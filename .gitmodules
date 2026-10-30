@@ -1,0 +1,4 @@
+[submodule "native/rtxgi-ddgi"]
+	path = native/rtxgi-ddgi
+	url = https://github.com/DennisSmolek/ddgi-rtxgi.git
+	branch = ddgi-reference
