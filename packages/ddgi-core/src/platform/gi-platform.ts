@@ -9,6 +9,8 @@
  * 1. the scene copy's uploads (`PlatformScene.encode`);
  * 2. the tracer acting on them: removed meshes, new mesh trees from the
  *    worker, and the top-level rebuild (CPU for now; B1a moves it to the GPU);
+ * 2b. hit shading: its settings, and the sky's projection when the
+ *    environment changed (`shade/hit-shading.ts`, T1.4);
  * 3. each technique's `encode`, fallbacks before the techniques stacked on them.
  *
  * The host owns the device. The platform watches `device.lost`; afterwards
@@ -34,14 +36,14 @@ import type {
     TextureDescriptor,
 } from './contract/scene.ts';
 import type { SceneChanges } from './contract/scene-copy.ts';
-import type { BounceSource, HitShading } from './contract/shade.ts';
+import type { BounceSource } from './contract/shade.ts';
 import type { ShadingModule } from './contract/shading-module.ts';
 import type { GIStats, MemoryReport, PassTiming } from './contract/stats.ts';
 import type { GITechnique, TechniqueContext, TechniqueFrame } from './contract/technique.ts';
 import type { GpuTimerScope } from './contract/timing.ts';
-import type { WgslModule } from './contract/wgsl.ts';
 import { PlatformKernelBuilder } from './kernel-builder.ts';
 import { PlatformScene } from './scene/platform-scene.ts';
+import { PlatformHitShading } from './shade/hit-shading.ts';
 import { GpuTimer } from './timing/gpu-timer.ts';
 import { PlatformRayQueries } from './trace/ray-queries.ts';
 
@@ -86,7 +88,8 @@ export class GIPlatformImpl implements GIPlatform {
     private readonly label: string;
     private readonly timer: GpuTimer | null;
     private readonly queries: SceneQueries;
-    private readonly shade: HitShading;
+    /** Hit shading and the sky (T1.4): `giSurfaceAt`, `giDirectIrradiance`, `giSkyRadiance`, `giSkyIrradiance`. */
+    readonly shade: PlatformHitShading;
     private readonly attached: AttachedTechnique[] = [];
     private output: GITechnique | undefined;
     private prepared = false;
@@ -115,7 +118,10 @@ export class GIPlatformImpl implements GIPlatform {
             rays,
             has: (kind: QueryKind) => kind === 'rays',
         };
-        this.shade = createHitShadingPlaceholder(this.sceneCopy.module, this.rays.module);
+        this.shade = new PlatformHitShading(device, this.sceneCopy.module, this.rays.module, {
+            label: this.label,
+            warn: (message) => this.warnOnce(message),
+        });
 
         void device.lost.then(() => {
             this.lost = true;
@@ -182,6 +188,7 @@ export class GIPlatformImpl implements GIPlatform {
     async prepare(): Promise<void> {
         this.checkUsable();
         await this.rays.prepare(this.kernels);
+        await this.shade.prepare();
         for (const technique of this.encodeOrder()) await technique.prepare();
         this.checkUsable();
         this.prepared = true;
@@ -196,12 +203,17 @@ export class GIPlatformImpl implements GIPlatform {
         if (this.timer) {
             // The previous frame's encoder has been submitted by now, so its timestamps can be read back.
             if (this.timerAwaitingReadback) this.timer.readback();
+            // Set again only once this frame's timestamps are resolved. If anything below throws,
+            // the frame's slot is never read back; the next beginFrame abandons and frees it.
+            this.timerAwaitingReadback = false;
             this.collectPasses(this.timer);
             this.timer.beginFrame(this.frame);
         }
 
         const upload = this.sceneCopy.encode(encoder);
         this.rays.update(encoder, upload);
+        // Settings, and the sky's projection when the environment changed.
+        this.shade.encode(encoder, this.sceneCopy.environment);
 
         if (!frame.budget.paused) {
             const techniques = this.encodeOrder();
@@ -274,6 +286,7 @@ export class GIPlatformImpl implements GIPlatform {
         this.prepared = false;
         for (const { technique } of this.attached.splice(0)) technique.dispose();
         this.output = undefined;
+        this.shade.dispose();
         this.rays.dispose();
         this.sceneCopy.dispose();
         this.timer?.dispose();
@@ -350,27 +363,6 @@ const IDENTITY_CAMERA = {
     near: 0,
     far: 0,
 } as const;
-
-/**
- * Hit shading arrives in T1.4 (`giSurfaceAt`, `giDirectIrradiance`,
- * `giSkyRadiance`). Until then techniques get a module with the right name and
- * dependencies but no functions, so a kernel that calls them fails to compile
- * with the shader compiler's "unresolved function" message.
- */
-function createHitShadingPlaceholder(sceneModule: WgslModule, raysModule: WgslModule): HitShading {
-    return {
-        module: {
-            name: 'gi-shade',
-            dependencies: [sceneModule, raysModule],
-            code: () => '// gi-shade: hit shading is not implemented yet (T1.4).\n',
-            entries: [],
-            resources: () => [],
-            version: 0,
-            storageBufferCount: 0,
-        },
-        settings: { maxShadowedLightsPerHit: 4, bounceAlbedoCap: 1 },
-    };
-}
 
 /**
  * The host's view of the scene: every call goes to the scene copy, after

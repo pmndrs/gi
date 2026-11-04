@@ -111,9 +111,12 @@ export type RequiredLimits = Partial<Record<Exclude<keyof GPUSupportedLimits, '_
 export interface GIPlatformModule {
     createGI(device: GPUDevice, options?: GIPlatformOptions): GIPlatform;
     /**
-     * Limits to request from this adapter: raised storage-buffer counts and
-     * binding sizes, capped at what the adapter supports. Typical scenes work
-     * at default limits too, by splitting large buffers across bindings.
+     * Limits to request from this adapter: the largest storage binding and
+     * buffer, and every storage buffer per stage, capped at what the adapter
+     * supports. Small scenes (Cornell, two-room, the furnished room) work at
+     * default limits; large ones (Sponza, Bistro) need these raised limits,
+     * because nothing is split across bindings (DECISIONS 2026-11-05). Without
+     * them the platform throws a `GILimitError` naming the limit.
      */
     requiredLimits(adapter: GPUAdapter): RequiredLimits;
     /** Optional features worth requesting (`timestamp-query`, `float32-filterable`). */

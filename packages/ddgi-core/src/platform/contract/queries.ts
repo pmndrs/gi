@@ -29,10 +29,11 @@ import type { WgslModule } from './wgsl';
  *
  * struct GiHit {
  *     t: f32,              // distance along the ray; negative means no hit
- *     instance: u32,       // platform instance index
- *     triangle: u32,       // triangle index within the instance's mesh
+ *     instance: u32,       // platform instance index (the scene copy's instance slot)
+ *     triangle: u32,       // triangle index within the instance's mesh, as the host gave it
  *     barycentrics: vec2f, // weights of vertices 1 and 2
- *     frontFace: bool,     // false when the ray hit the back side
+ *     frontFace: bool,     // true on the side the mesh was authored as front (counter-clockwise
+ *                          // corners), also through a mirrored transform (DECISIONS 2026-11-04)
  * }
  *
  * // Nearest hit, honouring alpha cutouts and `blocksLight`.
@@ -51,13 +52,17 @@ import type { WgslModule } from './wgsl';
  * runs a batch from buffers. Its kernel binds 5 (the same 3, plus rays and hits).
  *
  * `GiHit` is for function results only: WGSL `bool` can't be stored in a
- * buffer. Batches write `GiHitRecord` instead (24 bytes, T0.10):
+ * buffer. Batches write `GiHitRecord` instead (24 bytes, T0.10). `frontFace`
+ * comes before `barycentrics` so the `vec2f` lands on an 8-byte boundary
+ * without padding:
  *
  * ```wgsl
  * struct GiHitRecord {
- *     t: f32, instance: u32, triangle: u32,
- *     barycentrics: vec2f,
- *     frontFace: u32,      // 1 = front, 0 = back
+ *     t: f32,              // word 0
+ *     instance: u32,       // word 1
+ *     triangle: u32,       // word 2
+ *     frontFace: u32,      // word 3: 1 = front, 0 = back
+ *     barycentrics: vec2f, // words 4 and 5
  * }
  * ```
  */

@@ -1,9 +1,15 @@
 /**
  * The `platform` tracer of the benchmark: the same geometry and rays, but
- * through the platform API a host uses (T1.3). `createGI(device)`, then
- * `scene.createMesh` / `createMaterial` / `createInstance`, one `encode` per
- * frame until every mesh tree has arrived from the worker, then
- * `queries.rays.encodeBatch`. It shows that the platform path traces as fast as
+ * through the platform object (T1.3): the scene API (`createMesh`,
+ * `createMaterial`, `createInstance`), `prepare`, one `encode` per frame until
+ * every mesh tree has arrived from the worker, then the `rays` backend's
+ * `encodeBatch`.
+ *
+ * It is not quite a host's path: it constructs `GIPlatformImpl` (the class
+ * `createGI` returns) to reach internals a host can't, namely
+ * `rays.whenBuilt()` to wait for the trees, the batch's `timestampWrites`, and
+ * the per-buffer memory. A technique gets the same `rays` object as
+ * `context.queries.rays`. It shows that the platform path traces as fast as
  * the low-level one (`ours-tinybvh`, the same trees and the same WGSL), and it
  * reports the platform's memory: the scene copy and the acceleration buffers.
  */

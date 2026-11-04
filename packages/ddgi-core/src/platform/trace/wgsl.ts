@@ -524,6 +524,20 @@ fn giTraceAny(ray: GiRay) -> bool {
  */
 export const HIT_RECORD_BYTES = 24;
 
+/**
+ * Word positions inside a `GiHitRecord`, for code that reads batch results
+ * back. `frontFace` sits before `barycentrics` so the `vec2f` starts on an
+ * 8-byte boundary and the record has no padding (`wgsl.test.ts` checks this
+ * against the struct in `batchEntryWgsl`).
+ */
+export const HIT_RECORD_WORD = {
+    t: 0,
+    instance: 1,
+    triangle: 2,
+    frontFace: 3,
+    barycentrics: 4,
+} as const;
+
 /** Workgroup size of the batch kernels. */
 export const BATCH_WORKGROUP_SIZE = 64;
 

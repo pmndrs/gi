@@ -4,7 +4,8 @@ import type { FrameInput } from './contract/frame.ts';
 import type { GITechnique, TechniqueContext, TechniqueFrame } from './contract/technique.ts';
 import type { WgslModule } from './contract/wgsl.ts';
 import { DEFAULT_UNITS_PER_FRAME, GIPlatformImpl } from './gi-platform.ts';
-import { countStorageBuffers, orderModules, placeModules, PlatformKernelBuilder } from './kernel-builder.ts';
+import { isSupported, optionalFeatures, requiredLimits } from './device-requirements.ts';
+import { countGroupStorageBuffers, countStorageBuffers, orderModules, placeModules, PlatformKernelBuilder } from './kernel-builder.ts';
 import { createFakeGpu, type FakeBuffer, type FakeGpu } from './scene/testing/fake-gpu.ts';
 import { createCpuTracer } from './trace/cpu-traversal.ts';
 import { TOP_HEADER_WORD } from './trace/layout.ts';
@@ -168,6 +169,50 @@ describe('kernel builder', () => {
         expect((error as GILimitError).needed).toBe(9);
         expect(gpu.counters.pipelines).toBe(0);
     });
+
+    it("counts the technique's own storage buffers: DDGI's 8 of 8 compiles, a 9th throws a GILimitError", async () => {
+        const gpu = createPlatformGpu();
+        const builder = new PlatformKernelBuilder(gpu.device, 'test');
+        const storage = (binding: number, type: GPUBufferBindingType = 'storage'): GPUBindGroupLayoutEntry => ({ binding, visibility: 4, buffer: { type } });
+        const platformModules = [module('gi-trace', 3), module('gi-scene', 2)];
+        const ddgiGroup = { entries: [storage(0, 'read-only-storage'), storage(1), storage(2)] };
+        // A uniform buffer and a texture don't count against the storage-buffer limit.
+        const extras = { entries: [{ binding: 0, visibility: 4, buffer: {} }, { binding: 1, visibility: 4, texture: {} }] };
+        expect(countGroupStorageBuffers([ddgiGroup, extras])).toBe(3);
+
+        const kernel = await builder.computeKernel({ label: 'ddgi-shaped', modules: platformModules, code: '', entryPoint: 'main', ownGroups: [ddgiGroup, extras] });
+        expect(kernel.ownLayouts.length).toBe(2);
+
+        const nine = { entries: [...ddgiGroup.entries, storage(3)] };
+        const error = await builder
+            .computeKernel({ label: 'nine', modules: platformModules, code: '', entryPoint: 'main', ownGroups: [nine] })
+            .catch((caught: unknown) => caught);
+        expect(error).toBeInstanceOf(GILimitError);
+        expect((error as GILimitError).limit).toBe('maxStorageBuffersPerShaderStage');
+        expect((error as GILimitError).needed).toBe(9);
+    });
+});
+
+describe('device requirements', () => {
+    const adapter = (limits: Partial<GPUSupportedLimits>, features: string[]): GPUAdapter =>
+        ({ limits, features: new Set(features) }) as unknown as GPUAdapter;
+
+    it("requiredLimits asks for the adapter's own maximums, never more", () => {
+        const limits = { maxStorageBufferBindingSize: 2147483644, maxBufferSize: 2147483648, maxStorageBuffersPerShaderStage: 10 };
+        expect(requiredLimits(adapter(limits, []))).toEqual(limits);
+    });
+
+    it('optionalFeatures requests only what the adapter has', () => {
+        expect(optionalFeatures(adapter({}, ['timestamp-query', 'subgroups', 'shader-f16']))).toEqual(['subgroups', 'timestamp-query']);
+        expect(optionalFeatures(adapter({}, []))).toEqual([]);
+    });
+
+    it('isSupported needs the default 8 storage buffers per stage and 4 bind groups', () => {
+        const device = (limits: Partial<GPUSupportedLimits>): GPUDevice => ({ limits }) as unknown as GPUDevice;
+        expect(isSupported(device({ maxStorageBuffersPerShaderStage: 8, maxBindGroups: 4 }))).toBe(true);
+        expect(isSupported(device({ maxStorageBuffersPerShaderStage: 4, maxBindGroups: 4 }))).toBe(false);
+        expect(isSupported(device({ maxStorageBuffersPerShaderStage: 8, maxBindGroups: 3 }))).toBe(false);
+    });
 });
 
 describe('the rays backend over the scene copy', () => {
@@ -304,6 +349,28 @@ describe('the platform object', () => {
         expect(error).toBeInstanceOf(GINotReadyError);
         expect((error as GINotReadyError).reason).toBe('device-lost');
         expect(() => platform.scene.createMaterial({})).toThrow(GINotReadyError);
+
+        // Disposing after the loss frees what is left, and a second dispose does nothing.
+        platform.dispose();
+        platform.dispose();
+        expect(platform.isReady).toBe(false);
+    });
+
+    it('disposes once: buffers destroyed, techniques disposed, later calls refused', async () => {
+        const gpu = createPlatformGpu();
+        const platform = new GIPlatformImpl(gpu.device, { buildIn: 'main' });
+        const technique = platform.addTechnique(new RecordingTechnique('ddgi', []));
+        const mesh = platform.scene.createMesh(quad());
+        platform.scene.createInstance({ mesh, materials: [platform.scene.createMaterial({})], transform: translation(0, 0, 0) });
+        await readyPlatform(gpu, platform);
+
+        platform.dispose();
+        expect(technique.disposed).toBe(true);
+        expect(gpu.buffers.every((buffer) => buffer.destroyed)).toBe(true);
+        expect(() => platform.dispose()).not.toThrow();
+        expect(platform.isReady).toBe(false);
+        expect(() => platform.encode(gpu.createEncoder(), FRAME)).toThrow(/disposed/);
+        expect(() => platform.scene.createMaterial({})).toThrow(/disposed/);
     });
 
     it('encodes fallbacks first, passes units, skips paused frames, and reports memory per technique', async () => {

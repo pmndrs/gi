@@ -160,6 +160,9 @@ The answers go in PROGRESS. Any change to the contract is made in both the TypeS
 
 ### During M1, 2026-11-04
 
+- **Technique-facing: `ComputeKernelOptions.ownLayouts` became `ownGroups`,** bind-group layout *descriptors*, so the kernel builder can count the technique's own storage buffers too and throw `GILimitError` instead of a pipeline validation error past the device's limit. `ComputeKernel.ownLayouts` returns the layouts it made. Hosts don't see this. (T1.3 review, 2026-11-05)
+- **`requiredLimits` says what's true now:** small scenes run at default limits; large ones (Sponza with curtains, Bistro exterior) need the raised limits it asks for, which are the adapter's maximum binding and buffer sizes. Nothing is split across bindings. Dennis approved raising limits (DECISIONS 2026-11-05).
+
 - **Fix: `updateLight` takes `LightChanges`,** a union of each light type's partial fields. The old type, `Partial<Omit<LightDescriptor, 'type'>>`, kept only the keys every light type shares (that's how `Omit` treats a union), so a host couldn't update a point light's `position` or `range` without a cast. The documented behaviour (any field except `type`) is unchanged. Found by T1.2; fixed by the M1 lead, and Dennis was told.
 
 ### After T0.10 (BVH), 2026-11-04

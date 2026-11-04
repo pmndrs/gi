@@ -23,6 +23,7 @@
 import { GILimitError, GINotReadyError } from '../contract/errors.ts';
 import type { RayQueries } from '../contract/queries.ts';
 import type { BindingSlot, ComputeKernel, KernelBuilder, WgslModule } from '../contract/wgsl.ts';
+import { SHADER_STAGE_COMPUTE } from '../kernel-builder.ts';
 import type { PlatformScene, SceneUpload, UploadedMesh } from '../scene/platform-scene.ts';
 import { packedIndices, packedPositions } from '../scene/mesh-packing.ts';
 import { GrowableStorage, type ResidentRange } from './growable-storage.ts';
@@ -100,7 +101,6 @@ export class PlatformRayQueries implements RayQueries {
 
     private closestKernel: ComputeKernel | null = null;
     private anyKernel: ComputeKernel | null = null;
-    private batchLayout: GPUBindGroupLayout | null = null;
     private disposed = false;
 
     /** Instances in the current top level; for stats and tests. */
@@ -168,24 +168,22 @@ export class PlatformRayQueries implements RayQueries {
     /** Compiles the batch kernels. Called by the platform's `prepare`. */
     async prepare(kernels: KernelBuilder): Promise<void> {
         if (this.closestKernel && this.anyKernel) return;
-        const compute = 0x4; // GPUShaderStage.COMPUTE, spelled out so Node tests need no globals
-        const batchLayout = this.device.createBindGroupLayout({
+        const batchGroup: GPUBindGroupLayoutDescriptor = {
             label: `${this.label} trace batch`,
             entries: [
-                { binding: 0, visibility: compute, buffer: { type: 'read-only-storage' } },
-                { binding: 1, visibility: compute, buffer: { type: 'storage' } },
+                { binding: 0, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'read-only-storage' } },
+                { binding: 1, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'storage' } },
             ],
-        });
+        };
         const kernelFor = (mode: 'closest' | 'any') =>
             kernels.computeKernel({
                 label: `trace batch ${mode}`,
                 modules: [this.module],
                 code: batchEntryWgsl(mode, BATCH_GROUP),
                 entryPoint: 'giBatch',
-                ownLayouts: [batchLayout],
+                ownGroups: [batchGroup],
             });
         [this.closestKernel, this.anyKernel] = await Promise.all([kernelFor('closest'), kernelFor('any')]);
-        this.batchLayout = batchLayout;
     }
 
     /**
@@ -249,7 +247,7 @@ export class PlatformRayQueries implements RayQueries {
     ): void {
         this.checkLive();
         const kernel = batch.mode === 'closest' ? this.closestKernel : this.anyKernel;
-        if (!kernel || !this.batchLayout) throw new GINotReadyError('preparing');
+        if (!kernel) throw new GINotReadyError('preparing');
         if (batch.count <= 0) return;
         const resultBytes = batch.mode === 'closest' ? HIT_RECORD_BYTES : 4;
         if (batch.rays.size < batch.count * RAY_BYTES) throw new RangeError(`the ray buffer holds fewer than ${batch.count} rays`);
@@ -258,7 +256,7 @@ export class PlatformRayQueries implements RayQueries {
         // The kernel takes the ray count from the size of the bound range, so no uniform is needed.
         const group = this.device.createBindGroup({
             label: `${this.label} trace batch ${batch.mode}`,
-            layout: this.batchLayout,
+            layout: kernel.ownLayouts[0],
             entries: [
                 { binding: 0, resource: { buffer: batch.rays, offset: 0, size: batch.count * RAY_BYTES } },
                 { binding: 1, resource: { buffer: batch.hits, offset: 0, size: batch.count * resultBytes } },
@@ -428,11 +426,18 @@ export class PlatformRayQueries implements RayQueries {
 
         const bytes = topLevel.buffer.byteLength;
         if (bytes > this.topLevelBuffer.size) {
-            const limit = this.device.limits.maxStorageBufferBindingSize;
-            if (bytes > limit) throw new GILimitError('maxStorageBufferBindingSize', bytes, limit);
+            // One binding and one buffer must both hold it; name whichever limit is the smaller.
+            const limits = this.device.limits;
+            const limitBytes = Math.min(limits.maxStorageBufferBindingSize, limits.maxBufferSize);
+            if (bytes > limitBytes) {
+                const limit = limits.maxStorageBufferBindingSize <= limits.maxBufferSize ? 'maxStorageBufferBindingSize' : 'maxBufferSize';
+                throw new GILimitError(limit, bytes, limitBytes);
+            }
             this.retiredTopLevel.push(this.topLevelBuffer);
             // Room to grow, so a scene that keeps adding instances doesn't reallocate every frame.
-            this.topLevelBuffer = this.createTopLevelBuffer(Math.min(limit, Math.max(bytes, this.topLevelBuffer.size * 2)));
+            // The cap is rounded down to whole vec4s, since the buffer size is rounded up to them.
+            const cap = Math.floor(limitBytes / 16) * 16;
+            this.topLevelBuffer = this.createTopLevelBuffer(Math.min(cap, Math.max(bytes, this.topLevelBuffer.size * 2)));
             this.bufferVersion++;
         }
         this.device.queue.writeBuffer(this.topLevelBuffer, 0, topLevel.buffer);

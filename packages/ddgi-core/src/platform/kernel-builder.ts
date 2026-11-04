@@ -28,6 +28,9 @@ interface PlacedModule {
 /** The platform's bind group number. Techniques use groups 1-3. */
 export const PLATFORM_GROUP = 0;
 
+/** `GPUShaderStage.COMPUTE`. The global does not exist in Node, where the tests import this file. */
+export const SHADER_STAGE_COMPUTE = 0x4;
+
 /**
  * Orders the modules so that every module comes after its dependencies, each
  * module once. Modules are compared by identity: two modules with the same
@@ -72,6 +75,23 @@ export function countStorageBuffers(modules: readonly WgslModule[]): number {
     return modules.reduce((sum, module) => sum + module.storageBufferCount, 0);
 }
 
+/**
+ * Storage buffers in bind group layout descriptors visible to compute: the
+ * entries whose buffer type is `storage` or `read-only-storage` (a buffer
+ * entry without a type is a uniform buffer).
+ */
+export function countGroupStorageBuffers(groups: readonly GPUBindGroupLayoutDescriptor[]): number {
+    let count = 0;
+    for (const group of groups) {
+        for (const entry of group.entries) {
+            const type = entry.buffer?.type;
+            const isStorage = type === 'storage' || type === 'read-only-storage';
+            if (isStorage && (entry.visibility & SHADER_STAGE_COMPUTE) !== 0) count++;
+        }
+    }
+    return count;
+}
+
 export class PlatformKernelBuilder implements KernelBuilder {
     private readonly device: GPUDevice;
     private readonly labelPrefix: string;
@@ -87,11 +107,16 @@ export class PlatformKernelBuilder implements KernelBuilder {
         const placed = placeModules(orderModules(options.modules));
         const modules = placed.map(({ module }) => module);
 
-        const storageBuffers = countStorageBuffers(modules);
+        // The platform's group and the technique's own groups count against the same per-stage limit.
+        const ownGroups = options.ownGroups ?? [];
+        const storageBuffers = countStorageBuffers(modules) + countGroupStorageBuffers(ownGroups);
         const allowed = device.limits.maxStorageBuffersPerShaderStage;
         if (storageBuffers > allowed) throw new GILimitError('maxStorageBuffersPerShaderStage', storageBuffers, allowed);
-        const groupCount = 1 + (options.ownLayouts?.length ?? 0);
+        const groupCount = 1 + ownGroups.length;
         if (groupCount > device.limits.maxBindGroups) throw new GILimitError('maxBindGroups', groupCount, device.limits.maxBindGroups);
+        const ownLayouts = ownGroups.map((group, index) =>
+            device.createBindGroupLayout({ ...group, label: group.label ?? `${label} group ${PLATFORM_GROUP + 1 + index}` }),
+        );
 
         const platformLayout = device.createBindGroupLayout({
             label: `${label} group ${PLATFORM_GROUP}`,
@@ -107,7 +132,7 @@ export class PlatformKernelBuilder implements KernelBuilder {
             pipeline = await device.createComputePipelineAsync({
                 label,
                 // Explicit layouts, so every module binding counts whether or not the entry point uses it.
-                layout: device.createPipelineLayout({ label, bindGroupLayouts: [platformLayout, ...(options.ownLayouts ?? [])] }),
+                layout: device.createPipelineLayout({ label, bindGroupLayouts: [platformLayout, ...ownLayouts] }),
                 compute: { module: shaderModule, entryPoint: options.entryPoint, constants: options.constants },
             });
         } catch (error) {
@@ -134,6 +159,7 @@ export class PlatformKernelBuilder implements KernelBuilder {
 
         return {
             pipeline,
+            ownLayouts,
             bind(pass: GPUComputePassEncoder): void {
                 pass.setPipeline(pipeline);
                 pass.setBindGroup(PLATFORM_GROUP, platformGroup());

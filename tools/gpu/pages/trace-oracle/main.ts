@@ -7,10 +7,13 @@
  * rays aimed at the seams of a tessellated quad (they must not slip through).
  * Everything runs once per variant (see VARIANTS), always with the watertight
  * test of Woop et al. (the tracer's only triangle test):
- * - `platform`: through the platform API a host uses (T1.3): `createGI`, the
- *   scene API, then `queries.rays.encodeBatch`. Trees come from tinybvh in the
- *   worker, and hits report scene-copy instance slots, which the page maps
- *   back to the case's instance indices;
+ * - `platform`: through the platform object (T1.3): the scene API, `prepare`,
+ *   frames, then the `rays` backend's `encodeBatch`. Trees come from tinybvh
+ *   in the worker, and hits report scene-copy instance slots, which the page
+ *   maps back to the case's instance indices. The page reaches platform
+ *   internals directly (it constructs `GIPlatformImpl` for `rays.whenBuilt()`
+ *   and `sceneCopy.instanceSlot()`); inline tracing from a technique's own
+ *   kernel, the way DDGI traces, is checked by `trace-inline`;
  * - `watertight-tinybvh`: the same trees assembled and traced directly;
  * - `watertight-tmbuild`: trees built by three-mesh-bvh and converted.
  * The default device limits are used on purpose: the oracle scenes are tiny and
@@ -202,9 +205,10 @@ const IDLE_FRAME: FrameInput = {
 };
 
 /**
- * Traces a case through the platform API, as a host and a technique would:
- * `createGI`, the scene API, `prepare`, frames until every tree has arrived,
- * then `queries.rays.encodeBatch`. Hits report scene-copy instance slots; they
+ * Traces a case through the platform object: the scene API, `prepare`, frames
+ * until every tree has arrived, then the `rays` backend's `encodeBatch`. Uses
+ * two internals a host doesn't have: `rays.whenBuilt()` and
+ * `sceneCopy.instanceSlot()`. Hits report scene-copy instance slots; they
  * are mapped back to the case's own instance indices for the checks.
  */
 async function traceThroughPlatform(device: GPUDevice, oracleCase: OracleCase): Promise<GpuAnswers> {
