@@ -286,11 +286,13 @@ function writeChildBox(
 }
 
 /**
- * Builds a mesh BVH with tinybvh's builder (WASM, from @pmndrs/bvh): tinybvh
- * decides the tree's shape, and {@link buildMeshBvhFromTopology} writes our
- * layout. `tinyBvh` comes from `createTinyBvhBuilder()`; one build at a time.
+ * Builds a mesh BVH with tinybvh's builder (WASM, from @pmndrs/bvh). The WASM
+ * also writes our layout (stage B0b), byte for byte what
+ * {@link buildMeshBvhFromTopology} makes from tinybvh's tree
+ * (`mesh-bvh-tinybvh-layout.test.ts`), without the JavaScript pass over every
+ * node and triangle (about 0.65 s on Sponza). `tinyBvh` comes from
+ * `createTinyBvhBuilder()`; one build at a time.
  */
 export function buildMeshBvhWithTinyBvh(geometry: MeshGeometry, tinyBvh: TinyBvhBuilder, options: MeshTreeTopologyOptions = {}): MeshBvh {
-    const { topology } = tinyBvh.build(geometry);
-    return buildMeshBvhFromTopology(geometry, topology, options);
+    return tinyBvh.buildLayout(geometry, options).layout;
 }
