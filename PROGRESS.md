@@ -21,7 +21,7 @@ Rules:
 
 ---
 
-## 2026-11-05 · T1.6 · implementer (opus); timing to redo at normal clocks, then review
+## 2026-11-05 · T1.6 · implementer (opus); Opus review: pass with notes (timing not judged), fixes in progress
 Did:
 - DDGI's shading module (`techniques/ddgi/shading.ts`, `wgsl/shading.ts`): `giIrradiance` is `ddgiSampleIrradiance` unchanged; `giCoverage` (DECISIONS); `giDebugColor` with GI only, coverage and probes near this point. 3 textures, 2 samplers, 4 vec4f uniforms, `globalsCode` and `writeUniforms`. `version` 1. `provides.radiance` is false: a rough-only fallback is right only at roughness 1.
 - The sampling loop moved into `ddgiAccumulateField` (bit-identical leak numbers). Per-sample hoisting plus `inverseSqrt` made it 16% cheaper, a rounding-level change; all T1.5 checks pass again on both GPUs (furnace −0.16% / −0.28%, Cornell +5.68% / +5.63%, two-room leak 0.797% / 0.795%).
@@ -32,6 +32,14 @@ Verified (agent; RTX 3060 and Intel UHD, headless Chrome 156): every ddgi page p
 Numbers (shading.csv, median of 3, under the lock): GI sampling at 2560×1440, RTX front view 0.62 ms, inside view 1.07 ms (bar 1.0 ms, judged on the inside view, DECISIONS); Intel 8.16 / 13.60 ms. Without a depth prepass the inside view cost 2.49 ms.
 **Not valid as the final RTX number:** the RTX's SM clock was locked at 1200 MHz (max 2100) during every run. The lead confirmed it under load (82% use, still 1200 MHz) and asked Dennis to unlock it. Re-time after that.
 Not verified: a compatibility-mode device; hello scenes other than the two Cornells; hello in a visible browser by hand.
+Review (Opus): re-ran lint, typecheck, test 668, build and build:apps, and all 7 ddgi pages on both GPUs. Every number reproduces. The contract is met (no bindings in `code`, parameter order, `<texture>Sampler`, 3 textures, no storage buffers), and `giIrradiance` is the same function the trace kernel uses for bounce. Being fixed:
+- coverage asserted, not just logged (fade band, past the margin, a point no probe sees);
+- stronger debug-view checks;
+- hello's `ready` to mean a settled field;
+- `textureBindingViewDimension: '2d-array'` for compatibility mode;
+- the back/forward cache;
+- two comment nits.
+The shading.csv rows carry `954d393-dirty` and a locked clock; they get replaced by the re-time.
 Next: re-time at normal clocks; spot-check today's earlier RTX timings; add the hello and shading pages to `MEASURED_PATHS`; a `shading.csv` note in `bench/results/README.md`.
 
 ## 2026-11-05 · T1.9 prep: native matched-count timings · native-runner (opus)
