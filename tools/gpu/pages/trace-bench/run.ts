@@ -1,15 +1,17 @@
 /**
- * The tracer benchmark (T0.10 parts B and C): ours, on trees from three builders,
- * against three-mesh-bvh on probe-style rays, per scene.
+ * The tracer benchmark (T0.10 parts B and C, T1.3): ours, on trees from two
+ * builders and through the platform API, against three-mesh-bvh on
+ * probe-style rays, per scene.
  *
  * Per scene, in order:
  *   1. load the geometry (positions, indices, instance transforms; no textures);
- *   2. build our trees in the worker, assemble, time top-level rebuilds;
+ *   2. build our trees in the worker (tinybvh), assemble, time top-level rebuilds;
  *   3. generate the probe rays, trace them once to find the hits, and turn the
  *      hits into shadow rays toward the sun (the same rays go to every tracer);
- *   4. time ours-wt, then ours-tinybvh (tinybvh's trees, our walk), then
- *      ours-tmbuild (three-mesh-bvh's trees in our layout, our walk), then
- *      three-mesh-bvh, each on closest and any;
+ *   4. time ours-tinybvh (tinybvh's trees, our walk), then ours-tmbuild
+ *      (three-mesh-bvh's trees in our layout, our walk), then platform (the
+ *      same scene through createGI and its scene API), then three-mesh-bvh,
+ *      each on closest and any;
  *   5. compare the closest hits between tracers.
  *
  * Everything the GPU holds for a tracer is freed before the next one starts, so
@@ -48,6 +50,7 @@ import { makeProbeGrid, makeProbeRays, makeShadowRays, makeSphereDirections, typ
 import type { AgreementResult, DeviceRecord, ModeResult, SceneResult, TraceBenchData } from './results.ts';
 import { loadBenchScene } from './scene-source.ts';
 import { compareBlocked, compareClosestDistances } from './statistics.ts';
+import { runPlatformTracer } from './platform-bench.ts';
 import { runSynthetic } from './synthetic.ts';
 import { createTmbvhRenderer, runTmbvh, TMBVH_TIMING_METHOD, type TmbvhRun } from './tmbvh-bench.ts';
 import type { WebGPURenderer } from 'three/webgpu';
@@ -148,9 +151,10 @@ async function runScene(context: BenchContext, sceneId: string): Promise<SceneRe
         skipped: [],
     };
 
-    progress(`${sceneId}: building our trees`);
+    progress(`${sceneId}: building our trees (tinybvh, in the worker)`);
     const ours = await buildOursScene(context.builder, scene.meshes, scene.instances);
     result.ours = ours.result;
+    result.oursTinybvh = ours.result;
     progress(
         `${sceneId}: ours built in ${Math.round(ours.result.buildMsTotal)} ms (slowest mesh ${Math.round(ours.result.buildMsMaxMesh)} ms), ` +
             `${(ours.result.bytesTotal / 1e6).toFixed(1)} MB, top level rebuild ${ours.result.topLevelRebuildMsMedian.toFixed(2)} ms`,
@@ -235,26 +239,10 @@ async function runScene(context: BenchContext, sceneId: string): Promise<SceneRe
             for (const mode of run.modes) progress(describeMode(sceneId, mode));
         };
 
-        for (const tracer of ['ours-wt'] as const) {
-            if (!config.tracers.includes(tracer)) continue;
-            if (!oursAvailable) continue;
-            try {
-                finish(tracer, await runOursTracer(device, context.timer, tracer, ours.data, oursRays, plan));
-            } catch (error) {
-                result.skipped.push(`${tracer}: ${error instanceof Error ? error.message : String(error)}`);
-                progress(`${sceneId}: ${tracer} skipped (${error instanceof Error ? error.message : String(error)})`);
-            }
-            await yieldToBrowser();
-        }
-
-        // tinybvh's trees (WASM, built in the same worker as ours), traced by our watertight walk.
+        // tinybvh's trees (WASM, built in the worker), traced by our watertight walk.
         if (config.tracers.includes('ours-tinybvh') && oursAvailable) {
             try {
-                progress(`${sceneId}: building with tinybvh (WASM, in the worker)`);
-                const tinybvh = await buildOursScene(context.builder, scene.meshes, scene.instances, 'tinybvh');
-                result.oursTinybvh = tinybvh.result;
-                progress(`${sceneId}: ours-tinybvh built in ${Math.round(tinybvh.result.buildMsTotal)} ms, ${(tinybvh.result.bytesTotal / 1e6).toFixed(1)} MB`);
-                finish('ours-tinybvh', await runOursTracer(device, context.timer, 'ours-tinybvh', tinybvh.data, oursRays, plan));
+                finish('ours-tinybvh', await runOursTracer(device, context.timer, 'ours-tinybvh', ours.data, oursRays, plan));
             } catch (error) {
                 result.skipped.push(`ours-tinybvh: ${error instanceof Error ? error.message : String(error)}`);
                 progress(`${sceneId}: ours-tinybvh skipped (${error instanceof Error ? error.message : String(error)})`);
@@ -278,6 +266,24 @@ async function runScene(context: BenchContext, sceneId: string): Promise<SceneRe
             } catch (error) {
                 result.skipped.push(`ours-tmbuild: ${error instanceof Error ? error.message : String(error)}`);
                 progress(`${sceneId}: ours-tmbuild skipped (${error instanceof Error ? error.message : String(error)})`);
+            }
+            await yieldToBrowser();
+        }
+
+        // The same scene through the platform API (createGI, scene API, queries.rays).
+        if (config.tracers.includes('platform') && oursAvailable) {
+            try {
+                progress(`${sceneId}: describing the scene through the platform API`);
+                const run = await runPlatformTracer(device, context.timer, scene.meshes, scene.instances, oursRays, plan);
+                result.platform = run.build;
+                progress(
+                    `${sceneId}: platform ready in ${Math.round(run.build.readyMs)} ms; scene copy ${(run.build.bytesSceneCopy / 1e6).toFixed(1)} MB, ` +
+                        `acceleration ${(run.build.bytesAcceleration / 1e6).toFixed(1)} MB`,
+                );
+                finish('platform', run);
+            } catch (error) {
+                result.skipped.push(`platform: ${error instanceof Error ? error.message : String(error)}`);
+                progress(`${sceneId}: platform skipped (${error instanceof Error ? error.message : String(error)})`);
             }
             await yieldToBrowser();
         }
@@ -314,11 +320,10 @@ async function runScene(context: BenchContext, sceneId: string): Promise<SceneRe
     }
 
     const pairs: [string, string][] = [
-        ['ours-wt', 'tmbvh'],
-        ['ours-wt', 'ours-tinybvh'],
         ['ours-tinybvh', 'tmbvh'],
-        ['ours-wt', 'ours-tmbuild'],
+        ['ours-tinybvh', 'ours-tmbuild'],
         ['ours-tmbuild', 'tmbvh'],
+        ['ours-tinybvh', 'platform'],
     ];
     for (const [a, b] of pairs) {
         const runA = runs.get(a);

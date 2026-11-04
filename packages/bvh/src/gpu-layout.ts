@@ -3,10 +3,11 @@
  * builder hands to the tracer when it writes the layout itself instead of a
  * `MeshTreeTopology` (topology.ts). The layout is defined, word by word, in
  * `packages/ddgi-core/src/platform/trace/layout.ts` (and the WGSL generated
- * from it); `native/tinybvh-wasm.cpp` repeats it as C structs. This file only
- * holds the sizes and limits the JavaScript side needs. A test in ddgi-core
- * checks that they agree with layout.ts, and that the WASM's bytes equal the
- * JavaScript conversion's.
+ * from it); `native/tinybvh-wasm.cpp` repeats it as C structs.
+ *
+ * The sizes and limits below are the one definition: layout.ts imports them
+ * (this package can't import the core). A test in ddgi-core checks that the
+ * WASM's bytes equal the JavaScript conversion's.
  */
 
 /** One node: two child boxes (Aila-Laine layout), 64 bytes. */

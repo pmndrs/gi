@@ -591,10 +591,14 @@ function checkQuery(failures: string[], model: SceneModel, query: InstanceQuery,
 
     if (normalMatrix === null) return; // a flattened instance has no normals to check
     compareArrays(failures, `${label} normal matrix`, actual.normalMatrix, normalMatrix, 1e-5);
-    const geometric = unit(crossOf(
+    const winding = unit(crossOf(
         [corners[1][0] - corners[0][0], corners[1][1] - corners[0][1], corners[1][2] - corners[0][2]],
         [corners[2][0] - corners[0][0], corners[2][1] - corners[0][1], corners[2][2] - corners[0][2]],
     ));
+    // The authored front side (DECISIONS 2026-11-04): a mirror reverses the world-space winding,
+    // so its winding normal is turned back. Mirrored means a negative determinant of the linear part.
+    const mirrored = m[0] * (m[5] * m[10] - m[9] * m[6]) - m[4] * (m[1] * m[10] - m[9] * m[2]) + m[8] * (m[1] * m[6] - m[5] * m[2]) < 0;
+    const geometric = mirrored ? [-winding[0], -winding[1], -winding[2]] : winding;
     compareArrays(failures, `${label} geometric normal`, actual.geometricNormal, geometric, 1e-4);
 
     let shading = geometric;

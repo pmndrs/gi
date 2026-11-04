@@ -1,13 +1,11 @@
 /**
- * Per-mesh BVH (the "bottom level"): turns triangle geometry into the node
- * array and the tree-ordered triangle array the GPU traverses.
+ * Per-mesh BVH (the "bottom level"): the shapes a mesh tree has on its way to
+ * the GPU, the node array and the tree-ordered triangle array the walk reads.
  *
- * Runs anywhere (main thread, worker, Node). `mesh-bvh-async.ts` wraps it in a
- * worker for large meshes.
+ * tinybvh (WASM, `@pmndrs/bvh`) builds every mesh tree and writes this layout
+ * itself (`mesh-bvh-build.ts`); `mesh-bvh-async.ts` runs it in a worker. Trees
+ * built elsewhere (three-mesh-bvh's) come in through `mesh-bvh-topology.ts`.
  */
-
-import { buildSahTree, DEFAULT_SAH_OPTIONS, type SahBuildOptions } from './sah-builder.ts';
-import { checkGeometry, packTriangles } from './triangle-packing.ts';
 
 export { countTriangles } from './triangle-packing.ts';
 
@@ -46,52 +44,8 @@ export function meshBvhTransferables(bvh: MeshBvh): ArrayBuffer[] {
     return [bvh.nodes, bvh.triangles, bvh.parents.buffer as ArrayBuffer, bvh.bounds.buffer as ArrayBuffer];
 }
 
-/**
- * Who decides the tree's shape:
- * - `sah`: our binned SAH builder in this file (synchronous);
- * - `tinybvh`: tinybvh's builder in WASM (@pmndrs/bvh). It needs an asynchronous start,
- *   so it is only available through `buildMeshBvhAsync` and `createMeshBvhBuilder`.
- */
-export type MeshBvhBuilderKind = 'sah' | 'tinybvh';
-
-export interface MeshBvhBuildOptions extends Partial<SahBuildOptions> {
-    /** Defaults to `sah`. See {@link MeshBvhBuilderKind}. */
-    readonly builder?: MeshBvhBuilderKind;
-}
-
-export function buildMeshBvh(geometry: MeshGeometry, options: MeshBvhBuildOptions = {}): MeshBvh {
-    const { builder = 'sah', ...sahOptions } = options;
-    if (builder !== 'sah') throw new RangeError(`buildMeshBvh only runs the 'sah' builder; use buildMeshBvhAsync for '${builder}'`);
-    const { positions } = geometry;
-    const checked = checkGeometry(geometry);
-    const { triangleCount, vertexOf } = checked;
-
-    // One box per triangle. These are exact: the positions are already f32.
-    const triangleBounds = new Float32Array(triangleCount * 6);
-    for (let triangle = 0; triangle < triangleCount; triangle++) {
-        const slot = triangle * 6;
-        for (let axis = 0; axis < 3; axis++) {
-            const a = positions[vertexOf(triangle, 0) * 3 + axis];
-            const b = positions[vertexOf(triangle, 1) * 3 + axis];
-            const c = positions[vertexOf(triangle, 2) * 3 + axis];
-            triangleBounds[slot + axis] = Math.min(a, b, c);
-            triangleBounds[slot + 3 + axis] = Math.max(a, b, c);
-        }
-    }
-
-    const tree = buildSahTree(triangleBounds, { ...DEFAULT_SAH_OPTIONS, ...sahOptions });
-
-    // Store triangles in tree order so a leaf is just "start index + count".
-    const trianglesBuffer = packTriangles(geometry, checked, tree.order);
-
-    return {
-        nodes: tree.nodes,
-        triangles: trianglesBuffer,
-        parents: tree.parents,
-        nodeCount: tree.nodeCount,
-        triangleCount,
-        maxDepth: tree.maxDepth,
-        leafCount: tree.leafCount,
-        bounds: tree.bounds,
-    };
+/** Options for building a mesh tree. */
+export interface MeshBvhBuildOptions {
+    /** Leaves with more triangles than this are cut in half until they fit. 1 to 8; default 8. */
+    readonly maxLeafPrimitives?: number;
 }

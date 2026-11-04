@@ -1,0 +1,5 @@
+{
+    "description": "Full tracer benchmark on Sponza's base package only (the pre-T1.10 sponza): ours (tinybvh and three-mesh-bvh trees, and through the platform API) vs three-mesh-bvh. Slow; run under the bench lock, on its own.",
+    "timeoutMs": 900000,
+    "manual": true
+}

@@ -141,9 +141,12 @@ export class SceneReader {
         return vertices.map((vertex) => this.toWorld(instance, this.position(mesh, vertex))) as [Vec3, Vec3, Vec3];
     }
 
+    /** Points out of the authored front, also for a mirrored instance (DECISIONS 2026-11-04). */
     geometricNormal(instance: number, triangle: number): Vec3 {
         const [a, b, c] = this.corners(instance, triangle);
-        return unit(cross(subtract(b, a), subtract(c, a)));
+        const winding = unit(cross(subtract(b, a), subtract(c, a)));
+        const mirrored = (this.instanceFlags(instance) & INSTANCE_FLAG.mirrored) !== 0;
+        return mirrored ? [-winding[0], -winding[1], -winding[2]] : winding;
     }
 
     normalAt(instance: number, triangle: number, barycentrics: readonly [number, number]): Vec3 {

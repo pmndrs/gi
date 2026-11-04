@@ -6,14 +6,13 @@
 import {
     assembleTraceScene,
     buildTopLevel,
-    DEFAULT_SAH_OPTIONS,
+    MAX_LEAF_PRIMITIVES,
     HIT_RECORD_BYTES,
     RAY_FLOATS,
     TraceBatchKernel,
     uploadTraceScene,
     type MeshBvh,
     type MeshBvhBuilder,
-    type MeshBvhBuilderKind,
     type TraceInstance,
     type TraceSceneData,
 } from '../../../../packages/ddgi-core/src/platform/trace/index.ts';
@@ -37,20 +36,19 @@ export function yieldToBrowser(): Promise<void> {
 }
 
 /**
- * Builds every mesh's tree in the worker, one mesh after another, so each
- * mesh's time is its own.
+ * Builds every mesh's tree in the worker (tinybvh, the only mesh builder),
+ * one mesh after another, so each mesh's time is its own.
  */
 export async function buildOursScene(
     builder: MeshBvhBuilder,
     meshes: readonly BenchMeshGeometry[],
     instances: readonly BenchInstance[],
-    kind: MeshBvhBuilderKind = 'sah',
 ): Promise<OursBuild> {
     const perMeshMs: number[] = [];
     const bvhs: MeshBvh[] = [];
     for (const mesh of meshes) {
         const start = performance.now();
-        bvhs.push(await builder.build({ positions: mesh.positions, indices: mesh.indices }, { builder: kind }));
+        bvhs.push(await builder.build({ positions: mesh.positions, indices: mesh.indices }));
         perMeshMs.push(performance.now() - start);
     }
     return assembleOursScene(bvhs, perMeshMs, instances, builder.usesWorker);
@@ -128,7 +126,7 @@ async function assembleOursScene(
         nodeCount: sum(bvhs.map((bvh) => bvh.nodeCount)),
         maxMeshDepth: data.maxMeshDepth,
         requiredStackSize: data.requiredStackSize,
-        leafSize: DEFAULT_SAH_OPTIONS.maxLeafPrimitives,
+        leafSize: MAX_LEAF_PRIMITIVES,
         bytesNodes: data.nodes.byteLength,
         bytesTriangles: data.triangles.byteLength,
         bytesTopLevel: data.topLevel.buffer.byteLength,
@@ -226,7 +224,7 @@ export function extractHitDistances(hitRecords: ArrayBuffer): Float32Array {
 export async function runOursTracer(
     device: GPUDevice,
     timer: DispatchTimer,
-    tracer: 'ours-wt' | 'ours-tinybvh' | 'ours-tmbuild',
+    tracer: 'ours-tinybvh' | 'ours-tmbuild',
     data: TraceSceneData,
     rays: OursRayBuffers,
     plan: TimingPlan,
@@ -299,8 +297,8 @@ export async function estimateNsPerRay(device: GPUDevice, timer: DispatchTimer, 
     const resources = new Resources();
     try {
         const count = sampleRays.length / RAY_FLOATS;
-        const kernel = await TraceBatchKernel.create(device, 'ours-wt calibrate');
-        const scene = resources.add(uploadTraceScene(device, data, 'ours-wt calibrate'));
+        const kernel = await TraceBatchKernel.create(device, 'ours calibrate');
+        const scene = resources.add(uploadTraceScene(device, data, 'ours calibrate'));
         const rays = resources.add(uploadRays(device, 'calibration rays', sampleRays));
         const hits = resources.add(
             device.createBuffer({ label: 'calibration hits', size: count * HIT_RECORD_BYTES, usage: GPUBufferUsage.STORAGE }),
@@ -331,8 +329,8 @@ export async function traceClosestOnce(
 ): Promise<ArrayBuffer> {
     const resources = new Resources();
     try {
-        const kernel = await TraceBatchKernel.create(device, 'ours-wt prepare');
-        const scene = resources.add(uploadTraceScene(device, data, 'ours-wt prepare'));
+        const kernel = await TraceBatchKernel.create(device, 'ours prepare');
+        const scene = resources.add(uploadTraceScene(device, data, 'ours prepare'));
         const hits = resources.add(
             device.createBuffer({
                 label: 'prepare hits',

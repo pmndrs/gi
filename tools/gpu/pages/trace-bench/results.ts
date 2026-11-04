@@ -67,6 +67,22 @@ export interface TmbuildBuildResult extends OursBuildResult {
     targetLeafSize: number;
 }
 
+/** The `platform` tracer: the scene described through `createGI` and its scene API (T1.3). */
+export interface PlatformBuildResult {
+    /** Creating every mesh, material and instance through the scene API (CPU: checking and packing). */
+    describeMs: number;
+    /** From the first scene call until every tree is placed and the top level is built. */
+    readyMs: number;
+    usesWorker: boolean;
+    /** GPU bytes of the platform's scene copy (vertices and tables). */
+    bytesSceneCopy: number;
+    /** GPU bytes of the tracer's buffers (allocated, so with room to grow). */
+    bytesAcceleration: number;
+    bytesNodes: number;
+    bytesTriangles: number;
+    bytesTopLevel: number;
+}
+
 export interface TmbvhBuildResult {
     meshCount: number;
     /** Wall time to build every mesh's tree on the main thread (SAH), one after another. */
@@ -84,7 +100,7 @@ export interface TmbvhBuildResult {
 }
 
 export interface AgreementResult {
-    /** For example `ours-wt vs tmbvh`. */
+    /** For example `ours-tinybvh vs tmbvh`. */
     pair: string;
     closestRate: number;
     closestRays: number;
@@ -114,7 +130,7 @@ export interface SceneResult {
     thinned?: boolean;
     /** The estimate that decided it: GPU nanoseconds per closest-hit ray on a sample, or null when the check was off. */
     estimatedNsPerRay: number | null;
-    /** Closest-hit rays that hit something (by ours-wt). */
+    /** Closest-hit rays that hit something (by ours-tinybvh). */
     closestHits: number;
     /** Shadow rays traced; hits facing away from the sun get none. */
     shadowRays: number;
@@ -122,11 +138,14 @@ export interface SceneResult {
     sunSource: 'manifest' | 'fallback';
     modelFiles: string[];
     loadMs: number;
+    /** Our trees (tinybvh's since T1.3; our own SAH builder's before): build times, top-level rebuilds, memory. */
     ours: OursBuildResult | null;
     /** Missing in results from before T0.10 part C. */
     oursTmbuild?: TmbuildBuildResult | null;
     /** Trees built by tinybvh (WASM) in the worker. Missing in results from before T0.10 part C. */
     oursTinybvh?: OursBuildResult | null;
+    /** The same scene through the platform API. Missing before T1.3. */
+    platform?: PlatformBuildResult | null;
     tmbvh: TmbvhBuildResult | null;
     modes: ModeResult[];
     agreement: AgreementResult[];

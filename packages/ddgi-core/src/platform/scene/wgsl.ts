@@ -194,6 +194,7 @@ const GI_SCENE_MATERIAL_VEC4S: u32 = ${MATERIAL_RECORD_VEC4S}u;
 const GI_SCENE_LIGHT_VEC4S: u32 = ${LIGHT_RECORD_VEC4S}u;
 
 const GI_SCENE_INSTANCE_LIVE: u32 = ${INSTANCE_FLAG.live}u;
+const GI_SCENE_INSTANCE_MIRRORED: u32 = ${INSTANCE_FLAG.mirrored}u;
 // An instance rays see: live, visible, contributing, and with an invertible transform.
 const GI_SCENE_INSTANCE_TRACEABLE_MASK: u32 = ${hex(INSTANCE_FLAG.live | INSTANCE_FLAG.contributesToGi | INSTANCE_FLAG.visible | INSTANCE_FLAG.singular)};
 const GI_SCENE_INSTANCE_TRACEABLE: u32 = ${hex(INSTANCE_FLAG.live | INSTANCE_FLAG.contributesToGi | INSTANCE_FLAG.visible)};
@@ -320,14 +321,18 @@ fn giInstanceTriangle(instance: u32, triangle: u32) -> GiTriangle {
     );
 }
 
-// The triangle's own unit normal in world space, from its world-space winding
-// (corner 0 -> 1 -> 2, counter-clockwise seen from the front). The tracer's
-// GiHit.frontFace uses the same winding, so frontFace is true exactly when
-// dot(ray.direction, giInstanceGeometricNormal(...)) < 0. A mirrored instance
-// reverses the winding, so this points the other way from its vertex normals.
+// The triangle's own unit normal in world space, pointing out of the side the
+// mesh was authored as front (corner 0 -> 1 -> 2 counter-clockwise seen from
+// there). A mirrored instance reverses the winding in world space, so there the
+// cross product is flipped back; the normal then agrees with the instance's
+// vertex normals (DECISIONS 2026-11-04). The tracer's GiHit.frontFace uses the
+// same side, so frontFace is true exactly when
+// dot(ray.direction, giInstanceGeometricNormal(...)) < 0.
 fn giInstanceGeometricNormal(instance: u32, triangle: u32) -> vec3f {
     let corners = giInstanceTriangle(instance, triangle);
-    let normal = cross(corners.vertex1 - corners.vertex0, corners.vertex2 - corners.vertex0);
+    let windingNormal = cross(corners.vertex1 - corners.vertex0, corners.vertex2 - corners.vertex0);
+    let mirrored = (giSceneInstanceFlags(instance) & GI_SCENE_INSTANCE_MIRRORED) != 0u;
+    let normal = select(windingNormal, -windingNormal, mirrored);
     let lengthSquared = dot(normal, normal);
     // A degenerate triangle has no normal; rays can't hit it, so any unit vector will do.
     return select(vec3f(0.0, 0.0, 1.0), normal * inverseSqrt(lengthSquared), lengthSquared > 0.0);

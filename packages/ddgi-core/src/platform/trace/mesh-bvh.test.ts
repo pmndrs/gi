@@ -1,8 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { BVH_NODE_BYTES, NO_PARENT, NODE_WORD, EMPTY_CHILD_INDEX, TRIANGLE_BYTES, TRIANGLE_WORD, nodeView } from './layout.ts';
-import { buildMeshBvh, type MeshBvh, type MeshGeometry } from './mesh-bvh.ts';
+import { BVH_NODE_BYTES, MAX_LEAF_PRIMITIVES, NO_PARENT, NODE_WORD, EMPTY_CHILD_INDEX, TRIANGLE_BYTES, TRIANGLE_WORD, nodeView } from './layout.ts';
+import { createTinyBvhBuilder } from '@pmndrs/bvh';
+import type { MeshBvh, MeshBvhBuildOptions, MeshGeometry } from './mesh-bvh.ts';
+import { buildMeshBvhWithTinyBvh } from './mesh-bvh-topology.ts';
 import { createMeshBvhBuilder } from './mesh-bvh-async.ts';
 import { createRandom, randomTriangleSoup, tessellatedQuad } from './oracle-fixtures.ts';
+
+// Mesh trees come from tinybvh (WASM), the only mesh builder since B0 (DECISIONS 2026-11-04).
+const tinyBvh = await createTinyBvhBuilder();
+const buildMeshBvh = (geometry: MeshGeometry, options: MeshBvhBuildOptions = {}): MeshBvh => buildMeshBvhWithTinyBvh(geometry, tinyBvh, options);
 
 /** Vertex coordinates of an original triangle, straight from the input geometry. */
 function originalVertices(geometry: MeshGeometry, triangle: number): number[][] {
@@ -115,14 +121,14 @@ function expectEveryTriangleOnce(facts: TreeFacts, triangleCount: number): void 
     expect(sorted.every((value, position) => value === position)).toBe(true);
 }
 
-describe('buildMeshBvh', () => {
+describe('mesh trees from tinybvh', () => {
     for (const triangleCount of [1, 2, 3, 4, 5, 17, 300, 4000]) {
         it(`builds a valid tree for ${triangleCount} random triangles`, () => {
             const geometry = randomTriangleSoup(createRandom(triangleCount), triangleCount, 20, 1.5);
             const bvh = buildMeshBvh(geometry);
             const facts = checkTree(bvh, geometry);
             expectEveryTriangleOnce(facts, triangleCount);
-            expect(Math.max(...facts.leafSizes)).toBeLessThanOrEqual(4);
+            expect(Math.max(...facts.leafSizes)).toBeLessThanOrEqual(MAX_LEAF_PRIMITIVES);
             expect(facts.depth).toBe(bvh.maxDepth);
             expect(bvh.leafCount).toBe(facts.leafSizes.length);
             if (triangleCount === 1) expect(facts.emptyChildren).toBe(1);
@@ -179,7 +185,7 @@ describe('buildMeshBvh', () => {
         expect(() => buildMeshBvh({ positions: new Float32Array(9).fill(NaN) })).toThrow(/non-finite/);
         expect(() => buildMeshBvh({ positions: new Float32Array(0) })).toThrow(/at least one triangle/);
         expect(() => buildMeshBvh({ positions: new Float32Array(10) })).toThrow(/three floats/);
-        expect(() => buildMeshBvh({ positions: new Float32Array(9), indices: new Uint32Array([0, 1, 5]) })).toThrow(/vertex 5/);
+        expect(() => buildMeshBvh({ positions: new Float32Array(9), indices: new Uint32Array([0, 1, 5]) })).toThrow(/is 5, but there are 3 vertices/);
     });
 
     it('stores a parent for every node so a refit can walk upward', () => {

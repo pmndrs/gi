@@ -5,9 +5,14 @@
  * Cases: thin walls, mirrored and non-uniform transforms, instancing, a closed
  * thin box no interior ray may escape, random scenes, and about two million
  * rays aimed at the seams of a tessellated quad (they must not slip through).
- * Everything runs once per variant (see VARIANTS): the watertight test of Woop
- * et al. (the tracer's only triangle test) on our own trees, on trees built by
- * tinybvh (WASM, in the worker) and on trees built by three-mesh-bvh (converted).
+ * Everything runs once per variant (see VARIANTS), always with the watertight
+ * test of Woop et al. (the tracer's only triangle test):
+ * - `platform`: through the platform API a host uses (T1.3): `createGI`, the
+ *   scene API, then `queries.rays.encodeBatch`. Trees come from tinybvh in the
+ *   worker, and hits report scene-copy instance slots, which the page maps
+ *   back to the case's instance indices;
+ * - `watertight-tinybvh`: the same trees assembled and traced directly;
+ * - `watertight-tmbuild`: trees built by three-mesh-bvh and converted.
  * The default device limits are used on purpose: the oracle scenes are tiny and
  * the core has to work there.
  *
@@ -16,7 +21,6 @@
 
 import {
     assembleTraceScene,
-    buildMeshBvh,
     createCpuTracer,
     createMeshBvhBuilder,
     HIT_RECORD_BYTES,
@@ -26,10 +30,13 @@ import {
     TraceBatchKernel,
     uploadTraceScene,
     type MeshBvhBuilder,
-    type TraceSceneBuffers,
     type TraceSceneData,
-    type TracedHit,
 } from '../../../../packages/ddgi-core/src/platform/trace/index.ts';
+import { type TracedHit } from '../../../../packages/ddgi-core/src/platform/trace/oracle-compare.ts';
+import { createTinyBvhBuilder } from '../../../../packages/bvh/src/index.ts';
+import type { FrameInput } from '../../../../packages/ddgi-core/src/platform/contract/frame.ts';
+import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
+import { buildMeshBvhWithTinyBvh } from '../../../../packages/ddgi-core/src/platform/trace/mesh-bvh-topology.ts';
 import { assert, runGpuTest } from '../../client.ts';
 import {
     buildOracleCases,
@@ -39,6 +46,7 @@ import {
     type OracleCase,
     type SharedEdgeCase,
 } from './cases.ts';
+import { IDENTITY_MATRIX } from '../trace-bench/gltf-geometry.ts';
 import { buildMeshBvhWithTmbvh } from '../trace-bench/tmbvh-convert.ts';
 import {
     computeReferenceAnswersYielding,
@@ -58,11 +66,11 @@ import {
  */
 interface OracleVariant {
     name: string;
-    treeSource: 'ours' | 'tinybvh' | 'three-mesh-bvh';
+    treeSource: 'platform' | 'tinybvh' | 'three-mesh-bvh';
 }
 
 const VARIANTS: OracleVariant[] = [
-    { name: 'watertight', treeSource: 'ours' },
+    { name: 'platform', treeSource: 'platform' },
     { name: 'watertight-tinybvh', treeSource: 'tinybvh' },
     { name: 'watertight-tmbuild', treeSource: 'three-mesh-bvh' },
 ];
@@ -78,6 +86,8 @@ const STACK_PROBE_RAYS = 2000;
 
 /** Rays of each shared-edge scene also checked against the brute-force reference. */
 const SHARED_EDGE_REFERENCE_RAYS = 20000;
+
+const HIT_RECORD_WORDS = HIT_RECORD_BYTES / 4;
 
 interface GpuAnswers {
     closest: Float32Array;
@@ -101,13 +111,11 @@ async function readBuffer(device: GPUDevice, source: GPUBuffer, byteLength: numb
     return copy;
 }
 
+/** Records one batch: the low-level kernel or the platform's `encodeBatch`. */
+type EncodeBatch = (encoder: GPUCommandEncoder, batch: { mode: 'closest' | 'any'; rays: GPUBuffer; results: GPUBuffer; count: number }) => void;
+
 /** Traces the packed rays on the GPU in both modes and reads the results back. */
-async function traceOnGpu(
-    device: GPUDevice,
-    kernel: TraceBatchKernel,
-    scene: TraceSceneBuffers,
-    packedRays: Float32Array,
-): Promise<GpuAnswers> {
+async function traceOnGpu(device: GPUDevice, encodeBatch: EncodeBatch, packedRays: Float32Array): Promise<GpuAnswers> {
     const count = packedRays.length / 8;
     const rays = device.createBuffer({ label: 'oracle rays', size: count * RAY_BYTES, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
     device.queue.writeBuffer(rays, 0, packedRays as Float32Array<ArrayBuffer>);
@@ -117,8 +125,8 @@ async function traceOnGpu(
     const occlusion = device.createBuffer({ label: 'oracle occlusion', size: anyBytes, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
 
     const encoder = device.createCommandEncoder({ label: 'oracle trace' });
-    kernel.encode(encoder, scene, { mode: 'closest', rays, results: hits, count });
-    kernel.encode(encoder, scene, { mode: 'any', rays, results: occlusion, count });
+    encodeBatch(encoder, { mode: 'closest', rays, results: hits, count });
+    encodeBatch(encoder, { mode: 'any', rays, results: occlusion, count });
     device.queue.submit([encoder.finish()]);
 
     const hitData = await readBuffer(device, hits, hitBytes);
@@ -133,7 +141,6 @@ async function traceOnGpu(
     };
 }
 
-const HIT_RECORD_WORDS = HIT_RECORD_BYTES / 4;
 
 /** One ray's closest-hit record as the comparison code wants it. */
 function hitAt(answers: GpuAnswers, index: number): TracedHit | null {
@@ -168,7 +175,7 @@ async function buildScene(builder: MeshBvhBuilder, oracleCase: OracleCase, varia
     const start = performance.now();
     const bvhs =
         variant.treeSource !== 'three-mesh-bvh'
-            ? await Promise.all(oracleCase.meshes.map((mesh) => builder.build(mesh, { builder: variant.treeSource === 'tinybvh' ? 'tinybvh' : 'sah' })))
+            ? await Promise.all(oracleCase.meshes.map((mesh) => builder.build(mesh)))
             : oracleCase.meshes.map((mesh) => buildMeshBvhWithTmbvh(mesh, TMBUILD_LEAF_SIZE).bvh);
     const data = assembleTraceScene(bvhs, oracleCase.instances);
     return { data, buildMs: performance.now() - start };
@@ -187,6 +194,88 @@ function probeStackDepth(scene: TraceSceneData, oracleCase: OracleCase): number 
     return stats.maxStackSize;
 }
 
+/** A frame with no technique work: the platform only uploads the scene and places trees. */
+const IDLE_FRAME: FrameInput = {
+    deltaTime: 0,
+    budget: { units: 0 },
+    camera: { position: [0, 0, 0], view: IDENTITY_MATRIX, projection: IDENTITY_MATRIX, near: 0.1, far: 100 },
+};
+
+/**
+ * Traces a case through the platform API, as a host and a technique would:
+ * `createGI`, the scene API, `prepare`, frames until every tree has arrived,
+ * then `queries.rays.encodeBatch`. Hits report scene-copy instance slots; they
+ * are mapped back to the case's own instance indices for the checks.
+ */
+async function traceThroughPlatform(device: GPUDevice, oracleCase: OracleCase): Promise<GpuAnswers> {
+    const platform = new GIPlatformImpl(device, { label: `oracle ${oracleCase.name}` });
+    try {
+        const material = platform.scene.createMaterial({ albedo: [1, 1, 1] });
+        const meshes = oracleCase.meshes.map((mesh) =>
+            platform.scene.createMesh({
+                positions: mesh.positions,
+                indices: mesh.indices ?? Uint32Array.from({ length: mesh.positions.length / 3 }, (_, index) => index),
+            }),
+        );
+        const caseIndexBySlot = new Map<number, number>();
+        for (const instance of oracleCase.instances) {
+            const handle = platform.scene.createInstance({
+                mesh: meshes[instance.meshIndex],
+                materials: [material],
+                transform: instance.objectToWorld,
+                visible: instance.visible,
+                contributesToGI: instance.contributesToGi,
+            });
+            caseIndexBySlot.set(platform.sceneCopy.instanceSlot(handle), instance.instanceIndex);
+        }
+        await platform.prepare();
+        const frame = (): void => {
+            const encoder = device.createCommandEncoder({ label: 'oracle platform frame' });
+            platform.encode(encoder, IDLE_FRAME);
+            device.queue.submit([encoder.finish()]);
+        };
+        frame(); // uploads the scene; the worker starts building
+        await platform.rays.whenBuilt();
+        frame(); // places the trees and builds the top level
+        assert(!platform.rays.building, 'the platform still reports trees building');
+
+        const answers = await traceOnGpu(device, (encoder, batch) => {
+            platform.rays.encodeBatch(encoder, { mode: batch.mode, rays: batch.rays, hits: batch.results, count: batch.count });
+        }, oracleCase.rays);
+        // GiHit.instance is the scene-copy slot; the checks know the case's instance indices.
+        for (let ray = 0; ray < answers.blocked.length; ray++) {
+            const base = ray * HIT_RECORD_WORDS;
+            if (!(answers.closest[base] >= 0)) continue;
+            const caseIndex = caseIndexBySlot.get(answers.closestWords[base + 1]);
+            answers.closestWords[base + 1] = caseIndex ?? UNKNOWN_SLOT;
+        }
+        return answers;
+    } finally {
+        platform.dispose();
+    }
+}
+
+/** Reported for a hit on a slot that holds none of the case's instances, so the checks fail it. */
+const UNKNOWN_SLOT = 0xffffffff;
+
+/** Traces a case in a variant and returns the answers plus the trees (for the stack and size report). */
+async function traceCase(
+    device: GPUDevice,
+    kernel: TraceBatchKernel,
+    builder: MeshBvhBuilder,
+    oracleCase: OracleCase,
+    variant: OracleVariant,
+): Promise<{ answers: GpuAnswers; built: BuiltScene }> {
+    const built = await buildScene(builder, oracleCase, variant);
+    if (variant.treeSource === 'platform') return { answers: await traceThroughPlatform(device, oracleCase), built };
+    const buffers = uploadTraceScene(device, built.data, oracleCase.name);
+    try {
+        return { answers: await traceOnGpu(device, (encoder, batch) => kernel.encode(encoder, buffers, batch), oracleCase.rays), built };
+    } finally {
+        buffers.destroy();
+    }
+}
+
 async function runSharedEdgeCase(
     device: GPUDevice,
     kernel: TraceBatchKernel,
@@ -194,10 +283,7 @@ async function runSharedEdgeCase(
     oracleCase: SharedEdgeCase,
     variant: OracleVariant,
 ): Promise<SharedEdgeReport> {
-    const built = await buildScene(builder, oracleCase, variant);
-    const buffers = uploadTraceScene(device, built.data, oracleCase.name);
-    const answers = await traceOnGpu(device, kernel, buffers, oracleCase.rays);
-    buffers.destroy();
+    const { answers } = await traceCase(device, kernel, builder, oracleCase, variant);
     return evaluateSharedEdgeCase(oracleCase, tracerAnswers(answers), SHARED_EDGE_REFERENCE_RAYS);
 }
 
@@ -235,7 +321,7 @@ await runGpuTest(async ({ device, log }) => {
         const sample = buildOracleCases(FULL_SIZES).find((entry) => entry.name === 'random-soup');
         assert(sample !== undefined, 'random-soup case missing');
         const fromWorker = await builder.build(sample.meshes[0]);
-        const inline = buildMeshBvh(sample.meshes[0]);
+        const inline = buildMeshBvhWithTinyBvh(sample.meshes[0], await createTinyBvhBuilder());
         const inlineNodes = new Uint8Array(inline.nodes);
         assert(
             fromWorker.nodeCount === inline.nodeCount &&
@@ -262,10 +348,7 @@ await runGpuTest(async ({ device, log }) => {
         byTest[variant.name] = results;
 
         for (const [caseIndex, oracleCase] of cases.entries()) {
-            const built = await buildScene(builder, oracleCase, variant);
-            const buffers = uploadTraceScene(device, built.data, oracleCase.name);
-            const answers = await traceOnGpu(device, kernel, buffers, oracleCase.rays);
-            buffers.destroy();
+            const { answers, built } = await traceCase(device, kernel, builder, oracleCase, variant);
 
             const result = evaluateCase(oracleCase, tracerAnswers(answers), references[caseIndex]);
             const stackUsed = probeStackDepth(built.data, oracleCase);

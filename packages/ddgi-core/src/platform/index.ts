@@ -4,5 +4,8 @@
 // and upload entry points are private to the platform. Platform code imports it
 // by path (`./scene/index.ts`); hosts and techniques see only the contract.
 export * from './contract';
+// The platform object (T1.3): what GIPlatformModule in the contract declares.
+export { createGI } from './gi-platform.ts';
+export { isSupported, optionalFeatures, requiredLimits } from './device-requirements.ts';
 export * from './timing';
 export * from './trace';

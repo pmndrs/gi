@@ -3,15 +3,20 @@
  *
  * The CPU builders write these layouts and the WGSL reads them, so every
  * number the two sides must agree on lives here, and the WGSL source is
- * generated from these constants rather than repeating them.
+ * generated from these constants rather than repeating them. The sizes and
+ * limits a builder in `@pmndrs/bvh` also needs (node and triangle bytes, the
+ * largest leaf, the most triangles per mesh) are defined there, in
+ * `gpu-layout.ts`, and taken from it here: that package can't import the core.
  *
  * Everything is plain 32-bit words in a few buffers so it survives a worker
  * hand-off (transferable `ArrayBuffer`s) and a GPU upload without conversion.
  * See docs/design/trace.md for the reasoning.
  */
 
+import { GPU_LAYOUT_MAX_LEAF_PRIMITIVES, GPU_LAYOUT_MAX_TRIANGLES, GPU_LAYOUT_NODE_BYTES, GPU_LAYOUT_TRIANGLE_BYTES } from '@pmndrs/bvh/gpu-layout';
+
 /** One BVH node: two child boxes (Aila-Laine layout), 16 words. */
-export const BVH_NODE_BYTES = 64;
+export const BVH_NODE_BYTES = GPU_LAYOUT_NODE_BYTES;
 export const BVH_NODE_WORDS = BVH_NODE_BYTES / 4;
 
 /**
@@ -54,7 +59,7 @@ export const NO_PARENT = 0xffffffff;
  * stores its three corners as they are.
  */
 /** One triangle in tree order: three corners, the original index and flags, 48 bytes. */
-export const TRIANGLE_BYTES = 48;
+export const TRIANGLE_BYTES = GPU_LAYOUT_TRIANGLE_BYTES;
 export const TRIANGLE_WORDS = TRIANGLE_BYTES / 4;
 
 /**
@@ -98,8 +103,10 @@ export const INSTANCE_FLAG = {
     /** The instance is drawn at all. */
     visible: 2,
     /**
-     * The object-to-world transform has a negative determinant (a mirror). It
-     * flips triangle winding, so `frontFace` must be flipped to match.
+     * The object-to-world transform has a negative determinant (a mirror).
+     * Informational: the walk tests triangles in object space, where the
+     * winding is the authored one, so `frontFace` needs no flip (front faces
+     * follow the authored side, DECISIONS 2026-11-04).
      */
     mirrored: 4,
 } as const;
@@ -126,13 +133,18 @@ export const TOP_HEADER_WORD = {
  */
 export const TRACE_STACK_SIZE = 64;
 export const REF_COUNT_SHIFT = 28;
-export const REF_INDEX_MASK = 0x0fffffff;
+/** Node and triangle indices must fit under the reference index mask: the 28 bits below the count. */
+export const MAX_REFERENCE_INDEX = GPU_LAYOUT_MAX_TRIANGLES;
+export const REF_INDEX_MASK = MAX_REFERENCE_INDEX;
 /** Pushed when entering an instance; popping it switches back to the world-space ray. */
 export const REF_INSTANCE_MARKER = 0xffffffff;
 /** Largest leaf the reference encoding can hold without colliding with {@link REF_INSTANCE_MARKER}. */
-export const MAX_LEAF_PRIMITIVES = 8;
-/** Node and triangle indices must fit under the reference index mask. */
-export const MAX_REFERENCE_INDEX = REF_INDEX_MASK;
+export const MAX_LEAF_PRIMITIVES = GPU_LAYOUT_MAX_LEAF_PRIMITIVES;
+
+// The reference encoding needs the index mask to be exactly the bits below the count, and a
+// leaf count below 15 (count 15 with an all-ones index would be the instance marker).
+if (REF_INDEX_MASK !== 2 ** REF_COUNT_SHIFT - 1) throw new Error('layout: the reference index mask must be the bits below REF_COUNT_SHIFT');
+if (MAX_LEAF_PRIMITIVES >= 2 ** (32 - REF_COUNT_SHIFT) - 1) throw new Error('layout: leaves this large collide with the instance marker');
 
 export function makeReference(index: number, count: number): number {
     return ((count << REF_COUNT_SHIFT) | index) >>> 0;

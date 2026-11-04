@@ -1,13 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import { createCpuTracer } from './cpu-traversal.ts';
 import { BVH_NODE_WORDS, EMPTY_CHILD_INDEX, NODE_WORD, TRIANGLE_WORD, TRIANGLE_WORDS } from './layout.ts';
-import { buildMeshBvh, type MeshBvh, type MeshGeometry } from './mesh-bvh.ts';
+import { createTinyBvhBuilder } from '@pmndrs/bvh';
+import type { MeshBvh, MeshGeometry } from './mesh-bvh.ts';
 import { buildMeshBvhAsync } from './mesh-bvh-build.ts';
-import { buildMeshBvhFromTopology, TOPOLOGY_WORDS_PER_NODE, type MeshTreeTopology } from './mesh-bvh-topology.ts';
+import { buildMeshBvhFromTopology, buildMeshBvhWithTinyBvh, TOPOLOGY_WORDS_PER_NODE, type MeshTreeTopology } from './mesh-bvh-topology.ts';
 import { addToTally, compareAny, compareClosest, newTally } from './oracle-compare.ts';
 import { createRandom, randomRays, randomTriangleSoup } from './oracle-fixtures.ts';
 import { buildReferenceScene, traceAnyReference, traceClosestReference } from './reference-tracer.ts';
 import { assembleTraceScene } from './scene-assembly.ts';
+
+const tinyBvh = await createTinyBvhBuilder();
 
 const IDENTITY = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
 
@@ -44,10 +47,10 @@ function mismatchesAgainstReference(geometry: MeshGeometry, bvh: MeshBvh, seed: 
 }
 
 describe('buildMeshBvhFromTopology', () => {
-    it('rebuilds one of our own trees byte for byte from its shape alone', () => {
+    it('rebuilds a tree byte for byte from its shape alone', () => {
         for (const count of [1, 2, 9, 700]) {
             const geometry = randomTriangleSoup(createRandom(count), count, 10, 1);
-            const original = buildMeshBvh(geometry);
+            const original = buildMeshBvhWithTinyBvh(geometry, tinyBvh);
             const rebuilt = buildMeshBvhFromTopology(geometry, topologyOf(original));
             expect(new Uint8Array(rebuilt.nodes)).toEqual(new Uint8Array(original.nodes));
             expect(new Uint8Array(rebuilt.triangles)).toEqual(new Uint8Array(original.triangles));
@@ -85,12 +88,8 @@ describe('buildMeshBvhFromTopology', () => {
 describe('tinybvh-built mesh BVHs', () => {
     it('trace like the brute-force reference', async () => {
         const geometry = randomTriangleSoup(createRandom(60), 2000, 10, 1);
-        const bvh = await buildMeshBvhAsync(geometry, { builder: 'tinybvh' });
+        const bvh = await buildMeshBvhAsync(geometry);
         expect(bvh.triangleCount).toBe(2000);
         expect(mismatchesAgainstReference(geometry, bvh, 61)).toBe(0);
-    });
-
-    it('is refused by the synchronous builder, which cannot start WASM', () => {
-        expect(() => buildMeshBvh(randomTriangleSoup(createRandom(62), 4, 10, 1), { builder: 'tinybvh' })).toThrow(/buildMeshBvhAsync/);
     });
 });

@@ -4,7 +4,7 @@
  * converter script and its test share them.
  *
  * Metric names are `<group>/<what>_<unit>`, with the tracer and mode in the
- * group, for example `ours-wt/closest/mrays_per_s` or `tmbvh/build_ms_total`.
+ * group, for example `ours-tinybvh/closest/mrays_per_s` or `tmbvh/build_ms_total`.
  */
 
 import type { AgreementResult, ModeResult, SceneResult, SyntheticResult, TraceBenchData } from './results.ts';
@@ -117,6 +117,16 @@ function sceneRows(result: SceneResult): MetricRow[] {
             { scene, metric: 'ours-tmbuild/memory_bytes_nodes', value: tmbuild.bytesNodes },
             { scene, metric: 'ours-tmbuild/memory_bytes_triangles', value: tmbuild.bytesTriangles },
             { scene, metric: 'ours-tmbuild/memory_bytes', value: tmbuild.bytesTotal },
+        );
+    }
+    const platform = result.platform;
+    if (platform) {
+        rows.push(
+            { scene, metric: 'platform/describe_ms', value: platform.describeMs },
+            { scene, metric: 'platform/ready_ms', value: platform.readyMs },
+            { scene, metric: 'platform/memory_bytes_scene_copy', value: platform.bytesSceneCopy },
+            { scene, metric: 'platform/memory_bytes_acceleration', value: platform.bytesAcceleration },
+            { scene, metric: 'platform/memory_bytes_triangles', value: platform.bytesTriangles },
         );
     }
     const tmbvh = result.tmbvh;

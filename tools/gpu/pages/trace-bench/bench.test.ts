@@ -5,16 +5,13 @@
 
 import { describe, expect, it } from 'vitest';
 import {
-    addToTally,
     assembleTraceScene,
-    buildReferenceScene,
-    compareClosest,
     createCpuTracer,
     HIT_RECORD_BYTES,
-    newTally,
     RAY_FLOATS,
-    traceClosestReference,
 } from '../../../../packages/ddgi-core/src/platform/trace/index.ts';
+import { buildReferenceScene, traceClosestReference } from '../../../../packages/ddgi-core/src/platform/trace/reference-tracer.ts';
+import { addToTally, compareClosest, newTally } from '../../../../packages/ddgi-core/src/platform/trace/oracle-compare.ts';
 import { createRandom, randomRays, randomTriangleSoup } from '../../../../packages/ddgi-core/src/platform/trace/oracle-fixtures.ts';
 import { BenchConfigError, parseBenchConfig, type BenchProfileName } from './config.ts';
 import { browserFromUserAgent, deviceNameFromAdapter, formatValue, repeatedRunRows, traceBenchRows } from './csv-rows.ts';
@@ -57,7 +54,7 @@ describe('config', () => {
         const config = parseBenchConfig('', defaults);
         expect(config.raysPerProbe).toBe(64);
         expect(config.scenes).toEqual(['furnished-room']);
-        expect(config.tracers).toEqual(['ours-wt', 'ours-tinybvh', 'ours-tmbuild', 'tmbvh']);
+        expect(config.tracers).toEqual(['ours-tinybvh', 'ours-tmbuild', 'platform', 'tmbvh']);
     });
 
     it('lets the URL override the profile', () => {
@@ -76,7 +73,7 @@ describe('config', () => {
 
     it('rejects nonsense with a message', () => {
         expect(() => parseBenchConfig('?rays=0', defaults)).toThrow(BenchConfigError);
-        expect(() => parseBenchConfig('?tracer=nope', defaults)).toThrow(/ours-wt/);
+        expect(() => parseBenchConfig('?tracer=nope', defaults)).toThrow(/ours-tinybvh/);
     });
 });
 

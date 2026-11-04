@@ -1,7 +1,7 @@
 /**
  * A CPU port of the WGSL walk in `wgsl.ts`, step for step.
  *
- * It exists so the builder and the traversal logic (nearer child first,
+ * It exists so the builder and the traversal logic (child order,
  * two-level descent, object-space rays, stack use) can be tested in plain Node
  * against the brute-force reference, with no GPU. It also reports the deepest
  * stack the walk used, which the GPU cannot tell us without a debug counter.
@@ -9,7 +9,6 @@
  */
 
 import {
-    INSTANCE_FLAG,
     INSTANCE_RECORD_WORDS,
     INSTANCE_WORD,
     BVH_NODE_WORDS,
@@ -25,7 +24,7 @@ import {
     referenceCount,
     referenceIndex,
 } from './layout.ts';
-import type { TraceRay } from './reference-tracer.ts';
+import type { TraceRay } from './trace-gpu.ts';
 import type { TraceSceneData } from './scene-assembly.ts';
 
 export interface CpuHit {
@@ -141,7 +140,6 @@ export function createCpuTracer(scene: TraceSceneData): CpuTracer {
         let rootNodeOffset = 0;
         let triangleOffset = 0;
         let instanceIndex = 0;
-        let mirrored = false;
 
         let closestT = ray.tMax;
         let result: CpuHit | null = null;
@@ -174,7 +172,9 @@ export function createCpuTracer(scene: TraceSceneData): CpuTracer {
                 const hitRight = rightEntry < BOX_MISS;
 
                 if (hitLeft && hitRight) {
-                    if (leftEntry <= rightEntry) {
+                    // As in the WGSL: closest-hit takes the nearer child first, any-hit the farther one.
+                    const leftFirst = stopAtFirstHit ? leftEntry > rightEntry : leftEntry <= rightEntry;
+                    if (leftFirst) {
                         stack.push(rightReference);
                         current = leftReference;
                     } else {
@@ -194,7 +194,6 @@ export function createCpuTracer(scene: TraceSceneData): CpuTracer {
                 rootNodeOffset = topWords[record + INSTANCE_WORD.rootNodeOffset];
                 triangleOffset = topWords[record + INSTANCE_WORD.triangleOffset];
                 instanceIndex = topWords[record + INSTANCE_WORD.instanceIndex];
-                mirrored = (topWords[record + INSTANCE_WORD.flags] & INSTANCE_FLAG.mirrored) !== 0;
                 const row = (rowStart: number): number[] => [
                     topFloats[record + rowStart],
                     topFloats[record + rowStart + 1],
@@ -222,8 +221,8 @@ export function createCpuTracer(scene: TraceSceneData): CpuTracer {
                         triangleIndex: triangleWords[base + TRIANGLE_WORD.originalIndex],
                         u: hit.u,
                         v: hit.v,
-                        // A mirrored instance flips the winding as seen in world space.
-                        frontFace: hit.frontFace !== mirrored,
+                        // Object-space winding is the authored one, so this is the authored side even when mirrored.
+                        frontFace: hit.frontFace,
                     };
                     closestT = hit.t;
                     if (stopAtFirstHit) return result;

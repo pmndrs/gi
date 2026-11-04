@@ -6,7 +6,7 @@
  */
 
 import type { MeshGeometry } from './mesh-bvh.ts';
-import type { TraceRay } from './reference-tracer.ts';
+import type { TraceRay } from './trace-gpu.ts';
 
 export type Random = () => number;
 

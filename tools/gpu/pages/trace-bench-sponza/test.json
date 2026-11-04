@@ -1,5 +1,5 @@
 {
-    "description": "Full tracer benchmark on sponza: ours (on our, tinybvh and three-mesh-bvh trees) vs three-mesh-bvh. Slow; run under the bench lock, on its own.",
+    "description": "Full tracer benchmark on sponza: ours (on tinybvh and three-mesh-bvh trees, and through the platform API) vs three-mesh-bvh. Slow; run under the bench lock, on its own.",
     "timeoutMs": 900000,
     "manual": true
 }

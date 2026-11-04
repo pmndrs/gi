@@ -5,16 +5,20 @@
  */
 
 import {
-    buildMeshBvh,
     buildTopLevel,
     type MeshGeometry,
     type TraceInstance,
 } from '../../../../packages/ddgi-core/src/platform/trace/index.ts';
+import { buildMeshBvhWithTinyBvh } from '../../../../packages/ddgi-core/src/platform/trace/mesh-bvh-topology.ts';
+import { createTinyBvhBuilder } from '../../../../packages/bvh/src/index.ts';
 import { createRandom } from '../../../../packages/ddgi-core/src/platform/trace/oracle-fixtures.ts';
 import { SYNTHETIC_INSTANCE_COUNT, SYNTHETIC_SCENE_ID, TOP_LEVEL_REBUILD_RUNS } from './config.ts';
 import type { SyntheticResult } from './results.ts';
 import { maximum, median } from './statistics.ts';
 import { timeTopLevelRebuilds } from './ours-bench.ts';
+
+// Mesh trees come from tinybvh (WASM), the only mesh builder since B0.
+const tinyBvh = await createTinyBvhBuilder();
 
 /** A latitude-longitude sphere of radius 1: about `2 * segments * (rings - 1)` triangles. */
 export function makeSphereMesh(segments = 16, rings = 12): MeshGeometry {
@@ -61,7 +65,7 @@ function randomTransform(random: () => number, extent: number): number[] {
 
 export async function runSynthetic(instanceCount = SYNTHETIC_INSTANCE_COUNT, runs = TOP_LEVEL_REBUILD_RUNS): Promise<SyntheticResult> {
     const mesh = makeSphereMesh();
-    const bvh = buildMeshBvh(mesh);
+    const bvh = buildMeshBvhWithTinyBvh(mesh, tinyBvh);
     const random = createRandom(0x10_000);
     const instances: TraceInstance[] = [];
     for (let i = 0; i < instanceCount; i++) {

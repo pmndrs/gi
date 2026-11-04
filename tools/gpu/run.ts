@@ -8,6 +8,7 @@
 
 import { existsSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
+import { gitCommit } from './measured-commit.ts';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { parseRunnerArgs, UsageError, USAGE, type RunnerOptions } from './args.ts';
@@ -143,6 +144,7 @@ async function main(): Promise<number> {
     const summary: RunSummary = {
         schema: 1,
         startedAt: new Date(runStart).toISOString(),
+        commit: recordedCommit(),
         gpuRequested: options.gpu,
         adapter: null,
         ok: false,
@@ -227,3 +229,12 @@ async function main(): Promise<number> {
 
 installShutdownHandlers();
 process.exitCode = await main();
+
+/** The commit being measured, for `RunSummary.commit`; undefined when git can't tell (no repository, no git). */
+function recordedCommit(): string | undefined {
+    try {
+        return gitCommit();
+    } catch {
+        return undefined;
+    }
+}

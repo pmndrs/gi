@@ -8,22 +8,24 @@
  * it with a deliberate fault). Nothing here knows which.
  */
 
+import { type TraceRay } from '../../../../packages/ddgi-core/src/platform/trace/index.ts';
+import {
+    buildReferenceScene,
+    traceAnyReference,
+    traceClosestReference,
+    type ReferenceHit,
+    type ReferenceOcclusion,
+} from '../../../../packages/ddgi-core/src/platform/trace/reference-tracer.ts';
 import {
     addToTally,
-    buildReferenceScene,
     compareAny,
     compareClosest,
     newTally,
-    traceAnyReference,
-    traceClosestReference,
     T_TOLERANCE,
     type Comparison,
     type ComparisonTally,
-    type ReferenceHit,
-    type ReferenceOcclusion,
     type TracedHit,
-    type TraceRay,
-} from '../../../../packages/ddgi-core/src/platform/trace/index.ts';
+} from '../../../../packages/ddgi-core/src/platform/trace/oracle-compare.ts';
 import { SHARED_EDGE_CATEGORIES, unpackRay, type ExpectedHit, type OracleCase, type SharedEdgeCase } from './cases.ts';
 
 /** Accepted difference for barycentrics against hand-worked values. */

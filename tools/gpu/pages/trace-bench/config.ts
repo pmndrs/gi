@@ -5,21 +5,36 @@
  * but every default and every number the design fixed lives here.
  */
 
-/** The scenes the design benchmarks. Ids are scene manifest ids. */
+/**
+ * The scenes the design benchmarks. Ids are scene manifest ids, or one of
+ * {@link BENCH_SCENE_SUBSETS}.
+ */
 export const BENCH_SCENE_IDS = ['sponza', 'bistro-exterior', 'bistro-interior', 'furnished-room'] as const;
 export type BenchSceneId = (typeof BENCH_SCENE_IDS)[number];
+
+/**
+ * Bench scenes that load only some parts of a manifest, so rows stay
+ * comparable when a manifest grows. `sponza-base` is Intel's base package
+ * alone (3.75 M triangles): what the `sponza` rows measured until T1.10 added
+ * the curtains to the manifest. From then on `sponza` rows mean base plus
+ * curtains; compare older `sponza` rows with `sponza-base`.
+ */
+export const BENCH_SCENE_SUBSETS: Readonly<Record<string, { readonly manifest: string; readonly assets: readonly string[] }>> = {
+    'sponza-base': { manifest: 'sponza', assets: ['sponza-intel'] },
+};
 
 /** Pseudo-scene for the top-level rebuild timing: many instances of one small mesh. */
 export const SYNTHETIC_SCENE_ID = 'synthetic-10k';
 export const SYNTHETIC_INSTANCE_COUNT = 10_000;
 
 /**
- * - `ours-wt`: our builder and our (watertight) walk.
  * - `ours-tinybvh`: tinybvh (WASM, in our worker) builds each mesh's tree, traced by our watertight walk.
+ *   Our own SAH mesh builder (`ours-wt` in rows before T1.3) was deleted once B0's checks passed.
  * - `ours-tmbuild`: three-mesh-bvh builds each mesh's tree, converted to our layout, traced by our watertight walk.
+ * - `platform`: the same as `ours-tinybvh`, but through the platform API (`createGI`, its scene API, `queries.rays`).
  * - `tmbvh`: three-mesh-bvh's own trees and its own WebGPU walk.
  */
-export const TRACER_IDS = ['ours-wt', 'ours-tinybvh', 'ours-tmbuild', 'tmbvh'] as const;
+export const TRACER_IDS = ['ours-tinybvh', 'ours-tmbuild', 'platform', 'tmbvh'] as const;
 export type TracerId = (typeof TRACER_IDS)[number];
 
 /**
@@ -144,7 +159,7 @@ function readList(params: URLSearchParams, name: string): string[] | null {
  * Query parameters (all optional):
  *
  *   ?scene=sponza,bistro-interior   scene manifest ids, or `all` (default: what the page folder says)
- *   &tracer=ours-wt,tmbvh           any of TRACER_IDS (default: all)
+ *   &tracer=ours-tinybvh,tmbvh      any of TRACER_IDS (default: all)
  *   &rays=256                       rays per probe
  *   &targetRays=2097152             total rays per dispatch, about
  *   &profile=quick|full             defaults for the numbers above and the timing counts

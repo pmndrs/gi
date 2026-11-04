@@ -17,15 +17,11 @@
 import type { MeshGeometry } from './mesh-bvh.ts';
 import { countTriangles } from './mesh-bvh.ts';
 import { invertAffine } from './top-level.ts';
+import type { TraceRay } from './trace-gpu.ts';
+
+export type { TraceRay } from './trace-gpu.ts';
 import type { TraceSceneInstance } from './scene-assembly.ts';
 
-export interface TraceRay {
-    readonly origin: readonly [number, number, number];
-    /** Normalized. */
-    readonly direction: readonly [number, number, number];
-    readonly tMin: number;
-    readonly tMax: number;
-}
 
 export interface ReferenceHit {
     readonly t: number;
@@ -52,6 +48,8 @@ export interface ReferenceScene {
     readonly geometry: Float64Array;
     readonly instanceIndices: Uint32Array;
     readonly triangleIndices: Uint32Array;
+    /** 1 for triangles of a mirrored instance, whose world-space winding is the reverse of the authored one. */
+    readonly mirrored: Uint8Array;
 }
 
 /** Transforms every triangle of every traceable instance to world space. */
@@ -64,14 +62,17 @@ export function buildReferenceScene(
         if (instance.visible === false || instance.contributesToGi === false) return false;
         return invertAffine(instance.objectToWorld) !== null;
     });
+    const isMirrored = (instance: TraceSceneInstance): boolean => (invertAffine(instance.objectToWorld)?.determinant ?? 1) < 0;
     for (const instance of traceable) total += countTriangles(meshes[instance.meshIndex]);
 
     const geometry = new Float64Array(total * 9);
     const instanceIndices = new Uint32Array(total);
     const triangleIndices = new Uint32Array(total);
+    const mirrored = new Uint8Array(total);
     let slot = 0;
     for (const instance of traceable) {
         const mesh = meshes[instance.meshIndex];
+        const instanceMirrored = isMirrored(instance) ? 1 : 0;
         const e = instance.objectToWorld;
         const toWorld = (vertex: number): [number, number, number] => {
             const x = mesh.positions[vertex * 3];
@@ -97,10 +98,11 @@ export function buildReferenceScene(
             }
             instanceIndices[slot] = instance.instanceIndex;
             triangleIndices[slot] = triangle;
+            mirrored[slot] = instanceMirrored;
             slot++;
         }
     }
-    return { triangleCount: total, geometry, instanceIndices, triangleIndices };
+    return { triangleCount: total, geometry, instanceIndices, triangleIndices, mirrored };
 }
 
 /** Möller-Trumbore in doubles. Writes `t, u, v, determinant` to `out` and returns false when the ray misses the triangle's plane region. */
@@ -193,8 +195,9 @@ export function traceClosestReference(scene: ReferenceScene, ray: TraceRay): Ref
         triangleIndex: scene.triangleIndices[best],
         u: bestU,
         v: bestV,
-        // World-space winding: front when the ray runs against the geometric normal.
-        frontFace: bestDeterminant > 0,
+        // The authored side (DECISIONS 2026-11-04): the world-space winding test, flipped
+        // back for a mirrored instance, whose transform reverses the winding.
+        frontFace: bestDeterminant > 0 !== (scene.mirrored[best] === 1),
         ambiguous: bestIsAmbiguous,
     };
 }

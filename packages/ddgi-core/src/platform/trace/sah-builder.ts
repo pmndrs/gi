@@ -1,8 +1,10 @@
 /**
- * Binned surface-area-heuristic (SAH) BVH builder.
+ * Binned surface-area-heuristic (SAH) BVH builder, for the top level.
  *
- * One builder serves both levels: the per-mesh trees (primitives are
- * triangles) and the top level (primitives are instance boxes). It takes one
+ * It builds the tree over instance boxes (one primitive per instance). Mesh
+ * trees come from tinybvh (stage B0, `@pmndrs/bvh`); this builder made them
+ * too until B0's checks passed, and its mesh path was then deleted
+ * (DECISIONS 2026-11-04). B1a moves the top level to the GPU. It takes one
  * axis-aligned box per primitive and produces nodes in the 64-byte two-child
  * layout from `layout.ts`, plus the order the primitives must be stored in so
  * that every leaf points at a contiguous run.
@@ -40,7 +42,7 @@ import { BVH_NODE_BYTES, BVH_NODE_WORDS, EMPTY_CHILD_INDEX, MAX_LEAF_PRIMITIVES,
 export interface SahBuildOptions {
     /** Bins per axis. 16 is the usual sweet spot between build time and tree quality. */
     readonly binCount: number;
-    /** Most primitives a leaf may hold. The design uses 4 for triangles and 1 for instances. */
+    /** Most primitives a leaf may hold. The top level uses 1: one instance per leaf. */
     readonly maxLeafPrimitives: number;
     /** Relative cost of visiting a node (two box tests). Only the ratio to `intersectionCost` matters. */
     readonly traversalCost: number;

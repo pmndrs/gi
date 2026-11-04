@@ -8,9 +8,17 @@
 
 import { GILimitError } from '../contract/errors.ts';
 import type { BindingSlot, ModuleBindingEntry, WgslModule } from '../contract/wgsl.ts';
-import type { TraceRay } from './reference-tracer.ts';
 import type { TraceSceneData } from './scene-assembly.ts';
 import { BATCH_WORKGROUP_SIZE, batchKernelWgsl, TRACE_MODULE_ENTRIES, traceModuleWgsl } from './wgsl.ts';
+
+/** A ray on the CPU side, as `GiRay` holds it on the GPU. */
+export interface TraceRay {
+    readonly origin: readonly [number, number, number];
+    /** Normalized. */
+    readonly direction: readonly [number, number, number];
+    readonly tMin: number;
+    readonly tMax: number;
+}
 
 /** Bytes per ray in a batch: `GiRay` is 32 bytes. */
 export const RAY_BYTES = 32;
