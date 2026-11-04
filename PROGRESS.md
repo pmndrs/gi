@@ -21,6 +21,24 @@ Rules:
 
 ---
 
+## 2026-11-05 · T1.4 · implementer (opus); in review
+Did (72ebc0e):
+- `platform/shade`: hit shading (`giSurfaceAt`, `giDirectIrradiance`, `giSkyRadiance`, `giSkyIrradiance`, `giSkyIrradianceAt`). Point and spot lights use three r187's falloff and cones. Shadow rays use `giTraceAny`, and lights beyond the cap are picked stochastically and rescaled. It binds 0 storage buffers.
+- `platform/sky`: the environment projected by compute into SH (bands 0, 1, 2 and 4) plus a 256×128 radiance map; subgroups first, with a workgroup fallback; re-projected only on change.
+- The Preetham and calibration code moved from `scenes/src/sky` into the core; the sky files are byte-identical.
+- The contract states the equirect layout. One turbidity default, 2.
+Verified (agent; RTX 3060 ampere and Intel UHD gen-12lp, headless Chrome 156, default limits):
+- Sun on a plane matches E·cos θ, worst 7e-8.
+- Open-ground sky irradiance against the file's integral: +0.30 / −0.11 / −0.25%. Against Cycles: +0.33 / −0.09 / −0.25%, inside ±0.5%. L2 SH alone would be +0.74 / −0.33 / −0.87%.
+- Shadow rays against the oracle on 9 scenes: 0 disagreements, 0 leaks.
+- Point and spot lights against three's formulas: worst 1e-5.
+- The stochastic choice: cap 2 within 0.21% (1.6 SE) of all lights.
+- Subgroups against the fallback: 1.4e-7.
+- Scene copy plus hit shading: 2 storage buffers.
+- lint, typecheck, test 597.
+Not verified: cube maps made by three; an environment change in the viewer; the sky's ~1.3 MB isn't in `stats.memory` yet.
+Lead mistake, fixed: 43fab16 (T1.3's fixes) also caught T1.4's in-progress `gi-platform.ts` wiring, because the agent edited it between the lead's diff check and the commit. So `origin/m1` at 43fab16 didn't build until 72ebc0e. Rule since: no commit of a file that two active agents may touch.
+
 ## 2026-11-05 · T1.3 · implementer (opus); Opus review: pass with notes, fixed; done
 Did (168e632; timing rows d6ee376):
 - The platform object: `createGI`, `requiredLimits`, `optionalFeatures`, `isSupported`, a `KernelBuilder`, the technique lifecycle, device loss, `dispose`, `stats.memory`.
