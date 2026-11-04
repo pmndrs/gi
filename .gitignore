@@ -11,3 +11,4 @@ Thumbs.db
 .playwright-mcp/
 /bench/screenshots/
 /assets/generated/
+/bench/results/incoming/

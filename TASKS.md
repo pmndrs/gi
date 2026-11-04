@@ -8,14 +8,14 @@ Status values: `todo`, `active (agent, date)`, `review`, `done`, `blocked (why)`
 | --- | --- | --- | --- | --- | --- |
 | T0.1 | Workspace | implementer | M | none | done |
 | T0.2 | GPU runner | implementer | M | T0.1 | review |
-| T0.3 | Timing and devices | implementer, then gpu-tester | M | T0.2 | active (implementer, 2026-11-04) |
-| T0.4 | Test scenes | wrangler (assets) + implementer (manifest, procedural scenes) | M | T0.1 | active (wrangler + implementer, 2026-11-04) |
+| T0.3 | Timing and devices | implementer, then gpu-tester | M | T0.2 | review (Windows done; Apple devices need Dennis) |
+| T0.4 | Test scenes | wrangler (assets) + implementer (manifest, procedural scenes) | M | T0.1 | review (Sponza blocked: license question for Dennis) |
 | T0.5 | Viewer shell | implementer | M | T0.2, T0.3, T0.4 | todo |
 | T0.6 | Native harness | native-runner | M | T0.4 | todo |
 | T0.7 | References and compare | implementer | M | T0.4 | todo |
-| T0.8 | Spike: three.js sharing | implementer | S | T0.2 | todo |
-| T0.9 | Spike: Babylon | implementer | S | T0.2 | todo |
-| T0.10 | Spike: BVH | main session designs, implementer builds, gpu-tester measures | M | T0.2, T0.4 | active (design done: [docs/design/trace.md](docs/design/trace.md); build next) |
+| T0.8 | Spike: three.js sharing | implementer | S | T0.2 | active (implementer, 2026-11-04) |
+| T0.9 | Spike: Babylon | implementer | S | T0.2 | active (implementer, 2026-11-04) |
+| T0.10 | Spike: BVH | main session designs, implementer builds, gpu-tester measures | M | T0.2, T0.4 | active (design: [docs/design/trace.md](docs/design/trace.md); part A builder + oracle with implementer) |
 | T0.11 | Platform API draft | main session | M | none (revise after T0.8–T0.10) | active (draft in [docs/api/platform.md](docs/api/platform.md); waiting on spikes and Dennis's read) |
 | T0.12 | M0 note and M1 breakdown | main session | S | all M0 | todo |
 
