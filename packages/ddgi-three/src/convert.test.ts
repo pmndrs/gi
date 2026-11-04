@@ -23,8 +23,8 @@ import {
 } from 'three';
 import { describe, expect, it } from 'vitest';
 import type { TextureHandle } from '@pmndrs/ddgi-core';
-import { textureAverage } from './texture-average.ts';
-import { giAlbedo, lightDescriptor, materialDescriptor, MaterialSnapshot, meshDescriptor, readFloatAttribute, uvMapping } from './convert.ts';
+import { diffuseAverage, textureAverage } from './texture-average.ts';
+import { sameUvMapping, giAlbedo, lightDescriptor, materialDescriptor, MaterialSnapshot, meshDescriptor, readFloatAttribute, uvMapping } from './convert.ts';
 
 const HANDLE = 7 as TextureHandle;
 const noTextures = () => undefined;
@@ -107,37 +107,84 @@ describe('the rest of the material', () => {
     });
 });
 
-describe('texture colours folded into GI (until the core samples textures, M4)', () => {
-    const grey = (): [number, number, number] => [0.5, 0.25, 1];
+describe('texture averages folded into GI (until the core samples textures, M4)', () => {
+    /** Averages as the scene sync supplies them, but fixed: albedo factor and emissive colour. */
+    const fixedAverages = (factor: [number, number, number] | undefined, color: [number, number, number] | undefined) => ({
+        diffuse: () => factor,
+        color: () => color,
+    });
 
-    it('multiplies the albedo (metalness folded too) and the emission by the averages', () => {
-        const map = new Texture();
-        const emissiveMap = new Texture();
-        const material = new MeshStandardMaterial({ color: new Color().setRGB(0.8, 0.8, 0.8), metalness: 0.5, map, emissive: new Color().setRGB(1, 1, 1), emissiveMap });
-        const descriptor = materialDescriptor(material, () => HANDLE, grey);
-        expectClose(descriptor.albedo, [0.2, 0.1, 0.4]);
+    it('multiplies the colour by the diffuse factor and the emission by the emissive map\'s average', () => {
+        const material = new MeshStandardMaterial({ color: new Color().setRGB(0.8, 0.8, 0.8), map: new Texture(), emissive: new Color().setRGB(1, 1, 1), emissiveMap: new Texture() });
+        const descriptor = materialDescriptor(material, () => HANDLE, fixedAverages([0.5, 0.25, 1], [0.5, 0.25, 1]));
+        expectClose(descriptor.albedo, [0.4, 0.2, 0.8]);
         expectClose(descriptor.emissive, [0.5, 0.25, 1]);
     });
 
-    it('leaves the colour alone when the texture has no readable pixels', () => {
-        const material = new MeshStandardMaterial({ color: new Color().setRGB(0.5, 0.5, 0.5), map: new Texture() });
-        expectClose(materialDescriptor(material, () => HANDLE, () => undefined).albedo, [0.5, 0.5, 0.5]);
+    it('falls back to colour × (1 − metalness) when no texture can be read', () => {
+        const material = new MeshStandardMaterial({ color: new Color().setRGB(0.5, 0.5, 0.5), metalness: 0.5, map: new Texture() });
+        expectClose(materialDescriptor(material, () => HANDLE, fixedAverages(undefined, undefined)).albedo, [0.25, 0.25, 0.25]);
+    });
+
+    it('gives a Sponza-like material (metalness 1 from the factor, mostly 0 in its map) a real albedo', () => {
+        // glTF's metallicRoughness: metalness in B. Three quarters of the texels are paint (B = 0), one quarter metal (B = 255).
+        const albedoPixels = new Uint8Array(4 * 4 * 4).fill(255);
+        const metalPixels = new Uint8Array(4 * 4 * 4);
+        for (let texel = 0; texel < 16; texel++) {
+            metalPixels.set([0, 128, texel < 4 ? 255 : 0, 255], texel * 4);
+            albedoPixels.set([204, 102, 51, 255], texel * 4);
+        }
+        const map = new DataTexture(albedoPixels, 4, 4);
+        const metalnessMap = new DataTexture(metalPixels, 4, 4);
+        const material = new MeshStandardMaterial({ color: 0xffffff, metalness: 1, map, metalnessMap });
+        const real = { color: textureAverage, diffuse: (a: Texture | null, b: Texture | null, metalness: number, sameUv: boolean) => diffuseAverage(a, b, metalness, sameUv)?.factor };
+        const albedo = materialDescriptor(material, () => HANDLE, real).albedo!;
+        // 3/4 of the texels keep their albedo (0.8, 0.4, 0.2): 0.6, 0.3, 0.15. Folding the factor alone would give 0.
+        expectClose(albedo, [0.6, 0.3, 0.15], 3);
+        expect(diffuseAverage(map, metalnessMap, 1, true)!.method).toBe('per-texel');
+    });
+
+    it('multiplies separate averages when the two maps are sampled differently', () => {
+        const map = new DataTexture(new Uint8Array([255, 255, 255, 255, 0, 0, 0, 255]), 2, 1);
+        const metalnessMap = new DataTexture(new Uint8Array([0, 0, 255, 255, 0, 0, 0, 255]), 2, 1);
+        metalnessMap.repeat.set(2, 1);
+        expect(sameUvMapping(map, metalnessMap)).toBe(false);
+        const material = new MeshStandardMaterial({ color: 0xffffff, metalness: 1, map, metalnessMap });
+        const real = { color: textureAverage, diffuse: (a: Texture | null, b: Texture | null, metalness: number, sameUv: boolean) => diffuseAverage(a, b, metalness, sameUv)?.factor };
+        // Albedo average 0.5, metalness average 0.5: 0.5 × (1 − 0.5).
+        expectClose(materialDescriptor(material, () => HANDLE, real).albedo, [0.25, 0.25, 0.25]);
+        expect(diffuseAverage(map, metalnessMap, 1, false)!.method).toBe('separate-averages');
+    });
+
+    it('averages a metalness map alone into 1 − metalness × average', () => {
+        const metalnessMap = new DataTexture(new Uint8Array([0, 0, 255, 255, 0, 0, 0, 255]), 2, 1);
+        expect(diffuseAverage(null, metalnessMap, 0.5, false)).toEqual({ factor: [0.75, 0.75, 0.75], method: 'metalness-map' });
     });
 });
 
 describe('texture averages', () => {
-    it('averages pixel data, decoding sRGB', () => {
+    it('averages in linear light, decoding sRGB texel by texel', () => {
         const linear = new DataTexture(new Uint8Array([255, 0, 0, 255, 0, 0, 255, 255]), 2, 1);
         expectClose(textureAverage(linear), [0.5, 0, 0.5]);
-        const srgb = new DataTexture(new Uint8Array([188, 188, 188, 255]), 1, 1);
+        // Black and white sRGB texels average to linear 0.5 (encoded averaging would give sRGB 128, linear 0.22).
+        const srgb = new DataTexture(new Uint8Array([0, 0, 0, 255, 255, 255, 255, 255]), 2, 1);
         srgb.colorSpace = SRGBColorSpace;
-        expect(textureAverage(srgb)![0]).toBeCloseTo(0.5, 2);
+        expectClose(textureAverage(srgb), [0.5, 0.5, 0.5]);
     });
 
-    it('samples at most a 32 x 32 grid of a large image', () => {
-        const size = 1024;
-        const data = new Uint8Array(size * size * 4).fill(128);
-        expectClose(textureAverage(new DataTexture(data, size, size)), [128 / 255, 128 / 255, 128 / 255]);
+    it('weights by alpha, so cut-out texels don\'t count as black', () => {
+        // Two opaque green leaves and two fully transparent black texels.
+        const leaves = new DataTexture(new Uint8Array([0, 255, 0, 255, 0, 0, 0, 0, 0, 255, 0, 255, 0, 0, 0, 0]), 4, 1);
+        expectClose(textureAverage(leaves), [0, 1, 0]);
+        expect(textureAverage(new DataTexture(new Uint8Array(8), 2, 1))).toBeUndefined();
+    });
+
+    it('counts every texel of a data texture', () => {
+        const size = 512;
+        const data = new Uint8Array(size * size * 4).fill(255);
+        data.set([0, 0, 0], 0); // one black texel in a quarter of a million
+        const average = textureAverage(new DataTexture(data, size, size))!;
+        expect(average[0]).toBeCloseTo(1 - 1 / (size * size), 7);
     });
 
     it('has nothing for an image that has not loaded', () => {

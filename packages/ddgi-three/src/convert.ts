@@ -252,6 +252,7 @@ interface MaterialFields {
     transmission?: number;
     map?: Texture | null;
     emissiveMap?: Texture | null;
+    metalnessMap?: Texture | null;
 }
 
 function fields(material: Material): MaterialFields {
@@ -295,17 +296,34 @@ export function giAlbedo(material: Material): ColorRGB | undefined {
  *   out they sit inside geometry), unless `material.userData.giSingleSided`;
  * - textures (`map`, `emissiveMap`) as handles from `textureHandle`, with
  *   their uv mappings. The atlas that samples them is M4; until then each
- *   texture's average colour from `textureColor` is folded into the albedo
- *   and the emission (texture-average.ts).
+ *   the albedo is multiplied by the average of albedo map × (1 − metalness ×
+ *   metalness map), and the emission by the emissive map's average
+ *   (texture-average.ts, `averages`).
  *
  * Node materials' custom nodes (`colorNode`, `emissiveNode`) are not read.
  */
-export function materialDescriptor(
-    material: Material,
-    textureHandle: (texture: Texture) => TextureHandle | undefined,
-    textureColor: (texture: Texture) => ColorRGB | undefined = () => undefined,
-): MaterialDescriptor {
-    const { emissive, emissiveIntensity, transmission, map, emissiveMap } = fields(material);
+/**
+ * Texture averages folded into GI while the core samples no textures
+ * (texture-average.ts; remove in M4). The scene sync supplies cached ones.
+ */
+export interface TextureAverages {
+    /** A texture's average linear colour (emissive maps). */
+    color(texture: Texture): ColorRGB | undefined;
+    /** The GI albedo factor from an albedo map and/or a metalness map (texture-average.ts, `diffuseAverage`). */
+    diffuse(map: Texture | null, metalnessMap: Texture | null, metalness: number, sameUv: boolean): ColorRGB | undefined;
+}
+
+/** Whether two textures are sampled at the same uv: the same channel and the same uv transform. */
+export function sameUvMapping(a: Texture, b: Texture): boolean {
+    const first = uvMapping(a);
+    const second = uvMapping(b);
+    if (first.channel !== second.channel) return false;
+    for (let index = 0; index < 6; index++) if (first.matrix![index] !== second.matrix![index]) return false;
+    return true;
+}
+
+export function materialDescriptor(material: Material, textureHandle: (texture: Texture) => TextureHandle | undefined, averages?: TextureAverages): MaterialDescriptor {
+    const { color, emissive, emissiveIntensity, transmission, map, emissiveMap, metalnessMap } = fields(material);
     const albedoTexture = map ? textureHandle(map) : undefined;
     const emissiveTexture = emissiveMap ? textureHandle(emissiveMap) : undefined;
 
@@ -317,17 +335,18 @@ export function materialDescriptor(
         else if (alphaCutoff === undefined && albedoTexture !== undefined) alphaCutoff = BLENDED_ALPHA_CUTOFF;
     }
 
-    // Textures folded in as their average colour while the core samples none (texture-average.ts; remove in M4).
+    // Textures folded in by their averages while the core samples none (texture-average.ts; remove in M4).
+    // The albedo map and the metalness map (three: metalness × metalnessMap.b) together give what
+    // multiplies the colour; without either, the scalar metalness alone (giAlbedo).
     let albedo = giAlbedo(material);
-    const mapColor = map ? textureColor(map) : undefined;
-    if (mapColor) {
-        // A material with a map but no colour property: the map alone, still with metalness folded in.
-        const diffuse = 1 - metalnessOf(material);
-        const base: ColorRGB = albedo ?? [diffuse, diffuse, diffuse];
-        albedo = [base[0] * mapColor[0], base[1] * mapColor[1], base[2] * mapColor[2]];
-    }
+    const metalnessTexture = metalnessMap && typeof (material as MaterialFields).metalness === 'number' ? metalnessMap : null;
+    const factor =
+        averages && (map || metalnessTexture)
+            ? averages.diffuse(map ?? null, metalnessTexture, metalnessOf(material), map && metalnessTexture ? sameUvMapping(map, metalnessTexture) : false)
+            : undefined;
+    if (factor) albedo = color ? [color.r * factor[0], color.g * factor[1], color.b * factor[2]] : factor;
     let emission: ColorRGB | undefined = emissive ? [emissive.r, emissive.g, emissive.b] : undefined;
-    const emissiveColor = emissiveMap ? textureColor(emissiveMap) : undefined;
+    const emissiveColor = emissiveMap && averages ? averages.color(emissiveMap) : undefined;
     if (emission && emissiveColor) emission = [emission[0] * emissiveColor[0], emission[1] * emissiveColor[1], emission[2] * emissiveColor[2]];
 
     return {
@@ -370,9 +389,10 @@ const TEXTURE_SNAPSHOT_NUMBERS = 12;
 const FIRST_TEXTURE_SNAPSHOT_NUMBER = 14;
 
 export class MaterialSnapshot {
-    readonly numbers = new Float64Array(FIRST_TEXTURE_SNAPSHOT_NUMBER + 2 * TEXTURE_SNAPSHOT_NUMBERS);
+    readonly numbers = new Float64Array(FIRST_TEXTURE_SNAPSHOT_NUMBER + 3 * TEXTURE_SNAPSHOT_NUMBERS);
     map: Texture | null = null;
     emissiveMap: Texture | null = null;
+    metalnessMap: Texture | null = null;
     /** The material's own environment map, which three lights it with instead of `scene.environment`. */
     envMap: Texture | null = null;
 
@@ -416,13 +436,15 @@ export class MaterialSnapshot {
         values[slot.visible] = material.visible ? 1 : 0;
         this.map = map ?? null;
         this.emissiveMap = emissiveMap ?? null;
+        this.metalnessMap = fields(material).metalnessMap ?? null;
         this.envMap = envMapOf(material);
         readTextureNumbers(this.map, values, slot.mapFirst);
         readTextureNumbers(this.emissiveMap, values, slot.mapFirst + TEXTURE_SNAPSHOT_NUMBERS);
+        readTextureNumbers(this.metalnessMap, values, slot.mapFirst + 2 * TEXTURE_SNAPSHOT_NUMBERS);
     }
 
     equals(other: MaterialSnapshot): boolean {
-        if (this.map !== other.map || this.emissiveMap !== other.emissiveMap || this.envMap !== other.envMap) return false;
+        if (this.map !== other.map || this.emissiveMap !== other.emissiveMap || this.metalnessMap !== other.metalnessMap || this.envMap !== other.envMap) return false;
         const a = this.numbers;
         const b = other.numbers;
         for (let index = 0; index < a.length; index++) if (a[index] !== b[index]) return false;

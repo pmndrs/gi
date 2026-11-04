@@ -17,6 +17,18 @@ describe('GIVolume (LightProbeGrid-shaped)', () => {
         expect(grid.origin).toEqual([1 - 2 + 0.5, 2 - 1 + 0.5, 3 - 3 + 1]);
     });
 
+    it('keeps the probe count when the spacing is not a whole number', () => {
+        const volume = new GIVolume(3.4, 1, 1, 3, 1, 1);
+        volume.updateMatrixWorld();
+        const settings = volume.ddgiVolume();
+        expect((settings.spacing as readonly number[])[0]).toBeCloseTo(3.4 / 3);
+        expect(settings.size[0]).toBeCloseTo(3.4 - 3.4 / 3);
+        const grid = probeGrid(settings);
+        expect(grid.counts).toEqual([3, 1, 1]);
+        // Probes at the cell centres: -1.7 + 3.4 / 6, 0, and +1.7 - 3.4 / 6.
+        expect(grid.origin[0]).toBeCloseTo(-1.7 + 3.4 / 6);
+    });
+
     it('defaults to one probe per unit of length, like LightProbeGrid', () => {
         const volume = new GIVolume(3.4, 0.2, 5);
         expect(volume.resolution.toArray()).toEqual([3, 1, 5]);

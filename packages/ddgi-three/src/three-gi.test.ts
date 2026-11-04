@@ -1,4 +1,4 @@
-import { BoxGeometry, Mesh, MeshStandardMaterial, PerspectiveCamera, Scene, Texture } from 'three';
+import { BoxGeometry, Mesh, MeshStandardMaterial, PerspectiveCamera, PointLight, Scene, Texture } from 'three';
 import { describe, expect, it } from 'vitest';
 import type { FrameInput, GIPlatform, SceneApi, ShadingModule } from '@pmndrs/ddgi-core';
 import { GIVolume } from './gi-volume.ts';
@@ -137,6 +137,23 @@ describe('ThreeGI', () => {
         scene.environment = new Texture();
         threeGI.update(camera);
         expect(threeGI.light.computeCoverage).toBe(true);
+    });
+
+    it('counts a LightProbeGrid for coverage only when the camera sees its layer', () => {
+        const platform = fakePlatform(fakeShading());
+        const scene = new Scene();
+        const grid = Object.assign(new PointLight(), { isLightProbeGrid: true });
+        grid.layers.set(3);
+        scene.add(grid);
+        const threeGI = new ThreeGI(platform.gi, scene);
+        const camera = new PerspectiveCamera();
+        threeGI.update(camera);
+        expect(threeGI.light.computeCoverage).toBe(false);
+        camera.layers.enable(3);
+        threeGI.update(camera);
+        expect(threeGI.light.computeCoverage).toBe(true);
+        // The GI light itself lights every layer.
+        expect(threeGI.light.layers.test(camera.layers)).toBe(true);
     });
 
     it('removes everything it added on dispose', () => {

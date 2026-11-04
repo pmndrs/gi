@@ -118,6 +118,8 @@ export class ThreeGI {
         this.shadingSeen = { module: shading, version: shading.version };
         this.currentLight = new GILight(shading, options.light);
         this.currentLight.name = 'GI';
+        // three only lights with lights on the camera's layers; GI is for every camera.
+        this.currentLight.layers.enableAll();
         scene.add(this.currentLight);
     }
 
@@ -157,7 +159,7 @@ export class ThreeGI {
             this.light.intensity = this.volume.intensity;
             this.light.priority = this.volume.priority;
         }
-        this.sync.update(this.scene);
+        this.sync.update(this.scene, camera.layers);
         // Coverage is worth its cost only for the environment-diffuse workaround or to share the probe slot.
         // Without it coverage reads 1 everywhere, and the workaround would remove environment diffuse outside the volume too.
         const environmentLit = this.scene.environment !== null || this.sync.materialsWithEnvMap > 0;
@@ -210,6 +212,7 @@ export class ThreeGI {
         const old = this.currentLight;
         const next = new GILight(shading, { intensity: old.intensity, priority: old.priority, replaceEnvironmentDiffuse: old.replaceEnvironmentDiffuse });
         next.name = old.name;
+        next.layers.mask = old.layers.mask;
         (old.parent ?? this.scene).add(next);
         old.removeFromParent();
         old.dispose();

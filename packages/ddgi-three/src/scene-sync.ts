@@ -56,11 +56,11 @@
  * three's last render computed them (three-gi.ts says why).
  */
 
-import { Matrix4, type BufferAttribute, type BufferGeometry, type DirectionalLight, type InstancedMesh, type InterleavedBufferAttribute, type Light, type Material, type Mesh, type Object3D, type PointLight, type Scene, type Texture } from 'three';
+import { Matrix4, type Layers, type BufferAttribute, type BufferGeometry, type DirectionalLight, type InstancedMesh, type InterleavedBufferAttribute, type Light, type Material, type Mesh, type Object3D, type PointLight, type Scene, type Texture } from 'three';
 import type { ColorRGB, EnvironmentDescriptor, InstanceHandle, LightChanges, LightDescriptor, LightHandle, MaterialHandle, MeshHandle, SceneApi, TextureHandle } from '@pmndrs/ddgi-core';
-import { LIGHT_NUMBER_COUNT, MaterialSnapshot, PHYSICAL_DECAY, readLightNumbers, isSrgbTexture, lightDescriptor, luminance, materialDescriptor, materialSlotCount, meshDescriptor, textureSource, usesUvChannel1 } from './convert.ts';
+import { LIGHT_NUMBER_COUNT, MaterialSnapshot, type TextureAverages, PHYSICAL_DECAY, readLightNumbers, isSrgbTexture, lightDescriptor, luminance, materialDescriptor, materialSlotCount, meshDescriptor, textureSource, usesUvChannel1 } from './convert.ts';
 import { EnvironmentSync, type EnvironmentSources, type PmndrsSkyLike, type SkyMeshLike, type Warn } from './environment.ts';
-import { textureAverage } from './texture-average.ts';
+import { diffuseAverage, textureAverage, type DiffuseAverageMethod } from './texture-average.ts';
 import { contributesFlag, contributesToGI } from './user-data.ts';
 
 /** Floats in a 4x4 matrix. */
@@ -261,7 +261,12 @@ export class SceneSync {
     environment: EnvironmentDescriptor | null = null;
     /** A pmndrs/sky `Sky` to take the sky from (environment.ts, source 2). */
     sky: PmndrsSkyLike | null = null;
-    /** Visible `LightProbeGrid`s in the scene: they share three's light-probe slot with the GI light. */
+    /**
+     * `LightProbeGrid`s three will light with: visible, intensity above 0 and,
+     * when `update` is given the camera's layers, on one of them (three only
+     * gathers lights the camera's layers include). They share three's
+     * light-probe slot with the GI light.
+     */
     otherProbeLights = 0;
     /**
      * Mirrored materials with their own `envMap`. three lights those with it
@@ -280,14 +285,27 @@ export class SceneSync {
     private readonly materials = new Map<Material, MaterialRecord>();
     private readonly textures = new Map<Texture, TextureRecord>();
     private readonly textureHandleUsers = new Map<TextureHandle, number>();
-    /** Each texture's average colour, made once per texture version (texture-average.ts). */
-    private readonly textureAverages = new WeakMap<Texture, { readonly version: number; readonly average: ColorRGB | undefined }>();
-    private readonly textureColor = (texture: Texture): ColorRGB | undefined => {
-        const cached = this.textureAverages.get(texture);
-        if (cached && cached.version === texture.version) return cached.average;
-        const average = textureAverage(texture);
-        this.textureAverages.set(texture, { version: texture.version, average });
-        return average;
+    /** Texture averages for GI (texture-average.ts), each made once per texture version and kept. */
+    private readonly colorAverages = new WeakMap<Texture, { readonly version: number; readonly average: ColorRGB | undefined }>();
+    private readonly diffuseAverages = new Map<string, ColorRGB | undefined>();
+    /** How many materials' diffuse factors were made each way (texture-average.ts says what each means). */
+    readonly diffuseAverageMethods: Record<DiffuseAverageMethod, number> = { 'per-texel': 0, 'separate-averages': 0, 'albedo-map': 0, 'metalness-map': 0 };
+    private readonly textureAverages: TextureAverages = {
+        color: (texture) => {
+            const cached = this.colorAverages.get(texture);
+            if (cached && cached.version === texture.version) return cached.average;
+            const average = textureAverage(texture);
+            this.colorAverages.set(texture, { version: texture.version, average });
+            return average;
+        },
+        diffuse: (map, metalnessMap, metalness, sameUv) => {
+            const key = `${map?.uuid}:${map?.version}:${metalnessMap?.uuid}:${metalnessMap?.version}:${metalness}:${sameUv}`;
+            if (this.diffuseAverages.has(key)) return this.diffuseAverages.get(key);
+            const result = diffuseAverage(map, metalnessMap, metalness, sameUv);
+            if (result) this.diffuseAverageMethods[result.method]++;
+            this.diffuseAverages.set(key, result?.factor);
+            return result?.factor;
+        },
     };
     private readonly objects = new Map<Object3D, ObjectRecord>();
     private readonly lights = new Map<Light, LightRecord>();
@@ -323,6 +341,8 @@ export class SceneSync {
     private skyMesh: SkyMeshLike | null = null;
 
     private frame = 0;
+    /** The camera's layers this update, if given (for `otherProbeLights`). */
+    private cameraLayers: Layers | null = null;
     /** Set by {@link placement}: whether the object and all its parents are visible. */
     private placementVisible = false;
     private sun: DirectionalLight | null = null;
@@ -371,7 +391,8 @@ export class SceneSync {
     }
 
     /** Sends what changed: marked objects, the hot set, this frame's share of the walk, lights, edits, environment. */
-    update(scene: Scene): SyncFrameReport {
+    update(scene: Scene, cameraLayers?: Layers): SyncFrameReport {
+        this.cameraLayers = cameraLayers ?? null;
         this.frame++;
         resetReport(this.report);
         // A new scene is walked whole at once; afterwards, a share each frame.
@@ -895,7 +916,7 @@ export class SceneSync {
         const snapshot = new MaterialSnapshot();
         snapshot.read(material);
         const textureHandles: TextureHandle[] = [];
-        const descriptor = materialDescriptor(material, (texture) => this.textureHandleFor(texture, textureHandles), this.textureColor);
+        const descriptor = materialDescriptor(material, (texture) => this.textureHandleFor(texture, textureHandles), this.textureAverages);
         this.useTextureHandles(textureHandles);
         const record: MaterialRecord = {
             material,
@@ -919,7 +940,7 @@ export class SceneSync {
         this.materialsWithEnvMap += (record.scratch.envMap ? 1 : 0) - (record.snapshot.envMap ? 1 : 0);
         [record.snapshot, record.scratch] = [record.scratch, record.snapshot];
         const textureHandles: TextureHandle[] = [];
-        const descriptor = materialDescriptor(record.material, (texture) => this.textureHandleFor(texture, textureHandles), this.textureColor);
+        const descriptor = materialDescriptor(record.material, (texture) => this.textureHandleFor(texture, textureHandles), this.textureAverages);
         this.useTextureHandles(textureHandles);
         // Every field, so a removed texture or cutoff is cleared too.
         this.api.updateMaterial(record.handle, descriptor);
@@ -1060,7 +1081,7 @@ export class SceneSync {
         const grids = this.probeGrids;
         for (let index = grids.length - 1; index >= 0; index--) {
             if (!this.placement(grids[index], scene)) grids.splice(index, 1);
-            else if (this.placementVisible && grids[index].intensity > 0) this.otherProbeLights++;
+            else if (this.placementVisible && grids[index].intensity > 0 && (!this.cameraLayers || grids[index].layers.test(this.cameraLayers))) this.otherProbeLights++;
         }
     }
 

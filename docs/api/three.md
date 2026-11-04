@@ -96,6 +96,13 @@ This is the light that brings GI into three's materials. `ThreeGI` makes one, so
 - It works with every lit node material and every drawing pipeline: standard, Meshlet and Visibility-Buffer. It never changes your materials.
 - GI arrives as irradiance through three's light-probe slot.
 - Where GI and a `LightProbeGrid` overlap, the higher `priority` wins. GI's default priority, 1, beats the grid's default, 0.
+- `ThreeGI`'s light is on every layer, so it lights whichever camera renders.
+
+### For custom integrations
+
+- `wrapGpuTexture(gpuTexture, { dimension, sampleType, filtering, addressMode })` wraps a same-device `GPUTexture` as an `ExternalTexture`, described the way three needs it.
+- `wgslParameterType(parameter)` and `entryWgsl(shadingModule)` give the WGSL the GI light builds from a shading module.
+- The core exports DDGI's debug-view colours as `DDGI_DEBUG_COLORS`.
 
 ### `SceneSync`
 
@@ -118,7 +125,12 @@ This is the mirroring on its own, for hosts that call `gi.encode` themselves.
 - `alphaTest` becomes the alpha cutoff.
 - Glass (`transmission`) and mostly see-through `transparent` materials let light through.
 - Every material is double-sided for GI, whatever three's `side`. Back-face hits are how GI finds probes inside walls, and most glTF materials are `FrontSide`. To opt one out, set `material.userData.giSingleSided = true`.
-- Textures go to the platform as handles. The core doesn't sample textures yet (that comes in M4), so until then each `map` and `emissiveMap` adds its average colour. The average is worked out once per texture.
+- Textures go to the platform as handles. The core doesn't sample textures yet (that comes in M4), so until then the adapter multiplies by texture averages, worked out once per texture:
+  - The GI albedo is the colour × the average of map texel × (1 − metalness × metalnessMap texel). three reads metalness from the map's blue channel, as glTF's metallicRoughness stores it.
+  - When the two maps share a uv mapping, the product is taken texel by texel. Otherwise the two averages are multiplied.
+  - The emission is multiplied by the `emissiveMap`'s average.
+  - Averages are taken in linear light and weighted by alpha, so cut-out texels don't count as black.
+  - Images over 256 px a side are first drawn at 256 px by the browser.
 
 **Lights.**
 - Directional, point and spot lights, in three's physical units.
@@ -182,6 +194,6 @@ By default `update` doesn't recompute world matrices: it reads the ones three's 
 
 r187 adds the environment's diffuse light (from `scene.environment`, or a material's own `envMap`) on top of GI, so it would be counted twice. The GI light fixes this on Standard and Physical materials: it fades the environment's diffuse light where GI covers the point, and keeps the specular. This is `replaceEnvironmentDiffuse`, on by default.
 
-- Coverage costs as much as the GI lookup itself, so it is worked out only when something needs it: a `scene.environment`, a material `envMap`, or a `LightProbeGrid`.
+- Coverage costs as much as the GI lookup itself, so it is worked out only when something needs it: a `scene.environment`, a material `envMap`, or a `LightProbeGrid` that three will light with. That means a grid that is visible, has an intensity above 0, and is on one of the camera's layers.
 - Lambert and Phong materials get no diffuse light from the environment at all, so they need no fix.
 - r188 may add a switch for this (PR #35017). The adapter will use it once it lands.

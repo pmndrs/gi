@@ -54,23 +54,10 @@
  * - Basic materials are unlit and ignore lights, GI included.
  */
 
-import {
-    AnalyticLightNode,
-    ClampToEdgeWrapping,
-    ExternalTexture,
-    FloatType,
-    Light,
-    LinearFilter,
-    NearestFilter,
-    NodeUpdateType,
-    RepeatWrapping,
-    UnsignedIntType,
-    Vector4,
-    type Node,
-    type NodeBuilder,
-} from 'three/webgpu';
+import { AnalyticLightNode, Light, NodeUpdateType, Vector4, type ExternalTexture, type Node, type NodeBuilder } from 'three/webgpu';
 import { If, INFINITY, cameraPosition, float, normalWorld, positionWorld, renderGroup, screenUV, texture, texture3D, uniform, vec3, wgsl, wgslFn } from 'three/tsl';
 import type { ShadingModule, ShadingParameter } from '@pmndrs/ddgi-core';
+import { wrapGpuTexture } from './external-texture.ts';
 
 /** Where several probe-like lights cover a fragment, the highest priority wins. `LightProbeGrid` defaults to 0. */
 export const GI_LIGHT_PRIORITY = 1;
@@ -129,7 +116,7 @@ const patchedLightingModels = new WeakSet<object>();
 const ENTRY_NAME = 'giThreeLighting';
 
 /** WGSL type of a module parameter, as `wgslFn` parses it. */
-function wgslParameterType(parameter: ShadingParameter): string {
+export function wgslParameterType(parameter: ShadingParameter): string {
     if (parameter.kind === 'vec4f') return 'vec4f';
     if (parameter.kind === 'sampler') return 'sampler';
     const sampled = parameter.sampleType === 'uint' ? 'u32' : 'f32';
@@ -164,24 +151,9 @@ ${declarations}
 }`;
 }
 
-/** A same-device GPU texture wrapped for three, described as three needs (NOTES, `ExternalTexture`). */
+/** A module texture parameter wrapped for three, with its sampler's filter and wrap (external-texture.ts). */
 function wrapTexture(gpuTexture: GPUTexture, parameter: TextureParameter, sampler: SamplerParameter | undefined): ExternalTexture {
-    const wrapped = new ExternalTexture(gpuTexture as never);
-    // Without the size three reads 1x1.
-    (wrapped as unknown as { image: unknown }).image = { width: gpuTexture.width, height: gpuTexture.height, depth: gpuTexture.depthOrArrayLayers };
-    if (parameter.dimension === '2d-array') (wrapped as unknown as { isArrayTexture: boolean }).isArrayTexture = true;
-    if (parameter.dimension === '3d') (wrapped as unknown as { is3DTexture: boolean }).is3DTexture = true;
-    // The sample type of the bind-group layout: filterable float is three's default.
-    if (parameter.sampleType === 'unfilterable-float') wrapped.type = FloatType;
-    if (parameter.sampleType === 'uint') wrapped.type = UnsignedIntType;
-    const filter = sampler?.filtering === 'linear' ? LinearFilter : NearestFilter;
-    wrapped.magFilter = filter;
-    wrapped.minFilter = filter;
-    const wrap = sampler?.addressMode === 'repeat' ? RepeatWrapping : ClampToEdgeWrapping;
-    wrapped.wrapS = wrap;
-    wrapped.wrapT = wrap;
-    wrapped.generateMipmaps = false;
-    return wrapped;
+    return wrapGpuTexture(gpuTexture, { dimension: parameter.dimension, sampleType: parameter.sampleType, filtering: sampler?.filtering, addressMode: sampler?.addressMode });
 }
 
 type EntryFunction = ReturnType<typeof wgslFn>;
