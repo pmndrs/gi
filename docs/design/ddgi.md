@@ -107,7 +107,8 @@ Thread 0 then decides, from the paper's rules (Majercik 2021, section 5):
 - **irradiance texel**, direction `n` from the texel centre: the stored value is `π × Σ L·max(0, n·ω) / Σ max(0, n·ω)`. *Why π:* with rays spread evenly over the sphere, the cosine-weighted mean radiance over the hemisphere is E/π, and the contract's `giIrradiance` returns E. Check against the furnace: constant L gives E = πL exactly.
 - **distance texel:** weight `max(0, n·ω)^distanceSharpness` (default 50), accumulating `d = min(|distance|, clamp)` and `d²`.
 - **Hysteresis:** `new = mix(estimate, old, h)`, with `h = hysteresis` (default 0.97). The old value is read from the atlas with `textureLoad` (the atlas is bound for sampling in this kernel). `h = 0` for a probe in state 3.
-  - **Big changes:** if any channel of the irradiance changed by more than `irradianceChangeThreshold` (default 0.25 of the old value), lower `h` by a factor of 0.75, so a light switch shows up quickly (the paper's "probe irradiance threshold").
+  - **Big changes:** if the probe's **mean** irradiance (the average over all its interior texels) changed by more than `irradianceChangeThreshold` (default 0.25 of the old mean), lower `h` by a factor of 0.75 for the whole probe, so a light switch shows up quickly (the paper's "probe irradiance threshold").
+    - *Revised after the T1.5a review:* the first version tested each texel. A single texel's estimate from about 224 rays is noisy, and bright outliers are the common kind, so they won the lower hysteresis and the field drifted high: Cornell read +9.5% instead of +4.4% with the rule off. Averaging over the probe's texels averages the noise out, while a real light change still trips it.
   - **Firefly clamp:** the change applied in one update is clamped to `maxBrightnessChange` (default 2.0, in irradiance units relative to the old value; a setting) so one lucky ray can't flash a probe.
 - Results go to the scratch buffer.
 
@@ -146,7 +147,7 @@ Given a surface point `P`, its normal `N` and the direction `V` it's seen from:
 2. **The 8 probes around `P'`**, trilinear weights from `P'`'s position in the cell.
 3. Per probe, using its relocated position:
    - skip it unless its state is 0 (active);
-   - **direction weight:** `((dot(dirToProbe, N) + 1) / 2)² + 0.2`, so probes behind the surface count for little but never zero;
+   - **direction weight:** `((dot(dirToProbe, N) + 1) / 2)² + 0.2`, so probes behind the surface count for little but never zero. `dirToProbe` is taken from the **unbiased** point `P`, as in the 2019 paper (T1.5a measured about 1% better on Cornell's walls than from `P'`);
    - **visibility (Chebyshev):** sample the distance atlas in direction `−dirToProbe`: mean `μ`, mean squared `μ2`. If the probe's distance to `P'` is greater than `μ`: `variance = |μ2 − μ²|`, `chebyshev = variance / (variance + (d − μ)²)`, weight × `max(chebyshev³, 0.05)`;
    - **weight crush:** a combined weight below 0.2 is scaled by `(w / 0.2)²`, so small weights fade fast instead of adding a faint wrong colour.
      - HomeFig's trap: a crush threshold equal to the direction-weight floor (both 0.2) let fully back-facing exterior probes leak, because their weight sat exactly at the threshold and was never crushed.
