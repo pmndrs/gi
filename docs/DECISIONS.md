@@ -4,6 +4,21 @@ Settled choices, newest first. Each entry is short: the decision, why, and what 
 
 ## 2026-11-04
 
+- **Push hard on WebGPU features: subgroups first.** Dennis: "we should push hard on features. Subgroups are a basic utility for compute so I would propose that we build for them first."
+  - **Subgroups:**
+    - GPU compute kernels are written for the WebGPU `subgroups` feature first. That covers the coming GPU BVH builder with its sort and scan, refits, and DDGI kernels where it helps. Chrome desktop has shipped subgroups since version 134.
+    - `optionalFeatures(adapter)` requests `subgroups` whenever the adapter offers it.
+  - **Fallback without subgroups:** there is no second GPU code path.
+    - The BVH falls back to building on the CPU: the worker build, or trees from three-mesh-bvh converted to our layout (T0.10 part C).
+    - Any other kernel that needs subgroups reports that through `isSupported` or a typed error, instead of quietly doing something slower.
+  - **Rules for subgroup code:**
+    - Never assume a subgroup size; read `subgroup_size`, which is 8–64 across vendors.
+    - Never rely on workgroups making progress at the same time.
+    - One-pass "decoupled look-back" sorts are allowed only as an optional fast path, behind a self-test.
+  - **Other optional features:** use them where they clearly help: timestamp-query, shader-f16 where precision allows, and raised limits. Each needs a feature check and one declared fallback, so the code never carries parallel implementations.
+  - *Why:* subgroups are basic compute building blocks, and writing for them first keeps kernels simple and fast on the browsers we target.
+  - *Revisit if:* Safari or Firefox still ship without subgroups when the Apple-device tier is picked up.
+  - Research: `research/webgpu-compute-for-bvh.md`.
 - **As much BVH work as possible runs on the GPU. The top-level tree moves to the GPU in M1, not M3.** Dennis approved this.
   - M1 refits the top-level tree on the GPU every frame from instance transforms. It also rebuilds the tree now and then, on the GPU or on the CPU off the frame.
   - *Why:* part B measured the CPU top-level rebuild at 1–10 ms on the main thread for each move in real scenes, and 86–121 ms for 10,000 instances. Dragging furniture is a core v1 case.
