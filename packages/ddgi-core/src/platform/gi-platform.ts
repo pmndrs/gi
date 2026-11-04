@@ -43,6 +43,7 @@ import type { GITechnique, TechniqueContext, TechniqueFrame } from './contract/t
 import type { GpuTimerScope } from './contract/timing.ts';
 import { PlatformKernelBuilder } from './kernel-builder.ts';
 import { PlatformScene } from './scene/platform-scene.ts';
+import { checkComputeLimits } from './device-requirements.ts';
 import { PlatformHitShading } from './shade/hit-shading.ts';
 import { GpuTimer } from './timing/gpu-timer.ts';
 import { PlatformRayQueries } from './trace/ray-queries.ts';
@@ -265,6 +266,7 @@ export class GIPlatformImpl implements GIPlatform {
         // New resources and kernels: old costs per unit no longer apply.
         this.unitCosts.reset();
         this.checkUsable();
+        checkComputeLimits(this.device.limits);
         await this.rays.prepare(this.kernels);
         await this.shade.prepare();
         for (const technique of this.encodeOrder()) await technique.prepare();

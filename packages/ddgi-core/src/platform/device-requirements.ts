@@ -8,6 +8,7 @@
  * records for Bistro exterior don't fit the default storage binding.
  */
 
+import { GILimitError } from './contract/errors.ts';
 import type { RequiredLimits } from './contract/platform.ts';
 
 /**
@@ -20,16 +21,50 @@ export const MIN_STORAGE_BUFFERS_PER_STAGE = 8;
 export const MIN_BIND_GROUPS = 4;
 
 /**
+ * Compute limits the platform's kernels need where compatibility-mode
+ * devices default lower (128 threads per workgroup; core devices default to
+ * 256, so these change nothing there). The largest workgroups, 256 threads
+ * along x: DDGI's blend kernel (techniques/ddgi/wgsl/blend.ts,
+ * `BLEND_WORKGROUP_SIZE`) and the BVH refit's repair pass
+ * (packages/bvh/src/gpu-refit.ts). Other dimensions stay at 8 or less.
+ * Workgroup memory isn't listed: every kernel fits 16,384 bytes, the default
+ * in both modes (all GPU pages run on default limits).
+ */
+export const KERNEL_COMPUTE_LIMITS = {
+    maxComputeInvocationsPerWorkgroup: 256,
+    maxComputeWorkgroupSizeX: 256,
+} as const satisfies Partial<Record<Exclude<keyof GPUSupportedLimits, '__brand'>, number>>;
+
+type ComputeLimitName = keyof typeof KERNEL_COMPUTE_LIMITS;
+const COMPUTE_LIMIT_NAMES = Object.keys(KERNEL_COMPUTE_LIMITS) as ComputeLimitName[];
+
+/**
+ * Throws a `GILimitError` naming the first compute limit the device is below
+ * (KERNEL_COMPUTE_LIMITS). Called by `prepare`, before any kernel compiles,
+ * so a short device fails with the limit's name instead of a pipeline
+ * validation error.
+ */
+export function checkComputeLimits(limits: Pick<GPUSupportedLimits, ComputeLimitName>): void {
+    for (const name of COMPUTE_LIMIT_NAMES) {
+        if (limits[name] < KERNEL_COMPUTE_LIMITS[name]) throw new GILimitError(name, KERNEL_COMPUTE_LIMITS[name], limits[name]);
+    }
+}
+
+/**
  * Limits to request from this adapter: the largest storage binding and
- * buffer, and every storage buffer per stage it offers. Never more than the
- * adapter has, so `requestDevice` can't fail because of them.
+ * buffer, every storage buffer per stage it offers, and the compute limits
+ * the kernels need (KERNEL_COMPUTE_LIMITS). Never more than the adapter has,
+ * so `requestDevice` can't fail because of them; an adapter below a kernel's
+ * need fails in `prepare` with a `GILimitError` instead.
  */
 export function requiredLimits(adapter: GPUAdapter): RequiredLimits {
-    return {
+    const limits: RequiredLimits = {
         maxStorageBufferBindingSize: adapter.limits.maxStorageBufferBindingSize,
         maxBufferSize: adapter.limits.maxBufferSize,
         maxStorageBuffersPerShaderStage: adapter.limits.maxStorageBuffersPerShaderStage,
     };
+    for (const name of COMPUTE_LIMIT_NAMES) limits[name] = Math.min(KERNEL_COMPUTE_LIMITS[name], adapter.limits[name]);
+    return limits;
 }
 
 /**

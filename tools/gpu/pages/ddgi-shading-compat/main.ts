@@ -4,13 +4,12 @@
  * fragment shaders may bind no storage buffers and textures bind only with
  * the view dimension they were created for.
  *
- * Asks for a compatibility adapter, then a device with the platform's
- * raised limits (compatibility defaults allow 4 storage buffers per stage;
- * DDGI's trace kernel needs 7) plus the adapter's compute workgroup limits:
- * compatibility defaults allow 128 threads per workgroup, and the platform's
- * kernels use 256 (`requiredLimits` doesn't ask for these yet; found in T1.6).
- * The fragment-stage limits stay at the compatibility defaults, which is
- * what this page is about. Converges the point-light Cornell box and
+ * Asks for a compatibility adapter, then a device with `requiredLimits`
+ * alone, as a host would: it raises the storage buffers per stage
+ * (compatibility defaults allow 4; DDGI's trace kernel needs 7) and the
+ * compute workgroup limits (compatibility defaults allow 128 threads; the
+ * platform's largest kernels use 256). The fragment-stage limits stay at the
+ * compatibility defaults, which is what this page is about. Converges the point-light Cornell box and
  * checks the hello renderer's GI-only image against the engine-free test
  * view, as ddgi-shading-consistency does, with the same tolerances.
  *
@@ -43,20 +42,14 @@ try {
     const adapter = await navigator.gpu.requestAdapter({ featureLevel: 'compatibility' });
     assert(adapter, 'requestAdapter({ featureLevel: "compatibility" }) returned null');
     const features = [...optionalFeatures(adapter)];
-    const computeLimits = {
-        maxComputeWorkgroupSizeX: adapter.limits.maxComputeWorkgroupSizeX,
-        maxComputeWorkgroupSizeY: adapter.limits.maxComputeWorkgroupSizeY,
-        maxComputeWorkgroupSizeZ: adapter.limits.maxComputeWorkgroupSizeZ,
-        maxComputeInvocationsPerWorkgroup: adapter.limits.maxComputeInvocationsPerWorkgroup,
-        maxComputeWorkgroupStorageSize: adapter.limits.maxComputeWorkgroupStorageSize,
-    };
-    const device = await adapter.requestDevice({ requiredLimits: { ...requiredLimits(adapter), ...computeLimits }, requiredFeatures: features });
+    const device = await adapter.requestDevice({ requiredLimits: requiredLimits(adapter), requiredFeatures: features });
     deviceErrors = watchDevice(device);
     releaseDeviceOnPageHide(device);
     adapterSummary = summarizeAdapterInfo(device.adapterInfo, device.features);
     assert(!device.features.has('core-features-and-limits'), 'the browser gave a core device, not a compatibility-mode one; compatibility mode is untested here');
     logLines.push(
-        `compatibility device: ${device.adapterInfo.vendor} ${device.adapterInfo.architecture}; fragment storage buffers allowed: ${device.limits.maxStorageBuffersInFragmentStage ?? 'n/a'}; storage buffers per stage ${device.limits.maxStorageBuffersPerShaderStage}`,
+        `compatibility device: ${device.adapterInfo.vendor} ${device.adapterInfo.architecture}; fragment storage buffers allowed: ${device.limits.maxStorageBuffersInFragmentStage ?? 'n/a'}; ` +
+            `storage buffers per stage ${device.limits.maxStorageBuffersPerShaderStage}; workgroup ${device.limits.maxComputeInvocationsPerWorkgroup} threads, ${device.limits.maxComputeWorkgroupStorageSize} bytes`,
     );
 
     const { platform, ddgi, scene } = await createHelloScene(device, SCENE, { ignoreLightRange: true });

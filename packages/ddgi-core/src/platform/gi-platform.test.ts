@@ -4,7 +4,8 @@ import type { FrameInput } from './contract/frame.ts';
 import type { GITechnique, TechniqueContext, TechniqueFrame } from './contract/technique.ts';
 import type { WgslModule } from './contract/wgsl.ts';
 import { DEFAULT_UNITS_PER_FRAME, GIPlatformImpl } from './gi-platform.ts';
-import { isSupported, optionalFeatures, requiredLimits } from './device-requirements.ts';
+import { checkComputeLimits, isSupported, KERNEL_COMPUTE_LIMITS, optionalFeatures, requiredLimits } from './device-requirements.ts';
+import { BLEND_WORKGROUP_SIZE } from '../techniques/ddgi/wgsl/blend.ts';
 import { countGroupStorageBuffers, countStorageBuffers, orderModules, placeModules, PlatformKernelBuilder } from './kernel-builder.ts';
 import { createFakeGpu, type FakeBuffer, type FakeGpu } from './scene/testing/fake-gpu.ts';
 import { createCpuTracer } from './trace/cpu-traversal.ts';
@@ -225,8 +226,44 @@ describe('device requirements', () => {
         ({ limits, features: new Set(features) }) as unknown as GPUAdapter;
 
     it("requiredLimits asks for the adapter's own maximums, never more", () => {
-        const limits = { maxStorageBufferBindingSize: 2147483644, maxBufferSize: 2147483648, maxStorageBuffersPerShaderStage: 10 };
-        expect(requiredLimits(adapter(limits, []))).toEqual(limits);
+        const storage = { maxStorageBufferBindingSize: 2147483644, maxBufferSize: 2147483648, maxStorageBuffersPerShaderStage: 10 };
+        const compute = { maxComputeInvocationsPerWorkgroup: 1024, maxComputeWorkgroupSizeX: 1024 };
+        // Compute limits: what the kernels need, not the adapter's maximum.
+        expect(requiredLimits(adapter({ ...storage, ...compute }, []))).toEqual({ ...storage, ...KERNEL_COMPUTE_LIMITS });
+        // Capped at what the adapter has, so requestDevice can't fail over them.
+        const small = { maxComputeInvocationsPerWorkgroup: 128, maxComputeWorkgroupSizeX: 128 };
+        expect(requiredLimits(adapter({ ...storage, ...small }, []))).toEqual({ ...storage, ...small });
+    });
+
+    it('asks for workgroups as large as the largest kernel uses', () => {
+        expect(KERNEL_COMPUTE_LIMITS.maxComputeWorkgroupSizeX).toBeGreaterThanOrEqual(BLEND_WORKGROUP_SIZE);
+        expect(KERNEL_COMPUTE_LIMITS.maxComputeInvocationsPerWorkgroup).toBeGreaterThanOrEqual(BLEND_WORKGROUP_SIZE);
+    });
+
+    it('checkComputeLimits names the compute limit a device is below (compatibility mode defaults to 128)', () => {
+        expect(() => checkComputeLimits({ maxComputeInvocationsPerWorkgroup: 256, maxComputeWorkgroupSizeX: 256 })).not.toThrow();
+        const error = (() => {
+            try {
+                checkComputeLimits({ maxComputeInvocationsPerWorkgroup: 128, maxComputeWorkgroupSizeX: 256 });
+            } catch (caught) {
+                return caught;
+            }
+            return null;
+        })();
+        expect(error).toBeInstanceOf(GILimitError);
+        expect((error as GILimitError).limit).toBe('maxComputeInvocationsPerWorkgroup');
+        expect((error as GILimitError).needed).toBe(256);
+        expect((error as GILimitError).available).toBe(128);
+    });
+
+    it('prepare throws that GILimitError before compiling anything', async () => {
+        const gpu = createPlatformGpu({ maxComputeWorkgroupSizeX: 128 });
+        const platform = new GIPlatformImpl(gpu.device, { buildIn: 'main' });
+        const error = await platform.prepare().catch((caught: unknown) => caught);
+        expect(error).toBeInstanceOf(GILimitError);
+        expect((error as GILimitError).limit).toBe('maxComputeWorkgroupSizeX');
+        expect(gpu.counters.pipelines).toBe(0);
+        platform.dispose();
     });
 
     it('optionalFeatures requests only what the adapter has', () => {

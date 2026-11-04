@@ -93,6 +93,9 @@ export function createFakeGpu(limits: Partial<GPUSupportedLimits> = {}): FakeGpu
         maxStorageBufferBindingSize: 128 * 1024 * 1024,
         maxBufferSize: 256 * 1024 * 1024,
         maxStorageBuffersPerShaderStage: 8,
+        // Core defaults, which the platform's kernels need (KERNEL_COMPUTE_LIMITS).
+        maxComputeInvocationsPerWorkgroup: 256,
+        maxComputeWorkgroupSizeX: 256,
         ...limits,
     };
     const device = {
