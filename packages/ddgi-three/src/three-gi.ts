@@ -39,6 +39,7 @@ import type { Camera, Object3D, OrthographicCamera, PerspectiveCamera, Scene } f
 import type { EnvironmentDescriptor, FrameBudget, GIPlatform, ShadingModule } from '@pmndrs/ddgi-core';
 import type { PmndrsSkyLike } from './environment.ts';
 import { GILight, type GILightOptions } from './gi-light.ts';
+import type { GIVolume } from './gi-volume.ts';
 import { SceneSync, type SyncFrameReport } from './scene-sync.ts';
 
 export interface ThreeGIOptions {
@@ -46,6 +47,8 @@ export interface ThreeGIOptions {
     readonly budget?: FrameBudget;
     /** Settings for the GI light added to the scene. */
     readonly light?: GILightOptions;
+    /** A LightProbeGrid-shaped volume (gi-volume.ts) whose `intensity` and `priority` the GI light follows each frame. */
+    readonly volume?: GIVolume | null;
     /** An environment for GI rays instead of the scene's (environment.ts). */
     readonly environment?: EnvironmentDescriptor | null;
     /** A pmndrs/sky `Sky` to take GI's sky from (environment.ts). */
@@ -86,6 +89,8 @@ export class ThreeGI {
     }
     readonly sync: SceneSync;
     budget: FrameBudget;
+    /** The volume the GI light follows, if any (see the option). */
+    volume: GIVolume | null;
     readonly timings: ThreeGITimings = { matrixWorldMs: 0, syncMs: 0, encodeMs: 0 };
     /** What the last update sent. */
     get report(): SyncFrameReport {
@@ -104,6 +109,7 @@ export class ThreeGI {
         this.gi = gi;
         this.scene = scene;
         this.budget = options.budget ?? DEFAULT_BUDGET;
+        this.volume = options.volume ?? null;
         this.alwaysUpdateMatrixWorld = options.updateMatrixWorld ?? false;
         this.sync = new SceneSync(gi.scene, { device: gi.device, warn: options.warn, objectsPerFrame: options.objectsPerFrame, editChecksPerFrame: options.editChecksPerFrame });
         this.sync.environment = options.environment ?? null;
@@ -147,9 +153,15 @@ export class ThreeGI {
         const afterMatrices = performance.now();
 
         this.followShadingModule();
-        // Coverage is worth its cost only for the environment-diffuse workaround or to share the probe slot.
-        this.light.computeCoverage = (this.light.replaceEnvironmentDiffuse && this.scene.environment !== null) || this.sync.otherProbeLights > 0;
+        if (this.volume) {
+            this.light.intensity = this.volume.intensity;
+            this.light.priority = this.volume.priority;
+        }
         this.sync.update(this.scene);
+        // Coverage is worth its cost only for the environment-diffuse workaround or to share the probe slot.
+        // Without it coverage reads 1 everywhere, and the workaround would remove environment diffuse outside the volume too.
+        const environmentLit = this.scene.environment !== null || this.sync.materialsWithEnvMap > 0;
+        this.light.computeCoverage = (this.light.replaceEnvironmentDiffuse && environmentLit) || this.sync.otherProbeLights > 0;
         const afterSync = performance.now();
 
         const seconds = deltaTime ?? (this.previousTime < 0 ? 0 : (start - this.previousTime) / 1000);

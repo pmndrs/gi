@@ -294,11 +294,17 @@ export function giAlbedo(material: Material): ColorRGB | undefined {
  * - double-sided whatever three's `side` (back-face hits are how probes find
  *   out they sit inside geometry), unless `material.userData.giSingleSided`;
  * - textures (`map`, `emissiveMap`) as handles from `textureHandle`, with
- *   their uv mappings. The atlas that samples them is M4.
+ *   their uv mappings. The atlas that samples them is M4; until then each
+ *   texture's average colour from `textureColor` is folded into the albedo
+ *   and the emission (texture-average.ts).
  *
  * Node materials' custom nodes (`colorNode`, `emissiveNode`) are not read.
  */
-export function materialDescriptor(material: Material, textureHandle: (texture: Texture) => TextureHandle | undefined): MaterialDescriptor {
+export function materialDescriptor(
+    material: Material,
+    textureHandle: (texture: Texture) => TextureHandle | undefined,
+    textureColor: (texture: Texture) => ColorRGB | undefined = () => undefined,
+): MaterialDescriptor {
     const { emissive, emissiveIntensity, transmission, map, emissiveMap } = fields(material);
     const albedoTexture = map ? textureHandle(map) : undefined;
     const emissiveTexture = emissiveMap ? textureHandle(emissiveMap) : undefined;
@@ -311,11 +317,24 @@ export function materialDescriptor(material: Material, textureHandle: (texture: 
         else if (alphaCutoff === undefined && albedoTexture !== undefined) alphaCutoff = BLENDED_ALPHA_CUTOFF;
     }
 
+    // Textures folded in as their average colour while the core samples none (texture-average.ts; remove in M4).
+    let albedo = giAlbedo(material);
+    const mapColor = map ? textureColor(map) : undefined;
+    if (mapColor) {
+        // A material with a map but no colour property: the map alone, still with metalness folded in.
+        const diffuse = 1 - metalnessOf(material);
+        const base: ColorRGB = albedo ?? [diffuse, diffuse, diffuse];
+        albedo = [base[0] * mapColor[0], base[1] * mapColor[1], base[2] * mapColor[2]];
+    }
+    let emission: ColorRGB | undefined = emissive ? [emissive.r, emissive.g, emissive.b] : undefined;
+    const emissiveColor = emissiveMap ? textureColor(emissiveMap) : undefined;
+    if (emission && emissiveColor) emission = [emission[0] * emissiveColor[0], emission[1] * emissiveColor[1], emission[2] * emissiveColor[2]];
+
     return {
-        albedo: giAlbedo(material),
+        albedo,
         albedoTexture,
         albedoUv: albedoTexture !== undefined && map ? contractUvMapping(map) : undefined,
-        emissive: emissive ? [emissive.r, emissive.g, emissive.b] : undefined,
+        emissive: emission,
         emissiveIntensity: emissive ? (emissiveIntensity ?? 1) : undefined,
         emissiveTexture,
         emissiveUv: emissiveTexture !== undefined && emissiveMap ? contractUvMapping(emissiveMap) : undefined,
@@ -324,6 +343,12 @@ export function materialDescriptor(material: Material, textureHandle: (texture: 
         doubleSided: !singleSidedForGI(material.userData),
         label: material.name || material.type,
     };
+}
+
+/** The material's own `envMap`, if it has one. */
+export function envMapOf(material: Material): Texture | null {
+    const envMap = (material as Material & { envMap?: Texture | null }).envMap;
+    return envMap ?? null;
 }
 
 /** Whether any of the material's textures samples uv channel 1, so its meshes need `uv1`. */
@@ -348,6 +373,8 @@ export class MaterialSnapshot {
     readonly numbers = new Float64Array(FIRST_TEXTURE_SNAPSHOT_NUMBER + 2 * TEXTURE_SNAPSHOT_NUMBERS);
     map: Texture | null = null;
     emissiveMap: Texture | null = null;
+    /** The material's own environment map, which three lights it with instead of `scene.environment`. */
+    envMap: Texture | null = null;
 
     /** Slots in `numbers`, named so the reads below say what they are. */
     static readonly SLOT = {
@@ -389,12 +416,13 @@ export class MaterialSnapshot {
         values[slot.visible] = material.visible ? 1 : 0;
         this.map = map ?? null;
         this.emissiveMap = emissiveMap ?? null;
+        this.envMap = envMapOf(material);
         readTextureNumbers(this.map, values, slot.mapFirst);
         readTextureNumbers(this.emissiveMap, values, slot.mapFirst + TEXTURE_SNAPSHOT_NUMBERS);
     }
 
     equals(other: MaterialSnapshot): boolean {
-        if (this.map !== other.map || this.emissiveMap !== other.emissiveMap) return false;
+        if (this.map !== other.map || this.emissiveMap !== other.emissiveMap || this.envMap !== other.envMap) return false;
         const a = this.numbers;
         const b = other.numbers;
         for (let index = 0; index < a.length; index++) if (a[index] !== b[index]) return false;
@@ -515,6 +543,37 @@ export function lightDescriptor(light: Light, intensityScale = 1): LightDescript
         return { ...common, type: 'point', position: worldPosition(point), range: Math.max(point.distance, 0) };
     }
     return null;
+}
+
+/** Slots of {@link readLightNumbers}. */
+const LIGHT_SLOT = { colorR: 0, colorG: 1, colorB: 2, intensity: 3, castShadow: 4, group: 5, positionX: 6, positionY: 7, positionZ: 8, targetX: 9, targetY: 10, targetZ: 11, distance: 12, angle: 13, penumbra: 14 } as const;
+export const LIGHT_NUMBER_COUNT = 15;
+
+/**
+ * Everything {@link lightDescriptor} reads, as numbers in `target`, so a
+ * light can be compared with its last-sent state every frame without
+ * building a descriptor (or allocating). World matrices must be current.
+ */
+export function readLightNumbers(light: Light, intensityScale: number, target: Float64Array): void {
+    const position = light.matrixWorld.elements;
+    const lightTarget = (light as DirectionalLight | SpotLight).target;
+    const targetPosition = lightTarget ? lightTarget.matrixWorld.elements : position;
+    const ranged = light as PointLight & Partial<Pick<SpotLight, 'angle' | 'penumbra'>>;
+    target[LIGHT_SLOT.colorR] = light.color.r;
+    target[LIGHT_SLOT.colorG] = light.color.g;
+    target[LIGHT_SLOT.colorB] = light.color.b;
+    target[LIGHT_SLOT.intensity] = light.intensity * intensityScale;
+    target[LIGHT_SLOT.castShadow] = light.castShadow ? 1 : 0;
+    target[LIGHT_SLOT.group] = lightGroup(light);
+    target[LIGHT_SLOT.positionX] = position[12];
+    target[LIGHT_SLOT.positionY] = position[13];
+    target[LIGHT_SLOT.positionZ] = position[14];
+    target[LIGHT_SLOT.targetX] = targetPosition[12];
+    target[LIGHT_SLOT.targetY] = targetPosition[13];
+    target[LIGHT_SLOT.targetZ] = targetPosition[14];
+    target[LIGHT_SLOT.distance] = ranged.distance ?? 0;
+    target[LIGHT_SLOT.angle] = ranged.angle ?? 0;
+    target[LIGHT_SLOT.penumbra] = ranged.penumbra ?? 0;
 }
 
 /** Rec. 709 luminance of a linear colour. */

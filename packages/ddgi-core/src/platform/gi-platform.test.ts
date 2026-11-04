@@ -43,7 +43,12 @@ function createPlatformGpu(limits: Partial<GPUSupportedLimits> = {}): FakeGpu & 
         loseDevice = () => resolve({ reason: 'unknown', message: 'test' } as GPUDeviceLostInfo);
     });
     const device = fake.device as unknown as Record<string, unknown>;
+    // A real device is an EventTarget (`uncapturederror`).
+    const events = new EventTarget();
     Object.assign(device, {
+        addEventListener: events.addEventListener.bind(events),
+        removeEventListener: events.removeEventListener.bind(events),
+        dispatchEvent: events.dispatchEvent.bind(events),
         lost,
         createBindGroupLayout: (descriptor: GPUBindGroupLayoutDescriptor) => ({ descriptor }),
         createPipelineLayout: (descriptor: GPUPipelineLayoutDescriptor) => ({ descriptor }),
@@ -485,5 +490,33 @@ describe('the platform object', () => {
         await platform.prepare();
         encodeFrame(gpu, platform);
         platform.dispose();
+    });
+});
+
+describe('uncaptured GPU errors', () => {
+    /** An `uncapturederror` event with this message, as a device would dispatch it. */
+    function errorEvent(message: string): Event {
+        return Object.assign(new Event('uncapturederror'), { error: { message } });
+    }
+
+    it('forwards the platform own errors as warnings, listening without taking the slot, until disposed', () => {
+        const gpu = createPlatformGpu();
+        const device = gpu.device as unknown as EventTarget & { onuncapturederror?: unknown };
+        const warnings: string[] = [];
+        const originalWarn = console.warn;
+        console.warn = (message: string) => warnings.push(message);
+        try {
+            const platform = new GIPlatformImpl(gpu.device, { label: 'mine' });
+            expect(device.onuncapturederror).toBeUndefined();
+            device.dispatchEvent(errorEvent('Invalid ComputePipeline "mine group 0" is invalid'));
+            device.dispatchEvent(errorEvent('Invalid RenderPipeline "renderPipeline_cornell-white_21"'));
+            expect(warnings).toHaveLength(1);
+            expect(warnings[0]).toContain('mine group 0');
+            platform.dispose();
+            device.dispatchEvent(errorEvent('Invalid Buffer "mine scene table"'));
+            expect(warnings).toHaveLength(1);
+        } finally {
+            console.warn = originalWarn;
+        }
     });
 });

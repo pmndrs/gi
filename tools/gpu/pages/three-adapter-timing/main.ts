@@ -138,8 +138,13 @@ await runThreePage(async ({ device, renderer, data, log }) => {
         const matrices: number[] = [];
         const encode: number[] = [];
         const sent: number[] = [];
+        // The timer's own reading of an empty interval at the same point of the frame:
+        // what a per-frame mean costs before any work (coarse, jittered timer; interruptions).
+        const empty: number[] = [];
         for (let index = 0; index < FRAMES; index++) {
             beforeFrame(index);
+            const emptyStart = performance.now();
+            empty.push(performance.now() - emptyStart);
             frame();
             sync.push(threeGI.timings.syncMs);
             matrices.push(threeGI.timings.matrixWorldMs);
@@ -147,7 +152,7 @@ await runThreePage(async ({ device, renderer, data, log }) => {
             sent.push(threeGI.report.transforms + threeGI.report.materials + threeGI.report.lights + threeGI.report.meshes);
             if (index % 8 === 7) await device.queue.onSubmittedWorkDone();
         }
-        return { syncMs: summary(sync), matrixWorldMs: summary(matrices), encodeMs: summary(encode), changesSentPerFrame: summary(sent) };
+        return { syncMs: summary(sync), emptyIntervalMs: summary(empty), matrixWorldMs: summary(matrices), encodeMs: summary(encode), changesSentPerFrame: summary(sent) };
     };
 
     /** Mean ms of BATCH back-to-back syncs, BATCH_REPEATS times; the median of those means. */

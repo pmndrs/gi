@@ -84,26 +84,6 @@ export type Warn = (message: string) => void;
 // Resolution (pure, unit-tested)
 // ---------------------------------------------------------------------------
 
-/**
- * The environment the platform should have, in a form that's cheap to compare
- * every frame: a kind, a few numbers, and at most one texture or descriptor.
- */
-export interface EnvironmentChoice {
-    readonly kind: 'override' | 'procedural' | 'texture' | 'color' | 'none';
-    readonly override?: EnvironmentDescriptor;
-    readonly texture?: Texture;
-    readonly layout?: 'cube' | 'equirect';
-    /** procedural: sun direction xyz, turbidity (NaN = default), sunIlluminance. texture: version, intensity, rotation x, y, z. color: rgb. */
-    readonly numbers: readonly number[];
-}
-
-export function sameChoice(a: EnvironmentChoice | null, b: EnvironmentChoice): boolean {
-    if (!a || a.kind !== b.kind || a.override !== b.override || a.texture !== b.texture || a.layout !== b.layout) return false;
-    if (a.numbers.length !== b.numbers.length) return false;
-    for (let index = 0; index < a.numbers.length; index++) if (!Object.is(a.numbers[index], b.numbers[index])) return false;
-    return true;
-}
-
 /** The sun's illuminance at normal incidence: intensity × luminance of its colour (scene contract, `sunIlluminance`). */
 export function sunIlluminance(sun: DirectionalLight | null | undefined): number {
     return sun ? sun.intensity * luminance(sun.color) : 1;
@@ -130,49 +110,129 @@ export function unreadableReason(texture: Texture): string | null {
     return null;
 }
 
-function rotationNumbers(rotation: Euler): number[] {
-    return [rotation.x, rotation.y, rotation.z];
+/** Most numbers a choice keeps (a texture: version, intensity, rotation x, y, z). */
+const CHOICE_NUMBERS = 5;
+
+/**
+ * The environment the platform should have, in a form that's cheap to compare
+ * every frame: a kind, a few numbers, and at most one texture or descriptor.
+ * Filled in place by {@link fillChoice}, so choosing each frame allocates nothing.
+ */
+export interface EnvironmentChoice {
+    kind: 'override' | 'procedural' | 'texture' | 'color' | 'none';
+    override: EnvironmentDescriptor | null;
+    texture: Texture | null;
+    layout: 'cube' | 'equirect' | null;
+    /** procedural: sun direction xyz, turbidity (NaN = default), sunIlluminance. texture: version, intensity, rotation x, y, z. color: rgb. */
+    readonly numbers: Float64Array;
+    /** How many of `numbers` are in use. */
+    count: number;
 }
+
+export function emptyChoice(): EnvironmentChoice {
+    return { kind: 'none', override: null, texture: null, layout: null, numbers: new Float64Array(CHOICE_NUMBERS), count: 0 };
+}
+
+export function sameChoice(a: EnvironmentChoice | null, b: EnvironmentChoice): boolean {
+    if (!a || a.kind !== b.kind || a.override !== b.override || a.texture !== b.texture || a.layout !== b.layout || a.count !== b.count) return false;
+    for (let index = 0; index < a.count; index++) if (!Object.is(a.numbers[index], b.numbers[index])) return false;
+    return true;
+}
+
+/** Sets the kind and clears the references; the caller writes `count` numbers. */
+function resetChoice(target: EnvironmentChoice, kind: EnvironmentChoice['kind'], count: number): Float64Array {
+    target.kind = kind;
+    target.override = null;
+    target.texture = null;
+    target.layout = null;
+    target.count = count;
+    return target.numbers;
+}
+
+/** The procedural sky's numbers: direction toward the sun, turbidity (NaN = the default), sun illuminance. */
+const PROCEDURAL_NUMBERS = 5;
+/** A texture's numbers: version, intensity, rotation x, y, z. */
+const TEXTURE_NUMBERS = 5;
+/** A colour's numbers: r, g, b. */
+const COLOR_NUMBERS = 3;
+
+/** Fills `target` from a scene texture if it can light GI's rays; false (with `skipped` told why) if not. */
+function fillTextureChoice(target: EnvironmentChoice, what: string, value: unknown, intensity: number, rotation: Euler, skipped: (what: string, reason: string) => void): boolean {
+    const texture = value as Texture | null;
+    if (!texture?.isTexture) return false;
+    const layout = skyLayout(texture);
+    if (!layout) {
+        skipped(what, 'it isn\'t an equirect or cube texture');
+        return false;
+    }
+    const reason = unreadableReason(texture);
+    if (reason) {
+        skipped(what, reason);
+        return false;
+    }
+    const numbers = resetChoice(target, 'texture', TEXTURE_NUMBERS);
+    target.texture = texture;
+    target.layout = layout;
+    numbers[0] = texture.version;
+    numbers[1] = intensity;
+    numbers[2] = rotation.x;
+    numbers[3] = rotation.y;
+    numbers[4] = rotation.z;
+    return true;
+}
+
+const ignoreSkipped = (): void => {};
 
 /**
  * Picks the environment source for this frame (see the file comment for the
- * order). `skipped` collects textures that were passed over and why, for a
- * warning.
+ * order) into `target`. `skipped` hears of textures that were passed over and
+ * why, for a warning.
  */
-export function chooseEnvironment(scene: Scene, sources: EnvironmentSources, skipped: (what: string, reason: string) => void = () => {}): EnvironmentChoice {
-    if (sources.override) return { kind: 'override', override: sources.override, numbers: [] };
+export function fillChoice(target: EnvironmentChoice, scene: Scene, sources: EnvironmentSources, skipped: (what: string, reason: string) => void = ignoreSkipped): EnvironmentChoice {
+    if (sources.override) {
+        resetChoice(target, 'override', 0);
+        target.override = sources.override;
+        return target;
+    }
     if (sources.sky) {
         const { luminanceScale, sunDirection } = sources.sky.baker.sky;
-        const sun = sunDirection.value;
-        return { kind: 'procedural', numbers: [sun.x, sun.y, sun.z, Number.NaN, luminanceScale.value] };
+        const numbers = resetChoice(target, 'procedural', PROCEDURAL_NUMBERS);
+        numbers[0] = sunDirection.value.x;
+        numbers[1] = sunDirection.value.y;
+        numbers[2] = sunDirection.value.z;
+        numbers[3] = Number.NaN;
+        numbers[4] = luminanceScale.value;
+        return target;
     }
     if (sources.skyMesh) {
         const sun = sources.skyMesh.sunPosition.value;
-        return { kind: 'procedural', numbers: [sun.x, sun.y, sun.z, sources.skyMesh.turbidity.value, sunIlluminance(sources.sun)] };
+        const numbers = resetChoice(target, 'procedural', PROCEDURAL_NUMBERS);
+        numbers[0] = sun.x;
+        numbers[1] = sun.y;
+        numbers[2] = sun.z;
+        numbers[3] = sources.skyMesh.turbidity.value;
+        numbers[4] = sunIlluminance(sources.sun);
+        return target;
     }
-    const candidates: [string, Texture | Color | null, number, Euler][] = [
-        ['scene.environment', scene.environment, scene.environmentIntensity, scene.environmentRotation],
-        ['scene.background', scene.background, scene.backgroundIntensity, scene.backgroundRotation],
-    ];
-    for (const [what, value, intensity, rotation] of candidates) {
-        const texture = value as Texture | null;
-        if (!texture?.isTexture) continue;
-        const layout = skyLayout(texture);
-        if (!layout) {
-            skipped(what, 'it isn\'t an equirect or cube texture');
-            continue;
-        }
-        const reason = unreadableReason(texture);
-        if (reason) {
-            skipped(what, reason);
-            continue;
-        }
-        return { kind: 'texture', texture, layout, numbers: [texture.version, intensity, ...rotationNumbers(rotation)] };
-    }
+    if (fillTextureChoice(target, 'scene.environment', scene.environment, scene.environmentIntensity, scene.environmentRotation, skipped)) return target;
+    if (fillTextureChoice(target, 'scene.background', scene.background, scene.backgroundIntensity, scene.backgroundRotation, skipped)) return target;
     const background = scene.background as Color | null;
-    if (background && (background as Color).isColor) return { kind: 'color', numbers: [background.r, background.g, background.b] };
-    return { kind: 'none', numbers: [] };
+    if (background && (background as Color).isColor) {
+        const numbers = resetChoice(target, 'color', COLOR_NUMBERS);
+        numbers[0] = background.r;
+        numbers[1] = background.g;
+        numbers[2] = background.b;
+        return target;
+    }
+    resetChoice(target, 'none', 0);
+    return target;
 }
+
+/** {@link fillChoice} into a new choice. */
+export function chooseEnvironment(scene: Scene, sources: EnvironmentSources, skipped: (what: string, reason: string) => void = ignoreSkipped): EnvironmentChoice {
+    return fillChoice(emptyChoice(), scene, sources, skipped);
+}
+
 
 /** Normalizes a direction toward the sun; straight up if it has no length. */
 function sunDirection(x: number, y: number, z: number): Vec3 {
@@ -341,7 +401,10 @@ export class EnvironmentSync {
     private readonly scene: SceneApi;
     private readonly device: GPUDevice;
     private readonly warn: Warn;
+    /** The choice sent last (null before the first), and a second one this frame's is written into, swapped on change. */
     private current: EnvironmentChoice | null = null;
+    private scratch = emptyChoice();
+    private readonly skipped = (what: string, reason: string): void => this.warn(`${what} can't light GI rays: ${reason}.`);
     private uploaded: { readonly texture: Texture; readonly version: number; readonly gpu: GPUTexture | null } | null = null;
     /** How many times `setEnvironment` was called. */
     updates = 0;
@@ -355,8 +418,9 @@ export class EnvironmentSync {
     }
 
     update(threeScene: Scene, sources: EnvironmentSources): void {
-        const choice = chooseEnvironment(threeScene, sources, (what, reason) => this.warn(`${what} can't light GI rays: ${reason}.`));
+        const choice = fillChoice(this.scratch, threeScene, sources, this.skipped);
         if (sameChoice(this.current, choice)) return;
+        this.scratch = this.current ?? emptyChoice();
         this.current = choice;
         const descriptor = environmentDescriptor(choice, (texture, layout) => this.upload(texture, layout), this.warn);
         if (choice.kind !== 'texture') this.release();

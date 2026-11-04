@@ -29,9 +29,9 @@
  *   of each full pass removes what it didn't meet. So a static object's first
  *   move, a new object and a removal are seen within one pass:
  *   ceil(objects in the scene / objectsPerFrame) frames (with the default
- *   128: Sponza with the curtains, 596 objects, 5 frames; Bistro interior,
- *   2,622 objects, 21 frames, a third of a second at 60 fps; a removal that
- *   happens mid-pass can take up to two passes). The first pass over a scene is done whole, so a scene
+ *   64: Sponza with the curtains, 596 objects, 10 frames; Bistro interior,
+ *   2,622 objects, 41 frames, about 0.7 s at 60 fps; a removal that happens
+ *   mid-pass can take up to two passes). The first pass over a scene is done whole, so a scene
  *   is complete from the first frame.
  * - **The hot set:** an object found moved (or hidden or shown) is checked
  *   every frame until it has been still for {@link HOT_FRAMES} frames, so
@@ -48,37 +48,42 @@
  * light-probe and rect-area lights (the last three also add diffuse light on
  * top of GI in three), point and spot lights whose `decay` isn't 2.
  * Morph targets and skinning use the bind pose (deforming meshes are M3).
+ * Camera layers aren't mirrored either: GI follows `visible` only, so an
+ * object on a layer the camera doesn't see still blocks and bounces light
+ * (hide it, or set `userData.giContributes = false`).
  *
  * It reads world matrices as they are: `ThreeGI.update` leaves them as
  * three's last render computed them (three-gi.ts says why).
  */
 
 import { Matrix4, type BufferAttribute, type BufferGeometry, type DirectionalLight, type InstancedMesh, type InterleavedBufferAttribute, type Light, type Material, type Mesh, type Object3D, type PointLight, type Scene, type Texture } from 'three';
-import type { EnvironmentDescriptor, InstanceHandle, LightChanges, LightDescriptor, LightHandle, MaterialHandle, MeshHandle, SceneApi, TextureHandle } from '@pmndrs/ddgi-core';
-import { MaterialSnapshot, PHYSICAL_DECAY, isSrgbTexture, lightDescriptor, luminance, materialDescriptor, materialSlotCount, meshDescriptor, textureSource, usesUvChannel1 } from './convert.ts';
-import { EnvironmentSync, type PmndrsSkyLike, type SkyMeshLike, type Warn } from './environment.ts';
+import type { ColorRGB, EnvironmentDescriptor, InstanceHandle, LightChanges, LightDescriptor, LightHandle, MaterialHandle, MeshHandle, SceneApi, TextureHandle } from '@pmndrs/ddgi-core';
+import { LIGHT_NUMBER_COUNT, MaterialSnapshot, PHYSICAL_DECAY, readLightNumbers, isSrgbTexture, lightDescriptor, luminance, materialDescriptor, materialSlotCount, meshDescriptor, textureSource, usesUvChannel1 } from './convert.ts';
+import { EnvironmentSync, type EnvironmentSources, type PmndrsSkyLike, type SkyMeshLike, type Warn } from './environment.ts';
+import { textureAverage } from './texture-average.ts';
 import { contributesFlag, contributesToGI } from './user-data.ts';
 
 /** Floats in a 4x4 matrix. */
 const MATRIX_FLOATS = 16;
 
 /**
- * Objects the walk looks at per frame. With the cache cold after three's
- * render that is about 0.05 ms on the RTX 3060 laptop (Bistro interior: 256
- * cost about 0.1 ms). Sponza with the curtains (596 objects) is walked every
- * 5 frames, Bistro interior (2,622) every 21.
+ * Objects the walk looks at per frame. A frame's sync starts with its data
+ * cold in the cache (three has just rendered), so each object costs about
+ * 0.7 µs on the RTX 3060 laptop; 64 keep a still frame of Bistro interior
+ * near 0.12 ms. The trade is how late a static object's first unmarked move,
+ * a new object or a removal is seen: one pass, ceil(objects / 64) frames
+ * (Sponza with the curtains, 596 objects: 10 frames; Bistro interior, 2,622:
+ * 41 frames, about 0.7 s at 60 fps). `markChanged` makes it the next update.
  */
-export const DEFAULT_OBJECTS_PER_FRAME = 128;
+export const DEFAULT_OBJECTS_PER_FRAME = 64;
 
 /**
- * Geometries, and separately materials, checked for edits per frame. Edit
- * checks are the dearest per record (a material's snapshot reads about 40
- * values); 64 of each cost about 0.1 ms a frame on Bistro interior. A
- * geometry edit is seen within (geometries / this) frames (Bistro interior:
- * about 130), a material edit within (materials / this) (Bistro: 5); hosts
- * that edit call `markChanged` to have it now.
+ * Geometries, materials and objects' GI flags checked for edits per frame,
+ * each. An unmarked edit is seen within (records / this) frames: on Bistro
+ * interior about 260 frames for a geometry, 9 for a material. Hosts that
+ * edit call `markChanged` to have it the next update.
  */
-export const DEFAULT_EDIT_CHECKS_PER_FRAME = 16;
+export const DEFAULT_EDIT_CHECKS_PER_FRAME = 8;
 
 /** An object stays in the hot set (checked every frame) until it has been still this many frames: a second at 60 fps. */
 export const HOT_FRAMES = 60;
@@ -144,6 +149,12 @@ interface ObjectRecord {
     seenPass: number;
     /** While in the hot set: the frame it may leave if nothing changes before. */
     hotUntil: number;
+    /** In the hot list now. */
+    hot: boolean;
+    /** Plain mesh: the visibility last sent (an InstancedMesh keeps one per instance in `visible`). */
+    shown: boolean;
+    /** Where it sits in the object list the GI-flag rotation walks. */
+    listIndex: number;
     destroyed: boolean;
 }
 
@@ -151,7 +162,12 @@ interface LightRecord {
     readonly light: Light;
     readonly handle: LightHandle;
     descriptor: LightDescriptor;
+    /** The light's numbers when last sent, and a second array this frame's are read into (readLightNumbers). */
+    numbers: Float64Array;
+    scratch: Float64Array;
     seenPass: number;
+    /** Where it sits in the light list. */
+    listIndex: number;
 }
 
 /** What the last `update` did, for stats and tests. */
@@ -180,6 +196,19 @@ export interface SceneSyncOptions {
     readonly editChecksPerFrame?: number;
 }
 
+/** Zeroes a report in place (no allocation each frame). */
+function resetReport(report: SyncFrameReport): void {
+    report.created = 0;
+    report.destroyed = 0;
+    report.transforms = 0;
+    report.visibility = 0;
+    report.materials = 0;
+    report.meshes = 0;
+    report.lights = 0;
+    report.walked = 0;
+    report.hot = 0;
+}
+
 function emptyReport(): SyncFrameReport {
     return { created: 0, destroyed: 0, transforms: 0, visibility: 0, materials: 0, meshes: 0, lights: 0, walked: 0, hot: 0 };
 }
@@ -204,12 +233,16 @@ function attributeVersion(attribute: Attribute | null): number {
     return (attribute as InterleavedBufferAttribute).isInterleavedBufferAttribute ? (attribute as InterleavedBufferAttribute).data.version : (attribute as BufferAttribute).version;
 }
 
+/** Who is visiting a mesh: the walk, the hot list, or a `markChanged` call. */
+type VisitSource = 'walk' | 'hot' | 'marked';
+
 type ObjectFlags = Object3D & {
     isMesh?: boolean;
     isLight?: boolean;
     isSkyMesh?: boolean;
     isBatchedMesh?: boolean;
     isGILight?: boolean;
+    isGIVolume?: boolean;
     isLightProbeGrid?: boolean;
     isAmbientLight?: boolean;
     isHemisphereLight?: boolean;
@@ -230,6 +263,12 @@ export class SceneSync {
     sky: PmndrsSkyLike | null = null;
     /** Visible `LightProbeGrid`s in the scene: they share three's light-probe slot with the GI light. */
     otherProbeLights = 0;
+    /**
+     * Mirrored materials with their own `envMap`. three lights those with it
+     * (diffuse included) even without `scene.environment`, so the GI light's
+     * environment-diffuse workaround needs coverage then too.
+     */
+    materialsWithEnvMap = 0;
 
     private readonly api: SceneApi;
     private readonly warnOnce: Warn;
@@ -241,9 +280,22 @@ export class SceneSync {
     private readonly materials = new Map<Material, MaterialRecord>();
     private readonly textures = new Map<Texture, TextureRecord>();
     private readonly textureHandleUsers = new Map<TextureHandle, number>();
+    /** Each texture's average colour, made once per texture version (texture-average.ts). */
+    private readonly textureAverages = new WeakMap<Texture, { readonly version: number; readonly average: ColorRGB | undefined }>();
+    private readonly textureColor = (texture: Texture): ColorRGB | undefined => {
+        const cached = this.textureAverages.get(texture);
+        if (cached && cached.version === texture.version) return cached.average;
+        const average = textureAverage(texture);
+        this.textureAverages.set(texture, { version: texture.version, average });
+        return average;
+    };
     private readonly objects = new Map<Object3D, ObjectRecord>();
     private readonly lights = new Map<Light, LightRecord>();
-    private readonly probeGrids = new Set<Light>();
+    /** Arrays beside the maps, walked by index each frame: a Map or Set iterator is an allocation. */
+    private readonly objectList: ObjectRecord[] = [];
+    private readonly lightList: LightRecord[] = [];
+    private readonly probeGrids: Light[] = [];
+    private objectCursor = 0;
 
     /** Round-robin edit checks: the records in a list, and where the next check starts. */
     private readonly geometryList: GeometryRecord[] = [];
@@ -251,7 +303,7 @@ export class SceneSync {
     private geometryCursor = 0;
     private materialCursor = 0;
 
-    private readonly hot = new Set<ObjectRecord>();
+    private readonly hotList: ObjectRecord[] = [];
     private readonly marked = new Set<Object3D>();
 
     /** The resumable walk: its scene, a stack of objects still to visit with their parents' visibility, and the pass number. */
@@ -259,6 +311,14 @@ export class SceneSync {
     private readonly walkStack: Object3D[] = [];
     private readonly walkParentVisible: boolean[] = [];
     private pass = 0;
+    /**
+     * Object records in the order the current pass met them so far, and the
+     * previous pass's beyond that. A scene that didn't change shape is walked
+     * in the same order, so the next mesh's record is usually the next entry:
+     * read in sequence instead of looked up in a Map.
+     */
+    private readonly passOrder: ObjectRecord[] = [];
+    private passCursor = 0;
     private passSkyMesh: SkyMeshLike | null = null;
     private skyMesh: SkyMeshLike | null = null;
 
@@ -273,6 +333,8 @@ export class SceneSync {
 
     /** What the last `update` did. */
     readonly report: SyncFrameReport = emptyReport();
+    /** Filled in place each frame for the environment sync. */
+    private readonly environmentSources: { -readonly [Key in keyof EnvironmentSources]: EnvironmentSources[Key] } = {};
 
     constructor(api: SceneApi, options: SceneSyncOptions) {
         this.api = api;
@@ -311,7 +373,7 @@ export class SceneSync {
     /** Sends what changed: marked objects, the hot set, this frame's share of the walk, lights, edits, environment. */
     update(scene: Scene): SyncFrameReport {
         this.frame++;
-        Object.assign(this.report, emptyReport());
+        resetReport(this.report);
         // A new scene is walked whole at once; afterwards, a share each frame.
         const fresh = scene !== this.walkScene;
         if (fresh) this.startOver(scene);
@@ -321,16 +383,23 @@ export class SceneSync {
         if (!fresh) this.walk();
         this.checkLights(scene);
         this.checkEdits();
-        this.environmentSync.update(scene, { override: this.environment, sky: this.sky, skyMesh: this.skyMesh, sun: this.sun });
+        const sources = this.environmentSources;
+        sources.override = this.environment;
+        sources.sky = this.sky;
+        sources.skyMesh = this.skyMesh;
+        sources.sun = this.sun;
+        this.environmentSync.update(scene, sources);
         return this.report;
     }
 
     /** Destroys everything this sync created in the platform scene. */
     dispose(): void {
         for (const record of [...this.objects.values()]) this.destroyObject(record);
-        for (const record of [...this.lights.values()]) this.api.destroyLight(record.handle);
+        for (const record of this.lightList) this.api.destroyLight(record.handle);
         this.lights.clear();
-        this.hot.clear();
+        this.lightList.length = 0;
+        this.hotList.length = 0;
+        this.passOrder.length = 0;
         this.marked.clear();
         this.walkStack.length = 0;
         this.walkParentVisible.length = 0;
@@ -353,6 +422,7 @@ export class SceneSync {
 
     private beginPass(): void {
         this.pass++;
+        this.passCursor = 0;
         this.passSkyMesh = null;
         this.walkStack.push(this.walkScene!);
         this.walkParentVisible.push(true);
@@ -368,7 +438,7 @@ export class SceneSync {
             const object = stack.pop()!;
             const visible = parentVisible.pop()! && object.visible;
             visited++;
-            if (!this.visitObject(object, visible, false)) continue;
+            if (!this.visitObject(object, visible, 'walk')) continue;
             // Children in reverse, so they come off the stack in order.
             const children = object.children;
             for (let index = children.length - 1; index >= 0; index--) {
@@ -380,22 +450,35 @@ export class SceneSync {
         if (stack.length === 0) this.endPass();
     }
 
+    /**
+     * Removes what the pass didn't meet, unless it is still in the scene: an
+     * object moved mid-pass into a part already walked is missed by this pass
+     * but not gone, so its parents are followed up to the scene first.
+     * Deleting from a Map while iterating it is safe, and allocates nothing.
+     */
     private endPass(): void {
-        for (const record of [...this.objects.values()]) {
-            if (record.seenPass !== this.pass) this.destroyObject(record);
+        const scene = this.walkScene!;
+        for (const record of this.objects.values()) {
+            if (record.seenPass === this.pass) continue;
+            if (this.placement(record.object, scene)) record.seenPass = this.pass;
+            else this.destroyObject(record);
         }
-        for (const record of [...this.lights.values()]) {
-            if (record.seenPass !== this.pass) this.destroyLight(record);
+        // Backwards, since destroying swaps the last record into the hole.
+        for (let index = this.lightList.length - 1; index >= 0; index--) {
+            const record = this.lightList[index];
+            if (record.seenPass === this.pass) continue;
+            if (this.placement(record.light, scene)) record.seenPass = this.pass;
+            else this.destroyLight(record);
         }
+        this.passOrder.length = this.passCursor;
         this.skyMesh = this.passSkyMesh;
     }
 
     /**
-     * One object, met by the walk or because it was marked. Returns whether
-     * to go on into its children. `hot` puts a mesh in the hot set whatever
-     * happens (a marked object).
+     * One object, met by the walk, the hot set or because it was marked.
+     * Returns whether to go on into its children.
      */
-    private visitObject(object: Object3D, visible: boolean, hot: boolean): boolean {
+    private visitObject(object: Object3D, visible: boolean, source: VisitSource): boolean {
         // Flags are tested most common first: a missing property costs a walk up the prototypes.
         const flags = object as ObjectFlags;
         if (flags.isMesh) {
@@ -408,7 +491,7 @@ export class SceneSync {
                 return false;
             }
             if (flags.isBatchedMesh) this.warnOnce('BatchedMesh is not mirrored into GI yet; its objects neither block nor bounce light.');
-            else this.visitMesh(object as Mesh, visible, hot);
+            else this.visitMesh(object as Mesh, visible, source);
         } else if (flags.isLight) {
             this.visitLight(object as Light, visible);
         } else if (flags.isSkyMesh) {
@@ -465,7 +548,7 @@ export class SceneSync {
 
     private visitMarked(object: Object3D, visible: boolean): void {
         this.report.hot++;
-        if (!this.visitObject(object, visible, true)) return;
+        if (!this.visitObject(object, visible, 'marked')) return;
         const record = this.objects.get(object);
         if (record) {
             // Edits too, now rather than when the round robin gets to them.
@@ -475,36 +558,51 @@ export class SceneSync {
         for (const child of object.children) this.visitMarked(child, visible && child.visible);
     }
 
-    /** Every hot object, every frame; each leaves the set after HOT_FRAMES frames without a change. */
+    /** Every hot object, every frame; each leaves the list after HOT_FRAMES frames without a change. */
     private checkHot(scene: Scene): void {
-        for (const record of this.hot) {
-            if (record.destroyed) {
-                this.hot.delete(record);
-                continue;
+        const list = this.hotList;
+        // Backwards, so a removal (the last entry swapped in) never skips one.
+        for (let index = list.length - 1; index >= 0; index--) {
+            const record = list[index];
+            if (!record.destroyed) {
+                this.report.hot++;
+                if (!this.placement(record.object, scene)) this.destroyObject(record);
+                else this.visitMesh(record.object, this.placementVisible, 'hot');
             }
-            this.report.hot++;
-            if (!this.placement(record.object, scene)) {
-                this.destroyObject(record);
-                continue;
+            if (record.destroyed || this.frame > record.hotUntil) {
+                record.hot = false;
+                const last = list.pop()!;
+                if (index < list.length) list[index] = last;
             }
-            this.visitMesh(record.object, this.placementVisible, false);
-            if (this.frame > record.hotUntil) this.hot.delete(record);
         }
     }
 
     private makeHot(record: ObjectRecord): void {
         record.hotUntil = this.frame + HOT_FRAMES;
-        this.hot.add(record);
+        if (record.hot) return;
+        record.hot = true;
+        this.hotList.push(record);
     }
 
     // -----------------------------------------------------------------------
     // Meshes and instances
     // -----------------------------------------------------------------------
 
-    /** One mesh: its geometry, GI flag and materials by identity, its transform and visibility. */
-    private visitMesh(mesh: Mesh, visible: boolean, hot: boolean): void {
-        let record = this.objects.get(mesh);
-        if (record && (record.geometryObject !== mesh.geometry || record.contributes !== contributesFlag(mesh, record.skinned))) {
+    /**
+     * One mesh: its geometry and materials by identity, its transform and
+     * visibility. Its GI flag (a `userData` read, one more cold cache line per
+     * mesh) is read here only for hot and marked objects; the rest get it in
+     * the edit-check rotation (checkEdits).
+     */
+    private visitMesh(mesh: Mesh, visible: boolean, source: VisitSource): void {
+        let record: ObjectRecord | undefined;
+        if (source === 'walk') {
+            const expected = this.passOrder[this.passCursor];
+            record = expected !== undefined && expected.object === mesh && !expected.destroyed ? expected : this.objects.get(mesh);
+        } else {
+            record = this.objects.get(mesh);
+        }
+        if (record && (record.geometryObject !== mesh.geometry || (source !== 'walk' && record.contributes !== contributesFlag(mesh, record.skinned)))) {
             // A new geometry or a changed GI flag: the contract has no setter for either, so start over.
             this.destroyObject(record);
             record = undefined;
@@ -512,12 +610,13 @@ export class SceneSync {
         if (!record) {
             record = this.createObject(mesh, visible, contributesToGI(mesh));
             if (!record) return;
-            if (hot) this.makeHot(record);
+            if (source !== 'walk') this.makeHot(record);
         } else {
             if (mesh.material !== record.materialKey || Array.isArray(mesh.material)) this.checkMaterials(record);
-            if (this.checkInstances(record, visible) || hot) this.makeHot(record);
+            if (this.checkInstances(record, visible) || source === 'marked') this.makeHot(record);
         }
         record.seenPass = this.pass;
+        if (source === 'walk') this.passOrder[this.passCursor++] = record;
     }
 
     private materialForSlot(mesh: Mesh, slot: number): Material | undefined {
@@ -557,9 +656,13 @@ export class SceneSync {
             instanceMatrixVersion: -1,
             seenPass: this.pass,
             hotUntil: 0,
+            hot: false,
+            shown: visible,
+            listIndex: this.objectList.length,
             destroyed: false,
         };
         this.objects.set(mesh, record);
+        this.objectList.push(record);
         if (instanced) {
             this.syncInstancedMesh(record, instanced, visible);
         } else {
@@ -586,7 +689,7 @@ export class SceneSync {
 
     private destroyObject(record: ObjectRecord): void {
         record.destroyed = true;
-        this.hot.delete(record);
+        removeFromList(this.objectList, record);
         if (record.matrixSlot >= 0) this.matrixPool.release(record.matrixSlot);
         record.matrixSlot = -1;
         for (const instance of record.instances) this.api.destroyInstance(instance);
@@ -624,9 +727,9 @@ export class SceneSync {
         const mesh = record.object;
         if (record.instanced) return this.syncInstancedMesh(record, mesh as InstancedMesh, visible);
         let changed = false;
-        if (record.visible[0] !== visible) {
+        if (record.shown !== visible) {
             this.api.setVisible(record.instances[0], visible);
-            record.visible[0] = visible;
+            record.shown = visible;
             this.report.visibility++;
             changed = true;
         }
@@ -758,8 +861,15 @@ export class SceneSync {
         removeFromList(this.geometryList, record);
     }
 
-    /** This frame's share of the edit checks: `editChecksPerFrame` geometries and as many materials, round robin. */
+    /** This frame's share of the edit checks: `editChecksPerFrame` geometries, materials and objects' GI flags, round robin. */
     private checkEdits(): void {
+        const objects = this.objectList;
+        for (let check = 0; check < Math.min(this.editChecksPerFrame, objects.length); check++) {
+            this.objectCursor = (this.objectCursor + 1) % objects.length;
+            const record = objects[this.objectCursor];
+            // A changed flag: start the object over, through the marked path, next update.
+            if (record.contributes !== contributesFlag(record.object, record.skinned)) this.marked.add(record.object);
+        }
         const geometries = this.geometryList;
         for (let check = 0; check < Math.min(this.editChecksPerFrame, geometries.length); check++) {
             this.geometryCursor = (this.geometryCursor + 1) % geometries.length;
@@ -785,7 +895,7 @@ export class SceneSync {
         const snapshot = new MaterialSnapshot();
         snapshot.read(material);
         const textureHandles: TextureHandle[] = [];
-        const descriptor = materialDescriptor(material, (texture) => this.textureHandleFor(texture, textureHandles));
+        const descriptor = materialDescriptor(material, (texture) => this.textureHandleFor(texture, textureHandles), this.textureColor);
         this.useTextureHandles(textureHandles);
         const record: MaterialRecord = {
             material,
@@ -796,6 +906,7 @@ export class SceneSync {
             textureHandles,
             listIndex: this.materialList.length,
         };
+        if (snapshot.envMap) this.materialsWithEnvMap++;
         this.materials.set(material, record);
         this.materialList.push(record);
         return record;
@@ -805,9 +916,10 @@ export class SceneSync {
     private checkMaterial(record: MaterialRecord): void {
         record.scratch.read(record.material);
         if (record.scratch.equals(record.snapshot)) return;
+        this.materialsWithEnvMap += (record.scratch.envMap ? 1 : 0) - (record.snapshot.envMap ? 1 : 0);
         [record.snapshot, record.scratch] = [record.scratch, record.snapshot];
         const textureHandles: TextureHandle[] = [];
-        const descriptor = materialDescriptor(record.material, (texture) => this.textureHandleFor(texture, textureHandles));
+        const descriptor = materialDescriptor(record.material, (texture) => this.textureHandleFor(texture, textureHandles), this.textureColor);
         this.useTextureHandles(textureHandles);
         // Every field, so a removed texture or cutoff is cleared too.
         this.api.updateMaterial(record.handle, descriptor);
@@ -820,6 +932,7 @@ export class SceneSync {
         record.users--;
         if (record.users > 0) return;
         this.api.destroyMaterial(record.handle);
+        if (record.snapshot.envMap) this.materialsWithEnvMap--;
         this.releaseTextureHandles(record.textureHandles);
         this.materials.delete(record.material);
         removeFromList(this.materialList, record);
@@ -879,10 +992,10 @@ export class SceneSync {
     private visitLight(light: Light, visible: boolean): void {
         const flags = light as ObjectFlags;
         if (flags.isLightProbeGrid) {
-            this.probeGrids.add(light);
+            if (!this.probeGrids.includes(light)) this.probeGrids.push(light);
             return;
         }
-        if (flags.isGILight) return;
+        if (flags.isGILight || flags.isGIVolume) return;
         if (flags.isAmbientLight || flags.isHemisphereLight || flags.isLightProbe) {
             if (visible && light.intensity > 0) this.warnOnce(`${light.type} adds diffuse light on top of GI in three (it isn't part of GI's light): light is counted twice where GI covers.`);
             return;
@@ -894,14 +1007,18 @@ export class SceneSync {
         if ((flags.isPointLight || flags.isSpotLight) && (light as PointLight).decay !== PHYSICAL_DECAY) {
             this.warnOnce(`GI lights fall off with distance squared (three's decay = 2); "${light.name || light.type}" has decay ${(light as PointLight).decay}, so GI uses 2 for it.`);
         }
-        const record = this.lights.get(light);
-        if (record) {
-            record.seenPass = this.pass;
+        const existing = this.lights.get(light);
+        if (existing) {
+            existing.seenPass = this.pass;
             return;
         }
         const descriptor = lightDescriptor(light, visible ? 1 : 0);
         if (!descriptor) return;
-        this.lights.set(light, { light, handle: this.api.createLight(descriptor), descriptor, seenPass: this.pass });
+        const numbers = new Float64Array(LIGHT_NUMBER_COUNT);
+        readLightNumbers(light, visible ? 1 : 0, numbers);
+        const record: LightRecord = { light, handle: this.api.createLight(descriptor), descriptor, numbers, scratch: new Float64Array(LIGHT_NUMBER_COUNT), seenPass: this.pass, listIndex: this.lightList.length };
+        this.lights.set(light, record);
+        this.lightList.push(record);
         this.report.created++;
     }
 
@@ -909,20 +1026,27 @@ export class SceneSync {
     private checkLights(scene: Scene): void {
         this.sun = null;
         let sunIlluminance = 0;
-        for (const record of this.lights.values()) {
+        // Backwards, since destroying swaps the last record into the hole.
+        for (let index = this.lightList.length - 1; index >= 0; index--) {
+            const record = this.lightList[index];
             const light = record.light;
             if (!this.placement(light, scene)) {
                 this.destroyLight(record);
                 continue;
             }
             const visible = this.placementVisible;
-            const descriptor = lightDescriptor(light, visible ? 1 : 0)!;
-            // A three light never changes type, so the descriptor types always match.
-            const changes = lightChanges(record.descriptor, descriptor);
-            if (changes) {
-                this.api.updateLight(record.handle, changes);
-                record.descriptor = descriptor;
-                this.report.lights++;
+            // Numbers first: a descriptor (and its arrays) is built only when something changed.
+            readLightNumbers(light, visible ? 1 : 0, record.scratch);
+            if (!sameNumbers(record.scratch, record.numbers)) {
+                [record.numbers, record.scratch] = [record.scratch, record.numbers];
+                const descriptor = lightDescriptor(light, visible ? 1 : 0)!;
+                // A three light never changes type, so the descriptor types always match.
+                const changes = lightChanges(record.descriptor, descriptor);
+                if (changes) {
+                    this.api.updateLight(record.handle, changes);
+                    record.descriptor = descriptor;
+                    this.report.lights++;
+                }
             }
             if ((light as DirectionalLight).isDirectionalLight && visible) {
                 const illuminance = light.intensity * luminance(light.color);
@@ -933,15 +1057,17 @@ export class SceneSync {
             }
         }
         this.otherProbeLights = 0;
-        for (const grid of this.probeGrids) {
-            if (!this.placement(grid, scene)) this.probeGrids.delete(grid);
-            else if (this.placementVisible && grid.intensity > 0) this.otherProbeLights++;
+        const grids = this.probeGrids;
+        for (let index = grids.length - 1; index >= 0; index--) {
+            if (!this.placement(grids[index], scene)) grids.splice(index, 1);
+            else if (this.placementVisible && grids[index].intensity > 0) this.otherProbeLights++;
         }
     }
 
     private destroyLight(record: LightRecord): void {
         this.api.destroyLight(record.handle);
         this.lights.delete(record.light);
+        removeFromList(this.lightList, record);
         this.report.destroyed++;
     }
 }
@@ -992,6 +1118,11 @@ function copyIfChanged(source: ArrayLike<number>, target: Float64Array, offset: 
         }
     }
     return changed;
+}
+
+function sameNumbers(a: Float64Array, b: Float64Array): boolean {
+    for (let index = 0; index < a.length; index++) if (a[index] !== b[index]) return false;
+    return true;
 }
 
 function sameTuple(a: readonly number[] | undefined, b: readonly number[] | undefined): boolean {

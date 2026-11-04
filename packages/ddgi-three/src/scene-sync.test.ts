@@ -2,6 +2,7 @@ import {
     BoxGeometry,
     BufferAttribute,
     BufferGeometry,
+    DataTexture,
     Color,
     DirectionalLight,
     Group,
@@ -13,6 +14,7 @@ import {
     Scene,
     SkinnedMesh,
     Skeleton,
+    Texture,
 } from 'three';
 import { beforeEach, describe, expect, it } from 'vitest';
 import type {
@@ -381,6 +383,82 @@ describe('the walk', () => {
         parent.visible = false;
         bounded.update(scene);
         expect(api.take()).toEqual(['setVisible']);
+    });
+
+    it('keeps an object moved mid-pass into a part already walked', () => {
+        const bounded = new SceneSync(api, { device: NO_DEVICE, objectsPerFrame: 4 });
+        const scene = new Scene();
+        // scene → early, filler (20 meshes), holder → late: holder is expanded only near the end of a pass.
+        const early = new Group();
+        const filler = new Group();
+        const holder = new Group();
+        scene.add(early, filler, holder);
+        for (let index = 0; index < 20; index++) filler.add(new Mesh(new BoxGeometry(), new MeshStandardMaterial()));
+        const late = new Mesh(new BoxGeometry(), new MeshStandardMaterial());
+        holder.add(late);
+        scene.updateMatrixWorld();
+        bounded.update(scene);
+        api.take();
+        // One frame in, the walk has passed `early` but not reached `holder`; `late` moves into `early`.
+        bounded.update(scene);
+        early.add(late);
+        scene.updateMatrixWorld();
+        const calls: string[] = [];
+        for (let frame = 0; frame < 2 * Math.ceil(25 / 4); frame++) {
+            bounded.update(scene);
+            calls.push(...api.take());
+        }
+        expect(calls).not.toContain('destroyInstance');
+        expect(api.instances.size).toBe(21);
+    });
+
+    it('counts materials with their own envMap (they need GI coverage for the workaround)', () => {
+        const scene = new Scene();
+        const material = new MeshStandardMaterial();
+        scene.add(new Mesh(new BoxGeometry(), material));
+        frame(scene);
+        expect(sync.materialsWithEnvMap).toBe(0);
+        material.envMap = new Texture();
+        frame(scene);
+        expect(sync.materialsWithEnvMap).toBe(1);
+        scene.clear();
+        frame(scene);
+        expect(sync.materialsWithEnvMap).toBe(0);
+    });
+
+    it('folds a texture\'s average colour into the GI albedo, once per texture version', () => {
+        const scene = new Scene();
+        // Half red, half blue, stored linear.
+        const pixels = new Uint8Array([255, 0, 0, 255, 0, 0, 255, 255]);
+        const map = new DataTexture(pixels, 2, 1);
+        map.needsUpdate = true;
+        const material = new MeshStandardMaterial({ color: new Color().setRGB(1, 1, 0.5), map });
+        scene.add(new Mesh(new BoxGeometry(), material));
+        frame(scene);
+        const albedo = [...api.materials.values()][0].albedo!;
+        expect(albedo[0]).toBeCloseTo(0.5);
+        expect(albedo[1]).toBeCloseTo(0);
+        expect(albedo[2]).toBeCloseTo(0.25);
+        // New pixels (a new version): the average is made again.
+        pixels.set([0, 255, 0, 255, 0, 255, 0, 255]);
+        map.needsUpdate = true;
+        frame(scene);
+        expect([...api.materials.values()][0].albedo![1]).toBeCloseTo(1);
+    });
+
+    it('picks up a changed GI flag through the edit rotation, and at once when marked', () => {
+        const scene = new Scene();
+        const mesh = new Mesh(new BoxGeometry(), new MeshStandardMaterial());
+        scene.add(mesh);
+        frame(scene);
+        mesh.userData.giContributes = false;
+        frame(scene);
+        frame(scene);
+        expect([...api.instances.values()].map((instance) => instance.contributesToGI)).toEqual([false]);
+        mesh.userData.giContributes = true;
+        sync.markChanged(mesh);
+        frame(scene);
+        expect([...api.instances.values()].map((instance) => instance.contributesToGI)).toEqual([true]);
     });
 
     it('rejects budgets below one', () => {

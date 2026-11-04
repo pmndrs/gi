@@ -18,10 +18,12 @@ import {
     PointLight,
     RepeatWrapping,
     SpotLight,
+    SRGBColorSpace,
     Texture,
 } from 'three';
 import { describe, expect, it } from 'vitest';
 import type { TextureHandle } from '@pmndrs/ddgi-core';
+import { textureAverage } from './texture-average.ts';
 import { giAlbedo, lightDescriptor, materialDescriptor, MaterialSnapshot, meshDescriptor, readFloatAttribute, uvMapping } from './convert.ts';
 
 const HANDLE = 7 as TextureHandle;
@@ -102,6 +104,44 @@ describe('the rest of the material', () => {
         material.userData.giSingleSided = true;
         after.read(material);
         expect(after.equals(before)).toBe(false);
+    });
+});
+
+describe('texture colours folded into GI (until the core samples textures, M4)', () => {
+    const grey = (): [number, number, number] => [0.5, 0.25, 1];
+
+    it('multiplies the albedo (metalness folded too) and the emission by the averages', () => {
+        const map = new Texture();
+        const emissiveMap = new Texture();
+        const material = new MeshStandardMaterial({ color: new Color().setRGB(0.8, 0.8, 0.8), metalness: 0.5, map, emissive: new Color().setRGB(1, 1, 1), emissiveMap });
+        const descriptor = materialDescriptor(material, () => HANDLE, grey);
+        expectClose(descriptor.albedo, [0.2, 0.1, 0.4]);
+        expectClose(descriptor.emissive, [0.5, 0.25, 1]);
+    });
+
+    it('leaves the colour alone when the texture has no readable pixels', () => {
+        const material = new MeshStandardMaterial({ color: new Color().setRGB(0.5, 0.5, 0.5), map: new Texture() });
+        expectClose(materialDescriptor(material, () => HANDLE, () => undefined).albedo, [0.5, 0.5, 0.5]);
+    });
+});
+
+describe('texture averages', () => {
+    it('averages pixel data, decoding sRGB', () => {
+        const linear = new DataTexture(new Uint8Array([255, 0, 0, 255, 0, 0, 255, 255]), 2, 1);
+        expectClose(textureAverage(linear), [0.5, 0, 0.5]);
+        const srgb = new DataTexture(new Uint8Array([188, 188, 188, 255]), 1, 1);
+        srgb.colorSpace = SRGBColorSpace;
+        expect(textureAverage(srgb)![0]).toBeCloseTo(0.5, 2);
+    });
+
+    it('samples at most a 32 x 32 grid of a large image', () => {
+        const size = 1024;
+        const data = new Uint8Array(size * size * 4).fill(128);
+        expectClose(textureAverage(new DataTexture(data, size, size)), [128 / 255, 128 / 255, 128 / 255]);
+    });
+
+    it('has nothing for an image that has not loaded', () => {
+        expect(textureAverage(new Texture())).toBeUndefined();
     });
 });
 

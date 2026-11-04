@@ -1,6 +1,7 @@
 import { BoxGeometry, Mesh, MeshStandardMaterial, PerspectiveCamera, Scene, Texture } from 'three';
 import { describe, expect, it } from 'vitest';
 import type { FrameInput, GIPlatform, SceneApi, ShadingModule } from '@pmndrs/ddgi-core';
+import { GIVolume } from './gi-volume.ts';
 import { ThreeGI } from './three-gi.ts';
 
 /** A shading module whose shape can be changed, like a technique switching its code. */
@@ -101,6 +102,29 @@ describe('ThreeGI', () => {
         expect(threeGI.light).not.toBe(second);
         expect(threeGI.light.shading).toBe(other);
         expect(scene.children.filter((child) => (child as { isGILight?: boolean }).isGILight)).toHaveLength(1);
+    });
+
+    it('has the GI light follow the intensity and priority of a GIVolume', () => {
+        const platform = fakePlatform(fakeShading());
+        const scene = new Scene();
+        const volume = new GIVolume(4, 4, 4);
+        scene.add(volume);
+        const threeGI = new ThreeGI(platform.gi, scene, { volume });
+        volume.intensity = 0.5;
+        volume.priority = 7;
+        threeGI.update(new PerspectiveCamera());
+        expect(threeGI.light.intensity).toBe(0.5);
+        expect(threeGI.light.priority).toBe(7);
+        expect(threeGI.sync.counts.lights).toBe(0);
+    });
+
+    it('computes coverage for a material with its own envMap, without scene.environment', () => {
+        const platform = fakePlatform(fakeShading());
+        const scene = new Scene();
+        scene.add(new Mesh(new BoxGeometry(), new MeshStandardMaterial({ envMap: new Texture() })));
+        const threeGI = new ThreeGI(platform.gi, scene);
+        threeGI.update(new PerspectiveCamera());
+        expect(threeGI.light.computeCoverage).toBe(true);
     });
 
     it('turns coverage on only when something needs it', () => {

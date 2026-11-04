@@ -173,6 +173,8 @@ export class GIPlatformImpl implements GIPlatform {
     /** Each technique's measured GPU cost per unit, for turning `budget.gpuMs` into units. */
     private readonly unitCosts = new UnitCostMeter();
     private readonly warnedMessages = new Set<string>();
+    /** The `uncapturederror` listener, kept so `dispose` can remove it. */
+    private readonly onUncapturedError: (event: Event) => void;
 
     constructor(device: GPUDevice, options: GIPlatformOptions = {}) {
         this.device = device;
@@ -202,6 +204,19 @@ export class GIPlatformImpl implements GIPlatform {
             this.lost = true;
             this.prepared = false;
         });
+
+        // The platform's own GPU errors as warnings. A listener, never an assignment to
+        // `onuncapturederror`: the host (three.js) owns that slot (SPEC, "GPU device").
+        // The event also carries the host's errors, so only messages naming one of the
+        // platform's GPU objects are forwarded: their labels start with this platform's
+        // label, or with an attached technique's id and a slash ("ddgi/trace").
+        const ownObject = new RegExp(`"${escapeRegExp(this.label)}[ /]`);
+        this.onUncapturedError = (event: Event) => {
+            const message = (event as GPUUncapturedErrorEvent).error?.message ?? '';
+            const ours = ownObject.test(message) || this.attached.some(({ technique }) => message.includes(`"${technique.id}/`));
+            if (ours) this.warnOnce(`@pmndrs/ddgi: GPU error in the platform's work: ${message}`);
+        };
+        device.addEventListener('uncapturederror', this.onUncapturedError);
     }
 
     get isReady(): boolean {
@@ -370,6 +385,7 @@ export class GIPlatformImpl implements GIPlatform {
         if (this.disposed) return;
         this.disposed = true;
         this.prepared = false;
+        this.device.removeEventListener('uncapturederror', this.onUncapturedError);
         for (const { technique } of this.attached.splice(0)) technique.dispose();
         this.output = undefined;
         this.shade.dispose();
@@ -442,6 +458,10 @@ export class GIPlatformImpl implements GIPlatform {
         this.warnedMessages.add(message);
         console.warn(message);
     }
+}
+
+function escapeRegExp(text: string): string {
+    return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 /** Timestamps off: every pass goes untimed, which `beginComputePass({ timestampWrites })` accepts. */
