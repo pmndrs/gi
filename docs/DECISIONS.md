@@ -4,6 +4,9 @@ Settled choices, newest first. Each entry is short: the decision, why, and what 
 
 ## 2026-11-04
 
+- **Intel's Sponza add-ons are covered by the same approval as the base package** (T1.10). Curtains (726650), ivy (726656), trees (726662) and candles (726676) are download-only and never committed. Each package's `credits_license.txt` is byte-identical to the base's (Intel preface plus CC BY 4.0).
+- **The asset tool downloads from Intel with Windows' own `curl.exe`** (M1 lead). Since 2026-11-04, `cdrdv2.intel.com` answers Node's `fetch` with a 247-byte "Request Rejected" page, and `curl.exe` still gets the zip. We use a normal client that works; we don't disguise one that's refused (no fake browser headers). Other hosts keep Node `fetch`.
+  - *Revisit if:* Intel blocks `curl.exe` too. Then the instructions say to download by hand and put the zip in `assets/.cache`.
 - **How T1.5's accuracy and leak checks are measured** (M1 lead; design in `docs/design/ddgi.md`). These define the measurements; the targets themselves are unchanged.
   - **Cornell accuracy uses the point-light Cornell** (`cornell-box-point`). DDGI's field counts light seen straight from an emitter as GI, while Cycles' "indirect" pass doesn't, so the emissive Cornell can't be compared indirect-to-indirect. With a point light both hold exactly the bounced light. The emissive Cornell's full image is still reported, but doesn't gate.
   - **Two-room leak** = DDGI's indirect light in the dark room beyond the Cycles reference's (the doorway lets real light in), as a share of the lit room's indirect light, from mean pixel values at the `dark-room-leak-view` and `lit-room` bookmarks. Thin-wall and closed-door, where the true answer is zero, are reported too.

@@ -21,6 +21,27 @@ Rules:
 
 ---
 
+## 2026-11-04 · T1.10 part 1 · wrangler (haiku), lead checked
+Did: Intel's four Sponza add-ons in `tools/assets/sources.json` (`sponza-intel-curtains`, `-ivy`, `-trees`, `-candles`; download-only), with 1k texture conversion for the first three (the base's script, Blender 4.5.0). Four rows in THIRD_PARTY.md.
+Verified:
+- Licence files byte-identical to the base's.
+- The tool's download, checksum, extract, convert and output checks pass from scratch for all four, fed from a local server holding zips that `curl.exe` fetched from Intel.
+- Lead: `--verify-only` on all four passes.
+Not verified: a download straight from Intel through the tool. Intel rejects Node `fetch`, so part 2 switches the tool to `curl.exe` for Intel (DECISIONS).
+Numbers: triangles: curtains 2.0 M, ivy 5.1 M, trees 2.0 M, candles 19.5 M (plus 10,000 point lights); base 3.7 M.
+Next: part 2 (implementer, after T1.1): the `curl.exe` path; curtains into `sponza`; `sponza-full`; re-render Sponza's Cycles reference. Candles' size goes to Dennis.
+
+## 2026-11-04 · T1.5 references · gpu-tester (sonnet), lead checked files
+Did: `scenes/manifests/cornell-box-point.json`, the point-light Cornell (16a6099). Cycles renders at 2048 spp on the CPU, under the lock, into `bench/references/` (gitignored, so re-render them after a clean clone):
+- `cornell-box-point/front`: seeds 0 and 1;
+- `two-room/dark-room-leak-view`.
+Verified: the agent ran `pnpm test` (483 pass) before the open-ground work landed. The lead saw the EXRs on disk. The viewer scene picker wasn't checked.
+Numbers:
+- Render times: Cornell point 269 s and 290 s (512²); two-room dark view 385 s (640×360).
+- Mean indirect: Cornell point 0.0840; two-room lit-room 0.676; two-room dark room 0.0602, which is 8.9% of the lit room's, the light through the doorway.
+- Cornell point, seed 0 against seed 1: indirect bias −0.006%, 8×8 block error 1.07%; full bias −0.003%, block error 0.48%. So one image's per-pixel indirect noise is about 10%.
+Next: T1.5 uses these for its checks.
+
 ## 2026-11-04 · M1 start, T1.5 design · M1 lead (main session, opus)
 Did:
 - Branch `m1` from `main` at 799b050. The M1 board gets a Status column.

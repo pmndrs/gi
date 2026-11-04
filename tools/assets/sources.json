@@ -605,6 +605,263 @@
       ]
     },
     {
+      "id": "sponza-intel-curtains",
+      "title": "Sponza add-on: curtains (Intel New Sponza, 2022)",
+      "author": "Sponza Addon Package Crew (Katica Putica, Cristiano Siqueira, Timothy Heath, Justin Prazen, Sebastian Herholz, Bruce Cherniak, Anton Kaplanyan), for Intel's Sample Library",
+      "attribution": "Sponza 2022 Scene commissioned by Frank Meinl, sponsored by Anton Kaplanyan. Add-on package by the Sponza Addon Package Crew. Intel Sample Library. License text in the package is CC BY 4.0, with the preface \"For personal use and educational use. Limited commercial use for marketing and print purposes.\"",
+      "sourceUrl": "https://web.archive.org/web/20251206023318/https://www.intel.com/content/www/us/en/developer/topic-technology/graphics-research/samples.html",
+      "license": "CC-BY-4.0+intel-preface",
+      "licenseUrl": "https://creativecommons.org/licenses/by/4.0/legalcode",
+      "licenseApproval": {
+        "record": "docs/DECISIONS.md",
+        "date": "2026-11-04",
+        "title": "Sponza is Intel's \"New Sponza\" (base package), download-only."
+      },
+      "redistributable": false,
+      "extract": "zip",
+      "download": {
+        "url": "https://cdrdv2.intel.com/v1/dl/getContent/726650",
+        "file": "pkg_a_curtains.zip",
+        "bytes": 786898766,
+        "sha256": "3ba96e967c8f5ad0a133309cedb342e3563f9cccb42d04e188f55c0f2125bb65"
+      },
+      "convert": {
+        "tool": "blender",
+        "script": "tools/assets/convert/gltf-downsize-textures.py",
+        "args": [
+          "pkg_a_curtains/NewSponza_Curtains_glTF.gltf",
+          "pkg_a_curtains_1k/NewSponza_Curtains_1k.gltf",
+          "1024"
+        ],
+        "blenderVersion": "4.5.0"
+      },
+      "outputs": [
+        {
+          "path": "pkg_a_curtains/NewSponza_Curtains_glTF.gltf",
+          "sha256": "b56968aeb691970b63027ae3ffbb0d77f1d736e7bdace5c70be106d6dcfbb516",
+          "bytes": 37076
+        },
+        {
+          "path": "pkg_a_curtains/NewSponza_Curtains_glTF.bin",
+          "sha256": "c89c2876636a0baa9a506e3206d8336239d9a6b79e73c9e1dd53cd47f2caca0c",
+          "bytes": 73479384
+        },
+        {
+          "path": "pkg_a_curtains_1k/NewSponza_Curtains_1k.gltf",
+          "sha256": "19f03dcbd8afb3e46a6d9bba65211584b854a6aeb4c978376b45f1ed3c316bbb",
+          "bytes": 65491
+        },
+        {
+          "path": "pkg_a_curtains_1k/textures/curtain_fabric_Normal.png",
+          "sha256": "d49395116e3b808aaae6a6a2659b0e9d78d1204c18ee0cab641c07cdeba6bb14",
+          "bytes": 2866855
+        },
+        {
+          "path": "pkg_a_curtains_1k/textures/curtain_fabric_Roughnesscurtain_fabric_Metalness.png",
+          "sha256": "e8bab2fb4d420a4b02db07c84c0a725ed8814b67bee17ae84d361f3fdf450598",
+          "bytes": 1139513
+        },
+        {
+          "path": "pkg_a_curtains_1k/textures/curtain_fabric_blue_BaseColor.png",
+          "sha256": "3b8511be0bf82d9d2aabb0c1ebb49fc8bc3e6738c32ba92a174837efa95d7981",
+          "bytes": 1075427
+        },
+        {
+          "path": "pkg_a_curtains_1k/textures/curtain_fabric_green_BaseColor.png",
+          "sha256": "c6ac6771cfa0599a45204d108228a35702856f34fa618bc273374d9c72855776",
+          "bytes": 1101751
+        },
+        {
+          "path": "pkg_a_curtains_1k/textures/curtain_fabric_red_BaseColor.png",
+          "sha256": "5d84faf8c913778e9d1c133780d4d8d5c2a1a24491c8490dca94827eee58990a",
+          "bytes": 1050911
+        },
+        {
+          "path": "pkg_a_curtains_1k/textures/metal_door_01_BaseColor.png",
+          "sha256": "faed05cba21aa3bdf5345ad1ce56f9f691ca79975e79e3088d66a0535783908e",
+          "bytes": 737657
+        },
+        {
+          "path": "pkg_a_curtains_1k/textures/metal_door_01_Normal.png",
+          "sha256": "acefe4fef4bc3803e4bd0bca64bf2d454b99471b747c5a40b352392deda18e2d",
+          "bytes": 2280018
+        },
+        {
+          "path": "pkg_a_curtains_1k/textures/metal_door_01_Roughnessmetal_door_01_Metalness.png",
+          "sha256": "ca800359da554b83fddf17c44167656d802172e5cd371b48634eb3bd584ba1d5",
+          "bytes": 1796923
+        }
+      ]
+    },
+    {
+      "id": "sponza-intel-ivy",
+      "title": "Sponza add-on: ivy growth (Intel New Sponza, 2022)",
+      "author": "Sponza Addon Package Crew (Katica Putica, Cristiano Siqueira, Timothy Heath, Justin Prazen, Sebastian Herholz, Bruce Cherniak, Anton Kaplanyan), for Intel's Sample Library",
+      "attribution": "Sponza 2022 Scene commissioned by Frank Meinl, sponsored by Anton Kaplanyan. Add-on package by the Sponza Addon Package Crew. Intel Sample Library. License text in the package is CC BY 4.0, with the preface \"For personal use and educational use. Limited commercial use for marketing and print purposes.\"",
+      "sourceUrl": "https://web.archive.org/web/20251206023318/https://www.intel.com/content/www/us/en/developer/topic-technology/graphics-research/samples.html",
+      "license": "CC-BY-4.0+intel-preface",
+      "licenseUrl": "https://creativecommons.org/licenses/by/4.0/legalcode",
+      "licenseApproval": {
+        "record": "docs/DECISIONS.md",
+        "date": "2026-11-04",
+        "title": "Sponza is Intel's \"New Sponza\" (base package), download-only."
+      },
+      "redistributable": false,
+      "extract": "zip",
+      "download": {
+        "url": "https://cdrdv2.intel.com/v1/dl/getContent/726656",
+        "file": "pkg_b_ivy1.zip",
+        "bytes": 1383921436,
+        "sha256": "e1e2dfacf3db023e8674092fbe81f0d47e361d4ecf1d798802b23ed5d8d4c052"
+      },
+      "convert": {
+        "tool": "blender",
+        "script": "tools/assets/convert/gltf-downsize-textures.py",
+        "args": [
+          "pkg_b_ivy/NewSponza_IvyGrowth_glTF.gltf",
+          "pkg_b_ivy_1k/NewSponza_IvyGrowth_1k.gltf",
+          "1024"
+        ],
+        "blenderVersion": "4.5.0"
+      },
+      "outputs": [
+        {
+          "path": "pkg_b_ivy/NewSponza_IvyGrowth_glTF.gltf",
+          "sha256": "22039080d6de24569f377210b8ebbe59194b5d44de777679d9d87b69ffda2c1e",
+          "bytes": 3407
+        },
+        {
+          "path": "pkg_b_ivy/NewSponza_IvyGrowth_glTF.bin",
+          "sha256": "4e2d5ac1b3d63f269e2ea030860bc40f222a6e81b86aef0055a0cb37446268ad",
+          "bytes": 269978952
+        },
+        {
+          "path": "pkg_b_ivy_1k/NewSponza_IvyGrowth_1k.gltf",
+          "sha256": "943cc9d0b58168bb7a30b3fbb25ce83093c5fe6fecf866ffbb6494c2f23bb7c6",
+          "bytes": 6057
+        },
+        {
+          "path": "pkg_b_ivy_1k/textures/IvyLeaf_Normal.png",
+          "sha256": "3b19a496bc40a71ccabf71518553a3a52e7496d229f81b00a90e2947ebf25611",
+          "bytes": 1446595
+        },
+        {
+          "path": "pkg_b_ivy_1k/textures/IvyLeaf_BaseColor.png",
+          "sha256": "47c5e71fa457c5f110fab71c28d09ee91ecd7e647e6eeea4b34af53a2b0f5c56",
+          "bytes": 1265272
+        },
+        {
+          "path": "pkg_b_ivy_1k/textures/IvyLeaf_Roughness0.png",
+          "sha256": "812b5d8fac98036a4fce5f0b129a02cd8fd128da275444b0b76ef31590fedff4",
+          "bytes": 292909
+        }
+      ]
+    },
+    {
+      "id": "sponza-intel-trees",
+      "title": "Sponza add-on: cypress trees (Intel New Sponza, 2022)",
+      "author": "Sponza Addon Package Crew (Katica Putica, Cristiano Siqueira, Timothy Heath, Justin Prazen, Sebastian Herholz, Bruce Cherniak, Anton Kaplanyan), for Intel's Sample Library",
+      "attribution": "Sponza 2022 Scene commissioned by Frank Meinl, sponsored by Anton Kaplanyan. Add-on package by the Sponza Addon Package Crew. Intel Sample Library. License text in the package is CC BY 4.0, with the preface \"For personal use and educational use. Limited commercial use for marketing and print purposes.\"",
+      "sourceUrl": "https://web.archive.org/web/20251206023318/https://www.intel.com/content/www/us/en/developer/topic-technology/graphics-research/samples.html",
+      "license": "CC-BY-4.0+intel-preface",
+      "licenseUrl": "https://creativecommons.org/licenses/by/4.0/legalcode",
+      "licenseApproval": {
+        "record": "docs/DECISIONS.md",
+        "date": "2026-11-04",
+        "title": "Sponza is Intel's \"New Sponza\" (base package), download-only."
+      },
+      "redistributable": false,
+      "extract": "zip",
+      "download": {
+        "url": "https://cdrdv2.intel.com/v1/dl/getContent/726662",
+        "file": "pkg_c_trees.zip",
+        "bytes": 951147802,
+        "sha256": "72263ee9e26b96b72e86718c900274f6acfd767097806c03fbb36177ecd8e6d7"
+      },
+      "convert": {
+        "tool": "blender",
+        "script": "tools/assets/convert/gltf-downsize-textures.py",
+        "args": [
+          "pkg_c_trees/NewSponza_CypressTree_glTF.gltf",
+          "pkg_c_trees_1k/NewSponza_CypressTree_1k.gltf",
+          "1024"
+        ],
+        "blenderVersion": "4.5.0"
+      },
+      "outputs": [
+        {
+          "path": "pkg_c_trees/NewSponza_CypressTree_glTF.gltf",
+          "sha256": "3fef7b677e5d8ae87ac84f2e8a27a32fde9441b82bbcfd0de0a3bc6bf5e41fc9",
+          "bytes": 6296
+        },
+        {
+          "path": "pkg_c_trees/NewSponza_CypressTree_glTF.bin",
+          "sha256": "d60d2dbf1e0390cebe9bdb1c40098c8e08d832fa28ad4ef72ac33d661493f90c",
+          "bytes": 147736884
+        },
+        {
+          "path": "pkg_c_trees_1k/NewSponza_CypressTree_1k.gltf",
+          "sha256": "5d2582cbac40a7d0b1910a60e32df6ec4ac5981fd92ee5bd77e96a4471e2f889",
+          "bytes": 11284
+        },
+        {
+          "path": "pkg_c_trees_1k/textures/Bark_Normal.png",
+          "sha256": "9357a536751012226dab52b74b716b927985afec5e81130432684102971fc50f",
+          "bytes": 3065688
+        },
+        {
+          "path": "pkg_c_trees_1k/textures/Bark_BaseColor.png",
+          "sha256": "67944081d71cba53f9e24aa5220b87d5e0a0b5fe44134b1776db6e1e87e2993a",
+          "bytes": 3619112
+        },
+        {
+          "path": "pkg_c_trees_1k/textures/Cypress_LF01_Spring_Normal.png",
+          "sha256": "c675d3be9f7c1f0050d96d007d954aeae77271285b867b8da831c21c1962621b",
+          "bytes": 560156
+        },
+        {
+          "path": "pkg_c_trees_1k/textures/Cypress_LF01_Spring_BaseColor.png",
+          "sha256": "e5cb3e44b38b256c56189fdebac1e460276415e490709c76d175e61beaab1b7c",
+          "bytes": 298441
+        }
+      ]
+    },
+    {
+      "id": "sponza-intel-candles",
+      "title": "Sponza add-on: 10,000 candles (Intel New Sponza, 2022)",
+      "author": "Sponza Addon Package Crew (Katica Putica, Cristiano Siqueira, Timothy Heath, Justin Prazen, Sebastian Herholz, Bruce Cherniak, Anton Kaplanyan), for Intel's Sample Library",
+      "attribution": "Sponza 2022 Scene commissioned by Frank Meinl, sponsored by Anton Kaplanyan. Add-on package by the Sponza Addon Package Crew. Intel Sample Library. License text in the package is CC BY 4.0, with the preface \"For personal use and educational use. Limited commercial use for marketing and print purposes.\"",
+      "sourceUrl": "https://web.archive.org/web/20251206023318/https://www.intel.com/content/www/us/en/developer/topic-technology/graphics-research/samples.html",
+      "license": "CC-BY-4.0+intel-preface",
+      "licenseUrl": "https://creativecommons.org/licenses/by/4.0/legalcode",
+      "licenseApproval": {
+        "record": "docs/DECISIONS.md",
+        "date": "2026-11-04",
+        "title": "Sponza is Intel's \"New Sponza\" (base package), download-only."
+      },
+      "redistributable": false,
+      "extract": "zip",
+      "download": {
+        "url": "https://cdrdv2.intel.com/v1/dl/getContent/726676",
+        "file": "pkg_d_10k_candles.zip",
+        "bytes": 3190731713,
+        "sha256": "f8a43d972f377e7eb25e52fdc92faed425ad001a4516e0ecef436ff2f8663396"
+      },
+      "convert": null,
+      "outputs": [
+        {
+          "path": "pkg_d_10k_candles/NewSponza_4_Combined_glTF.gltf",
+          "sha256": "285326986de75d90bc9e662ca9a7e325efd04ac6e0d2142ade62878e31d1e453",
+          "bytes": 6657188
+        },
+        {
+          "path": "pkg_d_10k_candles/NewSponza_4_Combined_glTF.bin",
+          "sha256": "de9e10dc8d7763adb80087cced117815e9b79d8e60f32691afc6fea95beec80a",
+          "bytes": 648098592
+        }
+      ]
+    },
+    {
       "id": "sponza-khronos",
       "title": "Sponza (Khronos glTF Sample Assets)",
       "author": "Crytek (model, CRYENGINE sample); Khronos glTF Sample Assets repository",

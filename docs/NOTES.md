@@ -120,6 +120,12 @@ One bullet per fact, each with its source. Add a bullet when something cost you 
   - Git-bash's `curl` fails TLS to cdrdv2 ("self signed certificate in certificate chain"). Windows `curl.exe` and Node `fetch` both work.
   - The www.intel.com samples page doesn't load from here; the Wayback copy from 2025-12-06 has the links.
   - Source: T0.4 scout, 2026-11-04.
+- **Intel Sponza add-ons** (T1.10):
+  - Packages: 726650 `pkg_a_curtains.zip` (786,898,766 B, 2.0 M triangles), 726656 `pkg_b_ivy1.zip` (1,383,921,436 B, 5.1 M), 726662 `pkg_c_trees.zip` (951,147,802 B, 2.0 M), 726676 `pkg_d_10k_candles.zip` (3,190,731,713 B, 19.5 M). The base Sponza has 3.7 M triangles.
+  - Textures are 4096²; the base package's script reduces them to 1k. The base's textures folder already holds byte-identical `curtain_fabric_*` and `metal_door_01_*` files.
+  - The trees' cypress material is BLEND; the ivy's materials are declared OPAQUE.
+  - Candles: one 19.5 M-triangle mesh with no textures, plus 10,000 point lights.
+- **`cdrdv2.intel.com` rejects Node `fetch`** with HTTP 200 and a 247-byte "Request Rejected" page (2026-11-04), for the base and add-on URLs alike. Windows `curl.exe` gets the zip (302 to a signed CloudFront URL, no login). The fetch tool's size check refuses the page. Source: T1.10.
 - **McGuire archive:** Breakfast Room and Living Room are CC BY 3.0 (each folder's `license.txt`). Conference Room says only "Credit required", with no license, so it's excluded.
 - **Bistro (NVIDIA ORCA):** CC BY 4.0. One 894 MB zip holds both exterior and interior. The download URL redirects (302) to a short-lived token URL, and `curl -L` follows it with no login.
   - Exterior: 2.83 M triangles, 1,296 meshes. Interior: 1.04 M triangles, 1,186 meshes.
