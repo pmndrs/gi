@@ -5,9 +5,9 @@
  * Cases: thin walls, mirrored and non-uniform transforms, instancing, a closed
  * thin box no interior ray may escape, random scenes, and about two million
  * rays aimed at the seams of a tessellated quad (they must not slip through).
- * Everything runs twice, once per ray-triangle test: Moller-Trumbore (the
- * design's default) and the watertight test of Woop et al. (the fallback the
- * design names for rays that slip between triangles).
+ * Everything runs once per variant (see VARIANTS): Moller-Trumbore and the
+ * watertight test of Woop et al. on our own trees, and the watertight test on
+ * trees built by tinybvh (WASM, in the worker) and by three-mesh-bvh (converted).
  * The default device limits are used on purpose: the oracle scenes are tiny and
  * the core has to work there.
  *
@@ -43,9 +43,30 @@ import {
     type OracleCase,
     type SharedEdgeCase,
 } from './cases.ts';
+import { buildMeshBvhWithTmbvh } from '../trace-bench/tmbvh-convert.ts';
 import { computeReferenceAnswersYielding, evaluateCase, type CaseResult } from './check.ts';
 
-const TRIANGLE_TESTS: TriangleTest[] = ['moller-trumbore', 'watertight'];
+/**
+ * What each pass of the oracle traces: the triangle test, and who built the
+ * per-mesh trees. `three-mesh-bvh` trees are built by that library and
+ * converted to our layout (../trace-bench/tmbvh-convert.ts), the T0.10 part C
+ * experiment; they are traced by the same WGSL walk.
+ */
+interface OracleVariant {
+    name: string;
+    triangleTest: TriangleTest;
+    treeSource: 'ours' | 'tinybvh' | 'three-mesh-bvh';
+}
+
+const VARIANTS: OracleVariant[] = [
+    { name: 'moller-trumbore', triangleTest: 'moller-trumbore', treeSource: 'ours' },
+    { name: 'watertight', triangleTest: 'watertight', treeSource: 'ours' },
+    { name: 'watertight-tinybvh', triangleTest: 'watertight', treeSource: 'tinybvh' },
+    { name: 'watertight-tmbuild', triangleTest: 'watertight', treeSource: 'three-mesh-bvh' },
+];
+
+/** three-mesh-bvh target leaf size for the converted trees, as in the benchmark's default. */
+const TMBUILD_LEAF_SIZE = 4;
 
 /** Rays per shared-edge scene. Two scenes, so 2 million in total for each triangle test. */
 const DEFAULT_SHARED_EDGE_RAYS = 1_000_000;
@@ -133,9 +154,13 @@ interface BuiltScene {
     buildMs: number;
 }
 
-async function buildScene(builder: MeshBvhBuilder, oracleCase: OracleCase, triangleTest: TriangleTest): Promise<BuiltScene> {
+async function buildScene(builder: MeshBvhBuilder, oracleCase: OracleCase, variant: OracleVariant): Promise<BuiltScene> {
     const start = performance.now();
-    const bvhs = await Promise.all(oracleCase.meshes.map((mesh) => builder.build(mesh, { triangleTest })));
+    const { triangleTest } = variant;
+    const bvhs =
+        variant.treeSource !== 'three-mesh-bvh'
+            ? await Promise.all(oracleCase.meshes.map((mesh) => builder.build(mesh, { triangleTest, builder: variant.treeSource === 'tinybvh' ? 'tinybvh' : 'sah' })))
+            : oracleCase.meshes.map((mesh) => buildMeshBvhWithTmbvh(mesh, TMBUILD_LEAF_SIZE, triangleTest).bvh);
     const data = assembleTraceScene(bvhs, oracleCase.instances);
     return { data, buildMs: performance.now() - start };
 }
@@ -171,9 +196,9 @@ async function runSharedEdgeCase(
     kernel: TraceBatchKernel,
     builder: MeshBvhBuilder,
     oracleCase: SharedEdgeCase,
-    triangleTest: TriangleTest,
+    variant: OracleVariant,
 ): Promise<SharedEdgeReport> {
-    const built = await buildScene(builder, oracleCase, triangleTest);
+    const built = await buildScene(builder, oracleCase, variant);
     const buffers = uploadTraceScene(device, built.data, oracleCase.name);
     const answers = await traceOnGpu(device, kernel, buffers, oracleCase.rays);
     buffers.destroy();
@@ -264,13 +289,14 @@ await runGpuTest(async ({ device, log }) => {
     const references = [];
     for (const oracleCase of cases) references.push(await computeReferenceAnswersYielding(oracleCase));
 
-    for (const triangleTest of TRIANGLE_TESTS) {
+    for (const variant of VARIANTS) {
+        const { triangleTest } = variant;
         const kernel = await TraceBatchKernel.create(device, triangleTest);
         const results = { cases: {} as Record<string, unknown>, sharedEdges: [] as SharedEdgeReport[] };
-        byTest[triangleTest] = results;
+        byTest[variant.name] = results;
 
         for (const [caseIndex, oracleCase] of cases.entries()) {
-            const built = await buildScene(builder, oracleCase, triangleTest);
+            const built = await buildScene(builder, oracleCase, variant);
             const buffers = uploadTraceScene(device, built.data, oracleCase.name);
             const answers = await traceOnGpu(device, kernel, buffers, oracleCase.rays);
             buffers.destroy();
@@ -285,28 +311,28 @@ await runGpuTest(async ({ device, log }) => {
             deepestRequired = Math.max(deepestRequired, built.data.requiredStackSize);
             results.cases[oracleCase.name] = summarize(result, stackUsed, built.data, built.buildMs);
             log(
-                `[${triangleTest}] ${oracleCase.name}: ${result.rays} rays, closest ${result.closest.mismatches} mismatches / ${result.closest.ambiguous} ambiguous, ` +
+                `[${variant.name}] ${oracleCase.name}: ${result.rays} rays, closest ${result.closest.mismatches} mismatches / ${result.closest.ambiguous} ambiguous, ` +
                     `any ${result.any.mismatches} / ${result.any.ambiguous}, leaks ${result.leaks}, corner leaks ${result.edgeLeaks}`,
             );
-            for (const failure of result.failures) failures.push(`[${triangleTest}] ${oracleCase.name}: ${failure}`);
+            for (const failure of result.failures) failures.push(`[${variant.name}] ${oracleCase.name}: ${failure}`);
         }
 
         for (const transformed of [false, true]) {
-            const report = await runSharedEdgeCase(device, kernel, builder, sharedEdgeCase(sharedRays, transformed), triangleTest);
+            const report = await runSharedEdgeCase(device, kernel, builder, sharedEdgeCase(sharedRays, transformed), variant);
             results.sharedEdges.push(report);
-            log(`[${triangleTest}] ${report.name}: ${report.slipped} of ${report.rays} rays slipped between triangles`);
+            log(`[${variant.name}] ${report.name}: ${report.slipped} of ${report.rays} rays slipped between triangles`);
             // Moller-Trumbore is known to let some edge-aimed rays through (the design expects this and
             // names the watertight test as the fix), so its count is reported, not failed. The
             // watertight test has to be perfect.
             if (triangleTest === 'watertight' && report.slipped > 0) {
-                failures.push(`[${triangleTest}] ${report.name}: ${report.slipped} rays slipped between triangles`);
+                failures.push(`[${variant.name}] ${report.name}: ${report.slipped} rays slipped between triangles`);
             }
             // Shadow rays go through the any-hit walk, which has its own shortcuts; it must not leak either.
             if (triangleTest === 'watertight' && report.slippedAny > 0) {
-                failures.push(`[${triangleTest}] ${report.name}: ${report.slippedAny} any-hit rays slipped between triangles`);
+                failures.push(`[${variant.name}] ${report.name}: ${report.slippedAny} any-hit rays slipped between triangles`);
             }
             if (report.referenceMisses > 0) {
-                failures.push(`[${triangleTest}] ${report.name}: the reference missed ${report.referenceMisses} rays, so the setup is wrong`);
+                failures.push(`[${variant.name}] ${report.name}: the reference missed ${report.referenceMisses} rays, so the setup is wrong`);
             }
         }
     }
@@ -315,11 +341,11 @@ await runGpuTest(async ({ device, log }) => {
     const limits = device.limits;
     assert(failures.length === 0, failures.slice(0, 12).join('\n'));
     const slippedTotals: Record<string, number> = {};
-    for (const triangleTest of TRIANGLE_TESTS) {
-        slippedTotals[triangleTest] = byTest[triangleTest].sharedEdges.reduce((sum, report) => sum + report.slipped, 0);
+    for (const variant of VARIANTS) {
+        slippedTotals[variant.name] = byTest[variant.name].sharedEdges.reduce((sum, report) => sum + report.slipped, 0);
     }
     return {
-        sharedEdgeRaysPerTest: byTest[TRIANGLE_TESTS[0]].sharedEdges.reduce((sum, report) => sum + report.rays, 0),
+        sharedEdgeRaysPerTest: byTest[VARIANTS[0].name].sharedEdges.reduce((sum, report) => sum + report.rays, 0),
         slippedTotals,
         byTest,
         traceStorageBuffers: TRACE_MODULE_ENTRIES.length,

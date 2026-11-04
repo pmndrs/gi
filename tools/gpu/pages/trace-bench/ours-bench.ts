@@ -13,6 +13,7 @@ import {
     uploadTraceScene,
     type MeshBvh,
     type MeshBvhBuilder,
+    type MeshBvhBuilderKind,
     type TraceInstance,
     type TraceSceneData,
     type TriangleTest,
@@ -20,7 +21,8 @@ import {
 import { TOP_LEVEL_REBUILD_RUNS, type TracerId } from './config.ts';
 import { measureDispatches, type DispatchTimer } from './dispatch-timer.ts';
 import type { BenchInstance, BenchMeshGeometry } from './gltf-geometry.ts';
-import type { ModeResult, OursBuildResult, TraceMode } from './results.ts';
+import type { ModeResult, OursBuildResult, TmbuildBuildResult, TraceMode } from './results.ts';
+import { buildMeshBvhWithTmbvh } from './tmbvh-convert.ts';
 import { maximum, median, megaRaysPerSecond, sum } from './statistics.ts';
 
 export interface OursBuild {
@@ -44,15 +46,54 @@ export async function buildOursScene(
     builder: MeshBvhBuilder,
     meshes: readonly BenchMeshGeometry[],
     instances: readonly BenchInstance[],
+    kind: MeshBvhBuilderKind = 'sah',
 ): Promise<OursBuild> {
     const perMeshMs: number[] = [];
     const bvhs: MeshBvh[] = [];
     for (const mesh of meshes) {
         const start = performance.now();
-        bvhs.push(await builder.build({ positions: mesh.positions, indices: mesh.indices }, { triangleTest: 'watertight' }));
+        bvhs.push(await builder.build({ positions: mesh.positions, indices: mesh.indices }, { triangleTest: 'watertight', builder: kind }));
         perMeshMs.push(performance.now() - start);
     }
+    return assembleOursScene(bvhs, perMeshMs, instances, builder.usesWorker);
+}
 
+export interface TmbuildScene extends OursBuild {
+    result: TmbuildBuildResult;
+}
+
+/**
+ * The `ours-tmbuild` trees: three-mesh-bvh builds each mesh (SAH, on this
+ * thread, where that library builds), and tmbvh-convert.ts turns the tree into
+ * our layout with watertight triangles. Yields between meshes.
+ */
+export async function buildTmbuildScene(
+    meshes: readonly BenchMeshGeometry[],
+    instances: readonly BenchInstance[],
+    targetLeafSize: number,
+): Promise<TmbuildScene> {
+    const perMeshMs: number[] = [];
+    const bvhs: MeshBvh[] = [];
+    let tmbvhBuildMsTotal = 0;
+    let convertMsTotal = 0;
+    for (const mesh of meshes) {
+        const built = buildMeshBvhWithTmbvh({ positions: mesh.positions, indices: mesh.indices }, targetLeafSize, 'watertight');
+        bvhs.push(built.bvh);
+        perMeshMs.push(built.tmbvhMs + built.convertMs);
+        tmbvhBuildMsTotal += built.tmbvhMs;
+        convertMsTotal += built.convertMs;
+        await yieldToBrowser();
+    }
+    const scene = await assembleOursScene(bvhs, perMeshMs, instances, false);
+    return { ...scene, result: { ...scene.result, tmbvhBuildMsTotal, convertMsTotal, targetLeafSize } };
+}
+
+async function assembleOursScene(
+    bvhs: MeshBvh[],
+    perMeshMs: number[],
+    instances: readonly BenchInstance[],
+    usesWorker: boolean,
+): Promise<OursBuild> {
     const assembleStart = performance.now();
     const data = assembleTraceScene(
         bvhs,
@@ -74,8 +115,8 @@ export async function buildOursScene(
         if (ms > perMeshMs[maxMeshIndex]) maxMeshIndex = index;
     });
     const result: OursBuildResult = {
-        usesWorker: builder.usesWorker,
-        meshCount: meshes.length,
+        usesWorker,
+        meshCount: bvhs.length,
         triangles: sum(bvhs.map((bvh) => bvh.triangleCount)),
         buildMsTotal: sum(perMeshMs),
         buildMsMaxMesh: maximum(perMeshMs),
@@ -187,12 +228,12 @@ export function extractHitDistances(hitRecords: ArrayBuffer): Float32Array {
 export async function runOursTracer(
     device: GPUDevice,
     timer: DispatchTimer,
-    tracer: 'ours-mt' | 'ours-wt',
+    tracer: 'ours-mt' | 'ours-wt' | 'ours-tinybvh' | 'ours-tmbuild',
     data: TraceSceneData,
     rays: OursRayBuffers,
     plan: TimingPlan,
 ): Promise<OursTracerRun> {
-    const triangleTest: TriangleTest = tracer === 'ours-wt' ? 'watertight' : 'moller-trumbore';
+    const triangleTest: TriangleTest = tracer === 'ours-mt' ? 'moller-trumbore' : 'watertight';
     const resources = new Resources();
     try {
         const kernel = await TraceBatchKernel.create(device, triangleTest, tracer);

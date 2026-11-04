@@ -3,7 +3,8 @@
  * calling thread otherwise (Node tests, or a host that blocks workers).
  */
 
-import { buildMeshBvh, type MeshBvh, type MeshBvhBuildOptions, type MeshGeometry } from './mesh-bvh.ts';
+import type { MeshBvh, MeshBvhBuildOptions, MeshGeometry } from './mesh-bvh.ts';
+import { buildMeshBvhAsync } from './mesh-bvh-build.ts';
 import type { BuildRequest, BuildResponse } from './mesh-bvh-worker.ts';
 
 export interface MeshBvhBuilderConfig {
@@ -63,11 +64,9 @@ function createInlineBuilder(): MeshBvhBuilder {
             new Promise((resolve, reject) => {
                 // Build on a later turn so callers get the same "asynchronous" behaviour as with a worker.
                 setTimeout(() => {
-                    try {
-                        resolve(buildMeshBvh(geometry, options));
-                    } catch (error) {
-                        reject(error instanceof Error ? error : new Error(String(error)));
-                    }
+                    buildMeshBvhAsync(geometry, options).then(resolve, (error: unknown) =>
+                        reject(error instanceof Error ? error : new Error(String(error))),
+                    );
                 }, 0);
             }),
         dispose: () => {},

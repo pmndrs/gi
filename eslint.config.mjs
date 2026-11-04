@@ -54,6 +54,40 @@ export default tseslint.config(
         },
     },
     {
+        // The BVH package is engine-free and below the core: it may not import the
+        // core, the GI code, the adapters or any engine (docs/design/bvh-framework.md).
+        files: ['packages/bvh/**/*.ts'],
+        rules: {
+            'no-restricted-imports': ['error', {
+                patterns: [{
+                    group: [
+                        'three',
+                        'three/*',
+                        'three-mesh-bvh',
+                        'three-mesh-bvh/*',
+                        '@babylonjs/*',
+                        'pixi.js',
+                        'pixi.js/*',
+                        '@pmndrs/ddgi',
+                        '@pmndrs/ddgi/*',
+                        '@pmndrs/ddgi-core',
+                        '@pmndrs/ddgi-core/*',
+                        '@pmndrs/ddgi-three',
+                        '@pmndrs/ddgi-three/*',
+                        '**/ddgi-core/**',
+                        '**/ddgi-three/**',
+                        '**/ddgi/src/**',
+                    ],
+                    message: 'packages/bvh must stay engine-free and independent of the GI code: no ddgi-core, ddgi-three, three or other engines here.',
+                }],
+            }],
+            'no-restricted-syntax': ['error', {
+                selector: "ImportExpression[source.value=/^(three|@babylonjs\\/|pixi\\.js|@pmndrs\\/ddgi)|ddgi-(core|three)/]",
+                message: 'packages/bvh must stay engine-free and independent of the GI code: no ddgi-core, ddgi-three, three or other engines here.',
+            }],
+        },
+    },
+    {
         // The three.js adapter depends on the core and three only.
         files: ['packages/ddgi-three/**/*.ts'],
         rules: {

@@ -57,6 +57,16 @@ export interface OursBuildResult {
     bytesTotal: number;
 }
 
+/** Our layout built from three-mesh-bvh's trees (`ours-tmbuild`): the usual numbers plus the two halves of the build. */
+export interface TmbuildBuildResult extends OursBuildResult {
+    /** three-mesh-bvh's SAH build of every mesh (`new MeshBVH`), summed. */
+    tmbvhBuildMsTotal: number;
+    /** Converting every tree to our layout (nodes, boxes, triangles), summed. */
+    convertMsTotal: number;
+    /** three-mesh-bvh's `targetLeafSize`. */
+    targetLeafSize: number;
+}
+
 export interface TmbvhBuildResult {
     meshCount: number;
     /** Wall time to build every mesh's tree on the main thread (SAH), one after another. */
@@ -113,6 +123,10 @@ export interface SceneResult {
     modelFiles: string[];
     loadMs: number;
     ours: OursBuildResult | null;
+    /** Missing in results from before T0.10 part C. */
+    oursTmbuild?: TmbuildBuildResult | null;
+    /** Trees built by tinybvh (WASM) in the worker. Missing in results from before T0.10 part C. */
+    oursTinybvh?: OursBuildResult | null;
     tmbvh: TmbvhBuildResult | null;
     modes: ModeResult[];
     agreement: AgreementResult[];

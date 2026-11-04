@@ -90,6 +90,35 @@ function sceneRows(result: SceneResult): MetricRow[] {
             { scene, metric: 'ours/memory_bytes', value: ours.bytesTotal },
         );
     }
+    const tinybvh = result.oursTinybvh;
+    if (tinybvh) {
+        rows.push(
+            { scene, metric: 'ours-tinybvh/build_ms_total', value: tinybvh.buildMsTotal },
+            { scene, metric: 'ours-tinybvh/build_ms_max_mesh', value: tinybvh.buildMsMaxMesh },
+            { scene, metric: 'ours-tinybvh/nodes', value: tinybvh.nodeCount },
+            { scene, metric: 'ours-tinybvh/max_mesh_depth', value: tinybvh.maxMeshDepth },
+            { scene, metric: 'ours-tinybvh/stack_entries_needed', value: tinybvh.requiredStackSize },
+            { scene, metric: 'ours-tinybvh/memory_bytes_nodes', value: tinybvh.bytesNodes },
+            { scene, metric: 'ours-tinybvh/memory_bytes_triangles', value: tinybvh.bytesTriangles },
+            { scene, metric: 'ours-tinybvh/memory_bytes', value: tinybvh.bytesTotal },
+        );
+    }
+    const tmbuild = result.oursTmbuild;
+    if (tmbuild) {
+        rows.push(
+            { scene, metric: 'ours-tmbuild/build_ms_total', value: tmbuild.buildMsTotal },
+            { scene, metric: 'ours-tmbuild/build_ms_tmbvh', value: tmbuild.tmbvhBuildMsTotal },
+            { scene, metric: 'ours-tmbuild/build_ms_convert', value: tmbuild.convertMsTotal },
+            { scene, metric: 'ours-tmbuild/build_ms_max_mesh', value: tmbuild.buildMsMaxMesh },
+            { scene, metric: 'ours-tmbuild/target_leaf_size', value: tmbuild.targetLeafSize },
+            { scene, metric: 'ours-tmbuild/nodes', value: tmbuild.nodeCount },
+            { scene, metric: 'ours-tmbuild/max_mesh_depth', value: tmbuild.maxMeshDepth },
+            { scene, metric: 'ours-tmbuild/stack_entries_needed', value: tmbuild.requiredStackSize },
+            { scene, metric: 'ours-tmbuild/memory_bytes_nodes', value: tmbuild.bytesNodes },
+            { scene, metric: 'ours-tmbuild/memory_bytes_triangles', value: tmbuild.bytesTriangles },
+            { scene, metric: 'ours-tmbuild/memory_bytes', value: tmbuild.bytesTotal },
+        );
+    }
     const tmbvh = result.tmbvh;
     if (tmbvh) {
         rows.push(
@@ -150,7 +179,7 @@ export function repeatedRunRows(runs: readonly (readonly MetricRow[])[]): Metric
     const valuesByKey = new Map<string, { scene: string; metric: string; values: number[] }>();
     runs.forEach((runRows) => {
         for (const row of runRows) {
-            const key = `${row.scene} ${row.metric}`;
+            const key = `${row.scene}|${row.metric}`;
             const entry = valuesByKey.get(key) ?? { scene: row.scene, metric: row.metric, values: [] };
             entry.values.push(row.value);
             valuesByKey.set(key, entry);

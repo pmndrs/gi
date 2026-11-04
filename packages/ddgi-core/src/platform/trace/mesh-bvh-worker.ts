@@ -3,7 +3,8 @@
  * freeze the page. Started by `mesh-bvh-async.ts`; nothing imports this file.
  */
 
-import { buildMeshBvh, meshBvhTransferables, type MeshBvh, type MeshBvhBuildOptions, type MeshGeometry } from './mesh-bvh.ts';
+import { meshBvhTransferables, type MeshBvh, type MeshBvhBuildOptions, type MeshGeometry } from './mesh-bvh.ts';
+import { buildMeshBvhAsync } from './mesh-bvh-build.ts';
 
 export interface BuildRequest {
     readonly id: number;
@@ -23,12 +24,17 @@ interface WorkerScope {
 
 const scope = self as unknown as WorkerScope;
 
+// Requests are handled one after another: tinybvh builds one mesh at a time.
+let queue: Promise<void> = Promise.resolve();
+
 scope.onmessage = (event) => {
     const { id, geometry, options } = event.data;
-    try {
-        const bvh = buildMeshBvh(geometry, options);
-        scope.postMessage({ id, bvh }, meshBvhTransferables(bvh));
-    } catch (error) {
-        scope.postMessage({ id, error: error instanceof Error ? error.message : String(error) }, []);
-    }
+    queue = queue.then(async () => {
+        try {
+            const bvh = await buildMeshBvhAsync(geometry, options);
+            scope.postMessage({ id, bvh }, meshBvhTransferables(bvh));
+        } catch (error) {
+            scope.postMessage({ id, error: error instanceof Error ? error.message : String(error) }, []);
+        }
+    });
 };

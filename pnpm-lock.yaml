@@ -77,6 +77,8 @@ importers:
         specifier: ^6.1.0
         version: 6.4.5(@types/node@24.19.2)(tsx@4.23.15)
 
+  packages/bvh: {}
+
   packages/ddgi:
     devDependencies:
       '@pmndrs/ddgi-core':
@@ -101,7 +103,11 @@ importers:
         specifier: ^6.1.0
         version: 6.4.5(@types/node@24.19.2)(tsx@4.23.15)
 
-  packages/ddgi-core: {}
+  packages/ddgi-core:
+    dependencies:
+      '@pmndrs/bvh':
+        specifier: workspace:*
+        version: link:../bvh
 
   packages/ddgi-three:
     dependencies:

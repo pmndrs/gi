@@ -13,7 +13,13 @@ export type BenchSceneId = (typeof BENCH_SCENE_IDS)[number];
 export const SYNTHETIC_SCENE_ID = 'synthetic-10k';
 export const SYNTHETIC_INSTANCE_COUNT = 10_000;
 
-export const TRACER_IDS = ['ours-mt', 'ours-wt', 'tmbvh'] as const;
+/**
+ * - `ours-wt`, `ours-mt`: our builder and our walk, watertight and Moller-Trumbore triangles.
+ * - `ours-tinybvh`: tinybvh (WASM, in our worker) builds each mesh's tree, traced by our watertight walk.
+ * - `ours-tmbuild`: three-mesh-bvh builds each mesh's tree, converted to our layout, traced by our watertight walk.
+ * - `tmbvh`: three-mesh-bvh's own trees and its own WebGPU walk.
+ */
+export const TRACER_IDS = ['ours-mt', 'ours-wt', 'ours-tinybvh', 'ours-tmbuild', 'tmbvh'] as const;
 export type TracerId = (typeof TRACER_IDS)[number];
 
 /**
@@ -70,6 +76,12 @@ export const MIN_AGREEMENT_RATE = 0.98;
 export const TMBVH_DEFAULT_LEAF_SIZE = 10;
 
 /**
+ * three-mesh-bvh target leaf size for the `ours-tmbuild` trees. 4 matches our own
+ * builder's leaves; override with `?tmbuildLeaf=` (leaves over 8 are cut in half).
+ */
+export const TMBUILD_DEFAULT_LEAF_SIZE = 4;
+
+/**
  * One dispatch must stay well under the OS's GPU watchdog (Windows resets a GPU
  * after about 2 s), and the Intel iGPU is roughly 10x slower than the RTX 3060.
  * Before the real run, a small sample of the rays is timed, and if the full
@@ -93,6 +105,8 @@ export interface BenchConfig {
     warmupDispatches: number;
     timedDispatches: number;
     tmbvhLeafSize: number;
+    /** See {@link TMBUILD_DEFAULT_LEAF_SIZE}. */
+    tmbuildLeafSize: number;
     /** See {@link DEFAULT_MAX_DISPATCH_MS}. */
     maxDispatchMs: number;
     /** Fill the manifest's probe volume (default) or the geometry's own bounds. */
@@ -136,6 +150,7 @@ function readList(params: URLSearchParams, name: string): string[] | null {
  *   &profile=quick|full             defaults for the numbers above and the timing counts
  *   &iterations=20&warmups=5        timed and warm-up dispatches per tracer and mode
  *   &tmLeaf=10                      three-mesh-bvh target leaf size
+ *   &tmbuildLeaf=4                  three-mesh-bvh target leaf size for the ours-tmbuild trees
  *   &maxDispatchMs=400              thin the probe grid if a batch would take longer (0 = never)
  *   &volume=manifest|scene          which box the probe grid fills
  */
@@ -174,6 +189,7 @@ export function parseBenchConfig(
         warmupDispatches: readPositiveInteger(params, 'warmups', profile.warmupDispatches),
         timedDispatches: readPositiveInteger(params, 'iterations', profile.timedDispatches),
         tmbvhLeafSize: readPositiveInteger(params, 'tmLeaf', TMBVH_DEFAULT_LEAF_SIZE),
+        tmbuildLeafSize: readPositiveInteger(params, 'tmbuildLeaf', TMBUILD_DEFAULT_LEAF_SIZE),
         maxDispatchMs: readNonNegativeInteger(params, 'maxDispatchMs', DEFAULT_MAX_DISPATCH_MS),
         volume,
     };

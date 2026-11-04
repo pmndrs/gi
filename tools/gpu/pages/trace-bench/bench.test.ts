@@ -5,12 +5,19 @@
 
 import { describe, expect, it } from 'vitest';
 import {
+    addToTally,
+    assembleTraceScene,
     buildMeshBvh,
+    buildReferenceScene,
+    compareClosest,
+    createCpuTracer,
     HIT_RECORD_BYTES,
+    newTally,
     RAY_FLOATS,
+    traceClosestReference,
     type MeshGeometry,
 } from '../../../../packages/ddgi-core/src/platform/trace/index.ts';
-import { createRandom, randomTriangleSoup } from '../../../../packages/ddgi-core/src/platform/trace/oracle-fixtures.ts';
+import { createRandom, randomRays, randomTriangleSoup } from '../../../../packages/ddgi-core/src/platform/trace/oracle-fixtures.ts';
 import { BenchConfigError, parseBenchConfig, type BenchProfileName } from './config.ts';
 import { browserFromUserAgent, deviceNameFromAdapter, formatValue, repeatedRunRows, traceBenchRows } from './csv-rows.ts';
 import { extractGltfGeometry, modelTransformMatrix, parseGlb, type GltfJson } from './gltf-geometry.ts';
@@ -18,6 +25,7 @@ import { makeProbeGrid, makeProbeRays, makeShadowRays, makeSphereDirections, pro
 import type { TraceBenchData } from './results.ts';
 import { compareBlocked, compareClosestDistances, median, megaRaysPerSecond } from './statistics.ts';
 import { makeSphereMesh } from './synthetic.ts';
+import { buildMeshBvhWithTmbvh } from './tmbvh-convert.ts';
 import { convertWatertightToMollerTrumbore } from './triangle-conversion.ts';
 
 describe('statistics', () => {
@@ -52,7 +60,7 @@ describe('config', () => {
         const config = parseBenchConfig('', defaults);
         expect(config.raysPerProbe).toBe(64);
         expect(config.scenes).toEqual(['furnished-room']);
-        expect(config.tracers).toEqual(['ours-mt', 'ours-wt', 'tmbvh']);
+        expect(config.tracers).toEqual(['ours-mt', 'ours-wt', 'ours-tinybvh', 'ours-tmbuild', 'tmbvh']);
     });
 
     it('lets the URL override the profile', () => {
@@ -327,5 +335,33 @@ describe('CSV rows', () => {
         expect(deviceNameFromAdapter({ vendor: 'nvidia', architecture: 'ampere', description: 'NVIDIA GeForce RTX 3060 Laptop GPU' })).toBe('RTX 3060 Laptop');
         expect(deviceNameFromAdapter({ vendor: 'intel', architecture: 'gen-12lp', description: 'Intel(R) UHD Graphics' })).toBe('Intel UHD');
         expect(deviceNameFromAdapter({ vendor: 'nvidia', architecture: 'ampere', description: '' })).toBe('RTX 3060 Laptop');
+    });
+});
+
+describe('three-mesh-bvh trees converted to our layout', () => {
+    it('trace like the brute-force reference, for leaf sizes the tracer takes as they are and ones it must cut', () => {
+        const geometry = randomTriangleSoup(createRandom(77), 2000, 10, 1);
+        const instances = [{ meshIndex: 0, instanceIndex: 0, objectToWorld: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1] }];
+        const reference = buildReferenceScene([geometry], instances);
+        for (const leafSize of [4, 10]) {
+            const { bvh } = buildMeshBvhWithTmbvh(geometry, leafSize, 'watertight');
+            expect(bvh.triangleCount).toBe(2000);
+            const tracer = createCpuTracer(assembleTraceScene([bvh], instances));
+            const closest = newTally();
+            randomRays(createRandom(78), 1500, [-10, -10, -10, 10, 10, 10], 4).forEach((ray, index) => {
+                const hit = tracer.closest(ray);
+                addToTally(closest, compareClosest(hit && { hit: true, ...hit }, traceClosestReference(reference, ray), ray), `ray ${index}`);
+            });
+            expect(closest.mismatches, closest.examples.join('\n')).toBe(0);
+            expect(closest.matches).toBeGreaterThan(1400);
+        }
+    });
+
+    it('handles a mesh that three-mesh-bvh keeps as a single leaf', () => {
+        for (const count of [1, 3]) {
+            const geometry = randomTriangleSoup(createRandom(count), count, 10, 1);
+            const { bvh } = buildMeshBvhWithTmbvh(geometry, 10, 'watertight');
+            expect(bvh.leafCount).toBe(count === 1 ? 1 : 2);
+        }
     });
 });

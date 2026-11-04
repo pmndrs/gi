@@ -6,15 +6,11 @@
  * worker for large meshes.
  */
 
-import {
-    DEFAULT_TRIANGLE_TEST,
-    MAX_REFERENCE_INDEX,
-    TRIANGLE_BYTES,
-    TRIANGLE_WORD,
-    TRIANGLE_WORDS,
-    type TriangleTest,
-} from './layout.ts';
+import { DEFAULT_TRIANGLE_TEST, type TriangleTest } from './layout.ts';
 import { buildSahTree, DEFAULT_SAH_OPTIONS, type SahBuildOptions } from './sah-builder.ts';
+import { checkGeometry, packTriangles } from './triangle-packing.ts';
+
+export { countTriangles } from './triangle-packing.ts';
 
 /** Triangle geometry in object space. */
 export interface MeshGeometry {
@@ -53,36 +49,27 @@ export function meshBvhTransferables(bvh: MeshBvh): ArrayBuffer[] {
     return [bvh.nodes, bvh.triangles, bvh.parents.buffer as ArrayBuffer, bvh.bounds.buffer as ArrayBuffer];
 }
 
-export function countTriangles(geometry: MeshGeometry): number {
-    const entries = geometry.indices ? geometry.indices.length : geometry.positions.length / 3;
-    if (!Number.isInteger(entries) || entries % 3 !== 0) {
-        throw new RangeError('triangle geometry must have a multiple of three vertices or indices');
-    }
-    return entries / 3;
-}
+/**
+ * Who decides the tree's shape:
+ * - `sah`: our binned SAH builder in this file (synchronous);
+ * - `tinybvh`: tinybvh's builder in WASM (@pmndrs/bvh). It needs an asynchronous start,
+ *   so it is only available through `buildMeshBvhAsync` and `createMeshBvhBuilder`.
+ */
+export type MeshBvhBuilderKind = 'sah' | 'tinybvh';
 
 export interface MeshBvhBuildOptions extends Partial<SahBuildOptions> {
     /** Defaults to `moller-trumbore`. See {@link TriangleTest}. */
     readonly triangleTest?: TriangleTest;
+    /** Defaults to `sah`. See {@link MeshBvhBuilderKind}. */
+    readonly builder?: MeshBvhBuilderKind;
 }
 
 export function buildMeshBvh(geometry: MeshGeometry, options: MeshBvhBuildOptions = {}): MeshBvh {
-    const { triangleTest = DEFAULT_TRIANGLE_TEST, ...sahOptions } = options;
-    const { positions, indices, triangleFlags } = geometry;
-    if (positions.length % 3 !== 0) throw new RangeError('positions must hold three floats per vertex');
-    const vertexCount = positions.length / 3;
-    const triangleCount = countTriangles(geometry);
-    if (triangleCount === 0) throw new RangeError('a mesh BVH needs at least one triangle');
-    if (triangleCount > MAX_REFERENCE_INDEX) throw new RangeError(`too many triangles for one BVH: ${triangleCount}`);
-    if (triangleFlags && triangleFlags.length < triangleCount) {
-        throw new RangeError('triangleFlags must have one entry per triangle');
-    }
-
-    const vertexOf = (triangle: number, corner: number): number => {
-        const vertex = indices ? indices[triangle * 3 + corner] : triangle * 3 + corner;
-        if (vertex >= vertexCount) throw new RangeError(`triangle ${triangle} uses vertex ${vertex}, but there are ${vertexCount}`);
-        return vertex;
-    };
+    const { triangleTest = DEFAULT_TRIANGLE_TEST, builder = 'sah', ...sahOptions } = options;
+    if (builder !== 'sah') throw new RangeError(`buildMeshBvh only runs the 'sah' builder; use buildMeshBvhAsync for '${builder}'`);
+    const { positions } = geometry;
+    const checked = checkGeometry(geometry);
+    const { triangleCount, vertexOf } = checked;
 
     // One box per triangle. These are exact: the positions are already f32.
     const triangleBounds = new Float32Array(triangleCount * 6);
@@ -100,30 +87,7 @@ export function buildMeshBvh(geometry: MeshGeometry, options: MeshBvhBuildOption
     const tree = buildSahTree(triangleBounds, { ...DEFAULT_SAH_OPTIONS, ...sahOptions });
 
     // Store triangles in tree order so a leaf is just "start index + count".
-    const trianglesBuffer = new ArrayBuffer(triangleCount * TRIANGLE_BYTES);
-    const floats = new Float32Array(trianglesBuffer);
-    const words = new Uint32Array(trianglesBuffer);
-    for (let slot = 0; slot < triangleCount; slot++) {
-        const original = tree.order[slot];
-        const base = slot * TRIANGLE_WORDS;
-        const a = vertexOf(original, 0) * 3;
-        const b = vertexOf(original, 1) * 3;
-        const c = vertexOf(original, 2) * 3;
-        for (let axis = 0; axis < 3; axis++) {
-            floats[base + TRIANGLE_WORD.vertex0 + axis] = positions[a + axis];
-            if (triangleTest === 'watertight') {
-                // Corners are stored as they are, so a vertex shared by two triangles has identical bits in both.
-                floats[base + TRIANGLE_WORD.secondVector + axis] = positions[b + axis];
-                floats[base + TRIANGLE_WORD.thirdVector + axis] = positions[c + axis];
-            } else {
-                floats[base + TRIANGLE_WORD.secondVector + axis] = positions[b + axis] - positions[a + axis];
-                floats[base + TRIANGLE_WORD.thirdVector + axis] = positions[c + axis] - positions[a + axis];
-            }
-        }
-        words[base + TRIANGLE_WORD.originalIndex] = original;
-        words[base + TRIANGLE_WORD.flags] = triangleFlags ? triangleFlags[original] : 0;
-        words[base + TRIANGLE_WORD.padding] = 0;
-    }
+    const trianglesBuffer = packTriangles(geometry, checked, tree.order, triangleTest);
 
     return {
         nodes: tree.nodes,

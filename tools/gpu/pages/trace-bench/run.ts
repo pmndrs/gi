@@ -7,7 +7,9 @@
  *   2. build our trees in the worker, assemble, time top-level rebuilds;
  *   3. generate the probe rays, trace them once to find the hits, and turn the
  *      hits into shadow rays toward the sun (the same rays go to every tracer);
- *   4. time ours-wt, then ours-mt, then three-mesh-bvh, each on closest and any;
+ *   4. time ours-wt, then ours-mt, then ours-tinybvh (tinybvh's trees, our walk), then
+ *      ours-tmbuild (three-mesh-bvh's trees in our layout, our walk), then
+ *      three-mesh-bvh, each on closest and any;
  *   5. compare the closest hits between tracers.
  *
  * Everything the GPU holds for a tracer is freed before the next one starts, so
@@ -32,6 +34,7 @@ import {
 import { createDispatchTimer, type DispatchTimer } from './dispatch-timer.ts';
 import {
     buildOursScene,
+    buildTmbuildScene,
     estimateNsPerRay,
     runOursTracer,
     traceClosestOnce,
@@ -138,6 +141,8 @@ async function runScene(context: BenchContext, sceneId: string): Promise<SceneRe
         modelFiles: scene.modelFiles,
         loadMs: scene.loadMs,
         ours: null,
+        oursTmbuild: null,
+        oursTinybvh: null,
         tmbvh: null,
         modes: [],
         agreement: [],
@@ -245,6 +250,41 @@ async function runScene(context: BenchContext, sceneId: string): Promise<SceneRe
             await yieldToBrowser();
         }
 
+        // tinybvh's trees (WASM, built in the same worker as ours), traced by our watertight walk.
+        if (config.tracers.includes('ours-tinybvh') && oursAvailable) {
+            try {
+                progress(`${sceneId}: building with tinybvh (WASM, in the worker)`);
+                const tinybvh = await buildOursScene(context.builder, scene.meshes, scene.instances, 'tinybvh');
+                result.oursTinybvh = tinybvh.result;
+                progress(`${sceneId}: ours-tinybvh built in ${Math.round(tinybvh.result.buildMsTotal)} ms, ${(tinybvh.result.bytesTotal / 1e6).toFixed(1)} MB`);
+                finish('ours-tinybvh', await runOursTracer(device, context.timer, 'ours-tinybvh', tinybvh.data, oursRays, plan));
+            } catch (error) {
+                result.skipped.push(`ours-tinybvh: ${error instanceof Error ? error.message : String(error)}`);
+                progress(`${sceneId}: ours-tinybvh skipped (${error instanceof Error ? error.message : String(error)})`);
+            }
+            await yieldToBrowser();
+        }
+
+        // three-mesh-bvh's trees in our layout, traced by our watertight walk. Built after the others are
+        // done with the GPU; the trees are dropped once traced.
+        if (config.tracers.includes('ours-tmbuild') && oursAvailable) {
+            try {
+                progress(`${sceneId}: building with three-mesh-bvh (SAH, target leaf ${config.tmbuildLeafSize}) and converting to our layout`);
+                const tmbuild = await buildTmbuildScene(scene.meshes, scene.instances, config.tmbuildLeafSize);
+                result.oursTmbuild = tmbuild.result;
+                progress(
+                    `${sceneId}: ours-tmbuild built in ${Math.round(tmbuild.result.buildMsTotal)} ms ` +
+                        `(three-mesh-bvh ${Math.round(tmbuild.result.tmbvhBuildMsTotal)} ms + converting ${Math.round(tmbuild.result.convertMsTotal)} ms), ` +
+                        `${(tmbuild.result.bytesTotal / 1e6).toFixed(1)} MB`,
+                );
+                finish('ours-tmbuild', await runOursTracer(device, context.timer, 'ours-tmbuild', tmbuild.data, oursRays, plan));
+            } catch (error) {
+                result.skipped.push(`ours-tmbuild: ${error instanceof Error ? error.message : String(error)}`);
+                progress(`${sceneId}: ours-tmbuild skipped (${error instanceof Error ? error.message : String(error)})`);
+            }
+            await yieldToBrowser();
+        }
+
         if (config.tracers.includes('tmbvh')) {
             try {
                 progress(`${sceneId}: three-mesh-bvh building (SAH, leaf ${config.tmbvhLeafSize})`);
@@ -280,6 +320,10 @@ async function runScene(context: BenchContext, sceneId: string): Promise<SceneRe
         ['ours-mt', 'ours-wt'],
         ['ours-wt', 'tmbvh'],
         ['ours-mt', 'tmbvh'],
+        ['ours-wt', 'ours-tinybvh'],
+        ['ours-tinybvh', 'tmbvh'],
+        ['ours-wt', 'ours-tmbuild'],
+        ['ours-tmbuild', 'tmbvh'],
     ];
     for (const [a, b] of pairs) {
         const runA = runs.get(a);

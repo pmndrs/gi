@@ -1,0 +1,13 @@
+{
+    "name": "@pmndrs/bvh",
+    "version": "0.0.0",
+    "private": true,
+    "description": "Engine-free BVH builders for the ddgi platform. Builders produce a plain tree description that the tracer turns into its GPU layout. Bundled into the published package; never published on its own.",
+    "license": "MIT",
+    "type": "module",
+    "sideEffects": false,
+    "exports": {
+        ".": "./src/index.ts",
+        "./*": "./src/*.ts"
+    }
+}
