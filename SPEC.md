@@ -11,12 +11,39 @@ A **universal, open-source WebGPU dynamic diffuse GI library**, aimed at a pmndr
 - Babylon, Pixi, react-three-fiber and anyone's own WebGPU renderer must be able to plug in the same way, without changes to the core.
 - It is built for nobody in particular: games, configurators, archviz, editors, demos. No single product's needs shape the API. (HomeFig was where the first experiments happened; its lessons are recorded below, and it may become one user.)
 
+**Scenes are whatever the host builds.** The library never assumes a file format or a way of making scenes. A scene can be:
+
+- written in code;
+- generated procedurally;
+- edited live in a tool;
+- assembled from loaded models (glTF, FBX, USD, anything the host can load);
+- any mix of these.
+
+The host owns the scene. The adapter describes it to the core as meshes, materials, instances and lights.
+
 For a three.js user it should feel like this:
 
-- Add a probe volume to any glTF scene: interiors, Sponza, a courtyard with trees.
+- Add a probe volume to whatever scene they've built: interiors, Sponza, a courtyard with trees, a procedural level.
 - The bounce lighting looks right.
 - It keeps up while the camera moves, objects are dragged, lights and the sun change, and animated things like a tree swaying in the wind cast moving shadows.
 - The frame cost leaves room for the rest of the app.
+
+### A foundation, not just one technique
+
+DDGI is the first GI method built here, not the last. Nearly every modern GI path builds on a DDGI-style probe field or uses one as its fallback:
+
+- voxel GI;
+- SDF tracing;
+- surfels;
+- radiance cascades;
+- ray-traced reflections.
+
+So the code is split in two:
+
+1. **A shared GI platform.** It holds everything a GI method needs from the host and the scene.
+2. **Techniques that plug into it.** DDGI is the first.
+
+Later experiments add techniques without changing adapters or host code. See "Built to host other GI methods" under Architecture.
 
 ### What "moving" means
 
@@ -47,11 +74,37 @@ The common cases, in priority order:
 
 ### three.js version
 
-- **Pinned to r186,** the current release.
-- **Tracking r187/r188,** whose already-merged work is relevant:
-  - **Compute-based PMREM:** fast environment updates feed sky lighting on ray misses, and time of day.
-  - **Probe-related PRs, such as reflection probes:** DDGI supplies diffuse light and reflection probes supply specular, so the adapter must slot alongside them without double-counting the environment's diffuse light.
+- **Pinned to r187** (released 30 October 2026).
+- **Tracking r188** (due 25 November). See "What three.js already has" below for how r187 and the open PRs shape the adapter.
 - **Upscalers and denoisers:** your upscaler and denoiser libraries are first-class neighbours. GI must be temporally stable enough not to fight a temporal upscaler, and it must work at render resolution.
+
+### How the three.js adapter plugs in (r187)
+
+Checked against the r187 source. Runtime confirmation is an M0 spike.
+
+- **GPU device.** `new WebGPURenderer({ device })` is supported, so three and our core share one device.
+  - Our core creates the device with the limits it needs and hands it to three. Three's own default asks for a compatibility adapter with default limits: a 128 MB storage-binding cap, too small for large BVHs.
+  - Our core listens with `addEventListener('uncapturederror')` and never assigns `onuncapturederror`, which three overwrites.
+- **Our textures in three's shaders.** r187's `ExternalTexture` wraps a `GPUTexture` from the same device; three binds it without allocating or destroying it. This is how the adapter reads our probe atlases, with no reaching into `renderer.backend`.
+  - Set `image` dimensions and the right `type` for the sample format.
+  - On reallocation, wrap the new texture in a new `ExternalTexture`. But the core keeps textures fixed-capacity, so this should be rare.
+- **Our buffers in three's shaders: not supported.** That would need an upstream PR of about 20 lines (an `ExternalBufferAttribute`). So the platform rule is: **anything a fragment shader reads lives in textures, with small uniforms mirrored from the CPU.** This also suits compatibility-mode devices, which may allow zero fragment-stage storage buffers. Compute-only data (BVH, rays, hits) stays in buffers.
+- **Hooking into lighting.** r187 replaced `addLight` with `Light.registerNode()`. The adapter ships a GI volume as a three `Light` subclass with a registered `AnalyticLightNode`, the same pattern as three's `LightProbeGrid`:
+  - Adding it to the scene lights every lit node material, with no material changes.
+  - It works under the new Meshlet and Visibility-Buffer drawing pipelines. Those overwrite `material.contextNode`, so **never inject through `contextNode`**.
+  - It writes three's light-probe irradiance slot with a priority, so a fragment never adds our GI and a `LightProbeGrid` together. That slot is an internal convention; it gets a regression test and the three version is pinned.
+  - It returns irradiance E (three applies 1/π) and keeps its uniforms in `renderGroup`.
+  - It is toggled with `intensity`, because adding or removing a light recompiles materials.
+- **Matching the LightProbeGrid shape.** The three adapter's volume mirrors `LightProbeGrid`'s API: extends `Light`; `(width, height, depth, nx, ny, nz)` centred on `position`; probes at cell centres; `boundingBox`, `priority`, `intensity`. It becomes a drop-in upgrade.
+- **Bake export.** An option exports a snapshot to `LightProbeGrid` JSON (open PR #33658) as a static or WebGL fallback.
+- **Environment double-counting.** In r187, `scene.environment` adds its diffuse light separately from probe GI, so diffuse is counted twice, and r187 has no switch.
+  - Open PR #35017 adds `material.envMapDiffuseEnabled`. The adapter feature-detects it and turns env diffuse off for receivers our GI covers, keeping env specular.
+  - Until it lands, the adapter documents the issue and offers a material-level workaround.
+  - It warns when `AmbientLight`, `HemisphereLight` or `LightProbe` would also add diffuse.
+- **Coverage.** The shading module returns irradiance *and* a coverage value (how much of the answer the GI volume is confident about). That fits the "SSGI → probes → environment" coverage chain being discussed upstream.
+- **Sky.** The platform owns sky lighting for ray misses in WGSL (low-order SH or a small octahedral map, projected by compute from a host-provided sky texture or a procedural sky), so the core stays engine-neutral.
+  - three's PMREM (much faster once your compute PR #35130 lands) keeps handling specular from the same sky.
+  - Note that three's env "irradiance" is a rough-GGX approximation, not a true cosine convolution. Expect a small, known mismatch where GI fades into the environment.
 
 ### The rule that shapes everything
 
@@ -61,21 +114,38 @@ The common cases, in priority order:
 - It never walks an engine's scene graph.
 - It never touches an engine's internals.
 
-Everything engine-specific lives in an adapter. A lint rule and a CI check enforce this: the core package may only import from itself.
+"The core" here means the platform packages plus every technique. Everything engine-specific lives in an adapter. A lint rule and a CI check enforce this: platform and technique packages may only import from each other.
 
 ### Packages
 
-Package names below use the placeholder `@ddgi/*`. For pmndrs this would become something like `@pmndrs/ddgi`, `@pmndrs/ddgi-three`, and later `@react-three/ddgi`.
+Package names below use the placeholder `@gi/*`. For pmndrs this might become `@pmndrs/gi-core`, `@pmndrs/ddgi`, `@pmndrs/gi-three`, and later `@react-three/gi`.
+
+**Platform: shared by every GI method**
 
 | Package | Depends on | Job |
 | --- | --- | --- |
-| `@ddgi/core` | WebGPU only | Probe volumes, update scheduling, all GI compute passes, the GI's own scene copy (geometry, instances, materials, lights, sky), saving and loading bakes, stats |
-| `@ddgi/trace` | WebGPU only | Ray tracing for the core: BVH builder (runs in a worker) and WGSL traversal. Behind an interface, so another tracer can replace it |
-| `@ddgi/three` | core, three | Mirrors a three.js scene into the core. Provides the TSL node that adds GI to three's materials. Converts three's light units |
-| `@ddgi/webgpu-example` | core | A minimal plain-WebGPU renderer that uses the core directly. It proves the core works without any engine, and it's the reference for anyone writing their own adapter |
-| `@ddgi/babylon`, `@ddgi/pixi`, … | core, engine | Later adapters built to the same contract |
-| `apps/viewer` | three adapter | The human-facing judge-and-compare tool |
-| `tools/` | — | Native launcher, reference renderers, image comparison, scene manifests |
+| `@gi/core` | WebGPU only | The host contract (device, scene handles, frame driving, shading injection); the GPU scene copy (geometry, instances, materials, texture atlas, lights, environment); change tracking and dirty regions; the frame budget; timestamps and stats; debug-data plumbing |
+| `@gi/trace` | WebGPU only | Scene queries: BVH builder (in a worker), refit, WGSL closest-hit and any-hit traversal. Behind an interface, so SDF or voxel tracing can be swapped in later |
+| `@gi/shade` | core, trace | Shading at ray hits: material lookup, direct light with shadow rays, emission, sky on miss, plus a hook to add the active GI technique's answer for further bounces. Every ray-based technique and RT reflections reuse it |
+
+**Techniques: plug into the platform**
+
+| Package | Depends on | Job |
+| --- | --- | --- |
+| `@gi/ddgi` | platform | Probe volumes, the update scheduler, ray generation, blending, borders, relocation, classification, light groups, saved bakes, and the DDGI sampling module |
+| later: `@gi/voxel`, `@gi/sdf`, `@gi/surfels`, `@gi/cascades` | platform (+ ddgi as fallback) | Future experiments on the same contract |
+
+**Hosts and tools**
+
+| Package | Depends on | Job |
+| --- | --- | --- |
+| `@gi/three` | platform, three | Mirrors a three.js scene into the platform, injects the active technique's shading module through TSL, converts light units, coordinates with reflection probes and env maps |
+| `@gi/webgpu-example` | platform | A minimal plain-WebGPU renderer that proves everything works without an engine; the template for custom adapters |
+| `@gi/babylon`, `@gi/pixi`, ... | platform, engine | Later adapters on the same contract |
+| `apps/viewer` | three adapter | The human-facing judge-and-compare tool; switches techniques |
+| `tools/` | none | Native launcher, reference renderers, image comparison, test-scene manifests |
+
+The repo keeps its `webgpu-ddgi` name for now, since DDGI is the first deliverable. A rename to something like `webgpu-gi` can come with the public release.
 
 ### How a renderer plugs in (the adapter contract)
 
@@ -87,22 +157,29 @@ An adapter does four things. Nothing else is required.
 2. **Describe the scene by handles, incrementally.** Calls look like `createMesh(positions, indices, uvs)`, `createMaterial({albedo, albedoTexture, emissive, alphaCutoff})`, `createInstance(mesh, material, transform)`, `setTransform(instance, matrix)`, `createLight({type, color, intensity, position, direction, range, cone})`, `setEnvironment(...)`.
    - The adapter watches its engine for changes and sends only what changed.
    - The core keeps its own GPU copy. That copy is simplified on purpose: diffuse albedo, emissive and cutout only.
-3. **Drive a frame.** The host calls `ddgi.update(commandEncoder, budget)` once per frame.
+3. **Drive a frame.** The host calls `gi.update(commandEncoder, budget)` once per frame.
    - The core records its work into the host's encoder: no extra queue submits and no CPU readback.
    - The host decides when to call it, how much time to spend, and whether to pause.
-4. **Read the GI while shading.** The core publishes a **sampling module** made of three parts:
-   - WGSL source for `ddgiIrradiance(position, normal, viewDirection) -> vec3f`;
+4. **Read the GI while shading.** The active technique publishes a **shading module**, the same shape for every technique. It has three parts:
+   - WGSL functions:
+     - `giIrradiance(position, normal, viewDirection) -> vec3f` for diffuse;
+     - optionally `giRadiance(position, direction, roughness) -> vec3f` for glossy, which techniques that can answer it provide (DDGI gives a rough-only fallback);
    - the bind-group layout it needs;
-   - the live bindings (probe textures, sampler, a small uniform buffer).
+   - the live bindings.
 
-   Each adapter injects this into its own shading system. three.js does it through a TSL function node, Babylon through a material plugin, and a custom renderer just pastes the WGSL in.
+   Each adapter injects this into its own shading system once:
+   - three.js through a TSL node;
+   - Babylon through a material plugin;
+   - a custom renderer by pasting the WGSL in.
+
+   Switching from DDGI to a future technique changes the module, not the adapter.
 
 The core runs in metres, right-handed and Y-up, with linear color and its own documented light units. Adapters convert into these.
 
 ### Plug-in points inside the core
 
 - **Ray tracer.** The core asks for "closest hit" and "any hit" over batches of rays stored on the GPU.
-  - The default is `@ddgi/trace`.
+  - The default is `@gi/trace`.
   - A host could supply its own: another BVH library, or hardware ray tracing if WebGPU ever exposes it.
 - **Probe volumes.** v1 ships box grids:
   - several can coexist and blend at their edges;
@@ -114,9 +191,42 @@ The core runs in metres, right-handed and Y-up, with linear color and its own do
   - Blender Cycles, scripted, for converged ground truth;
   - the native RTXGI harness and its path tracer.
 
+### Built to host other GI methods
+
+The rules that keep later techniques cheap to add:
+
+- **Techniques never talk to the host.** They see only the platform: the scene copy, scene queries, hit shading, the budget and change events. That is how one adapter can serve every technique.
+- **Scene queries are an interface, not a BVH.**
+  - DDGI uses closest-hit and any-hit rays.
+  - A voxel technique adds a voxelized view of the same scene copy.
+  - An SDF technique adds distance fields.
+  - Each is another query backend over the same handles.
+- **Hit shading is shared.** Lighting a ray hit (material, direct light, shadows, sky, emission) is written once in `@gi/shade` and reused by DDGI, surfels, cascades, RT reflections and the reference checks.
+- **Techniques can stack.** A technique can use another as its fallback for distant or secondary bounces, e.g. surfels or cascades falling back to DDGI. The platform supports more than one active technique; only one feeds the final shading module.
+- **One output contract.** Every technique publishes the same shading module, debug data and stats, so the viewer, tests and comparisons work for all of them unchanged.
+- **Check it on paper in M0.** Sketch how a voxel technique and a surfel technique would sit on this API before writing DDGI. Revise the API if they don't fit.
+
+### Reflections
+
+DDGI is diffuse-only by design. Its probes store very blurred light (about 8x8 texels per probe), which can't represent a sharp reflection, so reflections are not a DDGI output. They layer on top, and DDGI makes all of them better:
+
+1. **Reflection probes** (three.js's box-projected probes, your own, or a host's). When the host renders a reflection probe's capture, the scene in that capture is lit with GI too, so reflections show bounce light and darken correctly in unlit rooms. The adapter can trigger recapture of probes near a GI change.
+2. **Screen-space reflections** fall back to reflection probes, or to `giRadiance`, when a ray leaves the screen.
+3. **Ray-traced glossy reflections** reuse what the platform already has: our tracer finds the hit, `@gi/shade` lights it, and DDGI supplies the bounce light at the hit. This is the standard RTXGI pairing. It makes a natural post-v1 technique, with no new scene work.
+
+**v1 scope for reflections:**
+
+- `giIrradiance` works inside reflection-probe capture passes.
+- The three.js adapter plays correctly with three's reflection probes and env maps:
+  - env-map *diffuse* is switched off where GI covers it, so it isn't counted twice;
+  - env-map and probe *specular* stay on.
+- DDGI's rough-only `giRadiance` fallback is available.
+
+A ray-traced reflections technique is the first candidate after v1.
+
 ### Tracing decision
 
-Software BVH tracing in WGSL, owned by `@ddgi/trace`:
+Software BVH tracing in WGSL, owned by `@gi/trace`:
 
 - **Two levels.** Each mesh gets its own BVH, built once in a worker. A small top-level BVH over all object instances is rebuilt every frame, so moving objects is cheap and adding objects never recompiles shaders.
 - **Deforming meshes** (a tree in the wind) keep their BVH shape. A compute pass refits the boxes every frame from deformed vertex positions that the adapter supplies as a GPU buffer, so there's no rebuild and no CPU work.
@@ -127,7 +237,7 @@ Software BVH tracing in WGSL, owned by `@ddgi/trace`:
 
 ### Scenes and content
 
-- Ordinary glTF scenes load unmodified (through the three adapter). The test set covers interiors and exteriors:
+- Any scene the host builds works, with no special preparation of its meshes or materials. The test set mixes hand-built scenes, procedural ones and scenes assembled from downloaded models, and covers interiors and exteriors:
   - **Primitives and known answers:** Cornell box, the classic two-room leak test, a furnace room, thin walls, a closed door, a hollow-panel cabinet row.
   - **Classics:** Sponza (Crytek and Intel versions), Bistro (interior and exterior), San Miguel if it fits in memory.
   - **Small environments:** furnished rooms, a courtyard, a small outdoor scene with an animated, alpha-cutout tree. These come from Sketchfab, Poly Haven and similar sources.
@@ -177,7 +287,7 @@ Software BVH tracing in WGSL, owned by `@ddgi/trace`:
 
 ### Out of scope for v1
 
-- Glossy and specular GI, reflections.
+- Building a reflection system. v1 feeds existing reflection probes and SSR and provides the platform pieces for ray-traced reflections; the RT reflections technique itself comes after v1.
 - Skeletal characters as light blockers is a stretch goal (they always *receive* GI).
 - Large-scale cascades for open worlds. One camera-following volume plus fixed volumes is in scope.
 - WebGL.
@@ -190,7 +300,7 @@ The viewer measures every number itself, with GPU timestamp queries, on named sc
 | What | How measured | Proposed v1 target (Tier A, 1440p) |
 | --- | --- | --- |
 | Cost of showing GI | GPU ms of the GI sampling in the frame | ≤ 1.0 ms (stretch 0.5 ms) |
-| Cost of updating GI | GPU ms of `ddgi.update` per frame at default budget | ≤ 2.0 ms, user-adjustable |
+| Cost of updating GI | GPU ms of `gi.update` per frame at default budget | ≤ 2.0 ms, user-adjustable |
 | Whole frame | p50 / p95 frame time, GI on vs off | GI adds ≤ 3 ms p50 and no p95 spikes |
 | Light change response | frames until visible; time until within 5% of settled | next frame; ≤ 0.5 s (Tier B ≤ 1.5 s) |
 | Object move response | same, for a cabinet move and a door closing | ≤ 1 s, no leak through the closed door |
@@ -241,7 +351,7 @@ You sign off before the next milestone starts.
 
   The old repo is left untouched.
 - **Workspace setup:** the package layout above, TypeScript, lint (including the core's no-engine-imports rule), formatting, and a Playwright-based GPU test runner as a normal dev dependency with `--gpu nvidia|intel`.
-- **Scene manifests:** glTF, units, cameras, lights and volume bounds, read by the viewer, the native harness and the reference renderers. Scenes: Cornell, two-rooms, Sponza, Bistro, and a furnished interior.
+- **Test-scene manifests:** how to build or load each test scene (code, or model files plus placement), units, cameras, lights and volume bounds, read by the viewer, the native harness and the reference renderers. Scenes: Cornell, two-rooms, Sponza, Bistro, and a furnished interior.
 - **Native harness:**
   - GPU picked by setting instead of a hard-coded "RTX 3060".
   - A `-Scene` launcher.
@@ -252,10 +362,16 @@ You sign off before the next milestone starts.
   - A D3D12 build, so PIX can time native and Chrome frames in one tool.
 - **References:** Blender Cycles scripted from the manifest. three-gpu-pathtracer wrapped as a reference plug-in.
 - **Spikes.** Small throwaway tests to answer the questions that could force an architecture change:
-  1. **three.js sharing:** can three's `WebGPURenderer` run on our `GPUDevice`, and can a TSL node bind GPU textures and buffers that the core owns, without reaching into three's internals? If not, what's the smallest supported workaround, or an upstream change?
+  1. **three.js sharing (answered on paper; confirm at runtime):**
+     - three r187 runs on our `GPUDevice` with our limits.
+     - A registered GI `Light` node samples our atlases through `ExternalTexture`.
+     - This holds under the Standard, Meshlet and Visibility-Buffer drawing pipelines.
+     - Env diffuse can be switched off without breaking env specular.
   2. **Babylon:** the same question through its WebGPU engine and a material plugin. This keeps the contract from becoming three-shaped.
-  3. **Tracing speed:** our two-level BVH traversal in plain WGSL vs three-mesh-bvh on Sponza, rays per second for closest-hit and any-hit.
+  3. **Tracing speed:** our two-level BVH traversal in plain WGSL vs the latest three-mesh-bvh WebGPU path (with its recent upstream speedups) on Sponza, rays per second for closest-hit and any-hit.
   4. **Timestamp queries:** availability and overhead on both GPUs in Chrome.
+  5. **Second-technique check (paper):** walk a voxel GI and a surfel GI design through the platform API and the shading-module contract, and fix what doesn't fit.
+  6. **Reflection-probe coexistence:** GI inside a three.js reflection-probe capture, and env diffuse off with env specular on.
 
 **Done when:** native timings exist for every manifest scene; each spike has a written yes/no answer with numbers; and the contract above is confirmed or revised from what the spikes found.
 
@@ -263,7 +379,7 @@ You sign off before the next milestone starts.
 
 - The core runs the full DDGI update in a budget. Content: static geometry, constant-color materials, sun plus sky.
 - **Both hosts:** the plain-WebGPU example and the three adapter render it.
-- **Viewer v1:** scene picker, navigation, GI modes, split wipe, stats, probe debug.
+- **Viewer v1:** scene picker, navigation, GI modes, split wipe, stats, probe debug, and three's `LightProbeGrid` and VXGI as baseline techniques on the same scenes.
 
 **Done when:** the GI cost, accuracy, leak, stability and memory targets are met on Sponza (untextured), Cornell and two-rooms; the two hosts match; Tier B is measured and its mode decided; and you've signed off on the look.
 
@@ -297,7 +413,7 @@ This can overlap M2 and M3.
 - Ray hits return UVs.
 - An albedo and emissive texture atlas in the core.
 - Alpha cutouts during traversal.
-- The three adapter maps glTF and three materials onto the core's material model.
+- The three adapter maps three.js materials (whatever their source) onto the core's material model.
 - Fully textured versions of every test scene, including Bistro and the alpha-cutout tree.
 
 **Done when:** all target scenes load unmodified and pass the accuracy, leak and cost targets, and you've reviewed each one.
@@ -312,6 +428,8 @@ This can overlap M2 and M3.
 
 ### After v1
 
+- Ray-traced glossy reflections as the first new technique.
+- Voxel, SDF, surfel and radiance-cascade experiments on the same platform.
 - react-three-fiber bindings, Babylon adapter, then Pixi.
 - Room-shaped volumes and multi-level cascades.
 - Optional high-quality modes.
@@ -329,6 +447,39 @@ These are carried over by rewriting, not by copying files. Source paths refer to
 | WebGPU call and timestamp counter idea | `scripts/browser/profile-probe.js` | Basis for stats |
 | Native fork and capture tools | `native/references/rtxgi-ddgi` | Comparison and timing |
 | Findings | [audit](docs/AUDIT-2026-10-30.md) | View bias, ray rotation, recursion-cap matching, camera-basis rays |
+
+## What three.js already has (r187)
+
+three.js is building its own GI quickly. We should know exactly where it stops, compare against it, and contribute where it helps.
+
+| | What it is | Dynamic? | Leaks | Notes |
+| --- | --- | --- | --- | --- |
+| `LightProbeGrid` (r186+, faster in r187) | L2 spherical harmonics per probe in a 3D texture, baked by rasterizing cubemaps (8 probes × 6 faces per draw via `ArrayCamera`). Multi-bounce by re-baking with the previous grid as a light | Partly: probes can be re-baked N per frame, but values are overwritten (no blending), a re-bake briefly drops bounce light, and nothing detects changes | No visibility, so it leaks through walls | Sponza (490 probes, 32² faces): 3.1 s bake on a Pascal GPU. One grid per fragment, chosen by priority |
+| PR #35174, DDGI visibility for `LightProbeGrid` (open draft, stalled) | Adds distance moments (rasterized), Chebyshev weighting, an optional 4-probe tetrahedral mode, and hiding (not moving) probes buried in geometry | Visibility is captured once (static geometry) | Fixes many | Measured shading cost on Sponza: 3.08 ms → 4.00 ms (8 probes) or 3.38 ms (4 probes). mrdoob was unhappy with the cost. Unlikely in r188 |
+| VXGI (r186+, leak fix in r187) | Voxel cone tracing: CPU-collected triangles, compute voxelization into dense 3D textures (default 128³), lights injected from shadow maps; gathered as a full-screen pass that needs TRAA | Lights yes. Geometry no: a change means full re-voxelization ("too expensive for per-frame animation") | Thin walls under a voxel leak; r187 fills solid interiors | Plugs in via a render-level GI context, not a light |
+| `LightMapper` (r187) + `RayTracedRadiosity` (r188) | Lightmap baking in UV space. r188's radiosity traces rays with three-mesh-bvh's WebGPU BVH | Bake-time only | n/a | Upstream BVH speedups (SAH, nearest-first, packed data) roughly doubled ray throughput |
+| Reflection probes (PR #35046, open draft, r188) | Box-projected cube-array probes installed as the scene environment | n/a | n/a | They also add diffuse via the environment, hence the need for #35017 |
+
+**What that means for us:**
+
+- **Our reason to exist is the gap three leaves:**
+  - updates that blend in instead of popping;
+  - moving and deforming geometry;
+  - leak control that's cheap enough to ship;
+  - ray-traced updates that don't re-render the scene per probe;
+  - an engine-neutral core.
+- **Compare, don't guess.** The viewer runs three's `LightProbeGrid` and VXGI on the same scenes as baseline techniques. Our targets have to beat the #35174 shading costs above on Sponza.
+- **Borrow good ideas:**
+  - the 4-probe tetrahedral sampling mode, as a quality/cost option;
+  - VXGI's "fill closed interiors as solid", for probe classification;
+  - expressing biases as fractions of probe spacing.
+- **Contribute where it helps everyone:**
+  - findings and cost data on #35174;
+  - the small `ExternalBufferAttribute` PR;
+  - the GI-coverage seam;
+  - BVH improvements upstream to three-mesh-bvh rather than a fork.
+
+  A full DDGI is unlikely to be accepted into three itself. Maintainers want small PRs, WebGL parity and BVH work routed through three-mesh-bvh. So this stays an external package that fits three cleanly.
 
 ## Lessons from HomeFig's DDGI branch
 
@@ -400,6 +551,6 @@ We don't take its code. We do take its ideas and its measured lessons. None of t
 ## Open questions for you
 
 1. **Hardware:** is this laptop (RTX 3060 + Intel UHD) the whole test matrix for now, or should we line up a Mac and an Android device?
-2. **Package scope/name:** `@ddgi/*` is a placeholder until a pmndrs home is discussed.
-3. **Your libraries:** names and repos of your upscaler and denoiser libraries, and links to the r187/188 PRs you mentioned (compute PMREM, reflection probes), so the adapter is designed alongside them.
+2. **Package scope/name:** `@gi/*` is a placeholder until a pmndrs home is discussed.
+3. **Your libraries:** names and repos of your upscaler and denoiser libraries, so the adapter is designed alongside them. (The r187 changes and the open PRs are covered in "What three.js already has".)
 4. **Optional tools:** Nsight Graphics and RenderDoc for GPU frame captures.
