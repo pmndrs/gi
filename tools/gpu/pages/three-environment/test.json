@@ -1,0 +1,4 @@
+{
+    "description": "T1.7: GI's sky equals the sky three draws (cube maps mirrored in x, equirect, rotation, intensity), and scene.environment's diffuse isn't counted twice.",
+    "timeoutMs": 180000
+}

@@ -1,7 +1,21 @@
 {
     "extends": "../../tsconfig.json",
     "compilerOptions": {
-        "declarationMap": false
+        "declarationMap": false,
+        // The private workspace packages by path, not through node_modules: rollup-plugin-dts
+        // treats files reached through node_modules as external libraries and builds a
+        // TypeScript program for each one, and each of the three adapter's files then
+        // loads all of three's types again (it ran out of memory). `paths` replaces the
+        // root config's, so the umbrella's own entries are repeated.
+        "paths": {
+            "@pmndrs/ddgi": ["packages/ddgi/src/index.ts"],
+            "@pmndrs/ddgi/core": ["packages/ddgi/src/core.ts"],
+            "@pmndrs/ddgi/three": ["packages/ddgi/src/three.ts"],
+            "@pmndrs/ddgi-core": ["packages/ddgi-core/src/index.ts"],
+            "@pmndrs/ddgi-core/*": ["packages/ddgi-core/src/*"],
+            "@pmndrs/ddgi-three": ["packages/ddgi-three/src/index.ts"],
+            "@pmndrs/ddgi-three/*": ["packages/ddgi-three/src/*"]
+        }
     },
     "include": ["src", "../ddgi-core/src", "../ddgi-three/src"],
     "exclude": ["**/*.test.ts"]
