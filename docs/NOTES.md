@@ -6,6 +6,13 @@ One bullet per fact, each with its source. Add a bullet when something cost you 
 
 - **Shared device:** `new WebGPURenderer({ device })` is supported. When three creates the device itself, it uses a compatibility adapter with default limits: a 128 MB storage-buffer binding and 8 storage buffers per stage. Source: `WebGPUBackend.js:72, 213-254`.
 - **Device errors:** three assigns `device.onuncapturederror`. Use `addEventListener('uncapturederror')` and never assign it. Source: `WebGPUBackend.js:281`.
+- **three caches node shaders by material properties plus light ids** (`RenderObject.getMaterialCacheKey`, `LightsNode.customCacheKey`), not by `material.version`. `needsUpdate` with an unchanged key reuses the old shader, so to change a light node's code, replace the light (new id). Source: `NodeManager.getForRender`, T1.7.
+- **Two `wgslFn`s that include the same WGSL through separate `wgsl()` nodes emit it twice,** and WGSL refuses the redeclaration. Share one function node per module. TSL `.toVar(name)` names share the WGSL namespace with included code (a var named `giCoverage` clashed with the module's function). Source: T1.7.
+- **Cube uploads with `flipY`:** three puts cube image i into layer `[0,1,3,2,4,5][i]`, flipped vertically (`WebGPUTextureUtils._flipMap`). Source: T1.7.
+- **The Meshlet and Visibility-Buffer pipelines draw only FrontSide, opaque, channel-0 materials;** DoubleSide objects fall back to the standard path. Source: T1.7.
+- **Standard materials scale indirect diffuse by (1 − F_ss − F_ms):** a white rough dielectric under a uniform environment reads exactly L. Compare against a plain diffuse host with Lambert. Source: T1.7.
+- **pmndrs/sky has no `isSky` flag.** Its exposure is `sky.baker.sky.luminanceScale.value` and its sun `.sunDirection.value`; its `turbidity` is a Mie scale, not Preetham's. Source: T1.7.
+- **rollup-plugin-dts ran out of memory** once ddgi-three imported three (it builds a new TS program per file reached through node_modules). Workspace `paths` in `packages/ddgi/tsconfig.build.json` fix it: 4.4 s. Source: T1.7.
 - **Wrapping our textures:** `ExternalTexture` wraps a same-device `GPUTexture`. three binds it without allocating or destroying it.
   - Set `image = { width, height, depth }`, or size reads as 1×1.
   - Set `type` to match the sample type: the default is filterable float; use `FloatType` for rgba32float and `UnsignedIntType` for uint.

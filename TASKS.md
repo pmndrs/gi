@@ -265,7 +265,7 @@ Rules for every M1 task:
 | T1.5a | DDGI field and update loop | main session designs, implementer builds | M | T1.4 | done (Opus review passed with notes; fixes carried into T1.5b) |
 | T1.5b | DDGI classification and relocation | implementer | M | T1.5a | done (Opus review passed with notes, fixed; Cornell +5.7%, two-room leak 0.80%) |
 | T1.6 | Shading module and plain-WebGPU example | implementer | M | T1.5 | active (built; 1440p timing to redo, RTX clock locked at 1200 MHz) |
-| T1.7 | three.js adapter | implementer | M | T1.6 | active (implementer, 2026-11-05) |
+| T1.7 | three.js adapter | implementer | M | T1.6 | active (built d0e3525; neutrality passes; fixing large-scene CPU cost) |
 | T1.8 | Viewer integration | implementer | M | T1.7 | todo |
 | T1.9 | M1 measurements against targets | gpu-tester, native-runner | M | T1.8 | todo (native matched-count runs started early, 2026-11-05) |
 | T1.10 | Sponza add-ons | wrangler + implementer | M | T1.1 (for the re-rendered reference) | done (Opus review passed with notes, fixed; candles waiting on Dennis) |
