@@ -31,6 +31,7 @@ import {
     TOP_LEVEL_HEADER_BYTES,
     INSTANCE_RECORD_BYTES,
     BVH_NODE_BYTES,
+    TRIANGLE_BYTES,
     DEFAULT_TRIANGLE_TEST,
     TRACE_STACK_SIZE,
     type TriangleTest,
@@ -151,12 +152,40 @@ export function traceModuleWgsl(slot: BindingSlot, triangleTest: TriangleTest = 
 // Which ray-triangle test the stored triangles are for. A constant, so the other test compiles away.
 const GI_WATERTIGHT: bool = ${triangleTest === 'watertight'};
 
-@group(${group}) @binding(${nodes}) var<storage, read> giTraceNodes: array<GiBvhNode>;
-@group(${group}) @binding(${triangles}) var<storage, read> giTraceTriangles: array<GiBvhTriangle>;
+// Nodes and triangles are read as plain vec4s, so every load is one 16-byte
+// read whatever the backend makes of a struct with vec3 members.
+@group(${group}) @binding(${nodes}) var<storage, read> giTraceNodes: array<vec4f>;
+@group(${group}) @binding(${triangles}) var<storage, read> giTraceTriangles: array<vec4f>;
 @group(${group}) @binding(${topLevel}) var<storage, read> giTraceTopLevel: array<vec4u>;
 
 fn giMakeReference(index: u32, count: u32) -> u32 {
     return index | (count << GI_REF_COUNT_SHIFT);
+}
+
+// ---- Loading mesh nodes and triangles -----------------------------------------
+
+const GI_VEC4_PER_TRIANGLE: u32 = ${TRIANGLE_BYTES / 16}u;
+
+fn giLoadMeshNode(nodeIndex: u32) -> GiBvhNode {
+    let base = nodeIndex * GI_TOP_VEC4_PER_NODE;
+    let a = giTraceNodes[base];
+    let b = giTraceNodes[base + 1u];
+    let c = giTraceNodes[base + 2u];
+    let d = giTraceNodes[base + 3u];
+    return GiBvhNode(
+        a.xyz, bitcast<u32>(a.w),
+        b.xyz, bitcast<u32>(b.w),
+        c.xyz, bitcast<u32>(c.w),
+        d.xyz, bitcast<u32>(d.w),
+    );
+}
+
+fn giLoadTriangle(triangleIndex: u32) -> GiBvhTriangle {
+    let base = triangleIndex * GI_VEC4_PER_TRIANGLE;
+    let a = giTraceTriangles[base];
+    let b = giTraceTriangles[base + 1u];
+    let c = giTraceTriangles[base + 2u];
+    return GiBvhTriangle(a.xyz, bitcast<u32>(a.w), b.xyz, bitcast<u32>(b.w), c.xyz, bitcast<u32>(c.w));
 }
 
 // ---- Loading from the top-level buffer ---------------------------------------
@@ -414,7 +443,7 @@ fn giTraverse(ray: GiRay, stopAtFirstHit: bool) -> GiHit {
             // An inner node: test both children, go to the nearer one first.
             var node: GiBvhNode;
             if (insideInstance) {
-                node = giTraceNodes[instance.rootNodeOffset + index];
+                node = giLoadMeshNode(instance.rootNodeOffset + index);
             } else {
                 node = giLoadTopLevelNode(firstTopLevelNode, index);
             }
@@ -467,7 +496,7 @@ fn giTraverse(ray: GiRay, stopAtFirstHit: bool) -> GiHit {
         } else {
             // A mesh leaf: 'count' triangles starting at 'index'.
             for (var i = 0u; i < count; i += 1u) {
-                let triangle = giTraceTriangles[instance.triangleOffset + index + i];
+                let triangle = giLoadTriangle(instance.triangleOffset + index + i);
                 let candidate = giIntersectTriangle(triangle, setup, ray.tMin, closestT);
                 if (candidate.hit) {
                     // A mirrored instance flips the winding as seen in world space.
