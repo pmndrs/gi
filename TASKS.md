@@ -263,7 +263,7 @@ Rules for every M1 task:
 | T1.3 | Tracer as a platform module | implementer | M | T1.2 (B0 as built) | done (Opus review passed with notes, fixed; any-hit 1.03-1.22× three-mesh-bvh on the RTX, except Bistro interior 0.93×) |
 | T1.4 | Hit shading | implementer | M | T1.1, T1.3 | done (Opus review passed with notes, fixed; `sunIlluminance` added per Dennis) |
 | T1.5a | DDGI field and update loop | main session designs, implementer builds | M | T1.4 | done (Opus review passed with notes; fixes carried into T1.5b) |
-| T1.5b | DDGI classification and relocation | implementer | M | T1.5a | active (9c6348a; all gates met; re-run with the big-change rule off) |
+| T1.5b | DDGI classification and relocation | implementer | M | T1.5a | review (c7fbbea; furnace −0.16%, Cornell +5.7%, two-room leak 0.80%) |
 | T1.6 | Shading module and plain-WebGPU example | implementer | M | T1.5 | todo |
 | T1.7 | three.js adapter | implementer | M | T1.6 | todo |
 | T1.8 | Viewer integration | implementer | M | T1.7 | todo |

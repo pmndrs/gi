@@ -21,7 +21,7 @@ Rules:
 
 ---
 
-## 2026-11-05 · T1.5b · implementer (opus); final checks with the big-change rule off, then review
+## 2026-11-05 · T1.5b · implementer (opus); in review
 Did (9c6348a):
 - The single kernel is replaced by `ddgi/trace` (64 threads, one ray each, inline `giTraceClosest`, a ray buffer that grows when needed), then `ddgi/blend` (phases B and C), then `ddgi/write`.
 - Phase B: subgroups first, with a declared workgroup fallback. Relocation and classification per the design, with the tuning in DECISIONS. Offsets are used for ray origins and in sampling; off and not-yet-updated probes are skipped when sampling.
@@ -41,7 +41,13 @@ Numbers (median of 3, under the lock, 512 probes; µs per probe, the probes 2 ms
 - Intel, two-room: 17.4 µs; 115 probes; 93 probes in 1.98 ms.
 - After the split, Intel spends about half its update time in `ddgi/blend`.
 Not verified: probes coming back on in a changing scene (M3); `resetHistory` and a second `prepare` on the GPU; dispatches past 65,535 probes; Sponza.
-Next: the lead turned the big-change rule off by default (DECISIONS); the agent re-runs the gates with it off.
+With the big-change rule off by default (c7fbbea; DECISIONS), re-run on both GPUs (RTX / Intel):
+- furnace −0.16% / −0.28% (worst point 3.7% / 3.8%);
+- Cornell on the manifest volume +5.67% / +5.61% (gate ±10%); in air +4.33% / +4.26%;
+- two-room leak 0.800% / 0.797% (≤ 1%); thin wall 0.48%; closed door 0.039% / 0.040%;
+- classification passes, subgroups equal to the fallback;
+- test 655.
+Lead: `ddgi-leak` re-run on the RTX passes. Timing wasn't re-run, since the rule doesn't change the per-frame work.
 
 ## 2026-11-05 · T1.5a · implementer (opus); Opus review: pass with notes; fixes folded into T1.5b
 Did (e18ba01): `DDGITechnique` from `docs/design/ddgi.md`, in `packages/ddgi-core/src/techniques/ddgi/`:
