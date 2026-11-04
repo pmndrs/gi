@@ -10,3 +10,4 @@ Thumbs.db
 /native/build/
 .playwright-mcp/
 /bench/screenshots/
+/assets/generated/

@@ -23,6 +23,6 @@
             "@pmndrs/ddgi/three": ["packages/ddgi/src/three.ts"]
         }
     },
-    "include": ["packages/*/src", "packages/*/test", "apps/*/src", "examples/webgpu/*/src", "tools"],
+    "include": ["packages/*/src", "packages/*/test", "apps/*/src", "examples/webgpu/*/src", "scenes/src", "tools"],
     "exclude": ["node_modules", "dist", ".claude"]
 }

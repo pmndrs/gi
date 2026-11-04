@@ -2,6 +2,7 @@ packages:
     - packages/*
     - apps/*
     - examples/webgpu/*
+    - scenes
 
 # pnpm 10 blocks dependency lifecycle scripts unless listed here.
 onlyBuiltDependencies:
