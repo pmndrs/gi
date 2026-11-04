@@ -21,7 +21,7 @@ Rules:
 
 ---
 
-## 2026-11-05 · T1.7 · implementer (opus); fixing CPU cost on large scenes and double-sidedness, then review
+## 2026-11-05 · T1.7 · implementer (opus); in review
 Did (d0e3525), in `packages/ddgi-three`:
 - `GILight`: a `Light` subclass with a registered node. One `wgslFn` built from `gi.shading.parameters`, returning irradiance and coverage together (coverage computed only when an environment or `LightProbeGrid` needs it). `ExternalTexture`s re-read every render, `renderGroup` vec4s, three's light-probe slot at priority 1, given up at intensity 0. The env-diffuse workaround wraps the lighting model's `indirect` (Lambert and Phong get no env diffuse at all; measured 0).
 - `SceneSync`: meshes, groups, normals, uv and uv1, metalness-folded materials, texture handles with `UvMapping`, `InstancedMesh`, visibility, lights, environment; the cube mirror and the environment upload.
@@ -35,7 +35,14 @@ Verified (agent; headless Chrome 156, RTX 3060 and Intel UHD): three-neutrality 
 - lint, typecheck, test 745, build.
 Numbers (CPU only; Sponza with curtains, 449 meshes, 600 frames): sync per frame, median still 0.2 ms (RTX session; means 0.19–0.21) and 0.2 ms (Intel session; 0.24–0.28); one object moving 0.1 / 0.2 ms; warm back-to-back 0.04–0.05 ms. Bistro interior (2,062 meshes): 1.2 ms per frame, over the 0.2 ms target. First sync on Sponza 220–300 ms. The browser timer steps 0.1 ms, so medians are coarse.
 Not verified on a GPU: the module-version light swap (unit test only); sharing the slot with a real `LightProbeGrid`; spot and directional lights end to end; a real pmndrs/sky; `InstancedMesh`.
-Being fixed: still-scene cost must not grow with mesh count (Bistro interior); every material double-sided for GI by default (DECISIONS).
+Fixes (52a7300):
+- Change tracking does a fixed amount of work per frame: the scene is walked 128 objects a frame, picking up where it stopped; objects seen changing are checked every frame for 60 frames; 16 geometries and 16 materials are checked for edits per frame; lights every frame. `markChanged(object)` picks a change up in the next update.
+- Every material is double-sided for GI unless `material.userData.giSingleSided` is set.
+CPU per frame, means over 600 frames, still / one object moving (targets 0.2 / 0.5 ms):
+- Sponza: RTX session 0.089 / 0.075 ms; Intel session 0.08–0.09 / 0.10 ms.
+- Bistro interior (2,062 meshes): 0.15 / 0.17 ms; Intel 0.16–0.17 / 0.19 ms.
+Detection latency is at most ceil(objects / 128) frames (Sponza 5, measured 2; Bistro 21, measured 18), or 1 frame with `markChanged`. A geometry edit can take about 130 frames on Bistro unless marked.
+Known gap for the fix round: textured materials bounce with their base colour only (the core samples no textures until M4), so textured scenes read too bright. The adapter should fold in each texture's average colour.
 
 ## 2026-11-05 · T1.6 · implementer (opus); Opus review: pass with notes (timing not judged), fixed; waiting on the RTX clock to re-time
 Did:
