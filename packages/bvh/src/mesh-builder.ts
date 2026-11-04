@@ -14,7 +14,7 @@
  */
 
 import type { GpuLayoutMeshBvh } from './gpu-layout.ts';
-import { checkGpuLbvhFits, GpuLbvhBuilder, type GpuLbvhOptions } from './gpu-lbvh.ts';
+import { GpuLbvhBuilder, planGpuLbvhBatches, type GpuLbvhOptions } from './gpu-lbvh.ts';
 import { createTinyBvhBuilder, type TinyBvhBuilder, type TinyBvhInput } from './tinybvh.ts';
 
 export type MeshLayoutBuilderKind = 'gpu-lbvh' | 'tinybvh';
@@ -31,7 +31,7 @@ export interface MeshLayoutBuilder {
     readonly kind: MeshLayoutBuilderKind;
     /** Why the GPU builder is not in use, or null when it is. */
     readonly fallbackReason: string | null;
-    /** Builds every mesh's tree. With the GPU builder, all fitting meshes go in one batch. */
+    /** Builds every mesh's tree. With the GPU builder, meshes go in as few batches as the device's buffers allow. */
     buildLayouts(geometries: readonly TinyBvhInput[], options?: GpuLbvhOptions): Promise<MeshLayoutResult[]>;
 }
 
@@ -73,30 +73,25 @@ export async function createMeshLayoutBuilder(
         fallbackReason: null,
         async buildLayouts(geometries, gpuOptions = {}) {
             const results: (MeshLayoutResult | null)[] = geometries.map(() => null);
-            const onGpu: number[] = [];
-            for (const [index, geometry] of geometries.entries()) {
-                const triangles = geometry.indices ? geometry.indices.length / 3 : geometry.positions.length / 9;
-                try {
-                    checkGpuLbvhFits(device, triangles);
-                    onGpu.push(index);
-                } catch (error) {
-                    const reason = error instanceof Error ? error.message : String(error);
-                    results[index] = { layout: await buildOnCpu(geometry, gpuOptions), builtBy: 'tinybvh', fallbackReason: reason };
-                }
+            const plan = planGpuLbvhBatches(device, geometries);
+            for (const index of plan.tooBig) {
+                const reason = `the mesh is too big for this device's GPU buffers (${Math.min(device.limits.maxStorageBufferBindingSize, device.limits.maxBufferSize)} bytes)`;
+                results[index] = { layout: await buildOnCpu(geometries[index], gpuOptions), builtBy: 'tinybvh', fallbackReason: reason };
             }
-            const builds = await gpu.buildMany(onGpu.map((index) => geometries[index]), gpuOptions);
-            try {
-                for (const [at, build] of builds.entries()) {
-                    const index = onGpu[at];
-                    if (build.problem) {
-                        results[index] = { layout: await buildOnCpu(geometries[index], gpuOptions), builtBy: 'tinybvh', fallbackReason: build.problem };
-                    } else {
-                        results[index] = { layout: await gpu.readLayout(build.tree), builtBy: 'gpu-lbvh', fallbackReason: null };
+            for (const batch of plan.batches) {
+                const trees = await gpu.buildMany(batch.map((index) => geometries[index]), gpuOptions);
+                try {
+                    const layouts = await gpu.readLayouts(trees);
+                    for (const [at, layout] of layouts.entries()) {
+                        const index = batch[at];
+                        const problem = trees.meshes[at].problem;
+                        if (layout && !problem) results[index] = { layout, builtBy: 'gpu-lbvh', fallbackReason: null };
+                        else results[index] = { layout: await buildOnCpu(geometries[index], gpuOptions), builtBy: 'tinybvh', fallbackReason: problem };
                     }
+                } finally {
+                    // The layouts are CPU copies; the GPU trees are not needed after the readback.
+                    trees.destroy();
                 }
-            } finally {
-                // The layouts are CPU copies; the GPU trees are not needed after the readback.
-                for (const build of builds) build.tree.destroy();
             }
             return results as MeshLayoutResult[];
         },

@@ -1,0 +1,4 @@
+{
+    "description": "B1 quick benchmark on the furnished room: the GPU LBVH builds, its trees trace and agree with tinybvh's.",
+    "timeoutMs": 180000
+}

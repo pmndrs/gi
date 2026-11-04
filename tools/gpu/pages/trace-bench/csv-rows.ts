@@ -119,6 +119,26 @@ function sceneRows(result: SceneResult): MetricRow[] {
             { scene, metric: 'ours-tmbuild/memory_bytes', value: tmbuild.bytesTotal },
         );
     }
+    const lbvh = result.oursLbvh;
+    if (lbvh) {
+        rows.push(
+            { scene, metric: 'ours-lbvh/build_gpu_ms_median', value: lbvh.gpuBuildMsMedian },
+            { scene, metric: 'ours-lbvh/build_gpu_ms_min', value: lbvh.gpuBuildMsMin },
+            { scene, metric: 'ours-lbvh/build_gpu_ms_max', value: lbvh.gpuBuildMsMax },
+            { scene, metric: 'ours-lbvh/build_gpu_runs', value: lbvh.gpuBuildRuns },
+            { scene, metric: 'ours-lbvh/build_timestamp_timed', value: lbvh.gpuBuildTimestampTimed },
+            { scene, metric: 'ours-lbvh/build_ms_wall', value: lbvh.wallBuildMs },
+            { scene, metric: 'ours-lbvh/readback_ms', value: lbvh.readbackMs },
+            { scene, metric: 'ours-lbvh/sah_cost_vs_tinybvh', value: lbvh.sahCostVsTinybvh },
+            { scene, metric: 'ours-lbvh/meshes_fallen_back', value: lbvh.meshesFallenBack },
+            { scene, metric: 'ours-lbvh/nodes', value: lbvh.nodeCount },
+            { scene, metric: 'ours-lbvh/max_mesh_depth', value: lbvh.maxMeshDepth },
+            { scene, metric: 'ours-lbvh/stack_entries_needed', value: lbvh.requiredStackSize },
+            { scene, metric: 'ours-lbvh/memory_bytes_nodes', value: lbvh.bytesNodes },
+            { scene, metric: 'ours-lbvh/memory_bytes_triangles', value: lbvh.bytesTriangles },
+            { scene, metric: 'ours-lbvh/memory_bytes', value: lbvh.bytesTotal },
+        );
+    }
     const platform = result.platform;
     if (platform) {
         rows.push(

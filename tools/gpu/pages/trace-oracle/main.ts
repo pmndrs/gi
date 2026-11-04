@@ -15,7 +15,11 @@
  *   and `sceneCopy.instanceSlot()`); inline tracing from a technique's own
  *   kernel, the way DDGI traces, is checked by `trace-inline`;
  * - `watertight-tinybvh`: the same trees assembled and traced directly;
- * - `watertight-tmbuild`: trees built by three-mesh-bvh and converted.
+ * - `watertight-tmbuild`: trees built by three-mesh-bvh and converted;
+ * - `watertight-lbvh`: trees built on the GPU by the LBVH builder (B1,
+ *   `@pmndrs/bvh`'s `createMeshLayoutBuilder`), read back and assembled the
+ *   same way. It runs only when the device has subgroups; without them the
+ *   builder would fall back to tinybvh, which the variants above already cover.
  * The default device limits are used on purpose: the oracle scenes are tiny and
  * the core has to work there.
  *
@@ -36,7 +40,7 @@ import {
     type TraceSceneData,
 } from '../../../../packages/ddgi-core/src/platform/trace/index.ts';
 import { type TracedHit } from '../../../../packages/ddgi-core/src/platform/trace/oracle-compare.ts';
-import { createTinyBvhBuilder } from '../../../../packages/bvh/src/index.ts';
+import { createMeshLayoutBuilder, createTinyBvhBuilder, type MeshLayoutBuilder } from '../../../../packages/bvh/src/index.ts';
 import type { FrameInput } from '../../../../packages/ddgi-core/src/platform/contract/frame.ts';
 import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
 import { buildMeshBvhWithTinyBvh } from '../../../../packages/ddgi-core/src/platform/trace/mesh-bvh-topology.ts';
@@ -69,14 +73,18 @@ import {
  */
 interface OracleVariant {
     name: string;
-    treeSource: 'platform' | 'tinybvh' | 'three-mesh-bvh';
+    treeSource: 'platform' | 'tinybvh' | 'three-mesh-bvh' | 'gpu-lbvh';
 }
 
 const VARIANTS: OracleVariant[] = [
     { name: 'platform', treeSource: 'platform' },
     { name: 'watertight-tinybvh', treeSource: 'tinybvh' },
     { name: 'watertight-tmbuild', treeSource: 'three-mesh-bvh' },
+    { name: 'watertight-lbvh', treeSource: 'gpu-lbvh' },
 ];
+
+/** The GPU LBVH builder (B1), made once the device is known. */
+let gpuLbvh: MeshLayoutBuilder | null = null;
 
 /** three-mesh-bvh target leaf size for the converted trees, as in the benchmark's default. */
 const TMBUILD_LEAF_SIZE = 4;
@@ -176,10 +184,17 @@ interface BuiltScene {
 
 async function buildScene(builder: MeshBvhBuilder, oracleCase: OracleCase, variant: OracleVariant): Promise<BuiltScene> {
     const start = performance.now();
-    const bvhs =
-        variant.treeSource !== 'three-mesh-bvh'
-            ? await Promise.all(oracleCase.meshes.map((mesh) => builder.build(mesh)))
-            : oracleCase.meshes.map((mesh) => buildMeshBvhWithTmbvh(mesh, TMBUILD_LEAF_SIZE).bvh);
+    let bvhs;
+    if (variant.treeSource === 'three-mesh-bvh') {
+        bvhs = oracleCase.meshes.map((mesh) => buildMeshBvhWithTmbvh(mesh, TMBUILD_LEAF_SIZE).bvh);
+    } else if (variant.treeSource === 'gpu-lbvh') {
+        assert(gpuLbvh !== null, 'the GPU LBVH builder was not made');
+        const results = await gpuLbvh.buildLayouts(oracleCase.meshes);
+        for (const result of results) assert(result.builtBy === 'gpu-lbvh', `a mesh fell back to ${result.builtBy}: ${result.fallbackReason}`);
+        bvhs = results.map((result) => result.layout);
+    } else {
+        bvhs = await Promise.all(oracleCase.meshes.map((mesh) => builder.build(mesh)));
+    }
     const data = assembleTraceScene(bvhs, oracleCase.instances);
     return { data, buildMs: performance.now() - start };
 }
@@ -346,7 +361,14 @@ await runGpuTest(async ({ device, log }) => {
     const references = [];
     for (const oracleCase of cases) references.push(await computeReferenceAnswersYielding(oracleCase));
 
+    gpuLbvh = await createMeshLayoutBuilder(device, { label: 'oracle lbvh' });
+    const skipped: string[] = [];
     for (const variant of VARIANTS) {
+        if (variant.treeSource === 'gpu-lbvh' && gpuLbvh.kind !== 'gpu-lbvh') {
+            skipped.push(`${variant.name}: ${gpuLbvh.fallbackReason}`);
+            log(`[${variant.name}] skipped: ${gpuLbvh.fallbackReason}`);
+            continue;
+        }
         const kernel = await TraceBatchKernel.create(device);
         const results = { cases: {} as Record<string, unknown>, sharedEdges: [] as SharedEdgeReport[] };
         byTest[variant.name] = results;
@@ -384,9 +406,11 @@ await runGpuTest(async ({ device, log }) => {
     assert(failures.length === 0, failures.slice(0, 12).join('\n'));
     const slippedTotals: Record<string, number> = {};
     for (const variant of VARIANTS) {
+        if (!byTest[variant.name]) continue;
         slippedTotals[variant.name] = byTest[variant.name].sharedEdges.reduce((sum, report) => sum + report.slipped, 0);
     }
     return {
+        skipped,
         sharedEdgeRaysPerTest: byTest[VARIANTS[0].name].sharedEdges.reduce((sum, report) => sum + report.rays, 0),
         slippedTotals,
         byTest,

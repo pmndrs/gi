@@ -3,8 +3,9 @@
  *
  * 1. **Scan:** random arrays of several sizes (one tile, several, many)
  *    against a CPU prefix sum.
- * 2. **Sort:** random 30-bit keys with many repeats against a stable CPU
- *    sort: keys in order, and equal keys in their original order.
+ * 2. **Sort:** random 30-bit keys with many repeats, in segments of awkward
+ *    sizes, against a stable CPU sort of each segment: keys in order, equal
+ *    keys in their original order, and no key leaving its segment.
  * 3. **Trees:** meshes of every awkward kind (one, two and three triangles,
  *    tile boundaries, a grid with 16-bit indices, all-equal triangles, a flat
  *    mesh, flags, a mesh already on the GPU with interleaved vertices, a large
@@ -15,7 +16,7 @@
  * The ray oracle for B1 trees is the trace-oracle page (variant `watertight-lbvh`).
  */
 
-import { createRadixSort, createRadixSortPipelines, sortOffsetWords } from '../../../../packages/bvh/src/gpu-radix-sort.ts';
+import { createRadixSort, createRadixSortPipelines, sortTileTable } from '../../../../packages/bvh/src/gpu-radix-sort.ts';
 import { createScanBindGroups, createScanPipelines, encodeScan, scanParams, scanTileSumWords } from '../../../../packages/bvh/src/gpu-scan.ts';
 import { GpuLbvhBuilder, type GpuLbvhGeometry } from '../../../../packages/bvh/src/gpu-lbvh.ts';
 import { checkGpuLayout, treeSahCost } from '../../../../packages/bvh/src/layout-check.ts';
@@ -120,24 +121,29 @@ async function checkSort(device: GPUDevice, log: (message: string) => void): Pro
     const failures: string[] = [];
     const scan = await createScanPipelines(device, 'bvh-lbvh');
     const pipelines = await createRadixSortPipelines(device, scan, 'bvh-lbvh');
-    for (const count of [1, 5, 2048, 2049, 50_000, 1_000_000]) {
+    const segmentSets = [[1], [5], [2048], [2049], [50_000], [1_000_000], [1, 2047, 2049, 3, 70_000, 1, 4096, 10]];
+    for (const segments of segmentSets) {
+        const count = segments.reduce((total, size) => total + size, 0);
         const random = randomSource(count + 99);
         // Few distinct keys, so stability is tested; all 30 bits used.
         const palette = Uint32Array.from({ length: 64 }, () => Math.floor(random() * 2 ** 30));
         const keys = Uint32Array.from({ length: count }, () => palette[Math.floor(random() * palette.length)]);
         const values = Uint32Array.from({ length: count }, (_, index) => index);
+        const table = sortTileTable(segments);
         const buffers = {
             keysA: storageBuffer(device, 'keys a', keys),
             valuesA: storageBuffer(device, 'values a', values),
             keysB: storageBuffer(device, 'keys b', count * 4),
             valuesB: storageBuffer(device, 'values b', count * 4),
-            offsets: storageBuffer(device, 'offsets', sortOffsetWords(count) * 4),
-            tileSums: storageBuffer(device, 'tile sums', scanTileSumWords(sortOffsetWords(count)) * 4),
+            offsets: storageBuffer(device, 'offsets', table.offsetWords * 4),
+            tileSums: storageBuffer(device, 'tile sums', scanTileSumWords(table.offsetWords) * 4),
+            tables: storageBuffer(device, 'tile table', table.tiles),
+            tilesOffset: 0,
             params: device.createBuffer({ size: 256 * 8, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST }),
             paramsOffset: 0,
             paramsStride: 256,
         };
-        const sort = createRadixSort(device, pipelines, buffers, count, 30, 'sort');
+        const sort = createRadixSort(device, pipelines, buffers, table, 30, 'sort');
         sort.writeParams(device.queue);
         const encoder = device.createCommandEncoder();
         const pass = encoder.beginComputePass();
@@ -146,14 +152,21 @@ async function checkSort(device: GPUDevice, log: (message: string) => void): Pro
         device.queue.submit([encoder.finish()]);
         const sortedKeys = new Uint32Array(await readBuffer(device, buffers.keysA, count * 4));
         const sortedValues = new Uint32Array(await readBuffer(device, buffers.valuesA, count * 4));
-        const expected = Uint32Array.from(values).sort((a, b) => keys[a] - keys[b] || a - b);
+        // Each segment sorted on its own: a key never leaves its segment.
+        const expected = new Uint32Array(count);
+        let start = 0;
+        for (const size of segments) {
+            expected.set(values.subarray(start, start + size).sort((a, b) => keys[a] - keys[b] || a - b), start);
+            start += size;
+        }
         let wrong = -1;
         for (let index = 0; index < count && wrong < 0; index++) {
             if (sortedValues[index] !== expected[index] || sortedKeys[index] !== keys[expected[index]]) wrong = index;
         }
-        if (wrong >= 0) failures.push(`sort of ${count}: position ${wrong} holds key ${sortedKeys[wrong]} value ${sortedValues[wrong]}, expected value ${expected[wrong]}`);
-        log(`sort of ${count}: ${wrong < 0 ? 'right and stable' : 'WRONG'}`);
-        for (const buffer of [buffers.keysA, buffers.valuesA, buffers.keysB, buffers.valuesB, buffers.offsets, buffers.tileSums, buffers.params]) buffer.destroy();
+        const name = `sort of ${segments.length === 1 ? count : `${segments.length} segments (${segments.join(', ')})`}`;
+        if (wrong >= 0) failures.push(`${name}: position ${wrong} holds key ${sortedKeys[wrong]} value ${sortedValues[wrong]}, expected value ${expected[wrong]}`);
+        log(`${name}: ${wrong < 0 ? 'right and stable' : 'WRONG'}`);
+        for (const buffer of [buffers.keysA, buffers.valuesA, buffers.keysB, buffers.valuesB, buffers.offsets, buffers.tileSums, buffers.tables, buffers.params]) buffer.destroy();
     }
     return failures;
 }
@@ -212,18 +225,19 @@ await runGpuTest(
         await builder.prepare();
         const tinyBvh = await createTinyBvhBuilder();
         const { cases, owned } = treeCases(device);
+        // Every case in one batch, so meshes of every size share the dispatches.
         const start = performance.now();
-        const builds = await builder.buildMany(cases.map((entry) => entry.input ?? entry.geometry));
+        const built = await builder.buildMany(cases.map((entry) => entry.input ?? entry.geometry));
         const batchMs = performance.now() - start;
+        const layouts = await builder.readLayouts(built);
+        built.destroy();
         const trees: Record<string, unknown> = {};
-        for (const [index, build] of builds.entries()) {
+        for (const [index, layout] of layouts.entries()) {
             const { name, geometry } = cases[index];
-            if (build.problem) {
-                failures.push(`${name}: ${build.problem}`);
+            if (!layout) {
+                failures.push(`${name}: ${built.meshes[index].problem}`);
                 continue;
             }
-            const layout = await builder.readLayout(build.tree);
-            build.tree.destroy();
             const problems = checkGpuLayout(layout, geometry);
             for (const problem of problems) failures.push(`${name}: ${problem}`);
             const cost = treeSahCost(layout);

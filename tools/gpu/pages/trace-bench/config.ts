@@ -33,9 +33,17 @@ export const SYNTHETIC_INSTANCE_COUNT = 10_000;
  * - `ours-tmbuild`: three-mesh-bvh builds each mesh's tree, converted to our layout, traced by our watertight walk.
  * - `platform`: the same as `ours-tinybvh`, but through the platform API (`createGI`, its scene API, `queries.rays`).
  * - `tmbvh`: three-mesh-bvh's own trees and its own WebGPU walk.
+ * - `ours-lbvh`: the GPU LBVH (B1, `@pmndrs/bvh`) builds every mesh's tree on the GPU in one batch, timed
+ *   with GPU timestamps; the trees are read back and traced by our watertight walk. Needs subgroups.
  */
-export const TRACER_IDS = ['ours-tinybvh', 'ours-tmbuild', 'platform', 'tmbvh'] as const;
+export const TRACER_IDS = ['ours-tinybvh', 'ours-tmbuild', 'platform', 'tmbvh', 'ours-lbvh'] as const;
 export type TracerId = (typeof TRACER_IDS)[number];
+
+/** What runs when the URL names no tracer. `ours-lbvh` is asked for by its own pages (trace-bench-lbvh*). */
+export const DEFAULT_TRACER_IDS: readonly TracerId[] = ['ours-tinybvh', 'ours-tmbuild', 'platform', 'tmbvh'];
+
+/** GPU LBVH builds timed per scene after one warm-up (median, fastest and slowest are reported). */
+export const LBVH_BUILD_TIMED_RUNS = 5;
 
 /**
  * How big a run is.
@@ -159,7 +167,7 @@ function readList(params: URLSearchParams, name: string): string[] | null {
  * Query parameters (all optional):
  *
  *   ?scene=sponza,bistro-interior   scene manifest ids, or `all` (default: what the page folder says)
- *   &tracer=ours-tinybvh,tmbvh      any of TRACER_IDS (default: all)
+ *   &tracer=ours-tinybvh,tmbvh      any of TRACER_IDS (default: DEFAULT_TRACER_IDS)
  *   &rays=256                       rays per probe
  *   &targetRays=2097152             total rays per dispatch, about
  *   &profile=quick|full             defaults for the numbers above and the timing counts
@@ -184,7 +192,7 @@ export function parseBenchConfig(
     let scenes = readList(params, 'scene') ?? defaults.scenes;
     if (scenes.includes('all')) scenes = [...BENCH_SCENE_IDS];
 
-    const tracerNames = readList(params, 'tracer') ?? [...TRACER_IDS];
+    const tracerNames = readList(params, 'tracer') ?? [...DEFAULT_TRACER_IDS];
     const tracers = tracerNames.map((name) => {
         if (!(TRACER_IDS as readonly string[]).includes(name)) {
             throw new BenchConfigError(`?tracer= entries must be from ${TRACER_IDS.join(', ')}, got "${name}"`);

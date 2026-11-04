@@ -67,6 +67,25 @@ export interface TmbuildBuildResult extends OursBuildResult {
     targetLeafSize: number;
 }
 
+/** The GPU LBVH's trees (`ours-lbvh`, B1): the usual numbers plus the GPU build time and the tree quality. */
+export interface LbvhBuildResult extends OursBuildResult {
+    /** GPU time of building every mesh's tree in one batch (one compute pass, timestamps): median, fastest, slowest. */
+    gpuBuildMsMedian: number;
+    gpuBuildMsMin: number;
+    gpuBuildMsMax: number;
+    gpuBuildRuns: number;
+    /** 1 when the build was timed with GPU timestamps, 0 for the wall-clock fallback. */
+    gpuBuildTimestampTimed: number;
+    /** Wall time of the first build: uploading the meshes, building, and reading the stats back. */
+    wallBuildMs: number;
+    /** Reading every tree back into CPU memory for the tracer's scene assembly (not part of a GPU-resident build). */
+    readbackMs: number;
+    /** The scene's summed SAH cost on these trees over tinybvh's, mesh by mesh (each mesh's cost scaled by its box's area). */
+    sahCostVsTinybvh: number;
+    /** Meshes the GPU refused and tinybvh built instead. Should be 0. */
+    meshesFallenBack: number;
+}
+
 /** The `platform` tracer: the scene described through `createGI` and its scene API (T1.3). */
 export interface PlatformBuildResult {
     /** Creating every mesh, material and instance through the scene API (CPU: checking and packing). */
@@ -144,6 +163,8 @@ export interface SceneResult {
     oursTmbuild?: TmbuildBuildResult | null;
     /** Trees built by tinybvh (WASM) in the worker. Missing in results from before T0.10 part C. */
     oursTinybvh?: OursBuildResult | null;
+    /** The GPU LBVH's trees (B1). Missing before B1. */
+    oursLbvh?: LbvhBuildResult | null;
     /** The same scene through the platform API. Missing before T1.3. */
     platform?: PlatformBuildResult | null;
     tmbvh: TmbvhBuildResult | null;

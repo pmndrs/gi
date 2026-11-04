@@ -196,9 +196,10 @@ await runGpuTest(
         const tinyBvh = await createTinyBvhBuilder();
         const failures: string[] = [];
         for (const [name, geometry] of [['grid', grid(90)], ['soup', soup(20_000)], ['one triangle', soup(1)]] as const) {
-            const gpuTree = await lbvh.build(geometry);
-            const gpuLayout = await lbvh.readLayout(gpuTree);
-            gpuTree.destroy();
+            const gpuTrees = await lbvh.build(geometry);
+            const [gpuLayout] = await lbvh.readLayouts(gpuTrees);
+            gpuTrees.destroy();
+            assert(gpuLayout !== null, `${name}: the GPU LBVH refused the mesh`);
             failures.push(...(await refitAcrossFrames(device, `${name} (GPU LBVH)`, geometry, gpuLayout, log)));
             failures.push(...(await refitAcrossFrames(device, `${name} (tinybvh)`, geometry, tinyBvh.buildLayout(geometry).layout, log)));
         }
