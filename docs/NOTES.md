@@ -137,6 +137,7 @@ One bullet per fact, each with its source. Add a bullet when something cost you 
   - Run it with `python -E`, not `-I`, because `-I` hides the user site-packages where it is installed.
   - FLIP numbers are comparable only at the same downsample.
 - **Comparing noisy renders:** average over 8×8 blocks before judging. Two Cycles seeds differ by 0.8% per pixel but by 0.1% per block.
+- **The references are pure Lambert; three's standard material isn't.** `scenes/src/three-scene.ts` uses `MeshStandardMaterial` (roughness 1, metalness 0, F0 0.04). That adds a rough specular lobe the Cycles and path-tracer references lack, worth a few percent of the full image. When comparing the viewer against a reference, render with `specularIntensity = 0`, or measure the gap first, so the GI error isn't mixed with material error. Source: T0.7 Opus review.
 - **`@pmndrs/denoiser` is not on npm.** Build steps are in `tools/reference/README.md`.
 
 ## Tracing (measured)
