@@ -31,6 +31,12 @@
  * tools/native's scripts) check it, and if that pid owns the lock they run under the parent's
  * hold instead of waiting for a lock that will not be released until they finish.
  *
+ * GPU clock: while `run`'s command runs, it samples nvidia-smi about once a second (if
+ * nvidia-smi exists), prints min / median / max SM and memory clock at the end, and keeps the
+ * summary in a JSON file (`--clock-file`, default `<lock folder>.clock.json`), rewritten after
+ * every sample. The command gets the file's path in DDGI_CLOCK_FILE, so the to-csv scripts and
+ * tools/native/bench.ps1 add `note/sm_clock_mhz` rows (see tools/gpu/clock-note.ts).
+ *
  * From a shell (agents, the native PowerShell launcher), the same protocol:
  *
  *   node tools/reference/bench-lock.ts status
@@ -45,6 +51,15 @@ import { hostname, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { installShutdownHandlers, registerCleanup } from '../gpu/cleanup.ts';
+import {
+    CLOCK_FILE_ENV,
+    describeClockSummary,
+    NVIDIA_SMI_CLOCK_ARGS,
+    parseClockLine,
+    summarizeClockSamples,
+    type ClockSample,
+    type ClockSummary,
+} from '../gpu/clock-note.ts';
 
 export const benchLockPath = join(process.env.TEMP ?? process.env.TMPDIR ?? tmpdir(), 'ddgi-gpu-bench.lock');
 
@@ -457,6 +472,72 @@ export async function withBenchLock<T>(
 }
 
 // ---------------------------------------------------------------------------
+// GPU clock sampling
+// ---------------------------------------------------------------------------
+
+const CLOCK_SAMPLE_MS = 1_000;
+
+/** Returns nvidia-smi's clock line, or null if nvidia-smi is missing or fails. Injected in tests. */
+export type ClockReader = () => Promise<string | null>;
+
+export const readNvidiaSmiClocks: ClockReader = () => run('nvidia-smi', NVIDIA_SMI_CLOCK_ARGS);
+
+export interface ClockSettings {
+    file: string;
+    read: ClockReader;
+    intervalMs?: number;
+}
+
+export interface ClockSampler {
+    /** Stops sampling, writes the final file and returns the summary (null if nothing was sampled). */
+    stop(): Promise<ClockSummary | null>;
+}
+
+/**
+ * Samples the GPU clock every `intervalMs` until `stop()`, rewriting `file` after each sample
+ * (to a temp name and renamed, so a reader never sees half a file). Returns null if the reader
+ * gives nothing on the first try: no nvidia-smi means no clock rows, not an error.
+ */
+export async function startClockSampler(settings: ClockSettings): Promise<ClockSampler | null> {
+    const samples: ClockSample[] = [];
+    const take = async (): Promise<void> => {
+        const text = await settings.read();
+        const sample = text === null ? null : parseClockLine(text);
+        if (sample) samples.push(sample);
+    };
+    await take();
+    if (samples.length === 0) return null;
+
+    const writeSummary = async (): Promise<ClockSummary | null> => {
+        const summary = summarizeClockSamples(samples);
+        if (!summary) return null;
+        const temporary = `${settings.file}.${process.pid}.tmp`;
+        // A reader holding the old file open can make the rename fail on Windows; the next sample retries.
+        await writeFile(temporary, `${JSON.stringify(summary, null, 2)}\n`)
+            .then(() => rename(temporary, settings.file))
+            .catch(() => undefined);
+        return summary;
+    };
+    await writeSummary();
+
+    let busy: Promise<void> = Promise.resolve();
+    const timer = setInterval(() => {
+        // One sample at a time; a slow nvidia-smi call delays the next one rather than piling up.
+        busy = busy.then(async () => {
+            await take();
+            await writeSummary();
+        });
+    }, settings.intervalMs ?? CLOCK_SAMPLE_MS);
+    return {
+        async stop() {
+            clearInterval(timer);
+            await busy;
+            return writeSummary();
+        },
+    };
+}
+
+// ---------------------------------------------------------------------------
 // Command line
 // ---------------------------------------------------------------------------
 
@@ -486,6 +567,10 @@ options:
   --ownerless-stale-minutes <n>
                               A lock folder with no owner file counts as abandoned after
                               this long (default ${OWNERLESS_STALE_MS / 60_000}).
+  --clock-file <file>         run: where the GPU clock summary goes (default <lock folder>.clock.json).
+                              While the command runs, nvidia-smi is sampled about once a second (if
+                              it exists); min / median / max SM and memory clock print at the end.
+                              The command gets ${CLOCK_FILE_ENV}=<file>.
   --command <text>            acquire: the command to record (default: this one).
   --path <folder>             Another lock folder (tests).
   --json                      status: print JSON (with "heldByParent": the owner pid when
@@ -497,45 +582,59 @@ function quoteForShell(argument: string): string {
 }
 
 /** Runs a command under the lock; returns its exit code. */
-async function runUnderLock(command: string[], settings: BenchLockOptions): Promise<number> {
-    return withBenchLock(
-        ({ ownerPid }) =>
-            new Promise<number>((resolvePromise, reject) => {
-                // One command string through the shell, so `pnpm` (a .cmd on Windows) resolves.
-                // LOCK_HELD_ENV tells a command that takes the lock itself that we hold it for it.
-                const child = spawn(command.map(quoteForShell).join(' '), {
-                    stdio: 'inherit',
-                    shell: true,
-                    env: { ...process.env, [LOCK_HELD_ENV]: String(ownerPid) },
-                });
-                const releaseKill = registerCleanup(
-                    () =>
-                        new Promise<void>((done) => {
-                            if (child.pid === undefined || child.exitCode !== null) return done();
-                            if (process.platform === 'win32') {
-                                const taskkill = spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
-                                taskkill.on('exit', () => done());
-                                taskkill.on('error', () => done());
-                            } else {
-                                child.kill('SIGTERM');
-                                done();
-                            }
-                        }),
-                );
-                child.on('error', (error) => {
-                    void releaseKill();
-                    reject(error);
-                });
-                child.on('close', (code) => {
-                    void releaseKill();
-                    resolvePromise(code ?? 1);
-                });
-            }),
-        settings,
-    );
+async function runUnderLock(command: string[], settings: BenchLockOptions, clock: ClockSettings): Promise<number> {
+    return withBenchLock(async ({ ownerPid }) => {
+        const sampler = await startClockSampler(clock);
+        try {
+            return await runCommand(command, ownerPid, sampler ? clock.file : null);
+        } finally {
+            const summary = await sampler?.stop();
+            if (summary) (settings.log ?? console.log)(describeClockSummary(summary));
+        }
+    }, settings);
 }
 
-export async function benchLockCli(argv: string[]): Promise<number> {
+function runCommand(command: string[], ownerPid: number, clockFile: string | null): Promise<number> {
+    return new Promise<number>((resolvePromise, reject) => {
+        // One command string through the shell, so `pnpm` (a .cmd on Windows) resolves.
+        // LOCK_HELD_ENV tells a command that takes the lock itself that we hold it for it.
+        const child = spawn(command.map(quoteForShell).join(' '), {
+            stdio: 'inherit',
+            shell: true,
+            env: { ...process.env, [LOCK_HELD_ENV]: String(ownerPid), ...(clockFile ? { [CLOCK_FILE_ENV]: clockFile } : {}) },
+        });
+        const releaseKill = registerCleanup(
+            () =>
+                new Promise<void>((done) => {
+                    if (child.pid === undefined || child.exitCode !== null) return done();
+                    if (process.platform === 'win32') {
+                        const taskkill = spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
+                        taskkill.on('exit', () => done());
+                        taskkill.on('error', () => done());
+                    } else {
+                        child.kill('SIGTERM');
+                        done();
+                    }
+                }),
+        );
+        child.on('error', (error) => {
+            void releaseKill();
+            reject(error);
+        });
+        child.on('close', (code) => {
+            void releaseKill();
+            resolvePromise(code ?? 1);
+        });
+    });
+}
+
+/** Test hooks for the command line: another clock reader or sampling interval. */
+export interface BenchLockCliDeps {
+    readClock?: ClockReader;
+    clockIntervalMs?: number;
+}
+
+export async function benchLockCli(argv: string[], deps: BenchLockCliDeps = {}): Promise<number> {
     const separator = argv.indexOf('--');
     const ownArgs = separator >= 0 ? argv.slice(0, separator) : argv;
     const command = separator >= 0 ? argv.slice(separator + 1) : [];
@@ -549,6 +648,7 @@ export async function benchLockCli(argv: string[]): Promise<number> {
             path: { type: 'string' },
             'timeout-minutes': { type: 'string' },
             'ownerless-stale-minutes': { type: 'string' },
+            'clock-file': { type: 'string' },
             json: { type: 'boolean' },
             help: { type: 'boolean', short: 'h' },
         },
@@ -613,7 +713,11 @@ export async function benchLockCli(argv: string[]): Promise<number> {
         case 'run': {
             if (command.length === 0) throw new Error('run needs a command after --');
             installShutdownHandlers();
-            return runUnderLock(command, { path, what: values.what ?? command.join(' '), command: command.join(' '), timeoutMs, ownerlessStaleMs, log });
+            return runUnderLock(
+                command,
+                { path, what: values.what ?? command.join(' '), command: command.join(' '), timeoutMs, ownerlessStaleMs, log },
+                { file: values['clock-file'] ?? `${path}.clock.json`, read: deps.readClock ?? readNvidiaSmiClocks, intervalMs: deps.clockIntervalMs },
+            );
         }
         default:
             throw new Error(`unknown command "${action}"; see --help`);

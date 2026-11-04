@@ -17,6 +17,7 @@ import { resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import type { RunSummary } from '../../contract.ts';
 import { gitCommit } from '../../measured-commit.ts';
+import { clockNoteRowsFromOption, isNvidiaDeviceName } from '../../clock-note.ts';
 import { browserFromUserAgent, deviceNameFromAdapter, formatValue, repeatedRunRows, type MetricRow } from '../trace-bench/csv-rows.ts';
 
 const CSV_HEADER = 'date,commit,device,browser,scene,metric,value';
@@ -68,10 +69,10 @@ async function main(): Promise<void> {
     const { values, positionals } = parseArgs({
         args: process.argv.slice(2),
         allowPositionals: true,
-        options: { append: { type: 'boolean' }, commit: { type: 'string' } },
+        options: { append: { type: 'boolean' }, commit: { type: 'string' }, 'clock-file': { type: 'string' } },
     });
     if (positionals.length === 0) {
-        console.error('Usage: node tools/gpu/pages/tlas-bench/to-csv.ts <runner.json> [more.json ...] [--append] [--commit <hash>]');
+        console.error('Usage: node tools/gpu/pages/tlas-bench/to-csv.ts <runner.json> [more.json ...] [--append] [--commit <hash>] [--clock-file <file>]');
         process.exit(2);
     }
     const groups = new Map<string, { prefix: string[]; runs: MetricRow[][] }>();
@@ -92,9 +93,11 @@ async function main(): Promise<void> {
             groups.set(device, group);
         }
     }
+    // The RTX's clock during the runs (bench-lock run's DDGI_CLOCK_FILE, or --clock-file); NVIDIA rows only.
+    const clockNotes = clockNoteRowsFromOption(values['clock-file']);
     const lines: string[] = [];
     for (const { prefix, runs } of groups.values()) {
-        const rows = runs.length === 1 ? runs[0] : repeatedRunRows(runs);
+        const rows = [...(runs.length === 1 ? runs[0] : repeatedRunRows(runs)), ...(isNvidiaDeviceName(prefix[2]) ? clockNotes : [])];
         lines.push(...rows.map((row) => [...prefix, row.scene, row.metric, formatValue(row.value)].join(',')));
     }
     if (lines.length === 0) {

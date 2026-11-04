@@ -19,6 +19,8 @@
  *   --browser <text>    default: derived from the page's user agent, for example "Chrome 156.0.8078.74 headless"
  *   --date <YYYY-MM-DD> default: the day the run started
  *   --include-failed    also take pages that did not pass (a disagreement fails a page; its speeds are suspect)
+ *   --clock-file <file> add `note/sm_clock_mhz` (and min, max, memory) rows to the NVIDIA runs, from the summary
+ *                       `bench-lock run` writes; default: the file named by DDGI_CLOCK_FILE, which it sets
  *
  * Without --append or --out the rows are printed. Columns are those of
  * bench/results/README.md: date, commit, device, browser, scene, metric, value.
@@ -30,6 +32,7 @@ import { dirname, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import type { PageSummary, RunSummary } from '../../contract.ts';
 import { gitCommit } from '../../measured-commit.ts';
+import { clockNoteRowsFromOption, isNvidiaDeviceName } from '../../clock-note.ts';
 import { browserFromUserAgent, deviceNameFromAdapter, formatValue, repeatedRunRows, traceBenchRows, type MetricRow } from './csv-rows.ts';
 import type { TraceBenchData } from './results.ts';
 
@@ -77,11 +80,12 @@ async function main(): Promise<void> {
             browser: { type: 'string' },
             date: { type: 'string' },
             'include-failed': { type: 'boolean' },
+            'clock-file': { type: 'string' },
         },
     });
     if (positionals.length < 1) {
         console.error(
-            'Usage: node tools/gpu/pages/trace-bench/to-csv.ts <runner.json> [more.json ...] [--append] [--out file] [--commit h] [--device n] [--browser b] [--date d] [--include-failed]',
+            'Usage: node tools/gpu/pages/trace-bench/to-csv.ts <runner.json> [more.json ...] [--append] [--out file] [--commit h] [--device n] [--browser b] [--date d] [--include-failed] [--clock-file f]',
         );
         process.exit(2);
     }
@@ -111,11 +115,12 @@ async function main(): Promise<void> {
         }
     }
 
+    const clockNotes = clockNoteRowsFromOption(values['clock-file']);
     const lines: string[] = [];
     for (const runs of groups.values()) {
         // Repeated runs share the first run's date and browser; the rows say how many there were.
         const context = runs[0].context;
-        const rows = runs.length === 1 ? runs[0].rows : repeatedRunRows(runs.map((run) => run.rows));
+        const rows = [...(runs.length === 1 ? runs[0].rows : repeatedRunRows(runs.map((run) => run.rows))), ...(isNvidiaDeviceName(context.device) ? clockNotes : [])];
         const prefix = [context.date, context.commit, context.device, context.browser];
         lines.push(...rows.map((row) => [...prefix, row.scene, row.metric, formatValue(row.value)].join(',')));
     }

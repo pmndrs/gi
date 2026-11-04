@@ -121,6 +121,24 @@ function Add-NativeCsvRows([string[]]$Rows) {
     Write-Host "Appended $($Rows.Count) rows for this scene to $Csv"
 }
 
+# The NVIDIA GPU's clock while this run was going: tools/reference/bench-lock.ts `run` samples nvidia-smi and
+# keeps a summary in the file named by DDGI_CLOCK_FILE (tools/gpu/clock-note.ts). Rows are note/sm_clock_mhz
+# (median over the samples under load, all samples if fewer than three) plus min, max and the memory clock.
+# Returns nothing when the file is missing, so a run outside `bench-lock run` simply has no note.
+function Get-ClockNoteRows {
+    if (-not $env:DDGI_CLOCK_FILE -or -not (Test-Path -LiteralPath $env:DDGI_CLOCK_FILE)) { return @() }
+    try { $clock = Get-Content -LiteralPath $env:DDGI_CLOCK_FILE -Raw | ConvertFrom-Json } catch { return @() }
+    $useLoaded = $clock.smMhzLoaded -and $clock.memMhzLoaded -and $clock.loadedSamples -ge 3
+    $sm = if ($useLoaded) { $clock.smMhzLoaded } else { $clock.smMhz }
+    $mem = if ($useLoaded) { $clock.memMhzLoaded } else { $clock.memMhz }
+    return @(
+        ,@('note/sm_clock_mhz', [double]$sm.median)
+        ,@('note/sm_clock_min_mhz', [double]$sm.min)
+        ,@('note/sm_clock_max_mhz', [double]$sm.max)
+        ,@('note/mem_clock_mhz', [double]$mem.median)
+    )
+}
+
 # "NVIDIA GeForce RTX 3060 Laptop GPU" -> "RTX 3060 Laptop"
 function Get-ShortDeviceName([string]$Name) {
     return ($Name.Trim() -replace '^NVIDIA GeForce ', '' -replace ' GPU$', '').Trim()
@@ -318,6 +336,7 @@ try {
                 $rows.Add(@('cpu_ms_frame', [math]::Round($cpuStats['Frame'].Mean, 3)))
                 $rows.Add(@('cpu_ms_frame_median', [math]::Round($cpuStats['Frame'].Median, 3)))
             }
+            foreach ($note in (Get-ClockNoteRows)) { $rows.Add($note) }
             if ($traceMedian -gt 0) { $rows.Add(@('mrays_per_s', [math]::Round($raysTraced / $traceMedian / 1000, 0))) }
             $sceneRows = foreach ($row in $rows) {
                 $value = if ($row[1] -is [double]) { $row[1].ToString('0.####', $script:Invariant) } else { [string]$row[1] }

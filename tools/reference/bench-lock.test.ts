@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promise
 import { hostname, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { CLOCK_FILE_ENV, clockNoteRows, parseClockLine, readClockSummary, summarizeClockSamples } from '../gpu/clock-note.ts';
 import {
     acquireBenchLock,
     benchLockCli,
@@ -13,6 +14,7 @@ import {
     OWNER_FILE,
     readLockState,
     releaseBenchLock,
+    startClockSampler,
     systemProbe,
     withBenchLock,
     type BenchLockOwner,
@@ -257,4 +259,79 @@ describe('system probe', () => {
         // Pids are multiples of 4 on Windows and small elsewhere; this one is not in use.
         expect(systemProbe.isAlive(2 ** 30 + 1)).toBe(false);
     }, 30_000);
+});
+
+describe('GPU clock sampling', () => {
+    it('parses the nvidia-smi line and ignores anything else', () => {
+        expect(parseClockLine('1215, 6001, 41\r\n')).toEqual({ smMhz: 1215, memMhz: 6001, utilizationPercent: 41 });
+        expect(parseClockLine('1215, 6001, [N/A]')).toBeNull();
+        expect(parseClockLine('')).toBeNull();
+    });
+
+    it('summarizes min / median / max, and takes the headline from samples under load', () => {
+        const idle = { smMhz: 210, memMhz: 810, utilizationPercent: 2 };
+        const busy = (smMhz: number) => ({ smMhz, memMhz: 6001, utilizationPercent: 98 });
+        const summary = summarizeClockSamples([idle, idle, busy(1800), busy(2100), busy(1950), busy(2100)])!;
+        expect(summary.samples).toBe(6);
+        expect(summary.loadedSamples).toBe(4);
+        expect(summary.smMhz).toEqual({ min: 210, median: 1875, max: 2100 });
+        expect(summary.smMhzLoaded).toEqual({ min: 1800, median: 2025, max: 2100 });
+        expect(clockNoteRows(summary).find((row) => row.metric === 'note/sm_clock_mhz')?.value).toBe(2025);
+        // Too few loaded samples to trust: the headline falls back to every sample.
+        const mostlyIdle = summarizeClockSamples([idle, idle, idle, busy(2100)])!;
+        expect(clockNoteRows(mostlyIdle).find((row) => row.metric === 'note/sm_clock_mhz')?.value).toBe(210);
+        expect(summarizeClockSamples([])).toBeNull();
+    });
+
+    it('samples while running, keeps a readable file, and does nothing without nvidia-smi', async () => {
+        const file = join(folder, 'clock.json');
+        let calls = 0;
+        const sampler = await startClockSampler({ file, intervalMs: 5, read: async () => `${1000 + 100 * calls++}, 6001, 90` });
+        expect(sampler).not.toBeNull();
+        await new Promise((done) => setTimeout(done, 60));
+        // Readable while still running.
+        expect(readClockSummary(file)?.samples).toBeGreaterThanOrEqual(2);
+        const summary = (await sampler!.stop())!;
+        expect(summary.smMhz.min).toBe(1000);
+        expect(summary.smMhz.max).toBeGreaterThan(1000);
+        expect(readClockSummary(file)?.samples).toBe(summary.samples);
+
+        expect(await startClockSampler({ file: join(folder, 'none.json'), read: async () => null })).toBeNull();
+        expect(existsSync(join(folder, 'none.json'))).toBe(false);
+    });
+
+    it('run writes the clock file, prints the range and passes the file to its command', async () => {
+        const file = join(folder, 'run-clock.json');
+        const out = join(folder, 'clock-env.txt');
+        const script = join(folder, 'print-clock-env.mjs');
+        await writeFile(script, `import { writeFileSync } from 'node:fs';
+writeFileSync(${JSON.stringify(out)}, process.env.${CLOCK_FILE_ENV} ?? 'unset');
+`);
+        const silence = { log: console.log, error: console.error };
+        const printed: string[] = [];
+        console.log = () => undefined;
+        console.error = (message: string) => void printed.push(String(message));
+        try {
+            delete process.env[LOCK_HELD_ENV];
+            const code = await benchLockCli(['run', '--path', lockPath, '--clock-file', file, '--', 'node', script], { readClock: async () => '1500, 6001, 80', clockIntervalMs: 10 });
+            expect(code).toBe(0);
+        } finally {
+            console.log = silence.log;
+            console.error = silence.error;
+        }
+        expect(await readFile(out, 'utf8')).toBe(file);
+        expect(readClockSummary(file)?.smMhz).toEqual({ min: 1500, median: 1500, max: 1500 });
+        expect(printed.some((line) => line.includes('GPU clock') && line.includes('median 1500'))).toBe(true);
+
+        // No nvidia-smi: the command runs, no file is written and the variable is not set.
+        await rm(file);
+        console.error = () => undefined;
+        try {
+            expect(await benchLockCli(['run', '--path', lockPath, '--clock-file', file, '--', 'node', script], { readClock: async () => null })).toBe(0);
+        } finally {
+            console.error = silence.error;
+        }
+        expect(await readFile(out, 'utf8')).toBe('unset');
+        expect(existsSync(file)).toBe(false);
+    }, 60_000);
 });
