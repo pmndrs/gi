@@ -210,7 +210,8 @@ export interface InstanceDescriptor {
  * - Directional: `intensity` is irradiance at normal incidence (a white
  *   diffuse surface facing the light reflects radiance `color * intensity / π`).
  * - Point and spot: `intensity` is radiant intensity; irradiance falls off as
- *   `intensity / distance²`, windowed to zero at `range`.
+ *   `intensity / distance²`, windowed to zero at `range`. `range: 0` means no
+ *   window, as three.js's `distance = 0` does.
  * - Emissive surfaces and the sky: radiance.
  */
 interface LightCommon {
@@ -238,7 +239,11 @@ export interface DirectionalLightDescriptor extends LightCommon {
 export interface PointLightDescriptor extends LightCommon {
     readonly type: 'point';
     readonly position: Vec3;
-    /** Distance at which the light reaches zero. Required: unbounded lights can't be culled. */
+    /**
+     * Distance at which the light reaches zero. Required, so culling is a
+     * choice: `0` means no limit (three.js's `distance = 0`). Such a light is
+     * never culled and costs every probe.
+     */
     readonly range: number;
     /** Radius of the emitting sphere, for soft shadows. Defaults to 0. */
     readonly radius?: number;
@@ -248,6 +253,7 @@ export interface SpotLightDescriptor extends LightCommon {
     readonly type: 'spot';
     readonly position: Vec3;
     readonly direction: Vec3;
+    /** As for point lights: `0` means no limit. */
     readonly range: number;
     /** Half-angle where the falloff starts, radians. */
     readonly innerConeAngle: number;

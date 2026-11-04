@@ -1,6 +1,6 @@
 # Platform API (draft for T0.11)
 
-Status: **first draft, before the spikes.** T0.8 (three.js), T0.9 (Babylon) and T0.10 (BVH) will test the riskiest parts. This page gets revised after them.
+Status: **signed off by Dennis, 2026-11-04, and revised after the spikes** (T0.8 three.js, T0.9 Babylon, T0.10 BVH). The changes are listed under "Revisions" at the end.
 
 The TypeScript is in [`packages/ddgi-core/src/platform/contract/`](../../packages/ddgi-core/src/platform/contract/). It holds types only, plus two error classes. This page explains it in plain language and walks two future GI techniques (voxels and surfels) through it, to check it isn't shaped only for DDGI.
 
@@ -55,7 +55,7 @@ The lifecycle names match the pmndrs siblings: `prepare()`, `isReady`, `encode()
 - **Textures** come in as any image source, or as a same-device `GPUTexture`. The platform always makes its own downsized atlas copy, so the host can free the source.
 - **`contributesToGI`** per instance. Characters and small props still *receive* GI through the shading module, but rays ignore them, which is what shipping engines do.
 - **Deforming meshes** keep their triangles. The host hands over a GPU buffer of positions each frame, and the BVH is refit on the GPU from it.
-- **Lights** use three.js's physical units: directional intensity is irradiance, point and spot intensity is radiant intensity, and emission and sky are radiance. So the three adapter passes values straight through. `range` is required for point and spot lights, because unbounded lights can't be culled. Light **group** membership (0–3) is scene data, so it lives on the light. Group *weights* belong to the technique.
+- **Lights** use three.js's physical units: directional intensity is irradiance, point and spot intensity is radiant intensity, and emission and sky are radiance. So the three adapter passes values straight through. `range` is required for point and spot lights. `range: 0` means "no limit", as in three.js (`distance = 0`): such a light is never culled, so it costs every probe. Light **group** membership (0–3) is scene data, so it lives on the light. Group *weights* belong to the technique.
 - **Nothing recompiles.** Every table (meshes, instances, materials, lights) is fixed capacity and grows by reallocating, never by changing shader code.
 
 ### What techniques see
@@ -150,12 +150,28 @@ Gaps:
   - Are the `GiRay`/`GiHit` structs and the inline `giTraceClosest`/`giTraceAny` signatures enough?
   - What is the real storage-buffer count?
   - Should a batch mode exist at all, or is inline tracing always better?
+  - Answered under "After T0.10" below.
 
 ## What happens after the spikes
 
 The answers go in PROGRESS. Any change to the contract is made in both the TypeScript and this page, and listed in a "Revisions" section here.
 
 ## Revisions
+
+### After T0.10 (BVH), 2026-11-04
+
+- **Confirmed: `GiRay`, `GiHit` and the inline `giTraceClosest` / `giTraceAny` are enough.** The oracle and the benchmarks ran through exactly these. Batches write `GiHitRecord`, because WGSL `bool` can't be stored in a buffer (already in the contract).
+- **The tracer's real binding cost:** inline tracing binds **3 storage buffers** (top level, nodes, triangles). A batch kernel binds **5** (those plus the ray and hit buffers). Measured on both GPUs, against a default limit of 8 per shader stage.
+- **Budget for a DDGI trace kernel, on a default device (8 storage buffers):**
+  - ray queries: 3;
+  - scene copy and hit shading together: at most 2. Vertex attributes (normals, uvs) go in one buffer with offsets, and instances, materials and lights in one table buffer;
+  - the technique's own data: the remaining 3, though DDGI mostly needs textures.
+  - The scene-copy task in M1 (T1.2) holds this. If it can't, the platform asks the host for a raised limit (the host owns the device and already raises limits for three) before it packs further.
+- **Both tracing modes stay. Inline is the default.**
+  - DDGI traces, shades and accumulates in one kernel, so rays and hits never go to memory. The DDGI update loop (T1.5) uses inline tracing.
+  - `encodeBatch` stays for techniques that want separate passes, and the oracle and benchmarks use it. It costs 2 more storage buffers.
+  - T0.10 didn't time inline against batch. T1.5 does, if the update cost comes near its budget.
+- **Change: `range: 0` on a point or spot light means "no limit".** Before, `range` had to be positive. three's `distance = 0` already means unlimited, so the three adapter passes it straight through. Such a light is never culled. This is host-facing, but it only allows a value three already uses.
 
 ### After T0.8 (three.js) and T0.9 (Babylon), 2026-11-04
 

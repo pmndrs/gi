@@ -45,8 +45,10 @@ import type { WgslModule } from './wgsl';
  *
  * Calling these from a technique's own kernel ("inline" tracing) lets the
  * kernel trace, shade and accumulate without writing rays and hits to memory.
+ * Inline is the default, and DDGI uses it. Inline tracing binds 3 storage
+ * buffers (measured in T0.10), counted in `module.storageBufferCount`.
  * For techniques that prefer separate passes, {@link RayQueries.encodeBatch}
- * runs a batch from buffers.
+ * runs a batch from buffers. Its kernel binds 5 (the same 3, plus rays and hits).
  *
  * `GiHit` is for function results only: WGSL `bool` can't be stored in a
  * buffer. Batches write `GiHitRecord` instead (24 bytes, T0.10):
