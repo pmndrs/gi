@@ -280,27 +280,73 @@ export type LightChanges =
 
 /**
  * The sky, seen by rays that miss all geometry. The platform projects it into
- * a small engine-neutral form (low-order SH plus a small octahedral map) by
- * compute, so tracing never samples the host's environment format directly.
+ * a small engine-neutral form by compute: irradiance as spherical harmonics
+ * (bands 0, 1, 2 and 4) and a 256 x 128 equirectangular radiance map for rays
+ * that miss, so tracing never samples the host's environment format directly.
+ * The projection runs in the next `encode` after `setEnvironment`, and only
+ * then: a texture is read at that moment, so after changing its contents call
+ * `setEnvironment` again.
+ *
+ * World space is right-handed with +Y up, as in three.js.
+ *
+ * **`equirect` layout** (three.js's `equirectUV`, so three's equirect
+ * textures can be passed straight in): a world direction d is found at the
+ * WebGPU texture coordinate
+ *
+ *     u = atan2(d.z, d.x) / (2 pi) + 0.5,    v = asin(d.y) / pi + 0.5
+ *
+ * - v = 0, the texture's first row in memory, is the nadir (-Y); the last row
+ *   is the zenith (+Y). (three stores its equirect textures this way: EXR and
+ *   HDR loaders write rows bottom-up, and images with `flipY` are flipped on
+ *   upload.) An image stored top row first, as image files are, must be
+ *   flipped when uploaded.
+ * - u = 0 and 1 are -X, u = 0.25 is -Z, u = 0.5 is +X, u = 0.75 is +Z, so u
+ *   runs clockwise seen from above (+Y). u wraps at -X.
+ *
+ * **`cube` layout:** WebGPU's own cube addressing, looked up with the world
+ * direction as it is (layers +X, -X, +Y, -Y, +Z, -Z).
+ *
+ * **`rotationY`** turns the environment about +Y, counter-clockwise seen from
+ * above (right-handed): what the unturned texture shows along d appears along
+ * R_y(rotationY) d, as three's `scene.environmentRotation.y` does.
+ *
+ * Float textures that can't be filtered (`rgba32float` and the like) are read
+ * with nearest samples. Formats that can't be sampled as float, and textures
+ * of the wrong shape, are refused with a console warning and give a black sky.
  */
 export type EnvironmentDescriptor =
     | { readonly type: 'none' }
+    /** One radiance in every direction, below the horizon too. */
     | { readonly type: 'color'; readonly color: ColorRGB; readonly intensity?: number }
     | {
           readonly type: 'texture';
-          /** Same-device texture: a cube map, or a 2D equirectangular image. */
+          /** Same-device texture with TEXTURE_BINDING usage: a cube map (6 layers), or a 2D equirectangular image (see above). */
           readonly texture: GPUTexture;
           readonly layout: 'cube' | 'equirect';
+          /** Multiplies the texture's radiance. Defaults to 1. */
           readonly intensity?: number;
-          /** Rotation about +Y, radians. */
+          /** Rotation about +Y, radians (see above). Defaults to 0. */
           readonly rotationY?: number;
       }
+    /**
+     * The Preetham clear sky (Preetham, Shirley and Smits 1999), made by the
+     * same code as the repo's shared sky files: no sun disc (the sun is your
+     * directional light), black below the horizon, and calibrated so that flat
+     * open ground gets the Ineichen-Perez clear-sky share of the sun's light
+     * (DECISIONS 2026-11-04).
+     */
     | {
           readonly type: 'procedural';
-          /** Direction toward the sun, world space. */
+          /** Direction toward the sun, world space. Below 5 degrees of elevation the sky is made for a sun at 5 degrees (time of day is M2). */
           readonly sunDirection: Vec3;
-          /** Atmospheric haze, roughly 2 (clear) to 10 (hazy). */
+          /** Atmospheric haze, roughly 2 (clear) to 10 (hazy); clamped to the model's 1.7 to 20. Defaults to 2. */
           readonly turbidity?: number;
+          /**
+           * The illuminance, at normal incidence, of the sun this sky goes
+           * with: for a directional light, its `intensity` times the Rec. 709
+           * luminance of its `color`. The sky's brightness follows from it.
+           * Defaults to 1.
+           */
           readonly intensity?: number;
       };
 

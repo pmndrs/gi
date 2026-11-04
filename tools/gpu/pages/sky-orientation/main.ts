@@ -7,8 +7,9 @@
  * layout of `scenes/src/sky/equirect.ts`:
  *
  *  1. the platform path: the engine-free loader (`loadSkyFile` +
- *     `createSkyTexture`) to an `rgba16float` GPUTexture, sampled by a compute
- *     shader through `SKY_EQUIRECT_WGSL`;
+ *     `createSkyTexture`) to an `rgba16float` GPUTexture in the platform's
+ *     equirect texture order (zenith in the last row, since T1.4), sampled by
+ *     a compute shader through `SKY_EQUIRECT_WGSL`;
  *  2. the viewer path: three.js's `EXRLoader` and the viewer's sky dome,
  *     rendered by a 1-degree camera looking along each direction.
  *

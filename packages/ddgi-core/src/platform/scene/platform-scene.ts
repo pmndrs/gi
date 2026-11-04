@@ -25,6 +25,7 @@
  * frame whose commands copied out of it has been submitted.
  */
 
+import { DEFAULT_TURBIDITY } from '../sky/calibrated-sky.ts';
 import { GILimitError } from '../contract/errors.ts';
 import type { InstanceHandle, LightHandle, MaterialHandle, MeshHandle, TextureHandle } from '../contract/handles.ts';
 import type { Aabb, ColorRGB, Mat4, Vec3 } from '../contract/math.ts';
@@ -878,7 +879,8 @@ export class PlatformScene implements SceneApi, SceneCopy {
             floats[HEADER_WORD.environmentIntensity] = intensity;
         } else if (environment.type === 'procedural') {
             floats.set(normalized(environment.sunDirection, 'sunDirection'), HEADER_WORD.environmentSunDirection);
-            floats[HEADER_WORD.environmentTurbidity] = environment.turbidity ?? 3;
+            // One turbidity default for the platform and the sky files (T1.4).
+            floats[HEADER_WORD.environmentTurbidity] = environment.turbidity ?? DEFAULT_TURBIDITY;
             floats[HEADER_WORD.environmentIntensity] = environment.intensity ?? 1;
         } else if (environment.type === 'texture') {
             floats[HEADER_WORD.environmentIntensity] = environment.intensity ?? 1;

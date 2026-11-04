@@ -3,42 +3,30 @@
  * calibrated, equirectangular HDR image: the shared sky that the viewer,
  * Cycles, the native harness and the platform all read.
  *
- * What is in the image:
- *  - Above the horizon: the Preetham sky (`preetham.ts`) for the manifest's
- *    sun direction and turbidity, in linear Rec.709 RGB.
- *  - No sun disc. The sun is the manifest's directional light, which every
- *    renderer already has; drawing it into the sky too would count it twice.
- *  - Below the horizon: black. The ground is the scene's geometry, so each
- *    renderer gets its ground light from the same place (the scene), and an
- *    open scene's edge doesn't get light from below that no renderer can agree on.
- *
- * Brightness (the calibration): the image is scaled so that a flat, open,
- * upward-facing ground gets sky irradiance equal to a realistic share of the
- * sun's irradiance on that same ground:
- *
- *   E_sky,horizontal = ratio(elevation, turbidity) * E_sun * sin(elevation) * environment.intensity
- *
- * where `ratio` is the clear-sky diffuse-to-direct horizontal ratio of the
- * Ineichen-Perez model (`clear-sky-ratio.ts`) and E_sun is the sun's
- * luminance-weighted illuminance at normal incidence (manifest `intensity`
- * times the Rec.709 luminance of its `color`). Luminance is the Rec.709 Y of
- * the stored RGB, the same weights renderers use. The irradiance is measured
- * on the half floats actually written, so what a reader integrates is what
- * the calibration promised (to half-float rounding).
+ * The sky itself (Preetham, no sun disc, black below the horizon) and its
+ * calibration (the Ineichen-Perez share of the sun's light on open ground)
+ * are the core's `buildCalibratedSky`
+ * (`packages/ddgi-core/src/platform/sky/calibrated-sky.ts`), the same code
+ * the platform runs for a `procedural` environment (T1.4). This file adds
+ * what is manifest-specific: which light is the sky's sun, and how bright it is.
  */
 
+import type { EnvironmentDescriptor } from '../../../packages/ddgi-core/src/platform/contract/scene.ts';
+import {
+    buildCalibratedSky,
+    DEFAULT_SKY_HEIGHT,
+    DEFAULT_SKY_WIDTH,
+    DEFAULT_TURBIDITY,
+    measureHalfImage,
+    measureHorizontalIrradiance,
+    type HorizontalIrradiance,
+    type SkyCalibration,
+} from '../../../packages/ddgi-core/src/platform/sky/calibrated-sky.ts';
+import type { HalfRgbImage } from '../../../packages/ddgi-core/src/platform/sky/half-float.ts';
+import { rec709Luminance } from '../../../packages/ddgi-core/src/platform/sky/preetham.ts';
 import type { ManifestEnvironment, ManifestLight, SceneManifest, Vec3 } from '../manifest.ts';
-import { ineichenPerezClearSky, type ClearSkyIrradiance } from './clear-sky-ratio.ts';
-import { rowHorizontalIrradianceWeight, texelCentreDirection } from './equirect.ts';
-import { floatToHalf, halfToFloat, type HalfRgbImage } from './exr-half.ts';
-import { createPreethamSky, preethamSkyXyY, rec709Luminance, xyYToLinearRgb } from './preetham.ts';
 
-/** 512 x 256 texels, 0.7 degrees each: the sky has no sun disc and no sharp detail, so more would only make the file bigger. */
-export const DEFAULT_SKY_WIDTH = 512;
-export const DEFAULT_SKY_HEIGHT = 256;
-
-/** Preetham turbidity when the manifest leaves it out (the viewer's old `SkyMesh` default). */
-export const DEFAULT_TURBIDITY = 2;
+export { DEFAULT_SKY_HEIGHT, DEFAULT_SKY_WIDTH, DEFAULT_TURBIDITY, measureHalfImage, measureHorizontalIrradiance, type HorizontalIrradiance, type SkyCalibration };
 
 /** A directional light counts as the sky's sun when it travels within this angle of -sunDirection. */
 const SUN_MATCH_DEGREES = 1;
@@ -53,23 +41,6 @@ export interface SkySun {
     illuminance: number;
     /** Where the illuminance came from, in words (for the sidecar and messages). */
     source: string;
-}
-
-export interface SkyCalibration {
-    model: string;
-    clearSky: ClearSkyIrradiance;
-    /** environment.intensity: a plain multiplier on top of the calibrated sky (1 = as calibrated). */
-    intensity: number;
-    /** E_sun * sin(elevation): the sun's luminance-weighted irradiance on the ground. */
-    sunHorizontalIlluminance: number;
-    /** What the sky's luminance-weighted horizontal irradiance was scaled to. */
-    targetSkyHorizontalIlluminance: number;
-}
-
-/** Horizontal (upward-facing ground) irradiance delivered by an image, per channel and as luminance. */
-export interface HorizontalIrradiance {
-    rgb: [number, number, number];
-    luminance: number;
 }
 
 export interface SkyImage {
@@ -121,26 +92,6 @@ export function resolveSkySun(environment: ProceduralEnvironment, lights: readon
     return { direction, elevationRad, illuminance: given, source: 'environment.sunIlluminance (no sun light in this scene)' };
 }
 
-/** Sums radiance times each texel's horizontal-irradiance weight over the upper hemisphere. */
-export function measureHorizontalIrradiance(width: number, height: number, radianceAt: (index: number) => number): HorizontalIrradiance {
-    const rgb: [number, number, number] = [0, 0, 0];
-    for (let row = 0; row < height; row++) {
-        const weight = rowHorizontalIrradianceWeight(row, width, height);
-        if (weight === 0) continue;
-        for (let column = 0; column < width; column++) {
-            const base = (row * width + column) * 3;
-            rgb[0] += radianceAt(base) * weight;
-            rgb[1] += radianceAt(base + 1) * weight;
-            rgb[2] += radianceAt(base + 2) * weight;
-        }
-    }
-    return { rgb, luminance: rec709Luminance(rgb[0], rgb[1], rgb[2]) };
-}
-
-export function measureHalfImage(image: HalfRgbImage): HorizontalIrradiance {
-    return measureHorizontalIrradiance(image.width, image.height, (index) => halfToFloat(image.halves[index]));
-}
-
 export interface BuildSkyOptions {
     width?: number;
     height?: number;
@@ -150,46 +101,33 @@ export interface BuildSkyOptions {
 export function buildSkyImage(manifest: Pick<SceneManifest, 'environment' | 'lights'>, options: BuildSkyOptions = {}): SkyImage {
     const environment = manifest.environment;
     if (environment.type !== 'procedural') throw new Error(`only a procedural environment becomes a sky file (this one is "${environment.type}")`);
-    const width = options.width ?? DEFAULT_SKY_WIDTH;
-    const height = options.height ?? DEFAULT_SKY_HEIGHT;
-    if (height % 2 !== 0) throw new Error('the sky height must be even, so the horizon falls on a row boundary');
-
     const sun = resolveSkySun(environment, manifest.lights);
-    const turbidity = environment.turbidity ?? DEFAULT_TURBIDITY;
-    const preetham = createPreethamSky(sun.direction, turbidity);
+    const sky = buildCalibratedSky({
+        sunDirection: environment.sunDirection,
+        turbidity: environment.turbidity,
+        sunIlluminance: sun.illuminance,
+        intensity: environment.intensity,
+        width: options.width,
+        height: options.height,
+    });
+    return { image: sky.image, sun, turbidity: sky.turbidity, calibration: sky.calibration, measured: sky.measured };
+}
 
-    // Unscaled sky in linear RGB (Preetham's kcd/m^2, which the calibration replaces).
-    const radiance = new Float64Array(width * height * 3);
-    for (let row = 0; row < height / 2; row++) {
-        for (let column = 0; column < width; column++) {
-            const direction = texelCentreDirection(column, row, width, height);
-            const rgb = xyYToLinearRgb(preethamSkyXyY(preetham, direction));
-            radiance.set(rgb, (row * width + column) * 3);
-        }
-    }
-
-    const clearSky = ineichenPerezClearSky(sun.elevationRad, turbidity);
-    const intensity = environment.intensity ?? 1;
-    const sunHorizontalIlluminance = sun.illuminance * Math.sin(sun.elevationRad);
-    const targetSkyHorizontalIlluminance = clearSky.skyToSunHorizontalRatio * sunHorizontalIlluminance * intensity;
-
-    const unscaled = measureHorizontalIrradiance(width, height, (index) => radiance[index]);
-    const scale = unscaled.luminance > 0 ? targetSkyHorizontalIlluminance / unscaled.luminance : 0;
-    const halves = new Uint16Array(width * height * 3);
-    for (let i = 0; i < halves.length; i++) halves[i] = floatToHalf(radiance[i] * scale);
-    const image: HalfRgbImage = { width, height, halves };
-
+/**
+ * The platform environment that gives the same sky as the manifest's sky
+ * file: `procedural`, with `intensity` the illuminance of the sun the sky goes
+ * with (the platform's meaning of `intensity` for a procedural sky, see
+ * `contract/scene.ts`) times the manifest's own `intensity`. The platform then
+ * builds exactly the file's pixels.
+ */
+export function platformSkyEnvironment(manifest: Pick<SceneManifest, 'environment' | 'lights'>): EnvironmentDescriptor {
+    const environment = manifest.environment;
+    if (environment.type !== 'procedural') throw new Error(`only a procedural environment has a platform sky (this one is "${environment.type}")`);
+    const sun = resolveSkySun(environment, manifest.lights);
     return {
-        image,
-        sun,
-        turbidity,
-        calibration: {
-            model: 'Ineichen and Perez 2002 clear sky (sea level), diffuse-to-direct horizontal ratio',
-            clearSky,
-            intensity,
-            sunHorizontalIlluminance,
-            targetSkyHorizontalIlluminance,
-        },
-        measured: measureHalfImage(image),
+        type: 'procedural',
+        sunDirection: environment.sunDirection,
+        turbidity: environment.turbidity ?? DEFAULT_TURBIDITY,
+        intensity: sun.illuminance * (environment.intensity ?? 1),
     };
 }

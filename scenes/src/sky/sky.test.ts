@@ -7,10 +7,10 @@ import { readExr } from '../../../tools/compare/exr.ts';
 import { compareWithCommitted, loadSkyManifests, skyDirectory } from '../../../tools/sky/generate.ts';
 import type { ManifestLight, SceneManifest } from '../manifest.ts';
 import { OPEN_GROUND_ALBEDO } from '../procedural/open-ground.ts';
-import { ineichenPerezClearSky, kastenYoungAirMass } from './clear-sky-ratio.ts';
+import { ineichenPerezClearSky, kastenYoungAirMass } from '../../../packages/ddgi-core/src/platform/sky/clear-sky-ratio.ts';
 import { directionToEquirectUv, equirectUvToDirection, rowHorizontalIrradianceWeight, rowSolidAngle } from './equirect.ts';
 import { decodeHalfExr, encodeHalfExr, floatToHalf, halfImageToFloats, halfToFloat, type HalfRgbImage } from './exr-half.ts';
-import { createPreethamSky, perez, preethamSkyXyY } from './preetham.ts';
+import { createPreethamSky, perez, preethamSkyXyY } from '../../../packages/ddgi-core/src/platform/sky/preetham.ts';
 import { decodeSkyFile, skyFileName, type SkySidecar } from './sky-file.ts';
 import { buildSkyImage, measureHalfImage, resolveSkySun, type ProceduralEnvironment } from './sky-image.ts';
 import { skyImageToRgbaHalves } from './sky-texture.ts';
@@ -96,11 +96,14 @@ describe('the sky file format (half-float OpenEXR)', () => {
         expect(Array.from(fromCompare.rgb)).toEqual(Array.from(halfImageToFloats(image)));
     });
 
-    it('expands to RGBA halves with alpha 1 for the GPU texture', () => {
+    it('expands to RGBA halves with alpha 1 for the GPU texture, rows flipped so the zenith is the last row (the equirect contract)', () => {
         const rgba = skyImageToRgbaHalves(image);
         expect(rgba.length).toBe(image.width * image.height * 4);
         expect(halfToFloat(rgba[3])).toBe(1);
-        expect(rgba[4 * 10 + 2]).toBe(image.halves[3 * 10 + 2]);
+        // Texture row 0 is the image's last row (the nadir), texture row height - 1 its first (the zenith).
+        const lastImageRow = (image.height - 1) * image.width;
+        expect(rgba[4 * 10 + 2]).toBe(image.halves[3 * (lastImageRow + 10) + 2]);
+        expect(rgba[4 * (lastImageRow + 10) + 2]).toBe(image.halves[3 * 10 + 2]);
     });
 });
 

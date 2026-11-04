@@ -24,7 +24,7 @@
  * {@link checkTurbidity} refuses them.
  *
  * The absolute luminance Yz is in kcd/m^2, but this project rescales the
- * whole sky to a calibrated brightness (`sky-image.ts`), so only the sky's
+ * whole sky to a calibrated brightness (`calibrated-sky.ts`), so only the sky's
  * shape and colour from this file are used.
  */
 

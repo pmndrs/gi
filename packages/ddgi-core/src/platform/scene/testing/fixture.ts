@@ -7,6 +7,7 @@
  * reader in the unit tests) with that memory. Test-only.
  */
 
+import { DEFAULT_TURBIDITY } from '../../sky/calibrated-sky.ts';
 import type { InstanceHandle, LightHandle, MaterialHandle, MeshHandle, TextureHandle } from '../../contract/handles.ts';
 import type {
     EnvironmentDescriptor,
@@ -683,7 +684,7 @@ function checkEnvironment(failures: string[], environment: EnvironmentDescriptor
         compareArrays(failures, 'environment radiance', actual.radiance, environment.color.map((value) => value * intensity), 1e-6);
     } else if (environment.type === 'procedural') {
         compareArrays(failures, 'sun direction', actual.sunDirection, unit(environment.sunDirection), 1e-6);
-        if (!close(actual.turbidity, environment.turbidity ?? 3, 1e-6)) failures.push(`turbidity ${actual.turbidity}`);
+        if (!close(actual.turbidity, environment.turbidity ?? DEFAULT_TURBIDITY, 1e-6)) failures.push(`turbidity ${actual.turbidity}`);
         if (!close(actual.intensity, environment.intensity ?? 1, 1e-6)) failures.push(`environment intensity ${actual.intensity}`);
     }
 }

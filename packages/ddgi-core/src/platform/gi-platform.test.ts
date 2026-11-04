@@ -12,7 +12,29 @@ import { TOP_HEADER_WORD } from './trace/layout.ts';
 import type { TraceSceneData } from './trace/scene-assembly.ts';
 import type { TopLevelBvh } from './trace/top-level.ts';
 
-/** The fake GPU plus what the platform needs beyond the scene copy: layouts, `lost`, a few limits. */
+/** A texture stand-in for hit shading's sky (T1.4): it only needs to exist, give views and be destroyed. */
+function fakeTexture(descriptor: GPUTextureDescriptor): unknown {
+    const size = descriptor.size as GPUExtent3DDict;
+    return {
+        label: descriptor.label ?? '',
+        width: size.width,
+        height: size.height ?? 1,
+        depthOrArrayLayers: size.depthOrArrayLayers ?? 1,
+        format: descriptor.format,
+        usage: descriptor.usage,
+        dimension: '2d',
+        destroyed: false,
+        createView: () => ({}),
+        destroy(this: { destroyed: boolean }) {
+            this.destroyed = true;
+        },
+    };
+}
+
+/** No-op compute pass, for the sky projection the platform records on its first frame. */
+const FAKE_COMPUTE_PASS = { setBindGroup() {}, setPipeline() {}, dispatchWorkgroups() {}, end() {} };
+
+/** The fake GPU plus what the platform needs beyond the scene copy: layouts, `lost`, a few limits, and the sky's textures (T1.4). */
 function createPlatformGpu(limits: Partial<GPUSupportedLimits> = {}): FakeGpu & { loseDevice(): Promise<void> } {
     const fake = createFakeGpu(limits);
     let loseDevice: () => void = () => {};
@@ -24,10 +46,15 @@ function createPlatformGpu(limits: Partial<GPUSupportedLimits> = {}): FakeGpu & 
         lost,
         createBindGroupLayout: (descriptor: GPUBindGroupLayoutDescriptor) => ({ descriptor }),
         createPipelineLayout: (descriptor: GPUPipelineLayoutDescriptor) => ({ descriptor }),
+        features: new Set<string>(),
+        createTexture: fakeTexture,
+        createSampler: () => ({}),
     });
+    (device.queue as Record<string, unknown>).writeTexture = () => {};
     Object.assign(device.limits as object, { maxBindGroups: 4, maxComputeWorkgroupsPerDimension: 65535, ...limits });
     return {
         ...fake,
+        createEncoder: () => Object.assign(fake.createEncoder(), { beginComputePass: () => FAKE_COMPUTE_PASS }),
         loseDevice: async () => {
             loseDevice();
             await lost;
