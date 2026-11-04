@@ -1,0 +1,42 @@
+{
+    "scene": "sponza",
+    "file": "sponza.exr",
+    "generator": "tools/sky/generate.ts",
+    "skyModel": "Preetham, Shirley and Smits 1999 (no sun disc; black below the horizon)",
+    "width": 512,
+    "height": 256,
+    "layout": "equirectangular, +Y up; row 0 is the zenith; u = atan2(z, x) / (2 pi) + 0.5, v (down from the top) = acos(y) / pi; the same as three.js equirectUV",
+    "sunDirection": [
+        -0.314485,
+        0.943456,
+        -0.104828
+    ],
+    "sunElevationDeg": 70.64,
+    "turbidity": 3,
+    "sunIlluminance": 2.86023,
+    "sunSource": "lights[0] \"sun\": intensity 3 x luminance of its colour",
+    "calibration": {
+        "model": "Ineichen and Perez 2002 clear sky (sea level), diffuse-to-direct horizontal ratio",
+        "skyToSunHorizontalRatio": 0.123093,
+        "diffuseFraction": 0.109602,
+        "airMass": 1.05946,
+        "intensity": 1,
+        "sunHorizontalIlluminance": 2.6985,
+        "targetSkyHorizontalIlluminance": 0.332168
+    },
+    "measured": {
+        "skyHorizontalIrradianceRgb": [
+            0.232642,
+            0.338109,
+            0.566378
+        ],
+        "skyHorizontalIlluminance": 0.332168,
+        "calibrationError": 3.26e-7
+    },
+    "flatEquivalentRadianceRgb": [
+        0.0740521,
+        0.107624,
+        0.180284
+    ],
+    "pixelSha256": "dc9e6425bc1db662b49bc4d003b5adae27fedfdfd62972a0bca0bcea871e7995"
+}

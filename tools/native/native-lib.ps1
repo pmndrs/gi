@@ -215,8 +215,19 @@ function New-HarnessIni {
     switch ($env.type) {
         'none' { $skyColor = '0 0 0'; $skyIntensity = 1 }
         'color' { $skyColor = ConvertTo-Vec $env.color; $skyIntensity = if ($null -ne $env.intensity) { $env.intensity } else { 1 } }
-        # The harness only has a flat sky colour, so a procedural sky becomes a plain blue-white sky.
-        'procedural' { $skyColor = '0.6 0.75 1.0'; $skyIntensity = 0.5 * $(if ($null -ne $env.intensity) { $env.intensity } else { 1 }) }
+        # The harness's shaders take one flat sky radiance for every ray that misses
+        # (app.skyRadiance), not an image, so a procedural sky becomes the shared sky
+        # file's flat equivalent: the uniform radiance that gives a flat open ground the
+        # same irradiance as the file, per channel (scenes/sky/<id>.json, written by
+        # tools/sky/generate.ts; environment.intensity is already in it). Unlike the file,
+        # the harness also returns it below the horizon.
+        'procedural' {
+            $sidecarPath = "$root/scenes/sky/$($Manifest.id).json"
+            if (-not (Test-Path $sidecarPath)) { throw "Sky sidecar $sidecarPath is missing; run 'node tools/sky/generate.ts'." }
+            $radiance = @((Get-Content -Raw $sidecarPath | ConvertFrom-Json).flatEquivalentRadianceRgb)
+            $skyIntensity = ($radiance | Measure-Object -Maximum).Maximum
+            $skyColor = ($radiance | ForEach-Object { Format-Number ($_ / $skyIntensity) 6 }) -join ' '
+        }
     }
 
     $showProbes = if ($Clean) { 0 } else { 1 }
@@ -264,7 +275,7 @@ function New-HarnessIni {
     $ini.Add("scene.screenshotPath=$screenshots")
     $ini.Add("scene.activeCamera=$($Camera - 1)")
     $ini.Add("scene.skyColor=$skyColor")
-    $ini.Add("scene.skyIntensity=$(Format-Number $skyIntensity)")
+    $ini.Add("scene.skyIntensity=$(Format-Number $skyIntensity 6)")
     $ini.Add('')
     $ini.Add('# scene lights (directional: lux as power; point and spot: candela as power, range as radius)')
 

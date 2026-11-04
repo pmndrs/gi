@@ -10,7 +10,8 @@
  * Nothing is added beyond what the manifest says: no fill light, no ambient,
  * no environment map. Every technique sees this same scene (DECISIONS: a fair
  * wipe), so whatever light a technique gets from the sky, it gets from the
- * manifest's sky. See `addSky` for how each technique takes it.
+ * manifest's sky: the shared sky file (`scene/sky.ts`). See `addSky` for how
+ * each technique takes it.
  */
 
 import {
@@ -19,6 +20,7 @@ import {
     Group,
     Scene,
     Vector3,
+    type DataTexture,
     type Light,
     type Mesh,
     type MeshStandardMaterial,
@@ -27,15 +29,14 @@ import {
 } from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { RectAreaLightTexturesLib } from 'three/addons/lights/RectAreaLightTexturesLib.js';
-import { SkyMesh } from 'three/addons/objects/SkyMesh.js';
-import { vec4 } from 'three/tsl';
-import { RectAreaLightNode, type Node } from 'three/webgpu';
+import { RectAreaLightNode } from 'three/webgpu';
 import { manifestLightToSceneLight, type ManifestEnvironment, type SceneManifest } from '../../../../scenes/src/manifest';
 import { buildProcedural } from '../../../../scenes/src/procedural';
 import { computeSceneStats, type SceneStats } from '../../../../scenes/src/stats';
 import { applyModelTransform, emissiveQuadLights, lightToThree, proceduralSceneToThree } from '../../../../scenes/src/three-scene';
 import { LAYER_DIRECT_LIGHTS, LAYER_VIEW_GEOMETRY } from './layers';
 import { findModelUrl } from './model-url';
+import { createSkyDome, loadSkyTexture } from './sky';
 
 export interface LoadProgress {
     /** Plain words for what is happening now. */
@@ -52,6 +53,8 @@ export interface LoadedScene {
     /** The manifest's lights and the emissive-quad area lights. */
     directLights: Light[];
     bounds: Box3;
+    /** The shared sky file as a three.js texture, for a procedural environment; null otherwise. */
+    sky: DataTexture | null;
     /** Length of the bounds' diagonal in metres; sets camera speed and clipping. */
     diagonal: number;
     stats: SceneStats;
@@ -66,53 +69,41 @@ export function nextFrame(): Promise<void> {
 const NO_SKY = new Color(0, 0, 0);
 
 /**
- * Size of the sky box. Its shader puts every vertex on the far plane, so the size only
- * has to keep the box around every camera (three's examples use the same value).
- */
-const SKY_BOX_SIZE = 450_000;
-
-/**
  * Puts the manifest's sky into the scene. Every technique draws the same sky; how much
  * light each one takes from it is part of what the comparison shows:
  *  - `LightProbeGrid` sees it in its cube-face captures, so the probes carry sky light.
  *  - VXGI has no sky term: its voxelizer skips the sky mesh, and it injects direct lights only.
+ * Surfaces get no light from the sky directly (no `scene.environment`); see `scene/sky.ts`.
  *
  * - `none`: a black world.
  * - `color`: a uniform background colour, scaled by `intensity`.
- * - `procedural`: three's Preetham sky (`SkyMesh`), with the manifest's sun direction and
- *   turbidity, scaled by `intensity`. The sun disc is off: the sun is the manifest's
- *   directional light, and must not be counted twice. Clouds are off. The Cycles
- *   reference uses a Nishita sky, so the two skies are close, not identical.
+ * - `procedural`: the shared sky file `scenes/sky/<scene id>.exr` (a calibrated Preetham
+ *   sky, black below the horizon), on a sky dome. It has no sun disc: the sun is the
+ *   manifest's directional light, and must not be counted twice. Cycles, the platform
+ *   and this viewer all read that one file, so the skies match. `intensity` is already
+ *   in the file.
+ *
+ * Returns the sky texture for a procedural sky, null otherwise.
  */
-function addSky(scene: Scene, environment: ManifestEnvironment): void {
+async function addSky(scene: Scene, manifest: SceneManifest): Promise<DataTexture | null> {
+    const environment: ManifestEnvironment = manifest.environment;
     switch (environment.type) {
         case 'none':
             scene.background = NO_SKY.clone();
-            return;
+            return null;
         case 'color': {
             const scale = environment.intensity ?? 1;
             scene.background = new Color().setRGB(environment.color[0] * scale, environment.color[1] * scale, environment.color[2] * scale);
-            return;
+            return null;
         }
         case 'procedural': {
             scene.background = NO_SKY.clone();
-            const sky = new SkyMesh();
-            sky.name = 'manifest-sky';
-            sky.scale.setScalar(SKY_BOX_SIZE);
-            sky.turbidity.value = environment.turbidity ?? sky.turbidity.value;
-            sky.sunPosition.value.set(...environment.sunDirection).normalize();
-            sky.showSunDisc.value = 0;
-            sky.cloudCoverage.value = 0;
-            sky.cloudSpeed.value = 0;
-            const intensity = environment.intensity ?? 1;
-            if (intensity !== 1) {
-                const radiance = sky.material.colorNode as unknown as { rgb: { mul(factor: number): Node<'vec3'> } };
-                sky.material.colorNode = vec4(radiance.rgb.mul(intensity), 1);
-            }
+            const sky = await loadSkyTexture(manifest.id);
+            const dome = createSkyDome(sky);
             // Layer 0 for the probe bake; the viewing layer for the cameras.
-            sky.layers.enable(LAYER_VIEW_GEOMETRY);
-            scene.add(sky);
-            return;
+            dome.layers.enable(LAYER_VIEW_GEOMETRY);
+            scene.add(dome);
+            return sky;
         }
     }
 }
@@ -158,6 +149,7 @@ function prepareMeshes(root: Object3D): void {
 
 /** Frees the GPU memory of a scene's geometry, materials and textures. Large scenes would otherwise pile up when switching. */
 export function disposeScene(loaded: LoadedScene): void {
+    loaded.sky?.dispose();
     loaded.scene.traverse((object) => {
         const mesh = object as Mesh;
         if (!mesh.isMesh) return;
@@ -173,7 +165,7 @@ export function disposeScene(loaded: LoadedScene): void {
 
 export async function loadScene(manifest: SceneManifest, report: (progress: LoadProgress) => void): Promise<LoadedScene> {
     const scene = new Scene();
-    addSky(scene, manifest.environment);
+    const sky = await addSky(scene, manifest);
 
     const content = new Group();
     content.name = manifest.id;
@@ -222,5 +214,5 @@ export async function loadScene(manifest: SceneManifest, report: (progress: Load
         }
     }
 
-    return { manifest, scene, content, directLights, bounds, diagonal, stats: computeSceneStats(content) };
+    return { manifest, scene, content, directLights, bounds, sky, diagonal, stats: computeSceneStats(content) };
 }

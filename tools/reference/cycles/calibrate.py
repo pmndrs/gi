@@ -22,6 +22,14 @@ irradiance E has radiance E / pi. The cases:
              and Roughness are linked (as the glTF importer links them to a
              texture), seen by a camera looking straight down: E / pi with the
              sun's E, and the straight-down camera basis matches three's.
+  sky orientation  the shared sky file (scenes/sky/open-ground.exr) as the world,
+             seen by narrow cameras along known manifest-space directions (towards
+             the sun's glow, away from it, to each side, along +X and -Z): each
+             must show the file's texel for that direction under the layout of
+             scenes/src/sky/equirect.ts (u = atan2(z, x) / 2 pi + 0.5, zenith in
+             the top row). A mirrored or turned sky misses by far more than 1%.
+  sky on the ground  the same world over a white floor: radiance E / pi with E
+             the sky file's horizontal irradiance, integrated here from its texels.
 
 Prints one line per case and exits with code 1 if any is outside tolerance.
 """
@@ -186,9 +194,142 @@ def case_furnace():
     ]
 
 
+# ---- The shared sky ---------------------------------------------------------
+
+SKY_SCENE = 'open-ground'
+
+
+def rec709_luminance(rgb):
+    return 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2]
+
+
+def load_sky_pixels(path):
+    """The sky file's pixels as Blender stores them: RGBA floats, row 0 at the bottom."""
+    image = bpy.data.images.load(path, check_existing=False)
+    width, height = image.size
+    pixels = list(image.pixels)
+    bpy.data.images.remove(image)
+    return pixels, width, height
+
+
+def sky_texel_lookup(pixels, width, height, direction):
+    """
+    Bilinear lookup (texel centres at (i + 0.5) / size, wrapping in u), as
+    Cycles' Linear interpolation does, at a manifest-space direction, using the
+    file's layout from scenes/src/sky/equirect.ts.
+    """
+    x, y, z = direction
+    length = math.sqrt(x * x + y * y + z * z)
+    u = math.atan2(z, x) / (2.0 * math.pi) + 0.5
+    v_from_top = math.acos(max(-1.0, min(1.0, y / length))) / math.pi
+    column = u * width - 0.5
+    row_from_bottom = (1.0 - v_from_top) * height - 0.5
+    c0 = math.floor(column)
+    r0 = math.floor(row_from_bottom)
+    fc = column - c0
+    fr = row_from_bottom - r0
+
+    def texel(c, r):
+        c %= width
+        r = max(0, min(height - 1, r))
+        base = (r * width + c) * 4
+        return pixels[base:base + 3]
+
+    result = [0.0, 0.0, 0.0]
+    for dc, dr, weight in ((0, 0, (1 - fc) * (1 - fr)), (1, 0, fc * (1 - fr)), (0, 1, (1 - fc) * fr), (1, 1, fc * fr)):
+        value = texel(c0 + dc, r0 + dr)
+        for channel in range(3):
+            result[channel] += weight * value[channel]
+    return result
+
+
+def sky_horizontal_irradiance(pixels, width, height):
+    """Rec.709 luminance of the irradiance on an upward-facing surface, texels taken as constant (equirect.ts)."""
+    total = [0.0, 0.0, 0.0]
+    for row_from_bottom in range(height):
+        row = height - 1 - row_from_bottom
+        theta0 = row / height * math.pi
+        theta1 = min((row + 1) / height * math.pi, math.pi / 2)
+        if theta1 <= theta0:
+            continue
+        weight = (2.0 * math.pi / width) * (math.cos(theta0) ** 2 - math.cos(theta1) ** 2) / 2.0
+        for column in range(width):
+            base = (row_from_bottom * width + column) * 4
+            for channel in range(3):
+                total[channel] += pixels[base + channel] * weight
+    return rec709_luminance(total)
+
+
+def centre_rgb(path, half_size=2):
+    pixels, width, height = bs.read_exr_pixels(path)
+    total = [0.0, 0.0, 0.0]
+    count = 0
+    for y in range(height // 2 - half_size, height // 2 + half_size):
+        for x in range(width // 2 - half_size, width // 2 + half_size):
+            for channel in range(3):
+                total[channel] += pixels[(y * width + x) * 4 + channel]
+            count += 1
+    return [value / count for value in total]
+
+
+def mean_rgb(path):
+    pixels, width, height = bs.read_exr_pixels(path)
+    count = width * height
+    return [sum(pixels[i + channel] for i in range(0, len(pixels), 4)) / count for channel in range(3)]
+
+
+def case_sky_orientation():
+    manifest = bs.read_json(os.path.join(REPO_ROOT, 'scenes', 'manifests', f'{SKY_SCENE}.json'))
+    sky_file = bs.sky_file_path(SKY_SCENE)
+    pixels, width, height = load_sky_pixels(sky_file)
+    sun = manifest['environment']['sunDirection']
+    sun_azimuth = math.atan2(sun[2], sun[0])
+
+    def at(azimuth, elevation_deg):
+        elevation = math.radians(elevation_deg)
+        return [math.cos(elevation) * math.cos(azimuth), math.sin(elevation), math.cos(elevation) * math.sin(azimuth)]
+
+    probes = [
+        ('towards the sun glow, 15 degrees up', at(sun_azimuth, 15)),
+        ('away from the sun, 15 degrees up', at(sun_azimuth + math.pi, 15)),
+        ('sun azimuth + 90 degrees, 15 up', at(sun_azimuth + math.pi / 2, 15)),
+        ('sun azimuth - 90 degrees, 15 up', at(sun_azimuth - math.pi / 2, 15)),
+        ('manifest +X, 30 degrees up', at(0.0, 30)),
+        ('manifest -Z, 30 degrees up', at(-math.pi / 2, 30)),
+        ('60 degrees up, towards the sun', at(sun_azimuth, 60)),
+    ]
+    results = []
+    for name, direction in probes:
+        scene = bs.reset_scene()
+        bs.configure_cycles(scene, 32, 32, 4, 0, 'cpu')
+        bs.add_environment(scene, manifest['environment'], sky_file)
+        bs.add_camera(scene, [0.0, 0.0, 0.0], direction, 1.0)
+        _, files = bs.render_to_files(scene, SCRATCH, 'sky-full', 'sky-indirect')
+        measured = rec709_luminance(centre_rgb(files[0]))
+        expected = rec709_luminance(sky_texel_lookup(pixels, width, height, direction))
+        results.append((f'sky file seen {name}', measured, expected))
+    return results
+
+
+def case_sky_on_ground():
+    manifest = bs.read_json(os.path.join(REPO_ROOT, 'scenes', 'manifests', f'{SKY_SCENE}.json'))
+    sky_file = bs.sky_file_path(SKY_SCENE)
+    pixels, width, height = load_sky_pixels(sky_file)
+    scene = bs.reset_scene()
+    bs.configure_cycles(scene, 32, 32, 256, 0, 'cpu')
+    white_floor()
+    bs.add_environment(scene, manifest['environment'], sky_file)
+    bs.add_camera(scene, [0.0, 1.0, 0.5], [0.0, 0.0, 0.0], 1.0)
+    _, files = bs.render_to_files(scene, SCRATCH, 'sky-ground-full', 'sky-ground-indirect')
+    measured = rec709_luminance(mean_rgb(files[0]))
+    expected = sky_horizontal_irradiance(pixels, width, height) / math.pi
+    return [('sky file lighting a white floor (E / pi, E from the file)', measured, expected)]
+
+
 def main():
     os.makedirs(SCRATCH, exist_ok=True)
     results = [case_point(), case_sun(), case_spot()] + case_linked_metal_from_above() + case_furnace()
+    results += case_sky_orientation() + case_sky_on_ground()
     failed = 0
     print('CALIBRATION (Blender %s)' % bpy.app.version_string)
     for name, measured, expected in results:

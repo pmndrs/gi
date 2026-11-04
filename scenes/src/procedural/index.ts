@@ -3,6 +3,7 @@ import { buildCabinetRow } from './cabinet-row';
 import { buildCornellBox } from './cornell-box';
 import { buildCourtyard } from './courtyard';
 import { buildFurnaceRoom } from './furnace-room';
+import { buildOpenGround } from './open-ground';
 import { buildThinWall } from './thin-wall';
 import { buildClosedDoor, buildTwoRoom } from './two-rooms';
 
@@ -18,6 +19,7 @@ export const proceduralBuilders: Readonly<Record<string, ProceduralBuilder>> = {
     'thin-wall': buildThinWall,
     'closed-door': buildClosedDoor,
     'cabinet-row': buildCabinetRow,
+    'open-ground': buildOpenGround,
 };
 
 export function buildProcedural(name: string, options?: BuilderOptions): ProceduralScene {
@@ -35,6 +37,7 @@ export {
     buildCornellBox,
     buildCourtyard,
     buildFurnaceRoom,
+    buildOpenGround,
     buildThinWall,
     buildTwoRoom,
 };

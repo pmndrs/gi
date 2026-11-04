@@ -109,11 +109,23 @@ export type ManifestEnvironment =
     | { type: 'none' }
     | { type: 'color'; color: Vec3; intensity?: number }
     | {
+          /**
+           * A clear sky, made into the shared sky file `scenes/sky/<scene id>.exr`
+           * by `tools/sky/generate.ts`. Every renderer reads that file.
+           */
           type: 'procedural';
           /** Direction toward the sun. */
           sunDirection: Vec3;
+          /** Preetham turbidity, about 2 (very clear) to 10 (hazy). */
           turbidity?: number;
+          /** Multiplier on the calibrated sky; 1 (the default) is as calibrated. */
           intensity?: number;
+          /**
+           * Only for a sky-only scene, with no directional light along -sunDirection:
+           * the illuminance (lux) of the sun this sky belongs to, which sets the
+           * sky's brightness. Scenes with a sun light take it from that light.
+           */
+          sunIlluminance?: number;
       };
 
 /** A suggested probe volume. */
@@ -383,6 +395,7 @@ function validateEnvironment(environment: Json, c: ErrorCollector): void {
             if (environment.turbidity !== undefined && !isFiniteNumber(environment.turbidity)) {
                 c.add(`${path}.turbidity`, 'must be a number');
             }
+            if (environment.sunIlluminance !== undefined) c.positiveNumber(`${path}.sunIlluminance`, environment.sunIlluminance);
             break;
         default:
             c.add(`${path}.type`, 'must be "none", "color" or "procedural"');

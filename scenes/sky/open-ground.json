@@ -1,0 +1,42 @@
+{
+    "scene": "open-ground",
+    "file": "open-ground.exr",
+    "generator": "tools/sky/generate.ts",
+    "skyModel": "Preetham, Shirley and Smits 1999 (no sun disc; black below the horizon)",
+    "width": 512,
+    "height": 256,
+    "layout": "equirectangular, +Y up; row 0 is the zenith; u = atan2(z, x) / (2 pi) + 0.5, v (down from the top) = acos(y) / pi; the same as three.js equirectUV",
+    "sunDirection": [
+        -0.501406,
+        0.601687,
+        -0.621743
+    ],
+    "sunElevationDeg": 36.991,
+    "turbidity": 3,
+    "sunIlluminance": 3,
+    "sunSource": "environment.sunIlluminance (no sun light in this scene)",
+    "calibration": {
+        "model": "Ineichen and Perez 2002 clear sky (sea level), diffuse-to-direct horizontal ratio",
+        "skyToSunHorizontalRatio": 0.166957,
+        "diffuseFraction": 0.143071,
+        "airMass": 1.65904,
+        "intensity": 1,
+        "sunHorizontalIlluminance": 1.80506,
+        "targetSkyHorizontalIlluminance": 0.301368
+    },
+    "measured": {
+        "skyHorizontalIrradianceRgb": [
+            0.219454,
+            0.305009,
+            0.506503
+        ],
+        "skyHorizontalIlluminance": 0.301368,
+        "calibrationError": -0.00000152
+    },
+    "flatEquivalentRadianceRgb": [
+        0.0698543,
+        0.0970873,
+        0.161225
+    ],
+    "pixelSha256": "3ab51ceefbe88e67ca039bbe4278a101e6d035ad9468b268f43d83f01eda03fa"
+}

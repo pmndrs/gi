@@ -42,7 +42,7 @@ Both sides, matched on purpose:
 | Clamping | off (Blender's default indirect clamp of 10 is a bias) | off (the library's default indirect clamp is 10) |
 | Denoising | off | off (see "Denoiser") |
 | Pixel filter | box, 1 px | jitter inside the pixel |
-| Environment | none = black | none = black; other types unsupported |
+| Environment | none = black; procedural = the shared sky file `scenes/sky/<scene>.exr` | none = black; other types unsupported |
 | Direct light range | not applied | three's range window is applied (see below) |
 
 **Diffuse only, checked.** Blender's glTF importer links Metallic and Roughness to the metallicRoughness texture (24 of the 28 New Sponza materials), and a linked input ignores the value set on it. So `make_materials_diffuse_only` unlinks every input in `NEUTRAL_PRINCIPLED_INPUTS` (Metallic, Roughness, Diffuse Roughness, Subsurface, Specular IOR Level and Tint, Anisotropic, Transmission, Coat, Sheen, Thin Film) and then sets it. `render.py` then refuses to render, listing each culprit, if any Principled BSDF still has one of those inputs linked or not neutral, or if a glossy-type shader node is present. On Sponza it removes 76 texture links. Sponza references rendered before 2026-11-04 16:00 had metal texels with no diffuse and a glossy sun highlight; the re-render is 2.3 percent brighter overall and 17.9 percent brighter in indirect light (mean 0.0341 to 0.0349, indirect 0.00420 to 0.00495), because glossy bounces are switched off, so those metal texels absorbed bounce light instead of passing it on. Cornell and two-room have no texture links and are unaffected.
@@ -51,7 +51,7 @@ Cycles also: adaptive sampling off; light sampling threshold 0 (the default 1 pe
 
 ## Unit conversions (manifest, three.js physical units, to Cycles)
 
-All in `tools/reference/cycles/units.py`, each with its reason. Pinned by measurement in Blender 4.5.0 and checked by `--calibrate` (point, sun, spot, furnace; all within 0.05 percent):
+All in `tools/reference/cycles/units.py`, each with its reason. Pinned by measurement in Blender 4.5.0 and checked by `--calibrate` (point, sun, spot, furnace; all within 0.05 percent; it also checks the shared sky's orientation and its light on a floor):
 
 | manifest | Cycles | note |
 | --- | --- | --- |
@@ -65,7 +65,7 @@ All in `tools/reference/cycles/units.py`, each with its reason. Pinned by measur
 
 **Range window.** three.js and the path tracer fade a point light to zero at `range` (`(1 - (d/range)^4)^2`). Cycles has no such window and the reference is the plain inverse-square answer. On two-room (range 14) that makes three about 12 percent dimmer than Cycles at 7 m from the lamp and 3 percent at 5 m. This is a difference to remember when comparing DDGI with a Cycles reference; Cornell and Sponza are unaffected (emissive geometry, directional light).
 
-**Procedural sky** (Sponza only): Cycles' Nishita sky with the sun disc off, since the directional light is the sun. It stands in for the viewer's sky; it is not the same model. `turbidity` is not mapped.
+**Procedural sky:** the shared sky file `scenes/sky/<scene>.exr` (T1.1, `tools/sky/README.md`) as an Environment Texture, the same file the viewer and the platform read: no sun disc (the directional light is the sun), black below the horizon, brightness calibrated. Until 2026-11-04 it was Cycles' Nishita sky, which was about twice as bright on Sponza: references with a procedural sky rendered before then (Sponza) must be rendered again. A quick 256-sample Sponza render at bookmark 1 has mean 0.0174 with the shared sky, against 0.0346 for the Nishita reference.
 
 ## Compare
 

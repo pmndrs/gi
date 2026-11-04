@@ -46,6 +46,8 @@ from units import (
 
 MAX_BOUNCES = 32
 
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', '..'))
+
 # Axis change as a 3x3 matrix: manifest (x, y, z) -> Blender (x, -z, y).
 AXIS_CHANGE = mathutils.Matrix(((1, 0, 0), (0, 0, -1), (0, 1, 0)))
 
@@ -346,12 +348,24 @@ def add_manifest_lights(scene, lights):
             obj.location = to_blender_space(light['position'])
 
 
-def add_environment(scene, environment):
+def sky_file_path(scene_id):
+    """The shared sky file of a scene with a procedural environment (tools/sky/generate.ts)."""
+    return os.path.join(REPO_ROOT, 'scenes', 'sky', f'{scene_id}.exr')
+
+
+def add_environment(scene, environment, sky_file=None):
     """
-    'none' is a black world. 'color' is a uniform radiance. 'procedural' is
-    Cycles' Nishita sky with the sun disc off (the sun comes from the
-    directional light, so it is not counted twice); it is an approximation of
-    the viewer's sky, not a match, and only Sponza uses it.
+    'none' is a black world. 'color' is a uniform radiance. 'procedural' is the
+    shared sky file (`sky_file`, see sky_file_path): the same equirectangular
+    half-float EXR the viewer and the platform read, with no sun disc (the sun
+    is the directional light) and calibrated brightness, so `intensity` is
+    already in it and the Background strength is 1.
+
+    Orientation: Cycles' equirectangular lookup puts image u = 0.5 at Blender
+    +X and u = 0.25 at Blender +Y, which is manifest -Z after the axis mapping
+    (x, y, z) -> (x, -z, y); that is the layout the file is written in
+    (scenes/src/sky/equirect.ts), so no rotation is applied.
+    `calibrate.py` checks this by rendering known directions.
     """
     world = bpy.data.worlds.new('world')
     scene.world = world
@@ -368,15 +382,16 @@ def add_environment(scene, environment):
         background.inputs['Color'].default_value = (color[0], color[1], color[2], 1.0)
         background.inputs['Strength'].default_value = environment_to_background_strength(environment.get('intensity', 1.0))
     elif kind == 'procedural':
-        sky = nodes.new('ShaderNodeTexSky')
-        sky.sky_type = 'NISHITA'
-        sky.sun_disc = False
-        toward_sun = mathutils.Vector(to_blender_space(environment['sunDirection'])).normalized()
-        sky.sun_elevation = math.asin(max(-1.0, min(1.0, toward_sun.z)))
-        # Nishita's rotation is measured from +Y, clockwise seen from above.
-        sky.sun_rotation = math.atan2(toward_sun.x, toward_sun.y) % (2.0 * math.pi)
+        if not sky_file or not os.path.exists(sky_file):
+            raise SystemExit(f'sky file {sky_file} is missing; run `node tools/sky/generate.ts`')
+        sky = nodes.new('ShaderNodeTexEnvironment')
+        sky.image = bpy.data.images.load(sky_file, check_existing=True)
+        # Float data as stored: no view transform or colour conversion on the way in.
+        sky.image.colorspace_settings.name = 'Linear Rec.709'
+        sky.projection = 'EQUIRECTANGULAR'
+        sky.interpolation = 'Linear'
         links.new(sky.outputs['Color'], background.inputs['Color'])
-        background.inputs['Strength'].default_value = environment_to_background_strength(environment.get('intensity', 1.0))
+        background.inputs['Strength'].default_value = 1.0
     else:
         raise ValueError(f'unknown environment type {kind!r}')
 

@@ -1,0 +1,42 @@
+{
+    "scene": "bistro-exterior",
+    "file": "bistro-exterior.exr",
+    "generator": "tools/sky/generate.ts",
+    "skyModel": "Preetham, Shirley and Smits 1999 (no sun disc; black below the horizon)",
+    "width": 512,
+    "height": 256,
+    "layout": "equirectangular, +Y up; row 0 is the zenith; u = atan2(z, x) / (2 pi) + 0.5, v (down from the top) = acos(y) / pi; the same as three.js equirectUV",
+    "sunDirection": [
+        0.399501,
+        0.799002,
+        0.449439
+    ],
+    "sunElevationDeg": 53.035,
+    "turbidity": 3,
+    "sunIlluminance": 2.86023,
+    "sunSource": "lights[0] \"sun\": intensity 3 x luminance of its colour",
+    "calibration": {
+        "model": "Ineichen and Perez 2002 clear sky (sea level), diffuse-to-direct horizontal ratio",
+        "skyToSunHorizontalRatio": 0.136892,
+        "diffuseFraction": 0.120409,
+        "airMass": 1.25056,
+        "intensity": 1,
+        "sunHorizontalIlluminance": 2.28533,
+        "targetSkyHorizontalIlluminance": 0.312843
+    },
+    "measured": {
+        "skyHorizontalIrradianceRgb": [
+            0.221136,
+            0.317368,
+            0.538054
+        ],
+        "skyHorizontalIlluminance": 0.312843,
+        "calibrationError": 8.66e-7
+    },
+    "flatEquivalentRadianceRgb": [
+        0.0703898,
+        0.101022,
+        0.171268
+    ],
+    "pixelSha256": "c2ce6615f052061cac73f49694dfe288226f428890ce977be466b2ae663ca4d9"
+}

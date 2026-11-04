@@ -240,6 +240,7 @@ describe('the manifests in scenes/manifests', async () => {
             'courtyard-tree',
             'furnace-room',
             'furnished-room',
+            'open-ground',
             'sponza',
             'thin-wall',
             'two-room',

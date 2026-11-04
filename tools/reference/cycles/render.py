@@ -103,7 +103,7 @@ def main():
     materials_changed, texture_links_removed = bs.make_materials_diffuse_only()
     bs.require_diffuse_only()
     bs.add_manifest_lights(scene, manifest['lights'])
-    bs.add_environment(scene, manifest['environment'])
+    bs.add_environment(scene, manifest['environment'], bs.sky_file_path(manifest['id']))
     bs.add_camera(scene, camera['position'], camera['target'], camera['fovYDeg'])
     load_seconds = time.time() - load_started
 
