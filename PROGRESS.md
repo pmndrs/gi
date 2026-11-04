@@ -21,7 +21,7 @@ Rules:
 
 ---
 
-## 2026-11-05 · B1a · implementer (opus); in review
+## 2026-11-05 · B1a · implementer (opus); Opus review: pass with notes, fixes in progress
 Did (see the B1a commit after b99773f):
 - packages/bvh: `gpu-refit.ts`, a bottom-up refit with per-node arrival counters, boxes copied as 32-bit atomic words, no float atomics, and a subgroup pairing step for sibling leaves; `gpu-instance-box.ts`; `refit-cpu.ts`, the CPU reference, with a test.
 - Core: `top-level-gpu.ts` (one pass gathers each instance's transform from the scene copy and writes its record and world box; then the refit). Shape builds in their own worker (`top-level-shape/async/worker.ts`). `ray-queries.ts` chooses the GPU refit, or the CPU top level without subgroups.
@@ -29,7 +29,16 @@ Did (see the B1a commit after b99773f):
 - Pages `tlas-oracle` and `tlas-bench`. trace-oracle and trace-inline now request subgroups, so they test the GPU top level.
 Verified (agent, headless Chrome 156): tlas-oracle passes on the RTX 3060 and the Intel UHD, with 32 frames of moving instances (mirrored, non-uniformly scaled, hidden, singular, created, destroyed). Per path: 192,000 rays, 0 mismatches. The GPU path and the no-subgroups fallback disagree on 0 rays, and no refit was incomplete. trace-inline and trace-oracle pass on both GPUs. lint, typecheck, test (637) and build pass.
 Numbers (`bench/results/bvh.csv`, median of 3, bench lock, idle GPU; the rows say `b99773f-dirty` because the code was uncommitted): refit pass for 10k moving instances, RTX 0.084 ms (bar 0.5), Intel 0.437 ms (no bar); without the subgroup pairing 0.0855 / 0.476 ms. Furnished room on the RTX: 157.3 / 513.1 Mrays/s closest / any (T1.3 157.3 / 513.2). CPU: tracer update 0.4 ms (it scans for new instances), scene upload 1.2 ms, 10k `setTransform` calls 18–20 ms (the scene copy's own cost), shape build 54–57 ms in the worker.
-Not verified: the refit pass in `stats.passes`; Intel closest-hit in the quick bench (too noisy).
+Not verified: Intel closest-hit in the quick bench (too noisy).
+Review (Opus): re-ran lint, typecheck, test, build, and tlas-oracle, trace-inline and trace-oracle on both GPUs (0 mismatches; 4 quality rebuilds each); bvh.csv matches (0.0837 / 0.4372 ms). The design holds: one writer per box slot, the clear in an earlier dispatch, waits only on siblings that have arrived. Being fixed:
+- a refit that gives up was only counted, and could keep a box shrunk by NaN;
+- the refit pass wasn't connected to `stats.passes` at all;
+- the oracle never ray-checked more than 64 instances, so the cross-workgroup path was untested;
+- a failed tree placement could leave records pointing at released ranges;
+- the instance scan and snapshot every moving frame (a scene flag is being added);
+- the refit's stats readback ran always, against the platform's "no readbacks" rule;
+- a rebuild costs 3.0–3.7 ms of main-thread time to snapshot, not "well under a millisecond".
+
 
 ## 2026-11-05 · T1.4 · implementer (opus); Opus review: pass with notes, fixed; done
 Did (72ebc0e):
