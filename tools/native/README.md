@@ -40,6 +40,7 @@ Keys in the harness: F2 dumps DDGI textures, F4 runs the 1024-frame benchmark, J
 | Manifest | Harness `.ini` |
 |---|---|
 | `parts[0]` model, or the procedural scene's `assets/generated/<id>.glb` | `scene.path` / `scene.file` |
+| several model `parts`, or one with a `transform` | one merged `native/build/scenes/<id>/<id>.gltf` (see "Scenes with several parts") |
 | `cameras[]` (position, target, fovYDeg) | `scene.cameras.N` as yaw, pitch, position, fov (vertical) |
 | `lights[]` directional | type 0; `power` = intensity (lux), `direction` = travel direction |
 | `lights[]` point | type 2; `power` = intensity (candela), `radius` = range |
@@ -64,10 +65,20 @@ origin        = volume.center
 - **A `.glb` with textures** is refused by the harness ("GLB format not supported for scenes with texture data"). The Bistro files are like that. `play.ps1` splits them once with `glb-to-gltf.mjs` into `native/build/scenes/<id>/` (a `.gltf`, a `.bin` and the images). Nothing in `assets/` is touched. While doing that the script also fixes two more things the harness cannot handle in the Bistro files:
   - **WebP textures** (Blender 4.5 wrote `EXT_texture_webp`): converted to PNG with ImageMagick (`magick` must be on PATH). Without this the harness silently finds no textures and renders black.
   - **Normal maps without tangents**: the harness needs a `TANGENT` attribute to use a normal map and shades garbage (black and purple, NaN probes) without one. If a file has no tangents at all, the staged copy drops its normal maps. The current Bistro exports (2026-11-04, 14:00) have tangents, so their normal maps are kept.
-- **Model transforms.** The harness cannot place a model, so a scene whose model part has a non-identity transform (`furnished-room`) is refused with a clear message. Scenes with more than one part (`courtyard-tree`) are refused too.
+- **Several parts, and model transforms.** The harness loads one glTF file and cannot place it. See the next section: such scenes are merged into one file. Scenes that mix a procedural part with a model part (`courtyard-tree`) are still refused, because `pnpm scenes:export` writes no file for their procedural part.
 - **File names** must be letters, digits, `_` and `-` only (`NewSponza_Main_1k.gltf` is fine).
-- The first load of a textured scene converts every texture to BC7 on the CPU, one thread, with no progress bar, and writes a cache to `native/build/cache/<id>/` (Sponza: about 2 minutes; Bistro: see the measured times below). The scripts do this first by themselves in a **minimized** window under the GPU lock (`play.ps1`, `bench.ps1` and `prepare-cache.ps1 -Scene a,b` all call the same step, one scene at a time), so an interactive window never has to. The harness now keeps its window answering Windows during this, but if you ever see "Not Responding", do not close it. Delete the cache folder if you change the scene file. Never run two Bistro loads at once: they use most of the 6 GB card.
+- The first load of a textured scene converts every texture to BC7 on the CPU, one thread, with no progress bar, and writes a cache to `native/build/cache/<id>/` (Sponza with curtains: about 2 minutes; Bistro: see the measured times below). The scripts do this first by themselves in a **minimized** window under the GPU lock (`play.ps1`, `bench.ps1` and `prepare-cache.ps1 -Scene a,b` all call the same step, one scene at a time), so an interactive window never has to. The harness now keeps its window answering Windows during this, but if you ever see "Not Responding", do not close it. Delete the cache folder if you change the scene file. Never run two Bistro loads at once: they use most of the 6 GB card.
 - If `assets/downloads/<asset>/<file>` is missing, the script falls back to `assets/downloads.bak/` and says so.
+
+### Scenes with several parts
+
+`sponza` is Intel's base package plus the curtains add-on: two model parts. A scene with more than one model part, or with one model part that has a non-identity `transform` (`furnished-room`), is merged by `merge-gltf.mjs` into one `native/build/scenes/<id>/<id>.gltf`, the way the viewer and Cycles load it: every part, each with its manifest transform. A part with a transform gets one extra root node with that transform (XYZ Euler degrees as a quaternion, the three.js order); identity parts are added as they are. The merged file refers to each part's own `.bin` and images with relative paths (`../../../../assets/downloads/...`), so nothing is copied and nothing in `assets/` changes. A `.glb` part is split first (`native/build/scenes/<id>/part<n>/`, the same step as above).
+
+The merge runs every time a script resolves the scene (it takes well under a second) and rewrites the file only when its content changes or a part's file is newer. When it rewrites it, the scene cache `native/build/cache/<id>/<id>.cache` is deleted, so it is rebuilt from the new file. The merged Sponza has 132 meshes (448 primitives) and 80 textures, well under the Vulkan mesh limit (see Known problems).
+
+Single-part scenes without a transform (all procedural scenes, Bistro) are loaded exactly as before: same `.ini`, same cache.
+
+Sponza timing rows from before the merge (all `9bd7f3c`, `1df1f97` and the earlier `c7d0162-dirty` rows) are Intel's base package alone, without curtains. Rows written since have a `scene_parts` row (2 for Sponza).
 
 ## Timing: `bench.ps1`
 
@@ -95,6 +106,7 @@ CSV conventions (columns, and how to pick valid rows: `bench/results/README.md`,
 | `gpu_ms_<pass>`, `gpu_ms_<pass>_median` | the harness's GPU timestamps around that pass, mean and median over the 1024 frames |
 | `cpu_ms_frame`, `cpu_ms_frame_median` | CPU time of one main-loop iteration (see below) |
 | `mrays_per_s` | `rays_traced_per_frame / gpu_ms_probe_trace_median`, in millions per second |
+| `scene_parts` | how many manifest parts the harness loaded (several are merged into one glTF). Missing in rows from before the merge |
 
 What the passes are, in the harness's own timers: `frame` (whole command buffer), `gbuffer`, `ddgi` (all probe work plus the screen-space gather), and inside it `probe_trace`, `blend`, `relocate`, `classify`, `variability`, `lighting` (the screen-space gather that applies the probes to the image).
 

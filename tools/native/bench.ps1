@@ -28,6 +28,7 @@
     gpu_ms_<pass>, _median            GPU timestamps around that pass, mean and median
     cpu_ms_frame, _median             CPU time of the whole frame loop iteration
     mrays_per_s                       rays_traced_per_frame / median probe trace time
+    scene_parts                       manifest parts loaded (multi-part scenes are merged into one glTF)
 
   Never run this while a browser GPU benchmark is running. The lock enforces that for scripts
   that also use it; if you time something by hand, take the lock yourself.
@@ -277,6 +278,10 @@ try {
                 resolution_width = $Width; resolution_height = $Height
                 benchmark_frames = $traceValues.Count; warmup_frames = $WarmupFrames
                 camera_bookmark = $Camera
+                # How many manifest parts the harness loaded (several are merged into one glTF).
+                # Sponza rows without this row are older runs of Intel's base package alone, before
+                # the curtains part was added to the manifest.
+                scene_parts = @($manifest.parts).Count
             }
             if ($isSweep) { $fixed['sweep'] = 1 }
             foreach ($key in $fixed.Keys) { $rows.Add(@($key, $fixed[$key])) }
