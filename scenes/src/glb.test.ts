@@ -40,6 +40,7 @@ describe('exported procedural scenes', async () => {
             'cabinet-row',
             'closed-door',
             'cornell-box',
+            'cornell-box-point',
             'furnace-room',
             'thin-wall',
             'two-room',

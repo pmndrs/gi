@@ -236,6 +236,7 @@ describe('the manifests in scenes/manifests', async () => {
             'cabinet-row',
             'closed-door',
             'cornell-box',
+            'cornell-box-point',
             'courtyard-tree',
             'furnace-room',
             'furnished-room',
