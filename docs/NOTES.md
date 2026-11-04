@@ -42,6 +42,8 @@ One bullet per fact, each with its source. Add a bullet when something cost you 
 
 ## Tooling and environment
 
+- **GPU timestamps on this laptop:** both GPUs support `timestamp-query` in Chrome 156, and headless Chrome returned unrounded values. Timing costs less than CPU-side frame timing can resolve (`performance.now()` steps 0.1 ms; the NVIDIA per-round scatter is about ±0.5 ms). Source: T0.3.
+- **Device page:** `tools/gpu/pages/device/`. `?label=`, `?rounds=`, `?frames=` and `?scale=` change the run. `pnpm device:serve` keeps its certificate in `node_modules/.cache/ddgi-lan` and regenerates it when the LAN addresses change. Source: T0.3.
 - **One GPU benchmark at a time.** Before any timing run, take the lock with `mkdir "$TEMP/ddgi-gpu-bench.lock"`. If the folder already exists, someone else is timing, so wait and retry. Remove the folder when done, even on failure. Correctness runs (smoke tests, pixel readbacks) don't need the lock. Never time native and browser GPU work at the same time. Source: main session, M0.
 - **WebGPU needs a secure context.** `http://<LAN IP>` pages get no `navigator.gpu`, so pages for the Mac and iOS devices must be served over HTTPS, and a self-signed certificate is fine. `localhost` counts as secure. Source: the WebGPU spec (secure-context only).
 - **GPUs on this laptop:** Playwright or headless Chrome with `powerPreference: 'high-performance'` gets the RTX 3060 Laptop. The Claude desktop browser pane got the Intel iGPU. Source: the audit, 2026-10-30.
@@ -58,7 +60,11 @@ One bullet per fact, each with its source. Add a bullet when something cost you 
 ## Test assets
 
 - **Sponza license:** the Khronos glTF Sample Assets Sponza now points at the CRYENGINE marketplace license, which allows "Games in object code form only" (§2.1.4). Crytek's 2010 note says it was "donated to the public for radiosity". These conflict, so it's on hold for Dennis. Source: `Models/Sponza/README.md` and `LICENSE.md` in glTF-Sample-Assets, checked 2026-11-04.
-- **Intel Sponza:** Intel's samples page redirected to a corporate 404 when checked from here (2026-11-04).
+- **Intel Sponza:** `https://cdrdv2.intel.com/v1/dl/getContent/830833` redirects to a signed CloudFront URL for `main_sponza.zip` (3,987,608,266 bytes), with no login.
+  - Add-ons have their own IDs: curtains 726650, ivy 726656, trees 726662, candles 726676.
+  - Git-bash's `curl` fails TLS to cdrdv2 ("self signed certificate in certificate chain"). Windows `curl.exe` and Node `fetch` both work.
+  - The www.intel.com samples page doesn't load from here; the Wayback copy from 2025-12-06 has the links.
+  - Source: T0.4 scout, 2026-11-04.
 - **McGuire archive:** Breakfast Room and Living Room are CC BY 3.0 (each folder's `license.txt`). Conference Room says only "Credit required", with no license, so it's excluded.
 - **Bistro (NVIDIA ORCA):** CC BY 4.0. One 894 MB zip holds both exterior and interior. The download URL redirects (302) to a short-lived token URL, and `curl -L` follows it with no login.
   - Exterior: 2.83 M triangles, 1,296 meshes. Interior: 1.04 M triangles, 1,186 meshes.
