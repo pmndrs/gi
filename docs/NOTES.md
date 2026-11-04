@@ -42,6 +42,15 @@ One bullet per fact, each with its source. Add a bullet when something cost you 
 
 ## Tooling and environment
 
+- **Choosing the GPU in headless Chrome:**
+  - Chrome 156 gives NVIDIA by default, whatever `powerPreference` says.
+  - `--use-webgpu-power-preference=force-low-power` makes `requestAdapter()` return null.
+  - The Intel GPU is reached with `--use-adapter-luid=<high>,<low>`. LUIDs change every boot; the runner reads them with `Get-PnpDeviceProperty` on `{60B193CB-5276-4D0F-96FC-F173ABAD3EC6} 2`.
+  - `--disable-gpu` makes `requestAdapter()` return null.
+  - Intel reports architecture `gen-12lp`.
+  - Source: T0.2, `tools/gpu/chrome.ts`.
+- **WGSL errors arrive late:** shader-module errors surface only after the queue drains. `runGpuTest` waits about 50 ms after the drain; anything later can be missed. Source: T0.2.
+- **Node runs `.ts` directly** (Node 24 type stripping), but rejects enums, namespaces and constructor parameter properties. The root tsconfig has `allowImportingTsExtensions` for `.ts` import paths. Source: T0.2.
 - **GPU timestamps on this laptop:** both GPUs support `timestamp-query` in Chrome 156, and headless Chrome returned unrounded values. Timing costs less than CPU-side frame timing can resolve (`performance.now()` steps 0.1 ms; the NVIDIA per-round scatter is about ±0.5 ms). Source: T0.3.
 - **Device page:** `tools/gpu/pages/device/`. `?label=`, `?rounds=`, `?frames=` and `?scale=` change the run. `pnpm device:serve` keeps its certificate in `node_modules/.cache/ddgi-lan` and regenerates it when the LAN addresses change. Source: T0.3.
 - **One GPU benchmark at a time.** Before any timing run, take the lock with `mkdir "$TEMP/ddgi-gpu-bench.lock"`. If the folder already exists, someone else is timing, so wait and retry. Remove the folder when done, even on failure. Correctness runs (smoke tests, pixel readbacks) don't need the lock. Never time native and browser GPU work at the same time. Source: main session, M0.

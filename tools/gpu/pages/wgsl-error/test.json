@@ -1,0 +1,5 @@
+{
+    "description": "Self-test: a shader with a deliberate WGSL error. The runner must fail it and show the error text.",
+    "expectFailure": true,
+    "expectMessage": "Error while parsing WGSL"
+}

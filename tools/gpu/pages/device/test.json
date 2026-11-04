@@ -1,0 +1,4 @@
+{
+    "description": "Runs a fixed compute + render workload; reports adapter, timestamp support, per-pass GPU ms and timing overhead.",
+    "timeoutMs": 120000
+}

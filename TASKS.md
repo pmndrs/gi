@@ -7,8 +7,8 @@ Status values: `todo`, `active (agent, date)`, `review`, `done`, `blocked (why)`
 | ID | Task | Agent | Size | Depends on | Status |
 | --- | --- | --- | --- | --- | --- |
 | T0.1 | Workspace | implementer | M | none | done |
-| T0.2 | GPU runner | implementer | M | T0.1 | review |
-| T0.3 | Timing and devices | implementer, then gpu-tester | M | T0.2 | review (Windows only; Apple devices deferred, see DECISIONS 2026-11-04) |
+| T0.2 | GPU runner | implementer | M | T0.1 | done |
+| T0.3 | Timing and devices | implementer, then gpu-tester | M | T0.2 | done (Windows only; Apple devices deferred, see DECISIONS 2026-11-04) |
 | T0.4 | Test scenes | wrangler (assets) + implementer (manifest, procedural scenes) | M | T0.1 | review (Sponza blocked: license question for Dennis) |
 | T0.5 | Viewer shell | implementer | M | T0.2, T0.3, T0.4 | todo |
 | T0.6 | Native harness | native-runner | M | T0.4 | todo |

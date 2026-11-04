@@ -1,0 +1,27 @@
+date,commit,device,browser,scene,metric,value
+2026-11-04,92b92bc-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,device-workload-run2of3,timestamps_supported,1
+2026-11-04,92b92bc-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,device-workload-run2of3,gpu_ms_device_compute,3.588
+2026-11-04,92b92bc-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,device-workload-run2of3,gpu_ms_device_render,1.757
+2026-11-04,92b92bc-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,device-workload-run2of3,frame_ms_untimed_pooled_median,7.9
+2026-11-04,92b92bc-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,device-workload-run2of3,frame_ms_timed_pooled_median,8
+2026-11-04,92b92bc-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,device-workload-run2of3,timing_overhead_ms_median_of_rounds,0.225
+2026-11-04,92b92bc-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,device-workload-run2of3,timing_overhead_round_min_ms,-0.05
+2026-11-04,92b92bc-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,device-workload-run2of3,timing_overhead_round_max_ms,0.5
+2026-11-04,92b92bc-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,device-workload-run2of3,timing_overhead_bound_percent,6.3
+2026-11-04,92b92bc-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,device-workload-run2of3,perf_now_step_ms,0.1
+2026-11-04,92b92bc-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,device-workload-all-runs,timing_overhead_ms_median_of_rounds_run1,0.6
+2026-11-04,92b92bc-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,device-workload-all-runs,timing_overhead_ms_median_of_rounds_run2,0.225
+2026-11-04,92b92bc-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,device-workload-all-runs,timing_overhead_ms_median_of_rounds_run3,0.05
+2026-11-04,92b92bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,device-workload-run1of3,timestamps_supported,1
+2026-11-04,92b92bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,device-workload-run1of3,gpu_ms_device_compute,60.907
+2026-11-04,92b92bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,device-workload-run1of3,gpu_ms_device_render,28.551
+2026-11-04,92b92bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,device-workload-run1of3,frame_ms_untimed_pooled_median,92.1
+2026-11-04,92b92bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,device-workload-run1of3,frame_ms_timed_pooled_median,92.05
+2026-11-04,92b92bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,device-workload-run1of3,timing_overhead_ms_median_of_rounds,0.25
+2026-11-04,92b92bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,device-workload-run1of3,timing_overhead_round_min_ms,-0.6
+2026-11-04,92b92bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,device-workload-run1of3,timing_overhead_round_max_ms,0.45
+2026-11-04,92b92bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,device-workload-run1of3,timing_overhead_bound_percent,0.7
+2026-11-04,92b92bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,device-workload-run1of3,perf_now_step_ms,0.1
+2026-11-04,92b92bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,device-workload-all-runs,timing_overhead_ms_median_of_rounds_run1,0.25
+2026-11-04,92b92bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,device-workload-all-runs,timing_overhead_ms_median_of_rounds_run2,0.125
+2026-11-04,92b92bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,device-workload-all-runs,timing_overhead_ms_median_of_rounds_run3,1.425

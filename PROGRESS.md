@@ -21,6 +21,45 @@ Rules:
 
 ---
 
+## 2026-11-04 · T0.2 · implementer (sonnet), reviewed by main session (opus)
+Did:
+- `pnpm test:gpu [--gpu nvidia|intel] [--filter name] [--json file] [--timeout ms] [--no-webgpu]`, in `tools/gpu/`.
+- It starts headless Chrome over the DevTools protocol (no Playwright) and serves `tools/gpu/pages/*` with vite.
+- It collects `Log.entryAdded`, console output and exceptions, and takes a screenshot per page.
+- `client.ts` gives pages `runGpuTest` and `reportGpuTest`. README explains the page contract.
+- A reviewer pass found holes in Ctrl-C cleanup and a self-test that accepted any failure. Both are fixed.
+Verified (Windows 11, headless Chrome 156; I re-ran each check):
+- `--gpu nvidia` reports `vendor=nvidia architecture=ampere`, smoke passes.
+- `--gpu intel` reports `vendor=intel architecture=gen-12lp`, smoke passes.
+- `--filter wgsl-error` fails and prints the WGSL error. A full run requires that error text, not just any failure.
+- `--no-webgpu` fails with "WebGPU is not available".
+- `--json` writes per-page outcome, data and adapter.
+- 54 runner unit tests pass.
+- Ctrl-C was tested by the implementer at 20 delays on both GPUs: no Chrome or profile folder left behind.
+Numbers: `--filter smoke` takes 2.1–2.5 s wall on NVIDIA and 6.1–6.7 s on Intel. About 2 s of the Intel time is the Windows lookup of the Intel adapter's ID.
+Not verified: macOS and Linux. Cleanup after `taskkill` or a crash isn't possible on Windows (README says so).
+Next: benchmark tasks use `--json` plus the GpuTimer strict mode.
+
+## 2026-11-04 · T0.3 · implementer (sonnet), reviewed by main session (opus)
+Did:
+- `GpuTimer` in `packages/ddgi-core/src/platform/timing/`. It has a slot ring with `mapAsync` readback, allocation inside error scopes, and switches itself off with one warning on failure. Frames split over two submits keep both submits' passes. A strict mode for benchmarks throws instead of silently leaving passes untimed.
+- A stats overlay in `apps/viewer/src/stats/`.
+- A device page in `tools/gpu/pages/device/`, plus `pnpm device:serve`: HTTPS on the LAN with a self-signed certificate made by openssl, and results posted to `bench/results/incoming/`.
+Verified (Windows 11, headless Chrome 156):
+- 63 unit tests pass, including a fake device that returns different data per slot, so mislabelled readbacks would be caught.
+- `pnpm test:gpu --filter device` passes on `nvidia/ampere` and `intel/gen-12lp`. The implementer ran 3 runs per GPU under the bench lock; I re-ran one per GPU.
+Results:
+
+| Device and browser | WebGPU | Timestamps | Timing overhead (CPU frame time, timed vs untimed) |
+| --- | --- | --- | --- |
+| Windows Chrome, RTX 3060 | yes | yes | within noise: median +0.225 ms, rounds -0.05 to +0.5 ms, so under ~6% |
+| Windows Chrome, Intel UHD | yes | yes | within noise: median +0.25 ms on a 92 ms frame, so under ~0.7% |
+| Mac Chrome / Mac Safari / iPad / older iOS | deferred (DECISIONS 2026-11-04) | | |
+
+Numbers: per-pass GPU ms for compute and render are 3.59 / 1.76 on NVIDIA and 60.9 / 28.5 on Intel (a fixed workload). Rows are in `bench/results/timing.csv`.
+Not verified: Apple devices (deferred); whether normal, non-headless Chrome rounds timestamps to 100 µs; Ctrl-C of `device:serve`.
+Next: T0.5 wires the overlay into the viewer. Benchmarks (T0.10 part B) should use the timer's strict mode.
+
 ## 2026-11-04 · T0.1 review · main session (opus)
 Did: reviewer pass (verdict: pass with notes) plus my own re-run. Fixed one finding: the boundary rule missed dynamic `import('three')`; added a `no-restricted-syntax` rule in `eslint.config.mjs` for `ImportExpression`.
 Verified (Windows 11, no GPU): `pnpm lint && pnpm typecheck && pnpm test && pnpm build` exit 0; `export const e = import('three')` in ddgi-core now fails lint with the boundary message; `packages/ddgi/dist` has index/core/three `.js` + `.d.ts`. A fresh `git clone` of commit ecc503f, then `pnpm i --frozen-lockfile && pnpm lint && pnpm typecheck && pnpm test && pnpm build`: exit 0, dist has all three entries.
