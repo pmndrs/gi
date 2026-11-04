@@ -58,7 +58,7 @@ An engine-free BVH module inside the platform, with its own tests and benchmark.
 
 | Stage | What | Done when (RTX 3060 Laptop, Chrome; Intel UHD must also pass, with no speed bar) | Where |
 | --- | --- | --- | --- |
-| **B0** | tinybvh WASM builder in a worker, behind the Builder contract. Our CPU builder is deleted. | Sponza builds in ≤ 2 s single-threaded, with the time recorded. The oracle passes. Trace speed on tinybvh trees is ≥ our current trees. | T0.10 part C, with the three-mesh-bvh experiment |
+| **B0** | tinybvh WASM builder in a worker, behind the Builder contract (SIMD Bonsai builder, emsdk 6.0.13 pinned). Our CPU builder is deleted once the checks pass. Status 2026-11-04: Sponza 2.2-2.7 s; B0b moves the layout conversion into the WASM. | Sponza builds in ≤ 2 s single-threaded, with the time recorded. The oracle passes. Trace speed on tinybvh trees is ≥ our current trees. | T0.10 part C, with the three-mesh-bvh experiment |
 | **B1** | GPU LBVH, subgroups first: Morton codes, sort, Apetrei build, SAH leaf collapse. GPU top-level rebuild every frame, and BLAS refit. | Sponza GPU build ≤ 50 ms. 10k-instance top level ≤ 0.5 ms of GPU time. The oracle passes on both GPUs. No subgroups: the BVH falls back to B0, and a test covers that. | M1 |
 | **B2** | GPU PLOC, then H-PLOC | H-PLOC trees match tinybvh `BuildHPLOC` (same SAH cost ±1%). SAH cost ≤ 1.15× tinybvh's best CPU build. Sponza build ≤ 50 ms. Trace ≥ 0.9× of B0 trees. | M1 or M2, by speed need |
 | **B3** | CWBVH spike: compressed 8-wide nodes and traversal, with tinybvh's builder and kernels as reference | Adopt if closest-hit Mrays/s ≥ 1.3× BVH2 on Sponza on both GPUs. Otherwise record the result and drop it. | After B2 |

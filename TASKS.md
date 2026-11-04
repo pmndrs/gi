@@ -274,7 +274,8 @@ Rules for every M1 task:
 
 | ID | Stage | Must be done before | Status |
 | --- | --- | --- | --- |
-| B0 | tinybvh WASM builder in a worker (`packages/bvh`) | M1 starts (M1 can start without the ≤ 2 s, DECISIONS 2026-11-04) | built and passes the oracle; 5.3 s on Sponza, not ≤ 2 s; waiting on Dennis about a newer Emscripten |
+| B0 | tinybvh WASM builder in a worker (`packages/bvh`) | M1 starts (M1 can start without the ≤ 2 s, DECISIONS 2026-11-04) | SIMD build with emsdk 6.0.13 pinned; oracle passes; Sponza 2.2-2.7 s, not ≤ 2 s |
+| B0b | Write our GPU layout from inside the WASM (no JS conversion pass); re-run the RTX trace bench on an idle GPU | T1.3 ends | todo |
 | B1a | GPU top-level tree: refit every frame from instance transforms, rebuild now and then | T1.3 ends (moved up to M1) | todo |
 | B1 | GPU LBVH per mesh (subgroups first), BLAS refit | M3 | todo |
 | B2 | GPU PLOC, then H-PLOC | M3 | todo |

@@ -71,6 +71,9 @@ Settled choices, newest first. Each entry is short: the decision, why, and what 
   - Both CPU builders stay, behind the same tree format, until B0's checks are met. Our builder isn't deleted yet. M1 meshes use tinybvh by default (5.3 s against 8.7 s; it traces at 0.97× our trees on the RTX 3060 and 1.00× on Intel). The top level keeps our builder until B1a moves it to the GPU.
   - The ≤ 2 s number stays. Reaching it needs a newer Emscripten whose SIMD builder compiles: a toolchain install, so it's Dennis's call. pthreads is not the route, since it needs headers the host page must set.
   - *Revisit when:* Dennis decides on the Emscripten upgrade, or B2 (GPU H-PLOC) makes the CPU build matter less.
+  - **Update, same day:** Dennis approved the newer Emscripten. With emsdk 6.0.13 pinned, tinybvh's SIMD Bonsai builder takes Sponza from 5.3 s to 2.2-2.7 s in the browser. Still not ≤ 2 s.
+    - The ≤ 2 s target stays. The next step is **B0b**: write our GPU layout directly from the WASM, removing the 0.65 s JS conversion pass. Not chosen: reusing tinybvh's boxes without recomputing them (it weakens the check that boxes really contain their triangles), and pruning Bonsai harder (13% faster for a worse tree).
+    - Our CPU mesh builder stays until B0's checks all pass.
 - **Code is written and reviewed on Opus.**
   - `implementer` and `reviewer` run on Opus at high effort, and `native-runner` on Opus at medium.
   - `gpu-tester` stays on Sonnet, and `scout` and `wrangler` on Haiku: running checks, measuring, lookups and mechanical jobs.

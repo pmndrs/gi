@@ -14,6 +14,13 @@ Columns, in this order:
 | `metric` | what was measured, with the unit in the name, e.g. `gpu_ms_probe_update` |
 | `value` | the number |
 
+## trace.csv
+
+- **Repeated runs:** a 3-run measurement writes `run1/`, `run2/` and `run3/` rows plus `median/` rows (the median of the three). Quote the `median/` rows.
+- **`probes/thinned,1`:** that scene ran with fewer rays (Intel Bistro), so compare its Mrays/s, not its ms.
+- **`note/gpu_busy,1`:** another program was using the GPU during that scene's runs. The rows are kept (the file is never edited) but aren't valid timings. The RTX 3060 rows at `80cd2dc` are like that.
+- **The commit column** names the commit the CSV was written at, with `-dirty` only if a measured file had uncommitted changes.
+
 ## native.csv
 
 NVIDIA's RTXGI-DDGI test harness (our fork in `native/rtxgi-ddgi`), written by `tools/native/bench.ps1`. Metric names and what they mean: `tools/native/README.md`, section "Timing".
