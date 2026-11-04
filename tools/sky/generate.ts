@@ -7,7 +7,7 @@
  *   node tools/sky/generate.ts --scene sponza  one scene (repeatable, or comma-separated)
  *   node tools/sky/generate.ts --check         regenerate in memory and compare with the committed files; exit 1 if any differ
  *
- * The files are committed: each is a few hundred kB, and committing them means
+ * The files are committed: each is about 50 kB, and committing them means
  * the viewer, Blender and the native scripts never need a generation step.
  * `--check` (also run by the unit tests) keeps them in step with the manifests
  * and the code. It compares decoded pixels, not file bytes, so a different
@@ -32,9 +32,10 @@ const manifestsDirectory = join(repoRoot, 'scenes', 'manifests');
 
 /**
  * Largest difference allowed by `--check` between a committed and a regenerated
- * texel, relative to the regenerated value: one half-float step (2^-10) plus a
- * little. Exact equality is expected on the same Node version; this only
- * forgives a last-bit change in Math.exp/acos between JavaScript engines.
+ * texel, relative to the regenerated value: 2e-3, about two half-float steps
+ * (one step is 2^-10, about 9.8e-4). Exact equality is expected on the same
+ * Node version; this only forgives a value that rounds to a neighbouring half
+ * after a last-bit change in Math.exp/acos between JavaScript engines.
  */
 const CHECK_RELATIVE_TOLERANCE = 2e-3;
 

@@ -64,6 +64,28 @@ describe('the sky file format (half-float OpenEXR)', () => {
         }
     });
 
+    it('honours a data window that does not start at line 0', async () => {
+        // Shift an uncompressed file's data window and every chunk's line number by 5:
+        // the same picture, in other coordinates.
+        const file = encodeHalfExr(image);
+        const view = new DataView(file.buffer, file.byteOffset, file.byteLength);
+        const marker = new TextEncoder().encode('dataWindow\0box2i\0');
+        const start = file.findIndex((_, index) => marker.every((byte, offset) => file[index + offset] === byte));
+        const box = start + marker.length + 4;
+        view.setInt32(box + 4, 5, true);
+        view.setInt32(box + 12, image.height - 1 + 5, true);
+        // Uncompressed: one line per chunk (line number, size, B G R halves), after an offset table of one u64 per line.
+        const chunkBytes = 8 + image.width * 6;
+        const offsetTable = file.length - image.height * chunkBytes - image.height * 8;
+        const firstChunk = Number(view.getBigUint64(offsetTable, true));
+        for (let line = 0; line < image.height; line++) {
+            const chunk = firstChunk + line * chunkBytes;
+            view.setInt32(chunk, view.getInt32(chunk, true) + 5, true);
+        }
+        const decoded = await decodeHalfExr(file);
+        expect(Buffer.from(decoded.halves.buffer).equals(Buffer.from(image.halves.buffer))).toBe(true);
+    });
+
     it('decodes with the browser-style DecompressionStream inflater too', async () => {
         const decoded = await decodeSkyFile(encodeHalfExr(image, (bytes) => deflateSync(bytes)));
         expect(Buffer.from(decoded.halves.buffer).equals(Buffer.from(image.halves.buffer))).toBe(true);

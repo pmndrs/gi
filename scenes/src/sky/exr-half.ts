@@ -298,6 +298,8 @@ interface ParsedHeader {
     width: number;
     height: number;
     compression: number;
+    /** dataWindow.yMin: chunks store absolute line numbers, so row = line - yMin. */
+    firstLineY: number;
     /** Byte offset of the first offset-table entry. */
     end: number;
 }
@@ -354,7 +356,7 @@ function parseHeader(file: Uint8Array): ParsedHeader {
         throw new Error(`unsupported OpenEXR compression ${compression} (the sky reader handles none and ZIP)`);
     }
     if (!dataWindow) throw new Error('the OpenEXR header has no dataWindow');
-    return { width: dataWindow[2] - dataWindow[0] + 1, height: dataWindow[3] - dataWindow[1] + 1, compression, end: offset };
+    return { width: dataWindow[2] - dataWindow[0] + 1, height: dataWindow[3] - dataWindow[1] + 1, compression, firstLineY: dataWindow[1], end: offset };
 }
 
 /**
@@ -372,8 +374,10 @@ export async function decodeHalfExr(file: Uint8Array, inflate: Inflate = inflate
 
     for (let block = 0; block < blockCount; block++) {
         const chunkOffset = Number(view.getBigUint64(header.end + block * 8, true));
-        const firstLine = view.getInt32(chunkOffset, true);
+        // The chunk names its first scanline in data-window coordinates, which need not start at 0.
+        const firstLine = view.getInt32(chunkOffset, true) - header.firstLineY;
         const dataSize = view.getInt32(chunkOffset + 4, true);
+        if (firstLine < 0 || firstLine >= height) throw new Error(`block ${block} starts at line ${firstLine + header.firstLineY}, outside the data window`);
         const lineCount = Math.min(linesPerBlock, height - firstLine);
         const rawSize = lineCount * lineBytes;
         let data = file.subarray(chunkOffset + 8, chunkOffset + 8 + dataSize);

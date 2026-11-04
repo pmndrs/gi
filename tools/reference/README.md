@@ -65,7 +65,7 @@ All in `tools/reference/cycles/units.py`, each with its reason. Pinned by measur
 
 **Range window.** three.js and the path tracer fade a point light to zero at `range` (`(1 - (d/range)^4)^2`). Cycles has no such window and the reference is the plain inverse-square answer. On two-room (range 14) that makes three about 12 percent dimmer than Cycles at 7 m from the lamp and 3 percent at 5 m. This is a difference to remember when comparing DDGI with a Cycles reference; Cornell and Sponza are unaffected (emissive geometry, directional light).
 
-**Procedural sky:** the shared sky file `scenes/sky/<scene>.exr` (T1.1, `tools/sky/README.md`) as an Environment Texture, the same file the viewer and the platform read: no sun disc (the directional light is the sun), black below the horizon, brightness calibrated. Until 2026-11-04 it was Cycles' Nishita sky, which was about twice as bright on Sponza: references with a procedural sky rendered before then (Sponza) must be rendered again. A quick 256-sample Sponza render at bookmark 1 has mean 0.0174 with the shared sky, against 0.0346 for the Nishita reference.
+**Procedural sky:** the shared sky file `scenes/sky/<scene>.exr` (T1.1, `tools/sky/README.md`) as an Environment Texture, the same file the viewer and the platform read: no sun disc (the directional light is the sun), black below the horizon, brightness calibrated. Until 2026-11-04 it was Cycles' Nishita sky, which was brighter: references with a procedural sky rendered before then (Sponza) must be rendered again. The before and after means are in PROGRESS (T1.1).
 
 ## Compare
 

@@ -6,7 +6,7 @@ One sky definition becomes one HDR file, and every renderer reads that file: the
 node tools/sky/generate.ts                  # write scenes/sky/<id>.exr and .json for every scene with a procedural sky
 node tools/sky/generate.ts --scene sponza   # one scene
 node tools/sky/generate.ts --check          # compare the committed files with a fresh generation (the unit tests do this too)
-node tools/sky/viewer-render.ts --scene open-ground --camera 1 [--material diffuse|standard]   # viewer render lit by the sky, to bench/references/
+node tools/sky/pmrem-env-render.ts --scene open-ground --camera 1 [--material diffuse|standard]   # three PMREM env diffuse (not used by the viewer), to bench/references/
 pnpm test:gpu --filter sky-orientation      # the platform loader and the viewer read known directions the same as the file
 node tools/reference/cycles/run.ts --calibrate   # includes the Cycles sky orientation and sky-on-a-floor checks
 ```
@@ -39,43 +39,35 @@ E_sky = ratio(sun elevation, turbidity) x E_sun x sin(elevation) x environment.i
 - `E_sun` is the sun's illuminance at normal incidence: the manifest's directional light that travels along `-sunDirection`, as `intensity` x the luminance of its `color`. A sky-only scene with no such light gives `environment.sunIlluminance` instead. Exactly one of the two must exist.
 - `ratio` is the clear-sky diffuse-to-direct horizontal irradiance ratio from Ineichen and Perez, "A new airmass independent formulation for the Linke turbidity coefficient" (Solar Energy 73, 2002), at sea level, with the Kasten-Young air mass. This is the model pvlib (`ineichen`) uses by default. See `scenes/src/sky/clear-sky-ratio.ts`.
   - Two assumptions: the manifest's Preetham turbidity is used as Linke turbidity, and the ratio is broadband radiometric.
-- Results today:
-
-| scene | sun elevation | turbidity | sky / sun on the ground | diffuse fraction (sky / all daylight) |
-| --- | --- | --- | --- | --- |
-| sponza | 70.6° | 3 | 0.123 | 11.0% |
-| courtyard-tree | 58.0° | 3 | 0.132 | 11.6% |
-| bistro-exterior | 53.0° | 3 | 0.137 | 12.0% |
-| furnished-room | 43.5° | 3 | 0.152 | 13.2% |
-| open-ground | 37.0° | 3 | 0.167 | 14.3% |
-
-Half-float rounding leaves the stored sky within 0.0001% of the target.
+- Each sidecar records its own ratio, diffuse fraction and target. The stored sky's measured irradiance is in `measured.calibrationError`, which is what half-float rounding leaves over. The values per scene are in PROGRESS (T1.1).
 
 ## Who reads it, and how
 
 | consumer | how |
 | --- | --- |
-| viewer (`apps/viewer/src/scene/sky.ts`) | `EXRLoader`, as a sky dome that cameras and the probe-grid bake see (it replaced three's `SkyMesh`). Surfaces get no light from it directly: three r187 would add environment diffuse on top of probe GI (NOTES). `applySkyEnvironmentLighting` puts it in `scene.environment` for sky-only checks. |
+| viewer (`apps/viewer/src/scene/sky.ts`) | `EXRLoader`, as a sky dome that cameras and the probe-grid bake see (it replaced three's `SkyMesh`). Surfaces get no light from it directly: three r187 would add environment diffuse on top of probe GI (NOTES). `applySkyEnvironmentLighting` puts it in `scene.environment` for measuring three's PMREM on its own (`pmrem-env-render.ts`). |
 | Cycles (`tools/reference/cycles/blender_scene.py`) | an Environment Texture node with the file, Linear Rec.709, linear interpolation, strength 1 |
 | platform host (`scenes/src/sky/sky-file.ts`, `sky-texture.ts`) | `loadSkyFile(url)` (no engine; `DecompressionStream`), then `createSkyTexture(device, image)` gives an `rgba16float` texture for `setEnvironment({ type: 'texture', layout: 'equirect', texture })`. `SKY_EQUIRECT_WGSL` is the matching lookup. |
-| native harness (`tools/native/native-lib.ps1`) | its shaders take one flat sky radiance, not an image. It gets the sidecar's `flatEquivalentRadianceRgb`: the uniform radiance that gives the same ground irradiance per channel. Unlike the file, it is also returned below the horizon. |
+| native harness (`tools/native/native-lib.ps1`) | its shaders take one constant sky radiance, not an image, and cannot tell above the horizon from below without a shader change. It gets the sidecar's `flatEquivalentRadianceRgb`: the uniform radiance that gives the same ground irradiance per channel. Unlike the file, it is also returned below the horizon. |
 
-## Checks and what they measured (2026-11-04)
+## Checks
 
-- **Orientation:** the file's sun glow is at the sun's azimuth (unit test).
-  - The platform loader (compute shader) and the viewer's sky dome read 8 known directions within 0.021% of a CPU lookup of the file on the RTX 3060, and within 0.008% on the Intel UHD (`sky-orientation`).
-  - Cycles reads them within 0.00% (`--calibrate`).
-  - The glow is 3.1x the opposite sky, so a turned or mirrored sky would fail.
-- **Cycles, sky on a white floor:** E / pi to 0.00% (`--calibrate`).
-- **Open ground, bookmark 1** (ground only, albedo 0.5, 640 x 360). The analytic answer is 0.5 x E / pi per channel. Compared with `node tools/compare/index.ts cycles-full.exr viewer-diffuse.exr --downsample 8`:
+Results are in PROGRESS (T1.1); this section only says what each check does.
 
-| render | R | G | B | vs Cycles: bias | block error |
-| --- | --- | --- | --- | --- | --- |
-| Cycles, 1024 samples | -0.03% | -0.01% | -0.01% | | |
-| viewer, diffuse-only materials, PMREM | -0.04% | -0.61% | -0.97% | -0.65% | 0.65% |
-| viewer, its own MeshStandardMaterial | +1.66% | +1.09% | +0.72% | +1.05% | 1.05% |
-
-  - The tolerance is ±0.5% brightness and 1% block error (DECISIONS).
-  - Even with the specular lobe off, three's PMREM misses the brightness limit by 0.15 points.
-  - The cause is PMREM. Its roughness-1 "irradiance" is a blurred GGX-style lobe times pi, not a cosine-weighted integral (NOTES). So it weights the sky's directions differently from Lambert's law, and each channel by a different amount, because the sky's colours are spread differently over the dome.
-  - Cycles itself matches the file's analytic answer.
+- **Orientation:**
+  - A unit test checks that the file's sun glow sits at the sun's azimuth.
+  - `pnpm test:gpu --filter sky-orientation` reads 8 known directions from the file in two ways and compares each with a CPU lookup (1% limit):
+    - the platform loader, through a compute shader;
+    - the viewer's sky dome, rendered by three.
+  - `node tools/reference/cycles/run.ts --calibrate` does the same in Cycles (1% limit).
+  - The page also checks that the glow is at least 2x the sky opposite it, so a turned or mirrored sky can't pass.
+- **Cycles sky on a white floor:** `--calibrate` renders the sky lighting a white floor and compares it with E / pi, with E integrated from the file's texels.
+- **Open ground, bookmark 1** (ground only, albedo 0.5):
+  - The analytic answer is 0.5 x E / pi per channel, with E from the sidecar.
+  - Cycles: `node tools/reference/cycles/run.ts --scene open-ground --camera 1`.
+  - `pmrem-env-render.ts` renders three's PMREM environment diffuse. **The viewer never lights surfaces this way** (see the table above), so this is a measurement of three's PMREM, not the viewer's sky check. The viewer's check is the orientation page: it shows the same file, the same way round.
+  - Compare with `node tools/compare/index.ts cycles-full.exr three-pmrem-env-diffuse.exr --downsample 8`. Read both metrics:
+    - `bias`: signed brightness;
+    - `mean relative error`: sum |T - R| / sum R over 8 x 8 blocks;
+    - `p95 8x8 block error`: the 95th-percentile block.
+  - Sky-lighting accuracy against Cycles is checked on the platform's own sky irradiance in T1.4, and through DDGI in the viewer in T1.8.

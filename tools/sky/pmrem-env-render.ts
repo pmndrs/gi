@@ -1,13 +1,15 @@
 /**
- * Renders a scene the way the viewer builds it, lit by the shared sky through
- * three's environment lighting, to a linear float EXR next to the references,
- * so `tools/compare` can put it against the Cycles render.
+ * Measures three's PMREM environment diffuse from the shared sky: three PMREM env
+ * diffuse, not used by the viewer (the viewer only shows the sky on a dome and
+ * never lights surfaces with `scene.environment`). The scene is built by the
+ * viewer's `loadScene`, lit only by `scene.environment`, and written as a linear
+ * float EXR next to the references, so `tools/compare` can put it against Cycles.
  *
- *   node tools/sky/viewer-render.ts --scene open-ground [--camera 1] [--width 640] [--height 360]
+ *   node tools/sky/pmrem-env-render.ts --scene open-ground [--camera 1] [--width 640] [--height 360]
  *        [--material diffuse|standard] [--gpu nvidia|intel]
  *
- * Output: bench/references/<scene>/<camera name>/viewer-<material>.exr and
- * viewer-<material>.json. It is a correctness render (one still frame), so it
+ * Output: bench/references/<scene>/<camera name>/three-pmrem-env-<material>.exr
+ * and .json. It is a correctness render (one still frame), so it
  * does not take the GPU bench lock.
  */
 
@@ -23,7 +25,7 @@ import { BrowserSession } from '../gpu/session.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '..', '..');
-const pageRoot = join(here, 'viewer-page');
+const pageRoot = join(here, 'pmrem-env-page');
 
 async function main(): Promise<void> {
     const { values } = parseArgs({
@@ -67,7 +69,7 @@ async function main(): Promise<void> {
         },
         plugins: [
             {
-                name: 'sky-render-job',
+                name: 'pmrem-env-render-job',
                 configureServer(devServer) {
                     devServer.middlewares.use('/job.json', (_request, response) => {
                         response.setHeader('content-type', 'application/json');
@@ -100,9 +102,9 @@ async function main(): Promise<void> {
     const outDir = resolve(values['out-dir'] ?? join(repoRoot, 'bench', 'references', manifest.id, cameraName));
     const session = await BrowserSession.launch({ serverOrigin: origin, chromePath: null, gpu, withoutGpu: false });
     registerCleanup(() => session.close());
-    console.log(`rendering ${job.scene} / ${cameraName} (${job.material} materials, sky as three environment light), ${job.width}x${job.height}, on ${gpu}`);
+    console.log(`rendering ${job.scene} / ${cameraName} (${job.material} materials, three PMREM env diffuse, not used by the viewer), ${job.width}x${job.height}, on ${gpu}`);
     const result = await session.runPage(
-        { name: 'sky-viewer-render', urlPath: '/index.html', description: 'viewer render lit by the shared sky', expectFailure: false, expectMessage: null, manual: false, timeoutMs: 120_000 },
+        { name: 'sky-pmrem-env-render', urlPath: '/index.html', description: 'three PMREM env diffuse from the shared sky (not used by the viewer)', expectFailure: false, expectMessage: null, manual: false, timeoutMs: 120_000 },
         { timeoutMs: 120_000, expectFailure: false, screenshotDir: join(outDir, 'logs'), gpuLabel: gpu },
     );
     if (!result.verdict.acceptable || !result.report) throw new Error(`the page failed:\n  ${result.verdict.reasons.join('\n  ')}`);
@@ -111,14 +113,15 @@ async function main(): Promise<void> {
     const bytes = Buffer.from(data.rgbBase64, 'base64');
     const rgb = new Float32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4).slice();
     await mkdir(outDir, { recursive: true });
-    const name = `viewer-${job.material}`;
+    const name = `three-pmrem-env-${job.material}`;
     await writeFile(join(outDir, `${name}.exr`), writeExr({ width: job.width, height: job.height, rgb }));
     await writeFile(
         join(outDir, `${name}.json`),
         JSON.stringify(
             {
-                tool: 'tools/sky/viewer-render.ts',
+                tool: 'tools/sky/pmrem-env-render.ts',
                 library: 'three 0.187.0 (WebGPURenderer), apps/viewer loadScene, sky as scene.environment (PMREM)',
+                measures: 'three PMREM env diffuse, not used by the viewer',
                 ...job,
                 cameraName,
                 meanLuminance: data.meanLuminance,

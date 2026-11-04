@@ -8,12 +8,11 @@
  *    bake cameras capture. This is how the viewer always shows it, as the
  *    baselines did with three's `SkyMesh`.
  *  - {@link applySkyEnvironmentLighting}: the same file as `scene.environment`,
- *    three's own image-based lighting (prefiltered by PMREM). The viewer does
- *    not turn this on for its techniques: three r187 adds environment diffuse
- *    on top of any probe GI, so the probe grid would count the sky twice
- *    (docs/NOTES.md, "Env diffuse counted twice"). It is for checks of the sky
- *    alone (`tools/sky/open-ground`), and for when a technique can switch
- *    environment diffuse off inside its volume.
+ *    three's own image-based lighting (prefiltered by PMREM). The viewer never
+ *    lights surfaces this way: three r187 adds environment diffuse on top of
+ *    any probe GI, so the probe grid would count the sky twice (docs/NOTES.md,
+ *    "Env diffuse counted twice"). Only `tools/sky/pmrem-env-render.ts` uses it,
+ *    to measure three's PMREM on its own.
  */
 
 import { BackSide, BoxGeometry, EquirectangularReflectionMapping, HalfFloatType, LinearFilter, Mesh, RepeatWrapping, type Scene, type DataTexture } from 'three';
@@ -89,7 +88,7 @@ export function createSkyDome(sky: DataTexture): Mesh {
     return dome;
 }
 
-/** Lights the scene's materials with the sky through three's environment map. See the file comment for when. */
+/** Lights the scene's materials with the sky through three's environment map (PMREM). Not used by the viewer; see the file comment. */
 export function applySkyEnvironmentLighting(scene: Scene, sky: DataTexture): void {
     scene.environment = sky;
     scene.environmentIntensity = 1;

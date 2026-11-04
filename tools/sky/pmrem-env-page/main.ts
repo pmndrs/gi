@@ -1,9 +1,13 @@
 /**
- * Renders a manifest scene the way the viewer builds it (`apps/viewer`'s
- * `loadScene`: the same geometry, materials, lights and shared sky file),
- * lit by the sky through three's own environment lighting
- * (`applySkyEnvironmentLighting`, PMREM), into a linear float image.
- * Driven by `tools/sky/viewer-render.ts`; see `tools/sky/README.md`.
+ * Measures three's PMREM environment diffuse; this is NOT the viewer's sky check.
+ * The viewer never lights surfaces with `scene.environment` (three r187 would
+ * add it on top of probe GI); it only shows the sky file on a dome, which the
+ * `sky-orientation` GPU page checks.
+ *
+ * What this renders: a manifest scene built by the viewer's `loadScene` (the
+ * same geometry, materials and sky file), lit by the sky only through three's
+ * environment lighting (`applySkyEnvironmentLighting`, PMREM), into a linear
+ * float image. Driven by `tools/sky/pmrem-env-render.ts`; see `tools/sky/README.md`.
  *
  * `material`:
  *  - `diffuse`: every material made pure Lambert (MeshPhysicalMaterial,
@@ -90,6 +94,7 @@ async function main(): Promise<void> {
     try {
         const loaded = await loadScene(manifest, () => {});
         if (!loaded.sky) throw new Error(`scene ${manifest.id} has no sky file (environment "${manifest.environment.type}")`);
+        // three PMREM env diffuse, not used by the viewer: measured here on its own.
         applySkyEnvironmentLighting(loaded.scene, loaded.sky);
         if (job.material === 'diffuse') makeDiffuseOnly(loaded.content);
 
