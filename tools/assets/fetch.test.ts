@@ -25,8 +25,10 @@ import {
     isAllowedLicense,
     isSafeRelativePath,
     makeGlbViewRecord,
+    metalProblems,
     parseArgs,
     parseBlenderVersion,
+    readGlbJson,
     readGlbStructure,
     readGlbViewRecord,
     runConversionProcess,
@@ -1215,5 +1217,88 @@ describe('outputs of a converter that is not bit-reproducible', () => {
         expect(validateSources({ assets: [rawAsset({ outputs: [{ ...complete, reproducible: 'no' }] })] }).join('\n')).toContain('reproducible: must be true or false');
         const strayFields = { path: 'a.bin', sha256: 'b'.repeat(64), bytes: 4, varyingAttributes: ['NORMAL'] };
         expect(validateSources({ assets: [rawAsset({ outputs: [strayFields] })] }).join('\n')).toContain('only go with reproducible false');
+    });
+});
+
+describe('outputs that must have no metal (dielectric)', () => {
+    let directory: string;
+
+    beforeAll(async () => {
+        directory = await mkdtemp(join(tmpdir(), 'ddgi-dielectric-'));
+    });
+    afterAll(() => rm(directory, { recursive: true, force: true }));
+
+    /** A one-triangle .glb with the given materials; the primitive uses `primitiveMaterial`. */
+    function glbWithMaterials(materials: unknown[], primitiveMaterial: number | undefined = 0): Buffer {
+        const json = {
+            asset: { version: '2.0' },
+            buffers: [{ byteLength: 4 }],
+            bufferViews: [{ buffer: 0, byteOffset: 0, byteLength: 4 }],
+            accessors: [{ bufferView: 0 }],
+            materials,
+            meshes: [{ primitives: [{ attributes: { POSITION: 0 }, ...(primitiveMaterial === undefined ? {} : { material: primitiveMaterial }) }] }],
+        };
+        return makeGlb(json, Buffer.from('DATA'));
+    }
+
+    const plaster = { name: 'Plaster', pbrMetallicRoughness: { baseColorFactor: [0.9, 0.9, 0.9, 1], metallicFactor: 0, roughnessFactor: 0.9 } };
+
+    it('accepts materials with metallicFactor 0, even with a metallicRoughness texture, since glTF multiplies the two', () => {
+        const textured = { name: 'Tiles', pbrMetallicRoughness: { metallicFactor: 0, metallicRoughnessTexture: { index: 0 } } };
+        expect(metalProblems({ materials: [plaster, textured], meshes: [{ primitives: [{ material: 0 }, { material: 1 }] }] })).toEqual([]);
+    });
+
+    it('treats a missing metallicFactor as glTF does: 1, fully metal (what Blender wrote for the Breakfast Room)', () => {
+        const problems = metalProblems({ materials: [plaster, { name: 'Paint', pbrMetallicRoughness: { roughnessFactor: 0.9 } }, { name: 'Bare' }] });
+        expect(problems).toHaveLength(1);
+        expect(problems[0]).toContain('2 material(s) can be metal');
+        expect(problems[0]).toContain(`"Paint" (metallicFactor not written, so glTF's default 1)`);
+        expect(problems[0]).toContain('"Bare"');
+        expect(problems[0]).not.toContain('Plaster');
+    });
+
+    it('flags any factor above 0 and says when a texture comes with it', () => {
+        const problems = metalProblems({ materials: [{ pbrMetallicRoughness: { metallicFactor: 0.25, metallicRoughnessTexture: { index: 0 } } }] });
+        expect(problems[0]).toContain('#0 (metallicFactor 0.25, with a metallicRoughness texture)');
+    });
+
+    it('flags primitives without a material, because glTF default material is fully metal', () => {
+        expect(metalProblems({ materials: [plaster], meshes: [{ primitives: [{ material: 0 }, {}] }] })).toEqual([
+            "1 mesh primitive(s) have no material, so they get glTF's default material, which is fully metal",
+        ]);
+    });
+
+    it('checkOutputs checks metal on marked outputs even when the hash matches, and only on those', async () => {
+        const metal = glbWithMaterials([{ name: 'Paint', pbrMetallicRoughness: {} }]);
+        await writeFile(join(directory, 'room.glb'), metal);
+        const recorded: AssetOutput = { path: 'room.glb', bytes: metal.length, sha256: sha256(metal) };
+        expect(await checkOutputs(directory, [recorded], () => undefined)).toEqual([]);
+        const marked = await checkOutputs(directory, [{ ...recorded, dielectric: true }], () => undefined);
+        expect(marked).toHaveLength(1);
+        expect(marked[0]).toMatch(/^room\.glb: 1 material\(s\) can be metal.*"Paint"/);
+
+        const dielectric = glbWithMaterials([plaster]);
+        await writeFile(join(directory, 'room.glb'), dielectric);
+        expect(await checkOutputs(directory, [{ path: 'room.glb', bytes: dielectric.length, sha256: sha256(dielectric), dielectric: true }], () => undefined)).toEqual([]);
+
+        // A file that is not a .glb is a plain problem, not a crash.
+        await writeFile(join(directory, 'room.glb'), 'not a glb at all, just text');
+        const broken = await checkOutputs(directory, [{ ...recorded, dielectric: true }], () => undefined);
+        expect(broken[0]).toContain('room.glb: not a .glb file (bad magic)');
+    });
+
+    it('readGlbJson reads the scene description without the BIN chunk', async () => {
+        await writeFile(join(directory, 'json.glb'), glbWithMaterials([plaster]));
+        const gltf = (await readGlbJson(join(directory, 'json.glb'))) as { materials: Array<{ name: string }> };
+        expect(gltf.materials[0].name).toBe('Plaster');
+        await writeFile(join(directory, 'short.glb'), Buffer.from('glTF'));
+        await expect(readGlbJson(join(directory, 'short.glb'))).rejects.toThrow('too short');
+    });
+
+    it('sources.json takes dielectric only as true or false, and only on .glb files', () => {
+        const output = { path: 'room.glb', sha256: 'b'.repeat(64), bytes: 40, dielectric: true };
+        expect(validateSources({ assets: [rawAsset({ outputs: [output] })] })).toEqual([]);
+        expect(validateSources({ assets: [rawAsset({ outputs: [{ ...output, dielectric: 'yes' }] })] }).join('\n')).toContain('dielectric: must be true or false');
+        expect(validateSources({ assets: [rawAsset({ outputs: [{ ...output, path: 'room.gltf' }] })] }).join('\n')).toContain('dielectric: only supported for .glb');
     });
 });

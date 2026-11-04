@@ -95,8 +95,9 @@
       "outputs": [
         {
           "path": "BreakfastRoom.glb",
-          "sha256": "823eb29e875ef69cdfa13e98fb794af289e771212b44c63a7b63478a51759f9f",
-          "bytes": 7694612
+          "sha256": "c708c5e9e1867a180482376b35aa224ebf240623cdc2849652b5c518da63cdbe",
+          "bytes": 7693624,
+          "dielectric": true
         }
       ]
     },

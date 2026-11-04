@@ -14,8 +14,19 @@ What it does and why:
   every material. The Breakfast Room MTL has no `d` or `Tr` (opacity), so that
   reading would make the walls and floor transparent. We set transmission to 0
   on every material. The count is printed.
-- Blender has no metallic value in MTL. Materials named "Chrome" therefore come
-  out as dark, rough dielectrics. This is a known limit, not fixed here.
+- The importer also guesses PBR values from old Phong fields, and for these
+  scenes every guess is wrong (see `make_dielectric`):
+  - Metallic = the average of the ambient colour `Ka` (when `illum` turns
+    reflection on, as `illum 4` does). The Breakfast Room MTL has `Ka 1 1 1` on
+    almost every material, so walls, floor and paint all came out fully metal
+    and got no diffuse light at all.
+  - Specular IOR Level = the average of `Ks`, and IOR = `Ni`. `Ni 1.0` means no
+    Fresnel reflection, and `Ks` was tuned for Phong, not for a PBR lobe.
+  We reset all three to a plain dielectric (Metallic 0, Principled's default
+  specular, IOR 1.5), so glTF gets metallicFactor 0 and no specular or IOR
+  extensions. Base colour, textures and roughness (from `Ns`) are kept.
+- So materials named "Chrome" come out as dark, rough dielectrics. MTL has no
+  trustworthy metal value, so this is a known limit, not fixed here.
 - OBJ has no up axis in its data. We assume -Z forward and Y up, which is what
   Blender writes and what the glTF exporter expects. The script prints the
   bounding box so a wrong unit or axis shows up in the log.
@@ -77,6 +88,58 @@ def clear_transmission():
     print(f"TRANSMISSION cleared on {cleared} materials")
 
 
+# Principled BSDF inputs the OBJ importer derives from Phong-era MTL fields,
+# and the plain-dielectric value each one gets instead.
+#   Metallic           from Ka (ambient colour): 0, nothing in these scenes is metal we can trust.
+#   Specular IOR Level from Ks: 0.5, Principled's default, which glTF writes as no
+#                      KHR_materials_specular (specularFactor 1).
+#   Specular Tint      from Ks colour: white, so the specular lobe is not tinted.
+#   IOR                from Ni: 1.5, glTF's default, which gives the usual F0 of
+#                      0.04 ((1.5 - 1) / (1.5 + 1))^2. Ni 1.0 would mean no reflection.
+DIELECTRIC_INPUTS = {
+    "Metallic": 0.0,
+    "Specular IOR Level": 0.5,
+    "Specular Tint": (1.0, 1.0, 1.0, 1.0),
+    "IOR": 1.5,
+}
+
+
+def same_value(current, wanted):
+    if isinstance(wanted, tuple):
+        return all(abs(a - b) < 1e-6 for a, b in zip(current, wanted))
+    return abs(current - wanted) < 1e-6
+
+
+def make_dielectric():
+    """Resets the importer's Phong-to-PBR guesses on every material to a plain dielectric.
+
+    A linked socket ignores its own value, so links into these inputs are removed
+    first. Prints the metallic value each material had, so the log shows what
+    the importer did.
+    """
+    changed = {name: 0 for name in DIELECTRIC_INPUTS}
+    for material in sorted(bpy.data.materials, key=lambda m: m.name):
+        if not material.use_nodes or material.node_tree is None:
+            continue
+        tree = material.node_tree
+        for node in tree.nodes:
+            if node.type != "BSDF_PRINCIPLED":
+                continue
+            metallic = node.inputs["Metallic"]
+            imported = "linked" if metallic.is_linked else f"{metallic.default_value:.3f}"
+            print(f"MATERIAL {material.name}: imported metallic {imported}")
+            for name, wanted in DIELECTRIC_INPUTS.items():
+                socket = node.inputs[name]
+                if not socket.is_linked and same_value(socket.default_value, wanted):
+                    continue
+                for link in list(socket.links):
+                    tree.links.remove(link)
+                socket.default_value = wanted
+                changed[name] += 1
+    summary = ", ".join(f"{name} {count}" for name, count in changed.items())
+    print(f"DIELECTRIC reset on materials: {summary}")
+
+
 def export_glb(out_path):
     bpy.ops.export_scene.gltf(
         filepath=out_path,
@@ -100,6 +163,7 @@ def main():
     print(f"BOUNDS min {low.round(2).tolist()} max {high.round(2).tolist()} size_m {(high - low).round(2).tolist()}")
 
     clear_transmission()
+    make_dielectric()
     export_glb(out_path)
     print(f"EXPORTED {out_path} bytes {os.path.getsize(out_path)}")
 

@@ -21,6 +21,14 @@ Rules:
 
 ---
 
+## 2026-11-04 · T0.4 follow-up (furnished-room metal) · implementer (opus)
+Did: the furnished room came out of Blender almost entirely metal, so it got no diffuse GI (found by T0.5).
+- Cause: Blender 4.5's OBJ importer sets Metallic to the average of `Ka` whenever `illum` turns on reflection, and every material here is `illum 4` with mostly `Ka 1 1 1`. 12 of 15 materials came out metal.
+- Fix: `obj-to-glb.py` resets every material to a plain dielectric. A new `"dielectric": true` output check in `sources.json` fails any metal material, or any primitive without a material, whatever the hashes say. The new GLB reconverts byte-identically.
+Verified (I re-ran it): `assets:fetch --verify-only` "All outputs verified". I read the GLB JSON myself: 0 of 15 materials are metal.
+Checked in passing: the Bistro GLBs have 14 metal materials each. They come from the FBX source and are mostly real metals (Vespa, bollards, chrome, cutlery), so I left them. The tree has none.
+Next: re-take the T0.5 furnished-room screenshots and baselines with the new GLB.
+
 ## 2026-11-04 · T0.7 follow-up · implementer (opus), after an Opus re-review
 Did: six fixes from the second review.
 - **Matte references.** The Cycles material reset unlinks inputs before setting them, so references are pure Lambert. That includes Diffuse Roughness, which turns on Oren-Nayar in Blender 4.3+. A check stops the render if anything is left non-neutral.

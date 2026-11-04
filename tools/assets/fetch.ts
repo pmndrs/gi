@@ -34,7 +34,8 @@
  *      size and modification time of every input before the conversion and
  *      fails if any changed.
  *   5. Check every output's sha256 (or, for .glb files Blender does not write
- *      the same way twice, their structure: see `AssetOutput.reproducible`).
+ *      the same way twice, their structure: see `AssetOutput.reproducible`),
+ *      and that a .glb marked `dielectric` has no metal material.
  *
  * An asset with `"skip": true` and a `skipReason` is reported and left alone.
  *
@@ -52,7 +53,7 @@
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createReadStream, createWriteStream } from 'node:fs';
-import { copyFile, link, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { copyFile, link, mkdir, open, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { delimiter, dirname, join, resolve } from 'node:path';
 import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
@@ -123,6 +124,18 @@ export interface AssetOutput {
      * not pinned. Required with `reproducible: false`; may be empty.
      */
     varyingAttributes?: string[];
+    /**
+     * Set to true for a .glb scene that must contain no metal. Every material
+     * must then write `metallicFactor: 0` (glTF's default when it is left out
+     * is 1, fully metal), and every mesh primitive must have a material
+     * (glTF's default material is fully metal too). Checked on every run,
+     * whatever the hashes say, so re-recording the hashes of a broken
+     * conversion cannot hide it. With factor 0 a metallicRoughness texture
+     * cannot add metal, because glTF multiplies the two.
+     * Why: Blender's OBJ importer turns the MTL ambient colour `Ka` into
+     * Metallic, which made the whole Breakfast Room metal (T0.4 follow-up).
+     */
+    dielectric?: boolean;
 }
 
 /**
@@ -377,6 +390,13 @@ export function validateSources(value: unknown): string[] {
                         }
                     } else if (output.bufferViewHashes !== undefined || output.varyingAttributes !== undefined) {
                         errors.push(`${outputWhere}: bufferViewHashes and varyingAttributes only go with reproducible false`);
+                    }
+                    if (output.dielectric !== undefined) {
+                        if (typeof output.dielectric !== 'boolean') {
+                            errors.push(`${outputWhere}.dielectric: must be true or false when present`);
+                        } else if (!output.path.toLowerCase().endsWith('.glb')) {
+                            errors.push(`${outputWhere}.dielectric: only supported for .glb files`);
+                        }
                     }
                 }
             });
@@ -866,6 +886,82 @@ export async function readGlbViewRecord(path: string): Promise<GlbViewRecord> {
     return parsed as unknown as GlbViewRecord;
 }
 
+/** The glTF JSON fields the metal check reads. Real materials carry more fields (base colour, roughness), which it ignores. */
+export interface GltfJsonForMaterials {
+    materials?: Array<{
+        name?: string;
+        pbrMetallicRoughness?: { metallicFactor?: number; metallicRoughnessTexture?: unknown; [otherField: string]: unknown };
+        [otherField: string]: unknown;
+    }>;
+    meshes?: Array<{ name?: string; primitives?: Array<{ material?: number; [otherField: string]: unknown }> }>;
+}
+
+/** glTF's value for a metallicFactor that is not written, and the metalness of its default material. */
+const GLTF_DEFAULT_METALLIC_FACTOR = 1;
+
+/** How many offending materials to name before summing up the rest. */
+const MAX_MATERIALS_LISTED = 8;
+
+/**
+ * Reads only the JSON chunk of a .glb (the header and the scene description),
+ * not the BIN chunk, so checking materials does not load the vertex data.
+ */
+export async function readGlbJson(path: string): Promise<unknown> {
+    const handle = await open(path, 'r');
+    try {
+        const headers = Buffer.alloc(GLB_HEADER_BYTES + GLB_CHUNK_HEADER_BYTES);
+        const { bytesRead } = await handle.read(headers, 0, headers.length, 0);
+        if (bytesRead < headers.length) throw new Error('too short to be a .glb file');
+        if (headers.readUInt32LE(0) !== GLB_MAGIC) throw new Error('not a .glb file (bad magic)');
+        if (headers.readUInt32LE(GLB_HEADER_BYTES + 4) !== GLB_CHUNK_JSON) throw new Error('the first chunk is not JSON');
+        const jsonLength = headers.readUInt32LE(GLB_HEADER_BYTES);
+        const json = Buffer.alloc(jsonLength);
+        const jsonRead = await handle.read(json, 0, jsonLength, headers.length);
+        if (jsonRead.bytesRead < jsonLength) throw new Error('the JSON chunk is cut off');
+        try {
+            return JSON.parse(json.toString('utf8'));
+        } catch (error) {
+            throw new Error(`the JSON chunk is not valid JSON: ${error instanceof Error ? error.message : String(error)}`);
+        }
+    } finally {
+        await handle.close();
+    }
+}
+
+/**
+ * Problems that would put metal into a scene that must have none (see
+ * `AssetOutput.dielectric`), or an empty list. glTF's metalness is
+ * metallicFactor times the blue channel of the metallicRoughness texture, so
+ * a factor of exactly 0 is metal-free whatever the texture holds, and any
+ * other factor (including a missing one, which means 1) is not.
+ */
+export function metalProblems(gltf: GltfJsonForMaterials): string[] {
+    const problems: string[] = [];
+    const metallic: string[] = [];
+    (gltf.materials ?? []).forEach((material, index) => {
+        const factor = material.pbrMetallicRoughness?.metallicFactor;
+        if (factor === 0) return;
+        const name = material.name !== undefined ? `"${material.name}"` : `#${index}`;
+        const value = factor === undefined ? `not written, so glTF's default ${GLTF_DEFAULT_METALLIC_FACTOR}` : String(factor);
+        const texture = material.pbrMetallicRoughness?.metallicRoughnessTexture !== undefined ? ', with a metallicRoughness texture' : '';
+        metallic.push(`${name} (metallicFactor ${value}${texture})`);
+    });
+    if (metallic.length > 0) {
+        const more = metallic.length > MAX_MATERIALS_LISTED ? ` and ${metallic.length - MAX_MATERIALS_LISTED} more` : '';
+        problems.push(`${metallic.length} material(s) can be metal, but this scene must have none: ${metallic.slice(0, MAX_MATERIALS_LISTED).join('; ')}${more}`);
+    }
+    let withoutMaterial = 0;
+    for (const mesh of gltf.meshes ?? []) {
+        for (const primitive of mesh.primitives ?? []) {
+            if (primitive.material === undefined) withoutMaterial++;
+        }
+    }
+    if (withoutMaterial > 0) {
+        problems.push(`${withoutMaterial} mesh primitive(s) have no material, so they get glTF's default material, which is fully metal`);
+    }
+    return problems;
+}
+
 /** What to add to a mismatch message for a file a conversion makes. */
 function conversionCause(convert: AssetConvert | null | undefined): string {
     if (!convert) return '';
@@ -894,6 +990,15 @@ export async function checkOutputs(
         if (!(await fileExists(path))) {
             problems.push(`missing: ${output.path}`);
             continue;
+        }
+        // Before the hash checks, and whatever they find: matching hashes only say the file is the recorded one,
+        // and a recorded file can be wrong (see AssetOutput.dielectric).
+        if (output.dielectric === true) {
+            try {
+                problems.push(...metalProblems((await readGlbJson(path)) as GltfJsonForMaterials).map((problem) => `${output.path}: ${problem}`));
+            } catch (error) {
+                problems.push(`${output.path}: ${error instanceof Error ? error.message : String(error)}`);
+            }
         }
         const size = (await stat(path)).size;
         if (size !== output.bytes) {
