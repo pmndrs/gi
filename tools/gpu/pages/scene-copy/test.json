@@ -1,0 +1,4 @@
+{
+    "description": "Scene copy (T1.2): every WGSL accessor against the inputs, no recompiles across create/destroy, and a tracer + scene copy + 3 technique buffers kernel on a default-limits device.",
+    "timeoutMs": 60000
+}

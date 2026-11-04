@@ -1,5 +1,6 @@
 // GI platform: shared scene, resource and pass contracts that techniques build on.
-// Only the T0.11 contract draft exists so far; the implementation starts in M1.
+// The contract (T0.11), GPU timing, the tracer (T0.10) and the scene copy (T1.2).
 export * from './contract';
 export * from './timing';
 export * from './trace';
+export * from './scene';
