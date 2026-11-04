@@ -132,6 +132,10 @@ Gaps:
 5. **Compressed textures** (KTX2). `TextureSource` accepts a `GPUTexture`, but getting three's `GPUTexture` means reaching into the renderer's backend, which we've ruled out. Alternatives: decode the KTX2 ourselves, or have the adapter keep the original image. To decide in M4.
 6. **Splitting the budget between stacked techniques.** For now the platform shares units in proportion to each technique's `msPerUnit`. This needs a real policy once there are two techniques.
 7. **Storage-buffer budget for tracing kernels.** The scene copy (about 3), the BVH (about 2) and lights (1) leave about 2 of the default 8 for the technique. T0.10 must count the real numbers. If it's too tight, `requiredLimits` asks for more where the adapter has it (most desktop adapters allow 10 or more), and we pack tables into fewer buffers.
+8. **Texture tiling (UV transforms).** Engines tile, offset and rotate textures, and may read a second uv set. Without that information, the GI copy of a tiled floor samples the wrong texels.
+   - The contract now has optional `albedoUv` and `emissiveUv` (`UvMapping`: uv channel, a 3×2 matrix, and wrap per axis) and a second uv set, `MeshDescriptor.uvs1`. From three.js the adapter passes `texture.matrix` and `texture.channel` straight through.
+   - Still to decide in M4: how the texture atlas honours `repeat` and `mirror`. A tile in an atlas can't use the sampler's own wrapping, so it needs wrap in the shader plus padding, or a texture array instead of an atlas.
+   - Found by the parent session while answering Dennis, 2026-11-04.
 
 ## Questions for the spikes
 

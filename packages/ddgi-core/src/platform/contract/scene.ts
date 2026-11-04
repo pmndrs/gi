@@ -34,8 +34,10 @@ export interface MeshDescriptor {
     readonly positions: Float32Array;
     /** Triangle list. Non-indexed meshes are given `0..n-1` by the adapter. */
     readonly indices: Uint32Array | Uint16Array;
-    /** uv per vertex. Needed for textured materials and alpha cutouts. */
+    /** uv per vertex (UV channel 0). Needed for textured materials and alpha cutouts. */
     readonly uvs?: Float32Array;
+    /** A second uv set (UV channel 1), for textures whose {@link UvMapping.channel} is 1. */
+    readonly uvs1?: Float32Array;
     /**
      * Material runs. Omit for a single run covering every triangle using
      * material slot 0.
@@ -101,6 +103,31 @@ export interface TextureDescriptor {
     readonly label?: string;
 }
 
+/** How a texture wraps outside 0..1, per axis. The same three choices as WebGPU's address modes. */
+export type UvWrap = 'repeat' | 'clamp' | 'mirror';
+
+/**
+ * Where a material's texture is sampled on the mesh. Engines tile, offset and
+ * rotate textures, and may read a second uv set. Without this, the GI copy of
+ * a tiled floor would sample the wrong texels.
+ *
+ * Every field is optional; omitted means channel 0, no transform, repeat.
+ */
+export interface UvMapping {
+    /** Which uv set: 0 = `MeshDescriptor.uvs`, 1 = `MeshDescriptor.uvs1`. */
+    readonly channel?: 0 | 1;
+    /**
+     * A 2D affine transform applied to the uv before sampling:
+     * `uv' = (m[0]·u + m[2]·v + m[4], m[1]·u + m[3]·v + m[5])`.
+     * That's a 3×2 matrix, column-major. From three.js, pass
+     * `[e[0], e[1], e[3], e[4], e[6], e[7]]` of `texture.matrix.elements`,
+     * after `texture.updateMatrix()`.
+     */
+    readonly matrix?: readonly [number, number, number, number, number, number];
+    readonly wrapU?: UvWrap;
+    readonly wrapV?: UvWrap;
+}
+
 /**
  * The platform's material model. Each adapter maps its engine's materials onto
  * these four ideas; nothing else about a material affects GI.
@@ -109,12 +136,16 @@ export interface MaterialDescriptor {
     /** Diffuse albedo, multiplied with `albedoTexture` when both are set. */
     readonly albedo?: ColorRGB;
     readonly albedoTexture?: TextureHandle;
+    /** Where `albedoTexture` is sampled. Its alpha (for `alphaCutoff`) uses the same mapping. */
+    readonly albedoUv?: UvMapping;
     /**
      * Emitted radiance, multiplied with `emissiveTexture` and
      * `emissiveIntensity`. In the platform's light units (see {@link LightDescriptor}).
      */
     readonly emissive?: ColorRGB;
     readonly emissiveTexture?: TextureHandle;
+    /** Where `emissiveTexture` is sampled. */
+    readonly emissiveUv?: UvMapping;
     readonly emissiveIntensity?: number;
     /**
      * Alpha below this value is a hole for rays. The alpha comes from
