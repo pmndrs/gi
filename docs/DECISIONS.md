@@ -65,7 +65,7 @@ Settled choices, newest first. Each entry is short: the decision, why, and what 
   - Bistro exterior is 0.83× and Bistro interior 0.99× on the RTX 3060.
   - three-mesh-bvh stays a reference to learn from, not a dependency (SPEC). Its traversal uses the same 64-byte two-child node, so there was nothing left to take from it.
   - Building with three-mesh-bvh and converting (7.4 s on Sponza) is slower than tinybvh (5.3 s) and traces slower, so that route is dropped.
-  - *Revisit if:* the M1 numbers show tracing is the bottleneck. Then B3 (wide nodes) moves forward, and any-hit on Bistro (0.60× three-mesh-bvh on the interior) gets looked at first.
+  - *Revisit if:* the M1 numbers show tracing is the bottleneck. Then B3 (wide nodes) moves forward, and any-hit gets looked at first. On the same rays it trails three-mesh-bvh in every scene but Sponza: furnished room 0.34× on the RTX 3060, Bistro interior 0.60×. It traces at the same speed on tinybvh's and three-mesh-bvh's trees, so the walk, the top level or the leaf size (three-mesh-bvh's hold 10 triangles, ours 4) is the likely cause; the triangle test isn't. T1.3 measures it.
 - **B0 isn't done yet, and M1 doesn't wait for it.**
   - tinybvh in WASM passes the oracle and builds Sponza in 5.3 s, against ≤ 2 s planned. The only Emscripten on this machine (3.1.57) compiles tinybvh's scalar builder only.
   - Both CPU builders stay, behind the same tree format, until B0's checks are met. Our builder isn't deleted yet. M1 meshes use tinybvh by default (5.3 s against 8.7 s; it traces at 0.97× our trees on the RTX 3060 and 1.00× on Intel). The top level keeps our builder until B1a moves it to the GPU.

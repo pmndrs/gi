@@ -295,7 +295,8 @@ Done-whens for the B stages are in `docs/design/bvh-framework.md`. B1a's: a 10k-
 - **T1.3 Tracer as a platform module.**
   - `RayQueries` (`giTraceClosest`, `giTraceAny`, `encodeBatch`) runs over the scene copy. Mesh trees come from tinybvh (B0 as built) by default, with our builder as the fallback; the top level from B1a once it lands.
   - The oracle's test helpers (`oracle-compare`, `reference-tracer`) leave the public exports.
-  - Any-hit: find out why it trails three-mesh-bvh on Bistro (interior 0.60×) and why it is slower than our closest-hit there. Fix it, or record why not.
+  - Any-hit: on the same rays it trails three-mesh-bvh in every scene but Sponza (furnished room 0.34×, Bistro interior 0.60× on the RTX 3060). Measure nodes, instances and triangles per shadow ray, and three-mesh-bvh at leaf size 4, then fix it or record why not.
+  - Record the commit when a benchmark page runs, not when its CSV is written (`to-csv.ts`).
   - Done when the oracle passes through the platform API on both GPUs, and speed is within 10% of the T0.10 numbers.
 - **T1.4 Hit shading.**
   - `giSurfaceAt` (interpolated normals), `giDirectIrradiance` (sun and sky, shadow rays, light-group mask), and `giSkyRadiance` and `giSkyIrradiance` from the shared sky.

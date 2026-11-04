@@ -33,7 +33,7 @@ Everything is plain arrays in a few storage buffers, so it survives a worker han
   }
   ```
   A child with count 0 is an inner node at `index`. A leaf child stores the first triangle and the number of triangles.
-- **Triangles: 48 bytes each, stored in tree order** (leaves point at contiguous runs, so no index indirection): `v0` + original triangle index, edge `v1 - v0` + flags, edge `v2 - v0` + pad. These are exactly what the Möller–Trumbore test needs. The original index maps a hit back to the mesh's UVs and material group. The flags bit 0 marks "needs alpha test" for M4.
+- **Triangles: 48 bytes each, stored in tree order** (leaves point at contiguous runs, so no index indirection): `v0` + original triangle index, `v1` + flags, `v2` + pad. The three corners are stored as they are, so a vertex shared by two triangles has identical bits in both; the watertight test needs that (part A replaced the corner-plus-two-edges layout Möller–Trumbore used). The original index maps a hit back to the mesh's UVs and material group. The flags bit 0 marks "needs alpha test" for M4.
 - **Leaves:** at most 4 triangles, fewer where the SAH cost says so.
 - **Builder: binned SAH,** 16 bins per axis over centroid bounds, all three axes tried, leaf when splitting costs more than intersecting. It runs in a worker and returns node and triangle arrays. Large meshes must not freeze the page.
 - **Deforming meshes (M3)** keep this tree's shape. Refitting bottom-up needs each node's parent, so the builder also writes a parent index per node (4 bytes per node, kept in a separate array that only the refit pass uses).
@@ -56,7 +56,7 @@ A default device caps one storage binding at 128 MB. At 48 bytes per triangle th
 - **Nearer child first:** both child boxes are tested (slab test with a precomputed inverse direction). Both hit means push the farther one and go to the nearer one. Boxes beyond the current closest hit are skipped.
 - **Closest hit** keeps the nearest `t`, instance, triangle and barycentrics, and whether the hit was on the front face. Back-face hits count as hits, because DDGI uses them to find probes inside geometry.
 - **Any hit** returns at the first triangle hit within `[tMin, tMax]`.
-- **Triangle test:** Möller–Trumbore, with no epsilon on the edge tests. The shared-edge oracle checks for rays slipping between triangles. If any of a million edge-aimed rays get through, the spike tries the watertight test (Woop, Benthin and Wald 2013) and reports the speed difference.
+- **Triangle test: watertight** (Woop, Benthin and Wald 2013), with per-ray shear rows computed once per ray. The design started with Möller–Trumbore, but it let up to 12% of edge-aimed rays slip (part A), so it was deleted in part C (DECISIONS 2026-11-04).
 - **Stack overflow:** the builder reports the maximum depth, and the spike asserts that the top-level and mesh depths together fit in the stack. If 32 would always fit, the spike measures whether the smaller stack is faster, since private arrays cost registers.
 
 ## What part A found (2026-11-04)
