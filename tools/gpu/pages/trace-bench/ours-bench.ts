@@ -1,6 +1,6 @@
 /**
  * Our tracer's side of the benchmark: build the trees, time the top-level
- * rebuild, upload, and time the batch kernels for both triangle tests.
+ * rebuild, upload, and time the batch kernels.
  */
 
 import {
