@@ -1,3 +1,30 @@
+/*!
+ * Parts of the WGSL below are ported from HIPRT (hiprt/impl/MortonCode.h and
+ * hiprt/impl/LbvhBuilderKernels.h); its licence (packages/bvh/licenses/hiprt.txt):
+ *
+ * MIT License
+ *
+ * Copyright (C) 2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ */
+
 /**
  * WGSL of the GPU LBVH builder (stage B1, gpu-lbvh.ts). Kept apart from the
  * host code so the kernels read top to bottom in build order.
@@ -25,7 +52,8 @@
  *   never stored: the second thread knows from the range it got back whether
  *   its sibling is a single triangle, and at which sorted position, and reads
  *   its box itself; the emit pass does the same. That halves the handed-over
- *   words (B1 profile: the climb went from 12 to TODO ms on Sponza).
+ *   words, though on Sponza the climb's time hardly moved (B1 profile, 13 ms
+ *   either way): it is not bound by how many words are handed over.
  * - **SAH leaf collapse in the same climb:** the thread that finishes a node
  *   knows both children's costs, so it decides then whether the node would be
  *   cheaper as one leaf (at most `maxLeaf` triangles; the subtree's triangles
@@ -78,9 +106,9 @@ export const LBVH_STATE_WORDS = 3;
  * this many triangles, and queues its arrival at the parent for the second
  * round. Why: a climb is a chain of dependent atomic round trips, and in a
  * subgroup one lane keeps climbing long after the others stopped, so the
- * subgroup stays resident; a single round made the climb Sponza's slowest
- * step (13 ms) whatever its atomics cost. The second round has few threads,
- * each with a long climb, which fits the GPU in one or two waves.
+ * subgroup stays resident. The second round has few threads, each with a long
+ * climb, which fits the GPU in one or two waves. On Sponza it took the climb
+ * from 13 to 11.7 ms (B1 profile); the climb is still the build's slowest step.
  */
 export const LBVH_FIRST_ROUND_TRIANGLES = 64;
 
@@ -792,7 +820,7 @@ fn lbvhClimb(
 
 // One thread: the second round's dispatch size, from the queue's count.
 @compute @workgroup_size(1)
-fn lbvhContinueArgs() {
+fn lbvhPlanSecondRound() {
     let count = atomicLoad(&lbvhStats[lbvhQueueCountWord()]);
     lbvhQueue[0] = count;
     let workgroups = (count + LBVH_WORKGROUP_SIZE - 1u) / LBVH_WORKGROUP_SIZE;

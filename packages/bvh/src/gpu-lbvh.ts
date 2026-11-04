@@ -169,7 +169,7 @@ const KERNELS = [
     'lbvhMorton',
     'lbvhClear',
     'lbvhClimb',
-    'lbvhContinueArgs',
+    'lbvhPlanSecondRound',
     'lbvhClimbOn',
     'lbvhMark',
     'lbvhEmit',
@@ -209,7 +209,7 @@ const KERNEL_BINDINGS: Record<LbvhKernel, readonly BindingName[]> = {
     lbvhMorton: ['primitiveBoxes', 'keys', 'values', 'params', 'tables', 'statsView'],
     lbvhClear: ['params', 'tables', 'scratchFill'],
     lbvhClimb: ['primitiveBoxes', 'keys', 'values', 'scratch', 'nodeInfo', 'stats', 'params', 'tables', 'queue'],
-    lbvhContinueArgs: ['stats', 'params', 'queue', 'continueArgs'],
+    lbvhPlanSecondRound: ['stats', 'params', 'queue', 'continueArgs'],
     lbvhClimbOn: ['primitiveBoxes', 'keys', 'values', 'scratch', 'nodeInfo', 'stats', 'params', 'tables', 'queue'],
     lbvhMark: ['nodeInfo', 'rank', 'params', 'tables'],
     lbvhEmit: ['nodeInfo', 'rank', 'outNodes', 'outTriangles', 'outParents', 'params', 'tables', 'scratchView', 'statsView'],
@@ -731,7 +731,7 @@ export class GpuLbvhBatch {
         stage('clear', (pass) => run(pass, 'lbvhClear', this.tileCount));
         stage('climb', (pass) => {
             run(pass, 'lbvhClimb', this.tileCount);
-            run(pass, 'lbvhContinueArgs', 1);
+            run(pass, 'lbvhPlanSecondRound', 1);
             pass.setPipeline(this.pipelines.lbvhClimbOn);
             pass.setBindGroup(0, this.groups.lbvhClimbOn);
             pass.dispatchWorkgroupsIndirect(this.continueArgs, 0);
