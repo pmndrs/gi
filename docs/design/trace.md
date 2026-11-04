@@ -86,6 +86,14 @@ Measured on the RTX 3060 Laptop and Intel UHD, Chrome 156, GPU timestamps. Rows 
 - **Top level:** it rebuilds in 1–10 ms on the real scenes and 86–121 ms for 10,000 instances. That's fine while objects move rarely, but a scene with thousands of moving instances would need an incremental or GPU build (M3).
 - **Correctness under load:** with probe-style rays on all four scenes, no ray hit in one tracer and missed in another.
 
+## What part C found (2026-11-04)
+
+- The NVIDIA gap was one thing: indexing a vector with a per-ray value (`a[kx]`) in the watertight test. Building per-ray rows once with `select()` took Sponza from 61 to 101 Mrays/s on the RTX 3060.
+- Reading nodes and triangles as `vec4f` arrays added 3% on the RTX 3060 and 23% on Intel.
+- An unordered any-hit walk and a 32-entry stack bought nothing.
+- Final (median of 3, Sponza closest-hit): 104.3 Mrays/s on the RTX 3060 (1.20× three-mesh-bvh), 12.8 on Intel (1.97×). The rule below picks our tracer (DECISIONS 2026-11-04).
+- three-mesh-bvh trees converted to our layout trace at 96.7 Mrays/s and take 7.4 s to build, so tinybvh (101.6 Mrays/s, 5.3 s) is the better CPU builder.
+
 ## Benchmark
 
 - **Rays:** probe-style rays. A grid of probes fills the scene bounds, and each probe fires 256 rays in random directions from a fixed seed. Closest-hit rays use those directions. Any-hit rays go from each closest hit toward the sun (or a fixed direction), which is what DDGI's shadow rays look like. The rays are generated once and stored in a buffer, so every tracer gets identical input.

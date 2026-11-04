@@ -15,7 +15,7 @@ Status values: `todo`, `active (agent, date)`, `review`, `done`, `blocked (why)`
 | T0.7 | References and compare | implementer | M | T0.4 | done (Cycles references for Cornell, two-room, Sponza; tolerance in DECISIONS; Opus-review fixes in, Sponza re-rendered diffuse-only) |
 | T0.8 | Spike: three.js sharing | implementer | S | T0.2 | done (yes to all; env-diffuse needs a workaround) |
 | T0.9 | Spike: Babylon | implementer | S | T0.2 | done (fits the contract; Babylon owns its device). Paused: three-only until v1 is validated |
-| T0.10 | Spike: BVH | main session designs, implementer builds, gpu-tester measures | M | T0.2, T0.4 | active (design: [docs/design/trace.md](docs/design/trace.md); part A done; part B measured (watertight 0.70× three-mesh-bvh on RTX 3060, below 0.8×); part C optimising) |
+| T0.10 | Spike: BVH | main session designs, implementer builds, gpu-tester measures | M | T0.2, T0.4 | review (part C: watertight 1.20× three-mesh-bvh on Sponza on the RTX 3060, 1.97× on Intel; our tracer chosen; B0 builds in 5.3 s, not 2 s, so it stays open in the BVH lane) |
 | T0.11 | Platform API draft | main session | M | none (revise after T0.8–T0.10) | done (signed off by Dennis 2026-11-04, incl. UV mapping and vertex normals; the post-T0.10 revision of tracing bindings follows without re-sign-off unless host-facing) |
 | T0.12 | M0 note and M1 breakdown | main session | S | all M0 | todo |
 
@@ -269,7 +269,7 @@ Status: **draft.** T0.12 finalises it, after T0.6 and T0.10 report, and it start
 
 | ID | Stage | Must be done before | Status |
 | --- | --- | --- | --- |
-| B0 | tinybvh WASM builder in a worker (`packages/bvh`) | M1 starts | in T0.10 part C |
+| B0 | tinybvh WASM builder in a worker (`packages/bvh`) | M1 starts (M1 can start without the ≤ 2 s, DECISIONS 2026-11-04) | built and passes the oracle; 5.3 s on Sponza, not ≤ 2 s; waiting on Dennis about a newer Emscripten |
 | B1a | GPU top-level tree: refit every frame from instance transforms, rebuild now and then | T1.3 ends (moved up to M1) | todo |
 | B1 | GPU LBVH per mesh (subgroups first), BLAS refit | M3 | todo |
 | B2 | GPU PLOC, then H-PLOC | M3 | todo |

@@ -165,6 +165,11 @@ One bullet per fact, each with its source. Add a bullet when something cost you 
 ## Tracing (measured)
 
 - **Use a watertight triangle test.** Möller–Trumbore let 3–12% of rays aimed at shared edges slip between triangles (RTX 3060 11.6%, Intel UHD 3.0%, 2M rays each), and leaked into sealed thin boxes. The watertight test (Woop et al. 2013, with stored corners) let none of 4M through. Source: `tools/gpu/pages/trace-oracle`, T0.10.
+- **Don't index a vector with a per-ray value in WGSL.** `a[kx]` with a runtime `kx` cost about 40% on the RTX 3060 (Sponza 61 → 101 Mrays/s once removed). Build per-ray row vectors with `select()` once per ray instead. Source: T0.10 part C.
+- **Read BVH nodes and triangles as `array<vec4f>`:** one 16-byte load each gave +3% on the RTX 3060 and +23% on Intel UHD. Source: T0.10 part C.
+- **Traversal stack depth:** Sponza needs 35 entries and Bistro exterior 44. A 32-entry stack was no faster than 64, so 64 stays. Source: T0.10 part C.
+- **tinybvh in WASM:** with Emscripten 3.1.57 only the scalar builder compiles (its fast builder needs AVX emulation). Sponza's `Build` takes 4.9 s in Node. pthreads would need cross-origin isolation (COOP/COEP headers), which a library can't require of its hosts. Source: T0.10 part C.
+- **Repeat runs:** `repeat.ts` writes `run<k>/` rows plus `median/` rows to `trace.csv`, and the commit column checks only the measured paths for `-dirty`. Source: T0.10 part C.
 - **WGSL `bool` can't live in a buffer**, so hit records store front-face as `u32`. Source: T0.10.
 - **Mirrored instances** flip winding in world space, so front-face is `(det > 0) != mirrored`. Source: T0.10.
 - **Long page work:** the test runner gives up on a page that's busy for 30 s inside one CDP evaluate, so long CPU work on a page must yield. Source: T0.10.

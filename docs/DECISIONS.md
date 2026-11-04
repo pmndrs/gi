@@ -60,6 +60,17 @@ Settled choices, newest first. Each entry is short: the decision, why, and what 
   - Möller–Trumbore stays as a build option only until part C is done, as a speed reference, and is then deleted.
   - *Why:* correctness first. Leaks are the failure DDGI is judged on, and the bar was agreed in advance.
   - *Revisit if:* part C can't reach 0.8× on the RTX 3060. In that case the choice between "slower but sealed" and "faster and leaky with workarounds" goes to Dennis.
+- **We use our own tracer.** T0.10's decision rule (set before measuring, `docs/design/trace.md`) is met.
+  - After part C, watertight closest-hit on Sponza is 1.20× three-mesh-bvh on the RTX 3060 and 1.97× on Intel UHD, and the oracle passes on both GPUs. Möller–Trumbore is deleted.
+  - Bistro exterior is 0.83× and Bistro interior 0.99× on the RTX 3060.
+  - three-mesh-bvh stays a reference to learn from, not a dependency (SPEC). Its traversal uses the same 64-byte two-child node, so there was nothing left to take from it.
+  - Building with three-mesh-bvh and converting (7.4 s on Sponza) is slower than tinybvh (5.3 s) and traces slower, so that route is dropped.
+  - *Revisit if:* the M1 numbers show tracing is the bottleneck. Then B3 (wide nodes) moves forward, and any-hit on Bistro (0.60× three-mesh-bvh on the interior) gets looked at first.
+- **B0 isn't done yet, and M1 doesn't wait for it.**
+  - tinybvh in WASM passes the oracle and builds Sponza in 5.3 s, against ≤ 2 s planned. The only Emscripten on this machine (3.1.57) compiles tinybvh's scalar builder only.
+  - Both CPU builders stay, behind the same tree format, until B0's checks are met. Our builder isn't deleted yet. M1 meshes use tinybvh by default (5.3 s against 8.7 s; it traces at 0.97× our trees on the RTX 3060 and 1.00× on Intel). The top level keeps our builder until B1a moves it to the GPU.
+  - The ≤ 2 s number stays. Reaching it needs a newer Emscripten whose SIMD builder compiles: a toolchain install, so it's Dennis's call. pthreads is not the route, since it needs headers the host page must set.
+  - *Revisit when:* Dennis decides on the Emscripten upgrade, or B2 (GPU H-PLOC) makes the CPU build matter less.
 - **Code is written and reviewed on Opus.**
   - `implementer` and `reviewer` run on Opus at high effort, and `native-runner` on Opus at medium.
   - `gpu-tester` stays on Sonnet, and `scout` and `wrangler` on Haiku: running checks, measuring, lookups and mechanical jobs.
