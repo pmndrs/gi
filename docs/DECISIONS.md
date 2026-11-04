@@ -4,6 +4,14 @@ Settled choices, newest first. Each entry is short: the decision, why, and what 
 
 ## 2026-11-04
 
+- **The platform API draft (T0.11) is signed off.** Dennis: "I am fine with the api spec." That covers the draft in `docs/api/platform.md` and the contract files, including the UV-mapping and vertex-normal additions.
+  - The revision after T0.10 (the storage-buffer count, batch versus inline tracing) doesn't need his sign-off again, unless it changes something a host sees.
+- **three.js is the only adapter until the library has proved itself.** Dennis: "maintaining babylon compatability is not a first order requirement... use three to get us through the phases... pause it until we can finish out the rest of the work and even validate that our library is fast enough/useful etc. with three acting as the main adapter... later when we work out kinks and api changes we can bring the other adapters in line."
+  - T0.9 stays done as the M0 spike. From M1 on there is no Babylon work, testing or fixing. If its spike page breaks, it leaves the required `test:gpu` set instead of being fixed.
+  - Contract changes no longer need checking against Babylon. The Babylon notes in `docs/api/platform.md` describe the T0.9 snapshot.
+  - The core stays engine-neutral, and the lint rule against engine imports stays. It costs almost nothing, and it's what lets other adapters come back later. Don't spend time on Babylon, Pixi or r3f adapters, or on "would this work in X" analysis.
+  - The Babylon, Pixi and react-three-fiber adapters move to after v1 has been validated: M5 or later.
+  - *Revisit when:* v1 is validated on three.js (fast enough and useful), or a user needs another engine sooner.
 - **The tracer ships the watertight triangle test only, and the speed bar applies to that test.**
   - Möller–Trumbore lets 3–12% of rays aimed at shared edges slip through (part A). In DDGI that shows up as light leaking through closed rooms, so it's not an option even though it's faster.
   - Part B measured watertight at 0.70× three-mesh-bvh on Sponza on the RTX 3060, below the 0.8× bar set before measuring, and 1.50× on Intel. So, as the rule says, T0.10 part C optimises the tracer and measures again.

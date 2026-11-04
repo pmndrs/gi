@@ -9,6 +9,7 @@ A **universal, open-source WebGPU dynamic diffuse GI library**, to be published 
 - It has no dependency on any rendering library.
 - three.js is the first adapter and the one we develop against.
 - Babylon, Pixi, react-three-fiber and anyone's own WebGPU renderer must be able to plug in the same way, without changes to the core.
+  - Until v1 is validated, three.js is the only adapter we build or test. The other adapters come in M5 or later; see DECISIONS 2026-11-04.
 - It is built for nobody in particular: games, configurators, archviz, editors, demos. No single product's needs shape the API. (HomeFig was where the first experiments happened; its lessons are recorded below, and it may become one user.)
 
 **Scenes are whatever the host builds.** The library never assumes a file format or a way of making scenes. A scene can be:
@@ -486,7 +487,7 @@ This can overlap M2 and M3.
 
 - Ray-traced glossy reflections as the first new technique.
 - Voxel, SDF, surfel and radiance-cascade experiments on the same platform.
-- react-three-fiber bindings, Babylon adapter, then Pixi.
+- react-three-fiber bindings, Babylon adapter, then Pixi: after v1 is validated on three.js (M5 or later). The contract is checked against Babylon only as of the T0.9 snapshot until then.
 - Room-shaped volumes and multi-level cascades.
 - Optional high-quality modes.
 

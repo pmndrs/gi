@@ -109,6 +109,7 @@ Full rows, with done-when checks, are on the board. In short:
   - A `tools/compare` CLI reporting FLIP and mean error.
 - **T0.8 Spike: three.js sharing.** A shared device, a registered GI `Light` node sampling an `ExternalTexture`, checked under the Standard, Meshlet and Visibility-Buffer pipelines; env diffuse off with env specular on; GI inside a reflection-probe capture.
 - **T0.9 Spike: Babylon.** The same contract through Babylon's WebGPU engine and a material plugin.
+  - Done, then paused. From M1 on, three.js is the only adapter until v1 is validated; Babylon, Pixi and r3f come in M5 or later (DECISIONS 2026-11-04). M1+ has no Babylon tasks. If the spike page breaks, it leaves the required `test:gpu` set.
 - **T0.10 Spike: BVH.**
   - Our two-level BVH (binned SAH, built in a worker) with WGSL closest-hit and any-hit, vs the latest three-mesh-bvh, on Sponza and Bistro.
   - Correctness via the ported ray oracle tests.
