@@ -50,7 +50,7 @@ Keys in the harness: F2 dumps DDGI textures, F4 runs the 1024-frame benchmark, J
 
 Biases scale with the smallest probe spacing `s`: normal bias `0.1 s`, view bias `0.3 s`, relocation minimum front-face distance `0.3 s`. Everything else in the DDGI block is the upstream Sponza sample: relocation, classification and variability on, no scrolling, hysteresis 0.97, 8x8 irradiance and 16x16 distance texels per probe.
 
-### Probe grid (the rule the browser side must copy)
+### Probe grid
 
 Probes sit at the **centres of equal cells that cover the manifest volume exactly**, the same layout as three.js `LightProbeGrid`:
 
@@ -59,6 +59,14 @@ count[axis]   = ceil(size[axis] / probeSpacing)
 spacing[axis] = size[axis] / count[axis]        (so it can be a little smaller than probeSpacing)
 origin        = volume.center
 ```
+
+Our DDGI technique uses a different rule (`floor(size / spacing) + 1` per axis at exactly the given spacing, centred on `volume.center`; `probeGrid()` in ddgi-core). `bench.ps1 -GridRule ddgi` gives the harness that grid, for timing at matched probe counts and positions; the default stays the cell-centre grid. Counts for our scenes:
+
+| Scene | default (`cells`) | `-GridRule ddgi` |
+|---|---|---|
+| cornell-box | 12 x 12 x 12 = 1728 (spacing 0.483, 0.467, 0.483) | 12 x 12 x 12 = 1728 (spacing 0.5) |
+| two-room | 17 x 6 x 9 = 918 | 17 x 7 x 9 = 1071 |
+| sponza | 37 x 20 x 24 = 17760 | 37 x 21 x 25 = 19425 |
 
 ### Scenes the harness cannot read directly
 
@@ -86,7 +94,12 @@ Sponza timing rows from before the merge (all `9bd7f3c`, `1df1f97` and the earli
 ./tools/native/bench.ps1                                   # the default scene list, Vulkan, 256 rays, RTX 3060
 ./tools/native/bench.ps1 -Scene sponza -Api d3d12
 ./tools/native/bench.ps1 -Scene two-room -NoAppend         # print only, leave bench/results/native.csv alone
+./tools/native/bench.ps1 -Scene cornell-box,two-room,sponza -GridRule ddgi -Runs 3 -Label t1.9-matched   # the T1.9 set
 ```
+
+- `-GridRule ddgi`: our DDGI's probe grid (see "Probe grid"). Its rows get `grid_ddgi,1`; keep them apart from default runs.
+- `-Runs n`: the whole scene list n times, interleaved (a, b, c, a, b, c, ...), in one hold of the lock. Each run is its own block of rows.
+- `-Label text`: a `label,text` row in every run, to name a set (`t1.9-matched`).
 
 Per scene it writes a clean-mode config (1920x1080, vsync off, 256 rays per probe, grid from the manifest), **takes the shared GPU lock once for the whole run** (`%TEMP%\ddgi-gpu-bench.lock`; it waits while another job holds it, and gives it back at the end, also on an error or Ctrl-C), builds the scene cache if it is missing, waits 300 frames for the probes to settle, records the harness's own 1024-frame benchmark (the same code as F4: `app.autoBenchmark=1` in the `.ini` runs it by itself and exits), and appends that scene's rows to `bench/results/native.csv` as soon as the scene is done. A scene that fails is reported and skipped; the scenes before it stay in the CSV, the ones after it still run, and the script exits with code 1 at the end.
 

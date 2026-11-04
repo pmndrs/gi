@@ -21,6 +21,43 @@ Rules:
 
 ---
 
+## 2026-11-05 · T1.9 prep: native matched-count timings · native-runner (opus)
+Did: `tools/native/bench.ps1` gains opt-in `-GridRule ddgi` (our probe grid), `-Runs` and `-Label`; the defaults are unchanged. Ran cornell-box, two-room and sponza (base + curtains) 3 times each: Vulkan, RTX 3060 Laptop, 256 rays, every probe updated every frame. 405 rows in native.csv (`label,t1.9-matched`, `grid_ddgi,1`).
+Verified: every run updated every probe (1023 of 1024 frames). The spread over 3 runs was under 1% this session, with the runs interleaved in one lock hold. The GPU was idle at the start; the python process held a core.
+Numbers (median of 3, ms; min–max below 1%):
+
+| | cornell-box | two-room | sponza |
+| --- | --- | --- | --- |
+| Grid | 12×12×12 = 1,728 | 17×7×9 = 1,071 | 37×21×25 = 19,425 |
+| Active / off | 1,037 / 691 | 844 / 227 | 7,947 / 11,478 |
+| Trace | 1.055 | 0.825 | 9.845 |
+| Blend | 0.429 | 0.338 | 3.482 |
+| Relocation | 0.022 | 0.020 | 0.034 |
+| Classification | 0.031 | 0.031 | 0.046 |
+| DDGI total | 4.165 | 3.936 | 16.198 |
+| Rays traced per frame | 287,584 | 223,328 | 2,401,728 |
+| Mrays/s | 273 | 271 | 244 |
+
+"DDGI total" includes about 2.7 ms of native's screen-space gather at 1920×1080.
+
+Native settings that differ from ours (for T1.9 to explain differences; nothing changed):
+
+| Setting | Native | Ours |
+| --- | --- | --- |
+| View bias | 0.3 × spacing | 0.1 × spacing |
+| Min front-face distance | 0.3 × spacing | 0.02 × spacing |
+| Big-change rule | on, 0.2 | off |
+| Brightness clamp | 1.0 | 2.0 |
+| Albedo cap on probe hits | 0.9 | 1.0 |
+| Irradiance storage | R10G10B10A2, gamma 5 | rgba16float |
+| Classification reach | own cell | 1.5 spacings |
+| Max ray distance | 10,000 | unlimited |
+| Probes per frame | all | budgeted (max 4,096) |
+
+Hysteresis 0.97, normal bias 0.1 × spacing, texel counts 6 and 14 and the distance clamp match.
+Not verified: image comparison; D3D12.
+Next (T1.9): compare per probe updated, or raise our `maxProbesPerFrame` to cover Sponza's 19,425 probes for a whole-field comparison.
+
 ## 2026-11-05 · T1.5b · implementer (opus); Opus review: pass with notes, fixed; done
 Did (9c6348a):
 - The single kernel is replaced by `ddgi/trace` (64 threads, one ray each, inline `giTraceClosest`, a ray buffer that grows when needed), then `ddgi/blend` (phases B and C), then `ddgi/write`.

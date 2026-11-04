@@ -200,19 +200,29 @@ function Clear-FolderContents([string]$Path) {
 
 # --- Probe volume ------------------------------------------------------------
 
-# Probes sit at the centres of equal cells that cover the manifest volume exactly
-# (the same layout as three.js LightProbeGrid): counts = ceil(size / spacing),
-# actual spacing = size / counts. The browser side must use the same rule.
-function Get-VolumeGrid($Volume, [double]$ProbeSpacing = 0) {
+# Two layouts, both centred on volume.center (the harness's volume origin is the grid's centre):
+#   'cells' (default): probes sit at the centres of equal cells that cover the manifest volume
+#           exactly (the same layout as three.js LightProbeGrid): counts = ceil(size / spacing),
+#           actual spacing = size / counts.
+#   'ddgi'  : the grid of our DDGI technique (probeGrid() in packages/ddgi-core, see
+#           docs/design/ddgi.md): counts = floor(size / spacing) + 1 per axis, spacing exactly as
+#           given. Used for timing at matched probe counts and positions (T1.9).
+function Get-VolumeGrid($Volume, [double]$ProbeSpacing = 0, [ValidateSet('cells', 'ddgi')][string]$GridRule = 'cells') {
     # $ProbeSpacing > 0 replaces the manifest's spacing (for timing sweeps over the probe count)
     $target = if ($ProbeSpacing -gt 0) { $ProbeSpacing } else { [double]$Volume.probeSpacing }
     $counts = @()
     $spacing = @()
     for ($axis = 0; $axis -lt 3; $axis++) {
         $size = [double]$Volume.size[$axis]
-        $n = [int][math]::Max(1, [math]::Ceiling($size / $target - 1e-4))
-        $counts += $n
-        $spacing += $size / $n
+        if ($GridRule -eq 'ddgi') {
+            # The same small tolerance as probeGrid(), so 3.0 / 0.5 does not floor to 5
+            $counts += [int]([math]::Floor($size / $target + 1e-6) + 1)
+            $spacing += $target
+        } else {
+            $n = [int][math]::Max(1, [math]::Ceiling($size / $target - 1e-4))
+            $counts += $n
+            $spacing += $size / $n
+        }
     }
     return @{
         Center = @($Volume.center | ForEach-Object { [double]$_ })
@@ -257,6 +267,7 @@ function ConvertTo-Vec([object[]]$Values, [int]$Digits = 4) {
 #                 which no probe work happens at all. Timing runs set this (fork ini option
 #                 ddgi.volume.0.probeVariability.skipConverged=0).
 #   ProbeSpacing: > 0 replaces the manifest probe spacing (timing sweeps over the probe count)
+#   GridRule    : 'cells' (default) or 'ddgi' (our DDGI's floor(size / spacing) + 1 grid), see Get-VolumeGrid
 function New-HarnessIni {
     param(
         $Manifest,
@@ -273,11 +284,12 @@ function New-HarnessIni {
         [switch]$HideUi,
         [int]$WarmupFrames = 300,
         [switch]$UpdateEveryFrame,
-        [double]$ProbeSpacing = 0
+        [double]$ProbeSpacing = 0,
+        [ValidateSet('cells', 'ddgi')][string]$GridRule = 'cells'
     )
     $root = Get-RepoRoot
     $harness = "$root/native/rtxgi-ddgi/samples/test-harness"
-    $grid = Get-VolumeGrid $Manifest.volume $ProbeSpacing
+    $grid = Get-VolumeGrid $Manifest.volume $ProbeSpacing $GridRule
     $s = $grid.MinSpacing
     $cameras = @($Manifest.cameras)
     if ($Camera -lt 1 -or $Camera -gt $cameras.Count) {

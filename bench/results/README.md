@@ -21,6 +21,7 @@ Columns, in this order:
 - **`note/gpu_busy,1`:** another program was using the GPU during that scene's runs. The rows are kept (the file is never edited) but aren't valid timings. The RTX 3060 rows at `80cd2dc` are like that.
 - **`note/cpu_core_busy,1`:** another process held one CPU core during the runs (the stray python.exe at `8e5373c`). GPU timings are valid. CPU-side numbers, such as the worker build time, may read a little high.
 - **`scene_parts` (native.csv):** how many model parts the scene was merged from. Sponza rows without it are the base package only; from 2026-11-05 `sponza` is base plus curtains (2 parts).
+- **`grid_ddgi,1` and `label,t1.9-matched` (native.csv):** the probe grid follows our DDGI rule (`floor(size / spacing) + 1` probes per axis at exactly the manifest spacing, centred), not the harness's default (`ceil(size / spacing)` cell centres). Compare these rows with our DDGI. Don't mix them with default-grid rows. The commit reads `c7d0162-dirty` because the `tools/native` option was uncommitted at the time; the fork itself is clean.
 - **The commit column** names the commit the CSV was written at, with `-dirty` only if a measured file had uncommitted changes.
 
 ## native.csv

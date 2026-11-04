@@ -110,6 +110,7 @@ One bullet per fact, each with its source. Add a bullet when something cost you 
 - **The native frame rate is CPU-bound.** Untimed main-thread work makes it 50–87 ms per frame on Sponza, against about 20 ms of GPU work, so compare GPU numbers only. Source: T0.6.
 - **Native timings drift 15-30% between runs of the same config** on the RTX 3060 laptop, in every pass including lighting, so it's machine state, not code. Take 3+ runs per scene before comparing. Source: T0.6.
 - **Native multi-part scenes** are merged into one glTF by `tools/native/merge-gltf.mjs`, which references the parts' own `.bin` and image files (nothing is copied). `native.csv` Sponza rows without a `scene_parts` row are base-only. Source: T1.9 prep.
+- **The native harness's default probe grid isn't ours:** it places `ceil(size / spacing)` cell centres. `bench.ps1 -GridRule ddgi` gives matched counts and positions: two-room 1,071 probes against the default 918, Sponza 19,425 against 17,760. Native's own-cell classification switches off 40% of Cornell's probes and 59% of Sponza's. Source: T1.9 prep.
 - **Native harness keys:** F2 dumps DDGI textures, F4 runs a 1024-frame benchmark to CSV, J toggles the performance overlay, R reloads shaders and config, M switches between DDGI and the path tracer.
 - **Installed tools:** RenderDoc 1.47.0, PIX 2603.25, Blender, NVIDIA FLIP (`python -m flip_evaluator`), Vulkan SDK 1.3.283, Nsight Systems 2022.4, Nsight Compute 2022.3. Nsight Graphics needs a manual install.
 

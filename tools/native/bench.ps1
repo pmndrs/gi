@@ -42,6 +42,20 @@
 .PARAMETER ProbeSpacing
   Replaces the manifest probe spacing (metres), for sweeps over the probe count.
 
+.PARAMETER GridRule
+  'cells' (default): the harness's usual grid, ceil(size / spacing) probes per axis at cell centres.
+  'ddgi': our DDGI technique's grid, floor(size / spacing) + 1 per axis at exactly the manifest
+  spacing, centred on the volume centre (matched probe counts and positions). Its rows get
+  grid_ddgi,1, so they are not mixed with the default runs.
+
+.PARAMETER Runs
+  Repeat the whole scene list this many times (interleaved: a, b, c, a, b, c, ...) inside one
+  hold of the GPU lock. Run-to-run drift is 15-30%, so take 3 or more.
+
+.PARAMETER Label
+  Free text written as a 'label' row with each run (letters, digits, '.', '-', '_'), to mark a
+  set of runs, for example t1.9-matched.
+
 .PARAMETER Tag
   Added to the run folder name, so sweep runs do not overwrite each other.
 
@@ -72,6 +86,9 @@ param(
     [string]$Csv = '',
     [double]$ProbeSpacing = 0,
     [string]$Tag = '',
+    [ValidateSet('cells', 'ddgi')][string]$GridRule = 'cells',
+    [ValidateRange(1, 20)][int]$Runs = 1,
+    [ValidatePattern('^[A-Za-z0-9._-]*$')][string]$Label = '',
     [switch]$SkipConverged,
     [switch]$HideUi,
     [switch]$NoAppend
@@ -169,15 +186,17 @@ $failedScenes = @()
 # whichever job polls next. The Use-BenchLock calls inside reuse this hold.
 $null = Enter-BenchLock -What "native bench $($Scene -join ',') ($Api)"
 try {
-    foreach ($sceneId in $Scene) {
-        Write-Host "=== $sceneId ($Api) ==="
+    $queue = foreach ($runIndex in 1..$Runs) { foreach ($id in $Scene) { [pscustomobject]@{ Run = $runIndex; Scene = $id } } }
+    foreach ($entry in $queue) {
+        $sceneId = $entry.Scene
+        Write-Host "=== $sceneId ($Api), run $($entry.Run) of $Runs ==="
         try {
             $manifest = Read-SceneManifest $sceneId
             $sceneFile = Resolve-SceneFile $manifest
             $runDir = Get-HarnessRunDir $sceneId $Api "-bench$Tag"
             $config = New-HarnessIni -Manifest $manifest -SceneFile $sceneFile -OutputDir $runDir -Gpu $Gpu `
                 -Width $Width -Height $Height -Vsync 0 -Clean -Camera $Camera -Rays $Rays -AutoBench -WarmupFrames $WarmupFrames `
-                -UpdateEveryFrame:(-not $SkipConverged) -ProbeSpacing $ProbeSpacing -HideUi:$HideUi
+                -UpdateEveryFrame:(-not $SkipConverged) -ProbeSpacing $ProbeSpacing -GridRule $GridRule -HideUi:$HideUi
             Write-Host "Probe grid: $($config.Grid.Counts -join ' x ') = $($config.Grid.Total) probes, $Rays rays per probe, probes updated $(if ($SkipConverged) { 'until converged (upstream)' } else { 'every frame' })"
             $iniPath = "$runDir/$sceneId.ini"
             [System.IO.File]::WriteAllText($iniPath, $config.Text)
@@ -284,6 +303,8 @@ try {
                 scene_parts = @($manifest.parts).Count
             }
             if ($isSweep) { $fixed['sweep'] = 1 }
+            if ($GridRule -eq 'ddgi') { $fixed['grid_ddgi'] = 1 }
+            if ($Label) { $fixed['label'] = $Label }
             foreach ($key in $fixed.Keys) { $rows.Add(@($key, $fixed[$key])) }
             # Passes that clean mode switches off are left out (always 0)
             $skipped = @('Path Tracing', 'DDGI Probe Vis', 'DDGI Texture Vis', 'RTAO')
@@ -307,7 +328,7 @@ try {
 
             $pick = { param($n) if ($stats.Contains($n)) { [math]::Round($stats[$n].Mean, 3) } else { $null } }
             $summary.Add([pscustomobject]@{
-                scene = $sceneId; api = $Api; device = $deviceName
+                scene = $sceneId; run = $entry.Run; api = $Api; device = $deviceName
                 probes = "$($grid.Counts -join 'x') = $($grid.Total)"
                 active = $states.Active
                 rays = $Rays
@@ -315,6 +336,7 @@ try {
                 trace_ms = & $pick 'Probe Trace'; blend_ms = & $pick 'Blend'; relocate_ms = & $pick 'Relocate'
                 classify_ms = & $pick 'Classify'; lighting_ms = & $pick 'Lighting'; variability_ms = & $pick 'Variability'
                 ddgi_ms = & $pick 'DDGI'; frame_ms = & $pick 'Frame'
+                rays_traced = $raysTraced
                 trace_median = [math]::Round($traceMedian, 3)
                 cpu_frame_ms = $(if ($cpuStats.Contains('Frame')) { [math]::Round($cpuStats['Frame'].Median, 1) } else { $null })
             })
