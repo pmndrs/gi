@@ -429,7 +429,7 @@ You sign off before the next milestone starts.
   5. **Second-technique check (paper):** walk a voxel GI and a surfel GI design through the platform API and the shading-module contract, and fix what doesn't fit.
   6. **Reflection-probe coexistence:** GI inside a three.js reflection-probe capture, and env diffuse off with env specular on.
 
-**Done when:** WebGPU timings work on every test device (Windows NVIDIA and Intel, Mac M5 Pro, iPad, older iOS where WebGPU exists); native timings exist for every manifest scene; each spike has a written yes/no answer with numbers; and the contract above is confirmed or revised from what the spikes found.
+**Done when:** WebGPU timings work on the Windows NVIDIA and Intel GPUs (the Mac M5 Pro, iPad and older iOS device are deferred to a later milestone: DECISIONS 2026-11-04); native timings exist for every manifest scene; each spike has a written yes/no answer with numbers; and the contract above is confirmed or revised from what the spikes found.
 
 ### M1: Core DDGI loop, static scene, two hosts
 

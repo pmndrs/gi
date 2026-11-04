@@ -4,6 +4,9 @@ Settled choices, newest first. Each entry is short: the decision, why, and what 
 
 ## 2026-11-04
 
+- **Apple-device testing is deferred past M0.** M0 measures on the Windows laptop only (RTX 3060 and Intel UHD). The Mac, iPad and older iOS rows of T0.3, the Mac columns of T0.5 and T0.10, and the M0 "every test device" check move to a later milestone.
+  - *Why:* Dennis: "We can skip the apple/device testing for now until we progress further." The LAN device page (`pnpm device:serve`) is built and ready for when we pick it up.
+  - *Revisit when:* the DDGI loop runs (M1 or M2), so the Apple numbers measure something real.
 - **Toolchain mirrors `@pmndrs/upscaler`.**
   - pnpm workspace with an umbrella package over `-core`/`-three`.
   - vite, vitest, rollup type bundling, ESLint 9.

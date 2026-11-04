@@ -8,7 +8,7 @@ Status values: `todo`, `active (agent, date)`, `review`, `done`, `blocked (why)`
 | --- | --- | --- | --- | --- | --- |
 | T0.1 | Workspace | implementer | M | none | done |
 | T0.2 | GPU runner | implementer | M | T0.1 | review |
-| T0.3 | Timing and devices | implementer, then gpu-tester | M | T0.2 | review (Windows done; Apple devices need Dennis) |
+| T0.3 | Timing and devices | implementer, then gpu-tester | M | T0.2 | review (Windows only; Apple devices deferred, see DECISIONS 2026-11-04) |
 | T0.4 | Test scenes | wrangler (assets) + implementer (manifest, procedural scenes) | M | T0.1 | review (Sponza blocked: license question for Dennis) |
 | T0.5 | Viewer shell | implementer | M | T0.2, T0.3, T0.4 | todo |
 | T0.6 | Native harness | native-runner | M | T0.4 | todo |
@@ -78,7 +78,7 @@ Status values: `todo`, `active (agent, date)`, `review`, `done`, `blocked (why)`
 - **Done when:**
   1. Unit tests cover the ring and result mapping (no GPU).
   2. The device page reports per-pass GPU ms on NVIDIA and Intel through T0.2.
-  3. A table in PROGRESS lists, for each device and browser (Windows Chrome NVIDIA, Windows Chrome Intel, Mac Chrome, Mac Safari, iPad Safari, older iOS Safari): WebGPU yes/no, timestamps yes/no, and the overhead of timing vs not timing.
+  3. A table in PROGRESS lists, for Windows Chrome NVIDIA and Windows Chrome Intel: WebGPU yes/no, timestamps yes/no, and the overhead of timing vs not timing. The Apple rows (Mac Chrome, Mac Safari, iPad Safari, older iOS Safari) are deferred to a later milestone (DECISIONS 2026-11-04); the LAN page is ready for them.
 - **Show:** the device page URL.
 - **Record:** that table, plus a `bench/results/timing.csv` row per device.
 - **Note:** the Apple devices need you to open the LAN URL. The gpu-tester prepares the page and the instructions, and you read the numbers back, or the page posts them to the dev server.
@@ -121,7 +121,7 @@ Status values: `todo`, `active (agent, date)`, `review`, `done`, `blocked (why)`
 - **Done when:**
   1. Every manifest scene opens on its first bookmark, visibly lit, with no console errors.
   2. The split wipe shows `LightProbeGrid` vs VXGI on Sponza.
-  3. Bake time and frame cost for each baseline are recorded per scene on NVIDIA and Intel, and on the Mac.
+  3. Bake time and frame cost for each baseline are recorded per scene on NVIDIA and Intel. (The Mac is deferred: DECISIONS 2026-11-04.)
   4. You can use it without instructions; your feedback goes in PROGRESS.
 - **Show:** the viewer URL.
 - **Record:** a baseline table (scene × technique × device: bake ms, frame ms, GI ms) in PROGRESS and `bench/results/baselines.csv`.
@@ -196,7 +196,7 @@ Status values: `todo`, `active (agent, date)`, `review`, `done`, `blocked (why)`
     - a port of the old project's CPU triangle oracle cases (thin wall, mirrored and non-uniform transforms, instancing) as tests.
 - **Done when:**
   1. All oracle cases pass on GPU on NVIDIA and Intel.
-  2. Rays per second for closest-hit and any-hit (probe-style rays) on Sponza and Bistro, for ours vs the latest three-mesh-bvh, on NVIDIA, Intel and the Mac.
+  2. Rays per second for closest-hit and any-hit (probe-style rays) on Sponza and Bistro, for ours vs the latest three-mesh-bvh, on NVIDIA and Intel. (The Mac is deferred: DECISIONS 2026-11-04.)
   3. BVH build time and memory per scene.
   4. A decision is written in DECISIONS.md.
 - **Show:** the benchmark page.

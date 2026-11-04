@@ -119,7 +119,7 @@ Full rows, with done-when checks, are on the board. In short:
 ### M0 done when
 
 - `pnpm i && pnpm lint && pnpm typecheck && pnpm test && pnpm build` passes from a clean clone.
-- `pnpm test:gpu` passes on NVIDIA and Intel.
+- `pnpm test:gpu` passes on NVIDIA and Intel. Apple devices (Mac, iPad, older iOS) are deferred to a later milestone (DECISIONS 2026-11-04).
 - The viewer opens every test scene on a lit default view.
 - three's `LightProbeGrid` and VXGI show as baselines with their frame and bake cost recorded per device.
 - Native per-pass timings exist for every native-capable scene.
