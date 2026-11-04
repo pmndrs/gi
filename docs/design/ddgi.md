@@ -96,10 +96,10 @@ Thread 0 then decides, from the paper's rules (Majercik 2021, section 5):
   - more than 25% back faces among the fixed rays: the probe is inside something; move it through the closest back face, to just past that surface (`closest back-face distance + 0.5 × minFrontFaceDistance`);
   - otherwise, closest front face nearer than `minFrontFaceDistance` (default 0.02 × the smallest spacing since T1.5b; the first design said 0.1): move away from it, along the farthest front-face direction, but only if that doesn't head back toward the closest one;
   - otherwise, ease back toward the grid point.
-  - A new offset is accepted only if it stays within ±0.45 of the spacing on every axis. Otherwise the old offset stays.
+  - A new offset is accepted only if it stays within ±0.45 of the spacing on every axis, and (since T1.5b) only if the moved probe stays inside the volume's probe box. Otherwise the old offset stays.
 - **Classification** (setting `classification`, default on):
-  - **off, inside geometry (1):** more than 25% back faces among the fixed rays, after relocation had its chance;
-  - **off, no surface nearby (2):** no fixed ray hit a front face within the probe's own cell (the box one spacing wide around it), so the probe affects no surface's interpolation. The paper's rule; it is what makes probes outside a building switch off;
+  - **off, inside geometry (1):** more than 25% back faces among the fixed rays, or the nearest thing the fixed rays see is a back face (added in T1.5b), after relocation had its chance;
+  - **off, no surface nearby (2):** no fixed ray hit a front face within reach, so the probe affects no surface's interpolation. The paper's rule uses the probe's own cell; T1.5b measured that 32 fixed rays miss slivers near the cell's corners and switched off 25 probes Cornell needs, so the reach is 1.5 spacings (DECISIONS 2026-11-05). It's what makes probes outside a building switch off;
   - otherwise **active (0)**, or stays **3** until its first blended update.
 - The new offset and state go to the scratch buffer.
 
@@ -125,19 +125,22 @@ Scratch buffer: `maxProbesPerFrame × (36 × 8 + 196 × 4 + 8)` bytes, about 1 M
 
 | Kernel | Storage buffers | Textures |
 | --- | --- | --- |
-| update | tracer 3 + scene copy and hit shading ≤ 2 + update list 1 + scratch 1 = **7** | irradiance, distance, probe data (sampled), plus whatever hit shading uses for the sky |
+| trace | tracer 3 + scene copy and hit shading 2 + update list and ray buffer = **7** | irradiance, distance, probe data (sampled), the sky's radiance map |
+| blend | update list, ray buffer, scratch and its own state = **4** | irradiance, distance, probe data (sampled) |
 | write | update list 1 + scratch 1 = **2** | irradiance, distance, probe data (write-only storage) |
+
+(Counts as built in T1.5b; the single `update` kernel of the first design used 7.)
 
 One uniform buffer holds the volume (origin, spacing, counts), the frame rotation, the settings and the update-list length.
 
 ## Which probes update (the budget)
 
-- **Unit = one probe update.** `TechniqueFrame.units` comes from the platform, which turns the host's `gpuMs` into units with `msPerUnit` (measured: the `ddgi/update` + `ddgi/write` GPU time divided by probes updated, smoothed over frames). Without timings, `FrameBudget.units`, default 512 on Tier A.
+- **Unit = one probe update.** `TechniqueFrame.units` comes from the platform, which turns the host's `gpuMs` into units with `msPerUnit` (measured: the `ddgi/trace` + `ddgi/blend` + `ddgi/write` GPU time divided by the probes the technique actually updated, smoothed over frames). Without timings, `FrameBudget.units`, default 512 on Tier A.
 - **Order:** a fixed scrambled order of all probes, `order[i] = (i × stride) mod N` with `stride` coprime with `N` and near `0.618 N`, so each frame's set is spread across the volume, not one slab. A CPU cursor walks it. Each frame's list is `units` consecutive entries, written into the update-list buffer with `queue.writeBuffer` inside `encode` (no readback; probe states stay on the GPU).
 - Off probes in the list still cost a workgroup, but only 32 rays and no blend, so they're cheap. `msPerUnit` absorbs the mix.
 - **Probes near a change first** (SceneChanges) is M2. The design leaves room: a priority list in front of the cursor, in the same buffer.
 - `maxProbesPerFrame` (default 4,096) sizes the update list and the scratch buffer. Dispatches over 65,535 workgroups use two dimensions.
-- `FrameBudget.paused` skips both kernels.
+- `FrameBudget.paused` skips every DDGI kernel.
 
 ## Sampling the field (`ddgiSampleIrradiance`): one function, two users
 
@@ -168,7 +171,7 @@ interface DDGISettings {
     irradianceTexels: number;        // 6 (interior), new prepare when changed
     distanceTexels: number;          // 14
     hysteresis: number;              // 0.97
-    irradianceChangeThreshold: number; // 0.25
+    irradianceChangeThreshold: number; // Infinity (off; DECISIONS 2026-11-05). A value turns on the lagged probe-mean rule
     maxBrightnessChange: number;     // 2.0
     distanceSharpness: number;       // 50
     normalBias: number | 'auto';     // auto = 0.1 × min spacing
@@ -176,7 +179,7 @@ interface DDGISettings {
     maxRayDistance: number;          // Infinity
     bounceEnergy: number;            // 1.0. Native RTXGI dims bounces (0.95); set it only to match native
     relocation: boolean;             // true
-    minFrontFaceDistance: number | 'auto'; // auto = 0.1 × min spacing
+    minFrontFaceDistance: number | 'auto'; // auto = 0.02 × min spacing (T1.5b; was 0.1)
     classification: boolean;         // true
     maxProbesPerFrame: number;       // 4096, new prepare when changed
 }

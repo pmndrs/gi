@@ -21,7 +21,7 @@ Rules:
 
 ---
 
-## 2026-11-05 · T1.5b · implementer (opus); in review
+## 2026-11-05 · T1.5b · implementer (opus); Opus review: pass with notes, fixes in progress
 Did (9c6348a):
 - The single kernel is replaced by `ddgi/trace` (64 threads, one ray each, inline `giTraceClosest`, a ray buffer that grows when needed), then `ddgi/blend` (phases B and C), then `ddgi/write`.
 - Phase B: subgroups first, with a declared workgroup fallback. Relocation and classification per the design, with the tuning in DECISIONS. Offsets are used for ray origins and in sampling; off and not-yet-updated probes are skipped when sampling.
@@ -48,6 +48,12 @@ With the big-change rule off by default (c7fbbea; DECISIONS), re-run on both GPU
 - classification passes, subgroups equal to the fallback;
 - test 655.
 Lead: `ddgi-leak` re-run on the RTX passes. Timing wasn't re-run, since the rule doesn't change the per-frame work.
+Review (Opus): every number reproduced on both GPUs; all 6 DDGI pages pass; subgroups equal to the fallback, with Intel exercising the cross-subgroup combine; the leak page's Cycles means match the EXRs. Being fixed:
+- the state census read back every frame against the no-readback rule;
+- the budget meter divided by units handed out instead of units used;
+- the cabinet row depends on the GPU (79 probes off inside a solid on the RTX, 39 on Intel; one probe still in state 3 after 60 frames, which suggests it flips);
+- two WGSL clarity items.
+Worth knowing before the targets tighten: as DECISIONS defines it, the leak measure can't tell a leak from overall brightness. DDGI reads +5.7% (lit room) and +9.0% (dark room) over Cycles, and that general excess accounts for most of the 0.80%.
 
 ## 2026-11-05 · T1.5a · implementer (opus); Opus review: pass with notes; fixes folded into T1.5b
 Did (e18ba01): `DDGITechnique` from `docs/design/ddgi.md`, in `packages/ddgi-core/src/techniques/ddgi/`:
