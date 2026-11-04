@@ -120,7 +120,7 @@ export const ENVIRONMENT_TYPE = {
  *                                   normal matrix transpose(inverse(L))
  *     normalRow0.w: u32             first word of this instance's material list (relative to the list section)
  *     normalRow1.w: u32             number of entries in the list
- *     normalRow2.w: u32             unused
+ *     normalRow2.w: u32             reserved (written as 0)
  *     boundsMin.xyz, w: u32         world-space box (min), mesh slot
  *     boundsMax.xyz, w: u32         world-space box (max), flags
  *
@@ -137,6 +137,8 @@ export const INSTANCE_WORD = {
     normalRow1: 16,
     materialListCount: 19,
     normalRow2: 20,
+    /** The w lane of normalRow2: nothing uses it yet; kept 0. */
+    reserved: 23,
     boundsMin: 24,
     mesh: 27,
     boundsMax: 28,

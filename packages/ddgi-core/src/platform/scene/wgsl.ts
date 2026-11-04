@@ -63,6 +63,7 @@ import {
     MESH_WORD,
     NONE,
     UV_PACK_SHIFT,
+    UV_WRAP,
 } from './layout.ts';
 
 /** `GPUShaderStage.COMPUTE`. The global does not exist in Node, where the tests import this file. */
@@ -173,9 +174,9 @@ const GI_ENVIRONMENT_COLOR: u32 = ${ENVIRONMENT_TYPE.color}u;
 const GI_ENVIRONMENT_TEXTURE: u32 = ${ENVIRONMENT_TYPE.texture}u;
 const GI_ENVIRONMENT_PROCEDURAL: u32 = ${ENVIRONMENT_TYPE.procedural}u;
 
-const GI_UV_WRAP_REPEAT: u32 = 0u;
-const GI_UV_WRAP_CLAMP: u32 = 1u;
-const GI_UV_WRAP_MIRROR: u32 = 2u;
+const GI_UV_WRAP_REPEAT: u32 = ${UV_WRAP.repeat}u;
+const GI_UV_WRAP_CLAMP: u32 = ${UV_WRAP.clamp}u;
+const GI_UV_WRAP_MIRROR: u32 = ${UV_WRAP.mirror}u;
 
 // ---- Bindings and layout ---------------------------------------------------------------
 

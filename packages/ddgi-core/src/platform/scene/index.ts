@@ -1,6 +1,8 @@
 // The platform's scene copy (T1.2): SceneApi for hosts, SceneCopy for techniques.
-// Layout constants stay internal (layout.ts): techniques read the scene through
-// the WGSL accessors only.
+// Internal: platform/index.ts does not re-export this, so nothing here reaches
+// `@pmndrs/ddgi/core`. The platform object and the tracer (T1.3) import it by path.
+// Layout constants stay in layout.ts: techniques read the scene through the WGSL
+// accessors only.
 export { PlatformScene, DEFAULT_SCENE_CAPACITIES } from './platform-scene.ts';
 export type {
     InstanceSnapshot,

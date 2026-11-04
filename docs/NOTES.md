@@ -169,6 +169,13 @@ One bullet per fact, each with its source. Add a bullet when something cost you 
 - **The references are pure Lambert; three's standard material isn't.** `scenes/src/three-scene.ts` uses `MeshStandardMaterial` (roughness 1, metalness 0, F0 0.04). That adds a rough specular lobe the Cycles and path-tracer references lack, worth a few percent of the full image. When comparing the viewer against a reference, render with `specularIntensity = 0`, or measure the gap first, so the GI error isn't mixed with material error. Source: T0.7 Opus review.
 - **`@pmndrs/denoiser` is not on npm.** Build steps are in `tools/reference/README.md`.
 
+## Platform scene copy (T1.2)
+
+- **Scene copy memory:** octahedral normals (4 bytes) and 16-bit indices for meshes with at most 65,536 vertices. Intel Sponza (2.05 M vertices, 3.75 M triangles) takes 87.7 MB. Bistro exterior takes 111.4 MB, which fits the 128 MB default binding only because of the octahedral normals. uv1 costs 16 MB on Sponza, so adapters should pass `uvs1` only when a material samples channel 1.
+- **`Omit<Union, K>` keeps only the keys shared by every member,** so `Partial<Omit<LightDescriptor,'type'>>` couldn't name `position` or `range`. Fixed with `LightChanges`.
+- **Bind-group layouts in budget tests must be explicit.** An `'auto'` layout drops bindings the entry point doesn't use, so it can hide an over-budget kernel.
+- **WebGPU ordering:** a `queue.writeBuffer` made during `encode` lands before the host's submit of that encoder, and copies recorded in the encoder run after it. So a growth copy must never cover a range written in the same frame.
+
 ## Tracing (measured)
 
 - **Use a watertight triangle test.** Möller–Trumbore let 3–12% of rays aimed at shared edges slip between triangles (RTX 3060 11.6%, Intel UHD 3.0%, 2M rays each), and leaked into sealed thin boxes. The watertight test (Woop et al. 2013, with stored corners) let none of 4M through. Source: `tools/gpu/pages/trace-oracle`, T0.10.

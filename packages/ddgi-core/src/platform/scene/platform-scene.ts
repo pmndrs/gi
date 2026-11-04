@@ -933,7 +933,7 @@ export class PlatformScene implements SceneApi, SceneCopy {
         }
         words[base + INSTANCE_WORD.materialListStart] = instance.listOffset;
         words[base + INSTANCE_WORD.materialListCount] = instance.materials.length;
-        words[base + INSTANCE_WORD.normalRow2 + 3] = 0;
+        words[base + INSTANCE_WORD.reserved] = 0;
 
         transformBounds(instance.mesh.packed.bounds, matrix, instance.worldBounds, 0);
         floats.set(instance.worldBounds.subarray(0, 3), base + INSTANCE_WORD.boundsMin);

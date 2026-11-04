@@ -259,7 +259,7 @@ Rules for every M1 task:
 | ID | Task | Agent | Size | Depends on | Status |
 | --- | --- | --- | --- | --- | --- |
 | T1.1 | Shared sky | implementer | S | none | active (implementer, 2026-11-04) |
-| T1.2 | Platform scene copy | implementer | M | none | active (implementer, 2026-11-04) |
+| T1.2 | Platform scene copy | implementer | M | none | done (Opus review passed with notes, all fixed; both GPUs) |
 | T1.3 | Tracer as a platform module | implementer | M | T1.2 (B0 as built) | todo |
 | T1.4 | Hit shading | implementer | M | T1.1, T1.3 | todo |
 | T1.5 | DDGI field and update loop | main session designs, implementer builds | L | T1.4 | design (main session, 2026-11-04) |
@@ -302,6 +302,10 @@ Done-whens for the B stages are in `docs/design/bvh-framework.md`. B1a's: a 10k-
 - **T1.4 Hit shading.**
   - `giSurfaceAt` (interpolated normals), `giDirectIrradiance` (sun and sky, shadow rays, light-group mask), and `giSkyRadiance` and `giSkyIrradiance` from the shared sky.
   - Done when a sun on a plane matches E·cos θ, sky irradiance matches Cycles within tolerance, and shadow rays agree with the oracle.
+  - From the T1.1 review (DECISIONS 2026-11-04):
+    - `giSkyIrradiance` on the open-ground scene meets the reference tolerance (±0.5%) against Cycles.
+    - The `procedural` environment type uses the same Preetham and calibration code as the sky files: move it from `scenes/src/sky` into the core (scenes then imports it), with one turbidity default.
+    - The contract states the `equirect` layout (which row is the zenith, where u = 0 points), matching three's `equirectUV`, so three's textures can be passed straight in.
 - **T1.5 DDGI field and update loop.**
   - Main session design first: probe layout, octahedral irradiance and distance atlases, rays with a random rotation each update, hysteresis, unlimited bounce from the current field, a budget in probes per frame, and classification and relocation on the GPU.
   - Tracing is inline (trace, shade and accumulate in one kernel). If the update cost comes near its budget, time inline against batch once.

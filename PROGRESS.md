@@ -21,6 +21,27 @@ Rules:
 
 ---
 
+## 2026-11-04 · T1.2 · implementer (opus); Opus review: pass with notes, fixed; done
+Did: `PlatformScene` (SceneApi and SceneCopy) in `packages/ddgi-core/src/platform/scene/`, commit 73f99e6.
+- Two storage buffers: vertex data, and one table buffer (header, instance, mesh, material and light records, per-instance material lists).
+- Uploads with `queue.writeBuffer` inside `encode(encoder)`. Tables double and reallocate, and `module.version` bumps.
+- Octahedral normals and 16-bit indices (DECISIONS). Also `SceneChanges`, bounds, memory and counts.
+- GPU page `tools/gpu/pages/scene-copy`. Contract fix by the lead: `updateLight` takes `LightChanges` (acc4d32).
+Verified (reviewer re-ran everything): lint, typecheck, test 545 pass. `test:gpu --filter scene-copy` passes on the RTX 3060 (ampere) and Intel UHD (gen-12lp), headless Chrome 156, default-limits device:
+- every accessor matches the inputs in 3 states;
+- 1 shader module and 1 pipeline before and after create/destroy churn;
+- a DDGI-shaped kernel at 8 of 8 storage buffers: 0 of 4096 rays disagree with the CPU walk.
+Not verified: GPU timing of uploads. Packing Sponza takes 698 ms on the CPU, in Node only.
+Numbers (vertex buffer): Sponza 87.7 MB (104.1 with float normals, 110.2 with 32-bit indices); Bistro exterior 111.4 MB (134.8); Bistro interior 32.3 MB. Tables 0.1–0.8 MB.
+Review fixes (lead re-checked):
+- the scene internals are gone from the public build (none of their names appear in `packages/ddgi/dist`);
+- the contract comment on normals is corrected;
+- `node tools/bench/scene-copy-memory.ts` reproduces the numbers below;
+- `testing/fixture.test.ts` plants 10 faults and the checker catches each one;
+- `GI_UV_WRAP_*` is now generated from `UV_WRAP`.
+After the fixes: lint, typecheck and test pass (556); the agent re-ran `scene-copy` on both GPUs.
+Next (T1.3): `GiHit.instance` = scene-copy slot; act on `SceneUpload` (`meshesRemoved`, then `meshesUploaded`, then `instancesChanged`); positions are stored twice (tracer 180 MB plus scene copy 87.7 MB on Sponza), so measure whether the tracer can read the scene copy's positions; mirrored front faces (DECISIONS).
+
 ## 2026-11-04 · T1.10 part 1 · wrangler (haiku), lead checked
 Did: Intel's four Sponza add-ons in `tools/assets/sources.json` (`sponza-intel-curtains`, `-ivy`, `-trees`, `-candles`; download-only), with 1k texture conversion for the first three (the base's script, Blender 4.5.0). Four rows in THIRD_PARTY.md.
 Verified:

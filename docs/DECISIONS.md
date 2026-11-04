@@ -4,6 +4,17 @@ Settled choices, newest first. Each entry is short: the decision, why, and what 
 
 ## 2026-11-04
 
+- **Sky brightness: the Ineichen–Perez clear-sky ratio** (T1.1). A flat open ground gets sky irradiance equal to the Ineichen–Perez 2002 clear-sky diffuse-to-direct horizontal ratio times the sun's horizontal illuminance (sea level, Kasten–Young air mass, Linke turbidity taken from the manifest's `turbidity`, no Perez enhancement, as in pvlib's default). Sponza's sky gives the ground 12.3% of the sun's light on it.
+  - *Why:* it's a measured-data model, and it changes with sun elevation and haze.
+  - *Revisit if:* Dennis wants brighter interiors. Adjust `environment.intensity` or the exposure, not the ratio.
+- **T1.1's viewer check means "the viewer shows the same sky file, the right way round". Sky-lighting accuracy is judged on the platform's own sky irradiance.** (M1 lead, after the T1.1 review)
+  - The viewer never lights surfaces with three's environment (PMREM); only the GI technique does. So the open-ground PMREM comparison (−0.65% brightness against ±0.5%) measured a mode the viewer doesn't use. PMREM is a GGX lobe, not a cosine integral (NOTES).
+  - The accuracy check moves to where it matters: T1.4 holds the platform's `giSkyIrradiance` to the reference tolerance (±0.5%) against Cycles on open ground, and T1.8 repeats it through DDGI in the viewer. The tolerance itself is unchanged.
+- **The native harness gets the sky as one flat colour in M1** (the file's flat equivalent, E/π). Its shaders have one constant `skyRadiance` and no texture path. M1 compares native on timings, not images, so a texture sky in the fork's miss shader moves to M2 (sky and time of day).
+- **The scene copy stores normals octahedral-encoded (4 bytes) and indices as 16 bits wherever every index fits** (T1.2). This settles open gap 9 in `docs/api/platform.md`.
+  - *Why:* measured vertex buffers: Sponza 87.7 MB against 104.1 MB with float normals; Bistro exterior 111.4 MB against 134.8 MB, so it fits the 128 MB default storage binding only this way.
+  - *Revisit if:* hit shading needs normals more precise than about 1e-4 rad.
+- **Front faces follow the side the mesh was authored with, also for mirrored instances** (M1 lead, from the T1.2 review). three.js keeps a mirrored mesh's authored front side. The tracer's `GiHit.frontFace` and the scene copy's geometric normal followed world-space winding, which a mirror flips. So a ray hitting a mirrored closed mesh from outside would count as a back face, and DDGI's "more than 25% back faces" rule would switch off probes next to it. T1.3 changes the tracer and `giInstanceGeometricNormal` together, and the oracle's mirrored cases test it.
 - **Intel's Sponza add-ons are covered by the same approval as the base package** (T1.10). Curtains (726650), ivy (726656), trees (726662) and candles (726676) are download-only and never committed. Each package's `credits_license.txt` is byte-identical to the base's (Intel preface plus CC BY 4.0).
 - **The asset tool downloads from Intel with Windows' own `curl.exe`** (M1 lead). Since 2026-11-04, `cdrdv2.intel.com` answers Node's `fetch` with a 247-byte "Request Rejected" page, and `curl.exe` still gets the zip. We use a normal client that works; we don't disguise one that's refused (no fake browser headers). Other hosts keep Node `fetch`.
   - *Revisit if:* Intel blocks `curl.exe` too. Then the instructions say to download by hand and put the zip in `assets/.cache`.

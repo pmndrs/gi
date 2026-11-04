@@ -7,7 +7,6 @@
 
 import { describe, expect, it } from 'vitest';
 import type { MaterialHandle } from '../contract/handles.ts';
-import type { LightDescriptor } from '../contract/scene.ts';
 import { PlatformScene, type SceneUpload } from './platform-scene.ts';
 import { createFakeGpu, type FakeBuffer, type FakeGpu } from './testing/fake-gpu.ts';
 import { buildBasicScene, checkReadback, churnScene, composeTransform, cubeMesh, editBasicScene, makeQueries, materialIndices, SceneModel } from './testing/fixture.ts';
@@ -157,9 +156,7 @@ describe('changes and bounds', () => {
         expect(receiver.changes.regions).toEqual([]);
         expect(receiver.changes.movedReceivers).toBe(1);
 
-        // The contract's Partial<Omit<LightDescriptor, 'type'>> keeps only keys shared by
-        // every light type, so `position` needs a cast (reported in PROGRESS for T1.2).
-        model.updateLight(basic.lights[4], { position: [0, 0, 0] } as Partial<Omit<LightDescriptor, 'type'>>);
+        model.updateLight(basic.lights[4], { position: [0, 0, 0] });
         const light = encodeAndSubmit(gpu, scene);
         expect(light.changes.regions.map((region) => region.reason)).toEqual(['light', 'light']);
     });

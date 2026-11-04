@@ -11,6 +11,7 @@ import type { InstanceHandle, LightHandle, MaterialHandle, MeshHandle, TextureHa
 import type {
     EnvironmentDescriptor,
     InstanceDescriptor,
+    LightChanges,
     LightDescriptor,
     MaterialDescriptor,
     MeshDescriptor,
@@ -121,7 +122,7 @@ export class SceneModel {
         return handle;
     }
 
-    updateLight(handle: LightHandle, changes: Partial<Omit<LightDescriptor, 'type'>>): void {
+    updateLight(handle: LightHandle, changes: LightChanges): void {
         this.scene.updateLight(handle, changes);
         this.lights.set(handle, { ...this.lights.get(handle), ...changes } as LightDescriptor);
     }

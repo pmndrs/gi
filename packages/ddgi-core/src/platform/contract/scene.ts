@@ -39,7 +39,8 @@ export interface MeshDescriptor {
      * hits shade with the interpolated normal, so curved low-poly surfaces
      * (columns, spheres) don't light in facets. When absent, the triangle's own
      * normal is used. Inside/outside tests always use the triangle normal.
-     * Costs 12 bytes per vertex on the GPU (stored as given, for now).
+     * Costs 4 bytes per vertex on the GPU: stored octahedral-encoded (two
+     * 16-bit values), within about 1e-4 radians of the given direction.
      * Normal maps are deliberately not supported: their detail is far below
      * probe resolution.
      */
