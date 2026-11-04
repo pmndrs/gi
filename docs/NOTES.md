@@ -113,6 +113,13 @@ One bullet per fact, each with its source. Add a bullet when something cost you 
   - The glTF exporter takes alpha mode from the node setup (Greater-Than 0.5 means MASK), not from `blend_method`.
   - The OBJ importer sets Transmission 1.0 on materials with `illum 4` plus `Tf`, so `obj-to-glb.py` clears it.
 
+## Tracing (measured)
+
+- **Use a watertight triangle test.** Möller–Trumbore let 3–12% of rays aimed at shared edges slip between triangles (RTX 3060 11.6%, Intel UHD 3.0%, 2M rays each), and leaked into sealed thin boxes. The watertight test (Woop et al. 2013, with stored corners) let none of 4M through. Source: `tools/gpu/pages/trace-oracle`, T0.10.
+- **WGSL `bool` can't live in a buffer**, so hit records store front-face as `u32`. Source: T0.10.
+- **Mirrored instances** flip winding in world space, so front-face is `(det > 0) != mirrored`. Source: T0.10.
+- **Long page work:** the test runner gives up on a page that's busy for 30 s inside one CDP evaluate, so long CPU work on a page must yield. Source: T0.10.
+
 ## DDGI (measured lessons)
 
 - **Leak fixes by measured effect:** double-sided distance (84×), then probe density (22×). Probe texture resolution made no difference. Reducing bias made leaks *worse*, by up to 34×. Source: the HomeFig DDGI branch.

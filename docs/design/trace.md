@@ -59,6 +59,19 @@ A default device caps one storage binding at 128 MB. At 48 bytes per triangle th
 - **Triangle test:** Möller–Trumbore, with no epsilon on the edge tests. The shared-edge oracle checks for rays slipping between triangles. If any of a million edge-aimed rays get through, the spike tries the watertight test (Woop, Benthin and Wald 2013) and reports the speed difference.
 - **Stack overflow:** the builder reports the maximum depth, and the spike asserts that the top-level and mesh depths together fit in the stack. If 32 would always fit, the spike measures whether the smaller stack is faster, since private arrays cost registers.
 
+## What part A found (2026-11-04)
+
+- **Möller–Trumbore leaks at shared edges; the watertight test doesn't.** Two million rays were aimed exactly at shared triangle edges. With Möller–Trumbore, 11.6% slipped through on the RTX 3060 and 3.0% on the Intel GPU. Rays into the corners of a sealed thin box also leaked (354 of 6,000 on NVIDIA). The watertight test (Woop, Benthin and Wald 2013) let none through on either GPU.
+  - Watertight needs bit-identical shared vertices, so it stores `v0, v1, v2` (still 48 bytes) instead of `v0` plus edges.
+  - Both tests are a build option for the spike. Part B times both, and the slower one is deleted after the decision; production shaders keep one.
+- **Buffers can't hold `bool`,** so batches write `GiHitRecord` with a `u32` front-face flag (contract updated).
+- **Other small changes:**
+  - Mesh triangle indices are mesh-relative.
+  - The top-level buffer starts with a 64-byte header.
+  - Instances carry a `mirrored` flag, so front-face stays correct under mirroring.
+  - A single-triangle tree has an empty right child.
+- **Budget:** the trace module binds 3 storage buffers, and a batch kernel 5 of the 8 allowed. The worst-case stack depth is 19 of 64 on the oracle scenes; the busiest ray used 12.
+
 ## Benchmark
 
 - **Rays:** probe-style rays. A grid of probes fills the scene bounds, and each probe fires 256 rays in random directions from a fixed seed. Closest-hit rays use those directions. Any-hit rays go from each closest hit toward the sun (or a fixed direction), which is what DDGI's shadow rays look like. The rays are generated once and stored in a buffer, so every tracer gets identical input.

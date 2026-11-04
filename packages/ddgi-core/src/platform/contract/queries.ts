@@ -47,6 +47,17 @@ import type { WgslModule } from './wgsl';
  * kernel trace, shade and accumulate without writing rays and hits to memory.
  * For techniques that prefer separate passes, {@link RayQueries.encodeBatch}
  * runs a batch from buffers.
+ *
+ * `GiHit` is for function results only: WGSL `bool` can't be stored in a
+ * buffer. Batches write `GiHitRecord` instead (24 bytes, T0.10):
+ *
+ * ```wgsl
+ * struct GiHitRecord {
+ *     t: f32, instance: u32, triangle: u32,
+ *     barycentrics: vec2f,
+ *     frontFace: u32,      // 1 = front, 0 = back
+ * }
+ * ```
  */
 export interface RayQueries {
     readonly kind: 'rays';
@@ -59,7 +70,7 @@ export interface RayQueries {
     };
     /**
      * Trace `count` rays from a storage buffer of `GiRay` into a storage buffer
-     * of `GiHit` (or of `u32` 0/1 for `any`). Recorded into the given encoder.
+     * of `GiHitRecord` (or of `u32` 0/1 for `any`). Recorded into the given encoder.
      */
     encodeBatch(
         encoder: GPUCommandEncoder,

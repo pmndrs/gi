@@ -1,0 +1,4 @@
+{
+    "description": "BVH tracer oracle: thin walls, mirrored and non-uniform transforms, instancing, 2M rays at shared edges, against a CPU reference.",
+    "timeoutMs": 240000
+}
