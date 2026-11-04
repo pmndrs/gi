@@ -21,7 +21,7 @@ Rules:
 
 ---
 
-## 2026-11-05 · T1.6 · implementer (opus); Opus review: pass with notes (timing not judged), fixes in progress
+## 2026-11-05 · T1.6 · implementer (opus); Opus review: pass with notes (timing not judged), fixed; waiting on the RTX clock to re-time
 Did:
 - DDGI's shading module (`techniques/ddgi/shading.ts`, `wgsl/shading.ts`): `giIrradiance` is `ddgiSampleIrradiance` unchanged; `giCoverage` (DECISIONS); `giDebugColor` with GI only, coverage and probes near this point. 3 textures, 2 samplers, 4 vec4f uniforms, `globalsCode` and `writeUniforms`. `version` 1. `provides.radiance` is false: a rough-only fallback is right only at roughness 1.
 - The sampling loop moved into `ddgiAccumulateField` (bit-identical leak numbers). Per-sample hoisting plus `inverseSqrt` made it 16% cheaper, a rounding-level change; all T1.5 checks pass again on both GPUs (furnace −0.16% / −0.28%, Cornell +5.68% / +5.63%, two-room leak 0.797% / 0.795%).
@@ -40,6 +40,8 @@ Review (Opus): re-ran lint, typecheck, test 668, build and build:apps, and all 7
 - the back/forward cache;
 - two comment nits.
 The shading.csv rows carry `954d393-dirty` and a locked clock; they get replaced by the re-time.
+Fixes (1864ecd, ceba56c): coverage asserted at four points (inside 1, fade band 0.5, past the margin 0, unseen 0); each debug view checked per channel against its own reference (at most 9 pixels differ, limit 1%); hello's `ready` = every probe updated 100 times; a back/forward-cache-restored page reloads.
+Compatibility mode tested on a new page `ddgi-shading-compat`: raster GI equals the test view (0 pixels differ) on both GPUs. It needed `textureBindingViewDimension` on the atlases and on the sky placeholder, and `requiredLimits` asking for 256-thread workgroups (DECISIONS).
 Next: re-time at normal clocks; spot-check today's earlier RTX timings; add the hello and shading pages to `MEASURED_PATHS`; a `shading.csv` note in `bench/results/README.md`.
 
 ## 2026-11-05 · T1.9 prep: native matched-count timings · native-runner (opus)
