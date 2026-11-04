@@ -361,8 +361,9 @@ export class PlatformSky {
 
     /**
      * Builds the calibrated Preetham sky for a `procedural` environment with
-     * the sky files' own code and uploads it. `intensity` is the illuminance of
-     * the sun this sky goes with (contract/scene.ts). Values outside the
+     * the sky files' own code and uploads it: calibrated to a sun of
+     * `sunIlluminance`, times `intensity` (contract/scene.ts), the same two
+     * numbers the sky files use. Values outside the
      * model's range are clamped: turbidity to 1.7..20, and the sun to at least
      * 5 degrees above the horizon (same azimuth); a lower sun is M2 (time of day).
      */
@@ -371,7 +372,8 @@ export class PlatformSky {
         const sky = buildCalibratedSky({
             sunDirection: liftSunAboveMinimum(environment.sunDirection),
             turbidity,
-            sunIlluminance: environment.intensity ?? 1,
+            sunIlluminance: environment.sunIlluminance ?? 1,
+            intensity: environment.intensity ?? 1,
         });
         const { width, height } = sky.image;
         if (!this.proceduralTexture || this.proceduralTexture.width !== width || this.proceduralTexture.height !== height) {

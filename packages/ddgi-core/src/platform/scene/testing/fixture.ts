@@ -357,7 +357,7 @@ export function buildBasicScene(model: SceneModel, seed = 1): BasicScene {
         model.createLight({ type: 'directional', color: [0.2, 0.2, 0.3], intensity: 0.5, direction: [-0.5, -1, 0], angularRadius: 0.01, castsShadows: false, label: 'moon' }),
         model.createLight({ type: 'point', color: [1, 0.4, 0.2], intensity: 5, position: [-2, 1, 3], range: 5, radius: 0.1, castsShadows: false, group: 3, label: 'candle' }),
     ];
-    model.setEnvironment({ type: 'procedural', sunDirection: [0.3, 1, 0.2], turbidity: 4, intensity: 2 });
+    model.setEnvironment({ type: 'procedural', sunDirection: [0.3, 1, 0.2], turbidity: 4, sunIlluminance: 3, intensity: 2 });
 
     return { meshes: { cube, wide, fan, single }, materials, instances, lights };
 }
@@ -685,7 +685,8 @@ function checkEnvironment(failures: string[], environment: EnvironmentDescriptor
     } else if (environment.type === 'procedural') {
         compareArrays(failures, 'sun direction', actual.sunDirection, unit(environment.sunDirection), 1e-6);
         if (!close(actual.turbidity, environment.turbidity ?? DEFAULT_TURBIDITY, 1e-6)) failures.push(`turbidity ${actual.turbidity}`);
-        if (!close(actual.intensity, environment.intensity ?? 1, 1e-6)) failures.push(`environment intensity ${actual.intensity}`);
+        const brightness = (environment.sunIlluminance ?? 1) * (environment.intensity ?? 1);
+        if (!close(actual.intensity, brightness, 1e-6)) failures.push(`environment intensity ${actual.intensity}`);
     }
 }
 

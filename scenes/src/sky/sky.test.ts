@@ -12,7 +12,8 @@ import { directionToEquirectUv, equirectUvToDirection, rowHorizontalIrradianceWe
 import { decodeHalfExr, encodeHalfExr, floatToHalf, halfImageToFloats, halfToFloat, type HalfRgbImage } from './exr-half.ts';
 import { createPreethamSky, perez, preethamSkyXyY } from '../../../packages/ddgi-core/src/platform/sky/preetham.ts';
 import { decodeSkyFile, skyFileName, type SkySidecar } from './sky-file.ts';
-import { buildSkyImage, measureHalfImage, resolveSkySun, type ProceduralEnvironment } from './sky-image.ts';
+import { buildCalibratedSky } from '../../../packages/ddgi-core/src/platform/sky/calibrated-sky.ts';
+import { buildSkyImage, measureHalfImage, platformSkyEnvironment, resolveSkySun, type ProceduralEnvironment } from './sky-image.ts';
 import { skyImageToRgbaHalves } from './sky-texture.ts';
 
 const repoRoot = resolve(__dirname, '..', '..', '..');
@@ -270,6 +271,25 @@ describe('the committed sky files in scenes/sky', async () => {
         expect(manifests.length).toBeGreaterThan(0);
         for (const manifest of manifests) {
             expect(await compareWithCommitted(manifest, buildSkyImage(manifest)), manifest.id).toEqual([]);
+        }
+    });
+
+    it("are what the platform builds for platformSkyEnvironment(manifest), half for half (sunIlluminance and intensity mapped through)", () => {
+        for (const manifest of manifests) {
+            const environment = platformSkyEnvironment(manifest);
+            if (environment.type !== 'procedural') throw new Error('expected a procedural environment');
+            // What platform-sky.ts passes to the shared builder for this environment.
+            const platformSky = buildCalibratedSky({
+                sunDirection: environment.sunDirection,
+                turbidity: environment.turbidity,
+                sunIlluminance: environment.sunIlluminance ?? 1,
+                intensity: environment.intensity ?? 1,
+            });
+            const fileHalves = buildSkyImage(manifest).image.halves;
+            // A plain loop: a deep toEqual over 400k halves takes seconds.
+            let differing = 0;
+            for (let index = 0; index < fileHalves.length; index++) if (platformSky.image.halves[index] !== fileHalves[index]) differing++;
+            expect(differing, manifest.id).toBe(0);
         }
     });
 

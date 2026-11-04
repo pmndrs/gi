@@ -8,7 +8,10 @@
  *    on flat ground must match the file's own integral (the sidecar's
  *    `measured`, the analytic answer Cycles matched within 0.03% in T1.1)
  *    within the ±0.5% reference tolerance, per channel.
- * 2. **`procedural` is the same sky.** The open-ground and Sponza manifests
+ * 2. **`procedural` is the same sky,** and its brightness numbers work:
+ *    by default the sky of a sun of illuminance 1; `sunIlluminance` 2 and
+ *    `intensity` 2 each double it.
+ *    **The same sky:** The open-ground and Sponza manifests
  *    through `platformSkyEnvironment`: the platform builds the sky with the
  *    sky files' code; the ground irradiance must match the sidecars within
  *    ±0.5%, and the open-ground SH must equal the texture path's.
@@ -29,6 +32,7 @@
  */
 
 import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
+import { buildCalibratedSky } from '../../../../packages/ddgi-core/src/platform/sky/calibrated-sky.ts';
 import { floatToHalf, halfImageToTextureRgba, halfToFloat } from '../../../../packages/ddgi-core/src/platform/sky/half-float.ts';
 import { PlatformSky } from '../../../../packages/ddgi-core/src/platform/sky/platform-sky.ts';
 import { SH_BYTES } from '../../../../packages/ddgi-core/src/platform/sky/projection-wgsl.ts';
@@ -302,6 +306,33 @@ await runGpuTest(
             results.sponzaProceduralError = sponzaErrors.map(percent);
             log(`sponza, procedural (sun from its directional light): ${sponzaErrors.map(percent).join(' / ')}`);
             sponzaErrors.forEach((error, channel) => assert(Math.abs(error) <= REFERENCE_TOLERANCE, `sponza procedural: channel ${'RGB'[channel]} off by ${percent(error)}`));
+
+            // procedural's two brightness numbers: by default the sky of a sun of illuminance 1;
+            // sunIlluminance 2 and intensity 2 each double it (radiance on a miss and irradiance).
+            const sunDirection = openGroundManifest.environment.type === 'procedural' ? openGroundManifest.environment.sunDirection : up;
+            const unitSun = buildCalibratedSky({ sunDirection, turbidity: 3, sunIlluminance: 1 });
+            const brightnessProbes: Vec3[] = [up, ...missDirections.slice(0, 12)];
+            setEnvironment({ type: 'procedural', sunDirection, turbidity: 3 });
+            const defaults = await sampleSky(kernel, brightnessProbes);
+            const defaultErrors = defaults.irradiance[0].map((value, channel) => value / unitSun.measured.rgb[channel] - 1);
+            assert(defaultErrors.every((error) => Math.abs(error) <= REFERENCE_TOLERANCE), `procedural defaults: ground irradiance off the sky of a sun of 1 by ${defaultErrors.map(percent)}`);
+            const doubling: Record<string, number> = {};
+            for (const [name, extra] of [['sunIlluminance 2', { sunIlluminance: 2 }], ['intensity 2', { intensity: 2 }]] as const) {
+                setEnvironment({ type: 'procedural', sunDirection, turbidity: 3, ...extra });
+                const doubled = await sampleSky(kernel, brightnessProbes);
+                let worst = 0;
+                brightnessProbes.forEach((_, index) => {
+                    for (let channel = 0; channel < 3; channel++) {
+                        worst = Math.max(worst, relativeError(doubled.radiance[index][channel], 2 * defaults.radiance[index][channel], 1e-6));
+                        worst = Math.max(worst, relativeError(doubled.irradiance[index][channel], 2 * defaults.irradiance[index][channel], 1e-6));
+                    }
+                });
+                doubling[name] = worst;
+                assert(worst <= 1e-3, `procedural ${name} should double the sky; off by ${percent(worst)}`);
+            }
+            results.proceduralDefaultsError = defaultErrors.map(percent);
+            results.proceduralDoubling = doubling;
+            log(`procedural defaults: ground ${defaultErrors.map(percent).join(' / ')} against a sun of 1; sunIlluminance 2 and intensity 2 double it (worst ${Object.values(doubling).map((v) => v.toExponential(1)).join(', ')})`);
 
             // 4. The equirect layout, with direction-coded textures.
             const probes = sphereDirections(40);

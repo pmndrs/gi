@@ -674,6 +674,7 @@ export class PlatformScene implements SceneApi, SceneCopy {
         } else if (environment.type === 'procedural') {
             normalized(environment.sunDirection, 'sunDirection');
             checkNonNegative(environment.turbidity, 'turbidity');
+            checkNonNegative(environment.sunIlluminance, 'sunIlluminance');
             checkNonNegative(environment.intensity, 'environment intensity');
         } else if (environment.type === 'texture') {
             if (!environment.texture) throw new TypeError('@pmndrs/ddgi: a texture environment needs a texture');
@@ -893,7 +894,8 @@ export class PlatformScene implements SceneApi, SceneCopy {
             floats.set(normalized(environment.sunDirection, 'sunDirection'), HEADER_WORD.environmentSunDirection);
             // One turbidity default for the platform and the sky files (T1.4).
             floats[HEADER_WORD.environmentTurbidity] = environment.turbidity ?? DEFAULT_TURBIDITY;
-            floats[HEADER_WORD.environmentIntensity] = environment.intensity ?? 1;
+            // The header's one brightness factor: the sun the sky is calibrated to, times the multiplier.
+            floats[HEADER_WORD.environmentIntensity] = (environment.sunIlluminance ?? 1) * (environment.intensity ?? 1);
         } else if (environment.type === 'texture') {
             floats[HEADER_WORD.environmentIntensity] = environment.intensity ?? 1;
             floats[HEADER_WORD.environmentRotationY] = environment.rotationY ?? 0;

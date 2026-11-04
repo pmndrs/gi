@@ -348,10 +348,18 @@ export type EnvironmentDescriptor =
           /** Atmospheric haze, roughly 2 (clear) to 10 (hazy); clamped to the model's 1.7 to 20. Defaults to 2. */
           readonly turbidity?: number;
           /**
-           * The illuminance, at normal incidence, of the sun this sky goes
-           * with: for a directional light, its `intensity` times the Rec. 709
-           * luminance of its `color`. The sky's brightness follows from it.
-           * Defaults to 1.
+           * The illuminance, at normal incidence, of the sun the sky is
+           * calibrated to: for a directional light, its `intensity` times the
+           * Rec. 709 luminance of its `color`. The sky is made for a sun of
+           * illuminance 1 and scaled by this, the same quantity as
+           * pmndrs/sky's `exposure` / `luminanceScale` (which computes its sky
+           * for a sun of illuminance 1, Hillaire's ILLUMINANCE_IS_ONE, then
+           * scales). Defaults to 1.
+           */
+          readonly sunIlluminance?: number;
+          /**
+           * A plain multiplier on top, as for `color` and `texture`. Defaults to 1.
+           * The sky's radiance is the calibrated sky x `sunIlluminance` x `intensity`.
            */
           readonly intensity?: number;
       };

@@ -115,10 +115,10 @@ export function buildSkyImage(manifest: Pick<SceneManifest, 'environment' | 'lig
 
 /**
  * The platform environment that gives the same sky as the manifest's sky
- * file: `procedural`, with `intensity` the illuminance of the sun the sky goes
- * with (the platform's meaning of `intensity` for a procedural sky, see
- * `contract/scene.ts`) times the manifest's own `intensity`. The platform then
- * builds exactly the file's pixels.
+ * file: `procedural`, with `sunIlluminance` the illuminance of the sky's sun
+ * (its directional light, or the manifest's `sunIlluminance`) and `intensity`
+ * the manifest's own multiplier. The platform then builds exactly the file's
+ * pixels.
  */
 export function platformSkyEnvironment(manifest: Pick<SceneManifest, 'environment' | 'lights'>): EnvironmentDescriptor {
     const environment = manifest.environment;
@@ -128,6 +128,7 @@ export function platformSkyEnvironment(manifest: Pick<SceneManifest, 'environmen
         type: 'procedural',
         sunDirection: environment.sunDirection,
         turbidity: environment.turbidity ?? DEFAULT_TURBIDITY,
-        intensity: sun.illuminance * (environment.intensity ?? 1),
+        sunIlluminance: sun.illuminance,
+        intensity: environment.intensity ?? 1,
     };
 }
