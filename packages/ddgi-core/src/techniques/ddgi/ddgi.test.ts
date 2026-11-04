@@ -3,7 +3,7 @@ import { GILimitError } from '../../platform/contract/errors.ts';
 import { checkFieldLimits, distanceFormatFor, fieldBytes, fieldLayout, scratchLayout, UNIFORM_BYTES, UNIFORM_WORD } from './layout.ts';
 import { borderSource, octDecode, octEncode, texelDirection } from './octahedral.ts';
 import { frameRayRotation, quaternionToMatrix, seededRandom, uniformRandomQuaternion } from './ray-rotation.ts';
-import { distanceClamp, effectiveMaxRayDistance, effectiveRaysPerProbe, probeGrid, resolveBias, UNBOUNDED_RAY_DISTANCE, withDefaults } from './settings.ts';
+import { blendSettings, CHANGE_RULE_OFF, distanceClamp, effectiveMaxRayDistance, effectiveRaysPerProbe, probeGrid, resolveBias, UNBOUNDED_RAY_DISTANCE, withDefaults } from './settings.ts';
 import { scrambleStride, UpdateCursor } from './update-order.ts';
 import { DDGI_SAMPLE_WGSL } from './wgsl/sample.ts';
 import { blendKernelWgsl } from './wgsl/blend.ts';
@@ -47,6 +47,13 @@ describe('settings', () => {
         expect(settings.hysteresis).toBe(0.97);
         expect(settings.bounceEnergy).toBe(1);
         expect(settings.maxProbesPerFrame).toBe(4096);
+    });
+
+    it('leaves the big-change rule off by default, and on when a threshold is set', () => {
+        const settings = withDefaults({ volume: { center: [0, 0, 0], size: [1, 1, 1], spacing: 1 } });
+        expect(blendSettings(settings).irradianceChangeThreshold).toBe(CHANGE_RULE_OFF);
+        expect(blendSettings({ ...settings, irradianceChangeThreshold: 0.25 }).irradianceChangeThreshold).toBe(0.25);
+        expect(blendSettings({ ...settings, irradianceChangeThreshold: Number.NaN }).irradianceChangeThreshold).toBe(CHANGE_RULE_OFF);
     });
 
     it('keeps raysPerProbe a multiple of 32 between 64 and 512', () => {

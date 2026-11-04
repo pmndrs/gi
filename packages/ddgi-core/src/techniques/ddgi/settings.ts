@@ -30,7 +30,13 @@ export interface DDGISettings {
     distanceTexels: number;
     /** Share of the old value kept per update, 0..1. */
     hysteresis: number;
-    /** A channel changing by more than this share of its old value lowers the hysteresis for that texel. */
+    /**
+     * Opt-in, off by default (Infinity): when a probe's mean irradiance moves
+     * by more than this share of its old mean, its next update uses a lower
+     * hysteresis. Off in M1 because any test on noisy rays selects by the
+     * noise and biases the field (DECISIONS 2026-11-05); M2 lowers hysteresis
+     * where SceneChanges says a light changed instead.
+     */
     irradianceChangeThreshold: number;
     /** Largest change one update may make, as a multiple of the old value (fireflies). */
     maxBrightnessChange: number;
@@ -62,7 +68,7 @@ export const DEFAULT_DDGI_SETTINGS: Readonly<Omit<DDGISettings, 'volume'>> = {
     irradianceTexels: 6,
     distanceTexels: 14,
     hysteresis: 0.97,
-    irradianceChangeThreshold: 0.25,
+    irradianceChangeThreshold: Infinity,
     maxBrightnessChange: 2.0,
     distanceSharpness: 50,
     normalBias: 'auto',
@@ -98,6 +104,9 @@ export const AUTO_MIN_FRONT_FACE_SHARE = 0.02;
 
 /** Distances written to the distance atlas are clamped to this multiple of the cell diagonal. */
 export const DISTANCE_CLAMP_SHARE_OF_DIAGONAL = 1.5;
+
+/** How the uniform says "the big-change rule is off" (no Infinity in a shader that may assume finite floats). */
+export const CHANGE_RULE_OFF = -1;
 
 export function withDefaults(input: DDGISettingsInput): DDGISettings {
     return { ...DEFAULT_DDGI_SETTINGS, ...input };
@@ -168,7 +177,8 @@ export function blendSettings(settings: DDGISettings): {
     const defaults = DEFAULT_DDGI_SETTINGS;
     return {
         hysteresis: clamp(settings.hysteresis, 0, 1, defaults.hysteresis),
-        irradianceChangeThreshold: clamp(settings.irradianceChangeThreshold, 0, Number.MAX_VALUE, defaults.irradianceChangeThreshold),
+        // Infinity (or anything not a number) switches the rule off; the kernel reads a negative value as "off".
+        irradianceChangeThreshold: settings.irradianceChangeThreshold >= 0 && Number.isFinite(settings.irradianceChangeThreshold) ? settings.irradianceChangeThreshold : CHANGE_RULE_OFF,
         maxBrightnessChange: clamp(settings.maxBrightnessChange, 0, Number.MAX_VALUE, defaults.maxBrightnessChange),
         distanceSharpness: clamp(settings.distanceSharpness, 0, 1000, defaults.distanceSharpness),
         bounceEnergy: clamp(settings.bounceEnergy, 0, Number.MAX_VALUE, defaults.bounceEnergy),

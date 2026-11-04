@@ -451,9 +451,11 @@ fn ddgiBlend(
     }
     workgroupBarrier();
 
-    // Step 2: the big-change test, on the probe's mean irradiance against its
-    // old mean (DECISIONS 2026-11-05), not per texel. And its verdict sets the
-    // hysteresis of the probe's *next* update, not this one.
+    // Step 2: the big-change test, opt-in (irradianceChangeThreshold; a
+    // negative value means off, the M1 default, DECISIONS 2026-11-05). It
+    // looks at the probe's mean irradiance against its old mean, not per
+    // texel, and its verdict sets the hysteresis of the probe's *next* update,
+    // not this one.
     // Why not this one: a test on this update's estimate is tripped by its own
     // ray noise, and the noise is skewed (a few rays find a small bright spot),
     // so the updates that trip are mostly the bright ones, and they get the
@@ -471,7 +473,8 @@ fn ddgiBlend(
             oldSum += ddgiTexelOld[texelIndex].rgb;
         }
         // The same share applies to the sums as to the means.
-        ddgiChangedNow = select(0u, 1u, any(abs(estimateSum - oldSum) > ddgi.irradianceChangeThreshold * oldSum));
+        let ruleOn = ddgi.irradianceChangeThreshold >= 0.0;
+        ddgiChangedNow = select(0u, 1u, ruleOn && any(abs(estimateSum - oldSum) > ddgi.irradianceChangeThreshold * oldSum));
         ddgiFastHysteresis = select(0u, 1u, ddgiTexelOld[0].a > 0.5);
     }
     let changedNow = workgroupUniformLoad(&ddgiChangedNow) != 0u;
