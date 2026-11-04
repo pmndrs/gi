@@ -37,9 +37,20 @@ function viewFromUrl(value: string | null): RenderView {
     return { mode: 'debug', debugView };
 }
 
+/**
+ * Updates per probe before the field counts as settled. Why 100: each update
+ * keeps 97% of the old value (DDGI's default hysteresis), so after 100 a
+ * probe holds under 5% of where it started (0.97^100 = 0.048), and light
+ * has had as many bounces to spread.
+ */
+const SETTLED_UPDATES_PER_PROBE = 100;
+
 /** Readiness for the screenshot script (scripts/screenshot.ts) and anyone watching. */
 interface HelloState {
+    /** Every probe has been updated at least SETTLED_UPDATES_PER_PROBE times. */
     ready: boolean;
+    /** The fewest times any probe has been updated so far. */
+    updatesPerProbe: number;
     frames: number;
     error: string | null;
     adapter: string;
@@ -51,7 +62,7 @@ declare global {
     }
 }
 
-const state: HelloState = { ready: false, frames: 0, error: null, adapter: '' };
+const state: HelloState = { ready: false, updatesPerProbe: 0, frames: 0, error: null, adapter: '' };
 window.helloState = state;
 
 async function main(): Promise<void> {
@@ -73,8 +84,23 @@ async function main(): Promise<void> {
         state.error = event.error.message;
         console.error('WebGPU error:', event.error.message);
     });
-    // Free the GPU promptly when the page goes away (NOTES: release the device between pages).
-    window.addEventListener('pagehide', () => device.destroy(), { once: true });
+    // Free the GPU promptly when the page goes away (NOTES: release the device
+    // between pages), and stop drawing with it. A page the browser keeps in
+    // its back/forward cache comes back without a device, so it reloads.
+    let animationFrame = 0;
+    let stopped = false;
+    window.addEventListener(
+        'pagehide',
+        () => {
+            stopped = true;
+            cancelAnimationFrame(animationFrame);
+            device.destroy();
+        },
+        { once: true },
+    );
+    window.addEventListener('pageshow', (event) => {
+        if (event.persisted) location.reload();
+    });
 
     // 2. The platform, and the scene described through its scene API.
     const gi = createGI(device, { gpuTiming: device.features.has('timestamp-query'), label: 'hello' });
@@ -95,8 +121,14 @@ async function main(): Promise<void> {
     const format = navigator.gpu.getPreferredCanvasFormat();
     context.configure({ device, format, alphaMode: 'opaque' });
 
+    // DDGI walks every probe in a fixed order, a budget of probes per frame,
+    // so all probes have been updated floor(total / count) times or more.
+    const probeCount = ddgi.field?.grid.probeCount ?? 1;
+    let probesUpdatedInTotal = 0;
+
     let previousTime = performance.now();
     const frame = (time: number): void => {
+        if (stopped) return;
         const width = Math.max(1, Math.round(canvas.clientWidth * devicePixelRatio));
         const height = Math.max(1, Math.round(canvas.clientHeight * devicePixelRatio));
         if (canvas.width !== width || canvas.height !== height) {
@@ -119,13 +151,17 @@ async function main(): Promise<void> {
 
         previousTime = time;
         state.frames++;
-        // Probes start out "not updated yet"; give the field a few hundred frames to settle.
-        state.ready = state.frames >= 300;
-        const counters = gi.stats.counters.ddgi ?? {};
-        status.textContent = `${manifest.title} · ${camera.name} · ${state.adapter} · frame ${state.frames} · probes updated ${counters['probes updated'] ?? 0}${state.error ? ` · ERROR ${state.error}` : ''}`;
-        requestAnimationFrame(frame);
+        const probesThisFrame = ddgi.counters['probes updated'] ?? 0;
+        probesUpdatedInTotal += probesThisFrame;
+        state.updatesPerProbe = Math.floor(probesUpdatedInTotal / probeCount);
+        state.ready = state.updatesPerProbe >= SETTLED_UPDATES_PER_PROBE;
+        const settling = state.ready
+            ? `field settled (every probe updated ${SETTLED_UPDATES_PER_PROBE}+ times)`
+            : `field settling: ${state.updatesPerProbe} of ${SETTLED_UPDATES_PER_PROBE} updates per probe`;
+        status.textContent = `${manifest.title} · ${camera.name} · ${state.adapter} · ${settling} · ${probesThisFrame} probes this frame${state.error ? ` · ERROR ${state.error}` : ''}`;
+        animationFrame = requestAnimationFrame(frame);
     };
-    requestAnimationFrame(frame);
+    animationFrame = requestAnimationFrame(frame);
 }
 
 main().catch((error: unknown) => {

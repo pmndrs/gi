@@ -352,6 +352,10 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
                 size: { width: size.width, height: size.height, depthOrArrayLayers: size.layers },
                 format,
                 usage: atlasUsage | extraUsage,
+                // Compatibility-mode devices fix a texture's binding dimension
+                // when it is created, and a one-layer texture would default to
+                // 2d. Every DDGI binding reads these as texture_2d_array.
+                textureBindingViewDimension: '2d-array',
             });
         const irradiance = arrayTexture('irradiance', layout.irradiance, IRRADIANCE_FORMAT);
         const distance = arrayTexture('distance', layout.distance, layout.distanceFormat);

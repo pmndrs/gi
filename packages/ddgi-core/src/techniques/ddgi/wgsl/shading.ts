@@ -8,8 +8,9 @@
  * fn giDebugColor(position: vec3f, normal: vec3f, view: u32, <resources>) -> vec3f
  * ```
  *
- * `<resources>` are the module's parameters in order (shading.ts,
- * `DDGI_SHADING_PARAMETERS`), and the WGSL parameter names are the parameter
+ * `<resources>` are the module's parameters in order
+ * (`DDGIShadingModule.parameters` in shading.ts, named by
+ * `DDGI_SHADING_PARAMETER_NAMES`), and the WGSL parameter names are the parameter
  * names, so an engine that matches inputs by name (three's `wgslFn`) can call
  * through directly:
  *
@@ -62,6 +63,25 @@ export const COVERAGE_FADE_SPACINGS = 0.5;
  */
 export const COVERAGE_FULL_WEIGHT = 0.02;
 
+/**
+ * The debug views' colours (linear rgb), chosen to read apart at a glance.
+ * Exported so checks can work out what a view should show.
+ */
+export const DDGI_DEBUG_COLORS = {
+    fullCoverage: [0.1, 0.75, 0.2],
+    noCoverage: [0.85, 0.1, 0.1],
+    stateActive: [0.1, 0.75, 0.2],
+    stateInsideGeometry: [0.85, 0.1, 0.1],
+    stateNoSurfaceNearby: [0.15, 0.35, 0.95],
+    stateNotUpdatedYet: [0.95, 0.8, 0.1],
+    // An id the module doesn't know: magenta, so a wrong id is obvious.
+    unknownView: [1, 0, 1],
+} as const satisfies Record<string, readonly [number, number, number]>;
+
+function wgslColor(color: readonly [number, number, number]): string {
+    return `vec3f(${color.map((channel) => channel.toFixed(4)).join(', ')})`;
+}
+
 export const DDGI_SHADING_WGSL = /* wgsl */ `
 ${DDGI_SAMPLE_WGSL}
 // ---- DDGI shading module (techniques/ddgi/shading.ts) -----------------------------------
@@ -73,15 +93,14 @@ const DDGI_COVERAGE_FULL_MARGIN: f32 = ${COVERAGE_FULL_MARGIN_SPACINGS};
 const DDGI_COVERAGE_FADE: f32 = ${COVERAGE_FADE_SPACINGS};
 const DDGI_COVERAGE_FULL_WEIGHT: f32 = ${COVERAGE_FULL_WEIGHT};
 
-// Debug colours, chosen to read apart at a glance.
-const DDGI_COLOR_FULL_COVERAGE: vec3f = vec3f(0.1, 0.75, 0.2);
-const DDGI_COLOR_NO_COVERAGE: vec3f = vec3f(0.85, 0.1, 0.1);
-const DDGI_COLOR_STATE_ACTIVE: vec3f = vec3f(0.1, 0.75, 0.2);
-const DDGI_COLOR_STATE_INSIDE_GEOMETRY: vec3f = vec3f(0.85, 0.1, 0.1);
-const DDGI_COLOR_STATE_NO_SURFACE: vec3f = vec3f(0.15, 0.35, 0.95);
-const DDGI_COLOR_STATE_NOT_UPDATED: vec3f = vec3f(0.95, 0.8, 0.1);
-// An id this module doesn't know: magenta, so a wrong id is obvious.
-const DDGI_COLOR_UNKNOWN_VIEW: vec3f = vec3f(1.0, 0.0, 1.0);
+// Debug colours (DDGI_DEBUG_COLORS in wgsl/shading.ts).
+const DDGI_COLOR_FULL_COVERAGE: vec3f = ${wgslColor(DDGI_DEBUG_COLORS.fullCoverage)};
+const DDGI_COLOR_NO_COVERAGE: vec3f = ${wgslColor(DDGI_DEBUG_COLORS.noCoverage)};
+const DDGI_COLOR_STATE_ACTIVE: vec3f = ${wgslColor(DDGI_DEBUG_COLORS.stateActive)};
+const DDGI_COLOR_STATE_INSIDE_GEOMETRY: vec3f = ${wgslColor(DDGI_DEBUG_COLORS.stateInsideGeometry)};
+const DDGI_COLOR_STATE_NO_SURFACE: vec3f = ${wgslColor(DDGI_DEBUG_COLORS.stateNoSurfaceNearby)};
+const DDGI_COLOR_STATE_NOT_UPDATED: vec3f = ${wgslColor(DDGI_DEBUG_COLORS.stateNotUpdatedYet)};
+const DDGI_COLOR_UNKNOWN_VIEW: vec3f = ${wgslColor(DDGI_DEBUG_COLORS.unknownView)};
 
 // giCoverage and giDebugColor get no view direction (the contract gives
 // none), so they look at the surface head-on: the view bias then pushes the

@@ -183,6 +183,9 @@ export class PlatformSky {
             size: { width: 1, height: 1, depthOrArrayLayers: 6 },
             format: 'rgba16float',
             usage: TEXTURE_USAGE.textureBinding,
+            // Compatibility-mode devices bind a texture only with the view
+            // dimension it was created for; 6 layers would default to 2d-array.
+            textureBindingViewDimension: 'cube',
         });
     }
 

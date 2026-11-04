@@ -1,9 +1,9 @@
 /// <reference types="node" />
 /**
  * Screenshots of the real hello example: starts its vite dev server, opens
- * it in headless Chrome on the GPU you ask for, waits until the page has run
- * enough frames for DDGI to settle (`window.helloState.ready`), and saves a
- * PNG per view. Fails on any browser or WebGPU error.
+ * it in headless Chrome on the GPU you ask for, waits until DDGI's field has
+ * settled (`window.helloState.ready`: every probe updated at least 100
+ * times), and saves a PNG per view. Fails on any browser or WebGPU error.
  *
  *   node examples/webgpu/hello/scripts/screenshot.ts
  *     [--gpu nvidia|intel]                   default nvidia
@@ -29,10 +29,12 @@ import { installShutdownHandlers, registerCleanup, runCleanups } from '../../../
 const helloDirectory = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const repoRoot = resolve(helloDirectory, '..', '..', '..');
 const VIEWPORT = { width: 1280, height: 720 };
-const READY_TIMEOUT_MS = 120_000;
+/** Until every probe is updated 100 times; the Intel UHD takes a few minutes at 1280 x 720. */
+const READY_TIMEOUT_MS = 600_000;
 
 interface HelloState {
     ready: boolean;
+    updatesPerProbe: number;
     frames: number;
     error: string | null;
     adapter: string;
@@ -112,7 +114,7 @@ async function main(): Promise<number> {
             const { data } = await cdp.send<{ data: string }>('Page.captureScreenshot', { format: 'png' }, 60_000);
             await writeFile(file, Buffer.from(data, 'base64'));
             const problems = [...browserErrors, ...(state?.error ? [state.error] : []), ...(state?.ready ? [] : ['never became ready'])];
-            console.log(`${view}: ${state?.adapter ?? '?'}, ${state?.frames ?? 0} frames -> ${file}`);
+            console.log(`${view}: ${state?.adapter ?? '?'}, ${state?.frames ?? 0} frames, ${state?.updatesPerProbe ?? 0} updates per probe -> ${file}`);
             for (const problem of problems) console.log(`    ERROR: ${problem}`);
             if (problems.length > 0) failures++;
         }

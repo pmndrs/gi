@@ -2,11 +2,15 @@
  * `ddgiSampleIrradiance`: reading the DDGI field at a surface point
  * (docs/design/ddgi.md, "Sampling the field").
  *
- * One function, two users: the update kernel calls it for bounce light, and
+ * One function, two users. The update kernel calls it for bounce light, and
  * the shading module (wgsl/shading.ts) wraps it for renderers as
- * `giIrradiance`, so there is exactly one sampling code path. The loop itself
- * is `ddgiAccumulateField`, which also gives coverage (`giCoverage`) the
- * summed probe weight; `ddgiSampleIrradiance` divides by it. That shapes it the way the shading-module contract
+ * `giIrradiance`, so there is exactly one sampling code path.
+ *
+ * The probe loop itself is `ddgiAccumulateField`. It returns the weighted
+ * sum and the summed weight; `ddgiSampleIrradiance` divides one by the
+ * other, and coverage (`giCoverage`) reads the summed weight.
+ *
+ * Being shared with renderers shapes it the way the shading-module contract
  * needs:
  *
  * - every resource is a parameter (no `@group/@binding` here), so three's
