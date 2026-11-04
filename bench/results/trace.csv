@@ -1,0 +1,687 @@
+date,commit,device,browser,scene,metric,value
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,scene/meshes,115
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,scene/instances,115
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,scene/triangles_unique,3747018
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,scene/triangles_instanced,3747018
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,rays/probes,8512
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,rays/per_probe,256
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,rays/closest,2179072
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,rays/closest_requested,2097152
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,rays/closest_hits,1802811
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,rays/any,877295
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,rays/estimated_ns_per_ray,24.1667
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,ours/build_ms_total,28079.4
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,ours/build_ms_max_mesh,620.7
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,ours/assemble_ms,82.5
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,ours/top_level_rebuild_ms_median,1.15
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,ours/top_level_rebuild_ms_max,1.9
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,ours/top_level_instances,115
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,ours/nodes,1913995
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,ours/max_mesh_depth,23
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,ours/stack_entries_needed,35
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,ours/leaf_size,4
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,ours/memory_bytes_nodes,122495680
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,ours/memory_bytes_triangles,179856864
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,ours/memory_bytes_top_level,14720
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,ours/memory_bytes,302367264
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,tmbvh/build_ms_total,6955.8
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,tmbvh/build_ms_max_mesh,189.5
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,tmbvh/data_update_ms,811.9
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,tmbvh/leaf_size,10
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,tmbvh/memory_bytes_nodes,75067136
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,tmbvh/memory_bytes_index,44964216
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,tmbvh/memory_bytes_attributes,32786192
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,tmbvh/memory_bytes_transforms,16560
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,tmbvh/memory_bytes,152834104
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,ours-wt/closest/mrays_per_s,61.1925
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,ours-wt/closest/gpu_ms_median,35.6101
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,ours-wt/closest/gpu_ms_min,35.5871
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,ours-wt/closest/gpu_ms_max,35.6424
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,ours-wt/closest/rays,2179072
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,ours-wt/closest/timestamp_timed,1
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,ours-wt/any/mrays_per_s,79.0017
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,ours-wt/any/gpu_ms_median,11.1048
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,ours-wt/any/gpu_ms_min,11.0746
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,ours-wt/any/gpu_ms_max,11.1176
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,ours-wt/any/rays,877295
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,ours-wt/any/timestamp_timed,1
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,ours-mt/closest/mrays_per_s,110.816
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,ours-mt/closest/gpu_ms_median,19.6639
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,ours-mt/closest/gpu_ms_min,19.6475
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,ours-mt/closest/gpu_ms_max,21.5593
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,ours-mt/closest/rays,2179072
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,ours-mt/closest/timestamp_timed,1
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,ours-mt/any/mrays_per_s,135.709
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,ours-mt/any/gpu_ms_median,6.46451
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,ours-mt/any/gpu_ms_min,6.4471
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,ours-mt/any/gpu_ms_max,6.55872
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,ours-mt/any/rays,877295
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,ours-mt/any/timestamp_timed,1
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,tmbvh/closest/mrays_per_s,87.1702
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,tmbvh/closest/gpu_ms_median,24.9979
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,tmbvh/closest/gpu_ms_min,24.9784
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,tmbvh/closest/gpu_ms_max,25.0378
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,tmbvh/closest/rays,2179072
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,tmbvh/closest/timestamp_timed,1
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,tmbvh/any/mrays_per_s,137.949
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,tmbvh/any/gpu_ms_median,6.35955
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,tmbvh/any/gpu_ms_min,6.33139
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,tmbvh/any/gpu_ms_max,6.39283
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,tmbvh/any/rays,877295
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,tmbvh/any/timestamp_timed,1
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,agreement/ours-mt_vs_ours-wt/closest_rate,0.999999
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,agreement/ours-mt_vs_ours-wt/closest_hit_miss_mismatches,0
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,agreement/ours-mt_vs_ours-wt/closest_distance_mismatches,2
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,agreement/ours-mt_vs_ours-wt/any_rate,1
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,agreement/ours-wt_vs_tmbvh/closest_rate,1
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,agreement/ours-wt_vs_tmbvh/closest_hit_miss_mismatches,0
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,agreement/ours-wt_vs_tmbvh/closest_distance_mismatches,1
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,agreement/ours-wt_vs_tmbvh/any_rate,1
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,agreement/ours-mt_vs_tmbvh/closest_rate,0.999999
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,agreement/ours-mt_vs_tmbvh/closest_hit_miss_mismatches,0
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,agreement/ours-mt_vs_tmbvh/closest_distance_mismatches,3
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,agreement/ours-mt_vs_tmbvh/any_rate,1
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,device,limit/max_storage_buffer_binding_size_bytes,2147483644
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,device,limit/max_buffer_size_bytes,2147483648
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,scene/meshes,1296
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,scene/instances,1296
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,scene/triangles_unique,2829226
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,scene/triangles_instanced,2829226
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,rays/probes,8370
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,rays/per_probe,256
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,rays/closest,2142720
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,rays/closest_requested,2097152
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,rays/closest_hits,752005
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,rays/any,388430
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,rays/estimated_ns_per_ray,67.3333
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,ours/build_ms_total,17261.2
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,ours/build_ms_max_mesh,493.2
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,ours/assemble_ms,72.2
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,ours/top_level_rebuild_ms_median,9.65
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,ours/top_level_rebuild_ms_max,10.4
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,ours/top_level_instances,1296
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,ours/nodes,1363920
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,ours/max_mesh_depth,25
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,ours/stack_entries_needed,44
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,ours/leaf_size,4
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,ours/memory_bytes_nodes,87290880
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,ours/memory_bytes_triangles,135802848
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,ours/memory_bytes_top_level,165888
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,ours/memory_bytes,223259616
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,tmbvh/build_ms_total,3648.9
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,tmbvh/build_ms_max_mesh,113.2
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,tmbvh/data_update_ms,522.5
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,tmbvh/leaf_size,10
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,tmbvh/memory_bytes_nodes,56832320
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,tmbvh/memory_bytes_index,33950712
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,tmbvh/memory_bytes_attributes,46731136
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,tmbvh/memory_bytes_transforms,186624
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,tmbvh/memory_bytes,137700792
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,ours-wt/closest/mrays_per_s,33.6788
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,ours-wt/closest/gpu_ms_median,63.6221
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,ours-wt/closest/gpu_ms_min,63.5187
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,ours-wt/closest/gpu_ms_max,63.7112
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,ours-wt/closest/rays,2142720
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,ours-wt/closest/timestamp_timed,1
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,ours-wt/any/mrays_per_s,24.3775
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,ours-wt/any/gpu_ms_median,15.934
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,ours-wt/any/gpu_ms_min,15.8607
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,ours-wt/any/gpu_ms_max,16.0348
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,ours-wt/any/rays,388430
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,ours-wt/any/timestamp_timed,1
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,ours-mt/closest/mrays_per_s,64.4005
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,ours-mt/closest/gpu_ms_median,33.2718
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,ours-mt/closest/gpu_ms_min,33.2145
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,ours-mt/closest/gpu_ms_max,33.3496
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,ours-mt/closest/rays,2142720
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,ours-mt/closest/timestamp_timed,1
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,ours-mt/any/mrays_per_s,47.663
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,ours-mt/any/gpu_ms_median,8.1495
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,ours-mt/any/gpu_ms_min,8.07117
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,ours-mt/any/gpu_ms_max,8.27904
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,ours-mt/any/rays,388430
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,ours-mt/any/timestamp_timed,1
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,tmbvh/closest/mrays_per_s,71.319
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,tmbvh/closest/gpu_ms_median,30.0442
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,tmbvh/closest/gpu_ms_min,29.9837
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,tmbvh/closest/gpu_ms_max,30.1087
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,tmbvh/closest/rays,2142720
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,tmbvh/closest/timestamp_timed,1
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,tmbvh/any/mrays_per_s,45.8068
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,tmbvh/any/gpu_ms_median,8.47974
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,tmbvh/any/gpu_ms_min,8.43162
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,tmbvh/any/gpu_ms_max,8.61389
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,tmbvh/any/rays,388430
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,tmbvh/any/timestamp_timed,1
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,agreement/ours-mt_vs_ours-wt/closest_rate,0.999993
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,agreement/ours-mt_vs_ours-wt/closest_hit_miss_mismatches,0
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,agreement/ours-mt_vs_ours-wt/closest_distance_mismatches,16
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,agreement/ours-mt_vs_ours-wt/any_rate,1
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,agreement/ours-wt_vs_tmbvh/closest_rate,0.999993
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,agreement/ours-wt_vs_tmbvh/closest_hit_miss_mismatches,0
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,agreement/ours-wt_vs_tmbvh/closest_distance_mismatches,16
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,agreement/ours-wt_vs_tmbvh/any_rate,1
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,agreement/ours-mt_vs_tmbvh/closest_rate,1
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,agreement/ours-mt_vs_tmbvh/closest_hit_miss_mismatches,0
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,agreement/ours-mt_vs_tmbvh/closest_distance_mismatches,1
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,agreement/ours-mt_vs_tmbvh/any_rate,1
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,device,limit/max_storage_buffer_binding_size_bytes,2147483644
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,device,limit/max_buffer_size_bytes,2147483648
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-interior,scene/meshes,1186
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-interior,scene/instances,1186
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-interior,scene/triangles_unique,1043077
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-interior,scene/triangles_instanced,1043077
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-interior,rays/probes,7920
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-interior,rays/per_probe,256
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-interior,rays/closest,2027520
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-interior,rays/closest_requested,2097152
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-interior,rays/closest_hits,940041
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-interior,rays/any,503829
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-interior,rays/estimated_ns_per_ray,63.5333
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-interior,ours/build_ms_total,5554.3
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-interior,ours/build_ms_max_mesh,123.3
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-interior,ours/assemble_ms,40
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-interior,ours/top_level_rebuild_ms_median,7.2
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-interior,ours/top_level_rebuild_ms_max,13.1
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-interior,ours/top_level_instances,1186
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-interior,ours/nodes,490653
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-interior,ours/max_mesh_depth,19
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-interior,ours/stack_entries_needed,35
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-interior,ours/leaf_size,4
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-interior,ours/memory_bytes_nodes,31401792
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-interior,ours/memory_bytes_triangles,50067696
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-interior,ours/memory_bytes_top_level,151808
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-interior,ours/memory_bytes,81621296
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-interior,tmbvh/build_ms_total,1121.1
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-interior,tmbvh/build_ms_max_mesh,31.9
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-interior,tmbvh/data_update_ms,236
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-interior,tmbvh/leaf_size,10
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-interior,tmbvh/memory_bytes_nodes,20783424
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-interior,tmbvh/memory_bytes_index,12516924
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-interior,tmbvh/memory_bytes_attributes,13023952
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-interior,tmbvh/memory_bytes_transforms,170784
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-interior,tmbvh/memory_bytes,46495084
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-interior,ours-wt/closest/mrays_per_s,30.1079
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-interior,ours-wt/closest/gpu_ms_median,67.3418
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-interior,ours-wt/closest/gpu_ms_min,67.2
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-interior,ours-wt/closest/gpu_ms_max,67.4673
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-interior,ours-wt/closest/rays,2027520
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-interior,ours-wt/closest/timestamp_timed,1
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-interior,ours-wt/any/mrays_per_s,23.6833
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-interior,ours-wt/any/gpu_ms_median,21.2736
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-interior,ours-wt/any/gpu_ms_min,21.1569
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-interior,ours-wt/any/gpu_ms_max,21.3883
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-interior,ours-wt/any/rays,503829
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-interior,ours-wt/any/timestamp_timed,1
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-interior,ours-mt/closest/mrays_per_s,57.1115
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-interior,ours-mt/closest/gpu_ms_median,35.5011
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-interior,ours-mt/closest/gpu_ms_min,35.4232
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-interior,ours-mt/closest/gpu_ms_max,35.6065
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-interior,ours-mt/closest/rays,2027520
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-interior,ours-mt/closest/timestamp_timed,1
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-interior,ours-mt/any/mrays_per_s,46.6946
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-interior,ours-mt/any/gpu_ms_median,10.7899
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-interior,ours-mt/any/gpu_ms_min,10.6998
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-interior,ours-mt/any/gpu_ms_max,10.9271
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-interior,ours-mt/any/rays,503829
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-interior,ours-mt/any/timestamp_timed,1
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-interior,tmbvh/closest/mrays_per_s,53.486
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-interior,tmbvh/closest/gpu_ms_median,37.9075
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-interior,tmbvh/closest/gpu_ms_min,37.803
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-interior,tmbvh/closest/gpu_ms_max,39.6268
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-interior,tmbvh/closest/rays,2027520
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-interior,tmbvh/closest/timestamp_timed,1
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-interior,tmbvh/any/mrays_per_s,72.2869
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-interior,tmbvh/any/gpu_ms_median,6.96986
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-interior,tmbvh/any/gpu_ms_min,6.8864
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-interior,tmbvh/any/gpu_ms_max,7.06867
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-interior,tmbvh/any/rays,503829
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-interior,tmbvh/any/timestamp_timed,1
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-interior,agreement/ours-mt_vs_ours-wt/closest_rate,0.999984
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-interior,agreement/ours-mt_vs_ours-wt/closest_hit_miss_mismatches,0
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-interior,agreement/ours-mt_vs_ours-wt/closest_distance_mismatches,33
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-interior,agreement/ours-mt_vs_ours-wt/any_rate,1
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-interior,agreement/ours-wt_vs_tmbvh/closest_rate,0.999985
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-interior,agreement/ours-wt_vs_tmbvh/closest_hit_miss_mismatches,0
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-interior,agreement/ours-wt_vs_tmbvh/closest_distance_mismatches,30
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-interior,agreement/ours-wt_vs_tmbvh/any_rate,1
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-interior,agreement/ours-mt_vs_tmbvh/closest_rate,0.999998
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-interior,agreement/ours-mt_vs_tmbvh/closest_hit_miss_mismatches,0
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-interior,agreement/ours-mt_vs_tmbvh/closest_distance_mismatches,5
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-interior,agreement/ours-mt_vs_tmbvh/any_rate,1
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,device,limit/max_storage_buffer_binding_size_bytes,2147483644
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,device,limit/max_buffer_size_bytes,2147483648
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,furnished-room,scene/meshes,21
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,furnished-room,scene/instances,21
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,furnished-room,scene/triangles_unique,269764
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,furnished-room,scene/triangles_instanced,269764
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,furnished-room,rays/probes,8500
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,furnished-room,rays/per_probe,256
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,furnished-room,rays/closest,2176000
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,furnished-room,rays/closest_requested,2097152
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,furnished-room,rays/closest_hits,2126552
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,furnished-room,rays/any,1053684
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,furnished-room,rays/estimated_ns_per_ray,54.8
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,furnished-room,ours/build_ms_total,1917.9
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,furnished-room,ours/build_ms_max_mesh,621
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,furnished-room,ours/assemble_ms,13.8
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,furnished-room,ours/top_level_rebuild_ms_median,0.4
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,furnished-room,ours/top_level_rebuild_ms_max,2.5
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,furnished-room,ours/top_level_instances,21
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,furnished-room,ours/nodes,121894
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,furnished-room,ours/max_mesh_depth,21
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,furnished-room,ours/stack_entries_needed,28
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,furnished-room,ours/leaf_size,4
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,furnished-room,ours/memory_bytes_nodes,7801216
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,furnished-room,ours/memory_bytes_triangles,12948672
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,furnished-room,ours/memory_bytes_top_level,2688
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,furnished-room,ours/memory_bytes,20752576
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,furnished-room,tmbvh/build_ms_total,464.6
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,furnished-room,tmbvh/build_ms_max_mesh,155.6
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,furnished-room,tmbvh/data_update_ms,106.3
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,furnished-room,tmbvh/leaf_size,10
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,furnished-room,tmbvh/memory_bytes_nodes,5139136
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,furnished-room,tmbvh/memory_bytes_index,3237168
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,furnished-room,tmbvh/memory_bytes_attributes,2566080
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,furnished-room,tmbvh/memory_bytes_transforms,3024
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,furnished-room,tmbvh/memory_bytes,10945408
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,furnished-room,ours-wt/closest/mrays_per_s,60.6926
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,furnished-room,ours-wt/closest/gpu_ms_median,35.8528
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,furnished-room,ours-wt/closest/gpu_ms_min,34.4269
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,furnished-room,ours-wt/closest/gpu_ms_max,40.4613
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,furnished-room,ours-wt/closest/rays,2176000
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,furnished-room,ours-wt/closest/timestamp_timed,1
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,furnished-room,ours-wt/any/mrays_per_s,83.7665
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,furnished-room,ours-wt/any/gpu_ms_median,12.5788
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,furnished-room,ours-wt/any/gpu_ms_min,12.2317
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,furnished-room,ours-wt/any/gpu_ms_max,15.358
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,furnished-room,ours-wt/any/rays,1053684
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,furnished-room,ours-wt/any/timestamp_timed,1
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,furnished-room,ours-mt/closest/mrays_per_s,114.164
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,furnished-room,ours-mt/closest/gpu_ms_median,19.0602
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,furnished-room,ours-mt/closest/gpu_ms_min,17.4459
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,furnished-room,ours-mt/closest/gpu_ms_max,22.1624
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,furnished-room,ours-mt/closest/rays,2176000
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,furnished-room,ours-mt/closest/timestamp_timed,1
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,furnished-room,ours-mt/any/mrays_per_s,135.975
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,furnished-room,ours-mt/any/gpu_ms_median,7.74912
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,furnished-room,ours-mt/any/gpu_ms_min,5.8839
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,furnished-room,ours-mt/any/gpu_ms_max,10.2687
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,furnished-room,ours-mt/any/rays,1053684
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,furnished-room,ours-mt/any/timestamp_timed,1
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,furnished-room,tmbvh/closest/mrays_per_s,113.573
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,furnished-room,tmbvh/closest/gpu_ms_median,19.1596
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,furnished-room,tmbvh/closest/gpu_ms_min,18.5078
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,furnished-room,tmbvh/closest/gpu_ms_max,22.9427
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,furnished-room,tmbvh/closest/rays,2176000
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,furnished-room,tmbvh/closest/timestamp_timed,1
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,furnished-room,tmbvh/any/mrays_per_s,499.388
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,furnished-room,tmbvh/any/gpu_ms_median,2.10995
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,furnished-room,tmbvh/any/gpu_ms_min,2.09613
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,furnished-room,tmbvh/any/gpu_ms_max,6.1655
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,furnished-room,tmbvh/any/rays,1053684
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,furnished-room,tmbvh/any/timestamp_timed,1
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,furnished-room,agreement/ours-mt_vs_ours-wt/closest_rate,0.999999
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,furnished-room,agreement/ours-mt_vs_ours-wt/closest_hit_miss_mismatches,0
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,furnished-room,agreement/ours-mt_vs_ours-wt/closest_distance_mismatches,2
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,furnished-room,agreement/ours-mt_vs_ours-wt/any_rate,1
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,furnished-room,agreement/ours-wt_vs_tmbvh/closest_rate,1
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,furnished-room,agreement/ours-wt_vs_tmbvh/closest_hit_miss_mismatches,0
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,furnished-room,agreement/ours-wt_vs_tmbvh/closest_distance_mismatches,0
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,furnished-room,agreement/ours-wt_vs_tmbvh/any_rate,1
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,furnished-room,agreement/ours-mt_vs_tmbvh/closest_rate,0.999999
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,furnished-room,agreement/ours-mt_vs_tmbvh/closest_hit_miss_mismatches,0
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,furnished-room,agreement/ours-mt_vs_tmbvh/closest_distance_mismatches,2
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,furnished-room,agreement/ours-mt_vs_tmbvh/any_rate,1
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,device,limit/max_storage_buffer_binding_size_bytes,2147483644
+2026-11-04,553d6f5-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,device,limit/max_buffer_size_bytes,2147483648
+2026-11-04,99e77ff-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,synthetic-10k,scene/instances,10000
+2026-11-04,99e77ff-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,synthetic-10k,scene/triangles_unique,352
+2026-11-04,99e77ff-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,synthetic-10k,ours/top_level_rebuild_ms_median,120.95
+2026-11-04,99e77ff-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,synthetic-10k,ours/top_level_rebuild_ms_max,159.6
+2026-11-04,99e77ff-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,synthetic-10k,ours/top_level_nodes,9999
+2026-11-04,99e77ff-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,synthetic-10k,ours/top_level_max_depth,16
+2026-11-04,99e77ff-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,synthetic-10k,ours/memory_bytes_top_level,1280000
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,sponza,scene/meshes,115
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,sponza,scene/instances,115
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,sponza,scene/triangles_unique,3747018
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,sponza,scene/triangles_instanced,3747018
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,sponza,rays/probes,8512
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,sponza,rays/per_probe,256
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,sponza,rays/closest,2179072
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,sponza,rays/closest_requested,2097152
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,sponza,rays/closest_hits,1802811
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,sponza,rays/any,877295
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,sponza,rays/estimated_ns_per_ray,182.793
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,sponza,ours/build_ms_total,25321.8
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,sponza,ours/build_ms_max_mesh,742.6
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,sponza,ours/assemble_ms,102.1
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,sponza,ours/top_level_rebuild_ms_median,0.9
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,sponza,ours/top_level_rebuild_ms_max,1.8
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,sponza,ours/top_level_instances,115
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,sponza,ours/nodes,1913995
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,sponza,ours/max_mesh_depth,23
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,sponza,ours/stack_entries_needed,35
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,sponza,ours/leaf_size,4
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,sponza,ours/memory_bytes_nodes,122495680
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,sponza,ours/memory_bytes_triangles,179856864
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,sponza,ours/memory_bytes_top_level,14720
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,sponza,ours/memory_bytes,302367264
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,sponza,tmbvh/build_ms_total,5861.1
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,sponza,tmbvh/build_ms_max_mesh,171.3
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,sponza,tmbvh/data_update_ms,739.7
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,sponza,tmbvh/leaf_size,10
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,sponza,tmbvh/memory_bytes_nodes,75067136
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,sponza,tmbvh/memory_bytes_index,44964216
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,sponza,tmbvh/memory_bytes_attributes,32786192
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,sponza,tmbvh/memory_bytes_transforms,16560
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,sponza,tmbvh/memory_bytes,152834104
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,sponza,ours-wt/closest/mrays_per_s,7.98947
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,sponza,ours-wt/closest/gpu_ms_median,272.743
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,sponza,ours-wt/closest/gpu_ms_min,257.442
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,sponza,ours-wt/closest/gpu_ms_max,308.375
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,sponza,ours-wt/closest/rays,2179072
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,sponza,ours-wt/closest/timestamp_timed,1
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,sponza,ours-wt/any/mrays_per_s,11.4683
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,sponza,ours-wt/any/gpu_ms_median,76.4975
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,sponza,ours-wt/any/gpu_ms_min,73.2846
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,sponza,ours-wt/any/gpu_ms_max,88.0025
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,sponza,ours-wt/any/rays,877295
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,sponza,ours-wt/any/timestamp_timed,1
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,sponza,ours-mt/closest/mrays_per_s,9.96676
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,sponza,ours-mt/closest/gpu_ms_median,218.634
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,sponza,ours-mt/closest/gpu_ms_min,208.732
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,sponza,ours-mt/closest/gpu_ms_max,228.295
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,sponza,ours-mt/closest/rays,2179072
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,sponza,ours-mt/closest/timestamp_timed,1
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,sponza,ours-mt/any/mrays_per_s,12.0309
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,sponza,ours-mt/any/gpu_ms_median,72.9202
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,sponza,ours-mt/any/gpu_ms_min,71.3103
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,sponza,ours-mt/any/gpu_ms_max,77.9316
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,sponza,ours-mt/any/rays,877295
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,sponza,ours-mt/any/timestamp_timed,1
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,sponza,tmbvh/closest/mrays_per_s,5.31935
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,sponza,tmbvh/closest/gpu_ms_median,409.65
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,sponza,tmbvh/closest/gpu_ms_min,402.597
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,sponza,tmbvh/closest/gpu_ms_max,433.687
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,sponza,tmbvh/closest/rays,2179072
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,sponza,tmbvh/closest/timestamp_timed,1
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,sponza,tmbvh/any/mrays_per_s,8.79778
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,sponza,tmbvh/any/gpu_ms_median,99.7177
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,sponza,tmbvh/any/gpu_ms_min,96.0217
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,sponza,tmbvh/any/gpu_ms_max,103.866
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,sponza,tmbvh/any/rays,877295
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,sponza,tmbvh/any/timestamp_timed,1
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,sponza,agreement/ours-mt_vs_ours-wt/closest_rate,1
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,sponza,agreement/ours-mt_vs_ours-wt/closest_hit_miss_mismatches,0
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,sponza,agreement/ours-mt_vs_ours-wt/closest_distance_mismatches,1
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,sponza,agreement/ours-mt_vs_ours-wt/any_rate,1
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,sponza,agreement/ours-wt_vs_tmbvh/closest_rate,1
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,sponza,agreement/ours-wt_vs_tmbvh/closest_hit_miss_mismatches,0
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,sponza,agreement/ours-wt_vs_tmbvh/closest_distance_mismatches,0
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,sponza,agreement/ours-wt_vs_tmbvh/any_rate,1
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,sponza,agreement/ours-mt_vs_tmbvh/closest_rate,1
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,sponza,agreement/ours-mt_vs_tmbvh/closest_hit_miss_mismatches,0
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,sponza,agreement/ours-mt_vs_tmbvh/closest_distance_mismatches,1
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,sponza,agreement/ours-mt_vs_tmbvh/any_rate,1
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,device,limit/max_storage_buffer_binding_size_bytes,2147483644
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,device,limit/max_buffer_size_bytes,2147483648
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,scene/meshes,1296
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,scene/instances,1296
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,scene/triangles_unique,2829226
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,scene/triangles_instanced,2829226
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,rays/probes,4200
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,rays/per_probe,256
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,rays/closest,1075200
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,rays/closest_requested,2097152
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,rays/closest_hits,375849
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,rays/any,191287
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,rays/estimated_ns_per_ray,376.127
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,ours/build_ms_total,16881.9
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,ours/build_ms_max_mesh,548.8
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,ours/assemble_ms,104.3
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,ours/top_level_rebuild_ms_median,10.4
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,ours/top_level_rebuild_ms_max,15.8
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,ours/top_level_instances,1296
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,ours/nodes,1363920
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,ours/max_mesh_depth,25
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,ours/stack_entries_needed,44
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,ours/leaf_size,4
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,ours/memory_bytes_nodes,87290880
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,ours/memory_bytes_triangles,135802848
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,ours/memory_bytes_top_level,165888
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,ours/memory_bytes,223259616
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,tmbvh/build_ms_total,3606.1
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,tmbvh/build_ms_max_mesh,117.3
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,tmbvh/data_update_ms,605.8
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,tmbvh/leaf_size,10
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,tmbvh/memory_bytes_nodes,56832320
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,tmbvh/memory_bytes_index,33950712
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,tmbvh/memory_bytes_attributes,46731136
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,tmbvh/memory_bytes_transforms,186624
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,tmbvh/memory_bytes,137700792
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,ours-wt/closest/mrays_per_s,6.46824
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,ours-wt/closest/gpu_ms_median,166.228
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,ours-wt/closest/gpu_ms_min,159.945
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,ours-wt/closest/gpu_ms_max,177.764
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,ours-wt/closest/rays,1075200
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,ours-wt/closest/timestamp_timed,1
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,ours-wt/any/mrays_per_s,4.43938
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,ours-wt/any/gpu_ms_median,43.0886
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,ours-wt/any/gpu_ms_min,40.2857
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,ours-wt/any/gpu_ms_max,45.7742
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,ours-wt/any/rays,191287
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,ours-wt/any/timestamp_timed,1
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,ours-mt/closest/mrays_per_s,6.89739
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,ours-mt/closest/gpu_ms_median,155.885
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,ours-mt/closest/gpu_ms_min,151.585
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,ours-mt/closest/gpu_ms_max,160.625
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,ours-mt/closest/rays,1075200
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,ours-mt/closest/timestamp_timed,1
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,ours-mt/any/mrays_per_s,4.77415
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,ours-mt/any/gpu_ms_median,40.0673
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,ours-mt/any/gpu_ms_min,36.7793
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,ours-mt/any/gpu_ms_max,43.7174
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,ours-mt/any/rays,191287
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,ours-mt/any/timestamp_timed,1
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,tmbvh/closest/mrays_per_s,5.90703
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,tmbvh/closest/gpu_ms_median,182.021
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,tmbvh/closest/gpu_ms_min,175.617
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,tmbvh/closest/gpu_ms_max,186.467
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,tmbvh/closest/rays,1075200
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,tmbvh/closest/timestamp_timed,1
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,tmbvh/any/mrays_per_s,3.52642
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,tmbvh/any/gpu_ms_median,54.2439
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,tmbvh/any/gpu_ms_min,52.203
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,tmbvh/any/gpu_ms_max,59.2484
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,tmbvh/any/rays,191287
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,tmbvh/any/timestamp_timed,1
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,agreement/ours-mt_vs_ours-wt/closest_rate,0.999998
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,agreement/ours-mt_vs_ours-wt/closest_hit_miss_mismatches,0
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,agreement/ours-mt_vs_ours-wt/closest_distance_mismatches,2
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,agreement/ours-mt_vs_ours-wt/any_rate,1
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,agreement/ours-wt_vs_tmbvh/closest_rate,0.999999
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,agreement/ours-wt_vs_tmbvh/closest_hit_miss_mismatches,0
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,agreement/ours-wt_vs_tmbvh/closest_distance_mismatches,1
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,agreement/ours-wt_vs_tmbvh/any_rate,1
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,agreement/ours-mt_vs_tmbvh/closest_rate,0.999997
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,agreement/ours-mt_vs_tmbvh/closest_hit_miss_mismatches,0
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,agreement/ours-mt_vs_tmbvh/closest_distance_mismatches,3
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,agreement/ours-mt_vs_tmbvh/any_rate,1
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,device,limit/max_storage_buffer_binding_size_bytes,2147483644
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,device,limit/max_buffer_size_bytes,2147483648
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-interior,scene/meshes,1186
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-interior,scene/instances,1186
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-interior,scene/triangles_unique,1043077
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-interior,scene/triangles_instanced,1043077
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-interior,rays/probes,3933
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-interior,rays/per_probe,256
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-interior,rays/closest,1006848
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-interior,rays/closest_requested,2097152
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-interior,rays/closest_hits,469296
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-interior,rays/any,252624
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-interior,rays/estimated_ns_per_ray,424.5
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-interior,ours/build_ms_total,5804.1
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-interior,ours/build_ms_max_mesh,109.1
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-interior,ours/assemble_ms,59.3
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-interior,ours/top_level_rebuild_ms_median,9.65
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-interior,ours/top_level_rebuild_ms_max,12.9
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-interior,ours/top_level_instances,1186
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-interior,ours/nodes,490653
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-interior,ours/max_mesh_depth,19
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-interior,ours/stack_entries_needed,35
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-interior,ours/leaf_size,4
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-interior,ours/memory_bytes_nodes,31401792
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-interior,ours/memory_bytes_triangles,50067696
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-interior,ours/memory_bytes_top_level,151808
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-interior,ours/memory_bytes,81621296
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-interior,tmbvh/build_ms_total,1176.9
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-interior,tmbvh/build_ms_max_mesh,23.1
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-interior,tmbvh/data_update_ms,277.6
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-interior,tmbvh/leaf_size,10
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-interior,tmbvh/memory_bytes_nodes,20783424
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-interior,tmbvh/memory_bytes_index,12516924
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-interior,tmbvh/memory_bytes_attributes,13023952
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-interior,tmbvh/memory_bytes_transforms,170784
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-interior,tmbvh/memory_bytes,46495084
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-interior,ours-wt/closest/mrays_per_s,5.63867
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-interior,ours-wt/closest/gpu_ms_median,178.561
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-interior,ours-wt/closest/gpu_ms_min,172.265
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-interior,ours-wt/closest/gpu_ms_max,179.969
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-interior,ours-wt/closest/rays,1006848
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-interior,ours-wt/closest/timestamp_timed,1
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-interior,ours-wt/any/mrays_per_s,4.34117
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-interior,ours-wt/any/gpu_ms_median,58.1927
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-interior,ours-wt/any/gpu_ms_min,56.4128
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-interior,ours-wt/any/gpu_ms_max,63.5241
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-interior,ours-wt/any/rays,252624
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-interior,ours-wt/any/timestamp_timed,1
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-interior,ours-mt/closest/mrays_per_s,5.70641
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-interior,ours-mt/closest/gpu_ms_median,176.442
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-interior,ours-mt/closest/gpu_ms_min,174.78
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-interior,ours-mt/closest/gpu_ms_max,181.909
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-interior,ours-mt/closest/rays,1006848
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-interior,ours-mt/closest/timestamp_timed,1
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-interior,ours-mt/any/mrays_per_s,4.65837
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-interior,ours-mt/any/gpu_ms_median,54.2301
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-interior,ours-mt/any/gpu_ms_min,52.8264
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-interior,ours-mt/any/gpu_ms_max,57.5227
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-interior,ours-mt/any/rays,252624
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-interior,ours-mt/any/timestamp_timed,1
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-interior,tmbvh/closest/mrays_per_s,4.1887
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-interior,tmbvh/closest/gpu_ms_median,240.373
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-interior,tmbvh/closest/gpu_ms_min,236.788
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-interior,tmbvh/closest/gpu_ms_max,243.693
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-interior,tmbvh/closest/rays,1006848
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-interior,tmbvh/closest/timestamp_timed,1
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-interior,tmbvh/any/mrays_per_s,5.56486
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-interior,tmbvh/any/gpu_ms_median,45.3963
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-interior,tmbvh/any/gpu_ms_min,42.9423
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-interior,tmbvh/any/gpu_ms_max,46.898
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-interior,tmbvh/any/rays,252624
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-interior,tmbvh/any/timestamp_timed,1
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-interior,agreement/ours-mt_vs_ours-wt/closest_rate,0.999997
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-interior,agreement/ours-mt_vs_ours-wt/closest_hit_miss_mismatches,0
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-interior,agreement/ours-mt_vs_ours-wt/closest_distance_mismatches,3
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-interior,agreement/ours-mt_vs_ours-wt/any_rate,1
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-interior,agreement/ours-wt_vs_tmbvh/closest_rate,0.999997
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-interior,agreement/ours-wt_vs_tmbvh/closest_hit_miss_mismatches,0
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-interior,agreement/ours-wt_vs_tmbvh/closest_distance_mismatches,3
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-interior,agreement/ours-wt_vs_tmbvh/any_rate,1
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-interior,agreement/ours-mt_vs_tmbvh/closest_rate,1
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-interior,agreement/ours-mt_vs_tmbvh/closest_hit_miss_mismatches,0
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-interior,agreement/ours-mt_vs_tmbvh/closest_distance_mismatches,0
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-interior,agreement/ours-mt_vs_tmbvh/any_rate,1
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,device,limit/max_storage_buffer_binding_size_bytes,2147483644
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,device,limit/max_buffer_size_bytes,2147483648
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,furnished-room,scene/meshes,21
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,furnished-room,scene/instances,21
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,furnished-room,scene/triangles_unique,269764
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,furnished-room,scene/triangles_instanced,269764
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,furnished-room,rays/probes,6992
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,furnished-room,rays/per_probe,256
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,furnished-room,rays/closest,1789952
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,furnished-room,rays/closest_requested,2097152
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,furnished-room,rays/closest_hits,1747232
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,furnished-room,rays/any,872529
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,furnished-room,rays/estimated_ns_per_ray,225.225
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,furnished-room,ours/build_ms_total,1629.7
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,furnished-room,ours/build_ms_max_mesh,580.2
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,furnished-room,ours/assemble_ms,10.3
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,furnished-room,ours/top_level_rebuild_ms_median,0.2
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,furnished-room,ours/top_level_rebuild_ms_max,1.1
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,furnished-room,ours/top_level_instances,21
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,furnished-room,ours/nodes,121894
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,furnished-room,ours/max_mesh_depth,21
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,furnished-room,ours/stack_entries_needed,28
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,furnished-room,ours/leaf_size,4
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,furnished-room,ours/memory_bytes_nodes,7801216
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,furnished-room,ours/memory_bytes_triangles,12948672
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,furnished-room,ours/memory_bytes_top_level,2688
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,furnished-room,ours/memory_bytes,20752576
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,furnished-room,tmbvh/build_ms_total,468.6
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,furnished-room,tmbvh/build_ms_max_mesh,157.2
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,furnished-room,tmbvh/data_update_ms,106.1
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,furnished-room,tmbvh/leaf_size,10
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,furnished-room,tmbvh/memory_bytes_nodes,5139136
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,furnished-room,tmbvh/memory_bytes_index,3237168
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,furnished-room,tmbvh/memory_bytes_attributes,2566080
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,furnished-room,tmbvh/memory_bytes_transforms,3024
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,furnished-room,tmbvh/memory_bytes,10945408
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,furnished-room,ours-wt/closest/mrays_per_s,16.457
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,furnished-room,ours-wt/closest/gpu_ms_median,108.765
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,furnished-room,ours-wt/closest/gpu_ms_min,104.411
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,furnished-room,ours-wt/closest/gpu_ms_max,114.22
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,furnished-room,ours-wt/closest/rays,1789952
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,furnished-room,ours-wt/closest/timestamp_timed,1
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,furnished-room,ours-wt/any/mrays_per_s,18.6198
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,furnished-room,ours-wt/any/gpu_ms_median,46.8602
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,furnished-room,ours-wt/any/gpu_ms_min,43.0546
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,furnished-room,ours-wt/any/gpu_ms_max,48.6844
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,furnished-room,ours-wt/any/rays,872529
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,furnished-room,ours-wt/any/timestamp_timed,1
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,furnished-room,ours-mt/closest/mrays_per_s,17.7835
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,furnished-room,ours-mt/closest/gpu_ms_median,100.653
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,furnished-room,ours-mt/closest/gpu_ms_min,94.2319
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,furnished-room,ours-mt/closest/gpu_ms_max,108.789
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,furnished-room,ours-mt/closest/rays,1789952
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,furnished-room,ours-mt/closest/timestamp_timed,1
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,furnished-room,ours-mt/any/mrays_per_s,20.0793
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,furnished-room,ours-mt/any/gpu_ms_median,43.4541
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,furnished-room,ours-mt/any/gpu_ms_min,39.0983
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,furnished-room,ours-mt/any/gpu_ms_max,47.9483
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,furnished-room,ours-mt/any/rays,872529
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,furnished-room,ours-mt/any/timestamp_timed,1
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,furnished-room,tmbvh/closest/mrays_per_s,11.7094
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,furnished-room,tmbvh/closest/gpu_ms_median,152.865
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,furnished-room,tmbvh/closest/gpu_ms_min,150.51
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,furnished-room,tmbvh/closest/gpu_ms_max,158.119
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,furnished-room,tmbvh/closest/rays,1789952
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,furnished-room,tmbvh/closest/timestamp_timed,1
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,furnished-room,tmbvh/any/mrays_per_s,31.778
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,furnished-room,tmbvh/any/gpu_ms_median,27.457
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,furnished-room,tmbvh/any/gpu_ms_min,25.107
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,furnished-room,tmbvh/any/gpu_ms_max,32.1818
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,furnished-room,tmbvh/any/rays,872529
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,furnished-room,tmbvh/any/timestamp_timed,1
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,furnished-room,agreement/ours-mt_vs_ours-wt/closest_rate,1
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,furnished-room,agreement/ours-mt_vs_ours-wt/closest_hit_miss_mismatches,0
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,furnished-room,agreement/ours-mt_vs_ours-wt/closest_distance_mismatches,0
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,furnished-room,agreement/ours-mt_vs_ours-wt/any_rate,1
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,furnished-room,agreement/ours-wt_vs_tmbvh/closest_rate,1
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,furnished-room,agreement/ours-wt_vs_tmbvh/closest_hit_miss_mismatches,0
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,furnished-room,agreement/ours-wt_vs_tmbvh/closest_distance_mismatches,0
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,furnished-room,agreement/ours-wt_vs_tmbvh/any_rate,1
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,furnished-room,agreement/ours-mt_vs_tmbvh/closest_rate,1
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,furnished-room,agreement/ours-mt_vs_tmbvh/closest_hit_miss_mismatches,0
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,furnished-room,agreement/ours-mt_vs_tmbvh/closest_distance_mismatches,0
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,furnished-room,agreement/ours-mt_vs_tmbvh/any_rate,1
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,device,limit/max_storage_buffer_binding_size_bytes,2147483644
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,device,limit/max_buffer_size_bytes,2147483648
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,synthetic-10k,scene/instances,10000
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,synthetic-10k,scene/triangles_unique,352
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,synthetic-10k,ours/top_level_rebuild_ms_median,86.45
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,synthetic-10k,ours/top_level_rebuild_ms_max,107.6
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,synthetic-10k,ours/top_level_nodes,9999
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,synthetic-10k,ours/top_level_max_depth,16
+2026-11-04,dff98bc-dirty,Intel UHD,Chrome 156.0.8078.74 headless,synthetic-10k,ours/memory_bytes_top_level,1280000

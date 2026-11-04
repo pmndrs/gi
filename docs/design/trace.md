@@ -72,6 +72,20 @@ A default device caps one storage binding at 128 MB. At 48 bytes per triangle th
   - A single-triangle tree has an empty right child.
 - **Budget:** the trace module binds 3 storage buffers, and a batch kernel 5 of the 8 allowed. The worst-case stack depth is 19 of 64 on the oracle scenes; the busiest ray used 12.
 
+## What part B found (2026-11-04)
+
+Measured on the RTX 3060 Laptop and Intel UHD, Chrome 156, GPU timestamps. Rows are in `bench/results/trace.csv`; the summary is in PROGRESS.
+
+- **Speed, closest hit on Sponza** (ours Möller–Trumbore / ours watertight / three-mesh-bvh):
+  - RTX 3060: 111 / 61 / 87 Mrays/s.
+  - Intel: 10.0 / 8.0 / 5.3 Mrays/s.
+  - Möller–Trumbore beats three-mesh-bvh on both GPUs. Watertight does too on Intel, but on the RTX 3060 it is 0.70×, below the bar.
+- **Watertight costs too much on NVIDIA.** It costs 45% of the speed there but only 20% on Intel, which points at how it is written rather than the method. The likely cause is that the walk indexes vectors by a per-ray axis (`a[kx]`, `a[kz]`). Indexing a vector by a runtime value can push it into slow per-thread scratch memory. The fix is to build three per-ray "row" vectors once, so each corner is transformed with dot products and no runtime indexing. That's the same arithmetic, so it stays watertight.
+- **Any hit:** three-mesh-bvh beats ours on Bistro interior and the furnished room. Our any-hit walk probably still visits the nearer child first and keeps narrowing the ray, which it doesn't need to do.
+- **Build and memory:** our build is about 4× slower and uses about 2× the memory. Sponza takes 28 s, which is too slow for a scene load. The memory comes from the 64-byte nodes and the 48-byte triangles, which copy vertices instead of indexing them.
+- **Top level:** it rebuilds in 1–10 ms on the real scenes and 86–121 ms for 10,000 instances. That's fine while objects move rarely, but a scene with thousands of moving instances would need an incremental or GPU build (M3).
+- **Correctness under load:** with probe-style rays on all four scenes, no ray hit in one tracer and missed in another.
+
 ## Benchmark
 
 - **Rays:** probe-style rays. A grid of probes fills the scene bounds, and each probe fires 256 rays in random directions from a fixed seed. Closest-hit rays use those directions. Any-hit rays go from each closest hit toward the sun (or a fixed direction), which is what DDGI's shadow rays look like. The rays are generated once and stored in a buffer, so every tracer gets identical input.

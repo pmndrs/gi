@@ -1,0 +1,5 @@
+{
+    "description": "Smoke run of the tracer benchmark: furnished room and Sponza with tiny ray counts. Not a measurement.",
+    "timeoutMs": 600000,
+    "manual": true
+}

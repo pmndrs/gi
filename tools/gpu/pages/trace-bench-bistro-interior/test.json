@@ -1,0 +1,5 @@
+{
+    "description": "Full tracer benchmark on bistro-interior: ours (Moller-Trumbore, watertight) vs three-mesh-bvh. Slow; run under the bench lock, on its own.",
+    "timeoutMs": 600000,
+    "manual": true
+}

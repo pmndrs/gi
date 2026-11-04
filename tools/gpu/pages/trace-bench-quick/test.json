@@ -1,0 +1,4 @@
+{
+    "description": "Tracer benchmark, quick profile on the furnished room: ours (both triangle tests) and three-mesh-bvh must run and agree.",
+    "timeoutMs": 180000
+}

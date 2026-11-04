@@ -1,0 +1,5 @@
+{
+    "description": "Top-level rebuild time with 10,000 instances of a small mesh (CPU).",
+    "timeoutMs": 120000,
+    "manual": true
+}

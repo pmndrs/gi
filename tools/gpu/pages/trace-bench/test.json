@@ -1,0 +1,5 @@
+{
+    "description": "Tracer benchmark, chosen by query parameters (see config.ts). For hand use; the runner pages are trace-bench-quick, -smoke and one per scene.",
+    "timeoutMs": 180000,
+    "manual": true
+}

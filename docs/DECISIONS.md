@@ -4,6 +4,12 @@ Settled choices, newest first. Each entry is short: the decision, why, and what 
 
 ## 2026-11-04
 
+- **The tracer ships the watertight triangle test only, and the speed bar applies to that test.**
+  - Möller–Trumbore lets 3–12% of rays aimed at shared edges slip through (part A). In DDGI that shows up as light leaking through closed rooms, so it's not an option even though it's faster.
+  - Part B measured watertight at 0.70× three-mesh-bvh on Sponza on the RTX 3060, below the 0.8× bar set before measuring, and 1.50× on Intel. So, as the rule says, T0.10 part C optimises the tracer and measures again.
+  - Möller–Trumbore stays as a build option only until part C is done, as a speed reference, and is then deleted.
+  - *Why:* correctness first. Leaks are the failure DDGI is judged on, and the bar was agreed in advance.
+  - *Revisit if:* part C can't reach 0.8× on the RTX 3060. In that case the choice between "slower but sealed" and "faster and leaky with workarounds" goes to Dennis.
 - **Code is written and reviewed on Opus.**
   - `implementer` and `reviewer` run on Opus at high effort, and `native-runner` on Opus at medium.
   - `gpu-tester` stays on Sonnet, and `scout` and `wrangler` on Haiku: running checks, measuring, lookups and mechanical jobs.

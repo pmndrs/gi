@@ -101,6 +101,8 @@ export interface TraceBatch {
     /** Closest: `count` records of `HIT_RECORD_BYTES`. Any: `count` u32, 1 = blocked. */
     readonly results: GPUBuffer;
     readonly count: number;
+    /** Optional GPU timing for the dispatch's pass, for example from `GpuTimer.computePass()`. */
+    readonly timestampWrites?: GPUComputePassTimestampWrites;
 }
 
 interface SceneBindGroups {
@@ -180,7 +182,10 @@ export class TraceBatchKernel {
         const x = Math.min(workgroups, this.device.limits.maxComputeWorkgroupsPerDimension);
         const y = Math.ceil(workgroups / x);
         const groups = this.groupsFor(scene);
-        const pass = encoder.beginComputePass({ label: `trace batch ${batch.mode}` });
+        const pass = encoder.beginComputePass({
+            label: `trace batch ${batch.mode}`,
+            timestampWrites: batch.timestampWrites,
+        });
         pass.setPipeline(pipeline);
         pass.setBindGroup(0, batch.mode === 'closest' ? groups.closest : groups.any);
         pass.setBindGroup(1, batchGroup);

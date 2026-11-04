@@ -21,6 +21,33 @@ Rules:
 
 ---
 
+## 2026-11-04 · T0.10 (part B) · implementer (sonnet) built it, gpu-tester (sonnet) measured, main session (opus) interpreted
+Did:
+- Benchmark pages `tools/gpu/pages/trace-bench*` (one folder per scene, all `manual`) and `to-csv.ts`.
+- `TraceBatch.timestampWrites` in `trace-gpu.ts`, so a batch can be timed.
+- The full run on both GPUs: 5 pages × 2 GPUs, rows in `bench/results/trace.csv`.
+Verified: all 10 runs pass, measured with GPU timestamps in Chrome 156 headless on nvidia/ampere (RTX 3060 Laptop) and intel/gen-12lp. Closest-hit results agree between ours-mt, ours-wt and three-mesh-bvh on 99.998–100% of rays, with no hit/miss mismatches. I spot-checked the Sponza rows in the CSV.
+Numbers: Mrays/s closest-hit, ours Möller–Trumbore / ours watertight / three-mesh-bvh.
+| scene | RTX 3060 | Intel UHD |
+| --- | --- | --- |
+| Sponza | 110.8 / 61.2 / 87.2 | 9.97 / 7.99 / 5.32 |
+| Bistro exterior | 64.4 / 33.7 / 71.3 | 6.90 / 6.47 / 5.91 (thinned) |
+| Bistro interior | 57.1 / 30.1 / 53.5 | 5.71 / 5.64 / 4.19 (thinned) |
+| Furnished room | 114.2 / 60.7 / 113.6 | 17.8 / 16.5 / 11.7 |
+Other costs:
+- Build: ours is 3.7–4.6× slower than three-mesh-bvh (Sponza 28.1 s against 7.0 s).
+- Memory: about 2× (Sponza 288 MB against 146 MB).
+- Top-level rebuild: 1–10 ms for the real scenes, 121 ms (RTX 3060) and 86 ms (Intel) for 10,000 instances.
+Verdict, by the rule set before measuring:
+- The watertight test is the one we must ship, since Möller–Trumbore leaks (part A).
+- On Sponza it is 0.70× three-mesh-bvh on the RTX 3060, below the 0.8× bar, and 1.50× on Intel.
+- So part C optimises the tracer and measures again. See DECISIONS and `docs/design/trace.md`.
+Not verified:
+- Each page ran once; the spread is only within one run.
+- Furnished-room numbers on the RTX 3060 are noisy (tiny dispatches); the three-mesh-bvh any-hit rate of 499 is not credible.
+- The CSV has no "thinned" flag, and its rows carry three different commits.
+Next: T0.10 part C.
+
 ## 2026-11-04 · T0.4 follow-up (furnished-room metal) · implementer (opus)
 Did: the furnished room came out of Blender almost entirely metal, so it got no diffuse GI (found by T0.5).
 - Cause: Blender 4.5's OBJ importer sets Metallic to the average of `Ka` whenever `illum` turns on reflection, and every material here is `illum 4` with mostly `Ka 1 1 1`. 12 of 15 materials came out metal.
