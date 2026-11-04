@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { wgslNameProblems } from './wgsl-names.ts';
 import { GPU_LAYOUT_EMPTY_CHILD, GPU_LAYOUT_NO_PARENT, GPU_LAYOUT_NODE_WORD, GPU_LAYOUT_NODE_WORDS } from './gpu-layout.ts';
 import { bvhRefitWgsl } from './gpu-refit.ts';
 import { BVH_FLOAT_MAX, halfArea, leafSlotsOf, parentSlotsOf, PRIMITIVE_BOX_FLOATS, refitOnCpu, relativeSahCost } from './refit-cpu.ts';
@@ -87,23 +88,6 @@ describe('refit WGSL', () => {
     });
 
     it('uses no WGSL reserved word as a name', () => {
-        // WGSL's reserved words (WGSL spec, "Reserved Words"); `active` once broke the shader.
-        const reserved = [
-        'NULL', 'Self', 'abstract', 'active', 'alignas', 'alignof', 'as', 'asm', 'asm_fragment', 'async', 'attribute', 'auto', 'await', 'become',
-        'cast', 'catch', 'class', 'co_await', 'co_return', 'co_yield', 'coherent', 'column_major', 'common', 'compile', 'compile_fragment', 'concept',
-        'const_cast', 'consteval', 'constexpr', 'constinit', 'crate', 'debugger', 'decltype', 'delete', 'demote', 'demote_to_helper', 'do',
-        'dynamic_cast', 'enum', 'explicit', 'export', 'extends', 'extern', 'external', 'fallthrough', 'filter', 'final', 'finally', 'friend', 'from',
-        'fxgroup', 'get', 'goto', 'groupshared', 'highp', 'impl', 'implements', 'import', 'inline', 'instanceof', 'interface', 'layout', 'lowp',
-        'macro', 'macro_rules', 'match', 'mediump', 'meta', 'mod', 'module', 'move', 'mut', 'mutable', 'namespace', 'new', 'nil', 'noexcept',
-        'noinline', 'nointerpolation', 'non_coherent', 'noncoherent', 'noperspective', 'null', 'nullptr', 'of', 'operator', 'package', 'packoffset',
-        'partition', 'pass', 'patch', 'pixelfragment', 'precise', 'precision', 'premerge', 'priv', 'protected', 'pub', 'public', 'readonly', 'ref',
-        'regardless', 'register', 'reinterpret_cast', 'require', 'resource', 'restrict', 'self', 'set', 'shared', 'sizeof', 'smooth', 'snorm',
-        'static', 'static_assert', 'static_cast', 'std', 'subroutine', 'super', 'target', 'template', 'this', 'thread_local', 'throw', 'trait', 'try',
-        'type', 'typedef', 'typeid', 'typename', 'typeof', 'union', 'unless', 'unorm', 'unsafe', 'unsized', 'use', 'using', 'varying', 'virtual',
-        'volatile', 'wgsl', 'where', 'with', 'writeonly', 'yield',
-        ];
-        const declared = [...wgsl.matchAll(/\b(?:let|var|fn|const)\s+([A-Za-z_]\w*)/g)].map((match) => match[1]);
-        const parameters = [...wgsl.matchAll(/\b([A-Za-z_]\w*)\s*:\s*(?:u32|f32|vec[234][uf]|BvhBox)\b/g)].map((match) => match[1]);
-        expect([...declared, ...parameters].filter((name) => reserved.includes(name))).toEqual([]);
+        expect(wgslNameProblems(wgsl)).toEqual([]);
     });
 });
