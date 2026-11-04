@@ -3,8 +3,64 @@
 Engine-free BVH builders for the ddgi platform (docs/design/bvh-framework.md).
 A builder produces a plain tree description (`MeshTreeTopology`, in
 `src/topology.ts`), which the tracer in `@pmndrs/ddgi-core` turns into its GPU
-layout, or writes that layout itself (`GpuLayoutMeshBvh`, in `src/gpu-layout.ts`).
+layout, or writes that layout itself (`GpuLayoutMeshBvh`, in `src/gpu-layout.ts`):
+tinybvh in WebAssembly (B0) on the CPU, the LBVH (B1) on the GPU.
 This package is bundled into `@pmndrs/ddgi` and never published on its own.
+
+## GPU LBVH (stage B1)
+
+`src/gpu-lbvh.ts` (`GpuLbvhBuilder`) builds mesh trees on the GPU, in exactly
+the layout tinybvh's `buildLayout` writes (`src/gpu-layout.ts`), so the tracer
+reads them unchanged. The kernels are in `src/gpu-lbvh-wgsl.ts`, ported from
+HIPRT's LBVH (MIT, `licenses/hiprt.txt`):
+
+1. triangle boxes and each mesh's centroid box (subgroup, then workgroup, then
+   one atomic per workgroup);
+2. 30-bit Morton codes in cubic cells over each mesh's own centroid box
+   (stretching every axis to 1024 cells, as HIPRT's plain code does, made flat
+   and long meshes cost 2.4-2.6 times tinybvh's SAH; cubic cells 1.02-1.22);
+3. a stable, segmented radix sort (`src/gpu-radix-sort.ts`: 5-bit digits,
+   reduce-then-scan, no look-back), on the scan in `src/gpu-scan.ts`;
+4. Apetrei's bottom-up climb with HIPRT's index tie-break, the SAH leaf
+   collapse decided on the way up, in two rounds (the second an indirect
+   dispatch);
+5. a scan numbers the nodes that stay; triangles, nodes and parents are
+   written in the tracer's layout.
+
+It builds every mesh of a **batch** with the same dispatches (a mesh table and
+a tile table say which workgroup works on which mesh), so a scene of many
+small meshes doesn't pay per mesh. The trees come back in three shared GPU
+buffers with an offset per mesh (`GpuLbvhTrees`); `readLayouts` copies them
+into CPU memory. `planGpuLbvhBatches` splits a scene into batches that fit the
+device's buffer limits. Every word one climbing thread hands to another goes
+through atomics with a bounded wait, as in the B1a refit; a tree whose wait ran
+out is refused (`problem`), never used.
+
+Workgroup scans number threads in subgroup order (`src/gpu-workgroup-scan.ts`),
+so nothing depends on the subgroup size (Intel's UHD runs 8 or 16 wide) or lane
+layout. The builder needs `subgroups`.
+
+**Fallback.** `src/mesh-builder.ts` (`createMeshLayoutBuilder`) picks the GPU
+LBVH when the device has subgroups and tinybvh (B0) otherwise, and also sends
+single meshes to tinybvh when they are too big for the device or the GPU
+refused them. The result says which builder made each tree.
+
+**Deforming meshes.** `src/gpu-mesh-refit.ts` (`GpuMeshRefit`) refits any
+builder's mesh tree from a vertex buffer the adapter supplies: one kernel
+rewrites the tree-ordered triangles from the moved vertices and writes their
+boxes, then the B1a refit climbs. The shape comes from a CPU copy of the layout
+once (`setTree`), not every frame.
+
+**Checking a tree.** `src/layout-check.ts` checks any layout against its mesh:
+triangles bit for bit, one tree from node 0, every box exactly the box below
+it, parents, depth and counts; `treeSahCost` gives its SAH cost.
+`src/lbvh-cpu.ts` is the same LBVH written plainly on the CPU, for the unit
+tests and as a cross-check (not a builder to ship).
+
+GPU pages: `bvh-lbvh` (scan, sort, trees), `bvh-blas-refit`, `bvh-lbvh-fallback`,
+`bvh-lbvh-profile` (manual, step-by-step timing), the `watertight-lbvh` variant
+of `trace-oracle`, and `trace-bench-lbvh-sponza` / `-quick` (build time and trace
+speed against tinybvh's trees).
 
 ## GPU refit (stage B1a)
 
