@@ -4,6 +4,11 @@ Settled choices, newest first. Each entry is short: the decision, why, and what 
 
 ## 2026-11-05
 
+- **The GPU top level: refit every frame, rebuild the shape in a worker** (B1a).
+  - **Rebuild trigger:** an instance is created, or the tree's quality signal (relative SAH cost) passes 1.25× its as-built value. A planning number: the top level is a small share of trace work, and rebuilds cost no frame time (54–57 ms for 10k instances, in their own worker).
+  - **New instances** become visible when their shape arrives (about 55 ms for 10k), as new meshes do. Hiding and showing take effect in the same frame.
+  - **Without subgroups,** the tracer keeps the CPU top level, per the subgroups-first rule (2026-11-04). The refit itself uses subgroups only for its pairing step, worth 2% on the RTX and 8% on Intel. Dropping that step would give every device the GPU refit with one code path. Not done now, because every M1 device has subgroups. *Revisit* when a target device lacks them (Safari at the Apple tier).
+
 - **A procedural sky gets a `sunIlluminance` field; `intensity` stays a plain multiplier everywhere.** Dennis: "i would look at what pmndrs/sky calls the prop but in general I think your lean sounds find".
   - Sky radiance = the calibrated sky × `sunIlluminance` × `intensity`. Both default to 1.
   - `sunIlluminance` is the same quantity as pmndrs/sky's `exposure` (`luminanceScale`, default 40 there), which computes its sky for a sun of illuminance 1 and then scales it. We don't call it `exposure`, because "exposure" already means the camera EV (the per-scene default in T1.8). `turbidity` already matches pmndrs/sky's name.

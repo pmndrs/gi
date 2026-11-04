@@ -277,7 +277,7 @@ Rules for every M1 task:
 | --- | --- | --- | --- |
 | B0 | tinybvh WASM builder in a worker (`packages/bvh`) | M1 starts (M1 can start without the ≤ 2 s, DECISIONS 2026-11-04) | done with B0b (DECISIONS: the median of 3 worker runs ≤ 2 s; our CPU builder deleted in T1.3) |
 | B0b | Write our GPU layout from inside the WASM (no JS conversion pass); re-run the RTX trace bench on an idle GPU | T1.3 ends | done (Opus review passed; B0 passed: Sponza worker median 1.89 / 1.61 s) |
-| B1a | GPU top-level tree: refit every frame from instance transforms, rebuild now and then | M1 ends (after T1.3's review fixes, alongside T1.4; DECISIONS 2026-11-05) | active (implementer, 2026-11-05) |
+| B1a | GPU top-level tree: refit every frame from instance transforms, rebuild now and then | M1 ends (after T1.3's review fixes, alongside T1.4; DECISIONS 2026-11-05) | review (10k instances: RTX 0.084 ms, Intel 0.44 ms) |
 | B1 | GPU LBVH per mesh (subgroups first), BLAS refit | M3 | todo |
 | B2 | GPU PLOC, then H-PLOC | M3 | todo |
 | B3 | Wide or compressed nodes, short-stack traversal | the performance review | todo |

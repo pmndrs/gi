@@ -204,6 +204,11 @@ One bullet per fact, each with its source. Add a bullet when something cost you 
 - **Reading triangle corners through the scene copy's index buffer costs 10–30% of trace speed,** so self-contained 48-byte records stay. Source: T1.3.
 - **Both laptop GPUs allow storage bindings of about 2 GiB** in Chrome 156 (`maxStorageBufferBindingSize` 2,147,483,644; `maxBufferSize` 2,147,483,648). Source: T1.3.
 - **tinybvh builds over NaN positions without complaint,** so `buildMeshBvhWithTinyBvh` refuses non-finite positions. Source: T1.3.
+- **`active` is a reserved word in WGSL,** and using it as a name fails shader creation. `refit-cpu.test.ts` scans the refit shader for such names. Source: B1a.
+- **One adapter makes one device.** A page that needs a second device (for example one without subgroups) must request a new adapter. Source: B1a.
+- **Subgroup sizes on this laptop:** RTX 3060 32 (min 32, max 32); Intel UHD 8 to 16. Source: B1a.
+- **The GPU top-level refit** takes 0.084 ms for 10k moving instances on the RTX 3060 and 0.44 ms on the Intel UHD. Box reads through atomics never needed their bounded re-wait to give up on either GPU. Source: B1a.
+- **An instance's world box** is the box around the mesh box's eight transformed corners, which is looser than the box around the transformed vertices when the mesh is rotated. Tests must compare against the corners. Source: B1a.
 - **Use a watertight triangle test.** Möller–Trumbore let 3–12% of rays aimed at shared edges slip between triangles (RTX 3060 11.6%, Intel UHD 3.0%, 2M rays each), and leaked into sealed thin boxes. The watertight test (Woop et al. 2013, with stored corners) let none of 4M through. Source: `tools/gpu/pages/trace-oracle`, T0.10.
 - **Don't index a vector with a per-ray value in WGSL.** `a[kx]` with a runtime `kx` cost about 40% on the RTX 3060 (Sponza 61 → 101 Mrays/s once removed). Build per-ray row vectors with `select()` once per ray instead. Source: T0.10 part C.
 - **Read BVH nodes and triangles as `array<vec4f>`:** one 16-byte load each gave +3% on the RTX 3060 and +23% on Intel UHD. Source: T0.10 part C.
