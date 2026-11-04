@@ -38,6 +38,13 @@ One bullet per fact, each with its source. Add a bullet when something cost you 
 - **Light ordering** in `LightsNode` is by `.id`, which mixes node and object ids, so ties between equal-priority probe lights are unreliable. Give our light a distinct priority. Source: `LightsNode.js:36`.
 - **Meshlet pipeline** draws `source.clone()` materials and skips cube render targets. So material-instance patches don't survive it; use the light node. Source: `examples/jsm/pipelines/MeshletDrawingPipeline.js:225`.
 
+- **three's frame counter only advances inside `renderer.setAnimationLoop`.** With a bare `requestAnimationFrame` plus `render()`, frame-based nodes (passes, VXGI's cycle, TRAA jitter) stall or skip frames. Source: T0.5, `Animation.js:87`.
+- **GPU timing in three:** `resolveTimestampsAsync` returns only the latest frame's passes. To get all of them, sum `backend.timestampQueryPool.<type>.timestamps`. Intel UHD sometimes returns an end before its start (one case read -3,546 s), so drop those. Source: T0.5.
+- **LightProbeGrid:** objects drawn before the first bake read an empty atlas. Draw into a fresh RenderTarget after the first bake step. Source: T0.5.
+- **VXGI** fails its depth copy on a renderer created with `antialias: true`; create it with `false`. Source: T0.5.
+- **Background compiles:** pipelines compile in the background, and objects are skipped until theirs is ready. Warm up until the draw-call count stops growing before timing anything. Source: T0.5.
+- **Release the device between pages:** destroy the device on `pagehide`. Otherwise the next page in the same browser waits on the old page's GPU memory; Bistro exterior then interior took 121 s, against 26 s once the device was destroyed. Source: T0.5.
+
 ## Babylon.js (9.33.2, checked 2026-11-04)
 
 - **No device input:** `WebGPUEngine.initAsync` always calls `requestAdapter` and `requestDevice(deviceDescriptor)`. Pass our limits and features in `deviceDescriptor`, and hand `engine._device` to the core. `dispose()` calls `device.destroy()`, and after device loss Babylon requests a new device itself. Source: `webgpuEngine.pure.js:443, 481, 503-520, 3176`.

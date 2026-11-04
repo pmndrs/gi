@@ -21,6 +21,33 @@ Rules:
 
 ---
 
+## 2026-11-04 · T0.5 · implementer (sonnet) built it; Opus reviewer failed it; implementer (opus) fixed it; main session checked
+Did: `apps/viewer` on three r187.
+- Viewing: a scene picker, orbit and fly, camera bookmarks, exposure and tone mapping, and the T0.3 overlay.
+- GI: off, on or GI-only; the split wipe; three's LightProbeGrid and VXGI as baselines; an upscaler toggle.
+- Hover help on every control, and the view saved in the URL.
+- The runner page `tools/gpu/pages/viewer-baselines` and `bench/results/baselines.csv`. It's header-only for now: the old rows were measured with definitions the review threw out.
+Review fixes:
+- **Fair wipe:** both techniques get the same sky (from the manifest), no extra fill light, and GI strength 1.
+- **Probe grid bake:** it re-bakes only when a bake setting changes, and a generation counter fixes the restart race.
+- **"GI ms"** = frame with GI minus frame with GI off, through the same pipeline, with a 95% interval. A value whose interval includes 0 is flagged `below_noise`.
+- **Bake time:** wall time (one fence at the end) and the sum of GPU pass times are reported separately.
+- **Bad values:** the CSV never stores a negative or non-finite value without a flag, and the baselines page fails on device errors.
+- **Speed:** Bistro interior gets ready in 22 s, down from 449 s.
+- **Layout:** the canvas sits beside the panel.
+Verified (I re-ran it): lint, typecheck and test pass (462). The agent reports the contact sheet 11/11 ready with 0 errors on the RTX 3060, headless Chrome 156. I looked at the Sponza wipe and the furnished-room screenshots.
+Numbers (quick check, RTX 3060, Sponza): probe-grid GI 0.20 ms [0.02, 0.39], noisy; VXGI GI 3.27 ms [3.26, 3.27]; frame with no GI 2.04 ms. The full baseline table on both GPUs comes from the next gpu-tester run.
+Finding: **the sky isn't calibrated.**
+- The viewer's Preetham sky is about as bright as the sun, so the probe-grid half of Sponza turns blue.
+- VXGI ignores the sky, so its shadows are black.
+- Cycles uses a different sky model (Nishita).
+- Fix in M1: one shared sky file read by every renderer, at a realistic sky-to-sun ratio.
+Not verified:
+- Intel for the fixes.
+- A real headed browser by hand.
+- Re-bake and the restart race at runtime (checked in code and unit tests only).
+- Dennis's own use (done-when 4).
+
 ## 2026-11-04 · T0.10 (part B) · implementer (sonnet) built it, gpu-tester (sonnet) measured, main session (opus) interpreted
 Did:
 - Benchmark pages `tools/gpu/pages/trace-bench*` (one folder per scene, all `manual`) and `to-csv.ts`.

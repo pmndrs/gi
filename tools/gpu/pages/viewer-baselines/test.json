@@ -1,0 +1,4 @@
+{
+    "description": "T0.5: baseline GI costs (three.js LightProbeGrid and VXGI) per scene. Default: two small scenes. VITE_DDGI_BASELINES=full runs every scene; VITE_DDGI_SCENES=a,b picks scenes.",
+    "timeoutMs": 7200000
+}

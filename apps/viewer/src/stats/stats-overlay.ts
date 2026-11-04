@@ -22,7 +22,14 @@ export class StatsOverlay {
     private readonly passTimes = new Map<string, SmoothedValue>();
     private lastRedrawAt = 0;
 
-    constructor(parent: HTMLElement = document.body) {
+    /**
+     * @param gpuCaption a line shown above the GPU pass lines, saying what the numbers are
+     *   (for example "GPU, one frame, averaged:"); nothing when empty
+     */
+    constructor(
+        parent: HTMLElement = document.body,
+        private readonly gpuCaption = '',
+    ) {
         this.element = document.createElement('pre');
         this.element.style.cssText = [
             'position: fixed',
@@ -77,6 +84,7 @@ export class StatsOverlay {
             if (smoothed.value !== undefined) smoothedMs.set(name, smoothed.value);
         }
         const text = formatStats(this.frameTime.value, smoothedMs);
-        this.element.textContent = [text.frameLine, ...text.passLines, text.totalLine].filter((line) => line !== '').join('\n');
+        const caption = text.passLines.length > 0 ? this.gpuCaption : '';
+        this.element.textContent = [text.frameLine, caption, ...text.passLines, text.totalLine].filter((line) => line !== '').join('\n');
     }
 }
