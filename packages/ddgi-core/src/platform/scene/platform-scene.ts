@@ -32,6 +32,7 @@ import type {
     DeformedPositions,
     EnvironmentDescriptor,
     InstanceDescriptor,
+    LightChanges,
     LightDescriptor,
     MaterialDescriptor,
     MeshDescriptor,
@@ -614,7 +615,7 @@ export class PlatformScene implements SceneApi, SceneCopy {
         return handle;
     }
 
-    updateLight(light: LightHandle, changes: Partial<Omit<LightDescriptor, 'type'>>): void {
+    updateLight(light: LightHandle, changes: LightChanges): void {
         this.checkLive();
         const entry = this.light(light);
         if ('type' in changes && (changes as { type?: unknown }).type !== entry.descriptor.type) {

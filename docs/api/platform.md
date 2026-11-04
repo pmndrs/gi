@@ -158,6 +158,10 @@ The answers go in PROGRESS. Any change to the contract is made in both the TypeS
 
 ## Revisions
 
+### During M1, 2026-11-04
+
+- **Fix: `updateLight` takes `LightChanges`,** a union of each light type's partial fields. The old type, `Partial<Omit<LightDescriptor, 'type'>>`, kept only the keys every light type shares (that's how `Omit` treats a union), so a host couldn't update a point light's `position` or `range` without a cast. The documented behaviour (any field except `type`) is unchanged. Found by T1.2; fixed by the M1 lead, and Dennis was told.
+
 ### After T0.10 (BVH), 2026-11-04
 
 - **Confirmed: `GiRay`, `GiHit` and the inline `giTraceClosest` / `giTraceAny` are enough.** The oracle and the benchmarks ran through exactly these. Batches write `GiHitRecord`, because WGSL `bool` can't be stored in a buffer (already in the contract).

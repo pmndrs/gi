@@ -265,6 +265,19 @@ export interface SpotLightDescriptor extends LightCommon {
 export type LightDescriptor = DirectionalLightDescriptor | PointLightDescriptor | SpotLightDescriptor;
 
 /**
+ * Changes to one light, for {@link SceneApi.updateLight}: any fields of the
+ * light's own type except `type`.
+ *
+ * Why a union of per-type partials: `Partial<Omit<LightDescriptor, 'type'>>`
+ * keeps only the keys every light type shares (`Omit` over a union), so it
+ * couldn't name a point light's `position` or `range` (T1.2).
+ */
+export type LightChanges =
+    | Partial<Omit<DirectionalLightDescriptor, 'type'>>
+    | Partial<Omit<PointLightDescriptor, 'type'>>
+    | Partial<Omit<SpotLightDescriptor, 'type'>>;
+
+/**
  * The sky, seen by rays that miss all geometry. The platform projects it into
  * a small engine-neutral form (low-order SH plus a small octahedral map) by
  * compute, so tracing never samples the host's environment format directly.
@@ -323,7 +336,7 @@ export interface SceneApi {
 
     createLight(descriptor: LightDescriptor): LightHandle;
     /** Partial updates. Changing `type` is not allowed: destroy and recreate. */
-    updateLight(light: LightHandle, changes: Partial<Omit<LightDescriptor, 'type'>>): void;
+    updateLight(light: LightHandle, changes: LightChanges): void;
     destroyLight(light: LightHandle): void;
 
     setEnvironment(environment: EnvironmentDescriptor): void;
