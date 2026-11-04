@@ -4,6 +4,7 @@ Settled choices, newest first. Each entry is short: the decision, why, and what 
 
 ## 2026-11-04
 
+- **M0 is signed off; M1 starts.** Dennis: "the viewer runs, is there more to test? otherwise lets start m1". The open B0 target (Sponza tinybvh build ≤ 2 s) stays in the BVH lane and doesn't block M1.
 - **The BVH code sources in `research/bvh-libraries.md` may be used.** Dennis: "So far all of the ones you listed we can use," and "the sort algos we can use as they are often cited in other work."
   - That includes the repos with no licence file: meistdan/ploc, AlanIWBFT/CWBVH, kishimisu/WebGPU-Radix-Sort and wgpu_sort.
   - **Rule:** any code ported from one of them gets a `THIRD_PARTY.md` entry naming the repo, the commit and what was taken.

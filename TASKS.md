@@ -10,14 +10,14 @@ Status values: `todo`, `active (agent, date)`, `review`, `done`, `blocked (why)`
 | T0.2 | GPU runner | implementer | M | T0.1 | done |
 | T0.3 | Timing and devices | implementer, then gpu-tester | M | T0.2 | done (Windows only; Apple devices deferred, see DECISIONS 2026-11-04) |
 | T0.4 | Test scenes | wrangler (assets) + implementer (manifest, procedural scenes) | M | T0.1 | done (11 scenes; Sponza is Intel, download-only; Opus-review fixes in) |
-| T0.5 | Viewer shell | implementer | M | T0.2, T0.3, T0.4 | review (baselines recorded on both GPUs; waiting on Dennis trying it) |
+| T0.5 | Viewer shell | implementer | M | T0.2, T0.3, T0.4 | done (baselines recorded on both GPUs; Dennis ran it 2026-11-04) |
 | T0.6 | Native harness | native-runner | M | T0.4 | done (review fixes checked; default config matches upstream within noise; fork branch `m0-harness` at c7d0162) |
 | T0.7 | References and compare | implementer | M | T0.4 | done (Cycles references for Cornell, two-room, Sponza; tolerance in DECISIONS; Opus-review fixes in, Sponza re-rendered diffuse-only) |
 | T0.8 | Spike: three.js sharing | implementer | S | T0.2 | done (yes to all; env-diffuse needs a workaround) |
 | T0.9 | Spike: Babylon | implementer | S | T0.2 | done (fits the contract; Babylon owns its device). Paused: three-only until v1 is validated |
 | T0.10 | Spike: BVH | main session designs, implementer builds, gpu-tester measures | M | T0.2, T0.4 | done (our tracer chosen: watertight 1.20× three-mesh-bvh on Sponza on the RTX 3060, 1.97× on Intel; Opus review passed; the oracle can now fail on corner escapes. B0 continues in the BVH lane) |
 | T0.11 | Platform API draft | main session | M | none (revise after T0.8–T0.10) | done (signed off by Dennis 2026-11-04, incl. UV mapping and vertex normals; revised after T0.10: binding budget, inline tracing by default, `range: 0` = no limit) |
-| T0.12 | M0 note and M1 breakdown | main session | S | all M0 | review (note in [docs/milestones/M0.md](docs/milestones/M0.md); M1 on the board; waiting on Dennis's sign-off) |
+| T0.12 | M0 note and M1 breakdown | main session | S | all M0 | done (note in [docs/milestones/M0.md](docs/milestones/M0.md); M1 on the board; signed off by Dennis 2026-11-04) |
 
 ## M0 tasks
 
@@ -249,7 +249,7 @@ Status values: `todo`, `active (agent, date)`, `review`, `done`, `blocked (why)`
 
 ## M1: core DDGI loop, static scene, two hosts
 
-Status: **ready.** It starts after Dennis signs off M0. Targets come from SPEC "How we'll judge it". Every task's numbers are on the RTX 3060 and the Intel UHD.
+Status: **started 2026-11-04** (M0 signed off). Targets come from SPEC "How we'll judge it". Every task's numbers are on the RTX 3060 and the Intel UHD.
 
 Rules for every M1 task:
 - **Subgroups first.** A new compute kernel uses subgroups where they help, with one declared fallback for devices without them, and a test covers the fallback (DECISIONS 2026-11-04).

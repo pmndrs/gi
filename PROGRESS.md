@@ -21,6 +21,12 @@ Rules:
 
 ---
 
+## 2026-11-04 · T0.5, T0.12 · main session
+Did: recorded Dennis's M0 sign-off. T0.5 and T0.12 marked done; M1 started.
+Verified: Dennis, on the viewer: "the viewer runs". He had no other feedback and asked to start M1.
+Not verified: a structured walk through every viewer control by Dennis. Any later feedback on it goes to T1.8 (viewer integration).
+Next: merge PR #1 (`m0` → main); M1 from main.
+
 ## 2026-11-04 · B0 · implementer (opus), main session checked
 Did:
 - Emscripten pinned: emsdk 6.0.13 (commit 35659964) installs into the gitignored `tools/emsdk/` with `pnpm bvh:wasm`; `--check` rebuilds and compares. Dennis's JoltPhysics.js emsdk wasn't used.
