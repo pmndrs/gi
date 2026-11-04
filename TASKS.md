@@ -230,6 +230,22 @@ Status values: `todo`, `active (agent, date)`, `review`, `done`, `blocked (why)`
   1. A one-page M0 note covers what works, what doesn't, the baseline table and the spike answers.
   2. M1 tasks are on this board with done-when checks.
   3. You've signed off.
+- **Already decided for the M1 breakdown** (collected during M0, so they aren't lost):
+  - **Sponza add-ons as a main task** (Dennis: "make that a main task when we start m1"):
+    - the curtains (Intel 726650) join the default `sponza` scene, for colour bleeding;
+    - ivy, trees and candles (726656, 726662, 726676) go into a new, heavier `sponza-full` scene, for M4 alpha cutouts and M2 many lights;
+    - per add-on: licence text, size, triangle count and checksum, all download-only;
+    - done when the viewer's Sponza at bookmark 1 shows the curtains, the fetch verifies, and the Cycles reference is re-rendered diffuse-only.
+    - Nothing is downloaded before M1 starts.
+  - **GPU top-level refit** every frame, with occasional rebuilds (DECISIONS 2026-11-04).
+  - **One shared sky file** read by the viewer, Cycles, the native harness and DDGI, at a realistic sky-to-sun ratio. Early in M1, because the Sponza targets compare against references (T0.5 finding).
+  - **Three-adapter checks:**
+    - metalness folded into GI albedo;
+    - UV mappings passed through;
+    - vertex normals passed through.
+  - **No Babylon tasks** (DECISIONS 2026-11-04).
+  - **The subgroups-first rule** for new compute kernels.
+  - **The BVH framework** stages, once Dennis confirms `docs/design/bvh-framework.md`.
 
 ## Later
 

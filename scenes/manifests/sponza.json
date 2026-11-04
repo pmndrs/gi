@@ -1,7 +1,7 @@
 {
     "id": "sponza",
     "title": "Sponza (Intel New Sponza)",
-    "description": "Intel's New Sponza atrium (2022, textures reduced to 1k): the classic sunlit palace courtyard with colonnades, arches, curtains and a tree, for large interior and outdoor-light tests (camera bookmarks are rough guesses until reviewed).",
+    "description": "Intel's New Sponza atrium (2022, textures reduced to 1k): the architecture only (Intel's base package: colonnades, arches and the open courtyard, no curtains, plants or candles), for large interior and outdoor-light tests.",
     "tags": ["interior", "classic", "large", "textured", "alpha-cutout"],
     "units": "meters",
     "upAxis": "y",
