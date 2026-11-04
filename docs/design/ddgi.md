@@ -94,7 +94,7 @@ One workgroup per probe in this frame's update list. Workgroup size 256 (the def
 Thread 0 then decides, from the paper's rules (Majercik 2021, section 5):
 - **Relocation** (setting `relocation`, default on):
   - more than 25% back faces among the fixed rays: the probe is inside something; move it through the closest back face, to just past that surface (`closest back-face distance + 0.5 × minFrontFaceDistance`);
-  - otherwise, closest front face nearer than `minFrontFaceDistance` (default 0.1 × the smallest spacing): move away from it, along the farthest front-face direction, but only if that doesn't head back toward the closest one;
+  - otherwise, closest front face nearer than `minFrontFaceDistance` (default 0.02 × the smallest spacing since T1.5b; the first design said 0.1): move away from it, along the farthest front-face direction, but only if that doesn't head back toward the closest one;
   - otherwise, ease back toward the grid point.
   - A new offset is accepted only if it stays within ±0.45 of the spacing on every axis. Otherwise the old offset stays.
 - **Classification** (setting `classification`, default on):
@@ -108,6 +108,7 @@ Thread 0 then decides, from the paper's rules (Majercik 2021, section 5):
 - **distance texel:** weight `max(0, n·ω)^distanceSharpness` (default 50), accumulating `d = min(|distance|, clamp)` and `d²`.
 - **Hysteresis:** `new = mix(estimate, old, h)`, with `h = hysteresis` (default 0.97). The old value is read from the atlas with `textureLoad` (the atlas is bound for sampling in this kernel). `h = 0` for a probe in state 3.
   - **Big changes:** if the probe's **mean** irradiance (the average over all its interior texels) changed by more than `irradianceChangeThreshold` (default 0.25 of the old mean), lower `h` by a factor of 0.75 for the whole probe, so a light switch shows up quickly (the paper's "probe irradiance threshold").
+    - **Off by default since T1.5b (DECISIONS 2026-11-05):** every variant measured biased the field; M2 lowers hysteresis from `SceneChanges` instead. When enabled, the verdict comes from the probe's mean in the previous update.
     - *Revised after the T1.5a review:* the first version tested each texel. A single texel's estimate from about 224 rays is noisy, and bright outliers are the common kind, so they won the lower hysteresis and the field drifted high: Cornell read +9.5% instead of +4.4% with the rule off. Averaging over the probe's texels averages the noise out, while a real light change still trips it.
   - **Firefly clamp:** the change applied in one update is clamped to `maxBrightnessChange` (default 2.0, in irradiance units relative to the old value; a setting) so one lucky ray can't flash a probe.
 - Results go to the scratch buffer.

@@ -4,6 +4,18 @@ Settled choices, newest first. Each entry is short: the decision, why, and what 
 
 ## 2026-11-05
 
+- **DDGI's big-change rule is off by default in M1; M2 drives fast response from scene changes instead** (M1 lead, after T1.5b).
+  - Any rule that lowers hysteresis when a probe's new estimate looks very different reacts to ray noise too. Measured on Cornell (in-air volume, against the rule off): per texel +8%; on the probe's mean, applied to the same update, +22% (a light near the ceiling makes even the mean noisy and skewed); on the probe's mean, applied to the next update, −1.8 points, because it forgets bright spikes faster.
+  - All three are biases, so the default is off (`irradianceChangeThreshold` disabled). The lagged probe-mean rule stays as an opt-in setting.
+  - *Why not keep the one nearest the reference:* a bias that happens to cancel another on one scene doesn't generalise.
+  - *M2:* light changes arrive through `SceneChanges`, so the technique lowers hysteresis for the probes near a known change, deterministically. That's how the ≤ 0.5 s light-response target gets met.
+- **DDGI relocation and classification tuning** (T1.5b, each measured on both GPUs):
+  - `minFrontFaceDistance` defaults to 0.02 of the smallest spacing (the design said 0.1): two-room leak 1.08% → 0.86%. Changing the view or normal bias didn't help; with no view bias the thin wall leaked 6.9%.
+  - Relocation only moves a probe to a point inside the volume's probe box: two-room 0.86% → 0.78%.
+  - "No surface nearby" uses a reach of 1.5 spacings, not 1: at 1.0, 25 Cornell probes that sampling needs were switched off. Costs Cornell about 1 point.
+  - A probe also counts as inside geometry when the nearest thing its fixed rays see is a back face.
+  - Known limit: where solids touch with shared faces (the cabinet row), 3–5 probes stay active while up to 3.4 mm inside a board. Ray-based inside tests can't see through coincident faces. The classification check reports these; anything deeper fails.
+
 - **DDGI's update is split into a trace-and-shade kernel and a blend kernel, with ray results in a small buffer** (M1 lead, from T1.5a's measurement). The design (`docs/design/ddgi.md`) had one kernel that traced, shaded and blended with rays never leaving workgroup memory, and said to time it against a split version if the cost came near its budget. It did. At 512 probes × 256 rays: RTX 3060 2.48 ms one kernel against 1.22 ms split; Intel UHD 11.6 against 7.8 ms, with the same field. The single kernel is register-bound. Tracing stays inline: the trace kernel calls `giTraceClosest` itself. The platform's `encodeBatch` isn't used. T1.5b makes the switch.
 - **T1.5a's Cornell accuracy is measured on a volume with every probe in the air. T1.5b must pass on the manifest's own volume** (M1 lead).
   - **Correction after the T1.5a review (2026-11-05):** probe placement is the smaller part of the excess. Most of it came from the design's change-threshold rule, tested per texel on noisy estimates. With the rule off: in-air +4.38% (RTX) / +4.31% (Intel), manifest volume +6.73%. The rule moves to the probe's mean irradiance (design doc). With that, Cornell is gated on the **manifest volume** again, and the in-air number becomes an extra report. The path-traced check's finding (true irradiance rises 12–21% over the first 0.5 m off the floor) still stands as the reason probe placement matters.

@@ -231,6 +231,10 @@ One bullet per fact, each with its source. Add a bullet when something cost you 
 - **One kernel that traces, shades and blends is register-bound:** a split trace-and-shade kernel plus a blend kernel ran 2× faster on the RTX 3060 and 1.5× on Intel. Source: T1.5a.
 - **Both laptop GPUs offer `texture-formats-tier1`** in Chrome 156, so DDGI's distance atlas is `rg16float`. Source: T1.5a.
 - **Decoded ray directions in workgroup memory** (12 KB of 16 KB) made the update 21% faster than recomputing them per texel. Source: T1.5a.
+- **A big-change test on a probe's own noisy estimate biases the field:** per texel +8%, on the probe's mean +22% on Cornell. Deciding from the previous update reads 1.8 points low instead. Source: T1.5b.
+- **32 fixed rays miss surface slivers near the corners of the reach box;** at a reach of 1.5 spacings no needed probe switched off on Cornell or the cabinet row. Source: T1.5b.
+- **Coincident faces of touching solids defeat ray-based inside tests:** probes can sit a few mm inside a board and stay active. Source: T1.5b.
+- **After the trace/blend split, the Intel UHD spends about half its DDGI update time in the blend kernel.** Source: T1.5b.
 - **Leak fixes by measured effect:** double-sided distance (84×), then probe density (22×). Probe texture resolution made no difference. Reducing bias made leaks *worse*, by up to 34×. Source: the HomeFig DDGI branch.
 - **View bias:** 6 → 0 cut image error against a path tracer from 18.2% to 12.4% RMS on two-rooms. Bias pulled into furniture caused black patches. Source: the audit, the HomeFig branch.
 - **Recursion cap:** NVIDIA's native recursion albedo cap (0.9 vs 1.0) changes indirect light by about 23%. Match it when comparing against native. Source: the audit.

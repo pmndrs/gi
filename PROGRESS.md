@@ -21,6 +21,28 @@ Rules:
 
 ---
 
+## 2026-11-05 · T1.5b · implementer (opus); final checks with the big-change rule off, then review
+Did (9c6348a):
+- The single kernel is replaced by `ddgi/trace` (64 threads, one ray each, inline `giTraceClosest`, a ray buffer that grows when needed), then `ddgi/blend` (phases B and C), then `ddgi/write`.
+- Phase B: subgroups first, with a declared workgroup fallback. Relocation and classification per the design, with the tuning in DECISIONS. Offsets are used for ray origins and in sampling; off and not-yet-updated probes are skipped when sampling.
+- The `points` debug view, and a GPU state census for the counters (read back a few frames late, like timings).
+- The ms budget converted into probes in gi-platform.ts (`UnitCostMeter`).
+- T1.5a review notes: named uniform fields and a `DdgiVolume` struct, with a layout test; render.ts gates on the manifest volume; a GPU test page for the stochastic rounding and the border rule.
+Verified (agent; RTX 3060 and Intel UHD, headless Chrome 156, default limits), with the lagged big-change rule on:
+- Furnace mean −0.15% / −0.28% (worst point 3.7% / 3.8%).
+- Cornell on the manifest volume +4.09% / +4.03% (gate ±10%). In air +2.80% / +2.73%. RTX detail: 8×8-block FLIP 0.190, block mean error 6.7%, p95 block error 94% (the wall-slab front edges, where Cycles is about 0). Emissive Cornell full image +5.1%, FLIP 0.280.
+- Two-room leak 0.783% / 0.781% (≤ 1%). Thin wall 0.48% / 0.48%; closed door 0.035% / 0.036%.
+- Classification: everything the geometry demands; subgroups and the fallback gave identical states and offsets for all 5,256 probes.
+- lint, typecheck, test 654.
+Numbers (median of 3, under the lock, 512 probes; µs per probe, the probes 2 ms buys, and what a `gpuMs: 2` budget gave):
+- RTX, Cornell: 2.31 µs; 866 probes; 932 probes in 1.999 ms.
+- RTX, two-room: 3.90 µs; 513 probes; 514 probes in 1.997 ms.
+- Intel, Cornell: 13.5 µs; 147 probes; 133 probes in 1.94 ms.
+- Intel, two-room: 17.4 µs; 115 probes; 93 probes in 1.98 ms.
+- After the split, Intel spends about half its update time in `ddgi/blend`.
+Not verified: probes coming back on in a changing scene (M3); `resetHistory` and a second `prepare` on the GPU; dispatches past 65,535 probes; Sponza.
+Next: the lead turned the big-change rule off by default (DECISIONS); the agent re-runs the gates with it off.
+
 ## 2026-11-05 · T1.5a · implementer (opus); Opus review: pass with notes; fixes folded into T1.5b
 Did (e18ba01): `DDGITechnique` from `docs/design/ddgi.md`, in `packages/ddgi-core/src/techniques/ddgi/`:
 - the volume and three `texture_2d_array` atlases with octahedral borders; distances in `rg16float`, falling back to `rgba16float`;
