@@ -266,7 +266,7 @@ Rules for every M1 task:
 | T1.5b | DDGI classification and relocation | implementer | M | T1.5a | done (Opus review passed with notes, fixed; Cornell +5.7%, two-room leak 0.80%) |
 | T1.6 | Shading module and plain-WebGPU example | implementer | M | T1.5 | done (Opus review passed with notes, fixed; GI sampling 1440p inside view 0.905 ms median of 9 against 1.0) |
 | T1.7 | three.js adapter | implementer | M | T1.6 | review (52a7300; neutrality 1e-8; CPU 0.09–0.17 ms still) |
-| T1.8 | Viewer integration | implementer | M | T1.7 | active (implementer, 2026-11-05) |
+| T1.8 | Viewer integration | implementer | M | T1.7 | review (8fe593e; then Dennis tries it) |
 | T1.9 | M1 measurements against targets | gpu-tester, native-runner | M | T1.8 | todo (native matched-count runs started early, 2026-11-05) |
 | T1.10 | Sponza add-ons | wrangler + implementer | M | T1.1 (for the re-rendered reference) | done (Opus review passed with notes, fixed; candles waiting on Dennis) |
 | T1.11 | M1 note and M2 breakdown | main session | S | all M1 | todo |
@@ -349,6 +349,14 @@ Done-whens for the B stages are in `docs/design/bvh-framework.md`. B1a's: a 10k-
 
 - `sponza-candles`: an opt-in scene with a stated subset of Intel's 10,000 candle lights, for the many-lights stress test (DECISIONS 2026-11-05).
 - A texture sky in the native harness's miss shader (DECISIONS 2026-11-04).
+- Area lights on the platform, so an emitter's direct light can be analytic and DDGI holds only its bounced light (DECISIONS 2026-11-05, the viewer entry).
+- A public "acceleration structures built" signal on the platform (the viewer duck-types `rays.whenBuilt`).
+- Light-change response from `SceneChanges` (the big-change rule is off; DECISIONS 2026-11-05).
+
+## Carried to M3 (collected during M1)
+
+- Probes in empty space are switched off by classification ("no surface nearby"; 347 of Cornell's 1,728). Moving objects in mid-air then get no GI. M3 (moving objects) needs those probes active near receivers, or a fallback.
+- The three adapter's change-detection latency (up to 41 frames on Bistro without `markChanged`).
 
 ## Later
 

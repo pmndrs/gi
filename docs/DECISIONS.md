@@ -4,6 +4,11 @@ Settled choices, newest first. Each entry is short: the decision, why, and what 
 
 ## 2026-11-05
 
+- **The viewer, as built in T1.8** (M1 lead):
+  - **DDGI is the viewer's default technique.** The baselines (three's `LightProbeGrid`, VXGI) stay in the switcher and the wipe.
+  - **Default exposure per scene:** sponza and sponza-full +2 EV, bistro-exterior +1 EV, everything else 0. The known-answer scenes stay at 0, so their pixel values mean what the references mean.
+  - **Warm-up:** after the trees are built, DDGI runs up to 16 large update passes with a running average (at least 2, at most 8 s), then switches to the 2 ms budget. *Why:* at 2 ms Sponza updates only tens of probes a frame, and an unconverged field shouldn't be the first thing Dennis sees.
+  - **An emitter is lit once, by DDGI.** With DDGI on, the viewer turns off the analytic area light it adds for the emissive Cornell's lamp. DDGI's field already carries light seen straight from emissive surfaces, and the platform has no area lights in M1, so keeping both counts the lamp twice. The baselines keep the area light. *Revisit in M2* (the light buffer): an analytic emitter light plus DDGI holding only bounced light from it is the better split, but it needs area lights on the platform.
 - **The three.js adapter, as built in T1.7** (M1 lead):
   - **Engine neutrality is judged with Lambert materials:** means within 0.5%, and at most 0.5% of pixels off by more than 2%. three's standard material scales indirect diffuse by (1 − F_ss − F_ms), so it can't match a plain diffuse host. Measured: means within 1e-8, 0 pixels differ, on both GPUs.
   - **Every material is double-sided for GI by default,** whatever three's `side`, with a per-material opt-out (`material.userData.giSingleSided`). Most glTF materials are FrontSide, and single-sided GI would let rays pass through the backs of walls, which breaks DDGI's inside-geometry detection (contract `doubleSided`).
