@@ -87,14 +87,15 @@ export class PlatformHitShading implements HitShading {
     }
 
     /**
-     * Uploads changed settings and re-projects a changed environment, into the
-     * host's encoder. Called by the platform's `encode` after the scene copy's
-     * uploads and before any technique.
+     * Uploads changed settings and re-projects the environment when
+     * `environmentVersion` changed (every `setEnvironment` call bumps it), into
+     * the host's encoder. Called by the platform's `encode` after the scene
+     * copy's uploads and before any technique.
      */
-    encode(encoder: GPUCommandEncoder, environment: EnvironmentDescriptor): void {
+    encode(encoder: GPUCommandEncoder, environment: EnvironmentDescriptor, environmentVersion: number): void {
         if (this.disposed) throw new Error('@pmndrs/ddgi: hit shading was disposed');
         this.uploadSettings();
-        this.sky.encode(encoder, environment, { buffer: this.uniforms, offset: SHADE_UNIFORM_LAYOUT.skyIrradiance });
+        this.sky.encode(encoder, environment, environmentVersion, { buffer: this.uniforms, offset: SHADE_UNIFORM_LAYOUT.skyIrradiance });
     }
 
     dispose(): void {

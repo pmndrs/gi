@@ -213,7 +213,7 @@ export class GIPlatformImpl implements GIPlatform {
         const upload = this.sceneCopy.encode(encoder);
         this.rays.update(encoder, upload);
         // Settings, and the sky's projection when the environment changed.
-        this.shade.encode(encoder, this.sceneCopy.environment);
+        this.shade.encode(encoder, this.sceneCopy.environment, this.sceneCopy.environmentVersion);
 
         if (!frame.budget.paused) {
             const techniques = this.encodeOrder();

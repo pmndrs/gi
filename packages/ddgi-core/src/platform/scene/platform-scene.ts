@@ -239,6 +239,8 @@ export class PlatformScene implements SceneApi, SceneCopy {
     private readonly lights: LightEntry[] = [];
     private directionalLightCount = 0;
     private environmentDescriptor: EnvironmentDescriptor = { type: 'none' };
+    /** Bumped by every `setEnvironment`, also with the same object: the host's way to say a texture's contents changed. */
+    private environmentChanges = 0;
 
     private readonly meshSlots = new SlotAllocator();
     private readonly textureSlots = new SlotAllocator();
@@ -309,6 +311,15 @@ export class PlatformScene implements SceneApi, SceneCopy {
 
     get environment(): EnvironmentDescriptor {
         return this.environmentDescriptor;
+    }
+
+    /**
+     * How many times `setEnvironment` has been called. Hit shading re-projects
+     * the sky when this changes, so calling `setEnvironment` again with the
+     * same object (after changing its texture's contents) re-projects it (T1.4).
+     */
+    get environmentVersion(): number {
+        return this.environmentChanges;
     }
 
     /** World-space bounds of every visible instance that contributes to GI. A zero box at the origin when there are none. */
@@ -671,6 +682,7 @@ export class PlatformScene implements SceneApi, SceneCopy {
             throw new TypeError(`@pmndrs/ddgi: unknown environment type ${(environment as { type: string }).type}`);
         }
         this.environmentDescriptor = environment;
+        this.environmentChanges++;
         this.changeLog.addGlobal('environment');
         this.headerDirty = true;
     }

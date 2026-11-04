@@ -22,7 +22,8 @@
  *    irradiance has an exact answer, pi / 2 + (pi / 3) n, which the SH must hit.
  *    The same for a **cube** texture, filled with WebGPU's cube-face table.
  * 5. **`color` and `none`.**
- * 6. **Re-projection only on change**, counted.
+ * 6. **Re-projection only on change**, counted, and again when the same
+ *    environment object is set again after its texture changed.
  * 7. **Subgroups and the fallback** reduce the same sky to the same SH,
  *    and the fallback matches the CPU projection (`spherical-harmonics.ts`).
  */
@@ -169,13 +170,20 @@ function codedEquirectTexture(device: GPUDevice, width: number, height: number, 
     return texture;
 }
 
-function codedCubeTexture(device: GPUDevice, size: number): GPUTexture {
+/**
+ * A cube whose texels hold their own direction. With `threeConvention`, each
+ * texel holds (-x, y, z) instead: what three.js r187 shows there, since it
+ * looks every cube texture up at (-d.x, d.y, d.z) on WebGPU
+ * (nodes/accessors/CubeTextureNode.js, setupUV).
+ */
+function codedCubeTexture(device: GPUDevice, size: number, threeConvention = false): GPUTexture {
     const texture = device.createTexture({ label: 'direction-coded cube', size: { width: size, height: size, depthOrArrayLayers: 6 }, format: 'rgba16float', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
     for (let face = 0; face < 6; face++) {
         const halves = new Uint16Array(size * size * 4);
         for (let row = 0; row < size; row++) {
             for (let column = 0; column < size; column++) {
-                const colour = coded(cubeTexelDirection(face, column, row, size));
+                const direction = cubeTexelDirection(face, column, row, size);
+                const colour = coded(threeConvention ? [-direction[0], direction[1], direction[2]] : direction);
                 halves.set([floatToHalf(colour[0]), floatToHalf(colour[1]), floatToHalf(colour[2]), floatToHalf(1)], (row * size + column) * 4);
             }
         }
@@ -185,10 +193,13 @@ function codedCubeTexture(device: GPUDevice, size: number): GPUTexture {
 }
 
 /** Projects one environment with a stand-alone sky and reads the SH back. */
+/** Versions for the stand-alone skies: each call is a new environment. */
+let standaloneVersion = 0;
+
 async function projectStandalone(device: GPUDevice, sky: PlatformSky, environment: EnvironmentDescriptor): Promise<Float32Array> {
     const output = device.createBuffer({ label: 'standalone sky SH', size: SH_BYTES, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
     const encoder = device.createCommandEncoder({ label: 'standalone sky projection' });
-    sky.encode(encoder, environment, { buffer: output });
+    sky.encode(encoder, environment, ++standaloneVersion, { buffer: output });
     device.queue.submit([encoder.finish()]);
     const result = new Float32Array(await readBuffer(device, output, SH_BYTES));
     output.destroy();
@@ -341,6 +352,21 @@ await runGpuTest(
             assert(cubeIrradiance <= CODED_IRRADIANCE_TOLERANCE, `cube: irradiance off by ${percent(cubeIrradiance)}`);
             cube.destroy();
 
+            // A cube made for three.js, passed straight in, comes out mirrored in x (the contract notes this
+            // for the three adapter): along d the platform sees what three shows along (-d.x, d.y, d.z).
+            const threeCube = codedCubeTexture(device, 64, true);
+            setEnvironment({ type: 'texture', texture: threeCube, layout: 'cube' });
+            const threeCubeSamples = await sampleSky(kernel, probes);
+            let mirrored = 0;
+            probes.forEach((direction, index) => {
+                const seenByThree = coded([-direction[0], direction[1], direction[2]]);
+                for (let channel = 0; channel < 3; channel++) mirrored = Math.max(mirrored, Math.abs(threeCubeSamples.radiance[index][channel] - seenByThree[channel]));
+            });
+            results.threeConventionCubeMirrored = mirrored;
+            log(`a three-convention cube passed straight in reads as three's x-mirror (worst ${mirrored.toExponential(2)})`);
+            assert(mirrored <= CODED_RADIANCE_TOLERANCE, `a three-convention cube should read as the x-mirror of what three shows (off by ${mirrored})`);
+            threeCube.destroy();
+
             // 5. color and none.
             setEnvironment({ type: 'color', color: [0.2, 0.5, 1], intensity: 3 });
             const colourSamples = await sampleSky(kernel, probes);
@@ -366,6 +392,18 @@ await runGpuTest(
             assert(sky.projections === before, `the sky was projected ${sky.projections - before} times without an environment change`);
             setEnvironment({ type: 'color', color: [1, 1, 1] });
             assert(sky.projections === before + 1, 'a new environment must be projected exactly once');
+            // The same object again, after its texture's contents changed, must be projected again (contract/scene.ts).
+            const changing = codedEquirectTexture(device, 64, 32, 'rgba16float');
+            const changingEnvironment: EnvironmentDescriptor = { type: 'texture', texture: changing, layout: 'equirect' };
+            setEnvironment(changingEnvironment);
+            const constantHalves = new Uint16Array(64 * 32 * 4).fill(floatToHalf(0.25));
+            device.queue.writeTexture({ texture: changing }, constantHalves, { bytesPerRow: 64 * 8 }, { width: 64, height: 32 });
+            setEnvironment(changingEnvironment);
+            assert(sky.projections === before + 3, `setEnvironment with the same object must re-project (projections ${sky.projections - before}, expected 3)`);
+            const refreshed = await sampleSky(kernel, probes);
+            const worstRefreshed = Math.max(...refreshed.radiance.flat().map((value) => Math.abs(value - 0.25)));
+            assert(worstRefreshed <= 1e-3, `after the same object was set again, the sky still shows the old contents (off by ${worstRefreshed})`);
+            changing.destroy();
             results.projectionsCounted = true;
         } finally {
             platform.dispose();

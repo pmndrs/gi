@@ -283,9 +283,9 @@ export type LightChanges =
  * a small engine-neutral form by compute: irradiance as spherical harmonics
  * (bands 0, 1, 2 and 4) and a 256 x 128 equirectangular radiance map for rays
  * that miss, so tracing never samples the host's environment format directly.
- * The projection runs in the next `encode` after `setEnvironment`, and only
- * then: a texture is read at that moment, so after changing its contents call
- * `setEnvironment` again.
+ * The projection runs in the next `encode` after a `setEnvironment` call, and
+ * only then: a texture is read at that moment, so after changing its contents
+ * call `setEnvironment` again (the same object is fine; every call re-projects).
  *
  * World space is right-handed with +Y up, as in three.js.
  *
@@ -304,7 +304,13 @@ export type LightChanges =
  *   runs clockwise seen from above (+Y). u wraps at -X.
  *
  * **`cube` layout:** WebGPU's own cube addressing, looked up with the world
- * direction as it is (layers +X, -X, +Y, -Y, +Z, -Z).
+ * direction d as it is: layers +X, -X, +Y, -Y, +Z, -Z, each face's (s, t)
+ * as in the WebGPU spec's face-selection table (the same as Vulkan's and
+ * D3D's). **three.js differs:** r187 looks every cube texture up at
+ * (-d.x, d.y, d.z) on WebGPU (`nodes/accessors/CubeTextureNode.js`,
+ * `setupUV`), so a three cube texture passed straight in comes out mirrored
+ * in x. The three adapter has to account for that (T1.7); an equirect
+ * texture has no such difference.
  *
  * **`rotationY`** turns the environment about +Y, counter-clockwise seen from
  * above (right-handed): what the unturned texture shows along d appears along

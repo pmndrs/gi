@@ -133,7 +133,8 @@ export class PlatformSky {
     private readonly placeholderCube: GPUTexture;
     private proceduralTexture: GPUTexture | null = null;
     private pipelines: { filterable: ProjectionPipelines; unfilterable: ProjectionPipelines } | null = null;
-    private projected: EnvironmentDescriptor | null = null;
+    /** The `version` last projected; null before the first projection. */
+    private projectedVersion: number | null = null;
     private projectionCount = 0;
     private disposed = false;
 
@@ -229,14 +230,19 @@ export class PlatformSky {
     }
 
     /**
-     * Projects the environment if it changed since the last call, writing the
-     * radiance map and the irradiance SH (into `irradianceSh`, a range of a
-     * buffer with STORAGE usage, {@link SH_BYTES} long). Records into the
-     * host's encoder; returns whether it projected.
+     * Projects the environment if `version` differs from the one last
+     * projected, writing the radiance map and the irradiance SH (into
+     * `irradianceSh`, a range of a buffer with STORAGE usage, {@link SH_BYTES}
+     * long). Records into the host's encoder; returns whether it projected.
+     *
+     * Why a version and not the descriptor's identity: the contract tells
+     * hosts to call `setEnvironment` again after changing a texture's
+     * contents, and they may pass the same object. The platform passes
+     * `PlatformScene.environmentVersion`, which every call bumps.
      */
-    encode(encoder: GPUCommandEncoder, environment: EnvironmentDescriptor, irradianceSh: GPUBufferBinding): boolean {
+    encode(encoder: GPUCommandEncoder, environment: EnvironmentDescriptor, version: number, irradianceSh: GPUBufferBinding): boolean {
         if (this.disposed) throw new Error('@pmndrs/ddgi: the sky was disposed');
-        if (environment === this.projected) return false;
+        if (version === this.projectedVersion) return false;
         const pipelines = this.pipelines;
         if (!pipelines) throw new Error('@pmndrs/ddgi: the sky projection is not compiled yet; call prepare() first');
 
@@ -264,7 +270,7 @@ export class PlatformSky {
         pass.dispatchWorkgroups(1);
         pass.end();
 
-        this.projected = environment;
+        this.projectedVersion = version;
         this.projectionCount++;
         return true;
     }

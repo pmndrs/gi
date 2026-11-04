@@ -261,7 +261,7 @@ Rules for every M1 task:
 | T1.1 | Shared sky | implementer | S | none | done (Opus re-review passed; viewer check redefined, DECISIONS) |
 | T1.2 | Platform scene copy | implementer | M | none | done (Opus review passed with notes, all fixed; both GPUs) |
 | T1.3 | Tracer as a platform module | implementer | M | T1.2 (B0 as built) | done (Opus review passed with notes, fixed; any-hit 1.03-1.22× three-mesh-bvh on the RTX, except Bistro interior 0.93×) |
-| T1.4 | Hit shading | implementer | M | T1.1, T1.3 | review (72ebc0e) |
+| T1.4 | Hit shading | implementer | M | T1.1, T1.3 | done (Opus review passed with notes, fixed; procedural `intensity` meaning open with Dennis) |
 | T1.5a | DDGI field and update loop | main session designs, implementer builds | M | T1.4 | active (implementer, 2026-11-05) |
 | T1.5b | DDGI classification and relocation | implementer | M | T1.5a | todo |
 | T1.6 | Shading module and plain-WebGPU example | implementer | M | T1.5 | todo |
