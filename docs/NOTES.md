@@ -99,7 +99,15 @@ One bullet per fact, each with its source. Add a bullet when something cost you 
 - **Bash tool and heredocs:** a long chain of `cat <<'EOF'` file writes in one Bash call failed to parse and created nothing. Use the Write tool for new files.
 - **Empty modules in the build:** vite and rollup warn "Generated empty chunks" while the packages only contain `export {}`. That is expected until real code lands. `passWithNoTests` in `vitest.config.ts` keeps `pnpm test` green with no tests; remove it once there are tests.
 - **pnpm banner:** pnpm 10.23.0 prints an "update available" box (pnpm 12). `packageManager` stays `pnpm@10.23.0`, the version installed here.
-- **Native harness device pick:** the fork's `Vulkan.cpp` skips any GPU whose name lacks "RTX 3060". This must be made configurable (T0.6). Source: the audit.
+- **Native harness device pick:** upstream skipped any GPU whose name lacks "RTX 3060". The fork (`m0-harness`) picks the GPU by ini `app.gpu` or the env var `RTXGI_GPU`, and otherwise takes the first GPU with ray tracing. Source: T0.6.
+- **The native harness skips a converged volume.** Once probe variability drops below 0.4 after 16 samples, trace and blend stop running. Time it with the fork option `probeVariability.skipConverged=0`, and don't use `native.csv` rows from commit 9bd7f3c. Source: T0.6.
+- **Native ray counts:**
+  - Classification leaves 30–70% of probes active. Inactive probes trace only the 32 fixed rays and aren't blended (`ProbeTraceRGS.hlsl:69`, `ProbeBlendingCS.hlsl:397`).
+  - Active probes trace all rays, but only rays 32 and up are shaded and blended. Each shaded hit also casts one shadow ray per light, which isn't counted.
+  - So compare on rays actually traced, not probes × rays. Sponza traces 2.01 M rays in 9.39 ms, about 214 M rays/s with hardware RT on the RTX 3060 under Vulkan.
+  - Source: T0.6 and its review.
+- **Native Vulkan mesh limit:** upstream's `ByteAddrBuffer[]` array holds 2048 entries, which caps a scene at about 1,022 meshes; Bistro lost the GPU. The fork sizes the array from the scene (1df1f97). Source: T0.6.
+- **The native frame rate is CPU-bound.** Untimed main-thread work makes it 50–87 ms per frame on Sponza, against about 20 ms of GPU work, so compare GPU numbers only. Source: T0.6.
 - **Native harness keys:** F2 dumps DDGI textures, F4 runs a 1024-frame benchmark to CSV, J toggles the performance overlay, R reloads shaders and config, M switches between DDGI and the path tracer.
 - **Installed tools:** RenderDoc 1.47.0, PIX 2603.25, Blender, NVIDIA FLIP (`python -m flip_evaluator`), Vulkan SDK 1.3.283, Nsight Systems 2022.4, Nsight Compute 2022.3. Nsight Graphics needs a manual install.
 
