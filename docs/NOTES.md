@@ -25,6 +25,14 @@ One bullet per fact, each with its source. Add a bullet when something cost you 
 - **`LightProbeGrid`:** L2 SH, raster cubemap bake, no visibility, re-bakes overwrite values. Sponza (490 probes, 32² faces) bakes in 3.1 s on a Pascal GPU. PR #35174, which adds DDGI visibility, is a stalled draft: Sponza shading goes 3.08 → 4.00 ms (8 probes) or 3.38 ms (4 probes).
 - **VXGI:** voxel cone tracing at 128³ by default, gathered as a full-screen pass that needs TRAA. Lights are dynamic; geometry needs full re-voxelization. Introduced in PR #34402 (r186).
 
+## three-mesh-bvh (checked 2026-11-04)
+
+- **Version and shape:** v0.9.18 (3 Nov 2026, MIT); default branch `master`. The WebGPU path is `three-mesh-bvh/webgpu` (`BVHComputeData`). It runs only inside three's node system (TSL `FunctionNode`s, three r185+), not on a bare `GPUDevice`, and its API is marked unstable. Source: `src/webgpu/BVHComputeData.js:83,144-149`.
+- **Layout:** 64-byte nodes with both child boxes (Aila–Laine, PR #945); triangles as a u32 index buffer plus interleaved `vec4f` positions; 4 storage buffers; a 60-entry stack. Two levels: SAH clusters (at most 64 primitives) under a top level, with per-instance entries; `updateTransforms()` refits the top level only, and skinned meshes are baked on the CPU. Source: `packBVHBufferUtils.js:9`, `ClusteredBVH.js:138-209`.
+- **Benchmark trap:** the per-mesh trees from `new MeshBVH(geometry)` default to the CENTER split, not SAH (`Constants.js:80-84`). Pass `{ strategy: SAH }` for a fair comparison.
+- **Speed claims:** the "about 2×" upstream gains were *build* times (PRs #942/#943). The Aila–Laine layout gave about 1.12× on raycasts (PR #945, no hardware stated). No published rays/s figure exists. This corrects SPEC's "roughly doubled ray throughput" line.
+- **three's `RayTracedRadiosity`** flattens static meshes into one world-space geometry and doesn't use the top level. It was merged to three master on 2 Nov 2026 (#35302), after r187.
+
 ## WebGPU
 
 - **Compatibility mode:** devices may allow 0 fragment-stage storage buffers. Keep fragment-side data in textures.
