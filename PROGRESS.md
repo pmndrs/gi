@@ -51,7 +51,7 @@ Spot checks of today's RTX numbers ("changed" = more than about 10%; new rows ad
 Not clean: the first trace-bench set had runs 4–10× slower than the rest (Sponza 117, 23, 9 Mrays/s), marked `note/gpu_busy,1`. A second set had the same problem and wasn't appended. The cause wasn't found; other agents' correctness pages and Dennis's apps share the GPU. Native runs were no longer flat to 1% as the locked ones were.
 Next: T1.9 measures with the clock note and on an idle machine where possible. Variance matters more than the clock now.
 
-## 2026-11-05 · T1.7 · implementer (opus); Opus review: fail (Bistro CPU didn't reproduce), fixes in progress
+## 2026-11-05 · T1.7 · implementer (opus); Opus review: fail (Bistro CPU didn't reproduce), fixed; re-review running
 Did (d0e3525), in `packages/ddgi-three`:
 - `GILight`: a `Light` subclass with a registered node. One `wgslFn` built from `gi.shading.parameters`, returning irradiance and coverage together (coverage computed only when an environment or `LightProbeGrid` needs it). `ExternalTexture`s re-read every render, `renderGroup` vec4s, three's light-probe slot at priority 1, given up at intensity 0. The env-diffuse workaround wraps the lighting model's `indirect` (Lambert and Phong get no env diffuse at all; measured 0).
 - `SceneSync`: meshes, groups, normals, uv and uv1, metalness-folded materials, texture handles with `UvMapping`, `InstancedMesh`, visibility, lights, environment; the cube mirror and the environment upload.
@@ -80,7 +80,19 @@ Review (Opus): lint, typecheck, build, test 749; three-neutrality, three-environ
 - the LightProbeGrid-shaped volume SPEC promises;
 - the core listening for `uncapturederror` (SPEC);
 - a docs/api/three.md page.
-Known gap for the fix round: textured materials bounce with their base colour only (the core samples no textures until M4), so textured scenes read too bright. The adapter should fold in each texture's average colour.
+Fixes (a97e29a):
+- per-frame allocations removed;
+- the walk halved to 64 objects and 8 edit checks per frame. Latency of a static object's first unmarked move: 41 frames on Bistro (23 measured, about 0.7 s), 10 on Sponza (3 measured); 1 frame with `markChanged`;
+- re-parenting fixed, with a failing-without test;
+- coverage when a material has its own envMap;
+- camera layers documented as not mirrored;
+- texture-average colour folded into GI albedo and emission (until the M4 atlas);
+- `GIVolume`, the LightProbeGrid-shaped volume (SPEC);
+- `createGI` forwards `uncapturederror` (SPEC);
+- `docs/api/three.md`.
+RTX CPU, three runs, still / moving ms: Sponza 0.094/0.142, 0.063/0.103, 0.098/0.145; Bistro interior 0.117/0.179, 0.111/0.172, 0.153/0.181. The Intel-session runs (Sponza 0.259, Bistro 0.206) were invalid: another process held the RTX at 87–100% outside the lock. To re-time when idle.
+lint, typecheck, test 779 and build pass; three-neutrality, three-environment and spike-three pass on both GPUs (agent).
+Known gap, now handled: textured materials bounce with their base colour only (the core samples no textures until M4), so textured scenes read too bright. The adapter should fold in each texture's average colour.
 
 ## 2026-11-05 · T1.6 · implementer (opus); Opus review: pass with notes, fixed; re-timed at normal clocks; done
 Did:
