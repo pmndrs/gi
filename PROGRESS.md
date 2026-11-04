@@ -21,6 +21,21 @@ Rules:
 
 ---
 
+## 2026-11-04 · T0.7 follow-up · implementer (opus), after an Opus re-review
+Did: six fixes from the second review.
+- **Matte references.** The Cycles material reset unlinks inputs before setting them, so references are pure Lambert. That includes Diffuse Roughness, which turns on Oren-Nayar in Blender 4.3+. A check stops the render if anything is left non-neutral.
+- **Bench lock** (`tools/reference/bench-lock.ts`), rewritten with an owner file (pid, process start time, label, command). It takes over a lock only when its owner is dead. It has a CLI: `status`, `run -- cmd`, `acquire --pid`, `release --pid`.
+- **Path tracer materials** keep their textures, alpha and normal maps.
+- **Compare** masks NaN/Inf pixels before block averaging and before FLIP.
+- **`--ppd` help** says that a user-given value is also divided by the block size.
+- **A camera looking straight down** gets the same nudge as three's `lookAt`.
+Verified (I re-ran it): `vitest tools/compare tools/reference` 37 pass. Lint and typecheck are clean. `bench-lock.ts status` reports the live T0.10 holder correctly.
+The agent reports:
+- `--calibrate` 7/7 within 0.05%, including a new linked-metal case;
+- the Cornell path tracer at 1024 spp is +0.01% against Cycles.
+Numbers: the Sponza 4096 spp re-render, diffuse-only, took 997 s. 76 texture links were removed. Full mean 0.0341 → 0.0349 (+2.4%); indirect 0.0042 → 0.0050 (+18%). The old "metal" texels had absorbed bounce light. Cornell, two-room and furnace have no texture links, so their references stand.
+Deviation: a lock folder with no owner file counts as stale only after 3 hours, because older holders still use a bare `mkdir`. Lower it once every holder writes `owner.json`.
+
 ## 2026-11-04 · T0.4 follow-up · implementer (opus), after an Opus re-review
 Did: seven fixes from the second review.
 - **Blender GLBs:** checked per bufferView (hashes in `tools/assets/glb-views/<id>.json`). Only TANGENT views may vary. Indices, images, JSON and padding are pinned exactly, and Blender is pinned to 4.5.0.

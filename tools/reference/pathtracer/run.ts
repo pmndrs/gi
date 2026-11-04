@@ -171,7 +171,7 @@ async function main(): Promise<void> {
                 { name: 'pathtracer', urlPath: '/index.html', description: 'path-traced reference', expectFailure: false, expectMessage: null, manual: false, timeoutMs },
                 { timeoutMs, expectFailure: false, screenshotDir: join(outDir, 'logs'), gpuLabel: gpu },
             );
-        });
+        }, { what: `pathtracer ${job.scene} / ${cameraName}` });
     } finally {
         await (session as BrowserSession | null)?.close();
     }

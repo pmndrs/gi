@@ -45,8 +45,12 @@ function killBlender(child: ChildProcess): Promise<void> {
     });
 }
 
-/** Blender 4.5 is pinned: the compositor and glTF importer APIs used here differ in 5.x. */
-const BLENDER_VERSION = '4.5';
+/**
+ * Blender 4.5.0 is pinned: the compositor and glTF importer APIs used here differ
+ * in 5.x, and every reference so far was rendered with 4.5.0. `findBlender`
+ * matches all three parts of the version.
+ */
+const BLENDER_VERSION = '4.5.0';
 
 async function main(): Promise<void> {
     const forwarded = process.argv.slice(2);
@@ -107,7 +111,8 @@ async function main(): Promise<void> {
             });
         });
 
-    const result = await withBenchLock(render);
+    const scene = forwarded[forwarded.indexOf('--scene') + 1] ?? '?';
+    const result = await withBenchLock(render, { what: calibrate ? 'cycles calibrate' : `cycles ${scene}` });
     if (calibrate) return;
     if (!result) throw new Error('Blender finished without reporting a result');
     const meta = JSON.parse(result);

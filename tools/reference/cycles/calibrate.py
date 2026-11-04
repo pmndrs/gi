@@ -18,6 +18,10 @@ irradiance E has radiance E / pi. The cases:
              emission 0.25 has radiance Le / (1 - rho) = 0.5 everywhere, of which
              the camera-visible emission is 0.25, direct light 0.125 and
              indirect 0.125 (rho^2 Le / (1 - rho)).
+  linked metal  make_materials_diffuse_only on a Principled metal whose Metallic
+             and Roughness are linked (as the glTF importer links them to a
+             texture), seen by a camera looking straight down: E / pi with the
+             sun's E, and the straight-down camera basis matches three's.
 
 Prints one line per case and exits with code 1 if any is outside tolerance.
 """
@@ -49,6 +53,27 @@ def white_floor():
     diffuse.inputs['Color'].default_value = (1.0, 1.0, 1.0, 1.0)
     output = nodes.new('ShaderNodeOutputMaterial')
     material.node_tree.links.new(diffuse.outputs[0], output.inputs[0])
+    plane.data.materials.append(material)
+
+
+def glossy_metal_floor():
+    """
+    The same plane, but with the Principled BSDF the glTF importer makes for a
+    textured metal: base colour white, Metallic, Roughness and Specular IOR Level
+    LINKED to other nodes (Value nodes standing in for the metallicRoughness
+    texture). Only make_materials_diffuse_only stands between this and a mirror.
+    """
+    bpy.ops.mesh.primitive_plane_add(size=40, location=(0, 0, 0))
+    plane = bpy.context.object
+    material = bpy.data.materials.new('linked-metal')
+    material.use_nodes = True
+    tree = material.node_tree
+    principled = tree.nodes['Principled BSDF']
+    principled.inputs['Base Color'].default_value = (1.0, 1.0, 1.0, 1.0)
+    for name, value in (('Metallic', 1.0), ('Roughness', 0.2), ('Specular IOR Level', 0.5)):
+        source = tree.nodes.new('ShaderNodeValue')
+        source.outputs[0].default_value = value
+        tree.links.new(source.outputs[0], principled.inputs[name])
     plane.data.materials.append(material)
 
 
@@ -116,11 +141,40 @@ def case_spot():
     return 'spot 60 cd, cone 10 to 30 degrees, read at 20 degrees', measured, expected
 
 
+def case_linked_metal_from_above():
+    """
+    Two fixes at once: a Principled metal whose Metallic and Roughness are linked
+    (as the glTF importer links them to a texture) must come out pure Lambert, and
+    a camera looking straight down must get a usable basis (forward x up is zero
+    there). Sun 3 lux at 45 degrees on a white plane: radiance 3 cos(45) / pi. A
+    metal would read about 0 here (its highlight points away from the camera).
+    """
+    scene = bs.reset_scene()
+    bs.configure_cycles(scene, 32, 32, 64, 0, 'cpu')
+    glossy_metal_floor()
+    if not bs.find_non_diffuse_surfaces():
+        raise SystemExit('calibration setup is wrong: the linked metal should be found before the reset')
+    bs.make_materials_diffuse_only()
+    bs.require_diffuse_only()
+    bs.add_environment(scene, {'type': 'none'})
+    lux = 3.0
+    bs.add_manifest_lights(scene, [{'type': 'directional', 'color': [1, 1, 1], 'intensity': lux, 'direction': [1, -1, 0]}])
+    camera = bs.add_camera(scene, [0.0, 1.0, 0.0], [0.0, 0.0, 0.0], 1.0)
+    # three's fallback: image up is Blender +Y (manifest -Z) when looking straight down.
+    image_up_y = camera.matrix_world.col[1][1]
+    _, files = bs.render_to_files(scene, SCRATCH, 'case-full', 'case-indirect')
+    return [
+        ('linked metal reset to Lambert, seen straight down', centre_value(files[0]), lux * math.cos(math.radians(45)) / math.pi),
+        ('straight-down camera: image up is Blender +Y (y component)', image_up_y, 1.0),
+    ]
+
+
 def case_furnace():
     scene = bs.reset_scene()
     bs.configure_cycles(scene, 96, 64, 128, 0, 'cpu')
     bs.import_gltf(os.path.join(REPO_ROOT, 'assets', 'generated', 'furnace-room.glb'))
     bs.make_materials_diffuse_only()
+    bs.require_diffuse_only()
     bs.add_environment(scene, {'type': 'none'})
     manifest = bs.read_json(os.path.join(REPO_ROOT, 'scenes', 'manifests', 'furnace-room.json'))
     camera = manifest['cameras'][0]
@@ -134,7 +188,7 @@ def case_furnace():
 
 def main():
     os.makedirs(SCRATCH, exist_ok=True)
-    results = [case_point(), case_sun(), case_spot()] + case_furnace()
+    results = [case_point(), case_sun(), case_spot()] + case_linked_metal_from_above() + case_furnace()
     failed = 0
     print('CALIBRATION (Blender %s)' % bpy.app.version_string)
     for name, measured, expected in results:

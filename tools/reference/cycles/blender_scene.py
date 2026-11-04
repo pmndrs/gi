@@ -164,6 +164,57 @@ def manifest_transform_to_blender(transform):
     return matrix
 
 
+# Principled BSDF inputs that must hold these values for the surface to be pure
+# Lambert (Blender 4.5 names). Everything else that shapes the look is kept:
+# Base Color (and its texture), Alpha (cutouts), Emission Color and Strength,
+# and Normal (a normal map bends the shading normal; it is geometry, not a lobe).
+#
+#   Metallic 0              a metal has no diffuse at all
+#   Roughness 1             no glossy lobe is left once specular is 0; 1 is the safe value
+#   Diffuse Roughness 0     above 0, Blender 4.3+ shades with Oren-Nayar, not Lambert
+#   Subsurface Weight 0     subsurface replaces part of the diffuse
+#   Specular IOR Level 0    makes the dielectric F0 zero: no glossy lobe, and no energy
+#                           taken from the diffuse for it (0.5 means "F0 from the IOR")
+#   Specular Tint white     no effect at level 0; neutral so the check stays simple
+#   Anisotropic, Transmission Weight, Coat Weight, Sheen Weight,
+#   Thin Film Thickness 0   the remaining lobes, all off
+#
+# Blender's glTF importer LINKS some of these to textures: Metallic and Roughness
+# go to the metallicRoughness texture (24 of the 28 New Sponza materials), and the
+# KHR_materials_* extensions link Specular, Sheen, Coat, Transmission and so on. A
+# linked socket ignores its default_value, so each one is unlinked first, then set.
+NEUTRAL_PRINCIPLED_INPUTS = {
+    'Metallic': 0.0,
+    'Roughness': 1.0,
+    'Diffuse Roughness': 0.0,
+    'Subsurface Weight': 0.0,
+    'Specular IOR Level': 0.0,
+    'Specular Tint': (1.0, 1.0, 1.0, 1.0),
+    'Anisotropic': 0.0,
+    'Transmission Weight': 0.0,
+    'Coat Weight': 0.0,
+    'Sheen Weight': 0.0,
+    'Thin Film Thickness': 0.0,
+}
+
+# Shader nodes that add a non-diffuse lobe by themselves. The glTF importer does
+# not create any of them, so finding one means the scene is not what we expect.
+NON_DIFFUSE_SHADER_NODES = {
+    'BSDF_ANISOTROPIC',
+    'BSDF_GLASS',
+    'BSDF_GLOSSY',
+    'BSDF_HAIR',
+    'BSDF_HAIR_PRINCIPLED',
+    'BSDF_METALLIC',
+    'BSDF_REFRACTION',
+    'BSDF_SHEEN',
+    'BSDF_TOON',
+    'BSDF_TRANSLUCENT',
+    'BSDF_VELVET',
+    'SUBSURFACE_SCATTERING',
+}
+
+
 def make_materials_diffuse_only():
     """
     Turns every imported material into a Lambertian surface that keeps its
@@ -172,29 +223,84 @@ def make_materials_diffuse_only():
     The platform models diffuse albedo only (see three-scene.ts: roughness 1,
     metalness 0), and GI references for DDGI should isolate diffuse transport.
     Blender's glTF importer builds a Principled BSDF with specular F0 = 4 percent
-    even at roughness 1; that is zeroed here so the surface is truly Lambertian.
+    even at roughness 1, and links Metallic and Roughness to textures. Every
+    input in NEUTRAL_PRINCIPLED_INPUTS is unlinked and set, so the surface is
+    truly Lambertian. Returns (Principled BSDFs reset, texture links removed).
     """
     changed = 0
+    unlinked = 0
+    for material in bpy.data.materials:
+        if not material.use_nodes:
+            continue
+        tree = material.node_tree
+        for node in tree.nodes:
+            if node.type != 'BSDF_PRINCIPLED':
+                continue
+            for name, value in NEUTRAL_PRINCIPLED_INPUTS.items():
+                unlinked += force_input(tree, node, name, value)
+            changed += 1
+    return changed, unlinked
+
+
+def force_input(tree, node, name, value):
+    """Removes every link into input `name`, then sets its value. Returns the number of links removed."""
+    socket = node.inputs.get(name)
+    if socket is None:
+        return 0
+    links = list(socket.links)
+    for link in links:
+        tree.links.remove(link)
+    socket.default_value = value
+    return len(links)
+
+
+def find_non_diffuse_surfaces():
+    """
+    Every reason a material in the scene is not pure Lambert, as readable lines
+    ("'Material' / 'Principled BSDF': Metallic is linked"). Empty when the scene
+    is clean. render.py runs it after make_materials_diffuse_only and refuses to
+    render if it finds anything.
+    """
+    problems = []
     for material in bpy.data.materials:
         if not material.use_nodes:
             continue
         for node in material.node_tree.nodes:
+            where = f'{material.name!r} / {node.name!r}'
+            if node.type in NON_DIFFUSE_SHADER_NODES:
+                problems.append(f'{where}: a {node.type} shader node')
+                continue
             if node.type != 'BSDF_PRINCIPLED':
                 continue
-            set_input(node, 'Metallic', 0.0)
-            set_input(node, 'Roughness', 1.0)
-            set_input(node, 'Specular IOR Level', 0.0)
-            set_input(node, 'Transmission Weight', 0.0)
-            set_input(node, 'Coat Weight', 0.0)
-            set_input(node, 'Sheen Weight', 0.0)
-            changed += 1
-    return changed
+            for name, neutral in NEUTRAL_PRINCIPLED_INPUTS.items():
+                socket = node.inputs.get(name)
+                if socket is None:
+                    continue
+                if socket.is_linked:
+                    problems.append(f'{where}: {name} is linked')
+                elif not values_match(socket.default_value, neutral):
+                    problems.append(f'{where}: {name} is {format_value(socket.default_value)}, needs {format_value(neutral)}')
+    return problems
 
 
-def set_input(node, name, value):
-    socket = node.inputs.get(name)
-    if socket is not None and not socket.is_linked:
-        socket.default_value = value
+def require_diffuse_only():
+    """Stops the run, listing every culprit, if any material is not pure Lambert."""
+    problems = find_non_diffuse_surfaces()
+    if problems:
+        listing = '\n  '.join(problems)
+        raise SystemExit(f'{len(problems)} material input(s) are not diffuse-only; refusing to render a biased reference:\n  {listing}')
+
+
+def values_match(actual, wanted, tolerance=1e-6):
+    if isinstance(wanted, tuple):
+        return all(abs(a - w) <= tolerance for a, w in zip(actual, wanted))
+    return abs(actual - wanted) <= tolerance
+
+
+def format_value(value):
+    if isinstance(value, (int, float)):
+        return f'{value:g}'
+    return '(' + ', '.join(f'{component:g}' for component in value) + ')'
 
 
 # ---------------------------------------------------------------------------
@@ -283,11 +389,19 @@ def add_camera(scene, position, target, fov_y_deg):
     """
     An explicit basis, not look-at constraints: forward = target - position,
     right = forward x up, up = right x forward; Blender cameras look down their
-    local -Z with +Y up, so the matrix columns are (right, up, -forward).
+    local -Z with +Y up, so the matrix columns are (right, up, -forward). A
+    camera looking straight up or down gets three.js's fallback (see below).
     """
     eye = mathutils.Vector(to_blender_space(position))
     forward = (mathutils.Vector(to_blender_space(target)) - eye).normalized()
     world_up = mathutils.Vector((0.0, 0.0, 1.0))
+    if forward.cross(world_up).length < 1e-6:
+        # Looking straight up or down: forward x up is zero and has no direction.
+        # three's Matrix4.lookAt (camera.up = +Y) then nudges its backward axis by
+        # 1e-4 along three's +Z, which is forward nudged along three's -Z, i.e.
+        # Blender +Y. Doing the same frames the same picture as the viewer and the
+        # path tracer: image right is +X; image up is Blender +Y looking down, -Y up.
+        forward = (forward + mathutils.Vector((0.0, 1e-4, 0.0))).normalized()
     right = forward.cross(world_up).normalized()
     up = right.cross(forward)
 

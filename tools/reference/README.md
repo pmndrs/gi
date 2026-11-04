@@ -36,13 +36,16 @@ Both sides, matched on purpose:
 
 | | Cycles | Path tracer |
 | --- | --- | --- |
-| Materials | diffuse only (Principled: metallic 0, specular 0, roughness 1) | `MeshPhysicalMaterial`, roughness 1, metalness 0, `specularIntensity` 0 |
+| Materials | diffuse only (Principled: metallic 0, specular 0, roughness 1; texture links into those inputs removed, then checked) | `MeshPhysicalMaterial`, roughness 1, metalness 0, `specularIntensity` 0 |
+| Kept from the source material | base colour and its texture, alpha, emission, normal map | the same (`map`, `alphaMap`, `alphaTest`, `transparent`, `opacity`, `emissive*`, `normalMap`, vertex colours, `side`) |
 | Bounces | 32 | 33 (the library counts the camera hit as the first) |
 | Clamping | off (Blender's default indirect clamp of 10 is a bias) | off (the library's default indirect clamp is 10) |
 | Denoising | off | off (see "Denoiser") |
 | Pixel filter | box, 1 px | jitter inside the pixel |
 | Environment | none = black | none = black; other types unsupported |
 | Direct light range | not applied | three's range window is applied (see below) |
+
+**Diffuse only, checked.** Blender's glTF importer links Metallic and Roughness to the metallicRoughness texture (24 of the 28 New Sponza materials), and a linked input ignores the value set on it. So `make_materials_diffuse_only` unlinks every input in `NEUTRAL_PRINCIPLED_INPUTS` (Metallic, Roughness, Diffuse Roughness, Subsurface, Specular IOR Level and Tint, Anisotropic, Transmission, Coat, Sheen, Thin Film) and then sets it. `render.py` then refuses to render, listing each culprit, if any Principled BSDF still has one of those inputs linked or not neutral, or if a glossy-type shader node is present. On Sponza it removes 76 texture links. Sponza references rendered before 2026-11-04 16:00 had metal texels with no diffuse and a glossy sun highlight; the re-render is 2.3 percent brighter overall and 17.9 percent brighter in indirect light (mean 0.0341 to 0.0349, indirect 0.00420 to 0.00495), because glossy bounces are switched off, so those metal texels absorbed bounce light instead of passing it on. Cornell and two-room have no texture links and are unaffected.
 
 Cycles also: adaptive sampling off; light sampling threshold 0 (the default 1 percent threshold drops dim lights); Standard view transform, exposure 0, gamma 1; glossy, transmission and volume bounces 0; Blender 4.5 pinned; runs with `--factory-startup` so no user add-on can change a render (and Blender exits quickly: a user add-on made it hang for minutes at exit).
 
@@ -71,9 +74,10 @@ All in `tools/reference/cycles/units.py`, each with its reason. Pinned by measur
 - **FLIP**, HDR mode, mean (0 identical). Tone mapper ACES, exposure range chosen by FLIP from the reference and printed, 67 pixels per degree. FLIP comes from the `flip-evaluator` Python package: there is no JavaScript port, and re-implementing a published metric is the bigger risk. The rest of the tool is Node (EXR reading and writing, PNG, metrics), so it also runs without Python with `--no-flip`. It runs `python -E`, from a temporary folder holding only the images, rather than `python -I`: `-I` hides the per-user site-packages where `flip-evaluator` lives here.
 - **mean relative error** = sum |test - ref| / sum ref. 10 percent too bright everywhere gives 0.100. **bias** = sum (test - ref) / sum ref (signed). **RMS** and relative RMS.
 - three PNGs: `-heatmap.png` (per-pixel relative luminance error, magma, saturating at 50 percent), `-flip.png` (FLIP's own map) and `-side-by-side.png` (reference, test, FLIP).
+- **NaN and infinite pixels**: a pixel that is NaN or infinite in either image is left out of both images, before block averaging, and the true count is printed (reference, test, either). A block averages its finite pixels only, and a block with none is left out. FLIP cannot skip a pixel, so it gets those pixels as 0 in both images, and the output says how many. `--clamp` leaves infinities alone (it does not turn +Inf into the limit).
 - **p95 error**: the 95th percentile of the per-pixel relative luminance error, `|T - R| / (R + 5% of the mean R)`. With `--downsample 8` each pixel is an 8 x 8 block, so it is the 95th-percentile block error: the worst few percent of the picture, which the averages hide.
 - A second line with every value limited to 1 first (`--also-clamp x` changes it), so a bright lamp (17 in Cornell) does not dominate the sums. `--clamp x` applies a limit to the main numbers instead. Clamping happens before block averaging.
-- `--downsample 8` averages 8 x 8 blocks of both images first. A path-traced image is noisy; this takes most of the noise out so lighting differences show. FLIP gets the block-averaged images with its pixels per degree divided by 8 (67 becomes 8.4): each pixel now spans 8 times the viewing angle, so FLIP judges the same view. A FLIP number is only comparable with another taken at the same downsample.
+- `--downsample 8` averages 8 x 8 blocks of both images first. A path-traced image is noisy; this takes most of the noise out so lighting differences show. FLIP gets the block-averaged images with its pixels per degree divided by 8 (67 becomes 8.4): each pixel now spans 8 times the viewing angle, so FLIP judges the same view. `--ppd` always describes the full-size image, so a value you give is divided too (`--ppd 40 --downsample 8` gives FLIP 5). A FLIP number is only comparable with another taken at the same downsample.
 
 ## Agreement tolerance: Cycles vs path tracer
 
@@ -116,13 +120,13 @@ Noise of one image, as relative RMS (half the difference between two seeds, over
 | --- | --- | --- | --- |
 | Cycles Cornell "front" | 512 x 512 | 2048 | 336 (second seed 328) |
 | Cycles two-room "lit-room" | 640 x 360 | 2048 | 442 (second seed 807, other renders running) |
-| Cycles Sponza "colonnade-from-the-floor" | 640 x 360 | 4096 | 1658 (other renders running; 1024 samples took 318 uncontended) |
+| Cycles Sponza "colonnade-from-the-floor" | 640 x 360 | 4096 | 997 (diffuse-only fix, raised sun; the first render took 1658 with other renders running) |
 | path tracer Cornell | 512 x 512 | 8192 | 139 full + 86 direct |
 | path tracer two-room | 640 x 360 | 8192 | 236 full + 52 direct |
 
 All in `bench/references/render-log.csv`.
 
-**Sponza is mostly shaded at this sun angle.** A ray test from 187 floor points toward the manifest sun finds only 3 unshadowed: the colonnades and galleries block a sun at 53 degrees. So the Sponza reference is lit mostly by the sky (mean pixel 0.018) and the bookmark looks dark at exposure 0; the viewing PNG is +2 stops. Cycles is right; the manifest's sun angle (or the sky, which stands in for the viewer's) is what to revisit.
+**Sponza's sun.** At the manifest's first sun angle (53 degrees) a ray test from 187 floor points found only 3 unshadowed, so the reference was lit mostly by the sky (mean pixel 0.018). The sun was raised in the manifest; the floor band is now lit and the mean is 0.0349.
 
 ## Denoiser
 
@@ -143,6 +147,27 @@ Only a single pass at the end is wired up, not the progressive (every N samples)
 
 ## Sample counts, GPU and CPU
 
-- Both tools hold the shared bench lock (`$TEMP/ddgi-gpu-bench.lock`) for the whole render: one machine-heavy job at a time. Cycles on the CPU (16 threads on this laptop) would skew other agents' build-time and CPU numbers, and the path tracer loads the GPU. A tool waits while someone else holds the lock and releases it when it finishes, fails, or is stopped with Ctrl-C or SIGTERM (the release is on the tools/gpu cleanup list, which also kills Blender). Chrome is closed after the lock is released, since closing can take minutes on a busy machine.
+- Both tools hold the shared bench lock (`$TEMP/ddgi-gpu-bench.lock`, see "Bench lock" below) for the whole render: one machine-heavy job at a time. Cycles on the CPU (16 threads on this laptop) would skew other agents' build-time and CPU numbers, and the path tracer loads the GPU. A tool waits while someone else holds the lock and releases it when it finishes, fails, or is stopped with Ctrl-C or SIGTERM (the release is on the tools/gpu cleanup list, which also kills Blender). Chrome is closed after the lock is released, since closing can take minutes on a busy machine.
 - Cycles uses the CPU by default; `--device gpu` uses OptiX (still under the lock).
 - Noise: render a second seed (`--seed 1 --name-suffix=-seed1`, note the `=`) and compare the two; half the relative RMS is the noise of one image.
+
+## Bench lock
+
+One machine-heavy job at a time on this machine: GPU timing, native harness runs, Cycles renders, path-tracer renders. The lock is the folder `$TEMP/ddgi-gpu-bench.lock`; `tools/reference/bench-lock.ts` implements it, for Node code (`withBenchLock`) and as a command line for everyone else.
+
+```
+node tools/reference/bench-lock.ts status                               # who holds it; exit 0 free, 3 held, 4 held but stale
+node tools/reference/bench-lock.ts run --what "trace bench" -- pnpm test:gpu --filter trace-bench
+node tools/reference/bench-lock.ts acquire --pid $PID --what "native cache build"   # PowerShell: $PID is the script itself
+node tools/reference/bench-lock.ts release --pid $PID
+```
+
+`run` is the easy one for agents: it holds the lock exactly as long as the command runs, and releases it on failure and Ctrl-C too. `acquire` needs `--pid`, the long-lived process that holds the lock (the command itself exits at once, so its own pid would look dead straight away). `--timeout-minutes n` gives up after n minutes (exit code 5).
+
+The protocol, for anything that cannot call the tool:
+
+1. **Take:** `mkdir` the folder. It fails if the folder exists; that is the atomic step.
+2. **Claim:** straight away write `owner.json` inside it (to a temporary name, then rename): `pid`, `processStart` (the OS start time of that pid, so a reused pid is recognised; on Windows `(Get-Process -Id <pid>).StartTime.ToUniversalTime().ToString('o')`), `host`, `startedAt` (ISO), `what` (a short label) and `command`.
+3. **Wait:** while it exists, poll (every second: some holders release and re-take it between runs) and say once a minute who holds it.
+4. **Stale:** take it over only if the owner is provably gone: its pid is not running, or the pid now has a different start time. Never remove a lock whose owner is alive, however long it has been held. A folder with no `owner.json` counts as abandoned only after 3 hours: `tools/native`'s `Use-BenchLock` and the manual `mkdir` in docs/NOTES.md write no owner file yet and hold the lock for whole native runs. Once they write one, this can come down to a few minutes (`--ownerless-stale-minutes`). A takeover renames the stale folder aside first and checks it is the one judged stale, so two waiters cannot both take it.
+5. **Release:** remove the folder, but only if `owner.json` is yours. `release` refuses (exit code 2) otherwise.

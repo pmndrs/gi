@@ -13,7 +13,7 @@ import { basename, dirname, join, parse, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { readExr, type FloatImage } from './exr.ts';
 import { runFlip, type FlipOptions, type FlipResult } from './flip.ts';
-import { clampImage, compareImages, downsample, percentile, relativeErrorMap, type ImageMetrics } from './metrics.ts';
+import { clampImage, compareImages, downsample, findFinitePixels, maskImage, percentile, relativeErrorMap, type ImageMetrics } from './metrics.ts';
 import { decodePng, encodePng, magma, toDisplayRgb8 } from './png.ts';
 
 const HELP = `usage: node tools/compare/index.ts <reference.exr> <test.exr> [options]
@@ -42,9 +42,16 @@ Numbers (sums run over every pixel and every colour channel):
 
 FLIP HDR settings: tone mapper ACES; start/stop exposure and number of exposures
 are chosen by FLIP from the reference image unless given below, and are printed;
-pixels per degree 67 (4K, 0.7 m wide, seen from 0.7 m) unless --ppd is given. With
---downsample n each compared pixel covers n times the viewing angle, so the pixels per
-degree are divided by n (67 becomes 67/n) and FLIP judges the same view, only blurred.
+pixels per degree 67 (4K, 0.7 m wide, seen from 0.7 m) unless --ppd is given. The
+pixels per degree always describe the FULL-SIZE image. With --downsample n each
+compared pixel covers n times the viewing angle, so the value is divided by n before
+FLIP gets it, the default and a --ppd value alike (67 becomes 67/n; --ppd 40
+--downsample 8 gives FLIP 5): FLIP judges the same view, only blurred.
+
+NaN and infinite pixels: a pixel that is NaN or infinite in either image is left out
+of both, before block averaging, and the count is printed. A block averages its
+finite pixels only; a block with none is left out. FLIP cannot skip pixels, so it
+gets them as 0 in both images, and the output says how many.
 
 options:
   --out <prefix>        Write <prefix>-heatmap.png (relative error), <prefix>-flip.png
@@ -62,7 +69,8 @@ options:
   --max-error <x>       Heatmap saturates at this relative error (default 0.5).
   --exposure <stops>    Exposure for the viewing PNGs (default 0).
   --tone-mapper <name>  ACES (default), HABLE or REINHARD.
-  --ppd <n>             FLIP pixels per degree.
+  --ppd <n>             FLIP pixels per degree of the full-size image (divided by n
+                        with --downsample n, see above).
   --start-exposure <c>  FLIP start exposure in stops.
   --stop-exposure <c>   FLIP stop exposure in stops.
   --num-exposures <n>   FLIP number of exposures.
@@ -75,6 +83,11 @@ interface CompareReport {
     width: number;
     height: number;
     downsample: number;
+    /**
+     * NaN/infinite pixels in the full-size images (a pixel counts if any channel is), and
+     * how many compared blocks had no finite pixel at all. All are left out of every number.
+     */
+    nonFinite: { referencePixels: number; testPixels: number; eitherPixels: number; emptyBlocks: number };
     metrics: ImageMetrics;
     p95Error: number;
     /** The same numbers with values limited to `limit`; null when --clamp was given. */
@@ -120,6 +133,11 @@ async function main(): Promise<number> {
     const blockSize = Number(values.downsample ?? 1);
     if (!Number.isInteger(blockSize) || blockSize < 1) throw new Error('--downsample must be a whole number of 1 or more');
 
+    // Pixels with a NaN or infinity in either image are left out of both, before anything else,
+    // so a block average never mixes one in and both images always average the same pixels.
+    const finite = findFinitePixels(originalReference.rgb, originalTest.rgb);
+    let emptyBlocks = 0;
+
     /** Clamp first, so a bright pixel cannot leak into its block average, then average blocks. */
     const prepare = (limit: number | null): { reference: FloatImage; test: FloatImage } => {
         let reference = originalReference;
@@ -129,8 +147,13 @@ async function main(): Promise<number> {
             test = { ...test, rgb: clampImage(test.rgb, limit) };
         }
         if (blockSize > 1) {
-            reference = downsample(reference.rgb, reference.width, reference.height, blockSize);
-            test = downsample(test.rgb, test.width, test.height, blockSize);
+            const reducedReference = downsample(reference.rgb, reference.width, reference.height, blockSize, finite.usable);
+            reference = reducedReference;
+            test = downsample(test.rgb, test.width, test.height, blockSize, finite.usable);
+            emptyBlocks = reducedReference.emptyBlocks;
+        } else if (finite.eitherBad > 0) {
+            reference = { ...reference, rgb: maskImage(reference.rgb, finite.usable) };
+            test = { ...test, rgb: maskImage(test.rgb, finite.usable) };
         }
         return { reference, test };
     };
@@ -182,6 +205,7 @@ async function main(): Promise<number> {
         width: reference.width,
         height: reference.height,
         downsample: blockSize,
+        nonFinite: { referencePixels: finite.referenceBad, testPixels: finite.testBad, eitherPixels: finite.eitherBad, emptyBlocks },
         metrics,
         p95Error,
         clamped,
@@ -267,7 +291,15 @@ function printReport(report: CompareReport, written: string[]): void {
         const c = report.clamped;
         console.log(`values limited to ${c.limit}: mean relative error ${percent(c.metrics.meanRelativeError)}, bias ${c.metrics.bias >= 0 ? '+' : ''}${percent(c.metrics.bias)}, relative RMS ${percent(c.metrics.relativeRms)}, p95 ${unit} error ${percent(c.p95Error)}`);
     }
-    if (metrics.nonFiniteValues > 0) console.log(`warning: ${metrics.nonFiniteValues} NaN/infinite values were skipped`);
+    const bad = report.nonFinite;
+    if (bad.eitherPixels > 0) {
+        const blocks = report.downsample > 1 ? `; ${bad.emptyBlocks} block(s) had no finite pixel and were left out` : '';
+        console.log(
+            `warning: ${bad.eitherPixels} pixel(s) are NaN or infinite (reference ${bad.referencePixels}, test ${bad.testPixels}); ` +
+                `they are left out of every number above${blocks}`,
+        );
+    }
+    if (flip && flip.zeroedPixels > 0) console.log(`warning: FLIP cannot skip pixels, so it got ${flip.zeroedPixels} pixel(s) as 0 in both images`);
     for (const path of written) console.log(`wrote ${path}`);
 }
 

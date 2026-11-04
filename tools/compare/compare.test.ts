@@ -1,8 +1,12 @@
 import { describe, expect, it } from 'vitest';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { deflateSync } from 'node:zlib';
 import { readExr, writeExr, type FloatImage } from './exr.ts';
 import { parseFlipOutput } from './flip.ts';
-import { clampImage, compareImages, downsample, percentile, relativeErrorMap, scaleImage } from './metrics.ts';
+import { clampImage, compareImages, downsample, findFinitePixels, maskImage, percentile, relativeErrorMap, scaleImage, zeroNonFinitePixels } from './metrics.ts';
 import { decodePng, encodePng, linearToSrgb8, magma } from './png.ts';
 
 /** A small image with a wide range of values, including some dark pixels. */
@@ -81,6 +85,99 @@ describe('clampImage and downsample', () => {
         expect(out.height).toBe(1);
         expect(Array.from(out.rgb)).toEqual([2, 2, 2, 10, 10, 10]);
     });
+});
+
+describe('NaN and infinite pixels', () => {
+    it('counts bad pixels per image and in either, a whole pixel at a time', () => {
+        // 4 pixels: reference pixel 1 has a NaN (two channels), test pixel 1 and 2 have infinities.
+        const reference = new Float32Array([1, 1, 1, NaN, NaN, 1, 2, 2, 2, 3, 3, 3]);
+        const test = new Float32Array([1, 1, 1, 1, Infinity, 1, -Infinity, 2, 2, 3, 3, 3]);
+        const finite = findFinitePixels(reference, test);
+        expect(finite.referenceBad).toBe(1);
+        expect(finite.testBad).toBe(2);
+        expect(finite.eitherBad).toBe(2);
+        expect(Array.from(finite.usable)).toEqual([1, 0, 0, 1]);
+        // Masked in both images, so the remaining pixels compare exactly.
+        const metrics = compareImages(maskImage(reference, finite.usable), maskImage(test, finite.usable));
+        expect(metrics.meanRelativeError).toBe(0);
+        expect(metrics.meanReference).toBe(2);
+    });
+
+    it('averages only the finite pixels of a block and leaves out a block with none', () => {
+        // 4 x 2 image, factor 2: left block has one NaN pixel, right block is all bad.
+        const rgb = new Float32Array([
+            1, 1, 1, NaN, 0, 0, NaN, NaN, NaN, Infinity, 0, 0,
+            3, 3, 3, 5, 5, 5, NaN, 1, 1, 1, 1, Infinity,
+        ]);
+        const out = downsample(rgb, 4, 2, 2);
+        expect(out.emptyBlocks).toBe(1);
+        expect(Array.from(out.rgb.subarray(0, 3))).toEqual([3, 3, 3]);
+        expect(Array.from(out.rgb.subarray(3, 6)).every(Number.isNaN)).toBe(true);
+    });
+
+    it('uses the pair mask, so both images skip the same pixels', () => {
+        // Pixel 0 is bad only in the test; the reference must skip it too, or the block averages differ.
+        const reference = new Float32Array([100, 100, 100, 1, 1, 1]);
+        const test = new Float32Array([NaN, 0, 0, 1, 1, 1]);
+        const { usable } = findFinitePixels(reference, test);
+        const reducedReference = downsample(reference, 2, 1, 2, usable);
+        const reducedTest = downsample(test, 2, 1, 2, usable);
+        expect(Array.from(reducedReference.rgb)).toEqual([1, 1, 1]);
+        expect(compareImages(reducedReference.rgb, reducedTest.rgb).meanRelativeError).toBe(0);
+    });
+
+    it('clampImage leaves NaN and infinities alone instead of turning +Inf into the limit', () => {
+        const out = clampImage(new Float32Array([0.5, 17, Infinity, -Infinity, NaN]), 1);
+        expect(Array.from(out.subarray(0, 4))).toEqual([0.5, 1, Infinity, -Infinity]);
+        expect(Number.isNaN(out[4])).toBe(true);
+    });
+
+    it('gives FLIP zeros in both images where either is not finite, and counts them', () => {
+        const reference = new Float32Array([1, 2, 3, 4, 5, 6]);
+        const test = new Float32Array([1, 2, 3, NaN, 5, 6]);
+        const cleaned = zeroNonFinitePixels(reference, test);
+        expect(cleaned.zeroedPixels).toBe(1);
+        expect(Array.from(cleaned.reference)).toEqual([1, 2, 3, 0, 0, 0]);
+        expect(Array.from(cleaned.test)).toEqual([1, 2, 3, 0, 0, 0]);
+        // The inputs are not changed.
+        expect(reference[3]).toBe(4);
+    });
+
+    it('leaves bad pixels out of the p95 error instead of counting them as full error', () => {
+        const reference = new Float32Array([1, 1, 1, 1, 1, 1, NaN, 1, 1]);
+        const map = relativeErrorMap(reference, reference);
+        expect(Number.isNaN(map[2])).toBe(true);
+        expect(percentile(map, 95)).toBe(0);
+    });
+
+    it('the compare tool reports the true count and finite numbers', () => {
+        const folder = mkdtempSync(join(tmpdir(), 'ddgi-compare-test-'));
+        try {
+            const width = 16;
+            const height = 8;
+            const reference = new Float32Array(width * height * 3).fill(0.5);
+            const test = scaleImage(reference, 1.1);
+            // Three bad pixels: two in the test, one in the reference; one 8 x 8 block keeps finite pixels.
+            test[0] = NaN;
+            test[3 * 5 + 1] = Infinity;
+            reference[3 * 20] = -Infinity;
+            writeFileSync(join(folder, 'reference.exr'), writeExr({ width, height, rgb: reference }));
+            writeFileSync(join(folder, 'test.exr'), writeExr({ width, height, rgb: test }));
+            const result = spawnSync(
+                process.execPath,
+                [join(__dirname, 'index.ts'), join(folder, 'reference.exr'), join(folder, 'test.exr'), '--no-flip', '--no-images', '--json', '--downsample', '8'],
+                { encoding: 'utf8' },
+            );
+            expect(result.stderr).toBe('');
+            const report = JSON.parse(result.stdout);
+            expect(report.nonFinite).toEqual({ referencePixels: 1, testPixels: 2, eitherPixels: 3, emptyBlocks: 0 });
+            expect(report.metrics.meanRelativeError).toBeCloseTo(0.1, 6);
+            expect(report.metrics.nonFiniteValues).toBe(0);
+            expect(report.clamped.metrics.meanRelativeError).toBeCloseTo(0.1, 6);
+        } finally {
+            rmSync(folder, { recursive: true, force: true });
+        }
+    }, 30_000);
 });
 
 describe('percentile', () => {

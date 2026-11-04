@@ -20,6 +20,7 @@ import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { writeExr, type FloatImage } from './exr.ts';
+import { zeroNonFinitePixels } from './metrics.ts';
 
 export interface FlipOptions {
     /** 'ACES' (FLIP's default), 'HABLE' or 'REINHARD'. */
@@ -42,12 +43,14 @@ export interface FlipResult {
     stopExposure: number | null;
     numExposures: number | null;
     pixelsPerDegree: number | null;
+    /** Pixels that were NaN or infinite in either image and were given to FLIP as 0 in both. */
+    zeroedPixels: number;
     /** FLIP's own error map, a magma-coloured PNG. */
     errorMapPng: Uint8Array;
 }
 
 /** Pulls the numbers out of FLIP's text output. Exported for testing. */
-export function parseFlipOutput(text: string): Omit<FlipResult, 'errorMapPng'> {
+export function parseFlipOutput(text: string): Omit<FlipResult, 'errorMapPng' | 'zeroedPixels'> {
     const number = (pattern: RegExp): number | null => {
         const match = text.match(pattern);
         return match ? Number(match[1]) : null;
@@ -75,11 +78,17 @@ function run(command: string, args: string[], cwd: string): Promise<{ code: numb
     });
 }
 
+/**
+ * FLIP must never see a NaN or infinity: one would spread through its filters
+ * into the mean. Pixels that are non-finite in either image are set to 0 in
+ * both first; the count comes back as `zeroedPixels` so the caller can say so.
+ */
 export async function runFlip(reference: FloatImage, test: FloatImage, options: FlipOptions): Promise<FlipResult> {
+    const cleaned = zeroNonFinitePixels(reference.rgb, test.rgb);
     const folder = await mkdtemp(join(tmpdir(), 'ddgi-flip-'));
     try {
-        await writeFile(join(folder, 'reference.exr'), writeExr(reference));
-        await writeFile(join(folder, 'test.exr'), writeExr(test));
+        await writeFile(join(folder, 'reference.exr'), writeExr({ ...reference, rgb: cleaned.reference }));
+        await writeFile(join(folder, 'test.exr'), writeExr({ ...test, rgb: cleaned.test }));
         const args = [
             // -E: ignore PYTHON* environment variables. (Not -I: that also hides the per-user
             // site-packages where flip-evaluator lives.) The working directory is a fresh temp
@@ -121,7 +130,7 @@ export async function runFlip(reference: FloatImage, test: FloatImage, options: 
         const outputFiles = await readdir(join(folder, 'out'));
         const errorMap = outputFiles.find((name) => name.endsWith('.png'));
         if (!errorMap) throw new Error(`FLIP wrote no error map; output folder had: ${outputFiles.join(', ')}`);
-        return { ...parsed, errorMapPng: new Uint8Array(await readFile(join(folder, 'out', errorMap))) };
+        return { ...parsed, zeroedPixels: cleaned.zeroedPixels, errorMapPng: new Uint8Array(await readFile(join(folder, 'out', errorMap))) };
     } finally {
         await rm(folder, { recursive: true, force: true });
     }

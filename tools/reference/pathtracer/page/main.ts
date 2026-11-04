@@ -11,22 +11,10 @@
  * Only procedural manifest scenes are supported (model parts need a glTF loader).
  */
 
-import {
-    DirectionalLight,
-    Mesh,
-    MeshPhysicalMaterial,
-    PerspectiveCamera,
-    PointLight,
-    Scene,
-    SpotLight,
-    WebGPURenderer,
-    type Color,
-    type Light,
-    type Object3D,
-    type Side,
-} from 'three/webgpu';
+import { DirectionalLight, PerspectiveCamera, PointLight, Scene, SpotLight, WebGPURenderer, type Light } from 'three/webgpu';
 import { WebGPUPathTracer } from 'three-gpu-pathtracer/webgpu';
 import { drainDevice, reportGpuTest, summarizeAdapterInfo, watchDevice } from '../../../gpu/client.ts';
+import { makeDiffuseOnly } from './diffuse-material.ts';
 import { buildProceduralParts, mergeScenes } from '../../../../scenes/src/build-scene.ts';
 import type { CameraBookmark, SceneManifest } from '../../../../scenes/src/manifest.ts';
 import { manifestLightToSceneLight } from '../../../../scenes/src/manifest.ts';
@@ -82,33 +70,6 @@ function pickCamera(manifest: SceneManifest, wanted: string): CameraBookmark {
     const camera = manifest.cameras.find((candidate) => candidate.name === wanted);
     if (!camera) throw new Error(`no camera named ${wanted}`);
     return camera;
-}
-
-/**
- * Lambertian, as the platform models surfaces. three-scene.ts already uses
- * roughness 1 and metalness 0, but the path tracer's material model adds a
- * 4 percent specular lobe unless specularIntensity is 0, so the materials are
- * rebuilt as MeshPhysicalMaterial with it zeroed. (Cycles gets the same
- * treatment in tools/reference/cycles/blender_scene.py.)
- */
-function makeDiffuseOnly(root: Object3D): MeshPhysicalMaterial[] {
-    const emissive: MeshPhysicalMaterial[] = [];
-    root.traverse((object) => {
-        if (!(object instanceof Mesh)) return;
-        const source = object.material as { color: Color; emissive: Color; emissiveIntensity: number; side: Side };
-        object.material = new MeshPhysicalMaterial({
-            color: source.color,
-            emissive: source.emissive,
-            emissiveIntensity: source.emissiveIntensity,
-            roughness: 1,
-            metalness: 0,
-            specularIntensity: 0,
-            side: source.side,
-        });
-        const material = object.material as MeshPhysicalMaterial;
-        if (material.emissive.r + material.emissive.g + material.emissive.b > 0) emissive.push(material);
-    });
-    return emissive;
 }
 
 function bytesToBase64(bytes: Uint8Array): string {

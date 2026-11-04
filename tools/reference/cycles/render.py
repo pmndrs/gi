@@ -100,7 +100,8 @@ def main():
 
     load_started = time.time()
     load_geometry(manifest)
-    materials_changed = bs.make_materials_diffuse_only()
+    materials_changed, texture_links_removed = bs.make_materials_diffuse_only()
+    bs.require_diffuse_only()
     bs.add_manifest_lights(scene, manifest['lights'])
     bs.add_environment(scene, manifest['environment'])
     bs.add_camera(scene, camera['position'], camera['target'], camera['fovYDeg'])
@@ -125,7 +126,7 @@ def main():
         'sampleClamp': 0,
         'lightSamplingThreshold': 0,
         'pixelFilter': 'BOX 1.0',
-        'materials': f'diffuse only ({materials_changed} Principled BSDFs reset)',
+        'materials': f'diffuse only ({materials_changed} Principled BSDFs reset, {texture_links_removed} texture links removed, checked)',
         'indirectDefinition': 'Diffuse Indirect x Diffuse Colour (light that bounced at least once before the visible surface)',
         'loadSeconds': round(load_seconds, 2),
         'renderSeconds': round(render_seconds, 2),

@@ -80,7 +80,10 @@ One bullet per fact, each with its source. Add a bullet when something cost you 
 - **Node runs `.ts` directly** (Node 24 type stripping), but rejects enums, namespaces and constructor parameter properties. The root tsconfig has `allowImportingTsExtensions` for `.ts` import paths. Source: T0.2.
 - **GPU timestamps on this laptop:** both GPUs support `timestamp-query` in Chrome 156, and headless Chrome returned unrounded values. Timing costs less than CPU-side frame timing can resolve (`performance.now()` steps 0.1 ms; the NVIDIA per-round scatter is about ±0.5 ms). Source: T0.3.
 - **Device page:** `tools/gpu/pages/device/`. `?label=`, `?rounds=`, `?frames=` and `?scale=` change the run. `pnpm device:serve` keeps its certificate in `node_modules/.cache/ddgi-lan` and regenerates it when the LAN addresses change. Source: T0.3.
-- **One GPU benchmark at a time.** Before any timing run, take the lock with `mkdir "$TEMP/ddgi-gpu-bench.lock"`. If the folder already exists, someone else is timing, so wait and retry. Remove the folder when done, even on failure. Correctness runs (smoke tests, pixel readbacks) don't need the lock. Never time native and browser GPU work at the same time. Source: main session, M0.
+- **One GPU benchmark at a time.** Before any timing run, Cycles render or native harness run, take the shared lock with `node tools/reference/bench-lock.ts run --what "<label>" -- <command>`, or `acquire --pid <pid>` and `release --pid <pid>`.
+  - `status` shows who holds it.
+  - The lock folder is still `$TEMP/ddgi-gpu-bench.lock`, but it now holds an `owner.json`, and a lock is taken over only when its owner process is dead.
+  - Don't use a bare `mkdir` any more. Correctness runs (smoke tests, pixel readbacks) don't need the lock. Never time native and browser GPU work at the same time. Source: main session, M0.
 - **WebGPU needs a secure context.** `http://<LAN IP>` pages get no `navigator.gpu`, so pages for the Mac and iOS devices must be served over HTTPS, and a self-signed certificate is fine. `localhost` counts as secure. Source: the WebGPU spec (secure-context only).
 - **GPUs on this laptop:** Playwright or headless Chrome with `powerPreference: 'high-performance'` gets the RTX 3060 Laptop. The Claude desktop browser pane got the Intel iGPU. Source: the audit, 2026-10-30.
 - **Worktrees read slow:** benchmarks run from a git worktree read about 3× slower in absolute GPU time. Compare A/B only within one environment. Source: the `@pmndrs/upscaler` CLAUDE.md.
@@ -139,6 +142,7 @@ One bullet per fact, each with its source. Add a bullet when something cost you 
   - Run it with `python -E`, not `-I`, because `-I` hides the user site-packages where it is installed.
   - FLIP numbers are comparable only at the same downsample.
 - **Comparing noisy renders:** average over 8×8 blocks before judging. Two Cycles seeds differ by 0.8% per pixel but by 0.1% per block.
+- **Blender's glTF importer links Metallic and Roughness to the metallicRoughness texture.** A linked socket ignores its value, so unlink it before setting it. Principled's Diffuse Roughness (4.3+) above 0 means Oren-Nayar. Source: T0.7 follow-up.
 - **The references are pure Lambert; three's standard material isn't.** `scenes/src/three-scene.ts` uses `MeshStandardMaterial` (roughness 1, metalness 0, F0 0.04). That adds a rough specular lobe the Cycles and path-tracer references lack, worth a few percent of the full image. When comparing the viewer against a reference, render with `specularIntensity = 0`, or measure the gap first, so the GI error isn't mixed with material error. Source: T0.7 Opus review.
 - **`@pmndrs/denoiser` is not on npm.** Build steps are in `tools/reference/README.md`.
 
