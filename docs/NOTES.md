@@ -108,6 +108,7 @@ One bullet per fact, each with its source. Add a bullet when something cost you 
   - Source: T0.6 and its review.
 - **Native Vulkan mesh limit:** upstream's `ByteAddrBuffer[]` array holds 2048 entries, which caps a scene at about 1,022 meshes; Bistro lost the GPU. The fork sizes the array from the scene (1df1f97). Source: T0.6.
 - **The native frame rate is CPU-bound.** Untimed main-thread work makes it 50–87 ms per frame on Sponza, against about 20 ms of GPU work, so compare GPU numbers only. Source: T0.6.
+- **Native timings drift 15-30% between runs of the same config** on the RTX 3060 laptop, in every pass including lighting, so it's machine state, not code. Take 3+ runs per scene before comparing. Source: T0.6.
 - **Native harness keys:** F2 dumps DDGI textures, F4 runs a 1024-frame benchmark to CSV, J toggles the performance overlay, R reloads shaders and config, M switches between DDGI and the path tracer.
 - **Installed tools:** RenderDoc 1.47.0, PIX 2603.25, Blender, NVIDIA FLIP (`python -m flip_evaluator`), Vulkan SDK 1.3.283, Nsight Systems 2022.4, Nsight Compute 2022.3. Nsight Graphics needs a manual install.
 

@@ -27,6 +27,10 @@
  * fails, or the process is interrupted (Ctrl-C, SIGTERM): the release is on the
  * tools/gpu cleanup list, which `installShutdownHandlers()` runs on a signal.
  *
+ * Nested holders: `run` gives its command LOCK_HELD_ENV=<owner pid>. `withBenchLock` (and
+ * tools/native's scripts) check it, and if that pid owns the lock they run under the parent's
+ * hold instead of waiting for a lock that will not be released until they finish.
+ *
  * From a shell (agents, the native PowerShell launcher), the same protocol:
  *
  *   node tools/reference/bench-lock.ts status
@@ -46,6 +50,14 @@ export const benchLockPath = join(process.env.TEMP ?? process.env.TMPDIR ?? tmpd
 
 /** The file inside the lock folder that says who holds it. */
 export const OWNER_FILE = 'owner.json';
+
+/**
+ * `run` sets this in the command's environment to the pid that owns the lock. A tool started
+ * under `run` that would take the lock itself (`withBenchLock`, tools/native's PowerShell
+ * scripts) would otherwise wait forever on its own parent. When the variable is set AND that pid
+ * really owns the lock right now, such a tool uses the parent's hold instead of taking it again.
+ */
+export const LOCK_HELD_ENV = 'DDGI_BENCH_LOCK_HELD';
 
 /** Who holds the lock. Written by the taker, read by everyone who waits. */
 export interface BenchLockOwner {
@@ -395,12 +407,41 @@ export async function acquireBenchLock(options: BenchLockOptions = {}): Promise<
 }
 
 /**
- * Holds the lock while `work` runs. The second argument may be a log function
- * (the old signature) or options.
+ * The owner of the lock if a parent process holds it for us: `LOCK_HELD_ENV` names a pid, and the
+ * lock at `path` is owned by that pid on this host and the pid is running. Anything else (no
+ * variable, a different owner, a free lock, a dead pid) returns null, so a stale or leaked
+ * variable never lets a process skip the lock.
  */
-export async function withBenchLock<T>(work: () => Promise<T>, options: BenchLockOptions | ((message: string) => void) = {}): Promise<T> {
+export async function lockHeldByParent(
+    options: { path?: string; probe?: ProcessProbe; env?: NodeJS.ProcessEnv } = {},
+): Promise<BenchLockOwner | null> {
+    const text = (options.env ?? process.env)[LOCK_HELD_ENV];
+    if (!text) return null;
+    const pid = Number(text);
+    if (!(Number.isInteger(pid) && pid > 0)) return null;
+    const state = await readLockState(options.path ?? benchLockPath);
+    if (state.kind !== 'owned' || state.owner.pid !== pid || state.owner.host !== hostname()) return null;
+    return (options.probe ?? systemProbe).isAlive(pid) ? state.owner : null;
+}
+
+/**
+ * Holds the lock while `work` runs. The second argument may be a log function
+ * (the old signature) or options. `work` gets the pid that owns the lock (this process, or the
+ * parent that holds it for us), so it can pass it on to a child in `LOCK_HELD_ENV`.
+ */
+export async function withBenchLock<T>(
+    work: (lock: { ownerPid: number }) => Promise<T>,
+    options: BenchLockOptions | ((message: string) => void) = {},
+): Promise<T> {
     const settings: BenchLockOptions = typeof options === 'function' ? { log: options } : options;
     const log = settings.log ?? console.log;
+    const parent = await lockHeldByParent({ path: settings.path, probe: settings.probe });
+    if (parent) {
+        // Started under `bench-lock run` (or another holder that set LOCK_HELD_ENV): the lock is
+        // already ours through the parent, which also releases it. Taking it again would wait forever.
+        log(`the bench lock is already held for us by pid ${parent.pid} ("${parent.what}"); not taking it again`);
+        return work({ ownerPid: parent.pid });
+    }
     const handle = await acquireBenchLock(settings);
     // Run-once: whichever of the normal path and the shutdown handler gets there first releases it.
     const release = registerCleanup(async () => {
@@ -408,7 +449,7 @@ export async function withBenchLock<T>(work: () => Promise<T>, options: BenchLoc
         if (result === 'not-ours') log('warning: the bench lock no longer has our owner file; left it alone');
     });
     try {
-        return await work();
+        return await work({ ownerPid: handle.owner.pid });
     } finally {
         await release();
         log('released the bench lock');
@@ -429,6 +470,9 @@ commands:
   run --what <label> -- <command...>
                               Wait for the lock, run the command holding it, release it
                               (also on failure or Ctrl-C). Exits with the command's code.
+                              The command gets ${LOCK_HELD_ENV}=<owner pid>; tools that take
+                              the lock themselves (withBenchLock, tools/native) see it and use
+                              this hold instead of waiting on it.
   acquire --pid <pid> --what <label>
                               Wait for the lock and take it for process <pid> (a shell
                               script passes its own pid, e.g. PowerShell $PID). The lock
@@ -444,7 +488,8 @@ options:
                               this long (default ${OWNERLESS_STALE_MS / 60_000}).
   --command <text>            acquire: the command to record (default: this one).
   --path <folder>             Another lock folder (tests).
-  --json                      status: print JSON.
+  --json                      status: print JSON (with "heldByParent": the owner pid when
+                              ${LOCK_HELD_ENV} names the pid that holds the lock, else null).
 `;
 
 function quoteForShell(argument: string): string {
@@ -454,10 +499,15 @@ function quoteForShell(argument: string): string {
 /** Runs a command under the lock; returns its exit code. */
 async function runUnderLock(command: string[], settings: BenchLockOptions): Promise<number> {
     return withBenchLock(
-        () =>
+        ({ ownerPid }) =>
             new Promise<number>((resolvePromise, reject) => {
                 // One command string through the shell, so `pnpm` (a .cmd on Windows) resolves.
-                const child = spawn(command.map(quoteForShell).join(' '), { stdio: 'inherit', shell: true });
+                // LOCK_HELD_ENV tells a command that takes the lock itself that we hold it for it.
+                const child = spawn(command.map(quoteForShell).join(' '), {
+                    stdio: 'inherit',
+                    shell: true,
+                    env: { ...process.env, [LOCK_HELD_ENV]: String(ownerPid) },
+                });
                 const releaseKill = registerCleanup(
                     () =>
                         new Promise<void>((done) => {
@@ -526,7 +576,10 @@ export async function benchLockCli(argv: string[]): Promise<number> {
         case 'status': {
             const state = await readLockState(path);
             const verdict = await judgeLock(state, { ownerlessStaleMs });
-            if (values.json) console.log(JSON.stringify({ path, ...state, stale: verdict.stale, reason: verdict.reason }, null, 2));
+            if (values.json) {
+                const parent = await lockHeldByParent({ path });
+                console.log(JSON.stringify({ path, ...state, stale: verdict.stale, reason: verdict.reason, heldByParent: parent?.pid ?? null }, null, 2));
+            }
             else console.log(`${path}: ${describeLock(state)}${state.kind === 'free' ? '' : `\n${verdict.stale ? 'STALE' : 'live'}: ${verdict.reason}`}`);
             return state.kind === 'free' ? 0 : verdict.stale ? 4 : 3;
         }

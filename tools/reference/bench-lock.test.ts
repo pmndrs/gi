@@ -8,10 +8,13 @@ import {
     benchLockCli,
     BenchLockTimeoutError,
     judgeLock,
+    LOCK_HELD_ENV,
+    lockHeldByParent,
     OWNER_FILE,
     readLockState,
     releaseBenchLock,
     systemProbe,
+    withBenchLock,
     type BenchLockOwner,
     type ProcessProbe,
 } from './bench-lock.ts';
@@ -170,6 +173,79 @@ describe('bench lock command line', () => {
     it('refuses acquire without --pid (its own pid dies at once)', async () => {
         await expect(benchLockCli(['acquire', '--path', lockPath])).rejects.toThrow(/--pid/);
     });
+});
+
+describe('a lock held by the parent (LOCK_HELD_ENV)', () => {
+    const saved = process.env[LOCK_HELD_ENV];
+    afterEach(() => {
+        if (saved === undefined) delete process.env[LOCK_HELD_ENV];
+        else process.env[LOCK_HELD_ENV] = saved;
+    });
+
+    it("runs the work under the parent's hold without waiting, and leaves the lock to the parent", async () => {
+        const parent = foreignOwner({ what: 'bench-lock run' });
+        await placeLock(parent);
+        process.env[LOCK_HELD_ENV] = String(parent.pid);
+        const probe = fakeProbe({ 4242: 'started-at-noon', [process.pid]: 'me' });
+        // Without the parent check this would wait on pid 4242 and time out.
+        const seen = await withBenchLock(async ({ ownerPid }) => ownerPid, { ...quiet, path: lockPath, timeoutMs: 60, probe });
+        expect(seen).toBe(4242);
+        expect(await ownerOnDisk()).toEqual(parent);
+    });
+
+    it('ignores the variable when that pid does not own the lock, or is not running', async () => {
+        const probe = fakeProbe({ 4242: 'started-at-noon', [process.pid]: 'me' });
+        process.env[LOCK_HELD_ENV] = '4242';
+        // Free lock: the variable is leftover, so the lock is taken normally (and released after).
+        expect(await lockHeldByParent({ path: lockPath, probe })).toBeNull();
+        const seen = await withBenchLock(async ({ ownerPid }) => {
+            expect((await ownerOnDisk()).pid).toBe(process.pid);
+            return ownerPid;
+        }, { ...quiet, path: lockPath, probe });
+        expect(seen).toBe(process.pid);
+        expect(existsSync(lockPath)).toBe(false);
+
+        // Someone else owns it: no skipping.
+        await placeLock(foreignOwner({ pid: 5555 }));
+        expect(await lockHeldByParent({ path: lockPath, probe: fakeProbe({ 5555: 'x' }) })).toBeNull();
+        await expect(withBenchLock(async () => 0, { ...quiet, path: lockPath, timeoutMs: 60, probe: fakeProbe({ 5555: 'started-at-noon' }) })).rejects.toBeInstanceOf(
+            BenchLockTimeoutError,
+        );
+        await rm(lockPath, { recursive: true });
+
+        // The named pid owns it on paper but is gone.
+        await placeLock(foreignOwner());
+        expect(await lockHeldByParent({ path: lockPath, probe: fakeProbe({}) })).toBeNull();
+    });
+
+    it('run gives its command the owner pid, and a nested run under it does not deadlock', async () => {
+        delete process.env[LOCK_HELD_ENV];
+        const out = join(folder, 'env.txt');
+        const script = join(folder, 'print-env.mjs');
+        await writeFile(script, `import { writeFileSync } from 'node:fs';
+writeFileSync(${JSON.stringify(out)}, process.env.${LOCK_HELD_ENV} ?? 'unset');
+`);
+        const silence = { log: console.log, error: console.error };
+        console.log = () => undefined;
+        console.error = () => undefined;
+        try {
+            expect(await benchLockCli(['run', '--what', 'outer', '--path', lockPath, '--', 'node', script])).toBe(0);
+            expect(await readFile(out, 'utf8')).toBe(String(process.pid));
+            expect(existsSync(lockPath)).toBe(false);
+
+            // Nested: hold the lock as this process, mark it as the parent's, and run again.
+            const handle = await acquireBenchLock({ ...quiet, path: lockPath });
+            process.env[LOCK_HELD_ENV] = String(process.pid);
+            expect(await benchLockCli(['run', '--what', 'inner', '--timeout-minutes', '0.05', '--path', lockPath, '--', 'node', script])).toBe(0);
+            expect(await readFile(out, 'utf8')).toBe(String(process.pid));
+            // The inner run did not release the outer hold.
+            expect((await ownerOnDisk()).pid).toBe(process.pid);
+            expect(await handle.release()).toBe('released');
+        } finally {
+            console.log = silence.log;
+            console.error = silence.error;
+        }
+    }, 60_000);
 });
 
 describe('system probe', () => {
