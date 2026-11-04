@@ -10,3 +10,9 @@ Thumbs.db
 /native/build/
 .playwright-mcp/
 /bench/screenshots/
+/assets/generated/
+/bench/results/incoming/
+/assets/downloads.bak/
+/bench/references/
+__pycache__/
+/tools/emsdk/

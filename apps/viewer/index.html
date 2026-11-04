@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>DDGI viewer</title>
+        <link rel="icon" href="data:," />
+        <style>
+            :root {
+                --panel-width: 320px;
+                --ink: #dfe6ee;
+                --muted: #93a1b1;
+                --bg: rgba(14, 17, 22, 0.88);
+                --accent: #5db0ff;
+            }
+            html,
+            body {
+                margin: 0;
+                height: 100%;
+                overflow: hidden;
+                background: #0b0d10;
+                color: var(--ink);
+                font: 13px/1.45 system-ui, -apple-system, 'Segoe UI', sans-serif;
+            }
+            /* The picture sits beside the panel, never under it. With the panel hidden it takes the whole window. */
+            canvas#view {
+                position: fixed;
+                top: 0;
+                left: 0;
+                bottom: 0;
+                width: calc(100vw - var(--panel-width));
+                height: 100vh;
+                display: block;
+            }
+            body.panel-hidden canvas#view {
+                width: 100vw;
+            }
+
+            /* The control panel */
+            .panel {
+                position: fixed;
+                top: 0;
+                right: 0;
+                bottom: 0;
+                width: var(--panel-width);
+                box-sizing: border-box;
+                padding: 12px 14px 0;
+                overflow-y: auto;
+                background: var(--bg);
+                border-left: 1px solid #2a323d;
+                z-index: 20;
+            }
+            .panel.hidden {
+                display: none;
+            }
+            .panel h1 {
+                margin: 0 0 4px;
+                font-size: 16px;
+            }
+            .panel h2 {
+                margin: 14px 0 6px;
+                font-size: 12px;
+                letter-spacing: 0.06em;
+                text-transform: uppercase;
+                color: var(--accent);
+            }
+            .panel section {
+                padding-bottom: 6px;
+                border-bottom: 1px solid #232a33;
+            }
+            .panel .label {
+                margin: 8px 0 3px;
+                color: var(--muted);
+            }
+            .panel .value {
+                color: var(--ink);
+                font-variant-numeric: tabular-nums;
+            }
+            .panel .muted {
+                margin: 6px 0;
+                color: var(--muted);
+            }
+            .panel .small {
+                font-size: 11px;
+            }
+            .panel select,
+            .panel button,
+            .panel input[type='range'] {
+                width: 100%;
+                box-sizing: border-box;
+            }
+            .panel select,
+            .panel button {
+                padding: 5px 6px;
+                color: var(--ink);
+                background: #1b222b;
+                border: 1px solid #36404d;
+                border-radius: 4px;
+                font: inherit;
+            }
+            .panel button {
+                cursor: pointer;
+                margin-top: 4px;
+            }
+            .panel button:hover {
+                border-color: var(--accent);
+            }
+            .panel button.active {
+                background: #234a73;
+                border-color: var(--accent);
+            }
+            .panel button.small-button {
+                width: auto;
+                margin: 0 0 0 6px;
+                padding: 1px 8px;
+            }
+            .panel .button-row {
+                display: flex;
+                flex-direction: column;
+            }
+            .panel .row {
+                display: flex;
+                gap: 14px;
+                margin: 4px 0;
+            }
+            .panel label.inline {
+                display: inline-flex;
+                align-items: center;
+                gap: 4px;
+                margin: 4px 0;
+                cursor: pointer;
+            }
+            .panel .group[hidden] {
+                display: none;
+            }
+            .panel .status {
+                margin-top: 8px;
+                color: var(--muted);
+                font-size: 12px;
+            }
+            .help-box {
+                position: sticky;
+                bottom: 0;
+                margin: 12px -14px 0;
+                padding: 10px 14px 12px;
+                min-height: 58px;
+                background: #121820;
+                border-top: 1px solid #2f3a48;
+                color: #c9d6e4;
+            }
+
+            /* Overlays on the picture */
+            #show-panel {
+                position: fixed;
+                top: 8px;
+                right: 8px;
+                z-index: 21;
+                display: none;
+                padding: 5px 10px;
+                color: var(--ink);
+                background: var(--bg);
+                border: 1px solid #36404d;
+                border-radius: 4px;
+                font: inherit;
+                cursor: pointer;
+            }
+            #show-panel.visible {
+                display: block;
+            }
+            .wipe-label {
+                position: fixed;
+                top: 10px;
+                z-index: 12;
+                padding: 3px 10px;
+                background: rgba(0, 0, 0, 0.6);
+                border-radius: 4px;
+                pointer-events: none;
+                white-space: nowrap;
+            }
+            .wipe-label.left {
+                transform: translateX(calc(-100% - 10px));
+            }
+            .wipe-label.right {
+                transform: translateX(10px);
+            }
+            #status-pill {
+                position: fixed;
+                left: calc((100vw - var(--panel-width)) / 2);
+                bottom: 14px;
+                transform: translateX(-50%);
+                z-index: 12;
+                padding: 5px 14px;
+                background: rgba(0, 0, 0, 0.7);
+                border-radius: 14px;
+                pointer-events: none;
+            }
+            body.panel-hidden #status-pill {
+                left: 50%;
+            }
+            #status-pill:empty {
+                display: none;
+            }
+            #loading {
+                position: fixed;
+                top: 0;
+                left: 0;
+                bottom: 0;
+                right: var(--panel-width);
+                z-index: 30;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                background: rgba(11, 13, 16, 0.82);
+            }
+            body.panel-hidden #loading {
+                right: 0;
+            }
+            #loading.done {
+                display: none;
+            }
+            #loading .box {
+                width: 380px;
+                padding: 18px 22px;
+                background: #151b23;
+                border: 1px solid #2f3a48;
+                border-radius: 8px;
+            }
+            #loading .title {
+                font-size: 16px;
+                margin-bottom: 8px;
+            }
+            #loading progress {
+                width: 100%;
+                height: 8px;
+                margin-top: 10px;
+            }
+            #loading.failed .title {
+                color: #ff8a80;
+            }
+            #loading.failed progress {
+                display: none;
+            }
+        </style>
+    </head>
+    <body>
+        <canvas id="view"></canvas>
+        <button id="show-panel" type="button">Show panel (H)</button>
+        <div id="status-pill"></div>
+        <div id="loading">
+            <div class="box">
+                <div class="title">DDGI viewer</div>
+                <div class="stage">Starting</div>
+                <progress max="1"></progress>
+            </div>
+        </div>
+        <script type="module" src="/src/main.ts"></script>
+    </body>
+</html>

@@ -1,0 +1,620 @@
+{
+  "assets": [
+    {
+      "id": "bistro-exterior",
+      "title": "Bistro (Exterior)",
+      "author": "Amazon Lumberyard (published by NVIDIA in the Open Research Content Archive, ORCA)",
+      "sourceUrl": "https://developer.nvidia.com/orca/amazon-lumberyard-bistro",
+      "license": "CC-BY-4.0",
+      "licenseUrl": "https://creativecommons.org/licenses/by/4.0/legalcode",
+      "attribution": "Amazon Lumberyard Bistro, Exterior. Open Research Content Archive (ORCA), NVIDIA. CC BY 4.0. Converted to glTF.",
+      "redistributable": true,
+      "download": {
+        "url": "https://developer.nvidia.com/downloads/bistro",
+        "file": "Bistro_v5_2.zip",
+        "bytes": 894377473,
+        "sha256": "0d50e3c724c6c5da19f8eb99ad3f53e36fec37ffa2df9621f9ccf0603f3934e1"
+      },
+      "extract": "zip",
+      "convert": {
+        "tool": "blender",
+        "blenderVersion": "4.5.0",
+        "script": "tools/assets/convert/fbx-to-glb.py",
+        "args": ["Bistro_v5_2/BistroExterior.fbx", "BistroExterior.glb"]
+      },
+      "outputs": [
+        {
+          "path": "BistroExterior.glb",
+          "sha256": "72188eab9c36a4f73e8043a2374acb7215e4ca945a293895ffcfcec2488f966c",
+          "bytes": 267021808,
+          "reproducible": false,
+          "jsonSha256": "8a01b68c6adf6c8b854e1deabc14f8a37369bb31bfa0de5a9cff1b5764a2f800",
+          "binBytes": 265074580,
+          "bufferViewHashes": "tools/assets/glb-views/bistro-exterior.json",
+          "varyingAttributes": ["TANGENT"]
+        }
+      ]
+    },
+    {
+      "id": "bistro-interior",
+      "title": "Bistro (Interior)",
+      "author": "Amazon Lumberyard (published by NVIDIA in the Open Research Content Archive, ORCA)",
+      "sourceUrl": "https://developer.nvidia.com/orca/amazon-lumberyard-bistro",
+      "license": "CC-BY-4.0",
+      "licenseUrl": "https://creativecommons.org/licenses/by/4.0/legalcode",
+      "attribution": "Amazon Lumberyard Bistro, Interior. Open Research Content Archive (ORCA), NVIDIA. CC BY 4.0. Converted to glTF.",
+      "redistributable": true,
+      "download": {
+        "url": "https://developer.nvidia.com/downloads/bistro",
+        "file": "Bistro_v5_2.zip",
+        "bytes": 894377473,
+        "sha256": "0d50e3c724c6c5da19f8eb99ad3f53e36fec37ffa2df9621f9ccf0603f3934e1"
+      },
+      "extract": "zip",
+      "convert": {
+        "tool": "blender",
+        "blenderVersion": "4.5.0",
+        "script": "tools/assets/convert/fbx-to-glb.py",
+        "args": ["Bistro_v5_2/BistroInterior.fbx", "BistroInterior.glb"]
+      },
+      "outputs": [
+        {
+          "path": "BistroInterior.glb",
+          "sha256": "1a4d61190fe1821b354328f2934686649736265abf5f1e275edea160c99aaa2a",
+          "bytes": 80230868,
+          "reproducible": false,
+          "jsonSha256": "f9949e7e5d91f40cabeae1a8337d3808f0e84bd53d70a3c71a5887e15f33b57e",
+          "binBytes": 77979452,
+          "bufferViewHashes": "tools/assets/glb-views/bistro-interior.json",
+          "varyingAttributes": ["TANGENT"]
+        }
+      ]
+    },
+    {
+      "id": "furnished-room",
+      "title": "Breakfast Room",
+      "author": "Wig42 (BlendSwap); OBJ export and material fixes by Morgan McGuire",
+      "sourceUrl": "https://casual-effects.com/data",
+      "license": "CC-BY-3.0",
+      "licenseUrl": "https://creativecommons.org/licenses/by/3.0/legalcode",
+      "attribution": "Breakfast Room by Wig42 (http://www.blendswap.com/blends/view/75431), CC BY 3.0. OBJ from Morgan McGuire's Computer Graphics Archive (https://casual-effects.com/data). Marble texture public domain. Converted to glTF.",
+      "redistributable": true,
+      "download": {
+        "url": "https://casual-effects.com/g3d/data10/research/model/breakfast_room/breakfast_room.zip",
+        "file": "breakfast_room.zip",
+        "bytes": 6446862,
+        "sha256": "e56ff9b4c89b680cfd5c4c00390533ae28fff7a122d6fc8c92c273a9066c0ca8"
+      },
+      "extract": "zip",
+      "convert": {
+        "tool": "blender",
+        "blenderVersion": "4.5.0",
+        "script": "tools/assets/convert/obj-to-glb.py",
+        "args": ["breakfast_room.obj", "BreakfastRoom.glb"]
+      },
+      "outputs": [
+        {
+          "path": "BreakfastRoom.glb",
+          "sha256": "c708c5e9e1867a180482376b35aa224ebf240623cdc2849652b5c518da63cdbe",
+          "bytes": 7693624,
+          "dielectric": true
+        }
+      ]
+    },
+    {
+      "id": "courtyard-tree",
+      "title": "Tree Small 02",
+      "author": "Rico Cilliers (Poly Haven)",
+      "sourceUrl": "https://polyhaven.com/a/tree_small_02",
+      "license": "CC0-1.0",
+      "licenseUrl": "https://polyhaven.com/license",
+      "attribution": "Tree Small 02 by Rico Cilliers, Poly Haven (polyhaven.com). CC0.",
+      "redistributable": true,
+      "download": [
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/gltf/2k/tree_small_02/tree_small_02_2k.gltf",
+          "file": "tree_small_02_2k.gltf",
+          "bytes": 9075,
+          "sha256": "a1a7c8a145c811392457c111bff8192146f655a75b5de163ec659cd32af17726"
+        },
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/gltf/8k/tree_small_02/tree_small_02.bin",
+          "file": "tree_small_02.bin",
+          "bytes": 95102324,
+          "sha256": "8da6c3c389ad8748286d1b7488cd827f75ebdad9d8f59ef7dfb0916df5edc634"
+        },
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/2k/tree_small_02/tree_small_02_arm_2k.jpg",
+          "file": "textures/tree_small_02_arm_2k.jpg",
+          "bytes": 2586815,
+          "sha256": "e96b4e84e9786b982d01562e0d249f6e58db1b656dd511db7c034d6ed60b1c92"
+        },
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/2k/tree_small_02/tree_small_02_branch_arm_2k.jpg",
+          "file": "textures/tree_small_02_branch_arm_2k.jpg",
+          "bytes": 1147503,
+          "sha256": "82da928cc4e8a45c559f6abe8053227c7ae6cc14eb8d026a30c203aedd087042"
+        },
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/2k/tree_small_02/tree_small_02_branch_diff_2k.jpg",
+          "file": "textures/tree_small_02_branch_diff_2k.jpg",
+          "bytes": 1425692,
+          "sha256": "9032de9e063ee7e3763a6b10d19d89302f5776e85a966b6dd1c3a5634b2a80e1"
+        },
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/2k/tree_small_02/tree_small_02_branch_nor_gl_2k.jpg",
+          "file": "textures/tree_small_02_branch_nor_gl_2k.jpg",
+          "bytes": 1781975,
+          "sha256": "368505992d867bb50eccc00d77940a7a3eaf32f42de9f536d105407b0d6df3fd"
+        },
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/2k/tree_small_02/tree_small_02_diff_2k.jpg",
+          "file": "textures/tree_small_02_diff_2k.jpg",
+          "bytes": 3170612,
+          "sha256": "4ab3210b6ec6bb1181145500bca71d1c1f81ead6baaa8600f5979c2cec50c6a4"
+        },
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/2k/tree_small_02/tree_small_02_leaves_arm_2k.jpg",
+          "file": "textures/tree_small_02_leaves_arm_2k.jpg",
+          "bytes": 2191542,
+          "sha256": "a126c0d92b60c44c0664e4d3651831970e259b0d5a1fb39ebb67081cbecaca96"
+        },
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/2k/tree_small_02/tree_small_02_leaves_diff_2k.jpg",
+          "file": "textures/tree_small_02_leaves_diff_2k.jpg",
+          "bytes": 961870,
+          "sha256": "6c984a46861562f2a20381c54106aa5e07ce0d3fce785907f8d263157e7561af"
+        },
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/2k/tree_small_02/tree_small_02_leaves_nor_gl_2k.jpg",
+          "file": "textures/tree_small_02_leaves_nor_gl_2k.jpg",
+          "bytes": 2395771,
+          "sha256": "40c956e345430562cdb4d0470c7d499aa160f1fa3dd7555d88be2dedf0d7ff2e"
+        },
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/2k/tree_small_02/tree_small_02_nor_gl_2k.jpg",
+          "file": "textures/tree_small_02_nor_gl_2k.jpg",
+          "bytes": 4555311,
+          "sha256": "cb7897fc0aea602964836116ecf631614ece2970f579647fe1070bccb428fe89"
+        },
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/png/2k/tree_small_02/tree_small_02_leaves_alpha_2k.png",
+          "file": "textures/tree_small_02_leaves_alpha_2k.png",
+          "bytes": 636661,
+          "sha256": "566484c7047ce67af5a4435c1e4da2b773578d73f83ae45dfad0fd442df7b9d5"
+        }
+      ],
+      "extract": null,
+      "convert": {
+        "tool": "blender",
+        "blenderVersion": "4.5.0",
+        "script": "tools/assets/convert/polyhaven-alpha-mask.py",
+        "args": ["tree_small_02_2k.gltf", "textures/tree_small_02_leaves_alpha_2k.png", "tree_small_02_2k_masked.glb"]
+      },
+      "outputs": [
+        {
+          "path": "tree_small_02_2k_masked.glb",
+          "sha256": "090f9665e27979ceb04320bf0700079f051c3b15cbfa6682016d360f4f7627ba",
+          "bytes": 151569160,
+          "reproducible": false,
+          "jsonSha256": "363a576c3de047fdc277b19c47aa85783e13b76216af8b30a3f26091f04c220e",
+          "binBytes": 151563012,
+          "bufferViewHashes": "tools/assets/glb-views/courtyard-tree.json",
+          "varyingAttributes": ["TANGENT"]
+        }
+      ]
+    },
+    {
+      "id": "sponza-intel",
+      "title": "Sponza (Intel New Sponza, 2022, base package)",
+      "author": "Frank Meinl and Anton Kaplanyan (commissioned and sponsored for Intel's Sample Library); add-on credits in the package",
+      "sourceUrl": "https://web.archive.org/web/20251206023318/https://www.intel.com/content/www/us/en/developer/topic-technology/graphics-research/samples.html",
+      "license": "CC-BY-4.0+intel-preface",
+      "licenseUrl": "https://creativecommons.org/licenses/by/4.0/legalcode",
+      "licenseApproval": {
+        "record": "docs/DECISIONS.md",
+        "date": "2026-11-04",
+        "title": "Sponza is Intel's \"New Sponza\" (base package), download-only."
+      },
+      "attribution": "Sponza 2022 Scene commissioned by Frank Meinl, sponsored by Anton Kaplanyan. Intel Sample Library. License text in the package is CC BY 4.0, with the preface \"For personal use and educational use. Limited commercial use for marketing and print purposes.\"",
+      "redistributable": false,
+      "download": {
+        "url": "https://cdrdv2.intel.com/v1/dl/getContent/830833",
+        "file": "main_sponza.zip",
+        "bytes": 3987608266,
+        "sha256": "b8bb853884ab1566b3beb35666bd09882a4e0dc16661e4684e103792cf0229b9"
+      },
+      "extract": "zip",
+      "convert": {"tool": "blender", "blenderVersion": "4.5.0", "script": "tools/assets/convert/gltf-downsize-textures.py", "args": ["main_sponza/NewSponza_Main_glTF_003.gltf", "main_sponza_1k/NewSponza_Main_1k.gltf", "1024"]},
+      "outputs": [
+        {
+          "path": "main_sponza/NewSponza_Main_glTF_003.gltf",
+          "sha256": "e04c4c540c74bdddcbd3f590a85c14119bfd5839702246a23b3a737c0cce2400",
+          "bytes": 691352
+        },
+        {
+          "path": "main_sponza/NewSponza_Main_glTF_003.bin",
+          "sha256": "903d443b46b51c8397c25b65286d9f9e111121f12a3e0e303f19019982568d6b",
+          "bytes": 139973456
+        },
+        {
+          "path": "main_sponza_1k/NewSponza_Main_1k.gltf",
+          "sha256": "d5f974f1270d7f9d512fda4f6eeb6550ae6861bf7d50c442eab7495b1b494e30",
+          "bytes": 693664
+        },
+        {
+          "path": "main_sponza_1k/textures/arch_stone_wall_01_BaseColor.png",
+          "sha256": "f5e9bc1e3cbf2b7921214eaac6a11fd41dacee832c04ad984dc22a2222dff8ee",
+          "bytes": 2250899
+        },
+        {
+          "path": "main_sponza_1k/textures/arch_stone_wall_01_Normal.png",
+          "sha256": "93b68d95919a3749cc512eed655d7eb90ab5ac41916d8dcf4e2b8cbead87a8bf",
+          "bytes": 2735766
+        },
+        {
+          "path": "main_sponza_1k/textures/arch_stone_wall_01_Roughnessarch_stone_wall_01_Metalness.png",
+          "sha256": "22539d589fc3d243d4e7514207345ed8df7dceb96cafec27fd534a0d9d3624c2",
+          "bytes": 2250447
+        },
+        {
+          "path": "main_sponza_1k/textures/brickwall_01_BaseColor.png",
+          "sha256": "969a6da1e8e44ea0aeed7cce3f24167d065cba5f071f795e93a095f1a8a2b75b",
+          "bytes": 2259565
+        },
+        {
+          "path": "main_sponza_1k/textures/brickwall_01_Normal.png",
+          "sha256": "e9399623ebf3d864c7623bc00a67e5d47bc9f0346824b7f15312fe957576e493",
+          "bytes": 2305851
+        },
+        {
+          "path": "main_sponza_1k/textures/brickwall_01_Roughnessbrickwall_01_Metalness.png",
+          "sha256": "5f966027ea85bf8d1f0340b340fe4b5dc9de64c9bb468cb8175bb45da8b122f2",
+          "bytes": 2113148
+        },
+        {
+          "path": "main_sponza_1k/textures/brickwall_02_BaseColor.png",
+          "sha256": "3948ab59f28ea9f2a8d4ad5991684bfbd73a1c0b41df24cb17914ed700e6eec8",
+          "bytes": 2050705
+        },
+        {
+          "path": "main_sponza_1k/textures/brickwall_02_Normal.png",
+          "sha256": "3215b6023b84cdcb5d64c597bdb1dea3b26796fa281f9f32ff8facfe75ee3f9b",
+          "bytes": 2804241
+        },
+        {
+          "path": "main_sponza_1k/textures/brickwall_02_Roughnessbrickwall_02_Metalness.png",
+          "sha256": "b815f29199f6b022297150932e05e4045b75fa88d06ffab8a4652a9775c6c2ea",
+          "bytes": 2165315
+        },
+        {
+          "path": "main_sponza_1k/textures/ceiling_plaster_01_BaseColor.png",
+          "sha256": "09a69be37f4c6b5107505b6ff0d30c2ca1d1c8272d43090ac83b4161a2e1ae62",
+          "bytes": 1911270
+        },
+        {
+          "path": "main_sponza_1k/textures/ceiling_plaster_01_Normal.png",
+          "sha256": "3eb0290a68296825395255d17f8955f9491ba987748d3db0a63403b16467e8b9",
+          "bytes": 2113196
+        },
+        {
+          "path": "main_sponza_1k/textures/ceiling_plaster_01_Roughnessceiling_plaster_01_Metalness.png",
+          "sha256": "637b3723c70e6e3c8d38a24aa04ac7ad23f92f32d5e179465abc0872ec0a369e",
+          "bytes": 896765
+        },
+        {
+          "path": "main_sponza_1k/textures/ceiling_plaster_02_BaseColor.png",
+          "sha256": "27eff1d3319d6e973ea21cb8e19f37537ca81a1ca32149db882b3beb310d0bb2",
+          "bytes": 1466847
+        },
+        {
+          "path": "main_sponza_1k/textures/ceiling_plaster_02_Roughnessceiling_plaster_01_Metalness.png",
+          "sha256": "00dcd032555d79298a43afb41cdb414581ab2a9ea9634005f8f7a94acee6ba21",
+          "bytes": 972435
+        },
+        {
+          "path": "main_sponza_1k/textures/col_1stfloor_BaseColor.png",
+          "sha256": "550cfe96e3ca5de16d54220166b6a7def204d86e6b00d4bd80cef7cd4cfb86ef",
+          "bytes": 2175097
+        },
+        {
+          "path": "main_sponza_1k/textures/col_1stfloor_Normal.png",
+          "sha256": "710891086f5c309c2c311701223cc0588cad0d3ee69981570ffbb420a7282e2d",
+          "bytes": 2715931
+        },
+        {
+          "path": "main_sponza_1k/textures/col_1stfloor_Roughnesscol_1stfloor_Metalness.png",
+          "sha256": "ad4445b735d6780c1d8869f3c7eb670e81ad11c453fb551862dc59a7758a5e54",
+          "bytes": 2058671
+        },
+        {
+          "path": "main_sponza_1k/textures/col_brickwall_01_BaseColor.png",
+          "sha256": "8c1b16564e5037b19f712166fa8cd85e9b71f578ac759efcbc6badcc5a5013c1",
+          "bytes": 1895633
+        },
+        {
+          "path": "main_sponza_1k/textures/col_brickwall_01_Normal.png",
+          "sha256": "1de9363a3ae409068fa2501fd8306fb7d6da3882d30447db0a319d611c559e26",
+          "bytes": 2113736
+        },
+        {
+          "path": "main_sponza_1k/textures/col_brickwall_01_Roughnesscol_brickwall_01_Metalness.png",
+          "sha256": "1fc41bdfb681e2d3216a8f7d35ad8437a26c041c9fdf2bef1f0642fc1992cf63",
+          "bytes": 2078636
+        },
+        {
+          "path": "main_sponza_1k/textures/col_head_1stfloor_BaseColor.png",
+          "sha256": "5eaac7d7ed45cce8ac1b97dc1d3d0682390beefc9b2b70d05d4fd32c11a4777c",
+          "bytes": 1705687
+        },
+        {
+          "path": "main_sponza_1k/textures/col_head_1stfloor_Normal.png",
+          "sha256": "84feed7386757fda006c111aa980a27ec6a490f09bbca6f8a6411d55414983a8",
+          "bytes": 2067766
+        },
+        {
+          "path": "main_sponza_1k/textures/col_head_1stfloor_Roughnesscol_head_1stfloor_Metalness.png",
+          "sha256": "87425360ab892072eb52598ab9b7b92ca7cbf49b2d18b29d8b5e08fb7d106651",
+          "bytes": 1532721
+        },
+        {
+          "path": "main_sponza_1k/textures/col_head_2ndfloor_02_BaseColor.png",
+          "sha256": "8d71acbc4c1053f89dcc9aaeef5f0548c0b5c28ceac861231510e0ad99a429d0",
+          "bytes": 1715514
+        },
+        {
+          "path": "main_sponza_1k/textures/col_head_2ndfloor_02_Normal.png",
+          "sha256": "245b714a59f9e1e1edf67222971f1055311b22d45a160501d29a4d5bfa4c9209",
+          "bytes": 2191846
+        },
+        {
+          "path": "main_sponza_1k/textures/col_head_2ndfloor_02_Roughnesscol_head_2ndfloor_02_Metalness.png",
+          "sha256": "30306fda25481cd16f5fbe264d95654ebdce8692514269b4d7015d3473b4a2fc",
+          "bytes": 1494228
+        },
+        {
+          "path": "main_sponza_1k/textures/col_head_2ndfloor_03_BaseColor.png",
+          "sha256": "fb5b2fcb958cc6467bfdae13ead4373ba92f9b287b6b3c2dd3cc383b0d7459e7",
+          "bytes": 1353216
+        },
+        {
+          "path": "main_sponza_1k/textures/col_head_2ndfloor_03_Normal.png",
+          "sha256": "4bfba6d40af88115d6b6c56a8b28898b4ec77232ccfa71092f2a508e1734c148",
+          "bytes": 1973327
+        },
+        {
+          "path": "main_sponza_1k/textures/col_head_2ndfloor_03_Roughnesscol_head_2ndfloor_03_Metalness.png",
+          "sha256": "1cdf9860281252e19588681edc51e69c925e0931dd19a8a06a388e97b127cc73",
+          "bytes": 1246531
+        },
+        {
+          "path": "main_sponza_1k/textures/dirt_decal_01_dirt_decal_01_mask_gltf_alpha_dirt_decal_Opacity.png",
+          "sha256": "c0e93909f800898413e92bdc1ac3cdfe7a538982ba4e705532cb43803ee2690b",
+          "bytes": 2202119
+        },
+        {
+          "path": "main_sponza_1k/textures/door_stoneframe_01_BaseColor.png",
+          "sha256": "88c0df694fd2d811027b50e232b21d8b35f4f4745fc02d660c675ef2dbfb321d",
+          "bytes": 1958344
+        },
+        {
+          "path": "main_sponza_1k/textures/door_stoneframe_01_Normal.png",
+          "sha256": "b2a6878fed03384bab49fe02bd2337e2a4058ea738168873bd70231d6859350b",
+          "bytes": 2476791
+        },
+        {
+          "path": "main_sponza_1k/textures/door_stoneframe_01_Roughnessdoor_stoneframe_01_Metalness.png",
+          "sha256": "1cfd6f6a12e6fffd7c0c1ad88f832f9fa503aa7fe72b91089ded7ea569409077",
+          "bytes": 1830982
+        },
+        {
+          "path": "main_sponza_1k/textures/door_stoneframe_02_BaseColor.png",
+          "sha256": "6ebbb3da6fcab6ae64ec8eda034095601abe7357191aca008a73b423c70874e1",
+          "bytes": 1801204
+        },
+        {
+          "path": "main_sponza_1k/textures/door_stoneframe_02_Normal.png",
+          "sha256": "8d64ecdb3b40f099e3d611b58cd2b5340039e9ae899059b1cd8e4ab8c973497a",
+          "bytes": 2292836
+        },
+        {
+          "path": "main_sponza_1k/textures/door_stoneframe_02_Roughnessdoor_stoneframe_02_Metalness.png",
+          "sha256": "2f771cb393b6ef0deb898fe251cb5e0db256ea8ccb8ea3208ceaef1a9901c991",
+          "bytes": 1450824
+        },
+        {
+          "path": "main_sponza_1k/textures/floor_tiles_01_BaseColor.png",
+          "sha256": "664ef508713a07145d0c5ff1d7a81118edacd7ba9ef2ac0b4a064661a1dca856",
+          "bytes": 1834902
+        },
+        {
+          "path": "main_sponza_1k/textures/floor_tiles_01_Normal.png",
+          "sha256": "20fc587e443f6b1b46c4e5147ae510bbdce3e395b6096a4d3eb667a1ed82c2e7",
+          "bytes": 2163835
+        },
+        {
+          "path": "main_sponza_1k/textures/floor_tiles_01_Roughnessfloor_tiles_01_Metalness.png",
+          "sha256": "b1fb2945ba655f98417d3b0c654db160933005d5aa22b2860b96d244ba06bac6",
+          "bytes": 1600767
+        },
+        {
+          "path": "main_sponza_1k/textures/lionhead_01_BaseColor.png",
+          "sha256": "ea55f25111146eeb02d887edcdde1127c57fbe8a2e60eec9920665ff2e70ea76",
+          "bytes": 1734879
+        },
+        {
+          "path": "main_sponza_1k/textures/lionhead_01_Normal.png",
+          "sha256": "089240a3b727a4244747cc3139ed9ccfb67313f6fb780945795f06aa3249fd78",
+          "bytes": 2438133
+        },
+        {
+          "path": "main_sponza_1k/textures/lionhead_01_Roughnesslionhead_01_Metalness.png",
+          "sha256": "3d02c6875f7d5df034b1179e36fe15c9b3d86029be4592c0ff710f4c48061c4c",
+          "bytes": 1600762
+        },
+        {
+          "path": "main_sponza_1k/textures/metal_door_01_BaseColor.png",
+          "sha256": "faed05cba21aa3bdf5345ad1ce56f9f691ca79975e79e3088d66a0535783908e",
+          "bytes": 737657
+        },
+        {
+          "path": "main_sponza_1k/textures/metal_door_01_Normal.png",
+          "sha256": "acefe4fef4bc3803e4bd0bca64bf2d454b99471b747c5a40b352392deda18e2d",
+          "bytes": 2280018
+        },
+        {
+          "path": "main_sponza_1k/textures/metal_door_01_Roughnessmetal_door_01_Metalness.png",
+          "sha256": "ca800359da554b83fddf17c44167656d802172e5cd371b48634eb3bd584ba1d5",
+          "bytes": 1796923
+        },
+        {
+          "path": "main_sponza_1k/textures/ornament_01_BaseColor.png",
+          "sha256": "0f129caeef3a5ad207b1c4198b3c76c8d2138431893124bb61bb1fa294764d6f",
+          "bytes": 1902036
+        },
+        {
+          "path": "main_sponza_1k/textures/ornament_01_Normal.png",
+          "sha256": "97be25155ca75c7501bb07f7c3e5a7d5f29853720c429841db399dc16e7bf4b1",
+          "bytes": 2564956
+        },
+        {
+          "path": "main_sponza_1k/textures/ornament_01_Roughnessornament_01_Metalness.png",
+          "sha256": "3e7fb5fcf61d13aa877e11d543907be042f7bdd9d036248738bb7619a4f6c187",
+          "bytes": 2023175
+        },
+        {
+          "path": "main_sponza_1k/textures/roof_tiles_01_BaseColor.png",
+          "sha256": "40d20d4cd4e864a3898ec560a709e81e14a6e2e12fb740bd955643be8409c019",
+          "bytes": 2670522
+        },
+        {
+          "path": "main_sponza_1k/textures/roof_tiles_01_Normal.png",
+          "sha256": "97ad83743eaf033fb8c96dccf2eb4ddffeb9861962c8ff0a368711b28ca4be24",
+          "bytes": 2565412
+        },
+        {
+          "path": "main_sponza_1k/textures/roof_tiles_01_Roughnessroof_tiles_01_Metalness.png",
+          "sha256": "fd82a33169f85777bf803e60a76981cc549b4f390a22d16e7f25d4552f81d89c",
+          "bytes": 1035994
+        },
+        {
+          "path": "main_sponza_1k/textures/stone_01_tile_BaseColor.png",
+          "sha256": "5c0d679452ec3bcc859a7b37516447a81a7f9ca7932421b9035e7b9c9b51aac2",
+          "bytes": 1962314
+        },
+        {
+          "path": "main_sponza_1k/textures/stone_01_tile_Normal.png",
+          "sha256": "fe91b6c8b6f204b925ff114c4769f6ada0166b350e5ca2068980ab167a3476cb",
+          "bytes": 2880246
+        },
+        {
+          "path": "main_sponza_1k/textures/stone_01_tile_Roughnessstone_01_tile_Metalness.png",
+          "sha256": "5f29fb6a6aeacb082c29fdfbba74b0ce992792c54d3ccfe115f4260829dcac35",
+          "bytes": 2050998
+        },
+        {
+          "path": "main_sponza_1k/textures/stone_trims_01_BaseColor.png",
+          "sha256": "5ea8456376a8c47556b66e6d238b44143232c318595cb5a7fec619918f4fa2d5",
+          "bytes": 1713200
+        },
+        {
+          "path": "main_sponza_1k/textures/stone_trims_01_Normal.png",
+          "sha256": "bb3e8f766c90e0031e64c7f09282606bcdbdc11c90273390ef4fa215eebf6a96",
+          "bytes": 2262534
+        },
+        {
+          "path": "main_sponza_1k/textures/stone_trims_01_Roughnessstone_trims_01_Metalness.png",
+          "sha256": "ee30f2ef85a36a71b3f89ccccc1c5829e5e658b3e2d3442c8dabbab8aee81f04",
+          "bytes": 1792338
+        },
+        {
+          "path": "main_sponza_1k/textures/stone_trims_02_BaseColor.png",
+          "sha256": "2da121b42c61db49f8d705273250b58d0c9a6e07b9a8416cd763e24268677110",
+          "bytes": 2141075
+        },
+        {
+          "path": "main_sponza_1k/textures/stone_trims_02_Normal.png",
+          "sha256": "667d817ca57cf2a7b08d4a758e81cd831e9057640dd9da2f7b6d7a9ade895d6d",
+          "bytes": 2555037
+        },
+        {
+          "path": "main_sponza_1k/textures/stone_trims_02_Roughnessstone_trims_02_Metalness.png",
+          "sha256": "7bceb5aac85a32fbca64e21a5dab573252be1a451b8df5a4a7b309908e01e704",
+          "bytes": 1847243
+        },
+        {
+          "path": "main_sponza_1k/textures/stones_2ndfloor_01_BaseColor.png",
+          "sha256": "84600847c56d8f2a1cea356a6c23c47c376945f8bb57009f31aa5ba92eff824f",
+          "bytes": 2245730
+        },
+        {
+          "path": "main_sponza_1k/textures/stones_2ndfloor_01_Normal.png",
+          "sha256": "26c5e8970ceccc04f9294ee93daba986c832f2c83fe400bfdba2d9afcf26ab5a",
+          "bytes": 2574497
+        },
+        {
+          "path": "main_sponza_1k/textures/stones_2ndfloor_01_Roughnessstones_2ndfloor_01_Metalness.png",
+          "sha256": "4e2793c0e43d413dc71e6f1446e964c6ff8e62a16bbce63f837464cbe85ee508",
+          "bytes": 1968358
+        },
+        {
+          "path": "main_sponza_1k/textures/window_frame_01_BaseColor.png",
+          "sha256": "8e604ffd29853064d1531605400c37412dddc6ab92e54717f3d820b347bf5ec1",
+          "bytes": 1715971
+        },
+        {
+          "path": "main_sponza_1k/textures/window_frame_01_Normal.png",
+          "sha256": "305a0e029b6e66375bc11a16a67d54eee74a442fcbfceb08386359bc1ea88da7",
+          "bytes": 2062644
+        },
+        {
+          "path": "main_sponza_1k/textures/window_frame_01_Roughnesswindow_frame_01_Metalness.png",
+          "sha256": "2fcb3fdbe62f18ff9a76915d6de4057b848a2ee1fae374a084fac8ca086dc042",
+          "bytes": 1750078
+        },
+        {
+          "path": "main_sponza_1k/textures/wood_door_01_BaseColor.png",
+          "sha256": "42cfe025886886331a155799a26aa5785f4dbcc7fc0fd1680e2ed2f16c943510",
+          "bytes": 1324147
+        },
+        {
+          "path": "main_sponza_1k/textures/wood_door_01_Normal.png",
+          "sha256": "268394add0e44c136bdd128f825506b168420422df5efb3e11beabc2db8b3d96",
+          "bytes": 1875001
+        },
+        {
+          "path": "main_sponza_1k/textures/wood_door_01_Roughnesswood_door_01_Metalness.png",
+          "sha256": "2822301ceb425cd16409c50a7e8c33208015ed6a566cd84816e81393365c261e",
+          "bytes": 987373
+        },
+        {
+          "path": "main_sponza_1k/textures/wood_tile_01_BaseColor.png",
+          "sha256": "9c535ca22ccdf00c5ceda58466cd2a2550f91cefaacae590a2c652162541c4d3",
+          "bytes": 2118029
+        },
+        {
+          "path": "main_sponza_1k/textures/wood_tile_01_Normal.png",
+          "sha256": "b7584c93738fc5589301040e44f703fb61e318c5ffb05e5145825b715754525e",
+          "bytes": 2582560
+        },
+        {
+          "path": "main_sponza_1k/textures/wood_tile_01_Roughnesswood_tile_01_Metalness.png",
+          "sha256": "bbce95cc0a45df8c0e63d503dad8d9e2e4b4811b71118483f624249e6aafe166",
+          "bytes": 1093357
+        }
+      ]
+    },
+    {
+      "id": "sponza-khronos",
+      "title": "Sponza (Khronos glTF Sample Assets)",
+      "author": "Crytek (model, CRYENGINE sample); Khronos glTF Sample Assets repository",
+      "sourceUrl": "https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/Sponza",
+      "license": "CRYENGINE Limited License Agreement",
+      "licenseUrl": "https://www.cryengine.com/ce-terms",
+      "attribution": "Sponza, Crytek. Not used: CRYENGINE license.",
+      "redistributable": false,
+      "skip": true,
+      "skipReason": "Model files are under the \"Cryengine Limited License Agreement\" (Models/Sponza/LICENSE.md in the Khronos repo), not CC-BY. The CRYENGINE terms (cryengine.com/ce-terms, Sec. 2.1.4) allow use in \"Games in object code form only\", and the Marketplace copy needs an \"Assets Terms\" checkbox. Not similarly permissive, so not downloaded."
+    }
+  ]
+}

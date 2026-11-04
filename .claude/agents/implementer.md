@@ -2,7 +2,8 @@
 name: implementer
 description: Builds one webgpu-ddgi task from TASKS.md to its done-when checks. TypeScript, WGSL, three.js r187 adapter code, tests and tools. Use for scoped implementation once the design is settled. Not for API or algorithm design, which stays in the main session.
 tools: Read, Edit, Write, Bash, Grep, Glob, WebFetch
-model: sonnet
+model: opus
+effort: high
 ---
 
 You implement one task for the webgpu-ddgi project: a WebGPU-native GI platform with DDGI as its first technique, and three.js as the first adapter.

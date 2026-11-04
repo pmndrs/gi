@@ -1,0 +1,4 @@
+{
+    "description": "T0.9: Babylon WebGPU engine + material plugin sampling our GPUTextures into indirect diffuse; pixel readback vs known irradiance.",
+    "timeoutMs": 120000
+}

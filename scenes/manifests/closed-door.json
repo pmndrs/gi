@@ -1,0 +1,26 @@
+{
+    "id": "closed-door",
+    "title": "Two rooms with a closed door",
+    "description": "The two-room layout with a door panel closing the doorway, so the dark room must stay completely dark.",
+    "tags": ["interior", "leak-test", "thin-geometry"],
+    "units": "meters",
+    "upAxis": "y",
+    "parts": [
+        { "kind": "procedural", "builder": "closed-door" }
+    ],
+    "cameras": [
+        { "name": "lit-room", "position": [0.4, 1.6, 3.6], "target": [3.2, 0.9, 1.0], "fovYDeg": 70 },
+        { "name": "facing-the-door", "position": [0.5, 1.5, 2.0], "target": [8.0, 1.2, 2.0], "fovYDeg": 60 },
+        { "name": "dark-room-leak-view", "position": [7.7, 1.6, 3.6], "target": [4.1, 1.0, 2.0], "fovYDeg": 70 }
+    ],
+    "lights": [
+        { "type": "point", "label": "room-a-lamp", "color": [1, 0.96, 0.88], "intensity": 12, "position": [2, 2.45, 2], "range": 14 }
+    ],
+    "environment": { "type": "none" },
+    "volume": { "center": [4.1, 1.4, 2.0], "size": [8.4, 3.0, 4.2], "probeSpacing": 0.5 },
+    "nativeCapable": true,
+    "referenceCube": { "position": [3.2, 0.5, 0.7] },
+    "credits": [
+        { "asset": null, "license": "MIT", "attribution": "MIT, this repo." }
+    ]
+}

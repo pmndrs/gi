@@ -1,0 +1,63 @@
+{
+    "id": "thin-wall",
+    "title": "Thin wall",
+    "description": "One room split by a 3 cm wall with no doorway, lit on one side only, so any light on the dark side has leaked through the wall.",
+    "tags": ["interior", "leak-test", "thin-geometry"],
+    "units": "meters",
+    "upAxis": "y",
+    "parts": [
+        {
+            "kind": "procedural",
+            "builder": "thin-wall"
+        }
+    ],
+    "cameras": [
+        {
+            "name": "lit-side",
+            "position": [0.4, 1.5, 3.7],
+            "target": [4, 1.2, 1.0],
+            "fovYDeg": 70
+        },
+        {
+            "name": "lit-side-from-the-wall",
+            "position": [3.6, 1.6, 0.5],
+            "target": [0.5, 1.0, 3.0],
+            "fovYDeg": 75
+        },
+        {
+            "name": "dark-side-leak-view",
+            "position": [7.6, 1.6, 3.6],
+            "target": [4.1, 1.2, 1.0],
+            "fovYDeg": 70
+        }
+    ],
+    "lights": [
+        {
+            "type": "point",
+            "label": "west-lamp",
+            "color": [1, 0.96, 0.88],
+            "intensity": 12,
+            "position": [2, 2.45, 2],
+            "range": 14
+        }
+    ],
+    "environment": {
+        "type": "none"
+    },
+    "volume": {
+        "center": [4, 1.4, 2],
+        "size": [8.4, 3.0, 4.4],
+        "probeSpacing": 0.5
+    },
+    "nativeCapable": true,
+    "referenceCube": {
+        "position": [3.2, 0.5, 0.6]
+    },
+    "credits": [
+        {
+            "asset": null,
+            "license": "MIT",
+            "attribution": "MIT, this repo."
+        }
+    ]
+}

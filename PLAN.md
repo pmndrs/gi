@@ -18,10 +18,10 @@ M0 is planned in detail below. Later milestones are outlined, and each one is br
    | --- | --- | --- |
    | `scout` | haiku | Read-only lookups: find code, read docs or upstream source, summarize. Never edits. |
    | `wrangler` | haiku | Mechanical jobs: download and convert assets, record licenses, rename, format, update tables. |
-   | `implementer` | sonnet | Build one task's code and tests to its done-when. |
+   | `implementer` | opus, high effort | Build one task's code and tests to its done-when. |
    | `gpu-tester` | sonnet | Run GPU checks and benchmarks in real browsers, record numbers, capture screenshots. |
-   | `native-runner` | sonnet | Native RTXGI harness work: CMake, Vulkan/D3D12 builds, PowerShell launchers, benchmark CSVs. |
-   | `reviewer` | sonnet | Check a finished task against its done-when, the code rules and the spec. It reports back and doesn't fix. |
+   | `native-runner` | opus, medium effort | Native RTXGI harness work: CMake, Vulkan/D3D12 builds, PowerShell launchers, benchmark CSVs. |
+   | `reviewer` | opus, high effort | Check a finished task against its done-when, the code rules and the spec. It reports back and doesn't fix. |
 
    Design-heavy work stays in the main session: platform API, tracing design, the DDGI algorithm, deciding what a spike's numbers mean.
 3. **Files are the shared memory.** A subagent starts by reading:
@@ -109,6 +109,7 @@ Full rows, with done-when checks, are on the board. In short:
   - A `tools/compare` CLI reporting FLIP and mean error.
 - **T0.8 Spike: three.js sharing.** A shared device, a registered GI `Light` node sampling an `ExternalTexture`, checked under the Standard, Meshlet and Visibility-Buffer pipelines; env diffuse off with env specular on; GI inside a reflection-probe capture.
 - **T0.9 Spike: Babylon.** The same contract through Babylon's WebGPU engine and a material plugin.
+  - Done, then paused. From M1 on, three.js is the only adapter until v1 is validated; Babylon, Pixi and r3f come in M5 or later (DECISIONS 2026-11-04). M1+ has no Babylon tasks. If the spike page breaks, it leaves the required `test:gpu` set.
 - **T0.10 Spike: BVH.**
   - Our two-level BVH (binned SAH, built in a worker) with WGSL closest-hit and any-hit, vs the latest three-mesh-bvh, on Sponza and Bistro.
   - Correctness via the ported ray oracle tests.
@@ -119,7 +120,7 @@ Full rows, with done-when checks, are on the board. In short:
 ### M0 done when
 
 - `pnpm i && pnpm lint && pnpm typecheck && pnpm test && pnpm build` passes from a clean clone.
-- `pnpm test:gpu` passes on NVIDIA and Intel.
+- `pnpm test:gpu` passes on NVIDIA and Intel. Apple devices (Mac, iPad, older iOS) are deferred to a later milestone (DECISIONS 2026-11-04).
 - The viewer opens every test scene on a lit default view.
 - three's `LightProbeGrid` and VXGI show as baselines with their frame and bake cost recorded per device.
 - Native per-pass timings exist for every native-capable scene.
@@ -132,7 +133,7 @@ Each is broken into tasks at the end of the previous milestone. The likely shape
 
 - **M1, core DDGI loop, static scene:**
   - the platform scene copy;
-  - `@gi/trace` from the T0.10 result;
+  - `@gi/trace` from the T0.10 result, with the top-level BVH refit on the GPU every frame and rebuilt now and then (moved up from M3; DECISIONS 2026-11-04);
   - `@gi/shade`;
   - the DDGI field and update loop (rotation, hysteresis, unlimited bounce, sky);
   - classification and relocation;
@@ -149,8 +150,7 @@ Each is broken into tasks at the end of the previous milestone. The likely shape
   - sky and time of day;
   - the light sweep and native side-by-side.
 - **M3, moving objects and camera:**
-  - per-frame top-level BVH;
-  - worker builds;
+  - worker builds (the per-frame top-level BVH moved to M1);
   - deforming-mesh refit;
   - the camera-following volume;
   - adapter change tracking;

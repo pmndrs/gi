@@ -1,0 +1,5 @@
+{
+    "description": "Full tracer benchmark on furnished-room: ours (on our, tinybvh and three-mesh-bvh trees) vs three-mesh-bvh. Slow; run under the bench lock, on its own.",
+    "timeoutMs": 300000,
+    "manual": true
+}

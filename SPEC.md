@@ -9,6 +9,7 @@ A **universal, open-source WebGPU dynamic diffuse GI library**, to be published 
 - It has no dependency on any rendering library.
 - three.js is the first adapter and the one we develop against.
 - Babylon, Pixi, react-three-fiber and anyone's own WebGPU renderer must be able to plug in the same way, without changes to the core.
+  - Until v1 is validated, three.js is the only adapter we build or test. The other adapters come in M5 or later; see DECISIONS 2026-11-04.
 - It is built for nobody in particular: games, configurators, archviz, editors, demos. No single product's needs shape the API. (HomeFig was where the first experiments happened; its lessons are recorded below, and it may become one user.)
 
 **Scenes are whatever the host builds.** The library never assumes a file format or a way of making scenes. A scene can be:
@@ -429,7 +430,7 @@ You sign off before the next milestone starts.
   5. **Second-technique check (paper):** walk a voxel GI and a surfel GI design through the platform API and the shading-module contract, and fix what doesn't fit.
   6. **Reflection-probe coexistence:** GI inside a three.js reflection-probe capture, and env diffuse off with env specular on.
 
-**Done when:** WebGPU timings work on every test device (Windows NVIDIA and Intel, Mac M5 Pro, iPad, older iOS where WebGPU exists); native timings exist for every manifest scene; each spike has a written yes/no answer with numbers; and the contract above is confirmed or revised from what the spikes found.
+**Done when:** WebGPU timings work on the Windows NVIDIA and Intel GPUs (the Mac M5 Pro, iPad and older iOS device are deferred to a later milestone: DECISIONS 2026-11-04); native timings exist for every manifest scene; each spike has a written yes/no answer with numbers; and the contract above is confirmed or revised from what the spikes found.
 
 ### M1: Core DDGI loop, static scene, two hosts
 
@@ -486,7 +487,7 @@ This can overlap M2 and M3.
 
 - Ray-traced glossy reflections as the first new technique.
 - Voxel, SDF, surfel and radiance-cascade experiments on the same platform.
-- react-three-fiber bindings, Babylon adapter, then Pixi.
+- react-three-fiber bindings, Babylon adapter, then Pixi: after v1 is validated on three.js (M5 or later). The contract is checked against Babylon only as of the T0.9 snapshot until then.
 - Room-shaped volumes and multi-level cascades.
 - Optional high-quality modes.
 

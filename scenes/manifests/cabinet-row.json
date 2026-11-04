@@ -1,0 +1,66 @@
+{
+    "id": "cabinet-row",
+    "title": "Hollow cabinet row",
+    "description": "A kitchen run of hollow cabinets made of 18 mm boards against a wall, to check light does not leak through thin panels or into closed cabinets.",
+    "tags": ["interior", "leak-test", "thin-geometry"],
+    "units": "meters",
+    "upAxis": "y",
+    "parts": [
+        {
+            "kind": "procedural",
+            "builder": "cabinet-row",
+            "options": {
+                "closedFronts": true
+            }
+        }
+    ],
+    "cameras": [
+        {
+            "name": "front-of-the-run",
+            "position": [1.6, 1.5, 3.0],
+            "target": [1.5, 1.2, 0.3],
+            "fovYDeg": 65
+        },
+        {
+            "name": "close-up",
+            "position": [1.3, 1.4, 1.8],
+            "target": [1.9, 0.9, 0.2],
+            "fovYDeg": 55
+        },
+        {
+            "name": "from-the-right",
+            "position": [4.5, 1.6, 3.0],
+            "target": [1.0, 1.0, 0.3],
+            "fovYDeg": 65
+        }
+    ],
+    "lights": [
+        {
+            "type": "point",
+            "label": "ceiling-lamp",
+            "color": [1, 0.96, 0.88],
+            "intensity": 12,
+            "position": [2.4, 2.35, 1.7],
+            "range": 12
+        }
+    ],
+    "environment": {
+        "type": "none"
+    },
+    "volume": {
+        "center": [2.4, 1.3, 1.6],
+        "size": [5.0, 2.8, 3.4],
+        "probeSpacing": 0.25
+    },
+    "nativeCapable": true,
+    "referenceCube": {
+        "position": [3.6, 0.5, 1.4]
+    },
+    "credits": [
+        {
+            "asset": null,
+            "license": "MIT",
+            "attribution": "MIT, this repo."
+        }
+    ]
+}

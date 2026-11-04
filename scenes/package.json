@@ -1,0 +1,24 @@
+{
+    "name": "@pmndrs/ddgi-scenes",
+    "version": "0.0.0",
+    "private": true,
+    "description": "Test scenes for @pmndrs/ddgi: manifests, engine-free procedural builders, a GLB exporter and a three.js check page. Not published.",
+    "license": "MIT",
+    "type": "module",
+    "scripts": {
+        "export": "tsx src/export.ts",
+        "check": "vite",
+        "check:build": "vite build",
+        "contact-sheet": "tsx check/contact-sheet.ts",
+        "bounds": "tsx src/model-bounds.ts"
+    },
+    "dependencies": {
+        "three": "0.187.0"
+    },
+    "devDependencies": {
+        "@types/node": "^24.0.0",
+        "@types/three": "0.187.0",
+        "tsx": "^4.19.0",
+        "vite": "^6.1.0"
+    }
+}

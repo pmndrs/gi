@@ -1,0 +1,123 @@
+/**
+ * The host-facing platform: what an adapter (or a plain WebGPU app) calls.
+ *
+ * An adapter does four things and nothing else is required:
+ *
+ * 1. **Share the device.** The host creates the `GPUDevice` (asking for
+ *    {@link requiredLimits}) and passes it in. The platform never creates,
+ *    configures or destroys a device.
+ * 2. **Describe the scene by handles,** incrementally, through {@link GIPlatform.scene}.
+ * 3. **Drive a frame** with {@link GIPlatform.encode}, recording into the
+ *    host's command encoder before the host renders.
+ * 4. **Read GI while shading** through {@link GIPlatform.shading}.
+ *
+ * Typical use:
+ *
+ * ```ts
+ * const device = await adapter.requestDevice({ requiredLimits: requiredLimits(adapter) });
+ * const gi = createGI(device, { gpuTiming: true });
+ * const ddgi = gi.addTechnique(new DDGITechnique({ volumes: [...] }));
+ * gi.setOutput(ddgi);
+ * // ...describe the scene with gi.scene.createMesh(...) etc.
+ * await gi.prepare();
+ *
+ * // every frame:
+ * const encoder = device.createCommandEncoder();
+ * gi.encode(encoder, { deltaTime, budget: { gpuMs: 2 }, camera });
+ * renderer.render(encoder); // shading reads gi.shading
+ * device.queue.submit([encoder.finish()]);
+ * ```
+ */
+
+import type { FrameInput, FrameScreen } from './frame';
+import type { SceneApi } from './scene';
+import type { ShadingModule } from './shading-module';
+import type { GIStats } from './stats';
+import type { GITechnique } from './technique';
+
+export interface GIPlatformOptions {
+    /**
+     * Fill `stats.passes` with per-pass GPU times when the device has
+     * `timestamp-query`; silently does nothing otherwise.
+     */
+    readonly gpuTiming?: boolean;
+    /** Prefix for GPU object labels, so captures show whose objects are whose. */
+    readonly label?: string;
+    /**
+     * Where mesh BVHs are built. `worker` keeps the main thread free; `main`
+     * is for environments without module workers (tests, some bundlers).
+     * Defaults to `worker`.
+     */
+    readonly buildIn?: 'worker' | 'main';
+}
+
+export interface GIPlatform {
+    readonly device: GPUDevice;
+    /** True after `prepare()` resolves; false again after device loss. */
+    readonly isReady: boolean;
+
+    readonly scene: SceneApi;
+
+    /** Attach a technique. Several may be attached; one feeds `shading`. */
+    addTechnique<T extends GITechnique>(technique: T): T;
+    removeTechnique(technique: GITechnique): void;
+    /** The technique whose shading module renderers read. */
+    setOutput(technique: GITechnique): void;
+    /**
+     * Stack techniques: `technique` uses `fallback`'s shading module as its
+     * bounce source for distant or missed rays. `fallback` is encoded first
+     * each frame.
+     */
+    setFallback(technique: GITechnique, fallback: GITechnique | undefined): void;
+
+    /**
+     * Compile kernels and allocate resources, asynchronously. Call after
+     * attaching techniques, and again after changing settings that need new
+     * resources. Encoding before it resolves throws `GINotReadyError`.
+     */
+    prepare(): Promise<void>;
+
+    /**
+     * Record this frame's world-space GI work into the host's encoder: scene
+     * uploads, the top-level BVH rebuild, deformed-mesh refits, then each
+     * technique's update within the budget. Call once per frame, before the
+     * host's passes that shade with GI.
+     */
+    encode(encoder: GPUCommandEncoder, frame: FrameInput): void;
+    /**
+     * Screen-space work for techniques that need it, after the host has
+     * written depth and normals and before it shades. A no-op when no attached
+     * technique has a screen stage, so hosts may always call it.
+     */
+    encodeScreen(encoder: GPUCommandEncoder, screen: FrameScreen): void;
+
+    /** The output technique's shading module. Re-read `version` each frame. */
+    readonly shading: ShadingModule;
+    readonly stats: GIStats;
+
+    /** Forget all accumulated history (a camera cut or a scene swap). */
+    resetHistory(): void;
+    /** Free everything the platform allocated. The device and host resources are untouched. */
+    dispose(): void;
+}
+
+/** Limits the platform would like for large scenes. Pass them to `requestDevice`. */
+export type RequiredLimits = Partial<Record<Exclude<keyof GPUSupportedLimits, '__brand'>, number>>;
+
+/**
+ * The factory and static helpers the implementation exports. Declared here so
+ * the contract is complete; implemented in M1.
+ */
+export interface GIPlatformModule {
+    createGI(device: GPUDevice, options?: GIPlatformOptions): GIPlatform;
+    /**
+     * Limits to request from this adapter: raised storage-buffer counts and
+     * binding sizes, capped at what the adapter supports. Typical scenes work
+     * at default limits too, by splitting large buffers across bindings.
+     */
+    requiredLimits(adapter: GPUAdapter): RequiredLimits;
+    /** Optional features worth requesting (`timestamp-query`, `float32-filterable`). */
+    optionalFeatures(adapter: GPUAdapter): GPUFeatureName[];
+    /** Whether this device can run the platform at all. */
+    isSupported(device: GPUDevice): boolean;
+}

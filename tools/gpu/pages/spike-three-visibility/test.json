@@ -1,0 +1,4 @@
+{
+    "description": "T0.8: the same checks under three's Visibility-Buffer drawing pipeline (r187 #35191).",
+    "timeoutMs": 90000
+}

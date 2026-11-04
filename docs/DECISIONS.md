@@ -4,6 +4,100 @@ Settled choices, newest first. Each entry is short: the decision, why, and what 
 
 ## 2026-11-04
 
+- **M0 is signed off; M1 starts.** Dennis: "the viewer runs, is there more to test? otherwise lets start m1". The open B0 target (Sponza tinybvh build ≤ 2 s) stays in the BVH lane and doesn't block M1.
+- **The BVH code sources in `research/bvh-libraries.md` may be used.** Dennis: "So far all of the ones you listed we can use," and "the sort algos we can use as they are often cited in other work."
+  - That includes the repos with no licence file: meistdan/ploc, AlanIWBFT/CWBVH, kishimisu/WebGPU-Radix-Sort and wgpu_sort.
+  - **Rule:** any code ported from one of them gets a `THIRD_PARTY.md` entry naming the repo, the commit and what was taken.
+  - **Original PLOC:** allowed if needed, but prefer H-PLOC.
+  - **EA Gigi** is dropped as a source, because its WebGPU output is generated code.
+  - *Revisit if:* we split out `pmndrs/bvh` as a published package. At that point, ask the authors of the unlicensed repos for an explicit licence before shipping anything ported from them.
+- **The BVH is its own engine-free package, `packages/bvh`, in this repo for now.** Dennis: "if its useful enough I might even say to make it pmndrs/bvh... I think that will be the plan, but lets keep it in the repo for now for simplicity sake."
+  - **Imports:** it imports no DDGI, GI or engine code. `ddgi-core` depends on it, and it ships through `@pmndrs/ddgi` until it may be split out as `pmndrs/bvh`.
+  - **Lint:** a rule forbids `packages/bvh` from importing `ddgi-core` or any engine.
+  - **The GPU builder:** the target is H-PLOC, with LBVH as the stepping stone.
+  - **Stage B0 starts in T0.10 part C:** tinybvh compiled to WASM, running in a worker behind the Builder contract.
+    - It's written straight into `packages/bvh`, never in `ddgi-core` first.
+    - Done when Sponza builds in 2 s or less single-threaded, the oracle passes, and tracing is at least as fast as on our current trees.
+    - Our own CPU builder is then deleted.
+  - Moving the existing tracer out of `ddgi-core/src/platform/trace` into the package happens in part C if there's room, otherwise as an M1 task.
+  - **The BVH runs in its own lane.** Dennis: "bvh can run in its own lane." It follows the gates in `docs/design/bvh-framework.md`:
+    - B0 (tinybvh) is done before M1 starts;
+    - B1–B2 (GPU LBVH, then H-PLOC) are done before M3;
+    - B3 is tied to the performance review.
+    Lane tasks get their own `B*` rows on the board, alongside the milestone tasks.
+  - Design: `docs/design/bvh-framework.md`.
+- **Push hard on WebGPU features: subgroups first.** Dennis: "we should push hard on features. Subgroups are a basic utility for compute so I would propose that we build for them first."
+  - **Subgroups:**
+    - GPU compute kernels are written for the WebGPU `subgroups` feature first. That covers the coming GPU BVH builder with its sort and scan, refits, and DDGI kernels where it helps. Chrome desktop has shipped subgroups since version 134.
+    - `optionalFeatures(adapter)` requests `subgroups` whenever the adapter offers it.
+  - **Fallback without subgroups:** there is no second GPU code path.
+    - The BVH falls back to building on the CPU: the worker build, or trees from three-mesh-bvh converted to our layout (T0.10 part C).
+    - Any other kernel that needs subgroups reports that through `isSupported` or a typed error, instead of quietly doing something slower.
+  - **Rules for subgroup code:**
+    - Never assume a subgroup size; read `subgroup_size`, which is 8–64 across vendors.
+    - Never rely on workgroups making progress at the same time.
+    - One-pass "decoupled look-back" sorts are allowed only as an optional fast path, behind a self-test.
+  - **Other optional features:** use them where they clearly help: timestamp-query, shader-f16 where precision allows, and raised limits. Each needs a feature check and one declared fallback, so the code never carries parallel implementations.
+  - *Why:* subgroups are basic compute building blocks, and writing for them first keeps kernels simple and fast on the browsers we target.
+  - *Revisit if:* Safari or Firefox still ship without subgroups when the Apple-device tier is picked up.
+  - Research: `research/webgpu-compute-for-bvh.md`.
+- **As much BVH work as possible runs on the GPU. The top-level tree moves to the GPU in M1, not M3.** Dennis approved this.
+  - M1 refits the top-level tree on the GPU every frame from instance transforms. It also rebuilds the tree now and then, on the GPU or on the CPU off the frame.
+  - *Why:* part B measured the CPU top-level rebuild at 1–10 ms on the main thread for each move in real scenes, and 86–121 ms for 10,000 instances. Dragging furniture is a core v1 case.
+  - Per-mesh trees: T0.10 part C also tries building with three-mesh-bvh in the three adapter and converting its tree into our GPU layout. The core stays engine-free, because the adapter hands over packed arrays.
+  - A GPU builder for per-mesh trees (LBVH, PLOC, H-PLOC) is being researched separately. It comes back as a design before anyone builds it.
+  - *Revisit if:* a GPU refit makes the trace much slower than a fresh build, on scenes where things move a lot. That would call for more frequent rebuilds or a GPU builder.
+- **The platform API draft (T0.11) is signed off.** Dennis: "I am fine with the api spec." That covers the draft in `docs/api/platform.md` and the contract files, including the UV-mapping and vertex-normal additions.
+  - The revision after T0.10 (the storage-buffer count, batch versus inline tracing) doesn't need his sign-off again, unless it changes something a host sees.
+- **three.js is the only adapter until the library has proved itself.** Dennis: "maintaining babylon compatability is not a first order requirement... use three to get us through the phases... pause it until we can finish out the rest of the work and even validate that our library is fast enough/useful etc. with three acting as the main adapter... later when we work out kinks and api changes we can bring the other adapters in line."
+  - T0.9 stays done as the M0 spike. From M1 on there is no Babylon work, testing or fixing. If its spike page breaks, it leaves the required `test:gpu` set instead of being fixed.
+  - Contract changes no longer need checking against Babylon. The Babylon notes in `docs/api/platform.md` describe the T0.9 snapshot.
+  - The core stays engine-neutral, and the lint rule against engine imports stays. It costs almost nothing, and it's what lets other adapters come back later. Don't spend time on Babylon, Pixi or r3f adapters, or on "would this work in X" analysis.
+  - The Babylon, Pixi and react-three-fiber adapters move to after v1 has been validated: M5 or later.
+  - *Revisit when:* v1 is validated on three.js (fast enough and useful), or a user needs another engine sooner.
+- **The tracer ships the watertight triangle test only, and the speed bar applies to that test.**
+  - Möller–Trumbore lets 3–12% of rays aimed at shared edges slip through (part A). In DDGI that shows up as light leaking through closed rooms, so it's not an option even though it's faster.
+  - Part B measured watertight at 0.70× three-mesh-bvh on Sponza on the RTX 3060, below the 0.8× bar set before measuring, and 1.50× on Intel. So, as the rule says, T0.10 part C optimises the tracer and measures again.
+  - Möller–Trumbore stays as a build option only until part C is done, as a speed reference, and is then deleted.
+  - *Why:* correctness first. Leaks are the failure DDGI is judged on, and the bar was agreed in advance.
+  - *Revisit if:* part C can't reach 0.8× on the RTX 3060. In that case the choice between "slower but sealed" and "faster and leaky with workarounds" goes to Dennis.
+- **We use our own tracer.** T0.10's decision rule (set before measuring, `docs/design/trace.md`) is met.
+  - After part C, watertight closest-hit on Sponza is 1.20× three-mesh-bvh on the RTX 3060 and 1.97× on Intel UHD, and the oracle passes on both GPUs. Möller–Trumbore is deleted.
+  - Bistro exterior is 0.83× and Bistro interior 0.99× on the RTX 3060.
+  - three-mesh-bvh stays a reference to learn from, not a dependency (SPEC). Its traversal uses the same 64-byte two-child node, so there was nothing left to take from it.
+  - Building with three-mesh-bvh and converting (7.4 s on Sponza) is slower than tinybvh (5.3 s) and traces slower, so that route is dropped.
+  - *Revisit if:* the M1 numbers show tracing is the bottleneck. Then B3 (wide nodes) moves forward, and any-hit gets looked at first. On the same rays it trails three-mesh-bvh in every scene but Sponza: furnished room 0.34× on the RTX 3060, Bistro interior 0.60×. It traces at the same speed on tinybvh's and three-mesh-bvh's trees, so the walk, the top level or the leaf size (three-mesh-bvh's hold 10 triangles, ours 4) is the likely cause; the triangle test isn't. T1.3 measures it.
+- **B0 isn't done yet, and M1 doesn't wait for it.**
+  - tinybvh in WASM passes the oracle and builds Sponza in 5.3 s, against ≤ 2 s planned. The only Emscripten on this machine (3.1.57) compiles tinybvh's scalar builder only.
+  - Both CPU builders stay, behind the same tree format, until B0's checks are met. Our builder isn't deleted yet. M1 meshes use tinybvh by default (5.3 s against 8.7 s; it traces at 0.97× our trees on the RTX 3060 and 1.00× on Intel). The top level keeps our builder until B1a moves it to the GPU.
+  - The ≤ 2 s number stays. Reaching it needs a newer Emscripten whose SIMD builder compiles: a toolchain install, so it's Dennis's call. pthreads is not the route, since it needs headers the host page must set.
+  - *Revisit when:* Dennis decides on the Emscripten upgrade, or B2 (GPU H-PLOC) makes the CPU build matter less.
+  - **Update, same day:** Dennis approved the newer Emscripten. With emsdk 6.0.13 pinned, tinybvh's SIMD Bonsai builder takes Sponza from 5.3 s to 2.2-2.7 s in the browser. Still not ≤ 2 s.
+    - The ≤ 2 s target stays. The next step is **B0b**: write our GPU layout directly from the WASM, removing the 0.65 s JS conversion pass. Not chosen: reusing tinybvh's boxes without recomputing them (it weakens the check that boxes really contain their triangles), and pruning Bonsai harder (13% faster for a worse tree).
+    - Our CPU mesh builder stays until B0's checks all pass.
+- **Code is written and reviewed on Opus.**
+  - `implementer` and `reviewer` run on Opus at high effort, and `native-runner` on Opus at medium.
+  - `gpu-tester` stays on Sonnet, and `scout` and `wrangler` on Haiku: running checks, measuring, lookups and mechanical jobs.
+  - *Why:* Dennis: Sonnet is "great for small things, tests, etc." but not the best coder; "opus-medium at a minimum with opus-high being fine." Also, a builder and a reviewer on the same tier tend to miss the same things.
+  - *Revisit if:* token cost becomes a problem. Then split small scaffolding jobs out to a Sonnet task, rather than downgrading the implementer.
+- **Two ground-truth renderers must agree before we trust either.** Cycles (CPU) and three-gpu-pathtracer count as agreeing on a scene when, compared with `tools/compare` after 8×8-pixel block averaging:
+  - **full image:** overall brightness within ±0.5%, block error at most 1%;
+  - **indirect only:** brightness within ±1%, block error at most 3%.
+  - Cornell measured -0.002% / 0.37% (full) and -0.014% / 1.43% (indirect). Two-room measured +0.11% and +0.12% brightness.
+  - *Why these numbers:*
+    - Block averaging cancels per-pixel noise. Two Cycles seeds already differ by 0.8% per pixel, so per-pixel limits would only measure noise.
+    - The limits are about 2–3× what we measured. That leaves room for noise, while a wrong light unit, a missing bounce or a flipped axis would still fail: those show up as 5% or more, as the 12% light-range gap on two-room did.
+    - DDGI's own targets against these references will be several percent, so references agreeing within 0.5–1% is accurate enough to judge DDGI.
+  - *Revisit if:* a run sits near a limit. In that case, measure the path tracer's own seed-to-seed noise; it wasn't measured in T0.7, and its noise likely makes up most of the 0.37%. Also revisit if DDGI targets tighter than about 3% need sharper references.
+- **Sponza is Intel's "New Sponza" (base package), download-only.**
+  - `pnpm assets:fetch` downloads `main_sponza.zip` (3.99 GB) from Intel. Nothing from it is committed. It isn't shown on a public examples site without Intel's written OK.
+  - Its license file is CC BY 4.0 text with a preface: "For personal use and educational use. Limited commercial use for marketing and print purposes." Intel's samples page says "Downloads are available under the Creative Commons Attribution license."
+  - The Khronos glTF Sponza is excluded. Its model files are under the CRYENGINE Limited License (§2.1.4: "Games in object code form only"). three.js r187's Sponza examples load that Khronos copy, so our Sponza numbers won't be the same model as three's examples. We compare against three's techniques running on our copy instead.
+  - *Why:* Dennis: "use the intel or the 'improved sponza' ive seen floating around." Intel's version is the improved one, and its license is the clearest available. Every other Sponza variant derives from Crytek's model.
+  - *Revisit if:* we want Sponza on the public examples site (ask Intel, sponza_feedback at intel dot com), or the base package is too heavy for the BVH spike. In that case use a stated subset of it.
+- **Apple-device testing is deferred past M0.** M0 measures on the Windows laptop only (RTX 3060 and Intel UHD). The Mac, iPad and older iOS rows of T0.3, the Mac columns of T0.5 and T0.10, and the M0 "every test device" check move to a later milestone.
+  - *Why:* Dennis: "We can skip the apple/device testing for now until we progress further." The LAN device page (`pnpm device:serve`) is built and ready for when we pick it up.
+  - *Revisit when:* the DDGI loop runs (M1 or M2), so the Apple numbers measure something real.
 - **Toolchain mirrors `@pmndrs/upscaler`.**
   - pnpm workspace with an umbrella package over `-core`/`-three`.
   - vite, vitest, rollup type bundling, ESLint 9.

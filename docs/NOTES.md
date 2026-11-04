@@ -9,7 +9,8 @@ One bullet per fact, each with its source. Add a bullet when something cost you 
 - **Wrapping our textures:** `ExternalTexture` wraps a same-device `GPUTexture`. three binds it without allocating or destroying it.
   - Set `image = { width, height, depth }`, or size reads as 1×1.
   - Set `type` to match the sample type: the default is filterable float; use `FloatType` for rgba32float and `UnsignedIntType` for uint.
-  - For array views, set `isArrayTexture = true`, or use `texture3D()` for 3D.
+  - For array views, set `isArrayTexture = true`.
+  - For 3D, set `is3DTexture = true` and sample it with `texture3D()`. Without the flag the shader fails with "expected texture_3d<f32>, got texture_2d<f32>". Source: T0.8, `WGSLNodeBuilder.js:1399, 2293-2296`.
   - On reallocation, create a new `ExternalTexture` and assign it to `node.value`; `needsUpdate` throws.
   - Don't touch `textureData.externalTexture`, which is the XR path.
 
@@ -25,6 +26,47 @@ One bullet per fact, each with its source. Add a bullet when something cost you 
 - **`LightProbeGrid`:** L2 SH, raster cubemap bake, no visibility, re-bakes overwrite values. Sponza (490 probes, 32² faces) bakes in 3.1 s on a Pascal GPU. PR #35174, which adds DDGI visibility, is a stalled draft: Sponza shading goes 3.08 → 4.00 ms (8 probes) or 3.38 ms (4 probes).
 - **VXGI:** voxel cone tracing at 128³ by default, gathered as a full-screen pass that needs TRAA. Lights are dynamic; geometry needs full re-voxelization. Introduced in PR #34402 (r186).
 
+- **`wgslFn` resources (T0.8):** a `wgslFn` accepts texture and sampler parameters.
+  - Pass `texture()` or `texture3D()` nodes of `ExternalTexture`s.
+  - A `sampler` parameter is fed from a filterable texture node and uses that texture's filter and wrap settings. Unfilterable (`rgba32float`) textures have no sampler; use `textureLoad`.
+  - Source: `nodes/accessors/TextureNode.js:673-680`, `WGSLNodeFunction.js:58-67`.
+- **Device features:** three reads `core-features-and-limits` from the device. When we create the device, request it (and all adapter features we need). Source: `WebGPUBackend.js:258`, T0.8.
+- **Env diffuse workaround (r187):** `LightingModel.start` builds all lights, then calls `this.indirect`. Overriding `indirect` on our light node's lighting model lets us scale `iblIrradiance` by 1 − coverage.
+  - Only Standard and Physical materials read `iblIrradiance`; Lambert and Phong don't.
+  - It costs the multi-scatter and sheen env terms inside the volume. It's fixed at build time.
+  - Source: `nodes/core/LightingModel.js:24`, `EnvironmentNode.js:109`, T0.8.
+- **Light ordering** in `LightsNode` is by `.id`, which mixes node and object ids, so ties between equal-priority probe lights are unreliable. Give our light a distinct priority. Source: `LightsNode.js:36`.
+- **Meshlet pipeline** draws `source.clone()` materials and skips cube render targets. So material-instance patches don't survive it; use the light node. Source: `examples/jsm/pipelines/MeshletDrawingPipeline.js:225`.
+
+- **three's frame counter only advances inside `renderer.setAnimationLoop`.** With a bare `requestAnimationFrame` plus `render()`, frame-based nodes (passes, VXGI's cycle, TRAA jitter) stall or skip frames. Source: T0.5, `Animation.js:87`.
+- **GPU timing in three:** `resolveTimestampsAsync` returns only the latest frame's passes. To get all of them, sum `backend.timestampQueryPool.<type>.timestamps`. Intel UHD sometimes returns an end before its start (one case read -3,546 s), so drop those. Source: T0.5.
+- **LightProbeGrid:** objects drawn before the first bake read an empty atlas. Draw into a fresh RenderTarget after the first bake step. Source: T0.5.
+- **VXGI** fails its depth copy on a renderer created with `antialias: true`; create it with `false`. Source: T0.5.
+- **Background compiles:** pipelines compile in the background, and objects are skipped until theirs is ready. Warm up until the draw-call count stops growing before timing anything. Source: T0.5.
+- **Release the device between pages:** destroy the device on `pagehide`. Otherwise the next page in the same browser waits on the old page's GPU memory; Bistro exterior then interior took 121 s, against 26 s once the device was destroyed. Source: T0.5.
+
+## Babylon.js (9.33.2, checked 2026-11-04)
+
+- **No device input:** `WebGPUEngine.initAsync` always calls `requestAdapter` and `requestDevice(deviceDescriptor)`. Pass our limits and features in `deviceDescriptor`, and hand `engine._device` to the core. `dispose()` calls `device.destroy()`, and after device loss Babylon requests a new device itself. Source: `webgpuEngine.pure.js:443, 481, 503-520, 3176`.
+- **Wrapping our textures:**
+  - `wrapWebGPUTexture` leaves the view null and sets no flags. Set `is2DArray`, `is3D` and `type` yourself (FLOAT for `rgba32float`, so the layout is unfilterable), then call `updateWrappedWebGPUTexture`.
+  - Disposing the wrapper destroys our `GPUTexture` unless `_hardwareTexture.reset()` runs first.
+  - Source: `webgpuEngine.pure.js:1981, 2014, 2999`, `webgpuHardwareTexture.js:88`.
+- **Material plugins:**
+  - Declarations go in `CUSTOM_FRAGMENT_DEFINITIONS`, the call in `CUSTOM_FRAGMENT_BEFORE_FINALCOLORCOMPOSITION`. Zero `finalIrradiance` to turn env diffuse off.
+  - Samplers are found by a `Sampler` name suffix, and `<texture>Sampler` binds to that texture.
+  - `vec4f` uniforms need `hardBindForSubMesh`.
+  - Babylon is left-handed, and its env irradiance is E/π.
+  - Source: `pbr.fragment.js:107, 621`, `webgpuShaderProcessorsWGSL.pure.js:35, 510`, `pbrBaseMaterial.pure.js:1561-1577`, `sphericalPolynomial.pure.js:187-199`.
+
+## three-mesh-bvh (checked 2026-11-04)
+
+- **Version and shape:** v0.9.18 (3 Nov 2026, MIT); default branch `master`. The WebGPU path is `three-mesh-bvh/webgpu` (`BVHComputeData`). It runs only inside three's node system (TSL `FunctionNode`s, three r185+), not on a bare `GPUDevice`, and its API is marked unstable. Source: `src/webgpu/BVHComputeData.js:83,144-149`.
+- **Layout:** 64-byte nodes with both child boxes (Aila–Laine, PR #945); triangles as a u32 index buffer plus interleaved `vec4f` positions; 4 storage buffers; a 60-entry stack. Two levels: SAH clusters (at most 64 primitives) under a top level, with per-instance entries; `updateTransforms()` refits the top level only, and skinned meshes are baked on the CPU. Source: `packBVHBufferUtils.js:9`, `ClusteredBVH.js:138-209`.
+- **Benchmark trap:** the per-mesh trees from `new MeshBVH(geometry)` default to the CENTER split, not SAH (`Constants.js:80-84`). Pass `{ strategy: SAH }` for a fair comparison.
+- **Speed claims:** the "about 2×" upstream gains were *build* times (PRs #942/#943). The Aila–Laine layout gave about 1.12× on raycasts (PR #945, no hardware stated). No published rays/s figure exists. This corrects SPEC's "roughly doubled ray throughput" line.
+- **three's `RayTracedRadiosity`** flattens static meshes into one world-space geometry and doesn't use the top level. It was merged to three master on 2 Nov 2026 (#35302), after r187.
+
 ## WebGPU
 
 - **Compatibility mode:** devices may allow 0 fragment-stage storage buffers. Keep fragment-side data in textures.
@@ -34,12 +76,107 @@ One bullet per fact, each with its source. Add a bullet when something cost you 
 
 ## Tooling and environment
 
+- **Choosing the GPU in headless Chrome:**
+  - Chrome 156 gives NVIDIA by default, whatever `powerPreference` says.
+  - `--use-webgpu-power-preference=force-low-power` makes `requestAdapter()` return null.
+  - The Intel GPU is reached with `--use-adapter-luid=<high>,<low>`. LUIDs change every boot; the runner reads them with `Get-PnpDeviceProperty` on `{60B193CB-5276-4D0F-96FC-F173ABAD3EC6} 2`.
+  - `--disable-gpu` makes `requestAdapter()` return null.
+  - Intel reports architecture `gen-12lp`.
+  - Source: T0.2, `tools/gpu/chrome.ts`.
+- **WGSL errors arrive late:** shader-module errors surface only after the queue drains. `runGpuTest` waits about 50 ms after the drain; anything later can be missed. Source: T0.2.
+- **Node runs `.ts` directly** (Node 24 type stripping), but rejects enums, namespaces and constructor parameter properties. The root tsconfig has `allowImportingTsExtensions` for `.ts` import paths. Source: T0.2.
+- **GPU timestamps on this laptop:** both GPUs support `timestamp-query` in Chrome 156, and headless Chrome returned unrounded values. Timing costs less than CPU-side frame timing can resolve (`performance.now()` steps 0.1 ms; the NVIDIA per-round scatter is about ±0.5 ms). Source: T0.3.
+- **Device page:** `tools/gpu/pages/device/`. `?label=`, `?rounds=`, `?frames=` and `?scale=` change the run. `pnpm device:serve` keeps its certificate in `node_modules/.cache/ddgi-lan` and regenerates it when the LAN addresses change. Source: T0.3.
+- **One GPU benchmark at a time.** Before any timing run, Cycles render or native harness run, take the shared lock with `node tools/reference/bench-lock.ts run --what "<label>" -- <command>`, or `acquire --pid <pid>` and `release --pid <pid>`.
+  - `status` shows who holds it.
+  - The lock folder is still `$TEMP/ddgi-gpu-bench.lock`, but it now holds an `owner.json`, and a lock is taken over only when its owner process is dead.
+  - Don't use a bare `mkdir` any more. Correctness runs (smoke tests, pixel readbacks) don't need the lock. Never time native and browser GPU work at the same time. Source: main session, M0.
+- **WebGPU needs a secure context.** `http://<LAN IP>` pages get no `navigator.gpu`, so pages for the Mac and iOS devices must be served over HTTPS, and a self-signed certificate is fine. `localhost` counts as secure. Source: the WebGPU spec (secure-context only).
 - **GPUs on this laptop:** Playwright or headless Chrome with `powerPreference: 'high-performance'` gets the RTX 3060 Laptop. The Claude desktop browser pane got the Intel iGPU. Source: the audit, 2026-10-30.
 - **Worktrees read slow:** benchmarks run from a git worktree read about 3× slower in absolute GPU time. Compare A/B only within one environment. Source: the `@pmndrs/upscaler` CLAUDE.md.
 - **`node_modules` symlinks:** a symlinked `node_modules` in a worktree isn't matched by `node_modules/` in `.gitignore`. Add a slash-less `node_modules` to `.git/info/exclude`. Source: the `@pmndrs/upscaler` CLAUDE.md.
-- **Native harness device pick:** the fork's `Vulkan.cpp` skips any GPU whose name lacks "RTX 3060". This must be made configurable (T0.6). Source: the audit.
+- **Workspace shape:** the umbrella `@pmndrs/ddgi` lives in `packages/ddgi` (unlike the upscaler, whose repo root is the umbrella). `ddgi-core` and `ddgi-three` are private, export their `src/*.ts` directly, and are bundled into `packages/ddgi/dist/` at build time. The root `package.json` is a private shell: `lint`, `typecheck` and `test` run over everything, and `pnpm build` filters to `@pmndrs/ddgi`. Source: T0.1.
+- **Bash tool and heredocs:** a long chain of `cat <<'EOF'` file writes in one Bash call failed to parse and created nothing. Use the Write tool for new files.
+- **Empty modules in the build:** vite and rollup warn "Generated empty chunks" while the packages only contain `export {}`. That is expected until real code lands. `passWithNoTests` in `vitest.config.ts` keeps `pnpm test` green with no tests; remove it once there are tests.
+- **pnpm banner:** pnpm 10.23.0 prints an "update available" box (pnpm 12). `packageManager` stays `pnpm@10.23.0`, the version installed here.
+- **Native harness device pick:** upstream skipped any GPU whose name lacks "RTX 3060". The fork (`m0-harness`) picks the GPU by ini `app.gpu` or the env var `RTXGI_GPU`, and otherwise takes the first GPU with ray tracing. Source: T0.6.
+- **The native harness skips a converged volume.** Once probe variability drops below 0.4 after 16 samples, trace and blend stop running. Time it with the fork option `probeVariability.skipConverged=0`, and don't use `native.csv` rows from commit 9bd7f3c. Source: T0.6.
+- **Native ray counts:**
+  - Classification leaves 30–70% of probes active. Inactive probes trace only the 32 fixed rays and aren't blended (`ProbeTraceRGS.hlsl:69`, `ProbeBlendingCS.hlsl:397`).
+  - Active probes trace all rays, but only rays 32 and up are shaded and blended. Each shaded hit also casts one shadow ray per light, which isn't counted.
+  - So compare on rays actually traced, not probes × rays. Sponza traces 2.01 M rays in 9.39 ms, about 214 M rays/s with hardware RT on the RTX 3060 under Vulkan.
+  - Source: T0.6 and its review.
+- **Native Vulkan mesh limit:** upstream's `ByteAddrBuffer[]` array holds 2048 entries, which caps a scene at about 1,022 meshes; Bistro lost the GPU. The fork sizes the array from the scene (1df1f97). Source: T0.6.
+- **The native frame rate is CPU-bound.** Untimed main-thread work makes it 50–87 ms per frame on Sponza, against about 20 ms of GPU work, so compare GPU numbers only. Source: T0.6.
+- **Native timings drift 15-30% between runs of the same config** on the RTX 3060 laptop, in every pass including lighting, so it's machine state, not code. Take 3+ runs per scene before comparing. Source: T0.6.
 - **Native harness keys:** F2 dumps DDGI textures, F4 runs a 1024-frame benchmark to CSV, J toggles the performance overlay, R reloads shaders and config, M switches between DDGI and the path tracer.
 - **Installed tools:** RenderDoc 1.47.0, PIX 2603.25, Blender, NVIDIA FLIP (`python -m flip_evaluator`), Vulkan SDK 1.3.283, Nsight Systems 2022.4, Nsight Compute 2022.3. Nsight Graphics needs a manual install.
+
+## Test assets
+
+- **Sponza license:** the Khronos glTF Sample Assets Sponza now points at the CRYENGINE marketplace license, which allows "Games in object code form only" (§2.1.4). Crytek's 2010 note says it was "donated to the public for radiosity". These conflict, so it's on hold for Dennis. Source: `Models/Sponza/README.md` and `LICENSE.md` in glTF-Sample-Assets, checked 2026-11-04.
+- **Intel Sponza:** `https://cdrdv2.intel.com/v1/dl/getContent/830833` redirects to a signed CloudFront URL for `main_sponza.zip` (3,987,608,266 bytes), with no login.
+  - Add-ons have their own IDs: curtains 726650, ivy 726656, trees 726662, candles 726676.
+  - Git-bash's `curl` fails TLS to cdrdv2 ("self signed certificate in certificate chain"). Windows `curl.exe` and Node `fetch` both work.
+  - The www.intel.com samples page doesn't load from here; the Wayback copy from 2025-12-06 has the links.
+  - Source: T0.4 scout, 2026-11-04.
+- **McGuire archive:** Breakfast Room and Living Room are CC BY 3.0 (each folder's `license.txt`). Conference Room says only "Credit required", with no license, so it's excluded.
+- **Bistro (NVIDIA ORCA):** CC BY 4.0. One 894 MB zip holds both exterior and interior. The download URL redirects (302) to a short-lived token URL, and `curl -L` follows it with no login.
+  - Exterior: 2.83 M triangles, 1,296 meshes. Interior: 1.04 M triangles, 1,186 meshes.
+  - The exterior is more than the 128 MB default storage binding can hold at 48 bytes per triangle.
+- **Blender 4.5 conversion quirks** (Blender 4.5.0 LTS at `C:\Program Files\Blender Foundation\Blender 4.5\blender.exe`; 4.2, 5.0 and 5.1 are also installed):
+  - The FBX importer has no `apply_unit_scale`; Bistro's FBX is already in metres.
+  - Bistro normal maps are DirectX-style, so `fbx-to-glb.py` flips green.
+  - Bistro's opacity lives in a second copy of each base-color DDS.
+  - The FBX importer doesn't wire emissive textures, so Bistro's lamps won't glow (M4).
+  - The glTF exporter takes alpha mode from the node setup (Greater-Than 0.5 means MASK), not from `blend_method`.
+  - The OBJ importer sets Transmission 1.0 on materials with `illum 4` plus `Tf`, so `obj-to-glb.py` clears it.
+
+- **Blender add-ons hang headless runs.** User add-ons on this machine (Scatter5, SimpleBake, Substance3D) stop `blender --background` from exiting, sometimes at startup. Always pass `--factory-startup`. Source: T0.4, fetch #3/#4.
+- **Blender's glTF export is not bit-reproducible.** Two runs of the same conversion differ in a few bytes of vertex data, while the JSON chunk and buffer lengths stay identical. `sources.json` marks those outputs `"reproducible": false` and checks `jsonSha256` plus `binBytes` instead. Source: T0.4.
+- **Blender 4.5.0's glTF export varies only in TANGENT data,** rounded at the 4th decimal. Index buffers, images, JSON and padding are identical between runs. So `tools/assets/glb-views/<id>.json` pins every other bufferView. Re-record them with `node tools/assets/fetch.ts --record-glb-views <id>`. Source: T0.4 follow-up.
+- **Blender 4.5's OBJ importer can make everything metal.** It sets Metallic to the average of `Ka` when `illum` turns reflection on (as `illum 4` does), Specular IOR Level to the `Ks` average, and IOR to `Ni`. The Breakfast Room has `Ka 1 1 1`, so it came out all metal. `obj-to-glb.py` resets materials to a plain dielectric, and the `"dielectric": true` output check keeps it that way. Source: T0.4 follow-up, Blender `obj_import_mtl.cc`.
+- **Convert scripts must never write their inputs.** Inputs are hard links into `assets/.cache`, so writing one in place would corrupt the cache. The fetch tool checks that inputs are unchanged after a conversion.
+- **GLTFLoader turns shadows off.** Loaded meshes neither cast nor receive shadows until you set `castShadow` and `receiveShadow`. Source: T0.4 check page.
+
+## Ground-truth renderers (T0.7)
+
+- **Cycles units** (`tools/reference/cycles/units.py`):
+  - Sun strength = lux.
+  - Point power P = 4πI watts, from candela.
+  - Emission strength = radiance.
+  - A spot keeps the point's I on its axis.
+- **Cycles axes:** three (x,y,z) maps to Blender (x,−z,y). three's Euler XYZ order is the reverse of Blender's.
+- **Cycles has no light range window.** three r187 point lights fade to 0 at `distance`, so three is about 12% dimmer than Cycles at 7 m on two-room.
+- **Blender defaults that bias references:** indirect clamp 10, light threshold 1%. Turn both off.
+- **Always run Blender with `--factory-startup`.** A user add-on on this machine makes Blender hang at exit.
+- **three-gpu-pathtracer (WebGPU):**
+  - `maxBounces` counts the camera hit as 1.
+  - Emissive meshes are found only by scattered rays, so Cornell's ceiling lamp is noisy. Point lights are sampled explicitly.
+  - Its default `clampIndirect` is 10; set it to 0.
+  - The accumulation texture is rgba32float, readable from `backend.get(target).texture`.
+- **FLIP:** `python -m flip_evaluator.flip_python_api`, which needs no numpy.
+  - Run it with `python -E`, not `-I`, because `-I` hides the user site-packages where it is installed.
+  - FLIP numbers are comparable only at the same downsample.
+- **Comparing noisy renders:** average over 8×8 blocks before judging. Two Cycles seeds differ by 0.8% per pixel but by 0.1% per block.
+- **Blender's glTF importer links Metallic and Roughness to the metallicRoughness texture.** A linked socket ignores its value, so unlink it before setting it. Principled's Diffuse Roughness (4.3+) above 0 means Oren-Nayar. Source: T0.7 follow-up.
+- **The references are pure Lambert; three's standard material isn't.** `scenes/src/three-scene.ts` uses `MeshStandardMaterial` (roughness 1, metalness 0, F0 0.04). That adds a rough specular lobe the Cycles and path-tracer references lack, worth a few percent of the full image. When comparing the viewer against a reference, render with `specularIntensity = 0`, or measure the gap first, so the GI error isn't mixed with material error. Source: T0.7 Opus review.
+- **`@pmndrs/denoiser` is not on npm.** Build steps are in `tools/reference/README.md`.
+
+## Tracing (measured)
+
+- **Use a watertight triangle test.** Möller–Trumbore let 3–12% of rays aimed at shared edges slip between triangles (RTX 3060 11.6%, Intel UHD 3.0%, 2M rays each), and leaked into sealed thin boxes. The watertight test (Woop et al. 2013, with stored corners) let none of 4M through. Source: `tools/gpu/pages/trace-oracle`, T0.10.
+- **Don't index a vector with a per-ray value in WGSL.** `a[kx]` with a runtime `kx` cost about 40% on the RTX 3060 (Sponza 61 → 101 Mrays/s once removed). Build per-ray row vectors with `select()` once per ray instead. Source: T0.10 part C.
+- **Read BVH nodes and triangles as `array<vec4f>`:** one 16-byte load each gave +3% on the RTX 3060 and +23% on Intel UHD. Source: T0.10 part C.
+- **Traversal stack depth:** Sponza needs 35 entries and Bistro exterior 44. A 32-entry stack was no faster than 64, so 64 stays. Source: T0.10 part C.
+- **tinybvh in WASM:** its fast builder needs `__AVX__`. Emscripten emulates 256-bit AVX on WASM SIMD from 3.1.68 on; with `-msimd128 -mavx`, `Build` runs the SIMD Bonsai builder (Ganestam et al. 2015): Sponza in about 1.5 s in Node, with the lowest tree cost of tinybvh's builders. With 3.1.57 only the scalar builder compiled (4.9 s). pthreads would need cross-origin isolation (COOP/COEP headers), which a library can't require of its hosts. Rebuild with `pnpm bvh:wasm` (pinned emsdk in `tools/emsdk/`). Source: T0.10 part C, B0.
+- **Every browser with WebGPU also has WASM SIMD** (Chrome 91+, Firefox 89+, Safari 16.4+), so no scalar WASM build is needed. Source: B0.
+- **JS memory speed on this laptop:** just reading 300 MB takes about 110 ms, so a JS pass over a Sponza-sized tree costs 100-300 ms whatever the code does. Move such passes into WASM or onto the GPU. Source: B0.
+- **Check the GPU is idle before timing.** A browser tab left open on the viewer used about 20% of the RTX 3060 and cost every tracer about 35%. Look at Task Manager's GPU column, or `nvidia-smi`, first. Source: B0.
+- **Repeat runs:** `repeat.ts` writes `run<k>/` rows plus `median/` rows to `trace.csv`, and the commit column checks only the measured paths for `-dirty`. Source: T0.10 part C.
+- **WGSL `bool` can't live in a buffer**, so hit records store front-face as `u32`. Source: T0.10.
+- **Mirrored instances** flip winding in world space, so front-face is `(det > 0) != mirrored`. Source: T0.10.
+- **Long page work:** the test runner gives up on a page that's busy for 30 s inside one CDP evaluate, so long CPU work on a page must yield. Source: T0.10.
 
 ## DDGI (measured lessons)
 

@@ -1,0 +1,3 @@
+{
+    "description": "A compute shader writes known values and the page reads them back."
+}

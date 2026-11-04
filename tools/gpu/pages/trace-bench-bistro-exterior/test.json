@@ -1,0 +1,5 @@
+{
+    "description": "Full tracer benchmark on bistro-exterior: ours (on our, tinybvh and three-mesh-bvh trees) vs three-mesh-bvh. Slow; run under the bench lock, on its own.",
+    "timeoutMs": 1200000,
+    "manual": true
+}
