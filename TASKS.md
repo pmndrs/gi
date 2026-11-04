@@ -245,7 +245,7 @@ Status values: `todo`, `active (agent, date)`, `review`, `done`, `blocked (why)`
     - vertex normals passed through.
   - **No Babylon tasks** (DECISIONS 2026-11-04).
   - **The subgroups-first rule** for new compute kernels.
-  - **The BVH framework** stages, once Dennis confirms `docs/design/bvh-framework.md`.
+  - **The BVH runs as its own lane** (Dennis, 2026-11-04): B rows on the board next to M1. B0 must be done before M1 starts, and B1–B2 before M3.
 
 ## Later
 

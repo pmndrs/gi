@@ -19,7 +19,11 @@ Settled choices, newest first. Each entry is short: the decision, why, and what 
     - Done when Sponza builds in 2 s or less single-threaded, the oracle passes, and tracing is at least as fast as on our current trees.
     - Our own CPU builder is then deleted.
   - Moving the existing tracer out of `ddgi-core/src/platform/trace` into the package happens in part C if there's room, otherwise as an M1 task.
-  - **Still open:** whether the BVH runs as its own lane or holds up M1. The recommendation in `docs/design/bvh-framework.md` is its own lane, with B0 before M1, B1–B2 before M3, and B3 tied to the performance review. Not decided until Dennis answers.
+  - **The BVH runs in its own lane.** Dennis: "bvh can run in its own lane." It follows the gates in `docs/design/bvh-framework.md`:
+    - B0 (tinybvh) is done before M1 starts;
+    - B1–B2 (GPU LBVH, then H-PLOC) are done before M3;
+    - B3 is tied to the performance review.
+    Lane tasks get their own `B*` rows on the board, alongside the milestone tasks.
   - Design: `docs/design/bvh-framework.md`.
 - **Push hard on WebGPU features: subgroups first.** Dennis: "we should push hard on features. Subgroups are a basic utility for compute so I would propose that we build for them first."
   - **Subgroups:**
