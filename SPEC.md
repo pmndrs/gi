@@ -4,7 +4,7 @@
 
 ## What we're building
 
-A **universal, open-source WebGPU dynamic diffuse GI library**, aimed at a pmndrs-style home (working name `pmndrs/ddgi`).
+A **universal, open-source WebGPU dynamic diffuse GI library**, to be published as **`pmndrs/ddgi`**. It's a sibling of [`pmndrs/upscaler`](https://github.com/pmndrs/upscaler) and [`pmndrs/denoiser`](https://github.com/pmndrs/denoiser), and follows their conventions.
 
 - It has no dependency on any rendering library.
 - three.js is the first adapter and the one we develop against.
@@ -76,14 +76,15 @@ The common cases, in priority order:
 
 - **Pinned to r187** (released 30 October 2026).
 - **Tracking r188** (due 25 November). See "What three.js already has" below for how r187 and the open PRs shape the adapter.
-- **Upscalers and denoisers:** your upscaler and denoiser libraries are first-class neighbours. GI must be temporally stable enough not to fight a temporal upscaler, and it must work at render resolution.
+- **Sibling libraries:** `@pmndrs/upscaler` (a WebGPU port of FSR3-style temporal upscaling) and `@pmndrs/denoiser` (Intel OIDN networks and AMD FidelityFX temporal denoisers in WGSL) are first-class neighbours. See "Working with the pmndrs siblings".
 
 ### How the three.js adapter plugs in (r187)
 
 Checked against the r187 source. Runtime confirmation is an M0 spike.
 
-- **GPU device.** `new WebGPURenderer({ device })` is supported, so three and our core share one device.
-  - Our core creates the device with the limits it needs and hands it to three. Three's own default asks for a compatibility adapter with default limits: a 128 MB storage-binding cap, too small for large BVHs.
+- **GPU device.** The host owns the device and our core never creates one. This is the same rule as the upscaler ("your device, never ours") and the denoiser.
+  - `DDGI.requiredLimits(adapter)` tells the host what to request, for example via `new WebGPURenderer({ requiredLimits })`, or by creating the device and passing `{ device }`.
+  - The core works at default limits for typical scenes by splitting large buffers across bindings, and reports clearly when a scene needs more. Three's default device has a 128 MB storage-binding cap.
   - Our core listens with `addEventListener('uncapturederror')` and never assigns `onuncapturederror`, which three overwrites.
 - **Our textures in three's shaders.** r187's `ExternalTexture` wraps a `GPUTexture` from the same device; three binds it without allocating or destroying it. This is how the adapter reads our probe atlases, with no reaching into `renderer.backend`.
   - Set `image` dimensions and the right `type` for the sample format.
@@ -106,6 +107,26 @@ Checked against the r187 source. Runtime confirmation is an M0 spike.
   - three's PMREM (much faster once your compute PR #35130 lands) keeps handling specular from the same sky.
   - Note that three's env "irradiance" is a rough-GGX approximation, not a true cosine convolution. Expect a small, known mismatch where GI fades into the environment.
 
+### Working with the pmndrs siblings
+
+- **Shared device, shared frame.** All three libraries run on the host's `GPUDevice` and record into the host's frame. One device carries:
+  - GI updates;
+  - the upscaler's temporal passes;
+  - the denoiser's passes.
+- **The upscaler** renders the scene at reduced resolution, so GI sampling cost falls with it.
+  - GI must be stable from frame to frame and under sub-pixel jitter, so it doesn't fight the upscaler's history. Probe GI is world-space, so jitter doesn't change it.
+  - A GI "reactive" hint (how much GI changed this frame in screen space) can feed the upscaler's reactive mask after big light changes.
+  - Its published temporal guides (motion, disocclusion) are reused by future screen-space GI techniques instead of being recomputed.
+- **The denoiser** pairs with later techniques that trace noisy rays per pixel: RT reflections via its FidelityFX reflection denoiser, and path-traced references via its OIDN networks.
+  - The reference renderers in `tools/` denoise progressive path tracing with it, so "converged" comes sooner.
+  - The DDGI probe field itself doesn't need it: blending over time already denoises.
+- **One test bench.** The viewer composes all three on the same scenes:
+  - GI on/off;
+  - upscaled vs native resolution;
+  - denoised RT reflections once they exist.
+
+  Frame-cost targets are reported both ways.
+
 ### The rule that shapes everything
 
 **The core speaks only WebGPU and plain data.**
@@ -118,7 +139,16 @@ Checked against the r187 source. Runtime confirmation is an M0 spike.
 
 ### Packages
 
-Package names below use the placeholder `@gi/*`. For pmndrs this might become `@pmndrs/gi-core`, `@pmndrs/ddgi`, `@pmndrs/gi-three`, and later `@react-three/gi`.
+**Published shape: one package, `@pmndrs/ddgi`, with one import path per layer,** matching `@pmndrs/upscaler`:
+
+- `@pmndrs/ddgi/core`: the platform plus the DDGI technique, engine-free;
+- `@pmndrs/ddgi` or `@pmndrs/ddgi/three`: the three.js adapter;
+- `@pmndrs/ddgi/babylon` and `/pixi`: later;
+- `@react-three/ddgi`: later react-three-fiber bindings.
+
+Engines are optional peer dependencies.
+
+**Inside the repo,** the platform and the technique stay separate modules (the `@gi/*` names below), with a lint-enforced boundary. When the second technique arrives, the platform can move into its own package (for example `@pmndrs/gi-core`) without changing its API.
 
 **Platform: shared by every GI method**
 
@@ -152,8 +182,8 @@ The repo keeps its `webgpu-ddgi` name for now, since DDGI is the first deliverab
 An adapter does four things. Nothing else is required.
 
 1. **Share the GPU device.**
-   - The host gives the core its `GPUDevice`. The core never creates a second device next to a renderer.
-   - The core handles device loss by telling the host and rebuilding when asked.
+   - The host gives the core its `GPUDevice`; the core never creates, configures or destroys one. `isSupported(device)` and `requiredLimits(adapter)` help the host pick limits.
+   - On device loss, `isReady` turns false and calls throw a typed not-ready error. The host recreates the core on the new device, the same rule as the upscaler.
 2. **Describe the scene by handles, incrementally.** Calls look like `createMesh(positions, indices, uvs)`, `createMaterial({albedo, albedoTexture, emissive, alphaCutoff})`, `createInstance(mesh, material, transform)`, `setTransform(instance, matrix)`, `createLight({type, color, intensity, position, direction, range, cone})`, `setEnvironment(...)`.
    - The adapter watches its engine for changes and sends only what changed.
    - The core keeps its own GPU copy. That copy is simplified on purpose: diffuse albedo, emissive and cutout only.
@@ -175,6 +205,18 @@ An adapter does four things. Nothing else is required.
    Switching from DDGI to a future technique changes the module, not the adapter.
 
 The core runs in metres, right-handed and Y-up, with linear color and its own documented light units. Adapters convert into these.
+
+**Lifecycle conventions shared with the pmndrs siblings:**
+
+- `configure(...)`, then `await prepare()`, which compiles pipelines asynchronously.
+- Calls throw a typed not-ready error until `isReady` is true.
+- `encode(encoder, ...)` once per frame.
+- `resetHistory()` for cuts.
+- `dispose()` frees only what the core allocated.
+- `gpuTiming: true` fills per-pass timings when `timestamp-query` is available, and silently does nothing otherwise.
+- Settings are a live object read every frame.
+- Every stage has a debug view.
+- An executable plain-WebGPU "hello" example is the reference integration.
 
 ### Plug-in points inside the core
 
@@ -281,8 +323,15 @@ Software BVH tracing in WGSL, owned by `@gi/trace`:
 
 ### Hardware tiers
 
-- **Tier A (discrete GPU, measured on this RTX 3060 Laptop):** full continuous updates.
-- **Tier B (integrated and mobile GPUs: this machine's Intel UHD, Apple silicon, Android flagships):** continuous at a smaller budget, or load a saved bake and update slowly. Measurement decides which. Only the Intel UHD is available here, so Apple and Android need devices or a device lab.
+- **Tier A (high-end):** full continuous updates. Test devices:
+  - an RTX 3060 Laptop (Windows, Chrome: Dawn on D3D12 and Vulkan);
+  - a Mac with an M5 Pro and 64 GB (Safari and Chrome: Metal).
+- **Tier B (integrated and mobile):** continuous updates at a smaller budget, or a saved bake with slow updates. Measurement decides which. Test devices:
+  - the Intel UHD in the Windows laptop;
+  - an iPad;
+  - an older iOS device. If its Safari has no WebGPU, it isn't a target; it documents the cutoff.
+- **Android:** a stretch goal, tested through a device lab if needed.
+- Every milestone's numbers are reported per test device and browser.
 - **Saved bakes:** the field saves and loads in a versioned, engine-neutral format.
 
 ### Out of scope for v1
@@ -360,7 +409,14 @@ You sign off before the next milestone starts.
   - Sponza downloaded.
   - Per-pass GPU timings recorded (the built-in F4 benchmark) for each scene.
   - A D3D12 build, so PIX can time native and Chrome frames in one tool.
-- **References:** Blender Cycles scripted from the manifest. three-gpu-pathtracer wrapped as a reference plug-in.
+- **References:** Blender Cycles scripted from the manifest. three-gpu-pathtracer wrapped as a reference plug-in, denoised progressively with `@pmndrs/denoiser`.
+- **Tooling:**
+  - **Image comparison:** NVIDIA FLIP is installed.
+  - **Frame capture and timing:**
+    - RenderDoc for Vulkan/D3D12 frame captures (installed);
+    - PIX for Chrome's D3D12 backend (installed);
+    - Nsight Graphics for NVIDIA GPU traces;
+    - Xcode's Metal debugger and Safari Web Inspector on the Mac and iOS devices.
 - **Spikes.** Small throwaway tests to answer the questions that could force an architecture change:
   1. **three.js sharing (answered on paper; confirm at runtime):**
      - three r187 runs on our `GPUDevice` with our limits.
@@ -373,7 +429,7 @@ You sign off before the next milestone starts.
   5. **Second-technique check (paper):** walk a voxel GI and a surfel GI design through the platform API and the shading-module contract, and fix what doesn't fit.
   6. **Reflection-probe coexistence:** GI inside a three.js reflection-probe capture, and env diffuse off with env specular on.
 
-**Done when:** native timings exist for every manifest scene; each spike has a written yes/no answer with numbers; and the contract above is confirmed or revised from what the spikes found.
+**Done when:** WebGPU timings work on every test device (Windows NVIDIA and Intel, Mac M5 Pro, iPad, older iOS where WebGPU exists); native timings exist for every manifest scene; each spike has a written yes/no answer with numbers; and the contract above is confirmed or revised from what the spikes found.
 
 ### M1: Core DDGI loop, static scene, two hosts
 
@@ -544,13 +600,17 @@ We don't take its code. We do take its ideas and its measured lessons. None of t
 
 - **One goal per milestone,** described as what you'll be able to see and do.
 - **Readable TypeScript and WGSL:** comments explain *why*, settings are real configuration objects, and there are no minified one-liners or magic indices.
-- **One test command from a clean clone on either GPU.** Tests check behavior and cost, never other reports.
+- **One test command from a clean clone on any test device.** Tests check behavior and cost, never other reports.
 - **Native and reference comparisons explain differences.** They don't block progress unless a stated target fails.
 - **Plain-language status:** "verified" and "not verified" are stated plainly.
 
-## Open questions for you
+## Decisions so far
 
-1. **Hardware:** is this laptop (RTX 3060 + Intel UHD) the whole test matrix for now, or should we line up a Mac and an Android device?
-2. **Package scope/name:** `@gi/*` is a placeholder until a pmndrs home is discussed.
-3. **Your libraries:** names and repos of your upscaler and denoiser libraries, so the adapter is designed alongside them. (The r187 changes and the open PRs are covered in "What three.js already has".)
-4. **Optional tools:** Nsight Graphics and RenderDoc for GPU frame captures.
+- **Hardware:** RTX 3060 Laptop + Intel UHD (Windows), Mac M5 Pro 64 GB, an iPad and an older iOS device. Android is a stretch goal.
+- **Name:** `pmndrs/ddgi`, published as `@pmndrs/ddgi` with `/core`, `/three`, `/babylon`, `/pixi` import paths, following `@pmndrs/upscaler`.
+- **Neighbours:** `@pmndrs/upscaler` and `@pmndrs/denoiser`, sharing device, conventions and the test bench.
+- **Tooling:** approved. See M0.
+
+## Open questions
+
+None blocking. M0 can start.
