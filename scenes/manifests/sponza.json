@@ -1,7 +1,7 @@
 {
     "id": "sponza",
-    "title": "Sponza (Intel New Sponza)",
-    "description": "Intel's New Sponza atrium (2022, textures reduced to 1k): the architecture only (Intel's base package: colonnades, arches and the open courtyard, no curtains, plants or candles), for large interior and outdoor-light tests.",
+    "title": "Sponza (Intel New Sponza, with curtains)",
+    "description": "Intel's New Sponza atrium (2022, textures reduced to 1k) with Intel's curtains add-on: colonnades, arches, the open courtyard and the coloured curtains in the arches, for colour bleeding, large interior and outdoor-light tests. Ivy and trees are in sponza-full; no candles.",
     "tags": ["interior", "classic", "large", "textured", "alpha-cutout"],
     "units": "meters",
     "upAxis": "y",
@@ -10,6 +10,16 @@
             "kind": "model",
             "asset": "sponza-intel",
             "path": "main_sponza_1k/NewSponza_Main_1k.gltf",
+            "transform": {
+                "position": [0, 0, 0],
+                "rotationDeg": [0, 0, 0],
+                "scale": 1
+            }
+        },
+        {
+            "kind": "model",
+            "asset": "sponza-intel-curtains",
+            "path": "pkg_a_curtains_1k/NewSponza_Curtains_1k.gltf",
             "transform": {
                 "position": [0, 0, 0],
                 "rotationDeg": [0, 0, 0],
@@ -56,7 +66,13 @@
         {
             "asset": "sponza-intel",
             "license": "CC-BY-4.0+intel-preface",
-            "attribution": "Sponza 2022 Scene commissioned by Frank Meinl, sponsored by Anton Kaplanyan. Intel Sample Library. License text in the package is CC BY 4.0, with the preface \"For personal use and educational use. Limited commercial use for marketing and print purposes.\"",
+            "attribution": "Base package: Sponza 2022 Scene commissioned by Frank Meinl, sponsored by Anton Kaplanyan. Intel Sample Library. License text in the package is CC BY 4.0, with the preface \"For personal use and educational use. Limited commercial use for marketing and print purposes.\"",
+            "sourceUrl": "https://web.archive.org/web/20251206023318/https://www.intel.com/content/www/us/en/developer/topic-technology/graphics-research/samples.html"
+        },
+        {
+            "asset": "sponza-intel-curtains",
+            "license": "CC-BY-4.0+intel-preface",
+            "attribution": "Curtains add-on: Sponza 2022 Scene commissioned by Frank Meinl, sponsored by Anton Kaplanyan. Add-on package by the Sponza Addon Package Crew. Intel Sample Library. License text in the package is CC BY 4.0, with the preface \"For personal use and educational use. Limited commercial use for marketing and print purposes.\"",
             "sourceUrl": "https://web.archive.org/web/20251206023318/https://www.intel.com/content/www/us/en/developer/topic-technology/graphics-research/samples.html"
         }
     ],

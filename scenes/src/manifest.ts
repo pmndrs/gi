@@ -559,6 +559,18 @@ export function isProceduralOnly(manifest: SceneManifest): boolean {
     return manifest.parts.every((part) => part.kind === 'procedural');
 }
 
+/**
+ * The tag that marks a scene too big to load unasked, like `sponza-full`
+ * (about 13 M triangles). Tools that go through every scene by default (the
+ * contact sheets, the full baseline run) leave a heavy scene out unless it is
+ * named. The viewer still lists it.
+ */
+export const HEAVY_SCENE_TAG = 'heavy';
+
+export function isHeavyScene(manifest: Pick<SceneManifest, 'tags'>): boolean {
+    return manifest.tags.includes(HEAVY_SCENE_TAG);
+}
+
 const DEGREES_TO_RADIANS = Math.PI / 180;
 
 /** Converts a manifest light (degrees) into the scene data / platform shape (radians). */

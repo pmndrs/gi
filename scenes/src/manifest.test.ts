@@ -8,6 +8,7 @@ import { loadManifests } from './export';
 import {
     checkManifestAgainstSources,
     type AssetOutputInfo,
+    isHeavyScene,
     isProceduralOnly,
     manifestLightToSceneLight,
     NO_RANGE_WINDOW,
@@ -242,10 +243,15 @@ describe('the manifests in scenes/manifests', async () => {
             'furnished-room',
             'open-ground',
             'sponza',
+            'sponza-full',
             'thin-wall',
             'two-room',
         ];
         expect(manifests.map((m) => m.id).sort()).toEqual(expected);
+    });
+
+    it('marks only sponza-full heavy, so tools that go through every scene leave it out unless named', () => {
+        expect(manifests.filter(isHeavyScene).map((manifest) => manifest.id)).toEqual(['sponza-full']);
     });
 
     it('has no placeholder scenes left: every scene has its assets confirmed', () => {

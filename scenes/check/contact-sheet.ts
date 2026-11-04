@@ -6,7 +6,7 @@
  *
  *   pnpm --filter @pmndrs/ddgi-scenes contact-sheet --
  *     [--gpu nvidia|intel]     which GPU Chrome gets (default nvidia)
- *     [--only a,b]             only these scene ids
+ *     [--only a,b]             only these scene ids (heavy scenes, like sponza-full, only when named here)
  *     [--camera 1]             only this bookmark number
  *     [--cam px,py,pz,tx,ty,tz,fov]  a one-off free camera instead of the bookmarks (for finding good views)
  *     [--downloads <dir>[;<dir>]  read downloaded models from these folders instead of assets/downloads
@@ -29,6 +29,7 @@ import { CdpClient } from '../../tools/gpu/cdp.ts';
 import { discoverGpuLuid, findBrowser, removeProfile, startChrome } from '../../tools/gpu/chrome.ts';
 import { installShutdownHandlers, registerCleanup, runCleanups } from '../../tools/gpu/cleanup.ts';
 import { loadManifests } from '../src/export';
+import { isHeavyScene } from '../src/manifest';
 
 const scenesDirectory = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const repoRoot = resolve(scenesDirectory, '..');
@@ -177,7 +178,10 @@ async function main(): Promise<number> {
         }
 
         // Which scenes and bookmarks exist: read the manifests the same way the page does.
-        const manifests = (await loadManifests()).filter((manifest) => options.only.length === 0 || options.only.includes(manifest.id));
+        // Without --only: every scene except the heavy ones, which load only when named.
+        const manifests = (await loadManifests()).filter((manifest) =>
+            options.only.length === 0 ? !isHeavyScene(manifest) : options.only.includes(manifest.id),
+        );
         if (options.only.length > 0 && manifests.length !== options.only.length) {
             throw new Error(`Unknown scene id in --only. Known ids: ${(await loadManifests()).map((m) => m.id).join(', ')}`);
         }

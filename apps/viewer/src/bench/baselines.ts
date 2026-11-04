@@ -56,7 +56,7 @@
  * numbers of the viewer's own render path.
  */
 
-import type { SceneManifest } from '../../../../scenes/src/manifest';
+import { isHeavyScene, type SceneManifest } from '../../../../scenes/src/manifest';
 import { ViewerCore } from '../core/viewer-core';
 import { resolveGpuTotals, timestampPoolsFillingUp } from '../render/gpu-time';
 import type { GiMode } from '../scene/layers';
@@ -67,7 +67,7 @@ import { failedMeasurement, median, NOISY_CV_THRESHOLD, summarize, summarizeDiff
 export { NOISY_CV_THRESHOLD, type Measurement } from './measurement';
 
 export interface BaselineOptions {
-    /** Scene ids; null means every manifest scene. */
+    /** Scene ids; null means every manifest scene except the heavy ones (`isHeavyScene`). */
     scenes: string[] | null;
     techniques: TechniqueId[];
     /** Frames timed per round and GI mode. */
@@ -345,7 +345,8 @@ export async function runBaselines(canvas: HTMLCanvasElement, options: BaselineO
     const core = await ViewerCore.create(canvas);
     core.resize(options.width, options.height);
 
-    const manifests = loadAllManifests().filter((manifest) => options.scenes === null || options.scenes.includes(manifest.id));
+    // "Every scene" leaves out the heavy ones (sponza-full); they run only when named.
+    const manifests = loadAllManifests().filter((manifest) => (options.scenes === null ? !isHeavyScene(manifest) : options.scenes.includes(manifest.id)));
     if (options.scenes !== null && manifests.length !== options.scenes.length) {
         throw new Error(`Unknown scene id in ${options.scenes.join(',')}; known: ${loadAllManifests().map((m) => m.id).join(', ')}`);
     }

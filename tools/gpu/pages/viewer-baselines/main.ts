@@ -7,7 +7,7 @@
  * `VITE_*` variables to the page):
  *
  *   (nothing)                      two small scenes, all three techniques: a quick check that it works
- *   VITE_DDGI_BASELINES=full       every scene
+ *   VITE_DDGI_BASELINES=full       every scene except heavy ones (sponza-full; name it in VITE_DDGI_SCENES)
  *   VITE_DDGI_SCENES=sponza,...    only these scenes
  *   VITE_DDGI_TECHNIQUES=none,lpg  only these techniques
  *   VITE_DDGI_ROUNDS=5             frame rounds (GI off and on, alternating)

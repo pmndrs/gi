@@ -1,0 +1,114 @@
+{
+    "id": "sponza-full",
+    "title": "Sponza with add-ons (curtains, ivy, trees)",
+    "description": "Intel's New Sponza (2022, textures reduced to 1k) with three of Intel's add-ons in their shared frame: the curtains, ivy on the walls and cypress trees in the courtyard, for alpha-cutout foliage and heavy-scene tests (about 12.8 M triangles, so only loaded when named). The 10,000-candles add-on is left out until Dennis decides where it goes (proposal: its own scene, sponza-candles, for M2).",
+    "tags": ["interior", "classic", "large", "textured", "alpha-cutout", "foliage", "heavy"],
+    "units": "meters",
+    "upAxis": "y",
+    "parts": [
+        {
+            "kind": "model",
+            "asset": "sponza-intel",
+            "path": "main_sponza_1k/NewSponza_Main_1k.gltf",
+            "transform": {
+                "position": [0, 0, 0],
+                "rotationDeg": [0, 0, 0],
+                "scale": 1
+            }
+        },
+        {
+            "kind": "model",
+            "asset": "sponza-intel-curtains",
+            "path": "pkg_a_curtains_1k/NewSponza_Curtains_1k.gltf",
+            "transform": {
+                "position": [0, 0, 0],
+                "rotationDeg": [0, 0, 0],
+                "scale": 1
+            }
+        },
+        {
+            "kind": "model",
+            "asset": "sponza-intel-ivy",
+            "path": "pkg_b_ivy_1k/NewSponza_IvyGrowth_1k.gltf",
+            "transform": {
+                "position": [0, 0, 0],
+                "rotationDeg": [0, 0, 0],
+                "scale": 1
+            }
+        },
+        {
+            "kind": "model",
+            "asset": "sponza-intel-trees",
+            "path": "pkg_c_trees_1k/NewSponza_CypressTree_1k.gltf",
+            "transform": {
+                "position": [0, 0, 0],
+                "rotationDeg": [0, 0, 0],
+                "scale": 1
+            }
+        }
+    ],
+    "cameras": [
+        {
+            "name": "cypress-and-curtains-from-the-arcade",
+            "position": [-10, 1.8, -2],
+            "target": [4, 6, 1.5],
+            "fovYDeg": 75
+        },
+        {
+            "name": "upper-gallery",
+            "position": [-6.5, 7.0, 0.8],
+            "target": [10, 5.5, 0],
+            "fovYDeg": 75
+        }
+    ],
+    "lights": [
+        {
+            "type": "directional",
+            "label": "sun",
+            "color": [1, 0.95, 0.85],
+            "intensity": 3,
+            "direction": [0.3, -0.9, 0.1]
+        }
+    ],
+    "environment": {
+        "type": "procedural",
+        "sunDirection": [-0.3, 0.9, -0.1],
+        "turbidity": 3,
+        "intensity": 1
+    },
+    "volume": {
+        "center": [1.88, 8.81, 2.48],
+        "size": [36.5, 20, 24],
+        "probeSpacing": 1
+    },
+    "nativeCapable": false,
+    "credits": [
+        {
+            "asset": "sponza-intel",
+            "license": "CC-BY-4.0+intel-preface",
+            "attribution": "Base package: Sponza 2022 Scene commissioned by Frank Meinl, sponsored by Anton Kaplanyan. Intel Sample Library. License text in the package is CC BY 4.0, with the preface \"For personal use and educational use. Limited commercial use for marketing and print purposes.\"",
+            "sourceUrl": "https://web.archive.org/web/20251206023318/https://www.intel.com/content/www/us/en/developer/topic-technology/graphics-research/samples.html"
+        },
+        {
+            "asset": "sponza-intel-curtains",
+            "license": "CC-BY-4.0+intel-preface",
+            "attribution": "Curtains add-on: Sponza 2022 Scene commissioned by Frank Meinl, sponsored by Anton Kaplanyan. Add-on package by the Sponza Addon Package Crew. Intel Sample Library. License text in the package is CC BY 4.0, with the preface \"For personal use and educational use. Limited commercial use for marketing and print purposes.\"",
+            "sourceUrl": "https://web.archive.org/web/20251206023318/https://www.intel.com/content/www/us/en/developer/topic-technology/graphics-research/samples.html"
+        },
+        {
+            "asset": "sponza-intel-ivy",
+            "license": "CC-BY-4.0+intel-preface",
+            "attribution": "Ivy add-on: Sponza 2022 Scene commissioned by Frank Meinl, sponsored by Anton Kaplanyan. Add-on package by the Sponza Addon Package Crew. Intel Sample Library. License text in the package is CC BY 4.0, with the preface \"For personal use and educational use. Limited commercial use for marketing and print purposes.\"",
+            "sourceUrl": "https://web.archive.org/web/20251206023318/https://www.intel.com/content/www/us/en/developer/topic-technology/graphics-research/samples.html"
+        },
+        {
+            "asset": "sponza-intel-trees",
+            "license": "CC-BY-4.0+intel-preface",
+            "attribution": "Cypress trees add-on: Sponza 2022 Scene commissioned by Frank Meinl, sponsored by Anton Kaplanyan. Add-on package by the Sponza Addon Package Crew. Intel Sample Library. License text in the package is CC BY 4.0, with the preface \"For personal use and educational use. Limited commercial use for marketing and print purposes.\"",
+            "sourceUrl": "https://web.archive.org/web/20251206023318/https://www.intel.com/content/www/us/en/developer/topic-technology/graphics-research/samples.html"
+        }
+    ],
+    "referenceCube": {
+        "position": [3, 0.5, -1.0]
+    }
+}

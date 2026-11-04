@@ -6,7 +6,9 @@
  *
  *     node tools/bench/scene-copy-memory.ts [scene id ...]
  *
- * Defaults to sponza, bistro-exterior and bistro-interior. Models must be
+ * Defaults to sponza, bistro-exterior and bistro-interior. Every model part
+ * of a scene is read (Sponza is the base package plus the curtains), and the
+ * output lists the files, then the scene's total and each part. Models must be
  * downloaded first (`pnpm assets:fetch`). Meshes are packed with the
  * platform's own `packMesh`, so the chosen-layout number is exactly what
  * `PlatformScene` uploads; the alternatives add the bytes those layouts
@@ -94,17 +96,34 @@ function readAccessor(gltf: Gltf, index: number): number[] {
     return values;
 }
 
-function modelPath(sceneId: string): string {
+interface ModelFile {
+    /** The asset id from tools/assets/sources.json. */
+    asset: string;
+    /** The file, relative to the asset's download folder. */
+    path: string;
+    absolutePath: string;
+}
+
+/**
+ * Every model part of a scene, in manifest order. Sponza is several Intel
+ * packages (the base plus add-ons), so a scene's memory is the sum over its parts.
+ */
+function modelFiles(sceneId: string): ModelFile[] {
     const manifest = JSON.parse(readFileSync(join(repository, 'scenes/manifests', `${sceneId}.json`), 'utf8')) as {
         parts: { kind: string; asset?: string; path?: string }[];
     };
-    const model = manifest.parts.find((part) => part.kind === 'model');
-    if (!model?.asset || !model.path) throw new Error(`${sceneId}: the manifest has no model part`);
-    return join(repository, 'assets/downloads', model.asset, model.path);
+    const files: ModelFile[] = [];
+    for (const part of manifest.parts) {
+        if (part.kind !== 'model') continue;
+        if (!part.asset || !part.path) throw new Error(`${sceneId}: a model part has no asset or path`);
+        files.push({ asset: part.asset, path: part.path, absolutePath: join(repository, 'assets/downloads', part.asset, part.path) });
+    }
+    if (files.length === 0) throw new Error(`${sceneId}: the manifest has no model part`);
+    return files;
 }
 
-interface SceneMemory {
-    scene: string;
+interface Memory {
+    label: string;
     meshes: number;
     vertices: number;
     triangles: number;
@@ -113,9 +132,12 @@ interface SceneMemory {
     indices32Bytes: number;
 }
 
-function measure(sceneId: string): SceneMemory {
-    const gltf = loadGltf(modelPath(sceneId));
-    const result: SceneMemory = { scene: sceneId, meshes: 0, vertices: 0, triangles: 0, chosenBytes: 0, floatNormalsBytes: 0, indices32Bytes: 0 };
+const emptyMemory = (label: string): Memory => ({ label, meshes: 0, vertices: 0, triangles: 0, chosenBytes: 0, floatNormalsBytes: 0, indices32Bytes: 0 });
+
+/** The scene copy's bytes for one glTF file. */
+function measureFile(file: ModelFile): Memory {
+    const gltf = loadGltf(file.absolutePath);
+    const result = emptyMemory(file.asset);
     for (const mesh of gltf.json.meshes) {
         for (const primitive of mesh.primitives) {
             if ((primitive.mode ?? 4) !== 4) continue; // triangles only, as the platform takes them
@@ -140,20 +162,45 @@ function measure(sceneId: string): SceneMemory {
     return result;
 }
 
+/** One row per model part, then the scene's total (the sum of its parts). */
+function measureScene(sceneId: string): { parts: Memory[]; total: Memory } {
+    const parts = modelFiles(sceneId).map(measureFile);
+    const total = emptyMemory(parts.length > 1 ? `${sceneId} (total of ${parts.length} parts)` : sceneId);
+    for (const part of parts) {
+        total.meshes += part.meshes;
+        total.vertices += part.vertices;
+        total.triangles += part.triangles;
+        total.chosenBytes += part.chosenBytes;
+        total.floatNormalsBytes += part.floatNormalsBytes;
+        total.indices32Bytes += part.indices32Bytes;
+    }
+    return { parts, total };
+}
+
 const megabytes = (bytes: number) => (bytes / 1e6).toFixed(1);
+const LABEL_WIDTH = 40;
+
+function formatRow(row: Memory): string {
+    return [
+        row.label.padEnd(LABEL_WIDTH),
+        String(row.meshes).padStart(7),
+        String(row.vertices).padStart(9),
+        String(row.triangles).padStart(11),
+        megabytes(row.chosenBytes).padStart(10),
+        megabytes(row.floatNormalsBytes).padStart(17),
+        megabytes(row.indices32Bytes).padStart(18),
+    ].join(' ');
+}
+
 const scenes = process.argv.slice(2).length > 0 ? process.argv.slice(2) : ['sponza', 'bistro-exterior', 'bistro-interior'];
-console.log('scene              meshes  vertices   triangles  chosen MB  float-normals MB  32-bit-indices MB');
+// Say exactly which files were read, so a scene's line is not mistaken for one package's.
 for (const sceneId of scenes) {
-    const row = measure(sceneId);
-    console.log(
-        [
-            row.scene.padEnd(17),
-            String(row.meshes).padStart(7),
-            String(row.vertices).padStart(9),
-            String(row.triangles).padStart(11),
-            megabytes(row.chosenBytes).padStart(10),
-            megabytes(row.floatNormalsBytes).padStart(17),
-            megabytes(row.indices32Bytes).padStart(18),
-        ].join(' '),
-    );
+    for (const file of modelFiles(sceneId)) console.log(`${sceneId}: reads ${file.asset}/${file.path}`);
+}
+console.log('');
+console.log(`${'scene (and its parts)'.padEnd(LABEL_WIDTH)}  meshes  vertices   triangles  chosen MB  float-normals MB  32-bit-indices MB`);
+for (const sceneId of scenes) {
+    const { parts, total } = measureScene(sceneId);
+    console.log(formatRow(total));
+    if (parts.length > 1) for (const part of parts) console.log(formatRow({ ...part, label: `  ${part.label}` }));
 }

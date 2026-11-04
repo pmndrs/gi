@@ -1,6 +1,8 @@
 /**
- * Builds a three.js scene from a manifest: the model (procedural or a
- * downloaded glTF), the manifest's direct lights, and the manifest's sky.
+ * Builds a three.js scene from a manifest: every part (procedural, or a
+ * downloaded glTF; Sponza is the base package plus add-ons, each its own
+ * part in one shared coordinate frame), the manifest's direct lights, and the
+ * manifest's sky.
  *
  * This reuses the scenes package's helpers (`proceduralSceneToThree`,
  * `lightToThree`, `emissiveQuadLights`, `applyModelTransform`). The only
@@ -170,6 +172,8 @@ export async function loadScene(manifest: SceneManifest, report: (progress: Load
     const content = new Group();
     content.name = manifest.id;
     const emitters: RectAreaLight[] = [];
+    const modelPartCount = manifest.parts.filter((part) => part.kind === 'model').length;
+    let modelPartNumber = 0;
     for (const part of manifest.parts) {
         if (part.kind === 'procedural') {
             report({ stage: `Building ${manifest.title}`, fraction: null });
@@ -177,8 +181,11 @@ export async function loadScene(manifest: SceneManifest, report: (progress: Load
             content.add(proceduralSceneToThree(built, part.builder));
             emitters.push(...emissiveQuadLights(built));
         } else {
+            // Scenes made of several downloads (Sponza and its add-ons) say which one is loading.
+            modelPartNumber++;
+            const label = modelPartCount > 1 ? `${manifest.title}, part ${modelPartNumber} of ${modelPartCount} (${part.asset})` : manifest.title;
             const url = await findModelUrl(part.asset, part.path);
-            const model = await loadGltf(url, manifest.title, report);
+            const model = await loadGltf(url, label, report);
             const holder = new Group();
             holder.name = `${part.asset}/${part.path}`;
             holder.add(model);
