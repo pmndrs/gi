@@ -7,16 +7,17 @@
  * GLTFLoader with textures), mirrored by `ThreeGI` into a platform running
  * DDGI on the manifest's volume, rendered by three each frame at 256².
  *
- * What is timed is the adapter's own work: `SceneSync.update`, the walk over
- * the scene that compares world matrices, materials, geometry versions and
- * lights and sends what changed. Reported separately, not part of it: three's
+ * What is timed is the adapter's own work: `SceneSync.update` (marked and
+ * hot objects, this frame's share of the walk, lights, edit checks, the
+ * environment) and what it sends. Reported separately, not part of it: three's
  * own `updateMatrixWorld` (which `render` does; ThreeGI doesn't repeat it by
  * default) and the platform's `encode`.
  *
  * Two ways, for each of a still scene and one object moving every frame:
- * - **per frame:** `threeGI.timings.syncMs` over `FRAMES` real frames
- *   (median and p95). `performance.now()` may step in 0.1 ms here (NOTES),
- *   which is coarse next to the targets;
+ * - **per frame:** `threeGI.timings.syncMs` over `FRAMES` real frames. The
+ *   browser's `performance.now()` steps in 0.1 ms with random jitter (NOTES),
+ *   so single frames are coarse but their mean over many frames isn't: the
+ *   targets are judged on the mean (median and p95 are reported too);
  * - **batched:** the mean of `BATCH` back-to-back `sync.update` calls, five
  *   times, median of the five. Each call is a full frame's sync (for the
  *   moving case the object moves before every call), so this is the same
@@ -25,6 +26,9 @@
  * Both must meet the targets.
  *
  * Targets (TASKS T1.7): still ≤ 0.2 ms, one object moving ≤ 0.5 ms.
+ *
+ * Also measured: how many frames until a static object's first move reaches
+ * GI without `markChanged` (the walk's detection latency), and with it.
  *
  * A timing run takes the bench lock:
  *   node tools/reference/bench-lock.ts run --what "T1.7 adapter timing" -- pnpm test:gpu --gpu nvidia --filter three-adapter-timing
@@ -35,6 +39,7 @@ import { assert } from '../../client.ts';
 import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
 import { DDGITechnique } from '../../../../packages/ddgi-core/src/techniques/ddgi/ddgi-technique.ts';
 import { ThreeGI } from '../../../../packages/ddgi-three/src/three-gi.ts';
+import { DEFAULT_OBJECTS_PER_FRAME, HOT_FRAMES } from '../../../../packages/ddgi-three/src/scene-sync.ts';
 import { loadAllManifests } from '../../../../apps/viewer/src/scene/manifests.ts';
 import { loadScene } from '../../../../apps/viewer/src/scene/load-scene.ts';
 import { platformSkyEnvironment } from '../../../../scenes/src/sky/sky-image.ts';
@@ -102,7 +107,11 @@ await runThreePage(async ({ device, renderer, data, log }) => {
     await platform.prepare();
     const environment: EnvironmentDescriptor | null = manifest.environment.type === 'procedural' ? platformSkyEnvironment(manifest) : null;
     const warnings: string[] = [];
-    const threeGI = new ThreeGI(platform, scene, { budget: { gpuMs: 2 }, environment, warn: (message) => warnings.push(message) });
+    // VITE_DDGI_OBJECTS_PER_FRAME and VITE_DDGI_EDIT_CHECKS try other budgets than the defaults.
+    const objectsPerFrame = Number(env.VITE_DDGI_OBJECTS_PER_FRAME) || DEFAULT_OBJECTS_PER_FRAME;
+    const editChecksPerFrame = Number(env.VITE_DDGI_EDIT_CHECKS) || undefined;
+    data.budgets = { objectsPerFrame, editChecksPerFrame: editChecksPerFrame ?? 'default' };
+    const threeGI = new ThreeGI(platform, scene, { budget: { gpuMs: 2 }, environment, warn: (message) => warnings.push(message), objectsPerFrame, editChecksPerFrame });
 
     const firstStart = performance.now();
     threeGI.update(camera);
@@ -160,6 +169,40 @@ await runThreePage(async ({ device, renderer, data, log }) => {
     };
 
     const moving = pickMovingMesh(loaded.content);
+
+    // Detection latency: a static object moved once, without and with markChanged.
+    const framesUntilSent = async (other: Mesh, mark: boolean): Promise<number> => {
+        other.position.y += 0.01;
+        other.updateMatrixWorld();
+        if (mark) threeGI.markChanged(other);
+        for (let frames = 1; frames <= 1000; frames++) {
+            frame();
+            if (threeGI.report.transforms > 0) return frames;
+            if (frames % 8 === 0) await device.queue.onSubmittedWorkDone();
+        }
+        return Number.POSITIVE_INFINITY;
+    };
+    const settle = async (): Promise<void> => {
+        // Long enough for everything to leave the hot set.
+        for (let index = 0; index < HOT_FRAMES + 10; index++) {
+            frame();
+            if (index % 8 === 7) await device.queue.onSubmittedWorkDone();
+        }
+    };
+    const staticMeshes: Mesh[] = [];
+    loaded.content.traverse((object) => {
+        if ((object as Mesh).isMesh && object !== moving) staticMeshes.push(object as Mesh);
+    });
+    const unmarked = await framesUntilSent(staticMeshes[Math.floor(staticMeshes.length * 0.3)], false);
+    const marked = await framesUntilSent(staticMeshes[Math.floor(staticMeshes.length * 0.7)], true);
+    await settle();
+    data.detection = {
+        framesUntilFirstMoveSentUnmarked: unmarked,
+        framesUntilFirstMoveSentMarked: marked,
+        boundFrames: Math.ceil(objectsInScene / objectsPerFrame),
+        objectsPerFrame,
+    };
+    log(`detection: first move of a static object sent after ${unmarked} frames (bound ${Math.ceil(objectsInScene / objectsPerFrame)}), ${marked} with markChanged`);
     const home = moving.position.clone();
     const move = (index: number) => moving.position.set(home.x, home.y + 0.05 * Math.sin(index * 0.1), home.z);
 
@@ -180,8 +223,8 @@ await runThreePage(async ({ device, renderer, data, log }) => {
     data.still = { frames: stillFrames, batched: stillBatched };
     data.moving = { frames: movingFrames, batched: movingBatched };
     data.warnings = warnings;
-    log(`still: sync per frame median ${stillFrames.syncMs.median.toFixed(3)} ms (p95 ${stillFrames.syncMs.p95.toFixed(3)}), batched ${stillBatched.meanMsPerSync.toFixed(4)} ms`);
-    log(`moving: sync per frame median ${movingFrames.syncMs.median.toFixed(3)} ms (p95 ${movingFrames.syncMs.p95.toFixed(3)}), batched ${movingBatched.meanMsPerSync.toFixed(4)} ms`);
+    log(`still: sync per frame mean ${stillFrames.syncMs.mean.toFixed(3)} ms (median ${stillFrames.syncMs.median.toFixed(3)}, p95 ${stillFrames.syncMs.p95.toFixed(3)}), batched ${stillBatched.meanMsPerSync.toFixed(4)} ms`);
+    log(`moving: sync per frame mean ${movingFrames.syncMs.mean.toFixed(3)} ms (median ${movingFrames.syncMs.median.toFixed(3)}, p95 ${movingFrames.syncMs.p95.toFixed(3)}), batched ${movingBatched.meanMsPerSync.toFixed(4)} ms`);
     log(`three's own updateMatrixWorld ${(data.threeUpdateMatrixWorldMs as number).toFixed(3)} ms; platform encode per frame median ${stillFrames.encodeMs.median.toFixed(3)} ms`);
 
     threeGI.dispose();
@@ -191,7 +234,8 @@ await runThreePage(async ({ device, renderer, data, log }) => {
     assert(movingFrames.changesSentPerFrame.median === 1, `one moving object sent a median of ${movingFrames.changesSentPerFrame.median} changes per frame`);
     assert(stillBatched.meanMsPerSync <= STILL_TARGET_MS, `still scene: ${stillBatched.meanMsPerSync.toFixed(3)} ms per sync (batched), over ${STILL_TARGET_MS} ms`);
     assert(movingBatched.meanMsPerSync <= MOVING_TARGET_MS, `one object moving: ${movingBatched.meanMsPerSync.toFixed(3)} ms per sync (batched), over ${MOVING_TARGET_MS} ms`);
-    // The done-when's own wording: the median over many real frames (timer steps of 0.1 ms included).
-    assert(stillFrames.syncMs.median <= STILL_TARGET_MS + 1e-6, `still scene: per-frame median ${stillFrames.syncMs.median.toFixed(3)} ms, over ${STILL_TARGET_MS} ms`);
-    assert(movingFrames.syncMs.median <= MOVING_TARGET_MS + 1e-6, `one object moving: per-frame median ${movingFrames.syncMs.median.toFixed(3)} ms, over ${MOVING_TARGET_MS} ms`);
+    assert(stillFrames.syncMs.mean <= STILL_TARGET_MS, `still scene: ${stillFrames.syncMs.mean.toFixed(3)} ms per frame (mean of ${FRAMES}), over ${STILL_TARGET_MS} ms`);
+    assert(movingFrames.syncMs.mean <= MOVING_TARGET_MS, `one object moving: ${movingFrames.syncMs.mean.toFixed(3)} ms per frame (mean of ${FRAMES}), over ${MOVING_TARGET_MS} ms`);
+    assert(unmarked <= Math.ceil(objectsInScene / objectsPerFrame) + 1, `a static object's first move took ${unmarked} frames to reach GI`);
+    assert(marked === 1, `with markChanged a move took ${marked} frames to reach GI; it should be the next update`);
 });

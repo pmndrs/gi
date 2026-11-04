@@ -157,8 +157,8 @@ function frame(scene: Scene): string[] {
 beforeEach(() => {
     api = new RecordingSceneApi();
     warnings = [];
-    // Every frame, so each test sees an edit on the next frame; the spreading has its own test.
-    sync = new SceneSync(api, { device: NO_DEVICE, warn: (message) => warnings.push(message), editCheckInterval: 1 });
+    // Small scenes: the default budgets cover them whole every frame, so each test sees a change on the next frame.
+    sync = new SceneSync(api, { device: NO_DEVICE, warn: (message) => warnings.push(message) });
 });
 
 describe('a still scene', () => {
@@ -180,7 +180,7 @@ describe('a still scene', () => {
         expect(first).toContain('setEnvironment');
         expect(frame(scene)).toEqual([]);
         expect(frame(scene)).toEqual([]);
-        expect(sync.report).toEqual({ created: 0, destroyed: 0, transforms: 0, visibility: 0, materials: 0, meshes: 0, lights: 0 });
+        expect(sync.report).toMatchObject({ created: 0, destroyed: 0, transforms: 0, visibility: 0, materials: 0, meshes: 0, lights: 0 });
     });
 });
 
@@ -257,60 +257,135 @@ describe('changes', () => {
 });
 
 describe('the walk', () => {
-    it('spreads edit checks over frames but never misses or repeats an edit', () => {
-        const spread = new SceneSync(api, { device: NO_DEVICE, editCheckInterval: 4 });
+    /** A scene of `count` meshes in a flat row, each with its own material, walked whole once. */
+    function rowScene(sync: SceneSync, count: number): { scene: Scene; meshes: Mesh[]; materials: MeshStandardMaterial[] } {
         const scene = new Scene();
-        const materials = Array.from({ length: 8 }, () => new MeshStandardMaterial());
-        for (const material of materials) scene.add(new Mesh(new BoxGeometry(), material));
-        scene.updateMatrixWorld();
-        spread.update(scene);
-        api.take();
-        for (const material of materials) material.color.setRGB(0.1, 0.2, 0.3);
-        const updatesPerFrame: number[] = [];
-        for (let frame = 0; frame < 6; frame++) {
-            spread.update(scene);
-            updatesPerFrame.push(api.take().filter((call) => call === 'updateMaterial').length);
+        const materials: MeshStandardMaterial[] = [];
+        const meshes: Mesh[] = [];
+        const geometry = new BoxGeometry();
+        for (let index = 0; index < count; index++) {
+            const material = new MeshStandardMaterial();
+            const mesh = new Mesh(geometry, material);
+            mesh.position.x = index;
+            materials.push(material);
+            meshes.push(mesh);
+            scene.add(mesh);
         }
-        // Every material once within 4 frames, a share of them each frame, none twice.
-        expect(updatesPerFrame.slice(0, 4).reduce((sum, count) => sum + count, 0)).toBe(8);
-        expect(Math.max(...updatesPerFrame)).toBeLessThan(8);
-        expect(updatesPerFrame.slice(4)).toEqual([0, 0]);
+        scene.updateMatrixWorld();
+        sync.update(scene);
+        api.take();
+        return { scene, meshes, materials };
+    }
+
+    it('looks at a bounded number of objects per frame, however big the scene', () => {
+        const bounded = new SceneSync(api, { device: NO_DEVICE, objectsPerFrame: 16 });
+        const { scene } = rowScene(bounded, 200);
+        // The first frame takes the whole scene, so it is complete at once.
+        expect(api.instances.size).toBe(200);
+        for (let frame = 0; frame < 30; frame++) {
+            bounded.update(scene);
+            expect(bounded.report.walked).toBeLessThanOrEqual(16);
+            expect(api.take()).toEqual([]);
+        }
     });
 
-    it('sends moves every frame whatever the edit-check interval', () => {
-        const spread = new SceneSync(api, { device: NO_DEVICE, editCheckInterval: 8 });
-        const scene = new Scene();
-        const mesh = new Mesh(new BoxGeometry(), new MeshStandardMaterial());
-        scene.add(mesh);
+    it('sees a static object\'s first move within a pass, then every frame', () => {
+        const bounded = new SceneSync(api, { device: NO_DEVICE, objectsPerFrame: 16 });
+        const { scene, meshes } = rowScene(bounded, 100);
+        const moving = meshes[57];
+        moving.position.y = 1;
         scene.updateMatrixWorld();
-        spread.update(scene);
-        api.take();
-        for (let frame = 1; frame <= 3; frame++) {
-            mesh.position.x = frame;
+        // 101 objects (the scene and 100 meshes) at 16 a frame: within ceil(101 / 16) = 7 frames.
+        let framesUntilSeen = 0;
+        for (; framesUntilSeen < 10; framesUntilSeen++) {
+            bounded.update(scene);
+            if (api.take().includes('setTransform')) break;
+        }
+        expect(framesUntilSeen).toBeLessThan(Math.ceil(101 / 16));
+        // Now hot: each further move is sent in the frame it happens.
+        for (let frame = 2; frame < 6; frame++) {
+            moving.position.y = frame;
             scene.updateMatrixWorld();
-            spread.update(scene);
+            bounded.update(scene);
             expect(api.take()).toEqual(['setTransform']);
         }
     });
 
-    it('copes with children reordered, removed and added back', () => {
-        const scene = new Scene();
-        const meshes = Array.from({ length: 4 }, () => new Mesh(new BoxGeometry(), new MeshStandardMaterial()));
-        scene.add(...meshes);
-        frame(scene);
-        scene.children.reverse();
-        expect(frame(scene)).toEqual([]);
-        const [first] = scene.children;
-        first.removeFromParent();
-        expect(frame(scene)).toEqual(['destroyInstance', 'destroyMaterial', 'destroyMesh']);
-        scene.add(first);
-        expect(frame(scene)).toEqual(['createMesh', 'createMaterial', 'createInstance']);
-        expect(frame(scene)).toEqual([]);
-        expect(api.instances.size).toBe(4);
+    it('picks up a marked object in the same update: moved, added and removed', () => {
+        const bounded = new SceneSync(api, { device: NO_DEVICE, objectsPerFrame: 1 });
+        const { scene, meshes } = rowScene(bounded, 50);
+        meshes[30].position.y = 3;
+        scene.updateMatrixWorld();
+        bounded.markChanged(meshes[30]);
+        bounded.update(scene);
+        expect(api.take()).toContain('setTransform');
+
+        const added = new Mesh(new BoxGeometry(), new MeshStandardMaterial());
+        scene.add(added);
+        scene.updateMatrixWorld();
+        bounded.markChanged(added);
+        bounded.update(scene);
+        expect(api.take()).toEqual(['createMesh', 'createMaterial', 'createInstance']);
+
+        added.removeFromParent();
+        bounded.markChanged(added);
+        bounded.update(scene);
+        expect(api.take()).toEqual(['destroyInstance', 'destroyMaterial', 'destroyMesh']);
     });
 
-    it('rejects an edit-check interval below one frame', () => {
-        expect(() => new SceneSync(api, { device: NO_DEVICE, editCheckInterval: 0 })).toThrow(RangeError);
+    it('finds unmarked additions and removals within a pass', () => {
+        const bounded = new SceneSync(api, { device: NO_DEVICE, objectsPerFrame: 8 });
+        const { scene, meshes } = rowScene(bounded, 40);
+        meshes[5].removeFromParent();
+        scene.add(new Mesh(new BoxGeometry(), new MeshStandardMaterial()));
+        scene.updateMatrixWorld();
+        const calls: string[] = [];
+        // Two passes at most: 41 objects at 8 a frame.
+        for (let frame = 0; frame < 2 * Math.ceil(41 / 8); frame++) {
+            bounded.update(scene);
+            calls.push(...api.take());
+        }
+        expect(calls.filter((call) => call === 'createInstance')).toHaveLength(1);
+        expect(calls.filter((call) => call === 'destroyInstance')).toHaveLength(1);
+        expect(api.instances.size).toBe(40);
+    });
+
+    it('checks a bounded number of materials for edits per frame and never misses one', () => {
+        const bounded = new SceneSync(api, { device: NO_DEVICE, editChecksPerFrame: 3 });
+        const { scene, materials } = rowScene(bounded, 9);
+        for (const material of materials) material.color.setRGB(0.1, 0.2, 0.3);
+        const updatesPerFrame: number[] = [];
+        for (let frame = 0; frame < 5; frame++) {
+            bounded.update(scene);
+            updatesPerFrame.push(api.take().filter((call) => call === 'updateMaterial').length);
+        }
+        expect(updatesPerFrame).toEqual([3, 3, 3, 0, 0]);
+    });
+
+    it('follows a hidden parent through the hot set', () => {
+        const bounded = new SceneSync(api, { device: NO_DEVICE, objectsPerFrame: 4 });
+        const scene = new Scene();
+        const parent = new Group();
+        const child = new Mesh(new BoxGeometry(), new MeshStandardMaterial());
+        parent.add(child);
+        scene.add(parent);
+        for (let index = 0; index < 20; index++) scene.add(new Mesh(new BoxGeometry(), new MeshStandardMaterial()));
+        scene.updateMatrixWorld();
+        bounded.update(scene);
+        child.position.x = 1;
+        scene.updateMatrixWorld();
+        bounded.markChanged(child);
+        bounded.update(scene);
+        api.take();
+        // The child is hot now, so hiding its parent shows up in the next frame although the walk is elsewhere.
+        parent.visible = false;
+        bounded.update(scene);
+        expect(api.take()).toEqual(['setVisible']);
+    });
+
+    it('rejects budgets below one', () => {
+        expect(() => new SceneSync(api, { device: NO_DEVICE, objectsPerFrame: 0 })).toThrow(RangeError);
+        expect(() => new SceneSync(api, { device: NO_DEVICE, editChecksPerFrame: 0 })).toThrow(RangeError);
     });
 });
 

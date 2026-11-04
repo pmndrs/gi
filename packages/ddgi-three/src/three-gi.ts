@@ -35,7 +35,7 @@
  * updates them, so GI never starts from matrices three hasn't computed yet.
  */
 
-import type { Camera, OrthographicCamera, PerspectiveCamera, Scene } from 'three';
+import type { Camera, Object3D, OrthographicCamera, PerspectiveCamera, Scene } from 'three';
 import type { EnvironmentDescriptor, FrameBudget, GIPlatform, ShadingModule } from '@pmndrs/ddgi-core';
 import type { PmndrsSkyLike } from './environment.ts';
 import { GILight, type GILightOptions } from './gi-light.ts';
@@ -54,6 +54,10 @@ export interface ThreeGIOptions {
     readonly warn?: (message: string) => void;
     /** Update the scene's world matrices in every `update` (see the file comment). Default false. */
     readonly updateMatrixWorld?: boolean;
+    /** Objects the scene sync's walk looks at per frame (scene-sync.ts, `DEFAULT_OBJECTS_PER_FRAME`). */
+    readonly objectsPerFrame?: number;
+    /** Geometries, and separately materials, checked for edits per frame (scene-sync.ts, `DEFAULT_EDIT_CHECKS_PER_FRAME`). */
+    readonly editChecksPerFrame?: number;
 }
 
 /** CPU time of the last `update`, milliseconds (`performance.now()`, so steps of up to 0.1 ms in some browsers). */
@@ -101,7 +105,7 @@ export class ThreeGI {
         this.scene = scene;
         this.budget = options.budget ?? DEFAULT_BUDGET;
         this.alwaysUpdateMatrixWorld = options.updateMatrixWorld ?? false;
-        this.sync = new SceneSync(gi.scene, { device: gi.device, warn: options.warn });
+        this.sync = new SceneSync(gi.scene, { device: gi.device, warn: options.warn, objectsPerFrame: options.objectsPerFrame, editChecksPerFrame: options.editChecksPerFrame });
         this.sync.environment = options.environment ?? null;
         this.sync.sky = options.sky ?? null;
         const shading = gi.shading;
@@ -159,6 +163,16 @@ export class ThreeGI {
         this.timings.matrixWorldMs = afterMatrices - start;
         this.timings.syncMs = afterSync - afterMatrices;
         this.timings.encodeMs = end - afterSync;
+    }
+
+    /**
+     * Says that `object` (and everything under it) was added, moved, edited
+     * or removed, so the next `update` picks it up at once. Without it,
+     * changes are found by the scene sync's walk within a few frames
+     * (scene-sync.ts states how many).
+     */
+    markChanged(object: Object3D): void {
+        this.sync.markChanged(object);
     }
 
     /** Removes the light and everything the sync created. The platform itself is the host's to dispose. */

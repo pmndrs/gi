@@ -14,7 +14,6 @@
 
 import {
     ClampToEdgeWrapping,
-    FrontSide,
     MirroredRepeatWrapping,
     SRGBColorSpace,
     type BufferAttribute,
@@ -41,7 +40,7 @@ import type {
     UvWrap,
     Vec3,
 } from '@pmndrs/ddgi-core';
-import { lightGroup } from './user-data.ts';
+import { lightGroup, singleSidedForGI } from './user-data.ts';
 
 // ---------------------------------------------------------------------------
 // Geometry
@@ -292,7 +291,8 @@ export function giAlbedo(material: Material): ColorRGB | undefined {
  * - light passes through (`blocksLight: false`) for `transmission` > 0, for
  *   `transparent` with `opacity` below {@link SEE_THROUGH_OPACITY}, and for
  *   materials with `visible = false`;
- * - `side`: `DoubleSide` and `BackSide` are double-sided, `FrontSide` not;
+ * - double-sided whatever three's `side` (back-face hits are how probes find
+ *   out they sit inside geometry), unless `material.userData.giSingleSided`;
  * - textures (`map`, `emissiveMap`) as handles from `textureHandle`, with
  *   their uv mappings. The atlas that samples them is M4.
  *
@@ -321,7 +321,7 @@ export function materialDescriptor(material: Material, textureHandle: (texture: 
         emissiveUv: emissiveTexture !== undefined && emissiveMap ? contractUvMapping(emissiveMap) : undefined,
         alphaCutoff,
         blocksLight,
-        doubleSided: material.side !== FrontSide,
+        doubleSided: !singleSidedForGI(material.userData),
         label: material.name || material.type,
     };
 }
@@ -363,7 +363,7 @@ export class MaterialSnapshot {
         transparent: 9,
         opacity: 10,
         transmission: 11,
-        side: 12,
+        singleSided: 12,
         visible: 13,
         /** Then the texture numbers for `map`, then the same for `emissiveMap`. */
         mapFirst: FIRST_TEXTURE_SNAPSHOT_NUMBER,
@@ -385,7 +385,7 @@ export class MaterialSnapshot {
         values[slot.transparent] = material.transparent ? 1 : 0;
         values[slot.opacity] = material.opacity;
         values[slot.transmission] = typeof transmission === 'number' ? transmission : 0;
-        values[slot.side] = material.side;
+        values[slot.singleSided] = singleSidedForGI(material.userData) ? 1 : 0;
         values[slot.visible] = material.visible ? 1 : 0;
         this.map = map ?? null;
         this.emissiveMap = emissiveMap ?? null;

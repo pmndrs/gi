@@ -86,9 +86,22 @@ describe('the rest of the material', () => {
         expect(materialDescriptor(material, () => HANDLE).alphaCutoff).toBe(0.5);
     });
 
-    it('maps side to doubleSided', () => {
+    it('makes every material double-sided for GI whatever its side, unless it opts out', () => {
         expect(materialDescriptor(new MeshStandardMaterial({ side: DoubleSide }), noTextures).doubleSided).toBe(true);
-        expect(materialDescriptor(new MeshStandardMaterial({ side: FrontSide }), noTextures).doubleSided).toBe(false);
+        expect(materialDescriptor(new MeshStandardMaterial({ side: FrontSide }), noTextures).doubleSided).toBe(true);
+        const optedOut = new MeshStandardMaterial({ side: DoubleSide });
+        optedOut.userData.giSingleSided = true;
+        expect(materialDescriptor(optedOut, noTextures).doubleSided).toBe(false);
+    });
+
+    it('sees the single-sided opt-out change', () => {
+        const material = new MeshStandardMaterial();
+        const before = new MaterialSnapshot();
+        const after = new MaterialSnapshot();
+        before.read(material);
+        material.userData.giSingleSided = true;
+        after.read(material);
+        expect(after.equals(before)).toBe(false);
     });
 });
 
