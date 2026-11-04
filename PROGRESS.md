@@ -21,6 +21,26 @@ Rules:
 
 ---
 
+## 2026-11-04 · B0b · implementer (opus); Opus review: pass with notes, fixes in progress
+Did: tinybvh's WASM writes our GPU layout directly (`tbvh_write_layout`, `buildLayout` in packages/bvh/src/tinybvh.ts, sizes in `gpu-layout.ts`), commit 4340e4e.
+- Leaves are packed and boxed during the walk, then inner boxes joined in a backward pass. Boxes are recomputed from the triangles with WASM SIMD.
+- Vertex widening and the index check moved into the WASM.
+- The JS conversion is off the tinybvh path.
+Verified (the reviewer re-ran these in a clean worktree at b10ad3f):
+- `mesh-bvh-tinybvh-layout.test.ts` compares the WASM layout byte for byte with the JS conversion.
+- `bvh:wasm --check` reproduces the WASM (SHA 656b99…); `verify-artifacts` passes.
+- The oracle passes on the RTX 3060 (ampere) and the Intel UHD (gen-12lp), with 0 slipped rays on tinybvh trees.
+Agent-only, so far: byte-identical on all 115 Sponza and 2,482 Bistro meshes, and three deliberate C++ faults each caught. A committed script to reproduce the per-mesh claim is being added.
+Timing at 8e5373c (b10ad3f), idle RTX, all under the bench lock, 3 runs per GPU:
+- Sponza in the browser worker: 1.89 / 2.27 / 1.70 s (RTX session) and 1.53 / 1.61 / 1.78 s (Intel session). That passes on the median (DECISIONS); 1 run in 6 went over 2 s. The stray python.exe held one core throughout (`note/cpu_core_busy`), and Windows Defender briefly took 2 cores twice.
+- Bistro exterior 1.42 / 1.34 s; Bistro interior 0.50 / 0.56 s.
+- In Node: 1.71 s against 2.23 s with the JS conversion (CPU busy with other agents).
+- tinybvh trees against ours on the RTX: 0.99–1.10×.
+- Against three-mesh-bvh (tinybvh trees), RTX closest / any: Sponza 1.22 / 1.00, Bistro exterior 0.83 / 0.96, Bistro interior 1.03 / 0.61, furnished room 1.04 / 0.37. Intel: Sponza 2.02 / 1.57, Bistro exterior 1.30 / 1.52, Bistro interior 1.57 / 0.91, furnished room 1.68 / 0.72.
+- The rows were written with `to-csv --commit 8e5373c` from the 24 run JSONs, because docs-only commits landed mid-run and `repeat.ts` refused. The measured code paths are unchanged between 4340e4e and 8e5373c (the reviewer checked). T1.3's uncommitted trace files all date from after the runs, which fits a clean run but doesn't prove it. T1.10 briefly had `scenes/src/manifest.ts` edited mid-run and reverted it, outside the measured paths.
+Review fixes in progress: a size guard on wasm32, `static_assert`s for the 16-byte stores, a NaN test, timing numbers out of READMEs and comments, THIRD_PARTY wording, the per-mesh script.
+Next: B0 is passed, so T1.3 deletes our CPU mesh builder. B1a (GPU top level) follows T1.3.
+
 ## 2026-11-04 · T1.1 · implementer (opus); Opus review failed, fixed, re-review passed; done
 Did (e98d543, fixes 8e5373c):
 - One sky file per manifest: `node tools/sky/generate.ts` writes `scenes/sky/<id>.exr` (half-float, about 50 kB, committed) plus a JSON sidecar. The model is Preetham 1999 from the paper, with no sun disc. The brightness uses the Ineichen–Perez clear-sky ratio (DECISIONS).
