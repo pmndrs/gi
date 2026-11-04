@@ -13,10 +13,10 @@
  * Not a page itself (no index.html).
  */
 
-import type { FrameInput } from '../../../../packages/ddgi-core/src/platform/contract/frame.ts';
+import type { FrameBudget, FrameInput } from '../../../../packages/ddgi-core/src/platform/contract/frame.ts';
 import type { EnvironmentDescriptor, LightDescriptor } from '../../../../packages/ddgi-core/src/platform/contract/scene.ts';
 import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
-import { DDGITechnique, type DDGIField } from '../../../../packages/ddgi-core/src/techniques/ddgi/ddgi-technique.ts';
+import { DDGITechnique, type DDGIField, type DDGITechniqueOptions } from '../../../../packages/ddgi-core/src/techniques/ddgi/ddgi-technique.ts';
 import type { DDGISettingsInput } from '../../../../packages/ddgi-core/src/techniques/ddgi/settings.ts';
 import { DDGI_SAMPLE_WGSL } from '../../../../packages/ddgi-core/src/techniques/ddgi/wgsl/sample.ts';
 import { buildProceduralParts, mergeScenes } from '../../../../scenes/src/build-scene.ts';
@@ -32,22 +32,13 @@ export function loadManifest(id: string): SceneManifest {
     return manifest;
 }
 
-/**
- * The point-light Cornell box's volume with every probe in the air, 2–5 cm
- * from the surfaces, which is where relocation (T1.5b) puts probes. The
- * manifest's volume (0.5 m from y = −0.01) buries its bottom layer 1 cm in
- * the floor slab and its top layer 2 mm in the ceiling slab; T1.5a has no
- * relocation, so floor and ceiling points would read only from probes 0.5 m
- * away, where the true irradiance is up to 21% higher (ddgi-irradiance-check).
- * Here the y spacing is 0.49 m, so the layers run from 5 cm above the floor
- * to 5 cm below the ceiling; x and z are the manifest's.
- */
-export const CORNELL_POINT_IN_AIR_VOLUME = { center: [2.78, 2.745, 2.8], size: [5.8, 5.39, 5.8], spacing: [0.5, 0.49, 0.5] } as const;
+export { CORNELL_POINT_IN_AIR_VOLUME } from './volumes.ts';
 
 const IDENTITY = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
 
-export function frameInput(units: number): FrameInput {
-    return { deltaTime: 1 / 60, budget: { units }, camera: { position: [0, 0, 0], view: IDENTITY, projection: IDENTITY, near: 0.1, far: 100 } };
+/** A frame with this budget: a number of units, or a whole FrameBudget (gpuMs). */
+export function frameInput(budget: number | FrameBudget): FrameInput {
+    return { deltaTime: 1 / 60, budget: typeof budget === 'number' ? { units: budget } : budget, camera: { position: [0, 0, 0], view: IDENTITY, projection: IDENTITY, near: 0.1, far: 100 } };
 }
 
 export interface SceneOptions {
@@ -110,13 +101,13 @@ export async function createDdgiScene(
     device: GPUDevice,
     manifestId: string,
     settings: Partial<DDGISettingsInput> = {},
-    options: SceneOptions & { readonly gpuTiming?: boolean } = {},
+    options: SceneOptions & { readonly gpuTiming?: boolean; readonly technique?: DDGITechniqueOptions } = {},
 ): Promise<DdgiScene> {
     const manifest = loadManifest(manifestId);
     const platform = new GIPlatformImpl(device, { label: `ddgi ${manifestId}`, gpuTiming: options.gpuTiming });
     const data = describeScene(platform, manifest, options);
     const volume = settings.volume ?? { center: manifest.volume.center, size: manifest.volume.size, spacing: manifest.volume.probeSpacing };
-    const ddgi = platform.addTechnique(new DDGITechnique({ ...settings, volume }));
+    const ddgi = platform.addTechnique(new DDGITechnique({ ...settings, volume }, options.technique));
     platform.setOutput(ddgi);
     await platform.prepare();
     // A frame with no probe updates places the scene; then wait for the mesh trees and place them.
@@ -127,9 +118,9 @@ export async function createDdgiScene(
     return { platform, ddgi, manifest, data };
 }
 
-export function runFrame(device: GPUDevice, platform: GIPlatformImpl, units: number): void {
+export function runFrame(device: GPUDevice, platform: GIPlatformImpl, budget: number | FrameBudget): void {
     const encoder = device.createCommandEncoder({ label: 'ddgi test frame' });
-    platform.encode(encoder, frameInput(units));
+    platform.encode(encoder, frameInput(budget));
     device.queue.submit([encoder.finish()]);
 }
 
@@ -441,4 +432,57 @@ export function floatsToBase64(values: Float32Array): string {
     const chunk = 0x8000;
     for (let offset = 0; offset < bytes.length; offset += chunk) binary += String.fromCharCode(...bytes.subarray(offset, offset + chunk));
     return btoa(binary);
+}
+
+/**
+ * A whole texture (every layer) read back as raw bytes, rows packed tightly
+ * (the copy itself pads rows to 256 bytes, which this removes).
+ */
+export async function readTextureBytes(device: GPUDevice, texture: GPUTexture, bytesPerTexel: number): Promise<Uint8Array> {
+    const rowBytes = texture.width * bytesPerTexel;
+    const paddedRowBytes = Math.ceil(rowBytes / 256) * 256;
+    const layers = texture.depthOrArrayLayers;
+    const buffer = device.createBuffer({ size: paddedRowBytes * texture.height * layers, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+    const encoder = device.createCommandEncoder({ label: 'ddgi test texture readback' });
+    encoder.copyTextureToBuffer({ texture }, { buffer, bytesPerRow: paddedRowBytes, rowsPerImage: texture.height }, { width: texture.width, height: texture.height, depthOrArrayLayers: layers });
+    device.queue.submit([encoder.finish()]);
+    await buffer.mapAsync(GPUMapMode.READ);
+    const padded = new Uint8Array(buffer.getMappedRange());
+    const packed = new Uint8Array(rowBytes * texture.height * layers);
+    for (let row = 0; row < texture.height * layers; row++) packed.set(padded.subarray(row * paddedRowBytes, row * paddedRowBytes + rowBytes), row * rowBytes);
+    buffer.unmap();
+    buffer.destroy();
+    return packed;
+}
+
+export function halfToFloat(half: number): number {
+    const sign = half & 0x8000 ? -1 : 1;
+    const exponent = (half >> 10) & 0x1f;
+    const fraction = half & 0x3ff;
+    if (exponent === 0) return sign * 2 ** -14 * (fraction / 1024);
+    if (exponent === 31) return fraction === 0 ? sign * Infinity : NaN;
+    return sign * 2 ** (exponent - 15) * (1 + fraction / 1024);
+}
+
+export interface ProbeRecord {
+    /** Relocation offset in spacings. */
+    readonly offset: [number, number, number];
+    readonly state: number;
+}
+
+/** Every probe's offset and state, in probe-index order (p = x + nx * (z + nz * y)). */
+export async function readProbeData(device: GPUDevice, field: DDGIField): Promise<ProbeRecord[]> {
+    const halves = new Uint16Array((await readTextureBytes(device, field.probeData, 8)).buffer);
+    const [nx, ny, nz] = field.grid.counts;
+    const probes: ProbeRecord[] = [];
+    for (let y = 0; y < ny; y++) {
+        for (let z = 0; z < nz; z++) {
+            for (let x = 0; x < nx; x++) {
+                // Layer y, row z, column x.
+                const base = ((y * nz + z) * nx + x) * 4;
+                probes.push({ offset: [halfToFloat(halves[base]), halfToFloat(halves[base + 1]), halfToFloat(halves[base + 2])], state: Math.round(halfToFloat(halves[base + 3])) });
+            }
+        }
+    }
+    return probes;
 }

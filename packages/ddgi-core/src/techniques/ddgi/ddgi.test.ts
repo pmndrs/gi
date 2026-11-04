@@ -1,12 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { GILimitError } from '../../platform/contract/errors.ts';
-import { checkFieldLimits, distanceFormatFor, fieldBytes, fieldLayout, scratchLayout, UNIFORM_BYTES } from './layout.ts';
+import { checkFieldLimits, distanceFormatFor, fieldBytes, fieldLayout, scratchLayout, UNIFORM_BYTES, UNIFORM_WORD } from './layout.ts';
 import { borderSource, octDecode, octEncode, texelDirection } from './octahedral.ts';
 import { frameRayRotation, quaternionToMatrix, seededRandom, uniformRandomQuaternion } from './ray-rotation.ts';
 import { distanceClamp, effectiveMaxRayDistance, effectiveRaysPerProbe, probeGrid, resolveBias, UNBOUNDED_RAY_DISTANCE, withDefaults } from './settings.ts';
 import { scrambleStride, UpdateCursor } from './update-order.ts';
 import { DDGI_SAMPLE_WGSL } from './wgsl/sample.ts';
-import { updateKernelWgsl } from './wgsl/update.ts';
+import { blendKernelWgsl } from './wgsl/blend.ts';
+import { DDGI_CENSUS_WGSL } from './wgsl/census.ts';
+import { DDGI_COMMON_WGSL } from './wgsl/common.ts';
+import { DDGI_TRACE_WGSL } from './wgsl/trace.ts';
 import { writeKernelWgsl } from './wgsl/write.ts';
 
 const DEFAULT_LIMITS = { maxTextureDimension2D: 8192, maxTextureArrayLayers: 256 };
@@ -56,9 +59,9 @@ describe('settings', () => {
 
     it('resolves auto biases to 0.1 of the smallest spacing', () => {
         const grid = probeGrid({ center: [0, 0, 0], size: [4, 4, 4], spacing: [1, 0.5, 2] });
-        expect(resolveBias('auto', grid)).toBeCloseTo(0.05, 12);
-        expect(resolveBias(0.3, grid)).toBe(0.3);
-        expect(resolveBias(-1, grid)).toBe(0);
+        expect(resolveBias('auto', grid, 0.1)).toBeCloseTo(0.05, 12);
+        expect(resolveBias(0.3, grid, 0.1)).toBe(0.3);
+        expect(resolveBias(-1, grid, 0.1)).toBe(0);
     });
 
     it('clamps distances at 1.5 cell diagonals and treats Infinity as unbounded rays', () => {
@@ -272,7 +275,51 @@ describe('the WGSL', () => {
     });
 
     it('uses only technique groups (1) for its own bindings', () => {
-        const code = updateKernelWgsl({ irradianceTexels: 6, distanceTexels: 14, scratch });
-        expect(code.match(/@group\((\d)\)/g)?.every((match) => match === '@group(1)')).toBe(true);
+        const kernels = [
+            DDGI_TRACE_WGSL,
+            DDGI_CENSUS_WGSL,
+            blendKernelWgsl({ irradianceTexels: 6, distanceTexels: 14, scratch, reduction: 'subgroups' }),
+            writeKernelWgsl({ irradianceTexels: 6, distanceTexels: 14, scratch, distanceFormat: 'rg16float' }),
+        ];
+        for (const code of kernels) expect(code.match(/@group\((\d)\)/g)?.every((match: string) => match === '@group(1)')).toBe(true);
+    });
+
+    it('builds phase B subgroups first, with the declared fallback free of subgroup calls', () => {
+        const subgroups = blendKernelWgsl({ irradianceTexels: 6, distanceTexels: 14, scratch, reduction: 'subgroups' });
+        const fallback = blendKernelWgsl({ irradianceTexels: 6, distanceTexels: 14, scratch, reduction: 'workgroup' });
+        // The enable directive must come before everything else in the module.
+        expect(subgroups.trimStart().startsWith('enable subgroups;')).toBe(true);
+        expect(subgroups).toMatch(/subgroupMin\(/);
+        expect(fallback).not.toMatch(/subgroup[A-Z]|enable subgroups/);
+    });
+});
+
+describe('the uniform block', () => {
+    /** Size and alignment of the WGSL types DdgiUniforms uses (WGSL spec, "Alignment and Size"). */
+    const TYPES: Record<string, { size: number; align: number }> = {
+        f32: { size: 4, align: 4 },
+        u32: { size: 4, align: 4 },
+        vec4f: { size: 16, align: 16 },
+        vec4u: { size: 16, align: 16 },
+        mat3x3f: { size: 48, align: 16 },
+    };
+
+    it('has every field where UNIFORM_WORD says, under WGSL layout rules', () => {
+        const body = /struct DdgiUniforms \{([\s\S]*?)\n\}/.exec(DDGI_COMMON_WGSL)?.[1];
+        expect(body).toBeDefined();
+        const members = [...(body ?? '').matchAll(/^\s*(\w+): (\w+),/gm)].map((match) => ({ name: match[1], type: match[2] }));
+        let offset = 0;
+        let structAlign = 0;
+        const words: Record<string, number> = {};
+        for (const member of members) {
+            const type = TYPES[member.type];
+            expect(type, `unknown type ${member.type}`).toBeDefined();
+            offset = Math.ceil(offset / type.align) * type.align;
+            words[member.name] = offset / 4;
+            offset += type.size;
+            structAlign = Math.max(structAlign, type.align);
+        }
+        expect(words).toEqual(UNIFORM_WORD);
+        expect(Math.ceil(offset / structAlign) * structAlign).toBe(UNIFORM_BYTES);
     });
 });

@@ -49,20 +49,91 @@ import { PlatformRayQueries } from './trace/ray-queries.ts';
 
 
 /**
- * Work units a technique gets when the frame's budget names none.
- *
- * This is the seam T1.5 fills in: there the platform turns `budget.gpuMs` into
- * units with each technique's `msPerUnit`, shared between techniques. Until
- * then every technique gets `budget.units`, or this many (DDGI's default probe
- * count per frame on Tier A, docs/design/ddgi.md).
+ * Work units a technique gets when there's no way to use `budget.gpuMs` (no
+ * GPU timings yet, or none at all without `timestamp-query`) and the budget
+ * names no units: DDGI's default probe count per frame on Tier A
+ * (docs/design/ddgi.md).
  */
 export const DEFAULT_UNITS_PER_FRAME = 512;
 
-/** Units each technique may spend this frame, in encode order. */
-export function unitsForFrame(budget: FrameBudget, techniques: readonly GITechnique[]): number[] {
-    // T1.5: convert budget.gpuMs with technique.msPerUnit and split between techniques.
-    const units = budget.units ?? DEFAULT_UNITS_PER_FRAME;
-    return techniques.map(() => units);
+/**
+ * Each new measurement of a technique's cost per unit moves its estimate this
+ * share of the way, so one slow or fast frame doesn't swing the budget.
+ */
+export const MS_PER_UNIT_SMOOTHING = 0.1;
+
+/** Frames of handed-out units remembered while their timings are on the way (they arrive a few frames late). */
+const REMEMBERED_FRAMES = 32;
+
+/**
+ * Units each technique may spend this frame, in encode order (FrameBudget):
+ * - with `gpuMs` and a cost per unit for every technique, the time is shared
+ *   evenly between the techniques and each share divided by that technique's
+ *   cost (docs/api/platform.md, gap 6: a real policy waits for a second
+ *   technique), capped by `units` when that is set too;
+ * - otherwise `units`, or {@link DEFAULT_UNITS_PER_FRAME}.
+ */
+export function unitsForFrame(budget: FrameBudget, msPerUnit: readonly (number | undefined)[]): number[] {
+    const fallback = budget.units ?? DEFAULT_UNITS_PER_FRAME;
+    const gpuMs = budget.gpuMs;
+    const costsKnown = msPerUnit.every((cost) => cost !== undefined && cost > 0 && Number.isFinite(cost));
+    if (gpuMs === undefined || !(gpuMs >= 0) || !costsKnown) return msPerUnit.map(() => fallback);
+    const share = gpuMs / Math.max(1, msPerUnit.length);
+    return msPerUnit.map((cost) => {
+        const units = Math.floor(share / (cost as number));
+        return budget.units === undefined ? units : Math.min(units, budget.units);
+    });
+}
+
+/**
+ * Measures each technique's GPU cost per unit from the platform's timer: the
+ * passes named `<technique id>/...` in a frame, divided by the units the
+ * technique was handed that frame, smoothed over frames.
+ *
+ * A technique that is handed more units than it can use (DDGI given more
+ * probes than its volume has) reads cheaper than it is. Its budget then keeps
+ * covering all its work, which is the right outcome, so this is left as is.
+ */
+export class UnitCostMeter {
+    private readonly handedOut = new Map<number, Map<string, number>>();
+    private readonly estimates = new Map<string, number>();
+
+    /** Records the units a technique was handed in a frame. */
+    handOut(frame: number, techniqueId: string, units: number): void {
+        let frameUnits = this.handedOut.get(frame);
+        if (!frameUnits) {
+            frameUnits = new Map();
+            this.handedOut.set(frame, frameUnits);
+            for (const old of this.handedOut.keys()) if (old <= frame - REMEMBERED_FRAMES) this.handedOut.delete(old);
+        }
+        frameUnits.set(techniqueId, units);
+    }
+
+    /** Takes one frame's pass timings into the estimates. */
+    measure(frame: number, passes: readonly { readonly name: string; readonly gpuMs: number }[]): void {
+        const frameUnits = this.handedOut.get(frame);
+        if (!frameUnits) return;
+        for (const [techniqueId, units] of frameUnits) {
+            if (!(units > 0)) continue;
+            const prefix = `${techniqueId}/`;
+            const timed = passes.filter((pass) => pass.name.startsWith(prefix) && pass.gpuMs >= 0);
+            if (timed.length === 0) continue;
+            const msPerUnit = timed.reduce((sum, pass) => sum + pass.gpuMs, 0) / units;
+            const previous = this.estimates.get(techniqueId);
+            this.estimates.set(techniqueId, previous === undefined ? msPerUnit : previous + (msPerUnit - previous) * MS_PER_UNIT_SMOOTHING);
+        }
+        this.handedOut.delete(frame);
+    }
+
+    /** The smoothed estimate, or undefined before the first timed frame. */
+    msPerUnit(techniqueId: string): number | undefined {
+        return this.estimates.get(techniqueId);
+    }
+
+    reset(): void {
+        this.handedOut.clear();
+        this.estimates.clear();
+    }
 }
 
 /** No scene changes: the screen stage runs after `encode`, which already reported them. */
@@ -100,6 +171,8 @@ export class GIPlatformImpl implements GIPlatform {
     /** Set after `encode` resolved timestamps, so the next `encode` starts their readback (the host has submitted by then). */
     private timerAwaitingReadback = false;
     private latestPasses: PassTiming[] = [];
+    /** Each technique's measured GPU cost per unit, for turning `budget.gpuMs` into units. */
+    private readonly unitCosts = new UnitCostMeter();
     private readonly warnedMessages = new Set<string>();
 
     constructor(device: GPUDevice, options: GIPlatformOptions = {}) {
@@ -220,8 +293,9 @@ export class GIPlatformImpl implements GIPlatform {
 
         if (!frame.budget.paused) {
             const techniques = this.encodeOrder();
-            const units = unitsForFrame(frame.budget, techniques);
+            const units = unitsForFrame(frame.budget, techniques.map((technique) => this.msPerUnit(technique)));
             techniques.forEach((technique, index) => {
+                if (this.timer) this.unitCosts.handOut(this.frame, technique.id, units[index]);
                 const techniqueFrame: TechniqueFrame = {
                     frame: this.frame,
                     deltaTime: frame.deltaTime,
@@ -343,8 +417,14 @@ export class GIPlatformImpl implements GIPlatform {
         };
     }
 
+    /** A technique's own estimate if it has one, otherwise the platform's measurement. */
+    msPerUnit(technique: GITechnique): number | undefined {
+        return technique.msPerUnit ?? this.unitCosts.msPerUnit(technique.id);
+    }
+
     private collectPasses(timer: GpuTimer): void {
         const samples = timer.takeSamples();
+        for (const sample of samples) this.unitCosts.measure(sample.frame, sample.passes);
         const newest = samples[samples.length - 1];
         if (!newest) return;
         this.latestPasses = newest.passes.map((pass) => ({ name: pass.name, gpuMs: pass.gpuMs, frame: newest.frame }));

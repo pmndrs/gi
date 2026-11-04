@@ -4,7 +4,11 @@
  *
  *   node tools/gpu/pages/ddgi-test-view/render.ts [--scene cornell-box-point] [--camera 1]
  *        [--frames 600] [--width 512] [--height 512] [--gpu nvidia|intel] [--keep-light-range]
- *        [--suffix -run2] [--settings '{"viewBias": 0}']
+ *        [--volume manifest|in-air] [--suffix -run2] [--settings '{"viewBias": 0}']
+ *
+ * `--volume in-air` (Cornell only) uses `CORNELL_POINT_IN_AIR_VOLUME`, T1.5a's
+ * measurement, as an extra report: its files get `-in-air` and it never
+ * gates. The gate is the manifest's own volume (DECISIONS 2026-11-05).
  *
  * Writes `bench/references/<scene>/<camera>/ddgi-indirect<suffix>.exr` and
  * `ddgi-full<suffix>.exr` (gitignored, next to the references), then runs
@@ -32,6 +36,7 @@ import type { GpuChoice } from '../../contract.ts';
 import { SITE_ROOT } from '../../server.ts';
 import { BrowserSession } from '../../session.ts';
 import type { TestViewJob } from './main.ts';
+import { CORNELL_POINT_IN_AIR_VOLUME } from '../ddgi-shared/volumes.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '..', '..', '..', '..');
@@ -42,6 +47,24 @@ function decodeFloats(base64: string): Float32Array {
     return new Float32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4).slice();
 }
 
+/**
+ * `--suffix -air`: parseArgs refuses an option value that starts with a dash,
+ * so such a value is joined to its flag (`--suffix=-air`) first.
+ */
+function joinDashValues(args: readonly string[], flag: string): string[] {
+    const joined: string[] = [];
+    for (let index = 0; index < args.length; index++) {
+        const next = args[index + 1];
+        if (args[index] === flag && next !== undefined && next.startsWith('-')) {
+            joined.push(`${flag}=${next}`);
+            index++;
+        } else {
+            joined.push(args[index]);
+        }
+    }
+    return joined;
+}
+
 function mean(values: Float32Array): number {
     let sum = 0;
     for (const value of values) sum += value;
@@ -50,7 +73,9 @@ function mean(values: Float32Array): number {
 
 async function main(): Promise<void> {
     const { values } = parseArgs({
+        args: joinDashValues(process.argv.slice(2), '--suffix'),
         options: {
+            volume: { type: 'string', default: 'manifest' },
             scene: { type: 'string', default: 'cornell-box-point' },
             camera: { type: 'string', default: '1' },
             frames: { type: 'string', default: '600' },
@@ -63,6 +88,9 @@ async function main(): Promise<void> {
         },
     });
     if (values.gpu !== 'nvidia' && values.gpu !== 'intel') throw new Error('--gpu must be nvidia or intel');
+    if (values.volume !== 'manifest' && values.volume !== 'in-air') throw new Error('--volume must be manifest or in-air');
+    const inAir = values.volume === 'in-air';
+    if (inAir && values.scene !== 'cornell-box-point') throw new Error('--volume in-air exists for cornell-box-point only');
     const gpu: GpuChoice = values.gpu;
     const manifest = JSON.parse(await readFile(join(repoRoot, 'scenes', 'manifests', `${values.scene}.json`), 'utf8')) as { id: string; cameras: { name: string }[] };
     const camera = Number(values.camera);
@@ -82,7 +110,12 @@ async function main(): Promise<void> {
         ignoreLightRange: !values['keep-light-range'],
         exportImages: true,
         referenceIndirectMean: null,
-        settings: JSON.parse(values.settings ?? '{}') as TestViewJob['settings'],
+        settings: {
+            ...(JSON.parse(values.settings ?? '{}') as TestViewJob['settings']),
+            ...(inAir ? { volume: CORNELL_POINT_IN_AIR_VOLUME } : {}),
+        },
+        // One volume per run here; the page's own in-air extra is for pnpm test:gpu.
+        extraVolumes: [],
     };
 
     const server = await createServer({
@@ -137,7 +170,7 @@ async function main(): Promise<void> {
     const full = image('fullBase64');
 
     await mkdir(outDir, { recursive: true });
-    const suffix = values.suffix ?? '';
+    const suffix = `${inAir ? '-in-air' : ''}${values.suffix ?? ''}`;
     const indirectFile = join(outDir, `ddgi-indirect${suffix}.exr`);
     const fullFile = join(outDir, `ddgi-full${suffix}.exr`);
     await writeFile(indirectFile, writeExr(indirect));
@@ -163,7 +196,12 @@ async function main(): Promise<void> {
     compare(referenceFull, fullFile, 'full, per pixel (not gating)', ['--out', prefix('full')]);
     compare(referenceFull, fullFile, 'full, 8x8 blocks (not gating)', ['--downsample', '8', '--out', prefix('full-blocks8')]);
 
-    if (data.emissiveSurfaces === true) {
+    if (inAir) {
+        const value = mean(indirect.rgb);
+        const versus = referenceIndirectMean === null ? '' : ` against Cycles ${referenceIndirectMean.toFixed(6)}: ${((value / referenceIndirectMean - 1) * 100).toFixed(2)}%`;
+        console.log(`
+in-air volume, an extra report that never gates: indirect mean ${value.toFixed(6)}${versus}`);
+    } else if (data.emissiveSurfaces === true) {
         console.log(
             "\nthe scene has emissive surfaces: DDGI counts their light as GI and Cycles' indirect pass does not, " +
                 'so the indirect numbers above are not comparable and do not gate (DECISIONS 2026-11-04)',

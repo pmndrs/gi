@@ -1,0 +1,4 @@
+{
+    "description": "T1.5b: probe states and offsets against the geometry (Cornell blocks, cabinet row), the points view, and subgroups vs the fallback reduction giving identical states and offsets.",
+    "timeoutMs": 300000
+}

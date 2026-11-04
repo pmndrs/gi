@@ -133,32 +133,56 @@ export function scratchLayout(irradianceTexels: number, distanceTexels: number):
 }
 
 /**
- * The uniform buffer both kernels read (`DdgiUniforms` in WGSL). The first
- * four vec4s are exactly the vec4 parameters `ddgiSampleIrradiance` takes, so
- * the update kernel and a renderer pass the same values.
- *
- * | vec4 | contents |
- * | --- | --- |
- * | 0 `volumeOrigin` | xyz: world position of probe (0, 0, 0); w: normal bias |
- * | 1 `volumeSpacing` | xyz: spacing; w: view bias |
- * | 2 `volumeCounts` | xyz: probes per axis (floats); w: unused |
- * | 3 `volumeTexels` | x: irradiance interior texels; y: distance interior texels; zw: unused |
- * | 4-6 `rayRotation` | this frame's ray rotation, one column per vec4 |
- * | 7 `blend` | hysteresis, irradianceChangeThreshold, maxBrightnessChange, distanceSharpness |
- * | 8 `rays` | maxRayDistance, distance clamp, bounceEnergy, unused |
- * | 9 `counts` (u32) | raysPerProbe, update count, frame, unused |
+ * Where each field of `DdgiUniforms` (wgsl/common.ts) sits, in 32-bit words.
+ * The first four vec4s are exactly the vec4 parameters `ddgiSampleIrradiance`
+ * takes, so the kernels and a renderer pass the same values. WGSL layout:
+ * the mat3x3f has 16-byte columns, and the struct rounds up to 16 bytes.
  */
-export const UNIFORM_VEC4 = {
+export const UNIFORM_WORD = {
     volumeOrigin: 0,
-    volumeSpacing: 1,
-    volumeCounts: 2,
-    volumeTexels: 3,
-    rayRotation: 4,
-    blend: 7,
-    rays: 8,
-    counts: 9,
+    volumeSpacing: 4,
+    volumeCounts: 8,
+    volumeTexels: 12,
+    rayRotation: 16,
+    hysteresis: 28,
+    irradianceChangeThreshold: 29,
+    maxBrightnessChange: 30,
+    distanceSharpness: 31,
+    maxRayDistance: 32,
+    distanceClamp: 33,
+    bounceEnergy: 34,
+    minFrontFaceDistance: 35,
+    relocation: 36,
+    classification: 37,
+    raysPerProbe: 38,
+    updateCount: 39,
+    frame: 40,
 } as const;
-export const UNIFORM_VEC4_COUNT = 10;
-export const UNIFORM_BYTES = UNIFORM_VEC4_COUNT * 16;
+/** 41 words, rounded up to the struct's 16-byte alignment. */
+export const UNIFORM_WORDS = 44;
+export const UNIFORM_BYTES = UNIFORM_WORDS * 4;
+/** Words per column of the rotation (vec3f columns padded to 16 bytes). */
+export const MAT3_COLUMN_WORDS = 4;
 /** The shading parameters: vec4s 0-3. */
 export const SAMPLE_PARAMETER_VEC4_COUNT = 4;
+
+/**
+ * One ray in the ray buffer between `ddgi/trace` and `ddgi/blend`: two
+ * words, rgb radiance as half floats (rg, then b) and the signed hit distance
+ * as a half float (negative: a back face). Half floats are the atlases' own
+ * precision. A probe's rays sit at `slot × raysPerProbe + ray`.
+ */
+export const RAY_RECORD_BYTES = 8;
+
+/**
+ * The census buffer (read back a few frames late, for the counters): probes
+ * per state (indices are the states), then rays traced this frame.
+ */
+export const CENSUS_WORDS = 5;
+export const CENSUS_RAYS_TRACED = 4;
+
+/** The points debug view: one rgba32float texel per probe, in probe-index order, rows as wide as the device allows. */
+export function pointsSize(probeCount: number, maxTextureDimension2D: number): { width: number; height: number } {
+    const width = Math.min(probeCount, maxTextureDimension2D);
+    return { width, height: Math.ceil(probeCount / width) };
+}

@@ -1,38 +1,56 @@
 /**
  * DDGI as a platform technique (docs/design/ddgi.md): a box of probes whose
- * irradiance and distance atlases are updated a budget of probes per frame
- * by the `ddgi/update` and `ddgi/write` kernels.
+ * irradiance and distance atlases are updated a budget of probes per frame.
+ *
+ * Each frame, into the host's encoder:
+ * 1. `ddgi/trace`: one thread per ray traces inline, shades the hit and
+ *    writes the ray buffer;
+ * 2. `ddgi/blend`: one workgroup per probe classifies and relocates the
+ *    probe (phase B) and blends its rays into the scratch buffer (phase C);
+ * 3. `ddgi/write`: copies the scratch into the atlases, the probe data and
+ *    the `points` debug view;
+ * 4. `ddgi/census` (now and then): counts probes per state for the counters,
+ *    read back a few frames later.
  *
  * It sees only its `TechniqueContext`: the scene copy, the `rays` backend,
  * hit shading, the kernel builder and the timer. Never the host or an engine.
- *
- * T1.5a builds the field and the update loop with every probe treated as
- * active. Classification and relocation (phase B) are T1.5b; the shading
- * module that renderers read is T1.6, built on `field` and `DDGI_SAMPLE_WGSL`.
+ * The shading module that renderers read is T1.6, built on `field` and
+ * `DDGI_SAMPLE_WGSL`.
  */
 
 import type { ShadingModule } from '../../platform/contract/shading-module.ts';
 import type { DebugView } from '../../platform/contract/stats.ts';
 import type { GITechnique, TechniqueContext, TechniqueFrame, TechniqueRequirements } from '../../platform/contract/technique.ts';
 import type { ComputeKernel } from '../../platform/contract/wgsl.ts';
+import { GILimitError } from '../../platform/contract/errors.ts';
 import {
+    CENSUS_RAYS_TRACED,
+    CENSUS_WORDS,
     checkFieldLimits,
     distanceFormatFor,
     fieldBytes,
     fieldLayout,
     IRRADIANCE_FORMAT,
     PROBE_DATA_FORMAT,
+    PROBE_STATE,
+    PROBE_STATE_LABELS,
+    pointsSize,
+    RAY_RECORD_BYTES,
     SAMPLE_PARAMETER_VEC4_COUNT,
     scratchLayout,
+    MAT3_COLUMN_WORDS,
     UNIFORM_BYTES,
-    UNIFORM_VEC4,
-    UNIFORM_VEC4_COUNT,
+    UNIFORM_WORD,
+    UNIFORM_WORDS,
     type DistanceFormat,
     type FieldLayout,
     type ScratchLayout,
 } from './layout.ts';
 import { frameRayRotation } from './ray-rotation.ts';
 import {
+    AUTO_MIN_FRONT_FACE_SHARE,
+    AUTO_NORMAL_BIAS_SHARE,
+    AUTO_VIEW_BIAS_SHARE,
     blendSettings,
     distanceClamp,
     effectiveMaxRayDistance,
@@ -45,18 +63,36 @@ import {
     type ProbeGrid,
 } from './settings.ts';
 import { UpdateCursor } from './update-order.ts';
-import { updateKernelWgsl } from './wgsl/update.ts';
+import { blendKernelWgsl, type PhaseBReduction } from './wgsl/blend.ts';
+import { CENSUS_WORKGROUP_SIZE, DDGI_CENSUS_WGSL } from './wgsl/census.ts';
+import { DDGI_TRACE_WGSL, TRACE_WORKGROUP_SIZE } from './wgsl/trace.ts';
 import { writeKernelWgsl } from './wgsl/write.ts';
 
 /** WebGPU usage bits; the globals don't exist in Node, where tests import this file. */
-const BUFFER_USAGE = { copyDst: 0x8, uniform: 0x40, storage: 0x80 } as const;
+const BUFFER_USAGE = { mapRead: 0x1, copySrc: 0x4, copyDst: 0x8, uniform: 0x40, storage: 0x80 } as const;
 const TEXTURE_USAGE = { copySrc: 0x1, copyDst: 0x2, textureBinding: 0x4, storageBinding: 0x8 } as const;
 const SHADER_STAGE_COMPUTE = 0x4;
+const MAP_MODE_READ = 0x1;
 
-/** Bytes of one probe-data texel (rgba16float). */
+/** Bytes of one probe-data texel (rgba16float) and one point (rgba32float). */
 const PROBE_DATA_TEXEL_BYTES = 8;
+const POINT_TEXEL_BYTES = 16;
 /** The half-float bit pattern of 3.0, the "not updated yet" state. */
 const HALF_THREE = 0x4200;
+/** Census readbacks in flight at once; one is usually enough, three cover a slow driver. */
+const CENSUS_STAGING_BUFFERS = 3;
+/** The ray buffer's first size, in rays; it grows when a frame needs more. */
+const INITIAL_RAY_CAPACITY = 512 * 256;
+
+/** Options fixed for the technique's life. */
+export interface DDGITechniqueOptions {
+    /**
+     * How phase B reduces the fixed rays. Defaults to `subgroups` when the
+     * device has the feature, otherwise the declared fallback `workgroup`.
+     * Both give the same states and offsets; tests run both.
+     */
+    readonly reduction?: PhaseBReduction;
+}
 
 /**
  * What a renderer (T1.6's shading module) and test tools read: the three
@@ -73,6 +109,11 @@ export interface DDGIField {
     readonly sampleParameters: Float32Array;
 }
 
+interface CensusStaging {
+    readonly buffer: GPUBuffer;
+    state: 'free' | 'copied' | 'mapping';
+}
+
 interface PreparedResources {
     readonly grid: ProbeGrid;
     readonly layout: FieldLayout;
@@ -80,78 +121,138 @@ interface PreparedResources {
     readonly irradianceTexels: number;
     readonly distanceTexels: number;
     readonly maxProbesPerFrame: number;
+    readonly reduction: PhaseBReduction;
     readonly irradiance: GPUTexture;
     readonly distance: GPUTexture;
     readonly probeData: GPUTexture;
+    readonly points: GPUTexture;
+    readonly sampler: GPUSampler;
     readonly uniforms: GPUBuffer;
     readonly updateList: GPUBuffer;
     readonly scratchBuffer: GPUBuffer;
-    readonly updateKernel: ComputeKernel;
+    readonly census: GPUBuffer;
+    readonly censusStaging: CensusStaging[];
+    readonly traceKernel: ComputeKernel;
+    readonly blendKernel: ComputeKernel;
     readonly writeKernel: ComputeKernel;
-    readonly updateGroup: GPUBindGroup;
+    readonly censusKernel: ComputeKernel;
     readonly writeGroup: GPUBindGroup;
+    readonly censusGroup: GPUBindGroup;
+    /** The ray buffer and the groups that bind it; replaced when it grows. */
+    rays: { buffer: GPUBuffer; capacity: number; traceGroup: GPUBindGroup; blendGroup: GPUBindGroup };
     readonly cursor: UpdateCursor;
     readonly list: Uint32Array<ArrayBuffer>;
-    readonly bytes: number;
+    readonly fixedBytes: number;
 }
 
-/** The update kernel's group 1 (wgsl/update.ts). */
-function updateGroupLayout(): GPUBindGroupLayoutDescriptor {
-    const texture = { sampleType: 'float', viewDimension: '2d-array' } as const;
-    return {
-        label: 'ddgi/update group 1',
-        entries: [
-            { binding: 0, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'uniform' } },
-            { binding: 1, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'read-only-storage' } },
-            { binding: 2, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'storage' } },
-            { binding: 3, visibility: SHADER_STAGE_COMPUTE, texture },
-            { binding: 4, visibility: SHADER_STAGE_COMPUTE, texture },
-            { binding: 5, visibility: SHADER_STAGE_COMPUTE, texture },
-            { binding: 6, visibility: SHADER_STAGE_COMPUTE, sampler: { type: 'filtering' } },
-        ],
-    };
-}
+const COMPUTE = SHADER_STAGE_COMPUTE;
+const SAMPLED_ARRAY = { sampleType: 'float', viewDimension: '2d-array' } as const;
 
-/** The write kernel's group 1 (wgsl/write.ts). */
+/** `ddgi/trace` group 1 (wgsl/trace.ts). */
+const TRACE_GROUP: GPUBindGroupLayoutDescriptor = {
+    label: 'ddgi/trace group 1',
+    entries: [
+        { binding: 0, visibility: COMPUTE, buffer: { type: 'uniform' } },
+        { binding: 1, visibility: COMPUTE, buffer: { type: 'read-only-storage' } },
+        { binding: 2, visibility: COMPUTE, buffer: { type: 'storage' } },
+        { binding: 3, visibility: COMPUTE, texture: SAMPLED_ARRAY },
+        { binding: 4, visibility: COMPUTE, texture: SAMPLED_ARRAY },
+        { binding: 5, visibility: COMPUTE, texture: SAMPLED_ARRAY },
+        { binding: 6, visibility: COMPUTE, sampler: { type: 'filtering' } },
+    ],
+};
+
+/** `ddgi/blend` group 1 (wgsl/blend.ts). */
+const BLEND_GROUP: GPUBindGroupLayoutDescriptor = {
+    label: 'ddgi/blend group 1',
+    entries: [
+        { binding: 0, visibility: COMPUTE, buffer: { type: 'uniform' } },
+        { binding: 1, visibility: COMPUTE, buffer: { type: 'read-only-storage' } },
+        { binding: 2, visibility: COMPUTE, buffer: { type: 'read-only-storage' } },
+        { binding: 3, visibility: COMPUTE, buffer: { type: 'storage' } },
+        { binding: 4, visibility: COMPUTE, buffer: { type: 'storage' } },
+        { binding: 5, visibility: COMPUTE, texture: SAMPLED_ARRAY },
+        { binding: 6, visibility: COMPUTE, texture: SAMPLED_ARRAY },
+        { binding: 7, visibility: COMPUTE, texture: SAMPLED_ARRAY },
+    ],
+};
+
+/** `ddgi/write` group 1 (wgsl/write.ts). */
 function writeGroupLayout(distanceFormat: DistanceFormat): GPUBindGroupLayoutDescriptor {
-    const storage = (format: GPUTextureFormat): GPUStorageTextureBindingLayout => ({ access: 'write-only', format, viewDimension: '2d-array' });
+    const storage = (format: GPUTextureFormat, viewDimension: GPUTextureViewDimension = '2d-array'): GPUStorageTextureBindingLayout => ({ access: 'write-only', format, viewDimension });
     return {
         label: 'ddgi/write group 1',
         entries: [
-            { binding: 0, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'uniform' } },
-            { binding: 1, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'read-only-storage' } },
-            { binding: 2, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'read-only-storage' } },
-            { binding: 3, visibility: SHADER_STAGE_COMPUTE, storageTexture: storage(IRRADIANCE_FORMAT) },
-            { binding: 4, visibility: SHADER_STAGE_COMPUTE, storageTexture: storage(distanceFormat) },
-            { binding: 5, visibility: SHADER_STAGE_COMPUTE, storageTexture: storage(PROBE_DATA_FORMAT) },
+            { binding: 0, visibility: COMPUTE, buffer: { type: 'uniform' } },
+            { binding: 1, visibility: COMPUTE, buffer: { type: 'read-only-storage' } },
+            { binding: 2, visibility: COMPUTE, buffer: { type: 'read-only-storage' } },
+            { binding: 3, visibility: COMPUTE, storageTexture: storage(IRRADIANCE_FORMAT) },
+            { binding: 4, visibility: COMPUTE, storageTexture: storage(distanceFormat) },
+            { binding: 5, visibility: COMPUTE, storageTexture: storage(PROBE_DATA_FORMAT) },
+            { binding: 6, visibility: COMPUTE, storageTexture: storage('rgba32float', '2d') },
         ],
     };
 }
+
+/** `ddgi/census` group 1 (wgsl/census.ts). */
+const CENSUS_GROUP: GPUBindGroupLayoutDescriptor = {
+    label: 'ddgi/census group 1',
+    entries: [
+        { binding: 0, visibility: COMPUTE, buffer: { type: 'uniform' } },
+        { binding: 1, visibility: COMPUTE, buffer: { type: 'storage' } },
+        { binding: 2, visibility: COMPUTE, texture: SAMPLED_ARRAY },
+    ],
+};
 
 export class DDGITechnique implements GITechnique<DDGISettings> {
     readonly id = 'ddgi';
     readonly requirements: TechniqueRequirements = { queries: ['rays'] };
     readonly settings: DDGISettings;
-    /** The points view (probe positions and states) comes with classification, T1.5b. */
-    readonly debugViews: readonly DebugView[] = [];
-    /** Set from GPU timings once the platform converts ms budgets into units (T1.5b). */
+    readonly debugViews: readonly DebugView[];
+    /**
+     * Undefined: the platform measures DDGI's cost per probe itself, from the
+     * `ddgi/*` pass timings and the probes it handed out (gi-platform.ts).
+     */
     readonly msPerUnit: number | undefined = undefined;
 
+    private readonly options: DDGITechniqueOptions;
     private context: TechniqueContext | null = null;
     private resources: PreparedResources | null = null;
-    private readonly uniformData = new Float32Array(UNIFORM_VEC4_COUNT * 4);
+    private readonly uniformData = new Float32Array(UNIFORM_WORDS);
     private readonly uniformWords = new Uint32Array(this.uniformData.buffer);
     private readonly parameterView = new Float32Array(SAMPLE_PARAMETER_VEC4_COUNT * 4);
-    private latestCounters: Record<string, number> = {};
+    /** The latest census read back: probes per state, then rays traced. Null until the first arrives. */
+    private latestCensus: Uint32Array | null = null;
+    private probesUpdated = 0;
     private disposed = false;
 
-    constructor(settings: DDGISettingsInput) {
+    constructor(settings: DDGISettingsInput, options: DDGITechniqueOptions = {}) {
         this.settings = withDefaults(settings);
+        this.options = options;
+        this.debugViews = [
+            {
+                kind: 'points',
+                id: 0,
+                label: 'Probes',
+                description: 'Each probe as a dot where it really sits (after relocation), coloured by its state.',
+                texture: () => {
+                    if (!this.resources) throw new Error('@pmndrs/ddgi: the probes debug view exists after prepare');
+                    return this.resources.points;
+                },
+                count: () => this.resources?.grid.probeCount ?? 0,
+                states: PROBE_STATE_LABELS,
+            },
+        ];
     }
 
     attach(context: TechniqueContext): void {
         if (this.context) throw new Error('@pmndrs/ddgi: a DDGI technique can be attached to one platform only');
         this.context = context;
+    }
+
+    /** Which phase-B reduction the kernels use (after `prepare`). */
+    get reduction(): PhaseBReduction | undefined {
+        return this.resources?.reduction;
     }
 
     async prepare(): Promise<void> {
@@ -165,19 +266,31 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         const distanceTexels = positiveInteger(this.settings.distanceTexels, 'distanceTexels');
         const layout = fieldLayout(grid, irradianceTexels, distanceTexels, distanceFormatFor(device.features as ReadonlySet<string>));
         checkFieldLimits(layout, device.limits);
+        const points = pointsSize(grid.probeCount, device.limits.maxTextureDimension2D);
+        if (points.height > device.limits.maxTextureDimension2D) throw new GILimitError('maxTextureDimension2D', points.height, device.limits.maxTextureDimension2D);
         const scratch = scratchLayout(irradianceTexels, distanceTexels);
         // No probe updates twice in a frame, so more slots than probes would never be used.
         const maxProbesPerFrame = Math.min(positiveInteger(this.settings.maxProbesPerFrame, 'maxProbesPerFrame'), grid.probeCount);
+        const hasSubgroups = device.features.has('subgroups');
+        const reduction = this.options.reduction ?? (hasSubgroups ? 'subgroups' : 'workgroup');
+        if (reduction === 'subgroups' && !hasSubgroups) throw new Error("@pmndrs/ddgi: the 'subgroups' reduction needs a device with the 'subgroups' feature");
 
         // Compile first: if a kernel fails, the old resources stay usable.
-        const [updateKernel, writeKernel] = await Promise.all([
+        const [traceKernel, blendKernel, writeKernel, censusKernel] = await Promise.all([
             context.kernels.computeKernel({
-                label: 'ddgi/update',
+                label: 'ddgi/trace',
                 // Hit shading brings the scene copy and rays in as its dependencies.
                 modules: [context.shade.module],
-                code: updateKernelWgsl({ irradianceTexels, distanceTexels, scratch }),
-                entryPoint: 'ddgiUpdate',
-                ownGroups: [updateGroupLayout()],
+                code: DDGI_TRACE_WGSL,
+                entryPoint: 'ddgiTrace',
+                ownGroups: [TRACE_GROUP],
+            }),
+            context.kernels.computeKernel({
+                label: `ddgi/blend (${reduction})`,
+                modules: [],
+                code: blendKernelWgsl({ irradianceTexels, distanceTexels, scratch, reduction }),
+                entryPoint: 'ddgiBlend',
+                ownGroups: [BLEND_GROUP],
             }),
             context.kernels.computeKernel({
                 label: 'ddgi/write',
@@ -186,41 +299,41 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
                 entryPoint: 'ddgiWrite',
                 ownGroups: [writeGroupLayout(layout.distanceFormat)],
             }),
+            context.kernels.computeKernel({
+                label: 'ddgi/census',
+                modules: [],
+                code: DDGI_CENSUS_WGSL,
+                entryPoint: 'ddgiCountStates',
+                ownGroups: [CENSUS_GROUP],
+            }),
         ]);
         if (this.disposed) return;
 
         this.releaseResources();
         const atlasUsage = TEXTURE_USAGE.textureBinding | TEXTURE_USAGE.storageBinding | TEXTURE_USAGE.copySrc;
-        const texture = (label: string, size: FieldLayout['irradiance'], format: GPUTextureFormat, extraUsage = 0): GPUTexture =>
+        const arrayTexture = (label: string, size: FieldLayout['irradiance'], format: GPUTextureFormat, extraUsage = 0): GPUTexture =>
             device.createTexture({
                 label: `ddgi ${label}`,
                 size: { width: size.width, height: size.height, depthOrArrayLayers: size.layers },
                 format,
                 usage: atlasUsage | extraUsage,
             });
-        const irradiance = texture('irradiance', layout.irradiance, IRRADIANCE_FORMAT);
-        const distance = texture('distance', layout.distance, layout.distanceFormat);
-        const probeData = texture('probe data', layout.probeData, PROBE_DATA_FORMAT, TEXTURE_USAGE.copyDst);
+        const irradiance = arrayTexture('irradiance', layout.irradiance, IRRADIANCE_FORMAT);
+        const distance = arrayTexture('distance', layout.distance, layout.distanceFormat);
+        const probeData = arrayTexture('probe data', layout.probeData, PROBE_DATA_FORMAT, TEXTURE_USAGE.copyDst);
+        const pointsTexture = device.createTexture({ label: 'ddgi points', size: points, format: 'rgba32float', usage: atlasUsage | TEXTURE_USAGE.copyDst });
         const uniforms = device.createBuffer({ label: 'ddgi uniforms', size: UNIFORM_BYTES, usage: BUFFER_USAGE.uniform | BUFFER_USAGE.copyDst });
         const updateList = device.createBuffer({ label: 'ddgi update list', size: maxProbesPerFrame * 4, usage: BUFFER_USAGE.storage | BUFFER_USAGE.copyDst });
         const scratchBuffer = device.createBuffer({ label: 'ddgi scratch', size: maxProbesPerFrame * scratch.strideWords * 4, usage: BUFFER_USAGE.storage });
+        const census = device.createBuffer({ label: 'ddgi census', size: CENSUS_WORDS * 4, usage: BUFFER_USAGE.storage | BUFFER_USAGE.copySrc | BUFFER_USAGE.copyDst });
+        const censusStaging = Array.from({ length: CENSUS_STAGING_BUFFERS }, (_, index) => ({
+            buffer: device.createBuffer({ label: `ddgi census readback ${index}`, size: CENSUS_WORDS * 4, usage: BUFFER_USAGE.mapRead | BUFFER_USAGE.copyDst }),
+            state: 'free' as CensusStaging['state'],
+        }));
         const sampler = device.createSampler({ label: 'ddgi atlases', magFilter: 'linear', minFilter: 'linear', addressModeU: 'clamp-to-edge', addressModeV: 'clamp-to-edge' });
 
         // Array views explicitly: a one-layer texture's default view would be 2d, not 2d-array.
         const arrayView = (target: GPUTexture): GPUTextureView => target.createView({ dimension: '2d-array' });
-        const updateGroup = device.createBindGroup({
-            label: 'ddgi/update group 1',
-            layout: updateKernel.ownLayouts[0],
-            entries: [
-                { binding: 0, resource: { buffer: uniforms } },
-                { binding: 1, resource: { buffer: updateList } },
-                { binding: 2, resource: { buffer: scratchBuffer } },
-                { binding: 3, resource: arrayView(irradiance) },
-                { binding: 4, resource: arrayView(distance) },
-                { binding: 5, resource: arrayView(probeData) },
-                { binding: 6, resource: sampler },
-            ],
-        });
         const writeGroup = device.createBindGroup({
             label: 'ddgi/write group 1',
             layout: writeKernel.ownLayouts[0],
@@ -231,67 +344,108 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
                 { binding: 3, resource: arrayView(irradiance) },
                 { binding: 4, resource: arrayView(distance) },
                 { binding: 5, resource: arrayView(probeData) },
+                { binding: 6, resource: pointsTexture.createView() },
+            ],
+        });
+        const censusGroup = device.createBindGroup({
+            label: 'ddgi/census group 1',
+            layout: censusKernel.ownLayouts[0],
+            entries: [
+                { binding: 0, resource: { buffer: uniforms } },
+                { binding: 1, resource: { buffer: census } },
+                { binding: 2, resource: arrayView(probeData) },
             ],
         });
 
-        const bytes = fieldBytes(layout) + UNIFORM_BYTES + updateList.size + scratchBuffer.size;
-        this.resources = {
+        const fixedBytes =
+            fieldBytes(layout) +
+            points.width * points.height * POINT_TEXEL_BYTES +
+            UNIFORM_BYTES +
+            updateList.size +
+            scratchBuffer.size +
+            census.size * (1 + CENSUS_STAGING_BUFFERS);
+        const partial = {
             grid,
             layout,
             scratch,
             irradianceTexels,
             distanceTexels,
             maxProbesPerFrame,
+            reduction,
             irradiance,
             distance,
             probeData,
+            points: pointsTexture,
+            sampler,
             uniforms,
             updateList,
             scratchBuffer,
-            updateKernel,
+            census,
+            censusStaging,
+            traceKernel,
+            blendKernel,
             writeKernel,
-            updateGroup,
+            censusKernel,
             writeGroup,
+            censusGroup,
             cursor: new UpdateCursor(grid.probeCount),
             list: new Uint32Array(maxProbesPerFrame),
-            bytes,
+            fixedBytes,
         };
+        this.resources = { ...partial, rays: this.createRayBuffer(device, partial, Math.min(INITIAL_RAY_CAPACITY, maxProbesPerFrame * 256)) };
+        this.latestCensus = null;
+        this.probesUpdated = 0;
         this.markAllNotUpdated();
-        this.latestCounters = this.countersFor(0, 0);
     }
 
     encode(encoder: GPUCommandEncoder, frame: TechniqueFrame): void {
         const resources = this.resources;
         const context = this.context;
         if (!resources || !context || this.disposed) return;
+        this.collectCensus(resources);
 
         const count = resources.cursor.next(Math.min(frame.units, resources.maxProbesPerFrame), resources.list);
-        const raysPerProbe = effectiveRaysPerProbe(this.settings.raysPerProbe);
-        this.latestCounters = this.countersFor(count, raysPerProbe);
+        this.probesUpdated = count;
         if (count === 0) return;
+        const raysPerProbe = effectiveRaysPerProbe(this.settings.raysPerProbe);
+        const device = context.device;
 
         this.writeUniforms(resources, frame.frame, count, raysPerProbe);
-        const queue = context.device.queue;
-        queue.writeBuffer(resources.uniforms, 0, this.uniformData);
-        queue.writeBuffer(resources.updateList, 0, resources.list, 0, count);
+        device.queue.writeBuffer(resources.uniforms, 0, this.uniformData);
+        device.queue.writeBuffer(resources.updateList, 0, resources.list, 0, count);
+        if (count * raysPerProbe > resources.rays.capacity) {
+            const old = resources.rays.buffer;
+            resources.rays = this.createRayBuffer(device, resources, Math.max(count * raysPerProbe, resources.rays.capacity * 2));
+            old.destroy();
+        }
+        // The census buffer also gathers this frame's rays traced (in ddgi/blend).
+        encoder.clearBuffer(resources.census);
 
-        const maxPerDimension = context.device.limits.maxComputeWorkgroupsPerDimension;
-        const groupsX = Math.min(count, maxPerDimension);
-        const groupsY = Math.ceil(count / groupsX);
+        const maxPerDimension = device.limits.maxComputeWorkgroupsPerDimension;
+        const probesX = Math.min(count, maxPerDimension);
+        const probesY = Math.ceil(count / probesX);
 
-        // Two passes so each is timed on its own. The write pass stores into
-        // the atlases the update pass sampled; passes are separate usage scopes.
-        const update = encoder.beginComputePass({ label: 'ddgi/update', timestampWrites: context.timer.computePass('ddgi/update') });
-        resources.updateKernel.bind(update);
-        update.setBindGroup(1, resources.updateGroup);
-        update.dispatchWorkgroups(groupsX, groupsY);
-        update.end();
+        // Separate passes so each is timed on its own. Passes are separate
+        // usage scopes, so ddgi/write may store into the atlases the others sampled.
+        const trace = encoder.beginComputePass({ label: 'ddgi/trace', timestampWrites: context.timer.computePass('ddgi/trace') });
+        resources.traceKernel.bind(trace);
+        trace.setBindGroup(1, resources.rays.traceGroup);
+        trace.dispatchWorkgroups(Math.ceil(raysPerProbe / TRACE_WORKGROUP_SIZE), probesX, probesY);
+        trace.end();
+
+        const blend = encoder.beginComputePass({ label: 'ddgi/blend', timestampWrites: context.timer.computePass('ddgi/blend') });
+        resources.blendKernel.bind(blend);
+        blend.setBindGroup(1, resources.rays.blendGroup);
+        blend.dispatchWorkgroups(probesX, probesY);
+        blend.end();
 
         const write = encoder.beginComputePass({ label: 'ddgi/write', timestampWrites: context.timer.computePass('ddgi/write') });
         resources.writeKernel.bind(write);
         write.setBindGroup(1, resources.writeGroup);
-        write.dispatchWorkgroups(groupsX, groupsY);
+        write.dispatchWorkgroups(probesX, probesY);
         write.end();
+
+        this.encodeCensus(encoder, resources, maxPerDimension);
     }
 
     /** Renderers read the field through T1.6's shading module, built on {@link field}. */
@@ -315,15 +469,30 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         };
     }
 
+    /**
+     * Counters for the latest frame. The per-state counts and rays traced come
+     * from the GPU census, read back a few frames late; until the first one
+     * arrives, every probe counts as not updated yet.
+     */
     get counters(): Readonly<Record<string, number>> {
-        return this.latestCounters;
+        const census = this.latestCensus;
+        const probes = this.resources?.grid.probeCount ?? 0;
+        return {
+            'probes updated': this.probesUpdated,
+            'rays traced': census ? census[CENSUS_RAYS_TRACED] : 0,
+            'probes active': census ? census[PROBE_STATE.active] : 0,
+            'probes off: inside geometry': census ? census[PROBE_STATE.offInsideGeometry] : 0,
+            'probes off: no surface nearby': census ? census[PROBE_STATE.offNoSurfaceNearby] : 0,
+            'probes not updated yet': census ? census[PROBE_STATE.notUpdatedYet] : probes,
+        };
     }
 
     get memoryBytes(): number {
-        return this.resources?.bytes ?? 0;
+        const resources = this.resources;
+        return resources ? resources.fixedBytes + resources.rays.buffer.size : 0;
     }
 
-    /** Every probe goes back to "not updated yet": its next update replaces it outright, and sampling skips it until then. */
+    /** Every probe goes back to "not updated yet" at its grid point: its next update replaces it outright, and sampling skips it until then. */
     resetHistory(): void {
         if (!this.resources) return;
         this.resources.cursor.resetHistory();
@@ -336,67 +505,141 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         this.releaseResources();
     }
 
+    private createRayBuffer(device: GPUDevice, resources: Omit<PreparedResources, 'rays'>, capacity: number): PreparedResources['rays'] {
+        const buffer = device.createBuffer({ label: 'ddgi rays', size: capacity * RAY_RECORD_BYTES, usage: BUFFER_USAGE.storage });
+        const arrayView = (target: GPUTexture): GPUTextureView => target.createView({ dimension: '2d-array' });
+        const traceGroup = device.createBindGroup({
+            label: 'ddgi/trace group 1',
+            layout: resources.traceKernel.ownLayouts[0],
+            entries: [
+                { binding: 0, resource: { buffer: resources.uniforms } },
+                { binding: 1, resource: { buffer: resources.updateList } },
+                { binding: 2, resource: { buffer } },
+                { binding: 3, resource: arrayView(resources.irradiance) },
+                { binding: 4, resource: arrayView(resources.distance) },
+                { binding: 5, resource: arrayView(resources.probeData) },
+                { binding: 6, resource: resources.sampler },
+            ],
+        });
+        const blendGroup = device.createBindGroup({
+            label: 'ddgi/blend group 1',
+            layout: resources.blendKernel.ownLayouts[0],
+            entries: [
+                { binding: 0, resource: { buffer: resources.uniforms } },
+                { binding: 1, resource: { buffer: resources.updateList } },
+                { binding: 2, resource: { buffer } },
+                { binding: 3, resource: { buffer: resources.scratchBuffer } },
+                { binding: 4, resource: { buffer: resources.census } },
+                { binding: 5, resource: arrayView(resources.irradiance) },
+                { binding: 6, resource: arrayView(resources.distance) },
+                { binding: 7, resource: arrayView(resources.probeData) },
+            ],
+        });
+        return { buffer, capacity, traceGroup, blendGroup };
+    }
+
+    /** Counts probes per state into the census buffer and copies it out, when a readback buffer is free. */
+    private encodeCensus(encoder: GPUCommandEncoder, resources: PreparedResources, maxPerDimension: number): void {
+        const staging = resources.censusStaging.find((slot) => slot.state === 'free');
+        if (!staging) return;
+        const groups = Math.ceil(resources.grid.probeCount / CENSUS_WORKGROUP_SIZE);
+        const groupsX = Math.min(groups, maxPerDimension);
+        const pass = encoder.beginComputePass({ label: 'ddgi/census' });
+        resources.censusKernel.bind(pass);
+        pass.setBindGroup(1, resources.censusGroup);
+        pass.dispatchWorkgroups(groupsX, Math.ceil(groups / groupsX));
+        pass.end();
+        encoder.copyBufferToBuffer(resources.census, 0, staging.buffer, 0, CENSUS_WORDS * 4);
+        staging.state = 'copied';
+    }
+
+    /**
+     * Starts reading back census copies made in earlier frames. By the next
+     * `encode` the host has submitted the frame that made them (the same
+     * convention as the platform's GPU timer).
+     */
+    private collectCensus(resources: PreparedResources): void {
+        for (const staging of resources.censusStaging) {
+            if (staging.state !== 'copied') continue;
+            staging.state = 'mapping';
+            staging.buffer.mapAsync(MAP_MODE_READ).then(
+                () => {
+                    if (this.resources !== resources) return;
+                    this.latestCensus = new Uint32Array(staging.buffer.getMappedRange().slice(0));
+                    staging.buffer.unmap();
+                    staging.state = 'free';
+                },
+                () => {
+                    // Destroyed while mapping (dispose or a new prepare): nothing to read.
+                },
+            );
+        }
+    }
+
     private releaseResources(): void {
         const resources = this.resources;
         if (!resources) return;
         this.resources = null;
-        for (const texture of [resources.irradiance, resources.distance, resources.probeData]) texture.destroy();
-        for (const buffer of [resources.uniforms, resources.updateList, resources.scratchBuffer]) buffer.destroy();
+        for (const texture of [resources.irradiance, resources.distance, resources.probeData, resources.points]) texture.destroy();
+        for (const buffer of [resources.uniforms, resources.updateList, resources.scratchBuffer, resources.census, resources.rays.buffer]) buffer.destroy();
+        for (const staging of resources.censusStaging) staging.buffer.destroy();
     }
 
-    /** Writes state 3 with zero offsets into every probe-data texel. Lands before the host's next submit. */
+    /** Writes state 3 with zero offsets into every probe-data texel and point. Lands before the host's next submit. */
     private markAllNotUpdated(): void {
         const resources = this.resources;
         const context = this.context;
         if (!resources || !context) return;
+        const queue = context.device.queue;
         const { width, height, layers } = resources.layout.probeData;
         const texels = new Uint16Array(width * height * layers * 4);
         for (let texel = 0; texel < width * height * layers; texel++) texels[texel * 4 + 3] = HALF_THREE;
-        context.device.queue.writeTexture(
-            { texture: resources.probeData },
-            texels,
-            { bytesPerRow: width * PROBE_DATA_TEXEL_BYTES, rowsPerImage: height },
-            { width, height, depthOrArrayLayers: layers },
-        );
+        queue.writeTexture({ texture: resources.probeData }, texels, { bytesPerRow: width * PROBE_DATA_TEXEL_BYTES, rowsPerImage: height }, { width, height, depthOrArrayLayers: layers });
+
+        const { grid, points } = resources;
+        const pointData = new Float32Array(points.width * points.height * 4);
+        const [nx, , nz] = grid.counts;
+        for (let probe = 0; probe < grid.probeCount; probe++) {
+            const x = probe % nx;
+            const z = Math.floor(probe / nx) % nz;
+            const y = Math.floor(probe / (nx * nz));
+            pointData.set([grid.origin[0] + x * grid.spacing[0], grid.origin[1] + y * grid.spacing[1], grid.origin[2] + z * grid.spacing[2], PROBE_STATE.notUpdatedYet], probe * 4);
+        }
+        queue.writeTexture({ texture: points }, pointData, { bytesPerRow: points.width * POINT_TEXEL_BYTES }, { width: points.width, height: points.height });
     }
 
-    /** vec4s 0-3 of the uniforms: the volume, with the live biases. */
+    /** The first four vec4s of the uniforms: the volume, with the live biases (`DdgiVolume` in wgsl/sample.ts names them). */
     private fillSampleParameters(grid: ProbeGrid, irradianceTexels: number, distanceTexels: number): void {
         const data = this.uniformData;
-        const set = (vec4: number, values: readonly number[]): void => data.set(values, vec4 * 4);
-        set(UNIFORM_VEC4.volumeOrigin, [...grid.origin, resolveBias(this.settings.normalBias, grid)]);
-        set(UNIFORM_VEC4.volumeSpacing, [...grid.spacing, resolveBias(this.settings.viewBias, grid)]);
-        set(UNIFORM_VEC4.volumeCounts, [...grid.counts, 0]);
-        set(UNIFORM_VEC4.volumeTexels, [irradianceTexels, distanceTexels, 0, 0]);
+        data.set([...grid.origin, resolveBias(this.settings.normalBias, grid, AUTO_NORMAL_BIAS_SHARE)], UNIFORM_WORD.volumeOrigin);
+        data.set([...grid.spacing, resolveBias(this.settings.viewBias, grid, AUTO_VIEW_BIAS_SHARE)], UNIFORM_WORD.volumeSpacing);
+        data.set([...grid.counts, 0], UNIFORM_WORD.volumeCounts);
+        data.set([irradianceTexels, distanceTexels, 0, 0], UNIFORM_WORD.volumeTexels);
     }
 
     private writeUniforms(resources: PreparedResources, frame: number, count: number, raysPerProbe: number): void {
         const { grid } = resources;
         this.fillSampleParameters(grid, resources.irradianceTexels, resources.distanceTexels);
         const data = this.uniformData;
+        const words = this.uniformWords;
         const rotation = frameRayRotation(frame);
         for (let column = 0; column < 3; column++) {
-            data.set([rotation[column * 3], rotation[column * 3 + 1], rotation[column * 3 + 2], 0], (UNIFORM_VEC4.rayRotation + column) * 4);
+            data.set(rotation.slice(column * 3, column * 3 + 3), UNIFORM_WORD.rayRotation + column * MAT3_COLUMN_WORDS);
         }
         const blend = blendSettings(this.settings);
-        data.set([blend.hysteresis, blend.irradianceChangeThreshold, blend.maxBrightnessChange, blend.distanceSharpness], UNIFORM_VEC4.blend * 4);
-        data.set([effectiveMaxRayDistance(this.settings.maxRayDistance), distanceClamp(grid), blend.bounceEnergy, 0], UNIFORM_VEC4.rays * 4);
-        this.uniformWords.set([raysPerProbe, count, frame >>> 0, 0], UNIFORM_VEC4.counts * 4);
-    }
-
-    private countersFor(updated: number, raysPerProbe: number): Record<string, number> {
-        const resources = this.resources;
-        const notUpdatedYet = resources?.cursor.notUpdatedYet ?? 0;
-        const probes = resources?.grid.probeCount ?? 0;
-        // Until classification (T1.5b) every probe that has had an update is active.
-        return {
-            'probes updated': updated,
-            'rays traced': updated * raysPerProbe,
-            'probes active': probes - notUpdatedYet,
-            'probes off: inside geometry': 0,
-            'probes off: no surface nearby': 0,
-            'probes not updated yet': notUpdatedYet,
-        };
+        data[UNIFORM_WORD.hysteresis] = blend.hysteresis;
+        data[UNIFORM_WORD.irradianceChangeThreshold] = blend.irradianceChangeThreshold;
+        data[UNIFORM_WORD.maxBrightnessChange] = blend.maxBrightnessChange;
+        data[UNIFORM_WORD.distanceSharpness] = blend.distanceSharpness;
+        data[UNIFORM_WORD.maxRayDistance] = effectiveMaxRayDistance(this.settings.maxRayDistance);
+        data[UNIFORM_WORD.distanceClamp] = distanceClamp(grid);
+        data[UNIFORM_WORD.bounceEnergy] = blend.bounceEnergy;
+        data[UNIFORM_WORD.minFrontFaceDistance] = resolveBias(this.settings.minFrontFaceDistance, grid, AUTO_MIN_FRONT_FACE_SHARE);
+        words[UNIFORM_WORD.relocation] = this.settings.relocation ? 1 : 0;
+        words[UNIFORM_WORD.classification] = this.settings.classification ? 1 : 0;
+        words[UNIFORM_WORD.raysPerProbe] = raysPerProbe;
+        words[UNIFORM_WORD.updateCount] = count;
+        words[UNIFORM_WORD.frame] = frame >>> 0;
     }
 }
 

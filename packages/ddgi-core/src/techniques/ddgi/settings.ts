@@ -46,7 +46,7 @@ export interface DDGISettings {
     bounceEnergy: number;
     /** Move probes out of geometry (T1.5b). */
     relocation: boolean;
-    /** Closest front face a probe may have before relocation moves it, metres. `auto` = 0.1 × the smallest spacing. */
+    /** Closest front face a probe may have before relocation moves it, metres. `auto` = 0.02 × the smallest spacing. */
     minFrontFaceDistance: number | 'auto';
     /** Switch off probes inside geometry or far from any surface (T1.5b). */
     classification: boolean;
@@ -83,8 +83,18 @@ export const MAX_RAYS_PER_PROBE = 512;
 /** "Unlimited" ray length, as the tracer's own unbounded shadow rays use. */
 export const UNBOUNDED_RAY_DISTANCE = 1e27;
 
-/** Share of the smallest spacing used by the `auto` biases and `minFrontFaceDistance`. */
-export const AUTO_BIAS_SHARE_OF_SPACING = 0.1;
+/** `auto` values, as shares of the smallest spacing. */
+export const AUTO_NORMAL_BIAS_SHARE = 0.1;
+export const AUTO_VIEW_BIAS_SHARE = 0.1;
+/**
+ * 0.02, not the design's first 0.1 (T1.5b, measured on the RTX 3060): probes
+ * relocated nearer to surfaces read the steep irradiance near them better.
+ * Two-room leak 1.08% at 0.1, 0.96% at 0.05, 0.86% at 0.02 (limit 1%);
+ * Cornell +2.4% / +2.8% / +3.0%; thin wall 0.34% / 0.47% / 0.51% (reported).
+ * Biases were swept too and left at 0.1: a larger normal bias raised the
+ * two-room number (0.2: 1.25%), and no view bias let the thin wall leak 6.9%.
+ */
+export const AUTO_MIN_FRONT_FACE_SHARE = 0.02;
 
 /** Distances written to the distance atlas are clamped to this multiple of the cell diagonal. */
 export const DISTANCE_CLAMP_SHARE_OF_DIAGONAL = 1.5;
@@ -126,9 +136,9 @@ export function effectiveRaysPerProbe(raysPerProbe: number): number {
     return Math.min(MAX_RAYS_PER_PROBE, Math.max(MIN_RAYS_PER_PROBE, rounded));
 }
 
-/** A bias setting in metres, resolving `auto` against the grid. */
-export function resolveBias(value: number | 'auto', grid: ProbeGrid): number {
-    if (value === 'auto' || !Number.isFinite(value)) return AUTO_BIAS_SHARE_OF_SPACING * Math.min(...grid.spacing);
+/** A distance setting in metres, resolving `auto` to `autoShare` of the smallest spacing. */
+export function resolveBias(value: number | 'auto', grid: ProbeGrid, autoShare: number): number {
+    if (value === 'auto' || !Number.isFinite(value)) return autoShare * Math.min(...grid.spacing);
     return Math.max(0, value);
 }
 

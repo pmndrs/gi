@@ -76,16 +76,44 @@ fn ddgiOctDecode(coordinates: vec2f) -> vec3f {
     return normalize(vec3f(xy, z));
 }
 
+// The volume, unpacked from the four vec4f parameters a renderer passes
+// (engines bind small uniforms as vec4s; the fields get names here).
+struct DdgiVolume {
+    origin: vec3f,           // world position of probe (0, 0, 0)
+    normalBias: f32,         // metres along the surface normal
+    spacing: vec3f,          // metres between probes, per axis
+    viewBias: f32,           // metres back towards the viewer
+    counts: vec3i,           // probes per axis
+    irradianceTexels: f32,   // interior texels per side of an irradiance tile
+    distanceTexels: f32,     // interior texels per side of a distance tile
+}
+
+fn ddgiVolume(volumeOrigin: vec4f, volumeSpacing: vec4f, volumeCounts: vec4f, volumeTexels: vec4f) -> DdgiVolume {
+    return DdgiVolume(volumeOrigin.xyz, volumeOrigin.w, volumeSpacing.xyz, volumeSpacing.w, vec3i(volumeCounts.xyz), volumeTexels.x, volumeTexels.y);
+}
+
+// One probe's texel of the probe-data atlas: rgb the relocation offset in
+// spacings, alpha the state (layout.ts, PROBE_STATE).
+struct DdgiProbeData {
+    offset: vec3f,
+    state: u32,
+}
+
+fn ddgiReadProbeData(probeData: texture_2d_array<f32>, probe: vec3i) -> DdgiProbeData {
+    let texel = textureLoad(probeData, probe.xz, probe.y, 0);
+    return DdgiProbeData(texel.rgb, u32(round(texel.a)));
+}
+
 // Normalized atlas coordinates of a direction inside a probe's tile. Tiles
 // are interiorTexels + 2 border texels wide; probe (x, z) owns tile (x, z) of
 // layer y. Interior texel centres map to the octahedral square's texel
 // centres, so a bilinear lookup near an edge blends into the border, which
 // holds the octahedral neighbour.
-fn ddgiAtlasUv(direction: vec3f, probe: vec3i, interiorTexels: f32, counts: vec3f) -> vec2f {
+fn ddgiAtlasUv(direction: vec3f, probe: vec3i, interiorTexels: f32, counts: vec3i) -> vec2f {
     let tile = interiorTexels + 2.0 * DDGI_TILE_BORDER;
     let inTile = (ddgiOctEncode(direction) * 0.5 + 0.5) * interiorTexels + DDGI_TILE_BORDER;
     let texel = vec2f(probe.xz) * tile + inTile;
-    return texel / (counts.xz * tile);
+    return texel / (vec2f(counts.xz) * tile);
 }
 
 // Irradiance E arriving at a surface point from the field: the 8 probes
@@ -101,19 +129,21 @@ fn ddgiSampleIrradiance(
     distanceAtlas: texture_2d_array<f32>,
     distanceSampler: sampler,
     probeData: texture_2d_array<f32>,
-    volumeOrigin: vec4f,   // xyz: probe (0, 0, 0); w: normal bias
-    volumeSpacing: vec4f,  // xyz: spacing; w: view bias
-    volumeCounts: vec4f,   // xyz: probes per axis
-    volumeTexels: vec4f,   // x: irradiance interior texels; y: distance interior texels
+    // The volume as four vec4f uniforms; ddgiVolume() names their fields.
+    volumeOrigin: vec4f,
+    volumeSpacing: vec4f,
+    volumeCounts: vec4f,
+    volumeTexels: vec4f,
 ) -> vec3f {
+    let volume = ddgiVolume(volumeOrigin, volumeSpacing, volumeCounts, volumeTexels);
     // Bias the point off the surface and back towards the viewer, so the
     // visibility test isn't decided by the surface the point lies on.
-    let samplePoint = position + normal * volumeOrigin.w - viewDirection * volumeSpacing.w;
-    let spacing = volumeSpacing.xyz;
-    let counts = vec3i(volumeCounts.xyz);
+    let samplePoint = position + normal * volume.normalBias - viewDirection * volume.viewBias;
+    let spacing = volume.spacing;
+    let counts = volume.counts;
     // The cell whose 8 corner probes surround the point, clamped to the grid
     // (outside the volume the nearest cell answers; coverage fades it, T1.6).
-    let gridPosition = (samplePoint - volumeOrigin.xyz) / spacing;
+    let gridPosition = (samplePoint - volume.origin) / spacing;
     let baseProbe = clamp(vec3i(floor(gridPosition)), vec3i(0), max(counts - 2, vec3i(0)));
     let alpha = clamp(gridPosition - vec3f(baseProbe), vec3f(0.0), vec3f(1.0));
 
@@ -122,12 +152,12 @@ fn ddgiSampleIrradiance(
     for (var corner = 0u; corner < 8u; corner++) {
         let step = vec3i(vec3u(corner, corner >> 1u, corner >> 2u) & vec3u(1u));
         let probe = min(baseProbe + step, counts - 1);
-        let data = textureLoad(probeData, probe.xz, probe.y, 0);
-        if (u32(round(data.w)) != DDGI_STATE_ACTIVE) {
+        let data = ddgiReadProbeData(probeData, probe);
+        if (data.state != DDGI_STATE_ACTIVE) {
             continue;
         }
         // The probe's relocated position (offsets are stored in spacings).
-        let probePosition = volumeOrigin.xyz + (vec3f(probe) + data.xyz) * spacing;
+        let probePosition = volume.origin + (vec3f(probe) + data.offset) * spacing;
         let toProbe = probePosition - samplePoint;
         let probeDistance = max(length(toProbe), DDGI_MIN_PROBE_DISTANCE);
         let directionToProbe = toProbe / probeDistance;
@@ -147,7 +177,7 @@ fn ddgiSampleIrradiance(
         // to the nearest surface in the point's direction. Farther than the
         // mean means probably occluded; Chebyshev's inequality bounds how
         // likely the point is visible anyway (variance shadow maps).
-        let moments = textureSampleLevel(distanceAtlas, distanceSampler, ddgiAtlasUv(-directionToProbe, probe, volumeTexels.y, volumeCounts.xyz), probe.y, 0.0).xy;
+        let moments = textureSampleLevel(distanceAtlas, distanceSampler, ddgiAtlasUv(-directionToProbe, probe, volume.distanceTexels, counts), probe.y, 0.0).xy;
         if (probeDistance > moments.x) {
             let variance = abs(moments.y - moments.x * moments.x);
             let excess = probeDistance - moments.x;
@@ -162,7 +192,7 @@ fn ddgiSampleIrradiance(
         let trilinear = mix(1.0 - alpha, alpha, vec3f(step));
         weight *= trilinear.x * trilinear.y * trilinear.z;
 
-        let irradiance = textureSampleLevel(irradianceAtlas, irradianceSampler, ddgiAtlasUv(normal, probe, volumeTexels.x, volumeCounts.xyz), probe.y, 0.0).rgb;
+        let irradiance = textureSampleLevel(irradianceAtlas, irradianceSampler, ddgiAtlasUv(normal, probe, volume.irradianceTexels, counts), probe.y, 0.0).rgb;
         irradianceSum += weight * irradiance;
         weightSum += weight;
     }

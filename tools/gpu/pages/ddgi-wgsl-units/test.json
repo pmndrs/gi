@@ -1,0 +1,4 @@
+{
+    "description": "GPU unit tests of DDGI WGSL: ddgiStochasticHalf (exact halves, unbiased at ordinary values, exponent boundaries, powers of two, subnormals, zero) and ddgiBorderSource against octahedral.ts.",
+    "timeoutMs": 120000
+}

@@ -1,0 +1,4 @@
+{
+    "description": "T1.5b: two-room leak <= 1% of the lit room against Cycles (DECISIONS); thin-wall and closed-door dark-side light reported.",
+    "timeoutMs": 300000
+}
