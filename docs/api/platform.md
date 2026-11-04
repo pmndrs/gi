@@ -136,6 +136,8 @@ Gaps:
    - The contract now has optional `albedoUv` and `emissiveUv` (`UvMapping`: uv channel, a 3×2 matrix, and wrap per axis) and a second uv set, `MeshDescriptor.uvs1`. From three.js the adapter passes `texture.matrix` and `texture.channel` straight through.
    - Still to decide in M4: how the texture atlas honours `repeat` and `mirror`. A tile in an atlas can't use the sampler's own wrapping, so it needs wrap in the shader plus padding, or a texture array instead of an atlas.
    - Found by the parent session while answering Dennis, 2026-11-04.
+9. **Smooth normals at ray hits.** Hit shading used the triangle normal only, so low-poly curved surfaces lit in facets. `MeshDescriptor.normals` is now optional, and `GiSurface.normal` interpolates it when present. Front/back tests keep the triangle normal.
+   - Still to decide in M1: whether to store normals compressed (octahedral, 4 bytes per vertex instead of 12) once the scene copy's memory is measured.
 
 ## Questions for the spikes
 
@@ -171,4 +173,9 @@ Both engines took the shading module as designed. A light node in three and a ma
   - Babylon is left-handed, so its adapter flips z in the call.
   - `screenUV` needs a viewport uniform from the adapter.
   - Babylon's foreign-texture wrapper destroys our texture on dispose unless reset first.
+  - **Metals bounce no diffuse light.** The adapter folds metalness into albedo:
+    - GI albedo = base colour × (1 − metalness);
+    - with a metalness texture, the same product is baked into the albedo copy when the atlas is built (M4).
+    - Without this, a metal bounces light like paint. Every adapter needs this rule, and the M1 adapter task checks it.
+    - Roughness stays out: DDGI bounces diffuse light only, the standard DDGI limitation. Revisit it for the RT-reflections technique.
   - Details are in NOTES.

@@ -34,6 +34,16 @@ export interface MeshDescriptor {
     readonly positions: Float32Array;
     /** Triangle list. Non-indexed meshes are given `0..n-1` by the adapter. */
     readonly indices: Uint32Array | Uint16Array;
+    /**
+     * xyz unit normal per vertex, in the mesh's local space. When present, ray
+     * hits shade with the interpolated normal, so curved low-poly surfaces
+     * (columns, spheres) don't light in facets. When absent, the triangle's own
+     * normal is used. Inside/outside tests always use the triangle normal.
+     * Costs 12 bytes per vertex on the GPU (stored as given, for now).
+     * Normal maps are deliberately not supported: their detail is far below
+     * probe resolution.
+     */
+    readonly normals?: Float32Array;
     /** uv per vertex (UV channel 0). Needed for textured materials and alpha cutouts. */
     readonly uvs?: Float32Array;
     /** A second uv set (UV channel 1), for textures whose {@link UvMapping.channel} is 1. */

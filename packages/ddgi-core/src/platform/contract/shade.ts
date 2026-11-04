@@ -22,8 +22,8 @@ import type { WgslModule } from './wgsl';
  * ```wgsl
  * struct GiSurface {
  *     position: vec3f,       // world space
- *     normal: vec3f,         // shading normal, facing the ray's origin side
- *     geometricNormal: vec3f,
+ *     normal: vec3f,         // shading normal (interpolated vertex normal if the mesh has one), facing the ray's origin side
+ *     geometricNormal: vec3f, // the triangle's own normal; used for front/back decisions
  *     uv: vec2f,
  *     albedo: vec3f,         // diffuse albedo, cutout already applied
  *     emission: vec3f,       // emitted radiance

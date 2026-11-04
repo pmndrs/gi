@@ -16,7 +16,7 @@ Status values: `todo`, `active (agent, date)`, `review`, `done`, `blocked (why)`
 | T0.8 | Spike: three.js sharing | implementer | S | T0.2 | done (yes to all; env-diffuse needs a workaround) |
 | T0.9 | Spike: Babylon | implementer | S | T0.2 | done (fits the contract; Babylon owns its device) |
 | T0.10 | Spike: BVH | main session designs, implementer builds, gpu-tester measures | M | T0.2, T0.4 | active (design: [docs/design/trace.md](docs/design/trace.md); part A done; part B measured (watertight 0.70× three-mesh-bvh on RTX 3060, below 0.8×); part C optimising) |
-| T0.11 | Platform API draft | main session | M | none (revise after T0.8–T0.10) | active (draft in [docs/api/platform.md](docs/api/platform.md); waiting on T0.10 and Dennis's read; gap 8 added: UV transforms) |
+| T0.11 | Platform API draft | main session | M | none (revise after T0.8–T0.10) | active (draft in [docs/api/platform.md](docs/api/platform.md); waiting on T0.10 and Dennis's read; gaps 8-9 added: UV transforms, vertex normals; metalness folding rule) |
 | T0.12 | M0 note and M1 breakdown | main session | S | all M0 | todo |
 
 ## M0 tasks
