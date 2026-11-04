@@ -133,7 +133,7 @@ Each is broken into tasks at the end of the previous milestone. The likely shape
 
 - **M1, core DDGI loop, static scene:**
   - the platform scene copy;
-  - `@gi/trace` from the T0.10 result;
+  - `@gi/trace` from the T0.10 result, with the top-level BVH refit on the GPU every frame and rebuilt now and then (moved up from M3; DECISIONS 2026-11-04);
   - `@gi/shade`;
   - the DDGI field and update loop (rotation, hysteresis, unlimited bounce, sky);
   - classification and relocation;
@@ -150,8 +150,7 @@ Each is broken into tasks at the end of the previous milestone. The likely shape
   - sky and time of day;
   - the light sweep and native side-by-side.
 - **M3, moving objects and camera:**
-  - per-frame top-level BVH;
-  - worker builds;
+  - worker builds (the per-frame top-level BVH moved to M1);
   - deforming-mesh refit;
   - the camera-following volume;
   - adapter change tracking;

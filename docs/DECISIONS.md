@@ -4,6 +4,12 @@ Settled choices, newest first. Each entry is short: the decision, why, and what 
 
 ## 2026-11-04
 
+- **As much BVH work as possible runs on the GPU. The top-level tree moves to the GPU in M1, not M3.** Dennis approved this.
+  - M1 refits the top-level tree on the GPU every frame from instance transforms. It also rebuilds the tree now and then, on the GPU or on the CPU off the frame.
+  - *Why:* part B measured the CPU top-level rebuild at 1–10 ms on the main thread for each move in real scenes, and 86–121 ms for 10,000 instances. Dragging furniture is a core v1 case.
+  - Per-mesh trees: T0.10 part C also tries building with three-mesh-bvh in the three adapter and converting its tree into our GPU layout. The core stays engine-free, because the adapter hands over packed arrays.
+  - A GPU builder for per-mesh trees (LBVH, PLOC, H-PLOC) is being researched separately. It comes back as a design before anyone builds it.
+  - *Revisit if:* a GPU refit makes the trace much slower than a fresh build, on scenes where things move a lot. That would call for more frequent rebuilds or a GPU builder.
 - **The platform API draft (T0.11) is signed off.** Dennis: "I am fine with the api spec." That covers the draft in `docs/api/platform.md` and the contract files, including the UV-mapping and vertex-normal additions.
   - The revision after T0.10 (the storage-buffer count, batch versus inline tracing) doesn't need his sign-off again, unless it changes something a host sees.
 - **three.js is the only adapter until the library has proved itself.** Dennis: "maintaining babylon compatability is not a first order requirement... use three to get us through the phases... pause it until we can finish out the rest of the work and even validate that our library is fast enough/useful etc. with three acting as the main adapter... later when we work out kinks and api changes we can bring the other adapters in line."
