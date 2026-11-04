@@ -27,6 +27,7 @@
         "eslint": "^9.18.0",
         "globals": "^15.14.0",
         "three": "0.187.0",
+        "three-gpu-pathtracer": "0.0.28",
         "three-mesh-bvh": "0.9.18",
         "typescript": "^5.7.0",
         "typescript-eslint": "^8.20.0",

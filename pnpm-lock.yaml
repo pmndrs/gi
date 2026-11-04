@@ -32,6 +32,9 @@ importers:
       three:
         specifier: 0.187.0
         version: 0.187.0
+      three-gpu-pathtracer:
+        specifier: 0.0.28
+        version: 0.0.28(three-mesh-bvh@0.9.18(three@0.187.0))(three@0.187.0)(xatlas-web@0.1.0)
       three-mesh-bvh:
         specifier: 0.9.18
         version: 0.9.18(three@0.187.0)
@@ -53,6 +56,12 @@ importers:
       '@pmndrs/ddgi':
         specifier: workspace:*
         version: link:../../packages/ddgi
+      '@pmndrs/upscaler':
+        specifier: 0.5.0
+        version: 0.5.0(three@0.187.0)
+      three:
+        specifier: 0.187.0
+        version: 0.187.0
     devDependencies:
       vite:
         specifier: ^6.1.0
@@ -533,6 +542,11 @@ packages:
     engines: {node: ^22.20 || ^24.12 || >=25}
     cpu: [x64]
     os: [linux]
+
+  '@pmndrs/upscaler@0.5.0':
+    resolution: {integrity: sha512-bi3+OckPIpHYMGbvML5StLpZU7Eaqjhti4JEP/GIwonCvS35EsB+dKQhwgR18ymqP9lXTDf4md/P8RVtIuRJwg==}
+    peerDependencies:
+      three: '>=0.184.0'
 
   '@rollup/rollup-android-arm-eabi@4.67.4':
     resolution: {integrity: sha512-/v/pUAPOcwp+r1Hjjdg0cBV1TE89CzGKrKh2FgkIQw2QBcIMmVPOCSfuOZStCn4Xh/98HXfo/ht6ztcssctPNg==}
@@ -1195,6 +1209,13 @@ packages:
     resolution: {integrity: sha512-qpCAvRl9stuOHveKsn7HncJRvv501qIacKzQlO/+Lwxc9+0q2wLyv4Dfvt80/DPn2pqOBsJdDiogXGR9+OvwRw==}
     engines: {node: '>=8'}
 
+  three-gpu-pathtracer@0.0.28:
+    resolution: {integrity: sha512-Ybfa6qpRIU2QP4EXQJaawYZzVN4raSFqsr9qhXXVSiCi59fjef0pyyXztYYWqAnX7bweKmD70p2xMEWehl019A==}
+    peerDependencies:
+      three: '>=0.187.0'
+      three-mesh-bvh: '>=0.9.17'
+      xatlas-web: ^0.1.0
+
   three-mesh-bvh@0.9.18:
     resolution: {integrity: sha512-S76hOBnsSG4jsuEyCu98K63klONG4NwJANabPY1LUD5l7oUgu2xtKC0IwnX/XyPzo4YZ1D7ZU+gHVA479UdQmA==}
     peerDependencies:
@@ -1344,6 +1365,9 @@ packages:
   word-wrap@1.2.5:
     resolution: {integrity: sha512-BN22B5eaMMI9UMtjrGd5g5eCYPpCPDUy0FJXbYsaT5zYxjFOckS53SQDE3pWkVoWpHXVb3BrYcEN4Twa55B5cA==}
     engines: {node: '>=0.10.0'}
+
+  xatlas-web@0.1.0:
+    resolution: {integrity: sha512-PprVfuXbaIskxLTLBUQRaWfgSy9xUQqAMIRooOw0P6NYqwgh6T0voeer6+Z5M7AFt5SGXUybuww/uDGs1yw8vQ==}
 
   yocto-queue@0.1.0:
     resolution: {integrity: sha512-rVksvsnNCdJ/ohGc6xgPwyN8eheCxsiLM8mxuE/t/mOVqJewPuO1miLpTHQiRgTKCLexL4MeAFVagts7HmNZ2Q==}
@@ -1603,6 +1627,10 @@ snapshots:
 
   '@napi-rs/lzma-linux-x64-gnu@1.5.1':
     optional: true
+
+  '@pmndrs/upscaler@0.5.0(three@0.187.0)':
+    dependencies:
+      three: 0.187.0
 
   '@rollup/rollup-android-arm-eabi@4.67.4':
     optional: true
@@ -2287,6 +2315,12 @@ snapshots:
     dependencies:
       has-flag: 4.0.0
 
+  three-gpu-pathtracer@0.0.28(three-mesh-bvh@0.9.18(three@0.187.0))(three@0.187.0)(xatlas-web@0.1.0):
+    dependencies:
+      three: 0.187.0
+      three-mesh-bvh: 0.9.18(three@0.187.0)
+      xatlas-web: 0.1.0
+
   three-mesh-bvh@0.9.18(three@0.187.0):
     dependencies:
       three: 0.187.0
@@ -2426,5 +2460,7 @@ snapshots:
       stackback: 0.0.2
 
   word-wrap@1.2.5: {}
+
+  xatlas-web@0.1.0: {}
 
   yocto-queue@0.1.0: {}
