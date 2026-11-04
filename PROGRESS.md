@@ -21,6 +21,21 @@ Rules:
 
 ---
 
+## 2026-11-04 · T0.4 follow-up · implementer (opus), after an Opus re-review
+Did: seven fixes from the second review.
+- **Blender GLBs:** checked per bufferView (hashes in `tools/assets/glb-views/<id>.json`). Only TANGENT views may vary. Indices, images, JSON and padding are pinned exactly, and Blender is pinned to 4.5.0.
+- **Hang guard:** a real non-zero exit always fails. The guard's own kill carries a marker exit code.
+- **Unpacking:** stale unpacked files are removed. A cached unpack is reused only when its file list matches. Inputs must be unchanged after a conversion.
+- **Sponza license:** `CC-BY-4.0+intel-preface`, with an approval that points at its DECISIONS entry. The tool checks that the entry exists.
+- **Sealing test:** it states honestly what it checks, fails when a name pattern matches nothing, and uses the builder's constants.
+- **Light range:** manifests may now set `range: 0`, meaning no range window, as in Cycles.
+Verified (I re-ran it): `vitest scenes tools/assets` 220 pass, `assets:fetch --verify-only` "All outputs verified", lint and typecheck clean.
+Finding: Blender's glTF export varies between runs only in TANGENT data (4th-decimal rounding): 1 view of 27 on the tree, 1 of 11,036 on Bistro interior.
+Not verified: Bistro exterior wasn't reconverted. It uses the same exporter as the interior.
+Next:
+- `tools/native/native-lib.ps1` passes `range` as the light radius, so `range: 0` would mean radius 0 there. No manifest uses 0 yet.
+- The T0.11 `LightDescriptor` says range is needed for culling; `range: 0` should mean "no culling".
+
 ## 2026-11-04 · T0.4 · implementer + wrangler (sonnet), reviewed by reviewer (sonnet) and main session (opus)
 Did: built the scene set and its tooling.
 - `scenes/`: manifests for 11 scenes, a validator, procedural builders, a GLB writer, the check page, a contact sheet, a sealing test, and `sun-visibility.ts`.

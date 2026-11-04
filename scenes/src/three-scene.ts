@@ -85,8 +85,19 @@ export interface LightFitting {
 }
 
 /**
+ * How far a point or spot light's shadow camera must reach: its range, or for
+ * a light with no range window (range 0) the far side of the geometry.
+ */
+function shadowFar(position: Vector3Tuple, range: number, fitting: LightFitting): number {
+    if (range > 0) return range;
+    const toCenter = Math.hypot(position[0] - fitting.center[0], position[1] - fitting.center[1], position[2] - fitting.center[2]);
+    return toCenter + fitting.radius;
+}
+
+/**
  * Creates a three.js light. Directional lights get a shadow camera that fits
- * `fitting`; the others use their range.
+ * `fitting`; the others reach to their range. A range of 0 maps to three's
+ * `distance = 0`: no range window, plain inverse-square falloff.
  */
 export function lightToThree(light: SceneLightData, fitting: LightFitting): Light {
     const color = linearColor(light.color);
@@ -119,7 +130,7 @@ export function lightToThree(light: SceneLightData, fitting: LightFitting): Ligh
             threeLight.position.set(...light.position);
             threeLight.castShadow = castShadow;
             threeLight.shadow.camera.near = 0.05;
-            threeLight.shadow.camera.far = light.range;
+            threeLight.shadow.camera.far = shadowFar(light.position, light.range, fitting);
             threeLight.shadow.mapSize.set(2048, 2048);
             // Small biases: a large normal bias is wider than a 3 cm wall and lets light
             // seep round its edges in the picture.
@@ -142,7 +153,7 @@ export function lightToThree(light: SceneLightData, fitting: LightFitting): Ligh
             threeLight.target.updateMatrixWorld();
             threeLight.castShadow = castShadow;
             threeLight.shadow.camera.near = 0.05;
-            threeLight.shadow.camera.far = light.range;
+            threeLight.shadow.camera.far = shadowFar(light.position, light.range, fitting);
             threeLight.shadow.mapSize.set(2048, 2048);
             threeLight.shadow.bias = -0.0005;
             threeLight.shadow.normalBias = 0.02;

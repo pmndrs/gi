@@ -78,7 +78,7 @@ export interface SceneDirectionalLight extends SceneLightCommon {
 export interface ScenePointLight extends SceneLightCommon {
     readonly type: 'point';
     readonly position: Vector3Tuple;
-    /** Distance at which the light reaches zero. */
+    /** Distance at which the light reaches zero, or 0 for no range window (plain inverse-square falloff, three.js `distance = 0`). */
     readonly range: number;
 }
 
@@ -86,6 +86,7 @@ export interface SceneSpotLight extends SceneLightCommon {
     readonly type: 'spot';
     readonly position: Vector3Tuple;
     readonly direction: Vector3Tuple;
+    /** As for point lights: a distance, or 0 for no range window. */
     readonly range: number;
     /** Half-angle where falloff starts, radians. */
     readonly innerConeAngle: number;

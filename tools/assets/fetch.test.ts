@@ -2,37 +2,48 @@ import { createHash } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo, Socket } from 'node:net';
-import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises';
+import { appendFile, link, mkdir, mkdtemp, readdir, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
     checkGlbStructure,
+    checkLicenseApprovals,
     checkOutputs,
+    conversionFailure,
     DEFAULT_DOWNLOAD_TIMEOUTS,
     downloadFile,
-    extractWithCache,
-    isAllowedLicense,
-    runConversionProcess,
     downloadsOf,
+    endedByGuardKill,
+    extractWithCache,
     fetchAsset,
+    fileFingerprints,
     findBlender,
+    formatBytes,
+    formatGlbViewRecord,
+    GUARD_KILL_EXIT_CODE,
+    isAllowedLicense,
+    isSafeRelativePath,
+    makeGlbViewRecord,
+    parseArgs,
     parseBlenderVersion,
     readGlbStructure,
-    versionMatches,
-    formatBytes,
-    isSafeRelativePath,
-    parseArgs,
+    readGlbViewRecord,
+    runConversionProcess,
     selectAssets,
     sha256OfFile,
     sortBlenderFolders,
     substitutePlaceholders,
     validateSources,
+    versionMatches,
     type AssetEntry,
     type AssetOutput,
+    type SourcesFile,
 } from './fetch';
 
-const sha256 = (text: string) => createHash('sha256').update(text).digest('hex');
+const sha256 = (data: string | Buffer) => createHash('sha256').update(data).digest('hex');
+const bytesOf = (text: string) => Buffer.byteLength(text);
+const convertWith = (blenderVersion = '4.5.0') => ({ tool: 'blender' as const, script: 'tools/assets/convert/x.py', args: [], blenderVersion });
 
 function asset(overrides: Partial<AssetEntry> = {}): AssetEntry {
     return {
@@ -51,6 +62,11 @@ function asset(overrides: Partial<AssetEntry> = {}): AssetEntry {
     };
 }
 
+/** An entry as it might be written in sources.json, before validation: any field may be wrong or missing. */
+function rawAsset(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return { ...asset(), ...overrides };
+}
+
 describe('validateSources', () => {
     it('accepts an empty asset list', () => {
         expect(validateSources({ assets: [] })).toEqual([]);
@@ -61,7 +77,7 @@ describe('validateSources', () => {
             licenseUrl: 'https://example.com/license',
             download: { url: 'https://example.com/a.zip', file: 'a.zip', bytes: 100, sha256: 'a'.repeat(64) },
             extract: 'zip',
-            convert: { tool: 'blender', script: 'tools/assets/convert/x.py', args: ['{dir}'] },
+            convert: { ...convertWith(), args: ['{dir}'] },
             outputs: [{ path: 'main.glb', sha256: 'B'.repeat(64), bytes: 20 }],
         });
         expect(validateSources({ assets: [entry] })).toEqual([]);
@@ -81,11 +97,11 @@ describe('validateSources', () => {
     });
 
     it('rejects an empty download list, repeated files, unsafe file paths and extract with several downloads', () => {
-        const base = { url: 'https://example.com/a', file: 'a.bin' };
-        expect(validateSources({ assets: [asset({ download: [] })] }).join('\n')).toContain('empty array');
-        expect(validateSources({ assets: [asset({ download: [base, base] })] }).join('\n')).toContain('listed twice');
-        expect(validateSources({ assets: [asset({ download: [{ ...base, file: '../a.bin' }] })] }).join('\n')).toContain('download[0].file');
-        const text = validateSources({ assets: [asset({ download: [base, { ...base, file: 'b.bin' }], extract: 'zip' })] }).join('\n');
+        const base = { url: 'https://example.com/a', file: 'a.bin', bytes: 1, sha256: 'a'.repeat(64) };
+        expect(validateSources({ assets: [rawAsset({ download: [] })] }).join('\n')).toContain('empty array');
+        expect(validateSources({ assets: [rawAsset({ download: [base, base] })] }).join('\n')).toContain('listed twice');
+        expect(validateSources({ assets: [rawAsset({ download: [{ ...base, file: '../a.bin' }] })] }).join('\n')).toContain('download[0].file');
+        const text = validateSources({ assets: [rawAsset({ download: [base, { ...base, file: 'b.bin' }], extract: 'zip' })] }).join('\n');
         expect(text).toContain('only works with a single download');
     });
 
@@ -95,7 +111,7 @@ describe('validateSources', () => {
     });
 
     it('requires sha256 and bytes on every download and output, and says which one is missing', () => {
-        const bare = asset({
+        const bare = rawAsset({
             download: [
                 { url: 'https://example.com/a', file: 'a.bin' },
                 { url: 'https://example.com/b', file: 'b.bin', bytes: 5, sha256: 'a'.repeat(64) },
@@ -117,17 +133,6 @@ describe('validateSources', () => {
         expect(validateSources({ assets: [rest] }).join('\n')).toContain('redistributable: must be present');
     });
 
-    it('allows only CC0 and CC-BY licenses', () => {
-        for (const license of ['CC0-1.0', 'CC-BY-4.0', 'CC-BY-3.0']) expect(isAllowedLicense(license)).toBe(true);
-        for (const license of ['CC-BY-SA-4.0', 'CC-BY-NC-4.0', 'CRYENGINE Limited License Agreement', 'MIT', 'cc0-1.0', '']) {
-            expect(isAllowedLicense(license), license).toBe(false);
-        }
-        const text = validateSources({ assets: [asset({ license: 'CRYENGINE Limited License Agreement' })] }).join('\n');
-        expect(text).toContain('is not on the allow list');
-        expect(text).toContain('Ask Dennis');
-        expect(validateSources({ assets: [asset({ license: 'CC-BY-4.0' })] })).toEqual([]);
-    });
-
     it('does not check the license, hashes or bytes of a skipped asset', () => {
         const skipped = { id: 'sponza-khronos', skip: true, skipReason: 'Cryengine license.', license: 'CRYENGINE Limited License Agreement' };
         expect(validateSources({ assets: [skipped] })).toEqual([]);
@@ -139,7 +144,7 @@ describe('validateSources', () => {
     });
 
     it('names the asset and the field for each problem', () => {
-        const bad = { ...asset(), id: 'Bad Id', download: { url: 'ftp://x', file: '../x.zip', sha256: 'zz' }, extract: 'rar', outputs: [] };
+        const bad = rawAsset({ id: 'Bad Id', download: { url: 'ftp://x', file: '../x.zip', sha256: 'zz' }, extract: 'rar', outputs: [] });
         const text = validateSources({ assets: [bad] }).join('\n');
         expect(text).toContain('assets[0] (Bad Id).id');
         expect(text).toContain('download.url');
@@ -151,10 +156,75 @@ describe('validateSources', () => {
 
     it('rejects duplicate ids and output paths that escape the folder', () => {
         const first = asset();
-        const second = asset({ outputs: [{ path: '../elsewhere.glb' }] });
+        const second = rawAsset({ outputs: [{ path: '../elsewhere.glb', sha256: 'b'.repeat(64), bytes: 1 }] });
         const text = validateSources({ assets: [first, second] }).join('\n');
         expect(text).toContain('duplicate id');
         expect(text).toContain('outputs[0].path');
+    });
+});
+
+describe('licenses', () => {
+    const approval = { record: 'docs/DECISIONS.md', date: '2026-11-04', title: 'Sponza is Intel\'s "New Sponza" (base package), download-only.' };
+
+    it('allows only CC0 and plain CC-BY without asking', () => {
+        for (const license of ['CC0-1.0', 'CC-BY-4.0', 'CC-BY-3.0']) expect(isAllowedLicense(license)).toBe(true);
+        const notPlain = ['CC-BY-SA-4.0', 'CC-BY-NC-4.0', 'CC-BY-4.0+intel-preface', 'CRYENGINE Limited License Agreement', 'MIT', 'cc0-1.0', ''];
+        for (const license of notPlain) expect(isAllowedLicense(license), license).toBe(false);
+        expect(validateSources({ assets: [asset({ license: 'CC-BY-4.0' })] })).toEqual([]);
+    });
+
+    it('needs a licenseApproval pointing at DECISIONS.md for any other license, CC-BY with extra terms included', () => {
+        const text = validateSources({ assets: [asset({ license: 'CC-BY-4.0+intel-preface' })] }).join('\n');
+        expect(text).toContain('"CC-BY-4.0+intel-preface" is not on the allow list');
+        expect(text).toContain('licenseApproval');
+        expect(text).toContain('docs/DECISIONS.md');
+        expect(text).toContain('Ask Dennis');
+        expect(validateSources({ assets: [asset({ license: 'CC-BY-4.0+intel-preface', licenseApproval: approval })] })).toEqual([]);
+    });
+
+    it('checks the shape of an approval', () => {
+        const wrong = { record: 'somewhere.md', date: 'last week', title: ' ' };
+        const text = validateSources({ assets: [rawAsset({ license: 'Custom', licenseApproval: wrong })] }).join('\n');
+        expect(text).toContain('licenseApproval: record must be "docs/DECISIONS.md"');
+        expect(text).toContain('licenseApproval: date must look like');
+        expect(text).toContain('licenseApproval: title must be');
+        expect(validateSources({ assets: [rawAsset({ license: 'Custom', licenseApproval: 'yes' })] }).join('\n')).toContain('must be an object');
+    });
+
+    it('finds the approved entry in DECISIONS.md, by date section and exact bold title', () => {
+        const decisions = [
+            '# Decisions',
+            '',
+            '## 2026-11-04',
+            '',
+            '- **Something else.**',
+            `- **${approval.title}**`,
+            '  - details',
+            '',
+            '## 2026-10-30',
+            '',
+            '- **Older entry.**',
+        ].join('\n');
+        const approved = asset({ id: 'sponza-intel', license: 'CC-BY-4.0+intel-preface', licenseApproval: approval });
+        expect(checkLicenseApprovals([approved], decisions)).toEqual([]);
+        // The right title under the wrong date does not count.
+        const wrongDate = asset({ ...approved, licenseApproval: { ...approval, date: '2026-10-30' } });
+        expect(checkLicenseApprovals([wrongDate], decisions)[0]).toContain('has no entry titled');
+        const missingDate = asset({ ...approved, licenseApproval: { ...approval, date: '2025-01-01' } });
+        expect(checkLicenseApprovals([missingDate], decisions)[0]).toContain('does not exist');
+        // Plain licenses need no entry at all.
+        expect(checkLicenseApprovals([asset({ license: 'CC-BY-4.0' })], '')).toEqual([]);
+    });
+
+    it('the real sources.json is valid, and its license approvals point at real DECISIONS.md entries', async () => {
+        const repo = resolve(__dirname, '..', '..');
+        const sources = JSON.parse(await readFile(join(repo, 'tools', 'assets', 'sources.json'), 'utf8')) as SourcesFile;
+        expect(validateSources(sources)).toEqual([]);
+        expect(checkLicenseApprovals(sources.assets, await readFile(join(repo, 'docs', 'DECISIONS.md'), 'utf8'))).toEqual([]);
+        // Intel's Sponza carries a use restriction on top of CC BY, so it must not pass as plain CC-BY.
+        const sponza = sources.assets.find((entry) => entry.id === 'sponza-intel');
+        expect(sponza && isAllowedLicense(sponza.license)).toBe(false);
+        expect(sponza?.licenseApproval).toBeDefined();
     });
 });
 
@@ -167,13 +237,15 @@ describe('isSafeRelativePath', () => {
 
 describe('parseArgs', () => {
     it('reads flags', () => {
-        expect(parseArgs([])).toEqual({ only: [], force: false, sourcesPath: null, hash: null, verifyOnly: false, help: false });
+        expect(parseArgs([])).toEqual({ only: [], force: false, sourcesPath: null, hash: null, recordGlbViews: [], verifyOnly: false, help: false });
         expect(parseArgs(['--verify-only']).verifyOnly).toBe(true);
+        expect(parseArgs(['--record-glb-views', 'a,b']).recordGlbViews).toEqual(['a', 'b']);
         expect(parseArgs(['--only', 'a', '--only', 'b,c', '--force', '--sources', 'x.json'])).toEqual({
             only: ['a', 'b', 'c'],
             force: true,
             sourcesPath: 'x.json',
             hash: null,
+            recordGlbViews: [],
             verifyOnly: false,
             help: false,
         });
@@ -224,7 +296,6 @@ describe('small helpers', () => {
         expect(formatBytes(1536)).toBe('1.5 KB');
         expect(formatBytes(5 * 1024 ** 3)).toBe('5.0 GB');
     });
-
 });
 
 describe('fetching from a local server', () => {
@@ -240,16 +311,16 @@ describe('fetching from a local server', () => {
         server = createServer((request, response) => {
             requests++;
             if (request.url === '/model.glb') {
-                response.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': Buffer.byteLength(body) });
+                response.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': bytesOf(body) });
                 response.end(body);
             } else if (request.url === '/shared.bin') {
-                response.writeHead(200, { 'content-length': Buffer.byteLength(sharedBody) });
+                response.writeHead(200, { 'content-length': bytesOf(sharedBody) });
                 response.end(sharedBody);
             } else {
                 response.writeHead(404).end();
             }
         });
-        await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+        await new Promise<void>((resolvePromise) => server.listen(0, '127.0.0.1', resolvePromise));
         baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
         vi.spyOn(console, 'log').mockImplementation(() => undefined);
     });
@@ -260,12 +331,10 @@ describe('fetching from a local server', () => {
         vi.restoreAllMocks();
     });
 
+    const modelDownload = (file = 'model.glb') => ({ url: `${baseUrl}/model.glb`, file, bytes: bytesOf(body), sha256: sha256(body) });
+    const sharedDownload = (file = 'shared.bin') => ({ url: `${baseUrl}/shared.bin`, file, bytes: bytesOf(sharedBody), sha256: sha256(sharedBody) });
     const entry = (overrides: Partial<AssetEntry> = {}) =>
-        asset({
-            download: { url: `${baseUrl}/model.glb`, file: 'model.glb', bytes: Buffer.byteLength(body), sha256: sha256(body) },
-            outputs: [{ path: 'model.glb', sha256: sha256(body) }],
-            ...overrides,
-        });
+        asset({ download: modelDownload(), outputs: [{ path: 'model.glb', sha256: sha256(body), bytes: bytesOf(body) }], ...overrides });
 
     it('downloads, verifies, then skips on the second run', async () => {
         const options = { force: false, downloadsDirectory: workDirectory };
@@ -289,6 +358,20 @@ describe('fetching from a local server', () => {
         expect(await readFile(join(workDirectory, 'test-asset', 'model.glb'), 'utf8')).toBe(body);
     });
 
+    it('downloads again when the cached copy itself was changed', async () => {
+        const directory = await mkdtemp(join(tmpdir(), 'ddgi-cache-bad-'));
+        const options = { force: false, downloadsDirectory: directory };
+        expect(await fetchAsset(entry(), options)).toBe('fetched');
+        // Writing through the hard link changes the cache too: exactly what convert scripts must never do.
+        await appendFile(join(directory, 'test-asset', 'model.glb'), ' and more');
+        expect(await readFile(join(directory, '.cache', sha256(body)), 'utf8')).toBe(`${body} and more`);
+        const before = requests;
+        expect(await fetchAsset(entry(), options)).toBe('fetched');
+        expect(requests).toBe(before + 1);
+        expect(await readFile(join(directory, 'test-asset', 'model.glb'), 'utf8')).toBe(body);
+        await rm(directory, { recursive: true, force: true });
+    });
+
     it('downloads again with force', async () => {
         const before = requests;
         await fetchAsset(entry(), { force: true, downloadsDirectory: workDirectory });
@@ -296,11 +379,11 @@ describe('fetching from a local server', () => {
     });
 
     it('fetches a shared download once for two assets', async () => {
-        const shared = { url: `${baseUrl}/shared.bin`, file: 'shared.bin', sha256: sha256(sharedBody) };
         const directory = await mkdtemp(join(tmpdir(), 'ddgi-shared-'));
         const before = requests;
-        const first = asset({ id: 'half-one', download: shared, outputs: [{ path: 'shared.bin', sha256: sha256(sharedBody) }] });
-        const second = asset({ id: 'half-two', download: { ...shared }, outputs: [{ path: 'shared.bin', sha256: sha256(sharedBody) }] });
+        const outputs = [{ path: 'shared.bin', sha256: sha256(sharedBody), bytes: bytesOf(sharedBody) }];
+        const first = asset({ id: 'half-one', download: sharedDownload(), outputs });
+        const second = asset({ id: 'half-two', download: sharedDownload(), outputs });
         expect(await fetchAsset(first, { force: false, downloadsDirectory: directory })).toBe('fetched');
         expect(await fetchAsset(second, { force: false, downloadsDirectory: directory })).toBe('fetched');
         expect(requests).toBe(before + 1);
@@ -314,11 +397,11 @@ describe('fetching from a local server', () => {
         const directory = await mkdtemp(join(tmpdir(), 'ddgi-multi-'));
         const many = asset({
             id: 'tree',
-            download: [
-                { url: `${baseUrl}/model.glb`, file: 'tree.gltf', sha256: sha256(body) },
-                { url: `${baseUrl}/shared.bin`, file: 'textures/bark/diffuse.bin' },
+            download: [modelDownload('tree.gltf'), sharedDownload('textures/bark/diffuse.bin')],
+            outputs: [
+                { path: 'tree.gltf', sha256: sha256(body), bytes: bytesOf(body) },
+                { path: 'textures/bark/diffuse.bin', sha256: sha256(sharedBody), bytes: bytesOf(sharedBody) },
             ],
-            outputs: [{ path: 'tree.gltf' }, { path: 'textures/bark/diffuse.bin' }],
         });
         expect(await fetchAsset(many, { force: false, downloadsDirectory: directory })).toBe('fetched');
         expect(await readFile(join(directory, 'tree', 'tree.gltf'), 'utf8')).toBe(body);
@@ -335,43 +418,42 @@ describe('fetching from a local server', () => {
     });
 
     it('fails clearly when the download hash is wrong, and leaves no partial file', async () => {
-        const wrong = entry({
-            id: 'wrong-hash',
-            download: { url: `${baseUrl}/model.glb`, file: 'model.glb', sha256: sha256('something else') },
-        });
+        const wrong = entry({ id: 'wrong-hash', download: { ...modelDownload(), sha256: sha256('something else') } });
         await expect(fetchAsset(wrong, { force: false, downloadsDirectory: workDirectory })).rejects.toThrow(/download sha256 is/);
         await expect(readFile(join(workDirectory, '.cache', `${sha256('something else')}.part`))).rejects.toThrow();
         await expect(readFile(join(workDirectory, 'wrong-hash', 'model.glb'))).rejects.toThrow();
     });
 
     it('fails clearly on a 404', async () => {
-        const missing = entry({ id: 'gone', download: { url: `${baseUrl}/nope.glb`, file: 'nope.glb' }, outputs: [{ path: 'nope.glb' }] });
+        const missing = entry({ id: 'gone', download: { ...modelDownload('nope.glb'), url: `${baseUrl}/nope.glb`, sha256: 'c'.repeat(64) } });
         await expect(fetchAsset(missing, { force: false, downloadsDirectory: workDirectory })).rejects.toThrow(/answered 404/);
     });
 
     it('fails clearly when the size differs from sources.json', async () => {
-        const wrongSize = entry({
-            id: 'wrong-size',
-            download: { url: `${baseUrl}/model.glb`, file: 'model.glb', bytes: 5 },
-            outputs: [{ path: 'model.glb' }],
-        });
-        await expect(fetchAsset(wrongSize, { force: false, downloadsDirectory: workDirectory })).rejects.toThrow(/bytes but sources.json says 5/);
+        // A folder of its own, so the right file is not simply taken from the download cache.
+        const directory = await mkdtemp(join(tmpdir(), 'ddgi-size-'));
+        const wrongSize = entry({ id: 'wrong-size', download: { ...modelDownload(), bytes: 5 } });
+        await expect(fetchAsset(wrongSize, { force: false, downloadsDirectory: directory })).rejects.toThrow(/bytes but sources.json says 5/);
+        await rm(directory, { recursive: true, force: true });
     });
 
-    it('reports missing and mismatched outputs, and counts unverified ones', async () => {
+    it('reports missing and mismatched outputs', async () => {
         const directory = join(workDirectory, 'check');
         await mkdir(directory, { recursive: true });
         await writeFile(join(directory, 'a.glb'), 'aaa');
         await writeFile(join(directory, 'b.glb'), 'bbb');
-        const result = await checkOutputs(
+        const problems = await checkOutputs(
             directory,
-            [{ path: 'a.glb', sha256: sha256('aaa') }, { path: 'b.glb', sha256: sha256('not b') }, { path: 'c.glb' }, { path: 'a.glb' }],
+            [
+                { path: 'a.glb', sha256: sha256('aaa'), bytes: 3 },
+                { path: 'b.glb', sha256: sha256('not'), bytes: 3 },
+                { path: 'c.glb', sha256: sha256('c'), bytes: 1 },
+            ],
             () => undefined,
         );
-        expect(result.problems).toHaveLength(2);
-        expect(result.problems[0]).toContain('sha256 differs: b.glb');
-        expect(result.problems[1]).toBe('missing: c.glb');
-        expect(result.unverified).toBe(1);
+        expect(problems).toHaveLength(2);
+        expect(problems[0]).toContain('sha256 differs: b.glb');
+        expect(problems[1]).toBe('missing: c.glb');
         expect(await sha256OfFile(join(directory, 'a.glb'))).toBe(sha256('aaa'));
     });
 });
@@ -383,12 +465,12 @@ describe('picking a Blender by version', () => {
         expect(parseBlenderVersion('not it')).toBeNull();
     });
 
-    it('matches on major.minor only', () => {
-        expect(versionMatches('4.5.0', '4.5')).toBe(true);
-        expect(versionMatches('4.5.3', '4.5')).toBe(true);
-        expect(versionMatches('4.50.0', '4.5')).toBe(false);
-        expect(versionMatches('5.1.0', '4.5')).toBe(false);
-        expect(versionMatches('14.5.0', '4.5')).toBe(false);
+    it('matches the full version exactly: a patch release is a different Blender', () => {
+        expect(versionMatches('4.5.0', '4.5.0')).toBe(true);
+        expect(versionMatches('4.5.3', '4.5.0')).toBe(false);
+        expect(versionMatches('4.5', '4.5.0')).toBe(false);
+        expect(versionMatches('4.50.0', '4.5.0')).toBe(false);
+        expect(versionMatches('14.5.0', '4.5.0')).toBe(false);
     });
 
     describe('with fake executables', () => {
@@ -416,14 +498,17 @@ describe('picking a Blender by version', () => {
         it('does not trust the BLENDER variable: a wrong version is skipped for the next candidate', async () => {
             versions.set(variablePath, '5.1.0');
             versions.set(pathExecutable, '4.5.0');
-            const choice = await findBlender('4.5', { env: environment, platform: 'win32', readVersion });
+            const choice = await findBlender('4.5.0', { env: environment, platform: 'win32', readVersion });
             expect(choice).toEqual({ path: pathExecutable, version: '4.5.0' });
         });
 
-        it('uses the BLENDER variable when its version matches', async () => {
+        it('uses the BLENDER variable when its version matches, and skips another patch release', async () => {
             versions.set(variablePath, '4.5.0');
             versions.set(pathExecutable, '4.5.2');
-            expect((await findBlender('4.5', { env: environment, platform: 'win32', readVersion })).path).toBe(variablePath);
+            expect((await findBlender('4.5.0', { env: environment, platform: 'win32', readVersion })).path).toBe(variablePath);
+            versions.set(variablePath, '4.5.2');
+            versions.set(pathExecutable, '4.5.0');
+            expect((await findBlender('4.5.0', { env: environment, platform: 'win32', readVersion })).path).toBe(pathExecutable);
         });
 
         it('takes the first runnable Blender when no version is asked for', async () => {
@@ -432,18 +517,20 @@ describe('picking a Blender by version', () => {
             expect((await findBlender(undefined, { env: environment, platform: 'win32', readVersion })).version).toBe('5.1.0');
         });
 
-        it('says which version is needed and what was found when none matches', async () => {
-            versions.set(variablePath, '5.1.0');
+        it('says which version is needed, what was found, and that the hashes would need re-recording', async () => {
+            versions.set(variablePath, '4.5.3');
             versions.set(pathExecutable, null);
-            const message = await findBlender('4.5', { env: environment, platform: 'win32', readVersion }).catch((error: Error) => error.message);
-            expect(message).toContain('Blender 4.5 is needed');
-            expect(message).toContain('version 5.1.0');
+            const message = await findBlender('4.5.0', { env: environment, platform: 'win32', readVersion }).catch((error: Error) => error.message);
+            expect(message).toContain('Blender 4.5.0 is needed');
+            expect(message).toContain('version 4.5.3');
             expect(message).toContain('would not run');
             expect(message).toContain('BLENDER');
+            expect(message).toContain('recorded with exactly this version');
+            expect(message).toContain('re-record the output hashes');
         });
 
         it('says so when there is no Blender at all', async () => {
-            const message = await findBlender('4.5', {
+            const message = await findBlender('4.5.0', {
                 env: { PATH: '', ProgramFiles: join(directory, 'nothing-here') },
                 platform: 'win32',
                 readVersion,
@@ -452,21 +539,24 @@ describe('picking a Blender by version', () => {
         });
     });
 
-    it('accepts a blenderVersion like "4.5" in sources.json and rejects other shapes', () => {
-        const convert = (blenderVersion: string) => ({ tool: 'blender' as const, script: 'tools/assets/convert/x.py', args: [], blenderVersion });
-        expect(validateSources({ assets: [asset({ convert: convert('4.5') })] })).toEqual([]);
-        expect(validateSources({ assets: [asset({ convert: convert('4') })] }).join('\n')).toContain('blenderVersion');
-        expect(validateSources({ assets: [asset({ convert: convert('4.5.0') })] }).join('\n')).toContain('blenderVersion');
+    it('needs the full blenderVersion, like "4.5.0", in sources.json', () => {
+        expect(validateSources({ assets: [asset({ convert: convertWith('4.5.0') })] })).toEqual([]);
+        for (const version of ['4.5', '4', '4.5.0 LTS']) {
+            expect(validateSources({ assets: [asset({ convert: convertWith(version) })] }).join('\n'), version).toContain('blenderVersion');
+        }
+        const { blenderVersion: _removed, ...noVersion } = convertWith();
+        expect(validateSources({ assets: [rawAsset({ convert: noVersion })] }).join('\n')).toContain('blenderVersion: required');
     });
 
-    it('blames the conversion when a converted output has the wrong hash', async () => {
+    it('blames the conversion when a converted output has the wrong hash, and says how to re-record', async () => {
         const directory = await mkdtemp(join(tmpdir(), 'ddgi-convhash-'));
         await writeFile(join(directory, 'a.glb'), 'bytes');
-        const convert = { tool: 'blender' as const, script: 'x.py', args: [], blenderVersion: '4.5' };
-        const converted = await checkOutputs(directory, [{ path: 'a.glb', sha256: sha256('other') }], () => undefined, convert);
-        expect(converted.problems[0]).toMatch(/different Blender version \(this one needs 4\.5\) or conversion script is the likely cause/);
-        const plain = await checkOutputs(directory, [{ path: 'a.glb', sha256: sha256('other') }], () => undefined);
-        expect(plain.problems[0]).not.toContain('Blender');
+        const output = { path: 'a.glb', sha256: sha256('other'), bytes: 5 };
+        const converted = await checkOutputs(directory, [output], () => undefined, convertWith());
+        expect(converted[0]).toMatch(/different Blender version \(this one needs 4\.5\.0\) or a changed conversion script is the likely cause/);
+        expect(converted[0]).toContain('re-record the hashes');
+        const plain = await checkOutputs(directory, [output], () => undefined);
+        expect(plain[0]).not.toContain('Blender');
         await rm(directory, { recursive: true, force: true });
     });
 });
@@ -492,7 +582,7 @@ describe('download timeouts', () => {
             openSockets.add(socket);
             socket.on('close', () => openSockets.delete(socket));
         });
-        await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+        await new Promise<void>((resolvePromise) => server.listen(0, '127.0.0.1', resolvePromise));
         baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
     });
 
@@ -527,26 +617,35 @@ describe('download timeouts', () => {
 });
 
 describe('unpacking a shared zip once', () => {
-    it('unpacks into a cache keyed by the zip hash and links it into each asset folder', async () => {
-        const directory = await mkdtemp(join(tmpdir(), 'ddgi-unpack-'));
-        const cache = join(directory, '.cache');
-        const download = { url: 'https://example.com/pack.zip', file: 'pack.zip', bytes: 1, sha256: sha256('the zip') };
-        let unpacks = 0;
-        const fakeExtract = async (_archive: string, destination: string) => {
-            unpacks++;
+    const quiet = () => undefined;
+    const noKeep = new Set<string>();
+    const zip = (name: string) => ({ url: 'https://example.com/pack.zip', file: 'pack.zip', bytes: 1, sha256: sha256(name) });
+
+    /** A stand-in for unzip that writes two files and counts its runs. */
+    function fakeUnzip() {
+        const state = { unpacks: 0 };
+        const extract = async (_archive: string, destination: string) => {
+            state.unpacks++;
             await mkdir(join(destination, 'models'), { recursive: true });
             await writeFile(join(destination, 'models', 'a.fbx'), 'model data');
             await writeFile(join(destination, 'readme.txt'), 'hello');
         };
-        const quiet = () => undefined;
+        return { state, extract };
+    }
 
-        await extractWithCache(download, 'ignored.zip', join(directory, 'first'), cache, quiet, fakeExtract);
-        await extractWithCache(download, 'ignored.zip', join(directory, 'second'), cache, quiet, fakeExtract);
+    it('unpacks into a cache keyed by the zip hash, links it into each asset folder, and returns the unpacked paths', async () => {
+        const directory = await mkdtemp(join(tmpdir(), 'ddgi-unpack-'));
+        const cache = join(directory, '.cache');
+        const { state, extract } = fakeUnzip();
 
-        expect(unpacks).toBe(1);
-        for (const asset of ['first', 'second']) {
-            expect(await readFile(join(directory, asset, 'models', 'a.fbx'), 'utf8')).toBe('model data');
-            expect(await readFile(join(directory, asset, 'readme.txt'), 'utf8')).toBe('hello');
+        const first = await extractWithCache(zip('the zip'), 'ignored.zip', join(directory, 'first'), cache, noKeep, quiet, extract);
+        await extractWithCache(zip('the zip'), 'ignored.zip', join(directory, 'second'), cache, noKeep, quiet, extract);
+
+        expect(state.unpacks).toBe(1);
+        expect(first).toEqual(['models/a.fbx', 'readme.txt']);
+        for (const assetFolder of ['first', 'second']) {
+            expect(await readFile(join(directory, assetFolder, 'models', 'a.fbx'), 'utf8')).toBe('model data');
+            expect(await readFile(join(directory, assetFolder, 'readme.txt'), 'utf8')).toBe('hello');
         }
         await rm(directory, { recursive: true, force: true });
     });
@@ -554,32 +653,101 @@ describe('unpacking a shared zip once', () => {
     it('never reuses a half-finished unpack: a failed unpack leaves nothing in the cache', async () => {
         const directory = await mkdtemp(join(tmpdir(), 'ddgi-unpack-fail-'));
         const cache = join(directory, '.cache');
-        const download = { url: 'https://example.com/pack.zip', file: 'pack.zip', bytes: 1, sha256: sha256('another zip') };
         const failing = async (_archive: string, destination: string) => {
             await writeFile(join(destination, 'half.bin'), 'partial');
             throw new Error('disk full');
         };
-        await expect(extractWithCache(download, 'ignored.zip', join(directory, 'asset'), cache, () => undefined, failing)).rejects.toThrow('disk full');
+        await expect(extractWithCache(zip('another zip'), 'ignored.zip', join(directory, 'asset'), cache, noKeep, quiet, failing)).rejects.toThrow('disk full');
 
         let unpacks = 0;
         const working = async (_archive: string, destination: string) => {
             unpacks++;
             await writeFile(join(destination, 'whole.bin'), 'complete');
         };
-        await extractWithCache(download, 'ignored.zip', join(directory, 'asset'), cache, () => undefined, working);
+        await extractWithCache(zip('another zip'), 'ignored.zip', join(directory, 'asset'), cache, noKeep, quiet, working);
         expect(unpacks).toBe(1);
         expect(await readFile(join(directory, 'asset', 'whole.bin'), 'utf8')).toBe('complete');
         await expect(readFile(join(directory, 'asset', 'half.bin'))).rejects.toThrow();
         await rm(directory, { recursive: true, force: true });
     });
 
-    it('unpacks straight into the asset folder when the zip has no recorded hash', async () => {
-        const directory = await mkdtemp(join(tmpdir(), 'ddgi-unpack-plain-'));
-        const seen: string[] = [];
-        await extractWithCache({ url: 'https://example.com/p.zip', file: 'p.zip' }, 'p.zip', join(directory, 'asset'), join(directory, '.cache'), () => undefined, async (_archive, destination) => {
-            seen.push(destination);
-        });
-        expect(seen).toEqual([join(directory, 'asset')]);
+    it('unpacks again when the cached copy no longer matches the file list a complete unpack wrote', async () => {
+        const directory = await mkdtemp(join(tmpdir(), 'ddgi-unpack-check-'));
+        const cache = join(directory, '.cache');
+        const cached = join(cache, 'extracted', sha256('checked zip'));
+        const { state, extract } = fakeUnzip();
+        const unpack = () => extractWithCache(zip('checked zip'), 'ignored.zip', join(directory, 'asset'), cache, noKeep, quiet, extract);
+
+        await unpack();
+        await unpack();
+        expect(state.unpacks).toBe(1);
+
+        // A file went missing from the cache.
+        await rm(join(cached, 'readme.txt'));
+        await unpack();
+        expect(state.unpacks).toBe(2);
+        expect(await readFile(join(directory, 'asset', 'readme.txt'), 'utf8')).toBe('hello');
+
+        // A file was written in place (through a hard link from some asset folder).
+        await appendFile(join(cached, 'models', 'a.fbx'), ' edited');
+        await unpack();
+        expect(state.unpacks).toBe(3);
+        expect(await readFile(join(directory, 'asset', 'models', 'a.fbx'), 'utf8')).toBe('model data');
+
+        // An extra file appeared.
+        await writeFile(join(cached, 'stray.txt'), 'x');
+        await unpack();
+        expect(state.unpacks).toBe(4);
+
+        // The folder is there but the list is not: the run stopped between the rename and writing the list.
+        await rm(`${cached}.files.json`);
+        await unpack();
+        expect(state.unpacks).toBe(5);
+        await rm(directory, { recursive: true, force: true });
+    });
+
+    it('leaves the asset folder holding exactly the archive, the downloads and the outputs', async () => {
+        const directory = await mkdtemp(join(tmpdir(), 'ddgi-unpack-mirror-'));
+        const cache = join(directory, '.cache');
+        const assetFolder = join(directory, 'asset');
+        const { extract } = fakeUnzip();
+        // Left over from an older version of the archive, and a stray log.
+        await mkdir(join(assetFolder, 'old', 'nested'), { recursive: true });
+        await writeFile(join(assetFolder, 'old', 'nested', 'gone.fbx'), 'old');
+        await writeFile(join(assetFolder, 'models-old.txt'), 'old');
+        await writeFile(join(assetFolder, 'pack.zip'), 'the download');
+        await mkdir(join(assetFolder, 'out'), { recursive: true });
+        await writeFile(join(assetFolder, 'out', 'model.glb'), 'an output');
+
+        const messages: string[] = [];
+        const keep = new Set(['pack.zip', 'out/model.glb']);
+        await extractWithCache(zip('new version'), 'ignored.zip', assetFolder, cache, keep, (message) => messages.push(message), extract);
+
+        const listing = async (folder: string, prefix = ''): Promise<string[]> => {
+            const names: string[] = [];
+            for (const entry of await readdir(join(folder, prefix), { withFileTypes: true })) {
+                const path = prefix ? `${prefix}/${entry.name}` : entry.name;
+                names.push(...(entry.isDirectory() ? await listing(folder, path) : [path]));
+            }
+            return names.sort();
+        };
+        expect(await listing(assetFolder)).toEqual(['models/a.fbx', 'out/model.glb', 'pack.zip', 'readme.txt']);
+        await expect(readdir(join(assetFolder, 'old'))).rejects.toThrow(); // the emptied folder is gone too
+        expect(messages.join('\n')).toContain('removing old/nested/gone.fbx');
+        await rm(directory, { recursive: true, force: true });
+    });
+
+    it('notices an input written in place through a hard link, which is how a convert script would damage the cache', async () => {
+        const directory = await mkdtemp(join(tmpdir(), 'ddgi-fingerprint-'));
+        await writeFile(join(directory, 'cached.bin'), 'original');
+        await link(join(directory, 'cached.bin'), join(directory, 'linked.bin'));
+        const longAgo = new Date(Date.now() - 3_600_000);
+        await utimes(join(directory, 'linked.bin'), longAgo, longAgo);
+        const before = await fileFingerprints(directory, ['linked.bin', 'cached.bin']);
+        await appendFile(join(directory, 'linked.bin'), '!');
+        const after = await fileFingerprints(directory, ['linked.bin', 'cached.bin']);
+        expect(after.get('linked.bin')).not.toBe(before.get('linked.bin'));
+        expect(after.get('cached.bin')).not.toBe(before.get('cached.bin')); // the same file, seen from the cache
         await rm(directory, { recursive: true, force: true });
     });
 });
@@ -588,11 +756,9 @@ describe('output size checks', () => {
     it('reports a wrong size before hashing, and blames the conversion for converted files', async () => {
         const directory = await mkdtemp(join(tmpdir(), 'ddgi-size-'));
         await writeFile(join(directory, 'a.glb'), 'twelve bytes');
-        const convert = { tool: 'blender' as const, script: 'x.py', args: [], blenderVersion: '4.5' };
-        const result = await checkOutputs(directory, [{ path: 'a.glb', bytes: 99, sha256: sha256('twelve bytes') }], () => undefined, convert);
-        expect(result.problems[0]).toMatch(/size differs: a\.glb \(expected 99 bytes, got 12\).*Blender version.*likely cause/);
-        const ok = await checkOutputs(directory, [{ path: 'a.glb', bytes: 12, sha256: sha256('twelve bytes') }], () => undefined);
-        expect(ok.problems).toEqual([]);
+        const problems = await checkOutputs(directory, [{ path: 'a.glb', bytes: 99, sha256: sha256('twelve bytes') }], () => undefined, convertWith());
+        expect(problems[0]).toMatch(/size differs: a\.glb \(expected 99 bytes, got 12\).*Blender version.*likely cause/);
+        expect(await checkOutputs(directory, [{ path: 'a.glb', bytes: 12, sha256: sha256('twelve bytes') }], () => undefined)).toEqual([]);
         await rm(directory, { recursive: true, force: true });
     });
 });
@@ -614,10 +780,11 @@ describe('running a conversion that may hang', { timeout: 60_000 }, () => {
     it('reports a normal exit with its exit code', async () => {
         const [command, args] = node('process.exit(3)');
         const result = await runConversionProcess(command, [...args], { cwd: directory, assetDirectory: directory, outputs: [], limits: quickLimits });
-        expect(result).toEqual({ end: 'exited', code: 3 });
+        expect(result).toEqual({ end: 'exited', code: 3, signal: null });
+        expect(conversionFailure(result, 'x.py')).toBe('Blender exited with code 3 while running x.py');
     });
 
-    it('stops a process that wrote every output and then hangs, like Blender does at shutdown', async () => {
+    it('stops a process that wrote every output and then hangs, like Blender does at shutdown, and the kill carries the guard mark', async () => {
         const output = join(directory, 'hang-after.bin').replaceAll('\\', '/');
         const [command, args] = node(`require('fs').writeFileSync('${output}', 'done'); ${hangForever}`);
         const result = await runConversionProcess(command, [...args], {
@@ -627,6 +794,8 @@ describe('running a conversion that may hang', { timeout: 60_000 }, () => {
             limits: quickLimits,
         });
         expect(result.end).toBe('stopped-after-outputs');
+        expect(endedByGuardKill(result.code, result.signal)).toBe(true);
+        expect(conversionFailure(result, 'x.py')).toBeNull();
         expect(await readFile(join(directory, 'hang-after.bin'), 'utf8')).toBe('done');
     });
 
@@ -639,6 +808,7 @@ describe('running a conversion that may hang', { timeout: 60_000 }, () => {
             limits: { ...quickLimits, timeoutMs: 600 },
         });
         expect(result.end).toBe('timed-out');
+        expect(conversionFailure(result, 'x.py', { ...quickLimits, timeoutMs: 600 })).toContain('was still running');
     });
 
     it('does not mistake an output left over from an earlier run for a finished one', async () => {
@@ -653,7 +823,7 @@ describe('running a conversion that may hang', { timeout: 60_000 }, () => {
             outputs: [{ path: 'stale.bin', bytes: 4, sha256: sha256('done') }],
             limits: { ...quickLimits, graceMs: 100 },
         });
-        expect(result).toEqual({ end: 'exited', code: 0 });
+        expect(result).toEqual({ end: 'exited', code: 0, signal: null });
     });
 
     it('treats an output of the right size but wrong content as finished, so the final check can report it', async () => {
@@ -666,168 +836,35 @@ describe('running a conversion that may hang', { timeout: 60_000 }, () => {
             limits: quickLimits,
         });
         expect(result.end).toBe('stopped-after-outputs');
-        const check = await checkOutputs(directory, [{ path: 'wrong.bin', bytes: 4, sha256: sha256('done') }], () => undefined);
-        expect(check.problems[0]).toContain('sha256 differs: wrong.bin');
-    });
-});
-
-/** A minimal .glb: header, JSON chunk (padded with spaces to 4 bytes) and BIN chunk (padded with zeros). */
-function makeGlb(json: string, bin: Buffer): Buffer {
-    const jsonBytes = Buffer.from(json + ' '.repeat((4 - (json.length % 4)) % 4));
-    const binBytes = Buffer.concat([bin, Buffer.alloc((4 - (bin.length % 4)) % 4)]);
-    const header = Buffer.alloc(12);
-    header.writeUInt32LE(0x46546c67, 0);
-    header.writeUInt32LE(2, 4);
-    header.writeUInt32LE(12 + 8 + jsonBytes.length + 8 + binBytes.length, 8);
-    const jsonHeader = Buffer.alloc(8);
-    jsonHeader.writeUInt32LE(jsonBytes.length, 0);
-    jsonHeader.writeUInt32LE(0x4e4f534a, 4);
-    const binHeader = Buffer.alloc(8);
-    binHeader.writeUInt32LE(binBytes.length, 0);
-    binHeader.writeUInt32LE(0x004e4942, 4);
-    return Buffer.concat([header, jsonHeader, jsonBytes, binHeader, binBytes]);
-}
-
-describe('outputs of a converter that is not bit-reproducible', () => {
-    const json = '{"asset":{"version":"2.0"},"meshes":[1,2,3]}';
-    const bin = Buffer.from('0123456789abcdef');
-    let directory: string;
-
-    beforeAll(async () => {
-        directory = await mkdtemp(join(tmpdir(), 'ddgi-glb-'));
-    });
-    afterAll(() => rm(directory, { recursive: true, force: true }));
-
-    async function write(name: string, glb: Buffer): Promise<string> {
-        const path = join(directory, name);
-        await writeFile(path, glb);
-        return path;
-    }
-
-    const padded = (text: string) => Buffer.from(text + ' '.repeat((4 - (text.length % 4)) % 4));
-
-    /** The sources.json entry for a file as it was first converted. */
-    function recordedFor(glb: Buffer) {
-        return {
-            path: 'model.glb',
-            bytes: glb.length,
-            sha256: createHash('sha256').update(glb).digest('hex'),
-            reproducible: false,
-            jsonSha256: createHash('sha256').update(padded(json)).digest('hex'),
-            binBytes: bin.length,
-        };
-    }
-
-    it('reads the JSON chunk hash and the BIN chunk length without reading the whole file', async () => {
-        const glb = makeGlb(json, bin);
-        const structure = await readGlbStructure(await write('read.glb', glb));
-        expect(structure.binBytes).toBe(16);
-        expect(structure.jsonSha256).toBe(recordedFor(glb).jsonSha256); // hash of the padded chunk as stored
-    });
-
-    it('rejects files that are not well-formed .glb', async () => {
-        const good = makeGlb(json, bin);
-        const badMagic = Buffer.from(good);
-        badMagic.writeUInt32LE(0x12345678, 0);
-        await expect(readGlbStructure(await write('magic.glb', badMagic))).rejects.toThrow('bad magic');
-
-        await expect(readGlbStructure(await write('short.glb', good.subarray(0, 10)))).rejects.toThrow('too short');
-        await expect(readGlbStructure(await write('cut.glb', good.subarray(0, good.length - 4)))).rejects.toThrow('header says');
-
-        const noBin = Buffer.from(good.subarray(0, 12 + 8 + padded(json).length));
-        noBin.writeUInt32LE(noBin.length, 8);
-        await expect(readGlbStructure(await write('nobin.glb', noBin))).rejects.toThrow('no BIN chunk');
-    });
-
-    it('passes when only bytes inside the BIN chunk changed, as when the exporter wobbles a float', async () => {
-        const original = makeGlb(json, bin);
-        const recorded = recordedFor(original);
-        const wobbled = Buffer.from(original);
-        wobbled[wobbled.length - 3] ^= 0x01; // flip one bit inside the BIN data
-        const path = await write('wobbled.glb', wobbled);
-        expect(createHash('sha256').update(wobbled).digest('hex')).not.toBe(recorded.sha256);
-        expect(await checkGlbStructure(path, recorded)).toEqual([]);
-    });
-
-    it('fails when the JSON chunk changed, even with the same file size', async () => {
-        const recorded = recordedFor(makeGlb(json, bin));
-        const changed = makeGlb(json.replace('[1,2,3]', '[1,2,4]'), bin);
-        expect(changed.length).toBe(makeGlb(json, bin).length);
-        const problems = await checkGlbStructure(await write('json.glb', changed), recorded);
-        expect(problems).toHaveLength(1);
-        expect(problems[0]).toContain('the JSON chunk differs');
-    });
-
-    it('fails when the BIN chunk has a different length', async () => {
-        const recorded = recordedFor(makeGlb(json, bin));
-        const problems = await checkGlbStructure(await write('bin.glb', makeGlb(json, Buffer.from('0123456789abcdef0123'))), recorded);
-        expect(problems[0]).toContain('the BIN chunk is 20 bytes but sources.json says 16');
-    });
-
-    it('checkOutputs uses the structure instead of the whole-file hash, and logs the hash for information', async () => {
-        const original = makeGlb(json, bin);
-        const recorded = recordedFor(original);
-        const wobbled = Buffer.from(original);
-        wobbled[wobbled.length - 2] ^= 0x10;
-        await write('model.glb', wobbled);
-        const notes: string[] = [];
-        const convert = { tool: 'blender' as const, script: 'x.py', args: [], blenderVersion: '4.5' };
-        const result = await checkOutputs(directory, [recorded], (message) => notes.push(message), convert);
-        expect(result.problems).toEqual([]);
-        expect(notes.join('\n')).toContain('not bit-reproducible');
-        expect(notes.join('\n')).toContain(createHash('sha256').update(wobbled).digest('hex'));
-
-        // A different size is still caught before anything else.
-        const resized = await checkOutputs(directory, [{ ...recorded, bytes: recorded.bytes + 4 }], () => undefined, convert);
-        expect(resized.problems[0]).toContain('size differs');
-
-        // The same file without the flag still fails on the whole-file hash.
-        const { reproducible: _flag, jsonSha256: _json, binBytes: _bin, ...strict } = recorded;
-        expect((await checkOutputs(directory, [strict], () => undefined, convert)).problems[0]).toContain('sha256 differs');
-    });
-
-    it('sources.json must give jsonSha256 and binBytes with reproducible false, and only for .glb files', () => {
-        const output = { path: 'a.glb', sha256: 'b'.repeat(64), bytes: 40, reproducible: false };
-        const text = validateSources({ assets: [asset({ outputs: [output as never] })] }).join('\n');
-        expect(text).toContain('jsonSha256: required with reproducible false');
-        expect(text).toContain('binBytes: required with reproducible false');
-        const complete = { ...output, jsonSha256: 'c'.repeat(64), binBytes: 16 };
-        expect(validateSources({ assets: [asset({ outputs: [complete as never] })] })).toEqual([]);
-        const notGlb = { ...complete, path: 'a.png' };
-        expect(validateSources({ assets: [asset({ outputs: [notGlb as never] })] }).join('\n')).toContain('only supported for .glb');
-        const badFlag = { ...complete, reproducible: 'no' };
-        expect(validateSources({ assets: [asset({ outputs: [badFlag as never] })] }).join('\n')).toContain('reproducible: must be true or false');
+        const problems = await checkOutputs(directory, [{ path: 'wrong.bin', bytes: 4, sha256: sha256('done') }], () => undefined);
+        expect(problems[0]).toContain('sha256 differs: wrong.bin');
     });
 });
 
 /** A stand-in for a child process whose life the test controls event by event. */
 class FakeChild extends EventEmitter {
     pid = 4242;
-    exitCode: number | null = null;
-    signalCode: string | null = null;
 
-    /** The process ends by itself (or is killed): 'exit' fires, then 'close' once its output is flushed. */
-    finish(code: number): void {
-        this.exitCode = code;
-        this.emit('exit', code, null);
-        this.emit('close', code);
+    /** The process ends: 'exit' fires, then 'close' once its output is flushed. */
+    finish(code: number | null, signal: string | null = null): void {
+        this.emit('exit', code, signal);
+        this.emit('close', code, signal);
     }
 }
 
 describe('who gets to end a conversion: the process or the guard', () => {
     const fastLimits = { timeoutMs: 400, graceMs: 0, pollMs: 5 };
     let directory: string;
-    let outputPath: string;
     const expectedOutput = { path: 'made.bin', bytes: 4, sha256: sha256('done') };
 
     beforeAll(async () => {
         directory = await mkdtemp(join(tmpdir(), 'ddgi-race-'));
-        outputPath = join(directory, 'made.bin');
-        await writeFile(outputPath, 'done');
+        await writeFile(join(directory, 'made.bin'), 'done');
     });
     afterAll(() => rm(directory, { recursive: true, force: true }));
 
-    const run = (child: FakeChild, outputs: AssetOutput[], limits = fastLimits) => {
+    /** `onKill` says how the process ends once the guard kills it; by default the kill lands and leaves its mark. */
+    const run = (child: FakeChild, outputs: AssetOutput[], limits = fastLimits, onKill = () => child.finish(GUARD_KILL_EXIT_CODE)) => {
         let killed = 0;
         const result = runConversionProcess('fake', [], {
             cwd: directory,
@@ -837,50 +874,346 @@ describe('who gets to end a conversion: the process or the guard', () => {
             spawnProcess: () => child,
             killTree: async () => {
                 killed++;
-                child.finish(1); // a killed process ends with a failure code, like taskkill /F
+                onKill();
             },
         });
         return { result, killed: () => killed };
     };
+
+    it('recognises the guard kill by its mark: the special exit code on Windows, SIGKILL elsewhere', () => {
+        expect(endedByGuardKill(GUARD_KILL_EXIT_CODE, null)).toBe(true);
+        expect(endedByGuardKill(null, 'SIGKILL')).toBe(true);
+        for (const [code, signal] of [[0, null], [1, null], [3221225477, null], [null, 'SIGSEGV']] as const) {
+            expect(endedByGuardKill(code, signal), `${code} ${signal}`).toBe(false);
+        }
+    });
 
     it('reports the real exit code of a process that ends by itself after writing its output, even with no grace period', async () => {
         const child = new FakeChild();
         const { result, killed } = run(child, [expectedOutput]);
         child.finish(7); // exits before the guard has looked at anything
         // Give the guard every chance to misfire (any wait only makes a wrong implementation more likely to fail, never a right one).
-        await new Promise((resolve) => setTimeout(resolve, 100));
-        expect(await result).toEqual({ end: 'exited', code: 7 });
+        await new Promise((resolvePromise) => setTimeout(resolvePromise, 100));
+        expect(await result).toEqual({ end: 'exited', code: 7, signal: null });
         expect(killed()).toBe(0);
     });
 
     it('does not mistake a process that has exited but not yet closed for one to stop', async () => {
         const child = new FakeChild();
         const { result, killed } = run(child, [expectedOutput]);
-        child.exitCode = 9;
         child.emit('exit', 9, null); // exited; the 'close' event has not arrived yet
-        await new Promise((resolve) => setTimeout(resolve, 100)); // the output is verified and the zero-length grace period passes
-        child.emit('close', 9);
-        expect(await result).toEqual({ end: 'exited', code: 9 });
+        await new Promise((resolvePromise) => setTimeout(resolvePromise, 100)); // the output is found and the zero-length grace period passes
+        child.emit('close', 9, null);
+        expect(await result).toEqual({ end: 'exited', code: 9, signal: null });
         expect(killed()).toBe(0);
     });
 
-    it('kills a process that is still running once its outputs are verified, and says the guard did it', async () => {
+    it('fails the conversion when the process exits with an error code of its own while the guard is killing it', async () => {
+        const child = new FakeChild();
+        // The guard has decided to stop the process, but before its kill lands the process exits by itself with
+        // code 1 (a Python error in Blender). An exit status is set once, so the kill cannot overwrite it.
+        const { result, killed } = run(child, [expectedOutput], fastLimits, () => child.finish(1));
+        const outcome = await result;
+        expect(killed()).toBe(1);
+        expect(outcome).toEqual({ end: 'exited', code: 1, signal: null });
+        expect(conversionFailure(outcome, 'convert.py')).toBe('Blender exited with code 1 while running convert.py');
+    });
+
+    it('accepts a clean exit of its own in that same moment', async () => {
+        const child = new FakeChild();
+        const { result } = run(child, [expectedOutput], fastLimits, () => child.finish(0));
+        const outcome = await result;
+        expect(outcome).toEqual({ end: 'exited', code: 0, signal: null });
+        expect(conversionFailure(outcome, 'convert.py')).toBeNull();
+    });
+
+    it('kills a process that is still running once its outputs are written, and says the guard did it', async () => {
         const child = new FakeChild();
         const { result, killed } = run(child, [expectedOutput]);
-        expect(await result).toEqual({ end: 'stopped-after-outputs', code: 1 });
+        expect(await result).toEqual({ end: 'stopped-after-outputs', code: GUARD_KILL_EXIT_CODE, signal: null });
         expect(killed()).toBe(1);
+    });
+
+    it('rejects when the killed process never reports its end, rather than guessing', { timeout: 10_000 }, async () => {
+        const child = new FakeChild();
+        const { result } = run(child, [expectedOutput], fastLimits, () => undefined);
+        await expect(result).rejects.toThrow('did not end within 5 s');
     });
 
     it('never stops early a conversion that lists no outputs; only the time limit ends it', async () => {
         const child = new FakeChild();
-        const { result, killed } = run(child, [], { ...fastLimits, timeoutMs: 150 });
-        expect(await result).toEqual({ end: 'timed-out', code: 1 });
+        const { result, killed } = run(child, [], { ...fastLimits, timeoutMs: 150 }, () => child.finish(null, 'SIGKILL'));
+        expect(await result).toEqual({ end: 'timed-out', code: null, signal: 'SIGKILL' });
         expect(killed()).toBe(1);
     });
 
-    it('does not treat an output that never matches as finished', async () => {
+    it('does not treat an output that never reaches its size as finished', async () => {
         const child = new FakeChild();
         const { result } = run(child, [{ ...expectedOutput, bytes: 5 }], { ...fastLimits, timeoutMs: 150 });
         expect((await result).end).toBe('timed-out');
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Non-reproducible .glb outputs
+// ---------------------------------------------------------------------------
+
+/** A .glb from a JSON value and BIN bytes: chunks padded to 4 bytes (JSON with spaces, BIN with zeros). */
+function makeGlb(json: unknown, bin: Buffer, trailing: Buffer = Buffer.alloc(0)): Buffer {
+    const text = JSON.stringify(json);
+    const jsonBytes = Buffer.from(text + ' '.repeat((4 - (text.length % 4)) % 4));
+    const binBytes = Buffer.concat([bin, Buffer.alloc((4 - (bin.length % 4)) % 4)]);
+    const header = Buffer.alloc(12);
+    header.writeUInt32LE(0x46546c67, 0);
+    header.writeUInt32LE(2, 4);
+    header.writeUInt32LE(12 + 8 + jsonBytes.length + 8 + binBytes.length + trailing.length, 8);
+    const jsonHeader = Buffer.alloc(8);
+    jsonHeader.writeUInt32LE(jsonBytes.length, 0);
+    jsonHeader.writeUInt32LE(0x4e4f534a, 4);
+    const binHeader = Buffer.alloc(8);
+    binHeader.writeUInt32LE(binBytes.length, 0);
+    binHeader.writeUInt32LE(0x004e4942, 4);
+    return Buffer.concat([header, jsonHeader, jsonBytes, binHeader, binBytes, trailing]);
+}
+
+interface SceneData {
+    position: Buffer;
+    normal: Buffer;
+    indices: Buffer;
+    image: Buffer;
+}
+
+/** The data of a tiny one-mesh scene with an embedded image. Each piece has a length that needs alignment padding after it. */
+function sceneData(): SceneData {
+    return {
+        position: Buffer.from('POSITIONS-12'),
+        normal: Buffer.from('NORMALS--12!'),
+        indices: Buffer.from('IDX-6!'),
+        image: Buffer.from('PNG!!'),
+    };
+}
+
+/** Lays the scene out as Blender does: one bufferView per piece, each starting on a 4-byte boundary, zero padding between. */
+function sceneGlb(data: SceneData = sceneData(), padding = 0): Buffer {
+    const pieces = [data.position, data.normal, data.indices, data.image];
+    const parts: Buffer[] = [];
+    const bufferViews: Array<{ buffer: number; byteOffset: number; byteLength: number }> = [];
+    let offset = 0;
+    for (const piece of pieces) {
+        bufferViews.push({ buffer: 0, byteOffset: offset, byteLength: piece.length });
+        const gap = (4 - (piece.length % 4)) % 4;
+        parts.push(piece, Buffer.alloc(gap, padding));
+        offset += piece.length + gap;
+    }
+    const json = {
+        asset: { version: '2.0' },
+        buffers: [{ byteLength: offset }],
+        bufferViews,
+        accessors: [{ bufferView: 0 }, { bufferView: 1 }, { bufferView: 2 }],
+        meshes: [{ primitives: [{ attributes: { POSITION: 0, NORMAL: 1 }, indices: 2 }] }],
+        images: [{ bufferView: 3, mimeType: 'image/png' }],
+    };
+    return makeGlb(json, Buffer.concat(parts));
+}
+
+describe('outputs of a converter that is not bit-reproducible', () => {
+    let directory: string;
+    const recordFile = 'glb-views/test-asset.json';
+
+    beforeAll(async () => {
+        directory = await mkdtemp(join(tmpdir(), 'ddgi-glb-'));
+        await mkdir(join(directory, 'glb-views'));
+    });
+    afterAll(() => rm(directory, { recursive: true, force: true }));
+
+    async function write(name: string, glb: Buffer): Promise<string> {
+        const path = join(directory, name);
+        await writeFile(path, glb);
+        return path;
+    }
+
+    /** The sources.json entry and bufferView record for a file as first converted, with NORMAL known to vary. */
+    async function recordedFor(glb: Buffer, varyingAttributes = ['NORMAL']) {
+        const structure = await readGlbStructure(await write('recorded.glb', glb));
+        const output: AssetOutput = {
+            path: 'model.glb',
+            bytes: glb.length,
+            sha256: sha256(glb),
+            reproducible: false,
+            jsonSha256: structure.jsonSha256,
+            binBytes: structure.binBytes,
+            bufferViewHashes: recordFile,
+            varyingAttributes,
+        };
+        const record = makeGlbViewRecord('test-asset', output, structure);
+        await writeFile(join(directory, recordFile), formatGlbViewRecord(record));
+        return { output, record };
+    }
+
+    it('hashes every bufferView, says what each holds, and finds no stray bytes in zero padding', async () => {
+        const data = sceneData();
+        const structure = await readGlbStructure(await write('read.glb', sceneGlb(data)));
+        expect(structure.bufferViewSha256).toEqual([sha256(data.position), sha256(data.normal), sha256(data.indices), sha256(data.image)]);
+        expect(structure.bufferViewUses).toEqual([['POSITION'], ['NORMAL'], ['indices'], ['image']]);
+        expect(structure.nonZeroPaddingBytes).toBe(0);
+        expect(structure.binBytes).toBe(12 + 12 + 8 + 8);
+    });
+
+    it('counts padding bytes that are not zero', async () => {
+        const structure = await readGlbStructure(await write('padded.glb', sceneGlb(sceneData(), 0x7f)));
+        expect(structure.nonZeroPaddingBytes).toBe(2 + 3); // after the 6 index bytes and the 5 image bytes
+    });
+
+    it('rejects files that are not well-formed single-buffer .glb', async () => {
+        const good = sceneGlb();
+        const badMagic = Buffer.from(good);
+        badMagic.writeUInt32LE(0x12345678, 0);
+        await expect(readGlbStructure(await write('magic.glb', badMagic))).rejects.toThrow('bad magic');
+        await expect(readGlbStructure(await write('short.glb', good.subarray(0, 10)))).rejects.toThrow('too short');
+        await expect(readGlbStructure(await write('cut.glb', good.subarray(0, good.length - 4)))).rejects.toThrow('header says');
+
+        const jsonOnly = makeGlb({ asset: { version: '2.0' } }, Buffer.alloc(0)).subarray(0, 12 + 8 + 28);
+        const noBin = Buffer.from(jsonOnly);
+        noBin.writeUInt32LE(noBin.length, 8);
+        await expect(readGlbStructure(await write('nobin.glb', noBin))).rejects.toThrow('no BIN chunk');
+
+        const trailing = makeGlb({ asset: { version: '2.0' } }, Buffer.from('data'), Buffer.from('MORE'));
+        await expect(readGlbStructure(await write('trailing.glb', trailing))).rejects.toThrow('the BIN chunk ends at byte');
+
+        const external = makeGlb({ buffers: [{ byteLength: 4 }, { uri: 'more.bin', byteLength: 4 }] }, Buffer.from('data'));
+        await expect(readGlbStructure(await write('external.glb', external))).rejects.toThrow('external buffer');
+
+        const outside = makeGlb({ buffers: [{ byteLength: 4 }], bufferViews: [{ buffer: 0, byteOffset: 2, byteLength: 4 }] }, Buffer.from('data'));
+        await expect(readGlbStructure(await write('outside.glb', outside))).rejects.toThrow('bufferView 0 is not inside the BIN chunk');
+    });
+
+    it('records a hash for every bufferView except those used only by varying attributes', async () => {
+        const { record } = await recordedFor(sceneGlb());
+        expect(record.bufferViews.map((hash) => (hash === null ? null : 'pinned'))).toEqual(['pinned', null, 'pinned', 'pinned']);
+        const reread = await readGlbViewRecord(join(directory, recordFile));
+        expect(reread).toEqual(record);
+    });
+
+    it('passes when only a varying attribute changed, as when the exporter wobbles a normal', async () => {
+        const { output, record } = await recordedFor(sceneGlb());
+        const wobbled = sceneGlb({ ...sceneData(), normal: Buffer.from('NORMALS--12?') });
+        const structure = await readGlbStructure(await write('wobbled.glb', wobbled));
+        expect(structure.fileSha256).not.toBe(output.sha256);
+        expect(checkGlbStructure(structure, output, record)).toEqual([]);
+    });
+
+    it('fails when a pinned bufferView changed, and names it', async () => {
+        const { output, record } = await recordedFor(sceneGlb());
+        for (const [piece, use] of [['position', 'POSITION'], ['indices', 'indices'], ['image', 'image']] as const) {
+            const data = sceneData();
+            const changed = Buffer.from(data[piece]);
+            changed[0] ^= 0x01;
+            const structure = await readGlbStructure(await write(`changed-${piece}.glb`, sceneGlb({ ...data, [piece]: changed })));
+            const problems = checkGlbStructure(structure, output, record);
+            expect(problems, piece).toHaveLength(1);
+            expect(problems[0]).toMatch(new RegExp(`1 pinned bufferView\\(s\\) differ: bufferView \\d \\(${use}\\)`));
+        }
+    });
+
+    it('never leaves an index buffer or an image unpinned, even in a hand-edited record', async () => {
+        const { output, record } = await recordedFor(sceneGlb());
+        const edited = { ...record, bufferViews: [record.bufferViews[0], null, null, null] };
+        const structure = await readGlbStructure(await write('same.glb', sceneGlb()));
+        const problems = checkGlbStructure(structure, output, edited);
+        expect(problems).toHaveLength(2);
+        expect(problems[0]).toContain('bufferView 2 (indices) has no recorded hash');
+        expect(problems[1]).toContain('bufferView 3 (image) has no recorded hash');
+    });
+
+    it('a view shared by a varying attribute and anything else stays pinned', async () => {
+        const glb = makeGlb(
+            {
+                buffers: [{ byteLength: 4 }],
+                bufferViews: [{ buffer: 0, byteOffset: 0, byteLength: 4 }],
+                accessors: [{ bufferView: 0 }, { bufferView: 0 }],
+                meshes: [{ primitives: [{ attributes: { NORMAL: 0 }, indices: 1 }] }],
+            },
+            Buffer.from('data'),
+        );
+        const { record } = await recordedFor(glb);
+        expect(record.bufferViews[0]).not.toBeNull();
+    });
+
+    it('fails when the JSON chunk changed, even with the same file size', async () => {
+        const { output, record } = await recordedFor(sceneGlb());
+        const data = sceneData();
+        // Same lengths, so the same JSON size; only the mime type text differs.
+        const json = JSON.parse(sceneGlb(data).subarray(20, 20 + sceneGlb(data).readUInt32LE(12)).toString()) as { images: Array<{ mimeType: string }> };
+        json.images[0].mimeType = 'image/pn_';
+        const changed = makeGlb(json, sceneGlb(data).subarray(20 + sceneGlb(data).readUInt32LE(12) + 8));
+        expect(changed.length).toBe(output.bytes);
+        const problems = checkGlbStructure(await readGlbStructure(await write('json.glb', changed)), output, record);
+        expect(problems).toHaveLength(1);
+        expect(problems[0]).toContain('the JSON chunk differs');
+    });
+
+    it('fails when the BIN chunk has a different length', async () => {
+        const { output, record } = await recordedFor(sceneGlb());
+        const structure = await readGlbStructure(await write('bin.glb', sceneGlb()));
+        const problems = checkGlbStructure({ ...structure, binBytes: structure.binBytes + 4 }, output, record);
+        expect(problems[0]).toContain(`the BIN chunk is ${structure.binBytes + 4} bytes but sources.json says ${structure.binBytes}`);
+    });
+
+    it('fails when the record was made for another JSON chunk', async () => {
+        const { output, record } = await recordedFor(sceneGlb());
+        const structure = await readGlbStructure(await write('other-record.glb', sceneGlb()));
+        expect(checkGlbStructure(structure, output, { ...record, jsonSha256: 'f'.repeat(64) })[0]).toContain('re-record it with --record-glb-views');
+    });
+
+    it('checkOutputs pins the pieces instead of the whole-file hash, and logs the whole-file hash for information', async () => {
+        const { output } = await recordedFor(sceneGlb());
+        const wobbled = sceneGlb({ ...sceneData(), normal: Buffer.from('NORMALS--12?') });
+        await write('model.glb', wobbled);
+        const notes: string[] = [];
+        expect(await checkOutputs(directory, [output], (message) => notes.push(message), convertWith(), { repoRoot: directory })).toEqual([]);
+        expect(notes.join('\n')).toContain('not bit-reproducible');
+        expect(notes.join('\n')).toContain('3 of 4 bufferViews');
+        expect(notes.join('\n')).toContain(sha256(wobbled));
+
+        // A different size is still caught before anything else.
+        const resized = await checkOutputs(directory, [{ ...output, bytes: output.bytes + 4 }], () => undefined, convertWith(), { repoRoot: directory });
+        expect(resized[0]).toContain('size differs');
+
+        // A changed position is caught, and blamed on the conversion.
+        const data = sceneData();
+        await write('model.glb', sceneGlb({ ...data, position: Buffer.from('POSITIONS-13') }));
+        const moved = await checkOutputs(directory, [output], () => undefined, convertWith(), { repoRoot: directory });
+        expect(moved[0]).toMatch(/model\.glb: 1 pinned bufferView\(s\) differ: bufferView 0 \(POSITION\).*likely cause/);
+
+        // A missing record file is a plain problem, not a crash.
+        const noRecord = await checkOutputs(directory, [{ ...output, bufferViewHashes: 'glb-views/missing.json' }], () => undefined, null, { repoRoot: directory });
+        expect(noRecord[0]).toContain('cannot read the bufferView record');
+
+        // The same file without the flag fails on the whole-file hash.
+        await write('model.glb', wobbled);
+        const { reproducible: _flag, jsonSha256: _json, binBytes: _bin, bufferViewHashes: _views, varyingAttributes: _varying, ...strict } = output;
+        expect((await checkOutputs(directory, [strict], () => undefined, convertWith()))[0]).toContain('sha256 differs');
+    });
+
+    it('sources.json must give jsonSha256, binBytes, bufferViewHashes and varyingAttributes with reproducible false, and only for .glb files', () => {
+        const output = { path: 'a.glb', sha256: 'b'.repeat(64), bytes: 40, reproducible: false };
+        const text = validateSources({ assets: [rawAsset({ outputs: [output] })] }).join('\n');
+        expect(text).toContain('jsonSha256: required with reproducible false');
+        expect(text).toContain('binBytes: required with reproducible false');
+        expect(text).toContain('bufferViewHashes: required with reproducible false');
+        expect(text).toContain('varyingAttributes: required with reproducible false');
+        const complete = { ...output, jsonSha256: 'c'.repeat(64), binBytes: 16, bufferViewHashes: 'tools/assets/glb-views/a.json', varyingAttributes: ['NORMAL'] };
+        expect(validateSources({ assets: [rawAsset({ outputs: [complete] })] })).toEqual([]);
+        expect(validateSources({ assets: [rawAsset({ outputs: [{ ...complete, varyingAttributes: [] }] })] })).toEqual([]);
+        // "indices" and "image" are not attribute names, so they can never be listed as varying.
+        for (const name of ['indices', 'image', 'normal']) {
+            const text = validateSources({ assets: [rawAsset({ outputs: [{ ...complete, varyingAttributes: [name] }] })] }).join('\n');
+            expect(text, name).toContain('varyingAttributes');
+        }
+        expect(validateSources({ assets: [rawAsset({ outputs: [{ ...complete, bufferViewHashes: '../x.json' }] })] }).join('\n')).toContain('bufferViewHashes');
+        expect(validateSources({ assets: [rawAsset({ outputs: [{ ...complete, path: 'a.png' }] })] }).join('\n')).toContain('only supported for .glb');
+        expect(validateSources({ assets: [rawAsset({ outputs: [{ ...complete, reproducible: 'no' }] })] }).join('\n')).toContain('reproducible: must be true or false');
+        const strayFields = { path: 'a.bin', sha256: 'b'.repeat(64), bytes: 4, varyingAttributes: ['NORMAL'] };
+        expect(validateSources({ assets: [rawAsset({ outputs: [strayFields] })] }).join('\n')).toContain('only go with reproducible false');
     });
 });

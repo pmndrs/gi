@@ -10,6 +10,7 @@ import {
     type AssetOutputInfo,
     isProceduralOnly,
     manifestLightToSceneLight,
+    NO_RANGE_WINDOW,
     parseManifest,
     type ModelTransform,
     validateManifest,
@@ -128,7 +129,7 @@ describe('validateManifest', () => {
         const errors = errorsFor((m) => {
             m.lights = [
                 { type: 'directional', color: [1, 1, 1], intensity: 3, direction: [0, 0, 0] },
-                { type: 'point', color: [1, 1, 1], intensity: 3, position: [0, 1, 0], range: 0 },
+                { type: 'point', color: [1, 1, 1], intensity: 3, position: [0, 1, 0], range: -1 },
                 {
                     type: 'spot',
                     color: [1, 1, 1],
@@ -147,6 +148,17 @@ describe('validateManifest', () => {
         expect(errors[1]).toContain('lights[1].range');
         expect(errors[2]).toContain('innerConeDeg');
         expect(errors[3]).toContain('lights[3].type');
+    });
+
+    it('allows range 0 on point and spot lights, meaning no range window, but not a missing range', () => {
+        const point = { type: 'point', color: [1, 1, 1], intensity: 3, position: [0, 1, 0], range: NO_RANGE_WINDOW };
+        const spot = { ...point, type: 'spot', direction: [0, -1, 0], innerConeDeg: 20, outerConeDeg: 30 };
+        expect(errorsFor((m) => (m.lights = [point, spot]))).toEqual([]);
+        const { range: _missing, ...noRange } = point;
+        const errors = errorsFor((m) => (m.lights = [noRange, { ...spot, range: Number.NaN }]));
+        expect(errors).toHaveLength(2);
+        expect(errors[0]).toContain('lights[0].range: must be a distance in metres, or 0 for no range window');
+        expect(errors[1]).toContain('lights[1].range');
     });
 
     it('rejects a probe spacing larger than the volume', () => {
@@ -204,6 +216,11 @@ describe('manifestLightToSceneLight', () => {
         if (light.type !== 'spot') throw new Error('expected a spot light');
         expect(light.innerConeAngle).toBeCloseTo(Math.PI / 9);
         expect(light.outerConeAngle).toBeCloseTo(Math.PI / 4);
+    });
+
+    it('passes a range of 0 (no range window) through unchanged', () => {
+        const light = manifestLightToSceneLight({ type: 'point', color: [1, 1, 1], intensity: 50, position: [0, 2, 0], range: NO_RANGE_WINDOW });
+        expect(light.type === 'point' && light.range).toBe(0);
     });
 });
 

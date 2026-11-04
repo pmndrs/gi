@@ -4,6 +4,7 @@
  *   pnpm assets:fetch                 every asset in tools/assets/sources.json
  *   pnpm assets:fetch --only <id>     one asset (repeat the flag, or use a,b)
  *   pnpm assets:fetch --force         redo everything even if outputs look fine
+ *   pnpm assets:fetch --verify-only   check what is on disk; change nothing
  *   pnpm assets:fetch --sources <p>   read a different sources file
  *
  * Files land in assets/downloads/<id>/ (gitignored). For each asset:
@@ -11,27 +12,38 @@
  *   2. Otherwise download each file (streamed, with progress) unless it is
  *      already there with the right hash, and check its size and sha256.
  *      `download` is one object or an array (a glTF with its .bin and
- *      textures; `file` may name subfolders). Files with a known sha256 go
- *      through a cache in assets/downloads/.cache/<sha256>, so assets that
- *      share a download (the two Bistro halves) fetch it once.
+ *      textures; `file` may name subfolders). Downloads go through a cache in
+ *      assets/downloads/.cache/<sha256>, so assets that share a download (the
+ *      two Bistro halves) fetch it once.
  *   3. Unpack zips: `tar` (bsdtar, ships with Windows 10+) on Windows,
  *      PowerShell `Expand-Archive` if tar is missing, `unzip` elsewhere.
- *      No npm dependency.
+ *      No npm dependency. The unpacked files are kept once in
+ *      .cache/extracted/<sha256>/ and hard-linked into the asset folder, which
+ *      then holds exactly the archive's files plus the downloads and outputs.
  *   4. Run the convert step, if any. Blender is found from the BLENDER
- *      environment variable, then PATH, then the default install folders.
+ *      environment variable, then PATH, then the default install folders, and
+ *      must be the exact version in sources.json (like 4.5.0).
  *      The script runs as `blender --background --factory-startup --python
  *      <script> -- <args>` (factory settings: the user's add-ons can hang Blender)
  *      with the asset folder as the working directory, and `{dir}`, `{id}` and
  *      `{repo}` in args replaced by the absolute asset folder, the asset id and
  *      the repository root.
- *   5. Check every output's sha256.
+ *      Convert scripts must never write to their input files: those are hard
+ *      links into the shared cache, so an in-place edit would change the cache
+ *      and the other asset that shares it. The tool checks this: it notes the
+ *      size and modification time of every input before the conversion and
+ *      fails if any changed.
+ *   5. Check every output's sha256 (or, for .glb files Blender does not write
+ *      the same way twice, their structure: see `AssetOutput.reproducible`).
  *
  * An asset with `"skip": true` and a `skipReason` is reported and left alone.
  *
  * sources.json is checked strictly before anything is downloaded: every
- * non-skipped asset needs `redistributable`, a license on the allow list (CC0
- * or CC-BY), and sha256 plus bytes for every download and every output. To add
- * an asset, get the numbers with `node tools/assets/fetch.ts --hash <file>`.
+ * non-skipped asset needs `redistributable`, sha256 plus bytes for every
+ * download and every output, and a license on the allow list (CC0 or plain
+ * CC-BY). Any other license needs a `licenseApproval` that names Dennis's
+ * entry in docs/DECISIONS.md, and that entry must exist. To add an asset, get
+ * the numbers with `node tools/assets/fetch.ts --hash <file>`.
  * Downloads give up after 60 s without an answer or without new data.
  * Everything here is one file so it runs under plain Node type
  * stripping with no imports from the repo.
@@ -40,7 +52,7 @@
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createReadStream, createWriteStream } from 'node:fs';
-import { copyFile, link, mkdir, open, readdir, readFile, rename, rm, stat } from 'node:fs/promises';
+import { copyFile, link, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { delimiter, dirname, join, resolve } from 'node:path';
 import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
@@ -50,43 +62,81 @@ import { fileURLToPath } from 'node:url';
 // Types
 // ---------------------------------------------------------------------------
 
+/** `validateSources` guarantees `bytes` and `sha256` before anything is downloaded. */
 export interface AssetDownload {
     url: string;
     /** Path inside the asset folder; may include subfolders, like "textures/bark.jpg". */
     file: string;
-    bytes?: number;
-    sha256?: string;
+    bytes: number;
+    sha256: string;
 }
 
 export interface AssetConvert {
     tool: 'blender';
-    /** Repo-relative path to a Python script. */
+    /** Repo-relative path to a Python script. It must write only new files, never its inputs (see the header). */
     script: string;
     args: string[];
-    /** Major.minor of the Blender that makes the recorded outputs, like "4.5". Other versions can crash or give different bytes. */
-    blenderVersion?: string;
+    /**
+     * The full version of the Blender that made the recorded outputs, like
+     * "4.5.0". Only that exact version is used: other versions, patch releases
+     * included, can crash or write different bytes, and then the recorded
+     * hashes would have to be made again.
+     */
+    blenderVersion: string;
 }
 
+/** `validateSources` guarantees `sha256` and `bytes`. */
 export interface AssetOutput {
     /** Relative to assets/downloads/<id>/. */
     path: string;
-    sha256?: string;
-    bytes?: number;
+    sha256: string;
+    bytes: number;
     /**
      * Set to false when the converter is known not to write the same bits every
-     * run (Blender's glTF exporter changes a couple of bytes in some vertex
-     * buffers between runs on Bistro and the tree). The file must then be a
-     * .glb, and instead of the whole-file sha256 it is checked structurally:
-     * the exact size, the sha256 of its JSON chunk (the scene description,
-     * which is identical between runs) and the exact length of its BIN chunk.
-     * The whole-file sha256 is only logged. Leave this out for everything else:
-     * the sha256 is how we know a conversion is the same.
+     * run (Blender's glTF exporter writes some vertex data a little differently
+     * between runs). The file must then be a .glb, and instead of the
+     * whole-file sha256 it is checked piece by piece:
+     * - the exact size, and the exact length of its BIN chunk;
+     * - the sha256 of its JSON chunk (the scene description, identical between runs);
+     * - the sha256 of every bufferView (`bufferViewHashes`), except views used
+     *   only by the vertex attributes listed in `varyingAttributes`. Index
+     *   buffers and embedded images are always pinned exactly;
+     * - every byte of the BIN chunk outside all bufferViews (alignment
+     *   padding) must be zero.
+     * The whole-file sha256 is then only logged. Leave this out for everything
+     * else: the sha256 is how we know a conversion is the same.
      */
     reproducible?: boolean;
     /** sha256 of the .glb's JSON chunk, bytes exactly as stored. Required with `reproducible: false`. */
     jsonSha256?: string;
     /** Length in bytes of the .glb's BIN chunk. Required with `reproducible: false`. */
     binBytes?: number;
+    /**
+     * Repo-relative path of a JSON file (`GlbViewRecord`) with the sha256 of
+     * each bufferView. Kept out of sources.json because Bistro has about ten
+     * thousand bufferViews. Made by `--record-glb-views`. Required with `reproducible: false`.
+     */
+    bufferViewHashes?: string;
+    /**
+     * glTF attribute names (like "NORMAL") whose data the converter is proven
+     * to write differently between runs; bufferViews used only by these are
+     * not pinned. Required with `reproducible: false`; may be empty.
+     */
+    varyingAttributes?: string[];
+}
+
+/**
+ * Dennis's go-ahead for a license that is not on the allow list. The tool
+ * checks that docs/DECISIONS.md has a `## <date>` section with an entry whose
+ * bold title is exactly `title`.
+ */
+export interface LicenseApproval {
+    /** Must be "docs/DECISIONS.md". */
+    record: string;
+    /** The date heading of the entry, like "2026-11-04". */
+    date: string;
+    /** The entry's bold title, exactly as written there. */
+    title: string;
 }
 
 export interface AssetEntry {
@@ -94,8 +144,11 @@ export interface AssetEntry {
     title: string;
     author: string;
     sourceUrl: string;
+    /** SPDX id for plain licenses. A license with extra terms gets its own id (like "CC-BY-4.0+intel-preface") so it never passes as the plain one. */
     license: string;
     licenseUrl?: string;
+    /** Required when `license` is not on the allow list. */
+    licenseApproval?: LicenseApproval;
     attribution: string;
     redistributable: boolean;
     /** One file, or several (a glTF with its .bin and textures). `extract` needs exactly one. */
@@ -118,6 +171,8 @@ export interface CliOptions {
     sourcesPath: string | null;
     /** A file to print sha256 and size for (to fill in sources.json), instead of fetching. */
     hash: string | null;
+    /** Asset ids whose non-reproducible .glb outputs get their bufferView hashes (re)written, instead of fetching. */
+    recordGlbViews: string[];
     /** Check every asset's existing outputs against sources.json; download and convert nothing. */
     verifyOnly: boolean;
     help: boolean;
@@ -130,13 +185,57 @@ export interface CliOptions {
 const KEBAB_CASE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 const SHA256_HEX = /^[0-9a-f]{64}$/i;
 
+const DATE = /^\d{4}-\d{2}-\d{2}$/;
+/** Where license approvals must point. */
+export const DECISIONS_FILE = 'docs/DECISIONS.md';
+/** glTF attribute names: POSITION, NORMAL, TEXCOORD_0, _CUSTOM. */
+const GLTF_ATTRIBUTE = /^_?[A-Z][A-Z0-9_]*$/;
+
 /**
- * Licenses we are willing to download and show: CC0 and plain CC-BY (any
- * version). Share-alike, non-commercial and custom licenses are not on the
- * list; adding one is a decision for Dennis (see docs/DECISIONS.md).
+ * Licenses we are willing to download and show without asking: CC0 and plain
+ * CC-BY (any version). Share-alike, non-commercial, custom licenses and
+ * CC-BY with extra terms are not on the list; each needs Dennis's decision in
+ * docs/DECISIONS.md and a `licenseApproval` pointing at it.
  */
 export function isAllowedLicense(license: string): boolean {
     return license === 'CC0-1.0' || /^CC-BY-\d\.\d$/.test(license);
+}
+
+/** Problems with a `licenseApproval` value's shape (not whether DECISIONS.md has it: see `checkLicenseApprovals`). */
+function licenseApprovalProblems(value: unknown): string[] {
+    if (!isRecord(value)) return ['must be an object with record, date and title'];
+    const problems: string[] = [];
+    if (value.record !== DECISIONS_FILE) problems.push(`record must be "${DECISIONS_FILE}"`);
+    if (!(typeof value.date === 'string' && DATE.test(value.date))) problems.push('date must look like "2026-11-04"');
+    if (!isNonEmptyString(value.title)) problems.push('title must be the entry\'s bold title, exactly as written');
+    return problems;
+}
+
+/**
+ * Checks that every approved non-allow-list license points at a real entry:
+ * a `## <date>` section of DECISIONS.md holding a `- **<title>**` line.
+ * Returns one line per approval that does not.
+ */
+export function checkLicenseApprovals(assets: readonly AssetEntry[], decisionsMarkdown: string): string[] {
+    // Split the file into its date sections: "## 2026-11-04" up to the next "## ".
+    const sections = new Map<string, string>();
+    for (const section of decisionsMarkdown.split(/^## /m).slice(1)) {
+        const newline = section.indexOf('\n');
+        const heading = (newline === -1 ? section : section.slice(0, newline)).trim();
+        sections.set(heading, (sections.get(heading) ?? '') + section);
+    }
+    const problems: string[] = [];
+    for (const asset of assets) {
+        if (asset.skip || isAllowedLicense(asset.license) || !asset.licenseApproval) continue;
+        const { date, title } = asset.licenseApproval;
+        const section = sections.get(date);
+        if (section === undefined) {
+            problems.push(`${asset.id}: licenseApproval names the ${date} section of ${DECISIONS_FILE}, which does not exist`);
+        } else if (!section.split('\n').some((line) => line.trim() === `- **${title}**`)) {
+            problems.push(`${asset.id}: the ${date} section of ${DECISIONS_FILE} has no entry titled "${title}"`);
+        }
+    }
+    return problems;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -186,7 +285,14 @@ export function validateSources(value: unknown): string[] {
         }
         if (typeof entry.redistributable !== 'boolean') errors.push(`${where}.redistributable: must be present and true or false`);
         if (isNonEmptyString(entry.license) && !isAllowedLicense(entry.license)) {
-            errors.push(`${where}.license: "${entry.license}" is not on the allow list (CC0-1.0, CC-BY-<version>). Ask Dennis before adding another license.`);
+            if (entry.licenseApproval === undefined) {
+                errors.push(
+                    `${where}.license: "${entry.license}" is not on the allow list (CC0-1.0, CC-BY-<version>), so it needs a licenseApproval ` +
+                        `that points at Dennis's entry in ${DECISIONS_FILE} (record, date, title). Ask Dennis before adding another license.`,
+                );
+            } else {
+                for (const problem of licenseApprovalProblems(entry.licenseApproval)) errors.push(`${where}.licenseApproval: ${problem}`);
+            }
         }
 
         const downloads = Array.isArray(entry.download) ? entry.download : [entry.download];
@@ -229,8 +335,8 @@ export function validateSources(value: unknown): string[] {
                 errors.push(`${where}.convert: must be null or { tool: "blender", script, args: [] }`);
             } else if (!isSafeRelativePath(convert.script) || !convert.args.every((arg: unknown) => typeof arg === 'string')) {
                 errors.push(`${where}.convert: script must be a repo-relative path and args must be strings`);
-            } else if (convert.blenderVersion !== undefined && !(typeof convert.blenderVersion === 'string' && /^\d+\.\d+$/.test(convert.blenderVersion))) {
-                errors.push(`${where}.convert.blenderVersion: must look like "4.5" (major.minor)`);
+            } else if (!(typeof convert.blenderVersion === 'string' && /^\d+\.\d+\.\d+$/.test(convert.blenderVersion))) {
+                errors.push(`${where}.convert.blenderVersion: required, the full version that made the recorded outputs, like "4.5.0"`);
             }
         }
 
@@ -261,6 +367,16 @@ export function validateSources(value: unknown): string[] {
                         if (!(typeof output.binBytes === 'number' && Number.isInteger(output.binBytes) && output.binBytes > 0)) {
                             errors.push(`${outputWhere}.binBytes: required with reproducible false, a positive whole number`);
                         }
+                        const viewFile = output.bufferViewHashes;
+                        if (!(isNonEmptyString(viewFile) && isSafeRelativePath(viewFile) && viewFile.endsWith('.json'))) {
+                            errors.push(`${outputWhere}.bufferViewHashes: required with reproducible false, a repo-relative .json path (made by --record-glb-views)`);
+                        }
+                        const varying = output.varyingAttributes;
+                        if (!(Array.isArray(varying) && varying.every((name: unknown) => typeof name === 'string' && GLTF_ATTRIBUTE.test(name)))) {
+                            errors.push(`${outputWhere}.varyingAttributes: required with reproducible false, a list of glTF attribute names like "NORMAL" (may be empty)`);
+                        }
+                    } else if (output.bufferViewHashes !== undefined || output.varyingAttributes !== undefined) {
+                        errors.push(`${outputWhere}: bufferViewHashes and varyingAttributes only go with reproducible false`);
                     }
                 }
             });
@@ -270,7 +386,7 @@ export function validateSources(value: unknown): string[] {
 }
 
 export function parseArgs(argv: readonly string[]): CliOptions {
-    const options: CliOptions = { only: [], force: false, sourcesPath: null, hash: null, verifyOnly: false, help: false };
+    const options: CliOptions = { only: [], force: false, sourcesPath: null, hash: null, recordGlbViews: [], verifyOnly: false, help: false };
     for (let i = 0; i < argv.length; i++) {
         const arg = argv[i];
         const takeValue = (): string => {
@@ -282,6 +398,7 @@ export function parseArgs(argv: readonly string[]): CliOptions {
         else if (arg === '--force') options.force = true;
         else if (arg === '--sources') options.sourcesPath = takeValue();
         else if (arg === '--hash') options.hash = takeValue();
+        else if (arg === '--record-glb-views') options.recordGlbViews.push(...takeValue().split(',').filter(Boolean));
         else if (arg === '--verify-only') options.verifyOnly = true;
         else if (arg === '--help' || arg === '-h') options.help = true;
         else throw new Error(`Unknown argument "${arg}". Use --help to see the options.`);
@@ -371,11 +488,14 @@ export function parseBlenderVersion(output: string): string | null {
     return output.match(/Blender\s+(\d+\.\d+(?:\.\d+)?)/)?.[1] ?? null;
 }
 
-/** True when `actual` ("4.5.0") is in the wanted major.minor ("4.5"). */
+/**
+ * True when `actual` is exactly the wanted full version ("4.5.0"). A patch
+ * release is not close enough: its exporter can write different bytes.
+ */
 export function versionMatches(actual: string, wanted: string): boolean {
-    const [wantedMajor, wantedMinor] = wanted.split('.');
-    const [major, minor] = actual.split('.');
-    return major === wantedMajor && minor === wantedMinor;
+    const parts = (version: string) => version.split('.').map(Number);
+    const [have, want] = [parts(actual), parts(wanted)];
+    return have.length === 3 && want.length === 3 && have.every((part, index) => part === want[index]);
 }
 
 /** Runs `blender --version` and returns the version, or null if it will not run. */
@@ -434,9 +554,10 @@ export interface BlenderChoice {
 }
 
 /**
- * Finds a Blender of the wanted major.minor (any version when `wanted` is
- * undefined). Each candidate is asked for its version rather than trusted by
- * its name or by the BLENDER variable. Throws a plain message listing what was found.
+ * Finds a Blender of exactly the wanted version, like "4.5.0" (any version
+ * when `wanted` is undefined). Each candidate is asked for its version rather
+ * than trusted by its name or by the BLENDER variable. Throws a plain message
+ * listing what was found, and what to do to move to another version.
  */
 export async function findBlender(
     wanted: string | undefined,
@@ -456,9 +577,16 @@ export async function findBlender(
     }
     const need = wanted ? `Blender ${wanted}` : 'Blender';
     const found = seen.length > 0 ? `Found, but not usable: ${seen.join('; ')}.` : 'No Blender was found at all.';
+    const why = wanted
+        ? ` The hashes in tools/assets/sources.json were recorded with exactly this version; another one, even a patch release, can write different bytes.`
+        : '';
+    const moveOn = wanted
+        ? ` To move to another version instead, set convert.blenderVersion to it, run the conversion, and re-record the output hashes ` +
+          `(--hash for each output, and --record-glb-views <id> for .glb outputs marked reproducible false).`
+        : '';
     throw new Error(
-        `${need} is needed for this conversion. ${found} Looked in the BLENDER variable, PATH and the default install folders. ` +
-            `Install ${need}, or set BLENDER to its full path.`,
+        `${need} is needed for this conversion.${why} ${found} Looked in the BLENDER variable, PATH and the default install folders. ` +
+            `Install ${need}, or set BLENDER to its full path.${moveOn}`,
     );
 }
 
@@ -468,103 +596,340 @@ export async function findBlender(
 
 type Log = (message: string) => void;
 
-/** The two facts about a .glb that stay the same when a converter's float output wobbles. */
+/** A .glb split into the pieces `checkOutputs` pins one by one. */
 export interface GlbStructure {
+    /** sha256 of the whole file. */
+    fileSha256: string;
     /** sha256 of the JSON chunk's bytes, exactly as stored (including its padding). */
     jsonSha256: string;
     /** Length of the BIN chunk's data, as the chunk header says. */
     binBytes: number;
+    /** sha256 of each bufferView's bytes, in index order. */
+    bufferViewSha256: string[];
+    /**
+     * What each bufferView is used for, from the JSON chunk: "indices",
+     * "image", a vertex attribute name such as "NORMAL", or "other" (morph
+     * targets, sparse data, animation, skins). Empty when nothing uses it.
+     */
+    bufferViewUses: string[][];
+    /** How many bytes of the BIN chunk lie outside every bufferView and are not zero. */
+    nonZeroPaddingBytes: number;
 }
 
-/** Reads a .glb's header and chunk headers and hashes only the JSON chunk, so a 270 MB file costs a few kilobytes of I/O. */
-export async function readGlbStructure(path: string): Promise<GlbStructure> {
-    const file = await open(path, 'r');
-    try {
-        const size = (await file.stat()).size;
-        const header = Buffer.alloc(20);
-        if (size < header.length || (await file.read(header, 0, header.length, 0)).bytesRead < header.length) {
-            throw new Error('too short to be a .glb file');
+/** The glTF JSON fields the check reads. */
+interface GltfJsonForViews {
+    buffers?: Array<{ uri?: string }>;
+    bufferViews?: Array<{ buffer: number; byteOffset?: number; byteLength: number }>;
+    accessors?: Array<{ bufferView?: number; sparse?: { indices: { bufferView: number }; values: { bufferView: number } } }>;
+    meshes?: Array<{ primitives: Array<{ attributes: Record<string, number>; indices?: number; targets?: Array<Record<string, number>> }> }>;
+    images?: Array<{ bufferView?: number }>;
+    animations?: Array<{ samplers: Array<{ input: number; output: number }> }>;
+    skins?: Array<{ inverseBindMatrices?: number }>;
+}
+
+const GLB_MAGIC = 0x46546c67; // "glTF"
+const GLB_CHUNK_JSON = 0x4e4f534a; // "JSON"
+const GLB_CHUNK_BIN = 0x004e4942; // "BIN\0"
+const GLB_HEADER_BYTES = 12;
+const GLB_CHUNK_HEADER_BYTES = 8;
+
+function sha256Of(bytes: Uint8Array): string {
+    return createHash('sha256').update(bytes).digest('hex');
+}
+
+/** Lists, for every bufferView, what the glTF uses it for. */
+function bufferViewUses(gltf: GltfJsonForViews, viewCount: number): string[][] {
+    const uses: Array<Set<string>> = Array.from({ length: viewCount }, () => new Set<string>());
+    const accessors = gltf.accessors ?? [];
+    const useAccessor = (accessorIndex: number | undefined, use: string): void => {
+        if (accessorIndex === undefined) return;
+        const accessor = accessors[accessorIndex];
+        if (accessor?.bufferView !== undefined) uses[accessor.bufferView]?.add(use);
+    };
+    for (const mesh of gltf.meshes ?? []) {
+        for (const primitive of mesh.primitives) {
+            for (const [name, accessorIndex] of Object.entries(primitive.attributes)) useAccessor(accessorIndex, name);
+            useAccessor(primitive.indices, 'indices');
+            for (const target of primitive.targets ?? []) {
+                for (const accessorIndex of Object.values(target)) useAccessor(accessorIndex, 'other');
+            }
         }
-        if (header.readUInt32LE(0) !== 0x46546c67) throw new Error('not a .glb file (bad magic)');
-        if (header.readUInt32LE(8) !== size) throw new Error(`the .glb header says ${header.readUInt32LE(8)} bytes but the file has ${size}`);
-        const jsonLength = header.readUInt32LE(12);
-        if (header.readUInt32LE(16) !== 0x4e4f534a) throw new Error('the first chunk is not JSON');
-        const json = Buffer.alloc(jsonLength);
-        if ((await file.read(json, 0, jsonLength, 20)).bytesRead < jsonLength) throw new Error('the JSON chunk is cut off');
-        const binHeader = Buffer.alloc(8);
-        if ((await file.read(binHeader, 0, 8, 20 + jsonLength)).bytesRead < 8) throw new Error('there is no BIN chunk');
-        if (binHeader.readUInt32LE(4) !== 0x004e4942) throw new Error('the second chunk is not BIN');
-        return { jsonSha256: createHash('sha256').update(json).digest('hex'), binBytes: binHeader.readUInt32LE(0) };
-    } finally {
-        await file.close();
     }
+    // Sparse data overrides an accessor's values; its views are never one of the plain vertex attributes.
+    for (const accessor of accessors) {
+        if (accessor.sparse) {
+            uses[accessor.sparse.indices.bufferView]?.add('other');
+            uses[accessor.sparse.values.bufferView]?.add('other');
+        }
+    }
+    for (const image of gltf.images ?? []) {
+        if (image.bufferView !== undefined) uses[image.bufferView]?.add('image');
+    }
+    for (const animation of gltf.animations ?? []) {
+        for (const sampler of animation.samplers) {
+            useAccessor(sampler.input, 'other');
+            useAccessor(sampler.output, 'other');
+        }
+    }
+    for (const skin of gltf.skins ?? []) useAccessor(skin.inverseBindMatrices, 'other');
+    return uses.map((set) => [...set].sort());
 }
 
-/** Problems with a not-bit-reproducible .glb output, or an empty list when its structure matches sources.json. */
-export async function checkGlbStructure(path: string, output: AssetOutput): Promise<string[]> {
-    let actual: GlbStructure;
+/**
+ * Reads a .glb and hashes it piece by piece: the whole file, the JSON chunk and
+ * every bufferView of the BIN chunk. Reads the file into memory once (Bistro
+ * exterior is 267 MB). Throws a plain message for a file that is not a
+ * well-formed single-buffer .glb.
+ */
+export async function readGlbStructure(path: string): Promise<GlbStructure> {
+    const file = await readFile(path);
+    if (file.length < GLB_HEADER_BYTES + GLB_CHUNK_HEADER_BYTES) throw new Error('too short to be a .glb file');
+    if (file.readUInt32LE(0) !== GLB_MAGIC) throw new Error('not a .glb file (bad magic)');
+    if (file.readUInt32LE(8) !== file.length) throw new Error(`the .glb header says ${file.readUInt32LE(8)} bytes but the file has ${file.length}`);
+
+    const jsonLength = file.readUInt32LE(GLB_HEADER_BYTES);
+    if (file.readUInt32LE(GLB_HEADER_BYTES + 4) !== GLB_CHUNK_JSON) throw new Error('the first chunk is not JSON');
+    const jsonStart = GLB_HEADER_BYTES + GLB_CHUNK_HEADER_BYTES;
+    if (jsonStart + jsonLength > file.length) throw new Error('the JSON chunk is cut off');
+    const json = file.subarray(jsonStart, jsonStart + jsonLength);
+
+    const binHeaderStart = jsonStart + jsonLength;
+    if (binHeaderStart + GLB_CHUNK_HEADER_BYTES > file.length) throw new Error('there is no BIN chunk');
+    if (file.readUInt32LE(binHeaderStart + 4) !== GLB_CHUNK_BIN) throw new Error('the second chunk is not BIN');
+    const binBytes = file.readUInt32LE(binHeaderStart);
+    const binStart = binHeaderStart + GLB_CHUNK_HEADER_BYTES;
+    // Nothing may follow the BIN chunk: bytes the check does not look at could change unseen.
+    if (binStart + binBytes !== file.length) {
+        throw new Error(`the BIN chunk ends at byte ${binStart + binBytes}, but the file has ${file.length}`);
+    }
+    const bin = file.subarray(binStart, binStart + binBytes);
+
+    let gltf: GltfJsonForViews;
     try {
-        actual = await readGlbStructure(path);
+        gltf = JSON.parse(json.toString('utf8')) as GltfJsonForViews;
     } catch (error) {
-        return [`cannot read the .glb structure: ${error instanceof Error ? error.message : String(error)}`];
+        throw new Error(`the JSON chunk is not valid JSON: ${error instanceof Error ? error.message : String(error)}`);
     }
+    // In a .glb, buffer 0 without a uri is the BIN chunk. Data in any other buffer would live outside this file.
+    if ((gltf.buffers ?? []).some((buffer, index) => index > 0 || buffer.uri !== undefined)) {
+        throw new Error('the .glb has more than one buffer or an external buffer, so its data cannot be checked here');
+    }
+    const views = gltf.bufferViews ?? [];
+    const ranges = views.map((view, index) => {
+        const start = view.byteOffset ?? 0;
+        const end = start + view.byteLength;
+        if (view.buffer !== 0 || !Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end > binBytes) {
+            throw new Error(`bufferView ${index} is not inside the BIN chunk`);
+        }
+        return { start, end };
+    });
+
+    // Bytes no bufferView covers are alignment padding. Walk the gaps between the ranges in order of offset.
+    let nonZeroPaddingBytes = 0;
+    const countNonZero = (from: number, to: number): void => {
+        for (let byte = from; byte < to; byte++) {
+            if (bin[byte] !== 0) nonZeroPaddingBytes++;
+        }
+    };
+    let coveredUpTo = 0;
+    for (const range of [...ranges].sort((a, b) => a.start - b.start)) {
+        if (range.start > coveredUpTo) countNonZero(coveredUpTo, range.start);
+        coveredUpTo = Math.max(coveredUpTo, range.end);
+    }
+    countNonZero(coveredUpTo, binBytes);
+
+    return {
+        fileSha256: sha256Of(file),
+        jsonSha256: sha256Of(json),
+        binBytes,
+        bufferViewSha256: ranges.map((range) => sha256Of(bin.subarray(range.start, range.end))),
+        bufferViewUses: bufferViewUses(gltf, views.length),
+        nonZeroPaddingBytes,
+    };
+}
+
+/**
+ * The recorded bufferView hashes of one non-reproducible .glb output, kept in
+ * its own file (`AssetOutput.bufferViewHashes`) because Bistro has about ten
+ * thousand bufferViews.
+ */
+export interface GlbViewRecord {
+    asset: string;
+    output: string;
+    /** The JSON chunk these views belong to; must equal the output's `jsonSha256`. */
+    jsonSha256: string;
+    /** The `varyingAttributes` in force when this was recorded. */
+    varyingAttributes: string[];
+    /** sha256 of each bufferView in index order; null for a view used only by varying attributes. */
+    bufferViews: Array<string | null>;
+}
+
+/** True for a bufferView that is used, and used only, by vertex attributes the converter writes differently each run. */
+function isVaryingOnly(uses: readonly string[], varyingAttributes: readonly string[]): boolean {
+    return uses.length > 0 && uses.every((use) => varyingAttributes.includes(use));
+}
+
+/** Makes the record to store for a freshly converted output. */
+export function makeGlbViewRecord(assetId: string, output: AssetOutput, structure: GlbStructure): GlbViewRecord {
+    const varyingAttributes = output.varyingAttributes ?? [];
+    return {
+        asset: assetId,
+        output: output.path,
+        jsonSha256: structure.jsonSha256,
+        varyingAttributes: [...varyingAttributes],
+        bufferViews: structure.bufferViewSha256.map((hash, index) =>
+            isVaryingOnly(structure.bufferViewUses[index], varyingAttributes) ? null : hash,
+        ),
+    };
+}
+
+/** The record as JSON text with one bufferView hash per line, so a re-record shows up as a readable diff. */
+export function formatGlbViewRecord(record: GlbViewRecord): string {
+    return [
+        '{',
+        `  "asset": ${JSON.stringify(record.asset)},`,
+        `  "output": ${JSON.stringify(record.output)},`,
+        `  "jsonSha256": ${JSON.stringify(record.jsonSha256)},`,
+        `  "varyingAttributes": ${JSON.stringify(record.varyingAttributes)},`,
+        '  "bufferViews": [',
+        record.bufferViews.map((hash) => `    ${JSON.stringify(hash)}`).join(',\n'),
+        '  ]',
+        '}',
+        '',
+    ].join('\n');
+}
+
+/** How many differing bufferViews to name before summing up the rest. */
+const MAX_VIEWS_LISTED = 8;
+
+/** Problems with a not-bit-reproducible .glb output, or an empty list when every pinned piece matches. */
+export function checkGlbStructure(actual: GlbStructure, output: AssetOutput, record: GlbViewRecord): string[] {
     const problems: string[] = [];
-    if (output.jsonSha256 && !sameHash(actual.jsonSha256, output.jsonSha256)) {
-        problems.push(`the JSON chunk differs (expected sha256 ${output.jsonSha256}, got ${actual.jsonSha256}); the scene description changed, which is not float noise`);
+    if (!output.jsonSha256 || !sameHash(actual.jsonSha256, output.jsonSha256)) {
+        problems.push(
+            `the JSON chunk differs (expected sha256 ${output.jsonSha256}, got ${actual.jsonSha256}); the scene description changed, which is not float noise`,
+        );
     }
-    if (output.binBytes !== undefined && actual.binBytes !== output.binBytes) {
+    if (actual.binBytes !== output.binBytes) {
         problems.push(`the BIN chunk is ${actual.binBytes} bytes but sources.json says ${output.binBytes}`);
     }
+    // The bufferViews of a different scene description cannot be compared one by one.
+    if (problems.length > 0) return problems;
+
+    if (!sameHash(record.jsonSha256, actual.jsonSha256)) {
+        return [`the bufferView record ${output.bufferViewHashes} was made for another JSON chunk (${record.jsonSha256}); re-record it with --record-glb-views`];
+    }
+    if (record.bufferViews.length !== actual.bufferViewSha256.length) {
+        return [`the file has ${actual.bufferViewSha256.length} bufferViews but ${output.bufferViewHashes} lists ${record.bufferViews.length}`];
+    }
+
+    const varyingAttributes = output.varyingAttributes ?? [];
+    const differing: string[] = [];
+    record.bufferViews.forEach((expected, index) => {
+        const uses = actual.bufferViewUses[index];
+        const described = `bufferView ${index} (${uses.length > 0 ? uses.join(', ') : 'unused'})`;
+        if (expected === null) {
+            // A view may be left unpinned only for the attributes sources.json names; index buffers and images never are.
+            if (!isVaryingOnly(uses, varyingAttributes)) {
+                problems.push(`${described} has no recorded hash, but only views used just by ${varyingAttributes.join(', ') || '(none listed)'} may be left out`);
+            }
+        } else if (!sameHash(expected, actual.bufferViewSha256[index])) {
+            differing.push(described);
+        }
+    });
+    if (differing.length > 0) {
+        const more = differing.length > MAX_VIEWS_LISTED ? ` and ${differing.length - MAX_VIEWS_LISTED} more` : '';
+        problems.push(`${differing.length} pinned bufferView(s) differ: ${differing.slice(0, MAX_VIEWS_LISTED).join('; ')}${more}`);
+    }
+    if (actual.nonZeroPaddingBytes > 0) {
+        problems.push(`${actual.nonZeroPaddingBytes} byte(s) of the BIN chunk outside every bufferView are not zero`);
+    }
     return problems;
+}
+
+export async function readGlbViewRecord(path: string): Promise<GlbViewRecord> {
+    let parsed: unknown;
+    try {
+        parsed = JSON.parse(await readFile(path, 'utf8'));
+    } catch (error) {
+        throw new Error(`cannot read the bufferView record ${path}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    const isHashOrNull = (hash: unknown) => hash === null || (typeof hash === 'string' && SHA256_HEX.test(hash));
+    if (
+        !isRecord(parsed) ||
+        typeof parsed.jsonSha256 !== 'string' ||
+        !Array.isArray(parsed.bufferViews) ||
+        !parsed.bufferViews.every(isHashOrNull)
+    ) {
+        throw new Error(`${path} is not a bufferView record (it needs jsonSha256 and a bufferViews list of sha256 or null)`);
+    }
+    return parsed as unknown as GlbViewRecord;
 }
 
 /** What to add to a mismatch message for a file a conversion makes. */
 function conversionCause(convert: AssetConvert | null | undefined): string {
     if (!convert) return '';
-    const needs = convert.blenderVersion ? ` (this one needs ${convert.blenderVersion})` : '';
-    return `. This file is made by a conversion, so a different Blender version${needs} or conversion script is the likely cause`;
+    return (
+        `. This file is made by a conversion, so a different Blender version (this one needs ${convert.blenderVersion}) or a changed ` +
+        `conversion script is the likely cause. If the change is intended, re-record the hashes (--hash, and --record-glb-views for ` +
+        `.glb outputs marked reproducible false)`
+    );
 }
 
-/** Checks every output. Returns what is wrong, or an empty list when all outputs are present and verified. */
+/**
+ * Checks every output. Returns one line per problem, or an empty list when all
+ * outputs are present and verified. `repoRoot` is where `bufferViewHashes`
+ * paths start (tests pass their own folder).
+ */
 export async function checkOutputs(
     assetDirectory: string,
     outputs: readonly AssetOutput[],
     log: Log,
     convert?: AssetConvert | null,
-): Promise<{ problems: string[]; unverified: number }> {
+    options: { repoRoot?: string } = {},
+): Promise<string[]> {
     const problems: string[] = [];
-    let unverified = 0;
     for (const output of outputs) {
         const path = join(assetDirectory, output.path);
         if (!(await fileExists(path))) {
             problems.push(`missing: ${output.path}`);
             continue;
         }
-        if (output.bytes !== undefined) {
-            const size = (await stat(path)).size;
-            if (size !== output.bytes) {
-                problems.push(`size differs: ${output.path} (expected ${output.bytes} bytes, got ${size})${conversionCause(convert)}`);
-                continue;
-            }
+        const size = (await stat(path)).size;
+        if (size !== output.bytes) {
+            problems.push(`size differs: ${output.path} (expected ${output.bytes} bytes, got ${size})${conversionCause(convert)}`);
+            continue;
         }
-        const actual = await sha256OfFile(path);
-        if (!output.sha256) {
-            unverified++;
-            log(`  warning: ${output.path} has no sha256 in sources.json, so it is unverified. Computed: ${actual}`);
-        } else if (!sameHash(actual, output.sha256)) {
-            if (output.reproducible === false) {
-                const structural = await checkGlbStructure(path, output);
-                if (structural.length > 0) {
-                    problems.push(...structural.map((problem) => `${output.path}: ${problem}${conversionCause(convert)}`));
-                } else {
-                    log(`  note: ${output.path} is not bit-reproducible; its size, JSON chunk and BIN chunk length match, whole-file sha256 is ${actual} (information only)`);
-                }
-                continue;
+        if (output.reproducible !== false) {
+            const actual = await sha256OfFile(path);
+            if (!sameHash(actual, output.sha256)) {
+                problems.push(`sha256 differs: ${output.path} (expected ${output.sha256}, got ${actual})${conversionCause(convert)}`);
             }
-            problems.push(`sha256 differs: ${output.path} (expected ${output.sha256}, got ${actual})${conversionCause(convert)}`);
+            continue;
+        }
+
+        let structure: GlbStructure;
+        let record: GlbViewRecord;
+        try {
+            structure = await readGlbStructure(path);
+            record = await readGlbViewRecord(join(options.repoRoot ?? repoRoot, output.bufferViewHashes ?? ''));
+        } catch (error) {
+            problems.push(`${output.path}: ${error instanceof Error ? error.message : String(error)}`);
+            continue;
+        }
+        const structural = checkGlbStructure(structure, output, record);
+        if (structural.length > 0) {
+            problems.push(...structural.map((problem) => `${output.path}: ${problem}${conversionCause(convert)}`));
+        } else if (!sameHash(structure.fileSha256, output.sha256)) {
+            const pinned = record.bufferViews.filter((hash) => hash !== null).length;
+            const varying = (output.varyingAttributes ?? []).join(', ') || 'nothing';
+            log(
+                `  note: ${output.path} is not bit-reproducible; its size, JSON chunk and ${pinned} of ${record.bufferViews.length} bufferViews ` +
+                    `match exactly (the rest hold only ${varying}). Whole-file sha256 ${structure.fileSha256} (information only)`,
+            );
         }
     }
-    return { problems, unverified };
+    return problems;
 }
 
 function makeProgress(label: string, total: number | undefined): { update: (received: number) => void; finish: () => void } {
@@ -629,8 +994,7 @@ export async function downloadFile(
         if (!response.ok || !response.body) {
             throw new Error(`download failed: ${download.url} answered ${response.status} ${response.statusText}`);
         }
-        const headerLength = Number(response.headers.get('content-length'));
-        const total = download.bytes ?? (Number.isFinite(headerLength) && headerLength > 0 ? headerLength : undefined);
+        const total = download.bytes;
 
         const hash = createHash('sha256');
         const progress = makeProgress(download.file, total);
@@ -651,11 +1015,11 @@ export async function downloadFile(
             progress.finish();
         }
 
-        if (download.bytes !== undefined && received !== download.bytes) {
+        if (received !== download.bytes) {
             throw new Error(`download is ${received} bytes but sources.json says ${download.bytes}`);
         }
         const actual = hash.digest('hex');
-        if (download.sha256 && !sameHash(actual, download.sha256)) {
+        if (!sameHash(actual, download.sha256)) {
             throw new Error(`download sha256 is ${actual} but sources.json says ${download.sha256}`);
         }
         await rename(partial, destination);
@@ -700,7 +1064,7 @@ async function extractZip(archive: string, destination: string): Promise<void> {
 export interface ConversionLimits {
     /** Give up and kill the process after this long. */
     timeoutMs: number;
-    /** Once every output is written and verified, how long the process gets to exit by itself. */
+    /** Once every output is written, how long the process gets to exit by itself. */
     graceMs: number;
     /** How often to look at the outputs. */
     pollMs: number;
@@ -709,15 +1073,76 @@ export const DEFAULT_CONVERSION_LIMITS: ConversionLimits = { timeoutMs: 60 * 60_
 
 export type ConversionEnd = 'exited' | 'stopped-after-outputs' | 'timed-out';
 
-/** Stops a process and everything it started. */
+export interface ConversionResult {
+    end: ConversionEnd;
+    /** The exit code, or null when the process ended by a signal. */
+    code: number | null;
+    signal: string | null;
+}
+
+/**
+ * The exit code the guard's kill gives the process on Windows. Programs that
+ * end by themselves use small codes or NTSTATUS values (like 0xC0000005), never
+ * this one, so it shows the guard ended the process. Elsewhere the guard's
+ * kill shows as the signal SIGKILL instead.
+ */
+export const GUARD_KILL_EXIT_CODE = 0x0dd61dea;
+
+/** True when an exit status carries the guard's kill (see GUARD_KILL_EXIT_CODE), not an ending of the process's own. */
+export function endedByGuardKill(code: number | null, signal: string | null): boolean {
+    return code === GUARD_KILL_EXIT_CODE || (code === null && signal === 'SIGKILL');
+}
+
+/**
+ * PowerShell that ends a process tree on Windows: the descendants first, then
+ * the process itself with exit code GUARD_KILL_EXIT_CODE (Win32_Process.Terminate
+ * sets the exit code to its Reason; taskkill always leaves 1, which is also
+ * what Blender returns for a Python error). A child must be younger than its
+ * parent, so a reused process id cannot pull in an unrelated process.
+ * Exits 0 when the process was ended by this script.
+ */
+const WINDOWS_KILL_TREE_SCRIPT = [
+    "$ErrorActionPreference = 'Stop'",
+    '$all = @(Get-CimInstance Win32_Process)',
+    '$root = $all | Where-Object { $_.ProcessId -eq [uint32]$env:DDGI_KILL_PID }',
+    'if ($null -eq $root) { exit 1 }',
+    'function Get-Descendants($parent) {',
+    '    foreach ($candidate in $all) {',
+    '        $isChild = $candidate.ParentProcessId -eq $parent.ProcessId -and $candidate.ProcessId -ne $parent.ProcessId',
+    '        if ($isChild -and $candidate.CreationDate -ge $parent.CreationDate) {',
+    '            Get-Descendants $candidate',
+    '            $candidate',
+    '        }',
+    '    }',
+    '}',
+    'foreach ($descendant in @(Get-Descendants $root)) {',
+    '    try { $null = Invoke-CimMethod -InputObject $descendant -MethodName Terminate -Arguments @{ Reason = [uint32]1 } } catch { }',
+    '}',
+    '$result = Invoke-CimMethod -InputObject $root -MethodName Terminate -Arguments @{ Reason = [uint32]$env:DDGI_KILL_CODE }',
+    'exit $result.ReturnValue',
+].join('\n');
+
+function runQuietly(command: string, args: string[], env?: NodeJS.ProcessEnv): Promise<number> {
+    return new Promise((resolvePromise) => {
+        const child = spawn(command, args, { stdio: 'ignore', env });
+        child.on('error', () => resolvePromise(-1));
+        child.on('close', (code) => resolvePromise(code ?? -1));
+    });
+}
+
+/**
+ * Stops a process and everything it started, marking the process's exit
+ * status so `endedByGuardKill` can recognise it. If the marked kill cannot run
+ * on Windows (no PowerShell), taskkill is the fallback: its exit code 1 is not
+ * the mark, so the conversion then counts as failed rather than passing on an
+ * exit status nobody can read.
+ */
 async function killProcessTree(child: { pid?: number; kill?: (signal?: NodeJS.Signals) => boolean }): Promise<void> {
     if (child.pid === undefined) return;
     if (process.platform === 'win32') {
-        await new Promise<void>((resolvePromise) => {
-            const killer = spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
-            killer.on('error', () => resolvePromise());
-            killer.on('close', () => resolvePromise());
-        });
+        const env = { ...process.env, DDGI_KILL_PID: String(child.pid), DDGI_KILL_CODE: String(GUARD_KILL_EXIT_CODE) };
+        const marked = await runQuietly('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', WINDOWS_KILL_TREE_SCRIPT], env);
+        if (marked !== 0) await runQuietly('taskkill', ['/PID', String(child.pid), '/T', '/F']);
     } else {
         try {
             process.kill(-child.pid, 'SIGKILL'); // the child leads its own process group
@@ -730,11 +1155,9 @@ async function killProcessTree(child: { pid?: number; kill?: (signal?: NodeJS.Si
 /** What `runConversionProcess` needs from a child process. Real runs use `spawn`; tests pass a fake. */
 export interface ConversionChild {
     pid?: number;
-    exitCode: number | null;
-    signalCode: string | null;
     on(event: 'error', listener: (error: Error) => void): unknown;
     on(event: 'exit', listener: () => void): unknown;
-    on(event: 'close', listener: (code: number | null) => void): unknown;
+    on(event: 'close', listener: (code: number | null, signal: NodeJS.Signals | null) => void): unknown;
 }
 
 export interface ConversionProcessOptions {
@@ -754,26 +1177,26 @@ export interface ConversionProcessOptions {
  * Blender can finish its work, write the file, and then never exit (all of its
  * threads end up waiting at shutdown, using no CPU). So the process is not
  * trusted to exit: when every output has been written fresh (modified after the
- * run began) and matches its recorded size and sha256, it gets `graceMs` to
- * exit and is then killed. A process that neither exits nor finishes its
- * outputs is killed after `timeoutMs`. Its stdin is closed so it can never wait
- * for input.
+ * run began) at its recorded size, it gets `graceMs` to exit and is then
+ * killed. A process that neither exits nor finishes its outputs is killed after
+ * `timeoutMs`. Its stdin is closed so it can never wait for input. The outputs'
+ * contents are not checked here; the caller's final check does that.
  *
- * What is reported:
- * - `exited`, with the real exit code, whenever the process ended by itself.
- *   A process that has already exited is never counted as stopped by the guard,
- *   so an error code right after writing the outputs is never hidden.
- * - `stopped-after-outputs` or `timed-out` only when the guard really killed it.
+ * What is guaranteed about the result:
+ * - `stopped-after-outputs` or `timed-out` is reported only when the guard
+ *   decided to stop the process and its exit status carries the guard's kill
+ *   (GUARD_KILL_EXIT_CODE on Windows, SIGKILL elsewhere; see `endedByGuardKill`).
+ * - Every other ending is `exited` with the real exit code and signal. That
+ *   includes a process that exits by itself in the moment between the guard
+ *   deciding to stop it and the kill landing: an exit status is set once, by
+ *   whichever comes first, so its own code survives and is reported. The
+ *   caller fails on any code other than 0 (`conversionFailure`).
+ * - If the guard's kill does not end the process within 5 s, the promise
+ *   rejects instead of guessing.
  *
- * Outputs that are present but wrong (right size, wrong hash) also count as
- * finished: the caller reports the mismatch, instead of waiting for a hang. A
- * conversion with no listed outputs is never stopped early, only by the timeout.
+ * A conversion with no listed outputs is never stopped early, only by the timeout.
  */
-export async function runConversionProcess(
-    command: string,
-    args: string[],
-    options: ConversionProcessOptions,
-): Promise<{ end: ConversionEnd; code: number | null }> {
+export async function runConversionProcess(command: string, args: string[], options: ConversionProcessOptions): Promise<ConversionResult> {
     const limits = options.limits ?? DEFAULT_CONVERSION_LIMITS;
     const startedAt = Date.now() - 2_000; // file times can be a little coarse
     const child: ConversionChild =
@@ -787,43 +1210,45 @@ export async function runConversionProcess(
 
     return new Promise((resolvePromise, reject) => {
         let finished = false;
-        let exited = false; // the process ended by itself or was killed: its 'exit' event has fired
-        let guardEnd: ConversionEnd | null = null; // set only when the guard is the one killing it
-        const settledOutputs = new Set<string>();
+        let exited = false; // the process's 'exit' event has fired
+        let guardEnd: ConversionEnd | null = null; // set once the guard has decided to stop the process
+        const writtenOutputs = new Set<string>();
         let polling = false;
         let graceTimer: ReturnType<typeof setTimeout> | undefined;
 
-        const done = (end: ConversionEnd, code: number | null): void => {
-            if (finished) return;
+        const settle = (): boolean => {
+            if (finished) return false;
             finished = true;
             clearInterval(poller);
             clearTimeout(deadline);
             clearTimeout(graceTimer);
-            resolvePromise({ end, code });
+            return true;
         };
 
         const stop = async (end: ConversionEnd): Promise<void> => {
-            // A process that has already exited is not ours to stop; its own exit code is the answer.
+            // A process that has already exited is not ours to stop; its own exit status is the answer.
             if (finished || exited || guardEnd) return;
             guardEnd = end;
             await killTree(child);
-            // The 'close' event normally follows within a moment; do not wait forever for it.
-            setTimeout(() => done(end, null), 5_000).unref();
+            setTimeout(() => {
+                if (settle()) {
+                    reject(new Error(`the conversion process (pid ${child.pid}) was killed but did not end within 5 s; look for a leftover Blender process`));
+                }
+            }, 5_000).unref();
         };
 
         child.on('error', (error) => {
-            if (finished) return;
-            finished = true;
-            clearInterval(poller);
-            clearTimeout(deadline);
-            clearTimeout(graceTimer);
-            reject(error);
+            if (settle()) reject(error);
         });
         child.on('exit', () => {
             exited = true;
             clearTimeout(graceTimer);
         });
-        child.on('close', (code) => done(guardEnd ?? 'exited', code));
+        child.on('close', (code, signal) => {
+            // The guard gets the credit only when the exit status carries its kill; anything else is the process's own ending.
+            const end = guardEnd !== null && endedByGuardKill(code, signal) ? guardEnd : 'exited';
+            if (settle()) resolvePromise({ end, code, signal });
+        });
 
         const deadline = setTimeout(() => void stop('timed-out'), limits.timeoutMs);
 
@@ -832,19 +1257,17 @@ export async function runConversionProcess(
             polling = true;
             void (async () => {
                 for (const output of options.outputs) {
-                    if (settledOutputs.has(output.path)) continue;
+                    if (writtenOutputs.has(output.path)) continue;
                     try {
-                        const path = join(options.assetDirectory, output.path);
-                        const info = await stat(path);
+                        const info = await stat(join(options.assetDirectory, output.path));
                         if (info.mtimeMs < startedAt) continue; // left over from an earlier run
-                        if (output.bytes !== undefined && info.size !== output.bytes) continue; // still being written
-                        if (output.sha256) await sha256OfFile(path); // a wrong hash is reported by the final check
-                        settledOutputs.add(output.path);
+                        if (info.size !== output.bytes) continue; // still being written
+                        writtenOutputs.add(output.path);
                     } catch {
-                        // Not there yet, or being written.
+                        // Not there yet.
                     }
                 }
-                const allWritten = options.outputs.length > 0 && settledOutputs.size === options.outputs.length;
+                const allWritten = options.outputs.length > 0 && writtenOutputs.size === options.outputs.length;
                 if (allWritten && graceTimer === undefined && !exited) {
                     graceTimer = setTimeout(() => void stop('stopped-after-outputs'), limits.graceMs);
                 }
@@ -857,7 +1280,40 @@ export async function runConversionProcess(
     });
 }
 
-async function runConvert(asset: AssetEntry, assetDirectory: string, limits?: ConversionLimits): Promise<void> {
+/** Null when a conversion run counts as a success, otherwise the message to fail with. */
+export function conversionFailure(result: ConversionResult, script: string, limits: ConversionLimits = DEFAULT_CONVERSION_LIMITS): string | null {
+    switch (result.end) {
+        case 'timed-out':
+            return `Blender was still running after ${limits.timeoutMs / 60_000} minutes without finishing the outputs, so it was stopped (${script})`;
+        case 'stopped-after-outputs':
+            return null;
+        case 'exited':
+            if (result.code === 0) return null;
+            return `Blender ${result.code !== null ? `exited with code ${result.code}` : `was ended by signal ${result.signal}`} while running ${script}`;
+    }
+}
+
+/** Size and modification time of each listed file, so a later look can tell whether anything wrote to it. */
+export async function fileFingerprints(directory: string, relativePaths: readonly string[]): Promise<Map<string, string>> {
+    const fingerprints = new Map<string, string>();
+    for (const relativePath of relativePaths) {
+        try {
+            const info = await stat(join(directory, relativePath));
+            fingerprints.set(relativePath, `${info.size} bytes, modified ${new Date(info.mtimeMs).toISOString()}`);
+        } catch {
+            fingerprints.set(relativePath, 'missing');
+        }
+    }
+    return fingerprints;
+}
+
+/**
+ * Runs the asset's convert step. `inputs` are the asset-folder paths that came
+ * from the downloads and the unpacked archive: hard links into the shared
+ * cache. The run fails if any of them changed, because the cache (and any other
+ * asset sharing it) would have changed with it.
+ */
+async function runConvert(asset: AssetEntry, assetDirectory: string, inputs: readonly string[], limits?: ConversionLimits): Promise<void> {
     const convert = asset.convert;
     if (!convert) return;
     const script = resolve(repoRoot, convert.script);
@@ -865,19 +1321,26 @@ async function runConvert(asset: AssetEntry, assetDirectory: string, limits?: Co
     const blender = await findBlender(convert.blenderVersion);
     const args = substitutePlaceholders(convert.args, { dir: assetDirectory, id: asset.id, repo: repoRoot });
     console.log(`  converting with Blender ${blender.version} at ${blender.path}`);
+
+    const before = await fileFingerprints(assetDirectory, inputs);
     const result = await runConversionProcess(blender.path, ['--background', '--factory-startup', '--python-exit-code', '1', '--python', script, '--', ...args], {
         cwd: assetDirectory,
         assetDirectory,
         outputs: asset.outputs,
         limits,
     });
-    if (result.end === 'timed-out') {
-        throw new Error(`Blender was still running after ${(limits ?? DEFAULT_CONVERSION_LIMITS).timeoutMs / 60_000} minutes without finishing the outputs, so it was stopped (${convert.script})`);
-    }
-    if (result.end === 'stopped-after-outputs') {
-        console.log('  all outputs are written; Blender did not exit by itself, so it was stopped');
-    } else if (result.code !== 0) {
-        throw new Error(`Blender exited with code ${result.code} while running ${convert.script}`);
+    const failure = conversionFailure(result, convert.script, limits);
+    if (failure) throw new Error(failure);
+    if (result.end === 'stopped-after-outputs') console.log('  all outputs are written; Blender did not exit by itself, so it was stopped');
+
+    const after = await fileFingerprints(assetDirectory, inputs);
+    const changed = inputs.filter((path) => before.get(path) !== after.get(path));
+    if (changed.length > 0) {
+        throw new Error(
+            `${convert.script} changed its input files (${changed.slice(0, 5).join(', ')}${changed.length > 5 ? ` and ${changed.length - 5} more` : ''}). ` +
+                `Inputs are hard links into assets/downloads/.cache, so the cache changed too. Make the script write new files only, ` +
+                `then run again with --force to restore the inputs.`,
+        );
     }
 }
 
@@ -893,9 +1356,10 @@ async function linkOrCopy(source: string, destination: string): Promise<void> {
 }
 
 /**
- * Puts one downloaded file at `destination`. Files whose sha256 is known go
- * through a content cache (`<downloads>/.cache/<sha256>`), so two assets that
- * share a download fetch it once; the asset folder gets a hard link or a copy.
+ * Puts one downloaded file at `destination`. Downloads go through a content
+ * cache (`<downloads>/.cache/<sha256>`), so two assets that share a download
+ * fetch it once; the asset folder gets a hard link or a copy. A cached file is
+ * hashed again before it is used.
  */
 export async function obtainDownload(
     download: AssetDownload,
@@ -904,82 +1368,115 @@ export async function obtainDownload(
     force: boolean,
     log: Log,
 ): Promise<void> {
-    const expected = download.sha256?.toLowerCase();
-    const cachePath = expected ? join(cacheDirectory, expected) : null;
+    const expected = download.sha256.toLowerCase();
+    const cachePath = join(cacheDirectory, expected);
 
-    if (!force && (await fileExists(destination))) {
-        const actual = await sha256OfFile(destination);
-        if (!expected || actual === expected) {
-            log(`  ${download.file} is already downloaded`);
-            if (cachePath && !(await fileExists(cachePath))) {
-                await mkdir(cacheDirectory, { recursive: true });
-                await linkOrCopy(destination, cachePath);
-            }
-            return;
-        }
-    }
-
-    if (cachePath && expected) {
-        if (!force && (await fileExists(cachePath)) && (await sha256OfFile(cachePath)) === expected) {
-            log(`  ${download.file}: taking it from the download cache`);
-        } else {
+    if (!force && (await fileExists(destination)) && (await sha256OfFile(destination)) === expected) {
+        log(`  ${download.file} is already downloaded`);
+        if (!(await fileExists(cachePath))) {
             await mkdir(cacheDirectory, { recursive: true });
-            await downloadFile(download, cachePath);
-            log(`  verified sha256 of ${download.file}`);
+            await linkOrCopy(destination, cachePath);
         }
-        await linkOrCopy(cachePath, destination);
         return;
     }
 
-    await mkdir(dirname(destination), { recursive: true });
-    const actual = await downloadFile(download, destination);
-    log(`  warning: ${download.file} has no sha256 in sources.json, so it is unverified. Computed: ${actual}`);
+    if (!force && (await fileExists(cachePath)) && (await sha256OfFile(cachePath)) === expected) {
+        log(`  ${download.file}: taking it from the download cache`);
+    } else {
+        await mkdir(cacheDirectory, { recursive: true });
+        await downloadFile(download, cachePath);
+        log(`  verified sha256 of ${download.file}`);
+    }
+    await linkOrCopy(cachePath, destination);
 }
 
-/** Hard-links (or copies, across drives) every file under `source` into `destination`. */
-async function linkTree(source: string, destination: string): Promise<void> {
-    await mkdir(destination, { recursive: true });
-    for (const entry of await readdir(source, { withFileTypes: true })) {
-        const from = join(source, entry.name);
-        const to = join(destination, entry.name);
-        if (entry.isDirectory()) await linkTree(from, to);
-        else await linkOrCopy(from, to);
+/** One file of an unpacked archive, as recorded when the unpack finished. */
+interface UnpackedFile {
+    /** Relative to the unpack folder, with "/" separators. */
+    path: string;
+    bytes: number;
+    mtimeMs: number;
+}
+
+/** Every file under `root`, sorted by path. */
+async function listFiles(root: string, prefix = ''): Promise<UnpackedFile[]> {
+    const files: UnpackedFile[] = [];
+    for (const entry of await readdir(join(root, prefix), { withFileTypes: true })) {
+        const relativePath = prefix ? `${prefix}/${entry.name}` : entry.name;
+        if (entry.isDirectory()) {
+            files.push(...(await listFiles(root, relativePath)));
+        } else {
+            const info = await stat(join(root, relativePath));
+            files.push({ path: relativePath, bytes: info.size, mtimeMs: info.mtimeMs });
+        }
+    }
+    return files.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+}
+
+function sameFileList(a: readonly UnpackedFile[], b: readonly UnpackedFile[]): boolean {
+    return a.length === b.length && a.every((file, index) => file.path === b[index].path && file.bytes === b[index].bytes && file.mtimeMs === b[index].mtimeMs);
+}
+
+async function readUnpackRecord(path: string): Promise<UnpackedFile[] | null> {
+    try {
+        const parsed: unknown = JSON.parse(await readFile(path, 'utf8'));
+        return isRecord(parsed) && Array.isArray(parsed.files) ? (parsed.files as UnpackedFile[]) : null;
+    } catch {
+        return null;
     }
 }
 
-async function directoryExists(path: string): Promise<boolean> {
-    try {
-        return (await stat(path)).isDirectory();
-    } catch {
-        return false;
+/** Removes files under `directory` that are not in `wanted` (relative "/" paths), then any folders left empty. */
+async function removeFilesNotIn(directory: string, wanted: ReadonlySet<string>, log: Log, prefix = ''): Promise<void> {
+    for (const entry of await readdir(join(directory, prefix), { withFileTypes: true })) {
+        const relativePath = prefix ? `${prefix}/${entry.name}` : entry.name;
+        if (entry.isDirectory()) {
+            await removeFilesNotIn(directory, wanted, log, relativePath);
+            if ((await readdir(join(directory, relativePath))).length === 0) await rm(join(directory, relativePath), { recursive: true });
+        } else if (!wanted.has(relativePath)) {
+            log(`  removing ${relativePath}: it is not in the archive, a download or an output`);
+            await rm(join(directory, relativePath), { force: true });
+        }
     }
 }
 
 /**
- * Unpacks a zip into the asset folder. When the zip's sha256 is known, the
- * unpacked files are kept in `<cache>/extracted/<sha256>/` and linked into the
- * asset folder, so two assets that share one zip (the two Bistro halves) unpack
- * it once. A half-finished unpack is never reused: it is built under a
- * temporary name and renamed when complete.
+ * Unpacks a zip into the asset folder and returns the unpacked files' paths.
+ *
+ * The unpacked files are kept in `<cache>/extracted/<sha256>/` and hard-linked
+ * into the asset folder, so two assets that share one zip (the two Bistro
+ * halves) unpack it once. An unpack is built under a temporary name; once it
+ * is complete it is renamed, and then a file list with every file's size and
+ * modification time is written next to it (`<sha256>.files.json`). A cached
+ * unpack is reused only when that list exists and still matches the folder
+ * exactly; otherwise it is unpacked again.
+ *
+ * Afterwards the asset folder holds exactly the archive's files, the
+ * downloads and the listed outputs (`keep`): anything else, such as a file
+ * from an older version of the archive, is removed. Outputs are made again by
+ * the convert step that follows.
  */
 export async function extractWithCache(
     download: AssetDownload,
     archivePath: string,
     assetDirectory: string,
     cacheDirectory: string,
+    keep: ReadonlySet<string>,
     log: Log,
     extract: (archive: string, destination: string) => Promise<void> = extractZip,
-): Promise<void> {
-    if (!download.sha256) {
-        log(`  extracting ${download.file}`);
-        await extract(archivePath, assetDirectory);
-        return;
-    }
+): Promise<string[]> {
     const cached = join(cacheDirectory, 'extracted', download.sha256.toLowerCase());
-    if (await directoryExists(cached)) {
+    const recordPath = `${cached}.files.json`;
+    const recorded = await readUnpackRecord(recordPath);
+    let files = recorded && (await directoryExists(cached)) ? await listFiles(cached) : null;
+
+    if (recorded && files && sameFileList(files, recorded)) {
         log(`  ${download.file}: taking the unpacked files from the cache`);
     } else {
-        log(`  extracting ${download.file}`);
+        if (await directoryExists(cached)) log(`  ${download.file}: the unpacked copy in the cache is incomplete or changed; unpacking again`);
+        else log(`  extracting ${download.file}`);
+        await rm(recordPath, { force: true });
+        await rm(cached, { recursive: true, force: true });
         const partial = `${cached}.partial`;
         await rm(partial, { recursive: true, force: true });
         await mkdir(partial, { recursive: true });
@@ -990,8 +1487,24 @@ export async function extractWithCache(
             throw error;
         }
         await rename(partial, cached);
+        files = await listFiles(cached);
+        // Written last: its presence is the mark of a complete unpack.
+        await writeFile(recordPath, JSON.stringify({ archive: download.file, files }));
     }
-    await linkTree(cached, assetDirectory);
+
+    await mkdir(assetDirectory, { recursive: true });
+    for (const file of files) await linkOrCopy(join(cached, file.path), join(assetDirectory, file.path));
+    const unpacked = files.map((file) => file.path);
+    await removeFilesNotIn(assetDirectory, new Set([...unpacked, ...keep]), log);
+    return unpacked;
+}
+
+async function directoryExists(path: string): Promise<boolean> {
+    try {
+        return (await stat(path)).isDirectory();
+    } catch {
+        return false;
+    }
 }
 
 /** Brings one asset up to date. Throws with a clear message on any failure. */
@@ -1006,34 +1519,33 @@ export async function fetchAsset(
     }
     const downloadsDirectory = options.downloadsDirectory ?? downloadsRoot;
     const assetDirectory = join(downloadsDirectory, asset.id);
+    const cacheDirectory = join(downloadsDirectory, '.cache');
     await mkdir(assetDirectory, { recursive: true });
 
-    if (!options.force) {
-        const existing = await checkOutputs(assetDirectory, asset.outputs, () => undefined);
-        if (existing.problems.length === 0) {
-            const note = existing.unverified > 0 ? ` (${existing.unverified} output(s) have no sha256 in sources.json, so they are only checked for existing)` : '';
-            log(`${asset.id}: up to date${note}`);
-            return 'up-to-date';
-        }
+    if (!options.force && (await checkOutputs(assetDirectory, asset.outputs, () => undefined, asset.convert)).length === 0) {
+        log(`${asset.id}: up to date`);
+        return 'up-to-date';
     }
 
     log(`${asset.id}: ${asset.title} by ${asset.author} (${asset.license}${asset.redistributable ? '' : ', not redistributable: stays local'})`);
 
     const downloads = downloadsOf(asset);
     for (const download of downloads) {
-        await obtainDownload(download, join(assetDirectory, download.file), join(downloadsDirectory, '.cache'), options.force, log);
+        await obtainDownload(download, join(assetDirectory, download.file), cacheDirectory, options.force, log);
     }
 
+    const inputs = downloads.map((download) => download.file);
     if (asset.extract === 'zip') {
-        await extractWithCache(downloads[0], join(assetDirectory, downloads[0].file), assetDirectory, join(downloadsDirectory, '.cache'), log);
+        const keep = new Set([...inputs, ...asset.outputs.map((output) => output.path)]);
+        inputs.push(...(await extractWithCache(downloads[0], join(assetDirectory, downloads[0].file), assetDirectory, cacheDirectory, keep, log)));
     }
-    await runConvert(asset, assetDirectory);
+    await runConvert(asset, assetDirectory, inputs);
 
-    const result = await checkOutputs(assetDirectory, asset.outputs, log, asset.convert);
-    if (result.problems.length > 0) {
-        throw new Error(`outputs are not right after fetching:\n    ${result.problems.join('\n    ')}`);
+    const problems = await checkOutputs(assetDirectory, asset.outputs, log, asset.convert);
+    if (problems.length > 0) {
+        throw new Error(`outputs are not right after fetching:\n    ${problems.join('\n    ')}`);
     }
-    log(`  ${asset.id}: ${asset.outputs.length} output file(s) ${result.unverified === 0 ? 'verified' : 'present (some unverified)'}`);
+    log(`  ${asset.id}: ${asset.outputs.length} output file(s) verified`);
     return 'fetched';
 }
 
@@ -1042,10 +1554,12 @@ export async function fetchAsset(
 // ---------------------------------------------------------------------------
 
 const helpText = `Usage: pnpm assets:fetch [--only <id>[,<id>]] [--force] [--verify-only] [--sources <path>]
-       node tools/assets/fetch.ts --hash <file>   print the sha256 and size to put in sources.json
+       node tools/assets/fetch.ts --hash <file>              print the sha256 and size to put in sources.json
+       node tools/assets/fetch.ts --record-glb-views <id>    write the bufferView hashes of the asset's
+                                                             non-reproducible .glb outputs, from the files on disk
 
 --verify-only checks the files already on disk against sources.json (sizes, hashes,
-structure of non-reproducible .glb files) without downloading or converting anything.
+and the pieces of non-reproducible .glb files) without downloading or converting anything.
 
 Downloads and verifies the external test assets listed in tools/assets/sources.json
 into assets/downloads/<id>/. Assets that are already complete are skipped.`;
@@ -1058,16 +1572,51 @@ async function verifyOnly(assets: readonly AssetEntry[]): Promise<number> {
             console.log(`${asset.id}: skipped: ${asset.skipReason ?? 'no reason given'}`);
             continue;
         }
-        const result = await checkOutputs(join(downloadsRoot, asset.id), asset.outputs, (message) => console.log(message), asset.convert);
-        if (result.problems.length === 0) {
+        const problems = await checkOutputs(join(downloadsRoot, asset.id), asset.outputs, (message) => console.log(message), asset.convert);
+        if (problems.length === 0) {
             console.log(`${asset.id}: OK, ${asset.outputs.length} output file(s) verified`);
         } else {
             failed.push(asset.id);
-            console.error(`${asset.id}: FAILED\n    ${result.problems.join('\n    ')}`);
+            console.error(`${asset.id}: FAILED\n    ${problems.join('\n    ')}`);
         }
     }
     console.log(failed.length === 0 ? '\nAll outputs verified.' : `\nFailed: ${failed.join(', ')}`);
     return failed.length === 0 ? 0 : 1;
+}
+
+/**
+ * Writes the bufferView record of each non-reproducible .glb output of the
+ * named assets, from the files on disk. The file's size, BIN length and JSON
+ * chunk must already match sources.json: this records the data of a known
+ * scene, it does not bless a new one.
+ */
+async function recordGlbViews(assets: readonly AssetEntry[]): Promise<number> {
+    let failures = 0;
+    for (const asset of assets) {
+        const glbOutputs = asset.outputs.filter((output) => output.reproducible === false);
+        if (glbOutputs.length === 0) console.log(`${asset.id}: has no output marked reproducible false; nothing to record`);
+        for (const output of glbOutputs) {
+            const path = join(downloadsRoot, asset.id, output.path);
+            const structure = await readGlbStructure(path);
+            const size = (await stat(path)).size;
+            if (size !== output.bytes || structure.binBytes !== output.binBytes || !sameHash(structure.jsonSha256, output.jsonSha256 ?? '')) {
+                console.error(`${asset.id}: ${output.path} does not match the size, BIN length and JSON chunk in sources.json; fix those first`);
+                failures++;
+                continue;
+            }
+            const record = makeGlbViewRecord(asset.id, output, structure);
+            const recordPath = join(repoRoot, output.bufferViewHashes ?? '');
+            await mkdir(dirname(recordPath), { recursive: true });
+            await writeFile(recordPath, formatGlbViewRecord(record));
+            const pinned = record.bufferViews.filter((hash) => hash !== null).length;
+            console.log(`${asset.id}: wrote ${output.bufferViewHashes}: ${pinned} of ${record.bufferViews.length} bufferViews pinned`);
+            if (structure.nonZeroPaddingBytes > 0) {
+                console.error(`${asset.id}: warning: ${structure.nonZeroPaddingBytes} padding byte(s) are not zero, so the check will fail`);
+                failures++;
+            }
+        }
+    }
+    return failures === 0 ? 0 : 1;
 }
 
 async function main(): Promise<number> {
@@ -1099,11 +1648,15 @@ async function main(): Promise<number> {
     if (problems.length > 0) throw new Error(`${sourcesPath} has problems:\n  ${problems.join('\n  ')}`);
 
     const sources = parsed as SourcesFile;
+    const approvalProblems = checkLicenseApprovals(sources.assets, await readFile(join(repoRoot, DECISIONS_FILE), 'utf8'));
+    if (approvalProblems.length > 0) throw new Error(`${sourcesPath} has license approvals that point nowhere:\n  ${approvalProblems.join('\n  ')}`);
+
     if (sources.assets.length === 0) {
         console.log('No assets are listed in sources.json yet, so there is nothing to download.');
         return 0;
     }
 
+    if (options.recordGlbViews.length > 0) return recordGlbViews(selectAssets(sources.assets, options.recordGlbViews));
     const selected = selectAssets(sources.assets, options.only);
     if (options.verifyOnly) return verifyOnly(selected);
     const failures: string[] = [];

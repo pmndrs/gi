@@ -120,15 +120,18 @@ function lightToGltf(light: SceneLightData): Record<string, unknown> {
         color: [...light.color],
         intensity: light.intensity,
     };
+    // KHR_lights_punctual: a range must be above 0 when present, and no range
+    // means plain inverse-square falloff, which is what our range 0 means.
+    const range = light.type !== 'directional' && light.range > 0 ? { range: light.range } : {};
     switch (light.type) {
         case 'directional':
             return { type: 'directional', ...common };
         case 'point':
-            return { type: 'point', range: light.range, ...common };
+            return { type: 'point', ...range, ...common };
         case 'spot':
             return {
                 type: 'spot',
-                range: light.range,
+                ...range,
                 spot: { innerConeAngle: light.innerConeAngle, outerConeAngle: light.outerConeAngle },
                 ...common,
             };

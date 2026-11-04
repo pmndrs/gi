@@ -27,11 +27,17 @@ const OUTER_WALL_THICKNESS_M = 0.2;
 const DOORWAY_CENTRE_Z_M = ROOM_SIZE_M / 2;
 const PARTITION_X0_M = ROOM_SIZE_M;
 const PARTITION_X1_M = ROOM_SIZE_M + PARTITION_THICKNESS_M;
-const ROOM_B_X1_M = PARTITION_X1_M + ROOM_SIZE_M;
+/** The far (east) inner wall of room B; room A's west inner wall is at x = 0. */
+export const ROOM_B_X1_M = PARTITION_X1_M + ROOM_SIZE_M;
+/** The doorway's opening along z. */
+export const DOORWAY_Z0_M = DOORWAY_CENTRE_Z_M - DOORWAY_WIDTH_M / 2;
+export const DOORWAY_Z1_M = DOORWAY_CENTRE_Z_M + DOORWAY_WIDTH_M / 2;
 
 /** A real door slab is a little larger than the opening it closes, so it overlaps the frame and leaves no gap. */
 const DOOR_OVERLAP_M = 0.004;
-const DOOR_THICKNESS_M = 0.04;
+export const DOOR_THICKNESS_M = 0.04;
+/** The closed door stands in the middle of the partition. */
+export const DOOR_CENTRE_X_M = (PARTITION_X0_M + PARTITION_X1_M) / 2;
 
 function buildRooms(withDoor: boolean): ProceduralScene {
     const builder = new SceneBuilder();
@@ -66,8 +72,8 @@ function buildRooms(withDoor: boolean): ProceduralScene {
     // The partition: two pillars either side of the doorway plus a lintel above
     // it. They run 1 cm into the shell, and the lintel overlaps the pillars.
     const embed = 0.01;
-    const doorwayZ0 = DOORWAY_CENTRE_Z_M - DOORWAY_WIDTH_M / 2;
-    const doorwayZ1 = DOORWAY_CENTRE_Z_M + DOORWAY_WIDTH_M / 2;
+    const doorwayZ0 = DOORWAY_Z0_M;
+    const doorwayZ1 = DOORWAY_Z1_M;
     builder.addBox('partition-south', partition, [PARTITION_X0_M, -embed, -embed], [PARTITION_X1_M, h + embed, doorwayZ0]);
     builder.addBox('partition-north', partition, [PARTITION_X0_M, -embed, doorwayZ1], [PARTITION_X1_M, h + embed, d + embed]);
     builder.addBox(
@@ -78,12 +84,11 @@ function buildRooms(withDoor: boolean): ProceduralScene {
     );
 
     if (withDoor) {
-        const middleX = (PARTITION_X0_M + PARTITION_X1_M) / 2;
         builder.addBox(
             'door-panel',
             door,
-            [middleX - DOOR_THICKNESS_M / 2, -DOOR_OVERLAP_M, doorwayZ0 - DOOR_OVERLAP_M],
-            [middleX + DOOR_THICKNESS_M / 2, DOORWAY_HEIGHT_M + DOOR_OVERLAP_M, doorwayZ1 + DOOR_OVERLAP_M],
+            [DOOR_CENTRE_X_M - DOOR_THICKNESS_M / 2, -DOOR_OVERLAP_M, doorwayZ0 - DOOR_OVERLAP_M],
+            [DOOR_CENTRE_X_M + DOOR_THICKNESS_M / 2, DOORWAY_HEIGHT_M + DOOR_OVERLAP_M, doorwayZ1 + DOOR_OVERLAP_M],
         );
     }
 

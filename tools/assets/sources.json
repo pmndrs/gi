@@ -18,18 +18,20 @@
       "extract": "zip",
       "convert": {
         "tool": "blender",
-        "blenderVersion": "4.5",
+        "blenderVersion": "4.5.0",
         "script": "tools/assets/convert/fbx-to-glb.py",
         "args": ["Bistro_v5_2/BistroExterior.fbx", "BistroExterior.glb"]
       },
       "outputs": [
         {
           "path": "BistroExterior.glb",
-          "sha256": "e31d2a39516f5104f34b7f2558112697f91efbd9b0d3e1a237af514cb165fa64",
+          "sha256": "72188eab9c36a4f73e8043a2374acb7215e4ca945a293895ffcfcec2488f966c",
           "bytes": 267021808,
           "reproducible": false,
           "jsonSha256": "8a01b68c6adf6c8b854e1deabc14f8a37369bb31bfa0de5a9cff1b5764a2f800",
-          "binBytes": 265074580
+          "binBytes": 265074580,
+          "bufferViewHashes": "tools/assets/glb-views/bistro-exterior.json",
+          "varyingAttributes": ["TANGENT"]
         }
       ]
     },
@@ -51,18 +53,20 @@
       "extract": "zip",
       "convert": {
         "tool": "blender",
-        "blenderVersion": "4.5",
+        "blenderVersion": "4.5.0",
         "script": "tools/assets/convert/fbx-to-glb.py",
         "args": ["Bistro_v5_2/BistroInterior.fbx", "BistroInterior.glb"]
       },
       "outputs": [
         {
           "path": "BistroInterior.glb",
-          "sha256": "f6a57f0f6a258a5522a245163e736250989a60bcae5a7c68d869f5e9ffb1b3ff",
+          "sha256": "1a4d61190fe1821b354328f2934686649736265abf5f1e275edea160c99aaa2a",
           "bytes": 80230868,
           "reproducible": false,
           "jsonSha256": "f9949e7e5d91f40cabeae1a8337d3808f0e84bd53d70a3c71a5887e15f33b57e",
-          "binBytes": 77979452
+          "binBytes": 77979452,
+          "bufferViewHashes": "tools/assets/glb-views/bistro-interior.json",
+          "varyingAttributes": ["TANGENT"]
         }
       ]
     },
@@ -84,7 +88,7 @@
       "extract": "zip",
       "convert": {
         "tool": "blender",
-        "blenderVersion": "4.5",
+        "blenderVersion": "4.5.0",
         "script": "tools/assets/convert/obj-to-glb.py",
         "args": ["breakfast_room.obj", "BreakfastRoom.glb"]
       },
@@ -182,18 +186,20 @@
       "extract": null,
       "convert": {
         "tool": "blender",
-        "blenderVersion": "4.5",
+        "blenderVersion": "4.5.0",
         "script": "tools/assets/convert/polyhaven-alpha-mask.py",
         "args": ["tree_small_02_2k.gltf", "textures/tree_small_02_leaves_alpha_2k.png", "tree_small_02_2k_masked.glb"]
       },
       "outputs": [
         {
           "path": "tree_small_02_2k_masked.glb",
-          "sha256": "a63e8993afeade4bca76bd789fd4a7e40c7114315865d9ccb79df4f43b6acdeb",
+          "sha256": "090f9665e27979ceb04320bf0700079f051c3b15cbfa6682016d360f4f7627ba",
           "bytes": 151569160,
           "reproducible": false,
           "jsonSha256": "363a576c3de047fdc277b19c47aa85783e13b76216af8b30a3f26091f04c220e",
-          "binBytes": 151563012
+          "binBytes": 151563012,
+          "bufferViewHashes": "tools/assets/glb-views/courtyard-tree.json",
+          "varyingAttributes": ["TANGENT"]
         }
       ]
     },
@@ -202,8 +208,13 @@
       "title": "Sponza (Intel New Sponza, 2022, base package)",
       "author": "Frank Meinl and Anton Kaplanyan (commissioned and sponsored for Intel's Sample Library); add-on credits in the package",
       "sourceUrl": "https://web.archive.org/web/20251206023318/https://www.intel.com/content/www/us/en/developer/topic-technology/graphics-research/samples.html",
-      "license": "CC-BY-4.0",
+      "license": "CC-BY-4.0+intel-preface",
       "licenseUrl": "https://creativecommons.org/licenses/by/4.0/legalcode",
+      "licenseApproval": {
+        "record": "docs/DECISIONS.md",
+        "date": "2026-11-04",
+        "title": "Sponza is Intel's \"New Sponza\" (base package), download-only."
+      },
       "attribution": "Sponza 2022 Scene commissioned by Frank Meinl, sponsored by Anton Kaplanyan. Intel Sample Library. License text in the package is CC BY 4.0, with the preface \"For personal use and educational use. Limited commercial use for marketing and print purposes.\"",
       "redistributable": false,
       "download": {
@@ -213,7 +224,7 @@
         "sha256": "b8bb853884ab1566b3beb35666bd09882a4e0dc16661e4684e103792cf0229b9"
       },
       "extract": "zip",
-      "convert": {"tool": "blender", "blenderVersion": "4.5", "script": "tools/assets/convert/gltf-downsize-textures.py", "args": ["main_sponza/NewSponza_Main_glTF_003.gltf", "main_sponza_1k/NewSponza_Main_1k.gltf", "1024"]},
+      "convert": {"tool": "blender", "blenderVersion": "4.5.0", "script": "tools/assets/convert/gltf-downsize-textures.py", "args": ["main_sponza/NewSponza_Main_glTF_003.gltf", "main_sponza_1k/NewSponza_Main_1k.gltf", "1024"]},
       "outputs": [
         {
           "path": "main_sponza/NewSponza_Main_glTF_003.gltf",

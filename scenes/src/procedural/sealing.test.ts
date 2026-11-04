@@ -3,17 +3,37 @@
  * door's near side, a thin wall's lit side or a hollow cabinet must never get
  * out, including rays aimed exactly along the seams where two solids meet.
  *
- * Triangles are tested with a plain, strict ray-triangle test and no
- * tolerance, so a crack between two touching faces would show as an escaping
- * ray. The scenes avoid that by overlapping solids instead of touching them.
+ * What the two kinds of check can and cannot see:
+ * - The ray checks cast rays in double precision with a strict ray-triangle
+ *   test and no tolerance. They catch missing faces and real gaps between
+ *   solids, down to a few micrometres when a ray is aimed into the gap (the
+ *   "checks themselves" tests below show a 2 µm slot being found). They do not
+ *   catch a crack between two faces that touch exactly: in double precision a
+ *   ray aimed at such a seam still hits one of the two faces, while a float32
+ *   GPU tracer can slip through it.
+ * - So the "no flush seams" checks look for that cause directly: no two boards
+ *   or wall slabs may meet face to face without overlapping. The scenes always
+ *   overlap their solids instead of letting them touch.
  */
 
 import { describe, expect, it } from 'vitest';
 import type { ProceduralScene, Vector3Tuple } from '../scene-data';
 import { buildCabinetRow, PANEL_THICKNESS_M } from './cabinet-row';
 import { buildFurnaceRoom, FURNACE_SIZE_M } from './furnace-room';
+import { SceneBuilder } from './geometry';
 import { buildThinWall, THIN_WALL_THICKNESS_M } from './thin-wall';
-import { buildClosedDoor, buildTwoRoom } from './two-rooms';
+import {
+    buildClosedDoor,
+    buildTwoRoom,
+    DOOR_CENTRE_X_M,
+    DOOR_THICKNESS_M,
+    DOORWAY_HEIGHT_M,
+    DOORWAY_Z0_M,
+    DOORWAY_Z1_M,
+    ROOM_B_X1_M,
+    ROOM_HEIGHT_M,
+    ROOM_SIZE_M,
+} from './two-rooms';
 
 type Vec = [number, number, number];
 
@@ -108,14 +128,12 @@ function towards(origin: Vec, target: Vec): Vec {
     return [d[0] / length, d[1] / length, d[2] / length];
 }
 
-/** Every ray (spread over the sphere, and aimed at each seam point) must hit something within `limit` on `axis`. */
-function expectContained(
-    scene: ProceduralScene,
-    origin: Vec,
-    seamPoints: Vec[],
-    isInside: (point: Vec) => boolean,
-    label: string,
-): void {
+/**
+ * Casts rays spread over the sphere, plus one aimed at each seam point, and
+ * counts those that hit nothing (`escaped`) or first hit something outside
+ * the region `isInside` describes (`outside`).
+ */
+function countLeaks(scene: ProceduralScene, origin: Vec, seamPoints: Vec[], isInside: (point: Vec) => boolean): { escaped: number; outside: number } {
     const triangles = worldTriangles(scene);
     const directions = [...sphereDirections(4000), ...seamPoints.map((point) => towards(origin, point))];
     let escaped = 0;
@@ -129,7 +147,53 @@ function expectContained(
         const hit: Vec = [origin[0] + direction[0] * distance, origin[1] + direction[1] * distance, origin[2] + direction[2] * distance];
         if (!isInside(hit)) outside++;
     }
-    expect({ label, escaped, outside }).toEqual({ label, escaped: 0, outside: 0 });
+    return { escaped, outside };
+}
+
+function expectContained(scene: ProceduralScene, origin: Vec, seamPoints: Vec[], isInside: (point: Vec) => boolean, label: string): void {
+    expect({ label, ...countLeaks(scene, origin, seamPoints, isInside) }).toEqual({ label, escaped: 0, outside: 0 });
+}
+
+interface Box {
+    name: string;
+    min: Vec;
+    max: Vec;
+}
+
+/** The scene's unrotated unit-box instances whose names match `include`, as world-space boxes. Fails when none match. */
+function axisAlignedBoxes(scene: ProceduralScene, include: RegExp): Box[] {
+    const boxes = scene.instances
+        .filter((instance) => scene.meshes[instance.mesh].name === 'unit-box' && include.test(instance.name))
+        .map((instance) => {
+            const m = instance.transform;
+            expect(m[1] === 0 && m[2] === 0 && m[4] === 0 && m[6] === 0 && m[8] === 0 && m[9] === 0, instance.name).toBe(true);
+            const half = [Math.abs(m[0]) / 2, Math.abs(m[5]) / 2, Math.abs(m[10]) / 2];
+            return {
+                name: instance.name,
+                min: [m[12] - half[0], m[13] - half[1], m[14] - half[2]] as Vec,
+                max: [m[12] + half[0], m[13] + half[1], m[14] + half[2]] as Vec,
+            };
+        });
+    // A pattern that matches nothing would make the flush check pass without checking anything.
+    expect(boxes.length, `the pattern ${include} matched no boxes`).toBeGreaterThan(0);
+    return boxes;
+}
+
+/** Pairs of boxes that touch on a face: zero overlap on one axis, positive overlap on the other two. */
+function flushPairs(boxes: Box[], mayTouch: (a: string, b: string) => boolean = () => false): string[] {
+    const found: string[] = [];
+    for (let i = 0; i < boxes.length; i++) {
+        for (let j = i + 1; j < boxes.length; j++) {
+            const overlaps = [0, 1, 2].map((axis) => Math.min(boxes[i].max[axis], boxes[j].max[axis]) - Math.max(boxes[i].min[axis], boxes[j].min[axis]));
+            const separated = overlaps.some((overlap) => overlap < -1e-9);
+            const touching = overlaps.filter((overlap) => Math.abs(overlap) <= 1e-9).length === 1;
+            const sharing = overlaps.filter((overlap) => overlap > 1e-9).length === 2;
+            if (!separated && touching && sharing && !mayTouch(boxes[i].name, boxes[j].name)) {
+                found.push(`${boxes[i].name} / ${boxes[j].name}`);
+            }
+        }
+    }
+    return found;
 }
 
 describe('sealing', () => {
@@ -143,7 +207,7 @@ describe('sealing', () => {
     });
 
     it('two rooms: no ray leaves the building, from either room', () => {
-        const seams = boxEdgePoints([0, 0, 0], [8.2, 2.8, 4]);
+        const seams = boxEdgePoints([0, 0, 0], [ROOM_B_X1_M, ROOM_HEIGHT_M, ROOM_SIZE_M]);
         for (const scene of [buildTwoRoom(), buildClosedDoor()]) {
             for (const origin of [[2, 1.5, 2], [6.5, 1.5, 2]] as Vec[]) {
                 expectContained(scene, origin, seams, () => true, 'two rooms');
@@ -153,15 +217,20 @@ describe('sealing', () => {
 
     it('closed door: room A never sees past the door, room B never sees past it the other way', () => {
         const scene = buildClosedDoor();
-        const doorFaceX = 4.1 - 0.02;
-        // Points around the door's frame, where the panel meets the partition.
+        const doorFaceX = DOOR_CENTRE_X_M - DOOR_THICKNESS_M / 2;
+        const doorwayWidth = DOORWAY_Z1_M - DOORWAY_Z0_M;
+        // Points around the door's frame, where the panel meets the partition: both sides and the top of the opening.
         const frame: Vec[] = [];
         for (let i = 0; i <= 100; i++) {
             const along = i / 100;
-            frame.push([doorFaceX, along * 2.1, 1.55], [doorFaceX, along * 2.1, 2.45], [doorFaceX, 2.1, 1.55 + along * 0.9]);
+            frame.push(
+                [doorFaceX, along * DOORWAY_HEIGHT_M, DOORWAY_Z0_M],
+                [doorFaceX, along * DOORWAY_HEIGHT_M, DOORWAY_Z1_M],
+                [doorFaceX, DOORWAY_HEIGHT_M, DOORWAY_Z0_M + along * doorwayWidth],
+            );
         }
         expectContained(scene, [2, 1.5, 2], frame, (hit) => hit[0] <= doorFaceX + 1e-6, 'room A of closed-door');
-        const farFaceX = 4.1 + 0.02;
+        const farFaceX = DOOR_CENTRE_X_M + DOOR_THICKNESS_M / 2;
         const farFrame = frame.map((point): Vec => [farFaceX, point[1], point[2]]);
         expectContained(scene, [6.5, 1.5, 2], farFrame, (hit) => hit[0] >= farFaceX - 1e-6, 'room B of closed-door');
     });
@@ -206,50 +275,7 @@ describe('sealing', () => {
     });
 });
 
-/**
- * Strict ray tests in double precision cannot show the cracks a float32 GPU
- * ray tracer can find between touching faces, so also check the cause directly:
- * no two boards or wall slabs may meet face to face with nothing overlapping.
- */
 describe('no flush seams', () => {
-    interface Box {
-        name: string;
-        min: Vec;
-        max: Vec;
-    }
-
-    function axisAlignedBoxes(scene: ProceduralScene, include: RegExp): Box[] {
-        return scene.instances
-            .filter((instance) => scene.meshes[instance.mesh].name === 'unit-box' && include.test(instance.name))
-            .map((instance) => {
-                const m = instance.transform;
-                expect(m[1] === 0 && m[2] === 0 && m[4] === 0 && m[6] === 0 && m[8] === 0 && m[9] === 0, instance.name).toBe(true);
-                const half = [Math.abs(m[0]) / 2, Math.abs(m[5]) / 2, Math.abs(m[10]) / 2];
-                return {
-                    name: instance.name,
-                    min: [m[12] - half[0], m[13] - half[1], m[14] - half[2]] as Vec,
-                    max: [m[12] + half[0], m[13] + half[1], m[14] + half[2]] as Vec,
-                };
-            });
-    }
-
-    /** Pairs of boxes that touch on a face: zero overlap on one axis, positive overlap on the other two. */
-    function flushPairs(boxes: Box[], mayTouch: (a: string, b: string) => boolean = () => false): string[] {
-        const found: string[] = [];
-        for (let i = 0; i < boxes.length; i++) {
-            for (let j = i + 1; j < boxes.length; j++) {
-                const overlaps = [0, 1, 2].map((axis) => Math.min(boxes[i].max[axis], boxes[j].max[axis]) - Math.max(boxes[i].min[axis], boxes[j].min[axis]));
-                const separated = overlaps.some((overlap) => overlap < -1e-9);
-                const touching = overlaps.filter((overlap) => Math.abs(overlap) <= 1e-9).length === 1;
-                const sharing = overlaps.filter((overlap) => overlap > 1e-9).length === 2;
-                if (!separated && touching && sharing && !mayTouch(boxes[i].name, boxes[j].name)) {
-                    found.push(`${boxes[i].name} / ${boxes[j].name}`);
-                }
-            }
-        }
-        return found;
-    }
-
     it('thin wall and its room', () => {
         const boxes = axisAlignedBoxes(buildThinWall(), /^(room-|thin-wall)/);
         expect(flushPairs(boxes)).toEqual([]);
@@ -270,5 +296,56 @@ describe('no flush seams', () => {
         const unitOf = (name: string) => name.replace(/-(bottom|top|side-left|side-right|back|door)$/, '');
         // Neighbouring cabinets stand side by side, as real ones do; only boards of one cabinet must not just touch.
         expect(flushPairs(boxes, (a, b) => unitOf(a) !== unitOf(b))).toEqual([]);
+    });
+});
+
+/**
+ * The checks above only mean something if they can fail. A unit room (inside
+ * 0..1 m on each axis, walls 0.25 m thick) whose south wall is built from two
+ * halves meeting at x = 0.5 shows what each check finds. The sizes are powers
+ * of two, so every corner is exact in floating point.
+ */
+describe('the checks themselves', () => {
+    const wall = 0.25;
+    const seamX = 0.5;
+    const origin: Vec = [0.5, 0.5, 0.5];
+    const insideRoom = (point: Vec) => point.every((value) => value >= -1e-9 && value <= 1 + 1e-9);
+    // Points along the seam between the two halves, on the room side of the south wall.
+    const seamPoints: Vec[] = Array.from({ length: 41 }, (_, i): Vec => [seamX, 0.05 + (0.9 * i) / 40, 0]);
+
+    /** The room, with the south wall's halves ending at `leftEnd` and starting at `rightStart`. */
+    function testRoom(leftEnd: number, rightStart: number): ProceduralScene {
+        const builder = new SceneBuilder();
+        const grey = builder.addDiffuse('grey', [0.5, 0.5, 0.5]);
+        builder.addBox('floor', grey, [-wall, -wall, -wall], [1 + wall, 0, 1 + wall]);
+        builder.addBox('ceiling', grey, [-wall, 1, -wall], [1 + wall, 1 + wall, 1 + wall]);
+        builder.addBox('west', grey, [-wall, -wall, -wall], [0, 1 + wall, 1 + wall]);
+        builder.addBox('east', grey, [1, -wall, -wall], [1 + wall, 1 + wall, 1 + wall]);
+        builder.addBox('north', grey, [-wall, -wall, 1], [1 + wall, 1 + wall, 1 + wall]);
+        builder.addBox('south-left', grey, [-wall, -wall, -wall], [leftEnd, 1 + wall, 0]);
+        builder.addBox('south-right', grey, [rightStart, -wall, -wall], [1 + wall, 1 + wall, 0]);
+        return builder.build();
+    }
+
+    it('a room whose halves overlap passes both checks', () => {
+        const scene = testRoom(seamX + 0.0625, seamX - 0.0625);
+        expect(countLeaks(scene, origin, seamPoints, insideRoom)).toEqual({ escaped: 0, outside: 0 });
+        expect(flushPairs(axisAlignedBoxes(scene, /^south-/))).toEqual([]);
+    });
+
+    it('the ray check finds a 2 µm slot between the halves', () => {
+        const scene = testRoom(seamX - 1e-6, seamX + 1e-6);
+        const leaks = countLeaks(scene, origin, seamPoints, insideRoom);
+        expect(leaks.escaped + leaks.outside).toBeGreaterThan(0);
+    });
+
+    it('halves that touch exactly pass the ray check, which is why the flush check exists, and the flush check catches them', () => {
+        const scene = testRoom(seamX, seamX);
+        expect(countLeaks(scene, origin, seamPoints, insideRoom)).toEqual({ escaped: 0, outside: 0 });
+        expect(flushPairs(axisAlignedBoxes(scene, /^south-/))).toEqual(['south-left / south-right']);
+    });
+
+    it('a name pattern that matches no boxes fails instead of passing with nothing checked', () => {
+        expect(() => axisAlignedBoxes(testRoom(seamX, seamX), /^no-such-box/)).toThrow(/matched no boxes/);
     });
 });

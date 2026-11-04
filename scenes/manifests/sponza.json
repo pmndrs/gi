@@ -55,7 +55,7 @@
     "credits": [
         {
             "asset": "sponza-intel",
-            "license": "CC-BY-4.0",
+            "license": "CC-BY-4.0+intel-preface",
             "attribution": "Sponza 2022 Scene commissioned by Frank Meinl, sponsored by Anton Kaplanyan. Intel Sample Library. License text in the package is CC BY 4.0, with the preface \"For personal use and educational use. Limited commercial use for marketing and print purposes.\"",
             "sourceUrl": "https://web.archive.org/web/20251206023318/https://www.intel.com/content/www/us/en/developer/topic-technology/graphics-research/samples.html"
         }

@@ -74,10 +74,20 @@ export interface ManifestDirectionalLight extends ManifestLightCommon {
     direction: Vec3;
 }
 
+/**
+ * `range` on point and spot lights is required. A positive value is the
+ * distance at which the light is faded to zero (three.js `distance`; glTF
+ * `range`). 0 means no range window at all: plain inverse-square falloff,
+ * three.js `distance = 0`, which is what Cycles does, so use 0 where a scene
+ * must match a Cycles reference. It is 0 rather than left out so that a
+ * forgotten field is still an error.
+ */
+export const NO_RANGE_WINDOW = 0;
+
 export interface ManifestPointLight extends ManifestLightCommon {
     type: 'point';
     position: Vec3;
-    /** Distance at which the light reaches zero. */
+    /** Metres at which the light reaches zero, or 0 (`NO_RANGE_WINDOW`) for plain inverse-square falloff. */
     range: number;
 }
 
@@ -85,6 +95,7 @@ export interface ManifestSpotLight extends ManifestLightCommon {
     type: 'spot';
     position: Vec3;
     direction: Vec3;
+    /** Metres at which the light reaches zero, or 0 (`NO_RANGE_WINDOW`) for plain inverse-square falloff. */
     range: number;
     /** Half-angle where falloff starts, degrees. */
     innerConeDeg: number;
@@ -233,6 +244,13 @@ class ErrorCollector {
         }
     }
 
+    /** A point or spot light's range: a positive distance, or 0 for no range window. */
+    lightRange(path: string, value: Json): void {
+        if (!isFiniteNumber(value) || value < 0) {
+            this.add(path, `must be a distance in metres, or ${NO_RANGE_WINDOW} for no range window (plain inverse-square falloff)`);
+        }
+    }
+
     positiveNumber(path: string, value: Json): value is number {
         if (!isFiniteNumber(value) || value <= 0) {
             this.add(path, 'must be a number greater than 0');
@@ -326,12 +344,12 @@ function validateLight(light: Json, path: string, c: ErrorCollector): void {
             break;
         case 'point':
             c.vec3(`${path}.position`, light.position);
-            c.positiveNumber(`${path}.range`, light.range);
+            c.lightRange(`${path}.range`, light.range);
             break;
         case 'spot': {
             c.vec3(`${path}.position`, light.position);
             c.direction(`${path}.direction`, light.direction);
-            c.positiveNumber(`${path}.range`, light.range);
+            c.lightRange(`${path}.range`, light.range);
             const innerOk = isFiniteNumber(light.innerConeDeg) && light.innerConeDeg >= 0;
             const outerOk = isFiniteNumber(light.outerConeDeg) && light.outerConeDeg > 0 && light.outerConeDeg <= 90;
             if (!innerOk) c.add(`${path}.innerConeDeg`, 'must be a number of 0 or more');

@@ -115,6 +115,8 @@ One bullet per fact, each with its source. Add a bullet when something cost you 
 
 - **Blender add-ons hang headless runs.** User add-ons on this machine (Scatter5, SimpleBake, Substance3D) stop `blender --background` from exiting, sometimes at startup. Always pass `--factory-startup`. Source: T0.4, fetch #3/#4.
 - **Blender's glTF export is not bit-reproducible.** Two runs of the same conversion differ in a few bytes of vertex data, while the JSON chunk and buffer lengths stay identical. `sources.json` marks those outputs `"reproducible": false` and checks `jsonSha256` plus `binBytes` instead. Source: T0.4.
+- **Blender 4.5.0's glTF export varies only in TANGENT data,** rounded at the 4th decimal. Index buffers, images, JSON and padding are identical between runs. So `tools/assets/glb-views/<id>.json` pins every other bufferView. Re-record them with `node tools/assets/fetch.ts --record-glb-views <id>`. Source: T0.4 follow-up.
+- **Convert scripts must never write their inputs.** Inputs are hard links into `assets/.cache`, so writing one in place would corrupt the cache. The fetch tool checks that inputs are unchanged after a conversion.
 - **GLTFLoader turns shadows off.** Loaded meshes neither cast nor receive shadows until you set `castShadow` and `receiveShadow`. Source: T0.4 check page.
 
 ## Ground-truth renderers (T0.7)
