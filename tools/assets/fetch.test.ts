@@ -653,6 +653,8 @@ describe('choosing the downloader', () => {
     it('runs curl plainly: follows redirects, fails on HTTP errors, no disguise', () => {
         const args = curlArguments('https://cdrdv2.intel.com/v1/dl/getContent/726650', 'out.zip.part', { connectMs: 60_000, stallMs: 60_000 });
         expect(args).toEqual([
+            // Skips the user's .curlrc, which could otherwise add headers.
+            '--disable',
             '--location',
             '--fail',
             '--silent',

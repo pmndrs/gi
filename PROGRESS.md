@@ -21,7 +21,36 @@ Rules:
 
 ---
 
-## 2026-11-04 · B0b · implementer (opus); Opus review: pass with notes, fixes in progress
+## 2026-11-05 · T1.10 part 2 · implementer (opus); Opus review: pass with notes, fixed by the lead; done
+Did (a5a1113):
+- `tools/assets/fetch.ts` downloads from `cdrdv2.intel.com` with `%SystemRoot%\System32\curl.exe` (`--disable --location --fail`, no header or user-agent flags, arguments as an array with no shell). Other hosts keep Node fetch.
+- `sponza` is now the base package plus the curtains. New `sponza-full`: base + curtains + ivy + trees, tagged `heavy`, `nativeCapable: false`, candles left out until Dennis decides.
+- `isHeavyScene` keeps heavy scenes out of "every scene" runs unless named. The viewer's loading text names each part. `tools/bench/scene-copy-memory.ts` sums every part.
+Lead fixes after review: `--disable` added to the curl call, so the user's `.curlrc` can't add headers. The Cycles metadata now records the scene's parts, its environment and the sky file's sha256. THIRD_PARTY's "Use" column and two NOTES bullets corrected.
+Verified:
+- Reviewer: `--verify-only` passes for all five Intel ids; 283 scene and asset tests pass; `generate.ts --check` OK; every add-on lies inside Sponza's volume; `sponza.png` shows the curtains at bookmark 1; nothing from the packages is committed.
+- Lead: looked at `bench/screenshots/t1.10/sponza.png` (curtains in the arches); fetch tests 104 pass after the curl change.
+- Agent only: a real forced download of the curtains from Intel through the tool (786,898,766 B, about 25 MB/s, 48 s including the Blender conversion), then `--verify-only` OK. Viewer on the RTX 3060, headless Chrome 156, 0 console errors.
+- Cycles reference re-rendered at bookmark 1: 4096 spp, 640×360, diffuse-only check passed (49 BSDFs reset, 86 links removed).
+Not verified: the Intel GPU in the viewer. The reviewer didn't reproduce the Cycles means.
+Numbers:
+- Triangles: base 3,747,018; `sponza` (with curtains) 5,744,384; `sponza-full` 12,833,689.
+- Viewer load / set-up, one warm run each: base 2.0 / 5.6 s; `sponza` 2.5 / 7.4 s; `sponza-full` 4.9 / 18.9 s.
+- Scene copy: `sponza` 130.1 MB (97% of the default binding); `sponza-full` 348.5 MB.
+- Cycles: render 1,107 s. Full mean 0.0151 (RGB 0.01778 / 0.01480 / 0.01272); indirect mean 0.00107. Before (no curtains, shared sky, 256 spp): 0.0174 / 0.00218.
+Watch out: **`sponza` rows from a5a1113 on include the curtains.** Earlier `trace.csv`, baseline and B0 rows are base-only; T1.3 adds a `sponza-base` bench scene for like-for-like comparisons.
+
+## 2026-11-05 · T1.9 prep: native multi-part scenes · native-runner (opus)
+Did: `tools/native/merge-gltf.mjs` merges a scene's model parts into one glTF in the native cache, with no fork change. It applies each part's transform through one wrapper node and points at the parts' own `.bin` and image files. `native-lib.ps1` sends multi-part scenes down this path. `bench.ps1` writes a `scene_parts` row.
+Verified (agent, RTX 3060 Laptop, Vulkan, fork c7d0162):
+- `play.ps1 -Scene sponza -Clean` shows the curtains at bookmark 1 (`bench/screenshots/native-sponza/`, gitignored).
+- 25 generated inis are unchanged for the single-part scenes, and the cornell-box cache has the same sha256.
+- One `bench.ps1 -Scene sponza` run: 43 rows.
+Not verified: furnished-room in the harness; D3D12; repeat runs.
+Numbers (1 run, so ±15–30% drift; Sponza with curtains, 17,760 probes, 256 rays, 6,454 active): trace 8.34, blend 2.94, lighting 2.53, DDGI total 14.00, gbuffer 5.61, frame 19.76 ms; 242 Mrays/s. CPU frame 150 ms (machine busy). The base-only T0.6 run had trace 7.94 and gbuffer 4.68.
+Next: T1.9 takes 3+ runs.
+
+## 2026-11-04 · B0b · implementer (opus); Opus review: pass with notes, fixed; done
 Did: tinybvh's WASM writes our GPU layout directly (`tbvh_write_layout`, `buildLayout` in packages/bvh/src/tinybvh.ts, sizes in `gpu-layout.ts`), commit 4340e4e.
 - Leaves are packed and boxed during the walk, then inner boxes joined in a backward pass. Boxes are recomputed from the triangles with WASM SIMD.
 - Vertex widening and the index check moved into the WASM.
@@ -30,7 +59,7 @@ Verified (the reviewer re-ran these in a clean worktree at b10ad3f):
 - `mesh-bvh-tinybvh-layout.test.ts` compares the WASM layout byte for byte with the JS conversion.
 - `bvh:wasm --check` reproduces the WASM (SHA 656b99…); `verify-artifacts` passes.
 - The oracle passes on the RTX 3060 (ampere) and the Intel UHD (gen-12lp), with 0 slipped rays on tinybvh trees.
-Agent-only, so far: byte-identical on all 115 Sponza and 2,482 Bistro meshes, and three deliberate C++ faults each caught. A committed script to reproduce the per-mesh claim is being added.
+Per-mesh identity: `node tools/bvh/layout-identity.ts` (lead re-ran it, 12 s) prints every mesh identical: `sponza` (now with curtains) 132 of 132, Bistro exterior 1,296 of 1,296, Bistro interior 1,186 of 1,186. Three deliberate C++ faults were each caught (agent).
 Timing at 8e5373c (b10ad3f), idle RTX, all under the bench lock, 3 runs per GPU:
 - Sponza in the browser worker: 1.89 / 2.27 / 1.70 s (RTX session) and 1.53 / 1.61 / 1.78 s (Intel session). That passes on the median (DECISIONS); 1 run in 6 went over 2 s. The stray python.exe held one core throughout (`note/cpu_core_busy`), and Windows Defender briefly took 2 cores twice.
 - Bistro exterior 1.42 / 1.34 s; Bistro interior 0.50 / 0.56 s.
@@ -38,7 +67,14 @@ Timing at 8e5373c (b10ad3f), idle RTX, all under the bench lock, 3 runs per GPU:
 - tinybvh trees against ours on the RTX: 0.99–1.10×.
 - Against three-mesh-bvh (tinybvh trees), RTX closest / any: Sponza 1.22 / 1.00, Bistro exterior 0.83 / 0.96, Bistro interior 1.03 / 0.61, furnished room 1.04 / 0.37. Intel: Sponza 2.02 / 1.57, Bistro exterior 1.30 / 1.52, Bistro interior 1.57 / 0.91, furnished room 1.68 / 0.72.
 - The rows were written with `to-csv --commit 8e5373c` from the 24 run JSONs, because docs-only commits landed mid-run and `repeat.ts` refused. The measured code paths are unchanged between 4340e4e and 8e5373c (the reviewer checked). T1.3's uncommitted trace files all date from after the runs, which fits a clean run but doesn't prove it. T1.10 briefly had `scenes/src/manifest.ts` edited mid-run and reverted it, outside the measured paths.
-Review fixes in progress: a size guard on wasm32, `static_assert`s for the 16-byte stores, a NaN test, timing numbers out of READMEs and comments, THIRD_PARTY wording, the per-mesh script.
+Review fixes:
+- buffer sizes are computed in 64 bits, with a clear `STATUS_TOO_LARGE` error at 4 GB on wasm32;
+- `static_assert`s on the node, triangle and vertex structs;
+- NaN test cases;
+- timing numbers removed from the README and comments;
+- THIRD_PARTY lists the runtime calls the wrapper makes;
+- the per-mesh script.
+After the fixes, `bvh:wasm --check` matches (SHA ae5e0cf4…) and the oracle passes on both GPUs (agent).
 Next: B0 is passed, so T1.3 deletes our CPU mesh builder. B1a (GPU top level) follows T1.3.
 
 ## 2026-11-04 · T1.1 · implementer (opus); Opus review failed, fixed, re-review passed; done

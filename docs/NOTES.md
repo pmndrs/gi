@@ -109,6 +109,7 @@ One bullet per fact, each with its source. Add a bullet when something cost you 
 - **Native Vulkan mesh limit:** upstream's `ByteAddrBuffer[]` array holds 2048 entries, which caps a scene at about 1,022 meshes; Bistro lost the GPU. The fork sizes the array from the scene (1df1f97). Source: T0.6.
 - **The native frame rate is CPU-bound.** Untimed main-thread work makes it 50–87 ms per frame on Sponza, against about 20 ms of GPU work, so compare GPU numbers only. Source: T0.6.
 - **Native timings drift 15-30% between runs of the same config** on the RTX 3060 laptop, in every pass including lighting, so it's machine state, not code. Take 3+ runs per scene before comparing. Source: T0.6.
+- **Native multi-part scenes** are merged into one glTF by `tools/native/merge-gltf.mjs`, which references the parts' own `.bin` and image files (nothing is copied). `native.csv` Sponza rows without a `scene_parts` row are base-only. Source: T1.9 prep.
 - **Native harness keys:** F2 dumps DDGI textures, F4 runs a 1024-frame benchmark to CSV, J toggles the performance overlay, R reloads shaders and config, M switches between DDGI and the path tracer.
 - **Installed tools:** RenderDoc 1.47.0, PIX 2603.25, Blender, NVIDIA FLIP (`python -m flip_evaluator`), Vulkan SDK 1.3.283, Nsight Systems 2022.4, Nsight Compute 2022.3. Nsight Graphics needs a manual install.
 
@@ -117,7 +118,7 @@ One bullet per fact, each with its source. Add a bullet when something cost you 
 - **Sponza license:** the Khronos glTF Sample Assets Sponza now points at the CRYENGINE marketplace license, which allows "Games in object code form only" (§2.1.4). Crytek's 2010 note says it was "donated to the public for radiosity". These conflict, so it's on hold for Dennis. Source: `Models/Sponza/README.md` and `LICENSE.md` in glTF-Sample-Assets, checked 2026-11-04.
 - **Intel Sponza:** `https://cdrdv2.intel.com/v1/dl/getContent/830833` redirects to a signed CloudFront URL for `main_sponza.zip` (3,987,608,266 bytes), with no login.
   - Add-ons have their own IDs: curtains 726650, ivy 726656, trees 726662, candles 726676.
-  - Git-bash's `curl` fails TLS to cdrdv2 ("self signed certificate in certificate chain"). Windows `curl.exe` and Node `fetch` both work.
+  - Git-bash's `curl` fails TLS to cdrdv2 ("self signed certificate in certificate chain"). Windows `curl.exe` works. Node `fetch` worked during T0.4 but has been refused since 2026-11-05 (see below).
   - The www.intel.com samples page doesn't load from here; the Wayback copy from 2025-12-06 has the links.
   - Source: T0.4 scout, 2026-11-04.
 - **Intel Sponza add-ons** (T1.10):
@@ -179,7 +180,7 @@ One bullet per fact, each with its source. Add a bullet when something cost you 
 
 ## Platform scene copy (T1.2)
 
-- **Scene copy memory:** octahedral normals (4 bytes) and 16-bit indices for meshes with at most 65,536 vertices. Intel Sponza (2.05 M vertices, 3.75 M triangles) takes 87.7 MB. Bistro exterior takes 111.4 MB, which fits the 128 MB default binding only because of the octahedral normals. uv1 costs 16 MB on Sponza, so adapters should pass `uvs1` only when a material samples channel 1.
+- **Scene copy memory:** octahedral normals (4 bytes) and 16-bit indices for meshes with at most 65,536 vertices. Intel Sponza's base package (2.05 M vertices, 3.75 M triangles) takes 87.7 MB. `sponza` with the curtains (5.74 M triangles) takes 130.1 MB, 97% of the 128 MiB default storage binding, and `sponza-full` 348.5 MB, so large scenes need raised limits (`node tools/bench/scene-copy-memory.ts`). Bistro exterior takes 111.4 MB, which fits the 128 MB default binding only because of the octahedral normals. uv1 costs 16 MB on Sponza, so adapters should pass `uvs1` only when a material samples channel 1.
 - **`Omit<Union, K>` keeps only the keys shared by every member,** so `Partial<Omit<LightDescriptor,'type'>>` couldn't name `position` or `range`. Fixed with `LightChanges`.
 - **Bind-group layouts in budget tests must be explicit.** An `'auto'` layout drops bindings the entry point doesn't use, so it can hide an over-budget kernel.
 - **WebGPU ordering:** a `queue.writeBuffer` made during `encode` lands before the host's submit of that encoder, and copies recorded in the encoder run after it. So a growth copy must never cover a range written in the same frame.

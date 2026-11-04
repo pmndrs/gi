@@ -267,7 +267,7 @@ Rules for every M1 task:
 | T1.7 | three.js adapter | implementer | M | T1.6 | todo |
 | T1.8 | Viewer integration | implementer | M | T1.7 | todo |
 | T1.9 | M1 measurements against targets | gpu-tester, native-runner | M | T1.8 | todo |
-| T1.10 | Sponza add-ons | wrangler + implementer | M | T1.1 (for the re-rendered reference) | active (part 1 downloads done; part 2 implementer, 2026-11-04) |
+| T1.10 | Sponza add-ons | wrangler + implementer | M | T1.1 (for the re-rendered reference) | done (Opus review passed with notes, fixed; candles waiting on Dennis) |
 | T1.11 | M1 note and M2 breakdown | main session | S | all M1 | todo |
 
 ### BVH lane (runs alongside; DECISIONS 2026-11-04)
@@ -275,7 +275,7 @@ Rules for every M1 task:
 | ID | Stage | Must be done before | Status |
 | --- | --- | --- | --- |
 | B0 | tinybvh WASM builder in a worker (`packages/bvh`) | M1 starts (M1 can start without the ≤ 2 s, DECISIONS 2026-11-04) | done with B0b (DECISIONS: the median of 3 worker runs ≤ 2 s; our CPU builder deleted in T1.3) |
-| B0b | Write our GPU layout from inside the WASM (no JS conversion pass); re-run the RTX trace bench on an idle GPU | T1.3 ends | review (passed with notes; fixes in progress. B0 passed: Sponza worker median 1.89 / 1.61 s) |
+| B0b | Write our GPU layout from inside the WASM (no JS conversion pass); re-run the RTX trace bench on an idle GPU | T1.3 ends | done (Opus review passed; B0 passed: Sponza worker median 1.89 / 1.61 s) |
 | B1a | GPU top-level tree: refit every frame from instance transforms, rebuild now and then | T1.3 ends (moved up to M1) | todo |
 | B1 | GPU LBVH per mesh (subgroups first), BLAS refit | M3 | todo |
 | B2 | GPU PLOC, then H-PLOC | M3 | todo |

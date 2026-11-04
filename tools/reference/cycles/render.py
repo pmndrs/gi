@@ -19,6 +19,7 @@ See blender_scene.py for the settings and units.py for the unit conversions.
 """
 
 import argparse
+import hashlib
 import json
 import os
 import platform
@@ -108,12 +109,22 @@ def main():
     load_seconds = time.time() - load_started
 
     triangles = sum(len(obj.data.polygons) for obj in bpy.data.objects if obj.type == 'MESH')
+    # Record what the image was rendered from, so a reference made before a
+    # scene changed (an added part, a new sky) can't be mistaken for a new one.
+    sky_path = bs.sky_file_path(manifest['id'])
+    sky_file = None
+    if manifest['environment'].get('type') == 'procedural' and os.path.exists(sky_path):
+        with open(sky_path, 'rb') as handle:
+            sky_file = {'path': os.path.relpath(sky_path, bs.REPO_ROOT).replace(os.sep, '/'), 'sha256': hashlib.sha256(handle.read()).hexdigest()}
     render_seconds, files = bs.render_to_files(scene, out_dir, full_name, indirect_name)
 
     meta = {
         'tool': 'tools/reference/cycles/render.py',
         'blender': bpy.app.version_string,
         'scene': manifest['id'],
+        'parts': manifest['parts'],
+        'environment': manifest['environment'],
+        'skyFile': sky_file,
         'camera': camera,
         'width': args.width,
         'height': args.height,

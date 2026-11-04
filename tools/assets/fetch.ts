@@ -1127,11 +1127,17 @@ export async function findSystemCurl(download: AssetDownload, curlPath: string =
  * the error page, print nothing but errors, and give up after the same
  * timeouts as the `fetch` path. curl's stall limit is whole seconds, at least 1.
  * No `--user-agent` or `--header`: curl's own request, as typed by hand.
+ * `--disable` (it must come first) skips the user's `.curlrc`, so a local
+ * config can't add headers or change behaviour. The URLs come from the
+ * committed sources.json (HTTPS) and the downloaded file is checked against
+ * its sha256, so the protocol isn't pinned here; the tests run curl against
+ * a plain-HTTP local server.
  */
 export function curlArguments(url: string, outputPath: string, timeouts: DownloadTimeouts): string[] {
     const connectSeconds = timeouts.connectMs / 1000;
     const stallSeconds = Math.max(1, Math.ceil(timeouts.stallMs / 1000));
     return [
+        '--disable',
         '--location',
         '--fail',
         '--silent',

@@ -19,6 +19,7 @@ Settled choices, newest first. Each entry is short: the decision, why, and what 
 - **The asset tool downloads from Intel with Windows' own `curl.exe`** (M1 lead). Since 2026-11-04, `cdrdv2.intel.com` answers Node's `fetch` with a 247-byte "Request Rejected" page, and `curl.exe` still gets the zip. We use a normal client that works; we don't disguise one that's refused (no fake browser headers). Other hosts keep Node `fetch`.
   - *Revisit if:* Intel blocks `curl.exe` too. Then the instructions say to download by hand and put the zip in `assets/.cache`.
 - **B0 is passed: its "Sponza builds in ≤ 2 s" is judged on the median of 3 browser-worker runs per GPU session** (M1 lead, after the B0b review).
+  - Measured on Sponza's base package only (3.75 M triangles), before the curtains joined `sponza`.
   - Runs at 8e5373c: 1.89, 2.27, 1.70 s (RTX session) and 1.53, 1.61, 1.78 s (Intel session). Medians 1.89 and 1.61 s; 1 run in 6 over 2 s, while another process held a CPU core throughout.
   - Trace speed on tinybvh trees against ours on the idle RTX is 0.99–1.10×. The 0.99 (Bistro exterior) is within run-to-run noise, so "at least as fast" counts as met.
   - *Why the median:* the build is CPU work on a laptop shared with background load, and one slow run is that load, not the code. The repeat tooling already reports medians for GPU numbers.
