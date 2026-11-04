@@ -1,28 +1,37 @@
 /**
- * Builds top-level tree shapes in a module worker when the environment has
- * one, and on the calling thread (on a later turn) otherwise: Node tests, or
- * a host that blocks workers. The same pattern as `mesh-bvh-async.ts`.
+ * Builds and checks top-level tree shapes in a module worker when the
+ * environment has one, and on the calling thread (on a later turn) otherwise:
+ * Node tests, or a host that blocks workers. The same pattern as
+ * `mesh-bvh-async.ts`.
  */
 
-import { buildTopLevelShape, topLevelInputTransferables, type TopLevelBuildInput, type TopLevelShape } from './top-level-shape.ts';
-import type { TopLevelBuildRequest, TopLevelBuildResponse } from './top-level-worker.ts';
+import { topLevelInputTransferables, TopLevelShapeKeeper, type TopLevelBuildInput, type TopLevelShape } from './top-level-shape.ts';
+import type { TopLevelRequest, TopLevelResponse } from './top-level-worker.ts';
 
-export interface TopLevelBuild {
-    readonly shape: TopLevelShape;
-    /** CPU time of the build itself (in the worker when there is one). */
-    readonly buildMs: number;
+export interface TopLevelResult {
+    /** A new shape, or null when a check found the old one still good enough. */
+    readonly shape: TopLevelShape | null;
+    /** For checks: the old shape's relative SAH cost at the current transforms, and as built. */
+    readonly relativeCost: number;
+    readonly builtCost: number;
+    /** CPU time of the request (in the worker when there is one). */
+    readonly workerMs: number;
 }
 
 export interface TopLevelBuilder {
     readonly usesWorker: boolean;
-    /** Builds over the instances in `input`, whose arrays move to the worker: they are unusable afterwards. */
-    build(input: TopLevelBuildInput): Promise<TopLevelBuild>;
-    /** Stops the worker. Pending builds reject. */
+    /**
+     * `build` makes a new shape; `check` makes one only if the last shape's
+     * cost at these transforms passed `ratio` times its as-built cost. The
+     * input's arrays move to the worker: they are unusable afterwards.
+     */
+    request(mode: 'build' | 'check', input: TopLevelBuildInput, ratio: number): Promise<TopLevelResult>;
+    /** Stops the worker. Pending requests reject. */
     dispose(): void;
 }
 
 export interface TopLevelBuilderConfig {
-    /** `'auto'` (default) uses a worker when `Worker` exists and starts; `'never'` always builds inline. */
+    /** `'auto'` (default) uses a worker when `Worker` exists and starts; `'never'` always works inline. */
     readonly worker?: 'auto' | 'never';
 }
 
@@ -42,16 +51,17 @@ function tryStartWorker(): Worker | null {
 }
 
 function createInlineBuilder(): TopLevelBuilder {
+    const keeper = new TopLevelShapeKeeper();
     return {
         usesWorker: false,
-        build: (input) =>
+        request: (mode, input, ratio) =>
             new Promise((resolve, reject) => {
                 // A later turn, so callers see the same asynchronous behaviour as with a worker.
                 setTimeout(() => {
                     try {
                         const start = performance.now();
-                        const shape = buildTopLevelShape(input);
-                        resolve({ shape, buildMs: performance.now() - start });
+                        const result = mode === 'build' ? { shape: keeper.build(input), relativeCost: 0, builtCost: 0 } : keeper.check(input, ratio);
+                        resolve({ ...result, workerMs: performance.now() - start });
                     } catch (error) {
                         reject(error instanceof Error ? error : new Error(String(error)));
                     }
@@ -62,29 +72,29 @@ function createInlineBuilder(): TopLevelBuilder {
 }
 
 function createWorkerBuilder(worker: Worker): TopLevelBuilder {
-    const pending = new Map<number, { resolve(build: TopLevelBuild): void; reject(error: Error): void }>();
+    const pending = new Map<number, { resolve(result: TopLevelResult): void; reject(error: Error): void }>();
     let nextId = 1;
     const failAll = (message: string): void => {
         for (const entry of pending.values()) entry.reject(new Error(message));
         pending.clear();
     };
-    worker.onmessage = (event: MessageEvent<TopLevelBuildResponse>) => {
+    worker.onmessage = (event: MessageEvent<TopLevelResponse>) => {
         const response = event.data;
         const entry = pending.get(response.id);
         if (!entry) return;
         pending.delete(response.id);
         if ('error' in response) entry.reject(new Error(response.error));
-        else entry.resolve({ shape: response.shape, buildMs: response.buildMs });
+        else entry.resolve(response);
     };
     worker.onerror = (event) => failAll(`top-level worker failed: ${event.message}`);
     return {
         usesWorker: true,
-        build(input) {
-            return new Promise<TopLevelBuild>((resolve, reject) => {
+        request(mode, input, ratio) {
+            return new Promise<TopLevelResult>((resolve, reject) => {
                 const id = nextId++;
                 pending.set(id, { resolve, reject });
-                const request: TopLevelBuildRequest = { id, input };
-                worker.postMessage(request, topLevelInputTransferables(input));
+                const message: TopLevelRequest = { id, mode, input, ratio };
+                worker.postMessage(message, topLevelInputTransferables(input));
             });
         },
         dispose() {

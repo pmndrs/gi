@@ -110,6 +110,9 @@ export class GIPlatformImpl implements GIPlatform {
         this.rays = new PlatformRayQueries(device, this.sceneCopy, {
             label: this.label,
             buildIn: options.buildIn,
+            // The top level reads its refit stats back only in stats mode: hosts are promised no readbacks.
+            diagnostics: options.gpuTiming === true,
+            warn: (message) => this.warnOnce(message),
         });
         this.kernels = new PlatformKernelBuilder(device, this.label);
         this.timer = options.gpuTiming ? new GpuTimer(device, { warn: (message) => this.warnOnce(message) }) : null;
@@ -211,7 +214,7 @@ export class GIPlatformImpl implements GIPlatform {
         }
 
         const upload = this.sceneCopy.encode(encoder);
-        this.rays.update(encoder, upload);
+        this.rays.update(encoder, upload, this.timer ?? undefined);
         // Settings, and the sky's projection when the environment changed.
         this.shade.encode(encoder, this.sceneCopy.environment, this.sceneCopy.environmentVersion);
 
@@ -265,6 +268,8 @@ export class GIPlatformImpl implements GIPlatform {
             techniques[technique.id] = technique.memoryBytes;
             counters[technique.id] = technique.counters;
         }
+        const topLevel = this.rays.topLevelCounters;
+        if (topLevel) counters['platform top level'] = topLevel;
         const sceneCopy = this.sceneCopy.memoryBytes;
         const acceleration = this.rays.memoryBytes;
         const memory: MemoryReport = {

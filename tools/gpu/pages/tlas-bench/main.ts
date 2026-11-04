@@ -49,7 +49,8 @@ await runGpuTest(
         assert(device.features.has('timestamp-query'), 'this adapter has no timestamp queries');
         const random = createRandom(0x10_000);
         const scene = new PlatformScene(device, { label: 'tlas-bench' });
-        const rays = new PlatformRayQueries(device, scene, { label: 'tlas-bench' });
+        // Diagnostics on, so a refit that gave up is counted. Its 64-byte stats copy runs after the timed pass.
+        const rays = new PlatformRayQueries(device, scene, { label: 'tlas-bench', diagnostics: true });
         const timer = await createDispatchTimer(device);
         try {
             assert(rays.topLevelPath === 'gpu-refit', `expected the GPU top level, got ${rays.topLevelPath}`);
@@ -107,6 +108,7 @@ await runGpuTest(
             const refitsBefore = top.counters.refits;
             const shapesBefore = top.counters.shapesBuilt;
             const qualityBefore = top.counters.qualityRebuilds;
+            const checksBefore = top.counters.qualityChecks;
             const gpuMs: number[] = [];
             const updateCpuMs: number[] = [];
             const sceneEncodeCpuMs: number[] = [];
@@ -138,7 +140,7 @@ await runGpuTest(
             );
             const tree = await checkTopLevel(device, top.buffer, bySlot);
             assert(tree.failures.length === 0, tree.failures.join('\n'));
-            assert(top.counters.refitIncomplete === 0, `${top.counters.refitIncomplete} refit box reads gave up waiting`);
+            assert(top.counters.refitGaveUp === 0, `${top.counters.refitGaveUp} refit box reads gave up waiting (repaired)`);
 
             const result = {
                 benchmark: 'tlas-bench',
@@ -157,6 +159,8 @@ await runGpuTest(
                 shapeBuildMsLast: top.counters.lastBuildMs,
                 shapesBuiltWhileMoving: top.counters.shapesBuilt - shapesBefore,
                 qualityRebuildsWhileMoving: top.counters.qualityRebuilds - qualityBefore,
+                qualityChecksWhileMoving: top.counters.qualityChecks - checksBefore,
+                snapshotMsLast: top.counters.lastSnapshotMs,
                 rebuildCostRatio: TOP_LEVEL_REBUILD_COST_RATIO,
                 latestRelativeCost: top.latestRelativeCost,
                 slotsChecked: tree.checked,

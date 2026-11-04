@@ -75,8 +75,43 @@ export function parentSlotsOf(words: Uint32Array, nodeWordOffset: number, nodeCo
     return slots;
 }
 
+/**
+ * Nodes grouped by depth, deepest level first, for a refit that goes level by
+ * level (the GPU refit's repair pass): every node comes after all its
+ * descendants. `levelStarts[level]` to `levelStarts[level + 1]` index into
+ * `levelNodes`; there are `levelStarts.length - 1` levels.
+ */
+export function levelOrderOf(parentSlots: Uint32Array, nodeCount: number): { levelStarts: Uint32Array; levelNodes: Uint32Array } {
+    const depth = new Int32Array(nodeCount).fill(-1);
+    const depthOf = (node: number): number => {
+        // Walk up to a node of known depth, then fill the path back down (no recursion: trees can be deep).
+        const path: number[] = [];
+        let at = node;
+        while (at !== GPU_LAYOUT_NO_PARENT && depth[at] < 0) {
+            path.push(at);
+            const parentSlot = parentSlots[at];
+            at = parentSlot === GPU_LAYOUT_NO_PARENT ? GPU_LAYOUT_NO_PARENT : parentSlot >> 1;
+        }
+        let level = at === GPU_LAYOUT_NO_PARENT ? -1 : depth[at];
+        for (let index = path.length - 1; index >= 0; index--) depth[path[index]] = ++level;
+        return depth[node];
+    };
+    let deepest = -1;
+    for (let node = 0; node < nodeCount; node++) deepest = Math.max(deepest, depthOf(node));
+    const levelCount = deepest + 1;
+    // Level 0 of the output is the deepest depth.
+    const counts = new Uint32Array(levelCount);
+    for (let node = 0; node < nodeCount; node++) counts[deepest - depth[node]]++;
+    const levelStarts = new Uint32Array(levelCount + 1);
+    for (let level = 0; level < levelCount; level++) levelStarts[level + 1] = levelStarts[level] + counts[level];
+    const fill = levelStarts.slice(0, levelCount);
+    const levelNodes = new Uint32Array(nodeCount);
+    for (let node = 0; node < nodeCount; node++) levelNodes[fill[deepest - depth[node]]++] = node;
+    return { levelStarts, levelNodes };
+}
+
 /** `[minX, minY, minZ, maxX, maxY, maxZ]`, with an empty box as `+max, -max`. */
-type Box = [number, number, number, number, number, number];
+type Box =[number, number, number, number, number, number];
 
 function emptyBox(): Box {
     return [BVH_FLOAT_MAX, BVH_FLOAT_MAX, BVH_FLOAT_MAX, -BVH_FLOAT_MAX, -BVH_FLOAT_MAX, -BVH_FLOAT_MAX];

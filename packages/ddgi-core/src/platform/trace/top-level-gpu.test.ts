@@ -14,20 +14,43 @@ import { BVH_NODE_BYTES, BVH_NODE_WORDS, TOP_HEADER_WORD } from './layout.ts';
 import { PlatformRayQueries } from './ray-queries.ts';
 import { transformBounds } from './top-level.ts';
 import { topLevelGatherWgsl } from './top-level-gpu.ts';
-import { buildTopLevelShape } from './top-level-shape.ts';
+import { buildTopLevelShape, TopLevelShapeKeeper, type TopLevelBuildInput } from './top-level-shape.ts';
+import { GILimitError } from '../contract/errors.ts';
+
+/** A build input over `count` instances whose slot is their index. */
+function randomInput(seed: number, count: number): TopLevelBuildInput {
+    const random = createRandom(seed);
+    const objectToWorld = new Float64Array(count * 16);
+    const meshBounds = new Float32Array(count * 6);
+    for (let index = 0; index < count; index++) {
+        objectToWorld.set(randomAffine(random, { extent: 50, mirror: index % 3 === 0 }), index * 16);
+        meshBounds.set([-1, -0.5, -0.2, 1, 0.5, 0.2], index * 6);
+    }
+    return { slots: Uint32Array.from({ length: count }, (_, index) => index), visible: new Uint8Array(count).fill(1), objectToWorld, meshBounds };
+}
+
+function copyInput(input: TopLevelBuildInput): TopLevelBuildInput {
+    return { slots: input.slots.slice(), visible: input.visible.slice(), objectToWorld: input.objectToWorld.slice(), meshBounds: input.meshBounds.slice() };
+}
 
 /** The fake GPU plus what the tracer's top level needs: layouts, features, compute passes and a mappable buffer. */
-function createGpu(features: string[]): FakeGpu & { compute: { passes: number } } {
-    const fake = createFakeGpu();
-    const state = { passes: 0 };
+function createGpu(features: string[], limits: Partial<GPUSupportedLimits> = {}): FakeGpu & { compute: { passes: number; mapAsyncCalls: number } } {
+    const fake = createFakeGpu(limits);
+    const state = { passes: 0, mapAsyncCalls: 0 };
     const device = fake.device as unknown as Record<string, unknown>;
     const createBuffer = device.createBuffer as (descriptor: GPUBufferDescriptor) => FakeBuffer;
     Object.assign(device, {
         features: new Set(features),
         createBindGroupLayout: (descriptor: GPUBindGroupLayoutDescriptor) => ({ descriptor }),
         createPipelineLayout: (descriptor: GPUPipelineLayoutDescriptor) => ({ descriptor }),
-        // Stats readbacks never resolve here: the fake device has no GPU to wait for.
-        createBuffer: (descriptor: GPUBufferDescriptor) => Object.assign(createBuffer(descriptor), { mapAsync: () => new Promise(() => {}) }),
+        // Readbacks are counted, and never resolve here: the fake device has no GPU to wait for.
+        createBuffer: (descriptor: GPUBufferDescriptor) =>
+            Object.assign(createBuffer(descriptor), {
+                mapAsync: () => {
+                    state.mapAsyncCalls++;
+                    return new Promise(() => {});
+                },
+            }),
     });
     Object.assign(device.limits as object, { maxComputeWorkgroupsPerDimension: 65535, maxBindGroups: 4 });
     const pass = { setBindGroup() {}, setPipeline() {}, dispatchWorkgroups() {}, end() {} };
@@ -51,15 +74,9 @@ function cube(): { positions: Float32Array; indices: Uint32Array } {
 
 describe('top-level shapes', () => {
     it('refitting a shape with the boxes it was built from gives back the built boxes, bit for bit', () => {
-        const random = createRandom(7);
         const count = 300;
-        const objectToWorld = new Float64Array(count * 16);
-        const meshBounds = new Float32Array(count * 6);
-        for (let index = 0; index < count; index++) {
-            objectToWorld.set(randomAffine(random, { extent: 50, mirror: index % 3 === 0 }), index * 16);
-            meshBounds.set([-1, -0.5, -0.2, 1, 0.5, 0.2], index * 6);
-        }
-        const shape = buildTopLevelShape({ objectToWorld: objectToWorld.slice(), meshBounds: meshBounds.slice() });
+        const { objectToWorld, meshBounds, ...rest } = randomInput(7, count);
+        const shape = buildTopLevelShape(copyInput({ objectToWorld, meshBounds, ...rest }));
         expect(shape.nodeCount).toBe(count - 1);
         expect(shape.leafSlots.length).toBe(count);
         expect(shape.relativeCost).toBeGreaterThan(1);
@@ -68,7 +85,7 @@ describe('top-level shapes', () => {
         const primitiveBoxes = new Float32Array(count * PRIMITIVE_BOX_FLOATS);
         const box = new Float32Array(6);
         for (let record = 0; record < count; record++) {
-            const input = shape.order[record];
+            const input = shape.recordSlots[record];   // slot = input index here
             transformBounds(meshBounds.subarray(input * 6, input * 6 + 6), objectToWorld.subarray(input * 16, input * 16 + 16), box, 0);
             primitiveBoxes.set(box.subarray(0, 3), record * PRIMITIVE_BOX_FLOATS);
             primitiveBoxes.set(box.subarray(3, 6), record * PRIMITIVE_BOX_FLOATS + 4);
@@ -88,9 +105,27 @@ describe('top-level shapes', () => {
     });
 
     it('builds an empty shape for no instances', () => {
-        const shape = buildTopLevelShape({ objectToWorld: new Float64Array(0), meshBounds: new Float32Array(0) });
+        const shape = buildTopLevelShape({ slots: new Uint32Array(0), visible: new Uint8Array(0), objectToWorld: new Float64Array(0), meshBounds: new Float32Array(0) });
         expect(shape.nodeCount).toBe(0);
         expect(shape.leafSlots.length).toBe(0);
+    });
+
+    it('keeps a shape whose quality holds, and builds a new one once it has decayed', () => {
+        const keeper = new TopLevelShapeKeeper();
+        const input = randomInput(11, 400);
+        const built = keeper.build(copyInput(input));
+        // Small moves: the refit shape is about as good as built.
+        const nudged = copyInput(input);
+        for (let index = 0; index < 400; index++) nudged.objectToWorld[index * 16 + 12] += 0.05;
+        const kept = keeper.check(nudged, 1.25);
+        expect(kept.shape).toBeNull();
+        expect(kept.builtCost).toBeCloseTo(built.relativeCost, 6);
+        expect(kept.relativeCost).toBeLessThan(1.25 * kept.builtCost);
+        // Every instance somewhere else: the old shape no longer suits them.
+        const scattered = randomInput(12, 400);
+        const rebuilt = keeper.check(scattered, 1.25);
+        expect(rebuilt.relativeCost).toBeGreaterThan(1.25 * rebuilt.builtCost);
+        expect(rebuilt.shape?.recordSlots.length).toBe(400);
     });
 
     it('gathers through the scene copy and the bvh package’s instance box', () => {
@@ -102,10 +137,10 @@ describe('top-level shapes', () => {
 });
 
 describe('the rays backend’s top level', () => {
-    async function setUp(features: string[]) {
-        const gpu = createGpu(features);
+    async function setUp(features: string[], options: { diagnostics?: boolean; limits?: Partial<GPUSupportedLimits> } = {}) {
+        const gpu = createGpu(features, options.limits);
         const scene = new PlatformScene(gpu.device);
-        const rays = new PlatformRayQueries(gpu.device, scene, { buildIn: 'main' });
+        const rays = new PlatformRayQueries(gpu.device, scene, { buildIn: 'main', diagnostics: options.diagnostics });
         await rays.prepare(new PlatformKernelBuilder(gpu.device, 'test'));
         const frame = () => {
             const encoder = gpu.createEncoder();
@@ -171,7 +206,78 @@ describe('the rays backend’s top level', () => {
         const idleBefore = gpu.compute.passes;
         frame();
         expect(gpu.compute.passes).toBe(idleBefore);
+        // And no readback ever, without diagnostics: hosts are promised none.
+        expect(gpu.compute.mapAsyncCalls).toBe(0);
         rays.dispose();
         expect(gpu.buffers.filter((buffer) => buffer.label.includes('top level')).every((buffer) => buffer.destroyed)).toBe(true);
+    });
+
+    it('reads the refit stats back only with diagnostics on', async () => {
+        const { gpu, scene, rays, frame } = await setUp(['subgroups'], { diagnostics: true });
+        const mesh = scene.createMesh(cube());
+        const instance = scene.createInstance({ mesh, materials: [scene.createMaterial({})], transform: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1] });
+        frame();
+        await rays.whenBuilt();
+        frame();
+        scene.setTransform(instance, [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 1, 0, 0, 1]);
+        frame();
+        expect(gpu.compute.mapAsyncCalls).toBeGreaterThan(0);
+        rays.dispose();
+    });
+
+    it('marks a removed mesh absent in the mesh table even when placing another tree fails that frame', async () => {
+        // Room for small trees, but not for 48-byte triangle records of the big mesh.
+        const { gpu, scene, rays, frame } = await setUp(['subgroups'], { limits: { maxStorageBufferBindingSize: 400_000 } });
+        const material = scene.createMaterial({});
+        const small = scene.createMesh(cube());
+        const instance = scene.createInstance({ mesh: small, materials: [material], transform: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1] });
+        frame();
+        await rays.whenBuilt();
+        frame();
+        const meshTable = gpu.buffers.filter((buffer) => buffer.label.includes('top level mesh table') && !buffer.destroyed).at(-1);
+        const smallSlot = scene.meshSlot(small);
+        const rootWord = (table: FakeBuffer) => new Uint32Array(table.bytes.buffer)[smallSlot * 8 + 3];
+        if (!meshTable) throw new Error('no mesh table');
+        expect(rootWord(meshTable)).not.toBe(0xffffffff);
+
+        // A big mesh whose tree can't be placed, uploaded and built first...
+        const triangles = 9000;
+        const positions = new Float32Array(triangles * 9).map((_, index) => (index % 97) / 10);
+        const big = scene.createMesh({ positions, indices: Uint32Array.from({ length: triangles * 3 }, (_, index) => index) });
+        scene.createInstance({ mesh: big, materials: [material], transform: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 5, 0, 0, 1] });
+        frame();
+        await rays.whenBuilt();
+        // ...then, in the frame where placing it fails, the small mesh goes away.
+        scene.destroyInstance(instance);
+        scene.destroyMesh(small);
+        expect(() => frame()).toThrow(GILimitError);
+        const tableAfter = gpu.buffers.filter((buffer) => buffer.label.includes('top level mesh table') && !buffer.destroyed).at(-1);
+        if (!tableAfter) throw new Error('no mesh table');
+        expect(rootWord(tableAfter)).toBe(0xffffffff);
+        rays.dispose();
+    });
+});
+
+describe('the scene copy’s instanceSetChanged flag', () => {
+    it('is set when an instance that contributes to GI is created or destroyed, not when one moves or is hidden', () => {
+        const gpu = createGpu(['subgroups']);
+        const scene = new PlatformScene(gpu.device);
+        const encode = () => scene.encode(gpu.createEncoder()).instanceSetChanged;
+        const mesh = scene.createMesh(cube());
+        const material = scene.createMaterial({});
+        const identity = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+        const instance = scene.createInstance({ mesh, materials: [material], transform: identity });
+        expect(encode()).toBe(true);
+        scene.setTransform(instance, [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 2, 0, 0, 1]);
+        expect(encode()).toBe(false);
+        scene.setVisible(instance, false);
+        expect(encode()).toBe(false);
+        // An instance that never contributes to GI is never in a shape.
+        scene.createInstance({ mesh, materials: [material], transform: identity, contributesToGI: false });
+        expect(encode()).toBe(false);
+        scene.destroyInstance(instance);
+        expect(encode()).toBe(true);
+        expect(scene.packGiInstances().slots.length).toBe(0);
+        scene.dispose();
     });
 });

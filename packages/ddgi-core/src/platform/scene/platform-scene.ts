@@ -115,6 +115,15 @@ export interface InstanceSnapshot {
     readonly visible: boolean;
 }
 
+/** Every instance that contributes to GI, in flat arrays (see {@link PlatformScene.packGiInstances}). */
+export interface PackedGiInstances {
+    readonly slots: Uint32Array;
+    readonly meshSlots: Uint32Array;
+    readonly visible: Uint8Array;
+    /** Object-to-world, 16 numbers per instance (column-major). */
+    readonly objectToWorld: Float64Array;
+}
+
 /** What one {@link PlatformScene.encode} did. */
 export interface SceneUpload {
     readonly changes: SceneChanges;
@@ -124,6 +133,13 @@ export interface SceneUpload {
     readonly meshesRemoved: readonly number[];
     /** The traceable instances, one of their transforms, or one of their meshes changed: a top level is stale. */
     readonly instancesChanged: boolean;
+    /**
+     * An instance that contributes to GI was created or destroyed (shown or
+     * hidden doesn't count). Moves and mesh updates leave it false, so the
+     * tracer's GPU top level (B1a) knows when it needs a new shape without
+     * looking at every instance.
+     */
+    readonly instanceSetChanged: boolean;
     /** A scene buffer was reallocated; `module.version` has changed too. */
     readonly reallocated: boolean;
     /** Bytes written with `queue.writeBuffer` this frame. */
@@ -252,6 +268,7 @@ export class PlatformScene implements SceneApi, SceneCopy {
     private readonly changeLog = new ChangeLog();
     private headerDirty = true;
     private topLevelDirty = false;
+    private instanceSetDirty = false;
     private triangleTotal = 0;
     private cachedBounds: Aabb | null = null;
 
@@ -356,6 +373,32 @@ export class PlatformScene implements SceneApi, SceneCopy {
     }
 
     /** Every live instance, for building the tracer's top level. */
+    /**
+     * Every instance that contributes to GI, hidden ones included, packed for
+     * the tracer's top-level shape builds: one pass, typed arrays, no object
+     * per instance (10,000 instances move often, B1a).
+     */
+    packGiInstances(): PackedGiInstances {
+        let count = 0;
+        for (const instance of this.instances.values()) if (instance.contributesToGi) count++;
+        const packed = {
+            slots: new Uint32Array(count),
+            meshSlots: new Uint32Array(count),
+            visible: new Uint8Array(count),
+            objectToWorld: new Float64Array(count * 16),
+        };
+        let index = 0;
+        for (const instance of this.instances.values()) {
+            if (!instance.contributesToGi) continue;
+            packed.slots[index] = instance.slot;
+            packed.meshSlots[index] = instance.mesh.slot;
+            packed.visible[index] = instance.visible ? 1 : 0;
+            packed.objectToWorld.set(instance.objectToWorld, index * 16);
+            index++;
+        }
+        return packed;
+    }
+
     instanceSnapshot(): InstanceSnapshot[] {
         return [...this.instances.values()].map((instance) => ({
             slot: instance.slot,
@@ -535,6 +578,7 @@ export class PlatformScene implements SceneApi, SceneCopy {
             this.changeLog.addRegion(entry.worldBounds, 'geometry', handle);
             this.topLevelDirty = true;
         }
+        if (entry.contributesToGi) this.instanceSetDirty = true;
         this.cachedBounds = null;
         this.headerDirty = true;
         return handle;
@@ -593,6 +637,7 @@ export class PlatformScene implements SceneApi, SceneCopy {
             this.changeLog.addRegion(entry.worldBounds, 'geometry', instance);
             this.topLevelDirty = true;
         }
+        if (entry.contributesToGi) this.instanceSetDirty = true;
         entry.mesh.instances.delete(entry);
         for (const material of entry.materials) material.users.delete(entry);
         this.mirror.releaseList(entry.listOffset, entry.materials.length);
@@ -714,11 +759,13 @@ export class PlatformScene implements SceneApi, SceneCopy {
             meshesUploaded: uploaded,
             meshesRemoved: this.removedMeshSlots,
             instancesChanged: this.topLevelDirty,
+            instanceSetChanged: this.instanceSetDirty,
             reallocated: this.bufferVersion !== versionBefore,
             bytesWritten,
         };
         this.removedMeshSlots = [];
         this.topLevelDirty = false;
+        this.instanceSetDirty = false;
         return upload;
     }
 

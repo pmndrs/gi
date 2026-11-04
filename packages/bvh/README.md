@@ -13,7 +13,9 @@ shape: one thread per leaf climbs to the root, and at each node the second
 thread to arrive (a per-node counter, no float atomics) takes the union of the
 two child boxes. Boxes travel as 32-bit atomic words, so no plain store has to
 be visible across workgroups; a bounded re-read covers WGSL's relaxed atomic
-order, and the stats count any read that gave up (it must stay 0). Sibling
+order. If a read still gives up, a one-workgroup repair pass refits the whole
+tree level by level in the same compute pass, so a wrong box is never kept;
+the stats (read back only with `diagnostics: true`) count it. Sibling
 leaves held by neighbouring subgroup lanes finish their node in registers. The
 climb also sums every inner node's half-area, the tree-quality signal
 (`relativeSahCost`) a caller uses to decide when to rebuild. It needs the

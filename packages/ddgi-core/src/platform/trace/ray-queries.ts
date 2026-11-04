@@ -46,6 +46,14 @@ export interface PlatformRayQueriesOptions {
     readonly label?: string;
     /** `worker` (default) builds mesh trees and top-level shapes in module workers; `main` on this thread. */
     readonly buildIn?: 'worker' | 'main';
+    /**
+     * Read the GPU top level's refit stats back, for counters and warnings.
+     * Off by default (hosts are promised no readbacks); the platform turns it
+     * on with `gpuTiming`.
+     */
+    readonly diagnostics?: boolean;
+    /** Where the GPU top level reports a refit it had to repair (once). Defaults to `console.warn`. */
+    readonly warn?: (message: string) => void;
 }
 
 /** Where the top level is kept up to date: refit on the GPU, or the CPU fallback without subgroups. */
@@ -135,7 +143,10 @@ export class PlatformRayQueries implements RayQueries {
         // An empty top level: the header says 0 nodes, so every ray misses.
         this.topLevelBuffer = this.createTopLevelBuffer(TOP_LEVEL_HEADER_BYTES);
         this.topLevelPath = GpuBvhRefit.isSupported(device) ? 'gpu-refit' : 'cpu';
-        this.gpuTopLevel = this.topLevelPath === 'gpu-refit' ? new GpuTopLevel(device, scene, { label: this.label, buildIn: options.buildIn }) : null;
+        this.gpuTopLevel =
+            this.topLevelPath === 'gpu-refit'
+                ? new GpuTopLevel(device, scene, { label: this.label, buildIn: options.buildIn, diagnostics: options.diagnostics, warn: options.warn })
+                : null;
 
         // The GPU top level replaces its buffer when it grows, so its version counts too.
         const currentVersion = (): number => this.bufferVersion + (this.gpuTopLevel?.version ?? 0);
@@ -164,6 +175,22 @@ export class PlatformRayQueries implements RayQueries {
     /** Instances in the current top level; for stats and tests. */
     get topLevelInstanceCount(): number {
         return this.gpuTopLevel ? this.gpuTopLevel.instanceCount : this.cpuTopLevelInstanceCount;
+    }
+
+    /** The GPU top level's counters in plain words, for `stats.counters`; null on the CPU path. */
+    get topLevelCounters(): Readonly<Record<string, number>> | null {
+        const counters = this.gpuTopLevel?.counters;
+        if (!counters) return null;
+        return {
+            'refit passes': counters.refits,
+            'shapes built': counters.shapesBuilt,
+            'quality checks': counters.qualityChecks,
+            'quality rebuilds': counters.qualityRebuilds,
+            'last shape build ms (worker)': counters.lastBuildMs,
+            'last snapshot ms (main thread)': counters.lastSnapshotMs,
+            'refit reads that gave up (diagnostics)': counters.refitGaveUp,
+            'refit repairs (diagnostics)': counters.refitRepairs,
+        };
     }
 
     private get currentTopLevelBuffer(): GPUBuffer {
@@ -244,8 +271,9 @@ export class PlatformRayQueries implements RayQueries {
         }
 
         // Placing trees can fail (a buffer over the device's binding limit). The top level
-        // is still rebuilt from what is placed, so it never points at a released range, and
-        // then the error is thrown.
+        // is still brought up to date with what is placed (the CPU path rebuilds it; the
+        // GPU path writes the mesh table, where released trees are marked absent, and
+        // refits), so it never points at a released range, and then the error is thrown.
         let failure: unknown = null;
         const arrived = this.takeArrived();
         if (arrived.length > 0) {
@@ -261,12 +289,20 @@ export class PlatformRayQueries implements RayQueries {
         }
         if (this.gpuTopLevel) {
             // Refit (and swap in a new shape) on the GPU: moves never rebuild on the CPU here.
-            if (failure === null) {
+            try {
                 this.gpuTopLevel.update(
                     encoder,
-                    { instancesChanged: upload.instancesChanged, meshesChanged, deepestMesh: this.deepestPlacedMesh() },
+                    {
+                        instancesChanged: upload.instancesChanged,
+                        instanceSetChanged: upload.instanceSetChanged,
+                        meshesChanged,
+                        deepestMesh: this.deepestPlacedMesh(),
+                    },
                     timer,
                 );
+            } catch (error) {
+                // The placement failure, if any, is the one to report first.
+                if (failure === null) failure = error;
             }
             this.topLevelStale = false;
         } else if (this.topLevelStale) {

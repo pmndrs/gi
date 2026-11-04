@@ -6,6 +6,7 @@
 export { PlatformScene, DEFAULT_SCENE_CAPACITIES } from './platform-scene.ts';
 export type {
     InstanceSnapshot,
+    PackedGiInstances,
     PlatformSceneOptions,
     SceneCapacities,
     SceneMemory,

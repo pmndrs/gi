@@ -35,6 +35,8 @@ interface TlasBenchData {
     shapeBuildMsFirst: number;
     shapeSnapshotMsFirst: number;
     qualityRebuildsWhileMoving: number;
+    qualityChecksWhileMoving?: number;
+    snapshotMsLast?: number;
     topLevelBytes: number;
     userAgent: string;
     browserVersion: string | null;
@@ -53,6 +55,9 @@ export function tlasBenchRows(data: TlasBenchData): MetricRow[] {
         row('tlas/shape_snapshot_cpu_ms', data.shapeSnapshotMsFirst),
         row('tlas/quality_rebuilds_60_frames', data.qualityRebuildsWhileMoving),
         row('tlas/memory_bytes', data.topLevelBytes),
+        // From the review fixes on: quality checks in the worker, and the main thread's pack time of the last one.
+        ...(data.qualityChecksWhileMoving === undefined ? [] : [row('tlas/quality_checks_60_frames', data.qualityChecksWhileMoving)]),
+        ...(data.snapshotMsLast === undefined ? [] : [row('tlas/snapshot_cpu_ms_last', data.snapshotMsLast)]),
     ];
 }
 

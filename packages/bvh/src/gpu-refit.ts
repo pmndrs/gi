@@ -5,7 +5,7 @@
  * primitives are instances that move every frame; the same kernels refit a
  * mesh tree's triangles later (B1).
  *
- * **How it works.** Two dispatches in the caller's compute pass:
+ * **How it works.** Three dispatches in the caller's compute pass:
  *
  * 1. `bvhRefitClear`, one thread per node: zeroes the node's arrival counter
  *    and marks both child boxes "unwritten".
@@ -17,6 +17,12 @@
  *    So every node is finished by exactly one thread, with no float atomics
  *    (WGSL has none) and no thread ever waiting on a workgroup that might not
  *    have started (WebGPU promises no such progress).
+ * 3. `bvhRefitRepair`, one workgroup: returns at once, unless a read in the
+ *    climb gave up (below). Then it refits the whole tree again, level by
+ *    level from the deepest, with barriers between levels: slower, but it
+ *    needs no cross-workgroup visibility at all. So a box built from an
+ *    unwritten word is never kept, not even for one frame, and no readback
+ *    is needed to find out.
  *
  * **Memory visibility.** WGSL atomics are relaxed, and plain stores from one
  * workgroup are not guaranteed visible to another within a dispatch. So the
@@ -26,8 +32,10 @@
  * may in theory see the counter before its sibling's box; the clear pass
  * marks boxes "unwritten" so the reader can tell, and it re-reads (a bounded
  * spin: the box store was issued before the counter's, so it only has to
- * land). A spin that runs out is counted in the stats, and the test pages
- * require that count to be 0 on every GPU (docs/NOTES.md).
+ * land). A spin that runs out is counted in the stats and triggers the repair
+ * pass. The stats can be read back for diagnostics (`diagnostics: true`,
+ * off by default: the platform promises hosts no readbacks), which is how a
+ * give-up reaches the platform's warnings and counters.
  *
  * **Subgroups** (DECISIONS 2026-11-04: written for subgroups first, with one
  * declared fallback). Builders store primitives in tree order, so two leaf
@@ -43,9 +51,9 @@
  * **Quality signal.** The climb also sums the half-areas of all inner nodes
  * (each node's area is added by the thread that finishes it, and partial sums
  * travel up with the boxes, so no float atomics here either). The root's sum
- * over its own area is `relativeSahCost` (refit-cpu.ts): when it grows well
- * past its value at build time, the shape no longer suits the positions and
- * the caller rebuilds.
+ * over its own area is `relativeSahCost` (refit-cpu.ts), reported in the
+ * diagnostics stats. A caller that decides when to rebuild without
+ * readbacks computes the same number on the CPU (`refitOnCpu`).
  *
  * **Empty boxes.** A primitive that must not be hit (a hidden instance, say)
  * has an empty box (`min > max`). Unions skip it, and an empty slot is stored
@@ -60,10 +68,16 @@ import {
     GPU_LAYOUT_NODE_WORD,
     GPU_LAYOUT_NODE_WORDS,
 } from './gpu-layout.ts';
-import { BVH_FLOAT_MAX, PRIMITIVE_BOX_FLOATS } from './refit-cpu.ts';
+import { BVH_FLOAT_MAX, levelOrderOf, PRIMITIVE_BOX_FLOATS } from './refit-cpu.ts';
 
-/** Threads per workgroup of both kernels. A multiple of every subgroup size up to 64. */
+/** Threads per workgroup of the clear and climb kernels. A multiple of every subgroup size up to 64. */
 export const BVH_REFIT_WORKGROUP_SIZE = 64;
+
+/** Threads of the repair pass's single workgroup: the default device's largest workgroup. */
+const REPAIR_WORKGROUP_SIZE = 256;
+
+/** Words of the uniform parameters (see `BvhRefitParams` in the WGSL). */
+const PARAM_WORDS = 8;
 
 /** Re-reads of a box word before a spin gives up and is counted (see the top of this file). */
 const MAX_SPINS = 4096;
@@ -80,8 +94,10 @@ export const BVH_REFIT_STAT = {
     generation: 7,
     /** Box reads that were still unwritten after the bounded spin, or climbs that didn't end. Must be 0. */
     incomplete: 8,
-    /** Threads that finished the root: 1 per refit of a non-empty tree. */
+    /** Threads that finished the root: 1 per refit of a non-empty tree, 2 when the repair pass ran too. */
     rootsFinished: 9,
+    /** 1 when the repair pass refit the tree again (because `incomplete` > 0). */
+    repairs: 10,
 } as const;
 export const BVH_REFIT_STATS_BYTES = 64;
 
@@ -101,17 +117,22 @@ export function bvhRefitWgsl(): string {
 // ---- Bindings ----------------------------------------------------------------
 
 struct BvhRefitParams {
-    nodeWordOffset: u32,   // where node 0 starts in bvhTree, in 32-bit words
+    nodeWordOffset: u32,     // where node 0 starts in bvhTree, in 32-bit words
     nodeCount: u32,
     leafCount: u32,
     generation: u32,
+    levelCount: u32,         // depth levels, for the repair pass
+    levelStartsOffset: u32,  // where the level starts begin in bvhTopology
+    levelNodesOffset: u32,   // where the nodes in level order begin in bvhTopology
+    unused: u32,
 }
 
 // The tree, read and written as 32-bit words: boxes are copied as bits, never as floats.
 @group(0) @binding(0) var<storage, read_write> bvhTree: array<atomic<u32>>;
 // Two vec4s per primitive: (min.xyz, unused), (max.xyz, unused). Empty when min > max.
 @group(0) @binding(1) var<storage, read> bvhPrimitiveBoxes: array<vec4f>;
-// [parent slot of each node (node * 2 + side), or BVH_NO_PARENT] then [each leaf slot].
+// [parent slot of each node (node * 2 + side), or BVH_NO_PARENT], [each leaf slot],
+// then for the repair pass [first index of each level, plus the end] and [nodes, deepest level first].
 @group(0) @binding(2) var<storage, read> bvhTopology: array<u32>;
 // [arrival counter per node] then [summed inner-node half-area below each child slot].
 @group(0) @binding(3) var<storage, read_write> bvhScratch: array<atomic<u32>>;
@@ -143,6 +164,8 @@ const BVH_STAT_ROOT_UPPER: u32 = ${stat.rootUpper}u;
 const BVH_STAT_GENERATION: u32 = ${stat.generation}u;
 const BVH_STAT_INCOMPLETE: u32 = ${stat.incomplete}u;
 const BVH_STAT_ROOTS_FINISHED: u32 = ${stat.rootsFinished}u;
+const BVH_STAT_REPAIRS: u32 = ${stat.repairs}u;
+const BVH_REPAIR_WORKGROUP_SIZE: u32 = ${REPAIR_WORKGROUP_SIZE}u;
 
 // ---- Boxes --------------------------------------------------------------------
 
@@ -225,6 +248,15 @@ fn bvhWaitCost(slot: u32) -> f32 {
     return bitcast<f32>(value);
 }
 
+// A stored box back as a box: the stored form of an empty box is a point at the largest float.
+fn bvhStoredBox(lower: vec3f, upper: vec3f) -> BvhBox {
+    if (lower.x == BVH_FLOAT_MAX) {
+        return bvhEmptyBox();
+    }
+    return BvhBox(lower, upper);
+}
+
+// A sibling's box during the climb, waiting (bounded) for each word to be written.
 fn bvhLoadSlot(slot: u32) -> BvhBox {
     let base = bvhSlotWord(slot);
     let lower = vec3f(
@@ -237,10 +269,23 @@ fn bvhLoadSlot(slot: u32) -> BvhBox {
         bitcast<f32>(bvhWaitTreeWord(base + BVH_MAX_OFFSET_WORDS + 1u)),
         bitcast<f32>(bvhWaitTreeWord(base + BVH_MAX_OFFSET_WORDS + 2u)),
     );
-    if (lower.x == BVH_FLOAT_MAX) {
-        return bvhEmptyBox();   // the stored form of an empty box
-    }
-    return BvhBox(lower, upper);
+    return bvhStoredBox(lower, upper);
+}
+
+// A box the repair pass wrote in an earlier level (visible after the level's barrier).
+fn bvhReadSlot(slot: u32) -> BvhBox {
+    let base = bvhSlotWord(slot);
+    let lower = vec3f(
+        bitcast<f32>(atomicLoad(&bvhTree[base])),
+        bitcast<f32>(atomicLoad(&bvhTree[base + 1u])),
+        bitcast<f32>(atomicLoad(&bvhTree[base + 2u])),
+    );
+    let upper = vec3f(
+        bitcast<f32>(atomicLoad(&bvhTree[base + BVH_MAX_OFFSET_WORDS])),
+        bitcast<f32>(atomicLoad(&bvhTree[base + BVH_MAX_OFFSET_WORDS + 1u])),
+        bitcast<f32>(atomicLoad(&bvhTree[base + BVH_MAX_OFFSET_WORDS + 2u])),
+    );
+    return bvhStoredBox(lower, upper);
 }
 
 // The union of a leaf slot's primitives.
@@ -274,11 +319,12 @@ fn bvhThreadIndex(id: vec3u, groups: vec3u) -> u32 {
     return id.y * groups.x * BVH_WORKGROUP_SIZE + id.x;
 }
 
-// Whether lane 'lane' is running, from a subgroupBallot(true) mask.
+// Whether lane 'lane' is running, from a subgroupBallot(true) mask: bit (lane % 32)
+// of the mask's word (lane / 32). Indexing the vector by a runtime value is fine
+// here: it happens once per thread, not in a loop.
 fn bvhLaneRunning(running: vec4u, lane: u32) -> bool {
-    let quarter = lane >> 5u;
-    let bits = select(select(running.w, running.z, quarter == 2u), select(running.y, running.x, quarter == 0u), quarter < 2u);
-    return ((bits >> (lane & 31u)) & 1u) == 1u;
+    let word = running[lane / 32u];
+    return ((word >> (lane % 32u)) & 1u) == 1u;
 }
 
 // ---- Kernels -------------------------------------------------------------------------
@@ -289,6 +335,7 @@ fn bvhRefitClear(@builtin(global_invocation_id) id: vec3u, @builtin(num_workgrou
     if (node == 0u) {
         atomicStore(&bvhStats[BVH_STAT_INCOMPLETE], 0u);
         atomicStore(&bvhStats[BVH_STAT_ROOTS_FINISHED], 0u);
+        atomicStore(&bvhStats[BVH_STAT_REPAIRS], 0u);
     }
     if (node >= bvhParams.nodeCount) {
         return;
@@ -386,6 +433,66 @@ fn bvhRefitClimb(
     }
     atomicAdd(&bvhStats[BVH_STAT_INCOMPLETE], 1u);
 }
+
+// Set by the repair workgroup's first thread, so every thread sees the same answer.
+var<workgroup> bvhRepairNeeded: u32;
+
+// Runs as one workgroup after the climb. Normally it returns at once; when a
+// climb read gave up, it refits the whole tree level by level, deepest first.
+// Within one workgroup, the barrier after each level makes that level's boxes
+// visible to the next, so this path needs no cross-workgroup visibility.
+@compute @workgroup_size(${REPAIR_WORKGROUP_SIZE})
+fn bvhRefitRepair(@builtin(local_invocation_index) thread: u32) {
+    if (thread == 0u) {
+        bvhRepairNeeded = atomicLoad(&bvhStats[BVH_STAT_INCOMPLETE]);
+    }
+    if (workgroupUniformLoad(&bvhRepairNeeded) == 0u) {
+        return;
+    }
+    if (thread == 0u) {
+        atomicAdd(&bvhStats[BVH_STAT_REPAIRS], 1u);
+    }
+    for (var level = 0u; level < bvhParams.levelCount; level += 1u) {
+        let first = bvhTopology[bvhParams.levelStartsOffset + level];
+        let end = bvhTopology[bvhParams.levelStartsOffset + level + 1u];
+        for (var at = first + thread; at < end; at += BVH_REPAIR_WORKGROUP_SIZE) {
+            let node = bvhTopology[bvhParams.levelNodesOffset + at];
+            let base = bvhNodeWord(node);
+            var nodeBox = bvhEmptyBox();
+            var nodeBelowArea = 0.0;
+            for (var side = 0u; side < 2u; side += 1u) {
+                let slot = node * 2u + side;
+                let child = atomicLoad(&bvhTree[base + select(BVH_LEFT_INDEX, BVH_RIGHT_INDEX, side == 1u)]);
+                if (child == BVH_EMPTY_CHILD) {
+                    continue;
+                }
+                let count = atomicLoad(&bvhTree[base + select(BVH_LEFT_COUNT, BVH_RIGHT_COUNT, side == 1u)]);
+                var box: BvhBox;
+                var belowArea = 0.0;
+                if (count > 0u) {
+                    box = bvhLeafBox(slot);
+                } else {
+                    // An inner child, finished in an earlier (deeper) level.
+                    box = bvhReadSlot(child * 2u);
+                    belowArea = bitcast<f32>(atomicLoad(&bvhScratch[bvhCostWord(child * 2u)]));
+                    if (atomicLoad(&bvhTree[bvhNodeWord(child) + BVH_RIGHT_INDEX]) != BVH_EMPTY_CHILD) {
+                        box = bvhUnion(box, bvhReadSlot(child * 2u + 1u));
+                        belowArea += bitcast<f32>(atomicLoad(&bvhScratch[bvhCostWord(child * 2u + 1u)]));
+                    }
+                    belowArea += bvhHalfArea(box);
+                }
+                bvhStoreSlot(slot, box, belowArea);
+                nodeBox = bvhUnion(nodeBox, box);
+                nodeBelowArea += belowArea;
+            }
+            if (bvhTopology[node] == BVH_NO_PARENT) {
+                bvhFinishRoot(nodeBox, nodeBelowArea + bvhHalfArea(nodeBox));
+            }
+        }
+        storageBarrier();
+        workgroupBarrier();
+    }
+}
 `;
 }
 
@@ -410,13 +517,22 @@ export interface BvhRefitStats {
     readonly summedHalfArea: number;
     /** `summedHalfArea` over the root's half-area: `relativeSahCost` of the refit tree. */
     readonly relativeCost: number;
-    /** Must be 0; see {@link BVH_REFIT_STAT}. */
+    /** Climb reads that gave up waiting; see {@link BVH_REFIT_STAT}. Non-zero means the repair pass ran. */
     readonly incomplete: number;
     readonly rootsFinished: number;
+    /** 1 when the repair pass refit the tree again. */
+    readonly repairs: number;
 }
 
 export interface GpuBvhRefitOptions {
     readonly label?: string;
+    /**
+     * Read the stats back (a frame or two late) into `latestStats`. Off by
+     * default: the platform promises hosts no readbacks, so only its stats or
+     * debug mode turns this on. Correctness never depends on it: a refit that
+     * gives up is repaired on the GPU in the same frame either way.
+     */
+    readonly diagnostics?: boolean;
 }
 
 function dispatch2d(pass: GPUComputePassEncoder, threads: number, maxPerDimension: number): void {
@@ -441,6 +557,8 @@ export class GpuBvhRefit {
     private readonly layout: GPUBindGroupLayout;
     private clearPipeline: GPUComputePipeline | null = null;
     private climbPipeline: GPUComputePipeline | null = null;
+    private repairPipeline: GPUComputePipeline | null = null;
+    private readonly diagnostics: boolean;
     private topology: GPUBuffer;
     private scratch: GPUBuffer;
     private readonly stats: GPUBuffer;
@@ -458,6 +576,7 @@ export class GpuBvhRefit {
         if (!GpuBvhRefit.isSupported(device)) throw new Error('@pmndrs/bvh: the GPU refit needs a device with the "subgroups" feature');
         this.device = device;
         this.label = options.label ?? 'bvh refit';
+        this.diagnostics = options.diagnostics ?? false;
         const storage = (type: GPUBufferBindingType): GPUBindGroupLayoutEntry['buffer'] => ({ type });
         this.layout = device.createBindGroupLayout({
             label: this.label,
@@ -473,22 +592,26 @@ export class GpuBvhRefit {
         this.topology = this.createStorage('topology', 64);
         this.scratch = this.createStorage('scratch', 64);
         this.stats = device.createBuffer({ label: `${this.label} stats`, size: BVH_REFIT_STATS_BYTES, usage: USAGE.STORAGE | USAGE.COPY_SRC });
-        this.params = device.createBuffer({ label: `${this.label} params`, size: 16, usage: USAGE.UNIFORM | USAGE.COPY_DST });
+        this.params = device.createBuffer({ label: `${this.label} params`, size: PARAM_WORDS * 4, usage: USAGE.UNIFORM | USAGE.COPY_DST });
         this.statsReadback = device.createBuffer({ label: `${this.label} stats readback`, size: BVH_REFIT_STATS_BYTES, usage: USAGE.MAP_READ | USAGE.COPY_DST });
     }
 
-    /** Compiles both kernels (asynchronously, so the main thread doesn't stall). */
+    /** Compiles the kernels (asynchronously, so the main thread doesn't stall). */
     async prepare(): Promise<void> {
-        if (this.clearPipeline && this.climbPipeline) return;
+        if (this.ready) return;
         const module = this.device.createShaderModule({ label: this.label, code: bvhRefitWgsl() });
         const layout = this.device.createPipelineLayout({ label: this.label, bindGroupLayouts: [this.layout] });
         const pipeline = (entryPoint: string) =>
             this.device.createComputePipelineAsync({ label: `${this.label} ${entryPoint}`, layout, compute: { module, entryPoint } });
-        [this.clearPipeline, this.climbPipeline] = await Promise.all([pipeline('bvhRefitClear'), pipeline('bvhRefitClimb')]);
+        [this.clearPipeline, this.climbPipeline, this.repairPipeline] = await Promise.all([
+            pipeline('bvhRefitClear'),
+            pipeline('bvhRefitClimb'),
+            pipeline('bvhRefitRepair'),
+        ]);
     }
 
     get ready(): boolean {
-        return this.clearPipeline !== null && this.climbPipeline !== null;
+        return this.clearPipeline !== null && this.climbPipeline !== null && this.repairPipeline !== null;
     }
 
     /** Takes a new tree shape. Its buffers are written with `queue.writeBuffer`, so they are in place for the next submit. */
@@ -496,7 +619,11 @@ export class GpuBvhRefit {
         const nodeCount = shape.nodeCount;
         const leafCount = shape.leafSlots.length;
         if (shape.parentSlots.length < nodeCount) throw new RangeError('parentSlots must hold one entry per node');
-        const topologyWords = Math.max(1, nodeCount + leafCount);
+        const levels = levelOrderOf(shape.parentSlots, nodeCount);
+        const levelCount = levels.levelStarts.length - 1;
+        const levelStartsOffset = nodeCount + leafCount;
+        const levelNodesOffset = levelStartsOffset + levels.levelStarts.length;
+        const topologyWords = Math.max(1, levelNodesOffset + nodeCount);
         if (this.topology.size < topologyWords * 4) {
             this.topology.destroy();
             this.topology = this.createStorage('topology', topologyWords * 8);
@@ -506,22 +633,27 @@ export class GpuBvhRefit {
             this.scratch.destroy();
             this.scratch = this.createStorage('scratch', scratchWords * 8);
         }
-        const topology = new Uint32Array(nodeCount + leafCount);
+        const topology = new Uint32Array(topologyWords);
         topology.set(shape.parentSlots.subarray(0, nodeCount), 0);
         topology.set(shape.leafSlots, nodeCount);
-        if (topology.length > 0) this.device.queue.writeBuffer(this.topology, 0, topology);
-        this.device.queue.writeBuffer(this.params, 0, new Uint32Array([shape.nodeWordOffset, nodeCount, leafCount, shape.generation >>> 0]));
+        topology.set(levels.levelStarts, levelStartsOffset);
+        topology.set(levels.levelNodes, levelNodesOffset);
+        this.device.queue.writeBuffer(this.topology, 0, topology);
+        const params = new Uint32Array(PARAM_WORDS);
+        params.set([shape.nodeWordOffset, nodeCount, leafCount, shape.generation >>> 0, levelCount, levelStartsOffset, levelNodesOffset]);
+        this.device.queue.writeBuffer(this.params, 0, params);
         this.shape = { nodeCount, leafCount };
     }
 
     /**
-     * Records the refit into `pass`: the clear, then the climb. `tree` holds
+     * Records the refit into `pass`: the clear, the climb and the repair
+     * (which returns at once unless the climb gave up). `tree` holds
      * the nodes at the shape's `nodeWordOffset`; `primitiveBoxes` holds
      * {@link PRIMITIVE_BOX_FLOATS} floats per primitive and must be written
      * by an earlier dispatch or command.
      */
     encode(pass: GPUComputePassEncoder, tree: GPUBuffer, primitiveBoxes: GPUBuffer): void {
-        if (!this.clearPipeline || !this.climbPipeline) throw new Error('@pmndrs/bvh: call prepare() before encode()');
+        if (!this.clearPipeline || !this.climbPipeline || !this.repairPipeline) throw new Error('@pmndrs/bvh: call prepare() before encode()');
         if (this.shape.nodeCount === 0) return;
         const maxPerDimension = this.device.limits.maxComputeWorkgroupsPerDimension;
         pass.setBindGroup(0, this.bindGroup(tree, primitiveBoxes));
@@ -529,6 +661,8 @@ export class GpuBvhRefit {
         dispatch2d(pass, this.shape.nodeCount, maxPerDimension);
         pass.setPipeline(this.climbPipeline);
         dispatch2d(pass, this.shape.leafCount, maxPerDimension);
+        pass.setPipeline(this.repairPipeline);
+        pass.dispatchWorkgroups(1);
     }
 
     /**
@@ -538,6 +672,7 @@ export class GpuBvhRefit {
      * the mapping resolves.
      */
     pollStats(): void {
+        if (!this.diagnostics) return;
         if (this.statsState === 'copied') {
             this.statsState = 'mapping';
             this.statsReadback.mapAsync(MAP_MODE_READ).then(
@@ -556,9 +691,13 @@ export class GpuBvhRefit {
         }
     }
 
-    /** Stats readback, part 2: after {@link encode}, copies this refit's stats out unless an earlier copy is still being read. */
+    /**
+     * Stats readback, part 2: after {@link encode}, copies this refit's stats
+     * out unless an earlier copy is still being read. Does nothing unless
+     * `diagnostics` is on.
+     */
     copyStats(encoder: GPUCommandEncoder): void {
-        if (this.statsState === 'idle' && this.shape.nodeCount > 0) {
+        if (this.diagnostics && this.statsState === 'idle' && this.shape.nodeCount > 0) {
             encoder.copyBufferToBuffer(this.stats, 0, this.statsReadback, 0, BVH_REFIT_STATS_BYTES);
             this.statsState = 'copied';
         }
@@ -621,5 +760,6 @@ export function parseStats(words: Uint32Array): BvhRefitStats {
         relativeCost: rootArea > 0 ? summedHalfArea / rootArea : 0,
         incomplete: words[BVH_REFIT_STAT.incomplete],
         rootsFinished: words[BVH_REFIT_STAT.rootsFinished],
+        repairs: words[BVH_REFIT_STAT.repairs],
     };
 }

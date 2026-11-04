@@ -81,3 +81,101 @@ date,commit,device,browser,scene,metric,value
 2026-11-04,b99773f-dirty,Intel UHD,Chrome 156.0.8078.74 headless,synthetic-10k,median/tlas/quality_rebuilds_60_frames,0
 2026-11-04,b99773f-dirty,Intel UHD,Chrome 156.0.8078.74 headless,synthetic-10k,median/tlas/memory_bytes,2400640
 2026-11-04,b99773f-dirty,Intel UHD,Chrome 156.0.8078.74 headless,synthetic-10k,median/runs,3
+2026-11-04,fb91751-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,synthetic-10k,run1/scene/instances,10000
+2026-11-04,fb91751-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,synthetic-10k,run1/tlas/refit_gpu_ms_median,0.085936
+2026-11-04,fb91751-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,synthetic-10k,run1/tlas/refit_gpu_ms_max,0.090784
+2026-11-04,fb91751-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,synthetic-10k,run1/tlas/update_cpu_ms_median,0.1
+2026-11-04,fb91751-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,synthetic-10k,run1/tlas/scene_upload_cpu_ms_median,1.4
+2026-11-04,fb91751-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,synthetic-10k,run1/tlas/set_transform_all_cpu_ms_median,22.3
+2026-11-04,fb91751-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,synthetic-10k,run1/tlas/shape_build_worker_ms,69.5
+2026-11-04,fb91751-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,synthetic-10k,run1/tlas/shape_snapshot_cpu_ms,3.9
+2026-11-04,fb91751-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,synthetic-10k,run1/tlas/quality_rebuilds_60_frames,0
+2026-11-04,fb91751-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,synthetic-10k,run1/tlas/memory_bytes,2480784
+2026-11-04,fb91751-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,synthetic-10k,run1/tlas/quality_checks_60_frames,8
+2026-11-04,fb91751-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,synthetic-10k,run1/tlas/snapshot_cpu_ms_last,1.4
+2026-11-04,fb91751-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,synthetic-10k,run2/scene/instances,10000
+2026-11-04,fb91751-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,synthetic-10k,run2/tlas/refit_gpu_ms_median,0.085952
+2026-11-04,fb91751-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,synthetic-10k,run2/tlas/refit_gpu_ms_max,0.091136
+2026-11-04,fb91751-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,synthetic-10k,run2/tlas/update_cpu_ms_median,0.1
+2026-11-04,fb91751-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,synthetic-10k,run2/tlas/scene_upload_cpu_ms_median,1.4
+2026-11-04,fb91751-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,synthetic-10k,run2/tlas/set_transform_all_cpu_ms_median,23.35
+2026-11-04,fb91751-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,synthetic-10k,run2/tlas/shape_build_worker_ms,59
+2026-11-04,fb91751-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,synthetic-10k,run2/tlas/shape_snapshot_cpu_ms,3.9
+2026-11-04,fb91751-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,synthetic-10k,run2/tlas/quality_rebuilds_60_frames,0
+2026-11-04,fb91751-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,synthetic-10k,run2/tlas/memory_bytes,2480784
+2026-11-04,fb91751-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,synthetic-10k,run2/tlas/quality_checks_60_frames,8
+2026-11-04,fb91751-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,synthetic-10k,run2/tlas/snapshot_cpu_ms_last,1.4
+2026-11-04,fb91751-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,synthetic-10k,run3/scene/instances,10000
+2026-11-04,fb91751-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,synthetic-10k,run3/tlas/refit_gpu_ms_median,0.08584
+2026-11-04,fb91751-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,synthetic-10k,run3/tlas/refit_gpu_ms_max,0.092352
+2026-11-04,fb91751-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,synthetic-10k,run3/tlas/update_cpu_ms_median,0.1
+2026-11-04,fb91751-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,synthetic-10k,run3/tlas/scene_upload_cpu_ms_median,1.3
+2026-11-04,fb91751-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,synthetic-10k,run3/tlas/set_transform_all_cpu_ms_median,19.85
+2026-11-04,fb91751-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,synthetic-10k,run3/tlas/shape_build_worker_ms,55.7
+2026-11-04,fb91751-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,synthetic-10k,run3/tlas/shape_snapshot_cpu_ms,2.6
+2026-11-04,fb91751-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,synthetic-10k,run3/tlas/quality_rebuilds_60_frames,0
+2026-11-04,fb91751-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,synthetic-10k,run3/tlas/memory_bytes,2480784
+2026-11-04,fb91751-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,synthetic-10k,run3/tlas/quality_checks_60_frames,7
+2026-11-04,fb91751-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,synthetic-10k,run3/tlas/snapshot_cpu_ms_last,1.4
+2026-11-04,fb91751-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,synthetic-10k,median/scene/instances,10000
+2026-11-04,fb91751-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,synthetic-10k,median/tlas/refit_gpu_ms_median,0.085936
+2026-11-04,fb91751-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,synthetic-10k,median/tlas/refit_gpu_ms_max,0.091136
+2026-11-04,fb91751-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,synthetic-10k,median/tlas/update_cpu_ms_median,0.1
+2026-11-04,fb91751-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,synthetic-10k,median/tlas/scene_upload_cpu_ms_median,1.4
+2026-11-04,fb91751-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,synthetic-10k,median/tlas/set_transform_all_cpu_ms_median,22.3
+2026-11-04,fb91751-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,synthetic-10k,median/tlas/shape_build_worker_ms,59
+2026-11-04,fb91751-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,synthetic-10k,median/tlas/shape_snapshot_cpu_ms,3.9
+2026-11-04,fb91751-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,synthetic-10k,median/tlas/quality_rebuilds_60_frames,0
+2026-11-04,fb91751-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,synthetic-10k,median/tlas/memory_bytes,2480784
+2026-11-04,fb91751-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,synthetic-10k,median/tlas/quality_checks_60_frames,8
+2026-11-04,fb91751-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,synthetic-10k,median/tlas/snapshot_cpu_ms_last,1.4
+2026-11-04,fb91751-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,synthetic-10k,median/runs,3
+2026-11-04,fb91751-dirty,Intel UHD,Chrome 156.0.8078.74 headless,synthetic-10k,run1/scene/instances,10000
+2026-11-04,fb91751-dirty,Intel UHD,Chrome 156.0.8078.74 headless,synthetic-10k,run1/tlas/refit_gpu_ms_median,0.426221
+2026-11-04,fb91751-dirty,Intel UHD,Chrome 156.0.8078.74 headless,synthetic-10k,run1/tlas/refit_gpu_ms_max,0.861714
+2026-11-04,fb91751-dirty,Intel UHD,Chrome 156.0.8078.74 headless,synthetic-10k,run1/tlas/update_cpu_ms_median,0.0999999
+2026-11-04,fb91751-dirty,Intel UHD,Chrome 156.0.8078.74 headless,synthetic-10k,run1/tlas/scene_upload_cpu_ms_median,1.1
+2026-11-04,fb91751-dirty,Intel UHD,Chrome 156.0.8078.74 headless,synthetic-10k,run1/tlas/set_transform_all_cpu_ms_median,17.9
+2026-11-04,fb91751-dirty,Intel UHD,Chrome 156.0.8078.74 headless,synthetic-10k,run1/tlas/shape_build_worker_ms,55.5
+2026-11-04,fb91751-dirty,Intel UHD,Chrome 156.0.8078.74 headless,synthetic-10k,run1/tlas/shape_snapshot_cpu_ms,2.7
+2026-11-04,fb91751-dirty,Intel UHD,Chrome 156.0.8078.74 headless,synthetic-10k,run1/tlas/quality_rebuilds_60_frames,0
+2026-11-04,fb91751-dirty,Intel UHD,Chrome 156.0.8078.74 headless,synthetic-10k,run1/tlas/memory_bytes,2480784
+2026-11-04,fb91751-dirty,Intel UHD,Chrome 156.0.8078.74 headless,synthetic-10k,run1/tlas/quality_checks_60_frames,6
+2026-11-04,fb91751-dirty,Intel UHD,Chrome 156.0.8078.74 headless,synthetic-10k,run1/tlas/snapshot_cpu_ms_last,1.5
+2026-11-04,fb91751-dirty,Intel UHD,Chrome 156.0.8078.74 headless,synthetic-10k,run2/scene/instances,10000
+2026-11-04,fb91751-dirty,Intel UHD,Chrome 156.0.8078.74 headless,synthetic-10k,run2/tlas/refit_gpu_ms_median,0.407758
+2026-11-04,fb91751-dirty,Intel UHD,Chrome 156.0.8078.74 headless,synthetic-10k,run2/tlas/refit_gpu_ms_max,0.595621
+2026-11-04,fb91751-dirty,Intel UHD,Chrome 156.0.8078.74 headless,synthetic-10k,run2/tlas/update_cpu_ms_median,0.0999999
+2026-11-04,fb91751-dirty,Intel UHD,Chrome 156.0.8078.74 headless,synthetic-10k,run2/tlas/scene_upload_cpu_ms_median,1
+2026-11-04,fb91751-dirty,Intel UHD,Chrome 156.0.8078.74 headless,synthetic-10k,run2/tlas/set_transform_all_cpu_ms_median,18.15
+2026-11-04,fb91751-dirty,Intel UHD,Chrome 156.0.8078.74 headless,synthetic-10k,run2/tlas/shape_build_worker_ms,52.6
+2026-11-04,fb91751-dirty,Intel UHD,Chrome 156.0.8078.74 headless,synthetic-10k,run2/tlas/shape_snapshot_cpu_ms,2.6
+2026-11-04,fb91751-dirty,Intel UHD,Chrome 156.0.8078.74 headless,synthetic-10k,run2/tlas/quality_rebuilds_60_frames,0
+2026-11-04,fb91751-dirty,Intel UHD,Chrome 156.0.8078.74 headless,synthetic-10k,run2/tlas/memory_bytes,2480784
+2026-11-04,fb91751-dirty,Intel UHD,Chrome 156.0.8078.74 headless,synthetic-10k,run2/tlas/quality_checks_60_frames,6
+2026-11-04,fb91751-dirty,Intel UHD,Chrome 156.0.8078.74 headless,synthetic-10k,run2/tlas/snapshot_cpu_ms_last,1.2
+2026-11-04,fb91751-dirty,Intel UHD,Chrome 156.0.8078.74 headless,synthetic-10k,run3/scene/instances,10000
+2026-11-04,fb91751-dirty,Intel UHD,Chrome 156.0.8078.74 headless,synthetic-10k,run3/tlas/refit_gpu_ms_median,0.443149
+2026-11-04,fb91751-dirty,Intel UHD,Chrome 156.0.8078.74 headless,synthetic-10k,run3/tlas/refit_gpu_ms_max,0.546716
+2026-11-04,fb91751-dirty,Intel UHD,Chrome 156.0.8078.74 headless,synthetic-10k,run3/tlas/update_cpu_ms_median,0.1
+2026-11-04,fb91751-dirty,Intel UHD,Chrome 156.0.8078.74 headless,synthetic-10k,run3/tlas/scene_upload_cpu_ms_median,1.2
+2026-11-04,fb91751-dirty,Intel UHD,Chrome 156.0.8078.74 headless,synthetic-10k,run3/tlas/set_transform_all_cpu_ms_median,23.75
+2026-11-04,fb91751-dirty,Intel UHD,Chrome 156.0.8078.74 headless,synthetic-10k,run3/tlas/shape_build_worker_ms,86.2
+2026-11-04,fb91751-dirty,Intel UHD,Chrome 156.0.8078.74 headless,synthetic-10k,run3/tlas/shape_snapshot_cpu_ms,4.4
+2026-11-04,fb91751-dirty,Intel UHD,Chrome 156.0.8078.74 headless,synthetic-10k,run3/tlas/quality_rebuilds_60_frames,0
+2026-11-04,fb91751-dirty,Intel UHD,Chrome 156.0.8078.74 headless,synthetic-10k,run3/tlas/memory_bytes,2480784
+2026-11-04,fb91751-dirty,Intel UHD,Chrome 156.0.8078.74 headless,synthetic-10k,run3/tlas/quality_checks_60_frames,8
+2026-11-04,fb91751-dirty,Intel UHD,Chrome 156.0.8078.74 headless,synthetic-10k,run3/tlas/snapshot_cpu_ms_last,1.2
+2026-11-04,fb91751-dirty,Intel UHD,Chrome 156.0.8078.74 headless,synthetic-10k,median/scene/instances,10000
+2026-11-04,fb91751-dirty,Intel UHD,Chrome 156.0.8078.74 headless,synthetic-10k,median/tlas/refit_gpu_ms_median,0.426221
+2026-11-04,fb91751-dirty,Intel UHD,Chrome 156.0.8078.74 headless,synthetic-10k,median/tlas/refit_gpu_ms_max,0.595621
+2026-11-04,fb91751-dirty,Intel UHD,Chrome 156.0.8078.74 headless,synthetic-10k,median/tlas/update_cpu_ms_median,0.0999999
+2026-11-04,fb91751-dirty,Intel UHD,Chrome 156.0.8078.74 headless,synthetic-10k,median/tlas/scene_upload_cpu_ms_median,1.1
+2026-11-04,fb91751-dirty,Intel UHD,Chrome 156.0.8078.74 headless,synthetic-10k,median/tlas/set_transform_all_cpu_ms_median,18.15
+2026-11-04,fb91751-dirty,Intel UHD,Chrome 156.0.8078.74 headless,synthetic-10k,median/tlas/shape_build_worker_ms,55.5
+2026-11-04,fb91751-dirty,Intel UHD,Chrome 156.0.8078.74 headless,synthetic-10k,median/tlas/shape_snapshot_cpu_ms,2.7
+2026-11-04,fb91751-dirty,Intel UHD,Chrome 156.0.8078.74 headless,synthetic-10k,median/tlas/quality_rebuilds_60_frames,0
+2026-11-04,fb91751-dirty,Intel UHD,Chrome 156.0.8078.74 headless,synthetic-10k,median/tlas/memory_bytes,2480784
+2026-11-04,fb91751-dirty,Intel UHD,Chrome 156.0.8078.74 headless,synthetic-10k,median/tlas/quality_checks_60_frames,6
+2026-11-04,fb91751-dirty,Intel UHD,Chrome 156.0.8078.74 headless,synthetic-10k,median/tlas/snapshot_cpu_ms_last,1.2
+2026-11-04,fb91751-dirty,Intel UHD,Chrome 156.0.8078.74 headless,synthetic-10k,median/runs,3

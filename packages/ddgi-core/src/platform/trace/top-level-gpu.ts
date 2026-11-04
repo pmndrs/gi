@@ -12,28 +12,36 @@
  *    An instance that is now hidden, removed or has a singular transform, or
  *    whose mesh tree is gone, gets an empty box: rays skip it at once.
  * 2. *Refit* (`GpuBvhRefit`, `@pmndrs/bvh`): recomputes every node box
- *    bottom-up from those world boxes, keeping the tree's shape.
+ *    bottom-up from those world boxes, keeping the tree's shape. If any read
+ *    in its climb gave up waiting, its repair dispatch refits the whole tree
+ *    again in the same pass, so a wrong box is never kept.
  *
  * **Now and then, a new shape**, built on the CPU in a worker
  * (top-level-async.ts) and swapped in at the start of a later frame;
  * refits continue on the old shape meanwhile. A new shape is built when:
  *
- * - an instance that contributes to GI isn't in the tree yet (created since,
- *   or made to contribute). It becomes visible to rays when the shape
- *   arrives, usually a frame or two later, as a new mesh does when its tree
- *   arrives;
- * - the refit tree's quality has decayed: its relative SAH cost
- *   (`relativeSahCost`, read back from the refit a frame or two late) is more
- *   than {@link TOP_LEVEL_REBUILD_COST_RATIO} times the shape's cost as built.
+ * - an instance that contributes to GI was created or destroyed (the scene
+ *   copy's `instanceSetChanged`). A new instance becomes visible to rays when
+ *   the shape arrives, usually a frame or two later, as a new mesh does when
+ *   its tree arrives;
+ * - the refit tree's quality has decayed. While things move, every
+ *   {@link QUALITY_CHECK_INTERVAL_MS} the worker refits the current shape on
+ *   the CPU from the current transforms and builds a new one if its relative
+ *   SAH cost is more than {@link TOP_LEVEL_REBUILD_COST_RATIO} times its cost
+ *   as built. Nothing is read back from the GPU for this: the platform
+ *   promises hosts no readbacks.
  *
  * Shapes include hidden instances too (their boxes are empty while hidden),
  * so hiding and showing take effect in the same frame. Removed instances
- * don't need a new shape either: their empty boxes cost nothing to skip, and
- * a slot reused by a new instance is traced correctly because the gather
- * reads whatever instance the slot holds now.
+ * cost nothing until the next shape: their empty boxes are skipped, and a slot
+ * reused by a new instance is traced correctly because the gather reads
+ * whatever instance the slot holds now. Mesh trees that arrive or are rebuilt
+ * only change the mesh table, so they need no new shape either.
  *
- * Mesh trees that arrive or are rebuilt only change the mesh table, so they
- * need no new shape either.
+ * **Diagnostics** (`diagnostics: true`, which the platform turns on with
+ * `gpuTiming`): the refit's stats are read back a frame or two late. A climb
+ * that gave up (and was repaired) is then counted and reported once through
+ * `warn`. Without diagnostics there are no readbacks at all.
  */
 
 import { BVH_INSTANCE_BOX_WGSL } from '@pmndrs/bvh/gpu-instance-box';
@@ -53,7 +61,8 @@ import {
     TOP_LEVEL_HEADER_WORDS,
     TRACE_STACK_SIZE,
 } from './layout.ts';
-import { createTopLevelBuilder, type TopLevelBuild, type TopLevelBuilder } from './top-level-async.ts';
+import { createTopLevelBuilder, type TopLevelBuilder, type TopLevelResult } from './top-level-async.ts';
+import type { TopLevelBuildInput, TopLevelShape } from './top-level-shape.ts';
 
 /**
  * Rebuild when the refit tree's relative SAH cost exceeds the as-built cost
@@ -62,18 +71,35 @@ import { createTopLevelBuilder, type TopLevelBuild, type TopLevelBuilder } from 
  * Why 1.25: the cost is the expected number of top-level nodes a ray visits,
  * and the top level is a small part of a ray's work (a shadow ray in Bistro
  * interior visits about 44 nodes in all, T1.3), so 25% more top-level visits
- * cost a few percent of trace time at most. A rebuild costs no frame time
- * (worker), only a main-thread copy of the transforms (well under a
- * millisecond for 10,000 instances), and only one runs at a time. A lower
- * ratio would rebuild continuously in a scene that never stops moving.
+ * cost a few percent of trace time at most. A check or rebuild costs no frame
+ * time on the GPU and runs in the worker; on the main thread it costs packing
+ * the transforms (`counters.lastSnapshotMs`): about 1.3 ms for 10,000
+ * instances, 2.6-4.4 ms the first time while the code is still cold (RTX
+ * 3060 and Intel UHD laptop, bench/results/bvh.csv). Only one runs at a time. A lower ratio would rebuild
+ * continuously in a scene that never stops moving.
  */
 export const TOP_LEVEL_REBUILD_COST_RATIO = 1.25;
+
+/**
+ * While instances move, the worker checks the shape's quality at most this
+ * often. Each check packs every instance's transform on the main thread
+ * (about 1.3 ms for 10,000), so it isn't done every frame: at most about
+ * 0.5% of the main thread while everything moves.
+ */
+export const QUALITY_CHECK_INTERVAL_MS = 250;
 
 /** Gather kernel workgroup size. */
 const GATHER_WORKGROUP_SIZE = 64;
 
-/** Mesh table entry: `(boundsMin.xyz, rootNodeOffset)`, `(boundsMax.xyz, triangleOffset)` as u32 words. */
+/** Mesh table entry: two vec4u per mesh slot, `(boundsMin.xyz, rootNodeOffset)` and `(boundsMax.xyz, triangleOffset)`. */
 const MESH_ENTRY_WORDS = 8;
+/** Word positions inside a mesh table entry (the bounds as f32 bits). */
+const MESH_ENTRY_WORD = {
+    boundsMin: 0,
+    rootNodeOffset: 3,
+    boundsMax: 4,
+    triangleOffset: 7,
+} as const;
 /** `rootNodeOffset` of a mesh slot with no tree: its instances get empty boxes. */
 const MESH_ABSENT = 0xffffffff;
 
@@ -89,6 +115,8 @@ export interface PlacedMeshTree {
 export interface TopLevelFrame {
     /** The scene copy reported an instance, transform or mesh change. */
     readonly instancesChanged: boolean;
+    /** An instance that contributes to GI was created or destroyed (the scene copy's flag). */
+    readonly instanceSetChanged: boolean;
     /** Mesh trees were placed or released this frame (the mesh table changed). */
     readonly meshesChanged: boolean;
     /** Deepest placed mesh tree, in levels, for the traversal-stack check. */
@@ -99,28 +127,34 @@ export interface GpuTopLevelOptions {
     readonly label?: string;
     /** `worker` (default) builds shapes in a module worker; `main` on this thread (on a later turn). */
     readonly buildIn?: 'worker' | 'main';
+    /** Read the refit's stats back for counters and warnings (see the top of this file). Off by default. */
+    readonly diagnostics?: boolean;
+    /** Where a refit that had to be repaired is reported (once). Defaults to `console.warn`. */
+    readonly warn?: (message: string) => void;
 }
 
 /** Counters for tests, stats and the benchmark. */
 export interface GpuTopLevelCounters {
     /** Shapes built (each one swapped in). */
     shapesBuilt: number;
-    /** Of those, started because the refit tree's quality decayed. */
+    /** Quality checks run in the worker. */
+    qualityChecks: number;
+    /** Of the shapes, those a quality check built. */
     qualityRebuilds: number;
-    /** CPU time of the last shape build, in the worker. */
+    /** Worker CPU time of the last shape build. */
     lastBuildMs: number;
-    /** Main-thread time to gather the last build's input. */
+    /** Main-thread time to pack the last build's or check's input. */
     lastSnapshotMs: number;
-    /** Refits recorded. */
+    /** Refit passes recorded. */
     refits: number;
-    /** Box reads the refit gave up on (see `@pmndrs/bvh` gpu-refit.ts). Must stay 0. */
-    refitIncomplete: number;
+    /** Diagnostics only: climb reads that gave up waiting (each repaired in the same pass). */
+    refitGaveUp: number;
+    /** Diagnostics only: refits the repair pass redid. */
+    refitRepairs: number;
 }
 
 interface ArrivedShape {
-    readonly build: TopLevelBuild;
-    /** Scene instance slot of each build input, in input order. */
-    readonly slots: Uint32Array;
+    readonly shape: TopLevelShape;
     readonly generation: number;
 }
 
@@ -129,8 +163,6 @@ interface CurrentShape {
     readonly nodeCount: number;
     readonly maxDepth: number;
     readonly generation: number;
-    /** Relative SAH cost as built. */
-    readonly builtCost: number;
 }
 
 const USAGE = { COPY_SRC: 0x4, COPY_DST: 0x8, UNIFORM: 0x40, STORAGE: 0x80 } as const;
@@ -243,17 +275,20 @@ const GATHER_GROUP: GPUBindGroupLayoutDescriptor = {
 export class GpuTopLevel {
     readonly counters: GpuTopLevelCounters = {
         shapesBuilt: 0,
+        qualityChecks: 0,
         qualityRebuilds: 0,
         lastBuildMs: 0,
         lastSnapshotMs: 0,
         refits: 0,
-        refitIncomplete: 0,
+        refitGaveUp: 0,
+        refitRepairs: 0,
     };
 
     private readonly device: GPUDevice;
     private readonly scene: PlatformScene;
     private readonly label: string;
     private readonly buildIn: 'worker' | 'main';
+    private readonly warn: (message: string) => void;
     private builder: TopLevelBuilder | null = null;
     private readonly refit: GpuBvhRefit;
     private gatherKernel: ComputeKernel | null = null;
@@ -267,15 +302,20 @@ export class GpuTopLevel {
     private meshTableDirty = true;
     private readonly gatherParams: GPUBuffer;
     private gatherGroup: { group: GPUBindGroup; buffers: GPUBuffer[] } | null = null;
-    /** Object-space mesh boxes by mesh slot, from the scene upload: the build's input for meshes without a tree yet. */
-    private readonly meshBounds = new Map<number, Float32Array>();
+    /**
+     * Object-space mesh boxes by mesh slot, six floats each: the packed bounds
+     * from the scene upload, then the tree's root box once placed. The input
+     * of shape builds and checks.
+     */
+    private meshBounds = new Float32Array(16 * 6);
 
-    private current: CurrentShape = { recordCount: 0, nodeCount: 0, maxDepth: 0, generation: 0, builtCost: 0 };
+    private current: CurrentShape = { recordCount: 0, nodeCount: 0, maxDepth: 0, generation: 0 };
     private arrived: ArrivedShape | null = null;
-    /** Slots in the newest shape requested (built, in flight or swapped in). */
-    private requestedSlots = new Set<number>();
-    private buildInFlight = false;
-    private buildAgain = false;
+    /** The request the worker is busy with, if any. */
+    private inFlight: 'build' | 'check' | null = null;
+    /** A build was asked for while the worker was busy: start it when the worker is free. */
+    private buildQueued = false;
+    private lastRequestTime = -Infinity;
     private nextGeneration = 1;
     private buildFailure: Error | null = null;
     private idleWaiters: (() => void)[] = [];
@@ -283,7 +323,7 @@ export class GpuTopLevel {
     private bufferVersion = 0;
     private disposed = false;
 
-    /** Relative SAH cost of the refit tree, as last read back (0 before the first). */
+    /** Relative SAH cost of the refit tree: from the last quality check, or the diagnostics readback when on. */
     latestRelativeCost = 0;
 
     constructor(device: GPUDevice, scene: PlatformScene, options: GpuTopLevelOptions = {}) {
@@ -291,7 +331,8 @@ export class GpuTopLevel {
         this.scene = scene;
         this.label = options.label ?? 'gi';
         this.buildIn = options.buildIn ?? 'worker';
-        this.refit = new GpuBvhRefit(device, { label: `${this.label} top level refit` });
+        this.warn = options.warn ?? ((message) => console.warn(message));
+        this.refit = new GpuBvhRefit(device, { label: `${this.label} top level refit`, diagnostics: options.diagnostics ?? false });
         // An empty top level: the header says 0 nodes, so every ray misses.
         this.topLevelBuffer = this.createTopLevelBuffer(TOP_LEVEL_HEADER_BYTES);
         this.recordSlots = this.createStorage('top level record slots', 64);
@@ -311,23 +352,23 @@ export class GpuTopLevel {
         return this.bufferVersion;
     }
 
-    /** Records in the current shape (traceable instances when it was built). */
+    /** Records in the current shape. */
     get instanceCount(): number {
         return this.current.recordCount;
     }
 
-    /** True while a shape is being built or waits to be swapped in. */
+    /** True while a shape that adds or removes instances is being built or waits to be swapped in. Quality checks don't count. */
     get building(): boolean {
-        return this.buildInFlight || this.arrived !== null;
+        return this.buildPending || this.arrived !== null;
     }
 
     get memoryBytes(): number {
         return this.topLevelBuffer.size + this.recordSlots.size + this.primitiveBoxes.size + this.meshTable.size + this.gatherParams.size + this.refit.memoryBytes;
     }
 
-    /** Resolves once no shape is being built (one may still wait for the next `update` to be swapped in). */
+    /** Resolves once no shape build is pending (the last may still wait for the next `update` to be swapped in). */
     whenIdle(): Promise<void> {
-        if (!this.buildInFlight) return Promise.resolve();
+        if (!this.buildPending) return Promise.resolve();
         return new Promise((resolve) => this.idleWaiters.push(resolve));
     }
 
@@ -348,13 +389,12 @@ export class GpuTopLevel {
 
     /** A mesh was uploaded: its object box is what builds use until its tree is placed. */
     meshUploaded(slot: number, bounds: ArrayLike<number>): void {
-        this.meshBounds.set(slot, Float32Array.from({ length: 6 }, (_, index) => bounds[index]));
+        this.setMeshBounds(slot, bounds);
     }
 
-    /** A mesh's tree was placed (or replaced), or released (`null`). Takes effect at the next refit. */
+    /** A mesh's tree was placed (or replaced), or released (`null`). The mesh table reaches the GPU at the next `update`. */
     setMeshTree(slot: number, tree: PlacedMeshTree | null): void {
-        if (tree === null) this.meshBounds.delete(slot);
-        else this.meshBounds.set(slot, Float32Array.from({ length: 6 }, (_, index) => tree.bounds[index]));
+        if (tree) this.setMeshBounds(slot, tree.bounds);
         if ((slot + 1) * MESH_ENTRY_WORDS > this.meshMirror.length) {
             let capacity = this.meshMirror.length / MESH_ENTRY_WORDS;
             while (capacity <= slot) capacity *= 2;
@@ -370,53 +410,51 @@ export class GpuTopLevel {
             this.meshMirror.fill(MESH_ABSENT, base, base + MESH_ENTRY_WORDS);
         } else {
             const floats = new Float32Array(this.meshMirror.buffer, base * 4, MESH_ENTRY_WORDS);
-            floats.set([tree.bounds[0], tree.bounds[1], tree.bounds[2]], 0);
-            floats.set([tree.bounds[3], tree.bounds[4], tree.bounds[5]], 4);
-            this.meshMirror[base + 3] = tree.nodeOffset;
-            this.meshMirror[base + 7] = tree.triangleOffset;
+            floats.set([tree.bounds[0], tree.bounds[1], tree.bounds[2]], MESH_ENTRY_WORD.boundsMin);
+            floats.set([tree.bounds[3], tree.bounds[4], tree.bounds[5]], MESH_ENTRY_WORD.boundsMax);
+            this.meshMirror[base + MESH_ENTRY_WORD.rootNodeOffset] = tree.nodeOffset;
+            this.meshMirror[base + MESH_ENTRY_WORD.triangleOffset] = tree.triangleOffset;
         }
         this.meshTableDirty = true;
     }
 
     /**
      * Brings the top level up to this frame: swaps in an arrived shape,
-     * starts a build if one is due, and records the refit pass (gather, then
-     * refit) when anything it depends on changed. Called by the tracer in the
-     * platform's `encode`, before any technique traces.
+     * starts a build or quality check if one is due, and records the refit
+     * pass (gather, then refit) when anything it depends on changed. Called
+     * by the tracer in the platform's `encode`, before any technique traces.
      */
     update(encoder: GPUCommandEncoder, frame: TopLevelFrame, timer?: GpuTimerScope): void {
         if (this.disposed) throw new Error('@pmndrs/ddgi: the top level was disposed');
         for (const buffer of this.retired) buffer.destroy();
         this.retired = [];
-        if (this.buildFailure) {
-            const failure = this.buildFailure;
-            this.buildFailure = null;
-            throw failure;
-        }
 
         this.refit.pollStats();
-        this.checkQuality();
-        if (frame.instancesChanged && this.hasUntracedInstance()) this.requestBuild();
+        this.collectDiagnostics();
+        const moved = frame.instancesChanged || frame.meshesChanged;
+        if (frame.instanceSetChanged) this.request('build');
+        else if (moved && this.current.recordCount > 0 && performance.now() - this.lastRequestTime >= QUALITY_CHECK_INTERVAL_MS) this.request('check');
 
-        let changed = frame.instancesChanged || frame.meshesChanged;
-        if (this.arrived) {
-            this.swap(this.arrived);
-            this.arrived = null;
-            changed = true;
-        }
-        const requiredStack = this.current.maxDepth + 1 + frame.deepestMesh;
-        if (this.current.recordCount > 0 && requiredStack > TRACE_STACK_SIZE) {
-            throw new Error(
-                `@pmndrs/ddgi: the trace stack holds ${TRACE_STACK_SIZE} entries, but this scene can need ${requiredStack} ` +
-                    `(top level ${this.current.maxDepth} + 1 + deepest mesh tree ${frame.deepestMesh}).`,
-            );
-        }
+        // The mesh table goes first, so even a frame that throws below leaves no record
+        // pointing at a released mesh tree.
+        let changed = moved;
         if (this.meshTableDirty) {
             this.device.queue.writeBuffer(this.meshTable, 0, this.meshMirror);
             this.writeGatherParams();
             this.meshTableDirty = false;
             changed = true;
         }
+        if (this.arrived) {
+            this.swap(this.arrived, frame.deepestMesh);
+            this.arrived = null;
+            changed = true;
+        }
+        if (this.buildFailure) {
+            const failure = this.buildFailure;
+            this.buildFailure = null;
+            throw failure;
+        }
+        this.checkStack(this.current.maxDepth, frame.deepestMesh);
         if (changed && this.current.recordCount > 0) this.encodeRefit(encoder, timer);
     }
 
@@ -434,77 +472,97 @@ export class GpuTopLevel {
     // Shapes
     // -----------------------------------------------------------------------
 
-    /**
-     * Whether an instance that contributes to GI (shown or hidden) is missing from the newest shape. One pass
-     * over the scene's instances, run only on frames the scene reported an
-     * instance change (DECISIONS proposal in PROGRESS, B1a: a scene flag would
-     * make it free).
-     */
-    private hasUntracedInstance(): boolean {
-        for (const instance of this.scene.instanceSnapshot()) {
-            if (instance.contributesToGi && !this.requestedSlots.has(instance.slot)) return true;
-        }
-        return false;
+    /** A build is running or queued (quality checks aside). */
+    private get buildPending(): boolean {
+        return this.inFlight === 'build' || this.buildQueued;
     }
 
-    private requestBuild(): void {
-        if (this.buildInFlight) {
-            this.buildAgain = true;
+    private setMeshBounds(slot: number, bounds: ArrayLike<number>): void {
+        if ((slot + 1) * 6 > this.meshBounds.length) {
+            const grown = new Float32Array(Math.max((slot + 1) * 6, this.meshBounds.length * 2));
+            grown.set(this.meshBounds);
+            this.meshBounds = grown;
+        }
+        for (let index = 0; index < 6; index++) this.meshBounds[slot * 6 + index] = bounds[index];
+    }
+
+    private request(mode: 'build' | 'check'): void {
+        if (this.inFlight !== null) {
+            if (mode === 'build') this.buildQueued = true;
             return;
         }
-        this.startBuild();
+        this.send(mode);
     }
 
-    private startBuild(): void {
+    /** Packs every instance that contributes to GI and sends it to the worker. */
+    private send(mode: 'build' | 'check'): void {
         const start = performance.now();
-        const instances = this.scene
-            .instanceSnapshot()
-            // Hidden ones too: the gather gives them empty boxes, and showing them again needs no new shape.
-            .filter((instance) => instance.contributesToGi && this.meshBounds.has(instance.meshSlot));
-        const slots = new Uint32Array(instances.length);
-        const objectToWorld = new Float64Array(instances.length * 16);
-        const meshBounds = new Float32Array(instances.length * 6);
-        instances.forEach((instance, index) => {
-            slots[index] = instance.slot;
-            objectToWorld.set(instance.objectToWorld.subarray(0, 16), index * 16);
-            meshBounds.set(this.meshBounds.get(instance.meshSlot) as Float32Array, index * 6);
-        });
-        this.requestedSlots = new Set(slots);
+        const packed = this.scene.packGiInstances();
+        const count = packed.slots.length;
+        const meshBounds = new Float32Array(count * 6);
+        for (let index = 0; index < count; index++) {
+            const meshSlot = packed.meshSlots[index];
+            // A mesh always reaches the tracer in the same upload as (or before) its first instance.
+            if ((meshSlot + 1) * 6 <= this.meshBounds.length) meshBounds.set(this.meshBounds.subarray(meshSlot * 6, meshSlot * 6 + 6), index * 6);
+        }
+        const input: TopLevelBuildInput = { slots: packed.slots, visible: packed.visible, objectToWorld: packed.objectToWorld, meshBounds };
         this.counters.lastSnapshotMs = performance.now() - start;
+        this.lastRequestTime = performance.now();
+        if (mode === 'check') this.counters.qualityChecks++;
 
         const generation = this.nextGeneration++;
-        this.buildInFlight = true;
+        this.inFlight = mode;
         this.builder ??= createTopLevelBuilder({ worker: this.buildIn === 'main' ? 'never' : 'auto' });
-        this.builder.build({ objectToWorld, meshBounds }).then(
-            (build) => {
-                if (this.disposed) return;
-                this.arrived = { build, slots, generation };
-                this.finishBuild();
-            },
+        this.builder.request(mode, input, TOP_LEVEL_REBUILD_COST_RATIO).then(
+            (result) => this.finish(mode, generation, result),
             (error: unknown) => {
                 if (this.disposed) return;
                 this.buildFailure = new Error(`@pmndrs/ddgi: building the top level failed: ${error instanceof Error ? error.message : String(error)}`);
-                this.finishBuild();
+                this.finish(mode, generation, null);
             },
         );
     }
 
-    private finishBuild(): void {
-        this.buildInFlight = false;
-        if (this.buildAgain) {
-            // Something changed while this one was building: start the next right away, so
+    private finish(mode: 'build' | 'check', generation: number, result: TopLevelResult | null): void {
+        if (this.disposed) return;
+        this.inFlight = null;
+        if (result) {
+            if (mode === 'check') this.latestRelativeCost = result.relativeCost;
+            if (result.shape) {
+                this.arrived = { shape: result.shape, generation };
+                this.counters.lastBuildMs = result.workerMs;
+                if (mode === 'check') this.counters.qualityRebuilds++;
+            }
+        }
+        if (this.buildQueued) {
+            // Instances came or went while the worker was busy: build again right away, so
             // `whenIdle` only resolves once the shape covers the scene as it is now.
-            this.buildAgain = false;
-            this.startBuild();
+            this.buildQueued = false;
+            this.send('build');
             return;
         }
         for (const resolve of this.idleWaiters.splice(0)) resolve();
     }
 
-    /** Puts an arrived shape in place. Every write lands before this frame's commands run. */
-    private swap(arrived: ArrivedShape): void {
-        const { shape, buildMs } = arrived.build;
-        const recordCount = arrived.slots.length;
+    private checkStack(topLevelDepth: number, deepestMesh: number): void {
+        const requiredStack = topLevelDepth + 1 + deepestMesh;
+        if (topLevelDepth > 0 && requiredStack > TRACE_STACK_SIZE) {
+            throw new Error(
+                `@pmndrs/ddgi: the trace stack holds ${TRACE_STACK_SIZE} entries, but this scene can need ${requiredStack} ` +
+                    `(top level ${topLevelDepth} + 1 + deepest mesh tree ${deepestMesh}).`,
+            );
+        }
+    }
+
+    /**
+     * Puts an arrived shape in place. The stack check and the size check come
+     * first, so a shape that can't be used leaves every buffer as it was.
+     * Every write lands before this frame's commands run.
+     */
+    private swap(arrived: ArrivedShape, deepestMesh: number): void {
+        const { shape, generation } = arrived;
+        this.checkStack(shape.maxDepth, deepestMesh);
+        const recordCount = shape.recordSlots.length;
         const nodeCount = shape.nodeCount;
         const nodeByteOffset = TOP_LEVEL_HEADER_BYTES + recordCount * INSTANCE_RECORD_BYTES;
         this.ensureTopLevelBytes(nodeByteOffset + nodeCount * BVH_NODE_BYTES);
@@ -516,9 +574,9 @@ export class GpuTopLevel {
         this.device.queue.writeBuffer(this.topLevelBuffer, 0, header);
         if (nodeCount > 0) this.device.queue.writeBuffer(this.topLevelBuffer, nodeByteOffset, shape.nodes, 0, nodeCount * BVH_NODE_BYTES);
 
-        // Records are in tree order; record r holds the instance at build input position order[r].
+        // Records are in tree order; record r holds the instance in scene slot recordSlots[r].
         const recordSlots = new Uint32Array(Math.max(1, recordCount));
-        for (let record = 0; record < recordCount; record++) recordSlots[record] = arrived.slots[shape.order[record]];
+        recordSlots.set(shape.recordSlots);
         if (this.recordSlots.size < recordSlots.byteLength) {
             this.retired.push(this.recordSlots);
             this.recordSlots = this.createStorage('top level record slots', recordSlots.byteLength * 2);
@@ -535,27 +593,26 @@ export class GpuTopLevel {
             nodeCount,
             parentSlots: shape.parentSlots,
             leafSlots: shape.leafSlots,
-            generation: arrived.generation,
+            generation,
         });
-        this.current = { recordCount, nodeCount, maxDepth: shape.maxDepth, generation: arrived.generation, builtCost: shape.relativeCost };
+        this.current = { recordCount, nodeCount, maxDepth: shape.maxDepth, generation };
         this.writeGatherParams();
         this.counters.shapesBuilt++;
-        this.counters.lastBuildMs = buildMs;
     }
 
-    /** Reads the latest refit stats: counts incomplete refits, and asks for a new shape when quality has decayed. */
-    private checkQuality(): void {
+    /** Diagnostics only: counts and reports (once) refits that gave up and were repaired. */
+    private collectDiagnostics(): void {
         const stats = this.refit.latestStats;
         if (!stats || stats === this.seenStats) return;
         this.seenStats = stats;
-        this.counters.refitIncomplete += stats.incomplete;
-        if (stats.generation !== this.current.generation) return;
-        this.latestRelativeCost = stats.relativeCost;
-        const decayed = this.current.builtCost > 0 && stats.relativeCost > TOP_LEVEL_REBUILD_COST_RATIO * this.current.builtCost;
-        if (decayed && !this.buildInFlight && this.arrived === null) {
-            this.counters.qualityRebuilds++;
-            this.requestBuild();
-        }
+        if (stats.generation === this.current.generation) this.latestRelativeCost = stats.relativeCost;
+        if (stats.incomplete === 0) return;
+        this.counters.refitGaveUp += stats.incomplete;
+        this.counters.refitRepairs += stats.repairs;
+        this.warn(
+            '@pmndrs/ddgi: the top-level refit gave up waiting for a box on this GPU and refit the tree again in a slower pass ' +
+                '(the result is correct). Counted in stats.counters["platform top level"].',
+        );
     }
 
     // -----------------------------------------------------------------------
