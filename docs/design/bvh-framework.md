@@ -1,6 +1,6 @@
 # BVH framework (proposal, 2026-11-04)
 
-Status: **proposal, waiting for Dennis.** It is built from three research notes:
+Status: **package and H-PLOC target decided by Dennis 2026-11-04** (see "Decided" below). The milestone fit ("How the BVH track fits the milestones") is a recommendation waiting for his answer. It is built from three research notes:
 - [research/bvh-gpu-build.md](../../research/bvh-gpu-build.md) (algorithms);
 - [research/bvh-libraries.md](../../research/bvh-libraries.md) (code we can port);
 - [research/webgpu-compute-for-bvh.md](../../research/webgpu-compute-for-bvh.md) (what WebGPU allows).
@@ -45,7 +45,11 @@ An engine-free BVH module inside the platform, with its own tests and benchmark.
    - Without cross-origin isolation, WASM threads need SharedArrayBuffer, so the drop-in default is single-threaded. Measure that.
 2. **HIPRT** (MIT): `LbvhBuilderKernels.h` (186 lines), `PlocBuilderKernels.h` (311 lines) and `MortonCode.h`, ported to WGSL with subgroup operations.
    - **Port rule:** never assume a 32- or 64-wide warp; read `subgroup_size`.
-3. **NexusBVH** (Apache-2.0, CUDA): the H-PLOC reference. It is heavy on warp ballots, and its 64-bit Morton option is out because WGSL has no u64.
+3. **NexusBVH** (Apache-2.0, CUDA): the H-PLOC reference. It is heavy on warp ballots.
+   - **Morton codes:** WGSL has no u64, so its 64-bit codes would be emulated as `vec2<u32>`. That costs twice the radix-sort passes (8 instead of 4).
+   - **Default:** 30-bit codes over each mesh's own bounds, tie-broken by index.
+   - **Option:** emulated 64-bit codes as a builder setting, measured on Bistro exterior (SAH cost and build ms). Turn it on only where it clearly pays.
+   - **Atomics:** 64-bit atomics can't be emulated this way. None of these builders need them.
 4. **Gridwise** (Apache-2.0, WGSL): sort and scan to vendor or depend on, minus the look-back default.
 5. **three-mesh-bvh** (MIT): in the three adapter only, a converter of about 60 lines into our layout. This is part C's experiment.
 6. **Not copied:** repos with no license (Meister's PLOC and PRBVH, AlanIWBFT/CWBVH, kishimisu's sort). Their papers are fine to build from.
@@ -62,7 +66,32 @@ An engine-free BVH module inside the platform, with its own tests and benchmark.
 
 The speed limits above are planning numbers. Like any threshold, changing one is a DECISIONS entry.
 
-## Open questions for Dennis
+## Decided (Dennis, 2026-11-04)
 
-1. Is the order right: **B0 now** to fix the 28 s, then **B1 (GPU LBVH) in M1**, then **H-PLOC**?
-2. Should the BVH live as its own internal package (`packages/ddgi-bvh`, engine-free, private for now)? The alternative is to stay inside `ddgi-core/src/platform/trace`. A package is easier to test alone and to publish later.
+1. **Its own package, in this repo for now.**
+   - `packages/bvh`, published later as `@pmndrs/bvh`, probably under pmndrs/bvh.
+   - It is engine-free, has no DDGI or GI dependencies, and ddgi-core depends on it.
+   - It ships through `/ddgi` until it's split out.
+   - Dennis: "if its useful enough I might even say to make it pmndrs/bvh... I think that will be the plan, but lets keep it in the repo for now for simplicity sake."
+2. **The target builder is H-PLOC.** LBVH (B1) is the stepping stone, because H-PLOC is built from the same pieces: Morton codes, sort, and the Apetrei bottom-up pass.
+
+## How the BVH track fits the milestones (recommendation)
+
+The BVH runs as its **own lane, alongside the DDGI milestones**. It isn't a gate in front of them. Two reasons:
+
+- **Build speed and trace speed are different levers.**
+  - B1 and B2 make builds fast. That matters for startup, deforming meshes and moving instances.
+  - A good CPU SAH tree (B0, tinybvh) traces as fast as, or faster than, a GPU-built one. GPU builders aim to *approach* SAH quality.
+  - So for M1's static scenes, B0 trees are already the fastest trees to trace. Waiting for H-PLOC wouldn't make M1's DDGI faster.
+- **The DDGI loop only talks to the tracer through `giTraceClosest` and `giTraceAny`.** Swapping builders or layouts later changes no DDGI code. M1's numbers get re-run on each new BVH stage, and `trace.csv` and the DDGI benchmarks record which stage was used.
+
+Where the BVH does gate:
+
+| BVH stage | Needed by | Why |
+| --- | --- | --- |
+| B0 | M1 start | Sponza and Bistro must load in seconds, not 28 s |
+| B1 GPU top level and refit | M3 (moving objects), with the GPU top-level refit in M1 | Dragging furniture and the animated tree |
+| B2 H-PLOC | M3 sign-off, and the ≤ 2 s startup target at M5 | Fast rebuilds for deforming meshes and large scenes |
+| B3 CWBVH | The M2 or M3 performance review | The only stage aimed at *trace* speed. If DDGI's update budget is limited by rays per second, B3 is the lever. |
+
+If M1 shows that tracing is the bottleneck, B3 moves forward.

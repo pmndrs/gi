@@ -4,6 +4,17 @@ Settled choices, newest first. Each entry is short: the decision, why, and what 
 
 ## 2026-11-04
 
+- **The BVH is its own engine-free package, `packages/bvh`, in this repo for now.** Dennis: "if its useful enough I might even say to make it pmndrs/bvh... I think that will be the plan, but lets keep it in the repo for now for simplicity sake."
+  - **Imports:** it imports no DDGI, GI or engine code. `ddgi-core` depends on it, and it ships through `@pmndrs/ddgi` until it may be split out as `pmndrs/bvh`.
+  - **Lint:** a rule forbids `packages/bvh` from importing `ddgi-core` or any engine.
+  - **The GPU builder:** the target is H-PLOC, with LBVH as the stepping stone.
+  - **Stage B0 starts in T0.10 part C:** tinybvh compiled to WASM, running in a worker behind the Builder contract.
+    - It's written straight into `packages/bvh`, never in `ddgi-core` first.
+    - Done when Sponza builds in 2 s or less single-threaded, the oracle passes, and tracing is at least as fast as on our current trees.
+    - Our own CPU builder is then deleted.
+  - Moving the existing tracer out of `ddgi-core/src/platform/trace` into the package happens in part C if there's room, otherwise as an M1 task.
+  - **Still open:** whether the BVH runs as its own lane or holds up M1. The recommendation in `docs/design/bvh-framework.md` is its own lane, with B0 before M1, B1–B2 before M3, and B3 tied to the performance review. Not decided until Dennis answers.
+  - Design: `docs/design/bvh-framework.md`.
 - **Push hard on WebGPU features: subgroups first.** Dennis: "we should push hard on features. Subgroups are a basic utility for compute so I would propose that we build for them first."
   - **Subgroups:**
     - GPU compute kernels are written for the WebGPU `subgroups` feature first. That covers the coming GPU BVH builder with its sort and scan, refits, and DDGI kernels where it helps. Chrome desktop has shipped subgroups since version 134.
