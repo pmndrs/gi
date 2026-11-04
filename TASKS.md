@@ -261,7 +261,7 @@ Rules for every M1 task:
 | T1.1 | Shared sky | implementer | S | none | done (Opus re-review passed; viewer check redefined, DECISIONS) |
 | T1.2 | Platform scene copy | implementer | M | none | done (Opus review passed with notes, all fixed; both GPUs) |
 | T1.3 | Tracer as a platform module | implementer | M | T1.2 (B0 as built) | done (Opus review passed with notes, fixed; any-hit 1.03-1.22× three-mesh-bvh on the RTX, except Bistro interior 0.93×) |
-| T1.4 | Hit shading | implementer | M | T1.1, T1.3 | done (Opus review passed with notes, fixed; procedural `intensity` meaning open with Dennis) |
+| T1.4 | Hit shading | implementer | M | T1.1, T1.3 | done (Opus review passed with notes, fixed; `sunIlluminance` per Dennis being added) |
 | T1.5a | DDGI field and update loop | main session designs, implementer builds | M | T1.4 | active (implementer, 2026-11-05) |
 | T1.5b | DDGI classification and relocation | implementer | M | T1.5a | todo |
 | T1.6 | Shading module and plain-WebGPU example | implementer | M | T1.5 | todo |
@@ -322,6 +322,7 @@ Done-whens for the B stages are in `docs/design/bvh-framework.md`. B1a's: a 10k-
   - `giIrradiance` (Chebyshev visibility, coverage) and `globalsCode`; `examples/webgpu/hello` renders Cornell with GI.
   - Done when GI sampling costs ≤ 1.0 ms at 1440p on the RTX 3060.
 - **T1.7 three.js adapter.**
+  - Sky: map a pmndrs/sky instance's `exposure` to `sunIlluminance`, otherwise take it from the sun `DirectionalLight` intensity; mirror three's cube maps in x; pass `environmentRotation` (DECISIONS 2026-11-05).
   - A `Light` subclass with a registered node. Scene sync covers meshes, materials, instances and lights, plus the env-diffuse workaround.
   - Checks, each with a test: metalness folded into GI albedo; UV mappings passed through; vertex normals passed through; a point light with `distance = 0` arrives as `range: 0`.
   - Done when:

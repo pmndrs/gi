@@ -4,6 +4,11 @@ Settled choices, newest first. Each entry is short: the decision, why, and what 
 
 ## 2026-11-05
 
+- **A procedural sky gets a `sunIlluminance` field; `intensity` stays a plain multiplier everywhere.** Dennis: "i would look at what pmndrs/sky calls the prop but in general I think your lean sounds find".
+  - Sky radiance = the calibrated sky × `sunIlluminance` × `intensity`. Both default to 1.
+  - `sunIlluminance` is the same quantity as pmndrs/sky's `exposure` (`luminanceScale`, default 40 there), which computes its sky for a sun of illuminance 1 and then scales it. We don't call it `exposure`, because "exposure" already means the camera EV (the per-scene default in T1.8). `turbidity` already matches pmndrs/sky's name.
+  - The three adapter (T1.7) maps a pmndrs/sky instance's `exposure` to `sunIlluminance`, or otherwise takes it from the scene's sun `DirectionalLight` intensity.
+  - *Why:* one field, one meaning. T1.4 had briefly made a procedural sky's `intensity` mean the sun's illuminance, while every other `intensity` is a multiplier.
 - **The platform's sky uses SH bands 0, 1, 2 and 4 (18 coefficients) for irradiance, and a 256×128 equirect radiance map for rays that miss** (T1.4).
   - *Why bands 0–2 + 4:* L2 SH (bands 0–2) missed the ±0.5% sky tolerance on our skies (+0.74 / −0.33 / −0.87% on open ground). Band 4 brings it to +0.30 / −0.11 / −0.25%. Band 3 adds nothing to irradiance, because its cosine-convolution weight is 0.
   - *Why an equirect map,* not the "small octahedral map" SPEC and the old contract described: it matches the sky files' layout and three's `equirectUV`, so there's one convention end to end. At 256×128 it's about 0.5 MB.
