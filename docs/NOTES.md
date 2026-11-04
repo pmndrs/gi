@@ -181,6 +181,13 @@ One bullet per fact, each with its source. Add a bullet when something cost you 
 ## Platform scene copy (T1.2)
 
 - **Scene copy memory:** octahedral normals (4 bytes) and 16-bit indices for meshes with at most 65,536 vertices. Intel Sponza's base package (2.05 M vertices, 3.75 M triangles) takes 87.7 MB. `sponza` with the curtains (5.74 M triangles) takes 130.1 MB, 97% of the 128 MiB default storage binding, and `sponza-full` 348.5 MB, so large scenes need raised limits (`node tools/bench/scene-copy-memory.ts`). Bistro exterior takes 111.4 MB, which fits the 128 MB default binding only because of the octahedral normals. uv1 costs 16 MB on Sponza, so adapters should pass `uvs1` only when a material samples channel 1.
+- **Scenes that need raised limits** (default `maxStorageBufferBindingSize` 128 MiB = 134.2 MB). The tracer's triangle records take 48 bytes per triangle; the scene copy figures come from `node tools/bench/scene-copy-memory.ts`:
+  - `sponza` (base + curtains, 5.74 M triangles): scene copy 130.1 MB (fits, just); tracer records about 276 MB (needs raised limits).
+  - Sponza base only (3.75 M): scene copy 87.7 MB; tracer records 179.9 MB (needs raised limits).
+  - `bistro-exterior` (2.83 M): scene copy 111.4 MB; tracer records about 136 MB (needs raised limits).
+  - `sponza-full` (12.8 M): scene copy 348.5 MB; tracer records about 616 MB (needs raised limits).
+  - `bistro-interior` (1.04 M) and every procedural scene fit the defaults.
+  - Both laptop GPUs allow about 2 GiB (DECISIONS 2026-11-05).
 - **`Omit<Union, K>` keeps only the keys shared by every member,** so `Partial<Omit<LightDescriptor,'type'>>` couldn't name `position` or `range`. Fixed with `LightChanges`.
 - **Bind-group layouts in budget tests must be explicit.** An `'auto'` layout drops bindings the entry point doesn't use, so it can hide an over-budget kernel.
 - **WebGPU ordering:** a `queue.writeBuffer` made during `encode` lands before the host's submit of that encoder, and copies recorded in the encoder run after it. So a growth copy must never cover a range written in the same frame.

@@ -2,6 +2,16 @@
 
 Settled choices, newest first. Each entry is short: the decision, why, and what would make us revisit it. Changing a threshold or target counts as a decision and goes here.
 
+## 2026-11-05
+
+- **Dennis on three open questions:** "go with a for exposure, candles as separate scene. regareding the limit, threejs and other apps routinely go over that. feel free."
+  - **Exposure:** scenes get a default exposure in their manifest (Sponza about +2 EV), and the sky stays physically calibrated. The exact values are picked in T1.8, once our DDGI is in the viewer, since the probe-grid baseline may mislead.
+  - **Candles:** a separate opt-in `sponza-candles` scene with a stated subset of the 10,000 lights, for M2's many-lights stress test. `sponza-full` stays base + curtains + ivy + trees.
+  - **Device limits:** raising limits above the defaults is fine, and `sponza` stays base + curtains.
+    - `requiredLimits(adapter)` asks for the adapter's maximum storage-binding and buffer sizes, as T1.3 built it. It runs when the device is created, before any scene exists, so it can't ask for "only what the scene needs". three.js requests adapter limits the same way.
+    - A scene that doesn't fit throws `GILimitError` naming the limit.
+    - Which scenes need raised limits, and by how much, is recorded in NOTES.
+
 ## 2026-11-04
 
 - **Sky brightness: the Ineichen–Perez clear-sky ratio** (T1.1). A flat open ground gets sky irradiance equal to the Ineichen–Perez 2002 clear-sky diffuse-to-direct horizontal ratio times the sun's horizontal illuminance (sea level, Kasten–Young air mass, Linke turbidity taken from the manifest's `turbidity`, no Perez enhancement, as in pvlib's default). Sponza's sky gives the ground 12.3% of the sun's light on it.

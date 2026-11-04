@@ -329,6 +329,7 @@ Done-whens for the B stages are in `docs/design/bvh-framework.md`. B1a's: a 10k-
     - adapter CPU time is ≤ 0.2 ms per frame for a still scene and ≤ 0.5 ms with one object moving.
   - No Babylon work.
 - **T1.8 Viewer integration.**
+  - A default exposure per scene in the manifest (Sponza about +2 EV), with values picked with our DDGI on (DECISIONS 2026-11-05).
   - DDGI as a technique in the viewer, with probe debug spheres coloured by state.
   - Stats: probes per frame, update ms, memory, adapter sync ms.
   - A wipe against the Cycles reference image.
@@ -342,6 +343,11 @@ Done-whens for the B stages are in `docs/design/bvh-framework.md`. B1a's: a 10k-
 - **T1.10 Sponza add-ons.**
   - See the T0.12 notes above: the curtains join `sponza`; ivy, trees and candles make `sponza-full`.
   - Done when the viewer shows the curtains at bookmark 1, the fetch verifies, and the Cycles reference is re-rendered.
+
+## Carried to M2 (collected during M1)
+
+- `sponza-candles`: an opt-in scene with a stated subset of Intel's 10,000 candle lights, for the many-lights stress test (DECISIONS 2026-11-05).
+- A texture sky in the native harness's miss shader (DECISIONS 2026-11-04).
 
 ## Later
 
