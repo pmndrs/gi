@@ -17,7 +17,7 @@ Status values: `todo`, `active (agent, date)`, `review`, `done`, `blocked (why)`
 | T0.9 | Spike: Babylon | implementer | S | T0.2 | done (fits the contract; Babylon owns its device). Paused: three-only until v1 is validated |
 | T0.10 | Spike: BVH | main session designs, implementer builds, gpu-tester measures | M | T0.2, T0.4 | review (part C: watertight 1.20× three-mesh-bvh on Sponza on the RTX 3060, 1.97× on Intel; our tracer chosen; B0 builds in 5.3 s, not 2 s, so it stays open in the BVH lane) |
 | T0.11 | Platform API draft | main session | M | none (revise after T0.8–T0.10) | done (signed off by Dennis 2026-11-04, incl. UV mapping and vertex normals; revised after T0.10: binding budget, inline tracing by default, `range: 0` = no limit) |
-| T0.12 | M0 note and M1 breakdown | main session | S | all M0 | todo |
+| T0.12 | M0 note and M1 breakdown | main session | S | all M0 | review (note in [docs/milestones/M0.md](docs/milestones/M0.md); M1 on the board; waiting on Dennis's sign-off) |
 
 ## M0 tasks
 
@@ -247,22 +247,27 @@ Status values: `todo`, `active (agent, date)`, `review`, `done`, `blocked (why)`
   - **The subgroups-first rule** for new compute kernels.
   - **The BVH runs as its own lane** (Dennis, 2026-11-04): B rows on the board next to M1. B0 must be done before M1 starts, and B1–B2 before M3.
 
-## M1 draft: core DDGI loop, static scene, two hosts
+## M1: core DDGI loop, static scene, two hosts
 
-Status: **draft.** T0.12 finalises it, after T0.6 and T0.10 report, and it starts after Dennis signs off M0. Targets come from SPEC "How we'll judge it". Every task's numbers are on the RTX 3060 and the Intel UHD.
+Status: **ready.** It starts after Dennis signs off M0. Targets come from SPEC "How we'll judge it". Every task's numbers are on the RTX 3060 and the Intel UHD.
+
+Rules for every M1 task:
+- **Subgroups first.** A new compute kernel uses subgroups where they help, with one declared fallback for devices without them, and a test covers the fallback (DECISIONS 2026-11-04).
+- **No Babylon work** (DECISIONS 2026-11-04).
+- **Native comparisons take 3 or more runs per scene,** because native timings drift 15-30% between runs (NOTES).
 
 | ID | Task | Agent | Size | Depends on |
 | --- | --- | --- | --- | --- |
 | T1.1 | Shared sky | implementer | S | none |
 | T1.2 | Platform scene copy | implementer | M | none |
-| T1.3 | Tracer as a platform module | implementer | M | T1.2, B0 |
+| T1.3 | Tracer as a platform module | implementer | M | T1.2 (B0 as built) |
 | T1.4 | Hit shading | implementer | M | T1.1, T1.3 |
 | T1.5 | DDGI field and update loop | main session designs, implementer builds | L | T1.4 |
 | T1.6 | Shading module and plain-WebGPU example | implementer | M | T1.5 |
 | T1.7 | three.js adapter | implementer | M | T1.6 |
 | T1.8 | Viewer integration | implementer | M | T1.7 |
 | T1.9 | M1 measurements against targets | gpu-tester, native-runner | M | T1.8 |
-| T1.10 | Sponza add-ons | wrangler + implementer | M | none |
+| T1.10 | Sponza add-ons | wrangler + implementer | M | T1.1 (for the re-rendered reference) |
 | T1.11 | M1 note and M2 breakdown | main session | S | all M1 |
 
 ### BVH lane (runs alongside; DECISIONS 2026-11-04)
@@ -285,16 +290,19 @@ Done-whens for the B stages are in `docs/design/bvh-framework.md`. B1a's: a 10k-
   - Done when an open-ground test scene lit only by the sky renders within the reference tolerance in the viewer and in Cycles, and Sponza's probe-grid view is no longer blue.
 - **T1.2 Platform scene copy.**
   - `SceneApi` is implemented: meshes with optional normals and uvs, constant-colour materials (metalness already folded in by the adapter), instances, lights and environment, with changes queued and uploaded inside `encode`.
-  - Done when unit tests and a GPU readback page check every accessor against the input, memory is reported, and adding or removing things never recompiles shaders.
+  - Binding budget (`docs/api/platform.md`, "After T0.10"): the scene copy and hit shading use at most 2 storage buffers together. Vertex attributes share one buffer; instances, materials and lights share one table buffer.
+  - Done when unit tests and a GPU readback page check every accessor against the input, memory is reported, adding or removing things never recompiles shaders, and a DDGI-shaped test kernel (tracer + scene copy + 3 technique buffers) compiles on a default device.
 - **T1.3 Tracer as a platform module.**
-  - `RayQueries` (`giTraceClosest`, `giTraceAny`, `encodeBatch`) runs over the scene copy, using B0 trees and the B1a top level.
-  - The T0.11 revision lands: the real storage-buffer count, and inline versus batch tracing.
+  - `RayQueries` (`giTraceClosest`, `giTraceAny`, `encodeBatch`) runs over the scene copy. Mesh trees come from tinybvh (B0 as built) by default, with our builder as the fallback; the top level from B1a once it lands.
+  - The oracle's test helpers (`oracle-compare`, `reference-tracer`) leave the public exports.
+  - Any-hit: find out why it trails three-mesh-bvh on Bistro (interior 0.60×) and why it is slower than our closest-hit there. Fix it, or record why not.
   - Done when the oracle passes through the platform API on both GPUs, and speed is within 10% of the T0.10 numbers.
 - **T1.4 Hit shading.**
   - `giSurfaceAt` (interpolated normals), `giDirectIrradiance` (sun and sky, shadow rays, light-group mask), and `giSkyRadiance` and `giSkyIrradiance` from the shared sky.
   - Done when a sun on a plane matches E·cos θ, sky irradiance matches Cycles within tolerance, and shadow rays agree with the oracle.
 - **T1.5 DDGI field and update loop.**
   - Main session design first: probe layout, octahedral irradiance and distance atlases, rays with a random rotation each update, hysteresis, unlimited bounce from the current field, a budget in probes per frame, and classification and relocation on the GPU.
+  - Tracing is inline (trace, shade and accumulate in one kernel). If the update cost comes near its budget, time inline against batch once.
   - Done when:
     - the furnace room converges to its analytic value within 2%;
     - Cornell's indirect light matches Cycles within the M1 accuracy target;
@@ -304,7 +312,8 @@ Done-whens for the B stages are in `docs/design/bvh-framework.md`. B1a's: a 10k-
   - `giIrradiance` (Chebyshev visibility, coverage) and `globalsCode`; `examples/webgpu/hello` renders Cornell with GI.
   - Done when GI sampling costs ≤ 1.0 ms at 1440p on the RTX 3060.
 - **T1.7 three.js adapter.**
-  - A `Light` subclass with a registered node. Scene sync covers meshes, materials (metalness folded into albedo; UV mappings and vertex normals passed through), instances and lights, plus the env-diffuse workaround.
+  - A `Light` subclass with a registered node. Scene sync covers meshes, materials, instances and lights, plus the env-diffuse workaround.
+  - Checks, each with a test: metalness folded into GI albedo; UV mappings passed through; vertex normals passed through; a point light with `distance = 0` arrives as `range: 0`.
   - Done when:
     - the same scene through `hello` and through three matches within a small tolerance (engine neutrality);
     - adapter CPU time is ≤ 0.2 ms per frame for a still scene and ≤ 0.5 ms with one object moving.
@@ -316,7 +325,8 @@ Done-whens for the B stages are in `docs/design/bvh-framework.md`. B1a's: a 10k-
   - Done when Dennis can use it without instructions.
 - **T1.9 M1 measurements.**
   - Measure on Sponza (untextured), Cornell and two-rooms: GI cost, update cost, whole-frame p50/p95, accuracy against Cycles, leaks, memory and startup.
-  - Native RTXGI numbers on the same scenes, side by side.
+  - Native RTXGI numbers on the same scenes, side by side, at matched probe counts and rays, 3 runs each.
+  - Re-measure the Bistro exterior baselines on the RTX 3060; T0.5's are too noisy to quote.
   - Set the stability threshold by eye with Dennis.
   - Done when the targets are met or a gap is explained and agreed, and Tier B's mode is decided from the Intel numbers.
 - **T1.10 Sponza add-ons.**
