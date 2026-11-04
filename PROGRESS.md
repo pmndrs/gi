@@ -83,7 +83,7 @@ Deviations:
 - The tolerance comes from Cycles' seed-to-seed noise only; the path tracer's own noise wasn't measured.
 Not verified: the Intel GPU; a real Ctrl-C releasing the lock (tested only after a normal run and a failed one); Cycles on the GPU.
 Next:
-- Re-render the Sponza Cycles reference once T0.4 raises the sun. Today only 3 of 187 floor points see it, so the image is dark (mean 0.018).
+- Done: the Sponza Cycles reference was re-rendered with the raised sun. 4096 spp took 1196 s; the mean is 0.034, up from 0.018; the noise is about 3% (full) and 11% (indirect), estimated from a 1024 spp seed-1 render. The floor band is lit.
 - Cycles has no point-light range window, so on two-room three is about 12% dimmer than Cycles at 7 m.
 - Remove the stray `C:\x\` folder (two small EXRs from a failed first run).
 
