@@ -21,11 +21,13 @@
  * 4. a probe that ends in air outside the room reads 1 or 2;
  * 5. the `points` debug view holds every probe's world position and state;
  * 6. phase B's subgroup reduction and its declared fallback give identical
- *    states and offsets on the same probes (when the device has subgroups).
+ *    states and offsets on the same probes (when the device has subgroups);
+ * 7. relocation and classification settle: SETTLE_FRAMES more all-probe
+ *    frames change no probe's state or offset.
  */
 
 import { assert, runGpuTest } from '../../client.ts';
-import { createDdgiScene, readProbeData, readTextureBytes, runFrames, type ProbeRecord } from '../ddgi-shared/harness.ts';
+import { createDdgiScene, readProbeData, readTextureBytes, runFrames, type ProbeRecord, releaseDeviceOnPageHide } from '../ddgi-shared/harness.ts';
 import type { ProceduralScene } from '../../../../scenes/src/scene-data.ts';
 import { PROBE_STATE } from '../../../../packages/ddgi-core/src/techniques/ddgi/layout.ts';
 import { AUTO_MIN_FRONT_FACE_SHARE, resolveBias } from '../../../../packages/ddgi-core/src/techniques/ddgi/settings.ts';
@@ -33,7 +35,14 @@ import type { PhaseBReduction } from '../../../../packages/ddgi-core/src/techniq
 import { CORNELL_DEPTH_M, CORNELL_HEIGHT_M, CORNELL_WIDTH_M } from '../../../../scenes/src/procedural/cornell-box.ts';
 import { CABINET_ROOM_SIZE_M } from '../../../../scenes/src/procedural/cabinet-row.ts';
 
-const FRAMES = 60;
+/**
+ * All-probe frames before the checks. Probes that are too close to a face and
+ * whose most open direction runs along it slide along it until their offset
+ * limit stops them, up to about 75 updates (blend.ts), so 120 leaves room.
+ */
+const FRAMES = 120;
+/** All-probe frames after FRAMES in which no probe may change any more. */
+const SETTLE_FRAMES = 20;
 /** A probe may move at most this share of the spacing on each axis (design: relocation). */
 const MAX_OFFSET = 0.45;
 /** Points per axis when checking whether a probe's ±0.45 box has any way out. */
@@ -176,6 +185,8 @@ interface CaseResult {
     readonly data: ProceduralScene;
     readonly counters: Readonly<Record<string, number>>;
     readonly minFrontFaceDistance: number;
+    /** Probes whose state or offset still changed in the SETTLE_FRAMES after FRAMES, with what they did. */
+    readonly unsettled: string[];
 }
 
 async function runCase(device: GPUDevice, testCase: Case, reduction: PhaseBReduction): Promise<CaseResult> {
@@ -185,15 +196,25 @@ async function runCase(device: GPUDevice, testCase: Case, reduction: PhaseBReduc
         assert(field, 'no field after prepare');
         assert(scene.ddgi.reduction === reduction, `asked for the ${reduction} reduction, got ${scene.ddgi.reduction}`);
         await runFrames(device, scene.platform, FRAMES, field.grid.probeCount);
-        // Two more frames with no updates, so the census of the last update is read back.
-        await runFrames(device, scene.platform, 3, 0);
-        const records = await readProbeData(device, field);
+        const settledRecords = await readProbeData(device, field);
+        const history = settledRecords.map((record) => [record]);
+        for (let frame = 0; frame < SETTLE_FRAMES; frame++) {
+            await runFrames(device, scene.platform, 1, field.grid.probeCount);
+            (await readProbeData(device, field)).forEach((record, index) => history[index].push(record));
+        }
+        const describe = (record: ProbeRecord): string => `${record.state}@${record.offset.map((value) => value.toFixed(3)).join(',')}`;
+        const unsettled: string[] = [];
+        history.forEach((records, index) => {
+            const first = describe(records[0]);
+            if (records.some((record) => describe(record) !== first)) unsettled.push(`probe ${index}: ${records.map(describe).join(' -> ')}`);
+        });
+        const records = history.map((states) => states[states.length - 1]);
         const pointsView = scene.ddgi.debugViews.find((view) => view.kind === 'points');
         assert(pointsView && pointsView.kind === 'points', 'no points debug view');
         const points = new Float32Array((await readTextureBytes(device, pointsView.texture(), 16)).buffer);
         // minFrontFaceDistance 'auto' is a share of the smallest spacing.
         const minFrontFaceDistance = resolveBias(scene.ddgi.settings.minFrontFaceDistance, field.grid, AUTO_MIN_FRONT_FACE_SHARE);
-        return { records, points, grid: field.grid, data: scene.data, counters: scene.ddgi.counters, minFrontFaceDistance };
+        return { records, points, grid: field.grid, data: scene.data, counters: scene.ddgi.counters, minFrontFaceDistance, unsettled };
     } finally {
         scene.platform.dispose();
     }
@@ -201,6 +222,7 @@ async function runCase(device: GPUDevice, testCase: Case, reduction: PhaseBReduc
 
 await runGpuTest(
     async ({ device, log }) => {
+        releaseDeviceOnPageHide(device);
         const failures: string[] = [];
         const results: Record<string, unknown> = {};
         const reductions: PhaseBReduction[] = device.features.has('subgroups') ? ['subgroups', 'workgroup'] : ['workgroup'];
@@ -264,6 +286,10 @@ await runGpuTest(
                 else fail(`in the room's air but ${record.state === PROBE_STATE.offNoSurfaceNearby ? 'off with a surface in reach' : 'not active'}: ${where}`);
             });
 
+            // 7. Settled.
+            for (const line of result.unsettled.slice(0, 6)) fail(`never settles: ${line}`);
+            if (result.unsettled.length > 6) fail(`${result.unsettled.length} probes never settle in all`);
+
             // 6. Subgroups against the fallback.
             let reductionMismatches = 0;
             if (runs.size === 2) {
@@ -275,7 +301,7 @@ await runGpuTest(
                 if (reductionMismatches > 0) fail(`${reductionMismatches} probes differ between the subgroup reduction and the fallback`);
             }
 
-            results[testCase.scene] = { probes: result.records.length, frames: FRAMES, reductions, reductionMismatches, ...tally, counters: result.counters };
+            results[testCase.scene] = { probes: result.records.length, frames: FRAMES, settleFrames: SETTLE_FRAMES, unsettled: result.unsettled.length, reductions, reductionMismatches, ...tally, counters: result.counters };
             log(`${testCase.scene}: ${JSON.stringify(tally)}; subgroups vs fallback mismatches ${reductionMismatches}`);
         }
         assert(failures.length === 0, `${failures.length} problems:\n${failures.slice(0, 12).join('\n')}`);

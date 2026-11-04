@@ -88,17 +88,15 @@ export function unitsForFrame(budget: FrameBudget, msPerUnit: readonly (number |
 /**
  * Measures each technique's GPU cost per unit from the platform's timer: the
  * passes named `<technique id>/...` in a frame, divided by the units the
- * technique was handed that frame, smoothed over frames.
- *
- * A technique that is handed more units than it can use (DDGI given more
- * probes than its volume has) reads cheaper than it is. Its budget then keeps
- * covering all its work, which is the right outcome, so this is left as is.
+ * technique used that frame (what its `encode` returned, or all it was
+ * handed), smoothed over frames. Reset when the work changes shape: on
+ * `prepare`, when a technique is added or removed, and on `resetHistory`.
  */
 export class UnitCostMeter {
     private readonly handedOut = new Map<number, Map<string, number>>();
     private readonly estimates = new Map<string, number>();
 
-    /** Records the units a technique was handed in a frame. */
+    /** Records the units a technique used in a frame. */
     handOut(frame: number, techniqueId: string, units: number): void {
         let frameUnits = this.handedOut.get(frame);
         if (!frameUnits) {
@@ -215,6 +213,7 @@ export class GIPlatformImpl implements GIPlatform {
 
     addTechnique<T extends GITechnique>(technique: T): T {
         this.checkUsable();
+        this.unitCosts.reset();
         if (this.find(technique)) throw new Error(`@pmndrs/ddgi: technique '${technique.id}' is already attached`);
         for (const kind of technique.requirements.queries) {
             if (!this.queries.has(kind)) throw new Error(`@pmndrs/ddgi: technique '${technique.id}' needs the '${kind}' query backend, which this platform doesn't have`);
@@ -229,6 +228,7 @@ export class GIPlatformImpl implements GIPlatform {
 
     /** Detaches and disposes the technique (a technique is attached to one platform for its whole life). */
     removeTechnique(technique: GITechnique): void {
+        this.unitCosts.reset();
         const entry = this.find(technique);
         if (!entry) return;
         if (this.attached.some((other) => other.fallback === technique)) {
@@ -262,6 +262,8 @@ export class GIPlatformImpl implements GIPlatform {
     // -----------------------------------------------------------------------
 
     async prepare(): Promise<void> {
+        // New resources and kernels: old costs per unit no longer apply.
+        this.unitCosts.reset();
         this.checkUsable();
         await this.rays.prepare(this.kernels);
         await this.shade.prepare();
@@ -295,7 +297,6 @@ export class GIPlatformImpl implements GIPlatform {
             const techniques = this.encodeOrder();
             const units = unitsForFrame(frame.budget, techniques.map((technique) => this.msPerUnit(technique)));
             techniques.forEach((technique, index) => {
-                if (this.timer) this.unitCosts.handOut(this.frame, technique.id, units[index]);
                 const techniqueFrame: TechniqueFrame = {
                     frame: this.frame,
                     deltaTime: frame.deltaTime,
@@ -303,7 +304,10 @@ export class GIPlatformImpl implements GIPlatform {
                     changes: upload.changes,
                     units: units[index],
                 };
-                technique.encode(encoder, techniqueFrame);
+                const used = technique.encode(encoder, techniqueFrame);
+                // Cost per unit is measured against the units actually used: a budget
+                // bigger than the work would otherwise make units look cheaper and cheaper.
+                if (this.timer) this.unitCosts.handOut(this.frame, technique.id, typeof used === 'number' ? Math.min(used, units[index]) : units[index]);
             });
         }
 
@@ -356,6 +360,7 @@ export class GIPlatformImpl implements GIPlatform {
     }
 
     resetHistory(): void {
+        this.unitCosts.reset();
         for (const { technique } of this.attached) technique.resetHistory();
     }
 

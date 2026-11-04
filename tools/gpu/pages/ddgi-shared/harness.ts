@@ -486,3 +486,12 @@ export async function readProbeData(device: GPUDevice, field: DDGIField): Promis
     }
     return probes;
 }
+
+/**
+ * Destroys the page's device when the runner moves on, so the next page in
+ * the same browser doesn't wait on this one's GPU memory (NOTES, "Release the
+ * device between pages").
+ */
+export function releaseDeviceOnPageHide(device: GPUDevice): void {
+    window.addEventListener('pagehide', () => device.destroy(), { once: true });
+}

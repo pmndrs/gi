@@ -235,6 +235,8 @@ One bullet per fact, each with its source. Add a bullet when something cost you 
 - **32 fixed rays miss surface slivers near the corners of the reach box;** at a reach of 1.5 spacings no needed probe switched off on Cornell or the cabinet row. Source: T1.5b.
 - **Coincident faces of touching solids defeat ray-based inside tests:** probes can sit a few mm inside a board and stay active. Source: T1.5b.
 - **After the trace/blend split, the Intel UHD spends about half its DDGI update time in the blend kernel.** Source: T1.5b.
+- **DDGI test runs are deterministic:** rays are seeded by the frame number, so repeated leak runs give identical numbers. Spread has to come from varying the seed, not from re-running. Source: T1.5b.
+- **The Intel UHD hangs when ddgi-distance-format's second device starts right after ddgi-classification** (6 of 6), with the current and the previous kernels. Not understood; the page runs its fallback device first to avoid it. Steps are in PROGRESS (T1.5b). Source: T1.5b.
 - **Leak fixes by measured effect:** double-sided distance (84×), then probe density (22×). Probe texture resolution made no difference. Reducing bias made leaks *worse*, by up to 34×. Source: the HomeFig DDGI branch.
 - **View bias:** 6 → 0 cut image error against a path tracer from 18.2% to 12.4% RMS on two-rooms. Bias pulled into furniture caused black patches. Source: the audit, the HomeFig branch.
 - **Recursion cap:** NVIDIA's native recursion albedo cap (0.9 vs 1.0) changes indirect light by about 23%. Match it when comparing against native. Source: the audit.

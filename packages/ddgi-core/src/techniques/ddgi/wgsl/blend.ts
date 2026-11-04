@@ -25,6 +25,16 @@
  */
 
 import { CENSUS_RAYS_TRACED, type ScratchLayout } from '../layout.ts';
+import { FIXED_RAYS } from '../settings.ts';
+
+/**
+ * Bits of a reduction key that hold the fixed ray's index (the rest is the
+ * hit distance's float bits). Derived from the fixed-ray count, and kept to
+ * at most 8 of the 23 mantissa bits so the distance stays precise.
+ */
+export const KEY_INDEX_BITS = Math.ceil(Math.log2(FIXED_RAYS));
+if (KEY_INDEX_BITS > 8) throw new Error(`@pmndrs/ddgi: ${FIXED_RAYS} fixed rays need ${KEY_INDEX_BITS} key bits; phase B's keys allow 8`);
+const KEY_INDEX_MASK = (1 << KEY_INDEX_BITS) - 1;
 import { DDGI_COMMON_WGSL } from './common.ts';
 import { DDGI_STOCHASTIC_HALF_WGSL } from './half.ts';
 
@@ -114,9 +124,21 @@ const DDGI_INSIDE_BACK_FACE_SHARE: f32 = 0.25;
 const DDGI_MAX_OFFSET: f32 = 0.45;
 // A probe moved out of geometry lands this share of minFrontFaceDistance past the surface.
 const DDGI_PAST_SURFACE_SHARE: f32 = 0.5;
-// Moving away from a close face only along a direction that doesn't head back
-// towards it: the farthest front face must be at least 60 degrees off.
+// Moving away from a close face along the most open direction is allowed
+// unless that heads back towards the face (more than 60 degrees towards it,
+// the paper's rule). A move that runs nearly along the face keeps the probe
+// close to it, so it repeats each update and the probe slides along the face
+// until its offset limit stops it (about 75 updates at most, T1.5b review).
+// Requiring moves to head clearly away stopped the sliding, but raised the
+// two-room leak from 0.80% to 0.97% (thin wall 0.59% to 0.70%, closed door
+// 0.06% to 0.13%); moving straight away from the face raised it to 1.49%.
 const DDGI_MAX_COS_TOWARDS_CLOSEST: f32 = 0.5;
+// Moves shorter than this share of minFrontFaceDistance are dropped. A dead
+// band, so the "too close" and "ease back" rules can't trade tiny moves for
+// ever, and half-float rounding of the offset can't keep a probe jittering
+// (123 Cornell probes were still creeping by fractions of a millimetre after
+// 60 frames without it, T1.5b review).
+const DDGI_MIN_MOVE_SHARE: f32 = 0.25;
 // A probe takes part in interpolating surfaces up to one spacing away on each
 // axis (its 8 cells). Its 32 fixed rays are about 40 degrees apart, so they
 // can miss a sliver of surface poking into that box near its corners; such a
@@ -128,8 +150,8 @@ const DDGI_REACH_SPACINGS: f32 = 1.5;
 const DDGI_EASE_BACK_SHARE: f32 = 0.1;
 // Distances and ray indices share one 32-bit key: the distance's float bits
 // (non-negative floats order like their bits) with the low 5 bits replaced by
-// the fixed ray's index, so min and max return both. Costs 5 of 23 mantissa bits.
-const DDGI_KEY_INDEX_BITS: u32 = 0x1fu;
+// the fixed ray's index, so min and max return both. Costs ${KEY_INDEX_BITS} of 23 mantissa bits.
+const DDGI_KEY_INDEX_MASK: u32 = ${KEY_INDEX_MASK}u;
 const DDGI_KEY_NONE_MIN: u32 = 0xffffffffu;
 const DDGI_KEY_NONE_MAX: u32 = 0u;
 // Stands in for "no front face hit at all" when distances are compared.
@@ -178,15 +200,15 @@ struct DdgiFixedRayResult {
 ${reductionWgsl(reduction)}
 
 fn ddgiDistanceKey(distance: f32, rayIndex: u32) -> u32 {
-    return (bitcast<u32>(distance) & ~DDGI_KEY_INDEX_BITS) | rayIndex;
+    return (bitcast<u32>(distance) & ~DDGI_KEY_INDEX_MASK) | rayIndex;
 }
 
 fn ddgiKeyDistance(key: u32) -> f32 {
-    return bitcast<f32>(key & ~DDGI_KEY_INDEX_BITS);
+    return bitcast<f32>(key & ~DDGI_KEY_INDEX_MASK);
 }
 
 fn ddgiKeyDirection(key: u32) -> vec3f {
-    return ddgiRayDirectionDistance[key & DDGI_KEY_INDEX_BITS].xyz;
+    return ddgiRayDirectionDistance[key & DDGI_KEY_INDEX_MASK].xyz;
 }
 
 fn ddgiPackHalves(a: f32, b: f32, seed: u32) -> u32 {
@@ -274,12 +296,16 @@ fn ddgiDecide(probe: vec3i, offset: vec3f, state: u32) -> DdgiProbeDecision {
     var newOffset = offset;
     if (ddgi.relocation != 0u) {
         var step = vec3f(0.0);
-        if (inside && closestBack != DDGI_KEY_NONE_MIN) {
-            // Inside something: through the closest back face it may leave by, to just past it.
+        if (inside && closestBack != DDGI_KEY_NONE_MIN && state != DDGI_STATE_OFF_INSIDE_GEOMETRY) {
+            // Inside something: through the closest back face it may leave by,
+            // to just past it. Once: a probe already off for being inside had
+            // its chance and stays put while it is still inside. Where solids
+            // overlap (corners of wall and floor slabs), hopping on put it in
+            // the other solid and back again for ever (T1.5b review).
             step = ddgiKeyDirection(closestBack) * (ddgiKeyDistance(closestBack) + DDGI_PAST_SURFACE_SHARE * minFrontFace);
         } else if (!inside && closestFrontDistance < minFrontFace) {
-            // Too close to a surface: away along the most open direction, as
-            // far as needed, unless that heads back towards the close face.
+            // Too close to a surface: away along the most open direction, by
+            // the shortfall, unless that heads back towards the close face.
             let away = ddgiKeyDirection(farthestFront);
             if (dot(away, ddgiKeyDirection(closestFront)) <= DDGI_MAX_COS_TOWARDS_CLOSEST) {
                 step = away * (minFrontFace - closestFrontDistance);
@@ -295,8 +321,9 @@ fn ddgiDecide(probe: vec3i, offset: vec3f, state: u32) -> DdgiProbeDecision {
             }
         }
         let candidate = offset + step / spacing;
-        // A new offset only where the probe may sit; otherwise the old one stays.
-        if (ddgiOffsetAllowed(probe, candidate)) {
+        // A new offset only where the probe may sit, and only for a real move;
+        // otherwise the old one stays.
+        if (length(step) >= DDGI_MIN_MOVE_SHARE * minFrontFace && ddgiOffsetAllowed(probe, candidate)) {
             newOffset = candidate;
         }
     }
@@ -408,9 +435,14 @@ fn ddgiBlend(
     let blendedRays = ddgi.raysPerProbe - DDGI_FIXED_RAYS;
 
     if (thread == 0u) {
+        // Every reduction starts from its neutral value, set here rather
+        // than relying on workgroup memory starting at zero.
+        atomicStore(&ddgiBackFaceCount, 0u);
         atomicStore(&ddgiNearestBackFace, DDGI_KEY_NONE_MIN);
         atomicStore(&ddgiClosestBackFace, DDGI_KEY_NONE_MIN);
         atomicStore(&ddgiClosestFrontFace, DDGI_KEY_NONE_MIN);
+        atomicStore(&ddgiFarthestFrontFace, DDGI_KEY_NONE_MAX);
+        atomicStore(&ddgiFrontFacesInReach, 0u);
         atomicAdd(&ddgiCensus[DDGI_CENSUS_RAYS_TRACED], tracedRays);
     }
     for (var rayIndex = thread; rayIndex < tracedRays; rayIndex += DDGI_BLEND_WORKGROUP_SIZE) {

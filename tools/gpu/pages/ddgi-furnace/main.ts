@@ -16,7 +16,7 @@
  */
 
 import { assert, runGpuTest } from '../../client.ts';
-import { createDdgiScene, FieldProbe, runFrames, type SurfacePoint } from '../ddgi-shared/harness.ts';
+import { createDdgiScene, FieldProbe, runFrames, type SurfacePoint, releaseDeviceOnPageHide } from '../ddgi-shared/harness.ts';
 import { FURNACE_EXPECTED_RADIANCE, FURNACE_SIZE_M } from '../../../../scenes/src/procedural/furnace-room.ts';
 
 /** Enough frames for hysteresis 0.97 to settle: the gap to the answer shrinks about 1.5% per update. */
@@ -90,6 +90,7 @@ function surfacePoints(blocks: readonly Box[]): SurfacePoint[] {
 
 await runGpuTest(
     async ({ device, log }) => {
+        releaseDeviceOnPageHide(device);
         const scene = await createDdgiScene(device, 'furnace-room');
         const field = scene.ddgi.field;
         assert(field, 'DDGI has no field after prepare');

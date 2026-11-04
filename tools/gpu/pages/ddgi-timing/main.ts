@@ -14,7 +14,7 @@
  */
 
 import { assert, runGpuTest } from '../../client.ts';
-import { createDdgiScene, runFrame } from '../ddgi-shared/harness.ts';
+import { createDdgiScene, runFrame, releaseDeviceOnPageHide } from '../ddgi-shared/harness.ts';
 import type { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
 import type { FrameBudget } from '../../../../packages/ddgi-core/src/platform/contract/frame.ts';
 
@@ -54,6 +54,7 @@ async function timeFrames(device: GPUDevice, platform: GIPlatformImpl, budget: n
 
 await runGpuTest(
     async ({ device, log }) => {
+        releaseDeviceOnPageHide(device);
         assert(device.features.has('timestamp-query'), 'timing needs the timestamp-query feature');
         const results: Record<string, unknown> = {};
         for (const sceneId of SCENES) {
@@ -91,7 +92,8 @@ await runGpuTest(
             const budgetCheck = { gpuMs: BUDGET_MS, medianProbesUpdated: budgeted.medianUpdated, medianDdgiMs: budgeted.totalMs, msPerUnit: scene.platform.msPerUnit(scene.ddgi) };
             log(`${sceneId}, budget ${BUDGET_MS} ms: ${budgeted.medianUpdated} probes per frame, DDGI ${budgeted.totalMs.toFixed(3)} ms`);
 
-            results[sceneId] = { probes, raysPerProbe: scene.ddgi.settings.raysPerProbe, units: perUnits, budgetCheck };
+            // With gpuTiming on, the census runs: the per-state counters are there.
+            results[sceneId] = { probes, raysPerProbe: scene.ddgi.settings.raysPerProbe, units: perUnits, budgetCheck, counters: scene.ddgi.counters };
             scene.platform.dispose();
         }
         return results;

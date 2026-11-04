@@ -80,8 +80,14 @@ export interface GITechnique<Settings extends object = object> {
     /**
      * World-space work: record this frame's updates into the host's encoder.
      * No queue submits and no CPU readbacks.
+     *
+     * May return the units it actually used (at most `frame.units`; DDGI: the
+     * probes it updated, which can be fewer when the volume has fewer). The
+     * platform measures cost per unit against that, so a budget bigger than
+     * the work can't make units look cheaper than they are. Returning nothing
+     * means all of `frame.units` were used.
      */
-    encode(encoder: GPUCommandEncoder, frame: TechniqueFrame): void;
+    encode(encoder: GPUCommandEncoder, frame: TechniqueFrame): number | void;
     /**
      * Optional screen-space work, run after the host has rendered its depth and
      * normals and before it shades (see `GIPlatform.encodeScreen`).

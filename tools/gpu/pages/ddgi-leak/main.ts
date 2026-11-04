@@ -16,7 +16,7 @@
  */
 
 import { assert, runGpuTest } from '../../client.ts';
-import { createDdgiScene, imageMean, runFrames, TestView } from '../ddgi-shared/harness.ts';
+import { createDdgiScene, imageMean, runFrames, TestView, releaseDeviceOnPageHide } from '../ddgi-shared/harness.ts';
 
 const FRAMES = 600;
 const WIDTH = 640;
@@ -48,6 +48,7 @@ const CASES: readonly LeakCase[] = [
 
 await runGpuTest(
     async ({ device, log: logLine }) => {
+        releaseDeviceOnPageHide(device);
         // Also to the console, so a failing run still shows every scene's numbers (--verbose).
         const log = (line: string): void => {
             logLine(line);

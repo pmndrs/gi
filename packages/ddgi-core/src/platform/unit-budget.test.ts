@@ -60,3 +60,45 @@ describe('the unit cost meter', () => {
         expect(meter.msPerUnit('ddgi')).toBeUndefined();
     });
 });
+
+describe('a budget bigger than the work', () => {
+    /**
+     * A technique with 100 units of work at 0.01 ms each, given 10 ms: it can
+     * only use 100 units (1 ms). Measured against the units used, the cost
+     * stays 0.01 ms and the hand-out stays 1000. Measured against the units
+     * handed out (the old way) the cost would fall every frame and the
+     * hand-out grow without limit.
+     */
+    function simulate(measureAgainst: 'used' | 'handed out'): { msPerUnit: number | undefined; lastHandOut: number } {
+        const meter = new UnitCostMeter();
+        const capacity = 100;
+        const trueCost = 0.01;
+        let lastHandOut = 0;
+        for (let frame = 1; frame <= 200; frame++) {
+            const [units] = unitsForFrame({ gpuMs: 10, units: frame === 1 ? 512 : undefined }, [meter.msPerUnit('t')]);
+            lastHandOut = units;
+            const used = Math.min(units, capacity);
+            meter.handOut(frame, 't', measureAgainst === 'used' ? used : units);
+            meter.measure(frame, [{ name: 't/work', gpuMs: used * trueCost }]);
+        }
+        return { msPerUnit: meter.msPerUnit('t'), lastHandOut };
+    }
+
+    it('keeps the cost per unit true and the hand-out bounded', () => {
+        const result = simulate('used');
+        expect(result.msPerUnit).toBeCloseTo(0.01, 12);
+        expect(result.lastHandOut).toBe(1000);
+    });
+
+    it('would run away if measured against the units handed out', () => {
+        expect(simulate('handed out').lastHandOut).toBeGreaterThan(100_000);
+    });
+
+    it('forgets everything on reset', () => {
+        const meter = new UnitCostMeter();
+        meter.handOut(1, 't', 10);
+        meter.measure(1, [{ name: 't/work', gpuMs: 1 }]);
+        meter.reset();
+        expect(meter.msPerUnit('t')).toBeUndefined();
+    });
+});

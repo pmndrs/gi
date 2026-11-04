@@ -160,6 +160,8 @@ The answers go in PROGRESS. Any change to the contract is made in both the TypeS
 
 ### During M1, 2026-11-04
 
+- **Technique-facing: `GITechnique.encode` may return the number of units it actually used** (T1.5b). The platform's budget meter divides the measured GPU time by that, not by the units it handed out, so a budget bigger than the work doesn't inflate the next frame's hand-out. Returning nothing means "all of them". Hosts don't see this.
+
 - **Host-facing, approved by Dennis (2026-11-05): a procedural environment gets an optional `sunIlluminance`,** the illuminance of the sun the sky is calibrated to (default 1); `intensity` stays a plain multiplier, as for 'color' and 'texture'. It's the same quantity as pmndrs/sky's `exposure`. See DECISIONS.
 - **Stated in the contract (T1.4):** the `equirect` layout (nadir at memory row 0, u = 0 at −X, as three's `equirectUV`), and the cube convention (WebGPU's faces, direction unchanged). three r187 looks cubes up at (−x, y, z), so the three adapter mirrors them.
 

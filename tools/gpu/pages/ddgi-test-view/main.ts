@@ -21,7 +21,7 @@
 
 import { assert, runGpuTest } from '../../client.ts';
 import type { DDGISettingsInput, DDGIVolumeSettings } from '../../../../packages/ddgi-core/src/techniques/ddgi/settings.ts';
-import { createDdgiScene, floatsToBase64, imageMean, runFrames, TestView, type TestViewImages } from '../ddgi-shared/harness.ts';
+import { createDdgiScene, floatsToBase64, imageMean, runFrames, TestView, type TestViewImages, releaseDeviceOnPageHide } from '../ddgi-shared/harness.ts';
 import { CORNELL_POINT_IN_AIR_VOLUME } from '../ddgi-shared/volumes.ts';
 
 export interface TestViewJob {
@@ -120,6 +120,7 @@ function percent(value: number | null): string {
 
 await runGpuTest(
     async ({ device, log }) => {
+        releaseDeviceOnPageHide(device);
         const bias = (mean: number): number | null => (job.referenceIndirectMean === null ? null : mean / job.referenceIndirectMean - 1);
         const primary = await render(device, job.settings ?? {});
         log(`${job.scene} / ${primary.camera}: ${job.frames} frames; indirect mean ${primary.indirectMean.toFixed(6)} (${percent(bias(primary.indirectMean))}), full mean ${primary.fullMean.toFixed(6)}`);

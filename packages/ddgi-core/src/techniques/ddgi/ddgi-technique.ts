@@ -9,8 +9,9 @@
  *    probe (phase B) and blends its rays into the scratch buffer (phase C);
  * 3. `ddgi/write`: copies the scratch into the atlases, the probe data and
  *    the `points` debug view;
- * 4. `ddgi/census` (now and then): counts probes per state for the counters,
- *    read back a few frames later.
+ * 4. `ddgi/census`, only when the platform times passes (its `gpuTiming`
+ *    option, the one setting that allows readbacks): counts probes per state
+ *    for the counters, read back a few frames later.
  *
  * It sees only its `TechniqueContext`: the scene copy, the `rays` backend,
  * hit shading, the kernel builder and the timer. Never the host or an engine.
@@ -398,15 +399,16 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         this.markAllNotUpdated();
     }
 
-    encode(encoder: GPUCommandEncoder, frame: TechniqueFrame): void {
+    /** Records this frame's updates; returns the probes it updated (the units it used). */
+    encode(encoder: GPUCommandEncoder, frame: TechniqueFrame): number {
         const resources = this.resources;
         const context = this.context;
-        if (!resources || !context || this.disposed) return;
+        if (!resources || !context || this.disposed) return 0;
         this.collectCensus(resources);
 
         const count = resources.cursor.next(Math.min(frame.units, resources.maxProbesPerFrame), resources.list);
         this.probesUpdated = count;
-        if (count === 0) return;
+        if (count === 0) return 0;
         const raysPerProbe = effectiveRaysPerProbe(this.settings.raysPerProbe);
         const device = context.device;
 
@@ -445,7 +447,8 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         write.dispatchWorkgroups(probesX, probesY);
         write.end();
 
-        this.encodeCensus(encoder, resources, maxPerDimension);
+        this.encodeCensus(encoder, context, resources, maxPerDimension);
+        return count;
     }
 
     /** Renderers read the field through T1.6's shading module, built on {@link field}. */
@@ -470,20 +473,21 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
     }
 
     /**
-     * Counters for the latest frame. The per-state counts and rays traced come
-     * from the GPU census, read back a few frames late; until the first one
-     * arrives, every probe counts as not updated yet.
+     * Counters for the latest frame. "probes updated" is always there. The
+     * per-state counts and rays traced need the GPU census, which runs only
+     * when the platform times passes (`gpuTiming`), and arrive a few frames
+     * late; without them those counters are absent, not guessed.
      */
     get counters(): Readonly<Record<string, number>> {
         const census = this.latestCensus;
-        const probes = this.resources?.grid.probeCount ?? 0;
+        if (!census) return { 'probes updated': this.probesUpdated };
         return {
             'probes updated': this.probesUpdated,
-            'rays traced': census ? census[CENSUS_RAYS_TRACED] : 0,
-            'probes active': census ? census[PROBE_STATE.active] : 0,
-            'probes off: inside geometry': census ? census[PROBE_STATE.offInsideGeometry] : 0,
-            'probes off: no surface nearby': census ? census[PROBE_STATE.offNoSurfaceNearby] : 0,
-            'probes not updated yet': census ? census[PROBE_STATE.notUpdatedYet] : probes,
+            'rays traced': census[CENSUS_RAYS_TRACED],
+            'probes active': census[PROBE_STATE.active],
+            'probes off: inside geometry': census[PROBE_STATE.offInsideGeometry],
+            'probes off: no surface nearby': census[PROBE_STATE.offNoSurfaceNearby],
+            'probes not updated yet': census[PROBE_STATE.notUpdatedYet],
         };
     }
 
@@ -538,13 +542,21 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         return { buffer, capacity, traceGroup, blendGroup };
     }
 
-    /** Counts probes per state into the census buffer and copies it out, when a readback buffer is free. */
-    private encodeCensus(encoder: GPUCommandEncoder, resources: PreparedResources, maxPerDimension: number): void {
+    /**
+     * Counts probes per state into the census buffer and copies it out for
+     * reading back. Only when the platform times passes: the platform makes
+     * no readbacks unless its `gpuTiming` option is on, and the timer gives
+     * this pass timestamp writes exactly then. Also skipped while every
+     * readback buffer is still in flight.
+     */
+    private encodeCensus(encoder: GPUCommandEncoder, context: TechniqueContext, resources: PreparedResources, maxPerDimension: number): void {
         const staging = resources.censusStaging.find((slot) => slot.state === 'free');
         if (!staging) return;
+        const timestampWrites = context.timer.computePass('ddgi/census');
+        if (!timestampWrites) return;
         const groups = Math.ceil(resources.grid.probeCount / CENSUS_WORKGROUP_SIZE);
         const groupsX = Math.min(groups, maxPerDimension);
-        const pass = encoder.beginComputePass({ label: 'ddgi/census' });
+        const pass = encoder.beginComputePass({ label: 'ddgi/census', timestampWrites });
         resources.censusKernel.bind(pass);
         pass.setBindGroup(1, resources.censusGroup);
         pass.dispatchWorkgroups(groupsX, Math.ceil(groups / groupsX));

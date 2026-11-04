@@ -3,10 +3,10 @@ import { GILimitError } from '../../platform/contract/errors.ts';
 import { checkFieldLimits, distanceFormatFor, fieldBytes, fieldLayout, scratchLayout, UNIFORM_BYTES, UNIFORM_WORD } from './layout.ts';
 import { borderSource, octDecode, octEncode, texelDirection } from './octahedral.ts';
 import { frameRayRotation, quaternionToMatrix, seededRandom, uniformRandomQuaternion } from './ray-rotation.ts';
-import { blendSettings, CHANGE_RULE_OFF, distanceClamp, effectiveMaxRayDistance, effectiveRaysPerProbe, probeGrid, resolveBias, UNBOUNDED_RAY_DISTANCE, withDefaults } from './settings.ts';
+import { blendSettings, CHANGE_RULE_OFF, FIXED_RAYS, distanceClamp, effectiveMaxRayDistance, effectiveRaysPerProbe, probeGrid, resolveBias, UNBOUNDED_RAY_DISTANCE, withDefaults } from './settings.ts';
 import { scrambleStride, UpdateCursor } from './update-order.ts';
 import { DDGI_SAMPLE_WGSL } from './wgsl/sample.ts';
-import { blendKernelWgsl } from './wgsl/blend.ts';
+import { blendKernelWgsl, KEY_INDEX_BITS } from './wgsl/blend.ts';
 import { DDGI_CENSUS_WGSL } from './wgsl/census.ts';
 import { DDGI_COMMON_WGSL } from './wgsl/common.ts';
 import { DDGI_TRACE_WGSL } from './wgsl/trace.ts';
@@ -328,5 +328,13 @@ describe('the uniform block', () => {
         }
         expect(words).toEqual(UNIFORM_WORD);
         expect(Math.ceil(offset / structAlign) * structAlign).toBe(UNIFORM_BYTES);
+    });
+});
+
+describe("phase B's reduction keys", () => {
+    it('reserve enough low bits for every fixed ray index, and few enough to keep distances precise', () => {
+        expect(2 ** KEY_INDEX_BITS).toBeGreaterThanOrEqual(FIXED_RAYS);
+        expect(KEY_INDEX_BITS).toBeLessThanOrEqual(8);
+        expect(blendKernelWgsl({ irradianceTexels: 6, distanceTexels: 14, scratch: scratchLayout(6, 14), reduction: 'workgroup' })).toContain(`const DDGI_KEY_INDEX_MASK: u32 = ${2 ** KEY_INDEX_BITS - 1}u;`);
     });
 });

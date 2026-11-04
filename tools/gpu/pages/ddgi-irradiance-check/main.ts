@@ -13,7 +13,7 @@
  */
 
 import { assert, runGpuTest } from '../../client.ts';
-import { CORNELL_POINT_IN_AIR_VOLUME, createDdgiScene, FieldProbe, readBuffer, runFrames, type SurfacePoint } from '../ddgi-shared/harness.ts';
+import { CORNELL_POINT_IN_AIR_VOLUME, createDdgiScene, FieldProbe, readBuffer, runFrames, type SurfacePoint, releaseDeviceOnPageHide } from '../ddgi-shared/harness.ts';
 import type { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
 
 const FRAMES = 400;
@@ -184,6 +184,7 @@ function perSurfaceSums(surfaces: readonly { name: string; points: SurfacePoint[
 
 await runGpuTest(
     async ({ device, log }) => {
+        releaseDeviceOnPageHide(device);
         const results: Record<string, unknown> = {};
         const surfaces = gridPoints();
         const allPoints = surfaces.flatMap((surface) => surface.points);

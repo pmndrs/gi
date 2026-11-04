@@ -17,7 +17,7 @@
  */
 
 import { assert, drainDevice, runGpuTest, watchDevice } from '../../client.ts';
-import { CORNELL_POINT_IN_AIR_VOLUME, createDdgiScene, FieldProbe, runFrames, type SurfacePoint } from '../ddgi-shared/harness.ts';
+import { CORNELL_POINT_IN_AIR_VOLUME, createDdgiScene, FieldProbe, runFrames, type SurfacePoint, releaseDeviceOnPageHide } from '../ddgi-shared/harness.ts';
 import type { DDGIField } from '../../../../packages/ddgi-core/src/techniques/ddgi/ddgi-technique.ts';
 
 const FRAMES = 200;
@@ -116,10 +116,10 @@ function largestDifference(a: ArrayLike<number>, b: ArrayLike<number>, floor: nu
 
 await runGpuTest(
     async ({ adapter, device, log }) => {
+        releaseDeviceOnPageHide(device);
         assert(adapter.features.has('texture-formats-tier1'), 'this adapter has no texture-formats-tier1, so the rg16float path cannot be tested here');
         assert(device.features.has('texture-formats-tier1'), 'device A was created without texture-formats-tier1');
         const points = surfacePoints();
-        const compact = await runOn(device, points);
 
         // Device B: a fresh adapter (an adapter gives out one device), no texture-formats-tier1.
         const fallbackAdapter = await navigator.gpu.requestAdapter();
@@ -131,6 +131,11 @@ await runGpuTest(
         await drainDevice(fallbackDevice);
         fallbackDevice.destroy();
         assert(fallbackErrors.length === 0, `device B reported errors: ${fallbackErrors.join(' | ')}`);
+
+        // Device A only after B is gone. Run the other way round on the Intel UHD, straight after
+        // the classification page, B hung the GPU (DXGI_ERROR_DEVICE_HUNG) in its first frames while A
+        // was still alive; DDGI's own code was ruled out (the hang came with older kernels too).
+        const compact = await runOn(device, points);
 
         assert(compact.format === 'rg16float', `with the feature, distances use ${compact.format}`);
         assert(fallback.format === 'rgba16float', `without the feature, distances use ${fallback.format}`);
