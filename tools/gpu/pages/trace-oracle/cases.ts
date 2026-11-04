@@ -64,18 +64,27 @@ export interface OracleCase {
     /** Hand-checked rays; `rays` holds exactly these, in order. Absent for random cases. */
     readonly curated?: readonly CuratedRay[];
     /**
-     * Every ray starts inside a closed shell, so a miss is a leak. Misses are
-     * counted separately from ordinary mismatches.
+     * Every ray starts inside a closed shell, so a miss is an escape and fails
+     * the case, in closest-hit and any-hit alike. Escapes are counted apart
+     * from ordinary mismatches, for the report.
      */
     readonly everyRayMustHit?: boolean;
     /**
-     * Rays from this index on are aimed at edges or corners. A miss there is
-     * counted and reported separately, not as an ordinary leak.
+     * Rays from this index on are aimed at edges or corners. Their escapes are
+     * counted apart from those of the random rays, so the report says where a
+     * hole is; they fail the case all the same.
      */
     readonly edgeAimedFrom?: number;
-    /** Largest share of rays the reference may call ambiguous. Curated cases allow none. */
-    readonly maxAmbiguousShare: number;
+    /** Largest share of rays per mode whose disagreement with the reference may be excused as ambiguous. Curated cases allow none. */
+    readonly maxAmbiguousShare: AmbiguousAllowance;
 }
+
+export interface AmbiguousAllowance {
+    readonly closest: number;
+    readonly any: number;
+}
+
+const NO_AMBIGUITY: AmbiguousAllowance = { closest: 0, any: 0 };
 
 const IDENTITY = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
 
@@ -122,7 +131,7 @@ function curatedCase(
         instances,
         curated,
         rays: packRays(curated.map((entry) => entry.ray)),
-        maxAmbiguousShare: 0,
+        maxAmbiguousShare: NO_AMBIGUITY,
     };
 }
 
@@ -312,8 +321,11 @@ function thinBoxCase(rayCount: number): OracleCase {
         rays: packRays(rays),
         everyRayMustHit: true,
         edgeAimedFrom: randomCount,
-        // Corner and edge rays are within rounding distance of an edge by construction.
-        maxAmbiguousShare: 0.3,
+        // Corner and edge rays are within rounding distance of an edge by construction, so
+        // which of the faces meeting there is hit first is a tie (check.ts holds a tie to
+        // the same t and side). Any-hit has no ties: something blocks every ray, so it
+        // is held to that and none of its rays may be ambiguous.
+        maxAmbiguousShare: { closest: 0.3, any: 0 },
     };
 }
 
@@ -335,7 +347,8 @@ function randomCase(
     rayCount: number,
 ): OracleCase {
     const rays = randomRays(random, rayCount, [-extent, -extent, -extent, extent, extent, extent], extent * 0.4, { randomInterval: true });
-    return { name, description, meshes, instances, rays: packRays(rays), maxAmbiguousShare: 0.01 };
+    // Random rays and random intervals land within rounding distance of an edge or an interval end now and then.
+    return { name, description, meshes, instances, rays: packRays(rays), maxAmbiguousShare: { closest: 0.01, any: 0.01 } };
 }
 
 function randomSoupCase(rayCount: number): OracleCase {
@@ -473,7 +486,8 @@ export function sharedEdgeCase(rayCount: number, transformed: boolean): SharedEd
         categories,
         everyRayMustHit: true,
         edgeAimedFrom: 0,
-        maxAmbiguousShare: 1,
+        // Not used: evaluateSharedEdgeCase (check.ts) counts slips directly and allows none.
+        maxAmbiguousShare: { closest: 1, any: 0 },
     };
 }
 

@@ -17,7 +17,6 @@
 import {
     assembleTraceScene,
     buildMeshBvh,
-    buildReferenceScene,
     createCpuTracer,
     createMeshBvhBuilder,
     HIT_RECORD_BYTES,
@@ -25,7 +24,6 @@ import {
     RAY_BYTES,
     TRACE_MODULE_ENTRIES,
     TraceBatchKernel,
-    traceClosestReference,
     uploadTraceScene,
     type MeshBvhBuilder,
     type TraceSceneBuffers,
@@ -36,14 +34,21 @@ import { assert, runGpuTest } from '../../client.ts';
 import {
     buildOracleCases,
     FULL_SIZES,
-    SHARED_EDGE_CATEGORIES,
     sharedEdgeCase,
     unpackRay,
     type OracleCase,
     type SharedEdgeCase,
 } from './cases.ts';
 import { buildMeshBvhWithTmbvh } from '../trace-bench/tmbvh-convert.ts';
-import { computeReferenceAnswersYielding, evaluateCase, type CaseResult } from './check.ts';
+import {
+    computeReferenceAnswersYielding,
+    evaluateCase,
+    evaluateSharedEdgeCase,
+    sharedEdgeFailures,
+    type CaseResult,
+    type SharedEdgeReport,
+    type TracerAnswers,
+} from './check.ts';
 
 /**
  * What each pass of the oracle traces: the triangle test, and who built the
@@ -146,6 +151,14 @@ function hitAt(answers: GpuAnswers, index: number): TracedHit | null {
     };
 }
 
+/** The read-back results in the form the checks (check.ts) take. */
+function tracerAnswers(answers: GpuAnswers): TracerAnswers {
+    return {
+        closest: (index) => hitAt(answers, index),
+        any: (index) => answers.blocked[index] !== 0,
+    };
+}
+
 interface BuiltScene {
     data: TraceSceneData;
     buildMs: number;
@@ -174,19 +187,6 @@ function probeStackDepth(scene: TraceSceneData, oracleCase: OracleCase): number 
     return stats.maxStackSize;
 }
 
-interface SharedEdgeReport {
-    name: string;
-    rays: number;
-    /** Closest-hit rays that reported a miss although they cross the quad. */
-    slipped: number;
-    /** Any-hit rays that reported "clear" although they cross the quad. */
-    slippedAny: number;
-    byCategory: Record<string, { rays: number; slipped: number }>;
-    /** Rays among the first few thousand for which the double-precision reference found no hit: must be 0. */
-    referenceMisses: number;
-    firstSlippedRays: number[];
-}
-
 async function runSharedEdgeCase(
     device: GPUDevice,
     kernel: TraceBatchKernel,
@@ -198,37 +198,7 @@ async function runSharedEdgeCase(
     const buffers = uploadTraceScene(device, built.data, oracleCase.name);
     const answers = await traceOnGpu(device, kernel, buffers, oracleCase.rays);
     buffers.destroy();
-
-    const rayCount = oracleCase.rays.length / 8;
-    const report: SharedEdgeReport = {
-        name: oracleCase.name,
-        rays: rayCount,
-        slipped: 0,
-        slippedAny: 0,
-        byCategory: {},
-        referenceMisses: 0,
-        firstSlippedRays: [],
-    };
-    for (const name of SHARED_EDGE_CATEGORIES) report.byCategory[name] = { rays: 0, slipped: 0 };
-
-    for (let index = 0; index < rayCount; index++) {
-        const entry = report.byCategory[SHARED_EDGE_CATEGORIES[oracleCase.categories[index]]];
-        entry.rays++;
-        // Every ray crosses the quad, so a miss is a slip.
-        if (hitAt(answers, index) === null) {
-            entry.slipped++;
-            report.slipped++;
-            if (report.firstSlippedRays.length < 5) report.firstSlippedRays.push(index);
-        }
-        if (answers.blocked[index] === 0) report.slippedAny++;
-    }
-
-    // The setup itself: the double-precision reference finds a hit for a sample of the rays.
-    const reference = buildReferenceScene(oracleCase.meshes, oracleCase.instances);
-    for (let index = 0; index < Math.min(rayCount, SHARED_EDGE_REFERENCE_RAYS); index++) {
-        if (traceClosestReference(reference, unpackRay(oracleCase.rays, index)) === null) report.referenceMisses++;
-    }
-    return report;
+    return evaluateSharedEdgeCase(oracleCase, tracerAnswers(answers), SHARED_EDGE_REFERENCE_RAYS);
 }
 
 function summarize(result: CaseResult, stackUsed: number, scene: TraceSceneData, buildMs: number) {
@@ -241,8 +211,9 @@ function summarize(result: CaseResult, stackUsed: number, scene: TraceSceneData,
             maxTError: Number(result.closest.maxTError.toExponential(2)),
         },
         any: { matches: result.any.matches, ambiguous: result.any.ambiguous, mismatches: result.any.mismatches },
-        leaks: result.leaks,
-        cornerLeaks: result.edgeLeaks,
+        closestEscapes: result.closestEscapes,
+        anyEscapes: result.anyEscapes,
+        referenceEscapes: result.referenceEscapes,
         expectationFailures: result.expectationFailures.length,
         topLevelDepth: scene.topLevel.maxDepth,
         maxMeshDepth: scene.maxMeshDepth,
@@ -296,18 +267,16 @@ await runGpuTest(async ({ device, log }) => {
             const answers = await traceOnGpu(device, kernel, buffers, oracleCase.rays);
             buffers.destroy();
 
-            const result = evaluateCase(
-                oracleCase,
-                { closest: (index) => hitAt(answers, index), any: (index) => answers.blocked[index] !== 0 },
-                references[caseIndex],
-            );
+            const result = evaluateCase(oracleCase, tracerAnswers(answers), references[caseIndex]);
             const stackUsed = probeStackDepth(built.data, oracleCase);
             deepestStackUsed = Math.max(deepestStackUsed, stackUsed);
             deepestRequired = Math.max(deepestRequired, built.data.requiredStackSize);
             results.cases[oracleCase.name] = summarize(result, stackUsed, built.data, built.buildMs);
             log(
                 `[${variant.name}] ${oracleCase.name}: ${result.rays} rays, closest ${result.closest.mismatches} mismatches / ${result.closest.ambiguous} ambiguous, ` +
-                    `any ${result.any.mismatches} / ${result.any.ambiguous}, leaks ${result.leaks}, corner leaks ${result.edgeLeaks}`,
+                    `any ${result.any.mismatches} / ${result.any.ambiguous}, ` +
+                    `escapes closest ${result.closestEscapes.ordinary} + ${result.closestEscapes.edgeAimed} at corners, ` +
+                    `any ${result.anyEscapes.ordinary} + ${result.anyEscapes.edgeAimed} at corners`,
             );
             for (const failure of result.failures) failures.push(`[${variant.name}] ${oracleCase.name}: ${failure}`);
         }
@@ -315,18 +284,11 @@ await runGpuTest(async ({ device, log }) => {
         for (const transformed of [false, true]) {
             const report = await runSharedEdgeCase(device, kernel, builder, sharedEdgeCase(sharedRays, transformed), variant);
             results.sharedEdges.push(report);
-            log(`[${variant.name}] ${report.name}: ${report.slipped} of ${report.rays} rays slipped between triangles`);
-            // The watertight test has to be perfect: no ray may slip between triangles.
-            if (report.slipped > 0) {
-                failures.push(`[${variant.name}] ${report.name}: ${report.slipped} rays slipped between triangles`);
-            }
-            // Shadow rays go through the any-hit walk, which has its own shortcuts; it must not leak either.
-            if (report.slippedAny > 0) {
-                failures.push(`[${variant.name}] ${report.name}: ${report.slippedAny} any-hit rays slipped between triangles`);
-            }
-            if (report.referenceMisses > 0) {
-                failures.push(`[${variant.name}] ${report.name}: the reference missed ${report.referenceMisses} rays, so the setup is wrong`);
-            }
+            log(
+                `[${variant.name}] ${report.name}: ${report.slipped} of ${report.rays} rays slipped between triangles ` +
+                    `(${report.slippedAny} any-hit)`,
+            );
+            for (const failure of sharedEdgeFailures(report)) failures.push(`[${variant.name}] ${report.name}: ${failure}`);
         }
     }
     builder.dispose();
