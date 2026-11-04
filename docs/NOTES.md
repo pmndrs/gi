@@ -178,6 +178,11 @@ One bullet per fact, each with its source. Add a bullet when something cost you 
 - **three's EXRLoader** stores rows bottom-up with `flipY` false, so `equirectUV` reads it the right way up. Source: `EXRLoader.js:2469`.
 - **Native harness sky:** one constant `skyRadiance` in ProbeTraceRGS, PathTraceRGS and GBufferRGS. There's no texture path, and nothing tells rays above the horizon from rays below.
 
+- **L2 SH misses ±0.5% sky irradiance under our Preetham skies** (up to 0.9%); adding band 4 brings it under 0.35%. Band 3's cosine weight is 0. Source: T1.4.
+- **three r187 WebGPU equirect textures put the nadir at memory row 0** (`isFlipY` is false in WGSL), and environment rotation samples at Rᵀd. three samples a non-render-target `CubeTexture` with x negated, so its cube maps come out mirrored against a plain convention. Source: T1.4 and its review.
+- **Shadow-ray offsets:** Wächter–Binder's per-component ulp offset tilts along the surface when the coordinates differ in size, and leaked 8 thin-box corner hits. T1.4 pushes along the normal, scaled by the largest coordinate, and nudges the point into its triangle. Before the nudge, 25 of 1,200 barycentric corner hits landed just outside the neighbouring face. The offset grows with distance from the origin, so far-off thin walls can still leak (comment at `platform/shade/wgsl.ts`). Source: T1.4.
+- **Nearest-sampled (rgba32float) rotated skies shift by up to half a texel.** Source: T1.4.
+
 ## Platform scene copy (T1.2)
 
 - **Scene copy memory:** octahedral normals (4 bytes) and 16-bit indices for meshes with at most 65,536 vertices. Intel Sponza's base package (2.05 M vertices, 3.75 M triangles) takes 87.7 MB. `sponza` with the curtains (5.74 M triangles) takes 130.1 MB, 97% of the 128 MiB default storage binding, and `sponza-full` 348.5 MB, so large scenes need raised limits (`node tools/bench/scene-copy-memory.ts`). Bistro exterior takes 111.4 MB, which fits the 128 MB default binding only because of the octahedral normals. uv1 costs 16 MB on Sponza, so adapters should pass `uvs1` only when a material samples channel 1.

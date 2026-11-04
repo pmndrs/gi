@@ -4,6 +4,11 @@ Settled choices, newest first. Each entry is short: the decision, why, and what 
 
 ## 2026-11-05
 
+- **The platform's sky uses SH bands 0, 1, 2 and 4 (18 coefficients) for irradiance, and a 256×128 equirect radiance map for rays that miss** (T1.4).
+  - *Why bands 0–2 + 4:* L2 SH (bands 0–2) missed the ±0.5% sky tolerance on our skies (+0.74 / −0.33 / −0.87% on open ground). Band 4 brings it to +0.30 / −0.11 / −0.25%. Band 3 adds nothing to irradiance, because its cosine-convolution weight is 0.
+  - *Why an equirect map,* not the "small octahedral map" SPEC and the old contract described: it matches the sky files' layout and three's `equirectUV`, so there's one convention end to end. At 256×128 it's about 0.5 MB.
+  - *Revisit if:* memory gets tight on Tier B, or the sun's glow needs more resolution in reflections.
+
 - **Dennis on three open questions:** "go with a for exposure, candles as separate scene. regareding the limit, threejs and other apps routinely go over that. feel free."
   - **Exposure:** scenes get a default exposure in their manifest (Sponza about +2 EV), and the sky stays physically calibrated. The exact values are picked in T1.8, once our DDGI is in the viewer, since the probe-grid baseline may mislead.
   - **Candles:** a separate opt-in `sponza-candles` scene with a stated subset of the 10,000 lights, for M2's many-lights stress test. `sponza-full` stays base + curtains + ivy + trees.

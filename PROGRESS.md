@@ -21,7 +21,7 @@ Rules:
 
 ---
 
-## 2026-11-05 · T1.4 · implementer (opus); in review
+## 2026-11-05 · T1.4 · implementer (opus); Opus review: pass with notes, fixes in progress
 Did (72ebc0e):
 - `platform/shade`: hit shading (`giSurfaceAt`, `giDirectIrradiance`, `giSkyRadiance`, `giSkyIrradiance`, `giSkyIrradianceAt`). Point and spot lights use three r187's falloff and cones. Shadow rays use `giTraceAny`, and lights beyond the cap are picked stochastically and rescaled. It binds 0 storage buffers.
 - `platform/sky`: the environment projected by compute into SH (bands 0, 1, 2 and 4) plus a 256×128 radiance map; subgroups first, with a workgroup fallback; re-projected only on change.
@@ -29,7 +29,7 @@ Did (72ebc0e):
 - The contract states the equirect layout. One turbidity default, 2.
 Verified (agent; RTX 3060 ampere and Intel UHD gen-12lp, headless Chrome 156, default limits):
 - Sun on a plane matches E·cos θ, worst 7e-8.
-- Open-ground sky irradiance against the file's integral: +0.30 / −0.11 / −0.25%. Against Cycles: +0.33 / −0.09 / −0.25%, inside ±0.5%. L2 SH alone would be +0.74 / −0.33 / −0.87%.
+- Open-ground sky irradiance against the sky file's own integral (what the page measures): +0.30 / −0.11 / −0.25%. Against Cycles, worked out through T1.1's 0.03% agreement between the file and Cycles: +0.33 / −0.09 / −0.25%. Both inside ±0.5%. L2 SH alone would be +0.74 / −0.33 / −0.87%.
 - Shadow rays against the oracle on 9 scenes: 0 disagreements, 0 leaks.
 - Point and spot lights against three's formulas: worst 1e-5.
 - The stochastic choice: cap 2 within 0.21% (1.6 SE) of all lights.
@@ -37,6 +37,8 @@ Verified (agent; RTX 3060 ampere and Intel UHD gen-12lp, headless Chrome 156, de
 - Scene copy plus hit shading: 2 storage buffers.
 - lint, typecheck, test 597.
 Not verified: cube maps made by three; an environment change in the viewer; the sky's ~1.3 MB isn't in `stats.memory` yet.
+Review (Opus): re-ran lint, typecheck, test, `generate.ts --check`, and every hit-shading page plus sky-orientation on both GPUs; the numbers match. hit-shading-sky was run in a clean worktree at 72ebc0e, because B1a's uncommitted shader broke it in the live tree. The reviewer confirmed the band-4 constants, the solid angles, three's falloff and cone formulas, and the unbiased rescale. Being fixed: re-projection when the same environment object is passed again; the cube-map convention against three's mirrored cubes. Open with Dennis: what a procedural sky's `intensity` means (a multiplier, or the sun's illuminance).
+Next: `stats.memory` should include hit shading's ~1.3 MB; T1.7 handles three's light decay, `environmentRotation` and cube maps.
 Lead mistake, fixed: 43fab16 (T1.3's fixes) also caught T1.4's in-progress `gi-platform.ts` wiring, because the agent edited it between the lead's diff check and the commit. So `origin/m1` at 43fab16 didn't build until 72ebc0e. Rule since: no commit of a file that two active agents may touch.
 
 ## 2026-11-05 · T1.3 · implementer (opus); Opus review: pass with notes, fixed; done
