@@ -1,5 +1,5 @@
 /**
- * tinybvh's binned SAH builder, compiled to WebAssembly (stage B0 of
+ * tinybvh's default triangle builder (SIMD Bonsai), compiled to WebAssembly (stage B0 of
  * docs/design/bvh-framework.md).
  *
  * The .wasm is built from native/tinybvh-wasm.cpp by native/build-wasm.ts and
@@ -8,7 +8,8 @@
  * in a worker for big meshes.
  *
  * tinybvh (https://github.com/jbikker/tinybvh, MIT, Jacco Bikker). Commit and
- * hashes: native/build-wasm.ts and THIRD_PARTY.md.
+ * hashes: native/build-wasm.ts and THIRD_PARTY.md. Licence texts (tinybvh's and
+ * the Emscripten runtime's): licenses/, also embedded at the top of tinybvh-wasm.ts.
  */
 
 import { singleLeafTopology, TOPOLOGY_WORDS_PER_NODE, type MeshTreeTopology } from './topology.ts';

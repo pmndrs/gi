@@ -33,9 +33,21 @@ function walk(directory) {
     });
 }
 
+// A WebAssembly module embedded as base64 starts with these characters (the bytes "\0asm", then version 1).
+const embeddedWasmMarker = 'AGFzbQEAAAA';
+// The tinybvh WASM must carry its licences (packages/bvh/licenses), which the
+// generated module puts in a /*! */ comment for bundlers to keep.
+const wasmLicenseLines = ['Copyright (c) 2024 Jacco Bikker', 'Copyright (c) 2010-2014 Emscripten authors', 'Rich Felker'];
+
 for (const file of existsSync(dist) ? walk(dist) : []) {
-    if (readFileSync(file, 'utf8').includes(privatePackagePrefix)) {
+    const text = readFileSync(file, 'utf8');
+    if (text.includes(privatePackagePrefix)) {
         problems.push(`${file} references a private workspace package (${privatePackagePrefix}*)`);
+    }
+    if (file.endsWith('.js') && text.includes(embeddedWasmMarker)) {
+        for (const line of wasmLicenseLines) {
+            if (!text.includes(line)) problems.push(`${file} embeds WebAssembly but lacks the licence line "${line}"`);
+        }
     }
 }
 

@@ -1,25 +1,31 @@
 /// <reference types="node" />
 /**
- * Builds tinybvh-wasm.cpp with a pinned tinybvh commit into a .wasm, and writes
- * it base64-encoded into `packages/bvh/src/tinybvh-wasm.ts` (with its SHA-256,
- * the commit and the flags), which is what the package loads and what is committed.
+ * Builds tinybvh-wasm.cpp with a pinned tinybvh commit and a pinned Emscripten
+ * into a .wasm, and writes it base64-encoded into `packages/bvh/src/tinybvh-wasm.ts`
+ * (with its SHA-256, the versions, the flags and the licence texts), which is
+ * what the package loads and what is committed.
  *
- *   node packages/bvh/native/build-wasm.ts [--emcc <command>] [--keep-headers]
+ *   pnpm bvh:wasm                  install the pinned emsdk if needed, then build
+ *   pnpm bvh:wasm --check          build, and fail unless the result matches the committed .wasm
+ *   options: --keep-headers        keep the temporary build folder, for inspection
  *
  * What it does, so the committed .wasm can be checked:
- * 1. Downloads tinybvh's headers at TINYBVH_COMMIT into a temporary folder and
+ * 1. Makes sure `tools/emsdk` (gitignored) is emsdk at EMSDK_COMMIT with
+ *    Emscripten EMSDK_VERSION installed and active. If the folder is missing it
+ *    is cloned from EMSDK_REPOSITORY and `emsdk install` / `emsdk activate` run
+ *    inside it. Nothing outside that folder is written, and no other Emscripten
+ *    on the machine is used: every EM* variable is dropped from the environment.
+ * 2. Downloads tinybvh's headers at TINYBVH_COMMIT into a temporary folder and
  *    checks each against its SHA-256 below. A mismatch stops the build.
- * 2. Checks the compiler is Emscripten EMCC_VERSION (the version the committed
- *    .wasm was made with), then compiles with BUILD_FLAGS.
+ * 3. Compiles there with BUILD_FLAGS, using relative paths only, so no folder
+ *    name ends up in the .wasm (tinybvh puts __FILE__ into its error messages).
  *
- * Emscripten is found as `emcc` on the PATH. On Windows without one, the
- * script runs `emcc` inside WSL (`wsl bash -lc ...`), which is how the
- * committed file was built (emsdk 3.1.57 in WSL Ubuntu). Nothing is installed.
+ * Needs git, and Python 3 on Linux and macOS (emsdk brings its own Python on Windows).
  */
 
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
@@ -27,7 +33,17 @@ import { parseArgs } from 'node:util';
 export const TINYBVH_REPOSITORY = 'https://github.com/jbikker/tinybvh';
 /** tinybvh 1.9.1, main on 2026-10-12. */
 export const TINYBVH_COMMIT = 'c9be3103cc9693b456b0a0353927c11cac7d710f';
-export const EMCC_VERSION = '3.1.57';
+
+export const EMSDK_REPOSITORY = 'https://github.com/emscripten-core/emsdk';
+/**
+ * Emscripten 6.0.13, released 2026-10-19. Chosen on 2026-11-04 as the newest
+ * release at least two weeks old. 256-bit AVX intrinsics (emulated on WASM
+ * SIMD) arrived in 3.1.68; the 3.1.57 used before could not compile tinybvh's
+ * AVX builder, which this build exists for.
+ */
+export const EMSDK_VERSION = '6.0.13';
+/** The emsdk tag EMSDK_VERSION points at; checked so a moved tag cannot change the build. */
+export const EMSDK_COMMIT = '35659964bc2762fffec0d257997fb61475f765b7';
 
 /** Every file the build reads from tinybvh, with its SHA-256 at TINYBVH_COMMIT. */
 const TINYBVH_FILES: Record<string, string> = {
@@ -43,8 +59,14 @@ const TINYBVH_FILES: Record<string, string> = {
 /**
  * Compiler flags, with the reason for each:
  * - `-O3`: speed; the builder is the whole point.
- * - `-DNO_THREADED_BUILDS`: single-threaded (no pthreads, so no cross-origin isolation needed). One worker builds.
- * - `-msimd128 -msse4.2`: WASM SIMD, through Emscripten's SSE headers, for tinybvh's SSE paths.
+ * - `-DNO_THREADED_BUILDS`: single-threaded. Threads in WASM need pthreads, and
+ *   pthreads need cross-origin isolation (COOP/COEP headers), which a library
+ *   cannot ask of the pages that use it. One worker builds.
+ * - `-msimd128 -mavx`: WASM SIMD, with Emscripten's AVX intrinsics on top of it.
+ *   tinybvh's fast builders (Bonsai, and binned SAH) are written in AVX and only
+ *   compile when `__AVX__` is defined; without it `Build` falls back to the
+ *   scalar reference builder, about 3x slower. AVX2 is not needed: it only adds
+ *   the 8-wide CPU tracing layouts, which we don't use.
  * - `-sSTANDALONE_WASM --no-entry`: a plain .wasm with no JS glue; src/tinybvh.ts instantiates it.
  * - `-sALLOW_MEMORY_GROWTH -sMAXIMUM_MEMORY=4GB`: big meshes need hundreds of MB.
  * - `-fno-exceptions`: tinybvh does not use them.
@@ -54,7 +76,7 @@ export const BUILD_FLAGS = [
     '-std=c++20',
     '-DNO_THREADED_BUILDS',
     '-msimd128',
-    '-msse4.2',
+    '-mavx',
     '-fno-exceptions',
     '-sSTANDALONE_WASM',
     '--no-entry',
@@ -64,11 +86,78 @@ export const BUILD_FLAGS = [
 ];
 
 const PACKAGE_ROOT = resolve(import.meta.dirname, '..');
+const REPOSITORY_ROOT = resolve(PACKAGE_ROOT, '..', '..');
 const SOURCE = join(PACKAGE_ROOT, 'native', 'tinybvh-wasm.cpp');
 const OUTPUT_MODULE = join(PACKAGE_ROOT, 'src', 'tinybvh-wasm.ts');
+const EMSDK_FOLDER = join(REPOSITORY_ROOT, 'tools', 'emsdk');
+/** Licence texts that travel inside the generated module (and so inside every bundle of it). */
+const LICENSE_FILES = [join(PACKAGE_ROOT, 'licenses', 'tinybvh.txt'), join(PACKAGE_ROOT, 'licenses', 'emscripten-runtime.txt')];
+const IS_WINDOWS = process.platform === 'win32';
 
 function sha256(bytes: Buffer): string {
     return createHash('sha256').update(bytes).digest('hex');
+}
+
+/** This process's environment without any Emscripten setting, so only tools/emsdk is used. */
+function cleanEnvironment(): NodeJS.ProcessEnv {
+    const environment: NodeJS.ProcessEnv = {};
+    for (const [name, value] of Object.entries(process.env)) {
+        if (!/^EM(SDK|_|CC)/i.test(name)) environment[name] = value;
+    }
+    return environment;
+}
+
+function run(command: string, args: string[], options: { cwd: string; env?: NodeJS.ProcessEnv }): string {
+    return execFileSync(command, args, { cwd: options.cwd, env: options.env ?? cleanEnvironment(), encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+}
+
+/** Runs emsdk's own command (`emsdk.bat` on Windows, `./emsdk` elsewhere) inside tools/emsdk. */
+function runEmsdk(args: string[]): void {
+    console.log(`emsdk ${args.join(' ')}`);
+    // Node does not start .bat files without a shell; cmd.exe runs it with plain arguments.
+    const output = IS_WINDOWS
+        ? run('cmd.exe', ['/d', '/c', 'emsdk.bat', ...args], { cwd: EMSDK_FOLDER })
+        : run('./emsdk', args, { cwd: EMSDK_FOLDER });
+    console.log(output.trim().split('\n').slice(-3).join('\n'));
+}
+
+function installedEmscriptenVersion(): string | null {
+    const file = join(EMSDK_FOLDER, 'upstream', 'emscripten', 'emscripten-version.txt');
+    return existsSync(file) ? readFileSync(file, 'utf8').trim().replace(/"/g, '') : null;
+}
+
+/** Step 1: tools/emsdk at the pinned commit, with the pinned Emscripten installed and active. */
+function ensureEmsdk(): void {
+    if (!existsSync(EMSDK_FOLDER)) {
+        console.log(`cloning ${EMSDK_REPOSITORY} ${EMSDK_VERSION} into ${EMSDK_FOLDER}`);
+        run('git', ['clone', '--quiet', '--depth', '1', '--branch', EMSDK_VERSION, EMSDK_REPOSITORY, EMSDK_FOLDER], { cwd: REPOSITORY_ROOT });
+    }
+    const commit = run('git', ['rev-parse', 'HEAD'], { cwd: EMSDK_FOLDER }).trim();
+    if (commit !== EMSDK_COMMIT) {
+        throw new Error(`${EMSDK_FOLDER} is at ${commit}, expected emsdk ${EMSDK_VERSION} (${EMSDK_COMMIT}). Delete the folder and run again.`);
+    }
+    if (installedEmscriptenVersion() !== EMSDK_VERSION || !existsSync(join(EMSDK_FOLDER, '.emscripten'))) {
+        runEmsdk(['install', EMSDK_VERSION]);
+        runEmsdk(['activate', EMSDK_VERSION]);
+    }
+}
+
+/** The Python that runs em++: emsdk's own on Windows, the system's elsewhere (as emsdk itself does). */
+function emsdkPython(): string {
+    if (!IS_WINDOWS) return 'python3';
+    const pythonFolder = join(EMSDK_FOLDER, 'python');
+    const versions = existsSync(pythonFolder) ? readdirSync(pythonFolder) : [];
+    if (versions.length !== 1) throw new Error(`expected one Python under ${pythonFolder}, found ${versions.length}`);
+    return join(pythonFolder, versions[0], 'python.exe');
+}
+
+/** Runs em++ from tools/emsdk in `cwd`, with only that emsdk's configuration and cache. */
+function runEmxx(args: string[], cwd: string): string {
+    const environment = cleanEnvironment();
+    environment.EM_CONFIG = join(EMSDK_FOLDER, '.emscripten');
+    environment.EM_CACHE = join(EMSDK_FOLDER, 'upstream', 'emscripten', 'cache');
+    environment.EMSDK_QUIET = '1';
+    return run(emsdkPython(), [join(EMSDK_FOLDER, 'upstream', 'emscripten', 'em++.py'), ...args], { cwd, env: environment });
 }
 
 async function downloadHeaders(folder: string): Promise<void> {
@@ -81,44 +170,35 @@ async function downloadHeaders(folder: string): Promise<void> {
         if (actual !== expected) throw new Error(`${file} has SHA-256 ${actual}, expected ${expected}`);
         writeFileSync(join(folder, file), bytes);
     }
-}
-
-/** Windows path to a WSL path: C:\a\b -> /mnt/c/a/b. */
-function toWslPath(path: string): string {
-    return path.replace(/^([A-Za-z]):/, (_, drive: string) => `/mnt/${drive.toLowerCase()}`).replace(/\\/g, '/');
-}
-
-function hasCommand(command: string): boolean {
-    try {
-        execFileSync(command, ['--version'], { stdio: 'ignore', shell: process.platform === 'win32' });
-        return true;
-    } catch {
-        return false;
+    // The committed copy of tinybvh's licence must be the one this build uses.
+    const committedLicense = readFileSync(LICENSE_FILES[0]);
+    if (!committedLicense.equals(readFileSync(join(folder, 'LICENSE')))) {
+        throw new Error(`${LICENSE_FILES[0]} differs from tinybvh's LICENSE at ${TINYBVH_COMMIT}`);
     }
 }
 
-/** Runs emcc with `args` (paths already in the form the compiler sees) and returns its output. */
-function makeEmcc(emccOption: string | undefined): { run(args: string[]): string; path(native: string): string } {
-    const useWsl = emccOption === undefined && !hasCommand('emcc') && process.platform === 'win32';
-    const command = emccOption ?? 'emcc';
-    if (useWsl) {
-        const quote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
-        return {
-            run: (args) => execFileSync('wsl', ['bash', '-lc', `EMSDK_QUIET=1 ${command} ${args.map(quote).join(' ')}`], { encoding: 'utf8' }),
-            path: toWslPath,
-        };
-    }
-    return {
-        run: (args) => execFileSync(command, args, { encoding: 'utf8', shell: process.platform === 'win32' }),
-        path: (native) => native,
-    };
+/**
+ * The licences as one `/*! ... *\/` comment. Bundlers keep `/*!` comments, so the
+ * notices reach every file the WASM ends up in.
+ */
+function licenseComment(): string {
+    const texts = LICENSE_FILES.map((file) => readFileSync(file, 'utf8').trimEnd().replace(/\*\//g, '* /'));
+    const lines = [
+        `The WebAssembly below is tinybvh (${TINYBVH_REPOSITORY}) plus a little of Emscripten's runtime.`,
+        'Their licences follow: tinybvh first, then the runtime.',
+        '',
+        ...texts.join('\n\n').split('\n'),
+    ];
+    return ['/*!', ...lines.map((line) => (line ? ` * ${line}` : ' *')), ' */'].join('\n');
 }
 
 function generatedModule(bytes: Buffer, hash: string): string {
     return [
-        '// Generated by packages/bvh/native/build-wasm.ts. Do not edit; rebuild instead.',
-        `// tinybvh ${TINYBVH_REPOSITORY} at ${TINYBVH_COMMIT} (MIT), compiled with Emscripten ${EMCC_VERSION}:`,
-        `//   emcc ${BUILD_FLAGS.join(' ')} native/tinybvh-wasm.cpp`,
+        licenseComment(),
+        '',
+        '// Generated by packages/bvh/native/build-wasm.ts (`pnpm bvh:wasm`). Do not edit; rebuild instead.',
+        `// tinybvh ${TINYBVH_REPOSITORY} at ${TINYBVH_COMMIT} (MIT), compiled with Emscripten ${EMSDK_VERSION}:`,
+        `//   em++ ${BUILD_FLAGS.join(' ')} tinybvh-wasm.cpp`,
         `// ${bytes.length} bytes, SHA-256 ${hash}.`,
         '',
         `export const TINYBVH_WASM_SHA256 = '${hash}';`,
@@ -129,38 +209,40 @@ function generatedModule(bytes: Buffer, hash: string): string {
     ].join('\n');
 }
 
-async function main(): Promise<void> {
-    const { values } = parseArgs({ args: process.argv.slice(2), options: { emcc: { type: 'string' }, 'keep-headers': { type: 'boolean' } } });
-    const emcc = makeEmcc(values.emcc);
-    const version = emcc.run(['--version']).split('\n')[0];
-    if (!version.includes(` ${EMCC_VERSION} `)) {
-        throw new Error(`expected Emscripten ${EMCC_VERSION}, found: ${version}`);
-    }
+/** The hash recorded in the committed module, or null if there is none yet. */
+function committedHash(): string | null {
+    if (!existsSync(OUTPUT_MODULE)) return null;
+    return /TINYBVH_WASM_SHA256 = '([0-9a-f]{64})'/.exec(readFileSync(OUTPUT_MODULE, 'utf8'))?.[1] ?? null;
+}
 
-    const headers = mkdtempSync(join(tmpdir(), 'tinybvh-'));
+async function main(): Promise<void> {
+    const { values } = parseArgs({ args: process.argv.slice(2), options: { check: { type: 'boolean' }, 'keep-headers': { type: 'boolean' } } });
+    ensureEmsdk();
+
+    const buildFolder = mkdtempSync(join(tmpdir(), 'tinybvh-'));
     try {
-        await downloadHeaders(headers);
-        const wasmFile = join(headers, 'tinybvh.wasm');
-        // tinybvh puts __FILE__ into its error messages; the prefix maps keep the build
-        // folder's random name (and this machine's paths) out of the .wasm, so it is reproducible.
-        const args = [
-            ...BUILD_FLAGS,
-            `-ffile-prefix-map=${emcc.path(headers)}=tinybvh`,
-            `-ffile-prefix-map=${emcc.path(join(PACKAGE_ROOT, 'native'))}=native`,
-            `-I${emcc.path(headers)}`,
-            emcc.path(SOURCE),
-            '-o',
-            emcc.path(wasmFile),
-        ];
-        console.log(`emcc ${args.join(' ')}`);
-        emcc.run(args);
-        const bytes = readFileSync(wasmFile);
+        const version = runEmxx(['--version'], buildFolder).split('\n')[0];
+        if (!version.includes(` ${EMSDK_VERSION} `)) throw new Error(`expected Emscripten ${EMSDK_VERSION}, found: ${version}`);
+        await downloadHeaders(buildFolder);
+        copyFileSync(SOURCE, join(buildFolder, 'tinybvh-wasm.cpp'));
+        // Relative paths only, run inside the build folder: __FILE__ and anything else
+        // the compiler records stay the same on every machine and in every folder.
+        const args = [...BUILD_FLAGS, '-I.', 'tinybvh-wasm.cpp', '-o', 'tinybvh.wasm'];
+        console.log(`em++ ${args.join(' ')}`);
+        runEmxx(args, buildFolder);
+        const bytes = readFileSync(join(buildFolder, 'tinybvh.wasm'));
         const hash = sha256(bytes);
-        writeFileSync(OUTPUT_MODULE, generatedModule(bytes, hash));
-        console.log(`wrote ${OUTPUT_MODULE}: ${statSync(wasmFile).size} bytes of WASM, SHA-256 ${hash}`);
+        if (values.check) {
+            const expected = committedHash();
+            if (hash !== expected) throw new Error(`rebuilt .wasm has SHA-256 ${hash}; the committed one has ${expected}`);
+            console.log(`rebuilt .wasm matches the committed one: ${bytes.length} bytes, SHA-256 ${hash}`);
+        } else {
+            writeFileSync(OUTPUT_MODULE, generatedModule(bytes, hash));
+            console.log(`wrote ${OUTPUT_MODULE}: ${bytes.length} bytes of WASM, SHA-256 ${hash}`);
+        }
     } finally {
-        if (values['keep-headers']) console.log(`headers kept in ${headers}`);
-        else rmSync(headers, { recursive: true, force: true });
+        if (values['keep-headers']) console.log(`build folder kept: ${buildFolder}`);
+        else rmSync(buildFolder, { recursive: true, force: true });
     }
 }
 

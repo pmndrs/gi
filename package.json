@@ -16,6 +16,7 @@
         "test:gpu": "node tools/gpu/run.ts",
         "device:serve": "node tools/gpu/serve-lan.ts",
         "assets:fetch": "node tools/assets/fetch.ts",
+        "bvh:wasm": "node packages/bvh/native/build-wasm.ts",
         "scenes:export": "pnpm --filter @pmndrs/ddgi-scenes export"
     },
     "devDependencies": {

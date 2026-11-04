@@ -1,7 +1,12 @@
-// A small C interface over tinybvh's binned SAH builder, compiled to WebAssembly
-// (see build-wasm.ts). It builds one mesh at a time and leaves the result in
-// WASM memory for JavaScript to read: tinybvh's 32-byte nodes and its triangle
-// order. JavaScript turns those into a plain tree description (src/tinybvh.ts);
+// A small C interface over tinybvh's default triangle builder, compiled to
+// WebAssembly (see build-wasm.ts). With AVX available (Emscripten emulates it on
+// WASM SIMD), `BVH::Build` runs tinybvh's SIMD Bonsai builder (Ganestam et al.,
+// 2015: small binned-SAH trees over a grid of cells, joined by a top tree). On
+// Sponza it is about 3x faster than tinybvh's scalar reference builder and its
+// trees have a lower SAH cost.
+//
+// It builds one mesh at a time and leaves the result in WASM memory for
+// JavaScript to read: tinybvh's 32-byte nodes and its triangle order. JavaScript turns those into a plain tree description (src/tinybvh.ts);
 // nothing here knows about our GPU layout.
 //
 // tinybvh: https://github.com/jbikker/tinybvh (MIT), by Jacco Bikker. The
@@ -16,7 +21,6 @@
 
 // The last tree built. One mesh at a time: the worker builds meshes in sequence.
 static tinybvh::BVH* lastBvh = nullptr;
-static const char* lastError = nullptr;
 
 static void releaseLast()
 {
@@ -32,11 +36,8 @@ static void releaseLast()
 EXPORT uint32_t tbvh_build(const float* vertices, uint32_t vertexCount, const uint32_t* indices, uint32_t triangleCount)
 {
     releaseLast();
-    lastError = nullptr;
-    if (triangleCount == 0) {
-        lastError = "no triangles";
-        return 0;
-    }
+    // JavaScript checks the input first; this only keeps a bad call from reaching tinybvh.
+    if (triangleCount == 0) return 0;
     lastBvh = new tinybvh::BVH();
     const tinybvh::bvhvec4slice slice(reinterpret_cast<const tinybvh::bvhvec4*>(vertices), vertexCount, sizeof(tinybvh::bvhvec4));
     if (indices) {
@@ -61,7 +62,8 @@ EXPORT const uint32_t* tbvh_triangle_order()
     return lastBvh ? lastBvh->primIdx : nullptr;
 }
 
-// Entries in the triangle order (equal to the triangle count: the binned build never splits triangles).
+// Entries in the triangle order (equal to the triangle count: without spatial splits or presplitting, which
+// are off by default, tinybvh never splits a triangle).
 EXPORT uint32_t tbvh_triangle_order_length()
 {
     return lastBvh ? lastBvh->idxCount : 0;

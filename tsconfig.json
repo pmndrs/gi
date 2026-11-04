@@ -25,5 +25,5 @@
         }
     },
     "include": ["packages/*/src", "packages/*/test", "apps/*/src", "examples/webgpu/*/src", "scenes/src", "scenes/check", "tools"],
-    "exclude": ["node_modules", "dist", ".claude"]
+    "exclude": ["node_modules", "dist", ".claude", "tools/emsdk"]
 }

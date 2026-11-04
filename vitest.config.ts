@@ -8,7 +8,7 @@ export default defineConfig({
         passWithNoTests: true,
         // Agent worktrees under .claude/ are full checkouts; without this every
         // one of them runs its own copy of the suite.
-        exclude: [...configDefaults.exclude, '.claude/**', '**/dist/**'],
+        exclude: [...configDefaults.exclude, '.claude/**', '**/dist/**', 'tools/emsdk/**'],
     },
     resolve: {
         // The umbrella imports itself by name. Node's self-reference resolves that
