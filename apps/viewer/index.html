@@ -133,6 +133,32 @@
             .panel .group[hidden] {
                 display: none;
             }
+            .panel .legend {
+                margin: 4px 0 2px 22px;
+                font-size: 12px;
+            }
+            .panel .legend[hidden],
+            .panel .note[hidden] {
+                display: none;
+            }
+            .panel .legend-row {
+                display: flex;
+                align-items: center;
+                gap: 6px;
+            }
+            .panel .legend-row .value {
+                margin-left: auto;
+                color: var(--muted);
+            }
+            .panel .swatch {
+                display: inline-block;
+                width: 10px;
+                height: 10px;
+                border-radius: 50%;
+            }
+            .panel .note {
+                word-break: break-word;
+            }
             .panel .status {
                 margin-top: 8px;
                 color: var(--muted);

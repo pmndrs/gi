@@ -169,7 +169,14 @@ function markdownTable(data: PageData, device: string): string {
     ];
     for (const row of data.rows) {
         const problems = row.measurements.filter((measurement) => measurement.problem).map((measurement) => `${measurement.name}: ${measurement.problem}`);
-        const size = row.technique === 'lpg' ? `${row.details.probes} probes` : row.technique === 'vxgi' ? `${row.details.voxel_resolution} voxels on the longest axis` : '';
+        const size =
+            row.technique === 'lpg'
+                ? `${row.details.probes} probes`
+                : row.technique === 'vxgi'
+                  ? `${row.details.voxel_resolution} voxels on the longest axis`
+                  : row.technique === 'ddgi'
+                    ? `${row.details.probes} probes, budget ${row.details.budget_ms} ms; first GI ${cell(row, 'first_gi_wall_ms', 0)} ms, warmed ${cell(row, 'warmed_wall_ms', 0)} ms; frame p95 ${cell(row, 'frame_gpu_p95_ms', 2)} (GI off ${cell(row, 'gi_off_frame_gpu_p95_ms', 2)}) ms`
+                    : '';
         const note = [row.error, ...problems, size].filter(Boolean).join('; ');
         lines.push(
             `| ${row.scene} | ${row.technique} | ${cell(row, 'bake_wall_ms', 0)} | ${cell(row, 'bake_gpu_pass_sum_ms', 0)} | ${cell(row, 'frame_gpu_ms', 2)} | ${cell(row, 'gi_off_frame_gpu_ms', 2)} | ${cell(row, 'gi_gpu_ms', 2)} | ${note} |`,

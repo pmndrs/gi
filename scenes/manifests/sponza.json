@@ -61,6 +61,7 @@
         "size": [36.5, 20, 24],
         "probeSpacing": 1
     },
+    "exposureEv": 2,
     "nativeCapable": true,
     "credits": [
         {

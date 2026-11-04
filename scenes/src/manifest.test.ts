@@ -8,6 +8,7 @@ import { loadManifests } from './export';
 import {
     checkManifestAgainstSources,
     type AssetOutputInfo,
+    defaultExposureEv,
     isHeavyScene,
     isProceduralOnly,
     manifestLightToSceneLight,
@@ -70,6 +71,16 @@ describe('validateManifest', () => {
 
     it('rejects unknown top-level fields so typos do not pass silently', () => {
         expect(errorsFor((m) => (m.camreas = []))).toEqual([expect.stringContaining('camreas')]);
+    });
+
+    it('accepts a default exposure in stops and refuses a nonsense one', () => {
+        expect(errorsFor((m) => (m.exposureEv = 2))).toEqual([]);
+        expect(errorsFor((m) => (m.exposureEv = -1.5))).toEqual([]);
+        for (const bad of ['2', Number.NaN, 40, -9]) {
+            expect(errorsFor((m) => (m.exposureEv = bad))).toEqual([expect.stringContaining('exposureEv')]);
+        }
+        expect(defaultExposureEv(validManifest())).toBe(0);
+        expect(defaultExposureEv({ ...validManifest(), exposureEv: 2 })).toBe(2);
     });
 
     it('requires 2 to 4 cameras', () => {

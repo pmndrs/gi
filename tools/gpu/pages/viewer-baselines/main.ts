@@ -6,12 +6,16 @@
  * chosen with environment variables set before `pnpm test:gpu` (vite exposes
  * `VITE_*` variables to the page):
  *
- *   (nothing)                      two small scenes, all three techniques: a quick check that it works
+ *   (nothing)                      two small scenes, every technique (none, lpg, vxgi, ddgi): a quick check that it works
  *   VITE_DDGI_BASELINES=full       every scene except heavy ones (sponza-full; name it in VITE_DDGI_SCENES)
  *   VITE_DDGI_SCENES=sponza,...    only these scenes
- *   VITE_DDGI_TECHNIQUES=none,lpg  only these techniques
+ *   VITE_DDGI_TECHNIQUES=none,ddgi only these techniques
  *   VITE_DDGI_ROUNDS=5             frame rounds (GI off and on, alternating)
+ *   VITE_DDGI_FRAMES=20            frames timed per round and GI mode
  *   VITE_DDGI_BAKE_RUNS=3          repeats of each bake
+ *
+ * DDGI's frame cost for T1.9 (GI on against off: GPU ms, frame p50 and p95):
+ *   VITE_DDGI_SCENES=cornell-box,two-room,sponza VITE_DDGI_TECHNIQUES=none,ddgi pnpm test:gpu --filter viewer-baselines
  *
  * The page fails when the device reports an error or is lost, when anything
  * is logged as an error, or when any measurement failed (a technique that
@@ -24,8 +28,7 @@
  */
 
 import { reportGpuTest } from '../../client.ts';
-import { DEFAULT_BASELINE_OPTIONS, failedMeasurements, runBaselines } from '../../../../apps/viewer/src/bench/baselines.ts';
-import type { TechniqueId } from '../../../../apps/viewer/src/techniques/types.ts';
+import { DEFAULT_BASELINE_OPTIONS, failedMeasurements, runBaselines, type BaselineOptions } from '../../../../apps/viewer/src/bench/baselines.ts';
 
 const QUICK_SCENES = ['cornell-box', 'two-room'];
 
@@ -60,7 +63,7 @@ console.error = (...args: unknown[]) => {
 const env = import.meta.env as Record<string, unknown>;
 const requestedScenes = listFromEnv(env.VITE_DDGI_SCENES);
 const full = env.VITE_DDGI_BASELINES === 'full';
-const techniques = (listFromEnv(env.VITE_DDGI_TECHNIQUES) ?? DEFAULT_BASELINE_OPTIONS.techniques) as TechniqueId[];
+const techniques = (listFromEnv(env.VITE_DDGI_TECHNIQUES) ?? DEFAULT_BASELINE_OPTIONS.techniques) as BaselineOptions['techniques'];
 
 try {
     const result = await runBaselines(document.getElementById('view') as HTMLCanvasElement, {
@@ -68,6 +71,7 @@ try {
         scenes: requestedScenes ?? (full ? null : QUICK_SCENES),
         techniques,
         frameRounds: countFromEnv(env.VITE_DDGI_ROUNDS, DEFAULT_BASELINE_OPTIONS.frameRounds),
+        sampleFrames: countFromEnv(env.VITE_DDGI_FRAMES, DEFAULT_BASELINE_OPTIONS.sampleFrames),
         bakeRuns: countFromEnv(env.VITE_DDGI_BAKE_RUNS, DEFAULT_BASELINE_OPTIONS.bakeRuns),
         log,
     });

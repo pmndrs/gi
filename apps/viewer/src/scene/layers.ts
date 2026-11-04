@@ -10,6 +10,8 @@
  *   VIEW_GEOMETRY    the model, the sky and the reference cube
  *   DIRECT_LIGHTS    the manifest's lights and the emissive-quad area lights
  *   PROBE_GRID       the `LightProbeGrid` (only its own cameras see it)
+ *   DDGI             DDGI's GI light (only DDGI's camera sees it)
+ *   DDGI_PROBES      DDGI's probe spheres (DDGI's camera, when they are switched on)
  *
  * Lights follow the camera's layers too (`Renderer.js` tests `light.layers`),
  * which is what makes "GI only" possible without touching light intensities.
@@ -21,6 +23,8 @@ import type { Layers } from 'three';
 export const LAYER_VIEW_GEOMETRY = 1;
 export const LAYER_DIRECT_LIGHTS = 2;
 export const LAYER_PROBE_GRID = 3;
+export const LAYER_DDGI = 4;
+export const LAYER_DDGI_PROBES = 5;
 
 /**
  * - `on`: direct light plus the technique's GI.

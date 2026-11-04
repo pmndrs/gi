@@ -1,10 +1,18 @@
 import { describe, expect, it } from 'vitest';
-import { median, NOISY_CV_THRESHOLD, standardDeviation, summarize, summarizeDifference, t95 } from './measurement.ts';
+import { median, NOISY_CV_THRESHOLD, percentile, standardDeviation, summarize, summarizeDifference, t95 } from './measurement.ts';
 
 describe('median and spread', () => {
     it('takes the middle value, or the mean of the middle two', () => {
         expect(median([3, 1, 2])).toBe(2);
         expect(median([4, 1, 3, 2])).toBe(2.5);
+    });
+
+    it('takes a percentile by nearest rank', () => {
+        const twenty = Array.from({ length: 20 }, (_, index) => index + 1);
+        expect(percentile(twenty, 0.95)).toBe(19);
+        expect(percentile(twenty, 0.5)).toBe(10);
+        expect(percentile([7], 0.95)).toBe(7);
+        expect(percentile([3, 1, 2], 1)).toBe(3);
     });
 
     it('uses the sample standard deviation', () => {

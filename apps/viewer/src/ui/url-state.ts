@@ -5,51 +5,72 @@
  *
  * - `scene`      manifest id
  * - `camera`     bookmark number (1-based) or name; `cam=px,py,pz,tx,ty,tz,fov` is a free camera that overrides it
- * - `technique`  `lpg` or `vxgi` (the GI technique shown when there is no wipe)
+ * - `technique`  `ddgi` (default), `lpg` or `vxgi` (the GI technique shown when there is no wipe)
  * - `gi`         `off` (direct light only), `on` (default), or `only` (the indirect light alone)
- * - `wipe`       two techniques, `left,right`, each `none`, `lpg` or `vxgi`; turns the split screen on
+ * - `wipe`       two techniques, `left,right`, each `none`, `ddgi`, `lpg`, `vxgi` or `cycles` (the
+ *                reference image); turns the split screen on
  * - `split`      where the wipe line starts, 0 to 1
- * - `ev`, `tone` exposure in stops and the tone mapper
+ * - `ev`, `tone` exposure in stops and the tone mapper; without `ev` the scene's own default (manifest `exposureEv`)
  * - `nav`        `orbit` or `fly`
  * - `upscale`    an upscaler quality preset; absent means off
+ * - `budget`     DDGI's GPU milliseconds per frame for probe updates (default 2)
+ * - `probes`     `1` draws DDGI's probes as spheres coloured by state
+ * - `debug`      one of DDGI's screen debug views: `gi-only`, `coverage`, `probe-states`
  *
  * No engine imports, so it is unit-tested.
  */
 
-import type { TechniqueId, UpscaleQuality } from '../techniques/types';
+import type { GiTechniqueId, TechniqueId, UpscaleQuality } from '../techniques/types';
 
 export type GiChoice = 'off' | 'on' | 'only';
+
+/** DDGI's screen debug views by their link names (ids in `techniques/ddgi-technique.ts`). */
+export type DdgiScreenViewName = 'gi-only' | 'coverage' | 'probe-states';
+export const DDGI_SCREEN_VIEW_NAMES: readonly DdgiScreenViewName[] = ['gi-only', 'coverage', 'probe-states'];
+
+/** DDGI's per-frame budget range, in GPU milliseconds (the slider's ends). */
+export const MIN_BUDGET_MS = 0.25;
+export const MAX_BUDGET_MS = 8;
+export const DEFAULT_BUDGET_MS = 2;
 
 export interface ViewerUrlState {
     scene: string | null;
     camera: string | null;
     freeCamera: [number, number, number, number, number, number, number] | null;
-    /** The GI technique (never `none`: "off" is expressed by `gi`). */
-    technique: Exclude<TechniqueId, 'none'>;
+    /** The GI technique (never `none`: "off" is expressed by `gi`; never the reference image). */
+    technique: GiTechniqueId;
     gi: GiChoice;
     wipe: [TechniqueId, TechniqueId] | null;
     split: number;
-    ev: number;
+    /** Exposure in stops; null means the scene's own default (the manifest's `exposureEv`). */
+    ev: number | null;
     tone: string;
     nav: 'orbit' | 'fly';
     upscale: UpscaleQuality | null;
+    budgetMs: number;
+    probes: boolean;
+    debug: DdgiScreenViewName | null;
 }
 
 export const DEFAULT_URL_STATE: ViewerUrlState = {
     scene: null,
     camera: null,
     freeCamera: null,
-    technique: 'lpg',
+    technique: 'ddgi',
     gi: 'on',
     wipe: null,
     split: 0.5,
-    ev: 0,
+    ev: null,
     tone: 'aces',
     nav: 'orbit',
     upscale: null,
+    budgetMs: DEFAULT_BUDGET_MS,
+    probes: false,
+    debug: null,
 };
 
-const TECHNIQUES: readonly TechniqueId[] = ['none', 'lpg', 'vxgi'];
+const TECHNIQUES: readonly TechniqueId[] = ['none', 'ddgi', 'lpg', 'vxgi', 'cycles'];
+const GI_TECHNIQUES: readonly GiTechniqueId[] = ['ddgi', 'lpg', 'vxgi'];
 const UPSCALE_QUALITIES: readonly UpscaleQuality[] = ['native-aa', 'quality', 'balanced', 'performance', 'ultra-performance'];
 
 function asTechnique(value: string | undefined): TechniqueId | null {
@@ -73,8 +94,8 @@ export function parseUrlState(search: string): ViewerUrlState {
     const free = params.get('cam')?.split(',').map(Number);
     if (free && free.length === 7 && free.every(Number.isFinite)) state.freeCamera = free as ViewerUrlState['freeCamera'];
 
-    const technique = asTechnique(params.get('technique') ?? undefined);
-    if (technique && technique !== 'none') state.technique = technique;
+    const technique = GI_TECHNIQUES.find((id) => id === params.get('technique'));
+    if (technique) state.technique = technique;
 
     const gi = params.get('gi');
     if (gi === 'off' || gi === 'on' || gi === 'only') state.gi = gi;
@@ -95,6 +116,11 @@ export function parseUrlState(search: string): ViewerUrlState {
     state.tone = params.get('tone') ?? state.tone;
     if (params.get('nav') === 'fly') state.nav = 'fly';
     state.upscale = UPSCALE_QUALITIES.find((quality) => quality === params.get('upscale')) ?? null;
+
+    const budget = finiteNumber(params.get('budget'));
+    if (budget !== null) state.budgetMs = Math.min(MAX_BUDGET_MS, Math.max(MIN_BUDGET_MS, budget));
+    state.probes = params.get('probes') === '1';
+    state.debug = DDGI_SCREEN_VIEW_NAMES.find((name) => name === params.get('debug')) ?? null;
     return state;
 }
 
@@ -110,9 +136,12 @@ export function serializeUrlState(state: ViewerUrlState): string {
         params.set('wipe', state.wipe.join(','));
         if (state.split !== DEFAULT_URL_STATE.split) params.set('split', state.split.toFixed(2));
     }
-    if (state.ev !== 0) params.set('ev', String(state.ev));
+    if (state.ev !== null) params.set('ev', String(state.ev));
     if (state.tone !== DEFAULT_URL_STATE.tone) params.set('tone', state.tone);
     if (state.nav !== 'orbit') params.set('nav', state.nav);
     if (state.upscale) params.set('upscale', state.upscale);
+    if (state.budgetMs !== DEFAULT_BUDGET_MS) params.set('budget', String(state.budgetMs));
+    if (state.probes) params.set('probes', '1');
+    if (state.debug) params.set('debug', state.debug);
     return params.toString();
 }

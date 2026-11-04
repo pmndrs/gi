@@ -14,8 +14,8 @@ export const HELP = {
     flySpeed: 'How fast you move in fly mode, in metres per second. Scrolling in fly mode changes this too.',
     fieldOfView: 'How wide the camera sees. Smaller is zoomed in, larger is wide angle. Bookmarks set their own.',
     exposure:
-        'Brightens or darkens the whole picture in photographic stops. 0 is the normal setting; +1 is twice as bright, -1 half. It does not change the lighting itself.',
-    exposureReset: 'Back to 0, the normal exposure.',
+        'Brightens or darkens the whole picture in photographic stops: +1 is twice as bright, -1 half. Each scene opens at its own setting (Sponza +2, because its sun is weak and most of it is in shade). It does not change the lighting itself.',
+    exposureReset: "Back to this scene's own exposure.",
     toneMapping:
         'How very bright light is squeezed onto the screen. ACES is the usual film look. AgX and Neutral keep colours truer. Linear clips bright areas to white.',
     referenceCube: 'Shows a 1 metre cube so you can judge the size of the scene.',
@@ -24,7 +24,15 @@ export const HELP = {
     giOnly:
         'Only the bounced light, with the direct sun and lamps hidden. Use it to see what the GI technique alone contributes. Surfaces still show their colour, and glowing surfaces still glow.',
     technique:
-        'Which global illumination technique to use. Both come from three.js and are the baselines our own technique has to beat. Light probe grid: light stored at points in the scene, baked once. VXGI: a voxel copy of the scene traced live every frame. Both get the same lights, sky and exposure, at full physical strength, so the comparison is fair.',
+        'Which global illumination technique to use. DDGI is ours: probes in a grid, each tracing rays every frame, so light, sky and moving things update live. The other two come from three.js and are the baselines DDGI has to beat. Light probe grid: light stored at points in the scene, baked once. VXGI: a voxel copy of the scene traced live every frame. All get the same lights, sky and exposure, at full physical strength, so the comparison is fair.',
+    ddgiBudget:
+        'How much GPU time DDGI may spend per frame updating its probes, in milliseconds. More updates more probes each frame, so light settles faster after a change; less leaves more time for drawing. 2 ms is the default and the target. The stats box (top left) shows how many probes that buys.',
+    ddgiProbes:
+        'Draws every DDGI probe as a small ball where it really sits (probes stuck in walls are moved out), coloured by what it is doing. The legend below says what each colour means; the numbers count the probes in each state.',
+    ddgiScreenView:
+        "Replaces the picture with one of DDGI's check views. GI only: just the bounced light, as it would fall on plain white surfaces. Coverage: green where DDGI answers fully, red where it gives way (outside the probe box, or where no probe can see). Probes near this point: the colours of the 8 probes each point reads from. Turns off while the upscaler is on.",
+    ddgiRestart:
+        'Throws away what the probes have learned and warms them up again from black, the way a scene starts. Useful to watch how fast the light settles.',
     lpgBounces:
         'How many times light bounces before it is stored in the probes. 0 is direct light only, 1 adds one bounce (the usual choice), 2 adds a second. More bounces take longer to bake.',
     lpgProbes: 'The most probes the grid may use. More probes capture finer lighting changes but bake slower. The spacing is widened to fit.',
@@ -33,15 +41,33 @@ export const HELP = {
         'How many bounces of light are cached in the voxel copy of the scene. 1 is the usual choice. VXGI only bounces the sun and lamps: it takes no light from the sky.',
     wipeToggle:
         'Split the screen between two techniques on the same view. The left side shows one, the right side the other, with a white line between them. Drag the line to compare.',
-    wipeLeft: 'The technique drawn on the left of the white line. "No GI" is direct light only, for comparing against nothing.',
-    wipeRight: 'The technique drawn on the right of the white line.',
+    wipeLeft:
+        'What is drawn left of the white line. "No GI" is direct light only. "Cycles reference" is a path-traced picture of a saved camera view, the right answer to compare against.',
+    wipeRight: 'What is drawn right of the white line.',
+    compareReference:
+        'Split the screen: DDGI on the left, the path-traced Cycles picture of this camera view on the right, at the same exposure and tone mapping. It lines up only at the saved camera view it was rendered from. Its materials are plain matte, so shiny spots differ a little.',
     upscaleToggle:
         'Draws the picture at a lower resolution and rebuilds it to full size with @pmndrs/upscaler, which saves GPU time. Works with No GI and the light probe grid; VXGI has its own anti-aliasing, so this is switched off while VXGI is on screen.',
     upscaleQuality: 'How much smaller the picture is drawn. Quality is a little smaller and looks nearly sharp; Ultra performance is much smaller and softer.',
     statsToggle:
-        'Shows the frame time, and the GPU time of one frame (averaged over the last few frames so it can be read). Needs a GPU that supports timestamps.',
+        "Shows the frame time, the GPU time of one frame, and what DDGI is doing (probes updated, its GPU time, memory, the adapter's CPU time). Hover over a line in that box for what it means. GPU times need a GPU that supports timestamps.",
     panelHide: 'Hides this panel so the picture fills the window. Press H, or the button at the top right, to bring it back.',
     wipeLine: 'Drag this line left or right to compare the two techniques.',
+
+    // The stats box, top left (each line explains itself on hover).
+    statsFrame: 'Time from one drawn frame to the next, and frames per second. 16.7 ms is 60 frames per second.',
+    statsGpu: "GPU time of three.js's own passes in one frame (drawing the scene, shadows, the final picture), averaged over the last few frames. DDGI's probe updates are listed separately below.",
+    statsProbes:
+        'How many DDGI probes were updated in the last frame, out of all of them. The budget decides how many fit; at that rate every probe gets its turn this often.',
+    statsDdgiUpdate:
+        "GPU time of DDGI's probe update per frame: tracing rays from the probes, blending the results into the probes, and writing them out for drawing. This is the number the budget controls (target 2 ms).",
+    statsRefit:
+        "GPU time to bring the ray-tracing tree up to date with where every object is, every frame. Cheap for a still scene; it matters once things move.",
+    statsMemory:
+        "GPU memory the GI library owns: its copy of the scene (positions, normals, materials), the ray-tracing trees, and DDGI's probes. three.js's own memory is not counted.",
+    statsSync:
+        "CPU time the three.js adapter spends per frame looking for changes in the scene and sending them to the GI library (target: 0.2 ms for a still scene), and then recording the GI work.",
+    statsStates: 'How many probes are in each state, counted on the GPU a few frames ago.',
 } as const;
 
 export type HelpKey = keyof typeof HELP;

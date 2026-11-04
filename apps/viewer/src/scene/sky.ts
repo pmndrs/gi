@@ -20,6 +20,7 @@ import { EXRLoader } from 'three/addons/loaders/EXRLoader.js';
 import { cameraPosition, equirectUV, Fn, modelViewProjection, positionWorld, texture, vec4 } from 'three/tsl';
 import { NodeMaterial, type Node } from 'three/webgpu';
 import { skyFileName } from '../../../../scenes/src/sky/sky-file.ts';
+import { GI_USER_DATA } from '../ddgi/library';
 
 /**
  * Every committed sky file, as a URL vite serves (the dev server and a build
@@ -81,10 +82,16 @@ export function createSkyDome(sky: DataTexture): Mesh {
     const viewDirection = positionWorld.sub(cameraPosition).normalize();
     material.colorNode = vec4(texture(sky, equirectUV(viewDirection)).rgb, 1);
 
+    // DDGI's screen debug views replace every material (scene.overrideMaterial); the sky stays the sky.
+    material.allowOverride = false;
+
     const dome = new Mesh(new BoxGeometry(1, 1, 1), material);
     dome.name = 'manifest-sky';
     dome.scale.setScalar(SKY_BOX_SIZE);
     dome.frustumCulled = false;
+    // A picture of the sky, not geometry: DDGI's rays get the same sky from the platform's
+    // own environment (platformSkyEnvironment), and must not hit a 450 km box instead.
+    dome.userData[GI_USER_DATA.contributes] = false;
     return dome;
 }
 

@@ -1,5 +1,7 @@
 /**
- * A small corner panel with CPU frame time and per-pass GPU milliseconds.
+ * A small corner panel with CPU frame time, per-pass GPU milliseconds, and
+ * (when DDGI is on screen) DDGI's own numbers. Every line explains itself
+ * when the mouse is over it (`title`, from `ui/help-text.ts`).
  *
  * It only needs numbers, not the GPU timer itself, so the viewer decides
  * where they come from:
@@ -8,18 +10,27 @@
  *     // every frame:
  *     stats.recordFrame(frameMs);
  *     stats.setPassTimings(timer.timings);   // or an empty map when timing is off
+ *     stats.setExtraLines(ddgiText.lines()); // or [] when DDGI isn't shown
  */
 
+import { HELP } from '../ui/help-text.ts';
+import type { StatsLine } from './ddgi-stats.ts';
 import { formatStats, SmoothedValue } from './format-stats.ts';
 
 /** Redraw the text a few times a second; faster than that is unreadable. */
 const REDRAW_INTERVAL_MS = 250;
 
+interface OverlayLine {
+    text: string;
+    help: string;
+}
+
 export class StatsOverlay {
-    readonly element: HTMLPreElement;
+    readonly element: HTMLDivElement;
 
     private readonly frameTime = new SmoothedValue();
     private readonly passTimes = new Map<string, SmoothedValue>();
+    private extraLines: readonly StatsLine[] = [];
     private lastRedrawAt = 0;
 
     /**
@@ -30,7 +41,8 @@ export class StatsOverlay {
         parent: HTMLElement = document.body,
         private readonly gpuCaption = '',
     ) {
-        this.element = document.createElement('pre');
+        this.element = document.createElement('div');
+        this.element.className = 'stats-overlay';
         this.element.style.cssText = [
             'position: fixed',
             'top: 8px',
@@ -40,7 +52,9 @@ export class StatsOverlay {
             'background: rgba(0, 0, 0, 0.6)',
             'color: #cfd8e3',
             'font: 12px/1.4 ui-monospace, Menlo, Consolas, monospace',
-            'pointer-events: none',
+            'white-space: pre',
+            // Lines answer the mouse with their help text; the box is small, so it hides little of the picture.
+            'cursor: help',
             'z-index: 10',
         ].join(';');
         parent.append(this.element);
@@ -70,6 +84,16 @@ export class StatsOverlay {
         }
     }
 
+    /** Starts the frame-time average again (after a set-up, whose frames are drawn only a few times a second). */
+    resetFrameTime(): void {
+        this.frameTime.reset();
+    }
+
+    /** Lines shown under the frame and GPU numbers (DDGI's); an empty list removes them. */
+    setExtraLines(lines: readonly StatsLine[]): void {
+        this.extraLines = lines;
+    }
+
     dispose(): void {
         this.element.remove();
     }
@@ -84,7 +108,20 @@ export class StatsOverlay {
             if (smoothed.value !== undefined) smoothedMs.set(name, smoothed.value);
         }
         const text = formatStats(this.frameTime.value, smoothedMs);
-        const caption = text.passLines.length > 0 ? this.gpuCaption : '';
-        this.element.textContent = [text.frameLine, caption, ...text.passLines, text.totalLine].filter((line) => line !== '').join('\n');
+        const lines: OverlayLine[] = [{ text: text.frameLine, help: HELP.statsFrame }];
+        if (text.passLines.length > 0) {
+            if (this.gpuCaption) lines.push({ text: this.gpuCaption, help: HELP.statsGpu });
+            for (const line of [...text.passLines, text.totalLine]) lines.push({ text: line, help: HELP.statsGpu });
+        }
+        for (const line of this.extraLines) lines.push({ text: line.text, help: HELP[line.help] });
+
+        this.element.replaceChildren(
+            ...lines.map((line) => {
+                const row = document.createElement('div');
+                row.textContent = line.text;
+                row.title = line.help;
+                return row;
+            }),
+        );
     }
 }

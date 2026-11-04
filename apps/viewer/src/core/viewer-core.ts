@@ -23,8 +23,10 @@ import { createRenderer, type RendererBundle } from '../render/create-renderer';
 import { setTimestampTracking } from '../render/gpu-time';
 import type { GiMode } from '../scene/layers';
 import { disposeScene, loadScene, type LoadedScene, type LoadProgress } from '../scene/load-scene';
+import { DdgiTechnique, DEFAULT_DDGI_VIEWER_SETTINGS, type DdgiViewerSettings } from '../techniques/ddgi-technique';
 import { DEFAULT_LPG_SETTINGS, LightProbeGridTechnique, type LightProbeGridSettings } from '../techniques/light-probe-grid-technique';
 import { NoGiTechnique } from '../techniques/no-gi-technique';
+import { ReferenceImageTechnique } from '../techniques/reference-technique';
 import { TECHNIQUE_LABELS, type GiTechnique, type TechniqueContext, type TechniqueId, type UpscaleSettings } from '../techniques/types';
 import { DEFAULT_VXGI_SETTINGS, VxgiTechnique, type VxgiSettings } from '../techniques/vxgi-technique';
 
@@ -51,7 +53,7 @@ export interface ViewLayout {
     split: number;
 }
 
-export const DEFAULT_LAYOUT: ViewLayout = { left: 'lpg', right: null, giMode: 'on', split: 0.5 };
+export const DEFAULT_LAYOUT: ViewLayout = { left: 'ddgi', right: null, giMode: 'on', split: 0.5 };
 
 /** Width of the wipe line, in screen pixels. */
 const WIPE_LINE_PIXELS = 2;
@@ -77,6 +79,9 @@ export class ViewerCore {
     private appliedUpscaleKey = 'off';
     private probeSettings: LightProbeGridSettings = DEFAULT_LPG_SETTINGS;
     private vxgiSettings: VxgiSettings = DEFAULT_VXGI_SETTINGS;
+    private ddgiSettings: DdgiViewerSettings = DEFAULT_DDGI_VIEWER_SETTINGS;
+    /** The camera bookmark the reference image belongs to (the last one chosen). */
+    private referenceBookmark = 0;
     private readonly frameWaiters: Array<(startedAt: number) => void> = [];
     /** When the current set-up of each technique began, by technique, with the generation it belongs to. */
     private readonly prepareStarts = new Map<GiTechnique, { generation: number; startedAt: number }>();
@@ -141,6 +146,7 @@ export class ViewerCore {
     unloadScene(): void {
         for (const technique of this.techniques.values()) technique.dispose();
         this.techniques.clear();
+        this.referenceBookmark = 0;
         this.prepareStarts.clear();
         if (this.loaded) disposeScene(this.loaded);
         this.loaded = null;
@@ -155,16 +161,39 @@ export class ViewerCore {
         const existing = this.techniques.get(id);
         if (existing) return existing;
         if (!this.loaded) throw new Error('No scene is loaded.');
-        const context: TechniqueContext = { renderer: this.renderer, device: this.device, loaded: this.loaded };
-        const technique =
-            id === 'lpg'
-                ? new LightProbeGridTechnique(context, this.probeSettings)
-                : id === 'vxgi'
-                  ? new VxgiTechnique(context, this.vxgiSettings)
-                  : new NoGiTechnique(context);
+        const context: TechniqueContext = { renderer: this.renderer, device: this.device, loaded: this.loaded, hasTimestamps: this.hasTimestamps };
+        const technique = this.createTechnique(id, context);
         if (this.upscaleAvailable && this.upscale) technique.setUpscale(this.upscale);
         this.techniques.set(id, technique);
         return technique;
+    }
+
+    private createTechnique(id: TechniqueId, context: TechniqueContext): GiTechnique {
+        switch (id) {
+            case 'ddgi':
+                return new DdgiTechnique(context, this.ddgiSettings);
+            case 'lpg':
+                return new LightProbeGridTechnique(context, this.probeSettings);
+            case 'vxgi':
+                return new VxgiTechnique(context, this.vxgiSettings);
+            case 'cycles': {
+                const reference = new ReferenceImageTechnique(context);
+                reference.setBookmark(this.referenceBookmark);
+                return reference;
+            }
+            case 'none':
+                return new NoGiTechnique(context);
+        }
+    }
+
+    /** DDGI, if it has been created for this scene. */
+    get ddgi(): DdgiTechnique | null {
+        return (this.techniques.get('ddgi') as DdgiTechnique | undefined) ?? null;
+    }
+
+    /** The reference image, if it has been created for this scene. */
+    get reference(): ReferenceImageTechnique | null {
+        return (this.techniques.get('cycles') as ReferenceImageTechnique | undefined) ?? null;
     }
 
     /** Techniques currently on screen. */
@@ -188,9 +217,26 @@ export class ViewerCore {
         (this.techniques.get('vxgi') as VxgiTechnique | undefined)?.configure(settings);
     }
 
+    /** Applies to DDGI now if it exists, and to the one created later. Display settings only: nothing recompiles. */
+    configureDdgi(settings: DdgiViewerSettings): void {
+        this.ddgiSettings = { ...settings };
+        this.ddgi?.configure(settings);
+    }
+
     /** Bakes the probe grid again with its current settings. */
     rebake(): void {
         this.techniques.get('lpg')?.restartPrepare();
+    }
+
+    /** Forgets DDGI's field and warms it up again. */
+    restartDdgi(): void {
+        this.ddgi?.restartPrepare();
+    }
+
+    /** Which camera bookmark's reference image to show (0-based). */
+    setReferenceBookmark(index: number): void {
+        this.referenceBookmark = index;
+        this.reference?.setBookmark(index);
     }
 
     /** Whether a technique on screen still has set-up to do. */
@@ -216,7 +262,8 @@ export class ViewerCore {
             if (!record || record.generation !== technique.prepareGeneration) {
                 this.prepareStarts.set(technique, { generation: technique.prepareGeneration, startedAt });
             }
-            while (!technique.ready && performance.now() - startedAt < budgetMs) technique.encodePrepareStep();
+            const maxSteps = technique.prepareStepsPerBatch ?? Number.POSITIVE_INFINITY;
+            for (let step = 0; step < maxSteps && !technique.ready && performance.now() - startedAt < budgetMs; step++) technique.encodePrepareStep();
         }
         if (waiting.length === 0) return;
         await this.device.queue.onSubmittedWorkDone();

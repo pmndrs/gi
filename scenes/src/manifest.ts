@@ -167,6 +167,13 @@ export interface SceneManifest {
     nativeCapable: boolean;
     /** Where the check page puts its 1 m cube. Defaults to the first camera's target. */
     referenceCube?: { position: Vec3 };
+    /**
+     * The camera exposure a viewer opens this scene with, in photographic
+     * stops (0 = normal, +1 = twice as bright). Absent means 0. The lighting
+     * stays physical (DECISIONS 2026-11-05: per-scene exposure, the sky stays
+     * calibrated); this only says how bright the picture starts.
+     */
+    exposureEv?: number;
     credits: ManifestCredit[];
 }
 
@@ -201,8 +208,12 @@ const TOP_LEVEL_KEYS = new Set([
     'volume',
     'nativeCapable',
     'referenceCube',
+    'exposureEv',
     'credits',
 ]);
+
+/** The most a scene's default exposure may brighten or darken, in stops. A wider default would be hiding a lighting problem. */
+export const MAX_DEFAULT_EXPOSURE_EV = 8;
 
 const KEBAB_CASE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 
@@ -506,6 +517,9 @@ export function validateManifest(value: unknown, options: ValidateOptions = {}):
         if (!isRecord(value.referenceCube)) c.add('referenceCube', 'must be an object with a position');
         else c.vec3('referenceCube.position', value.referenceCube.position);
     }
+    if (value.exposureEv !== undefined && (!isFiniteNumber(value.exposureEv) || Math.abs(value.exposureEv) > MAX_DEFAULT_EXPOSURE_EV)) {
+        c.add('exposureEv', `must be a number of stops from -${MAX_DEFAULT_EXPOSURE_EV} to +${MAX_DEFAULT_EXPOSURE_EV} (0 is normal)`);
+    }
     validateCredits(value, c);
 
     return { ok: c.errors.length === 0, errors: c.errors };
@@ -553,6 +567,11 @@ export function checkManifestAgainstSources(manifest: SceneManifest, assets: rea
         }
     });
     return errors;
+}
+
+/** The exposure, in stops, a viewer opens the scene with (0 when the manifest names none). */
+export function defaultExposureEv(manifest: Pick<SceneManifest, 'exposureEv'>): number {
+    return manifest.exposureEv ?? 0;
 }
 
 export function isProceduralOnly(manifest: SceneManifest): boolean {

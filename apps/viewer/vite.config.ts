@@ -25,6 +25,8 @@ export default defineConfig({
     define: {
         // `src/scene/model-url.ts` reads models through /@fs/<one of these>/<asset id>/<path>.
         __DOWNLOADS_DIRS__: JSON.stringify(downloadsDirectories),
+        // `src/scene/reference-files.ts` reads the Cycles references (gitignored, rendered on demand) from here.
+        __REFERENCES_DIR__: JSON.stringify(resolve(repoRoot, 'bench', 'references')),
     },
     // Top-level await (renderer.init) needs a modern target.
     build: { target: 'esnext' },

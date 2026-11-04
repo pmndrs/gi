@@ -60,6 +60,17 @@ export function median(values: readonly number[]): number {
     return sorted.length % 2 === 1 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
 }
 
+/**
+ * The value below which `share` of the samples fall (0.95 for p95), by the nearest-rank
+ * method: the smallest sample with at least that share of samples at or below it. With 20
+ * frames, p95 is the 19th fastest, so one slow frame in 20 doesn't show and two do.
+ */
+export function percentile(values: readonly number[], share: number): number {
+    const sorted = [...values].sort((a, b) => a - b);
+    const rank = Math.max(1, Math.ceil(share * sorted.length));
+    return sorted[Math.min(sorted.length, rank) - 1];
+}
+
 /** Sample standard deviation (divides by n - 1); zero for fewer than two values. */
 export function standardDeviation(values: readonly number[]): number {
     if (values.length < 2) return 0;
