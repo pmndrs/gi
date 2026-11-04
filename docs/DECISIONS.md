@@ -18,6 +18,17 @@ Settled choices, newest first. Each entry is short: the decision, why, and what 
 - **Intel's Sponza add-ons are covered by the same approval as the base package** (T1.10). Curtains (726650), ivy (726656), trees (726662) and candles (726676) are download-only and never committed. Each package's `credits_license.txt` is byte-identical to the base's (Intel preface plus CC BY 4.0).
 - **The asset tool downloads from Intel with Windows' own `curl.exe`** (M1 lead). Since 2026-11-04, `cdrdv2.intel.com` answers Node's `fetch` with a 247-byte "Request Rejected" page, and `curl.exe` still gets the zip. We use a normal client that works; we don't disguise one that's refused (no fake browser headers). Other hosts keep Node `fetch`.
   - *Revisit if:* Intel blocks `curl.exe` too. Then the instructions say to download by hand and put the zip in `assets/.cache`.
+- **Any-hit visits the farther child first** (T1.3).
+  - A shadow ray starts on a surface, so the nearer child is mostly that surface, and the blockers lie ahead.
+  - RTX 3060 any-hit against B0b's walk: furnished room 185 → 513 Mrays/s, Bistro interior 44 → 67, Sponza base 138 → 168. Closest-hit is unchanged.
+  - Leaf size and the top level weren't the cause: three-mesh-bvh is faster at leaf 4 than at its default 10, and a clustered top level saved 18% of nodes but costs a 254 ms rebuild.
+  - Any-hit is now 0.93–1.22× three-mesh-bvh on the RTX (Bistro interior 0.93) and 1.44–1.91× on Intel. That closes the "any-hit trails" item of the tracer decision.
+- **The tracer keeps its own 48-byte triangle records, and large scenes rely on raised limits** (T1.3).
+  - Reading triangle corners from the scene copy would save 165 MB on Sponza's base package, but traced 10–12% slower there and 24–30% slower on the furnished room and Bistro interior. A 16-byte record with vertex indices was still 7–21% slower.
+  - Both laptop GPUs allow about 2 GiB storage bindings in Chrome 156, so `requiredLimits` asks for the adapter's maximum `maxStorageBufferBindingSize` and `maxBufferSize`. A scene that doesn't fit the device throws `GILimitError` naming the limit.
+  - No splitting across bindings for now. Sponza with curtains needs about 276 MB of triangle records, beyond the 128 MiB default.
+  - *Revisit if:* a target device (iPad, older iOS) allows much less, or memory targets (SPEC: ≤ 64 MB for a furnished-room volume, everything the core owns) are missed.
+- **B1a (GPU top-level refit) runs after T1.3's review fixes, alongside T1.4, and must land before M1 ends** (M1 lead). The board had it "before T1.3 ends". Running it during T1.3's review would put two writers in the tracer files, and nothing in T1.4–T1.6 needs moving instances.
 - **B0 is passed: its "Sponza builds in ≤ 2 s" is judged on the median of 3 browser-worker runs per GPU session** (M1 lead, after the B0b review).
   - Measured on Sponza's base package only (3.75 M triangles), before the curtains joined `sponza`.
   - Runs at 8e5373c: 1.89, 2.27, 1.70 s (RTX session) and 1.53, 1.61, 1.78 s (Intel session). Medians 1.89 and 1.61 s; 1 run in 6 over 2 s, while another process held a CPU core throughout.

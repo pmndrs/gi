@@ -187,6 +187,11 @@ One bullet per fact, each with its source. Add a bullet when something cost you 
 
 ## Tracing (measured)
 
+- **Any-hit should visit the farther child first.** A shadow ray starts on a surface, so the nearer child is mostly that surface, and the blockers lie ahead. On the RTX 3060 that was 1.2–2.8× faster than nearer-first; closest-hit is unaffected. Source: T1.3.
+- **Leaf size is not why three-mesh-bvh won at any-hit.** It is faster at leaf 4 than at its default 10. Source: T1.3.
+- **Reading triangle corners through the scene copy's index buffer costs 10–30% of trace speed,** so self-contained 48-byte records stay. Source: T1.3.
+- **Both laptop GPUs allow storage bindings of about 2 GiB** in Chrome 156 (`maxStorageBufferBindingSize` 2,147,483,644; `maxBufferSize` 2,147,483,648). Source: T1.3.
+- **tinybvh builds over NaN positions without complaint,** so `buildMeshBvhWithTinyBvh` refuses non-finite positions. Source: T1.3.
 - **Use a watertight triangle test.** Möller–Trumbore let 3–12% of rays aimed at shared edges slip between triangles (RTX 3060 11.6%, Intel UHD 3.0%, 2M rays each), and leaked into sealed thin boxes. The watertight test (Woop et al. 2013, with stored corners) let none of 4M through. Source: `tools/gpu/pages/trace-oracle`, T0.10.
 - **Don't index a vector with a per-ray value in WGSL.** `a[kx]` with a runtime `kx` cost about 40% on the RTX 3060 (Sponza 61 → 101 Mrays/s once removed). Build per-ray row vectors with `select()` once per ray instead. Source: T0.10 part C.
 - **Read BVH nodes and triangles as `array<vec4f>`:** one 16-byte load each gave +3% on the RTX 3060 and +23% on Intel UHD. Source: T0.10 part C.
