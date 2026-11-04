@@ -1,0 +1,18 @@
+{
+    "name": "@pmndrs/ddgi-viewer",
+    "version": "0.0.0",
+    "private": true,
+    "description": "Viewer for developing and comparing @pmndrs/ddgi. Not published.",
+    "license": "MIT",
+    "type": "module",
+    "scripts": {
+        "dev": "vite",
+        "build": "vite build"
+    },
+    "dependencies": {
+        "@pmndrs/ddgi": "workspace:*"
+    },
+    "devDependencies": {
+        "vite": "^6.1.0"
+    }
+}

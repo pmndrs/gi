@@ -6,7 +6,7 @@ Status values: `todo`, `active (agent, date)`, `review`, `done`, `blocked (why)`
 
 | ID | Task | Agent | Size | Depends on | Status |
 | --- | --- | --- | --- | --- | --- |
-| T0.1 | Workspace | implementer | M | none | todo |
+| T0.1 | Workspace | implementer | M | none | done |
 | T0.2 | GPU runner | implementer | M | T0.1 | todo |
 | T0.3 | Timing and devices | implementer, then gpu-tester | M | T0.2 | todo |
 | T0.4 | Test scenes | wrangler (assets) + implementer (manifest, procedural scenes) | M | T0.1 | todo |

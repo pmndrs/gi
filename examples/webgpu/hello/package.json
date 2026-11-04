@@ -1,0 +1,18 @@
+{
+    "name": "@pmndrs/ddgi-example-hello",
+    "version": "0.0.0",
+    "private": true,
+    "description": "Smallest raw-WebGPU example of @pmndrs/ddgi. Not published.",
+    "license": "MIT",
+    "type": "module",
+    "scripts": {
+        "dev": "vite",
+        "build": "vite build"
+    },
+    "dependencies": {
+        "@pmndrs/ddgi": "workspace:*"
+    },
+    "devDependencies": {
+        "vite": "^6.1.0"
+    }
+}

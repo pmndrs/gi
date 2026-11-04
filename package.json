@@ -1,0 +1,29 @@
+{
+    "name": "webgpu-ddgi",
+    "version": "0.0.0",
+    "private": true,
+    "description": "Workspace root for @pmndrs/ddgi: a WebGPU-native GI platform with DDGI as its first technique. The published package lives in packages/ddgi.",
+    "license": "MIT",
+    "type": "module",
+    "packageManager": "pnpm@10.23.0",
+    "scripts": {
+        "dev": "pnpm --filter @pmndrs/ddgi-viewer dev",
+        "build": "pnpm --filter @pmndrs/ddgi build",
+        "build:apps": "pnpm --filter @pmndrs/ddgi-viewer --filter @pmndrs/ddgi-example-hello build",
+        "lint": "eslint .",
+        "typecheck": "tsc --noEmit",
+        "test": "vitest run"
+    },
+    "devDependencies": {
+        "@eslint/js": "^9.18.0",
+        "@types/three": "0.187.0",
+        "@webgpu/types": "^0.1.64",
+        "eslint": "^9.18.0",
+        "globals": "^15.14.0",
+        "three": "0.187.0",
+        "typescript": "^5.7.0",
+        "typescript-eslint": "^8.20.0",
+        "vite": "^6.1.0",
+        "vitest": "^3.0.0"
+    }
+}
