@@ -86,6 +86,7 @@ Checked against the r187 source. Runtime confirmation is an M0 spike.
 - **GPU device.** The host owns the device and our core never creates one. This is the same rule as the upscaler ("your device, never ours") and the denoiser.
   - `DDGI.requiredLimits(adapter)` tells the host what to request, for example via `new WebGPURenderer({ requiredLimits })`, or by creating the device and passing `{ device }`.
   - The core works at default limits for typical scenes by splitting large buffers across bindings, and reports clearly when a scene needs more. Three's default device has a 128 MB storage-binding cap.
+    - *Superseded 2026-11-05 (DECISIONS):* nothing is split across bindings. Small scenes run at default limits; large ones (Sponza with curtains, Bistro exterior) need the raised limits `requiredLimits` asks for, which Dennis approved.
   - Our core listens with `addEventListener('uncapturederror')` and never assigns `onuncapturederror`, which three overwrites.
 - **Our textures in three's shaders.** r187's `ExternalTexture` wraps a `GPUTexture` from the same device; three binds it without allocating or destroying it. This is how the adapter reads our probe atlases, with no reaching into `renderer.backend`.
   - Set `image` dimensions and the right `type` for the sample format.
