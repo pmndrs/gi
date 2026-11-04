@@ -144,6 +144,7 @@ Settled choices, newest first. Each entry is short: the decision, why, and what 
   - *Why:* matches the upscaler, and keeps install simple.
   - *Revisit when:* a second GI technique ships. Then the platform may become `@pmndrs/gi-core`.
 - **The host owns the GPU device.** `requiredLimits(adapter)` tells the host what to request, and the core works at default limits for typical scenes.
+  - *Update 2026-11-05:* "typical" means small scenes (Cornell, two-room, the furnished room). Large scenes such as Sponza with curtains need the raised limits `requiredLimits` asks for. Nothing is split across bindings (see the tracer-records entry above).
   - *Why:* the same rule as the upscaler and denoiser.
 - **The three.js integration is a `Light` subclass with a registered node, never `material.contextNode`.**
   - Fragment-readable data lives in textures wrapped by `ExternalTexture`.
