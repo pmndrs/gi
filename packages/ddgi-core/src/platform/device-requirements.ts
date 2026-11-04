@@ -36,10 +36,12 @@ export function requiredLimits(adapter: GPUAdapter): RequiredLimits {
  * Features worth requesting when the adapter has them:
  * - `subgroups`: compute kernels are written for them first (DECISIONS 2026-11-04);
  * - `timestamp-query`: per-pass GPU times in `stats.passes`;
- * - `float32-filterable`: lets shading modules filter `rgba32float` textures.
+ * - `float32-filterable`: lets shading modules filter `rgba32float` textures;
+ * - `texture-formats-tier1`: makes `rg16float` a storage format, so DDGI's
+ *   distance atlas takes half the memory (without it: `rgba16float`).
  */
 export function optionalFeatures(adapter: GPUAdapter): GPUFeatureName[] {
-    const wanted: GPUFeatureName[] = ['subgroups', 'timestamp-query', 'float32-filterable'];
+    const wanted: GPUFeatureName[] = ['subgroups', 'timestamp-query', 'float32-filterable', 'texture-formats-tier1'];
     return wanted.filter((feature) => adapter.features.has(feature));
 }
 

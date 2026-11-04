@@ -1,0 +1,4 @@
+{
+    "description": "T1.5a: the furnace room converges to E/pi = 0.5 within 2% (mean over a grid of wall, floor and ceiling points through ddgiSampleIrradiance); worst point reported.",
+    "timeoutMs": 300000
+}

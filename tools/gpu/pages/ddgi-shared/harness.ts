@@ -1,0 +1,444 @@
+/**
+ * Shared by the DDGI GPU pages (T1.5a): a platform with a manifest scene and
+ * a `DDGITechnique`, frames, and two test kernels that read the field
+ * through `ddgiSampleIrradiance`, the same function the update kernel uses:
+ *
+ * - `FieldProbe`: E at given surface points (the furnace check);
+ * - `TestView`: the engine-free test view. Per pixel of a manifest camera, a
+ *   primary ray through the platform tracer finds the surface, and the pixel
+ *   is `albedo / π × ddgiSampleIrradiance(...)` (indirect), and also
+ *   `emission + albedo / π × (direct + field)` (full). Primary rays here are a
+ *   test tool only, never a shading path.
+ *
+ * Not a page itself (no index.html).
+ */
+
+import type { FrameInput } from '../../../../packages/ddgi-core/src/platform/contract/frame.ts';
+import type { EnvironmentDescriptor, LightDescriptor } from '../../../../packages/ddgi-core/src/platform/contract/scene.ts';
+import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
+import { DDGITechnique, type DDGIField } from '../../../../packages/ddgi-core/src/techniques/ddgi/ddgi-technique.ts';
+import type { DDGISettingsInput } from '../../../../packages/ddgi-core/src/techniques/ddgi/settings.ts';
+import { DDGI_SAMPLE_WGSL } from '../../../../packages/ddgi-core/src/techniques/ddgi/wgsl/sample.ts';
+import { buildProceduralParts, mergeScenes } from '../../../../scenes/src/build-scene.ts';
+import type { CameraBookmark, ManifestLight, SceneManifest } from '../../../../scenes/src/manifest.ts';
+import type { ProceduralScene } from '../../../../scenes/src/scene-data.ts';
+import { platformSkyEnvironment } from '../../../../scenes/src/sky/sky-image.ts';
+
+const manifests = import.meta.glob('../../../../scenes/manifests/*.json', { eager: true, import: 'default' }) as Record<string, SceneManifest>;
+
+export function loadManifest(id: string): SceneManifest {
+    const manifest = Object.entries(manifests).find(([path]) => path.endsWith(`/${id}.json`))?.[1];
+    if (!manifest) throw new Error(`no manifest '${id}'`);
+    return manifest;
+}
+
+/**
+ * The point-light Cornell box's volume with every probe in the air, 2–5 cm
+ * from the surfaces, which is where relocation (T1.5b) puts probes. The
+ * manifest's volume (0.5 m from y = −0.01) buries its bottom layer 1 cm in
+ * the floor slab and its top layer 2 mm in the ceiling slab; T1.5a has no
+ * relocation, so floor and ceiling points would read only from probes 0.5 m
+ * away, where the true irradiance is up to 21% higher (ddgi-irradiance-check).
+ * Here the y spacing is 0.49 m, so the layers run from 5 cm above the floor
+ * to 5 cm below the ceiling; x and z are the manifest's.
+ */
+export const CORNELL_POINT_IN_AIR_VOLUME = { center: [2.78, 2.745, 2.8], size: [5.8, 5.39, 5.8], spacing: [0.5, 0.49, 0.5] } as const;
+
+const IDENTITY = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+
+export function frameInput(units: number): FrameInput {
+    return { deltaTime: 1 / 60, budget: { units }, camera: { position: [0, 0, 0], view: IDENTITY, projection: IDENTITY, near: 0.1, far: 100 } };
+}
+
+export interface SceneOptions {
+    /**
+     * Light point and spot lights with no range window (`range: 0`), as Cycles
+     * does: the Cycles references have no window (tools/reference/README.md).
+     */
+    readonly ignoreLightRange?: boolean;
+}
+
+function toPlatformLight(light: ManifestLight, options: SceneOptions): LightDescriptor {
+    const common = { color: light.color, intensity: light.intensity, castsShadows: light.castsShadows ?? true, label: light.label };
+    if (light.type === 'directional') return { ...common, type: 'directional', direction: light.direction };
+    const range = options.ignoreLightRange ? 0 : light.range;
+    if (light.type === 'point') return { ...common, type: 'point', position: light.position, range };
+    const radians = Math.PI / 180;
+    return {
+        ...common,
+        type: 'spot',
+        position: light.position,
+        direction: light.direction,
+        range,
+        innerConeAngle: light.innerConeDeg * radians,
+        outerConeAngle: light.outerConeDeg * radians,
+    };
+}
+
+function toPlatformEnvironment(manifest: SceneManifest): EnvironmentDescriptor {
+    const environment = manifest.environment;
+    if (environment.type === 'none') return { type: 'none' };
+    if (environment.type === 'color') return { type: 'color', color: environment.color, intensity: environment.intensity };
+    return platformSkyEnvironment(manifest);
+}
+
+/** Describes a procedural manifest scene through the scene API. Lights come from the manifest, as every renderer takes them. */
+export function describeScene(platform: GIPlatformImpl, manifest: SceneManifest, options: SceneOptions = {}): ProceduralScene {
+    const data = mergeScenes(buildProceduralParts(manifest));
+    const scene = platform.scene;
+    const meshes = data.meshes.map((mesh) => scene.createMesh({ positions: mesh.positions, indices: mesh.indices, normals: mesh.normals, uvs: mesh.uvs, label: mesh.name }));
+    const materials = data.materials.map((material) =>
+        scene.createMaterial({ albedo: material.albedo, emissive: material.emissive, doubleSided: material.doubleSided, label: material.name }),
+    );
+    for (const instance of data.instances) {
+        scene.createInstance({ mesh: meshes[instance.mesh], materials: [materials[instance.material]], transform: instance.transform, label: instance.name });
+    }
+    for (const light of manifest.lights) scene.createLight(toPlatformLight(light, options));
+    scene.setEnvironment(toPlatformEnvironment(manifest));
+    return data;
+}
+
+export interface DdgiScene {
+    readonly platform: GIPlatformImpl;
+    readonly ddgi: DDGITechnique;
+    readonly manifest: SceneManifest;
+    readonly data: ProceduralScene;
+}
+
+/** A platform with the scene and DDGI on the manifest's volume (unless settings say otherwise), prepared, trees built. */
+export async function createDdgiScene(
+    device: GPUDevice,
+    manifestId: string,
+    settings: Partial<DDGISettingsInput> = {},
+    options: SceneOptions & { readonly gpuTiming?: boolean } = {},
+): Promise<DdgiScene> {
+    const manifest = loadManifest(manifestId);
+    const platform = new GIPlatformImpl(device, { label: `ddgi ${manifestId}`, gpuTiming: options.gpuTiming });
+    const data = describeScene(platform, manifest, options);
+    const volume = settings.volume ?? { center: manifest.volume.center, size: manifest.volume.size, spacing: manifest.volume.probeSpacing };
+    const ddgi = platform.addTechnique(new DDGITechnique({ ...settings, volume }));
+    platform.setOutput(ddgi);
+    await platform.prepare();
+    // A frame with no probe updates places the scene; then wait for the mesh trees and place them.
+    runFrame(device, platform, 0);
+    await platform.rays.whenBuilt();
+    runFrame(device, platform, 0);
+    if (platform.rays.building) throw new Error('the platform still reports trees building');
+    return { platform, ddgi, manifest, data };
+}
+
+export function runFrame(device: GPUDevice, platform: GIPlatformImpl, units: number): void {
+    const encoder = device.createCommandEncoder({ label: 'ddgi test frame' });
+    platform.encode(encoder, frameInput(units));
+    device.queue.submit([encoder.finish()]);
+}
+
+/** Runs frames, waiting for the GPU every few so the page never sits in one long task. */
+export async function runFrames(device: GPUDevice, platform: GIPlatformImpl, frames: number, units: number): Promise<void> {
+    for (let index = 0; index < frames; index++) {
+        runFrame(device, platform, units);
+        if (index % 8 === 7) await device.queue.onSubmittedWorkDone();
+    }
+    await device.queue.onSubmittedWorkDone();
+}
+
+export async function readBuffer(device: GPUDevice, source: GPUBuffer, byteLength: number): Promise<ArrayBuffer> {
+    const readback = device.createBuffer({ label: 'ddgi test readback', size: byteLength, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
+    const encoder = device.createCommandEncoder({ label: 'ddgi test readback' });
+    encoder.copyBufferToBuffer(source, 0, readback, 0, byteLength);
+    device.queue.submit([encoder.finish()]);
+    await readback.mapAsync(GPUMapMode.READ);
+    const copy = readback.getMappedRange().slice(0);
+    readback.unmap();
+    readback.destroy();
+    return copy;
+}
+
+/** The field's resources as test kernels bind them (group 1). */
+const FIELD_GROUP: GPUBindGroupLayoutDescriptor = {
+    label: 'ddgi test field',
+    entries: [
+        { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },
+        { binding: 1, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: 'float', viewDimension: '2d-array' } },
+        { binding: 2, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: 'float', viewDimension: '2d-array' } },
+        { binding: 3, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: 'float', viewDimension: '2d-array' } },
+        { binding: 4, visibility: GPUShaderStage.COMPUTE, sampler: { type: 'filtering' } },
+    ],
+};
+
+/** Declarations matching FIELD_GROUP, and a call of the one sampling function with them. */
+const FIELD_WGSL = /* wgsl */ `
+${DDGI_SAMPLE_WGSL}
+
+struct TestFieldParameters {
+    volumeOrigin: vec4f,
+    volumeSpacing: vec4f,
+    volumeCounts: vec4f,
+    volumeTexels: vec4f,
+}
+@group(1) @binding(0) var<uniform> testField: TestFieldParameters;
+@group(1) @binding(1) var testIrradiance: texture_2d_array<f32>;
+@group(1) @binding(2) var testDistance: texture_2d_array<f32>;
+@group(1) @binding(3) var testProbeData: texture_2d_array<f32>;
+@group(1) @binding(4) var testSampler: sampler;
+
+fn testFieldIrradiance(position: vec3f, normal: vec3f, viewDirection: vec3f) -> vec3f {
+    return ddgiSampleIrradiance(
+        position, normal, viewDirection,
+        testIrradiance, testSampler, testDistance, testSampler, testProbeData,
+        testField.volumeOrigin, testField.volumeSpacing, testField.volumeCounts, testField.volumeTexels,
+    );
+}
+`;
+
+function fieldBindGroup(device: GPUDevice, layout: GPUBindGroupLayout, field: DDGIField, parameters: GPUBuffer): GPUBindGroup {
+    device.queue.writeBuffer(parameters, 0, field.sampleParameters as Float32Array<ArrayBuffer>);
+    const view = (texture: GPUTexture): GPUTextureView => texture.createView({ dimension: '2d-array' });
+    return device.createBindGroup({
+        layout,
+        entries: [
+            { binding: 0, resource: { buffer: parameters } },
+            { binding: 1, resource: view(field.irradiance) },
+            { binding: 2, resource: view(field.distance) },
+            { binding: 3, resource: view(field.probeData) },
+            { binding: 4, resource: device.createSampler({ magFilter: 'linear', minFilter: 'linear' }) },
+        ],
+    });
+}
+
+const IO_GROUP: GPUBindGroupLayoutDescriptor = {
+    label: 'ddgi test io',
+    entries: [
+        { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
+        { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
+    ],
+};
+
+type ComputeKernel = Awaited<ReturnType<GIPlatformImpl['kernels']['computeKernel']>>;
+
+export interface SurfacePoint {
+    readonly position: readonly [number, number, number];
+    readonly normal: readonly [number, number, number];
+    /** Direction the point is seen along (towards the point). */
+    readonly viewDirection: readonly [number, number, number];
+}
+
+/** Evaluates `ddgiSampleIrradiance` at surface points. */
+export class FieldProbe {
+    private constructor(
+        private readonly device: GPUDevice,
+        private readonly kernel: ComputeKernel,
+    ) {}
+
+    static async create(device: GPUDevice, platform: GIPlatformImpl): Promise<FieldProbe> {
+        const kernel = await platform.kernels.computeKernel({
+            label: 'ddgi test field probe',
+            modules: [],
+            code: /* wgsl */ `
+${FIELD_WGSL}
+struct TestPoint { position: vec4f, normal: vec4f, viewDirection: vec4f }
+@group(2) @binding(0) var<storage, read> testPoints: array<TestPoint>;
+@group(2) @binding(1) var<storage, read_write> testResults: array<vec4f>;
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) id: vec3u) {
+    if (id.x >= arrayLength(&testPoints)) {
+        return;
+    }
+    let point = testPoints[id.x];
+    testResults[id.x] = vec4f(testFieldIrradiance(point.position.xyz, normalize(point.normal.xyz), normalize(point.viewDirection.xyz)), 0.0);
+}
+`,
+            entryPoint: 'main',
+            ownGroups: [FIELD_GROUP, IO_GROUP],
+        });
+        return new FieldProbe(device, kernel);
+    }
+
+    /** Irradiance E (rgb) at each point. */
+    async sample(field: DDGIField, points: readonly SurfacePoint[]): Promise<[number, number, number][]> {
+        const device = this.device;
+        const inputs = new Float32Array(points.length * 12);
+        points.forEach((point, index) => {
+            inputs.set(point.position, index * 12);
+            inputs.set(point.normal, index * 12 + 4);
+            inputs.set(point.viewDirection, index * 12 + 8);
+        });
+        const inputBuffer = device.createBuffer({ size: inputs.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+        device.queue.writeBuffer(inputBuffer, 0, inputs);
+        const outputBytes = points.length * 16;
+        const outputBuffer = device.createBuffer({ size: outputBytes, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
+        const parameters = device.createBuffer({ size: 64, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+        const encoder = device.createCommandEncoder({ label: 'ddgi test field probe' });
+        const pass = encoder.beginComputePass();
+        this.kernel.bind(pass);
+        pass.setBindGroup(1, fieldBindGroup(device, this.kernel.ownLayouts[0], field, parameters));
+        pass.setBindGroup(
+            2,
+            device.createBindGroup({
+                layout: this.kernel.ownLayouts[1],
+                entries: [
+                    { binding: 0, resource: { buffer: inputBuffer } },
+                    { binding: 1, resource: { buffer: outputBuffer } },
+                ],
+            }),
+        );
+        pass.dispatchWorkgroups(Math.ceil(points.length / 64));
+        pass.end();
+        device.queue.submit([encoder.finish()]);
+        const values = new Float32Array(await readBuffer(device, outputBuffer, outputBytes));
+        inputBuffer.destroy();
+        outputBuffer.destroy();
+        parameters.destroy();
+        return points.map((_, index) => [values[index * 4], values[index * 4 + 1], values[index * 4 + 2]]);
+    }
+}
+
+export interface TestViewImages {
+    readonly width: number;
+    readonly height: number;
+    /** albedo / π × field, rgb per pixel, row 0 at the top. */
+    readonly indirect: Float32Array;
+    /** emission + albedo / π × (direct + field). */
+    readonly full: Float32Array;
+}
+
+/**
+ * The engine-free test view. Camera rays come from an explicit basis
+ * (forward, right, up from position, target and vertical fov), not an
+ * inverse view-projection matrix, which loses precision (NOTES).
+ */
+export class TestView {
+    private constructor(
+        private readonly device: GPUDevice,
+        private readonly kernel: ComputeKernel,
+    ) {}
+
+    static async create(device: GPUDevice, platform: GIPlatformImpl): Promise<TestView> {
+        const kernel = await platform.kernels.computeKernel({
+            label: 'ddgi test view',
+            modules: [platform.shade.module],
+            code: /* wgsl */ `
+${FIELD_WGSL}
+struct TestCamera {
+    position: vec4f,
+    forward: vec4f,   // xyz: unit forward; w: tan(fovY / 2)
+    right: vec4f,     // xyz: unit right; w: width / height
+    up: vec4f,        // xyz: unit up
+    size: vec4u,      // width, height
+}
+@group(2) @binding(0) var<storage, read> testCamera: TestCamera;
+@group(2) @binding(1) var<storage, read_write> testPixels: array<vec4f>;
+
+const TEST_INV_PI: f32 = 0.318309886183791;
+
+@compute @workgroup_size(8, 8)
+fn main(@builtin(global_invocation_id) id: vec3u) {
+    let size = testCamera.size.xy;
+    if (any(id.xy >= size)) {
+        return;
+    }
+    // Pixel centre in [-1, 1], y up; row 0 is the top of the image.
+    let ndc = vec2f((f32(id.x) + 0.5) / f32(size.x) * 2.0 - 1.0, 1.0 - (f32(id.y) + 0.5) / f32(size.y) * 2.0);
+    let tanHalfFov = testCamera.forward.w;
+    let direction = normalize(testCamera.forward.xyz + testCamera.right.xyz * ndc.x * tanHalfFov * testCamera.right.w + testCamera.up.xyz * ndc.y * tanHalfFov);
+    let ray = GiRay(testCamera.position.xyz, 0.0, direction, 1.0e27);
+    let hit = giTraceClosest(ray);
+    var indirect = vec3f(0.0);
+    var full = vec3f(0.0);
+    if (hit.t >= 0.0) {
+        let surface = giSurfaceAt(ray, hit);
+        let field = testFieldIrradiance(surface.position, surface.normal, direction);
+        let random = vec2f(fract(f32(id.x) * 0.7548776662), fract(f32(id.y) * 0.5698402910));
+        let direct = giDirectIrradiance(surface, 0xfu, random);
+        indirect = surface.albedo * TEST_INV_PI * field;
+        full = surface.emission + surface.albedo * TEST_INV_PI * (direct + field);
+    }
+    let pixel = id.y * size.x + id.x;
+    testPixels[2u * pixel] = vec4f(indirect, 0.0);
+    testPixels[2u * pixel + 1u] = vec4f(full, 0.0);
+}
+`,
+            entryPoint: 'main',
+            ownGroups: [FIELD_GROUP, IO_GROUP],
+        });
+        return new TestView(device, kernel);
+    }
+
+    async render(field: DDGIField, camera: CameraBookmark, width: number, height: number): Promise<TestViewImages> {
+        const device = this.device;
+        const forward = normalize3(subtract(camera.target, camera.position));
+        const right = normalize3(cross(forward, [0, 1, 0]));
+        const up = cross(right, forward);
+        const cameraData = new ArrayBuffer(80);
+        const floats = new Float32Array(cameraData);
+        floats.set([...camera.position, 0, ...forward, Math.tan((camera.fovYDeg * Math.PI) / 360), ...right, width / height, ...up, 0]);
+        new Uint32Array(cameraData, 64, 2).set([width, height]);
+        const cameraBuffer = device.createBuffer({ size: cameraData.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+        device.queue.writeBuffer(cameraBuffer, 0, cameraData);
+        const outputBytes = width * height * 32;
+        const outputBuffer = device.createBuffer({ size: outputBytes, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
+        const parameters = device.createBuffer({ size: 64, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+        const encoder = device.createCommandEncoder({ label: 'ddgi test view' });
+        const pass = encoder.beginComputePass();
+        this.kernel.bind(pass);
+        pass.setBindGroup(1, fieldBindGroup(device, this.kernel.ownLayouts[0], field, parameters));
+        pass.setBindGroup(
+            2,
+            device.createBindGroup({
+                layout: this.kernel.ownLayouts[1],
+                entries: [
+                    { binding: 0, resource: { buffer: cameraBuffer } },
+                    { binding: 1, resource: { buffer: outputBuffer } },
+                ],
+            }),
+        );
+        pass.dispatchWorkgroups(Math.ceil(width / 8), Math.ceil(height / 8));
+        pass.end();
+        device.queue.submit([encoder.finish()]);
+        const pixels = new Float32Array(await readBuffer(device, outputBuffer, outputBytes));
+        cameraBuffer.destroy();
+        outputBuffer.destroy();
+        parameters.destroy();
+        const indirect = new Float32Array(width * height * 3);
+        const full = new Float32Array(width * height * 3);
+        for (let pixel = 0; pixel < width * height; pixel++) {
+            for (let channel = 0; channel < 3; channel++) {
+                indirect[pixel * 3 + channel] = pixels[pixel * 8 + channel];
+                full[pixel * 3 + channel] = pixels[pixel * 8 + 4 + channel];
+            }
+        }
+        return { width, height, indirect, full };
+    }
+}
+
+type Tuple3 = readonly [number, number, number];
+
+function subtract(a: Tuple3, b: Tuple3): [number, number, number] {
+    return [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+}
+
+function cross(a: Tuple3, b: Tuple3): [number, number, number] {
+    return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+}
+
+function normalize3(a: Tuple3): [number, number, number] {
+    const length = Math.hypot(a[0], a[1], a[2]);
+    return [a[0] / length, a[1] / length, a[2] / length];
+}
+
+/** Mean of an rgb image, per channel and overall (luminance-free: the plain average of all values). */
+export function imageMean(rgb: Float32Array): number {
+    let sum = 0;
+    for (const value of rgb) sum += value;
+    return sum / rgb.length;
+}
+
+/** Floats as base64, for handing an image to Node through the report. */
+export function floatsToBase64(values: Float32Array): string {
+    const bytes = new Uint8Array(values.buffer, values.byteOffset, values.byteLength);
+    let binary = '';
+    const chunk = 0x8000;
+    for (let offset = 0; offset < bytes.length; offset += chunk) binary += String.fromCharCode(...bytes.subarray(offset, offset + chunk));
+    return btoa(binary);
+}

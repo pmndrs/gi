@@ -1,0 +1,5 @@
+{
+    "description": "T1.5a: GPU ms per probe of ddgi/update and ddgi/write (platform timer scopes), and probes per frame in 2 ms. For hand use under the bench lock.",
+    "timeoutMs": 600000,
+    "manual": true
+}

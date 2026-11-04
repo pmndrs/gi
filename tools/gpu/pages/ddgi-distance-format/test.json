@@ -1,0 +1,4 @@
+{
+    "description": "T1.5a: DDGI distance atlas in rg16float (texture-formats-tier1) and the declared rgba16float fallback (a second device without the feature) give the same field.",
+    "timeoutMs": 300000
+}
