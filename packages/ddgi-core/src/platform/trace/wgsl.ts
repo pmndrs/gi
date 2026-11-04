@@ -101,10 +101,12 @@ struct GiInstance {
 
 const GI_INSTANCE_FLAG_MIRRORED: u32 = ${INSTANCE_FLAG.mirrored}u;
 
+// Mesh trees and the top level use the same 64-byte node.
+const GI_VEC4_PER_NODE: u32 = ${BVH_NODE_BYTES / 16}u;
+
 // The top-level buffer is [header][instance records][top-level nodes], and is
 // read as vec4u so no integer ever passes through a float register.
 const GI_TOP_VEC4_PER_RECORD: u32 = ${INSTANCE_RECORD_BYTES / 16}u;
-const GI_TOP_VEC4_PER_NODE: u32 = ${BVH_NODE_BYTES / 16}u;
 const GI_TOP_HEADER_VEC4S: u32 = ${TOP_LEVEL_HEADER_BYTES / 16}u;
 
 // ---- Traversal constants -----------------------------------------------------
@@ -159,7 +161,7 @@ fn giMakeReference(index: u32, count: u32) -> u32 {
 const GI_VEC4_PER_TRIANGLE: u32 = ${TRIANGLE_BYTES / 16}u;
 
 fn giLoadMeshNode(nodeIndex: u32) -> GiBvhNode {
-    let base = nodeIndex * GI_TOP_VEC4_PER_NODE;
+    let base = nodeIndex * GI_VEC4_PER_NODE;
     let a = giTraceNodes[base];
     let b = giTraceNodes[base + 1u];
     let c = giTraceNodes[base + 2u];
@@ -196,7 +198,7 @@ fn giLoadInstance(recordIndex: u32) -> GiInstance {
 
 // 'firstNode' is the vec4 index where the top-level nodes begin.
 fn giLoadTopLevelNode(firstNode: u32, nodeIndex: u32) -> GiBvhNode {
-    let base = firstNode + nodeIndex * GI_TOP_VEC4_PER_NODE;
+    let base = firstNode + nodeIndex * GI_VEC4_PER_NODE;
     let a = giTraceTopLevel[base];
     let b = giTraceTopLevel[base + 1u];
     let c = giTraceTopLevel[base + 2u];
@@ -215,8 +217,9 @@ fn giLoadTopLevelNode(firstNode: u32, nodeIndex: u32) -> GiBvhNode {
 // an instance's object space inside it), with everything the tests reuse
 // precomputed once instead of per box or per triangle.
 struct GiRaySetup {
+    // The direction is not stored: the tests use only these precomputed forms of
+    // it. It is not normalized in object space, so t stays in world units.
     origin: vec3f,
-    direction: vec3f,          // object space: not normalized, so t stays in world units
     inverseDirection: vec3f,   // for the box test
     // Watertight triangle test: the permute-and-shear that maps a point (relative
     // to the ray origin) into the space where the ray runs along +z'. A point p
@@ -264,7 +267,6 @@ fn giMakeRaySetup(origin: vec3f, direction: vec3f) -> GiRaySetup {
     // same way in both, which is what keeps the test watertight.
     return GiRaySetup(
         origin,
-        direction,
         giSafeInverse(direction),
         axisX - shearX * axisZ,
         axisY - shearY * axisZ,
@@ -359,10 +361,6 @@ fn giIntersectWatertight(triangle: GiBvhTriangle, setup: GiRaySetup, tMin: f32, 
     return GiTriangleHit(true, t, vec2f(weight1, weight2) * inverseDeterminant, determinant > 0.0);
 }
 
-fn giIntersectTriangle(triangle: GiBvhTriangle, setup: GiRaySetup, tMin: f32, tMax: f32) -> GiTriangleHit {
-    return giIntersectWatertight(triangle, setup, tMin, tMax);
-}
-
 // ---- The walk -----------------------------------------------------------------------
 
 // With stopAtFirstHit the walk returns on the first triangle found in
@@ -455,7 +453,7 @@ fn giTraverse(ray: GiRay, stopAtFirstHit: bool) -> GiHit {
             // A mesh leaf: 'count' triangles starting at 'index'.
             for (var i = 0u; i < count; i += 1u) {
                 let triangle = giLoadTriangle(instance.triangleOffset + index + i);
-                let candidate = giIntersectTriangle(triangle, setup, ray.tMin, closestT);
+                let candidate = giIntersectWatertight(triangle, setup, ray.tMin, closestT);
                 if (candidate.hit) {
                     // A mirrored instance flips the winding as seen in world space.
                     let frontFace = candidate.frontFacing != mirrored;
