@@ -262,8 +262,8 @@ Rules for every M1 task:
 | T1.2 | Platform scene copy | implementer | M | none | done (Opus review passed with notes, all fixed; both GPUs) |
 | T1.3 | Tracer as a platform module | implementer | M | T1.2 (B0 as built) | done (Opus review passed with notes, fixed; any-hit 1.03-1.22× three-mesh-bvh on the RTX, except Bistro interior 0.93×) |
 | T1.4 | Hit shading | implementer | M | T1.1, T1.3 | done (Opus review passed with notes, fixed; `sunIlluminance` added per Dennis) |
-| T1.5a | DDGI field and update loop | main session designs, implementer builds | M | T1.4 | active (implementer, 2026-11-05) |
-| T1.5b | DDGI classification and relocation | implementer | M | T1.5a | todo |
+| T1.5a | DDGI field and update loop | main session designs, implementer builds | M | T1.4 | review (e18ba01; furnace −0.64%, Cornell +9.5% in-air) |
+| T1.5b | DDGI classification and relocation | implementer | M | T1.5a | active (implementer, 2026-11-05) |
 | T1.6 | Shading module and plain-WebGPU example | implementer | M | T1.5 | todo |
 | T1.7 | three.js adapter | implementer | M | T1.6 | todo |
 | T1.8 | Viewer integration | implementer | M | T1.7 | todo |
@@ -314,10 +314,10 @@ Done-whens for the B stages are in `docs/design/bvh-framework.md`. B1a's: a 10k-
   - **T1.5a, field and update loop:** the volume, the atlases, the `ddgi/update` and `ddgi/write` kernels with every probe treated as active, the budget and update order, `ddgiSampleIrradiance`, and the engine-free test view. Done when:
     - the furnace room converges to its analytic value within 2%;
     - Cornell's indirect light matches Cycles within the M1 accuracy target (the point-light Cornell, DECISIONS).
-  - **T1.5b, classification and relocation:** the fixed-ray reductions (subgroups first, plus the fallback and its test), relocation, the probe states and their effect on sampling. Done when:
+  - **T1.5b, classification and relocation:** first the trace/blend split (DECISIONS 2026-11-05), then the fixed-ray reductions (subgroups first, plus the fallback and its test), relocation, the probe states and their effect on sampling, and converting the ms budget into units. Done when:
     - probes inside walls are classified off;
     - the two-room leak is ≤ 1% (DECISIONS defines it);
-    - the furnace and Cornell checks of T1.5a still pass.
+    - the furnace and Cornell checks of T1.5a still pass, Cornell now on the manifest's own volume (DECISIONS 2026-11-05).
 - **T1.6 Shading module and plain-WebGPU example.**
   - `giIrradiance` (Chebyshev visibility, coverage) and `globalsCode`; `examples/webgpu/hello` renders Cornell with GI.
   - Done when GI sampling costs ≤ 1.0 ms at 1440p on the RTX 3060.

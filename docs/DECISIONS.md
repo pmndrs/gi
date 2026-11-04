@@ -4,6 +4,13 @@ Settled choices, newest first. Each entry is short: the decision, why, and what 
 
 ## 2026-11-05
 
+- **DDGI's update is split into a trace-and-shade kernel and a blend kernel, with ray results in a small buffer** (M1 lead, from T1.5a's measurement). The design (`docs/design/ddgi.md`) had one kernel that traced, shaded and blended with rays never leaving workgroup memory, and said to time it against a split version if the cost came near its budget. It did. At 512 probes × 256 rays: RTX 3060 2.48 ms one kernel against 1.22 ms split; Intel UHD 11.6 against 7.8 ms, with the same field. The single kernel is register-bound. Tracing stays inline: the trace kernel calls `giTraceClosest` itself. The platform's `encodeBatch` isn't used. T1.5b makes the switch.
+- **T1.5a's Cornell accuracy is measured on a volume with every probe in the air. T1.5b must pass on the manifest's own volume** (M1 lead).
+  - On the manifest volume one probe layer sits 1 cm inside the floor and another inside the ceiling. Without relocation (T1.5b) that reads +11.4% against the ±10% target. With probes in the air it reads +9.50% (RTX) and +9.43% (Intel).
+  - A path-traced irradiance check traces the excess to probe placement, not to lost or created energy: true irradiance rises 12–21% over the first 0.5 m off the floor.
+  - +9.5% is close to the limit. T1.5b's relocation and bias tuning are expected to bring it down. If they don't, it comes back as a decision.
+- **DDGI rounds stochastically when it writes half-float atlases** (T1.5a). With hysteresis 0.97, round-to-nearest can't move a value by less than half a half-float step, so the furnace stalled 4.6% low. With stochastic rounding it settles 0.6% low.
+
 - **The GPU top level: refit every frame, rebuild the shape in a worker** (B1a).
   - **Rebuild trigger:** an instance is created, or the tree's quality signal (relative SAH cost) passes 1.25× its as-built value. A planning number: the top level is a small share of trace work, and rebuilds cost no frame time (54–57 ms for 10k instances, in their own worker).
   - **New instances** become visible when their shape arrives (about 55 ms for 10k), as new meshes do. Hiding and showing take effect in the same frame.

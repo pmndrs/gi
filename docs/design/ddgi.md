@@ -58,7 +58,18 @@ State 3 is the starting state, so the first frames show partial GI instead of bl
 - **Blended rays:** `raysPerProbe − 32` spherical-Fibonacci directions, rotated by one random rotation per frame (shared by all probes that frame). The rotation comes from the CPU: a uniform random quaternion from a seeded generator, seeded by the frame number. Not byte-identical across runs, and nothing should require it.
 - **Range:** rays are traced to `maxRayDistance`, default unlimited (`tMax` = 1e27), so a miss sees the sky. Distances written to the distance atlas are clamped to `1.5 × length(spacing)`.
 
-## The update kernel (`ddgi/update`): trace, shade and accumulate in one kernel
+## Revision after T1.5a (2026-11-05): trace and blend are separate dispatches
+
+T1.5a built the one-kernel design below and, as the board asked, timed it once against a split version. The split won clearly, so it replaces the single kernel (DECISIONS 2026-11-05):
+
+- **`ddgi/trace`:** workgroups of 64 threads, one ray each. It calls `giTraceClosest` inline (tracing is still inline in the technique's own kernel, not the platform's `encodeBatch`), shades the hit exactly as phase A below, and writes each ray's radiance (rgb as halves) and signed distance to a ray buffer (about 4 MB at 512 probes × 256 rays).
+- **`ddgi/blend`:** one workgroup per probe. It loads that probe's rays from the buffer into workgroup memory, runs phase B (classification and relocation, T1.5b) and phase C (blend) as below, and writes the scratch tile.
+- **`ddgi/write`:** unchanged.
+- *Why:* the single kernel is register-bound. Tracing, shading and blending in one 256-thread workgroup leaves few waves resident. Measured at 512 probes, 256 rays: RTX 3060 2.48 ms one kernel against 1.22 ms split; Intel UHD 11.6 against 7.8 ms, with the same field.
+- The "rays never touch device memory" goal below is dropped; the ray buffer is small and is read once.
+- Bindings: `ddgi/trace` uses the tracer 3, the scene copy and hit shading 2, plus the update list and the ray buffers, within 8.
+
+## The update kernel (`ddgi/update`): trace, shade and accumulate in one kernel (superseded by the revision above; the per-ray and per-texel rules still apply)
 
 One workgroup per probe in this frame's update list. Workgroup size 256 (the default `maxComputeInvocationsPerWorkgroup`).
 
