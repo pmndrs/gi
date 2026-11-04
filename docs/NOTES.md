@@ -219,6 +219,8 @@ One bullet per fact, each with its source. Add a bullet when something cost you 
 - **Sponza under tinybvh:** 115 meshes of at most 85k triangles; 1.91 M nodes, about 2 triangles per leaf; WASM memory stays around 67 MB. tinybvh's own Build (about 1.45 s) is now most of the build time. tinybvh builds the same tree twice from the same mesh (tested). Source: B0b.
 - **Every browser with WebGPU also has WASM SIMD** (Chrome 91+, Firefox 89+, Safari 16.4+), so no scalar WASM build is needed. Source: B0.
 - **JS memory speed on this laptop:** just reading 300 MB takes about 110 ms, so a JS pass over a Sponza-sized tree costs 100-300 ms whatever the code does. Move such passes into WASM or onto the GPU. Source: B0.
+- **Check the RTX's clock before timing:** `nvidia-smi --query-gpu=clocks.sm,clocks.max.sm --format=csv` under load. On 2026-11-05 it was locked at 1200 MHz (max 2100), idle and under 82% load, probably by Nsight (Nsight Monitor was running) or a past `nvidia-smi -lgc`. `nvidia-smi -rgc` (admin) resets it; that's Dennis's call. Source: T1.6.
+- **Python on Windows writes CRLF in text mode;** write files with `newline='\n'` or in binary mode. Source: T1.6.
 - **Check the GPU is idle before timing.** A browser tab left open on the viewer used about 20% of the RTX 3060 and cost every tracer about 35%. Look at Task Manager's GPU column, or `nvidia-smi`, first. Source: B0.
 - **Repeat runs:** `repeat.ts` writes `run<k>/` rows plus `median/` rows to `trace.csv`, and the commit column checks only the measured paths for `-dirty`. Source: T0.10 part C.
 - **WGSL `bool` can't live in a buffer**, so hit records store front-face as `u32`. Source: T0.10.
@@ -238,6 +240,8 @@ One bullet per fact, each with its source. Add a bullet when something cost you 
 - **After the trace/blend split, the Intel UHD spends about half its DDGI update time in the blend kernel.** Source: T1.5b.
 - **DDGI test runs are deterministic:** rays are seeded by the frame number, so repeated leak runs give identical numbers. Spread has to come from varying the seed, not from re-running. Source: T1.5b.
 - **The Intel UHD hangs when ddgi-distance-format's second device starts right after ddgi-classification** (6 of 6), with the current and the previous kernels. Not understood; the page runs its fallback device first to avoid it. Steps are in PROGRESS (T1.5b). Source: T1.5b.
+- **Cost of DDGI sampling** (RTX 3060 at a locked 1200 MHz, 1440p, every pixel a surface): distance fetches about 0.31 ms, irradiance fetches 0.21, probe-data loads 0.06, arithmetic 0.35. Hoisting per-sample constants plus `inverseSqrt` saved 16%. A branch-free loop was slower; a loop the compiler can't unroll was 9% slower. Source: T1.6.
+- **Overdraw doubles GI cost in a forward pass:** 2.49 ms without a depth prepass against 1.29 ms with one. Shade GI once per pixel. Source: T1.6.
 - **Leak fixes by measured effect:** double-sided distance (84×), then probe density (22×). Probe texture resolution made no difference. Reducing bias made leaks *worse*, by up to 34×. Source: the HomeFig DDGI branch.
 - **View bias:** 6 → 0 cut image error against a path tracer from 18.2% to 12.4% RMS on two-rooms. Bias pulled into furniture caused black patches. Source: the audit, the HomeFig branch.
 - **Recursion cap:** NVIDIA's native recursion albedo cap (0.9 vs 1.0) changes indirect light by about 23%. Match it when comparing against native. Source: the audit.

@@ -160,7 +160,7 @@ Given a surface point `P`, its normal `N` and the direction `V` it's seen from:
    - sample irradiance bilinearly at `octahedral(N)` in the probe's tile.
 4. Return `Σ w·E / Σ w`, or 0 when `Σ w` is 0.
 
-**Coverage** (`giCoverage`, T1.6): 1 inside the volume, falling to 0 across the outer half cell, times `saturate(Σ w / small)` so a point no probe can see fades to the host's environment instead of going black.
+**Coverage** (`giCoverage`, T1.6): 1 out to half a spacing beyond the outermost probes, falling to 0 over the next half spacing, times `saturate(Σw / 0.02)`, so a point no probe can see fades to the host's environment instead of going black (DECISIONS 2026-11-05).
 
 ## Settings (`DDGISettings`)
 

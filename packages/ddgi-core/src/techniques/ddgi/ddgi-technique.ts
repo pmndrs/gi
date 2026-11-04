@@ -15,11 +15,10 @@
  *
  * It sees only its `TechniqueContext`: the scene copy, the `rays` backend,
  * hit shading, the kernel builder and the timer. Never the host or an engine.
- * The shading module that renderers read is T1.6, built on `field` and
- * `DDGI_SAMPLE_WGSL`.
+ * Renderers read the field through its shading module (`shading`,
+ * shading.ts), which wraps the same `ddgiSampleIrradiance` the update uses.
  */
 
-import type { ShadingModule } from '../../platform/contract/shading-module.ts';
 import type { DebugView } from '../../platform/contract/stats.ts';
 import type { GITechnique, TechniqueContext, TechniqueFrame, TechniqueRequirements } from '../../platform/contract/technique.ts';
 import type { ComputeKernel } from '../../platform/contract/wgsl.ts';
@@ -63,10 +62,12 @@ import {
     type DDGISettingsInput,
     type ProbeGrid,
 } from './settings.ts';
+import { DDGIShadingModule } from './shading.ts';
 import { UpdateCursor } from './update-order.ts';
 import { blendKernelWgsl, type PhaseBReduction } from './wgsl/blend.ts';
 import { CENSUS_WORKGROUP_SIZE, DDGI_CENSUS_WGSL } from './wgsl/census.ts';
 import { DDGI_TRACE_WGSL, TRACE_WORKGROUP_SIZE } from './wgsl/trace.ts';
+import { DDGI_DEBUG_VIEW } from './wgsl/shading.ts';
 import { writeKernelWgsl } from './wgsl/write.ts';
 
 /** WebGPU usage bits; the globals don't exist in Node, where tests import this file. */
@@ -96,9 +97,9 @@ export interface DDGITechniqueOptions {
 }
 
 /**
- * What a renderer (T1.6's shading module) and test tools read: the three
- * textures and the four `vec4f` parameters of `ddgiSampleIrradiance`, in
- * order. Textures are replaced only by `prepare`.
+ * What test tools read (renderers use `shading`): the three textures and the
+ * four `vec4f` parameters of `ddgiSampleIrradiance`, in order. Textures are
+ * replaced only by `prepare`.
  */
 export interface DDGIField {
     readonly grid: ProbeGrid;
@@ -210,6 +211,8 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
     readonly requirements: TechniqueRequirements = { queries: ['rays'] };
     readonly settings: DDGISettings;
     readonly debugViews: readonly DebugView[];
+    /** How renderers read the field (shading.ts). Its textures exist after `prepare`. */
+    readonly shading: DDGIShadingModule;
     /**
      * Undefined: the platform measures DDGI's cost per probe itself, from the
      * `ddgi/*` pass timings and the probes it handed out (gi-platform.ts).
@@ -233,7 +236,7 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         this.debugViews = [
             {
                 kind: 'points',
-                id: 0,
+                id: DDGI_DEBUG_VIEW.points,
                 label: 'Probes',
                 description: 'Each probe as a dot where it really sits (after relocation), coloured by its state.',
                 texture: () => {
@@ -243,7 +246,38 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
                 count: () => this.resources?.grid.probeCount ?? 0,
                 states: PROBE_STATE_LABELS,
             },
+            // Drawn through the shading module's giDebugColor (wgsl/shading.ts).
+            {
+                kind: 'screen',
+                id: DDGI_DEBUG_VIEW.giOnly,
+                label: 'GI only',
+                description: 'The indirect light alone, as it would light a plain white surface.',
+            },
+            {
+                kind: 'screen',
+                id: DDGI_DEBUG_VIEW.coverage,
+                label: 'Coverage',
+                description: 'Green where DDGI answers fully; turning red near the edge of the probe volume and where no probe can see the surface, where the renderer uses its own environment light instead.',
+            },
+            {
+                kind: 'screen',
+                id: DDGI_DEBUG_VIEW.probeStates,
+                label: 'Probes near this point',
+                description: 'The 8 probes around each point, coloured by state and blended by distance: green active, red off (inside geometry), blue off (no surface nearby), yellow not updated yet.',
+            },
         ];
+        this.shading = new DDGIShadingModule({
+            fieldTextures: () => {
+                const resources = this.resources;
+                if (!resources) throw new Error('@pmndrs/ddgi: the DDGI shading module has textures after prepare (await gi.prepare())');
+                return { irradiance: resources.irradiance, distance: resources.distance, probeData: resources.probeData };
+            },
+            sampleParameters: () => {
+                const resources = this.resources;
+                if (!resources) throw new Error('@pmndrs/ddgi: the DDGI shading module has its volume after prepare (await gi.prepare())');
+                return this.refreshSampleParameters(resources);
+            },
+        });
     }
 
     attach(context: TechniqueContext): void {
@@ -451,17 +485,11 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         return count;
     }
 
-    /** Renderers read the field through T1.6's shading module, built on {@link field}. */
-    get shading(): ShadingModule {
-        throw new Error('@pmndrs/ddgi: the DDGI shading module is not built yet (T1.6); read `field` with ddgiSampleIrradiance meanwhile');
-    }
-
     /** The field's textures and sampling parameters; null before `prepare`. */
     get field(): DDGIField | null {
         const resources = this.resources;
         if (!resources) return null;
-        this.fillSampleParameters(resources.grid, resources.irradianceTexels, resources.distanceTexels);
-        this.parameterView.set(this.uniformData.subarray(0, SAMPLE_PARAMETER_VEC4_COUNT * 4));
+        this.refreshSampleParameters(resources);
         return {
             grid: resources.grid,
             layout: resources.layout,
@@ -618,6 +646,13 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
             pointData.set([grid.origin[0] + x * grid.spacing[0], grid.origin[1] + y * grid.spacing[1], grid.origin[2] + z * grid.spacing[2], PROBE_STATE.notUpdatedYet], probe * 4);
         }
         queue.writeTexture({ texture: points }, pointData, { bytesPerRow: points.width * POINT_TEXEL_BYTES }, { width: points.width, height: points.height });
+    }
+
+    /** The four sampling parameters from the live settings, in `parameterView` (the same array every time). */
+    private refreshSampleParameters(resources: PreparedResources): Float32Array {
+        this.fillSampleParameters(resources.grid, resources.irradianceTexels, resources.distanceTexels);
+        this.parameterView.set(this.uniformData.subarray(0, SAMPLE_PARAMETER_VEC4_COUNT * 4));
+        return this.parameterView;
     }
 
     /** The first four vec4s of the uniforms: the volume, with the live biases (`DdgiVolume` in wgsl/sample.ts names them). */

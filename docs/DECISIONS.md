@@ -4,6 +4,8 @@ Settled choices, newest first. Each entry is short: the decision, why, and what 
 
 ## 2026-11-05
 
+- **T1.6's "GI sampling ≤ 1.0 ms at 1440p" is judged on a view where every pixel is a surface, at normal GPU clocks** (M1 lead). Cornell's inside bookmark (2) is that worst case. The front view, with sky and background pixels, costs less and would flatter the number. A run with the RTX's clocks locked below normal doesn't count for or against the target.
+- **DDGI coverage** (T1.6): 1 out to half a spacing beyond the outermost probes, fading to 0 over the next half spacing, multiplied by `saturate(Σw / 0.02)` so points no probe can see fade to the host's environment. *Why outside the probe box:* walls usually sit just outside the outermost probes (Cornell's are 3 cm out), and fading inside the box would dim them.
 - **DDGI's big-change rule is off by default in M1; M2 drives fast response from scene changes instead** (M1 lead, after T1.5b).
   - Any rule that lowers hysteresis when a probe's new estimate looks very different reacts to ray noise too. Measured on Cornell (in-air volume, against the rule off): per texel +8%; on the probe's mean, applied to the same update, +22% (a light near the ceiling makes even the mean noisy and skewed); on the probe's mean, applied to the next update, −1.8 points, because it forgets bright spikes faster.
   - All three are biases, so the default is off (`irradianceChangeThreshold` disabled). The lagged probe-mean rule stays as an opt-in setting.

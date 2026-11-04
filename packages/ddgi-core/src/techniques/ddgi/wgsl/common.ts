@@ -6,7 +6,6 @@
  */
 
 import { FIXED_RAYS, MAX_RAYS_PER_PROBE } from '../settings.ts';
-import { PROBE_STATE } from '../layout.ts';
 import { DDGI_SAMPLE_WGSL } from './sample.ts';
 
 /** `DdgiUniforms`; its byte layout is `UNIFORM_WORD` in layout.ts (checked by a unit test). */
@@ -46,8 +45,6 @@ const DDGI_MAX_RAYS: u32 = ${MAX_RAYS_PER_PROBE}u;
 // The first rays of every probe: fixed directions, never rotated or blended;
 // they feed classification and relocation (phase B in ddgi/blend).
 const DDGI_FIXED_RAYS: u32 = ${FIXED_RAYS}u;
-const DDGI_STATE_OFF_INSIDE_GEOMETRY: u32 = ${PROBE_STATE.offInsideGeometry}u;
-const DDGI_STATE_OFF_NO_SURFACE_NEARBY: u32 = ${PROBE_STATE.offNoSurfaceNearby}u;
 // 1 / golden ratio, for spherical Fibonacci points.
 const DDGI_GOLDEN_FRACTION: f32 = 0.618033988749895;
 const DDGI_TWO_PI: f32 = 6.28318530717959;
