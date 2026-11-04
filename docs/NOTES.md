@@ -9,7 +9,8 @@ One bullet per fact, each with its source. Add a bullet when something cost you 
 - **Wrapping our textures:** `ExternalTexture` wraps a same-device `GPUTexture`. three binds it without allocating or destroying it.
   - Set `image = { width, height, depth }`, or size reads as 1×1.
   - Set `type` to match the sample type: the default is filterable float; use `FloatType` for rgba32float and `UnsignedIntType` for uint.
-  - For array views, set `isArrayTexture = true`, or use `texture3D()` for 3D.
+  - For array views, set `isArrayTexture = true`.
+  - For 3D, set `is3DTexture = true` and sample it with `texture3D()`. Without the flag the shader fails with "expected texture_3d<f32>, got texture_2d<f32>". Source: T0.8, `WGSLNodeBuilder.js:1399, 2293-2296`.
   - On reallocation, create a new `ExternalTexture` and assign it to `node.value`; `needsUpdate` throws.
   - Don't touch `textureData.externalTexture`, which is the XR path.
 
@@ -24,6 +25,32 @@ One bullet per fact, each with its source. Add a bullet when something cost you 
 - **PMREM:** since r187 it is a `CubeRenderTarget` (RGBA16F, minimum size 256), sampled by roughness-to-mip. Env "irradiance" is the roughness-1 GGX lobe × π, not a cosine convolution, so expect a small mismatch with DDGI at fades. Source: PR #34585, `EnvironmentNode.js:101, 249-262`.
 - **`LightProbeGrid`:** L2 SH, raster cubemap bake, no visibility, re-bakes overwrite values. Sponza (490 probes, 32² faces) bakes in 3.1 s on a Pascal GPU. PR #35174, which adds DDGI visibility, is a stalled draft: Sponza shading goes 3.08 → 4.00 ms (8 probes) or 3.38 ms (4 probes).
 - **VXGI:** voxel cone tracing at 128³ by default, gathered as a full-screen pass that needs TRAA. Lights are dynamic; geometry needs full re-voxelization. Introduced in PR #34402 (r186).
+
+- **`wgslFn` resources (T0.8):** a `wgslFn` accepts texture and sampler parameters.
+  - Pass `texture()` or `texture3D()` nodes of `ExternalTexture`s.
+  - A `sampler` parameter is fed from a filterable texture node and uses that texture's filter and wrap settings. Unfilterable (`rgba32float`) textures have no sampler; use `textureLoad`.
+  - Source: `nodes/accessors/TextureNode.js:673-680`, `WGSLNodeFunction.js:58-67`.
+- **Device features:** three reads `core-features-and-limits` from the device. When we create the device, request it (and all adapter features we need). Source: `WebGPUBackend.js:258`, T0.8.
+- **Env diffuse workaround (r187):** `LightingModel.start` builds all lights, then calls `this.indirect`. Overriding `indirect` on our light node's lighting model lets us scale `iblIrradiance` by 1 − coverage.
+  - Only Standard and Physical materials read `iblIrradiance`; Lambert and Phong don't.
+  - It costs the multi-scatter and sheen env terms inside the volume. It's fixed at build time.
+  - Source: `nodes/core/LightingModel.js:24`, `EnvironmentNode.js:109`, T0.8.
+- **Light ordering** in `LightsNode` is by `.id`, which mixes node and object ids, so ties between equal-priority probe lights are unreliable. Give our light a distinct priority. Source: `LightsNode.js:36`.
+- **Meshlet pipeline** draws `source.clone()` materials and skips cube render targets. So material-instance patches don't survive it; use the light node. Source: `examples/jsm/pipelines/MeshletDrawingPipeline.js:225`.
+
+## Babylon.js (9.33.2, checked 2026-11-04)
+
+- **No device input:** `WebGPUEngine.initAsync` always calls `requestAdapter` and `requestDevice(deviceDescriptor)`. Pass our limits and features in `deviceDescriptor`, and hand `engine._device` to the core. `dispose()` calls `device.destroy()`, and after device loss Babylon requests a new device itself. Source: `webgpuEngine.pure.js:443, 481, 503-520, 3176`.
+- **Wrapping our textures:**
+  - `wrapWebGPUTexture` leaves the view null and sets no flags. Set `is2DArray`, `is3D` and `type` yourself (FLOAT for `rgba32float`, so the layout is unfilterable), then call `updateWrappedWebGPUTexture`.
+  - Disposing the wrapper destroys our `GPUTexture` unless `_hardwareTexture.reset()` runs first.
+  - Source: `webgpuEngine.pure.js:1981, 2014, 2999`, `webgpuHardwareTexture.js:88`.
+- **Material plugins:**
+  - Declarations go in `CUSTOM_FRAGMENT_DEFINITIONS`, the call in `CUSTOM_FRAGMENT_BEFORE_FINALCOLORCOMPOSITION`. Zero `finalIrradiance` to turn env diffuse off.
+  - Samplers are found by a `Sampler` name suffix, and `<texture>Sampler` binds to that texture.
+  - `vec4f` uniforms need `hardBindForSubMesh`.
+  - Babylon is left-handed, and its env irradiance is E/π.
+  - Source: `pbr.fragment.js:107, 621`, `webgpuShaderProcessorsWGSL.pure.js:35, 510`, `pbrBaseMaterial.pure.js:1561-1577`, `sphericalPolynomial.pure.js:187-199`.
 
 ## three-mesh-bvh (checked 2026-11-04)
 

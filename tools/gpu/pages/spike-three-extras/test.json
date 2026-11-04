@@ -1,0 +1,4 @@
+{
+    "description": "T0.8: coexistence with a real LightProbeGrid, scene.environment with env diffuse suppressed, and a CubeCamera capture that must contain our GI.",
+    "timeoutMs": 90000
+}

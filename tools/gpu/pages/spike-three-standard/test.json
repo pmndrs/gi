@@ -1,0 +1,4 @@
+{
+    "description": "T0.8: our device, compute-written textures and Light node under three's standard drawing pipeline; pixel readback and recompile counts.",
+    "timeoutMs": 60000
+}

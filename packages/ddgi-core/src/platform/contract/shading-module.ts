@@ -55,8 +55,17 @@ export type ShadingParameter =
           readonly texture: () => GPUTexture;
       }
     | {
+          /**
+           * A sampler always belongs to one filterable texture parameter and is
+           * named `<texture>Sampler`. Engines tie samplers to textures: three's
+           * `wgslFn` feeds a sampler parameter from a texture node and uses that
+           * texture's filter and wrap settings, and Babylon binds a sampler named
+           * `<texture>Sampler` to that texture automatically (T0.8, T0.9).
+           */
           readonly kind: 'sampler';
-          readonly name: string;
+          readonly name: `${string}Sampler`;
+          /** Name of the `texture` parameter this sampler belongs to. */
+          readonly texture: string;
           readonly filtering: 'linear' | 'nearest';
           readonly addressMode: 'clamp-to-edge' | 'repeat';
       }

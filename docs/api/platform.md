@@ -148,3 +148,23 @@ Gaps:
 ## What happens after the spikes
 
 The answers go in PROGRESS. Any change to the contract is made in both the TypeScript and this page, and listed in a "Revisions" section here.
+
+## Revisions
+
+### After T0.8 (three.js) and T0.9 (Babylon), 2026-11-04
+
+Both engines took the shading module as designed. A light node in three and a material plugin in Babylon each called a function shaped like `giIrradiance(position, normal, viewDirection, screenUV, ...)`. Its resources were a 2D-array texture, a 3D texture, an `rgba32float` table texture, samplers and `vec4f` uniforms. Pixel readbacks matched the expected E/π within 0.2% on both GPUs.
+
+- **Change: samplers belong to a texture.** A `sampler` parameter now names the texture it belongs to and is called `<texture>Sampler`. three's `wgslFn` feeds a sampler from a texture node, using that texture's filter and wrap settings. Babylon automatically binds a sampler named `<texture>Sampler` to that texture.
+- **Confirmed: `giCoverage` is needed.** Both engines add their environment's diffuse on top of ours unless told not to. The three adapter scales the environment's diffuse by `1 − coverage` (r187 has no switch; PR #35017 would add one). Babylon zeroes its environment irradiance inside a plugin. Environment specular stays on in both.
+- **Confirmed: the host owns the device, even when the engine insists on making it.**
+  - three takes our device (`new WebGPURenderer({ device })`) with raised limits.
+  - Babylon always makes its own device, so its adapter passes our limits through `deviceDescriptor` and hands `engine._device` to the core.
+  - Babylon also destroys the device on `dispose()` and makes a new one after device loss. Both fit the existing rule: on loss, recreate the platform on the new device.
+- **Confirmed: toggle GI with intensity.** In three, setting intensity to 0 cost 0 new pipelines. Removing the light cost 1–2 new render pipelines per material, and re-adding it cost the same again.
+- **Adapter notes, not contract changes:**
+  - three's 3D `ExternalTexture` needs `is3DTexture = true`.
+  - Babylon is left-handed, so its adapter flips z in the call.
+  - `screenUV` needs a viewport uniform from the adapter.
+  - Babylon's foreign-texture wrapper destroys our texture on dispose unless reset first.
+  - Details are in NOTES.
