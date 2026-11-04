@@ -167,9 +167,15 @@ export function topologyFromTinyBvhNodes(nodes: Uint32Array, order: Uint32Array)
     // Inner nodes are at most half the slots; grown to the real count at the end.
     const children = new Uint32Array(Math.ceil(slots / 2) * TOPOLOGY_WORDS_PER_NODE);
     let innerCount = 1;
-    const stack: [number, number][] = [[0, 0]]; // tinybvh node, our index
-    while (stack.length > 0) {
-        const [node, ours] = stack.pop() as [number, number];
+    // Pairs of (tinybvh node, our index), flat, with an explicit end: a big mesh has
+    // millions of nodes, and a tuple per node (or shrinking the array on every pop)
+    // costs more than the walk itself.
+    const stack: number[] = [0, 0];
+    let stackEnd = 2;
+    while (stackEnd > 0) {
+        stackEnd -= 2;
+        const node = stack[stackEnd];
+        const ours = stack[stackEnd + 1];
         const left = nodes[node * TINYBVH_NODE_WORDS + NODE_LEFT_FIRST];
         for (let side = 0; side < 2; side++) {
             const child = left + side;
@@ -183,7 +189,9 @@ export function topologyFromTinyBvhNodes(nodes: Uint32Array, order: Uint32Array)
                 const index = innerCount++;
                 children[target] = index;
                 children[target + 1] = 0;
-                stack.push([child, index]);
+                stack[stackEnd] = child;
+                stack[stackEnd + 1] = index;
+                stackEnd += 2;
             }
         }
     }

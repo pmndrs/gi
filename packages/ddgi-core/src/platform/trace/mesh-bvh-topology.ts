@@ -11,11 +11,14 @@
  * triangles' own f32 corners, bottom-up, so every box contains its triangles
  * exactly; a box rounded a hair too small would let rays slip past. Leaves
  * larger than the tracer accepts are cut in half until they fit.
+ *
+ * Big meshes have millions of nodes, so both passes avoid allocating per node:
+ * on Sponza, objects and tuples per node cost more than the work itself.
  */
 
-import { BVH_NODE_BYTES, BVH_NODE_WORDS, EMPTY_CHILD_INDEX, MAX_LEAF_PRIMITIVES, NODE_WORD, NO_PARENT } from './layout.ts';
+import { BVH_NODE_BYTES, BVH_NODE_WORDS, EMPTY_CHILD_INDEX, MAX_LEAF_PRIMITIVES, NODE_WORD, NO_PARENT, TRIANGLE_WORD, TRIANGLE_WORDS } from './layout.ts';
 import type { MeshBvh, MeshGeometry } from './mesh-bvh.ts';
-import { checkGeometry, growBoxByTriangle, packTriangles, type CheckedGeometry } from './triangle-packing.ts';
+import { checkGeometry, packTriangles } from './triangle-packing.ts';
 import { TOPOLOGY_EMPTY_CHILD, TOPOLOGY_WORDS_PER_NODE, type MeshTreeTopology, type TinyBvhBuilder } from '@pmndrs/bvh';
 
 // The tree description is the BVH package's Builder contract, so any builder there fits.
@@ -26,15 +29,18 @@ export interface MeshTreeTopologyOptions {
     readonly maxLeafPrimitives?: number;
 }
 
-/** A child to emit: an inner node of the input tree, or a run of positions that becomes a leaf or gets cut. */
-interface PendingChild {
-    readonly outputNode: number;
-    readonly depth: number;
-    /** Input node index, or -1 for a run of positions. */
-    readonly inputNode: number;
-    readonly start: number;
-    readonly count: number;
-}
+/**
+ * The walk's to-do list holds one entry per child still to emit, as this many
+ * numbers in a flat array: output node, depth, input node, start, count. The
+ * input node is an inner node of the input tree, or NOT_A_NODE for a run of
+ * positions (start, count) that becomes a leaf or gets cut.
+ */
+const PENDING_FIELDS = 5;
+const NOT_A_NODE = -1;
+
+/** A triangle record keeps its three corners evenly spaced, this many words apart. */
+const CORNER_STRIDE = TRIANGLE_WORD.vertex1 - TRIANGLE_WORD.vertex0;
+if (TRIANGLE_WORD.vertex2 - TRIANGLE_WORD.vertex1 !== CORNER_STRIDE) throw new Error('triangle corners must be evenly spaced');
 
 export function buildMeshBvhFromTopology(geometry: MeshGeometry, topology: MeshTreeTopology, options: MeshTreeTopologyOptions = {}): MeshBvh {
     const maxLeaf = options.maxLeafPrimitives ?? MAX_LEAF_PRIMITIVES;
@@ -62,85 +68,104 @@ export function buildMeshBvhFromTopology(geometry: MeshGeometry, topology: MeshT
     const seenInputNodes = new Uint8Array(inputNodeCount);
     const coveredPositions = new Uint8Array(triangleCount);
 
-    const writeLeaf = (outputNode: number, side: 'left' | 'right', start: number, count: number): void => {
-        if (start + count > triangleCount) throw new RangeError(`a leaf covers positions ${start} to ${start + count - 1}, but there are ${triangleCount} triangles`);
-        for (let position = start; position < start + count; position++) {
-            if (coveredPositions[position]) throw new RangeError(`position ${position} is in more than one leaf`);
-            coveredPositions[position] = 1;
-        }
+    /**
+     * Emits one child of `outputNode`, on the side whose index and count words
+     * are given. A run that fits becomes a leaf, and NOT_A_NODE is returned.
+     * Anything else gets the next node number, which is returned for the caller to queue.
+     */
+    const placeChild = (outputNode: number, indexWord: number, countWord: number, index: number, count: number, fromInput: boolean): number => {
         const base = outputNode * BVH_NODE_WORDS;
-        nodeWords[base + (side === 'left' ? NODE_WORD.leftIndex : NODE_WORD.rightIndex)] = start;
-        nodeWords[base + (side === 'left' ? NODE_WORD.leftCount : NODE_WORD.rightCount)] = count;
-        leafCount++;
-    };
-
-    // Nodes are numbered in the order they are reached (depth first, left first), so a
-    // child always has a larger number than its parent; the box pass below relies on that.
-    const pending: PendingChild[] = [];
-    const placeChild = (outputNode: number, side: 'left' | 'right', depth: number, index: number, count: number, fromInput: boolean): void => {
         const isRun = !fromInput || count > 0;
         if (isRun && count <= maxLeaf) {
-            writeLeaf(outputNode, side, index, count);
-            return;
+            if (index + count > triangleCount) throw new RangeError(`a leaf covers positions ${index} to ${index + count - 1}, but there are ${triangleCount} triangles`);
+            for (let position = index; position < index + count; position++) {
+                if (coveredPositions[position]) throw new RangeError(`position ${position} is in more than one leaf`);
+                coveredPositions[position] = 1;
+            }
+            nodeWords[base + indexWord] = index;
+            nodeWords[base + countWord] = count;
+            leafCount++;
+            return NOT_A_NODE;
         }
         if (nodeCount >= maxNodes) throw new RangeError('the tree has more nodes than its triangles allow (a cycle, or empty leaves)');
         const child = nodeCount++;
         parents[child] = outputNode;
-        const base = outputNode * BVH_NODE_WORDS;
-        nodeWords[base + (side === 'left' ? NODE_WORD.leftIndex : NODE_WORD.rightIndex)] = child;
-        nodeWords[base + (side === 'left' ? NODE_WORD.leftCount : NODE_WORD.rightCount)] = 0;
-        pending.push(isRun ? { outputNode: child, depth: depth + 1, inputNode: -1, start: index, count } : { outputNode: child, depth: depth + 1, inputNode: index, start: 0, count: 0 });
+        nodeWords[base + indexWord] = child;
+        nodeWords[base + countWord] = 0;
+        return child;
     };
 
-    pending.push({ outputNode: 0, depth: 1, inputNode: 0, start: 0, count: 0 });
-    while (pending.length > 0) {
-        const task = pending.pop() as PendingChild;
-        maxDepth = Math.max(maxDepth, task.depth);
-        let left: [number, number, boolean];
-        let right: [number, number, boolean] | null;
-        if (task.inputNode >= 0) {
-            const node = task.inputNode;
-            if (node >= inputNodeCount) throw new RangeError(`node ${node} does not exist`);
-            if (seenInputNodes[node]) throw new RangeError(`node ${node} is reached twice`);
-            seenInputNodes[node] = 1;
-            const words = node * TOPOLOGY_WORDS_PER_NODE;
-            left = [children[words], children[words + 1], true];
-            const rightIndex = children[words + 2];
-            right = rightIndex === TOPOLOGY_EMPTY_CHILD ? null : [rightIndex, children[words + 3], true];
-            if (left[0] === TOPOLOGY_EMPTY_CHILD) throw new RangeError(`node ${node} has an empty left child`);
+    // Nodes are numbered in the order they are reached (depth first, left first), so a
+    // child always has a larger number than its parent; the box pass below relies on that.
+    // `pendingEnd` marks the end of the live entries; the array itself only grows
+    // (shrinking it on every pop would make the engine resize it over and over).
+    const pending: number[] = [0, 1, 0, 0, 0];
+    let pendingEnd = PENDING_FIELDS;
+    const queue = (outputNode: number, depth: number, index: number, count: number, fromInput: boolean): void => {
+        const isInputInnerNode = fromInput && count === 0;
+        pending[pendingEnd] = outputNode;
+        pending[pendingEnd + 1] = depth;
+        pending[pendingEnd + 2] = isInputInnerNode ? index : NOT_A_NODE;
+        pending[pendingEnd + 3] = index;
+        pending[pendingEnd + 4] = count;
+        pendingEnd += PENDING_FIELDS;
+    };
+    while (pendingEnd > 0) {
+        pendingEnd -= PENDING_FIELDS;
+        const outputNode = pending[pendingEnd];
+        const depth = pending[pendingEnd + 1];
+        const inputNode = pending[pendingEnd + 2];
+        const start = pending[pendingEnd + 3];
+        const count = pending[pendingEnd + 4];
+        if (depth > maxDepth) maxDepth = depth;
+
+        let leftIndex: number;
+        let leftCount: number;
+        let rightIndex: number;
+        let rightCount: number;
+        const fromInput = inputNode !== NOT_A_NODE;
+        if (fromInput) {
+            if (inputNode >= inputNodeCount) throw new RangeError(`node ${inputNode} does not exist`);
+            if (seenInputNodes[inputNode]) throw new RangeError(`node ${inputNode} is reached twice`);
+            seenInputNodes[inputNode] = 1;
+            const words = inputNode * TOPOLOGY_WORDS_PER_NODE;
+            leftIndex = children[words];
+            leftCount = children[words + 1];
+            rightIndex = children[words + 2];
+            rightCount = children[words + 3];
+            if (leftIndex === TOPOLOGY_EMPTY_CHILD) throw new RangeError(`node ${inputNode} has an empty left child`);
         } else {
             // A leaf too big for the tracer: cut the run in half.
-            const half = Math.floor(task.count / 2);
-            left = [task.start, half, false];
-            right = [task.start + half, task.count - half, false];
+            const half = Math.floor(count / 2);
+            leftIndex = start;
+            leftCount = half;
+            rightIndex = start + half;
+            rightCount = count - half;
         }
-        // Push right before left, so the left subtree is numbered first.
-        const pendingBefore = pending.length;
-        placeChild(task.outputNode, 'left', task.depth, left[0], left[1], left[2]);
-        if (right) {
-            placeChild(task.outputNode, 'right', task.depth, right[0], right[1], right[2]);
+
+        const leftChild = placeChild(outputNode, NODE_WORD.leftIndex, NODE_WORD.leftCount, leftIndex, leftCount, fromInput);
+        let rightChild = NOT_A_NODE;
+        if (fromInput && rightIndex === TOPOLOGY_EMPTY_CHILD) {
+            if (outputNode !== 0 || triangleCount !== 1) throw new RangeError('only the root of a one-triangle mesh may have an empty child');
+            nodeWords[outputNode * BVH_NODE_WORDS + NODE_WORD.rightIndex] = EMPTY_CHILD_INDEX;
+            nodeWords[outputNode * BVH_NODE_WORDS + NODE_WORD.rightCount] = 0;
         } else {
-            if (task.outputNode !== 0 || triangleCount !== 1) throw new RangeError('only the root of a one-triangle mesh may have an empty child');
-            const base = task.outputNode * BVH_NODE_WORDS;
-            nodeWords[base + NODE_WORD.rightIndex] = EMPTY_CHILD_INDEX;
-            nodeWords[base + NODE_WORD.rightCount] = 0;
+            rightChild = placeChild(outputNode, NODE_WORD.rightIndex, NODE_WORD.rightCount, rightIndex, rightCount, fromInput);
         }
-        // placeChild pushed left then right; swap so left pops first.
-        if (pending.length - pendingBefore === 2) {
-            const last = pending.length - 1;
-            [pending[last - 1], pending[last]] = [pending[last], pending[last - 1]];
-        }
+        // Right is queued first, so the left subtree is walked (and numbered) first.
+        if (rightChild !== NOT_A_NODE) queue(rightChild, depth + 1, rightIndex, rightCount, fromInput);
+        if (leftChild !== NOT_A_NODE) queue(leftChild, depth + 1, leftIndex, leftCount, fromInput);
     }
     for (let position = 0; position < triangleCount; position++) {
         if (!coveredPositions[position]) throw new RangeError(`position ${position} is in no leaf`);
     }
 
-    const nodeFloats = new Float32Array(nodeBuffer);
-    const bounds = computeBoxes(nodeFloats, nodeWords, nodeCount, geometry.positions, checked, order);
+    const triangles = packTriangles(geometry, checked, order);
+    const bounds = computeBoxes(new Float32Array(nodeBuffer), nodeWords, nodeCount, new Float32Array(triangles));
 
     return {
         nodes: nodeBuffer.slice(0, nodeCount * BVH_NODE_BYTES),
-        triangles: packTriangles(geometry, checked, order),
+        triangles,
         parents: parents.slice(0, nodeCount),
         nodeCount,
         triangleCount,
@@ -163,66 +188,107 @@ function checkOrder(order: Uint32Array, triangleCount: number): void {
  * Writes every child box, last node first: a leaf's box is around its
  * triangles' corners, an inner child's box around that child's two boxes
  * (already done, since children come after their parents). Returns the root box.
+ *
+ * Leaf corners are read from the packed triangles (`triangleFloats`, in tree
+ * order), which hold the input's f32 corners unchanged. A leaf's triangles sit
+ * side by side there, which is much faster than looking each one up through the
+ * order and the index buffer. Taking the min and max of f32 values is exact, so
+ * the boxes come out the same either way.
  */
-function computeBoxes(
-    nodeFloats: Float32Array,
-    nodeWords: Uint32Array,
-    nodeCount: number,
-    positions: Float32Array,
-    checked: CheckedGeometry,
-    order: Uint32Array,
-): Float32Array {
-    const box = new Float32Array(6);
-    const resetBox = (): void => {
-        box[0] = box[1] = box[2] = Infinity;
-        box[3] = box[4] = box[5] = -Infinity;
-    };
-    const growByChild = (node: number, minWord: number, maxWord: number): void => {
-        const base = node * BVH_NODE_WORDS;
-        for (let axis = 0; axis < 3; axis++) {
-            const low = nodeFloats[base + minWord + axis];
-            const high = nodeFloats[base + maxWord + axis];
-            if (low < box[axis]) box[axis] = low;
-            if (high > box[3 + axis]) box[3 + axis] = high;
-        }
-    };
-    // Per side: [index word, count word, min word, max word]. Plain numbers, so the loop allocates nothing.
-    const sides = [
-        [NODE_WORD.leftIndex, NODE_WORD.leftCount, NODE_WORD.leftMin, NODE_WORD.leftMax],
-        [NODE_WORD.rightIndex, NODE_WORD.rightCount, NODE_WORD.rightMin, NODE_WORD.rightMax],
-    ];
+function computeBoxes(nodeFloats: Float32Array, nodeWords: Uint32Array, nodeCount: number, triangleFloats: Float32Array): Float32Array {
     for (let node = nodeCount - 1; node >= 0; node--) {
         const base = node * BVH_NODE_WORDS;
-        for (let side = 0; side < 2; side++) {
-            const [indexWord, countWord, minWord, maxWord] = sides[side];
-            const index = nodeWords[base + indexWord];
-            if (index === EMPTY_CHILD_INDEX) continue;
-            const count = nodeWords[base + countWord];
-            resetBox();
-            if (count > 0) {
-                for (let position = index; position < index + count; position++) growBoxByTriangle(box, 0, positions, checked, order[position]);
-            } else {
-                growByChild(index, NODE_WORD.leftMin, NODE_WORD.leftMax);
-                if (nodeWords[index * BVH_NODE_WORDS + NODE_WORD.rightIndex] !== EMPTY_CHILD_INDEX) {
-                    growByChild(index, NODE_WORD.rightMin, NODE_WORD.rightMax);
-                }
-            }
-            for (let axis = 0; axis < 3; axis++) {
-                nodeFloats[base + minWord + axis] = box[axis];
-                nodeFloats[base + maxWord + axis] = box[3 + axis];
-            }
+        writeChildBox(nodeFloats, nodeWords, triangleFloats, base, NODE_WORD.leftIndex, NODE_WORD.leftCount, NODE_WORD.leftMin, NODE_WORD.leftMax);
+        if (nodeWords[base + NODE_WORD.rightIndex] !== EMPTY_CHILD_INDEX) {
+            writeChildBox(nodeFloats, nodeWords, triangleFloats, base, NODE_WORD.rightIndex, NODE_WORD.rightCount, NODE_WORD.rightMin, NODE_WORD.rightMax);
         }
     }
-    resetBox();
-    growByChild(0, NODE_WORD.leftMin, NODE_WORD.leftMax);
-    if (nodeWords[NODE_WORD.rightIndex] !== EMPTY_CHILD_INDEX) growByChild(0, NODE_WORD.rightMin, NODE_WORD.rightMax);
-    return Float32Array.from(box);
+    const root = new Float32Array(6);
+    writeUnionOfChildBoxes(nodeFloats, nodeWords, 0, root, 0, 3);
+    return root;
 }
 
 /**
- * Builds a mesh BVH with tinybvh's binned SAH builder (WASM, from @pmndrs/bvh):
- * tinybvh decides the tree's shape, and {@link buildMeshBvhFromTopology} writes
- * our layout. `tinyBvh` comes from `createTinyBvhBuilder()`; one build at a time.
+ * Writes the box around `node`'s child boxes into `target` (min at `minAt`, max
+ * at `maxAt`). Compares the same way as the leaf loop, starting from an empty
+ * box, so the result is bit-for-bit what growing a box child by child gives.
+ */
+function writeUnionOfChildBoxes(nodeFloats: Float32Array, nodeWords: Uint32Array, node: number, target: Float32Array, minAt: number, maxAt: number): void {
+    const base = node * BVH_NODE_WORDS;
+    // Only the root of a one-triangle mesh has no right child.
+    const hasRight = nodeWords[base + NODE_WORD.rightIndex] !== EMPTY_CHILD_INDEX;
+    for (let axis = 0; axis < 3; axis++) {
+        let low = Infinity;
+        let high = -Infinity;
+        const leftLow = nodeFloats[base + NODE_WORD.leftMin + axis];
+        const leftHigh = nodeFloats[base + NODE_WORD.leftMax + axis];
+        if (leftLow < low) low = leftLow;
+        if (leftHigh > high) high = leftHigh;
+        if (hasRight) {
+            const rightLow = nodeFloats[base + NODE_WORD.rightMin + axis];
+            const rightHigh = nodeFloats[base + NODE_WORD.rightMax + axis];
+            if (rightLow < low) low = rightLow;
+            if (rightHigh > high) high = rightHigh;
+        }
+        target[minAt + axis] = low;
+        target[maxAt + axis] = high;
+    }
+}
+
+/**
+ * Computes and stores the box of one child of the node at word `base`, on the
+ * side whose words are given. A leaf's box uses plain local variables, not a
+ * scratch array: this runs millions of times on a big mesh.
+ */
+function writeChildBox(
+    nodeFloats: Float32Array,
+    nodeWords: Uint32Array,
+    triangleFloats: Float32Array,
+    base: number,
+    indexWord: number,
+    countWord: number,
+    minWord: number,
+    maxWord: number,
+): void {
+    const index = nodeWords[base + indexWord];
+    const count = nodeWords[base + countWord];
+    if (count === 0) {
+        // An inner child: the box around its own two child boxes (written already).
+        writeUnionOfChildBoxes(nodeFloats, nodeWords, index, nodeFloats, base + minWord, base + maxWord);
+        return;
+    }
+    let minX = Infinity;
+    let minY = Infinity;
+    let minZ = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    let maxZ = -Infinity;
+    const end = (index + count) * TRIANGLE_WORDS;
+    for (let triangle = index * TRIANGLE_WORDS; triangle < end; triangle += TRIANGLE_WORDS) {
+        for (let at = triangle + TRIANGLE_WORD.vertex0; at <= triangle + TRIANGLE_WORD.vertex2; at += CORNER_STRIDE) {
+            const x = triangleFloats[at];
+            const y = triangleFloats[at + 1];
+            const z = triangleFloats[at + 2];
+            if (x < minX) minX = x;
+            if (x > maxX) maxX = x;
+            if (y < minY) minY = y;
+            if (y > maxY) maxY = y;
+            if (z < minZ) minZ = z;
+            if (z > maxZ) maxZ = z;
+        }
+    }
+    nodeFloats[base + minWord] = minX;
+    nodeFloats[base + minWord + 1] = minY;
+    nodeFloats[base + minWord + 2] = minZ;
+    nodeFloats[base + maxWord] = maxX;
+    nodeFloats[base + maxWord + 1] = maxY;
+    nodeFloats[base + maxWord + 2] = maxZ;
+}
+
+/**
+ * Builds a mesh BVH with tinybvh's builder (WASM, from @pmndrs/bvh): tinybvh
+ * decides the tree's shape, and {@link buildMeshBvhFromTopology} writes our
+ * layout. `tinyBvh` comes from `createTinyBvhBuilder()`; one build at a time.
  */
 export function buildMeshBvhWithTinyBvh(geometry: MeshGeometry, tinyBvh: TinyBvhBuilder, options: MeshTreeTopologyOptions = {}): MeshBvh {
     const { topology } = tinyBvh.build(geometry);
