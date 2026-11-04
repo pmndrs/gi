@@ -21,6 +21,27 @@ Rules:
 
 ---
 
+## 2026-11-04 · T1.1 · implementer (opus); Opus review failed, fixed, re-review passed; done
+Did (e98d543, fixes 8e5373c):
+- One sky file per manifest: `node tools/sky/generate.ts` writes `scenes/sky/<id>.exr` (half-float, about 50 kB, committed) plus a JSON sidecar. The model is Preetham 1999 from the paper, with no sun disc. The brightness uses the Ineichen–Perez clear-sky ratio (DECISIONS).
+- Readers of the file: the viewer's sky dome (surfaces still get no environment light); Cycles' Environment Texture; native's flat equivalent (DECISIONS); and an engine-free platform loader (`scenes/src/sky/sky-texture.ts`, rgba16float).
+- New `open-ground` scene. GPU page `sky-orientation`.
+Verified (both reviews re-ran these):
+- `generate.ts --check`: 5 skies, calibration error 0.000%. lint, typecheck and test pass (557).
+- `sky-orientation`, 8 directions, worst error: RTX 3060 0.021%, Intel UHD 0.008% (headless Chrome 156). It uses the viewer's own loader and sky dome.
+- Cycles `--calibrate`: 0.00–0.05%, including the sky on a floor (E/π).
+- Open ground, bookmark 1, Cycles 1024 spp against the analytic answer: R −0.03%, G −0.01%, B −0.01%.
+- Sponza bookmark 1, probe-grid technique: no longer blue (`bench/screenshots/t1.1-before|after/sponza.png`, lead looked). But the shadows are near black at 0 EV, and no number checks the probe grid's sky light against Cycles. The exposure question went to Dennis.
+Not met as first written: the viewer leg. three's PMREM environment diffuse, which the viewer doesn't use, measured against Cycles:
+- diffuse-only material: bias −0.65% (limit ±0.5%), mean relative error 0.650%, p95 8×8 block error 0.530%; per channel against analytic R −0.04%, G −0.61%, B −0.97%;
+- standard material: +1.05%, mean relative error 1.046%, p95 block error 1.442%.
+The check was redefined (DECISIONS); sky-lighting accuracy is now T1.4's.
+Not verified: a native harness run (only the generated ini was checked); the viewer baselines weren't re-measured with the new sky.
+Numbers:
+- Sky-to-sun ratio on the ground (diffuse fraction of all daylight): sponza 0.123 (11.0%), courtyard-tree 0.132 (11.6%), bistro-exterior 0.137 (12.0%), furnished-room 0.152 (13.2%), open-ground 0.167 (14.3%).
+- Sponza Cycles bookmark 1 means: old Nishita sky 0.0346 (indirect 0.00491); shared sky, 256 spp, 0.0174 (indirect 0.00218). The sun glow is 3.08× the opposite sky.
+Next: T1.4 (the platform's sky irradiance within ±0.5%, the procedural type through the same code, the equirect layout in the contract); T1.10 re-renders Sponza's reference with the curtains.
+
 ## 2026-11-04 · T1.2 · implementer (opus); Opus review: pass with notes, fixed; done
 Did: `PlatformScene` (SceneApi and SceneCopy) in `packages/ddgi-core/src/platform/scene/`, commit 73f99e6.
 - Two storage buffers: vertex data, and one table buffer (header, instance, mesh, material and light records, per-instance material lists).

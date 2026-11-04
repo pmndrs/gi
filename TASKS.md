@@ -258,7 +258,7 @@ Rules for every M1 task:
 
 | ID | Task | Agent | Size | Depends on | Status |
 | --- | --- | --- | --- | --- | --- |
-| T1.1 | Shared sky | implementer | S | none | review (fixes in; re-review running) |
+| T1.1 | Shared sky | implementer | S | none | done (Opus re-review passed; viewer check redefined, DECISIONS) |
 | T1.2 | Platform scene copy | implementer | M | none | done (Opus review passed with notes, all fixed; both GPUs) |
 | T1.3 | Tracer as a platform module | implementer | M | T1.2 (B0 as built) | active (implementer, 2026-11-04) |
 | T1.4 | Hit shading | implementer | M | T1.1, T1.3 | todo |
@@ -288,7 +288,7 @@ Done-whens for the B stages are in `docs/design/bvh-framework.md`. B1a's: a 10k-
 - **T1.1 Shared sky.**
   - One sky definition becomes one HDR sky file, made by a script from the manifest (sun direction, turbidity). Its brightness is set so the sky lights a flat open ground with a stated, realistic share of the sun's light.
   - The viewer, Cycles, the native harness and the platform's environment all read that same file.
-  - Done when an open-ground test scene lit only by the sky renders within the reference tolerance in the viewer and in Cycles, and Sponza's probe-grid view is no longer blue.
+  - Done when an open-ground test scene lit only by the sky renders within the reference tolerance in Cycles, the viewer shows the same sky file the right way round, and Sponza's probe-grid view is no longer blue. (Changed 2026-11-04, DECISIONS: the viewer never lights surfaces with three's environment, so sky-lighting accuracy is checked on the platform's own sky irradiance in T1.4.)
 - **T1.2 Platform scene copy.**
   - `SceneApi` is implemented: meshes with optional normals and uvs, constant-colour materials (metalness already folded in by the adapter), instances, lights and environment, with changes queued and uploaded inside `encode`.
   - Binding budget (`docs/api/platform.md`, "After T0.10"): the scene copy and hit shading use at most 2 storage buffers together. Vertex attributes share one buffer; instances, materials and lights share one table buffer.

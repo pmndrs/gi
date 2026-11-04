@@ -169,6 +169,14 @@ One bullet per fact, each with its source. Add a bullet when something cost you 
 - **The references are pure Lambert; three's standard material isn't.** `scenes/src/three-scene.ts` uses `MeshStandardMaterial` (roughness 1, metalness 0, F0 0.04). That adds a rough specular lobe the Cycles and path-tracer references lack, worth a few percent of the full image. When comparing the viewer against a reference, render with `specularIntensity = 0`, or measure the gap first, so the GI error isn't mixed with material error. Source: T0.7 Opus review.
 - **`@pmndrs/denoiser` is not on npm.** Build steps are in `tools/reference/README.md`.
 
+## Sky (T1.1)
+
+- **Radiance `.hdr` readers disagree:** three's HDRLoader reads the mantissa as m/255, stb_image as m/256, Blender as (m+0.5)/256, up to 0.4% apart. Use half-float EXR for shared HDR data. Source: `HDRLoader.js:358`.
+- **three's PMREM against a cosine integral:** under the open-ground sky, PMREM environment diffuse on flat ground reads R/G/B −0.04/−0.61/−0.97% (diffuse-only material).
+- **Blender's equirect matches three's `equirectUV`** after the (x, −z, y) axis mapping, with no rotation. `--calibrate` checks it to 0.00%.
+- **three's EXRLoader** stores rows bottom-up with `flipY` false, so `equirectUV` reads it the right way up. Source: `EXRLoader.js:2469`.
+- **Native harness sky:** one constant `skyRadiance` in ProbeTraceRGS, PathTraceRGS and GBufferRGS. There's no texture path, and nothing tells rays above the horizon from rays below.
+
 ## Platform scene copy (T1.2)
 
 - **Scene copy memory:** octahedral normals (4 bytes) and 16-bit indices for meshes with at most 65,536 vertices. Intel Sponza (2.05 M vertices, 3.75 M triangles) takes 87.7 MB. Bistro exterior takes 111.4 MB, which fits the 128 MB default binding only because of the octahedral normals. uv1 costs 16 MB on Sponza, so adapters should pass `uvs1` only when a material samples channel 1.
