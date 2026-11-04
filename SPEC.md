@@ -399,7 +399,7 @@ You sign off before the next milestone starts.
   - the native RTXGI fork as a submodule.
 
   The old repo is left untouched.
-- **Workspace setup:** the package layout above, TypeScript, lint (including the core's no-engine-imports rule), formatting, and a Playwright-based GPU test runner as a normal dev dependency with `--gpu nvidia|intel`.
+- **Workspace setup:** the package layout above, TypeScript, lint (including the core's no-engine-imports rule), formatting, and a headless-Chrome GPU test runner driven over the DevTools protocol (the `@pmndrs/upscaler` approach) with `--gpu nvidia|intel`.
 - **Test-scene manifests:** how to build or load each test scene (code, or model files plus placement), units, cameras, lights and volume bounds, read by the viewer, the native harness and the reference renderers. Scenes: Cornell, two-rooms, Sponza, Bistro, and a furnished interior.
 - **Native harness:**
   - GPU picked by setting instead of a hard-coded "RTX 3060".
