@@ -14,6 +14,7 @@
         "typecheck": "tsc --noEmit",
         "test": "vitest run",
         "test:gpu": "node tools/gpu/run.ts",
+        "device:serve": "node tools/gpu/serve-lan.ts",
         "assets:fetch": "node tools/assets/fetch.ts",
         "scenes:export": "pnpm --filter @pmndrs/ddgi-scenes export"
     },

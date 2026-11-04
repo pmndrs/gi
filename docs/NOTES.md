@@ -42,6 +42,8 @@ One bullet per fact, each with its source. Add a bullet when something cost you 
 
 ## Tooling and environment
 
+- **One GPU benchmark at a time.** Before any timing run, take the lock with `mkdir "$TEMP/ddgi-gpu-bench.lock"`. If the folder already exists, someone else is timing, so wait and retry. Remove the folder when done, even on failure. Correctness runs (smoke tests, pixel readbacks) don't need the lock. Never time native and browser GPU work at the same time. Source: main session, M0.
+- **WebGPU needs a secure context.** `http://<LAN IP>` pages get no `navigator.gpu`, so pages for the Mac and iOS devices must be served over HTTPS, and a self-signed certificate is fine. `localhost` counts as secure. Source: the WebGPU spec (secure-context only).
 - **GPUs on this laptop:** Playwright or headless Chrome with `powerPreference: 'high-performance'` gets the RTX 3060 Laptop. The Claude desktop browser pane got the Intel iGPU. Source: the audit, 2026-10-30.
 - **Worktrees read slow:** benchmarks run from a git worktree read about 3× slower in absolute GPU time. Compare A/B only within one environment. Source: the `@pmndrs/upscaler` CLAUDE.md.
 - **`node_modules` symlinks:** a symlinked `node_modules` in a worktree isn't matched by `node_modules/` in `.gitignore`. Add a slash-less `node_modules` to `.git/info/exclude`. Source: the `@pmndrs/upscaler` CLAUDE.md.
