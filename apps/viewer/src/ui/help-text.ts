@@ -50,7 +50,8 @@ export const HELP = {
         'Draws the picture at a lower resolution and rebuilds it to full size with @pmndrs/upscaler, which saves GPU time. Works with No GI and the light probe grid; VXGI has its own anti-aliasing, so this is switched off while VXGI is on screen.',
     upscaleQuality: 'How much smaller the picture is drawn. Quality is a little smaller and looks nearly sharp; Ultra performance is much smaller and softer.',
     statsToggle:
-        "Shows the frame time, the GPU time of one frame, and what DDGI is doing (probes updated, its GPU time, memory, the adapter's CPU time). Hover over a line in that box for what it means. GPU times need a GPU that supports timestamps.",
+        "Shows the frame time, the GPU time of one frame, and what DDGI is doing (probes updated, its GPU time, memory, the adapter's CPU time). 'What the stats mean', just below, explains each line. GPU times need a GPU that supports timestamps.",
+    statsExplain: 'What each line of the stats box (top left of the picture) means.',
     panelHide: 'Hides this panel so the picture fills the window. Press H, or the button at the top right, to bring it back.',
     wipeLine: 'Drag this line left or right to compare the two techniques.',
 
@@ -60,7 +61,7 @@ export const HELP = {
     statsProbes:
         'How many DDGI probes were updated in the last frame, out of all of them. The budget decides how many fit; at that rate every probe gets its turn this often.',
     statsDdgiUpdate:
-        "GPU time of DDGI's probe update per frame: tracing rays from the probes, blending the results into the probes, and writing them out for drawing. This is the number the budget controls (target 2 ms).",
+        "GPU time of all of DDGI's passes in a frame: tracing rays from the probes (trace), blending the results into the probes (blend), writing them out for drawing (write), and, while GPU timing is on, a small pass that counts probes per state for these stats (census). The budget you chose is shown beside it. DDGI picks how many probes to update from costs it measured a few frames earlier, so the number can go over the budget for a while.",
     statsRefit:
         "GPU time to bring the ray-tracing tree up to date with where every object is, every frame. Cheap for a still scene; it matters once things move.",
     statsMemory:

@@ -12,7 +12,7 @@ import type { NavigationMode } from '../controls/camera-rig';
 import { TECHNIQUE_LABELS, type GiTechniqueId, type TechniqueId, type UpscaleQuality } from '../techniques/types';
 import { h } from './dom';
 import { DEFAULT_HELP, HELP, type HelpKey } from './help-text';
-import { MAX_BUDGET_MS, MIN_BUDGET_MS, type DdgiScreenViewName, type GiChoice } from './url-state';
+import { MAX_BUDGET_MS, MAX_EXPOSURE_EV, MIN_BUDGET_MS, type DdgiScreenViewName, type GiChoice } from './url-state';
 
 export interface DdgiPanelSettings {
     budgetMs: number;
@@ -95,6 +95,18 @@ const SCREEN_VIEW_LABELS: Record<DdgiScreenViewName | 'none', string> = {
 
 const PROBE_BUDGETS = [100, 300, 600, 1500, 3000];
 
+/** The stats box's lines, as they are labelled there, with their explanations. */
+const STATS_LINES: ReadonlyArray<readonly [string, HelpKey]> = [
+    ['frame', 'statsFrame'],
+    ['GPU per frame', 'statsGpu'],
+    ['probes updated', 'statsProbes'],
+    ['update (GPU)', 'statsDdgiUpdate'],
+    ['top-level refit (GPU)', 'statsRefit'],
+    ['GPU memory', 'statsMemory'],
+    ['adapter (CPU)', 'statsSync'],
+    ['active, off, not updated yet', 'statsStates'],
+];
+
 /** Every technique, in the order the selectors list them. */
 const WIPE_CHOICES: readonly TechniqueId[] = ['ddgi', 'lpg', 'vxgi', 'none', 'cycles'];
 const GI_CHOICES: readonly GiTechniqueId[] = ['ddgi', 'lpg', 'vxgi'];
@@ -130,7 +142,7 @@ export class Panel {
     private readonly navButtons = new Map<NavigationMode, HTMLInputElement>();
     private readonly flySpeed = h('input', { type: 'range', min: -1, max: 2.5, step: 0.01 });
     private readonly fov = h('input', { type: 'range', min: 30, max: 110, step: 1 });
-    private readonly exposure = h('input', { type: 'range', min: -4, max: 6, step: 0.1 });
+    private readonly exposure = h('input', { type: 'range', min: -MAX_EXPOSURE_EV, max: MAX_EXPOSURE_EV, step: 0.1 });
     private readonly exposureValue = h('span', { className: 'value' });
     private readonly toneSelect = h('select');
     private readonly referenceCube = h('input', { type: 'checkbox' });
@@ -354,8 +366,18 @@ export class Panel {
             {},
             h('h2', { text: 'Display' }),
             withHelp(h('label', { className: 'inline' }, this.statsToggle, ' Show frame time, GPU time and DDGI stats'), 'statsToggle'),
+            this.statsExplanation(),
             hide,
         );
+    }
+
+    /**
+     * What each line of the stats box means. The box itself lets the mouse through, so dragging
+     * over it always moves the camera; its explanations live here instead.
+     */
+    private statsExplanation(): HTMLElement {
+        const entries = STATS_LINES.map(([name, key]) => h('div', { className: 'stat-explained' }, h('b', { text: name }), ` ${HELP[key]}`));
+        return withHelp(h('details', { className: 'small' }, h('summary', { text: 'What the stats mean' }), ...entries), 'statsExplain');
     }
 
     // -- events ------------------------------------------------------------

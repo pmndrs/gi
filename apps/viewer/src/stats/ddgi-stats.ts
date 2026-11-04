@@ -1,7 +1,8 @@
 /**
  * The DDGI lines of the stats overlay, kept free of the DOM and of the
- * library so they can be tested. Each line carries the key of its hover help
- * (`ui/help-text.ts`).
+ * library so they can be tested. Each line carries the key of the help text
+ * that explains it (`ui/help-text.ts`, listed in the panel). Frames are added
+ * every frame; the lines are built only when the overlay redraws.
  *
  * Numbers that change every frame are smoothed (`SmoothedValue`), as the
  * frame time is: one that rewrites itself 60 times a second can't be read.
@@ -9,11 +10,13 @@
 
 import { SmoothedValue } from './format-stats.ts';
 
-/** One DDGI frame as the overlay needs it (a plain copy of `DdgiTechnique.statsSnapshot()`). */
+/** One DDGI frame as the overlay needs it (the shape of `DdgiTechnique.statsSnapshot()`). */
 export interface DdgiFrameStats {
     probeCount: number;
     probesUpdated: number;
-    /** GPU ms of DDGI's update passes, by short name (`trace`, `blend`, `write`); empty without timestamps. */
+    /** The update budget the user chose, GPU ms per frame. */
+    budgetMs: number;
+    /** GPU ms of DDGI's passes, by short name (`trace`, `blend`, `write`, `census`); empty without timestamps. */
     updatePasses: ReadonlyMap<string, number>;
     /** GPU ms of the platform's own passes (`top-level refit`); empty without timestamps. */
     platformPasses: ReadonlyMap<string, number>;
@@ -22,8 +25,8 @@ export interface DdgiFrameStats {
     memory: { sceneCopy: number; acceleration: number; techniques: Readonly<Record<string, number>>; total: number };
     syncCpuMs: number;
     encodeCpuMs: number;
-    /** Probes per state, e.g. `{ 'probes active': 812 }`; empty until the GPU census arrives. */
-    states: Readonly<Record<string, number>>;
+    /** Probes per state, in state order (`active 812`); empty until the GPU census arrives. */
+    states: ReadonlyArray<{ readonly label: string; readonly count: number }>;
 }
 
 export type DdgiStatsHelpKey = 'statsProbes' | 'statsDdgiUpdate' | 'statsRefit' | 'statsMemory' | 'statsSync' | 'statsStates';
@@ -85,7 +88,8 @@ export class DdgiStatsText {
         if (passes.length > 0) {
             const total = passes.reduce((sum, [, ms]) => sum + ms, 0);
             const breakdown = passes.map(([name, ms]) => `${name} ${ms.toFixed(2)}`).join(', ');
-            lines.push({ text: `  update (GPU)    ${milliseconds(total)}  (${breakdown})`, help: 'statsDdgiUpdate' });
+            // The budget beside the number, so an overshoot shows.
+            lines.push({ text: `  update (GPU)    ${milliseconds(total)} (budget ${frame.budgetMs.toFixed(2)})  ${breakdown}`, help: 'statsDdgiUpdate' });
         } else if (frame.timingsPending) {
             lines.push({ text: '  update (GPU)    measuring...', help: 'statsDdgiUpdate' });
         } else {
@@ -107,9 +111,8 @@ export class DdgiStatsText {
             help: 'statsSync',
         });
 
-        const states = Object.entries(frame.states);
-        if (states.length > 0) {
-            lines.push({ text: `  ${states.map(([name, count]) => `${name.replace(/^probes /, '')} ${count.toLocaleString('en')}`).join(', ')}`, help: 'statsStates' });
+        if (frame.states.length > 0) {
+            lines.push({ text: `  ${frame.states.map((state) => `${state.label} ${state.count.toLocaleString('en')}`).join(', ')}`, help: 'statsStates' });
         }
         return lines;
     }
@@ -117,7 +120,8 @@ export class DdgiStatsText {
 
 /** Adds this frame's value of each name; names missing this frame drop out. */
 function smoothInto(target: Map<string, SmoothedValue>, values: ReadonlyMap<string, number>): void {
-    for (const name of [...target.keys()]) if (!values.has(name)) target.delete(name);
+    // Deleting the entry being visited is safe in a Map iteration (and copies nothing).
+    for (const name of target.keys()) if (!values.has(name)) target.delete(name);
     for (const [name, value] of values) {
         let smoothed = target.get(name);
         if (!smoothed) {

@@ -34,14 +34,15 @@ import {
     createGI,
     DDGI_DEBUG_VIEW,
     DDGITechnique,
+    PROBE_STATE_LABELS,
     ThreeGI,
     type DebugView,
     type EnvironmentDescriptor,
     type FrameBudget,
     type GIPlatform,
-    type MemoryReport,
 } from '../ddgi/library';
 import { ProbeSpheres } from '../ddgi/probe-spheres';
+import type { DdgiFrameStats } from '../stats/ddgi-stats';
 import { LAYER_DDGI, LAYER_DDGI_PROBES } from '../scene/layers';
 import { ScenePassTechnique } from './scene-pass-technique';
 import type { TechniqueContext } from './types';
@@ -82,23 +83,29 @@ const EXPECTED_WARNING = 'RectAreaLight is not mirrored into GI';
 
 type Phase = 'preparing' | 'building' | 'warming' | 'ready' | 'failed';
 
-/** What the stats overlay shows for DDGI, as of the latest frame. */
-export interface DdgiStatsSnapshot {
-    probeCount: number;
-    probesUpdated: number;
-    /** GPU ms of DDGI's update passes (`ddgi/*`), by pass name without the prefix; empty without timestamps. */
+/**
+ * What the stats overlay shows for DDGI, as of the latest frame. One object per technique,
+ * refilled each frame (`statsSnapshot`), so drawing stats allocates nothing of its own.
+ */
+export type DdgiStatsSnapshot = DdgiFrameStats & {
     updatePasses: Map<string, number>;
-    /** GPU ms of the platform's own per-frame work (`platform/*`, the top-level tree refit), by pass name. */
     platformPasses: Map<string, number>;
-    /** True while the newest GPU timings still belong to the warm-up (the pass maps are then empty). */
     timingsPending: boolean;
-    memory: MemoryReport;
-    /** The adapter's CPU time in the last update: the scene sync, then the platform's encode and submit. */
-    syncCpuMs: number;
-    encodeCpuMs: number;
-    /** Probes per state from the GPU census (needs timestamps); empty until the first arrives. */
-    states: Record<string, number>;
-}
+    states: Array<{ label: string; count: number }>;
+};
+
+/**
+ * Where each probe state's count is in `DDGITechnique.counters`: the core names those
+ * counters "probes " + the state's label (`PROBE_STATE_LABELS`) and exports no constant for
+ * them, so this table is the one place in the viewer that relies on that. A count that
+ * isn't there reads as unknown, never as a guess.
+ */
+const STATE_COUNTERS: ReadonlyArray<{ readonly state: number; readonly label: string; readonly counter: string }> = Object.entries(PROBE_STATE_LABELS).map(
+    ([state, label]) => ({ state: Number(state), label, counter: `probes ${label}` }),
+);
+
+/** The counter DDGI reports its probes-per-frame under. */
+const PROBES_UPDATED_COUNTER = 'probes updated';
 
 /** Start-up times, milliseconds from when the technique was created. Null until reached. */
 export interface DdgiStartupTimes {
@@ -140,6 +147,18 @@ export class DdgiTechnique extends ScenePassTechnique {
     private warmupEndFrame = 0;
     private disposed = false;
     private readonly warnings = new Set<string>();
+    private readonly snapshot: DdgiStatsSnapshot = {
+        probeCount: 0,
+        probesUpdated: 0,
+        budgetMs: 0,
+        updatePasses: new Map(),
+        platformPasses: new Map(),
+        timingsPending: false,
+        memory: { sceneCopy: 0, acceleration: 0, techniques: {}, total: 0 },
+        syncCpuMs: 0,
+        encodeCpuMs: 0,
+        states: [],
+    };
 
     constructor(context: TechniqueContext, settings: DdgiViewerSettings = DEFAULT_DDGI_VIEWER_SETTINGS) {
         super(context);
@@ -172,7 +191,10 @@ export class DdgiTechnique extends ScenePassTechnique {
             environment: environmentFor(loaded.manifest),
             warn: (message) => this.warn(message),
         });
-        this.placeLight();
+        // The adapter puts its light on every layer; here only DDGI's camera may see it, so the other
+        // techniques in a wipe (and the probe grid's bake cameras on layer 0) get no DDGI light.
+        // The adapter keeps the layers when it replaces the light.
+        this.threeGI.light.layers.set(LAYER_DDGI);
 
         const points = this.ddgi.debugViews.find((view): view is Extract<DebugView, { kind: 'points' }> => view.kind === 'points');
         if (points) {
@@ -210,7 +232,6 @@ export class DdgiTechnique extends ScenePassTechnique {
         threeGI.budget = { paused: true };
         threeGI.update(this.camera, 0);
         threeGI.budget = this.budget;
-        this.placeLight();
     }
 
     private beginWarmup(): void {
@@ -281,8 +302,7 @@ export class DdgiTechnique extends ScenePassTechnique {
         this.threeGI.budget = { units: Math.min(this.probeCount, this.ddgi.settings.maxProbesPerFrame) };
         this.threeGI.update(this.camera, 0);
         this.threeGI.budget = this.budget;
-        this.placeLight();
-        this.warmupProbeUpdates += this.ddgi.counters['probes updated'] ?? 0;
+        this.warmupProbeUpdates += this.ddgi.counters[PROBES_UPDATED_COUNTER] ?? 0;
         const outOfTime = performance.now() - this.warmupStartedAt > WARMUP_MAX_SECONDS * 1000 && this.warmupPasses >= WARMUP_MIN_PASSES;
         if (this.warmupPasses >= WARMUP_PASSES || outOfTime) {
             this.ddgi.settings.hysteresis = this.targetHysteresis;
@@ -343,27 +363,11 @@ export class DdgiTechnique extends ScenePassTechnique {
 
     // -- the frame ---------------------------------------------------------
 
-    /**
-     * Keeps the GI light on DDGI's layer, and its coverage off. The adapter replaces the light
-     * when the shading module changes shape, and a new light starts on layer 0, which the probe
-     * grid's bake cameras would see. Coverage only matters where the light shares three's
-     * probe slot or replaces `scene.environment`'s diffuse light; in the viewer it never
-     * meets the probe grid (other layers) and there is no `scene.environment`, so the
-     * adapter's guess (it counts every LightProbeGrid in the scene) would only cost time.
-     */
-    private placeLight(): void {
-        const light = this.threeGI?.light;
-        if (!light) return;
-        if (light.layers.mask !== 1 << LAYER_DDGI) light.layers.set(LAYER_DDGI);
-        light.computeCoverage = false;
-    }
-
     renderBeforePipeline(): void {
         const threeGI = this.threeGI;
         // During warm-up the set-up steps do the updates; GI off means no GI work at all.
         if (threeGI && this.phase === 'ready' && this.giMode !== 'off') {
             threeGI.update(this.camera);
-            this.placeLight();
         }
         this.spheres?.refresh();
         const scene = this.context.loaded.scene;
@@ -397,7 +401,7 @@ export class DdgiTechnique extends ScenePassTechnique {
             case 'failed':
                 return `Could not start: ${this.failure}`;
             case 'ready': {
-                const updated = this.ddgi.counters['probes updated'] ?? 0;
+                const updated = this.ddgi.counters[PROBES_UPDATED_COUNTER] ?? 0;
                 const warm = this.finishedWallMs === null ? '' : `; warmed up in ${(this.finishedWallMs / 1000).toFixed(1)} s`;
                 return `${grid}; ${updated.toLocaleString('en')} updated last frame within ${this.settings.budgetMs} ms${warm}`;
             }
@@ -416,34 +420,52 @@ export class DdgiTechnique extends ScenePassTechnique {
         };
     }
 
-    /** The latest frame's numbers for the stats overlay, or null before the platform runs. */
+    /** The latest frame's numbers for the stats overlay, or null before the platform runs. The same object every call. */
     statsSnapshot(): DdgiStatsSnapshot | null {
-        if (!this.threeGI) return null;
+        const threeGI = this.threeGI;
+        if (!threeGI) return null;
+        const snapshot = this.snapshot;
         const stats = this.platform.stats;
-        const updatePasses = new Map<string, number>();
-        const platformPasses = new Map<string, number>();
+        snapshot.updatePasses.clear();
+        snapshot.platformPasses.clear();
         // Timings arrive a few frames late; right after the warm-up they still describe warm-up frames.
-        const timingsPending = stats.passes.some((pass) => pass.frame <= this.warmupEndFrame);
-        for (const pass of timingsPending ? [] : stats.passes) {
-            if (pass.gpuMs === undefined || !(pass.gpuMs >= 0)) continue;
-            const [owner, name] = splitPassName(pass.name);
-            const target = owner === 'ddgi' ? updatePasses : platformPasses;
-            target.set(name, (target.get(name) ?? 0) + pass.gpuMs);
+        snapshot.timingsPending = false;
+        for (const pass of stats.passes) if (pass.frame <= this.warmupEndFrame) snapshot.timingsPending = true;
+        if (!snapshot.timingsPending) {
+            for (const pass of stats.passes) {
+                if (pass.gpuMs === undefined || !(pass.gpuMs >= 0)) continue;
+                // `ddgi/trace` is DDGI's; anything else (`platform/top-level refit`) is the platform's.
+                const slash = pass.name.indexOf('/');
+                const isDdgi = slash >= 0 && pass.name.startsWith('ddgi/');
+                const target = isDdgi ? snapshot.updatePasses : snapshot.platformPasses;
+                const name = slash < 0 ? pass.name : pass.name.slice(slash + 1);
+                target.set(name, (target.get(name) ?? 0) + pass.gpuMs);
+            }
         }
         const counters = this.ddgi.counters;
-        const states: Record<string, number> = {};
-        for (const [name, value] of Object.entries(counters)) if (name.startsWith('probes ') && name !== 'probes updated') states[name] = value;
-        return {
-            probeCount: this.probeCount,
-            probesUpdated: counters['probes updated'] ?? 0,
-            updatePasses,
-            platformPasses,
-            timingsPending,
-            memory: stats.memory,
-            syncCpuMs: this.threeGI.timings.syncMs,
-            encodeCpuMs: this.threeGI.timings.encodeMs,
-            states,
-        };
+        snapshot.probeCount = this.probeCount;
+        snapshot.probesUpdated = counters[PROBES_UPDATED_COUNTER] ?? 0;
+        snapshot.budgetMs = this.settings.budgetMs;
+        snapshot.memory = stats.memory;
+        snapshot.syncCpuMs = threeGI.timings.syncMs;
+        snapshot.encodeCpuMs = threeGI.timings.encodeMs;
+        // The census needs GPU timing and arrives late: until then there are no state counts.
+        const counted = STATE_COUNTERS.every((entry) => counters[entry.counter] !== undefined);
+        snapshot.states.length = counted ? STATE_COUNTERS.length : 0;
+        if (counted) {
+            STATE_COUNTERS.forEach((entry, index) => {
+                const row = (snapshot.states[index] ??= { label: entry.label, count: 0 });
+                row.count = counters[entry.counter];
+            });
+        }
+        return snapshot;
+    }
+
+    /** How many probes are in `state` (a `PROBE_STATE` value), from the GPU census; null until it has counted. */
+    probeStateCount(state: number): number | null {
+        const entry = STATE_COUNTERS.find((candidate) => candidate.state === state);
+        const count = entry ? this.ddgi.counters[entry.counter] : undefined;
+        return count ?? null;
     }
 
     /**
@@ -455,10 +477,11 @@ export class DdgiTechnique extends ScenePassTechnique {
      */
     platformGpuMs(): number | null {
         const passes = this.platform.stats.passes;
-        if (passes.length === 0 || passes.some((pass) => pass.frame <= this.warmupEndFrame)) return null;
+        if (passes.length === 0) return null;
         let total = 0;
         for (const pass of passes) {
-            if (pass.gpuMs === undefined || !(pass.gpuMs >= 0)) return null;
+            // Still a warm-up frame's timing, or no valid timing: nothing to report yet.
+            if (pass.frame <= this.warmupEndFrame || pass.gpuMs === undefined || !(pass.gpuMs >= 0)) return null;
             total += pass.gpuMs;
         }
         return total;
@@ -472,12 +495,6 @@ export class DdgiTechnique extends ScenePassTechnique {
         this.platform.dispose();
         this.disposeTarget();
     }
-}
-
-/** `ddgi/trace` becomes `['ddgi', 'trace']`; a name with no slash belongs to the platform. */
-function splitPassName(name: string): [string, string] {
-    const slash = name.indexOf('/');
-    return slash < 0 ? ['platform', name] : [name.slice(0, slash), name.slice(slash + 1)];
 }
 
 /**

@@ -31,7 +31,7 @@ import { float, screenUV, texture, uniform, vec2, vec3, vec4 } from 'three/tsl';
 import type { Node, PerspectiveCamera } from 'three/webgpu';
 import type { CameraBookmark } from '../../../../scenes/src/manifest';
 import type { GiMode } from '../scene/layers';
-import { findReference, renderCommand, type ReferenceInfo, type ReferenceKind } from '../scene/reference-files';
+import { findReference, renderCommand, renderedSize, type ReferenceInfo, type ReferenceKind, type RenderSize } from '../scene/reference-files';
 import type { GiTechnique, TechniqueContext, TechniqueId, UpscaleSettings } from './types';
 import { copyViewerCamera, createViewCamera } from './view-camera';
 
@@ -44,7 +44,8 @@ const AT_BOOKMARK_ANGLE_DEGREES = 0.2;
 
 type ImageState =
     | { status: 'loading' }
-    | { status: 'missing' }
+    /** `size`: what the scene's other references were rendered at, for the command that makes this one. */
+    | { status: 'missing'; size: RenderSize | null }
     | { status: 'failed'; message: string }
     | { status: 'loaded'; texture: Texture; info: ReferenceInfo | null };
 
@@ -139,7 +140,7 @@ export class ReferenceImageTechnique implements GiTechnique {
     private async load(sceneId: string, cameraName: string, kind: ReferenceKind): Promise<ImageState> {
         try {
             const found = await findReference(sceneId, cameraName, kind);
-            if (!found) return { status: 'missing' };
+            if (!found) return { status: 'missing', size: await renderedSize(this.context.loaded.manifest) };
             const loader = new EXRLoader();
             // Half floats are plenty for display, and filterable everywhere.
             loader.setDataType(HalfFloatType);
@@ -221,7 +222,7 @@ export class ReferenceImageTechnique implements GiTechnique {
             case 'loading':
                 return `Loading the Cycles ${what} for ${view}`;
             case 'missing':
-                return `No Cycles reference for ${view} yet. Render it (a few minutes) with: ${renderCommand(this.context.loaded.manifest, this.bookmarkNumber)}`;
+                return `No Cycles reference for ${view} yet. Render it (a few minutes) with: ${renderCommand(this.context.loaded.manifest, this.bookmarkNumber, state.size)}`;
             case 'failed':
                 return `The Cycles reference for ${view} could not be read: ${state.message}`;
             case 'loaded': {

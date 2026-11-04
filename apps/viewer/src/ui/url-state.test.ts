@@ -24,7 +24,7 @@ describe('url state', () => {
         expect(state.gi).toBe('on');
         expect(state.wipe).toBeNull();
         expect(state.split).toBe(0.5);
-        expect(state.ev).toBe(6);
+        expect(state.ev).toBe(8);
         expect(state.upscale).toBeNull();
         expect(state.freeCamera).toBeNull();
         expect(state.budgetMs).toBe(0.25);

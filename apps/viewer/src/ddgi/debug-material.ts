@@ -15,12 +15,17 @@
 
 import { DoubleSide, NodeMaterial, type Node } from 'three/webgpu';
 import { normalWorld, positionWorld, uniform, vec4, wgsl, wgslFn } from 'three/tsl';
-import type { ShadingModule } from './library';
-import { ShadingNodes, wgslParameterType } from './shading-nodes';
+import { wgslParameterType, type ShadingModule } from './library';
+import { ShadingNodes } from './shading-nodes';
 
 const ENTRY_NAME = 'viewerDdgiDebugColor';
 
-/** A wrapper the node can call: the debug view id arrives as a float uniform and becomes the module's `u32`. */
+/**
+ * A wrapper the node can call: the debug view id arrives as a float uniform and becomes the
+ * module's `u32`. The adapter's own `entryWgsl` wraps `giIrradiance` and `giCoverage` for the GI
+ * light; this is the same construction (parameter types from the adapter's `wgslParameterType`)
+ * for `giDebugColor`, which the adapter doesn't wrap.
+ */
 function entryWgsl(shading: ShadingModule): string {
     const declarations = shading.parameters.map((parameter) => `    ${parameter.name}: ${wgslParameterType(parameter)},`).join('\n');
     const resources = shading.parameters.map((parameter) => parameter.name).join(', ');

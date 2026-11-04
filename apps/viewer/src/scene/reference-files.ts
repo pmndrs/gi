@@ -69,10 +69,40 @@ export async function findReference(sceneId: string, cameraName: string, kind: R
     return null;
 }
 
+/** A render size, in pixels. */
+export interface RenderSize {
+    width: number;
+    height: number;
+}
+
 /**
- * The command that renders a missing reference, as `tools/reference/README.md` gives it.
- * 1024 samples at 640x360 takes a few minutes on this laptop's CPU (Sponza: about 5).
+ * The size this scene's references were rendered at, read from the `cycles.json` of any of its
+ * camera views that has one (Sponza 640 x 360, Cornell 512 x 512), so a new one matches them.
+ * Null when the scene has no reference at all.
  */
-export function renderCommand(manifest: Pick<SceneManifest, 'id'>, bookmarkNumber: number): string {
-    return `node tools/reference/cycles/run.ts --scene ${manifest.id} --camera ${bookmarkNumber} --samples 1024 --width 640 --height 360`;
+export async function renderedSize(manifest: Pick<SceneManifest, 'id' | 'cameras'>): Promise<RenderSize | null> {
+    for (const camera of manifest.cameras) {
+        for (const folder of candidateFolders(manifest.id, camera.name)) {
+            try {
+                const response = await fetch(`${folder}/cycles.json`);
+                if (!response.ok || (response.headers.get('content-type') ?? '').includes('text/html')) continue;
+                const info = (await response.json()) as Partial<ReferenceInfo>;
+                if (typeof info.width === 'number' && typeof info.height === 'number') return { width: info.width, height: info.height };
+            } catch {
+                // Not there, or not readable: try the next view.
+            }
+        }
+    }
+    return null;
+}
+
+/**
+ * The command that renders a missing reference, as `tools/reference/README.md` gives it, at
+ * `size` (the scene's other references), or at the render tool's own default size (512 x 512)
+ * when the scene has none yet. 1024 samples takes a few minutes on this laptop's CPU (Sponza
+ * at 640 x 360: about 5).
+ */
+export function renderCommand(manifest: Pick<SceneManifest, 'id'>, bookmarkNumber: number, size: RenderSize | null): string {
+    const sizeFlags = size ? ` --width ${size.width} --height ${size.height}` : '';
+    return `node tools/reference/cycles/run.ts --scene ${manifest.id} --camera ${bookmarkNumber} --samples 1024${sizeFlags}`;
 }

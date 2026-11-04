@@ -20,7 +20,11 @@
  * No engine imports, so it is unit-tested.
  */
 
+import { MAX_DEFAULT_EXPOSURE_EV } from '../../../../scenes/src/manifest';
 import type { GiTechniqueId, TechniqueId, UpscaleQuality } from '../techniques/types';
+
+/** Exposure range in stops, for links and the slider: the same range a manifest's default may use. */
+export const MAX_EXPOSURE_EV = MAX_DEFAULT_EXPOSURE_EV;
 
 export type GiChoice = 'off' | 'on' | 'only';
 
@@ -111,7 +115,7 @@ export function parseUrlState(search: string): ViewerUrlState {
     if (split !== null) state.split = Math.min(1, Math.max(0, split));
 
     const ev = finiteNumber(params.get('ev'));
-    if (ev !== null) state.ev = Math.min(6, Math.max(-6, ev));
+    if (ev !== null) state.ev = Math.min(MAX_EXPOSURE_EV, Math.max(-MAX_EXPOSURE_EV, ev));
 
     state.tone = params.get('tone') ?? state.tone;
     if (params.get('nav') === 'fly') state.nav = 'fly';

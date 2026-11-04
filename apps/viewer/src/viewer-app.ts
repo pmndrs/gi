@@ -166,6 +166,7 @@ export class ViewerApp {
             this.rig.onPoseChanged(() => this.onCameraMoved());
             // Each GPU sample is one whole frame (see updateTimestamps); the overlay smooths them.
             this.stats = new StatsOverlay(document.body, 'GPU per frame, averaged over recent frames:');
+            this.stats.setExtraLines(() => this.ddgiStats.lines());
             this.panel = new Panel(document.body, this.manifests, this.panelHandlers());
             this.buildWipeLabels();
             this.installPageEvents();
@@ -611,22 +612,18 @@ export class ViewerApp {
         const shown = ddgi !== null && this.core.activeTechniques().includes(ddgi) && this.url.gi !== 'off';
         // Warm-up frames update thousands of probes each; they would swamp the averages of normal frames.
         const snapshot = shown && this.statsVisible && ddgi.running ? ddgi.statsSnapshot() : null;
-        if (!snapshot) {
-            this.ddgiStats.reset();
-            this.stats.setExtraLines([]);
-            return;
-        }
-        this.ddgiStats.add(snapshot);
-        this.stats.setExtraLines(this.ddgiStats.lines());
+        // The overlay reads the lines itself when it redraws (a few times a second), not every frame.
+        if (snapshot) this.ddgiStats.add(snapshot);
+        else this.ddgiStats.reset();
     }
 
     /** The probe legend: each state's colour and, once the GPU has counted them, how many probes are in it. */
     private probeLegend(): ProbeLegendEntry[] {
-        const states = this.core.ddgi?.statsSnapshot()?.states ?? {};
+        const ddgi = this.core.ddgi;
         return Object.entries(PROBE_STATE_LABELS).map(([state, label]) => ({
             color: PROBE_STATE_COLORS[Number(state)],
             label,
-            count: states[`probes ${label}`] ?? null,
+            count: ddgi?.probeStateCount(Number(state)) ?? null,
         }));
     }
 

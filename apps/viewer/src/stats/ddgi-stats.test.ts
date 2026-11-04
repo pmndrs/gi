@@ -5,6 +5,7 @@ function frame(overrides: Partial<DdgiFrameStats> = {}): DdgiFrameStats {
     return {
         probeCount: 19_425,
         probesUpdated: 800,
+        budgetMs: 2,
         updatePasses: new Map([
             ['trace', 1.2],
             ['blend', 0.5],
@@ -14,7 +15,7 @@ function frame(overrides: Partial<DdgiFrameStats> = {}): DdgiFrameStats {
         memory: { sceneCopy: 130_100_000, acceleration: 276_000_000, techniques: { ddgi: 9_500_000 }, total: 415_600_000 },
         syncCpuMs: 0.09,
         encodeCpuMs: 0.3,
-        states: {},
+        states: [],
         ...overrides,
     };
 }
@@ -29,7 +30,7 @@ describe('DdgiStatsText', () => {
         text.add(frame());
         const lines = text.lines().map((line) => line.text);
         expect(lines).toContain('  probes updated  800 of 19,425, each every 25 frames');
-        expect(lines).toContain('  update (GPU)    1.80 ms  (trace 1.20, blend 0.50, write 0.10)');
+        expect(lines).toContain('  update (GPU)    1.80 ms (budget 2.00)  trace 1.20, blend 0.50, write 0.10');
         expect(lines).toContain('  top-level refit (GPU)  0.02 ms');
         expect(lines).toContain('  GPU memory      416 MB  (scene 130 MB, ray tracing 276 MB, probes 9.5 MB)');
         expect(lines).toContain('  adapter (CPU)   sync 0.09 ms, record 0.30 ms');
@@ -37,7 +38,7 @@ describe('DdgiStatsText', () => {
 
     it('gives every line a hover help key', () => {
         const text = new DdgiStatsText();
-        text.add(frame({ states: { 'probes active': 700, 'probes off: inside geometry': 100 } }));
+        text.add(frame({ states: [ { label: 'active', count: 700 }, { label: 'off: inside geometry', count: 100 } ] }));
         const lines = text.lines();
         expect(lines.every((line) => line.help.startsWith('stats'))).toBe(true);
         expect(lines.at(-1)?.text).toBe('  active 700, off: inside geometry 100');
@@ -54,13 +55,19 @@ describe('DdgiStatsText', () => {
         text.add(frame({ updatePasses: new Map(), platformPasses: new Map(), timingsPending: true }));
         expect(text.lines().map((line) => line.text)).toContain('  update (GPU)    measuring...');
         text.add(frame());
-        expect(text.lines().map((line) => line.text)).toContain('  update (GPU)    1.80 ms  (trace 1.20, blend 0.50, write 0.10)');
+        expect(text.lines().map((line) => line.text)).toContain('  update (GPU)    1.80 ms (budget 2.00)  trace 1.20, blend 0.50, write 0.10');
     });
 
     it('says the top-level refit had nothing to do when nothing moved', () => {
         const text = new DdgiStatsText();
         text.add(frame({ platformPasses: new Map() }));
         expect(text.lines().map((line) => line.text)).toContain('  top-level refit (GPU)  none (nothing moved)');
+    });
+
+    it('shows the budget beside the update time, so an overshoot is plain', () => {
+        const text = new DdgiStatsText();
+        text.add(frame({ budgetMs: 2, updatePasses: new Map([['trace', 2.5], ['census', 0.4]]) }));
+        expect(text.lines().map((line) => line.text)).toContain('  update (GPU)    2.90 ms (budget 2.00)  trace 2.50, census 0.40');
     });
 
     it('smooths the numbers over frames', () => {

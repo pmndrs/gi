@@ -10,26 +10,24 @@
  * colour on to the fragment. Nothing is read back, and the spheres follow
  * relocation as it happens.
  *
- * The colours are DDGI's own debug colours (`DDGI_DEBUG_COLORS` in the core's
- * `wgsl/shading.ts`, which the "probes near this point" view also uses). The
- * core doesn't export them, so they are repeated here; keep the two in step.
+ * The colours are DDGI's own debug colours (`DDGI_DEBUG_COLORS`), the ones
+ * its "probes near this point" view uses, so the two views agree.
  */
 
 import { Mesh, SphereGeometry } from 'three';
 import { NodeMaterial, type Node } from 'three/webgpu';
 import { float, instanceIndex, int, ivec2, normalView, positionLocal, select, textureLoad, uniform, varying, vec3, vec4 } from 'three/tsl';
-import { GI_USER_DATA, PROBE_STATE, type DebugView } from './library';
+import { DDGI_DEBUG_COLORS, GI_USER_DATA, PROBE_STATE, wrapGpuTexture, type DebugView } from './library';
 import { LAYER_DDGI_PROBES } from '../scene/layers';
-import { wrapGpuTexture } from './shading-nodes';
 
 type PointsView = Extract<DebugView, { kind: 'points' }>;
 
-/** Linear RGB per probe state; the same values as the core's DDGI_DEBUG_COLORS. */
+/** Linear RGB per probe state, from DDGI's own debug colours. */
 export const PROBE_STATE_COLORS: Readonly<Record<number, readonly [number, number, number]>> = {
-    [PROBE_STATE.active]: [0.1, 0.75, 0.2],
-    [PROBE_STATE.offInsideGeometry]: [0.85, 0.1, 0.1],
-    [PROBE_STATE.offNoSurfaceNearby]: [0.15, 0.35, 0.95],
-    [PROBE_STATE.notUpdatedYet]: [0.95, 0.8, 0.1],
+    [PROBE_STATE.active]: DDGI_DEBUG_COLORS.stateActive,
+    [PROBE_STATE.offInsideGeometry]: DDGI_DEBUG_COLORS.stateInsideGeometry,
+    [PROBE_STATE.offNoSurfaceNearby]: DDGI_DEBUG_COLORS.stateNoSurfaceNearby,
+    [PROBE_STATE.notUpdatedYet]: DDGI_DEBUG_COLORS.stateNotUpdatedYet,
 };
 
 /**
