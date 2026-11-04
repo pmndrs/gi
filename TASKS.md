@@ -258,16 +258,16 @@ Rules for every M1 task:
 
 | ID | Task | Agent | Size | Depends on | Status |
 | --- | --- | --- | --- | --- | --- |
-| T1.1 | Shared sky | implementer | S | none | active (implementer, 2026-11-04) |
+| T1.1 | Shared sky | implementer | S | none | review (fixes in; re-review running) |
 | T1.2 | Platform scene copy | implementer | M | none | done (Opus review passed with notes, all fixed; both GPUs) |
-| T1.3 | Tracer as a platform module | implementer | M | T1.2 (B0 as built) | todo |
+| T1.3 | Tracer as a platform module | implementer | M | T1.2 (B0 as built) | active (implementer, 2026-11-04) |
 | T1.4 | Hit shading | implementer | M | T1.1, T1.3 | todo |
 | T1.5 | DDGI field and update loop | main session designs, implementer builds | L | T1.4 | design (main session, 2026-11-04) |
 | T1.6 | Shading module and plain-WebGPU example | implementer | M | T1.5 | todo |
 | T1.7 | three.js adapter | implementer | M | T1.6 | todo |
 | T1.8 | Viewer integration | implementer | M | T1.7 | todo |
 | T1.9 | M1 measurements against targets | gpu-tester, native-runner | M | T1.8 | todo |
-| T1.10 | Sponza add-ons | wrangler + implementer | M | T1.1 (for the re-rendered reference) | active (wrangler: downloads, 2026-11-04) |
+| T1.10 | Sponza add-ons | wrangler + implementer | M | T1.1 (for the re-rendered reference) | active (part 1 downloads done; part 2 implementer, 2026-11-04) |
 | T1.11 | M1 note and M2 breakdown | main session | S | all M1 | todo |
 
 ### BVH lane (runs alongside; DECISIONS 2026-11-04)
@@ -275,7 +275,7 @@ Rules for every M1 task:
 | ID | Stage | Must be done before | Status |
 | --- | --- | --- | --- |
 | B0 | tinybvh WASM builder in a worker (`packages/bvh`) | M1 starts (M1 can start without the ≤ 2 s, DECISIONS 2026-11-04) | SIMD build with emsdk 6.0.13 pinned; oracle passes; Sponza 2.2-2.7 s, not ≤ 2 s |
-| B0b | Write our GPU layout from inside the WASM (no JS conversion pass); re-run the RTX trace bench on an idle GPU | T1.3 ends | active (implementer, 2026-11-04) |
+| B0b | Write our GPU layout from inside the WASM (no JS conversion pass); re-run the RTX trace bench on an idle GPU | T1.3 ends | review (code done 4340e4e: byte-identical, Sponza 1.71 s in Node; worker and idle-RTX timing running) |
 | B1a | GPU top-level tree: refit every frame from instance transforms, rebuild now and then | T1.3 ends (moved up to M1) | todo |
 | B1 | GPU LBVH per mesh (subgroups first), BLAS refit | M3 | todo |
 | B2 | GPU PLOC, then H-PLOC | M3 | todo |
