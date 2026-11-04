@@ -16,11 +16,23 @@
  * checked node by node (top-level-check.ts), and no refit may have given up
  * waiting for a box.
  *
+ * Then the cost of the refit's safety path: the same 10,000 instances in a
+ * standalone `GpuBvhRefit` whose leaf-slot list names one leaf twice, so
+ * one climb waits for a box nobody writes, gives up after its bounded spin,
+ * and the repair pass refits the whole tree in one workgroup. Timed as one
+ * pass (clear, climb, the spin, the repair), median of 20.
+ *
  * Done-when (TASKS, B1a): the median refit pass is at most 0.5 ms on the RTX
  * 3060, over 3 runs under the bench lock (to-csv.ts writes the rows).
  */
 
 import type { InstanceHandle } from '../../../../packages/ddgi-core/src/platform/contract/handles.ts';
+import { GpuBvhRefit } from '../../../../packages/bvh/src/gpu-refit.ts';
+import { PRIMITIVE_BOX_FLOATS } from '../../../../packages/bvh/src/refit-cpu.ts';
+import { BVH_NODE_BYTES } from '../../../../packages/ddgi-core/src/platform/trace/layout.ts';
+import { transformBounds } from '../../../../packages/ddgi-core/src/platform/trace/top-level.ts';
+import { buildTopLevelShape } from '../../../../packages/ddgi-core/src/platform/trace/top-level-shape.ts';
+import type { DispatchTimer } from '../trace-bench/dispatch-timer.ts';
 import { PlatformKernelBuilder } from '../../../../packages/ddgi-core/src/platform/kernel-builder.ts';
 import { PlatformScene } from '../../../../packages/ddgi-core/src/platform/scene/platform-scene.ts';
 import { PlatformRayQueries } from '../../../../packages/ddgi-core/src/platform/trace/ray-queries.ts';
@@ -40,6 +52,76 @@ const EXTENT = 100;
 const STEP = 0.25;
 const WARMUP_FRAMES = 10;
 const TIMED_FRAMES = 60;
+/** Timed runs of the forced repair. */
+const REPAIR_RUNS = 20;
+
+/**
+ * GPU time of one refit pass that has to repair: a 10,000-instance tree whose
+ * leaf-slot list names one leaf twice (see the top of this file). Checks that
+ * the repair really ran.
+ */
+async function timeForcedRepair(device: GPUDevice, timer: DispatchTimer, matrices: readonly number[][], objectBox: readonly number[]): Promise<{ medianMs: number; gaveUp: number }> {
+    const count = matrices.length;
+    const objectToWorld = new Float64Array(count * 16);
+    const meshBounds = new Float32Array(count * 6);
+    matrices.forEach((matrix, index) => {
+        objectToWorld.set(matrix, index * 16);
+        meshBounds.set(objectBox, index * 6);
+    });
+    const shape = buildTopLevelShape({
+        slots: Uint32Array.from({ length: count }, (_, index) => index),
+        visible: new Uint8Array(count).fill(1),
+        objectToWorld: objectToWorld.slice(),
+        meshBounds: meshBounds.slice(),
+    });
+    const primitiveBoxes = new Float32Array(count * PRIMITIVE_BOX_FLOATS);
+    const box = new Float32Array(6);
+    for (let record = 0; record < count; record++) {
+        const input = shape.recordSlots[record];
+        transformBounds(meshBounds.subarray(input * 6, input * 6 + 6), objectToWorld.subarray(input * 16, input * 16 + 16), box, 0);
+        primitiveBoxes.set(box.subarray(0, 3), record * PRIMITIVE_BOX_FLOATS);
+        primitiveBoxes.set(box.subarray(3, 6), record * PRIMITIVE_BOX_FLOATS + 4);
+    }
+    const leafSlots = shape.leafSlots.slice();
+    const position = leafSlots.findIndex((slot, index) => (slot & 1) === 0 && leafSlots[index + 1] === slot + 1);
+    assert(position >= 0, 'no node with two leaf children');
+    leafSlots[position + 1] = leafSlots[position];
+
+    const nodeBytes = shape.nodeCount * BVH_NODE_BYTES;
+    const tree = device.createBuffer({ label: 'forced repair tree', size: nodeBytes, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+    device.queue.writeBuffer(tree, 0, shape.nodes, 0, nodeBytes);
+    const boxes = device.createBuffer({ label: 'forced repair boxes', size: primitiveBoxes.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+    device.queue.writeBuffer(boxes, 0, primitiveBoxes);
+    const refit = new GpuBvhRefit(device, { label: 'forced repair', diagnostics: true });
+    try {
+        await refit.prepare();
+        refit.setShape({ nodeWordOffset: 0, nodeCount: shape.nodeCount, parentSlots: shape.parentSlots, leafSlots, generation: 1 });
+        const samples: number[] = [];
+        for (let run = 0; run < WARMUP_FRAMES + REPAIR_RUNS; run++) {
+            const ms = await timer.time((encoder, writes) => {
+                const pass = encoder.beginComputePass({ label: 'forced repair', timestampWrites: writes });
+                refit.encode(pass, tree, boxes);
+                pass.end();
+                refit.copyStats(encoder);
+            });
+            if (run >= WARMUP_FRAMES) samples.push(ms);
+            refit.pollStats();
+        }
+        for (let waited = 0; refit.latestStats === null || refit.latestStats.repairs === 0; waited++) {
+            assert(waited < 200, 'the forced repair never reported a repair');
+            await new Promise((resolve) => setTimeout(resolve, 5));
+            refit.pollStats();
+        }
+        const stats = refit.latestStats;
+        assert(stats.incomplete > 0 && stats.repairs === 1, `the forced repair did not run (gave up ${stats.incomplete}, repairs ${stats.repairs})`);
+        return { medianMs: median(samples), gaveUp: stats.incomplete };
+    } finally {
+        refit.dispose();
+        tree.destroy();
+        boxes.destroy();
+    }
+}
+
 /** Done-when bar on the RTX 3060 (TASKS, B1a). */
 const BAR_MS = 0.5;
 
@@ -142,6 +224,7 @@ await runGpuTest(
             assert(tree.failures.length === 0, tree.failures.join('\n'));
             assert(top.counters.refitGaveUp === 0, `${top.counters.refitGaveUp} refit box reads gave up waiting (repaired)`);
 
+            const repair = await timeForcedRepair(device, timer, matrices, objectBox);
             const result = {
                 benchmark: 'tlas-bench',
                 scene: SCENE,
@@ -150,6 +233,8 @@ await runGpuTest(
                 refitGpuMsMedian: median(gpuMs),
                 refitGpuMsMin: Math.min(...gpuMs),
                 refitGpuMsMax: Math.max(...gpuMs),
+                refitWithRepairGpuMsMedian: repair.medianMs,
+                repairGaveUpReads: repair.gaveUp,
                 timedFrames: gpuMs.length,
                 updateCpuMsMedian: median(updateCpuMs),
                 sceneEncodeCpuMsMedian: median(sceneEncodeCpuMs),

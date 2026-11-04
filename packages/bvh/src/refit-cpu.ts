@@ -111,7 +111,7 @@ export function levelOrderOf(parentSlots: Uint32Array, nodeCount: number): { lev
 }
 
 /** `[minX, minY, minZ, maxX, maxY, maxZ]`, with an empty box as `+max, -max`. */
-type Box =[number, number, number, number, number, number];
+type Box = [number, number, number, number, number, number];
 
 function emptyBox(): Box {
     return [BVH_FLOAT_MAX, BVH_FLOAT_MAX, BVH_FLOAT_MAX, -BVH_FLOAT_MAX, -BVH_FLOAT_MAX, -BVH_FLOAT_MAX];

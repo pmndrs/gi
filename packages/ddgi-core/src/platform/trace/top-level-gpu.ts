@@ -75,8 +75,9 @@ import type { TopLevelBuildInput, TopLevelShape } from './top-level-shape.ts';
  * time on the GPU and runs in the worker; on the main thread it costs packing
  * the transforms (`counters.lastSnapshotMs`): about 1.3 ms for 10,000
  * instances, 2.6-4.4 ms the first time while the code is still cold (RTX
- * 3060 and Intel UHD laptop, bench/results/bvh.csv). Only one runs at a time. A lower ratio would rebuild
- * continuously in a scene that never stops moving.
+ * 3060 and Intel UHD laptop, bench/results/bvh.csv). Only one runs at a
+ * time. A lower ratio would rebuild continuously in a scene that never stops
+ * moving.
  */
 export const TOP_LEVEL_REBUILD_COST_RATIO = 1.25;
 
@@ -320,6 +321,10 @@ export class GpuTopLevel {
     private buildFailure: Error | null = null;
     private idleWaiters: (() => void)[] = [];
     private seenStats: BvhRefitStats | null = null;
+    /** A give-up was reported already: the warning is shown once per top level. */
+    private warnedGaveUp = false;
+    /** Set when a shape couldn't be swapped in; cleared when instances or meshes change. */
+    private qualityRebuildsPaused = false;
     private bufferVersion = 0;
     private disposed = false;
 
@@ -432,8 +437,12 @@ export class GpuTopLevel {
         this.refit.pollStats();
         this.collectDiagnostics();
         const moved = frame.instancesChanged || frame.meshesChanged;
+        // A shape that couldn't be swapped in pauses quality rebuilds (they would make the same
+        // shape again) until the instances or meshes change.
+        if (frame.instanceSetChanged || frame.meshesChanged) this.qualityRebuildsPaused = false;
+        const checkDue = performance.now() - this.lastRequestTime >= QUALITY_CHECK_INTERVAL_MS;
         if (frame.instanceSetChanged) this.request('build');
-        else if (moved && this.current.recordCount > 0 && performance.now() - this.lastRequestTime >= QUALITY_CHECK_INTERVAL_MS) this.request('check');
+        else if (moved && checkDue && this.current.recordCount > 0 && !this.qualityRebuildsPaused) this.request('check');
 
         // The mesh table goes first, so even a frame that throws below leaves no record
         // pointing at a released mesh tree.
@@ -444,18 +453,26 @@ export class GpuTopLevel {
             this.meshTableDirty = false;
             changed = true;
         }
+        // A failure is thrown at the end, once this frame's refit is recorded on the shape in use.
+        let failure: unknown = this.buildFailure;
+        this.buildFailure = null;
         if (this.arrived) {
-            this.swap(this.arrived, frame.deepestMesh);
+            // Tried once. A shape that can't be used (a limit, or too deep for the trace stack)
+            // is dropped: swap checks before writing anything, so the old shape stays whole and
+            // in use, and the worker keeps judging that one (checks name its generation).
+            const arrived = this.arrived;
             this.arrived = null;
-            changed = true;
-        }
-        if (this.buildFailure) {
-            const failure = this.buildFailure;
-            this.buildFailure = null;
-            throw failure;
+            try {
+                this.swap(arrived, frame.deepestMesh);
+                changed = true;
+            } catch (error) {
+                failure ??= error;
+                this.qualityRebuildsPaused = true;
+            }
         }
         this.checkStack(this.current.maxDepth, frame.deepestMesh);
         if (changed && this.current.recordCount > 0) this.encodeRefit(encoder, timer);
+        if (failure) throw failure;
     }
 
     dispose(): void {
@@ -513,7 +530,7 @@ export class GpuTopLevel {
         const generation = this.nextGeneration++;
         this.inFlight = mode;
         this.builder ??= createTopLevelBuilder({ worker: this.buildIn === 'main' ? 'never' : 'auto' });
-        this.builder.request(mode, input, TOP_LEVEL_REBUILD_COST_RATIO).then(
+        this.builder.request(mode, input, TOP_LEVEL_REBUILD_COST_RATIO, { current: this.current.generation, next: generation }).then(
             (result) => this.finish(mode, generation, result),
             (error: unknown) => {
                 if (this.disposed) return;
@@ -609,6 +626,8 @@ export class GpuTopLevel {
         if (stats.incomplete === 0) return;
         this.counters.refitGaveUp += stats.incomplete;
         this.counters.refitRepairs += stats.repairs;
+        if (this.warnedGaveUp) return;
+        this.warnedGaveUp = true;
         this.warn(
             '@pmndrs/ddgi: the top-level refit gave up waiting for a box on this GPU and refit the tree again in a slower pass ' +
                 '(the result is correct). Counted in stats.counters["platform top level"].',

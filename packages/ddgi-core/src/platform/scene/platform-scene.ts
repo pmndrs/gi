@@ -372,7 +372,6 @@ export class PlatformScene implements SceneApi, SceneCopy {
         return this.light(light).index;
     }
 
-    /** Every live instance, for building the tracer's top level. */
     /**
      * Every instance that contributes to GI, hidden ones included, packed for
      * the tracer's top-level shape builds: one pass, typed arrays, no object
@@ -399,6 +398,7 @@ export class PlatformScene implements SceneApi, SceneCopy {
         return packed;
     }
 
+    /** Every live instance, for the CPU top level (the tracer's fallback without subgroups). */
     instanceSnapshot(): InstanceSnapshot[] {
         return [...this.instances.values()].map((instance) => ({
             slot: instance.slot,

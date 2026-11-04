@@ -18,6 +18,10 @@ export interface TopLevelRequest {
     readonly mode: 'build' | 'check';
     readonly input: TopLevelBuildInput;
     readonly ratio: number;
+    /** The generation a new shape gets. */
+    readonly generation: number;
+    /** For checks: the generation of the shape the GPU uses now. */
+    readonly currentGeneration: number;
 }
 
 export type TopLevelResponse =
@@ -34,10 +38,10 @@ const scope = self as unknown as WorkerScope;
 const keeper = new TopLevelShapeKeeper();
 
 scope.onmessage = (event) => {
-    const { id, mode, input, ratio } = event.data;
+    const { id, mode, input, ratio, generation, currentGeneration } = event.data;
     try {
         const start = performance.now();
-        const result = mode === 'build' ? { shape: keeper.build(input), relativeCost: 0, builtCost: 0 } : keeper.check(input, ratio);
+        const result = mode === 'build' ? { shape: keeper.build(input, generation), relativeCost: 0, builtCost: 0 } : keeper.check(input, ratio, currentGeneration, generation);
         const response = { id, ...result, workerMs: performance.now() - start };
         scope.postMessage(response, result.shape ? topLevelShapeTransferables(result.shape) : []);
     } catch (error) {

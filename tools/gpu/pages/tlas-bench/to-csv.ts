@@ -37,6 +37,7 @@ interface TlasBenchData {
     qualityRebuildsWhileMoving: number;
     qualityChecksWhileMoving?: number;
     snapshotMsLast?: number;
+    refitWithRepairGpuMsMedian?: number;
     topLevelBytes: number;
     userAgent: string;
     browserVersion: string | null;
@@ -58,6 +59,8 @@ export function tlasBenchRows(data: TlasBenchData): MetricRow[] {
         // From the review fixes on: quality checks in the worker, and the main thread's pack time of the last one.
         ...(data.qualityChecksWhileMoving === undefined ? [] : [row('tlas/quality_checks_60_frames', data.qualityChecksWhileMoving)]),
         ...(data.snapshotMsLast === undefined ? [] : [row('tlas/snapshot_cpu_ms_last', data.snapshotMsLast)]),
+        // A refit pass that had to repair (forced give-up; the spin included).
+        ...(data.refitWithRepairGpuMsMedian === undefined ? [] : [row('tlas/refit_with_repair_gpu_ms_median', data.refitWithRepairGpuMsMedian)]),
     ];
 }
 

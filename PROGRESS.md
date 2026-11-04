@@ -47,7 +47,7 @@ Corrections from the review (Opus; clean worktree at e18ba01, every number repro
 - **Main finding:** most of Cornell's excess came from the per-texel change-threshold rule, not probe placement. With the rule off: in-air +4.38% / +4.31%, FLIP 0.169; manifest volume +6.73% (RTX). The rule moves to the probe's mean (design doc, DECISIONS correction). Also being fixed in T1.5b: named uniform fields instead of `.w`/`.z` indices, consistent defaults in `render.ts`, and unit tests for the stochastic half rounding and the WGSL border rule.
 Next (T1.5b): the trace/blend split; classification and relocation; ms-to-units budget conversion (the default of 512 probes is over 2 ms); bias tuning against the leak checks; Cornell on the manifest volume.
 
-## 2026-11-05 · B1a · implementer (opus); Opus review: pass with notes, fixed; re-review: pass with notes
+## 2026-11-05 · B1a · implementer (opus); Opus review and re-review passed with notes, all fixed; done
 Did (see the B1a commit after b99773f):
 - packages/bvh: `gpu-refit.ts`, a bottom-up refit with per-node arrival counters, boxes copied as 32-bit atomic words, no float atomics, and a subgroup pairing step for sibling leaves; `gpu-instance-box.ts`; `refit-cpu.ts`, the CPU reference, with a test.
 - Core: `top-level-gpu.ts` (one pass gathers each instance's transform from the scene copy and writes its record and world box; then the refit). Shape builds in their own worker (`top-level-shape/async/worker.ts`). `ray-queries.ts` chooses the GPU refit, or the CPU top level without subgroups.
@@ -78,7 +78,11 @@ Re-review (Opus): lint, typecheck, test (641); tlas-oracle on the RTX 3060 and I
 - the fallback agrees on every ray;
 - a forced give-up (7 reads on the RTX, 10 on Intel) is repaired to match the CPU refit bit for bit.
 The repair pass can't race the main refit: it reads a flag written by earlier dispatches. Refit re-timed (median of 3, under the lock): RTX 0.086 ms, Intel 0.43 ms.
-Last small fixes in progress: a failed `swap` must not leave the refit stuck; warn once inside the top level itself; the repair pass's cost when it runs; readability.
+Last fixes:
+- a failed `swap` keeps the old shape, drops the arrival, throws once, and pauses quality rebuilds until instances or meshes change; the worker judges shapes by the generation the GPU uses (tests fail without the fix);
+- the give-up warning is deduped inside `GpuTopLevel`.
+The agent re-ran lint, typecheck, test (645) and tlas-oracle on both GPUs.
+A refit that has to repair, forced, at 10k instances: RTX 8.43 ms, Intel 4.68 ms (median of 3). Most of it is the spin before giving up. Give-ups have never happened outside the forced test on either GPU, so this is a rare-spike cost, not a frame cost.
 
 
 ## 2026-11-05 · T1.4 · implementer (opus); Opus review: pass with notes, fixed; done

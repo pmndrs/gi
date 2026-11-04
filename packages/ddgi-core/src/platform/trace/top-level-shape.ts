@@ -93,31 +93,53 @@ function buildShapeKeepingParents(input: TopLevelBuildInput): { shape: TopLevelS
     return { shape, parents: tree.parents };
 }
 
+/** Shapes a keeper remembers. Old ones go first; the main thread only ever asks about recent ones. */
+const KEPT_SHAPES = 4;
+
+interface KeptShape {
+    readonly nodes: ArrayBuffer;
+    readonly parents: Uint32Array;
+    readonly nodeCount: number;
+    readonly recordSlots: Uint32Array;
+    readonly builtCost: number;
+}
+
 /**
- * Builds shapes and remembers the last one, so it can judge that shape
- * against new transforms. Lives in the shape worker (or on the main thread
- * when there is none); requests are handled one at a time.
+ * Builds shapes and remembers the last few, by generation, so it can judge
+ * the one the GPU actually uses against new transforms. A shape the main
+ * thread could not swap in (it threw) is never the one judged, because a
+ * check names the generation in use. Lives in the shape worker (or on the
+ * main thread when there is none); requests are handled one at a time.
  */
 export class TopLevelShapeKeeper {
-    private kept: { nodes: ArrayBuffer; parents: Uint32Array; nodeCount: number; recordSlots: Uint32Array; builtCost: number } | null = null;
+    private readonly kept = new Map<number, KeptShape>();
 
-    build(input: TopLevelBuildInput): TopLevelShape {
+    /** Builds a shape and remembers it as `generation`. */
+    build(input: TopLevelBuildInput, generation: number): TopLevelShape {
         const { shape, parents } = buildShapeKeepingParents(input);
         // A copy: the shape's own buffers move to the main thread.
-        this.kept = {
+        this.kept.set(generation, {
             nodes: shape.nodes.slice(0, shape.nodeCount * BVH_NODE_BYTES),
             parents,
             nodeCount: shape.nodeCount,
             recordSlots: shape.recordSlots.slice(),
             builtCost: shape.relativeCost,
-        };
+        });
+        for (const old of this.kept.keys()) {
+            if (this.kept.size <= KEPT_SHAPES) break;
+            this.kept.delete(old);
+        }
         return shape;
     }
 
-    /** Refits the kept shape to `input`'s transforms and builds a new one if its cost passed `ratio` times its as-built cost. */
-    check(input: TopLevelBuildInput, ratio: number): TopLevelCheck {
-        const kept = this.kept;
-        if (!kept || kept.nodeCount === 0) return { shape: this.build(input), relativeCost: 0, builtCost: 0 };
+    /**
+     * Refits shape `currentGeneration` (the one in use) to `input`'s
+     * transforms, and builds a new one as `generation` if its cost passed
+     * `ratio` times its as-built cost, or if that shape isn't known.
+     */
+    check(input: TopLevelBuildInput, ratio: number, currentGeneration: number, generation: number): TopLevelCheck {
+        const kept = this.kept.get(currentGeneration);
+        if (!kept || kept.nodeCount === 0) return { shape: this.build(input, generation), relativeCost: 0, builtCost: 0 };
 
         // Each record's current world box, as the GPU gather makes it: empty when hidden or gone.
         let largestSlot = 0;
@@ -145,7 +167,7 @@ export class TopLevelShapeKeeper {
         const rootArea = halfArea(refit.rootBox);
         const relativeCost = rootArea > 0 ? refit.summedHalfArea / rootArea : 0;
         const decayed = kept.builtCost > 0 && relativeCost > ratio * kept.builtCost;
-        return { shape: decayed ? this.build(input) : null, relativeCost, builtCost: kept.builtCost };
+        return { shape: decayed ? this.build(input, generation) : null, relativeCost, builtCost: kept.builtCost };
     }
 }
 

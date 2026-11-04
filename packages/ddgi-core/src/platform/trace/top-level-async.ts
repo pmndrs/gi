@@ -21,11 +21,13 @@ export interface TopLevelResult {
 export interface TopLevelBuilder {
     readonly usesWorker: boolean;
     /**
-     * `build` makes a new shape; `check` makes one only if the last shape's
-     * cost at these transforms passed `ratio` times its as-built cost. The
-     * input's arrays move to the worker: they are unusable afterwards.
+     * `build` makes a new shape; `check` makes one only if the cost of shape
+     * `generations.current` (the one in use) at these transforms passed
+     * `ratio` times its as-built cost. A new shape is remembered as
+     * `generations.next`. The input's arrays move to the worker: they are
+     * unusable afterwards.
      */
-    request(mode: 'build' | 'check', input: TopLevelBuildInput, ratio: number): Promise<TopLevelResult>;
+    request(mode: 'build' | 'check', input: TopLevelBuildInput, ratio: number, generations: { current: number; next: number }): Promise<TopLevelResult>;
     /** Stops the worker. Pending requests reject. */
     dispose(): void;
 }
@@ -54,13 +56,16 @@ function createInlineBuilder(): TopLevelBuilder {
     const keeper = new TopLevelShapeKeeper();
     return {
         usesWorker: false,
-        request: (mode, input, ratio) =>
+        request: (mode, input, ratio, generations) =>
             new Promise((resolve, reject) => {
                 // A later turn, so callers see the same asynchronous behaviour as with a worker.
                 setTimeout(() => {
                     try {
                         const start = performance.now();
-                        const result = mode === 'build' ? { shape: keeper.build(input), relativeCost: 0, builtCost: 0 } : keeper.check(input, ratio);
+                        const result =
+                            mode === 'build'
+                                ? { shape: keeper.build(input, generations.next), relativeCost: 0, builtCost: 0 }
+                                : keeper.check(input, ratio, generations.current, generations.next);
                         resolve({ ...result, workerMs: performance.now() - start });
                     } catch (error) {
                         reject(error instanceof Error ? error : new Error(String(error)));
@@ -89,11 +94,11 @@ function createWorkerBuilder(worker: Worker): TopLevelBuilder {
     worker.onerror = (event) => failAll(`top-level worker failed: ${event.message}`);
     return {
         usesWorker: true,
-        request(mode, input, ratio) {
+        request(mode, input, ratio, generations) {
             return new Promise<TopLevelResult>((resolve, reject) => {
                 const id = nextId++;
                 pending.set(id, { resolve, reject });
-                const message: TopLevelRequest = { id, mode, input, ratio };
+                const message: TopLevelRequest = { id, mode, input, ratio, generation: generations.next, currentGeneration: generations.current };
                 worker.postMessage(message, topLevelInputTransferables(input));
             });
         },
