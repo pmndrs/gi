@@ -68,7 +68,7 @@ Spot checks of today's RTX numbers ("changed" = more than about 10%; new rows ad
 Not clean: the first trace-bench set had runs 4–10× slower than the rest (Sponza 117, 23, 9 Mrays/s), marked `note/gpu_busy,1`. A second set had the same problem and wasn't appended. The cause wasn't found; other agents' correctness pages and Dennis's apps share the GPU. Native runs were no longer flat to 1% as the locked ones were.
 Next: T1.9 measures with the clock note and on an idle machine where possible. Variance matters more than the clock now.
 
-## 2026-11-05 · T1.7 · implementer (opus); Opus review: fail (Bistro CPU didn't reproduce), fixed; re-review running
+## 2026-11-05 · T1.7 · implementer (opus); review failed, fixed; re-review passed with notes; last round in progress
 Did (d0e3525), in `packages/ddgi-three`:
 - `GILight`: a `Light` subclass with a registered node. One `wgslFn` built from `gi.shading.parameters`, returning irradiance and coverage together (coverage computed only when an environment or `LightProbeGrid` needs it). `ExternalTexture`s re-read every render, `renderGroup` vec4s, three's light-probe slot at priority 1, given up at intensity 0. The env-diffuse workaround wraps the lighting model's `indirect` (Lambert and Phong get no env diffuse at all; measured 0).
 - `SceneSync`: meshes, groups, normals, uv and uv1, metalness-folded materials, texture handles with `UvMapping`, `InstancedMesh`, visibility, lights, environment; the cube mirror and the environment upload.
@@ -109,6 +109,12 @@ Fixes (a97e29a):
 - `docs/api/three.md`.
 RTX CPU, three runs, still / moving ms: Sponza 0.094/0.142, 0.063/0.103, 0.098/0.145; Bistro interior 0.117/0.179, 0.111/0.172, 0.153/0.181. The Intel-session runs (Sponza 0.259, Bistro 0.206) were invalid: another process held the RTX at 87–100% outside the lock. To re-time when idle.
 lint, typecheck, test 779 and build pass; three-neutrality, three-environment and spike-three pass on both GPUs (agent).
+Re-review (Opus): lint, typecheck, test 779 and build pass; three-neutrality, three-environment and spike-three pass on both GPUs (neutrality −3.4e-9 / 4.7e-9, 0 pixels differ). `GIVolume`, the `uncapturederror` listener and the re-parenting fix are correct. CPU not re-timed: the GPU never went idle (15–63% busy). Last round:
+- fold texture metalness into GI albedo (Sponza's GI is near black without it, found in T1.8);
+- weight the texture average by alpha, and average in linear space;
+- a doc wording fix; a non-whole-spacing `GIVolume` test;
+- `LightProbeGrid` layers for coverage;
+- exports the viewer can use.
 Known gap, now handled: textured materials bounce with their base colour only (the core samples no textures until M4), so textured scenes read too bright. The adapter should fold in each texture's average colour.
 
 ## 2026-11-05 · T1.6 · implementer (opus); Opus review: pass with notes, fixed; re-timed at normal clocks; done
