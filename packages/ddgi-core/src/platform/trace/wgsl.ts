@@ -197,8 +197,12 @@ struct GiRaySetup {
     origin: vec3f,
     direction: vec3f,          // object space: not normalized, so t stays in world units
     inverseDirection: vec3f,   // for the box test
-    shear: vec3f,              // watertight triangle test: (x, y, z) shear that points the ray along +z'
-    axes: vec3u,               // watertight triangle test: which axes are x', y' and z'
+    // Watertight triangle test: the permute-and-shear that maps a point (relative
+    // to the ray origin) into the space where the ray runs along +z'. A point p
+    // becomes (dot(p, shearRowX), dot(p, shearRowY), dot(p, shearRowZ)).
+    shearRowX: vec3f,
+    shearRowY: vec3f,
+    shearRowZ: vec3f,
 }
 
 fn giSafeInverse(direction: vec3f) -> vec3f {
@@ -208,25 +212,43 @@ fn giSafeInverse(direction: vec3f) -> vec3f {
 }
 
 fn giMakeRaySetup(origin: vec3f, direction: vec3f) -> GiRaySetup {
-    // The axis the ray runs along most becomes z'. Swapping x' and y' when it
-    // points the negative way keeps triangle winding, so the sign of the
+    // The axis the ray runs along most becomes z'; x' is the axis after it
+    // (x -> y -> z -> x) and y' the one after that. Swapping x' and y' when the
+    // ray points the negative way keeps triangle winding, so the sign of the
     // determinant still tells front from back.
+    //
+    // The axes are unit vectors picked with select(), never a vector indexed by
+    // a per-ray value: a runtime index into a vector can push it into slow
+    // per-thread scratch memory (T0.10 part C measured that on NVIDIA).
     let magnitude = abs(direction);
-    var kz = 2u;
-    if (magnitude.x > magnitude.y && magnitude.x > magnitude.z) {
-        kz = 0u;
-    } else if (magnitude.y > magnitude.z) {
-        kz = 1u;
+    let zIsX = magnitude.x > magnitude.y && magnitude.x > magnitude.z;
+    let zIsY = !zIsX && magnitude.y > magnitude.z;
+    let axisZ = select(select(vec3f(0.0, 0.0, 1.0), vec3f(0.0, 1.0, 0.0), zIsY), vec3f(1.0, 0.0, 0.0), zIsX);
+    var axisX = axisZ.zxy;   // the next axis: x for z, y for x, z for y
+    var axisY = axisX.zxy;
+    // Each of these dot products has one product with 1 and two with 0, so it is
+    // the direction's component exactly, as the indexed version was.
+    let directionZ = dot(direction, axisZ);
+    if (directionZ < 0.0) {
+        let swapped = axisX;
+        axisX = axisY;
+        axisY = swapped;
     }
-    var kx = (kz + 1u) % 3u;
-    var ky = (kx + 1u) % 3u;
-    if (direction[kz] < 0.0) {
-        let swapped = kx;
-        kx = ky;
-        ky = swapped;
-    }
-    let shear = vec3f(direction[kx] / direction[kz], direction[ky] / direction[kz], 1.0 / direction[kz]);
-    return GiRaySetup(origin, direction, giSafeInverse(direction), shear, vec3u(kx, ky, kz));
+    let shearX = dot(direction, axisX) / directionZ;
+    let shearY = dot(direction, axisY) / directionZ;
+    let shearZ = 1.0 / directionZ;
+    // The rows hold only 0, 1 and the shear factors. A row times a corner is then
+    // a[x'] - shearX * a[z'] (and so on) with exactly the old rounding: products
+    // with 0 and 1 are exact. A corner shared by two triangles is transformed the
+    // same way in both, which is what keeps the test watertight.
+    return GiRaySetup(
+        origin,
+        direction,
+        giSafeInverse(direction),
+        axisX - shearX * axisZ,
+        axisY - shearY * axisZ,
+        shearZ * axisZ,
+    );
 }
 
 fn giTransformPoint(instance: GiInstance, point: vec3f) -> vec3f {
@@ -310,22 +332,19 @@ fn giIntersectMollerTrumbore(triangle: GiBvhTriangle, setup: GiRaySetup, tMin: f
 // signs, so a ray cannot pass between them. A zero counts as inside for both,
 // so a ray exactly on an edge hits both neighbours rather than neither.
 fn giIntersectWatertight(triangle: GiBvhTriangle, setup: GiRaySetup, tMin: f32, tMax: f32) -> GiTriangleHit {
-    let kx = setup.axes.x;
-    let ky = setup.axes.y;
-    let kz = setup.axes.z;
-
     // Corners relative to the ray origin.
     let a = triangle.vertex0 - setup.origin;
     let b = triangle.secondVector - setup.origin;
     let c = triangle.thirdVector - setup.origin;
 
-    // Shear and scale into the space where the ray runs along +z' through the origin.
-    let ax = a[kx] - setup.shear.x * a[kz];
-    let ay = a[ky] - setup.shear.y * a[kz];
-    let bx = b[kx] - setup.shear.x * b[kz];
-    let by = b[ky] - setup.shear.y * b[kz];
-    let cx = c[kx] - setup.shear.x * c[kz];
-    let cy = c[ky] - setup.shear.y * c[kz];
+    // Shear and scale into the space where the ray runs along +z' through the origin
+    // (see giMakeRaySetup for why these are dot products with rows).
+    let ax = dot(a, setup.shearRowX);
+    let ay = dot(a, setup.shearRowY);
+    let bx = dot(b, setup.shearRowX);
+    let by = dot(b, setup.shearRowY);
+    let cx = dot(c, setup.shearRowX);
+    let cy = dot(c, setup.shearRowY);
 
     // Edge functions: the (scaled) barycentric weights of corners 0, 1 and 2.
     let weight0 = cx * by - cy * bx;
@@ -339,7 +358,8 @@ fn giIntersectWatertight(triangle: GiBvhTriangle, setup: GiRaySetup, tMin: f32, 
     if (determinant == 0.0) {
         return giNoTriangleHit();   // edge-on
     }
-    let scaledT = weight0 * (setup.shear.z * a[kz]) + weight1 * (setup.shear.z * b[kz]) + weight2 * (setup.shear.z * c[kz]);
+    // z' of each corner, scaled by 1 / direction along z'.
+    let scaledT = weight0 * dot(a, setup.shearRowZ) + weight1 * dot(b, setup.shearRowZ) + weight2 * dot(c, setup.shearRowZ);
     let inverseDeterminant = 1.0 / determinant;
     let t = scaledT * inverseDeterminant;
     if (t < tMin || t > tMax) {

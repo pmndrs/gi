@@ -178,6 +178,8 @@ async function runScene(context: BenchContext, sceneId: string): Promise<SceneRe
     result.probeCount = grid.probeCount;
     result.closestRays = closestCount;
     result.closestRaysRequested = requestedProbes * config.raysPerProbe;
+    result.probesRequested = requestedProbes;
+    result.thinned = probeTarget < requestedProbes;
     progress(
         `${sceneId}: ${grid.probeCount} probes (${grid.dimensions.join('x')}), ${closestCount} closest-hit rays` +
             (probeTarget < requestedProbes ? ` (thinned from about ${result.closestRaysRequested} to keep one dispatch short)` : ''),

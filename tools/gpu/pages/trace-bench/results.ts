@@ -98,6 +98,10 @@ export interface SceneResult {
     closestRays: number;
     /** Rays the profile asked for, before the grid was thinned to keep one dispatch short; equal to `closestRays` when it was not. */
     closestRaysRequested: number;
+    /** Probes the profile asked for. Missing in results from before T0.10 part C. */
+    probesRequested?: number;
+    /** True when the grid was thinned to keep one dispatch short, so the rays differ from the full set. Missing before T0.10 part C. */
+    thinned?: boolean;
     /** The estimate that decided it: GPU nanoseconds per closest-hit ray on a sample, or null when the check was off. */
     estimatedNsPerRay: number | null;
     /** Closest-hit rays that hit something (by ours-wt). */

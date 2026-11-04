@@ -1,0 +1,5 @@
+{
+    "description": "Sponza at full ray count with fewer timed dispatches: the per-step check used while optimising the tracer (T0.10 part C). Not the decision run; use trace-bench-sponza for that. Run under the bench lock, on its own.",
+    "timeoutMs": 900000,
+    "manual": true
+}

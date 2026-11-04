@@ -301,6 +301,10 @@ await runGpuTest(async ({ device, log }) => {
             if (triangleTest === 'watertight' && report.slipped > 0) {
                 failures.push(`[${triangleTest}] ${report.name}: ${report.slipped} rays slipped between triangles`);
             }
+            // Shadow rays go through the any-hit walk, which has its own shortcuts; it must not leak either.
+            if (triangleTest === 'watertight' && report.slippedAny > 0) {
+                failures.push(`[${triangleTest}] ${report.name}: ${report.slippedAny} any-hit rays slipped between triangles`);
+            }
             if (report.referenceMisses > 0) {
                 failures.push(`[${triangleTest}] ${report.name}: the reference missed ${report.referenceMisses} rays, so the setup is wrong`);
             }

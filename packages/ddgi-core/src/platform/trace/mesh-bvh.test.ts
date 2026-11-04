@@ -22,6 +22,10 @@ interface TreeFacts {
 /**
  * Walks the tree and asserts the structural rules: boxes contain what they
  * point at, parents match, every triangle is in exactly one leaf.
+ *
+ * Per-element rules are collected as problem strings and asserted once at the
+ * end: a vitest `expect` per number made the 4000-triangle case take seconds
+ * (and time out under load), while a plain comparison costs nothing.
  */
 function checkTree(bvh: MeshBvh, geometry: MeshGeometry): TreeFacts {
     const { floats, words } = nodeView(bvh.nodes);
@@ -34,11 +38,16 @@ function checkTree(bvh: MeshBvh, geometry: MeshGeometry): TreeFacts {
     expect(bvh.parents.length).toBe(bvh.nodeCount);
     expect(bvh.parents[0]).toBe(NO_PARENT);
 
+    const problems: string[] = [];
+    const check = (ok: boolean, describe: () => string): void => {
+        if (!ok && problems.length < 20) problems.push(describe());
+    };
+
     const visitedNodes = new Set<number>();
     const stack: { node: number; depth: number }[] = [{ node: 0, depth: 1 }];
     while (stack.length > 0) {
         const { node, depth } = stack.pop() as { node: number; depth: number };
-        expect(visitedNodes.has(node)).toBe(false);
+        check(!visitedNodes.has(node), () => `node ${node} is reached twice`);
         visitedNodes.add(node);
         facts.depth = Math.max(facts.depth, depth);
         const base = node * 16;
@@ -49,8 +58,7 @@ function checkTree(bvh: MeshBvh, geometry: MeshGeometry): TreeFacts {
             const index = words[base + (side === 'left' ? NODE_WORD.leftIndex : NODE_WORD.rightIndex)];
             const count = words[base + (side === 'left' ? NODE_WORD.leftCount : NODE_WORD.rightCount)];
             if (index === EMPTY_CHILD_INDEX) {
-                expect(side).toBe('right');
-                expect(bvh.triangleCount).toBe(1);
+                check(side === 'right' && bvh.triangleCount === 1, () => `node ${node} has an empty ${side} child in a tree of ${bvh.triangleCount} triangles`);
                 facts.emptyChildren++;
                 continue;
             }
@@ -59,12 +67,14 @@ function checkTree(bvh: MeshBvh, geometry: MeshGeometry): TreeFacts {
 
             if (count === 0) {
                 // Inner child: its parent entry is this node, and its own boxes sit inside this one.
-                expect(bvh.parents[index]).toBe(node);
+                check(bvh.parents[index] === node, () => `node ${index} names parent ${bvh.parents[index]}, not ${node}`);
                 const childBase = index * 16;
                 for (const childSide of [NODE_WORD.leftMin, NODE_WORD.rightMin]) {
                     for (let axis = 0; axis < 3; axis++) {
-                        expect(floats[childBase + childSide + axis]).toBeGreaterThanOrEqual(boxMin[axis]);
-                        expect(floats[childBase + childSide + 4 + axis]).toBeLessThanOrEqual(boxMax[axis]);
+                        check(
+                            floats[childBase + childSide + axis] >= boxMin[axis] && floats[childBase + childSide + 4 + axis] <= boxMax[axis],
+                            () => `node ${index}'s boxes stick out of its parent's box on axis ${axis}`,
+                        );
                     }
                 }
                 stack.push({ node: index, depth: depth + 1 });
@@ -76,23 +86,25 @@ function checkTree(bvh: MeshBvh, geometry: MeshGeometry): TreeFacts {
                     // The leaf's box must contain the triangle's real vertices.
                     for (const vertex of originalVertices(geometry, original)) {
                         for (let axis = 0; axis < 3; axis++) {
-                            expect(vertex[axis]).toBeGreaterThanOrEqual(boxMin[axis]);
-                            expect(vertex[axis]).toBeLessThanOrEqual(boxMax[axis]);
+                            check(vertex[axis] >= boxMin[axis] && vertex[axis] <= boxMax[axis], () => `triangle ${original} sticks out of its leaf box on axis ${axis}`);
                         }
                     }
                     // The stored corner and edges rebuild the original vertices.
                     const [v0, v1, v2] = originalVertices(geometry, original);
                     for (let axis = 0; axis < 3; axis++) {
-                        expect(triangleFloats[slot * 12 + TRIANGLE_WORD.vertex0 + axis]).toBe(v0[axis]);
+                        check(triangleFloats[slot * 12 + TRIANGLE_WORD.vertex0 + axis] === v0[axis], () => `triangle ${original}'s first corner is not stored exactly`);
                         const rebuiltV1 = triangleFloats[slot * 12 + TRIANGLE_WORD.vertex0 + axis] + triangleFloats[slot * 12 + TRIANGLE_WORD.secondVector + axis];
                         const rebuiltV2 = triangleFloats[slot * 12 + TRIANGLE_WORD.vertex0 + axis] + triangleFloats[slot * 12 + TRIANGLE_WORD.thirdVector + axis];
-                        expect(rebuiltV1).toBeCloseTo(v1[axis], 4);
-                        expect(rebuiltV2).toBeCloseTo(v2[axis], 4);
+                        check(
+                            Math.abs(rebuiltV1 - v1[axis]) < 5e-5 && Math.abs(rebuiltV2 - v2[axis]) < 5e-5,
+                            () => `triangle ${original}'s edges do not rebuild its corners`,
+                        );
                     }
                 }
             }
         }
     }
+    expect(problems).toEqual([]);
     expect(visitedNodes.size).toBe(bvh.nodeCount);
     return facts;
 }
@@ -100,7 +112,7 @@ function checkTree(bvh: MeshBvh, geometry: MeshGeometry): TreeFacts {
 function expectEveryTriangleOnce(facts: TreeFacts, triangleCount: number): void {
     const sorted = [...facts.seenTriangles].sort((a, b) => a - b);
     expect(sorted.length).toBe(triangleCount);
-    sorted.forEach((value, position) => expect(value).toBe(position));
+    expect(sorted.every((value, position) => value === position)).toBe(true);
 }
 
 describe('buildMeshBvh', () => {

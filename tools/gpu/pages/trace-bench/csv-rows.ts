@@ -8,6 +8,7 @@
  */
 
 import type { AgreementResult, ModeResult, SceneResult, SyntheticResult, TraceBenchData } from './results.ts';
+import { median } from './statistics.ts';
 
 export interface MetricRow {
     scene: string;
@@ -39,6 +40,16 @@ function agreementRows(scene: string, agreement: AgreementResult): MetricRow[] {
     return rows;
 }
 
+/** Probes the profile asked for, before any thinning. */
+function probesRequested(result: SceneResult): number {
+    return result.probesRequested ?? Math.round(result.closestRaysRequested / Math.max(1, result.raysPerProbe));
+}
+
+/** Whether the probe grid was thinned. Null for results from before the page recorded it. */
+function isThinned(result: SceneResult): boolean | null {
+    return typeof result.thinned === 'boolean' ? result.thinned : null;
+}
+
 function sceneRows(result: SceneResult): MetricRow[] {
     const scene = result.scene;
     const rows: MetricRow[] = [
@@ -52,7 +63,13 @@ function sceneRows(result: SceneResult): MetricRow[] {
         { scene, metric: 'rays/closest_requested', value: result.closestRaysRequested },
         { scene, metric: 'rays/closest_hits', value: result.closestHits },
         { scene, metric: 'rays/any', value: result.shadowRays },
+        // The probe grid: how many probes were traced, how many the profile asked for, and whether the
+        // grid was thinned to keep one dispatch under the GPU watchdog (then the rays differ between devices).
+        { scene, metric: 'probes/count', value: result.probeCount },
+        { scene, metric: 'probes/requested', value: probesRequested(result) },
     ];
+    const thinned = isThinned(result);
+    if (thinned !== null) rows.push({ scene, metric: 'probes/thinned', value: thinned ? 1 : 0 });
     if (result.estimatedNsPerRay !== null) rows.push({ scene, metric: 'rays/estimated_ns_per_ray', value: result.estimatedNsPerRay });
     const ours = result.ours;
     if (ours) {
@@ -117,6 +134,36 @@ export function traceBenchRows(data: TraceBenchData): MetricRow[] {
               ]
             : []),
     ];
+}
+
+/**
+ * Rows for several runs of the same page on the same device: every run's rows
+ * with the metric prefixed `run1/`, `run2/`, ..., then a `median/` row per
+ * metric that every run reported, and `median/runs` with the run count.
+ * The median rows are the result; the per-run rows show the spread.
+ */
+export function repeatedRunRows(runs: readonly (readonly MetricRow[])[]): MetricRow[] {
+    const rows: MetricRow[] = [];
+    runs.forEach((runRows, index) => {
+        for (const row of runRows) rows.push({ scene: row.scene, metric: `run${index + 1}/${row.metric}`, value: row.value });
+    });
+    const valuesByKey = new Map<string, { scene: string; metric: string; values: number[] }>();
+    runs.forEach((runRows) => {
+        for (const row of runRows) {
+            const key = `${row.scene} ${row.metric}`;
+            const entry = valuesByKey.get(key) ?? { scene: row.scene, metric: row.metric, values: [] };
+            entry.values.push(row.value);
+            valuesByKey.set(key, entry);
+        }
+    });
+    const scenes = new Set<string>();
+    for (const entry of valuesByKey.values()) {
+        if (entry.values.length !== runs.length) continue;
+        rows.push({ scene: entry.scene, metric: `median/${entry.metric}`, value: median(entry.values) });
+        scenes.add(entry.scene);
+    }
+    for (const scene of scenes) rows.push({ scene, metric: 'median/runs', value: runs.length });
+    return rows;
 }
 
 /** Six significant digits, no exponent for ordinary sizes, integers untouched. */

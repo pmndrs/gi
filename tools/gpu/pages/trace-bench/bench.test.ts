@@ -12,7 +12,7 @@ import {
 } from '../../../../packages/ddgi-core/src/platform/trace/index.ts';
 import { createRandom, randomTriangleSoup } from '../../../../packages/ddgi-core/src/platform/trace/oracle-fixtures.ts';
 import { BenchConfigError, parseBenchConfig, type BenchProfileName } from './config.ts';
-import { browserFromUserAgent, deviceNameFromAdapter, formatValue, traceBenchRows } from './csv-rows.ts';
+import { browserFromUserAgent, deviceNameFromAdapter, formatValue, repeatedRunRows, traceBenchRows } from './csv-rows.ts';
 import { extractGltfGeometry, modelTransformMatrix, parseGlb, type GltfJson } from './gltf-geometry.ts';
 import { makeProbeGrid, makeProbeRays, makeShadowRays, makeSphereDirections, probePosition, worldBounds } from './rays.ts';
 import type { TraceBenchData } from './results.ts';
@@ -270,7 +270,8 @@ describe('CSV rows', () => {
             {
                 scene: 'sponza',
                 meshCount: 1, instanceCount: 1, uniqueTriangles: 10, instancedTriangles: 10,
-                probeCount: 1, raysPerProbe: 1, closestRays: 1, closestHits: 1, shadowRays: 1,
+                probeCount: 1, raysPerProbe: 1, closestRays: 1, closestRaysRequested: 2, closestHits: 1, shadowRays: 1,
+                probesRequested: 2, thinned: true,
                 ours: null,
                 tmbvh: null,
                 modes: [
@@ -292,6 +293,30 @@ describe('CSV rows', () => {
         expect(metrics).toContain('sponza ours-wt/closest/gpu_ms_median');
         expect(metrics).toContain('sponza agreement/ours-wt_vs_tmbvh/closest_rate');
         expect(metrics).toContain('device limit/max_storage_buffer_binding_size_bytes');
+    });
+
+    it('says how many probes were traced and whether the grid was thinned', () => {
+        const rows = traceBenchRows(data);
+        const value = (metric: string) => rows.find((row) => row.metric === metric)?.value;
+        expect(value('probes/count')).toBe(1);
+        expect(value('probes/requested')).toBe(2);
+        expect(value('probes/thinned')).toBe(1);
+    });
+
+    it('turns repeated runs into per-run rows and medians', () => {
+        const run = (speed: number) => [
+            { scene: 'sponza', metric: 'ours-wt/closest/mrays_per_s', value: speed },
+            { scene: 'sponza', metric: 'rays/closest', value: 100 },
+        ];
+        const rows = repeatedRunRows([run(50), run(70), [...run(60), { scene: 'sponza', metric: 'only/in_run3', value: 1 }]]);
+        const value = (metric: string) => rows.find((row) => row.metric === metric)?.value;
+        expect(value('run1/ours-wt/closest/mrays_per_s')).toBe(50);
+        expect(value('run3/only/in_run3')).toBe(1);
+        expect(value('median/ours-wt/closest/mrays_per_s')).toBe(60);
+        expect(value('median/rays/closest')).toBe(100);
+        expect(value('median/runs')).toBe(3);
+        // A metric missing from some runs gets no median: it would not be a median of all runs.
+        expect(value('median/only/in_run3')).toBeUndefined();
     });
 
     it('formats numbers, browsers and devices', () => {
