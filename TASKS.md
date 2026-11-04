@@ -15,7 +15,7 @@ Status values: `todo`, `active (agent, date)`, `review`, `done`, `blocked (why)`
 | T0.7 | References and compare | implementer | M | T0.4 | done (Cycles references for Cornell, two-room, Sponza; tolerance in DECISIONS; Opus-review fixes in, Sponza re-rendered diffuse-only) |
 | T0.8 | Spike: three.js sharing | implementer | S | T0.2 | done (yes to all; env-diffuse needs a workaround) |
 | T0.9 | Spike: Babylon | implementer | S | T0.2 | done (fits the contract; Babylon owns its device). Paused: three-only until v1 is validated |
-| T0.10 | Spike: BVH | main session designs, implementer builds, gpu-tester measures | M | T0.2, T0.4 | review (part C: watertight 1.20× three-mesh-bvh on Sponza on the RTX 3060, 1.97× on Intel; our tracer chosen; B0 builds in 5.3 s, not 2 s, so it stays open in the BVH lane) |
+| T0.10 | Spike: BVH | main session designs, implementer builds, gpu-tester measures | M | T0.2, T0.4 | done (our tracer chosen: watertight 1.20× three-mesh-bvh on Sponza on the RTX 3060, 1.97× on Intel; Opus review passed; the oracle can now fail on corner escapes. B0 continues in the BVH lane) |
 | T0.11 | Platform API draft | main session | M | none (revise after T0.8–T0.10) | done (signed off by Dennis 2026-11-04, incl. UV mapping and vertex normals; revised after T0.10: binding budget, inline tracing by default, `range: 0` = no limit) |
 | T0.12 | M0 note and M1 breakdown | main session | S | all M0 | review (note in [docs/milestones/M0.md](docs/milestones/M0.md); M1 on the board; waiting on Dennis's sign-off) |
 
