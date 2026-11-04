@@ -13,7 +13,15 @@
  * See docs/design/trace.md for the reasoning.
  */
 
-import { GPU_LAYOUT_MAX_LEAF_PRIMITIVES, GPU_LAYOUT_MAX_TRIANGLES, GPU_LAYOUT_NODE_BYTES, GPU_LAYOUT_TRIANGLE_BYTES } from '@pmndrs/bvh/gpu-layout';
+import {
+    GPU_LAYOUT_EMPTY_CHILD,
+    GPU_LAYOUT_MAX_LEAF_PRIMITIVES,
+    GPU_LAYOUT_MAX_TRIANGLES,
+    GPU_LAYOUT_NO_PARENT,
+    GPU_LAYOUT_NODE_BYTES,
+    GPU_LAYOUT_NODE_WORD,
+    GPU_LAYOUT_TRIANGLE_BYTES,
+} from '@pmndrs/bvh/gpu-layout';
 
 /** One BVH node: two child boxes (Aila-Laine layout), 16 words. */
 export const BVH_NODE_BYTES = GPU_LAYOUT_NODE_BYTES;
@@ -28,28 +36,20 @@ export const BVH_NODE_WORDS = BVH_NODE_BYTES / 4;
  *     rightMax: vec3f, rightCount: u32,
  *
  * A child with `count > 0` is a leaf holding `count` primitives starting at
- * `index`. A child with `count == 0` is an inner node at `index`.
+ * `index`. A child with `count == 0` is an inner node at `index`. Defined in
+ * `@pmndrs/bvh/gpu-layout`, whose GPU refit writes the same words.
  */
-export const NODE_WORD = {
-    leftMin: 0,
-    leftIndex: 3,
-    leftMax: 4,
-    rightIndex: 7,
-    rightMin: 8,
-    leftCount: 11,
-    rightMax: 12,
-    rightCount: 15,
-} as const;
+export const NODE_WORD = GPU_LAYOUT_NODE_WORD;
 
 /**
  * `index` value of a child that does not exist. Only a tree with a single
  * primitive has one: its root node holds that primitive on the left and
  * nothing on the right.
  */
-export const EMPTY_CHILD_INDEX = 0xffffffff;
+export const EMPTY_CHILD_INDEX = GPU_LAYOUT_EMPTY_CHILD;
 
 /** Parent index of the root node in the parent array. */
-export const NO_PARENT = 0xffffffff;
+export const NO_PARENT = GPU_LAYOUT_NO_PARENT;
 
 /**
  * Triangles are tested with the watertight test of Woop, Benthin and Wald

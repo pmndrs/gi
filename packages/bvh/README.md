@@ -6,6 +6,24 @@ A builder produces a plain tree description (`MeshTreeTopology`, in
 layout, or writes that layout itself (`GpuLayoutMeshBvh`, in `src/gpu-layout.ts`).
 This package is bundled into `@pmndrs/ddgi` and never published on its own.
 
+## GPU refit (stage B1a)
+
+`src/gpu-refit.ts` refits a tree in the GPU layout on the GPU, keeping its
+shape: one thread per leaf climbs to the root, and at each node the second
+thread to arrive (a per-node counter, no float atomics) takes the union of the
+two child boxes. Boxes travel as 32-bit atomic words, so no plain store has to
+be visible across workgroups; a bounded re-read covers WGSL's relaxed atomic
+order, and the stats count any read that gave up (it must stay 0). Sibling
+leaves held by neighbouring subgroup lanes finish their node in registers. The
+climb also sums every inner node's half-area, the tree-quality signal
+(`relativeSahCost`) a caller uses to decide when to rebuild. It needs the
+`subgroups` feature (`GpuBvhRefit.isSupported`).
+
+`src/gpu-instance-box.ts` is the WGSL for an instance's padded world box
+(Arvo's method), and `src/refit-cpu.ts` holds the CPU twins: leaf and parent
+slots, the cost signal, and a plain refit the tests compare the GPU with.
+The tracer's top level (ddgi-core `trace/top-level-gpu.ts`) uses all three.
+
 ## tinybvh in WebAssembly (stage B0)
 
 `src/tinybvh.ts` runs [tinybvh](https://github.com/jbikker/tinybvh) 1.9.1

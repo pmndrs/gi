@@ -8,8 +8,12 @@
  *   tree off the main thread, and the tree is placed into the shared node and triangle buffers when it arrives, at
  *   the start of a later `encode`. Until then rays see the mesh's previous
  *   shape, or miss it if it is new (`building` is true meanwhile).
- * - **The top level.** Rebuilt on the CPU when an instance, a transform or a
- *   tree changed. B1a moves this to the GPU.
+ * - **The top level** (stage B1a). On a device with subgroups it lives on the
+ *   GPU (top-level-gpu.ts): refit every frame something moved, from the
+ *   scene copy's transforms, with no CPU work per instance; a new shape is
+ *   built in a worker now and then. Without subgroups, the declared fallback
+ *   (DECISIONS 2026-11-04): it is rebuilt on the CPU, on this thread, when an
+ *   instance, a transform or a tree changed. `topLevelPath` says which.
  *
  * `GiHit.instance` is the scene copy's instance slot, so a hit reads its
  * surface straight through the scene module (`giInstanceTriangle(hit.instance,
@@ -20,8 +24,10 @@
  * `module.version` so kernels rebuild their bind group only.
  */
 
+import { GpuBvhRefit } from '@pmndrs/bvh/gpu-refit';
 import { GILimitError, GINotReadyError } from '../contract/errors.ts';
 import type { RayQueries } from '../contract/queries.ts';
+import type { GpuTimerScope } from '../contract/timing.ts';
 import type { BindingSlot, ComputeKernel, KernelBuilder, WgslModule } from '../contract/wgsl.ts';
 import { SHADER_STAGE_COMPUTE } from '../kernel-builder.ts';
 import type { PlatformScene, SceneUpload, UploadedMesh } from '../scene/platform-scene.ts';
@@ -31,15 +37,19 @@ import { BVH_NODE_BYTES, TOP_LEVEL_HEADER_BYTES, TRACE_STACK_SIZE, TRIANGLE_BYTE
 import type { MeshBvh } from './mesh-bvh.ts';
 import { createMeshBvhBuilder, type MeshBvhBuilder } from './mesh-bvh-async.ts';
 import { buildTopLevel, type TraceInstance } from './top-level.ts';
+import { GpuTopLevel } from './top-level-gpu.ts';
 import { RAY_BYTES } from './trace-gpu.ts';
 import { BATCH_WORKGROUP_SIZE, batchEntryWgsl, HIT_RECORD_BYTES, TRACE_MODULE_ENTRIES, traceModuleWgsl } from './wgsl.ts';
 
 export interface PlatformRayQueriesOptions {
     /** Prefix for GPU object labels. */
     readonly label?: string;
-    /** `worker` (default) builds mesh trees in a module worker; `main` on this thread. */
+    /** `worker` (default) builds mesh trees and top-level shapes in module workers; `main` on this thread. */
     readonly buildIn?: 'worker' | 'main';
 }
+
+/** Where the top level is kept up to date: refit on the GPU, or the CPU fallback without subgroups. */
+export type TopLevelPath = 'gpu-refit' | 'cpu';
 
 /** A mesh tree placed in the shared buffers. */
 interface PlacedTree {
@@ -103,8 +113,12 @@ export class PlatformRayQueries implements RayQueries {
     private anyKernel: ComputeKernel | null = null;
     private disposed = false;
 
-    /** Instances in the current top level; for stats and tests. */
-    topLevelInstanceCount = 0;
+    /** `gpu-refit` on a device with subgroups; `cpu` otherwise. Fixed for the backend's life. */
+    readonly topLevelPath: TopLevelPath;
+    /** The GPU top level, on the `gpu-refit` path. */
+    readonly gpuTopLevel: GpuTopLevel | null;
+    /** Instances in the CPU top level (the `cpu` path). */
+    private cpuTopLevelInstanceCount = 0;
 
     constructor(device: GPUDevice, scene: PlatformScene, options: PlatformRayQueriesOptions = {}) {
         this.device = device;
@@ -120,14 +134,17 @@ export class PlatformRayQueries implements RayQueries {
         this.triangles = new GrowableStorage(device, `${this.label} trace triangles`, TRIANGLE_BYTES, INITIAL_TRIANGLES);
         // An empty top level: the header says 0 nodes, so every ray misses.
         this.topLevelBuffer = this.createTopLevelBuffer(TOP_LEVEL_HEADER_BYTES);
+        this.topLevelPath = GpuBvhRefit.isSupported(device) ? 'gpu-refit' : 'cpu';
+        this.gpuTopLevel = this.topLevelPath === 'gpu-refit' ? new GpuTopLevel(device, scene, { label: this.label, buildIn: options.buildIn }) : null;
 
-        const currentVersion = (): number => this.bufferVersion;
+        // The GPU top level replaces its buffer when it grows, so its version counts too.
+        const currentVersion = (): number => this.bufferVersion + (this.gpuTopLevel?.version ?? 0);
         this.module = {
             name: 'gi-trace',
             dependencies: [],
             code: (slot: BindingSlot) => traceModuleWgsl(slot),
             entries: TRACE_MODULE_ENTRIES,
-            resources: () => [{ buffer: this.nodes.buffer }, { buffer: this.triangles.buffer }, { buffer: this.topLevelBuffer }],
+            resources: () => [{ buffer: this.nodes.buffer }, { buffer: this.triangles.buffer }, { buffer: this.currentTopLevelBuffer }],
             get version() {
                 return currentVersion();
             },
@@ -135,9 +152,22 @@ export class PlatformRayQueries implements RayQueries {
         };
     }
 
-    /** True while a mesh tree is still being built. Rays meanwhile see the mesh's previous shape, or miss it if it is new. */
+    /**
+     * True while a mesh tree or a top-level shape is still being built. Rays
+     * meanwhile see a mesh's previous shape, or miss it if it is new, and miss
+     * instances created (or shown) since the current top-level shape.
+     */
     get building(): boolean {
-        return this.pendingBuilds > 0;
+        return this.pendingBuilds > 0 || (this.gpuTopLevel?.building ?? false);
+    }
+
+    /** Instances in the current top level; for stats and tests. */
+    get topLevelInstanceCount(): number {
+        return this.gpuTopLevel ? this.gpuTopLevel.instanceCount : this.cpuTopLevelInstanceCount;
+    }
+
+    private get currentTopLevelBuffer(): GPUBuffer {
+        return this.gpuTopLevel ? this.gpuTopLevel.buffer : this.topLevelBuffer;
     }
 
     get memoryBytes(): number {
@@ -147,7 +177,7 @@ export class PlatformRayQueries implements RayQueries {
     get memory(): AccelerationMemory {
         const nodes = this.nodes.byteLength;
         const triangles = this.triangles.byteLength;
-        const topLevel = this.topLevelBuffer.size;
+        const topLevel = this.gpuTopLevel ? this.gpuTopLevel.memoryBytes : this.topLevelBuffer.size;
         return { nodes, triangles, topLevel, total: nodes + triangles + topLevel };
     }
 
@@ -157,16 +187,17 @@ export class PlatformRayQueries implements RayQueries {
     }
 
     /**
-     * Resolves once no mesh tree is building. The trees still reach the GPU
-     * only at the next `update` (the platform's next `encode`).
+     * Resolves once no mesh tree and no top-level shape is building. They
+     * still reach the GPU only at the next `update` (the platform's next `encode`).
      */
-    whenBuilt(): Promise<void> {
-        if (this.pendingBuilds === 0) return Promise.resolve();
-        return new Promise((resolve) => this.builtWaiters.push(resolve));
+    async whenBuilt(): Promise<void> {
+        if (this.pendingBuilds > 0) await new Promise<void>((resolve) => this.builtWaiters.push(resolve));
+        await this.gpuTopLevel?.whenIdle();
     }
 
     /** Compiles the batch kernels. Called by the platform's `prepare`. */
     async prepare(kernels: KernelBuilder): Promise<void> {
+        await this.gpuTopLevel?.prepare(kernels);
         if (this.closestKernel && this.anyKernel) return;
         const batchGroup: GPUBindGroupLayoutDescriptor = {
             label: `${this.label} trace batch`,
@@ -189,9 +220,10 @@ export class PlatformRayQueries implements RayQueries {
     /**
      * Brings the tracer's buffers up to date with this frame's scene upload.
      * Called by the platform right after the scene copy's own `encode`, in the
-     * same encoder, before any technique runs.
+     * same encoder, before any technique runs. `timer` times the top-level
+     * refit pass (`platform/top-level refit`) when given.
      */
-    update(encoder: GPUCommandEncoder, upload: SceneUpload): void {
+    update(encoder: GPUCommandEncoder, upload: SceneUpload, timer?: GpuTimerScope): void {
         this.checkLive();
         this.nodes.releaseRetired();
         this.triangles.releaseRetired();
@@ -200,12 +232,16 @@ export class PlatformRayQueries implements RayQueries {
 
         if (upload.instancesChanged) this.topLevelStale = true;
         // Removals first: a slot may be removed and reused by a new mesh in the same frame.
+        let meshesChanged = upload.meshesRemoved.length > 0;
         for (const slot of upload.meshesRemoved) {
             this.bumpGeneration(slot);
             this.releaseTree(slot);
             this.topLevelStale = true;
         }
-        for (const mesh of upload.meshesUploaded) this.startBuild(mesh);
+        for (const mesh of upload.meshesUploaded) {
+            this.gpuTopLevel?.meshUploaded(mesh.slot, mesh.packed.bounds);
+            this.startBuild(mesh);
+        }
 
         // Placing trees can fail (a buffer over the device's binding limit). The top level
         // is still rebuilt from what is placed, so it never points at a released range, and
@@ -221,8 +257,19 @@ export class PlatformRayQueries implements RayQueries {
             }
             if (this.nodes.buffer !== buffersBefore[0] || this.triangles.buffer !== buffersBefore[1]) this.bufferVersion++;
             this.topLevelStale = true;
+            meshesChanged = true;
         }
-        if (this.topLevelStale) {
+        if (this.gpuTopLevel) {
+            // Refit (and swap in a new shape) on the GPU: moves never rebuild on the CPU here.
+            if (failure === null) {
+                this.gpuTopLevel.update(
+                    encoder,
+                    { instancesChanged: upload.instancesChanged, meshesChanged, deepestMesh: this.deepestPlacedMesh() },
+                    timer,
+                );
+            }
+            this.topLevelStale = false;
+        } else if (this.topLevelStale) {
             this.rebuildTopLevel();
             this.topLevelStale = false;
         }
@@ -277,6 +324,7 @@ export class PlatformRayQueries implements RayQueries {
         if (this.disposed) return;
         this.disposed = true;
         this.builder.dispose();
+        this.gpuTopLevel?.dispose();
         this.nodes.destroy();
         this.triangles.destroy();
         for (const buffer of this.retiredTopLevel) buffer.destroy();
@@ -325,6 +373,7 @@ export class PlatformRayQueries implements RayQueries {
         this.nodes.release(tree.nodeOffset, tree.nodeCount);
         this.triangles.release(tree.triangleOffset, tree.triangleCount);
         this.placed.delete(slot);
+        this.gpuTopLevel?.setMeshTree(slot, null);
     }
 
     /** Copies arrived trees into the shared buffers, growing them first if needed. */
@@ -353,14 +402,16 @@ export class PlatformRayQueries implements RayQueries {
         arrived.forEach(({ slot, bvh }, index) => {
             this.nodes.write(nodeOffsets[index], bvh.nodes);
             this.triangles.write(triangleOffsets[index], bvh.triangles);
-            this.placed.set(slot, {
+            const placed: PlacedTree = {
                 nodeOffset: nodeOffsets[index],
                 nodeCount: bvh.nodeCount,
                 triangleOffset: triangleOffsets[index],
                 triangleCount: bvh.triangleCount,
                 maxDepth: bvh.maxDepth,
                 bounds: bvh.bounds,
-            });
+            };
+            this.placed.set(slot, placed);
+            this.gpuTopLevel?.setMeshTree(slot, placed);
         });
     }
 
@@ -398,6 +449,13 @@ export class PlatformRayQueries implements RayQueries {
     // Top level
     // -----------------------------------------------------------------------
 
+    private deepestPlacedMesh(): number {
+        let deepest = 0;
+        for (const tree of this.placed.values()) deepest = Math.max(deepest, tree.maxDepth);
+        return deepest;
+    }
+
+    /** The CPU fallback: rebuilds the whole top level on this thread. */
     private rebuildTopLevel(): void {
         const instances: TraceInstance[] = [];
         let deepestMesh = 0;
@@ -441,14 +499,15 @@ export class PlatformRayQueries implements RayQueries {
             this.bufferVersion++;
         }
         this.device.queue.writeBuffer(this.topLevelBuffer, 0, topLevel.buffer);
-        this.topLevelInstanceCount = topLevel.instanceCount;
+        this.cpuTopLevelInstanceCount = topLevel.instanceCount;
     }
 
     private createTopLevelBuffer(size: number): GPUBuffer {
         return this.device.createBuffer({
             label: `${this.label} trace top level`,
             size: Math.ceil(size / 16) * 16,
-            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+            // COPY_SRC lets tests and debug tools read the tree back.
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
         });
     }
 

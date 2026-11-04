@@ -12,6 +12,42 @@
 
 /** One node: two child boxes (Aila-Laine layout), 64 bytes. */
 export const GPU_LAYOUT_NODE_BYTES = 64;
+export const GPU_LAYOUT_NODE_WORDS = GPU_LAYOUT_NODE_BYTES / 4;
+
+/**
+ * Word positions inside a node, matching the tracer's WGSL `GiBvhNode`:
+ *
+ *     leftMin: vec3f,  leftIndex: u32,
+ *     leftMax: vec3f,  rightIndex: u32,
+ *     rightMin: vec3f, leftCount: u32,
+ *     rightMax: vec3f, rightCount: u32,
+ *
+ * A child with `count > 0` is a leaf holding `count` primitives starting at
+ * `index`; `count == 0` is an inner node at `index`. Child `side` (0 left,
+ * 1 right) keeps its box at words `8 * side` (min) and `8 * side + 4` (max).
+ */
+export const GPU_LAYOUT_NODE_WORD = {
+    leftMin: 0,
+    leftIndex: 3,
+    leftMax: 4,
+    rightIndex: 7,
+    rightMin: 8,
+    leftCount: 11,
+    rightMax: 12,
+    rightCount: 15,
+} as const;
+
+/** Words between the left child's box and the right child's box (see {@link GPU_LAYOUT_NODE_WORD}). */
+export const GPU_LAYOUT_CHILD_STRIDE_WORDS = 8;
+
+/**
+ * `index` of a child that does not exist. Only a tree with a single primitive
+ * has one: its root holds that primitive on the left and nothing on the right.
+ */
+export const GPU_LAYOUT_EMPTY_CHILD = 0xffffffff;
+
+/** Parent of the root node in a parent array. */
+export const GPU_LAYOUT_NO_PARENT = 0xffffffff;
 
 /** One triangle in tree order: three corners, the original index and flags, 48 bytes. */
 export const GPU_LAYOUT_TRIANGLE_BYTES = 48;

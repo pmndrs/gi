@@ -27,6 +27,7 @@ export const MEASURED_PATHS = [
     'packages/bvh',
     ':(glob)tools/gpu/*',
     ':(glob)tools/gpu/pages/trace-*/**',
+    ':(glob)tools/gpu/pages/tlas-*/**',
     'scenes/manifests',
     'scenes/src',
     'pnpm-lock.yaml',

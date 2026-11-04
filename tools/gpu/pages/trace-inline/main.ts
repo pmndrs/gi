@@ -336,4 +336,7 @@ await runGpuTest(async ({ device, log }) => {
         sharedEdges,
         ninthStorageBuffer: limitMessage,
     };
+}, {
+    // As a host asking optionalFeatures(adapter): the platform then keeps its top level on the GPU (B1a).
+    optionalFeatures: ['subgroups'],
 });

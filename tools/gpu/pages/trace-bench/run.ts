@@ -347,7 +347,7 @@ function describeMode(sceneId: string, mode: ModeResult): string {
 }
 
 /** The user-agent string freezes the version at 156.0.0.0; the client hints still know the real one. */
-async function fullBrowserVersion(): Promise<string | null> {
+export async function fullBrowserVersion(): Promise<string | null> {
     const hints = (
         navigator as unknown as {
             userAgentData?: { getHighEntropyValues(hints: string[]): Promise<{ fullVersionList?: { brand: string; version: string }[] }> };
