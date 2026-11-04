@@ -1,0 +1,80 @@
+{
+    "id": "bistro-interior",
+    "title": "Bistro, interior",
+    "description": "The inside of the Amazon Lumberyard Bistro (NVIDIA ORCA): a dense furnished interior with many small objects and warm lamps (camera bookmarks and lights are rough guesses until reviewed).",
+    "tags": ["interior", "furnished", "large", "textured"],
+    "units": "meters",
+    "upAxis": "y",
+    "parts": [
+        {
+            "kind": "model",
+            "asset": "bistro-interior",
+            "path": "BistroInterior.glb",
+            "transform": {
+                "position": [0, 0, 0],
+                "rotationDeg": [0, 0, 0],
+                "scale": 1
+            }
+        }
+    ],
+    "cameras": [
+        {
+            "name": "dining-room",
+            "position": [0, 1.7, 0],
+            "target": [6, 1.4, -6],
+            "fovYDeg": 70
+        },
+        {
+            "name": "bar",
+            "position": [10, 1.7, 2],
+            "target": [4, 1.4, -8],
+            "fovYDeg": 70
+        }
+    ],
+    "lights": [
+        {
+            "type": "point",
+            "label": "lamp-1",
+            "color": [1, 0.85, 0.65],
+            "intensity": 40,
+            "position": [3, 3.2, -8],
+            "range": 12
+        },
+        {
+            "type": "point",
+            "label": "lamp-2",
+            "color": [1, 0.85, 0.65],
+            "intensity": 40,
+            "position": [8, 3.2, -8],
+            "range": 12
+        },
+        {
+            "type": "point",
+            "label": "lamp-3",
+            "color": [1, 0.85, 0.65],
+            "intensity": 40,
+            "position": [5.75, 3.2, -1],
+            "range": 12
+        }
+    ],
+    "environment": {
+        "type": "none"
+    },
+    "volume": {
+        "center": [5.75, 3.87, -4.24],
+        "size": [15.8, 7.4, 19.5],
+        "probeSpacing": 0.5
+    },
+    "nativeCapable": true,
+    "credits": [
+        {
+            "asset": "bistro-interior",
+            "license": "CC-BY-4.0",
+            "attribution": "Amazon Lumberyard Bistro, Interior. Open Research Content Archive (ORCA), NVIDIA. CC BY 4.0. Converted to glTF.",
+            "sourceUrl": "https://developer.nvidia.com/orca/amazon-lumberyard-bistro"
+        }
+    ],
+    "referenceCube": {
+        "position": [4, 0.75, -4]
+    }
+}

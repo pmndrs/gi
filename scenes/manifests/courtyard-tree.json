@@ -1,0 +1,81 @@
+{
+    "id": "courtyard-tree",
+    "title": "Courtyard with a tree",
+    "description": "A small walled courtyard (10 m square, one gateway) with an alpha-cutout tree in the middle, lit by the sun, for testing leaf shadows and sky light through a gateway.",
+    "tags": ["exterior", "alpha-cutout", "foliage", "textured"],
+    "units": "meters",
+    "upAxis": "y",
+    "parts": [
+        {
+            "kind": "procedural",
+            "builder": "courtyard"
+        },
+        {
+            "kind": "model",
+            "asset": "courtyard-tree",
+            "path": "tree_small_02_2k_masked.glb",
+            "transform": {
+                "position": [0, 0, 0],
+                "rotationDeg": [0, 0, 0],
+                "scale": 1
+            }
+        }
+    ],
+    "cameras": [
+        {
+            "name": "from-the-gateway",
+            "position": [-3.5, 1.7, 4.4],
+            "target": [0.3, 2.2, 0],
+            "fovYDeg": 60
+        },
+        {
+            "name": "from-the-south-east",
+            "position": [4.0, 1.5, 4.0],
+            "target": [-1.0, 2.0, -1.5],
+            "fovYDeg": 65
+        },
+        {
+            "name": "under-the-tree",
+            "position": [2.2, 1.5, 2.5],
+            "target": [0, 3, 0],
+            "fovYDeg": 70
+        }
+    ],
+    "lights": [
+        {
+            "type": "directional",
+            "label": "sun",
+            "color": [1, 0.95, 0.85],
+            "intensity": 3,
+            "direction": [-0.4, -0.8, -0.3]
+        }
+    ],
+    "environment": {
+        "type": "procedural",
+        "sunDirection": [0.4, 0.8, 0.3],
+        "turbidity": 3,
+        "intensity": 1
+    },
+    "volume": {
+        "center": [0, 2.12, 0],
+        "size": [10.6, 4.9, 10.6],
+        "probeSpacing": 0.5
+    },
+    "nativeCapable": true,
+    "referenceCube": {
+        "position": [2.6, 0.5, -2.0]
+    },
+    "credits": [
+        {
+            "asset": null,
+            "license": "MIT",
+            "attribution": "Courtyard walls and ground: MIT, this repo."
+        },
+        {
+            "asset": "courtyard-tree",
+            "license": "CC0-1.0",
+            "attribution": "Tree Small 02 by Rico Cilliers, Poly Haven (polyhaven.com). CC0.",
+            "sourceUrl": "https://polyhaven.com/a/tree_small_02"
+        }
+    ]
+}

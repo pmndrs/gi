@@ -1,0 +1,57 @@
+{
+    "id": "cornell-box",
+    "title": "Cornell box",
+    "description": "The standard Cornell box (5.55 m across, red and green side walls, two white blocks, a ceiling light) for checking colour bleeding against a reference renderer.",
+    "tags": ["interior", "classic", "known-answer", "emissive-light"],
+    "units": "meters",
+    "upAxis": "y",
+    "parts": [
+        {
+            "kind": "procedural",
+            "builder": "cornell-box",
+            "options": {
+                "light": "emissive"
+            }
+        }
+    ],
+    "cameras": [
+        {
+            "name": "front",
+            "position": [2.78, 2.74, 13.6],
+            "target": [2.78, 2.74, 0],
+            "fovYDeg": 39.3
+        },
+        {
+            "name": "inside-from-red-wall",
+            "position": [0.7, 3.0, 5.3],
+            "target": [4.0, 1.6, 1.5],
+            "fovYDeg": 65
+        },
+        {
+            "name": "diagonal-to-the-red-wall",
+            "position": [5.2, 3.0, 5.5],
+            "target": [1.5, 2.0, 0.5],
+            "fovYDeg": 70
+        }
+    ],
+    "lights": [],
+    "environment": {
+        "type": "none"
+    },
+    "volume": {
+        "center": [2.78, 2.74, 2.8],
+        "size": [5.8, 5.6, 5.8],
+        "probeSpacing": 0.5
+    },
+    "nativeCapable": true,
+    "referenceCube": {
+        "position": [0.9, 0.5, 4.9]
+    },
+    "credits": [
+        {
+            "asset": null,
+            "license": "MIT",
+            "attribution": "MIT, this repo."
+        }
+    ]
+}

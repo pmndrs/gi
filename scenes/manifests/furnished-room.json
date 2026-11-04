@@ -1,0 +1,74 @@
+{
+    "id": "furnished-room",
+    "title": "Breakfast room (furnished room)",
+    "description": "McGuire's Breakfast Room (about 3.9 by 4.9 m, 3.1 m high): a furnished interior with a six-person table, a pendant lamp and a window with blinds, for realistic everyday lighting.",
+    "tags": ["interior", "furnished", "textured"],
+    "units": "meters",
+    "upAxis": "y",
+    "parts": [
+        {
+            "kind": "model",
+            "asset": "furnished-room",
+            "path": "BreakfastRoom.glb",
+            "transform": {
+                "position": [0.2, 0.483, -0.916],
+                "rotationDeg": [0, 0, 0],
+                "scale": 0.34
+            }
+        }
+    ],
+    "cameras": [
+        {
+            "name": "from-the-corner",
+            "position": [1.6, 1.5, 2.2],
+            "target": [-0.3, 0.8, -1.5],
+            "fovYDeg": 70
+        },
+        {
+            "name": "towards-the-window",
+            "position": [-1.6, 1.4, 0.5],
+            "target": [1.9, 1.6, -0.5],
+            "fovYDeg": 65
+        }
+    ],
+    "lights": [
+        {
+            "type": "directional",
+            "label": "sun",
+            "color": [1, 0.95, 0.85],
+            "intensity": 3,
+            "direction": [-0.6, -0.6, 0.2]
+        },
+        {
+            "type": "point",
+            "label": "pendant-lamp",
+            "color": [1, 0.9, 0.75],
+            "intensity": 5,
+            "position": [-0.01, 1.81, -1.58],
+            "range": 10
+        }
+    ],
+    "environment": {
+        "type": "procedural",
+        "sunDirection": [0.6, 0.6, -0.2],
+        "turbidity": 3,
+        "intensity": 1
+    },
+    "volume": {
+        "center": [0, 1.565, 0],
+        "size": [4.1, 3.4, 5.1],
+        "probeSpacing": 0.25
+    },
+    "nativeCapable": true,
+    "credits": [
+        {
+            "asset": "furnished-room",
+            "license": "CC-BY-3.0",
+            "attribution": "Breakfast Room by Wig42 (http://www.blendswap.com/blends/view/75431), CC BY 3.0. OBJ from Morgan McGuire's Computer Graphics Archive (https://casual-effects.com/data). Marble texture public domain. Converted to glTF.",
+            "sourceUrl": "https://casual-effects.com/data"
+        }
+    ],
+    "referenceCube": {
+        "position": [-1.5, 0.5, -0.4]
+    }
+}

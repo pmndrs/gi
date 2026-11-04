@@ -1,0 +1,66 @@
+{
+    "id": "bistro-exterior",
+    "title": "Bistro, exterior",
+    "description": "The street outside the Amazon Lumberyard Bistro (NVIDIA ORCA): a large sunlit outdoor scene with trees, cars and cutout foliage (camera bookmarks are rough guesses until reviewed).",
+    "tags": ["exterior", "large", "textured", "alpha-cutout"],
+    "units": "meters",
+    "upAxis": "y",
+    "parts": [
+        {
+            "kind": "model",
+            "asset": "bistro-exterior",
+            "path": "BistroExterior.glb",
+            "transform": {
+                "position": [0, 0, 0],
+                "rotationDeg": [0, 0, 0],
+                "scale": 1
+            }
+        }
+    ],
+    "cameras": [
+        {
+            "name": "street",
+            "position": [-14, 2, 10],
+            "target": [0, 3, -5],
+            "fovYDeg": 65
+        },
+        {
+            "name": "across-the-street",
+            "position": [10, 2, 20],
+            "target": [0, 3, 0],
+            "fovYDeg": 65
+        }
+    ],
+    "lights": [
+        {
+            "type": "directional",
+            "label": "sun",
+            "color": [1, 0.95, 0.85],
+            "intensity": 3,
+            "direction": [-0.4, -0.8, -0.45]
+        }
+    ],
+    "environment": {
+        "type": "procedural",
+        "sunDirection": [0.4, 0.8, 0.45],
+        "turbidity": 3,
+        "intensity": 1
+    },
+    "volume": {
+        "center": [24.42, 17.99, 4.27],
+        "size": [174.5, 52, 185],
+        "probeSpacing": 4
+    },
+    "nativeCapable": true,
+    "credits": [
+        {
+            "asset": "bistro-exterior",
+            "license": "CC-BY-4.0",
+            "attribution": "Amazon Lumberyard Bistro, Exterior. Open Research Content Archive (ORCA), NVIDIA. CC BY 4.0. Converted to glTF.",
+            "sourceUrl": "https://developer.nvidia.com/orca/amazon-lumberyard-bistro"
+        }
+    ],
+    "referenceCube": {
+        "position": [-10, 0.5, 3]
+    }
+}
