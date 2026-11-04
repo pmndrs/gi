@@ -227,11 +227,12 @@ One bullet per fact, each with its source. Add a bullet when something cost you 
 - **Every browser with WebGPU also has WASM SIMD** (Chrome 91+, Firefox 89+, Safari 16.4+), so no scalar WASM build is needed. Source: B0.
 - **JS memory speed on this laptop:** just reading 300 MB takes about 110 ms, so a JS pass over a Sponza-sized tree costs 100-300 ms whatever the code does. Move such passes into WASM or onto the GPU. Source: B0.
 - **Check the RTX's clock before timing:** `nvidia-smi --query-gpu=clocks.sm,clocks.max.sm --format=csv` under load; the RTX 3060 Laptop's maximum is 2100 MHz. Source: T1.6.
+- **The RTX 3060 Laptop doesn't reach 2100 MHz under sustained load:** after the unlock it held about 1610–1660 MHz, held back by the power cap (about 72 W) and thermal slowdown (87 °C). Dennis's own apps keep it 16–28% busy when "idle". Expect run-to-run jumps; take 3+ runs, and repeat a set that jumps. Source: RTX re-time, 2026-11-05.
 - **The RTX 3060's clock was locked at 1200 MHz on 2026-11-05.** Dennis had set `nvidia-smi -lgc 1200,1200` during an earlier benchmark; nothing in the repo did it. He reset it with `nvidia-smi -rgc`.
   - **Affected for certain:** T1.6's GI-sampling rows in `shading.csv` (0.62 / 1.07 ms), which say `note/sm_clock_locked_mhz,1200`.
   - **Possibly affected** (the lock's start time isn't known): every RTX GPU timing recorded on 2026-11-05: T1.3's trace rows (d6ee376), B1a's refit rows in `bvh.csv`, T1.5a/T1.5b's per-probe DDGI timings, and the native matched-count runs (954d393).
   - **Not affected:** Intel UHD timings, CPU timings (adapter sync, builds), and every correctness result.
-  - T1.9 re-times the RTX numbers it reports after the reset.
+  - Re-timed after the reset (PROGRESS, "RTX re-time"): shadow rays were 16–19% faster, DDGI per probe 17–37% cheaper, native blend 18% faster. Closest-hit and native totals barely moved.
 - **Python on Windows writes CRLF in text mode;** write files with `newline='\n'` or in binary mode. Source: T1.6.
 - **Check the GPU is idle before timing.** A browser tab left open on the viewer used about 20% of the RTX 3060 and cost every tracer about 35%. Look at Task Manager's GPU column, or `nvidia-smi`, first. Source: B0.
 - **Repeat runs:** `repeat.ts` writes `run<k>/` rows plus `median/` rows to `trace.csv`, and the commit column checks only the measured paths for `-dirty`. Source: T0.10 part C.

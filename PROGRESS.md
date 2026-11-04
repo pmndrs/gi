@@ -21,6 +21,36 @@ Rules:
 
 ---
 
+## 2026-11-05 · RTX re-time after the clock unlock · gpu-tester (sonnet), lead checked
+Did (fbc9523): `bench-lock run` samples `nvidia-smi` (SM and memory clock, utilisation) about once a second and writes them out. Bench rows now carry `note/sm_clock_mhz` (the median over all samples, which reads low for some pages; README says so). Re-timed under the lock, 3 runs each, after Dennis reset the clock lock.
+Clocks seen: under load the SM clock held about 1610–1660 MHz (min 780–1440, max 1730–2010), not 2100. nvidia-smi showed the power cap (about 72 W) and thermal slowdown (87 °C). Dennis's own apps keep the RTX at 16–28% when idle, with spikes near 50%.
+T1.6 GI sampling at 2560×1440 (bar 1.0 ms on the inside view; median of 3 per set):
+
+| set | front | inside |
+| --- | --- | --- |
+| 1 | 0.523 (0.507–0.599) | 1.101 (0.905–1.132) |
+| 2 | 0.517 (0.494–0.545) | 0.882 (0.877–0.905) |
+| 3 | 0.526 (0.494–0.536) | 0.910 (0.885–0.920) |
+
+Nine runs: inside median 0.905 ms (0.877–1.132). Set 1 jumped and was repeated twice. Locked at 1200 MHz it read 0.62 / 1.07.
+Spot checks of today's RTX numbers ("changed" = more than about 10%; new rows added, old rows kept):
+
+| check | old (locked or unknown) | new | changed? |
+| --- | --- | --- | --- |
+| sponza-base closest, Mrays/s | 107.3 | 105.1 | no |
+| sponza-base any | 168.3 | 196.0 | yes, +16% |
+| furnished-room closest | 157.3 | 144.9 (128–166) | no |
+| furnished-room any | 512.3 | 610.0 | yes, +19% |
+| top-level refit, 10k, ms | 0.0859 | 0.0959 | +12%, near timer noise |
+| DDGI Cornell, µs per probe | 2.31 | 1.91 | yes, −17% |
+| DDGI two-room, µs per probe | 3.90 | 2.46 | yes, −37% |
+| native Sponza trace, ms | 9.845 | 8.82 (8.61–10.39) | yes, −10% |
+| native Sponza blend, ms | 3.48 | 2.87 | yes, −18% |
+| native Sponza DDGI mean, ms | 16.20 | 16.44 | no |
+
+Not clean: the first trace-bench set had runs 4–10× slower than the rest (Sponza 117, 23, 9 Mrays/s), marked `note/gpu_busy,1`. A second set had the same problem and wasn't appended. The cause wasn't found; other agents' correctness pages and Dennis's apps share the GPU. Native runs were no longer flat to 1% as the locked ones were.
+Next: T1.9 measures with the clock note and on an idle machine where possible. Variance matters more than the clock now.
+
 ## 2026-11-05 · T1.7 · implementer (opus); Opus review: fail (Bistro CPU didn't reproduce), fixes in progress
 Did (d0e3525), in `packages/ddgi-three`:
 - `GILight`: a `Light` subclass with a registered node. One `wgslFn` built from `gi.shading.parameters`, returning irradiance and coverage together (coverage computed only when an environment or `LightProbeGrid` needs it). `ExternalTexture`s re-read every render, `renderGroup` vec4s, three's light-probe slot at priority 1, given up at intensity 0. The env-diffuse workaround wraps the lighting model's `indirect` (Lambert and Phong get no env diffuse at all; measured 0).
@@ -52,7 +82,7 @@ Review (Opus): lint, typecheck, build, test 749; three-neutrality, three-environ
 - a docs/api/three.md page.
 Known gap for the fix round: textured materials bounce with their base colour only (the core samples no textures until M4), so textured scenes read too bright. The adapter should fold in each texture's average colour.
 
-## 2026-11-05 · T1.6 · implementer (opus); Opus review: pass with notes (timing not judged), fixed; waiting on the RTX clock to re-time
+## 2026-11-05 · T1.6 · implementer (opus); Opus review: pass with notes, fixed; re-timed at normal clocks; done
 Did:
 - DDGI's shading module (`techniques/ddgi/shading.ts`, `wgsl/shading.ts`): `giIrradiance` is `ddgiSampleIrradiance` unchanged; `giCoverage` (DECISIONS); `giDebugColor` with GI only, coverage and probes near this point. 3 textures, 2 samplers, 4 vec4f uniforms, `globalsCode` and `writeUniforms`. `version` 1. `provides.radiance` is false: a rough-only fallback is right only at roughness 1.
 - The sampling loop moved into `ddgiAccumulateField` (bit-identical leak numbers). Per-sample hoisting plus `inverseSqrt` made it 16% cheaper, a rounding-level change; all T1.5 checks pass again on both GPUs (furnace −0.16% / −0.28%, Cornell +5.68% / +5.63%, two-room leak 0.797% / 0.795%).
