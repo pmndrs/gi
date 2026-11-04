@@ -262,7 +262,8 @@ Rules for every M1 task:
 | T1.2 | Platform scene copy | implementer | M | none | done (Opus review passed with notes, all fixed; both GPUs) |
 | T1.3 | Tracer as a platform module | implementer | M | T1.2 (B0 as built) | review (168e632) |
 | T1.4 | Hit shading | implementer | M | T1.1, T1.3 | active (implementer, 2026-11-05) |
-| T1.5 | DDGI field and update loop | main session designs, implementer builds | L | T1.4 | design (main session, 2026-11-04) |
+| T1.5a | DDGI field and update loop | main session designs, implementer builds | M | T1.4 | todo (design done: docs/design/ddgi.md) |
+| T1.5b | DDGI classification and relocation | implementer | M | T1.5a | todo |
 | T1.6 | Shading module and plain-WebGPU example | implementer | M | T1.5 | todo |
 | T1.7 | three.js adapter | implementer | M | T1.6 | todo |
 | T1.8 | Viewer integration | implementer | M | T1.7 | todo |
@@ -309,11 +310,14 @@ Done-whens for the B stages are in `docs/design/bvh-framework.md`. B1a's: a 10k-
 - **T1.5 DDGI field and update loop.**
   - Main session design first: probe layout, octahedral irradiance and distance atlases, rays with a random rotation each update, hysteresis, unlimited bounce from the current field, a budget in probes per frame, and classification and relocation on the GPU.
   - Tracing is inline (trace, shade and accumulate in one kernel). If the update cost comes near its budget, time inline against batch once.
-  - Done when:
+  - Split before starting, as PLAN asks of L tasks (2026-11-05). Design and measurements: `docs/design/ddgi.md`.
+  - **T1.5a, field and update loop:** the volume, the atlases, the `ddgi/update` and `ddgi/write` kernels with every probe treated as active, the budget and update order, `ddgiSampleIrradiance`, and the engine-free test view. Done when:
     - the furnace room converges to its analytic value within 2%;
-    - Cornell's indirect light matches Cycles within the M1 accuracy target;
+    - Cornell's indirect light matches Cycles within the M1 accuracy target (the point-light Cornell, DECISIONS).
+  - **T1.5b, classification and relocation:** the fixed-ray reductions (subgroups first, plus the fallback and its test), relocation, the probe states and their effect on sampling. Done when:
     - probes inside walls are classified off;
-    - the two-room leak is ≤ 1%.
+    - the two-room leak is ≤ 1% (DECISIONS defines it);
+    - the furnace and Cornell checks of T1.5a still pass.
 - **T1.6 Shading module and plain-WebGPU example.**
   - `giIrradiance` (Chebyshev visibility, coverage) and `globalsCode`; `examples/webgpu/hello` renders Cornell with GI.
   - Done when GI sampling costs ≤ 1.0 ms at 1440p on the RTX 3060.
