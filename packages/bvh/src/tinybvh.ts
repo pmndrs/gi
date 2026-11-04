@@ -10,7 +10,8 @@
  * Two outputs from the same tree:
  * - `build`: the tree's shape (`MeshTreeTopology`, the Builder contract's plain description);
  * - `buildLayout` (stage B0b): the tracer's GPU layout, written inside the WASM.
- *   Converting the shape in JavaScript instead cost about 0.65 s on Sponza.
+ *   It replaces a JavaScript pass over every node and triangle, which was
+ *   memory-bound and slow on big meshes (timings: PROGRESS.md, B0b).
  *
  * tinybvh (https://github.com/jbikker/tinybvh, MIT, Jacco Bikker). Commit and
  * hashes: native/build-wasm.ts and THIRD_PARTY.md. Licence texts (tinybvh's and
@@ -44,7 +45,14 @@ const BUILD_STATUS = {
     badLeafLimit: 5,
     badOrder: 6,
     badTree: 7,
+    tooLarge: 8,
 } as const;
+
+/**
+ * The largest byte size `tbvh_alloc` takes: its argument is a 32-bit WASM
+ * integer, so a bigger size would wrap to a small one.
+ */
+const MAX_ALLOCATION_BYTES = 0xffffffff;
 
 /** What `badTree` found (`TreeProblem` in native/tinybvh-wasm.cpp), read from `tbvh_error_detail()`. */
 const TREE_PROBLEMS: Record<number, string> = {
@@ -204,6 +212,8 @@ function throwOnStatus(wasm: TinyBvhExports, status: number, geometry: TinyBvhIn
             throw new RangeError(`index ${detail} is ${geometry.indices?.[detail] ?? detail}, but there are ${vertexCount} vertices`);
         case BUILD_STATUS.outOfMemory:
             throw new Error('tinybvh: out of WASM memory');
+        case BUILD_STATUS.tooLarge:
+            throw new RangeError('tinybvh: the mesh is too big for 32-bit WebAssembly (one of its arrays would be 4 GB or more)');
         case BUILD_STATUS.badOrder:
             throw new Error('tinybvh ordered its triangles wrongly: not every triangle exactly once');
         case BUILD_STATUS.badTree:
@@ -211,6 +221,14 @@ function throwOnStatus(wasm: TinyBvhExports, status: number, geometry: TinyBvhIn
         default:
             throw new Error(`tinybvh failed with status ${status}`);
     }
+}
+
+/** Allocates WASM memory for an input array, refusing sizes the 32-bit allocator would wrap. */
+function allocateInput(wasm: TinyBvhExports, bytes: number, what: string): number {
+    if (bytes > MAX_ALLOCATION_BYTES) throw new RangeError(`tinybvh: the ${what} are too big for 32-bit WebAssembly (${bytes} bytes)`);
+    const pointer = wasm.tbvh_alloc(bytes);
+    if (pointer === 0) throw new Error(`tinybvh: out of WASM memory for the ${what}`);
+    return pointer;
 }
 
 /**
@@ -222,10 +240,10 @@ function throwOnStatus(wasm: TinyBvhExports, status: number, geometry: TinyBvhIn
 function withTinyBvhTree<T>(wasm: TinyBvhExports, geometry: TinyBvhInput, read: (wasmBuildMs: number) => T): T {
     const { positions, indices } = geometry;
     const { vertexCount, triangleCount } = countInput(geometry);
-    const positionPointer = wasm.tbvh_alloc(positions.length * 4);
-    const indexPointer = indices ? wasm.tbvh_alloc(indices.length * 4) : 0;
+    const positionPointer = allocateInput(wasm, positions.length * 4, 'positions');
+    let indexPointer = 0;
     try {
-        if (positionPointer === 0 || (indices && indexPointer === 0)) throw new Error('tinybvh: out of WASM memory for the input');
+        if (indices) indexPointer = allocateInput(wasm, indices.length * 4, 'indices');
         // Views are made after every allocation: growing the memory replaces its buffer.
         new Float32Array(wasm.memory.buffer, positionPointer, positions.length).set(positions);
         if (indices) new Uint32Array(wasm.memory.buffer, indexPointer, indices.length).set(indices);
@@ -268,9 +286,8 @@ function buildGpuLayout(wasm: TinyBvhExports, geometry: TinyBvhInput, options: T
     if (triangleFlags && triangleFlags.length < triangleCount) throw new RangeError('triangleFlags must have one entry per triangle');
 
     return withTinyBvhTree(wasm, geometry, (wasmBuildMs) => {
-        const flagsPointer = triangleFlags ? wasm.tbvh_alloc(triangleCount * 4) : 0;
+        const flagsPointer = triangleFlags ? allocateInput(wasm, triangleCount * 4, 'triangle flags') : 0;
         try {
-            if (triangleFlags && flagsPointer === 0) throw new Error('tinybvh: out of WASM memory for the triangle flags');
             if (triangleFlags) new Uint32Array(wasm.memory.buffer, flagsPointer, triangleCount).set(triangleFlags.subarray(0, triangleCount));
 
             const layoutStart = performance.now();

@@ -96,6 +96,22 @@ function signedZeroGrid(random: Random): MeshGeometry {
     return { positions, indices: quad.indices };
 }
 
+/**
+ * A triangle soup with NaN written into the coordinates `isNaN` picks. Box code
+ * must skip a NaN the same way on both paths (`if (value < low)` is false for a
+ * NaN). The NaN is the default quiet one: copying through JavaScript numbers
+ * could quiet a signalling NaN, which the WASM copies bit for bit.
+ */
+function soupWithNaN(count: number, seed: number, isNaN: (triangle: number, corner: number, axis: number) => boolean): MeshGeometry {
+    const positions = Float32Array.from(randomTriangleSoup(createRandom(seed), count, 10, 1).positions);
+    for (let triangle = 0; triangle < count; triangle++) {
+        for (let corner = 0; corner < 3; corner++) {
+            for (let axis = 0; axis < 3; axis++) if (isNaN(triangle, corner, axis)) positions[triangle * 9 + corner * 3 + axis] = NaN;
+        }
+    }
+    return { positions };
+}
+
 describe('tinybvh GPU layout written in WASM (B0b)', () => {
     it('agrees with layout.ts on sizes and limits', () => {
         expect(GPU_LAYOUT_NODE_BYTES).toBe(BVH_NODE_BYTES);
@@ -154,6 +170,20 @@ describe('tinybvh GPU layout written in WASM (B0b)', () => {
         compareBothWays({ positions: grid.positions, indices: Uint16Array.from(indices) });
         const triangleFlags = Uint32Array.from({ length: indices.length / 3 }, (_, triangle) => (triangle * 2654435761) >>> 0);
         compareBothWays({ ...grid, triangleFlags });
+    });
+
+    it('matches when some coordinates are NaN, and both refuse the tree when whole triangles are', () => {
+        // One coordinate of some corners is NaN: tinybvh still builds a valid tree, and
+        // the boxes skip the NaN on that axis only.
+        for (const count of [5, 300, 3000]) {
+            compareBothWays(soupWithNaN(count, count, (triangle, corner, axis) => triangle % 7 === 0 && corner === 1 && axis === 0));
+        }
+        // Every coordinate of every 11th triangle is NaN. With 300 triangles tinybvh's tree is
+        // still whole; with 3000 it leaves positions out of every leaf, and both paths say so.
+        compareBothWays(soupWithNaN(300, 300, (triangle) => triangle % 11 === 0));
+        const broken = soupWithNaN(3000, 3000, (triangle) => triangle % 11 === 0);
+        expect(() => buildMeshBvhFromTopology(broken, tinyBvh.build(broken).topology)).toThrow(/in no leaf/);
+        expect(() => tinyBvh.buildLayout(broken)).toThrow(/in no leaf/);
     });
 
     it('refuses bad input the way the JavaScript path does', () => {

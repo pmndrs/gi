@@ -23,9 +23,20 @@ It uses tinybvh's default builder, which with SIMD is Bonsai (Ganestam et al.,
   triangles in tree order, parents and the mesh's box. The bytes are exactly
   what ddgi-core's `buildMeshBvhFromTopology` makes from `build`'s shape; a
   test there checks it (`mesh-bvh-tinybvh-layout.test.ts`). As there, the
-  boxes are recomputed from the triangles, not taken from tinybvh. On Sponza
-  this takes about 0.2 s, against 0.65 s for the conversion in JavaScript. The
+  boxes are recomputed from the triangles, not taken from tinybvh. It is
+  several times faster than doing the conversion in JavaScript, which walks
+  every node and triangle through typed arrays and is bound by memory traffic;
+  the WASM packs each leaf's triangles and computes its box in one pass, with
+  SIMD compares instead of branches. The timings are in PROGRESS.md (B0b). The
   tracer's tinybvh path uses it.
+
+`tools/bvh/layout-identity.ts` rebuilds every mesh of Sponza and both Bistro
+scenes both ways and reports how many differ (it should be none):
+
+```sh
+node tools/bvh/layout-identity.ts            # all three scenes
+node tools/bvh/layout-identity.ts sponza     # one scene
+```
 
 The layout itself is defined in `packages/ddgi-core/src/platform/trace/layout.ts`.
 The C++ repeats it as structs with `static_assert`s on every offset; change both

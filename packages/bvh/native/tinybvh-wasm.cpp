@@ -11,7 +11,9 @@
 //   the plain tree description of the Builder contract (MeshTreeTopology);
 // - the tracer's GPU layout (stage B0b): 64-byte two-child nodes, 48-byte
 //   triangles in tree order, parent indices and the mesh's box, written here.
-//   Doing this in JavaScript cost about 0.65 s on Sponza, mostly memory traffic.
+//   This replaces a JavaScript pass over every node and triangle, which was
+//   bound by memory traffic and object handling; the timings are in PROGRESS.md
+//   (B0b).
 //
 // The GPU layout is defined in packages/ddgi-core/src/platform/trace/layout.ts
 // (and the WGSL generated from it). The structs below repeat it; a test there
@@ -58,6 +60,8 @@ enum Status : uint32_t {
     // tinybvh's nodes do not form a tree whose leaves cover every triangle once.
     // tbvh_error_detail() says which check failed (TreeProblem).
     STATUS_BAD_TREE = 7,
+    // An array for this mesh would be 4 GB or more, which 32-bit WASM cannot address.
+    STATUS_TOO_LARGE = 8,
 };
 
 // What STATUS_BAD_TREE found, in tbvh_error_detail(). Mirrored in src/tinybvh.ts.
@@ -71,6 +75,21 @@ enum TreeProblem : uint32_t {
 };
 
 static uint32_t errorDetail = 0;
+
+// The byte size of an array of `count` elements, or false if it is 4 GB or more.
+// size_t is 32 bits on wasm32, so `size_t(count) * elementBytes` would wrap for
+// a big enough mesh (above about 67 M triangles for the 64-byte nodes) and
+// malloc would return a buffer far too small for the writes that follow. The
+// product is taken in 64 bits instead (count < 2^32 and elementBytes <= 64, so
+// it cannot overflow there). Such a mesh could not fit in the 4 GB WASM memory
+// anyway; this makes it fail clearly instead of writing past a buffer.
+static bool arrayBytes(uint64_t count, uint64_t elementBytes, size_t& bytes)
+{
+    const uint64_t total = count * elementBytes;
+    if (total > SIZE_MAX) return false;
+    bytes = size_t(total);
+    return true;
+}
 
 // ---------------------------------------------------------------------------
 // The tracer's GPU layout (packages/ddgi-core/src/platform/trace/layout.ts).
@@ -94,6 +113,13 @@ static_assert(offsetof(GpuNode, leftIndex) == 3 * 4 && offsetof(GpuNode, leftMax
 static_assert(offsetof(GpuNode, rightIndex) == 7 * 4 && offsetof(GpuNode, rightMin) == 8 * 4, "NODE_WORD.rightIndex, rightMin");
 static_assert(offsetof(GpuNode, leftCount) == 11 * 4 && offsetof(GpuNode, rightMax) == 12 * 4, "NODE_WORD.leftCount, rightMax");
 static_assert(offsetof(GpuNode, rightCount) == 15 * 4, "NODE_WORD.rightCount");
+static_assert(offsetof(GpuNode, leftMin) == 0, "NODE_WORD.leftMin");
+// The box code loads each box corner as 16 bytes (x, y, z and the word after
+// it; see keepSmaller). These keep those loads inside the node: each corner is
+// three floats followed by a 4-byte word, and the last ends at the node's end.
+static_assert(sizeof(GpuNode::leftMin) == 12 && sizeof(GpuNode::leftMax) == 12, "box corners are three floats");
+static_assert(sizeof(GpuNode::rightMin) == 12 && sizeof(GpuNode::rightMax) == 12, "box corners are three floats");
+static_assert(offsetof(GpuNode, rightMax) + 16 == sizeof(GpuNode), "a 16-byte load at the last corner stays inside the node");
 
 // One triangle in tree order: its three corners exactly as the input has them
 // (the watertight test needs a shared vertex to have the same bits in every
@@ -109,6 +135,16 @@ struct GpuTriangle {
 static_assert(sizeof(GpuTriangle) == 48, "TRIANGLE_BYTES");
 static_assert(offsetof(GpuTriangle, originalIndex) == 3 * 4 && offsetof(GpuTriangle, vertex1) == 4 * 4, "TRIANGLE_WORD");
 static_assert(offsetof(GpuTriangle, flags) == 7 * 4 && offsetof(GpuTriangle, vertex2) == 8 * 4, "TRIANGLE_WORD");
+static_assert(offsetof(GpuTriangle, vertex0) == 0 && offsetof(GpuTriangle, padding) == 11 * 4, "TRIANGLE_WORD");
+// writeLeaf stores each corner as 16 bytes (x, y, z and the vertex's unused w)
+// and then overwrites the fourth word with the field that belongs there. These
+// guarantee that the fourth word of every corner is exactly originalIndex,
+// flags or padding, and that the last store ends at the triangle's end.
+static_assert(sizeof(GpuTriangle::vertex0) == 12 && sizeof(GpuTriangle::vertex1) == 12 && sizeof(GpuTriangle::vertex2) == 12, "corners are three floats");
+static_assert(offsetof(GpuTriangle, originalIndex) == offsetof(GpuTriangle, vertex0) + 12, "word after corner 0");
+static_assert(offsetof(GpuTriangle, flags) == offsetof(GpuTriangle, vertex1) + 12, "word after corner 1");
+static_assert(offsetof(GpuTriangle, padding) == offsetof(GpuTriangle, vertex2) + 12, "word after corner 2");
+static_assert(offsetof(GpuTriangle, vertex2) + 16 == sizeof(GpuTriangle), "the last 16-byte store stays inside the triangle");
 
 // `index` of a right child that does not exist (only a one-triangle mesh has one).
 static const uint32_t EMPTY_CHILD_INDEX = 0xffffffffu;
@@ -142,6 +178,9 @@ struct CurrentLayout {
     float bounds[6] = {};
 };
 
+// writeLeaf loads each vertex as one 16-byte vector: x, y, z, then the unused w.
+static_assert(sizeof(tinybvh::bvhvec4) == 16 && offsetof(tinybvh::bvhvec4, x) == 0 && offsetof(tinybvh::bvhvec4, z) == 8, "a vertex is x, y, z, w");
+
 static CurrentBuild current;
 static CurrentLayout layout;
 
@@ -174,6 +213,10 @@ EXPORT uint32_t tbvh_build(const float* positions, uint32_t vertexCount, const u
     releaseAll();
     errorDetail = 0;
     if (triangleCount == 0) return STATUS_NO_TRIANGLES;
+    // Three indices per triangle must be countable in 32 bits, and the vertex
+    // copy must fit (which also keeps `vertex * 3` below from wrapping).
+    size_t vertexBytes = 0;
+    if (uint64_t(triangleCount) * 3 > UINT32_MAX || !arrayBytes(vertexCount, sizeof(tinybvh::bvhvec4), vertexBytes)) return STATUS_TOO_LARGE;
     if (indices) {
         const uint32_t indexCount = triangleCount * 3;
         for (uint32_t i = 0; i < indexCount; i++) {
@@ -188,7 +231,8 @@ EXPORT uint32_t tbvh_build(const float* positions, uint32_t vertexCount, const u
     }
 
     // tinybvh reads vertices as 16-byte vectors; the copy keeps the input's bits.
-    current.vertices = static_cast<tinybvh::bvhvec4*>(malloc(size_t(vertexCount) * sizeof(tinybvh::bvhvec4)));
+    // tinybvh declares bvhvec4 16-byte aligned; vertexBytes is a multiple of 16, as aligned_alloc requires.
+    current.vertices = static_cast<tinybvh::bvhvec4*>(aligned_alloc(alignof(tinybvh::bvhvec4), vertexBytes));
     if (!current.vertices && vertexCount > 0) return STATUS_OUT_OF_MEMORY;
     for (uint32_t vertex = 0; vertex < vertexCount; vertex++) {
         current.vertices[vertex] = tinybvh::bvhvec4(positions[vertex * 3], positions[vertex * 3 + 1], positions[vertex * 3 + 2], 0.0f);
@@ -264,9 +308,9 @@ EXPORT uint32_t tbvh_triangle_order_length()
 // `if (value < low) low = value`: the new value only if it is strictly smaller
 // (larger), so a tie between -0 and +0, or a NaN, keeps the running value and
 // the bytes come out the same. (fminf/fmaxf and f32x4.min/max treat those
-// cases differently.) A compare and a bit-select per lane have no branches;
-// written as scalar selects, V8 turned them into branches, and computing the
-// boxes took 2.5 times as long on Sponza.
+// cases differently.) A compare and a bit-select per lane have no branches.
+// Written as scalar selects, V8 turned them into branches that mispredict, and
+// computing the boxes was several times slower (PROGRESS.md, B0b).
 //
 // A corner is held as four floats: x, y, z and one more word (a vertex's
 // unused w; or, in a node, the index or count stored after a box corner). The
@@ -569,9 +613,16 @@ EXPORT uint32_t tbvh_write_layout(const uint32_t* triangleFlags, uint32_t maxLea
 
     // A binary tree whose leaves hold at least one triangle has at most (triangles - 1) inner nodes.
     const uint32_t maxNodes = triangleCount > 1 ? triangleCount - 1 : 1;
-    layout.nodes = static_cast<GpuNode*>(malloc(size_t(maxNodes) * sizeof(GpuNode)));
-    layout.parents = static_cast<uint32_t*>(malloc(size_t(maxNodes) * sizeof(uint32_t)));
-    layout.triangles = static_cast<GpuTriangle*>(malloc(size_t(triangleCount) * sizeof(GpuTriangle)));
+    size_t nodeBytes = 0;
+    size_t parentBytes = 0;
+    size_t triangleBytes = 0;
+    if (!arrayBytes(maxNodes, sizeof(GpuNode), nodeBytes) || !arrayBytes(maxNodes, sizeof(uint32_t), parentBytes) ||
+        !arrayBytes(triangleCount, sizeof(GpuTriangle), triangleBytes)) {
+        return STATUS_TOO_LARGE;
+    }
+    layout.nodes = static_cast<GpuNode*>(malloc(nodeBytes));
+    layout.parents = static_cast<uint32_t*>(malloc(parentBytes));
+    layout.triangles = static_cast<GpuTriangle*>(malloc(triangleBytes));
     // Scratch: which triangles the order has listed, which tinybvh nodes the walk has
     // reached, and which positions a leaf covers.
     uint8_t* const seenTriangles = static_cast<uint8_t*>(calloc(triangleCount, 1));
