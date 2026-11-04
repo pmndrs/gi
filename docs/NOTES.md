@@ -55,6 +55,22 @@ One bullet per fact, each with its source. Add a bullet when something cost you 
 - **Native harness keys:** F2 dumps DDGI textures, F4 runs a 1024-frame benchmark to CSV, J toggles the performance overlay, R reloads shaders and config, M switches between DDGI and the path tracer.
 - **Installed tools:** RenderDoc 1.47.0, PIX 2603.25, Blender, NVIDIA FLIP (`python -m flip_evaluator`), Vulkan SDK 1.3.283, Nsight Systems 2022.4, Nsight Compute 2022.3. Nsight Graphics needs a manual install.
 
+## Test assets
+
+- **Sponza license:** the Khronos glTF Sample Assets Sponza now points at the CRYENGINE marketplace license, which allows "Games in object code form only" (§2.1.4). Crytek's 2010 note says it was "donated to the public for radiosity". These conflict, so it's on hold for Dennis. Source: `Models/Sponza/README.md` and `LICENSE.md` in glTF-Sample-Assets, checked 2026-11-04.
+- **Intel Sponza:** Intel's samples page redirected to a corporate 404 when checked from here (2026-11-04).
+- **McGuire archive:** Breakfast Room and Living Room are CC BY 3.0 (each folder's `license.txt`). Conference Room says only "Credit required", with no license, so it's excluded.
+- **Bistro (NVIDIA ORCA):** CC BY 4.0. One 894 MB zip holds both exterior and interior. The download URL redirects (302) to a short-lived token URL, and `curl -L` follows it with no login.
+  - Exterior: 2.83 M triangles, 1,296 meshes. Interior: 1.04 M triangles, 1,186 meshes.
+  - The exterior is more than the 128 MB default storage binding can hold at 48 bytes per triangle.
+- **Blender 4.5 conversion quirks** (Blender 4.5.0 LTS at `C:\Program Files\Blender Foundation\Blender 4.5\blender.exe`; 4.2, 5.0 and 5.1 are also installed):
+  - The FBX importer has no `apply_unit_scale`; Bistro's FBX is already in metres.
+  - Bistro normal maps are DirectX-style, so `fbx-to-glb.py` flips green.
+  - Bistro's opacity lives in a second copy of each base-color DDS.
+  - The FBX importer doesn't wire emissive textures, so Bistro's lamps won't glow (M4).
+  - The glTF exporter takes alpha mode from the node setup (Greater-Than 0.5 means MASK), not from `blend_method`.
+  - The OBJ importer sets Transmission 1.0 on materials with `illum 4` plus `Tf`, so `obj-to-glb.py` clears it.
+
 ## DDGI (measured lessons)
 
 - **Leak fixes by measured effect:** double-sided distance (84×), then probe density (22×). Probe texture resolution made no difference. Reducing bias made leaks *worse*, by up to 34×. Source: the HomeFig DDGI branch.
