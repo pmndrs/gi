@@ -14,3 +14,4 @@ Thumbs.db
 /bench/results/incoming/
 /assets/downloads.bak/
 /bench/references/
+__pycache__/

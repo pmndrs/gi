@@ -4,6 +4,15 @@ Settled choices, newest first. Each entry is short: the decision, why, and what 
 
 ## 2026-11-04
 
+- **Two ground-truth renderers must agree before we trust either.** Cycles (CPU) and three-gpu-pathtracer count as agreeing on a scene when, compared with `tools/compare` after 8×8-pixel block averaging:
+  - **full image:** overall brightness within ±0.5%, block error at most 1%;
+  - **indirect only:** brightness within ±1%, block error at most 3%.
+  - Cornell measured -0.002% / 0.37% (full) and -0.014% / 1.43% (indirect). Two-room measured +0.11% and +0.12% brightness.
+  - *Why these numbers:*
+    - Block averaging cancels per-pixel noise. Two Cycles seeds already differ by 0.8% per pixel, so per-pixel limits would only measure noise.
+    - The limits are about 2–3× what we measured. That leaves room for noise, while a wrong light unit, a missing bounce or a flipped axis would still fail: those show up as 5% or more, as the 12% light-range gap on two-room did.
+    - DDGI's own targets against these references will be several percent, so references agreeing within 0.5–1% is accurate enough to judge DDGI.
+  - *Revisit if:* a run sits near a limit. In that case, measure the path tracer's own seed-to-seed noise; it wasn't measured in T0.7, and its noise likely makes up most of the 0.37%. Also revisit if DDGI targets tighter than about 3% need sharper references.
 - **Sponza is Intel's "New Sponza" (base package), download-only.**
   - `pnpm assets:fetch` downloads `main_sponza.zip` (3.99 GB) from Intel. Nothing from it is committed. It isn't shown on a public examples site without Intel's written OK.
   - Its license file is CC BY 4.0 text with a preface: "For personal use and educational use. Limited commercial use for marketing and print purposes." Intel's samples page says "Downloads are available under the Creative Commons Attribution license."

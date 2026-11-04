@@ -50,6 +50,11 @@ export interface PageManifest {
     expectMessage?: string;
     /** Give up after this long. Default is {@link DEFAULT_PAGE_TIMEOUT_MS}. */
     timeoutMs?: number;
+    /**
+     * A slow benchmark that must run alone, under the bench lock. It runs only
+     * when a --filter names it exactly, never in a full run or a partial match.
+     */
+    manual?: boolean;
 }
 
 /** What `--json <file>` writes. Benchmark tasks read `pages[].data` from it to make CSV rows. */

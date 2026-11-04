@@ -113,6 +113,32 @@ One bullet per fact, each with its source. Add a bullet when something cost you 
   - The glTF exporter takes alpha mode from the node setup (Greater-Than 0.5 means MASK), not from `blend_method`.
   - The OBJ importer sets Transmission 1.0 on materials with `illum 4` plus `Tf`, so `obj-to-glb.py` clears it.
 
+- **Blender add-ons hang headless runs.** User add-ons on this machine (Scatter5, SimpleBake, Substance3D) stop `blender --background` from exiting, sometimes at startup. Always pass `--factory-startup`. Source: T0.4, fetch #3/#4.
+- **Blender's glTF export is not bit-reproducible.** Two runs of the same conversion differ in a few bytes of vertex data, while the JSON chunk and buffer lengths stay identical. `sources.json` marks those outputs `"reproducible": false` and checks `jsonSha256` plus `binBytes` instead. Source: T0.4.
+- **GLTFLoader turns shadows off.** Loaded meshes neither cast nor receive shadows until you set `castShadow` and `receiveShadow`. Source: T0.4 check page.
+
+## Ground-truth renderers (T0.7)
+
+- **Cycles units** (`tools/reference/cycles/units.py`):
+  - Sun strength = lux.
+  - Point power P = 4πI watts, from candela.
+  - Emission strength = radiance.
+  - A spot keeps the point's I on its axis.
+- **Cycles axes:** three (x,y,z) maps to Blender (x,−z,y). three's Euler XYZ order is the reverse of Blender's.
+- **Cycles has no light range window.** three r187 point lights fade to 0 at `distance`, so three is about 12% dimmer than Cycles at 7 m on two-room.
+- **Blender defaults that bias references:** indirect clamp 10, light threshold 1%. Turn both off.
+- **Always run Blender with `--factory-startup`.** A user add-on on this machine makes Blender hang at exit.
+- **three-gpu-pathtracer (WebGPU):**
+  - `maxBounces` counts the camera hit as 1.
+  - Emissive meshes are found only by scattered rays, so Cornell's ceiling lamp is noisy. Point lights are sampled explicitly.
+  - Its default `clampIndirect` is 10; set it to 0.
+  - The accumulation texture is rgba32float, readable from `backend.get(target).texture`.
+- **FLIP:** `python -m flip_evaluator.flip_python_api`, which needs no numpy.
+  - Run it with `python -E`, not `-I`, because `-I` hides the user site-packages where it is installed.
+  - FLIP numbers are comparable only at the same downsample.
+- **Comparing noisy renders:** average over 8×8 blocks before judging. Two Cycles seeds differ by 0.8% per pixel but by 0.1% per block.
+- **`@pmndrs/denoiser` is not on npm.** Build steps are in `tools/reference/README.md`.
+
 ## Tracing (measured)
 
 - **Use a watertight triangle test.** Möller–Trumbore let 3–12% of rays aimed at shared edges slip between triangles (RTX 3060 11.6%, Intel UHD 3.0%, 2M rays each), and leaked into sealed thin boxes. The watertight test (Woop et al. 2013, with stored corners) let none of 4M through. Source: `tools/gpu/pages/trace-oracle`, T0.10.

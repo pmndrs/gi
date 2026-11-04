@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { discoverPages, selectPages, type TestPage } from './pages.ts';
 import { join } from 'node:path';
 
-function page(name: string): TestPage {
+function page(name: string, manual = false): TestPage {
     return {
         name,
         urlPath: `/pages/${name}/index.html`,
@@ -10,6 +10,7 @@ function page(name: string): TestPage {
         expectFailure: false,
         expectMessage: null,
         timeoutMs: 1000,
+        manual,
     };
 }
 
@@ -26,6 +27,13 @@ describe('selectPages', () => {
 
     it('returns nothing for an unknown name', () => {
         expect(selectPages(pages, ['nope'])).toEqual([]);
+    });
+
+    it('runs a manual page only when a filter is its exact name', () => {
+        const withBench = [...pages, page('trace-bench-quick'), page('trace-bench-sponza', true)];
+        expect(selectPages(withBench, []).map((p) => p.name)).not.toContain('trace-bench-sponza');
+        expect(selectPages(withBench, ['trace-bench']).map((p) => p.name)).toEqual(['trace-bench-quick']);
+        expect(selectPages(withBench, ['trace-bench-sponza']).map((p) => p.name)).toEqual(['trace-bench-sponza']);
     });
 });
 

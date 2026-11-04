@@ -21,6 +21,72 @@ Rules:
 
 ---
 
+## 2026-11-04 · T0.4 · implementer + wrangler (sonnet), reviewed by reviewer (sonnet) and main session (opus)
+Did: built the scene set and its tooling.
+- `scenes/`: manifests for 11 scenes, a validator, procedural builders, a GLB writer, the check page, a contact sheet, a sealing test, and `sun-visibility.ts`.
+- `tools/assets/fetch.ts` with `sources.json`: sha256 checks, a cache, a Blender 4.5 pin, `--verify-only`, and a hang guard.
+- Convert scripts under `tools/assets/convert/`.
+- License rows in `THIRD_PARTY.md`.
+Verified (I re-ran it):
+- `pnpm assets:fetch --verify-only` gives "All outputs verified" in 22 s. A clean fetch from scratch took 9 min 16 s.
+- `vitest scenes tools/assets`: 195 tests pass. Lint is clean.
+- I looked at the contact sheet (`bench/screenshots/contact-sheet/index.html`); every scene is lit and at the right scale.
+Numbers (tris / meshes / materials / textures):
+| scene | tris | meshes | materials | textures |
+| --- | --- | --- | --- | --- |
+| cornell | 86 | 8 | 4 | 0 |
+| two-room | 216 | 18 | 8 | 0 |
+| closed-door | 228 | 19 | 9 | 0 |
+| furnace | 108 | 9 | 1 | 0 |
+| thin-wall | 108 | 9 | 6 | 0 |
+| cabinet-row | 744 | 62 | 6 | 0 |
+| courtyard-tree | 2,062,607 | 13 | 6 | 10 |
+| furnished-room | 269,764 | 21 | 15 | 2 |
+| bistro-exterior | 2,829,226 | 1591 | 132 | 277 |
+| bistro-interior | 1,043,077 | 2062 | 71 | 145 |
+| sponza | 3,747,018 | 405 | 44 | 72 |
+Deviations:
+- Sponza is Intel's New Sponza with 1k textures, download-only (see DECISIONS). Its sun was raised to 71° so 62% of the open court floor is lit.
+- Blender's glTF export is not bit-reproducible, so its three outputs are checked by the JSON-chunk sha256 plus exact sizes. See NOTES.
+- The furnished-room model is scaled by 0.34.
+Not verified: the Mac (deferred).
+Next: the courtyard-tree has no exported GLB in `assets/generated`, which T0.6 needs. GLTFLoader leaves shadows off, so loaders must turn on cast/receive.
+
+## 2026-11-04 · T0.7 · implementer (sonnet), reviewed by reviewer (sonnet) and main session (opus)
+Did: three pieces, with settings, units and tolerance in `tools/reference/README.md`.
+- Cycles references: `tools/reference/cycles`, Blender 4.5, CPU, `--factory-startup`, no denoise. Unit conversions are in `units.py`.
+- A three-gpu-pathtracer reference: `tools/reference/pathtracer`. `--denoise` uses a gitignored build of pmndrs/denoiser.
+- `tools/compare`: mean relative error, bias, RMS, p95 block error, a clamped line, and HDR-FLIP through the `flip-evaluator` Python package.
+All renders, CPU ones included, take the bench lock and release it on exit.
+Verified (I re-ran the compare checks):
+- an image against itself gives 0;
+- a +10% copy gives 0.100000;
+- Cornell numbers as below;
+- `--calibrate` (point, sun, spot, furnace 0.5/0.125) is within 0.05% of the exact answers;
+- lint, typecheck and test pass (375). The pathtracer ran on the RTX 3060 Laptop in Chrome 156 headless.
+Numbers: Cornell, Cycles 2048 spp against pathtracer 8192 spp, after 8×8 blocks.
+| image | bias | block error | clamped | p95 | FLIP at 8 ppd |
+| --- | --- | --- | --- | --- | --- |
+| full | -0.002% | 0.37% | 0.71% | 2.3% | 0.041 |
+| indirect | -0.014% | 1.43% | 1.43% | 3.8% | 0.056 |
+Two-room bias: +0.11% full, +0.12% indirect. The tolerance is in DECISIONS. Times and sample counts:
+| reference | samples | time |
+| --- | --- | --- |
+| Cycles Cornell | 2048 | 336 s |
+| Cycles two-room | 2048 | 442 s |
+| Cycles Sponza | 4096 | 1658 s, while other work ran |
+| pathtracer Cornell | 8192 | 225 s |
+| pathtracer two-room | 8192 | 288 s |
+Deviations:
+- Denoising is a single pass at the end, not progressive.
+- No pathtracer reference for Sponza: its page can't load glTF yet.
+- The tolerance comes from Cycles' seed-to-seed noise only; the path tracer's own noise wasn't measured.
+Not verified: the Intel GPU; a real Ctrl-C releasing the lock (tested only after a normal run and a failed one); Cycles on the GPU.
+Next:
+- Re-render the Sponza Cycles reference once T0.4 raises the sun. Today only 3 of 187 floor points see it, so the image is dark (mean 0.018).
+- Cycles has no point-light range window, so on two-room three is about 12% dimmer than Cycles at 7 m.
+- Remove the stray `C:\x\` folder (two small EXRs from a failed first run).
+
 ## 2026-11-04 · T0.10 (part A) · implementer (sonnet), reviewed by main session (opus)
 Did: built the tracer from `docs/design/trace.md` in `packages/ddgi-core/src/platform/trace/`:
 - the binned-SAH builder, in a worker plus an inline version;

@@ -14,12 +14,20 @@ export interface TestPage {
     /** The failure a self-test page must produce, or null for "any". */
     expectMessage: string | RegExp | null;
     timeoutMs: number;
+    /** Runs only when a filter names it exactly. See {@link PageManifest.manual}. */
+    manual: boolean;
 }
 
-/** Keeps pages whose name contains any filter text. No filters keeps everything. */
+/**
+ * Keeps pages whose name contains any filter text. No filters keeps everything.
+ * Manual pages (slow benchmarks) are kept only when a filter is their exact name,
+ * so a plain run or `--filter trace-bench` never starts a 10-minute benchmark by accident.
+ */
 export function selectPages(pages: TestPage[], filters: string[]): TestPage[] {
-    if (filters.length === 0) return pages;
-    return pages.filter((page) => filters.some((filter) => page.name.includes(filter)));
+    return pages.filter((page) => {
+        if (page.manual) return filters.includes(page.name);
+        return filters.length === 0 || filters.some((filter) => page.name.includes(filter));
+    });
 }
 
 /** Every folder under pagesDir that has an index.html, in name order. */
@@ -36,6 +44,7 @@ export async function discoverPages(pagesDir: string): Promise<TestPage[]> {
             expectFailure: manifest.expectFailure ?? false,
             expectMessage: manifest.expectMessage === undefined ? null : parseExpectedMessage(manifest.expectMessage),
             timeoutMs: manifest.timeoutMs ?? DEFAULT_PAGE_TIMEOUT_MS,
+            manual: manifest.manual ?? false,
         });
     }
     return pages;
