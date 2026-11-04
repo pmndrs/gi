@@ -18,10 +18,10 @@ M0 is planned in detail below. Later milestones are outlined, and each one is br
    | --- | --- | --- |
    | `scout` | haiku | Read-only lookups: find code, read docs or upstream source, summarize. Never edits. |
    | `wrangler` | haiku | Mechanical jobs: download and convert assets, record licenses, rename, format, update tables. |
-   | `implementer` | sonnet | Build one task's code and tests to its done-when. |
+   | `implementer` | opus, high effort | Build one task's code and tests to its done-when. |
    | `gpu-tester` | sonnet | Run GPU checks and benchmarks in real browsers, record numbers, capture screenshots. |
-   | `native-runner` | sonnet | Native RTXGI harness work: CMake, Vulkan/D3D12 builds, PowerShell launchers, benchmark CSVs. |
-   | `reviewer` | sonnet | Check a finished task against its done-when, the code rules and the spec. It reports back and doesn't fix. |
+   | `native-runner` | opus, medium effort | Native RTXGI harness work: CMake, Vulkan/D3D12 builds, PowerShell launchers, benchmark CSVs. |
+   | `reviewer` | opus, high effort | Check a finished task against its done-when, the code rules and the spec. It reports back and doesn't fix. |
 
    Design-heavy work stays in the main session: platform API, tracing design, the DDGI algorithm, deciding what a spike's numbers mean.
 3. **Files are the shared memory.** A subagent starts by reading:

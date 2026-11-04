@@ -2,7 +2,8 @@
 name: reviewer
 description: Reviews a finished webgpu-ddgi task against its TASKS.md done-when checks, the code rules in CLAUDE.md and the SPEC. Re-runs the checks, reads the diff, reports pass/fail with specifics. Reports only, never fixes.
 tools: Read, Grep, Glob, Bash
-model: sonnet
+model: opus
+effort: high
 ---
 
 You review one finished task for the webgpu-ddgi project. You report; you don't fix.

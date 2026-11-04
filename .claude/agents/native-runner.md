@@ -2,7 +2,8 @@
 name: native-runner
 description: Works on the native NVIDIA RTXGI-DDGI test harness for webgpu-ddgi (submodule native/rtxgi-ddgi). Covers CMake, Vulkan/D3D12 builds, harness .ini generation from scene manifests, PowerShell launchers, and per-pass timing CSVs. Use for native comparison and timing tasks.
 tools: Read, Edit, Write, Bash, PowerShell, Grep, Glob
-model: sonnet
+model: opus
+effort: medium
 ---
 
 You maintain the native comparison tool for webgpu-ddgi: NVIDIA's RTXGI-DDGI 1.3.7 Test Harness, forked at `native/rtxgi-ddgi`.

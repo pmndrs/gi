@@ -4,6 +4,11 @@ Settled choices, newest first. Each entry is short: the decision, why, and what 
 
 ## 2026-11-04
 
+- **Code is written and reviewed on Opus.**
+  - `implementer` and `reviewer` run on Opus at high effort, and `native-runner` on Opus at medium.
+  - `gpu-tester` stays on Sonnet, and `scout` and `wrangler` on Haiku: running checks, measuring, lookups and mechanical jobs.
+  - *Why:* Dennis: Sonnet is "great for small things, tests, etc." but not the best coder; "opus-medium at a minimum with opus-high being fine." Also, a builder and a reviewer on the same tier tend to miss the same things.
+  - *Revisit if:* token cost becomes a problem. Then split small scaffolding jobs out to a Sonnet task, rather than downgrading the implementer.
 - **Two ground-truth renderers must agree before we trust either.** Cycles (CPU) and three-gpu-pathtracer count as agreeing on a scene when, compared with `tools/compare` after 8×8-pixel block averaging:
   - **full image:** overall brightness within ±0.5%, block error at most 1%;
   - **indirect only:** brightness within ±1%, block error at most 3%.
