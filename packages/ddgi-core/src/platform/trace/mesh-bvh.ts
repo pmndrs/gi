@@ -6,7 +6,6 @@
  * worker for large meshes.
  */
 
-import { DEFAULT_TRIANGLE_TEST, type TriangleTest } from './layout.ts';
 import { buildSahTree, DEFAULT_SAH_OPTIONS, type SahBuildOptions } from './sah-builder.ts';
 import { checkGeometry, packTriangles } from './triangle-packing.ts';
 
@@ -35,8 +34,6 @@ export interface MeshBvh {
     readonly parents: Uint32Array;
     readonly nodeCount: number;
     readonly triangleCount: number;
-    /** What the triangles store; the shader must be generated for the same test. */
-    readonly triangleTest: TriangleTest;
     /** Levels of nodes on the longest path. The traversal stack needs at most this many entries for this mesh. */
     readonly maxDepth: number;
     readonly leafCount: number;
@@ -58,14 +55,12 @@ export function meshBvhTransferables(bvh: MeshBvh): ArrayBuffer[] {
 export type MeshBvhBuilderKind = 'sah' | 'tinybvh';
 
 export interface MeshBvhBuildOptions extends Partial<SahBuildOptions> {
-    /** Defaults to `moller-trumbore`. See {@link TriangleTest}. */
-    readonly triangleTest?: TriangleTest;
     /** Defaults to `sah`. See {@link MeshBvhBuilderKind}. */
     readonly builder?: MeshBvhBuilderKind;
 }
 
 export function buildMeshBvh(geometry: MeshGeometry, options: MeshBvhBuildOptions = {}): MeshBvh {
-    const { triangleTest = DEFAULT_TRIANGLE_TEST, builder = 'sah', ...sahOptions } = options;
+    const { builder = 'sah', ...sahOptions } = options;
     if (builder !== 'sah') throw new RangeError(`buildMeshBvh only runs the 'sah' builder; use buildMeshBvhAsync for '${builder}'`);
     const { positions } = geometry;
     const checked = checkGeometry(geometry);
@@ -87,7 +82,7 @@ export function buildMeshBvh(geometry: MeshGeometry, options: MeshBvhBuildOption
     const tree = buildSahTree(triangleBounds, { ...DEFAULT_SAH_OPTIONS, ...sahOptions });
 
     // Store triangles in tree order so a leaf is just "start index + count".
-    const trianglesBuffer = packTriangles(geometry, checked, tree.order, triangleTest);
+    const trianglesBuffer = packTriangles(geometry, checked, tree.order);
 
     return {
         nodes: tree.nodes,
@@ -95,7 +90,6 @@ export function buildMeshBvh(geometry: MeshGeometry, options: MeshBvhBuildOption
         parents: tree.parents,
         nodeCount: tree.nodeCount,
         triangleCount,
-        triangleTest,
         maxDepth: tree.maxDepth,
         leafCount: tree.leafCount,
         bounds: tree.bounds,

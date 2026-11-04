@@ -89,16 +89,16 @@ function checkTree(bvh: MeshBvh, geometry: MeshGeometry): TreeFacts {
                             check(vertex[axis] >= boxMin[axis] && vertex[axis] <= boxMax[axis], () => `triangle ${original} sticks out of its leaf box on axis ${axis}`);
                         }
                     }
-                    // The stored corner and edges rebuild the original vertices.
-                    const [v0, v1, v2] = originalVertices(geometry, original);
-                    for (let axis = 0; axis < 3; axis++) {
-                        check(triangleFloats[slot * 12 + TRIANGLE_WORD.vertex0 + axis] === v0[axis], () => `triangle ${original}'s first corner is not stored exactly`);
-                        const rebuiltV1 = triangleFloats[slot * 12 + TRIANGLE_WORD.vertex0 + axis] + triangleFloats[slot * 12 + TRIANGLE_WORD.secondVector + axis];
-                        const rebuiltV2 = triangleFloats[slot * 12 + TRIANGLE_WORD.vertex0 + axis] + triangleFloats[slot * 12 + TRIANGLE_WORD.thirdVector + axis];
-                        check(
-                            Math.abs(rebuiltV1 - v1[axis]) < 5e-5 && Math.abs(rebuiltV2 - v2[axis]) < 5e-5,
-                            () => `triangle ${original}'s edges do not rebuild its corners`,
-                        );
+                    // The three corners are stored bit for bit (the watertight test relies on it).
+                    const corners = originalVertices(geometry, original);
+                    const cornerWords = [TRIANGLE_WORD.vertex0, TRIANGLE_WORD.vertex1, TRIANGLE_WORD.vertex2];
+                    for (let corner = 0; corner < 3; corner++) {
+                        for (let axis = 0; axis < 3; axis++) {
+                            check(
+                                triangleFloats[slot * 12 + cornerWords[corner] + axis] === corners[corner][axis],
+                                () => `triangle ${original}'s corner ${corner} is not stored exactly`,
+                            );
+                        }
                     }
                 }
             }

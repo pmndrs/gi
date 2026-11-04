@@ -24,7 +24,6 @@ import {
     makeReference,
     referenceCount,
     referenceIndex,
-    type TriangleTest,
 } from './layout.ts';
 import type { TraceRay } from './reference-tracer.ts';
 import type { TraceSceneData } from './scene-assembly.ts';
@@ -106,7 +105,6 @@ export function createCpuTracer(scene: TraceSceneData): CpuTracer {
     const triangleWords = new Uint32Array(scene.triangles);
     const topFloats = new Float32Array(scene.topLevel.buffer);
     const topWords = new Uint32Array(scene.topLevel.buffer);
-    const triangleTest: TriangleTest = scene.triangleTest;
 
     const instanceCount = topWords[TOP_HEADER_WORD.instanceCount];
     const topNodeCount = topWords[TOP_HEADER_WORD.nodeCount];
@@ -216,10 +214,7 @@ export function createCpuTracer(scene: TraceSceneData): CpuTracer {
                 for (let i = 0; i < count; i++) {
                     if (stats) stats.trianglesTested++;
                     const base = (triangleOffset + index + i) * TRIANGLE_WORDS;
-                    const hit =
-                        triangleTest === 'watertight'
-                            ? intersectWatertight(triangleFloats, base, setup, ray.tMin, closestT)
-                            : intersectMollerTrumbore(triangleFloats, base, setup, ray.tMin, closestT);
+                    const hit = intersectWatertight(triangleFloats, base, setup, ray.tMin, closestT);
                     if (hit === null) continue;
                     result = {
                         t: hit.t,
@@ -264,42 +259,6 @@ export function createCpuTracer(scene: TraceSceneData): CpuTracer {
     };
 }
 
-/** Moller-Trumbore with no epsilon on the edge tests, as in the shader. Triangles store `v0`, `v1 - v0`, `v2 - v0`. */
-function intersectMollerTrumbore(
-    floats: Float32Array,
-    base: number,
-    setup: RaySetup,
-    tMin: number,
-    tMax: number,
-): TriangleHit | null {
-    const v0 = base + TRIANGLE_WORD.vertex0;
-    const e1 = base + TRIANGLE_WORD.secondVector;
-    const e2 = base + TRIANGLE_WORD.thirdVector;
-    const direction = setup.direction;
-    const origin = setup.origin;
-    const e1x = floats[e1], e1y = floats[e1 + 1], e1z = floats[e1 + 2];
-    const e2x = floats[e2], e2y = floats[e2 + 1], e2z = floats[e2 + 2];
-    const px = direction[1] * e2z - direction[2] * e2y;
-    const py = direction[2] * e2x - direction[0] * e2z;
-    const pz = direction[0] * e2y - direction[1] * e2x;
-    const determinant = e1x * px + e1y * py + e1z * pz;
-    if (determinant === 0) return null;
-    const inverseDeterminant = 1 / determinant;
-    const sx = origin[0] - floats[v0];
-    const sy = origin[1] - floats[v0 + 1];
-    const sz = origin[2] - floats[v0 + 2];
-    const u = (sx * px + sy * py + sz * pz) * inverseDeterminant;
-    if (u < 0 || u > 1) return null;
-    const qx = sy * e1z - sz * e1y;
-    const qy = sz * e1x - sx * e1z;
-    const qz = sx * e1y - sy * e1x;
-    const v = (direction[0] * qx + direction[1] * qy + direction[2] * qz) * inverseDeterminant;
-    if (v < 0 || u + v > 1) return null;
-    const t = (e2x * qx + e2y * qy + e2z * qz) * inverseDeterminant;
-    if (t < tMin || t > tMax) return null;
-    return { t, u, v, frontFace: determinant > 0 };
-}
-
 /** Woop, Benthin and Wald 2013. Triangles store `v0`, `v1`, `v2`. Edge-function zeros count for both sides. */
 function intersectWatertight(
     floats: Float32Array,
@@ -316,8 +275,8 @@ function intersectWatertight(
         floats[word + 2] - setup.origin[2],
     ];
     const a = relative(base + TRIANGLE_WORD.vertex0);
-    const b = relative(base + TRIANGLE_WORD.secondVector);
-    const c = relative(base + TRIANGLE_WORD.thirdVector);
+    const b = relative(base + TRIANGLE_WORD.vertex1);
+    const c = relative(base + TRIANGLE_WORD.vertex2);
 
     const ax = a[kx] - shearX * a[kz];
     const ay = a[ky] - shearY * a[kz];

@@ -5,9 +5,9 @@
  * Cases: thin walls, mirrored and non-uniform transforms, instancing, a closed
  * thin box no interior ray may escape, random scenes, and about two million
  * rays aimed at the seams of a tessellated quad (they must not slip through).
- * Everything runs once per variant (see VARIANTS): Moller-Trumbore and the
- * watertight test of Woop et al. on our own trees, and the watertight test on
- * trees built by tinybvh (WASM, in the worker) and by three-mesh-bvh (converted).
+ * Everything runs once per variant (see VARIANTS): the watertight test of Woop
+ * et al. (the tracer's only triangle test) on our own trees, on trees built by
+ * tinybvh (WASM, in the worker) and on trees built by three-mesh-bvh (converted).
  * The default device limits are used on purpose: the oracle scenes are tiny and
  * the core has to work there.
  *
@@ -31,7 +31,6 @@ import {
     type TraceSceneBuffers,
     type TraceSceneData,
     type TracedHit,
-    type TriangleTest,
 } from '../../../../packages/ddgi-core/src/platform/trace/index.ts';
 import { assert, runGpuTest } from '../../client.ts';
 import {
@@ -54,15 +53,13 @@ import { computeReferenceAnswersYielding, evaluateCase, type CaseResult } from '
  */
 interface OracleVariant {
     name: string;
-    triangleTest: TriangleTest;
     treeSource: 'ours' | 'tinybvh' | 'three-mesh-bvh';
 }
 
 const VARIANTS: OracleVariant[] = [
-    { name: 'moller-trumbore', triangleTest: 'moller-trumbore', treeSource: 'ours' },
-    { name: 'watertight', triangleTest: 'watertight', treeSource: 'ours' },
-    { name: 'watertight-tinybvh', triangleTest: 'watertight', treeSource: 'tinybvh' },
-    { name: 'watertight-tmbuild', triangleTest: 'watertight', treeSource: 'three-mesh-bvh' },
+    { name: 'watertight', treeSource: 'ours' },
+    { name: 'watertight-tinybvh', treeSource: 'tinybvh' },
+    { name: 'watertight-tmbuild', treeSource: 'three-mesh-bvh' },
 ];
 
 /** three-mesh-bvh target leaf size for the converted trees, as in the benchmark's default. */
@@ -156,11 +153,10 @@ interface BuiltScene {
 
 async function buildScene(builder: MeshBvhBuilder, oracleCase: OracleCase, variant: OracleVariant): Promise<BuiltScene> {
     const start = performance.now();
-    const { triangleTest } = variant;
     const bvhs =
         variant.treeSource !== 'three-mesh-bvh'
-            ? await Promise.all(oracleCase.meshes.map((mesh) => builder.build(mesh, { triangleTest, builder: variant.treeSource === 'tinybvh' ? 'tinybvh' : 'sah' })))
-            : oracleCase.meshes.map((mesh) => buildMeshBvhWithTmbvh(mesh, TMBUILD_LEAF_SIZE, triangleTest).bvh);
+            ? await Promise.all(oracleCase.meshes.map((mesh) => builder.build(mesh, { builder: variant.treeSource === 'tinybvh' ? 'tinybvh' : 'sah' })))
+            : oracleCase.meshes.map((mesh) => buildMeshBvhWithTmbvh(mesh, TMBUILD_LEAF_SIZE).bvh);
     const data = assembleTraceScene(bvhs, oracleCase.instances);
     return { data, buildMs: performance.now() - start };
 }
@@ -290,8 +286,7 @@ await runGpuTest(async ({ device, log }) => {
     for (const oracleCase of cases) references.push(await computeReferenceAnswersYielding(oracleCase));
 
     for (const variant of VARIANTS) {
-        const { triangleTest } = variant;
-        const kernel = await TraceBatchKernel.create(device, triangleTest);
+        const kernel = await TraceBatchKernel.create(device);
         const results = { cases: {} as Record<string, unknown>, sharedEdges: [] as SharedEdgeReport[] };
         byTest[variant.name] = results;
 
@@ -321,14 +316,12 @@ await runGpuTest(async ({ device, log }) => {
             const report = await runSharedEdgeCase(device, kernel, builder, sharedEdgeCase(sharedRays, transformed), variant);
             results.sharedEdges.push(report);
             log(`[${variant.name}] ${report.name}: ${report.slipped} of ${report.rays} rays slipped between triangles`);
-            // Moller-Trumbore is known to let some edge-aimed rays through (the design expects this and
-            // names the watertight test as the fix), so its count is reported, not failed. The
-            // watertight test has to be perfect.
-            if (triangleTest === 'watertight' && report.slipped > 0) {
+            // The watertight test has to be perfect: no ray may slip between triangles.
+            if (report.slipped > 0) {
                 failures.push(`[${variant.name}] ${report.name}: ${report.slipped} rays slipped between triangles`);
             }
             // Shadow rays go through the any-hit walk, which has its own shortcuts; it must not leak either.
-            if (triangleTest === 'watertight' && report.slippedAny > 0) {
+            if (report.slippedAny > 0) {
                 failures.push(`[${variant.name}] ${report.name}: ${report.slippedAny} any-hit rays slipped between triangles`);
             }
             if (report.referenceMisses > 0) {

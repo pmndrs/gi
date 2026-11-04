@@ -32,9 +32,7 @@ import {
     INSTANCE_RECORD_BYTES,
     BVH_NODE_BYTES,
     TRIANGLE_BYTES,
-    DEFAULT_TRIANGLE_TEST,
     TRACE_STACK_SIZE,
-    type TriangleTest,
 } from './layout.ts';
 
 /** `GPUShaderStage.COMPUTE`. The global does not exist in Node, where the tests import this file. */
@@ -82,13 +80,12 @@ struct GiBvhNode {
     rightMax: vec3f, rightCount: u32,
 }
 
-// A triangle is a corner plus two more vectors. What those are depends on the
-// triangle test: for Moller-Trumbore they are the edges v1 - v0 and v2 - v0;
-// for the watertight test they are the corners v1 and v2 themselves.
+// A triangle is its three corners, stored as they are so that a corner shared
+// by two triangles has the same bits in both (the watertight test needs that).
 struct GiBvhTriangle {
-    vertex0: vec3f,      originalIndex: u32,
-    secondVector: vec3f, flags: u32,
-    thirdVector: vec3f,  padding: u32,
+    vertex0: vec3f, originalIndex: u32,
+    vertex1: vec3f, flags: u32,
+    vertex2: vec3f, padding: u32,
 }
 
 // The world-to-object transform is a 3x4 matrix stored as three rows.
@@ -140,18 +137,13 @@ const GI_BOX_EXIT_PADDING: f32 = 1.0000004;
 /**
  * The trace module: contract types, layout, and `giTraceClosest` / `giTraceAny`.
  * Bindings land at `slot`: nodes, triangles, top level, in that order.
- *
- * `triangleTest` must match what the meshes were built for (`MeshBvh.triangleTest`).
  */
-export function traceModuleWgsl(slot: BindingSlot, triangleTest: TriangleTest = DEFAULT_TRIANGLE_TEST): string {
+export function traceModuleWgsl(slot: BindingSlot): string {
     const group = slot.group;
     const nodes = slot.firstBinding;
     const triangles = slot.firstBinding + 1;
     const topLevel = slot.firstBinding + 2;
     return /* wgsl */ `${COMMON_WGSL}
-// Which ray-triangle test the stored triangles are for. A constant, so the other test compiles away.
-const GI_WATERTIGHT: bool = ${triangleTest === 'watertight'};
-
 // Nodes and triangles are read as plain vec4s, so every load is one 16-byte
 // read whatever the backend makes of a struct with vec3 members.
 @group(${group}) @binding(${nodes}) var<storage, read> giTraceNodes: array<vec4f>;
@@ -324,37 +316,6 @@ fn giNoTriangleHit() -> GiTriangleHit {
     return GiTriangleHit(false, 0.0, vec2f(0.0), true);
 }
 
-// Moller-Trumbore. Triangles store 'vertex0' and two edges. No epsilon on the
-// edge tests. The direction need not be unit length; t is then in units of
-// that direction. Not watertight: a ray aimed at a shared edge can pass
-// between the two triangles (see GI_WATERTIGHT).
-fn giIntersectMollerTrumbore(triangle: GiBvhTriangle, setup: GiRaySetup, tMin: f32, tMax: f32) -> GiTriangleHit {
-    let edge1 = triangle.secondVector;
-    let edge2 = triangle.thirdVector;
-    let pVector = cross(setup.direction, edge2);
-    let determinant = dot(edge1, pVector);
-    if (determinant == 0.0) {
-        return giNoTriangleHit();   // parallel to the triangle's plane
-    }
-    let inverseDeterminant = 1.0 / determinant;
-
-    let toOrigin = setup.origin - triangle.vertex0;
-    let u = dot(toOrigin, pVector) * inverseDeterminant;
-    if (u < 0.0 || u > 1.0) {
-        return giNoTriangleHit();
-    }
-    let qVector = cross(toOrigin, edge1);
-    let v = dot(setup.direction, qVector) * inverseDeterminant;
-    if (v < 0.0 || u + v > 1.0) {
-        return giNoTriangleHit();
-    }
-    let t = dot(edge2, qVector) * inverseDeterminant;
-    if (t < tMin || t > tMax) {
-        return giNoTriangleHit();
-    }
-    return GiTriangleHit(true, t, vec2f(u, v), determinant > 0.0);
-}
-
 // Woop, Benthin and Wald, "Watertight Ray/Triangle Intersection" (2013).
 // Triangles store three corners. The three edge functions are computed from
 // the same corner bits for both triangles that share an edge, with opposite
@@ -363,8 +324,8 @@ fn giIntersectMollerTrumbore(triangle: GiBvhTriangle, setup: GiRaySetup, tMin: f
 fn giIntersectWatertight(triangle: GiBvhTriangle, setup: GiRaySetup, tMin: f32, tMax: f32) -> GiTriangleHit {
     // Corners relative to the ray origin.
     let a = triangle.vertex0 - setup.origin;
-    let b = triangle.secondVector - setup.origin;
-    let c = triangle.thirdVector - setup.origin;
+    let b = triangle.vertex1 - setup.origin;
+    let c = triangle.vertex2 - setup.origin;
 
     // Shear and scale into the space where the ray runs along +z' through the origin
     // (see giMakeRaySetup for why these are dot products with rows).
@@ -399,10 +360,7 @@ fn giIntersectWatertight(triangle: GiBvhTriangle, setup: GiRaySetup, tMin: f32, 
 }
 
 fn giIntersectTriangle(triangle: GiBvhTriangle, setup: GiRaySetup, tMin: f32, tMax: f32) -> GiTriangleHit {
-    if (GI_WATERTIGHT) {
-        return giIntersectWatertight(triangle, setup, tMin, tMax);
-    }
-    return giIntersectMollerTrumbore(triangle, setup, tMin, tMax);
+    return giIntersectWatertight(triangle, setup, tMin, tMax);
 }
 
 // ---- The walk -----------------------------------------------------------------------
@@ -561,7 +519,6 @@ export const BATCH_WORKGROUP_SIZE = 64;
  */
 export function batchKernelWgsl(
     mode: 'closest' | 'any',
-    triangleTest: TriangleTest = DEFAULT_TRIANGLE_TEST,
     traceSlot: BindingSlot = { group: 0, firstBinding: 0 },
 ): string {
     const resultDeclaration =
@@ -584,7 +541,7 @@ export function batchKernelWgsl(
     giBatchResults[rayIndex] = GiHitRecord(hit.t, hit.instance, hit.triangle, select(0u, 1u, hit.frontFace), hit.barycentrics);`
             : `giBatchResults[rayIndex] = select(0u, 1u, giTraceAny(giBatchRays[rayIndex]));`;
 
-    return /* wgsl */ `${traceModuleWgsl(traceSlot, triangleTest)}
+    return /* wgsl */ `${traceModuleWgsl(traceSlot)}
 @group(1) @binding(0) var<storage, read> giBatchRays: array<GiRay>;
 ${resultDeclaration}
 

@@ -7,7 +7,6 @@ import { describe, expect, it } from 'vitest';
 import {
     addToTally,
     assembleTraceScene,
-    buildMeshBvh,
     buildReferenceScene,
     compareClosest,
     createCpuTracer,
@@ -15,7 +14,6 @@ import {
     newTally,
     RAY_FLOATS,
     traceClosestReference,
-    type MeshGeometry,
 } from '../../../../packages/ddgi-core/src/platform/trace/index.ts';
 import { createRandom, randomRays, randomTriangleSoup } from '../../../../packages/ddgi-core/src/platform/trace/oracle-fixtures.ts';
 import { BenchConfigError, parseBenchConfig, type BenchProfileName } from './config.ts';
@@ -26,7 +24,6 @@ import type { TraceBenchData } from './results.ts';
 import { compareBlocked, compareClosestDistances, median, megaRaysPerSecond } from './statistics.ts';
 import { makeSphereMesh } from './synthetic.ts';
 import { buildMeshBvhWithTmbvh } from './tmbvh-convert.ts';
-import { convertWatertightToMollerTrumbore } from './triangle-conversion.ts';
 
 describe('statistics', () => {
     it('takes the median of odd and even counts', () => {
@@ -60,7 +57,7 @@ describe('config', () => {
         const config = parseBenchConfig('', defaults);
         expect(config.raysPerProbe).toBe(64);
         expect(config.scenes).toEqual(['furnished-room']);
-        expect(config.tracers).toEqual(['ours-mt', 'ours-wt', 'ours-tinybvh', 'ours-tmbuild', 'tmbvh']);
+        expect(config.tracers).toEqual(['ours-wt', 'ours-tinybvh', 'ours-tmbuild', 'tmbvh']);
     });
 
     it('lets the URL override the profile', () => {
@@ -79,7 +76,7 @@ describe('config', () => {
 
     it('rejects nonsense with a message', () => {
         expect(() => parseBenchConfig('?rays=0', defaults)).toThrow(BenchConfigError);
-        expect(() => parseBenchConfig('?tracer=nope', defaults)).toThrow(/ours-mt/);
+        expect(() => parseBenchConfig('?tracer=nope', defaults)).toThrow(/ours-wt/);
     });
 });
 
@@ -252,17 +249,6 @@ describe('glTF reader', () => {
     });
 });
 
-describe('Moller-Trumbore conversion', () => {
-    it('gives bit-identical triangles to a real Moller-Trumbore build', () => {
-        const geometry: MeshGeometry = randomTriangleSoup(createRandom(11), 500, 20, 3);
-        const watertight = buildMeshBvh(geometry, { triangleTest: 'watertight' });
-        const reference = buildMeshBvh(geometry, { triangleTest: 'moller-trumbore' });
-        const converted = watertight.triangles.slice(0);
-        convertWatertightToMollerTrumbore(converted);
-        expect(Array.from(new Uint32Array(converted))).toEqual(Array.from(new Uint32Array(reference.triangles)));
-    });
-});
-
 describe('synthetic mesh', () => {
     it('is a closed sphere of a few hundred triangles', () => {
         const sphere = makeSphereMesh();
@@ -344,7 +330,7 @@ describe('three-mesh-bvh trees converted to our layout', () => {
         const instances = [{ meshIndex: 0, instanceIndex: 0, objectToWorld: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1] }];
         const reference = buildReferenceScene([geometry], instances);
         for (const leafSize of [4, 10]) {
-            const { bvh } = buildMeshBvhWithTmbvh(geometry, leafSize, 'watertight');
+            const { bvh } = buildMeshBvhWithTmbvh(geometry, leafSize);
             expect(bvh.triangleCount).toBe(2000);
             const tracer = createCpuTracer(assembleTraceScene([bvh], instances));
             const closest = newTally();
@@ -360,7 +346,7 @@ describe('three-mesh-bvh trees converted to our layout', () => {
     it('handles a mesh that three-mesh-bvh keeps as a single leaf', () => {
         for (const count of [1, 3]) {
             const geometry = randomTriangleSoup(createRandom(count), count, 10, 1);
-            const { bvh } = buildMeshBvhWithTmbvh(geometry, 10, 'watertight');
+            const { bvh } = buildMeshBvhWithTmbvh(geometry, 10);
             expect(bvh.leafCount).toBe(count === 1 ? 1 : 2);
         }
     });

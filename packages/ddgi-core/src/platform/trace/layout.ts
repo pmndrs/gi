@@ -47,34 +47,25 @@ export const EMPTY_CHILD_INDEX = 0xffffffff;
 export const NO_PARENT = 0xffffffff;
 
 /**
- * How the ray-triangle test is done. Changes what a triangle stores, so the
- * builder and the shader must be given the same value.
- *
- * - `moller-trumbore`: the design's default. Triangles store a corner and two
- *   edges (`v0`, `v1 - v0`, `v2 - v0`), which is all the test needs.
- * - `watertight`: Woop, Benthin and Wald 2013. Triangles store three corners,
- *   because the test must see the *same bits* for a vertex shared by two
- *   triangles, and `v0 + edge` does not round the same way twice.
+ * Triangles are tested with the watertight test of Woop, Benthin and Wald
+ * (2013), the only test the tracer has: Moller-Trumbore let 3-12% of rays aimed
+ * at shared edges slip through (T0.10 part A; DECISIONS 2026-11-04). The test
+ * must see the *same bits* for a vertex shared by two triangles, so a triangle
+ * stores its three corners as they are.
  */
-export type TriangleTest = 'moller-trumbore' | 'watertight';
-
-export const DEFAULT_TRIANGLE_TEST: TriangleTest = 'moller-trumbore';
-
-/** One triangle in tree order: 48 bytes either way, so memory does not change with the test. */
+/** One triangle in tree order: three corners, the original index and flags, 48 bytes. */
 export const TRIANGLE_BYTES = 48;
 export const TRIANGLE_WORDS = TRIANGLE_BYTES / 4;
 
 /**
  * Word positions inside a triangle. Matches the WGSL `GiBvhTriangle`.
- * `secondVector` is `v1 - v0` (Moller-Trumbore) or `v1` (watertight);
- * `thirdVector` is `v2 - v0` or `v2`.
  */
 export const TRIANGLE_WORD = {
     vertex0: 0,
     originalIndex: 3,
-    secondVector: 4,
+    vertex1: 4,
     flags: 7,
-    thirdVector: 8,
+    vertex2: 8,
     padding: 11,
 } as const;
 

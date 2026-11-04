@@ -13,7 +13,7 @@
  * larger than the tracer accepts are cut in half until they fit.
  */
 
-import { BVH_NODE_BYTES, BVH_NODE_WORDS, DEFAULT_TRIANGLE_TEST, EMPTY_CHILD_INDEX, MAX_LEAF_PRIMITIVES, NODE_WORD, NO_PARENT, type TriangleTest } from './layout.ts';
+import { BVH_NODE_BYTES, BVH_NODE_WORDS, EMPTY_CHILD_INDEX, MAX_LEAF_PRIMITIVES, NODE_WORD, NO_PARENT } from './layout.ts';
 import type { MeshBvh, MeshGeometry } from './mesh-bvh.ts';
 import { checkGeometry, growBoxByTriangle, packTriangles, type CheckedGeometry } from './triangle-packing.ts';
 import { TOPOLOGY_EMPTY_CHILD, TOPOLOGY_WORDS_PER_NODE, type MeshTreeTopology, type TinyBvhBuilder } from '@pmndrs/bvh';
@@ -22,8 +22,6 @@ import { TOPOLOGY_EMPTY_CHILD, TOPOLOGY_WORDS_PER_NODE, type MeshTreeTopology, t
 export { TOPOLOGY_WORDS_PER_NODE, type MeshTreeTopology } from '@pmndrs/bvh';
 
 export interface MeshTreeTopologyOptions {
-    /** Defaults to `moller-trumbore`, like `buildMeshBvh`. */
-    readonly triangleTest?: TriangleTest;
     /** Leaves with more triangles than this are cut in half until they fit. At most {@link MAX_LEAF_PRIMITIVES} (the default). */
     readonly maxLeafPrimitives?: number;
 }
@@ -39,7 +37,6 @@ interface PendingChild {
 }
 
 export function buildMeshBvhFromTopology(geometry: MeshGeometry, topology: MeshTreeTopology, options: MeshTreeTopologyOptions = {}): MeshBvh {
-    const triangleTest = options.triangleTest ?? DEFAULT_TRIANGLE_TEST;
     const maxLeaf = options.maxLeafPrimitives ?? MAX_LEAF_PRIMITIVES;
     if (!Number.isInteger(maxLeaf) || maxLeaf < 1 || maxLeaf > MAX_LEAF_PRIMITIVES) {
         throw new RangeError(`maxLeafPrimitives must be an integer from 1 to ${MAX_LEAF_PRIMITIVES}, got ${maxLeaf}`);
@@ -143,11 +140,10 @@ export function buildMeshBvhFromTopology(geometry: MeshGeometry, topology: MeshT
 
     return {
         nodes: nodeBuffer.slice(0, nodeCount * BVH_NODE_BYTES),
-        triangles: packTriangles(geometry, checked, order, triangleTest),
+        triangles: packTriangles(geometry, checked, order),
         parents: parents.slice(0, nodeCount),
         nodeCount,
         triangleCount,
-        triangleTest,
         maxDepth,
         leafCount,
         bounds,

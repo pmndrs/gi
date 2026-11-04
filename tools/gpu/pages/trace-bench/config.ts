@@ -14,12 +14,12 @@ export const SYNTHETIC_SCENE_ID = 'synthetic-10k';
 export const SYNTHETIC_INSTANCE_COUNT = 10_000;
 
 /**
- * - `ours-wt`, `ours-mt`: our builder and our walk, watertight and Moller-Trumbore triangles.
+ * - `ours-wt`: our builder and our (watertight) walk.
  * - `ours-tinybvh`: tinybvh (WASM, in our worker) builds each mesh's tree, traced by our watertight walk.
  * - `ours-tmbuild`: three-mesh-bvh builds each mesh's tree, converted to our layout, traced by our watertight walk.
  * - `tmbvh`: three-mesh-bvh's own trees and its own WebGPU walk.
  */
-export const TRACER_IDS = ['ours-mt', 'ours-wt', 'ours-tinybvh', 'ours-tmbuild', 'tmbvh'] as const;
+export const TRACER_IDS = ['ours-wt', 'ours-tinybvh', 'ours-tmbuild', 'tmbvh'] as const;
 export type TracerId = (typeof TRACER_IDS)[number];
 
 /**
@@ -144,7 +144,7 @@ function readList(params: URLSearchParams, name: string): string[] | null {
  * Query parameters (all optional):
  *
  *   ?scene=sponza,bistro-interior   scene manifest ids, or `all` (default: what the page folder says)
- *   &tracer=ours-wt,tmbvh           any of ours-mt, ours-wt, tmbvh (default: all three)
+ *   &tracer=ours-wt,tmbvh           any of TRACER_IDS (default: all)
  *   &rays=256                       rays per probe
  *   &targetRays=2097152             total rays per dispatch, about
  *   &profile=quick|full             defaults for the numbers above and the timing counts

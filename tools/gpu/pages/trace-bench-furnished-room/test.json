@@ -1,5 +1,5 @@
 {
-    "description": "Full tracer benchmark on furnished-room: ours (Moller-Trumbore, watertight, and three-mesh-bvh-built trees in our layout) vs three-mesh-bvh. Slow; run under the bench lock, on its own.",
+    "description": "Full tracer benchmark on furnished-room: ours (on our, tinybvh and three-mesh-bvh trees) vs three-mesh-bvh. Slow; run under the bench lock, on its own.",
     "timeoutMs": 300000,
     "manual": true
 }

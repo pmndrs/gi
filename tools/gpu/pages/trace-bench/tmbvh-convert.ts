@@ -5,7 +5,7 @@
  * This is adapter-side code: the core never imports three or three-mesh-bvh.
  * three-mesh-bvh builds the tree; this file reads the shape of its packed tree
  * and hands it to the core as plain arrays (`buildMeshBvhFromTopology`), which
- * writes our 64-byte nodes and 48-byte watertight triangles and recomputes
+ * writes our 64-byte nodes and 48-byte triangles and recomputes
  * every box from the triangles.
  *
  * three-mesh-bvh v0.9.18 packs a tree as 32-byte nodes, depth first
@@ -32,7 +32,6 @@ import {
     type MeshBvh,
     type MeshGeometry,
     type MeshTreeTopology,
-    type TriangleTest,
 } from '../../../../packages/ddgi-core/src/platform/trace/index.ts';
 
 /** Size of one three-mesh-bvh node, in 32-bit words and 16-bit halves. */
@@ -114,7 +113,7 @@ export interface TmbvhConvertedBuild {
  * Builds `geometry`'s tree with three-mesh-bvh (SAH, `targetLeafSize`) and
  * converts it. Leaves above our limit of 8 triangles are cut in half by the core.
  */
-export function buildMeshBvhWithTmbvh(geometry: MeshGeometry, targetLeafSize: number, triangleTest: TriangleTest = 'watertight'): TmbvhConvertedBuild {
+export function buildMeshBvhWithTmbvh(geometry: MeshGeometry, targetLeafSize: number): TmbvhConvertedBuild {
     const threeGeometry = new BufferGeometry();
     threeGeometry.setAttribute('position', new BufferAttribute(geometry.positions, 3));
     // Indirect mode leaves the index as it is, so the shared index array is safe to pass.
@@ -124,7 +123,7 @@ export function buildMeshBvhWithTmbvh(geometry: MeshGeometry, targetLeafSize: nu
     const meshBvh = new MeshBVH(threeGeometry, { strategy: SAH, targetLeafSize, indirect: true, verbose: false });
     const built = performance.now();
     const topology = topologyFromMeshBvh(meshBvh, countTriangles(geometry));
-    const bvh = buildMeshBvhFromTopology(geometry, topology, { triangleTest });
+    const bvh = buildMeshBvhFromTopology(geometry, topology);
     const converted = performance.now();
     return { bvh, tmbvhMs: built - start, convertMs: converted - built };
 }

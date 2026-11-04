@@ -13,16 +13,13 @@ import {
     newTraceStats,
     traceClosestReference,
     type TracedHit,
-    type TriangleTest,
 } from '../../../../packages/ddgi-core/src/platform/trace/index.ts';
 import { buildOracleCases, sharedEdgeCase, SMALL_SIZES, unpackRay, type OracleCase } from './cases.ts';
 import { computeReferenceAnswers, evaluateCase } from './check.ts';
 
-const TRIANGLE_TESTS: TriangleTest[] = ['moller-trumbore', 'watertight'];
-
-function traceOnCpu(oracleCase: OracleCase, triangleTest: TriangleTest, reference: ReturnType<typeof computeReferenceAnswers>) {
+function traceOnCpu(oracleCase: OracleCase, reference: ReturnType<typeof computeReferenceAnswers>) {
     const scene = assembleTraceScene(
-        oracleCase.meshes.map((mesh) => buildMeshBvh(mesh, { triangleTest })),
+        oracleCase.meshes.map((mesh) => buildMeshBvh(mesh)),
         oracleCase.instances,
     );
     const tracer = createCpuTracer(scene);
@@ -43,41 +40,36 @@ function traceOnCpu(oracleCase: OracleCase, triangleTest: TriangleTest, referenc
 
 describe('oracle cases on the CPU traversal', () => {
     for (const oracleCase of buildOracleCases(SMALL_SIZES)) {
-        // The brute-force answers are the slow part, so both triangle tests share them.
         it(`${oracleCase.name}: ${oracleCase.description}`, { timeout: 60_000 }, () => {
             const reference = computeReferenceAnswers(oracleCase);
-            for (const triangleTest of TRIANGLE_TESTS) {
-                const { result, stats, scene } = traceOnCpu(oracleCase, triangleTest, reference);
-                expect(result.failures, `${triangleTest}: ${result.failures.join('\n')}`).toEqual([]);
-                expect(stats.maxStackSize).toBeLessThanOrEqual(scene.requiredStackSize);
-            }
+            const { result, stats, scene } = traceOnCpu(oracleCase, reference);
+            expect(result.failures, result.failures.join('\n')).toEqual([]);
+            expect(stats.maxStackSize).toBeLessThanOrEqual(scene.requiredStackSize);
         });
     }
 });
 
 describe('shared edges on the CPU traversal', () => {
-    for (const triangleTest of TRIANGLE_TESTS) {
-        for (const transformed of [false, true]) {
-            it(`no ray slips between triangles (${triangleTest}, ${transformed ? 'transformed' : 'plain'} quad)`, { timeout: 60_000 }, () => {
-                const oracleCase = sharedEdgeCase(20000, transformed);
-                const scene = assembleTraceScene(
-                    oracleCase.meshes.map((mesh) => buildMeshBvh(mesh, { triangleTest })),
-                    oracleCase.instances,
-                );
-                const tracer = createCpuTracer(scene);
-                const reference = buildReferenceScene(oracleCase.meshes, oracleCase.instances);
-                let slipped = 0;
-                let referenceMisses = 0;
-                for (let index = 0; index < 20000; index++) {
-                    const ray = unpackRay(oracleCase.rays, index);
-                    if (tracer.closest(ray) === null) slipped++;
-                    // The setup itself: every ray really does cross the quad.
-                    if (index < 2000 && traceClosestReference(reference, ray) === null) referenceMisses++;
-                }
-                expect(referenceMisses).toBe(0);
-                // Doubles leave far more room than f32; the GPU page reports the f32 count.
-                expect(slipped).toBe(0);
-            });
-        }
+    for (const transformed of [false, true]) {
+        it(`no ray slips between triangles (${transformed ? 'transformed' : 'plain'} quad)`, { timeout: 60_000 }, () => {
+            const oracleCase = sharedEdgeCase(20000, transformed);
+            const scene = assembleTraceScene(
+                oracleCase.meshes.map((mesh) => buildMeshBvh(mesh)),
+                oracleCase.instances,
+            );
+            const tracer = createCpuTracer(scene);
+            const reference = buildReferenceScene(oracleCase.meshes, oracleCase.instances);
+            let slipped = 0;
+            let referenceMisses = 0;
+            for (let index = 0; index < 20000; index++) {
+                const ray = unpackRay(oracleCase.rays, index);
+                if (tracer.closest(ray) === null) slipped++;
+                // The setup itself: every ray really does cross the quad.
+                if (index < 2000 && traceClosestReference(reference, ray) === null) referenceMisses++;
+            }
+            expect(referenceMisses).toBe(0);
+            // Doubles leave far more room than f32; the GPU page reports the f32 count.
+            expect(slipped).toBe(0);
+        });
     }
 });

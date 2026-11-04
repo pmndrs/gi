@@ -8,7 +8,6 @@
 
 import { GILimitError } from '../contract/errors.ts';
 import type { BindingSlot, ModuleBindingEntry, WgslModule } from '../contract/wgsl.ts';
-import { DEFAULT_TRIANGLE_TEST, type TriangleTest } from './layout.ts';
 import type { TraceRay } from './reference-tracer.ts';
 import type { TraceSceneData } from './scene-assembly.ts';
 import { BATCH_WORKGROUP_SIZE, batchKernelWgsl, TRACE_MODULE_ENTRIES, traceModuleWgsl } from './wgsl.ts';
@@ -23,8 +22,6 @@ export interface TraceSceneBuffers {
     readonly topLevel: GPUBuffer;
     /** Bytes held on the GPU. */
     readonly byteLength: number;
-    /** The test the triangles were built for. */
-    readonly triangleTest: TriangleTest;
     destroy(): void;
 }
 
@@ -64,7 +61,6 @@ export function uploadTraceScene(device: GPUDevice, scene: TraceSceneData, label
         triangles,
         topLevel,
         byteLength: scene.byteLength,
-        triangleTest: scene.triangleTest,
         destroy: () => buffers.forEach((buffer) => buffer.destroy()),
     };
 }
@@ -76,12 +72,11 @@ export function uploadTraceScene(device: GPUDevice, scene: TraceSceneData, label
 export function createTraceModule(
     getBuffers: () => TraceSceneBuffers,
     getVersion: () => number = () => 0,
-    triangleTest: TriangleTest = DEFAULT_TRIANGLE_TEST,
 ): WgslModule {
     return {
         name: 'gi-trace',
         dependencies: [],
-        code: (slot: BindingSlot) => traceModuleWgsl(slot, triangleTest),
+        code: (slot: BindingSlot) => traceModuleWgsl(slot),
         entries: TRACE_MODULE_ENTRIES as readonly ModuleBindingEntry[],
         resources: () => {
             const buffers = getBuffers();
@@ -119,28 +114,22 @@ export class TraceBatchKernel {
 
     private constructor(
         private readonly device: GPUDevice,
-        private readonly triangleTest: TriangleTest,
         private readonly closestPipeline: GPUComputePipeline,
         private readonly anyPipeline: GPUComputePipeline,
     ) {}
 
-    /** `triangleTest` must match the scenes this kernel will trace (`TraceSceneData.triangleTest`). */
-    static async create(
-        device: GPUDevice,
-        triangleTest: TriangleTest = DEFAULT_TRIANGLE_TEST,
-        label = 'trace',
-    ): Promise<TraceBatchKernel> {
+    static async create(device: GPUDevice, label = 'trace'): Promise<TraceBatchKernel> {
         const pipelineFor = (mode: 'closest' | 'any') =>
             device.createComputePipelineAsync({
-                label: `${label} batch ${mode} ${triangleTest}`,
+                label: `${label} batch ${mode}`,
                 layout: 'auto',
                 compute: {
-                    module: device.createShaderModule({ label: `${label} batch ${mode}`, code: batchKernelWgsl(mode, triangleTest) }),
+                    module: device.createShaderModule({ label: `${label} batch ${mode}`, code: batchKernelWgsl(mode) }),
                     entryPoint: 'giBatch',
                 },
             });
         const [closestPipeline, anyPipeline] = await Promise.all([pipelineFor('closest'), pipelineFor('any')]);
-        return new TraceBatchKernel(device, triangleTest, closestPipeline, anyPipeline);
+        return new TraceBatchKernel(device, closestPipeline, anyPipeline);
     }
 
     private groupsFor(scene: TraceSceneBuffers): SceneBindGroups {
@@ -165,9 +154,6 @@ export class TraceBatchKernel {
     /** Records one dispatch into `encoder`. */
     encode(encoder: GPUCommandEncoder, scene: TraceSceneBuffers, batch: TraceBatch): void {
         if (batch.count <= 0) return;
-        if (scene.triangleTest !== this.triangleTest) {
-            throw new Error(`trace kernel was built for the ${this.triangleTest} triangle test, but the scene uses ${scene.triangleTest}`);
-        }
         const pipeline = batch.mode === 'closest' ? this.closestPipeline : this.anyPipeline;
         // The ray count is the size of the bound range, so no uniform is needed.
         const batchGroup = this.device.createBindGroup({

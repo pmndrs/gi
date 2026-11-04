@@ -12,8 +12,8 @@ let tinyBvh: Promise<TinyBvhBuilder> | null = null;
 
 /** Builds with the builder `options.builder` names (default `sah`). */
 export async function buildMeshBvhAsync(geometry: MeshGeometry, options: MeshBvhBuildOptions = {}): Promise<MeshBvh> {
-    const { builder = 'sah', triangleTest, maxLeafPrimitives } = options;
+    const { builder = 'sah', maxLeafPrimitives } = options;
     if (builder === 'sah') return buildMeshBvh(geometry, options);
     tinyBvh ??= createTinyBvhBuilder();
-    return buildMeshBvhWithTinyBvh(geometry, await tinyBvh, { triangleTest, maxLeafPrimitives });
+    return buildMeshBvhWithTinyBvh(geometry, await tinyBvh, { maxLeafPrimitives });
 }

@@ -47,8 +47,8 @@ describe('buildMeshBvhFromTopology', () => {
     it('rebuilds one of our own trees byte for byte from its shape alone', () => {
         for (const count of [1, 2, 9, 700]) {
             const geometry = randomTriangleSoup(createRandom(count), count, 10, 1);
-            const original = buildMeshBvh(geometry, { triangleTest: 'watertight' });
-            const rebuilt = buildMeshBvhFromTopology(geometry, topologyOf(original), { triangleTest: 'watertight' });
+            const original = buildMeshBvh(geometry);
+            const rebuilt = buildMeshBvhFromTopology(geometry, topologyOf(original));
             expect(new Uint8Array(rebuilt.nodes)).toEqual(new Uint8Array(original.nodes));
             expect(new Uint8Array(rebuilt.triangles)).toEqual(new Uint8Array(original.triangles));
             expect(rebuilt.parents).toEqual(original.parents);
@@ -61,7 +61,7 @@ describe('buildMeshBvhFromTopology', () => {
         const geometry = randomTriangleSoup(createRandom(40), 300, 10, 1);
         // A deliberately poor tree: the root holds two leaves of 150 triangles in input order.
         const topology = { order: Uint32Array.from({ length: 300 }, (_, i) => i), children: Uint32Array.of(0, 150, 150, 150) };
-        const bvh = buildMeshBvhFromTopology(geometry, topology, { triangleTest: 'watertight', maxLeafPrimitives: 4 });
+        const bvh = buildMeshBvhFromTopology(geometry, topology, { maxLeafPrimitives: 4 });
         const words = new Uint32Array(bvh.nodes);
         for (let node = 0; node < bvh.nodeCount; node++) {
             expect(words[node * BVH_NODE_WORDS + NODE_WORD.leftCount]).toBeLessThanOrEqual(4);
@@ -85,9 +85,8 @@ describe('buildMeshBvhFromTopology', () => {
 describe('tinybvh-built mesh BVHs', () => {
     it('trace like the brute-force reference', async () => {
         const geometry = randomTriangleSoup(createRandom(60), 2000, 10, 1);
-        const bvh = await buildMeshBvhAsync(geometry, { builder: 'tinybvh', triangleTest: 'watertight' });
+        const bvh = await buildMeshBvhAsync(geometry, { builder: 'tinybvh' });
         expect(bvh.triangleCount).toBe(2000);
-        expect(bvh.triangleTest).toBe('watertight');
         expect(mismatchesAgainstReference(geometry, bvh, 61)).toBe(0);
     });
 

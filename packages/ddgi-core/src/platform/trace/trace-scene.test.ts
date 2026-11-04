@@ -9,7 +9,6 @@ import {
     TOP_HEADER_WORD,
     TOP_LEVEL_HEADER_WORDS,
     TRACE_STACK_SIZE,
-    type TriangleTest,
 } from './layout.ts';
 import { buildMeshBvh } from './mesh-bvh.ts';
 import { addToTally, compareAny, compareClosest, newTally } from './oracle-compare.ts';
@@ -164,9 +163,8 @@ function compareCpuTracerWithReference(
     meshes: ReturnType<typeof randomTriangleSoup>[],
     instances: TraceSceneInstance[],
     rays: ReturnType<typeof randomRays>,
-    triangleTest: TriangleTest,
 ) {
-    const scene = assembleTraceScene(meshes.map((mesh) => buildMeshBvh(mesh, { triangleTest })), instances);
+    const scene = assembleTraceScene(meshes.map((mesh) => buildMeshBvh(mesh)), instances);
     const tracer = createCpuTracer(scene);
     const reference = buildReferenceScene(meshes, instances);
     const closest = newTally();
@@ -181,7 +179,7 @@ function compareCpuTracerWithReference(
     return { scene, closest, any, stats };
 }
 
-describe.each<TriangleTest>(['moller-trumbore', 'watertight'])('CPU traversal against the brute-force reference (%s)', (triangleTest) => {
+describe('CPU traversal against the brute-force reference', () => {
     it('matches on a single mesh with an identity instance', { timeout: 60_000 }, () => {
         const mesh = randomTriangleSoup(createRandom(10), 1500, 10, 1);
         const rays = randomRays(createRandom(11), 3000, [-10, -10, -10, 10, 10, 10], 4);
@@ -189,7 +187,6 @@ describe.each<TriangleTest>(['moller-trumbore', 'watertight'])('CPU traversal ag
             [mesh],
             [{ meshIndex: 0, instanceIndex: 0, objectToWorld: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1] }],
             rays,
-            triangleTest,
         );
         expect(closest.mismatches, closest.examples.join('\n')).toBe(0);
         expect(any.mismatches, any.examples.join('\n')).toBe(0);
@@ -206,7 +203,7 @@ describe.each<TriangleTest>(['moller-trumbore', 'watertight'])('CPU traversal ag
             objectToWorld: randomAffine(random, { extent: 12, mirror: i % 4 === 0 }),
         }));
         const rays = randomRays(createRandom(21), 4000, [-14, -14, -14, 14, 14, 14], 6, { randomInterval: true });
-        const { closest, any, scene } = compareCpuTracerWithReference(meshes, instances, rays, triangleTest);
+        const { closest, any, scene } = compareCpuTracerWithReference(meshes, instances, rays);
         expect(closest.mismatches, closest.examples.join('\n')).toBe(0);
         expect(any.mismatches, any.examples.join('\n')).toBe(0);
         expect(closest.matches + closest.ambiguous).toBe(4000);
@@ -224,7 +221,7 @@ describe.each<TriangleTest>(['moller-trumbore', 'watertight'])('CPU traversal ag
             objectToWorld: randomAffine(random, { extent: 25, mirror: i % 5 === 0 }),
         }));
         const rays = randomRays(createRandom(31), 1500, [-25, -25, -25, 25, 25, 25], 5);
-        const { closest, any, scene, stats } = compareCpuTracerWithReference(meshes, instances, rays, triangleTest);
+        const { closest, any, scene, stats } = compareCpuTracerWithReference(meshes, instances, rays);
         expect(closest.mismatches, closest.examples.join('\n')).toBe(0);
         expect(any.mismatches, any.examples.join('\n')).toBe(0);
         expect(stats.maxStackSize).toBeGreaterThan(0);
@@ -236,7 +233,7 @@ describe.each<TriangleTest>(['moller-trumbore', 'watertight'])('CPU traversal ag
         const mesh = { positions: new Float32Array([-1, -1, 0, 1, -1, 0, 0, 1, 0]) };
         const plain = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
         const mirror = [-1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 10, 0, 0, 1];
-        const scene = assembleTraceScene([buildMeshBvh(mesh, { triangleTest })], [
+        const scene = assembleTraceScene([buildMeshBvh(mesh)], [
             { meshIndex: 0, instanceIndex: 0, objectToWorld: plain },
             { meshIndex: 0, instanceIndex: 1, objectToWorld: mirror },
         ]);

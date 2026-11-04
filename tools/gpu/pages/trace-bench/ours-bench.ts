@@ -16,7 +16,6 @@ import {
     type MeshBvhBuilderKind,
     type TraceInstance,
     type TraceSceneData,
-    type TriangleTest,
 } from '../../../../packages/ddgi-core/src/platform/trace/index.ts';
 import { TOP_LEVEL_REBUILD_RUNS, type TracerId } from './config.ts';
 import { measureDispatches, type DispatchTimer } from './dispatch-timer.ts';
@@ -39,8 +38,7 @@ export function yieldToBrowser(): Promise<void> {
 
 /**
  * Builds every mesh's tree in the worker, one mesh after another, so each
- * mesh's time is its own. The trees are built for the watertight test; the
- * Moller-Trumbore triangles are derived from them (see triangle-conversion.ts).
+ * mesh's time is its own.
  */
 export async function buildOursScene(
     builder: MeshBvhBuilder,
@@ -52,7 +50,7 @@ export async function buildOursScene(
     const bvhs: MeshBvh[] = [];
     for (const mesh of meshes) {
         const start = performance.now();
-        bvhs.push(await builder.build({ positions: mesh.positions, indices: mesh.indices }, { triangleTest: 'watertight', builder: kind }));
+        bvhs.push(await builder.build({ positions: mesh.positions, indices: mesh.indices }, { builder: kind }));
         perMeshMs.push(performance.now() - start);
     }
     return assembleOursScene(bvhs, perMeshMs, instances, builder.usesWorker);
@@ -65,7 +63,7 @@ export interface TmbuildScene extends OursBuild {
 /**
  * The `ours-tmbuild` trees: three-mesh-bvh builds each mesh (SAH, on this
  * thread, where that library builds), and tmbvh-convert.ts turns the tree into
- * our layout with watertight triangles. Yields between meshes.
+ * our layout. Yields between meshes.
  */
 export async function buildTmbuildScene(
     meshes: readonly BenchMeshGeometry[],
@@ -77,7 +75,7 @@ export async function buildTmbuildScene(
     let tmbvhBuildMsTotal = 0;
     let convertMsTotal = 0;
     for (const mesh of meshes) {
-        const built = buildMeshBvhWithTmbvh({ positions: mesh.positions, indices: mesh.indices }, targetLeafSize, 'watertight');
+        const built = buildMeshBvhWithTmbvh({ positions: mesh.positions, indices: mesh.indices }, targetLeafSize);
         bvhs.push(built.bvh);
         perMeshMs.push(built.tmbvhMs + built.convertMs);
         tmbvhBuildMsTotal += built.tmbvhMs;
@@ -228,16 +226,15 @@ export function extractHitDistances(hitRecords: ArrayBuffer): Float32Array {
 export async function runOursTracer(
     device: GPUDevice,
     timer: DispatchTimer,
-    tracer: 'ours-mt' | 'ours-wt' | 'ours-tinybvh' | 'ours-tmbuild',
+    tracer: 'ours-wt' | 'ours-tinybvh' | 'ours-tmbuild',
     data: TraceSceneData,
     rays: OursRayBuffers,
     plan: TimingPlan,
 ): Promise<OursTracerRun> {
-    const triangleTest: TriangleTest = tracer === 'ours-mt' ? 'moller-trumbore' : 'watertight';
     const resources = new Resources();
     try {
-        const kernel = await TraceBatchKernel.create(device, triangleTest, tracer);
-        const scene = resources.add(uploadTraceScene(device, { ...data, triangleTest }, tracer));
+        const kernel = await TraceBatchKernel.create(device, tracer);
+        const scene = resources.add(uploadTraceScene(device, data, tracer));
 
         const hits = resources.add(
             device.createBuffer({
@@ -294,7 +291,7 @@ export function uploadRays(device: GPUDevice, label: string, packed: Float32Arra
 }
 
 /**
- * Times a small batch of rays on the watertight tracer and returns GPU
+ * Times a small batch of rays on our tracer and returns GPU
  * nanoseconds per ray. Launch overhead is included, so for a small sample this
  * overestimates a little, which is the safe direction for a time limit.
  */
@@ -302,8 +299,8 @@ export async function estimateNsPerRay(device: GPUDevice, timer: DispatchTimer, 
     const resources = new Resources();
     try {
         const count = sampleRays.length / RAY_FLOATS;
-        const kernel = await TraceBatchKernel.create(device, 'watertight', 'ours-wt calibrate');
-        const scene = resources.add(uploadTraceScene(device, { ...data, triangleTest: 'watertight' }, 'ours-wt calibrate'));
+        const kernel = await TraceBatchKernel.create(device, 'ours-wt calibrate');
+        const scene = resources.add(uploadTraceScene(device, data, 'ours-wt calibrate'));
         const rays = resources.add(uploadRays(device, 'calibration rays', sampleRays));
         const hits = resources.add(
             device.createBuffer({ label: 'calibration hits', size: count * HIT_RECORD_BYTES, usage: GPUBufferUsage.STORAGE }),
@@ -323,7 +320,7 @@ export async function estimateNsPerRay(device: GPUDevice, timer: DispatchTimer, 
 }
 
 /**
- * One untimed closest-hit dispatch on the watertight scene, for building the
+ * One untimed closest-hit dispatch on our scene, for building the
  * shadow rays. Returns the hit records.
  */
 export async function traceClosestOnce(
@@ -334,8 +331,8 @@ export async function traceClosestOnce(
 ): Promise<ArrayBuffer> {
     const resources = new Resources();
     try {
-        const kernel = await TraceBatchKernel.create(device, 'watertight', 'ours-wt prepare');
-        const scene = resources.add(uploadTraceScene(device, { ...data, triangleTest: 'watertight' }, 'ours-wt prepare'));
+        const kernel = await TraceBatchKernel.create(device, 'ours-wt prepare');
+        const scene = resources.add(uploadTraceScene(device, data, 'ours-wt prepare'));
         const hits = resources.add(
             device.createBuffer({
                 label: 'prepare hits',

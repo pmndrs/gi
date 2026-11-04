@@ -1,5 +1,5 @@
 /**
- * The tracer benchmark (T0.10 part B): ours (Moller-Trumbore and watertight)
+ * The tracer benchmark (T0.10 parts B and C): ours, on trees from three builders,
  * against three-mesh-bvh on probe-style rays, per scene.
  *
  * Per scene, in order:
@@ -7,7 +7,7 @@
  *   2. build our trees in the worker, assemble, time top-level rebuilds;
  *   3. generate the probe rays, trace them once to find the hits, and turn the
  *      hits into shadow rays toward the sun (the same rays go to every tracer);
- *   4. time ours-wt, then ours-mt, then ours-tinybvh (tinybvh's trees, our walk), then
+ *   4. time ours-wt, then ours-tinybvh (tinybvh's trees, our walk), then
  *      ours-tmbuild (three-mesh-bvh's trees in our layout, our walk), then
  *      three-mesh-bvh, each on closest and any;
  *   5. compare the closest hits between tracers.
@@ -50,7 +50,6 @@ import { loadBenchScene } from './scene-source.ts';
 import { compareBlocked, compareClosestDistances } from './statistics.ts';
 import { runSynthetic } from './synthetic.ts';
 import { createTmbvhRenderer, runTmbvh, TMBVH_TIMING_METHOD, type TmbvhRun } from './tmbvh-bench.ts';
-import { convertWatertightToMollerTrumbore } from './triangle-conversion.ts';
 import type { WebGPURenderer } from 'three/webgpu';
 
 interface BenchContext {
@@ -193,7 +192,7 @@ async function runScene(context: BenchContext, sceneId: string): Promise<SceneRe
     const gpuBuffers: GPUBuffer[] = [];
     const runs = new Map<string, { closestT: Float32Array; blocked: Uint32Array | null }>();
     try {
-        // Trace once with the watertight tracer to find where the rays hit, then aim shadow rays from there.
+        // Trace once with our tracer to find where the rays hit, then aim shadow rays from there.
         const closestGpu = uploadRays(device, 'closest rays', closestPacked);
         gpuBuffers.push(closestGpu);
         let shadow: ShadowRays | null = null;
@@ -236,12 +235,10 @@ async function runScene(context: BenchContext, sceneId: string): Promise<SceneRe
             for (const mode of run.modes) progress(describeMode(sceneId, mode));
         };
 
-        // The watertight tracer must come first: the Moller-Trumbore triangles are made from its triangles, in place.
-        for (const tracer of ['ours-wt', 'ours-mt'] as const) {
+        for (const tracer of ['ours-wt'] as const) {
             if (!config.tracers.includes(tracer)) continue;
             if (!oursAvailable) continue;
             try {
-                if (tracer === 'ours-mt') convertWatertightToMollerTrumbore(ours.data.triangles);
                 finish(tracer, await runOursTracer(device, context.timer, tracer, ours.data, oursRays, plan));
             } catch (error) {
                 result.skipped.push(`${tracer}: ${error instanceof Error ? error.message : String(error)}`);
@@ -317,9 +314,7 @@ async function runScene(context: BenchContext, sceneId: string): Promise<SceneRe
     }
 
     const pairs: [string, string][] = [
-        ['ours-mt', 'ours-wt'],
         ['ours-wt', 'tmbvh'],
-        ['ours-mt', 'tmbvh'],
         ['ours-wt', 'ours-tinybvh'],
         ['ours-tinybvh', 'tmbvh'],
         ['ours-wt', 'ours-tmbuild'],

@@ -4,7 +4,7 @@
  * elsewhere (`mesh-bvh-topology.ts`). Internal: not exported from the module index.
  */
 
-import { MAX_REFERENCE_INDEX, TRIANGLE_BYTES, TRIANGLE_WORD, TRIANGLE_WORDS, type TriangleTest } from './layout.ts';
+import { MAX_REFERENCE_INDEX, TRIANGLE_BYTES, TRIANGLE_WORD, TRIANGLE_WORDS } from './layout.ts';
 import type { MeshGeometry } from './mesh-bvh.ts';
 
 export function countTriangles(geometry: MeshGeometry): number {
@@ -66,9 +66,10 @@ export function growBoxByTriangle(
 
 /**
  * Writes the triangles in tree order (`order[i]` is the original triangle at
- * position `i`), 48 bytes each, in the form `triangleTest` reads.
+ * position `i`), 48 bytes each. Corners are stored as they are, so a vertex
+ * shared by two triangles has identical bits in both (the watertight test needs that).
  */
-export function packTriangles(geometry: MeshGeometry, checked: CheckedGeometry, order: Uint32Array, triangleTest: TriangleTest): ArrayBuffer {
+export function packTriangles(geometry: MeshGeometry, checked: CheckedGeometry, order: Uint32Array): ArrayBuffer {
     const { positions, triangleFlags } = geometry;
     const triangleCount = checked.triangleCount;
     const trianglesBuffer = new ArrayBuffer(triangleCount * TRIANGLE_BYTES);
@@ -82,14 +83,8 @@ export function packTriangles(geometry: MeshGeometry, checked: CheckedGeometry, 
         const c = checked.vertexOf(original, 2) * 3;
         for (let axis = 0; axis < 3; axis++) {
             floats[base + TRIANGLE_WORD.vertex0 + axis] = positions[a + axis];
-            if (triangleTest === 'watertight') {
-                // Corners are stored as they are, so a vertex shared by two triangles has identical bits in both.
-                floats[base + TRIANGLE_WORD.secondVector + axis] = positions[b + axis];
-                floats[base + TRIANGLE_WORD.thirdVector + axis] = positions[c + axis];
-            } else {
-                floats[base + TRIANGLE_WORD.secondVector + axis] = positions[b + axis] - positions[a + axis];
-                floats[base + TRIANGLE_WORD.thirdVector + axis] = positions[c + axis] - positions[a + axis];
-            }
+            floats[base + TRIANGLE_WORD.vertex1 + axis] = positions[b + axis];
+            floats[base + TRIANGLE_WORD.vertex2 + axis] = positions[c + axis];
         }
         words[base + TRIANGLE_WORD.originalIndex] = original;
         words[base + TRIANGLE_WORD.flags] = triangleFlags ? triangleFlags[original] : 0;

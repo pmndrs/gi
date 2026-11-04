@@ -8,7 +8,7 @@
  */
 
 import type { Mat4 } from '../contract/math.ts';
-import { BVH_NODE_BYTES, DEFAULT_TRIANGLE_TEST, TRACE_STACK_SIZE, TRIANGLE_BYTES, type TriangleTest } from './layout.ts';
+import { BVH_NODE_BYTES, TRACE_STACK_SIZE, TRIANGLE_BYTES } from './layout.ts';
 import type { MeshBvh } from './mesh-bvh.ts';
 import { buildTopLevel, type TopLevelBvh, type TraceInstance } from './top-level.ts';
 import type { SahBuildOptions } from './sah-builder.ts';
@@ -30,8 +30,6 @@ export interface TraceSceneData {
     /** Every mesh's triangles, one after another. */
     readonly triangles: ArrayBuffer;
     readonly topLevel: TopLevelBvh;
-    /** The test every mesh's triangles were built for. */
-    readonly triangleTest: TriangleTest;
     /** Where each input mesh landed. */
     readonly meshes: readonly { readonly nodeOffset: number; readonly triangleOffset: number }[];
     /** Deepest mesh tree among the meshes the instances use. */
@@ -47,10 +45,6 @@ export function assembleTraceScene(
     instances: readonly TraceSceneInstance[],
     topLevelOptions: Partial<SahBuildOptions> = {},
 ): TraceSceneData {
-    const triangleTest = meshes[0]?.triangleTest ?? DEFAULT_TRIANGLE_TEST;
-    if (meshes.some((mesh) => mesh.triangleTest !== triangleTest)) {
-        throw new RangeError('all meshes in a scene must be built for the same triangle test');
-    }
     let totalNodes = 0;
     let totalTriangles = 0;
     const placements = meshes.map((mesh) => {
@@ -100,7 +94,6 @@ export function assembleTraceScene(
         nodes,
         triangles,
         topLevel,
-        triangleTest,
         meshes: placements,
         maxMeshDepth,
         requiredStackSize,
