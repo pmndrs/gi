@@ -247,6 +247,82 @@ Status values: `todo`, `active (agent, date)`, `review`, `done`, `blocked (why)`
   - **The subgroups-first rule** for new compute kernels.
   - **The BVH runs as its own lane** (Dennis, 2026-11-04): B rows on the board next to M1. B0 must be done before M1 starts, and B1–B2 before M3.
 
+## M1 draft: core DDGI loop, static scene, two hosts
+
+Status: **draft.** T0.12 finalises it, after T0.6 and T0.10 report, and it starts after Dennis signs off M0. Targets come from SPEC "How we'll judge it". Every task's numbers are on the RTX 3060 and the Intel UHD.
+
+| ID | Task | Agent | Size | Depends on |
+| --- | --- | --- | --- | --- |
+| T1.1 | Shared sky | implementer | S | none |
+| T1.2 | Platform scene copy | implementer | M | none |
+| T1.3 | Tracer as a platform module | implementer | M | T1.2, B0 |
+| T1.4 | Hit shading | implementer | M | T1.1, T1.3 |
+| T1.5 | DDGI field and update loop | main session designs, implementer builds | L | T1.4 |
+| T1.6 | Shading module and plain-WebGPU example | implementer | M | T1.5 |
+| T1.7 | three.js adapter | implementer | M | T1.6 |
+| T1.8 | Viewer integration | implementer | M | T1.7 |
+| T1.9 | M1 measurements against targets | gpu-tester, native-runner | M | T1.8 |
+| T1.10 | Sponza add-ons | wrangler + implementer | M | none |
+| T1.11 | M1 note and M2 breakdown | main session | S | all M1 |
+
+### BVH lane (runs alongside; DECISIONS 2026-11-04)
+
+| ID | Stage | Must be done before | Status |
+| --- | --- | --- | --- |
+| B0 | tinybvh WASM builder in a worker (`packages/bvh`) | M1 starts | in T0.10 part C |
+| B1a | GPU top-level tree: refit every frame from instance transforms, rebuild now and then | T1.3 ends (moved up to M1) | todo |
+| B1 | GPU LBVH per mesh (subgroups first), BLAS refit | M3 | todo |
+| B2 | GPU PLOC, then H-PLOC | M3 | todo |
+| B3 | Wide or compressed nodes, short-stack traversal | the performance review | todo |
+
+Done-whens for the B stages are in `docs/design/bvh-framework.md`. B1a's: a 10k-instance top level costs ≤ 0.5 ms of GPU time, and the oracle passes with instances moving every frame.
+
+### Draft done-whens
+
+- **T1.1 Shared sky.**
+  - One sky definition becomes one HDR sky file, made by a script from the manifest (sun direction, turbidity). Its brightness is set so the sky lights a flat open ground with a stated, realistic share of the sun's light.
+  - The viewer, Cycles, the native harness and the platform's environment all read that same file.
+  - Done when an open-ground test scene lit only by the sky renders within the reference tolerance in the viewer and in Cycles, and Sponza's probe-grid view is no longer blue.
+- **T1.2 Platform scene copy.**
+  - `SceneApi` is implemented: meshes with optional normals and uvs, constant-colour materials (metalness already folded in by the adapter), instances, lights and environment, with changes queued and uploaded inside `encode`.
+  - Done when unit tests and a GPU readback page check every accessor against the input, memory is reported, and adding or removing things never recompiles shaders.
+- **T1.3 Tracer as a platform module.**
+  - `RayQueries` (`giTraceClosest`, `giTraceAny`, `encodeBatch`) runs over the scene copy, using B0 trees and the B1a top level.
+  - The T0.11 revision lands: the real storage-buffer count, and inline versus batch tracing.
+  - Done when the oracle passes through the platform API on both GPUs, and speed is within 10% of the T0.10 numbers.
+- **T1.4 Hit shading.**
+  - `giSurfaceAt` (interpolated normals), `giDirectIrradiance` (sun and sky, shadow rays, light-group mask), and `giSkyRadiance` and `giSkyIrradiance` from the shared sky.
+  - Done when a sun on a plane matches E·cos θ, sky irradiance matches Cycles within tolerance, and shadow rays agree with the oracle.
+- **T1.5 DDGI field and update loop.**
+  - Main session design first: probe layout, octahedral irradiance and distance atlases, rays with a random rotation each update, hysteresis, unlimited bounce from the current field, a budget in probes per frame, and classification and relocation on the GPU.
+  - Done when:
+    - the furnace room converges to its analytic value within 2%;
+    - Cornell's indirect light matches Cycles within the M1 accuracy target;
+    - probes inside walls are classified off;
+    - the two-room leak is ≤ 1%.
+- **T1.6 Shading module and plain-WebGPU example.**
+  - `giIrradiance` (Chebyshev visibility, coverage) and `globalsCode`; `examples/webgpu/hello` renders Cornell with GI.
+  - Done when GI sampling costs ≤ 1.0 ms at 1440p on the RTX 3060.
+- **T1.7 three.js adapter.**
+  - A `Light` subclass with a registered node. Scene sync covers meshes, materials (metalness folded into albedo; UV mappings and vertex normals passed through), instances and lights, plus the env-diffuse workaround.
+  - Done when:
+    - the same scene through `hello` and through three matches within a small tolerance (engine neutrality);
+    - adapter CPU time is ≤ 0.2 ms per frame for a still scene and ≤ 0.5 ms with one object moving.
+  - No Babylon work.
+- **T1.8 Viewer integration.**
+  - DDGI as a technique in the viewer, with probe debug spheres coloured by state.
+  - Stats: probes per frame, update ms, memory, adapter sync ms.
+  - A wipe against the Cycles reference image.
+  - Done when Dennis can use it without instructions.
+- **T1.9 M1 measurements.**
+  - Measure on Sponza (untextured), Cornell and two-rooms: GI cost, update cost, whole-frame p50/p95, accuracy against Cycles, leaks, memory and startup.
+  - Native RTXGI numbers on the same scenes, side by side.
+  - Set the stability threshold by eye with Dennis.
+  - Done when the targets are met or a gap is explained and agreed, and Tier B's mode is decided from the Intel numbers.
+- **T1.10 Sponza add-ons.**
+  - See the T0.12 notes above: the curtains join `sponza`; ivy, trees and candles make `sponza-full`.
+  - Done when the viewer shows the curtains at bookmark 1, the fetch verifies, and the Cycles reference is re-rendered.
+
 ## Later
 
 M1–M5 tasks are added at the end of the previous milestone. See [PLAN.md](PLAN.md#later-milestones-outline).
