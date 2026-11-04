@@ -21,6 +21,14 @@ Rules:
 
 ---
 
+## 2026-11-04 · M1 start, T1.5 design · M1 lead (main session, opus)
+Did:
+- Branch `m1` from `main` at 799b050. The M1 board gets a Status column.
+- First wave running in parallel on separate files: T1.1, T1.2, T1.10 part 1 (add-on downloads), B0b, and the Cycles references T1.5's checks need (point-light Cornell, two-room dark-room view).
+- Wrote the T1.5 design, `docs/design/ddgi.md`. DECISIONS records how its Cornell accuracy and two-room leak checks are measured, and why `bounceEnergy` defaults to 1.
+Verified: `pnpm lint && pnpm typecheck && pnpm test` pass on fresh `m1` (475 tests). The RTX was idle (1%); the `pnpm dev` process (46096) was gone. The stray python.exe (16968) uses one full CPU core; the parent session was told.
+Next: review each task as it lands; T1.3 after T1.2.
+
 ## 2026-11-04 · T0.5, T0.12 · main session
 Did: recorded Dennis's M0 sign-off. T0.5 and T0.12 marked done; M1 started.
 Verified: Dennis, on the viewer: "the viewer runs". He had no other feedback and asked to start M1.

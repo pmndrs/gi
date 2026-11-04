@@ -4,6 +4,11 @@ Settled choices, newest first. Each entry is short: the decision, why, and what 
 
 ## 2026-11-04
 
+- **How T1.5's accuracy and leak checks are measured** (M1 lead; design in `docs/design/ddgi.md`). These define the measurements; the targets themselves are unchanged.
+  - **Cornell accuracy uses the point-light Cornell** (`cornell-box-point`). DDGI's field counts light seen straight from an emitter as GI, while Cycles' "indirect" pass doesn't, so the emissive Cornell can't be compared indirect-to-indirect. With a point light both hold exactly the bounced light. The emissive Cornell's full image is still reported, but doesn't gate.
+  - **Two-room leak** = DDGI's indirect light in the dark room beyond the Cycles reference's (the doorway lets real light in), as a share of the lit room's indirect light, from mean pixel values at the `dark-room-leak-view` and `lit-room` bookmarks. Thin-wall and closed-door, where the true answer is zero, are reported too.
+  - **`bounceEnergy` defaults to 1.0**, not native's 0.95: 0.95 makes the furnace room settle 4.8% low, which can't pass a 2% check. It's a setting, for matching native in T1.9.
+  - *Revisit if:* T1.9 finds these measurements disagree with what Dennis sees in the viewer.
 - **M0 is signed off; M1 starts.** Dennis: "the viewer runs, is there more to test? otherwise lets start m1". The open B0 target (Sponza tinybvh build ≤ 2 s) stays in the BVH lane and doesn't block M1.
 - **The BVH code sources in `research/bvh-libraries.md` may be used.** Dennis: "So far all of the ones you listed we can use," and "the sort algos we can use as they are often cited in other work."
   - That includes the repos with no licence file: meistdan/ploc, AlanIWBFT/CWBVH, kishimisu/WebGPU-Radix-Sort and wgpu_sort.
