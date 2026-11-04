@@ -153,3 +153,21 @@ No GPL or LGPL libraries turned up in this survey. The unusable-to-copy items ar
 3. **Defer H-PLOC and CWBVH.** H-PLOC (NexusBVH) is the best build, but its warp-heavy code is the biggest port; CWBVH adds an 80-byte node and a new traversal for an unproven gain in a DDGI workload with short rays and 256 rays per probe.
 4. **Decide the subgroup policy before porting:** require `subgroups` for the GPU builder (feature-detect, fall back to the WASM CPU builder), use 30-bit Morton codes, and put the Mac in the test matrix for any kernel that waits on another workgroup.
 5. **Keep tmb out of the core.** It needs three's node system for traversal; use it only as the adapter's CPU builder and as a performance baseline, and copy its ideas (DFS layout, relative offsets, empty-leaf handling) rather than its code paths.
+
+## Added sources (from Dennis, 2026-11-04)
+
+- **Alain Galvan, "Ray Tracing Acceleration Structures"** (2022, since updated): https://alain.xyz/blog/ray-tracing-acceleration-structures. An overview of builder families (top-down, bottom-up, insertion), Morton codes, refit, two-level TLAS/BLAS, and short-stack wide traversal. Papers it adds to our list:
+  - **Meister et al. 2021, "A Survey on Bounding Volume Hierarchies for Ray Tracing":** https://meistdan.github.io/publications/bvh_star/paper.pdf. The standard survey; read it first.
+  - **Benthin et al. 2017, "Improved Two-Level BVHs Using Partial Re-Braiding":** http://www.sven-woop.de/papers/2017-HPG-openmerge.pdf. Better top-level trees when instances overlap. Relevant to furniture packed in a room.
+  - **Vaidyanathan et al. 2019, "Wide BVH Traversal with a Short Stack":** https://www.intel.com/content/www/us/en/developer/articles/technical/wide-bvh-traversal-with-a-short-stack.html. Relevant to B3.
+  - **Karras, "Thinking Parallel, Part III: Tree Construction on the GPU":** https://developer.nvidia.com/blog/thinking-parallel-part-iii-tree-construction-gpu/
+  - **Bikker 2022, "How to build a BVH" series:** https://jacco.ompf2.com/2022/04/13/how-to-build-a-bvh-part-1-basics/
+  - **Libmorton** (MIT): https://github.com/Forceflow/libmorton
+
+## License status (Dennis, 2026-11-04)
+
+Dennis cleared every source listed in this file for use: "So far all of the ones you listed we can use". That includes the repos with no license file (meistdan/ploc, AlanIWBFT/CWBVH, kishimisu/WebGPU-Radix-Sort, and wgpu_sort).
+
+- Any code ported from them is attributed in `THIRD_PARTY.md`, with repo, commit and what was taken.
+- Gigi's WebGPU output is generated code, so it's dropped as a source.
+- The original PLOC is allowed "if needed". Prefer the newer methods (H-PLOC).

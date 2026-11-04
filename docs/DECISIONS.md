@@ -4,6 +4,12 @@ Settled choices, newest first. Each entry is short: the decision, why, and what 
 
 ## 2026-11-04
 
+- **The BVH code sources in `research/bvh-libraries.md` may be used.** Dennis: "So far all of the ones you listed we can use," and "the sort algos we can use as they are often cited in other work."
+  - That includes the repos with no licence file: meistdan/ploc, AlanIWBFT/CWBVH, kishimisu/WebGPU-Radix-Sort and wgpu_sort.
+  - **Rule:** any code ported from one of them gets a `THIRD_PARTY.md` entry naming the repo, the commit and what was taken.
+  - **Original PLOC:** allowed if needed, but prefer H-PLOC.
+  - **EA Gigi** is dropped as a source, because its WebGPU output is generated code.
+  - *Revisit if:* we split out `pmndrs/bvh` as a published package. At that point, ask the authors of the unlicensed repos for an explicit licence before shipping anything ported from them.
 - **The BVH is its own engine-free package, `packages/bvh`, in this repo for now.** Dennis: "if its useful enough I might even say to make it pmndrs/bvh... I think that will be the plan, but lets keep it in the repo for now for simplicity sake."
   - **Imports:** it imports no DDGI, GI or engine code. `ddgi-core` depends on it, and it ships through `@pmndrs/ddgi` until it may be split out as `pmndrs/bvh`.
   - **Lint:** a rule forbids `packages/bvh` from importing `ddgi-core` or any engine.
