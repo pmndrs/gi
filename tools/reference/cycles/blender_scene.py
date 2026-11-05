@@ -19,8 +19,13 @@ Settings that matter for a reference (and why):
     0.8, so the energy left after 32 bounces is below 1e-3 of the first bounce; the
     pathtracer side uses the same count. No Russian-roulette-style albedo cap is
     applied (NVIDIA's 0.9 cap in the native harness is a harness detail).
-  * Pixel filter BOX, width 1: matches a path tracer that jitters inside the
-    pixel. Cycles' default Blackman-Harris at 1.5 px would blur edges.
+  * Pixel filter Blackman-Harris, 1.5 px wide (Cycles' default) for references
+    (T1.13, 2026-11-05): anti-aliased edges at HD, so the viewer's wipe can be
+    judged by eye. Cycles importance-samples the filter (no negative lobes), so
+    an image's mean is unchanged; only edges are softened, by about half a
+    pixel. References before T1.13 used a 1 px box; `--pixel-filter box`
+    renders that way again. The calibration scenes keep the box (flat areas,
+    where the filter makes no difference).
   * Colour management: Standard view transform, look None, exposure 0, gamma 1.
     The EXRs are scene-linear and never see the view transform anyway; it is set
     so a stray PNG would not be tone-mapped either.
@@ -62,7 +67,15 @@ def reset_scene():
     return bpy.context.scene
 
 
-def configure_cycles(scene, width, height, samples, seed, device, max_bounces=MAX_BOUNCES):
+# Cycles' pixel filters by the names the command line uses.
+PIXEL_FILTERS = {'blackman-harris': 'BLACKMAN_HARRIS', 'gaussian': 'GAUSSIAN', 'box': 'BOX'}
+
+
+def configure_cycles(scene, width, height, samples, seed, device, max_bounces=MAX_BOUNCES, pixel_filter='box', filter_width=1.0):
+    """
+    Render settings (see the file comment). Returns a readable description of
+    the device that renders, e.g. 'OPTIX: NVIDIA GeForce RTX 3060 Laptop GPU'.
+    """
     scene.render.engine = 'CYCLES'
     scene.render.resolution_x = width
     scene.render.resolution_y = height
@@ -88,8 +101,8 @@ def configure_cycles(scene, width, height, samples, seed, device, max_bounces=MA
     cycles.caustics_reflective = False
     cycles.caustics_refractive = False
     cycles.blur_glossy = 0.0
-    cycles.pixel_filter_type = 'BOX'
-    cycles.filter_width = 1.0
+    cycles.pixel_filter_type = PIXEL_FILTERS[pixel_filter]
+    cycles.filter_width = filter_width
 
     scene.view_settings.view_transform = 'Standard'
     scene.view_settings.look = 'None'
@@ -98,24 +111,32 @@ def configure_cycles(scene, width, height, samples, seed, device, max_bounces=MA
 
     if device == 'cpu':
         cycles.device = 'CPU'
+        device_description = f'CPU ({os.cpu_count()} logical cores)'
     else:
         prefs = bpy.context.preferences.addons['cycles'].preferences
+        compute_type_used = None
         for compute_type in ('OPTIX', 'CUDA'):
             try:
                 prefs.compute_device_type = compute_type
                 prefs.get_devices()
+                compute_type_used = compute_type
                 break
             except TypeError:
                 continue
         for gpu in prefs.devices:
             gpu.use = gpu.type in ('OPTIX', 'CUDA') and 'NVIDIA' in gpu.name.upper()
+        used = [gpu.name for gpu in prefs.devices if gpu.use and gpu.type == compute_type_used]
+        if not used:
+            raise SystemExit('--device gpu: Blender found no NVIDIA OptiX or CUDA device')
         cycles.device = 'GPU'
+        device_description = f"{compute_type_used}: {', '.join(used)}"
 
     view_layer = scene.view_layers[0]
     # Passes used to build the indirect-only image (see add_compositor_outputs).
     view_layer.use_pass_diffuse_direct = True
     view_layer.use_pass_diffuse_indirect = True
     view_layer.use_pass_diffuse_color = True
+    return device_description
 
 
 # ---------------------------------------------------------------------------
@@ -400,6 +421,12 @@ def add_environment(scene, environment, sky_file=None):
 # Camera
 # ---------------------------------------------------------------------------
 
+# The reference camera's clip distances (metres). Recorded with every render
+# (render.py `shot`); nothing in the scenes is nearer or farther.
+CAMERA_NEAR = 0.01
+CAMERA_FAR = 2000.0
+
+
 def add_camera(scene, position, target, fov_y_deg):
     """
     An explicit basis, not look-at constraints: forward = target - position,
@@ -430,8 +457,8 @@ def add_camera(scene, position, target, fov_y_deg):
     data = bpy.data.cameras.new('reference-camera')
     data.sensor_fit = 'VERTICAL'
     data.angle = math.radians(fov_y_deg)
-    data.clip_start = 0.01
-    data.clip_end = 2000.0
+    data.clip_start = CAMERA_NEAR
+    data.clip_end = CAMERA_FAR
     obj = bpy.data.objects.new('reference-camera', data)
     obj.matrix_world = matrix
     scene.collection.objects.link(obj)

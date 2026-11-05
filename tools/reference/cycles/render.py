@@ -41,6 +41,7 @@ import json
 import os
 import platform
 import re
+import subprocess
 import sys
 import time
 
@@ -60,11 +61,28 @@ def parse_arguments():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--scene', required=True, help='manifest id, e.g. cornell-box')
     parser.add_argument('--camera', default='1', help='camera bookmark: name, or 1-based number (default 1, the first)')
+    parser.add_argument(
+        '--from-shot',
+        default=None,
+        help="a reference's json (cycles.json): render its stored camera and size instead of a bookmark's, to reproduce the view",
+    )
     parser.add_argument('--samples', type=int, required=True)
-    parser.add_argument('--width', type=int, default=512)
-    parser.add_argument('--height', type=int, default=512)
+    # 1920 x 1080 (T1.13): HD, and 16:9 like two-room's and Sponza's earlier 640 x 360,
+    # so their means stay comparable; the viewer letterboxes to the stored aspect.
+    parser.add_argument('--width', type=int, default=1920)
+    parser.add_argument('--height', type=int, default=1080)
     parser.add_argument('--seed', type=int, default=0)
-    parser.add_argument('--device', choices=['cpu', 'gpu'], default='cpu')
+    parser.add_argument('--device', choices=['cpu', 'gpu'], default='gpu', help='gpu (default) is OptiX on the NVIDIA GPU')
+    parser.add_argument('--pixel-filter', choices=sorted(bs.PIXEL_FILTERS), default='blackman-harris')
+    parser.add_argument('--filter-width', type=float, default=1.5, help='pixels (default 1.5)')
+    parser.add_argument(
+        '--denoise',
+        action='store_true',
+        help='also write <prefix>-full-denoised.exr (OpenImageDenoise with albedo and normal guides) for viewing; '
+        'the raw EXRs are written as always and stay the ones accuracy is measured on',
+    )
+    parser.add_argument('--tone-mapping', default='aces', help="the viewer's tone mapper for this reference (stored, not applied to the EXRs)")
+    parser.add_argument('--exposure-ev', type=float, default=None, help="the viewer's exposure for it; default the manifest's exposureEv")
     parser.add_argument('--out-dir', default=None, help='default bench/references/<scene>/<camera name>')
     parser.add_argument('--name-suffix', default='', help='added to file names, e.g. -seed1')
     parser.add_argument('--threads', type=int, default=0, help='CPU threads; 0 means all')
@@ -88,6 +106,40 @@ def pick_camera(manifest, wanted):
         if camera['name'] == wanted:
             return camera
     raise SystemExit(f'no camera named {wanted!r}; known: {[c["name"] for c in cameras]}')
+
+
+def camera_from_shot(path):
+    """The stored camera and size of an earlier reference (its json's `shot`), to render the same view again."""
+    with open(path, 'r', encoding='utf-8') as handle:
+        shot = json.load(handle).get('shot')
+    if not shot:
+        raise SystemExit(f'{path} has no stored camera (`shot`); it was rendered before T1.13')
+    camera = shot['camera']
+    return (
+        {'name': camera['bookmark'], 'position': camera['position'], 'target': camera['target'], 'fovYDeg': camera['fovYDeg']},
+        camera['width'],
+        camera['height'],
+    )
+
+
+def file_sha256(path):
+    with open(path, 'rb') as handle:
+        return hashlib.sha256(handle.read()).hexdigest()
+
+
+def git_state():
+    """The repo commit the render was made at, and whether the working tree had changes; None when git isn't there."""
+    try:
+        commit = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=REPO_ROOT, capture_output=True, text=True, check=True).stdout.strip()
+        status = subprocess.run(['git', 'status', '--porcelain'], cwd=REPO_ROOT, capture_output=True, text=True, check=True).stdout
+        return {'commit': commit, 'uncommittedChanges': bool(status.strip())}
+    except (OSError, subprocess.CalledProcessError):
+        return None
+
+
+# The format of `shot` in a reference's json. The viewer (apps/viewer/src/scene/reference-files.ts)
+# and the DDGI test pages read it; change the version when a field changes meaning.
+SHOT_FORMAT = 'ddgi-reference-shot/1'
 
 
 def load_geometry(manifest, model_parts=None):
@@ -407,7 +459,29 @@ def take_output(directory, name):
     return target
 
 
-def render_with_gi_parts(scene, directory, prefix, suffix):
+def add_denoised_output(tree, layers, output, name):
+    """
+    A second copy of the full image through OpenImageDenoise (the compositor's
+    Denoise node, HDR, with Cycles' denoising albedo and normal as guides),
+    for viewing only. The raw image is still written unchanged.
+    """
+    denoise = tree.nodes.new('CompositorNodeDenoise')
+    denoise.use_hdr = True
+    denoise.prefilter = 'ACCURATE'
+    if hasattr(denoise, 'quality'):
+        denoise.quality = 'HIGH'
+    tree.links.new(layers.outputs['Image'], denoise.inputs['Image'])
+    tree.links.new(layers.outputs['Denoising Normal'], denoise.inputs['Normal'])
+    tree.links.new(layers.outputs['Denoising Albedo'], denoise.inputs['Albedo'])
+    output.file_slots.new(name)
+    tree.links.new(denoise.outputs['Image'], output.inputs[len(output.file_slots) - 1])
+
+
+# How the viewing copy is denoised (render.py --denoise), as recorded in the json.
+DENOISER = 'OpenImageDenoise (Blender compositor Denoise node: HDR, prefilter accurate, albedo and normal guides)'
+
+
+def render_with_gi_parts(scene, directory, prefix, suffix, denoise=False):
     """
     The reference render, plus the parts of DDGI's quantity (GI_DEFINITION),
     for every scene: textured or untextured, with or without a sky.
@@ -440,10 +514,15 @@ def render_with_gi_parts(scene, directory, prefix, suffix):
     output = next(node for node in tree.nodes if node.type == 'OUTPUT_FILE')
     output.file_slots.new(direct_name)
     tree.links.new(multiply_passes(tree, layers, 'DiffDir', 'DiffCol').outputs['Image'], output.inputs[2])
+    denoised_name = f'{prefix}-full-denoised{suffix}'
+    if denoise:
+        add_denoised_output(tree, layers, output, denoised_name)
     started = time.time()
     bpy.ops.render.render(write_still=False)
     files = bs.collect_outputs(directory, full_name, indirect_name)
     files.append(take_output(directory, direct_name))
+    if denoise:
+        files.append(take_output(directory, denoised_name))
 
     # 2. The lights alone, direct only: every other source off, no bounces.
     lights_started = time.time()
@@ -471,7 +550,12 @@ def render_with_gi_parts(scene, directory, prefix, suffix):
 def main():
     args = parse_arguments()
     manifest = bs.read_json(os.path.join(REPO_ROOT, 'scenes', 'manifests', f'{args.scene}.json'))
-    camera = pick_camera(manifest, args.camera)
+    width, height = args.width, args.height
+    if args.from_shot:
+        camera, width, height = camera_from_shot(args.from_shot)
+    else:
+        camera = pick_camera(manifest, args.camera)
+    bookmark_number = next((index + 1 for index, bookmark in enumerate(manifest['cameras']) if bookmark['name'] == camera['name']), None)
 
     out_dir = os.path.abspath(args.out_dir or os.path.join(REPO_ROOT, 'bench', 'references', manifest['id'], camera['name']))
     gi_table = None
@@ -489,7 +573,12 @@ def main():
     prefix = 'cycles-untextured' if gi_table else 'cycles'
 
     scene = bs.reset_scene()
-    bs.configure_cycles(scene, args.width, args.height, args.samples, args.seed, args.device)
+    device_description = bs.configure_cycles(
+        scene, width, height, args.samples, args.seed, args.device, pixel_filter=args.pixel_filter, filter_width=args.filter_width
+    )
+    if args.denoise:
+        # Cycles' denoising albedo and normal passes: the guides for the viewing copy.
+        scene.view_layers[0].cycles.denoising_store_passes = True
     if args.threads:
         scene.render.threads_mode = 'FIXED'
         scene.render.threads = args.threads
@@ -521,7 +610,48 @@ def main():
     # Taken before the lights-only render switches every other source off.
     emitters = find_emitters(scene)
     lights_only_expected = lights_only_expectation(emitters, len(manifest['lights']))
-    render_seconds, lights_only_seconds, files = render_with_gi_parts(scene, out_dir, prefix, args.name_suffix)
+    render_seconds, lights_only_seconds, files = render_with_gi_parts(scene, out_dir, prefix, args.name_suffix, args.denoise)
+    manifest_path = os.path.join(REPO_ROOT, 'scenes', 'manifests', f'{args.scene}.json')
+    exposure_ev = args.exposure_ev if args.exposure_ev is not None else manifest.get('exposureEv', 0)
+    # Everything needed to see this exact view again: in the viewer (camera, aspect,
+    # exposure, tone mapping), in the DDGI test pages, or in Blender (--from-shot).
+    shot = {
+        'format': SHOT_FORMAT,
+        'camera': {
+            # Manifest space: three.js axes, Y up, metres. The camera's up is +Y, with
+            # three's lookAt fallback when looking straight up or down (blender_scene.add_camera).
+            'bookmark': camera['name'],
+            'bookmarkNumber': bookmark_number,
+            'position': camera['position'],
+            'target': camera['target'],
+            'up': [0, 1, 0],
+            'fovYDeg': camera['fovYDeg'],
+            'aspect': width / height,
+            'width': width,
+            'height': height,
+            'near': bs.CAMERA_NEAR,
+            'far': bs.CAMERA_FAR,
+        },
+        'display': {'exposureEv': exposure_ev, 'toneMapping': args.tone_mapping},
+        'scene': {
+            'manifest': manifest['id'],
+            'manifestPath': os.path.relpath(manifest_path, REPO_ROOT).replace(os.sep, '/'),
+            'manifestSha256': file_sha256(manifest_path),
+            'skySha256': sky_file['sha256'] if sky_file else None,
+            'giMaterialsSha256': gi_table_info['sha256'] if gi_table_info else None,
+        },
+        'render': {
+            'git': git_state(),
+            'blender': bpy.app.version_string,
+            'device': device_description,
+            'samplesPerPixel': args.samples,
+            'seed': args.seed,
+            'pixelFilter': {'type': bs.PIXEL_FILTERS[args.pixel_filter], 'widthPixels': args.filter_width},
+            'renderSeconds': round(render_seconds, 2),
+            # The raw EXRs are never denoised; with --denoise a separate viewing copy is.
+            'denoised': {'file': f'{prefix}-full-denoised{args.name_suffix}.exr', 'denoiser': DENOISER} if args.denoise else None,
+        },
+    }
 
     meta = {
         'tool': 'tools/reference/cycles/render.py',
@@ -532,17 +662,21 @@ def main():
         'environment': manifest['environment'],
         'skyFile': sky_file,
         'camera': camera,
-        'width': args.width,
-        'height': args.height,
+        'shot': shot,
+        'width': width,
+        'height': height,
         'samplesPerPixel': args.samples,
         'seed': args.seed,
         'device': args.device,
+        'deviceName': device_description,
         'threads': scene.render.threads,
         'maxBounces': bs.MAX_BOUNCES,
+        # The raw images are never denoised; `denoisedFile` is a separate viewing copy (--denoise).
         'denoising': False,
+        'denoisedFile': f'{prefix}-full-denoised{args.name_suffix}.exr' if args.denoise else None,
         'sampleClamp': 0,
         'lightSamplingThreshold': 0,
-        'pixelFilter': 'BOX 1.0',
+        'pixelFilter': f'{bs.PIXEL_FILTERS[args.pixel_filter]} {args.filter_width:g}',
         'materials': f'diffuse only ({materials_changed} Principled BSDFs reset, {texture_links_removed} texture links removed, checked)'
         + (f'; untextured: {gi_materials_set} materials set to the GI table constants, alpha 1, no normal maps (checked)' if gi_table else ''),
         'giMaterials': gi_table_info,
@@ -553,6 +687,7 @@ def main():
         'triangles': triangles,
         'files': [os.path.basename(path) for path in files],
         'outDir': out_dir,
+        'jsonFile': f'{prefix}{args.name_suffix}.json',
         # Sources of light besides the manifest lights (sky, emissive materials), at most 20 listed.
         'otherEmitters': {'count': len(emitters), 'listed': emitters[:20]},
         'giComposite': {

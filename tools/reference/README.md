@@ -3,7 +3,7 @@
 Ground truth on demand, and one way to compare images.
 
 ```
-node tools/reference/cycles/run.ts       --scene cornell-box --camera 1 --samples 2048 --width 512 --height 512
+node tools/reference/cycles/run.ts       --scene cornell-box --camera 1 --samples 4096 [--denoise]     # 1920 x 1080, OptiX
 node tools/reference/pathtracer/run.ts   --scene cornell-box --camera 1 --samples 8192 --width 512 --height 512
 node tools/compare/index.ts bench/references/cornell-box/front/cycles-full.exr bench/references/cornell-box/front/pathtracer-full.exr
 node tools/reference/cycles/run.ts --calibrate      # known-answer checks of the unit conversions
@@ -17,12 +17,40 @@ Output goes to `bench/references/<scene>/<camera name>/` (gitignored):
 | `cycles-direct.exr`, `cycles-lights-direct.exr`, `cycles-gi.exr` | the GI composite and its parts: what DDGI is compared with (see "The GI composite") |
 | `cycles-untextured-*` | the same from an untextured render (see "Untextured references") |
 | `pathtracer-full.exr`, `pathtracer-indirect.exr` | three-gpu-pathtracer (WebGPU), same |
-| `*.json` | every setting, sample count, adapter and time |
+| `cycles-full-denoised.exr` | with `--denoise`: a denoised copy of the full image, for viewing only (see "HD references") |
+| `*.json` | every setting, sample count, adapter and time, and the stored shot (see "Stored camera") |
 | `compare-*.png` | heatmaps from `tools/compare` |
 
 `bench/references/render-log.csv` gets one row per render (sample count, size, seconds).
 
-Cameras are the manifest bookmarks: `--camera 1` is the first, or give the name. Both renderers build the camera from the manifest position, target and vertical fov, with the same aspect and size.
+Cameras are the manifest bookmarks: `--camera 1` is the first, or give the name. Both renderers build the camera from the manifest position, target and vertical fov, with the same aspect and size. `--from-shot <cycles.json>` renders an earlier reference's stored camera and size instead.
+
+## HD references (T1.13, 2026-11-05)
+
+Dennis: "640 x 360 is an insane size to judge ANYTHING against." Since T1.13 every reference is:
+
+- **1920 × 1080** by default. 16:9 was chosen over the viewer's window shape because the window changes; the viewer instead letterboxes to the reference's stored aspect. It is also two-room's and Sponza's earlier 640 × 360 shape, so their means stay comparable (the `ddgi-leak` page's constants, for one). Cornell's earlier references were 512 × 512; at 16:9 the frame shows more of the black surroundings, which changes the image mean but not the bias (sum against sum on the same view).
+- **Anti-aliased:** Cycles' Blackman-Harris pixel filter, 1.5 px wide (its default). It was a 1 px box before. Cycles importance-samples the filter, so an image's mean doesn't change; edges are softer by about half a pixel. What it means for comparisons: DDGI's test view shoots one ray through each pixel centre (no anti-aliasing), so per-pixel numbers and per-pixel FLIP now include an edge-softness difference along every silhouette. The 8 × 8 block numbers, which the tolerances use, barely move (an edge's light stays in its block), and the bias doesn't move at all. `--pixel-filter box --filter-width 1` renders the old way.
+- **On the GPU:** `--device gpu` (OptiX on the RTX 3060 Laptop) is now the default; `--device cpu` still works. OptiX and CPU references agree to about 0.1% (DECISIONS, the sky-aware composite review). The json records the device by name.
+- **Clean:** the sample counts in "Sizes, samples and times" below, with the 8 × 8-block noise measured from two seeds.
+- **`--denoise`** (Dennis is fine with denoising tools) also writes `cycles-full-denoised.exr`: the full image through OpenImageDenoise (Blender's compositor Denoise node, HDR, with albedo and normal guides). It is for the viewer's wipe only. The raw EXRs are written unchanged and are what every accuracy number is measured on. `run.ts` measures the denoised copy against the raw image and stores the result (`denoiseCheck`: bias and 8 × 8 block error) in the json and in `shot.render.denoised.check`. The viewer shows the denoised copy when there is one, and says so.
+
+## Stored camera (`shot`)
+
+Every render writes, in its json (`cycles.json`, `cycles-untextured.json`, ...), a `shot` with everything needed to see exactly that view again (format `ddgi-reference-shot/1`):
+
+| field | what |
+| --- | --- |
+| `camera` | `bookmark` name and number; `position`, `target`, `up` (+Y) in manifest space (three.js axes, metres); `fovYDeg` (vertical); `aspect`, `width`, `height`; `near` 0.01 and `far` 2000 (m) |
+| `display` | `exposureEv` (default the manifest's `exposureEv`) and `toneMapping` (default `aces`): what the viewer shows it with. The EXRs are linear and never tone-mapped |
+| `scene` | the manifest id, path and sha256 of its file; the sky file's sha256; the GI material table's sha256 (untextured renders) |
+| `render` | `git` (commit, and whether the tree had uncommitted changes), Blender version, `device` (e.g. `OPTIX: NVIDIA GeForce RTX 3060 Laptop GPU`), samples, seed, pixel filter, render seconds, and `denoised` (null, or the viewing copy's file, denoiser and its check) |
+
+Who reads it:
+
+- **The viewer's Compare** (`apps/viewer/src/scene/reference-files.ts`, `viewer-app.ts`): moves the camera to the stored position, target and field of view, letterboxes the picture to the stored aspect, and (on pressing Compare) sets the stored exposure and tone mapping, so the wipe lines up pixel for pixel. The panel says when the scene's manifest has changed since the render (a warning: re-render), and when the render is from another commit than the viewer runs. The viewer keeps its own near and far planes: they only clip, and 0.01 to 2000 m would cost depth precision.
+- **The DDGI test images:** `tools/gpu/pages/ddgi-test-view/render.ts` and `ddgi-sponza-accuracy/run.ts` render DDGI from the stored camera at the stored size (`tools/reference/shot.ts`), and warn if the manifest has changed since.
+- **Blender:** `run.ts --scene <id> --from-shot <json> --samples N` renders the same view again.
 
 ## What "full" and "indirect-only" mean
 
@@ -103,7 +131,7 @@ Both sides, matched on purpose:
 | Bounces | 32 | 33 (the library counts the camera hit as the first) |
 | Clamping | off (Blender's default indirect clamp of 10 is a bias) | off (the library's default indirect clamp is 10) |
 | Denoising | off | off (see "Denoiser") |
-| Pixel filter | box, 1 px | jitter inside the pixel |
+| Pixel filter | Blackman-Harris, 1.5 px (box, 1 px before T1.13; see "HD references") | jitter inside the pixel |
 | Environment | none = black; procedural = the shared sky file `scenes/sky/<scene>.exr` | none = black; other types unsupported |
 | Direct light range | not applied | three's range window is applied (see below) |
 
@@ -210,7 +238,7 @@ Only a single pass at the end is wired up, not the progressive (every N samples)
 ## Sample counts, GPU and CPU
 
 - Both tools hold the shared bench lock (`$TEMP/ddgi-gpu-bench.lock`, see "Bench lock" below) for the whole render: one machine-heavy job at a time. Cycles on the CPU (16 threads on this laptop) would skew other agents' build-time and CPU numbers, and the path tracer loads the GPU. A tool waits while someone else holds the lock and releases it when it finishes, fails, or is stopped with Ctrl-C or SIGTERM (the release is on the tools/gpu cleanup list, which also kills Blender). Chrome is closed after the lock is released, since closing can take minutes on a busy machine.
-- Cycles uses the CPU by default; `--device gpu` uses OptiX (still under the lock).
+- Cycles uses the GPU (OptiX) by default since T1.13; `--device cpu` uses the CPU (both under the lock).
 - Noise: render a second seed (`--seed 1 --name-suffix=-seed1`, note the `=`) and compare the two; half the relative RMS is the noise of one image.
 
 ## Bench lock

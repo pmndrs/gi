@@ -1,9 +1,10 @@
 /**
  * Runs the Cycles reference renderer (render.py) in Blender 4.5.
  *
- *   node tools/reference/cycles/run.ts --scene cornell-box [--camera 1] [--samples 1024]
- *        [--width 512] [--height 512] [--seed 0] [--name-suffix -seed1]
- *        [--device cpu|gpu] [--threads N] [--materials-json <GI material table>]
+ *   node tools/reference/cycles/run.ts --scene cornell-box [--camera 1 | --from-shot <cycles.json>] --samples 4096
+ *        [--width 1920] [--height 1080] [--seed 0] [--name-suffix -seed1]
+ *        [--device gpu|cpu] [--threads N] [--materials-json <GI material table>]
+ *        [--pixel-filter blackman-harris|gaussian|box] [--filter-width 1.5] [--denoise]
  *   node tools/reference/cycles/run.ts --calibrate     known-answer checks of the unit conversions
  *
  * Output: bench/references/<scene>/<camera name>/cycles-{full,indirect,direct,lights-direct}.exr
@@ -15,11 +16,18 @@
  * constant GI albedo and emission) the files are cycles-untextured-* and the
  * log's tool column says `cycles-untextured`.
  *
+ * Every render stores its camera, size, display settings, scene hashes,
+ * commit and render settings as `shot` in its json (render.py; README
+ * "Stored camera"), which the viewer's Compare and the DDGI test pages use.
+ * `--denoise` adds a denoised viewing copy, `cycles-full-denoised.exr`, and
+ * records its bias against the raw image (`denoiseCheck`); the raw EXRs are
+ * what accuracy is measured on.
+ *
  * Every render holds the shared bench lock (`$TEMP/ddgi-gpu-bench.lock`), CPU
  * renders included: 16 busy threads skew other agents' build-time and CPU-side
  * numbers just as a GPU job skews GPU numbers. One machine-heavy job at a time.
  * Ctrl-C or SIGTERM kills Blender and releases the lock. The default device is
- * the CPU; `--device gpu` uses OptiX. See tools/reference/README.md.
+ * the GPU (OptiX); `--device cpu` uses the CPU. See tools/reference/README.md.
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -30,6 +38,7 @@ import { findBlender } from '../../assets/fetch.ts';
 import { readExr, writeExr } from '../../compare/exr.ts';
 import { installShutdownHandlers, registerCleanup } from '../../gpu/cleanup.ts';
 import { withBenchLock } from '../bench-lock.ts';
+import { compareImages, downsample } from '../../compare/metrics.ts';
 import { checkLightsOnlyImage, composeGiImage, type LightsOnlyExpectation } from './gi-composite.ts';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
@@ -64,10 +73,11 @@ async function main(): Promise<void> {
     const forwarded = process.argv.slice(2);
     const calibrate = forwarded.includes('--calibrate');
     if (forwarded.length === 0 || forwarded.includes('--help')) {
-        console.log('usage: node tools/reference/cycles/run.ts --scene <id> [--camera 1] [--samples N] [--width W] [--height H] [--seed N] [--name-suffix S] [--device cpu|gpu] [--threads N] [--materials-json file]');
+        console.log('usage: node tools/reference/cycles/run.ts --scene <id> [--camera 1 | --from-shot cycles.json] --samples N [--width 1920] [--height 1080] [--seed N] [--name-suffix S] [--device gpu|cpu] [--threads N] [--materials-json file] [--pixel-filter blackman-harris|gaussian|box] [--filter-width 1.5] [--denoise] [--exposure-ev N] [--tone-mapping aces]');
         process.exit(forwarded.length === 0 ? 1 : 0);
     }
-    const device = forwarded[forwarded.indexOf('--device') + 1] === 'gpu' ? 'gpu' : 'cpu';
+    // render.py's default is the GPU (OptiX).
+    const device = forwarded.includes('--device') && forwarded[forwarded.indexOf('--device') + 1] === 'cpu' ? 'cpu' : 'gpu';
     const blender = await findBlender(BLENDER_VERSION);
     console.log(`Blender ${blender.version} at ${blender.path}, device ${device}`);
 
@@ -135,7 +145,32 @@ async function main(): Promise<void> {
         `${meta.finishedAt},${meta.giMaterials ? 'cycles-untextured' : 'cycles'},${meta.scene},${meta.camera.name},${meta.width},${meta.height},${meta.samplesPerPixel},${meta.seed},${meta.device},${meta.threads},${meta.loadSeconds},${meta.renderSeconds},${meta.triangles}\n`,
     );
     meta.files.push(await writeGiImage(meta.outDir, meta.giComposite));
+    if (meta.denoisedFile) {
+        // The viewing copy's bias against the raw image it was made from, stored with the render.
+        meta.denoiseCheck = await checkDenoised(meta.outDir, meta.files[0], meta.denoisedFile);
+        const metaPath = join(meta.outDir, meta.jsonFile);
+        const stored = JSON.parse(await readFile(metaPath, 'utf8'));
+        stored.denoiseCheck = meta.denoiseCheck;
+        stored.shot.render.denoised.check = meta.denoiseCheck;
+        await writeFile(metaPath, JSON.stringify(stored, null, 2));
+    }
     console.log(`done: ${meta.files.join(', ')} in ${meta.renderSeconds} s (${meta.samplesPerPixel} samples, ${meta.width}x${meta.height}, ${meta.device})`);
+}
+
+/**
+ * How far the denoised viewing copy is from the raw full image: overall bias
+ * (sum against sum) and the mean relative error of 8 x 8 blocks. Denoised
+ * images are for viewing; accuracy numbers come from the raw EXRs, and this
+ * says how much a denoised image would move them.
+ */
+async function checkDenoised(outDir: string, rawName: string, denoisedName: string): Promise<{ bias: number; blockError: number; blockSize: number }> {
+    const raw = readExr(await readFile(join(outDir, rawName)));
+    const denoised = readExr(await readFile(join(outDir, denoisedName)));
+    const blockSize = 8;
+    const pixels = compareImages(raw.rgb, denoised.rgb);
+    const blocks = compareImages(downsample(raw.rgb, raw.width, raw.height, blockSize).rgb, downsample(denoised.rgb, denoised.width, denoised.height, blockSize).rgb);
+    console.log(`denoised viewing copy against the raw image: bias ${(pixels.bias * 100).toFixed(3)}%, ${blockSize}x${blockSize} block error ${(blocks.meanRelativeError * 100).toFixed(3)}%`);
+    return { bias: pixels.bias, blockError: blocks.meanRelativeError, blockSize };
 }
 
 /** render.py's recipe for the DDGI-comparable image: the sum of `add` minus `subtract` (all EXRs in `outDir`). */
