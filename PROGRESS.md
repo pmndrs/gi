@@ -31,6 +31,17 @@ Numbers (indirect, against Cycles; bias, 8×8 block error, p95 block, FLIP 8×8,
 Not verified: the cause. The ratio map shows DDGI brighter on most shadowed surfaces, the curtains most.
 Next: find Sponza's +26% (leaks through thin curtains, probe density, sun shadow rays, the decal `dirt_decal` with GI albedo 0 acting as a black opaque surface because glTF's default metalness is 1 and M1 ignores `blocksLight`); a README section for `--materials-json`; the test view's full image is black on sky pixels.
 
+## 2026-11-05 · Why the RTX clocks stay low · implementer (opus), lead checked
+Did: `bench-lock run` now samples temperature and nvidia-smi's throttle reasons along with the clocks. `note/clock_low,1` is written when the median SM clock over loaded samples (≥ 70% use, at least 3) is below 1,500 MHz, and the end-of-run warning names the cause (heat or the power limit). Files: `tools/gpu/clock-note.ts`, `tools/reference/bench-lock.ts` and `bench-lock.test.ts` (the lock part went into b009816 by the lead's mistake, the rest here), `bench/results/README.md`.
+Verified (agent; RTX 3060 Laptop, headless Chrome 156): `three-screen-gi` on Sponza, 80 s from a cool 59 C, sampled every 200 ms:
+- the clock ramps from P8 (210 MHz) to 1,400–2,000 MHz in about 1 s and holds for 15–20 s, at the 65 W power cap;
+- at 85–87 C it drops, and from about 30 s it holds 450–600 MHz at 88–89 C, 58–60 W, 93–100% use;
+- SW thermal slowdown in 197 of 395 samples; loaded median 555 MHz over 58 samples;
+- short loads read fine (`trace-bench-sponza` 1,229–1,387 MHz).
+Lead re-ran `vitest tools/reference tools/gpu/clock`: 35 passed.
+Conclusion: the low clocks under sustained load are heat, not sampling and not submission gaps. Chrome flags unchanged.
+Not verified: the laptop's fan mode (Armoury Crate Silent / Performance / Turbo), vents and stand (questions for Dennis); whether a cool-down plus short timed sections reproduces 1,500+ MHz medians for the T1.9 set.
+
 ## 2026-11-05 · T1.13 tooling · implementer (opus); HD renders running
 Did (b009816, reference tooling only): every reference render's json holds a `shot` block (`ddgi-reference-shot/1`): camera position, target, up, vertical FOV, aspect, width, height, near 0.01 and far 2000; exposure and tone mapping; manifest id, path and sha256; sky and material-table hashes; commit and dirty flag; Blender, device, samples, seed, pixel filter, seconds; and whether a denoised copy exists, with its bias. `--from-shot` re-renders a stored view. Defaults: 1920×1080, Blackman-Harris 1.5 px, OptiX. `--denoise` adds a viewing-only denoised copy; the raw EXRs stay the accuracy source. The viewer's Compare (moves to the stored camera, letterboxes to its aspect, applies its exposure and tone mapping, flags another manifest or an older commit) and the DDGI pages at the reference's camera and size are done but not yet committed (those files are shared with agents still working).
 Verified (agent, RTX, headless Chrome): the canvas letterboxed to exactly 16:9, and the green wall's edge lines up within 1 px in all-DDGI and all-Cycles views. Cost per sample at HD (both renders): Cornell point 0.085 s, emissive Cornell 0.12, two-room 0.24, Sponza untextured 0.26, textured 0.37. Noise: two seeds of Cornell point at 256 samples differ by 3.04% (GI) and 1.37% (full) after 8×8 blocks, scaling to 0.54% and 0.24% at 8192. The denoised copy's mean bias: −0.07% Cornell, −0.01% Sponza.

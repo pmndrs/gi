@@ -266,6 +266,9 @@ describe('GPU clock sampling', () => {
         expect(parseClockLine('1215, 6001, 41\r\n')).toEqual({ smMhz: 1215, memMhz: 6001, utilizationPercent: 41 });
         expect(parseClockLine('1215, 6001, [N/A]')).toBeNull();
         expect(parseClockLine('')).toBeNull();
+        // With temperature and the throttle-reason mask (hex), as the real query returns them.
+        expect(parseClockLine('585, 7151, 93, 89, 0x0000000000000020')).toEqual({ smMhz: 585, memMhz: 7151, utilizationPercent: 93, temperatureC: 89, throttleReasons: 0x20 });
+        expect(parseClockLine('585, 7151, 93, 89')).toBeNull();
     });
 
     it('summarizes min / median / max, and takes the headline from samples under load', () => {
@@ -319,6 +322,20 @@ describe('GPU clock sampling', () => {
             expect(clockNoteRows(mostlyIdle).find((row) => row.metric === 'note/sm_clock_mhz')?.value).toBe(210);
             expect(isClockLow(mostlyIdle)).toBe(false);
             expect(noteNames([idle, idle, idle])).not.toContain('note/clock_low');
+        });
+
+        it('says why when nvidia-smi named a reason: heat or the power limit', () => {
+            const hot = (smMhz: number, throttleReasons: number) => ({ smMhz, memMhz: 7151, utilizationPercent: 95, temperatureC: 88, throttleReasons });
+            const summary = summarizeClockSamples([hot(500, 0x20), hot(550, 0x20), hot(600, 0x20), hot(700, 0x4)])!;
+            expect(summary.thermalLimitedShare).toBe(0.75);
+            expect(summary.powerCappedShare).toBe(0.25);
+            expect(summary.temperatureCLoaded?.median).toBe(88);
+            const warning = clockLowWarning(summary)!;
+            expect(warning).toContain('thermal throttling in 75%');
+            expect(warning).toContain('power limit in 25%');
+            expect(warning).toContain('88 C');
+            // Three-field samples carry no reason: the warning is still given, without a cause.
+            expect(clockLowWarning(summarizeClockSamples([busy(500), busy(500), busy(500)])!)).not.toContain('nvidia-smi: thermal');
         });
 
         it('bench-lock run prints the warning at the end of a low-clock run', async () => {

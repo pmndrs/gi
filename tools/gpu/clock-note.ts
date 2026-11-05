@@ -17,8 +17,21 @@ import { existsSync, readFileSync } from 'node:fs';
 /** `bench-lock run` gives its command this variable: the file its clock summary is written to. */
 export const CLOCK_FILE_ENV = 'DDGI_CLOCK_FILE';
 
-/** The query that `bench-lock run` samples; one CSV line per GPU. */
-export const NVIDIA_SMI_CLOCK_ARGS = ['--query-gpu=clocks.sm,clocks.mem,utilization.gpu', '--format=csv,noheader,nounits'];
+/**
+ * The query that `bench-lock run` samples; one CSV line per GPU. Temperature and the active
+ * clock-throttle reasons (a hex bit mask) say WHY a clock is low; the three clock fields alone
+ * (older callers, tests) still parse.
+ */
+export const NVIDIA_SMI_CLOCK_ARGS = [
+    '--query-gpu=clocks.sm,clocks.mem,utilization.gpu,temperature.gpu,clocks_event_reasons.active',
+    '--format=csv,noheader,nounits',
+];
+
+/** Bits of `clocks_event_reasons.active` (nvidia-smi -q -d PERFORMANCE shows the same names). */
+const REASON_SW_POWER_CAP = 0x4;
+const REASON_HW_POWER_BRAKE = 0x80;
+const REASON_SW_THERMAL = 0x20;
+const REASON_HW_THERMAL = 0x40;
 
 /** A sample counts as "under load" at this GPU utilization or more; idle samples sit at the desktop's clock. */
 export const LOADED_UTILIZATION_PERCENT = 70;
@@ -26,10 +39,55 @@ export const LOADED_UTILIZATION_PERCENT = 70;
 /** Fewer loaded samples than this and the summary falls back to all samples. */
 const MIN_LOADED_SAMPLES = 3;
 
+/**
+ * The RTX 3060 Laptop's clock below which a run counts as clocked down (`note/clock_low,1`).
+ * Its maximum is 2100 MHz and a cool card under load runs at 1400 to 2000 MHz, so a MEDIAN under
+ * 1500 MHz over the loaded samples means the clock was held down (heat, the power limit, a low
+ * power state or a clock lock) and the milliseconds are not a full-speed card's. Measured: a
+ * sustained GPU-bound run on this laptop reaches 2000 MHz in seconds, then heats to the GPU's
+ * 87 C target and settles at 450 to 600 MHz. Only the RTX is judged: callers write the note on
+ * NVIDIA rows only.
+ */
+export const LOW_CLOCK_MHZ = 1500;
+
+/**
+ * Whether the run's clock was low. Judged only from at least MIN_LOADED_SAMPLES samples under
+ * load: the fallback to all samples (short pages, latency-bound pages, the minimized native
+ * harness) includes idle seconds and would read low for no reason, so those runs get no verdict.
+ */
+export function isClockLow(summary: ClockSummary): boolean {
+    if (summary.smMhzLoaded === null || summary.loadedSamples < MIN_LOADED_SAMPLES) return false;
+    return summary.smMhzLoaded.median < LOW_CLOCK_MHZ;
+}
+
+/** A plain-language warning for a low-clock run, or null. Printed at the end of `bench-lock run` and by the to-csv scripts. */
+export function clockLowWarning(summary: ClockSummary): string | null {
+    if (!isClockLow(summary) || summary.smMhzLoaded === null) return null;
+    return (
+        `WARNING: the GPU clock was LOW under load: SM median ${summary.smMhzLoaded.median} MHz over ${summary.loadedSamples} loaded samples ` +
+        `(below ${LOW_CLOCK_MHZ} MHz; a cool card reaches 1400 to 2000). ${describeClockCause(summary)}` +
+        'These milliseconds are slow-clock numbers: CSV rows get note/clock_low,1. ' +
+        'Let the GPU cool (under about 70 C) before timing, keep runs short, and close other GPU programs ' +
+        '(nvidia-smi --query-compute-apps=pid,name --format=csv; nvidia-smi -q -d PERFORMANCE).'
+    );
+}
+
+/** What nvidia-smi said held the loaded samples down, or an empty string when it did not say. */
+function describeClockCause(summary: ClockSummary): string {
+    if (summary.thermalLimitedShare === undefined || summary.powerCappedShare === undefined) return '';
+    const percent = (share: number) => `${Math.round(share * 100)}%`;
+    const temperature = summary.temperatureCLoaded ? `, GPU temperature ${summary.temperatureCLoaded.median} C (max ${summary.temperatureCLoaded.max})` : '';
+    return `nvidia-smi: thermal throttling in ${percent(summary.thermalLimitedShare)} and the power limit in ${percent(summary.powerCappedShare)} of the loaded samples${temperature}. `;
+}
+
 export interface ClockSample {
     smMhz: number;
     memMhz: number;
     utilizationPercent: number;
+    /** Absent when the line had only the three clock fields. */
+    temperatureC?: number;
+    /** The `clocks_event_reasons.active` bit mask; absent like temperatureC. */
+    throttleReasons?: number;
 }
 
 export interface ClockStats {
@@ -52,15 +110,27 @@ export interface ClockSummary {
     smMhzLoaded: ClockStats | null;
     memMhzLoaded: ClockStats | null;
     utilizationPercent: ClockStats;
+    /** Over loaded samples that carry a temperature; absent in summaries from older runs. */
+    temperatureCLoaded?: ClockStats | null;
+    /** Share (0 to 1) of loaded samples where nvidia-smi named a thermal limit as an active reason. */
+    thermalLimitedShare?: number;
+    /** The same for the power limit (software cap or hardware power brake). */
+    powerCappedShare?: number;
 }
 
-/** The first GPU's line of the `NVIDIA_SMI_CLOCK_ARGS` query, or null if it is not three numbers. */
+/** The first GPU's line of the `NVIDIA_SMI_CLOCK_ARGS` query, or null if it is not three or five numbers. */
 export function parseClockLine(text: string): ClockSample | null {
     const line = text.split(/\r?\n/).find((candidate) => candidate.trim() !== '');
     if (!line) return null;
     const fields = line.split(',').map((field) => Number(field.trim()));
-    if (fields.length !== 3 || !fields.every((value) => Number.isFinite(value))) return null;
-    return { smMhz: fields[0], memMhz: fields[1], utilizationPercent: fields[2] };
+    // Number() reads the reasons mask ("0x0000000000000020") as hex.
+    if ((fields.length !== 3 && fields.length !== 5) || !fields.every((value) => Number.isFinite(value))) return null;
+    const sample: ClockSample = { smMhz: fields[0], memMhz: fields[1], utilizationPercent: fields[2] };
+    if (fields.length === 5) {
+        sample.temperatureC = fields[3];
+        sample.throttleReasons = fields[4];
+    }
+    return sample;
 }
 
 function stats(values: readonly number[]): ClockStats {
@@ -73,6 +143,9 @@ function stats(values: readonly number[]): ClockStats {
 export function summarizeClockSamples(samples: readonly ClockSample[], now: Date = new Date()): ClockSummary | null {
     if (samples.length === 0) return null;
     const loaded = samples.filter((sample) => sample.utilizationPercent >= LOADED_UTILIZATION_PERCENT);
+    const withReasons = loaded.filter((sample) => sample.throttleReasons !== undefined);
+    const shareWith = (mask: number) => (withReasons.length === 0 ? 0 : withReasons.filter((sample) => ((sample.throttleReasons ?? 0) & mask) !== 0).length / withReasons.length);
+    const temperatures = loaded.flatMap((sample) => (sample.temperatureC === undefined ? [] : [sample.temperatureC]));
     return {
         updatedAt: now.toISOString(),
         samples: samples.length,
@@ -83,6 +156,10 @@ export function summarizeClockSamples(samples: readonly ClockSample[], now: Date
         smMhzLoaded: loaded.length > 0 ? stats(loaded.map((sample) => sample.smMhz)) : null,
         memMhzLoaded: loaded.length > 0 ? stats(loaded.map((sample) => sample.memMhz)) : null,
         utilizationPercent: stats(samples.map((sample) => sample.utilizationPercent)),
+        temperatureCLoaded: temperatures.length > 0 ? stats(temperatures) : null,
+        ...(withReasons.length > 0
+            ? { thermalLimitedShare: shareWith(REASON_SW_THERMAL | REASON_HW_THERMAL), powerCappedShare: shareWith(REASON_SW_POWER_CAP | REASON_HW_POWER_BRAKE) }
+            : {}),
     };
 }
 
@@ -109,6 +186,7 @@ export function readClockSummary(path: string): ClockSummary | null {
 /**
  * The note rows for a summary. The headline `note/sm_clock_mhz` is the median over the samples
  * under load (all samples if fewer than three were); min and max are over the same set.
+ * `note/clock_low,1` is added when the loaded median is under LOW_CLOCK_MHZ (see isClockLow).
  */
 export function clockNoteRows(summary: ClockSummary): Array<{ scene: string; metric: string; value: number }> {
     const useLoaded = summary.smMhzLoaded !== null && summary.memMhzLoaded !== null && summary.loadedSamples >= MIN_LOADED_SAMPLES;
@@ -119,6 +197,7 @@ export function clockNoteRows(summary: ClockSummary): Array<{ scene: string; met
         { scene: 'all', metric: 'note/sm_clock_min_mhz', value: sm.min },
         { scene: 'all', metric: 'note/sm_clock_max_mhz', value: sm.max },
         { scene: 'all', metric: 'note/mem_clock_mhz', value: mem.median },
+        ...(isClockLow(summary) ? [{ scene: 'all', metric: 'note/clock_low', value: 1 }] : []),
     ];
 }
 
@@ -139,5 +218,7 @@ export function clockNoteRowsFromOption(clockFile: string | undefined, env: Node
         console.error(`no clock summary in ${path}; no note/sm_clock_mhz rows written`);
         return [];
     }
+    const warning = clockLowWarning(summary);
+    if (warning) console.error(warning);
     return clockNoteRows(summary);
 }
