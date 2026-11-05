@@ -71,7 +71,7 @@ describe('DdgiStatsText', () => {
     });
 
     it('says why this many probes a frame, the sweep time and the measured cost (budget v2)', () => {
-        const budget = { calibrating: false, calibratedProbes: 133, floorProbes: 81, steppedDown: false, fixedMs: 1.2, usPerProbe: 6 };
+        const budget = { calibrating: false, calibratedProbes: 133, floorProbes: 81, steppedDown: false, stale: false, fixedMs: 1.2, usPerProbe: 6 };
         const text = new DdgiStatsText();
         text.add(frame({ probesUpdated: 133, sweepSeconds: 2.43, budget }));
         let lines = text.lines().map((line) => line.text);
@@ -86,6 +86,10 @@ describe('DdgiStatsText', () => {
         text.reset();
         text.add(frame({ probesUpdated: 106, budget: { ...budget, steppedDown: true } }));
         expect(text.lines().map((line) => line.text)).toContain('  per frame       106 probes: slowed, frames are late (2.00 ms buys 133 at full GPU speed)');
+
+        text.reset();
+        text.add(frame({ probesUpdated: 133, budget: { ...budget, stale: true } }));
+        expect(text.lines().map((line) => line.text)).toContain('  measured cost   1.20 ms + 6.0 µs per probe (the scene changed since; Start the probes over to measure again)');
 
         text.reset();
         text.add(frame({ budget: { ...budget, calibrating: true } }));

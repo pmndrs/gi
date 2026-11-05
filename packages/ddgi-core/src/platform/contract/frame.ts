@@ -13,13 +13,19 @@ import type { Mat4, Vec3 } from './math';
  * for DDGI) fit in `gpuMs`, and hands out that many every frame. It doesn't
  * steer on GPU milliseconds while frames arrive on time, because an idle GPU
  * lowers its clocks and makes the same work look slower. Only when frames are
- * late and the work's measured time is over `gpuMs` does it hand out fewer,
- * down to the technique's floor. It calibrates again after a new `prepare`, a
- * geometry change or a new `gpuMs`. Without GPU timings (`timestamp-query`)
- * it uses `units`. Probes near a change are spent first.
+ * late (against `targetFps`, or an observed vsync rate) does it hand out
+ * fewer, down to the technique's floor. It calibrates after
+ * `prepare` and on `GIPlatform.recalibrate()`; a new `gpuMs` is solved from
+ * what it measured. Without GPU timings it uses `units`. Probes near a change
+ * are spent first.
  */
 export interface FrameBudget {
-    /** GPU time for all GI updates per frame, measured with the GPU's clocks up. */
+    /**
+     * GPU time for all GI updates per frame, measured with the GPU's clocks
+     * up. Needs GPU timings: the platform's `gpuTiming` option on a device
+     * with `timestamp-query`. Without them `gpuMs` can't be measured, and the
+     * hand-out is `units`, or 512 per technique.
+     */
     readonly gpuMs?: number;
     /**
      * Work units per frame when no timings are available, or a hard cap when
@@ -30,9 +36,11 @@ export interface FrameBudget {
     /**
      * The frame rate the host aims for, frames per second. Optional: without
      * it the platform takes the rate it observes from `deltaTime` when frames
-     * are on time (vsync). Used to tell when frames are late (the only time
-     * the batch steps down) and for floors given in seconds (DDGI: a full
-     * sweep within 4 s).
+     * are on time, if that is a display refresh rate (vsync, up to 165 Hz);
+     * otherwise it treats the host as uncapped, with no frame-rate ceiling
+     * (the batch never steps down). Used to tell when frames are late (the
+     * only time the batch steps down) and for floors given in seconds (DDGI: a
+     * full sweep within 4 s).
      */
     readonly targetFps?: number;
     /** Skip all update work this frame; shading keeps using the last result. */

@@ -273,7 +273,7 @@ Rules for every M1 task:
 | T1.9b | Budget v2 (work-based, calibrated with the clocks up; DECISIONS 2026-11-05) | implementer | M | T1.9a | fixing (review failed: calibration didn't reproduce) |
 | T1.12 | Stability: Cornell flicker fixed, debug views of the source channels, threshold set by eye; hysteresis aware of the time between a probe's updates, and Sponza's settle time measured GPU-bound (frames and seconds) | implementer | M | T1.5, T1.8 | active (2026-11-05; Dennis: "it is not steady") |
 | T1.13 | HD Cycles references with stored cameras; the viewer's Compare matches them | implementer, then gpu-tester | M | T1.8, T0.7 | active (2026-11-05; Dennis: "640 x 360 is an insane size") |
-| T1.14 | GI composite for three (`docs/design/three-composite.md`): a drop-in TSL node on three's `pass()` and `mrt()`; `GIVolume` stays the simple path; usage bar against LightProbeGrid | main session designs, implementer builds | M | T1.7, T1.8 | design (2026-11-05; Dennis: "Go with the recommendation") |
+| T1.14 | GI composite for three (`docs/design/three-composite.md`): a drop-in TSL node on three's `pass()` and `mrt()`; `GIVolume` stays the simple path; usage bar against LightProbeGrid | main session designs, implementer builds | M | T1.7, T1.8 | active (part 1 built: match passes on both GPUs; cost to time; names waiting on Dennis) |
 | T1.11 | M1 note and M2 breakdown | main session | S | all M1 | todo |
 
 ### BVH lane (runs alongside; DECISIONS 2026-11-04)

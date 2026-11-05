@@ -20,10 +20,9 @@
  */
 
 import type { DebugView } from '../../platform/contract/stats.ts';
-import type { GITechnique, TechniqueContext, TechniqueFrame, TechniqueRequirements } from '../../platform/contract/technique.ts';
+import type { GITechnique, TechniqueContext, TechniqueFrame, TechniqueRequirements, WorkFloorRate } from '../../platform/contract/technique.ts';
 import type { ComputeKernel } from '../../platform/contract/wgsl.ts';
 import { GILimitError } from '../../platform/contract/errors.ts';
-import type { TechniqueWorkFloor, WorkFloorRate } from '../../platform/work-budget.ts';
 import {
     CENSUS_RAYS_TRACED,
     CENSUS_WORDS,
@@ -210,7 +209,7 @@ const CENSUS_GROUP: GPUBindGroupLayoutDescriptor = {
     ],
 };
 
-export class DDGITechnique implements GITechnique<DDGISettings>, TechniqueWorkFloor {
+export class DDGITechnique implements GITechnique<DDGISettings> {
     readonly id = 'ddgi';
     readonly requirements: TechniqueRequirements = { queries: ['rays'] };
     readonly settings: DDGISettings;

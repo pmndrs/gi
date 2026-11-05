@@ -133,45 +133,57 @@ Scratch buffer: `maxProbesPerFrame × (36 × 8 + 196 × 4 + 8)` bytes, about 1 M
 
 One uniform buffer holds the volume (origin, spacing, counts), the frame rotation, the settings and the update-list length.
 
-## Budget v2: work first, milliseconds as a ceiling (accepted by Dennis 2026-11-05; being fixed after review, see PROGRESS)
+## Budget v2: work first, milliseconds as a ceiling (accepted by Dennis 2026-11-05; as built in T1.9b)
 
-**Why change it.** A GPU-millisecond budget plus GPU power management is a positive feedback loop: less work lets the GPU idle, its clocks drop, the same work takes longer, so the controller cuts work again. On a quiet laptop at 60 Hz the RTX sat in its low-power state and 2 ms bought 2–3 Sponza probes a frame (a sweep every 162 s). The budget exists to protect frame time, and a GPU that is idling has time to spare. RTXGI itself uses fixed work per frame.
+**Why.** A GPU-millisecond budget plus GPU power management is a positive feedback loop: less work lets the GPU idle, its clocks drop, the same work takes longer, so the controller cuts work again. On a quiet laptop at 60 Hz the RTX sat in its low-power state and 2 ms bought 2–3 Sponza probes a frame (a sweep every 162 s). The budget exists to protect frame time, and a GPU that is idling has time to spare. RTXGI itself uses fixed work per frame.
 
-**1. The primary control is work: probes per frame (`units`).**
-- The platform hands a technique a fixed number of units each frame. It doesn't steer on GPU milliseconds while the frame rate is fine.
-- A host may set `budget.units` itself, which stays a hard cap.
+The code is `packages/ddgi-core/src/platform/work-budget.ts`; every threshold below is a named constant there (`CALIBRATION`, `SATURATION`) with its reason, and recorded in DECISIONS.
 
-**2. Picking the number: a one-off calibration at load, with the clocks up.**
-- During the warm-up (already large batches, back to back, so the GPU runs at full clocks), the platform fits cost = fixed + per-probe × probes from the warm-up passes.
-- `units = floor((budget.gpuMs − fixed) / perProbe)` at those clocks, clamped between the floor (point 3) and `maxProbesPerFrame`.
-- Re-calibrated after a geometry change (SceneChanges), a new `prepare`, a change of `gpuMs`, or on request. Never from frames run at light load.
-- **Per tier:** the host's `gpuMs` (default 2 ms) gives the number on each device. The Intel UHD lands near 140 probes on Cornell and 16 on Sponza (T1.9a). A host that wants a fixed number per scene sets `units` and skips the calibration.
+**1. The control is work: probes per frame (`units`).**
+- Each frame the platform hands a technique a fixed number of units: the calibrated batch (point 2), never below the floor (point 3), stepped down only when frames are late (point 4).
+- `budget.units` stays a hard cap over everything, the calibration burst and the floor included.
+- Without GPU timings (`gpuTiming` off, or no `timestamp-query`) `gpuMs` can't be measured: the hand-out is `budget.units`, or 512.
+
+**2. The calibration: once, GPU-bound, timings that agree.**
+- **When:** at the first frame with `gpuMs` after `prepare` (it waits while the mesh trees are still being built), and when the host calls `GIPlatform.recalibrate()`. Nothing else starts one: a burst during play makes frames heavier for a moment.
+- **How the host runs it:** behind its loading screen, GPU-bound, with two frames in flight so the GPU never waits (`deltaTime` 0). Waiting for every frame left the RTX about 40% busy and its clocks wandered by up to 2× over seconds; a light 60 Hz frame does the same. The viewer and the `ddgi-batch-cost` page end their warm-up this way.
+- **The burst** (`CalibrationBurst`): about 20–170 frames on the test scenes.
+  1. 1,024 probes, until the size's timings agree: its last 3 within 5% of each other, and their median within 2% of the 3 before. Timings that still move are the GPU changing its clocks.
+  2. Down (or up) by ×4 until two settled sizes sit on either side of the technique's share of `gpuMs` (shared evenly between techniques).
+  3. The batch on the line between them is measured itself and accepted within 5%; otherwise the size on the other side is dropped as suspect (measured while the clocks moved) and the ladder moves on, at most 3 times.
+  - A size whose timings never agree takes the median of its last 5 after 24 timings.
+  - A burst that hasn't finished after 400 frames gives up: the hand-out is the best estimate from the sizes that settled, or the floor with none, and the counters say "uncalibrated".
+- **Filler:** only in the platform's first calibration, and only when the host leaves time between frames (a host at 60 Hz). Small batches then alternate with a filler batch of at most half the frame interval, at most 1 s of GPU time in all, so the GPU stays loaded. A technique added at runtime calibrates without filler. Counted in the stats.
+- **The confirm pass:** after the burst, while the host still runs frames back to back, the chosen batch is timed for 300 more frames; if the median of the last 100 is off the curve by more than 10%, the curve is scaled by that factor and the batch solved again. It ends unconfirmed at the first frame with time between frames (the host left its loading screen), or after 600 frames, so it never stays open.
+- **The stored curve:** the settled sizes are kept. A new `gpuMs` or `budget.units` is solved from them with no new burst (`units` = the largest batch on the curve within the share, extrapolated at most one ×4 step beyond the largest size measured).
+- **A geometry change** (or mesh trees still building) marks the calibration **stale**: reported in `stats.counters['<technique> budget'].stale`, the batch unchanged until the host's next `prepare` or `recalibrate()`. A change during a burst leaves the new calibration stale. The viewer's "Start the probes over" re-calibrates.
+- **Reported:** the line around the batch (fixed ms + ms per probe, between the two measured sizes on either side of it), the burst's frames, the spread of the timings it settled on, filler frames and ms, the confirm factor. The GPU's clock can't be read from WebGPU.
+- **Per tier:** the host's `gpuMs` (default 2 ms) gives the number on each device. A host that wants a fixed number per scene sets `units` and skips the calibration.
 
 **3. A floor bounds convergence on every machine.**
-- DDGI never updates fewer than `minProbesPerFrame` probes. Default "auto": enough probes for a full sweep within 4 s at the frame rate the host runs (Sponza 81 at 60 Hz, Cornell 8).
-- The floor wins over the millisecond ceiling, so a weak device runs slower, never frozen. A host can lower it explicitly.
-- **The floor adapts to the device (added after measuring the Intel UHD):** "auto" aims for a full sweep within 4 s, but never asks for more than twice the calibrated batch (the probes the budget buys at full clocks). Measured fixed batches (60 Hz / back to back): Intel UHD, Sponza 16 probes 1.8 / 2.1 ms, 40 probes 3.3 / 3.0 ms, 81 probes 5.3 / 4.8 ms, 160 probes 9.3 / 6.7 ms; Cornell 8 probes 0.6 ms. RTX, Sponza 81 probes 4.0 / 1.4 ms. So on the Intel the cap gives Sponza about 32–40 probes (about 3 ms, a sweep every 8–10 s), while on the RTX the cap doesn't bind (81 probes, 4 s). No tier detection is needed: the calibration already knows the device.
+- DDGI asks for at least `minProbesPerFrame` probes (`GITechnique.minUnitsPerFrame`). Default "auto": enough for a full sweep within 4 s at the frame rate the host runs (`targetFps`, else the observed rate; Sponza 81 at 60 Hz, Cornell 8).
+- The floor wins over the millisecond ceiling, so a weak device runs slower, never frozen. A host can lower it explicitly (a number; 0 turns it off). `budget.units` still caps it.
+- **The floor adapts to the device (added after measuring the Intel UHD):** "auto" never asks for more than twice the calibrated batch. Measured fixed batches (60 Hz / back to back): Intel UHD, Sponza 16 probes 1.8 / 2.1 ms, 40 probes 3.3 / 3.0 ms, 81 probes 5.3 / 4.8 ms, 160 probes 9.3 / 6.7 ms; Cornell 8 probes 0.6 ms. RTX, Sponza 81 probes 4.0 / 1.4 ms. So on the Intel the cap gives Sponza about 32–40 probes (about 3 ms, a sweep every 8–10 s), while on the RTX the cap doesn't bind. No tier detection is needed: the calibration already knows the device.
 
-**4. When the GPU really is saturated: the frame rate tells us, not GPU milliseconds.**
-- The platform watches `FrameInput.deltaTime`, which the contract already has. Only when the frame is missing its target (median frame time above the host's target interval by more than 10% over about 1 s) **and** DDGI's measured time exceeds the budget does it step `units` down (×0.8 per second), never below the floor.
-- When frames are on time, it recovers toward the calibrated number (×1.1 per second).
-- *Why this avoids the loop:* when frames are on time the GPU isn't the bottleneck, so a slow-looking DDGI pass is low clocks, not a real cost. When frames are late, the GPU is busy and its clocks are high, so the measured milliseconds mean what they say.
-- The host's target interval comes from the observed frame rate (vsync) or from an explicit `budget.targetFps`. That would be a new optional host field.
+**4. Late frames step the batch down; on-time frames bring it back.**
+- The platform watches `FrameInput.deltaTime` in windows of about 1 s. Frames are late when the window's median frame time is more than 10% over the target interval.
+- **The target interval:** `1 / budget.targetFps` when the host gives it. Otherwise the shortest vsync-like window of the last 5 s: within 3% of a common display refresh rate (24 to 165 Hz) *and* steady (frame times from the 10th to the 90th percentile within 10% of the median, as a display paces them). Without one the host counts as uncapped and has **no ceiling**: an uncapped frame rate rises and falls with the view, which says nothing about being late. A host that is late from its first frame must give `targetFps` (a vsync host that never makes 60 Hz looks like an on-time 30 Hz host).
+- **Step down:** each late window multiplies the batch by 0.8, never below the floor. There is no clock test (DECISIONS, after the budget v2 re-review): a thermally throttled RTX reads about 3× its calibrated cost, and a test on DDGI's timings blocked the step-down in exactly that hot state. "Late" already needs the frame to miss its interval, so an idle, low-clocked GPU is never late. The cost: a CPU-bound host that misses its interval steps DDGI down too, which doesn't help it; the floor bounds that.
+- **Recover (no oscillation):** after a run of late windows, recovery waits for 3 s on time, then grows ×1.1 a second up to a ceiling of 0.9 × the batch that was late first. At the ceiling, after 10 s on time, the ceiling rises ×1.05, back to the calibrated batch.
+- *Why this avoids the loop:* while frames are on time, a slow-looking DDGI pass is low clocks, not a real cost, and nothing changes.
 
-**5. What gets reported.** Update GPU ms is reported as now, with the clock note. The probes per frame, the sweep time, and whether the saturation step-down is active are reported too.
+**5. What gets reported.** `stats.counters['<technique> budget']`: units this frame, calibrating, confirming, uncalibrated, calibrated units, floor units, stepped down, ceiling units, frames late, stale, frames per second, and the calibration's line, frames, spread, filler and confirm factor. DDGI's own counters add the seconds per full sweep. The viewer shows them in plain language ("per frame", "measured cost").
 
-**Defined measurements (replacing "the budget holds", DECISIONS):**
-- The update's cost is the calibrated batch's GPU time measured with the clocks up (back to back): it must be ≤ `gpuMs` (+10%).
-- A full sweep takes ≤ 4 s at the floor on every device. On a GPU-bound frame, the whole frame with GI on against off adds ≤ 3 ms p50 (SPEC), measured GPU-bound (uncapped, back to back). That's when the milliseconds cost frame time. 60 Hz light-load numbers are information only.
-- It must behave at 30, 60 and 120 Hz on the RTX and the Intel: a stable number of units, the floor respected, and a saturation step-down that recovers.
-
-**To re-measure in T1.9 under this meaning:** the budget set (units per scene and the sweep time, RTX and Intel, 30 / 60 / 120 Hz); the whole frame GI on against off, GPU-bound, at 720p and 1440p on Cornell, two-room and Sponza; DDGI's update cost at the calibrated batch, back to back. GI sampling (0.923 ms) and startup are unaffected.
+**Defined measurements (DECISIONS):**
+- The calibrated batch's GPU time, measured GPU-bound (two frames in flight) with the clocks up (from below about 70 °C, clocks ≥ 1,500 MHz, 10–15 s timed), is within ±10% of `gpuMs`; no lower bound when every probe fits.
+- A full sweep takes ≤ 4 s at the floor on every device. On a GPU-bound frame, the whole frame with GI on against off adds ≤ 3 ms p50 (SPEC). 60 Hz light-load numbers are information only.
+- It behaves at 30, 60 and 120 Hz on the RTX and the Intel: a stable number of units, the floor respected, no step-down while frames are on time. The Intel UHD is a correctness target: its numbers are reported, not judged.
 
 ## Which probes update (the budget)
 
-- **Unit = one probe update.** `TechniqueFrame.units` comes from the platform, which turns the host's `gpuMs` into units with a cost model of a fixed part plus a per-probe part (`costModel()`, since T1.9a; DECISIONS 2026-11-05). It's fitted from medians of the measured `ddgi/trace` + `ddgi/blend` + `ddgi/write` GPU time against the probes the technique actually updated, so small, latency-bound batches don't shrink the next batch in a spiral. `FrameBudget.units` stays a hard cap. Without timings, `FrameBudget.units`, default 512 on Tier A.
+- **Unit = one probe update.** `TechniqueFrame.units` comes from the platform's budget v2 (above): the calibrated batch, at least the floor, stepped down only when frames are late. `FrameBudget.units` stays a hard cap. Without GPU timings, `FrameBudget.units`, default 512 on Tier A.
 - **Order:** a fixed scrambled order of all probes, `order[i] = (i × stride) mod N` with `stride` coprime with `N` and near `0.618 N`, so each frame's set is spread across the volume, not one slab. A CPU cursor walks it. Each frame's list is `units` consecutive entries, written into the update-list buffer with `queue.writeBuffer` inside `encode` (no readback; probe states stay on the GPU).
-- Off probes in the list still cost a workgroup, but only 32 rays and no blend, so they're cheap. The cost model absorbs the mix.
+- Off probes in the list still cost a workgroup, but only 32 rays and no blend, so they're cheap. The calibration measures the mix as it is.
 - **Probes near a change first** (SceneChanges) is M2. The design leaves room: a priority list in front of the cursor, in the same buffer.
 - `maxProbesPerFrame` (default 4,096) sizes the update list and the scratch buffer. Dispatches over 65,535 workgroups use two dimensions.
 - `FrameBudget.paused` skips every DDGI kernel.

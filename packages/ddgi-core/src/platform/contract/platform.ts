@@ -97,6 +97,16 @@ export interface GIPlatform {
 
     /** Forget all accumulated history (a camera cut or a scene swap). */
     resetHistory(): void;
+    /**
+     * Measure again how much work fits in `budget.gpuMs` (budget v2), at the
+     * next frame with a millisecond budget: a short burst of frames, best run
+     * back to back behind a loading screen. The platform calibrates by itself
+     * after `prepare`; a geometry change only marks the calibration stale
+     * (`stats.counters['<technique> budget'].stale`), because a burst during
+     * play makes frames heavier for a moment. A new `gpuMs` needs no new
+     * calibration.
+     */
+    recalibrate(): void;
     /** Free everything the platform allocated. The device and host resources are untouched. */
     dispose(): void;
 }

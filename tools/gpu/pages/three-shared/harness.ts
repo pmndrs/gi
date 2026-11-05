@@ -36,8 +36,18 @@ function countCalls(device: GPUDevice, methodName: keyof GPUDevice, increment: (
     };
 }
 
-/** Runs a three page: device and renderer by the adapter's helper, then `body`, a drain, and the report. */
-export async function runThreePage(body: (context: ThreePageContext) => Promise<void>, size = 256): Promise<void> {
+/** Renderer settings a page can ask for, on top of the harness's (`antialias: false`). */
+export type ThreePageRendererOptions = NonNullable<Parameters<typeof createGIRenderer>[0]>['renderer'];
+
+/**
+ * Runs a three page: device and renderer by the adapter's helper, then `body`, a drain, and the report.
+ * `size` is the canvas in pixels: one number for a square, or a width and height.
+ */
+export async function runThreePage(
+    body: (context: ThreePageContext) => Promise<void>,
+    size: number | { readonly width: number; readonly height: number } = 256,
+    rendererOptions: ThreePageRendererOptions = {},
+): Promise<void> {
     const startTime = performance.now();
     const logLines: string[] = [];
     const data: Record<string, unknown> = {};
@@ -50,7 +60,7 @@ export async function runThreePage(body: (context: ThreePageContext) => Promise<
     window.addEventListener('unhandledrejection', (event) => asyncProblems.push(`Unhandled rejection: ${String(event.reason)}`));
 
     try {
-        const { device, renderer } = await createGIRenderer({ renderer: { antialias: false } });
+        const { device, renderer } = await createGIRenderer({ renderer: { antialias: false, ...rendererOptions } });
         // Free the GPU when the page goes (NOTES: release the device between pages).
         window.addEventListener('pagehide', () => device.destroy(), { once: true });
         deviceErrors = watchDevice(device);
@@ -61,7 +71,8 @@ export async function runThreePage(body: (context: ThreePageContext) => Promise<
         countCalls(device, 'createComputePipeline', () => pipelines.compute++);
         countCalls(device, 'createComputePipelineAsync', () => pipelines.compute++);
         renderer.setPixelRatio(1);
-        renderer.setSize(size, size, false);
+        const { width, height } = typeof size === 'number' ? { width: size, height: size } : size;
+        renderer.setSize(width, height, false);
         document.body.append(renderer.domElement);
         await body({ device, renderer, adapterSummary, pipelines, log: (line) => logLines.push(line), data });
         await drainDevice(device);

@@ -12,15 +12,17 @@
  *    warm-up rule (DECISIONS 2026-11-05): steps of `maxProbesPerFrame`
  *    probes with a running-average hysteresis, at most 16 passes over every
  *    probe, stopping after 8 s once 2 passes are done, 4 steps then a wait for
- *    the GPU. Then, as the viewer ends its warm-up, steps with
- *    `budget.gpuMs`, still back to back, until the platform's calibration
- *    burst is done. Reported: when each stage was reached, from the start of
+ *    the GPU. Then, as the viewer ends its warm-up, frames with
+ *    `budget.gpuMs`, GPU-bound (two in flight, not paced by the display),
+ *    until the platform's calibration burst is done
+ *    and confirmed (its batch timed over 300 more back-to-back frames). Reported: when each stage was reached, from the start of
  *    the load (file fetch included) and from the technique's creation (where
  *    the viewer's own clock starts): the scene first drawn without GI; the
  *    first warm-up step finished on the GPU; the first frame drawn with GI
  *    (three's pipelines compiled for the GI light, then drawn and finished);
  *    every probe updated once; the warm-up done; the calibration done (its
- *    frames, batch, and cost line). Kernel compiles are cold only for the
+ *    frames, batch, cost line, the spread of the timings it settled on, and
+ *    its filler frames). Kernel compiles are cold only for the
  *    first scene of a run (each run has a fresh browser profile; the driver's
  *    own shader cache may still be warm), so time one scene per run for cold
  *    numbers.
@@ -31,19 +33,23 @@
  *    median, never below the floor, and never step down while frames are on
  *    time. The update's GPU ms here is information only (light load, low
  *    clocks).
- * 3. **budget**: GPU-bound, back to back (each frame waited for, as Dennis
- *    asked: benchmarks run with the GPU loaded), with `budget.gpuMs` (default
- *    2). The page fails unless the median update (trace + blend + write) of
- *    frames at the calibrated batch is within the budget +10% (DECISIONS,
- *    "Defined measurements"); on the Intel UHD this is reported, not judged
- *    (a correctness target only, DECISIONS 2026-11-05). Reported: probes per frame, the calibrated
+ * 3. **budget**: GPU-bound and uncapped (two frames in flight, so the GPU
+ *    never waits; as Dennis asked, benchmarks run with the GPU loaded), with
+ *    `budget.gpuMs` (default 2). The page fails unless the median update (trace + blend + write) of
+ *    frames at the calibrated batch is within ±10% of the budget (DECISIONS,
+ *    "Defined measurements", plus a lower bound after the budget v2 review,
+ *    so a batch calibrated at low clocks fails too; no lower bound when every
+ *    probe fits). On the Intel UHD this is reported, not judged (a
+ *    correctness target only, DECISIONS 2026-11-05). Reported: probes per frame, the calibrated
  *    batch and the floor, and the time for a full sweep at 60 Hz.
  * 4. **curve**: fixed batches of 32 ... 4,096 probes, each frame waited for,
  *    one sweep up and one down so a clock drift shows; per batch the median
  *    `ddgi/trace`, `ddgi/blend`, `ddgi/write` and `ddgi/census` GPU ms, and a
  *    fit of the update (trace + blend + write) as fixed + per-probe.
  *
- * Two more sections on request:
+ * Three more sections on request:
+ * - **recheck**: `recalibrate()` after the budget section, and the new batch
+ *   against the first;
  * - **steady**: a fixed batch at 60 Hz and back to back, with each spike's
  *   start time, to tell our own spikes from other programs' GPU work;
  * - **breakdown**: test-only copies of `ddgi/trace` with parts of the
@@ -51,7 +57,7 @@
  *
  * Choose with environment variables (vite passes `VITE_*` to the page):
  *   VITE_DDGI_SCENES=cornell-box,two-room,sponza,bistro-exterior   (default cornell-box,two-room)
- *   VITE_DDGI_SECTIONS=startup,rates,budget,curve,steady,breakdown   (default startup,rates,budget,curve)
+ *   VITE_DDGI_SECTIONS=startup,rates,budget,curve,recheck,steady,breakdown   (default startup,rates,budget,curve)
  *   VITE_DDGI_BUDGET_MS=2
  *   VITE_DDGI_STEADY_UNITS=16,512                                    (default: the budget's median batch)
  *
@@ -64,6 +70,7 @@ import { PerspectiveCamera, type Scene, type WebGPURenderer } from 'three/webgpu
 import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
 import type { EnvironmentDescriptor } from '../../../../packages/ddgi-core/src/platform/contract/scene.ts';
 import { DDGITechnique } from '../../../../packages/ddgi-core/src/techniques/ddgi/ddgi-technique.ts';
+import { costOnCurve } from '../../../../packages/ddgi-core/src/platform/work-budget.ts';
 import { DDGI_TRACE_WGSL, TRACE_WORKGROUP_SIZE } from '../../../../packages/ddgi-core/src/techniques/ddgi/wgsl/trace.ts';
 import { ThreeGI } from '../../../../packages/ddgi-three/src/three-gi.ts';
 import { loadAllManifests } from '../../../../apps/viewer/src/scene/manifests.ts';
@@ -98,13 +105,19 @@ const CURVE_TIMED_FRAMES = 30;
 /** GPU-bound budget frames, each waited for (budget v2: the calibrated batch's cost with the clocks up). */
 const BUDGET_FRAMES = 600;
 /**
- * The calibrated batch's median update must be within the budget plus this
- * share (docs/design/ddgi.md, "Defined measurements": ≤ gpuMs +10%, with the
- * clocks up).
+ * The calibrated batch's median update must be within this share of the
+ * budget, either way (docs/design/ddgi.md, "Defined measurements": ≤ gpuMs
+ * +10% with the clocks up; the lower bound added after the budget v2 review).
  */
 const BUDGET_TOLERANCE = 0.1;
-/** The calibration steps after the warm-up stop after this many, as the viewer's do. */
+/** The calibration frames after the warm-up (burst, then its confirmation) stop after this many, as the viewer's do. */
 const CALIBRATION_MAX_STEPS = 600;
+
+/** The platform is measuring: a burst, or the back-to-back frames that confirm it. */
+function stillCalibrating(scene: Pick<SceneUnderTest, 'platform' | 'ddgi'>): boolean {
+    const report = scene.platform.budgetReport(scene.ddgi);
+    return report?.state === 'calibrating' || report?.confirming === true;
+}
 
 /** Host frame rates for the `rates` section, and how long each runs. */
 const RATES_HZ = [30, 60, 120] as const;
@@ -158,6 +171,35 @@ function fitLine(points: ReadonlyArray<{ probes: number; ms: number }>): { fixed
 
 function nextAnimationFrame(): Promise<void> {
     return new Promise((resolve) => requestAnimationFrame(() => resolve()));
+}
+
+/**
+ * GPU-bound frames: at most this many queued, so the GPU never waits for the
+ * CPU between them. Waiting for each frame left the RTX 3060 about 40% busy,
+ * and its clocks wandered between power states by up to 2× over seconds
+ * (budget v2 rework: the bench lock's clock log had 10 of 439 samples at 70%
+ * use or more).
+ */
+const FRAMES_IN_FLIGHT = 2;
+
+/** Keeps up to FRAMES_IN_FLIGHT frames queued: call `after` once per frame, `drain` at the end. */
+class GpuBoundPacing {
+    private readonly pending: Promise<void>[] = [];
+    private readonly device: GPUDevice;
+
+    constructor(device: GPUDevice) {
+        this.device = device;
+    }
+
+    async after(): Promise<void> {
+        this.pending.push(this.device.queue.onSubmittedWorkDone());
+        if (this.pending.length >= FRAMES_IN_FLIGHT) await this.pending.shift();
+        await yieldToCallbacks();
+    }
+
+    async drain(): Promise<void> {
+        await Promise.all(this.pending.splice(0));
+    }
 }
 
 /** Lets mapAsync callbacks (timestamps, census) run before the next encode collects them. */
@@ -331,18 +373,17 @@ async function startScene(
     ddgi.settings.hysteresis = targetHysteresis;
     const settledAt = performance.now();
 
-    // The calibration (budget v2), as the viewer ends its warm-up: steps with the
-    // millisecond budget, back to back (deltaTime 0), until the burst is done.
+    // The calibration (budget v2), as the viewer ends its warm-up: frames with the
+    // millisecond budget, GPU-bound (two in flight, deltaTime 0), until the burst is done.
     let calibrationSteps = 0;
+    const calibrationPacing = new GpuBoundPacing(device);
     for (;;) {
         frame(scene, { gpuMs: BUDGET_MS }, 0);
         calibrationSteps++;
-        if (platform.budgetReport(ddgi)?.state !== 'calibrating' || calibrationSteps >= CALIBRATION_MAX_STEPS) break;
-        if (calibrationSteps % WARMUP.stepsPerBatch === 0) {
-            await device.queue.onSubmittedWorkDone();
-            await yieldToCallbacks();
-        }
+        if (!stillCalibrating(scene) || calibrationSteps >= CALIBRATION_MAX_STEPS) break;
+        await calibrationPacing.after();
     }
+    await calibrationPacing.drain();
     await device.queue.onSubmittedWorkDone();
     const calibratedAt = performance.now();
     const calibration = platform.budgetReport(ddgi)?.calibration;
@@ -376,6 +417,10 @@ async function startScene(
         calibrated_probes: calibration.units,
         calibration_fixed_ms: round(calibration.model?.fixedMs ?? NaN),
         calibration_us_per_probe: round((calibration.model?.msPerUnit ?? NaN) * 1000, 3),
+        calibration_spread: round(calibration.spread),
+        calibration_sizes: calibration.curve.length,
+        calibration_filler_frames: calibration.fillerFrames,
+        calibration_confirm_factor: round(calibration.confirmFactor ?? NaN),
     };
     // The slowest pipelines this scene's start-up compiled.
     for (const [label, ms] of [...pipelineCompileMs].sort((a, b) => b[1] - a[1]).slice(0, 6)) {
@@ -385,7 +430,7 @@ async function startScene(
         `${manifest.id}: ${probeCount} probes; files ${startup.load_files_ms} ms, prepare ${startup.prepare_ms}, copy ${startup.scene_copy_cpu_ms}, trees ${startup.trees_ms}; ` +
             `first GI drawn ${startup.first_gi_shown_from_load_ms} ms from load (${startup.first_gi_shown_from_creation_ms} after creation), first pass ${startup.first_pass_from_creation_ms}, ` +
             `settled ${startup.settled_from_creation_ms} (${startup.warmup_passes} passes in ${startup.warmup_ms} ms); ` +
-            `calibrated in ${startup.calibration_ms} ms (${calibration.frames} frames): ${calibration.units} probes, ` +
+            `calibrated in ${startup.calibration_ms} ms (${calibration.frames} frames, ${calibration.curve.length} sizes, spread ${startup.calibration_spread}): ${calibration.units} probes, ` +
             `${startup.calibration_fixed_ms} ms + ${startup.calibration_us_per_probe} µs/probe`,
     );
     return { scene, startup };
@@ -407,6 +452,7 @@ async function measureBudget(device: GPUDevice, scene: SceneUnderTest, log: (lin
     const intervals: number[] = [];
     const states = new Map<number, string>();
     let previousAt = performance.now();
+    const pacing = new GpuBoundPacing(device);
     for (let index = 0; index < BUDGET_FRAMES; index++) {
         const now = performance.now();
         frame(scene, { gpuMs: BUDGET_MS }, (now - previousAt) / 1000);
@@ -414,9 +460,9 @@ async function measureBudget(device: GPUDevice, scene: SceneUnderTest, log: (lin
         previousAt = now;
         states.set(scene.platform.stats.frame, scene.platform.budgetReport(scene.ddgi)?.state ?? '');
         timings.note(scene.platform, scene.ddgi);
-        await device.queue.onSubmittedWorkDone();
-        await yieldToCallbacks();
+        await pacing.after();
     }
+    await pacing.drain();
     for (let extra = 0; extra < 6; extra++) {
         frame(scene, { paused: true });
         timings.note(scene.platform, scene.ddgi);
@@ -428,22 +474,34 @@ async function measureBudget(device: GPUDevice, scene: SceneUnderTest, log: (lin
     const calibrated = report?.calibratedUnits;
     assert(calibrated !== undefined, `${scene.manifest.id}: no calibrated batch`);
     const units: number[] = [];
-    const atCalibrated: number[] = [];
-    let steppedDown = 0;
     let calibrating = 0;
     for (let platformFrame = firstFrame; platformFrame < firstFrame + BUDGET_FRAMES; platformFrame++) {
-        const used = timings.unitsByFrame.get(platformFrame) ?? 0;
-        units.push(used);
+        units.push(timings.unitsByFrame.get(platformFrame) ?? 0);
         if (states.get(platformFrame) === 'calibrating') calibrating++;
-        if (used < calibrated) steppedDown++;
-        const ms = timings.updateMs(platformFrame);
-        if (ms !== undefined && used === calibrated) atCalibrated.push(ms);
     }
-    assert(atCalibrated.length >= BUDGET_FRAMES / 2, `${scene.manifest.id}: only ${atCalibrated.length} timed frames at the calibrated batch of ${calibrated}`);
+    // What the technique ran: the calibrated batch, or fewer when every probe fits (its
+    // capacity), or more when the floor binds (then the batch's cost isn't the budget's).
+    const ran = median(units);
+    const atBatch: number[] = [];
+    for (let platformFrame = firstFrame; platformFrame < firstFrame + BUDGET_FRAMES; platformFrame++) {
+        const ms = timings.updateMs(platformFrame);
+        if (ms !== undefined && timings.unitsByFrame.get(platformFrame) === ran) atBatch.push(ms);
+    }
+    const steppedDown = units.filter((used) => used < ran).length;
+    assert(atBatch.length >= BUDGET_FRAMES / 2, `${scene.manifest.id}: only ${atBatch.length} timed frames at the batch of ${ran}`);
+    const atCalibrated = atBatch;
     const probesAt60 = probesAt(scene, 60, calibrated);
+    // The most the technique can update in a frame: all its probes, or maxProbesPerFrame.
+    const techniqueMax = Math.min(scene.probeCount, scene.ddgi.settings.maxProbesPerFrame);
     const result = {
         budget_ms: BUDGET_MS,
         calibrated_probes: calibrated,
+        probes_run: ran,
+        // Every probe the technique can update fits in the budget: no lower bound then. A batch
+        // that ran below the calibrated one because it stepped down doesn't count as that.
+        all_probes_fit: ran >= techniqueMax && calibrated >= techniqueMax ? 1 : 0,
+        // The floor is above the calibrated batch: its cost is the floor's, not judged.
+        floor_binds: ran > calibrated ? 1 : 0,
         frame_interval_ms_median: round(median(intervals), 3),
         update_ms_median: round(median(atCalibrated)),
         update_ms_p05: round(percentile(atCalibrated, 0.05)),
@@ -463,11 +521,44 @@ async function measureBudget(device: GPUDevice, scene: SceneUnderTest, log: (lin
         calibration_us_per_probe: round((report?.calibration?.model?.msPerUnit ?? NaN) * 1000, 3),
     };
     log(
-        `${scene.manifest.id}, budget ${BUDGET_MS} ms, GPU-bound: calibrated ${calibrated} probes cost ${result.update_ms_median} ms median ` +
+        `${scene.manifest.id}, budget ${BUDGET_MS} ms, GPU-bound: calibrated ${calibrated} probes (ran ${ran}) cost ${result.update_ms_median} ms median ` +
             `(p05 ${result.update_ms_p05}, p95 ${result.update_ms_p95}; ${Math.round(result.update_over_budget_share * 1000) / 10}% against the budget); ` +
             `probes per frame ${result.probes_median} (p05 ${result.probes_p05}, p95 ${result.probes_p95}), ${steppedDown} frames stepped down; ` +
             `at 60 Hz ${probesAt60} probes a frame (floor ${result.floor_probes_at_60hz}), a sweep every ${result.sweep_s_at_60hz} s`,
     );
+    return result;
+}
+
+/**
+ * Opt-in `recheck`: `recalibrate()` after the GPU-bound frames, the burst run
+ * the same way as at start-up, and the new batch and its cost on the new
+ * curve, next to what the first calibration chose. Tells whether a
+ * calibration right after the warm-up reads the GPU differently from one
+ * later on.
+ */
+async function recheckCalibration(device: GPUDevice, scene: SceneUnderTest, firstUnits: number, log: (line: string) => void): Promise<Record<string, number>> {
+    scene.platform.recalibrate();
+    let steps = 0;
+    const pacing = new GpuBoundPacing(device);
+    for (;;) {
+        frame(scene, { gpuMs: BUDGET_MS }, 0);
+        steps++;
+        if (!stillCalibrating(scene) || steps >= CALIBRATION_MAX_STEPS) break;
+        await pacing.after();
+    }
+    await pacing.drain();
+    const calibration = scene.platform.budgetReport(scene.ddgi)?.calibration;
+    assert(calibration?.measured, `${scene.manifest.id}: the re-calibration did not finish in ${steps} frames`);
+    const result = {
+        first_calibrated_probes: firstUnits,
+        recalibrated_probes: calibration.units,
+        recalibration_frames: calibration.frames,
+        recalibration_spread: round(calibration.spread),
+        recalibration_confirm_factor: round(calibration.confirmFactor ?? NaN),
+        // The first batch's cost on the new curve: below the budget when the first calibration read slow.
+        first_batch_ms_on_new_curve: round(costOnCurve(calibration.curve, firstUnits) ?? NaN),
+    };
+    log(`${scene.manifest.id} re-check: first ${firstUnits} probes, now ${calibration.units} (${calibration.frames} frames); the first batch now reads ${result.first_batch_ms_on_new_curve} ms`);
     return result;
 }
 
@@ -838,10 +929,16 @@ await runThreePage(async ({ device, renderer, data, log }) => {
             const budget = await measureBudget(device, scene, log);
             sceneResult.budgetV2 = budget;
             // Checked after the numbers are in the report, so a failed run can still be read.
-            if (judgeCost && budget.update_ms_median > BUDGET_MS * (1 + BUDGET_TOLERANCE)) {
-                budgetFailures.push(`${id}: the calibrated batch (${budget.calibrated_probes} probes) took ${budget.update_ms_median} ms back to back against a ${BUDGET_MS} ms budget (+${BUDGET_TOLERANCE * 100}%)`);
+            const tooSlow = budget.floor_binds !== 1 && budget.update_ms_median > BUDGET_MS * (1 + BUDGET_TOLERANCE);
+            const tooFast = budget.floor_binds !== 1 && budget.all_probes_fit !== 1 && budget.update_ms_median < BUDGET_MS * (1 - BUDGET_TOLERANCE);
+            if (judgeCost && (tooSlow || tooFast)) {
+                budgetFailures.push(`${id}: the calibrated batch (${budget.calibrated_probes} probes) took ${budget.update_ms_median} ms back to back against a ${BUDGET_MS} ms budget (±${BUDGET_TOLERANCE * 100}%)`);
             }
             if (budget.frames_calibrating > 0) budgetFailures.push(`${id}: the platform calibrated again during ${budget.frames_calibrating} GPU-bound frames`);
+        }
+        if (SECTIONS.has('recheck')) {
+            const firstUnits = (startup as { calibrated_probes: number }).calibrated_probes;
+            sceneResult.recheck = await recheckCalibration(device, scene, firstUnits, log);
         }
         if (SECTIONS.has('steady')) {
             const budget = sceneResult.budgetV2 as { probes_median?: number } | undefined;

@@ -20,11 +20,14 @@
  *     its 19,425 probes from black would take minutes. The warm-up stops
  *     early after {@link WARMUP_MAX_SECONDS} (at least
  *     {@link WARMUP_MIN_PASSES} passes), so a slow GPU isn't kept waiting.
- *     The last warm-up steps carry the millisecond budget, still back to
- *     back: the platform's calibration burst (budget v2) runs in them, so it
- *     measures with the GPU's clocks up. They end when the platform reports
- *     it calibrated (about 30-60 steps), or after
- *     {@link CALIBRATION_MAX_STEPS}.
+ *     Then the platform's calibration (budget v2): frames with the
+ *     millisecond budget, GPU-bound (two in flight, so the GPU never waits)
+ *     and not paced by the display (at 60 Hz, or with every frame waited
+ *     for, the GPU is partly idle and its clocks wander). It ends when the
+ *     platform reports it calibrated and confirmed (about 20-170 burst
+ *     frames, then 300 confirming frames), or after
+ *     {@link CALIBRATION_MAX_STEPS}. "Start the probes over" runs it again
+ *     (for after the scene changed).
  *  4. **Ready:** the calibrated number of probes every frame, and the field
  *     keeps converging live.
  *
@@ -88,11 +91,18 @@ const PAUSED: FrameBudget = { paused: true };
 const WARMUP_STEPS_PER_BATCH = 4;
 
 /**
- * The calibration steps at the end of the warm-up stop after this many even
- * if the platform is still measuring (it gives up by itself after 400 frames
- * without timings); the budget then finishes calibrating in normal frames.
+ * The calibration frames at the end of the warm-up stop after this many even
+ * if the platform is still measuring. It covers the platform's own limits,
+ * which aren't part of the package's public surface, so they are copied here
+ * (`CALIBRATION` in packages/ddgi-core/src/platform/work-budget.ts): a burst
+ * gives up after `maxFrames` (400), and its confirmation ends after twice
+ * `confirmFrames` (2 × 300). 400 + 600 = 1,000. Bursts on the test scenes
+ * took 20-170 frames, then 300 to confirm.
  */
-const CALIBRATION_MAX_STEPS = 240;
+const CALIBRATION_MAX_STEPS = 1000;
+
+/** Calibration frames queued at once: the GPU never waits for the CPU between them (see the file comment). */
+const CALIBRATION_FRAMES_IN_FLIGHT = 2;
 
 /** The adapter's warning about area lights. The viewer's emissive quads carry emissive materials, which GI does see, so it is expected. */
 const EXPECTED_WARNING = 'RectAreaLight is not mirrored into GI';
@@ -158,7 +168,8 @@ export class DdgiTechnique extends ScenePassTechnique {
     private failure: string | null = null;
     private generation = 0;
     private warmupProbeUpdates = 0;
-    private calibrationSteps = 0;
+    /** The calibration's own loop of waited frames, while it runs. */
+    private calibrationRun: Promise<void> | null = null;
     /** When the first warm-up step ran (null until then): the time limit counts warm-up work, not time spent off screen. */
     private warmupStartedAt: number | null = null;
     private finishedWallMs: number | null = null;
@@ -249,6 +260,7 @@ export class DdgiTechnique extends ScenePassTechnique {
 
     private beginWarmup(): void {
         this.phase = 'warming';
+        this.calibrationRun = null;
         this.warmupProbeUpdates = 0;
         this.warmupStartedAt = null;
         this.warmupEndFrame = Number.POSITIVE_INFINITY;
@@ -327,25 +339,39 @@ export class DdgiTechnique extends ScenePassTechnique {
         if (this.warmupPasses >= WARMUP_PASSES || outOfTime) {
             this.ddgi.settings.hysteresis = this.targetHysteresis;
             this.phase = 'calibrating';
-            this.calibrationSteps = 0;
         }
         return this.ready;
     }
 
-    /** A warm-up step with the frame's millisecond budget, while the platform measures the GPU. */
+    /** While the platform measures the GPU: starts the calibration loop once; later calls wait for it. */
     private encodeCalibrationStep(threeGI: ThreeGI): boolean {
-        threeGI.budget = this.budget;
-        threeGI.update(this.camera, 0);
-        this.calibrationSteps++;
-        const budget = this.platform.stats.counters[this.budgetCounterKey];
-        // No report (paused, no technique) or not calibrating any more: done. Without GPU
-        // timestamps the platform never calibrates, and says so at once.
-        if (budget?.calibrating !== 1 || this.calibrationSteps >= CALIBRATION_MAX_STEPS) {
-            this.phase = 'ready';
-            this.warmupEndFrame = this.platform.stats.frame;
-            this.startup.warmedMs ??= performance.now() - this.createdAt;
-        }
+        this.calibrationRun ??= this.runCalibration(threeGI, this.generation).catch((error: unknown) => this.fail(error));
         return this.ready;
+    }
+
+    /**
+     * Frames with the millisecond budget, back to back with two in flight, until the platform has calibrated
+     * (see the file comment). Stops early if the warm-up was restarted meanwhile.
+     */
+    private async runCalibration(threeGI: ThreeGI, generation: number): Promise<void> {
+        threeGI.budget = this.budget;
+        const queued: Promise<void>[] = [];
+        for (let step = 0; step < CALIBRATION_MAX_STEPS; step++) {
+            threeGI.update(this.camera, 0);
+            // No report (paused, no technique) or calibrated and confirmed: done. Without GPU
+            // timestamps the platform never calibrates, and says so at once.
+            const budget = this.platform.stats.counters[this.budgetCounterKey];
+            if (budget?.calibrating !== 1 && budget?.confirming !== 1) break;
+            // Two frames in flight: wait for the one before this, never for this one.
+            queued.push(this.platform.device.queue.onSubmittedWorkDone());
+            if (queued.length >= CALIBRATION_FRAMES_IN_FLIGHT) await queued.shift();
+            // Lets the timestamp read-backs land before the next frame collects them.
+            await new Promise((resolve) => setTimeout(resolve, 0));
+            if (this.disposed || generation !== this.generation || this.phase !== 'calibrating') return;
+        }
+        this.phase = 'ready';
+        this.warmupEndFrame = this.platform.stats.frame;
+        this.startup.warmedMs ??= performance.now() - this.createdAt;
     }
 
     /** Where the platform reports DDGI's budget in `stats.counters` (budget v2). */
@@ -359,6 +385,8 @@ export class DdgiTechnique extends ScenePassTechnique {
         this.finishedWallMs = null;
         if (this.phase !== 'warming' && this.phase !== 'calibrating' && this.phase !== 'ready') return;
         this.platform.resetHistory();
+        // Measure the GPU again too: after the scene changed, the old calibration is stale.
+        this.platform.recalibrate();
         this.beginWarmup();
     }
 
@@ -548,8 +576,9 @@ export class DdgiTechnique extends ScenePassTechnique {
  */
 function budgetStats(counters: Readonly<Record<string, number>> | undefined, previous: DdgiBudgetStats | null | undefined): DdgiBudgetStats | null {
     if (!counters) return null;
-    const stats = previous ?? { calibrating: false, calibratedProbes: null, floorProbes: 0, steppedDown: false, fixedMs: null, usPerProbe: null };
+    const stats = previous ?? { calibrating: false, calibratedProbes: null, floorProbes: 0, steppedDown: false, stale: false, fixedMs: null, usPerProbe: null };
     stats.calibrating = counters.calibrating === 1;
+    stats.stale = counters.stale === 1;
     stats.calibratedProbes = counters['calibrated units'] ?? null;
     stats.floorProbes = counters['floor units'] ?? 0;
     stats.steppedDown = counters['stepped down'] === 1;

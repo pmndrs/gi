@@ -1,0 +1,5 @@
+{
+    "description": "T1.14 on Sponza with curtains: what showing GI costs at 1440p, GPU-bound (composite against per fragment against none), and the composite against per fragment at the stored camera, with Sponza's materials and the untextured GI material table. A timing page: run it under the bench lock. Needs the downloaded Sponza.",
+    "timeoutMs": 2400000,
+    "manual": true
+}
