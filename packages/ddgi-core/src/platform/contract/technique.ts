@@ -53,6 +53,14 @@ export interface TechniqueFrame {
     readonly units: number;
 }
 
+/** What a technique's floor (`GITechnique.minUnitsPerFrame`) depends on. */
+export interface WorkFloorRate {
+    /** The frame rate the host runs at: `budget.targetFps`, else the rate observed from `deltaTime` (60 until known). */
+    readonly framesPerSecond: number;
+    /** The batch the host's `gpuMs` buys with the GPU's clocks up (the platform's calibration). */
+    readonly calibratedUnits: number;
+}
+
 /** Per-frame inputs for the optional screen stage. */
 export interface TechniqueScreenFrame extends TechniqueFrame {
     readonly screen: FrameScreen;
@@ -106,6 +114,14 @@ export interface GITechnique<Settings extends object = object> {
      * platform uses it to turn the host's ms budget into units.
      */
     readonly msPerUnit: number | undefined;
+    /**
+     * Optional: the fewest units the technique should get per frame under a
+     * millisecond budget, so its work keeps converging on every device
+     * (budget v2's floor; DDGI: `minProbesPerFrame`). It wins over the
+     * millisecond ceiling; `budget.units` still caps it. Without it there is
+     * no floor.
+     */
+    minUnitsPerFrame?(rate: WorkFloorRate): number;
 
     /** Forget accumulated history (a camera cut or a scene swap). */
     resetHistory(): void;

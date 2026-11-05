@@ -1,17 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import type { FrameBudget } from './contract/frame.ts';
+import type { GITechnique } from './contract/technique.ts';
 import {
     CALIBRATION,
     CalibrationBurst,
+    costOnCurve,
     DEFAULT_UNITS_PER_FRAME,
-    GEOMETRY_RECALIBRATION,
     SATURATION,
     SaturationGuard,
     UnitCostMeter,
+    unitsOnCurve,
     WorkBudget,
-    workFloorOf,
     type BudgetReport,
-    type TechniqueWorkFloor,
 } from './work-budget.ts';
 import { FLOOR_MAX_CALIBRATED_SHARE, FLOOR_SWEEP_SECONDS, minProbesPerFrame } from '../techniques/ddgi/settings.ts';
 
@@ -38,28 +38,34 @@ function intelSponzaLike(units: number): number {
     return 6.7 + 0.03 * (units - 160);
 }
 
-/** DDGI's floor on a volume of `probeCount` probes, the way the technique gives it to the platform. */
-function ddgiFloor(probeCount: number, setting: number | 'auto' = 'auto', maxProbesPerFrame = 4096): TechniqueWorkFloor {
-    return { minUnitsPerFrame: (rate) => minProbesPerFrame(setting, probeCount, maxProbesPerFrame, rate) };
+/** A technique with DDGI's floor for a volume of `probeCount` probes. */
+function ddgiLike(probeCount: number, setting: number | 'auto' = 'auto', maxProbesPerFrame = 4096): Pick<GITechnique, 'msPerUnit' | 'minUnitsPerFrame'> {
+    return { msPerUnit: undefined, minUnitsPerFrame: (rate) => minProbesPerFrame(setting, probeCount, maxProbesPerFrame, rate) };
 }
+
+const VSYNC_60 = 1 / 60;
+/** A vsync'd 60 Hz host whose GPU does `otherMs` of its own work: a frame that doesn't fit waits for the next refresh. */
+const gpuBound60 = (otherMs: number) => (ddgiMs: number) => Math.ceil((otherMs + ddgiMs) / (1000 * VSYNC_60) - 1e-9) * VSYNC_60;
 
 interface SimulationOptions {
     readonly frames: number;
     readonly budget: (frame: number) => FrameBudget;
     /** The technique's true GPU ms for a batch, at full clocks. */
     readonly cost: (units: number) => number;
-    /** Seconds between frames as the host reports them (0: back to back). */
-    readonly deltaTime?: (frame: number) => number;
-    /** Multiplies the true cost: 2 for a GPU in its low-power state at a light load. */
+    /** Seconds since the previous frame as the host reports them, given this frame's real DDGI ms (0: back to back). */
+    readonly deltaTime?: (frame: number, ddgiMs: number) => number;
+    /** Multiplies the true cost: above 1 while the GPU's clocks are down. */
     readonly clockFactor?: (frame: number) => number;
     /** The most units the technique can use (all its probes, or `maxProbesPerFrame`). */
     readonly capacity?: number;
-    readonly floor?: TechniqueWorkFloor;
-    /** Frames whose scene upload had a geometry change. */
+    readonly technique?: Pick<GITechnique, 'msPerUnit' | 'minUnitsPerFrame'>;
     readonly geometryChange?: (frame: number) => boolean;
+    readonly sceneSettling?: (frame: number) => boolean;
     readonly timed?: boolean;
     /** Frames until a frame's timings arrive (the platform's readback lag). */
     readonly lag?: number;
+    /** Relative noise on each timing (uniform ±). */
+    readonly noise?: number;
     readonly seed?: number;
     /** Called before each frame, for requests such as `recalibrate`. */
     readonly beforeFrame?: (frame: number, budget: WorkBudget) => void;
@@ -69,6 +75,8 @@ interface Simulation {
     readonly handed: number[];
     readonly used: number[];
     readonly reports: BudgetReport[];
+    /** The host's frame time, seconds. */
+    readonly frameSeconds: number[];
     readonly budget: WorkBudget;
 }
 
@@ -76,29 +84,33 @@ interface Simulation {
  * The platform's loop for one technique (gi-platform.ts, encode): the work
  * budget's hand-out, the technique using at most `capacity`, the meter
  * pairing timings with the units used, timings arriving `lag` frames late
- * with ±5% noise.
+ * with noise. The host's frame time can depend on this frame's DDGI work.
  */
 function simulate(options: SimulationOptions): Simulation {
-    const budget = new WorkBudget(options.floor);
+    const budget = new WorkBudget(options.technique);
     const meter = new UnitCostMeter();
     const lag = options.lag ?? 3;
+    const noiseShare = options.noise ?? 0.03;
     let state = options.seed ?? 12345;
     const noise = () => {
         state = (state * 1664525 + 1013904223) >>> 0;
-        return 0.95 + 0.1 * (state / 2 ** 32);
+        return 1 - noiseShare + 2 * noiseShare * (state / 2 ** 32);
     };
     const pending: Array<{ frame: number; ms: number }> = [];
-    const run: Simulation = { handed: [], used: [], reports: [], budget };
+    const run: Simulation = { handed: [], used: [], reports: [], frameSeconds: [], budget };
+    let previousDdgiMs = 0;
     for (let frame = 1; frame <= options.frames; frame++) {
         options.beforeFrame?.(frame, budget);
         if (options.geometryChange?.(frame)) budget.geometryChanged();
         const frameBudget = options.budget(frame);
-        const shareMs = frameBudget.gpuMs;
-        const handed = budget.unitsFor({ frame, deltaTime: options.deltaTime?.(frame) ?? 1 / 60, budget: frameBudget, shareMs, timed: options.timed ?? true });
+        // The interval ending at this frame came from the previous frame's work.
+        const deltaTime = options.deltaTime ? options.deltaTime(frame, previousDdgiMs) : VSYNC_60;
+        const handed = budget.unitsFor({ frame, deltaTime, budget: frameBudget, shareMs: frameBudget.gpuMs, timed: options.timed ?? true, sceneSettling: options.sceneSettling?.(frame) });
         const used = Math.min(handed, options.capacity ?? Number.POSITIVE_INFINITY);
         meter.handOut(frame, 'ddgi', used);
         budget.record(handed, used);
         const ms = used === 0 ? 0 : options.cost(used) * (options.clockFactor?.(frame) ?? 1) * noise();
+        previousDdgiMs = ms;
         pending.push({ frame, ms });
         while (pending.length > 0 && pending[0].frame <= frame - lag) {
             const arrived = pending.shift() as { frame: number; ms: number };
@@ -107,16 +119,18 @@ function simulate(options: SimulationOptions): Simulation {
         run.handed.push(handed);
         run.used.push(used);
         run.reports.push(budget.report);
+        run.frameSeconds.push(deltaTime);
     }
     return run;
 }
 
-/** The first frame (1-based) whose report is calibrated, or -1. */
-function firstCalibratedFrame(run: Simulation): number {
-    return run.reports.findIndex((report) => report.state === 'calibrated') + 1 || -1;
+/** Frames (1-based) at which a burst started. */
+function burstStarts(run: Simulation): number[] {
+    return run.reports.flatMap((report, index) => (report.state === 'calibrating' && run.reports[index - 1]?.state !== 'calibrating' ? [index + 1] : []));
 }
 
 const unique = (values: readonly number[]) => [...new Set(values)];
+const within = (value: number, target: number, share: number) => Math.abs(value - target) <= share * target;
 
 describe('the unit cost meter', () => {
     it("measures a frame's technique passes against the units used that frame", () => {
@@ -141,102 +155,153 @@ describe('the unit cost meter', () => {
     });
 });
 
-describe('calibration from back-to-back data (budget v2)', () => {
-    it('finds the batch whose cost is the budget on a straight line, and reports the line', () => {
+describe('the cost curve', () => {
+    const curve = [
+        { units: 64, ms: 1.4, spread: 0 },
+        { units: 256, ms: 2.6, spread: 0 },
+    ];
+    it('reads costs along straight lines between sizes and beyond them', () => {
+        expect(costOnCurve(curve, 160)).toBeCloseTo(2.0, 9);
+        expect(costOnCurve(curve, 448)).toBeCloseTo(3.8, 9);
+        expect(costOnCurve([{ units: 100, ms: 1, spread: 0 }], 50)).toBeCloseTo(0.5, 9);
+    });
+    it('solves the largest batch that fits a share, within a limit', () => {
+        expect(unitsOnCurve(curve, 2, 10_000)).toBe(160);
+        // 448 on paper; floating point may land a hair under.
+        expect(unitsOnCurve(curve, 3.8, 10_000)).toBeGreaterThanOrEqual(447);
+        expect(unitsOnCurve(curve, 3.8, 300)).toBe(300);
+        expect(unitsOnCurve(curve, 0.1, 10_000)).toBe(1);
+    });
+});
+
+describe('calibration on sustained frames (budget v2, after the review)', () => {
+    it('finds the batch whose cost is the budget on a straight line, and reports the line and its convergence', () => {
         // 2 ms on 1.2 ms + 5 µs a probe: 160 probes.
-        const run = simulate({ frames: 200, budget: () => ({ gpuMs: 2 }), cost: line, deltaTime: () => 0 });
+        const run = simulate({ frames: 300, budget: () => ({ gpuMs: 2 }), cost: line, deltaTime: () => 0 });
         const calibration = run.budget.report.calibration;
         expect(calibration?.measured).toBe(true);
-        expect(Math.abs((calibration?.units ?? 0) - 160)).toBeLessThanOrEqual(8);
-        // The reported line, fitted through medians of timings with ±5% noise.
+        expect(within(line(calibration?.units ?? 0), 2, 0.05)).toBe(true);
         expect(Math.abs((calibration?.model?.fixedMs ?? 0) - 1.2)).toBeLessThan(0.15);
-        expect(Math.abs((calibration?.model?.msPerUnit ?? 0) * 1000 - 5)).toBeLessThan(0.5);
-        // Back to back: the host gave no time between frames.
-        expect(calibration?.frameSeconds).toBe(0);
+        expect(Math.abs((calibration?.model?.msPerUnit ?? 0) * 1000 - 5)).toBeLessThan(0.6);
+        // The spread of the six timings it settled on.
+        expect(calibration?.spread).toBeLessThanOrEqual(CALIBRATION.agreeShare + CALIBRATION.driftShare);
+        expect(calibration?.frames).toBeLessThan(80);
     });
 
-    it('lands within 10% of the budget on a curve that bends (Sponza on the RTX), in about a second', () => {
-        for (const gpuMs of [1, 2, 4]) {
-            const run = simulate({ frames: 300, budget: () => ({ gpuMs }), cost: sponzaLike, deltaTime: () => 1 / 60 });
+    for (const [name, cost] of [
+        ['Sponza on the RTX', sponzaLike],
+        ['Sponza on the Intel', intelSponzaLike],
+        ['a straight line', line],
+    ] as const) {
+        it(`lands within ±10% of the budget, both ways (${name})`, () => {
+            for (const gpuMs of [1, 2, 4]) {
+                const run = simulate({ frames: 400, budget: () => ({ gpuMs }), cost, deltaTime: () => 0 });
+                const units = run.budget.report.calibratedUnits ?? 0;
+                if (units > 1) expect(within(cost(units), gpuMs, 0.1)).toBe(true);
+            }
+        });
+    }
+
+    it('waits for the clocks: timings still moving are not used (the review: a burst at 1.7× the sustained cost)', () => {
+        // The GPU starts at 1.8× the sustained cost and settles over the first 40 frames.
+        const clockFactor = (frame: number) => (frame < 40 ? 1.8 - (0.8 * frame) / 40 : 1);
+        for (const cost of [cornellLike, sponzaLike, line]) {
+            const run = simulate({ frames: 400, budget: () => ({ gpuMs: 2 }), cost, clockFactor, capacity: 1728, deltaTime: () => 0, noise: 0.02 });
             const units = run.budget.report.calibratedUnits ?? 0;
-            expect(sponzaLike(units)).toBeLessThanOrEqual(gpuMs * 1.1);
-            // Not far under either: the next probes up would have fit.
-            expect(sponzaLike(units * 1.15 + 1)).toBeGreaterThan(gpuMs * 0.95);
-            expect(firstCalibratedFrame(run)).toBeLessThan(90);
+            expect(within(cost(units), 2, 0.1)).toBe(true);
         }
     });
 
-    it('lands within 10% on the Intel-like curve, where big batches cost more per probe', () => {
-        const run = simulate({ frames: 300, budget: () => ({ gpuMs: 2 }), cost: intelSponzaLike, deltaTime: () => 1 / 60 });
-        const units = run.budget.report.calibratedUnits ?? 0;
-        expect(units).toBeGreaterThan(10);
-        expect(intelSponzaLike(units)).toBeLessThanOrEqual(2.2);
+    it('confirms the batch over back-to-back frames after the burst, and re-solves when the GPU settled elsewhere', () => {
+        // The burst reads the GPU 20% slow (right after the warm-up); a few seconds on, the true cost.
+        const burstEnds = { frame: Number.POSITIVE_INFINITY };
+        const run = simulate({
+            frames: 900,
+            budget: () => ({ gpuMs: 2 }),
+            cost: sponzaLike,
+            deltaTime: () => 0,
+            clockFactor: (frame) => (frame <= burstEnds.frame + 100 ? 1.2 : 1),
+            beforeFrame: (_frame, budget) => {
+                if (budget.report.state === 'calibrated' && burstEnds.frame === Number.POSITIVE_INFINITY) burstEnds.frame = _frame;
+            },
+        });
+        const report = run.budget.report;
+        expect(report.confirming).toBe(false);
+        expect(report.calibration?.confirmFactor).toBeCloseTo(1 / 1.2, 1);
+        expect(within(sponzaLike(report.calibratedUnits as number), 2, 0.1)).toBe(true);
+    });
+
+    it('keeps the batch when the confirmation agrees, and waits for back-to-back frames to confirm at all', () => {
+        const agreed = simulate({ frames: 700, budget: () => ({ gpuMs: 2 }), cost: line, deltaTime: () => 0 });
+        expect(agreed.budget.report.calibration?.confirmFactor).toBe(1);
+        // A 60 Hz host after the burst: nothing to confirm with, the batch stands.
+        const live = simulate({ frames: 700, budget: () => ({ gpuMs: 2 }), cost: line, deltaTime: (frame) => (frame < 120 ? 0 : VSYNC_60) });
+        expect(live.budget.report.confirming).toBe(true);
+        expect(unique(live.handed.slice(200))).toEqual([live.budget.report.calibratedUnits]);
     });
 
     it('gives every probe when all of them fit (Cornell at 8 ms)', () => {
-        const run = simulate({ frames: 300, budget: () => ({ gpuMs: 8 }), cost: cornellLike, capacity: 1000 });
+        const run = simulate({ frames: 300, budget: () => ({ gpuMs: 8 }), cost: cornellLike, capacity: 1000, deltaTime: () => 0 });
         expect(run.budget.report.calibratedUnits).toBe(1000);
-        // Never hands out far past what the technique could use.
         expect(Math.max(...run.handed)).toBeLessThanOrEqual(CALIBRATION.firstUnits * CALIBRATION.ladderStep);
     });
 
-    it("doesn't count the ramp frames, which ran at low clocks", () => {
-        // The first frames of the burst take 3× as long (the GPU waking up); after them, full clocks.
-        const rampedFrames = CALIBRATION.rampFrames;
-        const run = simulate({ frames: 300, budget: () => ({ gpuMs: 2 }), cost: line, clockFactor: (frame) => (frame <= rampedFrames ? 3 : 1) });
-        expect(Math.abs((run.budget.report.calibratedUnits ?? 0) - 160)).toBeLessThanOrEqual(8);
+    it('runs no filler for a host running back to back', () => {
+        const run = simulate({ frames: 300, budget: () => ({ gpuMs: 2 }), cost: sponzaLike, deltaTime: () => 0 });
+        expect(run.budget.report.calibration?.fillerFrames).toBe(0);
     });
 
-    it('keeps the GPU loaded between small batches with a filler of about heavyMs', () => {
-        const run = simulate({ frames: 300, budget: () => ({ gpuMs: 2 }), cost: sponzaLike, deltaTime: () => 1 / 60 });
-        const burst = run.handed.slice(CALIBRATION.rampFrames, firstCalibratedFrame(run) - 1);
-        const filler = Math.max(...burst.slice(CALIBRATION.samplesPerSize + 4));
-        expect(sponzaLike(filler)).toBeGreaterThan(CALIBRATION.heavyMs * 0.7);
-        // Small batches alternate with the filler: no two small ones in a row.
-        const small = burst.map((units) => sponzaLike(units) < CALIBRATION.heavyMs / 2);
-        expect(small.some((isSmall, index) => isSmall && small[index + 1])).toBe(false);
+    it('a 60 Hz host gets filler in its first calibration only: each at most half a frame, at most fillerMaxMs in all', () => {
+        const run = simulate({
+            frames: 900,
+            budget: () => ({ gpuMs: 2 }),
+            cost: sponzaLike,
+            beforeFrame: (frame, budget) => {
+                if (frame === 500) budget.recalibrate();
+            },
+        });
+        const first = run.reports[450].calibration;
+        expect(first?.fillerFrames).toBeGreaterThan(0);
+        expect(first?.fillerMs).toBeLessThanOrEqual(CALIBRATION.fillerMaxMs + CALIBRATION.fillerFrameShare * 1000 * VSYNC_60);
+        const burst = run.handed.slice(0, (first?.frames ?? 0) - 1);
+        expect(Math.max(...burst.map(sponzaLike))).toBeLessThanOrEqual(CALIBRATION.fillerFrameShare * 1000 * VSYNC_60 * 1.1 + 0.0001 + sponzaLike(CALIBRATION.firstUnits));
+        expect(Math.max(...burst.slice(20).map(sponzaLike))).toBeLessThanOrEqual(CALIBRATION.fillerFrameShare * 1000 * VSYNC_60 * 1.1);
+        expect(run.budget.report.calibration?.fillerFrames).toBe(0);
     });
 
     it('gives up after maxFrames without timings, and falls back to units or the default', () => {
-        const burst = new CalibrationBurst(2, undefined);
+        const burst = new CalibrationBurst(2, undefined, false);
         let units = 0;
-        for (let frame = 1; frame <= CALIBRATION.maxFrames + 1; frame++) units = burst.next(frame, 1 / 60);
+        for (let frame = 1; frame <= CALIBRATION.maxFrames + 1; frame++) units = burst.next(frame, VSYNC_60);
         expect(burst.result?.measured).toBe(false);
         expect(units).toBe(DEFAULT_UNITS_PER_FRAME);
     });
 
-    it('a seeded burst (same work, new budget) only times the new answer', () => {
-        const first = simulate({ frames: 300, budget: () => ({ gpuMs: 2 }), cost: sponzaLike });
-        const seed = first.budget.report.calibration?.samples;
-        const burst = new CalibrationBurst(4, undefined, seed);
-        expect(burst.result).toBeUndefined();
-        // Frame by frame, each frame's timing arriving 3 frames later.
-        const handed: number[] = [];
-        let frame = 1;
-        for (; frame <= 80 && !burst.result; frame++) {
-            handed[frame] = burst.next(frame, 0);
-            const arrived = frame - 3;
-            if (arrived >= 1) burst.add({ frame: arrived, units: handed[arrived], ms: sponzaLike(handed[arrived]) });
-        }
-        expect(burst.result?.measured).toBe(true);
-        expect(sponzaLike(burst.result?.units ?? 0)).toBeLessThanOrEqual(4 * 1.1);
-        expect(frame).toBeLessThan(first.reports.findIndex((report) => report.state === 'calibrated'));
+    it('the first calibration waits while the mesh trees are built', () => {
+        const run = simulate({ frames: 300, budget: () => ({ gpuMs: 2 }), cost: line, sceneSettling: (frame) => frame <= 100 });
+        expect(run.reports.slice(0, 100).every((report) => report.state === 'not calibrated')).toBe(true);
+        expect(burstStarts(run)).toEqual([101]);
     });
 });
 
 describe('each frame hands out the calibrated batch (budget v2)', () => {
     it('keeps the batch while frames are on time, even when the GPU clocks down and the same work takes twice as long', () => {
-        // Calibrated with the clocks up; from frame 200 on a light load halves the clock.
-        const run = simulate({ frames: 1200, budget: () => ({ gpuMs: 2 }), cost: sponzaLike, clockFactor: (frame) => (frame >= 200 ? 2 : 1) });
+        const run = simulate({ frames: 1200, budget: () => ({ gpuMs: 2 }), cost: sponzaLike, deltaTime: (frame) => (frame < 200 ? 0 : VSYNC_60), clockFactor: (frame) => (frame >= 200 ? 2 : 1) });
         const calibrated = run.budget.report.calibratedUnits as number;
         expect(unique(run.handed.slice(200))).toEqual([calibrated]);
         expect(run.budget.report.steppedDown).toBe(false);
     });
 
-    it('applies budget.units as a hard cap, in the burst too', () => {
-        const run = simulate({ frames: 300, budget: () => ({ gpuMs: 2, units: 50 }), cost: line, floor: ddgiFloor(19_425) });
-        expect(Math.max(...run.handed)).toBeLessThanOrEqual(50);
-        expect(unique(run.handed.slice(200))).toEqual([50]);
+    it('applies budget.units as a hard cap, in the burst too; lifting the cap re-solves without a burst', () => {
+        const run = simulate({ frames: 600, budget: (frame) => (frame < 300 ? { gpuMs: 2, units: 50 } : { gpuMs: 2 }), cost: line, technique: ddgiLike(19_425), deltaTime: () => 0 });
+        expect(Math.max(...run.handed.slice(0, 299))).toBeLessThanOrEqual(50);
+        expect(unique(run.handed.slice(200, 299))).toEqual([50]);
+        expect(burstStarts(run)).toEqual([1]);
+        // Only sizes up to the old cap were measured: the new batch is extrapolated from them,
+        // at least the old cap and never over the budget (+10%).
+        const lifted = run.handed.at(-1) as number;
+        expect(lifted).toBeGreaterThanOrEqual(50);
+        expect(line(lifted)).toBeLessThanOrEqual(2.2);
     });
 
     it('hands out units, or the default, without a millisecond budget or without timings', () => {
@@ -248,148 +313,122 @@ describe('each frame hands out the calibrated batch (budget v2)', () => {
     });
 
     it('gives nothing for a zero budget', () => {
-        expect(simulate({ frames: 3, budget: () => ({ gpuMs: 0 }), cost: line, floor: ddgiFloor(1000) }).handed).toEqual([0, 0, 0]);
+        expect(simulate({ frames: 3, budget: () => ({ gpuMs: 0 }), cost: line, technique: ddgiLike(1000) }).handed).toEqual([0, 0, 0]);
     });
 
     it("uses a technique's own cost per unit instead of a burst", () => {
-        const budget = new WorkBudget(undefined, () => 0.01);
-        expect(budget.unitsFor({ frame: 1, deltaTime: 1 / 60, budget: { gpuMs: 2 }, shareMs: 2, timed: true })).toBe(200);
+        const budget = new WorkBudget({ msPerUnit: 0.01 });
+        expect(budget.unitsFor({ frame: 1, deltaTime: VSYNC_60, budget: { gpuMs: 2 }, shareMs: 2, timed: true })).toBe(200);
         expect(budget.report.state).toBe('calibrated');
     });
 });
 
-describe('re-calibration', () => {
-    it('calibrates again, from the timings it has, when gpuMs changes', () => {
-        const run = simulate({ frames: 900, budget: (frame) => ({ gpuMs: frame < 400 ? 2 : 4 }), cost: sponzaLike });
-        const before = run.reports[390].calibratedUnits as number;
+describe('no bursts during live use (budget v2, after the review)', () => {
+    it('a new gpuMs is solved from the measured curve, with no burst', () => {
+        const run = simulate({ frames: 900, budget: (frame) => ({ gpuMs: frame < 400 ? 2 : 4 }), cost: sponzaLike, deltaTime: (frame) => (frame < 200 ? 0 : VSYNC_60) });
+        expect(burstStarts(run)).toEqual([1]);
         const after = run.budget.report.calibratedUnits as number;
-        expect(sponzaLike(before)).toBeLessThanOrEqual(2.2);
-        expect(after).toBeGreaterThan(before * 2);
-        expect(sponzaLike(after)).toBeLessThanOrEqual(4.4);
-        // The second burst is short: it starts from the curve measured the first time.
-        const secondBurst = run.reports.slice(399).findIndex((report) => report.state === 'calibrated');
-        expect(secondBurst).toBeLessThan(firstCalibratedFrame(run));
+        expect(within(sponzaLike(after), 4, 0.1)).toBe(true);
+        expect(run.handed.at(-1)).toBe(after);
     });
 
-    it('calibrates again once the geometry has been still for a second, at most every 10 s', () => {
-        // The scene gets twice as expensive at frame 1000 (a mesh added), and is still after it.
-        const changeFrame = 1000;
-        let frameNow = 0;
+    it('a geometry change marks the calibration stale and keeps the batch; recalibrate() runs a burst and clears it', () => {
         const run = simulate({
-            frames: 2000,
-            budget: () => ({ gpuMs: 2 }),
-            cost: (units) => line(units) * (frameNow >= changeFrame ? 2 : 1),
-            geometryChange: (frame) => {
-                frameNow = frame;
-                return frame === changeFrame;
-            },
-        });
-        const stillFrames = GEOMETRY_RECALIBRATION.stillSeconds * 60;
-        const burstStart = run.reports.slice(changeFrame).findIndex((report) => report.state === 'calibrating');
-        expect(Math.abs(burstStart - stillFrames)).toBeLessThanOrEqual(2);
-        // 2 ms on 2.4 ms + 10 µs a probe: the fixed part alone is over, so 1 probe.
-        expect(run.budget.report.calibratedUnits).toBeLessThan(10);
-    });
-
-    it('the first geometry re-calibration runs at once (trees finished after a host started early); the next waits 10 s after it', () => {
-        // Changes at 5 s (trees arriving after the first calibration) and again at 8 s.
-        const run = simulate({ frames: 1600, budget: () => ({ gpuMs: 2 }), cost: line, geometryChange: (frame) => frame === 300 || frame === 480 });
-        const bursts = run.reports.flatMap((report, index) => (report.state === 'calibrating' && run.reports[index - 1]?.state !== 'calibrating' ? [index + 1] : []));
-        expect(bursts[0]).toBe(1);
-        expect(Math.abs(bursts[1] - 360)).toBeLessThanOrEqual(2);
-        // The second change is still for a second at 9 s, but waits until 10 s after the 6 s burst.
-        expect(Math.abs(bursts[2] - (bursts[1] + GEOMETRY_RECALIBRATION.minSpacingSeconds * 60))).toBeLessThanOrEqual(2);
-        expect(bursts).toHaveLength(3);
-    });
-
-    it("doesn't calibrate every frame while something keeps moving", () => {
-        const run = simulate({ frames: 1500, budget: () => ({ gpuMs: 2 }), cost: line, geometryChange: (frame) => frame > 400 });
-        expect(run.reports.slice(400).every((report) => report.state === 'calibrated')).toBe(true);
-    });
-
-    it('calibrates again on request', () => {
-        const run = simulate({
-            frames: 600,
+            frames: 1200,
             budget: () => ({ gpuMs: 2 }),
             cost: line,
+            geometryChange: (frame) => frame === 400,
             beforeFrame: (frame, budget) => {
-                if (frame === 400) budget.recalibrate();
+                if (frame === 800) budget.recalibrate();
             },
         });
-        expect(run.reports[398].state).toBe('calibrated');
-        expect(run.reports[399].state).toBe('calibrating');
-        expect(run.budget.report.state).toBe('calibrated');
+        const calibrated = run.reports[390].calibratedUnits;
+        expect(run.reports[700].stale).toBe(true);
+        expect(unique(run.handed.slice(400, 799))).toEqual([calibrated]);
+        expect(burstStarts(run)).toEqual([1, 800]);
+        expect(run.budget.report.stale).toBe(false);
     });
 
-    it('a new platform budget (prepare, a technique added) starts with a burst', () => {
-        const budget = new WorkBudget(undefined);
-        budget.unitsFor({ frame: 1, deltaTime: 1 / 60, budget: { gpuMs: 2 }, shareMs: 2, timed: true });
-        expect(budget.report.state).toBe('calibrating');
+    it("doesn't calibrate while something keeps moving", () => {
+        const run = simulate({ frames: 1500, budget: () => ({ gpuMs: 2 }), cost: line, geometryChange: (frame) => frame > 400 });
+        expect(burstStarts(run)).toEqual([1]);
     });
 });
 
-describe('saturation: the frame rate says when to step down (budget v2)', () => {
-    const late = (frame: number) => (frame >= 400 && frame < 1000 ? 1 / 40 : 1 / 60);
+describe('saturation: step down only when frames are late and the GPU is busy (budget v2, after the review)', () => {
+    const calibrateFirst = (frame: number, ddgiMs: number, then: (ddgiMs: number) => number) => (frame < 200 ? 0 : then(ddgiMs));
 
-    it('steps down ×0.8 a second while frames are late and the work is over its share, then recovers ×1.1 a second', () => {
-        // The GPU is saturated from frame 400 to 1000: frames come at 40 Hz against 60, and the
-        // work itself is 30% slower (the GPU shared with a heavier frame).
-        const run = simulate({
-            frames: 2200,
-            budget: () => ({ gpuMs: 2, targetFps: 60 }),
-            cost: sponzaLike,
-            deltaTime: late,
-            clockFactor: (frame) => (frame >= 400 && frame < 1000 ? 1.3 : 1),
-        });
+    it('settles under sustained saturation: a 60 Hz GPU-bound host whose own work leaves 1.2 ms', () => {
+        // 15.5 ms of the host's GPU work: DDGI's calibrated 2 ms makes every frame miss the refresh.
+        // No floor here (DDGI's would itself not fit in 1.2 ms on Sponza).
+        const host = gpuBound60(15.5);
+        // targetFps: a host late from its first frame would otherwise look like an on-time 30 Hz host.
+        const run = simulate({ frames: 60 * 90, budget: () => ({ gpuMs: 2, targetFps: 60 }), cost: sponzaLike, deltaTime: (frame, ms) => calibrateFirst(frame, ms, host) });
         const calibrated = run.budget.report.calibratedUnits as number;
-        expect(run.handed[399]).toBe(calibrated);
-        // After about 4 late seconds (160 frames at 40 Hz each): 0.8^n of the batch.
-        const steppedDown = run.reports[960];
-        expect(steppedDown.steppedDown).toBe(true);
-        expect(steppedDown.framesLate).toBe(true);
-        expect(run.handed[960]).toBeLessThan(calibrated * 0.8);
-        // Back on time: back to the calibrated batch, never above it.
-        expect(run.handed.at(-1)).toBe(calibrated);
-        expect(Math.max(...run.handed.slice(1000))).toBe(calibrated);
-        // ×1.1 a second at most.
-        const recovered = run.handed.slice(1000).findIndex((units) => units === calibrated);
-        const steps = Math.ceil(Math.log(calibrated / run.handed[999]) / Math.log(SATURATION.recovery));
-        expect(recovered).toBeGreaterThanOrEqual((steps - 2) * 60);
+        const last30s = run.reports.slice(-60 * 30);
+        // Mostly on time, and the batch moves rarely.
+        const late = run.frameSeconds.slice(-60 * 30).filter((seconds) => seconds > VSYNC_60 * 1.5).length / (60 * 30);
+        expect(late).toBeLessThan(0.15);
+        const steps = last30s.filter((report, index) => index > 0 && report.units < last30s[index - 1].units).length;
+        expect(steps).toBeLessThanOrEqual(3);
+        expect(Math.max(...run.handed.slice(-60 * 30))).toBeLessThan(calibrated);
+        expect(Math.min(...run.handed.slice(200))).toBeGreaterThanOrEqual(run.budget.report.floorUnits);
     });
 
-    it('never steps below the floor', () => {
-        const run = simulate({
-            frames: 1400,
-            budget: () => ({ gpuMs: 2, targetFps: 60 }),
-            cost: sponzaLike,
-            deltaTime: (frame) => (frame >= 400 ? 1 / 30 : 1 / 60),
-            clockFactor: (frame) => (frame >= 400 ? 3 : 1),
-            floor: ddgiFloor(19_425),
-        });
-        // At 60 Hz Sponza's floor is 81 probes (but at most twice the calibrated batch).
-        const floor = run.budget.report.floorUnits;
-        expect(floor).toBeGreaterThan(0);
-        expect(Math.min(...run.handed.slice(400))).toBeGreaterThanOrEqual(floor);
-    });
-
-    it('holds when frames are late but the work is within its share (the frame is slow for other reasons)', () => {
-        const run = simulate({ frames: 1400, budget: () => ({ gpuMs: 2, targetFps: 60 }), cost: line, deltaTime: (frame) => (frame >= 400 ? 1 / 30 : 1 / 60) });
+    it("doesn't step down for a CPU-bound host: frames late, but DDGI at low clocks", () => {
+        // The host makes 30 frames a second against a 60 Hz target; its GPU idles, so DDGI reads 2× slower.
+        const run = simulate({ frames: 60 * 30, budget: () => ({ gpuMs: 2, targetFps: 60 }), cost: sponzaLike, deltaTime: (frame) => (frame < 200 ? 0 : 1 / 30), clockFactor: (frame) => (frame < 200 ? 1 : 2) });
         const calibrated = run.budget.report.calibratedUnits as number;
-        expect(unique(run.handed.slice(400))).toEqual([calibrated]);
+        expect(unique(run.handed.slice(200))).toEqual([calibrated]);
+        expect(run.budget.report.framesLate).toBe(true);
     });
 
-    it('finds the target from the observed frame rate without targetFps, remembering the on-time rate', () => {
+    it('an uncapped host with no targetFps has no ceiling: no step-down however its frame time moves', () => {
+        // About 200 Hz, swinging between 4 and 7 ms with the view, GPU busy.
+        const run = simulate({ frames: 60 * 60, budget: () => ({ gpuMs: 2 }), cost: sponzaLike, deltaTime: (frame, ms) => calibrateFirst(frame, ms, () => (frame % 600 < 300 ? 0.004 : 0.007)) });
+        const calibrated = run.budget.report.calibratedUnits as number;
+        expect(unique(run.handed.slice(200))).toEqual([calibrated]);
+    });
+
+    it('with targetFps, an uncapped host is held to it', () => {
+        const run = simulate({ frames: 60 * 30, budget: () => ({ gpuMs: 2, targetFps: 250 }), cost: sponzaLike, deltaTime: (frame) => (frame < 200 ? 0 : 0.006) });
+        expect(run.budget.report.steppedDown).toBe(true);
+    });
+
+    it('a host changing frame rate (120 Hz to 60 Hz, vsync): stable at each, back at the calibrated batch', () => {
+        const run = simulate({ frames: 60 * 110, budget: () => ({ gpuMs: 2 }), cost: sponzaLike, deltaTime: (frame) => (frame < 200 ? 0 : frame < 1800 ? 1 / 120 : VSYNC_60), technique: ddgiLike(19_425) });
+        const calibrated = run.budget.report.calibratedUnits as number;
+        expect(unique(run.handed.slice(1000, 1800))).toEqual([calibrated]);
+        // The slower rate reads as late for up to targetMemorySeconds (a GPU busy at full clocks
+        // can't be told from saturation), then it is the new rate: recovery below the batch that was
+        // late, then probing up every probeEverySeconds. Back at the calibrated batch within a minute.
+        expect(unique(run.handed.slice(1800 + 60 * 60))).toEqual([calibrated]);
+        expect(run.reports.slice(200).every((report) => report.units >= report.floorUnits)).toBe(true);
+    });
+
+    it('recovers only after recoverAfterSeconds on time, up to below the batch that was late', () => {
+        // Late (GPU busy) from 4 s to 6 s, then on time.
+        const run = simulate({ frames: 60 * 40, budget: () => ({ gpuMs: 2, targetFps: 60 }), cost: sponzaLike, deltaTime: (frame) => (frame < 200 ? 0 : frame >= 240 && frame < 360 ? 1 / 40 : VSYNC_60) });
+        const calibrated = run.budget.report.calibratedUnits as number;
+        const lowest = Math.min(...run.handed);
+        expect(lowest).toBeLessThan(calibrated * 0.8);
+        // No growth in the first recoverAfterSeconds after the last late window.
+        const lateEnd = run.reports.length - 1 - [...run.reports].reverse().findIndex((report) => report.framesLate);
+        const heldUntil = lateEnd + Math.round(SATURATION.recoverAfterSeconds * 60) - 70;
+        expect(unique(run.handed.slice(lateEnd + 1, heldUntil))).toHaveLength(1);
+        expect(run.reports[lateEnd + 300].ceilingUnits).toBeDefined();
+        expect(Math.max(...run.handed.slice(lateEnd, lateEnd + 600))).toBeLessThan(calibrated);
+    });
+
+    it('treats an observed rate as a target only when it is a display refresh rate', () => {
         const guard = new SaturationGuard();
-        let verdict;
-        for (let frame = 0; frame < 120; frame++) verdict = guard.addFrame(1 / 60, undefined, 2) ?? verdict;
-        expect(verdict).toBe('recover');
-        expect(guard.framesPerSecond(undefined)).toBeCloseTo(60, 6);
-        guard.addUpdateMs(3);
-        for (let frame = 0; frame < 40; frame++) verdict = guard.addFrame(1 / 40, undefined, 2) ?? verdict;
-        expect(verdict).toBe('step down');
-        // The on-time rate is remembered while frames are late.
-        expect(guard.framesPerSecond(undefined)).toBeCloseTo(60, 6);
-        expect(guard.framesPerSecond(144)).toBe(144);
+        for (let frame = 0; frame < 70; frame++) guard.addFrame(VSYNC_60, undefined);
+        expect(guard.targetSeconds(undefined)).toBeCloseTo(VSYNC_60, 9);
+        const uncapped = new SaturationGuard();
+        for (let frame = 0; frame < 300; frame++) uncapped.addFrame(1 / 230, undefined);
+        expect(uncapped.targetSeconds(undefined)).toBeUndefined();
+        expect(uncapped.targetSeconds(144)).toBeCloseTo(1 / 144, 9);
+        expect(uncapped.framesPerSecond(undefined)).toBeCloseTo(230, 6);
     });
 });
 
@@ -415,16 +454,11 @@ describe('the floor (DDGI minProbesPerFrame)', () => {
 
     it('wins over the millisecond budget, under budget.units', () => {
         // The Intel-like device: 2 ms buys about 15 probes, the 4 s sweep wants 81, the cap allows twice the batch.
-        const intel = simulate({ frames: 600, budget: () => ({ gpuMs: 2 }), cost: intelSponzaLike, floor: ddgiFloor(19_425) });
+        const intel = simulate({ frames: 900, budget: () => ({ gpuMs: 2 }), cost: intelSponzaLike, technique: ddgiLike(19_425), deltaTime: (frame) => (frame < 300 ? 0 : VSYNC_60) });
         const calibrated = intel.budget.report.calibratedUnits as number;
-        expect(unique(intel.handed.slice(400))).toEqual([Math.min(81, FLOOR_MAX_CALIBRATED_SHARE * calibrated)]);
-        const capped = simulate({ frames: 600, budget: () => ({ gpuMs: 2, units: 20 }), cost: intelSponzaLike, floor: ddgiFloor(19_425) });
-        expect(unique(capped.handed.slice(400))).toEqual([20]);
-    });
-
-    it('is found on the technique by name', () => {
-        expect(workFloorOf(ddgiFloor(10))).toBeDefined();
-        expect(workFloorOf({})).toBeUndefined();
+        expect(unique(intel.handed.slice(600))).toEqual([Math.min(81, FLOOR_MAX_CALIBRATED_SHARE * calibrated)]);
+        const capped = simulate({ frames: 900, budget: () => ({ gpuMs: 2, units: 20 }), cost: intelSponzaLike, technique: ddgiLike(19_425), deltaTime: (frame) => (frame < 300 ? 0 : VSYNC_60) });
+        expect(unique(capped.handed.slice(600))).toEqual([20]);
     });
 });
 
@@ -432,9 +466,8 @@ describe('behaviour at 30, 60 and 120 Hz (budget v2)', () => {
     for (const hz of [30, 60, 120]) {
         it(`${hz} Hz: one stable batch, the floor respected (Sponza on the RTX and on the Intel)`, () => {
             for (const cost of [sponzaLike, intelSponzaLike]) {
-                const run = simulate({ frames: hz * 20, budget: () => ({ gpuMs: 2 }), cost, deltaTime: () => 1 / hz, floor: ddgiFloor(19_425) });
-                const settled = run.handed.slice(hz * 5);
-                // The floor follows the observed frame rate once a second of frames is in.
+                const run = simulate({ frames: 300 + hz * 20, budget: () => ({ gpuMs: 2 }), cost, deltaTime: (frame) => (frame < 300 ? 0 : 1 / hz), technique: ddgiLike(19_425) });
+                const settled = run.handed.slice(300 + hz * 2);
                 expect(unique(settled)).toHaveLength(1);
                 const report = run.budget.report;
                 expect(report.framesPerSecond).toBeCloseTo(hz, 6);

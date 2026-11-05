@@ -21,8 +21,10 @@ export interface DdgiBudgetStats {
     calibratedProbes: number | null;
     /** The fewest probes per frame (a full sweep within 4 s, at most twice the calibrated number); 0 when off. */
     floorProbes: number;
-    /** Fewer than calibrated: frames were late and DDGI was over its time. */
+    /** Fewer than calibrated: frames were late while the GPU was busy. */
     steppedDown: boolean;
+    /** The scene's shape changed since it was measured (the number stays until it is measured again). */
+    stale: boolean;
     /** The measured cost: a fixed part and a part per probe; null until measured. */
     fixedMs: number | null;
     usPerProbe: number | null;
@@ -82,7 +84,7 @@ function budgetLines(frame: DdgiFrameStats): StatsLine[] {
     } else if (budget.calibratedProbes === null) {
         reason = `${probes(frame.probesUpdated)} (no GPU timestamps to measure with)`;
     } else if (budget.steppedDown) {
-        reason = `${probes(frame.probesUpdated)}: slowed, frames are late (${buys(budget.calibratedProbes)})`;
+        reason = `${probes(frame.probesUpdated)}: slowed, frames are late with the GPU busy (${buys(budget.calibratedProbes)})`;
     } else if (budget.floorProbes > budget.calibratedProbes) {
         reason = `${probes(budget.floorProbes)}: the least for a full sweep in 4 s (${buys(budget.calibratedProbes)})`;
     } else {
@@ -91,7 +93,8 @@ function budgetLines(frame: DdgiFrameStats): StatsLine[] {
     }
     const lines: StatsLine[] = [{ text: `  per frame       ${reason}`, help: 'statsBudget' }];
     if (!budget.calibrating && budget.fixedMs !== null && budget.usPerProbe !== null) {
-        lines.push({ text: `  measured cost   ${milliseconds(budget.fixedMs)} + ${budget.usPerProbe.toFixed(1)} µs per probe`, help: 'statsBudget' });
+        const stale = budget.stale ? ' (the scene changed since; Start the probes over to measure again)' : '';
+        lines.push({ text: `  measured cost   ${milliseconds(budget.fixedMs)} + ${budget.usPerProbe.toFixed(1)} µs per probe${stale}`, help: 'statsBudget' });
     }
     return lines;
 }

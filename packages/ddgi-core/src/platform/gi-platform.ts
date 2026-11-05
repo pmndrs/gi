@@ -13,7 +13,7 @@
  *    environment changed (`shade/hit-shading.ts`, T1.4);
  * 3. each technique's `encode`, fallbacks before the techniques stacked on them,
  *    with the work units its budget gives it this frame (budget v2:
- *    calibrated once with the GPU loaded, `work-budget.ts`).
+ *    calibrated after `prepare` with the GPU loaded, `work-budget.ts`).
  *
  * The host owns the device. The platform watches `device.lost`; afterwards
  * `isReady` is false and calls throw `GINotReadyError('device-lost')`, and the
@@ -49,7 +49,7 @@ import { checkComputeLimits } from './device-requirements.ts';
 import { PlatformHitShading } from './shade/hit-shading.ts';
 import { GpuTimer } from './timing/gpu-timer.ts';
 import { PlatformRayQueries } from './trace/ray-queries.ts';
-import { UnitCostMeter, WorkBudget, workFloorOf, type BudgetReport, type UnitCostModel } from './work-budget.ts';
+import { UnitCostMeter, WorkBudget, type BudgetReport, type UnitCostModel } from './work-budget.ts';
 
 
 // Budget v2 lives in work-budget.ts; these names were exported from here before it.
@@ -240,10 +240,11 @@ export class GIPlatformImpl implements GIPlatform {
         this.shade.encode(encoder, this.sceneCopy.environment, this.sceneCopy.environmentVersion);
 
         const techniques = this.encodeOrder();
-        // Calibrated costs no longer hold once the geometry rays see changed: a geometry change in
-        // the scene, or mesh trees still being built (rays don't see those meshes yet). Each
-        // technique's budget calibrates again once it is still (GEOMETRY_RECALIBRATION).
-        if (this.rays.building || upload.changes.regions.some((region) => region.reason === 'geometry')) {
+        // A calibration no longer describes the scene once the geometry rays see changed: a geometry
+        // change, or mesh trees still being built. It is only marked stale (the host re-calibrates
+        // at its next prepare or with recalibrate()): a burst during play would make frames heavier.
+        const sceneSettling = this.rays.building;
+        if (sceneSettling || upload.changes.regions.some((region) => region.reason === 'geometry')) {
             for (const technique of techniques) this.budgetFor(technique).geometryChanged();
         }
 
@@ -254,7 +255,7 @@ export class GIPlatformImpl implements GIPlatform {
             const timed = this.timer?.enabled === true;
             for (const technique of techniques) {
                 const budget = this.budgetFor(technique);
-                const units = budget.unitsFor({ frame: this.frame, deltaTime: frame.deltaTime, budget: frame.budget, shareMs, timed });
+                const units = budget.unitsFor({ frame: this.frame, deltaTime: frame.deltaTime, budget: frame.budget, shareMs, timed, sceneSettling });
                 const techniqueFrame: TechniqueFrame = {
                     frame: this.frame,
                     deltaTime: frame.deltaTime,
@@ -387,13 +388,9 @@ export class GIPlatformImpl implements GIPlatform {
         };
     }
 
-    /**
-     * Calibrate every technique's batch again at the next frame with a
-     * millisecond budget, as after a new `prepare` (budget v2). For a host
-     * that knows the GPU's load changed for good. Not in the `GIPlatform`
-     * contract yet (proposed in PROGRESS).
-     */
+    /** Measure every technique's batch again at the next millisecond frame (GIPlatform; budget v2). */
     recalibrate(): void {
+        this.checkUsable();
         for (const budget of this.budgets.values()) budget.recalibrate();
     }
 
@@ -411,7 +408,7 @@ export class GIPlatformImpl implements GIPlatform {
     private budgetFor(technique: GITechnique): WorkBudget {
         let budget = this.budgets.get(technique);
         if (!budget) {
-            budget = new WorkBudget(workFloorOf(technique), () => technique.msPerUnit);
+            budget = new WorkBudget(technique);
             this.budgets.set(technique, budget);
         }
         return budget;
@@ -450,7 +447,11 @@ function budgetCounters(report: BudgetReport): Record<string, number> {
         'floor units': report.floorUnits,
         'stepped down': report.steppedDown ? 1 : 0,
         'frames late': report.framesLate ? 1 : 0,
+        stale: report.stale ? 1 : 0,
+        // 1 after a burst until its batch has been timed over back-to-back frames (or for good, if the host runs none).
+        confirming: report.confirming ? 1 : 0,
     };
+    if (report.ceilingUnits !== undefined) counters['ceiling units'] = report.ceilingUnits;
     if (report.calibratedUnits !== undefined) counters['calibrated units'] = report.calibratedUnits;
     if (report.framesPerSecond !== undefined) counters['frames per second'] = report.framesPerSecond;
     const calibration = report.calibration;
@@ -459,9 +460,14 @@ function budgetCounters(report: BudgetReport): Record<string, number> {
         counters['calibration ms per unit'] = calibration.model.msPerUnit;
     }
     if (calibration) {
+        // How the calibration converged: its frames, the spread of the timings its batch came
+        // from, and the filler batches it ran to keep the GPU loaded. The GPU's clock itself
+        // can't be read from WebGPU.
         counters['calibration frames'] = calibration.frames;
-        // 0: the host ran the burst back to back. The GPU's clock itself can't be read from WebGPU.
-        counters['calibration frame ms'] = calibration.frameSeconds * 1000;
+        counters['calibration spread'] = calibration.spread;
+        counters['calibration filler frames'] = calibration.fillerFrames;
+        counters['calibration filler ms'] = calibration.fillerMs;
+        if (calibration.confirmFactor !== undefined) counters['calibration confirm factor'] = calibration.confirmFactor;
     }
     return counters;
 }

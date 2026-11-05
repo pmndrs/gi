@@ -21,6 +21,15 @@ Rules:
 
 ---
 
+## 2026-11-05 · T1.9b Budget v2 review fixes · implementer (opus), lead checked
+Did (working-tree files committed by the lead): `work-budget.ts` rewritten after the failed review; `gi-platform.ts`, the contract (`GITechnique.minUnitsPerFrame?`, `GIPlatform.recalibrate()`, `gpuMs` needs `gpuTiming`), DDGI imports only the contract, viewer warm-up and stats, `ddgi-batch-cost` page.
+- Calibration: each batch size needs agreeing timings (last 3 within 5%, their median within 2% of the 3 before); a missed verify drops the point on the other side and re-measures; 300 back-to-back frames confirm the batch. The page and viewer run calibration and judged frames with **two frames in flight**: waiting for each frame left the RTX about 40% busy and its clocks wandered up to 2×, the real cause of the 1.7× reads in the review.
+- No live bursts: a new `gpuMs` or cap is solved from the stored curve; a geometry change only marks the calibration stale (viewer: "Start the probes over" measures again); the first calibration waits for the mesh trees; filler only in the first calibration.
+- Saturation: steps down only when frames are late and DDGI is at most 1.5× its calibrated cost; recovery waits 3 s on time, stops at 0.9× the first late batch, then probes up.
+Verified: agent: lint, typecheck, `pnpm test` 867; RTX `ddgi-` (8) and three/spike (7) pages pass; Intel `ddgi-batch-cost` passes (cost reported). Lead: typecheck clean; `vitest packages/ddgi-core/src/platform apps/viewer/src/stats` 210 passed.
+Timing (one cooled RTX run, 66–68 C at start, headless Chrome 156; **to re-run** as 3 runs under the new timing rule, DECISIONS): Cornell 1,728 probes (all) 1.84 ms; two-room 819, 1.99 ms; Sponza 276, 2.10 ms (`clock_low`, power limit); Bistro exterior 108, 2.03 ms. SM medians 1,567 / 1,665 / 1,477 / 1,590 MHz. Rows `note/budget_v2,1` in 88dbe45 are from the version the review failed.
+Not verified: the 3-run timing set (paused for the fan-control reinstall); 30 / 120 Hz behaviour on the Intel.
+
 ## 2026-11-05 · T1.9 Sponza accuracy check · implementer (opus), lead checked
 Did (5434142): `SceneSync.sentMaterial(material)` returns the GI descriptor the platform got; page `ddgi-sponza-accuracy` (manual) with `run.ts` (writes `gi-materials.json`, EXRs and comparisons; `--table` prints the three scenes); `render.py --materials-json` (constant colours, alpha 1, no normal maps, checked before rendering) and a GI composite (DECISIONS: indirect + direct − lights-only direct). Convergence: 16 warm-up passes, then blocks of 32 full passes at hysteresis 0.97 until the mean moves < 0.5% between blocks (2–12 blocks); fixed 3,885 probes a frame.
 Verified (agent): RTX 3060 and Intel UHD. Cycles: Blender 4.5, OptiX, 8,192 samples, 640×360, 321 s, under the lock; two seeds give 8×8-block noise 0.51% (per pixel 4.1%). Direct light agrees with Cycles to 0.02% (0.011139 against 0.011137), so the excess below is DDGI's.
