@@ -9,6 +9,7 @@ import {
     InstancedMesh,
     Matrix4,
     Mesh,
+    MeshPhysicalMaterial,
     MeshStandardMaterial,
     PointLight,
     Scene,
@@ -473,6 +474,84 @@ describe('the walk', () => {
     it('rejects budgets below one', () => {
         expect(() => new SceneSync(api, { device: NO_DEVICE, objectsPerFrame: 0 })).toThrow(RangeError);
         expect(() => new SceneSync(api, { device: NO_DEVICE, editChecksPerFrame: 0 })).toThrow(RangeError);
+    });
+});
+
+describe('see-through meshes', () => {
+    /** contributesToGI of each instance, by label (the mesh's name). */
+    function contributions(): Record<string, boolean | undefined> {
+        const result: Record<string, boolean | undefined> = {};
+        for (const instance of api.instances.values()) result[instance.label ?? '?'] = instance.contributesToGI;
+        return result;
+    }
+
+    /** A decal as GLTFLoader makes glTF `alphaMode: BLEND` with no metallicFactor (Sponza's dirt_decal). */
+    function blendedDecal(): MeshStandardMaterial {
+        return new MeshStandardMaterial({ transparent: true, metalness: 1, name: 'dirt_decal' });
+    }
+
+    it('leaves out a mesh whose materials all let light through, and keeps opaque ones', () => {
+        const scene = new Scene();
+        const decalMaterial = blendedDecal();
+        const glass = new MeshPhysicalMaterial({ transmission: 1 });
+        scene.add(
+            Object.assign(new Mesh(new BoxGeometry(), decalMaterial), { name: 'decal' }),
+            Object.assign(new Mesh(new BoxGeometry(), glass), { name: 'pane' }),
+            Object.assign(new Mesh(new BoxGeometry(), new MeshStandardMaterial()), { name: 'wall' }),
+        );
+        frame(scene);
+        expect(contributions()).toEqual({ decal: false, pane: false, wall: true });
+        expect(sync.sentMaterial(decalMaterial)?.blocksLight).toBe(false);
+        expect(warnings).toEqual([]);
+    });
+
+    it('keeps a mesh that mixes blocking and see-through materials, with one warning naming it', () => {
+        const scene = new Scene();
+        // BoxGeometry has six groups; with two materials, face 1 is the decal and the rest are opaque.
+        const mixed = new Mesh(new BoxGeometry(), [new MeshStandardMaterial(), blendedDecal()]);
+        mixed.name = 'facade';
+        scene.add(mixed);
+        frame(scene);
+        expect(contributions()).toEqual({ facade: true });
+        expect(warnings).toHaveLength(1);
+        expect(warnings[0]).toContain('"facade"');
+        frame(scene);
+        expect(warnings).toHaveLength(1);
+    });
+
+    it('keeps a blended material in GI when it opts in', () => {
+        const scene = new Scene();
+        const decalMaterial = blendedDecal();
+        decalMaterial.userData.giBlocksLight = true;
+        scene.add(Object.assign(new Mesh(new BoxGeometry(), decalMaterial), { name: 'decal' }));
+        frame(scene);
+        expect(contributions()).toEqual({ decal: true });
+        expect(sync.sentMaterial(decalMaterial)?.blocksLight).toBe(true);
+    });
+
+    it('follows a material edit or swap that makes a mesh see-through or opaque', () => {
+        const scene = new Scene();
+        const material = new MeshStandardMaterial();
+        const mesh = Object.assign(new Mesh(new BoxGeometry(), material), { name: 'pane' });
+        scene.add(mesh);
+        frame(scene);
+        expect(contributions()).toEqual({ pane: true });
+        // An unmarked edit: the material check, then the object rotation, pick it up.
+        material.transparent = true;
+        frame(scene);
+        frame(scene);
+        expect(contributions()).toEqual({ pane: false });
+        // Marked: at once.
+        material.userData.giBlocksLight = true;
+        sync.markChanged(mesh);
+        // New instances only: the mesh (and its tree) and the material are kept.
+        expect(frame(scene)).toEqual(['updateMaterial', 'destroyInstance', 'createInstance']);
+        expect(contributions()).toEqual({ pane: true });
+        // A swapped material, found by the walk.
+        mesh.material = blendedDecal();
+        frame(scene);
+        expect(contributions()).toEqual({ pane: false });
+        expect(api.instances.size).toBe(1);
     });
 });
 

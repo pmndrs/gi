@@ -15,6 +15,13 @@
  *   past `count` are hidden). Visibility includes the parents', as three
  *   draws it. `userData.giContributes` says whether an object takes part in GI
  *   rays (user-data.ts).
+ * - **See-through meshes:** the core's tracer treats every surface as opaque
+ *   until M4 (it doesn't read `blocksLight` per triangle yet), so a mesh whose
+ *   materials *all* let light through (alpha-blended, glass, hidden; convert.ts)
+ *   is sent with `contributesToGI: false`. Otherwise a decal with no diffuse
+ *   colour would be a black sheet in GI. A mesh that mixes blocking and
+ *   see-through materials stays in GI, all of it opaque, with a one-time
+ *   warning naming it.
  * - **Lights:** directional, point and spot, with `userData.giLightGroup`.
  *   Hidden lights are sent with intensity 0.
  * - **Environment:** environment.ts, fed with the `SkyMesh` and the sun found.
@@ -140,7 +147,15 @@ interface ObjectRecord {
     matrixSlot: number;
     /** Per instance: last visibility sent. */
     readonly visible: boolean[];
+    /** The object's GI flag (`userData.giContributes`, user-data.ts) when it was created. */
     readonly contributes: boolean;
+    /**
+     * Every material let light through (`blocksLight: false`) when it was
+     * created, so its instances are sent with `contributesToGI: false` (see
+     * the file header). Compared with the materials' sent descriptors to
+     * notice a change ({@link seeThroughChanged}).
+     */
+    readonly seeThrough: boolean;
     /** Fixed facts about the object, read once. */
     readonly instanced: boolean;
     readonly skinned: boolean;
@@ -587,6 +602,8 @@ export class SceneSync {
             // Edits too, now rather than when the round robin gets to them.
             this.checkGeometry(record.geometry);
             for (const material of record.materials) this.checkMaterial(material);
+            // An edit that made the mesh see-through, or no longer see-through, changes its instances' GI flag.
+            if (seeThroughChanged(record)) this.restartObject(record, visible);
         }
         for (const child of object.children) this.visitMarked(child, visible && child.visible);
     }
@@ -635,18 +652,28 @@ export class SceneSync {
         } else {
             record = this.objects.get(mesh);
         }
-        if (record && (record.geometryObject !== mesh.geometry || (source !== 'walk' && record.contributes !== contributesFlag(mesh, record.skinned)))) {
-            // A new geometry or a changed GI flag: the contract has no setter for either, so start over.
+        if (record && record.geometryObject !== mesh.geometry) {
+            // A new geometry: the contract has no setter for an instance's mesh, so start over.
             this.destroyObject(record);
             record = undefined;
+        } else if (record && source !== 'walk' && (record.contributes !== contributesFlag(mesh, record.skinned) || seeThroughChanged(record))) {
+            // A changed GI flag, or materials that changed whether the mesh blocks any light: new instances.
+            record = this.restartObject(record, visible);
+            if (!record) return;
         }
         if (!record) {
             record = this.createObject(mesh, visible, contributesToGI(mesh));
             if (!record) return;
             if (source !== 'walk') this.makeHot(record);
         } else {
-            if (mesh.material !== record.materialKey || Array.isArray(mesh.material)) this.checkMaterials(record);
-            if (this.checkInstances(record, visible) || source === 'marked') this.makeHot(record);
+            const materialsChanged = (mesh.material !== record.materialKey || Array.isArray(mesh.material)) && this.checkMaterials(record);
+            if (materialsChanged && seeThroughChanged(record)) {
+                // New materials that change whether the mesh blocks any light: its instances' GI flag changes, so start over.
+                record = this.restartObject(record, visible);
+                if (!record) return;
+            } else if (this.checkInstances(record, visible) || source === 'marked') {
+                this.makeHot(record);
+            }
         }
         record.seenPass = this.pass;
         if (source === 'walk') this.passOrder[this.passCursor++] = record;
@@ -672,6 +699,13 @@ export class SceneSync {
             materials.push(this.acquireMaterial(material));
         }
         const instanced = (mesh as InstancedMesh).isInstancedMesh ? (mesh as InstancedMesh) : null;
+        const seeThrough = seeThroughOnly(materials);
+        if (contributes && !seeThrough && materials.some((material) => material.sent.blocksLight === false)) {
+            this.warnOnce(
+                `mesh "${mesh.name || geometryRecord.geometry.name || mesh.uuid}" mixes materials that block light with see-through ones (alpha-blended, glass or hidden); ` +
+                    'GI treats all of it as opaque until see-through surfaces are traced (M4).',
+            );
+        }
         const record: ObjectRecord = {
             object: mesh,
             geometry: geometryRecord,
@@ -683,6 +717,7 @@ export class SceneSync {
             matrixSlot: -1,
             visible: [],
             contributes,
+            seeThrough,
             instanced: instanced !== null,
             skinned: (mesh as Mesh & { isSkinnedMesh?: boolean }).isSkinnedMesh === true,
             parentMatrix: new Float64Array(MATRIX_FLOATS),
@@ -711,13 +746,33 @@ export class SceneSync {
             mesh: record.geometry.handle,
             materials: record.materials.map((material) => material.handle),
             transform,
-            contributesToGI: record.contributes,
+            contributesToGI: record.contributes && !record.seeThrough,
             visible,
             label: record.object.name || undefined,
         });
         record.instances.push(handle);
         record.visible.push(visible);
         this.report.created++;
+    }
+
+    /**
+     * Destroys and re-creates an object whose instances' GI flag changed (the
+     * contract has no setter for `contributesToGI`); the new record is hot.
+     * Its platform mesh and materials are held across the restart, so the
+     * mesh's tree isn't rebuilt and textures aren't uploaded again.
+     */
+    private restartObject(record: ObjectRecord, visible: boolean): ObjectRecord | undefined {
+        const mesh = record.object;
+        const geometry = record.geometry;
+        const materials = record.materials;
+        geometry.users++;
+        for (const material of materials) material.users++;
+        this.destroyObject(record);
+        const restarted = this.createObject(mesh, visible, contributesToGI(mesh));
+        this.releaseGeometry(geometry);
+        for (const material of materials) this.releaseMaterial(material);
+        if (restarted) this.makeHot(restarted);
+        return restarted;
     }
 
     private destroyObject(record: ObjectRecord): void {
@@ -733,8 +788,8 @@ export class SceneSync {
         this.releaseGeometry(record.geometry);
     }
 
-    /** Material per slot by identity; a changed slot means `setMaterials` on every instance. */
-    private checkMaterials(record: ObjectRecord): void {
+    /** Material per slot by identity; a changed slot means `setMaterials` on every instance. Returns whether it changed. */
+    private checkMaterials(record: ObjectRecord): boolean {
         const mesh = record.object;
         const materials = record.materials;
         record.materialKey = mesh.material;
@@ -743,16 +798,18 @@ export class SceneSync {
             const material = this.materialForSlot(mesh, slot);
             if (material && material !== materials[slot].material) changed = true;
         }
-        if (!changed) return;
-        // Acquire the new list before releasing the old, so a material in both keeps its platform copy.
+        if (!changed) return false;
+        // Acquire the new list before releasing the old, so a material in both keeps its platform copy; and point the
+        // instances at the new list before releasing, since the platform refuses to destroy a material instances still use.
         const next: MaterialRecord[] = [];
         for (let slot = 0; slot < materials.length; slot++) {
             next.push(this.acquireMaterial(this.materialForSlot(mesh, slot) ?? materials[slot].material));
         }
-        for (const material of materials) this.releaseMaterial(material);
         record.materials = next;
         const handles = next.map((material) => material.handle);
         for (const instance of record.instances) this.api.setMaterials(instance, handles);
+        for (const material of materials) this.releaseMaterial(material);
+        return true;
     }
 
     /** Transform and visibility; returns whether anything was sent. */
@@ -896,13 +953,6 @@ export class SceneSync {
 
     /** This frame's share of the edit checks: `editChecksPerFrame` geometries, materials and objects' GI flags, round robin. */
     private checkEdits(): void {
-        const objects = this.objectList;
-        for (let check = 0; check < Math.min(this.editChecksPerFrame, objects.length); check++) {
-            this.objectCursor = (this.objectCursor + 1) % objects.length;
-            const record = objects[this.objectCursor];
-            // A changed flag: start the object over, through the marked path, next update.
-            if (record.contributes !== contributesFlag(record.object, record.skinned)) this.marked.add(record.object);
-        }
         const geometries = this.geometryList;
         for (let check = 0; check < Math.min(this.editChecksPerFrame, geometries.length); check++) {
             this.geometryCursor = (this.geometryCursor + 1) % geometries.length;
@@ -912,6 +962,14 @@ export class SceneSync {
         for (let check = 0; check < Math.min(this.editChecksPerFrame, materials.length); check++) {
             this.materialCursor = (this.materialCursor + 1) % materials.length;
             this.checkMaterial(materials[this.materialCursor]);
+        }
+        const objects = this.objectList;
+        for (let check = 0; check < Math.min(this.editChecksPerFrame, objects.length); check++) {
+            this.objectCursor = (this.objectCursor + 1) % objects.length;
+            const record = objects[this.objectCursor];
+            // A changed flag, or edited materials that changed whether it blocks any light: start the object over, through the
+            // marked path, next update. (After the material checks, so an edit they found this frame is acted on next update.)
+            if (record.contributes !== contributesFlag(record.object, record.skinned) || seeThroughChanged(record)) this.marked.add(record.object);
         }
     }
 
@@ -1122,6 +1180,17 @@ function removeFromList<Entry extends { listIndex: number }>(list: Entry[], entr
  * comparisons read memory in order (meshes take slots in the order the walk
  * first meets them) instead of a scattered array per mesh.
  */
+/** Whether every material lets light through (`blocksLight: false`), as last sent. */
+function seeThroughOnly(materials: readonly MaterialRecord[]): boolean {
+    for (const material of materials) if (material.sent.blocksLight !== false) return false;
+    return true;
+}
+
+/** Whether the object's materials, as last sent, no longer match the see-through state its instances were made with. */
+function seeThroughChanged(record: ObjectRecord): boolean {
+    return record.seeThrough !== seeThroughOnly(record.materials);
+}
+
 class MatrixPool {
     values = new Float64Array(64 * MATRIX_FLOATS);
     private readonly free: number[] = [];

@@ -123,7 +123,13 @@ This is the mirroring on its own, for hosts that call `gi.encode` themselves.
 - Albedo is colour × (1 − metalness): metals bounce no diffuse light.
 - Emission is emissive × emissiveIntensity.
 - `alphaTest` becomes the alpha cutoff.
-- Glass (`transmission`) and mostly see-through `transparent` materials let light through.
+- These materials let light through (`blocksLight: false`):
+  - glass (`transmission` above 0);
+  - alpha-blended materials: `transparent` with no `alphaTest`, at any `opacity`. glTF's `alphaMode: BLEND` loads this way, so decals do too;
+  - alpha-tested `transparent` materials with `opacity` below 0.5;
+  - hidden materials (`visible = false`).
+- To keep a see-through material blocking and bouncing light like an opaque one, set `material.userData.giBlocksLight = true`. A blended one with a texture then gets an alpha cutoff of 0.5. This doesn't bring back a hidden material.
+- glTF `alphaMode: MASK` (`alphaTest`) is a cutout, and it blocks light.
 - Every material is double-sided for GI, whatever three's `side`. Back-face hits are how GI finds probes inside walls, and most glTF materials are `FrontSide`. To opt one out, set `material.userData.giSingleSided = true`.
 - Textures go to the platform as handles. The core doesn't sample textures yet (that comes in M4), so until then the adapter multiplies by texture averages, worked out once per texture:
   - The GI albedo is the colour × the average of map texel × (1 − metalness × metalnessMap texel). three reads metalness from the map's blue channel, as glTF's metallicRoughness stores it.
@@ -148,6 +154,10 @@ This is the mirroring on its own, for hosts that call `gi.encode` themselves.
 
 **Per object.** Set `userData.giContributes = false` to keep an object out of GI's rays. It still receives GI. Skinned meshes are left out unless they set it to `true`.
 
+**See-through meshes.** Until M4, GI's rays treat every surface as opaque: they don't yet skip see-through materials triangle by triangle. So the adapter leaves out of GI's rays any mesh whose materials **all** let light through. Such a mesh still receives GI. Without this, a decal with no diffuse colour, such as Sponza's `dirt_decal`, would be a black sheet that darkens the room.
+- A mesh that mixes blocking and see-through materials stays in GI, and all of it is treated as opaque. You get a one-time warning naming it.
+- A material edit or swap that changes this is picked up like any other edit (see below).
+
 ## What isn't mirrored
 
 You get a one-time warning for:
@@ -161,6 +171,7 @@ Not mirrored, with no warning:
 - Morph targets and skinning. GI uses the bind pose.
 - The x and z parts of an environment rotation.
 - Render-target and compressed textures. Their pixels can't be read.
+- See-through parts of a mesh that also has opaque materials. They are treated as opaque (a warning names the mesh; see "See-through meshes").
 
 ## How changes are found, and how late
 
@@ -171,7 +182,7 @@ The adapter does a fixed amount of work per frame instead:
 - **The walk.** Each frame checks `objectsPerFrame` objects for new, moved, hidden or removed ones, then carries on where it stopped. A whole pass takes `ceil(objects / objectsPerFrame)` frames. Removals can take up to two passes.
 - **The hot list.** Once an object is seen moving, it is checked every frame until it has been still for 60 frames. Continuous motion is therefore sent every frame.
 - **`markChanged(object)`.** Tells the adapter something changed (added, moved, edited or removed). The object and everything under it are picked up in the next `update`. Use it when you move things and want no delay.
-- **Edits.** Each frame, `editChecksPerFrame` geometries, materials and objects are checked for edits: geometry, material values and the `giContributes` flag.
+- **Edits.** Each frame, `editChecksPerFrame` geometries, materials and objects are checked for edits: geometry, material values, the `giContributes` flag, and whether a mesh's materials still all let light through.
 - **Lights** are checked every frame.
 
 The first pass over a new scene is done in full, so GI has the whole scene from the first frame.

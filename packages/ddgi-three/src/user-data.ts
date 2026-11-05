@@ -13,6 +13,12 @@
  *   double-sided for GI whatever three's `side`, because back-face hits are
  *   how probes find out they sit inside geometry (scene contract,
  *   `doubleSided`), and most glTF materials are `FrontSide`.
+ * - `material.userData.giBlocksLight` (boolean, on a *material*): `true` makes
+ *   a material three draws see-through (alpha-blended, `transmission`, low
+ *   `opacity`) block and bounce light for GI like an opaque one. Without it,
+ *   such materials let light through (convert.ts, `materialDescriptor`), and
+ *   a mesh made only of them is left out of GI's rays (scene-sync.ts). Only
+ *   `true` is read.
  *
  * The flag is read from the object itself, not inherited from its parents.
  */
@@ -23,6 +29,7 @@ export const GI_USER_DATA = {
     contributes: 'giContributes',
     lightGroup: 'giLightGroup',
     singleSided: 'giSingleSided',
+    blocksLight: 'giBlocksLight',
 } as const;
 
 /** Light groups the platform has (scene contract: 0..3). */
@@ -41,6 +48,11 @@ export function contributesFlag(object: Object3D, skinned: boolean): boolean {
 /** Whether a material opted out of double-sided GI (`userData.giSingleSided === true`). */
 export function singleSidedForGI(userData: Record<string, unknown>): boolean {
     return userData[GI_USER_DATA.singleSided] === true;
+}
+
+/** Whether a see-through material opted in to blocking light for GI (`userData.giBlocksLight === true`). */
+export function blocksLightOptIn(userData: Record<string, unknown>): boolean {
+    return userData[GI_USER_DATA.blocksLight] === true;
 }
 
 /** The light group from userData, or 0 when absent or not a valid group. */

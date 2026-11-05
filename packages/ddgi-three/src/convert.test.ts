@@ -79,13 +79,52 @@ describe('the rest of the material', () => {
         expect(materialDescriptor(new MeshPhysicalMaterial({ transmission: 1 }), noTextures).blocksLight).toBe(false);
         expect(materialDescriptor(new MeshStandardMaterial({ transparent: true, opacity: 0.2 }), noTextures).blocksLight).toBe(false);
         expect(materialDescriptor(new MeshStandardMaterial({ visible: false }), noTextures).blocksLight).toBe(false);
-        expect(materialDescriptor(new MeshStandardMaterial({ transparent: true, opacity: 0.9 }), noTextures).blocksLight).toBe(true);
         expect(materialDescriptor(new MeshStandardMaterial(), noTextures).blocksLight).toBe(true);
     });
 
-    it('cuts blended textured materials at half alpha', () => {
-        const material = new MeshStandardMaterial({ transparent: true, map: new Texture() });
-        expect(materialDescriptor(material, () => HANDLE).alphaCutoff).toBe(0.5);
+    it('lets light through alpha-blended materials at any opacity (glTF BLEND), but not alpha-tested ones', () => {
+        // Sponza's dirt_decal as GLTFLoader makes it: BLEND, no metallicFactor (so metalness 1), a texture.
+        const decal = new MeshStandardMaterial({ transparent: true, metalness: 1, map: new Texture() });
+        const sent = materialDescriptor(decal, () => HANDLE);
+        expect(sent.blocksLight).toBe(false);
+        expect(sent.alphaCutoff).toBeUndefined();
+        expect(materialDescriptor(new MeshStandardMaterial({ transparent: true, opacity: 0.9 }), noTextures).blocksLight).toBe(false);
+        // glTF MASK: alpha-tested, so a cutout that blocks light, transparent or not; mostly see-through still lets it pass.
+        expect(materialDescriptor(new MeshStandardMaterial({ alphaTest: 0.5 }), noTextures).blocksLight).toBe(true);
+        expect(materialDescriptor(new MeshStandardMaterial({ transparent: true, alphaTest: 0.5 }), noTextures).blocksLight).toBe(true);
+        expect(materialDescriptor(new MeshStandardMaterial({ transparent: true, alphaTest: 0.5, opacity: 0.2 }), noTextures).blocksLight).toBe(false);
+    });
+
+    it('keeps a see-through material blocking when it opts in, cutting a textured blended one at half alpha', () => {
+        const decal = new MeshStandardMaterial({ transparent: true, map: new Texture() });
+        decal.userData.giBlocksLight = true;
+        const sent = materialDescriptor(decal, () => HANDLE);
+        expect(sent.blocksLight).toBe(true);
+        expect(sent.alphaCutoff).toBe(0.5);
+        const glass = new MeshPhysicalMaterial({ transmission: 1 });
+        glass.userData.giBlocksLight = true;
+        expect(materialDescriptor(glass, noTextures).blocksLight).toBe(true);
+        // Untextured: no cutoff to make. Hidden: the opt-in doesn't bring it back.
+        const plain = new MeshStandardMaterial({ transparent: true, opacity: 0.2 });
+        plain.userData.giBlocksLight = true;
+        expect(materialDescriptor(plain, noTextures)).toMatchObject({ blocksLight: true, alphaCutoff: undefined });
+        const hidden = new MeshStandardMaterial({ transparent: true, visible: false });
+        hidden.userData.giBlocksLight = true;
+        expect(materialDescriptor(hidden, noTextures).blocksLight).toBe(false);
+        // Only true is read.
+        const notTrue = new MeshStandardMaterial({ transparent: true });
+        notTrue.userData.giBlocksLight = 'yes';
+        expect(materialDescriptor(notTrue, noTextures).blocksLight).toBe(false);
+    });
+
+    it('sees the blocks-light opt-in change', () => {
+        const material = new MeshStandardMaterial({ transparent: true });
+        const before = new MaterialSnapshot();
+        before.read(material);
+        material.userData.giBlocksLight = true;
+        const after = new MaterialSnapshot();
+        after.read(material);
+        expect(after.equals(before)).toBe(false);
     });
 
     it('makes every material double-sided for GI whatever its side, unless it opts out', () => {

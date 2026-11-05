@@ -40,7 +40,7 @@ import type {
     UvWrap,
     Vec3,
 } from '@pmndrs/ddgi-core';
-import { lightGroup, singleSidedForGI } from './user-data.ts';
+import { blocksLightOptIn, lightGroup, singleSidedForGI } from './user-data.ts';
 
 // ---------------------------------------------------------------------------
 // Geometry
@@ -230,16 +230,18 @@ export function isSrgbTexture(texture: Texture): boolean {
 // ---------------------------------------------------------------------------
 
 /**
- * Below this `opacity`, a `transparent` material lets light through for GI
- * (`blocksLight: false`): mostly see-through surfaces such as tinted glass
- * would otherwise cast full shadows and bounce like walls.
+ * Below this `opacity`, a `transparent` material that is alpha-tested
+ * (`alphaTest` > 0) still lets light through for GI (`blocksLight: false`):
+ * a mostly see-through cutout would otherwise cast full shadows and bounce
+ * like a wall. (Alpha-blended materials let light through at any opacity.)
  */
 export const SEE_THROUGH_OPACITY = 0.5;
 
 /**
- * The alpha cutoff given to a `transparent` material with an albedo texture
- * and no `alphaTest` of its own: alpha-blended foliage and decals block light
- * where they are mostly opaque and let it through where they are mostly not.
+ * The alpha cutoff given to an alpha-blended material with an albedo texture
+ * that opted in to blocking light (`userData.giBlocksLight`): foliage and
+ * decals drawn blended then block light where they are mostly opaque and let
+ * it through where they are mostly not (once the core samples textures, M4).
  */
 export const BLENDED_ALPHA_CUTOFF = 0.5;
 
@@ -289,9 +291,12 @@ export function giAlbedo(material: Material): ColorRGB | undefined {
  * - emission: `emissive` and `emissiveIntensity`, passed separately (the
  *   platform multiplies them);
  * - cutout: `alphaTest` > 0 becomes `alphaCutoff`;
- * - light passes through (`blocksLight: false`) for `transmission` > 0, for
- *   `transparent` with `opacity` below {@link SEE_THROUGH_OPACITY}, and for
- *   materials with `visible = false`;
+ * - light passes through (`blocksLight: false`) for `transmission` > 0
+ *   (glass), for alpha-blended materials (`transparent` and no `alphaTest`;
+ *   glTF's `alphaMode: BLEND` loads that way), for alpha-tested `transparent`
+ *   ones with `opacity` below {@link SEE_THROUGH_OPACITY}, and for materials
+ *   with `visible = false`. `userData.giBlocksLight = true` keeps a
+ *   see-through material blocking (user-data.ts), but not a hidden one;
  * - double-sided whatever three's `side` (back-face hits are how probes find
  *   out they sit inside geometry), unless `material.userData.giSingleSided`;
  * - textures (`map`, `emissiveMap`) as handles from `textureHandle`, with
@@ -322,18 +327,32 @@ export function sameUvMapping(a: Texture, b: Texture): boolean {
     return true;
 }
 
+/**
+ * Whether three draws the material see-through, so GI should let light pass
+ * (before the `giBlocksLight` opt-in):
+ * - glass: `transmission` > 0;
+ * - alpha-blended: `transparent` and not alpha-tested. Decals, glass panes and
+ *   fading objects are drawn this way; tracing them as opaque turns a decal
+ *   with no diffuse colour into a black sheet (Sponza's `dirt_decal`);
+ * - alpha-tested and `transparent` but mostly see-through: `opacity` below
+ *   {@link SEE_THROUGH_OPACITY}.
+ */
+function seeThroughForGI(material: Material, alphaTested: boolean, transmission: number | undefined): boolean {
+    if (typeof transmission === 'number' && transmission > 0) return true;
+    if (!material.transparent) return false;
+    return !alphaTested || material.opacity < SEE_THROUGH_OPACITY;
+}
+
 export function materialDescriptor(material: Material, textureHandle: (texture: Texture) => TextureHandle | undefined, averages?: TextureAverages): MaterialDescriptor {
     const { color, emissive, emissiveIntensity, transmission, map, emissiveMap, metalnessMap } = fields(material);
     const albedoTexture = map ? textureHandle(map) : undefined;
     const emissiveTexture = emissiveMap ? textureHandle(emissiveMap) : undefined;
 
-    let alphaCutoff: number | undefined = material.alphaTest > 0 ? Math.min(material.alphaTest, 1) : undefined;
-    let blocksLight = material.visible;
-    if (typeof transmission === 'number' && transmission > 0) blocksLight = false;
-    if (material.transparent) {
-        if (material.opacity < SEE_THROUGH_OPACITY) blocksLight = false;
-        else if (alphaCutoff === undefined && albedoTexture !== undefined) alphaCutoff = BLENDED_ALPHA_CUTOFF;
-    }
+    const alphaTested = material.alphaTest > 0;
+    let alphaCutoff: number | undefined = alphaTested ? Math.min(material.alphaTest, 1) : undefined;
+    const blocksLight = material.visible && (blocksLightOptIn(material.userData) || !seeThroughForGI(material, alphaTested, transmission));
+    // An opted-in blended material with a texture: cut it at half alpha, so its clear parts still let light through (M4).
+    if (blocksLight && material.transparent && !alphaTested && albedoTexture !== undefined) alphaCutoff = BLENDED_ALPHA_CUTOFF;
 
     // Textures folded in by their averages while the core samples none (texture-average.ts; remove in M4).
     // The albedo map and the metalness map (three: metalness × metalnessMap.b) together give what
@@ -386,7 +405,7 @@ export function usesUvChannel1(material: Material): boolean {
 /** Numbers a {@link MaterialSnapshot} keeps per texture (see `readTextureNumbers`). */
 const TEXTURE_SNAPSHOT_NUMBERS = 12;
 /** Where the texture numbers start in a snapshot; the material's own numbers come first. */
-const FIRST_TEXTURE_SNAPSHOT_NUMBER = 14;
+const FIRST_TEXTURE_SNAPSHOT_NUMBER = 15;
 
 export class MaterialSnapshot {
     readonly numbers = new Float64Array(FIRST_TEXTURE_SNAPSHOT_NUMBER + 3 * TEXTURE_SNAPSHOT_NUMBERS);
@@ -412,6 +431,7 @@ export class MaterialSnapshot {
         transmission: 11,
         singleSided: 12,
         visible: 13,
+        blocksLightOptIn: 14,
         /** Then the texture numbers for `map`, then the same for `emissiveMap`. */
         mapFirst: FIRST_TEXTURE_SNAPSHOT_NUMBER,
     } as const;
@@ -434,6 +454,7 @@ export class MaterialSnapshot {
         values[slot.transmission] = typeof transmission === 'number' ? transmission : 0;
         values[slot.singleSided] = singleSidedForGI(material.userData) ? 1 : 0;
         values[slot.visible] = material.visible ? 1 : 0;
+        values[slot.blocksLightOptIn] = blocksLightOptIn(material.userData) ? 1 : 0;
         this.map = map ?? null;
         this.emissiveMap = emissiveMap ?? null;
         this.metalnessMap = fields(material).metalnessMap ?? null;
