@@ -251,7 +251,14 @@ Two locks, both folders in `$TEMP`, with the same protocol and code (`tools/refe
 
 So a GPU-timed run may overlap a CPU render; a CPU-timed one may not.
 
-**GPU timing waits for the GPU to cool.** After taking its lock and before starting the command, `run` waits until nvidia-smi reads the GPU below 70 C (pass/fail timing starts there, DECISIONS 2026-11-05), checking every 5 s. It prints the temperature at the start and when it is cool. `--cool-below <C>` changes the limit. After 15 minutes (`--cool-wait-max-minutes`) it runs anyway with a warning. Without nvidia-smi there is no wait. `--no-cool-wait` skips it for jobs that time nothing on the GPU (correctness checks, renders), and `--lock cpu` never waits. The clock summary records the start temperature (`start`), and the to-csv scripts write `note/start_temp_c`, plus `note/start_hot,1` for a start at 70 C or more.
+**GPU timing waits for the GPU to cool.** After taking its lock and before starting the command, `run` waits until nvidia-smi reads the GPU below 70 C (pass/fail timing starts there, DECISIONS 2026-11-05), checking every 5 s. It prints the temperature at the start and when it is cool. `--cool-below <C>` changes the limit. After 15 minutes (`--cool-wait-max-minutes`) it runs anyway with a warning. Without nvidia-smi there is no wait. `--no-cool-wait` skips it for jobs that time nothing on the GPU (correctness checks, renders), and `--lock cpu` never waits. The clock summary records the start temperature (`start`).
+
+**The timing verdict** (the clock rule, DECISIONS 2026-11-05). While the command runs, `run` samples nvidia-smi every 200 ms. At the end it prints one line:
+- **VALID:** the run started below 70 C and fewer than 5% of its loaded samples (70% GPU use or more) show thermal throttling.
+- **INVALID:** a hot start, or 5% or more thermal samples; the line says which.
+- **NO VERDICT:** fewer than 5 loaded samples.
+
+There is no MHz bar; the clock median is printed for information. The to-csv scripts write the same verdict as `note/timing_valid,1|0` (and `note/timing_no_verdict,1`), with `note/thermal_share` and `note/start_temp_c`.
 
 ```
 node tools/reference/bench-lock.ts status                               # who holds each lock; exit 0 free, 3 held, 4 held but stale (GPU lock, or --lock cpu)

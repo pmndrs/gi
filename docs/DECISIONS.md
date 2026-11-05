@@ -32,7 +32,7 @@ Settled choices, newest first. Each entry is short: the decision, why, and what 
   - **The M5 Pro check of the GPU builders** is Dennis's, on the Mac, later: "assume it will work and what doesnt an agent then can resolve".
 - **Accepted by Dennis 2026-11-05: how pass/fail timing is taken on the laptop** ("I go with your reccs on pass/fail state", via the parent session).
   - *Why:* the clock investigation found that a sustained GPU-bound load heats the RTX 3060 Laptop to its 87 C target in about 20 s, after which it holds 450–600 MHz, 3–4× slower than a cool card (NOTES; `note/clock_low`).
-  - **M1's performance targets are judged on timed sections of 10–15 s, started below 70 C, back to back, with the SM clock median at 1,500 MHz or more.** A row flagged `note/clock_low,1` can't pass or fail a target.
+  - **M1's performance targets are judged on timed sections of 10–15 s, started below 70 C, back to back.** *Superseded the same day:* the original "SM clock median at 1,500 MHz or more" bar was replaced by the clock rule above (fewer than 5% thermal samples, no MHz bar). Rows before that carry `note/clock_low`; rows after carry `note/timing_valid`.
   - **The sustained, heat-limited numbers are reported alongside, for information.**
   - **At runtime, Budget v2's saturation step-down handles the hot state.**
   - The laptop's fan control (Armoury Crate) wasn't running. Dennis is reinstalling it, and the laptop is now on a stand with a fan. Once that has settled, one sustained loaded Sponza run checks whether the clocks now hold; if they do, the sustained numbers may come closer to the cool ones.

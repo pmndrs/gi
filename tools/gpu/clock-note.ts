@@ -1,11 +1,16 @@
 /**
- * The NVIDIA GPU's clock during a run, and how it becomes CSV rows.
+ * The NVIDIA GPU's clock during a run, whether the run counts as valid timing, and how both
+ * become CSV rows.
  *
- * Why: the RTX 3060's clock was found locked at 1200 MHz (max 2100) after a day of timings
- * (docs/NOTES.md). `node tools/reference/bench-lock.ts run` now samples `nvidia-smi` about
- * once a second while its command runs and keeps a summary in a small JSON file (rewritten
- * after every sample, so a tool running inside the command can already read it). The
- * to-csv scripts and tools/native/bench.ps1 read that file and add `note/sm_clock_mhz` rows.
+ * Why: the RTX 3060 Laptop throttles. A sustained GPU-bound load heats it to its 87 C target in
+ * about 20 s, and then it holds about 500 MHz (docs/NOTES.md). `node tools/reference/bench-lock.ts
+ * run` waits for the GPU to cool below 70 C, then samples `nvidia-smi` every 200 ms while its
+ * command runs and keeps a summary in a small JSON file (rewritten after every sample, so a tool
+ * running inside the command can already read it). The to-csv scripts and tools/native/bench.ps1
+ * read that file and add `note/...` rows.
+ *
+ * The verdict is "the clock rule for valid timing" (docs/DECISIONS.md, 2026-11-05): see
+ * judgeTiming. It replaced the `note/clock_low` (median under 1,500 MHz) flag the same day.
  *
  * The file is named by `--clock-file <path>` on a to-csv script, or by the DDGI_CLOCK_FILE
  * environment variable, which `bench-lock run` sets for its command. Without either, no
@@ -36,57 +41,28 @@ const REASON_HW_THERMAL = 0x40;
 /** A sample counts as "under load" at this GPU utilization or more; idle samples sit at the desktop's clock. */
 export const LOADED_UTILIZATION_PERCENT = 70;
 
-/** Fewer loaded samples than this and the summary falls back to all samples. */
-const MIN_LOADED_SAMPLES = 3;
+/** Fewer loaded samples than this and the `note/sm_clock_mhz` headline falls back to all samples. */
+const MIN_LOADED_SAMPLES_FOR_HEADLINE = 3;
 
 /**
- * The RTX 3060 Laptop's clock below which a run counts as clocked down (`note/clock_low,1`).
- * Its maximum is 2100 MHz and a cool card under load runs at 1400 to 2000 MHz, so a MEDIAN under
- * 1500 MHz over the loaded samples means the clock was held down (heat, the power limit, a low
- * power state or a clock lock) and the milliseconds are not a full-speed card's. Measured: a
- * sustained GPU-bound run on this laptop reaches 2000 MHz in seconds, then heats to the GPU's
- * 87 C target and settles at 450 to 600 MHz. Only the RTX is judged: callers write the note on
- * NVIDIA rows only.
- */
-export const LOW_CLOCK_MHZ = 1500;
-
-/**
- * A pass/fail timing run must start with the RTX below this temperature (DECISIONS, 2026-11-05: "how
- * pass/fail timing is taken on the laptop"): a sustained load heats it to its 87 C target in about
- * 20 s, and a card that starts warm gets there sooner. `bench-lock run` waits for it by default
- * (`--cool-below`), and a run that started at or above it gets `note/start_hot,1`.
+ * A timing run must start with the RTX below this temperature (DECISIONS, 2026-11-05): a card that
+ * starts warm reaches its thermal limit sooner. `bench-lock run` waits for it by default
+ * (`--cool-below`).
  */
 export const START_TEMP_LIMIT_C = 70;
 
 /**
- * Whether the run's clock was low. Judged only from at least MIN_LOADED_SAMPLES samples under
- * load: the fallback to all samples (short pages, latency-bound pages, the minimized native
- * harness) includes idle seconds and would read low for no reason, so those runs get no verdict.
+ * A run is valid only if fewer than this share of its loaded samples show a thermal-throttle
+ * reason. The state to exclude is the thermal collapse to about 500 MHz; from a cool start the card
+ * is power-limited instead, which is its normal state and doesn't count against a run.
  */
-export function isClockLow(summary: ClockSummary): boolean {
-    if (summary.smMhzLoaded === null || summary.loadedSamples < MIN_LOADED_SAMPLES) return false;
-    return summary.smMhzLoaded.median < LOW_CLOCK_MHZ;
-}
+export const THERMAL_SHARE_LIMIT = 0.05;
 
-/** A plain-language warning for a low-clock run, or null. Printed at the end of `bench-lock run` and by the to-csv scripts. */
-export function clockLowWarning(summary: ClockSummary): string | null {
-    if (!isClockLow(summary) || summary.smMhzLoaded === null) return null;
-    return (
-        `WARNING: the GPU clock was LOW under load: SM median ${summary.smMhzLoaded.median} MHz over ${summary.loadedSamples} loaded samples ` +
-        `(below ${LOW_CLOCK_MHZ} MHz; a cool card reaches 1400 to 2000). ${describeClockCause(summary)}` +
-        'These milliseconds are slow-clock numbers: CSV rows get note/clock_low,1. ' +
-        'Let the GPU cool (under about 70 C) before timing, keep runs short, and close other GPU programs ' +
-        '(nvidia-smi --query-compute-apps=pid,name --format=csv; nvidia-smi -q -d PERFORMANCE).'
-    );
-}
-
-/** What nvidia-smi said held the loaded samples down, or an empty string when it did not say. */
-function describeClockCause(summary: ClockSummary): string {
-    if (summary.thermalLimitedShare === undefined || summary.powerCappedShare === undefined) return '';
-    const percent = (share: number) => `${Math.round(share * 100)}%`;
-    const temperature = summary.temperatureCLoaded ? `, GPU temperature ${summary.temperatureCLoaded.median} C (max ${summary.temperatureCLoaded.max})` : '';
-    return `nvidia-smi: thermal throttling in ${percent(summary.thermalLimitedShare)} and the power limit in ${percent(summary.powerCappedShare)} of the loaded samples${temperature}. `;
-}
+/**
+ * Fewer loaded samples than this: no verdict. At 200 ms sampling that is a second under load; with
+ * fewer, one throttled sample is already 20% or more and the share means nothing.
+ */
+export const MIN_LOADED_SAMPLES_FOR_VERDICT = 5;
 
 export interface ClockSample {
     smMhz: number;
@@ -120,6 +96,8 @@ export interface ClockSummary {
     /** ISO time of the last update. */
     updatedAt: string;
     samples: number;
+    /** How often nvidia-smi was sampled; absent in summaries from before 200 ms sampling (those were 1 s). */
+    sampleIntervalMs?: number;
     /** Samples at or above LOADED_UTILIZATION_PERCENT. */
     loadedSamples: number;
     loadedThresholdPercent: number;
@@ -138,6 +116,60 @@ export interface ClockSummary {
     powerCappedShare?: number;
     /** How the command started; absent in summaries from older runs, and when nvidia-smi gave no temperature. */
     start?: StartConditions;
+}
+
+export type TimingVerdict =
+    | { kind: 'valid'; reason: string }
+    | { kind: 'invalid'; reason: string }
+    | { kind: 'no-verdict'; reason: string };
+
+/**
+ * The clock rule for valid timing (DECISIONS, 2026-11-05):
+ *
+ *   invalid     the run started at 70 C or more (whatever else happened, it doesn't count), or
+ *               5% or more of its loaded samples show a thermal-throttle reason;
+ *   no verdict  no start temperature or no throttle reasons were recorded, or fewer than
+ *               MIN_LOADED_SAMPLES_FOR_VERDICT samples were under load;
+ *   valid       otherwise: a cool start, and under 5% thermal samples.
+ *
+ * There is no MHz bar: a cool card is power-limited and its median lands anywhere from about
+ * 1,000 to 1,700 MHz depending on the load, which is the card's real speed, not a fault.
+ */
+export function judgeTiming(summary: ClockSummary): TimingVerdict {
+    const { start } = summary;
+    if (start === undefined) return { kind: 'no-verdict', reason: 'no start temperature was recorded' };
+    if (start.temperatureC >= START_TEMP_LIMIT_C) {
+        return { kind: 'invalid', reason: `hot start: the GPU was at ${start.temperatureC} C (${START_TEMP_LIMIT_C} C or more)` };
+    }
+    if (summary.loadedSamples < MIN_LOADED_SAMPLES_FOR_VERDICT) {
+        return {
+            kind: 'no-verdict',
+            reason: `only ${summary.loadedSamples} samples under load (${MIN_LOADED_SAMPLES_FOR_VERDICT} needed)`,
+        };
+    }
+    if (summary.thermalLimitedShare === undefined) return { kind: 'no-verdict', reason: 'nvidia-smi gave no throttle reasons' };
+    const thermal = `thermal throttling in ${formatPercent(summary.thermalLimitedShare)} of ${summary.loadedSamples} loaded samples`;
+    if (summary.thermalLimitedShare >= THERMAL_SHARE_LIMIT) {
+        return { kind: 'invalid', reason: `${thermal} (${formatPercent(THERMAL_SHARE_LIMIT)} or more)` };
+    }
+    return { kind: 'valid', reason: `started at ${start.temperatureC} C, ${thermal}` };
+}
+
+function formatPercent(share: number): string {
+    return `${Math.round(share * 1000) / 10}%`;
+}
+
+/** The plain-language verdict line printed at the end of `bench-lock run` and by the to-csv scripts. */
+export function describeTimingVerdict(summary: ClockSummary): string {
+    const verdict = judgeTiming(summary);
+    const label = verdict.kind === 'valid' ? 'VALID' : verdict.kind === 'invalid' ? 'INVALID' : 'NO VERDICT';
+    const clock = summary.smMhzLoaded ? ` SM clock median under load ${summary.smMhzLoaded.median} MHz (information only).` : '';
+    const power = summary.powerCappedShare === undefined ? '' : ` Power limit in ${formatPercent(summary.powerCappedShare)} of loaded samples.`;
+    const advice =
+        verdict.kind === 'invalid'
+            ? ' These milliseconds can\'t pass or fail a target: let the GPU cool, keep the timed section to 10-15 s, and time again.'
+            : '';
+    return `Timing ${label}: ${verdict.reason}.${clock}${power}${advice}`;
 }
 
 /** The first GPU's line of the `NVIDIA_SMI_CLOCK_ARGS` query, or null if it is not three or five numbers. */
@@ -206,44 +238,30 @@ export function readClockSummary(path: string): ClockSummary | null {
 }
 
 /**
- * The note rows for a summary. The headline `note/sm_clock_mhz` is the median over the samples
- * under load (all samples if fewer than three were); min and max are over the same set.
- * `note/clock_low,1` is added when the loaded median is under LOW_CLOCK_MHZ (see isClockLow).
- * `note/start_temp_c` is the GPU temperature when the command started, and `note/start_hot,1` marks
- * a start at or above START_TEMP_LIMIT_C (see startedHot).
+ * The note rows for a summary:
+ *
+ *   note/sm_clock_mhz (+ min, max, mem)  the median over the samples under load (all samples if
+ *                                        fewer than three were); information only.
+ *   note/start_temp_c                    the GPU temperature when the command started.
+ *   note/thermal_share                   the share (0 to 1) of loaded samples with a thermal-throttle reason.
+ *   note/timing_valid,1|0                the clock rule's verdict (judgeTiming); 0 also for no verdict,
+ *   note/timing_no_verdict,1             which then gets this row as well.
  */
 export function clockNoteRows(summary: ClockSummary): Array<{ scene: string; metric: string; value: number }> {
-    const useLoaded = summary.smMhzLoaded !== null && summary.memMhzLoaded !== null && summary.loadedSamples >= MIN_LOADED_SAMPLES;
+    const useLoaded = summary.smMhzLoaded !== null && summary.memMhzLoaded !== null && summary.loadedSamples >= MIN_LOADED_SAMPLES_FOR_HEADLINE;
     const sm = (useLoaded ? summary.smMhzLoaded : summary.smMhz) as ClockStats;
     const mem = (useLoaded ? summary.memMhzLoaded : summary.memMhz) as ClockStats;
+    const verdict = judgeTiming(summary);
     return [
         { scene: 'all', metric: 'note/sm_clock_mhz', value: sm.median },
         { scene: 'all', metric: 'note/sm_clock_min_mhz', value: sm.min },
         { scene: 'all', metric: 'note/sm_clock_max_mhz', value: sm.max },
         { scene: 'all', metric: 'note/mem_clock_mhz', value: mem.median },
-        ...(isClockLow(summary) ? [{ scene: 'all', metric: 'note/clock_low', value: 1 }] : []),
         ...(summary.start ? [{ scene: 'all', metric: 'note/start_temp_c', value: summary.start.temperatureC }] : []),
-        ...(startedHot(summary) ? [{ scene: 'all', metric: 'note/start_hot', value: 1 }] : []),
+        ...(summary.thermalLimitedShare === undefined ? [] : [{ scene: 'all', metric: 'note/thermal_share', value: Math.round(summary.thermalLimitedShare * 1000) / 1000 }]),
+        { scene: 'all', metric: 'note/timing_valid', value: verdict.kind === 'valid' ? 1 : 0 },
+        ...(verdict.kind === 'no-verdict' ? [{ scene: 'all', metric: 'note/timing_no_verdict', value: 1 }] : []),
     ];
-}
-
-/** Whether the run started at or above START_TEMP_LIMIT_C, so it can't pass or fail a timing target. */
-export function startedHot(summary: ClockSummary): boolean {
-    return summary.start !== undefined && summary.start.temperatureC >= START_TEMP_LIMIT_C;
-}
-
-/** A plain-language warning for a run that started hot, or null. */
-export function startHotWarning(summary: ClockSummary): string | null {
-    if (!startedHot(summary) || summary.start === undefined) return null;
-    const why = summary.start.capped
-        ? `the cool-down wait gave up after ${Math.round(summary.start.waitedSeconds / 60)} min`
-        : summary.start.coolBelowC === null
-            ? 'there was no cool-down wait'
-            : `the wait only aimed for ${summary.start.coolBelowC} C`;
-    return (
-        `WARNING: the GPU was at ${summary.start.temperatureC} C when the run started (${why}). ` +
-        `Pass/fail timing starts below ${START_TEMP_LIMIT_C} C, so CSV rows get note/start_hot,1.`
-    );
 }
 
 /** Only the NVIDIA GPU is sampled, so the note belongs on NVIDIA rows only. */
@@ -252,8 +270,8 @@ export function isNvidiaDeviceName(device: string): boolean {
 }
 
 /**
- * Note rows for a to-csv script: from `--clock-file`, else DDGI_CLOCK_FILE, else none.
- * Warns (and returns none) if a named file is missing.
+ * Note rows for a to-csv script: from `--clock-file`, else DDGI_CLOCK_FILE, else none. Prints the
+ * timing verdict. Warns (and returns none) if a named file is missing.
  */
 export function clockNoteRowsFromOption(clockFile: string | undefined, env: NodeJS.ProcessEnv = process.env): Array<{ scene: string; metric: string; value: number }> {
     const path = clockFile ?? env[CLOCK_FILE_ENV];
@@ -263,9 +281,6 @@ export function clockNoteRowsFromOption(clockFile: string | undefined, env: Node
         console.error(`no clock summary in ${path}; no note/sm_clock_mhz rows written`);
         return [];
     }
-    const warning = clockLowWarning(summary);
-    if (warning) console.error(warning);
-    const hot = startHotWarning(summary);
-    if (hot) console.error(hot);
+    console.error(describeTimingVerdict(summary));
     return clockNoteRows(summary);
 }

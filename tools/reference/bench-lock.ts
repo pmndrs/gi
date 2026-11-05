@@ -46,15 +46,14 @@
  * with a warning. `--no-cool-wait` skips the wait for jobs that time nothing on the GPU (correctness
  * checks, renders); `--lock cpu` never waits. Without nvidia-smi there is no wait.
  *
- * GPU clock: while `run`'s command runs, it samples nvidia-smi about once a second (if
- * nvidia-smi exists), prints min / median / max SM and memory clock at the end, and keeps the
- * summary in a JSON file (`--clock-file`, default `<lock folder>.clock.json`), rewritten after
- * every sample. The summary also records the start temperature and the cool-down wait (`start`).
- * The command gets the file's path in DDGI_CLOCK_FILE, so the to-csv scripts and
- * tools/native/bench.ps1 add `note/sm_clock_mhz` rows (see tools/gpu/clock-note.ts). If the median
- * SM clock over the samples under load (70% GPU use or more) is below 1,500 MHz, the end of the run
- * prints a warning and the to-csv rows get `note/clock_low,1`; a start at 70 C or more gets
- * `note/start_hot,1`.
+ * GPU clock: while `run`'s command runs, it samples nvidia-smi every 200 ms (if nvidia-smi
+ * exists), prints min / median / max SM and memory clock at the end, and keeps the summary in a
+ * JSON file (`--clock-file`, default `<lock folder>.clock.json`), rewritten after every sample.
+ * The summary also records the start temperature and the cool-down wait (`start`). The command
+ * gets the file's path in DDGI_CLOCK_FILE, so the to-csv scripts and tools/native/bench.ps1 add
+ * `note/...` rows (see tools/gpu/clock-note.ts). The end of the run prints the timing verdict
+ * (the clock rule, DECISIONS 2026-11-05): VALID (started below 70 C, under 5% of the loaded
+ * samples thermally throttled), INVALID (and why) or NO VERDICT (under 5 loaded samples).
  *
  * From a shell (agents, the native PowerShell launcher), the same protocol:
  *
@@ -74,12 +73,11 @@ import { parseArgs } from 'node:util';
 import { installShutdownHandlers, registerCleanup } from '../gpu/cleanup.ts';
 import {
     CLOCK_FILE_ENV,
-    clockLowWarning,
     describeClockSummary,
+    describeTimingVerdict,
     NVIDIA_SMI_CLOCK_ARGS,
     parseClockLine,
     START_TEMP_LIMIT_C,
-    startHotWarning,
     summarizeClockSamples,
     type ClockSample,
     type ClockSummary,
@@ -528,7 +526,13 @@ export async function withBenchLock<T>(
 // GPU clock sampling
 // ---------------------------------------------------------------------------
 
-const CLOCK_SAMPLE_MS = 1_000;
+/**
+ * Every 200 ms (DECISIONS 2026-11-05, the clock rule): a 10-15 s timed section then gives 50-75
+ * samples, enough for a 5% share to mean something. nvidia-smi refreshes its values about every
+ * 0.6 s, so neighbouring samples repeat, but a short burst is no longer missed. One call takes
+ * about 75 ms on the laptop.
+ */
+export const CLOCK_SAMPLE_MS = 200;
 
 /** Returns nvidia-smi's clock line, or null if nvidia-smi is missing or fails. Injected in tests. */
 export type ClockReader = () => Promise<string | null>;
@@ -549,12 +553,14 @@ export interface ClockSampler {
 }
 
 /**
- * Samples the GPU clock every `intervalMs` until `stop()`, rewriting `file` after each sample
- * (to a temp name and renamed, so a reader never sees half a file). Returns null if the reader
- * gives nothing on the first try: no nvidia-smi means no clock rows, not an error.
+ * Samples the GPU clock every `intervalMs` (default CLOCK_SAMPLE_MS) until `stop()`, rewriting
+ * `file` after each sample (to a temp name and renamed, so a reader never sees half a file).
+ * Returns null if the reader gives nothing on the first try: no nvidia-smi means no clock rows,
+ * not an error.
  */
 export async function startClockSampler(settings: ClockSettings): Promise<ClockSampler | null> {
     const samples: ClockSample[] = [];
+    const intervalMs = settings.intervalMs ?? CLOCK_SAMPLE_MS;
     const take = async (): Promise<void> => {
         const text = await settings.read();
         const sample = text === null ? null : parseClockLine(text);
@@ -566,7 +572,7 @@ export async function startClockSampler(settings: ClockSettings): Promise<ClockS
     const writeSummary = async (): Promise<ClockSummary | null> => {
         const sampled = summarizeClockSamples(samples);
         if (!sampled) return null;
-        const summary: ClockSummary = settings.start ? { ...sampled, start: settings.start } : sampled;
+        const summary: ClockSummary = { ...sampled, sampleIntervalMs: intervalMs, ...(settings.start ? { start: settings.start } : {}) };
         const temporary = `${settings.file}.${process.pid}.tmp`;
         // A reader holding the old file open can make the rename fail on Windows; the next sample retries.
         await writeFile(temporary, `${JSON.stringify(summary, null, 2)}\n`)
@@ -576,18 +582,31 @@ export async function startClockSampler(settings: ClockSettings): Promise<ClockS
     };
     await writeSummary();
 
-    let busy: Promise<void> = Promise.resolve();
-    const timer = setInterval(() => {
-        // One sample at a time; a slow nvidia-smi call delays the next one rather than piling up.
-        busy = busy.then(async () => {
+    // One sample at a time, on a fixed beat. A call slower than the interval (nvidia-smi under a busy
+    // driver) skips the beats it missed instead of queueing calls behind it.
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let wake: (() => void) | undefined;
+    const loop = (async () => {
+        let nextAt = Date.now() + intervalMs;
+        while (!stopped) {
+            await new Promise<void>((resolvePromise) => {
+                wake = resolvePromise;
+                timer = setTimeout(resolvePromise, Math.max(0, nextAt - Date.now()));
+            });
+            if (stopped) break;
             await take();
             await writeSummary();
-        });
-    }, settings.intervalMs ?? CLOCK_SAMPLE_MS);
+            nextAt += intervalMs;
+            if (nextAt <= Date.now()) nextAt = Date.now() + intervalMs;
+        }
+    })();
     return {
         async stop() {
-            clearInterval(timer);
-            await busy;
+            stopped = true;
+            clearTimeout(timer);
+            wake?.();
+            await loop;
             return writeSummary();
         },
     };
@@ -606,7 +625,7 @@ const COOL_POLL_MS = 5_000;
 /**
  * The longest the wait holds back a run. A laptop that cannot get under the limit in 15 minutes
  * (a hot room, a CPU render heating the shared cooling) would otherwise block every waiter behind
- * it; the run goes ahead with a warning and its rows get `note/start_hot,1`.
+ * it; the run goes ahead with a warning and its timing verdict is INVALID (hot start).
  */
 export const COOL_WAIT_MAX_MS = 15 * 60_000;
 
@@ -665,7 +684,7 @@ export async function waitForCoolGpu(settings: CoolWaitSettings): Promise<StartC
         if (waitedMs >= maxWaitMs) {
             log(
                 `WARNING: the GPU is still at ${current} C after waiting ${formatMinutes(waitedMs)} for it to drop below ${belowC} C; ` +
-                    `starting anyway. The clock file records it${current >= START_TEMP_LIMIT_C ? ', and CSV rows get note/start_hot,1' : ''}.`,
+                    `starting anyway. The clock file records it${current >= START_TEMP_LIMIT_C ? ', and the run counts as INVALID timing (hot start)' : ''}.`,
             );
             return { ...result, capped: true };
         }
@@ -718,8 +737,9 @@ options:
                               A lock folder with no owner file counts as abandoned after
                               this long (default ${OWNERLESS_STALE_MS / 60_000}).
   --clock-file <file>         run: where the GPU clock summary goes (default <lock folder>.clock.json).
-                              While the command runs, nvidia-smi is sampled about once a second (if
-                              it exists); min / median / max SM and memory clock print at the end.
+                              While the command runs, nvidia-smi is sampled every 200 ms (if it
+                              exists); min / median / max SM and memory clock and the timing
+                              verdict (VALID, INVALID or NO VERDICT) print at the end.
                               The summary also records the start temperature and the wait.
                               The command gets ${CLOCK_FILE_ENV}=<file>.
   --command <text>            acquire: the command to record (default: this one).
@@ -763,10 +783,7 @@ async function runUnderLocks(
             const summary = await sampler?.stop();
             if (summary) {
                 log(describeClockSummary(summary));
-                const warning = clockLowWarning(summary);
-                if (warning) log(warning);
-                const hot = startHotWarning(summary);
-                if (hot) log(hot);
+                log(describeTimingVerdict(summary));
             }
         }
     };

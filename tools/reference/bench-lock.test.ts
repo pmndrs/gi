@@ -5,20 +5,24 @@ import { basename, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
     CLOCK_FILE_ENV,
-    clockLowWarning,
     clockNoteRows,
-    isClockLow,
-    LOW_CLOCK_MHZ,
+    describeTimingVerdict,
+    judgeTiming,
+    MIN_LOADED_SAMPLES_FOR_VERDICT,
     parseClockLine,
     readClockSummary,
-    startHotWarning,
+    START_TEMP_LIMIT_C,
     summarizeClockSamples,
+    THERMAL_SHARE_LIMIT,
+    type ClockSample,
+    type StartConditions,
 } from '../gpu/clock-note.ts';
 import {
     acquireBenchLock,
     benchLockCli,
     benchLockPath,
     BenchLockTimeoutError,
+    CLOCK_SAMPLE_MS,
     cpuLockPath,
     defaultLockPath,
     judgeLock,
@@ -302,74 +306,136 @@ describe('GPU clock sampling', () => {
         expect(summarizeClockSamples([])).toBeNull();
     });
 
-    describe('the low-clock flag', () => {
-        const idle = { smMhz: 210, memMhz: 810, utilizationPercent: 2 };
-        const busy = (smMhz: number, utilizationPercent = 98) => ({ smMhz, memMhz: 6001, utilizationPercent });
-        const noteNames = (samples: Parameters<typeof summarizeClockSamples>[0]) => clockNoteRows(summarizeClockSamples(samples)!).map((row) => row.metric);
+    describe('the timing verdict (the clock rule)', () => {
+        const cool: StartConditions = { temperatureC: 62, coolBelowC: 70, waitedSeconds: 0, capped: false };
+        const idle: ClockSample = { smMhz: 210, memMhz: 810, utilizationPercent: 2, temperatureC: 60, throttleReasons: 0 };
+        /** A loaded sample: power-limited (0x4) by default, thermally throttled with 0x20. */
+        const loaded = (throttleReasons = 0x4, smMhz = 1100, utilizationPercent = 98): ClockSample => ({
+            smMhz,
+            memMhz: 7151,
+            utilizationPercent,
+            temperatureC: 75,
+            throttleReasons,
+        });
+        const judged = (samples: ClockSample[], start: StartConditions | null = cool) => {
+            const summary = { ...summarizeClockSamples(samples)!, ...(start ? { start } : {}) };
+            const rows = clockNoteRows(summary);
+            return {
+                verdict: judgeTiming(summary),
+                line: describeTimingVerdict(summary),
+                note: (metric: string) => rows.find((row) => row.metric === metric)?.value,
+            };
+        };
 
-        it('flags a loaded median under 1,500 MHz, and writes note/clock_low,1', () => {
-            expect(LOW_CLOCK_MHZ).toBe(1500);
-            const low = summarizeClockSamples([busy(590), busy(600), busy(1400), busy(580), busy(610)])!;
-            expect(isClockLow(low)).toBe(true);
-            expect(clockNoteRows(low).find((row) => row.metric === 'note/clock_low')?.value).toBe(1);
-            expect(clockLowWarning(low)).toContain('WARNING');
-            expect(clockLowWarning(low)).toContain('600 MHz');
+        it('is valid from a cool start with under 5% thermal samples, whatever the clock', () => {
+            expect(START_TEMP_LIMIT_C).toBe(70);
+            expect(THERMAL_SHARE_LIMIT).toBe(0.05);
+            // 1 thermal sample in 25 is 4%. The clock is power-limited at 1,000 MHz: no MHz bar.
+            const samples = [idle, idle, loaded(0x20, 1000), ...Array.from({ length: 24 }, () => loaded(0x4, 1000))];
+            const result = judged(samples);
+            expect(result.verdict.kind).toBe('valid');
+            expect(result.note('note/timing_valid')).toBe(1);
+            expect(result.note('note/timing_no_verdict')).toBeUndefined();
+            expect(result.note('note/thermal_share')).toBe(0.04);
+            expect(result.note('note/start_temp_c')).toBe(62);
+            expect(result.note('note/sm_clock_mhz')).toBe(1000);
+            expect(result.note('note/clock_low')).toBeUndefined();
+            expect(result.line).toMatch(/^Timing VALID: started at 62 C, thermal throttling in 4% of 25 loaded samples/);
+            expect(result.line).toContain('1000 MHz (information only)');
         });
 
-        it('does not flag a healthy run, and the limit itself is healthy', () => {
-            const healthy = summarizeClockSamples([busy(1600), busy(1650), busy(1500), busy(1700)])!;
-            expect(isClockLow(healthy)).toBe(false);
-            expect(clockLowWarning(healthy)).toBeNull();
-            expect(noteNames([busy(1500), busy(1500), busy(1500)])).not.toContain('note/clock_low');
-            expect(noteNames([busy(1499), busy(1499), busy(1499)])).toContain('note/clock_low');
+        it('is invalid at 5% thermal samples or more, and says so', () => {
+            // 1 in 20 is exactly 5%.
+            const result = judged([loaded(0x20), ...Array.from({ length: 19 }, () => loaded())]);
+            expect(result.verdict.kind).toBe('invalid');
+            expect(result.note('note/timing_valid')).toBe(0);
+            expect(result.note('note/timing_no_verdict')).toBeUndefined();
+            expect(result.note('note/thermal_share')).toBe(0.05);
+            expect(result.line).toMatch(/^Timing INVALID: thermal throttling in 5% of 20 loaded samples \(5% or more\)/);
         });
 
-        it('counts only samples at 70% use or more: idle gaps do not make a healthy run low', () => {
-            const withGaps = summarizeClockSamples([idle, idle, idle, idle, idle, busy(1700), busy(1650), busy(1600), busy(1700), busy(1500, 69)])!;
-            expect(withGaps.smMhz.median).toBeLessThan(LOW_CLOCK_MHZ);
-            expect(withGaps.loadedSamples).toBe(4);
-            expect(isClockLow(withGaps)).toBe(false);
-            // Busy samples below the threshold are not "under load" either, however low their clock.
-            expect(isClockLow(summarizeClockSamples([busy(1700), busy(1700), busy(1700), busy(300, 69), busy(300, 69), busy(300, 69)])!)).toBe(false);
+        it('is invalid after a hot start, even with no thermal samples', () => {
+            const hot = { ...cool, temperatureC: 74, waitedSeconds: 900, capped: true };
+            const result = judged(Array.from({ length: 10 }, () => loaded()), hot);
+            expect(result.verdict.kind).toBe('invalid');
+            expect(result.note('note/timing_valid')).toBe(0);
+            expect(result.line).toContain('Timing INVALID: hot start: the GPU was at 74 C');
         });
 
-        it('gives no verdict from fewer than three loaded samples (all-sample fallback would read low)', () => {
-            const mostlyIdle = summarizeClockSamples([idle, idle, idle, busy(900), busy(900)])!;
-            expect(clockNoteRows(mostlyIdle).find((row) => row.metric === 'note/sm_clock_mhz')?.value).toBe(210);
-            expect(isClockLow(mostlyIdle)).toBe(false);
-            expect(noteNames([idle, idle, idle])).not.toContain('note/clock_low');
+        it('gives no verdict under 5 loaded samples (idle and below-70% samples do not count), or without a start temperature', () => {
+            expect(MIN_LOADED_SAMPLES_FOR_VERDICT).toBe(5);
+            const few = judged([idle, idle, idle, loaded(), loaded(), loaded(), loaded(), loaded(0x20, 500, 69), loaded(0x4, 1100, 69)]);
+            expect(few.verdict.kind).toBe('no-verdict');
+            expect(few.note('note/timing_valid')).toBe(0);
+            expect(few.note('note/timing_no_verdict')).toBe(1);
+            expect(few.line).toMatch(/^Timing NO VERDICT: only 4 samples under load \(5 needed\)/);
+            // Five is enough.
+            expect(judged([loaded(), loaded(), loaded(), loaded(), loaded()]).verdict.kind).toBe('valid');
+
+            const noStart = judged(Array.from({ length: 10 }, () => loaded()), null);
+            expect(noStart.verdict.kind).toBe('no-verdict');
+            expect(noStart.note('note/start_temp_c')).toBeUndefined();
+            // Three-field lines carry no throttle reasons: nothing to judge the share on.
+            const threeField = { ...summarizeClockSamples(Array.from({ length: 10 }, () => ({ smMhz: 1500, memMhz: 6001, utilizationPercent: 95 })))!, start: cool };
+            expect(judgeTiming(threeField).kind).toBe('no-verdict');
+            expect(clockNoteRows(threeField).map((row) => row.metric)).not.toContain('note/thermal_share');
         });
 
-        it('says why when nvidia-smi named a reason: heat or the power limit', () => {
+        it('keeps the share of power-limited samples and the temperature in the summary', () => {
             const hot = (smMhz: number, throttleReasons: number) => ({ smMhz, memMhz: 7151, utilizationPercent: 95, temperatureC: 88, throttleReasons });
             const summary = summarizeClockSamples([hot(500, 0x20), hot(550, 0x20), hot(600, 0x20), hot(700, 0x4)])!;
             expect(summary.thermalLimitedShare).toBe(0.75);
             expect(summary.powerCappedShare).toBe(0.25);
             expect(summary.temperatureCLoaded?.median).toBe(88);
-            const warning = clockLowWarning(summary)!;
-            expect(warning).toContain('thermal throttling in 75%');
-            expect(warning).toContain('power limit in 25%');
-            expect(warning).toContain('88 C');
-            // Three-field samples carry no reason: the warning is still given, without a cause.
-            expect(clockLowWarning(summarizeClockSamples([busy(500), busy(500), busy(500)])!)).not.toContain('nvidia-smi: thermal');
         });
 
-        it('bench-lock run prints the warning at the end of a low-clock run', async () => {
-            const file = join(folder, 'low-clock.json');
-            const printed: string[] = [];
-            const original = { log: console.log, error: console.error };
-            console.log = () => undefined;
-            console.error = (message: string) => void printed.push(String(message));
-            try {
-                delete process.env[LOCK_HELD_ENV];
-                const code = await benchLockCli(['run', '--path', lockPath, '--clock-file', file, '--', 'node', '-e', 'setTimeout(() => {}, 150)'], { readClock: async () => '600, 6001, 95', clockIntervalMs: 10 });
-                expect(code).toBe(0);
-            } finally {
-                console.log = original.log;
-                console.error = original.error;
-            }
-            expect(printed.some((line) => line.includes('WARNING') && line.includes('600 MHz'))).toBe(true);
-        });
+        it('bench-lock run prints the verdict at the end of the run', async () => {
+            const file = join(folder, 'verdict.json');
+            // A cool start, then thermally throttled under load: INVALID.
+            const smi = async () => '600, 7151, 95, 65, 0x0000000000000020';
+            const { code, printed } = await runCliCaptured(['run', '--path', lockPath, '--clock-file', file, '--', 'node', '-e', 'setTimeout(() => {}, 300)'], {
+                readClock: smi,
+                clockIntervalMs: 10,
+            });
+            expect(code).toBe(0);
+            expect(printed.some((line) => line.startsWith('Timing INVALID: thermal throttling in 100%'))).toBe(true);
+            expect(readClockSummary(file)?.sampleIntervalMs).toBe(10);
+        }, 30_000);
+    });
+
+    it('samples every 200 ms by default', async () => {
+        expect(CLOCK_SAMPLE_MS).toBe(200);
+        const file = join(folder, 'rate.json');
+        const readAt: number[] = [];
+        const sampler = await startClockSampler({ file, read: async () => (readAt.push(Date.now()), '1500, 6001, 90, 60, 0x0') });
+        await new Promise((done) => setTimeout(done, 1_050));
+        const summary = (await sampler!.stop())!;
+        // The first sample at once, then one per 200 ms: 6 in 1.05 s (timers may run a little late).
+        expect(summary.samples).toBeGreaterThanOrEqual(5);
+        expect(summary.samples).toBeLessThanOrEqual(7);
+        expect(summary.sampleIntervalMs).toBe(200);
+        const gaps = readAt.slice(2).map((at, index) => at - readAt[index + 1]);
+        for (const gap of gaps) expect(gap).toBeGreaterThanOrEqual(150);
+    });
+
+    it('a reader slower than the interval skips beats instead of queueing calls', async () => {
+        let running = 0;
+        let mostAtOnce = 0;
+        let calls = 0;
+        const slowRead = async () => {
+            calls += 1;
+            running += 1;
+            mostAtOnce = Math.max(mostAtOnce, running);
+            await new Promise((done) => setTimeout(done, 60));
+            running -= 1;
+            return '1500, 6001, 90, 60, 0x0';
+        };
+        const sampler = await startClockSampler({ file: join(folder, 'slow.json'), intervalMs: 10, read: slowRead });
+        await new Promise((done) => setTimeout(done, 400));
+        await sampler!.stop();
+        expect(mostAtOnce).toBe(1);
+        // At most one call per 60 ms (plus the first), not one per 10 ms.
+        expect(calls).toBeLessThanOrEqual(9);
     });
 
     it('samples while running, keeps a readable file, and does nothing without nvidia-smi', async () => {
@@ -501,7 +567,7 @@ describe('cool-down wait in bench-lock run', () => {
         expect(summary.start).toMatchObject({ temperatureC: 69, coolBelowC: 70, capped: false });
         const rows = clockNoteRows(summary);
         expect(rows.find((row) => row.metric === 'note/start_temp_c')?.value).toBe(69);
-        expect(rows.map((row) => row.metric)).not.toContain('note/start_hot');
+        expect(judgeTiming(summary).kind).not.toBe('invalid');
         expect(existsSync(lockPath)).toBe(false);
     }, 30_000);
 
@@ -517,7 +583,7 @@ describe('cool-down wait in bench-lock run', () => {
         expect(lower.printed.some((line) => line.includes('below 65 C'))).toBe(true);
     }, 30_000);
 
-    it('runs anyway at the time cap, with a warning, and the rows flag the hot start', async () => {
+    it('runs anyway at the time cap, with a warning, and the verdict is INVALID (hot start)', async () => {
         const file = join(folder, 'capped.json');
         const { code, printed } = await runCliCaptured(
             ['run', '--path', lockPath, '--clock-file', file, '--cool-wait-max-minutes', '0.001', '--', 'node', '-e', '0'],
@@ -527,8 +593,9 @@ describe('cool-down wait in bench-lock run', () => {
         expect(printed.some((line) => line.startsWith('WARNING: the GPU is still at 80 C') && line.includes('starting anyway'))).toBe(true);
         const summary = readClockSummary(file)!;
         expect(summary.start).toMatchObject({ temperatureC: 80, coolBelowC: 70, capped: true });
-        expect(clockNoteRows(summary).find((row) => row.metric === 'note/start_hot')?.value).toBe(1);
-        expect(startHotWarning(summary)).toContain('gave up');
+        expect(clockNoteRows(summary).find((row) => row.metric === 'note/timing_valid')?.value).toBe(0);
+        expect(judgeTiming(summary)).toMatchObject({ kind: 'invalid', reason: expect.stringContaining('hot start') });
+        expect(printed.some((line) => line.startsWith('Timing INVALID: hot start'))).toBe(true);
     }, 30_000);
 
     it('--no-cool-wait starts a hot GPU at once, but still records the start temperature', async () => {
@@ -543,7 +610,7 @@ describe('cool-down wait in bench-lock run', () => {
         expect(printed.some((line) => line.includes('waiting until'))).toBe(false);
         const summary = readClockSummary(file)!;
         expect(summary.start).toMatchObject({ temperatureC: 85, coolBelowC: null, capped: false });
-        expect(clockNoteRows(summary).find((row) => row.metric === 'note/start_hot')?.value).toBe(1);
+        expect(judgeTiming(summary).kind).toBe('invalid');
     }, 30_000);
 
     it('skips the wait without nvidia-smi, or without a temperature in its line', async () => {
