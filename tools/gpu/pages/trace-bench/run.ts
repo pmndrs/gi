@@ -34,7 +34,9 @@ import {
     type BenchProfileName,
 } from './config.ts';
 import { createDispatchTimer, type DispatchTimer } from './dispatch-timer.ts';
+import { GpuLbvhBuilder } from '../../../../packages/bvh/src/gpu-lbvh.ts';
 import {
+    buildLbvhScene,
     buildOursScene,
     buildTmbuildScene,
     estimateNsPerRay,
@@ -144,6 +146,7 @@ async function runScene(context: BenchContext, sceneId: string): Promise<SceneRe
         loadMs: scene.loadMs,
         ours: null,
         oursTmbuild: null,
+        oursLbvh: null,
         oursTinybvh: null,
         tmbvh: null,
         modes: [],
@@ -250,6 +253,27 @@ async function runScene(context: BenchContext, sceneId: string): Promise<SceneRe
             await yieldToBrowser();
         }
 
+        // The GPU LBVH's trees (B1), traced by our watertight walk; built after tinybvh's are done with the GPU.
+        if (config.tracers.includes('ours-lbvh') && oursAvailable) {
+            try {
+                if (!GpuLbvhBuilder.isSupported(device)) throw new Error('the device has no subgroups, so the GPU LBVH does not run (its fallback is tinybvh)');
+                progress(`${sceneId}: building on the GPU (LBVH, one batch of ${scene.meshes.length} meshes)`);
+                const lbvh = await buildLbvhScene(device, context.timer, scene.meshes, scene.instances, ours.bvhs);
+                result.oursLbvh = lbvh.result;
+                progress(
+                    `${sceneId}: ours-lbvh built in ${lbvh.result.gpuBuildMsMedian.toFixed(2)} ms of GPU time (median of ${lbvh.result.gpuBuildRuns}; ` +
+                        `${Math.round(lbvh.result.wallBuildMs)} ms wall for the first, with uploads), read back in ${Math.round(lbvh.result.readbackMs)} ms; ` +
+                        `SAH cost ${lbvh.result.sahCostVsTinybvh.toFixed(3)}x tinybvh's, depth ${lbvh.result.maxMeshDepth}, ` +
+                        `${(lbvh.result.bytesTotal / 1e6).toFixed(1)} MB, ${lbvh.result.meshesFallenBack} meshes fell back`,
+                );
+                finish('ours-lbvh', await runOursTracer(device, context.timer, 'ours-lbvh', lbvh.data, oursRays, plan));
+            } catch (error) {
+                result.skipped.push(`ours-lbvh: ${error instanceof Error ? error.message : String(error)}`);
+                progress(`${sceneId}: ours-lbvh skipped (${error instanceof Error ? error.message : String(error)})`);
+            }
+            await yieldToBrowser();
+        }
+
         // three-mesh-bvh's trees in our layout, traced by our watertight walk. Built after the others are
         // done with the GPU; the trees are dropped once traced.
         if (config.tracers.includes('ours-tmbuild') && oursAvailable) {
@@ -324,6 +348,7 @@ async function runScene(context: BenchContext, sceneId: string): Promise<SceneRe
         ['ours-tinybvh', 'ours-tmbuild'],
         ['ours-tmbuild', 'tmbvh'],
         ['ours-tinybvh', 'platform'],
+        ['ours-tinybvh', 'ours-lbvh'],
     ];
     for (const [a, b] of pairs) {
         const runA = runs.get(a);

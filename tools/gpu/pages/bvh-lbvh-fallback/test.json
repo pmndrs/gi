@@ -1,0 +1,4 @@
+{
+    "description": "B1 fallback: on a device made without subgroups, the mesh builder falls back to tinybvh (B0), the GPU LBVH refuses to start, and the trees are valid.",
+    "timeoutMs": 60000
+}

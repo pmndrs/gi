@@ -52,6 +52,20 @@ export const GPU_LAYOUT_NO_PARENT = 0xffffffff;
 /** One triangle in tree order: three corners, the original index and flags, 48 bytes. */
 export const GPU_LAYOUT_TRIANGLE_BYTES = 48;
 
+/**
+ * Word positions inside a triangle, matching the tracer's WGSL `GiBvhTriangle`
+ * (and ddgi-core's `TRIANGLE_WORD`): each corner is a `vec3f` followed by one
+ * word, the original triangle index after the first, the flags after the second.
+ */
+export const GPU_LAYOUT_TRIANGLE_WORD = {
+    vertex0: 0,
+    originalIndex: 3,
+    vertex1: 4,
+    flags: 7,
+    vertex2: 8,
+    padding: 11,
+} as const;
+
 /** The tracer's largest leaf; larger leaves are cut in half until they fit. */
 export const GPU_LAYOUT_MAX_LEAF_PRIMITIVES = 8;
 

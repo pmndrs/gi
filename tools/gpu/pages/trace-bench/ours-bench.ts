@@ -16,10 +16,13 @@ import {
     type TraceInstance,
     type TraceSceneData,
 } from '../../../../packages/ddgi-core/src/platform/trace/index.ts';
-import { TOP_LEVEL_REBUILD_RUNS, type TracerId } from './config.ts';
+import { GpuLbvhBuilder } from '../../../../packages/bvh/src/gpu-lbvh.ts';
+import { treeSahCost } from '../../../../packages/bvh/src/layout-check.ts';
+import { createTinyBvhBuilder, type TinyBvhBuilder } from '../../../../packages/bvh/src/tinybvh.ts';
+import { LBVH_BUILD_TIMED_RUNS, TOP_LEVEL_REBUILD_RUNS, type TracerId } from './config.ts';
 import { measureDispatches, type DispatchTimer } from './dispatch-timer.ts';
 import type { BenchInstance, BenchMeshGeometry } from './gltf-geometry.ts';
-import type { ModeResult, OursBuildResult, TmbuildBuildResult, TraceMode } from './results.ts';
+import type { LbvhBuildResult, ModeResult, OursBuildResult, TmbuildBuildResult, TraceMode } from './results.ts';
 import { buildMeshBvhWithTmbvh } from './tmbvh-convert.ts';
 import { maximum, median, megaRaysPerSecond, sum } from './statistics.ts';
 
@@ -82,6 +85,92 @@ export async function buildTmbuildScene(
     }
     const scene = await assembleOursScene(bvhs, perMeshMs, instances, false);
     return { ...scene, result: { ...scene.result, tmbvhBuildMsTotal, convertMsTotal, targetLeafSize } };
+}
+
+export interface LbvhScene extends OursBuild {
+    result: LbvhBuildResult;
+}
+
+/** A tree's SAH cost in absolute terms (relative cost times its box's half-area), so meshes can be summed. */
+function absoluteSahCost(bvh: MeshBvh): number {
+    const size = [bvh.bounds[3] - bvh.bounds[0], bvh.bounds[4] - bvh.bounds[1], bvh.bounds[5] - bvh.bounds[2]];
+    return treeSahCost(bvh) * (size[0] * size[1] + size[1] * size[2] + size[2] * size[0]);
+}
+
+/**
+ * The `ours-lbvh` trees (B1): every mesh built on the GPU in one batch. The
+ * batch is recorded once and built `1 + LBVH_BUILD_TIMED_RUNS` times through
+ * the dispatch timer (one compute pass, so the timestamps cover exactly the
+ * build); the first is the warm-up. The trees are then read back and
+ * assembled like the others, and their SAH cost is compared with tinybvh's
+ * trees of the same meshes (`reference`).
+ */
+export async function buildLbvhScene(
+    device: GPUDevice,
+    timer: DispatchTimer,
+    meshes: readonly BenchMeshGeometry[],
+    instances: readonly BenchInstance[],
+    reference: readonly MeshBvh[],
+): Promise<LbvhScene> {
+    const builder = new GpuLbvhBuilder(device, { label: 'trace-bench lbvh' });
+    await builder.prepare();
+    const geometries = meshes.map((mesh) => ({ positions: mesh.positions, indices: mesh.indices }));
+
+    const wallStart = performance.now();
+    const batch = builder.createBatch(geometries);
+    const gpuMs: number[] = [];
+    let wallBuildMs = 0;
+    let builds;
+    try {
+        for (let run = 0; run <= LBVH_BUILD_TIMED_RUNS; run++) {
+            const ms = await timer.time((encoder, timestampWrites) => batch.encode(encoder, timestampWrites));
+            if (run === 0) wallBuildMs = performance.now() - wallStart;
+            else gpuMs.push(ms);
+        }
+        const statsStart = performance.now();
+        builds = await batch.finish();
+        wallBuildMs += performance.now() - statsStart;
+    } finally {
+        batch.destroy();
+    }
+
+    const readbackStart = performance.now();
+    const layouts = await builder.readLayouts(builds);
+    builds.destroy();
+    const readbackMs = performance.now() - readbackStart;
+    const bvhs: MeshBvh[] = [];
+    let meshesFallenBack = 0;
+    let tinyBvh: TinyBvhBuilder | null = null;
+    for (const [index, layout] of layouts.entries()) {
+        if (layout) {
+            bvhs.push(layout);
+            continue;
+        }
+        meshesFallenBack++;
+        tinyBvh ??= await createTinyBvhBuilder();
+        bvhs.push(tinyBvh.buildLayout(geometries[index]).layout);
+    }
+
+    const scene = await assembleOursScene(bvhs, bvhs.map(() => 0), instances, false);
+    const sahCostVsTinybvh = sum(bvhs.map(absoluteSahCost)) / sum(reference.map(absoluteSahCost));
+    return {
+        ...scene,
+        result: {
+            ...scene.result,
+            buildMsTotal: wallBuildMs,
+            // One batch for every mesh: there is no per-mesh time.
+            buildMsMaxMesh: Number.NaN,
+            gpuBuildMsMedian: median(gpuMs),
+            gpuBuildMsMin: Math.min(...gpuMs),
+            gpuBuildMsMax: Math.max(...gpuMs),
+            gpuBuildRuns: gpuMs.length,
+            gpuBuildTimestampTimed: timer.source === 'timestamp-query' ? 1 : 0,
+            wallBuildMs,
+            readbackMs,
+            sahCostVsTinybvh,
+            meshesFallenBack,
+        },
+    };
 }
 
 async function assembleOursScene(
@@ -224,7 +313,7 @@ export function extractHitDistances(hitRecords: ArrayBuffer): Float32Array {
 export async function runOursTracer(
     device: GPUDevice,
     timer: DispatchTimer,
-    tracer: 'ours-tinybvh' | 'ours-tmbuild',
+    tracer: 'ours-tinybvh' | 'ours-tmbuild' | 'ours-lbvh',
     data: TraceSceneData,
     rays: OursRayBuffers,
     plan: TimingPlan,
