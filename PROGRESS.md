@@ -31,6 +31,14 @@ Numbers (indirect, against Cycles; bias, 8×8 block error, p95 block, FLIP 8×8,
 Not verified: the cause. The ratio map shows DDGI brighter on most shadowed surfaces, the curtains most.
 Next: find Sponza's +26% (leaks through thin curtains, probe density, sun shadow rays, the decal `dirt_decal` with GI albedo 0 acting as a black opaque surface because glTF's default metalness is 1 and M1 ignores `blocksLight`); a README section for `--materials-json`; the test view's full image is black on sky pixels.
 
+## 2026-11-05 · Decals out of GI (adapter) · implementer (opus), lead checked
+Did (90c54e2 and the next commit): an alpha-blended three material (glTF BLEND: `transparent` with `alphaTest` 0) maps to `blocksLight: false`. A `Mesh` whose materials all block no light is sent with `contributesToGI: false`, because M1's tracer doesn't honour `blocksLight` per triangle (M4). A mixed mesh stays in, with a one-time warning. `material.userData.giBlocksLight = true` keeps a blended material in GI. Also fixed a crash when a material was swapped away. `SceneSync.sentSeeThrough(mesh)`; the GI material table lists the loaded parts and the meshes left out; `render.py` loads only the listed parts and removes the left-out materials' faces (Sponza: `dirt_decal`, 8,140 faces), stopping if a material is only partly left out.
+Verified (agent): lint, typecheck, test 837; three-neutrality and three-environment on both GPUs; all 8 `ddgi-` pages on the RTX (covering the investigation's harness change). Sponza against the new untextured Cycles reference (decal faces removed, 8,192 samples, OptiX, under the lock):
+- **with curtains: RTX +23.03%, Intel +22.99%** (8×8 block error 26.7%), down from +26.3%;
+- **base package: RTX +3.05%, Intel +3.02%** (block error 9.4%);
+- the path tracer against Cycles: +0.16% and +0.14%; DDGI against the path tracer: +22.83% and +2.91%.
+So the decals were about 3 points; the rest is the curtain limit. The canonical `cycles-untextured-*` references were overwritten; the base one is `cycles-untextured-*-base`; the `-seed1` files are stale.
+
 ## 2026-11-05 · T1.9 quiet-window measurements · gpu-tester (sonnet), lead checked
 Did (453d213): with Dennis's GPU apps closed, about 57 min, all under the lock, medians of 3 (rows `note/quiet,1`; native label `t1.9-quiet`). Before every set the RTX read 0% use, 210 MHz, P8, 12 W, and nothing else ran on it (only the compositor and the Claude app, about 1.3% each, on the other adapter). SM clock under load about 1400–1500 MHz. HEAD 90c54e2 plus tool-page options (width and height, `--note`, per-pass steady medians).
 Numbers (RTX 3060, headless Chrome 156):
