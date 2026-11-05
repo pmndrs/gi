@@ -146,7 +146,7 @@ export async function readBuffer(device: GPUDevice, source: GPUBuffer, byteLengt
 }
 
 /** The field's resources as test kernels bind them (group 1). */
-const FIELD_GROUP: GPUBindGroupLayoutDescriptor = {
+export const FIELD_GROUP: GPUBindGroupLayoutDescriptor = {
     label: 'ddgi test field',
     entries: [
         { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },
@@ -182,7 +182,7 @@ fn testFieldIrradiance(position: vec3f, normal: vec3f, viewDirection: vec3f) -> 
 }
 `;
 
-function fieldBindGroup(device: GPUDevice, layout: GPUBindGroupLayout, field: DDGIField, parameters: GPUBuffer): GPUBindGroup {
+export function fieldBindGroup(device: GPUDevice, layout: GPUBindGroupLayout, field: DDGIField, parameters: GPUBuffer): GPUBindGroup {
     device.queue.writeBuffer(parameters, 0, field.sampleParameters as Float32Array<ArrayBuffer>);
     const view = (texture: GPUTexture): GPUTextureView => texture.createView({ dimension: '2d-array' });
     return device.createBindGroup({
@@ -197,7 +197,7 @@ function fieldBindGroup(device: GPUDevice, layout: GPUBindGroupLayout, field: DD
     });
 }
 
-const IO_GROUP: GPUBindGroupLayoutDescriptor = {
+export const IO_GROUP: GPUBindGroupLayoutDescriptor = {
     label: 'ddgi test io',
     entries: [
         { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },

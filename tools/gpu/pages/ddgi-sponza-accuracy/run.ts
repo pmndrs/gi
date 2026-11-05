@@ -15,7 +15,9 @@
  *     node tools/reference/cycles/run.ts --scene sponza --camera 1 --width 640 --height 360 \
  *          --samples 8192 --device gpu --materials-json bench/references/sponza/colonnade-from-the-floor/gi-materials.json
  *   which writes `cycles-untextured-{full,indirect,gi}.exr` next to it.
- * - `ddgi-untextured-{indirect,full}<suffix>.exr` and `ddgi-untextured<suffix>.json`.
+ * - `ddgi-untextured-{indirect,full}<suffix>.exr` and `ddgi-untextured<suffix>.json`;
+ * - with a `pathTrace` job, `pt-untextured-indirect<suffix>.exr`: the same
+ *   quantity from the page's path tracer over the platform's own scene;
  * - comparison PNGs (`compare-cycles-untextured-vs-ddgi-*`).
  *
  * What is compared: DDGI's test view "indirect" is albedo / π × the field,
@@ -200,12 +202,22 @@ no ${relative(repoRoot, referenceGi)} yet; render it with tools/reference/cycles
     // Sky pixels are 0 in the test view and the sky in Cycles' full image: the full numbers are for looking at, not judging.
     comparePrinted(referenceFull, full, 'full, 8x8 blocks (not gating; sky pixels are black in the test view)', ['--downsample', '8', '--out', prefix('full-blocks8')]);
     const gi = compareJson(referenceGi, indirect, ['--no-images', '--no-flip']);
+    const pathTraced = join(outDir, `pt-untextured-indirect${suffix}.exr`);
     const cyclesIndirect = existsSync(referenceIndirect) ? compareJson(referenceIndirect, indirect, ['--no-images', '--no-flip']) : null;
     const signed = (value: number): string => `${value >= 0 ? '+' : ''}${(value * 100).toFixed(2)}%`;
     console.log(`
 Sponza: DDGI indirect mean ${gi.metrics.meanTest.toFixed(6)} against untextured Cycles GI ${gi.metrics.meanReference.toFixed(6)}: ${signed(gi.metrics.bias)} (target ±${MEAN_TOLERANCE * 100}%)`);
     if (cyclesIndirect) {
         console.log(`(against Cycles' own indirect pass, ${cyclesIndirect.metrics.meanReference.toFixed(6)}, which leaves out sky light reaching a surface straight: ${signed(cyclesIndirect.metrics.bias)})`);
+    }
+    if (existsSync(pathTraced)) {
+        // The path tracer shares DDGI's scene exactly, so it splits the gap in two:
+        // how far our scene and shading are from Cycles, and how far DDGI is from them.
+        const tracedAgainstCycles = compareJson(referenceGi, pathTraced, ['--no-images', '--no-flip']);
+        const ddgiAgainstTraced = compareJson(pathTraced, indirect, ['--no-images', '--no-flip']);
+        const ddgiAgainstTracedBlocks = compareJson(pathTraced, indirect, ['--no-images', '--no-flip', '--downsample', '8']);
+        console.log(`path traced (our scene and shading) against Cycles GI: ${signed(tracedAgainstCycles.metrics.bias)}`);
+        console.log(`DDGI against path traced: ${signed(ddgiAgainstTraced.metrics.bias)}, 8x8 block error ${(ddgiAgainstTracedBlocks.metrics.meanRelativeError * 100).toFixed(2)}%`);
     }
 }
 
@@ -294,9 +306,10 @@ async function main(): Promise<void> {
     const fullFile = join(outDir, `ddgi-untextured-full${suffix}.exr`);
     await writeFile(indirectFile, writeExr(image('indirectBase64')));
     await writeFile(fullFile, writeExr(image('fullBase64')));
+    if (data.pathTracedBase64) await writeFile(join(outDir, `pt-untextured-indirect${suffix}.exr`), writeExr(image('pathTracedBase64')));
     const tableFile = join(outDir, `gi-materials${suffix}.json`);
     await writeFile(tableFile, `${JSON.stringify(data.giMaterials, null, 2)}\n`);
-    const summary = { ...data, indirectBase64: undefined, fullBase64: undefined, giMaterials: undefined, adapter, finishedAt: new Date().toISOString() };
+    const summary = { ...data, indirectBase64: undefined, fullBase64: undefined, pathTracedBase64: undefined, giMaterials: undefined, adapter, finishedAt: new Date().toISOString() };
     await writeFile(join(outDir, `ddgi-untextured${suffix}.json`), JSON.stringify(summary, null, 2));
     console.log(`wrote ${relative(repoRoot, indirectFile)}, ${relative(repoRoot, fullFile)} and ${relative(repoRoot, tableFile)}`);
     console.log(`${String(data.passes)} passes in ${String(data.convergeMs)} ms; block means ${JSON.stringify(data.blockMeans)}`);

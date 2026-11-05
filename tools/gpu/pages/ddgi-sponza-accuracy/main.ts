@@ -36,6 +36,15 @@
  * frames), not the millisecond budget, so the run doesn't depend on the
  * budget controller.
  *
+ * Experiments (the Sponza +26% investigation) go through the job, e.g.
+ * `--job '{"parts":["sponza-intel"],"pathTrace":{"paths":128,"bounces":12,"backFaces":"shaded"}}'`:
+ * `ddgi` settings and volume over the defaults, `parts` to keep,
+ * `excludeMaterials` to leave out of GI, `pathTrace` for the same view from
+ * the page's path tracer (ddgi-shared/path-tracer.ts; it agrees with Cycles
+ * to +0.15% on Sponza, so it is the reference for changed scenes), and
+ * `probeCheck` for probes against path-traced irradiance at their own
+ * positions. Probe-state counts are always reported.
+ *
  * Run `node tools/gpu/pages/ddgi-sponza-accuracy/run.ts` for the EXRs, the
  * material table and the comparison. `pnpm test:gpu --filter
  * ddgi-sponza-accuracy` (manual: it needs the downloaded Sponza) runs the
@@ -43,6 +52,9 @@
  */
 
 import { PerspectiveCamera, type Material, type Mesh, type Object3D } from 'three/webgpu';
+import type { DDGISettingsInput, DDGIVolumeSettings } from '../../../../packages/ddgi-core/src/techniques/ddgi/settings.ts';
+import { PathTracer, type PathTraceOptions } from '../ddgi-shared/path-tracer.ts';
+import { ProbeValues } from '../ddgi-shared/probe-values.ts';
 import { assert } from '../../client.ts';
 import type { MaterialDescriptor } from '../../../../packages/ddgi-core/src/platform/contract/scene.ts';
 import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
@@ -51,7 +63,7 @@ import { ThreeGI } from '../../../../packages/ddgi-three/src/three-gi.ts';
 import { loadAllManifests } from '../../../../apps/viewer/src/scene/manifests.ts';
 import { loadScene } from '../../../../apps/viewer/src/scene/load-scene.ts';
 import { platformSkyEnvironment } from '../../../../scenes/src/sky/sky-image.ts';
-import { floatsToBase64, imageMean, TestView } from '../ddgi-shared/harness.ts';
+import { floatsToBase64, imageMean, readProbeData, TestView } from '../ddgi-shared/harness.ts';
 import { runSteps, runThreePage } from '../three-shared/harness.ts';
 
 export interface SponzaAccuracyJob {
@@ -69,6 +81,23 @@ export interface SponzaAccuracyJob {
     readonly maxBlocks: number;
     /** Return the images as base64 floats and the material table (for run.ts). */
     readonly exportImages: boolean;
+    /**
+     * Experiments (T1.9 Sponza investigation). DDGI settings over the
+     * defaults; `volume` fields replace the manifest volume's.
+     */
+    readonly ddgi: Partial<Omit<DDGISettingsInput, 'volume'>> & { readonly volume?: Partial<DDGIVolumeSettings> };
+    /** Model parts to load, by asset id (e.g. only `sponza-intel` for the base package); null loads all. */
+    readonly parts: readonly string[] | null;
+    /** Materials (glTF names) whose meshes are left out of GI entirely: not traced, not seen by the test view. */
+    readonly excludeMaterials: readonly string[];
+    /** Also render the test view's indirect image with the page's path tracer (ddgi-shared/path-tracer.ts). */
+    readonly pathTrace: PathTraceOptions | null;
+    /**
+     * Compare probes with path-traced irradiance at their own positions:
+     * `probes` active probes in front of the camera, each in the 6 axis
+     * directions, `paths` paths per direction.
+     */
+    readonly probeCheck: (PathTraceOptions & { readonly probes: number }) | null;
 }
 
 const DEFAULT_SPONZA_ACCURACY_JOB: SponzaAccuracyJob = {
@@ -81,6 +110,11 @@ const DEFAULT_SPONZA_ACCURACY_JOB: SponzaAccuracyJob = {
     minBlocks: 2,
     maxBlocks: 12,
     exportImages: false,
+    ddgi: {},
+    parts: null,
+    excludeMaterials: [],
+    pathTrace: null,
+    probeCheck: null,
 };
 
 declare global {
@@ -184,6 +218,147 @@ function percent(value: number): string {
     return `${(value * 100).toFixed(2)}%`;
 }
 
+const AXIS_DIRECTIONS: readonly (readonly [number, number, number])[] = [
+    [1, 0, 0],
+    [-1, 0, 0],
+    [0, 1, 0],
+    [0, -1, 0],
+    [0, 0, 1],
+    [0, 0, -1],
+];
+const AXIS_NAMES = ['+x', '-x', '+y (up)', '-y (down)', '+z', '-z'];
+
+/** A small seeded generator (mulberry32), so the probe sample is the same run to run. */
+function seededRandom(seed: number): () => number {
+    let state = seed >>> 0;
+    return () => {
+        state = (state + 0x6d2b79f5) >>> 0;
+        let value = Math.imul(state ^ (state >>> 15), 1 | state);
+        value = (value + Math.imul(value ^ (value >>> 7), 61 | value)) ^ value;
+        return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
+    };
+}
+
+interface ViewBookmark {
+    readonly position: readonly [number, number, number];
+    readonly target: readonly [number, number, number];
+    readonly fovYDeg: number;
+}
+
+/** Probes nearer than this to the camera, or farther, are not checked. */
+const PROBE_CHECK_RANGE = { near: 0.5, far: 30 } as const;
+
+/**
+ * Probes against path-traced irradiance at their own (relocated) positions,
+ * per axis direction. Picks active probes in front of the camera (inside
+ * a cone of the horizontal field of view at 16:9, within 30 m). Reports the
+ * summed ratio overall, per direction and per height.
+ */
+async function checkProbes(
+    device: GPUDevice,
+    ddgi: DDGITechnique,
+    tracer: PathTracer,
+    bookmark: ViewBookmark,
+    options: PathTraceOptions & { readonly probes: number },
+    log: (message: string) => void,
+    platform: GIPlatformImpl,
+): Promise<Record<string, unknown>> {
+    const field = ddgi.field;
+    assert(field, 'DDGI has no field');
+    const records = await readProbeData(device, field);
+    const { counts, origin, spacing } = field.grid;
+    const forward = bookmark.target.map((value, axis) => value - bookmark.position[axis]);
+    const forwardLength = Math.hypot(...forward);
+    const horizontalHalfFov = Math.atan(Math.tan((bookmark.fovYDeg * Math.PI) / 360) * (16 / 9));
+    const coneCosine = Math.cos(horizontalHalfFov);
+    const candidates: { index: number; position: [number, number, number] }[] = [];
+    records.forEach((record, index) => {
+        if (record.state !== 0) return;
+        const x = index % counts[0];
+        const z = Math.floor(index / counts[0]) % counts[2];
+        const y = Math.floor(index / (counts[0] * counts[2]));
+        const position = [x, y, z].map((cell, axis) => origin[axis] + (cell + record.offset[axis]) * spacing[axis]) as [number, number, number];
+        const toProbe = position.map((value, axis) => value - bookmark.position[axis]);
+        const distance = Math.hypot(...toProbe);
+        if (distance > PROBE_CHECK_RANGE.far || distance < PROBE_CHECK_RANGE.near) return;
+        const cosine = toProbe.reduce((sum, value, axis) => sum + value * forward[axis], 0) / (distance * forwardLength);
+        if (cosine < coneCosine) return;
+        candidates.push({ index, position });
+    });
+    const random = seededRandom(1234);
+    for (let index = candidates.length - 1; index > 0; index--) {
+        const other = Math.floor(random() * (index + 1));
+        [candidates[index], candidates[other]] = [candidates[other], candidates[index]];
+    }
+    const chosen = candidates.slice(0, options.probes);
+    const directionsPerProbe = AXIS_DIRECTIONS.length;
+    const queries = chosen.flatMap((probe) => AXIS_DIRECTIONS.map((direction) => ({ probe: probe.index, direction })));
+    const stored = await (await ProbeValues.create(device, platform)).read(field, queries);
+    assert(
+        stored.every((value) => value.state === 0),
+        'a chosen probe is not active',
+    );
+    const traceStart = performance.now();
+    const traced = await tracer.irradianceAt(
+        chosen.flatMap((probe) => AXIS_DIRECTIONS.map((direction) => ({ position: probe.position, normal: direction }))),
+        options,
+    );
+    const storedValues = stored.map((value) => value.irradiance);
+    const sum = (values: readonly (readonly [number, number, number])[], pick: (index: number) => boolean): number =>
+        values.reduce((total, value, index) => (pick(index) ? total + value[0] + value[1] + value[2] : total), 0);
+    const ratio = (pick: (index: number) => boolean): number => sum(storedValues, pick) / sum(traced, pick);
+    const byDirection: Record<string, number> = {};
+    AXIS_NAMES.forEach((name, direction) => {
+        byDirection[name] = ratio((index) => index % directionsPerProbe === direction);
+    });
+    const byHeight: Record<string, number> = {};
+    for (const [name, low, high] of [
+        ['below 2 m', -Infinity, 2],
+        ['2 to 6 m', 2, 6],
+        ['6 to 11 m', 6, 11],
+        ['above 11 m', 11, Infinity],
+    ] as const) {
+        const probeInBand = (probe: { position: [number, number, number] }): boolean => probe.position[1] >= low && probe.position[1] < high;
+        const probesInBand = chosen.filter(probeInBand).length;
+        if (probesInBand > 0) byHeight[`${name} (${probesInBand} probes)`] = ratio((index) => probeInBand(chosen[Math.floor(index / directionsPerProbe)]));
+    }
+    // Per probe (summed over its directions), for the spread.
+    const onProbe = (probe: number) => (index: number) => Math.floor(index / directionsPerProbe) === probe;
+    const perProbeDetail = chosen.map((probe, index) => ({
+        probe: probe.index,
+        position: probe.position.map((value) => Number(value.toFixed(3))),
+        stored: sum(storedValues, onProbe(index)),
+        traced: sum(traced, onProbe(index)),
+        ratio: ratio(onProbe(index)),
+    }));
+    const perProbe = perProbeDetail.map((detail) => detail.ratio).sort((a, b) => a - b);
+    const quantile = (share: number): number => perProbe[Math.min(perProbe.length - 1, Math.floor(perProbe.length * share))];
+    // Probes far brighter than the truth at their own position: where the field is wrong at the source.
+    const outliers = [...perProbeDetail].sort((a, b) => b.ratio - a.ratio).slice(0, 25);
+    const overTwice = perProbeDetail.filter((detail) => detail.ratio > 2);
+    const storedTotal = sum(storedValues, () => true);
+    const result = {
+        candidates: candidates.length,
+        probes: chosen.length,
+        paths: options.paths,
+        bounces: options.bounces,
+        backFaces: options.backFaces,
+        traceMs: Math.round(performance.now() - traceStart),
+        storedOverTraced: ratio(() => true),
+        byDirection,
+        byHeight,
+        perProbeQuantiles: { p10: quantile(0.1), median: quantile(0.5), p90: quantile(0.9) },
+        probesOverTwice: overTwice.length,
+        storedShareOfProbesOverTwice: overTwice.reduce((total, detail) => total + detail.stored, 0) / storedTotal,
+        outliers,
+    };
+    log(
+        `probe check: ${chosen.length} of ${candidates.length} active probes in view; stored / path traced ${result.storedOverTraced.toFixed(4)}; ` +
+            `by direction ${JSON.stringify(byDirection)}; by height ${JSON.stringify(byHeight)}; per probe ${JSON.stringify(result.perProbeQuantiles)}`,
+    );
+    return result;
+}
+
 const SETTLE_RULE =
     'warm-up passes with a running average, then blocks of full passes at the normal hysteresis until the test view indirect mean moves by less than the tolerance between blocks';
 
@@ -196,13 +371,16 @@ await runThreePage(async ({ device, data, log }) => {
     data.camera = bookmark.name;
 
     const loadStart = performance.now();
-    const loaded = await loadScene(manifest, () => {});
+    const keptParts = job.parts;
+    const loadedManifest = keptParts ? { ...manifest, parts: manifest.parts.filter((part) => part.kind !== 'model' || keptParts.includes(part.asset)) } : manifest;
+    data.parts = loadedManifest.parts.map((part) => (part.kind === 'model' ? part.asset : part.kind));
+    const loaded = await loadScene(loadedManifest, () => {});
     data.loadMs = Math.round(performance.now() - loadStart);
     const scene = loaded.scene;
 
     // The model parts: load-scene.ts puts each under a Group named `<asset>/<path>`.
     const holders = new Map<Object3D, string>();
-    for (const part of manifest.parts) {
+    for (const part of loadedManifest.parts) {
         if (part.kind !== 'model') continue;
         const holder = loaded.content.getObjectByName(`${part.asset}/${part.path}`);
         assert(holder, `no loaded object for part ${part.asset}`);
@@ -214,13 +392,26 @@ await runThreePage(async ({ device, data, log }) => {
     scene.traverse((object) => {
         if ((object as Mesh).isMesh && !content.has(object)) object.userData.giContributes = false;
     });
+    // Experiments: meshes of excluded materials leave GI altogether.
+    let excludedMeshes = 0;
+    loaded.content.traverse((object) => {
+        const mesh = object as Mesh;
+        if (!mesh.isMesh) return;
+        const materials: Material[] = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+        if (materials.some((material) => job.excludeMaterials.includes(material.name))) {
+            mesh.userData.giContributes = false;
+            excludedMeshes++;
+        }
+    });
+    data.excludedMeshes = excludedMeshes;
 
     const camera = new PerspectiveCamera(bookmark.fovYDeg, job.width / job.height, 0.05, loaded.diagonal * 2);
     camera.position.set(...bookmark.position);
     camera.lookAt(...bookmark.target);
 
     const platform = new GIPlatformImpl(device, { label: 'ddgi sponza accuracy' });
-    const ddgi = platform.addTechnique(new DDGITechnique({ volume: { center: manifest.volume.center, size: manifest.volume.size, spacing: manifest.volume.probeSpacing } }));
+    const volume: DDGIVolumeSettings = { center: manifest.volume.center, size: manifest.volume.size, spacing: manifest.volume.probeSpacing, ...job.ddgi.volume };
+    const ddgi = platform.addTechnique(new DDGITechnique({ ...job.ddgi, volume }));
     platform.setOutput(ddgi);
     await platform.prepare();
     const threeGI = new ThreeGI(platform, scene, { budget: { units: 0 }, environment: platformSkyEnvironment(manifest) });
@@ -298,6 +489,31 @@ await runThreePage(async ({ device, data, log }) => {
         if (job.exportImages) {
             data.indirectBase64 = floatsToBase64(images.indirect);
             data.fullBase64 = floatsToBase64(images.full);
+        }
+
+        // Probe states and relocations, for comparing experiments (layout.ts PROBE_STATE: 0 active, 1 off inside, 2 off no surface, 3 not updated).
+        const probeRecords = await readProbeData(device, field);
+        const stateCounts = [0, 0, 0, 0];
+        let relocated = 0;
+        for (const record of probeRecords) {
+            stateCounts[record.state] = (stateCounts[record.state] ?? 0) + 1;
+            if (record.offset.some((value) => value !== 0)) relocated++;
+        }
+        data.probeStates = { active: stateCounts[0], offInside: stateCounts[1], offNoSurface: stateCounts[2], notUpdated: stateCounts[3], relocated };
+        log(`probe states: ${JSON.stringify(data.probeStates)}`);
+
+        if (job.pathTrace || job.probeCheck) {
+            const tracer = await PathTracer.create(device, platform);
+            if (job.pathTrace) {
+                const traceStart = performance.now();
+                const traced = await tracer.renderIndirect(bookmark, job.width, job.height, job.pathTrace);
+                data.pathTraceMs = Math.round(performance.now() - traceStart);
+                data.pathTracedMean = imageMean(traced);
+                const ratio = (data.indirectMean as number) / (data.pathTracedMean as number);
+                log(`path-traced indirect mean ${(data.pathTracedMean as number).toFixed(6)} (${job.pathTrace.paths} paths, ${job.pathTrace.bounces} rays, back faces ${job.pathTrace.backFaces}) in ${String(data.pathTraceMs)} ms; DDGI / path traced ${ratio.toFixed(4)}`);
+                if (job.exportImages) data.pathTracedBase64 = floatsToBase64(traced);
+            }
+            if (job.probeCheck) data.probeCheck = await checkProbes(device, ddgi, tracer, bookmark, job.probeCheck, log, platform);
         }
     } finally {
         threeGI.dispose();
