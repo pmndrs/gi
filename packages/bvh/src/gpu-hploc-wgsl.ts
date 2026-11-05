@@ -79,6 +79,15 @@
  *
  * A wait that runs out is counted, and the builder refuses the tree.
  *
+ * **Numbering made nodes without a counter.** Every cluster has a
+ * representative, one of its leaves' sorted positions (a leaf is its own).
+ * When clusters a and b (a first) merge, the new node takes a's
+ * representative and its number is b's, which no cluster represents any more.
+ * So a mesh's n - 1 nodes get distinct numbers below n, decided locally; one
+ * number (the root's representative) stays unused, and the layout skips it.
+ * Counting nodes with one atomic per mesh and merge round queued hundreds of
+ * thousands of atomics on one word for Sponza's big meshes.
+ *
  * **The layout** comes after the climb, in later dispatches: the SAH leaf
  * collapse was decided as each node was made (B1's rule), one scan numbers
  * the nodes that stay, and a second gives each kept node's leaves their run of
@@ -97,8 +106,8 @@ export { HPLOC_MAX_CLUSTERS, HPLOC_MERGE_THRESHOLD, HPLOC_SEARCH_RADIUS };
 /** Words per radix-tree node in the climb's scratch: the exchange word, then one per side. */
 export const HPLOC_CLIMB_WORDS = 3;
 
-/** Words per node the merges make: its box (min xyz, max xyz), SAH cost, info. */
-export const HPLOC_RECORD_WORDS = 8;
+/** Words per node the merges make: its box (min xyz, max xyz), SAH cost, info, representative. */
+export const HPLOC_RECORD_WORDS = 9;
 
 /** Bits of a stored cluster entry that hold the writer's level; the cluster number is above them. */
 const LEVEL_BITS = 7;
@@ -118,8 +127,6 @@ const INFO_HEIGHT_MASK = 0x7f;
 export const HPLOC_STAT = {
     /** The root's cluster number, written when the root is merged; 0 (never a root) before. */
     root: 26,
-    /** Nodes the merges made: must end at triangles - 1. */
-    nodesMade: 27,
     /** Merge rounds that found no mutual pair (NaN boxes). Must be 0. */
     failedMerges: 28,
     /** Subgroups too narrow for HPLOC_SLOTS slots. Must be 0. */
@@ -175,13 +182,14 @@ struct HplocParams {
 @group(0) @binding(22) var<storage, read_write> hplocDeltas: array<u32>;
 // 'tinybvh-63' only: per triangle, its Morton code's high word, then its low word.
 @group(0) @binding(23) var<storage, read_write> hplocCodes: array<u32>;
-// Handed between climbing threads: [3 words per radix-tree node][a record per made node][a stored cluster per sorted position].
+// Handed between climbing threads: [3 words per radix-tree node][a record per possible made node (one per
+// sorted position, see "Numbering")][a stored cluster per sorted position].
 @group(0) @binding(24) var<storage, read_write> hplocScratch: array<atomic<u32>>;
 // Plain views of hplocScratch, for the clear and for the dispatches after the climb.
 @group(0) @binding(25) var<storage, read> hplocScratchView: array<u32>;
 @group(0) @binding(26) var<storage, read_write> hplocScratchFill: array<vec4u>;
-// Read only in later dispatches: [the node scan (lbvhRank), one more at the end][the leaf-run scan, one more]
-// [2 children per made node][every cluster's parent: leaves, then made nodes][each sorted triangle's tree position].
+// Read only in later dispatches, all per sorted position: [the node scan, one more at the end][the leaf-run
+// scan, one more][2 children per made node][every cluster's parent: leaves, then made nodes][each triangle's tree position].
 @group(0) @binding(27) var<storage, read_write> hplocLinks: array<u32>;
 @group(0) @binding(28) var<uniform> hplocParams: HplocParams;
 // 'tinybvh-63' only: the triangles in order of the low code words (the first sort's result).
@@ -210,7 +218,6 @@ const HPLOC_NO_LANE: u32 = 0xffffffffu;
 // What a merge returns when it could not finish.
 const HPLOC_FAILED: u32 = 0xffffffffu;
 const HPLOC_STAT_ROOT: u32 = ${stat.root}u;
-const HPLOC_STAT_NODES_MADE: u32 = ${stat.nodesMade}u;
 const HPLOC_STAT_FAILED_MERGES: u32 = ${stat.failedMerges}u;
 const HPLOC_STAT_NARROW_SUBGROUPS: u32 = ${stat.narrowSubgroups}u;
 const HPLOC_STAT_TOO_DEEP: u32 = ${stat.tooDeep}u;
@@ -225,9 +232,9 @@ fn hplocSideWord(mesh: LbvhMesh, split: u32, side: u32) -> u32 {
     return (mesh.innerStart + split) * HPLOC_CLIMB_WORDS + 1u + side;
 }
 
-// Word 'word' of the record of made node 'made' (cluster triangleCount + made).
+// Word 'word' of the record of made node 'made' (cluster triangleCount + made, made below triangleCount).
 fn hplocRecordWord(mesh: LbvhMesh, made: u32, word: u32) -> u32 {
-    return hplocParams.recordsOffset + (mesh.innerStart + made) * HPLOC_RECORD_WORDS + word;
+    return hplocParams.recordsOffset + (mesh.triangleStart + made) * HPLOC_RECORD_WORDS + word;
 }
 
 fn hplocListWord(mesh: LbvhMesh, position: u32) -> u32 {
@@ -235,18 +242,23 @@ fn hplocListWord(mesh: LbvhMesh, position: u32) -> u32 {
 }
 
 fn hplocChildWord(mesh: LbvhMesh, made: u32, side: u32) -> u32 {
-    return hplocParams.childrenOffset + (mesh.innerStart + made) * 2u + side;
+    return hplocParams.childrenOffset + (mesh.triangleStart + made) * 2u + side;
 }
 
 fn hplocParentWord(mesh: LbvhMesh, cluster: u32) -> u32 {
     if (cluster < mesh.triangleCount) {
         return hplocParams.parentsOffset + mesh.triangleStart + cluster;
     }
-    return hplocParams.parentsOffset + hplocParams.triangleTotal + mesh.innerStart + cluster - mesh.triangleCount;
+    return hplocParams.parentsOffset + hplocParams.triangleTotal + mesh.triangleStart + cluster - mesh.triangleCount;
 }
 
 fn hplocLeafRunWord(mesh: LbvhMesh, made: u32) -> u32 {
-    return hplocParams.leafRunsOffset + mesh.innerStart + made;
+    return hplocParams.leafRunsOffset + mesh.triangleStart + made;
+}
+
+// The node scan's word of made node 'made'.
+fn hplocRankWord(mesh: LbvhMesh, made: u32) -> u32 {
+    return mesh.triangleStart + made;
 }
 
 fn hplocTreePositionWord(mesh: LbvhMesh, position: u32) -> u32 {
@@ -392,6 +404,7 @@ struct HplocCluster {
     id: u32,     // a sorted position (a leaf) below the mesh's triangle count, a made node at or above it
     cost: f32,   // SAH cost of its subtree: the cheaper of one leaf and an inner node
     info: u32,   // triangles << 8 | collapse bit | height
+    rep: u32,    // its representative (see "Numbering" at the top)
 }
 
 alias HplocSlots = array<HplocCluster, HPLOC_SLOTS>;
@@ -453,12 +466,12 @@ fn hplocWaitEntry(mesh: u32, at: u32, level: u32) -> u32 {
 fn hplocLeafCluster(mesh: LbvhMesh, position: u32) -> HplocCluster {
     let box = lbvhPrimitiveBox(mesh, lbvhValues[mesh.triangleStart + position]);
     let cost = lbvhParams.intersectionCost * lbvhHalfArea(box.lower, box.upper);
-    return HplocCluster(box.lower, box.upper, position, cost, 1u << HPLOC_INFO_TRIANGLES_SHIFT);
+    return HplocCluster(box.lower, box.upper, position, cost, 1u << HPLOC_INFO_TRIANGLES_SHIFT, position);
 }
 
 // A made node, from its record: its maker stored it before the node could be handed on.
-// All eight words are loaded first, so the loads overlap; only a word still
-// unwritten is then waited for (a wait per word would be eight round trips in a row).
+// All its words are loaded first, so the loads overlap; only a word still
+// unwritten is then waited for (a wait per word would be that many round trips in a row).
 fn hplocMadeCluster(mesh: LbvhMesh, cluster: u32) -> HplocCluster {
     let made = cluster - mesh.triangleCount;
     var words: array<u32, ${HPLOC_RECORD_WORDS}>;
@@ -472,7 +485,7 @@ fn hplocMadeCluster(mesh: LbvhMesh, cluster: u32) -> HplocCluster {
     }
     let lower = vec3f(bitcast<f32>(words[0]), bitcast<f32>(words[1]), bitcast<f32>(words[2]));
     let upper = vec3f(bitcast<f32>(words[3]), bitcast<f32>(words[4]), bitcast<f32>(words[5]));
-    return HplocCluster(lower, upper, cluster, bitcast<f32>(words[6]), words[7]);
+    return HplocCluster(lower, upper, cluster, bitcast<f32>(words[6]), words[7], words[8]);
 }
 
 // Cluster 'index' of a node being merged: the left child's clusters, then the right child's.
@@ -511,10 +524,12 @@ fn hplocCloser(index: u32, other: u32, area: f32, nearest: u32, best: f32) -> bo
     return area < best || (hplocParams.tieBreak == HPLOC_TIES_IN_PAIRS && area == best && hplocPairRank(index, other) < hplocPairRank(index, nearest));
 }
 
-// Makes node 'made' from clusters a (the first in order) and b: its record (handed
+// Makes a node from clusters a (the first in order) and b: its record (handed
 // on, through atomics), children and parents (read in later dispatches only), and
-// the SAH collapse decision, B1's rule. Both children are finished subtrees.
-fn hplocMakeNode(mesh: LbvhMesh, made: u32, a: HplocCluster, b: HplocCluster, isRoot: bool) -> HplocCluster {
+// the SAH collapse decision, B1's rule. Both children are finished subtrees. Its
+// number is b's representative, and it keeps a's (see "Numbering" at the top).
+fn hplocMakeNode(mesh: LbvhMesh, a: HplocCluster, b: HplocCluster, isRoot: bool) -> HplocCluster {
+    let made = b.rep;
     let lower = min(a.lower, b.lower);
     let upper = max(a.upper, b.upper);
     let area = lbvhHalfArea(lower, upper);
@@ -540,11 +555,12 @@ fn hplocMakeNode(mesh: LbvhMesh, made: u32, a: HplocCluster, b: HplocCluster, is
     }
     atomicStore(&hplocScratch[hplocRecordWord(mesh, made, 6u)], bitcast<u32>(cost));
     atomicStore(&hplocScratch[hplocRecordWord(mesh, made, 7u)], info);
+    atomicStore(&hplocScratch[hplocRecordWord(mesh, made, 8u)], a.rep);
     hplocLinks[hplocChildWord(mesh, made, 0u)] = a.id;
     hplocLinks[hplocChildWord(mesh, made, 1u)] = b.id;
     hplocLinks[hplocParentWord(mesh, a.id)] = id;
     hplocLinks[hplocParentWord(mesh, b.id)] = id;
-    return HplocCluster(lower, upper, id, cost, info);
+    return HplocCluster(lower, upper, id, cost, info, a.rep);
 }
 
 // ---- The subgroup's merge: shuffles by cluster number ----
@@ -562,8 +578,9 @@ fn hplocGather(clusters: HplocSlots, wanted: HplocSlotWords, laneCount: u32) -> 
             let id = subgroupShuffle(clusters[offered].id, sourceLane);
             let cost = subgroupShuffle(clusters[offered].cost, sourceLane);
             let info = subgroupShuffle(clusters[offered].info, sourceLane);
+            let representative = subgroupShuffle(clusters[offered].rep, sourceLane);
             if (offered == sourceSlot) {
-                result[slot] = HplocCluster(lower, upper, id, cost, info);
+                result[slot] = HplocCluster(lower, upper, id, cost, info, representative);
             }
         }
     }
@@ -602,18 +619,6 @@ fn hplocGatherWords(values: HplocSlotWords, wanted: HplocSlotWords, laneCount: u
         }
     }
     return result;
-}
-
-// Exclusive prefix sums of per-slot flags in cluster order: every lane's slot 0, then slot 1, ...
-@diagnostic(off, subgroup_uniformity)
-fn hplocPrefix(flags: HplocSlotWords) -> HplocSlotWords {
-    var prefix: HplocSlotWords;
-    var before = 0u;
-    for (var slot = 0u; slot < HPLOC_SLOTS; slot += 1u) {
-        prefix[slot] = before + subgroupExclusiveAdd(flags[slot]);
-        before += subgroupAdd(flags[slot]);
-    }
-    return prefix;
 }
 
 @diagnostic(off, subgroup_uniformity)
@@ -735,22 +740,10 @@ fn hplocMerge(mesh: LbvhMesh, node: HplocNode, lane: u32, laneCount: u32) -> u32
             }
             return HPLOC_FAILED;
         }
-        var base = 0u;
-        if (subgroupElect()) {
-            base = atomicAdd(&lbvhStats[lbvhStatWord(mesh.index, HPLOC_STAT_NODES_MADE)], made);
-        }
-        // The elected lane is the lowest active one, which is where broadcastFirst reads.
-        base = subgroupBroadcastFirst(base);
-        let makeRank = hplocPrefix(makes);
         for (var slot = 0u; slot < HPLOC_SLOTS; slot += 1u) {
             if (makes[slot] == 1u) {
-                let madeIndex = base + makeRank[slot];
-                if (madeIndex < mesh.innerCount) {
-                    // The last pair of the root's merge makes the root.
-                    clusters[slot] = hplocMakeNode(mesh, madeIndex, clusters[slot], partner[slot], isRoot && kept == 1u);
-                } else {
-                    atomicAdd(&lbvhStats[lbvhStatWord(mesh.index, LBVH_STAT_INCOMPLETE)], 1u);
-                }
+                // The last pair of the root's merge makes the root.
+                clusters[slot] = hplocMakeNode(mesh, clusters[slot], partner[slot], isRoot && kept == 1u);
             }
         }
 
@@ -920,7 +913,7 @@ fn hplocRootOf(mesh: LbvhMesh) -> u32 {
     return lbvhStatsView[lbvhStatWord(mesh.index, HPLOC_STAT_ROOT)];
 }
 
-// A cluster's info word in the dispatches after the climb.
+// A cluster's info word in the dispatches after the climb (LBVH_UNWRITTEN for the number no node got).
 fn hplocInfo(mesh: LbvhMesh, cluster: u32) -> u32 {
     if (cluster < mesh.triangleCount) {
         return 1u << HPLOC_INFO_TRIANGLES_SHIFT;
@@ -974,7 +967,7 @@ fn hplocMark(
     let tile = lbvhTile(workgroup, groups);
     let mesh = tile.mesh;
     let made = tile.first + localIndex;
-    if (made >= mesh.innerCount) {
+    if (made >= mesh.triangleCount) {
         return;
     }
     // A one-triangle mesh made no node but still needs one, its root, which holds the triangle.
@@ -982,7 +975,8 @@ fn hplocMark(
     var leafTriangles = 1u;
     if (!kept) {
         let cluster = mesh.triangleCount + made;
-        kept = hplocKept(mesh, cluster, hplocRootOf(mesh));
+        // The one number no node got has no record.
+        kept = hplocInfo(mesh, cluster) != LBVH_UNWRITTEN && hplocKept(mesh, cluster, hplocRootOf(mesh));
         leafTriangles = 0u;
         if (kept) {
             for (var side = 0u; side < 2u; side += 1u) {
@@ -993,10 +987,12 @@ fn hplocMark(
             }
         }
     }
-    hplocLinks[mesh.innerStart + made] = select(0u, 1u, kept);
+    hplocLinks[hplocRankWord(mesh, made)] = select(0u, 1u, kept);
     hplocLinks[hplocLeafRunWord(mesh, made)] = leafTriangles;
-    if (mesh.index + 1u == lbvhParams.meshCount && made + 1u == mesh.innerCount) {
-        hplocLinks[hplocParams.leafRunsOffset + hplocParams.innerTotal] = 0u;   // the scan's end marker
+    if (mesh.index + 1u == lbvhParams.meshCount && made + 1u == mesh.triangleCount) {
+        // The scans' end markers.
+        hplocLinks[hplocParams.triangleTotal] = 0u;
+        hplocLinks[hplocParams.leafRunsOffset + hplocParams.triangleTotal] = 0u;
     }
 }
 
@@ -1041,7 +1037,7 @@ fn hplocPlaceLeaves(mesh: LbvhMesh, cluster: u32, start: u32) {
 
 // The output number of a kept made node: its scanned rank within the mesh's run, the root swapped to 0.
 fn hplocOutputIndex(mesh: LbvhMesh, cluster: u32, nodeOffset: u32, rootRank: u32) -> u32 {
-    return lbvhOutputIndex(hplocLinks[mesh.innerStart + cluster - mesh.triangleCount] - nodeOffset, rootRank);
+    return lbvhOutputIndex(hplocLinks[hplocRankWord(mesh, cluster - mesh.triangleCount)] - nodeOffset, rootRank);
 }
 
 @compute @workgroup_size(${LBVH_WORKGROUP_SIZE})
@@ -1056,11 +1052,11 @@ fn hplocEmit(
     let tile = lbvhTile(workgroup, groups);
     let mesh = tile.mesh;
     let made = tile.first + localIndex;
-    if (made >= mesh.innerCount) {
+    if (made >= mesh.triangleCount) {
         return;
     }
     // The mesh's run of node numbers starts at the scanned value of its first made node.
-    let nodeOffset = hplocLinks[mesh.innerStart];
+    let nodeOffset = hplocLinks[hplocRankWord(mesh, 0u)];
     if (mesh.triangleCount == 1u) {
         // One triangle: the root holds it on the left and nothing on the right.
         let box = lbvhPrimitiveBox(mesh, 0u);
@@ -1072,12 +1068,12 @@ fn hplocEmit(
         return;
     }
     // Kept nodes are the ones the node scan counted (hplocMark).
-    if (hplocLinks[mesh.innerStart + made + 1u] == hplocLinks[mesh.innerStart + made]) {
+    if (hplocLinks[hplocRankWord(mesh, made + 1u)] == hplocLinks[hplocRankWord(mesh, made)]) {
         return;
     }
     let cluster = mesh.triangleCount + made;
     let root = hplocRootOf(mesh);
-    let rootRank = hplocLinks[mesh.innerStart + root - mesh.triangleCount] - nodeOffset;
+    let rootRank = hplocLinks[hplocRankWord(mesh, root - mesh.triangleCount)] - nodeOffset;
     let out = hplocOutputIndex(mesh, cluster, nodeOffset, rootRank);
     // This node's leaves' run of triangle positions, within the mesh's.
     var placed = hplocLinks[hplocLeafRunWord(mesh, made)] - hplocLinks[hplocLeafRunWord(mesh, 0u)];
@@ -1129,9 +1125,9 @@ fn hplocFinish(@builtin(global_invocation_id) id: vec3u) {
         return;
     }
     let mesh = lbvhMesh(id.x);
-    let nodeOffset = hplocLinks[mesh.innerStart];
-    // The scanned value after the mesh's last made node: the next mesh's offset, or the end marker's.
-    let nodeCount = hplocLinks[mesh.innerStart + mesh.innerCount] - nodeOffset;
+    let nodeOffset = hplocLinks[hplocRankWord(mesh, 0u)];
+    // The scanned value after the mesh's last position: the next mesh's offset, or the end marker's.
+    let nodeCount = hplocLinks[hplocRankWord(mesh, mesh.triangleCount)] - nodeOffset;
     atomicStore(&lbvhStats[lbvhStatWord(mesh.index, LBVH_STAT_NODE_OFFSET)], nodeOffset);
     atomicStore(&lbvhStats[lbvhStatWord(mesh.index, LBVH_STAT_NODE_COUNT)], nodeCount);
     var lower: vec3f;
@@ -1153,9 +1149,6 @@ fn hplocFinish(@builtin(global_invocation_id) id: vec3u) {
         upper = box.upper;
         atomicStore(&lbvhStats[lbvhStatWord(mesh.index, LBVH_STAT_LEAF_COUNT)], nodeCount + 1u);
         atomicStore(&lbvhStats[lbvhStatWord(mesh.index, LBVH_STAT_MAX_DEPTH)], hplocInfo(mesh, root) & HPLOC_INFO_HEIGHT_MASK);
-        if (atomicLoad(&lbvhStats[lbvhStatWord(mesh.index, HPLOC_STAT_NODES_MADE)]) != mesh.triangleCount - 1u) {
-            atomicAdd(&lbvhStats[lbvhStatWord(mesh.index, LBVH_STAT_INCOMPLETE)], 1u);
-        }
     }
     for (var axis = 0u; axis < 3u; axis += 1u) {
         atomicStore(&lbvhStats[lbvhStatWord(mesh.index, LBVH_STAT_BOUNDS + axis)], bitcast<u32>(lower[axis]));

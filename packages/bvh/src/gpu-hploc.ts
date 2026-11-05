@@ -87,7 +87,7 @@ export { HPLOC_MAX_MESH_TRIANGLES } from './gpu-hploc-wgsl.ts';
 const MIN_SUBGROUP_SIZE = 4;
 
 /** The biggest per-triangle share of any one batch buffer: the output nodes, 64 bytes. */
-const LARGEST_BYTES_PER_TRIANGLE = Math.max(GPU_LAYOUT_NODE_BYTES, GPU_LAYOUT_TRIANGLE_BYTES, (HPLOC_CLIMB_WORDS + HPLOC_RECORD_WORDS + 1) * 4);
+const LARGEST_BYTES_PER_TRIANGLE = Math.max(GPU_LAYOUT_NODE_BYTES, GPU_LAYOUT_TRIANGLE_BYTES, (HPLOC_CLIMB_WORDS + HPLOC_RECORD_WORDS + 1) * 4, 7 * 4);
 
 /** Bits of each code word the sorts sort. */
 const SORT_BITS = { 'cubic-30': [30], 'tinybvh-63': [32, 31] } as const satisfies Record<HplocMortonCodes, readonly number[]>;
@@ -339,15 +339,18 @@ export class GpuHplocBatch {
             outTriangles: make('triangles', triangleTotal * GPU_LAYOUT_TRIANGLE_BYTES, output, false),
             outParents: make('parents', innerTotal * 4, output, false),
         };
-        // hplocScratch: [climb words per radix-tree node][a record per made node][a stored cluster per sorted position].
+        // hplocScratch: [climb words per radix-tree node][a record per sorted position (made-node numbers are
+        // representatives, gpu-hploc-wgsl.ts "Numbering")][a stored cluster per sorted position].
         const recordsOffset = innerTotal * HPLOC_CLIMB_WORDS;
-        const listsOffset = recordsOffset + innerTotal * HPLOC_RECORD_WORDS;
-        // hplocLinks: [the node scan, one more at the end][the leaf-run scan, one more][2 children per made node]
-        // [parents: leaves, made nodes][tree positions]. The scans are bound at offsets, which must be 256-byte aligned.
-        const leafRunsOffset = Math.ceil((innerTotal + 1) / 64) * 64;
-        const childrenOffset = leafRunsOffset + innerTotal + 1;
-        const parentsOffset = childrenOffset + innerTotal * 2;
-        const treePositionsOffset = parentsOffset + triangleTotal + innerTotal;
+        const listsOffset = recordsOffset + triangleTotal * HPLOC_RECORD_WORDS;
+        // hplocLinks, all per sorted position: [the node scan, one more at the end][the leaf-run scan, one more]
+        // [2 children per made node][parents: leaves, made nodes][tree positions]. The scans are bound at
+        // offsets, which must be 256-byte aligned.
+        const scanWords = triangleTotal + 1;
+        const leafRunsOffset = Math.ceil(scanWords / 64) * 64;
+        const childrenOffset = leafRunsOffset + scanWords;
+        const parentsOffset = childrenOffset + triangleTotal * 2;
+        const treePositionsOffset = parentsOffset + triangleTotal * 2;
         // The scratch is cleared in whole vec4s.
         const scratchQuads = Math.ceil((listsOffset + triangleTotal) / 4);
         this.clearWorkgroups = Math.ceil(scratchQuads / LBVH_WORKGROUP_SIZE);
@@ -359,7 +362,7 @@ export class GpuHplocBatch {
             keysB: make('keys b', triangleTotal * 4, storage),
             valuesB: make('values b', triangleTotal * 4, storage),
             sortOffsets: make('sort offsets', sortTable.offsetWords * 4, storage),
-            tileSums: make('scan tile sums', Math.max(scanTileSumWords(sortTable.offsetWords), scanTileSumWords(innerTotal + 1)) * 4, storage),
+            tileSums: make('scan tile sums', Math.max(scanTileSumWords(sortTable.offsetWords), scanTileSumWords(triangleTotal + 1)) * 4, storage),
             codes: make('codes', tinybvhCodes ? triangleTotal * 8 : 16, storage),
             deltas: make('deltas', triangleTotal * 8, storage),
             scratch: make('climb scratch', scratchQuads * 16, storage),
@@ -474,10 +477,10 @@ export class GpuHplocBatch {
             device,
             sortPipelines.scan,
             {
-                data: { buffer: scratch.links, offset: 0, size: (innerTotal + 1) * 4 },
+                data: { buffer: scratch.links, offset: 0, size: scanWords * 4 },
                 tileSums: { buffer: scratch.tileSums },
                 params: { buffer: params, offset: rankScanRecord * UNIFORM_STRIDE, size: SCAN_PARAMS_BYTES },
-                count: innerTotal + 1,
+                count: scanWords,
             },
             `${label} rank scan`,
         );
@@ -485,18 +488,18 @@ export class GpuHplocBatch {
             device,
             sortPipelines.scan,
             {
-                data: { buffer: scratch.links, offset: leafRunsOffset * 4, size: (innerTotal + 1) * 4 },
+                data: { buffer: scratch.links, offset: leafRunsOffset * 4, size: scanWords * 4 },
                 tileSums: { buffer: scratch.tileSums },
                 params: { buffer: params, offset: leafRunScanRecord * UNIFORM_STRIDE, size: SCAN_PARAMS_BYTES },
-                count: innerTotal + 1,
+                count: scanWords,
             },
             `${label} leaf-run scan`,
         );
         // Every uniform is written once, here: they never change, so a batch can be recorded again and again.
         device.queue.writeBuffer(params, 0, lbvhParams);
         for (const sort of this.sorts) sort.writeParams(device.queue);
-        device.queue.writeBuffer(params, rankScanRecord * UNIFORM_STRIDE, scanParams(innerTotal + 1));
-        device.queue.writeBuffer(params, leafRunScanRecord * UNIFORM_STRIDE, scanParams(innerTotal + 1));
+        device.queue.writeBuffer(params, rankScanRecord * UNIFORM_STRIDE, scanParams(scanWords));
+        device.queue.writeBuffer(params, leafRunScanRecord * UNIFORM_STRIDE, scanParams(scanWords));
         device.queue.writeBuffer(params, hplocParamsRecord * UNIFORM_STRIDE, hplocParams);
     }
 
