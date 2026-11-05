@@ -1,13 +1,16 @@
 /**
- * B1's declared fallback, on a real device: the page asks for no optional
- * features, so the device has no `subgroups` (the adapter may have them; the
- * device doesn't). Then:
+ * The GPU builders' declared fallback (B1, B2), on a real device: the page
+ * asks for no optional features, so the device has no `subgroups` (the
+ * adapter may have them; the device doesn't). Then:
  *
- * - `createMeshLayoutBuilder` picks tinybvh (B0) and says why;
- * - the GPU LBVH and the BLAS refit refuse to start rather than fail later;
+ * - `createMeshLayoutBuilder` picks tinybvh (B0) and says why, whichever GPU
+ *   builder is asked for;
+ * - the GPU LBVH, the GPU H-PLOC and the BLAS refit refuse to start rather
+ *   than fail later;
  * - the trees it builds pass the layout checker.
  */
 
+import { GpuHplocBuilder } from '../../../../packages/bvh/src/gpu-hploc.ts';
 import { GpuLbvhBuilder } from '../../../../packages/bvh/src/gpu-lbvh.ts';
 import { GpuMeshRefit } from '../../../../packages/bvh/src/gpu-mesh-refit.ts';
 import { checkGpuLayout } from '../../../../packages/bvh/src/layout-check.ts';
@@ -25,14 +28,21 @@ await runGpuTest(async ({ adapter, device, log }) => {
     const builder = await createMeshLayoutBuilder(device);
     assert(builder.kind === 'tinybvh', `the mesh builder chose ${builder.kind} on a device without subgroups`);
     log(`fallback chosen: ${builder.fallbackReason}`);
+    const askedForLbvh = await createMeshLayoutBuilder(device, { prefer: 'gpu-lbvh' });
+    assert(askedForLbvh.kind === 'tinybvh', `asked for the LBVH, the mesh builder chose ${askedForLbvh.kind} on a device without subgroups`);
 
-    let lbvhRefused = false;
-    try {
-        new GpuLbvhBuilder(device);
-    } catch {
-        lbvhRefused = true;
+    for (const [name, start] of [
+        ['LBVH', () => new GpuLbvhBuilder(device)],
+        ['H-PLOC', () => new GpuHplocBuilder(device)],
+    ] as const) {
+        let refused = false;
+        try {
+            start();
+        } catch {
+            refused = true;
+        }
+        assert(refused, `the GPU ${name} builder started on a device without subgroups`);
     }
-    assert(lbvhRefused, 'the GPU LBVH builder started on a device without subgroups');
     assert(!GpuMeshRefit.isSupported(device), 'the BLAS refit says it can run without subgroups');
 
     const geometries = [{ positions: randomSoup(1, 1) }, { positions: randomSoup(3, 2) }, { positions: randomSoup(20_000, 3) }];

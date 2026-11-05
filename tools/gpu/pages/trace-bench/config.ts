@@ -35,15 +35,17 @@ export const SYNTHETIC_INSTANCE_COUNT = 10_000;
  * - `tmbvh`: three-mesh-bvh's own trees and its own WebGPU walk.
  * - `ours-lbvh`: the GPU LBVH (B1, `@pmndrs/bvh`) builds every mesh's tree on the GPU in one batch, timed
  *   with GPU timestamps; the trees are read back and traced by our watertight walk. Needs subgroups.
+ * - `ours-hploc`: the same with the GPU H-PLOC (B2). Also builds the scene once more with tinybvh's
+ *   codes, tie rule and one-triangle leaves, and compares its SAH cost with tinybvh's `BuildHPLOC`.
  */
-export const TRACER_IDS = ['ours-tinybvh', 'ours-tmbuild', 'platform', 'tmbvh', 'ours-lbvh'] as const;
+export const TRACER_IDS = ['ours-tinybvh', 'ours-tmbuild', 'platform', 'tmbvh', 'ours-lbvh', 'ours-hploc'] as const;
 export type TracerId = (typeof TRACER_IDS)[number];
 
-/** What runs when the URL names no tracer. `ours-lbvh` is asked for by its own pages (trace-bench-lbvh*). */
+/** What runs when the URL names no tracer. `ours-lbvh` and `ours-hploc` are asked for by their own pages (trace-bench-lbvh*, trace-bench-hploc*). */
 export const DEFAULT_TRACER_IDS: readonly TracerId[] = ['ours-tinybvh', 'ours-tmbuild', 'platform', 'tmbvh'];
 
-/** GPU LBVH builds timed per scene after one warm-up (median, fastest and slowest are reported). */
-export const LBVH_BUILD_TIMED_RUNS = 5;
+/** GPU builds (LBVH, H-PLOC) timed per scene after one warm-up (median, fastest and slowest are reported). */
+export const GPU_BUILD_TIMED_RUNS = 5;
 
 /**
  * How big a run is.

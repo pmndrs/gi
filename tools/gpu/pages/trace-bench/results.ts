@@ -67,8 +67,8 @@ export interface TmbuildBuildResult extends OursBuildResult {
     targetLeafSize: number;
 }
 
-/** The GPU LBVH's trees (`ours-lbvh`, B1): the usual numbers plus the GPU build time and the tree quality. */
-export interface LbvhBuildResult extends OursBuildResult {
+/** A GPU builder's trees (`ours-lbvh`, B1; `ours-hploc`, B2): the usual numbers plus the GPU build time and the tree quality. */
+export interface GpuBuildResult extends OursBuildResult {
     /** GPU time of building every mesh's tree in one batch (one compute pass, timestamps): median, fastest, slowest. */
     gpuBuildMsMedian: number;
     gpuBuildMsMin: number;
@@ -84,6 +84,13 @@ export interface LbvhBuildResult extends OursBuildResult {
     sahCostVsTinybvh: number;
     /** Meshes the GPU refused and tinybvh built instead. Should be 0. */
     meshesFallenBack: number;
+    /**
+     * H-PLOC only: the scene built again with tinybvh's codes, tie rule and one-triangle leaves, its
+     * summed SAH cost over that of tinybvh's `BuildHPLOC` trees of the same meshes (B2: within 1%).
+     */
+    sahCostVsTinybvhHploc?: number;
+    /** H-PLOC only: meshes that comparison left out because the GPU refused them. */
+    hplocMatchMeshesRefused?: number;
 }
 
 /** The `platform` tracer: the scene described through `createGI` and its scene API (T1.3). */
@@ -164,7 +171,9 @@ export interface SceneResult {
     /** Trees built by tinybvh (WASM) in the worker. Missing in results from before T0.10 part C. */
     oursTinybvh?: OursBuildResult | null;
     /** The GPU LBVH's trees (B1). Missing before B1. */
-    oursLbvh?: LbvhBuildResult | null;
+    oursLbvh?: GpuBuildResult | null;
+    /** The GPU H-PLOC's trees (B2). Missing before B2. */
+    oursHploc?: GpuBuildResult | null;
     /** The same scene through the platform API. Missing before T1.3. */
     platform?: PlatformBuildResult | null;
     tmbvh: TmbvhBuildResult | null;

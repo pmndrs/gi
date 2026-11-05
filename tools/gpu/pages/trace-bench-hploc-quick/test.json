@@ -1,0 +1,4 @@
+{
+    "description": "B2 quick benchmark on the furnished room: the GPU H-PLOC builds, matches tinybvh's BuildHPLOC, and its trees trace and agree with tinybvh's.",
+    "timeoutMs": 240000
+}
