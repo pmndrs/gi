@@ -337,11 +337,11 @@ Done-whens for the B stages are in `docs/design/bvh-framework.md`. B1a's: a 10k-
   - A wipe against the Cycles reference image.
   - Done when Dennis can use it without instructions.
 - **T1.9 M1 measurements.**
-  - Measure on Sponza (untextured), Cornell and two-rooms: GI cost, update cost, whole-frame p50/p95, accuracy against Cycles, leaks, memory and startup.
+  - Measure on Sponza (with its curtains, untextured materials), Cornell and two-rooms: GI cost, update cost, whole-frame p50/p95, accuracy against Cycles, leaks, memory and startup.
   - Native RTXGI numbers on the same scenes, side by side, at matched probe counts and rays, 3 runs each.
   - Re-measure the Bistro exterior baselines on the RTX 3060; T0.5's are too noisy to quote.
   - Set the stability threshold by eye with Dennis.
-  - Done when the targets are met or a gap is explained and agreed, and Tier B's mode is decided from the Intel numbers.
+  - Done when the targets are met or a gap is explained and agreed, measured GPU-bound on the target hardware (RTX 3060), and the Intel UHD passes every correctness check (SPEC revised 2026-11-05: no Tier B mode decision in M1).
 - **T1.10 Sponza add-ons.**
   - See the T0.12 notes above: the curtains join `sponza`; ivy, trees and candles make `sponza-full`.
   - Done when the viewer shows the curtains at bookmark 1, the fetch verifies, and the Cycles reference is re-rendered.

@@ -325,15 +325,17 @@ Software BVH tracing in WGSL, owned by `@gi/trace`:
 
 ### Hardware tiers
 
-- **Tier A (high-end):** full continuous updates. Test devices:
-  - an RTX 3060 Laptop (Windows, Chrome: Dawn on D3D12 and Vulkan);
+Revised 2026-11-05 (DECISIONS). Dennis: "we arent building for the intel. We are building for RTX3060 and up." DDGI is for mid- to high-end GPUs.
+
+- **Target hardware (the performance targets apply here):** full continuous updates. Test devices:
+  - an RTX 3060 Laptop (Windows, Chrome: Dawn on D3D12 and Vulkan), the floor of the range;
   - a Mac with an M5 Pro and 64 GB (Safari and Chrome: Metal).
-- **Tier B (integrated and mobile):** continuous updates at a smaller budget, or a saved bake with slow updates. Measurement decides which. Test devices:
+- **Correctness devices (no performance targets):** integrated and mobile GPUs must run correctly and pass every correctness check, with settings scaled down by presets (M5). Test devices:
   - the Intel UHD in the Windows laptop;
   - an iPad;
   - an older iOS device. If its Safari has no WebGPU, it isn't a target; it documents the cutoff.
 - **Android:** a stretch goal, tested through a device lab if needed.
-- Every milestone's numbers are reported per test device and browser.
+- Every milestone reports its numbers per test device and browser. Performance numbers are judged on the target hardware only.
 - **Saved bakes:** the field saves and loads in a versioned, engine-neutral format.
 
 ### Out of scope for v1
@@ -348,18 +350,20 @@ Software BVH tracing in WGSL, owned by `@gi/trace`:
 
 The viewer measures every number itself, with GPU timestamp queries, on named scenes and cameras. Targets are proposals until M0 gives us real web and native baselines.
 
-| What | How measured | Proposed v1 target (Tier A, 1440p) |
+**Costs are measured with the GPU loaded** (revised 2026-11-05, DECISIONS): GPU-bound, uncapped or back to back, with the clocks up. Dennis: "We should load the GPU and test at a 'normal' baseline not a super quiet, low power mode." A GPU idling at 60 Hz drops into a low-power state that inflates per-pass milliseconds without costing any frame time, so light-load numbers aren't criteria.
+
+| What | How measured | Proposed v1 target (target hardware, 1440p) |
 | --- | --- | --- |
 | Cost of showing GI | GPU ms of the GI sampling in the frame | ≤ 1.0 ms (stretch 0.5 ms) |
 | Cost of updating GI | GPU ms of `gi.update` per frame at default budget | ≤ 2.0 ms, user-adjustable |
 | Whole frame | p50 / p95 frame time, GI on vs off | GI adds ≤ 3 ms p50 and no p95 spikes |
-| Light change response | frames until visible; time until within 5% of settled | next frame; ≤ 0.5 s (Tier B ≤ 1.5 s) |
+| Light change response | frames until visible; time until within 5% of settled | next frame; ≤ 0.5 s |
 | Object move response | same, for a cabinet move and a door closing | ≤ 1 s, no leak through the closed door |
 | Stability | frame-to-frame flicker on a still scene | threshold set by eye in M1, then locked |
 | Leaks | dark-room light as a share of lit-room light, thin-wall fixtures and furnished rooms | ≤ 1%, and none visible in review |
 | Accuracy | indirect light vs a converged path-traced reference (mean error, FLIP) | mean within ±10%; FLIP threshold set in M1 |
-| Memory | measured GPU bytes owned by the core | ≤ 64 MB for a single furnished-room volume; reported for every scene |
-| Startup | load to first visible GI; shader compile stalls; BVH build time | ≤ 2 s on Tier A; others reported |
+| Memory | measured GPU bytes owned by the core | reported for every scene; defaults sized for mid- to high-end GPUs (a 6 GB RTX 3060 must hold Sponza with room for the host). The furnished room's 64 MB stays as a guide, not a gate (measured 40.7 MB) |
+| Startup | from the host handing the scene to GI, to the first frame drawn with GI, with a cold shader compile; time from file request reported too | ≤ 2 s on the target hardware (Dennis: "2s cold is fine", from "Handoff") |
 | Engine neutrality | same scene through the plain-WebGPU example and the three adapter | GI images match within a small tolerance |
 | Adapter cost | CPU ms per frame the three adapter spends syncing a still scene / one moving object | ≤ 0.2 ms / ≤ 0.5 ms |
 
@@ -439,7 +443,7 @@ You sign off before the next milestone starts.
 - **Both hosts:** the plain-WebGPU example and the three adapter render it.
 - **Viewer v1:** scene picker, navigation, GI modes, split wipe, stats, probe debug, and three's `LightProbeGrid` and VXGI as baseline techniques on the same scenes.
 
-**Done when:** the GI cost, accuracy, leak, stability and memory targets are met on Sponza (untextured), Cornell and two-rooms; the two hosts match; Tier B is measured and its mode decided; and you've signed off on the look.
+**Done when:** the GI cost, accuracy, leak and stability targets are met on Sponza (with its curtains; untextured materials until the M4 atlas), Cornell and two-rooms on the target hardware, with memory reported; the two hosts match; the Intel UHD runs every correctness check; and you've signed off on the look.
 
 ### M2: Dynamic lights
 
@@ -449,7 +453,7 @@ You sign off before the next milestone starts.
 - Sun and sky with time of day.
 - Viewer: gizmos, sliders, the scripted light sweep, and side-by-side with native doing the same motion.
 
-**Done when:** the light-response targets are met on Tier A and B, and the sweep looks right to you next to native.
+**Done when:** the light-response targets are met on the target hardware, the correctness devices run it correctly, and the sweep looks right to you next to native.
 
 ### M3: Moving objects
 
@@ -478,7 +482,7 @@ This can overlap M2 and M3.
 
 ### M5: Tiers, packaging, release prep
 
-- Quality presets per tier.
+- Quality presets, including scaled-down settings for the correctness devices.
 - Saved bakes.
 - Public API docs, plus an adapter-writing guide built on the plain-WebGPU example.
 - Examples site.
@@ -608,7 +612,7 @@ We don't take its code. We do take its ideas and its measured lessons. None of t
 
 ## Decisions so far
 
-- **Hardware:** RTX 3060 Laptop + Intel UHD (Windows), Mac M5 Pro 64 GB, an iPad and an older iOS device. Android is a stretch goal.
+- **Hardware:** target hardware is the RTX 3060 Laptop and up, and a Mac M5 Pro 64 GB. Correctness devices: the Intel UHD (Windows), an iPad and an older iOS device. Android is a stretch goal (revised 2026-11-05).
 - **Name:** `pmndrs/ddgi`, published as `@pmndrs/ddgi` with `/core`, `/three`, `/babylon`, `/pixi` import paths, following `@pmndrs/upscaler`.
 - **Neighbours:** `@pmndrs/upscaler` and `@pmndrs/denoiser`, sharing device, conventions and the test bench.
 - **Tooling:** approved. See M0.
