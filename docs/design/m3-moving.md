@@ -25,7 +25,7 @@ Moving geometry already works at the tracing level. The top-level tree is refit 
 
 ## What M3 must deliver (SPEC)
 
-| Target | Tier A (RTX 3060, 1440p) |
+| Target | RTX 3060 and up, Apple M5 Pro (1440p) |
 | --- | --- |
 | Object move response (a cabinet move, a door closing) | within 5% of settled in ≤ 1 s |
 | Closed door | no leak: dark-room light ≤ 1% of the lit room's, and none visible |
@@ -156,14 +156,16 @@ The volume is a fixed-size window of probes over a lattice fixed in world space 
 - **Speed:** entering probes need their 2 warming updates before they're shown (section 5.2).
   - With a 32 × 12 × 32 window at spacing `s`, each plane on the x or z axis holds 384 probes. At `v` m/s that's `384 × v / s / 60` entering probes a frame, and twice that in warming updates: `8.5 v` a frame at 1.5 m spacing.
   - **Measured:** Bistro exterior fits **20–27** probe updates a frame at 2 ms (T1.9a, with the fixed controller). An earlier estimate here, about 90, came from its cost curve and was wrong.
-  - So at 1.5 m spacing, giving half the budget to entering planes allows only about **1.4 m/s**. 5 m/s needs about 43 warming updates a frame, about twice the whole budget.
+  - **Budget v2** (accepted 2026-11-05, ddgi.md) replaces the controller T1.9a measured. Its floor is a full sweep in 4 s: for this 12,288-probe volume at 60 Hz, at least **51** probes a frame. The calibrated number may be higher; the M1 lead's GPU-bound re-measure says.
+  - At the floor, half the budget for entering planes allows about **3 m/s** at 1.5 m. 5 m/s needs about 43 of the 51. That's more than the scheduler's priority share (0.75 × 51 ≈ 38), so it would also need `priorityShare` raised to about 0.85 while the camera moves, leaving the round robin about 8 a frame.
+  - (At T1.9a's old rate of 20–27, half the budget allowed only about 1.4 m/s.)
   - Levers:
-    - **coarser spacing:** at 3 m (a 96 × 36 × 96 m window, the same memory), 5 m/s needs about 21 a frame, roughly the whole budget;
+    - **coarser spacing:** at 3 m (a 96 × 36 × 96 m window, the same memory), 5 m/s needs about 21 a frame, about 40% of the floor's 51;
     - **a larger budget while moving;**
     - **M2's deferred shadow pass,** if it raises the rate.
   - Dennis picked 5 m/s at 1.5 m on the wrong estimate, so this goes back to him (open question below).
 - **Teleports** (the camera jumps more than half the window): every slot resets, and the viewer's warm-up mode (DECISIONS 2026-11-05) runs, as after a scene load.
-- **Memory:** 32 × 12 × 32 = 12,288 probes at about 1.5 KB each (irradiance 512 B, distance 1 KB, probe data, history) is **19 MB**, covering 48 × 18 × 48 m at 1.5 m spacing.
+- **Memory:** 32 × 12 × 32 = 12,288 probes at about 1.5 KB each (irradiance 512 B, distance 1 KB, probe data, history) is **19 MB**, covering 48 × 18 × 48 m at 1.5 m spacing. M2's instant sky, on by default, adds 41 MB (m2-lights.md 6.3), so **60 MB** in all.
 
 ## 5. Probes near moved geometry
 
@@ -186,7 +188,7 @@ M2's `ddgi/mark` (m2-lights.md 4.2) gets geometry entries. For each geometry reg
 
 **What the budget buys** (the same arithmetic as m2-lights.md 4.3): the door's near and far sets are a few hundred probes on two-room, where about 300 probes fit a frame (T1.9a), so all of them get their 8 updates well inside 1 s. A cabinet moved in the furnished room touches fewer. On Sponza-sized scenes the probes nearest the camera are served first.
 
-**With M2's instant sky on** (m2-lights.md 6.3), marked probes' sky transfers are un-built and rebuilt from the start (their 64-update build), at the priority their marks give them; until then, sky changes reach them at the delayed pace. The sky layer itself keeps updating, so nothing jumps.
+**With M2's instant sky on** (m2-lights.md 6.3), marked probes' first-order sky transfers are reset with their history. They re-accumulate from the updates the probes are owed anyway, and count as built again after 8, under a second on two-room for the door's few hundred probes. Until then, sky changes reach them by re-tracing. The sky layer itself keeps updating, so nothing jumps.
 
 **The distance atlas** uses the same per-probe history. For geometry that matters most: until a probe near the door learns the door's distance, light can leak through it. The short history and the priority keep that to the first few updates (risk 3).
 
@@ -377,7 +379,7 @@ Storage buffers stay as in M2 (`ddgi/trace` 7). `gi/pack-mesh` binds the staging
 | Adapter, still / one mover | every frame | ≤ 0.2 / ≤ 0.5 ms (targets) |
 | GPU mesh packing | at load | ~10–20 ms GPU for Sponza, once |
 
-Memory: the camera-following volume is 19 MB. LBVH output buffers live until their trees are copied in (a few frames). During a swap a mesh briefly holds two trees. Deforming meshes on the CPU route keep a buffer the size of their positions.
+Memory: the camera-following volume is 19 MB, 60 MB with M2's instant sky. LBVH output buffers live until their trees are copied in (a few frames). During a swap a mesh briefly holds two trees. Deforming meshes on the CPU route keep a buffer the size of their positions.
 
 ## Proposed task breakdown
 
@@ -459,7 +461,7 @@ B1 is done before M3 starts. B2 (H-PLOC) is done before M3 sign-off, and doesn't
   4. `InstancedMesh` update ranges send only those instances (test).
 - **T3.8 Viewer scenarios.** Done when every scenario plays from its manifest motion with hover help, shows the response meter and the recompile counter, and Dennis can run each without instructions.
 - **T3.11 The wind tree's asset.** Done when the tree loads in the courtyard scene at real-world size against the 1 m reference cube, has 20,000–100,000 triangles, and its source, licence and checksum are in its manifest and `THIRD_PARTY.md`.
-- **T3.9 M3 measurements.** The SPEC table above on both GPUs, plus the door and cabinet response curves against Cycles renders of their end states (3 runs), with the recompile counter at 0 throughout. Done when each target is met or its miss is explained and agreed with Dennis.
+- **T3.9 M3 measurements.** The SPEC table above on the RTX 3060 (GPU-bound) and the M5 Pro if it's set up, the correctness checks on the Intel UHD (no speed targets there, Dennis 2026-11-05), plus the door and cabinet response curves against Cycles renders of their end states (3 runs), with the recompile counter at 0 throughout. Done when each target is met or its miss is explained and agreed with Dennis.
 
 ## Risks, and what to spike first
 
@@ -467,7 +469,7 @@ B1 is done before M3 starts. B2 (H-PLOC) is done before M3 sign-off, and doesn't
 2. **Change tracking at scale.** Cache misses, not code, set the walk's cost (0.7 µs per object). If the `updateMatrixWorld` override is unsafe or no cheaper, unmarked moves on Bistro-sized scenes keep a latency of tens of frames, and `markChanged` stays the answer for interactive moves.
 3. **The door's leak window.** Until the near probes' distance tiles learn the closed door, light leaks for a few frames. With `n` near 0.4 and the door's probes updated every frame, that should be 2–4 frames. If it shows, those probes' first update could use 2× rays.
 4. **The far-set estimate** (`Ω_ref`, the 8-spacing radius, the entry-distance test) is a guess. T3.4 compares marked probes against probes that really changed by more than 5%.
-5. **Scrolling speed.** At Bistro exterior's measured rate (20–27 probes a frame), about 1.4 m/s at 1.5 m spacing, or about 5 m/s at 3 m. Faster flights show the environment longer at the edge (section 4.2).
+5. **Scrolling speed.** At Budget v2's floor (51 probes a frame for this volume), about 3 m/s at 1.5 m spacing with half the budget, or 5 m/s with about 43 of the 51 (and `priorityShare` raised to about 0.85 while moving); 5 m/s at 3 m uses about 21. A higher calibrated count helps. Faster flights show the environment longer at the edge (section 4.2).
 6. **The stats readback adds 1–3 frames** before a GPU tree is used. That's harmless at load. For an object added at run time it adds to the top level's worker delay; if it shows in the cabinet scenario, the top level can move to the GPU (section 2.2).
 7. **Refit quality** on large deformations (cloth, fan blades) may need rebuilds, which SPEC's tracing decision rules out today.
 
@@ -483,7 +485,7 @@ B1 is done before M3 starts. B2 (H-PLOC) is done before M3 sign-off, and doesn't
 1. **Deformed positions:** `setDeformedPositions` also takes a CPU array. The `ExternalBufferAttribute` PR is drafted in section 7.1 for him to see; nothing is posted.
 2. **`setTransforms`:** yes.
 3. **Readbacks** aren't a rule but a preference: "prefer GPU-resident; read back when it clearly pays". GPU trees use one small asynchronous stats readback (section 2.2); the provisional pool is gone.
-4. **The fly-through:** Bistro exterior, a 32 × 12 × 32 camera-following volume at 1.5 m (19 MB), up to 5 m/s. (But see "Still open": that speed rested on a wrong rate.)
+4. **The fly-through:** Bistro exterior, a 32 × 12 × 32 camera-following volume at 1.5 m (19 MB; 60 MB with M2's instant sky), up to 5 m/s. (But see "Still open": that speed rested on a wrong rate.)
 5. **Startup:** measured from the hand-off to GI, ≤ 2 s with a cold shader compile.
 6. **The wind tree:** a game-ready tree (section 8.1), not a 2 M-triangle one. Solid leaf cards until M4 are fine.
 7. **B2 (H-PLOC):** before M3 sign-off, not before M3 starts. It must not block; the fallbacks always stay.
@@ -491,6 +493,6 @@ B1 is done before M3 starts. B2 (H-PLOC) is done before M3 sign-off, and doesn't
 
 ## Still open
 
-1. **The fly-through's speed and spacing.** Dennis's pick (5 m/s at 1.5 m) rested on an estimate of about 90 probe updates a frame on Bistro exterior. T1.9a measured 20–27. At 1.5 m, 5 m/s needs about twice the whole budget for the entering planes alone (section 4.2). Options: 3 m spacing (5 m/s fits, coarser GI around the camera), 1.4 m/s at 1.5 m, a larger budget while the camera moves, or wait for T2.0's numbers. I'd keep 1.5 m, target 5 m/s, and measure after the deferred shadow pass; if it still doesn't fit, use 3 m for the moving volume.
+1. **The fly-through's speed and spacing.** Dennis's pick (5 m/s at 1.5 m) rested on an estimate of about 90 probe updates a frame on Bistro exterior. T1.9a measured 20–27. At 1.5 m, 5 m/s needs about twice the whole budget for the entering planes alone (section 4.2). Under Budget v2 (accepted since), the floor for this volume is 51 probes a frame: 5 m/s at 1.5 m then needs about 43 of them, more than the 0.75 priority share allows (38), so `priorityShare` would rise to about 0.85 while the camera moves, leaving little for light changes. Options: 3 m spacing (5 m/s uses about 21), about 3 m/s at 1.5 m, or a higher calibrated count (the M1 lead's GPU-bound re-measure, T2.0's deferred shadow pass). I'd keep 1.5 m, target 5 m/s, and decide once the calibrated count is measured; if it leaves under half the budget for everything else, use 3 m for the moving volume.
 
 Apart from this, nothing is left open in this doc. The M1 lead records 1, 3, 5 and 7 in DECISIONS: they change or add to SPEC's tracing decision, the B1a review's no-readback wording, the startup target and the B-lane gate.

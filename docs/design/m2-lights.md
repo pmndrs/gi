@@ -1,6 +1,6 @@
 # M2 design draft: dynamic lights
 
-Status: **draft for Dennis's review, 2026-11-05, revised after an Opus review the same day.** Nothing here is decided. It is the input for T1.11 ("M1 note and M2 breakdown"). Where it would change a default or a settled choice from M1, it says so; those become DECISIONS entries only once Dennis agrees.
+Status: **draft for Dennis's review, 2026-11-05, revised after an Opus review the same day and again after Dennis's answers (time of day rebuilt so nothing takes minutes to build; memory sized for mid- to high-end GPUs; the Intel UHD for correctness only).** Nothing here is decided. It is the input for T1.11 ("M1 note and M2 breakdown"). Where it would change a default or a settled choice from M1, it says so; those become DECISIONS entries only once Dennis agrees.
 
 It builds on [ddgi.md](ddgi.md) (the field and update loop), [platform.md](../api/platform.md) (the contract), [three.md](../api/three.md) (the adapter) and the M1 entries in [DECISIONS](../DECISIONS.md). The M3 draft, [m3-moving.md](m3-moving.md), reuses the change-driven scheduler designed here for moved geometry.
 
@@ -14,7 +14,7 @@ Lights already live in a growable table, and adding one never recompiles anythin
 
 Light groups (one irradiance layer per group, added up into the atlas the renderer reads) make a dimmer or a colour change across a group instant.
 
-For time of day the plan is "instant with a delayed fallback" (Dennis, 2026-11-05). Each probe stores how it responds to 9 fixed sky patterns, so a new sky is nudged into the field in the same frame (within 4 frames on Tier B), and the normal updates then settle it exactly where the delayed field would. Where memory doesn't allow that, or for the sun's direction, the field follows at the budget's pace, nearest the camera first, blending rather than popping.
+For time of day, the sun's colour and brightness are instant and exact, because the sun gets a layer of its own. The sky is nudged in the same frame for what each probe sees of it directly. That uses a first-order sky transfer, built from the field's own rays no slower than the field converges (about 1.2 s into Sponza's warm-up). The sun's direction, and whatever the nudge leaves, are re-traced nearest the camera first, blending rather than popping. Nothing takes minutes to build (Dennis, 2026-11-05).
 
 Dennis answered this draft's first questions on 2026-11-05; they're listed at the end.
 
@@ -31,37 +31,50 @@ Dennis answered this draft's first questions on 2026-11-05; they're listed at th
 - **Indirect dispatch:** the GPU decides how many workgroups run, from a count it wrote itself, so the CPU never reads it back.
 - **Reservoir** (from ReSTIR/ReGIR): a slot that keeps one light chosen at random from a stream of candidates, each with a probability that depends on how much it would contribute, plus a weight that keeps the result unbiased.
 - **CDF:** a running sum of light powers, used to pick lights in proportion to their power.
-- **SH patterns and transfer:** spherical harmonics (SH) are fixed patterns over the sphere, and any smooth sky is close to a weighted sum of the first 9. A probe's *transfer* for a pattern is what the probe would store if the sky were that pattern alone.
+- **SH patterns and first-order transfer:** spherical harmonics (SH) are fixed patterns over the sphere, and any smooth sky is close to a weighted sum of the first 9. A probe's *first-order transfer* for a pattern is how much of that pattern the probe sees directly, through openings, with no bounces.
+- **GPU-bound:** measured with the GPU kept busy and its clocks up, not at 60 Hz under light load, where the laptop GPU lowers its clocks.
 - **Linearity (superposition):** twice the light gives twice the bounce, and two lights give the sum of what each gives alone.
 
 ## What M2 must deliver (SPEC)
 
-| Target | Tier A (RTX 3060, 1440p) | Tier B (Intel UHD) |
-| --- | --- | --- |
-| Light change visible | next frame | next frame |
-| Light change within 5% of settled | ≤ 0.5 s | ≤ 1.5 s |
-| GI update cost | ≤ 2.0 ms at the default budget | reported |
-| GI sampling cost | ≤ 1.0 ms (no regression from T1.6's 0.905 ms) | reported |
-| Lights | ≥ 32; adding or removing one never recompiles | same |
-| Adapter cost | ≤ 0.2 ms still scene, ≤ 0.5 ms one moving thing | reported |
-| Sweep | looks right to Dennis next to native doing the same motion | |
+| Target | RTX 3060 and up, Apple M5 Pro (1440p) |
+| --- | --- |
+| Light change visible | next frame |
+| Light change within 5% of settled | ≤ 0.5 s |
+| GI update cost | ≤ 2.0 ms at the default budget |
+| GI sampling cost | ≤ 1.0 ms (no regression from T1.6's 0.905 ms) |
+| Lights | ≥ 32; adding or removing one never recompiles |
+| Adapter cost | ≤ 0.2 ms still scene, ≤ 0.5 ms one moving thing |
+| Sweep | looks right to Dennis next to native doing the same motion |
 
 M1's accuracy, leak, furnace and stability checks must still pass on still scenes.
 
+- **Hardware** (Dennis, 2026-11-05; SPEC and DECISIONS already revised on `m1`): the targets are for the RTX 3060 and up and an Apple M5 Pro. The Intel UHD is a **correctness device only**, with no performance targets ("we arent building for the intel"). It runs the oracle, furnace, accuracy and leak checks; its timings aren't gated.
+- **Timings are GPU-bound** (Dennis: "Running at 60hz seems like a fail"): with the GPU loaded and its clocks up.
+
 ## The update rates this plan works with
 
-Everything about response time depends on how many probes fit in 2 ms. Measured at 60 Hz on the RTX with the fixed budget controller (T1.9a, 3 runs under the bench lock; PROGRESS and DECISIONS 2026-11-05), median probes per frame and the p05–p95 spread:
+Everything about response time depends on how many probes are updated each frame.
 
-| Scene | Probes | Probes per frame at 2 ms (RTX) | Spread (p05–p95) | Intel UHD |
-| --- | --- | --- | --- | --- |
-| Cornell | 1,728 | 875–910 | ~440–1,600 | 139 (one run, before the fix) |
-| Two-room | 1,071 | 294–340 | 110–566 | 45 (same) |
-| Furnished room | 4,998 | **not measured** | | not measured |
-| Sponza | 19,425 | **30–43** | 9–181 | 16 (same) |
-| Bistro exterior | n/a | 20–27 | 7–90 | 11 (same) |
+**Budget v2** (accepted by Dennis, 2026-11-05; ddgi.md "Budget v2") sets that number by work, not by milliseconds:
 
-- **Sponza is set by ray latency, not probe count:** fixed batches of 20 / 40 / 128 probes cost 1.55 / 1.91 / 2.81 ms, so about 40 probes is what 2 ms buys, and a full sweep of Sponza takes 7.5–10.8 s. The rate also follows other programs' GPU load second to second.
-- **The tables below use ~36 for Sponza and ~300 for two-room.** Section 2's deferred shadow pass is the lever that could raise Sponza's rate; nothing below assumes it does.
+- The platform hands DDGI a fixed number of probes a frame. It's calibrated once at load, with the clocks up, so that the batch costs about the budget (2 ms) back to back.
+- **A floor:** never fewer than a full sweep in 4 s at the host's frame rate. That's 81 probes a frame on Sponza at 60 Hz. On the RTX, 81 Sponza probes cost 1.4 ms back to back (ddgi.md), so the floor sits inside 2 ms.
+- Milliseconds only cut the number when frames are actually late.
+
+T1.9a's numbers came from the old millisecond controller at 60 Hz. DECISIONS says other apps kept the RTX's clocks up then, but NOTES records them still 1.8–2.1× down on Cornell (512 probes: 1.29 ms at 60 Hz against 0.70 ms back to back), so the rooms' numbers are probably on the low side. They are the best numbers there are for the small scenes until T1.9 re-measures under Budget v2:
+
+| Scene | Probes | Probes per frame this doc uses (RTX) | Where it comes from |
+| --- | --- | --- | --- |
+| Cornell | 1,728 | ~890 | T1.9a median (875–910) |
+| Two-room | 1,071 | ~300 | T1.9a median (294–340) |
+| Furnished room | 4,998 | **not measured** | |
+| Sponza | 19,425 | **81** | Budget v2's floor (T1.9a's old controller gave 30–43) |
+| Bistro exterior's camera volume (m3-moving.md) | 12,288 | **51** | Budget v2's floor (T1.9a gave 20–27 on the fixed volume) |
+
+- **Sponza and Bistro use the floor,** a lower bound. The calibrated number may be higher; T1.9's re-measure says.
+- **Every time in this doc gets re-derived** once the M1 lead's GPU-bound numbers land.
+- Section 2's deferred shadow pass could raise the calibrated rate further. Nothing below assumes it does.
 
 ## What others do, and what we copy
 
@@ -76,7 +89,7 @@ Everything about response time depends on how many probes fit in 2 ms. Measured 
 | **A-SVGF** (Schied, Peters, Dachsbacher, HPG 2018) | Shortens the history of a temporal filter where it detects that lighting changed. | **History length per probe, shortened by the size of the change.** We know the change from the scene, so we skip their noisy detector. |
 | **Enlighten** (Martin and Einarsson, "A Real-Time Radiosity Architecture for Video Games", SIGGRAPH 2010 Advances) | Static geometry with precomputed links between surfaces; lights and time of day relit at run time, a little each frame. | Confirms incremental, budgeted updates are the norm. We stay ray-traced, because geometry moves in M3. |
 | **Relighting by superposition** (Dorsey, Sillion, Greenberg, SIGGRAPH 1991; Nimeroff, Simoncelli, Dorsey, EGWR 1994) and HomeFig's light groups (SPEC) | A lighting change that only scales a group is a weighted sum of per-group solutions. HomeFig measured it linear to 0.006%. | **Light groups as layers,** with HomeFig's three rules (SPEC "Lessons"). |
-| **Far Cry 3** (Gilabert and Stefanov, "Deferred Radiance Transfer Volumes", GDC 2012) and PRT (Sloan, Kautz, Snyder 2002) | Probes store how they respond to each of a few sky "basis" patterns, so the sky and sun relight instantly. | **The instant sky** (section 6.3): the main path for time of day, with the delayed field as its fallback. |
+| **Far Cry 3** (Gilabert and Stefanov, "Deferred Radiance Transfer Volumes", GDC 2012) and PRT (Sloan, Kautz, Snyder 2002) | Probes store how they respond to each of a few sky "basis" patterns, so the sky and sun relight instantly. | **The instant sky** (section 6.3), cut down to what a probe sees of the sky directly, so it builds from the field's own rays in seconds. Re-tracing near the camera stays the main path. |
 
 ## 1. The light buffer
 
@@ -109,7 +122,7 @@ Everything about response time depends on how many probes fit in 2 ms. Measured 
 | ray-side geometric normal, octahedral | 4 | "Light from behind can't reach it", and the push-off direction |
 | albedo, 10 + 10 + 10 bits unorm | 4 | So `gi/direct` never reads the material table. Albedo is at most 1 after `bounceAlbedoCap` (default 1.0); a cap above 1 is stored as a scale in the 2 spare bits |
 
-**Memory:** the ray buffer grows on demand up to `maxProbesPerFrame` (default 4,096), and the viewer's warm-up uses 4,096-probe batches. Uncapped, surface records could reach 22 MB. So M2 splits any batch above 1,024 probes into rounds of 1,024 inside the same `encode` (trace, direct, blend, write per round). The ray scratch (ray results, surface records and the work-list counter, one buffer with three sections, the scene copy's pattern) is then at most 1,024 × (256 × 8 × layers + 224 × 24) bytes: **7.6 MB** with one layer, 11.8 MB with three (the instant sky's lights, sun and sky). `ddgi/trace` stays at 7 storage buffers.
+**Memory:** the ray buffer grows on demand up to `maxProbesPerFrame` (default 4,096), and the viewer's warm-up uses 4,096-probe batches. Uncapped, surface records could reach 22 MB. So M2 splits any batch above 1,024 probes into rounds of 1,024 inside the same `encode` (trace, direct, blend, write per round). The ray scratch (ray results, surface records and the work-list counter, one buffer with three sections, the scene copy's pattern) is then at most 1,024 × (256 × 8 × layers + 224 × 24) bytes: **7.6 MB** with one layer, 11.8 MB with three (lights, sun and sky, with the instant sky on). `ddgi/trace` stays at 7 storage buffers.
 
 **The work list** is filled with one `atomicAdd` per subgroup, with each thread's offset from `subgroupExclusiveAdd`. The declared fallback without subgroups is one atomic per thread. A 1-thread kernel turns the final count into indirect dispatch arguments.
 
@@ -209,11 +222,10 @@ It runs only in frames with changes. The CPU writes a small table of changed lig
 - `r = lightChangeScale × Δ / (mean_c + ε)`, where `mean_c` is the probe's stored mean irradiance in the same channel (history words 5–6). `lightChangeScale` (default 0.25, tuned in T2.4a) accounts for the probe seeing the light only through the surfaces it lights.
 - **Visibility filter:** one Chebyshev test from the probe's distance moments toward the light (as in sampling) scales `r` by `max(chebyshev, 0.25)`. A probe behind a wall gets a smaller share but never zero, because it may see lit surfaces through a door.
 
-**Global changes** (the sun's direction, the sky; more than 1,024 light changes in one frame) mark every probe, with these exceptions when the instant sky is on (6.3):
+**Global changes** (the sun's direction, the sky; more than 1,024 light changes in one frame) mark every probe. On big volumes, far probes are owed 2 updates instead of 8 (6.4). The exceptions:
 
-- a sun change of colour or intensity alone marks nothing: it becomes the sun layer's weight;
-- the same holds without the instant sky when the host puts the sun alone in a light group: its group weight becomes new / old per channel (the group layer is stored at the light's real colour, section 5; a channel that was 0 can't be scaled, so that change is marked as usual);
-- a sky change marks only probes whose transfer isn't built (the nudge has handled the rest; their leftover error is put right by normal updates).
+- a sun change of colour or intensity alone marks nothing: it becomes the sun layer's weight (6.1);
+- a sky change marks probes with a built transfer at `r × skyResidualShare` (default 0.3), because the nudge has already moved most of it, unless the nudge's brightness ratio was clamped (6.3).
 
 For a sky change, `r = max over channels of (|Δc₀| + |Δc₁…₃|) / c₀` (the change of the sky's band-0 and band-1 radiance SH, relative to its mean), times the same openness factor as below.
 
@@ -236,13 +248,13 @@ The update list moves from the CPU (`UpdateCursor` plus `writeBuffer`) to the GP
 
 Cost: four dispatches of a few µs each, plus one thread per probe. Estimate: under 0.05 ms on the RTX at 20,000 probes. They run every frame: the CPU can't see on the GPU whether probes are still owed, and skipping them would leave owed probes stranded (a Sponza-wide change keeps probes owed for hundreds of frames).
 
-**What the budget buys.** With `U` probes per frame, a window of `W` frames and K owed updates, at most `P × W / K` changed probes get all their updates in time. With W = 30 and K = 8:
+**What the budget buys.** With `U` probes per frame (the rates section), a window of `W` frames and K owed updates, at most `P × W / K` changed probes get all their updates in time. With W = 30 and K = 8:
 
 | Scene | U | P (75%) | Changed probes fully served within 0.5 s |
 | --- | --- | --- | --- |
 | Cornell | ~890 | ~670 | ~2,500, more than its 1,728 probes |
 | Two-room | ~300 | ~225 | ~840, most of its 1,071 |
-| Sponza | ~36 | ~27 | ~100 |
+| Sponza | 81 (floor) | ~61 | ~230 |
 
 A lamp whose influence box holds more probes than that is served nearest-and-most-changed first. The visible image meets the target, while far, weakly changed probes finish later.
 
@@ -267,6 +279,7 @@ By linearity, the field for "group g at weight w" is w × the field for group g 
 - **Direct light:** the hit's light samples are shared; each goes into its own group's layer. Each layer's estimate stays unbiased; groups with few lights get noisier.
 - **Ray results:** 8 bytes per ray per layer, in the ray scratch.
 - **Blend:** loops the 36 irradiance texels per layer; the 196 distance texels only once.
+  - **One layer at a time in workgroup memory.** The blend sizes its arrays for `DDGI_MAX_RAYS` (512): 8 KB of ray directions and distances, 4 KB of radiance per layer, and about 1.2 KB of texel estimates, 13.5 KB of the 16 KB default today. A second and third radiance layer side by side would need about 21.7 KB. So the directions are loaded once, then each layer's radiance is loaded into the same 4 KB, blended, and replaced by the next layer after a barrier. Workgroup memory stays at 13.5 KB for any number of layers, at the cost of two barriers per extra layer (after its texels are blended, and after the next layer is loaded).
 - **`ddgi/compose`:** composed = Σ weight_g × layer_g per texel, borders included. It runs for the tiles updated this frame, and for every tile in a frame where a weight changes. **A group weight change shows in the same frame,** with no lag and no noise.
 - **Weights** are technique settings, `lightGroups: { count, weights: Color[], environmentWeight: Color }`: linear RGB multipliers on top of the lights' own intensities. The three adapter exposes `threeGI.setGroupWeight(group, color)`.
 
@@ -278,7 +291,7 @@ By linearity, the field for "group g at weight w" is w × the field for group g 
 | Furnished room (4,998) | 2.6 MB | 10.2 MB | 15.4 MB |
 | Sponza (19,425) | 9.9 MB | 39.8 MB | 59.7 MB |
 
-Distance (1 KB per probe) doesn't change. Four groups fit the furnished room's 64 MB budget, but they are expensive on Sponza. So **groups are opt-in and off by default,** and the host picks how many (Dennis agreed, 2026-11-05). The instant sky (6.3) uses the same layers for the sky and the sun; that's its own setting and its own memory.
+Distance (1 KB per probe) doesn't change. Four groups fit the furnished room's 64 MB budget, but they are expensive on Sponza. So **groups are opt-in and off by default,** and the host picks how many (Dennis agreed, 2026-11-05). Time of day (6.1, 6.3) uses the same layers for the sun and the sky; those are on by default and have their own memory.
 
 **Left open on purpose** (Dennis: "I dont want to close the door on common use cases"): in three.js, people dim a group the usual way, by scaling each light's `intensity`. The API keeps that possible later. Group weights are separate from light intensities, and the adapter already sees every intensity change, so a later detector could spot "every light of group g scaled by the same factor this frame" and turn it into a weight change. It's on the Later list, not in M2.
 
@@ -287,160 +300,200 @@ Distance (1 KB per probe) doesn't change. Four groups fit the furnished room's 6
 - trace about +10% (the extra irradiance fetches only);
 - blend about +60% (the irradiance texel work × 5);
 - compose about 0.1 ms on Sponza when a weight changes;
-- in total about +25–35% per probe updated; with 3 layers (the instant sky's lights, sun and sky), about +15–20%.
+- in total about +25–35% per probe updated; with 3 layers (lights, sun and sky), about +15–20%; with 2 (lights and sun), about +8–10%.
 
 Shading cost doesn't change, because the renderer samples one composed atlas. *Why not sample every layer in the fragment shader:* irradiance fetches were about 0.21 ms of T1.6's sampling cost (a run at a locked 1200 MHz clock, NOTES), and five layers would push sampling past 1.0 ms.
 
 ## 6. Sun and sky with time of day
 
-Dennis (2026-11-05): time of day should be **"instant with a delayed fallback"**. So the main path is an instant sky (6.3) wherever memory allows, and the delayed field (6.4) is its declared fallback.
+Dennis (2026-11-05): time of day should be **"instant with a delayed fallback"**, and nothing may take minutes to build: "anything taking minutes to build is a fail and we should not go that direction." So each part below either needs no build, or builds from the field's own rays no slower than the field itself converges (on Sponza, about 1.2 s into the warm-up).
 
-### 6.1 What changes with time of day, and which part can be instant
+### 6.1 What changes with time of day, and how each part follows
 
-| What changes | Instant? | How |
+| What changes | How it follows | What it has to build |
 | --- | --- | --- |
-| The sky's shape and brightness (it moves with the sun, reddens, brightens) | **yes**, where memory allows | the sky transfer (6.3) |
-| The sun's colour and brightness | **yes**, when the instant sky is on (or the host puts the sun in a light group of its own); otherwise delayed | the sun gets a layer of its own, traced with the sun at a fixed white reference (colour 1, intensity 1). The layer's weight is the sun's actual colour × intensity, so a colour or intensity change is exact and instant, with no marking. HomeFig's rule 3 (bake in real colours) is about groups of several differently coloured lights; for one light, white × its colour is the same thing |
-| The sun's direction (the patch of sunlight moves, and its bounce with it) | no: **delayed** | re-traced by the change-driven updates (6.4) |
+| The sun's colour and brightness | **instant and exact.** The sun gets a layer of its own (section 5's layers), traced with the sun at a fixed white reference (colour 1, intensity 1). The layer's weight is the sun's actual colour × intensity, so a change is a new weight, with no marking. HomeFig's rule 3 (bake in real colours) is about groups of several differently coloured lights; for one light, white × its colour is the same thing | nothing |
+| The sky's colour, brightness and shape | **instant for what each probe sees of the sky directly**, through openings (the first-order sky transfer, 6.3), with the sky's bounces rescaled by its brightness; **re-traced** for what that leaves | the transfer, from the field's own rays: built after a probe's first 8 updates |
+| The sun's direction (the patch of sunlight moves, and its bounce with it) | **re-traced**, nearest the camera first (6.4) | nothing |
 
-The last row matters: in a sunlit interior the sun's bounce is often the larger part of the GI. The instant path makes the sky and the sun's colour follow at once; the patch of sun bounce follows at the delayed path's pace. Making that instant too needs a different idea (a cache of every probe's ray hits, relit with new shadow rays, as HomeFig did); it's on the Later list.
+The last row is the largest. On open ground the sky is only 11–14% of daylight (T1.1's sky-to-sun ratios: Sponza 11.0%, furnished room 13.2%, open ground 14.3%), and in a sunlit interior the sun's bounce is often most of the GI. So how time of day looks on Sponza depends mostly on how fast re-tracing is (6.4), with or without the instant sky. An instant sun direction needs a different idea; it's on the Later list.
 
-### 6.2 Re-baking the sky (needed by both paths)
+### 6.2 Re-baking the sky (needed by every path)
 
 **Today:** a `procedural` environment is built on the CPU (Preetham, calibrated with the Ineichen–Perez ratio; `calibrated-sky.ts`) and uploaded. One workgroup then resamples it to the 256 × 128 radiance map and projects it to 18 SH coefficients. That runs only when `setEnvironment` is called. The projection kernel takes about 1 s to compile (T1.9a), and the CPU build isn't meant to run every frame.
 
 **M2:**
 
 - **A GPU procedural source.** The resample kernel evaluates Preetham directly (a new `SKY_SOURCE_KIND`). The calibration scale is computed on the CPU per sun direction (a few scalar formulas) and passed as a uniform. The CPU code stays: it writes the shared sky files for Cycles and native, and a test holds the GPU map to it (mean within 0.1%, every texel within 1%).
-- **The SH projection works in two levels:** many workgroups write partial sums, and one adds them up. Subgroups first, with the existing workgroup-memory fallback. On a procedural sky it integrates over the 256 × 128 map itself. It also writes the sky's **radiance** SH, bands 0–2, which the instant path needs. Those are the same sums before the cosine weights are applied (`projection-wgsl.ts`), so they cost nothing extra.
+- **The SH projection works in two levels:** many workgroups write partial sums, and one adds them up. Subgroups first, with the existing workgroup-memory fallback. On a procedural sky it integrates over the 256 × 128 map itself. It also writes the sky's **radiance** SH, bands 0–2, which the instant sky needs. Those are the same sums before the cosine weights are applied (`projection-wgsl.ts`), so they cost nothing extra.
 - **When it re-bakes:** when the sun moves more than 0.05°, or turbidity, intensity or `sunIlluminance` change; at most once per frame. Estimated GPU cost under 0.1 ms per re-bake; CPU under 0.05 ms.
 - **The slow compile:** T2.6a finds why the projection takes about 1 s to compile (perhaps the unrolled 18-term basis inside the loop) and gets it under 0.2 s. That also helps startup (DECISIONS: "find the slow sky kernel").
 - **The sun** is a directional light, a separate object (light buffer, shadow rays). Keeping the sun light and the sky's sun in step is the host's job; the viewer's slider moves both. The three adapter already maps pmndrs/sky and `SkyMesh` (three.md, "The sky").
 
-### 6.3 The instant sky: per-probe sky transfer (main path)
+### 6.3 The instant sky: a first-order sky transfer
 
-**The idea** (PRT, Sloan, Kautz, Snyder 2002; Far Cry 3's probes, Gilabert and Stefanov, GDC 2012):
+**The idea** (PRT, Sloan, Kautz, Snyder 2002; Far Cry 3's probes, Gilabert and Stefanov, GDC 2012), kept to the part that's cheap to build:
 
-- Any sky is close to a weighted sum of 9 fixed patterns, the SH basis functions of bands 0–2: `sky(ω) ≈ Σₖ cₖ Yₖ(ω)`. 6.2's projection computes the weights `cₖ`.
-- What a probe texel stores from the sky (seen through openings, and bounced off everything the sky lights) is linear in the sky. So it's the same weighted sum of what the texel would store under each pattern alone, its **transfer** `Tₖ`.
-- So each probe keeps **9 transfer tiles `Tₖ`**. When the sky's weights change from `c` to `c'`, the change in that probe's sky light is `Σₖ (c'ₖ − cₖ) Tₖ`, and it can be applied in the same frame, with no rays.
+- Any sky is close to a weighted sum of 9 fixed patterns, the SH basis functions of bands 0–2: `sky(ω) ≈ Σₖ cₖ Yₖ(ω)`, with colour weights `cₖ` (rgb). 6.2's projection computes them.
+- What a probe texel sees **directly** of the sky, through openings, is `Σₖ cₖ Tₖ`. A texel's **first-order transfer** `Tₖ` is the pattern `Yₖ`, seen through the probe's visibility, with the same cosine weighting the texel uses for irradiance.
+- `Tₖ` has no colour: nothing sits between the probe and the sky. That makes it 9 numbers per texel, not 9 colours, and it needs no bounces, so it doesn't depend on any other probe.
+- The sky's **bounces** (sky light off the courtyard floor, the walls) aren't in `Tₖ`. They're handled by a rescale and by re-tracing (below).
 
-**The instant step is a nudge to the ordinary sky layer.** The probe's sky layer `S` (section 5's environment layer: what the probe stores from the sky, as the delayed field does today) stays exactly what it is. When the sky changes, a pass adds `Σₖ (c'ₖ − cₖ) Tₖ` to `S`, and clamps it at 0 (a truncated SH sum can dip below 0 where the sky is dark). That's the whole instant path:
+**Building it, from the field's own rays.** No extra rays and no new kernel:
 
-- **`S` stays the real field.** Normal updates keep blending the traced sky into `S` with the probe's history and the firefly clamp, as today. So after the sky stops changing, `S` converges to exactly what the delayed field would hold. What the 9 patterns miss (the sun's glow is blurred by them) is put right by those normal updates, at the delayed pace.
-- **Bounces stay right.** A ray hit reads `S` for the sky's bounce, as any layer reads its own (section 5). That is one fetch, as today, and the nudge has already moved `S`.
-- **The fallback is "no nudge".** Without the transfer (not enough memory, or a probe whose transfer isn't built yet) `S` simply isn't nudged, and that probe follows at the delayed pace (6.4). Nothing switches and nothing jumps: a probe whose transfer becomes built just starts getting nudged at the next sky change. Un-building it (M3, below) just stops the nudges.
+- In `ddgi/blend`, each texel thread already loops over the probe's rays with their directions and distances (in workgroup memory). For every ray that **missed** (escaped to the sky), it also adds `Yₖ(direction)` for the 9 patterns, with the same texel weight it uses for irradiance. Rays that hit anything add 0. The 9 polynomial terms are computed inline from the direction, so the transfer adds no workgroup memory (section 5 keeps the layers at 13.5 KB).
+- **It must count rays exactly as the irradiance does,** or `Σₖ cₖ Tₖ` won't match the sky part of `S`:
+  - it's normalised by the same sum of weights over all blended rays (`blend.ts`), so back-face hits count, with 0;
+  - the 32 fixed rays are left out, as they are from irradiance;
+  - "missed" uses the trace's own test (`signedDistance` equal to the miss value, `trace.ts`), so a ray that ends at a finite `maxRayDistance` counts as sky in both;
+  - the firefly clamp applies to `S` and not to `T`. In steady state that changes nothing; right after a bright change it can make `S` lag `Σₖ cₖ Tₖ` for a few updates.
+- The transfer keeps its own count `m` (8 bits in history word 3, beside `owed`) and blends with `h = min(0.97, m / (m + 1))`. It goes on updating with every probe update: that costs only the blend's extra work, and it follows moved geometry by itself. Light changes never shorten `m`. It's reset to 0 when geometry near the probe moves (M3, below), when the probe goes from off to on (state 3, "not updated yet", where `S` restarts too), and when relocation moves the probe by more than 10% of a spacing.
+- A probe's transfer counts as **built** once `m ≥ 8` (about 1,800 rays). T2.6b measures its noise at 8 updates against 64 and raises the count if it has to.
 
-**Layout.** Layers aren't more array layers of the atlas: the atlas already uses one array layer per probe row (ddgi.md), and the default limit is 256. Sponza's 21 rows × 12 layers = 252 would just fit, but any taller volume, or light groups on top, wouldn't. So **layers are blocks side by side inside each array layer.** Layer `L`'s tile for probe `(x, z)` sits at `((L × nx + x) × 8, z × 8)`.
+**How long building takes.** A transfer is built after a probe's 8th update, so it is never later than the probe's own irradiance.
 
-- This is the same for light groups (section 5), with no new textures and no new storage bindings. `ddgi/write` already uses the default limit of 4 storage textures.
-- `prepare` checks `nx × 8 × layers ≤ 8192` (or `nz`, whichever axis is used) and throws `GILimitError` past it. Bistro exterior's camera volume (32 wide, 12 blocks) is 3,072 texels wide.
+- **With the warm-up,** every probe gets 16 updates. Today the viewer runs it (up to 16 large passes). T2.4b moves it into the technique, **on by default**, so every host gets it.
+  - Sponza's warm-up took about 2.3 s on the RTX (T1.9's cold start: first GI at 10.8 s, settled at 13.1 s). So transfers are built about halfway through it, around **1.2 s**.
+  - Two-room's whole warm-up took 0.08 s.
+- **With the warm-up turned off, at the default budget,** an unbuilt probe counts as owed one update, at a low urgency (0.05, below any real change) times its camera weight. So the view builds first.
+  - The view's ~200 nearest probes need `200 × 8 / (0.75 × 81)` ≈ 26 frames, about **0.4 s** on Sponza.
+  - **The whole volume takes about 32 s** on Sponza: 8 sweeps of 4 s at Budget v2's floor. That's the same time the field itself takes to converge without a warm-up, which is why the warm-up is on by default. A host that turns it off accepts half a minute of an unconverged field at the far end of Sponza, with or without the instant sky.
+
+**The instant step is a nudge to the ordinary sky layer.** The probe's sky layer `S` (section 5's environment layer: what the probe stores from the sky) stays the real field. With the instant sky on, emissive surfaces go in the lights layer, so `S` holds only the sky. When the sky's weights change from `c` to `c'`, a pass computes, per texel and channel:
+
+1. **the direct part:** `Δdirect = Σₖ (c'ₖ − cₖ) Tₖ`;
+2. **everything else:** `B = max(0, S − Σₖ cₖ Tₖ)`, what `S` holds beyond the 9-pattern sky seen directly. That's mostly the sky's bounces, but it also holds the part of the directly seen sky that bands 0–2 miss: miss rays read the full 256 × 128 radiance map (`giSkyRadiance`), not the SH;
+3. **the sky's brightness change:** `ρ = c'₀ / c₀` (band 0, the sky's mean, per channel), clamped to [0.25, 4] for one nudge;
+4. **the nudged sky layer:** `S' = max(0, S + Δdirect + B × (ρ − 1))`. The clamp at 0 is there because a truncated SH sum can dip below 0 where the sky is dark.
+
+- *Why rescaling `B` is a fair guess:* bounced sky light is the sky's light blurred over the surfaces around the probe. When the sky reddens, brightens or dims as a whole, its bounce follows nearly in proportion.
+- *What the rescale gets wrong, left for re-tracing:*
+  - the bright side of the sky moving with the sun. SPEC's HomeFig rule 2 says it: time of day changes the sky's shape, not just its brightness. That's why `S` is still re-traced and the rescale is only the instant guess;
+  - the directly seen detail that bands 0–2 miss (near the sun's glow, behind a window), which changes with the sky's shape too. Where it's negative, `B`'s clamp at 0 drops it. On open ground bands 0–2 already missed irradiance by up to 0.87% in M1 (DECISIONS: the platform's sky added band 4); behind windows it's more.
+- T2.6b measures the nudge with the direct part alone and with the rescale, and keeps the rescale only if it helps.
+- *Why clamp `ρ`:* near night `c₀` is close to 0, and a large ratio would multiply the noise in `B`. Once nudged, a probe's sky weights become `c'`, so a clamped rescale is never made up later. `ρ` is the same for every probe (it's the sky's), but the sky's SH is computed on the GPU (6.2). So `ddgi/mark` reads the old and new SH itself and, when `ρ` was clamped, marks every probe at the full `r` instead of the residual share below. No readback.
+
+**Everything else about the nudge:**
+
+- **`S` stays the real field.** Normal updates keep blending the traced sky into `S` with the probe's history and the firefly clamp, as today. So after the sky stops changing, `S` converges to exactly what it would without the instant sky. The nudge only decides how much of a change shows at once.
+- **Bounces read `S`.** A ray hit reads `S` for the sky's bounce, as any layer reads its own (section 5). That is one fetch, as today.
+- **The fallback is "no nudge".** A probe whose transfer isn't built (or a volume with the instant sky off) simply isn't nudged and follows by re-tracing (6.4). Nothing switches and nothing jumps.
+- **Marking after a sky change:** every probe is marked as for a global change (6.4). A probe with a built transfer gets `r × skyResidualShare` (default 0.3 until T2.6b measures what the nudge leaves), so the budget goes first to probes the nudge couldn't cover.
+  - *This matters less than it looks during time of day.* Every sun move re-bakes the sky too, and the sun's direction marks every probe in full. History `n` is per probe and shared by its layers, so the sky layer's history is shortened anyway. The share helps only for sky-only changes (turbidity, a host's own sky).
+  - *The shared history has a cost:* a sun mark also makes the next updates of the unchanged lights layer noisier. If T2.4a's two-room step shows that, history becomes per layer (one more f32 per layer per probe).
+- **Layout.** Layers aren't more array layers of the atlas: it already uses one array layer per probe row (ddgi.md), and the default limit is 256. So **layers are blocks side by side inside each array layer.** Layer `L`'s tile for probe `(x, z)` sits at `((L × nx + x) × 8, z × 8)`. Light groups (section 5) use the same layout, with no new textures and no new storage bindings. `prepare` checks `nx × 8 × blocks ≤ 8192` and throws `GILimitError` past it. Bistro exterior's camera volume (32 wide, 6 blocks) is 1,536 texels wide.
+- **The transfer's 9 numbers per texel** sit in 3 `rgba16float` blocks (12 channels, 3 spare). Transfer values can be negative; halves hold that.
 - **The composed atlas** the renderer samples is its own texture. A texture can't be read and written by the same dispatch, and the shading module still binds just one irradiance texture.
 - **Writing the nudge** has the same problem (it reads `T` and `S` and writes `S`), so it works like blend and write. `ddgi/sky-nudge` writes the nudged `S` tiles to a nudge scratch buffer (288 bytes per probe). Then a second `ddgi/write` dispatch, in "sky" mode, copies them into the atlas for every probe whose transfer is built (one workgroup per probe; the others exit at once).
-- **The order in a frame matters:** the nudge and its write run **before** `ddgi/trace`. So a probe that is also updated this frame blends from its already-nudged `S`, and the nudge is never lost to the blend writing an older `S`.
-
-**Memory.** The 9 transfer tiles, the sun layer, the sky layer and the composed atlas are 12 more irradiance-sized layers than M1 has (`rgba16float`, 6 × 6 texels plus border, 512 bytes per probe per layer; transfer values can be negative, which halves hold), plus the nudge scratch:
-
-| Scene (probes) | Extra GPU memory |
-| --- | --- |
-| Two-room (1,071) | 6.9 MB |
-| Furnished room (4,998) | 32 MB |
-| Bistro exterior's camera volume (12,288, m3-moving.md) | 79 MB |
-| Sponza (19,425) | 125 MB |
-
-- **What kind of memory:** this is GPU memory. On the RTX 3060 Laptop it's the card's own 6 GB. The Intel UHD has no memory of its own: its "GPU memory" is the laptop's system RAM (Windows counts it as shared GPU memory), so on Tier B it competes with the browser and the app.
-- **Default caps** (proposed; open question 1): the instant sky turns on when its extra memory fits **128 MB on Tier A** and **48 MB on Tier B**. The RTX gets it on every scene above, Sponza included (just under). The Intel UHD gets it on two-room and the furnished room (32.1 MB), not on Sponza.
-- **SPEC's 64 MB for a furnished-room volume** (everything the core owns) gets tight: the field's atlases (~8 MB), the instant sky (32 MB) and the ray scratch (up to 12 MB) come to about 52 MB before the scene copy and its trees. T2.6b checks the total. If it's over, that scene defaults to the 4 × 4 transfer tile (about half the transfer memory).
-- **The 4 × 4 transfer tile:** 6 × 6 is the default. The coarser 4 × 4 tile (about half the transfer memory; transfer is as smooth as irradiance) is used only on a scene where 6 × 6 would break SPEC's 64 MB, and T2.6b measures whether it's accurate enough.
-
-**Building the transfer.**
-
-- The transfer is built from **the field's own rays**: the same directions, hits and surface records. No extra rays.
-  - A miss ray adds `Yₖ(ω)` to pattern k's estimate.
-  - A front-face hit adds `albedo / π × bounceEnergy ×` pattern k's own bounce, read from `Tₖ` at the hit with the same probe weights as the field's bounce lookup. That's the same term the trace kernel uses for the field (`emission + albedo / π × (bounceEnergy × bounce + direct)`). Emission and direct light are 0 for a sky pattern, because the sky reaches surfaces only through the field.
-- A pass after `gi/direct`, `ddgi/sky-transfer`, writes each ray's 9 pattern radiances (rgb halves, 56 bytes a ray) into the ray scratch. The blend blends the 9 tiles with the probe's history. There's no firefly clamp on them: the clamp isn't linear, and pattern values can be negative. While transfers are being built, batches are split into rounds of 256 probes; the ray scratch is then about 6.2 MB (ray results for three layers, surface records and transfer radiances).
-- **When it's built.** Bounce light builds up over many updates, as in the field. Early estimates were made while neighbouring probes' transfers were still near 0, so they mustn't linger:
-  - **phase 1,** 32 updates with a short history (`h = min(0.9, n / (n + 1))`), so early estimates fade (0.9³² ≈ 3% left) while the neighbours fill in;
-  - **phase 2,** 32 more with a growing history, to average the noise down.
-
-  After its 64th update a probe's transfer is marked **built** and isn't updated again. The count and the built flag sit in the history record's word 3 (8 bits beside `owed`). The transfer depends only on geometry and materials, not on lighting, so once built a still scene pays nothing more for it. Whatever bias is left, the normal updates of `S` put right; the transfer only decides how much of a change shows at once.
-- **The view builds first,** on purpose. While the instant sky is on, a probe whose transfer isn't built counts as owed one update, at a low urgency (0.05, below any real change) times its camera weight. So when nothing else is urgent, the scheduler's priority share goes to the unbuilt probes nearest the camera. Near probes read their neighbours' transfers for bounce, and neighbours in view build together, so the view converges as a block; probes at its edge reach their 64 updates a little later.
-- **How long building takes** (estimated from the measured rates above): while building, a probe update costs about 2.1× an M1 update (1.8× for the 9 extra tiles and bounce fetches, times about 1.15–1.2 for the three lighting layers). At the default 2 ms budget, with the 64 updates a transfer takes, the whole volume needs `probes × 64 / (rate / 2.1)` frames; the view's ~200 nearest probes get the 75% priority share, `200 × 64 / (0.75 × rate / 2.1)` frames:
-
-| Scene | Probes | Probes per frame while building (RTX / Intel) | Whole volume built (RTX) | The view's ~200 nearest probes built (RTX) | Whole volume built (Intel) |
-| --- | --- | --- | --- | --- | --- |
-| Two-room | 1,071 | ~143 / ~21 | ~8 s | ~2 s | ~55 s |
-| Furnished room | 4,998 | not measured | not measured (4.7× two-room's probes) | not measured | not measured |
-| Sponza | 19,425 | ~14–20 / ~8 | **~17–25 minutes** | ~14–20 s | off by default (memory cap) |
-| Bistro exterior's camera volume | 12,288 | ~10–13 / ~5 | ~17–22 minutes | ~22–28 s | off by default (memory cap) |
-
-**What this means: the honest trade-off.**
-
-- **On rooms** (two-room, and the furnished room if its rate is near two-room's per probe), transfers are built within seconds of loading. The instant sky works as intended.
-- **On Sponza-sized scenes at 2 ms**, the instant sky works **where you look after about 14–20 s** (camera-near probes build first), and everywhere else only after 17–25 minutes. Until then, sky changes far from the camera arrive at the delayed pace (6.4). The 8-second warm-up doesn't change this much: its large passes cover Sponza only a few times.
-- **In a camera-following volume** it barely helps while the camera moves: a probe that enters at the far edge leaves again before it has its 64 updates. It helps only when the camera stays somewhere for tens of seconds.
-- **What would make it work on big scenes:**
-  - **saved bakes** (M5), so a scene loads with its transfers;
-  - **a build budget of its own** (`transferBuildMs`, default 0): spend extra GPU time on transfers until they're built, for apps that can afford a busy first minute;
-  - **the deferred shadow pass** (section 2), if T2.0 shows it raises Sponza's rate.
-- **Recommendation**, within Dennis's call of "instant with a delayed fallback": keep the instant sky as the main path. On by default where memory allows; on Sponza-sized scenes, say plainly (in the stats overlay: "sky transfer built: 12%") that it covers the view first and the rest later. Then decide in T2.11, with T2.0's and T2.6b's numbers, whether saved bakes should move earlier than M5. That's open question 2.
+- **The order in a frame:** the nudge and its write run **before** `ddgi/trace`. So a probe that is also updated this frame blends from its already-nudged `S`, and the nudge is never lost to the blend writing an older `S`.
 
 **Showing it.** In a frame where the sky changed by more than the re-bake threshold:
 
-1. `ddgi/sky-nudge` handles every probe with a built transfer (before `ddgi/trace`, as above);
+1. `ddgi/sky-nudge` handles every probe with a built transfer (before `ddgi/trace`);
 2. a `ddgi/write` dispatch in sky mode copies the nudged tiles;
 3. `ddgi/compose` writes the composed atlas from the layers:
    `composed = Σ light-group layers × weights + sun layer × sun weight + S × environmentWeight`.
 
-In other frames compose writes only the tiles that were updated.
+The change shows in the same frame. In other frames compose writes only the tiles that were updated.
 
-- **Tier A:** the sky change shows in the same frame.
-- **Tier B:** with a sky change every frame (a dragged slider), the nudge covers a quarter of the probes a frame. The quarters are fixed (probe index mod 4), and each quarter keeps the sky weights `c` it was last nudged with, so every probe's nudges add up exactly. The change shows **within 4 frames**.
+**The sun layer at a white reference departs from SPEC's HomeFig rule 3** ("bake each group in its real colors … not in white"). For a single light the result is the same, because each colour channel is linear on its own. Baking in the sun's real colour would break it: probes updated after a colour change would hold the new colour and the rest the old one, so one layer weight couldn't serve both. The one non-linear step, the firefly clamp, needs no change: it limits each update relative to the stored value (`maxBrightnessChange × old`, `blend.ts`), so it clamps the same at any scale. Its only absolute term is a tiny floor (the smallest normal half, about 6e-5), which is negligible. This needs Dennis's OK and a DECISIONS entry (open question 2).
 
-**What happens when geometry moves (M3).** A moved object changes what the sky can reach: a door closing cuts the dark room off from the window. M3's `ddgi/mark` (m3-moving.md section 5) marks probes near moved geometry. Those probes' transfers become "not built" again, so sky changes reach them at the delayed pace until they're re-built with their shortened history and owed updates. `S` itself is updated by the normal blend all along, so nothing jumps. The extra cost is the 1.8× update cost on the marked probes only.
+**Memory.** Per probe: the transfer's 3 blocks, the sun layer, the sky layer and the composed atlas (512 bytes each: `rgba16float`, 6 × 6 texels plus border), plus the nudge scratch (288 bytes): 3,360 bytes. The blend's scratch tile grows with the transfer too, by about 1.4 KB per probe in a round (about 1.5 MB at 1,024-probe rounds). That is less than half of the earlier design's, which needed a colour per pattern because it carried bounces.
 
-**Cost per tier** (estimates, to be measured):
+| Scene (probes) | Extra GPU memory |
+| --- | --- |
+| Two-room (1,071) | 3.6 MB |
+| Furnished room (4,998) | 16.8 MB |
+| Bistro exterior's camera volume (12,288, m3-moving.md) | 41 MB |
+| Sponza (19,425) | 65 MB |
 
-| | Tier A (RTX 3060) | Tier B (Intel UHD) |
-| --- | --- | --- |
-| On by default | when ≤ 128 MB: every M2 scene | when ≤ 48 MB: the rooms, not Sponza |
-| A frame with a sky change (nudge + write + compose of every tile) | Sponza ~0.3 ms, furnished room ~0.1 ms | furnished room ~0.4 ms for all tiles; a quarter of that per frame while the sky keeps changing |
-| While transfers build | updates ~1.8× per probe, so fewer probes per frame | same |
-| Once built, sky still | nothing extra | nothing extra |
+- **Sized for the target machines** (Dennis: "mid to high end machines are the goal"). The RTX 3060 Laptop has 6 GB of its own, a desktop RTX 3060 12 GB, and the M5 Pro test Mac shares 64 GB with its GPU. Sponza's 65 MB is about 1% of the laptop's 6 GB.
+- So the instant sky is **on by default.** A guard turns it off, with a line in the stats, only past `skyTransferMaxMB` (default 512 MB), which no test scene comes near. The earlier 128 MB and 48 MB caps are gone.
+- **The furnished room** (everything the core owns): T1.9 measured 40.7 MB. With the instant sky (16.8 MB), the ray scratch for three layers (up to +4.2 MB) and the blend scratch (+1.5 MB), that's about 63 MB. SPEC now keeps its 64 MB as a guide, not a gate (revised 2026-11-05), so T2.6b reports it and nothing turns off.
 
-The sky-change cost is paid out of the same 2 ms. On Sponza, ~0.3 ms of every frame of a slider drag goes to the nudge, which leaves fewer probes for the sun direction's delayed catch-up: about 40% fewer while dragging (from T1.9a's fixed batches: 20 probes cost 1.55 ms, 40 cost 1.91 ms). On Tier B the quarter-a-frame nudge keeps that share small.
+**What happens when geometry moves (M3).** A moved object changes what the sky can reach: a door closing cuts the dark room off from the window. M3's `ddgi/mark` (m3-moving.md section 5) marks probes near moved geometry. Their transfer count `m` is reset to 0 with their history. Their transfer re-accumulates from the updates they're owed anyway, and is built again after 8 of them. Until then they aren't nudged, and sky changes reach them by re-tracing. `S` itself is updated by the normal blend all along, so nothing jumps. **In a camera-following volume** entering probes get their 2 warming updates first; the other 6 come at the low building urgency. With the camera still, the priority share is free and they come within about 24 s. During a fly-through the entering planes take the priority share, so the other 6 come from the round robin alone (a quarter of 51, about 13 a frame, one pass per 16 s): about 1.5 minutes. In a fast fly-through, most entering probes reach the camera before their transfer is built, and sky changes reach them by re-tracing. Sky changes during a fly-through are rare, so that's accepted.
 
-**Accuracy: measured first** (T2.6b's first check, before the rest is built):
+**Cost** (RTX 3060, estimates, to be measured GPU-bound):
 
-- Right after a 30° move of the sun, with the sun layer's weight at 0 so only the sky counts, how far is the nudged sky from the settled one (GI only)?
-- It must be within 5% (SPEC's response target, met in the same frame) on the furnished room's window bookmark and Sponza's bookmark 1.
-- If bands 0–2 miss it and bands 0–3 meet it, the transfer grows from 9 to 16 layers (Sponza +70 MB, over the 128 MB cap). That goes back to Dennis.
+| | GPU cost |
+| --- | --- |
+| Accumulating the transfer (always, while the instant sky is on) | the blend does about +50–80% more work. On Sponza, back to back, the blend is about 3.5% of a probe update (T1.9, 20 probes: 0.05 of 1.44 ms), so about **+2–3% per probe update**; more on small scenes, where the blend is a larger share |
+| Its three lighting layers (lights, sun, sky) | each probe update about +15–20% (section 5's estimate for 3 layers) |
+| A frame with a sky change: nudge, write and compose of every tile | Sponza ~0.3 ms. It moves about 4.3 KB per probe, 83 MB in all, so at the laptop's 336 GB/s it can't be under 0.25 ms. Furnished room ~0.08 ms |
+| The same, with far probes a quarter per frame | Sponza ~0.1 ms |
+| Sky still | the accumulation only |
 
-### 6.4 The delayed path (the fallback)
+- **Far probes a quarter per frame:** on volumes above 8,000 probes, probes with a camera weight under 0.25 are nudged a quarter per frame (probe index mod 4). Each quarter keeps the sky weights it was last nudged with, so its nudges still add up exactly, and the far end of the volume shows a sky change within 4 frames. Near probes are nudged every frame.
+- **Under Budget v2** the probe count doesn't shrink while frames are on time, so the nudge adds to the update's GPU time in the frames where the sky changes. On Sponza at the floor that's about 1.4 ms + 0.1 ms. At a calibrated count the batch is already near 2 ms, so a sky-change frame relies on Budget v2's +10% margin (0.2 ms), which the far-quarter nudge fits and the every-tile nudge doesn't. T2.6b checks it at the calibrated count.
+
+**Accuracy: measured first** (T2.6b's first check, before the rest is built).
+
+- Right after a 30° move of the sun, with the sun layer's weight at 0 so only the sky counts, how much of the change between the old and the settled field (GI only) does the nudge remove in the same frame? Measured on the furnished room's window bookmark and Sponza's bookmark 1, with the direct part alone and with the rescale.
+- **Decision rule, set before measuring:** keep the instant sky if it removes at least 70% on both bookmarks. Otherwise drop it. The sun layer and re-tracing don't depend on it, so nothing else changes.
+- If bands 0–2 fall short, try bands 0–4 (band 4 is what fixed the platform's sky irradiance in M1): 25 numbers per texel, 7 blocks, about +40 MB on Sponza. For radiance seen directly, band 3 matters too, so it's 0–4, not 0–2 plus 4.
+
+### 6.4 Re-tracing, nearest the camera first
 
 It's today's field, driven by M2's change-driven updates (section 4). It's what runs:
 
 - for the sun's direction, always;
-- for the sky, where the instant sky is off (memory) or a probe's transfer isn't built yet.
+- for what the sky's nudge leaves, and for probes whose transfer isn't built.
 
-A change of the sky or the sun's direction marks every probe (section 4.2). For a big step, all N probes need K updates, about `N × K / U` frames of the whole budget. Camera-near probes come first: with the camera weight, "near" means within about 4 spacings and in view, roughly the 100–300 probes that dominate the image.
+A change of the sun's direction (or of the sky) marks every probe (section 4.2). For a big step, all N probes need K updates, about `N × K / U` frames of the whole budget. Camera-near probes come first: with the camera weight, "near" means within about 4 spacings and in view, roughly the 100–300 probes that dominate the image.
 
-| Scene | Probes | U (RTX / Intel) | View settled, RTX | Whole volume, RTX | View settled, Intel | Whole volume, Intel |
-| --- | --- | --- | --- | --- | --- | --- |
-| Cornell | 1,728 | ~890 / 139 | ~0.1 s | ~0.26 s | ~0.3 s | ~1.7 s |
-| Two-room | 1,071 | ~300 / 45 | ~0.1 s | ~0.48 s | ~0.8 s | ~3.2 s |
-| Furnished room | 4,998 | not measured | not measured | not measured | not measured | not measured |
-| Sponza | 19,425 | ~36 / 16 | ~1 s | ~70 s | ~2 s | ~160 s |
+**Far probes owe fewer updates after a global change.** At K = 8 for every probe, the whole of Sponza takes about half a minute. So after a global change:
 
-The RTX rates are T1.9a's, with the fixed controller; the Intel rates are its single run from before the fix, and will likely rise. So on Sponza the view settles in about a second after a big jump, and the far end of the volume takes about a minute.
+- probes with a camera weight of 0.5 or more (near and in view) owe 8;
+- the rest owe 2.
 
+This applies only to volumes where 8 updates for every probe wouldn't fit in 2 s at the current rate (`N × 8 / U > 120` frames): Sponza and Bistro's camera volume, not the rooms.
+
+- Two updates bring a far probe within 5% (that's what the history rule in 4.1 gives for K = 2), but it's noisier: it holds about 2 updates' rays instead of 8. Its history then grows by itself with the round robin.
+- When the camera turns toward it, its camera weight raises its priority as usual.
+
+| Scene | Probes | U (RTX, the rates section) | View within 5% | Whole volume, K = 8 everywhere | Whole volume, far probes owe 2 |
+| --- | --- | --- | --- | --- | --- |
+| Cornell | 1,728 | ~890 | ~0.1 s | ~0.26 s | not needed |
+| Two-room | 1,071 | ~300 | ~0.1 s | ~0.48 s | not needed |
+| Furnished room | 4,998 | not measured | not measured | not measured | not measured |
+| Bistro exterior's camera volume | 12,288 | 51 (floor) | ~0.7 s | ~32 s | **~8.4 s** |
+| Sponza | 19,425 | 81 (floor) | ~0.4 s | ~32 s | **~8.2 s** |
+
+- **Sponza and Bistro use Budget v2's floor,** so their times are the slow end. If the calibration gives more probes, they shrink in proportion. Every time here is re-derived once the M1 lead's GPU-bound numbers land.
+- **Far probes owing 2 are noisier** for a while: about 448 rays each instead of about 1,800. Their history grows back with each sweep (every 4 s).
 - **These are for a big jump** (dragging the slider across hours). Dennis agreed (2026-11-05) to judge global changes on the view.
 - **A slow time-of-day animation** (an hour of sun in 10 s, 1.5° per second) changes each probe only a little between two of its updates, so the step rule in 4.1 wouldn't shorten its history, and with 32 updates of history it would lag far behind. Section 4.1's **ramp rule** handles this: a probe that keeps changing gets a history short enough that its lag stays near 5%.
   - In two-room (a probe updated every ~3.5 frames) the change per update is tiny and the history stays near 32 updates: it trails by about 1.9 s, which costs under 5%.
-  - Far from the camera on Sponza, out of view, a probe is reached only by the round robin's quarter of the budget (about 9 probes a frame), so about every 36 s on the RTX. The sun moves about 54° in that time, so the history drops below 1 update: those probes jump to each new estimate, about 36 s apart, with more noise. Near the camera the scheduler updates probes far more often.
-- **It blends, it never goes black.** Every probe moves from its old value toward its new one through its history (section 4.1). In view, that shows as the old lighting fading into the new. The exception is the one above: during a fast day animation, far, out-of-view Sponza probes have so little history that they step from one estimate to the next, about 36 s apart.
+  - Far from the camera on Sponza, out of view, a probe is reached only by the round robin's quarter of the budget (about 20 probes a frame at the floor), so about every 16 s. The sun moves about 24° in that time, so the history drops below 1 update: those probes jump to each new estimate, about 16 s apart, with more noise. Near the camera the scheduler updates probes far more often.
+- **It blends, it never goes black.** Every probe moves from its old value toward its new one through its history (section 4.1). In view, that shows as the old lighting fading into the new. The exception is the one above: during a fast day animation, far, out-of-view Sponza probes have so little history that they step from one estimate to the next.
 
-### 6.5 Native
+### 6.5 Re-tracing alone, or with the instant sky: the comparison
+
+On Sponza, on the RTX, at Budget v2's floor (81 probes a frame; the calibrated number may be higher):
+
+| | Re-tracing near the camera, with the sun layer | The same, plus the first-order sky transfer |
+| --- | --- | --- |
+| Sun colour and brightness | same frame, exact (the sun layer) | same |
+| Sun direction | view within 5% in ~0.4 s; whole volume ~8 s | the same |
+| Sky change, in view | within 5% in ~0.4 s | most of it in the same frame (T2.6b measures how much); the rest ~0.4 s |
+| Sky change, whole volume | ~8 s | most of it within 4 frames; the rest ~8 s, at lower priority |
+| Build | none | from the field's rays: ~1.2 s into the warm-up; with the warm-up off, the view in ~0.4 s and the whole volume in ~32 s, as the field itself converges |
+| Extra memory | 20 MB (the sun layer and the composed atlas) | 65 MB |
+| Extra GPU cost | the sun layer (about +8–10% per probe update) | also +2–3% per probe update, and ~0.1 ms in frames where the sky changed |
+| New code | the layers (shared with light groups) | also the blend's accumulation, `ddgi/sky-nudge` and `ddgi/write`'s sky mode |
+
+**Recommendation: both, in that order.**
+
+1. **Re-tracing nearest the camera is the main path,** with far probes owing 2 updates after a global change, and the warm-up on by default. The sun's direction is most of time of day, and only re-tracing moves it. T2.4b and T2.6a build it.
+2. **The sun layer goes with it:** exact, instant, and nothing to build.
+3. **The first-order sky transfer is added in T2.6b,** on by default, as the instant part of the sky. It meets Dennis's bar: it builds from the field's own rays, never later than the field itself, about 1.2 s into Sponza's warm-up (on by default). Its memory is small for the target machines.
+4. **It stays only if its first check passes** (it removes at least 70% of a sky change in the same frame). If it doesn't, it's dropped, and the rest stands unchanged.
+
+This keeps "instant with a delayed fallback" where instant is cheap. It drops the full transfer with bounces from the earlier draft. That transfer needed 64 updates per probe because each probe's bounce read its neighbours' transfers: 17–25 minutes on Sponza at the old controller's rate (still about 9 minutes at the floor), and 125 MB.
+
+*Why not a separate pass of extra visibility rays to build the transfer faster:* it isn't needed. The field's own miss rays give the same transfer for free, and the field needs those updates anyway.
+
+### 6.6 Native
 
 The native harness's miss shader sees one flat colour (DECISIONS 2026-11-04). M2 gives it the texture sky and an animated sun (T2.7), so time-of-day comparisons are like for like. Native has no instant sky; it re-traces every probe every frame with hardware ray tracing.
 
@@ -483,12 +536,13 @@ The native harness's miss shader sees one flat colour (DECISIONS 2026-11-04). M2
 | `ddgi/trace` | trace, shade, direct light inline | trace, shade, bounce per layer, surface records; **no `giDirectIrradiance` call** |
 | `gi/direct` (platform) | none | new; takes over direct light for every technique that traces |
 | light grid build (platform) | none | new; only above `exactLightLimit` local lights |
-| `ddgi/blend` | one global hysteresis | per-probe `h` from the history record; loops layers; writes the probe's mean |
-| `ddgi/compose` | none | with light groups or the instant sky on |
-| `ddgi/sky-transfer` | none | new; only while some probe's transfer isn't built. Writes each ray's 9 pattern radiances; the blend blends them |
+| `ddgi/blend` | one global hysteresis | per-probe `h` from the history record; loops layers; writes the probe's mean; accumulates the first-order sky transfer from its miss rays |
+| `ddgi/compose` | none | whenever there's more than one layer (the sun layer is on by default) |
 | `ddgi/sky-nudge` | none | new; only in frames where the sky changed, with the instant sky on |
-| `ddgi/write` | one block per probe | loops the layer blocks (and the 9 transfer tiles while building); a second dispatch in sky mode writes nudged sky tiles |
+| `ddgi/write` | one block per probe | loops the layer blocks (the transfer's 3 included); a second dispatch in sky mode writes nudged sky tiles |
 | sky resample and projection | CPU-built procedural sky, one-workgroup SH | GPU procedural source, two-level SH, plus radiance SH for the instant sky |
+
+The transfer is built inside `ddgi/blend` from rays the field traces anyway, so there's no transfer kernel and no extra rays.
 
 The instant sky is a nudge to the ordinary sky layer, and its fallback is simply no nudge. So there's no second sky path.
 
@@ -504,11 +558,10 @@ Every new kernel that reduces or compacts is subgroups first, with one declared 
 | `ddgi/write` | update list + scratch tile = 2; in sky mode, history + nudge scratch = 2 |
 | `ddgi/mark` | light-change table, history = 2 (atlases as textures) |
 | `ddgi/schedule-*` | history, update list, schedule state = 3 |
-| `ddgi/sky-transfer` | update list + ray scratch = 2 (the atlas as a texture) |
 | `ddgi/sky-nudge` | history + nudge scratch = 2 (the atlas as a texture; the sky weights as uniforms) |
 | `ddgi/compose` | update list = 1 (the atlas as a texture, the composed atlas as 1 storage texture, the weights as uniforms) |
 
-## Cost against the budgets (estimates, RTX 3060, to be measured)
+## Cost against the budgets (estimates, RTX 3060, to be measured GPU-bound)
 
 | Item | When | GPU ms |
 | --- | --- | --- |
@@ -518,17 +571,20 @@ Every new kernel that reduces or compacts is subgroups first, with one declared 
 | Light grid build | above `exactLightLimit` local lights | ~0.05 on Sponza with 1,024 lights |
 | `ddgi/compose` | groups on | updated tiles only: < 0.01; a weight change on Sponza: ~0.1 |
 | Sky re-bake | the sky changed | < 0.1 |
-| Instant sky: nudge + compose every tile | the sky changed | Sponza ~0.3; furnished room ~0.1 (Intel ~0.4, a quarter a frame) |
-| Instant sky: building transfers | until every probe's is built | each probe update ~1.8× |
-| Instant sky: its three lighting layers (lights, sun, sky) | while it's on | each probe update ~+15–20% (section 5's estimate for 3 layers) |
+| Instant sky: nudge + write + compose | the sky changed | Sponza ~0.3 for every tile (about 83 MB moved; at least 0.25 ms at the laptop's 336 GB/s), ~0.1 with far probes a quarter per frame; furnished room ~0.08 |
+| Instant sky: accumulating the transfer in the blend | while it's on | each probe update ~+2–3% on Sponza |
+| Time of day's lighting layers (lights, sun, sky) | on by default | each probe update ~+15–20% (section 5's estimate for 3 layers) |
 
-All of it sits inside the 2 ms update budget: the platform's cost model measures the `ddgi/*` passes and `gi/direct` together, so extra fixed costs shrink the probe count, not the frame. Shading cost doesn't change.
+Under Budget v2 the probe count is set by the calibration at load, which measures the `ddgi/*` passes and `gi/direct` together with whatever is on (layers, the transfer). So the costs that run every frame are paid for in a smaller calibrated batch. Costs that come and go (`ddgi/mark`, a sky change's nudge) don't change the count while frames are on time; they add to that frame's GPU time, and T2.4b and T2.6b check that the update stays within its 2 ms ceiling. Shading cost doesn't change.
 
-Memory: history 32 bytes per probe, ray scratch at most 7.6 MB (11.8 MB with three layers), light grid at most 2 MB, light groups and the instant sky as tabled.
+Memory: history 32 bytes per probe, ray scratch at most 7.6 MB (11.8 MB with three layers), light grid at most 2 MB, light groups and the instant sky as tabled (Sponza +65 MB for the instant sky, on by default).
 
 ## Proposed task breakdown
 
-Board format. IDs are proposals; T1.11 assigns the real ones. Every GPU check runs on the RTX 3060 and the Intel UHD, says which adapter, and uses the bench lock (with Dennis's GPU apps closed for p95 and timings, DECISIONS 2026-11-05).
+Board format. IDs are proposals; T1.11 assigns the real ones. Every GPU check says which adapter and uses the bench lock (with Dennis's GPU apps closed for p95 and timings, DECISIONS 2026-11-05).
+
+- **Speed checks** run on the RTX 3060, GPU-bound (the method the M1 lead's re-measure settles), and on the M5 Pro once it's set up.
+- **The Intel UHD runs the correctness checks only** (oracle, furnace, accuracy, leaks, the subgroup fallback). Its timings may be recorded, never gated.
 
 | ID | Task | Agent | Size | Depends on |
 | --- | --- | --- | --- | --- |
@@ -537,10 +593,10 @@ Board format. IDs are proposals; T1.11 assigns the real ones. Every GPU check ru
 | T2.2 | Deferred direct light (`gi/direct`) in platform hit shading | implementer | M | T2.0 |
 | T2.3 | Many-light sampling: the light grid | implementer | M | T2.1, T2.2 |
 | T2.4a | Per-probe history and `ddgi/mark` | implementer | M | T2.1 |
-| T2.4b | GPU scheduler with camera priority | implementer | M | T2.4a |
+| T2.4b | GPU scheduler with camera priority; far probes owe 2 after a global change; the warm-up moves into the technique | implementer | M | T2.4a |
 | T2.5 | Light groups: layers, compose, weights, adapter API | implementer | M | T2.2, T2.4a |
 | T2.6a | Sky re-bake: GPU procedural source, two-level SH with radiance SH, compile fix | implementer | M | T2.4b |
-| T2.6b | Instant sky: transfer layers, sun layer, building, the nudge, fallback | implementer | M | T2.5, T2.6a |
+| T2.6b | Instant sky: the first-order transfer in the blend, the nudge, fallback (the sun layer comes with T2.5's layers) | implementer | M | T2.5, T2.6a |
 | T2.7 | Native harness: manifest motions, texture sky, animated sun | native-runner | M | T2.1 |
 | T2.8 | Viewer: gizmos, sliders, groups, time of day, motions, response meter, native compare page | implementer | M | T2.4b, T2.5, T2.6b, T2.7 |
 | T2.10 | M2 measurements against targets | gpu-tester, native-runner | M | all above |
@@ -553,7 +609,7 @@ The startup items DECISIONS moved to M2 ("fast first GI", the scene copy off the
 ### Draft done-whens
 
 - **T2.0 Spike: deferred shadows.** A throwaway branch splits Sponza's `ddgi/trace` into trace + `gi/direct` with surface records.
-  - Done when: the fixed and per-probe cost of the pair (from a batch-size curve, 16 to 512 probes) and the shadow-ray rate against the bench's any-hit rate are recorded on both GPUs (3 runs); and the field matches M1's within 1% mean on Cornell and Sponza after 300 frames.
+  - Done when: the fixed and per-probe cost of the pair (from a batch-size curve, 16 to 512 probes, GPU-bound) and the shadow-ray rate against the bench's any-hit rate are recorded on the RTX (3 runs); and the field matches M1's within 1% mean on Cornell and Sponza after 300 frames, on the RTX and the Intel UHD.
   - Decision rule, set before measuring: go ahead with T2.2 if Sponza fits ≥ 1.25× the probes at 2 ms on the RTX. Otherwise record why, and the main session decides.
   - Show: the cost curves. Record: `timing.csv` `batch_cost/` rows.
 - **T2.1 Light buffer v2.**
@@ -584,11 +640,13 @@ The startup items DECISIONS moved to M2 ("fast first GI", the scene copy off the
     4. marked probes against probes whose true change was > 5% (from a re-converged field) are recorded, with a lit-room recall of at least 95%.
   - Record: `lightChangeScale` chosen, and the counts.
 - **T2.4b GPU scheduler.**
-  - Done when, at the default budget, in GI-only mode:
-    1. two-room and Cornell (point light) step changes show the next frame (ROI changes by > 1%) and are within 5% of settled in ≤ 0.5 s on the RTX and ≤ 1.5 s on the Intel UHD;
-    2. Sponza's step change at bookmark 1 meets the same on the RTX;
+  - Done when, at the default budget, in GI-only mode, on the RTX:
+    1. two-room and Cornell (point light) step changes show the next frame (ROI changes by > 1%) and are within 5% of settled in ≤ 0.5 s;
+    2. Sponza's step change at bookmark 1 meets the same;
     3. no probe goes un-updated for more than 2 full round-robin passes during a 60 s sweep (census);
-    4. the scheduler costs ≤ 0.05 ms on the RTX at 20,000 probes, and the subgroup and fallback histograms agree exactly.
+    4. the scheduler costs ≤ 0.05 ms at 20,000 probes, and the subgroup and fallback histograms agree exactly (on the Intel UHD too);
+    5. after a 30° sun step on Sponza, the mean error over all probes against a re-converged field is within 5% in ≤ 10 s at the calibrated count (far probes owing 2; the bar is re-set from the GPU-bound rates); the p95 and the far probes' extra noise are recorded;
+    6. the warm-up runs in the technique and is on by default: a host that does nothing gets the same first frames as the viewer does today.
   - Record: response curves (CSV), per GPU.
 - **T2.5 Light groups.**
   - Done when:
@@ -602,14 +660,16 @@ The startup items DECISIONS moved to M2 ("fast first GI", the scene copy off the
     1. the GPU procedural map matches the CPU sky within 0.1% mean and 1% per texel, and `giSkyIrradiance` still meets ±0.5% on open ground;
     2. a re-bake costs ≤ 0.1 ms GPU and ≤ 0.05 ms CPU;
     3. the projection compiles in ≤ 0.2 s cold on the RTX ("cold": a fresh browser profile with nothing cached, one scene per run, as T1.9a measured startup);
-    4. on the delayed path (instant sky off), a 30° sun step on the furnished room settles the bookmark view (GI only) within 5% in ≤ 0.5 s on the RTX (global changes are judged on the view, Dennis 2026-11-05); the whole-volume time is recorded.
-- **T2.6b Instant sky.** The first check runs before the rest is built. Every check builds the transfers first in a test mode (16 ms budget until every probe's transfer is built), then measures at the default budget.
-  - Done when:
-    1. right after a 30° sun move, the nudged sky (sun layer weight 0, GI only) is within 5% of the settled field on the furnished room's window bookmark and Sponza's bookmark 1, with bands 0–2 (if only bands 0–3 meet it, stop and bring it back);
-    2. on the furnished room's window bookmark, a sky change moves the GI-only mean of the sunlit floor rectangle by more than 1% in the frame it happens on the RTX, and within 4 frames on the Intel UHD;
-    3. on two-room and the furnished room, 1,800 frames (at the 16 ms test budget) after a sky change, the field with the instant sky on matches a run with it off within 0.5% mean: the nudge only makes the change sooner, it doesn't move where the field settles;
-    4. with every transfer built and the scene still, on two-room and the furnished room, µs per updated probe (fixed batch of 512) is within 3% of the same three layers (lights, sun, sky) with no transfer; and the furnished room's total core memory is ≤ 64 MB (SPEC).
-  - Record: build times per scene and GPU, extra memory, nudge and compose ms, the three layers' own cost against one layer, and bands 0–2 against 0–3 and 6 × 6 against 4 × 4 tiles.
+    4. by re-tracing alone (instant sky off), a 30° sun step on the furnished room settles the bookmark view (GI only) within 5% in ≤ 0.5 s on the RTX (global changes are judged on the view, Dennis 2026-11-05); the whole-volume time is recorded.
+- **T2.6b Instant sky.** The first check runs before the rest is built.
+  - Done when, on the RTX:
+    1. right after a 30° sun move, with the sun layer's weight at 0 (GI only), the nudge removes at least 70% of the difference between the old and the settled field in the same frame, on the furnished room's window bookmark and Sponza's bookmark 1, with bands 0–2. Recorded with the direct part alone and with the bounce rescale. If it falls short, stop: the instant sky is dropped and the main session tells Dennis;
+    2. transfers are built: on Sponza ≤ 1.5 s after the warm-up starts; with the warm-up off, the bookmark view's probes in ≤ 1 s;
+    3. on the furnished room's window bookmark, a sky change moves the GI-only mean of the sunlit floor rectangle by more than 1% in the frame it happens;
+    4. on two-room and the furnished room, 1,800 frames (at a 16 ms test budget) after a sky change, the field with the instant sky on matches a run with it off within 0.5% mean: the nudge only makes the change sooner, it doesn't move where the field settles;
+    5. µs per updated probe (fixed batch of 512, GPU-bound) is within 5% of the same three layers with no transfer; and on Sponza, at the calibrated count, the update plus a sky change's nudge, write and compose stays within Budget v2's "≤ gpuMs (+10%)", back to back (the nudge's own ms recorded, every tile and far quarters);
+    6. checks 3 and 4 also pass on the Intel UHD (correctness, not speed).
+  - Record: build times per scene, extra memory, the furnished room's total core memory (SPEC's 64 MB is a guide), nudge and compose ms, the transfer's noise at 8 against 64 updates, and bands 0–2 against 0–4.
 - **T2.7 Native harness.**
   - Done when:
     1. `play.ps1 -Scene two-room -Motion light-sweep` plays the manifest motion at the viewer's speed (positions within 1 cm at matching times);
@@ -624,31 +684,37 @@ The startup items DECISIONS moved to M2 ("fast first GI", the scene copy off the
     3. the native compare page plays both recordings in sync;
     4. every control has hover help, and Dennis can drive it without instructions.
   - Show: the viewer URL with two-room at `lit-room`.
-- **T2.10 M2 measurements.** The table at the top, per GPU, plus our and native's response times for the same motions (3 runs; recorded as numbers, not required to match native). Done when each target is met or its miss is explained and agreed with Dennis, and he has judged the sweep's look next to native by eye.
+- **T2.10 M2 measurements.** The table at the top on the RTX (GPU-bound) and the M5 Pro if it's set up, the correctness checks on the Intel UHD, plus our and native's response times for the same motions (3 runs; recorded as numbers, not required to match native). Done when each target is met or its miss is explained and agreed with Dennis, and he has judged the sweep's look next to native by eye.
 
 ## Risks, and what to spike first
 
-1. **The deferred pass may buy little** at Sponza's operating point, where the fixed cost dominates. Then Sponza stays at 30–43 probes per frame, and the response target is met only near the camera. This is the largest lever and the largest uncertainty. *Spike first: T2.0.*
+1. **The deferred pass may buy little** at Sponza's operating point, where the fixed cost dominates. Then Sponza stays near Budget v2's floor (81 probes a frame), and the response target is met only near the camera. This is the largest lever and the largest uncertainty. *Spike first: T2.0.*
 2. **Short histories flicker.** At `n` = 0.42 the first update is 70% one noisy estimate. If that shows as a flash, raise the floor on `n`, or give marked probes 2× rays for their first update (at a cost). T2.4a's two-room step shows it.
 3. **Light-grid noise with many small lights.** Candles have short ranges, and a cell 2 probe spacings wide may hold many lights that matter only at its corners. The options are smaller cells near lights, more reservoirs, or Moreau's light tree. `sponza-candles` decides.
 4. **The change estimate is a stand-in.** `lightChangeScale` and the visibility floor are guesses until T2.4a compares marked probes against probes that really changed. Too generous wastes budget; too stingy leaves stale probes until the round robin reaches them.
-5. **Global changes on big scenes** can't meet 0.5 s everywhere at 2 ms on the delayed path (section 6.4). Dennis agreed to judge them on the view.
+5. **Global changes on big scenes** can't meet 0.5 s everywhere at 2 ms by re-tracing (section 6.4). Dennis agreed to judge them on the view.
 6. **Native motion** needs fork changes, because the harness has no animation. Two-room first, Sponza second.
-7. **The instant sky's accuracy.** If 9 patterns blur the sky too much near windows (the sun's glow), the same-frame error exceeds 5%, and normal updates have to carry the rest at the delayed pace. Bands 0–3 (16 layers) is the next step, at +70 MB on Sponza. *Measured first in T2.6b.*
-8. **Building transfers takes 17–25 minutes on Sponza at 2 ms** (6.3). Until then, sky changes away from the camera arrive at the delayed pace. Saved bakes (M5) or a build budget of its own fix it; the warm-up doesn't.
+7. **The instant sky may cover too little.** It moves only what a probe sees of the sky directly, plus a rescaled guess at the bounce. Deep inside Sponza's colonnade, where sky light arrives mostly by bounce, the same-frame share may fall under 70%, and then the transfer is dropped (T2.6b's first check). Re-tracing still carries time of day, so the plan doesn't depend on it.
+8. **Re-tracing after a big jump takes seconds far from the camera on Sponza:** about 8 s for the whole volume at Budget v2's floor with far probes owing 2 (6.4), and those far probes are noisier for a while. A higher calibrated count and T2.0's deferred shadow pass are the levers.
 9. **The ramp rule's short histories are noisy** far from the camera on Sponza during a day animation (the history drops below 1 update there, 6.4). If that flickers, the floor on `n` rises and those probes lag more.
-10. **Memory on the furnished room** (6.3): the instant sky plus the field and ray scratch is about 52 MB before the scene copy; SPEC's 64 MB for everything the core owns may not hold. The 4 × 4 transfer tile is the fallback; T2.6b checks it.
+10. **The rates under Budget v2 aren't measured yet.** This doc uses T1.9a's old-controller medians for the rooms and the floor for Sponza and Bistro. The rooms' T1.9a numbers were probably taken with the clocks partly down, so their calibrated numbers are likely higher and their times shorter; if they come out lower, the times grow in proportion.
 
 ## Decided by Dennis (2026-11-05)
 
-1. **Time of day:** "instant with a delayed fallback". The instant sky (6.3) is the main path where memory allows; the delayed field (6.4) is its declared fallback.
+1. **Time of day:** "instant with a delayed fallback". Instant where it's cheap: the sun's colour and brightness (the sun layer) and the sky seen directly (6.3). Re-tracing nearest the camera (6.4) carries the sun's direction and the rest; see 7.
 2. **`sponza-candles`:** "1024 is fine for now". The count is a setting, for raising later as a stress test.
 3. **Light groups:** an explicit group weight, off by default. "Go with stability but also flexibility and expansion later. I dont want to close the door on common use cases": spotting three.js-style dimming stays possible and is on the Later list.
 4. **Global changes** (the sun, the sky) are judged on the view.
 5. **Native:** the look is judged by eye. Response time is measured as a number, not as a requirement to match native, which has hardware ray tracing.
 6. **Area lights:** after M2, "lets not abandon them". On the Later list, with how they'd fit (section 8).
+7. **No minutes-long builds:** "anything taking minutes to build is a fail and we should not go that direction." The full sky transfer with bounces (17–25 minutes on Sponza) is dropped; the first-order transfer (6.3) builds from the field's own rays in seconds.
+8. **Memory** is sized for mid- to high-end GPUs: "Why are we memory capping so low? this machine has like 6-8gb of GPU memory and 64gb of DDR5 CPU memory. mid to high end machines are the goal." The 128 MB and 48 MB caps are gone; the instant sky is on by default. SPEC now keeps the furnished room's 64 MB as a guide, not a gate (revised 2026-11-05).
+9. **Hardware:** the RTX 3060 and up and an Apple M5 Pro are the targets. The Intel UHD is a correctness test only ("we arent building for the intel").
+10. **Measurement:** benchmarks and estimates assume a loaded GPU with its clocks up ("Running at 60hz seems like a fail"). Budget v2 is accepted (work per frame, calibrated with the clocks up, a 4 s sweep floor); this doc's rates follow it, and its times get re-derived once the M1 lead's re-measure lands.
 
 ## Still open
 
-1. **The instant sky's memory caps:** on by default when its extra memory fits 128 MB on Tier A and 48 MB on Tier B (the Intel UHD uses shared system RAM). With these caps the RTX gets it on every M2 scene, including Sponza (+125 MB), and the Intel UHD on the rooms (the furnished room needs 32.1 MB). OK, or different caps?
-2. **The instant sky on big scenes** (6.3, "the honest trade-off"): at Sponza's measured rate its transfers take 17–25 minutes to build at 2 ms (the view's nearest probes in 14–20 s). Keep it on by default there and accept "the view first, the rest later" until saved bakes exist? Or give transfer building a budget of its own, or bring saved bakes forward from M5? I'd keep it on, add the optional build budget, and decide about bakes in T2.11 with T2.0's and T2.6b's numbers.
+1. **Far probes owing 2 updates after a global change** (6.4). It brings Sponza's whole volume from about 32 s to about 8 s at Budget v2's floor, but those far probes are noisier (about 448 rays instead of about 1,800) until later sweeps. OK? The alternative is 8 everywhere and about half a minute for the far end of Sponza.
+2. **The sun layer at a white reference** (6.3, after "Showing it"). It departs from SPEC's HomeFig rule 3 ("not in white") for a single light, where the result is the same and the real-colour version can't be kept consistent while some probes are updated and others aren't. OK to record as a DECISIONS exception?
+
+Once the M1 lead's GPU-bound rates under Budget v2 land, every time in sections 4.3, 6.3, 6.4 and 6.5 is re-derived; no answer is needed for that.
