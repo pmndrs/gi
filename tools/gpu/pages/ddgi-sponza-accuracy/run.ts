@@ -28,18 +28,21 @@
  * What is compared: DDGI's test view "indirect" is albedo / π × the field,
  * and the field holds everything but the analytic lights: bounce light, and
  * also sky light (and emission) reaching the surface straight. Cycles'
- * Diffuse Indirect pass counts that sky light as direct. Cornell and two-room
- * have no sky, so there the two are the same; Sponza's open courtyard makes
- * them differ by about 2×. So Sponza is judged against
- * `cycles-untextured-gi.exr` (render.py `render_untextured`: indirect + direct
- * − the lights' direct), and the Cycles indirect pass is reported alongside.
+ * Diffuse Indirect pass counts that sky light as direct. So every scene is
+ * judged against the GI composite, `cycles-gi.exr` or
+ * `cycles-untextured-gi.exr` (render.py `render_with_gi_parts`: indirect +
+ * direct − the lights' direct; DECISIONS "What 'indirect light' means against
+ * Cycles in a scene with a sky"). Cornell (point) and two-room have no sky and
+ * no emitter, so there the composite equals the indirect pass (run.ts checks
+ * that the two direct images match); Sponza's open courtyard makes them differ
+ * by about 2×, and the Cycles indirect pass is reported alongside.
  *
  * The GPU run holds the bench lock (it is minutes of full GPU load), unless
  * started under `bench-lock.ts run`.
  *
- * `--table` compares the three scenes' existing images (no GPU): Cornell
- * (point light, `front`) and two-room (`lit-room`) from
- * `ddgi-test-view/render.ts` against `cycles-indirect.exr`, and Sponza from
+ * `--table` compares the three scenes' existing images (no GPU), each against
+ * its GI composite: Cornell (point light, `front`) and two-room (`lit-room`)
+ * from `ddgi-test-view/render.ts` against `cycles-gi.exr`, and Sponza from
  * this script against `cycles-untextured-gi.exr`. Bias is per pixel (the
  * sums); block error, p95 block error and FLIP use 8 × 8 blocks (NOTES:
  * comparing noisy renders), and FLIP is also given per pixel.
@@ -233,15 +236,20 @@ interface TableRow {
     readonly test: string;
 }
 
-/** One accuracy table for the three M1 scenes, from images already on disk. */
+/**
+ * One accuracy table for the three M1 scenes, from images already on disk.
+ * Every row uses the same reference definition, the GI composite (see the
+ * file header); a missing `cycles-gi.exr` is rendered with
+ * tools/reference/cycles/run.ts at the reference's size and samples.
+ */
 async function printTable(suffixes: { readonly cornell: string; readonly twoRoom: string; readonly sponza: string }): Promise<void> {
     const rows: TableRow[] = [
-        { scene: 'cornell-box-point', camera: 'front', reference: 'cycles-indirect.exr', test: `ddgi-indirect${suffixes.cornell}.exr` },
-        { scene: 'two-room', camera: 'lit-room', reference: 'cycles-indirect.exr', test: `ddgi-indirect${suffixes.twoRoom}.exr` },
+        { scene: 'cornell-box-point', camera: 'front', reference: 'cycles-gi.exr', test: `ddgi-indirect${suffixes.cornell}.exr` },
+        { scene: 'two-room', camera: 'lit-room', reference: 'cycles-gi.exr', test: `ddgi-indirect${suffixes.twoRoom}.exr` },
         { scene: 'sponza', camera: 'colonnade-from-the-floor', reference: 'cycles-untextured-gi.exr', test: `ddgi-untextured-indirect${suffixes.sponza}.exr` },
     ];
     const lines = [
-        '| scene / camera | Cycles reference | DDGI image | indirect bias | 8x8 block mean rel. error | p95 block error | FLIP 8x8 (8.4 ppd) | FLIP per pixel (67 ppd) |',
+        '| scene / camera | Cycles reference (GI composite) | DDGI image | GI bias | 8x8 block mean rel. error | p95 block error | FLIP 8x8 (8.4 ppd) | FLIP per pixel (67 ppd) |',
         '| --- | --- | --- | --- | --- | --- | --- | --- |',
     ];
     const percent = (value: number): string => `${(value * 100).toFixed(2)}%`;

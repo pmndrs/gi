@@ -14,6 +14,8 @@ Output goes to `bench/references/<scene>/<camera name>/` (gitignored):
 | file | what |
 | --- | --- |
 | `cycles-full.exr`, `cycles-indirect.exr` | Blender Cycles, 32-bit linear float, no denoising |
+| `cycles-direct.exr`, `cycles-lights-direct.exr`, `cycles-gi.exr` | the GI composite and its parts: what DDGI is compared with (see "The GI composite") |
+| `cycles-untextured-*` | the same from an untextured render (see "Untextured references") |
 | `pathtracer-full.exr`, `pathtracer-indirect.exr` | three-gpu-pathtracer (WebGPU), same |
 | `*.json` | every setting, sample count, adapter and time |
 | `compare-*.png` | heatmaps from `tools/compare` |
@@ -29,6 +31,66 @@ Cameras are the manifest bookmarks: `--camera 1` is the first, or give the name.
   - Cycles: the Diffuse Indirect pass times Diffuse Colour. Materials are purely diffuse, so full = emission + environment + direct + indirect.
   - Path tracer: full minus a direct image. The library counts the camera hit as bounce 1 and samples point, directional and spot lights explicitly at every hit, but finds emissive surfaces only by following a scattered ray. So a single bounce limit means different things for the two kinds of source. The direct image is therefore two runs added together (light is additive): lights only (emission switched off, `maxBounces` 1) and emission only (lights switched off, `maxBounces` 2). The same random numbers are used in every run, which keeps the difference quiet.
   - Checked against known answers and against each other: furnace room (albedo 0.5, emission 0.25) gives full 0.5, indirect 0.125 in both renderers; two-room (a point light) agrees on indirect to 0.1 percent; Cornell (emissive quad) agrees to 0.3 percent. Using the emission setting (2 bounces) on a point-light scene drops the indirect by 36 percent, which is how the split was found.
+
+## The GI composite: what DDGI is compared with
+
+`cycles-gi.exr` = `cycles-indirect.exr` + `cycles-direct.exr` − `cycles-lights-direct.exr`. Every Cycles render writes it (`render.py` renders the parts, `run.ts` adds them up), and every DDGI accuracy number is taken against it, for Cornell, two-room and Sponza alike (`node tools/gpu/pages/ddgi-sponza-accuracy/run.ts --table`).
+
+**Why.** DDGI's field holds every light a probe ray brings back: bounces, and also the sky and emitters seen straight. Only the manifest's analytic lights (sun, point, spot) are drawn by the renderer, outside the field. Cycles' indirect pass leaves out the sky and emitters seen straight from the surface (it counts them as direct), so on Sponza's open courtyard it holds about half of what DDGI's field holds. So the reference is everything diffuse except the analytic lights' direct light. The decision and its history are in DECISIONS ("What 'indirect light' means against Cycles in a scene with a sky", set 2026-11-05 at T1.9).
+
+**The parts** (both × Diffuse Colour, so they are radiance like the indirect pass):
+
+| file | what |
+| --- | --- |
+| `cycles-direct.exr` | Diffuse Direct from the normal render: the lights, the sky and emitters, reaching the visible surface without a bounce |
+| `cycles-lights-direct.exr` | Diffuse Direct from a second render with only the manifest lights on and no bounces, same seed and samples (so pixel jitter matches and edges cancel) |
+
+**The lights-only render really is lights-only.** `switch_off_emitters` (render.py) replaces the world with a black one (no nodes, colour 0), whatever it held. In every material and shader node group it unlinks and zeroes every emitting input: Principled surface emission, the Emission shader (on a surface or in a volume), a Background shader used in a material, and Principled Volume emission and blackbody. Then `find_emitters` must find nothing left, or the run stops with the list. A shader node of a kind it doesn't know that has an emission input also stops it. Light objects in the glTF files are deleted on import, so the only light objects are the manifest's.
+
+**Checks, on every render.** Before the normal render, `render.py` records what else emits (`otherEmitters` in `cycles.json`) and what the lights-only image must therefore be (`giComposite.lightsOnlyExpected`). `run.ts` checks it (`gi-composite.ts`). If the check fails, it stops with exit code 1 and writes no `cycles-gi.exr`.
+
+- `equals-direct`: the manifest lights are the only source (no sky, no emitter: point-light Cornell, two-room). The lights-only direct image must equal the normal direct image: bias within ±0.5% and 8 × 8 block error at most 2%. This catches a lights-only render that lost or changed the lights' own light. In these scenes the composite equals the indirect pass.
+- `black`: the scene has no manifest lights (emissive Cornell). The lights-only image must be 0 (at most 0.01% of the direct light). This catches an emitter the switch-off missed.
+- not checked: both kinds of source (Sponza). There is no known image to compare with; the calibration case below covers the switch-off.
+
+`node tools/reference/cycles/run.ts --calibrate` has a known-answer case, "lights only": a white floor under a point light, with a coloured world and four emitting quads around it (an Emission shader, one inside a node group, a Background shader as a material, Principled emission). `find_emitters` must list 5 sources, and the lights-only image must show the point light's E / π alone: 3.97888 against 3.97887. With everything on, the floor reads 5.895, so a missed source would show. (The switch-off before 2026-11-05 zeroed only Principled emission and the world's Background node; it would have left three of the four quads on.)
+
+Cheap end-to-end runs of the check (seconds each; they take the bench lock and add rows to `render-log.csv`):
+
+```
+node tools/reference/cycles/run.ts --scene cornell-box-point --samples 64 --width 128 --height 128 --out-dir <scratch folder>   # equals-direct
+node tools/reference/cycles/run.ts --scene cornell-box --samples 64 --width 128 --height 128 --out-dir <scratch folder>         # black
+node tools/reference/cycles/run.ts --calibrate                                                                                  # the switch-off, known answers
+npx vitest run tools/reference/cycles                                                                                           # the image check itself
+```
+
+Measured 2026-11-05 (CPU, 2048 samples, seed 0, the references' sizes): on point-light Cornell (512 × 512) and two-room `lit-room` (640 × 360) the lights-only direct image equals the normal direct image exactly (bias 0.000%, block error 0.000%: same seed, same first-hit samples), so `cycles-gi.exr` equals `cycles-indirect.exr` there, and the re-rendered `cycles-full`/`cycles-indirect` are pixel-identical to the earlier ones. The lights-only render costs 116 s (Cornell) and 110 s (two-room) on top of 211 s and 340 s.
+
+## Untextured references (`--materials-json`)
+
+```
+node tools/reference/cycles/run.ts --scene sponza --camera 1 --width 640 --height 360 --samples 8192 --device gpu \
+     --materials-json bench/references/sponza/colonnade-from-the-floor/gi-materials.json
+```
+
+renders the scene with the materials DDGI actually sees, and names the files `cycles-untextured-*` (`full`, `indirect`, `direct`, `lights-direct`, `gi`, and `cycles-untextured.json`).
+
+**What it replaces.** In M1 the platform's GI sees one constant colour per material: the three adapter folds each texture's average into the colour, and the core samples no textures until M4 (DECISIONS 2026-11-05, T1.7). A textured Cycles render would judge that simplification together with DDGI. The GI material table (`gi-materials.json`, written by `tools/gpu/pages/ddgi-sponza-accuracy/run.ts` from `SceneSync.sentMaterial`) lists, per model part and glTF material name, the albedo and emission the adapter sent to the platform. `apply_gi_material_table` puts them on every Principled BSDF, replacing the textured inputs:
+
+| input | set to | why |
+| --- | --- | --- |
+| Base Color | the table's albedo; texture, vertex colour and factor nodes cut off | the GI albedo is one constant per material |
+| Emission Color, Strength | emission / its peak, strength = the peak | strength is radiance (units.py) |
+| Alpha | 1 | the M1 tracer treats every surface as opaque (alpha cutouts and see-through materials arrive with M4). So `glass` is an opaque surface on both sides, as in DDGI: consistent, not physical |
+| Normal | cut off (normal maps removed) | the platform shades with interpolated vertex normals |
+
+Metallic, Roughness, Transmission, Specular and the other lobes are forced to the diffuse values as for every reference (`make_materials_diffuse_only`; "Diffuse only, checked" below). `require_untextured` then refuses to render if any input in the table above is still linked.
+
+**Matching.** Materials are matched by model part and glTF name (Blender's `.001` suffixes for repeated names are stripped). A material used in the scene with no row, or a row with no material, stops the run. Only the model parts the table lists (`parts`) are imported, so a table made from the base package renders the base package.
+
+**Left-out faces.** The three adapter leaves a mesh out of GI when all its materials let light through (alpha-blended glTF materials such as Sponza's `dirt_decal`, `blocksLight: false`), because the M1 tracer can't honour that per triangle. The table counts those meshes per material (`leftOutMeshes`), and `remove_left_out_faces` deletes the faces of every such material (Sponza: `dirt_decal`, 8,140 faces; recorded as `leftOutOfGiFaces` in the json). three makes one mesh per glTF primitive, with one material each, so a material's faces are exactly those meshes; a material with only some of its meshes left out stops the run.
+
+**The table hash.** `cycles-untextured.json` records the table's path and sha256 (`giMaterials`). `ddgi-sponza-accuracy/run.ts` hashes the table it has just written and says whether the reference was rendered from it, or warns that the reference must be rendered again (a changed adapter can send different colours).
 
 ## Settings, and why
 

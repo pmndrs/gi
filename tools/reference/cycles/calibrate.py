@@ -30,6 +30,12 @@ irradiance E has radiance E / pi. The cases:
              the top row). A mirrored or turned sky misses by far more than 1%.
   sky on the ground  the same world over a white floor: radiance E / pi with E
              the sky file's horizontal irradiance, integrated here from its texels.
+  lights only  render.py's lights-only render (the part the GI composite takes
+             away): the white floor under a point light, with a coloured world
+             and four emitting quads around it (an Emission shader, an Emission
+             shader inside a node group, a Background shader used as a material,
+             Principled emission). find_emitters must list all five, and the
+             lights-only image must hold the point light's E / pi alone.
 
 Prints one line per case and exits with code 1 if any is outside tolerance.
 """
@@ -43,6 +49,7 @@ import bpy
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import blender_scene as bs  # noqa: E402
+import render  # noqa: E402
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', '..'))
 SCRATCH = os.path.join(os.environ.get('TEMP', REPO_ROOT), 'ddgi-calibrate')
@@ -326,10 +333,82 @@ def case_sky_on_ground():
     return [('sky file lighting a white floor (E / pi, E from the file)', measured, expected)]
 
 
+def emitting_quad(name, location, build_shader):
+    """A 1 m quad facing down at `location` (Blender space), its material's surface made by `build_shader(tree)`."""
+    bpy.ops.mesh.primitive_plane_add(size=1, location=location, rotation=(math.pi, 0, 0))
+    quad = bpy.context.object
+    material = bpy.data.materials.new(name)
+    material.use_nodes = True
+    tree = material.node_tree
+    tree.nodes.clear()
+    output = tree.nodes.new('ShaderNodeOutputMaterial')
+    tree.links.new(build_shader(tree), output.inputs['Surface'])
+    quad.data.materials.append(material)
+
+
+def emission_shader(tree, strength=5.0):
+    emission = tree.nodes.new('ShaderNodeEmission')
+    emission.inputs['Strength'].default_value = strength
+    return emission.outputs[0]
+
+
+def emission_in_group(tree):
+    group = bpy.data.node_groups.new('glow-group', 'ShaderNodeTree')
+    group.interface.new_socket('Shader', in_out='OUTPUT', socket_type='NodeSocketShader')
+    group_output = group.nodes.new('NodeGroupOutput')
+    group.links.new(emission_shader(group), group_output.inputs[0])
+    instance = tree.nodes.new('ShaderNodeGroup')
+    instance.node_tree = group
+    return instance.outputs[0]
+
+
+def background_as_material(tree):
+    background = tree.nodes.new('ShaderNodeBackground')
+    background.inputs['Strength'].default_value = 5.0
+    return background.outputs[0]
+
+
+def principled_emission(tree):
+    principled = tree.nodes.new('ShaderNodeBsdfPrincipled')
+    principled.inputs['Emission Color'].default_value = (1.0, 1.0, 1.0, 1.0)
+    principled.inputs['Emission Strength'].default_value = 5.0
+    return principled.outputs[0]
+
+
+def case_lights_only():
+    """
+    The lights-only render must keep the manifest lights and nothing else. The
+    floor's centre sees the point light, the coloured world and the four quads
+    (1 m away, 1 m up), so with any of those left on it would be brighter than
+    the point light's E / pi by far more than the tolerance.
+    """
+    intensity, height = 50.0, 2.0
+    scene = bs.reset_scene()
+    bs.configure_cycles(scene, 32, 32, 256, 0, 'cpu')
+    white_floor()
+    bs.add_environment(scene, {'type': 'color', 'color': [0.4, 0.6, 1.0], 'intensity': 2.0})
+    bs.add_manifest_lights(scene, [{'type': 'point', 'color': [1, 1, 1], 'intensity': intensity, 'position': [0, height, 0], 'range': 100}])
+    emitting_quad('glow-emission', (1.0, 0.0, 1.0), emission_shader)
+    emitting_quad('glow-group-user', (-1.0, 0.0, 1.0), emission_in_group)
+    emitting_quad('glow-background', (0.0, 1.0, 1.0), background_as_material)
+    emitting_quad('glow-principled', (0.0, -1.5, 1.0), principled_emission)
+    bs.add_camera(scene, [0.0, 1.0, 0.5], (0.0, 0.0, 0.0), 1.0)
+    emitters = render.find_emitters(scene)
+    _, _, files = render.render_with_gi_parts(scene, SCRATCH, 'lights-only', '')
+    direct = next(path for path in files if path.endswith('lights-only-direct.exr'))
+    lights_direct = next(path for path in files if path.endswith('lights-only-lights-direct.exr'))
+    expected = intensity / height**2 / math.pi
+    print('lights only: the floor centre with everything on is %.5f, lights only %.5f' % (centre_value(direct), centre_value(lights_direct)))
+    return [
+        ('lights only: emitters found (the world, 3 quad materials and the node group)', len(emitters), 5),
+        ('lights only: floor under the point light, world and quads switched off', centre_value(lights_direct), expected),
+    ]
+
+
 def main():
     os.makedirs(SCRATCH, exist_ok=True)
     results = [case_point(), case_sun(), case_spot()] + case_linked_metal_from_above() + case_furnace()
-    results += case_sky_orientation() + case_sky_on_ground()
+    results += case_sky_orientation() + case_sky_on_ground() + case_lights_only()
     failed = 0
     print('CALIBRATION (Blender %s)' % bpy.app.version_string)
     for name, measured, expected in results:

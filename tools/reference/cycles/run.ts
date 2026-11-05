@@ -6,13 +6,14 @@
  *        [--device cpu|gpu] [--threads N] [--materials-json <GI material table>]
  *   node tools/reference/cycles/run.ts --calibrate     known-answer checks of the unit conversions
  *
- * Output: bench/references/<scene>/<camera name>/cycles-{full,indirect}.exr
+ * Output: bench/references/<scene>/<camera name>/cycles-{full,indirect,direct,lights-direct}.exr
  * and cycles.json, plus one line appended to bench/references/render-log.csv.
- * With `--materials-json` (render.py: every material gets the table's constant
- * GI albedo and emission) the files are cycles-untextured-* and the log's tool
- * column says `cycles-untextured`. It then adds render.py's parts up into
- * `cycles-untextured-gi.exr`, the quantity DDGI's test view shows (see
- * `composeGiImage`).
+ * Then it checks the lights-only render where the answer is known and adds
+ * the parts up into `cycles-gi.exr`, the quantity DDGI's test view shows
+ * (gi-composite.ts). A failed check stops with exit code 1 and writes no GI
+ * image. With `--materials-json` (render.py: every material gets the table's
+ * constant GI albedo and emission) the files are cycles-untextured-* and the
+ * log's tool column says `cycles-untextured`.
  *
  * Every render holds the shared bench lock (`$TEMP/ddgi-gpu-bench.lock`), CPU
  * renders included: 16 busy threads skew other agents' build-time and CPU-side
@@ -22,13 +23,14 @@
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
-import { appendFile, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { findBlender } from '../../assets/fetch.ts';
 import { readExr, writeExr } from '../../compare/exr.ts';
 import { installShutdownHandlers, registerCleanup } from '../../gpu/cleanup.ts';
 import { withBenchLock } from '../bench-lock.ts';
+import { checkLightsOnlyImage, composeGiImage, type LightsOnlyExpectation } from './gi-composite.ts';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const renderScript = join(repoRoot, 'tools', 'reference', 'cycles', 'render.py');
@@ -132,7 +134,7 @@ async function main(): Promise<void> {
         renderLog,
         `${meta.finishedAt},${meta.giMaterials ? 'cycles-untextured' : 'cycles'},${meta.scene},${meta.camera.name},${meta.width},${meta.height},${meta.samplesPerPixel},${meta.seed},${meta.device},${meta.threads},${meta.loadSeconds},${meta.renderSeconds},${meta.triangles}\n`,
     );
-    if (meta.giComposite) meta.files.push(await composeGiImage(meta.outDir, meta.giComposite));
+    meta.files.push(await writeGiImage(meta.outDir, meta.giComposite));
     console.log(`done: ${meta.files.join(', ')} in ${meta.renderSeconds} s (${meta.samplesPerPixel} samples, ${meta.width}x${meta.height}, ${meta.device})`);
 }
 
@@ -141,28 +143,32 @@ interface GiComposite {
     readonly output: string;
     readonly add: readonly string[];
     readonly subtract: string;
+    /** The one of `add` that is the normal direct image, which the lights-only image is checked against. */
+    readonly direct: string;
+    readonly lightsOnlyExpected: LightsOnlyExpectation;
 }
 
 /**
- * Writes the untextured render's GI image: Cycles' indirect + direct minus
- * the lights' direct light (render.py, `render_untextured`), which is what
- * DDGI's field holds (sky and emission seen straight from a surface, and
- * every bounce). Returns the file name.
+ * Writes the render's GI image: Cycles' indirect + direct minus the lights'
+ * direct light (render.py, `render_with_gi_parts`), which is what DDGI's field
+ * holds (sky and emission seen straight from a surface, and every bounce).
+ * First checks the lights-only image (gi-composite.ts) and throws, writing
+ * nothing, if it isn't what it must be. Returns the file name.
  */
-async function composeGiImage(outDir: string, recipe: GiComposite): Promise<string> {
+async function writeGiImage(outDir: string, recipe: GiComposite): Promise<string> {
     const read = async (name: string) => readExr(await readFile(join(outDir, name)));
-    const [first, ...others] = await Promise.all(recipe.add.map(read));
-    const subtract = await read(recipe.subtract);
-    const rgb = new Float32Array(first.rgb);
-    for (const image of [...others, subtract]) {
-        if (image.width !== first.width || image.height !== first.height) throw new Error('the GI parts differ in size');
+    const add = await Promise.all(recipe.add.map(read));
+    const lightsDirect = await read(recipe.subtract);
+    const direct = add[recipe.add.indexOf(recipe.direct)];
+    if (!direct) throw new Error(`the GI recipe's direct image ${recipe.direct} is not one of ${recipe.add.join(', ')}`);
+    const check = checkLightsOnlyImage(recipe.lightsOnlyExpected, direct, lightsDirect);
+    console.log(check.summary);
+    if (!check.passed) {
+        // A GI image left from an earlier render would now be mistaken for this one's.
+        await rm(join(outDir, recipe.output), { force: true });
+        throw new Error(`the lights-only render is not lights-only (or lost the lights' own light); ${recipe.output} not written.\n  ${check.summary}`);
     }
-    for (let index = 0; index < rgb.length; index++) {
-        let value = rgb[index];
-        for (const image of others) value += image.rgb[index];
-        rgb[index] = value - subtract.rgb[index];
-    }
-    await writeFile(join(outDir, recipe.output), writeExr({ width: first.width, height: first.height, rgb }));
+    await writeFile(join(outDir, recipe.output), writeExr(composeGiImage(add, lightsDirect)));
     return recipe.output;
 }
 

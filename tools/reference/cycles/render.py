@@ -12,21 +12,22 @@ or directly:
         --scene cornell-box --camera 1 --samples 1024 --width 512 --height 512
 
 Writes to bench/references/<scene>/<camera name>/ :
-    cycles-full.exr       everything the camera sees
-    cycles-indirect.exr   only light that bounced at least once before the visible surface
-    cycles.json           every setting, the sample count and the render time
+    cycles-full.exr            everything the camera sees
+    cycles-indirect.exr        only light that bounced at least once before the visible surface
+    cycles-direct.exr          Diffuse Direct x Diffuse Colour
+    cycles-lights-direct.exr   the same from a second render with only the manifest's
+                               lights on (no sky, no emitter of any kind, no bounces)
+    cycles.json                every setting, the sample count and the render time
+and run.ts checks the lights-only image and adds the parts up into
+cycles-gi.exr, the quantity DDGI's field holds (see render_with_gi_parts and
+DECISIONS "What 'indirect light' means against Cycles in a scene with a sky").
 See blender_scene.py for the settings and units.py for the unit conversions.
 
 --materials-json <file> renders the scene "untextured": every material gets the
 constant GI albedo and emission from a GI material table (written by
 tools/gpu/pages/ddgi-sponza-accuracy/run.ts, as the three adapter sent them to
-the platform), and the files are named cycles-untextured-*. See
-apply_gi_material_table. It also writes the parts of DDGI's quantity (see
-render_untextured):
-    cycles-untextured-direct.exr          Diffuse Direct x Diffuse Colour
-    cycles-untextured-lights-direct.exr   the same from a second render with only the
-                                          manifest's lights (no sky, no emission, no bounces)
-and run.ts adds them up into cycles-untextured-gi.exr.
+the platform), and the files are named cycles-untextured-* instead of cycles-*.
+See apply_gi_material_table.
 
 The table also says which model parts were loaded (`parts`; only those are
 imported) and which materials' meshes the three adapter left out of GI
@@ -261,6 +262,131 @@ GI_DEFINITION = (
 )
 
 
+# ---------------------------------------------------------------------------
+# Emitters other than the manifest lights
+# ---------------------------------------------------------------------------
+
+# Shader nodes that can emit light, and their (strength input, colour input)
+# pairs. A pair emits when the strength is linked or above 0 and the colour is
+# linked or not black (no colour input: the strength alone decides).
+#   BSDF_PRINCIPLED     surface emission (the glTF importer's emissive)
+#   EMISSION            the Emission shader, on a surface or as a volume
+#   BACKGROUND          the world's shader; also allowed inside a material
+#   PRINCIPLED_VOLUME   volume emission and blackbody glow
+EMITTER_INPUTS = {
+    'BSDF_PRINCIPLED': (('Emission Strength', 'Emission Color'),),
+    'EMISSION': (('Strength', 'Color'),),
+    'BACKGROUND': (('Strength', 'Color'),),
+    'PRINCIPLED_VOLUME': (('Emission Strength', 'Emission Color'), ('Blackbody Intensity', None)),
+}
+
+
+def socket_is_on(socket, colour=False):
+    """True if an input contributes: linked, or a value above 0 (a colour: any channel above 0)."""
+    if socket.is_linked:
+        return True
+    if colour:
+        return any(channel > 0.0 for channel in socket.default_value[:3])
+    return socket.default_value > 0.0
+
+
+def shader_trees():
+    """Every shader node tree that can emit: the world's, each material's, and shader node groups (used inside those)."""
+    trees = []
+    for world in bpy.data.worlds:
+        if world.use_nodes and world.node_tree is not None:
+            trees.append((f'world {world.name!r}', world.node_tree))
+    for material in bpy.data.materials:
+        if material.use_nodes and material.node_tree is not None:
+            trees.append((f'material {material.name!r}', material.node_tree))
+    for group in bpy.data.node_groups:
+        if group.bl_idname == 'ShaderNodeTree':
+            trees.append((f'node group {group.name!r}', group))
+    return trees
+
+
+def find_emitters(scene):
+    """
+    Every source of light in the scene other than its light objects (which are
+    the manifest's: import_gltf deletes the file's own lights), as readable
+    lines. Empty when the lights are the only source.
+
+    Conservative on purpose: an emitting node counts even when nothing is
+    connected to it, and a shader node of a kind not in EMITTER_INPUTS that has
+    an emission input is reported as unknown. A false alarm only makes the
+    lights-only render skip its equal-to-direct check (or refuse to run); a
+    missed emitter would put that light into the "analytic lights" share and
+    take it out of the GI composite.
+    """
+    found = []
+    world = scene.world
+    if world is not None and not world.use_nodes and any(channel > 0.0 for channel in world.color[:3]):
+        found.append(f'world {world.name!r}: colour {format_colour(world.color)} without nodes')
+    for where, tree in shader_trees():
+        # A world that is not the scene's does not render.
+        if where.startswith('world ') and (world is None or tree != world.node_tree):
+            continue
+        for node in tree.nodes:
+            pairs = EMITTER_INPUTS.get(node.type)
+            if pairs is None:
+                unknown = [socket.name for socket in node.inputs if 'emissi' in socket.name.lower()]
+                if unknown:
+                    found.append(f'{where} / {node.name!r}: a {node.type} node with emission inputs {unknown} (not a known kind)')
+                continue
+            for strength_name, colour_name in pairs:
+                strength = node.inputs.get(strength_name)
+                colour = node.inputs.get(colour_name) if colour_name else None
+                if strength is None:
+                    continue
+                if socket_is_on(strength) and (colour is None or socket_is_on(colour, colour=True)):
+                    found.append(f'{where} / {node.name!r}: {strength_name} on')
+    return found
+
+
+def format_colour(value):
+    return '(' + ', '.join(f'{channel:g}' for channel in value[:3]) + ')'
+
+
+def switch_off_emitters(scene):
+    """
+    Leaves the manifest's light objects as the only source of light, for the
+    lights-only render:
+    - the world becomes a new black one (no nodes, colour 0), whatever it held
+      (sky texture, colour, any node setup);
+    - every emitting input in every material and shader node group
+      (EMITTER_INPUTS: Principled surface and volume emission, Emission and
+      Background shaders, blackbody) is unlinked and set to 0.
+    Then find_emitters must come back empty, or the run stops with the list.
+    """
+    black = bpy.data.worlds.new('lights-only-black')
+    black.use_nodes = False
+    black.color = (0.0, 0.0, 0.0)
+    scene.world = black
+    for _, tree in shader_trees():
+        for node in tree.nodes:
+            for strength_name, _ in EMITTER_INPUTS.get(node.type, ()):
+                bs.force_input(tree, node, strength_name, 0.0)
+    left = find_emitters(scene)
+    if left:
+        listing = '\n  '.join(left)
+        raise SystemExit(f'{len(left)} source(s) of light other than the manifest lights are still on; refusing to render a lights-only image:\n  {listing}')
+
+
+# What the lights-only render must look like, when that can be known without
+# rendering it a second way (run.ts checks the images; see gi-composite.ts):
+#   'equals-direct'  the manifest lights are the only source in the scene, so
+#                    switching everything else off changes nothing: the
+#                    lights-only direct image must equal the normal direct image
+#   'black'          the scene has no manifest lights: the lights-only image must be 0
+#   None             both kinds of source: no known answer to check against
+def lights_only_expectation(emitters, light_count):
+    if not emitters:
+        return 'equals-direct'
+    if light_count == 0:
+        return 'black'
+    return None
+
+
 def multiply_passes(tree, layers, first, second):
     """A compositor node giving pass `first` x pass `second`."""
     multiply = tree.nodes.new('CompositorNodeMixRGB')
@@ -281,9 +407,10 @@ def take_output(directory, name):
     return target
 
 
-def render_untextured(scene, directory, prefix, suffix):
+def render_with_gi_parts(scene, directory, prefix, suffix):
     """
-    The untextured render, plus what DDGI's quantity needs (GI_DEFINITION).
+    The reference render, plus the parts of DDGI's quantity (GI_DEFINITION),
+    for every scene: textured or untextured, with or without a sky.
 
     Cycles' Diffuse Indirect pass leaves out light that reaches the visible
     surface without a bounce, and that includes the sky and emissive surfaces
@@ -292,11 +419,13 @@ def render_untextured(scene, directory, prefix, suffix):
     manifest's lights (sun, point, spot) are added analytically, outside the
     field. So, with Diffuse Colour as the albedo:
         DDGI's "indirect" = Indirect + Direct - (Direct from the lights alone)
-    The lights' direct part comes from a second render with the sky and every
-    emission at 0 and no bounces, with the same seed and samples, so its pixel
-    jitter matches and edges cancel.
+    The lights' direct part comes from a second render with every other source
+    switched off (switch_off_emitters) and no bounces, with the same seed and
+    samples, so its pixel jitter matches and edges cancel. In a scene whose
+    only sources are the manifest lights, the two direct images are the same
+    and the composite is the indirect pass.
 
-    Returns (seconds for both renders, the files).
+    Returns (seconds for both renders, seconds for the lights-only render, the files).
     """
     full_name = f'{prefix}-full{suffix}'
     indirect_name = f'{prefix}-indirect{suffix}'
@@ -316,14 +445,9 @@ def render_untextured(scene, directory, prefix, suffix):
     files = bs.collect_outputs(directory, full_name, indirect_name)
     files.append(take_output(directory, direct_name))
 
-    # 2. The lights alone, direct only: no sky, no emission, no bounces.
-    scene.world.node_tree.nodes['Background'].inputs['Strength'].default_value = 0.0
-    for material in bpy.data.materials:
-        if not material.use_nodes:
-            continue
-        for node in material.node_tree.nodes:
-            if node.type == 'BSDF_PRINCIPLED':
-                node.inputs['Emission Strength'].default_value = 0.0
+    # 2. The lights alone, direct only: every other source off, no bounces.
+    lights_started = time.time()
+    switch_off_emitters(scene)
     scene.cycles.max_bounces = 0
     scene.cycles.diffuse_bounces = 0
     tree.nodes.clear()
@@ -340,7 +464,8 @@ def render_untextured(scene, directory, prefix, suffix):
     tree.links.new(multiply_passes(tree, layers, 'DiffDir', 'DiffCol').outputs['Image'], output.inputs[0])
     bpy.ops.render.render(write_still=False)
     files.append(take_output(directory, lights_direct_name))
-    return time.time() - started, files
+    finished = time.time()
+    return finished - started, finished - lights_started, files
 
 
 def main():
@@ -362,8 +487,6 @@ def main():
             'materials': len(gi_table['materials']),
         }
     prefix = 'cycles-untextured' if gi_table else 'cycles'
-    full_name = f'{prefix}-full{args.name_suffix}'
-    indirect_name = f'{prefix}-indirect{args.name_suffix}'
 
     scene = bs.reset_scene()
     bs.configure_cycles(scene, args.width, args.height, args.samples, args.seed, args.device)
@@ -395,10 +518,10 @@ def main():
     if manifest['environment'].get('type') == 'procedural' and os.path.exists(sky_path):
         with open(sky_path, 'rb') as handle:
             sky_file = {'path': os.path.relpath(sky_path, bs.REPO_ROOT).replace(os.sep, '/'), 'sha256': hashlib.sha256(handle.read()).hexdigest()}
-    if gi_table:
-        render_seconds, files = render_untextured(scene, out_dir, prefix, args.name_suffix)
-    else:
-        render_seconds, files = bs.render_to_files(scene, out_dir, full_name, indirect_name)
+    # Taken before the lights-only render switches every other source off.
+    emitters = find_emitters(scene)
+    lights_only_expected = lights_only_expectation(emitters, len(manifest['lights']))
+    render_seconds, lights_only_seconds, files = render_with_gi_parts(scene, out_dir, prefix, args.name_suffix)
 
     meta = {
         'tool': 'tools/reference/cycles/render.py',
@@ -426,19 +549,21 @@ def main():
         'indirectDefinition': 'Diffuse Indirect x Diffuse Colour (light that bounced at least once before the visible surface)',
         'loadSeconds': round(load_seconds, 2),
         'renderSeconds': round(render_seconds, 2),
+        'lightsOnlySeconds': round(lights_only_seconds, 2),
         'triangles': triangles,
         'files': [os.path.basename(path) for path in files],
         'outDir': out_dir,
-        'giComposite': (
-            {
-                'output': f'{prefix}-gi{args.name_suffix}.exr',
-                'add': [f'{prefix}-indirect{args.name_suffix}.exr', f'{prefix}-direct{args.name_suffix}.exr'],
-                'subtract': f'{prefix}-lights-direct{args.name_suffix}.exr',
-                'definition': GI_DEFINITION,
-            }
-            if gi_table
-            else None
-        ),
+        # Sources of light besides the manifest lights (sky, emissive materials), at most 20 listed.
+        'otherEmitters': {'count': len(emitters), 'listed': emitters[:20]},
+        'giComposite': {
+            'output': f'{prefix}-gi{args.name_suffix}.exr',
+            'add': [f'{prefix}-indirect{args.name_suffix}.exr', f'{prefix}-direct{args.name_suffix}.exr'],
+            'subtract': f'{prefix}-lights-direct{args.name_suffix}.exr',
+            'direct': f'{prefix}-direct{args.name_suffix}.exr',
+            'definition': GI_DEFINITION,
+            # run.ts checks the lights-only image against this before composing (gi-composite.ts).
+            'lightsOnlyExpected': lights_only_expected,
+        },
         'host': platform.node(),
         'finishedAt': time.strftime('%Y-%m-%dT%H:%M:%S'),
     }
@@ -451,4 +576,6 @@ def main():
     os._exit(0)
 
 
-main()
+# Blender runs a --python script as __main__; calibrate.py imports this file for its functions.
+if __name__ == '__main__':
+    main()
