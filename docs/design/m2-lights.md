@@ -212,6 +212,7 @@ It runs only in frames with changes. The CPU writes a small table of changed lig
 **Global changes** (the sun's direction, the sky; more than 1,024 light changes in one frame) mark every probe, with these exceptions when the instant sky is on (6.3):
 
 - a sun change of colour or intensity alone marks nothing: it becomes the sun layer's weight;
+- the same holds without the instant sky when the host puts the sun alone in a light group: its group weight becomes new / old per channel (the group layer is stored at the light's real colour, section 5; a channel that was 0 can't be scaled, so that change is marked as usual);
 - a sky change marks only probes whose transfer isn't built (the nudge has handled the rest; their leftover error is put right by normal updates).
 
 For a sky change, `r = max over channels of (|Δc₀| + |Δc₁…₃|) / c₀` (the change of the sky's band-0 and band-1 radiance SH, relative to its mean), times the same openness factor as below.
@@ -286,7 +287,7 @@ Distance (1 KB per probe) doesn't change. Four groups fit the furnished room's 6
 - trace about +10% (the extra irradiance fetches only);
 - blend about +60% (the irradiance texel work × 5);
 - compose about 0.1 ms on Sponza when a weight changes;
-- in total about +25–35% per probe updated.
+- in total about +25–35% per probe updated; with 3 layers (the instant sky's lights, sun and sky), about +15–20%.
 
 Shading cost doesn't change, because the renderer samples one composed atlas. *Why not sample every layer in the fragment shader:* irradiance fetches were about 0.21 ms of T1.6's sampling cost (a run at a locked 1200 MHz clock, NOTES), and five layers would push sampling past 1.0 ms.
 
@@ -350,34 +351,34 @@ The last row matters: in a sunlit interior the sun's bounce is often the larger 
 - **What kind of memory:** this is GPU memory. On the RTX 3060 Laptop it's the card's own 6 GB. The Intel UHD has no memory of its own: its "GPU memory" is the laptop's system RAM (Windows counts it as shared GPU memory), so on Tier B it competes with the browser and the app.
 - **Default caps** (proposed; open question 1): the instant sky turns on when its extra memory fits **128 MB on Tier A** and **48 MB on Tier B**. The RTX gets it on every scene above, Sponza included (just under). The Intel UHD gets it on two-room and the furnished room (32.1 MB), not on Sponza.
 - **SPEC's 64 MB for a furnished-room volume** (everything the core owns) gets tight: the field's atlases (~8 MB), the instant sky (32 MB) and the ray scratch (up to 12 MB) come to about 52 MB before the scene copy and its trees. T2.6b checks the total. If it's over, that scene defaults to the 4 × 4 transfer tile (about half the transfer memory).
-- *Why not halve the memory with a coarser 4 × 4 transfer tile:* it might be enough, because transfer is as smooth as irradiance. T2.6b measures it as an option, not the default.
+- **The 4 × 4 transfer tile:** 6 × 6 is the default. The coarser 4 × 4 tile (about half the transfer memory; transfer is as smooth as irradiance) is used only on a scene where 6 × 6 would break SPEC's 64 MB, and T2.6b measures whether it's accurate enough.
 
 **Building the transfer.**
 
 - The transfer is built from **the field's own rays**: the same directions, hits and surface records. No extra rays.
   - A miss ray adds `Yₖ(ω)` to pattern k's estimate.
   - A front-face hit adds `albedo / π × bounceEnergy ×` pattern k's own bounce, read from `Tₖ` at the hit with the same probe weights as the field's bounce lookup. That's the same term the trace kernel uses for the field (`emission + albedo / π × (bounceEnergy × bounce + direct)`). Emission and direct light are 0 for a sky pattern, because the sky reaches surfaces only through the field.
-- A pass after `gi/direct`, `ddgi/sky-transfer`, writes each ray's 9 pattern radiances (rgb halves, 56 bytes a ray) into the ray scratch. The blend blends the 9 tiles with the probe's history. There's no firefly clamp on them: the clamp isn't linear, and pattern values can be negative. While transfers are being built, batches are split into rounds of 256 probes; the ray scratch is then about 5 MB (ray results, surface records and transfer radiances).
+- A pass after `gi/direct`, `ddgi/sky-transfer`, writes each ray's 9 pattern radiances (rgb halves, 56 bytes a ray) into the ray scratch. The blend blends the 9 tiles with the probe's history. There's no firefly clamp on them: the clamp isn't linear, and pattern values can be negative. While transfers are being built, batches are split into rounds of 256 probes; the ray scratch is then about 6.2 MB (ray results for three layers, surface records and transfer radiances).
 - **When it's built.** Bounce light builds up over many updates, as in the field. Early estimates were made while neighbouring probes' transfers were still near 0, so they mustn't linger:
   - **phase 1,** 32 updates with a short history (`h = min(0.9, n / (n + 1))`), so early estimates fade (0.9³² ≈ 3% left) while the neighbours fill in;
   - **phase 2,** 32 more with a growing history, to average the noise down.
 
   After its 64th update a probe's transfer is marked **built** and isn't updated again. The count and the built flag sit in the history record's word 3 (8 bits beside `owed`). The transfer depends only on geometry and materials, not on lighting, so once built a still scene pays nothing more for it. Whatever bias is left, the normal updates of `S` put right; the transfer only decides how much of a change shows at once.
 - **The view builds first,** on purpose. While the instant sky is on, a probe whose transfer isn't built counts as owed one update, at a low urgency (0.05, below any real change) times its camera weight. So when nothing else is urgent, the scheduler's priority share goes to the unbuilt probes nearest the camera. Near probes read their neighbours' transfers for bounce, and neighbours in view build together, so the view converges as a block; probes at its edge reach their 64 updates a little later.
-- **How long building takes** (estimated from the measured rates above): while building, a probe update costs about 1.8× as much (9 more tiles to blend, 9 more bounce fetches sharing one set of weights). At the default 2 ms budget, with 64 updates per probe (32 for a lower bound), the whole volume takes `probes × 64 / (rate / 1.8)` frames:
+- **How long building takes** (estimated from the measured rates above): while building, a probe update costs about 2.1× an M1 update (1.8× for the 9 extra tiles and bounce fetches, times about 1.15–1.2 for the three lighting layers). At the default 2 ms budget, with the 64 updates a transfer takes, the whole volume needs `probes × 64 / (rate / 2.1)` frames; the view's ~200 nearest probes get the 75% priority share, `200 × 64 / (0.75 × rate / 2.1)` frames:
 
 | Scene | Probes | Probes per frame while building (RTX / Intel) | Whole volume built (RTX) | The view's ~200 nearest probes built (RTX) | Whole volume built (Intel) |
 | --- | --- | --- | --- | --- | --- |
-| Two-room | 1,071 | ~165 / ~25 | ~3.5–7 s | ~1 s | ~25–45 s |
+| Two-room | 1,071 | ~143 / ~21 | ~8 s | ~2 s | ~55 s |
 | Furnished room | 4,998 | not measured | not measured (4.7× two-room's probes) | not measured | not measured |
-| Sponza | 19,425 | ~17–24 / ~9 | **~7–20 minutes** | ~5–13 s | off by default (memory cap) |
-| Bistro exterior's camera volume | 12,288 | ~11–15 / ~6 | ~7–20 minutes | ~7–20 s | off by default (memory cap) |
+| Sponza | 19,425 | ~14–20 / ~8 | **~17–25 minutes** | ~14–20 s | off by default (memory cap) |
+| Bistro exterior's camera volume | 12,288 | ~10–13 / ~5 | ~17–22 minutes | ~22–28 s | off by default (memory cap) |
 
 **What this means: the honest trade-off.**
 
 - **On rooms** (two-room, and the furnished room if its rate is near two-room's per probe), transfers are built within seconds of loading. The instant sky works as intended.
-- **On Sponza-sized scenes at 2 ms**, the instant sky works **where you look after about 5–13 s** (camera-near probes build first), and everywhere else only after 7–20 minutes. Until then, sky changes far from the camera arrive at the delayed pace (6.4). The 8-second warm-up doesn't change this much: its large passes cover Sponza only a few times.
-- **In a camera-following volume** it barely helps while the camera moves: a probe that enters at the far edge leaves again before it has its 32+ updates. It helps only when the camera stays somewhere for tens of seconds.
+- **On Sponza-sized scenes at 2 ms**, the instant sky works **where you look after about 14–20 s** (camera-near probes build first), and everywhere else only after 17–25 minutes. Until then, sky changes far from the camera arrive at the delayed pace (6.4). The 8-second warm-up doesn't change this much: its large passes cover Sponza only a few times.
+- **In a camera-following volume** it barely helps while the camera moves: a probe that enters at the far edge leaves again before it has its 64 updates. It helps only when the camera stays somewhere for tens of seconds.
 - **What would make it work on big scenes:**
   - **saved bakes** (M5), so a scene loads with its transfers;
   - **a build budget of its own** (`transferBuildMs`, default 0): spend extra GPU time on transfers until they're built, for apps that can afford a busy first minute;
@@ -402,7 +403,7 @@ In other frames compose writes only the tiles that were updated.
 
 | | Tier A (RTX 3060) | Tier B (Intel UHD) |
 | --- | --- | --- |
-| On by default | when ≤ 128 MB: every M2 scene | when ≤ 32 MB: the rooms, not Sponza |
+| On by default | when ≤ 128 MB: every M2 scene | when ≤ 48 MB: the rooms, not Sponza |
 | A frame with a sky change (nudge + write + compose of every tile) | Sponza ~0.3 ms, furnished room ~0.1 ms | furnished room ~0.4 ms for all tiles; a quarter of that per frame while the sky keeps changing |
 | While transfers build | updates ~1.8× per probe, so fewer probes per frame | same |
 | Once built, sky still | nothing extra | nothing extra |
@@ -437,7 +438,7 @@ The RTX rates are T1.9a's, with the fixed controller; the Intel rates are its si
 - **A slow time-of-day animation** (an hour of sun in 10 s, 1.5° per second) changes each probe only a little between two of its updates, so the step rule in 4.1 wouldn't shorten its history, and with 32 updates of history it would lag far behind. Section 4.1's **ramp rule** handles this: a probe that keeps changing gets a history short enough that its lag stays near 5%.
   - In two-room (a probe updated every ~3.5 frames) the change per update is tiny and the history stays near 32 updates: it trails by about 1.9 s, which costs under 5%.
   - Far from the camera on Sponza, out of view, a probe is reached only by the round robin's quarter of the budget (about 9 probes a frame), so about every 36 s on the RTX. The sun moves about 54° in that time, so the history drops below 1 update: those probes jump to each new estimate, about 36 s apart, with more noise. Near the camera the scheduler updates probes far more often.
-- **It blends, it never pops.** Every probe moves from its old value to its new one through its history (section 4.1). Far from the camera on Sponza, the old lighting fades into the new over seconds; it doesn't jump.
+- **It blends, it never goes black.** Every probe moves from its old value toward its new one through its history (section 4.1). In view, that shows as the old lighting fading into the new. The exception is the one above: during a fast day animation, far, out-of-view Sponza probes have so little history that they step from one estimate to the next, about 36 s apart.
 
 ### 6.5 Native
 
@@ -500,6 +501,7 @@ Every new kernel that reduces or compacts is subgroups first, with one declared 
 | `ddgi/trace` | tracer 3 + scene copy and shading 2 + update list + ray scratch = **7** |
 | `gi/direct` | tracer 3 + scene copy and shading 2 + ray scratch + light grid = **7** |
 | `ddgi/blend` | update list, ray scratch, scratch tile, census, history = **5** |
+| `ddgi/write` | update list + scratch tile = 2; in sky mode, history + nudge scratch = 2 |
 | `ddgi/mark` | light-change table, history = 2 (atlases as textures) |
 | `ddgi/schedule-*` | history, update list, schedule state = 3 |
 | `ddgi/sky-transfer` | update list + ray scratch = 2 (the atlas as a texture) |
@@ -604,9 +606,9 @@ The startup items DECISIONS moved to M2 ("fast first GI", the scene copy off the
 - **T2.6b Instant sky.** The first check runs before the rest is built. Every check builds the transfers first in a test mode (16 ms budget until every probe's transfer is built), then measures at the default budget.
   - Done when:
     1. right after a 30° sun move, the nudged sky (sun layer weight 0, GI only) is within 5% of the settled field on the furnished room's window bookmark and Sponza's bookmark 1, with bands 0–2 (if only bands 0–3 meet it, stop and bring it back);
-    2. a sky change moves the GI-only image by more than 1% of the region's mean in the frame it happens on the RTX, and within 4 frames on the Intel UHD;
+    2. on the furnished room's window bookmark, a sky change moves the GI-only mean of the sunlit floor rectangle by more than 1% in the frame it happens on the RTX, and within 4 frames on the Intel UHD;
     3. on two-room and the furnished room, 1,800 frames (at the 16 ms test budget) after a sky change, the field with the instant sky on matches a run with it off within 0.5% mean: the nudge only makes the change sooner, it doesn't move where the field settles;
-    4. with every transfer built and the scene still, µs per updated probe (fixed batch of 512) is within 3% of the same three layers (lights, sun, sky) with no transfer; and the furnished room's total core memory is ≤ 64 MB (SPEC).
+    4. with every transfer built and the scene still, on two-room and the furnished room, µs per updated probe (fixed batch of 512) is within 3% of the same three layers (lights, sun, sky) with no transfer; and the furnished room's total core memory is ≤ 64 MB (SPEC).
   - Record: build times per scene and GPU, extra memory, nudge and compose ms, the three layers' own cost against one layer, and bands 0–2 against 0–3 and 6 × 6 against 4 × 4 tiles.
 - **T2.7 Native harness.**
   - Done when:
@@ -633,7 +635,7 @@ The startup items DECISIONS moved to M2 ("fast first GI", the scene copy off the
 5. **Global changes on big scenes** can't meet 0.5 s everywhere at 2 ms on the delayed path (section 6.4). Dennis agreed to judge them on the view.
 6. **Native motion** needs fork changes, because the harness has no animation. Two-room first, Sponza second.
 7. **The instant sky's accuracy.** If 9 patterns blur the sky too much near windows (the sun's glow), the same-frame error exceeds 5%, and normal updates have to carry the rest at the delayed pace. Bands 0–3 (16 layers) is the next step, at +70 MB on Sponza. *Measured first in T2.6b.*
-8. **Building transfers takes 7–20 minutes on Sponza at 2 ms** (6.3). Until then, sky changes away from the camera arrive at the delayed pace. Saved bakes (M5) or a build budget of its own fix it; the warm-up doesn't.
+8. **Building transfers takes 17–25 minutes on Sponza at 2 ms** (6.3). Until then, sky changes away from the camera arrive at the delayed pace. Saved bakes (M5) or a build budget of its own fix it; the warm-up doesn't.
 9. **The ramp rule's short histories are noisy** far from the camera on Sponza during a day animation (the history drops below 1 update there, 6.4). If that flickers, the floor on `n` rises and those probes lag more.
 10. **Memory on the furnished room** (6.3): the instant sky plus the field and ray scratch is about 52 MB before the scene copy; SPEC's 64 MB for everything the core owns may not hold. The 4 × 4 transfer tile is the fallback; T2.6b checks it.
 
@@ -649,4 +651,4 @@ The startup items DECISIONS moved to M2 ("fast first GI", the scene copy off the
 ## Still open
 
 1. **The instant sky's memory caps:** on by default when its extra memory fits 128 MB on Tier A and 48 MB on Tier B (the Intel UHD uses shared system RAM). With these caps the RTX gets it on every M2 scene, including Sponza (+125 MB), and the Intel UHD on the rooms (the furnished room needs 32.1 MB). OK, or different caps?
-2. **The instant sky on big scenes** (6.3, "the honest trade-off"): at Sponza's measured rate its transfers take 7–20 minutes to build at 2 ms (the view's nearest probes in 5–13 s). Keep it on by default there and accept "the view first, the rest later" until saved bakes exist? Or give transfer building a budget of its own, or bring saved bakes forward from M5? I'd keep it on, add the optional build budget, and decide about bakes in T2.11 with T2.0's and T2.6b's numbers.
+2. **The instant sky on big scenes** (6.3, "the honest trade-off"): at Sponza's measured rate its transfers take 17–25 minutes to build at 2 ms (the view's nearest probes in 14–20 s). Keep it on by default there and accept "the view first, the rest later" until saved bakes exist? Or give transfer building a budget of its own, or bring saved bakes forward from M5? I'd keep it on, add the optional build budget, and decide about bakes in T2.11 with T2.0's and T2.6b's numbers.
