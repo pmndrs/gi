@@ -75,6 +75,9 @@ const WARMUP_MAX_SECONDS = 8;
 /** ...but not before every probe has been updated this many times, so no probe is left black. */
 const WARMUP_MIN_PASSES = 2;
 
+/** The frame budget while the scene's trees are still being built: no probe updates at all. */
+const PAUSED: FrameBudget = { paused: true };
+
 /** Warm-up steps recorded per batch before the viewer waits for the GPU. Each can be a few thousand probes. */
 const WARMUP_STEPS_PER_BATCH = 4;
 
@@ -187,7 +190,9 @@ export class DdgiTechnique extends ScenePassTechnique {
 
         const { loaded } = this.context;
         this.threeGI = new ThreeGI(this.platform, loaded.scene, {
-            budget: this.budget,
+            // No probe work until the ray-tracing trees exist: rays would see through every wall
+            // of a half-built scene to the sky. The warm-up sets the real budget.
+            budget: PAUSED,
             environment: environmentFor(loaded.manifest),
             warn: (message) => this.warn(message),
         });
@@ -204,14 +209,12 @@ export class DdgiTechnique extends ScenePassTechnique {
         this.debugMaterial = new DdgiDebugMaterial(this.platform.shading);
         this.applyScreenView();
 
-        // The first update copies the scene in and starts the tree builds; no probe work until they exist,
-        // or the first passes would see through every wall to the sky.
+        // The first update copies the scene in and starts the tree builds (still paused).
         this.threeGI.update(this.camera, 0);
-        this.pauseOneFrame();
         await this.waitForTrees();
         if (this.disposed) return;
-        // Finished trees reach the GPU in the platform's next encode.
-        this.pauseOneFrame();
+        // Finished trees reach the GPU in the platform's next encode, still with no probe work.
+        this.threeGI.update(this.camera, 0);
         this.startup.firstGiMs = performance.now() - this.createdAt;
         this.beginWarmup();
     }
@@ -224,14 +227,6 @@ export class DdgiTechnique extends ScenePassTechnique {
     private async waitForTrees(): Promise<void> {
         const whenBuilt = (this.platform as unknown as TreesBuiltSignal).rays?.whenBuilt;
         if (whenBuilt) await whenBuilt.call((this.platform as unknown as TreesBuiltSignal).rays);
-    }
-
-    /** One update with no probe work: scene changes and finished trees reach the GPU. */
-    private pauseOneFrame(): void {
-        const threeGI = this.threeGI!;
-        threeGI.budget = { paused: true };
-        threeGI.update(this.camera, 0);
-        threeGI.budget = this.budget;
     }
 
     private beginWarmup(): void {
@@ -338,7 +333,8 @@ export class DdgiTechnique extends ScenePassTechnique {
         this.settings = { ...settings };
         // A new object: ThreeGI reads its `budget` field every update.
         this.budget = { gpuMs: settings.budgetMs };
-        if (this.threeGI) this.threeGI.budget = this.budget;
+        // Before the warm-up the platform stays paused (see `start`); the warm-up takes the new budget.
+        if (this.threeGI && (this.phase === 'warming' || this.phase === 'ready')) this.threeGI.budget = this.budget;
         this.applyScreenView();
         if (probesChanged) this.applyLayers();
     }
