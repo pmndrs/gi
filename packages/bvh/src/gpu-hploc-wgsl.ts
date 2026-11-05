@@ -80,9 +80,12 @@
  * A wait that runs out is counted, and the builder refuses the tree.
  *
  * **The layout** comes after the climb, in later dispatches: the SAH leaf
- * collapse was decided as each node was made (B1's rule), a scan numbers the
- * nodes that stay, and each triangle goes to its place in depth-first leaf
- * order, which keeps every leaf's triangles together.
+ * collapse was decided as each node was made (B1's rule), one scan numbers
+ * the nodes that stay, and a second gives each kept node's leaves their run of
+ * triangle positions (kept nodes in their numbering order, each leaf's
+ * triangles together, depth first within the leaf). A depth-first order over
+ * the whole tree needed each node to walk up to the root for its place: that
+ * was 8.6 ms of Sponza's 44.8 ms build.
  */
 
 import { HPLOC_MAX_CLUSTERS, HPLOC_MERGE_THRESHOLD, HPLOC_SEARCH_RADIUS } from './hploc-cpu.ts';
@@ -162,7 +165,7 @@ struct HplocParams {
     parentsOffset: u32,        // where every cluster's parent starts in hplocLinks
     treePositionsOffset: u32,  // where each sorted triangle's tree position starts in hplocLinks
     tieBreak: u32,             // HPLOC_TIE_BREAK
-    unused0: u32,
+    leafRunsOffset: u32,       // where each made node's leaf triangles (then, scanned, their first position) start in hplocLinks
     unused1: u32,
     unused2: u32,
 }
@@ -176,8 +179,8 @@ struct HplocParams {
 // Plain views of hplocScratch, for the clear and for the dispatches after the climb.
 @group(0) @binding(25) var<storage, read> hplocScratchView: array<u32>;
 @group(0) @binding(26) var<storage, read_write> hplocScratchFill: array<u32>;
-// Read only in later dispatches: [the node scan (lbvhRank), one more at the end][2 children per made node]
-// [every cluster's parent: leaves, then made nodes][each sorted triangle's tree position].
+// Read only in later dispatches: [the node scan (lbvhRank), one more at the end][the leaf-run scan, one more]
+// [2 children per made node][every cluster's parent: leaves, then made nodes][each sorted triangle's tree position].
 @group(0) @binding(27) var<storage, read_write> hplocLinks: array<u32>;
 @group(0) @binding(28) var<uniform> hplocParams: HplocParams;
 // 'tinybvh-63' only: the triangles in order of the low code words (the first sort's result).
@@ -239,6 +242,10 @@ fn hplocParentWord(mesh: LbvhMesh, cluster: u32) -> u32 {
         return hplocParams.parentsOffset + mesh.triangleStart + cluster;
     }
     return hplocParams.parentsOffset + hplocParams.triangleTotal + mesh.innerStart + cluster - mesh.triangleCount;
+}
+
+fn hplocLeafRunWord(mesh: LbvhMesh, made: u32) -> u32 {
+    return hplocParams.leafRunsOffset + mesh.innerStart + made;
 }
 
 fn hplocTreePositionWord(mesh: LbvhMesh, position: u32) -> u32 {
@@ -934,6 +941,11 @@ fn hplocCollapsed(info: u32) -> bool {
     return (info & HPLOC_INFO_COLLAPSE_BIT) != 0u;
 }
 
+// A child the layout makes a leaf: one triangle, or a collapsed subtree.
+fn hplocIsLeaf(mesh: LbvhMesh, cluster: u32) -> bool {
+    return cluster < mesh.triangleCount || hplocCollapsed(hplocInfo(mesh, cluster));
+}
+
 // A made node stays unless it or an ancestor became a leaf. Only ancestors with
 // at most maxLeaf triangles can have, and counts grow on the way up.
 fn hplocKept(mesh: LbvhMesh, cluster: u32, root: u32) -> bool {
@@ -970,12 +982,27 @@ fn hplocMark(
     if (made >= mesh.innerCount) {
         return;
     }
-    // A one-triangle mesh made no node but still needs one, its root.
+    // A one-triangle mesh made no node but still needs one, its root, which holds the triangle.
     var kept = mesh.triangleCount == 1u;
+    var leafTriangles = 1u;
     if (!kept) {
-        kept = hplocKept(mesh, mesh.triangleCount + made, hplocRootOf(mesh));
+        let cluster = mesh.triangleCount + made;
+        kept = hplocKept(mesh, cluster, hplocRootOf(mesh));
+        leafTriangles = 0u;
+        if (kept) {
+            for (var side = 0u; side < 2u; side += 1u) {
+                let child = hplocLinks[hplocChildWord(mesh, made, side)];
+                if (hplocIsLeaf(mesh, child)) {
+                    leafTriangles += hplocTriangles(hplocInfo(mesh, child));
+                }
+            }
+        }
     }
     hplocLinks[mesh.innerStart + made] = select(0u, 1u, kept);
+    hplocLinks[hplocLeafRunWord(mesh, made)] = leafTriangles;
+    if (mesh.index + 1u == lbvhParams.meshCount && made + 1u == mesh.innerCount) {
+        hplocLinks[hplocParams.leafRunsOffset + hplocParams.innerTotal] = 0u;   // the scan's end marker
+    }
 }
 
 // ---- 7. The tracer's layout -----------------------------------------------------------
@@ -992,23 +1019,6 @@ fn hplocBoxOf(mesh: LbvhMesh, cluster: u32) -> LbvhBox {
         upper[axis] = bitcast<f32>(hplocScratchView[hplocRecordWord(mesh, made, 3u + axis)]);
     }
     return LbvhBox(lower, upper);
-}
-
-// Where a cluster's first triangle goes in depth-first leaf order: the
-// triangles of every left sibling on the way to the root come before it.
-fn hplocTreeOffset(mesh: LbvhMesh, cluster: u32, root: u32) -> u32 {
-    var offset = 0u;
-    var current = cluster;
-    // Every node on the way is a kept node, whose height fits HPLOC_INFO_HEIGHT_MASK.
-    for (var guard = 0u; guard <= HPLOC_INFO_HEIGHT_MASK && current != root; guard += 1u) {
-        let above = hplocLinks[hplocParentWord(mesh, current)];
-        let left = hplocLinks[hplocChildWord(mesh, above - mesh.triangleCount, 0u)];
-        if (left != current) {
-            offset += hplocTriangles(hplocInfo(mesh, left));
-        }
-        current = above;
-    }
-    return offset;
 }
 
 // A leaf of the layout (one triangle, or a collapsed subtree of at most maxLeaf):
@@ -1073,21 +1083,18 @@ fn hplocEmit(
     }
     let rootRank = hplocLinks[mesh.innerStart + root - mesh.triangleCount] - nodeOffset;
     let out = hplocOutputIndex(mesh, cluster, nodeOffset, rootRank);
-    let offset = hplocTreeOffset(mesh, cluster, root);
-    let left = hplocLinks[hplocChildWord(mesh, made, 0u)];
+    // This node's leaves' run of triangle positions, within the mesh's.
+    var placed = hplocLinks[hplocLeafRunWord(mesh, made)] - hplocLinks[hplocLeafRunWord(mesh, 0u)];
     for (var side = 0u; side < 2u; side += 1u) {
         let child = hplocLinks[hplocChildWord(mesh, made, side)];
-        let info = hplocInfo(mesh, child);
         let box = hplocBoxOf(mesh, child);
         var index: u32;
         var count = 0u;
-        if (child < mesh.triangleCount || hplocCollapsed(info)) {
-            index = offset;
-            if (side == 1u) {
-                index += hplocTriangles(hplocInfo(mesh, left));
-            }
-            count = hplocTriangles(info);
+        if (hplocIsLeaf(mesh, child)) {
+            index = placed;
+            count = hplocTriangles(hplocInfo(mesh, child));
             hplocPlaceLeaves(mesh, child, index);
+            placed += count;
         } else {
             index = hplocOutputIndex(mesh, child, nodeOffset, rootRank);
         }
