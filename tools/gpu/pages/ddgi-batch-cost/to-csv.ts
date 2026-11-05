@@ -19,7 +19,12 @@
  * - `batch_cost/startup/...`: milliseconds to each start-up stage, and the
  *   slowest pipeline compiles;
  * - `batch_cost/breakdown/batch<n>/<variant>_ms`: `ddgi/trace` with parts of
- *   its shading taken out (main.ts, TRACE_VARIANTS).
+ *   its shading taken out (main.ts, TRACE_VARIANTS);
+ * - `batch_cost/steady/batch<n>/<raf|waited>/...`: a fixed batch at 60 Hz or
+ *   back to back: update ms, spike count and share (frames over 1.5 × the
+ *   median + 0.2 ms), the spikes' extra ms (per pass), and their spacing in
+ *   wall-clock ms (median, quartiles). Spikes spaced by another program's
+ *   clock, not ours, are that program's GPU work.
  *
  * The browser column comes from the page (user agent plus client hints);
  * `--browser` overrides it (runs from before the page reported the full
@@ -51,6 +56,8 @@ interface SceneResult {
     budget?: Record<string, number | string>;
     curve?: { sizes: Record<string, Record<string, number>> } & Record<string, unknown>;
     breakdown?: Record<string, Record<string, number>>;
+    /** Fixed batches: per batch size, per cadence (raf, waited), the spike numbers. */
+    steady?: Record<string, Record<string, unknown>>;
 }
 
 interface PageData {
@@ -85,6 +92,13 @@ export function batchCostRows(data: PageData): MetricRow[] {
                 ...numericRows(scene, `${PREFIX}/fit_all`, { fixed_ms: fit.fit_all_fixed_ms, us_per_probe: fit.fit_all_us_per_probe }),
                 ...numericRows(scene, `${PREFIX}/fit_upto512`, { fixed_ms: fit.fit_small_fixed_ms, us_per_probe: fit.fit_small_us_per_probe }),
             );
+        }
+        if (result.steady) {
+            for (const [size, cadences] of Object.entries(result.steady)) {
+                for (const [cadence, values] of Object.entries(cadences)) {
+                    if (typeof values === 'object' && values !== null) rows.push(...numericRows(scene, `${PREFIX}/steady/batch${size}/${cadence}`, values as Record<string, unknown>));
+                }
+            }
         }
         if (result.breakdown) {
             for (const [size, values] of Object.entries(result.breakdown)) rows.push(...numericRows(scene, `${PREFIX}/breakdown/batch${size}`, values));

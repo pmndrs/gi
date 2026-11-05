@@ -12,16 +12,21 @@
  *    probes with a running-average hysteresis, at most 16 passes over every
  *    probe, stopping after 8 s once 2 passes are done, 4 steps then a wait for
  *    the GPU. Reported: when each stage was reached, from the start of the
- *    load and from the technique's creation (where the viewer's own clock
- *    starts). "First GI" is the first warm-up step finished on the GPU
- *    (probes start showing); "first pass" is every probe updated once;
- *    "settled" is the warm-up done.
+ *    load (file fetch included) and from the technique's creation (where
+ *    the viewer's own clock starts): the scene first drawn without GI; the
+ *    first warm-up step finished on the GPU; the first frame drawn with GI
+ *    (three's pipelines compiled for the GI light, then drawn and finished);
+ *    every probe updated once; the warm-up done. Kernel compiles are cold
+ *    only for the first scene of a run (each run has a fresh browser
+ *    profile; the driver's own shader cache may still be warm), so time one
+ *    scene per run for cold numbers.
  * 2. **budget**: straight after the warm-up, as in the viewer, frames with
  *    `budget.gpuMs` (default 2) at the display's frame rate (one frame per
  *    `requestAnimationFrame`, nothing waits for the GPU), so timings arrive as
  *    late as they do in the viewer. Reported: the update's GPU ms per frame
  *    (median, p05, p95, share of frames within ±10% of the budget), probes per
- *    frame, and how the first frames after the warm-up went.
+ *    frame, and how the first frames after the warm-up went. The page fails
+ *    unless the median frame is within ±10% of the budget (DECISIONS).
  * 3. **curve**: fixed batches of 32 ... 4,096 probes, each frame waited for,
  *    one sweep up and one down so a clock drift shows; per batch the median
  *    `ddgi/trace`, `ddgi/blend`, `ddgi/write` and `ddgi/census` GPU ms, and a
@@ -44,7 +49,7 @@
  * and turn the JSON into rows with `node tools/gpu/pages/ddgi-batch-cost/to-csv.ts`.
  */
 
-import { PerspectiveCamera } from 'three/webgpu';
+import { PerspectiveCamera, type Scene, type WebGPURenderer } from 'three/webgpu';
 import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
 import type { EnvironmentDescriptor } from '../../../../packages/ddgi-core/src/platform/contract/scene.ts';
 import { DDGITechnique } from '../../../../packages/ddgi-core/src/techniques/ddgi/ddgi-technique.ts';
@@ -82,7 +87,11 @@ const CURVE_TIMED_FRAMES = 30;
 /** Budget frames: the first ones show how the budget settles after the warm-up; the rest are judged. */
 const BUDGET_SETTLE_FRAMES = 120;
 const BUDGET_JUDGED_FRAMES = 480;
-/** The budget is held when a frame's update is within this share of it. */
+/**
+ * The budget holds when the median frame's update is within this share of it
+ * (DECISIONS 2026-11-05: single frames include other programs' GPU work).
+ * The page fails otherwise. The share of single frames within it is reported too.
+ */
 const BUDGET_TOLERANCE = 0.1;
 
 /** The update's own passes; the census is a counter for the stats, reported apart. */
@@ -214,10 +223,30 @@ function timePipelineCompiles(device: GPUDevice): void {
     };
 }
 
-async function startScene(device: GPUDevice, manifest: SceneManifest, log: (line: string) => void): Promise<{ scene: SceneUnderTest; startup: Record<string, number> }> {
+/** Draws one frame of the scene with three, its pipelines compiled first, and waits for the GPU. */
+async function drawFrame(device: GPUDevice, renderer: WebGPURenderer, scene: Scene, camera: PerspectiveCamera): Promise<void> {
+    await renderer.compileAsync(scene, camera);
+    renderer.render(scene, camera);
+    await device.queue.onSubmittedWorkDone();
+}
+
+async function startScene(
+    device: GPUDevice,
+    renderer: WebGPURenderer,
+    manifest: SceneManifest,
+    log: (line: string) => void,
+): Promise<{ scene: SceneUnderTest; startup: Record<string, number> }> {
     pipelineCompileMs.clear();
     const loadStartedAt = performance.now();
     const loaded = await loadScene(manifest, () => {});
+    const bookmark = manifest.cameras[0];
+    const camera = new PerspectiveCamera(bookmark.fovYDeg, 1, 0.05, loaded.diagonal * 2);
+    camera.position.set(...bookmark.position);
+    camera.lookAt(...bookmark.target);
+    camera.updateMatrixWorld();
+    // The scene on screen without GI, as the viewer shows it while DDGI starts.
+    await drawFrame(device, renderer, loaded.scene, camera);
+    const sceneShownAt = performance.now();
     const createdAt = performance.now();
 
     const platform = new GIPlatformImpl(device, { label: `batch cost ${manifest.id}`, gpuTiming: true });
@@ -227,11 +256,6 @@ async function startScene(device: GPUDevice, manifest: SceneManifest, log: (line
     await platform.prepare();
     const preparedAt = performance.now();
 
-    const bookmark = manifest.cameras[0];
-    const camera = new PerspectiveCamera(bookmark.fovYDeg, 16 / 9, 0.05, loaded.diagonal * 2);
-    camera.position.set(...bookmark.position);
-    camera.lookAt(...bookmark.target);
-    camera.updateMatrixWorld();
     const threeGI = new ThreeGI(platform, loaded.scene, { budget: { paused: true }, environment: environmentFor(manifest), warn: () => {} });
     threeGI.update(camera, 0);
     const copiedAt = performance.now();
@@ -249,6 +273,7 @@ async function startScene(device: GPUDevice, manifest: SceneManifest, log: (line
     let updates = 0;
     let steps = 0;
     let firstGiAt = NaN;
+    let firstGiShownAt = NaN;
     let firstPassAt = NaN;
     const warmupStartedAt = performance.now();
     for (;;) {
@@ -264,7 +289,12 @@ async function startScene(device: GPUDevice, manifest: SceneManifest, log: (line
         const firstPass = Number.isNaN(firstPassAt) && updates >= probeCount;
         if (done || firstStep || firstPass || steps % WARMUP.stepsPerBatch === 0) {
             await device.queue.onSubmittedWorkDone();
-            if (firstStep) firstGiAt = performance.now();
+            if (firstStep) {
+                firstGiAt = performance.now();
+                // The first frame drawn with GI: three compiles the materials again for the GI light.
+                await drawFrame(device, renderer, loaded.scene, camera);
+                firstGiShownAt = performance.now();
+            }
             if (firstPass) firstPassAt = performance.now();
             await yieldToCallbacks();
         }
@@ -277,14 +307,18 @@ async function startScene(device: GPUDevice, manifest: SceneManifest, log: (line
     const fromCreation = (at: number) => round(at - createdAt, 1);
     const startup = {
         probes: probeCount,
-        load_files_ms: fromLoad(createdAt),
+        // From the start of the load: files fetched and parsed, then the first frame drawn without GI.
+        load_files_ms: round(sceneShownAt - loadStartedAt, 1),
+        scene_shown_from_load_ms: fromLoad(sceneShownAt),
         prepare_ms: round(preparedAt - createdAt, 1),
         scene_copy_cpu_ms: round(copiedAt - preparedAt, 1),
         trees_ms: round(treesAt - copiedAt, 1),
-        first_gi_from_load_ms: fromLoad(firstGiAt),
+        first_gi_step_from_load_ms: fromLoad(firstGiAt),
+        first_gi_shown_from_load_ms: fromLoad(firstGiShownAt),
         first_pass_from_load_ms: fromLoad(firstPassAt),
         settled_from_load_ms: fromLoad(settledAt),
-        first_gi_from_creation_ms: fromCreation(firstGiAt),
+        first_gi_step_from_creation_ms: fromCreation(firstGiAt),
+        first_gi_shown_from_creation_ms: fromCreation(firstGiShownAt),
         first_pass_from_creation_ms: fromCreation(firstPassAt),
         settled_from_creation_ms: fromCreation(settledAt),
         warmup_ms: round(settledAt - warmupStartedAt, 1),
@@ -297,7 +331,7 @@ async function startScene(device: GPUDevice, manifest: SceneManifest, log: (line
     }
     log(
         `${manifest.id}: ${probeCount} probes; files ${startup.load_files_ms} ms, prepare ${startup.prepare_ms}, copy ${startup.scene_copy_cpu_ms}, trees ${startup.trees_ms}; ` +
-            `first GI ${startup.first_gi_from_creation_ms} ms after creation (${startup.first_gi_from_load_ms} from load), first pass ${startup.first_pass_from_creation_ms}, ` +
+            `first GI drawn ${startup.first_gi_shown_from_load_ms} ms from load (${startup.first_gi_shown_from_creation_ms} after creation), first pass ${startup.first_pass_from_creation_ms}, ` +
             `settled ${startup.settled_from_creation_ms} (${startup.warmup_passes} passes in ${startup.warmup_ms} ms)`,
     );
     return { scene, startup };
@@ -425,6 +459,7 @@ async function measureSteady(device: GPUDevice, scene: SceneUnderTest, units: nu
             frame_interval_ms_median: round(median(frameGaps), 2),
             update_ms_median: round(typical),
             update_ms_p95: round(percentile(samples.map((sample) => sample.total), 0.95)),
+            spike_count: spikes.length,
             spike_share: round(spikes.length / samples.length, 3),
             spike_extra_ms_median: round(median(spikes.map((spike) => spike.total)) - typical),
             spike_extra_trace_ms: extra('trace'),
@@ -622,7 +657,7 @@ async function measureTraceBreakdown(device: GPUDevice, scene: SceneUnderTest, l
     return result;
 }
 
-await runThreePage(async ({ device, data, log }) => {
+await runThreePage(async ({ device, renderer, data, log }) => {
     assert(device.features.has('timestamp-query'), 'timing needs the timestamp-query feature');
     timePipelineCompiles(device);
     data.sections = [...SECTIONS].join(',');
@@ -631,14 +666,22 @@ await runThreePage(async ({ device, data, log }) => {
     const manifests = loadAllManifests();
     const results: Record<string, unknown> = {};
     data.scenes = results;
+    const budgetFailures: string[] = [];
     for (const id of SCENES) {
         const manifest = manifests.find((candidate) => candidate.id === id);
         assert(manifest, `no manifest '${id}'`);
-        const { scene, startup } = await startScene(device, manifest, log);
+        const { scene, startup } = await startScene(device, renderer, manifest, log);
         const sceneResult: Record<string, unknown> = { probes: scene.probeCount, raysPerProbe: scene.ddgi.settings.raysPerProbe };
         results[id] = sceneResult;
         if (SECTIONS.has('startup')) sceneResult.startup = startup;
-        if (SECTIONS.has('budget')) sceneResult.budget = await measureBudget(device, scene, log);
+        if (SECTIONS.has('budget')) {
+            const budget = await measureBudget(device, scene, log);
+            sceneResult.budget = budget;
+            // Checked after the numbers are in the report, so a failed run can still be read.
+            if (Math.abs((budget.update_ms_median as number) - BUDGET_MS) > BUDGET_TOLERANCE * BUDGET_MS) {
+                budgetFailures.push(`${id}: the median update took ${budget.update_ms_median} ms against a ${BUDGET_MS} ms budget (±${BUDGET_TOLERANCE * 100}%)`);
+            }
+        }
         if (SECTIONS.has('steady')) {
             const budget = sceneResult.budget as { probes_median?: number } | undefined;
             const sizes = STEADY_UNITS.length > 0 ? STEADY_UNITS : [Math.round(budget?.probes_median ?? 256)];
@@ -654,4 +697,5 @@ await runThreePage(async ({ device, data, log }) => {
         scene.platform.dispose();
         await device.queue.onSubmittedWorkDone();
     }
+    assert(budgetFailures.length === 0, budgetFailures.join('; '));
 });

@@ -2634,3 +2634,782 @@ date,commit,device,browser,scene,metric,value
 2026-11-05,146ce4b-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,batch_cost/budget2ms/settle_max_ms,9.613
 2026-11-05,146ce4b-dirty,Intel UHD,Chrome 156.0.8078.74 headless,bistro-exterior,batch_cost/budget2ms/settle_first_within_frame,2
 2026-11-05,146ce4b-dirty,Intel UHD,Chrome 156.0.8078.74 headless,all,note/set,2
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/probes_in_volume,19425
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/startup/probes,19425
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/startup/load_files_ms,3714.7
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/startup/scene_shown_from_load_ms,3714.7
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/startup/prepare_ms,941
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/startup/scene_copy_cpu_ms,1102.6
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/startup/trees_ms,2841.4
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/startup/first_gi_step_from_load_ms,8755.7
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/startup/first_gi_shown_from_load_ms,9270.9
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/startup/first_pass_from_load_ms,9437.6
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/startup/settled_from_load_ms,11852.2
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/startup/first_gi_step_from_creation_ms,5041
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/startup/first_gi_shown_from_creation_ms,5556.2
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/startup/first_pass_from_creation_ms,5722.9
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/startup/settled_from_creation_ms,8137.5
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/startup/warmup_ms,3252.2
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/startup/warmup_steps,76
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/startup/warmup_passes,16.03
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/startup/compile_ms/ddgi/trace,932
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/startup/compile_ms/sky SH projection,589
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/startup/compile_ms/ddgi/blend (subgroups),323.4
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/startup/compile_ms/trace batch closest,210.4
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/startup/compile_ms/top level refit bvhRefitClimb,190.2
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/startup/compile_ms/trace batch any,183.3
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/budget2ms/budget_ms,2
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/budget2ms/timed_frames,480
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/budget2ms/update_ms_median,2.1064
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/budget2ms/update_ms_mean,2.4132
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/budget2ms/update_ms_p05,0.4076
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/budget2ms/update_ms_p95,4.8251
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/budget2ms/update_ms_max,10.8155
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/budget2ms/share_within_10pct,0.106
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/budget2ms/census_ms_median,0.0051
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/budget2ms/probes_median,19
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/budget2ms/probes_p05,8
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/budget2ms/probes_p95,66
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/budget2ms/settle_first_ms,2.7638
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/budget2ms/settle_max_ms,6.1594
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/budget2ms/settle_first_within_frame,3
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/steady/batch19/raf/timed_frames,359
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/steady/batch19/raf/frame_interval_ms_median,16.7
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/steady/batch19/raf/update_ms_median,2.0439
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/steady/batch19/raf/update_ms_p95,5.0483
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/steady/batch19/raf/spike_count,102
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/steady/batch19/raf/spike_share,0.284
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/steady/batch19/raf/spike_extra_ms_median,2.1806
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/steady/batch19/raf/spike_extra_trace_ms,2.1919
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/steady/batch19/raf/spike_extra_blend_ms,0.002
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/steady/batch19/raf/spike_extra_write_ms,0.001
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/steady/batch19/raf/spike_spacing_ms_median,50
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/steady/batch19/raf/spike_spacing_ms_p25,49.9
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/steady/batch19/raf/spike_spacing_ms_p75,53.2
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/steady/batch19/waited/timed_frames,360
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/steady/batch19/waited/frame_interval_ms_median,4
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/steady/batch19/waited/update_ms_median,0.9916
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/steady/batch19/waited/update_ms_p95,2.262
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/steady/batch19/waited/spike_count,61
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/steady/batch19/waited/spike_share,0.169
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/steady/batch19/waited/spike_extra_ms_median,0.997
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/steady/batch19/waited/spike_extra_trace_ms,0.997
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/steady/batch19/waited/spike_extra_blend_ms,0.0031
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/steady/batch19/waited/spike_extra_write_ms,0.001
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/steady/batch19/waited/spike_spacing_ms_median,14.95
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/steady/batch19/waited/spike_spacing_ms_p25,7.6
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/steady/batch19/waited/spike_spacing_ms_p75,37.6
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run1/batch_cost/probes_in_volume,28952
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run1/batch_cost/startup/probes,28952
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run1/batch_cost/startup/load_files_ms,8746.6
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run1/batch_cost/startup/scene_shown_from_load_ms,8746.6
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run1/batch_cost/startup/prepare_ms,46.7
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run1/batch_cost/startup/scene_copy_cpu_ms,3236
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run1/batch_cost/startup/trees_ms,1710.9
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run1/batch_cost/startup/first_gi_step_from_load_ms,13813
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run1/batch_cost/startup/first_gi_shown_from_load_ms,14832.4
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run1/batch_cost/startup/first_pass_from_load_ms,17481.9
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run1/batch_cost/startup/settled_from_load_ms,22981.8
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run1/batch_cost/startup/first_gi_step_from_creation_ms,5066.4
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run1/batch_cost/startup/first_gi_shown_from_creation_ms,6085.8
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run1/batch_cost/startup/first_pass_from_creation_ms,8735.3
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run1/batch_cost/startup/settled_from_creation_ms,14235.2
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run1/batch_cost/startup/warmup_ms,9241.5
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run1/batch_cost/startup/warmup_steps,29
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run1/batch_cost/startup/warmup_passes,4.1
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run1/batch_cost/startup/compile_ms/ddgi/trace,38.2
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run1/batch_cost/startup/compile_ms/ddgi/blend (subgroups),25.3
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run1/batch_cost/startup/compile_ms/ddgi/write,21.4
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run1/batch_cost/startup/compile_ms/ddgi/census,21.3
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run1/batch_cost/startup/compile_ms/sky resample,6.9
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run1/batch_cost/startup/compile_ms/sky SH projection,6.9
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run1/batch_cost/budget2ms/budget_ms,2
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run1/batch_cost/budget2ms/timed_frames,479
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run1/batch_cost/budget2ms/update_ms_median,2.0982
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run1/batch_cost/budget2ms/update_ms_mean,2.4486
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run1/batch_cost/budget2ms/update_ms_p05,0.3799
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run1/batch_cost/budget2ms/update_ms_p95,5.3001
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run1/batch_cost/budget2ms/update_ms_max,13.0007
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run1/batch_cost/budget2ms/share_within_10pct,0.102
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run1/batch_cost/budget2ms/census_ms_median,0.0041
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run1/batch_cost/budget2ms/probes_median,20
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run1/batch_cost/budget2ms/probes_p05,10
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run1/batch_cost/budget2ms/probes_p95,54
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run1/batch_cost/budget2ms/settle_first_ms,0.8161
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run1/batch_cost/budget2ms/settle_max_ms,5.6003
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run1/batch_cost/budget2ms/settle_first_within_frame,19
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run1/batch_cost/steady/batch20/raf/timed_frames,360
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run1/batch_cost/steady/batch20/raf/frame_interval_ms_median,16.7
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run1/batch_cost/steady/batch20/raf/update_ms_median,2.1064
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run1/batch_cost/steady/batch20/raf/update_ms_p95,5.3996
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run1/batch_cost/steady/batch20/raf/spike_count,105
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run1/batch_cost/steady/batch20/raf/spike_share,0.292
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run1/batch_cost/steady/batch20/raf/spike_extra_ms_median,2.0101
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run1/batch_cost/steady/batch20/raf/spike_extra_trace_ms,2.0154
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run1/batch_cost/steady/batch20/raf/spike_extra_blend_ms,0.0205
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run1/batch_cost/steady/batch20/raf/spike_extra_write_ms,0.0031
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run1/batch_cost/steady/batch20/raf/spike_spacing_ms_median,50
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run1/batch_cost/steady/batch20/raf/spike_spacing_ms_p25,33.3
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run1/batch_cost/steady/batch20/raf/spike_spacing_ms_p75,83.8
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run1/batch_cost/steady/batch20/waited/timed_frames,360
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run1/batch_cost/steady/batch20/waited/frame_interval_ms_median,4
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run1/batch_cost/steady/batch20/waited/update_ms_median,1.0731
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run1/batch_cost/steady/batch20/waited/update_ms_p95,2.2145
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run1/batch_cost/steady/batch20/waited/spike_count,52
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run1/batch_cost/steady/batch20/waited/spike_share,0.144
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run1/batch_cost/steady/batch20/waited/spike_extra_ms_median,1.0382
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run1/batch_cost/steady/batch20/waited/spike_extra_trace_ms,1.0362
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run1/batch_cost/steady/batch20/waited/spike_extra_blend_ms,0.002
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run1/batch_cost/steady/batch20/waited/spike_extra_write_ms,0
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run1/batch_cost/steady/batch20/waited/spike_spacing_ms_median,27
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run1/batch_cost/steady/batch20/waited/spike_spacing_ms_p25,10.2
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run1/batch_cost/steady/batch20/waited/spike_spacing_ms_p75,41.2
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/probes_in_volume,19425
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/startup/probes,19425
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/startup/load_files_ms,3998.6
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/startup/scene_shown_from_load_ms,3998.6
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/startup/prepare_ms,1151.1
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/startup/scene_copy_cpu_ms,1160.5
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/startup/trees_ms,3157.7
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/startup/first_gi_step_from_load_ms,9538.5
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/startup/first_gi_shown_from_load_ms,10239
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/startup/first_pass_from_load_ms,10391.2
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/startup/settled_from_load_ms,12526.4
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/startup/first_gi_step_from_creation_ms,5539.9
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/startup/first_gi_shown_from_creation_ms,6240.4
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/startup/first_pass_from_creation_ms,6392.6
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/startup/settled_from_creation_ms,8527.8
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/startup/warmup_ms,3058
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/startup/warmup_steps,76
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/startup/warmup_passes,16.03
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/startup/compile_ms/ddgi/trace,1140.4
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/startup/compile_ms/sky SH projection,816.3
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/startup/compile_ms/ddgi/blend (subgroups),459
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/startup/compile_ms/trace batch closest,279.2
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/startup/compile_ms/trace batch any,252.2
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/startup/compile_ms/top level refit bvhRefitClimb,242.4
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/budget2ms/budget_ms,2
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/budget2ms/timed_frames,480
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/budget2ms/update_ms_median,2.0152
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/budget2ms/update_ms_mean,2.3759
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/budget2ms/update_ms_p05,0.4178
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/budget2ms/update_ms_p95,4.7688
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/budget2ms/update_ms_max,11.3951
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/budget2ms/share_within_10pct,0.092
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/budget2ms/census_ms_median,0.0051
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/budget2ms/probes_median,17
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/budget2ms/probes_p05,8
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/budget2ms/probes_p95,54
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/budget2ms/settle_first_ms,5.7416
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/budget2ms/settle_max_ms,5.7416
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/budget2ms/settle_first_within_frame,1
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/steady/batch17/raf/timed_frames,360
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/steady/batch17/raf/frame_interval_ms_median,16.7
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/steady/batch17/raf/update_ms_median,2.0675
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/steady/batch17/raf/update_ms_p95,4.9203
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/steady/batch17/raf/spike_count,109
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/steady/batch17/raf/spike_share,0.303
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/steady/batch17/raf/spike_extra_ms_median,2.006
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/steady/batch17/raf/spike_extra_trace_ms,2.0398
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/steady/batch17/raf/spike_extra_blend_ms,0.0031
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/steady/batch17/raf/spike_extra_write_ms,0.002
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/steady/batch17/raf/spike_spacing_ms_median,50
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/steady/batch17/raf/spike_spacing_ms_p25,49.7
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/steady/batch17/raf/spike_spacing_ms_p75,50.1
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/steady/batch17/waited/timed_frames,360
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/steady/batch17/waited/frame_interval_ms_median,4
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/steady/batch17/waited/update_ms_median,0.9789
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/steady/batch17/waited/update_ms_p95,2.7505
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/steady/batch17/waited/spike_count,66
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/steady/batch17/waited/spike_share,0.183
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/steady/batch17/waited/spike_extra_ms_median,1.366
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/steady/batch17/waited/spike_extra_trace_ms,1.3512
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/steady/batch17/waited/spike_extra_blend_ms,0.0143
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/steady/batch17/waited/spike_extra_write_ms,0.002
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/steady/batch17/waited/spike_spacing_ms_median,10.2
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/steady/batch17/waited/spike_spacing_ms_p25,7
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/steady/batch17/waited/spike_spacing_ms_p75,27.9
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run2/batch_cost/probes_in_volume,28952
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run2/batch_cost/startup/probes,28952
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run2/batch_cost/startup/load_files_ms,8821.8
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run2/batch_cost/startup/scene_shown_from_load_ms,8821.8
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run2/batch_cost/startup/prepare_ms,37.6
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run2/batch_cost/startup/scene_copy_cpu_ms,3163.1
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run2/batch_cost/startup/trees_ms,1715.1
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run2/batch_cost/startup/first_gi_step_from_load_ms,13919.5
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run2/batch_cost/startup/first_gi_shown_from_load_ms,15001.6
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run2/batch_cost/startup/first_pass_from_load_ms,15569.9
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run2/batch_cost/startup/settled_from_load_ms,19770.8
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run2/batch_cost/startup/first_gi_step_from_creation_ms,5097.7
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run2/batch_cost/startup/first_gi_shown_from_creation_ms,6179.8
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run2/batch_cost/startup/first_pass_from_creation_ms,6748.1
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run2/batch_cost/startup/settled_from_creation_ms,10949
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run2/batch_cost/startup/warmup_ms,6033
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run2/batch_cost/startup/warmup_steps,114
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run2/batch_cost/startup/warmup_passes,16.13
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run2/batch_cost/startup/compile_ms/ddgi/trace,31.2
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run2/batch_cost/startup/compile_ms/ddgi/blend (subgroups),22
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run2/batch_cost/startup/compile_ms/ddgi/write,19.5
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run2/batch_cost/startup/compile_ms/ddgi/census,19.5
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run2/batch_cost/startup/compile_ms/sky resample,5.7
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run2/batch_cost/startup/compile_ms/sky SH projection,5.7
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run2/batch_cost/budget2ms/budget_ms,2
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run2/batch_cost/budget2ms/timed_frames,479
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run2/batch_cost/budget2ms/update_ms_median,2.0838
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run2/batch_cost/budget2ms/update_ms_mean,2.3987
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run2/batch_cost/budget2ms/update_ms_p05,0.3574
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run2/batch_cost/budget2ms/update_ms_p95,5.2081
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run2/batch_cost/budget2ms/update_ms_max,12.3382
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run2/batch_cost/budget2ms/share_within_10pct,0.086
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run2/batch_cost/budget2ms/census_ms_median,0.0041
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run2/batch_cost/budget2ms/probes_median,13
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run2/batch_cost/budget2ms/probes_p05,6
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run2/batch_cost/budget2ms/probes_p95,36
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run2/batch_cost/budget2ms/settle_first_ms,5.7231
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run2/batch_cost/budget2ms/settle_max_ms,13.9577
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run2/batch_cost/budget2ms/settle_first_within_frame,3
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run2/batch_cost/steady/batch13/raf/timed_frames,359
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run2/batch_cost/steady/batch13/raf/frame_interval_ms_median,16.7
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run2/batch_cost/steady/batch13/raf/update_ms_median,2.1064
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run2/batch_cost/steady/batch13/raf/update_ms_p95,5.1845
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run2/batch_cost/steady/batch13/raf/spike_count,99
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run2/batch_cost/steady/batch13/raf/spike_share,0.276
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run2/batch_cost/steady/batch13/raf/spike_extra_ms_median,2.22
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run2/batch_cost/steady/batch13/raf/spike_extra_trace_ms,2.2876
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run2/batch_cost/steady/batch13/raf/spike_extra_blend_ms,0.0164
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run2/batch_cost/steady/batch13/raf/spike_extra_write_ms,0.002
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run2/batch_cost/steady/batch13/raf/spike_spacing_ms_median,50
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run2/batch_cost/steady/batch13/raf/spike_spacing_ms_p25,33.5
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run2/batch_cost/steady/batch13/raf/spike_spacing_ms_p75,83.4
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run2/batch_cost/steady/batch13/waited/timed_frames,360
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run2/batch_cost/steady/batch13/waited/frame_interval_ms_median,4.1
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run2/batch_cost/steady/batch13/waited/update_ms_median,1.052
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run2/batch_cost/steady/batch13/waited/update_ms_p95,2.9317
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run2/batch_cost/steady/batch13/waited/spike_count,69
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run2/batch_cost/steady/batch13/waited/spike_share,0.192
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run2/batch_cost/steady/batch13/waited/spike_extra_ms_median,1.2827
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run2/batch_cost/steady/batch13/waited/spike_extra_trace_ms,1.3153
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run2/batch_cost/steady/batch13/waited/spike_extra_blend_ms,0.0082
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run2/batch_cost/steady/batch13/waited/spike_extra_write_ms,0.001
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run2/batch_cost/steady/batch13/waited/spike_spacing_ms_median,10.05
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run2/batch_cost/steady/batch13/waited/spike_spacing_ms_p25,5.6
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run2/batch_cost/steady/batch13/waited/spike_spacing_ms_p75,25.9
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/probes_in_volume,19425
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/startup/probes,19425
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/startup/load_files_ms,4111.7
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/startup/scene_shown_from_load_ms,4111.7
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/startup/prepare_ms,1186.8
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/startup/scene_copy_cpu_ms,1179.9
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/startup/trees_ms,3205
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/startup/first_gi_step_from_load_ms,9767.7
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/startup/first_gi_shown_from_load_ms,10476.9
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/startup/first_pass_from_load_ms,10628.5
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/startup/settled_from_load_ms,12706.2
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/startup/first_gi_step_from_creation_ms,5656
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/startup/first_gi_shown_from_creation_ms,6365.2
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/startup/first_pass_from_creation_ms,6516.8
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/startup/settled_from_creation_ms,8594.5
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/startup/warmup_ms,3022
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/startup/warmup_steps,76
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/startup/warmup_passes,16.03
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/startup/compile_ms/ddgi/trace,1174.5
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/startup/compile_ms/sky SH projection,822.5
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/startup/compile_ms/ddgi/blend (subgroups),447.4
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/startup/compile_ms/trace batch closest,293.5
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/startup/compile_ms/trace batch any,259.2
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/startup/compile_ms/top level refit bvhRefitClimb,226.9
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/budget2ms/budget_ms,2
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/budget2ms/timed_frames,480
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/budget2ms/update_ms_median,2.0239
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/budget2ms/update_ms_mean,2.4544
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/budget2ms/update_ms_p05,0.5161
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/budget2ms/update_ms_p95,4.8425
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/budget2ms/update_ms_max,13.5649
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/budget2ms/share_within_10pct,0.117
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/budget2ms/census_ms_median,0.0041
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/budget2ms/probes_median,23
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/budget2ms/probes_p05,11
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/budget2ms/probes_p95,82
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/budget2ms/settle_first_ms,7.9555
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/budget2ms/settle_max_ms,7.9555
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/budget2ms/settle_first_within_frame,1
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/steady/batch23/raf/timed_frames,360
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/steady/batch23/raf/frame_interval_ms_median,16.6
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/steady/batch23/raf/update_ms_median,2.1831
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/steady/batch23/raf/update_ms_p95,5.0268
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/steady/batch23/raf/spike_count,98
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/steady/batch23/raf/spike_share,0.272
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/steady/batch23/raf/spike_extra_ms_median,1.9759
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/steady/batch23/raf/spike_extra_trace_ms,2.0239
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/steady/batch23/raf/spike_extra_blend_ms,0.002
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/steady/batch23/raf/spike_extra_write_ms,0.001
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/steady/batch23/raf/spike_spacing_ms_median,50
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/steady/batch23/raf/spike_spacing_ms_p25,49.9
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/steady/batch23/raf/spike_spacing_ms_p75,50.1
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/steady/batch23/waited/timed_frames,360
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/steady/batch23/waited/frame_interval_ms_median,3.9
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/steady/batch23/waited/update_ms_median,0.9779
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/steady/batch23/waited/update_ms_p95,2.9604
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/steady/batch23/waited/spike_count,60
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/steady/batch23/waited/spike_share,0.167
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/steady/batch23/waited/spike_extra_ms_median,1.3307
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/steady/batch23/waited/spike_extra_trace_ms,1.3071
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/steady/batch23/waited/spike_extra_blend_ms,0.0364
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/steady/batch23/waited/spike_extra_write_ms,0.0041
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/steady/batch23/waited/spike_spacing_ms_median,9
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/steady/batch23/waited/spike_spacing_ms_p25,6.3
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/steady/batch23/waited/spike_spacing_ms_p75,38.5
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run3/batch_cost/probes_in_volume,28952
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run3/batch_cost/startup/probes,28952
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run3/batch_cost/startup/load_files_ms,8796.6
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run3/batch_cost/startup/scene_shown_from_load_ms,8796.6
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run3/batch_cost/startup/prepare_ms,40.2
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run3/batch_cost/startup/scene_copy_cpu_ms,3166.8
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run3/batch_cost/startup/trees_ms,1794.2
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run3/batch_cost/startup/first_gi_step_from_load_ms,13859.1
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run3/batch_cost/startup/first_gi_shown_from_load_ms,14949.9
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run3/batch_cost/startup/first_pass_from_load_ms,15484.2
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run3/batch_cost/startup/settled_from_load_ms,19929
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run3/batch_cost/startup/first_gi_step_from_creation_ms,5062.5
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run3/batch_cost/startup/first_gi_shown_from_creation_ms,6153.3
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run3/batch_cost/startup/first_pass_from_creation_ms,6687.6
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run3/batch_cost/startup/settled_from_creation_ms,11132.4
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run3/batch_cost/startup/warmup_ms,6131.1
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run3/batch_cost/startup/warmup_steps,114
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run3/batch_cost/startup/warmup_passes,16.13
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run3/batch_cost/startup/compile_ms/ddgi/trace,34.5
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run3/batch_cost/startup/compile_ms/ddgi/blend (subgroups),23.8
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run3/batch_cost/startup/compile_ms/ddgi/census,21.2
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run3/batch_cost/startup/compile_ms/ddgi/write,20.6
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run3/batch_cost/startup/compile_ms/trace batch closest,8.1
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run3/batch_cost/startup/compile_ms/trace batch any,8.1
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run3/batch_cost/budget2ms/budget_ms,2
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run3/batch_cost/budget2ms/timed_frames,480
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run3/batch_cost/budget2ms/update_ms_median,2.0572
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run3/batch_cost/budget2ms/update_ms_mean,2.4562
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run3/batch_cost/budget2ms/update_ms_p05,0.3615
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run3/batch_cost/budget2ms/update_ms_p95,5.118
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run3/batch_cost/budget2ms/update_ms_max,14.0848
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run3/batch_cost/budget2ms/share_within_10pct,0.098
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run3/batch_cost/budget2ms/census_ms_median,0.0041
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run3/batch_cost/budget2ms/probes_median,23
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run3/batch_cost/budget2ms/probes_p05,9
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run3/batch_cost/budget2ms/probes_p95,42
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run3/batch_cost/budget2ms/settle_first_ms,3.628
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run3/batch_cost/budget2ms/settle_max_ms,5.6361
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run3/batch_cost/budget2ms/settle_first_within_frame,14
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run3/batch_cost/steady/batch23/raf/timed_frames,360
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run3/batch_cost/steady/batch23/raf/frame_interval_ms_median,16.7
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run3/batch_cost/steady/batch23/raf/update_ms_median,2.2905
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run3/batch_cost/steady/batch23/raf/update_ms_p95,5.4856
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run3/batch_cost/steady/batch23/raf/spike_count,100
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run3/batch_cost/steady/batch23/raf/spike_share,0.278
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run3/batch_cost/steady/batch23/raf/spike_extra_ms_median,2.2842
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run3/batch_cost/steady/batch23/raf/spike_extra_trace_ms,2.2842
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run3/batch_cost/steady/batch23/raf/spike_extra_blend_ms,0.0051
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run3/batch_cost/steady/batch23/raf/spike_extra_write_ms,0.002
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run3/batch_cost/steady/batch23/raf/spike_spacing_ms_median,50
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run3/batch_cost/steady/batch23/raf/spike_spacing_ms_p25,49.9
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run3/batch_cost/steady/batch23/raf/spike_spacing_ms_p75,99.8
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run3/batch_cost/steady/batch23/waited/timed_frames,360
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run3/batch_cost/steady/batch23/waited/frame_interval_ms_median,4
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run3/batch_cost/steady/batch23/waited/update_ms_median,1.109
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run3/batch_cost/steady/batch23/waited/update_ms_p95,2.3368
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run3/batch_cost/steady/batch23/waited/spike_count,48
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run3/batch_cost/steady/batch23/waited/spike_share,0.133
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run3/batch_cost/steady/batch23/waited/spike_extra_ms_median,1.0547
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run3/batch_cost/steady/batch23/waited/spike_extra_trace_ms,1.0573
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run3/batch_cost/steady/batch23/waited/spike_extra_blend_ms,0.001
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run3/batch_cost/steady/batch23/waited/spike_extra_write_ms,0.001
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run3/batch_cost/steady/batch23/waited/spike_spacing_ms_median,25.5
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run3/batch_cost/steady/batch23/waited/spike_spacing_ms_p25,10.6
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,run3/batch_cost/steady/batch23/waited/spike_spacing_ms_p75,45.8
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,median/batch_cost/probes_in_volume,19425
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,median/batch_cost/startup/probes,19425
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,median/batch_cost/startup/load_files_ms,3998.6
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,median/batch_cost/startup/scene_shown_from_load_ms,3998.6
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,median/batch_cost/startup/prepare_ms,1151.1
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,median/batch_cost/startup/scene_copy_cpu_ms,1160.5
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,median/batch_cost/startup/trees_ms,3157.7
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,median/batch_cost/startup/first_gi_step_from_load_ms,9538.5
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,median/batch_cost/startup/first_gi_shown_from_load_ms,10239
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,median/batch_cost/startup/first_pass_from_load_ms,10391.2
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,median/batch_cost/startup/settled_from_load_ms,12526.4
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,median/batch_cost/startup/first_gi_step_from_creation_ms,5539.9
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,median/batch_cost/startup/first_gi_shown_from_creation_ms,6240.4
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,median/batch_cost/startup/first_pass_from_creation_ms,6392.6
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,median/batch_cost/startup/settled_from_creation_ms,8527.8
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,median/batch_cost/startup/warmup_ms,3058
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,median/batch_cost/startup/warmup_steps,76
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,median/batch_cost/startup/warmup_passes,16.03
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,median/batch_cost/startup/compile_ms/ddgi/trace,1140.4
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,median/batch_cost/startup/compile_ms/sky SH projection,816.3
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,median/batch_cost/startup/compile_ms/ddgi/blend (subgroups),447.4
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,median/batch_cost/startup/compile_ms/trace batch closest,279.2
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,median/batch_cost/startup/compile_ms/top level refit bvhRefitClimb,226.9
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,median/batch_cost/startup/compile_ms/trace batch any,252.2
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,median/batch_cost/budget2ms/budget_ms,2
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,median/batch_cost/budget2ms/timed_frames,480
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,median/batch_cost/budget2ms/update_ms_median,2.0239
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,median/batch_cost/budget2ms/update_ms_mean,2.4132
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,median/batch_cost/budget2ms/update_ms_p05,0.4178
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,median/batch_cost/budget2ms/update_ms_p95,4.8251
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,median/batch_cost/budget2ms/update_ms_max,11.3951
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,median/batch_cost/budget2ms/share_within_10pct,0.106
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,median/batch_cost/budget2ms/census_ms_median,0.0051
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,median/batch_cost/budget2ms/probes_median,19
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,median/batch_cost/budget2ms/probes_p05,8
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,median/batch_cost/budget2ms/probes_p95,66
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,median/batch_cost/budget2ms/settle_first_ms,5.7416
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,median/batch_cost/budget2ms/settle_max_ms,6.1594
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,median/batch_cost/budget2ms/settle_first_within_frame,1
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,median/batch_cost/probes_in_volume,28952
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,median/batch_cost/startup/probes,28952
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,median/batch_cost/startup/load_files_ms,8796.6
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,median/batch_cost/startup/scene_shown_from_load_ms,8796.6
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,median/batch_cost/startup/prepare_ms,40.2
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,median/batch_cost/startup/scene_copy_cpu_ms,3166.8
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,median/batch_cost/startup/trees_ms,1715.1
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,median/batch_cost/startup/first_gi_step_from_load_ms,13859.1
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,median/batch_cost/startup/first_gi_shown_from_load_ms,14949.9
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,median/batch_cost/startup/first_pass_from_load_ms,15569.9
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,median/batch_cost/startup/settled_from_load_ms,19929
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,median/batch_cost/startup/first_gi_step_from_creation_ms,5066.4
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,median/batch_cost/startup/first_gi_shown_from_creation_ms,6153.3
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,median/batch_cost/startup/first_pass_from_creation_ms,6748.1
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,median/batch_cost/startup/settled_from_creation_ms,11132.4
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,median/batch_cost/startup/warmup_ms,6131.1
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,median/batch_cost/startup/warmup_steps,114
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,median/batch_cost/startup/warmup_passes,16.13
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,median/batch_cost/startup/compile_ms/ddgi/trace,34.5
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,median/batch_cost/startup/compile_ms/ddgi/blend (subgroups),23.8
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,median/batch_cost/startup/compile_ms/ddgi/write,20.6
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,median/batch_cost/startup/compile_ms/ddgi/census,21.2
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,median/batch_cost/budget2ms/budget_ms,2
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,median/batch_cost/budget2ms/timed_frames,479
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,median/batch_cost/budget2ms/update_ms_median,2.0838
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,median/batch_cost/budget2ms/update_ms_mean,2.4486
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,median/batch_cost/budget2ms/update_ms_p05,0.3615
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,median/batch_cost/budget2ms/update_ms_p95,5.2081
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,median/batch_cost/budget2ms/update_ms_max,13.0007
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,median/batch_cost/budget2ms/share_within_10pct,0.098
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,median/batch_cost/budget2ms/census_ms_median,0.0041
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,median/batch_cost/budget2ms/probes_median,20
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,median/batch_cost/budget2ms/probes_p05,9
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,median/batch_cost/budget2ms/probes_p95,42
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,median/batch_cost/budget2ms/settle_first_ms,3.628
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,median/batch_cost/budget2ms/settle_max_ms,5.6361
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,median/batch_cost/budget2ms/settle_first_within_frame,14
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,median/runs,3
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,bistro-exterior,median/runs,3
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,all,note/set,3
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,all,note/sm_clock_mhz,1755
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,all,note/sm_clock_min_mhz,915
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,all,note/sm_clock_max_mhz,2025
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,all,note/mem_clock_mhz,7151
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,run1/batch_cost/probes_in_volume,1728
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,run1/batch_cost/startup/probes,1728
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,run1/batch_cost/startup/load_files_ms,414.3
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,run1/batch_cost/startup/scene_shown_from_load_ms,414.3
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,run1/batch_cost/startup/prepare_ms,1553.5
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,run1/batch_cost/startup/scene_copy_cpu_ms,6.8
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,run1/batch_cost/startup/trees_ms,46.5
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,run1/batch_cost/startup/first_gi_step_from_load_ms,2033.6
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,run1/batch_cost/startup/first_gi_shown_from_load_ms,2339
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,run1/batch_cost/startup/first_pass_from_load_ms,2339
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,run1/batch_cost/startup/settled_from_load_ms,2447.5
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,run1/batch_cost/startup/first_gi_step_from_creation_ms,1619.3
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,run1/batch_cost/startup/first_gi_shown_from_creation_ms,1924.7
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,run1/batch_cost/startup/first_pass_from_creation_ms,1924.7
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,run1/batch_cost/startup/settled_from_creation_ms,2033.2
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,run1/batch_cost/startup/warmup_ms,426.1
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,run1/batch_cost/startup/warmup_steps,16
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,run1/batch_cost/startup/warmup_passes,16
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,run1/batch_cost/startup/compile_ms/ddgi/trace,1545.1
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,run1/batch_cost/startup/compile_ms/sky SH projection,1109.4
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,run1/batch_cost/startup/compile_ms/ddgi/blend (subgroups),493.1
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,run1/batch_cost/startup/compile_ms/trace batch closest,322.3
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,run1/batch_cost/startup/compile_ms/trace batch any,279.4
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,run1/batch_cost/startup/compile_ms/top level refit bvhRefitClimb,244.5
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,run2/batch_cost/probes_in_volume,1728
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,run2/batch_cost/startup/probes,1728
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,run2/batch_cost/startup/load_files_ms,458.1
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,run2/batch_cost/startup/scene_shown_from_load_ms,458.1
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,run2/batch_cost/startup/prepare_ms,1710.9
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,run2/batch_cost/startup/scene_copy_cpu_ms,8.3
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,run2/batch_cost/startup/trees_ms,45.6
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,run2/batch_cost/startup/first_gi_step_from_load_ms,2243.2
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,run2/batch_cost/startup/first_gi_shown_from_load_ms,2581.9
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,run2/batch_cost/startup/first_pass_from_load_ms,2581.9
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,run2/batch_cost/startup/settled_from_load_ms,2645.1
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,run2/batch_cost/startup/first_gi_step_from_creation_ms,1785.1
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,run2/batch_cost/startup/first_gi_shown_from_creation_ms,2123.8
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,run2/batch_cost/startup/first_pass_from_creation_ms,2123.8
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,run2/batch_cost/startup/settled_from_creation_ms,2187
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,run2/batch_cost/startup/warmup_ms,422
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,run2/batch_cost/startup/warmup_steps,16
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,run2/batch_cost/startup/warmup_passes,16
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,run2/batch_cost/startup/compile_ms/ddgi/trace,1696.3
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,run2/batch_cost/startup/compile_ms/sky SH projection,1206.3
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,run2/batch_cost/startup/compile_ms/ddgi/blend (subgroups),511.5
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,run2/batch_cost/startup/compile_ms/trace batch closest,331.4
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,run2/batch_cost/startup/compile_ms/trace batch any,288.3
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,run2/batch_cost/startup/compile_ms/top level refit bvhRefitClimb,262.3
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,run3/batch_cost/probes_in_volume,1728
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,run3/batch_cost/startup/probes,1728
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,run3/batch_cost/startup/load_files_ms,455.2
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,run3/batch_cost/startup/scene_shown_from_load_ms,455.2
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,run3/batch_cost/startup/prepare_ms,1524.6
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,run3/batch_cost/startup/scene_copy_cpu_ms,10.3
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,run3/batch_cost/startup/trees_ms,56.6
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,run3/batch_cost/startup/first_gi_step_from_load_ms,2058.2
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,run3/batch_cost/startup/first_gi_shown_from_load_ms,2334.8
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,run3/batch_cost/startup/first_pass_from_load_ms,2334.8
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,run3/batch_cost/startup/settled_from_load_ms,2393.1
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,run3/batch_cost/startup/first_gi_step_from_creation_ms,1603
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,run3/batch_cost/startup/first_gi_shown_from_creation_ms,1879.6
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,run3/batch_cost/startup/first_pass_from_creation_ms,1879.6
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,run3/batch_cost/startup/settled_from_creation_ms,1937.9
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,run3/batch_cost/startup/warmup_ms,346.1
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,run3/batch_cost/startup/warmup_steps,16
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,run3/batch_cost/startup/warmup_passes,16
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,run3/batch_cost/startup/compile_ms/ddgi/trace,1510.8
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,run3/batch_cost/startup/compile_ms/sky SH projection,909.2
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,run3/batch_cost/startup/compile_ms/ddgi/blend (subgroups),485
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,run3/batch_cost/startup/compile_ms/trace batch closest,308.2
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,run3/batch_cost/startup/compile_ms/top level refit bvhRefitClimb,285.1
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,run3/batch_cost/startup/compile_ms/trace batch any,264.3
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,median/batch_cost/probes_in_volume,1728
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,median/batch_cost/startup/probes,1728
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,median/batch_cost/startup/load_files_ms,455.2
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,median/batch_cost/startup/scene_shown_from_load_ms,455.2
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,median/batch_cost/startup/prepare_ms,1553.5
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,median/batch_cost/startup/scene_copy_cpu_ms,8.3
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,median/batch_cost/startup/trees_ms,46.5
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,median/batch_cost/startup/first_gi_step_from_load_ms,2058.2
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,median/batch_cost/startup/first_gi_shown_from_load_ms,2339
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,median/batch_cost/startup/first_pass_from_load_ms,2339
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,median/batch_cost/startup/settled_from_load_ms,2447.5
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,median/batch_cost/startup/first_gi_step_from_creation_ms,1619.3
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,median/batch_cost/startup/first_gi_shown_from_creation_ms,1924.7
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,median/batch_cost/startup/first_pass_from_creation_ms,1924.7
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,median/batch_cost/startup/settled_from_creation_ms,2033.2
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,median/batch_cost/startup/warmup_ms,422
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,median/batch_cost/startup/warmup_steps,16
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,median/batch_cost/startup/warmup_passes,16
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,median/batch_cost/startup/compile_ms/ddgi/trace,1545.1
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,median/batch_cost/startup/compile_ms/sky SH projection,1109.4
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,median/batch_cost/startup/compile_ms/ddgi/blend (subgroups),493.1
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,median/batch_cost/startup/compile_ms/trace batch closest,322.3
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,median/batch_cost/startup/compile_ms/trace batch any,279.4
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,median/batch_cost/startup/compile_ms/top level refit bvhRefitClimb,262.3
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box,median/runs,3
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,all,note/set,4
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,all,note/sm_clock_mhz,1710
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,all,note/sm_clock_min_mhz,1567
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,all,note/sm_clock_max_mhz,1800
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,all,note/mem_clock_mhz,7151
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,run1/batch_cost/probes_in_volume,1071
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,run1/batch_cost/startup/probes,1071
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,run1/batch_cost/startup/load_files_ms,325.4
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,run1/batch_cost/startup/scene_shown_from_load_ms,325.4
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,run1/batch_cost/startup/prepare_ms,1648.1
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,run1/batch_cost/startup/scene_copy_cpu_ms,9.4
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,run1/batch_cost/startup/trees_ms,41.7
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,run1/batch_cost/startup/first_gi_step_from_load_ms,2054.6
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,run1/batch_cost/startup/first_gi_shown_from_load_ms,2233.3
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,run1/batch_cost/startup/first_pass_from_load_ms,2233.3
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,run1/batch_cost/startup/settled_from_load_ms,2308.1
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,run1/batch_cost/startup/first_gi_step_from_creation_ms,1729.2
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,run1/batch_cost/startup/first_gi_shown_from_creation_ms,1907.9
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,run1/batch_cost/startup/first_pass_from_creation_ms,1907.9
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,run1/batch_cost/startup/settled_from_creation_ms,1982.7
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,run1/batch_cost/startup/warmup_ms,283.2
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,run1/batch_cost/startup/warmup_steps,16
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,run1/batch_cost/startup/warmup_passes,16
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,run1/batch_cost/startup/compile_ms/ddgi/trace,1633.2
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,run1/batch_cost/startup/compile_ms/sky SH projection,1206.1
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,run1/batch_cost/startup/compile_ms/ddgi/blend (subgroups),498
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,run1/batch_cost/startup/compile_ms/trace batch closest,315.5
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,run1/batch_cost/startup/compile_ms/trace batch any,286.1
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,run1/batch_cost/startup/compile_ms/top level refit bvhRefitClimb,259.6
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,run2/batch_cost/probes_in_volume,1071
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,run2/batch_cost/startup/probes,1071
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,run2/batch_cost/startup/load_files_ms,348.2
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,run2/batch_cost/startup/scene_shown_from_load_ms,348.2
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,run2/batch_cost/startup/prepare_ms,1639.1
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,run2/batch_cost/startup/scene_copy_cpu_ms,9.5
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,run2/batch_cost/startup/trees_ms,52.1
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,run2/batch_cost/startup/first_gi_step_from_load_ms,2059.1
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,run2/batch_cost/startup/first_gi_shown_from_load_ms,2333.3
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,run2/batch_cost/startup/first_pass_from_load_ms,2333.3
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,run2/batch_cost/startup/settled_from_load_ms,2410.3
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,run2/batch_cost/startup/first_gi_step_from_creation_ms,1710.9
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,run2/batch_cost/startup/first_gi_shown_from_creation_ms,1985.1
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,run2/batch_cost/startup/first_pass_from_creation_ms,1985.1
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,run2/batch_cost/startup/settled_from_creation_ms,2062.1
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,run2/batch_cost/startup/warmup_ms,361.3
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,run2/batch_cost/startup/warmup_steps,16
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,run2/batch_cost/startup/warmup_passes,16
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,run2/batch_cost/startup/compile_ms/ddgi/trace,1627.6
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,run2/batch_cost/startup/compile_ms/sky SH projection,1094.2
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,run2/batch_cost/startup/compile_ms/ddgi/blend (subgroups),466.9
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,run2/batch_cost/startup/compile_ms/top level refit bvhRefitClimb,283.7
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,run2/batch_cost/startup/compile_ms/trace batch closest,262.1
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,run2/batch_cost/startup/compile_ms/trace batch any,242.1
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,run3/batch_cost/probes_in_volume,1071
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,run3/batch_cost/startup/probes,1071
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,run3/batch_cost/startup/load_files_ms,337.8
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,run3/batch_cost/startup/scene_shown_from_load_ms,337.8
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,run3/batch_cost/startup/prepare_ms,1707
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,run3/batch_cost/startup/scene_copy_cpu_ms,11.2
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,run3/batch_cost/startup/trees_ms,49.2
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,run3/batch_cost/startup/first_gi_step_from_load_ms,2114.3
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,run3/batch_cost/startup/first_gi_shown_from_load_ms,2331.2
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,run3/batch_cost/startup/first_pass_from_load_ms,2331.2
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,run3/batch_cost/startup/settled_from_load_ms,2413.9
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,run3/batch_cost/startup/first_gi_step_from_creation_ms,1776.5
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,run3/batch_cost/startup/first_gi_shown_from_creation_ms,1993.4
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,run3/batch_cost/startup/first_pass_from_creation_ms,1993.4
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,run3/batch_cost/startup/settled_from_creation_ms,2076.1
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,run3/batch_cost/startup/warmup_ms,308.4
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,run3/batch_cost/startup/warmup_steps,16
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,run3/batch_cost/startup/warmup_passes,16
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,run3/batch_cost/startup/compile_ms/ddgi/trace,1688.9
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,run3/batch_cost/startup/compile_ms/sky SH projection,1094.7
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,run3/batch_cost/startup/compile_ms/ddgi/blend (subgroups),526.9
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,run3/batch_cost/startup/compile_ms/trace batch closest,309.8
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,run3/batch_cost/startup/compile_ms/trace batch any,273.9
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,run3/batch_cost/startup/compile_ms/top level refit bvhRefitClimb,262.7
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,median/batch_cost/probes_in_volume,1071
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,median/batch_cost/startup/probes,1071
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,median/batch_cost/startup/load_files_ms,337.8
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,median/batch_cost/startup/scene_shown_from_load_ms,337.8
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,median/batch_cost/startup/prepare_ms,1648.1
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,median/batch_cost/startup/scene_copy_cpu_ms,9.5
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,median/batch_cost/startup/trees_ms,49.2
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,median/batch_cost/startup/first_gi_step_from_load_ms,2059.1
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,median/batch_cost/startup/first_gi_shown_from_load_ms,2331.2
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,median/batch_cost/startup/first_pass_from_load_ms,2331.2
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,median/batch_cost/startup/settled_from_load_ms,2410.3
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,median/batch_cost/startup/first_gi_step_from_creation_ms,1729.2
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,median/batch_cost/startup/first_gi_shown_from_creation_ms,1985.1
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,median/batch_cost/startup/first_pass_from_creation_ms,1985.1
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,median/batch_cost/startup/settled_from_creation_ms,2062.1
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,median/batch_cost/startup/warmup_ms,308.4
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,median/batch_cost/startup/warmup_steps,16
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,median/batch_cost/startup/warmup_passes,16
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,median/batch_cost/startup/compile_ms/ddgi/trace,1633.2
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,median/batch_cost/startup/compile_ms/sky SH projection,1094.7
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,median/batch_cost/startup/compile_ms/ddgi/blend (subgroups),498
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,median/batch_cost/startup/compile_ms/trace batch closest,309.8
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,median/batch_cost/startup/compile_ms/trace batch any,273.9
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,median/batch_cost/startup/compile_ms/top level refit bvhRefitClimb,262.7
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,two-room,median/runs,3
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,all,note/set,4
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,all,note/sm_clock_mhz,1710
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,all,note/sm_clock_min_mhz,1567
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,all,note/sm_clock_max_mhz,1800
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,all,note/mem_clock_mhz,7151
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/probes_in_volume,19425
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/startup/probes,19425
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/startup/load_files_ms,4658.3
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/startup/scene_shown_from_load_ms,4658.3
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/startup/prepare_ms,1041.3
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/startup/scene_copy_cpu_ms,1205.5
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/startup/trees_ms,3225.5
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/startup/first_gi_step_from_load_ms,10196.7
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/startup/first_gi_shown_from_load_ms,10801.4
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/startup/first_pass_from_load_ms,10955.8
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/startup/settled_from_load_ms,13312.9
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/startup/first_gi_step_from_creation_ms,5538.4
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/startup/first_gi_shown_from_creation_ms,6143.1
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/startup/first_pass_from_creation_ms,6297.5
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/startup/settled_from_creation_ms,8654.6
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/startup/warmup_ms,3181.8
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/startup/warmup_steps,76
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/startup/warmup_passes,16.03
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/startup/compile_ms/ddgi/trace,1027.9
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/startup/compile_ms/sky SH projection,658.5
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/startup/compile_ms/ddgi/blend (subgroups),416.9
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/startup/compile_ms/top level refit bvhRefitClimb,227.6
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/startup/compile_ms/trace batch closest,218.1
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run1/batch_cost/startup/compile_ms/trace batch any,187.7
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/probes_in_volume,19425
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/startup/probes,19425
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/startup/load_files_ms,4012.5
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/startup/scene_shown_from_load_ms,4012.5
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/startup/prepare_ms,1337.3
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/startup/scene_copy_cpu_ms,1187.9
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/startup/trees_ms,3326.8
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/startup/first_gi_step_from_load_ms,9962.8
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/startup/first_gi_shown_from_load_ms,10680.3
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/startup/first_pass_from_load_ms,10830.5
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/startup/settled_from_load_ms,12879.6
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/startup/first_gi_step_from_creation_ms,5950.3
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/startup/first_gi_shown_from_creation_ms,6667.8
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/startup/first_pass_from_creation_ms,6818
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/startup/settled_from_creation_ms,8867.1
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/startup/warmup_ms,3014.8
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/startup/warmup_steps,76
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/startup/warmup_passes,16.03
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/startup/compile_ms/ddgi/trace,1327.6
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/startup/compile_ms/sky SH projection,929.9
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/startup/compile_ms/ddgi/blend (subgroups),437.6
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/startup/compile_ms/trace batch closest,274.2
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/startup/compile_ms/trace batch any,237
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run2/batch_cost/startup/compile_ms/top level refit bvhRefitClimb,230.1
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/probes_in_volume,19425
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/startup/probes,19425
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/startup/load_files_ms,4159.4
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/startup/scene_shown_from_load_ms,4159.4
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/startup/prepare_ms,1188
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/startup/scene_copy_cpu_ms,1284
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/startup/trees_ms,3403.4
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/startup/first_gi_step_from_load_ms,10085
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/startup/first_gi_shown_from_load_ms,10820.1
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/startup/first_pass_from_load_ms,11017.8
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/startup/settled_from_load_ms,13066.9
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/startup/first_gi_step_from_creation_ms,5925.6
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/startup/first_gi_shown_from_creation_ms,6660.7
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/startup/first_pass_from_creation_ms,6858.4
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/startup/settled_from_creation_ms,8907.5
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/startup/warmup_ms,3031.4
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/startup/warmup_steps,76
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/startup/warmup_passes,16.03
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/startup/compile_ms/ddgi/trace,1177.5
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/startup/compile_ms/sky SH projection,826.5
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/startup/compile_ms/ddgi/blend (subgroups),464.6
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/startup/compile_ms/trace batch closest,271.3
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/startup/compile_ms/trace batch any,253.1
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,run3/batch_cost/startup/compile_ms/top level refit bvhRefitClimb,239.3
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,median/batch_cost/probes_in_volume,19425
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,median/batch_cost/startup/probes,19425
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,median/batch_cost/startup/load_files_ms,4159.4
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,median/batch_cost/startup/scene_shown_from_load_ms,4159.4
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,median/batch_cost/startup/prepare_ms,1188
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,median/batch_cost/startup/scene_copy_cpu_ms,1205.5
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,median/batch_cost/startup/trees_ms,3326.8
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,median/batch_cost/startup/first_gi_step_from_load_ms,10085
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,median/batch_cost/startup/first_gi_shown_from_load_ms,10801.4
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,median/batch_cost/startup/first_pass_from_load_ms,10955.8
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,median/batch_cost/startup/settled_from_load_ms,13066.9
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,median/batch_cost/startup/first_gi_step_from_creation_ms,5925.6
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,median/batch_cost/startup/first_gi_shown_from_creation_ms,6660.7
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,median/batch_cost/startup/first_pass_from_creation_ms,6818
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,median/batch_cost/startup/settled_from_creation_ms,8867.1
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,median/batch_cost/startup/warmup_ms,3031.4
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,median/batch_cost/startup/warmup_steps,76
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,median/batch_cost/startup/warmup_passes,16.03
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,median/batch_cost/startup/compile_ms/ddgi/trace,1177.5
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,median/batch_cost/startup/compile_ms/sky SH projection,826.5
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,median/batch_cost/startup/compile_ms/ddgi/blend (subgroups),437.6
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,median/batch_cost/startup/compile_ms/top level refit bvhRefitClimb,230.1
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,median/batch_cost/startup/compile_ms/trace batch closest,271.3
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,median/batch_cost/startup/compile_ms/trace batch any,237
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,sponza,median/runs,3
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,all,note/set,4
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,all,note/sm_clock_mhz,1710
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,all,note/sm_clock_min_mhz,1567
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,all,note/sm_clock_max_mhz,1800
+2026-11-05,a121726-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,all,note/mem_clock_mhz,7151
