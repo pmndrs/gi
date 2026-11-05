@@ -19,48 +19,12 @@
  * done in well under a minute.
  */
 
-import { existsSync, readFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
 import { createTinyBvhBuilder, type GpuLayoutMeshBvh, type TinyBvhBuilder } from '../../packages/bvh/src/index.ts';
 import type { MeshBvh } from '../../packages/ddgi-core/src/platform/trace/mesh-bvh.ts';
 import { buildMeshBvhFromTopology } from '../../packages/ddgi-core/src/platform/trace/mesh-bvh-topology.ts';
-import type { ModelPart, SceneManifest } from '../../scenes/src/manifest.ts';
-import { extractGltfGeometry, parseGlb, type BenchMeshGeometry, type GltfJson } from '../gpu/pages/trace-bench/gltf-geometry.ts';
+import { readSceneMeshes } from './scene-meshes.ts';
 
-const REPOSITORY_ROOT = resolve(import.meta.dirname, '..', '..');
 const DEFAULT_SCENES = ['sponza', 'bistro-exterior', 'bistro-interior'];
-/** Folders searched for downloaded models, in order (as the trace bench does). */
-const DOWNLOAD_FOLDERS = ['assets/downloads', 'assets/downloads.bak'];
-
-function readManifest(sceneId: string): SceneManifest {
-    const file = join(REPOSITORY_ROOT, 'scenes', 'manifests', `${sceneId}.json`);
-    if (!existsSync(file)) throw new Error(`no manifest ${file}`);
-    return JSON.parse(readFileSync(file, 'utf8')) as SceneManifest;
-}
-
-function findModelFile(part: ModelPart): string {
-    for (const folder of DOWNLOAD_FOLDERS) {
-        const file = join(REPOSITORY_ROOT, folder, part.asset, part.path);
-        if (existsSync(file)) return file;
-    }
-    throw new Error(`model ${part.asset}/${part.path} not found; run "pnpm assets:fetch --only ${part.asset}"`);
-}
-
-/** Every mesh of a model file, in object space (instances don't matter here). */
-function readMeshes(file: string): BenchMeshGeometry[] {
-    if (file.toLowerCase().endsWith('.glb')) {
-        const bytes = readFileSync(file);
-        const { gltf, binary } = parseGlb(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
-        if (!binary) throw new Error(`${file} has no binary chunk`);
-        return extractGltfGeometry(gltf, [binary]).meshes;
-    }
-    const gltf = JSON.parse(readFileSync(file, 'utf8')) as GltfJson & { buffers?: { uri?: string }[] };
-    const buffers = (gltf.buffers ?? []).map((buffer) => {
-        if (!buffer.uri || buffer.uri.startsWith('data:')) throw new Error(`${file}: only external buffers are read`);
-        return new Uint8Array(readFileSync(join(dirname(file), decodeURIComponent(buffer.uri))));
-    });
-    return extractGltfGeometry(gltf, buffers).meshes;
-}
 
 function sameBytes(a: ArrayBuffer | ArrayBufferView, b: ArrayBuffer | ArrayBufferView): boolean {
     const bytesOf = (data: ArrayBuffer | ArrayBufferView) =>
@@ -89,19 +53,15 @@ interface SceneResult {
 }
 
 function checkScene(tinyBvh: TinyBvhBuilder, sceneId: string): SceneResult {
-    const parts = readManifest(sceneId).parts.filter((part): part is ModelPart => part.kind === 'model');
-    if (parts.length === 0) throw new Error(`${sceneId} has no model parts`);
     const result: SceneResult = { meshes: 0, triangles: 0, identical: 0, differing: [] };
-    for (const part of parts) {
-        readMeshes(findModelFile(part)).forEach((mesh, index) => {
-            const fromJavaScript = buildMeshBvhFromTopology(mesh, tinyBvh.build(mesh).topology);
-            const fromWasm = tinyBvh.buildLayout(mesh).layout;
-            const difference = firstDifference(fromWasm, fromJavaScript);
-            result.meshes++;
-            result.triangles += fromWasm.triangleCount;
-            if (difference === null) result.identical++;
-            else result.differing.push(`${part.path} mesh ${index}: ${difference}`);
-        });
+    for (const { name, geometry } of readSceneMeshes(sceneId)) {
+        const fromJavaScript = buildMeshBvhFromTopology(geometry, tinyBvh.build(geometry).topology);
+        const fromWasm = tinyBvh.buildLayout(geometry).layout;
+        const difference = firstDifference(fromWasm, fromJavaScript);
+        result.meshes++;
+        result.triangles += fromWasm.triangleCount;
+        if (difference === null) result.identical++;
+        else result.differing.push(`${name}: ${difference}`);
     }
     return result;
 }

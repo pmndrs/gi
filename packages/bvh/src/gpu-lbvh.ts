@@ -82,11 +82,11 @@ import type { TinyBvhInput } from './tinybvh.ts';
 export const LBVH_MORTON_BITS = 30;
 
 /** Buffer usages and the map mode; the globals don't exist in Node, where tests import this file. */
-const USAGE = { MAP_READ: 0x1, COPY_SRC: 0x4, COPY_DST: 0x8, UNIFORM: 0x40, STORAGE: 0x80, INDIRECT: 0x100 } as const;
-const MAP_MODE_READ = 0x1;
+export const USAGE = { MAP_READ: 0x1, COPY_SRC: 0x4, COPY_DST: 0x8, UNIFORM: 0x40, STORAGE: 0x80, INDIRECT: 0x100 } as const;
+export const MAP_MODE_READ = 0x1;
 
 /** Uniform blocks sit 256 bytes apart: the default `minUniformBufferOffsetAlignment`. */
-const UNIFORM_STRIDE = 256;
+export const UNIFORM_STRIDE = 256;
 
 /** The biggest per-triangle (or per-inner-node) share of any one batch buffer: the climb's scratch, 76 bytes. */
 const LARGEST_BYTES_PER_TRIANGLE = Math.max((LBVH_SCRATCH_NODE_WORDS + LBVH_STATE_WORDS) * 4, GPU_LAYOUT_NODE_BYTES, GPU_LAYOUT_TRIANGLE_BYTES);
@@ -217,7 +217,7 @@ const KERNEL_BINDINGS: Record<LbvhKernel, readonly BindingName[]> = {
     lbvhTriangles: ['positions', 'indices', 'flags', 'values', 'outTriangles', 'params', 'tables'],
 };
 
-function isBufferGeometry(geometry: GpuLbvhGeometry): geometry is GpuLbvhBufferGeometry {
+export function isBufferGeometry(geometry: GpuLbvhGeometry): geometry is GpuLbvhBufferGeometry {
     return 'positionBuffer' in geometry;
 }
 
@@ -227,7 +227,7 @@ export function gpuLbvhTriangleCount(geometry: GpuLbvhGeometry): number {
     return entries / 3;
 }
 
-function checkOptions(options: GpuLbvhOptions): Required<GpuLbvhOptions> {
+export function checkOptions(options: GpuLbvhOptions): Required<GpuLbvhOptions> {
     const maxLeaf = options.maxLeafPrimitives ?? GPU_LAYOUT_MAX_LEAF_PRIMITIVES;
     if (!Number.isInteger(maxLeaf) || maxLeaf < 1 || maxLeaf > GPU_LAYOUT_MAX_LEAF_PRIMITIVES) {
         throw new RangeError(`maxLeafPrimitives must be an integer from 1 to ${GPU_LAYOUT_MAX_LEAF_PRIMITIVES}, got ${maxLeaf}`);
@@ -238,7 +238,7 @@ function checkOptions(options: GpuLbvhOptions): Required<GpuLbvhOptions> {
     return { maxLeafPrimitives: maxLeaf, traversalCost, intersectionCost };
 }
 
-function checkGeometry(geometry: GpuLbvhGeometry, index: number): void {
+export function checkGeometry(geometry: GpuLbvhGeometry, index: number): void {
     const where = `mesh ${index}`;
     const triangles = gpuLbvhTriangleCount(geometry);
     if (isBufferGeometry(geometry)) {
@@ -262,12 +262,12 @@ function checkGeometry(geometry: GpuLbvhGeometry, index: number): void {
 }
 
 /** Bytes one buffer of this device may hold and bind. */
-function bufferLimit(device: GPUDevice): number {
+export function bufferLimit(device: GPUDevice): number {
     return Math.min(device.limits.maxStorageBufferBindingSize, device.limits.maxBufferSize);
 }
 
 /** Bytes of vertex positions a geometry needs in a batch's position buffer. */
-function positionBytes(geometry: GpuLbvhGeometry): number {
+export function positionBytes(geometry: GpuLbvhGeometry): number {
     if (!isBufferGeometry(geometry)) return geometry.positions.byteLength;
     return ((geometry.vertexCount - 1) * (geometry.positionStrideFloats ?? 3) + 3) * 4;
 }
@@ -277,6 +277,20 @@ function positionBytes(geometry: GpuLbvhGeometry): number {
  * A mesh too big for any batch comes back in `tooBig`; callers build it on the CPU.
  */
 export function planGpuLbvhBatches(device: GPUDevice, geometries: readonly GpuLbvhGeometry[]): { batches: number[][]; tooBig: number[] } {
+    return planMeshBatches(device, geometries, LARGEST_BYTES_PER_TRIANGLE, GPU_LAYOUT_MAX_TRIANGLES);
+}
+
+/**
+ * The planner of {@link planGpuLbvhBatches} for any GPU builder: its largest
+ * buffer holds `bytesPerTriangle` per triangle, and a mesh of more than
+ * `maxMeshTriangles` triangles is too big for it whatever the device.
+ */
+export function planMeshBatches(
+    device: GPUDevice,
+    geometries: readonly GpuLbvhGeometry[],
+    bytesPerTriangle: number,
+    maxMeshTriangles: number,
+): { batches: number[][]; tooBig: number[] } {
     const limit = bufferLimit(device);
     const batches: number[][] = [];
     const tooBig: number[] = [];
@@ -286,11 +300,11 @@ export function planGpuLbvhBatches(device: GPUDevice, geometries: readonly GpuLb
     geometries.forEach((geometry, index) => {
         const meshTriangles = Math.max(1, gpuLbvhTriangleCount(geometry));
         const meshPositions = positionBytes(geometry);
-        if (meshTriangles * LARGEST_BYTES_PER_TRIANGLE > limit || meshPositions > limit) {
+        if (meshTriangles > maxMeshTriangles || meshTriangles * bytesPerTriangle > limit || meshPositions > limit) {
             tooBig.push(index);
             return;
         }
-        if ((triangles + meshTriangles) * LARGEST_BYTES_PER_TRIANGLE > limit || positions + meshPositions > limit) {
+        if ((triangles + meshTriangles) * bytesPerTriangle > limit || positions + meshPositions > limit) {
             batches.push(current);
             current = [];
             triangles = 0;
@@ -385,50 +399,54 @@ export class GpuLbvhBuilder {
     }
 
     /** Copies every usable tree of a batch back into CPU memory (one readback), each exactly as tinybvh's `buildLayout` returns one. */
-    async readLayouts(trees: GpuLbvhTrees): Promise<(GpuLayoutMeshBvh | null)[]> {
-        const device = this.device;
-        let nodeEnd = 0;
-        let triangleEnd = 0;
-        for (const mesh of trees.meshes) {
-            nodeEnd = Math.max(nodeEnd, mesh.nodeOffset + mesh.nodeCount);
-            triangleEnd = Math.max(triangleEnd, mesh.triangleOffset + mesh.triangleCount);
-        }
-        const nodeBytes = nodeEnd * GPU_LAYOUT_NODE_BYTES;
-        const triangleBytes = triangleEnd * GPU_LAYOUT_TRIANGLE_BYTES;
-        const parentBytes = nodeEnd * 4;
-        const readback = device.createBuffer({ label: `${this.label} readback`, size: nodeBytes + triangleBytes + parentBytes, usage: USAGE.MAP_READ | USAGE.COPY_DST });
-        try {
-            const encoder = device.createCommandEncoder({ label: `${this.label} readback` });
-            encoder.copyBufferToBuffer(trees.nodes, 0, readback, 0, nodeBytes);
-            encoder.copyBufferToBuffer(trees.triangles, 0, readback, nodeBytes, triangleBytes);
-            encoder.copyBufferToBuffer(trees.parents, 0, readback, nodeBytes + triangleBytes, parentBytes);
-            device.queue.submit([encoder.finish()]);
-            await readback.mapAsync(MAP_MODE_READ);
-            const bytes = readback.getMappedRange();
-            return trees.meshes.map((mesh) => {
-                if (mesh.problem) return null;
-                const nodeStart = mesh.nodeOffset * GPU_LAYOUT_NODE_BYTES;
-                const triangleStart = nodeBytes + mesh.triangleOffset * GPU_LAYOUT_TRIANGLE_BYTES;
-                const parentStart = nodeBytes + triangleBytes + mesh.nodeOffset * 4;
-                return {
-                    nodes: bytes.slice(nodeStart, nodeStart + mesh.nodeCount * GPU_LAYOUT_NODE_BYTES),
-                    triangles: bytes.slice(triangleStart, triangleStart + mesh.triangleCount * GPU_LAYOUT_TRIANGLE_BYTES),
-                    parents: new Uint32Array(bytes.slice(parentStart, parentStart + mesh.nodeCount * 4)),
-                    nodeCount: mesh.nodeCount,
-                    triangleCount: mesh.triangleCount,
-                    maxDepth: mesh.maxDepth,
-                    leafCount: mesh.leafCount,
-                    bounds: mesh.bounds.slice(),
-                };
-            });
-        } finally {
-            readback.destroy();
-        }
+    readLayouts(trees: GpuLbvhTrees): Promise<(GpuLayoutMeshBvh | null)[]> {
+        return readTreeLayouts(this.device, trees, this.label);
+    }
+}
+
+/** Copies every usable tree in shared GPU buffers back into CPU memory, with one readback. Any GPU builder's trees. */
+export async function readTreeLayouts(device: GPUDevice, trees: GpuLbvhTrees, label: string): Promise<(GpuLayoutMeshBvh | null)[]> {
+    let nodeEnd = 0;
+    let triangleEnd = 0;
+    for (const mesh of trees.meshes) {
+        nodeEnd = Math.max(nodeEnd, mesh.nodeOffset + mesh.nodeCount);
+        triangleEnd = Math.max(triangleEnd, mesh.triangleOffset + mesh.triangleCount);
+    }
+    const nodeBytes = nodeEnd * GPU_LAYOUT_NODE_BYTES;
+    const triangleBytes = triangleEnd * GPU_LAYOUT_TRIANGLE_BYTES;
+    const parentBytes = nodeEnd * 4;
+    const readback = device.createBuffer({ label: `${label} readback`, size: nodeBytes + triangleBytes + parentBytes, usage: USAGE.MAP_READ | USAGE.COPY_DST });
+    try {
+        const encoder = device.createCommandEncoder({ label: `${label} readback` });
+        encoder.copyBufferToBuffer(trees.nodes, 0, readback, 0, nodeBytes);
+        encoder.copyBufferToBuffer(trees.triangles, 0, readback, nodeBytes, triangleBytes);
+        encoder.copyBufferToBuffer(trees.parents, 0, readback, nodeBytes + triangleBytes, parentBytes);
+        device.queue.submit([encoder.finish()]);
+        await readback.mapAsync(MAP_MODE_READ);
+        const bytes = readback.getMappedRange();
+        return trees.meshes.map((mesh) => {
+            if (mesh.problem) return null;
+            const nodeStart = mesh.nodeOffset * GPU_LAYOUT_NODE_BYTES;
+            const triangleStart = nodeBytes + mesh.triangleOffset * GPU_LAYOUT_TRIANGLE_BYTES;
+            const parentStart = nodeBytes + triangleBytes + mesh.nodeOffset * 4;
+            return {
+                nodes: bytes.slice(nodeStart, nodeStart + mesh.nodeCount * GPU_LAYOUT_NODE_BYTES),
+                triangles: bytes.slice(triangleStart, triangleStart + mesh.triangleCount * GPU_LAYOUT_TRIANGLE_BYTES),
+                parents: new Uint32Array(bytes.slice(parentStart, parentStart + mesh.nodeCount * 4)),
+                nodeCount: mesh.nodeCount,
+                triangleCount: mesh.triangleCount,
+                maxDepth: mesh.maxDepth,
+                leafCount: mesh.leafCount,
+                bounds: mesh.bounds.slice(),
+            };
+        });
+    } finally {
+        readback.destroy();
     }
 }
 
 /** Where one mesh sits in a batch's buffers. */
-interface MeshPlacement {
+export interface MeshPlacement {
     readonly geometry: GpuLbvhGeometry;
     readonly triangleStart: number;
     readonly triangleCount: number;
@@ -447,16 +465,16 @@ interface MeshPlacement {
 }
 
 /** Rounds up to a multiple of 4 bytes, where buffer copies and bindings need their offsets and sizes. */
-const align4 = (bytes: number): number => Math.ceil(bytes / 4) * 4;
+export const align4 = (bytes: number): number => Math.ceil(bytes / 4) * 4;
 
 /** Index bytes a mesh's block in a batch's indices holds. */
-function indexBytes(mesh: Pick<MeshPlacement, 'indexFormat' | 'indexSkip' | 'triangleCount'>): number {
+export function indexBytes(mesh: Pick<MeshPlacement, 'indexFormat' | 'indexSkip' | 'triangleCount'>): number {
     const bytesPerIndex = mesh.indexFormat === LBVH_INDEX_FORMAT.uint16 ? 2 : mesh.indexFormat === LBVH_INDEX_FORMAT.uint32 ? 4 : 0;
     return (mesh.indexSkip + mesh.triangleCount * 3) * bytesPerIndex;
 }
 
 /** Lays the meshes out one after another in every batch buffer. */
-function placeMeshes(geometries: readonly GpuLbvhGeometry[]): MeshPlacement[] {
+export function placeMeshes(geometries: readonly GpuLbvhGeometry[]): MeshPlacement[] {
     let triangleStart = 0;
     let innerStart = 0;
     let positionByteStart = 0;
@@ -508,7 +526,7 @@ function placeMeshes(geometries: readonly GpuLbvhGeometry[]): MeshPlacement[] {
 }
 
 /** The mesh table, the workgroup tiles and the sort's tiles, in one array, and where each part starts. */
-function buildTables(meshes: readonly MeshPlacement[]): {
+export function buildTables(meshes: readonly MeshPlacement[]): {
     tables: Uint32Array<ArrayBuffer>;
     tilesOffset: number;
     tileCount: number;
@@ -622,7 +640,7 @@ export class GpuLbvhBatch {
             rank: make('inner-node rank', (innerTotal + 1) * 4, storage),
         };
         device.queue.writeBuffer(scratch.tables, 0, tables);
-        this.uploadCpuGeometry();
+        uploadBatchGeometry(device.queue, this.meshes, this.buffers);
 
         const passes = radixPassCount(LBVH_MORTON_BITS);
         const rankScanRecord = 1 + passes + 1;
@@ -693,6 +711,8 @@ export class GpuLbvhBatch {
             LBVH_MORTON_BITS,
             `${label} sort`,
         );
+        // The climb reads the sorted codes and triangles from buffers a.
+        if (!this.sort.resultInA) throw new Error(`a ${LBVH_MORTON_BITS}-bit sort must end in buffers a`);
         this.rankScan = createScanBindGroups(
             device,
             sortPipelines.scan,
@@ -720,7 +740,7 @@ export class GpuLbvhBatch {
      */
     encode(encoder: GPUCommandEncoder, timestampWrites?: GPUComputePassTimestampWrites, stageTimestamps?: (stage: LbvhStage) => GPUComputePassTimestampWrites): void {
         if (this.destroyed) throw new Error('@pmndrs/bvh: the batch was destroyed');
-        this.copyGpuGeometry(encoder);
+        copyBatchGeometry(encoder, this.meshes, this.buffers);
         const maxPerDimension = this.device.limits.maxComputeWorkgroupsPerDimension;
         const shared: GPUComputePassEncoder | null = stageTimestamps ? null : encoder.beginComputePass({ label: this.label, timestampWrites });
         const stage = (name: LbvhStage, record: (pass: GPUComputePassEncoder) => void): void => {
@@ -811,59 +831,64 @@ export class GpuLbvhBatch {
             this.buffers.outParents.destroy();
         }
     }
+}
 
-    /** Writes CPU geometry into the batch's buffers, once. */
-    private uploadCpuGeometry(): void {
-        const queue = this.device.queue;
-        for (const mesh of this.meshes) {
-            const geometry = mesh.geometry;
-            if (isBufferGeometry(geometry)) continue;
-            queue.writeBuffer(this.buffers.positions, mesh.positionByteStart, geometry.positions.buffer as ArrayBuffer, geometry.positions.byteOffset, geometry.positions.byteLength);
-            const { indices, triangleFlags } = geometry;
-            if (indices) {
-                // writeBuffer copies whole words; a 16-bit index list of odd length gets one padding index.
-                let data: Uint16Array | Uint32Array = indices;
-                if (data instanceof Uint16Array && data.length % 2 === 1) {
-                    const padded = new Uint16Array(data.length + 1);
-                    padded.set(data);
-                    data = padded;
-                }
-                queue.writeBuffer(this.buffers.indices, mesh.indexByteStart, data.buffer as ArrayBuffer, data.byteOffset, data.byteLength);
+/** The buffers a batch's geometry goes into: every mesh's vertices, indices and flags, one after another. */
+export interface BatchGeometryBuffers {
+    readonly positions: GPUBuffer;
+    readonly indices: GPUBuffer;
+    readonly flags: GPUBuffer;
+}
+
+/** Writes the CPU geometry of a batch into its buffers, once, when the batch is made. */
+export function uploadBatchGeometry(queue: GPUQueue, meshes: readonly MeshPlacement[], buffers: BatchGeometryBuffers): void {
+    for (const mesh of meshes) {
+        const geometry = mesh.geometry;
+        if (isBufferGeometry(geometry)) continue;
+        queue.writeBuffer(buffers.positions, mesh.positionByteStart, geometry.positions.buffer as ArrayBuffer, geometry.positions.byteOffset, geometry.positions.byteLength);
+        const { indices, triangleFlags } = geometry;
+        if (indices) {
+            // writeBuffer copies whole words; a 16-bit index list of odd length gets one padding index.
+            let data: Uint16Array | Uint32Array = indices;
+            if (data instanceof Uint16Array && data.length % 2 === 1) {
+                const padded = new Uint16Array(data.length + 1);
+                padded.set(data);
+                data = padded;
             }
-            if (triangleFlags) {
-                const flags = triangleFlags.subarray(0, mesh.triangleCount);
-                queue.writeBuffer(this.buffers.flags, mesh.flagsWordStart * 4, flags.buffer as ArrayBuffer, flags.byteOffset, flags.byteLength);
-            }
+            queue.writeBuffer(buffers.indices, mesh.indexByteStart, data.buffer as ArrayBuffer, data.byteOffset, data.byteLength);
         }
-    }
-
-    /** Records copies of GPU-buffer geometry into the batch's buffers: the vertices, indices and flags may change between builds. */
-    private copyGpuGeometry(encoder: GPUCommandEncoder): void {
-        for (const mesh of this.meshes) {
-            const geometry = mesh.geometry;
-            if (!isBufferGeometry(geometry)) continue;
-            const positionStart = (geometry.positionOffsetFloats ?? 0) * 4;
-            // Rounded up to whole words, within the buffer (its size was checked when the batch was made).
-            const positionSize = Math.min(align4(positionBytes(geometry)), geometry.positionBuffer.size - positionStart);
-            encoder.copyBufferToBuffer(geometry.positionBuffer, positionStart, this.buffers.positions, mesh.positionByteStart, positionSize);
-            if (geometry.indexBuffer) {
-                const bytesPerIndex = mesh.indexFormat === LBVH_INDEX_FORMAT.uint16 ? 2 : 4;
-                const indexStart = ((geometry.indexOffset ?? 0) - mesh.indexSkip) * bytesPerIndex;
-                const indexSize = Math.min(align4(indexBytes(mesh)), geometry.indexBuffer.size - indexStart);
-                encoder.copyBufferToBuffer(geometry.indexBuffer, indexStart, this.buffers.indices, mesh.indexByteStart, indexSize);
-            }
-            if (geometry.triangleFlagsBuffer) {
-                encoder.copyBufferToBuffer(geometry.triangleFlagsBuffer, 0, this.buffers.flags, mesh.flagsWordStart * 4, mesh.triangleCount * 4);
-            }
+        if (triangleFlags) {
+            const flags = triangleFlags.subarray(0, mesh.triangleCount);
+            queue.writeBuffer(buffers.flags, mesh.flagsWordStart * 4, flags.buffer as ArrayBuffer, flags.byteOffset, flags.byteLength);
         }
     }
 }
 
-/** A mesh's stats words as its tree, checked. */
-function meshResult(mesh: MeshPlacement, index: number, stats: Uint32Array): GpuLbvhMeshTree {
+/** Records copies of a batch's GPU-buffer geometry into its buffers: the vertices, indices and flags may change between builds. */
+export function copyBatchGeometry(encoder: GPUCommandEncoder, meshes: readonly MeshPlacement[], buffers: BatchGeometryBuffers): void {
+    for (const mesh of meshes) {
+        const geometry = mesh.geometry;
+        if (!isBufferGeometry(geometry)) continue;
+        const positionStart = (geometry.positionOffsetFloats ?? 0) * 4;
+        // Rounded up to whole words, within the buffer (its size was checked when the batch was made).
+        const positionSize = Math.min(align4(positionBytes(geometry)), geometry.positionBuffer.size - positionStart);
+        encoder.copyBufferToBuffer(geometry.positionBuffer, positionStart, buffers.positions, mesh.positionByteStart, positionSize);
+        if (geometry.indexBuffer) {
+            const bytesPerIndex = mesh.indexFormat === LBVH_INDEX_FORMAT.uint16 ? 2 : 4;
+            const indexStart = ((geometry.indexOffset ?? 0) - mesh.indexSkip) * bytesPerIndex;
+            const indexSize = Math.min(align4(indexBytes(mesh)), geometry.indexBuffer.size - indexStart);
+            encoder.copyBufferToBuffer(geometry.indexBuffer, indexStart, buffers.indices, mesh.indexByteStart, indexSize);
+        }
+        if (geometry.triangleFlagsBuffer) {
+            encoder.copyBufferToBuffer(geometry.triangleFlagsBuffer, 0, buffers.flags, mesh.flagsWordStart * 4, mesh.triangleCount * 4);
+        }
+    }
+}
+
+/** A mesh's stats words as its tree, checked; `problems` holds what the builder's own checks found. */
+export function meshResult(mesh: MeshPlacement, index: number, stats: Uint32Array, problems: string[] = []): GpuLbvhMeshTree {
     const floats = new Float32Array(stats.buffer, stats.byteOffset, stats.length);
     const nodeCount = stats[LBVH_STAT.nodeCount];
-    const problems: string[] = [];
     if (stats[LBVH_STAT.badIndices] > 0) problems.push(`${stats[LBVH_STAT.badIndices]} triangle corners name a vertex past the last (${mesh.vertexCount})`);
     if (stats[LBVH_STAT.incomplete] > 0) problems.push(`${stats[LBVH_STAT.incomplete]} handed-over words were still unwritten after the wait`);
     if (stats[LBVH_STAT.rootsFinished] !== 1) problems.push(`${stats[LBVH_STAT.rootsFinished]} threads finished the root, not 1`);

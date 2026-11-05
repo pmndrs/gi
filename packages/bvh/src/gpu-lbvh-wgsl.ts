@@ -144,6 +144,9 @@ export const LBVH_STAT = {
     rootsFinished: 18,
     /** Triangle corners that named a vertex past the end. Must be 0. */
     badIndices: 19,
+    /** The box around every triangle as order-preserving integers: min x, y, z, then max x, y, z (tinybvh's Morton codes, gpu-hploc.ts). */
+    meshMin: 20,
+    meshMax: 23,
 } as const;
 export const LBVH_STATS_WORDS = 32;
 export const LBVH_STATS_BYTES = LBVH_STATS_WORDS * 4;
@@ -182,12 +185,17 @@ export const LBVH_INDEX_FORMAT = { none: 0, uint16: 16, uint32: 32 } as const;
 const hex = (value: number): string => `0x${value.toString(16)}u`;
 
 export function lbvhWgsl(): string {
+    return `enable subgroups;
+${lbvhKernelsWgsl()}`;
+}
+
+/** The LBVH module without its `enable` line, for modules that build on its kernels (gpu-hploc-wgsl.ts). */
+export function lbvhKernelsWgsl(): string {
     const word = GPU_LAYOUT_NODE_WORD;
     const triangle = GPU_LAYOUT_TRIANGLE_WORD;
     const stat = LBVH_STAT;
     const mesh = LBVH_MESH;
-    return /* wgsl */ `enable subgroups;
-
+    return /* wgsl */ `
 struct LbvhParams {
     meshCount: u32,
     tileCount: u32,          // workgroups that have work: entries in the tile table
@@ -287,6 +295,8 @@ const LBVH_STAT_BOUNDS: u32 = ${stat.bounds}u;
 const LBVH_STAT_INCOMPLETE: u32 = ${stat.incomplete}u;
 const LBVH_STAT_ROOTS_FINISHED: u32 = ${stat.rootsFinished}u;
 const LBVH_STAT_BAD_INDICES: u32 = ${stat.badIndices}u;
+const LBVH_STAT_MESH_MIN: u32 = ${stat.meshMin}u;
+const LBVH_STAT_MESH_MAX: u32 = ${stat.meshMax}u;
 // The largest dispatch dimension every device allows.
 const LBVH_MAX_WORKGROUPS_PER_DIMENSION: u32 = 65535u;
 ${WORKGROUP_INDEX_WGSL}
@@ -428,14 +438,18 @@ fn lbvhStart(@builtin(global_invocation_id) id: vec3u) {
     }
     for (var axis = 0u; axis < 3u; axis += 1u) {
         atomicStore(&lbvhStats[lbvhStatWord(mesh, LBVH_STAT_CENTROID_MIN + axis)], 0xffffffffu);
+        atomicStore(&lbvhStats[lbvhStatWord(mesh, LBVH_STAT_MESH_MIN + axis)], 0xffffffffu);
     }
 }
 
-// ---- 2. Triangle boxes and the centroid bounds -------------------------------------------
+// ---- 2. Triangle boxes, the centroid bounds and the mesh box -------------------------------
 
 var<workgroup> lbvhGroupMin: array<atomic<u32>, 3>;
 // Workgroup memory starts at zero, which is already the smallest ordered value: only the minima need setting.
 var<workgroup> lbvhGroupMax: array<atomic<u32>, 3>;
+// The same for the triangles' boxes (the mesh box, which tinybvh's Morton codes use).
+var<workgroup> lbvhGroupBoxMin: array<atomic<u32>, 3>;
+var<workgroup> lbvhGroupBoxMax: array<atomic<u32>, 3>;
 
 @compute @workgroup_size(${LBVH_WORKGROUP_SIZE})
 fn lbvhBoxes(
@@ -448,6 +462,7 @@ fn lbvhBoxes(
     }
     if (localIndex < 3u) {
         atomicStore(&lbvhGroupMin[localIndex], 0xffffffffu);
+        atomicStore(&lbvhGroupBoxMin[localIndex], 0xffffffffu);
     }
     workgroupBarrier();
 
@@ -456,9 +471,9 @@ fn lbvhBoxes(
     let triangle = tile.first + localIndex;
     let hasTriangle = triangle < mesh.triangleCount;
     var centroid = vec3f(0.0);
+    var lower = vec3f(LBVH_FLOAT_MAX);
+    var upper = vec3f(-LBVH_FLOAT_MAX);
     if (hasTriangle) {
-        var lower = vec3f(LBVH_FLOAT_MAX);
-        var upper = vec3f(-LBVH_FLOAT_MAX);
         for (var corner = 0u; corner < 3u; corner += 1u) {
             var vertex = lbvhVertexOf(mesh, triangle, corner);
             if (vertex >= mesh.vertexCount) {
@@ -476,18 +491,25 @@ fn lbvhBoxes(
     }
 
     // Reduce in the subgroup, then the workgroup (one mesh), then one global atomic per axis and workgroup.
+    // (A thread without a triangle holds the empty box, which changes neither.)
     let lowest = subgroupMin(select(vec3f(LBVH_FLOAT_MAX), centroid, hasTriangle));
     let highest = subgroupMax(select(vec3f(-LBVH_FLOAT_MAX), centroid, hasTriangle));
+    let boxLowest = subgroupMin(lower);
+    let boxHighest = subgroupMax(upper);
     if (subgroupElect()) {
         for (var axis = 0u; axis < 3u; axis += 1u) {
             atomicMin(&lbvhGroupMin[axis], lbvhOrderedFromFloat(lowest[axis]));
             atomicMax(&lbvhGroupMax[axis], lbvhOrderedFromFloat(highest[axis]));
+            atomicMin(&lbvhGroupBoxMin[axis], lbvhOrderedFromFloat(boxLowest[axis]));
+            atomicMax(&lbvhGroupBoxMax[axis], lbvhOrderedFromFloat(boxHighest[axis]));
         }
     }
     workgroupBarrier();
     if (localIndex < 3u) {
         atomicMin(&lbvhStats[lbvhStatWord(mesh.index, LBVH_STAT_CENTROID_MIN + localIndex)], atomicLoad(&lbvhGroupMin[localIndex]));
         atomicMax(&lbvhStats[lbvhStatWord(mesh.index, LBVH_STAT_CENTROID_MAX + localIndex)], atomicLoad(&lbvhGroupMax[localIndex]));
+        atomicMin(&lbvhStats[lbvhStatWord(mesh.index, LBVH_STAT_MESH_MIN + localIndex)], atomicLoad(&lbvhGroupBoxMin[localIndex]));
+        atomicMax(&lbvhStats[lbvhStatWord(mesh.index, LBVH_STAT_MESH_MAX + localIndex)], atomicLoad(&lbvhGroupBoxMax[localIndex]));
     }
 }
 
@@ -1054,23 +1076,9 @@ fn lbvhFinish(@builtin(global_invocation_id) id: vec3u) {
     }
 }
 
-// Triangles in tree order (sorted order): three corners as they are, the original index and the flags.
-@compute @workgroup_size(${LBVH_WORKGROUP_SIZE})
-fn lbvhTriangles(
-    @builtin(workgroup_id) workgroup: vec3u,
-    @builtin(num_workgroups) groups: vec3u,
-    @builtin(local_invocation_index) localIndex: u32,
-) {
-    if (!lbvhHasTile(workgroup, groups)) {
-        return;
-    }
-    let tile = lbvhTile(workgroup, groups);
-    let mesh = tile.mesh;
-    let position = tile.first + localIndex;
-    if (position >= mesh.triangleCount) {
-        return;
-    }
-    let triangle = lbvhValues[mesh.triangleStart + position];
+// The triangle record of the mesh's triangle 'triangle' at its tree position 'position':
+// three corners as they are, the original index and the flags.
+fn lbvhWriteTriangle(mesh: LbvhMesh, triangle: u32, position: u32) {
     let base = (mesh.triangleStart + position) * LBVH_TRIANGLE_WORDS;
     for (var corner = 0u; corner < 3u; corner += 1u) {
         // A bad index was counted by lbvhBoxes (and the build refused); clamping only keeps the read in range.
@@ -1088,6 +1096,25 @@ fn lbvhTriangles(
     lbvhOutTriangles[base + LBVH_TRIANGLE_ORIGINAL_INDEX] = triangle;
     lbvhOutTriangles[base + LBVH_TRIANGLE_FLAGS] = flags;
     lbvhOutTriangles[base + LBVH_TRIANGLE_PADDING] = 0u;
+}
+
+// Triangles in tree order, which for the LBVH is sorted order.
+@compute @workgroup_size(${LBVH_WORKGROUP_SIZE})
+fn lbvhTriangles(
+    @builtin(workgroup_id) workgroup: vec3u,
+    @builtin(num_workgroups) groups: vec3u,
+    @builtin(local_invocation_index) localIndex: u32,
+) {
+    if (!lbvhHasTile(workgroup, groups)) {
+        return;
+    }
+    let tile = lbvhTile(workgroup, groups);
+    let mesh = tile.mesh;
+    let position = tile.first + localIndex;
+    if (position >= mesh.triangleCount) {
+        return;
+    }
+    lbvhWriteTriangle(mesh, lbvhValues[mesh.triangleStart + position], position);
 }
 `;
 }

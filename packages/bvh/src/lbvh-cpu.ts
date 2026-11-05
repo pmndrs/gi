@@ -285,7 +285,8 @@ export function buildLbvhOnCpu(geometry: TinyBvhInput, options: GpuLbvhOptions =
     return buildLbvhFromSorted(geometry, boxes, sorted, options);
 }
 
-function singleTriangleLayout(geometry: TinyBvhInput, box: Float32Array): GpuLayoutMeshBvh {
+/** The layout of a one-triangle mesh: a root holding the triangle on the left and nothing on the right. */
+export function singleTriangleLayout(geometry: TinyBvhInput, box: Float32Array): GpuLayoutMeshBvh {
     const nodes = new ArrayBuffer(GPU_LAYOUT_NODE_BYTES);
     const words = new Uint32Array(nodes);
     const floats = new Float32Array(nodes);
@@ -311,7 +312,7 @@ function singleTriangleLayout(geometry: TinyBvhInput, box: Float32Array): GpuLay
 }
 
 /** Triangles in tree order (`order[position]` is the triangle there), 48 bytes each, corners as they are. */
-function packTrianglesInOrder(geometry: TinyBvhInput, order: Uint32Array): ArrayBuffer {
+export function packTrianglesInOrder(geometry: TinyBvhInput, order: Uint32Array): ArrayBuffer {
     const { positions, indices, triangleFlags } = geometry;
     const buffer = new ArrayBuffer(order.length * GPU_LAYOUT_TRIANGLE_BYTES);
     const words = new Uint32Array(buffer);
