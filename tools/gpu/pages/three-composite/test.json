@@ -1,0 +1,4 @@
+{
+    "description": "T1.14: the GI composite on three's pass() and mrt() against GI per fragment on the Cornell scenes at the stored camera (mean <= 0.5%, p95 <= 2%); transparent objects keep GI; whether GI's frame can run from a light node's render-time update and still land before the render.",
+    "timeoutMs": 600000
+}

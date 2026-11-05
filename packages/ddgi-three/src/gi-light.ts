@@ -52,11 +52,21 @@
  *   lighting model never adds diffuse light from `scene.environment` (it only
  *   uses the environment as a reflection map), so GI is not doubled there.
  * - Basic materials are unlit and ignore lights, GI included.
+ *
+ * **In a composited pass** (composite.ts, T1.14): when the pass carries the
+ * composite's mark and the surface is one the composite lights
+ * (`compositeTakesGI`, composite-mark.ts), the node evaluates no irradiance.
+ * It still claims the light-probe slot where GI covers, with zero, so a
+ * lower-priority probe light doesn't add its light under the composite's,
+ * and the environment-diffuse workaround runs as above. Coverage is then the
+ * only per-fragment cost, and only when `computeCoverage` is on. Every other
+ * surface, and every unmarked pass, builds exactly as before.
  */
 
 import { AnalyticLightNode, Light, NodeUpdateType, Vector4, type ExternalTexture, type Node, type NodeBuilder } from 'three/webgpu';
 import { If, INFINITY, cameraPosition, float, normalWorld, positionWorld, renderGroup, screenUV, texture, texture3D, uniform, vec3, wgsl, wgslFn } from 'three/tsl';
 import type { ShadingModule, ShadingParameter } from '@pmndrs/ddgi-core';
+import { compositeTakesGI } from './composite-mark.ts';
 import { wrapGpuTexture } from './external-texture.ts';
 
 /** Where several probe-like lights cover a fragment, the highest priority wins. `LightProbeGrid` defaults to 0. */
@@ -156,22 +166,70 @@ function wrapTexture(gpuTexture: GPUTexture, parameter: TextureParameter, sample
     return wrapGpuTexture(gpuTexture, { dimension: parameter.dimension, sampleType: parameter.sampleType, filtering: sampler?.filtering, addressMode: sampler?.addressMode });
 }
 
+/** Name of the generated WGSL coverage-only entry, for composited surfaces. */
+const COVERAGE_ENTRY_NAME = 'giThreeCoverage';
+
+/**
+ * Coverage alone, for a composited surface (file comment): the composite
+ * adds the irradiance, so per fragment only the workaround and the probe
+ * slot need coverage, and only when it's asked for (1 otherwise, as in
+ * {@link entryWgsl}).
+ */
+export function coverageEntryWgsl(shading: ShadingModule): string {
+    const declarations = shading.parameters.map((parameter) => `    ${parameter.name}: ${wgslParameterType(parameter)},`).join('\n');
+    const resources = shading.parameters.map((parameter) => parameter.name).join(', ');
+    return /* wgsl */ `fn ${COVERAGE_ENTRY_NAME}(
+    position: vec3f,
+    normal: vec3f,
+    computeCoverage: f32,
+${declarations}
+) -> f32 {
+    var coverage = 1.0;
+    if (computeCoverage > 0.5) {
+        coverage = giCoverage(position, normal, ${resources});
+    }
+    return coverage;
+}`;
+}
+
 type EntryFunction = ReturnType<typeof wgslFn>;
+
+interface SharedEntries {
+    readonly version: number;
+    /** The module's WGSL, one node, included by every entry so a shader declares it once. */
+    readonly code: ReturnType<typeof wgsl>;
+    readonly entry: EntryFunction;
+    /** Made on first use: only composited builds call it. */
+    coverageEntry: EntryFunction | null;
+}
 
 /**
  * One function node (and one copy of the module's WGSL) per module version,
- * shared by every GI light. Each code node is emitted once per shader, so two
- * lights with their own copies would declare the module's constants and
- * functions twice in one shader, which WGSL refuses.
+ * shared by every GI light and the composite. Each code node is emitted once
+ * per shader, so two lights with their own copies would declare the module's
+ * constants and functions twice in one shader, which WGSL refuses.
  */
-const entries = new WeakMap<ShadingModule, { readonly version: number; readonly entry: EntryFunction }>();
+const entries = new WeakMap<ShadingModule, SharedEntries>();
 
-function sharedEntry(shading: ShadingModule): EntryFunction {
+function sharedEntries(shading: ShadingModule): SharedEntries {
     const cached = entries.get(shading);
-    if (cached && cached.version === shading.version) return cached.entry;
-    const entry = wgslFn(entryWgsl(shading), [wgsl(shading.code)]);
-    entries.set(shading, { version: shading.version, entry });
-    return entry;
+    if (cached && cached.version === shading.version) return cached;
+    const code = wgsl(shading.code);
+    const shared: SharedEntries = { version: shading.version, code, entry: wgslFn(entryWgsl(shading), [code]), coverageEntry: null };
+    entries.set(shading, shared);
+    return shared;
+}
+
+/** The irradiance-and-coverage function of {@link entryWgsl} for this module version. */
+export function sharedEntry(shading: ShadingModule): EntryFunction {
+    return sharedEntries(shading).entry;
+}
+
+/** The coverage-only function of {@link coverageEntryWgsl} for this module version. */
+function sharedCoverageEntry(shading: ShadingModule): EntryFunction {
+    const shared = sharedEntries(shading);
+    shared.coverageEntry ??= wgslFn(coverageEntryWgsl(shading), [shared.code]);
+    return shared.coverageEntry;
 }
 
 type TextureNode = ReturnType<typeof texture>;
@@ -181,16 +239,67 @@ function vec4Uniform(value: Vector4) {
 }
 type Vec4Uniform = ReturnType<typeof vec4Uniform>;
 
-/** The nodes made for one module version, shared by every material that builds the light. */
-interface BuiltModule {
+/**
+ * The three nodes for one module version's resources: its textures wrapped
+ * as `ExternalTexture`s and its `vec4f` values as `renderGroup` uniforms.
+ * Made by the GI light's node and by the composite (composite.ts), each for
+ * its own shaders; `refresh` once per render keeps them current.
+ */
+export class ShadingModuleNodes {
     readonly module: ShadingModule;
     readonly version: number;
-    readonly entry: EntryFunction;
     /** Each filterable texture's sampler description, by texture name. */
-    readonly samplers: Map<string, SamplerParameter>;
-    readonly textureNodes: Map<string, TextureNode>;
-    readonly gpuTextures: Map<string, GPUTexture>;
-    readonly uniforms: Map<string, Vec4Uniform>;
+    private readonly samplers = new Map<string, SamplerParameter>();
+    private readonly textureNodes = new Map<string, TextureNode>();
+    private readonly gpuTextures = new Map<string, GPUTexture>();
+    private readonly uniforms = new Map<string, Vec4Uniform>();
+
+    constructor(shading: ShadingModule) {
+        this.module = shading;
+        this.version = shading.version;
+        for (const parameter of shading.parameters) if (parameter.kind === 'sampler') this.samplers.set(parameter.texture, parameter);
+        for (const parameter of shading.parameters) {
+            if (parameter.kind === 'texture') {
+                const gpuTexture = parameter.texture();
+                const wrapped = wrapTexture(gpuTexture, parameter, this.samplers.get(parameter.name));
+                this.textureNodes.set(parameter.name, (parameter.dimension === '3d' ? texture3D(wrapped) : texture(wrapped)) as TextureNode);
+                this.gpuTextures.set(parameter.name, gpuTexture);
+            } else if (parameter.kind === 'vec4f') {
+                this.uniforms.set(parameter.name, vec4Uniform(new Vector4().fromArray(parameter.value())));
+            }
+        }
+    }
+
+    /** Whether these nodes still fit the module (a new version may have another shape). */
+    fits(shading: ShadingModule): boolean {
+        return shading === this.module && shading.version === this.version;
+    }
+
+    /** The module's resources by parameter name, as the entry functions take them. */
+    resources(): Record<string, Node> {
+        const resources: Record<string, Node> = {};
+        for (const parameter of this.module.parameters) {
+            // A sampler parameter is fed from its texture's node, which carries the sampler (NOTES).
+            const name = parameter.kind === 'sampler' ? parameter.texture : parameter.name;
+            resources[parameter.name] = (parameter.kind === 'vec4f' ? this.uniforms.get(name) : this.textureNodes.get(name)) as unknown as Node;
+        }
+        return resources;
+    }
+
+    /** The module's current uniform values, and a new wrap for any texture the technique reallocated. */
+    refresh(): void {
+        for (const parameter of this.module.parameters) {
+            if (parameter.kind === 'vec4f') {
+                this.uniforms.get(parameter.name)!.value.fromArray(parameter.value());
+            } else if (parameter.kind === 'texture') {
+                // Reallocated by the technique (a new prepare): wrap the new texture; three rebinds when the node's value changes.
+                const gpuTexture = parameter.texture();
+                if (gpuTexture === this.gpuTextures.get(parameter.name)) continue;
+                this.textureNodes.get(parameter.name)!.value = wrapTexture(gpuTexture, parameter, this.samplers.get(parameter.name));
+                this.gpuTextures.set(parameter.name, gpuTexture);
+            }
+        }
+    }
 }
 
 class GILightNode extends AnalyticLightNode<GILight> {
@@ -198,7 +307,7 @@ class GILightNode extends AnalyticLightNode<GILight> {
         return 'GILightNode';
     }
 
-    private built: BuiltModule | null = null;
+    private built: ShadingModuleNodes | null = null;
     private readonly intensityUniform = uniform(1).setGroup(renderGroup);
     private readonly priorityUniform = uniform(GI_LIGHT_PRIORITY).setGroup(renderGroup);
     private readonly computeCoverageUniform = uniform(1).setGroup(renderGroup);
@@ -208,27 +317,11 @@ class GILightNode extends AnalyticLightNode<GILight> {
         this.updateType = NodeUpdateType.RENDER;
     }
 
-    /** Makes the texture, uniform and function nodes for the light's current module, unless they're current. */
-    private buildModule(): BuiltModule {
+    /** Makes the texture and uniform nodes for the light's current module, unless they're current. */
+    private buildModule(): ShadingModuleNodes {
         const shading = this.light!.shading;
         if (this.built && this.built.version === shading.version) return this.built;
-        const samplers = new Map<string, SamplerParameter>();
-        for (const parameter of shading.parameters) if (parameter.kind === 'sampler') samplers.set(parameter.texture, parameter);
-        const textureNodes = new Map<string, TextureNode>();
-        const gpuTextures = new Map<string, GPUTexture>();
-        const uniforms = new Map<string, Vec4Uniform>();
-        for (const parameter of shading.parameters) {
-            if (parameter.kind === 'texture') {
-                const gpuTexture = parameter.texture();
-                const wrapped = wrapTexture(gpuTexture, parameter, samplers.get(parameter.name));
-                textureNodes.set(parameter.name, (parameter.dimension === '3d' ? texture3D(wrapped) : texture(wrapped)) as TextureNode);
-                gpuTextures.set(parameter.name, gpuTexture);
-            } else if (parameter.kind === 'vec4f') {
-                uniforms.set(parameter.name, vec4Uniform(new Vector4().fromArray(parameter.value())));
-            }
-        }
-        const entry = sharedEntry(shading);
-        this.built = { module: shading, version: shading.version, entry, samplers, textureNodes, gpuTextures, uniforms };
+        this.built = new ShadingModuleNodes(shading);
         return this.built;
     }
 
@@ -241,17 +334,7 @@ class GILightNode extends AnalyticLightNode<GILight> {
         const built = this.built;
         // A module that changed shape no longer fits these nodes; ThreeGI replaces this light with a new one.
         if (!built || built.version !== light.shading.version) return undefined;
-        for (const parameter of built.module.parameters) {
-            if (parameter.kind === 'vec4f') {
-                built.uniforms.get(parameter.name)!.value.fromArray(parameter.value());
-            } else if (parameter.kind === 'texture') {
-                // Reallocated by the technique (a new prepare): wrap the new texture; three rebinds when the node's value changes.
-                const gpuTexture = parameter.texture();
-                if (gpuTexture === built.gpuTextures.get(parameter.name)) continue;
-                built.textureNodes.get(parameter.name)!.value = wrapTexture(gpuTexture, parameter, built.samplers.get(parameter.name));
-                built.gpuTextures.set(parameter.name, gpuTexture);
-            }
-        }
+        built.refresh();
         return undefined;
     }
 
@@ -267,22 +350,30 @@ class GILightNode extends AnalyticLightNode<GILight> {
         // names start with gi/ddgi (platform rule), so ours start with `threeGi`.
         context.threeGiCoverage ||= float(0).toVar('threeGiCoverage');
 
-        const resources: Record<string, Node> = {};
-        for (const parameter of built.module.parameters) {
-            // A sampler parameter is fed from its texture's node, which carries the sampler (NOTES).
-            const name = parameter.kind === 'sampler' ? parameter.texture : parameter.name;
-            resources[parameter.name] = (parameter.kind === 'vec4f' ? built.uniforms.get(name) : built.textureNodes.get(name)) as unknown as Node;
+        if (compositeTakesGI(builder)) {
+            this.setupComposited(context, built);
+        } else {
+            this.setupPerFragment(context, built);
         }
+
+        if (light.replaceEnvironmentDiffuse) replaceEnvironmentDiffuse(context);
+        return undefined;
+    }
+
+    /** GI per fragment: irradiance (and coverage) from the module, into the probe slot. */
+    private setupPerFragment(context: LightingContext, built: ShadingModuleNodes): void {
+        const light = this.light!;
+        const entry = sharedEntry(built.module);
         // From the eye towards the point, as the shading module expects (ddgiSampleIrradiance's view bias).
         const viewDirection = positionWorld.sub(cameraPosition).normalize();
         const lighting = (
-            built.entry({
+            entry({
                 position: positionWorld,
                 normal: normalWorld,
                 viewDirection,
                 screenUV,
                 computeCoverage: this.computeCoverageUniform,
-                ...resources,
+                ...built.resources(),
             }) as unknown as Node<'vec4'>
         ).toVar('threeGiLighting');
         const coverage = lighting.w;
@@ -297,9 +388,33 @@ class GILightNode extends AnalyticLightNode<GILight> {
             // Only a light that replaces the environment's diffuse light says how much to remove.
             if (light.replaceEnvironmentDiffuse) context.threeGiCoverage!.assign(coverage.mul(this.intensityUniform.saturate()));
         });
+    }
 
-        if (light.replaceEnvironmentDiffuse) replaceEnvironmentDiffuse(context);
-        return undefined;
+    /**
+     * A composited surface (file comment): the composite adds the irradiance
+     * after the pass, so the slot is claimed with zero where GI covers, and
+     * only coverage is evaluated here (when asked for).
+     */
+    private setupComposited(context: LightingContext, built: ShadingModuleNodes): void {
+        const light = this.light!;
+        const coverage = (
+            sharedCoverageEntry(built.module)({
+                position: positionWorld,
+                normal: normalWorld,
+                computeCoverage: this.computeCoverageUniform,
+                ...built.resources(),
+            }) as unknown as Node<'float'>
+        ).toVar('threeGiCompositeCoverage');
+        const claims = this.priorityUniform
+            .greaterThanEqual(context.lightProbePriority!)
+            .and(coverage.greaterThan(0))
+            .and(this.intensityUniform.greaterThan(0));
+
+        If(claims, () => {
+            context.lightProbeIrradiance!.assign(vec3(0));
+            context.lightProbePriority!.assign(this.priorityUniform);
+            if (light.replaceEnvironmentDiffuse) context.threeGiCoverage!.assign(coverage.mul(this.intensityUniform.saturate()));
+        });
     }
 }
 
