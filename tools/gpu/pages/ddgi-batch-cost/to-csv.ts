@@ -3,7 +3,7 @@
  * Turns test-runner `--json` files from the `ddgi-batch-cost` page into rows
  * for `bench/results/timing.csv` (columns as in bench/results/README.md).
  *
- *   node tools/gpu/pages/ddgi-batch-cost/to-csv.ts <runner.json> [more.json ...] [--append] [--commit <hash>] [--browser <text>] [--clock-file <file>] [--set <n>]
+ *   node tools/gpu/pages/ddgi-batch-cost/to-csv.ts <runner.json> [more.json ...] [--append] [--commit <hash>] [--browser <text>] [--clock-file <file>] [--set <n>] [--note <metric>=<n>] [--include-failed]
  *
  * Several files of the same GPU are repeated runs: `run1/`, `run2/`, ... plus
  * `median/` rows. Metric names start with `batch_cost/`:
@@ -111,21 +111,31 @@ async function main(): Promise<void> {
     const { values, positionals } = parseArgs({
         args: process.argv.slice(2),
         allowPositionals: true,
-        options: { append: { type: 'boolean' }, commit: { type: 'string' }, browser: { type: 'string' }, 'clock-file': { type: 'string' }, set: { type: 'string' } },
+        options: { append: { type: 'boolean' }, commit: { type: 'string' }, browser: { type: 'string' }, 'clock-file': { type: 'string' }, set: { type: 'string' }, note: { type: 'string', multiple: true }, 'include-failed': { type: 'boolean' } },
     });
     if (positionals.length === 0) {
         console.error('Usage: node tools/gpu/pages/ddgi-batch-cost/to-csv.ts <runner.json> [more.json ...] [--append] [--commit <hash>] [--browser <text>] [--clock-file <file>] [--set <n>]');
         process.exit(2);
     }
     const clockNotes = clockNoteRowsFromOption(values['clock-file']);
-    const setNote: MetricRow[] = values.set === undefined ? [] : [{ scene: 'all', metric: 'note/set', value: Number(values.set) }];
+    // `--note quiet=1` becomes the row `note/quiet,1` (scene `all`).
+    const extraNotes: MetricRow[] = (values.note ?? []).map((note) => {
+        const [metric, value] = note.split('=');
+        if (!metric || value === undefined || !Number.isFinite(Number(value))) throw new Error(`--note needs <metric>=<number>, got "${note}"`);
+        return { scene: 'all', metric: `note/${metric}`, value: Number(value) };
+    });
+    const setNote: MetricRow[] = [...(values.set === undefined ? [] : [{ scene: 'all', metric: 'note/set', value: Number(values.set) }]), ...extraNotes];
+    let failedRuns = 0;
     const groups = new Map<string, { prefix: string[]; runs: MetricRow[][] }>();
     for (const file of positionals) {
         const summary = JSON.parse(await readFile(file, 'utf8')) as RunSummary;
         const device = deviceNameFromAdapter(summary.adapter);
         for (const page of summary.pages) {
             if (page.name !== 'ddgi-batch-cost') continue;
-            if (page.outcome !== 'pass') {
+            // The page fails when a budget isn't held, but its numbers are still the measurement: --include-failed keeps them
+            // and marks the group with note/page_failed (the number of runs that failed).
+            if (page.outcome !== 'pass' && values['include-failed']) failedRuns += 1;
+            else if (page.outcome !== 'pass') {
                 console.error(`skipping ${page.name} in ${file}: ${page.outcome}`);
                 continue;
             }
@@ -140,7 +150,7 @@ async function main(): Promise<void> {
     }
     const lines: string[] = [];
     for (const { prefix, runs } of groups.values()) {
-        const rows = [...(runs.length === 1 ? runs[0] : repeatedRunRows(runs)), ...setNote, ...(isNvidiaDeviceName(prefix[2]) ? clockNotes : [])];
+        const rows = [...(runs.length === 1 ? runs[0] : repeatedRunRows(runs)), ...setNote, ...(failedRuns > 0 ? [{ scene: 'all', metric: 'note/page_failed', value: failedRuns }] : []), ...(isNvidiaDeviceName(prefix[2]) ? clockNotes : [])];
         lines.push(...rows.map((row) => [...prefix, row.scene, row.metric, formatValue(row.value)].join(',')));
     }
     if (lines.length === 0) {

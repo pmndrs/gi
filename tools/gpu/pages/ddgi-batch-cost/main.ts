@@ -487,6 +487,13 @@ async function measureSteady(device: GPUDevice, scene: SceneUnderTest, units: nu
             frame_interval_ms_median: round(median(frameGaps), 2),
             update_ms_median: round(typical),
             update_ms_p95: round(percentile(samples.map((sample) => sample.total), 0.95)),
+            // Each pass on its own, for the 20-probe breakdown (T1.9).
+            trace_ms_median: round(median(samples.map((sample) => sample.trace))),
+            blend_ms_median: round(median(samples.map((sample) => sample.blend))),
+            write_ms_median: round(median(samples.map((sample) => sample.write))),
+            trace_ms_p95: round(percentile(samples.map((sample) => sample.trace), 0.95)),
+            blend_ms_p95: round(percentile(samples.map((sample) => sample.blend), 0.95)),
+            write_ms_p95: round(percentile(samples.map((sample) => sample.write), 0.95)),
             spike_count: spikes.length,
             spike_share: round(spikes.length / samples.length, 3),
             spike_extra_ms_median: round(median(spikes.map((spike) => spike.total)) - typical),

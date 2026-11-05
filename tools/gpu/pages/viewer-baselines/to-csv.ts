@@ -4,7 +4,11 @@
  * rows for `bench/results/baselines.csv` and prints a table.
  *
  *   pnpm test:gpu --filter viewer-baselines --gpu nvidia --json run.json
- *   node tools/gpu/pages/viewer-baselines/to-csv.ts run.json [--device "RTX 3060 Laptop"] [--append]
+ *   node tools/gpu/pages/viewer-baselines/to-csv.ts run1.json [run2.json ...] [--device "RTX 3060 Laptop"] [--append] [--note quiet=1] [--clock-file <file>]
+ *
+ * Several files are repeated runs: rows come out as `run1/`, `run2/`, ... plus
+ * `median/` rows, as for the other CSVs. `--clock-file` (or DDGI_CLOCK_FILE,
+ * which `bench-lock run` sets) adds the `note/sm_clock_mhz` rows on NVIDIA.
  *
  * Without `--append` it only prints. With it, rows are added to
  * `bench/results/baselines.csv` (columns as in bench/results/README.md).
@@ -27,6 +31,9 @@ import { execFileSync } from 'node:child_process';
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { parseArgs } from 'node:util';
+import { clockNoteRowsFromOption, isNvidiaDeviceName } from '../../clock-note.ts';
+import { formatValue, repeatedRunRows, type MetricRow } from '../trace-bench/csv-rows.ts';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..');
 const csvPath = join(repoRoot, 'bench', 'results', 'baselines.csv');
@@ -66,17 +73,28 @@ interface RunJson {
     pages: Array<{ name: string; outcome: string; data: PageData | null }>;
 }
 
-function parseArguments(argv: string[]): { file: string; device: string | null; append: boolean } {
-    let file: string | null = null;
-    let device: string | null = null;
-    let append = false;
-    for (let i = 0; i < argv.length; i++) {
-        if (argv[i] === '--device') device = argv[++i] ?? null;
-        else if (argv[i] === '--append') append = true;
-        else file = argv[i];
-    }
-    if (!file) throw new Error('usage: to-csv.ts <runner-json> [--device "<name>"] [--append]');
-    return { file, device, append };
+interface Options {
+    files: string[];
+    device: string | null;
+    append: boolean;
+    notes: MetricRow[];
+    clockFile: string | undefined;
+}
+
+function parseArguments(argv: string[]): Options {
+    const { values, positionals } = parseArgs({
+        args: argv,
+        allowPositionals: true,
+        options: { device: { type: 'string' }, append: { type: 'boolean' }, note: { type: 'string', multiple: true }, 'clock-file': { type: 'string' } },
+    });
+    if (positionals.length === 0) throw new Error('usage: to-csv.ts <runner-json> [more.json ...] [--device "<name>"] [--append] [--note <metric>=<number>] [--clock-file <file>]');
+    // `--note quiet=1` becomes the row `note/quiet,1` (scene `all`), as in the other CSVs.
+    const notes: MetricRow[] = (values.note ?? []).map((note) => {
+        const [metric, value] = note.split('=');
+        if (!metric || value === undefined || !Number.isFinite(Number(value))) throw new Error(`--note needs <metric>=<number>, got "${note}"`);
+        return { scene: 'all', metric: `note/${metric}`, value: Number(value) };
+    });
+    return { files: positionals, device: values.device ?? null, append: values.append ?? false, notes, clockFile: values['clock-file'] };
 }
 
 function defaultDeviceName(vendor: string): string {
@@ -106,25 +124,32 @@ function cellText(text: string): string {
     return text.replaceAll(',', ';').replaceAll('\n', ' ');
 }
 
-function csvRows(data: PageData, device: string): string[] {
-    const date = new Date().toISOString().slice(0, 10);
-    const prefix = `${date},${gitCommit()},${device},${browserName(data.userAgent)}`;
-    const out: string[] = [];
-    const add = (scene: string, metric: string, value: number | string, mayBeNegative = false) => {
-        if (typeof value === 'number' && (!Number.isFinite(value) || (value < 0 && !mayBeNegative))) {
+/**
+ * The page's numbers as rows (scene, metric, value) for one run. Failed
+ * measurements come back as text in `problems`: they are not numbers, so
+ * they stay out of the run1/median arithmetic.
+ */
+function metricRows(data: PageData): { rows: MetricRow[]; problems: Array<{ scene: string; metric: string; text: string }> } {
+    const rows: MetricRow[] = [];
+    const problems: Array<{ scene: string; metric: string; text: string }> = [];
+    const add = (scene: string, metric: string, value: number, mayBeNegative = false) => {
+        if (!Number.isFinite(value) || (value < 0 && !mayBeNegative)) {
             // baselines.ts never hands these out; refuse rather than write a number nobody should trust.
             throw new Error(`${scene} ${metric}: refusing to write ${value}`);
         }
-        out.push(`${prefix},${scene},${metric},${typeof value === 'number' ? Number(value.toFixed(3)) : cellText(value)}`);
+        rows.push({ scene, metric, value });
     };
+    // The view size goes into the file, so a 1440p run can be told from a 720p one.
+    add('all', 'view/width_px', data.options.width);
+    add('all', 'view/height_px', data.options.height);
     for (const row of data.rows) {
         const name = row.technique;
         // A failed measurement is recorded with its reason, never as a blank or a made-up number.
-        if (row.error) add(row.scene, `${name}_problem`, row.error);
+        if (row.error) problems.push({ scene: row.scene, metric: `${name}_problem`, text: row.error });
         for (const measurement of row.measurements) {
             const metric = `${name}_${measurement.name}`;
             if (measurement.value === null) {
-                add(row.scene, `${metric}_problem`, measurement.problem ?? 'failed without a reason');
+                problems.push({ scene: row.scene, metric: `${metric}_problem`, text: measurement.problem ?? 'failed without a reason' });
                 continue;
             }
             // Only a difference whose interval contains 0 may be negative (see baselines.ts).
@@ -143,7 +168,7 @@ function csvRows(data: PageData, device: string): string[] {
             if (typeof value === 'number' && Number.isFinite(value) && value >= 0) add(row.scene, `${name}_${key}`, value);
         }
     }
-    return out;
+    return { rows, problems };
 }
 
 /** A cell of the PROGRESS table: the value, marked when noisy, or "failed". */
@@ -185,17 +210,35 @@ function markdownTable(data: PageData, device: string): string {
     return lines.join('\n');
 }
 
-const { file, device: deviceOverride, append } = parseArguments(process.argv.slice(2));
-const run = JSON.parse(readFileSync(file, 'utf8')) as RunJson;
-const page = run.pages.find((candidate) => candidate.name === 'viewer-baselines');
-if (!page?.data) throw new Error(`${file} has no data for the viewer-baselines page (outcome: ${page?.outcome ?? 'page missing'}).`);
-if (page.outcome !== 'pass') console.log(`Note: the page did not pass (${page.outcome}); failed measurements are written as _problem rows.\n`);
-const device = deviceOverride ?? defaultDeviceName(page.data.adapter.vendor);
+const options = parseArguments(process.argv.slice(2));
+const pages: PageData[] = [];
+for (const file of options.files) {
+    const run = JSON.parse(readFileSync(file, 'utf8')) as RunJson;
+    const page = run.pages.find((candidate) => candidate.name === 'viewer-baselines');
+    if (!page?.data) throw new Error(`${file} has no data for the viewer-baselines page (outcome: ${page?.outcome ?? 'page missing'}).`);
+    if (page.outcome !== 'pass') console.log(`Note: the page did not pass in ${file} (${page.outcome}); failed measurements are written as _problem rows.\n`);
+    pages.push(page.data);
+}
+const device = options.device ?? defaultDeviceName(pages[0].adapter.vendor);
 
-console.log(markdownTable(page.data, device));
-if (append) {
+pages.forEach((data, index) => {
+    if (pages.length > 1) console.log(`\nrun ${index + 1}`);
+    console.log(markdownTable(data, device));
+});
+if (options.append) {
     if (!existsSync(csvPath)) writeFileSync(csvPath, `${CSV_HEADER}\n`);
-    const rows = csvRows(page.data, device);
-    appendFileSync(csvPath, `${rows.join('\n')}\n`);
-    console.log(`\nappended ${rows.length} rows to ${csvPath}`);
+    const perRun = pages.map(metricRows);
+    const rows: MetricRow[] = [
+        ...(perRun.length === 1 ? perRun[0].rows : repeatedRunRows(perRun.map((run) => run.rows))),
+        ...options.notes,
+        ...(isNvidiaDeviceName(device) ? clockNoteRowsFromOption(options.clockFile) : []),
+    ];
+    const date = new Date().toISOString().slice(0, 10);
+    const prefix = `${date},${gitCommit()},${device},${browserName(pages[0].userAgent)}`;
+    const lines = rows.map((row) => `${prefix},${row.scene},${row.metric},${formatValue(row.value)}`);
+    perRun.forEach((run, index) => {
+        for (const problem of run.problems) lines.push(`${prefix},${problem.scene},run${index + 1}/${problem.metric},${cellText(problem.text)}`);
+    });
+    appendFileSync(csvPath, `${lines.join('\n')}\n`);
+    console.log(`\nappended ${lines.length} rows to ${csvPath}`);
 }

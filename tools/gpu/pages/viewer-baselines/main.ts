@@ -13,6 +13,7 @@
  *   VITE_DDGI_ROUNDS=5             frame rounds (GI off and on, alternating)
  *   VITE_DDGI_FRAMES=20            frames timed per round and GI mode
  *   VITE_DDGI_BAKE_RUNS=3          repeats of each bake
+ *   VITE_DDGI_WIDTH=2560 VITE_DDGI_HEIGHT=1440   the view size (default 1280x720)
  *
  * DDGI's frame cost for T1.9 (GI on against off: GPU ms, frame p50 and p95):
  *   VITE_DDGI_SCENES=cornell-box,two-room,sponza VITE_DDGI_TECHNIQUES=none,ddgi pnpm test:gpu --filter viewer-baselines
@@ -73,6 +74,8 @@ try {
         frameRounds: countFromEnv(env.VITE_DDGI_ROUNDS, DEFAULT_BASELINE_OPTIONS.frameRounds),
         sampleFrames: countFromEnv(env.VITE_DDGI_FRAMES, DEFAULT_BASELINE_OPTIONS.sampleFrames),
         bakeRuns: countFromEnv(env.VITE_DDGI_BAKE_RUNS, DEFAULT_BASELINE_OPTIONS.bakeRuns),
+        width: countFromEnv(env.VITE_DDGI_WIDTH, DEFAULT_BASELINE_OPTIONS.width),
+        height: countFromEnv(env.VITE_DDGI_HEIGHT, DEFAULT_BASELINE_OPTIONS.height),
         log,
     });
     const failures = failedMeasurements(result);
