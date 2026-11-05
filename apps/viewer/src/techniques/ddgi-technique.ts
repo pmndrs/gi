@@ -23,10 +23,11 @@
  *     Then the platform's calibration (budget v2): frames with the
  *     millisecond budget, GPU-bound (two in flight, so the GPU never waits)
  *     and not paced by the display (at 60 Hz, or with every frame waited
- *     for, the GPU is partly idle and its clocks wander). It ends when the platform reports it calibrated and
- *     confirmed (about 30-160 burst frames, then 300 confirming frames), or
- *     after {@link CALIBRATION_MAX_STEPS}. "Start
- *     the probes over" runs it again (for after the scene changed).
+ *     for, the GPU is partly idle and its clocks wander). It ends when the
+ *     platform reports it calibrated and confirmed (about 20-170 burst
+ *     frames, then 300 confirming frames), or after
+ *     {@link CALIBRATION_MAX_STEPS}. "Start the probes over" runs it again
+ *     (for after the scene changed).
  *  4. **Ready:** the calibrated number of probes every frame, and the field
  *     keeps converging live.
  *
@@ -91,11 +92,14 @@ const WARMUP_STEPS_PER_BATCH = 4;
 
 /**
  * The calibration frames at the end of the warm-up stop after this many even
- * if the platform is still measuring: the longest burst seen on the test
- * scenes (about 160 frames) plus the 300 confirming frames, with room to
- * spare. The burst or its confirmation then finishes in normal frames.
+ * if the platform is still measuring. It covers the platform's own limits,
+ * which aren't part of the package's public surface, so they are copied here
+ * (`CALIBRATION` in packages/ddgi-core/src/platform/work-budget.ts): a burst
+ * gives up after `maxFrames` (400), and its confirmation ends after twice
+ * `confirmFrames` (2 × 300). 400 + 600 = 1,000. Bursts on the test scenes
+ * took 20-170 frames, then 300 to confirm.
  */
-const CALIBRATION_MAX_STEPS = 600;
+const CALIBRATION_MAX_STEPS = 1000;
 
 /** Calibration frames queued at once: the GPU never waits for the CPU between them (see the file comment). */
 const CALIBRATION_FRAMES_IN_FLIGHT = 2;

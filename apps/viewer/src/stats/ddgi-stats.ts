@@ -21,7 +21,7 @@ export interface DdgiBudgetStats {
     calibratedProbes: number | null;
     /** The fewest probes per frame (a full sweep within 4 s, at most twice the calibrated number); 0 when off. */
     floorProbes: number;
-    /** Fewer than calibrated: frames were late while the GPU was busy. */
+    /** Fewer than calibrated: frames were late. */
     steppedDown: boolean;
     /** The scene's shape changed since it was measured (the number stays until it is measured again). */
     stale: boolean;
@@ -84,7 +84,7 @@ function budgetLines(frame: DdgiFrameStats): StatsLine[] {
     } else if (budget.calibratedProbes === null) {
         reason = `${probes(frame.probesUpdated)} (no GPU timestamps to measure with)`;
     } else if (budget.steppedDown) {
-        reason = `${probes(frame.probesUpdated)}: slowed, frames are late with the GPU busy (${buys(budget.calibratedProbes)})`;
+        reason = `${probes(frame.probesUpdated)}: slowed, frames are late (${buys(budget.calibratedProbes)})`;
     } else if (budget.floorProbes > budget.calibratedProbes) {
         reason = `${probes(budget.floorProbes)}: the least for a full sweep in 4 s (${buys(budget.calibratedProbes)})`;
     } else {

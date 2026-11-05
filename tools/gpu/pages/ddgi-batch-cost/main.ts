@@ -491,13 +491,15 @@ async function measureBudget(device: GPUDevice, scene: SceneUnderTest, log: (lin
     assert(atBatch.length >= BUDGET_FRAMES / 2, `${scene.manifest.id}: only ${atBatch.length} timed frames at the batch of ${ran}`);
     const atCalibrated = atBatch;
     const probesAt60 = probesAt(scene, 60, calibrated);
-    const capacity = report?.calibration?.capacity ?? Number.POSITIVE_INFINITY;
+    // The most the technique can update in a frame: all its probes, or maxProbesPerFrame.
+    const techniqueMax = Math.min(scene.probeCount, scene.ddgi.settings.maxProbesPerFrame);
     const result = {
         budget_ms: BUDGET_MS,
         calibrated_probes: calibrated,
         probes_run: ran,
-        // Every probe the technique can update fits in the budget: no lower bound then.
-        all_probes_fit: calibrated >= capacity || ran < calibrated ? 1 : 0,
+        // Every probe the technique can update fits in the budget: no lower bound then. A batch
+        // that ran below the calibrated one because it stepped down doesn't count as that.
+        all_probes_fit: ran >= techniqueMax && calibrated >= techniqueMax ? 1 : 0,
         // The floor is above the calibrated batch: its cost is the floor's, not judged.
         floor_binds: ran > calibrated ? 1 : 0,
         frame_interval_ms_median: round(median(intervals), 3),

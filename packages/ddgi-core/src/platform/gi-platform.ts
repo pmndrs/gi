@@ -94,6 +94,11 @@ export class GIPlatformImpl implements GIPlatform {
     private readonly unitCosts = new UnitCostMeter();
     /** Each technique's units per frame: calibration, floor, saturation (work-budget.ts). */
     private readonly budgets = new Map<GITechnique, WorkBudget>();
+    /**
+     * A technique on this platform has finished a calibration: the host is past its start-up,
+     * so a budget made from now on (a technique added at runtime) runs its burst without filler.
+     */
+    private calibratedOnce = false;
     private readonly warnedMessages = new Set<string>();
     /** The `uncapturederror` listener, kept so `dispose` can remove it. */
     private readonly onUncapturedError: (event: Event) => void;
@@ -269,6 +274,7 @@ export class GIPlatformImpl implements GIPlatform {
                 const used = typeof reported === 'number' ? Math.min(reported, units) : units;
                 if (this.timer) this.unitCosts.handOut(this.frame, technique.id, used);
                 budget.record(units, used);
+                if (budget.report.calibration?.measured) this.calibratedOnce = true;
             }
         }
 
@@ -408,7 +414,7 @@ export class GIPlatformImpl implements GIPlatform {
     private budgetFor(technique: GITechnique): WorkBudget {
         let budget = this.budgets.get(technique);
         if (!budget) {
-            budget = new WorkBudget(technique);
+            budget = new WorkBudget(technique, { fillerAllowed: !this.calibratedOnce });
             this.budgets.set(technique, budget);
         }
         return budget;
@@ -444,6 +450,8 @@ function budgetCounters(report: BudgetReport): Record<string, number> {
     const counters: Record<string, number> = {
         'units this frame': report.units,
         calibrating: report.state === 'calibrating' ? 1 : 0,
+        // A millisecond budget without a calibration: no timings, or the burst gave up.
+        uncalibrated: report.state === 'not calibrated' ? 1 : 0,
         'floor units': report.floorUnits,
         'stepped down': report.steppedDown ? 1 : 0,
         'frames late': report.framesLate ? 1 : 0,

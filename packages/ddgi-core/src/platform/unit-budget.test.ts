@@ -69,6 +69,10 @@ interface SimulationOptions {
     readonly seed?: number;
     /** Called before each frame, for requests such as `recalibrate`. */
     readonly beforeFrame?: (frame: number, budget: WorkBudget) => void;
+    /** Frames whose timings never arrive (a lost read-back). */
+    readonly dropTimings?: (frame: number) => boolean;
+    /** A budget made by the test (options), instead of a new one. */
+    readonly workBudget?: WorkBudget;
 }
 
 interface Simulation {
@@ -87,7 +91,7 @@ interface Simulation {
  * with noise. The host's frame time can depend on this frame's DDGI work.
  */
 function simulate(options: SimulationOptions): Simulation {
-    const budget = new WorkBudget(options.technique);
+    const budget = options.workBudget ?? new WorkBudget(options.technique);
     const meter = new UnitCostMeter();
     const lag = options.lag ?? 3;
     const noiseShare = options.noise ?? 0.03;
@@ -111,7 +115,7 @@ function simulate(options: SimulationOptions): Simulation {
         budget.record(handed, used);
         const ms = used === 0 ? 0 : options.cost(used) * (options.clockFactor?.(frame) ?? 1) * noise();
         previousDdgiMs = ms;
-        pending.push({ frame, ms });
+        if (!options.dropTimings?.(frame)) pending.push({ frame, ms });
         while (pending.length > 0 && pending[0].frame <= frame - lag) {
             const arrived = pending.shift() as { frame: number; ms: number };
             for (const { sample } of meter.measure(arrived.frame, [{ name: 'ddgi/trace', gpuMs: arrived.ms }])) budget.addSample(sample);
@@ -231,13 +235,35 @@ describe('calibration on sustained frames (budget v2, after the review)', () => 
         expect(within(sponzaLike(report.calibratedUnits as number), 2, 0.1)).toBe(true);
     });
 
-    it('keeps the batch when the confirmation agrees, and waits for back-to-back frames to confirm at all', () => {
+    it('keeps the batch when the confirmation agrees; a host that leaves its loading screen ends it unconfirmed', () => {
         const agreed = simulate({ frames: 700, budget: () => ({ gpuMs: 2 }), cost: line, deltaTime: () => 0 });
         expect(agreed.budget.report.calibration?.confirmFactor).toBe(1);
-        // A 60 Hz host after the burst: nothing to confirm with, the batch stands.
+        // A 60 Hz host after the burst: nothing to confirm with. The confirmation ends (never stays
+        // open) and the batch stands.
         const live = simulate({ frames: 700, budget: () => ({ gpuMs: 2 }), cost: line, deltaTime: (frame) => (frame < 120 ? 0 : VSYNC_60) });
-        expect(live.budget.report.confirming).toBe(true);
+        expect(live.budget.report.confirming).toBe(false);
+        expect(live.budget.report.calibration?.confirmFactor).toBeUndefined();
         expect(unique(live.handed.slice(200))).toEqual([live.budget.report.calibratedUnits]);
+    });
+
+    it('ends the confirmation after twice confirmFrames even when its timings never arrive', () => {
+        // Timings stop arriving after the burst: the confirmation can't collect any.
+        let burstDone = Number.POSITIVE_INFINITY;
+        const run = simulate({
+            frames: 1200,
+            budget: () => ({ gpuMs: 2 }),
+            cost: line,
+            deltaTime: () => 0,
+            timed: true,
+            lag: 3,
+            beforeFrame: (frame, budget) => {
+                if (budget.report.state === 'calibrated' && burstDone === Number.POSITIVE_INFINITY) burstDone = frame;
+            },
+            dropTimings: (frame) => frame >= burstDone,
+        });
+        expect(run.budget.report.confirming).toBe(false);
+        const stillConfirming = run.reports.filter((report) => report.confirming).length;
+        expect(stillConfirming).toBeLessThanOrEqual(2 * CALIBRATION.confirmFrames + 1);
     });
 
     it('gives every probe when all of them fit (Cornell at 8 ms)', () => {
@@ -269,12 +295,32 @@ describe('calibration on sustained frames (budget v2, after the review)', () => 
         expect(run.budget.report.calibration?.fillerFrames).toBe(0);
     });
 
-    it('gives up after maxFrames without timings, and falls back to units or the default', () => {
-        const burst = new CalibrationBurst(2, undefined, false);
+    it('gives up after maxFrames: the best estimate from the sizes that settled, reported not calibrated', () => {
+        // Only 1,024 probes ever settle (2 ms of a 1 ms + 1 µs line): later sizes get no timings.
+        const burst = new CalibrationBurst(1.5, undefined, false);
         let units = 0;
-        for (let frame = 1; frame <= CALIBRATION.maxFrames + 1; frame++) units = burst.next(frame, VSYNC_60);
+        for (let frame = 1; frame <= CALIBRATION.maxFrames + 1; frame++) {
+            units = burst.next(frame, 0);
+            if (units === CALIBRATION.firstUnits) burst.add({ frame, units, ms: 2 });
+        }
         expect(burst.result?.measured).toBe(false);
-        expect(units).toBe(DEFAULT_UNITS_PER_FRAME);
+        // Proportional from the one size: 1.5 ms of 2 ms per 1,024.
+        expect(units).toBe(768);
+    });
+
+    it('a burst that gave up with nothing measured hands out the floor, or the default without one, and says so', () => {
+        const withFloor = simulate({ frames: CALIBRATION.maxFrames + 20, budget: () => ({ gpuMs: 2 }), cost: line, technique: ddgiLike(19_425), dropTimings: () => true });
+        expect(withFloor.budget.report.state).toBe('not calibrated');
+        // Sponza's 4 s sweep at the assumed 60 Hz: 81 probes, not 512.
+        expect(withFloor.handed.at(-1)).toBe(81);
+        const withoutFloor = simulate({ frames: CALIBRATION.maxFrames + 20, budget: () => ({ gpuMs: 2 }), cost: line, dropTimings: () => true });
+        expect(withoutFloor.handed.at(-1)).toBe(DEFAULT_UNITS_PER_FRAME);
+    });
+
+    it('a technique added at runtime calibrates without filler, even at 60 Hz', () => {
+        const budget = new WorkBudget({ msPerUnit: undefined }, { fillerAllowed: false });
+        const run = simulate({ frames: 400, budget: () => ({ gpuMs: 2 }), cost: sponzaLike, workBudget: budget });
+        expect(run.budget.report.calibration?.fillerFrames).toBe(0);
     });
 
     it('the first calibration waits while the mesh trees are built', () => {
@@ -332,6 +378,13 @@ describe('no bursts during live use (budget v2, after the review)', () => {
         expect(run.handed.at(-1)).toBe(after);
     });
 
+    it('a geometry change during a burst leaves the new calibration stale', () => {
+        const run = simulate({ frames: 400, budget: () => ({ gpuMs: 2 }), cost: line, deltaTime: () => 0, geometryChange: (frame) => frame === 10 });
+        expect(run.reports[8].state).toBe('calibrating');
+        expect(run.budget.report.state).toBe('calibrated');
+        expect(run.budget.report.stale).toBe(true);
+    });
+
     it('a geometry change marks the calibration stale and keeps the batch; recalibrate() runs a burst and clears it', () => {
         const run = simulate({
             frames: 1200,
@@ -355,7 +408,7 @@ describe('no bursts during live use (budget v2, after the review)', () => {
     });
 });
 
-describe('saturation: step down only when frames are late and the GPU is busy (budget v2, after the review)', () => {
+describe('saturation: step down when frames are late, never below the floor (budget v2, after the re-review)', () => {
     const calibrateFirst = (frame: number, ddgiMs: number, then: (ddgiMs: number) => number) => (frame < 200 ? 0 : then(ddgiMs));
 
     it('settles under sustained saturation: a 60 Hz GPU-bound host whose own work leaves 1.2 ms', () => {
@@ -375,16 +428,40 @@ describe('saturation: step down only when frames are late and the GPU is busy (b
         expect(Math.min(...run.handed.slice(200))).toBeGreaterThanOrEqual(run.budget.report.floorUnits);
     });
 
-    it("doesn't step down for a CPU-bound host: frames late, but DDGI at low clocks", () => {
-        // The host makes 30 frames a second against a 60 Hz target; its GPU idles, so DDGI reads 2× slower.
-        const run = simulate({ frames: 60 * 30, budget: () => ({ gpuMs: 2, targetFps: 60 }), cost: sponzaLike, deltaTime: (frame) => (frame < 200 ? 0 : 1 / 30), clockFactor: (frame) => (frame < 200 ? 1 : 2) });
+    it('steps down on a hot, throttled GPU: frames late while DDGI reads 3× its calibrated cost, never below the floor', () => {
+        // The RTX 3060 at 87 C holds 450-600 MHz: the same work takes about 3× as long, and frames miss 60 Hz.
+        const run = simulate({
+            frames: 60 * 30,
+            budget: () => ({ gpuMs: 2, targetFps: 60 }),
+            cost: sponzaLike,
+            deltaTime: (frame) => (frame < 200 ? 0 : 1 / 40),
+            clockFactor: (frame) => (frame < 200 ? 1 : 3),
+            technique: ddgiLike(19_425),
+        });
         const calibrated = run.budget.report.calibratedUnits as number;
-        expect(unique(run.handed.slice(200))).toEqual([calibrated]);
+        expect(run.budget.report.steppedDown).toBe(true);
+        expect(Math.min(...run.handed.slice(200))).toBeLessThan(calibrated);
+        expect(run.reports.slice(200).every((report) => report.units >= report.floorUnits)).toBe(true);
+        expect(run.handed.at(-1)).toBe(run.budget.report.floorUnits);
+    });
+
+    it('a late CPU-bound host steps DDGI down too (there is no clock test), bounded by the floor', () => {
+        // The host makes 30 frames a second against a 60 Hz target; its GPU idles, so DDGI reads 2× slower.
+        // Fewer probes don't help it; the floor bounds what that costs (SATURATION, the comment).
+        const run = simulate({
+            frames: 60 * 30,
+            budget: () => ({ gpuMs: 2, targetFps: 60 }),
+            cost: sponzaLike,
+            deltaTime: (frame) => (frame < 200 ? 0 : 1 / 30),
+            clockFactor: (frame) => (frame < 200 ? 1 : 2),
+            technique: ddgiLike(19_425),
+        });
         expect(run.budget.report.framesLate).toBe(true);
+        expect(run.reports.slice(200).every((report) => report.units >= report.floorUnits)).toBe(true);
     });
 
     it('an uncapped host with no targetFps has no ceiling: no step-down however its frame time moves', () => {
-        // About 200 Hz, swinging between 4 and 7 ms with the view, GPU busy.
+        // About 200 Hz, swinging between 4 and 7 ms with the view.
         const run = simulate({ frames: 60 * 60, budget: () => ({ gpuMs: 2 }), cost: sponzaLike, deltaTime: (frame, ms) => calibrateFirst(frame, ms, () => (frame % 600 < 300 ? 0.004 : 0.007)) });
         const calibrated = run.budget.report.calibratedUnits as number;
         expect(unique(run.handed.slice(200))).toEqual([calibrated]);
@@ -399,15 +476,15 @@ describe('saturation: step down only when frames are late and the GPU is busy (b
         const run = simulate({ frames: 60 * 110, budget: () => ({ gpuMs: 2 }), cost: sponzaLike, deltaTime: (frame) => (frame < 200 ? 0 : frame < 1800 ? 1 / 120 : VSYNC_60), technique: ddgiLike(19_425) });
         const calibrated = run.budget.report.calibratedUnits as number;
         expect(unique(run.handed.slice(1000, 1800))).toEqual([calibrated]);
-        // The slower rate reads as late for up to targetMemorySeconds (a GPU busy at full clocks
-        // can't be told from saturation), then it is the new rate: recovery below the batch that was
+        // The slower rate reads as late for up to targetMemorySeconds (a new vsync rate can't be
+        // told from frames late at the old one), then it is the new rate: recovery below the batch that was
         // late, then probing up every probeEverySeconds. Back at the calibrated batch within a minute.
         expect(unique(run.handed.slice(1800 + 60 * 60))).toEqual([calibrated]);
         expect(run.reports.slice(200).every((report) => report.units >= report.floorUnits)).toBe(true);
     });
 
     it('recovers only after recoverAfterSeconds on time, up to below the batch that was late', () => {
-        // Late (GPU busy) from 4 s to 6 s, then on time.
+        // Late from 4 s to 6 s, then on time.
         const run = simulate({ frames: 60 * 40, budget: () => ({ gpuMs: 2, targetFps: 60 }), cost: sponzaLike, deltaTime: (frame) => (frame < 200 ? 0 : frame >= 240 && frame < 360 ? 1 / 40 : VSYNC_60) });
         const calibrated = run.budget.report.calibratedUnits as number;
         const lowest = Math.min(...run.handed);
@@ -420,10 +497,18 @@ describe('saturation: step down only when frames are late and the GPU is busy (b
         expect(Math.max(...run.handed.slice(lateEnd, lateEnd + 600))).toBeLessThan(calibrated);
     });
 
-    it('treats an observed rate as a target only when it is a display refresh rate', () => {
+    it('treats an observed rate as a target only when it is a steady display refresh rate (vsync)', () => {
         const guard = new SaturationGuard();
         for (let frame = 0; frame < 70; frame++) guard.addFrame(VSYNC_60, undefined);
         expect(guard.targetSeconds(undefined)).toBeCloseTo(VSYNC_60, 9);
+        // About 60 Hz on average, but wandering ±20% frame to frame: an uncapped host, not vsync.
+        const wandering = new SaturationGuard();
+        for (let frame = 0; frame < 70; frame++) wandering.addFrame(VSYNC_60 * (frame % 2 ? 0.8 : 1.2), undefined);
+        expect(wandering.targetSeconds(undefined)).toBeUndefined();
+        // Display jitter of a fraction of a millisecond still counts as vsync.
+        const jittery = new SaturationGuard();
+        for (let frame = 0; frame < 70; frame++) jittery.addFrame(VSYNC_60 + (frame % 3 - 1) * 0.0004, undefined);
+        expect(jittery.targetSeconds(undefined)).toBeDefined();
         const uncapped = new SaturationGuard();
         for (let frame = 0; frame < 300; frame++) uncapped.addFrame(1 / 230, undefined);
         expect(uncapped.targetSeconds(undefined)).toBeUndefined();

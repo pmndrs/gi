@@ -13,8 +13,8 @@ import type { Mat4, Vec3 } from './math';
  * for DDGI) fit in `gpuMs`, and hands out that many every frame. It doesn't
  * steer on GPU milliseconds while frames arrive on time, because an idle GPU
  * lowers its clocks and makes the same work look slower. Only when frames are
- * late while the GPU is busy (the work's timings near their full-clock cost)
- * does it hand out fewer, down to the technique's floor. It calibrates after
+ * late (against `targetFps`, or an observed vsync rate) does it hand out
+ * fewer, down to the technique's floor. It calibrates after
  * `prepare` and on `GIPlatform.recalibrate()`; a new `gpuMs` is solved from
  * what it measured. Without GPU timings it uses `units`. Probes near a change
  * are spent first.

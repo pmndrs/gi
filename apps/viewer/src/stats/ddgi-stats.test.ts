@@ -85,7 +85,7 @@ describe('DdgiStatsText', () => {
 
         text.reset();
         text.add(frame({ probesUpdated: 106, budget: { ...budget, steppedDown: true } }));
-        expect(text.lines().map((line) => line.text)).toContain('  per frame       106 probes: slowed, frames are late with the GPU busy (2.00 ms buys 133 at full GPU speed)');
+        expect(text.lines().map((line) => line.text)).toContain('  per frame       106 probes: slowed, frames are late (2.00 ms buys 133 at full GPU speed)');
 
         text.reset();
         text.add(frame({ probesUpdated: 133, budget: { ...budget, stale: true } }));

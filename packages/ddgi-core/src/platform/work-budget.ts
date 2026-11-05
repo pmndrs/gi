@@ -210,8 +210,9 @@ function modelAround(curve: readonly CurvePoint[], units: number): UnitCostModel
  *   share of the observed frame interval, and all of them together at most
  *   this many GPU ms. Counted in the stats.
  * - `maxFrames`: a burst still running after this many frames gives up
- *   (timings aren't arriving) and the hand-out falls back to `budget.units`
- *   or {@link DEFAULT_UNITS_PER_FRAME}.
+ *   (timings aren't arriving, or never agree) and reports itself not
+ *   calibrated; the hand-out is then the best estimate from the sizes it did
+ *   settle, or the technique's floor when there are none (WorkBudget).
  * - `confirmFrames`, `confirmJudgedFrames`, `confirmTolerance`: after the
  *   burst, while the host still runs frames back to back (`deltaTime` 0,
  *   its loading screen), the chosen batch is timed for `confirmFrames`
@@ -262,7 +263,7 @@ export interface Calibration {
     /** Filler frames and their estimated GPU ms. */
     readonly fillerFrames: number;
     readonly fillerMs: number;
-    /** False when the burst gave up without timings; `units` is then the fallback. */
+    /** False when the burst gave up (CALIBRATION `maxFrames`); `units` is then its best estimate, 0 with none. */
     readonly measured: boolean;
     /**
      * Sustained timings after the burst against the curve (CALIBRATION
@@ -283,10 +284,10 @@ export interface Calibration {
  * 3. The batch on the line between them is measured itself and accepted, or
  *    solved again (`verifyRounds`).
  *
- * The host runs it best back to back, each frame waited for, behind a
- * loading screen: the viewer and the batch-cost page do (about 30-60
- * frames). A host at 60 Hz gets filler batches in its first calibration
- * instead (see CALIBRATION).
+ * The host runs it best GPU-bound behind a loading screen, two frames in
+ * flight so the GPU never waits: the viewer and the batch-cost page do
+ * (about 20-170 frames). A host at 60 Hz gets filler batches in the
+ * platform's first calibration instead (see CALIBRATION).
  */
 export class CalibrationBurst {
     private readonly shareMs: number;
@@ -310,7 +311,7 @@ export class CalibrationBurst {
     private fillerMs = 0;
     private finished: Calibration | undefined;
 
-    /** `cap`: `budget.units`. `fillerAllowed`: the first calibration after `prepare` (see CALIBRATION). */
+    /** `cap`: `budget.units`. `fillerAllowed`: the platform's first calibration, behind its start-up (see CALIBRATION). */
     constructor(shareMs: number, cap: number | undefined, fillerAllowed: boolean) {
         this.shareMs = shareMs;
         this.cap = cap;
@@ -334,7 +335,10 @@ export class CalibrationBurst {
         this.frames++;
         if (deltaTime > 0 && Number.isFinite(deltaTime)) this.frameSeconds.push(deltaTime);
         if (this.frames > CALIBRATION.maxFrames && !this.finished) {
-            this.finished = this.calibration(this.cap ?? DEFAULT_UNITS_PER_FRAME, false);
+            // Gave up: the best estimate from the sizes that did settle (0 with none; the
+            // budget then hands out the floor), reported as not calibrated.
+            const curve = this.curve();
+            this.finished = this.calibration(curve.length > 0 ? unitsOnCurve(curve, this.shareMs, this.limit) : 0, false);
             return this.finished.units;
         }
         const filler = this.fillerUnits();
@@ -408,7 +412,8 @@ export class CalibrationBurst {
                 }
                 // Off by more than the tolerance: the line between the two sizes around it was
                 // wrong, most likely because the size on the other side was measured while the
-                // clocks still moved. Measure that one again, then solve with both.
+                // clocks still moved. Drop that size from the curve; the ladder below then moves
+                // on from the sizes left (and measures that size again if it is the next step).
                 const curve = this.curve();
                 const suspect =
                     probePoint.ms <= share
@@ -506,16 +511,21 @@ function settle(units: number, timings: readonly number[]): CurvePoint | undefin
 /**
  * When the batch steps down, and how it comes back.
  *
+ * Frames late means a step down, whatever the technique's timings read
+ * (DECISIONS 2026-11-05, after the budget v2 re-review). The first version
+ * stepped down only when the timings were near their calibrated cost (the
+ * GPU "busy"), but a thermally throttled RTX 3060 reads about 3× its
+ * calibrated cost, so that gate blocked the step-down in exactly the hot
+ * state it is for. "Late" already needs the frame to miss its interval, so
+ * an idle GPU at low clocks is never late. The cost: a CPU-bound host that
+ * misses its interval steps DDGI down too, which doesn't help it; the floor
+ * bounds how far.
+ *
  * - `windowSeconds`: the frame time is the median over about this long; at
  *   most one step per window.
  * - `lateShare`: frames are late when that median is over the target
  *   interval by more than this share.
- * - `clockShare`: the GPU counts as busy (clocks up) when the technique's
- *   timings in the window are at most this many times the calibrated cost of
- *   the same batches. Much slower means low clocks: the GPU idles between
- *   frames, so it isn't what makes them late (a CPU-bound host), and fewer
- *   probes wouldn't help.
- * - `stepDown`: the batch's factor per late window with the GPU busy.
+ * - `stepDown`: the batch's factor per late window, never below the floor.
  * - `ceilingShare`: after a run of late windows, recovery stops at this
  *   share of the batch that was late first, below the level that caused it.
  * - `recoverAfterSeconds`, `recovery`: after this long on time, the batch
@@ -523,19 +533,23 @@ function settle(units: number, timings: readonly number[]): CurvePoint | undefin
  * - `probeEverySeconds`, `probeStep`: once at the ceiling and on time this
  *   long, the ceiling rises by this factor, back to the calibrated batch.
  * - `targetMemorySeconds`: without `budget.targetFps`, the target interval is
- *   the shortest per-window median of this long (the rate the host reaches
- *   when on time), so a few late seconds don't become the new target...
- * - `refreshRates`, `refreshTolerance`: ...and only when that rate is within
- *   this share of a common display refresh rate (vsync). Otherwise the host
- *   is taken to be uncapped and has no ceiling: an uncapped frame rate rises
- *   and falls with the view, which says nothing about being late. A host can
+ *   the shortest vsync-like per-window median of this long (the rate the
+ *   host reaches when on time), so a few late seconds don't become the new
+ *   target...
+ * - `refreshRates`, `refreshTolerance`, `vsyncJitter`: ...where vsync-like
+ *   means within `refreshTolerance` of a common display refresh rate *and*
+ *   steady: the window's frame times from the 10th to the 90th percentile
+ *   span at most `vsyncJitter` of its median. The refresh list alone matched
+ *   about 40% of all rates (re-review); a display paces frames to within a
+ *   fraction of a millisecond, while an uncapped frame rate wanders with the
+ *   view and the work. Without a vsync-like window the host is taken to be
+ *   uncapped and has no ceiling (the batch never steps down). A host can
  *   always say `targetFps`, and must when it is late from the start: a vsync
  *   host that never makes 60 Hz looks like an on-time 30 Hz host.
  */
 export const SATURATION = {
     windowSeconds: 1,
     lateShare: 0.1,
-    clockShare: 1.5,
     stepDown: 0.8,
     ceilingShare: 0.9,
     recoverAfterSeconds: 3,
@@ -545,93 +559,80 @@ export const SATURATION = {
     targetMemorySeconds: 5,
     refreshRates: [24, 25, 30, 48, 50, 60, 72, 75, 90, 100, 120, 144, 165],
     refreshTolerance: 0.03,
+    vsyncJitter: 0.1,
 } as const;
 
 /** What a full window of frames says. */
 export interface SaturationWindow {
     /** Frames were late against the target interval (never, with no target). */
     readonly late: boolean;
-    /** The technique's timings were close to their calibrated cost: the GPU's clocks are up. */
-    readonly gpuBusy: boolean;
     readonly seconds: number;
 }
 
-/**
- * Watches the frame time (`FrameInput.deltaTime`) and the technique's GPU
- * time against its calibrated cost, over windows of about a second.
- */
+/** One window's frame time: its median and how steady it was. */
+interface FrameWindow {
+    readonly seconds: number;
+    /** (p90 − p10) / median of the window's frame times. */
+    readonly jitter: number;
+}
+
+/** Watches the frame time (`FrameInput.deltaTime`) over windows of about a second. */
 export class SaturationGuard {
     private frameTimes: number[] = [];
     private windowSeconds = 0;
-    /** Measured ms / calibrated ms of the technique's frames in this window. */
-    private costRatios: number[] = [];
-    /** Per-window median frame times, the latest last, for the observed target. */
-    private windowMedians: number[] = [];
+    /** The latest windows, the latest last, for the observed target. */
+    private windows: FrameWindow[] = [];
     /** The last full window, for the stats. */
     framesLate = false;
-    gpuBusy = false;
-
-    /** A timing of the technique in a normal (not burst) frame, and what the calibration says it should cost. */
-    addUpdate(ms: number, calibratedMs: number): void {
-        if (ms >= 0 && calibratedMs > 0) this.costRatios.push(ms / calibratedMs);
-    }
 
     /**
      * One frame. Returns the window's verdict when a window is complete.
      * Frames with no time (back to back, `deltaTime` 0) don't count.
      */
     addFrame(deltaTime: number, targetFps: number | undefined): SaturationWindow | undefined {
-        if (!(deltaTime > 0) || !Number.isFinite(deltaTime)) {
-            // Back-to-back frames aren't judged, and their timings don't describe the next window.
-            this.costRatios = [];
-            return undefined;
-        }
+        if (!(deltaTime > 0) || !Number.isFinite(deltaTime)) return undefined;
         this.frameTimes.push(deltaTime);
         this.windowSeconds += deltaTime;
         if (this.windowSeconds < SATURATION.windowSeconds) return undefined;
 
         const frameSeconds = median(this.frameTimes);
-        this.windowMedians.push(frameSeconds);
+        const jitter = (quantile(this.frameTimes, 0.9) - quantile(this.frameTimes, 0.1)) / frameSeconds;
+        this.windows.push({ seconds: frameSeconds, jitter });
         const remembered = Math.max(1, Math.round(SATURATION.targetMemorySeconds / SATURATION.windowSeconds));
-        if (this.windowMedians.length > remembered) this.windowMedians.shift();
+        if (this.windows.length > remembered) this.windows.shift();
         const target = this.targetSeconds(targetFps);
         const late = target !== undefined && frameSeconds > target * (1 + SATURATION.lateShare);
-        const gpuBusy = this.costRatios.length > 0 && median(this.costRatios) <= SATURATION.clockShare;
-        const window = { late, gpuBusy, seconds: this.windowSeconds };
+        const window = { late, seconds: this.windowSeconds };
         this.framesLate = late;
-        this.gpuBusy = gpuBusy;
         this.frameTimes = [];
-        this.costRatios = [];
         this.windowSeconds = 0;
         return window;
     }
 
     /**
-     * The interval frames should come at: `1 / targetFps`, or the observed
-     * on-time interval when it is a display refresh rate (vsync); undefined
-     * for an uncapped host (no ceiling).
+     * The interval frames should come at: `1 / targetFps`, or the shortest
+     * vsync-like window remembered (see SATURATION); undefined for an
+     * uncapped host (no ceiling).
      */
     targetSeconds(targetFps: number | undefined): number | undefined {
         if (targetFps !== undefined && targetFps > 0) return 1 / targetFps;
-        if (this.windowMedians.length === 0) return undefined;
-        const observed = Math.min(...this.windowMedians);
-        const isRefreshRate = SATURATION.refreshRates.some((rate) => Math.abs(observed * rate - 1) <= SATURATION.refreshTolerance);
-        return isRefreshRate ? observed : undefined;
+        const vsyncLike = this.windows.filter(
+            (window) => window.jitter <= SATURATION.vsyncJitter && SATURATION.refreshRates.some((rate) => Math.abs(window.seconds * rate - 1) <= SATURATION.refreshTolerance),
+        );
+        return vsyncLike.length > 0 ? Math.min(...vsyncLike.map((window) => window.seconds)) : undefined;
     }
 
     /** The host's frame rate as far as it is known (for floors given in seconds): `targetFps`, else the fastest observed. */
     framesPerSecond(targetFps: number | undefined): number | undefined {
         if (targetFps !== undefined && targetFps > 0) return targetFps;
-        return this.windowMedians.length > 0 ? 1 / Math.min(...this.windowMedians) : undefined;
+        return this.windows.length > 0 ? 1 / Math.min(...this.windows.map((window) => window.seconds)) : undefined;
     }
 
     /** A new calibration: the open window goes; the remembered frame rate stays. */
     startOver(): void {
         this.frameTimes = [];
-        this.costRatios = [];
         this.windowSeconds = 0;
         this.framesLate = false;
-        this.gpuBusy = false;
     }
 }
 
@@ -658,7 +659,7 @@ export interface BudgetFrameInput {
 
 /**
  * - `units`: no millisecond budget; the hand-out is `budget.units` (or the default).
- * - `not calibrated`: a millisecond budget but no timings (or the burst gave up, or the trees are still being built); the fallback.
+ * - `not calibrated`: a millisecond budget but no timings, or the trees are still being built (`budget.units` or the default), or the burst gave up (its best estimate, or the floor).
  * - `calibrating`: a burst is running.
  * - `calibrated`: the calibrated batch, the floor, the saturation guard.
  */
@@ -673,7 +674,7 @@ export interface BudgetReport {
     readonly calibratedUnits: number | undefined;
     /** The floor in the latest frame (0 without one). */
     readonly floorUnits: number;
-    /** The batch is below the calibrated number after frames were late with the GPU busy. */
+    /** The batch is below the calibrated number after frames were late. */
     readonly steppedDown: boolean;
     /** Where recovery stops for now (below the batch that was late); undefined when not limited. */
     readonly ceilingUnits: number | undefined;
@@ -698,17 +699,19 @@ export class WorkBudget {
     private readonly guard = new SaturationGuard();
     private calibration: Calibration | undefined;
     private burst: CalibrationBurst | undefined;
-    /** No calibration has finished yet (filler batches are allowed only then). */
-    private firstCalibration = true;
+    /** Filler batches are allowed: the platform's first calibration, and none has finished yet. */
+    private fillerAllowed: boolean;
     private recalibrateRequested = false;
     private stale = false;
+    /** The geometry changed while a burst ran: its calibration is stale from the start. */
+    private geometryChangedDuringBurst = false;
     /** The batch now: the calibrated one, or less while stepped down. */
     private current = 0;
     /** Recovery stops here after a step-down (AIMD); undefined when not limited. */
     private ceiling: number | undefined;
     private onTimeSeconds = 0;
     private atCeilingSeconds = 0;
-    /** Inside a run of late windows with the GPU busy: the ceiling was set at its start. */
+    /** Inside a run of late windows: the ceiling was set at its start. */
     private lateEpisode = false;
     /** Timings of frames up to this one belong to the last burst. */
     private calibratedAfterFrame = 0;
@@ -718,6 +721,8 @@ export class WorkBudget {
     private confirming = false;
     private readonly confirmFrames = new Set<number>();
     private confirmRatios: number[] = [];
+    /** Frames handed out while confirming: it ends after twice `confirmFrames` even if timings went missing. */
+    private confirmHandedFrames = 0;
     private latest: BudgetReport = {
         state: 'units',
         units: 0,
@@ -732,9 +737,14 @@ export class WorkBudget {
         calibration: undefined,
     };
 
-    /** `technique`: its own cost estimate (`msPerUnit`, which replaces the burst) and its floor. */
-    constructor(technique: Pick<GITechnique, 'msPerUnit' | 'minUnitsPerFrame'> = { msPerUnit: undefined }) {
+    /**
+     * `technique`: its own cost estimate (`msPerUnit`, which replaces the burst) and its floor.
+     * `fillerAllowed`: false for a technique added while the host runs live (no filler batches
+     * in its frames); the platform allows them only before its first calibration.
+     */
+    constructor(technique: Pick<GITechnique, 'msPerUnit' | 'minUnitsPerFrame'> = { msPerUnit: undefined }, options: { readonly fillerAllowed?: boolean } = {}) {
         this.technique = technique;
+        this.fillerAllowed = options.fillerAllowed ?? true;
     }
 
     get report(): BudgetReport {
@@ -766,28 +776,41 @@ export class WorkBudget {
                 // The first calibration waits for the mesh trees: rays wouldn't see those meshes yet.
                 if (!this.calibration && input.sceneSettling) return this.handOut('not calibrated', cap ?? DEFAULT_UNITS_PER_FRAME, 0);
                 this.recalibrateRequested = false;
-                this.burst = new CalibrationBurst(shareMs, cap, this.firstCalibration);
+                this.geometryChangedDuringBurst = false;
+                this.burst = new CalibrationBurst(shareMs, cap, this.fillerAllowed);
                 this.guard.startOver();
             }
             const burst = this.burst;
             if (burst) {
                 const units = burst.next(input.frame, input.deltaTime);
-                // A burst that gave up (no timings) finishes inside `next`.
-                if (burst.result) this.adopt(burst.result, true);
-                return this.handOut('calibrating', capped(units), 0);
+                if (!burst.result) return this.handOut('calibrating', capped(units), 0);
+                // A burst that gave up finishes inside `next`: on to the hand-out below.
+                this.adopt(burst.result, true);
             }
         }
 
         let calibration = this.calibration as Calibration;
-        if (!calibration.measured) return this.handOut('not calibrated', capped(calibration.units), 0);
+        if (!calibration.measured) {
+            // The burst gave up: its estimate, at least the floor; with neither, the default.
+            const framesPerSecond = this.guard.framesPerSecond(budget.targetFps) ?? ASSUMED_FRAMES_PER_SECOND;
+            const floorUnits = this.floorUnits(framesPerSecond, calibration.units > 0 ? calibration.units : Number.POSITIVE_INFINITY);
+            const units = Math.max(calibration.units, floorUnits);
+            return this.handOut('not calibrated', capped(units > 0 ? units : DEFAULT_UNITS_PER_FRAME), floorUnits);
+        }
         // A new share or cap: solved from the measured curve, no burst.
         if (calibration.shareMs !== shareMs || calibration.cap !== cap) {
             this.adopt(resolve(calibration, shareMs, cap), false);
             calibration = this.calibration as Calibration;
         }
 
-        // Back-to-back frames after a burst confirm it (CALIBRATION `confirmFrames`).
-        if (this.confirming && !(input.deltaTime > 0)) this.confirmFrames.add(input.frame);
+        // Back-to-back frames after a burst confirm it (CALIBRATION `confirmFrames`). The first
+        // frame with time between frames (the host left its loading screen), or twice as many
+        // frames as it needs, ends the confirmation unconfirmed: it never stays open.
+        if (this.confirming) {
+            this.confirmHandedFrames++;
+            if (input.deltaTime > 0 || this.confirmHandedFrames > 2 * CALIBRATION.confirmFrames) this.endConfirmation();
+            else this.confirmFrames.add(input.frame);
+        }
         const framesPerSecond = this.guard.framesPerSecond(budget.targetFps);
         const floorUnits = this.floorUnits(framesPerSecond ?? ASSUMED_FRAMES_PER_SECOND, calibration.units);
         const window = this.guard.addFrame(input.deltaTime, budget.targetFps);
@@ -815,9 +838,13 @@ export class WorkBudget {
         const calibration = this.calibration;
         if (!calibration?.measured || sample.frame <= this.calibratedAfterFrame) return;
         const calibratedMs = costOnCurve(calibration.curve, sample.units);
-        if (calibratedMs === undefined) return;
-        this.guard.addUpdate(sample.ms, calibratedMs);
-        if (this.confirming && this.confirmFrames.delete(sample.frame)) this.confirm(calibration, sample.ms / calibratedMs);
+        if (calibratedMs !== undefined && this.confirming && this.confirmFrames.delete(sample.frame)) this.confirm(calibration, sample.ms / calibratedMs);
+    }
+
+    private endConfirmation(): void {
+        this.confirming = false;
+        this.confirmFrames.clear();
+        this.confirmRatios = [];
     }
 
     /** One back-to-back timing after the burst; once there are enough, scale the curve if it is off. */
@@ -825,9 +852,7 @@ export class WorkBudget {
         this.confirmRatios.push(ratio);
         if (this.confirmRatios.length < CALIBRATION.confirmFrames) return;
         const factor = median(this.confirmRatios.slice(-CALIBRATION.confirmJudgedFrames));
-        this.confirming = false;
-        this.confirmFrames.clear();
-        this.confirmRatios = [];
+        this.endConfirmation();
         if (Math.abs(factor - 1) <= CALIBRATION.confirmTolerance) {
             this.calibration = { ...calibration, confirmFactor: 1 };
             return;
@@ -840,6 +865,8 @@ export class WorkBudget {
     /** The scene's geometry changed: the calibration is stale (reported). The batch stays until the host re-calibrates. */
     geometryChanged(): void {
         if (this.calibration) this.stale = true;
+        // A burst running now measures a scene that is changing: stale once it ends.
+        if (this.burst) this.geometryChangedDuringBurst = true;
     }
 
     /** Calibrate again at the next millisecond frame (`GIPlatform.recalibrate`). */
@@ -850,10 +877,10 @@ export class WorkBudget {
     /** One window of the saturation guard: step down, hold, or recover (AIMD, see SATURATION). */
     private applyWindow(window: SaturationWindow, calibratedUnits: number, floorUnits: number): void {
         if (window.late) {
+            // Late: step down, whatever the technique's timings read (see SATURATION for why
+            // there is no clock test), never below the floor.
             this.onTimeSeconds = 0;
             this.atCeilingSeconds = 0;
-            // Late with the GPU at low clocks: the GPU isn't what makes the frame late. Hold.
-            if (!window.gpuBusy) return;
             // The ceiling comes from the batch that was late first, not from the steps after it.
             if (!this.lateEpisode) this.ceiling = Math.max(floorUnits, Math.floor(this.current * SATURATION.ceilingShare));
             this.lateEpisode = true;
@@ -894,12 +921,13 @@ export class WorkBudget {
         this.lateEpisode = false;
         if (measuredNow) {
             this.calibratedAfterFrame = this.latestFrame;
-            this.firstCalibration = false;
-            this.stale = false;
+            this.fillerAllowed = false;
+            this.stale = this.geometryChangedDuringBurst;
+            this.geometryChangedDuringBurst = false;
             // A measured burst is confirmed over back-to-back frames, if the host runs any.
+            this.endConfirmation();
             this.confirming = calibration.measured && calibration.frames > 0;
-            this.confirmFrames.clear();
-            this.confirmRatios = [];
+            this.confirmHandedFrames = 0;
         }
         this.guard.startOver();
     }
@@ -951,6 +979,12 @@ function proportionalCalibration(shareMs: number, cap: number | undefined, msPer
 function resolve(calibration: Calibration, shareMs: number, cap: number | undefined): Calibration {
     const units = unitsOnCurve(calibration.curve, shareMs, Math.min(calibration.capacity, cap ?? Number.POSITIVE_INFINITY));
     return { ...calibration, units, shareMs, cap, model: modelAround(calibration.curve, units) };
+}
+
+/** Nearest-rank quantile. */
+function quantile(values: readonly number[], share: number): number {
+    const sorted = [...values].sort((a, b) => a - b);
+    return sorted[Math.min(sorted.length - 1, Math.max(0, Math.ceil(share * sorted.length) - 1))];
 }
 
 function median(values: readonly number[]): number {
