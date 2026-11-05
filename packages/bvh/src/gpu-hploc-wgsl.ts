@@ -171,7 +171,7 @@ struct HplocParams {
     listsOffset: u32,          // where the stored clusters start in hplocScratch
     childrenOffset: u32,       // where the merges' children start in hplocLinks
     parentsOffset: u32,        // where every cluster's parent starts in hplocLinks
-    treePositionsOffset: u32,  // where each sorted triangle's tree position starts in hplocLinks
+    treeOrderOffset: u32,      // where the sorted position at each tree position starts in hplocLinks
     tieBreak: u32,             // HPLOC_TIE_BREAK
     leafRunsOffset: u32,       // where each made node's leaf triangles (then, scanned, their first position) start in hplocLinks
     scratchQuads: u32,        // hplocScratch's length in vec4s, which the clear fills
@@ -189,7 +189,7 @@ struct HplocParams {
 @group(0) @binding(25) var<storage, read> hplocScratchView: array<u32>;
 @group(0) @binding(26) var<storage, read_write> hplocScratchFill: array<vec4u>;
 // Read only in later dispatches, all per sorted position: [the node scan, one more at the end][the leaf-run
-// scan, one more][2 children per made node][every cluster's parent: leaves, then made nodes][each triangle's tree position].
+// scan, one more][2 children per made node][every cluster's parent: leaves, then made nodes][the sorted position at each tree position].
 @group(0) @binding(27) var<storage, read_write> hplocLinks: array<u32>;
 @group(0) @binding(28) var<uniform> hplocParams: HplocParams;
 // 'tinybvh-63' only: the triangles in order of the low code words (the first sort's result).
@@ -261,8 +261,9 @@ fn hplocRankWord(mesh: LbvhMesh, made: u32) -> u32 {
     return mesh.triangleStart + made;
 }
 
-fn hplocTreePositionWord(mesh: LbvhMesh, position: u32) -> u32 {
-    return hplocParams.treePositionsOffset + mesh.triangleStart + position;
+// The word that holds which sorted position goes to tree position 'treePosition'.
+fn hplocTreeOrderWord(mesh: LbvhMesh, treePosition: u32) -> u32 {
+    return hplocParams.treeOrderOffset + mesh.triangleStart + treePosition;
 }
 
 // ---- 3b. tinybvh's Morton codes ('tinybvh-63') -------------------------------------------
@@ -696,27 +697,27 @@ fn hplocMerge(mesh: LbvhMesh, node: HplocNode, lane: u32, laneCount: u32) -> u32
                 upIndex[slot] = index + radius;
                 downIndex[slot] = index - radius;   // wraps below 0, where it is not used
             }
+            // The pair (index, index + radius) is measured once, by the lower cluster, which
+            // passes the area up: the upper one takes it as its pair (index - radius, index).
             let above = hplocGatherBoxes(clusters, upIndex, laneCount);
-            let below = hplocGatherBoxes(clusters, downIndex, laneCount);
+            var upArea: HplocSlotWords;
             for (var slot = 0u; slot < HPLOC_SLOTS; slot += 1u) {
                 let index = slot * laneCount + lane;
-                if (index >= count) {
-                    continue;
-                }
                 let own = clusters[slot];
-                if (index + radius < count) {
-                    let area = hplocMergedArea(own.lower, own.upper, above[slot].lower, above[slot].upper);
-                    if (hplocCloser(index, index + radius, area, nearest[slot], best[slot])) {
-                        best[slot] = area;
-                        nearest[slot] = index + radius;
-                    }
+                let area = hplocMergedArea(own.lower, own.upper, above[slot].lower, above[slot].upper);
+                upArea[slot] = bitcast<u32>(area);
+                if (index < count && index + radius < count && hplocCloser(index, index + radius, area, nearest[slot], best[slot])) {
+                    best[slot] = area;
+                    nearest[slot] = index + radius;
                 }
-                if (index >= radius) {
-                    let area = hplocMergedArea(below[slot].lower, below[slot].upper, own.lower, own.upper);
-                    if (hplocCloser(index, index - radius, area, nearest[slot], best[slot])) {
-                        best[slot] = area;
-                        nearest[slot] = index - radius;
-                    }
+            }
+            let downArea = hplocGatherWords(upArea, downIndex, laneCount);
+            for (var slot = 0u; slot < HPLOC_SLOTS; slot += 1u) {
+                let index = slot * laneCount + lane;
+                let area = bitcast<f32>(downArea[slot]);
+                if (index < count && index >= radius && hplocCloser(index, index - radius, area, nearest[slot], best[slot])) {
+                    best[slot] = area;
+                    nearest[slot] = index - radius;
                 }
             }
         }
@@ -840,6 +841,37 @@ fn hplocClimb(
     var end = position + 1u;
     var clusters = 1u;
     var level = 0u;
+
+    // The first level, as in the LBVH (lbvhClimb): when the lane above holds this
+    // leaf's sibling leaf, this lane takes their node at once, with no handing over.
+    // Positions and sides are compared, never lane numbers. Not the root of a
+    // two-triangle mesh, which is merged.
+    var firstParent = LbvhParent(LBVH_NO_PARENT, 0u);
+    if (climbing) {
+        firstParent = hplocFindParent(mesh, first, end);
+    }
+    let climbingAbove = subgroupShuffleDown(select(0u, 1u, climbing), 1u) == 1u;
+    let positionAbove = subgroupShuffleDown(position, 1u);
+    let parentAbove = subgroupShuffleDown(firstParent.split, 1u);
+    let sideAbove = subgroupShuffleDown(firstParent.side, 1u);
+    let climbingBelow = subgroupShuffleUp(select(0u, 1u, climbing), 1u) == 1u;
+    let positionBelow = subgroupShuffleUp(position, 1u);
+    let parentBelow = subgroupShuffleUp(firstParent.split, 1u);
+    let sideBelow = subgroupShuffleUp(firstParent.side, 1u);
+    let pairIsRoot = count == 2u;
+    let pairedAbove = climbing && !pairIsRoot && firstParent.side == 0u && lane + 1u < laneCount && climbingAbove &&
+        positionAbove == position + 1u && parentAbove == firstParent.split && sideAbove == 1u;
+    let pairedBelow = climbing && !pairIsRoot && firstParent.side == 1u && lane > 0u && climbingBelow &&
+        positionBelow + 1u == position && parentBelow == firstParent.split && sideBelow == 0u;
+    if (pairedBelow) {
+        climbing = false;   // the lane below carries the pair
+    }
+    if (pairedAbove) {
+        end = position + 2u;
+        clusters = 2u;
+        level = 1u;
+    }
+
     // Lanes without a triangle, and lanes that stopped, stay in the loop to help merge.
     for (var step = 0u; step <= HPLOC_MAX_LEVEL; step += 1u) {
         var node = HplocNode(0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u);
@@ -1013,7 +1045,7 @@ fn hplocBoxOf(mesh: LbvhMesh, cluster: u32) -> LbvhBox {
 }
 
 // A leaf of the layout (one triangle, or a collapsed subtree of at most maxLeaf):
-// its triangles' tree positions from 'start', depth first.
+// its triangles go to the tree positions from 'start', depth first.
 fn hplocPlaceLeaves(mesh: LbvhMesh, cluster: u32, start: u32) {
     // A subtree of at most maxLeaf (8) triangles needs at most 8 entries.
     var stack: array<u32, ${GPU_LAYOUT_MAX_LEAF_PRIMITIVES}>;
@@ -1024,7 +1056,7 @@ fn hplocPlaceLeaves(mesh: LbvhMesh, cluster: u32, start: u32) {
         depth -= 1u;
         let current = stack[depth];
         if (current < mesh.triangleCount) {
-            hplocLinks[hplocTreePositionWord(mesh, current)] = placed;
+            hplocLinks[hplocTreeOrderWord(mesh, placed)] = current;
             placed += 1u;
         } else if (depth + 2u <= ${GPU_LAYOUT_MAX_LEAF_PRIMITIVES}u) {
             let made = current - mesh.triangleCount;
@@ -1064,7 +1096,7 @@ fn hplocEmit(
         lbvhWriteChild(out, 0u, box.lower, box.upper, 0u, 1u);
         lbvhWriteChild(out, 1u, vec3f(0.0), vec3f(0.0), LBVH_EMPTY_CHILD, 0u);
         lbvhOutParents[nodeOffset] = LBVH_NO_PARENT;
-        hplocLinks[hplocTreePositionWord(mesh, 0u)] = 0u;
+        hplocLinks[hplocTreeOrderWord(mesh, 0u)] = 0u;
         return;
     }
     // Kept nodes are the ones the node scan counted (hplocMark).
@@ -1099,7 +1131,8 @@ fn hplocEmit(
     lbvhOutParents[nodeOffset + out] = parent;
 }
 
-// Each triangle to its tree position (written by hplocEmit, which runs first).
+// The triangle record at each tree position (whose triangle hplocEmit, which runs first, chose):
+// neighbouring threads write neighbouring records.
 @compute @workgroup_size(${LBVH_WORKGROUP_SIZE})
 fn hplocTrianglesKernel(
     @builtin(workgroup_id) workgroup: vec3u,
@@ -1111,11 +1144,12 @@ fn hplocTrianglesKernel(
     }
     let tile = lbvhTile(workgroup, groups);
     let mesh = tile.mesh;
-    let position = tile.first + localIndex;
-    if (position >= mesh.triangleCount) {
+    let treePosition = tile.first + localIndex;
+    if (treePosition >= mesh.triangleCount) {
         return;
     }
-    lbvhWriteTriangle(mesh, lbvhValues[mesh.triangleStart + position], hplocLinks[hplocTreePositionWord(mesh, position)]);
+    let sorted = hplocLinks[hplocTreeOrderWord(mesh, treePosition)];
+    lbvhWriteTriangle(mesh, lbvhValues[mesh.triangleStart + sorted], treePosition);
 }
 
 // One thread per mesh: where its nodes landed, how many, its depth and box, and the checks.

@@ -344,13 +344,13 @@ export class GpuHplocBatch {
         const recordsOffset = innerTotal * HPLOC_CLIMB_WORDS;
         const listsOffset = recordsOffset + triangleTotal * HPLOC_RECORD_WORDS;
         // hplocLinks, all per sorted position: [the node scan, one more at the end][the leaf-run scan, one more]
-        // [2 children per made node][parents: leaves, made nodes][tree positions]. The scans are bound at
+        // [2 children per made node][parents: leaves, made nodes][the sorted position at each tree position]. The scans are bound at
         // offsets, which must be 256-byte aligned.
         const scanWords = triangleTotal + 1;
         const leafRunsOffset = Math.ceil(scanWords / 64) * 64;
         const childrenOffset = leafRunsOffset + scanWords;
         const parentsOffset = childrenOffset + triangleTotal * 2;
-        const treePositionsOffset = parentsOffset + triangleTotal * 2;
+        const treeOrderOffset = parentsOffset + triangleTotal * 2;
         // The scratch is cleared in whole vec4s.
         const scratchQuads = Math.ceil((listsOffset + triangleTotal) / 4);
         this.clearWorkgroups = Math.ceil(scratchQuads / LBVH_WORKGROUP_SIZE);
@@ -366,7 +366,7 @@ export class GpuHplocBatch {
             codes: make('codes', tinybvhCodes ? triangleTotal * 8 : 16, storage),
             deltas: make('deltas', triangleTotal * 8, storage),
             scratch: make('climb scratch', scratchQuads * 16, storage),
-            links: make('links', (treePositionsOffset + triangleTotal) * 4, storage),
+            links: make('links', (treeOrderOffset + triangleTotal) * 4, storage),
         };
         device.queue.writeBuffer(scratch.tables, 0, tables);
         uploadBatchGeometry(device.queue, this.meshes, this.buffers);
@@ -400,7 +400,7 @@ export class GpuHplocBatch {
             listsOffset, // listsOffset
             childrenOffset, // childrenOffset
             parentsOffset, // parentsOffset
-            treePositionsOffset, // treePositionsOffset
+            treeOrderOffset, // treeOrderOffset
             HPLOC_TIE_BREAK[options.tieBreak], // tieBreak
             leafRunsOffset, // leafRunsOffset
             scratchQuads, // scratchQuads
