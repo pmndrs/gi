@@ -31,6 +31,20 @@ Numbers (indirect, against Cycles; bias, 8×8 block error, p95 block, FLIP 8×8,
 Not verified: the cause. The ratio map shows DDGI brighter on most shadowed surfaces, the curtains most.
 Next: find Sponza's +26% (leaks through thin curtains, probe density, sun shadow rays, the decal `dirt_decal` with GI albedo 0 acting as a black opaque surface because glTF's default metalness is 1 and M1 ignores `blocksLight`); a README section for `--materials-json`; the test view's full image is black on sky pixels.
 
+## 2026-11-05 · Sponza +26% investigation · implementer (opus), lead checked the logic
+Did (079e2d5): `ddgi-shared/path-tracer.ts` (a path tracer over the platform's tracer and hit shading) and `probe-values.ts`; the Sponza page gained `ddgi`, `parts`, `excludeMaterials`, `pathTrace` and `probeCheck` options and probe-state counts; `run.ts` writes and compares `pt-untextured-indirect*.exr`. No core code changed.
+Verified (agent; RTX 3060 and Intel UHD): experiments, each one change (DDGI against Cycles or the path tracer):
+- the path tracer against Cycles: +0.15% (black back faces instead of shaded: −0.17%). So the gap is DDGI's;
+- **without the curtains (base package): +2.59%,** block error 9.95%; Intel +2.57%. With curtains, against the path tracer, +26.10%: curtain pixels 1.41×, other pixels 1.17×;
+- probe spacing: 1 m +26.29%, 0.75 m +19.71%, 0.5 m +12.33% (block error 16.9%, FLIP 0.244);
+- probes against the path tracer at their own positions: +0.47% (1 m), +0.32% (0.5 m). Exact irradiance at DDGI's biased lookup point: +11.5% (0.1 m biases), +6.9% (0.05 m);
+- biases 0.05/0.05 +25.67%, 0.1/0 +25.21%, 0/0.1 +26.08%, 0.2/0.2 +28.01%; `minFrontFaceDistance` 0.1 m +25.09%, 0.3 m +26.53%;
+- relocation off +33.40%; classification off +25.95%; both off +28.04%; back-face distance share 1.0 +25.80%; 30 distance texels +26.77%; 512 rays +26.37%; 10 irradiance texels +26.79%;
+- `dirt_decal` left out: +22.83% (opaque black on both sides, so not the cause; it darkens the true GI by about 30%).
+Conclusion: a probe-resolution limit on thin folded cloth, not a bug; no fix made. Sponza stays +26.29% / +26.25%. lint, typecheck, test 831.
+Not verified: `test:gpu --filter ddgi-` after a one-word `export` change in `ddgi-shared/harness.ts` (paused for the quiet window; the lead runs it after); a Cycles render of the base package (the path tracer stood in).
+Proposed (DECISIONS, waiting on Dennis): judge M1 Sponza accuracy on the base package, report the curtains as a known limit. Follow-ups: honour `blocksLight: false` so decals don't act as black sheets (with M4's alpha cutouts); a near-surface occlusion term (after M1).
+
 ## 2026-11-05 · Review of the sky-aware GI reference · reviewer (opus)
 Asked by the parent session, so the reference isn't judged by the agent that wrote it. Verdict: **pass with notes** (all from the reviewer's own renders and code reading).
 - DDGI's shaded GI term equals the composite's contents (DECISIONS has the details); the sun's direct light matches to 0.02% and Cycles full = lights-only direct + composite (0.012070 against 0.012069).
