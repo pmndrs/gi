@@ -20,7 +20,7 @@ import { GpuHplocBuilder } from '../../../../packages/bvh/src/gpu-hploc.ts';
 import { GpuLbvhBuilder, type GpuLbvhGeometry } from '../../../../packages/bvh/src/gpu-lbvh.ts';
 import { treeSahCost } from '../../../../packages/bvh/src/layout-check.ts';
 import { createTinyBvhBuilder, type TinyBvhBuilder } from '../../../../packages/bvh/src/tinybvh.ts';
-import { GPU_BUILD_TIMED_RUNS, TOP_LEVEL_REBUILD_RUNS, type TracerId } from './config.ts';
+import { GPU_BUILD_LOADED_MS, GPU_BUILD_LOADED_RUNS, GPU_BUILD_TIMED_RUNS, TOP_LEVEL_REBUILD_RUNS, type TracerId } from './config.ts';
 import { measureDispatches, type DispatchTimer } from './dispatch-timer.ts';
 import type { BenchInstance, BenchMeshGeometry } from './gltf-geometry.ts';
 import type { GpuBuildResult, ModeResult, OursBuildResult, TmbuildBuildResult, TraceMode } from './results.ts';
@@ -128,6 +128,8 @@ export async function buildGpuScene(
     const wallStart = performance.now();
     const batch = builder.createBatch(geometries);
     const gpuMs: number[] = [];
+    let loadedMs: number[] = [];
+    let loadedSeconds = 0;
     let wallBuildMs = 0;
     let builds;
     try {
@@ -136,6 +138,10 @@ export async function buildGpuScene(
             if (run === 0) wallBuildMs = performance.now() - wallStart;
             else gpuMs.push(ms);
         }
+        const loadedRuns = Math.min(GPU_BUILD_LOADED_RUNS.max, Math.max(GPU_BUILD_LOADED_RUNS.min, Math.round(GPU_BUILD_LOADED_MS / Math.max(1, median(gpuMs)))));
+        const loadedStart = performance.now();
+        loadedMs = await timeBuildsBackToBack(device, (encoder, timestampWrites) => batch.encode(encoder, timestampWrites), loadedRuns);
+        loadedSeconds = (performance.now() - loadedStart) / 1000;
         const statsStart = performance.now();
         builds = await batch.finish();
         wallBuildMs += performance.now() - statsStart;
@@ -175,6 +181,11 @@ export async function buildGpuScene(
             gpuBuildMsMax: Math.max(...gpuMs),
             gpuBuildRuns: gpuMs.length,
             gpuBuildTimestampTimed: timer.source === 'timestamp-query' ? 1 : 0,
+            gpuBuildLoadedMsMedian: median(loadedMs),
+            gpuBuildLoadedMsMin: Math.min(...loadedMs),
+            gpuBuildLoadedMsMax: Math.max(...loadedMs),
+            gpuBuildLoadedRuns: loadedMs.length,
+            gpuBuildLoadedSeconds: loadedSeconds,
             wallBuildMs,
             readbackMs,
             sahCostVsTinybvh,
@@ -182,6 +193,53 @@ export async function buildGpuScene(
             ...(match ? { sahCostVsTinybvhHploc: match.sahCostRatio, hplocMatchMeshesRefused: match.refused } : {}),
         },
     };
+}
+
+/**
+ * Times `count` builds submitted back to back, without waiting between
+ * them, so the GPU stays loaded: each build is its own compute pass with
+ * timestamps, and the builds go in submits of a few (a single submit of
+ * seconds of work could trip Windows' GPU timeout). Returns each build's ms;
+ * without timestamp queries, one value, the wall time over the count.
+ */
+async function timeBuildsBackToBack(
+    device: GPUDevice,
+    encode: (encoder: GPUCommandEncoder, timestampWrites?: GPUComputePassTimestampWrites) => void,
+    count: number,
+): Promise<number[]> {
+    if (!device.features.has('timestamp-query')) {
+        const start = performance.now();
+        for (let run = 0; run < count; run++) {
+            const encoder = device.createCommandEncoder({ label: 'loaded build' });
+            encode(encoder);
+            device.queue.submit([encoder.finish()]);
+        }
+        await device.queue.onSubmittedWorkDone();
+        return [(performance.now() - start) / count];
+    }
+    const perSubmit = 8;
+    const reads: Promise<number[]>[] = [];
+    for (let first = 0; first < count; first += perSubmit) {
+        const builds = Math.min(perSubmit, count - first);
+        const querySet = device.createQuerySet({ type: 'timestamp', count: builds * 2 });
+        const resolve = device.createBuffer({ size: builds * 16, usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC });
+        const readback = device.createBuffer({ size: builds * 16, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
+        const encoder = device.createCommandEncoder({ label: 'loaded builds' });
+        for (let build = 0; build < builds; build++) encode(encoder, { querySet, beginningOfPassWriteIndex: build * 2, endOfPassWriteIndex: build * 2 + 1 });
+        encoder.resolveQuerySet(querySet, 0, builds * 2, resolve, 0);
+        encoder.copyBufferToBuffer(resolve, 0, readback, 0, builds * 16);
+        device.queue.submit([encoder.finish()]);
+        reads.push(
+            readback.mapAsync(GPUMapMode.READ).then(() => {
+                const stamps = new BigUint64Array(readback.getMappedRange().slice(0));
+                readback.destroy();
+                resolve.destroy();
+                querySet.destroy();
+                return Array.from({ length: builds }, (_, build) => Number(stamps[build * 2 + 1] - stamps[build * 2]) / 1e6);
+            }),
+        );
+    }
+    return (await Promise.all(reads)).flat();
 }
 
 /**

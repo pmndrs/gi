@@ -48,6 +48,17 @@ export const DEFAULT_TRACER_IDS: readonly TracerId[] = ['ours-tinybvh', 'ours-tm
 export const GPU_BUILD_TIMED_RUNS = 5;
 
 /**
+ * Then the loaded section: builds submitted back to back for about this long,
+ * so the GPU stays busy and its clock is the loaded one (DECISIONS f3e3bba:
+ * pass/fail timing is taken GPU-bound, over sections of 10-15 s, from a cool
+ * card). The single builds above wait for each result, so the GPU idles
+ * between them and the bench lock's once-a-second clock sampler barely sees them.
+ */
+export const GPU_BUILD_LOADED_MS = 10_000;
+/** Bounds on the loaded section's build count, whatever one build takes. */
+export const GPU_BUILD_LOADED_RUNS = { min: 10, max: 400 } as const;
+
+/**
  * How big a run is.
  *
  * - `full`: what the decision uses. 256 rays per probe, about 2M rays per dispatch,

@@ -76,6 +76,15 @@ export interface GpuBuildResult extends OursBuildResult {
     gpuBuildRuns: number;
     /** 1 when the build was timed with GPU timestamps, 0 for the wall-clock fallback. */
     gpuBuildTimestampTimed: number;
+    /**
+     * The loaded section (config.ts, GPU_BUILD_LOADED_MS): builds submitted back to back, each timed on its
+     * own. The pass/fail number; median, fastest, slowest, how many, and the section's wall time in seconds.
+     */
+    gpuBuildLoadedMsMedian: number;
+    gpuBuildLoadedMsMin: number;
+    gpuBuildLoadedMsMax: number;
+    gpuBuildLoadedRuns: number;
+    gpuBuildLoadedSeconds: number;
     /** Wall time of the first build: uploading the meshes, building, and reading the stats back. */
     wallBuildMs: number;
     /** Reading every tree back into CPU memory for the tracer's scene assembly (not part of a GPU-resident build). */

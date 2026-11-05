@@ -270,6 +270,7 @@ async function runScene(context: BenchContext, sceneId: string): Promise<SceneRe
                 const match = built.result.sahCostVsTinybvhHploc;
                 progress(
                     `${sceneId}: ${tracer} built in ${built.result.gpuBuildMsMedian.toFixed(2)} ms of GPU time (median of ${built.result.gpuBuildRuns}; ` +
+                        `loaded, back to back: ${built.result.gpuBuildLoadedMsMedian.toFixed(2)} ms, median of ${built.result.gpuBuildLoadedRuns} over ${built.result.gpuBuildLoadedSeconds.toFixed(1)} s; ` +
                         `${Math.round(built.result.wallBuildMs)} ms wall for the first, with uploads), read back in ${Math.round(built.result.readbackMs)} ms; ` +
                         `SAH cost ${built.result.sahCostVsTinybvh.toFixed(3)}x tinybvh's, depth ${built.result.maxMeshDepth}, ` +
                         `${(built.result.bytesTotal / 1e6).toFixed(1)} MB, ${built.result.meshesFallenBack} meshes fell back` +
