@@ -354,9 +354,9 @@ The viewer measures every number itself, with GPU timestamp queries, on named sc
 
 | What | How measured | Proposed v1 target (target hardware, 1440p) |
 | --- | --- | --- |
-| Cost of showing GI | GPU ms of the GI sampling in the frame | ≤ 1.0 ms (stretch 0.5 ms) |
+| Cost of showing GI | GPU ms of the GI sampling in the frame, including any extra render targets and the composite pass it needs | ≤ 1.0 ms (stretch 0.5 ms) |
 | Cost of updating GI | GPU ms of `gi.update` per frame at default budget | ≤ 2.0 ms, user-adjustable |
-| Whole frame | p50 / p95 frame time, GI on vs off | GI adds ≤ 3 ms p50 and no p95 spikes |
+| Whole frame | p50 / p95 frame time, GI on vs off | reported; the bar is the sum of the two rows above (≤ 3 ms p50 at the default budget), and no p95 spikes (revised 2026-11-05, DECISIONS) |
 | Light change response | frames until visible; time until within 5% of settled | next frame; ≤ 0.5 s |
 | Object move response | same, for a cabinet move and a door closing | ≤ 1 s, no leak through the closed door |
 | Stability | frame-to-frame flicker on a still scene | threshold set by eye in M1, then locked |
