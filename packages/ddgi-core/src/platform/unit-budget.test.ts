@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { BUCKET_MAX_AGE_FRAMES, DEFAULT_UNITS_PER_FRAME, RECENT_FRAMES, steerUnits, UNIT_STEERING, UnitCostMeter, unitsForFrame, type UnitCostModel } from './gi-platform.ts';
+import { BatchSteering, BUCKET_MAX_AGE_FRAMES, DEFAULT_UNITS_PER_FRAME, RECENT_FRAMES, steerUnits, UNIT_STEERING, UnitCostMeter, unitsForFrame, type UnitCostModel } from './gi-platform.ts';
+import type { FrameBudget } from './contract/frame.ts';
 
 const proportional = (msPerUnit: number): UnitCostModel => ({ fixedMs: 0, msPerUnit });
 
@@ -38,40 +39,42 @@ describe('turning a ms budget into units (T1.5b, fixed part T1.9a)', () => {
     });
 });
 
-describe('steering the batch from frame to frame (T1.9a review)', () => {
+describe('steering the batch from frame to frame (T1.9a reviews)', () => {
+    const previous = (units: number, nearMs: number | undefined, framesUnchanged = 0) => ({ units, nearMs, framesUnchanged });
+
     it('takes the model target on the first millisecond frame (after a warm-up in units)', () => {
         expect(steerUnits(133, undefined, 2)).toBe(133);
     });
 
     it('waits at the previous batch until enough frames near it are measured', () => {
-        expect(steerUnits(133, { units: 60, nearMs: undefined }, 2)).toBe(60);
+        expect(steerUnits(133, previous(60, undefined, 50), 2)).toBe(60);
     });
 
-    it('keeps the batch inside the dead band', () => {
-        expect(steerUnits(133, { units: 60, nearMs: 2.08 }, 2)).toBe(60);
-    });
-
-    it('moves by the square root of budget / measured, within the shrink and growth limits', () => {
+    it('shrinks by the square root of budget / measured, at most to maxShrink', () => {
         // 2 / 2.5 = 0.8, its square root 0.894: 60 → 54.
-        expect(steerUnits(1, { units: 60, nearMs: 2.5 }, 2)).toBe(54);
-        // Far over the budget: at most maxShrink.
-        expect(steerUnits(1, { units: 60, nearMs: 8 }, 2)).toBe(Math.floor(60 * UNIT_STEERING.maxShrink));
-        // Far under: at most maxGrowth (+ 1, so small batches can grow).
-        expect(steerUnits(1000, { units: 60, nearMs: 0.5 }, 2)).toBe(Math.ceil(60 * UNIT_STEERING.maxGrowth) + 1);
+        expect(steerUnits(1, previous(60, 2.5), 2)).toBe(54);
+        expect(steerUnits(1, previous(60, 8), 2)).toBe(Math.floor(60 * UNIT_STEERING.maxShrink));
     });
 
-    it('ignores the model target once steering (the line is wrong below the flat part)', () => {
-        expect(steerUnits(1, { units: 25, nearMs: 2.0 }, 2)).toBe(25);
+    it('grows by that square root when well under the budget, at most by maxGrowth', () => {
+        expect(steerUnits(1000, previous(60, 1.6), 2)).toBe(67);
+        expect(steerUnits(1000, previous(60, 0.5), 2)).toBe(Math.ceil(60 * UNIT_STEERING.maxGrowth) + 1);
+    });
+
+    it('climbs slowly inside the band while at or under the budget, once the batch has stood long enough', () => {
+        expect(steerUnits(1, previous(60, 1.98, UNIT_STEERING.climbFrames - 1), 2)).toBe(60);
+        expect(steerUnits(1, previous(60, 1.98, UNIT_STEERING.climbFrames), 2)).toBe(Math.round(60 * UNIT_STEERING.climbStep));
+        // Inside the band but over the budget: stay.
+        expect(steerUnits(1, previous(60, 2.08, 50), 2)).toBe(60);
     });
 
     it('keeps a zero budget at zero', () => {
-        expect(steerUnits(0, { units: 100, nearMs: 2 }, 0)).toBe(0);
+        expect(steerUnits(0, previous(100, 2), 0)).toBe(0);
     });
 
     it('applies the units cap last (FrameBudget: a hard cap when gpuMs is set)', () => {
         const model: UnitCostModel = { fixedMs: 1.2, msPerUnit: 0.006 };
-        // After a 1,000-probe frame, steering alone would allow 800; the cap of 10 wins.
-        expect(unitsForFrame({ gpuMs: 2, units: 10 }, [model], [{ units: 1000, nearMs: 9 }])).toEqual([10]);
+        expect(unitsForFrame({ gpuMs: 2, units: 10 }, [model], [previous(1000, 9)])).toEqual([10]);
     });
 
     it('measures near a batch from recent frames within the near share, once there are enough', () => {
@@ -86,6 +89,19 @@ describe('steering the batch from frame to frame (T1.9a review)', () => {
         meter.measure(frame, [{ name: 't/work', gpuMs: 3.5 }]);
         // Five frames between 48 and 75 probes: 1.8, 2, 2.1, 2.2, 3.5.
         expect(meter.msNear('t', 60)).toBe(2.1);
+    });
+
+    it('steers from the units used, and counts the frames the hand-out stood', () => {
+        const meter = new UnitCostMeter();
+        const steering = new BatchSteering();
+        steering.record(5000, 1000, true);
+        steering.record(5000, 1000, true);
+        expect(steering.previous(meter, 't')).toEqual({ units: 1000, nearMs: undefined, framesUnchanged: 1 });
+        // It used 1,000 of 5,000: the next hand-out is at most maxGrowth past 1,000.
+        expect(steering.limit(5000)).toBe(Math.ceil(1000 * UNIT_STEERING.maxGrowth) + 1);
+        steering.record(600, 600, false);
+        expect(steering.previous(meter, 't')).toBeUndefined();
+        expect(steering.limit(5000)).toBe(5000);
     });
 });
 
@@ -251,50 +267,59 @@ describe('aging out batch sizes (T1.9a review)', () => {
 });
 
 /**
- * The budget loop as the platform runs it (T1.9a and its review): a warm-up
- * of big batches in units, then `gpuMs: 2` with the previous batch fed back
- * for steering, timings arriving 3 frames late, ±10% noise per frame, outside
- * GPU work adding 2.5 ms to every third frame, and bursts in which it adds
- * 0.8 ms to the other frames too (what the RTX 3060 showed on Sponza).
+ * The budget loop exactly as the platform runs it (gi-platform.ts, encode):
+ * the model's target on the first millisecond frame, then BatchSteering fed
+ * the units *used*; timings arriving 3 frames late; ±10% noise per frame;
+ * optionally outside GPU work adding 2.5 ms to every third frame, and 1 s
+ * bursts adding 0.8 ms to the other frames too (what the RTX 3060 showed).
+ * `capacity` is the most units the technique can use (all probes, or
+ * `maxProbesPerFrame`).
  */
-interface BudgetRun {
-    units: number[];
-    /** The technique's own time per frame (the outside work taken out). */
-    ms: number[];
+interface LoopOptions {
+    readonly budget: (frame: number) => FrameBudget;
+    readonly truth: (units: number) => number;
+    readonly frames: number;
+    readonly capacity?: number;
+    readonly spikes?: boolean;
+    readonly bursts?: boolean;
+    readonly seed?: number;
 }
 
-function simulateBudget(truth: (units: number) => number, options: { spikes: boolean; bursts?: boolean; frames?: number; seed?: number }): BudgetRun {
+interface LoopRun {
+    readonly handed: number[];
+    readonly used: number[];
+    /** The technique's own time per frame (outside work taken out). */
+    readonly ms: number[];
+}
+
+function runBudgetLoop(options: LoopOptions): LoopRun {
     const meter = new UnitCostMeter();
+    const steering = new BatchSteering();
     const lag = 3;
-    const warmupFrames = 20;
     let state = options.seed ?? 12345;
     const random = () => {
         state = (state * 1664525 + 1013904223) >>> 0;
         return state / 2 ** 32;
     };
     const pending: Array<{ frame: number; ms: number }> = [];
-    const run: BudgetRun = { units: [], ms: [] };
-    let previous: number | undefined;
-    for (let frame = 1; frame <= (options.frames ?? 600); frame++) {
-        const budget = frame <= warmupFrames ? { units: 4096 } : { gpuMs: 2 };
-        // As the platform does it (gi-platform.ts, encode).
-        const last = previous === undefined ? undefined : { units: previous, nearMs: meter.msNear('ddgi', previous) };
-        const [handed] = unitsForFrame(budget, [meter.model('ddgi')], [last]);
-        previous = budget.gpuMs === undefined ? undefined : handed;
-        meter.handOut(frame, 'ddgi', handed);
-        // Bursts of 1 s: the RTX showed them about once in 15 s.
+    const run: LoopRun = { handed: [], used: [], ms: [] };
+    for (let frame = 1; frame <= options.frames; frame++) {
+        const budget = options.budget(frame);
+        const handed = steering.limit(unitsForFrame(budget, [meter.model('ddgi')], [steering.previous(meter, 'ddgi')])[0]);
+        const used = Math.min(handed, options.capacity ?? Number.POSITIVE_INFINITY);
+        meter.handOut(frame, 'ddgi', used);
+        steering.record(handed, used, budget.gpuMs !== undefined);
         const inBurst = options.bursts === true && frame % 900 >= 300 && frame % 900 < 360;
         const outside = !options.spikes ? 0 : frame % 3 === 0 ? 2.5 : inBurst ? 0.8 : 0;
-        const own = truth(handed) * (0.9 + 0.2 * random());
+        const own = used === 0 ? 0 : options.truth(used) * (0.9 + 0.2 * random());
         pending.push({ frame, ms: own + outside });
         while (pending.length > 0 && pending[0].frame <= frame - lag) {
             const arrived = pending.shift()!;
             meter.measure(arrived.frame, [{ name: 'ddgi/trace', gpuMs: arrived.ms }]);
         }
-        if (frame > warmupFrames) {
-            run.units.push(handed);
-            run.ms.push(own);
-        }
+        run.handed.push(handed);
+        run.used.push(used);
+        run.ms.push(own);
     }
     return run;
 }
@@ -306,52 +331,78 @@ function quantile(values: readonly number[], share: number): number {
 
 const median = (values: readonly number[]) => quantile(values, 0.5);
 
-/** Flat, then linear: about 1.5 ms up to 128 probes, then 5.5 µs per probe. truth(n) = 2 at n = 218. */
-const flatThenLinear = (units: number) => Math.max(1.5, 0.8 + 0.0055 * units);
-/**
- * Sponza at 60 Hz on the RTX: a single probe costs 0.2-0.3 ms, the time
- * climbs to about 1.7 ms by 32 probes, then about 6 µs per probe.
- * truth(n) = 2 at about 60 probes.
- */
+/** The first frame from which a 30-frame rolling median of `values` stays within ±25% of `settled`. */
+function settleFrame(values: readonly number[], settled: number): number {
+    let first = 0;
+    for (let frame = 30; frame <= values.length; frame++) {
+        const rolling = median(values.slice(frame - 30, frame));
+        if (Math.abs(rolling - settled) > 0.25 * settled) first = frame;
+    }
+    return first;
+}
+
+const warmupThen = (gpuMs: (frame: number) => number) => (frame: number): FrameBudget => (frame <= 20 ? { units: 4096 } : { gpuMs: gpuMs(frame) });
+
+/** Sponza at 60 Hz on the RTX: 1 probe 0.2-0.3 ms, about 1.7 ms by 32 probes, then about 6 µs per probe. truth(n) = 2 at about 60. */
 const sponzaLike = (units: number) => 0.2 + 1.4 * (1 - Math.exp(-units / 12)) + 0.006 * units;
+/** The re-review's Sponza: nearly flat (1.85-1.95 ms) from 20 to 190 probes, then 8 µs per probe. */
+const flatSponza = (units: number) => 0.2 + 1.65 * (1 - Math.exp(-units / 6)) + 0.0006 * units + Math.max(0, 0.008 * (units - 190));
+/** Cornell on the RTX: 0.15 ms + 1.4 µs per probe. */
+const cornellLike = (units: number) => 0.15 + 0.0014 * units;
 
-describe('the budget loop with a fixed cost, late timings and outside spikes (T1.9a)', () => {
-    it('settles on the batch whose own time is the budget', () => {
-        for (const spikes of [false, true]) {
-            const { units, ms } = simulateBudget(flatThenLinear, { spikes });
-            const settled = { units: units.slice(200), ms: ms.slice(200) };
-            // The dead band (±5% of the budget) leaves it anywhere from about 180 to 240.
-            expect(median(settled.units)).toBeGreaterThan(180);
-            expect(median(settled.units)).toBeLessThan(240);
-            expect(Math.abs(median(settled.ms) - 2) / 2).toBeLessThan(0.1);
-        }
+describe('the budget loop as the platform runs it (T1.9a reviews)', () => {
+    it('settles at the largest batch that fits on a nearly flat curve, not the first', () => {
+        const run = runBudgetLoop({ budget: warmupThen(() => 2), truth: flatSponza, frames: 1500 });
+        const used = run.used.slice(600);
+        // flatSponza(n) = 2 at n ≈ 200; the first batch that fits is about 20.
+        expect(median(used)).toBeGreaterThan(170);
+        expect(Math.abs(median(run.ms.slice(600)) - 2) / 2).toBeLessThan(0.1);
+        expect(settleFrame(run.used, median(used))).toBeLessThan(600);
     });
 
-    it('comes down from the warm-up within a few frames, without ringing', () => {
-        const { units } = simulateBudget(flatThenLinear, { spikes: true });
-        expect(Math.max(...units.slice(10))).toBeLessThan(2 * 218);
-    });
-
-    it('holds a steady batch on a steady Sponza-like scene, past the buckets aging out', () => {
-        const { units, ms } = simulateBudget(sponzaLike, { spikes: true, frames: 3000 });
-        const settled = { units: units.slice(200), ms: ms.slice(200) };
-        const typical = median(settled.units);
-        expect(Math.abs(median(settled.ms) - 2) / 2).toBeLessThan(0.1);
-        expect(quantile(settled.units, 0.05)).toBeGreaterThanOrEqual(typical / 2);
-        expect(quantile(settled.units, 0.95)).toBeLessThanOrEqual(typical * 2);
-        expect(Math.min(...settled.units)).toBeGreaterThanOrEqual(typical / 2);
+    it('holds a steady batch on a Sponza-like curve with outside spikes', () => {
+        const run = runBudgetLoop({ budget: warmupThen(() => 2), truth: sponzaLike, frames: 3000, spikes: true });
+        const used = run.used.slice(400);
+        const typical = median(used);
+        expect(Math.abs(median(run.ms.slice(400)) - 2) / 2).toBeLessThan(0.1);
+        expect(quantile(used, 0.05)).toBeGreaterThanOrEqual(typical / 2);
+        expect(quantile(used, 0.95)).toBeLessThanOrEqual(typical * 2);
     });
 
     it('shrinks during a 1 s burst of outside work and recovers within 3 s', () => {
-        const { units, ms } = simulateBudget(sponzaLike, { spikes: true, bursts: true, frames: 3000 });
-        const settled = { units: units.slice(200), ms: ms.slice(200) };
-        const typical = median(settled.units);
-        expect(Math.abs(median(settled.ms) - 2) / 2).toBeLessThan(0.1);
-        // Bursts cover simulated frames 300-359 of every 900 (run index = frame - 21).
-        for (const burstStart of [300, 1200, 2100]) {
-            const afterRecovery = units.slice(burstStart + 60 + 180 - 21, burstStart + 900 - 21 - 300);
-            expect(Math.min(...afterRecovery)).toBeGreaterThanOrEqual(typical / 2);
+        const run = runBudgetLoop({ budget: warmupThen(() => 2), truth: sponzaLike, frames: 3000, spikes: true, bursts: true });
+        const typical = median(run.used.slice(400));
+        expect(Math.abs(median(run.ms.slice(400)) - 2) / 2).toBeLessThan(0.1);
+        for (const burstStart of [1200, 2100]) {
+            expect(Math.min(...run.used.slice(burstStart + 60 + 180, burstStart + 600))).toBeGreaterThanOrEqual(typical / 2);
         }
-        expect(Math.min(...settled.units)).toBeGreaterThanOrEqual(1);
+    });
+
+    it('follows the budget down and up mid-run (1,000 probes, 8 → 1 → 8 ms)', () => {
+        const run = runBudgetLoop({ budget: warmupThen((frame) => (frame < 300 ? 8 : frame < 700 ? 1 : 8)), truth: cornellLike, frames: 1100, capacity: 1000 });
+        // 8 ms buys more than all the work: every probe, and the hand-out stays near it.
+        expect(median(run.used.slice(200, 300))).toBe(1000);
+        expect(Math.max(...run.handed.slice(100, 300))).toBeLessThanOrEqual(Math.ceil(1000 * UNIT_STEERING.maxGrowth) + 1);
+        // 1 ms: settled within 2 s, near 607 probes (0.15 + 0.0014 n = 1).
+        expect(Math.abs(median(run.ms.slice(420, 700)) - 1)).toBeLessThan(0.1);
+        expect(settleFrame(run.used.slice(300, 700), median(run.used.slice(500, 700)))).toBeLessThan(120);
+        // Back to 8 ms: every probe again.
+        expect(median(run.used.slice(900))).toBe(1000);
+    });
+
+    it('never freezes when the budget exceeds the work, and still follows a cut (the re-review case)', () => {
+        const run = runBudgetLoop({ budget: warmupThen((frame) => (frame < 300 ? 8 : 1)), truth: cornellLike, frames: 600, capacity: 1000 });
+        // The warm-up asks for 4,096 once; from then on never more than maxGrowth past the 1,000 there are.
+        expect(Math.max(...run.handed.slice(1))).toBeLessThanOrEqual(Math.ceil(1000 * UNIT_STEERING.maxGrowth) + 1);
+        expect(Math.abs(median(run.ms.slice(450)) - 1)).toBeLessThan(0.1);
+    });
+
+    it('respects maxProbesPerFrame as the most the technique can use', () => {
+        // DDGI with maxProbesPerFrame 300: it uses at most 300 whatever it is handed.
+        const run = runBudgetLoop({ budget: warmupThen((frame) => (frame < 300 ? 8 : 0.4)), truth: cornellLike, frames: 600, capacity: 300 });
+        expect(median(run.used.slice(200, 300))).toBe(300);
+        expect(Math.max(...run.handed.slice(100))).toBeLessThanOrEqual(Math.ceil(300 * UNIT_STEERING.maxGrowth) + 1);
+        // 0.4 ms buys about 178 probes.
+        expect(Math.abs(median(run.ms.slice(450)) - 0.4) / 0.4).toBeLessThan(0.1);
     });
 });

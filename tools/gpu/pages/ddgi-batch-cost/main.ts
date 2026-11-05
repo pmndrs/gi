@@ -84,9 +84,21 @@ const BATCH_SIZES = [32, 64, 128, 256, 512, 1024, 2048, 4096] as const;
 const CURVE_UNTIMED_FRAMES = 6;
 const CURVE_TIMED_FRAMES = 30;
 
-/** Budget frames: the first ones show how the budget settles after the warm-up; the rest are judged. */
-const BUDGET_SETTLE_FRAMES = 120;
-const BUDGET_JUDGED_FRAMES = 480;
+/**
+ * Budget frames: the first ones let the controller settle after the warm-up
+ * (the climb took a few seconds on Sponza, T1.9a re-review); the rest are
+ * judged. Settled means the median update time over the last
+ * SETTLE_WINDOW_FRAMES is within ±10% of the budget for the first time; the
+ * page fails if that happens only inside the judged frames. The batch
+ * itself has no fixed point on this laptop: it follows the outside GPU load
+ * (Sponza between about 12 and 225 probes from one second to the next, with
+ * each second's median time 1.4-2.5 ms), so it isn't what "settled" means.
+ */
+const BUDGET_SETTLE_FRAMES = 900;
+const BUDGET_JUDGED_FRAMES = 600;
+const SETTLE_WINDOW_FRAMES = 60;
+/** 60 Hz, for turning frames into seconds. */
+const FRAME_SECONDS = 1 / 60;
 /**
  * The budget holds when the median frame's update is within this share of it
  * (DECISIONS 2026-11-05: single frames include other programs' GPU work).
@@ -377,6 +389,17 @@ async function measureBudget(device: GPUDevice, scene: SceneUnderTest, log: (lin
     const ms = judged.map((sample) => sample.ms);
     const within = ms.filter((value) => Math.abs(value - BUDGET_MS) <= BUDGET_TOLERANCE * BUDGET_MS).length;
     const firstWithin = settle.find((sample) => Math.abs(sample.ms - BUDGET_MS) <= BUDGET_TOLERANCE * BUDGET_MS);
+    // When the controller settled: the first frame whose rolling median update time is within ±10% of the budget.
+    const probesMedian = median(judged.map((sample) => sample.units));
+    const msByFrame = Array.from({ length: totalFrames }, (_, index) => timings.updateMs(firstFrame + index));
+    let settledFrame = Number.POSITIVE_INFINITY;
+    for (let frame = SETTLE_WINDOW_FRAMES; frame <= totalFrames; frame++) {
+        const window = msByFrame.slice(frame - SETTLE_WINDOW_FRAMES, frame).filter((value): value is number => value !== undefined);
+        if (window.length >= SETTLE_WINDOW_FRAMES / 2 && Math.abs(median(window) - BUDGET_MS) <= BUDGET_TOLERANCE * BUDGET_MS) {
+            settledFrame = frame;
+            break;
+        }
+    }
     const result = {
         budget_ms: BUDGET_MS,
         timed_frames: judged.length,
@@ -387,9 +410,13 @@ async function measureBudget(device: GPUDevice, scene: SceneUnderTest, log: (lin
         update_ms_max: round(Math.max(...ms)),
         share_within_10pct: round(within / ms.length, 3),
         census_ms_median: round(median(judged.map((sample) => sample.census))),
-        probes_median: median(judged.map((sample) => sample.units)),
+        probes_median: probesMedian,
         probes_p05: percentile(judged.map((sample) => sample.units), 0.05),
         probes_p95: percentile(judged.map((sample) => sample.units), 0.95),
+        // Seconds after the warm-up until the batch settled, and how long a pass over every probe takes once it has.
+        settled_after_s: round(settledFrame * FRAME_SECONDS, 2),
+        settled_before_judging: settledFrame <= BUDGET_SETTLE_FRAMES ? 1 : 0,
+        sweep_s: round(scene.probeCount / probesMedian * FRAME_SECONDS, 2),
         settle_first_ms: settle[0] ? round(settle[0].ms) : NaN,
         settle_max_ms: round(Math.max(...settle.map((sample) => sample.ms))),
         settle_first_within_frame: firstWithin ? firstWithin.frame : -1,
@@ -399,7 +426,8 @@ async function measureBudget(device: GPUDevice, scene: SceneUnderTest, log: (lin
     };
     log(
         `${scene.manifest.id}, budget ${BUDGET_MS} ms: update median ${result.update_ms_median} (p05 ${result.update_ms_p05}, p95 ${result.update_ms_p95}), ` +
-            `${Math.round(result.share_within_10pct * 100)}% of frames within ±10%, ${result.probes_median} probes per frame; ` +
+            `${Math.round(result.share_within_10pct * 100)}% of frames within ±10%, ${result.probes_median} probes per frame (p05 ${result.probes_p05}, p95 ${result.probes_p95}), ` +
+            `settled after ${result.settled_after_s} s, a sweep every ${result.sweep_s} s; ` +
             `after the warm-up: first ${result.settle_first_ms} ms, max ${result.settle_max_ms}, within ±10% from frame ${result.settle_first_within_frame}`,
     );
     return result;
@@ -681,6 +709,7 @@ await runThreePage(async ({ device, renderer, data, log }) => {
             if (Math.abs((budget.update_ms_median as number) - BUDGET_MS) > BUDGET_TOLERANCE * BUDGET_MS) {
                 budgetFailures.push(`${id}: the median update took ${budget.update_ms_median} ms against a ${BUDGET_MS} ms budget (±${BUDGET_TOLERANCE * 100}%)`);
             }
+            if (budget.settled_before_judging !== 1) budgetFailures.push(`${id}: the update time reached the budget only after ${budget.settled_after_s} s, inside the judged frames`);
         }
         if (SECTIONS.has('steady')) {
             const budget = sceneResult.budget as { probes_median?: number } | undefined;

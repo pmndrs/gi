@@ -95,21 +95,38 @@ export const RECENT_FRAMES = 31;
  *
  * Why (T1.9a review): steering by the fitted line alone swung Sponza's batch
  * between 1 and about 120 probes. Below about 30 probes Sponza's time is not
- * a line: 1 probe costs 0.2 ms, 25 probes about 2 ms at 60 Hz. The line's
- * fixed part (about 2 ms) then sent the batch to 1 probe, the 1-probe frames
- * pulled the fixed part down, and the line sent it back up. So after the
+ * a line: 1 probe costs 0.2 ms, 25 probes about 2 ms at 60 Hz. So after the
  * first millisecond frame the batch is steered by what was measured at about
- * its own size, which needs no line:
+ * its own size, which needs no line. And because the time is nearly flat
+ * from about 20 to 190 probes at 60 Hz, the batch keeps climbing while the
+ * time stays within the budget, so it settles at the largest batch that
+ * fits, not the first (T1.9a re-review: about 10× the probes for the same
+ * time).
  *
- * - the recent frames whose batch was within `nearShare` of the previous
- *   one (at least `nearFrames` of them; until then the batch stays) give the
- *   median time at that size;
- * - within `deadBand` of the budget, the batch stays;
- * - otherwise it changes by the square root of budget / measured (half the
- *   correction a proportional step would make, so the 3-frame-late timings
- *   don't make it ring), by at most `maxShrink` and `maxGrowth` per frame.
+ * - The batch is the units the technique *used* last frame (never more than
+ *   it could use: all probes, or `maxProbesPerFrame`), so a budget bigger
+ *   than the work can't run the hand-out away from what is measured;
+ * - the recent frames whose batch was within `nearShare` of it (at least
+ *   `nearFrames` of them; until then the batch stays) give the median time
+ *   at that size;
+ * - over the budget by more than `deadBand`: shrink by the square root of
+ *   budget / measured, at most to `maxShrink`;
+ * - under it by more than `deadBand`: grow by that square root, at most by
+ *   `maxGrowth`;
+ * - in between and at or under the budget: climb by `climbStep` once the
+ *   batch has stood for `climbFrames` frames (the timings arrive 3 frames
+ *   late, and the median needs frames at the new size); over the budget but
+ *   inside the band: stay.
  */
-export const UNIT_STEERING = { nearShare: 1.25, nearFrames: 5, deadBand: 0.05, maxShrink: 0.8, maxGrowth: 1.25 } as const;
+export const UNIT_STEERING = {
+    nearShare: 1.25,
+    nearFrames: 5,
+    deadBand: 0.05,
+    maxShrink: 0.8,
+    maxGrowth: 1.25,
+    climbStep: 1.1,
+    climbFrames: 6,
+} as const;
 
 /** Each batch-size bucket keeps this many of its latest frames; the slope is fitted through their medians. */
 const BUCKET_FRAMES = 9;
@@ -140,11 +157,14 @@ const MIN_FIT_SPAN = 4;
 /** Frames of handed-out units remembered while their timings are on the way (they arrive a few frames late). */
 const REMEMBERED_FRAMES = 32;
 
-/** What steering needs from the previous frame: its batch, and the median time measured at about that size. */
+/** What steering needs from the previous frame. */
 export interface PreviousBatch {
+    /** The units the technique used last frame. */
     readonly units: number;
     /** The median GPU ms of recent frames near `units` ({@link UNIT_STEERING}); undefined until there are enough. */
     readonly nearMs: number | undefined;
+    /** Frames the batch has stood unchanged (for the climb). */
+    readonly framesUnchanged: number;
 }
 
 /**
@@ -182,15 +202,66 @@ export function unitsForFrame(budget: FrameBudget, costs: readonly (UnitCostMode
 export function steerUnits(target: number, previous: PreviousBatch | undefined, shareMs: number): number {
     if (target === 0) return 0;
     if (previous === undefined || !(previous.units > 0)) return target;
+    const units = previous.units;
     // Not enough frames at this size yet: wait for them rather than guess.
-    if (previous.nearMs === undefined || !(previous.nearMs > 0)) return previous.units;
-    const ratio = shareMs / previous.nearMs;
-    if (Math.abs(ratio - 1) <= UNIT_STEERING.deadBand) return previous.units;
-    const step = Math.sqrt(ratio);
-    const smallest = Math.floor(previous.units * UNIT_STEERING.maxShrink);
-    // + 1 so a batch of a few units can still grow.
-    const largest = Math.ceil(previous.units * UNIT_STEERING.maxGrowth) + 1;
-    return Math.max(1, Math.min(largest, Math.max(smallest, Math.round(previous.units * step))));
+    if (previous.nearMs === undefined || !(previous.nearMs > 0)) return units;
+    const measured = previous.nearMs;
+    const correction = Math.sqrt(shareMs / measured);
+    if (measured > shareMs * (1 + UNIT_STEERING.deadBand)) {
+        return Math.max(1, Math.floor(units * UNIT_STEERING.maxShrink), Math.round(units * correction));
+    }
+    if (measured < shareMs * (1 - UNIT_STEERING.deadBand)) {
+        // + 1 so a batch of a few units can still grow.
+        return Math.min(Math.ceil(units * UNIT_STEERING.maxGrowth) + 1, Math.max(units + 1, Math.round(units * correction)));
+    }
+    if (measured <= shareMs && previous.framesUnchanged >= UNIT_STEERING.climbFrames) {
+        return Math.max(units + 1, Math.round(units * UNIT_STEERING.climbStep));
+    }
+    return units;
+}
+
+/**
+ * One technique's steering state between frames, as the platform keeps it:
+ * the units it used last frame and how long the hand-out has stood. Only
+ * frames with a millisecond budget count; any other frame starts over (the
+ * next millisecond frame takes the model's target).
+ */
+export class BatchSteering {
+    private last: { used: number; handedOut: number; framesUnchanged: number } | undefined;
+    /** The units used last frame when that was less than handed out (all the work there was), whatever the budget. */
+    private workLimit: number | undefined;
+
+    /** What {@link steerUnits} needs, or undefined when the last frame had no millisecond budget. */
+    previous(meter: UnitCostMeter, techniqueId: string): PreviousBatch | undefined {
+        const last = this.last;
+        if (!last) return undefined;
+        return { units: last.used, nearMs: meter.msNear(techniqueId, last.used), framesUnchanged: last.framesUnchanged };
+    }
+
+    /**
+     * This frame's hand-out, at most `maxGrowth` past what the technique could
+     * use last frame when it used less than it was given. A bigger hand-out
+     * buys nothing, and steering from it would leave the measured sizes behind.
+     */
+    limit(units: number): number {
+        return this.workLimit === undefined ? units : Math.min(units, Math.ceil(this.workLimit * UNIT_STEERING.maxGrowth) + 1);
+    }
+
+    /** After the technique's encode: what was handed out, what it used, and whether the budget was in milliseconds. */
+    record(handedOut: number, used: number, msBudget: boolean): void {
+        this.workLimit = used < handedOut ? used : undefined;
+        if (!msBudget) {
+            this.last = undefined;
+            return;
+        }
+        const unchanged = this.last !== undefined && this.last.handedOut === handedOut;
+        this.last = { used, handedOut, framesUnchanged: unchanged ? (this.last as { framesUnchanged: number }).framesUnchanged + 1 : 0 };
+    }
+
+    reset(): void {
+        this.last = undefined;
+        this.workLimit = undefined;
+    }
 }
 
 /** One timed frame: the units a technique used and the GPU ms its passes took. */
@@ -429,8 +500,8 @@ export class GIPlatformImpl implements GIPlatform {
     private latestPasses: PassTiming[] = [];
     /** Each technique's measured GPU cost (fixed + per unit), for turning `budget.gpuMs` into units. */
     private readonly unitCosts = new UnitCostMeter();
-    /** Units handed out last frame, for techniques whose last frame had a millisecond budget (for steering, UNIT_STEERING). */
-    private readonly lastMsBudgetUnits = new Map<GITechnique, number>();
+    /** Each technique's steering state between frames (UNIT_STEERING). */
+    private readonly steering = new Map<GITechnique, BatchSteering>();
     private readonly warnedMessages = new Set<string>();
     /** The `uncapturederror` listener, kept so `dispose` can remove it. */
     private readonly onUncapturedError: (event: Event) => void;
@@ -489,7 +560,7 @@ export class GIPlatformImpl implements GIPlatform {
     addTechnique<T extends GITechnique>(technique: T): T {
         this.checkUsable();
         this.unitCosts.reset();
-        this.lastMsBudgetUnits.clear();
+        this.steering.clear();
         if (this.find(technique)) throw new Error(`@pmndrs/ddgi: technique '${technique.id}' is already attached`);
         for (const kind of technique.requirements.queries) {
             if (!this.queries.has(kind)) throw new Error(`@pmndrs/ddgi: technique '${technique.id}' needs the '${kind}' query backend, which this platform doesn't have`);
@@ -505,7 +576,7 @@ export class GIPlatformImpl implements GIPlatform {
     /** Detaches and disposes the technique (a technique is attached to one platform for its whole life). */
     removeTechnique(technique: GITechnique): void {
         this.unitCosts.reset();
-        this.lastMsBudgetUnits.clear();
+        this.steering.clear();
         const entry = this.find(technique);
         if (!entry) return;
         if (this.attached.some((other) => other.fallback === technique)) {
@@ -541,7 +612,7 @@ export class GIPlatformImpl implements GIPlatform {
     async prepare(): Promise<void> {
         // New resources and kernels: old costs per unit no longer apply.
         this.unitCosts.reset();
-        this.lastMsBudgetUnits.clear();
+        this.steering.clear();
         this.checkUsable();
         checkComputeLimits(this.device.limits);
         // The platform's kernels and the techniques' compile side by side: every module's
@@ -587,17 +658,16 @@ export class GIPlatformImpl implements GIPlatform {
             const units = unitsForFrame(
                 frame.budget,
                 techniques.map((technique) => this.costModel(technique)),
-                techniques.map((technique) => {
-                    const previous = this.lastMsBudgetUnits.get(technique);
-                    return previous === undefined ? undefined : { units: previous, nearMs: this.unitCosts.msNear(technique.id, previous) };
-                }),
+                techniques.map((technique) => this.steering.get(technique)?.previous(this.unitCosts, technique.id)),
             );
             const msBudget = frame.budget.gpuMs !== undefined;
             techniques.forEach((technique, index) => {
-                if (msBudget) this.lastMsBudgetUnits.set(technique, units[index]);
-                else this.lastMsBudgetUnits.delete(technique);
-            });
-            techniques.forEach((technique, index) => {
+                let steering = this.steering.get(technique);
+                if (!steering) {
+                    steering = new BatchSteering();
+                    this.steering.set(technique, steering);
+                }
+                units[index] = steering.limit(units[index]);
                 const techniqueFrame: TechniqueFrame = {
                     frame: this.frame,
                     deltaTime: frame.deltaTime,
@@ -605,10 +675,13 @@ export class GIPlatformImpl implements GIPlatform {
                     changes: upload.changes,
                     units: units[index],
                 };
-                const used = technique.encode(encoder, techniqueFrame);
-                // Cost per unit is measured against the units actually used: a budget
-                // bigger than the work would otherwise make units look cheaper and cheaper.
-                if (this.timer) this.unitCosts.handOut(this.frame, technique.id, typeof used === 'number' ? Math.min(used, units[index]) : units[index]);
+                const reported = technique.encode(encoder, techniqueFrame);
+                // Cost is measured, and the batch steered, against the units actually used: a budget
+                // bigger than the work would otherwise make units look cheaper and cheaper, and
+                // the hand-out climb away from anything measured.
+                const used = typeof reported === 'number' ? Math.min(reported, units[index]) : units[index];
+                if (this.timer) this.unitCosts.handOut(this.frame, technique.id, used);
+                steering.record(units[index], used, msBudget);
             });
         }
 
@@ -662,7 +735,7 @@ export class GIPlatformImpl implements GIPlatform {
 
     resetHistory(): void {
         this.unitCosts.reset();
-        this.lastMsBudgetUnits.clear();
+        this.steering.clear();
         for (const { technique } of this.attached) technique.resetHistory();
     }
 
