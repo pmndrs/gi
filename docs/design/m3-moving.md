@@ -1,6 +1,6 @@
 # M3 design draft: moving objects and the camera
 
-Status: **draft for Dennis's review, 2026-11-05, revised after an Opus review the same day.** Nothing here is decided. It is the input for M3's breakdown (the last task of M2) and, for the startup items DECISIONS moved to M2, for T1.11.
+Status: **draft for Dennis's review, 2026-11-05, revised after an Opus review and again after Dennis's answers the same day** (listed at the end). Apart from those answers, nothing here is decided. It is the input for M3's breakdown (the last task of M2) and, for the startup items DECISIONS moved to M2, for T1.11.
 
 It builds on [ddgi.md](ddgi.md), [bvh-framework.md](bvh-framework.md), [platform.md](../api/platform.md), [three.md](../api/three.md), the B1 hand-over (branch `bvh-b1`: `packages/bvh/README.md` and its PROGRESS entry) and the M2 draft, [m2-lights.md](m2-lights.md). M3 reuses M2's per-probe history and GPU scheduler (m2-lights.md section 4) for moved geometry; if M2 changes them, this page follows.
 
@@ -55,11 +55,11 @@ What already exists: `setTransform`, `createInstance` and `destroyInstance`, `cr
 
 M3 adds:
 
-- **`setTransforms(instances: Uint32Array, matrices: Float32Array)`** (a host-facing addition; question 2). B1a measured 10,000 `setTransform` calls at 18–20 ms, about 2 µs each, all bookkeeping per call. A batch call writes straight into the instance mirror and logs one region list. Target: 10,000 transforms in ≤ 2 ms.
+- **`setTransforms(instances: Uint32Array, matrices: Float32Array)`** (a host-facing addition; Dennis: yes, 2026-11-05). B1a measured 10,000 `setTransform` calls at 18–20 ms, about 2 µs each, all bookkeeping per call. A batch call writes straight into the instance mirror and logs one region list. Target: 10,000 transforms in ≤ 2 ms.
 - **The move distance per instance:** `SceneChanges` regions from a move carry how far the box's corners moved (`moved`, in metres). `ddgi/mark` uses it (section 5.1). Technique-facing.
 - **`SceneChanges.receivers: readonly Aabb[]`** in place of the `movedReceivers` count (technique-facing). Moving objects that don't contribute to GI (characters, small props) still need nearby probes awake (section 5.3).
 - **`deformBounds`** on a `deforming: true` mesh: a box, in mesh space, the deformed shape stays inside. The platform can't read GPU-supplied positions on the CPU, so this is what it logs as the mesh's region each frame.
-- **`setDeformedPositions`** as the contract says: a same-device `GPUBuffer`. Optionally also a CPU `Float32Array` that the platform uploads into its own buffer (question 1). *Why the CPU form:* three r187 gives no supported way to get at a GPU buffer it owns (section 7). It would be a host-facing addition and needs a DECISIONS entry, because SPEC's tracing decision describes positions arriving "as a GPU buffer, so there's no rebuild and no CPU work".
+- **`setDeformedPositions`** as the contract says: a same-device `GPUBuffer`. Also a CPU `Float32Array`, which the platform uploads into its own buffer (Dennis: yes, 2026-11-05). *Why the CPU form:* three r187 gives no supported way to get at a GPU buffer it owns (section 7). It's a host-facing addition beside SPEC's tracing decision, which describes positions arriving "as a GPU buffer, so there's no rebuild and no CPU work", so the M1 lead records it in DECISIONS.
 - **A recompile counter** in `gi.stats`: compute pipelines created after `isReady`. The viewer shows it next to three's own program count. With T2.14, every kernel a configuration needs is compiled in `prepare`, so nothing compiles on first use and the counter means what it says.
 
 ## 2. Per-mesh trees: GPU first, tinybvh as the refinement
@@ -70,38 +70,45 @@ M3 adds:
 - **B1 (GPU LBVH, branch `bvh-b1`, being merged into `m1`):** Sponza's 5.74 M triangles in 31.2 ms on the RTX. Its trees cost 1.22× tinybvh's SAH and trace at 0.82× (closest hit) and 0.80× (any hit). It builds every mesh of a batch with the same dispatches, in exactly the tracer's layout. It needs subgroups; without them `createMeshLayoutBuilder` uses tinybvh.
 - **What B1 still needs from the CPU:** node counts, depth and "refused" flags come back through a stats readback, and `GpuMeshRefit` takes a tree's shape from a CPU copy of its layout (`setTree`, via `readLayouts`). **It isn't wired into `ddgi-core` yet;** the platform builds with tinybvh only.
 - **B1a top level:** refit on the GPU every frame; the shape rebuilt in a worker when an instance is created or quality drifts (DECISIONS 2026-11-04). New instances appear when the worker's shape arrives (about 55 ms at 10,000 instances, less for small scenes).
-- **B2 (H-PLOC):** target trees within 1.15× tinybvh's SAH and trace speed ≥ 0.9× B0's. DECISIONS 2026-11-04 and TASKS: B1 and B2 are done before M3 starts.
+- **B2 (H-PLOC):** target trees within 1.15× tinybvh's SAH and trace speed ≥ 0.9× B0's. Dennis (2026-11-05): B2 is done **before M3 sign-off, not before M3 starts**. It must not block anything, and the fallbacks (tinybvh, LBVH) always stay. (DECISIONS 2026-11-04 had "B1–B2 before M3"; the M1 lead records the change.)
 
-### 2.2 The plan: GPU trees without a readback
+### 2.2 The plan: GPU trees, with one small readback
 
-The platform promises no CPU readbacks (DECISIONS, B1a review). So the GPU builds must manage on the GPU what B1 reads back today:
+The platform's habit is **"prefer GPU-resident; read back when it clearly pays"**. Dennis (2026-11-05): "This isnt a rule but a preference". Here it pays. A GPU build's node count, depth and "refused" flag are a few bytes per mesh, and knowing them on the CPU saves a large temporary memory pool and a GPU-side bookkeeping scheme.
 
-- **Where a tree goes:** GPU-built trees live in a **provisional pool**, a buffer the GPU allocates from with an atomic bump pointer. Each build writes its root offset and node count into the mesh table itself. Pool size: 0.6 × triangles × 1.25 nodes (B1's Sponza trees have 0.57 nodes per triangle). A mesh that doesn't fit is marked "not ready". Only nodes need the pool: a mesh's triangle records (48 bytes each, tree-ordered) are exactly one per triangle, so the CPU allocates them as now. During a swap, one mesh briefly has two triangle ranges, because tinybvh orders them differently.
-- **Whether a tree is usable:** after each build, a small GPU pass climbs from every leaf to measure depth. A tree that is deeper than the tracer's 64-entry stack, or that the builder refused, is marked "not ready" too. The tracer checks one status word per mesh when it enters a mesh tree, and treats a not-ready mesh as missing. That is one extra load per mesh entry.
-- **tinybvh still builds every mesh in its worker,** as now. When its tree arrives (CPU-known size), it is uploaded into the CPU-managed tree buffers, and the mesh table's root and status flip to it. The tracer sees a different tree over the same triangles; watertight hits agree up to float rounding, so the field doesn't notice.
-- **The pool empties** once every provisional tree has been replaced. The CPU knows when, because it counts the tinybvh trees it uploaded. At load the pool is then freed. For meshes added at run time, a small pool (default room for 4 M triangles) is reset whenever it holds no live trees.
+- **Build:** B1's LBVH builds a batch of meshes into its own output buffers, as it does now.
+- **Read back the stats only** (asynchronously, `mapAsync`, a few frames later; never the trees themselves): each mesh's node count, depth, and whether its tree was refused. It's what B1's `finish` reads today.
+- **Then, on the CPU:**
+  - a tree that's usable (not refused, depth within the tracer's 64-entry stack) gets an exact range in the tracer's node and triangle buffers;
+  - one `copyBufferToBuffer` per mesh moves it there;
+  - the mesh table's root offset flips to it.
+
+  A refused or too-deep tree is never used; that mesh waits for tinybvh.
+- **The cost of the readback** is latency, not frame time: a GPU tree reaches the tracer 1–3 frames after it's built. For first GI that's about 50 ms more.
+- **tinybvh still builds every mesh in its worker,** as now. When its tree arrives, it's uploaded into a new range, the mesh table flips to it, and the LBVH range is freed a frame later (after the GPU is done with it). The tracer sees a different tree over the same triangles; watertight hits agree up to float rounding, so the field doesn't notice. During a swap one mesh briefly has two trees.
 - **When B2 lands** and its trees trace at ≥ 0.95× tinybvh's, the swap can become optional (`meshTreeRefinement: 'tinybvh' | 'none'`), which saves the worker's copy and time.
 - **Without subgroups:** tinybvh only, as in M1 (the declared fallback). First GI waits for the worker on those devices.
-- **Not chosen:** reading B1's per-mesh node counts back asynchronously (a few bytes, a few frames late) would make the pool unnecessary. It breaks the no-readback promise, so it's question 3.
 - **The top level** stays as B1a decided. If "add a cabinet" shows the worker's delay, the GPU LBVH could build the top level in the same frame from the instance boxes. It's the same code, but not planned.
 
 ### 2.3 First GI from GPU trees (scheduled in M2)
 
-DECISIONS 2026-11-05 (provisional): first GI from B1's GPU trees, swapping to tinybvh's when the worker finishes, plus the other startup levers (file loading, the scene copy off the main thread, the cold compile). These are rows T2.12–T2.15 below, run in M2.
+DECISIONS 2026-11-05 (provisional): first GI from B1's GPU trees, swapping to tinybvh's when the worker finishes, plus the other startup levers (the scene copy off the main thread, the cold compile; file loading). These are rows T2.12–T2.14 below, run in M2.
+
+**The target** (Dennis, 2026-11-05): **≤ 2 s from the moment the host hands the scene to GI, with a cold shader compile.** File loading is the host's and isn't part of it, so the viewer's file loading moves to the Later list.
 
 Sponza from load today (T1.9a, cold compile, first GI drawn): 10.8 s, of which files 4.2 s, mesh trees 3.3 s, main-thread scene copy 1.2 s and shader compile 1.2 s. The remaining 0.9 s (the first frame, the first warm-up step, three's own work) isn't broken down yet.
 
-| Part | Today | After T2.12–T2.15 (estimate) | How |
+| Part | Today | After T2.12–T2.14 (estimate) | How |
 | --- | --- | --- | --- |
-| Files | 4.2 s | measure first (T2.15) | The viewer is the host here; the levers are the viewer's loading |
-| Mesh trees | 3.3 s | ~0.3 s | GPU LBVH: 31 ms GPU; B1's first build took 302 ms wall, including uploads and the stats readback that goes away |
+| Files | 4.2 s | 4.2 s | The host's; outside the target |
+| Mesh trees | 3.3 s | ~0.3 s | GPU LBVH: 31 ms GPU; B1's first build took 302 ms wall, including uploads and its stats readback; plus 1–3 frames until the trees are copied in |
 | Scene copy | 1.2 s, main thread | ~0.15 s | Raw upload plus GPU packing (section 2.4); done in one go at load, not spread over frames |
 | Compile | 1.2 s | ~0.7 s | Only what's configured; the sky kernel fix (T2.6); the LBVH's own kernels added (not yet timed) |
 | Not broken down | 0.9 s | 0.9 s | T2.12 breaks it down |
-| **From load** | **10.8 s** | **~6.2 s + whatever T2.15 saves** | |
-| **From "scene handed to GI"** | **~6.6 s** | **~2.0 s** | |
+| **From load** | **10.8 s** | **~6.2 s** | |
+| **From "scene handed to GI" (the target)** | **~6.6 s** | **~2.0 s** | |
 
-So Sponza lands near 2 s if the clock starts when the host hands the scene over, and well above it if it starts at the first file request. That's the open question for Dennis at M1 sign-off (DECISIONS), repeated as question 5.
+So Sponza lands near the 2 s target, with no margin: the 0.9 s not yet broken down and the LBVH's compile time decide it. T2.12 measures both first.
 
 ### 2.4 The scene copy off the main thread
 
@@ -146,7 +153,7 @@ The volume is a fixed-size window of probes over a lattice fixed in world space 
 - **Fading the new planes in.** Coverage is 1 out to half a spacing beyond the outermost probes (DECISIONS 2026-11-05), so a new plane at full coverage the moment the window moves would be a pop. The volume table therefore holds a **valid extent** next to the window. Coverage fades at the valid extent, not at the window's edge. `ddgi/scroll` advances the valid extent toward the window by `spacing / 15` a frame, and only over planes whose probes have finished warming (from the census). A new plane fades in over about a quarter of a second instead of appearing at once.
 - **Sampling** maps a point to lattice coordinates, then to slots with the same modulo; the window and valid extent come from the volume table. For a fixed volume the offset is 0 and the modulo changes nothing: the same code, not a second path. Cost: one integer modulo per axis per probe sample.
 - **The ends of the scroll:** a plane that enters next to a fixed, higher-priority volume is covered by that volume meanwhile; elsewhere the host's environment covers the fade band, as at any volume edge.
-- **Speed:** entering probes need their 2 warming updates before they're shown (section 5.2). With a 32 × 12 × 32 window at 1.5 m spacing, each plane on the x or z axis holds 384 probes. At `v` m/s that's about `4.3 v` entering probes a frame at 60 Hz, `8.5 v` warming updates a frame. Bistro exterior fits about 90 probe updates a frame at 2 ms (NOTES: 1.57 ms + 4.7 µs per probe). Giving half of that to entering planes allows **about 5 m/s** at 1.5 m spacing; coarser spacing or a larger budget allows more. Question 4.
+- **Speed:** entering probes need their 2 warming updates before they're shown (section 5.2). With a 32 × 12 × 32 window at 1.5 m spacing, each plane on the x or z axis holds 384 probes. At `v` m/s that's about `4.3 v` entering probes a frame at 60 Hz, `8.5 v` warming updates a frame. Bistro exterior fits about 90 probe updates a frame at 2 ms (NOTES: 1.57 ms + 4.7 µs per probe). Giving half of that to entering planes allows **about 5 m/s** at 1.5 m spacing; coarser spacing or a larger budget allows more. Decided (2026-11-05): Bistro exterior, 32 × 12 × 32 at 1.5 m, up to 5 m/s.
 - **Teleports** (the camera jumps more than half the window): every slot resets, and the viewer's warm-up mode (DECISIONS 2026-11-05) runs, as after a scene load.
 - **Memory:** 32 × 12 × 32 = 12,288 probes at about 1.5 KB each (irradiance 512 B, distance 1 KB, probe data, history) is **19 MB**, covering 48 × 18 × 48 m at 1.5 m spacing.
 
@@ -210,7 +217,7 @@ What three r187 offers, and what M3 uses:
 | Anything else | the walk, as a safety net | one pass |
 
 - **Sending:** moved objects go out in one `setTransforms` batch per frame.
-- **Deforming meshes:** a mesh with `userData.giDeforming = true` is created `deforming`. When its position attribute's `version` changes, the adapter sends the CPU array (section 7, if Dennis agrees to that form). A `SkinnedMesh` skins on the GPU, so its position attribute never changes; skinned meshes stay in their bind pose (SPEC: a stretch goal).
+- **Deforming meshes:** a mesh with `userData.giDeforming = true` is created `deforming`. When its position attribute's `version` changes, the adapter sends the CPU array (section 7). A `SkinnedMesh` skins on the GPU, so its position attribute never changes; skinned meshes stay in their bind pose (a stretch goal after v1, Dennis 2026-11-05).
 - **Moves still reach GI one frame late** by default (DECISIONS 2026-11-05: the adapter reads the matrices three's last render made).
 - **For interactive tools,** `markChanged` stays the recommended path; the viewer's drag gizmo calls it.
 
@@ -220,11 +227,87 @@ The hard part of the wind tree isn't the refit. It's that three r187 gives no su
 
 Three routes, in the order I'd try them:
 
-1. **CPU positions** (works today): the host animates the position attribute on the CPU (three uploads it as well), and the adapter passes the same `Float32Array` to `setDeformedPositions`. Cost: one `writeBuffer` a frame, about 1.2 MB for a 100,000-vertex tree. This is the plan for the viewer's tree, if Dennis agrees to the CPU form (question 1).
+1. **CPU positions** (works today): the host animates the position attribute on the CPU (three uploads it as well), and the adapter passes the same `Float32Array` to `setDeformedPositions`. Cost: one `writeBuffer` a frame, about 1.2 MB for a 100,000-vertex tree. This is the plan for the viewer's tree (Dennis: yes).
 2. **A TSL compute writing into our texture** (T3.0 spike): if three can bind an `ExternalTexture` as a *storage* texture in a TSL compute, the host's GPU wind writes positions into a texture we own, three's vertex shader reads them back through `positionNode`, and our refit reads the same texture. No backend access and no upstream change. Unknown whether r187 allows it.
-3. **An upstream `ExternalBufferAttribute`** (the ~20-line PR SPEC already lists): three would read our buffer as a vertex attribute. This is the cleanest, but it depends on review upstream (question 1).
+3. **An upstream `ExternalBufferAttribute`** (the small PR SPEC already lists): three would read our buffer as a vertex attribute. This is the cleanest, but it depends on review upstream. The draft is in section 7.1; Dennis sees it before anything is submitted, and nothing is posted until he says so.
 
-Skinned characters as light blockers stay a stretch goal (SPEC). If they're wanted later, a platform skinning kernel (linear blend skinning from bone matrices, engine-neutral) is the route.
+Skinned characters as light blockers stay a stretch goal after v1 (SPEC; Dennis 2026-11-05). If they're wanted later, a platform skinning kernel (linear blend skinning from bone matrices, engine-neutral) is the route.
+
+### 7.1 Draft: the `ExternalBufferAttribute` PR to three.js (not submitted)
+
+Dennis sees this text before anything is posted to three.js, and nothing is submitted until he says so. The code below was checked against three r187's `WebGPUAttributeUtils.js` (`createAttribute`, `updateAttribute`, `destroyAttribute`) and `StorageBufferAttribute.js`. It is a sketch for the PR, not tested code.
+
+**Title:** WebGPURenderer: add `ExternalBufferAttribute` (use a `GPUBuffer` from the same device as an attribute)
+
+**Description:**
+
+> `ExternalTexture` (r187) lets an app hand three a `GPUTexture` it created on the renderer's device, and three binds it without allocating or destroying it. There's no equivalent for buffers. Apps that compute vertex data with their own WebGPU code (cloth or physics solvers, GPU skinning outside three, GI or ray-tracing libraries that refit their own copy of a mesh) must read the data back to the CPU, or copy it into a three-owned attribute each frame.
+>
+> This adds `ExternalBufferAttribute`, the buffer counterpart of `ExternalTexture`. It wraps an existing `GPUBuffer`. three uses that buffer for vertex input and for storage bindings in TSL, and never uploads into it, resizes it or destroys it. The caller owns its contents and its lifetime.
+>
+> - WebGPU backend only; the WebGL backend throws a clear error.
+> - The buffer must come from `renderer.backend.device` (or the device passed to `WebGPURenderer`) and have the usages it's used with (`VERTEX`, `STORAGE`).
+> - The data layout is the caller's: tightly packed items of `itemSize` components of the given type. No padding is applied.
+> - There's no CPU copy, so `computeBoundingBox` / `computeBoundingSphere` can't run; set `geometry.boundingBox` / `boundingSphere` yourself (frustum culling needs them).
+>
+> Example: positions written by an app's own compute pass, drawn by three:
+>
+> ```js
+> const positions = new THREE.ExternalBufferAttribute( gpuBuffer, vertexCount, 3 ); // Float32 by default
+> geometry.setAttribute( 'position', positions );
+> geometry.boundingSphere = new THREE.Sphere( center, radius );
+> ```
+>
+> Also works with TSL storage nodes, so a TSL compute can write into an app-owned buffer: `storage( positions, 'vec3', vertexCount )`.
+
+**Code sketch:**
+
+```js
+// src/renderers/common/ExternalBufferAttribute.js
+import { BufferAttribute } from '../../core/BufferAttribute.js';
+
+class ExternalBufferAttribute extends BufferAttribute {
+
+	constructor( buffer, count, itemSize, typeClass = Float32Array ) {
+
+		// An empty array of the right type: three reads the vertex format from its constructor.
+		super( new typeClass( 0 ), itemSize );
+
+		this.isExternalBufferAttribute = true;
+		this.buffer = buffer; // GPUBuffer, owned by the caller
+		this.count = count;
+
+	}
+
+}
+
+// src/renderers/webgpu/utils/WebGPUAttributeUtils.js
+createAttribute( attribute, usage ) {
+	const bufferAttribute = backend.getBufferAttribute( attribute );
+	const bufferData = backend.get( bufferAttribute );
+	if ( bufferAttribute.isExternalBufferAttribute ) {
+		bufferData.buffer = bufferAttribute.buffer; // use it as it is: no allocation, no upload
+		return;
+	}
+	// ... unchanged
+}
+
+updateAttribute( attribute ) {
+	if ( this.backend.getBufferAttribute( attribute ).isExternalBufferAttribute ) return; // contents are the caller's
+	// ... unchanged
+}
+
+destroyAttribute( attribute ) {
+	const bufferAttribute = backend.getBufferAttribute( attribute );
+	const data = backend.get( bufferAttribute );
+	if ( bufferAttribute.isExternalBufferAttribute !== true ) data.buffer.destroy(); // never destroy the caller's buffer
+	backend.delete( bufferAttribute );
+}
+```
+
+Plus: the export from `Three.WebGPU.js`; a WebGL backend check that throws; a unit test that the buffer is used without being written to or destroyed; a short example (an app-side compute pass that moves a grid's vertices). It goes to three's `dev` branch, as small as the maintainers prefer (NOTES and SPEC: they want small PRs).
+
+**What it gives us:** a host's GPU-animated mesh (TSL wind, morph targets computed by the host) writes positions into a buffer we own. three draws from it, and our refit reads the same buffer. No CPU copy, and no reaching into three's backend.
 
 ## 8. The viewer scenarios
 
@@ -233,19 +316,32 @@ Skinned characters as light blockers stay a stretch goal (SPEC). If they're want
 | **Drag furniture** | furnished room | `TransformControls` on any object; shadows and colour bleeding follow | time to within 5% of settled after a 1 m cabinet move (M2's response meter, GI only) |
 | **Animated door** | two-room with a hinged door | a keyframed door swing closing on the lit side | dark-room leak at `dark-room-leak-view` over time (DECISIONS' leak definition) |
 | **Add and duplicate cabinets** | cabinet row | "add" makes a new mesh (a new tree, built on the GPU that frame); "duplicate" shares the mesh (a new instance only); up to 100 | frames until GI sees it; the recompile counter |
-| **Wind tree** | courtyard (small outdoor scene) | a CPU wind sway on the tree, casting moving occlusion | refit ms; trace speed over 60 s; the GI under the tree following the sway |
+| **Wind tree** | courtyard (small outdoor scene) with a game-ready tree (8.1) | a CPU wind sway on the tree, casting moving occlusion | refit ms; trace speed over 60 s; the GI under the tree following the sway |
 | **Fly-through** | Bistro exterior | a manifest camera path longer than one volume, with the camera-following volume | frame-to-frame change in the edge band; probes per frame; memory |
 
 - Every scenario is a manifest motion (m2-lights.md section 7), so it replays the same way in tests, and next to native where native can follow.
 - The response meter and the recompile counter are on screen during each.
-- **Alpha cutouts are M4.** Until they land, the tree's leaf cards block light as solid quads and over-darken. M3 checks that the occlusion *moves*; the look is judged after M4 (question 6).
+- **Alpha cutouts are M4.** Until they land, the tree's leaf cards block light as solid quads and over-darken. M3 checks that the occlusion *moves*; the look is judged after M4 (Dennis: fine, 2026-11-05).
 - **Native:** the harness has no moving geometry. The side-by-side for M3 covers the door and cabinet scenes only if T2.7's motion support can be extended to instance transforms; otherwise M3 compares against Cycles renders of the end states only.
+
+### 8.1 The wind tree's asset
+
+Dennis (2026-11-05): `sponza-full`'s 2 M-triangle trees are too heavy. Plan for a **game-ready tree**:
+
+- **What:** a single tree of about 20,000–100,000 triangles (trunk, branches, leaf cards with alpha), real-world size, with its source and licence recorded like every asset (T0.4).
+- **Where from, in order:**
+  1. a CC0 or CC BY tree from Sketchfab or Poly Haven;
+  2. one generated in Blender with a tree add-on (Blender's bundled Sapling Tree Gen, for example), saved as glTF; the output is ours, but the add-on's own licence is checked and recorded;
+  3. a Sponza tree, only if one is easy to cut out and small enough.
+- **The sway:** done by the viewer on the CPU. Each vertex moves by a small sine offset that grows with its height above the trunk base, plus a faster flutter on leaf-card vertices. At 100,000 vertices that's about 0.3–0.5 ms of JS a frame (an estimate), and it's the viewer's cost (the host's), not the adapter's.
+- **Leaves** block light as solid cards until M4's alpha cutouts (fine for M3).
+- A wrangler task (T3.11) finds and converts it.
 
 ## How it fits the existing kernels (no parallel GPU paths)
 
 | Piece | M1 | After M2's startup lane (T2.12–T2.15) | M3 |
 | --- | --- | --- | --- |
-| Mesh trees at load | tinybvh in the worker | GPU LBVH into the provisional pool, tinybvh swapped in; tinybvh only without subgroups | unchanged |
+| Mesh trees at load | tinybvh in the worker | GPU LBVH, copied in after its stats readback; tinybvh swapped in; tinybvh only without subgroups | unchanged |
 | Meshes added or replaced later | tinybvh in the worker | tinybvh in the worker | GPU LBVH in the frame, tinybvh swapped in |
 | Deforming meshes | refused | refused | `GpuMeshRefit` every frame on the rest-pose tree; rest pose without subgroups |
 | Top level | GPU refit + worker rebuild (B1a) | unchanged | unchanged |
@@ -271,7 +367,7 @@ Storage buffers stay as in M2 (`ddgi/trace` 7). `gi/pack-mesh` binds the staging
 | Adapter, still / one mover | every frame | ≤ 0.2 / ≤ 0.5 ms (targets) |
 | GPU mesh packing | at load | ~10–20 ms GPU for Sponza, once |
 
-Memory: the camera-following volume is 19 MB at the proposed size. The provisional pool at load is about 0.75 nodes per triangle (Sponza: about 275 MB at 64 bytes per node) until the tinybvh trees are in. Deforming meshes on the CPU route keep a buffer the size of their positions.
+Memory: the camera-following volume is 19 MB. LBVH output buffers live until their trees are copied in (a few frames). During a swap a mesh briefly holds two trees. Deforming meshes on the CPU route keep a buffer the size of their positions.
 
 ## Proposed task breakdown
 
@@ -279,20 +375,18 @@ Memory: the camera-following volume is 19 MB at the proposed size. The provision
 
 | ID | Task | Agent | Size | Depends on |
 | --- | --- | --- | --- | --- |
-| T2.12 | Fast first GI: GPU LBVH trees at load with no readback (provisional pool, status words, depth pass); tinybvh swapped in per mesh | implementer | M | B1 merged into `m1` |
+| T2.12 | Fast first GI: GPU LBVH trees at load (stats readback, exact ranges, copy in); tinybvh swapped in per mesh | implementer | M | B1 merged into `m1` |
 | T2.13 | Scene copy off the main thread: raw upload, GPU packing | implementer | M | none |
 | T2.14 | Compile only what's configured: `encodeBatch` kernels only when a technique asks for batches; compile while uploading | implementer | S | T2.6 (which owns the sky kernel's compile) |
-| T2.15 | Viewer file loading: break Sponza's 4.2 s down by stage, then halve the largest stage | implementer | S | none |
 
 - **T2.12.** Done when:
   1. Sponza from "scene handed to GI" to the first frame drawn with GI is ≤ 2.0 s on the RTX (cold compile, median of 3), with the 0.9 s now unexplained broken down in PROGRESS;
   2. across the swap frame the field's mean changes by ≤ 0.5%, and trace speed afterwards is within 5% of M1's on tinybvh trees;
-  3. the oracle passes in mid-swap (some meshes on LBVH trees, some on tinybvh's) and on a forced "not ready" mesh, on both GPUs;
+  3. the oracle passes in mid-swap (some meshes on LBVH trees, some on tinybvh's) and with a forced refused tree (that mesh waits for tinybvh), on both GPUs;
   4. a device without subgroups still gets tinybvh trees and GI (test).
   - Record: startup by stage in `timing.csv`.
 - **T2.13.** Done when the scene copy's main-thread time is ≤ 150 ms on Sponza and ≤ 200 ms on Bistro exterior (from 1.2 s and 4.1 s), and the GPU-packed buffers match the CPU packer (positions and indices byte for byte, normals within one octahedral step) on every procedural scene and Sponza.
 - **T2.14.** Done when Cornell from load to the first frame with GI is ≤ 1.5 s cold on the RTX (from 2.34 s), and the recompile counter stays at 0 through a viewer session on every scene.
-- **T2.15.** Done when the viewer records Sponza's file stage by part (fetch, parse, texture decode, upload), and the largest part takes at most half its present time. Record: the breakdown in PROGRESS.
 
 ### M3
 
@@ -300,7 +394,7 @@ Memory: the camera-following volume is 19 MB at the proposed size. The provision
 | --- | --- | --- | --- | --- |
 | T3.0 | Spike: deformed positions from three (storage `ExternalTexture`); the `updateMatrixWorld` override's cost and safety on Bistro interior; refit decay on a swaying tree | implementer | S | M2 done |
 | T3.1 | Change feed: `setTransforms`, `moved`, `receivers`, `deformBounds`, `setDeformedPositions`, recompile counter | implementer | M | none |
-| T3.2 | Runtime mesh trees: GPU builds for added and updated meshes, the run-time pool, tinybvh refinement | implementer | M | T2.12 |
+| T3.2 | Runtime mesh trees: GPU builds for added and updated meshes, tinybvh refinement | implementer | M | T2.12 |
 | T3.3 | Deforming meshes: `GpuMeshRefit` wired, scene-copy positions, geometric normals, movement word | implementer | M | T3.1, T3.2 |
 | T3.4 | Probes near moved geometry: geometry entries in `ddgi/mark`, the 2-update warm-up, woken air probes | implementer | M | T3.1, M2's T2.4b |
 | T3.5 | Several volumes: shared atlas, volume table, priority blending | implementer | M | none |
@@ -309,8 +403,9 @@ Memory: the camera-following volume is 19 MB at the proposed size. The provision
 | T3.8 | Viewer scenarios and their manifest motions (furniture, door, cabinets, wind tree, fly-through) | implementer | M | T3.3, T3.4, T3.6, T3.7 |
 | T3.9 | M3 measurements | gpu-tester | M | all above |
 | T3.10 | M3 note and M4/M5 breakdown | main session | S | T3.9 |
+| T3.11 | The wind tree's asset (8.1): find or generate, convert, record licence | wrangler | S | none |
 
-B1 and B2 are done before M3 starts (DECISIONS 2026-11-04). Question 7 asks whether B2 should still gate M3's start.
+B1 is done before M3 starts. B2 (H-PLOC) is done before M3 sign-off, and doesn't block any M3 task (Dennis, 2026-11-05).
 
 ### Draft done-whens
 
@@ -324,9 +419,9 @@ B1 and B2 are done before M3 starts (DECISIONS 2026-11-04). Question 7 asks whet
   3. `setDeformedPositions` passes the oracle on a deforming test mesh;
   4. creating and destroying 1,000 instances and 100 meshes in random order leaves the recompile counter at 0.
 - **T3.2 Runtime mesh trees.** Done when:
-  1. a replaced mesh (`updateMesh` on an existing instance) is hit by rays the next frame (oracle page);
+  1. a replaced mesh (`updateMesh` on an existing instance) is hit by rays within 4 frames (oracle page; the stats readback);
   2. a new instance of a new mesh on the cabinet row is hit within 4 frames (the worker's top-level rebuild);
-  3. after the tinybvh swap, trace speed equals tinybvh-only within 5%, and the run-time pool is reset once it holds no live trees;
+  3. after the tinybvh swap, trace speed equals tinybvh-only within 5%, and the LBVH range is freed within 2 frames;
   4. without subgroups, meshes get tinybvh trees (test).
 - **T3.3 Deforming meshes.** Done when:
   1. the oracle passes on a deforming mesh over 60 frames on both GPUs, hit points included (scene-copy positions);
@@ -342,7 +437,7 @@ B1 and B2 are done before M3 starts (DECISIONS 2026-11-04). Question 7 asks whet
   1. a dense fixed volume inside a coarse one shows no seam: the image difference across the fade band, frame to frame, stays within the stability threshold set in T1.9;
   2. sampling at 1440p on a view half inside the fade band costs ≤ 1.0 ms on the RTX;
   3. one-volume scenes match M2 (field mean within 0.1%, cost within 3%).
-- **T3.6 Camera-following volume.** Done when, on Bistro exterior's fly-through at the speed Dennis picks (question 4):
+- **T3.6 Camera-following volume.** Done when, on Bistro exterior's fly-through at 5 m/s (the 32 × 12 × 32 volume at 1.5 m; decided 2026-11-05):
   1. the frame-to-frame change in the edge band stays within T1.9's stability threshold;
   2. entering probes are never used before warming (test);
   3. memory stays fixed;
@@ -353,6 +448,7 @@ B1 and B2 are done before M3 starts (DECISIONS 2026-11-04). Question 7 asks whet
   3. an unmarked first move reaches GI in ≤ 10 frames if T3.0's override is adopted, or within one pass of the (shortened) walk otherwise;
   4. `InstancedMesh` update ranges send only those instances (test).
 - **T3.8 Viewer scenarios.** Done when every scenario plays from its manifest motion with hover help, shows the response meter and the recompile counter, and Dennis can run each without instructions.
+- **T3.11 The wind tree's asset.** Done when the tree loads in the courtyard scene at real-world size against the 1 m reference cube, has 20,000–100,000 triangles, and its source, licence and checksum are in its manifest and `THIRD_PARTY.md`.
 - **T3.9 M3 measurements.** The SPEC table above on both GPUs, plus the door and cabinet response curves against Cycles renders of their end states (3 runs), with the recompile counter at 0 throughout. Done when each target is met or its miss is explained and agreed with Dennis.
 
 ## Risks, and what to spike first
@@ -362,18 +458,25 @@ B1 and B2 are done before M3 starts (DECISIONS 2026-11-04). Question 7 asks whet
 3. **The door's leak window.** Until the near probes' distance tiles learn the closed door, light leaks for a few frames. With `n` near 0.4 and the door's probes updated every frame, that should be 2–4 frames. If it shows, those probes' first update could use 2× rays.
 4. **The far-set estimate** (`Ω_ref`, the 8-spacing radius, the entry-distance test) is a guess. T3.4 compares marked probes against probes that really changed by more than 5%.
 5. **Scrolling speed.** At Bistro exterior's rate, about 5 m/s at 1.5 m spacing. Faster flights show the environment longer at the edge.
-6. **The provisional pool** costs about 275 MB on Sponza until the tinybvh trees arrive (a few seconds). On a device with less memory, the pool shrinks and more meshes wait for tinybvh.
+6. **The stats readback adds 1–3 frames** before a GPU tree is used. That's harmless at load. For an object added at run time it adds to the top level's worker delay; if it shows in the cabinet scenario, the top level can move to the GPU (section 2.2).
 7. **Refit quality** on large deformations (cloth, fan blades) may need rebuilds, which SPEC's tracing decision rules out today.
 
-## Questions for Dennis
+## Later
 
-1. **Deforming meshes from three:** may `setDeformedPositions` also take a CPU array (a host-facing addition, beside the GPU buffer SPEC describes), so the viewer's wind tree can be CPU-animated in M3? And should we open the small `ExternalBufferAttribute` PR upstream now, so GPU-animated meshes (TSL wind, morph targets) can contribute later?
-2. **`setTransforms`,** a batch call on the host-facing scene API (one array of handles, one of matrices). It only adds; nothing changes for existing callers. OK to add?
-3. **No-readback rule:** first GI from GPU trees needs a provisional memory pool (about 275 MB on Sponza, for a few seconds), because the platform never reads anything back. One tiny asynchronous readback of each tree's size (a few bytes, a few frames late) would remove the pool. Keep the rule, or allow that one exception?
-4. **The fly-through:** Bistro exterior, a camera-following volume of 32 × 12 × 32 probes at 1.5 m (19 MB), at up to about 5 m/s within the 2 ms budget? Or coarser spacing for faster flight?
-5. **Startup:** does the 2 s target start when the host hands the scene to GI (Sponza projected at about 2 s) or at the first file request (about 6 s, with files 4.2 s of it today)? (Already open from M1.)
-6. **The wind tree:** which asset (the courtyard tree, or one of `sponza-full`'s 2 M-triangle trees)? And is it fine that leaves block light as solid cards until M4's alpha cutouts?
-7. **The B2 gate:** M3 needs only B1's GPU builds and refit. Should B2 (H-PLOC) still be done before M3 starts, as decided, or move to before M3 sign-off?
-8. **Skinned characters as light blockers** stay a stretch goal after v1?
-</content>
-</invoke>
+- **The viewer's file loading** (Sponza's 4.2 s): outside the startup target, which counts from the hand-off to GI. Worth breaking down later, because it's what a viewer user waits for.
+- **The GPU building the top level** in the same frame (section 2.2), if the worker's delay shows.
+- **A platform skinning kernel** for skinned characters as light blockers (a stretch goal after v1).
+- **Rebuilds for strongly deforming meshes** (cloth, fan blades), if T3.0 shows refits alone degrade too far. That would be a DECISIONS entry against SPEC's "keep the shape".
+
+## Decided by Dennis (2026-11-05)
+
+1. **Deformed positions:** `setDeformedPositions` also takes a CPU array. The `ExternalBufferAttribute` PR is drafted in section 7.1 for him to see; nothing is posted.
+2. **`setTransforms`:** yes.
+3. **Readbacks** aren't a rule but a preference: "prefer GPU-resident; read back when it clearly pays". GPU trees use one small asynchronous stats readback (section 2.2); the provisional pool is gone.
+4. **The fly-through:** Bistro exterior, a 32 × 12 × 32 camera-following volume at 1.5 m (19 MB), up to 5 m/s.
+5. **Startup:** measured from the hand-off to GI, ≤ 2 s with a cold shader compile.
+6. **The wind tree:** a game-ready tree (section 8.1), not a 2 M-triangle one. Solid leaf cards until M4 are fine.
+7. **B2 (H-PLOC):** before M3 sign-off, not before M3 starts. It must not block; the fallbacks always stay.
+8. **Skinned characters** as light blockers: a stretch goal after v1.
+
+Nothing is left open in this doc. The M1 lead records 1, 3, 5 and 7 in DECISIONS: they change or add to SPEC's tracing decision, the B1a review's no-readback wording, the startup target and the B-lane gate.
