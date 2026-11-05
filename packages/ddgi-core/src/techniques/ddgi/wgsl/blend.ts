@@ -170,9 +170,8 @@ const DDGI_NO_DISTANCE: f32 = 3.0e38;
 @group(1) @binding(5) var ddgiIrradianceAtlas: texture_2d_array<f32>;
 @group(1) @binding(6) var ddgiDistanceAtlas: texture_2d_array<f32>;
 @group(1) @binding(7) var ddgiProbeData: texture_2d_array<f32>;
-// Per probe: x = the updates its history counts as (n), y = the technique's
-// clock at its last blended update (t, seconds). Zero until first written.
-@group(1) @binding(8) var<storage, read_write> ddgiProbeHistory: array<vec2f>;
+// Per probe: its history for the hysteresis rule (DdgiProbeHistory). Zero until first written.
+@group(1) @binding(8) var<storage, read_write> ddgiProbeHistory: array<DdgiProbeHistory>;
 
 // Per ray: its direction (xyz) and signed hit distance (w, negative = back
 // face). Decoded once here: the blend reads every ray once per texel.
@@ -355,35 +354,66 @@ fn ddgiDecide(probe: vec3i, offset: vec3f, state: u32) -> DdgiProbeDecision {
 
 // ---- Phase C: blend ----
 
+// One probe's history (PROBE_HISTORY_BYTES in ddgi-technique.ts).
+struct DdgiProbeHistory {
+    samples: f32,            // n: the updates its history counts as
+    lastUpdateSeconds: f32,  // t: the technique's clock at its last blended update
+    updates: u32,            // k: blended updates since it was last new, reset or back on
+}
+
 // This update's hysteresis for one probe, and the probe's history after it.
 struct DdgiHysteresisStep {
     hysteresis: f32,
-    history: vec2f,
+    history: DdgiProbeHistory,
+}
+
+// The ramp: the most a probe with k blended updates may remember. For its
+// first K updates (rampUpdates, 16) that is k / a (updatesPerSample, 8); then
+// one more per update, as a plain mean grows.
+// Why: an update's bounce light reads the field the probe is still building,
+// so its first estimates are too dark, and a plain mean (h = k / (k + 1))
+// keeps them at full weight: its error from them shrinks only like
+// k^-(1 - rho), with rho the share of a probe's light that comes back through
+// the field. Cornell's 16-pass warm-up came out 25% low that way. Capped at
+// k / a, every-frame updates get h = k / (k + a): a mean weighted towards
+// later updates (weights grow like k^(a - 1)), whose error shrinks like
+// k^-(a (1 - rho)), at a / sqrt(2a - 1) times the noise of a plain mean.
+// Why only K updates: under the cap an every-frame probe would reach n_max
+// only after a * n_max updates and stay noisy until then; after the ramp it
+// gets there K / a + n_max updates in. A sparse probe settles on the clock at
+// a few samples, so the ramp no longer binds once it has had a few updates.
+fn ddgiRampCap(updates: u32) -> f32 {
+    let k = f32(updates);
+    let rampEnd = ddgi.rampUpdates;
+    return select(rampEnd / ddgi.updatesPerSample + (k - rampEnd), k / ddgi.updatesPerSample, k <= rampEnd);
 }
 
 // The hysteresis rule (docs/design/ddgi.md, "Hysteresis that knows the time
 // between updates"). A probe's history counts as n updates. Before this
 // update, n fades with the time since the last one, n * exp(-elapsed / tau),
 // so a probe updated rarely remembers less and follows changes within
-// seconds, while one updated every frame builds up to n_max and goes quiet.
-// The new estimate then counts as one more update: h = n / (n + 1), which
-// makes the field the plain mean of its updates while nothing fades (the
-// warm-up's running average, frames with no time between them). After it,
-// n + 1, capped at n_max, so h never exceeds n_max / (n_max + 1).
+// seconds, while one updated every frame builds up to n_max and goes quiet;
+// it is also held to the ramp above. The new estimate then counts as one more
+// update: h = n / (n + 1). After it, n + 1, capped at n_max, so h never
+// exceeds n_max / (n_max + 1).
 // A probe's first blended update (state 3: new, reset, or back on) starts
-// from nothing, h = 0, so the field shows partial GI at once instead of
-// fading in from black. The history is kept with the fixed rule too, so
-// switching rules mid-run carries on from the right count.
-fn ddgiHysteresisStep(history: vec2f, state: u32) -> DdgiHysteresisStep {
+// from nothing (n = 0, k = 0), h = 0, so the field shows partial GI at once
+// instead of fading in from black. The history is kept with the fixed rule
+// too, so switching rules mid-run carries on from the right count.
+fn ddgiHysteresisStep(history: DdgiProbeHistory, state: u32) -> DdgiHysteresisStep {
     let firstUpdate = state == DDGI_STATE_NOT_UPDATED_YET;
+    let updates = select(history.updates, 0u, firstUpdate);
     // max(0): a clock that went back (a new prepare) never makes n grow.
-    let elapsedSeconds = max(0.0, ddgi.clockSeconds - history.y);
-    let remembered = select(history.x * exp(-elapsedSeconds * ddgi.inverseMemorySeconds), 0.0, firstUpdate);
+    let elapsedSeconds = max(0.0, ddgi.clockSeconds - history.lastUpdateSeconds);
+    let faded = select(history.samples * exp(-elapsedSeconds * ddgi.inverseMemorySeconds), 0.0, firstUpdate);
+    let remembered = min(faded, ddgiRampCap(updates));
     let adaptive = remembered / (remembered + 1.0);
     let fixed = select(ddgi.hysteresis, 0.0, firstUpdate);
     let hysteresis = select(fixed, adaptive, ddgi.adaptiveHysteresis != 0u);
     let samples = min(remembered + 1.0, ddgi.maxHistorySamples);
-    return DdgiHysteresisStep(hysteresis, vec2f(samples, ddgi.clockSeconds));
+    // Saturating: the count only matters while k / a is below n_max.
+    let nextUpdates = select(updates + 1u, updates, updates == 0xffffffffu);
+    return DdgiHysteresisStep(hysteresis, DdgiProbeHistory(samples, ddgi.clockSeconds, nextUpdates));
 }
 
 // The cosine-weighted mean radiance of the blended rays around one
@@ -502,7 +532,8 @@ fn ddgiBlend(
             let step = ddgiHysteresisStep(ddgiProbeHistory[probeIndex], state);
             ddgiUpdateHysteresis = step.hysteresis;
             ddgiProbeHistory[probeIndex] = step.history;
-        }        // Offsets and states are small exact values in half floats; no rounding noise wanted.
+        }
+        // Offsets and states are small exact values in half floats; no rounding noise wanted.
         let base = slot * DDGI_SCRATCH_STRIDE + DDGI_SCRATCH_PROBE_DATA;
         ddgiScratch[base] = pack2x16float(decision.offset.xy);
         ddgiScratch[base + 1u] = pack2x16float(vec2f(decision.offset.z, f32(decision.state)));

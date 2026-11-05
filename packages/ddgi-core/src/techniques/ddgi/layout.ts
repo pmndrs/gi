@@ -161,8 +161,10 @@ export const UNIFORM_WORD = {
     clockSeconds: 42,
     inverseMemorySeconds: 43,
     maxHistorySamples: 44,
+    updatesPerSample: 45,
+    rampUpdates: 46,
 } as const;
-/** 45 words, rounded up to the struct's 16-byte alignment. */
+/** 47 words, rounded up to the struct's 16-byte alignment. */
 export const UNIFORM_WORDS = 48;
 export const UNIFORM_BYTES = UNIFORM_WORDS * 4;
 /** Words per column of the rotation (vec3f columns padded to 16 bytes). */

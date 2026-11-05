@@ -5,6 +5,8 @@
  *   fixed:0.97   every update keeps 0.97 of the old value (the rule before T1.12)
  *   tau:5        adaptive hysteresis with a 5 s memory time (hysteresisMemorySeconds)
  *   tau:5/200    the same with n_max = 200 (hysteresisMaxSamples)
+ *   tau:5/200/1  ... and the ramp a = 1 (hysteresisUpdatesPerSample; 1 is a plain mean)
+ *   tau:5/200/8/16  ... for a probe's first 16 updates only (hysteresisRampUpdates; default endless)
  *   default      the technique's defaults
  *
  * Not a page itself (no index.html).
@@ -12,7 +14,7 @@
 
 import { DEFAULT_DDGI_SETTINGS, type DDGISettings } from '../../../../packages/ddgi-core/src/techniques/ddgi/settings.ts';
 
-export type HysteresisSettings = Pick<DDGISettings, 'adaptiveHysteresis' | 'hysteresis' | 'hysteresisMemorySeconds' | 'hysteresisMaxSamples'>;
+export type HysteresisSettings = Pick<DDGISettings, 'adaptiveHysteresis' | 'hysteresis' | 'hysteresisMemorySeconds' | 'hysteresisMaxSamples' | 'hysteresisUpdatesPerSample' | 'hysteresisRampUpdates'>;
 
 export interface HysteresisMode {
     /** As written in the list, for reports. */
@@ -25,6 +27,8 @@ const DEFAULTS: HysteresisSettings = {
     hysteresis: DEFAULT_DDGI_SETTINGS.hysteresis,
     hysteresisMemorySeconds: DEFAULT_DDGI_SETTINGS.hysteresisMemorySeconds,
     hysteresisMaxSamples: DEFAULT_DDGI_SETTINGS.hysteresisMaxSamples,
+    hysteresisUpdatesPerSample: DEFAULT_DDGI_SETTINGS.hysteresisUpdatesPerSample,
+    hysteresisRampUpdates: DEFAULT_DDGI_SETTINGS.hysteresisRampUpdates,
 };
 
 /** The rule before T1.12, for converging a field fast and as the baseline. */
@@ -40,14 +44,21 @@ export function parseHysteresisMode(text: string): HysteresisMode {
         return { name, settings: { ...DEFAULTS, adaptiveHysteresis: false, hysteresis } };
     }
     if (kind === 'tau') {
-        const [seconds, maxSamples] = (value ?? '').split('/').map(Number);
-        if (!(seconds > 0)) throw new Error(`bad hysteresis mode '${name}': tau:<seconds>[/<n_max>]`);
+        const [seconds, maxSamples, updatesPerSample, rampUpdates] = (value ?? '').split('/').map(Number);
+        if (!(seconds > 0)) throw new Error(`bad hysteresis mode '${name}': tau:<seconds>[/<n_max>[/<a>[/<K>]]]`);
         return {
             name,
-            settings: { ...DEFAULTS, adaptiveHysteresis: true, hysteresisMemorySeconds: seconds, hysteresisMaxSamples: maxSamples > 0 ? maxSamples : DEFAULTS.hysteresisMaxSamples },
+            settings: {
+                ...DEFAULTS,
+                adaptiveHysteresis: true,
+                hysteresisMemorySeconds: seconds,
+                hysteresisMaxSamples: maxSamples > 0 ? maxSamples : DEFAULTS.hysteresisMaxSamples,
+                hysteresisUpdatesPerSample: updatesPerSample >= 1 ? updatesPerSample : DEFAULTS.hysteresisUpdatesPerSample,
+                hysteresisRampUpdates: rampUpdates >= 0 ? rampUpdates : DEFAULTS.hysteresisRampUpdates,
+            },
         };
     }
-    throw new Error(`bad hysteresis mode '${name}': use fixed:<h>, tau:<seconds>[/<n_max>] or default`);
+    throw new Error(`bad hysteresis mode '${name}': use fixed:<h>, tau:<seconds>[/<n_max>[/<a>[/<K>]]] or default`);
 }
 
 export function parseHysteresisModes(value: unknown, fallback: readonly string[]): HysteresisMode[] {

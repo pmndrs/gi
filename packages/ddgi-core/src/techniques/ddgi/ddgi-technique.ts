@@ -89,8 +89,8 @@ const CENSUS_STAGING_BUFFERS = 3;
 const INITIAL_RAY_CAPACITY = 512 * 256;
 /** Frame times kept for the sweep counter (its median), about half a second at 60 Hz. */
 const SWEEP_FRAME_TIMES = 31;
-/** Bytes of one probe's history: n and t as two f32 (`ddgiProbeHistory` in wgsl/blend.ts). */
-const PROBE_HISTORY_BYTES = 8;
+/** Bytes of one probe's history: n and t as f32, k as u32 (`DdgiProbeHistory` in wgsl/blend.ts). */
+const PROBE_HISTORY_BYTES = 12;
 
 /** Options fixed for the technique's life. */
 export interface DDGITechniqueOptions {
@@ -139,7 +139,7 @@ interface PreparedResources {
     readonly updateList: GPUBuffer;
     readonly scratchBuffer: GPUBuffer;
     readonly census: GPUBuffer;
-    /** Per probe: the updates its history counts as and the clock at its last update (adaptive hysteresis). */
+    /** Per probe: the updates its history counts as, the clock at its last update and its blended updates so far (adaptive hysteresis). */
     readonly probeHistory: GPUBuffer;
     readonly censusStaging: CensusStaging[];
     readonly traceKernel: ComputeKernel;
@@ -744,6 +744,8 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         data[UNIFORM_WORD.clockSeconds] = this.clockSeconds;
         data[UNIFORM_WORD.inverseMemorySeconds] = blend.inverseMemorySeconds;
         data[UNIFORM_WORD.maxHistorySamples] = blend.maxSamples;
+        data[UNIFORM_WORD.updatesPerSample] = blend.updatesPerSample;
+        data[UNIFORM_WORD.rampUpdates] = blend.rampUpdates;
         data[UNIFORM_WORD.irradianceChangeThreshold] = blend.irradianceChangeThreshold;
         data[UNIFORM_WORD.maxBrightnessChange] = blend.maxBrightnessChange;
         data[UNIFORM_WORD.distanceSharpness] = blend.distanceSharpness;

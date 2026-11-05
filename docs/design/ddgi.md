@@ -189,13 +189,15 @@ The code is `packages/ddgi-core/src/platform/work-budget.ts`; every threshold be
 - Cornell updates every probe every frame, so the wobble from small-emitter ray noise (σ about 30% per update, NOTES) shows: 0.56% per pixel per frame, and Dennis: "it is not steady". A higher fixed h is quieter but slower everywhere.
 - Under budget v2 a Sponza probe is updated about once every 73 frames (1.2 s at 60 Hz). At 0.97 a change takes about 75 updates to settle 90%: about 90 s. A fixed 0.995 would make that minutes.
 
-**The rule.** Each probe keeps an effective sample count `n` and the time `t` of its last blended update. On an update at time `T`:
+**The rule.** Each probe keeps an effective sample count `n`, the time `t` of its last blended update and its count of blended updates `k`. On an update at time `T`:
 1. `n ← n · exp(−(T − t) / τ)`: what it remembers fades with the time since its last update.
-2. `h = n / (n + 1) = 1 − 1 / (n + 1)` blends this update: the new estimate counts as one sample among `n + 1`.
-3. `n ← min(n + 1, nMax)`, `t ← T`.
+2. `n ← min(n, ramp(k))`, the ramp (below, added after the first review): `ramp(k) = k / a` for `k ≤ K`, then `K / a + (k − K)`.
+3. `h = n / (n + 1) = 1 − 1 / (n + 1)` blends this update: the new estimate counts as one sample among `n + 1`.
+4. `n ← min(n + 1, nMax)`, `t ← T`, `k ← k + 1`.
 
-- **First update** (state 3: new, after `resetHistory()`, or back on after being off): `n = 0`, so `h = 0`, as before.
-- **The warm-up's running average** is the same rule with no time between updates: the viewer's warm-up runs with `deltaTime` 0, so `n` counts 0, 1, 2, … and `h = k/(k+1)` at a probe's k-th update. The viewer's `settings.hysteresis` override during the warm-up is now unused (harmless; phase 2b can drop it).
+- **First update** (state 3: new, after `resetHistory()`, or back on after being off): `n = 0` and `k = 0`, so `h = 0`, as before.
+- **The warm-up** is the same rule with no time between updates: the viewer's warm-up (and ddgi-three's `volume.start`) run with `deltaTime` 0. The viewer's `settings.hysteresis` override during the warm-up is now unused (harmless; phase 2b can drop it).
+- **The ramp (a = 8 for a probe's first K = 16 updates; `hysteresisUpdatesPerSample`, `hysteresisRampUpdates`).** Without it, the warm-up was a plain running average, `h = k/(k+1)`. Its bounce light reads the field it is building, so the first estimates are too dark, and a plain mean keeps them at full weight: the error shrinks only like `k^−(1−ρ)` (ρ: the share of a probe's light that comes back through the field; Cornell fits ρ ≈ 0.65). Cornell came out of the 16-pass warm-up 25% low and took 19 s to get within 1%. Under the ramp, every-frame updates get `h = k/(k+a)`: a mean weighted towards later updates (weights grow like `k^(a−1)`), whose error shrinks like `k^−a(1−ρ)`, at `a/√(2a−1)` times the noise of a plain mean. It is limited to the first K updates because under the cap an every-frame probe reaches nMax only after `a · nMax` updates (1,600) and stays noisy until then; after the ramp it gets there about `K/a + nMax` updates in. 16 is the warm-up's own pass count. A fixed small cap on `n` instead (n ≤ 2 to 16 during the warm-up) does worse by the same model: a cap of 8 leaves Cornell about 23% low, a cap of 2 about 13%.
 - **Where it settles.** A probe updated every Δ seconds settles at `n = e/(1 − e)` with `e = exp(−Δ/τ)`, so `h = e`: an exponential average with a memory of τ seconds, whatever the frame rate. Cornell (Δ = 1/60 s) would reach `n = 60τ`, so it stops at `nMax`; Sponza at 60 Hz (Δ ≈ 1.2 s) settles at a few samples.
 - **nMax** sets the quietest a probe can get: `h ≤ nMax / (nMax + 1)`. 200 gives 0.995, the hold the flicker decision asked for (DECISIONS, Cornell's flicker).
 - **The big-change rule** is unchanged and still off by default: when on, it multiplies this `h` by 0.75 for the probe's next update. The firefly clamp is unchanged too.
@@ -204,7 +206,7 @@ The code is `packages/ddgi-core/src/platform/work-budget.ts`; every threshold be
 
 **The clock.** The technique's own, in seconds: the sum of every frame's `deltaTime` since `prepare`, each frame counting at most 0.25 s (`MAX_CLOCK_STEP_SECONDS`). A longer frame is a stall (a hidden tab, a debugger, a hitch). Counted in full, a minute in a background tab would make every probe forget its history at once, and the whole field would flash noisy as it updated again. Paused frames (`budget.paused`) don't call the technique and don't advance it. f32 seconds keep millisecond precision for days of running, far below τ.
 
-**Storage.** A `vec2f` per probe (`n`, `t`) in a storage buffer that only `ddgi/blend` reads and writes (8 bytes a probe; Sponza 155 KB). Each workgroup owns one probe and a probe is listed at most once a frame, so there are no races. New buffers start at zero, and state 3 resets `n`, so `resetHistory()` needs no clear. Blend now binds 5 storage buffers.
+**Storage.** `DdgiProbeHistory` per probe (`n` and `t` as f32, `k` as u32, saturating) in a storage buffer that only `ddgi/blend` reads and writes (12 bytes a probe; Sponza 233 KB). Each workgroup owns one probe and a probe is listed at most once a frame, so there are no races. New buffers start at zero, and state 3 resets `n` and `k`, so `resetHistory()` needs no clear. Blend now binds 5 storage buffers.
 
 **What it trades.** For a texel updated with hysteresis h and per-update noise σ, the wobble is `σ·√((1−h)/(1+h))` and the change per update about `σ·(1−h)·√(2/(1+h))`. Bias from bounce light that hasn't settled shrinks per update by about `(1−h)(1−ρ)` (ρ: how much of a probe's light comes back through the field). So a quieter probe is also slower to settle bounce light: on the accuracy pages, where every probe is updated every frame for 600 frames, the field is still a little low (numbers below). And a running average whose estimates use the field it is building (h = k/(k+1)) settles bounce light only like `k^−(1−ρ)`, so early estimates made with a dark field linger until the clock fades them.
 
@@ -220,9 +222,22 @@ The code is `packages/ddgi-core/src/platform/work-budget.ts`; every threshold be
 | Sponza, after the warm-up: image mean | within 0.2% | within 0.6% | **within 0.3%** | within 0.4% |
 | Cornell, after the warm-up (25% low): within 5% / 1% | 2 / 4.5 s (noise to 49 s) | 3.5 / 10 s | **4.5 / 17.5 s** | 6 / 18.5 s |
 
+**The ramp, measured** (RTX 3060, τ 5 s, nMax 200; Cornell 1,574 probes a frame, Sponza 291; `ddgi-settle`, and `ddgi-flicker` with `VITE_DDGI_FLICKER_AFTER_WARMUP`). The error right after the warm-up is one image, about ±1.5 points from run to run (a = 8 for 16 updates ran three times: −4.6%, −6.3%, −7.4%).
+
+| | no ramp (a = 1) | a = 2 | a = 3 | a = 4 | a = 8 (endless) | **a = 8, K = 16** |
+| --- | --- | --- | --- | --- | --- | --- |
+| Cornell, right after the warm-up | −26% | −15.6% | −10.5% | −9.2% | −4.6% | **−7.4% / −6.3%** |
+| Cornell after the warm-up: within 5% / 1% | 4.5 / 19 s | 1 / 5.5 s | 0.5 / 2 s | 0.5 / 1.5 s | 0 / 0.5 s | **0.5 / 1 s** |
+| Cornell after a restart: within 5% / 1% | 4.5 / 16.5 s | 1.5 / 6.5 s | 1 / 2.5 s | 0.5 / 2 s | 0.5 / 0.5 s | **0.5 / 2 s** |
+| Cornell change a frame, the 240 frames after the warm-up (mean / p95) | 0.30% / 1.18% (the image climbs 21%) | | 0.63% / 2.63% | | 1.52% / 6.33% | **0.39% / 1.62%** |
+| Cornell change a frame, 400 frames later | 0.092% (still climbing 1.7%) | | 0.109% | | 0.283% | **0.089%** |
+| Sponza right after the warm-up; within 1% after a restart | −0.5%; 3 s | | +0.5%; 3.5 s | | −0.3%; 6 s | **+0.3%; 3.5 s** |
+
+Settled flicker with the ramp is unchanged (it no longer binds): Cornell 0.094% / 0.38% a frame at `gpuMs:2` (0.094% / 0.38% without the ramp), Sponza 0.025% / 0.091% at 291 probes a frame (0.026% / 0.094%). A light change on Sponza: within 5% / 1% in 12.5 / 20.5 s (13 / 22.5 s without).
+
 - **Defaults:** τ = 5 s and nMax = 200 (`ADAPTIVE_MEMORY_SECONDS`, `ADAPTIVE_MAX_SAMPLES` in settings.ts). Any τ above about 3.4 s lets Cornell reach the cap, so 5 and 10 are equally quiet there. 5 s follows a light change on Sponza in half the time of 10 s, at about twice the per-frame change on sparsely updated probes (still a fifth of Cornell's adaptive number). 2 s is noisier everywhere and no faster to a steady answer. nMax = 100 (h ≤ 0.99) was measured as well: Cornell 0.185% / 0.76%, furnace −0.80% after 600 frames.
 - **Sparse probes are noisier than before.** Where a probe's updates are more than about 0.15 s apart (τ·ln(1/0.97)), its h is below the old 0.97, so each update moves it more. That is the point (Sponza follows changes in seconds). The cost: Sponza changes about 7× more per frame than at 0.97, and Intel Cornell (a sweep every 0.32 s) 2×. Both stay well under the RTX Cornell's adaptive number.
-- **Every-frame probes settle bounce light more slowly.** On the accuracy pages (every probe every frame), 600 frames left the furnace −1.95% / −2.05% (RTX / Intel; the Intel over the 2% limit) and the two-room lit room 5.4% below its settled value. The pages now run 1800 (furnace) and 3000 (leak) frames, and the settled values match the fixed rule's: furnace −0.24% / −0.36% (fixed 0.97: −0.16% / −0.28%), two-room leak 0.81% (fixed 0.80%). In the viewer, Cornell's field after the warm-up is still a few percent low for some seconds and creeps up (table). M2's change-driven reset is what makes light changes fast on every-frame probes.
+- **Every-frame probes settle bounce light more slowly.** On the accuracy pages (every probe every frame), 600 frames left the furnace −1.95% / −2.05% (RTX / Intel; the Intel over the 2% limit) and the two-room lit room 5.4% below its settled value. The pages now run 1800 (furnace) and 3000 (leak) frames, and the settled values match the fixed rule's: furnace −0.24% / −0.36% (fixed 0.97: −0.16% / −0.28%), two-room leak 0.81% (fixed 0.80%). With the ramp (its table above) the furnace settles in 600 frames again (−0.19% at a = 3), the two-room scene still needs more (0.74% at 600 frames with a = 3, settled 0.81%), so the counts stay. Measured with the ramp defaults: furnace (1800) −0.15%, leak (3000) 0.83%, Cornell test view (600) +5.63% (+4.52% without the ramp, which hadn't settled). M2's change-driven reset is what makes light changes fast on every-frame probes.
 
 ## Which probes update (the budget)
 
@@ -265,6 +280,8 @@ interface DDGISettings {
     hysteresis: number;              // 0.97, used only with adaptiveHysteresis false
     hysteresisMemorySeconds: number; // 5 (τ); Infinity never forgets
     hysteresisMaxSamples: number;    // 200 (nMax; h at most 0.995)
+    hysteresisUpdatesPerSample: number; // 8 (a, the ramp)
+    hysteresisRampUpdates: number;   // 16 (K, how long the ramp lasts)
     irradianceChangeThreshold: number; // Infinity (off; DECISIONS 2026-11-05). A value turns on the lagged probe-mean rule
     maxBrightnessChange: number;     // 2.0
     distanceSharpness: number;       // 50

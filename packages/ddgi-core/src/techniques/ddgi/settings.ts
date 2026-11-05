@@ -53,6 +53,21 @@ export interface DDGISettings {
      */
     hysteresisMaxSamples: number;
     /**
+     * The ramp, a: during a probe's first `hysteresisRampUpdates` blended
+     * updates (since it was new, reset or back on), its history counts as at
+     * most one update per `a`. Its first estimates read a field still filling
+     * with bounce light and come out too dark; the ramp weights later updates
+     * more, so they fade fast (docs/design/ddgi.md). 1 is a plain running
+     * average.
+     */
+    hysteresisUpdatesPerSample: number;
+    /**
+     * How long the ramp lasts, K: a probe's first K blended updates. After
+     * them its count grows by one per update again. `Infinity` keeps the
+     * ramp until the count reaches `hysteresisMaxSamples`.
+     */
+    hysteresisRampUpdates: number;
+    /**
      * Opt-in, off by default (Infinity): when a probe's mean irradiance moves
      * by more than this share of its old mean, its next update uses a lower
      * hysteresis. Off in M1 because any test on noisy rays selects by the
@@ -115,6 +130,28 @@ export const ADAPTIVE_MEMORY_SECONDS = 5;
  */
 export const ADAPTIVE_MAX_SAMPLES = 200;
 
+/**
+ * The ramp by default: a = 8 for a probe's first K = 16 updates (T1.12, RTX
+ * 3060; docs/design/ddgi.md has the table). Cornell right after the 16-pass
+ * warm-up: -26% with no ramp, -10.5% at a = 3 and -5 to -7% at a = 8, then
+ * within 1% after about 1 s instead of 19 s. Kept to the first 16 updates
+ * because an endless a = 8 reaches n_max only after 1600 updates: 400 frames
+ * after the warm-up Cornell still changed 0.28% a frame against 0.089% with
+ * K = 16 (the settled 0.094%). 16 is the warm-up's own pass count; a sparse
+ * probe (Sponza) spends its first 16 updates, about 18 s after a restart,
+ * slightly noisier.
+ */
+export const ADAPTIVE_UPDATES_PER_SAMPLE = 8;
+
+/** `hysteresisRampUpdates` by default, K (see ADAPTIVE_UPDATES_PER_SAMPLE). */
+export const ADAPTIVE_RAMP_UPDATES = 16;
+
+/** The kernel's stand-in for an endless ramp (no Infinity in a shader that may assume finite floats). */
+const RAMP_UPDATES_ENDLESS = 1e9;
+
+/** The largest ramp the kernel takes: beyond it a probe would stay noisy for thousands of updates. */
+const MAX_UPDATES_PER_SAMPLE = 64;
+
 /** What a host must give; everything else has a default. */
 export type DDGISettingsInput = Partial<DDGISettings> & { readonly volume: DDGIVolumeSettings };
 
@@ -126,6 +163,8 @@ export const DEFAULT_DDGI_SETTINGS: Readonly<Omit<DDGISettings, 'volume'>> = {
     hysteresis: 0.97,
     hysteresisMemorySeconds: ADAPTIVE_MEMORY_SECONDS,
     hysteresisMaxSamples: ADAPTIVE_MAX_SAMPLES,
+    hysteresisUpdatesPerSample: ADAPTIVE_UPDATES_PER_SAMPLE,
+    hysteresisRampUpdates: ADAPTIVE_RAMP_UPDATES,
     irradianceChangeThreshold: Infinity,
     maxBrightnessChange: 2.0,
     distanceSharpness: 50,
@@ -284,6 +323,8 @@ export function blendSettings(settings: DDGISettings): {
     /** 1 / hysteresisMemorySeconds; 0 never forgets. */
     inverseMemorySeconds: number;
     maxSamples: number;
+    updatesPerSample: number;
+    rampUpdates: number;
     irradianceChangeThreshold: number;
     maxBrightnessChange: number;
     distanceSharpness: number;
@@ -298,6 +339,9 @@ export function blendSettings(settings: DDGISettings): {
         hysteresis: clamp(settings.hysteresis, 0, 1, defaults.hysteresis),
         inverseMemorySeconds,
         maxSamples: clamp(settings.hysteresisMaxSamples, 0, MAX_HISTORY_SAMPLES, defaults.hysteresisMaxSamples),
+        // At least 1 (a plain mean); the kernel divides by it.
+        updatesPerSample: clamp(settings.hysteresisUpdatesPerSample, 1, MAX_UPDATES_PER_SAMPLE, defaults.hysteresisUpdatesPerSample),
+        rampUpdates: settings.hysteresisRampUpdates >= 0 ? Math.min(settings.hysteresisRampUpdates, RAMP_UPDATES_ENDLESS) : RAMP_UPDATES_ENDLESS,
         // Infinity (or anything not a number) switches the rule off; the kernel reads a negative value as "off".
         irradianceChangeThreshold: settings.irradianceChangeThreshold >= 0 && Number.isFinite(settings.irradianceChangeThreshold) ? settings.irradianceChangeThreshold : CHANGE_RULE_OFF,
         maxBrightnessChange: clamp(settings.maxBrightnessChange, 0, Number.MAX_VALUE, defaults.maxBrightnessChange),

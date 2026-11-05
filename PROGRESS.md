@@ -21,6 +21,21 @@ Rules:
 
 ---
 
+## 2026-11-05 · T1.12 phase 2a follow-up: the warm-up's bounce light (the ramp) · implementer (opus)
+Did (uncommitted, on top of 14c2ed2): the lead asked to fix Cornell coming out of the warm-up 25% low and needing 17.5 s to get within 1%, in the technique.
+- Cause: the warm-up was a plain running average whose estimates read the field it was building. The bias shrinks like k^−(1−ρ); Cornell fits ρ ≈ 0.65 (the model matches a = 1–4 within 1–3 points).
+- The ramp: for a probe's first K = 16 blended updates its count is capped at k/a with a = 8, then it grows by one per update. Every-frame updates get h = k/(k+a) during the ramp, which weights later estimates more. Settings `hysteresisUpdatesPerSample` (8) and `hysteresisRampUpdates` (16); the history is now n, t and k (12 bytes a probe). Files: `wgsl/blend.ts` (`ddgiRampCap`, `DdgiProbeHistory`), `wgsl/common.ts`, `layout.ts`, `settings.ts`, `ddgi-technique.ts`, `ddgi.test.ts`; pages `ddgi-shared/hysteresis-modes.ts` (`tau:5/200/<a>/<K>`), `ddgi-flicker` (`VITE_DDGI_FLICKER_AFTER_WARMUP`: measure right after loading); design doc ("The ramp"), NOTES.
+Numbers (RTX 3060, τ 5 s; Cornell 1,574 probes a frame, Sponza 291; the error right after the warm-up is one image, ±1.5 points run to run):
+- Cornell after the warm-up: a = 1 −26%, 2 −15.6%, 3 −10.5%, 4 −9.2%, 6 −9.0%, 8 −4.6%; **a = 8, K = 16: −7.4% / −6.3%**. Within 1%: 19 s, 5.5, 2, 1.5, 1, 0.5; **1 s**. After a restart: 16.5 s → **2 s**.
+- Cornell per-pixel change the 240 frames after the warm-up: a = 1 0.30% (the image climbs 21%), a = 3 0.63%, a = 8 1.52%, **a = 8 K = 16 0.39%**. 400 frames later: 0.092% (still climbing), 0.109%, 0.283%, **0.089%**. So an endless a = 8 is out: it reaches n_max only after 1,600 updates.
+- Settled flicker with the defaults: Cornell 0.094% / 0.38% (`gpuMs:2`), Sponza 0.025% / 0.091% (unchanged).
+- Sponza with the defaults: +0.05% after the warm-up, within 1% 3.5 s after a restart (3 s before), sun halved within 5% / 1% in 12.5 / 20.5 s (13 / 22.5 s). Per-pixel error 5 s after a restart 5.0% against 3.6%: a little noisier for its first 16 updates.
+- A fixed small cap (the lead's other idea) loses by the same model: a cap of 8 during the warm-up leaves Cornell about 23% low, a cap of 2 about 13%. Not measured.
+- With a = 3: furnace at 600 frames −0.19% (settled), two-room leak at 600 0.74% (settled 0.81%), so the page counts (1800 / 3000) stay.
+Verified: lint, typecheck; DDGI unit tests 43; the full `pnpm test` gave 912/917 while the Intel suite and a Cycles CPU render ran (timeouts in bench-lock, sky and trace-bench tests). Those three files alone: 88/88. `test:gpu --filter ddgi-` passes on the RTX (furnace −0.15%, leak 0.83%, test view +5.63%) and the Intel UHD (−0.28%, 0.83%, +5.57%). The test view went from +4.52% to +5.63%: its 600 frames now settle further (the T1.5 number was +5.7%).
+Not verified: Intel settle and flicker with the ramp; the viewer by eye (phase 2b).
+Next: the lead: the ramp's two thresholds for DECISIONS (in my report).
+
 ## 2026-11-05 · T1.12 phase 2a: hysteresis that knows the time between a probe's updates · implementer (opus)
 Did (uncommitted; the lead's design, docs/design/ddgi.md "Hysteresis that knows the time between updates"):
 - Core: per probe, `n` (effective samples) and `t` (last update, s) in a new storage buffer that only `ddgi/blend` reads and writes (binding 8; 5 storage buffers). On an update: `n ← n·exp(−(T−t)/τ)`, `h = n/(n+1)`, then `n ← min(n+1, nMax)`. State 3 gives n = 0 (h = 0). The same h for distances; the big-change rule and the firefly clamp are unchanged.

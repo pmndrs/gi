@@ -67,6 +67,14 @@ describe('settings', () => {
         expect(blendSettings({ ...settings, hysteresisMemorySeconds: Number.NaN }).inverseMemorySeconds).toBe(fallback);
         expect(blendSettings({ ...settings, hysteresisMaxSamples: -3 }).maxSamples).toBe(0);
         expect(blendSettings({ ...settings, adaptiveHysteresis: false }).adaptiveHysteresis).toBe(false);
+        expect(blendSettings(settings).updatesPerSample).toBe(settings.hysteresisUpdatesPerSample);
+        expect(blendSettings({ ...settings, hysteresisUpdatesPerSample: 0 }).updatesPerSample).toBe(1);
+        expect(blendSettings({ ...settings, hysteresisUpdatesPerSample: Number.NaN }).updatesPerSample).toBe(settings.hysteresisUpdatesPerSample);
+        expect(blendSettings({ ...settings, hysteresisRampUpdates: 16 }).rampUpdates).toBe(16);
+        // An endless ramp reaches the kernel as a large finite number.
+        const endless = blendSettings({ ...settings, hysteresisRampUpdates: Infinity }).rampUpdates;
+        expect(Number.isFinite(endless) && endless >= 1e9).toBe(true);
+        expect(blendSettings({ ...settings, hysteresisRampUpdates: Number.NaN }).rampUpdates).toBe(endless);
     });
 
     it('advances the clock by deltaTime, at most MAX_CLOCK_STEP_SECONDS a frame, never backwards', () => {

@@ -45,6 +45,8 @@ struct DdgiUniforms {
     clockSeconds: f32,
     inverseMemorySeconds: f32, // 1 / tau; 0 never forgets
     maxHistorySamples: f32,   // n_max
+    updatesPerSample: f32,    // a: n is at most (blended updates) / a during the ramp; 1 = a plain mean
+    rampUpdates: f32,         // K: the ramp lasts a probe's first K blended updates
 }
 
 const DDGI_MAX_RAYS: u32 = ${MAX_RAYS_PER_PROBE}u;

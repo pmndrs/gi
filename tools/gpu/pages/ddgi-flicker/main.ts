@@ -50,6 +50,9 @@
  *   VITE_DDGI_CAMERA=1             (1-based bookmark)
  *   VITE_DDGI_FLICKER_BUDGETS=gpuMs:2,units:256
  *   VITE_DDGI_FLICKER_HYSTERESIS=fixed:0.97,tau:2,tau:5,tau:10   (results keyed '<rule>/<budget>' when given)
+ *   VITE_DDGI_FLICKER_AFTER_WARMUP=400   (instead of steps 1-2: for each rule, every probe back to "not
+ *       updated yet", the warm-up, then this many frames at the budget with deltaTime 0, as the viewer's
+ *       calibration runs, and the measurement starts at once: what a user sees right after loading)
  *   VITE_DDGI_FLICKER_FRAMES=120
  *   VITE_DDGI_FLICKER_IMAGES=1
  *   VITE_DDGI_WIDTH=640 VITE_DDGI_HEIGHT=360
@@ -88,6 +91,8 @@ const WIDTH = countFromEnv(env.VITE_DDGI_WIDTH, 640);
 const HEIGHT = countFromEnv(env.VITE_DDGI_HEIGHT, 360);
 
 const SETTLE_FRAMES = 60;
+/** Frames after the warm-up before measuring, when the run measures right after loading (see the file comment); -1 when not. */
+const AFTER_WARMUP_FRAMES = typeof env.VITE_DDGI_FLICKER_AFTER_WARMUP === 'string' && env.VITE_DDGI_FLICKER_AFTER_WARMUP !== '' ? Math.max(0, Math.round(Number(env.VITE_DDGI_FLICKER_AFTER_WARMUP))) : -1;
 /** DDGI's clock step per frame: a 60 Hz host. */
 const FRAME_SECONDS = 1 / 60;
 /** An adaptive rule settles for at least this many memory times (each probe's history count reaches its steady value within e^-4). */
@@ -239,13 +244,22 @@ async function measureSetting(
     const field = scene.ddgi.field;
     assert(field, 'DDGI has no field');
     applyHysteresisMode(scene.ddgi.settings, mode);
+    const afterWarmup = AFTER_WARMUP_FRAMES >= 0;
+    if (afterWarmup) {
+        scene.ddgi.resetHistory();
+        await warmUp(scene);
+        for (let index = 0; index < AFTER_WARMUP_FRAMES; index++) {
+            scene.frame(budget, 0);
+            if (index % 8 === 7) await scene.device.queue.onSubmittedWorkDone();
+        }
+    }
     const renderFrame = async (): Promise<Float32Array> => {
         scene.frame(budget, FRAME_SECONDS);
         const { indirect } = await view.render(field, bookmark, WIDTH, HEIGHT);
         return indirect;
     };
     // Settling needs no images; the GPU is waited for every few frames so the page never sits in one long task.
-    const settle = settleFrames(mode);
+    const settle = afterWarmup ? 0 : settleFrames(mode);
     for (let index = 0; index < settle; index++) {
         scene.frame(budget, FRAME_SECONDS);
         if (index % 8 === 7) await scene.device.queue.onSubmittedWorkDone();
@@ -351,8 +365,9 @@ await runThreePage(async ({ device, data, log }) => {
         data.probes = scene.probeCount;
         const view = await TestView.create(device, scene.platform);
 
-        const warm = await warmUp(scene);
+        const warm = AFTER_WARMUP_FRAMES >= 0 ? { passes: 0 } : await warmUp(scene);
         data.warmup_passes = round(warm.passes);
+        data.after_warmup_frames = AFTER_WARMUP_FRAMES;
 
         // Converge with the fixed 0.97 rule (see the file comment) with whole passes split into equal frames.
         applyHysteresisMode(scene.ddgi.settings, FIXED_097);
@@ -361,7 +376,7 @@ await runThreePage(async ({ device, data, log }) => {
         let blockMean = imageMean((await view.render(field, bookmark, WIDTH, HEIGHT)).indirect);
         let blocks = 0;
         let settled = false;
-        for (let block = 1; block <= MAX_BLOCKS; block++) {
+        for (let block = 1; block <= (AFTER_WARMUP_FRAMES >= 0 ? 0 : MAX_BLOCKS); block++) {
             for (let frame = 0; frame < BLOCK_PASSES * framesPerPass; frame++) {
                 scene.frame({ units: unitsPerFrame }, FRAME_SECONDS);
                 if (frame % 8 === 7) await device.queue.onSubmittedWorkDone();
@@ -379,7 +394,7 @@ await runThreePage(async ({ device, data, log }) => {
         data.converge_blocks = blocks;
         data.converge_passes = warm.passes + blocks * BLOCK_PASSES;
         data.converged_image_mean = round(blockMean);
-        assert(settled, `the GI image mean did not settle within ±${CONVERGED_TOLERANCE * 100}% in ${MAX_BLOCKS} blocks`);
+        assert(settled || AFTER_WARMUP_FRAMES >= 0, `the GI image mean did not settle within ±${CONVERGED_TOLERANCE * 100}% in ${MAX_BLOCKS} blocks`);
 
         const settings: Record<string, unknown> = {};
         const images: Array<{ name: string; base64: string }> = [];
