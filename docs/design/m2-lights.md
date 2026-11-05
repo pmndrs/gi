@@ -50,17 +50,18 @@ M1's accuracy, leak, furnace and stability checks must still pass on still scene
 
 ## The update rates this plan works with
 
-Everything about response time depends on how many probes fit in 2 ms. Measured at 60 Hz on the RTX, 2 ms budget (T1.9a, PROGRESS):
+Everything about response time depends on how many probes fit in 2 ms. Measured at 60 Hz on the RTX with the fixed budget controller (T1.9a, 3 runs under the bench lock; PROGRESS and DECISIONS 2026-11-05), median probes per frame and the p05–p95 spread:
 
-| Scene | Probes | Probes per frame at 2 ms | Note |
-| --- | --- | --- | --- |
-| Cornell | 1,728 | 995 | measured |
-| Two-room | 1,071 | 337 | measured |
-| Furnished room | 4,998 | not measured | to measure in T1.9 |
-| Sponza | 19,425 | 39 measured; **about 190** once the controller fix lands | its cost is nearly flat from 20 to 190 probes (T1.9a re-review) |
-| Bistro exterior | n/a | 23 measured; about 90 from its cost curve (1.57 ms + 4.7 µs per probe, NOTES) | |
+| Scene | Probes | Probes per frame at 2 ms (RTX) | Spread (p05–p95) | Intel UHD |
+| --- | --- | --- | --- | --- |
+| Cornell | 1,728 | 875–910 | ~440–1,600 | 139 (one run, before the fix) |
+| Two-room | 1,071 | 294–340 | 110–566 | 45 (same) |
+| Furnished room | 4,998 | **not measured** | | not measured |
+| Sponza | 19,425 | **30–43** | 9–181 | 16 (same) |
+| Bistro exterior | n/a | 20–27 | 7–90 | 11 (same) |
 
-The plan below uses 190 for Sponza. If T1.9's restated number differs, every Sponza figure here scales with it.
+- **Sponza is set by ray latency, not probe count:** fixed batches of 20 / 40 / 128 probes cost 1.55 / 1.91 / 2.81 ms, so about 40 probes is what 2 ms buys, and a full sweep of Sponza takes 7.5–10.8 s. The rate also follows other programs' GPU load second to second.
+- **The tables below use ~36 for Sponza and ~300 for two-room.** Section 2's deferred shadow pass is the lever that could raise Sponza's rate; nothing below assumes it does.
 
 ## What others do, and what we copy
 
@@ -122,7 +123,7 @@ The plan below uses 190 for Sponza. If T1.9's restated number differs, every Spo
 **What it might buy.** Two things limit Sponza at 2 ms:
 
 - **The per-probe cost.** This is where the 53% was measured. If shadow rays reach even half the bench's any-hit rate once they're coherent, full-subgroup work, the per-probe cost of trace plus direct drops to about 0.6× today's.
-- **The fixed cost.** Sponza sits at 1.3–1.6 ms from 32 to 128 probes (NOTES). Most likely that's the latency of the longest walks in a small batch. A cheaper per-probe cost buys few extra probes while the fixed part dominates. Shorter kernels may cut that latency too, but nobody has measured it.
+- **The fixed cost.** On Sponza a batch of 20 probes already costs 1.55 ms (T1.9a). Most likely that's the latency of the longest walks in a small batch. A cheaper per-probe cost buys few extra probes while the fixed part dominates. Shorter kernels may cut that latency too, but nobody has measured it.
 
 So the gain in probes per frame is unknown, somewhere between "little" and "about 1.6×". **The spike (T2.0) measures both parts before anything else is built.** Nothing below counts on the gain: the rates table above is the plan.
 
@@ -233,9 +234,9 @@ Cost: four dispatches of a few µs each, plus one thread per probe. Estimate: un
 
 | Scene | U | P (75%) | Changed probes fully served within 0.5 s |
 | --- | --- | --- | --- |
-| Cornell | 995 | 746 | 2,800, more than its 1,728 probes |
-| Two-room | 337 | 253 | 950, nearly all of its 1,071 |
-| Sponza | ~190 | ~142 | ~530 |
+| Cornell | ~890 | ~670 | ~2,500, more than its 1,728 probes |
+| Two-room | ~300 | ~225 | ~840, most of its 1,071 |
+| Sponza | ~36 | ~27 | ~100 |
 
 A lamp whose influence box holds more probes than that is served nearest-and-most-changed first. The visible image meets the target, while far, weakly changed probes finish later.
 
@@ -351,15 +352,25 @@ The last row matters: in a sunlit interior the sun's bounce is often the larger 
   - A front-face hit adds `albedo / π × bounceEnergy ×` pattern k's own bounce, read from `Tₖ` at the hit with the same probe weights as the field's bounce lookup. That's the same term the trace kernel uses for the field (`emission + albedo / π × (bounceEnergy × bounce + direct)`). Emission and direct light are 0 for a sky pattern, because the sky reaches surfaces only through the field.
 - A pass after `gi/direct`, `ddgi/sky-transfer`, writes each ray's 9 pattern radiances (rgb halves, 56 bytes a ray) into the ray scratch. The blend blends the 9 tiles with the probe's history. There's no firefly clamp on them: the clamp isn't linear, and pattern values can be negative. While transfers are being built, batches are split into rounds of 256 probes; the ray scratch is then about 5 MB (ray results, surface records and transfer radiances).
 - **When it's built.** Bounce light builds up over many updates, as in the field: early estimates were made while neighbouring probes' transfers were still near 0. So a probe's transfer is marked **built** only after at least 32 updates, *and* once its band-0 mean has changed by under 1% over its last 4 updates. Then it's no longer updated. The transfer depends only on geometry and materials, not on lighting, so a still scene pays nothing more for it once built.
-- **How long building takes** (estimated): while building, a probe update costs about 1.8× as much (9 more tiles to blend, 9 more bounce fetches sharing one set of weights). At the default 2 ms budget, with 32–64 updates per probe:
+- **How long building takes** (estimated from the measured rates above): while building, a probe update costs about 1.8× as much (9 more tiles to blend, 9 more bounce fetches sharing one set of weights). At the default 2 ms budget, with 32–64 updates per probe, the whole volume takes `probes × (32 to 64) / (rate / 1.8)` frames:
 
-| Scene | Probes | Probes per frame while building (RTX) | Transfer built for the whole volume |
-| --- | --- | --- | --- |
-| Two-room | 1,071 | ~190 | ~3–6 s |
-| Furnished room | 4,998 | ~220 if its rate is ~400 | ~12–24 s |
-| Sponza | 19,425 | ~105 | ~100–200 s |
+| Scene | Probes | Probes per frame while building (RTX) | Whole volume built | The view's ~200 nearest probes built |
+| --- | --- | --- | --- | --- |
+| Two-room | 1,071 | ~165 | ~3.5–7 s | ~1 s |
+| Furnished room | 4,998 | not measured | not measured (4.7× two-room's probes) | not measured |
+| Sponza | 19,425 | ~17–24 | **~7–20 minutes** | ~5–13 s |
+| Bistro exterior's camera volume | 12,288 | ~11–15 | ~7–20 minutes | ~7–20 s |
 
-  The camera's neighbourhood builds first (the same camera weight). The viewer's warm-up (DECISIONS 2026-11-05: large update passes for up to 8 s after load) shortens this a lot. Saved bakes (M5) can store the transfer, so a loaded scene has it at once. Until a probe's transfer is built, a sky change reaches that probe at the delayed pace.
+**What this means: the honest trade-off.**
+
+- **On rooms** (two-room, and the furnished room if its rate is near two-room's per probe), transfers are built within seconds of loading. The instant sky works as intended.
+- **On Sponza-sized scenes at 2 ms**, the instant sky works **where you look after about 5–13 s** (camera-near probes build first), and everywhere else only after 7–20 minutes. Until then, sky changes far from the camera arrive at the delayed pace (6.4). The 8-second warm-up doesn't change this much: its large passes cover Sponza only a few times.
+- **In a camera-following volume** it barely helps while the camera moves: a probe that enters at the far edge leaves again before it has its 32+ updates. It helps only when the camera stays somewhere for tens of seconds.
+- **What would make it work on big scenes:**
+  - **saved bakes** (M5), so a scene loads with its transfers;
+  - **a build budget of its own** (`transferBuildMs`, default 0): spend extra GPU time on transfers until they're built, for apps that can afford a busy first minute;
+  - **the deferred shadow pass** (section 2), if T2.0 shows it raises Sponza's rate.
+- **Recommendation**, within Dennis's call of "instant with a delayed fallback": keep the instant sky as the main path. On by default where memory allows; on Sponza-sized scenes, say plainly (in the stats overlay: "sky transfer built: 12%") that it covers the view first and the rest later. Then decide in T2.11, with T2.0's and T2.6b's numbers, whether saved bakes should move earlier than M5. That's open question 2.
 
 **Showing it.** In a frame where the sky changed by more than the re-bake threshold:
 
@@ -384,7 +395,7 @@ In other frames compose writes only the tiles that were updated.
 | While transfers build | updates ~1.8× per probe, so fewer probes per frame | same |
 | Once built, sky still | nothing extra | nothing extra |
 
-The sky-change cost is paid out of the same 2 ms. On Sponza, ~0.3 ms of every frame of a slider drag goes to the nudge, which leaves fewer probes for the sun direction's delayed catch-up: about half as many while dragging, because Sponza's fixed cost is most of its 2 ms (T1.9a). On Tier B the quarter-a-frame nudge keeps that share small.
+The sky-change cost is paid out of the same 2 ms. On Sponza, ~0.3 ms of every frame of a slider drag goes to the nudge, which leaves fewer probes for the sun direction's delayed catch-up: about 40% fewer while dragging (from T1.9a's fixed batches: 20 probes cost 1.55 ms, 40 cost 1.91 ms). On Tier B the quarter-a-frame nudge keeps that share small.
 
 **Accuracy: measured first** (T2.6b's first check, before the rest is built):
 
@@ -403,17 +414,17 @@ A change of the sky or the sun's direction marks every probe (section 4.2). For 
 
 | Scene | Probes | U (RTX / Intel) | View settled, RTX | Whole volume, RTX | View settled, Intel | Whole volume, Intel |
 | --- | --- | --- | --- | --- | --- | --- |
-| Cornell | 1,728 | 995 / 139 | ~0.1 s | ~0.23 s | ~0.2 s | ~1.7 s |
-| Two-room | 1,071 | 337 / 45 | ~0.1 s | ~0.42 s | ~0.8 s | ~3.2 s |
-| Furnished room | 4,998 | ~400 / not measured | ~0.2 s | ~1.7 s | not measured | not measured |
-| Sponza | 19,425 | ~190 / 16 | ~0.3 s | ~14 s | ~2 s | ~160 s |
+| Cornell | 1,728 | ~890 / 139 | ~0.1 s | ~0.26 s | ~0.3 s | ~1.7 s |
+| Two-room | 1,071 | ~300 / 45 | ~0.1 s | ~0.48 s | ~0.8 s | ~3.2 s |
+| Furnished room | 4,998 | not measured | not measured | not measured | not measured | not measured |
+| Sponza | 19,425 | ~36 / 16 | ~1 s | ~70 s | ~2 s | ~160 s |
 
-The Intel rates are T1.9a's single run, before the controller fix; they will likely rise.
+The RTX rates are T1.9a's, with the fixed controller; the Intel rates are its single run from before the fix, and will likely rise. So on Sponza the view settles in about a second after a big jump, and the far end of the volume takes about a minute.
 
 - **These are for a big jump** (dragging the slider across hours). Dennis agreed (2026-11-05) to judge global changes on the view.
 - **A slow time-of-day animation** (an hour of sun in 10 s, 1.5° per second) changes each probe only a little between two of its updates, so the step rule in 4.1 wouldn't shorten its history, and with 32 updates of history it would lag far behind. Section 4.1's **ramp rule** handles this: a probe that keeps changing gets a history short enough that its lag stays near 5%.
-  - In two-room (a probe updated every ~3 frames) the change per update is tiny and the history stays near 32 updates: it trails by about 1.7 s, which costs under 5%.
-  - Far from the camera on Sponza (a probe updated every ~1.7 s on the RTX) the history drops to 1–2 updates: those probes follow within one or two of their own updates (2–3 s), with more noise.
+  - In two-room (a probe updated every ~3.5 frames) the change per update is tiny and the history stays near 32 updates: it trails by about 1.9 s, which costs under 5%.
+  - Far from the camera on Sponza (a probe updated every ~9 s on the RTX) the sun moves about 13° between two updates, so the history drops below 1 update: those probes jump to each new estimate, about 9 s apart, with more noise. Near the camera the scheduler updates them far more often.
 - **It blends, it never pops.** Every probe moves from its old value to its new one through its history (section 4.1). Far from the camera on Sponza, the old lighting fades into the new over seconds; it doesn't jump.
 
 ### 6.5 Native
@@ -603,14 +614,14 @@ The startup items DECISIONS moved to M2 ("fast first GI", the scene copy off the
 
 ## Risks, and what to spike first
 
-1. **The deferred pass may buy little** at Sponza's operating point, where the fixed cost dominates. Then Sponza stays near 190 probes per frame, and the response target is met only near the camera. This is the largest lever and the largest uncertainty. *Spike first: T2.0.*
+1. **The deferred pass may buy little** at Sponza's operating point, where the fixed cost dominates. Then Sponza stays at 30–43 probes per frame, and the response target is met only near the camera. This is the largest lever and the largest uncertainty. *Spike first: T2.0.*
 2. **Short histories flicker.** At `n` = 0.42 the first update is 70% one noisy estimate. If that shows as a flash, raise the floor on `n`, or give marked probes 2× rays for their first update (at a cost). T2.4a's two-room step shows it.
 3. **Light-grid noise with many small lights.** Candles have short ranges, and a cell 2 probe spacings wide may hold many lights that matter only at its corners. The options are smaller cells near lights, more reservoirs, or Moreau's light tree. `sponza-candles` decides.
 4. **The change estimate is a stand-in.** `lightChangeScale` and the visibility floor are guesses until T2.4a compares marked probes against probes that really changed. Too generous wastes budget; too stingy leaves stale probes until the round robin reaches them.
 5. **Global changes on big scenes** can't meet 0.5 s everywhere at 2 ms on the delayed path (section 6.4). Dennis agreed to judge them on the view.
 6. **Native motion** needs fork changes, because the harness has no animation. Two-room first, Sponza second.
 7. **The instant sky's accuracy.** If 9 patterns blur the sky too much near windows (the sun's glow), the same-frame error exceeds 5%, and normal updates have to carry the rest at the delayed pace. Bands 0–3 (16 layers) is the next step, at +70 MB on Sponza. *Measured first in T2.6b.*
-8. **Building transfers takes long on big scenes** (~100–200 s for Sponza at 2 ms). Until then, sky changes reach those probes at the delayed pace. Warm-up and saved bakes (M5) shorten it.
+8. **Building transfers takes 7–20 minutes on Sponza at 2 ms** (6.3). Until then, sky changes away from the camera arrive at the delayed pace. Saved bakes (M5) or a build budget of its own fix it; the warm-up doesn't.
 9. **The ramp rule's short histories are noisy** far from the camera on Sponza during a day animation (1–2 updates of history). If that flickers, the floor on `n` rises and those probes lag more.
 
 ## Decided by Dennis (2026-11-05)
@@ -625,3 +636,4 @@ The startup items DECISIONS moved to M2 ("fast first GI", the scene copy off the
 ## Still open
 
 1. **The instant sky's memory caps:** on by default when its extra memory fits 128 MB on Tier A and 32 MB on Tier B (the Intel UHD uses shared system RAM). With these caps the RTX gets it on every M2 scene, including Sponza (+125 MB), and the Intel UHD on the rooms. OK, or different caps?
+2. **The instant sky on big scenes** (6.3, "the honest trade-off"): at Sponza's measured rate its transfers take 7–20 minutes to build at 2 ms (the view's nearest probes in 5–13 s). Keep it on by default there and accept "the view first, the rest later" until saved bakes exist? Or give transfer building a budget of its own, or bring saved bakes forward from M5? I'd keep it on, add the optional build budget, and decide about bakes in T2.11 with T2.0's and T2.6b's numbers.

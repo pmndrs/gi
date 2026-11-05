@@ -153,7 +153,15 @@ The volume is a fixed-size window of probes over a lattice fixed in world space 
 - **Fading the new planes in.** Coverage is 1 out to half a spacing beyond the outermost probes (DECISIONS 2026-11-05), so a new plane at full coverage the moment the window moves would be a pop. The volume table therefore holds a **valid extent** next to the window. Coverage fades at the valid extent, not at the window's edge. `ddgi/scroll` advances the valid extent toward the window by `spacing / 15` a frame, and only over planes whose probes have finished warming (from the census). A new plane fades in over about a quarter of a second instead of appearing at once.
 - **Sampling** maps a point to lattice coordinates, then to slots with the same modulo; the window and valid extent come from the volume table. For a fixed volume the offset is 0 and the modulo changes nothing: the same code, not a second path. Cost: one integer modulo per axis per probe sample.
 - **The ends of the scroll:** a plane that enters next to a fixed, higher-priority volume is covered by that volume meanwhile; elsewhere the host's environment covers the fade band, as at any volume edge.
-- **Speed:** entering probes need their 2 warming updates before they're shown (section 5.2). With a 32 × 12 × 32 window at 1.5 m spacing, each plane on the x or z axis holds 384 probes. At `v` m/s that's about `4.3 v` entering probes a frame at 60 Hz, `8.5 v` warming updates a frame. Bistro exterior fits about 90 probe updates a frame at 2 ms (NOTES: 1.57 ms + 4.7 µs per probe). Giving half of that to entering planes allows **about 5 m/s** at 1.5 m spacing; coarser spacing or a larger budget allows more. Decided (2026-11-05): Bistro exterior, 32 × 12 × 32 at 1.5 m, up to 5 m/s.
+- **Speed:** entering probes need their 2 warming updates before they're shown (section 5.2).
+  - With a 32 × 12 × 32 window at spacing `s`, each plane on the x or z axis holds 384 probes. At `v` m/s that's `384 × v / s / 60` entering probes a frame, and twice that in warming updates: `8.5 v` a frame at 1.5 m spacing.
+  - **Measured:** Bistro exterior fits **20–27** probe updates a frame at 2 ms (T1.9a, with the fixed controller). An earlier estimate here, about 90, came from its cost curve and was wrong.
+  - So at 1.5 m spacing, giving half the budget to entering planes allows only about **1.4 m/s**. 5 m/s needs about 43 warming updates a frame, about twice the whole budget.
+  - Levers:
+    - **coarser spacing:** at 3 m (a 96 × 36 × 96 m window, the same memory), 5 m/s needs about 21 a frame, roughly the whole budget;
+    - **a larger budget while moving;**
+    - **M2's deferred shadow pass,** if it raises the rate.
+  - Dennis picked 5 m/s at 1.5 m on the wrong estimate, so this goes back to him (open question below).
 - **Teleports** (the camera jumps more than half the window): every slot resets, and the viewer's warm-up mode (DECISIONS 2026-11-05) runs, as after a scene load.
 - **Memory:** 32 × 12 × 32 = 12,288 probes at about 1.5 KB each (irradiance 512 B, distance 1 KB, probe data, history) is **19 MB**, covering 48 × 18 × 48 m at 1.5 m spacing.
 
@@ -176,7 +184,7 @@ M2's `ddgi/mark` (m2-lights.md 4.2) gets geometry entries. For each geometry reg
 
 **Example: a door between two rooms** (1 × 2 m, radius about 1.1 m), closed in one step. A probe 4 m into the dark room that saw the open doorway has `Ω ≈ 0.24 sr` and `r ≈ 0.47`. Its history drops to `n ≈ 0.95`, and it is owed 8 updates. A probe behind a wall doesn't pass the far-set test and isn't marked.
 
-**What the budget buys** (the same arithmetic as m2-lights.md 4.3): the door's near and far sets are a few hundred probes on two-room, where 337 probes fit a frame, so all of them get their 8 updates well inside 1 s. A cabinet moved in the furnished room touches fewer. On Sponza-sized scenes the probes nearest the camera are served first.
+**What the budget buys** (the same arithmetic as m2-lights.md 4.3): the door's near and far sets are a few hundred probes on two-room, where about 300 probes fit a frame (T1.9a), so all of them get their 8 updates well inside 1 s. A cabinet moved in the furnished room touches fewer. On Sponza-sized scenes the probes nearest the camera are served first.
 
 **The distance atlas** uses the same per-probe history. For geometry that matters most: until a probe near the door learns the door's distance, light can leak through it. The short history and the priority keep that to the first few updates (risk 3).
 
@@ -437,7 +445,7 @@ B1 is done before M3 starts. B2 (H-PLOC) is done before M3 sign-off, and doesn't
   1. a dense fixed volume inside a coarse one shows no seam: the image difference across the fade band, frame to frame, stays within the stability threshold set in T1.9;
   2. sampling at 1440p on a view half inside the fade band costs ≤ 1.0 ms on the RTX;
   3. one-volume scenes match M2 (field mean within 0.1%, cost within 3%).
-- **T3.6 Camera-following volume.** Done when, on Bistro exterior's fly-through at 5 m/s (the 32 × 12 × 32 volume at 1.5 m; decided 2026-11-05):
+- **T3.6 Camera-following volume.** Done when, on Bistro exterior's fly-through at the speed and spacing settled in the open question below (5 m/s at 1.5 m as decided, unless that changes):
   1. the frame-to-frame change in the edge band stays within T1.9's stability threshold;
   2. entering probes are never used before warming (test);
   3. memory stays fixed;
@@ -457,7 +465,7 @@ B1 is done before M3 starts. B2 (H-PLOC) is done before M3 sign-off, and doesn't
 2. **Change tracking at scale.** Cache misses, not code, set the walk's cost (0.7 µs per object). If the `updateMatrixWorld` override is unsafe or no cheaper, unmarked moves on Bistro-sized scenes keep a latency of tens of frames, and `markChanged` stays the answer for interactive moves.
 3. **The door's leak window.** Until the near probes' distance tiles learn the closed door, light leaks for a few frames. With `n` near 0.4 and the door's probes updated every frame, that should be 2–4 frames. If it shows, those probes' first update could use 2× rays.
 4. **The far-set estimate** (`Ω_ref`, the 8-spacing radius, the entry-distance test) is a guess. T3.4 compares marked probes against probes that really changed by more than 5%.
-5. **Scrolling speed.** At Bistro exterior's rate, about 5 m/s at 1.5 m spacing. Faster flights show the environment longer at the edge.
+5. **Scrolling speed.** At Bistro exterior's measured rate (20–27 probes a frame), about 1.4 m/s at 1.5 m spacing, or about 5 m/s at 3 m. Faster flights show the environment longer at the edge (section 4.2).
 6. **The stats readback adds 1–3 frames** before a GPU tree is used. That's harmless at load. For an object added at run time it adds to the top level's worker delay; if it shows in the cabinet scenario, the top level can move to the GPU (section 2.2).
 7. **Refit quality** on large deformations (cloth, fan blades) may need rebuilds, which SPEC's tracing decision rules out today.
 
@@ -473,10 +481,14 @@ B1 is done before M3 starts. B2 (H-PLOC) is done before M3 sign-off, and doesn't
 1. **Deformed positions:** `setDeformedPositions` also takes a CPU array. The `ExternalBufferAttribute` PR is drafted in section 7.1 for him to see; nothing is posted.
 2. **`setTransforms`:** yes.
 3. **Readbacks** aren't a rule but a preference: "prefer GPU-resident; read back when it clearly pays". GPU trees use one small asynchronous stats readback (section 2.2); the provisional pool is gone.
-4. **The fly-through:** Bistro exterior, a 32 × 12 × 32 camera-following volume at 1.5 m (19 MB), up to 5 m/s.
+4. **The fly-through:** Bistro exterior, a 32 × 12 × 32 camera-following volume at 1.5 m (19 MB), up to 5 m/s. (But see "Still open": that speed rested on a wrong rate.)
 5. **Startup:** measured from the hand-off to GI, ≤ 2 s with a cold shader compile.
 6. **The wind tree:** a game-ready tree (section 8.1), not a 2 M-triangle one. Solid leaf cards until M4 are fine.
 7. **B2 (H-PLOC):** before M3 sign-off, not before M3 starts. It must not block; the fallbacks always stay.
 8. **Skinned characters** as light blockers: a stretch goal after v1.
 
-Nothing is left open in this doc. The M1 lead records 1, 3, 5 and 7 in DECISIONS: they change or add to SPEC's tracing decision, the B1a review's no-readback wording, the startup target and the B-lane gate.
+## Still open
+
+1. **The fly-through's speed and spacing.** Dennis's pick (5 m/s at 1.5 m) rested on an estimate of about 90 probe updates a frame on Bistro exterior. T1.9a measured 20–27. At 1.5 m, 5 m/s needs about twice the whole budget for the entering planes alone (section 4.2). Options: 3 m spacing (5 m/s fits, coarser GI around the camera), 1.4 m/s at 1.5 m, a larger budget while the camera moves, or wait for T2.0's numbers. I'd keep 1.5 m, target 5 m/s, and measure after the deferred shadow pass; if it still doesn't fit, use 3 m for the moving volume.
+
+Apart from this, nothing is left open in this doc. The M1 lead records 1, 3, 5 and 7 in DECISIONS: they change or add to SPEC's tracing decision, the B1a review's no-readback wording, the startup target and the B-lane gate.
