@@ -526,8 +526,15 @@ function settle(units: number, timings: readonly number[]): CurvePoint | undefin
  * - `lateShare`: frames are late when that median is over the target
  *   interval by more than this share.
  * - `stepDown`: the batch's factor per late window, never below the floor.
- * - `ceilingShare`: after a run of late windows, recovery stops at this
- *   share of the batch that was late first, below the level that caused it.
+ * - `ceilingShare`: after a late episode, recovery stops at this share of
+ *   the batch that was late first, below the level that caused it. An
+ *   episode runs from the first late window until frames have been on time
+ *   for `recoverAfterSeconds`: a load that leaves a window on time now and
+ *   then is still one episode. Why (the RTX run of the page's saturation
+ *   test): ending the episode at every on-time window let each new late
+ *   window set the ceiling again from the batch already stepped down, so
+ *   the ceiling ratcheted down (0.9 × 1,569, then 0.9 × 1,255) and the batch
+ *   stopped there, ×1.05 per 10 s from full recovery.
  * - `recoverAfterSeconds`, `recovery`: after this long on time, the batch
  *   grows by this factor per window up to that ceiling.
  * - `probeEverySeconds`, `probeStep`: once at the ceiling and on time this
@@ -733,7 +740,7 @@ export class WorkBudget {
     private ceiling: number | undefined;
     private onTimeSeconds = 0;
     private atCeilingSeconds = 0;
-    /** Inside a run of late windows: the ceiling was set at its start. */
+    /** Inside a late episode (see SATURATION `ceilingShare`): the ceiling was set at its start. */
     private lateEpisode = false;
     /** Timings of frames up to this one belong to the last burst. */
     private calibratedAfterFrame = 0;
@@ -911,9 +918,11 @@ export class WorkBudget {
             this.current = Math.max(floorUnits, Math.floor(this.current * SATURATION.stepDown));
             return;
         }
-        this.lateEpisode = false;
         this.onTimeSeconds += window.seconds;
-        if (this.onTimeSeconds < SATURATION.recoverAfterSeconds || this.current >= calibratedUnits) return;
+        if (this.onTimeSeconds < SATURATION.recoverAfterSeconds) return;
+        // On time long enough: the episode is over, and recovery starts.
+        this.lateEpisode = false;
+        if (this.current >= calibratedUnits) return;
         const limit = Math.min(calibratedUnits, this.ceiling ?? calibratedUnits);
         if (this.current < limit) {
             // + 1 so a batch of a few units still grows.

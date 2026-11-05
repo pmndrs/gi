@@ -519,6 +519,29 @@ describe('saturation: step down when frames are late, never below the floor (bud
         expect(unique(told.handed.slice(1000))).toEqual([told.budget.report.calibratedUnits]);
     });
 
+    it('a load that leaves some windows on time is one episode: the ceiling stays 0.9 × the first late batch (the RTX saturation run)', () => {
+        // Cornell on the RTX: on time, then 10 s of a marginal load whose seconds alternate between
+        // late (19.2 ms frames) and on time, then on time for 40 s.
+        const loadFrom = 200 + 60 * 3;
+        const loadFrames = 60 * 10;
+        const late = (frame: number) => frame >= loadFrom && frame < loadFrom + loadFrames && Math.floor((frame - loadFrom) / 60) % 2 === 0;
+        const run = simulate({
+            frames: loadFrom + loadFrames + 60 * 40,
+            budget: () => ({ gpuMs: 2, targetFps: 60 }),
+            cost: cornellLike,
+            capacity: 1728,
+            deltaTime: (frame) => (frame < 200 ? 0 : late(frame) ? 1 / 52 : VSYNC_60),
+            technique: ddgiLike(1728),
+        });
+        const calibrated = run.reports[loadFrom - 2].calibratedUnits as number;
+        const afterLoad = run.reports.slice(loadFrom + loadFrames);
+        // The ceiling comes from the batch that was late first, not from a later, stepped-down one.
+        const ceilings = afterLoad.map((report) => report.ceilingUnits).filter((ceiling): ceiling is number => ceiling !== undefined);
+        expect(Math.min(...ceilings)).toBe(Math.floor(calibrated * SATURATION.ceilingShare));
+        // So it recovers to 0.85 × the calibrated batch well within 40 s.
+        expect(Math.max(...afterLoad.map((report) => report.units))).toBeGreaterThanOrEqual(0.85 * calibrated);
+    });
+
     it('recovers only after recoverAfterSeconds on time, up to below the batch that was late', () => {
         // Late from 4 s to 6 s, then on time.
         const run = simulate({ frames: 60 * 40, budget: () => ({ gpuMs: 2, targetFps: 60 }), cost: sponzaLike, deltaTime: (frame) => (frame < 200 ? 0 : frame >= 240 && frame < 360 ? 1 / 40 : VSYNC_60) });
