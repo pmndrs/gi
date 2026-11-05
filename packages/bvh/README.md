@@ -1,217 +1,190 @@
 # @pmndrs/bvh
 
-Engine-free BVH builders for the ddgi platform (docs/design/bvh-framework.md).
-A builder produces a plain tree description (`MeshTreeTopology`, in
-`src/topology.ts`), which the tracer in `@pmndrs/ddgi-core` turns into its GPU
-layout, or writes that layout itself (`GpuLayoutMeshBvh`, in `src/gpu-layout.ts`):
-tinybvh in WebAssembly (B0) on the CPU, the LBVH (B1) and H-PLOC (B2) on the GPU.
-This package is bundled into `@pmndrs/ddgi` and never published on its own.
+BVH builders for WebGPU that don't depend on any engine. You give it triangles, and it gives you a bounding volume hierarchy in one fixed GPU layout that a WGSL ray walk can read: built on the CPU (tinybvh in WebAssembly) or on the GPU (LBVH or H-PLOC), and refit on the GPU when things move.
 
-## GPU H-PLOC (stage B2)
+DDGI (`@pmndrs/ddgi`) is its first user. The package imports nothing from DDGI, from GI code or from any engine, so picking, a path tracer or another GI technique can use it too.
 
-`src/gpu-hploc.ts` (`GpuHplocBuilder`) is the target GPU builder: H-PLOC
-(Benthin et al., HPG 2024), behind the same contract as the LBVH and with the
-same output (`GpuLbvhTrees`, the tracer's layout). It reuses the LBVH's batches,
-triangle boxes, Morton codes, sort, scans and readback, and climbs the same
-radix tree; on the way up it merges clusters with PLOC, so its trees are close
-to a full SAH build's. The kernels are in `src/gpu-hploc-wgsl.ts`, ported from
-tinybvh's `BuildHPLOC` (MIT, `licenses/tinybvh.txt`):
+**Status.** For now it lives in this repo and ships bundled inside `@pmndrs/ddgi`; it is planned as a standalone package later ([docs/design/bvh-package-split.md](../../docs/design/bvh-package-split.md)). ddgi-core uses the CPU builder and the GPU refit today. **The GPU mesh builders (LBVH and H-PLOC) are not wired into ddgi-core yet.** That is M2's "fast first GI" item. The API may change when that happens.
 
-1. a node of at most 16 triangles holds them as they are; a bigger node (and
-   the root) holds its children's clusters, at most 32, and merges mutual
-   nearest neighbours (search radius 8, by merged surface area) until 16 are
-   left (the root: one);
-2. the whole subgroup merges one node at a time, with each cluster in a lane
-   and slot (`ceil(32 / smallest subgroup size)` slots per lane: one on 32-wide
-   GPUs, four on the Intel UHD) and shuffles by cluster number, so the tree is
-   the same on every subgroup size (the RTX and the Intel build identical trees);
-3. the SAH leaf collapse (B1's rule) is decided as each node is made; a scan
-   numbers the nodes that stay, and a second gives each kept node's leaves
-   their run of triangle positions (each leaf's triangles together).
+How the builders work inside: [docs/design/bvh-builders.md](../../docs/design/bvh-builders.md). The plan and its stages: [docs/design/bvh-framework.md](../../docs/design/bvh-framework.md).
 
-As in the LBVH, everything one climbing thread hands to another is an atomic,
-written once and read with a bounded wait. A node's stored clusters reuse
-positions on the way up, so each entry carries its writer's radix-tree level.
+## The builder contract
 
-**Options** (`HplocOptions`): the LBVH's, plus `mortonCodes` (`'cubic-30'`,
-B1's, the default; or `'tinybvh-63'`, tinybvh's 63-bit codes, two sort words)
-and `tieBreak` (`'pairs'`, the default, or `'tinybvh'`). On exactly equal
-merged areas tinybvh's rule chains the tree (3000 identical triangles: depth
-128, twice the tracer's stack); `'pairs'` pairs ties up and keeps it balanced.
+Every builder follows the same contract, so one can replace another without changing the code that traces rays.
 
-**The oracle.** `src/hploc-cpu.ts` is H-PLOC on the CPU, step for step, with
-the same options. With tinybvh's codes and tie rule it builds exactly the tree
-of tinybvh's `BuildHPLOC`, which the WASM wrapper now exposes
-(`buildLayout(geometry, { builder: 'hploc' })`); the unit tests check that.
-The GPU's trees match the twin's (same SAH cost and node count), and with
-tinybvh's options they match tinybvh's (SAH cost within 1%: the `bvh-hploc`
-page, and the trace bench on whole scenes).
+- **In:** one mesh, or many: vertex positions (`x, y, z` floats) and, optionally, three indices per triangle and a flags word per triangle. CPU arrays (`TinyBvhInput`) work for every builder. The GPU builders also take buffers already on the GPU (`GpuLbvhBufferGeometry`), for example the output of a skinning pass.
+- **Options:** the largest leaf (1 to 8 triangles, default 8) and, for the GPU builders, the SAH costs. H-PLOC has two more (see [bvh-builders.md](../../docs/design/bvh-builders.md#gpu-h-ploc-stage-b2)).
+- **Out:** the tree in the shared GPU layout (`GpuLayoutMeshBvh` on the CPU, `GpuLbvhTrees` on the GPU):
+  - 64-byte nodes with two child boxes each (the Aila–Laine layout), node 0 the root;
+  - 48-byte triangles in tree order, each with its original index and flags;
+  - one parent index per node, for refits;
+  - the mesh's box, its depth and its counts.
 
-`tools/bvh/tree-quality.ts` compares the CPU builders and twins on real scenes
-without a GPU (`node tools/bvh/tree-quality.ts sponza`).
+  The word positions are in `src/gpu-layout.ts`.
+- **Rule:** every builder must pass the same ray oracle (the `trace-oracle` GPU page, on the RTX 3060 and the Intel UHD) before it is used. `checkGpuLayout` also checks any tree against its mesh: every triangle bit for bit, every box exactly the box below it, parents, depth and counts.
 
-GPU pages: `bvh-hploc`, `bvh-hploc-profile` (manual), the `watertight-hploc`
-variant of `trace-oracle`, and `trace-bench-hploc-sponza` / `-quick`.
+## Which builder to use
 
-`createMeshLayoutBuilder` (`src/mesh-builder.ts`) now picks H-PLOC by default
-when the device has subgroups (`prefer: 'gpu-lbvh'` gives the LBVH), with the
-same fallback to tinybvh.
+| Path | What it is | Use it when | Needs |
+| --- | --- | --- | --- |
+| **tinybvh** (`createTinyBvhBuilder`) | tinybvh 1.9.1 compiled to WebAssembly, on the CPU. Its default builder (Bonsai, SIMD) makes the best trees here. | You want the best trees and can wait about a second or two (Sponza: 1.6–1.9 s). Run it in a worker: it is synchronous. It is also the fallback for everything else. | WebAssembly SIMD (every current browser) |
+| **GPU H-PLOC** (`GpuHplocBuilder`) | H-PLOC (Benthin et al., 2024) in WGSL, ported from tinybvh's `BuildHPLOC`. **The default GPU builder.** | You need trees fast: at startup, or to rebuild a mesh that changed a lot. Its trees trace about as fast as tinybvh's. | `subgroups` |
+| **GPU LBVH** (`GpuLbvhBuilder`) | A linear BVH in WGSL, ported from HIPRT. | The fastest build when tree quality matters less. Its trees trace about 20% slower. | `subgroups` |
+| **Either, chosen for you** (`createMeshLayoutBuilder`) | H-PLOC when the device has subgroups, otherwise tinybvh. Meshes too big for the device, or refused by the GPU, go to tinybvh too. | The default entry point. Each result says which builder made it and why. | nothing |
+| **GPU refit** (`GpuBvhRefit`) | Keeps a tree's shape and recomputes every box on the GPU from one box per primitive. | A top level over instances that move every frame. ddgi-core builds the instance tree's shape on the CPU in a worker and refits it with this. | `subgroups` |
+| **BLAS refit** (`GpuMeshRefit`) | Refits one mesh's tree from a vertex buffer on the GPU. Works on any builder's tree. | Deforming meshes (skinned, morphed) whose triangles keep their connectivity. Rebuild when the tree's quality drifts. | `subgroups` |
 
-## GPU LBVH (stage B1)
+**Without subgroups.** Every GPU path needs the WebGPU `subgroups` feature. Without it there is one fallback: build on the CPU with tinybvh. `createMeshLayoutBuilder` does that for you, and says so in `fallbackReason`. A test page (`bvh-lbvh-fallback`) covers it. The GPU code never assumes a subgroup size: it reads it from the device, and gives the same trees at 8, 16 or 32 lanes.
 
-`src/gpu-lbvh.ts` (`GpuLbvhBuilder`) builds mesh trees on the GPU, in exactly
-the layout tinybvh's `buildLayout` writes (`src/gpu-layout.ts`), so the tracer
-reads them unchanged. The kernels are in `src/gpu-lbvh-wgsl.ts`, ported from
-HIPRT's LBVH (MIT, `licenses/hiprt.txt`):
+## Examples
 
-1. triangle boxes and each mesh's centroid box (subgroup, then workgroup, then
-   one atomic per workgroup);
-2. 30-bit Morton codes in cubic cells over each mesh's own centroid box
-   (stretching every axis to 1024 cells, as HIPRT's plain code does, made flat
-   and long meshes cost 2.4-2.6 times tinybvh's SAH; cubic cells 1.02-1.22);
-3. a stable, segmented radix sort (`src/gpu-radix-sort.ts`: 5-bit digits,
-   reduce-then-scan, no look-back), on the scan in `src/gpu-scan.ts`;
-4. Apetrei's bottom-up climb with HIPRT's index tie-break, the SAH leaf
-   collapse decided on the way up, in two rounds (the second an indirect
-   dispatch);
-5. a scan numbers the nodes that stay; triangles, nodes and parents are
-   written in the tracer's layout.
+These show the shape of each path. The full signatures are in the source files' comments.
 
-It builds every mesh of a **batch** with the same dispatches (a mesh table and
-a tile table say which workgroup works on which mesh), so a scene of many
-small meshes doesn't pay per mesh. The trees come back in three shared GPU
-buffers with an offset per mesh (`GpuLbvhTrees`); `readLayouts` copies them
-into CPU memory. `planGpuLbvhBatches` splits a scene into batches that fit the
-device's buffer limits. Every word one climbing thread hands to another goes
-through atomics with a bounded wait, as in the B1a refit; a tree whose wait ran
-out is refused (`problem`), never used.
+**A device with subgroups when there are any:**
 
-Workgroup scans number threads in subgroup order (`src/gpu-workgroup-scan.ts`),
-so nothing depends on the subgroup size (Intel's UHD runs 8 or 16 wide) or lane
-layout. The builder needs `subgroups`.
-
-**Fallback.** `src/mesh-builder.ts` (`createMeshLayoutBuilder`) picks a GPU
-builder (H-PLOC by default, or the LBVH) when the device has subgroups and
-tinybvh (B0) otherwise, and also sends single meshes to tinybvh when they are
-too big for the device or the GPU refused them. The result says which builder
-made each tree.
-
-**Deforming meshes.** `src/gpu-mesh-refit.ts` (`GpuMeshRefit`) refits any
-builder's mesh tree from a vertex buffer the adapter supplies: one kernel
-rewrites the tree-ordered triangles from the moved vertices and writes their
-boxes, then the B1a refit climbs. The shape comes from a CPU copy of the layout
-once (`setTree`), not every frame.
-
-**Checking a tree.** `src/layout-check.ts` checks any layout against its mesh:
-triangles bit for bit, one tree from node 0, every box exactly the box below
-it, parents, depth and counts; `treeSahCost` gives its SAH cost.
-`src/lbvh-cpu.ts` is the same LBVH written plainly on the CPU, for the unit
-tests and as a cross-check (not a builder to ship).
-
-GPU pages: `bvh-lbvh` (scan, sort, trees), `bvh-blas-refit`, `bvh-lbvh-fallback`,
-`bvh-lbvh-profile` (manual, step-by-step timing), the `watertight-lbvh` variant
-of `trace-oracle`, and `trace-bench-lbvh-sponza` / `-quick` (build time and trace
-speed against tinybvh's trees).
-
-## GPU refit (stage B1a)
-
-`src/gpu-refit.ts` refits a tree in the GPU layout on the GPU, keeping its
-shape: one thread per leaf climbs to the root, and at each node the second
-thread to arrive (a per-node counter, no float atomics) takes the union of the
-two child boxes. Boxes travel as 32-bit atomic words, so no plain store has to
-be visible across workgroups; a bounded re-read covers WGSL's relaxed atomic
-order. If a read still gives up, a one-workgroup repair pass refits the whole
-tree level by level in the same compute pass, so a wrong box is never kept;
-the stats (read back only with `diagnostics: true`) count it. Sibling
-leaves held by neighbouring subgroup lanes finish their node in registers. The
-climb also sums every inner node's half-area, the tree-quality signal
-(`relativeSahCost`) a caller uses to decide when to rebuild. It needs the
-`subgroups` feature (`GpuBvhRefit.isSupported`).
-
-`src/gpu-instance-box.ts` is the WGSL for an instance's padded world box
-(Arvo's method), and `src/refit-cpu.ts` holds the CPU twins: leaf and parent
-slots, the cost signal, and a plain refit the tests compare the GPU with.
-The tracer's top level (ddgi-core `trace/top-level-gpu.ts`) uses all three.
-
-## tinybvh in WebAssembly (stage B0)
-
-`src/tinybvh.ts` runs [tinybvh](https://github.com/jbikker/tinybvh) 1.9.1
-(MIT, Jacco Bikker), compiled to WebAssembly. The `.wasm` is committed,
-base64-encoded, in `src/tinybvh-wasm.ts`, so it loads the same way in a worker,
-on a page, in Node and in any bundler. It is single-threaded; the tracer runs it
-in a worker.
-
-It uses tinybvh's default builder, which with SIMD is Bonsai (Ganestam et al.,
-2015). From one tree it gives either output:
-
-- `build(geometry)` returns the tree's shape (`MeshTreeTopology`).
-- `buildLayout(geometry)` (stage B0b) returns the tracer's GPU layout, written
-  inside the WASM by `native/tinybvh-wasm.cpp`: 64-byte nodes, 48-byte
-  triangles in tree order, parents and the mesh's box. The bytes are exactly
-  what ddgi-core's `buildMeshBvhFromTopology` makes from `build`'s shape; a
-  test there checks it (`mesh-bvh-tinybvh-layout.test.ts`). As there, the
-  boxes are recomputed from the triangles, not taken from tinybvh. It is
-  several times faster than doing the conversion in JavaScript, which walks
-  every node and triangle through typed arrays and is bound by memory traffic;
-  the WASM packs each leaf's triangles and computes its box in one pass, with
-  SIMD compares instead of branches. The timings are in PROGRESS.md (B0b). The
-  tracer's tinybvh path uses it.
-
-`tools/bvh/layout-identity.ts` rebuilds every mesh of Sponza and both Bistro
-scenes both ways and reports how many differ (it should be none):
-
-```sh
-node tools/bvh/layout-identity.ts            # all three scenes
-node tools/bvh/layout-identity.ts sponza     # one scene
+```ts
+const adapter = await navigator.gpu.requestAdapter();
+const device = await adapter.requestDevice({
+    requiredFeatures: adapter.features.has('subgroups') ? ['subgroups'] : [],
+});
 ```
 
-The layout itself is defined in `packages/ddgi-core/src/platform/trace/layout.ts`.
-The C++ repeats it as structs with `static_assert`s on every offset; change both
-together. The build needs WebAssembly SIMD (SIMD128), which every current Chrome,
-Edge, Firefox and Safari has (Chrome 91, Firefox 89 and Safari 16.4 onwards), so
-there is no scalar fallback build.
+**Let the package choose** (H-PLOC on the GPU, or tinybvh):
 
-### Rebuilding the .wasm
+```ts
+import { createMeshLayoutBuilder } from '@pmndrs/bvh';
 
-```sh
-pnpm bvh:wasm           # install the pinned Emscripten if needed, then build
-pnpm bvh:wasm --check   # build, and fail unless it matches the committed .wasm
+const builder = await createMeshLayoutBuilder(device); // compiles the GPU kernels once
+console.log(builder.kind, builder.fallbackReason);       // 'gpu-hploc' and null, or 'tinybvh' and why
+
+const results = await builder.buildLayouts([
+    { positions: floorPositions, indices: floorIndices },
+    { positions: chairPositions, indices: chairIndices },
+]);
+for (const { layout, builtBy, fallbackReason } of results) {
+    // layout.nodes and layout.triangles are ArrayBuffers in the GPU layout: upload them.
+}
 ```
 
-`native/build-wasm.ts` does everything:
+This path copies the trees back to the CPU. To keep GPU-built trees on the GPU, use the builder directly (below).
 
-1. **Toolchain.** It uses emsdk **6.0.13** (emsdk commit
-   `35659964bc2762fffec0d257997fb61475f765b7`) in `tools/emsdk/`, which is
-   gitignored. If that folder is missing it clones emsdk there and runs
-   `emsdk install 6.0.13` and `emsdk activate 6.0.13` inside it, which downloads
-   about 700 MB. It never uses or touches any other Emscripten on the machine:
-   it drops every `EM*` variable from the environment and sets its own config
-   and cache, both inside `tools/emsdk/`.
-2. **Sources.** It downloads tinybvh's headers at commit
-   `c9be3103cc9693b456b0a0353927c11cac7d710f` and checks each one's SHA-256.
-3. **Build.** It compiles `native/tinybvh-wasm.cpp` (our small C interface) with
-   the flags listed, with a reason for each, in `BUILD_FLAGS`: `-O3`, no threads,
-   and `-msimd128 -mavx`. Emscripten turns tinybvh's AVX code into WASM SIMD.
-   AVX turns on tinybvh's fast builders. Without it tinybvh falls back to its
-   scalar reference builder, which is about 3 times slower on Sponza.
-   The build runs in a temporary folder with relative paths only, so no folder
-   name ends up in the output.
+**CPU, tinybvh** (in a worker):
 
-Needs: Node 24, git and network access. On Linux and macOS it also needs
-Python 3, because emsdk brings its own Python only on Windows.
+```ts
+import { createTinyBvhBuilder } from '@pmndrs/bvh';
 
-**Reproducibility.** On Windows (2026-11-04), repeated builds from different
-temporary folders gave the same bytes as the committed `.wasm` (`--check`
-passes). A Linux or macOS build has not been compared yet.
+const tinybvh = await createTinyBvhBuilder();
+const { layout, buildMs } = tinybvh.buildLayout({ positions, indices }, { maxLeafPrimitives: 8 });
+```
 
-### Licences
+**GPU H-PLOC, trees left on the GPU:**
 
-`licenses/tinybvh.txt` is tinybvh's licence. The build checks it against
-tinybvh's own `LICENSE` file. `licenses/emscripten-runtime.txt` covers the
-parts of Emscripten's runtime that the `.wasm` contains: Emscripten's own code
-and musl (MIT), dlmalloc (public domain), and LLVM's libc++ and compiler-rt
-(Apache 2.0 with LLVM Exceptions). The generated `src/tinybvh-wasm.ts` starts
-with both texts in a `/*! */` comment, which bundlers keep. As a result, every
-built file that contains the `.wasm` also contains its licences.
-`packages/ddgi/scripts/verify-artifacts.mjs` fails the package build if one
-doesn't.
+```ts
+import { GpuHplocBuilder, planGpuHplocBatches } from '@pmndrs/bvh';
+
+const hploc = new GpuHplocBuilder(device);
+await hploc.prepare(); // compiles the kernels, asynchronously
+
+// One batch builds many meshes with the same dispatches. A big scene may not fit
+// the device's buffers in one batch: planGpuHplocBatches splits it.
+const { batches, tooBig } = planGpuHplocBatches(device, meshes);
+for (const batch of batches) {
+    const trees = await hploc.buildMany(batch.map((index) => meshes[index]));
+    // trees.nodes, trees.triangles and trees.parents are GPU buffers shared by the batch.
+    for (const mesh of trees.meshes) {
+        if (mesh.problem) continue; // refused: build this mesh with tinybvh instead
+        // mesh.nodeOffset and mesh.triangleOffset say where its tree sits in those buffers.
+    }
+    // ... bind them to your ray walk; trees.destroy() frees them.
+}
+// Meshes in tooBig go to tinybvh.
+```
+
+A mesh can also come from a GPU buffer: `{ positionBuffer, vertexCount, indexBuffer, indexFormat: 'uint32', triangleCount }`. The buffers need `COPY_SRC` usage. `GpuLbvhBuilder` has the same API.
+
+**GPU refit of a tree** (a top level over moving instances):
+
+```ts
+import { GpuBvhRefit, leafSlotsOf, parentSlotsOf } from '@pmndrs/bvh';
+
+const refit = new GpuBvhRefit(device);
+await refit.prepare();
+
+// Once per tree shape, from a CPU copy of the tree:
+const words = new Uint32Array(layout.nodes);
+refit.setShape({
+    nodeWordOffset: 0,
+    nodeCount: layout.nodeCount,
+    parentSlots: parentSlotsOf(words, 0, layout.nodeCount, layout.parents),
+    leafSlots: leafSlotsOf(words, 0, layout.nodeCount),
+    generation: 1,
+});
+
+// Every frame, after a pass wrote one box per primitive (8 floats: min x, y, z, unused,
+// max x, y, z, unused), in the order the tree's leaves index them:
+refit.encode(computePass, treeBuffer, primitiveBoxes);
+```
+
+**BLAS refit of a deforming mesh:**
+
+```ts
+import { GpuMeshRefit } from '@pmndrs/bvh';
+
+const meshRefit = new GpuMeshRefit(device);
+await meshRefit.prepare();
+// Once, from a CPU copy of the tree (any builder's). For a tree inside shared buffers,
+// pass where it sits: setTree(layout, { nodeWordOffset, triangleWordOffset }).
+meshRefit.setTree(layout);
+
+// Every frame, after the pass that writes the moved vertices:
+meshRefit.encode(
+    computePass,
+    { nodes: nodeBuffer, triangles: triangleBuffer },
+    { positionBuffer: skinnedPositions, vertexCount, indexBuffer, indexFormat: 'uint32' },
+);
+```
+
+Both refits can report the tree's quality (`latestStats.relativeCost`, with `diagnostics: true`), so you know when to rebuild. Stats are read back a frame or two late; nothing else needs a readback.
+
+**Check a tree:**
+
+```ts
+import { checkGpuLayout, treeSahCost } from '@pmndrs/bvh';
+
+const problems = checkGpuLayout(layout, { positions, indices }); // [] when the tree is right
+const cost = treeSahCost(layout);
+```
+
+## Measured numbers
+
+Speed targets are for the RTX 3060 Laptop (and the M5 Pro, not measured yet). The Intel UHD runs every check for correctness only, with no speed target. All numbers are on headless Chrome 156 under Windows. The details, and how each run was taken, are in PROGRESS (stages B0b, B1, B2) and `bench/results/trace.csv`.
+
+**Sponza:** 5,744,384 triangles in 132 meshes.
+
+| What | Number | Conditions |
+| --- | --- | --- |
+| GPU H-PLOC build, whole scene | **46.6 ms** (target ≤ 50) | Median of the 2 runs that were valid under the clock rule (cool start, under 5% of samples thermally throttled, enough samples), 2026-11-05. Loaded SM clock about 1,000 MHz, power-limited. |
+| CPU tinybvh build, whole scene | **1.6–1.9 s** | In a browser worker, single-threaded; medians of 3 runs per session, 2026-11-04. |
+| H-PLOC tree quality | SAH cost **1.032×** tinybvh's | Lower is better. The LBVH's is 1.217×. |
+| Trace speed on H-PLOC trees | closest-hit **0.95×**, any-hit **1.02×** of tinybvh's trees | Same rays, both tracers in each run, median of 3. The runs were flagged as low-clock, so the ratio is more reliable than the rays per second. |
+| GPU LBVH build, whole scene | 31.2 ms | Median of 3, measured before the clock rule existed. Its trees trace at 0.82× (closest) and 0.80× (any) of tinybvh's. |
+| GPU top-level refit, 10,000 moving instances | about **0.09 ms** of GPU time (0.086–0.091) | B1a's page, across two measurements. |
+
+**Intel UHD (correctness only):** the oracle passes for tinybvh, LBVH and H-PLOC trees, with no rays slipping through shared edges. H-PLOC builds exactly the same trees on the Intel (8–16 lanes) as on the RTX (32 lanes).
+
+## Licences
+
+The package is MIT. It contains or ports code from:
+
+- **tinybvh** 1.9.1 by Jacco Bikker (MIT): compiled into the `.wasm`, and its `BuildHPLOC` ported to WGSL and TypeScript. Text: `licenses/tinybvh.txt`.
+- **HIPRT** by AMD (MIT): the LBVH kernels and Morton codes, ported to WGSL. Text: `licenses/hiprt.txt`.
+- **Emscripten's runtime**, linked into the `.wasm`: Emscripten's code and musl (MIT), dlmalloc (public domain), LLVM libc++ and compiler-rt (Apache 2.0 with LLVM Exceptions). Text: `licenses/emscripten-runtime.txt`.
+
+The `.wasm` carries its licence texts in a `/*! */` comment that bundlers keep, and the `@pmndrs/ddgi` build fails if a built file loses them. Sources and commits are in [THIRD_PARTY.md](../../THIRD_PARTY.md).
+
+## Working on the package
+
+- Unit tests: `pnpm test` (the CPU twins, the layout checker, the batch planner, the WGSL names).
+- GPU pages: `pnpm test:gpu --filter bvh-` and `--filter trace-oracle`, on both GPUs.
+- Rebuild the `.wasm` with `pnpm bvh:wasm`, or check it with `pnpm bvh:wasm --check`; [bvh-builders.md](../../docs/design/bvh-builders.md#rebuilding-the-wasm) has the toolchain.
+- Port only MIT or Apache-2.0 code, and add its licence to `licenses/` and THIRD_PARTY.md.
