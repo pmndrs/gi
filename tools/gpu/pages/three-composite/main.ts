@@ -26,9 +26,37 @@
  *    after K (not after K − 1), and the GI frame's queue submit must come
  *    after the scene pass's `beginRender` and before that pass's own
  *    submit. A second explicit run gives the run-to-run noise.
+ * 4. **More cases, the same match bar** (the Opus review of T1.14), each on
+ *    `cornell-box-point`:
+ *    - `grid`: a baked `LightProbeGrid` at priority 2 (above GI's 1) over the
+ *      left half of the box. Per fragment the grid wins the probe slot there;
+ *      the composite must add no GI there, or GI is counted twice;
+ *    - `ao`: AO in `giAlbedo`: three's `builtinAOContext` (a constant 0.6) on
+ *      every pass, and a sphere with an `aoMap` (0.4). Both darken indirect
+ *      diffuse per fragment; the composite must carry them in the weight;
+ *    - `environment`: a `scene.environment` (a flat grey equirect), so the
+ *      environment-diffuse workaround and per-pixel coverage run in both
+ *      paths.
  */
 
-import { AnalyticLightNode, Light, Mesh, MeshStandardMaterial, NodeUpdateType, SphereGeometry, type Node, type NodeFrame } from 'three/webgpu';
+import {
+    AnalyticLightNode,
+    Color,
+    DataTexture,
+    EquirectangularReflectionMapping,
+    FloatType,
+    Light,
+    Mesh,
+    MeshStandardMaterial,
+    NodeUpdateType,
+    RGBAFormat,
+    Scene,
+    SphereGeometry,
+    type Node,
+    type NodeFrame,
+} from 'three/webgpu';
+import { builtinAOContext, float } from 'three/tsl';
+import { LightProbeGrid } from 'three/addons/lighting/LightProbeGrid.js';
 import { assert } from '../../client.ts';
 import { runThreePage, type ThreePageContext } from '../three-shared/harness.ts';
 import {
@@ -78,17 +106,68 @@ async function takeImages(scene: CompositeScene, routes: CompositeRoutes, reader
     return { perFragment, composite, opaqueOnly, coverage, giOff };
 }
 
-async function matchScene(context: ThreePageContext, sceneId: string): Promise<{ stats: MatchStatistics; scene: CompositeScene; routes: CompositeRoutes; reader: HdrReader }> {
+/**
+ * Loads the scene, lets `prepare` change it after the field froze (it returns the routes'
+ * options), and compares the composite with GI per fragment.
+ */
+async function matchScene(
+    context: ThreePageContext,
+    sceneId: string,
+    name = `${sceneId} match`,
+    prepare: (scene: CompositeScene) => Promise<ConstructorParameters<typeof CompositeRoutes>[1]> = async () => ({}),
+): Promise<{ stats: MatchStatistics; scene: CompositeScene; routes: CompositeRoutes; reader: HdrReader }> {
     const scene = await loadCompositeScene(context.device, sceneId, { ...SHOT_SIZE, giFrames: GI_FRAMES, probesPerFrame: PROBES_PER_FRAME, log: context.log });
-    const routes = new CompositeRoutes(scene);
+    const routes = new CompositeRoutes(scene, await prepare(scene));
     const reader = new HdrReader(context.renderer, SHOT_SIZE.width, SHOT_SIZE.height);
     await compileRoutes(context, routes);
     const images = await takeImages(scene, routes, reader);
     const mask = opaqueMask(images.coverage, images.perFragment, images.opaqueOnly);
     const stats = matchStatistics(images.perFragment, images.composite, images.giOff, mask);
-    context.log(formatMatch(`${sceneId} match`, stats));
+    context.log(formatMatch(name, stats));
     return { stats, scene, routes, reader };
 }
+
+/** A paused GI frame: ThreeGI re-reads the scene (another probe light, an environment) and sets coverage, without touching the field. */
+function resync(scene: CompositeScene): void {
+    scene.threeGI.update(scene.camera, 0);
+}
+
+/** The review's cases (file comment, 4): each returns the routes' options after changing the scene. */
+const EXTRA_CASES: Record<string, (context: ThreePageContext, scene: CompositeScene) => Promise<ConstructorParameters<typeof CompositeRoutes>[1]>> = {
+    grid: async (context, scene) => {
+        // A grid that saw only a flat grey background: a known, flat irradiance, unlike GI's.
+        const bakeScene = new Scene();
+        bakeScene.background = new Color(0.5, 0.5, 0.5);
+        const grid = new LightProbeGrid(2.8, 5.6, 5.8, 2, 2, 2);
+        grid.position.set(1.4, 2.74, 2.8);
+        grid.priority = 2;
+        grid.bake(context.renderer, bakeScene, { cubemapSize: 8 });
+        scene.scene.add(grid);
+        resync(scene);
+        context.log(`grid: LightProbeGrid at priority ${grid.priority} over the left half; GI computes coverage per pixel: ${scene.threeGI.light.computeCoverage}`);
+        return {};
+    },
+    ao: async (context, scene) => {
+        const aoTexture = new DataTexture(new Uint8Array([102, 102, 102, 255, 102, 102, 102, 255, 102, 102, 102, 255, 102, 102, 102, 255]), 2, 2, RGBAFormat);
+        aoTexture.needsUpdate = true;
+        const sphere = new Mesh(new SphereGeometry(0.6, 48, 24), new MeshStandardMaterial({ color: 0xd0d0d0, roughness: 0.8, aoMap: aoTexture }));
+        sphere.position.set(3.6, 0.9, 4.0);
+        sphere.userData.giContributes = false;
+        scene.scene.add(sphere);
+        context.log('ao: builtinAOContext(0.6) on every pass, and a sphere with an aoMap of 0.4');
+        return { context: builtinAOContext(float(0.6)) };
+    },
+    environment: async (context, scene) => {
+        const grey = new Float32Array(16).fill(0.3);
+        const environment = new DataTexture(grey, 2, 2, RGBAFormat, FloatType);
+        environment.mapping = EquirectangularReflectionMapping;
+        environment.needsUpdate = true;
+        scene.scene.environment = environment;
+        resync(scene);
+        context.log(`environment: a flat grey scene.environment; GI computes coverage per pixel: ${scene.threeGI.light.computeCoverage}`);
+        return {};
+    },
+};
 
 /** Pixels where hiding `object` changes the per-fragment image: what it covers. */
 async function coveredBy(object: Mesh, routes: CompositeRoutes, reader: HdrReader, withObject: Float32Array): Promise<Uint8Array> {
@@ -329,12 +408,21 @@ await runThreePage(
             scene.threeGI.dispose();
             scene.platform.dispose();
         }
+        for (const [name, prepare] of Object.entries(EXTRA_CASES)) {
+            const { stats, scene, reader } = await matchScene(context, 'cornell-box-point', `${name} match`, (loaded) => prepare(context, loaded));
+            matches[name] = stats;
+            data.match = matches;
+            reader.dispose();
+            scene.threeGI.dispose();
+            scene.platform.dispose();
+        }
         data.renderTimeUpdate = await renderTimeCheck(context);
         log('done');
 
         for (const [sceneId, stats] of Object.entries(matches)) {
             assert(stats.pixels > 0, `${sceneId}: no pixels compared`);
-            assert(stats.giShare > 0.05, `${sceneId}: GI is only ${(stats.giShare * 100).toFixed(2)}% of the light, too little for the check to mean anything`);
+            // With scene.environment, GI replaces the environment's diffuse light, so turning GI off can brighten the image: the size counts, not the sign.
+            assert(Math.abs(stats.giShare) > 0.05, `${sceneId}: GI changes the light by only ${(stats.giShare * 100).toFixed(2)}%, too little for the check to mean anything`);
             assert(stats.meanRelative <= MEAN_BAR, `${sceneId}: composite against per fragment, mean ${(stats.meanRelative * 100).toFixed(3)}% > ${MEAN_BAR * 100}%`);
             assert(stats.p95Relative <= P95_BAR, `${sceneId}: composite against per fragment, p95 ${(stats.p95Relative * 100).toFixed(3)}% > ${P95_BAR * 100}%`);
         }

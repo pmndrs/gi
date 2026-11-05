@@ -79,8 +79,8 @@ import {
     vec3,
     vec4,
 } from 'three/tsl';
-import { compositeTakesGI, compositedModel, flowContextData, markCompositePass } from './composite-mark.ts';
-import { ShadingModuleNodes, sharedEntry, type GILight } from './gi-light.ts';
+import { compositeTakesGI, compositedModel, flowContextData, hasCompositeMark, markCompositePass, type MarkablePass } from './composite-mark.ts';
+import { GI_COMPOSITE_WON, ShadingModuleNodes, sharedEntry, type GILight } from './gi-light.ts';
 
 /** The MRT output name the composite reads the GI weight from. */
 export const GI_ALBEDO_OUTPUT = 'giAlbedo';
@@ -155,7 +155,9 @@ export class GIAlbedoNode extends Node {
             const alpha = material?.transparent ? diffuseColor.a : 1;
             return vec4(0, 0, 0, alpha) as unknown as Node;
         }
-        const weight = compositedModel(material) === 'physical' ? physicalIndirectDiffuseWeight() : (diffuseColor.rgb as unknown as TslNode);
+        const lightingWeight = compositedModel(material) === 'physical' ? physicalIndirectDiffuseWeight() : (diffuseColor.rgb as unknown as TslNode);
+        // Zero where another probe light won the slot: that light is shaded per fragment (gi-light.ts, GI_COMPOSITE_WON).
+        const weight = lightingWeight.mul(GI_COMPOSITE_WON) as unknown as TslNode;
         // `ambientOcclusion` holds the material's AO only when `setupAmbientOcclusion` found some; otherwise it's never written.
         const hasAmbientOcclusion = (builder.context as { ambientOcclusion?: unknown }).ambientOcclusion !== undefined;
         const occluded = hasAmbientOcclusion ? weight.mul(ambientOcclusion) : weight;
@@ -227,7 +229,12 @@ const RECIPROCAL_PI = 1 / Math.PI;
  * so the pipeline's own full-screen quad evaluates it.
  *
  * Marks the pass at construction (composite-mark.ts), keeping any context
- * the pass already has. The pass's MRT must have `giAlbedo` and `normal`
+ * the pass already has. If `scenePass.contextNode` is replaced later, the
+ * mark would be lost and GI counted twice (per fragment and composited), so
+ * the node checks at build time and on every render, merges the mark into
+ * the new context, and warns once. A replacement made after the pipeline's
+ * first frame still shows for one frame: the pass draws before the
+ * composite's update sees it. Set the pass's context before `ddgi()`. The pass's MRT must have `giAlbedo` and `normal`
  * outputs (file comment); `setup` says so if it doesn't.
  *
  * The shader is built for the shading module of the light at build time. If
@@ -252,6 +259,9 @@ export class DDGICompositeNode extends Node {
     private readonly occlusionSource: GIOcclusionSource | null;
     private moduleNodes: ShadingModuleNodes | null = null;
     private warnedStale = false;
+    /** The pass context the mark was last checked on. */
+    private markedContext: PassNode['contextNode'] = null;
+    private warnedLostMark = false;
     private readonly intensity = uniform(1);
     private readonly computeCoverage = uniform(1);
 
@@ -272,13 +282,34 @@ export class DDGICompositeNode extends Node {
         }
         // Each render of the pipeline's quad: the module's values and the light's settings.
         this.updateType = NodeUpdateType.RENDER;
-        markCompositePass(scenePass as unknown as Parameters<typeof markCompositePass>[0]);
+        markCompositePass(scenePass as unknown as MarkablePass);
+        this.markedContext = scenePass.contextNode;
+        if (occlusion !== false && 'source' in occlusion && passAppliesAO(scenePass)) {
+            console.warn(
+                '@pmndrs/ddgi/three: ddgi() got an occlusion source, and its pass already applies AO to its materials (builtinAOContext), which giAlbedo carries: GI gets AO twice. Use one of them.',
+            );
+        }
         // Before the pass compiles, if its MRT is already set (the usual order); `setup` checks again.
         const outputs = scenePass.getMRT();
         if (outputs?.has(GI_ALBEDO_OUTPUT)) configureWeightOutput(outputs);
     }
 
+    /** Merges the mark back into the pass's context if the context was replaced (the class comment). */
+    private keepMark(): void {
+        const scenePass = this.scenePass;
+        if (scenePass.contextNode === this.markedContext) return;
+        if (!scenePass.contextNode || !hasCompositeMark(flowContextData(scenePass.contextNode))) {
+            markCompositePass(scenePass as unknown as MarkablePass);
+            if (!this.warnedLostMark) {
+                this.warnedLostMark = true;
+                console.warn('@pmndrs/ddgi/three: the scene pass got a new contextNode after ddgi(); the GI composite merged its mark into it again. Set the pass context before calling ddgi().');
+            }
+        }
+        this.markedContext = scenePass.contextNode;
+    }
+
     update(): boolean | undefined {
+        this.keepMark();
         const light = this.source.light;
         this.intensity.value = light.intensity;
         this.computeCoverage.value = light.computeCoverage ? 1 : 0;
@@ -295,6 +326,7 @@ export class DDGICompositeNode extends Node {
 
     setup(builder: NodeBuilder): Node {
         void builder;
+        this.keepMark();
         const scenePass = this.scenePass;
         const outputs = scenePass.getMRT();
         if (!outputs || !outputs.has(GI_ALBEDO_OUTPUT) || !outputs.has(GI_NORMAL_OUTPUT)) {
@@ -371,9 +403,13 @@ export class DDGICompositeNode extends Node {
  * `giAlbedo` then carries (file comment).
  */
 function defaultOcclusion(scenePass: PassNode): false | GIOcclusionSettings {
+    return passAppliesAO(scenePass) ? false : {};
+}
+
+/** Whether the pass's context applies AO to its materials (three's `builtinAOContext`), which `giAlbedo` then carries. */
+function passAppliesAO(scenePass: PassNode): boolean {
     const context = scenePass.contextNode;
-    const passAppliesAO = context !== null && typeof flowContextData(context).getAO === 'function';
-    return passAppliesAO ? false : {};
+    return context !== null && typeof flowContextData(context).getAO === 'function';
 }
 
 /** three's GTAO on the pass's depth and its packed view-space normal (the `normal` output). */

@@ -21,6 +21,58 @@ Rules:
 
 ---
 
+## 2026-11-06 · T1.14: a GPU-bound cost page, the cost numbers, and the Opus review fixes · implementer (opus)
+Did (uncommitted):
+- **Cost page** (`three-composite-sponza`, `three-composite-shared/composite-check.ts`, `run.ts`). The lead's runs left the GPU about 20% busy. The cause was CPU, at 130–280 ms to record each frame:
+  - two passes with the same targets but different lights (`off` and `forward`) made three rebuild their objects every frame;
+  - the sun's shadow map, redrawn under each variant's pass context, cost 130 ms a frame.
+  - The fix: each variant has its own pass and camera, and the GI light sits on a layer only the GI cameras see. `off` is the only single-target pass, and `forward` writes the same MRT as `mrt` but unmarked (so `forward − mrt` is GI per fragment on the same pass). The shadow map is drawn once; the scene is static, and it's the same in every variant.
+  - Batches stay in flight: the CPU stays a batch ahead and reads batch k − 1's timestamps while batch k runs, with no other waits.
+  - Each variant's CPU recording time is reported: about 2.5–3 ms now.
+  - `run.ts` drops its own verdict and prints bench-lock's, plus each section's GPU use (and whether it's ≥ 90%). The two sections are labelled: "section 1 of 2: 2560 x 1440, the bar" and "section 2 of 2: 1920 x 1080, the composite pass at the reference size".
+- **Review fixes:**
+  1. *LightProbeGrid double count:* at the lighting model's `indirect` step (after every light), the GI light writes `GI_COMPOSITE_WON`: 1 only where the slot still holds GI's claim (GI's priority and GI's zero irradiance). `giAlbedo` multiplies by it.
+  2. *A lost mark:* the composite checks the pass context at build and on every render, merges the mark back and warns once. A change after the first frame still shows for one frame (documented).
+  3. *Reproducible WGSL check:* new page `three-unmarked-wgsl`. The unmarked Standard and Lambert WGSL is the same before and after a composite pipeline is built and drawn, and holds none of the composite's symbols. The comparison with the pre-T1.14 build (part 1) was a one-off and isn't repeated.
+  4. *Checks:* three new cases on the Cornell page (`grid`, `ao`, `environment`) and four unit tests (the AO-twice warning, the mark re-merge, `ThreeGILimitError`, the frame-keyed guard). `ddgi()` now warns when `occlusion: { source }` meets a pass that already applies AO.
+  5. *Render-time guard:* it keys on three's frame id when `setAnimationLoop` drives the frames, and falls back to the JavaScript task otherwise. The caveat (awaits between two renders of one frame without the loop) is documented.
+  6. *Docs:* three.md (0.04–0.08%; `requiredLimits` from `@pmndrs/ddgi/core`), the same in the error message, TASKS (`ddgi`).
+Verified (headless Chrome 156):
+- RTX, Cornell page, per-pixel relative luminance difference against per fragment (mean / p95):
+  - cornell-box-point 0.042% / 0.16%;
+  - emissive Cornell 0.052% / 0.21%;
+  - **grid 0.026% / 0.12%** (GI 18% of the light; the grid wins the left half);
+  - **ao 0.041% / 0.15%**;
+  - **environment 0.037% / 0.14%**.
+- Intel UHD, the same cases: 0.033% / 0.083%, 0.045% / 0.14%, grid 0.019% / 0.058%, ao 0.032% / 0.078%, environment 0.030% / 0.078%.
+- RTX: `three-unmarked-wgsl` passes (30,860 and 25,208 characters, the same lengths as the pre-T1.14 baseline).
+- `test:gpu --filter three-` passes on both GPUs, 9 pages each (RTX 3060, Intel UHD gen-12lp), the new cases included. `fetch.test.ts` passes on its own.
+- `pnpm test`: 916 of 917 passed. The failure is `tools/assets/fetch.test.ts`, already listed as flaky under load (TASKS, carried to M3), and run while the GPU suite was going.
+Cost on the RTX, Sponza 2560×1440, GPU-bound (GPU use 99–100%), field frozen, median of per-cycle differences:
+- **run 1** (10 s + 4 s, 2026-11-05 22:5x): **INVALID**, thermal throttling in 46% of loaded samples, SM 690–712 MHz.
+  - composite (no GTAO) − off 1.84 ms; composite + GTAO (the default) − off 11.97; GTAO half 5.15; MRT 0.68; composite pass 1.33; GTAO full 10.2; GI per fragment on the same pass 6.51.
+  - At 1920×1080: composite pass 0.85 ms, composite − off 1.32.
+- **run 2** (6 s): **VALID** (63 C start, 0% thermal), SM 944–990 MHz.
+  - composite − off 1.89; default path 11.47; GTAO half 5.90; composite pass 1.36.
+  - Wide per-cycle spread (MAD about 3 ms): the clock rose from idle.
+- **run 3** (6 s): **VALID** (68 C, 0% thermal), SM 600–810 MHz.
+  - composite − off 1.72 (MAD 0.24); default 11.38; GTAO half 4.96; MRT 0.63; composite pass 1.28; GTAO full 9.72.
+- **run 4** (6 s): **INVALID**, thermal throttling in 11.8%, SM 667–705 MHz.
+  - composite − off 1.83; default 12.46; composite pass 1.37.
+- **Spread:** composite − off is 1.72–1.89 ms across all four runs, within ±0.1 ms. The default path is 11.4–12.5 ms (±0.55).
+- **Against the bar (≤ 1.0 ms):**
+  - at these power-limited clocks (600–990 MHz) even the composite without GTAO is over the bar;
+  - clock-normalised to 1,500 MHz it's 0.86–1.25 ms;
+  - GTAO, which DECISIONS puts on by default, adds 9.7–10.8 ms at full resolution and 3.2–3.5 ms at half (about 5 and 1.7 ms normalised). The cheapest setting that keeps Sponza within ±10% (half, 16 samples) is still well over the bar.
+Not verified: a VALID run at a clock near 1,500 MHz. The RTX is power-capped (60–76% of loaded samples) and throttles within about 10 s of GPU-bound load.
+Next:
+- **lead / Dennis:** GTAO on GI by default doesn't fit the 1.0 ms bar at any setting that keeps Sponza within ±10%. Choose between:
+  - GTAO off by default (opt-in for cloth);
+  - a cheaper occlusion term;
+  - counting GTAO apart from the shading bar;
+  - a quarter-resolution GTAO, whose accuracy is unmeasured.
+- The viewer's warm-up switch-over to `volume.start` once `apps/viewer` is free.
+
 ## 2026-11-05 · T1.12 phase 2a follow-up: the warm-up's bounce light (the ramp) · implementer (opus)
 Did (uncommitted, on top of 14c2ed2): the lead asked to fix Cornell coming out of the warm-up 25% low and needing 17.5 s to get within 1%, in the technique.
 - Cause: the warm-up was a plain running average whose estimates read the field it was building. The bias shrinks like k^−(1−ρ); Cornell fits ρ ≈ 0.65 (the model matches a = 1–4 within 1–3 points).

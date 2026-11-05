@@ -17,13 +17,29 @@
  *    - `composite+gtao`: the composite with its default occlusion (three's
  *      GTAO on the GI term, 1 m radius, full resolution): the default path;
  *    - `composite+gtao-half`: the same at half resolution;
- *    - `forward`: the plain pass, GI per fragment (today's path).
+ *    - `forward`: GI per fragment (today's path), on a pass with the same
+ *      MRT outputs as `mrt` but no mark, so `forward − mrt` is what GI per
+ *      fragment adds to the same pass.
  *    Each difference is the median of per-cycle differences between
- *    neighbouring frames, with its spread. The bar: the cost of showing GI
- *    on the default path (`composite+gtao` − `off`) ≤ 1.0 ms at 2560 × 1440
- *    on the RTX 3060. A shorter section at 1920 × 1080 follows. Run it
- *    through `run.ts`, which adds each section's GPU clock and the
- *    clock-normalised numbers.
+ *    neighbouring frames, with its spread. Each variant has its own pass
+ *    and camera, and the GI light is on a layer only the GI variants'
+ *    cameras see: nothing changes between frames, so three's caches hold
+ *    and the page stays GPU-bound (timeInterleaved says why that matters).
+ *    Two passes with the same targets but different lights make three
+ *    rebuild their objects every frame (measured: 130–280 ms of CPU per
+ *    frame), so `off` is the only variant with a single target, and
+ *    `forward` has the MRT targets of the GI variants. The sun's shadow map
+ *    is drawn once, while compiling, not every frame: the scene is static,
+ *    the shadow pass is the same in every variant (so it cancels in every
+ *    difference), and drawing it each frame under each variant's pass
+ *    context cost 130 ms of CPU per frame.
+ *    Two timed sections:
+ *    - **section 1, 2560 × 1440:** the bar, the cost of showing GI on the
+ *      default path (`composite+gtao` − `off`) ≤ 1.0 ms on the RTX 3060;
+ *    - **section 2, 1920 × 1080:** the same variants at the reference
+ *      size, for the composite pass's cost there.
+ *    Run it through `run.ts`, which adds each section's GPU clock and use,
+ *    the clock-normalised numbers, and the bench lock's verdict.
  * 2. **Match** at the stored camera (bookmark 1, 1920 × 1080), the composite
  *    without occlusion against per fragment (the composite page's check):
  *    first with Sponza's own materials, then with the untextured GI material
@@ -36,6 +52,7 @@
  *   VITE_DDGI_SECONDS_1080 the 1920 × 1080 timed section, seconds (default 4; 0 skips it)
  *   VITE_DDGI_COOL        idle seconds after loading, before timing (default 25)
  *   VITE_DDGI_RAMP        GPU-bound seconds before each timed section, for the clock to ramp up (default 2)
+ *   VITE_DDGI_STATIC_SHADOWS '0': redraw the sun's shadow map every frame (default '1': once; see above)
  *   VITE_DDGI_TARGETS     'half' (default) or 'byte': the format of giAlbedo and the normal.
  *                         One format per run: in r187 two MRT passes over one scene whose targets
  *                         differ only in format reuse each other's pipelines (NOTES).
@@ -44,7 +61,7 @@
  *   node tools/reference/bench-lock.ts run --what "three composite sponza" -- node tools/gpu/pages/three-composite-sponza/run.ts --gpu nvidia
  */
 
-import { RenderPipeline, UnsignedByteType, type Node } from 'three/webgpu';
+import { RenderPipeline, UnsignedByteType, type Node, type PerspectiveCamera } from 'three/webgpu';
 import { mrt, normalView, output, packNormalToRGB, pass } from 'three/tsl';
 import { assert } from '../../client.ts';
 import { markCompositePass, type MarkablePass } from '../../../../packages/ddgi-three/src/composite-mark.ts';
@@ -81,6 +98,8 @@ const CYCLES_PER_BATCH = 4;
 const COMPILE_FRAMES = 6;
 
 const env = import.meta.env as Record<string, unknown>;
+/** A layer only the GI variants' cameras see; the GI light lives there while timing. */
+const GI_LAYER = 30;
 const byteTargets = env.VITE_DDGI_TARGETS === 'byte';
 
 function numberFromEnv(value: unknown, fallback: number): number {
@@ -93,7 +112,8 @@ const DELTAS: readonly DeltaDefinition[] = [
     { name: 'showing GI, default path (composite + GTAO full) - off', minuend: 'composite+gtao', subtrahend: 'off', part: 'total' },
     { name: 'showing GI, composite + GTAO half - off', minuend: 'composite+gtao-half', subtrahend: 'off', part: 'total' },
     { name: 'showing GI, composite without occlusion - off', minuend: 'composite', subtrahend: 'off', part: 'total' },
-    { name: 'showing GI, forward per fragment - off', minuend: 'forward', subtrahend: 'off', part: 'total' },
+    { name: 'GI per fragment on the same MRT pass (forward - mrt)', minuend: 'forward', subtrahend: 'mrt', part: 'total' },
+    { name: 'showing GI, forward per fragment with the MRT targets - off', minuend: 'forward', subtrahend: 'off', part: 'total' },
     { name: 'MRT extra (mrt - off)', minuend: 'mrt', subtrahend: 'off', part: 'total' },
     { name: 'composite pass (quad: composite - mrt)', minuend: 'composite', subtrahend: 'mrt', part: 'quad' },
     { name: 'GTAO full (composite + GTAO - composite)', minuend: 'composite+gtao', subtrahend: 'composite', part: 'total' },
@@ -115,11 +135,34 @@ async function timing(context: ThreePageContext, scene: CompositeScene): Promise
     const { renderer, device, log } = context;
     setViewSize(context, scene, TIMING_SIZE);
     const light = scene.threeGI.light;
+    // GI on its own layer: the "off" camera leaves it out, so no variant toggles the light (timeInterleaved).
+    light.layers.set(GI_LAYER);
+    const cameras: PerspectiveCamera[] = [];
+    const cameraFor = (withGI: boolean): PerspectiveCamera => {
+        const camera = scene.camera.clone();
+        if (withGI) camera.layers.enable(GI_LAYER);
+        cameras.push(camera);
+        return camera;
+    };
+    const resizeCameras = () => {
+        for (const camera of cameras) {
+            camera.aspect = scene.camera.aspect;
+            camera.updateProjectionMatrix();
+        }
+    };
 
-    const plain = new RenderPipeline(renderer, pass(scene.scene, scene.camera) as unknown as Node);
+    const off = new RenderPipeline(renderer, pass(scene.scene, cameraFor(false)) as unknown as Node);
+    // GI per fragment on the MRT targets, unmarked (see the file comment): giAlbedo writes 0 there.
+    const forwardPass = pass(scene.scene, cameraFor(true));
+    forwardPass.setMRT(mrt({ output, [GI_ALBEDO_OUTPUT]: giAlbedo, [GI_NORMAL_OUTPUT]: packNormalToRGB(normalView) }));
+    for (const name of [GI_ALBEDO_OUTPUT, GI_NORMAL_OUTPUT]) {
+        const target = forwardPass.getTexture(name);
+        if (byteTargets) target.type = UnsignedByteType;
+    }
+    const forward = new RenderPipeline(renderer, forwardPass.getTextureNode('output') as unknown as Node);
 
     // The MRT pass alone: the composite's outputs and mark, its colour shown as is.
-    const mrtPass = pass(scene.scene, scene.camera);
+    const mrtPass = pass(scene.scene, cameraFor(true));
     mrtPass.setMRT(mrt({ output, [GI_ALBEDO_OUTPUT]: giAlbedo, [GI_NORMAL_OUTPUT]: packNormalToRGB(normalView) }));
     markCompositePass(mrtPass as unknown as MarkablePass);
     // An MRT output is only drawn once its texture exists (MRTNode.setup).
@@ -130,7 +173,7 @@ async function timing(context: ThreePageContext, scene: CompositeScene): Promise
     const mrtOnly = new RenderPipeline(renderer, mrtPass.getTextureNode('output') as unknown as Node);
 
     const pipelineFor = (occlusion: ConstructorParameters<typeof CompositeRoutes>[1]) => {
-        const routes = new CompositeRoutes(scene, { byteTargets, ...occlusion });
+        const routes = new CompositeRoutes(scene, { byteTargets, ...occlusion, camera: cameraFor(true) });
         return new RenderPipeline(renderer, routes.composite as unknown as Node);
     };
     const composite = pipelineFor({ occlusion: false });
@@ -138,16 +181,14 @@ async function timing(context: ThreePageContext, scene: CompositeScene): Promise
     const compositeGtao = pipelineFor({ occlusion: {} });
     const compositeGtaoHalf = pipelineFor({ occlusion: { resolutionScale: 0.5 } });
 
-    const showGI = (visible: boolean) => () => {
-        light.visible = visible;
-    };
+    const nothing = () => {};
     const variants: FrameVariant[] = [
-        { id: 'off', apply: showGI(false), draw: () => plain.render() },
-        { id: 'mrt', apply: showGI(true), draw: () => mrtOnly.render() },
-        { id: 'composite', apply: showGI(true), draw: () => composite.render() },
-        { id: 'composite+gtao', apply: showGI(true), draw: () => compositeGtao.render() },
-        { id: 'composite+gtao-half', apply: showGI(true), draw: () => compositeGtaoHalf.render() },
-        { id: 'forward', apply: showGI(true), draw: () => plain.render() },
+        { id: 'off', apply: nothing, draw: () => off.render() },
+        { id: 'mrt', apply: nothing, draw: () => mrtOnly.render() },
+        { id: 'composite', apply: nothing, draw: () => composite.render() },
+        { id: 'composite+gtao', apply: nothing, draw: () => compositeGtao.render() },
+        { id: 'composite+gtao-half', apply: nothing, draw: () => compositeGtaoHalf.render() },
+        { id: 'forward', apply: nothing, draw: () => forward.render() },
     ];
 
     // Compile every variant, then let the GPU cool: loading the scene heated it.
@@ -163,13 +204,30 @@ async function timing(context: ThreePageContext, scene: CompositeScene): Promise
     log(`compiled ${variants.length} variants; idle for ${coolSeconds} s`);
     await new Promise((resolve) => setTimeout(resolve, coolSeconds * 1000));
 
+    if (env.VITE_DDGI_STATIC_SHADOWS !== '0') {
+        // The scene doesn't move, so the shadow map drawn while compiling stays right; no variant redraws it.
+        for (const light of scene.loaded.directLights) {
+            const shadow = (light as { shadow?: { autoUpdate: boolean } }).shadow;
+            if (shadow) shadow.autoUpdate = false;
+        }
+        log('shadow maps drawn once (static)');
+    }
     const clock = new PassClock(renderer, shadowCameras(scene));
     const rampSeconds = numberFromEnv(env.VITE_DDGI_RAMP, 2);
     const sections: InterleavedTiming[] = [];
-    sections.push(await timeInterleaved(renderer, device, clock, variants, DELTAS, { seconds: numberFromEnv(env.VITE_DDGI_SECONDS, 10), cyclesPerBatch: CYCLES_PER_BATCH, rampSeconds, log }));
+    sections.push(
+        await timeInterleaved(renderer, device, clock, variants, DELTAS, {
+            label: 'section 1 of 2: 2560 x 1440, the bar',
+            seconds: numberFromEnv(env.VITE_DDGI_SECONDS, 10),
+            cyclesPerBatch: CYCLES_PER_BATCH,
+            rampSeconds,
+            log,
+        }),
+    );
     const seconds1080 = numberFromEnv(env.VITE_DDGI_SECONDS_1080, 4);
     if (seconds1080 > 0) {
         setViewSize(context, scene, SHOT_SIZE);
+        resizeCameras();
         // A resize reallocates every pass target: a few frames of each first.
         for (let frame = 0; frame < 2; frame++) {
             for (const variant of variants) {
@@ -180,10 +238,18 @@ async function timing(context: ThreePageContext, scene: CompositeScene): Promise
             await device.queue.onSubmittedWorkDone();
         }
         await clock.read();
-        sections.push(await timeInterleaved(renderer, device, clock, variants, DELTAS, { seconds: seconds1080, cyclesPerBatch: CYCLES_PER_BATCH, rampSeconds: 0.5, log }));
+        sections.push(
+            await timeInterleaved(renderer, device, clock, variants, DELTAS, {
+                label: 'section 2 of 2: 1920 x 1080, the composite pass at the reference size',
+                seconds: seconds1080,
+                cyclesPerBatch: CYCLES_PER_BATCH,
+                rampSeconds: 0.5,
+                log,
+            }),
+        );
     }
-    light.visible = true;
-    for (const pipeline of [plain, mrtOnly, composite, compositeGtao, compositeGtaoHalf]) pipeline.dispose();
+    light.layers.enableAll();
+    for (const pipeline of [off, forward, mrtOnly, composite, compositeGtao, compositeGtaoHalf]) pipeline.dispose();
     return { sections, targets: byteTargets ? 'byte' : 'half' };
 }
 

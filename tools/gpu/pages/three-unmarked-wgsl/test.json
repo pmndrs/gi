@@ -1,0 +1,4 @@
+{
+    "description": "T1.14: GI per fragment is unchanged by the composite: the unmarked Standard and Lambert WGSL is the same text before and after a composite pipeline is built and drawn, with none of the composite's symbols.",
+    "timeoutMs": 120000
+}

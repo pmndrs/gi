@@ -102,7 +102,7 @@ export class ThreeGILimitError extends GILimitError {
         this.message =
             `@pmndrs/ddgi/three: the scene needs ${source.limit} = ${source.needed}, but the renderer's device allows ${source.available}. ` +
             'Make the renderer with the platform\'s limits: `const { renderer } = await createGIRenderer()`, or ' +
-            '`new WebGPURenderer({ requiredLimits: requiredLimits(await navigator.gpu.requestAdapter()) })`.';
+            '`new WebGPURenderer({ requiredLimits: requiredLimits(await navigator.gpu.requestAdapter()) })` with `requiredLimits` from `@pmndrs/ddgi/core`.';
     }
 }
 

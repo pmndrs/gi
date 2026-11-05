@@ -48,10 +48,14 @@
  * queue runs it before the render that samples it (checked on the GPU, the
  * three-composite page). Then the node reads the module's values, so this
  * render sees this frame's GI. What follows from running inside the render:
- * - **once per frame:** the update runs at most once per JavaScript task (a
- *   `requestAnimationFrame` or `setAnimationLoop` callback), though a frame
- *   may hold several lit renders (cube captures, reflections, several
- *   passes);
+ * - **once per frame:** a frame may hold several lit renders (cube
+ *   captures, reflections, several passes), and the update runs once. When
+ *   `renderer.setAnimationLoop` drives the frames, "a frame" is three's own
+ *   frame id (`NodeFrame.frameId`, which only that loop advances, NOTES).
+ *   Otherwise it is one JavaScript task (a `requestAnimationFrame`
+ *   callback): a host that drives frames itself and awaits between two
+ *   renders of one frame (`await renderer.renderAsync()` twice, say) gets a
+ *   GI frame per render. Use `setAnimationLoop`, or render synchronously;
  * - **the camera** is the first lit render's camera that frame. With cube
  *   captures or a reflection pass drawn before the main view, GI's update
  *   order follows that camera for the frame;
@@ -84,16 +88,35 @@
  * and the environment-diffuse workaround runs as above. Coverage is then the
  * only per-fragment cost, and only when `computeCoverage` is on. Every other
  * surface, and every unmarked pass, builds exactly as before.
+ *
+ * The composite must add GI exactly where GI won the slot: a probe light of
+ * higher priority (a `LightProbeGrid`, say) may take it after GI claimed it,
+ * and then that light's irradiance is shaded per fragment. Once every light
+ * has run (the lighting model's `indirect` step), the node writes
+ * {@link GI_COMPOSITE_WON}: 1 where the slot still holds GI's claim (GI
+ * claimed it, the slot's priority is GI's, and its irradiance is still
+ * GI's zero), else 0. `giAlbedo` multiplies its weight by it, so where
+ * another light won, the composite adds nothing. On an exact tie GI keeps
+ * the slot only if the later light wrote zero irradiance too.
  */
 
 import { AnalyticLightNode, Light, NodeUpdateType, Vector4, type Camera, type ExternalTexture, type Node, type NodeBuilder, type NodeFrame } from 'three/webgpu';
-import { If, INFINITY, cameraPosition, float, normalWorld, positionWorld, renderGroup, screenUV, texture, texture3D, uniform, vec3, wgsl, wgslFn } from 'three/tsl';
+import { If, INFINITY, cameraPosition, float, normalWorld, positionWorld, property, renderGroup, screenUV, select, texture, texture3D, uniform, vec3, wgsl, wgslFn } from 'three/tsl';
 import type { ShadingModule, ShadingParameter } from '@pmndrs/ddgi-core';
 import { compositeTakesGI } from './composite-mark.ts';
 import { wrapGpuTexture } from './external-texture.ts';
 
 /** Where several probe-like lights cover a fragment, the highest priority wins. `LightProbeGrid` defaults to 0. */
 export const GI_LIGHT_PRIORITY = 1;
+
+/**
+ * In a composited build: 1 where GI won the light-probe slot once every
+ * light has run, else 0 (file comment). Written by the GI light's node at
+ * the lighting model's `indirect` step; read by `giAlbedo` (composite.ts).
+ * A shader-wide variable, so never written means 0: no GI light, no
+ * composited GI.
+ */
+export const GI_COMPOSITE_WON = property('float', 'ThreeGiCompositeWon');
 
 export interface GILightOptions {
     /** Multiplies the GI. 0 turns it off without recompiling. Default 1. */
@@ -132,8 +155,10 @@ export class GILight extends Light {
     onRenderError: (error: unknown) => void = (error) => console.error('@pmndrs/ddgi/three: the GI frame failed during a render; GI stops updating.', error);
     /** True once `onRender` threw: the render-time update stays off. */
     renderUpdateFailed = false;
-    /** Whether `onRender` already ran in the current JavaScript task. */
+    /** Whether `onRender` already ran in the current JavaScript task (without an animation loop). */
     private ranThisTask = false;
+    /** three's frame id `onRender` last ran in (with an animation loop). */
+    private lastFrameId: number | null = null;
 
     constructor(shading: ShadingModule, options: GILightOptions = {}) {
         super(0xffffff, options.intensity ?? 1);
@@ -144,20 +169,25 @@ export class GILight extends Light {
     }
 
     /**
-     * Runs `onRender` unless it already ran in this JavaScript task (one
-     * frame: a `requestAnimationFrame` or `setAnimationLoop` callback, file
-     * comment). A microtask clears the mark once the task's synchronous
-     * renders are done, so the guard needs neither three's frame counter
-     * (which only advances inside `setAnimationLoop`, NOTES) nor the host's
-     * cooperation.
+     * Runs `onRender` unless it already ran this frame (file comment, "once
+     * per frame"). `frameId` is three's frame id when `setAnimationLoop`
+     * drives the frames, and keys the guard; null otherwise, and then the
+     * guard is the JavaScript task: a microtask clears the mark once the
+     * task's synchronous renders are done.
      */
-    runRenderTimeUpdate(camera: Camera | null): void {
+    runRenderTimeUpdate(camera: Camera | null, frameId: number | null = null): void {
         const update = this.onRender;
-        if (!update || !camera || this.renderUpdateFailed || this.ranThisTask) return;
-        this.ranThisTask = true;
-        queueMicrotask(() => {
-            this.ranThisTask = false;
-        });
+        if (!update || !camera || this.renderUpdateFailed) return;
+        if (frameId !== null) {
+            if (frameId === this.lastFrameId) return;
+            this.lastFrameId = frameId;
+        } else {
+            if (this.ranThisTask) return;
+            this.ranThisTask = true;
+            queueMicrotask(() => {
+                this.ranThisTask = false;
+            });
+        }
         try {
             update(camera);
         } catch (error) {
@@ -173,6 +203,8 @@ interface LightingContext {
     lightProbePriority?: Node<'float'>;
     /** Ours: this fragment's GI coverage × saturate(intensity), 0 where GI didn't claim the slot. */
     threeGiCoverage?: Node<'float'>;
+    /** Ours, composited builds: 1 once GI claimed the slot (another light may take it later). */
+    threeGiCompositeClaimed?: Node<'float'>;
     iblIrradiance?: Node<'vec3'>;
     lightingModel: { indirect(builder: NodeBuilder): void };
 }
@@ -390,7 +422,10 @@ class GILightNode extends AnalyticLightNode<GILight> {
      */
     update(frame: NodeFrame): boolean | undefined {
         const light = this.light!;
-        light.runRenderTimeUpdate(frame.camera);
+        // three's frame id is a frame only while its animation loop runs (NOTES); otherwise the task is.
+        const renderer = (frame as unknown as { renderer: { getAnimationLoop(): unknown } | null }).renderer;
+        const loopRunning = renderer !== null && renderer.getAnimationLoop() !== null;
+        light.runRenderTimeUpdate(frame.camera, loopRunning ? frame.frameId : null);
         this.intensityUniform.value = light.intensity;
         this.priorityUniform.value = light.priority;
         this.computeCoverageUniform.value = light.computeCoverage ? 1 : 0;
@@ -473,12 +508,42 @@ class GILightNode extends AnalyticLightNode<GILight> {
             .and(coverage.greaterThan(0))
             .and(this.intensityUniform.greaterThan(0));
 
+        context.threeGiCompositeClaimed ||= float(0).toVar('threeGiCompositeClaimed');
         If(claims, () => {
             context.lightProbeIrradiance!.assign(vec3(0));
             context.lightProbePriority!.assign(this.priorityUniform);
+            context.threeGiCompositeClaimed!.assign(1);
             if (light.replaceEnvironmentDiffuse) context.threeGiCoverage!.assign(coverage.mul(this.intensityUniform.saturate()));
         });
+        recordCompositeWinner(context, this.priorityUniform);
     }
+}
+
+/** Lighting models whose `indirect` step already records the composite's winner. */
+const winnerRecordingModels = new WeakSet<object>();
+
+/**
+ * Wraps this build's lighting model's `indirect` step, which runs once every
+ * light has had its turn at the probe slot, to write {@link GI_COMPOSITE_WON}
+ * (file comment). Once per lighting model.
+ */
+function recordCompositeWinner(context: LightingContext, priority: Node<'float'>): void {
+    const model = context.lightingModel;
+    if (!model || winnerRecordingModels.has(model)) return;
+    winnerRecordingModels.add(model);
+    const originalIndirect = model.indirect.bind(model);
+    model.indirect = (builder: NodeBuilder) => {
+        const current = builder.context as unknown as LightingContext;
+        const claimed = current.threeGiCompositeClaimed;
+        const slot = current.lightProbeIrradiance;
+        const slotPriority = current.lightProbePriority;
+        if (claimed && slot && slotPriority) {
+            // Still GI's claim: GI's priority and GI's zero. A light that took the slot after GI changed one of them.
+            const stillGi = claimed.greaterThan(0.5).and(slotPriority.equal(priority)).and(slot.dot(slot).equal(0));
+            GI_COMPOSITE_WON.assign(select(stillGi, float(1), float(0)));
+        }
+        originalIndirect(builder);
+    };
 }
 
 /**

@@ -1,9 +1,11 @@
 import { PerspectiveCamera, Scene } from 'three';
 import { builtinAOContext, float, mrt, normalView, output, packNormalToRGB, pass } from 'three/tsl';
-import { describe, expect, it } from 'vitest';
-import type { GIPlatform, SceneApi, ShadingModule } from '@pmndrs/ddgi-core';
+import { describe, expect, it, vi } from 'vitest';
+import { GILimitError, type GIPlatform, type SceneApi, type ShadingModule } from '@pmndrs/ddgi-core';
+import { flowContextData, hasCompositeMark } from './composite-mark.ts';
 import { ddgi, giAlbedo } from './composite.ts';
 import { GILight } from './gi-light.ts';
+import { ThreeGILimitError } from './volume-start.ts';
 import { GIVolume } from './gi-volume.ts';
 import { ThreeGI } from './three-gi.ts';
 
@@ -40,6 +42,19 @@ describe('the render-time update (GILight.runRenderTimeUpdate)', () => {
         await endOfTask();
         light.runRenderTimeUpdate(camera);
         expect(cameras).toHaveLength(2);
+    });
+
+    it("with three's animation loop, runs once per frame id, even across tasks (awaits between renders)", async () => {
+        const light = new GILight(fakeShading());
+        let runs = 0;
+        light.onRender = () => runs++;
+        const camera = new PerspectiveCamera();
+        light.runRenderTimeUpdate(camera, 7);
+        await endOfTask();
+        light.runRenderTimeUpdate(camera, 7);
+        expect(runs).toBe(1);
+        light.runRenderTimeUpdate(camera, 8);
+        expect(runs).toBe(2);
     });
 
     it('does nothing without a hook or a camera', () => {
@@ -124,9 +139,45 @@ describe('the composite node, ddgi(scenePass, volume)', () => {
         expect(ddgi(compositePass(), new GIVolume(), { occlusion: { source } }).occlusionNode).toBeNull();
     });
 
+    it('merges its mark back when the pass gets a new context after ddgi(), keeping that context', () => {
+        const scenePass = compositePass();
+        const node = ddgi(scenePass, { light: new GILight(fakeShading()) }, { occlusion: false });
+        const aoContext = builtinAOContext(float(0.5));
+        scenePass.contextNode = aoContext;
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        node.update();
+        const data = flowContextData(scenePass.contextNode!);
+        expect(hasCompositeMark(data)).toBe(true);
+        expect(data.getAO).toBe(flowContextData(aoContext).getAO);
+        expect(warn).toHaveBeenCalledTimes(1);
+        warn.mockRestore();
+    });
+
+    it("warns when an occlusion source meets a pass that already applies AO (GI would get AO twice)", () => {
+        const scenePass = compositePass();
+        scenePass.contextNode = builtinAOContext(float(0.5));
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        ddgi(scenePass, new GIVolume(), { occlusion: { source: { getTextureNode: () => compositePass().getTextureNode() } } });
+        expect(warn).toHaveBeenCalledWith(expect.stringMatching(/AO twice/));
+        warn.mockRestore();
+    });
+
     it('adds no second occlusion when the pass already applies AO to its materials', () => {
         const scenePass = compositePass();
         scenePass.contextNode = builtinAOContext(float(0.5));
         expect(ddgi(scenePass, new GIVolume()).occlusionNode).toBeNull();
+    });
+});
+
+describe('ThreeGILimitError', () => {
+    it('is a GILimitError with the limit, and gives the fix for three', () => {
+        const error = new ThreeGILimitError(new GILimitError('maxStorageBufferBindingSize', 300_000_000, 134_217_728));
+        expect(error).toBeInstanceOf(GILimitError);
+        expect(error.code).toBe('GI_LIMIT');
+        expect(error.limit).toBe('maxStorageBufferBindingSize');
+        expect(error.needed).toBe(300_000_000);
+        expect(error.message).toMatch(/maxStorageBufferBindingSize/);
+        expect(error.message).toMatch(/createGIRenderer/);
+        expect(error.message).toMatch(/@pmndrs\/ddgi\/core/);
     });
 });

@@ -15,7 +15,7 @@
 
 import { FloatType, MeshStandardMaterial, NodeMaterial, PerspectiveCamera, QuadMesh, RenderTarget, UnsignedByteType, Vector2 } from 'three/webgpu';
 import type { Camera, Material, Mesh, Node, Object3D, Scene, WebGPURenderer } from 'three/webgpu';
-import { isBackgroundDepth, mrt, normalView, output, packNormalToRGB, pass, uv, vec4 } from 'three/tsl';
+import { type context, isBackgroundDepth, mrt, normalView, output, packNormalToRGB, pass, uv, vec4 } from 'three/tsl';
 import type { MaterialDescriptor } from '../../../../packages/ddgi-core/src/platform/contract/scene.ts';
 import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
 import { DDGITechnique } from '../../../../packages/ddgi-core/src/techniques/ddgi/ddgi-technique.ts';
@@ -186,12 +186,21 @@ export class CompositeRoutes {
      * `occlusion`: the composite's short-range occlusion on GI. Off unless
      * asked for, because the match checks compare the composite with GI per
      * fragment, which has none.
+     * `camera`: the camera the passes render with (default the scene's shot camera).
+     * `context`: a pass context for all three passes (three's `builtinAOContext`, say), set before `ddgi()`.
      */
-    constructor(scene: CompositeScene, options: { readonly byteTargets?: boolean; readonly occlusion?: DDGICompositeOptions['occlusion'] } = {}) {
-        this.perFragmentPass = pass(scene.scene, scene.camera);
-        this.opaquePass = pass(scene.scene, scene.camera);
+    constructor(
+        scene: CompositeScene,
+        options: { readonly byteTargets?: boolean; readonly occlusion?: DDGICompositeOptions['occlusion']; readonly camera?: Camera; readonly context?: ReturnType<typeof context> } = {},
+    ) {
+        const camera = options.camera ?? scene.camera;
+        this.perFragmentPass = pass(scene.scene, camera);
+        this.opaquePass = pass(scene.scene, camera);
         this.opaquePass.transparent = false;
-        this.compositePass = pass(scene.scene, scene.camera);
+        this.compositePass = pass(scene.scene, camera);
+        if (options.context) {
+            for (const scenePass of [this.perFragmentPass, this.opaquePass, this.compositePass]) scenePass.contextNode = options.context;
+        }
         this.compositePass.setMRT(mrt({ output, [GI_ALBEDO_OUTPUT]: giAlbedo, [GI_NORMAL_OUTPUT]: packNormalToRGB(normalView) }));
         if (options.byteTargets) {
             this.compositePass.getTexture(GI_ALBEDO_OUTPUT).type = UnsignedByteType;
@@ -420,7 +429,12 @@ export class PassClock {
         };
     }
 
-    /** Resolves three's query pool: every tagged frame's passes, and how many pass times were implausible. */
+    /**
+     * Resolves three's query pool: every tagged frame's passes drawn so far,
+     * and how many pass times were implausible. three submits the resolve at
+     * once and maps the result when the GPU gets there, so frames drawn while
+     * this is pending land in the next read (they keep their tags).
+     */
     async read(): Promise<{ frames: FramePasses[]; invalid: number }> {
         const backend = this.renderer.backend as unknown as BackendShape;
         const frames = new Map<string, { variant: string; cycle: number; byLabel: Record<string, number> }>();
@@ -431,6 +445,8 @@ export class PassClock {
             for (const [uid, ms] of pool.timestamps) {
                 const pass = this.passes.get(uid);
                 if (!pass) continue;
+                // Only this resolve's passes: frames drawn since (still in flight) keep their tags.
+                this.passes.delete(uid);
                 if (!Number.isFinite(ms) || ms < 0 || ms > MAX_PLAUSIBLE_PASS_MS) {
                     invalid++;
                     continue;
@@ -444,7 +460,6 @@ export class PassClock {
                 frame.byLabel[pass.label] = (frame.byLabel[pass.label] ?? 0) + ms;
             }
         }
-        this.passes.clear();
         return {
             frames: [...frames.values()].map((frame) => ({ ...frame, total: Object.values(frame.byLabel).reduce((sum, ms) => sum + ms, 0) })),
             invalid,
@@ -462,6 +477,8 @@ export interface FrameVariant {
 }
 
 export interface InterleavedOptions {
+    /** What the section is for, kept in its result (the report prints it). */
+    readonly label: string;
     /** Length of the timed section, seconds. */
     readonly seconds: number;
     /** Cycles drawn back to back between two reads of the query pool (each read waits for the GPU once). */
@@ -484,14 +501,20 @@ export interface Spread {
 }
 
 export interface InterleavedTiming {
+    /** What the section is for (`InterleavedOptions.label`). */
+    readonly label: string;
     /** Wall-clock window of the timed section (`Date.now()`), for matching GPU clock samples. */
     readonly windowStartMs: number;
     readonly windowEndMs: number;
     readonly width: number;
     readonly height: number;
     readonly cycles: number;
-    /** Per variant: median ms per frame, in total and by pass kind, and the draw-call counts seen. */
-    readonly variants: Record<string, { readonly totalMs: number; readonly byLabel: Record<string, number>; readonly drawCalls: number[] }>;
+    /**
+     * Per variant: median GPU ms per frame, in total and by pass kind; the
+     * draw-call counts seen; and the median CPU time of recording one frame
+     * (a page whose frames cost more CPU than GPU can't be GPU-bound).
+     */
+    readonly variants: Record<string, { readonly totalMs: number; readonly byLabel: Record<string, number>; readonly drawCalls: number[]; readonly cpuMs: number }>;
     /** Per named difference: the distribution of its per-cycle values. */
     readonly deltas: Record<string, Spread>;
     readonly invalidPasses: number;
@@ -538,13 +561,25 @@ export interface DeltaDefinition {
 
 /**
  * GPU time of each variant with the variants interleaved frame by frame
- * (A B C D A B C D ...), GPU-bound: cycles are drawn back to back and the
- * GPU is waited on once per batch. Every pass of every frame is timed on the
- * GPU, and each difference is taken per cycle, between frames that ran next
- * to each other, then summarised over all cycles. Clock drift during the
- * run moves every variant alike, so it cancels in the differences instead of
- * landing on whichever variant ran while the GPU was hot (the laptop RTX 3060
+ * (A B C D A B C D ...). Every pass of every frame is timed on the GPU, and
+ * each difference is taken per cycle, between frames that ran next to each
+ * other, then summarised over all cycles. Clock drift during the run moves
+ * every variant alike, so it cancels in the differences instead of landing
+ * on whichever variant ran while the GPU was hot (the laptop RTX 3060
  * throttles after about 20 s of GPU-bound load, 7a8128c).
+ *
+ * **GPU-bound, really.** The GPU must never wait for the page, or it drops
+ * to a low-power clock and every millisecond reads long (Budget v2 hit this:
+ * waiting for each frame left the RTX about 40% busy). So:
+ * - the CPU stays at least one batch ahead: batch k is drawn while batch
+ *   k − 1 is still on the GPU, and the page only waits for batch k − 1's
+ *   timestamps (three resolves them as soon as they're asked for, and maps
+ *   them when the GPU gets there);
+ * - there are no other waits or read-backs in the timed section;
+ * - drawing a frame must change no renderer state: each variant has its
+ *   own pass and camera (the caller's job), because toggling a light or a
+ *   material between frames makes three refresh every object, and the page
+ *   becomes CPU-bound (it measured 150 ms of wall time per frame on Sponza).
  *
  * The variants must already be compiled (draw each a few times first).
  */
@@ -558,37 +593,53 @@ export async function timeInterleaved(
 ): Promise<InterleavedTiming> {
     const drawCalls = () => (renderer as unknown as FrameAdvance).info.render.drawCalls;
     const callsSeen = new Map<string, Set<number>>(variants.map((variant) => [variant.id, new Set<number>()]));
+    const cpuTimes = new Map<string, number[]>(variants.map((variant) => [variant.id, []]));
     const drawCycle = (cycle: number | null) => {
         for (const variant of variants) {
+            const cpuStart = performance.now();
             advanceThreeFrame(renderer);
             variant.apply();
             clock.tag = cycle === null ? null : { variant: variant.id, cycle };
             variant.draw();
-            if (cycle !== null) callsSeen.get(variant.id)!.add(drawCalls());
+            if (cycle !== null) {
+                cpuTimes.get(variant.id)!.push(performance.now() - cpuStart);
+                callsSeen.get(variant.id)!.add(drawCalls());
+            }
         }
         clock.tag = null;
     };
 
+    // The ramp: untimed batches, two in flight, until the clock has come up from idle.
     const rampStart = performance.now();
+    let previous: Promise<void> | null = null;
     while (performance.now() - rampStart < options.rampSeconds * 1000) {
         for (let index = 0; index < options.cyclesPerBatch; index++) drawCycle(null);
-        await device.queue.onSubmittedWorkDone();
+        const done = device.queue.onSubmittedWorkDone();
+        if (previous) await previous;
+        previous = done;
     }
-    await clock.read();
 
     const frames: FramePasses[] = [];
     let invalid = 0;
     let cycle = 0;
-    const windowStartMs = Date.now();
-    const start = performance.now();
-    while (performance.now() - start < options.seconds * 1000) {
-        for (let index = 0; index < options.cyclesPerBatch; index++) drawCycle(cycle++);
-        await device.queue.onSubmittedWorkDone();
-        const read = await clock.read();
+    const collect = (read: { frames: FramePasses[]; invalid: number }) => {
         frames.push(...read.frames);
         invalid += read.invalid;
+    };
+    const windowStartMs = Date.now();
+    const start = performance.now();
+    // The ramp's last batch is still on the GPU: its frames are untagged, so a read just empties the pool.
+    let pendingRead: Promise<void> = clock.read().then(() => {});
+    while (performance.now() - start < options.seconds * 1000) {
+        for (let index = 0; index < options.cyclesPerBatch; index++) drawCycle(cycle++);
+        // Wait for the batch before this one (this one stays queued on the GPU), then ask for this one's times.
+        await pendingRead;
+        pendingRead = clock.read().then(collect);
     }
+    await pendingRead;
     const windowEndMs = Date.now();
+    // Anything resolved after the last read started (three resolves on overflow by itself).
+    collect(await clock.read());
 
     // Frames by cycle; a cycle missing any variant's frame (a dropped timestamp) is left out.
     const byCycle = new Map<number, Map<string, FramePasses>>();
@@ -606,13 +657,13 @@ export async function timeInterleaved(
         .map(([, cycleFrames]) => cycleFrames);
 
     const partOf = (frame: FramePasses, part: DeltaDefinition['part']) => (part === 'total' ? frame.total : (frame.byLabel[part] ?? 0));
-    const results: Record<string, { totalMs: number; byLabel: Record<string, number>; drawCalls: number[] }> = {};
+    const results: Record<string, { totalMs: number; byLabel: Record<string, number>; drawCalls: number[]; cpuMs: number }> = {};
     for (const variant of variants) {
         const own = complete.map((cycleFrames) => cycleFrames.get(variant.id)!);
         const labels = new Set(own.flatMap((frame) => Object.keys(frame.byLabel)));
         const byLabel: Record<string, number> = {};
         for (const label of labels) byLabel[label] = median(own.map((frame) => frame.byLabel[label] ?? 0));
-        results[variant.id] = { totalMs: median(own.map((frame) => frame.total)), byLabel, drawCalls: [...callsSeen.get(variant.id)!] };
+        results[variant.id] = { totalMs: median(own.map((frame) => frame.total)), byLabel, drawCalls: [...callsSeen.get(variant.id)!], cpuMs: median(cpuTimes.get(variant.id)!) };
     }
     const differences: Record<string, Spread> = {};
     for (const delta of deltas) {
@@ -620,17 +671,18 @@ export async function timeInterleaved(
         differences[delta.name] = spreadOf(values);
     }
     const size = renderer.getDrawingBufferSize(new Vector2());
-    options.log(`${size.width} x ${size.height}: ${complete.length} complete cycles in ${((windowEndMs - windowStartMs) / 1000).toFixed(1)} s`);
+    options.log(`${options.label}, ${size.width} x ${size.height}: ${complete.length} complete cycles in ${((windowEndMs - windowStartMs) / 1000).toFixed(1)} s`);
     for (const [id, result] of Object.entries(results)) {
         const parts = Object.entries(result.byLabel)
             .map(([label, ms]) => `${label} ${ms.toFixed(3)}`)
             .join(', ');
-        options.log(`  ${id}: ${result.totalMs.toFixed(3)} ms per frame (${parts}); draw calls ${result.drawCalls.join('/')}`);
+        options.log(`  ${id}: ${result.totalMs.toFixed(3)} ms per frame on the GPU (${parts}), ${result.cpuMs.toFixed(2)} ms to record; draw calls ${result.drawCalls.join('/')}`);
     }
     for (const [name, spread] of Object.entries(differences)) {
         options.log(`  ${name}: median ${spread.median.toFixed(3)} ms, p10 to p90 ${spread.p10.toFixed(3)} to ${spread.p90.toFixed(3)}, MAD ${spread.mad.toFixed(3)}, thirds ${spread.thirds.map((ms) => ms.toFixed(3)).join('/')}`);
     }
     return {
+        label: options.label,
         windowStartMs,
         windowEndMs,
         width: size.width,
