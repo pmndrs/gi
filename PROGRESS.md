@@ -31,6 +31,21 @@ Numbers (indirect, against Cycles; bias, 8×8 block error, p95 block, FLIP 8×8,
 Not verified: the cause. The ratio map shows DDGI brighter on most shadowed surfaces, the curtains most.
 Next: find Sponza's +26% (leaks through thin curtains, probe density, sun shadow rays, the decal `dirt_decal` with GI albedo 0 acting as a black opaque surface because glTF's default metalness is 1 and M1 ignores `blocksLight`); a README section for `--materials-json`; the test view's full image is black on sky pixels.
 
+## 2026-11-05 · Budget v2 · implementer (opus); in review
+Did (88dbe45):
+- `packages/ddgi-core/src/platform/work-budget.ts` (new) holds the whole budget:
+  - a calibration burst: ramp the GPU up, bracket the budget with ×4 steps, alternate small batches with ~12 ms filler batches so a 60 Hz host keeps its clocks up; re-solve on a `gpuMs` change; give up after 400 frames without timings;
+  - the saturation step-down: ×0.8 a second when frames are more than 10% late and DDGI is more than 10% over its share; ×1.1 a second back when on time;
+  - the floor hook.
+- `gi-platform.ts` re-calibrates on `prepare`, techniques added or removed, geometry (once still for 1 s; geometry-triggered at most every 10 s except the first), a `gpuMs` or cap change, and `recalibrate()`. Counters under 'ddgi budget'. T1.9a's frame-by-frame steering is gone.
+- DDGI: `minProbesPerFrame: number | 'auto'` (a full sweep within 4 s, at most 2× the calibrated batch); counter 'seconds per full sweep'.
+- `FrameBudget.targetFps` (platform.md Revisions).
+- Viewer: the warm-up ends with the calibration; stats lines "per frame" and "measured cost" with help.
+Verified (agent): lint, typecheck, test 848 (33 budget tests). RTX 3060, headless Chrome 156: ddgi-batch-cost on 4 scenes, the 8 `ddgi-` pages, the three and spike pages pass. Intel UHD: ddgi-batch-cost runs cleanly.
+Numbers (`timing.csv` `batch_cost/v2_*`; RTX GPU-bound, back to back, 1 run): calibrated probes / ms (budget 2) / sweep at 60 Hz: Cornell 1,553 / 1.66 / 0.03 s; two-room 857 / 1.96 / 0.03 s; **Sponza 266 / 1.88 / 1.23 s** (39 probes at 60 Hz under T1.9a); Bistro exterior 112 / 1.89 / 4.0 s (the floor of 121 binds at 60 Hz). Calibration takes 20–52 frames (59–363 ms after the warm-up). At 30 / 60 / 120 Hz: one value per rate, no late frames, no step-downs. Intel: calibrated 90 / 92 / 58 probes cost 3.07 / 4.40 / 4.36 ms GPU-bound (it measured about half the sustained cost, probably short-lived turbo after the warm-up); reported, not judged (Intel is correctness-only).
+Not verified: the saturation step-down on a GPU (unit tests only); the M5 Pro; a host with no warm-up on a GPU.
+Note: one help-text hunk in this commit (the Compare camera) belongs to T1.13, whose code lands with T1.13.
+
 ## 2026-11-05 · T1.12 phase 1: Cornell flicker cause · implementer (opus)
 Did: page `ddgi-flicker-causes` (manual, correctness only). No core or viewer edits.
 Found (RTX 3060; the Intel gave the same; `cornell-box`, every probe updated each frame unless noted; image per-pixel change mean or p95; atlas rms per texel):
