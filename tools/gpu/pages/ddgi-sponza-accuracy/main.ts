@@ -142,22 +142,36 @@ export interface GiMaterialEntry {
     readonly albedo: [number, number, number];
     /** Emitted radiance as the platform stores it: emissive × the emissive texture's average × emissiveIntensity. */
     readonly emission: [number, number, number];
-    /** Sent, but not yet honoured by the M1 tracer (every surface is opaque until M4's cutouts). */
+    /**
+     * False for see-through materials (alpha-blended, glass, hidden). The M1
+     * tracer doesn't honour it per triangle (every surface is opaque until
+     * M4); instead the adapter leaves out of GI each mesh whose materials all
+     * block no light (`leftOutMeshes`).
+     */
     readonly blocksLight: boolean;
     /** Sent, but not yet honoured by the M1 tracer (see `blocksLight`). */
     readonly alphaCutoff: number | null;
     readonly doubleSided: boolean;
     /** Meshes in the part that use it. */
     readonly meshes: number;
+    /**
+     * Of those, the meshes the adapter left out of GI because all their
+     * materials let light through (`SceneSync.sentSeeThrough`). render.py
+     * removes this material's faces when it equals `meshes`, and stops when
+     * it is between 0 and `meshes` (it can't tell those meshes apart).
+     */
+    readonly leftOutMeshes: number;
 }
 
 export interface GiMaterialTable {
     readonly scene: string;
+    /** The model parts loaded (asset ids), so render.py loads the same ones. */
+    readonly parts: readonly string[];
     readonly note: string;
     readonly materials: GiMaterialEntry[];
 }
 
-function tableEntry(part: string, name: string, descriptor: MaterialDescriptor): Omit<GiMaterialEntry, 'meshes'> {
+function tableEntry(part: string, name: string, descriptor: MaterialDescriptor): Omit<GiMaterialEntry, 'meshes' | 'leftOutMeshes'> {
     // The same defaults the platform's scene copy applies (platform-scene.ts, writeMaterialRecord).
     const albedo = descriptor.albedo ?? [1, 1, 1];
     const emissive = descriptor.emissive ?? [0, 0, 0];
@@ -196,6 +210,9 @@ function giMaterialTable(threeGI: ThreeGI, content: Object3D, holders: ReadonlyM
         const part = partOf(mesh, holders);
         assert(part, `mesh '${mesh.name}' is in no model part`);
         const materials: Material[] = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+        const seeThrough = threeGI.sync.sentSeeThrough(mesh);
+        assert(seeThrough !== undefined, `mesh '${mesh.name}' was never sent to the platform`);
+        const leftOut = seeThrough ? 1 : 0;
         for (const material of materials) {
             const descriptor = threeGI.sync.sentMaterial(material);
             assert(descriptor, `material '${material.name}' of mesh '${mesh.name}' was never sent to the platform`);
@@ -203,11 +220,11 @@ function giMaterialTable(threeGI: ThreeGI, content: Object3D, holders: ReadonlyM
             const key = `${part}\n${material.name}`;
             const existing = entries.get(key);
             if (existing) {
-                const same = JSON.stringify({ ...existing, meshes: 0 }) === JSON.stringify({ ...entry, meshes: 0 });
+                const same = JSON.stringify({ ...existing, meshes: 0, leftOutMeshes: 0 }) === JSON.stringify({ ...entry, meshes: 0, leftOutMeshes: 0 });
                 assert(same, `two materials named '${material.name}' in ${part} were sent with different GI values`);
-                entries.set(key, { ...existing, meshes: existing.meshes + 1 });
+                entries.set(key, { ...existing, meshes: existing.meshes + 1, leftOutMeshes: existing.leftOutMeshes + leftOut });
             } else {
-                entries.set(key, { ...entry, meshes: 1 });
+                entries.set(key, { ...entry, meshes: 1, leftOutMeshes: leftOut });
             }
         }
     });
@@ -426,10 +443,14 @@ await runThreePage(async ({ device, data, log }) => {
         data.materials = table.length;
         data.emissiveMaterials = table.filter((entry) => entry.emission.some((channel) => channel > 0)).map((entry) => `${entry.part}/${entry.name}`);
         data.seeThroughMaterials = table.filter((entry) => !entry.blocksLight).map((entry) => `${entry.part}/${entry.name}`);
+        data.leftOutMeshes = table.filter((entry) => entry.leftOutMeshes > 0).map((entry) => `${entry.part}/${entry.name}: ${entry.leftOutMeshes} of ${entry.meshes}`);
         if (job.exportImages) {
             const exported: GiMaterialTable = {
                 scene: manifest.id,
-                note: 'GI materials as the three adapter sent them to the platform (SceneSync.sentMaterial). M1 traces every surface as opaque: blocksLight and alphaCutoff are sent but not yet honoured.',
+                parts: [...holders.values()],
+                note:
+                    'GI materials as the three adapter sent them to the platform (SceneSync.sentMaterial). M1 traces every surface as opaque: ' +
+                    'blocksLight and alphaCutoff are not honoured per triangle; the adapter leaves out of GI the meshes whose materials all block no light (leftOutMeshes).',
                 materials: table,
             };
             data.giMaterials = exported;

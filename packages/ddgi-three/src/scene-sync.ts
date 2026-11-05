@@ -403,6 +403,16 @@ export class SceneSync {
         return this.materials.get(material)?.sent;
     }
 
+    /**
+     * Whether a mirrored mesh was left out of GI's rays because all its
+     * materials let light through (see the file header), or undefined if the
+     * mesh isn't mirrored. For checks that must give another renderer the
+     * same scene (the Sponza accuracy page).
+     */
+    sentSeeThrough(mesh: Mesh): boolean | undefined {
+        return this.objects.get(mesh)?.seeThrough;
+    }
+
     /** How many times the environment was sent, and how many textures uploaded for it. */
     get environmentUpdates(): { updates: number; uploads: number } {
         return { updates: this.environmentSync.updates, uploads: this.environmentSync.uploads };

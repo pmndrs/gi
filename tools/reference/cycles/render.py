@@ -27,6 +27,11 @@ render_untextured):
     cycles-untextured-lights-direct.exr   the same from a second render with only the
                                           manifest's lights (no sky, no emission, no bounces)
 and run.ts adds them up into cycles-untextured-gi.exr.
+
+The table also says which model parts were loaded (`parts`; only those are
+imported) and which materials' meshes the three adapter left out of GI
+because all their materials let light through (`leftOutMeshes`; their faces
+are removed, see remove_left_out_faces).
 """
 
 import argparse
@@ -38,6 +43,7 @@ import re
 import sys
 import time
 
+import bmesh
 import bpy
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -83,14 +89,17 @@ def pick_camera(manifest, wanted):
     raise SystemExit(f'no camera named {wanted!r}; known: {[c["name"] for c in cameras]}')
 
 
-def load_geometry(manifest):
+def load_geometry(manifest, model_parts=None):
     """
     Procedural parts come as one GLB per scene (pnpm scenes:export); model parts are downloaded files.
+    `model_parts` (asset ids), when given, keeps only those model parts (the GI material table's `parts`).
     Returns {model part asset id: the mesh objects it imported}, for the GI material table.
     """
     procedural_done = False
     imported_by_part = {}
     for part in manifest['parts']:
+        if model_parts is not None and part['kind'] == 'model' and part['asset'] not in model_parts:
+            continue
         if part['kind'] == 'procedural':
             if procedural_done:
                 continue
@@ -124,7 +133,8 @@ def apply_gi_material_table(table, imported_by_part):
       Base Color      the table's albedo (texture, vertex colour and factor nodes cut off)
       Emission        colour = emission / its peak, strength = the peak (strength is radiance, units.py)
       Alpha           1: the M1 tracer treats every surface as opaque (alpha cutouts and
-                      see-through materials arrive with M4), so Cycles does too
+                      see-through materials arrive with M4), so Cycles does too; the meshes
+                      the adapter leaves out of GI instead are removed (remove_left_out_faces)
       Normal          cut off: the platform shades with interpolated vertex normals
     Run after make_materials_diffuse_only; require_untextured and
     require_diffuse_only check the result. Materials are matched by model part
@@ -148,6 +158,57 @@ def apply_gi_material_table(table, imported_by_part):
     if unmatched:
         raise SystemExit(f'GI material table rows with no material in the Blender scene: {unmatched}')
     return changed
+
+
+def remove_left_out_faces(table, imported_by_part):
+    """
+    Removes the faces of materials whose meshes the three adapter left out of
+    GI (the table's `leftOutMeshes`): a mesh whose materials all let light
+    through is sent with contributesToGI false, since the M1 tracer treats
+    every surface as opaque (packages/ddgi-three/src/scene-sync.ts). three
+    makes one mesh per glTF primitive and a primitive has one material, so
+    removing a material's faces removes exactly those meshes. A material with
+    only some of its meshes left out can't be matched that way, and stops the
+    run. Returns {part/name: faces removed}.
+    """
+    left_out = set()
+    for row in table['materials']:
+        count = row.get('leftOutMeshes', 0)
+        if count == 0:
+            continue
+        if count != row['meshes']:
+            raise SystemExit(
+                f"material {row['name']!r} of part {row['part']}: {count} of its {row['meshes']} meshes were left out of GI; "
+                'render.py can only remove all of a material\'s faces'
+            )
+        left_out.add((row['part'], row['name']))
+    removed = {}
+    done_meshes = set()
+    for part, objects in imported_by_part.items():
+        for obj in objects:
+            mesh = obj.data
+            # Objects can share mesh data; remove its faces once.
+            if mesh.name in done_meshes:
+                continue
+            done_meshes.add(mesh.name)
+            slots = [BLENDER_DUPLICATE_SUFFIX.sub('', slot.material.name) if slot.material else None for slot in obj.material_slots]
+            removed_slots = {index for index, name in enumerate(slots) if (part, name) in left_out}
+            if not removed_slots:
+                continue
+            editable = bmesh.new()
+            editable.from_mesh(mesh)
+            faces = [face for face in editable.faces if face.material_index in removed_slots]
+            for index in removed_slots:
+                key = f'{part}/{slots[index]}'
+                removed[key] = removed.get(key, 0) + sum(1 for face in faces if face.material_index == index)
+            bmesh.ops.delete(editable, geom=faces, context='FACES')
+            editable.to_mesh(mesh)
+            editable.free()
+            mesh.update()
+    missing = sorted(f'{part}/{name}' for part, name in left_out if f'{part}/{name}' not in removed)
+    if missing:
+        raise SystemExit(f'materials left out of GI with no faces in the Blender scene: {missing}')
+    return removed
 
 
 def set_constant_material(material, row):
@@ -311,12 +372,15 @@ def main():
         scene.render.threads = args.threads
 
     load_started = time.time()
-    imported_by_part = load_geometry(manifest)
+    model_parts = gi_table.get('parts') if gi_table else None
+    imported_by_part = load_geometry(manifest, model_parts)
     materials_changed, texture_links_removed = bs.make_materials_diffuse_only()
     gi_materials_set = 0
+    left_out_faces = None
     if gi_table:
         gi_materials_set = apply_gi_material_table(gi_table, imported_by_part)
         require_untextured()
+        left_out_faces = remove_left_out_faces(gi_table, imported_by_part)
     bs.require_diffuse_only()
     bs.add_manifest_lights(scene, manifest['lights'])
     bs.add_environment(scene, manifest['environment'], bs.sky_file_path(manifest['id']))
@@ -340,7 +404,8 @@ def main():
         'tool': 'tools/reference/cycles/render.py',
         'blender': bpy.app.version_string,
         'scene': manifest['id'],
-        'parts': manifest['parts'],
+        'parts': [part for part in manifest['parts'] if model_parts is None or part['kind'] != 'model' or part['asset'] in model_parts],
+        'leftOutOfGiFaces': left_out_faces,
         'environment': manifest['environment'],
         'skyFile': sky_file,
         'camera': camera,

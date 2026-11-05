@@ -4,8 +4,8 @@
  * Cycles reference. Also prints one accuracy table for the three M1 scenes.
  *
  *   node tools/gpu/pages/ddgi-sponza-accuracy/run.ts [--gpu nvidia|intel] [--camera 1]
- *        [--width 640] [--height 360] [--suffix -run2] [--job '{"blockPasses": 32}']
- *   node tools/gpu/pages/ddgi-sponza-accuracy/run.ts --compare-only [--suffix ...]
+ *        [--width 640] [--height 360] [--suffix -run2] [--reference-suffix -base] [--job '{"blockPasses": 32}']
+ *   node tools/gpu/pages/ddgi-sponza-accuracy/run.ts --compare-only [--suffix ...] [--reference-suffix ...]
  *   node tools/gpu/pages/ddgi-sponza-accuracy/run.ts --table [--cornell-suffix -t19] [--two-room-suffix -t19] [--suffix ...]
  *
  * Writes to `bench/references/sponza/<camera>/` (gitignored):
@@ -14,7 +14,12 @@
  *   `render.py --materials-json` renders Cycles with:
  *     node tools/reference/cycles/run.ts --scene sponza --camera 1 --width 640 --height 360 \
  *          --samples 8192 --device gpu --materials-json bench/references/sponza/colonnade-from-the-floor/gi-materials.json
- *   which writes `cycles-untextured-{full,indirect,gi}.exr` next to it.
+ *   which writes `cycles-untextured-{full,indirect,gi}.exr` next to it. The
+ *   table also lists the model parts loaded (render.py loads only those) and,
+ *   per material, the meshes the adapter left out of GI as see-through
+ *   (render.py removes those faces). A reference rendered with
+ *   `--name-suffix S` (e.g. the base package, `--job '{"parts":["sponza-intel"]}'`)
+ *   is compared with `--reference-suffix S`.
  * - `ddgi-untextured-{indirect,full}<suffix>.exr` and `ddgi-untextured<suffix>.json`;
  * - with a `pathTrace` job, `pt-untextured-indirect<suffix>.exr`: the same
  *   quantity from the page's path tracer over the platform's own scene;
@@ -175,8 +180,8 @@ function sha256(text: string | Buffer): string {
  * table (render.py records the table's sha256). A reference rendered from an
  * older table compares different materials.
  */
-async function checkReferenceTable(outDir: string, tablePath: string): Promise<void> {
-    const metaPath = join(outDir, 'cycles-untextured.json');
+async function checkReferenceTable(outDir: string, tablePath: string, referenceSuffix: string): Promise<void> {
+    const metaPath = join(outDir, `cycles-untextured${referenceSuffix}.json`);
     if (!existsSync(metaPath) || !existsSync(tablePath)) return;
     const meta = JSON.parse(await readFile(metaPath, 'utf8')) as { giMaterials?: { sha256?: string } };
     const tableHash = sha256(await readFile(tablePath));
@@ -184,10 +189,10 @@ async function checkReferenceTable(outDir: string, tablePath: string): Promise<v
     else console.warn(`warning: the Cycles reference was rendered from a different material table than ${relative(repoRoot, tablePath)}; render it again`);
 }
 
-async function compareSponza(outDir: string, suffix: string): Promise<void> {
-    const referenceGi = join(outDir, 'cycles-untextured-gi.exr');
-    const referenceIndirect = join(outDir, 'cycles-untextured-indirect.exr');
-    const referenceFull = join(outDir, 'cycles-untextured-full.exr');
+async function compareSponza(outDir: string, suffix: string, referenceSuffix: string): Promise<void> {
+    const referenceGi = join(outDir, `cycles-untextured-gi${referenceSuffix}.exr`);
+    const referenceIndirect = join(outDir, `cycles-untextured-indirect${referenceSuffix}.exr`);
+    const referenceFull = join(outDir, `cycles-untextured-full${referenceSuffix}.exr`);
     const indirect = join(outDir, `ddgi-untextured-indirect${suffix}.exr`);
     const full = join(outDir, `ddgi-untextured-full${suffix}.exr`);
     if (!existsSync(referenceGi)) {
@@ -195,7 +200,7 @@ async function compareSponza(outDir: string, suffix: string): Promise<void> {
 no ${relative(repoRoot, referenceGi)} yet; render it with tools/reference/cycles/run.ts --materials-json (see this file's header)`);
         return;
     }
-    await checkReferenceTable(outDir, join(outDir, `gi-materials${suffix}.json`));
+    await checkReferenceTable(outDir, join(outDir, `gi-materials${suffix}.json`), referenceSuffix);
     const prefix = (name: string): string => join(outDir, `compare-cycles-untextured-vs-ddgi-${name}${suffix}`);
     comparePrinted(referenceGi, indirect, 'GI (DDGI indirect against Cycles indirect + sky and emission direct), per pixel', ['--out', prefix('gi')]);
     comparePrinted(referenceGi, indirect, 'GI, 8x8 blocks', ['--downsample', '8', '--out', prefix('gi-blocks8')]);
@@ -260,13 +265,14 @@ async function printTable(suffixes: { readonly cornell: string; readonly twoRoom
 
 async function main(): Promise<void> {
     const { values } = parseArgs({
-        args: joinDashValues(process.argv.slice(2), ['--suffix', '--cornell-suffix', '--two-room-suffix']),
+        args: joinDashValues(process.argv.slice(2), ['--suffix', '--reference-suffix', '--cornell-suffix', '--two-room-suffix']),
         options: {
             camera: { type: 'string', default: '1' },
             width: { type: 'string', default: '640' },
             height: { type: 'string', default: '360' },
             gpu: { type: 'string', default: 'nvidia' },
             suffix: { type: 'string', default: '' },
+            'reference-suffix': { type: 'string', default: '' },
             job: { type: 'string', default: '{}' },
             'compare-only': { type: 'boolean' },
             table: { type: 'boolean' },
@@ -282,7 +288,7 @@ async function main(): Promise<void> {
     const camera = Number(values.camera);
     const outDir = join(referencesRoot, 'sponza', await cameraName('sponza', camera));
     if (values['compare-only']) {
-        await compareSponza(outDir, suffix);
+        await compareSponza(outDir, suffix, values['reference-suffix'] ?? '');
         return;
     }
     if (values.gpu !== 'nvidia' && values.gpu !== 'intel') throw new Error('--gpu must be nvidia or intel');
@@ -313,7 +319,7 @@ async function main(): Promise<void> {
     await writeFile(join(outDir, `ddgi-untextured${suffix}.json`), JSON.stringify(summary, null, 2));
     console.log(`wrote ${relative(repoRoot, indirectFile)}, ${relative(repoRoot, fullFile)} and ${relative(repoRoot, tableFile)}`);
     console.log(`${String(data.passes)} passes in ${String(data.convergeMs)} ms; block means ${JSON.stringify(data.blockMeans)}`);
-    await compareSponza(outDir, suffix);
+    await compareSponza(outDir, suffix, values['reference-suffix'] ?? '');
 }
 
 installShutdownHandlers();

@@ -494,13 +494,12 @@ describe('see-through meshes', () => {
         const scene = new Scene();
         const decalMaterial = blendedDecal();
         const glass = new MeshPhysicalMaterial({ transmission: 1 });
-        scene.add(
-            Object.assign(new Mesh(new BoxGeometry(), decalMaterial), { name: 'decal' }),
-            Object.assign(new Mesh(new BoxGeometry(), glass), { name: 'pane' }),
-            Object.assign(new Mesh(new BoxGeometry(), new MeshStandardMaterial()), { name: 'wall' }),
-        );
+        const decal = Object.assign(new Mesh(new BoxGeometry(), decalMaterial), { name: 'decal' });
+        const wall = Object.assign(new Mesh(new BoxGeometry(), new MeshStandardMaterial()), { name: 'wall' });
+        scene.add(decal, Object.assign(new Mesh(new BoxGeometry(), glass), { name: 'pane' }), wall);
         frame(scene);
         expect(contributions()).toEqual({ decal: false, pane: false, wall: true });
+        expect([sync.sentSeeThrough(decal), sync.sentSeeThrough(wall), sync.sentSeeThrough(new Mesh())]).toEqual([true, false, undefined]);
         expect(sync.sentMaterial(decalMaterial)?.blocksLight).toBe(false);
         expect(warnings).toEqual([]);
     });
