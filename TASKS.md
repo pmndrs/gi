@@ -285,7 +285,7 @@ Rules for every M1 task:
 | B1a | GPU top-level tree: refit every frame from instance transforms, rebuild now and then | M1 ends (after T1.3's review fixes, alongside T1.4; DECISIONS 2026-11-05) | done (Opus review and re-review passed; 10k instances: RTX 0.086 ms, Intel 0.43 ms) |
 | B1 | GPU LBVH per mesh (subgroups first), BLAS refit | M3 | done (merged into m1, Dennis approved; not wired into ddgi-core until M2's fast first GI. Opus review passed with notes, fixed: Sponza GPU build 31.2 ms on the RTX; oracle passes on both GPUs; trace 0.82x / 0.80x of tinybvh trees; 10k top level 0.091 ms; no-subgroups fallback to tinybvh tested) |
 | B2 | GPU PLOC, then H-PLOC | M3 | todo |
-| B3 | Wide or compressed nodes, short-stack traversal | the performance review | todo |
+| B3 | Wide or compressed nodes, short-stack traversal | the performance review | done: dropped (Dennis, 2026-11-05). CWBVH closest-hit about 1.0× BVH2 on Sponza against the 1.3× bar, 0.82× on Bistro interior; oracle passed on both GPUs. Findings in PROGRESS and NOTES; code on branch `bvh-b3` |
 
 Done-whens for the B stages are in `docs/design/bvh-framework.md`. B1a's: a 10k-instance top level costs ≤ 0.5 ms of GPU time, and the oracle passes with instances moving every frame.
 
