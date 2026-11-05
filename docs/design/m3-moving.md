@@ -156,11 +156,11 @@ The volume is a fixed-size window of probes over a lattice fixed in world space 
 - **Speed:** entering probes need their 2 warming updates before they're shown (section 5.2).
   - With a 32 × 12 × 32 window at spacing `s`, each plane on the x or z axis holds 384 probes. At `v` m/s that's `384 × v / s / 60` entering probes a frame, and twice that in warming updates: `8.5 v` a frame at 1.5 m spacing.
   - **Measured:** Bistro exterior fits **20–27** probe updates a frame at 2 ms (T1.9a, with the fixed controller). An earlier estimate here, about 90, came from its cost curve and was wrong.
-  - **Budget v2** (accepted 2026-11-05, ddgi.md) replaces the controller T1.9a measured. Its floor is a full sweep in 4 s: for this 12,288-probe volume at 60 Hz, at least **51** probes a frame. The calibrated number may be higher; the M1 lead's GPU-bound re-measure says.
-  - At the floor, half the budget for entering planes allows about **3 m/s** at 1.5 m. 5 m/s needs about 43 of the 51. That's more than the scheduler's priority share (0.75 × 51 ≈ 38), so it would also need `priorityShare` raised to about 0.85 while the camera moves, leaving the round robin about 8 a frame.
+  - **Budget v2, with the GPU loaded** (the M1 lead's 88dbe45, in review): Sponza updates about 266 probes a frame against T1.9a's 30–43; the old numbers were mostly the GPU's low-power state. Bistro exterior isn't re-measured yet, so it's **scaled by Sponza's ratio** (7.4×): about **170** probes a frame. Provisional until T1.9's numbers land.
+  - At about 170, **5 m/s at 1.5 m needs about 43 a frame, a quarter of the budget**, well inside the scheduler's priority share (0.75 × 170 ≈ 127). Half the budget allows about 10 m/s.
   - (At T1.9a's old rate of 20–27, half the budget allowed only about 1.4 m/s.)
   - Levers:
-    - **coarser spacing:** at 3 m (a 96 × 36 × 96 m window, the same memory), 5 m/s needs about 21 a frame, about 40% of the floor's 51;
+    - **coarser spacing:** at 3 m (a 96 × 36 × 96 m window, the same memory), 5 m/s needs about 21 a frame;
     - **a larger budget while moving;**
     - **M2's deferred shadow pass,** if it raises the rate.
   - Dennis picked 5 m/s at 1.5 m on the wrong estimate, so this goes back to him (open question below).
@@ -186,7 +186,7 @@ M2's `ddgi/mark` (m2-lights.md 4.2) gets geometry entries. For each geometry reg
 
 **Example: a door between two rooms** (1 × 2 m, radius about 1.1 m), closed in one step. A probe 4 m into the dark room that saw the open doorway has `Ω ≈ 0.24 sr` and `r ≈ 0.47`. Its history drops to `n ≈ 0.95`, and it is owed 8 updates. A probe behind a wall doesn't pass the far-set test and isn't marked.
 
-**What the budget buys** (the same arithmetic as m2-lights.md 4.3): the door's near and far sets are a few hundred probes on two-room, where about 300 probes fit a frame (T1.9a), so all of them get their 8 updates well inside 1 s. A cabinet moved in the furnished room touches fewer. On Sponza-sized scenes the probes nearest the camera are served first.
+**What the budget buys** (the same arithmetic as m2-lights.md 4.3): the door's near and far sets are a few hundred probes on two-room, where every probe is updated every frame at the scaled GPU-loaded rate (m2-lights.md, the rates section; provisional), so all of them get their 8 updates in 8 frames, about 0.13 s. A cabinet moved in the furnished room touches fewer. On Sponza-sized scenes the probes nearest the camera are served first.
 
 **With M2's instant sky on** (m2-lights.md 6.3), marked probes' first-order sky transfers are reset with their history. They re-accumulate from the updates the probes are owed anyway, and count as built again after 8, under a second on two-room for the door's few hundred probes. Until then, sky changes reach them by re-tracing. The sky layer itself keeps updating, so nothing jumps.
 
@@ -469,7 +469,7 @@ B1 is done before M3 starts. B2 (H-PLOC) is done before M3 sign-off, and doesn't
 2. **Change tracking at scale.** Cache misses, not code, set the walk's cost (0.7 µs per object). If the `updateMatrixWorld` override is unsafe or no cheaper, unmarked moves on Bistro-sized scenes keep a latency of tens of frames, and `markChanged` stays the answer for interactive moves.
 3. **The door's leak window.** Until the near probes' distance tiles learn the closed door, light leaks for a few frames. With `n` near 0.4 and the door's probes updated every frame, that should be 2–4 frames. If it shows, those probes' first update could use 2× rays.
 4. **The far-set estimate** (`Ω_ref`, the 8-spacing radius, the entry-distance test) is a guess. T3.4 compares marked probes against probes that really changed by more than 5%.
-5. **Scrolling speed.** At Budget v2's floor (51 probes a frame for this volume), about 3 m/s at 1.5 m spacing with half the budget, or 5 m/s with about 43 of the 51 (and `priorityShare` raised to about 0.85 while moving); 5 m/s at 3 m uses about 21. A higher calibrated count helps. Faster flights show the environment longer at the edge (section 4.2).
+5. **Scrolling speed.** At the scaled ~170 probes a frame (provisional), 5 m/s at 1.5 m uses about a quarter of the budget and half allows about 10 m/s. If Bistro's measured rate comes out much lower than the scaling says, this comes back. Faster flights show the environment longer at the edge (section 4.2).
 6. **The stats readback adds 1–3 frames** before a GPU tree is used. That's harmless at load. For an object added at run time it adds to the top level's worker delay; if it shows in the cabinet scenario, the top level can move to the GPU (section 2.2).
 7. **Refit quality** on large deformations (cloth, fan blades) may need rebuilds, which SPEC's tracing decision rules out today.
 
@@ -485,7 +485,7 @@ B1 is done before M3 starts. B2 (H-PLOC) is done before M3 sign-off, and doesn't
 1. **Deformed positions:** `setDeformedPositions` also takes a CPU array. The `ExternalBufferAttribute` PR is drafted in section 7.1 for him to see; nothing is posted.
 2. **`setTransforms`:** yes.
 3. **Readbacks** aren't a rule but a preference: "prefer GPU-resident; read back when it clearly pays". GPU trees use one small asynchronous stats readback (section 2.2); the provisional pool is gone.
-4. **The fly-through:** Bistro exterior, a 32 × 12 × 32 camera-following volume at 1.5 m (19 MB; 60 MB with M2's instant sky), up to 5 m/s. (But see "Still open": that speed rested on a wrong rate.)
+4. **The fly-through:** Bistro exterior, a 32 × 12 × 32 camera-following volume at 1.5 m (19 MB; 60 MB with M2's instant sky), up to 5 m/s. (It rested on a wrong rate at first; at the scaled GPU-loaded rate it fits, pending T1.9's Bistro number: "Still open".)
 5. **Startup:** measured from the hand-off to GI, ≤ 2 s with a cold shader compile.
 6. **The wind tree:** a game-ready tree (section 8.1), not a 2 M-triangle one. Solid leaf cards until M4 are fine.
 7. **B2 (H-PLOC):** before M3 sign-off, not before M3 starts. It must not block; the fallbacks always stay.
@@ -493,6 +493,6 @@ B1 is done before M3 starts. B2 (H-PLOC) is done before M3 sign-off, and doesn't
 
 ## Still open
 
-1. **The fly-through's speed and spacing.** Dennis's pick (5 m/s at 1.5 m) rested on an estimate of about 90 probe updates a frame on Bistro exterior. T1.9a measured 20–27. At 1.5 m, 5 m/s needs about twice the whole budget for the entering planes alone (section 4.2). Under Budget v2 (accepted since), the floor for this volume is 51 probes a frame: 5 m/s at 1.5 m then needs about 43 of them, more than the 0.75 priority share allows (38), so `priorityShare` would rise to about 0.85 while the camera moves, leaving little for light changes. Options: 3 m spacing (5 m/s uses about 21), about 3 m/s at 1.5 m, or a higher calibrated count (the M1 lead's GPU-bound re-measure, T2.0's deferred shadow pass). I'd keep 1.5 m, target 5 m/s, and decide once the calibrated count is measured; if it leaves under half the budget for everything else, use 3 m for the moving volume.
+1. **The fly-through's speed and spacing: probably settled, pending a measurement.** Dennis's pick (5 m/s at 1.5 m) first rested on a wrong estimate (about 90 a frame), then T1.9a measured 20–27, which didn't fit. With the GPU loaded, Sponza runs about 7.4× T1.9a's rate (Budget v2, in review); scaled the same way, Bistro exterior gets about 170 a frame, and 5 m/s at 1.5 m needs about 43 of them. So the pick stands, provisionally. T1.9's GPU-loaded Bistro number confirms it; if it's under about 90, the options are again 3 m spacing or a slower speed.
 
 Apart from this, nothing is left open in this doc. The M1 lead records 1, 3, 5 and 7 in DECISIONS: they change or add to SPEC's tracing decision, the B1a review's no-readback wording, the startup target and the B-lane gate.

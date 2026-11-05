@@ -59,22 +59,23 @@ Everything about response time depends on how many probes are updated each frame
 **Budget v2** (accepted by Dennis, 2026-11-05; ddgi.md "Budget v2") sets that number by work, not by milliseconds:
 
 - The platform hands DDGI a fixed number of probes a frame. It's calibrated once at load, with the clocks up, so that the batch costs about the budget (2 ms) back to back.
-- **A floor:** never fewer than a full sweep in 4 s at the host's frame rate. That's 81 probes a frame on Sponza at 60 Hz. On the RTX, 81 Sponza probes cost 1.4 ms back to back (ddgi.md), so the floor sits inside 2 ms.
+- **A floor:** never fewer than a full sweep in 4 s at the host's frame rate (81 probes a frame on Sponza at 60 Hz).
 - Milliseconds only cut the number when frames are actually late.
 
-T1.9a's numbers came from the old millisecond controller at 60 Hz. DECISIONS says other apps kept the RTX's clocks up then, but NOTES records them still 1.8–2.1× down on Cornell (512 probes: 1.29 ms at 60 Hz against 0.70 ms back to back), so the rooms' numbers are probably on the low side. They are the best numbers there are for the small scenes until T1.9 re-measures under Budget v2:
+**Measured with the GPU loaded** (the M1 lead's Budget v2, 88dbe45, still in its Opus review): at 2 ms on the RTX, **Sponza updates about 266 probes a frame**, a full sweep in about 1.2 s. T1.9a's 30–43 was mostly the GPU's low-power state.
 
-| Scene | Probes | Probes per frame this doc uses (RTX) | Where it comes from |
+**Provisional.** Only Sponza is measured this way so far. Until the review passes and T1.9's GPU-loaded numbers for the other scenes land, **two-room and Bistro exterior are scaled from T1.9a by Sponza's ratio** (266 / 36 ≈ 7.4). Cornell keeps T1.9a's number, which already sweeps it in 2 frames.
+
+| Scene | Probes | Probes per frame this doc uses (RTX, 2 ms, GPU loaded) | Where it comes from |
 | --- | --- | --- | --- |
-| Cornell | 1,728 | ~890 | T1.9a median (875–910) |
-| Two-room | 1,071 | ~300 | T1.9a median (294–340) |
+| Cornell | 1,728 | ~890 | T1.9a median (875–910), not scaled |
+| Two-room | 1,071 | **all 1,071, every frame** | T1.9a's ~300 × 7.4 ≈ 2,200, more than it has, so capped at its probe count (scaled, provisional) |
 | Furnished room | 4,998 | **not measured** | |
-| Sponza | 19,425 | **81** | Budget v2's floor (T1.9a's old controller gave 30–43) |
-| Bistro exterior's camera volume (m3-moving.md) | 12,288 | **51** | Budget v2's floor (T1.9a gave 20–27 on the fixed volume) |
+| Sponza | 19,425 | **~266** | measured, Budget v2 (88dbe45, in review) |
+| Bistro exterior's camera volume (m3-moving.md) | 12,288 | **~170** | T1.9a's ~23 × 7.4 (scaled, provisional) |
 
-- **Sponza and Bistro use the floor,** a lower bound. The calibrated number may be higher; T1.9's re-measure says.
-- **Every time in this doc gets re-derived** once the M1 lead's GPU-bound numbers land.
-- Section 2's deferred shadow pass could raise the calibrated rate further. Nothing below assumes it does.
+- Every time in this doc that depends on these is re-derived again when T1.9's numbers land.
+- Section 2's deferred shadow pass could raise them further. Nothing below assumes it does.
 
 ## What others do, and what we copy
 
@@ -253,8 +254,8 @@ Cost: four dispatches of a few µs each, plus one thread per probe. Estimate: un
 | Scene | U | P (75%) | Changed probes fully served within 0.5 s |
 | --- | --- | --- | --- |
 | Cornell | ~890 | ~670 | ~2,500, more than its 1,728 probes |
-| Two-room | ~300 | ~225 | ~840, most of its 1,071 |
-| Sponza | 81 (floor) | ~61 | ~230 |
+| Two-room | 1,071 (all) | ~800 | every probe, 8 updates in 8 frames |
+| Sponza | ~266 | ~200 | ~750 |
 
 A lamp whose influence box holds more probes than that is served nearest-and-most-changed first. The visible image meets the target, while far, weakly changed probes finish later.
 
@@ -356,8 +357,8 @@ The last row is the largest. On open ground the sky is only 11–14% of daylight
   - Sponza's warm-up took about 2.3 s on the RTX (T1.9's cold start: first GI at 10.8 s, settled at 13.1 s). So transfers are built about halfway through it, around **1.2 s**.
   - Two-room's whole warm-up took 0.08 s.
 - **With the warm-up turned off, at the default budget,** an unbuilt probe counts as owed one update, at a low urgency (0.05, below any real change) times its camera weight. So the view builds first.
-  - The view's ~200 nearest probes need `200 × 8 / (0.75 × 81)` ≈ 26 frames, about **0.4 s** on Sponza.
-  - **The whole volume takes about 32 s** on Sponza: 8 sweeps of 4 s at Budget v2's floor. That's the same time the field itself takes to converge without a warm-up, which is why the warm-up is on by default. A host that turns it off accepts half a minute of an unconverged field at the far end of Sponza, with or without the instant sky.
+  - The view's ~200 nearest probes need `200 × 8 / (0.75 × 266)` ≈ 8 frames, about **0.13 s** on Sponza.
+  - **The whole volume takes about 10 s** on Sponza: 8 sweeps of 1.2 s. That's the same time the field itself takes to converge without a warm-up, which is why the warm-up is on by default. A host that turns it off gets an unconverged far end of Sponza for about 10 s, with or without the instant sky. The view is fine after 0.13 s.
 
 **The instant step is a nudge to the ordinary sky layer.** The probe's sky layer `S` (section 5's environment layer: what the probe stores from the sky) stays the real field. With the instant sky on, emissive surfaces go in the lights layer, so `S` holds only the sky. When the sky's weights change from `c` to `c'`, a pass computes, per texel and channel:
 
@@ -411,7 +412,7 @@ The change shows in the same frame. In other frames compose writes only the tile
 - So the instant sky is **on by default.** A guard turns it off, with a line in the stats, only past `skyTransferMaxMB` (default 512 MB), which no test scene comes near. The earlier 128 MB and 48 MB caps are gone.
 - **The furnished room** (everything the core owns): T1.9 measured 40.7 MB. With the instant sky (16.8 MB), the ray scratch for three layers (up to +4.2 MB) and the blend scratch (+1.5 MB), that's about 63 MB. SPEC now keeps its 64 MB as a guide, not a gate (revised 2026-11-05), so T2.6b reports it and nothing turns off.
 
-**What happens when geometry moves (M3).** A moved object changes what the sky can reach: a door closing cuts the dark room off from the window. M3's `ddgi/mark` (m3-moving.md section 5) marks probes near moved geometry. Their transfer count `m` is reset to 0 with their history. Their transfer re-accumulates from the updates they're owed anyway, and is built again after 8 of them. Until then they aren't nudged, and sky changes reach them by re-tracing. `S` itself is updated by the normal blend all along, so nothing jumps. **In a camera-following volume** entering probes get their 2 warming updates first; the other 6 come at the low building urgency. With the camera still, the priority share is free and they come within about 24 s. During a fly-through the entering planes take the priority share, so the other 6 come from the round robin alone (a quarter of 51, about 13 a frame, one pass per 16 s): about 1.5 minutes. In a fast fly-through, most entering probes reach the camera before their transfer is built, and sky changes reach them by re-tracing. Sky changes during a fly-through are rare, so that's accepted.
+**What happens when geometry moves (M3).** A moved object changes what the sky can reach: a door closing cuts the dark room off from the window. M3's `ddgi/mark` (m3-moving.md section 5) marks probes near moved geometry. Their transfer count `m` is reset to 0 with their history. Their transfer re-accumulates from the updates they're owed anyway, and is built again after 8 of them. Until then they aren't nudged, and sky changes reach them by re-tracing. `S` itself is updated by the normal blend all along, so nothing jumps. **In a camera-following volume** entering probes get their 2 warming updates first; the other 6 come at the low building urgency. With the camera still, the priority share is free and they come within about 1 s. During a fly-through the entering planes take part of the priority share (about 43 of Bistro's ~170 a frame at 5 m/s, m3-moving.md), so the other 6 come mostly from the round robin (a quarter of 170, about 42 a frame, one pass per 4.9 s): about 30 s. Most entering probes reach the camera before their transfer is built, so a sky change during a fast fly-through reaches them by re-tracing. That's accepted, because their irradiance is already right; only the instant step is missing.
 
 **Cost** (RTX 3060, estimates, to be measured GPU-bound):
 
@@ -424,7 +425,7 @@ The change shows in the same frame. In other frames compose writes only the tile
 | Sky still | the accumulation only |
 
 - **Far probes a quarter per frame:** on volumes above 8,000 probes, probes with a camera weight under 0.25 are nudged a quarter per frame (probe index mod 4). Each quarter keeps the sky weights it was last nudged with, so its nudges still add up exactly, and the far end of the volume shows a sky change within 4 frames. Near probes are nudged every frame.
-- **Under Budget v2** the probe count doesn't shrink while frames are on time, so the nudge adds to the update's GPU time in the frames where the sky changes. On Sponza at the floor that's about 1.4 ms + 0.1 ms. At a calibrated count the batch is already near 2 ms, so a sky-change frame relies on Budget v2's +10% margin (0.2 ms), which the far-quarter nudge fits and the every-tile nudge doesn't. T2.6b checks it at the calibrated count.
+- **Under Budget v2** the probe count doesn't shrink while frames are on time, so the nudge adds to the update's GPU time in the frames where the sky changes. On Sponza the calibrated batch (about 266 probes) is already near 2 ms, so a sky-change frame relies on Budget v2's +10% margin (0.2 ms), which the far-quarter nudge fits and the every-tile nudge doesn't. T2.6b checks it at the calibrated count.
 
 **Accuracy: measured first** (T2.6b's first check, before the rest is built).
 
@@ -441,7 +442,7 @@ It's today's field, driven by M2's change-driven updates (section 4). It's what 
 
 A change of the sun's direction (or of the sky) marks every probe (section 4.2). For a big step, all N probes need K updates, about `N × K / U` frames of the whole budget. Camera-near probes come first: with the camera weight, "near" means within about 4 spacings and in view, roughly the 100–300 probes that dominate the image.
 
-**Far probes owe fewer updates after a global change.** At K = 8 for every probe, the whole of Sponza takes about half a minute. So after a global change:
+**Far probes owe fewer updates after a global change.** At K = 8 for every probe, the whole of Sponza takes about 10 s, which Dennis calls a fail for a real-time game ("8s to update a scene in a realtime game would be considered a fail"). So after a global change:
 
 - probes with a camera weight of 0.5 or more (near and in view) owe 8;
 - the rest owe 2.
@@ -454,30 +455,32 @@ This applies only to volumes where 8 updates for every probe wouldn't fit in 2 s
 | Scene | Probes | U (RTX, the rates section) | View within 5% | Whole volume, K = 8 everywhere | Whole volume, far probes owe 2 |
 | --- | --- | --- | --- | --- | --- |
 | Cornell | 1,728 | ~890 | ~0.1 s | ~0.26 s | not needed |
-| Two-room | 1,071 | ~300 | ~0.1 s | ~0.48 s | not needed |
+| Two-room | 1,071 | all 1,071 (scaled) | ~0.13 s | ~0.13 s | not needed |
 | Furnished room | 4,998 | not measured | not measured | not measured | not measured |
-| Bistro exterior's camera volume | 12,288 | 51 (floor) | ~0.7 s | ~32 s | **~8.4 s** |
-| Sponza | 19,425 | 81 (floor) | ~0.4 s | ~32 s | **~8.2 s** |
+| Bistro exterior's camera volume | 12,288 | ~170 (scaled) | ~0.2 s | ~9.6 s | **~2.5 s** |
+| Sponza | 19,425 | ~266 (measured) | ~0.13 s | ~9.7 s | **~2.5 s** |
 
-- **Sponza and Bistro use Budget v2's floor,** so their times are the slow end. If the calibration gives more probes, they shrink in proportion. Every time here is re-derived once the M1 lead's GPU-bound numbers land.
+- **What the camera sees settles in 0.13–0.2 s** on every scene, well inside 2 s.
+- **The whole volume:** about 2.5 s on Sponza and Bistro with far probes owing 2. That's over 2 s, but the extra half second is out of view. **With 8 updates for every probe it's about 10 s, which fails Dennis's bar.** So far probes owing 2 isn't optional on these scenes; it's what keeps them near 2 s.
+- **Provisional:** Sponza's rate is measured (in review), two-room's and Bistro's are scaled (the rates section). Re-derived when T1.9's numbers land.
 - **Far probes owing 2 are noisier** for a while: about 448 rays each instead of about 1,800. Their history grows back with each sweep (every 4 s).
 - **These are for a big jump** (dragging the slider across hours). Dennis agreed (2026-11-05) to judge global changes on the view.
 - **A slow time-of-day animation** (an hour of sun in 10 s, 1.5° per second) changes each probe only a little between two of its updates, so the step rule in 4.1 wouldn't shorten its history, and with 32 updates of history it would lag far behind. Section 4.1's **ramp rule** handles this: a probe that keeps changing gets a history short enough that its lag stays near 5%.
-  - In two-room (a probe updated every ~3.5 frames) the change per update is tiny and the history stays near 32 updates: it trails by about 1.9 s, which costs under 5%.
-  - Far from the camera on Sponza, out of view, a probe is reached only by the round robin's quarter of the budget (about 20 probes a frame at the floor), so about every 16 s. The sun moves about 24° in that time, so the history drops below 1 update: those probes jump to each new estimate, about 16 s apart, with more noise. Near the camera the scheduler updates probes far more often.
+  - In two-room (every probe updated every frame) the change per update is tiny and the history stays near 32 updates: it trails by about 0.5 s (under 1° of sun), which costs well under 5%.
+  - Far from the camera on Sponza, out of view, a probe is reached only by the round robin's quarter of the budget (about 66 probes a frame), so about every 5 s. The sun moves about 7° in that time, so the history drops to about 1 update: those probes step from one estimate to the next about 5 s apart, with more noise. Near the camera the scheduler updates probes far more often.
 - **It blends, it never goes black.** Every probe moves from its old value toward its new one through its history (section 4.1). In view, that shows as the old lighting fading into the new. The exception is the one above: during a fast day animation, far, out-of-view Sponza probes have so little history that they step from one estimate to the next.
 
 ### 6.5 Re-tracing alone, or with the instant sky: the comparison
 
-On Sponza, on the RTX, at Budget v2's floor (81 probes a frame; the calibrated number may be higher):
+On Sponza, on the RTX, at the measured ~266 probes a frame (provisional, in review):
 
 | | Re-tracing near the camera, with the sun layer | The same, plus the first-order sky transfer |
 | --- | --- | --- |
 | Sun colour and brightness | same frame, exact (the sun layer) | same |
-| Sun direction | view within 5% in ~0.4 s; whole volume ~8 s | the same |
-| Sky change, in view | within 5% in ~0.4 s | most of it in the same frame (T2.6b measures how much); the rest ~0.4 s |
-| Sky change, whole volume | ~8 s | most of it within 4 frames; the rest ~8 s, at lower priority |
-| Build | none | from the field's rays: ~1.2 s into the warm-up; with the warm-up off, the view in ~0.4 s and the whole volume in ~32 s, as the field itself converges |
+| Sun direction | view within 5% in ~0.13 s; whole volume ~2.5 s | the same |
+| Sky change, in view | within 5% in ~0.13 s | most of it in the same frame (T2.6b measures how much); the rest ~0.13 s |
+| Sky change, whole volume | ~2.5 s | most of it within 4 frames; the rest ~2.5 s, at lower priority |
+| Build | none | from the field's rays: ~1.2 s into the warm-up; with the warm-up off, the view in ~0.13 s and the whole volume in ~10 s, as the field itself converges |
 | Extra memory | 20 MB (the sun layer and the composed atlas) | 65 MB |
 | Extra GPU cost | the sun layer (about +8–10% per probe update) | also +2–3% per probe update, and ~0.1 ms in frames where the sky changed |
 | New code | the layers (shared with light groups) | also the blend's accumulation, `ddgi/sky-nudge` and `ddgi/write`'s sky mode |
@@ -489,7 +492,9 @@ On Sponza, on the RTX, at Budget v2's floor (81 probes a frame; the calibrated n
 3. **The first-order sky transfer is added in T2.6b,** on by default, as the instant part of the sky. It meets Dennis's bar: it builds from the field's own rays, never later than the field itself, about 1.2 s into Sponza's warm-up (on by default). Its memory is small for the target machines.
 4. **It stays only if its first check passes** (it removes at least 70% of a sky change in the same frame). If it doesn't, it's dropped, and the rest stands unchanged.
 
-This keeps "instant with a delayed fallback" where instant is cheap. It drops the full transfer with bounces from the earlier draft. That transfer needed 64 updates per probe because each probe's bounce read its neighbours' transfers: 17–25 minutes on Sponza at the old controller's rate (still about 9 minutes at the floor), and 125 MB.
+**With the measured rate, the instant sky buys less than it did.** Re-tracing alone now settles a sky change in view in about 0.13 s (8 frames), so the transfer's gain in view is those 8 frames. Its larger gain is the far end of the volume, out of view (same frame against ~2.5 s). T2.6b's first check should weigh that against its 65 MB and its code; if the gain is too small to see, drop it.
+
+This keeps "instant with a delayed fallback" where instant is cheap. It drops the full transfer with bounces from the earlier draft. That transfer needed 64 updates per probe because each probe's bounce read its neighbours' transfers: 17–25 minutes on Sponza at the old controller's rate (still about 3 minutes at 266 probes a frame), and 125 MB.
 
 *Why not a separate pass of extra visibility rays to build the transfer faster:* it isn't needed. The field's own miss rays give the same transfer for free, and the field needs those updates anyway.
 
@@ -645,7 +650,7 @@ The startup items DECISIONS moved to M2 ("fast first GI", the scene copy off the
     2. Sponza's step change at bookmark 1 meets the same;
     3. no probe goes un-updated for more than 2 full round-robin passes during a 60 s sweep (census);
     4. the scheduler costs ≤ 0.05 ms at 20,000 probes, and the subgroup and fallback histograms agree exactly (on the Intel UHD too);
-    5. after a 30° sun step on Sponza, the mean error over all probes against a re-converged field is within 5% in ≤ 10 s at the calibrated count (far probes owing 2; the bar is re-set from the GPU-bound rates); the p95 and the far probes' extra noise are recorded;
+    5. after a 30° sun step on Sponza, the mean error over all probes against a re-converged field is within 5% in ≤ 3 s at the calibrated count, and the bookmark view's ROI in ≤ 0.5 s (far probes owing 2; re-set from T1.9's GPU-loaded rates); the p95 and the far probes' extra noise are recorded;
     6. the warm-up runs in the technique and is on by default: a host that does nothing gets the same first frames as the viewer does today.
   - Record: response curves (CSV), per GPU.
 - **T2.5 Light groups.**
@@ -688,16 +693,16 @@ The startup items DECISIONS moved to M2 ("fast first GI", the scene copy off the
 
 ## Risks, and what to spike first
 
-1. **The deferred pass may buy little** at Sponza's operating point, where the fixed cost dominates. Then Sponza stays near Budget v2's floor (81 probes a frame), and the response target is met only near the camera. This is the largest lever and the largest uncertainty. *Spike first: T2.0.*
+1. **The deferred pass may buy little** at Sponza's operating point, where the fixed cost dominates. Then Sponza stays at about 266 probes a frame (measured, in review), which already meets the response target in view. This is the largest lever and the largest uncertainty. *Spike first: T2.0.*
 2. **Short histories flicker.** At `n` = 0.42 the first update is 70% one noisy estimate. If that shows as a flash, raise the floor on `n`, or give marked probes 2× rays for their first update (at a cost). T2.4a's two-room step shows it.
 3. **Light-grid noise with many small lights.** Candles have short ranges, and a cell 2 probe spacings wide may hold many lights that matter only at its corners. The options are smaller cells near lights, more reservoirs, or Moreau's light tree. `sponza-candles` decides.
 4. **The change estimate is a stand-in.** `lightChangeScale` and the visibility floor are guesses until T2.4a compares marked probes against probes that really changed. Too generous wastes budget; too stingy leaves stale probes until the round robin reaches them.
 5. **Global changes on big scenes** can't meet 0.5 s everywhere at 2 ms by re-tracing (section 6.4). Dennis agreed to judge them on the view.
 6. **Native motion** needs fork changes, because the harness has no animation. Two-room first, Sponza second.
 7. **The instant sky may cover too little.** It moves only what a probe sees of the sky directly, plus a rescaled guess at the bounce. Deep inside Sponza's colonnade, where sky light arrives mostly by bounce, the same-frame share may fall under 70%, and then the transfer is dropped (T2.6b's first check). Re-tracing still carries time of day, so the plan doesn't depend on it.
-8. **Re-tracing after a big jump takes seconds far from the camera on Sponza:** about 8 s for the whole volume at Budget v2's floor with far probes owing 2 (6.4), and those far probes are noisier for a while. A higher calibrated count and T2.0's deferred shadow pass are the levers.
-9. **The ramp rule's short histories are noisy** far from the camera on Sponza during a day animation (the history drops below 1 update there, 6.4). If that flickers, the floor on `n` rises and those probes lag more.
-10. **The rates under Budget v2 aren't measured yet.** This doc uses T1.9a's old-controller medians for the rooms and the floor for Sponza and Bistro. The rooms' T1.9a numbers were probably taken with the clocks partly down, so their calibrated numbers are likely higher and their times shorter; if they come out lower, the times grow in proportion.
+8. **Re-tracing after a big jump, far from the camera, on Sponza and Bistro:** about 2.5 s for the whole volume with far probes owing 2 (6.4), over the 2 s Dennis's comment implies, though only out of view. With 8 updates everywhere it's about 10 s, a fail. The levers are a higher rate (T2.0's deferred shadow pass) and fewer probes far away (coarser far spacing, M3's volumes).
+9. **The ramp rule's short histories are noisy** far from the camera on Sponza during a day animation (the history drops to about 1 update there, 6.4). If that flickers, the floor on `n` rises and those probes lag more.
+10. **The rates are provisional.** Sponza's ~266 comes from Budget v2's measurement, still in review. Two-room's and Bistro's are scaled from T1.9a by Sponza's ratio (7.4×). If the scenes don't scale alike, their times change in proportion; T1.9's GPU-loaded numbers settle it.
 
 ## Decided by Dennis (2026-11-05)
 
@@ -710,11 +715,11 @@ The startup items DECISIONS moved to M2 ("fast first GI", the scene copy off the
 7. **No minutes-long builds:** "anything taking minutes to build is a fail and we should not go that direction." The full sky transfer with bounces (17–25 minutes on Sponza) is dropped; the first-order transfer (6.3) builds from the field's own rays in seconds.
 8. **Memory** is sized for mid- to high-end GPUs: "Why are we memory capping so low? this machine has like 6-8gb of GPU memory and 64gb of DDR5 CPU memory. mid to high end machines are the goal." The 128 MB and 48 MB caps are gone; the instant sky is on by default. SPEC now keeps the furnished room's 64 MB as a guide, not a gate (revised 2026-11-05).
 9. **Hardware:** the RTX 3060 and up and an Apple M5 Pro are the targets. The Intel UHD is a correctness test only ("we arent building for the intel").
-10. **Measurement:** benchmarks and estimates assume a loaded GPU with its clocks up ("Running at 60hz seems like a fail"). Budget v2 is accepted (work per frame, calibrated with the clocks up, a 4 s sweep floor); this doc's rates follow it, and its times get re-derived once the M1 lead's re-measure lands.
+10. **Measurement:** benchmarks and estimates assume a loaded GPU with its clocks up ("Running at 60hz seems like a fail"). Budget v2 is accepted (work per frame, calibrated with the clocks up, a 4 s sweep floor); this doc's rates follow its first measurement (Sponza ~266 a frame) and get re-derived when T1.9's numbers land.
 
 ## Still open
 
-1. **Far probes owing 2 updates after a global change** (6.4). It brings Sponza's whole volume from about 32 s to about 8 s at Budget v2's floor, but those far probes are noisier (about 448 rays instead of about 1,800) until later sweeps. OK? The alternative is 8 everywhere and about half a minute for the far end of Sponza.
+1. **Far probes owing 2 updates after a global change** (6.4). At the measured rate it brings Sponza's whole volume from about 10 s (a fail, by Dennis's "8s … would be considered a fail") to about 2.5 s, with the view settled in about 0.13 s either way. The cost: those far probes are noisier (about 448 rays instead of about 1,800) until later sweeps, a few seconds. I'd take it; is 2.5 s for the out-of-view part OK, or does it need to be under 2 s (then far probes owe 1, or the far end gets coarser probes)?
 2. **The sun layer at a white reference** (6.3, after "Showing it"). It departs from SPEC's HomeFig rule 3 ("not in white") for a single light, where the result is the same and the real-colour version can't be kept consistent while some probes are updated and others aren't. OK to record as a DECISIONS exception?
 
-Once the M1 lead's GPU-bound rates under Budget v2 land, every time in sections 4.3, 6.3, 6.4 and 6.5 is re-derived; no answer is needed for that.
+Every time in sections 4.3, 6.3, 6.4 and 6.5 is provisional: Sponza's from Budget v2's measurement (in review), the others scaled. They're re-derived when T1.9's GPU-loaded numbers land; no answer is needed for that.
