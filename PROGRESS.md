@@ -31,6 +31,16 @@ Numbers (indirect, against Cycles; bias, 8×8 block error, p95 block, FLIP 8×8,
 Not verified: the cause. The ratio map shows DDGI brighter on most shadowed surfaces, the curtains most.
 Next: find Sponza's +26% (leaks through thin curtains, probe density, sun shadow rays, the decal `dirt_decal` with GI albedo 0 acting as a black opaque surface because glTF's default metalness is 1 and M1 ignores `blocksLight`); a README section for `--materials-json`; the test view's full image is black on sky pixels.
 
+## 2026-11-05 · Frame breakdown, GI on against off · implementer (opus)
+Did: viewer-baselines gets a breakdown mode (`breakdown.ts`), labelling three's passes by render context; `stats.memory` now includes the sky (`shade.memoryBytes`), with a test (the `ddgi-memory` page still adds it itself, so it double-counts: to fix there).
+Found: **forward GI cost scales with fragment-shader runs, not visible pixels.** Sponza draws 5.7 M triangles; most are smaller than a pixel, and the GPU shades 2×2 blocks per triangle, so the GI function runs many times per pixel. A control material with no GI or textures costs 6.9× more on Sponza than Cornell on the RTX (13.6× on Intel); GI with one plain material shows nearly the same ratios (9×, 10.7×). A depth prepass doesn't help: Sponza shades only 1.98 fragments per pixel (Cornell 0.81, two-room 1.48). The update stayed at its budget (about 2.2 ms); warm-up, probe spheres, debug views and coverage were off. Textured materials made GI about 1.7× dearer on the RTX.
+Scene pass, GI off → on (DDGI's own update listed separately):
+- RTX 1440p: **Sponza 4.5 → 20.9 ms** (update 1.95; with prepass 21.5 + 3.3), two-room 1.2 → 3.65, Cornell 0.46 → 1.43.
+- RTX 720p: Sponza 4.0 → 11.4 (update 2.2), two-room 0.16 → 0.64, Cornell 0.10 → 0.31.
+- Intel 720p: Sponza 32.2 → 74.2 (+42; update 2.18), two-room 4.1 → 9.6, Cornell 4.8 → 12.3.
+The RTX runs were GPU-bound (8 frames back to back), but Dennis's apps were open and the SM clock under load had a median of only 650–990 MHz, so the absolutes are noisy; the ratios held across runs.
+Lever: shade GI once per pixel (a screen pass from depth and normals, which the contract's `encodeScreen` and `screenUV` already allow), or reduce geometry. Proposed to Dennis (DECISIONS).
+
 ## 2026-11-05 · Dennis reviewed the viewer · parent session relayed
 His words: "it is not steady" (the flicker threshold). "The cornell box particularly the color sides is constantly moving. its like the lighting cant settle and is very noisy. I dont have debug views of the source channels or info to be able to provide more details. using the upscaler seems to settle this. Its not visible in either threejs version so its us." And: "640 x 360 is an insane size to judge ANYTHING against. Do a HD render and store that, that can be a baseline."
 New M1 blockers (DECISIONS): Cornell's flicker; debug views of the source channels; HD Cycles references (1920+, anti-aliased, stored with their cameras, the viewer's Compare matching them). Earlier he wrote: "The viewer loads but quality has issues, they may be addressed later."
