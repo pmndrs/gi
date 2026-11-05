@@ -31,6 +31,20 @@ Numbers (indirect, against Cycles; bias, 8×8 block error, p95 block, FLIP 8×8,
 Not verified: the cause. The ratio map shows DDGI brighter on most shadowed surfaces, the curtains most.
 Next: find Sponza's +26% (leaks through thin curtains, probe density, sun shadow rays, the decal `dirt_decal` with GI albedo 0 acting as a black opaque surface because glTF's default metalness is 1 and M1 ignores `blocksLight`); a README section for `--materials-json`; the test view's full image is black on sky pixels.
 
+## 2026-11-05 · T1.9 quiet-window measurements · gpu-tester (sonnet), lead checked
+Did (453d213): with Dennis's GPU apps closed, about 57 min, all under the lock, medians of 3 (rows `note/quiet,1`; native label `t1.9-quiet`). Before every set the RTX read 0% use, 210 MHz, P8, 12 W, and nothing else ran on it (only the compositor and the Claude app, about 1.3% each, on the other adapter). SM clock under load about 1400–1500 MHz. HEAD 90c54e2 plus tool-page options (width and height, `--note`, per-pass steady medians).
+Numbers (RTX 3060, headless Chrome 156):
+- **GI sampling at 1440p:** front 0.548 ms, inside 0.923 ms (0.923–0.960); bar 1.0 on the inside view: met.
+- **Startup, cold Chrome profile (the driver's shader cache was probably warm), first GI drawn,** from handoff / from file request: Cornell 1.44 / 1.63 s, two-room 1.40 / 1.56 s, Sponza 4.75 / 7.63 s. Target ≤ 2 s from handoff: met on Cornell and two-room, missed on Sponza.
+- **Whole frame, GPU ms, GI on minus off, p50 (p95 delta):** 720p Cornell +2.56 (3.66), two-room +2.57 (3.01), Sponza +4.23 (3.58); 1440p Cornell +2.41 (4.83), two-room +3.18 (2.85), Sponza +6.18 (5.43). Target ≤ +3 ms p50. Inflated by the power-state effect below.
+- **Fixed batch, update ms p50 / p95** at 60 Hz, then back to back: Cornell 2.04 / 2.19 and 1.07 / 2.05; two-room 2.04 / 2.23 and 1.10 / 2.07; Sponza 2.33 / 8.90 and 1.11 / 4.60; Bistro exterior 2.89 / 10.36 and 1.33 / 5.07.
+- **The 2 ms budget:** Cornell 2.04 ms, 118 / 138 / 147 probes (sweep 0.2 s); two-room 2.03 ms, 33 / 39 / 44 (0.5 s); **Sponza 2.35 ms, 1 / 2 / 3 probes (sweep 162 s); Bistro exterior 2.49 ms, 1 / 3 / 4 (161 s).** The page's ±10% check failed on Sponza and Bistro (`note/page_failed`).
+- **Sponza at a fixed 20 probes,** trace / blend / write ms: 60 Hz 2.47 / 0.13 / 0.01 (total 2.63, p95 7.05); back to back 1.37 / 0.05 / 0.01 (1.44, p95 4.81). Spikes every other frame (33.3 ms apart), not the outside 50 ms pattern.
+- **Native, matched grids** (trace / blend ms): Cornell 0.68 / 0.40, two-room 0.53 / 0.35, Sponza 11.4 / 4.02 (slower than the 8.6–8.8 trace measured with Dennis's apps open).
+- **Three's baselines on Bistro exterior:** still too noisy to quote (GI-cost coefficient of variation 1.1–2.0). VXGI frame 24.4 ms, LightProbeGrid 10.9 ms (`baselines.csv`).
+**The finding:** on a quiet machine at 60 Hz with a light load, the RTX drops into its low-power state (P8, 210–560 MHz; median SM clock 240 MHz over the budget set). With Dennis's apps running, they kept the clocks up. So the 2 ms GPU-time budget bought 2–3 probes on Sponza where it bought 30–43 before, and much of the "fixed cost" chased in T1.9a is the power state. The whole-frame deltas and native's slower trace show the same effect. A budget in GPU milliseconds isn't stable under power management (proposal in DECISIONS).
+Not measured: the Intel GPU in a quiet window.
+
 ## 2026-11-05 · Sponza +26% investigation · implementer (opus), lead checked the logic
 Did (079e2d5): `ddgi-shared/path-tracer.ts` (a path tracer over the platform's tracer and hit shading) and `probe-values.ts`; the Sponza page gained `ddgi`, `parts`, `excludeMaterials`, `pathTrace` and `probeCheck` options and probe-state counts; `run.ts` writes and compares `pt-untextured-indirect*.exr`. No core code changed.
 Verified (agent; RTX 3060 and Intel UHD): experiments, each one change (DDGI against Cycles or the path tracer):

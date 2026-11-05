@@ -4,6 +4,12 @@ Settled choices, newest first. Each entry is short: the decision, why, and what 
 
 ## 2026-11-05
 
+- **Proposed, waiting on Dennis: the budget gets a floor, and costs are judged where the clocks are up** (M1 lead, after the T1.9 quiet window).
+  - *The problem:* a GPU-millisecond budget can't tell "this work is expensive" from "the GPU is in its low-power state". On a quiet machine at 60 Hz the RTX sits in P8, so 2 ms bought 2–3 Sponza probes a frame (a full sweep every 162 s) against 30–43 when other apps kept the clocks up.
+  - *But the budget's purpose is to protect the frame time.* A GPU idling in P8 has room to spare, so spending more of it there costs the frame nothing.
+  - **Proposal 1, a floor:** DDGI never updates fewer than `minProbesPerFrame` probes, default "auto" = enough for a full sweep within a set time (e.g. 4 s at 60 Hz, which is 81 probes on Sponza and 8 on Cornell), whatever the ms budget says. The ms budget can raise the batch above the floor; `budget.units` stays a hard cap above everything. This bounds convergence time on every machine.
+  - **Proposal 2, measuring:** SPEC's "update ≤ 2 ms" and "GI adds ≤ 3 ms p50" are judged with the GPU clocks up (back to back, or a GPU-bound frame), because that's when the milliseconds matter. The 60 Hz light-load numbers are reported as information, with the clock note.
+  - Host-facing: proposal 1 adds a DDGI setting. Dennis decides.
 - **Proposed, waiting on Dennis: how M1 judges Sponza's accuracy** (M1 lead, after the +26% investigation).
   - **The cause of +26%** is the curtains, folded single-sheet cloth, read through probes at 1 m spacing. Without them DDGI reads +2.6% against path tracing. The probes themselves match path tracing at their own positions within 0.5%, so the excess comes from reading them at surfaces next to thin folded cloth. It's DDGI's resolution limit, not a bug: denser probes shrink it about linearly (+26% / +20% / +12% at 1 / 0.75 / 0.5 m). Biases, texel counts, ray counts and the classification and relocation settings each move it by 1–2 points or less.
   - **Proposal:** judge M1's Sponza accuracy on the base package (+2.6%, inside ±10%), and report the curtained `sponza` (+26%) as a known DDGI limit. The fixes are denser probes where cloth hangs (0.5 m everywhere is 7.6× the probes and still +12%) or a near-surface occlusion term in shading, both after M1.
