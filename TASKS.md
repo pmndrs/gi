@@ -352,6 +352,7 @@ Done-whens for the B stages are in `docs/design/bvh-framework.md`. B1a's: a 10k-
 - A texture sky in the native harness's miss shader (DECISIONS 2026-11-04).
 - Area lights on the platform, so an emitter's direct light can be analytic and DDGI holds only its bounced light (DECISIONS 2026-11-05, the viewer entry).
 - A public "acceleration structures built" signal on the platform (the viewer duck-types `rays.whenBuilt`).
+- **Fast first GI** (Dennis, provisional): first GI from B1's GPU-built trees, swapping to tinybvh's when the worker finishes; plus the other startup levers: file loading, the scene copy off the main thread, the cold shader compile.
 - Light-change response from `SceneChanges` (the big-change rule is off; DECISIONS 2026-11-05).
 - A deferred shadow-ray pass in platform hit shading: shadow rays take 53% of Sponza's DDGI trace and run at 1/7 of the bench any-hit rate (T1.9a).
 - `encodeBatch` kernels compiled only on first use; why the sky SH projection takes 1 s to compile.
