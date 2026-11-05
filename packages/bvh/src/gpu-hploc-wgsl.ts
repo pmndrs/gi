@@ -115,8 +115,12 @@ const LEVEL_BITS = 7;
 /** Highest level a radix-tree node may have: one below the "unwritten" pattern's. */
 export const HPLOC_MAX_LEVEL = (1 << LEVEL_BITS) - 2;
 
-/** Most triangles one mesh may have: cluster numbers (twice the triangles) must fit above the level bits. */
-export const HPLOC_MAX_MESH_TRIANGLES = 2 ** (32 - LEVEL_BITS - 1);
+/**
+ * Most triangles one mesh may have: cluster numbers (below twice the triangles)
+ * must fit above the level bits, and a node's triangle count in the info word's
+ * 24 bits (so one less than 2^24).
+ */
+export const HPLOC_MAX_MESH_TRIANGLES = 2 ** (32 - LEVEL_BITS - 1) - 1;
 
 /** A record's info word: triangles above bit 8, the collapse flag at bit 7, the height (0 if collapsed) below. */
 const INFO_TRIANGLES_SHIFT = 8;
@@ -766,6 +770,11 @@ fn hplocMerge(mesh: LbvhMesh, node: HplocNode, lane: u32, laneCount: u32) -> u32
     }
 
     // 4. What is left, at the start of the node's range, tagged with its level.
+    //    Positions past the left child's own clusters may last have been written
+    //    by a deeper node that this one never read. WGSL's relaxed atomics don't
+    //    order those two writes, so in theory the deeper one could end up last;
+    //    the parent would then wait for this level in vain, run out, and the
+    //    tree would be refused (never built wrong). No run has seen it.
     for (var slot = 0u; slot < HPLOC_SLOTS; slot += 1u) {
         let index = slot * laneCount + lane;
         if (index < count) {
