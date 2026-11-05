@@ -1,0 +1,4 @@
+{
+    "description": "B2: GPU H-PLOC trees (the B1 cases: edge cases, soups, a grid, duplicates, flat meshes, GPU-resident input) through the layout checker; with the default codes against the CPU twin, with tinybvh's codes and one-triangle leaves against tinybvh's BuildHPLOC (SAH cost within 1%); a mesh with a bad index is refused.",
+    "timeoutMs": 300000
+}

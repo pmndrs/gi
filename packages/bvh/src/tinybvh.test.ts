@@ -67,4 +67,15 @@ describe('tinybvh in WASM', () => {
         const builder = await createTinyBvhBuilder();
         expect(() => builder.build({ positions: randomSoup(1, 1), indices: Uint32Array.of(0, 1, 9) })).toThrow(/index 2/);
     });
+
+    it("builds with its H-PLOC builder when asked (one triangle per leaf), and refuses a builder it doesn't have", async () => {
+        const builder = await createTinyBvhBuilder();
+        for (const count of [1, 2, 7, 3000]) {
+            const leafSizes = checkTopology(builder.build({ positions: randomSoup(count, count) }, { builder: 'hploc' }).topology, count);
+            expect(leafSizes.every((size) => size === 1)).toBe(true);
+        }
+        // The default builder still runs after an H-PLOC build: the choice is per build.
+        expect(checkTopology(builder.build({ positions: randomSoup(3000, 1) }).topology, 3000).some((size) => size > 1)).toBe(true);
+        expect(() => builder.build({ positions: randomSoup(1, 1) }, { builder: 'sweep' as 'hploc' })).toThrow(/unknown tinybvh builder/);
+    });
 });

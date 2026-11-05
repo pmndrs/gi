@@ -29,5 +29,8 @@ describe('createMeshLayoutBuilder', () => {
         const forced = await createMeshLayoutBuilder(device, { prefer: 'tinybvh' });
         expect(forced.kind).toBe('tinybvh');
         expect(forced.fallbackReason).toMatch(/asked/);
+        // Asking for either GPU builder on a device without subgroups still gives tinybvh.
+        const withoutSubgroups = { features: new Set<string>() } as unknown as GPUDevice;
+        for (const prefer of ['gpu-hploc', 'gpu-lbvh'] as const) expect((await createMeshLayoutBuilder(withoutSubgroups, { prefer })).kind).toBe('tinybvh');
     });
 });

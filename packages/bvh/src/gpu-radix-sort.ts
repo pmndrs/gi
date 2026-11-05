@@ -228,7 +228,7 @@ export async function createRadixSortPipelines(device: GPUDevice, scan: ScanPipe
     return { count, scatter, scan };
 }
 
-/** The buffers one sort uses. Keys and values ping-pong between `a` and `b`; with an even pass count the result ends in `a`. */
+/** The buffers one sort uses. Keys and values ping-pong between `a` and `b`: the result ends in `a` after an even number of passes, in `b` after an odd one. */
 export interface RadixSortBuffers {
     readonly keysA: GPUBuffer;
     readonly valuesA: GPUBuffer;
@@ -250,6 +250,8 @@ export interface RadixSortBuffers {
 /** A sort over fixed buffers and segments, with its bind groups made once. */
 export interface RadixSort {
     readonly passes: number;
+    /** Whether the sorted keys and values end in buffers `a` (an even pass count) or `b`. */
+    readonly resultInA: boolean;
     /** Writes the uniforms. They never change, so once is enough. */
     writeParams(queue: GPUQueue): void;
     encode(pass: GPUComputePassEncoder): void;
@@ -265,7 +267,6 @@ export function createRadixSort(
     label: string,
 ): RadixSort {
     const passes = radixPassCount(keyBits);
-    if (passes % 2 !== 0) throw new RangeError(`the sort needs an even number of passes to end in buffer a; ${keyBits}-bit keys take ${passes}`);
     const { tileCount, offsetWords } = table;
     const scanParamsOffset = buffers.paramsOffset + passes * buffers.paramsStride;
     const maxPerDimension = device.limits.maxComputeWorkgroupsPerDimension;
@@ -304,6 +305,7 @@ export function createRadixSort(
 
     return {
         passes,
+        resultInA: passes % 2 === 0,
         writeParams(queue) {
             for (let pass = 0; pass < passes; pass++) {
                 queue.writeBuffer(buffers.params, buffers.paramsOffset + pass * buffers.paramsStride, sortParams(pass, tileCount, buffers.tilesOffset));

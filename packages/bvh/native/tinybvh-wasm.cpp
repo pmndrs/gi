@@ -1,9 +1,11 @@
-// A small C interface over tinybvh's default triangle builder, compiled to
+// A small C interface over tinybvh's triangle builders, compiled to
 // WebAssembly (see build-wasm.ts). With AVX available (Emscripten emulates it on
 // WASM SIMD), `BVH::Build` runs tinybvh's SIMD Bonsai builder (Ganestam et al.,
 // 2015: small binned-SAH trees over a grid of cells, joined by a top tree). On
 // Sponza it is about 3x faster than tinybvh's scalar reference builder and its
-// trees have a lower SAH cost.
+// trees have a lower SAH cost. tinybvh's scalar H-PLOC builder (BuildHPLOC)
+// can be asked for instead: it is the oracle the GPU H-PLOC (stage B2) is
+// compared with, not a builder the tracer uses.
 //
 // It builds one mesh at a time and leaves the result in WASM memory for
 // JavaScript to read (src/tinybvh.ts), in one of two forms:
@@ -62,6 +64,14 @@ enum Status : uint32_t {
     STATUS_BAD_TREE = 7,
     // An array for this mesh would be 4 GB or more, which 32-bit WASM cannot address.
     STATUS_TOO_LARGE = 8,
+    // tbvh_build was asked for a builder it does not have (see Builder).
+    STATUS_BAD_BUILDER = 9,
+};
+
+// Which of tinybvh's builders tbvh_build runs. Mirrored in src/tinybvh.ts.
+enum Builder : uint32_t {
+    BUILDER_DEFAULT = 0,  // BVH::Build: the SIMD Bonsai builder
+    BUILDER_HPLOC = 1,    // BVH::BuildHPLOC (settings.useHPLOC): leaves of one triangle
 };
 
 // What STATUS_BAD_TREE found, in tbvh_error_detail(). Mirrored in src/tinybvh.ts.
@@ -207,11 +217,13 @@ static void releaseAll()
 // Builds a tree over `triangleCount` triangles. `positions` holds x, y, z per
 // vertex. `indices` holds three vertex indices per triangle, or is null for a
 // plain triangle list (three vertices per triangle); it must stay allocated
-// until tbvh_release, because tbvh_write_layout reads it again. Returns a Status.
-EXPORT uint32_t tbvh_build(const float* positions, uint32_t vertexCount, const uint32_t* indices, uint32_t triangleCount)
+// until tbvh_release, because tbvh_write_layout reads it again. `builder` is a
+// Builder. Returns a Status.
+EXPORT uint32_t tbvh_build(const float* positions, uint32_t vertexCount, const uint32_t* indices, uint32_t triangleCount, uint32_t builder)
 {
     releaseAll();
     errorDetail = 0;
+    if (builder != BUILDER_DEFAULT && builder != BUILDER_HPLOC) return STATUS_BAD_BUILDER;
     if (triangleCount == 0) return STATUS_NO_TRIANGLES;
     // Three indices per triangle must be countable in 32 bits, and the vertex
     // copy must fit (which also keeps `vertex * 3` below from wrapping).
@@ -242,6 +254,7 @@ EXPORT uint32_t tbvh_build(const float* positions, uint32_t vertexCount, const u
     current.triangleCount = triangleCount;
 
     current.bvh = new tinybvh::BVH();
+    current.bvh->settings.useHPLOC = builder == BUILDER_HPLOC;
     const tinybvh::bvhvec4slice slice(current.vertices, vertexCount, sizeof(tinybvh::bvhvec4));
     if (indices) {
         current.bvh->Build(slice, indices, triangleCount);

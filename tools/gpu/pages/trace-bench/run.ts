@@ -36,7 +36,7 @@ import {
 import { createDispatchTimer, type DispatchTimer } from './dispatch-timer.ts';
 import { GpuLbvhBuilder } from '../../../../packages/bvh/src/gpu-lbvh.ts';
 import {
-    buildLbvhScene,
+    buildGpuScene,
     buildOursScene,
     buildTmbuildScene,
     estimateNsPerRay,
@@ -147,6 +147,7 @@ async function runScene(context: BenchContext, sceneId: string): Promise<SceneRe
         ours: null,
         oursTmbuild: null,
         oursLbvh: null,
+        oursHploc: null,
         oursTinybvh: null,
         tmbvh: null,
         modes: [],
@@ -253,23 +254,32 @@ async function runScene(context: BenchContext, sceneId: string): Promise<SceneRe
             await yieldToBrowser();
         }
 
-        // The GPU LBVH's trees (B1), traced by our watertight walk; built after tinybvh's are done with the GPU.
-        if (config.tracers.includes('ours-lbvh') && oursAvailable) {
+        // The GPU builders' trees (B1 LBVH, B2 H-PLOC), traced by our watertight walk; built after tinybvh's are done with the GPU.
+        const gpuBuilders = [
+            { tracer: 'ours-lbvh', kind: 'lbvh', name: 'LBVH' },
+            { tracer: 'ours-hploc', kind: 'hploc', name: 'H-PLOC' },
+        ] as const;
+        for (const { tracer, kind, name } of gpuBuilders) {
+            if (!config.tracers.includes(tracer) || !oursAvailable) continue;
             try {
-                if (!GpuLbvhBuilder.isSupported(device)) throw new Error('the device has no subgroups, so the GPU LBVH does not run (its fallback is tinybvh)');
-                progress(`${sceneId}: building on the GPU (LBVH, one batch of ${scene.meshes.length} meshes)`);
-                const lbvh = await buildLbvhScene(device, context.timer, scene.meshes, scene.instances, ours.bvhs);
-                result.oursLbvh = lbvh.result;
+                if (!GpuLbvhBuilder.isSupported(device)) throw new Error(`the device has no subgroups, so the GPU ${name} does not run (its fallback is tinybvh)`);
+                progress(`${sceneId}: building on the GPU (${name}, one batch of ${scene.meshes.length} meshes)`);
+                const built = await buildGpuScene(device, context.timer, kind, scene.meshes, scene.instances, ours.bvhs);
+                if (kind === 'lbvh') result.oursLbvh = built.result;
+                else result.oursHploc = built.result;
+                const match = built.result.sahCostVsTinybvhHploc;
                 progress(
-                    `${sceneId}: ours-lbvh built in ${lbvh.result.gpuBuildMsMedian.toFixed(2)} ms of GPU time (median of ${lbvh.result.gpuBuildRuns}; ` +
-                        `${Math.round(lbvh.result.wallBuildMs)} ms wall for the first, with uploads), read back in ${Math.round(lbvh.result.readbackMs)} ms; ` +
-                        `SAH cost ${lbvh.result.sahCostVsTinybvh.toFixed(3)}x tinybvh's, depth ${lbvh.result.maxMeshDepth}, ` +
-                        `${(lbvh.result.bytesTotal / 1e6).toFixed(1)} MB, ${lbvh.result.meshesFallenBack} meshes fell back`,
+                    `${sceneId}: ${tracer} built in ${built.result.gpuBuildMsMedian.toFixed(2)} ms of GPU time (median of ${built.result.gpuBuildRuns}; ` +
+                        `loaded, back to back: ${built.result.gpuBuildLoadedMsMedian.toFixed(2)} ms, median of ${built.result.gpuBuildLoadedRuns} over ${built.result.gpuBuildLoadedSeconds.toFixed(1)} s; ` +
+                        `${Math.round(built.result.wallBuildMs)} ms wall for the first, with uploads), read back in ${Math.round(built.result.readbackMs)} ms; ` +
+                        `SAH cost ${built.result.sahCostVsTinybvh.toFixed(3)}x tinybvh's, depth ${built.result.maxMeshDepth}, ` +
+                        `${(built.result.bytesTotal / 1e6).toFixed(1)} MB, ${built.result.meshesFallenBack} meshes fell back` +
+                        (match === undefined ? '' : `; with tinybvh's codes and ties, ${match.toFixed(4)}x the SAH cost of tinybvh's BuildHPLOC`),
                 );
-                finish('ours-lbvh', await runOursTracer(device, context.timer, 'ours-lbvh', lbvh.data, oursRays, plan));
+                finish(tracer, await runOursTracer(device, context.timer, tracer, built.data, oursRays, plan));
             } catch (error) {
-                result.skipped.push(`ours-lbvh: ${error instanceof Error ? error.message : String(error)}`);
-                progress(`${sceneId}: ours-lbvh skipped (${error instanceof Error ? error.message : String(error)})`);
+                result.skipped.push(`${tracer}: ${error instanceof Error ? error.message : String(error)}`);
+                progress(`${sceneId}: ${tracer} skipped (${error instanceof Error ? error.message : String(error)})`);
             }
             await yieldToBrowser();
         }
@@ -349,6 +359,7 @@ async function runScene(context: BenchContext, sceneId: string): Promise<SceneRe
         ['ours-tmbuild', 'tmbvh'],
         ['ours-tinybvh', 'platform'],
         ['ours-tinybvh', 'ours-lbvh'],
+        ['ours-tinybvh', 'ours-hploc'],
     ];
     for (const [a, b] of pairs) {
         const runA = runs.get(a);

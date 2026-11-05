@@ -119,25 +119,39 @@ function sceneRows(result: SceneResult): MetricRow[] {
             { scene, metric: 'ours-tmbuild/memory_bytes', value: tmbuild.bytesTotal },
         );
     }
-    const lbvh = result.oursLbvh;
-    if (lbvh) {
+    for (const [tracer, built] of [
+        ['ours-lbvh', result.oursLbvh],
+        ['ours-hploc', result.oursHploc],
+    ] as const) {
+        if (!built) continue;
         rows.push(
-            { scene, metric: 'ours-lbvh/build_gpu_ms_median', value: lbvh.gpuBuildMsMedian },
-            { scene, metric: 'ours-lbvh/build_gpu_ms_min', value: lbvh.gpuBuildMsMin },
-            { scene, metric: 'ours-lbvh/build_gpu_ms_max', value: lbvh.gpuBuildMsMax },
-            { scene, metric: 'ours-lbvh/build_gpu_runs', value: lbvh.gpuBuildRuns },
-            { scene, metric: 'ours-lbvh/build_timestamp_timed', value: lbvh.gpuBuildTimestampTimed },
-            { scene, metric: 'ours-lbvh/build_ms_wall', value: lbvh.wallBuildMs },
-            { scene, metric: 'ours-lbvh/readback_ms', value: lbvh.readbackMs },
-            { scene, metric: 'ours-lbvh/sah_cost_vs_tinybvh', value: lbvh.sahCostVsTinybvh },
-            { scene, metric: 'ours-lbvh/meshes_fallen_back', value: lbvh.meshesFallenBack },
-            { scene, metric: 'ours-lbvh/nodes', value: lbvh.nodeCount },
-            { scene, metric: 'ours-lbvh/max_mesh_depth', value: lbvh.maxMeshDepth },
-            { scene, metric: 'ours-lbvh/stack_entries_needed', value: lbvh.requiredStackSize },
-            { scene, metric: 'ours-lbvh/memory_bytes_nodes', value: lbvh.bytesNodes },
-            { scene, metric: 'ours-lbvh/memory_bytes_triangles', value: lbvh.bytesTriangles },
-            { scene, metric: 'ours-lbvh/memory_bytes', value: lbvh.bytesTotal },
+            { scene, metric: `${tracer}/build_gpu_ms_median`, value: built.gpuBuildMsMedian },
+            { scene, metric: `${tracer}/build_gpu_ms_min`, value: built.gpuBuildMsMin },
+            { scene, metric: `${tracer}/build_gpu_ms_max`, value: built.gpuBuildMsMax },
+            { scene, metric: `${tracer}/build_gpu_runs`, value: built.gpuBuildRuns },
+            { scene, metric: `${tracer}/build_timestamp_timed`, value: built.gpuBuildTimestampTimed },
+            { scene, metric: `${tracer}/build_gpu_loaded_ms_median`, value: built.gpuBuildLoadedMsMedian },
+            { scene, metric: `${tracer}/build_gpu_loaded_ms_min`, value: built.gpuBuildLoadedMsMin },
+            { scene, metric: `${tracer}/build_gpu_loaded_ms_max`, value: built.gpuBuildLoadedMsMax },
+            { scene, metric: `${tracer}/build_gpu_loaded_runs`, value: built.gpuBuildLoadedRuns },
+            { scene, metric: `${tracer}/build_gpu_loaded_seconds`, value: built.gpuBuildLoadedSeconds },
+            { scene, metric: `${tracer}/build_ms_wall`, value: built.wallBuildMs },
+            { scene, metric: `${tracer}/readback_ms`, value: built.readbackMs },
+            { scene, metric: `${tracer}/sah_cost_vs_tinybvh`, value: built.sahCostVsTinybvh },
+            { scene, metric: `${tracer}/meshes_fallen_back`, value: built.meshesFallenBack },
+            { scene, metric: `${tracer}/nodes`, value: built.nodeCount },
+            { scene, metric: `${tracer}/max_mesh_depth`, value: built.maxMeshDepth },
+            { scene, metric: `${tracer}/stack_entries_needed`, value: built.requiredStackSize },
+            { scene, metric: `${tracer}/memory_bytes_nodes`, value: built.bytesNodes },
+            { scene, metric: `${tracer}/memory_bytes_triangles`, value: built.bytesTriangles },
+            { scene, metric: `${tracer}/memory_bytes`, value: built.bytesTotal },
         );
+        if (built.sahCostVsTinybvhHploc !== undefined) {
+            rows.push(
+                { scene, metric: `${tracer}/sah_cost_vs_tinybvh_hploc`, value: built.sahCostVsTinybvhHploc },
+                { scene, metric: `${tracer}/hploc_match_meshes_refused`, value: built.hplocMatchMeshesRefused ?? 0 },
+            );
+        }
     }
     const platform = result.platform;
     if (platform) {

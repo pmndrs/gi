@@ -1,0 +1,5 @@
+{
+    "description": "B2 benchmark on sponza: GPU H-PLOC build time, tree cost (against tinybvh's default build and its BuildHPLOC), and trace speed on its trees against tinybvh's. Slow; run under the bench lock, on its own.",
+    "timeoutMs": 900000,
+    "manual": true
+}

@@ -4,8 +4,58 @@ Engine-free BVH builders for the ddgi platform (docs/design/bvh-framework.md).
 A builder produces a plain tree description (`MeshTreeTopology`, in
 `src/topology.ts`), which the tracer in `@pmndrs/ddgi-core` turns into its GPU
 layout, or writes that layout itself (`GpuLayoutMeshBvh`, in `src/gpu-layout.ts`):
-tinybvh in WebAssembly (B0) on the CPU, the LBVH (B1) on the GPU.
+tinybvh in WebAssembly (B0) on the CPU, the LBVH (B1) and H-PLOC (B2) on the GPU.
 This package is bundled into `@pmndrs/ddgi` and never published on its own.
+
+## GPU H-PLOC (stage B2)
+
+`src/gpu-hploc.ts` (`GpuHplocBuilder`) is the target GPU builder: H-PLOC
+(Benthin et al., HPG 2024), behind the same contract as the LBVH and with the
+same output (`GpuLbvhTrees`, the tracer's layout). It reuses the LBVH's batches,
+triangle boxes, Morton codes, sort, scans and readback, and climbs the same
+radix tree; on the way up it merges clusters with PLOC, so its trees are close
+to a full SAH build's. The kernels are in `src/gpu-hploc-wgsl.ts`, ported from
+tinybvh's `BuildHPLOC` (MIT, `licenses/tinybvh.txt`):
+
+1. a node of at most 16 triangles holds them as they are; a bigger node (and
+   the root) holds its children's clusters, at most 32, and merges mutual
+   nearest neighbours (search radius 8, by merged surface area) until 16 are
+   left (the root: one);
+2. the whole subgroup merges one node at a time, with each cluster in a lane
+   and slot (`ceil(32 / smallest subgroup size)` slots per lane: one on 32-wide
+   GPUs, four on the Intel UHD) and shuffles by cluster number, so the tree is
+   the same on every subgroup size (the RTX and the Intel build identical trees);
+3. the SAH leaf collapse (B1's rule) is decided as each node is made; a scan
+   numbers the nodes that stay, and a second gives each kept node's leaves
+   their run of triangle positions (each leaf's triangles together).
+
+As in the LBVH, everything one climbing thread hands to another is an atomic,
+written once and read with a bounded wait. A node's stored clusters reuse
+positions on the way up, so each entry carries its writer's radix-tree level.
+
+**Options** (`HplocOptions`): the LBVH's, plus `mortonCodes` (`'cubic-30'`,
+B1's, the default; or `'tinybvh-63'`, tinybvh's 63-bit codes, two sort words)
+and `tieBreak` (`'pairs'`, the default, or `'tinybvh'`). On exactly equal
+merged areas tinybvh's rule chains the tree (3000 identical triangles: depth
+128, twice the tracer's stack); `'pairs'` pairs ties up and keeps it balanced.
+
+**The oracle.** `src/hploc-cpu.ts` is H-PLOC on the CPU, step for step, with
+the same options. With tinybvh's codes and tie rule it builds exactly the tree
+of tinybvh's `BuildHPLOC`, which the WASM wrapper now exposes
+(`buildLayout(geometry, { builder: 'hploc' })`); the unit tests check that.
+The GPU's trees match the twin's (same SAH cost and node count), and with
+tinybvh's options they match tinybvh's (SAH cost within 1%: the `bvh-hploc`
+page, and the trace bench on whole scenes).
+
+`tools/bvh/tree-quality.ts` compares the CPU builders and twins on real scenes
+without a GPU (`node tools/bvh/tree-quality.ts sponza`).
+
+GPU pages: `bvh-hploc`, `bvh-hploc-profile` (manual), the `watertight-hploc`
+variant of `trace-oracle`, and `trace-bench-hploc-sponza` / `-quick`.
+
+`createMeshLayoutBuilder` (`src/mesh-builder.ts`) now picks H-PLOC by default
+when the device has subgroups (`prefer: 'gpu-lbvh'` gives the LBVH), with the
+same fallback to tinybvh.
 
 ## GPU LBVH (stage B1)
 
@@ -40,10 +90,11 @@ Workgroup scans number threads in subgroup order (`src/gpu-workgroup-scan.ts`),
 so nothing depends on the subgroup size (Intel's UHD runs 8 or 16 wide) or lane
 layout. The builder needs `subgroups`.
 
-**Fallback.** `src/mesh-builder.ts` (`createMeshLayoutBuilder`) picks the GPU
-LBVH when the device has subgroups and tinybvh (B0) otherwise, and also sends
-single meshes to tinybvh when they are too big for the device or the GPU
-refused them. The result says which builder made each tree.
+**Fallback.** `src/mesh-builder.ts` (`createMeshLayoutBuilder`) picks a GPU
+builder (H-PLOC by default, or the LBVH) when the device has subgroups and
+tinybvh (B0) otherwise, and also sends single meshes to tinybvh when they are
+too big for the device or the GPU refused them. The result says which builder
+made each tree.
 
 **Deforming meshes.** `src/gpu-mesh-refit.ts` (`GpuMeshRefit`) refits any
 builder's mesh tree from a vertex buffer the adapter supplies: one kernel

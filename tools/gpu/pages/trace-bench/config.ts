@@ -35,15 +35,28 @@ export const SYNTHETIC_INSTANCE_COUNT = 10_000;
  * - `tmbvh`: three-mesh-bvh's own trees and its own WebGPU walk.
  * - `ours-lbvh`: the GPU LBVH (B1, `@pmndrs/bvh`) builds every mesh's tree on the GPU in one batch, timed
  *   with GPU timestamps; the trees are read back and traced by our watertight walk. Needs subgroups.
+ * - `ours-hploc`: the same with the GPU H-PLOC (B2). Also builds the scene once more with tinybvh's
+ *   codes, tie rule and one-triangle leaves, and compares its SAH cost with tinybvh's `BuildHPLOC`.
  */
-export const TRACER_IDS = ['ours-tinybvh', 'ours-tmbuild', 'platform', 'tmbvh', 'ours-lbvh'] as const;
+export const TRACER_IDS = ['ours-tinybvh', 'ours-tmbuild', 'platform', 'tmbvh', 'ours-lbvh', 'ours-hploc'] as const;
 export type TracerId = (typeof TRACER_IDS)[number];
 
-/** What runs when the URL names no tracer. `ours-lbvh` is asked for by its own pages (trace-bench-lbvh*). */
+/** What runs when the URL names no tracer. `ours-lbvh` and `ours-hploc` are asked for by their own pages (trace-bench-lbvh*, trace-bench-hploc*). */
 export const DEFAULT_TRACER_IDS: readonly TracerId[] = ['ours-tinybvh', 'ours-tmbuild', 'platform', 'tmbvh'];
 
-/** GPU LBVH builds timed per scene after one warm-up (median, fastest and slowest are reported). */
-export const LBVH_BUILD_TIMED_RUNS = 5;
+/** GPU builds (LBVH, H-PLOC) timed per scene after one warm-up (median, fastest and slowest are reported). */
+export const GPU_BUILD_TIMED_RUNS = 5;
+
+/**
+ * Then the loaded section: builds submitted back to back for about this long,
+ * so the GPU stays busy and its clock is the loaded one (DECISIONS f3e3bba:
+ * pass/fail timing is taken GPU-bound, over sections of 10-15 s, from a cool
+ * card). The single builds above wait for each result, so the GPU idles
+ * between them and the bench lock's once-a-second clock sampler barely sees them.
+ */
+export const GPU_BUILD_LOADED_MS = 10_000;
+/** Bounds on the loaded section's build count, whatever one build takes. */
+export const GPU_BUILD_LOADED_RUNS = { min: 10, max: 400 } as const;
 
 /**
  * How big a run is.
