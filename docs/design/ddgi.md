@@ -135,9 +135,9 @@ One uniform buffer holds the volume (origin, spacing, counts), the frame rotatio
 
 ## Which probes update (the budget)
 
-- **Unit = one probe update.** `TechniqueFrame.units` comes from the platform, which turns the host's `gpuMs` into units with `msPerUnit` (measured: the `ddgi/trace` + `ddgi/blend` + `ddgi/write` GPU time divided by the probes the technique actually updated, smoothed over frames). Without timings, `FrameBudget.units`, default 512 on Tier A.
+- **Unit = one probe update.** `TechniqueFrame.units` comes from the platform, which turns the host's `gpuMs` into units with a cost model of a fixed part plus a per-probe part (`costModel()`, since T1.9a; DECISIONS 2026-11-05). It's fitted from medians of the measured `ddgi/trace` + `ddgi/blend` + `ddgi/write` GPU time against the probes the technique actually updated, so small, latency-bound batches don't shrink the next batch in a spiral. `FrameBudget.units` stays a hard cap. Without timings, `FrameBudget.units`, default 512 on Tier A.
 - **Order:** a fixed scrambled order of all probes, `order[i] = (i × stride) mod N` with `stride` coprime with `N` and near `0.618 N`, so each frame's set is spread across the volume, not one slab. A CPU cursor walks it. Each frame's list is `units` consecutive entries, written into the update-list buffer with `queue.writeBuffer` inside `encode` (no readback; probe states stay on the GPU).
-- Off probes in the list still cost a workgroup, but only 32 rays and no blend, so they're cheap. `msPerUnit` absorbs the mix.
+- Off probes in the list still cost a workgroup, but only 32 rays and no blend, so they're cheap. The cost model absorbs the mix.
 - **Probes near a change first** (SceneChanges) is M2. The design leaves room: a priority list in front of the cursor, in the same buffer.
 - `maxProbesPerFrame` (default 4,096) sizes the update list and the scratch buffer. Dispatches over 65,535 workgroups use two dimensions.
 - `FrameBudget.paused` skips every DDGI kernel.
