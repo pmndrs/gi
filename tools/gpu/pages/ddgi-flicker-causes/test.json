@@ -1,0 +1,5 @@
+{
+    "description": "T1.12 flicker investigation: on a still, converged scene, changes one DDGI setting at a time (probes per frame, hysteresis, rays, a fixed ray rotation, a frozen frame number, the firefly clamp, bounce light) and measures how much the GI image and the probe atlas change from frame to frame and over time, the probes changing state, and the per-update texel noise against the hysteresis theory. VITE_DDGI_SCENES picks the scene (default cornell-box), VITE_DDGI_CAUSE_EXPERIMENTS a subset of experiments. Correctness only, no timing. Manual.",
+    "timeoutMs": 1800000,
+    "manual": true
+}

@@ -18,6 +18,10 @@
  * DDGI's frame cost for T1.9 (GI on against off: GPU ms, frame p50 and p95):
  *   VITE_DDGI_SCENES=cornell-box,two-room,sponza VITE_DDGI_TECHNIQUES=none,ddgi pnpm test:gpu --filter viewer-baselines
  *
+ * Where DDGI's GI-on frame time goes, pass by pass (`breakdown.ts`; default scenes Cornell, two-room, Sponza;
+ * VITE_DDGI_ROUNDS and VITE_DDGI_FRAMES default to 3 and 15 there; VITE_DDGI_VARIANTS and VITE_DDGI_BURST are its own):
+ *   VITE_DDGI_BREAKDOWN=1 pnpm test:gpu --filter viewer-baselines
+ *
  * The page fails when the device reports an error or is lost, when anything
  * is logged as an error, or when any measurement failed (a technique that
  * could not run, or a number that came out negative or not finite). The
@@ -30,6 +34,7 @@
 
 import { reportGpuTest } from '../../client.ts';
 import { DEFAULT_BASELINE_OPTIONS, failedMeasurements, runBaselines, type BaselineOptions } from '../../../../apps/viewer/src/bench/baselines.ts';
+import { runBreakdown, VARIANTS, type VariantId } from './breakdown.ts';
 
 const QUICK_SCENES = ['cornell-box', 'two-room'];
 
@@ -66,7 +71,34 @@ const requestedScenes = listFromEnv(env.VITE_DDGI_SCENES);
 const full = env.VITE_DDGI_BASELINES === 'full';
 const techniques = (listFromEnv(env.VITE_DDGI_TECHNIQUES) ?? DEFAULT_BASELINE_OPTIONS.techniques) as BaselineOptions['techniques'];
 
-try {
+const BREAKDOWN_SCENES = ['cornell-box', 'two-room', 'sponza'];
+
+async function breakdown(): Promise<void> {
+    const result = await runBreakdown(document.getElementById('view') as HTMLCanvasElement, {
+        scenes: requestedScenes ?? BREAKDOWN_SCENES,
+        variants: (listFromEnv(env.VITE_DDGI_VARIANTS) ?? VARIANTS).filter((variant): variant is VariantId => (VARIANTS as readonly string[]).includes(variant)),
+        burst: countFromEnv(env.VITE_DDGI_BURST, 1),
+        rounds: countFromEnv(env.VITE_DDGI_ROUNDS, 3),
+        sampleFrames: countFromEnv(env.VITE_DDGI_FRAMES, 15),
+        width: countFromEnv(env.VITE_DDGI_WIDTH, DEFAULT_BASELINE_OPTIONS.width),
+        height: countFromEnv(env.VITE_DDGI_HEIGHT, DEFAULT_BASELINE_OPTIONS.height),
+        log,
+    });
+    const failures = result.scenes.filter((scene) => scene.error).map((scene) => `${scene.scene}: ${scene.error}`);
+    const consoleOnly = pageErrors.filter((message) => !result.gpuErrors.some((gpuError) => message.includes(gpuError)));
+    const problems = [...consoleOnly, ...failures];
+    reportGpuTest({
+        status: problems.length === 0 ? 'pass' : 'fail',
+        message: problems.length === 0 ? undefined : `${problems.length} problem(s): ${problems.join(' | ')}`,
+        data: { ...result, pageErrors } as unknown as Record<string, unknown>,
+        deviceErrors: result.gpuErrors,
+        startTime,
+        adapter: { ...result.adapter, isFallbackAdapter: false },
+        logLines,
+    });
+}
+
+async function baselines(): Promise<void> {
     const result = await runBaselines(document.getElementById('view') as HTMLCanvasElement, {
         ...DEFAULT_BASELINE_OPTIONS,
         scenes: requestedScenes ?? (full ? null : QUICK_SCENES),
@@ -92,6 +124,11 @@ try {
         adapter: { ...result.adapter, isFallbackAdapter: false },
         logLines: [...logLines, `${result.rows.length} rows, ${failures.length} failed measurement(s), ${pageErrors.length} page error(s)`],
     });
+}
+
+try {
+    if (env.VITE_DDGI_BREAKDOWN === '1') await breakdown();
+    else await baselines();
 } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     reportGpuTest({ status: 'fail', message: [message, ...pageErrors].join(' | '), startTime, logLines });

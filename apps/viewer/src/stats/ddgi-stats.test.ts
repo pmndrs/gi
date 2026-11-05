@@ -70,6 +70,31 @@ describe('DdgiStatsText', () => {
         expect(text.lines().map((line) => line.text)).toContain('  update (GPU)    2.90 ms (budget 2.00)  trace 2.50, census 0.40');
     });
 
+    it('says why this many probes a frame, the sweep time and the measured cost (budget v2)', () => {
+        const budget = { calibrating: false, calibratedProbes: 133, floorProbes: 81, steppedDown: false, fixedMs: 1.2, usPerProbe: 6 };
+        const text = new DdgiStatsText();
+        text.add(frame({ probesUpdated: 133, sweepSeconds: 2.43, budget }));
+        let lines = text.lines().map((line) => line.text);
+        expect(lines).toContain('  probes updated  133 of 19,425, every probe every 2.4 s');
+        expect(lines).toContain('  per frame       133 probes: what 2.00 ms buys at full GPU speed, at least 81');
+        expect(lines).toContain('  measured cost   1.20 ms + 6.0 µs per probe');
+
+        text.reset();
+        text.add(frame({ probesUpdated: 32, budget: { ...budget, calibratedProbes: 16, floorProbes: 32 } }));
+        expect(text.lines().map((line) => line.text)).toContain('  per frame       32 probes: the least for a full sweep in 4 s (2.00 ms buys 16 at full GPU speed)');
+
+        text.reset();
+        text.add(frame({ probesUpdated: 106, budget: { ...budget, steppedDown: true } }));
+        expect(text.lines().map((line) => line.text)).toContain('  per frame       106 probes: slowed, frames are late (2.00 ms buys 133 at full GPU speed)');
+
+        text.reset();
+        text.add(frame({ budget: { ...budget, calibrating: true } }));
+        lines = text.lines().map((line) => line.text);
+        expect(lines).toContain('  per frame       measuring the GPU...');
+        expect(lines.some((line) => line.includes('measured cost'))).toBe(false);
+        expect(text.lines().find((line) => line.text.includes('per frame'))?.help).toBe('statsBudget');
+    });
+
     it('smooths the numbers over frames', () => {
         const text = new DdgiStatsText();
         text.add(frame({ probesUpdated: 1000 }));

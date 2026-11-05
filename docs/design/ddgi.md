@@ -133,7 +133,7 @@ Scratch buffer: `maxProbesPerFrame × (36 × 8 + 196 × 4 + 8)` bytes, about 1 M
 
 One uniform buffer holds the volume (origin, spacing, counts), the frame rotation, the settings and the update-list length.
 
-## Budget v2: work first, milliseconds as a ceiling (proposed after the T1.9 quiet window; waiting on Dennis)
+## Budget v2: work first, milliseconds as a ceiling (accepted by Dennis 2026-11-05; being fixed after review, see PROGRESS)
 
 **Why change it.** A GPU-millisecond budget plus GPU power management is a positive feedback loop: less work lets the GPU idle, its clocks drop, the same work takes longer, so the controller cuts work again. On a quiet laptop at 60 Hz the RTX sat in its low-power state and 2 ms bought 2–3 Sponza probes a frame (a sweep every 162 s). The budget exists to protect frame time, and a GPU that is idling has time to spare. RTXGI itself uses fixed work per frame.
 

@@ -1,5 +1,5 @@
 {
-    "description": "T1.9a: DDGI GPU cost against batch size (32 to 4,096 probes) through the three adapter, the 2 ms budget held at a viewer-like frame rate, and start-up times (load, compile, trees, first GI, settled). VITE_DDGI_SCENES=a,b picks scenes (default cornell-box,two-room); VITE_DDGI_SECTIONS=startup,budget,curve,steady,breakdown picks parts (default the first three). Sponza and Bistro need the downloads. For hand use under the bench lock.",
+    "description": "DDGI GPU cost against batch size (32 to 4,096 probes) through the three adapter; budget v2: the calibrated batch's cost GPU-bound (must be within the budget +10%), and stable probes per frame at 30, 60 and 120 Hz; start-up times (load, compile, trees, first GI, settled, calibrated). VITE_DDGI_SCENES=a,b picks scenes (default cornell-box,two-room); VITE_DDGI_SECTIONS=startup,rates,budget,curve,steady,breakdown picks parts (default the first four). Sponza and Bistro need the downloads. For hand use under the bench lock.",
     "timeoutMs": 3600000,
     "manual": true
 }

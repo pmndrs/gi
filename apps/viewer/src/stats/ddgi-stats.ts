@@ -10,10 +10,32 @@
 
 import { SmoothedValue } from './format-stats.ts';
 
+/**
+ * How the platform chose DDGI's probes per frame (budget v2), from its
+ * `ddgi budget` counters.
+ */
+export interface DdgiBudgetStats {
+    /** Measuring the GPU right now (start-up, or after the budget or the scene changed). */
+    calibrating: boolean;
+    /** The probes the budget buys with the GPU's clocks up; null when nothing was measured (no GPU timestamps). */
+    calibratedProbes: number | null;
+    /** The fewest probes per frame (a full sweep within 4 s, at most twice the calibrated number); 0 when off. */
+    floorProbes: number;
+    /** Fewer than calibrated: frames were late and DDGI was over its time. */
+    steppedDown: boolean;
+    /** The measured cost: a fixed part and a part per probe; null until measured. */
+    fixedMs: number | null;
+    usPerProbe: number | null;
+}
+
 /** One DDGI frame as the overlay needs it (the shape of `DdgiTechnique.statsSnapshot()`). */
 export interface DdgiFrameStats {
     probeCount: number;
     probesUpdated: number;
+    /** Seconds until every probe has been updated once at this rate; null until known. */
+    sweepSeconds?: number | null;
+    /** Null before the platform reports how it chose the number. */
+    budget?: DdgiBudgetStats | null;
     /** The update budget the user chose, GPU ms per frame. */
     budgetMs: number;
     /** GPU ms of DDGI's passes, by short name (`trace`, `blend`, `write`, `census`); empty without timestamps. */
@@ -29,7 +51,7 @@ export interface DdgiFrameStats {
     states: ReadonlyArray<{ readonly label: string; readonly count: number }>;
 }
 
-export type DdgiStatsHelpKey = 'statsProbes' | 'statsDdgiUpdate' | 'statsRefit' | 'statsMemory' | 'statsSync' | 'statsStates';
+export type DdgiStatsHelpKey = 'statsProbes' | 'statsBudget' | 'statsDdgiUpdate' | 'statsRefit' | 'statsMemory' | 'statsSync' | 'statsStates';
 
 export interface StatsLine {
     text: string;
@@ -42,6 +64,36 @@ function megabytes(bytes: number): string {
 
 function milliseconds(ms: number): string {
     return `${ms.toFixed(2)} ms`;
+}
+
+function seconds(value: number): string {
+    return value < 10 ? `${value.toFixed(1)} s` : `${Math.round(value)} s`;
+}
+
+/** Why DDGI updates this many probes a frame (budget v2), and the cost it measured. */
+function budgetLines(frame: DdgiFrameStats): StatsLine[] {
+    const budget = frame.budget;
+    if (!budget) return [];
+    const probes = (count: number) => `${count.toLocaleString('en')} probe${count === 1 ? '' : 's'}`;
+    const buys = (count: number) => `${frame.budgetMs.toFixed(2)} ms buys ${count.toLocaleString('en')} at full GPU speed`;
+    let reason: string;
+    if (budget.calibrating) {
+        reason = 'measuring the GPU...';
+    } else if (budget.calibratedProbes === null) {
+        reason = `${probes(frame.probesUpdated)} (no GPU timestamps to measure with)`;
+    } else if (budget.steppedDown) {
+        reason = `${probes(frame.probesUpdated)}: slowed, frames are late (${buys(budget.calibratedProbes)})`;
+    } else if (budget.floorProbes > budget.calibratedProbes) {
+        reason = `${probes(budget.floorProbes)}: the least for a full sweep in 4 s (${buys(budget.calibratedProbes)})`;
+    } else {
+        const floor = budget.floorProbes > 0 ? `, at least ${budget.floorProbes.toLocaleString('en')}` : '';
+        reason = `${probes(budget.calibratedProbes)}: what ${frame.budgetMs.toFixed(2)} ms buys at full GPU speed${floor}`;
+    }
+    const lines: StatsLine[] = [{ text: `  per frame       ${reason}`, help: 'statsBudget' }];
+    if (!budget.calibrating && budget.fixedMs !== null && budget.usPerProbe !== null) {
+        lines.push({ text: `  measured cost   ${milliseconds(budget.fixedMs)} + ${budget.usPerProbe.toFixed(1)} µs per probe`, help: 'statsBudget' });
+    }
+    return lines;
 }
 
 /** Smooths each number over frames, and turns the result into the overlay's lines. */
@@ -81,8 +133,11 @@ export class DdgiStatsText {
 
         const updated = Math.round(this.probesUpdated.value ?? frame.probesUpdated);
         const cycleFrames = updated > 0 ? Math.ceil(frame.probeCount / updated) : null;
-        const cycle = cycleFrames === null ? '' : `, each every ${cycleFrames} frame${cycleFrames === 1 ? '' : 's'}`;
+        let cycle = '';
+        if (frame.sweepSeconds !== undefined && frame.sweepSeconds !== null) cycle = `, every probe every ${seconds(frame.sweepSeconds)}`;
+        else if (cycleFrames !== null) cycle = `, each every ${cycleFrames} frame${cycleFrames === 1 ? '' : 's'}`;
         lines.push({ text: `  probes updated  ${updated.toLocaleString('en')} of ${frame.probeCount.toLocaleString('en')}${cycle}`, help: 'statsProbes' });
+        lines.push(...budgetLines(frame));
 
         const passes = [...this.updatePasses.entries()].map(([name, smoothed]) => [name, smoothed.value ?? 0] as const);
         if (passes.length > 0) {

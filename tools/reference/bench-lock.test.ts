@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promise
 import { hostname, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { CLOCK_FILE_ENV, clockNoteRows, parseClockLine, readClockSummary, summarizeClockSamples } from '../gpu/clock-note.ts';
+import { CLOCK_FILE_ENV, clockLowWarning, clockNoteRows, isClockLow, LOW_CLOCK_MHZ, parseClockLine, readClockSummary, summarizeClockSamples } from '../gpu/clock-note.ts';
 import {
     acquireBenchLock,
     benchLockCli,
@@ -266,6 +266,9 @@ describe('GPU clock sampling', () => {
         expect(parseClockLine('1215, 6001, 41\r\n')).toEqual({ smMhz: 1215, memMhz: 6001, utilizationPercent: 41 });
         expect(parseClockLine('1215, 6001, [N/A]')).toBeNull();
         expect(parseClockLine('')).toBeNull();
+        // With temperature and the throttle-reason mask (hex), as the real query returns them.
+        expect(parseClockLine('585, 7151, 93, 89, 0x0000000000000020')).toEqual({ smMhz: 585, memMhz: 7151, utilizationPercent: 93, temperatureC: 89, throttleReasons: 0x20 });
+        expect(parseClockLine('585, 7151, 93, 89')).toBeNull();
     });
 
     it('summarizes min / median / max, and takes the headline from samples under load', () => {
@@ -281,6 +284,76 @@ describe('GPU clock sampling', () => {
         const mostlyIdle = summarizeClockSamples([idle, idle, idle, busy(2100)])!;
         expect(clockNoteRows(mostlyIdle).find((row) => row.metric === 'note/sm_clock_mhz')?.value).toBe(210);
         expect(summarizeClockSamples([])).toBeNull();
+    });
+
+    describe('the low-clock flag', () => {
+        const idle = { smMhz: 210, memMhz: 810, utilizationPercent: 2 };
+        const busy = (smMhz: number, utilizationPercent = 98) => ({ smMhz, memMhz: 6001, utilizationPercent });
+        const noteNames = (samples: Parameters<typeof summarizeClockSamples>[0]) => clockNoteRows(summarizeClockSamples(samples)!).map((row) => row.metric);
+
+        it('flags a loaded median under 1,500 MHz, and writes note/clock_low,1', () => {
+            expect(LOW_CLOCK_MHZ).toBe(1500);
+            const low = summarizeClockSamples([busy(590), busy(600), busy(1400), busy(580), busy(610)])!;
+            expect(isClockLow(low)).toBe(true);
+            expect(clockNoteRows(low).find((row) => row.metric === 'note/clock_low')?.value).toBe(1);
+            expect(clockLowWarning(low)).toContain('WARNING');
+            expect(clockLowWarning(low)).toContain('600 MHz');
+        });
+
+        it('does not flag a healthy run, and the limit itself is healthy', () => {
+            const healthy = summarizeClockSamples([busy(1600), busy(1650), busy(1500), busy(1700)])!;
+            expect(isClockLow(healthy)).toBe(false);
+            expect(clockLowWarning(healthy)).toBeNull();
+            expect(noteNames([busy(1500), busy(1500), busy(1500)])).not.toContain('note/clock_low');
+            expect(noteNames([busy(1499), busy(1499), busy(1499)])).toContain('note/clock_low');
+        });
+
+        it('counts only samples at 70% use or more: idle gaps do not make a healthy run low', () => {
+            const withGaps = summarizeClockSamples([idle, idle, idle, idle, idle, busy(1700), busy(1650), busy(1600), busy(1700), busy(1500, 69)])!;
+            expect(withGaps.smMhz.median).toBeLessThan(LOW_CLOCK_MHZ);
+            expect(withGaps.loadedSamples).toBe(4);
+            expect(isClockLow(withGaps)).toBe(false);
+            // Busy samples below the threshold are not "under load" either, however low their clock.
+            expect(isClockLow(summarizeClockSamples([busy(1700), busy(1700), busy(1700), busy(300, 69), busy(300, 69), busy(300, 69)])!)).toBe(false);
+        });
+
+        it('gives no verdict from fewer than three loaded samples (all-sample fallback would read low)', () => {
+            const mostlyIdle = summarizeClockSamples([idle, idle, idle, busy(900), busy(900)])!;
+            expect(clockNoteRows(mostlyIdle).find((row) => row.metric === 'note/sm_clock_mhz')?.value).toBe(210);
+            expect(isClockLow(mostlyIdle)).toBe(false);
+            expect(noteNames([idle, idle, idle])).not.toContain('note/clock_low');
+        });
+
+        it('says why when nvidia-smi named a reason: heat or the power limit', () => {
+            const hot = (smMhz: number, throttleReasons: number) => ({ smMhz, memMhz: 7151, utilizationPercent: 95, temperatureC: 88, throttleReasons });
+            const summary = summarizeClockSamples([hot(500, 0x20), hot(550, 0x20), hot(600, 0x20), hot(700, 0x4)])!;
+            expect(summary.thermalLimitedShare).toBe(0.75);
+            expect(summary.powerCappedShare).toBe(0.25);
+            expect(summary.temperatureCLoaded?.median).toBe(88);
+            const warning = clockLowWarning(summary)!;
+            expect(warning).toContain('thermal throttling in 75%');
+            expect(warning).toContain('power limit in 25%');
+            expect(warning).toContain('88 C');
+            // Three-field samples carry no reason: the warning is still given, without a cause.
+            expect(clockLowWarning(summarizeClockSamples([busy(500), busy(500), busy(500)])!)).not.toContain('nvidia-smi: thermal');
+        });
+
+        it('bench-lock run prints the warning at the end of a low-clock run', async () => {
+            const file = join(folder, 'low-clock.json');
+            const printed: string[] = [];
+            const original = { log: console.log, error: console.error };
+            console.log = () => undefined;
+            console.error = (message: string) => void printed.push(String(message));
+            try {
+                delete process.env[LOCK_HELD_ENV];
+                const code = await benchLockCli(['run', '--path', lockPath, '--clock-file', file, '--', 'node', '-e', 'setTimeout(() => {}, 150)'], { readClock: async () => '600, 6001, 95', clockIntervalMs: 10 });
+                expect(code).toBe(0);
+            } finally {
+                console.log = original.log;
+                console.error = original.error;
+            }
+            expect(printed.some((line) => line.includes('WARNING') && line.includes('600 MHz'))).toBe(true);
+        });
     });
 
     it('samples while running, keeps a readable file, and does nothing without nvidia-smi', async () => {

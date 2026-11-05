@@ -270,8 +270,10 @@ Rules for every M1 task:
 | T1.9a | DDGI performance pass (budget model, small-batch cost, p95, startup) | implementer | M | T1.6, T1.8 | done (budget median within ±5% on four scenes; Sponza 30–43 probes per 2 ms; gaps in DECISIONS) |
 | T1.9 | M1 measurements against targets | gpu-tester, native-runner | M | T1.8, T1.9a | todo (native matched-count runs done early) |
 | T1.10 | Sponza add-ons | wrangler + implementer | M | T1.1 (for the re-rendered reference) | done (Opus review passed with notes, fixed; candles waiting on Dennis) |
-| T1.12 | Stability: Cornell flicker fixed, debug views of the source channels, threshold set by eye | implementer | M | T1.5, T1.8 | active (2026-11-05; Dennis: "it is not steady") |
+| T1.9b | Budget v2 (work-based, calibrated with the clocks up; DECISIONS 2026-11-05) | implementer | M | T1.9a | fixing (review failed: calibration didn't reproduce) |
+| T1.12 | Stability: Cornell flicker fixed, debug views of the source channels, threshold set by eye; hysteresis aware of the time between a probe's updates, and Sponza's settle time measured GPU-bound (frames and seconds) | implementer | M | T1.5, T1.8 | active (2026-11-05; Dennis: "it is not steady") |
 | T1.13 | HD Cycles references with stored cameras; the viewer's Compare matches them | implementer, then gpu-tester | M | T1.8, T0.7 | active (2026-11-05; Dennis: "640 x 360 is an insane size") |
+| T1.14 | GI composite for three (`docs/design/three-composite.md`): a drop-in TSL node on three's `pass()` and `mrt()`; `GIVolume` stays the simple path; usage bar against LightProbeGrid | main session designs, implementer builds | M | T1.7, T1.8 | design (2026-11-05; Dennis: "Go with the recommendation") |
 | T1.11 | M1 note and M2 breakdown | main session | S | all M1 | todo |
 
 ### BVH lane (runs alongside; DECISIONS 2026-11-04)
@@ -344,6 +346,15 @@ Done-whens for the B stages are in `docs/design/bvh-framework.md`. B1a's: a 10k-
   - Re-measure the Bistro exterior baselines on the RTX 3060; T0.5's are too noisy to quote.
   - Set the stability threshold by eye with Dennis.
   - Done when the targets are met or a gap is explained and agreed, measured GPU-bound on the target hardware (RTX 3060), and the Intel UHD passes every correctness check (SPEC revised 2026-11-05: no Tier B mode decision in M1).
+- **T1.14 GI composite for three** (DECISIONS 2026-11-05).
+  - A TSL node built like three r187's SSGI and GTAO nodes: the user's post-processing pipeline renders `pass(scene, camera)` with `mrt({...})`, and `ddgiComposite(...)` adds `albedo/π × E` into the HDR colour before tone mapping. No custom render path in the adapter.
+  - In composite mode the GI light returns no indirect diffuse for opaque surfaces. Transparent objects and cube captures keep the per-fragment path. `GIVolume` alone, with no pipeline changes, keeps working as today.
+  - `examples/three/` next to three's LightProbeGrid example: about as many setup lines. Report the line counts, every API a user touches, and anything still harder than LightProbeGrid.
+  - Done when:
+    - the composite matches the per-fragment path on Sponza and Cornell: per-pixel relative luminance difference mean ≤ 0.5%, p95 ≤ 2%, opaque pixels, HDR before tone mapping;
+    - the cost of showing GI (MRT extra plus the composite) is ≤ 1.0 ms on Sponza at 1440p, GPU-bound on the RTX 3060;
+    - the usage report is written, and the scout's list of differences from three's examples is either fixed or explained;
+    - both GPUs pass, and the Opus review passes.
 - **T1.10 Sponza add-ons.**
   - See the T0.12 notes above: the curtains join `sponza`; ivy, trees and candles make `sponza-full`.
   - Done when the viewer shows the curtains at bookmark 1, the fetch verifies, and the Cycles reference is re-rendered.

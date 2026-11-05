@@ -26,7 +26,7 @@ export const HELP = {
     technique:
         'Which global illumination technique to use. DDGI is ours: probes in a grid, each tracing rays every frame, so light, sky and moving things update live. The other two come from three.js and are the baselines DDGI has to beat. Light probe grid: light stored at points in the scene, baked once. VXGI: a voxel copy of the scene traced live every frame. All get the same lights, sky and exposure, at full physical strength, so the comparison is fair.',
     ddgiBudget:
-        'How much GPU time DDGI may spend per frame updating its probes, in milliseconds. More updates more probes each frame, so light settles faster after a change; less leaves more time for drawing. 2 ms is the default and the target. The stats box (top left) shows how many probes that buys.',
+        'How much GPU time DDGI may spend per frame updating its probes, in milliseconds, with the GPU working at full speed. DDGI measures once how many probes that buys and then updates that many every frame; changing this measures again, which takes about a second. More updates more probes each frame, so light settles faster after a change; less leaves more time for drawing. 2 ms is the default and the target. The stats box (top left) shows how many probes that buys.',
     ddgiProbes:
         'Draws every DDGI probe as a small ball where it really sits (probes stuck in walls are moved out), coloured by what it is doing. The legend below says what each colour means; the numbers count the probes in each state.',
     ddgiScreenView:
@@ -45,7 +45,7 @@ export const HELP = {
         'What is drawn left of the white line. "No GI" is direct light only. "Cycles reference" is a path-traced picture of a saved camera view, the right answer to compare against.',
     wipeRight: 'What is drawn right of the white line.',
     compareReference:
-        'Split the screen: DDGI on the left, the path-traced Cycles picture of this camera view on the right, at the same exposure and tone mapping. It lines up only at the saved camera view it was rendered from. Its materials are plain matte, so shiny spots differ a little.',
+        'Split the screen: DDGI on the left, the path-traced Cycles picture of this camera view on the right, at the same exposure and tone mapping. The camera moves to the exact spot, field of view and picture shape the reference was rendered with (dark bars fill the rest of the window), so the two sides line up; move the camera and they no longer do. Its materials are plain matte, so shiny spots differ a little.',
     upscaleToggle:
         'Draws the picture at a lower resolution and rebuilds it to full size with @pmndrs/upscaler, which saves GPU time. Works with No GI and the light probe grid; VXGI has its own anti-aliasing, so this is switched off while VXGI is on screen.',
     upscaleQuality: 'How much smaller the picture is drawn. Quality is a little smaller and looks nearly sharp; Ultra performance is much smaller and softer.',
@@ -59,9 +59,11 @@ export const HELP = {
     statsFrame: 'Time from one drawn frame to the next, and frames per second. 16.7 ms is 60 frames per second.',
     statsGpu: "GPU time of three.js's own passes in one frame (drawing the scene, shadows, the final picture), averaged over the last few frames. DDGI's probe updates are listed separately below.",
     statsProbes:
-        'How many DDGI probes were updated in the last frame, out of all of them. The budget decides how many fit; at that rate every probe gets its turn this often.',
+        'How many DDGI probes were updated in the last frame, out of all of them, and how long it takes at that rate until every probe has had its turn.',
+    statsBudget:
+        "Why DDGI updates this many probes a frame. When it starts (and after the budget or the scene's shape changes) it measures, with the GPU working at full speed, how many probes fit in the update budget, then updates that many every frame. It doesn't chase the measured time frame by frame: a GPU with little to do slows down to save power, which makes the same work look slower without costing the frame anything. It updates fewer only when frames arrive late and DDGI is over its time ('slowed'), and goes back up once frames are on time. It never goes below the number that updates every probe within 4 seconds, except on a slow GPU, where it stops at twice what the budget buys. 'measured cost' is what it measured: a fixed part per frame plus a part per probe.",
     statsDdgiUpdate:
-        "GPU time of all of DDGI's passes in a frame: tracing rays from the probes (trace), blending the results into the probes (blend), writing them out for drawing (write), and, while GPU timing is on, a small pass that counts probes per state for these stats (census). The budget you chose is shown beside it. DDGI picks how many probes to update from costs it measured a few frames earlier, so the number can go over the budget for a while.",
+        "GPU time of all of DDGI's passes in a frame: tracing rays from the probes (trace), blending the results into the probes (blend), writing them out for drawing (write), and, while GPU timing is on, a small pass that counts probes per state for these stats (census). The budget you chose is shown beside it. The budget was measured with the GPU at full speed; when the GPU has little to do it slows down, so this can read above the budget while frames are on time. That is expected and costs the frame nothing.",
     statsRefit:
         "GPU time to bring the ray-tracing tree up to date with where every object is, every frame. Cheap for a still scene; it matters once things move.",
     statsMemory:

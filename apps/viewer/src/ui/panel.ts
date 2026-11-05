@@ -100,6 +100,7 @@ const STATS_LINES: ReadonlyArray<readonly [string, HelpKey]> = [
     ['frame', 'statsFrame'],
     ['GPU per frame', 'statsGpu'],
     ['probes updated', 'statsProbes'],
+    ['per frame, measured cost', 'statsBudget'],
     ['update (GPU)', 'statsDdgiUpdate'],
     ['top-level refit (GPU)', 'statsRefit'],
     ['GPU memory', 'statsMemory'],

@@ -35,7 +35,9 @@
  * nvidia-smi exists), prints min / median / max SM and memory clock at the end, and keeps the
  * summary in a JSON file (`--clock-file`, default `<lock folder>.clock.json`), rewritten after
  * every sample. The command gets the file's path in DDGI_CLOCK_FILE, so the to-csv scripts and
- * tools/native/bench.ps1 add `note/sm_clock_mhz` rows (see tools/gpu/clock-note.ts).
+ * tools/native/bench.ps1 add `note/sm_clock_mhz` rows (see tools/gpu/clock-note.ts). If the median
+ * SM clock over the samples under load (70% GPU use or more) is below 1,500 MHz, the end of the run
+ * prints a warning and the to-csv rows get `note/clock_low,1`.
  *
  * From a shell (agents, the native PowerShell launcher), the same protocol:
  *
@@ -53,6 +55,7 @@ import { parseArgs } from 'node:util';
 import { installShutdownHandlers, registerCleanup } from '../gpu/cleanup.ts';
 import {
     CLOCK_FILE_ENV,
+    clockLowWarning,
     describeClockSummary,
     NVIDIA_SMI_CLOCK_ARGS,
     parseClockLine,
@@ -589,7 +592,12 @@ async function runUnderLock(command: string[], settings: BenchLockOptions, clock
             return await runCommand(command, ownerPid, sampler ? clock.file : null);
         } finally {
             const summary = await sampler?.stop();
-            if (summary) (settings.log ?? console.log)(describeClockSummary(summary));
+            if (summary) {
+                const log = settings.log ?? console.log;
+                log(describeClockSummary(summary));
+                const warning = clockLowWarning(summary);
+                if (warning) log(warning);
+            }
         }
     }, settings);
 }
