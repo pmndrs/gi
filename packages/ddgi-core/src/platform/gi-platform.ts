@@ -11,7 +11,9 @@
  *    worker, and the top-level rebuild (CPU for now; B1a moves it to the GPU);
  * 2b. hit shading: its settings, and the sky's projection when the
  *    environment changed (`shade/hit-shading.ts`, T1.4);
- * 3. each technique's `encode`, fallbacks before the techniques stacked on them.
+ * 3. each technique's `encode`, fallbacks before the techniques stacked on them,
+ *    with the work units its budget gives it this frame (budget v2:
+ *    calibrated once with the GPU loaded, `work-budget.ts`).
  *
  * The host owns the device. The platform watches `device.lost`; afterwards
  * `isReady` is false and calls throw `GINotReadyError('device-lost')`, and the
@@ -21,7 +23,7 @@
 import { GINotReadyError } from './contract/errors.ts';
 import type { InstanceHandle, LightHandle, MaterialHandle, MeshHandle, TextureHandle } from './contract/handles.ts';
 import type { Aabb, Mat4 } from './contract/math.ts';
-import type { FrameBudget, FrameInput, FrameScreen } from './contract/frame.ts';
+import type { FrameInput, FrameScreen } from './contract/frame.ts';
 import type { GIPlatform, GIPlatformOptions } from './contract/platform.ts';
 import type { QueryKind, SceneQueries } from './contract/queries.ts';
 import type {
@@ -47,421 +49,11 @@ import { checkComputeLimits } from './device-requirements.ts';
 import { PlatformHitShading } from './shade/hit-shading.ts';
 import { GpuTimer } from './timing/gpu-timer.ts';
 import { PlatformRayQueries } from './trace/ray-queries.ts';
+import { UnitCostMeter, WorkBudget, workFloorOf, type BudgetReport, type UnitCostModel } from './work-budget.ts';
 
 
-/**
- * Work units a technique gets when there's no way to use `budget.gpuMs` (no
- * GPU timings yet, or none at all without `timestamp-query`) and the budget
- * names no units: DDGI's default probe count per frame on Tier A
- * (docs/design/ddgi.md).
- */
-export const DEFAULT_UNITS_PER_FRAME = 512;
-
-/**
- * A technique's GPU cost for a frame of `units` work units, as the budget
- * sees it: `fixedMs + msPerUnit × units`.
- *
- * Why a fixed part (T1.9a): a small batch doesn't fill the GPU, so its time
- * is mostly the latency of the slowest workgroup, not the sum of the work.
- * DDGI on Sponza (RTX 3060) costs about the same 1.6 ms for 32 probes as for
- * 128, then about 6 µs per probe more. A cost proportional to the units reads
- * small batches as expensive per unit and hands out too few, and after a
- * warm-up of big batches it hands out far too many.
- */
-export interface UnitCostModel {
-    readonly fixedMs: number;
-    readonly msPerUnit: number;
-}
-
-/**
- * The fixed part is the median over this many recent timed frames (half a
- * second at 60 Hz), so up to 15 slow frames in 31 change nothing.
- *
- * Why a median (T1.9a): GPU timestamps time the GPU's wall clock, so another
- * program's GPU work that the driver slices into ours lands inside our
- * passes. On this laptop that added about 2.5 ms (RTX 3060) or 1.3 ms (Intel
- * UHD) to the trace pass every 50 ms, a third of the frames at 60 Hz, and
- * smaller overlaps to many more. A running mean held the *mean* at the
- * budget, so the typical frame ran well under it; on Sponza it shrank the
- * batch to 14 probes. A low quantile instead of the median overspent the
- * budget by 5-30% (measured), and 15 frames were too few to ride out bursts
- * of outside work.
- */
-export const RECENT_FRAMES = 31;
-
-/**
- * How the batch moves from frame to frame under a millisecond budget
- * ({@link steerUnits}), once a frame budgeted in milliseconds came before.
- *
- * Why (T1.9a review): steering by the fitted line alone swung Sponza's batch
- * between 1 and about 120 probes. Below about 30 probes Sponza's time is not
- * a line: 1 probe costs 0.2 ms, 25 probes about 2 ms at 60 Hz. So after the
- * first millisecond frame the batch is steered by what was measured at about
- * its own size, which needs no line. And because the time is nearly flat
- * from about 20 to 190 probes at 60 Hz, the batch keeps climbing while the
- * time stays within the budget, so it settles at the largest batch that
- * fits, not the first (T1.9a re-review: about 10× the probes for the same
- * time).
- *
- * - The batch is the units the technique *used* last frame (never more than
- *   it could use: all probes, or `maxProbesPerFrame`), so a budget bigger
- *   than the work can't run the hand-out away from what is measured;
- * - the recent frames whose batch was within `nearShare` of it (at least
- *   `nearFrames` of them; until then the batch stays) give the median time
- *   at that size;
- * - over the budget by more than `deadBand`: shrink by the square root of
- *   budget / measured, at most to `maxShrink`;
- * - under it by more than `deadBand`: grow by that square root, at most by
- *   `maxGrowth`;
- * - in between and at or under the budget: climb by `climbStep` once the
- *   batch has stood for `climbFrames` frames (the timings arrive 3 frames
- *   late, and the median needs frames at the new size); over the budget but
- *   inside the band: stay.
- */
-export const UNIT_STEERING = {
-    nearShare: 1.25,
-    nearFrames: 5,
-    deadBand: 0.05,
-    maxShrink: 0.8,
-    maxGrowth: 1.25,
-    climbStep: 1.1,
-    climbFrames: 6,
-} as const;
-
-/** Each batch-size bucket keeps this many of its latest frames; the slope is fitted through their medians. */
-const BUCKET_FRAMES = 9;
-
-/**
- * A batch-size bucket with no new frame for this long (30 s at 60 Hz) is
- * dropped, so old measurements (the warm-up's big batches, a different GPU
- * clock) stop shaping the slope. Buckets are also dropped when the scene's
- * geometry changes.
- */
-export const BUCKET_MAX_AGE_FRAMES = 1800;
-
-/**
- * The fitted cost per unit stays at least this share of the lowest average
- * cost per unit measured (the biggest batches'). A nearly flat fit (all
- * latency, no throughput) would make every small timing error a huge jump in
- * units.
- */
-const MIN_SLOPE_SHARE = 0.25;
-
-/**
- * Batch sizes must span at least this factor before a slope is fitted. Nearby
- * sizes (a budget's batch wandering by a few units) give a slope that is all
- * noise.
- */
-const MIN_FIT_SPAN = 4;
-
-/** Frames of handed-out units remembered while their timings are on the way (they arrive a few frames late). */
-const REMEMBERED_FRAMES = 32;
-
-/** What steering needs from the previous frame. */
-export interface PreviousBatch {
-    /** The units the technique used last frame. */
-    readonly units: number;
-    /** The median GPU ms of recent frames near `units` ({@link UNIT_STEERING}); undefined until there are enough. */
-    readonly nearMs: number | undefined;
-    /** Frames the batch has stood unchanged (for the climb). */
-    readonly framesUnchanged: number;
-}
-
-/**
- * Units each technique may spend this frame, in encode order (FrameBudget):
- * - with `gpuMs` and a cost model for every technique, the time is shared
- *   evenly between the techniques (docs/api/platform.md, gap 6: a real policy
- *   waits for a second technique). The first frame budgeted in milliseconds
- *   (after a warm-up in units, say) takes the units the model says fit:
- *   `(share − fixedMs) / msPerUnit`, at least 1 while the share is above 0.
- *   Later frames are steered from the previous batch ({@link steerUnits});
- * - otherwise `units`, or {@link DEFAULT_UNITS_PER_FRAME}.
- * With `gpuMs` set, `units` caps the result, applied last (FrameBudget).
- */
-export function unitsForFrame(budget: FrameBudget, costs: readonly (UnitCostModel | undefined)[], previous: readonly (PreviousBatch | undefined)[] = []): number[] {
-    const fallback = budget.units ?? DEFAULT_UNITS_PER_FRAME;
-    const gpuMs = budget.gpuMs;
-    const costsKnown = costs.every(
-        (cost) => cost !== undefined && cost.msPerUnit > 0 && Number.isFinite(cost.msPerUnit) && cost.fixedMs >= 0 && Number.isFinite(cost.fixedMs),
-    );
-    if (gpuMs === undefined || !(gpuMs >= 0) || !costsKnown) return costs.map(() => fallback);
-    const share = gpuMs / Math.max(1, costs.length);
-    return costs.map((cost, index) => {
-        const model = cost as UnitCostModel;
-        const target = share > 0 ? Math.max(1, Math.floor((share - model.fixedMs) / model.msPerUnit)) : 0;
-        const steered = steerUnits(target, previous[index], share);
-        return budget.units === undefined ? steered : Math.min(steered, budget.units);
-    });
-}
-
-/**
- * This frame's batch: the model's `target` on the first millisecond frame,
- * then steered from the previous batch by what was measured near its size
- * ({@link UNIT_STEERING}). A zero target (a zero budget) stays zero.
- */
-export function steerUnits(target: number, previous: PreviousBatch | undefined, shareMs: number): number {
-    if (target === 0) return 0;
-    if (previous === undefined || !(previous.units > 0)) return target;
-    const units = previous.units;
-    // Not enough frames at this size yet: wait for them rather than guess.
-    if (previous.nearMs === undefined || !(previous.nearMs > 0)) return units;
-    const measured = previous.nearMs;
-    const correction = Math.sqrt(shareMs / measured);
-    if (measured > shareMs * (1 + UNIT_STEERING.deadBand)) {
-        return Math.max(1, Math.floor(units * UNIT_STEERING.maxShrink), Math.round(units * correction));
-    }
-    if (measured < shareMs * (1 - UNIT_STEERING.deadBand)) {
-        // + 1 so a batch of a few units can still grow.
-        return Math.min(Math.ceil(units * UNIT_STEERING.maxGrowth) + 1, Math.max(units + 1, Math.round(units * correction)));
-    }
-    if (measured <= shareMs && previous.framesUnchanged >= UNIT_STEERING.climbFrames) {
-        return Math.max(units + 1, Math.round(units * UNIT_STEERING.climbStep));
-    }
-    return units;
-}
-
-/**
- * One technique's steering state between frames, as the platform keeps it:
- * the units it used last frame and how long the hand-out has stood. Only
- * frames with a millisecond budget count; any other frame starts over (the
- * next millisecond frame takes the model's target).
- */
-export class BatchSteering {
-    private last: { used: number; handedOut: number; framesUnchanged: number } | undefined;
-    /** The units used last frame when that was less than handed out (all the work there was), whatever the budget. */
-    private workLimit: number | undefined;
-
-    /** What {@link steerUnits} needs, or undefined when the last frame had no millisecond budget. */
-    previous(meter: UnitCostMeter, techniqueId: string): PreviousBatch | undefined {
-        const last = this.last;
-        if (!last) return undefined;
-        return { units: last.used, nearMs: meter.msNear(techniqueId, last.used), framesUnchanged: last.framesUnchanged };
-    }
-
-    /**
-     * This frame's hand-out, at most `maxGrowth` past what the technique could
-     * use last frame when it used less than it was given. A bigger hand-out
-     * buys nothing, and steering from it would leave the measured sizes behind.
-     */
-    limit(units: number): number {
-        return this.workLimit === undefined ? units : Math.min(units, Math.ceil(this.workLimit * UNIT_STEERING.maxGrowth) + 1);
-    }
-
-    /** After the technique's encode: what was handed out, what it used, and whether the budget was in milliseconds. */
-    record(handedOut: number, used: number, msBudget: boolean): void {
-        this.workLimit = used < handedOut ? used : undefined;
-        if (!msBudget) {
-            this.last = undefined;
-            return;
-        }
-        const unchanged = this.last !== undefined && this.last.handedOut === handedOut;
-        this.last = { used, handedOut, framesUnchanged: unchanged ? (this.last as { framesUnchanged: number }).framesUnchanged + 1 : 0 };
-    }
-
-    reset(): void {
-        this.last = undefined;
-        this.workLimit = undefined;
-    }
-}
-
-/** One timed frame: the units a technique used and the GPU ms its passes took. */
-interface CostSample {
-    readonly units: number;
-    readonly ms: number;
-}
-
-/** A timed frame and when it was (the platform's frame number), for aging buckets out. */
-interface DatedSample extends CostSample {
-    readonly frame: number;
-}
-
-interface TechniqueCost {
-    /** The latest {@link RECENT_FRAMES} frames, oldest first. */
-    readonly recent: CostSample[];
-    /** The slope last fitted from spread batch sizes; kept when old buckets age out, dropped when geometry changes. */
-    lastFittedSlope: number | undefined;
-    /** The latest frames per batch size (bucket = floor(log2(units))): the spread the slope is fitted from. */
-    readonly buckets: Map<number, DatedSample[]>;
-}
-
-/**
- * Measures each technique's GPU cost from the platform's timer, as a
- * {@link UnitCostModel}: the passes named `<technique id>/...` in a frame
- * against the units the technique used that frame (what its `encode`
- * returned, or all it was handed).
- *
- * - **The slope** (cost per unit) is a least-squares line through the
- *   medians of each batch size's latest frames (sizes grouped by powers of
- *   two). The warm-up's big batches and the budget's small ones give it
- *   spread. It is kept at or above {@link MIN_SLOPE_SHARE} of the cheapest
- *   average cost per unit measured, and at or below the recent frames'
- *   average, so the fixed part is never negative.
- * - **The fixed part** is the median, over the latest {@link RECENT_FRAMES}
- *   frames, of each frame's ms minus slope × its units, at least 0. A median,
- *   so frames slowed by other programs' GPU work count little (see
- *   {@link RECENT_FRAMES}); and per frame, so a batch that changes from frame
- *   to frame doesn't blur it.
- * - Without spread (one batch size so far) there is no slope, and the model
- *   is proportional: the median of the recent frames' ms per unit, no fixed
- *   part, as before T1.9a.
- *
- * With this model the budget converges on the batch whose measured time is
- * the budget, by steps along the fitted slope. A proportional model has the
- * same end point in theory, but crawls there when most of the time is fixed,
- * and its running mean followed the outside spikes.
- *
- * Reset when the work changes shape: on `prepare`, when a technique is added
- * or removed, and on `resetHistory`. Buckets age out
- * ({@link BUCKET_MAX_AGE_FRAMES}) and are dropped when geometry changes
- * ({@link UnitCostMeter.forgetBatchSizes}).
- */
-export class UnitCostMeter {
-    private readonly handedOut = new Map<number, Map<string, number>>();
-    private readonly costs = new Map<string, TechniqueCost>();
-
-    /** Records the units a technique used in a frame. */
-    handOut(frame: number, techniqueId: string, units: number): void {
-        let frameUnits = this.handedOut.get(frame);
-        if (!frameUnits) {
-            frameUnits = new Map();
-            this.handedOut.set(frame, frameUnits);
-            for (const old of this.handedOut.keys()) if (old <= frame - REMEMBERED_FRAMES) this.handedOut.delete(old);
-        }
-        frameUnits.set(techniqueId, units);
-    }
-
-    /** Takes one frame's pass timings into the estimates. */
-    measure(frame: number, passes: readonly { readonly name: string; readonly gpuMs: number }[]): void {
-        const frameUnits = this.handedOut.get(frame);
-        if (!frameUnits) return;
-        for (const [techniqueId, units] of frameUnits) {
-            if (!(units > 0)) continue;
-            const prefix = `${techniqueId}/`;
-            const timed = passes.filter((pass) => pass.name.startsWith(prefix) && pass.gpuMs >= 0);
-            if (timed.length === 0) continue;
-            const ms = timed.reduce((sum, pass) => sum + pass.gpuMs, 0);
-            this.add(techniqueId, { units, ms, frame });
-        }
-        this.handedOut.delete(frame);
-    }
-
-    /** The technique's cost model, or undefined before its first timed frame. */
-    model(techniqueId: string): UnitCostModel | undefined {
-        const cost = this.costs.get(techniqueId);
-        if (!cost) return undefined;
-        // Without spread now, the last line fitted (until geometry changes): it only sets the
-        // step size and the floor, while the fixed part below still comes from recent frames.
-        const fitted = bucketSlope(cost.buckets) ?? cost.lastFittedSlope;
-        const recentAverage = median(cost.recent.map((sample) => sample.ms / sample.units));
-        if (fitted === undefined) return { fixedMs: 0, msPerUnit: recentAverage };
-        // At most the recent average: where big batches cost more per unit than small ones
-        // (the Intel UHD after a warm-up of 1,728-probe batches), a steeper line would need
-        // a negative fixed part, and clamping that to 0 made the model overestimate the
-        // batch in use by 40% and hold the budget at 1.4 ms (T1.9a).
-        const slope = Math.min(recentAverage, fitted);
-        const fixedMs = Math.max(0, median(cost.recent.map((sample) => sample.ms - slope * sample.units)));
-        return { fixedMs, msPerUnit: slope };
-    }
-
-    /**
-     * The median GPU ms of the recent frames whose batch was within
-     * {@link UNIT_STEERING}`.nearShare` of `units`, or undefined with fewer
-     * than `nearFrames` of them. A median, so frames slowed by other
-     * programs' GPU work count little ({@link RECENT_FRAMES}).
-     */
-    msNear(techniqueId: string, units: number): number | undefined {
-        const cost = this.costs.get(techniqueId);
-        if (!cost) return undefined;
-        const near = cost.recent.filter((sample) => sample.units <= units * UNIT_STEERING.nearShare && sample.units * UNIT_STEERING.nearShare >= units);
-        return near.length >= UNIT_STEERING.nearFrames ? median(near.map((sample) => sample.ms)) : undefined;
-    }
-
-    /** How many batch-size buckets the technique has (for tests and diagnostics). */
-    batchSizesKnown(techniqueId: string): number {
-        return this.costs.get(techniqueId)?.buckets.size ?? 0;
-    }
-
-    reset(): void {
-        this.handedOut.clear();
-        this.costs.clear();
-    }
-
-    /**
-     * Drops every batch-size bucket (the slope's spread), keeping the recent
-     * frames: after a geometry change the old curve no longer applies, while
-     * the median of recent frames follows the change by itself.
-     */
-    forgetBatchSizes(): void {
-        for (const cost of this.costs.values()) {
-            cost.buckets.clear();
-            cost.lastFittedSlope = undefined;
-        }
-    }
-
-    private add(techniqueId: string, sample: DatedSample): void {
-        let cost = this.costs.get(techniqueId);
-        if (!cost) {
-            cost = { recent: [], buckets: new Map(), lastFittedSlope: undefined };
-            this.costs.set(techniqueId, cost);
-        }
-        pushLimited(cost.recent, sample, RECENT_FRAMES);
-        const bucket = Math.floor(Math.log2(sample.units));
-        let samples = cost.buckets.get(bucket);
-        if (!samples) {
-            samples = [];
-            cost.buckets.set(bucket, samples);
-        }
-        pushLimited(samples, sample, BUCKET_FRAMES);
-        for (const [key, list] of cost.buckets) {
-            if (list[list.length - 1].frame < sample.frame - BUCKET_MAX_AGE_FRAMES) cost.buckets.delete(key);
-        }
-        const fitted = bucketSlope(cost.buckets);
-        if (fitted !== undefined) cost.lastFittedSlope = fitted;
-    }
-}
-
-function pushLimited<T>(list: T[], item: T, limit: number): void {
-    list.push(item);
-    if (list.length > limit) list.shift();
-}
-
-function median(values: readonly number[]): number {
-    const sorted = [...values].sort((a, b) => a - b);
-    const middle = Math.floor(sorted.length / 2);
-    return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
-}
-
-/**
- * The slope through the buckets' medians, at least {@link MIN_SLOPE_SHARE} of
- * the cheapest bucket's cost per unit; undefined without enough spread.
- */
-function bucketSlope(buckets: ReadonlyMap<number, readonly CostSample[]>): number | undefined {
-    const points = [...buckets.values()].map((samples) => ({
-        units: median(samples.map((sample) => sample.units)),
-        ms: median(samples.map((sample) => sample.ms)),
-    }));
-    const fitted = fittedSlope(points);
-    if (fitted === undefined) return undefined;
-    const cheapest = Math.min(...points.map((point) => point.ms / point.units));
-    return Math.max(MIN_SLOPE_SHARE * cheapest, fitted);
-}
-
-/** Least-squares slope of ms against units through the points; undefined without enough spread in units. */
-function fittedSlope(points: readonly CostSample[]): number | undefined {
-    if (points.length < 2) return undefined;
-    const smallest = Math.min(...points.map((point) => point.units));
-    const largest = Math.max(...points.map((point) => point.units));
-    if (largest < MIN_FIT_SPAN * smallest) return undefined;
-    const meanUnits = points.reduce((sum, point) => sum + point.units, 0) / points.length;
-    const meanMs = points.reduce((sum, point) => sum + point.ms, 0) / points.length;
-    let covariance = 0;
-    let variance = 0;
-    for (const point of points) {
-        covariance += (point.units - meanUnits) * (point.ms - meanMs);
-        variance += (point.units - meanUnits) ** 2;
-    }
-    return variance > 0 ? covariance / variance : undefined;
-}
+// Budget v2 lives in work-budget.ts; these names were exported from here before it.
+export { DEFAULT_UNITS_PER_FRAME, type UnitCostModel } from './work-budget.ts';
 
 /** No scene changes: the screen stage runs after `encode`, which already reported them. */
 const NO_CHANGES: SceneChanges = { regions: [], global: [], movedReceivers: 0 };
@@ -498,10 +90,10 @@ export class GIPlatformImpl implements GIPlatform {
     /** Set after `encode` resolved timestamps, so the next `encode` starts their readback (the host has submitted by then). */
     private timerAwaitingReadback = false;
     private latestPasses: PassTiming[] = [];
-    /** Each technique's measured GPU cost (fixed + per unit), for turning `budget.gpuMs` into units. */
+    /** Pairs each frame's GPU timings with the units each technique used (budget v2's calibration reads them). */
     private readonly unitCosts = new UnitCostMeter();
-    /** Each technique's steering state between frames (UNIT_STEERING). */
-    private readonly steering = new Map<GITechnique, BatchSteering>();
+    /** Each technique's units per frame: calibration, floor, saturation (work-budget.ts). */
+    private readonly budgets = new Map<GITechnique, WorkBudget>();
     private readonly warnedMessages = new Set<string>();
     /** The `uncapturederror` listener, kept so `dispose` can remove it. */
     private readonly onUncapturedError: (event: Event) => void;
@@ -559,8 +151,7 @@ export class GIPlatformImpl implements GIPlatform {
 
     addTechnique<T extends GITechnique>(technique: T): T {
         this.checkUsable();
-        this.unitCosts.reset();
-        this.steering.clear();
+        this.forgetBudgets();
         if (this.find(technique)) throw new Error(`@pmndrs/ddgi: technique '${technique.id}' is already attached`);
         for (const kind of technique.requirements.queries) {
             if (!this.queries.has(kind)) throw new Error(`@pmndrs/ddgi: technique '${technique.id}' needs the '${kind}' query backend, which this platform doesn't have`);
@@ -575,8 +166,7 @@ export class GIPlatformImpl implements GIPlatform {
 
     /** Detaches and disposes the technique (a technique is attached to one platform for its whole life). */
     removeTechnique(technique: GITechnique): void {
-        this.unitCosts.reset();
-        this.steering.clear();
+        this.forgetBudgets();
         const entry = this.find(technique);
         if (!entry) return;
         if (this.attached.some((other) => other.fallback === technique)) {
@@ -611,8 +201,7 @@ export class GIPlatformImpl implements GIPlatform {
 
     async prepare(): Promise<void> {
         // New resources and kernels: old costs per unit no longer apply.
-        this.unitCosts.reset();
-        this.steering.clear();
+        this.forgetBudgets();
         this.checkUsable();
         checkComputeLimits(this.device.limits);
         // The platform's kernels and the techniques' compile side by side: every module's
@@ -650,39 +239,36 @@ export class GIPlatformImpl implements GIPlatform {
         // Settings, and the sky's projection when the environment changed.
         this.shade.encode(encoder, this.sceneCopy.environment, this.sceneCopy.environmentVersion);
 
-        // The measured cost curve no longer applies once geometry changed.
-        if (upload.changes.regions.some((region) => region.reason === 'geometry')) this.unitCosts.forgetBatchSizes();
+        const techniques = this.encodeOrder();
+        // Calibrated costs no longer hold once the geometry rays see changed: a geometry change in
+        // the scene, or mesh trees still being built (rays don't see those meshes yet). Each
+        // technique's budget calibrates again once it is still (GEOMETRY_RECALIBRATION).
+        if (this.rays.building || upload.changes.regions.some((region) => region.reason === 'geometry')) {
+            for (const technique of techniques) this.budgetFor(technique).geometryChanged();
+        }
 
         if (!frame.budget.paused) {
-            const techniques = this.encodeOrder();
-            const units = unitsForFrame(
-                frame.budget,
-                techniques.map((technique) => this.costModel(technique)),
-                techniques.map((technique) => this.steering.get(technique)?.previous(this.unitCosts, technique.id)),
-            );
-            const msBudget = frame.budget.gpuMs !== undefined;
-            techniques.forEach((technique, index) => {
-                let steering = this.steering.get(technique);
-                if (!steering) {
-                    steering = new BatchSteering();
-                    this.steering.set(technique, steering);
-                }
-                units[index] = steering.limit(units[index]);
+            const gpuMs = frame.budget.gpuMs;
+            // The millisecond budget is shared evenly between techniques (docs/api/platform.md, gap 6).
+            const shareMs = gpuMs === undefined ? undefined : gpuMs / Math.max(1, techniques.length);
+            const timed = this.timer?.enabled === true;
+            for (const technique of techniques) {
+                const budget = this.budgetFor(technique);
+                const units = budget.unitsFor({ frame: this.frame, deltaTime: frame.deltaTime, budget: frame.budget, shareMs, timed });
                 const techniqueFrame: TechniqueFrame = {
                     frame: this.frame,
                     deltaTime: frame.deltaTime,
                     camera: frame.camera,
                     changes: upload.changes,
-                    units: units[index],
+                    units,
                 };
                 const reported = technique.encode(encoder, techniqueFrame);
-                // Cost is measured, and the batch steered, against the units actually used: a budget
-                // bigger than the work would otherwise make units look cheaper and cheaper, and
-                // the hand-out climb away from anything measured.
-                const used = typeof reported === 'number' ? Math.min(reported, units[index]) : units[index];
+                // Cost is measured against the units actually used: a hand-out bigger than the
+                // work would otherwise make units look cheaper than they are.
+                const used = typeof reported === 'number' ? Math.min(reported, units) : units;
                 if (this.timer) this.unitCosts.handOut(this.frame, technique.id, used);
-                steering.record(units[index], used, msBudget);
-            });
+                budget.record(units, used);
+            }
         }
 
         if (this.timer) {
@@ -722,7 +308,11 @@ export class GIPlatformImpl implements GIPlatform {
         }
         const topLevel = this.rays.topLevelCounters;
         if (topLevel) counters['platform top level'] = topLevel;
-        const sceneCopy = this.sceneCopy.memoryBytes;
+        for (const [technique, budget] of this.budgets) counters[`${technique.id} budget`] = budgetCounters(budget.report);
+        // The sky the rays see (radiance map, procedural source texture) and the hit-shading
+        // uniforms are part of the scene as the platform holds it, so they count as scene copy;
+        // `MemoryReport` has no bucket of its own for them, and the total must cover them.
+        const sceneCopy = this.sceneCopy.memoryBytes + this.shade.memoryBytes;
         const acceleration = this.rays.memoryBytes;
         const memory: MemoryReport = {
             sceneCopy,
@@ -734,8 +324,7 @@ export class GIPlatformImpl implements GIPlatform {
     }
 
     resetHistory(): void {
-        this.unitCosts.reset();
-        this.steering.clear();
+        this.forgetBudgets();
         for (const { technique } of this.attached) technique.resetHistory();
     }
 
@@ -798,15 +387,49 @@ export class GIPlatformImpl implements GIPlatform {
         };
     }
 
-    /** A technique's own estimate (cost per unit, no fixed part) if it has one, otherwise the platform's measurement. */
+    /**
+     * Calibrate every technique's batch again at the next frame with a
+     * millisecond budget, as after a new `prepare` (budget v2). For a host
+     * that knows the GPU's load changed for good. Not in the `GIPlatform`
+     * contract yet (proposed in PROGRESS).
+     */
+    recalibrate(): void {
+        for (const budget of this.budgets.values()) budget.recalibrate();
+    }
+
+    /** What a technique's budget did in the latest frame (also in `stats.counters['<id> budget']`). */
+    budgetReport(technique: GITechnique): BudgetReport | undefined {
+        return this.budgets.get(technique)?.report;
+    }
+
+    /** The cost line a technique's batch was calibrated from: its own estimate (cost per unit, no fixed part) if it has one. */
     costModel(technique: GITechnique): UnitCostModel | undefined {
         if (technique.msPerUnit !== undefined) return { fixedMs: 0, msPerUnit: technique.msPerUnit };
-        return this.unitCosts.model(technique.id);
+        return this.budgets.get(technique)?.model;
+    }
+
+    private budgetFor(technique: GITechnique): WorkBudget {
+        let budget = this.budgets.get(technique);
+        if (!budget) {
+            budget = new WorkBudget(workFloorOf(technique), () => technique.msPerUnit);
+            this.budgets.set(technique, budget);
+        }
+        return budget;
+    }
+
+    /** New resources, kernels or techniques: what was measured no longer applies. */
+    private forgetBudgets(): void {
+        this.unitCosts.reset();
+        this.budgets.clear();
     }
 
     private collectPasses(timer: GpuTimer): void {
         const samples = timer.takeSamples();
-        for (const sample of samples) this.unitCosts.measure(sample.frame, sample.passes);
+        for (const sample of samples) {
+            for (const { techniqueId, sample: cost } of this.unitCosts.measure(sample.frame, sample.passes)) {
+                for (const [technique, budget] of this.budgets) if (technique.id === techniqueId) budget.addSample(cost);
+            }
+        }
         const newest = samples[samples.length - 1];
         if (!newest) return;
         this.latestPasses = newest.passes.map((pass) => ({ name: pass.name, gpuMs: pass.gpuMs, frame: newest.frame }));
@@ -817,6 +440,30 @@ export class GIPlatformImpl implements GIPlatform {
         this.warnedMessages.add(message);
         console.warn(message);
     }
+}
+
+/** A budget report as `stats.counters` numbers (flags as 0 or 1, unknowns left out). */
+function budgetCounters(report: BudgetReport): Record<string, number> {
+    const counters: Record<string, number> = {
+        'units this frame': report.units,
+        calibrating: report.state === 'calibrating' ? 1 : 0,
+        'floor units': report.floorUnits,
+        'stepped down': report.steppedDown ? 1 : 0,
+        'frames late': report.framesLate ? 1 : 0,
+    };
+    if (report.calibratedUnits !== undefined) counters['calibrated units'] = report.calibratedUnits;
+    if (report.framesPerSecond !== undefined) counters['frames per second'] = report.framesPerSecond;
+    const calibration = report.calibration;
+    if (calibration?.model) {
+        counters['calibration fixed ms'] = calibration.model.fixedMs;
+        counters['calibration ms per unit'] = calibration.model.msPerUnit;
+    }
+    if (calibration) {
+        counters['calibration frames'] = calibration.frames;
+        // 0: the host ran the burst back to back. The GPU's clock itself can't be read from WebGPU.
+        counters['calibration frame ms'] = calibration.frameSeconds * 1000;
+    }
+    return counters;
 }
 
 function escapeRegExp(text: string): string {

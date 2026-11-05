@@ -480,6 +480,23 @@ describe('the platform object', () => {
         expect(top.disposed).toBe(true);
     });
 
+    it("counts hit shading's sky in the scene copy and the total", async () => {
+        const gpu = createPlatformGpu();
+        const platform = new GIPlatformImpl(gpu.device);
+        platform.addTechnique(new RecordingTechnique('ddgi', []));
+        await platform.prepare();
+        encodeFrame(gpu, platform);
+
+        // The radiance map alone is hundreds of kilobytes; leaving it out once made the total too small.
+        const shadeBytes = platform.shade.memoryBytes;
+        expect(platform.shade.sky.memoryBytes).toBeGreaterThan(0);
+        expect(shadeBytes).toBeGreaterThan(platform.shade.sky.memoryBytes);
+        const memory = platform.stats.memory;
+        expect(memory.sceneCopy).toBe(platform.sceneCopy.memoryBytes + shadeBytes);
+        expect(memory.total).toBe(platform.sceneCopy.memoryBytes + shadeBytes + memory.acceleration + 1000);
+        platform.dispose();
+    });
+
     it('needs prepare again after a technique is added', async () => {
         const gpu = createPlatformGpu();
         const platform = new GIPlatformImpl(gpu.device);
