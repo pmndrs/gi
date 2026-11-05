@@ -150,6 +150,7 @@ One uniform buffer holds the volume (origin, spacing, counts), the frame rotatio
 **3. A floor bounds convergence on every machine.**
 - DDGI never updates fewer than `minProbesPerFrame` probes. Default "auto": enough probes for a full sweep within 4 s at the frame rate the host runs (Sponza 81 at 60 Hz, Cornell 8).
 - The floor wins over the millisecond ceiling, so a weak device runs slower, never frozen. A host can lower it explicitly.
+- **The floor adapts to the device (added after measuring the Intel UHD):** "auto" aims for a full sweep within 4 s, but never asks for more than twice the calibrated batch (the probes the budget buys at full clocks). Measured fixed batches (60 Hz / back to back): Intel UHD, Sponza 16 probes 1.8 / 2.1 ms, 40 probes 3.3 / 3.0 ms, 81 probes 5.3 / 4.8 ms, 160 probes 9.3 / 6.7 ms; Cornell 8 probes 0.6 ms. RTX, Sponza 81 probes 4.0 / 1.4 ms. So on the Intel the cap gives Sponza about 32–40 probes (about 3 ms, a sweep every 8–10 s), while on the RTX the cap doesn't bind (81 probes, 4 s). No tier detection is needed: the calibration already knows the device.
 
 **4. When the GPU really is saturated: the frame rate tells us, not GPU milliseconds.**
 - The platform watches `FrameInput.deltaTime`, which the contract already has. Only when the frame is missing its target (median frame time above the host's target interval by more than 10% over about 1 s) **and** DDGI's measured time exceeds the budget does it step `units` down (×0.8 per second), never below the floor.
