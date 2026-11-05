@@ -273,7 +273,7 @@ Rules for every M1 task:
 | T1.9b | Budget v2 (work-based, calibrated with the clocks up; DECISIONS 2026-11-05) | implementer | M | T1.9a | review passed with notes (32222f6); follow-ups (hot-state target memory, a saturation page check) and the RTX 3-run timing pending |
 | T1.12 | Stability: Cornell flicker fixed, debug views of the source channels, threshold set by eye; hysteresis aware of the time between a probe's updates, and Sponza's settle time measured GPU-bound (frames and seconds) | implementer | M | T1.5, T1.8 | active (2026-11-05; Dennis: "it is not steady") |
 | T1.13 | HD Cycles references with stored cameras; the viewer's Compare matches them | implementer, then gpu-tester | M | T1.8, T0.7 | active (2026-11-05; Dennis: "640 x 360 is an insane size") |
-| T1.14 | GI composite for three (`docs/design/three-composite.md`): a drop-in TSL node on three's `pass()` and `mrt()`; `GIVolume` stays the simple path; usage bar against LightProbeGrid | main session designs, implementer builds | M | T1.7, T1.8 | active (part 1 built: match passes on both GPUs; cost to time; names waiting on Dennis) |
+| T1.14 | GI composite for three (`docs/design/three-composite.md`): a drop-in TSL node on three's `pass()` and `mrt()`, with three's GTAO on the GI term by default (curtains, DECISIONS); `GIVolume` stays the simple path; usage bar against LightProbeGrid | main session designs, implementer builds | M | T1.7, T1.8 | active (part 1 built: match passes on both GPUs; cost to time; names waiting on Dennis) |
 | T1.11 | M1 note and M2 breakdown | main session | S | all M1 | todo |
 
 ### BVH lane (runs alongside; DECISIONS 2026-11-04)
@@ -376,6 +376,7 @@ Done-whens for the B stages are in `docs/design/bvh-framework.md`. B1a's: a 10k-
 - The three adapter's change-detection latency (up to 41 frames on Bistro without `markChanged`).
 - The main-thread scene copy (1.3 s Sponza, 4.1 s Bistro exterior at load) moves off the main thread.
 - A flaky `tools/assets/fetch.test.ts` under load.
+- Nested finer DDGI volumes around thin cloth (Sponza's curtains: 0.25 m around them measured +5.5% offline, about 40k probes, 60 MB, about 1 ms of update): the quality route behind M1's GTAO fix (DECISIONS 2026-11-05).
 
 ## Later
 
