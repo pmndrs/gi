@@ -26,7 +26,8 @@ tinybvh's `BuildHPLOC` (MIT, `licenses/tinybvh.txt`):
    GPUs, four on the Intel UHD) and shuffles by cluster number, so the tree is
    the same on every subgroup size (the RTX and the Intel build identical trees);
 3. the SAH leaf collapse (B1's rule) is decided as each node is made; a scan
-   numbers the nodes that stay, and triangles go to depth-first leaf order.
+   numbers the nodes that stay, and a second gives each kept node's leaves
+   their run of triangle positions (each leaf's triangles together).
 
 As in the LBVH, everything one climbing thread hands to another is an atomic,
 written once and read with a bounded wait. A node's stored clusters reuse
