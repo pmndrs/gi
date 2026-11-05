@@ -26,7 +26,7 @@ scene.add(volume);
 await volume.start(renderer, scene);              // like probes.bake(renderer, scene)
 ```
 
-- `start` takes three's device from `renderer.backend.device`, makes the platform and the DDGI technique from the volume, and runs `prepare`. Options (budget, sky, environment, DDGI settings) go in an optional second argument. Same 4–5 lines as LightProbeGrid.
+- `start` takes three's device from `renderer.backend.device`, makes the platform and the DDGI technique from the volume, and runs `prepare`. It also runs the viewer's warm-up (full passes with a running average, time-capped; `apps/viewer/src/techniques/ddgi-technique.ts`), moved into the adapter. Without it a library user starts from black, and on Sponza a probe updates only about every 73 frames. Options (budget, sky, environment, DDGI settings) go in an optional second argument. Same 4–5 lines as LightProbeGrid.
 - **No per-frame call:** the GI light's node runs the GI frame in its render-time update, as LightProbeGridNode updates itself. The implementer must check the command order there: GI's submit has to land before the render's encoder is submitted, which r187 does at `finishRender`. If that order can't be guaranteed, `volume.update(camera)` stays as one explicit line, and the usage report says so.
 - **Limits:** if the scene doesn't fit three's default limits, `start` throws `GILimitError` naming the limit, with the fix: `new WebGPURenderer({ requiredLimits: giRequiredLimits(adapter) })`, or `createGIRenderer()` as now.
 - `createGI`, `DDGITechnique` and `ThreeGI` stay public for hosts that want control (several techniques, a shared platform). The simple path doesn't need them.
