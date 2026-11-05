@@ -472,8 +472,10 @@ describe('saturation: step down when frames are late, never below the floor (bud
         expect(run.budget.report.steppedDown).toBe(true);
     });
 
-    it('a vsync host that turns 3× slower holds stepped down without targetFps (the re-review case), and recovers when the load goes', () => {
+    it('a vsync host that turns 3× slower holds stepped down without targetFps (the re-review case) until the slower-rate rule adopts the new rate, and goes back when frames speed up', () => {
         // On time at 60 Hz for 20 s, then 3× slower: frames at 30 Hz (vsync) for 60 s, then on time again.
+        // Steady 30 Hz frames at the floor can't be told from a display that changed to 30 Hz
+        // (Chrome's Energy Saver), so after adoptSlowerRateSeconds at the floor 30 Hz is adopted.
         const slowFrom = 200 + 60 * 20;
         const slowFrames = 30 * 60;
         let frameNow = 0;
@@ -491,14 +493,71 @@ describe('saturation: step down when frames are late, never below the floor (bud
         });
         const calibrated = run.reports[slowFrom - 2].calibratedUnits as number;
         expect(run.handed[slowFrom - 2]).toBe(calibrated);
-        // Late all through the slowdown: stepped down to the floor and held there, never back at the full batch.
-        const duringSlow = run.reports.slice(slowFrom + 30 * 10, slowFrom + slowFrames);
-        expect(duringSlow.every((report) => report.steppedDown)).toBe(true);
-        expect(Math.max(...duringSlow.map((report) => report.units))).toBeLessThan(calibrated);
-        // The floor stays at 60 Hz's (81), not 30 Hz's: the slowdown doesn't raise it.
-        expect(duringSlow.every((report) => report.floorUnits === 81 && report.units >= 81)).toBe(true);
-        // On time again: recovers, back to the calibrated batch within a minute.
+        // Late at first: stepped down to the 60 Hz floor (81; the slowdown doesn't raise it), not back up.
+        const adoptedAt = run.reports.findIndex((report, index) => index > slowFrom && Math.abs((report.framesPerSecond ?? 0) - 30) < 1);
+        expect(adoptedAt).toBeGreaterThan(slowFrom + 30 * SATURATION.adoptSlowerRateSeconds);
+        // Sponza reaches its floor about 3 s into the slowdown; from there until the adoption, held at it.
+        const beforeAdopting = run.reports.slice(slowFrom + 30 * 4, adoptedAt);
+        expect(beforeAdopting.length).toBeGreaterThan(30 * 5);
+        expect(beforeAdopting.every((report) => report.steppedDown && report.floorUnits === 81 && report.units >= 81)).toBe(true);
+        expect(beforeAdopting.at(-1)?.units).toBe(81);
+        // Faster frames again: 60 Hz is learned back (on time and vsync-like), and the batch is the calibrated one.
+        expect(run.reports.at(-1)?.framesPerSecond).toBeCloseTo(60, 6);
         expect(run.handed.at(-1)).toBe(calibrated);
+    });
+
+    it('a display rate that drops for good (120 Hz to 30 Hz, no targetFps): steps down to the floor, adopts 30 Hz after adoptSlowerRateSeconds there, then recovers', () => {
+        // Cornell (floor 4 at 120 Hz). The display drops to 30 Hz at 15 s and stays there.
+        const dropAt = 200 + 60 * 15;
+        const run = simulate({
+            frames: dropAt + 30 * 150,
+            budget: () => ({ gpuMs: 2 }),
+            cost: cornellLike,
+            capacity: 1728,
+            deltaTime: (frame) => (frame < 200 ? 0 : frame < dropAt ? 1 / 120 : 1 / 30),
+            technique: ddgiLike(1728),
+        });
+        const calibrated = run.reports[dropAt - 2].calibratedUnits as number;
+        expect(run.reports[dropAt - 2].framesPerSecond).toBeCloseTo(120, 6);
+        const afterDrop = run.reports.slice(dropAt);
+        const firstAtFloor = afterDrop.findIndex((report) => report.units <= report.floorUnits);
+        expect(firstAtFloor).toBeGreaterThan(0);
+        const adopted = afterDrop.findIndex((report) => Math.abs((report.framesPerSecond ?? 0) - 30) < 1);
+        // At 30 frames a second: at least adoptSlowerRateSeconds at the floor before adopting.
+        expect(adopted - firstAtFloor).toBeGreaterThanOrEqual(30 * SATURATION.adoptSlowerRateSeconds - 30);
+        // Then on time against 30 Hz: recovers toward the calibrated batch (up to 0.9 × it, then probing).
+        const end = afterDrop.at(-1) as BudgetReport;
+        expect(end.framesLate).toBe(false);
+        expect(end.units).toBeGreaterThanOrEqual(Math.floor(SATURATION.ceilingShare * calibrated));
+    });
+
+    it('a real GPU overload at the floor (unsteady late frames) never adopts a slower rate', () => {
+        // 60 Hz, then frames of 25-45 ms for 60 s: late, but not vsync-like.
+        const overloadAt = 200 + 60 * 10;
+        const run = simulate({
+            frames: overloadAt + 30 * 60,
+            budget: () => ({ gpuMs: 2 }),
+            cost: sponzaLike,
+            deltaTime: (frame) => (frame < 200 ? 0 : frame < overloadAt ? VSYNC_60 : frame % 2 ? 0.025 : 0.045),
+            technique: ddgiLike(19_425),
+        });
+        const overloaded = run.reports.slice(overloadAt + 30 * 10);
+        expect(overloaded.every((report) => Math.abs((report.framesPerSecond ?? 0) - 60) < 1e-6)).toBe(true);
+        expect(overloaded.every((report) => report.units === report.floorUnits)).toBe(true);
+    });
+
+    it('recalibrate() forgets the learned display rate', () => {
+        const guard = new SaturationGuard();
+        for (let frame = 0; frame < 70; frame++) guard.addFrame(VSYNC_60, undefined);
+        expect(guard.targetSeconds(undefined)).toBeCloseTo(VSYNC_60, 9);
+        guard.forgetRate();
+        expect(guard.targetSeconds(undefined)).toBeUndefined();
+        const budget = new WorkBudget({ msPerUnit: undefined });
+        const run = simulate({ frames: 400, budget: () => ({ gpuMs: 2 }), cost: line, workBudget: budget });
+        expect(run.budget.report.framesPerSecond).toBeCloseTo(60, 6);
+        budget.recalibrate();
+        budget.unitsFor({ frame: 401, deltaTime: VSYNC_60, budget: { gpuMs: 2 }, shareMs: 2, timed: true });
+        expect((budget as unknown as { guard: SaturationGuard }).guard.targetSeconds(undefined)).toBeUndefined();
     });
 
     it('a frame that misses now and then leaves the median on time: no step-down', () => {

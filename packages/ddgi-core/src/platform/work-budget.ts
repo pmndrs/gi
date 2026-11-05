@@ -547,10 +547,22 @@ function settle(units: number, timings: readonly number[]): CurvePoint | undefin
  *   60 Hz a few seconds into a slowdown, counted the 30 Hz frames as on time
  *   and climbed back to the full batch while every frame stayed late. A
  *   vsync host whose frames slow from 60 Hz to 30 Hz can't be told from one
- *   that switched to a 30 Hz display, so the slowdown wins: a host that
- *   really changes its display rate should say `targetFps`. The rate the
- *   floor uses follows the learned target too, so a slowdown doesn't raise
- *   the floor.
+ *   that switched to a 30 Hz display, so at first the slowdown wins. The
+ *   rate the floor uses follows the learned target too, so a slowdown
+ *   doesn't raise the floor.
+ * - `adoptSlowerRateSeconds` (the slower-rate rule): a display rate can drop
+ *   for good (Chrome's Energy Saver caps at 30 fps; the window moves to a
+ *   60 Hz screen), and the viewer and ddgi-three don't pass `targetFps`.
+ *   When the batch has been at the floor and the frames steady and
+ *   vsync-like at one slower refresh rate for this long, that rate is
+ *   adopted. At the floor DDGI's work is as small as it gets, so it isn't
+ *   what keeps the frames at the slower rate: the display rate changed.
+ *   10 s is several times what reaching the floor takes, so a short
+ *   overload that stops on its own is never mistaken for a new display,
+ *   and short enough that DDGI doesn't sit at the floor for long. A real
+ *   GPU overload makes unsteady late frames, which aren't vsync-like, so it
+ *   never adopts a rate. `GIPlatform.recalibrate()` forgets the learned
+ *   rate too. Hosts may still pass `targetFps`; nothing depends on it.
  * - `refreshRates`, `refreshTolerance`, `vsyncJitter`: vsync-like means
  *   within `refreshTolerance` of a common display refresh rate *and* steady:
  *   the window's frame times from the 10th to the 90th percentile span at
@@ -577,6 +589,7 @@ export const SATURATION = {
     refreshRates: [24, 25, 30, 48, 50, 60, 72, 75, 90, 100, 120, 144, 165],
     refreshTolerance: 0.03,
     vsyncJitter: 0.1,
+    adoptSlowerRateSeconds: 10,
 } as const;
 
 /** What a full window of frames says. */
@@ -606,14 +619,17 @@ export class SaturationGuard {
     private learnedSeconds: number | undefined;
     /** The fastest window seen, for the floor's frame rate before a display interval is learned. */
     private fastestSeconds: number | undefined;
+    /** A slower display rate seen while at the floor, and for how long (the slower-rate rule, SATURATION). */
+    private slowerRate: { seconds: number; heldSeconds: number } | undefined;
     /** The last full window, for the stats. */
     framesLate = false;
 
     /**
      * One frame. Returns the window's verdict when a window is complete.
      * Frames with no time (back to back, `deltaTime` 0) don't count.
+     * `atFloor`: the technique's batch is at its floor (for the slower-rate rule).
      */
-    addFrame(deltaTime: number, targetFps: number | undefined): SaturationWindow | undefined {
+    addFrame(deltaTime: number, targetFps: number | undefined, atFloor = false): SaturationWindow | undefined {
         if (!(deltaTime > 0) || !Number.isFinite(deltaTime)) return undefined;
         this.frameTimes.push(deltaTime);
         this.windowSeconds += deltaTime;
@@ -627,6 +643,18 @@ export class SaturationGuard {
         // is none yet, or a faster one when it is on time; a late window never replaces it.
         const onTimeForLearned = this.learnedSeconds === undefined || frameSeconds <= this.learnedSeconds * (1 + SATURATION.lateShare);
         if (isVsyncLike(window) && onTimeForLearned) this.learnedSeconds = Math.min(this.learnedSeconds ?? Number.POSITIVE_INFINITY, frameSeconds);
+        // The slower-rate rule: at the floor, steady vsync-like frames at one slower rate for
+        // long enough mean the display rate changed; adopt it.
+        if (!onTimeForLearned && atFloor && isVsyncLike(window)) {
+            const sameRate = this.slowerRate !== undefined && Math.abs(this.slowerRate.seconds / frameSeconds - 1) <= SATURATION.refreshTolerance;
+            this.slowerRate = sameRate && this.slowerRate ? { seconds: this.slowerRate.seconds, heldSeconds: this.slowerRate.heldSeconds + this.windowSeconds } : { seconds: frameSeconds, heldSeconds: this.windowSeconds };
+            if (this.slowerRate.heldSeconds >= SATURATION.adoptSlowerRateSeconds) {
+                this.learnedSeconds = this.slowerRate.seconds;
+                this.slowerRate = undefined;
+            }
+        } else {
+            this.slowerRate = undefined;
+        }
         const target = this.targetSeconds(targetFps);
         const late = target !== undefined && frameSeconds > target * (1 + SATURATION.lateShare);
         const verdict = { late, seconds: this.windowSeconds };
@@ -662,6 +690,13 @@ export class SaturationGuard {
         this.frameTimes = [];
         this.windowSeconds = 0;
         this.framesLate = false;
+    }
+
+    /** `recalibrate()`: forget the learned display rate too; the next vsync-like window teaches it again. */
+    forgetRate(): void {
+        this.learnedSeconds = undefined;
+        this.fastestSeconds = undefined;
+        this.slowerRate = undefined;
     }
 }
 
@@ -844,7 +879,7 @@ export class WorkBudget {
         }
         const framesPerSecond = this.guard.framesPerSecond(budget.targetFps);
         const floorUnits = this.floorUnits(framesPerSecond ?? ASSUMED_FRAMES_PER_SECOND, calibration.units);
-        const window = this.guard.addFrame(input.deltaTime, budget.targetFps);
+        const window = this.guard.addFrame(input.deltaTime, budget.targetFps, this.current <= floorUnits);
         if (window) this.applyWindow(window, calibration.units, floorUnits);
         const units = Math.max(floorUnits, this.current);
         return this.handOut('calibrated', capped(units), floorUnits, framesPerSecond);
@@ -903,6 +938,8 @@ export class WorkBudget {
     /** Calibrate again at the next millisecond frame (`GIPlatform.recalibrate`). */
     recalibrate(): void {
         this.recalibrateRequested = true;
+        // The display rate may have changed too (the slower-rate rule, SATURATION): learn it again.
+        this.guard.forgetRate();
     }
 
     /** One window of the saturation guard: step down, hold, or recover (AIMD, see SATURATION). */
