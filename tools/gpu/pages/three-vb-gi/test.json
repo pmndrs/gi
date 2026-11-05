@@ -1,0 +1,5 @@
+{
+    "description": "Sponza: GI on against off through three's Visibility-Buffer (and optionally Meshlet) drawing pipeline, against the standard forward path, and which materials fall back to the standard path. A timing page: run it under the bench lock.",
+    "timeoutMs": 2400000,
+    "manual": true
+}
