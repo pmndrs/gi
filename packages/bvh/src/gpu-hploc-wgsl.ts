@@ -88,6 +88,7 @@
  * was 8.6 ms of Sponza's 44.8 ms build.
  */
 
+import { GPU_LAYOUT_MAX_LEAF_PRIMITIVES } from './gpu-layout.ts';
 import { HPLOC_MAX_CLUSTERS, HPLOC_MERGE_THRESHOLD, HPLOC_SEARCH_RADIUS } from './hploc-cpu.ts';
 import { LBVH_STAT, LBVH_STATS_WORDS, LBVH_WORKGROUP_SIZE, lbvhKernelsWgsl } from './gpu-lbvh-wgsl.ts';
 
@@ -115,7 +116,7 @@ const INFO_HEIGHT_MASK = 0x7f;
 
 /** H-PLOC's words in a mesh's stats, after the LBVH's (gpu-lbvh-wgsl.ts, LBVH_STAT). */
 export const HPLOC_STAT = {
-    /** The root's cluster number, written when the root is merged. */
+    /** The root's cluster number, written when the root is merged; 0 (never a root) before. */
     root: 26,
     /** Nodes the merges made: must end at triangles - 1. */
     nodesMade: 27,
@@ -166,8 +167,8 @@ struct HplocParams {
     treePositionsOffset: u32,  // where each sorted triangle's tree position starts in hplocLinks
     tieBreak: u32,             // HPLOC_TIE_BREAK
     leafRunsOffset: u32,       // where each made node's leaf triangles (then, scanned, their first position) start in hplocLinks
-    unused1: u32,
-    unused2: u32,
+    scratchQuads: u32,        // hplocScratch's length in vec4s, which the clear fills
+    unused: u32,
 }
 
 // Per sorted position: the split metric between it and the next, (high, low).
@@ -178,7 +179,7 @@ struct HplocParams {
 @group(0) @binding(24) var<storage, read_write> hplocScratch: array<atomic<u32>>;
 // Plain views of hplocScratch, for the clear and for the dispatches after the climb.
 @group(0) @binding(25) var<storage, read> hplocScratchView: array<u32>;
-@group(0) @binding(26) var<storage, read_write> hplocScratchFill: array<u32>;
+@group(0) @binding(26) var<storage, read_write> hplocScratchFill: array<vec4u>;
 // Read only in later dispatches: [the node scan (lbvhRank), one more at the end][the leaf-run scan, one more]
 // [2 children per made node][every cluster's parent: leaves, then made nodes][each sorted triangle's tree position].
 @group(0) @binding(27) var<storage, read_write> hplocLinks: array<u32>;
@@ -365,32 +366,20 @@ fn hplocDeltasKernel(
 
 // ---- 4. Clear ---------------------------------------------------------------------------
 
-// Marks every handed-over word unwritten (plain stores; the climb is a later dispatch).
+// Marks every handed-over word unwritten: the whole scratch buffer, one vec4
+// per thread, neighbouring threads on neighbouring words (plain stores; the
+// climb is a later dispatch). Per node, as the LBVH clears, the stores were
+// strided and took 2.8 ms of Sponza's build; a flat fill writes at full speed.
+// (A mesh's root word needs no mark: lbvhStart zeroes it, and no root is cluster 0.)
 @compute @workgroup_size(${LBVH_WORKGROUP_SIZE})
 fn hplocClear(
     @builtin(workgroup_id) workgroup: vec3u,
     @builtin(num_workgroups) groups: vec3u,
     @builtin(local_invocation_index) localIndex: u32,
 ) {
-    if (!lbvhHasTile(workgroup, groups)) {
-        return;
-    }
-    let tile = lbvhTile(workgroup, groups);
-    let mesh = tile.mesh;
-    let local = tile.first + localIndex;
-    if (local < mesh.innerCount) {
-        for (var word = 0u; word < HPLOC_CLIMB_WORDS; word += 1u) {
-            hplocScratchFill[hplocExchangeWord(mesh, local) + word] = LBVH_UNWRITTEN;
-        }
-        for (var word = 0u; word < HPLOC_RECORD_WORDS; word += 1u) {
-            hplocScratchFill[hplocRecordWord(mesh, local, word)] = LBVH_UNWRITTEN;
-        }
-    }
-    if (local < mesh.triangleCount) {
-        hplocScratchFill[hplocListWord(mesh, local)] = LBVH_UNWRITTEN;
-    }
-    if (local == 0u) {
-        atomicStore(&lbvhStats[lbvhStatWord(mesh.index, HPLOC_STAT_ROOT)], LBVH_UNWRITTEN);
+    let at = flatWorkgroupIndex(workgroup, groups) * LBVH_WORKGROUP_SIZE + localIndex;
+    if (at < hplocParams.scratchQuads) {
+        hplocScratchFill[at] = vec4u(LBVH_UNWRITTEN);
     }
 }
 
@@ -468,17 +457,22 @@ fn hplocLeafCluster(mesh: LbvhMesh, position: u32) -> HplocCluster {
 }
 
 // A made node, from its record: its maker stored it before the node could be handed on.
+// All eight words are loaded first, so the loads overlap; only a word still
+// unwritten is then waited for (a wait per word would be eight round trips in a row).
 fn hplocMadeCluster(mesh: LbvhMesh, cluster: u32) -> HplocCluster {
     let made = cluster - mesh.triangleCount;
-    let m = mesh.index;
-    var lower: vec3f;
-    var upper: vec3f;
-    for (var axis = 0u; axis < 3u; axis += 1u) {
-        lower[axis] = bitcast<f32>(hplocWait(m, hplocRecordWord(mesh, made, axis)));
-        upper[axis] = bitcast<f32>(hplocWait(m, hplocRecordWord(mesh, made, 3u + axis)));
+    var words: array<u32, ${HPLOC_RECORD_WORDS}>;
+    for (var word = 0u; word < HPLOC_RECORD_WORDS; word += 1u) {
+        words[word] = atomicLoad(&hplocScratch[hplocRecordWord(mesh, made, word)]);
     }
-    let cost = bitcast<f32>(hplocWait(m, hplocRecordWord(mesh, made, 6u)));
-    return HplocCluster(lower, upper, cluster, cost, hplocWait(m, hplocRecordWord(mesh, made, 7u)));
+    for (var word = 0u; word < HPLOC_RECORD_WORDS; word += 1u) {
+        if (words[word] == LBVH_UNWRITTEN) {
+            words[word] = hplocWait(mesh.index, hplocRecordWord(mesh, made, word));
+        }
+    }
+    let lower = vec3f(bitcast<f32>(words[0]), bitcast<f32>(words[1]), bitcast<f32>(words[2]));
+    let upper = vec3f(bitcast<f32>(words[3]), bitcast<f32>(words[4]), bitcast<f32>(words[5]));
+    return HplocCluster(lower, upper, cluster, bitcast<f32>(words[6]), words[7]);
 }
 
 // Cluster 'index' of a node being merged: the left child's clusters, then the right child's.
@@ -921,6 +915,7 @@ fn hplocClimb(
 
 // ---- 6. Which made nodes stay -----------------------------------------------------------
 
+// The root's cluster number; 0 (the stats' start value) until the root is merged.
 fn hplocRootOf(mesh: LbvhMesh) -> u32 {
     return lbvhStatsView[lbvhStatWord(mesh.index, HPLOC_STAT_ROOT)];
 }
@@ -1024,8 +1019,8 @@ fn hplocBoxOf(mesh: LbvhMesh, cluster: u32) -> LbvhBox {
 // A leaf of the layout (one triangle, or a collapsed subtree of at most maxLeaf):
 // its triangles' tree positions from 'start', depth first.
 fn hplocPlaceLeaves(mesh: LbvhMesh, cluster: u32, start: u32) {
-    // A subtree of at most 8 triangles needs at most 8 entries.
-    var stack: array<u32, ${2 * HPLOC_MERGE_THRESHOLD}>;
+    // A subtree of at most maxLeaf (8) triangles needs at most 8 entries.
+    var stack: array<u32, ${GPU_LAYOUT_MAX_LEAF_PRIMITIVES}>;
     stack[0] = cluster;
     var depth = 1u;
     var placed = start;
@@ -1035,7 +1030,7 @@ fn hplocPlaceLeaves(mesh: LbvhMesh, cluster: u32, start: u32) {
         if (current < mesh.triangleCount) {
             hplocLinks[hplocTreePositionWord(mesh, current)] = placed;
             placed += 1u;
-        } else if (depth + 2u <= ${2 * HPLOC_MERGE_THRESHOLD}u) {
+        } else if (depth + 2u <= ${GPU_LAYOUT_MAX_LEAF_PRIMITIVES}u) {
             let made = current - mesh.triangleCount;
             stack[depth] = hplocLinks[hplocChildWord(mesh, made, 1u)];
             stack[depth + 1u] = hplocLinks[hplocChildWord(mesh, made, 0u)];
@@ -1076,11 +1071,12 @@ fn hplocEmit(
         hplocLinks[hplocTreePositionWord(mesh, 0u)] = 0u;
         return;
     }
-    let cluster = mesh.triangleCount + made;
-    let root = hplocRootOf(mesh);
-    if (!hplocKept(mesh, cluster, root)) {
+    // Kept nodes are the ones the node scan counted (hplocMark).
+    if (hplocLinks[mesh.innerStart + made + 1u] == hplocLinks[mesh.innerStart + made]) {
         return;
     }
+    let cluster = mesh.triangleCount + made;
+    let root = hplocRootOf(mesh);
     let rootRank = hplocLinks[mesh.innerStart + root - mesh.triangleCount] - nodeOffset;
     let out = hplocOutputIndex(mesh, cluster, nodeOffset, rootRank);
     // This node's leaves' run of triangle positions, within the mesh's.
@@ -1149,7 +1145,7 @@ fn hplocFinish(@builtin(global_invocation_id) id: vec3u) {
         atomicStore(&lbvhStats[lbvhStatWord(mesh.index, LBVH_STAT_ROOTS_FINISHED)], 1u);
     } else {
         let root = atomicLoad(&lbvhStats[lbvhStatWord(mesh.index, HPLOC_STAT_ROOT)]);
-        if (root == LBVH_UNWRITTEN || root < mesh.triangleCount) {
+        if (root < mesh.triangleCount) {
             return;   // no root: rootsFinished stays 0 and the tree is refused
         }
         let box = hplocBoxOf(mesh, root);

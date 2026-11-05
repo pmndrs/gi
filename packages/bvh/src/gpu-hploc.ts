@@ -154,7 +154,7 @@ const KERNEL_BINDINGS: Record<HplocKernel, readonly BindingName[]> = {
     hplocMortonTinybvh: ['primitiveBoxes', 'keys', 'values', 'codes', 'params', 'tables', 'statsView'],
     hplocGatherHigh: ['keys', 'values', 'codes', 'valuesIn', 'params', 'tables'],
     hplocDeltasKernel: ['keys', 'values', 'codes', 'deltas', 'params', 'tables', 'hplocParams'],
-    hplocClear: ['scratchFill', 'stats', 'params', 'tables', 'hplocParams'],
+    hplocClear: ['scratchFill', 'hplocParams'],
     hplocClimb: ['primitiveBoxes', 'values', 'deltas', 'scratch', 'links', 'stats', 'params', 'tables', 'hplocParams'],
     hplocMark: ['scratchView', 'links', 'statsView', 'params', 'tables', 'hplocParams'],
     hplocEmit: ['primitiveBoxes', 'values', 'scratchView', 'links', 'outNodes', 'outParents', 'statsView', 'params', 'tables', 'hplocParams'],
@@ -284,6 +284,8 @@ export class GpuHplocBatch {
     private readonly sortPipelines: RadixSortPipelines;
     private readonly meshes: MeshPlacement[];
     private readonly tileCount: number;
+    /** Workgroups of the clear: one vec4 of the climb's scratch per thread. */
+    private readonly clearWorkgroups: number;
     /** Buffers freed with the batch; the outputs are handed to `finish`'s caller instead. */
     private readonly owned: GPUBuffer[] = [];
     private readonly buffers: Record<BatchBuffer, GPUBuffer>;
@@ -346,6 +348,9 @@ export class GpuHplocBatch {
         const childrenOffset = leafRunsOffset + innerTotal + 1;
         const parentsOffset = childrenOffset + innerTotal * 2;
         const treePositionsOffset = parentsOffset + triangleTotal + innerTotal;
+        // The scratch is cleared in whole vec4s.
+        const scratchQuads = Math.ceil((listsOffset + triangleTotal) / 4);
+        this.clearWorkgroups = Math.ceil(scratchQuads / LBVH_WORKGROUP_SIZE);
         const scratch = {
             tables: make('tables', tables.byteLength, storage),
             primitiveBoxes: make('primitive boxes', triangleTotal * 32, storage),
@@ -357,7 +362,7 @@ export class GpuHplocBatch {
             tileSums: make('scan tile sums', Math.max(scanTileSumWords(sortTable.offsetWords), scanTileSumWords(innerTotal + 1)) * 4, storage),
             codes: make('codes', tinybvhCodes ? triangleTotal * 8 : 16, storage),
             deltas: make('deltas', triangleTotal * 8, storage),
-            scratch: make('climb scratch', (listsOffset + triangleTotal) * 4, storage),
+            scratch: make('climb scratch', scratchQuads * 16, storage),
             links: make('links', (treePositionsOffset + triangleTotal) * 4, storage),
         };
         device.queue.writeBuffer(scratch.tables, 0, tables);
@@ -395,8 +400,8 @@ export class GpuHplocBatch {
             treePositionsOffset, // treePositionsOffset
             HPLOC_TIE_BREAK[options.tieBreak], // tieBreak
             leafRunsOffset, // leafRunsOffset
-            0, // unused1
-            0, // unused2
+            scratchQuads, // scratchQuads
+            0, // unused
         ]);
         if (hplocParams.byteLength !== HPLOC_PARAMS_BYTES) throw new Error('HplocParams changed size');
 
@@ -537,7 +542,7 @@ export class GpuHplocBatch {
             }
         });
         stage('deltas', (pass) => run(pass, 'hplocDeltasKernel', this.tileCount));
-        stage('clear', (pass) => run(pass, 'hplocClear', this.tileCount));
+        stage('clear', (pass) => run(pass, 'hplocClear', this.clearWorkgroups));
         stage('climb', (pass) => run(pass, 'hplocClimb', this.tileCount));
         stage('mark', (pass) => run(pass, 'hplocMark', this.tileCount));
         stage('rank', (pass) => {
