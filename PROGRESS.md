@@ -21,6 +21,73 @@ Rules:
 
 ---
 
+## 2026-11-06 · T1.14 after the cost study: half-resolution GI deleted, the composite's GTAO sized from the pass · implementer (opus)
+Did (uncommitted; defaults and exports unchanged):
+- `packages/ddgi-three/src/composite.ts`:
+  - the internal half-resolution GI (`irradianceResolution`) is deleted. The study below has its numbers: it saved 0.23 ms and missed the match by 1% / 4% untextured and 4% / 20% with normal maps. NOTES has the reason;
+  - the composite's own GTAO is now a `PassSizedGTAONode` (a GTAONode whose `setSize` scales the drawing-buffer size by the scene pass's `getResolutionScale()`), so under a reduced pass (the upscaler) it runs at the pass's size, and `occlusion.resolutionScale` is relative to the pass (0.5 = half the pass's pixels at any upscaler preset).
+- The pages: the half-resolution options are removed. The upscaled variant now uses the composite's own GTAO instead of the page's scaled copy (variants.ts).
+- Test: a unit test that GTAO's target is 640×360, 854×480 and 1280×720 for a 2560×1440 drawing buffer at pass scales 0.5, 1/1.5 and 1, with GTAO at 0.5.
+Verified (headless Chrome 156):
+- lint and typecheck clean; `pnpm test` 917 of 918;
+  - the one failure is `tools/reference/bench-lock.test.ts` ("a nested run under it does not deadlock"), which timed out at 60 s while the RTX was warm and passed (37/37) once it was under 70 C. It runs a real `bench-lock run`, which waits for a cool GPU. For the bench-lock owner;
+- `test:gpu --filter three-`: RTX 9 of 9, the composite's match unchanged (Cornell point 0.042% / 0.16%);
+- Intel UHD: the run straight after the RTX suite lost the device in `three-examples`, during the simple example's `volume.start`, and the two pages after it found no adapter. The same happened once in the study above, also straight after the RTX run.  Run alone, the suite passed 9 of 9 (Cornell point 0.033% / 0.083%), and `three-examples` passed twice more. So it's intermittent, on the Intel only; the cause is unknown.
+Next: the Intel device loss in `three-examples` after a long GPU session (2 of 6 Intel suite runs). Worth a look if it shows up again outside back-to-back RTX + Intel runs.
+
+## 2026-11-06 · T1.14 cost study for Dennis: GTAO variants, half-resolution GI, the upscaler · implementer (opus)
+Did (uncommitted; measurement only; defaults and exports unchanged):
+- `packages/ddgi-three/src/composite.ts`: an internal setting, `DDGICompositeInternalOptions.irradianceResolution: 'half'`. It's on the constructor only, not in `DDGICompositeOptions` and not exported from the package. GI is evaluated per 2×2 block in a pass of its own, then upsampled with weights for bilinear position, depth (5%) and normal (cos⁸), with a full-resolution evaluation where nothing fits. The default path's GI evaluation moved into a shared helper.
+- `tools/gpu/pages/three-composite-shared/variants.ts` (new, page-only):
+  - the composite through `@pmndrs/upscaler` by its documented composable path: the pass at 1/ratio with `velocity` in the MRT, as `upscaleScene` builds it; the composite made a texture with `rtt(…, { resolutionScale })`; then `upscale(color, depth, velocity, camera, { quality })`. The viewer's toggle uses `upscaleScene`, which can't take a composite;
+  - GTAO averaged over frames (`AccumulatedOcclusion`: GTAO's `useTemporalFiltering` plus a plain or exponential mean over 16 frames; static camera only, nothing reprojects the history);
+  - three's SSAO.
+- `three-composite-sponza`: `VITE_DDGI_SET` = `native` or `upscaled`, the upscaler's own compute time per variant (`gpuTiming`), and `VITE_DDGI_IRRADIANCE_RESOLUTION=half` for the match, with silhouette and interior pixels reported apart.
+- `three-composite-ao` (page and run.ts): `--ao-kind gtao|gtao-temporal|ssao`, `--irradiance-resolution half`, `--upscale quality|performance`. The last gives the GI term at the output size through the upscaler's own pipeline (its jitter, 32 frames on a still camera), with GTAO inside.
+Verified:
+- lint, typecheck, `pnpm test` (917 passed);
+- `test:gpu --filter three-` passes on the RTX 3060. On the Intel UHD the first run lost the device (`DXGI_ERROR_DEVICE_HUNG` in `three-examples`, then no adapter for the two pages after it); the re-run passed all 9 pages.
+- The composite's match is unchanged on both GPUs (Cornell point 0.042% / 0.16% RTX, 0.033% / 0.083% Intel).
+- All cost runs below are VALID under the clock rule (cool start, 0% thermal samples; bench-lock), GPU-bound (100% GPU use in all 31 samples), headless Chrome 156.
+**The table for Dennis.** Sponza with curtains, RTX 3060 Laptop, frozen field. Cost = showing GI − the same path without GI, 2560×1440 output, raw ms, with the figure normalised to 1,500 MHz in brackets (SM 1,185–1,395 MHz; power-limited, not thermal). Accuracy is the GI term against untextured Cycles: Sponza at the 640×360 reference (overall / curtain pixels), the base package, and Cornell at 1920×1080 with 600 passes.
+
+| Path (2560×1440 output) | Cost of showing GI | Sponza | curtains | base | Cornell |
+| --- | --- | --- | --- | --- | --- |
+| Composite, no occlusion | 1.26–1.41 (1.05–1.15) | +23.0% | +43.5% | +3.2% | +5.6% |
+| + GTAO full res, 16 samples (default today) | 8.0–8.1 (6.5–6.6) | +4.4% | +10.7% | −2.6% | +0.5% |
+| + GTAO half res | 3.2 (2.6) | +8.0% | +18.0% | −1.5% | +0.7% |
+| + GTAO quarter res | 2.0 (1.66) | +7.9% | +17.5% | −1.4% | +0.65% |
+| + GTAO half, 16-frame average (static camera only) | 3.2–3.3 (2.7) | +2.3% | +11.9% | −6.7% | −4.8% |
+| + three's SSAO (half res, its blur) | 2.3–2.4 (1.9) | +14.8% | +31.0% | −0.7% | +1.0% |
+| Half-resolution GI, no occlusion | 1.17–1.19 (0.96) | (with full GTAO: +4.3%) | | | |
+| Forward per fragment (on the MRT pass − mrt) | 3.43 (2.86); 3.89 (3.25) over `off` | | | | |
+| **Upscaler Quality (1.5×), composite** | **0.66 (0.61)** | +22.9% | +43.9% | +3.0% | +5.4% |
+| Upscaler Quality + GTAO at render res | 2.9–3.1 (2.7–2.9) | +8.6% | +20.6% | −1.8% | −0.3% |
+| Upscaler Quality + GTAO half of render res | 1.25 (1.16) | +9.1% | +21.1% | −1.4% | +0.2% |
+| **Upscaler Performance (2×), composite** | **0.41 (0.38)** | +22.9% | +43.9% | +3.0% | +5.4% |
+| Upscaler Performance + GTAO at render res | 1.59 (1.47) | +7.9% | +19.5% | −2.4% | −0.3% |
+| **Upscaler Performance + GTAO half of render res** | **0.73 (0.68)** | +10.0% | +23.2% | −1.2% | +0.2% |
+
+- **The upscaler itself:** 1.72 ms (Quality) and 1.55 ms (Performance) of compute per frame. The scene without GI costs 2.58 / 2.04 ms through it, against 2.96–3.05 ms native. On this scene, then, upscaling costs more than it saves (2.58 + 1.72 = 4.30 ms against 3.0). That cost is the same with and without GI, so it isn't in the deltas above.
+- **Under the 1.0 ms bar:** the composite without occlusion through either preset (0.41–0.66 ms), and the Performance preset with GTAO at half of its render resolution (0.73 ms, Sponza +10.0%, right at the ±10% edge). The Quality preset with half-res GTAO is 1.25 ms, at +9.1%. Natively, nothing with occlusion is under 1 ms; quarter-res GTAO is the cheapest at 2.0 ms, +7.9%.
+- **Accuracy caveat:** the Sponza reference is 640×360, so through the upscaler the GTAO behind these numbers ran at 160×90 to 427×240. At a 2560×1440 output it would run at 640×360 to 1707×960, finer than measured. The curtain error grows as GTAO gets coarser (+10.7% at full res, +17.5% at quarter, +23% at the coarsest here). A 1440p reference would tell how much of that is resolution.
+- **Half-resolution GI:** it saves only 0.23 ms (1.39 → 1.17), against the hoped-for three quarters: most of the composite's 1.3 ms is reading the targets, not the probe lookup. It misses the composite's own match bar badly:
+  - Sponza with the GI table: mean 0.99%, p95 4.1%; silhouettes (1.5% of pixels) 4.6% / 20%, interior 0.95% / 4.0%;
+  - with Sponza's own materials: 4.0% / 20%. A 2×2 block shares one normal while normal maps vary per pixel.
+  - The upscaler's Performance preset already shades GI at a quarter of the pixels with a temporal reconstruction. Recommendation: delete the internal half-res option (about 150 lines in composite.ts) rather than keep it.
+- **GTAO averaged over frames** darkens more than one frame of GTAO (Sponza +2.3%, but Cornell −4.8%, base −6.7%). GTAO's temporal pattern is meant for TRAA, which three applies to the whole image, not to GI alone. It costs the same as half-res GTAO, so it isn't worth it.
+- **SSAO** is cheap but too weak on the curtains (+31%).
+- **GTAO's size:** it sizes itself from the renderer's drawing buffer, not the pass. Under the upscaler its `resolutionScale` has to include 1/ratio, which the page sets. The production composite's own GTAO doesn't yet follow a pass's `setResolutionScale` (Next).
+Not verified:
+- accuracy at 1440p (no 1440p Cycles reference);
+- the upscaler with a moving camera (all still; the upscaler's history and our GTAO average behave differently in motion);
+- the Intel for any of the new variants (correctness only; Intel has no performance target).
+Next (lead / Dennis):
+- choose the shipped path: for example, the upscaler (Performance or Quality) with half-res GTAO on GI, or no occlusion by default;
+- if the upscaler is the intended pipeline, the composite's own GTAO should scale with the pass's `setResolutionScale`;
+- delete the internal half-res GI option;
+- a 1440p untextured Cycles reference for Sponza, to confirm the curtain numbers at the real resolution.
+
 ## 2026-11-06 · T1.12 phase 2a review fixes · implementer (opus)
 Did (uncommitted, on top of 76ca4c9), from the Opus review of 14c2ed2 and 58b6dcc:
 - **The clock wraps every 4096 s** (`CLOCK_WRAP_SECONDS`, settings.ts). The design doc's "millisecond precision for days" was wrong: an f32 `t` steps 0.49 ms below 2^12 s, 7.8 ms after a day and 62.5 ms after a week. The technique keeps its clock modulo 4096 s; `ddgi/blend` adds the period back when `T − t` is negative (that replaces the `max(0, …)` guard; a new `prepare` makes a fresh buffer anyway). It would misread only a probe left unblended for more than 68 min while active; active probes are blended every sweep, and off probes restart from state 3. Design doc "The clock" corrected.

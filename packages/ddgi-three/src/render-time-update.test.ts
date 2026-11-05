@@ -126,6 +126,26 @@ describe('the composite node, ddgi(scenePass, volume)', () => {
         expect(node.occlusionNode!.radius.value).toBe(1);
     });
 
+    it("sizes its GTAO from the scene pass (not the drawing buffer), with GTAO's own scale relative to the pass", () => {
+        const scenePass = compositePass();
+        const node = ddgi(scenePass, new GIVolume(), { occlusion: { resolutionScale: 0.5 } });
+        const gtao = node.occlusionNode!;
+        const aoSize = () => {
+            const image = (gtao.getTextureNode() as unknown as { value: { image: { width: number; height: number } } }).value.image;
+            return [image.width, image.height];
+        };
+        // GTAO's updateBefore passes the drawing buffer's size; under an upscaler the pass draws at a fraction of it.
+        scenePass.setResolutionScale(0.5);
+        gtao.setSize(2560, 1440);
+        expect(aoSize()).toEqual([640, 360]);
+        scenePass.setResolutionScale(1 / 1.5);
+        gtao.setSize(2560, 1440);
+        expect(aoSize()).toEqual([854, 480]);
+        scenePass.setResolutionScale(1);
+        gtao.setSize(2560, 1440);
+        expect(aoSize()).toEqual([1280, 720]);
+    });
+
     it('takes occlusion settings, or none', () => {
         const half = ddgi(compositePass(), new GIVolume(), { occlusion: { radius: 0.5, resolutionScale: 0.5, samples: 8 } });
         expect(half.occlusionNode!.radius.value).toBe(0.5);

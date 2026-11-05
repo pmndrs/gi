@@ -55,9 +55,8 @@
  * so the default is then no second occlusion.
  */
 
-import { BlendMode, MaterialBlending, Node, NodeUpdateType, PhysicalLightingModel, type NodeBuilder, type PassNode, type TextureNode } from 'three/webgpu';
-import type GTAONode from 'three/addons/tsl/display/GTAONode.js';
-import { ao } from 'three/addons/tsl/display/GTAONode.js';
+import { BlendMode, MaterialBlending, Node, NodeUpdateType, PhysicalLightingModel, type Camera, type NodeBuilder, type PassNode, type TextureNode } from 'three/webgpu';
+import GTAONode from 'three/addons/tsl/display/GTAONode.js';
 import {
     DFGLUT,
     Fn,
@@ -67,10 +66,12 @@ import {
     diffuseContribution,
     getViewPosition,
     isBackgroundDepth,
+    nodeObject,
     normalView,
     positionViewDirection,
     roughness,
     sample,
+    select,
     specularColor,
     specularF90,
     uniform,
@@ -195,7 +196,7 @@ export const DEFAULT_GI_OCCLUSION_RADIUS = 1;
 export interface GIOcclusionSettings {
     /** Metres, in view space. Default {@link DEFAULT_GI_OCCLUSION_RADIUS}. */
     readonly radius?: number;
-    /** GTAO's resolution against the pass's (three's `resolutionScale`; 0.5 is half). Default 1. */
+    /** GTAO's resolution against the scene pass's (0.5 is half the pass's pixels, whatever the pass's own scale). Default 1. */
     readonly resolutionScale?: number;
     /** Samples per pixel (three's default 16). */
     readonly samples?: number;
@@ -217,6 +218,10 @@ export interface DDGICompositeOptions {
      */
     readonly occlusion?: false | GIOcclusionSettings | { readonly source: GIOcclusionSource };
 }
+
+type Vec2Node = Node<'vec2'>;
+type Vec3Node = Node<'vec3'>;
+type FloatNode = Node<'float'>;
 
 /** 1 / π: three's Lambert BRDF factor (`BRDF_Lambert`), which turns irradiance into reflected radiance. */
 const RECIPROCAL_PI = 1 / Math.PI;
@@ -355,6 +360,33 @@ export class DDGICompositeNode extends Node {
         const depthTexture = scenePass.getTextureNode('depth');
         const occlusionTexture = this.occlusionSource?.getTextureNode() ?? null;
 
+        /**
+         * GI irradiance at one pixel, from its depth and packed normal: E × intensity
+         * where GI's coverage claims the probe slot (as the per-fragment path does), else 0.
+         */
+        const irradianceAt = (screen: Vec2Node, depth: FloatNode, packedNormal: Vec3Node): Vec3Node => {
+            const viewPosition = getViewPosition(screen as never, depth as never, projectionMatrixInverse);
+            const worldPosition = cameraWorldMatrix.mul(vec4(viewPosition, 1)).xyz.toVar();
+            // The pass stores the view-space shading normal; the camera's world matrix turns it into world space.
+            const worldNormal = cameraWorldMatrix.mul(vec4(unpackRGBToNormal(packedNormal as never), 0)).xyz.normalize();
+            const eye = cameraWorldMatrix.mul(vec4(0, 0, 0, 1)).xyz;
+            // From the eye towards the point, as the shading module expects (gi-light.ts does the same).
+            const viewDirection = worldPosition.sub(eye).normalize();
+            const lighting = (
+                entry({
+                    position: worldPosition,
+                    normal: worldNormal,
+                    viewDirection,
+                    screenUV: screen,
+                    computeCoverage: this.computeCoverage,
+                    ...moduleNodes.resources(),
+                }) as unknown as ReturnType<typeof vec4>
+            ).toVar();
+            // The per-fragment path adds GI only where its coverage claims the probe slot.
+            return select(lighting.w.greaterThan(0), lighting.xyz.mul(this.intensity), vec3(0)) as unknown as Vec3Node;
+        };
+
+
         const composite = Fn(() => {
             const screen = uv();
             const sceneColor = colorTexture.sample(screen).toVar('threeGiSceneColor');
@@ -364,37 +396,20 @@ export class DDGICompositeNode extends Node {
             // Background pixels and surfaces that shade GI themselves (weight 0) skip the probe lookup.
             const lit = isBackgroundDepth(depth).not().and(weight.r.add(weight.g).add(weight.b).greaterThan(0));
             If(lit, () => {
-                const viewPosition = getViewPosition(screen, depth, projectionMatrixInverse);
-                const worldPosition = cameraWorldMatrix.mul(vec4(viewPosition, 1)).xyz.toVar('threeGiPosition');
-                // The pass stores the view-space shading normal; the camera's world matrix turns it into world space.
-                const viewNormal = unpackRGBToNormal(normalTexture.sample(screen).rgb);
-                const worldNormal = cameraWorldMatrix.mul(vec4(viewNormal, 0)).xyz.normalize();
-                const eye = cameraWorldMatrix.mul(vec4(0, 0, 0, 1)).xyz;
-                // From the eye towards the point, as the shading module expects (gi-light.ts does the same).
-                const viewDirection = worldPosition.sub(eye).normalize();
-                const lighting = (
-                    entry({
-                        position: worldPosition,
-                        normal: worldNormal,
-                        viewDirection,
-                        screenUV: screen,
-                        computeCoverage: this.computeCoverage,
-                        ...moduleNodes.resources(),
-                    }) as unknown as ReturnType<typeof vec4>
-                ).toVar('threeGiLighting');
-                // The per-fragment path adds GI only where its coverage claims the probe slot.
-                If(lighting.w.greaterThan(0), () => {
-                    let irradiance = lighting.xyz.mul(this.intensity);
-                    // Short-range occlusion on the GI term only (file comment).
-                    if (occlusionTexture) irradiance = irradiance.mul(occlusionTexture.sample(screen).r);
-                    const indirectDiffuse = weight.mul(irradiance).mul(RECIPROCAL_PI);
-                    result.assign(vec4(sceneColor.rgb.add(indirectDiffuse), sceneColor.a));
-                });
+                const packedNormal = normalTexture.sample(screen).rgb as unknown as Vec3Node;
+                const pixelUV = screen as unknown as Vec2Node;
+                const pixelDepth = depth as unknown as FloatNode;
+                let irradiance: Vec3Node = irradianceAt(pixelUV, pixelDepth, packedNormal).toVar('threeGiIrradiance');
+                // Short-range occlusion on the GI term only (file comment).
+                if (occlusionTexture) irradiance = irradiance.mul(occlusionTexture.sample(screen).r);
+                const indirectDiffuse = weight.mul(irradiance).mul(RECIPROCAL_PI);
+                result.assign(vec4(sceneColor.rgb.add(indirectDiffuse), sceneColor.a));
             });
             return result;
         });
         return composite() as unknown as Node;
     }
+
 }
 
 /**
@@ -412,11 +427,37 @@ function passAppliesAO(scenePass: PassNode): boolean {
     return context !== null && typeof flowContextData(context).getAO === 'function';
 }
 
-/** three's GTAO on the pass's depth and its packed view-space normal (the `normal` output). */
+/**
+ * three's GTAO, sized from the scene pass instead of the drawing buffer.
+ * GTAONode sizes itself each frame from `renderer.getDrawingBufferSize()`
+ * (its `updateBefore`), times its own `resolutionScale`. A pass drawn at a
+ * reduced size (`scenePass.setResolutionScale`, as under an upscaler) would
+ * then get AO at display resolution, for depth and normals that only have
+ * the pass's. Here the size is the pass's (drawing buffer × the pass's scale),
+ * and GTAO's own `resolutionScale` is relative to that: 0.5 is always half the
+ * pass's pixels, whatever the pass's scale.
+ */
+class PassSizedGTAONode extends GTAONode {
+    constructor(
+        depthNode: Node,
+        normalNode: Node,
+        camera: Camera,
+        private readonly scenePass: PassNode,
+    ) {
+        super(depthNode, normalNode, camera);
+    }
+
+    setSize(width: number, height: number): void {
+        const passScale = this.scenePass.getResolutionScale();
+        super.setSize(Math.max(1, Math.round(width * passScale)), Math.max(1, Math.round(height * passScale)));
+    }
+}
+
+/** three's GTAO on the pass's depth and its packed view-space normal (the `normal` output), sized from the pass. */
 function makeOcclusion(scenePass: PassNode, settings: GIOcclusionSettings): GTAONode {
     const normalTexture = scenePass.getTextureNode(GI_NORMAL_OUTPUT);
     const viewNormal = sample((coordinate) => unpackRGBToNormal(normalTexture.sample(coordinate).rgb));
-    const node = ao(scenePass.getTextureNode('depth'), viewNormal, scenePass.camera);
+    const node = new PassSizedGTAONode(nodeObject(scenePass.getTextureNode('depth')) as unknown as Node, nodeObject(viewNormal) as unknown as Node, scenePass.camera, scenePass);
     node.radius.value = settings.radius ?? DEFAULT_GI_OCCLUSION_RADIUS;
     if (settings.resolutionScale !== undefined) node.resolutionScale = settings.resolutionScale;
     if (settings.samples !== undefined) node.samples.value = settings.samples;

@@ -129,7 +129,10 @@ function printSection(report: SectionReport): void {
     const use = report.gpuUseMedianPercent === null ? 'no GPU samples' : `GPU use median ${report.gpuUseMedianPercent}% (min ${report.gpuUseMinPercent}%) over ${report.samples} samples, ${report.loadedSamples} at 70% or more`;
     const bound = report.gpuUseMedianPercent === null ? '' : report.gpuUseMedianPercent >= GPU_BOUND_USE_PERCENT ? '; GPU-bound' : `; NOT GPU-bound (under ${GPU_BOUND_USE_PERCENT}%)`;
     console.log(`\n${report.label} (${report.size}): ${report.cycles} cycles in ${report.seconds.toFixed(1)} s; ${use}${bound}; SM clock under load ${report.loadedSmMhzMedian ?? 'n/a'} MHz`);
-    for (const [id, variant] of Object.entries(report.variants)) console.log(`  ${id.padEnd(20)} ${variant.totalMs.toFixed(3)} ms per frame on the GPU, ${variant.cpuMs.toFixed(2)} ms to record`);
+    for (const [id, variant] of Object.entries(report.variants)) {
+        const upscaler = variant.extraGpuMs === null ? '' : ` + ${variant.extraGpuMs.toFixed(3)} ms upscaler compute`;
+        console.log(`  ${id.padEnd(30)} ${variant.totalMs.toFixed(3)} ms per frame on the GPU${upscaler}, ${variant.cpuMs.toFixed(2)} ms to record`);
+    }
     for (const [name, delta] of Object.entries(report.deltas)) {
         const normalised = delta.normalisedMedian === null ? '' : `; at ${REFERENCE_MHZ} MHz ${delta.normalisedMedian.toFixed(3)} ms (p10 to p90 ${delta.normalisedP10!.toFixed(3)} to ${delta.normalisedP90!.toFixed(3)})`;
         console.log(`  ${name}: ${delta.median.toFixed(3)} ms (p10 to p90 ${delta.p10.toFixed(3)} to ${delta.p90.toFixed(3)}, MAD ${delta.mad.toFixed(3)}, thirds ${delta.thirds.map((ms) => ms.toFixed(3)).join('/')})${normalised}`);
@@ -169,8 +172,8 @@ async function main(): Promise<void> {
     const lockVerdict = lockSummary ? describeTimingVerdict(lockSummary) : 'no bench-lock clock file: run this under `bench-lock run` for a verdict';
     console.log(`\nBench lock: ${lockVerdict}`);
     const main1440 = sections[0];
-    if (main1440) {
-        const cost = main1440.deltas[DEFAULT_PATH_DELTA];
+    const cost = main1440?.deltas[DEFAULT_PATH_DELTA];
+    if (main1440 && cost) {
         const gpuBound = main1440.gpuUseMedianPercent !== null && main1440.gpuUseMedianPercent >= GPU_BOUND_USE_PERCENT;
         console.log(
             `Showing GI on the default path, ${main1440.label}: ${cost.median.toFixed(3)} ms (bar ${COST_BAR_MS} ms; ${cost.median <= COST_BAR_MS ? 'within' : 'over'}). ` +

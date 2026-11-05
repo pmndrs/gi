@@ -53,6 +53,12 @@
  *   VITE_DDGI_COOL        idle seconds after loading, before timing (default 25)
  *   VITE_DDGI_RAMP        GPU-bound seconds before each timed section, for the clock to ramp up (default 2)
  *   VITE_DDGI_STATIC_SHADOWS '0': redraw the sun's shadow map every frame (default '1': once; see above)
+ *   VITE_DDGI_SET         which variants (measurement for Dennis's decision; shared/variants.ts):
+ *                           'default': off, mrt, composite, composite + GTAO full and half, forward;
+ *                           'native': off, composite, and composite with GTAO full, half, quarter,
+ *                             half averaged over 16 frames (static camera), SSAO;
+ *                           'upscaled': through @pmndrs/upscaler at its Quality and Performance presets,
+ *                             each off (upscaleScene, as the viewer does), composite, composite + GTAO, + GTAO half.
  *   VITE_DDGI_TARGETS     'half' (default) or 'byte': the format of giAlbedo and the normal.
  *                         One format per run: in r187 two MRT passes over one scene whose targets
  *                         differ only in format reuse each other's pipelines (NOTES).
@@ -65,6 +71,8 @@ import { RenderPipeline, UnsignedByteType, type Node, type PerspectiveCamera } f
 import { mrt, normalView, output, packNormalToRGB, pass } from 'three/tsl';
 import { assert } from '../../client.ts';
 import { markCompositePass, type MarkablePass } from '../../../../packages/ddgi-three/src/composite-mark.ts';
+import { AccumulatedOcclusion, compositePassAt, gtaoOn, ssaoOn, upscaledComposite, upscaledScene, upscalerMs, type UpscalePreset } from '../three-composite-shared/variants.ts';
+import { DDGICompositeNode } from '../../../../packages/ddgi-three/src/composite.ts';
 import { giAlbedo, GI_ALBEDO_OUTPUT, GI_NORMAL_OUTPUT } from '../../../../packages/ddgi-three/src/composite.ts';
 import { runThreePage, type ThreePageContext } from '../three-shared/harness.ts';
 import {
@@ -151,45 +159,60 @@ async function timing(context: ThreePageContext, scene: CompositeScene): Promise
         }
     };
 
-    const off = new RenderPipeline(renderer, pass(scene.scene, cameraFor(false)) as unknown as Node);
-    // GI per fragment on the MRT targets, unmarked (see the file comment): giAlbedo writes 0 there.
-    const forwardPass = pass(scene.scene, cameraFor(true));
-    forwardPass.setMRT(mrt({ output, [GI_ALBEDO_OUTPUT]: giAlbedo, [GI_NORMAL_OUTPUT]: packNormalToRGB(normalView) }));
-    for (const name of [GI_ALBEDO_OUTPUT, GI_NORMAL_OUTPUT]) {
-        const target = forwardPass.getTexture(name);
-        if (byteTargets) target.type = UnsignedByteType;
-    }
-    const forward = new RenderPipeline(renderer, forwardPass.getTextureNode('output') as unknown as Node);
-
-    // The MRT pass alone: the composite's outputs and mark, its colour shown as is.
-    const mrtPass = pass(scene.scene, cameraFor(true));
-    mrtPass.setMRT(mrt({ output, [GI_ALBEDO_OUTPUT]: giAlbedo, [GI_NORMAL_OUTPUT]: packNormalToRGB(normalView) }));
-    markCompositePass(mrtPass as unknown as MarkablePass);
-    // An MRT output is only drawn once its texture exists (MRTNode.setup).
-    for (const name of [GI_ALBEDO_OUTPUT, GI_NORMAL_OUTPUT]) {
-        const target = mrtPass.getTexture(name);
-        if (byteTargets) target.type = UnsignedByteType;
-    }
-    const mrtOnly = new RenderPipeline(renderer, mrtPass.getTextureNode('output') as unknown as Node);
-
-    const pipelineFor = (occlusion: ConstructorParameters<typeof CompositeRoutes>[1]) => {
-        const routes = new CompositeRoutes(scene, { byteTargets, ...occlusion, camera: cameraFor(true) });
-        return new RenderPipeline(renderer, routes.composite as unknown as Node);
+    const pipelines: RenderPipeline[] = [];
+    const pipelineOf = (node: unknown) => {
+        const pipeline = new RenderPipeline(renderer, node as Node);
+        pipelines.push(pipeline);
+        return pipeline;
     };
-    const composite = pipelineFor({ occlusion: false });
-    // The composite's default occlusion: its own GTAO at 1 m.
-    const compositeGtao = pipelineFor({ occlusion: {} });
-    const compositeGtaoHalf = pipelineFor({ occlusion: { resolutionScale: 0.5 } });
+    const set = typeof env.VITE_DDGI_SET === 'string' && env.VITE_DDGI_SET !== '' ? env.VITE_DDGI_SET : 'default';
+    const built = set === 'native' ? nativeSet(scene, cameraFor, pipelineOf) : set === 'upscaled' ? upscaledSet(scene, cameraFor, pipelineOf) : defaultSet();
+    const variants = built.variants;
+    const deltas = built.deltas;
+    log(`variant set '${set}': ${variants.map((variant) => variant.id).join(', ')}`);
 
-    const nothing = () => {};
-    const variants: FrameVariant[] = [
-        { id: 'off', apply: nothing, draw: () => off.render() },
-        { id: 'mrt', apply: nothing, draw: () => mrtOnly.render() },
-        { id: 'composite', apply: nothing, draw: () => composite.render() },
-        { id: 'composite+gtao', apply: nothing, draw: () => compositeGtao.render() },
-        { id: 'composite+gtao-half', apply: nothing, draw: () => compositeGtaoHalf.render() },
-        { id: 'forward', apply: nothing, draw: () => forward.render() },
-    ];
+    function defaultSet(): { variants: FrameVariant[]; deltas: readonly DeltaDefinition[] } {
+        const off = pipelineOf(pass(scene.scene, cameraFor(false)));
+        // GI per fragment on the MRT targets, unmarked (see the file comment): giAlbedo writes 0 there.
+        const forwardPass = pass(scene.scene, cameraFor(true));
+        forwardPass.setMRT(mrt({ output, [GI_ALBEDO_OUTPUT]: giAlbedo, [GI_NORMAL_OUTPUT]: packNormalToRGB(normalView) }));
+        for (const name of [GI_ALBEDO_OUTPUT, GI_NORMAL_OUTPUT]) {
+            const target = forwardPass.getTexture(name);
+            if (byteTargets) target.type = UnsignedByteType;
+        }
+        const forward = pipelineOf(forwardPass.getTextureNode('output'));
+
+        // The MRT pass alone: the composite's outputs and mark, its colour shown as is.
+        const mrtPass = pass(scene.scene, cameraFor(true));
+        mrtPass.setMRT(mrt({ output, [GI_ALBEDO_OUTPUT]: giAlbedo, [GI_NORMAL_OUTPUT]: packNormalToRGB(normalView) }));
+        markCompositePass(mrtPass as unknown as MarkablePass);
+        // An MRT output is only drawn once its texture exists (MRTNode.setup).
+        for (const name of [GI_ALBEDO_OUTPUT, GI_NORMAL_OUTPUT]) {
+            const target = mrtPass.getTexture(name);
+            if (byteTargets) target.type = UnsignedByteType;
+        }
+        const mrtOnly = pipelineOf(mrtPass.getTextureNode('output'));
+
+        const pipelineFor = (occlusion: ConstructorParameters<typeof CompositeRoutes>[1]) => {
+            const routes = new CompositeRoutes(scene, { byteTargets, ...occlusion, camera: cameraFor(true) });
+            return pipelineOf(routes.composite);
+        };
+        const composite = pipelineFor({ occlusion: false });
+        // The composite's default occlusion: its own GTAO at 1 m.
+        const compositeGtao = pipelineFor({ occlusion: {} });
+        const compositeGtaoHalf = pipelineFor({ occlusion: { resolutionScale: 0.5 } });
+
+        const nothing = () => {};
+        const variants: FrameVariant[] = [
+            { id: 'off', apply: nothing, draw: () => off.render() },
+            { id: 'mrt', apply: nothing, draw: () => mrtOnly.render() },
+            { id: 'composite', apply: nothing, draw: () => composite.render() },
+            { id: 'composite+gtao', apply: nothing, draw: () => compositeGtao.render() },
+            { id: 'composite+gtao-half', apply: nothing, draw: () => compositeGtaoHalf.render() },
+            { id: 'forward', apply: nothing, draw: () => forward.render() },
+        ];
+        return { variants, deltas: DELTAS };
+    }
 
     // Compile every variant, then let the GPU cool: loading the scene heated it.
     for (const variant of variants) {
@@ -216,7 +239,7 @@ async function timing(context: ThreePageContext, scene: CompositeScene): Promise
     const rampSeconds = numberFromEnv(env.VITE_DDGI_RAMP, 2);
     const sections: InterleavedTiming[] = [];
     sections.push(
-        await timeInterleaved(renderer, device, clock, variants, DELTAS, {
+        await timeInterleaved(renderer, device, clock, variants, deltas, {
             label: 'section 1 of 2: 2560 x 1440, the bar',
             seconds: numberFromEnv(env.VITE_DDGI_SECONDS, 10),
             cyclesPerBatch: CYCLES_PER_BATCH,
@@ -239,7 +262,7 @@ async function timing(context: ThreePageContext, scene: CompositeScene): Promise
         }
         await clock.read();
         sections.push(
-            await timeInterleaved(renderer, device, clock, variants, DELTAS, {
+            await timeInterleaved(renderer, device, clock, variants, deltas, {
                 label: 'section 2 of 2: 1920 x 1080, the composite pass at the reference size',
                 seconds: seconds1080,
                 cyclesPerBatch: CYCLES_PER_BATCH,
@@ -249,8 +272,67 @@ async function timing(context: ThreePageContext, scene: CompositeScene): Promise
         );
     }
     light.layers.enableAll();
-    for (const pipeline of [off, forward, mrtOnly, composite, compositeGtao, compositeGtaoHalf]) pipeline.dispose();
+    for (const pipeline of pipelines) pipeline.dispose();
     return { sections, targets: byteTargets ? 'byte' : 'half' };
+}
+
+type CameraFor = (withGI: boolean) => PerspectiveCamera;
+type PipelineOf = (node: unknown) => RenderPipeline;
+const nothing = () => {};
+
+/**
+ * The 'native' set (file comment): cheaper ways to show GI at native resolution. Each
+ * composite has its own pass at full resolution.
+ */
+function nativeSet(scene: CompositeScene, cameraFor: CameraFor, pipelineOf: PipelineOf): { variants: FrameVariant[]; deltas: readonly DeltaDefinition[] } {
+    const off = pipelineOf(pass(scene.scene, cameraFor(false)));
+    const compositeWith = (make: (scenePass: ReturnType<typeof compositePassAt>) => ConstructorParameters<typeof DDGICompositeNode>[2]) => {
+        const scenePass = compositePassAt(scene.scene, cameraFor(true), 1, false);
+        return pipelineOf(new DDGICompositeNode(scenePass, scene.threeGI, make(scenePass)));
+    };
+    const pipelines: Record<string, RenderPipeline> = {
+        off,
+        composite: compositeWith(() => ({ occlusion: false })),
+        'composite+gtao': compositeWith(() => ({ occlusion: {} })),
+        'composite+gtao-half': compositeWith(() => ({ occlusion: { resolutionScale: 0.5 } })),
+        'composite+gtao-quarter': compositeWith(() => ({ occlusion: { resolutionScale: 0.25 } })),
+        'composite+gtao-half-temporal': compositeWith((scenePass) => ({ occlusion: { source: new AccumulatedOcclusion(gtaoOn(scenePass, { resolutionScale: 0.5 }), 16) } })),
+        'composite+ssao': compositeWith((scenePass) => ({ occlusion: { source: ssaoOn(scenePass) } })),
+    };
+    const variants = Object.entries(pipelines).map(([id, pipeline]) => ({ id, apply: nothing, draw: () => pipeline.render() }));
+    const deltas: DeltaDefinition[] = Object.keys(pipelines)
+        .filter((id) => id !== 'off')
+        .map((id) => ({ name: `showing GI, ${id} - off`, minuend: id, subtrahend: 'off', part: 'total' as const }));
+    return { variants, deltas };
+}
+
+/**
+ * The 'upscaled' set (file comment): 2560 x 1440 output through @pmndrs/upscaler at its
+ * Quality and Performance presets; the scene pass, the composite and GTAO at the
+ * preset's render scale. "off" is the viewer's own path (`upscaleScene`). Each variant's
+ * upscaler reports its own compute time (it isn't in three's passes).
+ */
+function upscaledSet(scene: CompositeScene, cameraFor: CameraFor, pipelineOf: PipelineOf): { variants: FrameVariant[]; deltas: readonly DeltaDefinition[] } {
+    const variants: FrameVariant[] = [];
+    const deltas: DeltaDefinition[] = [];
+    for (const preset of ['quality', 'performance'] as const satisfies readonly UpscalePreset[]) {
+        const offNode = upscaledScene(scene.scene, cameraFor(false), preset);
+        const off = pipelineOf(offNode);
+        variants.push({ id: `${preset} off`, apply: nothing, draw: () => off.render(), extraGpuMs: () => upscalerMs(offNode) });
+        const options = {
+            composite: false,
+            'composite+gtao': { resolutionScale: 1 },
+            'composite+gtao-half': { resolutionScale: 0.5 },
+        } as const;
+        for (const [name, occlusion] of Object.entries(options)) {
+            const built = upscaledComposite(scene.scene, cameraFor(true), scene.threeGI, preset, { occlusion });
+            const pipeline = pipelineOf(built.node);
+            const id = `${preset} ${name}`;
+            variants.push({ id, apply: nothing, draw: () => pipeline.render(), extraGpuMs: () => upscalerMs(built.node) });
+            deltas.push({ name: `showing GI, ${id} - off`, minuend: id, subtrahend: `${preset} off`, part: 'total' });
+        }
+    }
+    return { variants, deltas };
 }
 
 async function match(context: ThreePageContext, scene: CompositeScene, name: string): Promise<MatchStatistics> {
@@ -269,7 +351,8 @@ async function match(context: ThreePageContext, scene: CompositeScene, name: str
     const giOff = await reader.read(routes.perFragmentPass as unknown as Node);
     light.intensity = 1;
     reader.dispose();
-    const stats = matchStatistics(perFragment, composite, giOff, opaqueMask(coverage, perFragment, opaqueOnly));
+    const mask = opaqueMask(coverage, perFragment, opaqueOnly);
+    const stats = matchStatistics(perFragment, composite, giOff, mask);
     context.log(formatMatch(name, stats));
     return stats;
 }

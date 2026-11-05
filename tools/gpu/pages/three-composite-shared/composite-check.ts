@@ -20,7 +20,7 @@ import type { MaterialDescriptor } from '../../../../packages/ddgi-core/src/plat
 import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
 import { DDGITechnique } from '../../../../packages/ddgi-core/src/techniques/ddgi/ddgi-technique.ts';
 import { ThreeGI } from '../../../../packages/ddgi-three/src/three-gi.ts';
-import { ddgi, giAlbedo, GI_ALBEDO_OUTPUT, GI_NORMAL_OUTPUT, type DDGICompositeNode, type DDGICompositeOptions } from '../../../../packages/ddgi-three/src/composite.ts';
+import { DDGICompositeNode, giAlbedo, GI_ALBEDO_OUTPUT, GI_NORMAL_OUTPUT, type DDGICompositeOptions } from '../../../../packages/ddgi-three/src/composite.ts';
 import { loadAllManifests } from '../../../../apps/viewer/src/scene/manifests.ts';
 import { loadScene, type LoadedScene } from '../../../../apps/viewer/src/scene/load-scene.ts';
 import { platformSkyEnvironment } from '../../../../scenes/src/sky/sky-image.ts';
@@ -177,7 +177,7 @@ export class CompositeRoutes {
     readonly opaquePass;
     readonly compositePass;
     readonly composite: DDGICompositeNode;
-    /** Per pixel: 1 where a surface is (not the cleared background), the giAlbedo weight's luminance, and its alpha. */
+    /** Per pixel: 1 where a surface is (not the cleared background), the giAlbedo weight's luminance, its alpha, and the linear depth (0 near, 1 far). */
     readonly coverage: Node;
 
     /**
@@ -191,7 +191,12 @@ export class CompositeRoutes {
      */
     constructor(
         scene: CompositeScene,
-        options: { readonly byteTargets?: boolean; readonly occlusion?: DDGICompositeOptions['occlusion']; readonly camera?: Camera; readonly context?: ReturnType<typeof context> } = {},
+        options: {
+            readonly byteTargets?: boolean;
+            readonly occlusion?: DDGICompositeOptions['occlusion'];
+            readonly camera?: Camera;
+            readonly context?: ReturnType<typeof context>;
+        } = {},
     ) {
         const camera = options.camera ?? scene.camera;
         this.perFragmentPass = pass(scene.scene, camera);
@@ -206,11 +211,12 @@ export class CompositeRoutes {
             this.compositePass.getTexture(GI_ALBEDO_OUTPUT).type = UnsignedByteType;
             this.compositePass.getTexture(GI_NORMAL_OUTPUT).type = UnsignedByteType;
         }
-        this.composite = ddgi(this.compositePass, scene.threeGI, { occlusion: options.occlusion ?? false });
+        this.composite = new DDGICompositeNode(this.compositePass, scene.threeGI, { occlusion: options.occlusion ?? false });
         const depth = this.compositePass.getTextureNode('depth').sample(uv()).r;
         const weight = this.compositePass.getTextureNode(GI_ALBEDO_OUTPUT).sample(uv());
         const surface = isBackgroundDepth(depth).select(0, 1);
-        this.coverage = vec4(surface, weight.r.mul(0.2126).add(weight.g.mul(0.7152)).add(weight.b.mul(0.0722)), weight.a, 0) as unknown as Node;
+        const linearDepth = this.compositePass.getLinearDepthNode();
+        this.coverage = vec4(surface, weight.r.mul(0.2126).add(weight.g.mul(0.7152)).add(weight.b.mul(0.0722)), weight.a, linearDepth) as unknown as Node;
     }
 }
 
@@ -474,6 +480,11 @@ export interface FrameVariant {
     apply(): void;
     /** One frame's GPU work. Must not wait. */
     draw(): void;
+    /**
+     * GPU time this variant spends outside three's passes, in ms, as it last
+     * measured it (the upscaler times its own compute passes), or null.
+     */
+    extraGpuMs?(): number | null;
 }
 
 export interface InterleavedOptions {
@@ -514,7 +525,7 @@ export interface InterleavedTiming {
      * draw-call counts seen; and the median CPU time of recording one frame
      * (a page whose frames cost more CPU than GPU can't be GPU-bound).
      */
-    readonly variants: Record<string, { readonly totalMs: number; readonly byLabel: Record<string, number>; readonly drawCalls: number[]; readonly cpuMs: number }>;
+    readonly variants: Record<string, { readonly totalMs: number; readonly byLabel: Record<string, number>; readonly drawCalls: number[]; readonly cpuMs: number; readonly extraGpuMs: number | null }>;
     /** Per named difference: the distribution of its per-cycle values. */
     readonly deltas: Record<string, Spread>;
     readonly invalidPasses: number;
@@ -594,6 +605,7 @@ export async function timeInterleaved(
     const drawCalls = () => (renderer as unknown as FrameAdvance).info.render.drawCalls;
     const callsSeen = new Map<string, Set<number>>(variants.map((variant) => [variant.id, new Set<number>()]));
     const cpuTimes = new Map<string, number[]>(variants.map((variant) => [variant.id, []]));
+    const extraTimes = new Map<string, number[]>(variants.map((variant) => [variant.id, []]));
     const drawCycle = (cycle: number | null) => {
         for (const variant of variants) {
             const cpuStart = performance.now();
@@ -604,6 +616,8 @@ export async function timeInterleaved(
             if (cycle !== null) {
                 cpuTimes.get(variant.id)!.push(performance.now() - cpuStart);
                 callsSeen.get(variant.id)!.add(drawCalls());
+                const extra = variant.extraGpuMs?.() ?? null;
+                if (extra !== null) extraTimes.get(variant.id)!.push(extra);
             }
         }
         clock.tag = null;
@@ -657,13 +671,20 @@ export async function timeInterleaved(
         .map(([, cycleFrames]) => cycleFrames);
 
     const partOf = (frame: FramePasses, part: DeltaDefinition['part']) => (part === 'total' ? frame.total : (frame.byLabel[part] ?? 0));
-    const results: Record<string, { totalMs: number; byLabel: Record<string, number>; drawCalls: number[]; cpuMs: number }> = {};
+    const results: Record<string, { totalMs: number; byLabel: Record<string, number>; drawCalls: number[]; cpuMs: number; extraGpuMs: number | null }> = {};
     for (const variant of variants) {
         const own = complete.map((cycleFrames) => cycleFrames.get(variant.id)!);
         const labels = new Set(own.flatMap((frame) => Object.keys(frame.byLabel)));
         const byLabel: Record<string, number> = {};
         for (const label of labels) byLabel[label] = median(own.map((frame) => frame.byLabel[label] ?? 0));
-        results[variant.id] = { totalMs: median(own.map((frame) => frame.total)), byLabel, drawCalls: [...callsSeen.get(variant.id)!], cpuMs: median(cpuTimes.get(variant.id)!) };
+        const extra = extraTimes.get(variant.id)!;
+        results[variant.id] = {
+            totalMs: median(own.map((frame) => frame.total)),
+            byLabel,
+            drawCalls: [...callsSeen.get(variant.id)!],
+            cpuMs: median(cpuTimes.get(variant.id)!),
+            extraGpuMs: extra.length > 0 ? median(extra) : null,
+        };
     }
     const differences: Record<string, Spread> = {};
     for (const delta of deltas) {
@@ -676,7 +697,8 @@ export async function timeInterleaved(
         const parts = Object.entries(result.byLabel)
             .map(([label, ms]) => `${label} ${ms.toFixed(3)}`)
             .join(', ');
-        options.log(`  ${id}: ${result.totalMs.toFixed(3)} ms per frame on the GPU (${parts}), ${result.cpuMs.toFixed(2)} ms to record; draw calls ${result.drawCalls.join('/')}`);
+        const extra = result.extraGpuMs === null ? '' : `, plus ${result.extraGpuMs.toFixed(3)} ms of upscaler compute`;
+        options.log(`  ${id}: ${result.totalMs.toFixed(3)} ms per frame on the GPU (${parts})${extra}, ${result.cpuMs.toFixed(2)} ms to record; draw calls ${result.drawCalls.join('/')}`);
     }
     for (const [name, spread] of Object.entries(differences)) {
         options.log(`  ${name}: median ${spread.median.toFixed(3)} ms, p10 to p90 ${spread.p10.toFixed(3)} to ${spread.p90.toFixed(3)}, MAD ${spread.mad.toFixed(3)}, thirds ${spread.thirds.map((ms) => ms.toFixed(3)).join('/')}`);
