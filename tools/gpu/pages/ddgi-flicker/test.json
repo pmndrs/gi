@@ -1,0 +1,5 @@
+{
+    "description": "T1.9 stability: frame-to-frame change of the GI image (per pixel |GI(t) - GI(t-1)| / mean(GI), mean and p95 over pixels, averaged over 120 frames) on a still, converged scene, with DDGI at the 2 ms budget and at a fixed 256 probes a frame. One scene per run (VITE_DDGI_SCENES), camera VITE_DDGI_CAMERA; VITE_DDGI_FLICKER_IMAGES=1 also returns PNG frame sequences. Manual, for hand use under the bench lock; 3 runs per scene and GPU, then to-csv.ts.",
+    "timeoutMs": 1800000,
+    "manual": true
+}

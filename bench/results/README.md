@@ -48,3 +48,20 @@ $bad = $rows | Where-Object { ($_.metric -eq 'probe_update_every_frame' -and $_.
     ForEach-Object { "$($_.date),$($_.commit),$($_.device),$($_.browser),$($_.scene)" }
 $rows | Where-Object { $_.browser -eq 'native' -and "$($_.date),$($_.commit),$($_.device),$($_.browser),$($_.scene)" -notin $bad }
 ```
+
+## memory.csv
+
+`gi.stats.memory` per scene at the manifest's volume, from the `ddgi-memory` page (`tools/gpu/pages/ddgi-memory`, T1.9). Bytes unless the name ends in `_mb` (1 MB = 1,000,000 bytes, as the viewer shows them). Byte counts of what the core created, so they don't depend on the GPU.
+
+- `memory/scene_copy_*`, `acceleration_*`, `ddgi_*`, `total_*`: the four numbers of `gi.stats.memory`.
+- `memory/shading_sky_*`: the shading module's sky (radiance map and the procedural sky's source texture). **`gi.stats.memory.total` does not include it**; `memory/everything_*` is the total plus it, and is the number to compare with SPEC's 64 MB.
+
+## flicker.csv
+
+Frame-to-frame change of the GI image on a still, converged scene, from the `ddgi-flicker` page (T1.9). Definitions are at the top of `tools/gpu/pages/ddgi-flicker/main.ts`. The scene column is `<scene>/<camera bookmark>`; 3 runs give `run1/`..`run3/` and `median/` rows.
+
+- Metrics are `flicker/<budget>/<name>`; the budget is `gpuMs2` (the viewer's 2 ms budget) or `units256` (a fixed 256 probes a frame).
+- `rel_change_mean` and `rel_change_p95`: per pixel `|GI(t) - GI(t-1)| / mean(GI)` over pixels that show a surface; the mean and the 95th percentile over pixels, averaged over the measured frame pairs. `1` means 100%.
+- `probes_per_frame_mean`: what the budget gave. With `gpuMs2` it varies with the GPU's speed that second, so compare flicker with this number beside it.
+- `image_mean_drift`: the whole image's mean, last 10 frames against first 10: a check that the scene was converged.
+- The GI image is the engine-free test view's indirect image (albedo / pi times the field), 640 x 360, so it holds no noise except the probes'.

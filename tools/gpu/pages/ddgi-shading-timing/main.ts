@@ -25,8 +25,14 @@ import { fullBrowserVersion } from '../trace-bench/run.ts';
 const SCENE = 'cornell-box-point';
 /** Bookmark 1 looks into the open box; bookmark 2 is inside it, so every pixel is a surface. */
 const CAMERAS = [1, 2] as const;
-const WIDTH = 2560;
-const HEIGHT = 1440;
+/** The view size; the done-when is 2560x1440. VITE_DDGI_WIDTH / VITE_DDGI_HEIGHT change it (T1.9: 720p and 1080p on the Intel GPU). */
+const env = import.meta.env as Record<string, unknown>;
+function sizeFromEnv(value: unknown, fallback: number): number {
+    const parsed = typeof value === 'string' ? Number(value) : NaN;
+    return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+const WIDTH = sizeFromEnv(env.VITE_DDGI_WIDTH, 2560);
+const HEIGHT = sizeFromEnv(env.VITE_DDGI_HEIGHT, 1440);
 const FRAMES = 600;
 /** Passes of each version per submit (BatchTimer). */
 const PASSES_PER_BATCH = 20;

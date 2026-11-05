@@ -1,0 +1,5 @@
+{
+    "description": "T1.9: the library's GPU memory (gi.stats.memory: scene copy, acceleration, DDGI, total, and the shading module's sky, which the total leaves out) for each scene at its manifest volume, started as the viewer starts it. VITE_DDGI_SCENES=a,b picks scenes (default: the six T1.9 scenes). Sponza and Bistro need the downloads. Deterministic: one run is enough. Fails if the furnished room's total is over 64 MB (SPEC).",
+    "timeoutMs": 900000,
+    "manual": true
+}

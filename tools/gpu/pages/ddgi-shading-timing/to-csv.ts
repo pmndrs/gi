@@ -46,7 +46,9 @@ interface ShadingTimingData {
 export function shadingTimingRows(data: ShadingTimingData): MetricRow[] {
     const rows: MetricRow[] = [];
     for (const [camera, timing] of Object.entries(data.cameras)) {
-        const scene = `${data.scene}/${camera}`;
+        // The done-when size (2560x1440) keeps the plain name; another size is part of the scene, so the sizes never mix in the medians.
+        const sizeSuffix = data.width === 2560 && data.height === 1440 ? '' : `@${data.width}x${data.height}`;
+        const scene = `${data.scene}/${camera}${sizeSuffix}`;
         rows.push(
             { scene, metric: 'shading/width_px', value: data.width },
             { scene, metric: 'shading/height_px', value: data.height },
