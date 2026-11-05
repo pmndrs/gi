@@ -31,6 +31,19 @@ Numbers (indirect, against Cycles; bias, 8×8 block error, p95 block, FLIP 8×8,
 Not verified: the cause. The ratio map shows DDGI brighter on most shadowed surfaces, the curtains most.
 Next: find Sponza's +26% (leaks through thin curtains, probe density, sun shadow rays, the decal `dirt_decal` with GI albedo 0 acting as a black opaque surface because glTF's default metalness is 1 and M1 ignores `blocksLight`); a README section for `--materials-json`; the test view's full image is black on sky pixels.
 
+## 2026-11-05 · T1.12 phase 1: Cornell flicker cause · implementer (opus)
+Did: page `ddgi-flicker-causes` (manual, correctness only). No core or viewer edits.
+Found (RTX 3060; the Intel gave the same; `cornell-box`, every probe updated each frame unless noted; image per-pixel change mean or p95; atlas rms per texel):
+- base (h 0.97, 256 rays): 0.56% / 2.31%; atlas 0.91%;
+- 32 / 128 / 512 / 876 probes a frame: 0.016 / 0.066 / 0.22 / 0.33% (fewer probes slow the wobble, not shrink it);
+- h 0.98 / 0.99: 0.37 / 0.19%; 128 / 512 rays: 1.23 / 0.30%;
+- a fixed rotation: 0.0046% (but the image reads 5.5% darker); also with a frozen frame number: 0.0016%;
+- the firefly clamp off or 0.05: 0.56 / 0.55%; bounce off: the same absolute noise;
+- point-light Cornell: 0.26% (σ 16%, the hot spot under the light).
+Theory against 600 frames: per-frame change predicted 0.94%, measured 0.91%; spread over time 3.8% against 3.6%.
+Cause and the chosen fix: DECISIONS. The red and green walls aren't special in the field; their pixels change about 15% more than white ones relative to their brightness, because only GI lights them.
+Next (phase 2, after Budget v2 and the curtain fix leave those files): per-probe adaptive hysteresis, the viewer debug views, then Dennis judges by eye.
+
 ## 2026-11-05 · Frame breakdown, GI on against off · implementer (opus)
 Did: viewer-baselines gets a breakdown mode (`breakdown.ts`), labelling three's passes by render context; `stats.memory` now includes the sky (`shade.memoryBytes`), with a test (the `ddgi-memory` page still adds it itself, so it double-counts: to fix there).
 Found: **forward GI cost scales with fragment-shader runs, not visible pixels.** Sponza draws 5.7 M triangles; most are smaller than a pixel, and the GPU shades 2×2 blocks per triangle, so the GI function runs many times per pixel. A control material with no GI or textures costs 6.9× more on Sponza than Cornell on the RTX (13.6× on Intel); GI with one plain material shows nearly the same ratios (9×, 10.7×). A depth prepass doesn't help: Sponza shades only 1.98 fragments per pixel (Cornell 0.81, two-room 1.48). The update stayed at its budget (about 2.2 ms); warm-up, probe spheres, debug views and coverage were off. Textured materials made GI about 1.7× dearer on the RTX.
