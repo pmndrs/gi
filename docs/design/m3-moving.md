@@ -1,239 +1,277 @@
 # M3 design draft: moving objects and the camera
 
-Status: **draft for Dennis's review, 2026-11-05.** Nothing here is decided. It is the input for M3's breakdown (the last task of M2), and, for the startup items DECISIONS moved to M2, for T1.11.
+Status: **draft for Dennis's review, 2026-11-05, revised after an Opus review the same day.** Nothing here is decided. It is the input for M3's breakdown (the last task of M2) and, for the startup items DECISIONS moved to M2, for T1.11.
 
-It builds on [ddgi.md](ddgi.md), [bvh-framework.md](bvh-framework.md), [platform.md](../api/platform.md), [three.md](../api/three.md), the B1 hand-over (branch `bvh-b1`, `packages/bvh/README.md`) and the M2 draft, [m2-lights.md](m2-lights.md). M3 reuses M2's per-probe history and GPU scheduler (m2-lights.md section 4) for moved geometry; if M2 changes them, this page follows.
+It builds on [ddgi.md](ddgi.md), [bvh-framework.md](bvh-framework.md), [platform.md](../api/platform.md), [three.md](../api/three.md), the B1 hand-over (branch `bvh-b1`: `packages/bvh/README.md` and its PROGRESS entry) and the M2 draft, [m2-lights.md](m2-lights.md). M3 reuses M2's per-probe history and GPU scheduler (m2-lights.md section 4) for moved geometry; if M2 changes them, this page follows.
 
 ## In one paragraph
 
-Moving geometry already works at the tracing level: the top-level tree is refit on the GPU every frame and rebuilt in a worker (B1a), and nothing recompiles when instances come and go. M3 makes the rest of the chain fast and complete. The three adapter finds changes from three's own events and version counters instead of a slow walk, and sends many transforms in one call. New and edited meshes get GPU-built trees (B1's LBVH, later B2's H-PLOC) in the frame they arrive, and tinybvh's better trees replace them quietly when the worker finishes; the same machinery gives first GI in about a second after a scene is handed over. Deforming meshes are refit on the GPU from positions the adapter supplies. Probes near a moved object get their history shortened and are put at the front of the update list, exactly as for a light change, with the size of the change estimated from how much of the probe's view the object covers; probes that were switched off come back warmed, not black. A camera-following volume scrolls its probe grid toroidally, RTXGI-style, so only the planes entering at the far edge start over, and several volumes share one atlas and blend at their edges.
+Moving geometry already works at the tracing level. The top-level tree is refit on the GPU every frame and rebuilt in a worker (B1a), and nothing recompiles when instances come and go. M3 makes the rest of the chain fast and complete:
+
+- **Trees.** New and edited meshes get trees built on the GPU (B1's LBVH, later B2's H-PLOC) in the frame they arrive, and tinybvh's better trees replace them when the worker finishes. The same machinery gives first GI about 2 s after a scene is handed over.
+- **Deforming meshes** keep their tree's shape and are refit on the GPU from positions the adapter supplies.
+- **Probes.** Probes near a moved object get their history shortened and go to the front of the update list, exactly as for a light change. The size of the change comes from how far the object moved and how much of the probe's view it covers. Probes that were switched off come back warmed, never black.
+- **The camera-following volume** keeps its probes fixed in world space and reuses the planes left behind for the planes entering ahead (RTXGI's "infinite scrolling"). New planes fade in, so the edge never pops. Several volumes share one atlas and blend at their edges.
+- **The three adapter** finds additions and removals from three's own events, and sends many transforms in one call.
+
+## Words used here
+
+- **Mesh tree / top-level tree:** each mesh has its own BVH (a tree of boxes around its triangles); a small top-level tree over all instances points into them. Other engines call these BLAS and TLAS.
+- **Refit:** recompute a tree's boxes for new vertex positions, keeping its shape. **Rebuild:** make a new shape.
+- **SAH cost:** a standard estimate of how expensive a tree is to trace; lower is better.
+- **Solid angle (Ω, in steradians, sr):** how much of a probe's view an object covers. The whole sphere is 4π ≈ 12.6 sr.
+- **Toroidal addressing:** storage that wraps around. When the window moves one step, the slot that falls off one end is reused for the new step at the other end, so nothing else moves. Clipmaps (Tanner et al. 1998) use it for textures.
+- **History length, τ, K, owed updates, the scheduler:** as defined in m2-lights.md ("Words used here", section 4).
 
 ## What M3 must deliver (SPEC)
 
 | Target | Tier A (RTX 3060, 1440p) |
 | --- | --- |
-| Object move response (cabinet move, door closing) | within 5% of settled in ≤ 1 s |
+| Object move response (a cabinet move, a door closing) | within 5% of settled in ≤ 1 s |
 | Closed door | no leak: dark-room light ≤ 1% of the lit room's, and none visible |
 | Recompiles | the counter stays at 0 through every scenario |
-| Adapter cost | ≤ 0.2 ms per frame still, ≤ 0.5 ms with one object moving |
+| Adapter cost | ≤ 0.2 ms a frame still, ≤ 0.5 ms with one object moving |
 | Camera-following volume | scrolling never shows as a seam or a pop |
 | Deforming meshes | cast moving occlusion into the GI |
 
-Plus M1's still-scene checks, and M2's light checks, unchanged.
+M1's still-scene checks and M2's light checks still pass.
 
 ## What others do, and what we copy
 
 | Who | How moved geometry reaches the GI | What we take |
 | --- | --- | --- |
-| **RTXGI-DDGI** (Majercik et al. 2021; SDK docs `DDGIVolume.md`) | Rays see the moved geometry immediately (hardware TLAS/BLAS rebuilt or refit by the app). Probes don't know anything moved: the 0.97 hysteresis plus the per-texel change test catches up. Classification and relocation re-run from the fixed rays each update. **Infinite scrolling volumes** keep probes fixed in world space and, when the active area moves, invalidate only the plane of probes that wrapped to the far edge (`DDGIClearScrolledPlane` in `ProbeBlendingCS.hlsl`). | Fixed rays re-checking state every update (we already do this, T1.5b). **Toroidal scrolling with plane resets.** Volume blending by priority. |
-| **Lumen** (Wright et al., SIGGRAPH 2022 Advances) | Rigid instances carry precomputed mesh distance fields and surface-cache cards that move with the instance; caches near changes are re-lit within a budget, by priority. Deforming meshes need hardware ray tracing. | Rigid trees that move with their instance (our two-level BVH). **Budgeted, prioritized refresh near changes** (M2's scheduler). |
-| **Godot SDFGI** ([docs](https://docs.godotengine.org/en/stable/tutorials/3d/global_illumination/using_sdfgi.html)) | Camera-following cascades; dynamic objects don't occlude or bounce. | Confirms camera-following is the norm; we go further on movers. |
-| **EA SEED GIBS** (Halén et al., SIGGRAPH 2021) and **GIBS2** (Apers, SIGGRAPH 2024 Advances) | Surfels are attached to the object (and its skin), so they move with it; probes with DDGI-style octahedral data cover the rest. | The idea that movers must be *found*, not waited out. We don't take surfels in v1. |
-| **AMD Brixelizer** ([GPUOpen](https://gpuopen.com/fidelityfx-brixelizer/)) | Sparse distance-field bricks around the camera, rebuilt in a budget for dynamic instances. | Camera-centred, budgeted rebuilds. |
-| **Enlighten** (Martin and Einarsson, SIGGRAPH 2010 Advances) | Geometry is static; dynamic objects only receive light from probes. | What we must beat: SPEC's door and cabinet cases need movers to occlude. |
-| **Clipmaps** (Tanner, Migdal, Jones, SIGGRAPH 1998) | A fixed-size window over a virtual texture, addressed modulo its size, updated only at the edge the window moves toward. | The addressing for the scrolling grid. |
-| **BVH maintenance** (Wald, Boulos, Shirley, "Ray Tracing Deformable Scenes Using Dynamic Bounding Volume Hierarchies", TOG 2007; LBVH: Karras 2012, Apetrei 2014; H-PLOC: Benthin et al., HPG 2024) | Refit when the shape stays similar, rebuild when quality drifts; GPU builders make rebuilds cheap. | Refit every frame + periodic GPU rebuild for deforming meshes; GPU LBVH now, H-PLOC later. |
+| **RTXGI-DDGI** (Majercik et al. 2021; SDK `DDGIVolume.md`) | Rays see moved geometry at once (the app rebuilds or refits its hardware trees). Probes aren't told anything moved: the 0.97 hysteresis and the per-texel change test catch up. Classification and relocation re-run from the fixed rays each update. **Infinite scrolling volumes** keep probes fixed in world space; when the active area moves, only the plane of probes that wrapped to the far edge is cleared (`DDGIClearScrolledPlane`, `ProbeBlendingCS.hlsl`). | Fixed rays re-checking probe states every update (we do this already, T1.5b). **Scrolling with plane resets.** Blending volumes by priority. |
+| **Lumen** (Wright et al., SIGGRAPH 2022 Advances) | Rigid instances carry precomputed distance fields and surface-cache "cards" that move with them; caches near changes are refreshed within a budget, by priority. Deforming meshes need hardware ray tracing. | Trees that move with their instance (our two levels). **Budgeted, prioritized refresh near changes** (M2's scheduler). |
+| **Godot SDFGI** ([docs](https://docs.godotengine.org/en/stable/tutorials/3d/global_illumination/using_sdfgi.html)) | Camera-following cascades; dynamic objects don't block or bounce light. | Confirms camera-following is the norm. We go further on movers. |
+| **EA SEED GIBS** (Halén et al., SIGGRAPH 2021) and **GIBS2** (Apers, SIGGRAPH 2024 Advances) | Surfels are attached to objects (and their skin), so they move with them; probes with DDGI-like octahedral data cover the rest. | Movers must be *found*, not waited out. No surfels in v1. |
+| **AMD Brixelizer** ([GPUOpen](https://gpuopen.com/fidelityfx-brixelizer/)) | Sparse distance-field bricks around the camera, rebuilt within a budget for dynamic instances. | Camera-centred, budgeted rebuilds. |
+| **Enlighten** (Martin and Einarsson, SIGGRAPH 2010 Advances) | Geometry is static; dynamic objects only receive light from probes. | What we have to beat: SPEC's door and cabinet cases need movers to block light. |
+| **Clipmaps** (Tanner, Migdal, Jones, SIGGRAPH 1998) | A fixed-size window over a larger virtual texture, addressed modulo its size, updated only at the edge it moves toward. | The addressing for the scrolling grid. |
+| **BVH upkeep** (Wald, Boulos, Shirley, "Ray Tracing Deformable Scenes Using Dynamic Bounding Volume Hierarchies", TOG 2007; LBVH: Karras 2012, Apetrei 2014; H-PLOC: Benthin et al., HPG 2024) | Refit while the shape stays similar; rebuild when quality drifts; GPU builders make rebuilds cheap. | Refit for deforming meshes (SPEC's tracing decision: keep the shape). GPU builds for new meshes. |
 
 ## 1. The change feed (platform side)
 
-What already exists: `setTransform`, `createInstance`/`destroyInstance`, `createMesh`/`updateMesh`/`destroyMesh`, `setDeformedPositions` (throws "arrives in M3"). The change log writes two regions per moved instance (old and new box) with the instance as `source`. Fixed-capacity tables grow by reallocating; no recompiles.
+What already exists: `setTransform`, `createInstance` and `destroyInstance`, `createMesh`, `updateMesh` and `destroyMesh`, and `setDeformedPositions` (which throws "arrives in M3"). The change log writes two regions per moved instance (old box and new box), with the instance as `source`. Tables have fixed capacity and grow by reallocating; nothing recompiles.
 
 M3 adds:
 
-- **`setTransforms(instances: Uint32Array, matrices: Float32Array)`** (host-facing addition; question 2). B1a measured 10,000 `setTransform` calls at 18–20 ms, about 2 µs each, all in per-call bookkeeping. A batch call writes straight into the instance mirror and logs one merged region list. Target: 10,000 transforms in ≤ 2 ms.
-- **`SceneChanges.receivers: readonly Aabb[]`** in place of the `movedReceivers` count (technique-facing). Moving objects that don't contribute to GI (characters, small props) still need probes near them to be awake (section 5.3).
-- **`setDeformedPositions` in two forms:** a same-device `GPUBuffer` (as the contract says now) or a CPU `Float32Array`, which the platform uploads into its own buffer. *Why the CPU form:* three r187 gives us no way to get a GPU buffer it owns without reaching into its backend (section 7).
-- **A recompile counter** in `gi.stats`: compute pipelines created after `isReady`. The viewer shows it next to three's own program count.
+- **`setTransforms(instances: Uint32Array, matrices: Float32Array)`** (a host-facing addition; question 2). B1a measured 10,000 `setTransform` calls at 18–20 ms, about 2 µs each, all bookkeeping per call. A batch call writes straight into the instance mirror and logs one region list. Target: 10,000 transforms in ≤ 2 ms.
+- **The move distance per instance:** `SceneChanges` regions from a move carry how far the box's corners moved (`moved`, in metres). `ddgi/mark` uses it (section 5.1). Technique-facing.
+- **`SceneChanges.receivers: readonly Aabb[]`** in place of the `movedReceivers` count (technique-facing). Moving objects that don't contribute to GI (characters, small props) still need nearby probes awake (section 5.3).
+- **`deformBounds`** on a `deforming: true` mesh: a box, in mesh space, the deformed shape stays inside. The platform can't read GPU-supplied positions on the CPU, so this is what it logs as the mesh's region each frame.
+- **`setDeformedPositions`** as the contract says: a same-device `GPUBuffer`. Optionally also a CPU `Float32Array` that the platform uploads into its own buffer (question 1). *Why the CPU form:* three r187 gives no supported way to get at a GPU buffer it owns (section 7). It would be a host-facing addition and needs a DECISIONS entry, because SPEC's tracing decision describes positions arriving "as a GPU buffer, so there's no rebuild and no CPU work".
+- **A recompile counter** in `gi.stats`: compute pipelines created after `isReady`. The viewer shows it next to three's own program count. With T2.14, every kernel a configuration needs is compiled in `prepare`, so nothing compiles on first use and the counter means what it says.
 
 ## 2. Per-mesh trees: GPU first, tinybvh as the refinement
 
 ### 2.1 What exists
 
-- **B0 (tinybvh, WASM worker):** best trees (lowest SAH cost); Sponza in 3.9 s in the worker.
-- **B1 (GPU LBVH, branch `bvh-b1`, being merged into `m1`):** Sponza's 5.74 M triangles in 31.2 ms on the RTX; trees cost 1.22× tinybvh's SAH and trace at 0.82× (closest) and 0.80× (any). Builds every mesh of a batch in shared dispatches into three shared buffers with a node offset per mesh, in exactly the tracer's layout. Needs subgroups; `createMeshLayoutBuilder` falls back to tinybvh without them. **Not yet wired into `ddgi-core`**: the platform still builds with tinybvh only, and B1's output is read back today.
-- **B1 BLAS refit (`GpuMeshRefit`):** rewrites the tree-ordered triangles from a vertex buffer, then B1a's refit climbs. Works on any builder's tree.
-- **B2 (H-PLOC):** target trees within 1.15× of tinybvh's SAH and trace ≥ 0.9× B0's; required before M3 sign-off (bvh-framework.md).
+- **B0 (tinybvh, WASM worker):** the best trees (lowest SAH cost). Sponza takes 3.9 s in the worker.
+- **B1 (GPU LBVH, branch `bvh-b1`, being merged into `m1`):** Sponza's 5.74 M triangles in 31.2 ms on the RTX. Its trees cost 1.22× tinybvh's SAH and trace at 0.82× (closest hit) and 0.80× (any hit). It builds every mesh of a batch with the same dispatches, in exactly the tracer's layout. It needs subgroups; without them `createMeshLayoutBuilder` uses tinybvh.
+- **What B1 still needs from the CPU:** node counts, depth and "refused" flags come back through a stats readback, and `GpuMeshRefit` takes a tree's shape from a CPU copy of its layout (`setTree`, via `readLayouts`). **It isn't wired into `ddgi-core` yet;** the platform builds with tinybvh only.
+- **B1a top level:** refit on the GPU every frame; the shape rebuilt in a worker when an instance is created or quality drifts (DECISIONS 2026-11-04). New instances appear when the worker's shape arrives (about 55 ms at 10,000 instances, less for small scenes).
+- **B2 (H-PLOC):** target trees within 1.15× tinybvh's SAH and trace speed ≥ 0.9× B0's. DECISIONS 2026-11-04 and TASKS: B1 and B2 are done before M3 starts.
 
-### 2.2 The plan
+### 2.2 The plan: GPU trees without a readback
 
-- **Every new or replaced mesh is built on the GPU in the frame it arrives,** straight into the tracer's node and triangle buffers. Each mesh gets a range from a range allocator (the scene copy already has one); the mesh table holds its root offset. No readback.
-- **tinybvh still builds every mesh in its worker** (a copy of positions and indices goes there, as now). When a mesh's tinybvh tree arrives, it is uploaded into a new range, the mesh table's root offset flips, and the old range is freed a frame later (after the GPU has finished with it). The tracer sees a different tree over the same triangles: watertight hits are the same up to float rounding, so the field doesn't notice. Both trees exist for a moment: worst case about 2× one mesh's tree memory.
-- **When B2 lands** and its trees trace at ≥ 0.95× tinybvh's, the swap becomes optional (a setting, `meshTreeRefinement: 'tinybvh' | 'none'`), and saves the worker's copy and time.
+The platform promises no CPU readbacks (DECISIONS, B1a review). So the GPU builds must manage on the GPU what B1 reads back today:
+
+- **Where a tree goes:** GPU-built trees live in a **provisional pool**, a buffer the GPU allocates from with an atomic bump pointer. Each build writes its root offset and node count into the mesh table itself. Pool size: 0.6 × triangles × 1.25 nodes (B1's Sponza trees have 0.57 nodes per triangle). A mesh that doesn't fit is marked "not ready". Only nodes need the pool: a mesh's triangle records (48 bytes each, tree-ordered) are exactly one per triangle, so the CPU allocates them as now. During a swap, one mesh briefly has two triangle ranges, because tinybvh orders them differently.
+- **Whether a tree is usable:** after each build, a small GPU pass climbs from every leaf to measure depth. A tree that is deeper than the tracer's 64-entry stack, or that the builder refused, is marked "not ready" too. The tracer checks one status word per mesh when it enters a mesh tree, and treats a not-ready mesh as missing. That is one extra load per mesh entry.
+- **tinybvh still builds every mesh in its worker,** as now. When its tree arrives (CPU-known size), it is uploaded into the CPU-managed tree buffers, and the mesh table's root and status flip to it. The tracer sees a different tree over the same triangles; watertight hits agree up to float rounding, so the field doesn't notice.
+- **The pool empties** once every provisional tree has been replaced. The CPU knows when, because it counts the tinybvh trees it uploaded. At load the pool is then freed. For meshes added at run time, a small pool (default room for 4 M triangles) is reset whenever it holds no live trees.
+- **When B2 lands** and its trees trace at ≥ 0.95× tinybvh's, the swap can become optional (`meshTreeRefinement: 'tinybvh' | 'none'`), which saves the worker's copy and time.
 - **Without subgroups:** tinybvh only, as in M1 (the declared fallback). First GI waits for the worker on those devices.
-- **The top level:** B1a's decision stands: refit every frame on the GPU, rebuild the shape in a worker on instance creation or quality drift (new instances appear in about 55 ms at 10,000 instances, sooner for small scenes). If the "add a cabinet" scenario shows that delay, the GPU LBVH can build the top level over instance boxes in the same frame; it's the same code. Not planned by default.
+- **Not chosen:** reading B1's per-mesh node counts back asynchronously (a few bytes, a few frames late) would make the pool unnecessary. It breaks the no-readback promise, so it's question 3.
+- **The top level** stays as B1a decided. If "add a cabinet" shows the worker's delay, the GPU LBVH could build the top level in the same frame from the instance boxes. It's the same code, but not planned.
 
 ### 2.3 First GI from GPU trees (scheduled in M2)
 
-DECISIONS 2026-11-05 (provisional): first GI from B1's GPU trees, swapping to tinybvh's when the worker finishes, plus the scene copy off the main thread and compiling less. These are rows T2.12–T2.14 below, run in M2.
+DECISIONS 2026-11-05 (provisional): first GI from B1's GPU trees, swapping to tinybvh's when the worker finishes, plus the other startup levers (file loading, the scene copy off the main thread, the cold compile). These are rows T2.12–T2.15 below, run in M2.
 
-Sponza from load today (T1.9a): files 4.2 s (the host's), mesh trees 3.3 s, main-thread scene copy 1.2 s, cold compile 1.2 s = 10.8 s (Bistro exterior's scene copy alone 4.1 s).
+Sponza from load today (T1.9a, cold compile, first GI drawn): 10.8 s, of which files 4.2 s, mesh trees 3.3 s, main-thread scene copy 1.2 s and shader compile 1.2 s. The remaining 0.9 s (the first frame, the first warm-up step, three's own work) isn't broken down yet.
 
-| Part | Today | With T2.12–T2.14 (estimate) | How |
+| Part | Today | After T2.12–T2.15 (estimate) | How |
 | --- | --- | --- | --- |
-| Files | 4.2 s | 4.2 s | The host's; out of our hands |
-| Mesh trees | 3.3 s | ~0.3 s | GPU LBVH (31 ms GPU; 302 ms wall in B1's first build with uploads and a stats readback, which goes) |
-| Scene copy | 1.2 s main thread | ~0.15 s, time-sliced | Raw upload + GPU packing (section 2.4) |
-| Compile | 1.2 s | ~0.6 s | Only what's used; the sky kernel fix; compile while trees build |
-| **Total from load** | **10.8 s** | **~5.3 s** | |
-| **From "scene handed to GI"** | **~6.6 s** | **~1.0 s** | |
+| Files | 4.2 s | measure first (T2.15) | The viewer is the host here; the levers are the viewer's loading |
+| Mesh trees | 3.3 s | ~0.3 s | GPU LBVH: 31 ms GPU; B1's first build took 302 ms wall, including uploads and the stats readback that goes away |
+| Scene copy | 1.2 s, main thread | ~0.15 s | Raw upload plus GPU packing (section 2.4); done in one go at load, not spread over frames |
+| Compile | 1.2 s | ~0.7 s | Only what's configured; the sky kernel fix (T2.6); the LBVH's own kernels added (not yet timed) |
+| Not broken down | 0.9 s | 0.9 s | T2.12 breaks it down |
+| **From load** | **10.8 s** | **~6.2 s + whatever T2.15 saves** | |
+| **From "scene handed to GI"** | **~6.6 s** | **~2.0 s** | |
 
-So Sponza can meet 2 s if the clock starts when the host hands the scene over, not if it starts at the first file request. That's still the open question for Dennis at M1 sign-off (DECISIONS), repeated as question 5.
+So Sponza lands near 2 s if the clock starts when the host hands the scene over, and well above it if it starts at the first file request. That's the open question for Dennis at M1 sign-off (DECISIONS), repeated as question 5.
 
 ### 2.4 The scene copy off the main thread
 
-The 1.2 s (Sponza) and 4.1 s (Bistro exterior) are JS loops on the main thread: octahedral normals, 16-bit indices, interleaving, per mesh. A worker would still need the arrays copied in and the results copied back, then a `writeBuffer` from the main thread (the device lives there; the host owns it). The GPU can do the packing instead:
+The 1.2 s (Sponza) and 4.1 s (Bistro exterior) are JS loops on the main thread, one mesh at a time: octahedral normals, 16-bit indices, interleaving. A worker would still need the arrays copied in and the results copied back, followed by a `writeBuffer` from the main thread (the device lives there; the host owns it). The GPU can do the packing instead:
 
-- **Upload raw arrays** (positions, normals, uvs, indices exactly as the host gave them) with `writeBuffer` into a staging region, a few meshes per frame, at most `uploadMsPerFrame` (default 4 ms) of main-thread time.
-- **`gi/pack-mesh`** (compute, one thread per vertex, then per triangle): octahedral normals, index narrowing to 16 bits where every index fits, the same layout `mesh-packing.ts` writes today.
-- **The CPU packer stays as the test oracle,** and a test holds the GPU output to it byte for byte on every procedural scene and on Sponza.
-- *Floor:* the raw copy itself. NOTES: reading 300 MB in JS takes about 110 ms on this laptop, so Sponza's ~180 MB of raw arrays costs ~60–100 ms of main-thread copying however it's done.
+- **Upload the raw arrays** (positions, normals, uvs and indices, as the host gave them) with `writeBuffer` into a staging buffer. At load this happens in one go. For meshes added later it happens a few meshes per frame, at most `uploadMsPerFrame` (default 4 ms) of main-thread time.
+- **`gi/pack-mesh`** (compute, one thread per vertex, then one per triangle) writes octahedral normals, narrows indices to 16 bits where they all fit, and lays them out as `mesh-packing.ts` does today.
+- **The CPU packer stays as the test oracle.** Positions and indices must match it byte for byte; normals within one octahedral step (the GPU encodes in f32, the CPU in f64).
+- **The floor** is the raw copy itself. NOTES: reading 300 MB in JS takes about 110 ms on this laptop, so Sponza's ~180 MB of raw arrays costs about 60–100 ms of main-thread copying however it's done. The tinybvh worker's own copy adds to that.
 
-The tinybvh worker keeps receiving its own copy, as now; that copy is part of the floor too.
+## 3. Deforming meshes (mesh-tree refit)
 
-## 3. Deforming meshes (BLAS refit)
+SPEC's tracing decision: deforming meshes "keep their BVH shape", refit every frame on the GPU, "no rebuild and no CPU work". The plan follows it.
 
-- **Input:** `setDeformedPositions(mesh, positions)` each frame, GPU buffer or CPU array (section 1). A mesh created with `deforming: true` keeps its triangle list.
-- **Per frame:** `GpuMeshRefit` (B1) rewrites that mesh's tree-ordered triangle records from the positions and refits its boxes bottom-up; then the top-level refit, which already runs every frame, picks up the new mesh box. All on the GPU, no readback.
-- **Quality:** refitted trees degrade as the shape moves away from the one they were built for. The platform promises no readbacks, so the GPU's SAH numbers can't steer a rebuild from the CPU. Instead, each deforming mesh is **rebuilt with the GPU LBVH every `deformRebuildFrames` frames** (default 32, staggered across meshes so they don't all rebuild in one frame). A sway rarely strays far from its rest pose; the T3.0 spike measures how fast trace speed decays on the wind tree to set the number.
-- **Normals:** the scene copy's octahedral normals are the rest pose's. Deforming meshes shade with the triangle's geometric normal (from the refreshed triangle records). For foliage at probe resolution that's invisible; an optional normals buffer can come later.
-- **Cost estimate:** B1a's top-level refit is 0.086 ms for 10,000 instances; a mesh refit touches triangles as well, so a 100,000-triangle tree should be about 0.1–0.2 ms on the RTX, plus an LBVH rebuild of ~0.5 ms every 32 frames. Planning number: ≤ 0.3 ms per frame for the wind tree.
-- **Probes:** a deforming mesh logs its world box as a geometry region every frame, so nearby probes get the M2 treatment with a small change each frame (section 5), which keeps their history matched to the motion.
+- **Shape:** a deforming mesh's tree is tinybvh's tree of the rest pose. It's built on the CPU, so `GpuMeshRefit.setTree` gets its layout exactly as B1 built it.
+- **Per frame:** `GpuMeshRefit` (B1) rewrites the mesh's tree-ordered triangle records from the positions and refits its boxes bottom-up. The top-level refit, which already runs every frame, picks up the new mesh box. Everything stays on the GPU.
+- **The scene copy's positions too.** Hit shading rebuilds the hit point from the scene copy's positions (`giSurfaceAt` → `giInstanceTriangle`), not from the tracer's records. So the same kernel also writes that mesh's positions into the scene copy's vertex buffer.
+- **Normals:** the scene copy's octahedral normals belong to the rest pose. A deforming mesh shades with each triangle's geometric normal, worked out from the fresh positions. At probe resolution that's invisible on foliage; an optional normals buffer can come later.
+- **How much it moved:** the triangle kernel also writes the frame's largest vertex movement since the last frame (an `atomicMax`) into a GPU word. `ddgi/mark` reads it for the change size (section 5.1). The CPU logs `deformBounds` as the region.
+- **Quality:** refits drift from the shape the tree was built for. A sway stays near its rest pose, so the plan has no rebuilds. T3.0 measures trace-speed decay on the wind tree. If it's bad, a periodic GPU rebuild would be a DECISIONS entry, because it departs from SPEC's "keep the shape".
+- **Without subgroups:** B1a's refit uses subgroups for its pairing step. On such devices `isSupported` reports deforming meshes as unsupported, and they're traced in their rest pose with a one-time warning (the declared fallback; no slower second path).
+- **Cost estimate:** B1a's top-level refit is 0.086 ms for 10,000 instances. A mesh refit also rewrites triangles and positions, so a 100,000-triangle tree should be about 0.1–0.2 ms on the RTX (not yet timed). Planning number: ≤ 0.3 ms a frame for the wind tree.
 
 ## 4. Several volumes, and the camera-following volume
 
 ### 4.1 Several volumes in one technique
 
 - **Settings:** `volumes: VolumeSettings[]` (at most 8), each `{ center, size, spacing, follow: 'fixed' | 'camera', priority }`. M1's single `volume` becomes the one-element case.
-- **One atlas set for all volumes:** the irradiance, distance and probe-data textures stay three 2D arrays. Volume `v` owns layers `[base_v, base_v + ny_v)` and tiles `(x, z)` inside each. Layer size is the largest volume's footprint (`max nx × 8` by `max nz × 8` for irradiance). *Why shared:* the shading module may use at most 6 textures (platform.md gap 1); one set per volume would break that at the second volume.
-- **The volume table** is the small `rgba32float` texture the contract already plans: 4 texels per volume (origin and spacing; counts and layer base; scroll offset and window; priority, fade width, flags).
+- **One atlas set for all volumes:** the irradiance, distance and probe-data textures stay three 2D arrays. Volume `v` owns layers `[base_v, base_v + ny_v)` and the tiles `(x, z)` inside them. Each layer is as large as the largest volume's footprint. *Why shared:* a shading module may use at most 6 textures (platform.md gap 1); one set per volume breaks that at the second volume. Past 256 layers in total, `prepare` throws `GILimitError`.
+- **The volume table** is the small `rgba32float` texture the contract already plans: 4 texels per volume (origin and spacing; counts and layer base; scroll offset and valid extent; priority, fade width and flags). The GPU writes it (section 4.2), so it is also a storage texture.
 - **Probe numbering:** one global index across volumes (`volumeBase + local`), so the scheduler, history and update list don't change.
-- **Shading:** for a point, volumes are visited in priority order (the CPU sorts the table). Each contributes with weight `w_v = coverage_v × (1 − W)`, where coverage is the existing edge fade times `saturate(Σw / 0.02)` (DECISIONS 2026-11-05), and `W` is the weight so far. Stop at `W ≥ 0.99` or after 2 volumes. Inside a volume, one sample as now; only in fade bands, two. RTXGI blends volumes the same way.
-- **Bounce light** in `ddgi/trace` uses the same multi-volume function, so light bounces between volumes.
+- **Shading:** for a point, volumes are visited in priority order (the CPU sorts the table). Each contributes with weight `w_v = coverage_v × (1 − W)`, where coverage is the existing edge fade times `saturate(Σw / 0.02)` (DECISIONS 2026-11-05), and `W` is the weight gathered so far. Stop at `W ≥ 0.99`, or after 2 volumes. Inside a volume that's one sample, as now; only in fade bands is it two. RTXGI blends volumes the same way.
+- **Bounce light** in `ddgi/trace` uses the same function, so light bounces between volumes.
 
-### 4.2 The camera-following volume: toroidal scrolling
+### 4.2 The camera-following volume: scrolling
 
 The volume is a fixed-size window of probes over a lattice fixed in world space (RTXGI's infinite scrolling, clipmap addressing):
 
-- **Lattice and slots:** world lattice coordinates `L = round((P − anchor) / spacing)`; a probe's storage slot is `L mod n` per axis. Probes never move in world space, so their irradiance and distance stay valid.
-- **The window** is `[windowMin, windowMin + n)` in lattice units, centred on the camera. It moves when the camera is more than **0.75 spacing** from the window's centre plane on an axis, by whole planes. *Why 0.75, not 0.5:* a camera resting on a plane boundary would otherwise make the window flip back and forth, clearing the same planes every frame.
-- **On a move:** the slots of the planes that leave are now the planes that enter at the far edge. A small kernel `ddgi/scroll` resets them: state 3 (not updated yet), relocation offset 0, history `n = 0`, `owed = K`, high urgency. M2's scheduler then updates them first.
-- **Sampling** maps a point to lattice coordinates, then slots with the same modulo, and the window bounds come from the volume table. For a fixed volume the offset is 0 and the modulo does nothing: the same code, not a second path. Cost: one integer modulo per axis per probe sample.
-- **No seam, no pop:** entering planes are at the far edge, half a volume from the camera, inside the coverage fade band, and they aren't used in shading until warmed (section 5.2). The fixed volumes and then the host's environment cover the band in the meantime.
-- **Speed:** at 10 m/s with 1.5 m spacing, about 6.7 planes per second per axis; with a 32 × 12 × 32 window that's about 2,600 probes per second, 43 per frame at 60 Hz. Each needs its K warm-up updates: about 340 probe updates per frame, competing with everything else. The fly-through test measures whether 10 m/s is the right speed to promise.
+- **Lattice and slots:** a probe's lattice coordinates are `L = round((P − anchor) / spacing)`, and its storage slot is `L mod n` on each axis. Probes never move in world space, so their irradiance and distance stay valid.
+- **The window** is `[windowMin, windowMin + n)` in lattice units, centred on the camera. It moves by whole planes when the camera is more than **0.75 spacing** from the window's centre plane on an axis. *Why 0.75, not 0.5:* a camera resting on a plane boundary would otherwise make the window flip back and forth, clearing the same planes every frame.
+- **On a move:** the slots of the planes that leave become the planes that enter at the far edge. A small kernel, `ddgi/scroll`, resets them: state 3 (not updated yet), relocation offset 0, history `n = 0`, owed K, high urgency. M2's scheduler then updates them first.
+- **Fading the new planes in.** Coverage is 1 out to half a spacing beyond the outermost probes (DECISIONS 2026-11-05), so a new plane at full coverage the moment the window moves would be a pop. The volume table therefore holds a **valid extent** next to the window. Coverage fades at the valid extent, not at the window's edge. `ddgi/scroll` advances the valid extent toward the window by `spacing / 15` a frame, and only over planes whose probes have finished warming (from the census). A new plane fades in over about a quarter of a second instead of appearing at once.
+- **Sampling** maps a point to lattice coordinates, then to slots with the same modulo; the window and valid extent come from the volume table. For a fixed volume the offset is 0 and the modulo changes nothing: the same code, not a second path. Cost: one integer modulo per axis per probe sample.
+- **The ends of the scroll:** a plane that enters next to a fixed, higher-priority volume is covered by that volume meanwhile; elsewhere the host's environment covers the fade band, as at any volume edge.
+- **Speed:** entering probes need their 2 warming updates before they're shown (section 5.2). With a 32 × 12 × 32 window at 1.5 m spacing, each plane on the x or z axis holds 384 probes. At `v` m/s that's about `4.3 v` entering probes a frame at 60 Hz, `8.5 v` warming updates a frame. Bistro exterior fits about 90 probe updates a frame at 2 ms (NOTES: 1.57 ms + 4.7 µs per probe). Giving half of that to entering planes allows **about 5 m/s** at 1.5 m spacing; coarser spacing or a larger budget allows more. Question 4.
 - **Teleports** (the camera jumps more than half the window): every slot resets, and the viewer's warm-up mode (DECISIONS 2026-11-05) runs, as after a scene load.
-- **Memory:** 32 × 12 × 32 = 12,288 probes, about 1.5 KB each (irradiance 512 B, distance 1 KB, data, history): **19 MB**, covering 48 × 18 × 48 m at 1.5 m spacing.
+- **Memory:** 32 × 12 × 32 = 12,288 probes at about 1.5 KB each (irradiance 512 B, distance 1 KB, probe data, history) is **19 MB**, covering 48 × 18 × 48 m at 1.5 m spacing.
 
 ## 5. Probes near moved geometry
 
 ### 5.1 How a moved object becomes a set of probes
 
-M2's `ddgi/mark` (m2-lights.md 4.2) gets a geometry entry. For each geometry region (the old box and the new box of a moved, added, removed or deforming object):
+M2's `ddgi/mark` (m2-lights.md 4.2) gets geometry entries. For each geometry region (the old and the new box of a moved, added, removed or deforming object):
 
-- **Near set:** probes within the box grown by 1.5 spacings. `r = 1` (a full change): their rays may now start inside the object, or see a different surface right next to them.
-- **Far set:** probes within 8 spacings (clipped to the volume) that can see the box: one Chebyshev test from the probe's distance moments toward the box centre, kept if ≥ 0.25. Their change is the share of the view the object covers:
-  `r = min(1, Ω / Ω_ref)`, with `Ω ≈ π × boxRadius² / distance²` and `Ω_ref = 0.5 sr` (an object filling a twelfth of the sphere counts as a full change).
-- Then the same history rule as for lights: `n ← min(n, τK / (r − τ))`, `owed ← K`, urgency from `r` and the camera weight.
+- **Near set:** probes within the box grown by 1.5 spacings. Their rays may now start inside the object, or see a different surface right next to them. The change size is:
+  - added or removed: `r = 1`;
+  - moved: `r = min(1, moved / spacing)`, from the region's corner movement (section 1);
+  - deforming: `r = min(1, largest vertex movement / spacing)`, the GPU word from section 3.
 
-Example, the door between two rooms (1 × 2 m, radius about 1.1 m): a probe 4 m into the dark room that looked through the doorway has `Ω ≈ 0.24 sr`, `r ≈ 0.47`, so its history drops to `n ≈ 0.95` and it is owed 8 updates. Behind a wall (Chebyshev < 0.25) it isn't marked.
+  A drag or a sway therefore marks a little every frame, and `pendingChange` adds it up until the probe's next update. That's the same behaviour as a light sweep in M2, not a reset every frame.
+- **Far set:** probes within 8 spacings (clipped to the volume) that can see the box. The test: in the direction of the box centre, the probe's stored mean distance (from its distance moments) must reach at least the distance to where that direction **enters** the box, minus half a spacing. A test against the box centre would fail for the old box, because the object hid its own centre: the stored distance stops at its near face.
+  - The change size is the share of the view the object covers: `r = min(1, Ω / Ω_ref)`, with `Ω ≈ π × boxRadius² / distance²` and `Ω_ref = 0.5 sr` (an object covering about 1/25 of the sphere counts as a full change).
+  - For a move, `r` is also scaled by `min(1, moved / spacing)`, so a slow drag doesn't count as a full change every frame.
+- Then the same history rule as for lights: `n ← min(n, τK / (pendingChange − τ))`, owed K, urgency from `pendingChange` and the camera weight.
 
-**What the budget buys** (the same arithmetic as M2): the door's near and far sets are a few hundred probes on two-room, which all get their 8 updates in well under 1 s. A cabinet moved in the furnished room touches fewer. Sponza-sized changes are served nearest the camera first.
+**Example: a door between two rooms** (1 × 2 m, radius about 1.1 m), closed in one step. A probe 4 m into the dark room that saw the open doorway has `Ω ≈ 0.24 sr` and `r ≈ 0.47`. Its history drops to `n ≈ 0.95`, and it is owed 8 updates. A probe behind a wall doesn't pass the far-set test and isn't marked.
 
-**The distance atlas** uses the same per-probe history. For geometry changes that matters most: until a probe near the door learns the door's distance, light can leak through it for those few frames. Section 5.2's first-update rule keeps that short.
+**What the budget buys** (the same arithmetic as m2-lights.md 4.3): the door's near and far sets are a few hundred probes on two-room, where 337 probes fit a frame, so all of them get their 8 updates well inside 1 s. A cabinet moved in the furnished room touches fewer. On Sponza-sized scenes the probes nearest the camera are served first.
 
-### 5.2 Probes that were off come back warmed, not black
+**The distance atlas** uses the same per-probe history. For geometry that matters most: until a probe near the door learns the door's distance, light can leak through it. The short history and the priority keep that to the first few updates (risk 3).
 
-Off probes (inside geometry, or no surface nearby) already trace their 32 fixed rays every time they're updated, and classification can turn them back on (T1.5b). Today a probe switching on is used in shading straight away, with whatever its atlas tiles last held. M3 changes the transition:
+### 5.2 Probes that were off come back warmed
 
-- **Off → on** sets `n = 0` and state 3; state 3 now ends after **2** blended updates, not 1, so a probe is only used once it has at least two estimates. Both off states are in the near set of any change that can free them, so they're scheduled at once.
-- **On → off** (a cabinet pushed over a probe): immediate, as now; neighbours fill in through the normal sampling weights.
+Off probes (inside geometry, or no surface nearby) trace their 32 fixed rays whenever they're updated, and classification can turn them back on (T1.5b). Today `blend.ts` already moves a probe coming back on to state 3 (not updated yet, not used in shading), and it becomes active after its first blended update.
+
+M3 changes one thing: **state 3 ends after 2 blended updates, not 1,** so a probe is used in shading only once it has at least two estimates. One noisy estimate is the pop SPEC forbids. Both off states are in the near set of any change that can free them, so they're scheduled at once.
+
+On → off (a cabinet pushed over a probe) stays immediate, as now; neighbouring probes fill in through the normal sampling weights.
 
 ### 5.3 Moving receivers in empty space
 
 TASKS carries this from M1: classification turns off probes in empty space (347 of Cornell's 1,728), so an object moving through mid-air gets no GI. RTXGI has the same limit. Proposed:
 
-- **Awake air probes:** a probe off for "no surface nearby" that is within 2 spacings of a receiver region (`SceneChanges.receivers`) or a geometry region is **woken** for 300 frames (5 s) after the last touch: it traces all rays, blends, and is used in shading (after warming). Then it goes back to sleep.
-- *Why not keep all air probes awake at a low rate:* it would change M1's still-scene cost and results; waking keeps a still scene exactly as M1 has it.
-- Data: a `wakeUntil` frame in the history record's spare word.
+- **Woken air probes:** a probe that is off for "no surface nearby" and lies within 2 spacings of a receiver region (`SceneChanges.receivers`) or a geometry region is **woken** for 300 frames (5 s) after the last touch. While awake it traces all rays, blends, and is used in shading once warmed. Then it goes back to sleep.
+- *Why not keep every air probe awake at a slow rate:* that would change M1's still-scene cost and results. Waking keeps a still scene exactly as M1 has it.
+- Data: a `wakeUntil` frame, in the history record's spare word.
 
-## 6. Efficient change tracking in the three adapter
+## 6. Change tracking in the three adapter
 
-**Today (T1.7, three.md):** a walk of 64 objects per frame plus a hot list for movers, `markChanged(object)` for no delay, 8 edit checks per frame, lights every frame. Still frames cost 0.06–0.10 ms on Sponza and 0.11–0.15 ms on Bistro interior, but an unmarked first move on Bistro interior takes up to 41 frames (0.7 s), and an unmarked geometry edit up to about 260.
+**Today (T1.7, three.md, `scene-sync.ts`):** a walk of 64 objects per frame plus a hot set for movers, `markChanged(object)` for no delay, 8 geometry and 8 material edit checks per frame, and every light every frame.
 
-**M3, using what three already tells us:**
+- A still frame costs 0.06–0.10 ms on Sponza and 0.11–0.15 ms on Bistro interior.
+- Each object costs about **0.7 µs**, because its data is cold in the cache right after three renders. A full pass over Bistro interior every frame would be 1.2 ms. That's why the walk is budgeted.
+- An unmarked first move on Bistro interior can take 41 frames (0.7 s); an unmarked geometry edit up to about 260.
 
-| Change | How it's found | Latency |
+What three r187 offers, and what M3 uses:
+
+| Change | How it's found in M3 | Latency |
 | --- | --- | --- |
-| Added or removed objects | three's `childadded` / `childremoved` events on every tracked parent (to confirm in r187, T3.0) | same frame |
-| Moved objects | every frame, compare each tracked object's `matrixWorld.elements` with a `Float32Array` snapshot (16 floats per object) in one tight loop | next frame |
-| Static hint | objects with `matrixAutoUpdate` and `matrixWorldAutoUpdate` both false are skipped by the loop and left to the slow walk or `markChanged` (three's own idiom for static objects) | walk |
-| `InstancedMesh` | `instanceMatrix.version`; only the ranges in `instanceMatrix.updateRanges` when present | next frame |
-| Geometry edits | each position and index attribute's `version`, every frame (one integer compare each) | next frame |
-| Material edits | `material.version` | next frame |
-| `visible` | own flag every frame; a change re-checks the subtree | next frame |
-| Anything else | the existing walk, kept as a safety net at a lower rate | `ceil(objects / objectsPerFrame)` frames |
+| Added or removed objects | three's `childadded` and `childremoved` events (they exist in r187, `Object3D.js`), on every tracked parent | the same frame |
+| Moved objects | the walk and the hot set stay (cache misses, not code, set their cost). New: the walk skips objects with `matrixAutoUpdate` and `matrixWorldAutoUpdate` both false (three's own idiom for static objects), leaving them to `markChanged`; that shortens a pass in scenes that use the idiom | `ceil(movable objects / objectsPerFrame)` frames, or the next frame with `markChanged` |
+| Moved objects, faster (T3.0 spike) | compare the matrix right after three computes it, while it's still in the cache: override `updateMatrixWorld` on each tracked object (not on the prototype) | the next frame, if the spike shows it's cheap and safe |
+| `InstancedMesh` | `instanceMatrix.version`, and only the ranges in `instanceMatrix.updateRanges`. three clears those ranges when it uploads during `render`, and `ThreeGI.update` runs before `render` (the documented order), so they're still there | the next frame |
+| Geometry edits | each position and index attribute's `version`, more per frame than now (an integer compare each) | a few frames |
+| Material edits | three bumps `material.version` only on `needsUpdate`, so value edits (a colour change) still need the snapshot compare, budgeted as now | as now |
+| Anything else | the walk, as a safety net | one pass |
 
 - **Sending:** moved objects go out in one `setTransforms` batch per frame.
-- **Cost estimate:** the compare loop should be tens of nanoseconds per object, so ~0.05–0.1 ms for Bistro interior's 2,622 objects. If T3.0's micro-benchmark says otherwise, the walk-plus-hot-list stays and only its budget rises.
-- **Deforming meshes:** a mesh with `userData.giDeforming = true` (or a `SkinnedMesh` with `giContributes = true`) is created `deforming`. When its position attribute's `version` changes, the adapter sends the CPU array (section 7).
-- Moves still reach GI one frame late by default (DECISIONS 2026-11-05: the adapter reads the matrices three's last render made).
+- **Deforming meshes:** a mesh with `userData.giDeforming = true` is created `deforming`. When its position attribute's `version` changes, the adapter sends the CPU array (section 7, if Dennis agrees to that form). A `SkinnedMesh` skins on the GPU, so its position attribute never changes; skinned meshes stay in their bind pose (SPEC: a stretch goal).
+- **Moves still reach GI one frame late** by default (DECISIONS 2026-11-05: the adapter reads the matrices three's last render made).
+- **For interactive tools,** `markChanged` stays the recommended path; the viewer's drag gizmo calls it.
 
 ## 7. Getting deformed positions out of three
 
-The hard part of the wind tree isn't the refit; it's that three r187 gives us no supported way to read a GPU buffer it owns (NOTES: no external buffers; and we don't reach into `renderer.backend`). A wind sway written as a TSL `positionNode` exists only inside three's vertex shader.
+The hard part of the wind tree isn't the refit. It's that three r187 gives no supported way to read a GPU buffer it owns (NOTES: no external buffers; and we don't reach into `renderer.backend`). A wind sway written as a TSL `positionNode` exists only inside three's vertex shader.
 
 Three routes, in the order I'd try them:
 
-1. **CPU positions** (works today): the host animates the position attribute on the CPU (three uploads it too), the adapter passes the same `Float32Array` to `setDeformedPositions`, and the platform uploads it. Cost: one `writeBuffer` per frame, about 1.2 MB for a 100,000-vertex tree. This is the plan for the viewer's tree.
-2. **A TSL compute writing into our texture** (T3.0 spike): if three can bind an `ExternalTexture` as a *storage* texture in a TSL compute, the host's GPU wind writes positions into a texture we own, three's vertex shader reads them back with `positionNode`, and our refit reads the same texture. No backend access, no upstream change. Unknown whether r187 allows it.
-3. **Upstream `ExternalBufferAttribute`** (the ~20-line PR SPEC already lists): three would read our buffer as a vertex attribute. Cleanest, but it depends on review upstream (question 1).
+1. **CPU positions** (works today): the host animates the position attribute on the CPU (three uploads it as well), and the adapter passes the same `Float32Array` to `setDeformedPositions`. Cost: one `writeBuffer` a frame, about 1.2 MB for a 100,000-vertex tree. This is the plan for the viewer's tree, if Dennis agrees to the CPU form (question 1).
+2. **A TSL compute writing into our texture** (T3.0 spike): if three can bind an `ExternalTexture` as a *storage* texture in a TSL compute, the host's GPU wind writes positions into a texture we own, three's vertex shader reads them back through `positionNode`, and our refit reads the same texture. No backend access and no upstream change. Unknown whether r187 allows it.
+3. **An upstream `ExternalBufferAttribute`** (the ~20-line PR SPEC already lists): three would read our buffer as a vertex attribute. This is the cleanest, but it depends on review upstream (question 1).
 
-Skinned characters as occluders stay a stretch goal (SPEC). If wanted, a platform skinning kernel (linear blend skinning from bone matrices, engine-neutral) is the route; not in M3's plan.
+Skinned characters as light blockers stay a stretch goal (SPEC). If they're wanted later, a platform skinning kernel (linear blend skinning from bone matrices, engine-neutral) is the route.
 
 ## 8. The viewer scenarios
 
 | Scenario | Scene | What it shows | Measured |
 | --- | --- | --- | --- |
-| **Drag furniture** | furnished room | `TransformControls` on any object; shadows and colour bleeding follow | time to within 5% of settled after a 1 m cabinet move (response meter, M2) |
-| **Animated door** | closed-door / two-room with a hinged door | a keyframed door swing closing on the lit side | dark-room mean at `dark-room-leak-view` over time; leak ≤ 1% after settling, none visible during |
-| **Add and duplicate cabinets** | cabinet row | "add" makes a new mesh (new tree, built on the GPU that frame); "duplicate" shares the mesh (new instance only); up to 100 | frames until GI sees it; recompile counter |
-| **Wind tree** | courtyard (small outdoor scene) | a CPU wind sway on the tree, casting moving occlusion | refit ms, trace speed over 60 s |
-| **Fly-through** | Bistro exterior | a manifest camera path larger than one volume, with the camera-following volume | per-frame image change at the volume's edge band; probes per frame; memory |
+| **Drag furniture** | furnished room | `TransformControls` on any object; shadows and colour bleeding follow | time to within 5% of settled after a 1 m cabinet move (M2's response meter, GI only) |
+| **Animated door** | two-room with a hinged door | a keyframed door swing closing on the lit side | dark-room leak at `dark-room-leak-view` over time (DECISIONS' leak definition) |
+| **Add and duplicate cabinets** | cabinet row | "add" makes a new mesh (a new tree, built on the GPU that frame); "duplicate" shares the mesh (a new instance only); up to 100 | frames until GI sees it; the recompile counter |
+| **Wind tree** | courtyard (small outdoor scene) | a CPU wind sway on the tree, casting moving occlusion | refit ms; trace speed over 60 s; the GI under the tree following the sway |
+| **Fly-through** | Bistro exterior | a manifest camera path longer than one volume, with the camera-following volume | frame-to-frame change in the edge band; probes per frame; memory |
 
-- Every scenario is a manifest motion (m2-lights.md section 7), so it replays the same way in tests and next to native where native can follow.
+- Every scenario is a manifest motion (m2-lights.md section 7), so it replays the same way in tests, and next to native where native can follow.
 - The response meter and the recompile counter are on screen during each.
-- **Alpha cutouts are M4.** Until they land, the tree's leaf cards block light as solid quads and over-darken. The M3 check is that occlusion *moves*; the look is judged after M4 (question 6).
-- **Native:** the harness has no moving geometry. Side-by-side for M3 is limited to the door and cabinet scenes if T2.7's motion support can be extended to instance transforms; otherwise M3 compares against references (Cycles renders of the door open and closed) only.
+- **Alpha cutouts are M4.** Until they land, the tree's leaf cards block light as solid quads and over-darken. M3 checks that the occlusion *moves*; the look is judged after M4 (question 6).
+- **Native:** the harness has no moving geometry. The side-by-side for M3 covers the door and cabinet scenes only if T2.7's motion support can be extended to instance transforms; otherwise M3 compares against Cycles renders of the end states only.
 
 ## How it fits the existing kernels (no parallel GPU paths)
 
-| Piece | M1 / M2 | M3 |
-| --- | --- | --- |
-| Mesh trees | tinybvh in the worker | GPU LBVH first (B2 later), tinybvh swapped in; tinybvh only without subgroups (the declared fallback) |
-| Deforming meshes | refused | `GpuMeshRefit` every frame + periodic GPU LBVH rebuild |
-| Top level | GPU refit + worker rebuild (B1a) | unchanged |
-| Scene copy packing | CPU, main thread | `gi/pack-mesh` on the GPU; the CPU packer becomes the test oracle only |
-| `ddgi/mark` | light entries (M2) | + geometry and receiver entries |
-| Probe states | off probes used again straight away | warmed for 2 updates; air probes woken near movers |
-| Sampling | one volume | several volumes in priority order, toroidal slots; one volume and no scroll is the same code |
-| `ddgi/scroll` | none | new, tiny, only on window moves |
+| Piece | M1 | After M2's startup lane (T2.12–T2.15) | M3 |
+| --- | --- | --- | --- |
+| Mesh trees at load | tinybvh in the worker | GPU LBVH into the provisional pool, tinybvh swapped in; tinybvh only without subgroups | unchanged |
+| Meshes added or replaced later | tinybvh in the worker | tinybvh in the worker | GPU LBVH in the frame, tinybvh swapped in |
+| Deforming meshes | refused | refused | `GpuMeshRefit` every frame on the rest-pose tree; rest pose without subgroups |
+| Top level | GPU refit + worker rebuild (B1a) | unchanged | unchanged |
+| Scene copy packing | CPU, main thread | `gi/pack-mesh` on the GPU; the CPU packer is the test oracle only | + time-sliced uploads for meshes added at run time |
+| `ddgi/mark` | none | light entries (M2) | + geometry and receiver entries |
+| Probe states | back on after 1 update | unchanged | back on after 2 updates; air probes woken near movers |
+| Sampling | one volume | one volume | several volumes in priority order with wrapping slots; one fixed volume is the same code |
+| `ddgi/scroll` | none | none | new, tiny, only on window moves and while new planes fade in |
 
-Storage buffers stay as in M2 (`ddgi/trace` 7). `gi/pack-mesh` binds the staging buffer and the scene copy's vertex buffer (2). `ddgi/scroll` binds the history (1) and writes the probe-data texture.
+Storage buffers stay as in M2 (`ddgi/trace` 7). `gi/pack-mesh` binds the staging buffer and the scene copy's vertex buffer (2). `ddgi/scroll` binds the history (1) and writes the probe-data and volume-table textures.
 
 ## Cost against the budgets (estimates, RTX 3060, to be measured)
 
 | Item | When | Cost |
 | --- | --- | --- |
-| Top-level refit | always | 0.086 ms at 10k instances (B1a, measured) |
-| Mesh refit, wind tree (~100k triangles) | every frame | ~0.1–0.2 ms + LBVH rebuild ~0.5 ms every 32 frames |
-| New mesh tree (a cabinet, a few thousand triangles) | on add | well under 1 ms GPU, the same frame |
+| Top-level refit | every frame | 0.086 ms at 10k instances (B1a, measured) |
+| Mesh refit, wind tree (~100k triangles) | every frame | ~0.1–0.2 ms |
+| A new mesh tree (a cabinet, a few thousand triangles) | on add | well under 1 ms GPU, in the same frame |
+| Tree depth pass | after each GPU build | small; Sponza's 5.7 M leaves × depth 33 at load |
 | `ddgi/mark` geometry entries | frames with moves | < 0.02 ms for a few objects |
-| `ddgi/scroll` | window moves | < 0.01 ms |
-| Sampling with two volumes | fade bands only | ≤ 2× there; whole frame ≤ 1.15× (target) |
-| Adapter, still | every frame | ≤ 0.2 ms (target) |
-| Adapter, one mover | every frame | ≤ 0.5 ms (target) |
+| `ddgi/scroll` | window moves and fades | < 0.01 ms |
+| Sampling with two volumes | fade bands only | ≤ 2× there; the whole view must stay ≤ 1.0 ms at 1440p (SPEC) |
+| Adapter, still / one mover | every frame | ≤ 0.2 / ≤ 0.5 ms (targets) |
 | GPU mesh packing | at load | ~10–20 ms GPU for Sponza, once |
 
-Memory: camera-following volume 19 MB at the proposed size; the swap holds two trees of one mesh for a frame; deforming meshes keep a vertex buffer the size of their positions when the CPU route is used.
+Memory: the camera-following volume is 19 MB at the proposed size. The provisional pool at load is about 0.75 nodes per triangle (Sponza: about 275 MB at 64 bytes per node) until the tinybvh trees are in. Deforming meshes on the CPU route keep a buffer the size of their positions.
 
 ## Proposed task breakdown
 
@@ -241,63 +279,101 @@ Memory: camera-following volume 19 MB at the proposed size; the swap holds two t
 
 | ID | Task | Agent | Size | Depends on |
 | --- | --- | --- | --- | --- |
-| T2.12 | Fast first GI: GPU LBVH trees in the tracer without readback; tinybvh swapped in per mesh | implementer | M | B1 merged into `m1` |
-| T2.13 | Scene copy off the main thread: raw upload, time-sliced, GPU packing | implementer | M | none |
-| T2.14 | Compile only what's used: lazy `encodeBatch` kernels, compile while trees build | implementer | S | T2.6 (owns the sky kernel's compile) |
+| T2.12 | Fast first GI: GPU LBVH trees at load with no readback (provisional pool, status words, depth pass); tinybvh swapped in per mesh | implementer | M | B1 merged into `m1` |
+| T2.13 | Scene copy off the main thread: raw upload, GPU packing | implementer | M | none |
+| T2.14 | Compile only what's configured: `encodeBatch` kernels only when a technique asks for batches; compile while uploading | implementer | S | T2.6 (which owns the sky kernel's compile) |
+| T2.15 | Viewer file loading: break Sponza's 4.2 s down by stage, then halve the largest stage | implementer | S | none |
 
-- **T2.12.** Done when: Sponza from "scene handed to GI" to first GI frame ≤ 1.0 s on the RTX (cold compile included; median of 3); at the swap, the field's mean changes by ≤ 0.5% and trace speed afterwards is within 5% of M1's on tinybvh trees; the oracle passes on trees in mid-swap (some meshes LBVH, some tinybvh) on both GPUs; a device without subgroups still gets tinybvh trees and GI (test).
-- **T2.13.** Done when: main-thread time for the scene copy is ≤ 150 ms total on Sponza and ≤ 200 ms on Bistro exterior (from 1.2 s and 4.1 s), with no single frame's share over `uploadMsPerFrame` + 1 ms; the GPU-packed buffers equal the CPU packer's byte for byte on every procedural scene and Sponza.
-- **T2.14.** Done when: Cornell from load to first GI ≤ 1.5 s cold on the RTX (from 2.34 s); no `encodeBatch` pipeline is created in a viewer session that doesn't use it (counter).
+- **T2.12.** Done when:
+  1. Sponza from "scene handed to GI" to the first frame drawn with GI is ≤ 2.0 s on the RTX (cold compile, median of 3), with the 0.9 s now unexplained broken down in PROGRESS;
+  2. across the swap frame the field's mean changes by ≤ 0.5%, and trace speed afterwards is within 5% of M1's on tinybvh trees;
+  3. the oracle passes in mid-swap (some meshes on LBVH trees, some on tinybvh's) and on a forced "not ready" mesh, on both GPUs;
+  4. a device without subgroups still gets tinybvh trees and GI (test).
+  - Record: startup by stage in `timing.csv`.
+- **T2.13.** Done when the scene copy's main-thread time is ≤ 150 ms on Sponza and ≤ 200 ms on Bistro exterior (from 1.2 s and 4.1 s), and the GPU-packed buffers match the CPU packer (positions and indices byte for byte, normals within one octahedral step) on every procedural scene and Sponza.
+- **T2.14.** Done when Cornell from load to the first frame with GI is ≤ 1.5 s cold on the RTX (from 2.34 s), and the recompile counter stays at 0 through a viewer session on every scene.
+- **T2.15.** Done when the viewer records Sponza's file stage by part (fetch, parse, texture decode, upload), and the largest part takes at most half its present time. Record: the breakdown in PROGRESS.
 
 ### M3
 
 | ID | Task | Agent | Size | Depends on |
 | --- | --- | --- | --- | --- |
-| T3.0 | Spike: deformed positions from three (storage `ExternalTexture`), `childadded` events, transform-compare cost on Bistro interior, refit quality decay on a swaying tree | implementer | S | M2 done |
-| T3.1 | Change feed: `setTransforms`, `receivers`, `setDeformedPositions` (both forms), recompile counter | implementer | M | none |
-| T3.2 | Runtime mesh trees: GPU build on add and update, tinybvh refinement, range allocation | implementer | M | T2.12 |
-| T3.3 | Deforming meshes: `GpuMeshRefit` wired, periodic rebuild, geometric normals | implementer | M | T3.1, T3.2 |
-| T3.4 | Probes near moved geometry: geometry `ddgi/mark` entries, warm-up rule, awake air probes | implementer | M | T3.1, M2's T2.4b |
+| T3.0 | Spike: deformed positions from three (storage `ExternalTexture`); the `updateMatrixWorld` override's cost and safety on Bistro interior; refit decay on a swaying tree | implementer | S | M2 done |
+| T3.1 | Change feed: `setTransforms`, `moved`, `receivers`, `deformBounds`, `setDeformedPositions`, recompile counter | implementer | M | none |
+| T3.2 | Runtime mesh trees: GPU builds for added and updated meshes, the run-time pool, tinybvh refinement | implementer | M | T2.12 |
+| T3.3 | Deforming meshes: `GpuMeshRefit` wired, scene-copy positions, geometric normals, movement word | implementer | M | T3.1, T3.2 |
+| T3.4 | Probes near moved geometry: geometry entries in `ddgi/mark`, the 2-update warm-up, woken air probes | implementer | M | T3.1, M2's T2.4b |
 | T3.5 | Several volumes: shared atlas, volume table, priority blending | implementer | M | none |
-| T3.6 | Camera-following volume: toroidal slots, `ddgi/scroll`, window rule | implementer | M | T3.5 |
+| T3.6 | Camera-following volume: wrapping slots, `ddgi/scroll`, window rule, fade-in | implementer | M | T3.5 |
 | T3.7 | three adapter change tracking v2 | implementer | M | T3.0, T3.1 |
 | T3.8 | Viewer scenarios and their manifest motions (furniture, door, cabinets, wind tree, fly-through) | implementer | M | T3.3, T3.4, T3.6, T3.7 |
-| T3.9 | M3 measurements | gpu-tester | M | all above, B2 |
+| T3.9 | M3 measurements | gpu-tester | M | all above |
 | T3.10 | M3 note and M4/M5 breakdown | main session | S | T3.9 |
 
-B2 (H-PLOC) stays in the BVH lane and gates M3 sign-off, as bvh-framework.md says.
+B1 and B2 are done before M3 starts (DECISIONS 2026-11-04). Question 7 asks whether B2 should still gate M3's start.
 
 ### Draft done-whens
 
-- **T3.0 Spike.** Written yes/no answers with numbers: can a TSL compute write an `ExternalTexture` (r187) and can our refit read it; does r187 fire `childadded`/`childremoved`; ns per object for the transform compare on Bistro interior; trace speed after 600 frames of refit-only sway, against a fresh build.
-- **T3.1 Change feed.** Done when: 10,000 transforms through `setTransforms` cost ≤ 2 ms CPU (from 18–20 ms); a moved receiver produces a `receivers` box; both `setDeformedPositions` forms pass the oracle on a deforming test mesh; creating and destroying 1,000 instances and 100 meshes in random order leaves the recompile counter at 0.
-- **T3.2 Runtime mesh trees.** Done when: a mesh added at frame f is hit by rays at frame f + 1 (oracle page); after the tinybvh swap, trace speed equals tinybvh-only within 5%; memory returns to one tree per mesh within 2 frames of the swap; without subgroups, meshes get tinybvh trees (test).
-- **T3.3 Deforming meshes.** Done when: the oracle passes on a deforming mesh over 60 frames on both GPUs; refit plus amortized rebuild cost ≤ 0.3 ms per frame on the RTX for a 100,000-triangle mesh; trace speed on it stays within 15% of a fresh build over 60 s.
-- **T3.4 Probes near moved geometry.** Done when: on the furnished room, a 1 m cabinet move is within 5% of settled in ≤ 1 s (RTX, response meter, default budget); on two-room with a door, closing it brings the dark room's indirect light to within 5% of the closed-door reference in ≤ 1 s and to ≤ 1% leak after settling; no probe is used in shading before 2 blended updates (test); a still scene shows the same field and cost as M2 within noise (air probes stay asleep).
-- **T3.5 Several volumes.** Done when: a fixed dense volume inside a coarse one shows no seam (image difference across the fade band ≤ the M1 stability threshold); sampling cost at 1440p on a view half in the fade band ≤ 1.15× one volume; one-volume scenes match M2 exactly (same code with one entry).
-- **T3.6 Camera-following volume.** Done when: on Bistro exterior's fly-through at 10 m/s, the frame-to-frame change in the edge band is within the M1 stability threshold, probes entering are never used before warming (test), memory stays fixed, and a camera resting on a plane boundary for 10 s clears 0 planes.
-- **T3.7 Adapter change tracking v2.** Done when: on Bistro interior an unmarked first move reaches GI in ≤ 2 frames (from 41), an unmarked geometry edit in ≤ 2 (from ~260), still-frame CPU ≤ 0.2 ms and one mover ≤ 0.5 ms (median of 300 frames, RTX laptop); `InstancedMesh` update ranges send only those instances (test).
+- **T3.0 Spike.** Done when each question has a written yes/no answer with numbers, as M0's spikes did:
+  1. can a TSL compute write an `ExternalTexture` in r187, and can our refit read it;
+  2. ns per object for the `updateMatrixWorld` override on Bistro interior, and whether three's own tests and our adapter tests still pass with it;
+  3. trace speed on a swaying 100,000-triangle tree after 600 frames of refits only, against a fresh build.
+- **T3.1 Change feed.** Done when:
+  1. 10,000 transforms through `setTransforms` cost ≤ 2 ms of CPU (from 18–20 ms);
+  2. a moved receiver produces a `receivers` box, and a moved instance carries `moved`;
+  3. `setDeformedPositions` passes the oracle on a deforming test mesh;
+  4. creating and destroying 1,000 instances and 100 meshes in random order leaves the recompile counter at 0.
+- **T3.2 Runtime mesh trees.** Done when:
+  1. a replaced mesh (`updateMesh` on an existing instance) is hit by rays the next frame (oracle page);
+  2. a new instance of a new mesh on the cabinet row is hit within 4 frames (the worker's top-level rebuild);
+  3. after the tinybvh swap, trace speed equals tinybvh-only within 5%, and the run-time pool is reset once it holds no live trees;
+  4. without subgroups, meshes get tinybvh trees (test).
+- **T3.3 Deforming meshes.** Done when:
+  1. the oracle passes on a deforming mesh over 60 frames on both GPUs, hit points included (scene-copy positions);
+  2. the refit costs ≤ 0.3 ms a frame on the RTX for a 100,000-triangle mesh;
+  3. with the tree held at its two extreme poses, the converged GI in a ground rectangle under it differs by ≥ 2%, and while it sways that rectangle's mean follows the pose within 0.5 s (from the cross-correlation of the two curves);
+  4. a device without subgroups shows the rest pose and one warning.
+- **T3.4 Probes near moved geometry.** Done when, at the default budget, GI only:
+  1. on the furnished room, a 1 m cabinet move is within 5% of settled in ≤ 1 s on the RTX;
+  2. on two-room with a door, the dark room's leak (DECISIONS' definition) is ≤ 1% within 1 s of the door closing and stays there;
+  3. no probe is used in shading before 2 blended updates (test);
+  4. a still scene's field and cost match M2's (mean within 0.1%, cost within 3%): air probes stay asleep.
+- **T3.5 Several volumes.** Done when:
+  1. a dense fixed volume inside a coarse one shows no seam: the image difference across the fade band, frame to frame, stays within the stability threshold set in T1.9;
+  2. sampling at 1440p on a view half inside the fade band costs ≤ 1.0 ms on the RTX;
+  3. one-volume scenes match M2 (field mean within 0.1%, cost within 3%).
+- **T3.6 Camera-following volume.** Done when, on Bistro exterior's fly-through at the speed Dennis picks (question 4):
+  1. the frame-to-frame change in the edge band stays within T1.9's stability threshold;
+  2. entering probes are never used before warming (test);
+  3. memory stays fixed;
+  4. a camera resting on a plane boundary for 10 s clears 0 planes.
+- **T3.7 Adapter change tracking v2.** Done when, on Bistro interior (RTX laptop, median of 300 frames):
+  1. added and removed objects reach GI in the next update without `markChanged`;
+  2. a still frame costs ≤ 0.2 ms, and one mover ≤ 0.5 ms;
+  3. an unmarked first move reaches GI in ≤ 10 frames if T3.0's override is adopted, or within one pass of the (shortened) walk otherwise;
+  4. `InstancedMesh` update ranges send only those instances (test).
 - **T3.8 Viewer scenarios.** Done when every scenario plays from its manifest motion with hover help, shows the response meter and the recompile counter, and Dennis can run each without instructions.
-- **T3.9 M3 measurements.** The SPEC table above on both GPUs, plus the door and cabinet response curves against Cycles references of the end states (3 runs). Recompile counter 0 throughout.
+- **T3.9 M3 measurements.** The SPEC table above on both GPUs, plus the door and cabinet response curves against Cycles renders of their end states (3 runs), with the recompile counter at 0 throughout. Done when each target is met or its miss is explained and agreed with Dennis.
 
 ## Risks, and what to spike first
 
 1. **Deformed positions from three** (T3.0). If neither a storage `ExternalTexture` nor the upstream PR works, GPU-animated meshes can't contribute without reaching into three's backend; only CPU-animated ones can. *Spike first.*
-2. **Change tracking at scale.** If the per-frame transform compare costs more than estimated, Bistro-sized scenes keep a latency of several frames for unmarked moves. Measured in T3.0.
-3. **The door's leak window.** Until the near probes' distance tiles learn the closed door, light leaks for a few frames. With `n` near 0.4 and the door's probes updated every frame, that should be 2–4 frames; if it's visible, those probes' first update could take 2× rays.
-4. **The far-set estimate** (`Ω_ref`, the 8-spacing radius) is a guess; T3.4 measures marked probes against probes that actually changed by more than 5%.
-5. **Scrolling speed.** Fast flights at fine spacing could need more updates than the budget has; the edge band then shows the environment longer. The fly-through sets the promise.
-6. **Shared atlas waste.** Volumes of very different footprints waste layer area; at 8 volumes the atlas could hit `maxTextureArrayLayers` (256). The design refuses past that with `GILimitError`.
-7. **Refit quality** on large deformations (cloth, a fan's blades) may need faster rebuilds than every 32 frames.
+2. **Change tracking at scale.** Cache misses, not code, set the walk's cost (0.7 µs per object). If the `updateMatrixWorld` override is unsafe or no cheaper, unmarked moves on Bistro-sized scenes keep a latency of tens of frames, and `markChanged` stays the answer for interactive moves.
+3. **The door's leak window.** Until the near probes' distance tiles learn the closed door, light leaks for a few frames. With `n` near 0.4 and the door's probes updated every frame, that should be 2–4 frames. If it shows, those probes' first update could use 2× rays.
+4. **The far-set estimate** (`Ω_ref`, the 8-spacing radius, the entry-distance test) is a guess. T3.4 compares marked probes against probes that really changed by more than 5%.
+5. **Scrolling speed.** At Bistro exterior's rate, about 5 m/s at 1.5 m spacing. Faster flights show the environment longer at the edge.
+6. **The provisional pool** costs about 275 MB on Sponza until the tinybvh trees arrive (a few seconds). On a device with less memory, the pool shrinks and more meshes wait for tinybvh.
+7. **Refit quality** on large deformations (cloth, fan blades) may need rebuilds, which SPEC's tracing decision rules out today.
 
 ## Questions for Dennis
 
-1. **Deforming meshes from three:** is CPU-animated positions enough for the viewer's wind tree in M3? And should we open the small `ExternalBufferAttribute` PR upstream now, so GPU-animated meshes (TSL wind, morph targets) can contribute later?
-2. **`setTransforms`, a batch call** on the host-facing scene API (one array of handles, one of matrices). It's an addition, nothing changes for existing callers. OK to add?
-3. **Air probes:** wake "no surface nearby" probes only near moving things (still scenes stay exactly as M1), rather than keeping them all updated slowly. OK?
-4. **The fly-through:** Bistro exterior, with a camera-following volume of 32 × 12 × 32 probes at 1.5 m (19 MB), at up to 10 m/s?
-5. **Startup:** does the 2 s target start when the host hands the scene to GI (Sponza ~1.0 s projected) or at the first file request (~5.3 s, files being 4.2 s of it)? (Already open from M1.)
-6. **The wind tree:** which asset (the courtyard tree, or one of `sponza-full`'s 2 M-triangle trees), and is it fine that leaves block light as solid cards until M4's alpha cutouts?
-7. **Skinned characters as occluders** stay a stretch goal after v1?
+1. **Deforming meshes from three:** may `setDeformedPositions` also take a CPU array (a host-facing addition, beside the GPU buffer SPEC describes), so the viewer's wind tree can be CPU-animated in M3? And should we open the small `ExternalBufferAttribute` PR upstream now, so GPU-animated meshes (TSL wind, morph targets) can contribute later?
+2. **`setTransforms`,** a batch call on the host-facing scene API (one array of handles, one of matrices). It only adds; nothing changes for existing callers. OK to add?
+3. **No-readback rule:** first GI from GPU trees needs a provisional memory pool (about 275 MB on Sponza, for a few seconds), because the platform never reads anything back. One tiny asynchronous readback of each tree's size (a few bytes, a few frames late) would remove the pool. Keep the rule, or allow that one exception?
+4. **The fly-through:** Bistro exterior, a camera-following volume of 32 × 12 × 32 probes at 1.5 m (19 MB), at up to about 5 m/s within the 2 ms budget? Or coarser spacing for faster flight?
+5. **Startup:** does the 2 s target start when the host hands the scene to GI (Sponza projected at about 2 s) or at the first file request (about 6 s, with files 4.2 s of it today)? (Already open from M1.)
+6. **The wind tree:** which asset (the courtyard tree, or one of `sponza-full`'s 2 M-triangle trees)? And is it fine that leaves block light as solid cards until M4's alpha cutouts?
+7. **The B2 gate:** M3 needs only B1's GPU builds and refit. Should B2 (H-PLOC) still be done before M3 starts, as decided, or move to before M3 sign-off?
+8. **Skinned characters as light blockers** stay a stretch goal after v1?
 </content>
 </invoke>
