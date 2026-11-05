@@ -160,6 +160,8 @@ The answers go in PROGRESS. Any change to the contract is made in both the TypeS
 
 ### During M1, 2026-11-04
 
+- **Host-facing, accepted by Dennis with budget v2 (2026-11-05): `FrameBudget.targetFps`, optional.** The frame rate the host aims for. Budget v2 (docs/design/ddgi.md) hands out a calibrated number of work units each frame and steps it down only when frames are late, so it needs the target interval; without `targetFps` it uses the rate it observes from `deltaTime` when frames are on time. It also sets the frame rate for floors given in seconds (DDGI's `minProbesPerFrame: 'auto'`, a full sweep within 4 s). `gpuMs` now means "per frame, measured with the GPU's clocks up", and `units` caps the floor too. (Budget v2 implementation, 2026-11-05.)
+
 - **`requiredLimits` also covers compute workgroups:** it asks for 256 invocations per workgroup (and size X 256), capped at the adapter, because compatibility-mode devices default to 128. Host-facing only in that hosts get one more limit in the list they already pass through. (T1.6, 2026-11-05)
 
 - **Technique-facing: `GITechnique.encode` may return the number of units it actually used** (T1.5b). The platform's budget meter divides the measured GPU time by that, not by the units it handed out, so a budget bigger than the work doesn't inflate the next frame's hand-out. Returning nothing means "all of them". Hosts don't see this.

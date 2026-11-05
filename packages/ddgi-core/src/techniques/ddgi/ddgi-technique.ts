@@ -23,6 +23,7 @@ import type { DebugView } from '../../platform/contract/stats.ts';
 import type { GITechnique, TechniqueContext, TechniqueFrame, TechniqueRequirements } from '../../platform/contract/technique.ts';
 import type { ComputeKernel } from '../../platform/contract/wgsl.ts';
 import { GILimitError } from '../../platform/contract/errors.ts';
+import type { TechniqueWorkFloor, WorkFloorRate } from '../../platform/work-budget.ts';
 import {
     CENSUS_RAYS_TRACED,
     CENSUS_WORDS,
@@ -55,6 +56,7 @@ import {
     distanceClamp,
     effectiveMaxRayDistance,
     effectiveRaysPerProbe,
+    minProbesPerFrame,
     probeGrid,
     resolveBias,
     withDefaults,
@@ -85,6 +87,8 @@ const HALF_THREE = 0x4200;
 const CENSUS_STAGING_BUFFERS = 3;
 /** The ray buffer's first size, in rays; it grows when a frame needs more. */
 const INITIAL_RAY_CAPACITY = 512 * 256;
+/** Frame times kept for the sweep counter (its median), about half a second at 60 Hz. */
+const SWEEP_FRAME_TIMES = 31;
 
 /** Options fixed for the technique's life. */
 export interface DDGITechniqueOptions {
@@ -206,7 +210,7 @@ const CENSUS_GROUP: GPUBindGroupLayoutDescriptor = {
     ],
 };
 
-export class DDGITechnique implements GITechnique<DDGISettings> {
+export class DDGITechnique implements GITechnique<DDGISettings>, TechniqueWorkFloor {
     readonly id = 'ddgi';
     readonly requirements: TechniqueRequirements = { queries: ['rays'] };
     readonly settings: DDGISettings;
@@ -228,6 +232,8 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
     /** The latest census read back: probes per state, then rays traced. Null until the first arrives. */
     private latestCensus: Uint32Array | null = null;
     private probesUpdated = 0;
+    /** Recent `deltaTime`s above 0, for the sweep counter. */
+    private readonly frameTimes: number[] = [];
     private disposed = false;
 
     constructor(settings: DDGISettingsInput, options: DDGITechniqueOptions = {}) {
@@ -446,6 +452,10 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
 
         const count = resources.cursor.next(Math.min(frame.units, resources.maxProbesPerFrame), resources.list);
         this.probesUpdated = count;
+        if (frame.deltaTime > 0 && Number.isFinite(frame.deltaTime)) {
+            this.frameTimes.push(frame.deltaTime);
+            if (this.frameTimes.length > SWEEP_FRAME_TIMES) this.frameTimes.shift();
+        }
         if (count === 0) return 0;
         const raysPerProbe = effectiveRaysPerProbe(this.settings.raysPerProbe);
         const device = context.device;
@@ -505,22 +515,50 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
     }
 
     /**
-     * Counters for the latest frame. "probes updated" is always there. The
-     * per-state counts and rays traced need the GPU census, which runs only
+     * Counters for the latest frame. "probes updated" is always there;
+     * "seconds per full sweep" (every probe updated once at this batch and the
+     * recent frame rate) once frames carry a `deltaTime`. The per-state counts and rays traced need the GPU census, which runs only
      * when the platform times passes (`gpuTiming`), and arrive a few frames
      * late; without them those counters are absent, not guessed.
      */
     get counters(): Readonly<Record<string, number>> {
         const census = this.latestCensus;
-        if (!census) return { 'probes updated': this.probesUpdated };
+        const sweep = this.sweepSeconds();
+        const updates: Record<string, number> = { 'probes updated': this.probesUpdated };
+        if (sweep !== undefined) updates['seconds per full sweep'] = sweep;
+        if (!census) return updates;
         return {
-            'probes updated': this.probesUpdated,
+            ...updates,
             'rays traced': census[CENSUS_RAYS_TRACED],
             'probes active': census[PROBE_STATE.active],
             'probes off: inside geometry': census[PROBE_STATE.offInsideGeometry],
             'probes off: no surface nearby': census[PROBE_STATE.offNoSurfaceNearby],
             'probes not updated yet': census[PROBE_STATE.notUpdatedYet],
         };
+    }
+
+    /**
+     * Budget v2's floor (`minProbesPerFrame`, settings.ts): the fewest probes
+     * the platform hands out per frame under a millisecond budget. 0 before
+     * `prepare`.
+     */
+    minUnitsPerFrame(rate: WorkFloorRate): number {
+        const resources = this.resources;
+        if (!resources) return 0;
+        return minProbesPerFrame(this.settings.minProbesPerFrame, resources.grid.probeCount, resources.maxProbesPerFrame, rate);
+    }
+
+    /**
+     * How long updating every probe once takes at the latest frame's batch and
+     * the recent frame rate (the median `deltaTime`); undefined before frames
+     * with a time, or with no probes updated.
+     */
+    private sweepSeconds(): number | undefined {
+        const probeCount = this.resources?.grid.probeCount ?? 0;
+        if (this.probesUpdated <= 0 || probeCount <= 0 || this.frameTimes.length === 0) return undefined;
+        const sorted = [...this.frameTimes].sort((a, b) => a - b);
+        const frameSeconds = sorted[Math.floor(sorted.length / 2)];
+        return Math.ceil(probeCount / this.probesUpdated) * frameSeconds;
     }
 
     get memoryBytes(): number {

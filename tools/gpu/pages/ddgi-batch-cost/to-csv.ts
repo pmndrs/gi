@@ -13,9 +13,16 @@
  *   `ddgi/write`, `ddgi/census`, their update sum, its p95, and µs per probe;
  * - `batch_cost/fit_all/...` and `batch_cost/fit_upto512/...`: the update
  *   fitted as fixed ms + µs per probe, over all batches or those up to 512;
- * - `batch_cost/budget<ms>ms/...`: frames at `budget.gpuMs` and 60 Hz
- *   (median, p05, p95, mean update ms; share of frames within ±10%; probes
- *   per frame);
+ * - `batch_cost/budget<ms>ms/...`: T1.9a's millisecond controller, frames
+ *   at `budget.gpuMs` and 60 Hz (median, p05, p95, mean update ms; share of
+ *   frames within ±10%; probes per frame). Old runs only;
+ * - `batch_cost/v2_budget<ms>ms/...`: budget v2, GPU-bound (back to back):
+ *   the calibrated batch's update ms (median, p05, p95), probes per frame,
+ *   the floor and the full-sweep time at 60 Hz;
+ * - `batch_cost/v2_rate<hz>hz/...`: budget v2 at 30, 60 and 120 Hz: probes
+ *   per frame (median, min, max), the floor, frames late, stepped down or
+ *   below the floor, the sweep time, and the update ms (light load,
+ *   information only);
  * - `batch_cost/startup/...`: milliseconds to each start-up stage, and the
  *   slowest pipeline compiles;
  * - `batch_cost/breakdown/batch<n>/<variant>_ms`: `ddgi/trace` with parts of
@@ -53,7 +60,12 @@ const PREFIX = 'batch_cost';
 interface SceneResult {
     probes: number;
     startup?: Record<string, number>;
+    /** T1.9a's millisecond controller (old runs). */
     budget?: Record<string, number | string>;
+    /** Budget v2, GPU-bound. */
+    budgetV2?: Record<string, number>;
+    /** Budget v2 at host frame rates, by `<hz>hz`. */
+    rates?: Record<string, Record<string, number>>;
     curve?: { sizes: Record<string, Record<string, number>> } & Record<string, unknown>;
     breakdown?: Record<string, Record<string, number>>;
     /** Fixed batches: per batch size, per cadence (raf, waited), the spike numbers. */
@@ -84,6 +96,12 @@ export function batchCostRows(data: PageData): MetricRow[] {
         if (result.budget) {
             const budgetMs = result.budget.budget_ms;
             rows.push(...numericRows(scene, `${PREFIX}/budget${budgetMs}ms`, result.budget));
+        }
+        if (result.budgetV2) {
+            rows.push(...numericRows(scene, `${PREFIX}/v2_budget${result.budgetV2.budget_ms}ms`, result.budgetV2));
+        }
+        if (result.rates) {
+            for (const [rate, values] of Object.entries(result.rates)) rows.push(...numericRows(scene, `${PREFIX}/v2_rate${rate}`, values));
         }
         if (result.curve) {
             for (const [size, values] of Object.entries(result.curve.sizes)) rows.push(...numericRows(scene, `${PREFIX}/batch${size}`, values));

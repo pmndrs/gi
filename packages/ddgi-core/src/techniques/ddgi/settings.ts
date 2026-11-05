@@ -58,6 +58,16 @@ export interface DDGISettings {
     classification: boolean;
     /** Largest number of probes updated in one frame: sizes the update list and the scratch buffer. New `prepare` when changed. */
     maxProbesPerFrame: number;
+    /**
+     * The fewest probes updated per frame under a millisecond budget, so the
+     * field keeps converging on every device (budget v2). It wins over the
+     * millisecond ceiling; `budget.units` still caps it. `auto` = enough for a
+     * full sweep of every probe within {@link FLOOR_SWEEP_SECONDS} at the
+     * host's frame rate, but never more than {@link FLOOR_MAX_CALIBRATED_SHARE}×
+     * the batch the budget buys with the clocks up, so a weak GPU slows the
+     * sweep rather than the frame. A number replaces it (0 turns it off).
+     */
+    minProbesPerFrame: number | 'auto';
 }
 
 /** What a host must give; everything else has a default. */
@@ -79,6 +89,7 @@ export const DEFAULT_DDGI_SETTINGS: Readonly<Omit<DDGISettings, 'volume'>> = {
     minFrontFaceDistance: 'auto',
     classification: true,
     maxProbesPerFrame: 4096,
+    minProbesPerFrame: 'auto',
 };
 
 /** The first rays of every probe point in fixed directions and are never blended (design: "Rays"). */
@@ -101,6 +112,41 @@ export const AUTO_VIEW_BIAS_SHARE = 0.1;
  * two-room number (0.2: 1.25%), and no view bias let the thin wall leak 6.9%.
  */
 export const AUTO_MIN_FRONT_FACE_SHARE = 0.02;
+
+/**
+ * `minProbesPerFrame: 'auto'` (budget v2, docs/design/ddgi.md): every probe
+ * updated at least once in this many seconds. Sponza (19,425 probes) at 60 Hz
+ * needs 81 a frame, Cornell 8.
+ */
+export const FLOOR_SWEEP_SECONDS = 4;
+
+/**
+ * ...but `auto` never asks for more than this many times the calibrated batch
+ * (the probes the budget buys with the clocks up). Measured on the Intel UHD,
+ * Sponza: 16 probes cost 2.1 ms back to back, 40 about 3.0 ms, 81 about
+ * 4.8 ms. So the full 4 s sweep would cost more than twice the budget there;
+ * capped, Sponza runs about 32-40 probes (about 3 ms, a sweep every 8-10 s). On the
+ * RTX 3060 the cap doesn't bind.
+ */
+export const FLOOR_MAX_CALIBRATED_SHARE = 2;
+
+/**
+ * The floor in probes per frame for a volume of `probeCount` probes, at
+ * `framesPerSecond`, given the calibrated batch. At most `maxProbesPerFrame`
+ * (the technique can't update more).
+ */
+export function minProbesPerFrame(
+    setting: number | 'auto',
+    probeCount: number,
+    maxProbesPerFrame: number,
+    rate: { readonly framesPerSecond: number; readonly calibratedUnits: number },
+): number {
+    if (setting !== 'auto') return Number.isFinite(setting) && setting > 0 ? Math.min(Math.floor(setting), maxProbesPerFrame) : 0;
+    if (!(rate.framesPerSecond > 0) || probeCount <= 0) return 0;
+    const sweep = Math.ceil(probeCount / (FLOOR_SWEEP_SECONDS * rate.framesPerSecond));
+    const deviceLimit = FLOOR_MAX_CALIBRATED_SHARE * Math.max(0, Math.floor(rate.calibratedUnits));
+    return Math.min(sweep, deviceLimit, maxProbesPerFrame);
+}
 
 /** Distances written to the distance atlas are clamped to this multiple of the cell diagonal. */
 export const DISTANCE_CLAMP_SHARE_OF_DIAGONAL = 1.5;

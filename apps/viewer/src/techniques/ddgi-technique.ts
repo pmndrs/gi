@@ -20,7 +20,13 @@
  *     its 19,425 probes from black would take minutes. The warm-up stops
  *     early after {@link WARMUP_MAX_SECONDS} (at least
  *     {@link WARMUP_MIN_PASSES} passes), so a slow GPU isn't kept waiting.
- *  4. **Ready:** the budget applies, and the field keeps converging live.
+ *     The last warm-up steps carry the millisecond budget, still back to
+ *     back: the platform's calibration burst (budget v2) runs in them, so it
+ *     measures with the GPU's clocks up. They end when the platform reports
+ *     it calibrated (about 30-60 steps), or after
+ *     {@link CALIBRATION_MAX_STEPS}.
+ *  4. **Ready:** the calibrated number of probes every frame, and the field
+ *     keeps converging live.
  *
  * Why a running average during warm-up: pass k keeps k/(k+1) of the old
  * value, which makes the field the plain mean of every estimate so far, the
@@ -42,7 +48,7 @@ import {
     type GIPlatform,
 } from '../ddgi/library';
 import { ProbeSpheres } from '../ddgi/probe-spheres';
-import type { DdgiFrameStats } from '../stats/ddgi-stats';
+import type { DdgiBudgetStats, DdgiFrameStats } from '../stats/ddgi-stats';
 import { LAYER_DDGI, LAYER_DDGI_PROBES } from '../scene/layers';
 import { ScenePassTechnique } from './scene-pass-technique';
 import type { TechniqueContext } from './types';
@@ -81,10 +87,17 @@ const PAUSED: FrameBudget = { paused: true };
 /** Warm-up steps recorded per batch before the viewer waits for the GPU. Each can be a few thousand probes. */
 const WARMUP_STEPS_PER_BATCH = 4;
 
+/**
+ * The calibration steps at the end of the warm-up stop after this many even
+ * if the platform is still measuring (it gives up by itself after 400 frames
+ * without timings); the budget then finishes calibrating in normal frames.
+ */
+const CALIBRATION_MAX_STEPS = 240;
+
 /** The adapter's warning about area lights. The viewer's emissive quads carry emissive materials, which GI does see, so it is expected. */
 const EXPECTED_WARNING = 'RectAreaLight is not mirrored into GI';
 
-type Phase = 'preparing' | 'building' | 'warming' | 'ready' | 'failed';
+type Phase = 'preparing' | 'building' | 'warming' | 'calibrating' | 'ready' | 'failed';
 
 /**
  * What the stats overlay shows for DDGI, as of the latest frame. One object per technique,
@@ -109,6 +122,8 @@ const STATE_COUNTERS: ReadonlyArray<{ readonly state: number; readonly label: st
 
 /** The counter DDGI reports its probes-per-frame under. */
 const PROBES_UPDATED_COUNTER = 'probes updated';
+/** The counter DDGI reports how long a pass over every probe takes under (seconds). */
+const SWEEP_COUNTER = 'seconds per full sweep';
 
 /** Start-up times, milliseconds from when the technique was created. Null until reached. */
 export interface DdgiStartupTimes {
@@ -143,6 +158,7 @@ export class DdgiTechnique extends ScenePassTechnique {
     private failure: string | null = null;
     private generation = 0;
     private warmupProbeUpdates = 0;
+    private calibrationSteps = 0;
     /** When the first warm-up step ran (null until then): the time limit counts warm-up work, not time spent off screen. */
     private warmupStartedAt: number | null = null;
     private finishedWallMs: number | null = null;
@@ -153,6 +169,8 @@ export class DdgiTechnique extends ScenePassTechnique {
     private readonly snapshot: DdgiStatsSnapshot = {
         probeCount: 0,
         probesUpdated: 0,
+        sweepSeconds: null,
+        budget: null,
         budgetMs: 0,
         updatePasses: new Map(),
         platformPasses: new Map(),
@@ -273,7 +291,9 @@ export class DdgiTechnique extends ScenePassTechnique {
             case 'building':
                 return 0.05;
             case 'warming':
-                return 0.1 + 0.9 * Math.min(1, this.warmupPasses / WARMUP_PASSES);
+                return 0.1 + 0.85 * Math.min(1, this.warmupPasses / WARMUP_PASSES);
+            case 'calibrating':
+                return 0.95;
             default:
                 return 1;
         }
@@ -288,9 +308,14 @@ export class DdgiTechnique extends ScenePassTechnique {
         return this.probeCount > 0 ? this.warmupProbeUpdates / this.probeCount : 0;
     }
 
-    /** One warm-up step: as many probes as the technique takes in a frame, with the running-average hysteresis. */
+    /**
+     * One warm-up step: as many probes as the technique takes in a frame, with the
+     * running-average hysteresis; then the calibration steps (see the file comment).
+     */
     encodePrepareStep(): boolean {
-        if (this.phase !== 'warming' || !this.threeGI) return this.ready;
+        if (!this.threeGI) return this.ready;
+        if (this.phase === 'calibrating') return this.encodeCalibrationStep(this.threeGI);
+        if (this.phase !== 'warming') return this.ready;
         this.warmupStartedAt ??= performance.now();
         const completedPasses = Math.floor(this.warmupPasses);
         this.ddgi.settings.hysteresis = Math.min(this.targetHysteresis, completedPasses / (completedPasses + 1));
@@ -301,6 +326,21 @@ export class DdgiTechnique extends ScenePassTechnique {
         const outOfTime = performance.now() - this.warmupStartedAt > WARMUP_MAX_SECONDS * 1000 && this.warmupPasses >= WARMUP_MIN_PASSES;
         if (this.warmupPasses >= WARMUP_PASSES || outOfTime) {
             this.ddgi.settings.hysteresis = this.targetHysteresis;
+            this.phase = 'calibrating';
+            this.calibrationSteps = 0;
+        }
+        return this.ready;
+    }
+
+    /** A warm-up step with the frame's millisecond budget, while the platform measures the GPU. */
+    private encodeCalibrationStep(threeGI: ThreeGI): boolean {
+        threeGI.budget = this.budget;
+        threeGI.update(this.camera, 0);
+        this.calibrationSteps++;
+        const budget = this.platform.stats.counters[this.budgetCounterKey];
+        // No report (paused, no technique) or not calibrating any more: done. Without GPU
+        // timestamps the platform never calibrates, and says so at once.
+        if (budget?.calibrating !== 1 || this.calibrationSteps >= CALIBRATION_MAX_STEPS) {
             this.phase = 'ready';
             this.warmupEndFrame = this.platform.stats.frame;
             this.startup.warmedMs ??= performance.now() - this.createdAt;
@@ -308,11 +348,16 @@ export class DdgiTechnique extends ScenePassTechnique {
         return this.ready;
     }
 
+    /** Where the platform reports DDGI's budget in `stats.counters` (budget v2). */
+    private get budgetCounterKey(): string {
+        return `${this.ddgi.id} budget`;
+    }
+
     /** "Start the probes over": forget the field and warm up again. */
     restartPrepare(): void {
         this.generation++;
         this.finishedWallMs = null;
-        if (this.phase !== 'warming' && this.phase !== 'ready') return;
+        if (this.phase !== 'warming' && this.phase !== 'calibrating' && this.phase !== 'ready') return;
         this.platform.resetHistory();
         this.beginWarmup();
     }
@@ -334,7 +379,7 @@ export class DdgiTechnique extends ScenePassTechnique {
         // A new object: ThreeGI reads its `budget` field every update.
         this.budget = { gpuMs: settings.budgetMs };
         // Before the warm-up the platform stays paused (see `start`); the warm-up takes the new budget.
-        if (this.threeGI && (this.phase === 'warming' || this.phase === 'ready')) this.threeGI.budget = this.budget;
+        if (this.threeGI && (this.phase === 'warming' || this.phase === 'calibrating' || this.phase === 'ready')) this.threeGI.budget = this.budget;
         this.applyScreenView();
         if (probesChanged) this.applyLayers();
     }
@@ -394,12 +439,14 @@ export class DdgiTechnique extends ScenePassTechnique {
                 return `Starting: copying the scene for ray tracing; ${grid}`;
             case 'warming':
                 return `Warming up ${grid}: pass ${Math.min(WARMUP_PASSES, Math.floor(this.warmupPasses) + 1)} of ${WARMUP_PASSES}`;
+            case 'calibrating':
+                return `Warming up ${grid}: measuring how many probes fit in ${this.settings.budgetMs} ms`;
             case 'failed':
                 return `Could not start: ${this.failure}`;
             case 'ready': {
                 const updated = this.ddgi.counters[PROBES_UPDATED_COUNTER] ?? 0;
                 const warm = this.finishedWallMs === null ? '' : `; warmed up in ${(this.finishedWallMs / 1000).toFixed(1)} s`;
-                return `${grid}; ${updated.toLocaleString('en')} updated last frame within ${this.settings.budgetMs} ms${warm}`;
+                return `${grid}; ${updated.toLocaleString('en')} updated per frame (budget ${this.settings.budgetMs} ms)${warm}`;
             }
         }
     }
@@ -441,6 +488,8 @@ export class DdgiTechnique extends ScenePassTechnique {
         const counters = this.ddgi.counters;
         snapshot.probeCount = this.probeCount;
         snapshot.probesUpdated = counters[PROBES_UPDATED_COUNTER] ?? 0;
+        snapshot.sweepSeconds = counters[SWEEP_COUNTER] ?? null;
+        snapshot.budget = budgetStats(stats.counters[this.budgetCounterKey], snapshot.budget);
         snapshot.budgetMs = this.settings.budgetMs;
         snapshot.memory = stats.memory;
         snapshot.syncCpuMs = threeGI.timings.syncMs;
@@ -491,6 +540,23 @@ export class DdgiTechnique extends ScenePassTechnique {
         this.platform.dispose();
         this.disposeTarget();
     }
+}
+
+/**
+ * The platform's budget counters (`ddgi budget`, budget v2) as the stats overlay reads them,
+ * refilling `previous` when there is one. Null when the platform hasn't reported yet.
+ */
+function budgetStats(counters: Readonly<Record<string, number>> | undefined, previous: DdgiBudgetStats | null | undefined): DdgiBudgetStats | null {
+    if (!counters) return null;
+    const stats = previous ?? { calibrating: false, calibratedProbes: null, floorProbes: 0, steppedDown: false, fixedMs: null, usPerProbe: null };
+    stats.calibrating = counters.calibrating === 1;
+    stats.calibratedProbes = counters['calibrated units'] ?? null;
+    stats.floorProbes = counters['floor units'] ?? 0;
+    stats.steppedDown = counters['stepped down'] === 1;
+    stats.fixedMs = counters['calibration fixed ms'] ?? null;
+    const msPerProbe = counters['calibration ms per unit'];
+    stats.usPerProbe = msPerProbe === undefined ? null : msPerProbe * 1000;
+    return stats;
 }
 
 /**
