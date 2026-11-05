@@ -51,6 +51,14 @@ const MIN_LOADED_SAMPLES = 3;
 export const LOW_CLOCK_MHZ = 1500;
 
 /**
+ * A pass/fail timing run must start with the RTX below this temperature (DECISIONS, 2026-11-05: "how
+ * pass/fail timing is taken on the laptop"): a sustained load heats it to its 87 C target in about
+ * 20 s, and a card that starts warm gets there sooner. `bench-lock run` waits for it by default
+ * (`--cool-below`), and a run that started at or above it gets `note/start_hot,1`.
+ */
+export const START_TEMP_LIMIT_C = 70;
+
+/**
  * Whether the run's clock was low. Judged only from at least MIN_LOADED_SAMPLES samples under
  * load: the fallback to all samples (short pages, latency-bound pages, the minimized native
  * harness) includes idle seconds and would read low for no reason, so those runs get no verdict.
@@ -90,6 +98,18 @@ export interface ClockSample {
     throttleReasons?: number;
 }
 
+/** How the command under `bench-lock run` started: the GPU temperature, and the cool-down wait before it. */
+export interface StartConditions {
+    /** The GPU temperature when the command started (after any cool-down wait). */
+    temperatureC: number;
+    /** The temperature the wait aimed to get under; null when there was no wait (`--no-cool-wait`, the CPU lock). */
+    coolBelowC: number | null;
+    /** How long the wait took. */
+    waitedSeconds: number;
+    /** The wait hit its time cap and the command started anyway, still at or above `coolBelowC`. */
+    capped: boolean;
+}
+
 export interface ClockStats {
     min: number;
     median: number;
@@ -116,6 +136,8 @@ export interface ClockSummary {
     thermalLimitedShare?: number;
     /** The same for the power limit (software cap or hardware power brake). */
     powerCappedShare?: number;
+    /** How the command started; absent in summaries from older runs, and when nvidia-smi gave no temperature. */
+    start?: StartConditions;
 }
 
 /** The first GPU's line of the `NVIDIA_SMI_CLOCK_ARGS` query, or null if it is not three or five numbers. */
@@ -187,6 +209,8 @@ export function readClockSummary(path: string): ClockSummary | null {
  * The note rows for a summary. The headline `note/sm_clock_mhz` is the median over the samples
  * under load (all samples if fewer than three were); min and max are over the same set.
  * `note/clock_low,1` is added when the loaded median is under LOW_CLOCK_MHZ (see isClockLow).
+ * `note/start_temp_c` is the GPU temperature when the command started, and `note/start_hot,1` marks
+ * a start at or above START_TEMP_LIMIT_C (see startedHot).
  */
 export function clockNoteRows(summary: ClockSummary): Array<{ scene: string; metric: string; value: number }> {
     const useLoaded = summary.smMhzLoaded !== null && summary.memMhzLoaded !== null && summary.loadedSamples >= MIN_LOADED_SAMPLES;
@@ -198,7 +222,28 @@ export function clockNoteRows(summary: ClockSummary): Array<{ scene: string; met
         { scene: 'all', metric: 'note/sm_clock_max_mhz', value: sm.max },
         { scene: 'all', metric: 'note/mem_clock_mhz', value: mem.median },
         ...(isClockLow(summary) ? [{ scene: 'all', metric: 'note/clock_low', value: 1 }] : []),
+        ...(summary.start ? [{ scene: 'all', metric: 'note/start_temp_c', value: summary.start.temperatureC }] : []),
+        ...(startedHot(summary) ? [{ scene: 'all', metric: 'note/start_hot', value: 1 }] : []),
     ];
+}
+
+/** Whether the run started at or above START_TEMP_LIMIT_C, so it can't pass or fail a timing target. */
+export function startedHot(summary: ClockSummary): boolean {
+    return summary.start !== undefined && summary.start.temperatureC >= START_TEMP_LIMIT_C;
+}
+
+/** A plain-language warning for a run that started hot, or null. */
+export function startHotWarning(summary: ClockSummary): string | null {
+    if (!startedHot(summary) || summary.start === undefined) return null;
+    const why = summary.start.capped
+        ? `the cool-down wait gave up after ${Math.round(summary.start.waitedSeconds / 60)} min`
+        : summary.start.coolBelowC === null
+            ? 'there was no cool-down wait'
+            : `the wait only aimed for ${summary.start.coolBelowC} C`;
+    return (
+        `WARNING: the GPU was at ${summary.start.temperatureC} C when the run started (${why}). ` +
+        `Pass/fail timing starts below ${START_TEMP_LIMIT_C} C, so CSV rows get note/start_hot,1.`
+    );
 }
 
 /** Only the NVIDIA GPU is sampled, so the note belongs on NVIDIA rows only. */
@@ -220,5 +265,7 @@ export function clockNoteRowsFromOption(clockFile: string | undefined, env: Node
     }
     const warning = clockLowWarning(summary);
     if (warning) console.error(warning);
+    const hot = startHotWarning(summary);
+    if (hot) console.error(hot);
     return clockNoteRows(summary);
 }

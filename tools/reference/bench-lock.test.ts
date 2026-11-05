@@ -1,22 +1,38 @@
 import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import { hostname, tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { CLOCK_FILE_ENV, clockLowWarning, clockNoteRows, isClockLow, LOW_CLOCK_MHZ, parseClockLine, readClockSummary, summarizeClockSamples } from '../gpu/clock-note.ts';
+import {
+    CLOCK_FILE_ENV,
+    clockLowWarning,
+    clockNoteRows,
+    isClockLow,
+    LOW_CLOCK_MHZ,
+    parseClockLine,
+    readClockSummary,
+    startHotWarning,
+    summarizeClockSamples,
+} from '../gpu/clock-note.ts';
 import {
     acquireBenchLock,
     benchLockCli,
+    benchLockPath,
     BenchLockTimeoutError,
+    cpuLockPath,
+    defaultLockPath,
     judgeLock,
     LOCK_HELD_ENV,
     lockHeldByParent,
     OWNER_FILE,
     readLockState,
     releaseBenchLock,
+    parseHeldPids,
     startClockSampler,
     systemProbe,
+    waitForCoolGpu,
     withBenchLock,
+    type BenchLockCliDeps,
     type BenchLockOwner,
     type ProcessProbe,
 } from './bench-lock.ts';
@@ -407,4 +423,230 @@ writeFileSync(${JSON.stringify(out)}, process.env.${CLOCK_FILE_ENV} ?? 'unset');
         expect(await readFile(out, 'utf8')).toBe('unset');
         expect(existsSync(file)).toBe(false);
     }, 60_000);
+});
+
+/** Runs the command line with console output captured; `printed` is stderr, where `run` logs. */
+async function runCliCaptured(args: string[], deps: BenchLockCliDeps = {}): Promise<{ code: number; printed: string[]; stdout: string[] }> {
+    const original = { log: console.log, error: console.error };
+    const printed: string[] = [];
+    const stdout: string[] = [];
+    console.log = (message: string) => void stdout.push(String(message));
+    console.error = (message: string) => void printed.push(String(message));
+    try {
+        return { code: await benchLockCli(args, deps), printed, stdout };
+    } finally {
+        console.log = original.log;
+        console.error = original.error;
+    }
+}
+
+/**
+ * A pretend nvidia-smi: one five-field line per call, with the temperatures in turn (the last one
+ * repeats). Records when each temperature was read.
+ */
+function fakeSmi(temperatures: number[]): { read: () => Promise<string>; reads: Array<{ temperatureC: number; at: number }> } {
+    const reads: Array<{ temperatureC: number; at: number }> = [];
+    return {
+        reads,
+        read: async () => {
+            const temperatureC = temperatures[Math.min(reads.length, temperatures.length - 1)];
+            reads.push({ temperatureC, at: Date.now() });
+            return `1500, 6001, 90, ${temperatureC}, 0x0000000000000000`;
+        },
+    };
+}
+
+let probeScripts = 0;
+
+/** A script that writes the time it started, which lock folders exist and LOCK_HELD_ENV to `out`. */
+async function writeProbeScript(out: string, paths: Record<string, string>): Promise<string> {
+    const script = join(folder, `probe-${probeScripts++}.mjs`);
+    await writeFile(
+        script,
+        `import { existsSync, writeFileSync } from 'node:fs';
+const paths = ${JSON.stringify(paths)};
+const exists = Object.fromEntries(Object.entries(paths).map(([name, path]) => [name, existsSync(path)]));
+writeFileSync(${JSON.stringify(out)}, JSON.stringify({ startedAt: Date.now(), exists, held: process.env.${LOCK_HELD_ENV} ?? null }));
+`,
+    );
+    return script;
+}
+
+describe('cool-down wait in bench-lock run', () => {
+    beforeEach(() => {
+        delete process.env[LOCK_HELD_ENV];
+    });
+
+    it('waits until the GPU is below 70 C, prints the temperature at the start and when cool, and records it', async () => {
+        const smi = fakeSmi([80, 76, 72, 69]);
+        const file = join(folder, 'cool.json');
+        const out = join(folder, 'cool-out.json');
+        const script = await writeProbeScript(out, {});
+        const { code, printed } = await runCliCaptured(['run', '--path', lockPath, '--clock-file', file, '--', 'node', script], {
+            readClock: smi.read,
+            clockIntervalMs: 10,
+            coolPollMs: 5,
+        });
+        expect(code).toBe(0);
+        expect(smi.reads.slice(0, 4).map((read) => read.temperatureC)).toEqual([80, 76, 72, 69]);
+        // The command started only after the reading under 70 C.
+        const started = JSON.parse(await readFile(out, 'utf8')) as { startedAt: number };
+        expect(started.startedAt).toBeGreaterThanOrEqual(smi.reads[3].at);
+        // One line when it starts waiting and one when it is cool; nothing per poll.
+        const temperatureLines = printed.filter((line) => line.startsWith('GPU at'));
+        expect(temperatureLines).toHaveLength(2);
+        expect(temperatureLines[0]).toContain('80 C: waiting until it is below 70 C');
+        expect(temperatureLines[1]).toMatch(/^GPU at 69 C after .*: starting$/);
+        const summary = readClockSummary(file)!;
+        expect(summary.start).toMatchObject({ temperatureC: 69, coolBelowC: 70, capped: false });
+        const rows = clockNoteRows(summary);
+        expect(rows.find((row) => row.metric === 'note/start_temp_c')?.value).toBe(69);
+        expect(rows.map((row) => row.metric)).not.toContain('note/start_hot');
+        expect(existsSync(lockPath)).toBe(false);
+    }, 30_000);
+
+    it('starts at once when the GPU is already cool, and --cool-below changes the limit', async () => {
+        const cool = await runCliCaptured(['run', '--path', lockPath, '--', 'node', '-e', '0'], { readClock: fakeSmi([55]).read, coolPollMs: 5 });
+        expect(cool.code).toBe(0);
+        expect(cool.printed).toContain('GPU at 55 C, below 70 C: starting');
+
+        const smi = fakeSmi([66, 64]);
+        const lower = await runCliCaptured(['run', '--path', lockPath, '--cool-below', '65', '--', 'node', '-e', '0'], { readClock: smi.read, coolPollMs: 5 });
+        expect(lower.code).toBe(0);
+        expect(smi.reads.slice(0, 2).map((read) => read.temperatureC)).toEqual([66, 64]);
+        expect(lower.printed.some((line) => line.includes('below 65 C'))).toBe(true);
+    }, 30_000);
+
+    it('runs anyway at the time cap, with a warning, and the rows flag the hot start', async () => {
+        const file = join(folder, 'capped.json');
+        const { code, printed } = await runCliCaptured(
+            ['run', '--path', lockPath, '--clock-file', file, '--cool-wait-max-minutes', '0.001', '--', 'node', '-e', '0'],
+            { readClock: fakeSmi([80]).read, clockIntervalMs: 10, coolPollMs: 5 },
+        );
+        expect(code).toBe(0);
+        expect(printed.some((line) => line.startsWith('WARNING: the GPU is still at 80 C') && line.includes('starting anyway'))).toBe(true);
+        const summary = readClockSummary(file)!;
+        expect(summary.start).toMatchObject({ temperatureC: 80, coolBelowC: 70, capped: true });
+        expect(clockNoteRows(summary).find((row) => row.metric === 'note/start_hot')?.value).toBe(1);
+        expect(startHotWarning(summary)).toContain('gave up');
+    }, 30_000);
+
+    it('--no-cool-wait starts a hot GPU at once, but still records the start temperature', async () => {
+        const file = join(folder, 'no-wait.json');
+        // With the default 15-minute cap, a wait here would time the test out.
+        const { code, printed } = await runCliCaptured(['run', '--no-cool-wait', '--path', lockPath, '--clock-file', file, '--', 'node', '-e', '0'], {
+            readClock: fakeSmi([85]).read,
+            clockIntervalMs: 10,
+        });
+        expect(code).toBe(0);
+        expect(printed).toContain('GPU at 85 C (no cool-down wait)');
+        expect(printed.some((line) => line.includes('waiting until'))).toBe(false);
+        const summary = readClockSummary(file)!;
+        expect(summary.start).toMatchObject({ temperatureC: 85, coolBelowC: null, capped: false });
+        expect(clockNoteRows(summary).find((row) => row.metric === 'note/start_hot')?.value).toBe(1);
+    }, 30_000);
+
+    it('skips the wait without nvidia-smi, or without a temperature in its line', async () => {
+        const messages: string[] = [];
+        expect(await waitForCoolGpu({ read: async () => null, belowC: 70, log: (message) => messages.push(message) })).toBeNull();
+        expect(messages).toEqual(['no GPU temperature from nvidia-smi: no cool-down wait']);
+        expect(await waitForCoolGpu({ read: async () => '1500, 6001, 90', belowC: 70, log: () => undefined })).toBeNull();
+    });
+});
+
+describe('the CPU lock', () => {
+    let gpuPath: string;
+    let cpuPath: string;
+    beforeEach(() => {
+        delete process.env[LOCK_HELD_ENV];
+        gpuPath = join(folder, 'gpu.lock');
+        cpuPath = join(folder, 'cpu.lock');
+    });
+
+    it('is its own folder next to the GPU lock', () => {
+        expect(basename(benchLockPath)).toBe('ddgi-gpu-bench.lock');
+        expect(basename(cpuLockPath)).toBe('ddgi-cpu-heavy.lock');
+        expect(defaultLockPath('gpu')).toBe(benchLockPath);
+        expect(defaultLockPath('cpu')).toBe(cpuLockPath);
+    });
+
+    it('run --lock cpu takes only the CPU lock, while the GPU lock is held, and never waits for a hot GPU', async () => {
+        const gpuHolder = await acquireBenchLock({ ...quiet, path: gpuPath });
+        const out = join(folder, 'cpu-out.json');
+        const script = await writeProbeScript(out, { gpu: gpuPath, cpu: cpuPath });
+        const { code, printed } = await runCliCaptured(
+            ['run', '--lock', 'cpu', '--gpu-path', gpuPath, '--cpu-path', cpuPath, '--timeout-minutes', '0.5', '--clock-file', join(folder, 'cpu-clock.json'), '--', 'node', script],
+            { readClock: fakeSmi([90]).read, clockIntervalMs: 10 },
+        );
+        expect(code).toBe(0);
+        const seen = JSON.parse(await readFile(out, 'utf8')) as { exists: Record<string, boolean>; held: string };
+        expect(seen.exists).toEqual({ gpu: true, cpu: true });
+        expect(seen.held).toBe(String(process.pid));
+        expect(printed.some((line) => line.includes('waiting until'))).toBe(false);
+        // The CPU lock is released; the GPU lock is still the other holder's.
+        expect(existsSync(cpuPath)).toBe(false);
+        expect(await gpuHolder.release()).toBe('released');
+    }, 30_000);
+
+    it('run --cpu-timed takes the GPU lock first, then waits for the CPU lock, and holds both while the command runs', async () => {
+        const cpuHolder = await acquireBenchLock({ ...quiet, path: cpuPath, what: 'cpu render' });
+        const out = join(folder, 'both-out.json');
+        const script = await writeProbeScript(out, { gpu: gpuPath, cpu: cpuPath });
+        const running = runCliCaptured(['run', '--cpu-timed', '--gpu-path', gpuPath, '--cpu-path', cpuPath, '--timeout-minutes', '0.5', '--', 'node', script], {
+            readClock: async () => null,
+        });
+        // While the CPU render holds its lock: the GPU lock is already ours, and the command has not started.
+        const deadline = Date.now() + 10_000;
+        while (!existsSync(join(gpuPath, OWNER_FILE)) && Date.now() < deadline) await new Promise((done) => setTimeout(done, 20));
+        expect((JSON.parse(await readFile(join(gpuPath, OWNER_FILE), 'utf8')) as BenchLockOwner).pid).toBe(process.pid);
+        await new Promise((done) => setTimeout(done, 300));
+        expect(existsSync(out)).toBe(false);
+
+        expect(await cpuHolder.release()).toBe('released');
+        const { code } = await running;
+        expect(code).toBe(0);
+        const seen = JSON.parse(await readFile(out, 'utf8')) as { exists: Record<string, boolean>; held: string };
+        expect(seen.exists).toEqual({ gpu: true, cpu: true });
+        expect(seen.held).toBe(String(process.pid));
+        expect(existsSync(gpuPath)).toBe(false);
+        expect(existsSync(cpuPath)).toBe(false);
+    }, 30_000);
+
+    it('run refuses --cpu-timed with --lock cpu', async () => {
+        await expect(benchLockCli(['run', '--cpu-timed', '--lock', 'cpu', '--cpu-path', cpuPath, '--', 'node', '-e', '0'])).rejects.toThrow(/--cpu-timed/);
+    });
+
+    it('status shows both locks; the exit code is for the chosen lock', async () => {
+        const cpuHolder = await acquireBenchLock({ ...quiet, path: cpuPath, what: 'cpu render' });
+        try {
+            const gpuStatus = await runCliCaptured(['status', '--gpu-path', gpuPath, '--cpu-path', cpuPath]);
+            expect(gpuStatus.code).toBe(0);
+            expect(gpuStatus.stdout.some((line) => line.startsWith(`GPU lock ${gpuPath}: free`))).toBe(true);
+            expect(gpuStatus.stdout.some((line) => line.startsWith(`CPU lock ${cpuPath}: held by pid ${process.pid}`) && line.includes('cpu render'))).toBe(true);
+            expect((await runCliCaptured(['status', '--lock', 'cpu', '--gpu-path', gpuPath, '--cpu-path', cpuPath])).code).toBe(3);
+
+            const json = await runCliCaptured(['status', '--json', '--gpu-path', gpuPath, '--cpu-path', cpuPath]);
+            const parsed = JSON.parse(json.stdout.join('\n')) as { path: string; kind: string; locks: Record<string, { path: string; kind: string }> };
+            expect(parsed.path).toBe(gpuPath);
+            expect(parsed.kind).toBe('free');
+            expect(parsed.locks.gpu.kind).toBe('free');
+            expect(parsed.locks.cpu).toMatchObject({ path: cpuPath, kind: 'owned' });
+        } finally {
+            await cpuHolder.release();
+        }
+    }, 30_000);
+
+    it('withBenchLock takes the lock it is given, and a parent hold can name two pids', async () => {
+        const seen = await withBenchLock(async () => existsSync(join(cpuPath, OWNER_FILE)), { ...quiet, lock: 'cpu', path: cpuPath });
+        expect(seen).toBe(true);
+        expect(existsSync(cpuPath)).toBe(false);
+
+        expect(parseHeldPids('1234,5678')).toEqual([1234, 5678]);
+        expect(parseHeldPids('x, 0, 42')).toEqual([42]);
+        await mkdir(cpuPath);
+        await writeFile(join(cpuPath, OWNER_FILE), JSON.stringify(foreignOwner()));
+        const probe = fakeProbe({ 4242: 'started-at-noon' });
+        expect((await lockHeldByParent({ path: cpuPath, probe, env: { [LOCK_HELD_ENV]: '1111,4242' } }))?.pid).toBe(4242);
+        expect(await lockHeldByParent({ path: cpuPath, probe, env: { [LOCK_HELD_ENV]: '1111' } })).toBeNull();
+    });
 });

@@ -243,20 +243,31 @@ Only a single pass at the end is wired up, not the progressive (every N samples)
 
 ## Bench lock
 
-One machine-heavy job at a time on this machine: GPU timing, native harness runs, Cycles renders, path-tracer renders. The lock is the folder `$TEMP/ddgi-gpu-bench.lock`; `tools/reference/bench-lock.ts` implements it, for Node code (`withBenchLock`) and as a command line for everyone else.
+Two locks, both folders in `$TEMP`, with the same protocol and code (`tools/reference/bench-lock.ts`, for Node code as `withBenchLock` and as a command line for everyone else):
+
+- **GPU lock** `ddgi-gpu-bench.lock` (the default): GPU timing, native harness runs, GPU renders (Cycles on OptiX, the path tracer). One at a time.
+- **CPU lock** `ddgi-cpu-heavy.lock` (`--lock cpu`, or `withBenchLock(work, { lock: 'cpu' })`): CPU renders (Cycles on the CPU, long CPU path tracers). They take only this one, not the GPU lock.
+- **Benchmarks that time CPU-side work take both** with `run --cpu-timed` (GPU lock first, then CPU): the three adapter's CPU cost pages, B0's worker build times, scene-copy timings.
+
+So a GPU-timed run may overlap a CPU render; a CPU-timed one may not.
+
+**GPU timing waits for the GPU to cool.** After taking its lock and before starting the command, `run` waits until nvidia-smi reads the GPU below 70 C (pass/fail timing starts there, DECISIONS 2026-11-05), checking every 5 s. It prints the temperature at the start and when it is cool. `--cool-below <C>` changes the limit. After 15 minutes (`--cool-wait-max-minutes`) it runs anyway with a warning. Without nvidia-smi there is no wait. `--no-cool-wait` skips it for jobs that time nothing on the GPU (correctness checks, renders), and `--lock cpu` never waits. The clock summary records the start temperature (`start`), and the to-csv scripts write `note/start_temp_c`, plus `note/start_hot,1` for a start at 70 C or more.
 
 ```
-node tools/reference/bench-lock.ts status                               # who holds it; exit 0 free, 3 held, 4 held but stale
+node tools/reference/bench-lock.ts status                               # who holds each lock; exit 0 free, 3 held, 4 held but stale (GPU lock, or --lock cpu)
 node tools/reference/bench-lock.ts run --what "trace bench" -- pnpm test:gpu --filter trace-bench
+node tools/reference/bench-lock.ts run --no-cool-wait --what "ddgi checks" -- pnpm test:gpu --filter ddgi-
+node tools/reference/bench-lock.ts run --lock cpu --what "cpu render" -- <command>
+node tools/reference/bench-lock.ts run --cpu-timed --what "adapter cpu cost" -- <command>
 node tools/reference/bench-lock.ts acquire --pid $PID --what "native cache build"   # PowerShell: $PID is the script itself
 node tools/reference/bench-lock.ts release --pid $PID
 ```
 
 `run` is the easy one for agents: it holds the lock exactly as long as the command runs, and releases it on failure and Ctrl-C too. `acquire` needs `--pid`, the long-lived process that holds the lock (the command itself exits at once, so its own pid would look dead straight away). `--timeout-minutes n` gives up after n minutes (exit code 5).
 
-**Commands that take the lock themselves can run under `run`.** `run` starts its command with the environment variable `DDGI_BENCH_LOCK_HELD=<pid of the lock owner>`. `withBenchLock` (Cycles, path tracer) and the `tools/native` scripts check it: if that pid owns the lock right now (owner file, this host, process running), they work under the parent's hold and neither take nor release the lock. Without this they would wait forever for a lock their own parent holds. A variable that does not match the current owner is ignored and the lock is taken normally, so a leftover value never skips the lock. `status --json` reports the match as `heldByParent` (the pid, or `null`).
+**Commands that take the lock themselves can run under `run`.** `run` starts its command with the environment variable `DDGI_BENCH_LOCK_HELD=<pid of the lock owner>`. `withBenchLock` (Cycles, path tracer) and the `tools/native` scripts check it: if that pid owns the lock right now (owner file, this host, process running), they work under the parent's hold and neither take nor release the lock. Without this they would wait forever for a lock their own parent holds. A variable that does not match the current owner is ignored and the lock is taken normally, so a leftover value never skips the lock. `status --json` reports the match as `heldByParent` (the pid, or `null`) for the chosen lock, and for both under `locks`. With `--cpu-timed` under a parent that already held the GPU lock, the variable lists two pids (`1234,5678`).
 
-The protocol, for anything that cannot call the tool:
+The protocol, for anything that cannot call the tool (the same for either lock; to hold both, take the GPU lock first):
 
 1. **Take:** `mkdir` the folder. It fails if the folder exists; that is the atomic step.
 2. **Claim:** straight away write `owner.json` inside it (to a temporary name, then rename): `pid`, `processStart` (the OS start time of that pid, so a reused pid is recognised; on Windows `(Get-Process -Id <pid>).StartTime.ToUniversalTime().ToString('o')`), `host`, `startedAt` (ISO), `what` (a short label) and `command`.
