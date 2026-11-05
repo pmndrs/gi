@@ -5,14 +5,14 @@
  * triangles: +12 ms at 1440p). Built like three r187's SSGI example:
  *
  * ```ts
+ * await volume.start(renderer, scene);                 // the simple path (gi-volume.ts)
  * const pipeline = new RenderPipeline(renderer);
  * const scenePass = pass(scene, camera);
  * scenePass.setMRT(mrt({ output, giAlbedo, normal: packNormalToRGB(normalView) }));
- * pipeline.outputNode = ddgiComposite(scenePass, threeGI);
+ * pipeline.outputNode = ddgi(scenePass, volume);
  * ```
  *
- * The names (`giAlbedo`, `ddgiComposite`) are working names until Dennis
- * confirms them, so nothing here is exported from the package yet.
+ * `ddgi` and `giAlbedo` are the names Dennis confirmed (DECISIONS, 607c1f0).
  *
  * **Why it equals per-fragment GI.** three's materials take indirect diffuse
  * light as `E × weight / π`, linear in E (r187
@@ -40,9 +40,24 @@
  *
  * Fog: the composite adds GI after the material's fog, so a fogged scene
  * gets un-fogged GI. Neither test scene has fog.
+ *
+ * **Short-range occlusion on GI** (DECISIONS 2026-11-05, curtained Sponza,
+ * option A): probes 1 m apart can't follow light that changes inside small
+ * folds (Sponza's curtains read +23% against Cycles without it). By default
+ * the composite runs three's own GTAO (`ao()`, GTAONode) on the pass's depth
+ * and normal, with a 1 m radius, and multiplies the GI term by it, and only
+ * the GI term: direct light and the environment's light are untouched. The
+ * option `occlusion` sets the radius, resolution and samples, turns it off
+ * (`false`), or takes an AO texture the pipeline already makes (`{ source }`,
+ * a GTAONode on this pass's depth and normal) instead of running a second
+ * GTAO. If the pass already applies AO to its materials (a context with
+ * `getAO`, three's `builtinAOContext`), `giAlbedo` carries that AO already,
+ * so the default is then no second occlusion.
  */
 
-import { BlendMode, MaterialBlending, Node, NodeUpdateType, PhysicalLightingModel, type NodeBuilder, type PassNode } from 'three/webgpu';
+import { BlendMode, MaterialBlending, Node, NodeUpdateType, PhysicalLightingModel, type NodeBuilder, type PassNode, type TextureNode } from 'three/webgpu';
+import type GTAONode from 'three/addons/tsl/display/GTAONode.js';
+import { ao } from 'three/addons/tsl/display/GTAONode.js';
 import {
     DFGLUT,
     Fn,
@@ -55,6 +70,7 @@ import {
     normalView,
     positionViewDirection,
     roughness,
+    sample,
     specularColor,
     specularF90,
     uniform,
@@ -63,7 +79,7 @@ import {
     vec3,
     vec4,
 } from 'three/tsl';
-import { compositeTakesGI, compositedModel, markCompositePass } from './composite-mark.ts';
+import { compositeTakesGI, compositedModel, flowContextData, markCompositePass } from './composite-mark.ts';
 import { ShadingModuleNodes, sharedEntry, type GILight } from './gi-light.ts';
 
 /** The MRT output name the composite reads the GI weight from. */
@@ -150,7 +166,11 @@ export class GIAlbedoNode extends Node {
 /** The weight of indirect diffuse light per pixel, for `mrt({ ..., giAlbedo })`. */
 export const giAlbedo = new GIAlbedoNode();
 
-/** Where the composite finds the GI light: `ThreeGI` (its light changes when the shading module changes shape). */
+/**
+ * Where the composite finds the GI light: a started `GIVolume`, or a
+ * `ThreeGI` (its light changes when the shading module changes shape, so
+ * it's read each render).
+ */
 export interface CompositeGISource {
     readonly light: GILight;
 }
@@ -164,6 +184,36 @@ export interface CompositeGISource {
 function configureWeightOutput(outputs: NonNullable<ReturnType<PassNode['getMRT']>>): void {
     outputs.setBlendMode(GI_ALBEDO_OUTPUT, new BlendMode(MaterialBlending));
     outputs.setClearColor(GI_ALBEDO_OUTPUT, 0x000000, 0);
+}
+
+/** The GTAO radius on the GI term, metres (view space): DECISIONS 2026-11-05, curtained Sponza option A. */
+export const DEFAULT_GI_OCCLUSION_RADIUS = 1;
+
+/** The composite's own GTAO on the GI term. Anything left out keeps three's GTAO default, except the radius. */
+export interface GIOcclusionSettings {
+    /** Metres, in view space. Default {@link DEFAULT_GI_OCCLUSION_RADIUS}. */
+    readonly radius?: number;
+    /** GTAO's resolution against the pass's (three's `resolutionScale`; 0.5 is half). Default 1. */
+    readonly resolutionScale?: number;
+    /** Samples per pixel (three's default 16). */
+    readonly samples?: number;
+}
+
+/**
+ * An AO texture the pipeline already makes, one value per pass pixel in red,
+ * from this pass's depth and normal: three's GTAONode fits.
+ */
+export interface GIOcclusionSource {
+    getTextureNode(): TextureNode;
+}
+
+export interface DDGICompositeOptions {
+    /**
+     * Short-range occlusion on the GI term (file comment). Settings for the
+     * composite's own GTAO (the default: a 1 m radius), `false` for none, or
+     * `{ source }` to use an AO texture the pipeline already makes.
+     */
+    readonly occlusion?: false | GIOcclusionSettings | { readonly source: GIOcclusionSource };
 }
 
 /** 1 / π: three's Lambert BRDF factor (`BRDF_Lambert`), which turns irradiance into reflected radiance. */
@@ -192,15 +242,34 @@ export class DDGICompositeNode extends Node {
 
     readonly scenePass: PassNode;
     readonly source: CompositeGISource;
+    /**
+     * The composite's own GTAO on the GI term, when it makes one: change its
+     * `radius.value` or `samples.value` live. Null when occlusion is off or
+     * comes from the pipeline (`occlusion: { source }`).
+     */
+    readonly occlusionNode: GTAONode | null;
+    /** Where the occlusion is read from, or null for none. */
+    private readonly occlusionSource: GIOcclusionSource | null;
     private moduleNodes: ShadingModuleNodes | null = null;
     private warnedStale = false;
     private readonly intensity = uniform(1);
     private readonly computeCoverage = uniform(1);
 
-    constructor(scenePass: PassNode, source: CompositeGISource) {
+    constructor(scenePass: PassNode, source: CompositeGISource, options: DDGICompositeOptions = {}) {
         super('vec4');
         this.scenePass = scenePass;
         this.source = source;
+        const occlusion = options.occlusion ?? defaultOcclusion(scenePass);
+        if (occlusion === false) {
+            this.occlusionNode = null;
+            this.occlusionSource = null;
+        } else if ('source' in occlusion) {
+            this.occlusionNode = null;
+            this.occlusionSource = occlusion.source;
+        } else {
+            this.occlusionNode = makeOcclusion(scenePass, occlusion);
+            this.occlusionSource = this.occlusionNode;
+        }
         // Each render of the pipeline's quad: the module's values and the light's settings.
         this.updateType = NodeUpdateType.RENDER;
         markCompositePass(scenePass as unknown as Parameters<typeof markCompositePass>[0]);
@@ -252,6 +321,7 @@ export class DDGICompositeNode extends Node {
         const weightTexture = scenePass.getTextureNode(GI_ALBEDO_OUTPUT);
         const normalTexture = scenePass.getTextureNode(GI_NORMAL_OUTPUT);
         const depthTexture = scenePass.getTextureNode('depth');
+        const occlusionTexture = this.occlusionSource?.getTextureNode() ?? null;
 
         const composite = Fn(() => {
             const screen = uv();
@@ -282,7 +352,10 @@ export class DDGICompositeNode extends Node {
                 ).toVar('threeGiLighting');
                 // The per-fragment path adds GI only where its coverage claims the probe slot.
                 If(lighting.w.greaterThan(0), () => {
-                    const indirectDiffuse = weight.mul(lighting.xyz).mul(this.intensity.mul(RECIPROCAL_PI));
+                    let irradiance = lighting.xyz.mul(this.intensity);
+                    // Short-range occlusion on the GI term only (file comment).
+                    if (occlusionTexture) irradiance = irradiance.mul(occlusionTexture.sample(screen).r);
+                    const indirectDiffuse = weight.mul(irradiance).mul(RECIPROCAL_PI);
                     result.assign(vec4(sceneColor.rgb.add(indirectDiffuse), sceneColor.a));
                 });
             });
@@ -293,9 +366,34 @@ export class DDGICompositeNode extends Node {
 }
 
 /**
- * The composite as a node for `pipeline.outputNode`, like three's `ssgi(...)`.
- * Working name, not exported from the package until the names are confirmed.
+ * The default occlusion: the composite's own GTAO at 1 m, unless the pass
+ * already applies AO to its materials (a context with `getAO`), which
+ * `giAlbedo` then carries (file comment).
  */
-export function ddgiComposite(scenePass: PassNode, source: CompositeGISource): DDGICompositeNode {
-    return new DDGICompositeNode(scenePass, source);
+function defaultOcclusion(scenePass: PassNode): false | GIOcclusionSettings {
+    const context = scenePass.contextNode;
+    const passAppliesAO = context !== null && typeof flowContextData(context).getAO === 'function';
+    return passAppliesAO ? false : {};
+}
+
+/** three's GTAO on the pass's depth and its packed view-space normal (the `normal` output). */
+function makeOcclusion(scenePass: PassNode, settings: GIOcclusionSettings): GTAONode {
+    const normalTexture = scenePass.getTextureNode(GI_NORMAL_OUTPUT);
+    const viewNormal = sample((coordinate) => unpackRGBToNormal(normalTexture.sample(coordinate).rgb));
+    const node = ao(scenePass.getTextureNode('depth'), viewNormal, scenePass.camera);
+    node.radius.value = settings.radius ?? DEFAULT_GI_OCCLUSION_RADIUS;
+    if (settings.resolutionScale !== undefined) node.resolutionScale = settings.resolutionScale;
+    if (settings.samples !== undefined) node.samples.value = settings.samples;
+    return node;
+}
+
+/**
+ * GI on a scene pass, as a node for `pipeline.outputNode`, like three's
+ * `ssgi(...)` and `ao(...)`: the pass's colour plus `giAlbedo × E / π`
+ * (file comment). `source` is the started `GIVolume` (or a `ThreeGI`): the
+ * composite reads its GI light. Options: `occlusion` (GTAO on the GI term,
+ * 1 m by default).
+ */
+export function ddgi(scenePass: PassNode, source: CompositeGISource, options: DDGICompositeOptions = {}): DDGICompositeNode {
+    return new DDGICompositeNode(scenePass, source, options);
 }

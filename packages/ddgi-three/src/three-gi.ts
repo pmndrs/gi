@@ -26,7 +26,11 @@
  * ordering). That is one extra submit per frame, the same kind three makes
  * for every render pass and compute call.
  *
- * Call `update` before `renderer.render`, once per frame. It reads the
+ * With `updateOnRender` (what `GIVolume.start` uses), there is no per-frame
+ * call: the GI light's node runs `update` from inside three's render, once
+ * per frame, with that render's camera (gi-light.ts, "The render-time
+ * update", lists what that means). Otherwise call `update` before
+ * `renderer.render`, once per frame. It reads the
  * world matrices three computed in the last `render`, so a moved object
  * reaches GI one frame later, which DDGI's blending over many frames hides.
  * Updating them here as well would make three do it twice per frame: 1 ms on
@@ -61,6 +65,8 @@ export interface ThreeGIOptions {
     readonly objectsPerFrame?: number;
     /** Geometries, and separately materials, checked for edits per frame (scene-sync.ts, `DEFAULT_EDIT_CHECKS_PER_FRAME`). */
     readonly editChecksPerFrame?: number;
+    /** Run `update` from the GI light's render-time update instead of a call per frame (see the file comment). Default false. */
+    readonly updateOnRender?: boolean;
 }
 
 /** CPU time of the last `update`, milliseconds (`performance.now()`, so steps of up to 0.1 ms in some browsers). */
@@ -101,6 +107,8 @@ export class ThreeGI {
     private shadingSeen: { module: ShadingModule; version: number };
     private previousTime = -1;
     private readonly alwaysUpdateMatrixWorld: boolean;
+    private renderTimeUpdate: boolean;
+    private readonly warnOnce: (message: string) => void;
     private updates = 0;
 
     /** The platform must be prepared (`await gi.prepare()`), because the light wraps the technique's textures. */
@@ -111,6 +119,8 @@ export class ThreeGI {
         this.budget = options.budget ?? DEFAULT_BUDGET;
         this.volume = options.volume ?? null;
         this.alwaysUpdateMatrixWorld = options.updateMatrixWorld ?? false;
+        this.renderTimeUpdate = options.updateOnRender ?? false;
+        this.warnOnce = options.warn ?? ((message) => console.warn(`@pmndrs/ddgi/three: ${message}`));
         this.sync = new SceneSync(gi.scene, { device: gi.device, warn: options.warn, objectsPerFrame: options.objectsPerFrame, editChecksPerFrame: options.editChecksPerFrame });
         this.sync.environment = options.environment ?? null;
         this.sync.sky = options.sky ?? null;
@@ -118,6 +128,7 @@ export class ThreeGI {
         this.shadingSeen = { module: shading, version: shading.version };
         this.currentLight = new GILight(shading, options.light);
         this.currentLight.name = 'GI';
+        this.connectRenderTimeUpdate(this.currentLight);
         // three only lights with lights on the camera's layers; GI is for every camera.
         this.currentLight.layers.enableAll();
         scene.add(this.currentLight);
@@ -196,6 +207,27 @@ export class ThreeGI {
         this.sync.dispose();
     }
 
+    /** Run `update` from the GI light's render-time update (see the file comment). Can be switched at any time. */
+    get updateOnRender(): boolean {
+        return this.renderTimeUpdate;
+    }
+
+    set updateOnRender(enabled: boolean) {
+        this.renderTimeUpdate = enabled;
+        this.connectRenderTimeUpdate(this.currentLight);
+    }
+
+    /** With `updateOnRender`, the light runs `update` from its render-time update (see the file comment). */
+    private connectRenderTimeUpdate(light: GILight): void {
+        if (!this.renderTimeUpdate) {
+            light.onRender = null;
+            return;
+        }
+        light.renderUpdateFailed = false;
+        light.onRender = (camera) => this.update(camera);
+        light.onRenderError = (error) => this.warnOnce(`the GI frame failed during a render, so GI stopped updating: ${error instanceof Error ? error.message : String(error)}`);
+    }
+
     /**
      * When the platform's output module changes shape (a new `version`, or
      * another technique), the light's shader code must be rebuilt. three
@@ -213,6 +245,7 @@ export class ThreeGI {
         const next = new GILight(shading, { intensity: old.intensity, priority: old.priority, replaceEnvironmentDiffuse: old.replaceEnvironmentDiffuse });
         next.name = old.name;
         next.layers.mask = old.layers.mask;
+        this.connectRenderTimeUpdate(next);
         (old.parent ?? this.scene).add(next);
         old.removeFromParent();
         old.dispose();

@@ -38,6 +38,29 @@
  * uniform. At intensity 0 it gives up the probe slot and stops suppressing
  * the environment.
  *
+ * **The render-time update** (T1.14): with `onRender` set (`ThreeGI` sets it
+ * for `updateOnRender`, which `GIVolume.start` uses), the node runs the GI
+ * frame from its own render-time update, as three's `LightProbeGridNode`
+ * updates itself, so the host has no per-frame call. In r187 a light node's
+ * `RENDER` update runs inside the render pass's encoder lifetime: after
+ * `backend.beginRender` created the pass's encoder and before `finishRender`
+ * submits it (NOTES). The GI frame submits its own encoder there, so the
+ * queue runs it before the render that samples it (checked on the GPU, the
+ * three-composite page). Then the node reads the module's values, so this
+ * render sees this frame's GI. What follows from running inside the render:
+ * - **once per frame:** the update runs at most once per JavaScript task (a
+ *   `requestAnimationFrame` or `setAnimationLoop` callback), though a frame
+ *   may hold several lit renders (cube captures, reflections, several
+ *   passes);
+ * - **the camera** is the first lit render's camera that frame. With cube
+ *   captures or a reflection pass drawn before the main view, GI's update
+ *   order follows that camera for the frame;
+ * - **no lit render, no GI frame:** a frame that draws no lit object with
+ *   the light (everything culled, GI's layer hidden) runs no GI work, so the
+ *   field doesn't converge meanwhile;
+ * - **errors** in the GI frame are reported once through `onRenderError` and
+ *   stop the render-time update; three's render carries on without it.
+ *
  * **Environment diffuse counted twice** (NOTES): r187 adds
  * `scene.environment`'s diffuse light (`iblIrradiance`) separately from
  * probe GI and has no switch (PR #35017 adds one). With
@@ -63,7 +86,7 @@
  * surface, and every unmarked pass, builds exactly as before.
  */
 
-import { AnalyticLightNode, Light, NodeUpdateType, Vector4, type ExternalTexture, type Node, type NodeBuilder } from 'three/webgpu';
+import { AnalyticLightNode, Light, NodeUpdateType, Vector4, type Camera, type ExternalTexture, type Node, type NodeBuilder, type NodeFrame } from 'three/webgpu';
 import { If, INFINITY, cameraPosition, float, normalWorld, positionWorld, renderGroup, screenUV, texture, texture3D, uniform, vec3, wgsl, wgslFn } from 'three/tsl';
 import type { ShadingModule, ShadingParameter } from '@pmndrs/ddgi-core';
 import { compositeTakesGI } from './composite-mark.ts';
@@ -99,6 +122,18 @@ export class GILight extends Light {
     readonly replaceEnvironmentDiffuse: boolean;
     /** Compute coverage per pixel (see the file comment). A uniform, so changing it is free. */
     computeCoverage = true;
+    /**
+     * The GI frame, run from the node's render-time update once per frame
+     * with the render's camera (file comment, "The render-time update").
+     * Null: the host calls `ThreeGI.update` itself.
+     */
+    onRender: ((camera: Camera) => void) | null = null;
+    /** Where an error from `onRender` goes (once); the render-time update stops after it. Default `console.error`. */
+    onRenderError: (error: unknown) => void = (error) => console.error('@pmndrs/ddgi/three: the GI frame failed during a render; GI stops updating.', error);
+    /** True once `onRender` threw: the render-time update stays off. */
+    renderUpdateFailed = false;
+    /** Whether `onRender` already ran in the current JavaScript task. */
+    private ranThisTask = false;
 
     constructor(shading: ShadingModule, options: GILightOptions = {}) {
         super(0xffffff, options.intensity ?? 1);
@@ -106,6 +141,29 @@ export class GILight extends Light {
         this.shading = shading;
         this.priority = options.priority ?? GI_LIGHT_PRIORITY;
         this.replaceEnvironmentDiffuse = options.replaceEnvironmentDiffuse ?? true;
+    }
+
+    /**
+     * Runs `onRender` unless it already ran in this JavaScript task (one
+     * frame: a `requestAnimationFrame` or `setAnimationLoop` callback, file
+     * comment). A microtask clears the mark once the task's synchronous
+     * renders are done, so the guard needs neither three's frame counter
+     * (which only advances inside `setAnimationLoop`, NOTES) nor the host's
+     * cooperation.
+     */
+    runRenderTimeUpdate(camera: Camera | null): void {
+        const update = this.onRender;
+        if (!update || !camera || this.renderUpdateFailed || this.ranThisTask) return;
+        this.ranThisTask = true;
+        queueMicrotask(() => {
+            this.ranThisTask = false;
+        });
+        try {
+            update(camera);
+        } catch (error) {
+            this.renderUpdateFailed = true;
+            this.onRenderError(error);
+        }
     }
 }
 
@@ -325,9 +383,14 @@ class GILightNode extends AnalyticLightNode<GILight> {
         return this.built;
     }
 
-    /** Once per render: the module's current textures and uniform values, and the light's own settings. */
-    update(): boolean | undefined {
+    /**
+     * Once per render: the GI frame when the light runs it here (file
+     * comment, "The render-time update"), then the module's current textures
+     * and uniform values, and the light's own settings.
+     */
+    update(frame: NodeFrame): boolean | undefined {
         const light = this.light!;
+        light.runRenderTimeUpdate(frame.camera);
         this.intensityUniform.value = light.intensity;
         this.priorityUniform.value = light.priority;
         this.computeCoverageUniform.value = light.computeCoverage ? 1 : 0;

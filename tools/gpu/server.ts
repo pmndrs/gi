@@ -3,6 +3,7 @@
  * TypeScript (including the shared client helper) with no build step.
  */
 
+import { resolve } from 'node:path';
 import { createServer, type ViteDevServer } from 'vite';
 
 /** The folder served as the site root: it holds client.ts, preflight.html and pages/. */
@@ -21,6 +22,14 @@ export async function startTestSite(): Promise<TestSiteServer> {
         configFile: false,
         logLevel: 'warn',
         appType: 'mpa',
+        // The published names, pointed at the source as the examples' own config does, so a page can
+        // run examples/three as a user writes it (`@pmndrs/ddgi/three`).
+        resolve: {
+            alias: [
+                { find: /^@pmndrs\/ddgi$/, replacement: resolve(SITE_ROOT, '../../packages/ddgi/src/index.ts') },
+                { find: /^@pmndrs\/ddgi\/(core|three)$/, replacement: resolve(SITE_ROOT, '../../packages/ddgi/src/$1.ts') },
+            ],
+        },
         // The pages have no npm dependencies; skip the dependency pre-bundling scan.
         optimizeDeps: { noDiscovery: true, include: [] },
         server: {

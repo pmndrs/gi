@@ -1,18 +1,22 @@
 /**
  * A GI volume shaped like three's `LightProbeGrid` (SPEC, "Matching the
  * LightProbeGrid shape"), so its users can switch to DDGI with the same
- * numbers:
+ * numbers and as many lines:
  *
  * ```ts
- * const volume = new GIVolume(width, height, depth, nx, ny, nz); // like new LightProbeGrid(...)
- * volume.position.set(x, y, z);
+ * const volume = new GIVolume(6, 5, 6, 6, 6, 6);   // like new LightProbeGrid(...)
+ * volume.position.set(0, 2.5, 0);
  * scene.add(volume);
- * scene.updateMatrixWorld();
- * const ddgi = gi.addTechnique(new DDGITechnique({ volume: volume.ddgiVolume() }));
- * gi.setOutput(ddgi);
- * await gi.prepare();
- * const threeGI = new ThreeGI(gi, scene, { volume });
+ * await volume.start(renderer, scene);              // like probes.bake(renderer, scene)
  * ```
+ *
+ * `start` (volume-start.ts) makes the platform and DDGI on three's own
+ * device, warms the probes up, and switches on the render-time update: from
+ * then on GI updates itself inside `renderer.render`, with no per-frame
+ * call. `recalibrate()` measures the GPU budget again; `dispose()` removes
+ * the GI light and frees the platform. Hosts that want control (several
+ * techniques, a shared platform) still build it by hand: `ddgiVolume()`
+ * gives the DDGI settings, and `ThreeGI` takes `{ volume }`.
  *
  * As in `LightProbeGrid`, the box is `width × height × depth`, centred on the
  * object's world position and axis-aligned (rotation and scale are not
@@ -32,9 +36,11 @@
  * `Light` because `LightProbeGrid` is one; its registered node does nothing.
  */
 
-import { AnalyticLightNode, Box3, Light, Vector3, type Node } from 'three/webgpu';
-import type { DDGIVolumeSettings, Vec3 } from '@pmndrs/ddgi-core';
-import { GI_LIGHT_PRIORITY } from './gi-light.ts';
+import { AnalyticLightNode, Box3, Light, Vector3, type Node, type Scene, type WebGPURenderer } from 'three/webgpu';
+import type { DDGIVolumeSettings, GIPlatform, Vec3 } from '@pmndrs/ddgi-core';
+import { GI_LIGHT_PRIORITY, type GILight } from './gi-light.ts';
+import type { ThreeGI } from './three-gi.ts';
+import { startVolume, type GIVolumeStartOptions, type StartedGI } from './volume-start.ts';
 
 /** `LightProbeGrid`'s default probe count for an axis: one per unit of length, at least one. */
 function defaultProbes(length: number): number {
@@ -53,6 +59,9 @@ export class GIVolume extends Light {
     readonly boundingBox = new Box3();
     /** Where probe-like lights overlap, the highest priority lights the fragment. */
     priority = GI_LIGHT_PRIORITY;
+    /** What `start` made, while it lives. */
+    private started: StartedGI | null = null;
+    private starting: Promise<void> | null = null;
 
     constructor(width = 1, height = 1, depth = 1, widthProbes?: number, heightProbes?: number, depthProbes?: number) {
         super(0xffffff, 1);
@@ -90,6 +99,69 @@ export class GIVolume extends Light {
         const spacing = lengths.map((length, axis) => length / probes[axis]) as unknown as Vec3;
         const size = lengths.map((length, axis) => length - spacing[axis]) as unknown as Vec3;
         return { center: this.center(), size, spacing };
+    }
+
+    /**
+     * Starts GI on three's device (volume-start.ts): the platform and DDGI on
+     * this volume's grid, the warm-up, and the render-time update. Adds the
+     * volume to `scene` if it has no parent. Resolves when the probes are
+     * warm; GI then updates itself on every render. Throws `GILimitError`
+     * (naming the limit, with the fix) when the scene outgrows the device.
+     */
+    start(renderer: WebGPURenderer, scene: Scene, options: GIVolumeStartOptions = {}): Promise<void> {
+        if (this.started || this.starting) throw new Error('@pmndrs/ddgi/three: this GIVolume has already been started; dispose() it first.');
+        this.starting = startVolume(this, renderer, scene, options).then(
+            (started) => {
+                this.started = started;
+                this.starting = null;
+            },
+            (error: unknown) => {
+                this.starting = null;
+                throw error;
+            },
+        );
+        return this.starting;
+    }
+
+    /** Whether `start` has finished. */
+    get isStarted(): boolean {
+        return this.started !== null;
+    }
+
+    /** The scene's link to GI, after `start`: budget, scene sync, `markChanged`, timings. */
+    get threeGI(): ThreeGI | null {
+        return this.started?.threeGI ?? null;
+    }
+
+    /** The GI platform `start` made (for stats and debug views), or null. */
+    get platform(): GIPlatform | null {
+        return this.started?.platform ?? null;
+    }
+
+    /** The GI light `start` added, which the composite reads (`ddgi(scenePass, volume)`). */
+    get light(): GILight {
+        if (!this.started) throw new Error('@pmndrs/ddgi/three: the GIVolume has no GI yet; await volume.start(renderer, scene) before rendering with it.');
+        return this.started.threeGI.light;
+    }
+
+    /**
+     * Measures again how much probe work fits the frame budget (budget v2),
+     * over the next frames: after the scene changed a lot, or a different
+     * GPU load. The platform calibrates by itself after `start`.
+     */
+    recalibrate(): void {
+        this.started?.platform.recalibrate();
+    }
+
+    /** Removes the GI light and frees the platform `start` made. The volume can be started again afterwards. */
+    dispose(): void {
+        const started = this.started;
+        this.started = null;
+        if (started) {
+            started.threeGI.dispose();
+            started.platform.dispose();
+        }
+        super.dispose();
     }
 }
 

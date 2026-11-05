@@ -3,36 +3,121 @@
 The adapter puts the GI platform's global illumination into a three.js r187 `WebGPURenderer` scene. It does three jobs:
 
 - it mirrors the three.js scene into the platform;
-- it runs one GI frame per `update`;
-- it lights every lit material through one GI light.
+- it runs one GI frame per rendered frame;
+- it lights every lit material through one GI light, or, on three's post-processing pipeline, adds GI once per pixel (`ddgi()`).
 
-The code is in [`packages/ddgi-three/src/`](../../packages/ddgi-three/src/). The platform underneath is described in [platform.md](platform.md).
+The code is in [`packages/ddgi-three/src/`](../../packages/ddgi-three/src/). The platform underneath is described in [platform.md](platform.md). Working examples: [`examples/three/`](../../examples/three/).
 
 ## Getting started
 
+The same shape as three's `LightProbeGrid`, in as many lines:
+
 ```ts
-import { createGI, DDGITechnique } from '@pmndrs/ddgi/core';
-import { createGIRenderer, GIVolume, ThreeGI } from '@pmndrs/ddgi/three';
+import { GIVolume } from '@pmndrs/ddgi/three';
 
-const { renderer, device } = await createGIRenderer();     // one device for three and GI
-const gi = createGI(device);
-
-const volume = new GIVolume(20, 8, 20, 40, 16, 40);         // like new LightProbeGrid(...)
-volume.position.set(0, 4, 0);
+const volume = new GIVolume(6, 5, 6, 6, 6, 6);   // like new LightProbeGrid(6, 5, 6, 6, 6, 6)
+volume.position.set(0, 2.5, 0);
 scene.add(volume);
-scene.updateMatrixWorld();
+await volume.start(renderer, scene);              // like probes.bake(renderer, scene)
 
-gi.setOutput(gi.addTechnique(new DDGITechnique({ volume: volume.ddgiVolume() })));
-await gi.prepare();
-const threeGI = new ThreeGI(gi, scene, { volume });
-
-renderer.setAnimationLoop(() => {
-    threeGI.update(camera);           // first: GI's work for this frame
-    renderer.render(scene, camera);   // then three draws, reading GI
-});
+renderer.setAnimationLoop(() => renderer.render(scene, camera));   // GI updates itself
 ```
 
+`start` uses three's own GPU device, warms the probes up, and from then on GI updates itself inside `renderer.render`. There is no per-frame call.
+
+### Dense scenes: GI once per pixel
+
+Lit materials normally take GI per fragment. In scenes with many tiny triangles (Sponza's curtains), that runs many times per pixel. On three's post-processing pipeline, as three's SSGI and GTAO examples use it, `ddgi()` adds GI once per pixel instead:
+
+```ts
+import { mrt, normalView, output, packNormalToRGB, pass } from 'three/tsl';
+import { ddgi, giAlbedo } from '@pmndrs/ddgi/three';
+
+const pipeline = new THREE.RenderPipeline(renderer);
+const scenePass = pass(scene, camera);
+scenePass.setMRT(mrt({ output, giAlbedo, normal: packNormalToRGB(normalView) }));
+pipeline.outputNode = ddgi(scenePass, volume);
+
+renderer.setAnimationLoop(() => pipeline.render());
+```
+
+- `giAlbedo` is the weight three's lighting gives indirect diffuse light, per pixel: the diffuse colour × (1 − F_ss − F_ms) × ambient occlusion for Standard and Physical materials, as r187's `PhysicalLightingModel` applies it.
+- `ddgi()` adds `giAlbedo × E / π` to the pass's linear HDR colour before the pipeline's tone mapping. It matches the per-fragment image to 0.04–0.07% on average (p95 under 0.25%) on Cornell and Sponza.
+- In that pass the GI light adds no indirect diffuse on the surfaces the composite lights, so nothing is counted twice. Other passes, shadow maps and cube captures keep GI per fragment.
+- Call `volume.start` before the pipeline's first render.
+
 ## The pieces
+
+### `GIVolume`
+
+`GIVolume` has the same shape as three's `LightProbeGrid`, so moving a scene from one to the other is a small change:
+
+- `new GIVolume(width, height, depth, nx, ny, nz)`;
+- the box is centred on the object's position and aligned with the world axes;
+- there is one probe at the centre of each cell;
+- `boundingBox`, `priority` and `intensity` work as they do on `LightProbeGrid`. `intensity = 0` turns GI off.
+
+**`await volume.start(renderer, scene, options?)`** does the set-up:
+
+1. It takes three's device (`renderer.backend.device`) and initialises the renderer if needed.
+2. It makes the platform and a DDGI technique on the volume's probe grid, and prepares them.
+3. It adds the GI light to the scene (through a `ThreeGI`).
+4. It warms the probes up. The first frames copy the scene and build the ray-tracing trees. Then up to 16 passes over every probe run with a running average, stopping early after 8 s (at least 2 passes). Then the budget is calibrated on the GPU.
+5. It switches on the render-time update.
+
+| Option | What it does |
+| --- | --- |
+| `budget` | GPU work per frame for GI updates after the warm-up, default `{ gpuMs: 2 }`. |
+| `ddgi` | DDGI settings over the defaults (rays per probe, hysteresis…). The probe grid comes from the volume. |
+| `environment`, `sky` | GI's sky, as for `ThreeGI` below. |
+| `light` | Settings for the GI light. |
+| `warmUp` | `false` to skip it (GI then fills in live), or `{ passes, maxSeconds, minPasses, calibrate }`. |
+| `warn` | Where warnings go. |
+
+If the scene needs more than the renderer's device allows, `start` throws a `GILimitError` (`ThreeGILimitError`) naming the limit. three makes its device with default limits (a 128 MiB storage binding), which large scenes such as Sponza with its curtains outgrow. The fix is to make the renderer with the platform's limits: `const { renderer } = await createGIRenderer()`, or `new WebGPURenderer({ requiredLimits: requiredLimits(adapter) })`.
+
+Other members:
+
+- `volume.recalibrate()` measures again how much probe work fits the budget, over the next frames. Use it after a big scene change.
+- `volume.threeGI` (budget, `markChanged`, timings) and `volume.platform` (stats, debug views) are there after `start`.
+- `volume.light` is the GI light (`ddgi()` reads it).
+- `volume.dispose()` removes the GI light and frees the platform.
+
+`volume.ddgiVolume()` gives the matching DDGI settings, for building a platform by hand:
+
+- the spacing is `width / nx` (and the same on the other axes);
+- the box is one cell smaller than the volume, so the outermost probes sit half a cell inside it.
+
+Moving or resizing the volume later needs new settings: `dispose()` and `start` again.
+
+### The render-time update
+
+After `start`, the GI light's node runs each GI frame from its own render-time update, as three's `LightProbeGridNode` updates itself. In r187 that update runs inside the render pass, after its command encoder exists and before it is submitted. GI's work is submitted from there, so the GPU runs it before the render that samples it (checked on the GPU: the image equals an explicit update-then-render exactly). What it means in practice:
+
+- **Once per frame.** It runs at most once per JavaScript task (a `requestAnimationFrame` or `setAnimationLoop` callback), however many lit renders the frame draws.
+- **The first lit render's camera.** If cube captures or a reflection pass render before the main view, GI's update order follows their camera that frame.
+- **No lit render, no GI frame.** A frame that draws nothing lit by GI (all of it culled, or the light's layer hidden) does no GI work, so the probes don't converge meanwhile.
+- **Errors** in the GI frame are reported once (`warn`) and stop the updates; three keeps rendering.
+
+`threeGI.updateOnRender = false` turns it off. Call `threeGI.update(camera)` yourself before each render instead.
+
+### `ddgi(scenePass, volume, options?)` and `giAlbedo`
+
+The composite node for three's pipeline (see "Dense scenes" above). Built like three's `SSGINode` and `GTAONode`.
+
+- The pass's MRT must write `giAlbedo` and `normal: packNormalToRGB(normalView)` (three's SSGI and GTAO convention). The node says so if it doesn't.
+- It marks its pass through `scenePass.contextNode`, keeping any context you already set (GTAO's `builtinAOContext`, say). Set your own context before calling `ddgi()`.
+- **Which surfaces it lights:** opaque surfaces with Standard, Physical, Lambert or Phong materials. Physical materials with clearcoat, sheen, iridescence, transmission, dispersion or rough diffuse keep GI per fragment, and so do transparent surfaces and unlit ones.
+- **Transparent surfaces in front of composited ones.** The composited GI behind a transparent surface is evaluated at the transparent surface, because the pass's normal and depth are its own. Behind a 50%-opaque sphere in Cornell that reads about 19% too dark. Where that matters, draw transparent objects after the composite.
+- **Short-range occlusion on GI.** By default `ddgi()` runs three's own GTAO (`ao()`) on the pass's depth and normal, with a 1 m radius, and multiplies the GI term by it, and only the GI term. Probes 1 m apart can't follow light that changes inside small folds: Sponza's curtains read +23% against a path tracer without it, +4.3% with it.
+  - `occlusion: { radius, resolutionScale, samples }` sets it. It needs 16 samples (three's default): with 8, Sponza reads +16%.
+  - `occlusion: false` turns it off.
+  - `occlusion: { source: gtaoNode }` uses a GTAO node your pipeline already makes from this pass, instead of a second one.
+  - If the pass already applies AO to its materials (`builtinAOContext`), `giAlbedo` already carries it, and the default is no second occlusion.
+  - `node.occlusionNode` is the composite's own GTAO node, for live changes (`radius.value`).
+- The fog of a fogged scene isn't applied to the composited GI.
+- The targets should stay half float: 8-bit `giAlbedo` and normal miss the match by about 10× on Sponza.
+- If the platform's shading module changes shape (another technique, say), set `pipeline.needsUpdate = true`.
 
 ### `createGIRenderer()` and `requestGIDevice()`
 
@@ -44,9 +129,24 @@ These make the GPU device and hand it to three (`new WebGPURenderer({ device })`
 
 ### `ThreeGI`
 
+For hosts that want control (several techniques, a shared platform), `ThreeGI` is the scene's link to a platform you built yourself:
+
+```ts
+const { renderer, device } = await createGIRenderer();
+const gi = createGI(device);
+gi.setOutput(gi.addTechnique(new DDGITechnique({ volume: volume.ddgiVolume() })));
+await gi.prepare();
+const threeGI = new ThreeGI(gi, scene, { volume });
+
+renderer.setAnimationLoop(() => {
+    threeGI.update(camera);           // first: GI's work for this frame
+    renderer.render(scene, camera);   // then three draws, reading GI
+});
+```
+
 `new ThreeGI(gi, scene, options)` needs a prepared platform. It adds the GI light to the scene.
 
-`update(camera, deltaTime?)` is called once per frame, before `renderer.render`. Each call:
+`update(camera, deltaTime?)` is called once per frame, before `renderer.render` (or by the GI light itself, with `updateOnRender`). Each call:
 
 - sends the scene's changes;
 - records the GI work for the frame;
@@ -63,6 +163,7 @@ The extra submit is needed because three r187 records into its own command encod
 | `sky` | A pmndrs/sky `Sky`, used as GI's sky. Its `exposure` becomes `sunIlluminance`. |
 | `objectsPerFrame`, `editChecksPerFrame` | How much of the scene is checked each frame (see "How changes are found"). |
 | `updateMatrixWorld` | Update world matrices in every `update` (see below). Default: no. |
+| `updateOnRender` | Run `update` from the GI light's render-time update (see above). Default: no. Can be switched later. |
 | `warn` | Where warnings go. Each message is shown once. |
 
 Other members:
@@ -72,22 +173,6 @@ Other members:
 - `threeGI.report` lists what the last update sent.
 - `threeGI.markChanged(object)` is described below.
 - `dispose()` removes what the adapter added.
-
-### `GIVolume`
-
-`GIVolume` has the same shape as three's `LightProbeGrid`, so moving a scene from one to the other is a small change:
-
-- `new GIVolume(width, height, depth, nx, ny, nz)`;
-- the box is centred on the object's position and aligned with the world axes;
-- there is one probe at the centre of each cell;
-- `boundingBox`, `priority` and `intensity` work as they do on `LightProbeGrid`.
-
-`volume.ddgiVolume()` gives the matching DDGI settings:
-
-- the spacing is `width / nx` (and the same on the other axes);
-- the box is one cell smaller than the volume, so the outermost probes sit half a cell inside it.
-
-Moving or resizing the volume later needs new settings and another `prepare`.
 
 ### `GILight`
 

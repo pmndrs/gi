@@ -21,6 +21,57 @@ Rules:
 
 ---
 
+## 2026-11-05 · T1.14 part 2: the confirmed names, volume.start, the render-time update, examples · implementer (opus)
+Did (uncommitted):
+- `packages/ddgi-three/src/index.ts` exports `ddgi` (renamed from `ddgiComposite`; it takes the volume), `giAlbedo`, the `GIVolume` additions, `ThreeGILimitError`, `DEFAULT_WARM_UP` and their option types.
+- `volume-start.ts` (new) is what `GIVolume.start(renderer, scene, options?)` runs:
+  - three's device, created if needed (`renderer.backend.device`, `renderer.init()`);
+  - `createGI` with GPU timing, and DDGI from `volume.ddgiVolume()`, prepared;
+  - `ThreeGI`;
+  - the warm-up, copied from the viewer: paused until the trees exist, then 16 running-average passes (8 s cap, at least 2), then budget calibration;
+  - then it switches on the render-time update.
+  - A core `GILimitError` comes back as `ThreeGILimitError` (still a `GILimitError`), with the fix for three: `createGIRenderer()`, or `requiredLimits(adapter)` on the renderer.
+- `gi-volume.ts`: `start`, `isStarted`, `threeGI`, `platform`, `light` (throws with "await volume.start" before), `recalibrate()` (`platform.recalibrate()`) and `dispose()`.
+- `gi-light.ts`: the render-time update. The node's `update` first runs `light.onRender(camera)`, at most once per JavaScript task (a microtask clears the mark, so it doesn't need three's frame counter), then refreshes the module's values. An error is reported once and stops it. The file comment lists the caveats: the first lit render's camera, and no GI frame in a frame with nothing lit.
+- `three-gi.ts`: `updateOnRender` (option and settable property), carried across light swaps.
+- `packages/ddgi/vite.config.ts`: `three/addons/*` is external too (the composite imports three's GTAO).
+- `examples/three/`: `simple.html` and `composite.html`, on three's `webgpu_lightprobes.html` scene (`src/cornell.ts`, copied), plus `index.html` and `vite.config.ts`. Run with `pnpm exec vite --config examples/three/vite.config.ts`. `tsconfig.json` includes `examples/three/src`.
+- `tools/gpu/server.ts` aliases `@pmndrs/ddgi(/core|/three)` to source, as the examples' config does. New page `three-examples` runs both examples' own `main()`.
+- `docs/api/three.md`: getting started, `GIVolume.start`, the render-time update, `ddgi()` and `giAlbedo`.
+- Tests: `render-time-update.test.ts` (10 tests: the once-per-task guard, errors, `updateOnRender`, the volume before start, the composite's occlusion defaults).
+Verified (headless Chrome 156):
+- lint, typecheck, `pnpm build`, `pnpm test` (911 passed);
+- RTX: the unmarked WGSL is still byte-identical to the part-1 HEAD baseline for Standard and Lambert, so the simple path's shader is unchanged;
+- RTX, `three-examples`: each example ran 40 GI frames in 40 animation frames with no per-frame call. GI is 45% of the canvas brightness in simple and 44% in composite. Both use `antialias: true`, so the composite works with an MSAA pass.
+- `test:gpu --filter three-` passes on both GPUs, 8 pages each (RTX 3060, Intel UHD gen-12lp): the T1.7 neutrality and environment pages, the composite page and the examples. On the Intel the examples give GI 44.5% (simple) and 43.3% (composite), 40 GI frames in 40 animation frames.
+Usage bar against three's `webgpu_lightprobes.html` (GI lines):
+- LightProbeGrid: 5 (import, `new`, `position.set`, `scene.add`, `bake`).
+- Ours, simple: 5 (import, `new GIVolume`, `position.set`, `scene.add`, `await volume.start`). Nothing per frame; the probes update live, where LightProbeGrid needs a re-bake when the light changes.
+- Ours, composite: 10, the 5 plus a `three/tsl` import, `new RenderPipeline`, `pass`, `setMRT(mrt({ output, giAlbedo, normal: packNormalToRGB(normalView) }))` and `outputNode = ddgi(scenePass, volume)`. `pipeline.render()` replaces `renderer.render`.
+- Names a user touches: simple, only `GIVolume` (constructor, `position`, `start`). Composite adds `ddgi` and `giAlbedo`, plus three's own `RenderPipeline`, `pass`, `mrt`, `output`, `normalView` and `packNormalToRGB`.
+Still harder than LightProbeGrid:
+- **Large scenes need raised device limits** (`createGIRenderer()` or `requiredLimits(adapter)`). `start` throws `GILimitError` with the fix.
+- **Composite:**
+  - transparent objects in front of composited surfaces get the GI behind them evaluated at the transparent surface (−19% behind a 50% sphere in Cornell), so draw them after the composite;
+  - the MRT output must be named `normal` and packed with `packNormalToRGB`;
+  - `start` must finish before the pipeline's first render;
+  - a shading module that changes shape needs `pipeline.needsUpdate = true`.
+- **The render-time update:** it uses the first lit render's camera, and runs no GI frame in a frame with nothing lit.
+- **Start-up time:** `start` takes seconds (up to 8 s of warm-up plus calibration). `warmUp: false` makes it fast, and GI then fills in live.
+- **GTAO** (on by default in the composite): its cost is not yet timed under the clock rule.
+Scout's list of differences from three's examples:
+- LightProbeGrid's shape and its self-updating node: now matched (`start`, the render-time update).
+- SSGI's additive composite: matched. We write `giAlbedo` instead of `diffuseColor`, because `diffuseColor` is about 4% brighter at normal incidence and would fail the match.
+- GTAO/VXGI's `builtinGIContext`: not used. It needs GI before the pass (a prepass, +6.5 ms; DECISIONS).
+- The display nodes' own render target: the composite needs none (it's a pure function of the pass textures); its GTAO has one, as three's does.
+- Double counting: handled by the pass mark and the environment-diffuse workaround.
+- Default limits: `GILimitError` with the fix.
+Not verified: the cost (timing waits for the lead's go-ahead); a scene with `scene.environment` in the composite path; the examples by hand in a visible browser (only headless).
+Next:
+- the viewer still has its own warm-up (`apps/viewer/src/techniques/ddgi-technique.ts`). Switch it over to `GIVolume.start` (or a shared warm-up) once other agents are out of `apps/viewer`;
+- the viewer's "GI composite" toggle;
+- the RTX timing of `three-composite-sponza`, 3 runs under the clock rule.
+
 ## 2026-11-05 · Clock-rule timing runs: Budget v2 calibration and B2 Sponza build · measurer
 Did: RTX 3060 Laptop (nvidia, ampere), headless Chrome 156.0.8078.80, each run under `bench-lock run` (cool start below 70 C, 200 ms sampling). No code changes. Rows in `bench/results/timing.csv` (720 rows, `note/set` 1-3, `note/timing_valid,1`, `note/thermal_share,0`, `note/clock_rule_job_budget_v2_calibration,1`). The notes were added by hand with `--note` because to-csv ran after the runs, outside `bench-lock run`, so the rows have no `note/sm_clock_mhz` or `note/start_temp_c`.
 Budget v2 calibration (`ddgi-batch-cost`, `VITE_DDGI_SECTIONS=startup,budget`, `rates` not needed; budget 2 ms). All 12 runs VALID, 0% thermal samples. Update ms is the median of the timed frames at the calibrated batch; the page's check is within ±10% of 2 ms.
