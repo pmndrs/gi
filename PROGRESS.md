@@ -31,6 +31,10 @@ Numbers (indirect, against Cycles; bias, 8×8 block error, p95 block, FLIP 8×8,
 Not verified: the cause. The ratio map shows DDGI brighter on most shadowed surfaces, the curtains most.
 Next: find Sponza's +26% (leaks through thin curtains, probe density, sun shadow rays, the decal `dirt_decal` with GI albedo 0 acting as a black opaque surface because glTF's default metalness is 1 and M1 ignores `blocksLight`); a README section for `--materials-json`; the test view's full image is black on sky pixels.
 
+## 2026-11-05 · Dennis reviewed the viewer · parent session relayed
+His words: "it is not steady" (the flicker threshold). "The cornell box particularly the color sides is constantly moving. its like the lighting cant settle and is very noisy. I dont have debug views of the source channels or info to be able to provide more details. using the upscaler seems to settle this. Its not visible in either threejs version so its us." And: "640 x 360 is an insane size to judge ANYTHING against. Do a HD render and store that, that can be a baseline."
+New M1 blockers (DECISIONS): Cornell's flicker; debug views of the source channels; HD Cycles references (1920+, anti-aliased, stored with their cameras, the viewer's Compare matching them). Earlier he wrote: "The viewer loads but quality has issues, they may be addressed later."
+
 ## 2026-11-05 · T1.9 memory, flicker and the Intel set · gpu-tester (sonnet), lead checked
 Did (0db31d6): pages `ddgi-memory` and `ddgi-flicker` (new), `ddgi-shared/viewer-scene.ts`; width and height options on `ddgi-shading-timing`; rows in `memory.csv`, `flicker.csv`, `shading.csv`, `timing.csv`, `baselines.csv`. Every timing under the lock; Dennis's Chrome open, about 2% 3D load from other processes.
 Numbers:

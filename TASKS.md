@@ -270,6 +270,8 @@ Rules for every M1 task:
 | T1.9a | DDGI performance pass (budget model, small-batch cost, p95, startup) | implementer | M | T1.6, T1.8 | done (budget median within ±5% on four scenes; Sponza 30–43 probes per 2 ms; gaps in DECISIONS) |
 | T1.9 | M1 measurements against targets | gpu-tester, native-runner | M | T1.8, T1.9a | todo (native matched-count runs done early) |
 | T1.10 | Sponza add-ons | wrangler + implementer | M | T1.1 (for the re-rendered reference) | done (Opus review passed with notes, fixed; candles waiting on Dennis) |
+| T1.12 | Stability: Cornell flicker fixed, debug views of the source channels, threshold set by eye | implementer | M | T1.5, T1.8 | active (2026-11-05; Dennis: "it is not steady") |
+| T1.13 | HD Cycles references with stored cameras; the viewer's Compare matches them | implementer, then gpu-tester | M | T1.8, T0.7 | active (2026-11-05; Dennis: "640 x 360 is an insane size") |
 | T1.11 | M1 note and M2 breakdown | main session | S | all M1 | todo |
 
 ### BVH lane (runs alongside; DECISIONS 2026-11-04)
