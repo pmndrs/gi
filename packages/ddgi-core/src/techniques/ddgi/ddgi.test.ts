@@ -74,7 +74,9 @@ describe('settings', () => {
         // An endless ramp reaches the kernel as a large finite number.
         const endless = blendSettings({ ...settings, hysteresisRampUpdates: Infinity }).rampUpdates;
         expect(Number.isFinite(endless) && endless >= 1e9).toBe(true);
-        expect(blendSettings({ ...settings, hysteresisRampUpdates: Number.NaN }).rampUpdates).toBe(endless);
+        // Nonsense falls back to the default, like every other setting.
+        expect(blendSettings({ ...settings, hysteresisRampUpdates: Number.NaN }).rampUpdates).toBe(settings.hysteresisRampUpdates);
+        expect(blendSettings({ ...settings, hysteresisRampUpdates: -1 }).rampUpdates).toBe(settings.hysteresisRampUpdates);
     });
 
     it('advances the clock by deltaTime, at most MAX_CLOCK_STEP_SECONDS a frame, never backwards', () => {

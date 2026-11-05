@@ -308,6 +308,18 @@ function clamp(value: number, low: number, high: number, fallback: number): numb
  */
 export const MAX_CLOCK_STEP_SECONDS = 0.25;
 
+/**
+ * The technique's clock wraps to 0 every this many seconds (2^12, about
+ * 68 min). Why: the kernel keeps each probe's last update time as f32, whose
+ * step is 0.49 ms below 4096 s but 7.8 ms after a day and 62.5 ms after a
+ * week. Wrapped, every time stays under 4096 s, and the blend adds the period
+ * back when `clock - t` comes out negative. Only a probe left unblended for
+ * more than a whole period would be misread, and an active probe is blended
+ * every sweep (seconds); an off probe starts again from state 3 when it comes
+ * back on.
+ */
+export const CLOCK_WRAP_SECONDS = 4096;
+
 /** How long the technique's clock advances for a frame with this `deltaTime`. */
 export function clockStep(deltaTime: number): number {
     return Number.isFinite(deltaTime) && deltaTime > 0 ? Math.min(deltaTime, MAX_CLOCK_STEP_SECONDS) : 0;
@@ -341,7 +353,8 @@ export function blendSettings(settings: DDGISettings): {
         maxSamples: clamp(settings.hysteresisMaxSamples, 0, MAX_HISTORY_SAMPLES, defaults.hysteresisMaxSamples),
         // At least 1 (a plain mean); the kernel divides by it.
         updatesPerSample: clamp(settings.hysteresisUpdatesPerSample, 1, MAX_UPDATES_PER_SAMPLE, defaults.hysteresisUpdatesPerSample),
-        rampUpdates: settings.hysteresisRampUpdates >= 0 ? Math.min(settings.hysteresisRampUpdates, RAMP_UPDATES_ENDLESS) : RAMP_UPDATES_ENDLESS,
+        // Infinity is an endless ramp (a large finite number for the kernel); NaN or negative falls back to the default.
+        rampUpdates: Math.min(settings.hysteresisRampUpdates >= 0 ? settings.hysteresisRampUpdates : defaults.hysteresisRampUpdates, RAMP_UPDATES_ENDLESS),
         // Infinity (or anything not a number) switches the rule off; the kernel reads a negative value as "off".
         irradianceChangeThreshold: settings.irradianceChangeThreshold >= 0 && Number.isFinite(settings.irradianceChangeThreshold) ? settings.irradianceChangeThreshold : CHANGE_RULE_OFF,
         maxBrightnessChange: clamp(settings.maxBrightnessChange, 0, Number.MAX_VALUE, defaults.maxBrightnessChange),

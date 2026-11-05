@@ -20,8 +20,9 @@
  * built; nothing assumes a subgroup size.
  *
  * Hysteresis knows the time between a probe's updates (T1.12): each probe
- * keeps how many updates it remembers (n) and when it was last updated (t)
- * in the history buffer, which only this kernel reads and writes.
+ * keeps how many updates it remembers (n), when it was last updated (t) and
+ * how many blended updates it has had (k, for the warm-up ramp) in the
+ * history buffer, which only this kernel reads and writes.
  *
  * Bindings (group 1; no platform module): uniforms, the update list, the ray
  * buffer, the scratch buffer, the census buffer and the probe history (5
@@ -30,7 +31,7 @@
  */
 
 import { CENSUS_RAYS_TRACED, type ScratchLayout } from '../layout.ts';
-import { FIXED_RAYS } from '../settings.ts';
+import { CLOCK_WRAP_SECONDS, FIXED_RAYS } from '../settings.ts';
 
 /**
  * Bits of a reduction key that hold the fixed ray's index (the rest is the
@@ -120,6 +121,8 @@ const DDGI_BACK_FACE_DISTANCE_SHARE: f32 = 0.2;
 // When the probe's mean irradiance changed by more than the change threshold,
 // its hysteresis is multiplied by this, so a light switch shows up quickly.
 const DDGI_BIG_CHANGE_HYSTERESIS_SCALE: f32 = 0.75;
+// The technique's clock wraps to 0 every this many seconds (CLOCK_WRAP_SECONDS in settings.ts).
+const DDGI_CLOCK_WRAP_SECONDS: f32 = ${CLOCK_WRAP_SECONDS}.0;
 
 // Phase B rules (Majercik et al. 2021, section 5).
 // More than this share of fixed rays hitting back faces means the probe is inside something.
@@ -403,8 +406,10 @@ fn ddgiRampCap(updates: u32) -> f32 {
 fn ddgiHysteresisStep(history: DdgiProbeHistory, state: u32) -> DdgiHysteresisStep {
     let firstUpdate = state == DDGI_STATE_NOT_UPDATED_YET;
     let updates = select(history.updates, 0u, firstUpdate);
-    // max(0): a clock that went back (a new prepare) never makes n grow.
-    let elapsedSeconds = max(0.0, ddgi.clockSeconds - history.lastUpdateSeconds);
+    // The clock wraps (CLOCK_WRAP_SECONDS): a negative difference means it
+    // wrapped since this probe's last update, so add the period back.
+    let sinceLastUpdate = ddgi.clockSeconds - history.lastUpdateSeconds;
+    let elapsedSeconds = select(sinceLastUpdate, sinceLastUpdate + DDGI_CLOCK_WRAP_SECONDS, sinceLastUpdate < 0.0);
     let faded = select(history.samples * exp(-elapsedSeconds * ddgi.inverseMemorySeconds), 0.0, firstUpdate);
     let remembered = min(faded, ddgiRampCap(updates));
     let adaptive = remembered / (remembered + 1.0);

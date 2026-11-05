@@ -21,6 +21,21 @@ Rules:
 
 ---
 
+## 2026-11-06 · T1.12 phase 2a review fixes · implementer (opus)
+Did (uncommitted, on top of 76ca4c9), from the Opus review of 14c2ed2 and 58b6dcc:
+- **The clock wraps every 4096 s** (`CLOCK_WRAP_SECONDS`, settings.ts). The design doc's "millisecond precision for days" was wrong: an f32 `t` steps 0.49 ms below 2^12 s, 7.8 ms after a day and 62.5 ms after a week. The technique keeps its clock modulo 4096 s; `ddgi/blend` adds the period back when `T − t` is negative (that replaces the `max(0, …)` guard; a new `prepare` makes a fresh buffer anyway). It would misread only a probe left unblended for more than 68 min while active; active probes are blended every sweep, and off probes restart from state 3. Design doc "The clock" corrected.
+- A NaN or negative `hysteresisRampUpdates` now falls back to the default (16), like every other setting; Infinity is still an endless ramp. Test updated.
+- Comments: `hysteresis-modes.ts` (the default rule is `tau:5/200/8/16`; `tau:5/200/8/endless` names the endless ramp) and the `blend.ts` header (n, t and k).
+Verified: lint, typecheck, DDGI unit tests 43. GPU: `test:gpu --filter ddgi-` passes on the RTX 3060 with unchanged numbers (furnace −0.15%, leak 0.83%, test view +5.63%), so the kernel compiles and behaves; no run reaches the wrap. Not run on the Intel this time.
+Not verified: a run past 4096 s of clock (the wrap path itself only by reading it).
+Next (other lanes; I didn't edit them):
+- **Calibration runs with `deltaTime` 0** after the warm-up (the viewer, and `packages/ddgi-three/src/volume-start.ts:152`), so the clock stays frozen and probes keep counting up with no fade. My estimate:
+  - Cornell: no effect, since it reaches n_max at 60 Hz anyway.
+  - Sponza on the RTX: about 410 calibration frames at 291 probes is about 6 more updates each, so n goes from 2 to about 8 (h 0.89 instead of its 60 Hz steady 0.80). Once the clock runs, n fades back to about 4 within 4–5 updates (about 5 s at 60 Hz).
+  - Upper bound: a 1,000-frame calibration with 1,024-probe burst batches would leave n near 50 (h 0.98) and take about 12 updates (13 s) to return.
+  - So for a few seconds after loading, Sponza is a little quieter and up to 2× slower to follow a change. Nothing changes behind the loading screen, so I'd leave it. Passing the real elapsed time during calibration would remove it.
+  - The real risk is a host that passes `deltaTime` 0 (or a constant tiny value) at runtime: the clock never moves, every probe climbs to n_max, and Sponza is back to minutes. Worth a check that ddgi-three's render-time update passes measured time.
+
 ## 2026-11-06 · T1.14: a GPU-bound cost page, the cost numbers, and the Opus review fixes · implementer (opus)
 Did (uncommitted):
 - **Cost page** (`three-composite-sponza`, `three-composite-shared/composite-check.ts`, `run.ts`). The lead's runs left the GPU about 20% busy. The cause was CPU, at 130–280 ms to record each frame:

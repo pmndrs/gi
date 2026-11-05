@@ -53,6 +53,7 @@ import {
     AUTO_VIEW_BIAS_SHARE,
     blendSettings,
     clockStep,
+    CLOCK_WRAP_SECONDS,
     distanceClamp,
     effectiveMaxRayDistance,
     effectiveRaysPerProbe,
@@ -239,8 +240,10 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
     private probesUpdated = 0;
     /**
      * The technique's own clock in seconds: the sum of every frame's
-     * `deltaTime` since `prepare` (each at most MAX_CLOCK_STEP_SECONDS).
-     * Adaptive hysteresis measures the time between a probe's updates on it.
+     * `deltaTime` since `prepare` (each at most MAX_CLOCK_STEP_SECONDS),
+     * wrapped to 0 every CLOCK_WRAP_SECONDS so the kernel's f32 times stay
+     * precise. Adaptive hysteresis measures the time between a probe's
+     * updates on it.
      */
     private clockSeconds = 0;
     /** Recent `deltaTime`s above 0, for the sweep counter. */
@@ -467,7 +470,7 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         this.collectCensus(resources);
 
         // Time passes whether or not this frame updates any probe.
-        this.clockSeconds += clockStep(frame.deltaTime);
+        this.clockSeconds = (this.clockSeconds + clockStep(frame.deltaTime)) % CLOCK_WRAP_SECONDS;
         const count = resources.cursor.next(Math.min(frame.units, resources.maxProbesPerFrame), resources.list);
         this.probesUpdated = count;
         if (frame.deltaTime > 0 && Number.isFinite(frame.deltaTime)) {

@@ -6,7 +6,8 @@
  *   tau:5        adaptive hysteresis with a 5 s memory time (hysteresisMemorySeconds)
  *   tau:5/200    the same with n_max = 200 (hysteresisMaxSamples)
  *   tau:5/200/1  ... and the ramp a = 1 (hysteresisUpdatesPerSample; 1 is a plain mean)
- *   tau:5/200/8/16  ... for a probe's first 16 updates only (hysteresisRampUpdates; default endless)
+ *   tau:5/200/8/16  ... for a probe's first 16 updates (hysteresisRampUpdates; the default rule is tau:5/200/8/16)
+ *   tau:5/200/8/endless  ... the ramp for every update until the count reaches n_max
  *   default      the technique's defaults
  *
  * Not a page itself (no index.html).
@@ -44,8 +45,9 @@ export function parseHysteresisMode(text: string): HysteresisMode {
         return { name, settings: { ...DEFAULTS, adaptiveHysteresis: false, hysteresis } };
     }
     if (kind === 'tau') {
-        const [seconds, maxSamples, updatesPerSample, rampUpdates] = (value ?? '').split('/').map(Number);
-        if (!(seconds > 0)) throw new Error(`bad hysteresis mode '${name}': tau:<seconds>[/<n_max>[/<a>[/<K>]]]`);
+        // 'endless' names an endless ramp (Number('endless') would be NaN, which means the default).
+        const [seconds, maxSamples, updatesPerSample, rampUpdates] = (value ?? '').split('/').map((part) => (part === 'endless' ? Infinity : Number(part)));
+        if (!(seconds > 0)) throw new Error(`bad hysteresis mode '${name}': tau:<seconds>[/<n_max>[/<a>[/<K or endless>]]]`);
         return {
             name,
             settings: {
@@ -58,7 +60,7 @@ export function parseHysteresisMode(text: string): HysteresisMode {
             },
         };
     }
-    throw new Error(`bad hysteresis mode '${name}': use fixed:<h>, tau:<seconds>[/<n_max>[/<a>[/<K>]]] or default`);
+    throw new Error(`bad hysteresis mode '${name}': use fixed:<h>, tau:<seconds>[/<n_max>[/<a>[/<K or endless>]]] or default`);
 }
 
 export function parseHysteresisModes(value: unknown, fallback: readonly string[]): HysteresisMode[] {
