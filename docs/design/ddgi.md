@@ -133,6 +133,39 @@ Scratch buffer: `maxProbesPerFrame × (36 × 8 + 196 × 4 + 8)` bytes, about 1 M
 
 One uniform buffer holds the volume (origin, spacing, counts), the frame rotation, the settings and the update-list length.
 
+## Budget v2: work first, milliseconds as a ceiling (proposed after the T1.9 quiet window; waiting on Dennis)
+
+**Why change it.** A GPU-millisecond budget plus GPU power management is a positive feedback loop: less work lets the GPU idle, its clocks drop, the same work takes longer, so the controller cuts work again. On a quiet laptop at 60 Hz the RTX sat in its low-power state and 2 ms bought 2–3 Sponza probes a frame (a sweep every 162 s). The budget exists to protect frame time, and a GPU that is idling has time to spare. RTXGI itself uses fixed work per frame.
+
+**1. The primary control is work: probes per frame (`units`).**
+- The platform hands a technique a fixed number of units each frame. It doesn't steer on GPU milliseconds while the frame rate is fine.
+- A host may set `budget.units` itself, which stays a hard cap.
+
+**2. Picking the number: a one-off calibration at load, with the clocks up.**
+- During the warm-up (already large batches, back to back, so the GPU runs at full clocks), the platform fits cost = fixed + per-probe × probes from the warm-up passes.
+- `units = floor((budget.gpuMs − fixed) / perProbe)` at those clocks, clamped between the floor (point 3) and `maxProbesPerFrame`.
+- Re-calibrated after a geometry change (SceneChanges), a new `prepare`, a change of `gpuMs`, or on request. Never from frames run at light load.
+- **Per tier:** the host's `gpuMs` (default 2 ms) gives the number on each device. The Intel UHD lands near 140 probes on Cornell and 16 on Sponza (T1.9a). A host that wants a fixed number per scene sets `units` and skips the calibration.
+
+**3. A floor bounds convergence on every machine.**
+- DDGI never updates fewer than `minProbesPerFrame` probes. Default "auto": enough probes for a full sweep within 4 s at the frame rate the host runs (Sponza 81 at 60 Hz, Cornell 8).
+- The floor wins over the millisecond ceiling, so a weak device runs slower, never frozen. A host can lower it explicitly.
+
+**4. When the GPU really is saturated: the frame rate tells us, not GPU milliseconds.**
+- The platform watches `FrameInput.deltaTime`, which the contract already has. Only when the frame is missing its target (median frame time above the host's target interval by more than 10% over about 1 s) **and** DDGI's measured time exceeds the budget does it step `units` down (×0.8 per second), never below the floor.
+- When frames are on time, it recovers toward the calibrated number (×1.1 per second).
+- *Why this avoids the loop:* when frames are on time the GPU isn't the bottleneck, so a slow-looking DDGI pass is low clocks, not a real cost. When frames are late, the GPU is busy and its clocks are high, so the measured milliseconds mean what they say.
+- The host's target interval comes from the observed frame rate (vsync) or from an explicit `budget.targetFps`. That would be a new optional host field.
+
+**5. What gets reported.** Update GPU ms is reported as now, with the clock note. The probes per frame, the sweep time, and whether the saturation step-down is active are reported too.
+
+**Defined measurements (replacing "the budget holds", DECISIONS):**
+- The update's cost is the calibrated batch's GPU time measured with the clocks up (back to back): it must be ≤ `gpuMs` (+10%).
+- A full sweep takes ≤ 4 s at the floor on every device. On a GPU-bound frame, the whole frame with GI on against off adds ≤ 3 ms p50 (SPEC), measured GPU-bound (uncapped, back to back). That's when the milliseconds cost frame time. 60 Hz light-load numbers are information only.
+- It must behave at 30, 60 and 120 Hz on the RTX and the Intel: a stable number of units, the floor respected, and a saturation step-down that recovers.
+
+**To re-measure in T1.9 under this meaning:** the budget set (units per scene and the sweep time, RTX and Intel, 30 / 60 / 120 Hz); the whole frame GI on against off, GPU-bound, at 720p and 1440p on Cornell, two-room and Sponza; DDGI's update cost at the calibrated batch, back to back. GI sampling (0.923 ms) and startup are unaffected.
+
 ## Which probes update (the budget)
 
 - **Unit = one probe update.** `TechniqueFrame.units` comes from the platform, which turns the host's `gpuMs` into units with a cost model of a fixed part plus a per-probe part (`costModel()`, since T1.9a; DECISIONS 2026-11-05). It's fitted from medians of the measured `ddgi/trace` + `ddgi/blend` + `ddgi/write` GPU time against the probes the technique actually updated, so small, latency-bound batches don't shrink the next batch in a spiral. `FrameBudget.units` stays a hard cap. Without timings, `FrameBudget.units`, default 512 on Tier A.

@@ -4,7 +4,7 @@ Settled choices, newest first. Each entry is short: the decision, why, and what 
 
 ## 2026-11-05
 
-- **Proposed, waiting on Dennis: the budget gets a floor, and costs are judged where the clocks are up** (M1 lead, after the T1.9 quiet window).
+- **Proposed, waiting on Dennis: budget v2. Work (probes per frame) is the primary control, calibrated once at load with the clocks up; milliseconds become a ceiling used only when the frame rate drops; a floor bounds the sweep time** (M1 lead, after the T1.9 quiet window). The full proposal, with how a host picks the number per tier, what happens when the GPU is saturated, the redefined measurements and what T1.9 re-measures, is in `docs/design/ddgi.md`, "Budget v2". It supersedes the T1.9a entry "The millisecond budget uses a fixed + per-probe cost model" and the "budget holds" definition if accepted. The earlier, smaller version of this proposal follows:
   - *The problem:* a GPU-millisecond budget can't tell "this work is expensive" from "the GPU is in its low-power state". On a quiet machine at 60 Hz the RTX sits in P8, so 2 ms bought 2–3 Sponza probes a frame (a full sweep every 162 s) against 30–43 when other apps kept the clocks up.
   - *But the budget's purpose is to protect the frame time.* A GPU idling in P8 has room to spare, so spending more of it there costs the frame nothing.
   - **Proposal 1, a floor:** DDGI never updates fewer than `minProbesPerFrame` probes, default "auto" = enough for a full sweep within a set time (e.g. 4 s at 60 Hz, which is 81 probes on Sponza and 8 on Cornell), whatever the ms budget says. The ms budget can raise the batch above the floor; `budget.units` stays a hard cap above everything. This bounds convergence time on every machine.
