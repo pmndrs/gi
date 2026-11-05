@@ -89,7 +89,7 @@ await runGpuTest(
                 await new Promise((resolve) => setTimeout(resolve, 0));
             }
             const budgeted = await timeFrames(device, scene.platform, budget, MEASURED_FRAMES, probesUpdated);
-            const budgetCheck = { gpuMs: BUDGET_MS, medianProbesUpdated: budgeted.medianUpdated, medianDdgiMs: budgeted.totalMs, msPerUnit: scene.platform.msPerUnit(scene.ddgi) };
+            const budgetCheck = { gpuMs: BUDGET_MS, medianProbesUpdated: budgeted.medianUpdated, medianDdgiMs: budgeted.totalMs, costModel: scene.platform.costModel(scene.ddgi) };
             log(`${sceneId}, budget ${BUDGET_MS} ms: ${budgeted.medianUpdated} probes per frame, DDGI ${budgeted.totalMs.toFixed(3)} ms`);
 
             // With gpuTiming on, the census runs: the per-state counters are there.

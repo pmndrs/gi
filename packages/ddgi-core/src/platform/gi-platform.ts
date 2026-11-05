@@ -58,44 +58,149 @@ import { PlatformRayQueries } from './trace/ray-queries.ts';
 export const DEFAULT_UNITS_PER_FRAME = 512;
 
 /**
- * Each new measurement of a technique's cost per unit moves its estimate this
- * share of the way, so one slow or fast frame doesn't swing the budget.
+ * A technique's GPU cost for a frame of `units` work units, as the budget
+ * sees it: `fixedMs + msPerUnit × units`.
+ *
+ * Why a fixed part (T1.9a): a small batch doesn't fill the GPU, so its time
+ * is mostly the latency of the slowest workgroup, not the sum of the work.
+ * DDGI on Sponza (RTX 3060) costs about the same 1.6 ms for 32 probes as for
+ * 128, then about 6 µs per probe more. A cost proportional to the units reads
+ * small batches as expensive per unit and hands out too few, and after a
+ * warm-up of big batches it hands out far too many.
  */
-export const MS_PER_UNIT_SMOOTHING = 0.1;
+export interface UnitCostModel {
+    readonly fixedMs: number;
+    readonly msPerUnit: number;
+}
+
+/**
+ * The fixed part is the median over this many recent timed frames (half a
+ * second at 60 Hz), so up to 15 slow frames in 31 change nothing.
+ *
+ * Why a median (T1.9a): GPU timestamps time the GPU's wall clock, so another
+ * program's GPU work that the driver slices into ours lands inside our
+ * passes. On this laptop that added about 2.5 ms (RTX 3060) or 1.3 ms (Intel
+ * UHD) to the trace pass every 50 ms, a third of the frames at 60 Hz, and
+ * smaller overlaps to many more. A running mean held the *mean* at the
+ * budget, so the typical frame ran well under it; on Sponza it shrank the
+ * batch to 14 probes. A low quantile instead of the median overspent the
+ * budget by 5-30% (measured), and 15 frames were too few to ride out bursts
+ * of outside work.
+ */
+export const RECENT_FRAMES = 31;
+
+/**
+ * When the budget is in milliseconds two frames running, a technique's units
+ * shrink by at most this share per frame. A burst of outside GPU work can
+ * still push the measured median over the budget for a few frames; without
+ * the limit the batch then fell to 1 probe (Sponza, Bistro), which makes the
+ * time no shorter (most of it is fixed) but stops GI from converging.
+ */
+export const MAX_UNITS_DROP_PER_FRAME = 0.5;
+
+/** Each batch-size bucket keeps this many of its latest frames; the slope is fitted through their medians. */
+const BUCKET_FRAMES = 9;
+
+/**
+ * The fitted cost per unit stays at least this share of the lowest average
+ * cost per unit measured (the biggest batches'). A nearly flat fit (all
+ * latency, no throughput) would make every small timing error a huge jump in
+ * units.
+ */
+const MIN_SLOPE_SHARE = 0.25;
+
+/**
+ * Batch sizes must span at least this factor before a slope is fitted. Nearby
+ * sizes (a budget's batch wandering by a few units) give a slope that is all
+ * noise.
+ */
+const MIN_FIT_SPAN = 4;
 
 /** Frames of handed-out units remembered while their timings are on the way (they arrive a few frames late). */
 const REMEMBERED_FRAMES = 32;
 
 /**
  * Units each technique may spend this frame, in encode order (FrameBudget):
- * - with `gpuMs` and a cost per unit for every technique, the time is shared
- *   evenly between the techniques and each share divided by that technique's
- *   cost (docs/api/platform.md, gap 6: a real policy waits for a second
- *   technique), capped by `units` when that is set too;
+ * - with `gpuMs` and a cost model for every technique, the time is shared
+ *   evenly between the techniques (docs/api/platform.md, gap 6: a real policy
+ *   waits for a second technique), and each share buys the units its model
+ *   says fit: `(share − fixedMs) / msPerUnit`, at least 1 while the share is
+ *   above 0 (a share below the fixed cost can't be met by any batch; one unit
+ *   keeps the technique working and measured, instead of stopping it for
+ *   good). Capped by `units` when that is set too;
  * - otherwise `units`, or {@link DEFAULT_UNITS_PER_FRAME}.
  */
-export function unitsForFrame(budget: FrameBudget, msPerUnit: readonly (number | undefined)[]): number[] {
+export function unitsForFrame(budget: FrameBudget, costs: readonly (UnitCostModel | undefined)[]): number[] {
     const fallback = budget.units ?? DEFAULT_UNITS_PER_FRAME;
     const gpuMs = budget.gpuMs;
-    const costsKnown = msPerUnit.every((cost) => cost !== undefined && cost > 0 && Number.isFinite(cost));
-    if (gpuMs === undefined || !(gpuMs >= 0) || !costsKnown) return msPerUnit.map(() => fallback);
-    const share = gpuMs / Math.max(1, msPerUnit.length);
-    return msPerUnit.map((cost) => {
-        const units = Math.floor(share / (cost as number));
+    const costsKnown = costs.every(
+        (cost) => cost !== undefined && cost.msPerUnit > 0 && Number.isFinite(cost.msPerUnit) && cost.fixedMs >= 0 && Number.isFinite(cost.fixedMs),
+    );
+    if (gpuMs === undefined || !(gpuMs >= 0) || !costsKnown) return costs.map(() => fallback);
+    const share = gpuMs / Math.max(1, costs.length);
+    return costs.map((cost) => {
+        const model = cost as UnitCostModel;
+        const units = share > 0 ? Math.max(1, Math.floor((share - model.fixedMs) / model.msPerUnit)) : 0;
         return budget.units === undefined ? units : Math.min(units, budget.units);
     });
 }
 
 /**
- * Measures each technique's GPU cost per unit from the platform's timer: the
- * passes named `<technique id>/...` in a frame, divided by the units the
- * technique used that frame (what its `encode` returned, or all it was
- * handed), smoothed over frames. Reset when the work changes shape: on
- * `prepare`, when a technique is added or removed, and on `resetHistory`.
+ * This frame's units for one technique after the drop limit
+ * ({@link MAX_UNITS_DROP_PER_FRAME}): at least that share of the previous
+ * frame's, when the previous frame was budgeted in milliseconds too
+ * (`previous` defined). A zero hand-out (a zero budget) stays zero.
+ */
+export function limitUnitsDrop(units: number, previous: number | undefined): number {
+    if (previous === undefined || units === 0) return units;
+    return Math.max(units, Math.floor(previous * MAX_UNITS_DROP_PER_FRAME));
+}
+
+/** One timed frame: the units a technique used and the GPU ms its passes took. */
+interface CostSample {
+    readonly units: number;
+    readonly ms: number;
+}
+
+interface TechniqueCost {
+    /** The latest {@link RECENT_FRAMES} frames, oldest first. */
+    readonly recent: CostSample[];
+    /** The latest frames per batch size (bucket = floor(log2(units))): the spread the slope is fitted from. */
+    readonly buckets: Map<number, CostSample[]>;
+}
+
+/**
+ * Measures each technique's GPU cost from the platform's timer, as a
+ * {@link UnitCostModel}: the passes named `<technique id>/...` in a frame
+ * against the units the technique used that frame (what its `encode`
+ * returned, or all it was handed).
+ *
+ * - **The slope** (cost per unit) is a least-squares line through the
+ *   medians of each batch size's latest frames (sizes grouped by powers of
+ *   two). The warm-up's big batches and the budget's small ones give it
+ *   spread. It is kept at or above {@link MIN_SLOPE_SHARE} of the cheapest
+ *   average cost per unit measured, and at or below the recent frames'
+ *   average, so the fixed part is never negative.
+ * - **The fixed part** is the median, over the latest {@link RECENT_FRAMES}
+ *   frames, of each frame's ms minus slope × its units, at least 0. A median,
+ *   so frames slowed by other programs' GPU work count little (see
+ *   {@link RECENT_FRAMES}); and per frame, so a batch that changes from frame
+ *   to frame doesn't blur it.
+ * - Without spread (one batch size so far) there is no slope, and the model
+ *   is proportional: the median of the recent frames' ms per unit, no fixed
+ *   part, as before T1.9a.
+ *
+ * With this model the budget converges on the batch whose measured time is
+ * the budget, by steps along the fitted slope. A proportional model has the
+ * same end point in theory, but crawls there when most of the time is fixed,
+ * and its running mean followed the outside spikes.
+ *
+ * Reset when the work changes shape: on `prepare`, when a technique is added
+ * or removed, and on `resetHistory`.
  */
 export class UnitCostMeter {
     private readonly handedOut = new Map<number, Map<string, number>>();
-    private readonly estimates = new Map<string, number>();
+    private readonly costs = new Map<string, TechniqueCost>();
 
     /** Records the units a technique used in a frame. */
     handOut(frame: number, techniqueId: string, units: number): void {
@@ -117,22 +222,81 @@ export class UnitCostMeter {
             const prefix = `${techniqueId}/`;
             const timed = passes.filter((pass) => pass.name.startsWith(prefix) && pass.gpuMs >= 0);
             if (timed.length === 0) continue;
-            const msPerUnit = timed.reduce((sum, pass) => sum + pass.gpuMs, 0) / units;
-            const previous = this.estimates.get(techniqueId);
-            this.estimates.set(techniqueId, previous === undefined ? msPerUnit : previous + (msPerUnit - previous) * MS_PER_UNIT_SMOOTHING);
+            const ms = timed.reduce((sum, pass) => sum + pass.gpuMs, 0);
+            this.add(techniqueId, { units, ms });
         }
         this.handedOut.delete(frame);
     }
 
-    /** The smoothed estimate, or undefined before the first timed frame. */
-    msPerUnit(techniqueId: string): number | undefined {
-        return this.estimates.get(techniqueId);
+    /** The technique's cost model, or undefined before its first timed frame. */
+    model(techniqueId: string): UnitCostModel | undefined {
+        const cost = this.costs.get(techniqueId);
+        if (!cost) return undefined;
+        const points = [...cost.buckets.values()].map((samples) => ({
+            units: median(samples.map((sample) => sample.units)),
+            ms: median(samples.map((sample) => sample.ms)),
+        }));
+        const fitted = fittedSlope(points);
+        const recentAverage = median(cost.recent.map((sample) => sample.ms / sample.units));
+        if (fitted === undefined) return { fixedMs: 0, msPerUnit: recentAverage };
+        const cheapest = Math.min(...points.map((point) => point.ms / point.units));
+        // At most the recent average: where big batches cost more per unit than small ones
+        // (the Intel UHD after a warm-up of 1,728-probe batches), a steeper line would need
+        // a negative fixed part, and clamping that to 0 made the model overestimate the
+        // batch in use by 40% and hold the budget at 1.4 ms (T1.9a).
+        const slope = Math.min(recentAverage, Math.max(MIN_SLOPE_SHARE * cheapest, fitted));
+        const fixedMs = median(cost.recent.map((sample) => sample.ms - slope * sample.units));
+        return { fixedMs: Math.max(0, fixedMs), msPerUnit: slope };
     }
 
     reset(): void {
         this.handedOut.clear();
-        this.estimates.clear();
+        this.costs.clear();
     }
+
+    private add(techniqueId: string, sample: CostSample): void {
+        let cost = this.costs.get(techniqueId);
+        if (!cost) {
+            cost = { recent: [], buckets: new Map() };
+            this.costs.set(techniqueId, cost);
+        }
+        pushLimited(cost.recent, sample, RECENT_FRAMES);
+        const bucket = Math.floor(Math.log2(sample.units));
+        let samples = cost.buckets.get(bucket);
+        if (!samples) {
+            samples = [];
+            cost.buckets.set(bucket, samples);
+        }
+        pushLimited(samples, sample, BUCKET_FRAMES);
+    }
+}
+
+function pushLimited<T>(list: T[], item: T, limit: number): void {
+    list.push(item);
+    if (list.length > limit) list.shift();
+}
+
+function median(values: readonly number[]): number {
+    const sorted = [...values].sort((a, b) => a - b);
+    const middle = Math.floor(sorted.length / 2);
+    return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+}
+
+/** Least-squares slope of ms against units through the points; undefined without enough spread in units. */
+function fittedSlope(points: readonly CostSample[]): number | undefined {
+    if (points.length < 2) return undefined;
+    const smallest = Math.min(...points.map((point) => point.units));
+    const largest = Math.max(...points.map((point) => point.units));
+    if (largest < MIN_FIT_SPAN * smallest) return undefined;
+    const meanUnits = points.reduce((sum, point) => sum + point.units, 0) / points.length;
+    const meanMs = points.reduce((sum, point) => sum + point.ms, 0) / points.length;
+    let covariance = 0;
+    let variance = 0;
+    for (const point of points) {
+        covariance += (point.units - meanUnits) * (point.ms - meanMs);
+        variance += (point.units - meanUnits) ** 2;
+    }
+    return variance > 0 ? covariance / variance : undefined;
 }
 
 /** No scene changes: the screen stage runs after `encode`, which already reported them. */
@@ -170,8 +334,10 @@ export class GIPlatformImpl implements GIPlatform {
     /** Set after `encode` resolved timestamps, so the next `encode` starts their readback (the host has submitted by then). */
     private timerAwaitingReadback = false;
     private latestPasses: PassTiming[] = [];
-    /** Each technique's measured GPU cost per unit, for turning `budget.gpuMs` into units. */
+    /** Each technique's measured GPU cost (fixed + per unit), for turning `budget.gpuMs` into units. */
     private readonly unitCosts = new UnitCostMeter();
+    /** Units handed out last frame, for techniques whose last frame had a millisecond budget (the drop limit). */
+    private readonly lastMsBudgetUnits = new Map<GITechnique, number>();
     private readonly warnedMessages = new Set<string>();
     /** The `uncapturederror` listener, kept so `dispose` can remove it. */
     private readonly onUncapturedError: (event: Event) => void;
@@ -230,6 +396,7 @@ export class GIPlatformImpl implements GIPlatform {
     addTechnique<T extends GITechnique>(technique: T): T {
         this.checkUsable();
         this.unitCosts.reset();
+        this.lastMsBudgetUnits.clear();
         if (this.find(technique)) throw new Error(`@pmndrs/ddgi: technique '${technique.id}' is already attached`);
         for (const kind of technique.requirements.queries) {
             if (!this.queries.has(kind)) throw new Error(`@pmndrs/ddgi: technique '${technique.id}' needs the '${kind}' query backend, which this platform doesn't have`);
@@ -245,6 +412,7 @@ export class GIPlatformImpl implements GIPlatform {
     /** Detaches and disposes the technique (a technique is attached to one platform for its whole life). */
     removeTechnique(technique: GITechnique): void {
         this.unitCosts.reset();
+        this.lastMsBudgetUnits.clear();
         const entry = this.find(technique);
         if (!entry) return;
         if (this.attached.some((other) => other.fallback === technique)) {
@@ -280,11 +448,19 @@ export class GIPlatformImpl implements GIPlatform {
     async prepare(): Promise<void> {
         // New resources and kernels: old costs per unit no longer apply.
         this.unitCosts.reset();
+        this.lastMsBudgetUnits.clear();
         this.checkUsable();
         checkComputeLimits(this.device.limits);
-        await this.rays.prepare(this.kernels);
-        await this.shade.prepare();
-        for (const technique of this.encodeOrder()) await technique.prepare();
+        // The platform's kernels and the techniques' compile side by side: every module's
+        // code exists from construction, so nothing here waits on another's prepare. One
+        // after the other, a cold start spent about 2.5 s compiling on the RTX 3060
+        // (the tracer's kernels, then the sky projection's 0.7 s, then DDGI's trace
+        // kernel's 1.1 s; T1.9a). Techniques still prepare in encode order among themselves.
+        const platformReady = Promise.all([this.rays.prepare(this.kernels), this.shade.prepare()]);
+        const techniquesReady = (async () => {
+            for (const technique of this.encodeOrder()) await technique.prepare();
+        })();
+        await Promise.all([platformReady, techniquesReady]);
         this.checkUsable();
         this.prepared = true;
     }
@@ -312,7 +488,16 @@ export class GIPlatformImpl implements GIPlatform {
 
         if (!frame.budget.paused) {
             const techniques = this.encodeOrder();
-            const units = unitsForFrame(frame.budget, techniques.map((technique) => this.msPerUnit(technique)));
+            const units = unitsForFrame(frame.budget, techniques.map((technique) => this.costModel(technique)));
+            const msBudget = frame.budget.gpuMs !== undefined;
+            techniques.forEach((technique, index) => {
+                if (!msBudget) {
+                    this.lastMsBudgetUnits.delete(technique);
+                    return;
+                }
+                units[index] = limitUnitsDrop(units[index], this.lastMsBudgetUnits.get(technique));
+                this.lastMsBudgetUnits.set(technique, units[index]);
+            });
             techniques.forEach((technique, index) => {
                 const techniqueFrame: TechniqueFrame = {
                     frame: this.frame,
@@ -378,6 +563,7 @@ export class GIPlatformImpl implements GIPlatform {
 
     resetHistory(): void {
         this.unitCosts.reset();
+        this.lastMsBudgetUnits.clear();
         for (const { technique } of this.attached) technique.resetHistory();
     }
 
@@ -440,9 +626,10 @@ export class GIPlatformImpl implements GIPlatform {
         };
     }
 
-    /** A technique's own estimate if it has one, otherwise the platform's measurement. */
-    msPerUnit(technique: GITechnique): number | undefined {
-        return technique.msPerUnit ?? this.unitCosts.msPerUnit(technique.id);
+    /** A technique's own estimate (cost per unit, no fixed part) if it has one, otherwise the platform's measurement. */
+    costModel(technique: GITechnique): UnitCostModel | undefined {
+        if (technique.msPerUnit !== undefined) return { fixedMs: 0, msPerUnit: technique.msPerUnit };
+        return this.unitCosts.model(technique.id);
     }
 
     private collectPasses(timer: GpuTimer): void {

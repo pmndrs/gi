@@ -1,0 +1,150 @@
+/// <reference types="node" />
+/**
+ * Turns test-runner `--json` files from the `ddgi-batch-cost` page into rows
+ * for `bench/results/timing.csv` (columns as in bench/results/README.md).
+ *
+ *   node tools/gpu/pages/ddgi-batch-cost/to-csv.ts <runner.json> [more.json ...] [--append] [--commit <hash>] [--browser <text>] [--clock-file <file>] [--set <n>]
+ *
+ * Several files of the same GPU are repeated runs: `run1/`, `run2/`, ... plus
+ * `median/` rows. Metric names start with `batch_cost/`:
+ *
+ * - `batch_cost/batch<n>/...`: fixed batches of n probes, each frame waited
+ *   for (the GPU kept busy): median GPU ms of `ddgi/trace`, `ddgi/blend`,
+ *   `ddgi/write`, `ddgi/census`, their update sum, its p95, and µs per probe;
+ * - `batch_cost/fit_all/...` and `batch_cost/fit_upto512/...`: the update
+ *   fitted as fixed ms + µs per probe, over all batches or those up to 512;
+ * - `batch_cost/budget<ms>ms/...`: frames at `budget.gpuMs` and 60 Hz
+ *   (median, p05, p95, mean update ms; share of frames within ±10%; probes
+ *   per frame);
+ * - `batch_cost/startup/...`: milliseconds to each start-up stage, and the
+ *   slowest pipeline compiles;
+ * - `batch_cost/breakdown/batch<n>/<variant>_ms`: `ddgi/trace` with parts of
+ *   its shading taken out (main.ts, TRACE_VARIANTS).
+ *
+ * The browser column comes from the page (user agent plus client hints);
+ * `--browser` overrides it (runs from before the page reported the full
+ * version read "156.0.0.0").
+ * `--set <n>` adds a `note/set,<n>` row (scene `all`) when a measurement was
+ * repeated as a new `bench-lock run` set (bench/results/README.md).
+ * `--clock-file` (or DDGI_CLOCK_FILE, which `bench-lock run` sets) adds
+ * `note/sm_clock_mhz` and friends to the NVIDIA rows. Without --append the
+ * rows are printed.
+ */
+
+import { existsSync } from 'node:fs';
+import { appendFile, readFile, writeFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
+import { parseArgs } from 'node:util';
+import type { RunSummary } from '../../contract.ts';
+import { clockNoteRowsFromOption, isNvidiaDeviceName } from '../../clock-note.ts';
+import { gitCommit } from '../../measured-commit.ts';
+import { browserFromUserAgent, deviceNameFromAdapter, formatValue, repeatedRunRows, type MetricRow } from '../trace-bench/csv-rows.ts';
+
+const CSV_HEADER = 'date,commit,device,browser,scene,metric,value';
+const DEFAULT_CSV = resolve(import.meta.dirname, '..', '..', '..', '..', 'bench', 'results', 'timing.csv');
+const PREFIX = 'batch_cost';
+
+/** What the page reports per scene (main.ts); every section is optional. */
+interface SceneResult {
+    probes: number;
+    startup?: Record<string, number>;
+    budget?: Record<string, number | string>;
+    curve?: { sizes: Record<string, Record<string, number>> } & Record<string, unknown>;
+    breakdown?: Record<string, Record<string, number>>;
+}
+
+interface PageData {
+    userAgent?: string;
+    /** From the client hints; the user agent freezes it at 156.0.0.0. */
+    browserVersion?: string | null;
+    scenes: Record<string, SceneResult>;
+}
+
+/** Numeric fields only (traces and labels are for reading the JSON, not for the CSV). */
+function numericRows(scene: string, prefix: string, record: Record<string, unknown>): MetricRow[] {
+    return Object.entries(record).flatMap(([name, value]) => (typeof value === 'number' && Number.isFinite(value) ? [{ scene, metric: `${prefix}/${name}`, value }] : []));
+}
+
+export function batchCostRows(data: PageData): MetricRow[] {
+    const rows: MetricRow[] = [];
+    for (const [scene, result] of Object.entries(data.scenes)) {
+        rows.push({ scene, metric: `${PREFIX}/probes_in_volume`, value: result.probes });
+        if (result.startup) {
+            // Pipeline labels carry the page's platform label ("batch cost <scene> ddgi/trace"); keep the kernel's own name.
+            const startup = Object.fromEntries(Object.entries(result.startup).map(([name, value]) => [name.replace(`compile_ms/batch cost ${scene} `, 'compile_ms/'), value]));
+            rows.push(...numericRows(scene, `${PREFIX}/startup`, startup));
+        }
+        if (result.budget) {
+            const budgetMs = result.budget.budget_ms;
+            rows.push(...numericRows(scene, `${PREFIX}/budget${budgetMs}ms`, result.budget));
+        }
+        if (result.curve) {
+            for (const [size, values] of Object.entries(result.curve.sizes)) rows.push(...numericRows(scene, `${PREFIX}/batch${size}`, values));
+            const fit = result.curve as Record<string, unknown>;
+            rows.push(
+                ...numericRows(scene, `${PREFIX}/fit_all`, { fixed_ms: fit.fit_all_fixed_ms, us_per_probe: fit.fit_all_us_per_probe }),
+                ...numericRows(scene, `${PREFIX}/fit_upto512`, { fixed_ms: fit.fit_small_fixed_ms, us_per_probe: fit.fit_small_us_per_probe }),
+            );
+        }
+        if (result.breakdown) {
+            for (const [size, values] of Object.entries(result.breakdown)) rows.push(...numericRows(scene, `${PREFIX}/breakdown/batch${size}`, values));
+        }
+    }
+    return rows;
+}
+
+async function main(): Promise<void> {
+    const { values, positionals } = parseArgs({
+        args: process.argv.slice(2),
+        allowPositionals: true,
+        options: { append: { type: 'boolean' }, commit: { type: 'string' }, browser: { type: 'string' }, 'clock-file': { type: 'string' }, set: { type: 'string' } },
+    });
+    if (positionals.length === 0) {
+        console.error('Usage: node tools/gpu/pages/ddgi-batch-cost/to-csv.ts <runner.json> [more.json ...] [--append] [--commit <hash>] [--browser <text>] [--clock-file <file>] [--set <n>]');
+        process.exit(2);
+    }
+    const clockNotes = clockNoteRowsFromOption(values['clock-file']);
+    const setNote: MetricRow[] = values.set === undefined ? [] : [{ scene: 'all', metric: 'note/set', value: Number(values.set) }];
+    const groups = new Map<string, { prefix: string[]; runs: MetricRow[][] }>();
+    for (const file of positionals) {
+        const summary = JSON.parse(await readFile(file, 'utf8')) as RunSummary;
+        const device = deviceNameFromAdapter(summary.adapter);
+        for (const page of summary.pages) {
+            if (page.name !== 'ddgi-batch-cost') continue;
+            if (page.outcome !== 'pass') {
+                console.error(`skipping ${page.name} in ${file}: ${page.outcome}`);
+                continue;
+            }
+            const data = page.data as unknown as PageData;
+            const commit = values.commit ?? summary.commit ?? gitCommit();
+            const browser = values.browser ?? (data.userAgent ? browserFromUserAgent(data.userAgent, data.browserVersion ?? null) : 'Chrome headless');
+            const prefix = [summary.startedAt.slice(0, 10), commit, device, browser];
+            const group = groups.get(device) ?? { prefix, runs: [] };
+            group.runs.push(batchCostRows(data));
+            groups.set(device, group);
+        }
+    }
+    const lines: string[] = [];
+    for (const { prefix, runs } of groups.values()) {
+        const rows = [...(runs.length === 1 ? runs[0] : repeatedRunRows(runs)), ...setNote, ...(isNvidiaDeviceName(prefix[2]) ? clockNotes : [])];
+        lines.push(...rows.map((row) => [...prefix, row.scene, row.metric, formatValue(row.value)].join(',')));
+    }
+    if (lines.length === 0) {
+        console.error('no passing ddgi-batch-cost pages in those files');
+        process.exit(1);
+    }
+    if (!values.append) {
+        console.log([CSV_HEADER, ...lines].join('\n'));
+        return;
+    }
+    if (!existsSync(DEFAULT_CSV)) await writeFile(DEFAULT_CSV, `${CSV_HEADER}\n`);
+    await appendFile(DEFAULT_CSV, `${lines.join('\n')}\n`);
+    console.error(`added ${lines.length} rows to ${DEFAULT_CSV}`);
+}
+
+if (process.argv[1] && resolve(process.argv[1]) === resolve(import.meta.filename)) {
+    main().catch((error: unknown) => {
+        console.error(error instanceof Error ? error.message : error);
+        process.exit(1);
+    });
+}

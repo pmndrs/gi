@@ -49,10 +49,17 @@ const DDGI_MISS_DISTANCE: f32 = 60000.0;
 // Linear, clamp to edge: tiles have borders, so filtering never needs to wrap.
 @group(1) @binding(6) var ddgiAtlasSampler: sampler;
 
-// What radiance travels back along a blended ray that hit a front face.
+// What radiance travels back along a blended ray that hit a front face:
+// emission + albedo / pi × (direct light + bounce light).
+//
+// The bounce is read before the direct light on purpose. The direct light
+// traces a shadow ray (an any-hit traversal loop, the most expensive part of
+// this kernel in sunlit scenes), and whatever is still needed afterwards stays
+// in registers through that loop. Folding the bounce in first leaves only the
+// running sum and albedo / pi alive there. Measured (T1.9a, RTX 3060, the same
+// probes): 512 probes on Sponza 17-30% faster, two-room 11%, Cornell 20%.
 fn ddgiShadeRay(ray: GiRay, hit: GiHit, random: vec2f) -> vec3f {
     let surface = giSurfaceAt(ray, hit);
-    let direct = giDirectIrradiance(surface, DDGI_ALL_LIGHT_GROUPS, random);
     // Bounce light from the current field: the field already holds every
     // earlier bounce, so this gives unlimited bounces over updates.
     let bounce = ddgiSampleIrradiance(
@@ -60,7 +67,10 @@ fn ddgiShadeRay(ray: GiRay, hit: GiHit, random: vec2f) -> vec3f {
         ddgiIrradianceAtlas, ddgiAtlasSampler, ddgiDistanceAtlas, ddgiAtlasSampler, ddgiProbeData,
         ddgi.volumeOrigin, ddgi.volumeSpacing, ddgi.volumeCounts, ddgi.volumeTexels,
     );
-    return surface.emission + surface.albedo * (1.0 / DDGI_PI) * (direct + ddgi.bounceEnergy * bounce);
+    let albedoOverPi = surface.albedo * (1.0 / DDGI_PI);
+    let emittedAndBounced = surface.emission + albedoOverPi * (ddgi.bounceEnergy * bounce);
+    let direct = giDirectIrradiance(surface, DDGI_ALL_LIGHT_GROUPS, random);
+    return emittedAndBounced + albedoOverPi * direct;
 }
 
 // Workgroup (x, y, z): x walks a probe's rays 64 at a time; y and z give the

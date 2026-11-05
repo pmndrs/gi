@@ -29,7 +29,7 @@ interface SceneTiming {
     probes: number;
     raysPerProbe: number;
     units: Record<string, { probesUpdated: number; traceMs: number; blendMs: number; writeMs: number; msPerProbe: number; probesIn2Ms: number }>;
-    budgetCheck: { gpuMs: number; medianProbesUpdated: number; medianDdgiMs: number; msPerUnit: number };
+    budgetCheck: { gpuMs: number; medianProbesUpdated: number; medianDdgiMs: number };
 }
 
 export function ddgiTimingRows(data: Record<string, SceneTiming>): MetricRow[] {
