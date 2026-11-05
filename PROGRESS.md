@@ -21,6 +21,40 @@ Rules:
 
 ---
 
+## 2026-11-05 · T1.14 part 1b: GTAO on the GI term, and drift-proof cost timing · implementer (opus)
+Did (uncommitted):
+- `packages/ddgi-three/src/composite.ts`: option `occlusion` on the composite.
+  - Default: three's own GTAO (`ao()`) on the pass's depth and packed normal, radius 1 m (`DEFAULT_GI_OCCLUSION_RADIUS`), multiplying the GI term only.
+  - `{ radius, resolutionScale, samples }` sets it; `false` turns it off; `{ source }` takes a GTAO node the pipeline already has.
+  - A pass whose context already applies AO (`builtinAOContext`) defaults to none, since `giAlbedo` already carries that AO.
+  - `occlusionNode` exposes the composite's own GTAO node for live changes.
+- `tools/gpu/pages/three-composite-shared/composite-check.ts`: `timeInterleaved` replaces `timeVariants`.
+  - Variants are drawn frame by frame (A B C D A B C D …), and every pass of every frame is GPU-timestamped and tagged with its variant and cycle.
+  - Each difference is the median of per-cycle differences between neighbouring frames, with p10–p90, MAD and the medians of each third (a drift check).
+  - `CompositeRoutes` takes `occlusion`; it defaults to off, because the match checks compare with GI per fragment.
+- `three-composite-sponza/main.ts` (rewritten):
+  - variants off, mrt, composite, composite+gtao, composite+gtao-half and forward;
+  - a 10 s section at 2560×1440, then 4 s at 1920×1080;
+  - a 25 s idle after loading, then a 2 s ramp;
+  - the page no longer judges the bar.
+- `three-composite-sponza/run.ts` (new):
+  - samples nvidia-smi every 200 ms with wall-clock stamps and runs the page;
+  - for each section, gives the SM clock median, the clock rule's verdict (`judgeTiming`, with the temperature at the section's start) and every delta clock-normalised (ms × MHz ÷ 1,500).
+- The curtain agent's `three-composite-ao` (uncommitted): its timing moved to `timeInterleaved`, and its match takes `--resolution-scale`.
+Verified:
+- `three-composite` passes on both GPUs after the change. The Cornell match, transparent check and render-time update results are unchanged.
+- `run.ts` runs the cost page end to end on the Intel UHD (correctness only; no nvidia-smi there, so no verdict).
+- Typecheck and lint are clean.
+GTAO accuracy against untextured Cycles (RTX; `three-composite-ao/run.ts`; Sponza at the 640×360 reference, Cornell at 600 passes). Bias at radius 1 m:
+- full resolution, 16 samples: Sponza +4.27% (curtains +10.5%), base package −2.68%, Cornell +0.58%;
+- **half resolution, 16 samples: Sponza +7.99% (curtains +18.0%), base −1.47%, Cornell +0.73%**;
+- 8 samples: Sponza +15.8% (full) / +17.0% (half), outside ±10%;
+- 4 samples: Sponza +20.4% (full) / +20.7% (half), almost no effect.
+- So the sample count matters far more than the resolution, and the cheapest setting within ±10% is half resolution at 16 samples.
+- Caveat: at 640×360, half resolution is only 320×180, much coarser than half of 1440p. Its accuracy at 1440p is unmeasured until a 1440p reference exists.
+Not verified: the cost on the RTX. I'm waiting for the lead's go-ahead on the fan-control reinstall. The clock rule's bench-lock update has landed (8939225). Command, 3 runs: `node tools/reference/bench-lock.ts run --what "three composite sponza" -- node tools/gpu/pages/three-composite-sponza/run.ts --gpu nvidia`. So whether the composite − off spread is now within ±0.2 ms is unknown.
+Next: if composite + GTAO at full resolution is over 1.0 ms, propose half resolution at 16 samples as the default.
+
 ## 2026-11-05 · Bench lock: the clock rule for valid timing · implementer (opus)
 Did (uncommitted): `tools/gpu/clock-note.ts`: `judgeTiming` (DECISIONS cca8ab9). A hot start (70 C or more) is INVALID. Otherwise: under 5 loaded samples, or no start temperature, is NO VERDICT; 5% or more thermal samples is INVALID; else VALID. There is no MHz bar. Rows: `note/timing_valid,1|0`, `note/timing_no_verdict,1`, `note/thermal_share`, `note/start_temp_c`; `note/clock_low` and `note/start_hot` are gone (start_hot was never written to a CSV). `tools/reference/bench-lock.ts`: sampling every 200 ms on a fixed beat (a slow nvidia-smi call skips beats, never queues); the summary records `sampleIntervalMs`; the end-of-run line is the verdict. Docs: tools/reference/README "Bench lock", bench/results/README (old and new notes, with the date), my NOTES bullet.
 Verified: `npx vitest run tools/reference tools/gpu/clock` 48 passed (the three verdicts, the 5% and 5-sample edges, 200 ms rate, a slow reader). `pnpm lint` clean. Typecheck clean apart from other lanes' uncommitted `work-budget.ts` and `three-composite-*`. Real nvidia-smi on temp lock folders: 11 samples in about 2.2 s.
