@@ -1,6 +1,6 @@
 # T1.14: GI for three, the simple path and the composite
 
-Status: design by the M1 lead, 2026-11-05. Accepted direction and constraints: DECISIONS 2026-11-05 ("T1.14, the additive GI composite"). The API names marked **(to confirm)** face the host, so Dennis confirms them before the implementer builds them.
+Status: design by the M1 lead, 2026-11-05. Names confirmed by Dennis the same day (DECISIONS): `volume.start`, `ddgi(scenePass, volume)` (was `ddgiComposite` below), `giAlbedo`, `volume.recalibrate()`; GTAO on the GI term on by default. Accepted direction and constraints: DECISIONS 2026-11-05 ("T1.14, the additive GI composite"). The API names marked **(to confirm)** face the host, so Dennis confirms them before the implementer builds them.
 
 ## What three r187 already does (scout, 2026-11-05)
 
