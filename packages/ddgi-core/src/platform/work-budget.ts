@@ -532,20 +532,31 @@ function settle(units: number, timings: readonly number[]): CurvePoint | undefin
  *   grows by this factor per window up to that ceiling.
  * - `probeEverySeconds`, `probeStep`: once at the ceiling and on time this
  *   long, the ceiling rises by this factor, back to the calibrated batch.
- * - `targetMemorySeconds`: without `budget.targetFps`, the target interval is
- *   the shortest vsync-like per-window median of this long (the rate the
- *   host reaches when on time), so a few late seconds don't become the new
- *   target...
- * - `refreshRates`, `refreshTolerance`, `vsyncJitter`: ...where vsync-like
- *   means within `refreshTolerance` of a common display refresh rate *and*
- *   steady: the window's frame times from the 10th to the 90th percentile
- *   span at most `vsyncJitter` of its median. The refresh list alone matched
- *   about 40% of all rates (re-review); a display paces frames to within a
+ * - Without `budget.targetFps`, the target interval is **learned from the
+ *   display, and kept while frames are late** (the learned-target rule): it
+ *   is the interval of a vsync-like window, and only a later window that is
+ *   itself vsync-like *and on time* can change it, to a faster rate. Why
+ *   (budget v2 re-review): a target that followed the recent windows forgot
+ *   60 Hz a few seconds into a slowdown, counted the 30 Hz frames as on time
+ *   and climbed back to the full batch while every frame stayed late. A
+ *   vsync host whose frames slow from 60 Hz to 30 Hz can't be told from one
+ *   that switched to a 30 Hz display, so the slowdown wins: a host that
+ *   really changes its display rate should say `targetFps`. The rate the
+ *   floor uses follows the learned target too, so a slowdown doesn't raise
+ *   the floor.
+ * - `refreshRates`, `refreshTolerance`, `vsyncJitter`: vsync-like means
+ *   within `refreshTolerance` of a common display refresh rate *and* steady:
+ *   the window's frame times from the 10th to the 90th percentile span at
+ *   most `vsyncJitter` of its median. The refresh list alone matched about
+ *   40% of all rates (re-review); a display paces frames to within a
  *   fraction of a millisecond, while an uncapped frame rate wanders with the
  *   view and the work. Without a vsync-like window the host is taken to be
  *   uncapped and has no ceiling (the batch never steps down). A host can
  *   always say `targetFps`, and must when it is late from the start: a vsync
  *   host that never makes 60 Hz looks like an on-time 30 Hz host.
+ * - A frame that misses now and then leaves the window's median at the
+ *   display interval: not late, no step-down. That is meant: one late frame
+ *   in many isn't saturation.
  */
 export const SATURATION = {
     windowSeconds: 1,
@@ -556,7 +567,6 @@ export const SATURATION = {
     recovery: 1.1,
     probeEverySeconds: 10,
     probeStep: 1.05,
-    targetMemorySeconds: 5,
     refreshRates: [24, 25, 30, 48, 50, 60, 72, 75, 90, 100, 120, 144, 165],
     refreshTolerance: 0.03,
     vsyncJitter: 0.1,
@@ -576,12 +586,19 @@ interface FrameWindow {
     readonly jitter: number;
 }
 
+/** Paced by a display: steady, at a common refresh rate (SATURATION). */
+function isVsyncLike(window: FrameWindow): boolean {
+    return window.jitter <= SATURATION.vsyncJitter && SATURATION.refreshRates.some((rate) => Math.abs(window.seconds * rate - 1) <= SATURATION.refreshTolerance);
+}
+
 /** Watches the frame time (`FrameInput.deltaTime`) over windows of about a second. */
 export class SaturationGuard {
     private frameTimes: number[] = [];
     private windowSeconds = 0;
-    /** The latest windows, the latest last, for the observed target. */
-    private windows: FrameWindow[] = [];
+    /** The display's interval as learned (the learned-target rule, SATURATION); undefined until a vsync-like window. */
+    private learnedSeconds: number | undefined;
+    /** The fastest window seen, for the floor's frame rate before a display interval is learned. */
+    private fastestSeconds: number | undefined;
     /** The last full window, for the stats. */
     framesLate = false;
 
@@ -597,35 +614,40 @@ export class SaturationGuard {
 
         const frameSeconds = median(this.frameTimes);
         const jitter = (quantile(this.frameTimes, 0.9) - quantile(this.frameTimes, 0.1)) / frameSeconds;
-        this.windows.push({ seconds: frameSeconds, jitter });
-        const remembered = Math.max(1, Math.round(SATURATION.targetMemorySeconds / SATURATION.windowSeconds));
-        if (this.windows.length > remembered) this.windows.shift();
+        const window: FrameWindow = { seconds: frameSeconds, jitter };
+        this.fastestSeconds = Math.min(this.fastestSeconds ?? Number.POSITIVE_INFINITY, frameSeconds);
+        // The learned-target rule: a vsync-like window teaches the display's interval when there
+        // is none yet, or a faster one when it is on time; a late window never replaces it.
+        const onTimeForLearned = this.learnedSeconds === undefined || frameSeconds <= this.learnedSeconds * (1 + SATURATION.lateShare);
+        if (isVsyncLike(window) && onTimeForLearned) this.learnedSeconds = Math.min(this.learnedSeconds ?? Number.POSITIVE_INFINITY, frameSeconds);
         const target = this.targetSeconds(targetFps);
         const late = target !== undefined && frameSeconds > target * (1 + SATURATION.lateShare);
-        const window = { late, seconds: this.windowSeconds };
+        const verdict = { late, seconds: this.windowSeconds };
         this.framesLate = late;
         this.frameTimes = [];
         this.windowSeconds = 0;
-        return window;
+        return verdict;
     }
 
     /**
-     * The interval frames should come at: `1 / targetFps`, or the shortest
-     * vsync-like window remembered (see SATURATION); undefined for an
-     * uncapped host (no ceiling).
+     * The interval frames should come at: `1 / targetFps`, or the learned
+     * display interval (see SATURATION); undefined for an uncapped host (no
+     * ceiling).
      */
     targetSeconds(targetFps: number | undefined): number | undefined {
         if (targetFps !== undefined && targetFps > 0) return 1 / targetFps;
-        const vsyncLike = this.windows.filter(
-            (window) => window.jitter <= SATURATION.vsyncJitter && SATURATION.refreshRates.some((rate) => Math.abs(window.seconds * rate - 1) <= SATURATION.refreshTolerance),
-        );
-        return vsyncLike.length > 0 ? Math.min(...vsyncLike.map((window) => window.seconds)) : undefined;
+        return this.learnedSeconds;
     }
 
-    /** The host's frame rate as far as it is known (for floors given in seconds): `targetFps`, else the fastest observed. */
+    /**
+     * The host's frame rate as far as it is known (for floors given in
+     * seconds): `targetFps`, else the learned display rate, else the fastest
+     * window seen. Never the rate of a slowdown.
+     */
     framesPerSecond(targetFps: number | undefined): number | undefined {
         if (targetFps !== undefined && targetFps > 0) return targetFps;
-        return this.windows.length > 0 ? 1 / Math.min(...this.windows.map((window) => window.seconds)) : undefined;
+        const seconds = this.learnedSeconds ?? this.fastestSeconds;
+        return seconds === undefined ? undefined : 1 / seconds;
     }
 
     /** A new calibration: the open window goes; the remembered frame rate stays. */
@@ -791,7 +813,9 @@ export class WorkBudget {
 
         let calibration = this.calibration as Calibration;
         if (!calibration.measured) {
-            // The burst gave up: its estimate, at least the floor; with neither, the default.
+            // The burst gave up: its best estimate, at least the floor. The floor is capped at twice
+            // that estimate, as after a calibration (DDGI's 'auto'); only when nothing was measured
+            // at all is it uncapped (calibratedUnits Infinity). With neither, the default.
             const framesPerSecond = this.guard.framesPerSecond(budget.targetFps) ?? ASSUMED_FRAMES_PER_SECOND;
             const floorUnits = this.floorUnits(framesPerSecond, calibration.units > 0 ? calibration.units : Number.POSITIVE_INFINITY);
             const units = Math.max(calibration.units, floorUnits);

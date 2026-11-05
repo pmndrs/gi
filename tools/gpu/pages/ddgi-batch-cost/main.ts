@@ -47,7 +47,11 @@
  *    `ddgi/trace`, `ddgi/blend`, `ddgi/write` and `ddgi/census` GPU ms, and a
  *    fit of the update (trace + blend + write) as fixed + per-probe.
  *
- * Three more sections on request:
+ * Four more sections on request:
+ * - **saturation**: the step-down on real hardware: at 60 Hz, a synthetic
+ *   GPU load (a page-only busy compute pass) makes frames late for 10 s,
+ *   then goes; the batch must step down within 4 s, never below the floor,
+ *   and recover (SATURATION_TEST);
  * - **recheck**: `recalibrate()` after the budget section, and the new batch
  *   against the first;
  * - **steady**: a fixed batch at 60 Hz and back to back, with each spike's
@@ -57,7 +61,7 @@
  *
  * Choose with environment variables (vite passes `VITE_*` to the page):
  *   VITE_DDGI_SCENES=cornell-box,two-room,sponza,bistro-exterior   (default cornell-box,two-room)
- *   VITE_DDGI_SECTIONS=startup,rates,budget,curve,recheck,steady,breakdown   (default startup,rates,budget,curve)
+ *   VITE_DDGI_SECTIONS=startup,rates,budget,curve,saturation,recheck,steady,breakdown   (default startup,rates,budget,curve)
  *   VITE_DDGI_BUDGET_MS=2
  *   VITE_DDGI_STEADY_UNITS=16,512                                    (default: the budget's median batch)
  *
@@ -563,6 +567,228 @@ async function recheckCalibration(device: GPUDevice, scene: SceneUnderTest, firs
 }
 
 /**
+ * The `saturation` section's phases: on time, then a synthetic GPU load that
+ * makes frames late, then on time again. The load lasts about 10 s (enough
+ * steps to reach the floor on every test scene); the recovery waits 3 s on
+ * time and then grows ×1.1 a second up to 0.9 × the calibrated batch
+ * (SATURATION), which from the floor takes up to about 30 s.
+ *
+ * The rate is the first of `rates` the page's own loop holds without the
+ * load (a 2 s probe, no `targetFps`, so nothing steps down): on the Intel UHD
+ * the loop itself takes about 21-23 ms a frame, so 60 Hz would be late from
+ * the start and the recovery could never count as on time.
+ */
+const SATURATION_TEST = {
+    rates: [60, 30, 20],
+    probeSeconds: 2,
+    /** A rate is held when the probe's median frame is within this share of its interval. */
+    heldShare: 0.05,
+    beforeSeconds: 3,
+    loadSeconds: 10,
+    afterSeconds: 40,
+    /** GPU ms of the synthetic load per frame, in display intervals: two, so every frame is late. */
+    loadIntervals: 2,
+    /** Recovered: the batch back to at least this share of the calibrated one (its ceiling is 0.9). */
+    recoveredShare: 0.85,
+    /** The step-down must start within this long of the load. */
+    stepDownWithinSeconds: 4,
+} as const;
+
+type SaturationPhase = 'probe' | 'before' | 'load' | 'after';
+interface SaturationSample {
+    readonly seconds: number;
+    readonly phase: SaturationPhase;
+    readonly units: number;
+    readonly floor: number;
+    readonly frameMs: number;
+}
+
+/**
+ * Frames at `hz` for `seconds`, each waited for as a host's display would make
+ * it wait, with the synthetic load when `load` is given. `targetFps` is passed
+ * only when `withTarget` (the probe runs without one).
+ */
+async function saturationFrames(
+    device: GPUDevice,
+    scene: SceneUnderTest,
+    hz: number,
+    seconds: number,
+    phase: SaturationPhase,
+    options: { readonly load?: SyntheticGpuLoad; readonly withTarget: boolean; readonly startedAt: number },
+    samples: SaturationSample[],
+): Promise<void> {
+    const endAt = performance.now() + seconds * 1000;
+    let previousAt = performance.now();
+    let due = previousAt;
+    while (performance.now() < endAt) {
+        // The next display slot; a frame that ran past it starts at once (late), and the
+        // slots go on from there. A frame that fits waits for its slot.
+        due = Math.max(due + 1000 / hz, performance.now());
+        await sleep(due - performance.now());
+        const now = performance.now();
+        frame(scene, options.withTarget ? { gpuMs: BUDGET_MS, targetFps: hz } : { gpuMs: BUDGET_MS }, (now - previousAt) / 1000);
+        options.load?.submit();
+        // A display makes the host wait for its GPU: a frame that takes longer than the interval is late.
+        await device.queue.onSubmittedWorkDone();
+        await yieldToCallbacks();
+        const report = scene.platform.budgetReport(scene.ddgi);
+        samples.push({ seconds: (now - options.startedAt) / 1000, phase, units: report?.units ?? 0, floor: report?.floorUnits ?? 0, frameMs: now - previousAt });
+        previousAt = now;
+    }
+}
+
+/** A page-only compute pass that keeps the GPU busy for about `loadMs`: the synthetic load. */
+const BUSY_LOAD_WGSL = /* wgsl */ `
+struct BusyParams { iterations: u32 }
+@group(0) @binding(0) var<uniform> params: BusyParams;
+@group(0) @binding(1) var<storage, read_write> sink: array<u32>;
+
+// A chain of dependent integer steps per thread, so the work can't be skipped or shortened.
+@compute @workgroup_size(64)
+fn busy(@builtin(global_invocation_id) id: vec3u) {
+    var value = id.x;
+    for (var step = 0u; step < params.iterations; step++) {
+        value = value * 1664525u + 1013904223u;
+    }
+    sink[id.x] = value;
+}
+`;
+const BUSY_LOAD_WORKGROUPS = 1024;
+
+/** The synthetic load: one dispatch per call to `submit`, sized at start to take about `loadMs`. */
+class SyntheticGpuLoad {
+    private readonly device: GPUDevice;
+    private readonly pipeline: GPUComputePipeline;
+    private readonly params: GPUBuffer;
+    private readonly sink: GPUBuffer;
+    private readonly group: GPUBindGroup;
+    iterations = 4096;
+
+    constructor(device: GPUDevice) {
+        this.device = device;
+        const module = device.createShaderModule({ label: 'saturation test: busy load', code: BUSY_LOAD_WGSL });
+        this.pipeline = device.createComputePipeline({ label: 'saturation test: busy load', layout: 'auto', compute: { module, entryPoint: 'busy' } });
+        this.params = device.createBuffer({ label: 'saturation test: busy params', size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+        this.sink = device.createBuffer({ label: 'saturation test: busy sink', size: BUSY_LOAD_WORKGROUPS * 64 * 4, usage: GPUBufferUsage.STORAGE });
+        this.group = device.createBindGroup({
+            label: 'saturation test: busy load',
+            layout: this.pipeline.getBindGroupLayout(0),
+            entries: [
+                { binding: 0, resource: { buffer: this.params } },
+                { binding: 1, resource: { buffer: this.sink } },
+            ],
+        });
+    }
+
+    submit(): void {
+        this.device.queue.writeBuffer(this.params, 0, new Uint32Array([this.iterations]));
+        const encoder = this.device.createCommandEncoder({ label: 'saturation test: busy load' });
+        const pass = encoder.beginComputePass({ label: 'saturation test: busy load' });
+        pass.setPipeline(this.pipeline);
+        pass.setBindGroup(0, this.group);
+        pass.dispatchWorkgroups(BUSY_LOAD_WORKGROUPS);
+        pass.end();
+        this.device.queue.submit([encoder.finish()]);
+    }
+
+    /** Scales the iterations until one dispatch takes about `targetMs` of wall time (median of 3). */
+    async size(targetMs: number): Promise<number> {
+        let ms = 0;
+        for (let round = 0; round < 4; round++) {
+            const times: number[] = [];
+            for (let repeat = 0; repeat < 3; repeat++) {
+                const startedAt = performance.now();
+                this.submit();
+                await this.device.queue.onSubmittedWorkDone();
+                times.push(performance.now() - startedAt);
+            }
+            ms = median(times);
+            if (Math.abs(ms - targetMs) < 0.15 * targetMs) break;
+            this.iterations = Math.max(64, Math.round((this.iterations * targetMs) / Math.max(ms, 0.05)));
+        }
+        return ms;
+    }
+
+    dispose(): void {
+        this.params.destroy();
+        this.sink.destroy();
+    }
+}
+
+/**
+ * Budget v2's saturation step-down on real hardware (the measurement "a
+ * saturation step-down that recovers", docs/design/ddgi.md). At the first
+ * rate the loop holds (SATURATION_TEST; timer-paced, with `targetFps`: timer
+ * pacing isn't steady enough to be learned as a display rate), each frame
+ * waited for as a host's display would make it wait: on time, then with the
+ * synthetic load (frames late), then without it. Judged: no step-down before
+ * the load, a step-down within `stepDownWithinSeconds` of it, never below the
+ * floor, and back to `recoveredShare` of the calibrated batch after it.
+ */
+async function measureSaturation(device: GPUDevice, scene: SceneUnderTest, log: (line: string) => void): Promise<{ result: Record<string, unknown>; failures: string[] }> {
+    const calibrated = scene.platform.budgetReport(scene.ddgi)?.calibratedUnits;
+    assert(calibrated !== undefined, `${scene.manifest.id}: no calibrated batch before the saturation test`);
+    const samples: SaturationSample[] = [];
+    const startedAt = performance.now();
+    // The rate: the first one the loop holds without the load (see SATURATION_TEST).
+    let hz: number = SATURATION_TEST.rates[SATURATION_TEST.rates.length - 1];
+    for (const rate of SATURATION_TEST.rates) {
+        const probe: SaturationSample[] = [];
+        await saturationFrames(device, scene, rate, SATURATION_TEST.probeSeconds, 'probe', { withTarget: false, startedAt }, probe);
+        samples.push(...probe);
+        if (median(probe.slice(1).map((sample) => sample.frameMs)) <= (1000 / rate) * (1 + SATURATION_TEST.heldShare)) {
+            hz = rate;
+            break;
+        }
+    }
+    const load = new SyntheticGpuLoad(device);
+    const loadMs = await load.size(SATURATION_TEST.loadIntervals * (1000 / hz));
+    await saturationFrames(device, scene, hz, SATURATION_TEST.beforeSeconds, 'before', { withTarget: true, startedAt }, samples);
+    await saturationFrames(device, scene, hz, SATURATION_TEST.loadSeconds, 'load', { load, withTarget: true, startedAt }, samples);
+    await saturationFrames(device, scene, hz, SATURATION_TEST.afterSeconds, 'after', { withTarget: true, startedAt }, samples);
+    load.dispose();
+
+    const inPhase = (phase: SaturationPhase) => samples.filter((sample) => sample.phase === phase);
+    const loadStart = inPhase('load')[0]?.seconds ?? Number.NaN;
+    const judged = samples.filter((sample) => sample.phase !== 'probe');
+    const steppedBeforeLoad = inPhase('before').filter((sample) => sample.units < calibrated).length;
+    const firstStep = samples.find((sample) => (sample.phase === 'load' || sample.phase === 'after') && sample.units < calibrated);
+    const lowest = Math.min(...judged.map((sample) => sample.units));
+    const belowFloor = judged.filter((sample) => sample.units < sample.floor).length;
+    const after = inPhase('after');
+    const recoveredAt = after.find((sample) => sample.units >= SATURATION_TEST.recoveredShare * calibrated);
+    const result = {
+        hz,
+        calibrated_probes: calibrated,
+        floor_probes: samples.at(-1)?.floor ?? 0,
+        frames_stepped_down_before_load: steppedBeforeLoad,
+        load_ms: round(loadMs, 2),
+        frame_ms_median_before: round(median(inPhase('before').map((sample) => sample.frameMs)), 2),
+        frame_ms_median_load: round(median(inPhase('load').map((sample) => sample.frameMs)), 2),
+        frame_ms_median_after: round(median(after.slice(Math.floor(after.length / 2)).map((sample) => sample.frameMs)), 2),
+        step_down_after_s: firstStep ? round(firstStep.seconds - loadStart, 2) : -1,
+        lowest_probes: lowest,
+        frames_below_floor: belowFloor,
+        recovered_after_s: recoveredAt ? round(recoveredAt.seconds - (after[0]?.seconds ?? 0), 2) : -1,
+        final_probes: samples.at(-1)?.units ?? 0,
+        // The batch once a second: what happened over time.
+        probes_per_second: judged.filter((_, index) => index % hz === 0).map((sample) => `${Math.round(sample.seconds)}:${sample.units}`).join(' '),
+    };
+    const failures: string[] = [];
+    if (steppedBeforeLoad > 0) failures.push(`${scene.manifest.id}: stepped down before the load, at ${hz} Hz on time (frames ${result.frame_ms_median_before} ms)`);
+    if (!firstStep || firstStep.seconds - loadStart > SATURATION_TEST.stepDownWithinSeconds) {
+        failures.push(`${scene.manifest.id}: no step-down within ${SATURATION_TEST.stepDownWithinSeconds} s of the load (frames ${result.frame_ms_median_load} ms against ${round(1000 / hz, 2)})`);
+    }
+    if (belowFloor > 0) failures.push(`${scene.manifest.id}: ${belowFloor} frames below the floor during the saturation test`);
+    if (!recoveredAt) failures.push(`${scene.manifest.id}: no recovery to ${SATURATION_TEST.recoveredShare} × the calibrated batch within ${SATURATION_TEST.afterSeconds} s of the load ending (ended at ${result.final_probes})`);
+    log(
+        `${scene.manifest.id} saturation at ${hz} Hz (load ${result.load_ms} ms): frames ${result.frame_ms_median_before} → ${result.frame_ms_median_load} → ${result.frame_ms_median_after} ms; ` +
+            `stepped down after ${result.step_down_after_s} s to as low as ${lowest} (floor ${result.floor_probes}), recovered after ${result.recovered_after_s} s; ${result.probes_per_second}`,
+    );
+    return { result, failures };
+}
+
+/**
  * Budget v2 at a host frame rate: frames paced by timers at `hz` (nothing
  * waits for the GPU, as in a browser at that refresh rate), `deltaTime` the
  * real interval, no `targetFps`. Returns the numbers and what failed.
@@ -935,6 +1161,11 @@ await runThreePage(async ({ device, renderer, data, log }) => {
                 budgetFailures.push(`${id}: the calibrated batch (${budget.calibrated_probes} probes) took ${budget.update_ms_median} ms back to back against a ${BUDGET_MS} ms budget (±${BUDGET_TOLERANCE * 100}%)`);
             }
             if (budget.frames_calibrating > 0) budgetFailures.push(`${id}: the platform calibrated again during ${budget.frames_calibrating} GPU-bound frames`);
+        }
+        if (SECTIONS.has('saturation')) {
+            const { result, failures } = await measureSaturation(device, scene, log);
+            sceneResult.saturation = result;
+            budgetFailures.push(...failures);
         }
         if (SECTIONS.has('recheck')) {
             const firstUnits = (startup as { calibrated_probes: number }).calibrated_probes;

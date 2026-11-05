@@ -472,15 +472,51 @@ describe('saturation: step down when frames are late, never below the floor (bud
         expect(run.budget.report.steppedDown).toBe(true);
     });
 
-    it('a host changing frame rate (120 Hz to 60 Hz, vsync): stable at each, back at the calibrated batch', () => {
-        const run = simulate({ frames: 60 * 110, budget: () => ({ gpuMs: 2 }), cost: sponzaLike, deltaTime: (frame) => (frame < 200 ? 0 : frame < 1800 ? 1 / 120 : VSYNC_60), technique: ddgiLike(19_425) });
+    it('a vsync host that turns 3× slower holds stepped down without targetFps (the re-review case), and recovers when the load goes', () => {
+        // On time at 60 Hz for 20 s, then 3× slower: frames at 30 Hz (vsync) for 60 s, then on time again.
+        const slowFrom = 200 + 60 * 20;
+        const slowFrames = 30 * 60;
+        let frameNow = 0;
+        const slow = () => frameNow >= slowFrom && frameNow < slowFrom + slowFrames;
+        const run = simulate({
+            frames: slowFrom + slowFrames + 60 * 60,
+            budget: () => ({ gpuMs: 2 }),
+            cost: sponzaLike,
+            deltaTime: (frame) => {
+                frameNow = frame;
+                return frame < 200 ? 0 : slow() ? 1 / 30 : VSYNC_60;
+            },
+            clockFactor: () => (slow() ? 3 : 1),
+            technique: ddgiLike(19_425),
+        });
+        const calibrated = run.reports[slowFrom - 2].calibratedUnits as number;
+        expect(run.handed[slowFrom - 2]).toBe(calibrated);
+        // Late all through the slowdown: stepped down to the floor and held there, never back at the full batch.
+        const duringSlow = run.reports.slice(slowFrom + 30 * 10, slowFrom + slowFrames);
+        expect(duringSlow.every((report) => report.steppedDown)).toBe(true);
+        expect(Math.max(...duringSlow.map((report) => report.units))).toBeLessThan(calibrated);
+        // The floor stays at 60 Hz's (81), not 30 Hz's: the slowdown doesn't raise it.
+        expect(duringSlow.every((report) => report.floorUnits === 81 && report.units >= 81)).toBe(true);
+        // On time again: recovers, back to the calibrated batch within a minute.
+        expect(run.handed.at(-1)).toBe(calibrated);
+    });
+
+    it('a frame that misses now and then leaves the median on time: no step-down', () => {
+        // Every fifth frame takes two refreshes.
+        const run = simulate({ frames: 60 * 40, budget: () => ({ gpuMs: 2 }), cost: sponzaLike, deltaTime: (frame) => (frame < 200 ? 0 : frame % 5 === 0 ? 2 * VSYNC_60 : VSYNC_60) });
         const calibrated = run.budget.report.calibratedUnits as number;
-        expect(unique(run.handed.slice(1000, 1800))).toEqual([calibrated]);
-        // The slower rate reads as late for up to targetMemorySeconds (a new vsync rate can't be
-        // told from frames late at the old one), then it is the new rate: recovery below the batch that was
-        // late, then probing up every probeEverySeconds. Back at the calibrated batch within a minute.
-        expect(unique(run.handed.slice(1800 + 60 * 60))).toEqual([calibrated]);
-        expect(run.reports.slice(200).every((report) => report.units >= report.floorUnits)).toBe(true);
+        expect(unique(run.handed.slice(200))).toEqual([calibrated]);
+    });
+
+    it('a host changing its display rate (120 Hz to 60 Hz) looks like a slowdown: without targetFps it steps down, with targetFps it follows', () => {
+        const rate = (frame: number) => (frame < 200 ? 0 : frame < 1800 ? 1 / 120 : VSYNC_60);
+        const observed = simulate({ frames: 60 * 60, budget: () => ({ gpuMs: 2 }), cost: sponzaLike, deltaTime: rate, technique: ddgiLike(19_425) });
+        const calibrated = observed.budget.report.calibratedUnits as number;
+        expect(unique(observed.handed.slice(1000, 1800))).toEqual([calibrated]);
+        expect(observed.budget.report.steppedDown).toBe(true);
+        expect(observed.reports.slice(200).every((report) => report.units >= report.floorUnits)).toBe(true);
+        const told = simulate({ frames: 60 * 60, budget: (frame) => ({ gpuMs: 2, targetFps: frame < 1800 ? 120 : 60 }), cost: sponzaLike, deltaTime: rate, technique: ddgiLike(19_425) });
+        expect(unique(told.handed.slice(1000))).toEqual([told.budget.report.calibratedUnits]);
     });
 
     it('recovers only after recoverAfterSeconds on time, up to below the batch that was late', () => {
