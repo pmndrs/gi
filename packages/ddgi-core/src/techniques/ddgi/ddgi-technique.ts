@@ -52,6 +52,7 @@ import {
     AUTO_NORMAL_BIAS_SHARE,
     AUTO_VIEW_BIAS_SHARE,
     blendSettings,
+    clockStep,
     distanceClamp,
     effectiveMaxRayDistance,
     effectiveRaysPerProbe,
@@ -88,6 +89,8 @@ const CENSUS_STAGING_BUFFERS = 3;
 const INITIAL_RAY_CAPACITY = 512 * 256;
 /** Frame times kept for the sweep counter (its median), about half a second at 60 Hz. */
 const SWEEP_FRAME_TIMES = 31;
+/** Bytes of one probe's history: n and t as two f32 (`ddgiProbeHistory` in wgsl/blend.ts). */
+const PROBE_HISTORY_BYTES = 8;
 
 /** Options fixed for the technique's life. */
 export interface DDGITechniqueOptions {
@@ -136,6 +139,8 @@ interface PreparedResources {
     readonly updateList: GPUBuffer;
     readonly scratchBuffer: GPUBuffer;
     readonly census: GPUBuffer;
+    /** Per probe: the updates its history counts as and the clock at its last update (adaptive hysteresis). */
+    readonly probeHistory: GPUBuffer;
     readonly censusStaging: CensusStaging[];
     readonly traceKernel: ComputeKernel;
     readonly blendKernel: ComputeKernel;
@@ -179,6 +184,7 @@ const BLEND_GROUP: GPUBindGroupLayoutDescriptor = {
         { binding: 5, visibility: COMPUTE, texture: SAMPLED_ARRAY },
         { binding: 6, visibility: COMPUTE, texture: SAMPLED_ARRAY },
         { binding: 7, visibility: COMPUTE, texture: SAMPLED_ARRAY },
+        { binding: 8, visibility: COMPUTE, buffer: { type: 'storage' } },
     ],
 };
 
@@ -231,6 +237,12 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
     /** The latest census read back: probes per state, then rays traced. Null until the first arrives. */
     private latestCensus: Uint32Array | null = null;
     private probesUpdated = 0;
+    /**
+     * The technique's own clock in seconds: the sum of every frame's
+     * `deltaTime` since `prepare` (each at most MAX_CLOCK_STEP_SECONDS).
+     * Adaptive hysteresis measures the time between a probe's updates on it.
+     */
+    private clockSeconds = 0;
     /** Recent `deltaTime`s above 0, for the sweep counter. */
     private readonly frameTimes: number[] = [];
     private disposed = false;
@@ -370,6 +382,8 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         const updateList = device.createBuffer({ label: 'ddgi update list', size: maxProbesPerFrame * 4, usage: BUFFER_USAGE.storage | BUFFER_USAGE.copyDst });
         const scratchBuffer = device.createBuffer({ label: 'ddgi scratch', size: maxProbesPerFrame * scratch.strideWords * 4, usage: BUFFER_USAGE.storage });
         const census = device.createBuffer({ label: 'ddgi census', size: CENSUS_WORDS * 4, usage: BUFFER_USAGE.storage | BUFFER_USAGE.copySrc | BUFFER_USAGE.copyDst });
+        // Starts at zero (WebGPU clears new buffers): no probe remembers anything yet.
+        const probeHistory = device.createBuffer({ label: 'ddgi probe history', size: grid.probeCount * PROBE_HISTORY_BYTES, usage: BUFFER_USAGE.storage });
         const censusStaging = Array.from({ length: CENSUS_STAGING_BUFFERS }, (_, index) => ({
             buffer: device.createBuffer({ label: `ddgi census readback ${index}`, size: CENSUS_WORDS * 4, usage: BUFFER_USAGE.mapRead | BUFFER_USAGE.copyDst }),
             state: 'free' as CensusStaging['state'],
@@ -407,6 +421,7 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
             UNIFORM_BYTES +
             updateList.size +
             scratchBuffer.size +
+            probeHistory.size +
             census.size * (1 + CENSUS_STAGING_BUFFERS);
         const partial = {
             grid,
@@ -425,6 +440,7 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
             updateList,
             scratchBuffer,
             census,
+            probeHistory,
             censusStaging,
             traceKernel,
             blendKernel,
@@ -439,6 +455,7 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         this.resources = { ...partial, rays: this.createRayBuffer(device, partial, Math.min(INITIAL_RAY_CAPACITY, maxProbesPerFrame * 256)) };
         this.latestCensus = null;
         this.probesUpdated = 0;
+        this.clockSeconds = 0;
         this.markAllNotUpdated();
     }
 
@@ -449,6 +466,8 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         if (!resources || !context || this.disposed) return 0;
         this.collectCensus(resources);
 
+        // Time passes whether or not this frame updates any probe.
+        this.clockSeconds += clockStep(frame.deltaTime);
         const count = resources.cursor.next(Math.min(frame.units, resources.maxProbesPerFrame), resources.list);
         this.probesUpdated = count;
         if (frame.deltaTime > 0 && Number.isFinite(frame.deltaTime)) {
@@ -565,7 +584,11 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         return resources ? resources.fixedBytes + resources.rays.buffer.size : 0;
     }
 
-    /** Every probe goes back to "not updated yet" at its grid point: its next update replaces it outright, and sampling skips it until then. */
+    /**
+     * Every probe goes back to "not updated yet" at its grid point: its next
+     * update replaces it outright (hysteresis 0, and its adaptive-hysteresis
+     * history starts again from that update), and sampling skips it until then.
+     */
     resetHistory(): void {
         if (!this.resources) return;
         this.resources.cursor.resetHistory();
@@ -606,6 +629,7 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
                 { binding: 5, resource: arrayView(resources.irradiance) },
                 { binding: 6, resource: arrayView(resources.distance) },
                 { binding: 7, resource: arrayView(resources.probeData) },
+                { binding: 8, resource: { buffer: resources.probeHistory } },
             ],
         });
         return { buffer, capacity, traceGroup, blendGroup };
@@ -662,7 +686,7 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         if (!resources) return;
         this.resources = null;
         for (const texture of [resources.irradiance, resources.distance, resources.probeData, resources.points]) texture.destroy();
-        for (const buffer of [resources.uniforms, resources.updateList, resources.scratchBuffer, resources.census, resources.rays.buffer]) buffer.destroy();
+        for (const buffer of [resources.uniforms, resources.updateList, resources.scratchBuffer, resources.census, resources.probeHistory, resources.rays.buffer]) buffer.destroy();
         for (const staging of resources.censusStaging) staging.buffer.destroy();
     }
 
@@ -715,7 +739,11 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
             data.set(rotation.slice(column * 3, column * 3 + 3), UNIFORM_WORD.rayRotation + column * MAT3_COLUMN_WORDS);
         }
         const blend = blendSettings(this.settings);
+        words[UNIFORM_WORD.adaptiveHysteresis] = blend.adaptiveHysteresis ? 1 : 0;
         data[UNIFORM_WORD.hysteresis] = blend.hysteresis;
+        data[UNIFORM_WORD.clockSeconds] = this.clockSeconds;
+        data[UNIFORM_WORD.inverseMemorySeconds] = blend.inverseMemorySeconds;
+        data[UNIFORM_WORD.maxHistorySamples] = blend.maxSamples;
         data[UNIFORM_WORD.irradianceChangeThreshold] = blend.irradianceChangeThreshold;
         data[UNIFORM_WORD.maxBrightnessChange] = blend.maxBrightnessChange;
         data[UNIFORM_WORD.distanceSharpness] = blend.distanceSharpness;

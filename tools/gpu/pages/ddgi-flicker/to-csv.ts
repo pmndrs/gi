@@ -8,7 +8,8 @@
  * Several files of the same GPU and scene are repeated runs: `run1/`, `run2/`,
  * ... plus `median/` rows. The scene column is `<scene>/<camera bookmark name>`;
  * metrics are `flicker/<budget>/<name>` with the budget written `gpuMs2` or
- * `units256` (definitions at the top of main.ts). `--images <dir>` saves the
+ * `units256`, or `flicker/<rule>/<budget>/<name>` when the run named
+ * hysteresis rules (`tau5`, `fixed0.97`; definitions at the top of main.ts). `--images <dir>` saves the
  * PNGs of the FIRST file with images under `<dir>/<gpu>/<scene>/` (the page
  * only makes them when asked, so give it files from a run with
  * VITE_DDGI_FLICKER_IMAGES=1). Without --append the rows are printed.
@@ -51,7 +52,8 @@ export function flickerRows(data: PageData): MetricRow[] {
         { scene, metric: 'flicker/converged_image_mean', value: data.converged_image_mean },
     ];
     for (const [budget, values] of Object.entries(data.settings)) {
-        const name = budget.replace(':', '');
+        // '<budget>', or '<hysteresis rule>/<budget>' when the run named rules (tau:5/gpuMs:2 becomes tau5/gpuMs2).
+        const name = budget.replaceAll(':', '');
         for (const [metric, value] of Object.entries(values)) {
             if (typeof value === 'number' && Number.isFinite(value)) rows.push({ scene, metric: `flicker/${name}/${metric}`, value });
         }

@@ -13,12 +13,30 @@
  *
  * Each scene: DDGI on the manifest's volume with default settings, every
  * probe updated every frame for FRAMES frames, then the test views.
+ *
+ * For comparing hysteresis rules (T1.12), two optional variables:
+ * `VITE_DDGI_HYSTERESIS` (one rule from ddgi-shared/hysteresis-modes.ts, for
+ * example `fixed:0.97`) and `VITE_DDGI_FRAMES` (instead of FRAMES).
  */
 
 import { assert, runGpuTest } from '../../client.ts';
 import { createDdgiScene, imageMean, runFrames, TestView, releaseDeviceOnPageHide } from '../ddgi-shared/harness.ts';
+import { parseHysteresisMode } from '../ddgi-shared/hysteresis-modes.ts';
 
-const FRAMES = 600;
+const env = import.meta.env as Record<string, unknown>;
+
+/**
+ * Frames every probe is updated: 50 s of DDGI's clock at 60 Hz. Why 3000:
+ * the adaptive hysteresis (T1.12, the default) climbs to about 0.995 when
+ * every probe is updated every frame, so bounce light settles far more
+ * slowly than at the old fixed 0.97, for which 600 was enough; the two rooms
+ * bounce a lot of their light. Two-room on the RTX: adaptive 600 frames leak
+ * -0.22% (lit room 5.4% below its settled value), 1800 frames 0.67%, 3000
+ * frames 0.81%; fixed 0.97 at 600 0.80%. The settled value is the same.
+ */
+const FRAMES = Number(env.VITE_DDGI_FRAMES) > 0 ? Math.round(Number(env.VITE_DDGI_FRAMES)) : 3000;
+/** The hysteresis rule, when a run names one; otherwise the technique's defaults. */
+const HYSTERESIS = typeof env.VITE_DDGI_HYSTERESIS === 'string' && env.VITE_DDGI_HYSTERESIS !== '' ? parseHysteresisMode(env.VITE_DDGI_HYSTERESIS) : null;
 const WIDTH = 640;
 const HEIGHT = 360;
 /** SPEC's leak target, as a share of the lit room's indirect light. */
@@ -57,7 +75,7 @@ await runGpuTest(
         const results: Record<string, unknown> = {};
         let twoRoomLeak = Number.NaN;
         for (const leakCase of CASES) {
-            const scene = await createDdgiScene(device, leakCase.scene, {}, { ignoreLightRange: true });
+            const scene = await createDdgiScene(device, leakCase.scene, HYSTERESIS?.settings ?? {}, { ignoreLightRange: true });
             const field = scene.ddgi.field;
             assert(field, 'no field after prepare');
             await runFrames(device, scene.platform, FRAMES, field.grid.probeCount);
@@ -92,7 +110,7 @@ await runGpuTest(
             }
         }
         assert(twoRoomLeak <= LEAK_LIMIT, `the two-room leak is ${(twoRoomLeak * 100).toFixed(3)}% of the lit room, over the ${LEAK_LIMIT * 100}% limit`);
-        return results;
+        return { frames: FRAMES, hysteresis: HYSTERESIS?.name ?? 'default', ...results };
     },
     { optionalFeatures: ['texture-formats-tier1', 'subgroups'] },
 );

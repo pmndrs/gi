@@ -12,16 +12,22 @@
  * Steps per run (one scene, one camera):
  * 1. Start the scene as the viewer does (ddgi-shared/viewer-scene.ts) and run
  *    the viewer's warm-up.
- * 2. Converge: blocks of full passes over every probe at the normal
- *    hysteresis, until the image mean moves less than CONVERGED_TOLERANCE
- *    between two blocks (at least MIN_BLOCKS; fails after MAX_BLOCKS). This
- *    is the accuracy page's rule, so "converged" means the same thing.
- * 3. For each budget setting (`VITE_DDGI_FLICKER_BUDGETS`, default
- *    `gpuMs:2,units:256`): SETTLE_FRAMES frames at that budget, not
- *    measured (the millisecond budget needs a few frames to find its
- *    batch), then MEASURE_FRAMES frames, each one platform update followed
- *    by one test-view render (this waits for the GPU, so frames run back to
- *    back, not at 60 Hz).
+ * 2. Converge: blocks of full passes over every probe with the fixed 0.97
+ *    hysteresis (the rule before T1.12, whatever is measured after: with
+ *    every probe updated often it settles bounce light fastest, and the
+ *    flicker number is about the settled state), until the image mean moves
+ *    less than CONVERGED_TOLERANCE between two blocks (at least MIN_BLOCKS;
+ *    fails after MAX_BLOCKS). This is the accuracy page's rule, so
+ *    "converged" means the same thing.
+ * 3. For each hysteresis rule (`VITE_DDGI_FLICKER_HYSTERESIS`, default the
+ *    technique's defaults; ddgi-shared/hysteresis-modes.ts) and each budget
+ *    setting (`VITE_DDGI_FLICKER_BUDGETS`, default `gpuMs:2,units:256`):
+ *    settle frames at that budget, not measured (SETTLE_FRAMES: the
+ *    millisecond budget needs a few frames to find its batch; an adaptive
+ *    rule gets at least 4 memory times, so each probe's history reaches its
+ *    steady count), then MEASURE_FRAMES frames, each one platform update
+ *    followed by one test-view render (this waits for the GPU, so frames run
+ *    back to back; DDGI's clock still advances 1/60 s a frame, a 60 Hz host).
  *
  * The measure, for each pair of consecutive frames (t-1, t), over the
  * "surface" pixels (primary ray hit something; sky pixels are 0 in both
@@ -43,6 +49,7 @@
  *   VITE_DDGI_SCENES=cornell-box   (one scene per run)
  *   VITE_DDGI_CAMERA=1             (1-based bookmark)
  *   VITE_DDGI_FLICKER_BUDGETS=gpuMs:2,units:256
+ *   VITE_DDGI_FLICKER_HYSTERESIS=fixed:0.97,tau:2,tau:5,tau:10   (results keyed '<rule>/<budget>' when given)
  *   VITE_DDGI_FLICKER_FRAMES=120
  *   VITE_DDGI_FLICKER_IMAGES=1
  *   VITE_DDGI_WIDTH=640 VITE_DDGI_HEIGHT=360
@@ -54,6 +61,7 @@
 import { assert } from '../../client.ts';
 import { loadAllManifests } from '../../../../apps/viewer/src/scene/manifests.ts';
 import { imageMean, TestView } from '../ddgi-shared/harness.ts';
+import { applyHysteresisMode, FIXED_097, parseHysteresisModes, type HysteresisMode } from '../ddgi-shared/hysteresis-modes.ts';
 import { startViewerScene, warmUp, type ViewerScene } from '../ddgi-shared/viewer-scene.ts';
 import { runThreePage } from '../three-shared/harness.ts';
 import { fullBrowserVersion } from '../trace-bench/run.ts';
@@ -71,12 +79,19 @@ function countFromEnv(value: unknown, fallback: number): number {
 const SCENE = listFromEnv(env.VITE_DDGI_SCENES, ['cornell-box'])[0];
 const CAMERA = countFromEnv(env.VITE_DDGI_CAMERA, 1);
 const BUDGETS = listFromEnv(env.VITE_DDGI_FLICKER_BUDGETS, ['gpuMs:2', 'units:256']);
+/** Hysteresis rules to measure; without the variable, the defaults only and results keyed by budget as before. */
+const HYSTERESIS_GIVEN = typeof env.VITE_DDGI_FLICKER_HYSTERESIS === 'string' && env.VITE_DDGI_FLICKER_HYSTERESIS.trim() !== '';
+const HYSTERESIS_MODES = parseHysteresisModes(env.VITE_DDGI_FLICKER_HYSTERESIS, ['default']);
 const MEASURE_FRAMES = countFromEnv(env.VITE_DDGI_FLICKER_FRAMES, 120);
 const SAVE_IMAGES = env.VITE_DDGI_FLICKER_IMAGES === '1';
 const WIDTH = countFromEnv(env.VITE_DDGI_WIDTH, 640);
 const HEIGHT = countFromEnv(env.VITE_DDGI_HEIGHT, 360);
 
 const SETTLE_FRAMES = 60;
+/** DDGI's clock step per frame: a 60 Hz host. */
+const FRAME_SECONDS = 1 / 60;
+/** An adaptive rule settles for at least this many memory times (each probe's history count reaches its steady value within e^-4). */
+const SETTLE_MEMORY_TIMES = 4;
 /** The accuracy page's convergence rule (ddgi-sponza-accuracy). */
 const BLOCK_PASSES = 32;
 const CONVERGED_TOLERANCE = 0.005;
@@ -204,23 +219,37 @@ function differenceImage(first: Float32Array, last: Float32Array, referenceMean:
     return rgba;
 }
 
-/** One budget setting: settle, then measure frame by frame. */
+/** Frames to run before measuring a rule: SETTLE_FRAMES, and for an adaptive rule at least SETTLE_MEMORY_TIMES memory times. */
+function settleFrames(mode: HysteresisMode): number {
+    const { adaptiveHysteresis, hysteresisMemorySeconds } = mode.settings;
+    if (!adaptiveHysteresis || !Number.isFinite(hysteresisMemorySeconds)) return SETTLE_FRAMES;
+    return Math.max(SETTLE_FRAMES, Math.ceil((SETTLE_MEMORY_TIMES * hysteresisMemorySeconds) / FRAME_SECONDS));
+}
+
+/** One hysteresis rule and budget setting: settle, then measure frame by frame. */
 async function measureSetting(
     scene: ViewerScene,
     view: TestView,
     bookmark: ViewerScene['manifest']['cameras'][number],
+    mode: HysteresisMode,
     budgetText: string,
     log: (line: string) => void,
 ): Promise<{ result: Record<string, unknown>; images: Array<{ name: string; base64: string }> }> {
     const budget = parseBudget(budgetText);
     const field = scene.ddgi.field;
     assert(field, 'DDGI has no field');
+    applyHysteresisMode(scene.ddgi.settings, mode);
     const renderFrame = async (): Promise<Float32Array> => {
-        scene.frame(budget);
+        scene.frame(budget, FRAME_SECONDS);
         const { indirect } = await view.render(field, bookmark, WIDTH, HEIGHT);
         return indirect;
     };
-    for (let index = 0; index < SETTLE_FRAMES; index++) await renderFrame();
+    // Settling needs no images; the GPU is waited for every few frames so the page never sits in one long task.
+    const settle = settleFrames(mode);
+    for (let index = 0; index < settle; index++) {
+        scene.frame(budget, FRAME_SECONDS);
+        if (index % 8 === 7) await scene.device.queue.onSubmittedWorkDone();
+    }
 
     const comparisons: Comparison[] = [];
     const probesPerFrame: number[] = [];
@@ -258,7 +287,9 @@ async function measureSetting(
     const driftFirst = mean(imageMeans.slice(0, DRIFT_FRAMES));
     const driftLast = mean(imageMeans.slice(-DRIFT_FRAMES));
     const result = {
+        hysteresis: mode.name,
         budget: budgetText,
+        settle_frames: settle,
         frames: comparisons.length,
         // The headline: the two numbers, each averaged over the frame pairs.
         rel_change_mean: round(mean(perFrameMean)),
@@ -275,14 +306,15 @@ async function measureSetting(
         probes_share_per_frame: round(mean(probesPerFrame) / scene.probeCount, 5),
     };
     log(
-        `${scene.manifest.id} ${budgetText}: mean ${(result.rel_change_mean * 100).toFixed(3)}%, p95 ${(result.rel_change_p95 * 100).toFixed(3)}% per pixel; ` +
+        `${scene.manifest.id} ${mode.name} ${budgetText}: mean ${(result.rel_change_mean * 100).toFixed(3)}%, p95 ${(result.rel_change_p95 * 100).toFixed(3)}% per pixel; ` +
             `image mean moves ${(result.image_mean_change * 100).toFixed(4)}% a frame, drift ${(result.image_mean_drift * 100).toFixed(3)}%; ${result.probes_per_frame_mean} probes a frame (${(result.probes_share_per_frame * 100).toFixed(2)}% of ${scene.probeCount})`,
     );
 
     const images: Array<{ name: string; base64: string }> = [];
     if (SAVE_IMAGES) {
         const scale = DISPLAY_MEAN / result.surface_mean_gi;
-        const safeBudget = budgetText.replace(':', '-');
+        const ruleName = HYSTERESIS_GIVEN ? `${mode.name.replaceAll(':', '-').replaceAll('/', '-')}-` : '';
+        const safeBudget = `${ruleName}${budgetText.replace(':', '-')}`;
         let sequence = 0;
         for (const start of IMAGE_SEQUENCE_STARTS.slice(0, IMAGE_SEQUENCES)) {
             sequence++;
@@ -322,7 +354,8 @@ await runThreePage(async ({ device, data, log }) => {
         const warm = await warmUp(scene);
         data.warmup_passes = round(warm.passes);
 
-        // Converge at the normal hysteresis with whole passes split into equal frames.
+        // Converge with the fixed 0.97 rule (see the file comment) with whole passes split into equal frames.
+        applyHysteresisMode(scene.ddgi.settings, FIXED_097);
         const framesPerPass = Math.ceil(scene.probeCount / MAX_PROBES_PER_FRAME);
         const unitsPerFrame = Math.ceil(scene.probeCount / framesPerPass);
         let blockMean = imageMean((await view.render(field, bookmark, WIDTH, HEIGHT)).indirect);
@@ -330,7 +363,7 @@ await runThreePage(async ({ device, data, log }) => {
         let settled = false;
         for (let block = 1; block <= MAX_BLOCKS; block++) {
             for (let frame = 0; frame < BLOCK_PASSES * framesPerPass; frame++) {
-                scene.frame({ units: unitsPerFrame });
+                scene.frame({ units: unitsPerFrame }, FRAME_SECONDS);
                 if (frame % 8 === 7) await device.queue.onSubmittedWorkDone();
             }
             const next = imageMean((await view.render(field, bookmark, WIDTH, HEIGHT)).indirect);
@@ -352,10 +385,12 @@ await runThreePage(async ({ device, data, log }) => {
         const images: Array<{ name: string; base64: string }> = [];
         data.settings = settings;
         data.images = images;
-        for (const budgetText of BUDGETS) {
-            const { result, images: settingImages } = await measureSetting(scene, view, bookmark, budgetText, log);
-            settings[budgetText] = result;
-            images.push(...settingImages);
+        for (const mode of HYSTERESIS_MODES) {
+            for (const budgetText of BUDGETS) {
+                const { result, images: settingImages } = await measureSetting(scene, view, bookmark, mode, budgetText, log);
+                settings[HYSTERESIS_GIVEN ? `${mode.name}/${budgetText}` : budgetText] = result;
+                images.push(...settingImages);
+            }
         }
     } finally {
         scene.dispose();

@@ -28,8 +28,30 @@ export interface DDGISettings {
     irradianceTexels: number;
     /** Interior texels per side of a probe's distance tile. New `prepare` when changed. */
     distanceTexels: number;
-    /** Share of the old value kept per update, 0..1. */
+    /**
+     * How much of a probe's old value each update keeps (docs/design/ddgi.md,
+     * "Hysteresis that knows the time between updates"). On (the default):
+     * per probe, from how many updates it remembers and how long ago they
+     * were, so a probe updated often settles quietly and one updated rarely
+     * still follows changes within seconds. Off: every update keeps
+     * {@link DDGISettings.hysteresis} (the rule before T1.12).
+     */
+    adaptiveHysteresis: boolean;
+    /** With `adaptiveHysteresis` off: the share of the old value every update keeps, 0..1. Not used when it is on. */
     hysteresis: number;
+    /**
+     * The field's memory time τ in seconds, on the technique's clock (the sum
+     * of `deltaTime`): an update made this long ago counts e⁻¹ as much as a new
+     * one. A probe updated every Δ seconds settles at a hysteresis of about
+     * e^(−Δ/τ). `Infinity` never forgets (a plain running average up to
+     * `hysteresisMaxSamples`).
+     */
+    hysteresisMemorySeconds: number;
+    /**
+     * The most updates a probe's history may count as, n_max: its hysteresis
+     * never goes above n_max / (n_max + 1). 200 holds at most 0.995.
+     */
+    hysteresisMaxSamples: number;
     /**
      * Opt-in, off by default (Infinity): when a probe's mean irradiance moves
      * by more than this share of its old mean, its next update uses a lower
@@ -70,6 +92,29 @@ export interface DDGISettings {
     minProbesPerFrame: number | 'auto';
 }
 
+/**
+ * `hysteresisMemorySeconds` by default, τ = 5 s (T1.12, measured on the RTX
+ * 3060 at 60 Hz; docs/design/ddgi.md has the table):
+ * - Cornell, every probe each frame: any τ above about 3.4 s reaches the
+ *   n_max cap, so 5 and 10 are equally quiet (per-pixel change 0.095%
+ *   against 0.56% at the old fixed 0.97); 2 s stops short (0.155%).
+ * - Sponza, 291 probes a frame (a sweep every 1.1 s): after its sun halves,
+ *   the field is within 5% / 1% of the new answer in 13 / 22.5 s at 5 s,
+ *   25.5 / 44 s at 10 s, 91 / 162.5 s at the old 0.97. The cost is
+ *   steadiness on sparsely updated probes: Sponza's per-pixel change 0.027%
+ *   at 5 s, 0.0145% at 10 s, 0.0038% at 0.97 (all far under Cornell's).
+ * 5 s keeps Sponza responsive within seconds at half the noise of 2 s.
+ */
+export const ADAPTIVE_MEMORY_SECONDS = 5;
+
+/**
+ * `hysteresisMaxSamples` by default, n_max = 200: the hold the flicker
+ * decision asked for, h ≤ 200/201 ≈ 0.995 (DECISIONS, Cornell's flicker).
+ * 100 (h ≤ 0.99) was measured too: Cornell 0.185% instead of 0.095%, for
+ * bounce light that settles in half the frames.
+ */
+export const ADAPTIVE_MAX_SAMPLES = 200;
+
 /** What a host must give; everything else has a default. */
 export type DDGISettingsInput = Partial<DDGISettings> & { readonly volume: DDGIVolumeSettings };
 
@@ -77,7 +122,10 @@ export const DEFAULT_DDGI_SETTINGS: Readonly<Omit<DDGISettings, 'volume'>> = {
     raysPerProbe: 256,
     irradianceTexels: 6,
     distanceTexels: 14,
+    adaptiveHysteresis: true,
     hysteresis: 0.97,
+    hysteresisMemorySeconds: ADAPTIVE_MEMORY_SECONDS,
+    hysteresisMaxSamples: ADAPTIVE_MAX_SAMPLES,
     irradianceChangeThreshold: Infinity,
     maxBrightnessChange: 2.0,
     distanceSharpness: 50,
@@ -212,17 +260,44 @@ function clamp(value: number, low: number, high: number, fallback: number): numb
     return Math.min(high, Math.max(low, value));
 }
 
+/**
+ * The technique's clock advances by at most this much per frame. A longer
+ * frame is a stall (a hidden tab, a debugger, a loading hitch), not time in
+ * which the probes could have seen the scene change; counted in full, a
+ * minute in a background tab would make every probe forget its history at
+ * once and the whole field flash noisy as it updates again.
+ */
+export const MAX_CLOCK_STEP_SECONDS = 0.25;
+
+/** How long the technique's clock advances for a frame with this `deltaTime`. */
+export function clockStep(deltaTime: number): number {
+    return Number.isFinite(deltaTime) && deltaTime > 0 ? Math.min(deltaTime, MAX_CLOCK_STEP_SECONDS) : 0;
+}
+
+/** The largest `hysteresisMaxSamples` the kernel takes (n / (n + 1) is 1 in f32 well before this). */
+const MAX_HISTORY_SAMPLES = 1e6;
+
 /** The live blend settings, each limited to a range that can't break the kernel. */
 export function blendSettings(settings: DDGISettings): {
+    adaptiveHysteresis: boolean;
     hysteresis: number;
+    /** 1 / hysteresisMemorySeconds; 0 never forgets. */
+    inverseMemorySeconds: number;
+    maxSamples: number;
     irradianceChangeThreshold: number;
     maxBrightnessChange: number;
     distanceSharpness: number;
     bounceEnergy: number;
 } {
     const defaults = DEFAULT_DDGI_SETTINGS;
+    const memorySeconds = settings.hysteresisMemorySeconds;
+    // Infinity never forgets; zero, negative or NaN fall back to the default (no clock to divide by).
+    const inverseMemorySeconds = memorySeconds === Infinity ? 0 : 1 / (memorySeconds > 0 ? memorySeconds : defaults.hysteresisMemorySeconds);
     return {
+        adaptiveHysteresis: settings.adaptiveHysteresis !== false,
         hysteresis: clamp(settings.hysteresis, 0, 1, defaults.hysteresis),
+        inverseMemorySeconds,
+        maxSamples: clamp(settings.hysteresisMaxSamples, 0, MAX_HISTORY_SAMPLES, defaults.hysteresisMaxSamples),
         // Infinity (or anything not a number) switches the rule off; the kernel reads a negative value as "off".
         irradianceChangeThreshold: settings.irradianceChangeThreshold >= 0 && Number.isFinite(settings.irradianceChangeThreshold) ? settings.irradianceChangeThreshold : CHANGE_RULE_OFF,
         maxBrightnessChange: clamp(settings.maxBrightnessChange, 0, Number.MAX_VALUE, defaults.maxBrightnessChange),

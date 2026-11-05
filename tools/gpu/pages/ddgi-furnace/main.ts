@@ -13,14 +13,30 @@
  * every wall, the floor and the ceiling, seen head-on. Passes when the mean
  * of |E/π − 0.5| / 0.5 over all points and channels is within 2%; the worst
  * point is reported. Runs on a default-limits device.
+ *
+ * For comparing hysteresis rules (T1.12), two optional variables:
+ * `VITE_DDGI_HYSTERESIS` (one rule from ddgi-shared/hysteresis-modes.ts, for
+ * example `fixed:0.97`) and `VITE_DDGI_FRAMES` (instead of FRAMES).
  */
 
 import { assert, runGpuTest } from '../../client.ts';
 import { createDdgiScene, FieldProbe, runFrames, type SurfacePoint, releaseDeviceOnPageHide } from '../ddgi-shared/harness.ts';
+import { parseHysteresisMode } from '../ddgi-shared/hysteresis-modes.ts';
 import { FURNACE_EXPECTED_RADIANCE, FURNACE_SIZE_M } from '../../../../scenes/src/procedural/furnace-room.ts';
 
-/** Enough frames for hysteresis 0.97 to settle: the gap to the answer shrinks about 1.5% per update. */
-const FRAMES = 600;
+const env = import.meta.env as Record<string, unknown>;
+
+/**
+ * Frames every probe is updated: 30 s of DDGI's clock at 60 Hz. Why 1800:
+ * the adaptive hysteresis (T1.12, the default) climbs to about 0.995 when
+ * every probe is updated every frame, so bounce light settles about 6x more
+ * slowly than at the old fixed 0.97, for which 600 was enough. Measured mean
+ * bias, RTX / Intel: adaptive 600 frames -1.95% / -2.05% (over the limit on
+ * the Intel), 1800 frames -0.24% / -0.36%; fixed 0.97 at 600 -0.16% / -0.28%.
+ */
+const FRAMES = Number(env.VITE_DDGI_FRAMES) > 0 ? Math.round(Number(env.VITE_DDGI_FRAMES)) : 1800;
+/** The hysteresis rule, when a run names one; otherwise the technique's defaults. */
+const HYSTERESIS = typeof env.VITE_DDGI_HYSTERESIS === 'string' && env.VITE_DDGI_HYSTERESIS !== '' ? parseHysteresisMode(env.VITE_DDGI_HYSTERESIS) : null;
 /** The check: the mean relative error, over every point and channel. */
 const MEAN_TOLERANCE = 0.02;
 /** Points per metre on each surface. */
@@ -91,7 +107,7 @@ function surfacePoints(blocks: readonly Box[]): SurfacePoint[] {
 await runGpuTest(
     async ({ device, log }) => {
         releaseDeviceOnPageHide(device);
-        const scene = await createDdgiScene(device, 'furnace-room');
+        const scene = await createDdgiScene(device, 'furnace-room', HYSTERESIS?.settings ?? {});
         const field = scene.ddgi.field;
         assert(field, 'DDGI has no field after prepare');
         const probeCount = field.grid.probeCount;
@@ -132,6 +148,7 @@ await runGpuTest(
         assert(meanError <= MEAN_TOLERANCE, `mean |E/pi - 0.5| / 0.5 is ${(meanError * 100).toFixed(3)}%, over the ${MEAN_TOLERANCE * 100}% limit`);
         return {
             frames: FRAMES,
+            hysteresis: HYSTERESIS?.name ?? 'default',
             probesPerFrame: probeCount,
             probes: field.grid.counts,
             distanceFormat: field.layout.distanceFormat,

@@ -19,9 +19,14 @@
  * integers, so both give exactly the same result. Chosen when the kernel is
  * built; nothing assumes a subgroup size.
  *
+ * Hysteresis knows the time between a probe's updates (T1.12): each probe
+ * keeps how many updates it remembers (n) and when it was last updated (t)
+ * in the history buffer, which only this kernel reads and writes.
+ *
  * Bindings (group 1; no platform module): uniforms, the update list, the ray
- * buffer, the scratch buffer and the census buffer (4 storage buffers), and
- * the irradiance, distance and probe-data atlases (sampled, for the old values).
+ * buffer, the scratch buffer, the census buffer and the probe history (5
+ * storage buffers), and the irradiance, distance and probe-data atlases
+ * (sampled, for the old values).
  */
 
 import { CENSUS_RAYS_TRACED, type ScratchLayout } from '../layout.ts';
@@ -165,6 +170,9 @@ const DDGI_NO_DISTANCE: f32 = 3.0e38;
 @group(1) @binding(5) var ddgiIrradianceAtlas: texture_2d_array<f32>;
 @group(1) @binding(6) var ddgiDistanceAtlas: texture_2d_array<f32>;
 @group(1) @binding(7) var ddgiProbeData: texture_2d_array<f32>;
+// Per probe: x = the updates its history counts as (n), y = the technique's
+// clock at its last blended update (t, seconds). Zero until first written.
+@group(1) @binding(8) var<storage, read_write> ddgiProbeHistory: array<vec2f>;
 
 // Per ray: its direction (xyz) and signed hit distance (w, negative = back
 // face). Decoded once here: the blend reads every ray once per texel.
@@ -180,6 +188,7 @@ var<workgroup> ddgiFarthestFrontFace: atomic<u32>;
 var<workgroup> ddgiFrontFacesInReach: atomic<u32>;
 // Thread 0's verdicts, read by everyone with workgroupUniformLoad.
 var<workgroup> ddgiBlendThisUpdate: u32;
+var<workgroup> ddgiUpdateHysteresis: f32;
 var<workgroup> ddgiFastHysteresis: u32;
 var<workgroup> ddgiChangedNow: u32;
 // Phase C: each irradiance texel's new estimate and old value, for the
@@ -346,10 +355,35 @@ fn ddgiDecide(probe: vec3i, offset: vec3f, state: u32) -> DdgiProbeDecision {
 
 // ---- Phase C: blend ----
 
-// Hysteresis for one probe: none for its first blended update, so the field
-// shows partial GI at once instead of fading in from black.
-fn ddgiProbeHysteresis(state: u32) -> f32 {
-    return select(ddgi.hysteresis, 0.0, state == DDGI_STATE_NOT_UPDATED_YET);
+// This update's hysteresis for one probe, and the probe's history after it.
+struct DdgiHysteresisStep {
+    hysteresis: f32,
+    history: vec2f,
+}
+
+// The hysteresis rule (docs/design/ddgi.md, "Hysteresis that knows the time
+// between updates"). A probe's history counts as n updates. Before this
+// update, n fades with the time since the last one, n * exp(-elapsed / tau),
+// so a probe updated rarely remembers less and follows changes within
+// seconds, while one updated every frame builds up to n_max and goes quiet.
+// The new estimate then counts as one more update: h = n / (n + 1), which
+// makes the field the plain mean of its updates while nothing fades (the
+// warm-up's running average, frames with no time between them). After it,
+// n + 1, capped at n_max, so h never exceeds n_max / (n_max + 1).
+// A probe's first blended update (state 3: new, reset, or back on) starts
+// from nothing, h = 0, so the field shows partial GI at once instead of
+// fading in from black. The history is kept with the fixed rule too, so
+// switching rules mid-run carries on from the right count.
+fn ddgiHysteresisStep(history: vec2f, state: u32) -> DdgiHysteresisStep {
+    let firstUpdate = state == DDGI_STATE_NOT_UPDATED_YET;
+    // max(0): a clock that went back (a new prepare) never makes n grow.
+    let elapsedSeconds = max(0.0, ddgi.clockSeconds - history.y);
+    let remembered = select(history.x * exp(-elapsedSeconds * ddgi.inverseMemorySeconds), 0.0, firstUpdate);
+    let adaptive = remembered / (remembered + 1.0);
+    let fixed = select(ddgi.hysteresis, 0.0, firstUpdate);
+    let hysteresis = select(fixed, adaptive, ddgi.adaptiveHysteresis != 0u);
+    let samples = min(remembered + 1.0, ddgi.maxHistorySamples);
+    return DdgiHysteresisStep(hysteresis, vec2f(samples, ddgi.clockSeconds));
 }
 
 // The cosine-weighted mean radiance of the blended rays around one
@@ -371,10 +405,10 @@ fn ddgiEstimateIrradianceTexel(texelIndex: u32, blendedRays: u32) -> vec3f {
     return DDGI_PI * radianceSum / max(weightSum, 1.0e-6);
 }
 
-fn ddgiWriteIrradianceTexel(slot: u32, probeIndex: u32, state: u32, texelIndex: u32, fastHysteresis: bool, changedNow: bool) {
+fn ddgiWriteIrradianceTexel(slot: u32, probeIndex: u32, state: u32, texelIndex: u32, probeHysteresis: f32, fastHysteresis: bool, changedNow: bool) {
     let estimate = ddgiTexelEstimate[texelIndex].rgb;
     let old = ddgiTexelOld[texelIndex].rgb;
-    var hysteresis = ddgiProbeHysteresis(state);
+    var hysteresis = probeHysteresis;
     if (fastHysteresis) {
         hysteresis *= DDGI_BIG_CHANGE_HYSTERESIS_SCALE;
     }
@@ -393,7 +427,7 @@ fn ddgiWriteIrradianceTexel(slot: u32, probeIndex: u32, state: u32, texelIndex: 
     ddgiScratch[base + 1u] = ddgiPackHalves(blendedValue.b, select(0.0, 1.0, changedNow), seed ^ 0x5bd1e995u);
 }
 
-fn ddgiBlendDistanceTexel(slot: u32, probeIndex: u32, probe: vec3i, state: u32, texelIndex: u32, blendedRays: u32) {
+fn ddgiBlendDistanceTexel(slot: u32, probeIndex: u32, probe: vec3i, texelIndex: u32, blendedRays: u32, hysteresis: f32) {
     let texel = vec2u(texelIndex % DDGI_DISTANCE_TEXELS, texelIndex / DDGI_DISTANCE_TEXELS);
     let normal = ddgiTexelDirection(texel, DDGI_DISTANCE_TEXELS);
     var moments = vec2f(0.0);
@@ -409,7 +443,7 @@ fn ddgiBlendDistanceTexel(slot: u32, probeIndex: u32, probe: vec3i, state: u32, 
     let old = textureLoad(ddgiDistanceAtlas, ddgiAtlasTexel(probe, texel, DDGI_DISTANCE_TEXELS), probe.y, 0).xy;
     // A texel no ray came near this update keeps its old value.
     let estimate = select(old, moments / weightSum, weightSum > 1.0e-6);
-    let blendedValue = mix(estimate, old, ddgiProbeHysteresis(state));
+    let blendedValue = mix(estimate, old, hysteresis);
 
     let base = slot * DDGI_SCRATCH_STRIDE + DDGI_SCRATCH_DISTANCE + texelIndex;
     let seed = (probeIndex * DDGI_DISTANCE_TEXEL_COUNT + texelIndex) ^ 0x68e31da4u;
@@ -460,8 +494,15 @@ fn ddgiBlend(
         let decision = ddgiDecide(probe, probeData.offset, state);
         // Phase C runs for probes that traced all their rays and stay active.
         // (The write kernel copies the tiles exactly when the new state is active.)
-        ddgiBlendThisUpdate = select(0u, 1u, decision.state == DDGI_STATE_ACTIVE && !ddgiIsOff(state));
-        // Offsets and states are small exact values in half floats; no rounding noise wanted.
+        let blendThisUpdate = decision.state == DDGI_STATE_ACTIVE && !ddgiIsOff(state);
+        ddgiBlendThisUpdate = select(0u, 1u, blendThisUpdate);
+        if (blendThisUpdate) {
+            // One workgroup per probe in the list, and a probe is listed at
+            // most once a frame, so this read and write can't race.
+            let step = ddgiHysteresisStep(ddgiProbeHistory[probeIndex], state);
+            ddgiUpdateHysteresis = step.hysteresis;
+            ddgiProbeHistory[probeIndex] = step.history;
+        }        // Offsets and states are small exact values in half floats; no rounding noise wanted.
         let base = slot * DDGI_SCRATCH_STRIDE + DDGI_SCRATCH_PROBE_DATA;
         ddgiScratch[base] = pack2x16float(decision.offset.xy);
         ddgiScratch[base + 1u] = pack2x16float(vec2f(decision.offset.z, f32(decision.state)));
@@ -469,6 +510,7 @@ fn ddgiBlend(
     if (workgroupUniformLoad(&ddgiBlendThisUpdate) == 0u) {
         return;
     }
+    let hysteresis = workgroupUniformLoad(&ddgiUpdateHysteresis);
 
     // ---- Phase C ----
     // Step 1: each irradiance texel's estimate and old value; the distance texels in full.
@@ -478,7 +520,7 @@ fn ddgiBlend(
             ddgiTexelEstimate[texelIndex] = vec4f(ddgiEstimateIrradianceTexel(texelIndex, blendedRays), 0.0);
             ddgiTexelOld[texelIndex] = textureLoad(ddgiIrradianceAtlas, ddgiAtlasTexel(probe, texel, DDGI_IRRADIANCE_TEXELS), probe.y, 0);
         } else {
-            ddgiBlendDistanceTexel(slot, probeIndex, probe, state, texelIndex - DDGI_IRRADIANCE_TEXEL_COUNT, blendedRays);
+            ddgiBlendDistanceTexel(slot, probeIndex, probe, texelIndex - DDGI_IRRADIANCE_TEXEL_COUNT, blendedRays, hysteresis);
         }
     }
     workgroupBarrier();
@@ -514,7 +556,7 @@ fn ddgiBlend(
 
     // Step 3: blend every irradiance texel with the probe's hysteresis.
     for (var texelIndex = thread; texelIndex < DDGI_IRRADIANCE_TEXEL_COUNT; texelIndex += DDGI_BLEND_WORKGROUP_SIZE) {
-        ddgiWriteIrradianceTexel(slot, probeIndex, state, texelIndex, fastHysteresis, changedNow);
+        ddgiWriteIrradianceTexel(slot, probeIndex, state, texelIndex, hysteresis, fastHysteresis, changedNow);
     }
 }
 `;

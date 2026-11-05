@@ -39,6 +39,12 @@ struct DdgiUniforms {
     raysPerProbe: u32,
     updateCount: u32,         // probes in the update list
     frame: u32,
+    // Hysteresis that knows the time between a probe's updates (phase C;
+    // docs/design/ddgi.md). The clock is the technique's own, in seconds.
+    adaptiveHysteresis: u32,  // 0: every update keeps 'hysteresis'
+    clockSeconds: f32,
+    inverseMemorySeconds: f32, // 1 / tau; 0 never forgets
+    maxHistorySamples: f32,   // n_max
 }
 
 const DDGI_MAX_RAYS: u32 = ${MAX_RAYS_PER_PROBE}u;

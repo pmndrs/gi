@@ -38,10 +38,12 @@ function viewFromUrl(value: string | null): RenderView {
 }
 
 /**
- * Updates per probe before the field counts as settled. Why 100: each update
- * keeps 97% of the old value (DDGI's default hysteresis), so after 100 a
- * probe holds under 5% of where it started (0.97^100 = 0.048), and light
- * has had as many bounces to spread.
+ * Updates per probe before the field counts as settled. Why 100: chosen for
+ * the fixed 0.97 hysteresis (0.97^100 = 0.048 of where a probe started), and
+ * light has had as many bounces to spread. Under the adaptive hysteresis
+ * (the default since T1.12) the first updates are a running average, so
+ * after 100 a probe's noise is down to a tenth, but bounce light can still
+ * be a few percent low for some seconds (docs/design/ddgi.md).
  */
 const SETTLED_UPDATES_PER_PROBE = 100;
 

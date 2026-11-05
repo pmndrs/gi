@@ -43,8 +43,12 @@ export interface ViewerScene {
     readonly camera: PerspectiveCamera;
     readonly probeCount: number;
     readonly device: GPUDevice;
-    /** One frame through the adapter with this budget. */
-    frame(budget: ThreeGI['budget']): void;
+    /**
+     * One frame through the adapter with this budget. `deltaTime` (seconds,
+     * default 1/60, a 60 Hz host) also advances DDGI's clock, which adaptive
+     * hysteresis measures the time between a probe's updates on.
+     */
+    frame(budget: ThreeGI['budget'], deltaTime?: number): void;
     /** Hands a camera bookmark (1-based) to the adapter's camera. */
     lookFrom(bookmarkIndex: number): void;
     dispose(): void;
@@ -79,9 +83,9 @@ export async function startViewerScene(device: GPUDevice, manifest: SceneManifes
         camera,
         probeCount,
         device,
-        frame(budget) {
+        frame(budget, deltaTime = 1 / 60) {
             threeGI.budget = budget;
-            threeGI.update(camera, 1 / 60);
+            threeGI.update(camera, deltaTime);
         },
         lookFrom(bookmarkIndex) {
             const view = manifest.cameras[bookmarkIndex - 1];
@@ -102,7 +106,12 @@ export function yieldToCallbacks(): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
-/** The viewer's warm-up: steps of `maxProbesPerFrame` probes with a running-average hysteresis. Returns the passes made and the milliseconds taken. */
+/**
+ * The viewer's warm-up: steps of `maxProbesPerFrame` probes with a
+ * running-average hysteresis, back to back with `deltaTime` 0 as the viewer
+ * runs it (so adaptive hysteresis counts the steps with no time between them,
+ * the same running average). Returns the passes made and the milliseconds taken.
+ */
 export async function warmUp(scene: ViewerScene): Promise<{ passes: number; ms: number }> {
     const { ddgi, probeCount, device } = scene;
     const targetHysteresis = ddgi.settings.hysteresis;
@@ -113,7 +122,7 @@ export async function warmUp(scene: ViewerScene): Promise<{ passes: number; ms: 
     for (;;) {
         const completed = Math.floor(updates / probeCount);
         ddgi.settings.hysteresis = Math.min(targetHysteresis, completed / (completed + 1));
-        scene.frame({ units: stepUnits });
+        scene.frame({ units: stepUnits }, 0);
         updates += ddgi.counters[PROBES_UPDATED] ?? 0;
         steps++;
         const done = updates / probeCount >= WARMUP.passes || (performance.now() - startedAt > WARMUP.maxSeconds * 1000 && updates / probeCount >= WARMUP.minPasses);

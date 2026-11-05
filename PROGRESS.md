@@ -21,6 +21,26 @@ Rules:
 
 ---
 
+## 2026-11-05 · T1.12 phase 2a: hysteresis that knows the time between a probe's updates · implementer (opus)
+Did (uncommitted; the lead's design, docs/design/ddgi.md "Hysteresis that knows the time between updates"):
+- Core: per probe, `n` (effective samples) and `t` (last update, s) in a new storage buffer that only `ddgi/blend` reads and writes (binding 8; 5 storage buffers). On an update: `n ← n·exp(−(T−t)/τ)`, `h = n/(n+1)`, then `n ← min(n+1, nMax)`. State 3 gives n = 0 (h = 0). The same h for distances; the big-change rule and the firefly clamp are unchanged.
+- The clock: the sum of `deltaTime`, at most 0.25 s a frame (`MAX_CLOCK_STEP_SECONDS`: a hidden tab mustn't wipe every probe's history), reset at `prepare`.
+- Settings: `adaptiveHysteresis` (true), `hysteresisMemorySeconds` τ (5, `ADAPTIVE_MEMORY_SECONDS`), `hysteresisMaxSamples` nMax (200, `ADAPTIVE_MAX_SAMPLES`); `hysteresis` (0.97) is now the fixed rule's. The viewer's and ddgi-three's warm-ups still write `hysteresis`; under the adaptive rule that is unused and harmless, because they run with `deltaTime` 0, which is the same running average.
+- Files: `packages/ddgi-core/src/techniques/ddgi/` `settings.ts`, `layout.ts`, `ddgi-technique.ts`, `wgsl/common.ts`, `wgsl/blend.ts`, `ddgi.test.ts`. Pages: new `ddgi-settle` (manual); `ddgi-flicker` (`VITE_DDGI_FLICKER_HYSTERESIS`; it converges with the fixed 0.97 first); `ddgi-shared/hysteresis-modes.ts` (new), `viewer-scene.ts` (`frame(budget, deltaTime)`; the warm-up passes 0 like the viewer); `ddgi-furnace` and `ddgi-leak` (`VITE_DDGI_HYSTERESIS` and `VITE_DDGI_FRAMES`; **default frames 600 → 1800 and 3000**, below). Comment in `examples/webgpu/hello`. Design doc, NOTES (3 bullets), `bench/results/flicker.csv` (`note/t1_12_hysteresis_rules`).
+Numbers (RTX 3060 Laptop, Chrome 156; DDGI's clock at 60 Hz; fixed 0.97 / τ 2 / **τ 5** / τ 10):
+- Cornell flicker (`gpuMs:2`, every probe each frame), per-pixel change mean / p95: 0.56 / 2.30% · 0.155 / 0.64% · **0.095 / 0.39%** · 0.093 / 0.38%. Theory: 6.0× quieter at h 0.995, measured 5.9×. nMax 100: 0.185 / 0.76%.
+- Sponza flicker (291 probes a frame): 0.0038 / 0.014% · 0.058 / 0.22% · **0.027 / 0.10%** · 0.0145 / 0.054%. Intel Cornell (90 a frame): 0.046% · – · **0.090%** · 0.048%.
+- Sponza settle (`ddgi-settle`; batch 291 calibrated from a 62 C start, 1.1 s a sweep; the run's verdict was INVALID because it ran hot later, but only the batch is timing). After the warm-up the image mean is already within 0.6% for every rule (0 frames to 5% and 1%). Restart with no warm-up, to within 5% / 1%: 60 / 2,640 frames (1 / 44 s) · 30 / 720 (0.5 / 12 s) · **60 / 180 (1 / 3 s)** · 30 / 210 (0.5 / 3.5 s). Sun halved, no reset: 5,460 / 9,750 frames (91 / 162.5 s) · 330 frames (5.5 s) / noisy · **780 / 1,350 (13 / 22.5 s)** · 1,530 / 2,640 (25.5 / 44 s).
+- Cornell settle (1,574 a frame): after the warm-up the image is 25% low. To within 5% / 1%: 2 / 4.5 s (first time; the 0.97 noise leaves the band until 49 s) · 3.5 / 10 s · **4.5 / 17.5 s** · 6 / 18.5 s.
+- Accuracy, RTX / Intel: test view Cornell point against the HD Cycles reference +4.52% / +4.47% (600 frames, pass). Furnace at 600 frames: adaptive −1.95% / **−2.05% (fails 2%)**, fixed −0.16% / −0.28%; at 1800 frames −0.24% / −0.36%. Two-room leak at 600 frames: adaptive −0.22% / −0.21% (lit room 5.4% below settled), fixed 0.80% / 0.80%; at 1800 0.67% / 0.67%; at 3000 0.81% (RTX). So the settled accuracy is unchanged, and every-frame probes take 3–5× the frames to settle bounce light.
+Verified: lint, typecheck, test 913. GPU suite: `test:gpu --filter ddgi-` passes on the RTX 3060 and the Intel UHD (8 pages each: furnace 1800 frames −0.24% / −0.36%, two-room leak 3000 frames 0.81% / 0.81%, test view +4.52% / +4.47%; the Intel leak page takes 183 s, so its timeout went 300 → 600 s). The manual pages `ddgi-flicker` and `ddgi-settle` ran on the RTX, and `ddgi-flicker` on the Intel, all passing.
+Not verified: the viewer by eye (phase 2b); Sponza settle on the Intel; settle at frame rates other than 60 Hz (τ is in seconds, so adaptive settle times should hold; the fixed rule's scale with the frame rate); curtained Sponza.
+Next:
+- Lead: the proposed DECISIONS entry (τ 5 s, nMax 200; the accuracy pages' new frame counts) is in my report.
+- Lead or T1.13: `ddgi-test-view` still converges 600 frames (I didn't touch it; T1.13 has it open). For a settled number under the adaptive rule it needs about 3000.
+- Phase 2b: the viewer's warm-up `hysteresis` override can go; debug views; Dennis judges by eye.
+- Possible later: Cornell's warm-up leaves it 25% low and the adaptive rule takes 17 s to settle it within 1%. Weighting later updates more during the running average (bounce estimates improve as the field fills) would shorten that. Not built: outside the lead's design.
+
 ## 2026-11-05 · T1.14 part 2: the confirmed names, volume.start, the render-time update, examples · implementer (opus)
 Did (uncommitted):
 - `packages/ddgi-three/src/index.ts` exports `ddgi` (renamed from `ddgiComposite`; it takes the volume), `giAlbedo`, the `GIVolume` additions, `ThreeGILimitError`, `DEFAULT_WARM_UP` and their option types.

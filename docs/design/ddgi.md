@@ -106,7 +106,7 @@ Thread 0 then decides, from the paper's rules (Majercik 2021, section 5):
 **Phase C: blend** (active and not-yet-updated probes only). Threads `0..35` each own an irradiance texel and threads `36..231` each own a distance texel (for the default 6 and 14; other sizes loop). Each loops over the blended rays in workgroup memory:
 - **irradiance texel**, direction `n` from the texel centre: the stored value is `π × Σ L·max(0, n·ω) / Σ max(0, n·ω)`. *Why π:* with rays spread evenly over the sphere, the cosine-weighted mean radiance over the hemisphere is E/π, and the contract's `giIrradiance` returns E. Check against the furnace: constant L gives E = πL exactly.
 - **distance texel:** weight `max(0, n·ω)^distanceSharpness` (default 50), accumulating `d = min(|distance|, clamp)` and `d²`.
-- **Hysteresis:** `new = mix(estimate, old, h)`, with `h = hysteresis` (default 0.97). The old value is read from the atlas with `textureLoad` (the atlas is bound for sampling in this kernel). `h = 0` for a probe in state 3.
+- **Hysteresis:** `new = mix(estimate, old, h)`. The old value is read from the atlas with `textureLoad` (the atlas is bound for sampling in this kernel). `h = 0` for a probe in state 3. *Since T1.12* `h` is per probe and knows the time since the probe's last update ("Hysteresis that knows the time between updates" below); the fixed `h = hysteresis` (0.97) of the first design stays as `adaptiveHysteresis: false`. Irradiance and distance texels use the same `h`.
   - **Big changes:** if the probe's **mean** irradiance (the average over all its interior texels) changed by more than `irradianceChangeThreshold` (default 0.25 of the old mean), lower `h` by a factor of 0.75 for the whole probe, so a light switch shows up quickly (the paper's "probe irradiance threshold").
     - **Off by default since T1.5b (DECISIONS 2026-11-05):** every variant measured biased the field; M2 lowers hysteresis from `SceneChanges` instead. When enabled, the verdict comes from the probe's mean in the previous update.
     - *Revised after the T1.5a review:* the first version tested each texel. A single texel's estimate from about 224 rays is noisy, and bright outliers are the common kind, so they won the lower hysteresis and the field drifted high: Cornell read +9.5% instead of +4.4% with the rule off. Averaging over the probe's texels averages the noise out, while a real light change still trips it.
@@ -126,7 +126,7 @@ Scratch buffer: `maxProbesPerFrame × (36 × 8 + 196 × 4 + 8)` bytes, about 1 M
 | Kernel | Storage buffers | Textures |
 | --- | --- | --- |
 | trace | tracer 3 + scene copy and hit shading 2 + update list and ray buffer = **7** | irradiance, distance, probe data (sampled), the sky's radiance map |
-| blend | update list, ray buffer, scratch and its own state = **4** | irradiance, distance, probe data (sampled) |
+| blend | update list, ray buffer, scratch, its own state (census) and the probe history (T1.12) = **5** | irradiance, distance, probe data (sampled) |
 | write | update list 1 + scratch 1 = **2** | irradiance, distance, probe data (write-only storage) |
 
 (Counts as built in T1.5b; the single `update` kernel of the first design used 7.)
@@ -183,6 +183,47 @@ The code is `packages/ddgi-core/src/platform/work-budget.ts`; every threshold be
 - A full sweep takes ≤ 4 s at the floor on every device. On a GPU-bound frame, the whole frame with GI on against off adds ≤ 3 ms p50 (SPEC). 60 Hz light-load numbers are information only.
 - It behaves at 30, 60 and 120 Hz on the RTX and the Intel: a stable number of units, the floor respected, no step-down while frames are on time, and a saturation step-down that recovers. The last is the `saturation` section of `ddgi-batch-cost`: at 60 Hz a synthetic GPU load makes frames late for 10 s; the batch must step down within 4 s, never below the floor, and get back to 0.85 × the calibrated batch within the time the controller's own constants allow from the lowest batch under the load: 3 s on time, then one ×1.1 step a second, plus 10 s of margin, at most 90 s. The check catches a recovery that stalls (a ceiling that ratchets down, frames that never count as on time again), not a slow one; how fast recovery is comes from those constants. The Intel UHD is a correctness target: its numbers are reported, not judged.
 
+## Hysteresis that knows the time between updates (T1.12 phase 2a; the lead's design, 2026-11-05)
+
+**Why.** With a fixed hysteresis (0.97) every update keeps the same share of the old value, whatever the time since the probe's last one.
+- Cornell updates every probe every frame, so the wobble from small-emitter ray noise (σ about 30% per update, NOTES) shows: 0.56% per pixel per frame, and Dennis: "it is not steady". A higher fixed h is quieter but slower everywhere.
+- Under budget v2 a Sponza probe is updated about once every 73 frames (1.2 s at 60 Hz). At 0.97 a change takes about 75 updates to settle 90%: about 90 s. A fixed 0.995 would make that minutes.
+
+**The rule.** Each probe keeps an effective sample count `n` and the time `t` of its last blended update. On an update at time `T`:
+1. `n ← n · exp(−(T − t) / τ)`: what it remembers fades with the time since its last update.
+2. `h = n / (n + 1) = 1 − 1 / (n + 1)` blends this update: the new estimate counts as one sample among `n + 1`.
+3. `n ← min(n + 1, nMax)`, `t ← T`.
+
+- **First update** (state 3: new, after `resetHistory()`, or back on after being off): `n = 0`, so `h = 0`, as before.
+- **The warm-up's running average** is the same rule with no time between updates: the viewer's warm-up runs with `deltaTime` 0, so `n` counts 0, 1, 2, … and `h = k/(k+1)` at a probe's k-th update. The viewer's `settings.hysteresis` override during the warm-up is now unused (harmless; phase 2b can drop it).
+- **Where it settles.** A probe updated every Δ seconds settles at `n = e/(1 − e)` with `e = exp(−Δ/τ)`, so `h = e`: an exponential average with a memory of τ seconds, whatever the frame rate. Cornell (Δ = 1/60 s) would reach `n = 60τ`, so it stops at `nMax`; Sponza at 60 Hz (Δ ≈ 1.2 s) settles at a few samples.
+- **nMax** sets the quietest a probe can get: `h ≤ nMax / (nMax + 1)`. 200 gives 0.995, the hold the flicker decision asked for (DECISIONS, Cornell's flicker).
+- **The big-change rule** is unchanged and still off by default: when on, it multiplies this `h` by 0.75 for the probe's next update. The firefly clamp is unchanged too.
+- **Distances** blend with the same `h` as irradiance.
+- **The fixed rule** stays as `adaptiveHysteresis: false` (uses `hysteresis`). The history is kept under both rules, so switching mid-run carries on from the right count.
+
+**The clock.** The technique's own, in seconds: the sum of every frame's `deltaTime` since `prepare`, each frame counting at most 0.25 s (`MAX_CLOCK_STEP_SECONDS`). A longer frame is a stall (a hidden tab, a debugger, a hitch). Counted in full, a minute in a background tab would make every probe forget its history at once, and the whole field would flash noisy as it updated again. Paused frames (`budget.paused`) don't call the technique and don't advance it. f32 seconds keep millisecond precision for days of running, far below τ.
+
+**Storage.** A `vec2f` per probe (`n`, `t`) in a storage buffer that only `ddgi/blend` reads and writes (8 bytes a probe; Sponza 155 KB). Each workgroup owns one probe and a probe is listed at most once a frame, so there are no races. New buffers start at zero, and state 3 resets `n`, so `resetHistory()` needs no clear. Blend now binds 5 storage buffers.
+
+**What it trades.** For a texel updated with hysteresis h and per-update noise σ, the wobble is `σ·√((1−h)/(1+h))` and the change per update about `σ·(1−h)·√(2/(1+h))`. Bias from bounce light that hasn't settled shrinks per update by about `(1−h)(1−ρ)` (ρ: how much of a probe's light comes back through the field). So a quieter probe is also slower to settle bounce light: on the accuracy pages, where every probe is updated every frame for 600 frames, the field is still a little low (numbers below). And a running average whose estimates use the field it is building (h = k/(k+1)) settles bounce light only like `k^−(1−ρ)`, so early estimates made with a dark field linger until the clock fades them.
+
+**Measured (T1.12 phase 2a; RTX 3060 Laptop, Chrome 156, DDGI's clock at 60 Hz; pages `ddgi-flicker`, `ddgi-settle`, `ddgi-furnace`, `ddgi-leak`; numbers in PROGRESS).**
+
+| | fixed 0.97 | τ = 2 s | **τ = 5 s** | τ = 10 s |
+| --- | --- | --- | --- | --- |
+| Cornell per-pixel change a frame, mean / p95 (every probe each frame) | 0.56% / 2.30% | 0.155% / 0.64% | **0.095% / 0.39%** | 0.093% / 0.38% |
+| Sponza per-pixel change a frame (291 probes a frame) | 0.0038% / 0.014% | 0.058% / 0.22% | **0.027% / 0.10%** | 0.0145% / 0.054% |
+| Intel Cornell per-pixel change (90 probes a frame) | 0.046% / 0.24% | | **0.090% / 0.46%** | 0.048% / 0.26% |
+| Sponza, sun halved: within 5% / 1% of the new answer | 91 / 162.5 s | 5.5 s / noisy | **13 / 22.5 s** | 25.5 / 44 s |
+| Sponza, restart with no warm-up: within 5% / 1% | 1 / 44 s | 0.5 / 12 s | **1 / 3 s** | 0.5 / 3.5 s |
+| Sponza, after the warm-up: image mean | within 0.2% | within 0.6% | **within 0.3%** | within 0.4% |
+| Cornell, after the warm-up (25% low): within 5% / 1% | 2 / 4.5 s (noise to 49 s) | 3.5 / 10 s | **4.5 / 17.5 s** | 6 / 18.5 s |
+
+- **Defaults:** τ = 5 s and nMax = 200 (`ADAPTIVE_MEMORY_SECONDS`, `ADAPTIVE_MAX_SAMPLES` in settings.ts). Any τ above about 3.4 s lets Cornell reach the cap, so 5 and 10 are equally quiet there. 5 s follows a light change on Sponza in half the time of 10 s, at about twice the per-frame change on sparsely updated probes (still a fifth of Cornell's adaptive number). 2 s is noisier everywhere and no faster to a steady answer. nMax = 100 (h ≤ 0.99) was measured as well: Cornell 0.185% / 0.76%, furnace −0.80% after 600 frames.
+- **Sparse probes are noisier than before.** Where a probe's updates are more than about 0.15 s apart (τ·ln(1/0.97)), its h is below the old 0.97, so each update moves it more. That is the point (Sponza follows changes in seconds). The cost: Sponza changes about 7× more per frame than at 0.97, and Intel Cornell (a sweep every 0.32 s) 2×. Both stay well under the RTX Cornell's adaptive number.
+- **Every-frame probes settle bounce light more slowly.** On the accuracy pages (every probe every frame), 600 frames left the furnace −1.95% / −2.05% (RTX / Intel; the Intel over the 2% limit) and the two-room lit room 5.4% below its settled value. The pages now run 1800 (furnace) and 3000 (leak) frames, and the settled values match the fixed rule's: furnace −0.24% / −0.36% (fixed 0.97: −0.16% / −0.28%), two-room leak 0.81% (fixed 0.80%). In the viewer, Cornell's field after the warm-up is still a few percent low for some seconds and creeps up (table). M2's change-driven reset is what makes light changes fast on every-frame probes.
+
 ## Which probes update (the budget)
 
 - **Unit = one probe update.** `TechniqueFrame.units` comes from the platform's budget v2 (above): the calibrated batch, at least the floor, stepped down only when frames are late. `FrameBudget.units` stays a hard cap. Without GPU timings, `FrameBudget.units`, default 512 on Tier A.
@@ -220,7 +261,10 @@ interface DDGISettings {
     raysPerProbe: number;            // 256
     irradianceTexels: number;        // 6 (interior), new prepare when changed
     distanceTexels: number;          // 14
-    hysteresis: number;              // 0.97
+    adaptiveHysteresis: boolean;     // true (T1.12): per probe, from its history and the time since its last update
+    hysteresis: number;              // 0.97, used only with adaptiveHysteresis false
+    hysteresisMemorySeconds: number; // 5 (τ); Infinity never forgets
+    hysteresisMaxSamples: number;    // 200 (nMax; h at most 0.995)
     irradianceChangeThreshold: number; // Infinity (off; DECISIONS 2026-11-05). A value turns on the lagged probe-mean rule
     maxBrightnessChange: number;     // 2.0
     distanceSharpness: number;       // 50
