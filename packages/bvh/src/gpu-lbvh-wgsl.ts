@@ -240,6 +240,17 @@ const LBVH_WORKGROUP_SIZE: u32 = ${LBVH_WORKGROUP_SIZE}u;
 const LBVH_SCRATCH_NODE_WORDS: u32 = ${LBVH_SCRATCH_NODE_WORDS}u;
 const LBVH_SLOT_WORDS: u32 = ${LBVH_SLOT_WORDS}u;
 const LBVH_NODE_INFO_WORDS: u32 = ${LBVH_NODE_INFO_WORDS}u;
+// Words of a node's info.
+const LBVH_INFO_FIRST: u32 = 0u;    // first sorted position of its triangles
+const LBVH_INFO_COUNT: u32 = 1u;    // its triangle count, | LBVH_COLLAPSE_BIT
+const LBVH_INFO_PARENT: u32 = 2u;   // its parent's split index, or LBVH_NO_PARENT
+// Words of a child slot in lbvhScratch.
+const LBVH_SLOT_MIN: u32 = 0u;
+const LBVH_SLOT_REFERENCE: u32 = 3u;
+const LBVH_SLOT_MAX: u32 = 4u;
+const LBVH_SLOT_COST: u32 = 7u;
+const LBVH_INDEX_UINT16: u32 = ${LBVH_INDEX_FORMAT.uint16}u;
+const LBVH_INDEX_UINT32: u32 = ${LBVH_INDEX_FORMAT.uint32}u;
 const LBVH_MESH_WORDS: u32 = ${LBVH_MESH_WORDS}u;
 const LBVH_TILE_WORDS: u32 = ${LBVH_TILE_WORDS}u;
 const LBVH_STATS_WORDS: u32 = ${LBVH_STATS_WORDS}u;
@@ -359,9 +370,9 @@ fn lbvhMeshOfInner(node: u32) -> LbvhMesh {
 fn lbvhVertexOf(mesh: LbvhMesh, triangle: u32, corner: u32) -> u32 {
     let entry = mesh.indexOffset + triangle * 3u + corner;
     var vertex = triangle * 3u + corner;
-    if (mesh.indexFormat == 32u) {
+    if (mesh.indexFormat == LBVH_INDEX_UINT32) {
         vertex = lbvhIndices[entry];
-    } else if (mesh.indexFormat == 16u) {
+    } else if (mesh.indexFormat == LBVH_INDEX_UINT16) {
         vertex = (lbvhIndices[entry >> 1u] >> ((entry & 1u) * 16u)) & 0xffffu;
     }
     return vertex;
@@ -423,6 +434,7 @@ fn lbvhStart(@builtin(global_invocation_id) id: vec3u) {
 // ---- 2. Triangle boxes and the centroid bounds -------------------------------------------
 
 var<workgroup> lbvhGroupMin: array<atomic<u32>, 3>;
+// Workgroup memory starts at zero, which is already the smallest ordered value: only the minima need setting.
 var<workgroup> lbvhGroupMax: array<atomic<u32>, 3>;
 
 @compute @workgroup_size(${LBVH_WORKGROUP_SIZE})
@@ -577,14 +589,14 @@ fn lbvhClear(
 fn lbvhStoreChild(mesh: LbvhMesh, split: u32, side: u32, child: LbvhChild) {
     let node = mesh.innerStart + split;
     let base = node * LBVH_SCRATCH_NODE_WORDS + side * LBVH_SLOT_WORDS;
-    atomicStore(&lbvhScratch[base], bitcast<u32>(child.lower.x));
-    atomicStore(&lbvhScratch[base + 1u], bitcast<u32>(child.lower.y));
-    atomicStore(&lbvhScratch[base + 2u], bitcast<u32>(child.lower.z));
-    atomicStore(&lbvhScratch[base + 3u], child.reference);
-    atomicStore(&lbvhScratch[base + 4u], bitcast<u32>(child.upper.x));
-    atomicStore(&lbvhScratch[base + 5u], bitcast<u32>(child.upper.y));
-    atomicStore(&lbvhScratch[base + 6u], bitcast<u32>(child.upper.z));
-    atomicStore(&lbvhScratch[base + 7u], bitcast<u32>(child.cost));
+    atomicStore(&lbvhScratch[base + LBVH_SLOT_MIN], bitcast<u32>(child.lower.x));
+    atomicStore(&lbvhScratch[base + LBVH_SLOT_MIN + 1u], bitcast<u32>(child.lower.y));
+    atomicStore(&lbvhScratch[base + LBVH_SLOT_MIN + 2u], bitcast<u32>(child.lower.z));
+    atomicStore(&lbvhScratch[base + LBVH_SLOT_REFERENCE], child.reference);
+    atomicStore(&lbvhScratch[base + LBVH_SLOT_MAX], bitcast<u32>(child.upper.x));
+    atomicStore(&lbvhScratch[base + LBVH_SLOT_MAX + 1u], bitcast<u32>(child.upper.y));
+    atomicStore(&lbvhScratch[base + LBVH_SLOT_MAX + 2u], bitcast<u32>(child.upper.z));
+    atomicStore(&lbvhScratch[base + LBVH_SLOT_COST], bitcast<u32>(child.cost));
     atomicStore(&lbvhScratch[lbvhHeightWord(node, side)], child.height);
 }
 
@@ -607,10 +619,10 @@ fn lbvhWaitChild(mesh: LbvhMesh, split: u32, side: u32) -> LbvhChild {
     let base = node * LBVH_SCRATCH_NODE_WORDS + side * LBVH_SLOT_WORDS;
     let m = mesh.index;
     return LbvhChild(
-        vec3f(bitcast<f32>(lbvhWaitScratch(m, base)), bitcast<f32>(lbvhWaitScratch(m, base + 1u)), bitcast<f32>(lbvhWaitScratch(m, base + 2u))),
-        vec3f(bitcast<f32>(lbvhWaitScratch(m, base + 4u)), bitcast<f32>(lbvhWaitScratch(m, base + 5u)), bitcast<f32>(lbvhWaitScratch(m, base + 6u))),
-        lbvhWaitScratch(m, base + 3u),
-        bitcast<f32>(lbvhWaitScratch(m, base + 7u)),
+        vec3f(bitcast<f32>(lbvhWaitScratch(m, base + LBVH_SLOT_MIN)), bitcast<f32>(lbvhWaitScratch(m, base + LBVH_SLOT_MIN + 1u)), bitcast<f32>(lbvhWaitScratch(m, base + LBVH_SLOT_MIN + 2u))),
+        vec3f(bitcast<f32>(lbvhWaitScratch(m, base + LBVH_SLOT_MAX)), bitcast<f32>(lbvhWaitScratch(m, base + LBVH_SLOT_MAX + 1u)), bitcast<f32>(lbvhWaitScratch(m, base + LBVH_SLOT_MAX + 2u))),
+        lbvhWaitScratch(m, base + LBVH_SLOT_REFERENCE),
+        bitcast<f32>(lbvhWaitScratch(m, base + LBVH_SLOT_COST)),
         lbvhWaitScratch(m, lbvhHeightWord(node, side)),
     );
 }
@@ -664,14 +676,14 @@ fn lbvhFinishNode(mesh: LbvhMesh, split: u32, first: u32, end: u32, a: LbvhChild
     // The root stays an inner node: the layout's root always has two children.
     let isRoot = first == 0u && end == mesh.triangleCount;
     let collapse = !isRoot && leafCost <= innerCost;
-    lbvhNodeInfo[lbvhInfoWord(mesh, split, 0u)] = first;
-    lbvhNodeInfo[lbvhInfoWord(mesh, split, 1u)] = count | select(0u, LBVH_COLLAPSE_BIT, collapse);
+    lbvhNodeInfo[lbvhInfoWord(mesh, split, LBVH_INFO_FIRST)] = first;
+    lbvhNodeInfo[lbvhInfoWord(mesh, split, LBVH_INFO_COUNT)] = count | select(0u, LBVH_COLLAPSE_BIT, collapse);
     let height = 1u + max(a.height, b.height);
     return LbvhChild(lower, upper, split, min(innerCost, leafCost), select(height, 0u, collapse));
 }
 
 fn lbvhFinishRoot(mesh: LbvhMesh, split: u32, root: LbvhChild) {
-    lbvhNodeInfo[lbvhInfoWord(mesh, split, 2u)] = LBVH_NO_PARENT;
+    lbvhNodeInfo[lbvhInfoWord(mesh, split, LBVH_INFO_PARENT)] = LBVH_NO_PARENT;
     atomicStore(&lbvhStats[lbvhStatWord(mesh.index, LBVH_STAT_ROOT_NODE)], split);
     atomicStore(&lbvhStats[lbvhStatWord(mesh.index, LBVH_STAT_MAX_DEPTH)], root.height);
     for (var axis = 0u; axis < 3u; axis += 1u) {
@@ -734,7 +746,7 @@ fn lbvhClimbFrom(mesh: LbvhMesh, start: LbvhChild, startFirst: u32, startEnd: u3
             return;
         }
         parent = lbvhFindParent(mesh, first, end);
-        lbvhNodeInfo[lbvhInfoWord(mesh, split, 2u)] = parent.split;
+        lbvhNodeInfo[lbvhInfoWord(mesh, split, LBVH_INFO_PARENT)] = parent.split;
         // The node's data go into its side of the parent, for the sibling's thread (if it comes second) and the emit pass.
         lbvhStoreChild(mesh, parent.split, parent.side, child);
         if (end - first >= limit) {
@@ -808,7 +820,7 @@ fn lbvhClimb(
             return;
         }
         parent = lbvhFindParent(mesh, first, end);
-        lbvhNodeInfo[lbvhInfoWord(mesh, split, 2u)] = parent.split;
+        lbvhNodeInfo[lbvhInfoWord(mesh, split, LBVH_INFO_PARENT)] = parent.split;
         lbvhStoreChild(mesh, parent.split, parent.side, child);
         if (end - first >= lbvhParams.climbLimit) {
             lbvhQueueArrival(mesh, parent);
@@ -848,8 +860,8 @@ fn lbvhClimbOn(
     let split = node - mesh.innerStart;
     // Stored by the first round, a dispatch ago.
     let child = lbvhWaitChild(mesh, split, side);
-    let first = lbvhNodeInfo[lbvhInfoWord(mesh, child.reference, 0u)];
-    let end = first + (lbvhNodeInfo[lbvhInfoWord(mesh, child.reference, 1u)] & LBVH_COUNT_MASK);
+    let first = lbvhNodeInfo[lbvhInfoWord(mesh, child.reference, LBVH_INFO_FIRST)];
+    let end = first + (lbvhNodeInfo[lbvhInfoWord(mesh, child.reference, LBVH_INFO_COUNT)] & LBVH_COUNT_MASK);
     lbvhClimbFrom(mesh, child, first, end, LbvhParent(split, side), 0xffffffffu);
 }
 
@@ -859,19 +871,19 @@ fn lbvhClimbOn(
 // most maxLeaf triangles can have, and counts grow on the way up, so the walk
 // is short.
 fn lbvhKept(mesh: LbvhMesh, split: u32) -> bool {
-    if ((lbvhNodeInfo[lbvhInfoWord(mesh, split, 1u)] & LBVH_COLLAPSE_BIT) != 0u) {
+    if ((lbvhNodeInfo[lbvhInfoWord(mesh, split, LBVH_INFO_COUNT)] & LBVH_COLLAPSE_BIT) != 0u) {
         return false;
     }
-    var above = lbvhNodeInfo[lbvhInfoWord(mesh, split, 2u)];
+    var above = lbvhNodeInfo[lbvhInfoWord(mesh, split, LBVH_INFO_PARENT)];
     for (var guard = 0u; guard <= lbvhParams.maxLeaf && above != LBVH_NO_PARENT; guard += 1u) {
-        let info = lbvhNodeInfo[lbvhInfoWord(mesh, above, 1u)];
+        let info = lbvhNodeInfo[lbvhInfoWord(mesh, above, LBVH_INFO_COUNT)];
         if ((info & LBVH_COUNT_MASK) > lbvhParams.maxLeaf) {
             return true;
         }
         if ((info & LBVH_COLLAPSE_BIT) != 0u) {
             return false;
         }
-        above = lbvhNodeInfo[lbvhInfoWord(mesh, above, 2u)];
+        above = lbvhNodeInfo[lbvhInfoWord(mesh, above, LBVH_INFO_PARENT)];
     }
     return true;
 }
@@ -939,10 +951,10 @@ fn lbvhTriangleBox(mesh: LbvhMesh, position: u32) -> LbvhBox {
 fn lbvhReadChild(mesh: LbvhMesh, split: u32, side: u32) -> LbvhChild {
     let base = (mesh.innerStart + split) * LBVH_SCRATCH_NODE_WORDS + side * LBVH_SLOT_WORDS;
     return LbvhChild(
-        vec3f(bitcast<f32>(lbvhScratchView[base]), bitcast<f32>(lbvhScratchView[base + 1u]), bitcast<f32>(lbvhScratchView[base + 2u])),
-        vec3f(bitcast<f32>(lbvhScratchView[base + 4u]), bitcast<f32>(lbvhScratchView[base + 5u]), bitcast<f32>(lbvhScratchView[base + 6u])),
-        lbvhScratchView[base + 3u],
-        bitcast<f32>(lbvhScratchView[base + 7u]),
+        vec3f(bitcast<f32>(lbvhScratchView[base + LBVH_SLOT_MIN]), bitcast<f32>(lbvhScratchView[base + LBVH_SLOT_MIN + 1u]), bitcast<f32>(lbvhScratchView[base + LBVH_SLOT_MIN + 2u])),
+        vec3f(bitcast<f32>(lbvhScratchView[base + LBVH_SLOT_MAX]), bitcast<f32>(lbvhScratchView[base + LBVH_SLOT_MAX + 1u]), bitcast<f32>(lbvhScratchView[base + LBVH_SLOT_MAX + 2u])),
+        lbvhScratchView[base + LBVH_SLOT_REFERENCE],
+        bitcast<f32>(lbvhScratchView[base + LBVH_SLOT_COST]),
         0u,
     );
 }
@@ -980,8 +992,8 @@ fn lbvhEmit(
     let rootRank = lbvhRank[mesh.innerStart + root] - nodeOffset;
     let out = lbvhOutputIndex(lbvhRank[mesh.innerStart + split] - nodeOffset, rootRank);
     // The left child covers [first, split + 1), the right [split + 1, first + count).
-    let first = lbvhNodeInfo[lbvhInfoWord(mesh, split, 0u)];
-    let end = first + (lbvhNodeInfo[lbvhInfoWord(mesh, split, 1u)] & LBVH_COUNT_MASK);
+    let first = lbvhNodeInfo[lbvhInfoWord(mesh, split, LBVH_INFO_FIRST)];
+    let end = first + (lbvhNodeInfo[lbvhInfoWord(mesh, split, LBVH_INFO_COUNT)] & LBVH_COUNT_MASK);
     for (var side = 0u; side < 2u; side += 1u) {
         let leafPosition = select(first, split + 1u, side == 1u);
         let isLeaf = select(split + 1u - first, end - split - 1u, side == 1u) == 1u;
@@ -995,10 +1007,10 @@ fn lbvhEmit(
             count = 1u;
         } else {
             child = lbvhReadChild(mesh, split, side);
-            let info = lbvhNodeInfo[lbvhInfoWord(mesh, child.reference, 1u)];
+            let info = lbvhNodeInfo[lbvhInfoWord(mesh, child.reference, LBVH_INFO_COUNT)];
             if ((info & LBVH_COLLAPSE_BIT) != 0u) {
                 // A subtree's triangles are neighbours in sorted order: the leaf is that run.
-                index = lbvhNodeInfo[lbvhInfoWord(mesh, child.reference, 0u)];
+                index = lbvhNodeInfo[lbvhInfoWord(mesh, child.reference, LBVH_INFO_FIRST)];
                 count = info & LBVH_COUNT_MASK;
             } else {
                 index = lbvhOutputIndex(lbvhRank[mesh.innerStart + child.reference] - nodeOffset, rootRank);
@@ -1009,7 +1021,7 @@ fn lbvhEmit(
     }
     var parent = LBVH_NO_PARENT;
     if (split != root) {
-        let above = lbvhNodeInfo[lbvhInfoWord(mesh, split, 2u)];
+        let above = lbvhNodeInfo[lbvhInfoWord(mesh, split, LBVH_INFO_PARENT)];
         parent = lbvhOutputIndex(lbvhRank[mesh.innerStart + above] - nodeOffset, rootRank);
     }
     lbvhOutParents[nodeOffset + out] = parent;

@@ -76,7 +76,7 @@ async function readBuffer(device: GPUDevice, source: GPUBuffer, byteLength: numb
     return copy;
 }
 
-function storageBuffer(device: GPUDevice, label: string, data: Uint32Array | Float32Array | number): GPUBuffer {
+function storageBuffer(device: GPUDevice, label: string, data: Uint32Array | Uint16Array | Float32Array | number): GPUBuffer {
     const size = Math.max(16, typeof data === 'number' ? data : data.byteLength);
     const buffer = device.createBuffer({ label, size, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST });
     if (typeof data !== 'number') device.queue.writeBuffer(buffer, 0, data as Uint32Array<ArrayBuffer>);
@@ -195,6 +195,8 @@ function treeCases(device: GPUDevice): { cases: TreeCase[]; owned: GPUBuffer[] }
         { name: 'flat (no height)', geometry: { positions: randomSoup(4000, 6).map((value, index) => (index % 3 === 1 ? 0 : value)) } },
         { name: 'flags', geometry: { positions: randomSoup(500, 7), triangleFlags: Uint32Array.from({ length: 500 }, (_, index) => index % 3) } },
         { name: 'random soup 300k', geometry: { positions: randomSoup(300_000, 8, 200) } },
+        // Nine 16-bit indices: an odd count, padded to whole words on upload.
+        { name: 'odd 16-bit index list', geometry: { positions: randomSoup(3, 9), indices: Uint16Array.from({ length: 9 }, (_, index) => 8 - index) } },
     ];
 
     // The same grid again, but from GPU buffers: interleaved vertices (position, then 3 unused floats) and 32-bit indices.
@@ -210,6 +212,27 @@ function treeCases(device: GPUDevice): { cases: TreeCase[]; owned: GPUBuffer[] }
         name: 'GPU buffers, interleaved',
         geometry: { positions: source.positions, indices },
         input: { positionBuffer, vertexCount, positionStrideFloats: 6, positionOffsetFloats: 1, indexBuffer, indexFormat: 'uint32', triangleCount: indices.length / 3 },
+    });
+    // A 16-bit index buffer whose mesh starts at an odd index: one stray index first.
+    const shared = grid(40);
+    const sharedIndices = shared.indices as Uint16Array;
+    const offsetIndices = new Uint16Array(sharedIndices.length + 2);
+    offsetIndices[0] = 0xffff;
+    offsetIndices.set(sharedIndices, 1);
+    const sharedPositions = storageBuffer(device, 'positions', shared.positions);
+    const oddIndexBuffer = storageBuffer(device, 'indices at an odd offset', offsetIndices);
+    owned.push(sharedPositions, oddIndexBuffer);
+    cases.push({
+        name: 'GPU buffers, 16-bit indices at an odd offset',
+        geometry: shared,
+        input: {
+            positionBuffer: sharedPositions,
+            vertexCount: shared.positions.length / 3,
+            indexBuffer: oddIndexBuffer,
+            indexFormat: 'uint16',
+            indexOffset: 1,
+            triangleCount: sharedIndices.length / 3,
+        },
     });
     return { cases, owned };
 }

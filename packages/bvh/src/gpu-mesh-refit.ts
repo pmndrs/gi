@@ -16,7 +16,7 @@
  *
  * Any builder's tree works (the GPU LBVH's or tinybvh's): only the layout
  * matters. The refit takes the tree's shape from a CPU copy of the layout
- * (`setTree`), which a GPU-built tree gets once with `GpuLbvhBuilder.readLayout`;
+ * (`setTree`), which a GPU-built tree gets once with `GpuLbvhBuilder.readLayouts`;
  * the shape never changes while the mesh deforms, so that is a one-off at
  * build time, not a per-frame readback.
  *
@@ -27,6 +27,7 @@
  */
 
 import { GPU_LAYOUT_TRIANGLE_BYTES, GPU_LAYOUT_TRIANGLE_WORD, type GpuLayoutMeshBvh } from './gpu-layout.ts';
+import { LBVH_INDEX_FORMAT } from './gpu-lbvh-wgsl.ts';
 import { GpuBvhRefit, type BvhRefitStats, type GpuBvhRefitOptions } from './gpu-refit.ts';
 import { leafSlotsOf, parentSlotsOf, PRIMITIVE_BOX_FLOATS } from './refit-cpu.ts';
 import { dispatchWorkgroups2d, WORKGROUP_INDEX_WGSL } from './gpu-workgroup-scan.ts';
@@ -61,14 +62,16 @@ const REFIT_WORKGROUP_SIZE: u32 = ${WORKGROUP_SIZE}u;
 const REFIT_TRIANGLE_WORDS: u32 = ${GPU_LAYOUT_TRIANGLE_BYTES / 4}u;
 const REFIT_CORNER_STRIDE: u32 = ${triangle.vertex1 - triangle.vertex0}u;
 const REFIT_ORIGINAL_INDEX: u32 = ${triangle.originalIndex}u;
+const REFIT_INDEX_UINT16: u32 = ${LBVH_INDEX_FORMAT.uint16}u;
+const REFIT_INDEX_UINT32: u32 = ${LBVH_INDEX_FORMAT.uint32}u;
 ${WORKGROUP_INDEX_WGSL}
 
 fn refitVertexOf(original: u32, corner: u32) -> u32 {
     let entry = refitParams.indexOffset + original * 3u + corner;
     var vertex = original * 3u + corner;
-    if (refitParams.indexFormat == 32u) {
+    if (refitParams.indexFormat == REFIT_INDEX_UINT32) {
         vertex = refitIndices[entry];
-    } else if (refitParams.indexFormat == 16u) {
+    } else if (refitParams.indexFormat == REFIT_INDEX_UINT16) {
         vertex = (refitIndices[entry >> 1u] >> ((entry & 1u) * 16u)) & 0xffffu;
     }
     // The indices were checked when the tree was built; this only keeps a bad buffer's reads in range.
@@ -197,19 +200,20 @@ export class GpuMeshRefit {
     encode(pass: GPUComputePassEncoder, target: MeshRefitTarget, vertices: MeshRefitVertices): void {
         if (!this.pipeline) throw new Error('@pmndrs/bvh: call prepare() before encode()');
         if (this.triangleCount === 0) return;
-        const indexFormat = vertices.indexBuffer ? (vertices.indexFormat === 'uint16' ? 16 : 32) : 0;
+        const indexFormat = vertices.indexBuffer ? LBVH_INDEX_FORMAT[vertices.indexFormat ?? 'uint32'] : LBVH_INDEX_FORMAT.none;
         this.device.queue.writeBuffer(
             this.params,
             0,
+            // MeshRefitParams, field by field.
             new Uint32Array([
-                this.triangleCount,
-                this.triangleWordOffset,
-                vertices.vertexCount,
-                vertices.positionStrideFloats ?? 3,
-                vertices.positionOffsetFloats ?? 0,
-                indexFormat,
-                vertices.indexOffset ?? 0,
-                0,
+                this.triangleCount, // triangleCount
+                this.triangleWordOffset, // triangleWordOffset
+                vertices.vertexCount, // vertexCount
+                vertices.positionStrideFloats ?? 3, // positionStride
+                vertices.positionOffsetFloats ?? 0, // positionOffset
+                indexFormat, // indexFormat
+                vertices.indexOffset ?? 0, // indexOffset
+                0, // unused
             ]),
         );
         pass.setPipeline(this.pipeline);

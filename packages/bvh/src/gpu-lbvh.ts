@@ -244,6 +244,13 @@ function checkGeometry(geometry: GpuLbvhGeometry, index: number): void {
     if (isBufferGeometry(geometry)) {
         if (!Number.isInteger(triangles) || triangles < 1) throw new RangeError(`${where}: needs at least one triangle`);
         if (!Number.isInteger(geometry.vertexCount) || geometry.vertexCount < 1) throw new RangeError(`${where}: needs at least one vertex`);
+        const positionStart = (geometry.positionOffsetFloats ?? 0) * 4;
+        if (positionStart + positionBytes(geometry) > geometry.positionBuffer.size) throw new RangeError(`${where}: the position buffer is too small for ${geometry.vertexCount} vertices`);
+        if (geometry.indexBuffer) {
+            const bytesPerIndex = geometry.indexFormat === 'uint16' ? 2 : 4;
+            if (((geometry.indexOffset ?? 0) + triangles * 3) * bytesPerIndex > geometry.indexBuffer.size) throw new RangeError(`${where}: the index buffer is too small for ${triangles} triangles`);
+        }
+        if (geometry.triangleFlagsBuffer && triangles * 4 > geometry.triangleFlagsBuffer.size) throw new RangeError(`${where}: the flags buffer is too small for ${triangles} triangles`);
     } else {
         const { positions, triangleFlags } = geometry;
         if (positions.length % 3 !== 0 || positions.length === 0 || !Number.isInteger(triangles) || triangles < 1) {
@@ -621,8 +628,17 @@ export class GpuLbvhBatch {
         const rankScanRecord = 1 + passes + 1;
         const params = make('params', (rankScanRecord + 1) * UNIFORM_STRIDE, USAGE.UNIFORM | USAGE.COPY_DST);
         const paramsData = new ArrayBuffer(LBVH_PARAMS_BYTES);
-        new Uint32Array(paramsData).set([this.meshCount, tileCount, tilesOffset, innerTotal, options.maxLeafPrimitives, 0, 0, LBVH_FIRST_ROUND_TRIANGLES]);
-        new Float32Array(paramsData).set([options.traversalCost, options.intersectionCost], 5);
+        // LbvhParams, field by field (gpu-lbvh-wgsl.ts).
+        const words = new Uint32Array(paramsData);
+        const floats = new Float32Array(paramsData);
+        words[0] = this.meshCount; // meshCount
+        words[1] = tileCount; // tileCount
+        words[2] = tilesOffset; // tilesOffset
+        words[3] = innerTotal; // innerTotal
+        words[4] = options.maxLeafPrimitives; // maxLeaf
+        floats[5] = options.traversalCost; // traversalCost
+        floats[6] = options.intersectionCost; // intersectionCost
+        words[7] = LBVH_FIRST_ROUND_TRIANGLES; // climbLimit
 
         const resources: Record<BindingName, GPUBindingResource> = {
             positions: { buffer: this.buffers.positions },
@@ -754,7 +770,6 @@ export class GpuLbvhBatch {
      */
     async finish(): Promise<GpuLbvhTrees> {
         if (this.finished || this.destroyed) throw new Error('@pmndrs/bvh: the batch was already finished');
-        this.finished = true;
         const device = this.device;
         const bytes = this.meshCount * LBVH_STATS_BYTES;
         const readback = device.createBuffer({ label: `${this.label} stats readback`, size: bytes, usage: USAGE.MAP_READ | USAGE.COPY_DST });
@@ -764,6 +779,8 @@ export class GpuLbvhBatch {
             device.queue.submit([encoder.finish()]);
             await readback.mapAsync(MAP_MODE_READ);
             const words = new Uint32Array(readback.getMappedRange().slice(0));
+            // From here the outputs are the caller's; if the read above failed, destroy() frees them with the rest.
+            this.finished = true;
             const { outNodes, outTriangles, outParents } = this.buffers;
             return {
                 nodes: outNodes,
@@ -826,6 +843,7 @@ export class GpuLbvhBatch {
             const geometry = mesh.geometry;
             if (!isBufferGeometry(geometry)) continue;
             const positionStart = (geometry.positionOffsetFloats ?? 0) * 4;
+            // Rounded up to whole words, within the buffer (its size was checked when the batch was made).
             const positionSize = Math.min(align4(positionBytes(geometry)), geometry.positionBuffer.size - positionStart);
             encoder.copyBufferToBuffer(geometry.positionBuffer, positionStart, this.buffers.positions, mesh.positionByteStart, positionSize);
             if (geometry.indexBuffer) {
