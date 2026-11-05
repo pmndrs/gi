@@ -186,6 +186,8 @@ M2's `ddgi/mark` (m2-lights.md 4.2) gets geometry entries. For each geometry reg
 
 **What the budget buys** (the same arithmetic as m2-lights.md 4.3): the door's near and far sets are a few hundred probes on two-room, where about 300 probes fit a frame (T1.9a), so all of them get their 8 updates well inside 1 s. A cabinet moved in the furnished room touches fewer. On Sponza-sized scenes the probes nearest the camera are served first.
 
+**With M2's instant sky on** (m2-lights.md 6.3), marked probes' sky transfers are un-built and rebuilt with the shortened history; until then, sky changes reach them at the delayed pace. The sky layer itself keeps updating, so nothing jumps.
+
 **The distance atlas** uses the same per-probe history. For geometry that matters most: until a probe near the door learns the door's distance, light can leak through it. The short history and the priority keep that to the first few updates (risk 3).
 
 ### 5.2 Probes that were off come back warmed
