@@ -267,7 +267,7 @@ Rules for every M1 task:
 | T1.6 | Shading module and plain-WebGPU example | implementer | M | T1.5 | done (Opus review passed with notes, fixed; GI sampling 1440p inside view 0.905 ms median of 9 against 1.0) |
 | T1.7 | three.js adapter | implementer | M | T1.6 | done (Opus review failed, fixed, re-review passed; neutrality 1e-8; CPU 0.09–0.14 ms still, 0.11–0.19 moving, lead re-timed) |
 | T1.8 | Viewer integration | implementer | M | T1.7 | review passed (1081258); done when Dennis has tried it |
-| T1.9a | DDGI performance pass (budget model, small-batch cost, p95, startup) | implementer | M | T1.6, T1.8 | active (implementer, 2026-11-05) |
+| T1.9a | DDGI performance pass (budget model, small-batch cost, p95, startup) | implementer | M | T1.6, T1.8 | review (9ba4c5c; budget within 5%) |
 | T1.9 | M1 measurements against targets | gpu-tester, native-runner | M | T1.8, T1.9a | todo (native matched-count runs done early) |
 | T1.10 | Sponza add-ons | wrangler + implementer | M | T1.1 (for the re-rendered reference) | done (Opus review passed with notes, fixed; candles waiting on Dennis) |
 | T1.11 | M1 note and M2 breakdown | main session | S | all M1 | todo |
@@ -353,11 +353,15 @@ Done-whens for the B stages are in `docs/design/bvh-framework.md`. B1a's: a 10k-
 - Area lights on the platform, so an emitter's direct light can be analytic and DDGI holds only its bounced light (DECISIONS 2026-11-05, the viewer entry).
 - A public "acceleration structures built" signal on the platform (the viewer duck-types `rays.whenBuilt`).
 - Light-change response from `SceneChanges` (the big-change rule is off; DECISIONS 2026-11-05).
+- A deferred shadow-ray pass in platform hit shading: shadow rays take 53% of Sponza's DDGI trace and run at 1/7 of the bench any-hit rate (T1.9a).
+- `encodeBatch` kernels compiled only on first use; why the sky SH projection takes 1 s to compile.
 
 ## Carried to M3 (collected during M1)
 
 - Probes in empty space are switched off by classification ("no surface nearby"; 347 of Cornell's 1,728). Moving objects in mid-air then get no GI. M3 (moving objects) needs those probes active near receivers, or a fallback.
 - The three adapter's change-detection latency (up to 41 frames on Bistro without `markChanged`).
+- The main-thread scene copy (1.3 s Sponza, 4.1 s Bistro exterior at load) moves off the main thread.
+- A flaky `tools/assets/fetch.test.ts` under load.
 
 ## Later
 

@@ -4,6 +4,12 @@ Settled choices, newest first. Each entry is short: the decision, why, and what 
 
 ## 2026-11-05
 
+- **The millisecond budget uses a fixed + per-probe cost model built from medians** (T1.9a). Small batches are limited by latency, not by probe count, so a model proportional to probes shrank Sponza's batch in a spiral. Outside GPU spikes biased a mean-based estimate, so the typical frame landed at about 60% of the budget. Details: the slope is a least-squares line through per-batch-size medians; the fixed part is the median of the last 31 frames' (ms − slope × probes); the batch shrinks by at most half per frame. *Revisit if* a quiet machine shows the batch oscillating.
+- **"The budget holds" means the median per-frame update time at 60 Hz is within ±10% of the budget.** Single frames include other programs' GPU work (next entry). T1.9a measured within ±5% on Cornell, two-room, Sponza and Bistro exterior (RTX).
+- **GPU timestamps on this laptop include other programs' GPU work.** Something lands every 50 ms (RTX +2.5 ms, Intel +1.3 ms): Dennis's Chrome GPU process uses 17–27% of the RTX and the Windows compositor 7–12%. So SPEC's "no p95 spikes" needs a test condition. *Open with Dennis:* measure with his GPU apps closed, or judge DDGI's own fixed-batch p95.
+- **M1 explains two gaps rather than closing them** (M1 lead, after T1.9a):
+  - **Sponza's update rate:** 39 probes a frame at 2 ms on the RTX (each probe about every 500 frames). Shadow rays take 53% of `ddgi/trace` and run at no more than 1/7 of the trace bench's any-hit rate. The lever is a deferred shadow-ray pass in platform hit shading; it goes to M2 with the light buffer, because many lights make it matter more.
+  - **Startup on large scenes:** Sponza 4.7 s and Bistro exterior 6.0 s to first GI, against SPEC's ≤ 2 s on Tier A. Most of it is the mesh trees (3.3 s on Sponza) and the main-thread scene copy (1.3 s Sponza, 4.1 s Bistro). B2 (GPU H-PLOC) is the planned fix for the startup target at M5 (`docs/design/bvh-framework.md`); the scene-copy packing moves off the main thread in M3. Cornell meets it (1.97 s).
 - **The viewer, as built in T1.8** (M1 lead):
   - **DDGI is the viewer's default technique.** The baselines (three's `LightProbeGrid`, VXGI) stay in the switcher and the wipe.
   - **Default exposure per scene:** sponza and sponza-full +2 EV, bistro-exterior +1 EV, everything else 0. The known-answer scenes stay at 0, so their pixel values mean what the references mean.
