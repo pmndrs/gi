@@ -72,7 +72,8 @@ Asked by the parent session, so the reference isn't judged by the agent that wro
 - DDGI's shaded GI term equals the composite's contents (DECISIONS has the details); the sun's direct light matches to 0.02% and Cycles full = lights-only direct + composite (0.012070 against 0.012069).
 - Cornell (point) and two-room with the composite: unchanged (+5.68%; two-room +5.50% on OptiX against +5.63% on the CPU reference, an OptiX-against-CPU difference of 0.13 points, the same without `--materials-json`).
 - `--materials-json`: all 49 Blender materials set, all 32 rows matched, the table hash recorded; Metallic, Transmission and specular forced to 0; `glass` and `dirt_decal` opaque black on both sides (consistent, not physical).
-To fix (after the Sponza investigation, which is in those files now):
+Fixed later the same day (implementer): the lights-only render swaps in a black world and zeroes every emitter (Principled, Emission and Background shaders, volume, node groups), refuses to render if anything still emits, and is checked by a new `--calibrate` case (lights-only 3.97888 against 3.97887 expected; the old switch-off would have left 3 of its 4 emitters on). Every render writes the composite; `run.ts --table` uses it for all three scenes (Cornell point and two-room re-rendered on the CPU, 2048 spp: lights-only equals direct exactly, so the composite equals indirect, pixel-identical). README and design-doc sections added. Table: Cornell +5.68%, two-room +5.63%, Sponza +23.03% (FLIP 8×8: 0.179, 0.073, 0.326).
+Originally listed, to fix after the Sponza investigation:
 - a check that the lights-only render really is lights-only (`render.py:259-265` only turns off Principled emission and the Background);
 - `run.ts --table` using the composite for all three scenes;
 - README and design-doc sections;
