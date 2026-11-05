@@ -3,11 +3,16 @@
  *
  *   node tools/reference/cycles/run.ts --scene cornell-box [--camera 1] [--samples 1024]
  *        [--width 512] [--height 512] [--seed 0] [--name-suffix -seed1]
- *        [--device cpu|gpu] [--threads N]
+ *        [--device cpu|gpu] [--threads N] [--materials-json <GI material table>]
  *   node tools/reference/cycles/run.ts --calibrate     known-answer checks of the unit conversions
  *
  * Output: bench/references/<scene>/<camera name>/cycles-{full,indirect}.exr
  * and cycles.json, plus one line appended to bench/references/render-log.csv.
+ * With `--materials-json` (render.py: every material gets the table's constant
+ * GI albedo and emission) the files are cycles-untextured-* and the log's tool
+ * column says `cycles-untextured`. It then adds render.py's parts up into
+ * `cycles-untextured-gi.exr`, the quantity DDGI's test view shows (see
+ * `composeGiImage`).
  *
  * Every render holds the shared bench lock (`$TEMP/ddgi-gpu-bench.lock`), CPU
  * renders included: 16 busy threads skew other agents' build-time and CPU-side
@@ -17,10 +22,11 @@
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
-import { appendFile, mkdir, stat, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { findBlender } from '../../assets/fetch.ts';
+import { readExr, writeExr } from '../../compare/exr.ts';
 import { installShutdownHandlers, registerCleanup } from '../../gpu/cleanup.ts';
 import { withBenchLock } from '../bench-lock.ts';
 
@@ -56,7 +62,7 @@ async function main(): Promise<void> {
     const forwarded = process.argv.slice(2);
     const calibrate = forwarded.includes('--calibrate');
     if (forwarded.length === 0 || forwarded.includes('--help')) {
-        console.log('usage: node tools/reference/cycles/run.ts --scene <id> [--camera 1] [--samples N] [--width W] [--height H] [--seed N] [--name-suffix S] [--device cpu|gpu] [--threads N]');
+        console.log('usage: node tools/reference/cycles/run.ts --scene <id> [--camera 1] [--samples N] [--width W] [--height H] [--seed N] [--name-suffix S] [--device cpu|gpu] [--threads N] [--materials-json file]');
         process.exit(forwarded.length === 0 ? 1 : 0);
     }
     const device = forwarded[forwarded.indexOf('--device') + 1] === 'gpu' ? 'gpu' : 'cpu';
@@ -124,9 +130,40 @@ async function main(): Promise<void> {
     }
     await appendFile(
         renderLog,
-        `${meta.finishedAt},cycles,${meta.scene},${meta.camera.name},${meta.width},${meta.height},${meta.samplesPerPixel},${meta.seed},${meta.device},${meta.threads},${meta.loadSeconds},${meta.renderSeconds},${meta.triangles}\n`,
+        `${meta.finishedAt},${meta.giMaterials ? 'cycles-untextured' : 'cycles'},${meta.scene},${meta.camera.name},${meta.width},${meta.height},${meta.samplesPerPixel},${meta.seed},${meta.device},${meta.threads},${meta.loadSeconds},${meta.renderSeconds},${meta.triangles}\n`,
     );
+    if (meta.giComposite) meta.files.push(await composeGiImage(meta.outDir, meta.giComposite));
     console.log(`done: ${meta.files.join(', ')} in ${meta.renderSeconds} s (${meta.samplesPerPixel} samples, ${meta.width}x${meta.height}, ${meta.device})`);
+}
+
+/** render.py's recipe for the DDGI-comparable image: the sum of `add` minus `subtract` (all EXRs in `outDir`). */
+interface GiComposite {
+    readonly output: string;
+    readonly add: readonly string[];
+    readonly subtract: string;
+}
+
+/**
+ * Writes the untextured render's GI image: Cycles' indirect + direct minus
+ * the lights' direct light (render.py, `render_untextured`), which is what
+ * DDGI's field holds (sky and emission seen straight from a surface, and
+ * every bounce). Returns the file name.
+ */
+async function composeGiImage(outDir: string, recipe: GiComposite): Promise<string> {
+    const read = async (name: string) => readExr(await readFile(join(outDir, name)));
+    const [first, ...others] = await Promise.all(recipe.add.map(read));
+    const subtract = await read(recipe.subtract);
+    const rgb = new Float32Array(first.rgb);
+    for (const image of [...others, subtract]) {
+        if (image.width !== first.width || image.height !== first.height) throw new Error('the GI parts differ in size');
+    }
+    for (let index = 0; index < rgb.length; index++) {
+        let value = rgb[index];
+        for (const image of others) value += image.rgb[index];
+        rgb[index] = value - subtract.rgb[index];
+    }
+    await writeFile(join(outDir, recipe.output), writeExr({ width: first.width, height: first.height, rgb }));
+    return recipe.output;
 }
 
 installShutdownHandlers();

@@ -1,0 +1,5 @@
+{
+    "description": "T1.9: DDGI on Sponza through the three adapter, converged, in the engine-free test view (bookmark 1, 640x360); reports the means. For EXRs, the GI material table and the comparison with the untextured Cycles reference run node tools/gpu/pages/ddgi-sponza-accuracy/run.ts. Needs the downloaded Sponza.",
+    "timeoutMs": 1800000,
+    "manual": true
+}

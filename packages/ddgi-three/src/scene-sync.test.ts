@@ -224,6 +224,15 @@ describe('changes', () => {
         expect(descriptor.albedo).toEqual([0.5, 0, 0]);
     });
 
+    it('reports the GI material it last sent for a three material', () => {
+        expect(sync.sentMaterial(material)?.albedo).toEqual([0.5, 0.5, 0.5]);
+        material.color.setRGB(0.25, 0, 0);
+        frame(scene);
+        expect(sync.sentMaterial(material)).toEqual([...api.materials.values()][0]);
+        expect(sync.sentMaterial(material)?.albedo).toEqual([0.25, 0, 0]);
+        expect(sync.sentMaterial(new MeshStandardMaterial())).toBeUndefined();
+    });
+
     it('hides and shows with the parent', () => {
         const parent = new Group();
         scene.add(parent);

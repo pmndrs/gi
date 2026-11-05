@@ -57,7 +57,7 @@
  */
 
 import { Matrix4, type Layers, type BufferAttribute, type BufferGeometry, type DirectionalLight, type InstancedMesh, type InterleavedBufferAttribute, type Light, type Material, type Mesh, type Object3D, type PointLight, type Scene, type Texture } from 'three';
-import type { ColorRGB, EnvironmentDescriptor, InstanceHandle, LightChanges, LightDescriptor, LightHandle, MaterialHandle, MeshHandle, SceneApi, TextureHandle } from '@pmndrs/ddgi-core';
+import type { ColorRGB, EnvironmentDescriptor, InstanceHandle, LightChanges, LightDescriptor, LightHandle, MaterialDescriptor, MaterialHandle, MeshHandle, SceneApi, TextureHandle } from '@pmndrs/ddgi-core';
 import { LIGHT_NUMBER_COUNT, MaterialSnapshot, type TextureAverages, PHYSICAL_DECAY, readLightNumbers, isSrgbTexture, lightDescriptor, luminance, materialDescriptor, materialSlotCount, meshDescriptor, textureSource, usesUvChannel1 } from './convert.ts';
 import { EnvironmentSync, type EnvironmentSources, type PmndrsSkyLike, type SkyMeshLike, type Warn } from './environment.ts';
 import { diffuseAverage, textureAverage, type DiffuseAverageMethod } from './texture-average.ts';
@@ -108,6 +108,8 @@ interface GeometryRecord {
 interface MaterialRecord {
     readonly material: Material;
     handle: MaterialHandle;
+    /** The descriptor last sent to the platform (see `sentMaterial`). */
+    sent: MaterialDescriptor;
     users: number;
     snapshot: MaterialSnapshot;
     scratch: MaterialSnapshot;
@@ -374,6 +376,16 @@ export class SceneSync {
         let instances = 0;
         for (const record of this.objects.values()) instances += record.instances.length;
         return { meshes: this.geometries.size, materials: this.materials.size, textures: this.textures.size, objects: this.objects.size, instances, lights: this.lights.size };
+    }
+
+    /**
+     * The GI material last sent to the platform for a three material, or
+     * undefined if no mirrored mesh uses it. It shows what GI actually sees
+     * (texture averages and the metalness fold applied), for checks that must
+     * give another renderer the same constants (the Sponza accuracy page).
+     */
+    sentMaterial(material: Material): MaterialDescriptor | undefined {
+        return this.materials.get(material)?.sent;
     }
 
     /** How many times the environment was sent, and how many textures uploaded for it. */
@@ -921,6 +933,7 @@ export class SceneSync {
         const record: MaterialRecord = {
             material,
             handle: this.api.createMaterial(descriptor),
+            sent: descriptor,
             users: 1,
             snapshot,
             scratch: new MaterialSnapshot(),
@@ -944,6 +957,7 @@ export class SceneSync {
         this.useTextureHandles(textureHandles);
         // Every field, so a removed texture or cutoff is cleared too.
         this.api.updateMaterial(record.handle, descriptor);
+        record.sent = descriptor;
         this.releaseTextureHandles(record.textureHandles);
         record.textureHandles = textureHandles;
         this.report.materials++;
