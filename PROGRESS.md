@@ -31,6 +31,17 @@ Numbers (indirect, against Cycles; bias, 8×8 block error, p95 block, FLIP 8×8,
 Not verified: the cause. The ratio map shows DDGI brighter on most shadowed surfaces, the curtains most.
 Next: find Sponza's +26% (leaks through thin curtains, probe density, sun shadow rays, the decal `dirt_decal` with GI albedo 0 acting as a black opaque surface because glTF's default metalness is 1 and M1 ignores `blocksLight`); a README section for `--materials-json`; the test view's full image is black on sky pixels.
 
+## 2026-11-05 · GI once per pixel: routes measured · implementer (opus)
+Did: pages `three-vb-gi`, `three-screen-gi`, `three-screen-gi-shared` (measurement only; no adapter changes). RTX 3060, 2560×1440, Sponza with curtains, bookmark 1, 3 runs under the lock. **Clocks low** (SM median 592 MHz under load, Dennis's apps open), so the ratios count more than the ms.
+Scene pass, GI off / on / added (medians, no shadow map):
+- standard forward: 6.4 / 18.4 / +12.0 (another run 9.8 / 22.2 / +12.0);
+- Visibility Buffer: 14.1 (10.5 is VB's own compute) / 20.3 / +6.2; with the fallback materials forced FrontSide 18.2 / 22.7 / +4.5;
+- Meshlet: 5.9 / 18.1 / +11.8;
+- **MRT route** (normals and depth from the main pass's extra outputs, GI once per pixel, materials read it by `screenUV`): MRT +1.1, screen pass 3.1, texture read about ±0.7: **+3.9** in total;
+- prepass route: prepass 3.8 (6.2 at 4× MSAA) + screen pass 3.0: +6.5 (4×: +8.8).
+The probe update (141 probes) adds 4.2 ms on top at these clocks. VB: 25 of Sponza's 50 materials fall back to forward (8 DoubleSide, which includes the curtains' 1.9 M triangles; 14 with vertex colours; 2 transparent decals), 2.33 M of 5.74 M triangles, about 70% of the VB frame's GI cost; VB also needs 23–33 s of CPU set-up. The MRT image differs on 3.6% of pixels and the prepass on 1.3%, at edges; mean brightness matches.
+Qualitative: MSAA (MRT averages normal and depth at edges; a 1-sample prepass uses the centre surface); alpha-tested foliage (a prepass must run the alpha test; MRT gets it free); transparent objects and cube captures have no screen data and keep per-fragment GI. The MRT route reads last frame's GI unless the composite comes after the main pass (see DECISIONS).
+
 ## 2026-11-05 · Budget v2 · implementer (opus); Opus review: fail, fixes in progress
 Did (88dbe45):
 - `packages/ddgi-core/src/platform/work-budget.ts` (new) holds the whole budget:
