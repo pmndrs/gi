@@ -295,7 +295,7 @@ Measured on the RTX 3060 (PROGRESS 2026-11-06, T2.4c; `ddgi-key-probes-sponza`, 
 - 30° sun turn: the view within 5% from frame 4; the field's light-weighted error within 5% from frame 24 (far probes owe 2: 48), 1.98% at 2 s; every fine probe traced by frame 60.
 - Sun halved: the view within 5% from frame 11 (T2.4b: 19-34).
 - Propagation alone, fine probes held: 63.1% of the change removed for the sun turn, 91.4% for the sky at a quarter (the decision rule: 60%).
-- No leak through the two-room wall with fine probes held (dark room's fine probes at most 0.18% of the lit room's light past their settled values).
+- No leak through the two-room wall with fine probes held (the dark room's fine probes at most 0.18-0.24% of the lit room's light past their settled values, three runs).
 - Out-of-view fine probes' noise at 3 s: 0.15% against 0.18% for far probes owe 2.
 - Cost (VALID): `ddgi/propagate` 0.010 ms on still frames, median 0.046 ms after the sun turn; a 10-second day's update median 2.17 ms at the calibrated 311 (Budget v2's bar 2.2).
 
