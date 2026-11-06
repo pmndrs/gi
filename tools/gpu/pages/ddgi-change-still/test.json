@@ -1,0 +1,4 @@
+{
+    "description": "T2.4a checks 1 and 3: on still Cornell and two-room, 600 frames at the calibrated batch; the irradiance atlas and test-view means match M1's (db431f6) within 0.5%, and the 'probes marked (total)' counter stays 0.",
+    "timeoutMs": 300000
+}
