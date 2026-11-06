@@ -40,7 +40,10 @@ describe('hit shading', () => {
         expect(scene.storageBufferCount + shade.module.storageBufferCount).toBe(2);
         // With the tracer's 3, a DDGI update kernel has 3 of its 8 left for its own buffers (it uses 2).
         const modules = orderModules([shade.module]);
-        expect(modules.map((module) => module.name)).toEqual(['gi-scene', 'gi-rays', 'gi-shade']);
+        expect(modules.map((module) => module.name)).toEqual(['gi-scene', 'gi-rays', 'gi-light-falloff', 'gi-shade']);
+        // The falloff is the same object as the platform's, so a kernel listing both includes it once.
+        expect(orderModules([shade.lightFalloff, shade.module]).filter((module) => module === shade.lightFalloff)).toHaveLength(1);
+        expect(shade.lightFalloff.storageBufferCount + shade.lightFalloff.entries.length).toBe(0);
         expect(modules.reduce((sum, module) => sum + module.storageBufferCount, 0)).toBe(5);
     });
 
