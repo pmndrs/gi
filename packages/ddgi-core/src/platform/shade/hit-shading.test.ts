@@ -73,12 +73,43 @@ describe('hit shading', () => {
         }
     });
 
-    it('places its three entries after the modules it depends on', () => {
+    it('places its four entries after the modules it depends on, the light grid picks last', () => {
         const shade = new PlatformHitShading(fakeDevice(), NO_KERNELS, scene, rays);
         const placed = placeModules(orderModules([shade.module]));
         expect(placed[2].slot.firstBinding).toBe(SCENE_MODULE_ENTRIES.length);
         expect(shade.module.entries).toBe(SHADE_MODULE_ENTRIES);
-        expect(shade.module.resources()).toHaveLength(3);
+        expect(shade.module.resources()).toHaveLength(4);
+        expect(SHADE_MODULE_ENTRIES[3].texture?.sampleType).toBe('uint');
+        expect(shadeModuleWgsl({ group: 0, firstBinding: 7 })).toContain('@group(0) @binding(10) var giLightGridPicks: texture_2d<u32>');
+        // No grid until a scene has many lights: the module's resources are those it was made with.
+        expect(shade.module.version).toBe(0);
+    });
+
+    it("lays the light grid's lookup out where the WGSL struct has it", () => {
+        // WGSL's uniform layout for the struct's fields from maxShadowedLightsPerHit on: scalars align to 4, vec3 to 16 (size 12).
+        const code = shadeModuleWgsl({ group: 0, firstBinding: 0 });
+        const body = /struct GiShadeUniforms \{([^}]*)\}/.exec(code)?.[1] ?? '';
+        const fields = body
+            .split('\n')
+            .map((line) => line.trim().replace(/,$/, ''))
+            .filter((line) => line.includes(':') && !line.startsWith('//'))
+            .map((line) => line.split(':').map((part) => part.trim()) as [string, string]);
+        const first = fields.findIndex(([name]) => name === 'maxShadowedLightsPerHit');
+        let offset = SHADE_UNIFORM_LAYOUT.maxShadowedLightsPerHit;
+        const offsets = new Map<string, number>();
+        for (const [name, type] of fields.slice(first)) {
+            const isVector = type === 'vec3f' || type === 'vec3u';
+            if (isVector) offset = Math.ceil(offset / 16) * 16;
+            offsets.set(name, offset);
+            offset += isVector ? 12 : 4;
+        }
+        expect(offsets.get('bounceAlbedoCap')).toBe(SHADE_UNIFORM_LAYOUT.bounceAlbedoCap);
+        expect(offsets.get('lightGridActive')).toBe(SHADE_UNIFORM_LAYOUT.lightGrid);
+        expect(offsets.get('lightGridOrigin')).toBe(SHADE_UNIFORM_LAYOUT.lightGrid + 8);
+        expect(offsets.get('lightGridInverseCellSize')).toBe(SHADE_UNIFORM_LAYOUT.lightGrid + 20);
+        expect(offsets.get('lightGridCells')).toBe(SHADE_UNIFORM_LAYOUT.lightGrid + 24);
+        expect(offsets.get('lightGridOutsideCell')).toBe(SHADE_UNIFORM_LAYOUT.lightGrid + 36);
+        expect(Math.ceil(offset / 16) * 16).toBe(SHADE_UNIFORM_LAYOUT.byteLength);
     });
 
     it("starts from the contract defaults and lays its uniforms out after the sky's harmonics", () => {

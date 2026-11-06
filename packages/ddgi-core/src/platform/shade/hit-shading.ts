@@ -1,15 +1,18 @@
 /**
  * The platform's hit shading (contract/shade.ts): a WGSL module that
- * techniques include in their tracing kernels, plus the sky it reads.
+ * techniques include in their tracing kernels, plus the sky it reads and the
+ * light grid it draws many lights from.
  *
- * Per frame (`encode`), it writes its live settings when they changed and
- * re-bakes the sky when the environment changed. The module's resources
- * never change after construction (the sky's textures and the uniform buffer
- * are allocated once), so its `version` stays 0 and kernels never rebuild
- * their bind group for it. The same holds for the sky-change module
- * (`sky-change.ts`).
+ * Per frame (`encode`), it writes its live settings when they changed,
+ * re-bakes the sky when the environment changed, and rebuilds the light grid
+ * when the scene has more point and spot lights than `exactLightLimit`. The
+ * module's resources are allocated once, except the light grid's picks
+ * texture, which is made when a scene first needs the grid and grows with
+ * its cells; the module's `version` follows it, so kernels rebuild their bind
+ * group only then. The sky-change module (`sky-change.ts`) never changes.
  */
 
+import type { Aabb } from '../contract/math.ts';
 import type { EnvironmentDescriptor } from '../contract/scene.ts';
 import type { HitShading, HitShadingSettings } from '../contract/shade.ts';
 import type { GpuTimerScope } from '../contract/timing.ts';
@@ -17,6 +20,7 @@ import type { BindingSlot, KernelBuilder, WgslModule } from '../contract/wgsl.ts
 import { PlatformSky, type PlatformSkyOptions } from '../sky/platform-sky.ts';
 import { PlatformDeferredDirect } from './direct.ts';
 import { LIGHT_FALLOFF_MODULE } from './light-falloff.ts';
+import { INACTIVE_LIGHT_GRID, LIGHT_GRID_MAX_CELLS, PlatformLightGrid, type LightGridLookup, type LightGridReduction } from './light-grid.ts';
 import { SKY_CHANGE_MODULE_ENTRIES, SKY_RADIANCE_SH_BYTES, skyChangeModuleWgsl } from './sky-change.ts';
 import { SHADE_MODULE_ENTRIES, SHADE_UNIFORM_LAYOUT, shadeModuleWgsl } from './wgsl.ts';
 
@@ -24,16 +28,33 @@ import { SHADE_MODULE_ENTRIES, SHADE_UNIFORM_LAYOUT, shadeModuleWgsl } from './w
 export const DEFAULT_HIT_SHADING_SETTINGS: Readonly<HitShadingSettings> = {
     maxShadowedLightsPerHit: 4,
     bounceAlbedoCap: 1,
+    exactLightLimit: 8,
+    lightGridMaxCells: 4096,
 };
+
+/** What hit shading needs to know of the scene's lights each frame, for the light grid. */
+export interface HitShadingLights {
+    /** The platform's frame number (the grid's picks are new every frame). */
+    readonly frame: number;
+    /** Point and spot lights in the scene. */
+    readonly localLights: number;
+    /** The scene's bounds: where the grid's cells go. */
+    readonly bounds: Aabb;
+}
 
 /** `GPUBufferUsage` bits; the globals don't exist in Node, where tests import this file. */
 const BUFFER_USAGE = { copySrc: 0x4, copyDst: 0x8, uniform: 0x40, storage: 0x80 } as const;
+
+/** Bytes of the light grid's lookup in the uniforms (`SHADE_UNIFORM_LAYOUT.lightGrid`). */
+const LIGHT_GRID_LOOKUP_BYTES = 40;
 
 export interface PlatformHitShadingOptions {
     readonly label?: string;
     readonly warn?: (message: string) => void;
     /** The sky's SH reduction (see {@link PlatformSkyOptions.reduction}); for tests. */
     readonly skyReduction?: PlatformSkyOptions['reduction'];
+    /** The light grid's scan: `subgroups` when the device has them (the default), or the declared fallback. */
+    readonly lightGridReduction?: LightGridReduction;
 }
 
 export class PlatformHitShading implements HitShading {
@@ -45,15 +66,19 @@ export class PlatformHitShading implements HitShading {
     readonly sky: PlatformSky;
     /** Deferred direct light (`gi/direct`, direct.ts); its kernels compile on a technique's first `prepare`. */
     readonly direct: PlatformDeferredDirect;
+    /** Many-light sampling (`gi/light-grid`, light-grid.ts), built in frames with more than `exactLightLimit` point and spot lights. */
+    readonly lightGrid: PlatformLightGrid;
 
     private readonly device: GPUDevice;
-    /** `GiShadeUniforms`: the sky's harmonics (written by the bake), then the settings. */
+    /** `GiShadeUniforms`: the sky's harmonics (written by the bake), then the settings and the light grid's lookup. */
     private readonly uniforms: GPUBuffer;
     /** The sky's radiance SH when the techniques last saw an environment change (sky-change.ts). */
     private readonly skyRadianceBefore: GPUBuffer;
     private readonly radianceMapView: GPUTextureView;
     private readonly skySampler: GPUSampler;
     private uploadedSettings = '';
+    private uploadedLightGrid = '';
+    private readonly lightGridWords = new ArrayBuffer(LIGHT_GRID_LOOKUP_BYTES);
     private disposed = false;
 
     constructor(device: GPUDevice, kernels: KernelBuilder, sceneModule: WgslModule, raysModule: WgslModule, options: PlatformHitShadingOptions = {}) {
@@ -81,14 +106,19 @@ export class PlatformHitShading implements HitShading {
             addressModeV: 'clamp-to-edge',
         });
 
-        const resources: readonly GPUBindingResource[] = [{ buffer: this.uniforms }, this.radianceMapView, this.skySampler];
+        this.lightGrid = new PlatformLightGrid(device, kernels, sceneModule, LIGHT_FALLOFF_MODULE, { label, reduction: options.lightGridReduction });
+        const lightGrid = this.lightGrid;
+        const fixedResources: readonly GPUBindingResource[] = [{ buffer: this.uniforms }, this.radianceMapView, this.skySampler];
         this.module = {
             name: 'gi-shade',
             dependencies: [sceneModule, raysModule, LIGHT_FALLOFF_MODULE],
             code: (slot: BindingSlot) => shadeModuleWgsl(slot),
             entries: SHADE_MODULE_ENTRIES,
-            resources: () => resources,
-            version: 0,
+            resources: () => [...fixedResources, lightGrid.view],
+            // Only the light grid's texture is ever reallocated (when a scene first needs it, or its cells grow).
+            get version() {
+                return lightGrid.version;
+            },
             storageBufferCount: 0,
         };
         this.direct = new PlatformDeferredDirect(device, kernels, this.module, label);
@@ -108,27 +138,43 @@ export class PlatformHitShading implements HitShading {
         };
     }
 
-    /** GPU bytes held: the uniform buffers, the sky and gi/direct's dispatch arguments (techniques hold their ray scratch). */
+    /** GPU bytes held: the uniform buffers, the sky, gi/direct's dispatch arguments and the light grid (techniques hold their ray scratch). */
     get memoryBytes(): number {
-        return SHADE_UNIFORM_LAYOUT.byteLength + SKY_RADIANCE_SH_BYTES + this.sky.memoryBytes + this.direct.memoryBytes;
+        return SHADE_UNIFORM_LAYOUT.byteLength + SKY_RADIANCE_SH_BYTES + this.sky.memoryBytes + this.direct.memoryBytes + this.lightGrid.memoryBytes;
     }
 
-    /** Compiles the sky bake. Called by the platform's `prepare`. */
-    prepare(): Promise<void> {
-        return this.sky.prepare();
+    /** Compiles the sky bake and the light grid's build. Called by the platform's `prepare`. */
+    async prepare(): Promise<void> {
+        await Promise.all([this.sky.prepare(), this.lightGrid.prepare()]);
     }
 
     /**
-     * Uploads changed settings and re-bakes the environment when
+     * Uploads changed settings, re-bakes the environment when
      * `environmentVersion` changed (every `setEnvironment` call bumps it) and
-     * the change needs a bake (`PlatformSky`), into the host's encoder.
-     * Called by the platform's `encode` after the scene copy's uploads and
-     * before any technique.
+     * the change needs a bake (`PlatformSky`), and, given the scene's
+     * `lights`, rebuilds the light grid when there are more point and spot
+     * lights than `exactLightLimit`, all into the host's encoder. Called by
+     * the platform's `encode` after the scene copy's uploads and before any
+     * technique. Without `lights` the grid is off.
      */
-    encode(encoder: GPUCommandEncoder, environment: EnvironmentDescriptor, environmentVersion: number, timer?: GpuTimerScope): void {
+    encode(encoder: GPUCommandEncoder, environment: EnvironmentDescriptor, environmentVersion: number, timer?: GpuTimerScope, lights?: HitShadingLights): void {
         if (this.disposed) throw new Error('@pmndrs/ddgi: hit shading was disposed');
         this.uploadSettings();
         this.sky.encode(encoder, environment, environmentVersion, { buffer: this.uniforms, offset: SHADE_UNIFORM_LAYOUT.skyHarmonics }, timer);
+        const lookup = lights
+            ? this.lightGrid.encode(
+                  encoder,
+                  {
+                      frame: lights.frame,
+                      bounds: lights.bounds,
+                      localLights: lights.localLights,
+                      exactLightLimit: settingAtLeast(this.settings.exactLightLimit, DEFAULT_HIT_SHADING_SETTINGS.exactLightLimit, 0),
+                      maxCells: Math.min(LIGHT_GRID_MAX_CELLS, settingAtLeast(this.settings.lightGridMaxCells, DEFAULT_HIT_SHADING_SETTINGS.lightGridMaxCells, 1)),
+                  },
+                  timer,
+              )
+            : INACTIVE_LIGHT_GRID;
+        this.uploadLightGrid(lookup);
     }
 
     /**
@@ -146,6 +192,7 @@ export class PlatformHitShading implements HitShading {
         this.disposed = true;
         this.sky.dispose();
         this.direct.dispose();
+        this.lightGrid.dispose();
         this.uniforms.destroy();
         this.skyRadianceBefore.destroy();
     }
@@ -162,8 +209,37 @@ export class PlatformHitShading implements HitShading {
         this.device.queue.writeBuffer(this.uniforms, SHADE_UNIFORM_LAYOUT.maxShadowedLightsPerHit, data);
         this.uploadedSettings = key;
     }
+
+    /**
+     * Writes the light grid's lookup into the uniforms when it changed. A
+     * queue write lands before the host submits this frame's encoder, so
+     * every kernel of the frame reads the grid `gi/light-grid` just built.
+     */
+    private uploadLightGrid(lookup: LightGridLookup): void {
+        const layout = lookup.layout;
+        const key = lookup.active ? `${layout.origin.join(',')}/${layout.cellSize}/${layout.cells.join(',')}` : 'off';
+        if (key === this.uploadedLightGrid) return;
+        const words = new Uint32Array(this.lightGridWords);
+        const floats = new Float32Array(this.lightGridWords);
+        // GiShadeUniforms from lightGridActive on: active, a spare word, origin, 1 / cell size, cells, the outside cell.
+        words[0] = lookup.active ? 1 : 0;
+        words[1] = 0;
+        floats.set(layout.origin, 2);
+        floats[5] = 1 / layout.cellSize;
+        words.set(layout.cells, 6);
+        // The outside cell's index is the cell count.
+        words[9] = layout.cellCount;
+        this.device.queue.writeBuffer(this.uniforms, SHADE_UNIFORM_LAYOUT.lightGrid, this.lightGridWords);
+        this.uploadedLightGrid = key;
+    }
 }
 
 function finiteOr(value: number, fallback: number): number {
     return Number.isFinite(value) ? value : fallback;
+}
+
+/** A whole-number setting, at least `minimum`; Infinity stays Infinity (no limit). */
+function settingAtLeast(value: number, fallback: number, minimum: number): number {
+    if (value === Infinity) return Infinity;
+    return Math.max(minimum, Math.floor(finiteOr(value, fallback)));
 }

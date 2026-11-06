@@ -14,9 +14,11 @@
  *
  * It depends on the scene copy (lights, materials, triangles) and the `rays`
  * module (`giTraceAny` for shadow rays), and binds no storage buffer of its
- * own: one uniform buffer (settings and the sky's irradiance SH), the sky's
- * radiance map and a sampler. So the scene copy and hit shading together stay
- * at the scene copy's 2 storage buffers (docs/api/platform.md, binding budget).
+ * own: one uniform buffer (settings, the light grid's place and the sky's
+ * irradiance SH), the sky's radiance map, a sampler and the light grid's
+ * picks (a texture, light-grid.ts). So the scene copy and hit shading
+ * together stay at the scene copy's 2 storage buffers (docs/api/platform.md,
+ * binding budget).
  *
  * Light units are the platform's (contract/scene.ts), which are three.js's
  * physically based ones; point and spot falloff and spot cones follow three.js
@@ -24,17 +26,19 @@
  */
 
 import type { BindingSlot, ModuleBindingEntry } from '../contract/wgsl.ts';
+import { lightGridLookupWgsl } from './light-grid.ts';
 import { RADIANCE_SH_COUNT, SKY_HARMONICS_LAYOUT } from '../sky/projection-wgsl.ts';
 import { SH_BASIS_WGSL, SH_COEFFICIENT_COUNT } from '../sky/spherical-harmonics.ts';
 
 /** `GPUShaderStage.COMPUTE`. The global does not exist in Node, where the tests import this file. */
 const SHADER_STAGE_COMPUTE = 0x4;
 
-/** The module's bindings, in order: uniforms (settings and sky SH), the sky's radiance map, its sampler. No storage buffers. */
+/** The module's bindings, in order: uniforms (settings and sky SH), the sky's radiance map, its sampler, the light grid's picks. No storage buffers. */
 export const SHADE_MODULE_ENTRIES: readonly ModuleBindingEntry[] = [
     { visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'uniform' } },
     { visibility: SHADER_STAGE_COMPUTE, texture: { sampleType: 'float', viewDimension: '2d' } },
     { visibility: SHADER_STAGE_COMPUTE, sampler: { type: 'filtering' } },
+    { visibility: SHADER_STAGE_COMPUTE, texture: { sampleType: 'uint', viewDimension: '2d' } },
 ];
 
 /**
@@ -50,8 +54,10 @@ export const SHADE_UNIFORM_LAYOUT = {
     skyRadianceMapScale: SKY_HARMONICS_LAYOUT.radianceMapScale,
     maxShadowedLightsPerHit: SKY_HARMONICS_LAYOUT.byteLength,
     bounceAlbedoCap: SKY_HARMONICS_LAYOUT.byteLength + 4,
+    /** The light grid's lookup (light-grid.ts), 40 bytes from here: active, a spare word, origin and 1 / cell size, cells and the outside cell. */
+    lightGrid: SKY_HARMONICS_LAYOUT.byteLength + 8,
     /** Rounded up to the struct's 16-byte alignment. */
-    byteLength: SKY_HARMONICS_LAYOUT.byteLength + 16,
+    byteLength: SKY_HARMONICS_LAYOUT.byteLength + 48,
 } as const;
 
 /** The module's source, with its bindings at `slot`. */
@@ -60,6 +66,7 @@ export function shadeModuleWgsl(slot: BindingSlot): string {
     const uniformsBinding = slot.firstBinding;
     const radianceMapBinding = slot.firstBinding + 1;
     const samplerBinding = slot.firstBinding + 2;
+    const lightGridBinding = slot.firstBinding + 3;
     const skyIrradianceTerms = Array.from({ length: SH_COEFFICIENT_COUNT }, (_, index) => `        giShade.skyIrradiance[${index}].xyz * basis[${index}]`).join(' +\n');
 
     return /* wgsl */ `
@@ -89,6 +96,15 @@ struct GiShadeUniforms {
     skyRadianceMapScale: vec4f,
     maxShadowedLightsPerHit: u32,
     bounceAlbedoCap: f32,
+    // The light grid (light-grid.ts): 1 when this frame's point and spot
+    // lights are drawn from it (more of them than exactLightLimit), and where
+    // its cells are.
+    lightGridActive: u32,
+    lightGridReserved: u32,
+    lightGridOrigin: vec3f,
+    lightGridInverseCellSize: f32,
+    lightGridCells: vec3u,
+    lightGridOutsideCell: u32,
 }
 
 @group(${group}) @binding(${uniformsBinding}) var<uniform> giShade: GiShadeUniforms;
@@ -96,6 +112,8 @@ struct GiShadeUniforms {
 @group(${group}) @binding(${radianceMapBinding}) var giSkyRadianceMap: texture_2d<f32>;
 // Linear, repeating across the -X seam, clamped at the poles.
 @group(${group}) @binding(${samplerBinding}) var giSkySampler: sampler;
+// The light grid's picks, R per cell: (light index, its share at a hit as f32 bits).
+@group(${group}) @binding(${lightGridBinding}) var giLightGridPicks: texture_2d<u32>;
 
 const GI_SHADE_INV_PI: f32 = 0.318309886183791;
 const GI_SHADE_INV_TWO_PI: f32 = 0.159154943091895;
@@ -292,68 +310,136 @@ fn giShadeVisibility(light: GiLight, lightIndex: u32, lightSample: GiShadeLightS
     return select(1.0, 0.0, blocked);
 }
 
+${lightGridLookupWgsl('giLightGridPicks')}
+
+// Is this frame's point and spot light drawn from the light grid? Set by
+// the platform when the scene has more of them than exactLightLimit.
+fn giShadeUsesLightGrid() -> bool {
+    return giShade.lightGridActive != 0u;
+}
+
+// One of the point and spot lights a hit weighs: the light, and what its
+// unshadowed contribution counts for in the sum (share; 0 = skip it).
+struct GiShadeCandidate {
+    light: u32,
+    share: f32,
+}
+
+// The hit's local candidate number 'candidate'. Without the grid, every
+// point and spot light, each counting once. With it, the R picks of the
+// hit's cell, each counting the share the build stored: a pick drawn with
+// probability p is a fair one-sample estimate of the cell's light as f / p,
+// so R picks estimate it as the sum of f / (R p); a light picked m times is
+// one candidate counting m / (R p) (its other picks store 0), so it is never
+// traced twice for one hit.
+fn giShadeLocalCandidate(candidate: u32, directionalCount: u32, useGrid: bool, cell: u32) -> GiShadeCandidate {
+    if (!useGrid) {
+        return GiShadeCandidate(directionalCount + candidate, 1.0);
+    }
+    let pick = giLightGridPick(cell, candidate);
+    if (pick.light == GI_LIGHT_GRID_NO_LIGHT) {
+        return GiShadeCandidate(0u, 0.0);
+    }
+    return GiShadeCandidate(pick.light, pick.share);
+}
+
 // Direct light from the lights whose group bit is set in groupMask, as
 // irradiance, shadow rays included.
 //
-// Directional lights are always evaluated. If more point and spot lights reach
-// the surface than giShade.maxShadowedLightsPerHit (K), K of them are chosen at
-// random with probability proportional to their unshadowed contribution
-// (luminance), by systematic sampling: one random number r = random.x places K
-// evenly spaced points (k + r) / K on the lights' cumulative distribution. A
-// light picked n times counts n * f / (K p), where p = its share of the total,
-// so the sum is unbiased; a light with p >= 1/K is always picked. With K or
-// fewer contributing lights every one is evaluated and the answer has no noise.
+// Directional lights are always evaluated. Point and spot lights are first
+// gathered as candidates (giShadeLocalCandidate): every one of them when the
+// scene has up to exactLightLimit (the light grid is off), or the R picks of
+// the hit's cell from the light grid (light-grid.ts) when it has more. Each
+// candidate's unshadowed contribution at the surface, times its share, is
+// its weight. If more candidates have a weight than
+// giShade.maxShadowedLightsPerHit (K), K of them are chosen at random with
+// probability proportional to their weight (luminance), by systematic
+// sampling: one random number r = random.x places K evenly spaced points
+// (k + r) / K on the candidates' cumulative distribution. A candidate picked
+// n times counts n * share * f / (K q), where q = its share of the total
+// weight, so the sum is unbiased; a candidate with q >= 1/K is always
+// picked. With K or fewer weighted candidates every one is traced: without
+// the grid the answer then has no noise; with it, what is left is the
+// grid's own sampling, which a new grid every frame averages out.
+//
+// With the grid this is ReGIR's two stages (Boksansky et al., "Rendering
+// Many Lights with Grid-Based Reservoirs", Ray Tracing Gems II, 2021): the
+// cell's picks follow a bound that knows neither the surface's normal nor
+// its exact place, and the second stage spends the shadow rays where the
+// real contribution is, so lights behind the surface or at grazing angles
+// cost no rays. A candidate outside groupMask counts 0, which keeps the sum
+// over the mask unbiased.
 fn giDirectIrradiance(surface: GiSurface, groupMask: u32, random: vec2f) -> vec3f {
     let raySide = giShadeRaySide(surface);
     let origin = giShadeOffsetRayOrigin(surface.position, raySide);
     let lightCount = giLightCount();
     let directionalCount = min(giDirectionalLightCount(), lightCount);
+    let useGrid = giShadeUsesLightGrid();
+    let cell = select(0u, giLightGridCellAt(surface.position), useGrid);
+    let localCandidates = select(lightCount - directionalCount, GI_LIGHT_GRID_PICKS, useGrid);
+    let budget = max(giShade.maxShadowedLightsPerHit, 1u);
+    let picksPerHit = f32(budget);
 
-    // First pass over the local lights: how many reach the surface, and their total estimated contribution.
+    // First pass over the local candidates: how many have a weight, and the total.
     var contributing = 0u;
     var weightSum = 0.0;
-    for (var index = directionalCount; index < lightCount; index++) {
-        let light = giLight(index);
+    for (var candidateNumber = 0u; candidateNumber < localCandidates; candidateNumber++) {
+        let candidate = giShadeLocalCandidate(candidateNumber, directionalCount, useGrid, cell);
+        if (!(candidate.share > 0.0)) {
+            continue;
+        }
+        let light = giLight(candidate.light);
         if (!giShadeInGroup(light, groupMask)) {
             continue;
         }
-        let weight = giShadeLuminance(giShadeLightSample(light, surface, raySide).irradiance);
+        let weight = giShadeLuminance(giShadeLightSample(light, surface, raySide).irradiance) * candidate.share;
         if (weight > 0.0) {
             contributing++;
             weightSum += weight;
         }
     }
-    let budget = max(giShade.maxShadowedLightsPerHit, 1u);
     let chooseLocalLights = contributing > budget;
-    let picksPerHit = f32(budget);
 
-    // Second pass, over every light; one shadow-ray call site keeps the tracer inlined once.
+    // Second pass, over the directional lights and the local candidates again;
+    // one shadow-ray call site keeps the tracer inlined once.
+    let evaluations = directionalCount + localCandidates;
     var total = vec3f(0.0);
     var cumulative = 0.0;
     var seen = 0u;
-    for (var index = 0u; index < lightCount; index++) {
+    for (var evaluation = 0u; evaluation < evaluations; evaluation++) {
+        var index = evaluation;
+        var share = 1.0;
+        let isLocal = evaluation >= directionalCount;
+        if (isLocal) {
+            let candidate = giShadeLocalCandidate(evaluation - directionalCount, directionalCount, useGrid, cell);
+            if (!(candidate.share > 0.0)) {
+                continue;
+            }
+            index = candidate.light;
+            share = candidate.share;
+        }
         let light = giLight(index);
         if (!giShadeInGroup(light, groupMask)) {
             continue;
         }
         let lightSample = giShadeLightSample(light, surface, raySide);
-        let weight = giShadeLuminance(lightSample.irradiance);
+        let weight = giShadeLuminance(lightSample.irradiance) * share;
         if (!(weight > 0.0)) {
             continue;
         }
-        var scale = 1.0;
-        if (index >= directionalCount && chooseLocalLights) {
+        var scale = share;
+        if (isLocal && chooseLocalLights) {
             seen++;
             let start = cumulative / weightSum;
             cumulative += weight;
-            // The last light's interval ends at exactly 1, whatever the rounding of the running sum.
+            // The last candidate's interval ends at exactly 1, whatever the rounding of the running sum.
             let end = select(cumulative / weightSum, 1.0, seen == contributing);
             // Points (k + r) / K in [start, end): k from ceil(start K - r) up to ceil(end K - r).
             let picks = ceil(end * picksPerHit - random.x) - ceil(start * picksPerHit - random.x);
             if (picks <= 0.0) {
                 continue;
             }
-            scale = picks * weightSum / (picksPerHit * weight);
+            scale = share * picks * weightSum / (picksPerHit * weight);
         }
         total += lightSample.irradiance * (scale * giShadeVisibility(light, index, lightSample, origin, random));
     }
@@ -363,14 +449,29 @@ fn giDirectIrradiance(surface: GiSurface, groupMask: u32, random: vec2f) -> vec3
 // Can any light whose group bit is set in groupMask light this surface at
 // all? True when one of them reaches the side the ray arrived on with a
 // non-zero unshadowed contribution: exactly the lights giDirectIrradiance
-// would evaluate. No shadow rays. A tracing kernel asks this before putting
+// would weigh (with the light grid, the directional lights and the cell's R
+// picks, so a hit it says no to gets nothing from giDirectIrradiance this
+// frame either). No shadow rays. A tracing kernel asks this before putting
 // a hit on gi/direct's work list, so hits facing away from every light
 // (about half of Sponza's, which face away from the sun; T2.0) cost nothing
 // there.
 fn giDirectReaches(surface: GiSurface, groupMask: u32) -> bool {
     let raySide = giShadeRaySide(surface);
     let lightCount = giLightCount();
-    for (var index = 0u; index < lightCount; index++) {
+    let useGrid = giShadeUsesLightGrid();
+    let directionalCount = min(giDirectionalLightCount(), lightCount);
+    let cell = select(0u, giLightGridCellAt(surface.position), useGrid);
+    let candidates = select(lightCount, directionalCount + GI_LIGHT_GRID_PICKS, useGrid);
+    for (var candidate = 0u; candidate < candidates; candidate++) {
+        var index = candidate;
+        if (useGrid && candidate >= directionalCount) {
+            let pick = giLightGridPick(cell, candidate - directionalCount);
+            // A light's repeated picks (share 0) were weighed with its first.
+            if (pick.light == GI_LIGHT_GRID_NO_LIGHT || !(pick.share > 0.0)) {
+                continue;
+            }
+            index = pick.light;
+        }
         let light = giLight(index);
         if (giShadeInGroup(light, groupMask) && giShadeLuminance(giShadeLightSample(light, surface, raySide).irradiance) > 0.0) {
             return true;

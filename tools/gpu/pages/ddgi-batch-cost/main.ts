@@ -80,7 +80,7 @@
  * and turn the JSON into rows with `node tools/gpu/pages/ddgi-batch-cost/to-csv.ts`.
  */
 
-import { PerspectiveCamera, type Scene, type WebGPURenderer } from 'three/webgpu';
+import { PerspectiveCamera, type Lighting, type Scene, type WebGPURenderer } from 'three/webgpu';
 import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
 import type { EnvironmentDescriptor } from '../../../../packages/ddgi-core/src/platform/contract/scene.ts';
 import { DDGITechnique, type DirectLightPath } from '../../../../packages/ddgi-core/src/techniques/ddgi/ddgi-technique.ts';
@@ -89,6 +89,7 @@ import { DDGI_TRACE_WGSL, TRACE_WORKGROUP_SIZE } from '../../../../packages/ddgi
 import { ThreeGI } from '../../../../packages/ddgi-three/src/three-gi.ts';
 import { loadAllManifests } from '../../../../apps/viewer/src/scene/manifests.ts';
 import { loadScene } from '../../../../apps/viewer/src/scene/load-scene.ts';
+import { sceneLighting } from '../../../../apps/viewer/src/render/scene-lighting.ts';
 import type { SceneManifest } from '../../../../scenes/src/manifest.ts';
 import { platformSkyEnvironment } from '../../../../scenes/src/sky/sky-image.ts';
 import { assert } from '../../client.ts';
@@ -330,12 +331,17 @@ function timePipelineCompiles(device: GPUDevice): void {
     };
 }
 
-/** Draws one frame of the scene with three, its pipelines compiled first, and waits for the GPU. */
-async function drawFrame(device: GPUDevice, renderer: WebGPURenderer, scene: Scene, camera: PerspectiveCamera): Promise<void> {
+/** Draws one frame of the scene with three, its pipelines compiled first, and waits for the GPU. Returns when the compile ended. */
+async function drawFrame(device: GPUDevice, renderer: WebGPURenderer, scene: Scene, camera: PerspectiveCamera): Promise<number> {
     await renderer.compileAsync(scene, camera);
+    const compiledAt = performance.now();
     renderer.render(scene, camera);
     await device.queue.onSubmittedWorkDone();
+    return compiledAt;
 }
+
+/** three's own lighting, kept so a scene drawn with clustered lighting doesn't pass it on to the next scene. */
+let defaultLighting: Lighting | null = null;
 
 async function startScene(
     device: GPUDevice,
@@ -347,13 +353,19 @@ async function startScene(
     pipelineCompileMs.clear();
     const loadStartedAt = performance.now();
     const loaded = await loadScene(manifest, () => {});
+    const filesLoadedAt = performance.now();
     const bookmark = manifest.cameras[0];
     const camera = new PerspectiveCamera(bookmark.fovYDeg, 1, 0.05, loaded.diagonal * 2);
     camera.position.set(...bookmark.position);
     camera.lookAt(...bookmark.target);
     camera.updateMatrixWorld();
+    // three draws the scene's lights as the viewer does: clustered for many shadowless lights
+    // (sponza-candles' 1,024 candles). With three's default lighting every material's shader holds
+    // every light, and compiling those for 1,024 lights took minutes (T2.3).
+    defaultLighting ??= renderer.lighting;
+    renderer.lighting = sceneLighting(loaded.directLights, defaultLighting);
     // The scene on screen without GI, as the viewer shows it while DDGI starts.
-    await drawFrame(device, renderer, loaded.scene, camera);
+    const threeCompiledAt = await drawFrame(device, renderer, loaded.scene, camera);
     const sceneShownAt = performance.now();
     const createdAt = performance.now();
 
@@ -426,7 +438,11 @@ async function startScene(
     const startup = {
         probes: probeCount,
         // From the start of the load: files fetched and parsed, then the first frame drawn without GI.
+        // load_files_ms is the whole stage (as before T2.3); its three parts follow.
         load_files_ms: round(sceneShownAt - loadStartedAt, 1),
+        load_fetch_parse_ms: round(filesLoadedAt - loadStartedAt, 1),
+        load_three_compile_ms: round(threeCompiledAt - filesLoadedAt, 1),
+        load_three_first_draw_ms: round(sceneShownAt - threeCompiledAt, 1),
         scene_shown_from_load_ms: fromLoad(sceneShownAt),
         prepare_ms: round(preparedAt - createdAt, 1),
         scene_copy_cpu_ms: round(copiedAt - preparedAt, 1),
@@ -460,7 +476,7 @@ async function startScene(
         (startup as Record<string, number>)[`compile_ms/${label}`] = round(ms, 1);
     }
     log(
-        `${manifest.id} (${direct} direct light): ${probeCount} probes; files ${startup.load_files_ms} ms, prepare ${startup.prepare_ms}, copy ${startup.scene_copy_cpu_ms}, trees ${startup.trees_ms}; ` +
+        `${manifest.id} (${direct} direct light): ${probeCount} probes; files ${startup.load_files_ms} ms (fetch and parse ${startup.load_fetch_parse_ms}, three compile ${startup.load_three_compile_ms}, first draw ${startup.load_three_first_draw_ms}), prepare ${startup.prepare_ms}, copy ${startup.scene_copy_cpu_ms}, trees ${startup.trees_ms}; ` +
             `first GI drawn ${startup.first_gi_shown_from_load_ms} ms from load (${startup.first_gi_shown_from_creation_ms} after creation), first pass ${startup.first_pass_from_creation_ms}, ` +
             `settled ${startup.settled_from_creation_ms} (${startup.warmup_passes} passes in ${startup.warmup_ms} ms); ` +
             `calibrated in ${startup.calibration_ms} ms (${calibration.frames} frames, ${calibration.curve.length} sizes, spread ${startup.calibration_spread}): ${calibration.units} probes, ` +

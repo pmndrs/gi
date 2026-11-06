@@ -1,0 +1,5 @@
+{
+    "description": "T2.3 checks 2 and 3, timed: DDGI's update cost per updated probe (fixed batches of 64 and 512, GPU-bound) at K = 1, 2, 4, and the light grid's build time, on sponza-candles (default) or sponza (VITE_DDGI_SCENES). Needs the Sponza and candle downloads; time it under the bench lock.",
+    "timeoutMs": 900000,
+    "manual": true
+}
