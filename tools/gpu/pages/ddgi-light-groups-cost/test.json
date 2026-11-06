@@ -1,0 +1,5 @@
+{
+    "description": "T2.5 checks 2 and 3: DDGI update cost per probe with light groups off, 2 and 4 groups (two-room, Sponza; GPU-bound fixed batches); 4 groups at most 1.4x groups off at 512 probes. A timing page: run it alone under the bench lock. Needs the Sponza download.",
+    "timeoutMs": 900000,
+    "manual": true
+}

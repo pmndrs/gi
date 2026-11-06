@@ -137,7 +137,7 @@ import {
 import { cameraFalloffDistance, frustumPlanes, inViewMargin } from './camera.ts';
 import { buildMarkTable, type MarkTable } from './mark-table.ts';
 import { layerPlan, MAX_IRRADIANCE_LAYERS, MAX_LIGHT_GROUPS, writeLayerWeights, type LayerPlan } from './light-groups.ts';
-import { COMPOSE_ENTRY_POINTS, COMPOSE_WEIGHTS_BYTES, COMPOSE_WORKGROUP_SIZE, composeKernelWgsl } from './wgsl/compose.ts';
+import { COMPOSE_ENTRY_POINTS, COMPOSE_WEIGHTS_BYTES, composeKernelWgsl } from './wgsl/compose.ts';
 import { MoverTable } from './mover-table.ts';
 import { priorityCount, scrambleStride } from './schedule.ts';
 import { DDGIShadingModule } from './shading.ts';
