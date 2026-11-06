@@ -21,7 +21,8 @@
         "paths": {
             "@pmndrs/ddgi": ["packages/ddgi/src/index.ts"],
             "@pmndrs/ddgi/core": ["packages/ddgi/src/core.ts"],
-            "@pmndrs/ddgi/three": ["packages/ddgi/src/three.ts"]
+            "@pmndrs/ddgi/three": ["packages/ddgi/src/three.ts"],
+            "@pmndrs/upscaler": ["apps/viewer/node_modules/@pmndrs/upscaler/dist/index.d.ts"]
         }
     },
     "include": ["packages/*/src", "packages/*/test", "apps/*/src", "examples/webgpu/*/src", "examples/three/src", "scenes/src", "scenes/check", "tools"],

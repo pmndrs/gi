@@ -28,6 +28,8 @@ export async function startTestSite(): Promise<TestSiteServer> {
             alias: [
                 { find: /^@pmndrs\/ddgi$/, replacement: resolve(SITE_ROOT, '../../packages/ddgi/src/index.ts') },
                 { find: /^@pmndrs\/ddgi\/(core|three)$/, replacement: resolve(SITE_ROOT, '../../packages/ddgi/src/$1.ts') },
+                // examples/three's composite imports the upscaler by name; the viewer is the package that depends on it.
+                { find: /^@pmndrs\/upscaler$/, replacement: resolve(SITE_ROOT, '../../apps/viewer/node_modules/@pmndrs/upscaler/dist/index.js') },
             ],
         },
         // The pages have no npm dependencies; skip the dependency pre-bundling scan.

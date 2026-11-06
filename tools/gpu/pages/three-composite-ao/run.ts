@@ -38,7 +38,9 @@ const repoRoot = resolve(here, '..', '..', '..', '..');
 
 /** Where each scene's reference lives, its default reference and size, and its GI material table (for the curtain split). */
 const SCENES: Record<CompositeAoScene, { directory: string; reference: string; width: number; height: number; table: string | null }> = {
-    sponza: { directory: 'sponza/colonnade-from-the-floor', reference: 'cycles-untextured-gi-c23.exr', width: 640, height: 360, table: 'gi-materials-cp1.json' },
+    // The HD reference (T1.13, 689b5f6): 1920 x 1080 at the stored camera, with the GI table it was rendered from.
+    sponza: { directory: 'sponza/colonnade-from-the-floor', reference: 'cycles-untextured-gi.exr', width: 1920, height: 1080, table: 'gi-materials.json' },
+    // The base package has only its 640 x 360 reference so far.
     'sponza-base': { directory: 'sponza/colonnade-from-the-floor', reference: 'cycles-untextured-gi-cbase23.exr', width: 640, height: 360, table: 'gi-materials-cp1.json' },
     'cornell-box-point': { directory: 'cornell-box-point/front', reference: 'cycles-gi.exr', width: 1920, height: 1080, table: null },
 };

@@ -9,6 +9,9 @@
  *   platform's frame count rises while three's animation loop draws;
  * - GI shows: the canvas with GI is brighter than with the volume's
  *   intensity at 0 (the GI light follows it), and the image isn't black.
+ *   The composite example is the intended pipeline: through @pmndrs/upscaler
+ *   (Performance), so pictures are read inside its animation loop, after
+ *   enough frames for the upscaler's history to settle.
  * The runner's screenshot shows the composite example's last frame.
  */
 
@@ -33,6 +36,17 @@ function canvasLuminance(canvas: HTMLCanvasElement): number {
     let sum = 0;
     for (let index = 0; index < pixels.length; index += 4) sum += 0.2126 * pixels[index] + 0.7152 * pixels[index + 1] + 0.0722 * pixels[index + 2];
     return sum / (pixels.length / 4) / 255;
+}
+
+/** The canvas's mean luminance, read right after the animation loop's next frame (the same task). */
+function captureInLoop(handle: ExampleHandle): Promise<number> {
+    return new Promise((resolve) => {
+        handle.renderer.setAnimationLoop(() => {
+            handle.render();
+            handle.renderer.setAnimationLoop(handle.render);
+            resolve(canvasLuminance(handle.renderer.domElement));
+        });
+    });
 }
 
 /** Waits until three's animation loop has drawn `frames` more frames. */
@@ -68,17 +82,13 @@ async function runExample(name: string, main: (container: HTMLElement) => Promis
     const framesBefore = platform.stats.frame;
     await loopFrames(LOOP_FRAMES);
     const platformFramesDuringLoop = platform.stats.frame - framesBefore;
-    // Stop the loop and draw each picture ourselves, reading it back in the same task.
-    handle.renderer.setAnimationLoop(null);
-    await device.queue.onSubmittedWorkDone();
-    handle.render();
-    const luminanceWithGi = canvasLuminance(handle.renderer.domElement);
+    // Read each picture inside the running animation loop: three only redraws its passes (and the
+    // upscaler only advances its history) on a new frame of that loop.
+    const luminanceWithGi = await captureInLoop(handle);
     handle.volume.intensity = 0;
-    // Two renders: the first runs the GI frame that copies the volume's intensity onto the light.
-    handle.render();
-    await device.queue.onSubmittedWorkDone();
-    handle.render();
-    const luminanceWithoutGi = canvasLuminance(handle.renderer.domElement);
+    // Enough frames for the upscaler's history to settle on the new picture.
+    await loopFrames(LOOP_FRAMES);
+    const luminanceWithoutGi = await captureInLoop(handle);
     handle.volume.intensity = 1;
     await drainDevice(device);
     const result: ExampleResult = {

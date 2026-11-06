@@ -25,21 +25,49 @@ renderer.setAnimationLoop(() => renderer.render(scene, camera));   // GI updates
 
 `start` uses three's own GPU device, warms the probes up, and from then on GI updates itself inside `renderer.render`. There is no per-frame call.
 
-### Dense scenes: GI once per pixel
+### Dense scenes: GI once per pixel, through the upscaler
 
-Lit materials normally take GI per fragment. In scenes with many tiny triangles (Sponza's curtains), that runs many times per pixel. On three's post-processing pipeline, as three's SSGI and GTAO examples use it, `ddgi()` adds GI once per pixel instead:
+Lit materials normally take GI per fragment. In scenes with many tiny triangles (Sponza's curtains), that runs many times per pixel. On three's post-processing pipeline, as three's SSGI and GTAO examples use it, `ddgi()` adds GI once per pixel instead.
+
+**The intended pipeline puts [`@pmndrs/upscaler`](https://github.com/pmndrs/upscaler) after it** (DECISIONS 2026-11-06). The scene pass and the composite run at the upscaler's render resolution, and the upscaler brings the result to the display. This is its composable path (`upscale()`), because `upscaleScene()` makes its own scene pass and can't take the composite:
 
 ```ts
-import { mrt, normalView, output, packNormalToRGB, pass } from 'three/tsl';
+import { mrt, normalView, output, packNormalToRGB, pass, rtt, velocity } from 'three/tsl';
+import { QualityMode, getQualityModeRatio, upscale } from '@pmndrs/upscaler';
 import { ddgi, giAlbedo } from '@pmndrs/ddgi/three';
 
+const renderer = new THREE.WebGPURenderer({ antialias: false });   // the upscaler anti-aliases
+// ... the scene, and await volume.start(renderer, scene) as above ...
+
+const renderScale = 1 / getQualityModeRatio(QualityMode.Performance);
 const pipeline = new THREE.RenderPipeline(renderer);
 const scenePass = pass(scene, camera);
-scenePass.setMRT(mrt({ output, giAlbedo, normal: packNormalToRGB(normalView) }));
-pipeline.outputNode = ddgi(scenePass, volume);
+scenePass.setMRT(mrt({ output, giAlbedo, normal: packNormalToRGB(normalView), velocity }));
+scenePass.setResolutionScale(renderScale);
+const gi = rtt(ddgi(scenePass, volume), null, null, { type: THREE.HalfFloatType, resolutionScale: renderScale });
+pipeline.outputNode = upscale(gi, scenePass.getTextureNode('depth'), scenePass.getTextureNode('velocity'), camera, { quality: QualityMode.Performance });
 
 renderer.setAnimationLoop(() => pipeline.render());
 ```
+
+- `velocity` in the MRT is three's own; the upscaler keeps it free of its jitter.
+- `rtt(…, { type: HalfFloatType, resolutionScale })` makes the composite a texture at the render resolution. Without it, `upscale()` would materialise it at display size. Keep `type`: an options object without it gives an 8-bit target, which clips HDR.
+- On the reduced pass, `ddgi()` runs three's GTAO on the GI term at half the render resolution by default (below).
+- Without the upscaler, `pipeline.outputNode = ddgi(scenePass, volume)` on a full-resolution pass works too, with GTAO opt-in (below).
+
+**What it costs** (Sponza with its curtains, 2560 × 1440 output, RTX 3060 laptop, GPU-bound, the field frozen; T1.14):
+
+| Path | Showing GI | Sponza GI against Cycles (curtain pixels) |
+| --- | --- | --- |
+| Upscaler Performance, GTAO at half the render resolution (the default) | 0.73 ms | +6.6% (+15.7%) |
+| Upscaler Quality, the same | 1.25 ms | +6.1% (+14.6%) |
+| No upscaler, no occlusion | 1.3–1.4 ms | +23% (+44%) |
+| No upscaler, GTAO at half resolution (`occlusion: { resolutionScale: 0.5 }`) | 3.2 ms | +5.8% (+13.6%) |
+| No upscaler, GTAO at full resolution (`occlusion: {}`) | 8.0 ms | +4.4% (+10.7%; 640 × 360 reference) |
+| GI per fragment (no pipeline) | 3.4 ms | as the composite without occlusion |
+
+- **The upscaler's own cost is separate:** 1.55 ms per frame (Performance) or 1.72 ms (Quality), with or without GI. On Sponza at 1440p the upscaled frame without GI costs more than native (2.58 + 1.72 ms against 3.0 ms). You'd use it for the frame as a whole, not for GI.
+- The accuracy figures use the HD Cycles reference at 1920 × 1080; the base package (no curtains) reads −1.2%, and Cornell +0.2%.
 
 - `giAlbedo` is the weight three's lighting gives indirect diffuse light, per pixel: the diffuse colour × (1 − F_ss − F_ms) × ambient occlusion for Standard and Physical materials, as r187's `PhysicalLightingModel` applies it.
 - `ddgi()` adds `giAlbedo × E / π` to the pass's linear HDR colour before the pipeline's tone mapping. It matches the per-fragment image to 0.04–0.08% on average (p95 under 0.25%) on Cornell and Sponza, on both test GPUs.
@@ -109,13 +137,14 @@ The composite node for three's pipeline (see "Dense scenes" above). Built like t
 - It marks its pass through `scenePass.contextNode`, keeping any context you already set (GTAO's `builtinAOContext`, say). Set your own context before calling `ddgi()`.
 - **Which surfaces it lights:** opaque surfaces with Standard, Physical, Lambert or Phong materials. Physical materials with clearcoat, sheen, iridescence, transmission, dispersion or rough diffuse keep GI per fragment, and so do transparent surfaces and unlit ones.
 - **Transparent surfaces in front of composited ones.** The composited GI behind a transparent surface is evaluated at the transparent surface, because the pass's normal and depth are its own. Behind a 50%-opaque sphere in Cornell that reads about 19% too dark. Where that matters, draw transparent objects after the composite.
-- **Short-range occlusion on GI.** By default `ddgi()` runs three's own GTAO (`ao()`) on the pass's depth and normal, with a 1 m radius, and multiplies the GI term by it, and only the GI term. Probes 1 m apart can't follow light that changes inside small folds: Sponza's curtains read +23% against a path tracer without it, +4.3% with it.
+- **Short-range occlusion on GI.** `ddgi()` can run three's own GTAO (`ao()`) on the pass's depth and normal, with a 1 m radius, and multiply the GI term by it, and only the GI term. Probes 1 m apart can't follow light that changes inside small folds: Sponza's curtains read +23% against Cycles without it.
+  - **The default follows the pass.** On a reduced pass (`scenePass.setResolutionScale` below 1, as under the upscaler), GTAO runs at half the pass's resolution. On a full-resolution pass there is no occlusion: GTAO is opt-in there, because it costs several times the composite (table above). The choice is made when the pipeline builds, so the pass's scale may be set before or after `ddgi()`.
   - `occlusion: { radius, resolutionScale, samples }` sets it. It needs 16 samples (three's default): with 8, Sponza reads +16%.
   - Its size follows the scene pass, not the canvas: a pass drawn smaller (`scenePass.setResolutionScale`, as under `@pmndrs/upscaler`) gets GTAO at its own size, and `resolutionScale: 0.5` is always half the pass's pixels.
   - `occlusion: false` turns it off.
   - `occlusion: { source: gtaoNode }` uses a GTAO node your pipeline already makes from this pass, instead of a second one.
   - If the pass already applies AO to its materials (`builtinAOContext`), `giAlbedo` already carries it, and the default is no second occlusion.
-  - `node.occlusionNode` is the composite's own GTAO node, for live changes (`radius.value`).
+  - `node.occlusionNode` is the composite's own GTAO node, for live changes (`radius.value`). With the default it is made at the build.
 - The fog of a fogged scene isn't applied to the composited GI.
 - The targets should stay half float: 8-bit `giAlbedo` and normal miss the match by about 10× on Sponza.
 - If the platform's shading module changes shape (another technique, say), set `pipeline.needsUpdate = true`.

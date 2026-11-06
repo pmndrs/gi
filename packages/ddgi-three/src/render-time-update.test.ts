@@ -120,10 +120,25 @@ describe('the composite node, ddgi(scenePass, volume)', () => {
         return scenePass;
     }
 
-    it('runs its own GTAO on the GI term by default, at 1 m', () => {
-        const node = ddgi(compositePass(), new GIVolume());
+    it('by default runs GTAO at half resolution, 1 m, on an upscaled (reduced) pass, and none on a full-resolution pass (DECISIONS 2026-11-06)', () => {
+        const reduced = compositePass();
+        reduced.setResolutionScale(0.5);
+        const upscaled = ddgi(reduced, new GIVolume());
+        expect(upscaled.occlusionNode).not.toBeNull();
+        expect(upscaled.occlusionNode!.radius.value).toBe(1);
+        expect(upscaled.occlusionNode!.resolutionScale).toBe(0.5);
+        expect(ddgi(compositePass(), new GIVolume()).occlusionNode).toBeNull();
+    });
+
+    it('re-chooses the default when the pass is reduced after ddgi(), at the build', () => {
+        const scenePass = compositePass();
+        const node = ddgi(scenePass, new GIVolume());
+        expect(node.occlusionNode).toBeNull();
+        scenePass.setResolutionScale(1 / 2);
+        // What setup() does first: the default follows the pass as it is at the build.
+        (node as unknown as { resolveOcclusion(): void }).resolveOcclusion();
         expect(node.occlusionNode).not.toBeNull();
-        expect(node.occlusionNode!.radius.value).toBe(1);
+        expect(node.occlusionNode!.resolutionScale).toBe(0.5);
     });
 
     it("sizes its GTAO from the scene pass (not the drawing buffer), with GTAO's own scale relative to the pass", () => {
@@ -148,6 +163,7 @@ describe('the composite node, ddgi(scenePass, volume)', () => {
 
     it('takes occlusion settings, or none', () => {
         const half = ddgi(compositePass(), new GIVolume(), { occlusion: { radius: 0.5, resolutionScale: 0.5, samples: 8 } });
+        // An explicit choice stands on a full-resolution pass too (native GTAO is opt-in).
         expect(half.occlusionNode!.radius.value).toBe(0.5);
         expect(half.occlusionNode!.resolutionScale).toBe(0.5);
         expect(half.occlusionNode!.samples.value).toBe(8);
@@ -184,6 +200,7 @@ describe('the composite node, ddgi(scenePass, volume)', () => {
 
     it('adds no second occlusion when the pass already applies AO to its materials', () => {
         const scenePass = compositePass();
+        scenePass.setResolutionScale(0.5);
         scenePass.contextNode = builtinAOContext(float(0.5));
         expect(ddgi(scenePass, new GIVolume()).occlusionNode).toBeNull();
     });

@@ -21,6 +21,29 @@ Rules:
 
 ---
 
+## 2026-11-06 · T1.14 default locked: the upscaler's Performance preset with half-resolution GTAO · implementer (opus)
+Did (uncommitted):
+- **HD re-measure** (`three-composite-ao/run.ts`, whose `sponza` default is now the HD reference: `cycles-untextured-gi.exr` at 1920×1080 with `gi-materials.json`, `7680a2d0…`). The GI term through `@pmndrs/upscaler` at the stored camera, GTAO 1 m, 16 samples, at half the render resolution, RTX:
+  - **Performance:** Sponza **+6.59%** (curtain pixels +15.7%); base package −1.19% (its 640×360 reference, the only one so far); Cornell +0.22% (1920×1080, 600 passes);
+  - **Quality:** Sponza +6.06% (curtains +14.6%); base −1.53%; Cornell +0.21%;
+  - without the upscaler, half-resolution GTAO reads +5.83% (curtains +13.6%) at HD.
+  - **Chosen by the DECISIONS rule (Performance if Sponza is within ±10%): Performance.** No cost re-runs: the cost study's numbers stand (0.73 ms for showing GI; the upscaler's own 1.55 ms).
+- `packages/ddgi-three/src/composite.ts`: **the default occlusion follows the pass.** On a reduced pass (`getResolutionScale() < 1`, the upscaler's path) it is GTAO at half the pass's resolution, 1 m, 16 samples. On a full-resolution pass it is none (native GTAO is opt-in, its cost in docs). The choice is made at construction and again at the build, so a scale set after `ddgi()` counts. `occlusionNode` is now a getter. No new exports, and the names are unchanged.
+- `examples/three/composite.*`: the upscaled path (Performance: `rtt(ddgi(...), …, { type: HalfFloatType, resolutionScale })` into `upscale(...)`, `velocity` in the MRT, `antialias: false`). `@pmndrs/upscaler` resolves through aliases (examples vite config, `tools/gpu/server.ts`, tsconfig paths) to the viewer's copy, because `examples/three` isn't a workspace package.
+- `docs/api/three.md`: the intended pipeline (the upscaler, with the composable wiring), a cost and accuracy table, the upscaler's own cost as a separate line, native GTAO opt-in with its cost, and the default following the pass.
+- `tools/gpu/pages/three-examples`: pictures are read inside the running animation loop, because the upscaler only advances on a new frame.
+- Tests: the default (GTAO at 0.5 on a reduced pass, none on a full one, re-chosen at the build).
+Verified (headless Chrome 156, RTX 3060):
+- lint, typecheck and `pnpm test` (942 passed);
+- `test:gpu --filter three-`: 9 of 9, the Cornell match unchanged;
+- `three-examples`: both examples render with 40 GI frames in 40 animation frames; GI is 45.7% of the canvas (simple) and 44.8% (composite, through the upscaler). The screenshot shows clean colour bleed, and a little speckle on the short box's top under the sphere (likely the half-resolution GTAO at a 400 px-tall render).
+Not verified: the Intel for this round (`--filter three-` was asked on the RTX only); a 1440p display with a moving camera.
+Usage bar, updated: the composite example is now 14 GI lines (the simple 5, plus the `three/tsl` and `@pmndrs/upscaler` imports, the render scale, `RenderPipeline`, `pass`, `setMRT`, `setResolutionScale`, `rtt`, `outputNode`); LightProbeGrid 5, ours simple 5. Names a user touches for the upscaled path: ours `GIVolume`, `ddgi`, `giAlbedo`; three's `RenderPipeline`, `pass`, `mrt`, `output`, `normalView`, `packNormalToRGB`, `velocity`, `rtt`, `HalfFloatType`; the upscaler's `upscale`, `QualityMode`, `getQualityModeRatio`.
+Next:
+- `examples/three` as a workspace package with its own dependencies (three, `@pmndrs/upscaler`), replacing the aliases;
+- the viewer's warm-up switch-over to `volume.start` and a composite toggle, once `apps/viewer` is free;
+- the base package's HD reference, to replace its 640×360 numbers.
+
 ## 2026-11-06 · BVH package docs · side session (opus)
 Did (docs only, branch `bvh-docs`; no code changed): `packages/bvh/README.md` rewritten for users (what it is, the builder contract, which builder to use when, one short example per path, the measured numbers with their conditions, licences, status: GPU mesh builders not wired into ddgi-core until M2's fast first GI). The design text it had moved, lightly reordered, to `docs/design/bvh-builders.md`. New `docs/design/bvh-package-split.md`: an outline (not a decision) for splitting out `@pmndrs/bvh`. `packages/bvh/package.json` description: bundled into `@pmndrs/ddgi` for now, standalone later (still `private`). `bvh-framework.md` links the new docs.
 Verified: `pnpm lint` and `pnpm typecheck` clean, `pnpm test` 912 passed (6 skipped). The README examples were checked against the source signatures by reading them, not run.
