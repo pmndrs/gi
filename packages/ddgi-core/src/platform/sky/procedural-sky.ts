@@ -14,7 +14,9 @@
  *   Ineichen-Perez share of the sun's light. The target is a few scalar
  *   formulas (here); what the unscaled sky delivers to that ground is a sum
  *   over the sky, which the GPU makes in the same pass as the SH, over the
- *   same 512 x 256 grid of texel centres the CPU's sky files are built on.
+ *   256 x 128 radiance map it has just written. Each map texel averages the
+ *   sky at the centres of the 2 x 2 texels the CPU's 512 x 256 sky files have
+ *   there, so the map, and the brightness measured on it, match the CPU's.
  *
  * So a re-bake costs the CPU a few dozen arithmetic operations and one small
  * buffer write, and never builds an image. The CPU sky (`buildCalibratedSky`)
@@ -23,17 +25,17 @@
  */
 
 import type { EnvironmentDescriptor } from '../contract/scene.ts';
-import { DEFAULT_SKY_HEIGHT, DEFAULT_SKY_WIDTH, DEFAULT_TURBIDITY, sunDirectionAndElevation } from './calibrated-sky.ts';
+import { DEFAULT_SKY_WIDTH, DEFAULT_TURBIDITY, sunDirectionAndElevation } from './calibrated-sky.ts';
 import { ineichenPerezClearSky, MIN_SUN_ELEVATION_DEG } from './clear-sky-ratio.ts';
 import { createPreethamSky, MAX_TURBIDITY, MIN_TURBIDITY, type PerezCoefficients } from './preetham.ts';
 
 /**
- * The grid the GPU integrates a procedural sky over (for its SH and its
- * calibration): the CPU sky's own texel centres, so the GPU's brightness
- * comes out as the CPU's to float rounding.
+ * Where the GPU evaluates a procedural sky: the CPU sky's own texel centres
+ * across (512, so 2 x 2 samples in each 256 x 128 map texel), so the map
+ * matches the CPU sky's box-filtered texels. The SH and the calibration are
+ * then summed over the map (projection-wgsl.ts).
  */
 export const PROCEDURAL_GRID_WIDTH = DEFAULT_SKY_WIDTH;
-export const PROCEDURAL_GRID_HEIGHT = DEFAULT_SKY_HEIGHT;
 
 /**
  * The smallest turn of the sun that re-bakes the sky (m2-lights.md §6.2).

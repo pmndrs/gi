@@ -14,8 +14,13 @@
  *    in which keys pass their change on. `ddgi/propagate` must cost at most
  *    0.1 ms (its median over those frames; the p90 and largest reported,
  *    since other programs' GPU work lands in some frames, NOTES).
- * 4. **day**: a 10-second day: the sun sweeps DAY_DEGREES across the sky in
- *    DAY_FRAMES frames (60 Hz). The update, every `ddgi/` pass the platform
+ * 4. **day**: a 10-second day, DAY_FRAMES frames (60 Hz): the sun's
+ *    elevation rises from DAY_LOW_DEGREES to DAY_HIGH_DEGREES and sets again
+ *    (a sine over the day), while its azimuth moves steadily through
+ *    DAY_AZIMUTH_DEGREES around the scene's own. An explicit path: until
+ *    T2.6a this was built from repeated `turnedSun` calls, which took the sun
+ *    below the horizon after about 77 frames (and, with the corrected
+ *    helper, would hold it near the zenith for most of the day). The update, every `ddgi/` pass the platform
  *    counts against the budget (mark, schedule, trace, blend, write,
  *    propagate, census), must stay within Budget v2's margin, at most
  *    gpuMs × 1.1, as a median over the day's timed frames; its p95, and the
@@ -26,7 +31,7 @@
  */
 
 import { assert } from '../../client.ts';
-import { aimSun, startSponza, sunDirection, turnedSun, type SponzaUnderTest } from '../ddgi-shared/sponza-response.ts';
+import { aimSun, startSponza, sunAngles, sunDirection, sunFromAngles, turnedSun, type SponzaUnderTest } from '../ddgi-shared/sponza-response.ts';
 import { yieldToCallbacks } from '../ddgi-shared/viewer-scene.ts';
 import { runThreePage } from '../three-shared/harness.ts';
 
@@ -41,7 +46,10 @@ const STILL_FRAMES = 240;
 const STEP_FRAMES = 90;
 const SUN_TURN_DEGREES = 30;
 const DAY_FRAMES = 600;
-const DAY_DEGREES = 160;
+/** The day's path: elevation from low to high and back, azimuth moving steadily (degrees). */
+const DAY_LOW_DEGREES = 5;
+const DAY_HIGH_DEGREES = 75;
+const DAY_AZIMUTH_DEGREES = 160;
 const FRAMES_IN_FLIGHT = 2;
 const PROPAGATE_PASS = 'ddgi/propagate';
 const MARK_PASS = 'ddgi/mark';
@@ -191,11 +199,19 @@ await runThreePage(async ({ device, data, log: logLine }) => {
     if (!(quantile(propagateBusy, 0.5) <= PROPAGATE_MS)) failures.push(`step: ddgi/propagate median ${round(quantile(propagateBusy, 0.5))} ms (bar ${PROPAGATE_MS})`);
 
     // 4. A 10-second day.
-    let direction = turnedSun(startDirection, -DAY_DEGREES / 2 + SUN_TURN_DEGREES);
-    aimSun(test, direction);
+    const startAzimuth = sunAngles(startDirection).azimuth;
+    const sunAtDayFrame = (frame: number) => {
+        const t = frame / DAY_FRAMES;
+        return sunFromAngles(DAY_LOW_DEGREES + (DAY_HIGH_DEGREES - DAY_LOW_DEGREES) * Math.sin(Math.PI * t), startAzimuth + DAY_AZIMUTH_DEGREES * (t - 0.5));
+    };
+    aimSun(test, sunAtDayFrame(0));
     await run(30, { units }, 1 / 60);
+    let dayFrame = 0;
+    const elevations: number[] = [];
     const day = await run(DAY_FRAMES, { units }, 1 / 60, () => {
-        direction = turnedSun(direction, -DAY_DEGREES / DAY_FRAMES);
+        dayFrame++;
+        const direction = sunAtDayFrame(dayFrame);
+        elevations.push(sunAngles(direction).elevation);
         aimSun(test, direction);
     });
     const dayFrames = timings.frames(day.first, day.last);
@@ -205,7 +221,7 @@ await runThreePage(async ({ device, data, log: logLine }) => {
     const bar = BUDGET_MS * (1 + BUDGET_MARGIN);
     results.day = {
         frames: dayFrames.length,
-        degrees: DAY_DEGREES,
+        path: { lowDegrees: DAY_LOW_DEGREES, highDegrees: DAY_HIGH_DEGREES, azimuthDegrees: DAY_AZIMUTH_DEGREES, lowestElevation: round(Math.min(...elevations)), highestElevation: round(Math.max(...elevations)) },
         updateMedian: round(quantile(dayTotals, 0.5)),
         updateP95: round(quantile(dayTotals, 0.95)),
         calibratedMedian: round(quantile(dayFrames.map((entry) => entry.calibrated), 0.5)),
@@ -215,7 +231,7 @@ await runThreePage(async ({ device, data, log: logLine }) => {
         counters: scene.ddgi.counters,
     };
     log(
-        `a 10-second day (${DAY_DEGREES} degrees in ${DAY_FRAMES} frames) at ${units} probes, ${dayFrames.length} timed frames: update (every ddgi/ pass) median ${round(quantile(dayTotals, 0.5))} ms, p95 ${round(quantile(dayTotals, 0.95))} (bar ${bar}); ` +
+        `a 10-second day (elevation ${DAY_LOW_DEGREES}-${DAY_HIGH_DEGREES}-${DAY_LOW_DEGREES} degrees, azimuth through ${DAY_AZIMUTH_DEGREES}, in ${DAY_FRAMES} frames) at ${units} probes, ${dayFrames.length} timed frames: update (every ddgi/ pass) median ${round(quantile(dayTotals, 0.5))} ms, p95 ${round(quantile(dayTotals, 0.95))} (bar ${bar}); ` +
             `trace + blend + write ${round(quantile(dayFrames.map((entry) => entry.calibrated), 0.5))}; ddgi/propagate ${round(quantile(dayPropagate, 0.5))}; ddgi/mark ${round(quantile(dayMark, 0.5))}`,
     );
     if (!(quantile(dayTotals, 0.5) <= bar)) failures.push(`day: the update's median ${round(quantile(dayTotals, 0.5))} ms is over Budget v2's margin (${bar} ms)`);

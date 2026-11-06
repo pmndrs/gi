@@ -43,6 +43,7 @@ import { DEFAULT_PRIORITY_SHARE, NEAR_CAMERA_WEIGHT } from '../../../../packages
 import { loadAllManifests } from '../../../../apps/viewer/src/scene/manifests.ts';
 import { imageMean, readProbeData, TestView } from '../ddgi-shared/harness.ts';
 import { applyHysteresisMode, FIXED_097, parseHysteresisMode } from '../ddgi-shared/hysteresis-modes.ts';
+import { sunAngles, sunFromAngles, turnedSun } from '../ddgi-shared/sponza-response.ts';
 import { describeErrors, probeCoordinates, readHistory, ScheduleGapCensus, stepResponse } from '../ddgi-shared/response.ts';
 import { startViewerScene, yieldToCallbacks, type ViewerScene } from '../ddgi-shared/viewer-scene.ts';
 import { runThreePage } from '../three-shared/harness.ts';
@@ -159,12 +160,6 @@ function aimSun(test: SponzaUnderTest, direction: Vector3): void {
     test.sun.position.copy(target).addScaledVector(direction, -distance);
     test.sun.updateMatrixWorld();
     test.scene.threeGI.markChanged(test.sun);
-}
-
-/** The sun turned `degrees` lower (about the horizontal axis across its direction). */
-function turnedSun(direction: Vector3, degrees: number): Vector3 {
-    const axis = new Vector3().crossVectors(direction, new Vector3(0, 1, 0)).normalize();
-    return direction.clone().applyAxisAngle(axis, (-degrees * Math.PI) / 180).normalize();
 }
 
 interface ProbeMeans {
@@ -408,11 +403,15 @@ await runThreePage(
             const passFrames = Math.ceil(field.grid.probeCount / roundRobinShare);
             // Every probe listed at least once before the census starts.
             await frames(test, passFrames + 4, UNITS);
-            let direction = sunDirection(test.sun);
+            // The moving sun: its elevation kept, its azimuth moving so that the
+            // direction turns SUN_DEGREES_PER_SECOND (an explicit path; until T2.6a
+            // repeated turns about cross(direction, up) took Sponza's sun to the
+            // zenith after 13 s and held it there).
+            const startSun = sunAngles(sunDirection(test.sun));
+            const azimuthPerFrame = SUN_DEGREES_PER_SECOND / 60 / Math.cos((startSun.elevation * Math.PI) / 180);
             const scheduleMs: number[] = [];
             for (let frame = 1; frame <= CENSUS_FRAMES; frame++) {
-                direction = turnedSun(direction, SUN_DEGREES_PER_SECOND / 60);
-                aimSun(test, direction);
+                aimSun(test, sunFromAngles(startSun.elevation, startSun.azimuth + azimuthPerFrame * frame));
                 test.scene.frame({ units: UNITS });
                 census.measure(test.scene.platform.stats.frame);
                 const pass = test.scene.platform.stats.passes.find((entry) => entry.name === 'ddgi/schedule');
