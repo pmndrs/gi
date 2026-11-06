@@ -73,9 +73,12 @@
  * Every pick has exactly one writer, so the result does not depend on thread
  * timing.
  *
- * **Storage:** the picks are a `rg32uint` texture (light index, share as f32
- * bits), 8 bytes a pick, so the hit-shading module still binds no storage
- * buffer: `ddgi/trace` stays at 7 storage buffers and `gi/direct` at 6.
+ * **Storage:** the picks are a `rgba32uint` texture (light index, share as
+ * f32 bits; z and w unused), so the hit-shading module still binds no
+ * storage buffer: `ddgi/trace` stays at 7 storage buffers and `gi/direct` at
+ * 6. Not the 8-byte `rg32uint`: compatibility-mode devices refuse it as a
+ * storage texture (`ddgi-shading-compat`), and 16 bytes a pick is about
+ * 0.5 MB at 2,048 cells.
  */
 
 import type { Aabb } from '../contract/math.ts';
@@ -98,6 +101,8 @@ export const LIGHT_GRID_WORKGROUP_SIZE = LIGHT_GRID_RUNS_PER_CELL * LIGHT_GRID_C
 export const LIGHT_GRID_TEXTURE_WIDTH = 2048;
 /** The most cells a grid may have (the design's cap), so a pick's texel row stays well inside the texture limits. */
 export const LIGHT_GRID_MAX_CELLS = 32768;
+/** Bytes of one pick in the texture (`rgba32uint`: light, share, two unused words). */
+export const LIGHT_GRID_PICK_BYTES = 16;
 /** A pick slot with no light (a cell no local light can reach). */
 export const LIGHT_GRID_NO_LIGHT = 0xffffffff;
 /** The timed pass. */
@@ -327,7 +332,7 @@ struct GiLightGridLight {
 }
 
 @group(1) @binding(0) var<uniform> giGridBuild: GiLightGridBuild;
-@group(1) @binding(1) var giGridPicksOut: texture_storage_2d<rg32uint, write>;
+@group(1) @binding(1) var giGridPicksOut: texture_storage_2d<rgba32uint, write>;
 // The local lights, packed: entry i is light firstLocal + i.
 @group(1) @binding(2) var<storage, read_write> giGridLights: array<GiLightGridLight>;
 
@@ -593,7 +598,7 @@ const BUILD_GROUP: GPUBindGroupLayoutDescriptor = {
     label: 'gi/light-grid group 1',
     entries: [
         { binding: 0, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'uniform' } },
-        { binding: 1, visibility: SHADER_STAGE_COMPUTE, storageTexture: { access: 'write-only', format: 'rg32uint', viewDimension: '2d' } },
+        { binding: 1, visibility: SHADER_STAGE_COMPUTE, storageTexture: { access: 'write-only', format: 'rgba32uint', viewDimension: '2d' } },
         { binding: 2, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'storage' } },
     ],
 };
@@ -680,7 +685,7 @@ export class PlatformLightGrid {
     }
 
     get memoryBytes(): number {
-        return this.picks.width * this.picks.height * 8 + LIGHT_GRID_BUILD_UNIFORM_BYTES + (this.packedLights?.size ?? 0);
+        return this.picks.width * this.picks.height * LIGHT_GRID_PICK_BYTES + LIGHT_GRID_BUILD_UNIFORM_BYTES + (this.packedLights?.size ?? 0);
     }
 
     /** The picks texture, for tests that read it back (it has COPY_SRC). */
@@ -791,7 +796,7 @@ export class PlatformLightGrid {
         return this.device.createTexture({
             label: `${this.label} light grid picks`,
             size: { width, height: rows },
-            format: 'rg32uint',
+            format: 'rgba32uint',
             // COPY_SRC so a test can read the picks back.
             usage: TEXTURE_USAGE.textureBinding | TEXTURE_USAGE.storageBinding | TEXTURE_USAGE.copySrc,
         });

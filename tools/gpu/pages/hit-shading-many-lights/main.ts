@@ -38,6 +38,7 @@ import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-p
 import { RAY_RESULT_BYTES } from '../../../../packages/ddgi-core/src/platform/shade/direct.ts';
 import {
     LIGHT_GRID_NO_LIGHT,
+    LIGHT_GRID_PICK_BYTES,
     LIGHT_GRID_PICKS_PER_CELL,
     LIGHT_GRID_TEXTURE_WIDTH,
     PlatformLightGrid,
@@ -62,6 +63,8 @@ const POINTS_WITHIN_SHARE = 0.99;
 const MIN_SAME_PICKS = 0.999;
 const WORKGROUP_SIZE = 64;
 const ALL_GROUPS = 0xf;
+/** 32-bit words a pick takes in the picks texture. */
+const PICK_WORDS = LIGHT_GRID_PICK_BYTES / 4;
 const NO_TIMER: GpuTimerScope = { computePass: () => undefined };
 
 const RAYS_GROUP: GPUBindGroupLayoutDescriptor = {
@@ -153,7 +156,7 @@ async function readBack(device: GPUDevice, source: GPUBuffer, offset: number, by
 }
 
 async function readTexture(device: GPUDevice, texture: GPUTexture): Promise<Uint32Array> {
-    const bytesPerRow = texture.width * 8;
+    const bytesPerRow = texture.width * LIGHT_GRID_PICK_BYTES;
     const buffer = device.createBuffer({ size: bytesPerRow * texture.height, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
     const encoder = device.createCommandEncoder();
     encoder.copyTextureToBuffer({ texture }, { buffer, bytesPerRow }, { width: texture.width, height: texture.height });
@@ -427,25 +430,25 @@ async function compareScans(device: GPUDevice, platform: GIPlatformImpl, log: (l
         let unwritten = 0;
         const shares = new Float32Array(words.buffer);
         for (let slot = 0; slot < cells * LIGHT_GRID_PICKS_PER_CELL; slot++) {
-            const light = words[slot * 2];
+            const light = words[slot * PICK_WORDS];
             const firstOfCell = slot % LIGHT_GRID_PICKS_PER_CELL === 0;
-            const repeat = !firstOfCell && words[(slot - 1) * 2] === light;
-            if (light !== LIGHT_GRID_NO_LIGHT && !(shares[slot * 2 + 1] > 0) && !repeat) unwritten++;
+            const repeat = !firstOfCell && words[(slot - 1) * PICK_WORDS] === light;
+            if (light !== LIGHT_GRID_NO_LIGHT && !(shares[slot * PICK_WORDS + 1] > 0) && !repeat) unwritten++;
         }
         let emptyCells = 0;
-        for (let cell = 0; cell < cells; cell++) if (words[cell * LIGHT_GRID_PICKS_PER_CELL * 2] === LIGHT_GRID_NO_LIGHT) emptyCells++;
+        for (let cell = 0; cell < cells; cell++) if (words[cell * LIGHT_GRID_PICKS_PER_CELL * PICK_WORDS] === LIGHT_GRID_NO_LIGHT) emptyCells++;
         assert(unwritten === 0, `${reduction} scan: ${unwritten} pick slots left unwritten`);
         // With 1,024 unranged and ranged lights over a 24 m floor, every cell has some light.
         assert(emptyCells === 0, `${reduction} scan: ${emptyCells} of ${cells} cells have no light`);
-        picks.set(reduction, words.slice(0, cells * LIGHT_GRID_PICKS_PER_CELL * 2));
+        picks.set(reduction, words.slice(0, cells * LIGHT_GRID_PICKS_PER_CELL * PICK_WORDS));
         grid.dispose();
     }
     const result: Record<string, unknown> = { reductions };
     if (reductions.length === 2) {
         const [first, second] = [picks.get('subgroups')!, picks.get('workgroup')!];
-        const slots = first.length / 2;
+        const slots = first.length / PICK_WORDS;
         let same = 0;
-        for (let slot = 0; slot < slots; slot++) if (first[slot * 2] === second[slot * 2]) same++;
+        for (let slot = 0; slot < slots; slot++) if (first[slot * PICK_WORDS] === second[slot * PICK_WORDS]) same++;
         const share = same / slots;
         result.samePicks = share;
         result.picks = slots;
