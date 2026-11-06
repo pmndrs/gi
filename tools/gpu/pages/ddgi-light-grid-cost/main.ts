@@ -127,7 +127,7 @@ await runThreePage(async ({ device, data, log: logLine }) => {
         await run(SETTLE_FRAMES, LARGE_BATCH);
         const byK: Record<string, unknown> = {};
         for (const k of K_VALUES) {
-            scene.platform.shade.settings.maxShadowedLightsPerHit = k;
+            scene.platform.shade.settings.lightGridShadowedLightsPerHit = k;
             const small = await run(FRAMES, SMALL_BATCH);
             const large = await run(FRAMES, LARGE_BATCH);
             const update = (range: { first: number; last: number }) => timings.sums(range.first, range.last, (name) => name.startsWith(UPDATE_PASS_PREFIX));

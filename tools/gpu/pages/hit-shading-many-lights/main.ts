@@ -13,13 +13,14 @@
  *    and `maxShadowedLightsPerHit` above the light count, so every light is
  *    evaluated with its shadow ray at every point.
  * 2. **Through `gi/direct` with the grid** (the defaults: grid above 8
- *    point and spot lights, shadow rays to K = 4 of a cell's 16 picks): a test kernel traces
+ *    point and spot lights, 2,048 cells, a shadow ray to K = 1 of a cell's 16
+ *    picks, chosen at the hit by their weight; also K = 2 and 4): a test kernel traces
  *    the points' rays and lists them as a technique's tracing kernel does,
  *    `gi/direct` lights them; the grid is rebuilt every frame (new picks) by
  *    the platform's frame. Averaged over FRAMES frames, the done-when:
  *    the mean over all points within 1% of the exhaustive one, and 99% of
  *    the points within 5% each.
- * 3. **Noise at K = 1, 2, 4** (recorded, not gated): each point's standard
+ * 3. **Noise at K = 1, 2, 4** (recorded): each point's standard
  *    deviation over frames, relative to its exhaustive value (median, mean,
  *    p95 over points), and the same accuracy figures.
  * 4. **The two scans:** `gi/light-grid` built with the subgroup scan and with
@@ -478,19 +479,21 @@ await runGpuTest(
             log(`${bench.pointCount} points, ${litPoints} lit by the exhaustive evaluation of ${LIGHTS} point lights`);
             assert(litPoints >= 0.95 * bench.pointCount, `only ${litPoints} points are lit`);
 
-            // 2 and 3. Through gi/direct with the grid, at K = 4 (the default; gated), 2 and 1.
+            // 2 and 3. Through gi/direct with the grid, at K = 1 (the default), 2 and 4: each gated.
             platform.shade.settings.exactLightLimit = 8;
             const byK: Record<string, Accuracy> = {};
-            for (const k of [4, 2, 1]) {
-                platform.shade.settings.maxShadowedLightsPerHit = k;
+            for (const k of [1, 2, 4]) {
+                platform.shade.settings.lightGridShadowedLightsPerHit = k;
                 const accuracy = await sample(device, platform, bench, exhaustive.values, lit, 1000 * k);
                 byK[`K${k}`] = accuracy;
                 log(`K = ${k}, ${FRAMES} frames: ${describe(accuracy)}`);
             }
             results.accuracy = byK;
-            const gated = byK.K4;
-            assert(Math.abs(gated.meanDifference) <= MAX_MEAN_DIFFERENCE, `K = 4: the mean is ${(gated.meanDifference * 100).toFixed(3)}% from exhaustive (bar ${MAX_MEAN_DIFFERENCE * 100}%)`);
-            assert(gated.withinTolerance >= POINTS_WITHIN_SHARE, `K = 4: only ${(gated.withinTolerance * 100).toFixed(1)}% of points within ${POINT_TOLERANCE * 100}% (bar ${POINTS_WITHIN_SHARE * 100}%). ${Object.entries(byK).map(([k, accuracy]) => `${k}: ${describe(accuracy)}; worst ${accuracy.worstPoints}`).join(' | ')}`);
+            const details = Object.entries(byK).map(([k, accuracy]) => `${k}: ${describe(accuracy)}; worst ${accuracy.worstPoints}`).join(' | ');
+            for (const [k, accuracy] of Object.entries(byK)) {
+                assert(Math.abs(accuracy.meanDifference) <= MAX_MEAN_DIFFERENCE, `${k}: the mean is ${(accuracy.meanDifference * 100).toFixed(3)}% from exhaustive (bar ${MAX_MEAN_DIFFERENCE * 100}%). ${details}`);
+                assert(accuracy.withinTolerance >= POINTS_WITHIN_SHARE, `${k}: only ${(accuracy.withinTolerance * 100).toFixed(1)}% of points within ${POINT_TOLERANCE * 100}% (bar ${POINTS_WITHIN_SHARE * 100}%). ${details}`);
+            }
 
             bench.destroy();
         } finally {

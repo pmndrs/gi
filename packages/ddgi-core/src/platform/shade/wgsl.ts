@@ -54,7 +54,7 @@ export const SHADE_UNIFORM_LAYOUT = {
     skyRadianceMapScale: SKY_HARMONICS_LAYOUT.radianceMapScale,
     maxShadowedLightsPerHit: SKY_HARMONICS_LAYOUT.byteLength,
     bounceAlbedoCap: SKY_HARMONICS_LAYOUT.byteLength + 4,
-    /** The light grid's lookup (light-grid.ts), 40 bytes from here: active, a spare word, origin and 1 / cell size, cells and the outside cell. */
+    /** The light grid's lookup (light-grid.ts), 40 bytes from here: active, shadowed lights per hit with the grid, origin and 1 / cell size, cells and the outside cell. */
     lightGrid: SKY_HARMONICS_LAYOUT.byteLength + 8,
     /** Rounded up to the struct's 16-byte alignment. */
     byteLength: SKY_HARMONICS_LAYOUT.byteLength + 48,
@@ -100,7 +100,7 @@ struct GiShadeUniforms {
     // lights are drawn from it (more of them than exactLightLimit), and where
     // its cells are.
     lightGridActive: u32,
-    lightGridReserved: u32,
+    lightGridShadowedLightsPerHit: u32,  // K with the grid (the lightGridShadowedLightsPerHit setting)
     lightGridOrigin: vec3f,
     lightGridInverseCellSize: f32,
     lightGridCells: vec3u,
@@ -351,8 +351,8 @@ fn giShadeLocalCandidate(candidate: u32, directionalCount: u32, useGrid: bool, c
 // scene has up to exactLightLimit (the light grid is off), or the R picks of
 // the hit's cell from the light grid (light-grid.ts) when it has more. Each
 // candidate's unshadowed contribution at the surface, times its share, is
-// its weight. If more candidates have a weight than
-// giShade.maxShadowedLightsPerHit (K), K of them are chosen at random with
+// its weight. If more candidates have a weight than K (maxShadowedLightsPerHit,
+// or lightGridShadowedLightsPerHit with the grid), K of them are chosen at random with
 // probability proportional to their weight (luminance), by systematic
 // sampling: one random number r = random.x places K evenly spaced points
 // (k + r) / K on the candidates' cumulative distribution. A candidate picked
@@ -377,7 +377,8 @@ fn giDirectIrradiance(surface: GiSurface, groupMask: u32, random: vec2f) -> vec3
     let useGrid = giShadeUsesLightGrid();
     let cell = select(0u, giLightGridCellAt(surface.position), useGrid);
     let localCandidates = select(lightCount - directionalCount, GI_LIGHT_GRID_PICKS, useGrid);
-    let budget = max(giShade.maxShadowedLightsPerHit, 1u);
+    // K: maxShadowedLightsPerHit on the exact path, lightGridShadowedLightsPerHit with the grid.
+    let budget = max(select(giShade.maxShadowedLightsPerHit, giShade.lightGridShadowedLightsPerHit, useGrid), 1u);
     let picksPerHit = f32(budget);
 
     // First pass over the local candidates: how many have a weight, and the total.

@@ -30,6 +30,7 @@ export const DEFAULT_HIT_SHADING_SETTINGS: Readonly<HitShadingSettings> = {
     bounceAlbedoCap: 1,
     exactLightLimit: 8,
     lightGridMaxCells: 2048,
+    lightGridShadowedLightsPerHit: 1,
 };
 
 /** What hit shading needs to know of the scene's lights each frame, for the light grid. */
@@ -217,13 +218,14 @@ export class PlatformHitShading implements HitShading {
      */
     private uploadLightGrid(lookup: LightGridLookup): void {
         const layout = lookup.layout;
-        const key = lookup.active ? `${layout.origin.join(',')}/${layout.cellSize}/${layout.cells.join(',')}` : 'off';
+        const shadowedLights = Math.max(1, Math.floor(finiteOr(this.settings.lightGridShadowedLightsPerHit, DEFAULT_HIT_SHADING_SETTINGS.lightGridShadowedLightsPerHit)));
+        const key = lookup.active ? `${layout.origin.join(',')}/${layout.cellSize}/${layout.cells.join(',')}/${shadowedLights}` : 'off';
         if (key === this.uploadedLightGrid) return;
         const words = new Uint32Array(this.lightGridWords);
         const floats = new Float32Array(this.lightGridWords);
-        // GiShadeUniforms from lightGridActive on: active, a spare word, origin, 1 / cell size, cells, the outside cell.
+        // GiShadeUniforms from lightGridActive on: active, shadowed lights per hit, origin, 1 / cell size, cells, the outside cell.
         words[0] = lookup.active ? 1 : 0;
-        words[1] = 0;
+        words[1] = shadowedLights;
         floats.set(layout.origin, 2);
         floats[5] = 1 / layout.cellSize;
         words.set(layout.cells, 6);

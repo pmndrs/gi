@@ -214,9 +214,8 @@ export interface HitShadingSettings {
      * evaluated; local lights beyond this count are chosen stochastically,
      * weighted by their estimated contribution, and the result is rescaled so
      * it stays unbiased. With the light grid (more point and spot lights
-     * than `exactLightLimit`) this many of the hit's cell's 8 picks are
-     * evaluated, at most 8. At least 1 (smaller values count as 1).
-     * Defaults to 4.
+     * than `exactLightLimit`), `lightGridShadowedLightsPerHit` counts
+     * instead. At least 1 (smaller values count as 1). Defaults to 4.
      */
     maxShadowedLightsPerHit: number;
     /**
@@ -241,6 +240,14 @@ export interface HitShadingSettings {
      * Defaults to 2,048 (on Sponza, cells of about 2 m: two probe spacings).
      */
     lightGridMaxCells: number;
+    /**
+     * Shadowed lights evaluated per hit with the light grid: of the hit's
+     * cell's 16 light picks, weighed at the hit, this many get a shadow ray,
+     * chosen by their weight. Each shadow ray costs far more than the
+     * weighing (T2.3: on `sponza-candles` 1 instead of 4 halved the update's
+     * cost per probe, for a little more noise). At least 1. Defaults to 1.
+     */
+    lightGridShadowedLightsPerHit: number;
 }
 
 /**
