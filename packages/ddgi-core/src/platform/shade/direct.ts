@@ -18,12 +18,21 @@
  * | Bytes                       | What                                                       |
  * | --------------------------- | ---------------------------------------------------------- |
  * | 0 .. 256                    | header (`GiRayScratch`'s fields before `cells`)            |
- * | 256 .. 256 + 8 × rays       | ray results, one `vec2u` each                              |
+ * | 256 .. 256 + 8 × rays × L   | ray results, one `vec2u` each (L result layers per ray)    |
  * | then 32 × work items        | work items, four `vec2u` cells each                        |
  *
  * The header is 256 bytes so the ray results start at an offset every device
  * accepts for a storage binding (`minStorageBufferOffsetAlignment` is at most
  * 256): a technique's blend binds them alone, as `array<vec2u>`.
+ *
+ * **Result layers** (T2.5, light groups): a scratch may hold several results
+ * per ray, `layers` of them side by side (ray `i`'s layer `l` at result
+ * `i × layers + l`). The technique says which layer each light group's direct
+ * light goes into (`DirectLightFrame.groupLayers`): DDGI keeps one layer per
+ * light group, so a group's weight can change without new rays. The light
+ * choice and the shadow rays are shared by every layer
+ * (`giDirectGroupIrradiance`). With one layer (the default) every group goes
+ * into it, as before.
  *
  * **A work item** (32 bytes): the surface record and the index of the ray
  * whose result gets the light.
@@ -99,7 +108,7 @@ export const RAY_SCRATCH_WORD = {
     workCount: 0,
     /** The list `gi/direct` runs over this dispatch: `workCount` clamped to the capacity. */
     listed: 1,
-    /** Where the work items start, in cells after the header (= the ray capacity). Written at creation. */
+    /** Where the work items start, in cells after the header (= the ray capacity × layers). Written at creation. */
     itemsStart: 2,
     /** Work items that fit. Written at creation. */
     itemCapacity: 3,
@@ -113,7 +122,16 @@ export const RAY_SCRATCH_WORD = {
     itemsThisFrame: 7,
     /** Hits dropped because the list was full, in `countedFrame`. */
     droppedThisFrame: 8,
+    /** Results per ray (result layers). Written at creation. */
+    layers: 9,
+    /** For light groups 0-3, the result layer that gets the group's direct light, 8 bits each (group 0 lowest). Written by `encode`. */
+    groupLayers: 10,
 } as const;
+
+/** The most result layers a scratch holds: each group's layer number is 8 bits of a header word. */
+export const MAX_RAY_RESULT_LAYERS = 8;
+/** Light groups of the contract (a light's `group`, 0-3). */
+const LIGHT_GROUPS = 4;
 
 /** The scratch's header and cells, as every kernel that binds a whole scratch declares it. No other module needed. */
 const RAY_SCRATCH_STRUCT_WGSL = /* wgsl */ `
@@ -132,9 +150,9 @@ struct GiRayScratch {
     countedFrame: u32,
     itemsThisFrame: u32,
     droppedThisFrame: u32,
+    layers: u32,
+    groupLayers: u32,
     reserved0: u32,
-    reserved1: u32,
-    reserved2: u32,
     reserved: array<vec4u, 13>,
     cells: array<vec2u>,
 }
@@ -285,8 +303,14 @@ ${RAY_SCRATCH_STRUCT_WGSL}
 ${SURFACE_RECORD_WGSL}
 ${WORK_ITEM_WGSL}
 
+// Ray 'ray''s result in layer 'layer' (the scratch's layers sit side by side per ray).
+fn giStoreRayLayerResult(ray: u32, layer: u32, radiance: vec3f, techniqueHalf: f32) {
+    ${variable}.cells[ray * ${variable}.layers + layer] = giPackRayResult(radiance, techniqueHalf);
+}
+
+// Layer 0, the only one of a one-layer scratch.
 fn giStoreRayResult(ray: u32, radiance: vec3f, techniqueHalf: f32) {
-    ${variable}.cells[ray] = giPackRayResult(radiance, techniqueHalf);
+    giStoreRayLayerResult(ray, 0u, radiance, techniqueHalf);
 }
 
 // Does this hit go on the work list? Only if a light of this frame's groups can reach it.
@@ -375,31 +399,49 @@ fn giDirect(
     let surface = giSurfaceFromRecord(record);
 
     // The same light selection and shadow rays as a kernel that calls
-    // giDirectIrradiance inline: one code path.
+    // giDirectIrradiance inline (its four groups summed): one code path.
     let random = giDirectRandom(ray, giDirectScratch.frame);
-    let direct = giDirectIrradiance(surface, giDirectScratch.groupMask, random);
-    if (all(direct == vec3f(0.0))) {
-        // Every light blocked: the result already holds the rest of the ray's light.
-        return;
-    }
-    // Add albedo / pi × direct to what the tracing kernel stored, rounded to
-    // halves at random so this second store adds no bias; the technique's half stays.
-    let stored = giDirectScratch.cells[ray];
-    let blueAndTechnique = unpack2x16float(stored.y);
-    let radiance = vec3f(unpack2x16float(stored.x), blueAndTechnique.x) + surface.albedo * GI_SHADE_INV_PI * direct;
-    // Three more numbers for the rounding, from the light's random numbers.
+    let byGroup = giDirectGroupIrradiance(surface, giDirectScratch.groupMask, random);
+    // Three more numbers per layer for the rounding, from the light's random numbers.
     let roundingSeed = giShadeHash(bitcast<u32>(random.x) ^ giShadeHash(bitcast<u32>(random.y) ^ 0x85ebca6bu));
-    let rounding = vec3f(
-        f32(roundingSeed >> 8u),
-        f32(giShadeHash(roundingSeed + 1u) >> 8u),
-        f32(giShadeHash(roundingSeed + 2u) >> 8u),
-    ) * (1.0 / 16777216.0);
-    let rounded = vec3f(
-        giDirectStochasticHalf(radiance.r, rounding.x),
-        giDirectStochasticHalf(radiance.g, rounding.y),
-        giDirectStochasticHalf(radiance.b, rounding.z),
-    );
-    giDirectScratch.cells[ray] = giPackRayResult(rounded, blueAndTechnique.y);
+    let layers = giDirectScratch.layers;
+    let groupLayers = giDirectScratch.groupLayers;
+    for (var layer = 0u; layer < layers; layer++) {
+        // The groups whose direct light goes into this layer (all of them with one layer).
+        let direct =
+            select(vec3f(0.0), byGroup.group0, giDirectGroupLayer(groupLayers, 0u) == layer) +
+            select(vec3f(0.0), byGroup.group1, giDirectGroupLayer(groupLayers, 1u) == layer) +
+            select(vec3f(0.0), byGroup.group2, giDirectGroupLayer(groupLayers, 2u) == layer) +
+            select(vec3f(0.0), byGroup.group3, giDirectGroupLayer(groupLayers, 3u) == layer);
+        if (all(direct == vec3f(0.0))) {
+            // Every light of the layer blocked (or none in it): the result already holds the rest of the ray's light.
+            continue;
+        }
+        // Add albedo / pi × direct to what the tracing kernel stored, rounded to
+        // halves at random so this second store adds no bias; the technique's half stays.
+        let cell = ray * layers + layer;
+        let stored = giDirectScratch.cells[cell];
+        let blueAndTechnique = unpack2x16float(stored.y);
+        let radiance = vec3f(unpack2x16float(stored.x), blueAndTechnique.x) + surface.albedo * GI_SHADE_INV_PI * direct;
+        // Layer 0 keeps the seed it had before layers existed; the others get their own.
+        let layerSeed = roundingSeed ^ (layer * 0x9e3779b9u);
+        let rounding = vec3f(
+            f32(layerSeed >> 8u),
+            f32(giShadeHash(layerSeed + 1u) >> 8u),
+            f32(giShadeHash(layerSeed + 2u) >> 8u),
+        ) * (1.0 / 16777216.0);
+        let rounded = vec3f(
+            giDirectStochasticHalf(radiance.r, rounding.x),
+            giDirectStochasticHalf(radiance.g, rounding.y),
+            giDirectStochasticHalf(radiance.b, rounding.z),
+        );
+        giDirectScratch.cells[cell] = giPackRayResult(rounded, blueAndTechnique.y);
+    }
+}
+
+// The result layer light group 'group' goes into (RAY_SCRATCH_WORD.groupLayers: 8 bits a group).
+fn giDirectGroupLayer(groupLayers: u32, group: u32) -> u32 {
+    return (groupLayers >> (8u * group)) & 0xffu;
 }
 `;
 
@@ -418,9 +460,22 @@ const DIRECT_GROUP: GPUBindGroupLayoutDescriptor = {
     entries: [{ binding: 0, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'storage' } }],
 };
 
-/** Bytes of a scratch for `rays` results and `workItems` items. */
-export function rayScratchBytes(rays: number, workItems: number): number {
-    return RAY_SCRATCH_HEADER_BYTES + rays * RAY_RESULT_BYTES + workItems * WORK_ITEM_BYTES;
+/** Bytes of a scratch for `rays` rays of `layers` results each and `workItems` items. */
+export function rayScratchBytes(rays: number, workItems: number, layers = 1): number {
+    return RAY_SCRATCH_HEADER_BYTES + rays * layers * RAY_RESULT_BYTES + workItems * WORK_ITEM_BYTES;
+}
+
+/** The header word of `groupLayers` (RAY_SCRATCH_WORD.groupLayers): 8 bits a group, every group in layer 0 by default. */
+export function packGroupLayers(groupLayers: readonly number[] | undefined, layers: number): number {
+    let packed = 0;
+    for (let group = 0; group < LIGHT_GROUPS; group++) {
+        const layer = groupLayers?.[group] ?? 0;
+        if (!Number.isInteger(layer) || layer < 0 || layer >= layers) {
+            throw new RangeError(`@pmndrs/ddgi: light group ${group} goes into result layer ${layer}, but the ray scratch has ${layers} layer(s)`);
+        }
+        packed |= layer << (8 * group);
+    }
+    return packed >>> 0;
 }
 
 interface DirectKernels {
@@ -432,18 +487,20 @@ class PlatformRayScratch implements RayScratch {
     readonly buffer: GPUBuffer;
     readonly rayCapacity: number;
     readonly itemCapacity: number;
+    readonly layers: number;
     readonly rayResults: GPUBufferBinding;
     readonly countsOffset = RAY_SCRATCH_WORD.itemsThisFrame * 4;
     readonly bytes: number;
     readonly argsGroup: GPUBindGroup;
     readonly directGroup: GPUBindGroup;
-    /** The frame and group mask last written into the header ("" before any). */
+    /** The frame, group mask and group layers last written into the header ("" before any). */
     writtenFrame = '';
 
-    constructor(device: GPUDevice, kernels: DirectKernels, dispatch: GPUBuffer, label: string, rays: number, workItems: number) {
+    constructor(device: GPUDevice, kernels: DirectKernels, dispatch: GPUBuffer, label: string, rays: number, workItems: number, layers: number) {
         this.rayCapacity = rays;
         this.itemCapacity = workItems;
-        this.bytes = rayScratchBytes(rays, workItems);
+        this.layers = layers;
+        this.bytes = rayScratchBytes(rays, workItems, layers);
         // COPY_SRC so a technique can copy the header's counts into its counters,
         // COPY_DST for encode's header writes.
         this.buffer = device.createBuffer({
@@ -454,12 +511,13 @@ class PlatformRayScratch implements RayScratch {
         });
         // The list starts empty (new buffers are zero); where the items start and how many fit.
         const header = new Uint32Array(this.buffer.getMappedRange(0, RAY_SCRATCH_HEADER_BYTES));
-        header[RAY_SCRATCH_WORD.itemsStart] = rays;
+        header[RAY_SCRATCH_WORD.itemsStart] = rays * layers;
         header[RAY_SCRATCH_WORD.itemCapacity] = workItems;
+        header[RAY_SCRATCH_WORD.layers] = layers;
         // No frame is counted yet: the first frame's counts start from zero, whatever its number.
         header[RAY_SCRATCH_WORD.countedFrame] = 0xffffffff;
         this.buffer.unmap();
-        this.rayResults = { buffer: this.buffer, offset: RAY_SCRATCH_HEADER_BYTES, size: Math.max(RAY_RESULT_BYTES, rays * RAY_RESULT_BYTES) };
+        this.rayResults = { buffer: this.buffer, offset: RAY_SCRATCH_HEADER_BYTES, size: Math.max(RAY_RESULT_BYTES, rays * layers * RAY_RESULT_BYTES) };
         this.argsGroup = device.createBindGroup({
             label: `${label} gi/direct-args`,
             layout: kernels.args.ownLayouts[0],
@@ -486,7 +544,9 @@ export class PlatformDeferredDirect implements DeferredDirectLight {
     private readonly dispatch: GPUBuffer;
     private kernels: DirectKernels | null = null;
     private preparing: Promise<void> | null = null;
+    /** The header's frame and group mask words, then (after the counts) its group layers. */
     private readonly headerWords = new Uint32Array(2);
+    private readonly groupLayerWord = new Uint32Array(1);
 
     constructor(device: GPUDevice, kernels: KernelBuilder, shadeModule: WgslModule, label: string) {
         this.device = device;
@@ -526,15 +586,19 @@ export class PlatformDeferredDirect implements DeferredDirectLight {
         return rayScratchTraceWgsl(scratchVariable, workList);
     }
 
-    createScratch(options: { readonly label: string; readonly rays: number; readonly workItems: number }): RayScratch {
+    createScratch(options: { readonly label: string; readonly rays: number; readonly workItems: number; readonly layers?: number }): RayScratch {
         const kernels = this.kernels;
         if (!kernels) throw new Error('@pmndrs/ddgi: await shade.direct.prepare() before creating a ray scratch');
         const rays = Math.max(1, Math.ceil(options.rays));
         const workItems = Math.max(0, Math.ceil(options.workItems));
-        const bytes = rayScratchBytes(rays, workItems);
+        const layers = options.layers ?? 1;
+        if (!Number.isInteger(layers) || layers < 1 || layers > MAX_RAY_RESULT_LAYERS) {
+            throw new RangeError(`@pmndrs/ddgi: a ray scratch holds 1 to ${MAX_RAY_RESULT_LAYERS} result layers, got ${layers}`);
+        }
+        const bytes = rayScratchBytes(rays, workItems, layers);
         const allowed = this.device.limits.maxStorageBufferBindingSize;
         if (bytes > allowed) throw new GILimitError('maxStorageBufferBindingSize', bytes, allowed);
-        return new PlatformRayScratch(this.device, kernels, this.dispatch, options.label, rays, workItems);
+        return new PlatformRayScratch(this.device, kernels, this.dispatch, options.label, rays, workItems, layers);
     }
 
     encode(encoder: GPUCommandEncoder, scratch: RayScratch, frame: DirectLightFrame): void {
@@ -544,11 +608,14 @@ export class PlatformDeferredDirect implements DeferredDirectLight {
         // The frame and groups for this frame's dispatches. A queue write lands before the
         // host submits this encoder, so the tracing kernel recorded before this call reads the
         // same group mask as gi/direct.
-        const frameKey = `${frame.frame >>> 0}/${frame.groupMask >>> 0}`;
+        const groupLayers = packGroupLayers(frame.groupLayers, scratch.layers);
+        const frameKey = `${frame.frame >>> 0}/${frame.groupMask >>> 0}/${groupLayers}`;
         if (frameKey !== scratch.writtenFrame) {
             this.headerWords[0] = frame.frame >>> 0;
             this.headerWords[1] = frame.groupMask >>> 0;
             this.device.queue.writeBuffer(scratch.buffer, RAY_SCRATCH_WORD.frame * 4, this.headerWords);
+            this.groupLayerWord[0] = groupLayers;
+            this.device.queue.writeBuffer(scratch.buffer, RAY_SCRATCH_WORD.groupLayers * 4, this.groupLayerWord);
             scratch.writtenFrame = frameKey;
         }
         // One pass, two dispatches: each dispatch is its own usage scope, so the arguments

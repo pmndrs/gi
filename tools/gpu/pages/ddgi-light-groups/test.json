@@ -1,0 +1,4 @@
+{
+    "description": "T2.5 check 1: two-room with 2 light groups; a weight change shows in its own frame, matches a field re-converged from scratch at that weight within 1% mean, marks nothing and leaves the history and layers byte for byte; the layers add up to groups off; both reductions agree.",
+    "timeoutMs": 300000
+}

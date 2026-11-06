@@ -3,12 +3,14 @@
  * volume they describe.
  *
  * Settings are a live object, as the technique contract asks: the host edits
- * fields and the next `encode` reads them. Four of them need new GPU
+ * fields and the next `encode` reads them. Five of them need new GPU
  * resources and only take effect at the next `prepare`: `volume`,
- * `irradianceTexels`, `distanceTexels` and `maxProbesPerFrame`.
+ * `irradianceTexels`, `distanceTexels`, `maxProbesPerFrame` and
+ * `lightGroups.count` (its weights are live).
  */
 
 import type { Vec3 } from '../../platform/contract/math.ts';
+import type { DDGILightGroups } from './light-groups.ts';
 
 export interface DDGIVolumeSettings {
     /** Centre of the box, metres. */
@@ -199,6 +201,20 @@ export interface DDGISettings {
     classification: boolean;
     /** Largest number of probes updated in one frame: sizes the update list and the scratch buffer. New `prepare` when changed. */
     maxProbesPerFrame: number;
+    /**
+     * Light groups (T2.5, light-groups.ts; docs/design/m2-lights.md §5): one
+     * irradiance layer per group plus one for the sky and emission, added up
+     * with live weights, so dimming or recolouring a whole group shows in the
+     * same frame with no update lag. Off (null, the default): one layer.
+     * Opt-in because each layer costs memory and its share of every probe
+     * update. Measured on the RTX 3060 (T2.5): Sponza's DDGI is 58 MB with
+     * groups off, 119 MB with 2 groups, 170 MB with 4 (+112 MB: about 25.5 MB
+     * a layer, mostly ray results and scratch, plus the composed atlas), and
+     * an update per probe costs 1.05× (2 groups) and 1.10× (4) at 512 probes;
+     * two-room 1.04× and 1.23×. `count` needs a new `prepare`; the weights are
+     * read every frame.
+     */
+    lightGroups: DDGILightGroups | null;
     /**
      * The fewest probes updated per frame under a millisecond budget, so the
      * field keeps converging on every device (budget v2). It wins over the
@@ -419,6 +435,7 @@ export const DEFAULT_DDGI_SETTINGS: Readonly<Omit<DDGISettings, 'volume'>> = {
     minFrontFaceDistance: 'auto',
     classification: true,
     maxProbesPerFrame: 4096,
+    lightGroups: null,
     minProbesPerFrame: 'auto',
 };
 

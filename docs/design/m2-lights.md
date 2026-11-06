@@ -463,6 +463,16 @@ Distance (1 KB per probe) doesn't change. Four groups fit the furnished room's 6
 
 Shading cost doesn't change, because the renderer samples one composed atlas. *Why not sample every layer in the fragment shader:* irradiance fetches were about 0.21 ms of T1.6's sampling cost (a run at a locked 1200 MHz clock, NOTES), and five layers would push sampling past 1.0 ms.
 
+*As built (T2.5, 2026-11-06; `light-groups.ts`, `wgsl/compose.ts`; DECISIONS 2026-11-06).* Where it differs from the sketch above:
+
+- **The layer plan** (`layerPlan`): groups off is one layer holding everything; with `count` groups, a layer per group (lights of a group at or past `count` go into the last one), then the environment layer (sky and emission). The kernels loop over whatever the plan lists, so T2.6b's sun layer is one more entry: a kind, a place, a weight, and a route for directional lights in `gi/direct` (today it routes by group, `DirectLightFrame.groupLayers`).
+- **Ray results:** one per ray per layer in the one ray scratch (`createScratch({ layers })`), so `ddgi/trace` stays at 7 storage buffers and `gi/direct` at 6. `gi/direct` shares the light choice and shadow rays (`giDirectGroupIrradiance`) and adds each group into its layer.
+- **The trace's bounce:** the 8 probes' weights once (`ddgiCornerWeight`, which renderers' `ddgiAccumulateField` now calls too), each layer's tile read with them.
+- **The blend:** every layer's texels in one step beside the distance texels, one thread per (layer, texel), the radiance read from the ray buffer with several layers. The sketch's one layer at a time through one workgroup array left most of the workgroup idle in each extra layer: the blend cost 2.6× with 5 layers on two-room, 1.6× this way. Workgroup memory is 8 KB + 1,152 bytes a layer, so at most 6 layers (4 groups, the environment and T2.6b's sun).
+- **Compose** rounds to the nearest half before its store (`textureStore` truncates on the RTX, NOTES), and covers the update list, propagation's list, and every tile in a frame where a weight changed (and the first frame after `prepare`).
+- **The inline trace** (kept for comparison) doesn't take layers: light groups need direct light deferred.
+- **Measured** (RTX 3060, VALID runs): per updated probe at a 512-probe batch, 4 groups cost 1.10× groups off on Sponza and 1.23× on two-room (2 groups 1.05× / 1.04×); the linearity check matches a re-converged field within 0.004%. Memory per extra layer (atlas, ray results for a 4,096-probe warm-up batch, scratch, key deltas, propagation): two-room 3.6 MB, Cornell 5.8 MB, furnished room 14.5 MB, Sponza 25.5 MB, plus the composed atlas (one tile a probe: 0.55 / 0.88 / 2.6 / 9.9 MB). The design's table counted the atlas tiles alone.
+
 ## 6. Sun and sky with time of day
 
 Dennis (2026-11-05): time of day should be **"instant with a delayed fallback"**, and nothing may take minutes to build: "anything taking minutes to build is a fail and we should not go that direction." So each part below either needs no build, or builds from the field's own rays no slower than the field itself converges (on Sponza, about 1.2 s into the warm-up).
