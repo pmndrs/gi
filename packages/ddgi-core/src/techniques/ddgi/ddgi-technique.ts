@@ -247,7 +247,7 @@ interface PropagationResources {
     /** The compacted list of fine probes and its scratch of new irradiance texels. */
     readonly list: GPUBuffer;
     readonly scratch: GPUBuffer;
-    /** Indirect dispatch arguments and the list's length (PROPAGATION_STATE_WORD). */
+    /** The list's length (PROPAGATION_STATE_WORD.listed). Read by the kernels directly, not as indirect dispatch arguments: each empty indirect dispatch cost about 0.022 ms (ddgi.md). */
     readonly state: GPUBuffer;
     readonly findGroup: GPUBindGroup;
     readonly argsGroup: GPUBindGroup;
