@@ -24,8 +24,8 @@
  *
  * With VITE_DDGI_SCHEDULE_TIMING=1 (run it under the bench lock for the
  * clock rule): each scenario's four dispatches, in one pass as the technique
- * runs them, timed with timestamps over TIMED_FRAMES back-to-back frames,
- * median per reduction. Check 4's bar applies to the default reduction
+ * runs them, timed with timestamps over TIMED_ROUNDS × TIMED_FRAMES
+ * back-to-back frames, median per reduction. Check 4's bar applies to the default reduction
  * (subgroups where the device has them).
  *
  * `pnpm test:gpu --filter ddgi-schedule-reduction --gpu nvidia` (or intel).
@@ -59,7 +59,15 @@ const VOLUME = { center: [0, 0, 0] as [number, number, number], size: [39, 19, 2
 /** Sponza's calibrated batch at 2 ms on the RTX (T2.0's worktree: 293): the list the kernels fill. */
 const UPDATE_COUNT = 293;
 const FRAME = 1234;
+/**
+ * Timed frames per round (one query set: 2 timestamps a frame, at most 4,096
+ * queries), and rounds. Frames go to the GPU FRAMES_PER_SUBMIT at a time so
+ * it runs them back to back: one 30 µs frame per submit would leave the GPU
+ * idle between them and its clocks low (the clock rule needs it loaded).
+ */
 const TIMED_FRAMES = 2000;
+const TIMED_ROUNDS = 12;
+const FRAMES_PER_SUBMIT = 250;
 /** The local scenario's owed probes (a light change's box): 100 of 20,000, under the priority share. */
 const LOCAL_OWED_SHARE = 0.005;
 /** Check 4's bar. */
@@ -187,17 +195,22 @@ async function runScheduler(device: GPUDevice, platform: GIPlatformImpl, reducti
         const querySet = device.createQuerySet({ type: 'timestamp', count: 2 * TIMED_FRAMES });
         const resolve = device.createBuffer({ size: 16 * TIMED_FRAMES, usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC });
         reset();
-        for (let frame = 0; frame < TIMED_FRAMES; frame++) {
-            const timed = device.createCommandEncoder();
-            encodeFrame(timed, { querySet, beginningOfPassWriteIndex: 2 * frame, endOfPassWriteIndex: 2 * frame + 1 });
-            device.queue.submit([timed.finish()]);
-            if (frame % 64 === 63) await device.queue.onSubmittedWorkDone();
+        const ms: number[] = [];
+        for (let round = 0; round < TIMED_ROUNDS; round++) {
+            for (let start = 0; start < TIMED_FRAMES; start += FRAMES_PER_SUBMIT) {
+                const timed = device.createCommandEncoder();
+                for (let frame = start; frame < Math.min(TIMED_FRAMES, start + FRAMES_PER_SUBMIT); frame++) {
+                    encodeFrame(timed, { querySet, beginningOfPassWriteIndex: 2 * frame, endOfPassWriteIndex: 2 * frame + 1 });
+                }
+                if (start + FRAMES_PER_SUBMIT >= TIMED_FRAMES) timed.resolveQuerySet(querySet, 0, 2 * TIMED_FRAMES, resolve, 0);
+                device.queue.submit([timed.finish()]);
+            }
+            const stamps = new BigUint64Array(await readBuffer(device, resolve, 16 * TIMED_FRAMES));
+            for (let frame = 0; frame < TIMED_FRAMES; frame++) {
+                const value = Number(stamps[2 * frame + 1] - stamps[2 * frame]) / 1e6;
+                if (value > 0 && value < 100) ms.push(value);
+            }
         }
-        const resolver = device.createCommandEncoder();
-        resolver.resolveQuerySet(querySet, 0, 2 * TIMED_FRAMES, resolve, 0);
-        device.queue.submit([resolver.finish()]);
-        const stamps = new BigUint64Array(await readBuffer(device, resolve, 16 * TIMED_FRAMES));
-        const ms = Array.from({ length: TIMED_FRAMES }, (_, frame) => Number(stamps[2 * frame + 1] - stamps[2 * frame]) / 1e6).filter((value) => value > 0 && value < 100);
         ms.sort((a, b) => a - b);
         medianMs = ms[Math.floor(ms.length / 2)];
         querySet.destroy();
