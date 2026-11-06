@@ -1,6 +1,6 @@
 /**
  * DDGI's GPU time per probe, through the platform's own timer scopes
- * (`stats.passes`: `ddgi/trace`, `ddgi/blend`, `ddgi/write`), the probes per
+ * (`stats.passes`: `ddgi/trace`, `ddgi/gi-direct`, `ddgi/blend`, `ddgi/write`), the probes per
  * frame the 2 ms update budget (SPEC) buys, and the platform's conversion of
  * that budget into probes.
  *
@@ -23,7 +23,9 @@ const UNITS = [128, 512, 1024] as const;
 const WARMUP_FRAMES = 30;
 const MEASURED_FRAMES = 120;
 const BUDGET_MS = 2;
-const PASSES = ['ddgi/trace', 'ddgi/blend', 'ddgi/write'] as const;
+// With direct light deferred (the default since T2.2) the platform's gi/direct is part of the update, timed as DDGI's.
+// UNITS stay at or below 1,024 probes, one deferred round, so each pass runs once a frame.
+const PASSES = ['ddgi/trace', 'ddgi/gi-direct', 'ddgi/blend', 'ddgi/write'] as const;
 
 function median(values: readonly number[]): number {
     const sorted = [...values].sort((a, b) => a - b);

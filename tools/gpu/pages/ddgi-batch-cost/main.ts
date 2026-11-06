@@ -59,8 +59,18 @@
  * - **breakdown**: test-only copies of `ddgi/trace` with parts of the
  *   shading taken out, timed on the same probes (TRACE_VARIANTS).
  *
+ * Each scene runs once per direct-light path in `VITE_DDGI_DIRECT` (T2.2):
+ * `deferred` (the default: `ddgi/trace` plus the platform's `gi/direct`,
+ * timed as `ddgi/gi-direct`, both counted in the update) and `inline` (M1's
+ * trace with the shadow rays inside). With both listed the paths run one
+ * after the other on fresh platforms, inline first, and results are keyed
+ * `<scene>/<path>`. With direct light deferred, the budget section also
+ * reports the hits `gi/direct` lit per probe and per second (one shadow ray
+ * each for a scene lit by one shadow-casting sun, as Sponza is).
+ *
  * Choose with environment variables (vite passes `VITE_*` to the page):
  *   VITE_DDGI_SCENES=cornell-box,two-room,sponza,bistro-exterior   (default cornell-box,two-room)
+ *   VITE_DDGI_DIRECT=inline,deferred                                (default deferred)
  *   VITE_DDGI_SECTIONS=startup,rates,budget,curve,saturation,recheck,steady,breakdown   (default startup,rates,budget,curve)
  *   VITE_DDGI_BUDGET_MS=2
  *   VITE_DDGI_STEADY_UNITS=16,512                                    (default: the budget's median batch)
@@ -73,7 +83,7 @@
 import { PerspectiveCamera, type Scene, type WebGPURenderer } from 'three/webgpu';
 import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
 import type { EnvironmentDescriptor } from '../../../../packages/ddgi-core/src/platform/contract/scene.ts';
-import { DDGITechnique } from '../../../../packages/ddgi-core/src/techniques/ddgi/ddgi-technique.ts';
+import { DDGITechnique, type DirectLightPath } from '../../../../packages/ddgi-core/src/techniques/ddgi/ddgi-technique.ts';
 import { costOnCurve, SATURATION } from '../../../../packages/ddgi-core/src/platform/work-budget.ts';
 import { DDGI_TRACE_WGSL, TRACE_WORKGROUP_SIZE } from '../../../../packages/ddgi-core/src/techniques/ddgi/wgsl/trace.ts';
 import { ThreeGI } from '../../../../packages/ddgi-three/src/three-gi.ts';
@@ -94,6 +104,11 @@ function listFromEnv(value: unknown, fallback: readonly string[]): string[] {
 const SCENES = listFromEnv(env.VITE_DDGI_SCENES, ['cornell-box', 'two-room']);
 const SECTIONS = new Set(listFromEnv(env.VITE_DDGI_SECTIONS, ['startup', 'rates', 'budget', 'curve']));
 const BUDGET_MS = typeof env.VITE_DDGI_BUDGET_MS === 'string' ? Number(env.VITE_DDGI_BUDGET_MS) : 2;
+/** The direct-light paths to measure, in this order (see the file comment). */
+const DIRECT_PATHS: DirectLightPath[] = listFromEnv(env.VITE_DDGI_DIRECT, ['deferred']).map((path) => {
+    if (path !== 'inline' && path !== 'deferred') throw new Error(`VITE_DDGI_DIRECT: '${path}' is neither inline nor deferred`);
+    return path;
+});
 /** Fixed batch sizes for the `steady` section; by default the budget's median batch. */
 const STEADY_UNITS = listFromEnv(env.VITE_DDGI_STEADY_UNITS, []).map(Number).filter((units) => units > 0);
 
@@ -135,9 +150,18 @@ const RATE_SETTLE_SECONDS = 2.5;
 /** "Stable": every judged frame's probes within this share of the median. */
 const RATE_STABLE_SHARE = 0.05;
 
-/** The update's own passes; the census is a counter for the stats, reported apart. */
-const UPDATE_PASSES = ['ddgi/trace', 'ddgi/blend', 'ddgi/write'] as const;
+/**
+ * The update's own passes; the census is a counter for the stats, reported
+ * apart. With direct light deferred, the platform's `gi/direct` pass (timed
+ * as DDGI's `ddgi/gi-direct`) is part of the update.
+ */
+const DIRECT_PASS = 'ddgi/gi-direct';
+function updatePasses(direct: DirectLightPath | undefined): readonly string[] {
+    return direct === 'inline' ? ['ddgi/trace', 'ddgi/blend', 'ddgi/write'] : ['ddgi/trace', DIRECT_PASS, 'ddgi/blend', 'ddgi/write'];
+}
 const CENSUS_PASS = 'ddgi/census';
+/** DDGI's counter of the hits gi/direct lit in a frame (from the census, a few frames late). */
+const DIRECT_HITS = 'hits lit by gi/direct';
 const PROBES_UPDATED = 'probes updated';
 
 function median(values: readonly number[]): number {
@@ -228,27 +252,36 @@ function environmentFor(manifest: SceneManifest): EnvironmentDescriptor {
 class FrameTimings {
     readonly byFrame = new Map<number, Map<string, number>>();
     readonly unitsByFrame = new Map<number, number>();
+    private updatePassNames: readonly string[] = updatePasses(undefined);
 
-    /** After an update: the units it used, and whatever timings have arrived. */
+    /**
+     * After an update: the units it used, and whatever timings have arrived.
+     * Passes of one name in a frame add up (the deferred trace runs one
+     * `ddgi/trace` and one `ddgi/gi-direct` per round of 1,024 probes). The
+     * newest frame's list is complete each time, so its sums replace earlier ones.
+     */
     note(platform: GIPlatformImpl, ddgi: DDGITechnique): void {
         const stats = platform.stats;
+        this.updatePassNames = updatePasses(ddgi.directLight);
         this.unitsByFrame.set(stats.frame, ddgi.counters[PROBES_UPDATED] ?? 0);
+        const sums = new Map<number, Map<string, number>>();
         for (const pass of stats.passes) {
             if (pass.gpuMs === undefined || !(pass.gpuMs >= 0)) continue;
-            let passes = this.byFrame.get(pass.frame);
+            let passes = sums.get(pass.frame);
             if (!passes) {
                 passes = new Map();
-                this.byFrame.set(pass.frame, passes);
+                sums.set(pass.frame, passes);
             }
-            passes.set(pass.name, pass.gpuMs);
+            passes.set(pass.name, (passes.get(pass.name) ?? 0) + pass.gpuMs);
         }
+        for (const [platformFrame, passes] of sums) this.byFrame.set(platformFrame, passes);
     }
 
-    /** The update's GPU ms (trace + blend + write) of a frame, or undefined while not all three are in. */
+    /** The update's GPU ms (trace, gi/direct when deferred, blend, write) of a frame, or undefined while not all are in. */
     updateMs(frame: number): number | undefined {
         const passes = this.byFrame.get(frame);
-        if (!passes || !UPDATE_PASSES.every((name) => passes.has(name))) return undefined;
-        return UPDATE_PASSES.reduce((sum, name) => sum + (passes.get(name) ?? 0), 0);
+        if (!passes || !this.updatePassNames.every((name) => passes.has(name))) return undefined;
+        return this.updatePassNames.reduce((sum, name) => sum + (passes.get(name) ?? 0), 0);
     }
 
     pass(frame: number, name: string): number | undefined {
@@ -308,6 +341,7 @@ async function startScene(
     device: GPUDevice,
     renderer: WebGPURenderer,
     manifest: SceneManifest,
+    direct: DirectLightPath,
     log: (line: string) => void,
 ): Promise<{ scene: SceneUnderTest; startup: Record<string, number> }> {
     pipelineCompileMs.clear();
@@ -325,7 +359,7 @@ async function startScene(
 
     const platform = new GIPlatformImpl(device, { label: `batch cost ${manifest.id}`, gpuTiming: true });
     const volume = manifest.volume;
-    const ddgi = platform.addTechnique(new DDGITechnique({ volume: { center: volume.center, size: volume.size, spacing: volume.probeSpacing } }));
+    const ddgi = platform.addTechnique(new DDGITechnique({ volume: { center: volume.center, size: volume.size, spacing: volume.probeSpacing } }, { directLight: direct }));
     platform.setOutput(ddgi);
     await platform.prepare();
     const preparedAt = performance.now();
@@ -425,7 +459,7 @@ async function startScene(
         (startup as Record<string, number>)[`compile_ms/${label}`] = round(ms, 1);
     }
     log(
-        `${manifest.id}: ${probeCount} probes; files ${startup.load_files_ms} ms, prepare ${startup.prepare_ms}, copy ${startup.scene_copy_cpu_ms}, trees ${startup.trees_ms}; ` +
+        `${manifest.id} (${direct} direct light): ${probeCount} probes; files ${startup.load_files_ms} ms, prepare ${startup.prepare_ms}, copy ${startup.scene_copy_cpu_ms}, trees ${startup.trees_ms}; ` +
             `first GI drawn ${startup.first_gi_shown_from_load_ms} ms from load (${startup.first_gi_shown_from_creation_ms} after creation), first pass ${startup.first_pass_from_creation_ms}, ` +
             `settled ${startup.settled_from_creation_ms} (${startup.warmup_passes} passes in ${startup.warmup_ms} ms); ` +
             `calibrated in ${startup.calibration_ms} ms (${calibration.frames} frames, ${calibration.curve.length} sizes, spread ${startup.calibration_spread}): ${calibration.units} probes, ` +
@@ -487,6 +521,14 @@ async function measureBudget(device: GPUDevice, scene: SceneUnderTest, log: (lin
     }
     const steppedDown = units.filter((used) => used < ran).length;
     assert(atBatch.length >= BUDGET_FRAMES / 2, `${scene.manifest.id}: only ${atBatch.length} timed frames at the batch of ${ran}`);
+    // gi/direct at the batch, and the hits it lit (the census's latest frame, which ran the same batch).
+    const directMs: number[] = [];
+    for (let platformFrame = firstFrame; platformFrame < firstFrame + BUDGET_FRAMES; platformFrame++) {
+        const ms = timings.pass(platformFrame, DIRECT_PASS);
+        if (ms !== undefined && timings.unitsByFrame.get(platformFrame) === ran) directMs.push(ms);
+    }
+    const directHits = scene.ddgi.counters[DIRECT_HITS];
+    const directMedianMs = directMs.length > 0 ? median(directMs) : NaN;
     const atCalibrated = atBatch;
     const probesAt60 = probesAt(scene, 60, calibrated);
     // The most the technique can update in a frame: all its probes, or maxProbesPerFrame.
@@ -517,12 +559,17 @@ async function measureBudget(device: GPUDevice, scene: SceneUnderTest, log: (lin
         sweep_s_at_60hz: round(Math.ceil(scene.probeCount / probesAt60) / 60, 2),
         calibration_fixed_ms: round(report?.calibration?.model?.fixedMs ?? NaN),
         calibration_us_per_probe: round((report?.calibration?.model?.msPerUnit ?? NaN) * 1000, 3),
+        gi_direct_ms_median: round(directMedianMs),
+        gi_direct_hits_per_probe: directHits === undefined ? NaN : round(directHits / ran, 2),
+        // Hits lit per second inside gi/direct (one shadow ray each under a single shadow-casting sun).
+        gi_direct_mhits_per_s: directHits === undefined ? NaN : round(directHits / (directMedianMs * 1000), 2),
     };
     log(
         `${scene.manifest.id}, budget ${BUDGET_MS} ms, GPU-bound: calibrated ${calibrated} probes (ran ${ran}) cost ${result.update_ms_median} ms median ` +
             `(p05 ${result.update_ms_p05}, p95 ${result.update_ms_p95}; ${Math.round(result.update_over_budget_share * 1000) / 10}% against the budget); ` +
             `probes per frame ${result.probes_median} (p05 ${result.probes_p05}, p95 ${result.probes_p95}), ${steppedDown} frames stepped down; ` +
-            `at 60 Hz ${probesAt60} probes a frame (floor ${result.floor_probes_at_60hz}), a sweep every ${result.sweep_s_at_60hz} s`,
+            `at 60 Hz ${probesAt60} probes a frame (floor ${result.floor_probes_at_60hz}), a sweep every ${result.sweep_s_at_60hz} s` +
+            (Number.isFinite(directMedianMs) ? `; gi/direct ${result.gi_direct_ms_median} ms, ${result.gi_direct_hits_per_probe} hits a probe, ${result.gi_direct_mhits_per_s} M hits/s` : ''),
     );
     return result;
 }
@@ -1015,18 +1062,20 @@ async function measureCurve(device: GPUDevice, scene: SceneUnderTest, log: (line
     const perSize: Record<string, unknown> = {};
     for (const size of sizes) {
         const list = framesBySize.get(size)!.flatMap((platformFrame) => {
+            const total = timings.updateMs(platformFrame);
             const trace = timings.pass(platformFrame, 'ddgi/trace');
             const blend = timings.pass(platformFrame, 'ddgi/blend');
             const write = timings.pass(platformFrame, 'ddgi/write');
-            if (trace === undefined || blend === undefined || write === undefined) return [];
-            return [{ trace, blend, write, census: timings.pass(platformFrame, CENSUS_PASS) ?? NaN }];
+            if (total === undefined || trace === undefined || blend === undefined || write === undefined) return [];
+            return [{ total, trace, direct: timings.pass(platformFrame, DIRECT_PASS) ?? NaN, blend, write, census: timings.pass(platformFrame, CENSUS_PASS) ?? NaN }];
         });
         assert(list.length >= CURVE_TIMED_FRAMES, `${scene.manifest.id}: only ${list.length} timed frames at ${size} probes`);
-        const totals = list.map((sample) => sample.trace + sample.blend + sample.write);
+        const totals = list.map((sample) => sample.total);
         const total = median(totals);
         points.push({ probes: size, ms: total });
         perSize[String(size)] = {
             trace_ms: round(median(list.map((sample) => sample.trace))),
+            gi_direct_ms: round(median(list.map((sample) => sample.direct).filter(Number.isFinite))),
             blend_ms: round(median(list.map((sample) => sample.blend))),
             write_ms: round(median(list.map((sample) => sample.write))),
             census_ms: round(median(list.map((sample) => sample.census).filter(Number.isFinite))),
@@ -1182,12 +1231,15 @@ await runThreePage(async ({ device, renderer, data, log }) => {
     // 2026-11-05): its numbers are reported, not judged.
     const judgeCost = device.adapterInfo.vendor !== 'intel';
     data.costJudged = judgeCost;
-    for (const id of SCENES) {
+    data.directPaths = DIRECT_PATHS.join(',');
+    const runs = SCENES.flatMap((sceneId) => DIRECT_PATHS.map((direct) => ({ sceneId, direct })));
+    for (const { sceneId, direct } of runs) {
+        const id = sceneId;
         const manifest = manifests.find((candidate) => candidate.id === id);
         assert(manifest, `no manifest '${id}'`);
-        const { scene, startup } = await startScene(device, renderer, manifest, log);
-        const sceneResult: Record<string, unknown> = { probes: scene.probeCount, raysPerProbe: scene.ddgi.settings.raysPerProbe };
-        results[id] = sceneResult;
+        const { scene, startup } = await startScene(device, renderer, manifest, direct, log);
+        const sceneResult: Record<string, unknown> = { scene: id, directLight: direct, probes: scene.probeCount, raysPerProbe: scene.ddgi.settings.raysPerProbe };
+        results[DIRECT_PATHS.length > 1 ? `${id}/${direct}` : id] = sceneResult;
         if (SECTIONS.has('startup')) sceneResult.startup = startup;
         // Rates first, in rising order: the platform remembers the fastest on-time rate it saw for
         // 10 s, so a slower rate straight after the GPU-bound frames would read as late frames.
@@ -1228,7 +1280,8 @@ await runThreePage(async ({ device, renderer, data, log }) => {
             sceneResult.steady = steady;
         }
         if (SECTIONS.has('curve')) sceneResult.curve = await measureCurve(device, scene, log);
-        if (SECTIONS.has('breakdown')) sceneResult.breakdown = await measureTraceBreakdown(device, scene, log);
+        // The breakdown's variants edit M1's inline trace source; they mean nothing for the deferred kernel.
+        if (SECTIONS.has('breakdown') && direct === 'inline') sceneResult.breakdown = await measureTraceBreakdown(device, scene, log);
         // Probes per state and rays traced, from the GPU census (a few frames old).
         sceneResult.counters = { ...scene.ddgi.counters };
         scene.threeGI.dispose();
