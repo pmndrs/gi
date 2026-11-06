@@ -3,11 +3,14 @@
  * irradiance and distance atlases are updated a budget of probes per frame.
  *
  * Each frame, into the host's encoder:
- * 0. `ddgi/mark`, only in frames whose `SceneChanges` report a light or sky
- *    change: tells each probe how much its light changed, from the lights'
- *    own numbers (wgsl/mark.ts, mark-table.ts), so its next blend cuts its
- *    history to match, and promises it updates at priority
- *    (docs/design/m2-lights.md §4.1, §4.2);
+ * 0. `ddgi/mark`, only in frames whose `SceneChanges` report a light, sky or
+ *    geometry change: tells each probe how much its light changed, from the
+ *    lights' own numbers or how far an object moved and how much of the
+ *    probe's view it covers (wgsl/mark.ts, mark-table.ts), so its next blend
+ *    cuts its history to match, and promises it updates at priority
+ *    (docs/design/m2-lights.md §4.1, §4.2; m3-moving.md §5.1). The hot movers
+ *    (mover-table.ts) follow the frame's moves first: their mask bits go in
+ *    the mark table, and their boxes to `ddgi/blend`'s mover table;
  * 0b. `ddgi/schedule`: the GPU scheduler's four dispatches fill the update
  *    list, probes owed updates first by urgency and nearness to the camera,
  *    the rest from the round robin (wgsl/schedule.ts, §4.3);
@@ -90,6 +93,9 @@ import {
     SCHEDULE_STATE_WORDS,
     scratchLayout,
     MAT3_COLUMN_WORDS,
+    MARK_ENTRY_WORDS,
+    MARK_HEADER_WORDS,
+    MOVER_TABLE_WORDS,
     UNIFORM_BYTES,
     UNIFORM_WORD,
     UNIFORM_WORDS,
@@ -123,6 +129,7 @@ import {
 } from './settings.ts';
 import { cameraFalloffDistance, frustumPlanes, inViewMargin } from './camera.ts';
 import { buildMarkTable, type MarkTable } from './mark-table.ts';
+import { MoverTable } from './mover-table.ts';
 import { priorityCount, scrambleStride } from './schedule.ts';
 import { DDGIShadingModule } from './shading.ts';
 import { blendKernelWgsl, type PhaseBReduction } from './wgsl/blend.ts';
@@ -152,7 +159,7 @@ const INITIAL_RAY_CAPACITY = 512 * 256;
 /** Frame times kept for the sweep counter (its median), about half a second at 60 Hz. */
 const SWEEP_FRAME_TIMES = 31;
 /** The mark table's first size in bytes (it grows when a frame needs more): room for 64 entries. */
-const INITIAL_MARK_TABLE_BYTES = 64 * 176 + 16;
+const INITIAL_MARK_TABLE_BYTES = (MARK_HEADER_WORDS + 64 * MARK_ENTRY_WORDS) * 4;
 
 /** Options fixed for the technique's life. */
 export interface DDGITechniqueOptions {
@@ -234,6 +241,8 @@ interface PreparedResources {
     readonly updateList: GPUBuffer;
     readonly scratchBuffer: GPUBuffer;
     readonly census: GPUBuffer;
+    /** The hot movers' boxes and mask bits for `ddgi/blend` (a uniform buffer; mover-table.ts). */
+    readonly movers: GPUBuffer;
     /** Per probe: the updates its history counts as, the clock at its last update and its blended updates so far (adaptive hysteresis). */
     readonly probeHistory: GPUBuffer;
     readonly censusStaging: CensusStaging[];
@@ -340,6 +349,7 @@ const BLEND_GROUP: GPUBindGroupLayoutDescriptor = {
         { binding: 8, visibility: COMPUTE, buffer: { type: 'storage' } },
         { binding: 9, visibility: COMPUTE, buffer: { type: 'storage' } },
         { binding: 10, visibility: COMPUTE, buffer: { type: 'storage' } },
+        { binding: 11, visibility: COMPUTE, buffer: { type: 'uniform' } },
     ],
 };
 
@@ -486,6 +496,8 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
     private lastUpdateCount = 0;
     /** `resetHistory` asked for the history and the feedback requests to be cleared, in the next encode. */
     private historyClearPending = false;
+    /** The objects that moved lately, for the mover mask (mover-table.ts). */
+    private readonly movers = new MoverTable();
     private disposed = false;
 
     constructor(settings: DDGISettingsInput, options: DDGITechniqueOptions = {}) {
@@ -693,6 +705,7 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         const updateList = device.createBuffer({ label: 'ddgi update list', size: maxProbesPerFrame * 4, usage: BUFFER_USAGE.storage });
         const scratchBuffer = device.createBuffer({ label: 'ddgi scratch', size: maxProbesPerFrame * scratch.strideWords * 4, usage: BUFFER_USAGE.storage });
         const census = device.createBuffer({ label: 'ddgi census', size: CENSUS_WORDS * 4, usage: BUFFER_USAGE.storage | BUFFER_USAGE.copySrc | BUFFER_USAGE.copyDst });
+        const movers = device.createBuffer({ label: 'ddgi movers', size: MOVER_TABLE_WORDS * 4, usage: BUFFER_USAGE.uniform | BUFFER_USAGE.copyDst });
         // Starts at zero (WebGPU clears new buffers): no probe remembers anything yet.
         // COPY_SRC so debug tools and tests can copy it out (DDGIField.probeHistory).
         const probeHistory = device.createBuffer({ label: 'ddgi probe history', size: grid.probeCount * PROBE_HISTORY_BYTES, usage: BUFFER_USAGE.storage | BUFFER_USAGE.copySrc | BUFFER_USAGE.copyDst });
@@ -822,6 +835,7 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
             UNIFORM_BYTES +
             updateList.size +
             scratchBuffer.size +
+            movers.size +
             probeHistory.size +
             scheduleState.size +
             feedbackRequests.size +
@@ -850,6 +864,7 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
             updateList,
             scratchBuffer,
             census,
+            movers,
             probeHistory,
             censusStaging,
             traceKernel,
@@ -882,6 +897,7 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         this.clockSeconds = 0;
         this.lastUpdateCount = 0;
         this.historyClearPending = false;
+        this.movers.clear();
         this.startWarmUp();
         this.markAllNotUpdated();
     }
@@ -917,9 +933,15 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
             this.frameTimes.push(frame.deltaTime);
             if (this.frameTimes.length > SWEEP_FRAME_TIMES) this.frameTimes.shift();
         }
+        // The hot movers follow this frame's moves first, so a mover's mask bit is known in the frame it moves.
+        this.movers.update(frame.changes, frame.frame);
+        if (this.movers.dirty) {
+            context.device.queue.writeBuffer(resources.movers, 0, this.movers.words);
+            this.movers.dirty = false;
+        }
         // Marks land even in a frame that updates no probe: they wait in the
         // history for each probe's next update.
-        const markTable = this.settings.changeDrivenHistory !== false ? buildMarkTable(frame.changes, resources.grid) : null;
+        const markTable = this.settings.changeDrivenHistory !== false ? buildMarkTable(frame.changes, resources.grid, this.movers) : null;
         this.latestMarkEntries = markTable?.entryCount ?? 0;
         if (count === 0 && !markTable && !this.historyClearPending) return 0;
         const raysPerProbe = effectiveRaysPerProbe(this.settings.raysPerProbe);
@@ -1231,6 +1253,7 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
     resetHistory(): void {
         if (!this.resources) return;
         this.historyClearPending = true;
+        this.movers.clear();
         this.startWarmUp();
         this.markAllNotUpdated();
     }
@@ -1330,6 +1353,7 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
                 { binding: 8, resource: { buffer: resources.probeHistory } },
                 { binding: 9, resource: { buffer: resources.feedbackRequests } },
                 { binding: 10, resource: { buffer: resources.propagation.keyDeltas } },
+                { binding: 11, resource: { buffer: resources.movers } },
             ],
         });
         return { scratch, capacity, traceGroup, blendGroup };
@@ -1395,8 +1419,10 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
             resources.updateList,
             resources.scratchBuffer,
             resources.census,
+            resources.movers,
             resources.probeHistory,
             resources.scheduleState,
+
             resources.feedbackRequests,
             resources.propagation.keyDeltas,
             resources.propagation.list,

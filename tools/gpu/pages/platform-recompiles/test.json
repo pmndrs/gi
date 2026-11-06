@@ -1,0 +1,4 @@
+{
+    "description": "T2.M1 item 2: gi.stats.recompiles (compute pipelines made while the platform is ready) stays 0 while 1,000 instances (and about 20 meshes) are created, moved and destroyed in random order with DDGI updating on the cabinet row; a control kernel made afterwards counts 1.",
+    "timeoutMs": 300000
+}

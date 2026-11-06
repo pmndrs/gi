@@ -34,6 +34,15 @@ export interface GIStats {
     readonly counters: Readonly<Record<string, Readonly<Record<string, number>>>>;
     /** CPU milliseconds spent in the latest `encode` call, including scene uploads. */
     readonly encodeCpuMs: number;
+    /**
+     * Compute pipelines the platform and its techniques created while the
+     * platform was ready (after `prepare`, and not inside a later `prepare`):
+     * shader compiles that frames or scene edits caused. It should stay 0.
+     * Scene tables grow by reallocating buffers, never by changing shader
+     * code, so adding and removing objects compiles nothing. Counted since
+     * the platform was created.
+     */
+    readonly recompiles: number;
 }
 
 /**

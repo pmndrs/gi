@@ -26,7 +26,9 @@
  * counters are read back.
  *
  * Runs on M1's code too (no counter there): the counter is then reported as
- * absent and not checked. That is how M1_REFERENCE was measured.
+ * absent and not checked. That is how M1_REFERENCE was measured. At another
+ * frame count than 600 (`VITE_DDGI_FRAMES`, for an A/B of two codes) the M1
+ * numbers don't apply and only the means are reported.
  */
 
 import { assert, runGpuTest } from '../../client.ts';
@@ -82,7 +84,8 @@ await runGpuTest(
     async ({ adapter, device, log }) => {
         releaseDeviceOnPageHide(device);
         const vendor = /nvidia/i.test(adapter.info.vendor) ? 'nvidia' : /intel/i.test(adapter.info.vendor) ? 'intel' : adapter.info.vendor;
-        const references = M1_REFERENCE[vendor] ?? {};
+        // M1's numbers are at 600 frames: a run at another frame count (an A/B of two codes, T2.M1) leaves them out.
+        const references = FRAMES === 600 ? (M1_REFERENCE[vendor] ?? {}) : {};
         const results: Record<string, unknown> = { frames: FRAMES, vendor };
         const failures: string[] = [];
         for (const stillCase of CASES) {

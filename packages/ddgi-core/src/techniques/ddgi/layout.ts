@@ -116,7 +116,16 @@ export interface ScratchLayout {
 
 export const SCRATCH_WORDS_PER_IRRADIANCE_TEXEL = 2;
 export const SCRATCH_WORDS_PER_DISTANCE_TEXEL = 1;
-export const SCRATCH_PROBE_DATA_WORDS = 2;
+/**
+ * The probe-data part of a scratch slot: the new offset and state (two
+ * words of half floats), then whether the blend wrote this probe's tiles
+ * (1 or 0). Why a word of its own: since T2.M1 a probe's first blended
+ * update keeps it in state 3 (m3-moving.md §5.2), so "the new state is
+ * active" no longer says whether there are tiles to copy.
+ */
+export const SCRATCH_PROBE_DATA_WORDS = 3;
+/** Where the probe-data words sit inside that part. */
+export const SCRATCH_PROBE_DATA_WORD = { offsetXy: 0, offsetZAndState: 1, tilesWritten: 2 } as const;
 
 export function scratchLayout(irradianceTexels: number, distanceTexels: number): ScratchLayout {
     const irradianceWords = irradianceTexels * irradianceTexels * SCRATCH_WORDS_PER_IRRADIANCE_TEXEL;
@@ -243,7 +252,7 @@ export const RAY_RECORD_BYTES = 8;
  *   update's mean estimate and the stored mean (a half float; T2.4b's
  *   feedback rule reads it). Written by every blend; `ddgi/mark` divides a
  *   light's change by the mean;
- * - `wakeUntil`: M3 (m3-moving.md 5.2);
+ * - `wakeUntil`: M3 (m3-moving.md 5.3, woken air probes);
  * - `keysReceived`: for a fine probe awaiting a change (T2.4c, m2-lights.md
  *   §4.5), which of its up to 8 key neighbours have passed it their change
  *   since its own last update, in the low 8 bits (bit j: key neighbour j,
@@ -255,6 +264,12 @@ export const RAY_RECORD_BYTES = 8;
  * - `keyDeltaSlot`: for a key probe whose latest update passed its change on
  *   (the `passedChange` flag), the update-list slot of that update: where
  *   its entry in the key-delta buffer is (T2.4c).
+ * - `moverMask` (T2.M1, m3-moving.md §5.1): which of the hot movers (the
+ *   technique's mover table, mover-table.ts) its latest blended update's
+ *   rays hit, one bit per table entry. Written by every blend, so it holds
+ *   exactly the latest update's hits; `ddgi/mark` adds a probe to a moved
+ *   object's far set when it has the object's bit;
+ * - words 13-15: spare, so the record stays a whole number of 16-byte rows.
  *
  * The history buffer (`DDGIField.probeHistory`) holds one per probe in
  * probe-index order, the order of the `points` debug view's texels. It starts
@@ -273,8 +288,10 @@ export const PROBE_HISTORY_WORD = {
     keysReceived: 9,
     changeClock: 10,
     keyDeltaSlot: 11,
+    moverMask: 12,
 } as const;
-export const PROBE_HISTORY_WORDS = 12;
+/** 64 bytes: 13 words used, padded to 16 (T2.M1 added the mover mask to T2.4a's 48 bytes). */
+export const PROBE_HISTORY_WORDS = 16;
 export const PROBE_HISTORY_BYTES = PROBE_HISTORY_WORDS * 4;
 
 /** The fields packed into the `updates` word. */
@@ -309,6 +326,13 @@ export const PROBE_HISTORY_FLAG = {
      * keys updated this frame.
      */
     passedChange: 1 << 4,
+    /**
+     * It is in state 3 and has had one blended update since it got there
+     * (T2.M1, m3-moving.md §5.2): its next blended update makes it active.
+     * A probe is used in shading only once it has two estimates, because one
+     * noisy estimate is a pop. Cleared when it becomes active or goes off.
+     */
+    warmedOnce: 1 << 5,
 } as const;
 /** The packing of `keysReceived` (T2.4c). */
 export const PROBE_HISTORY_KEYS = {
@@ -528,7 +552,9 @@ export const SCHEDULE_STATE_WORDS = SCHEDULE_STATE_WORD.histogram + PRIORITY_BUC
  *
  * An entry: box min (3 u32) and kind ({@link MARK_KIND}), box size (3 u32)
  * and first thread, the global change r and 3 spare words, then the light
- * before and after, `MARK_LIGHT_WORDS` each ({@link MARK_LIGHT_WORD}).
+ * before and after, `MARK_LIGHT_WORDS` each ({@link MARK_LIGHT_WORD}), then
+ * the geometry block (T2.M1, {@link MARK_GEOMETRY_WORD}): a changed
+ * region's world box, how far it moved and its mover bit.
  */
 export const MARK_HEADER_WORDS = 4;
 export const MARK_LIGHT_WORDS = 16;
@@ -540,8 +566,21 @@ export const MARK_ENTRY_WORD = {
     globalChange: 8,
     before: 12,
     after: 12 + MARK_LIGHT_WORDS,
+    geometry: 12 + 2 * MARK_LIGHT_WORDS,
 } as const;
-export const MARK_ENTRY_WORDS = 12 + 2 * MARK_LIGHT_WORDS;
+/** The geometry block of an entry (MARK_KIND.geometry), from MARK_ENTRY_WORD.geometry. */
+export const MARK_GEOMETRY_WORD = {
+    /** The region's world box min (3 f32)... */
+    regionMin: 0,
+    /** ...how far it moved, in metres; negative for an object added or removed (a whole change). */
+    moved: 3,
+    /** The box max (3 f32)... */
+    regionMax: 4,
+    /** ...and the object's bit in the probes' mover masks (0: not a hot mover). */
+    moverBit: 7,
+} as const;
+export const MARK_GEOMETRY_WORDS = 8;
+export const MARK_ENTRY_WORDS = 12 + 2 * MARK_LIGHT_WORDS + MARK_GEOMETRY_WORDS;
 /** Inside one light of an entry: position (3) and kind, direction (3) and range, colour × intensity (3) and cos inner cone, cos outer cone and 3 spare. */
 export const MARK_LIGHT_WORD = {
     position: 0,
@@ -563,7 +602,25 @@ export const MARK_KIND = {
     environment: 2,
     /** A change with no shape (more light changes than are listed): every probe, r as it is. */
     everywhere: 3,
+    /**
+     * Geometry changed in a region (an object moved, added, removed, shown or
+     * hidden; m3-moving.md §5.1): its near set by how far it moved, its far
+     * set by how much of their view it covers.
+     */
+    geometry: 4,
 } as const;
+
+/**
+ * The mover table `ddgi/blend` reads (`DdgiMoverTable` in wgsl/blend.ts, a
+ * uniform buffer of its own; mover-table.ts fills it): a count and 3 spare
+ * words, then {@link MOVER_TABLE_CAPACITY} boxes of 8 words, min (3 f32) and
+ * the entry's mask bit, max (3 f32) and a spare word.
+ */
+export const MOVER_TABLE_CAPACITY = 32;
+export const MOVER_TABLE_HEADER_WORDS = 4;
+export const MOVER_BOX_WORDS = 8;
+export const MOVER_BOX_WORD = { min: 0, bit: 3, max: 4 } as const;
+export const MOVER_TABLE_WORDS = MOVER_TABLE_HEADER_WORDS + MOVER_TABLE_CAPACITY * MOVER_BOX_WORDS;
 
 /** A light's kind inside an entry. */
 export const MARK_LIGHT_KIND = { point: 0, spot: 1, directional: 2 } as const;

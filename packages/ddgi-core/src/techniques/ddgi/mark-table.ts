@@ -7,12 +7,54 @@
  * lose which light changed and how. Each changed point or spot light gives
  * one entry over the probes its change can reach; each global change gives
  * one entry over the whole volume.
+ *
+ * Geometry (T2.M1, docs/design/m3-moving.md §5.1): each geometry region (an
+ * object's old or new box after a move, or its box when it was added,
+ * removed, shown or hidden) gives one entry over the probes within
+ * FAR_SET_SPACINGS of it: the kernel sorts them into the near set (within
+ * NEAR_SET_SPACINGS) and the far set (those that can see the box, or whose
+ * mover mask has the object's bit).
  */
 
 import type { LightDescriptor } from '../../platform/contract/scene.ts';
-import type { LightChange, SceneChanges } from '../../platform/contract/scene-copy.ts';
-import { MARK_ENTRY_WORD, MARK_ENTRY_WORDS, MARK_HEADER_WORDS, MARK_KIND, MARK_LIGHT_KIND, MARK_LIGHT_WORD } from './layout.ts';
+import type { DirtyRegion, LightChange, SceneChanges } from '../../platform/contract/scene-copy.ts';
+import { MARK_ENTRY_WORD, MARK_ENTRY_WORDS, MARK_GEOMETRY_WORD, MARK_HEADER_WORDS, MARK_KIND, MARK_LIGHT_KIND, MARK_LIGHT_WORD } from './layout.ts';
 import type { ProbeGrid } from './settings.ts';
+
+/**
+ * The near set of a geometry change (m3-moving.md §5.1): probes within this
+ * many spacings of the region's box. Their rays may now start inside the
+ * object or see a different surface right next to them, so their distances
+ * change too and each is traced itself.
+ */
+export const NEAR_SET_SPACINGS = 1.5;
+/** The far set's reach: probes within this many spacings of the box that can see it (m3-moving.md §5.1). */
+export const FAR_SET_SPACINGS = 8;
+/**
+ * The solid angle (steradians) an object must cover in a far probe's view to
+ * count as a whole change there (m3-moving.md §5.1): r = min(1, Ω / Ω_ref)
+ * with Ω about π × radius² / distance². 0.5 sr is about 1/25 of the sphere.
+ * The design's guess; T2.M1 records how it does (the far-set check).
+ */
+export const FAR_SET_REFERENCE_SOLID_ANGLE = 0.5;
+
+/**
+ * How much more urgent an off probe in a geometry change's near set is than
+ * an active one with the same change (m3-moving.md §5.2: off probes "are
+ * scheduled at once"). An off probe shows nothing until it is back on and
+ * has had its 2 warming updates, which is worse than a stale value, and
+ * until then it is cheap (32 fixed rays, no blend). 16 puts it ahead of keys
+ * (`keyProbeBoost` 4) and near probes at the same camera weight. It keeps
+ * the urgency through its warming updates (they are owed with it).
+ */
+export const FREED_PROBE_URGENCY_SHARE = 16;
+
+/** What `buildMarkTable` needs to know about the hot movers: an instance's mask bit, 0 when it isn't one. */
+export interface MoverBits {
+    bitFor(slot: number): number;
+}
+
+const NO_MOVERS: MoverBits = { bitFor: () => 0 };
 
 /**
  * The largest relative change a global entry carries. A sun switched on from
@@ -61,7 +103,19 @@ interface Entry {
     readonly globalChange: number;
     readonly before: LightRecord;
     readonly after: LightRecord;
+    readonly geometry: GeometryRecord;
 }
+
+/** The geometry block of an entry (MARK_GEOMETRY_WORD). */
+interface GeometryRecord {
+    readonly regionMin: Vec3;
+    readonly regionMax: Vec3;
+    /** Metres; negative for a whole change (added, removed, shown, hidden). */
+    readonly moved: number;
+    readonly moverBit: number;
+}
+
+const NO_GEOMETRY: GeometryRecord = { regionMin: [0, 0, 0], regionMax: [0, 0, 0], moved: 0, moverBit: 0 };
 
 interface LightRecord {
     readonly kind: number;
@@ -215,9 +269,9 @@ function localBox(change: LightChange, grid: ProbeGrid): { min: Vec3; size: Vec3
  * - A light's group changing marks nothing by itself: every group is in the
  *   field's one layer until light groups (T2.5).
  */
-export function buildMarkTable(changes: SceneChanges, grid: ProbeGrid): MarkTable | null {
+export function buildMarkTable(changes: SceneChanges, grid: ProbeGrid, movers: MoverBits = NO_MOVERS): MarkTable | null {
     const entries: Entry[] = [];
-    const everywhere = { boxMin: [0, 0, 0] as Vec3, boxSize: [grid.counts[0], grid.counts[1], grid.counts[2]] as Vec3 };
+    const everywhere = { boxMin: [0, 0, 0] as Vec3, boxSize: [grid.counts[0], grid.counts[1], grid.counts[2]] as Vec3, geometry: NO_GEOMETRY };
     for (const change of changes.lights) {
         const [before, after] = bothSides(change);
         const directional = change.before?.type === 'directional' || change.after?.type === 'directional';
@@ -231,7 +285,11 @@ export function buildMarkTable(changes: SceneChanges, grid: ProbeGrid): MarkTabl
         }
         const box = localBox(change, grid);
         if (!box) continue;
-        entries.push({ kind: MARK_KIND.localLight, boxMin: box.min, boxSize: box.size, globalChange: 0, before, after });
+        entries.push({ kind: MARK_KIND.localLight, boxMin: box.min, boxSize: box.size, globalChange: 0, before, after, geometry: NO_GEOMETRY });
+    }
+    for (const region of changes.regions) {
+        const entry = geometryEntry(region, grid, movers);
+        if (entry) entries.push(entry);
     }
     if (changes.global.includes('environment')) {
         entries.push({ kind: MARK_KIND.environment, ...everywhere, globalChange: ENVIRONMENT_CHANGE, before: NO_LIGHT, after: NO_LIGHT });
@@ -247,6 +305,7 @@ export function buildMarkTable(changes: SceneChanges, grid: ProbeGrid): MarkTabl
     let threadCount = 0;
     entries.forEach((entry, index) => {
         const base = MARK_HEADER_WORDS + index * MARK_ENTRY_WORDS;
+        writeGeometry(words, floats, base + MARK_ENTRY_WORD.geometry, entry.geometry);
         words.set(entry.boxMin, base + MARK_ENTRY_WORD.boxMin);
         words[base + MARK_ENTRY_WORD.kind] = entry.kind;
         words.set(entry.boxSize, base + MARK_ENTRY_WORD.boxSize);
@@ -261,7 +320,45 @@ export function buildMarkTable(changes: SceneChanges, grid: ProbeGrid): MarkTabl
     return { words, floats, entryCount: entries.length, threadCount };
 }
 
+/**
+ * A geometry region's entry, or null when it can't mark anything: not a
+ * geometry change, it moved nothing, or no probe lies within its far reach.
+ * Its probe box is the region grown by FAR_SET_SPACINGS (the kernel tells
+ * the near set from the far set); `moved` is the region's move distance, or
+ * −1 for a whole change.
+ */
+function geometryEntry(region: DirtyRegion, grid: ProbeGrid, movers: MoverBits): Entry | null {
+    if (region.reason !== 'geometry') return null;
+    if (region.moved !== undefined && !(region.moved > 0)) return null;
+    const { min, max } = region.bounds;
+    const reach = grid.spacing.map((spacing) => FAR_SET_SPACINGS * spacing);
+    const box = probeBox(grid, [min[0] - reach[0], min[1] - reach[1], min[2] - reach[2]], [max[0] + reach[0], max[1] + reach[1], max[2] + reach[2]]);
+    if (!box) return null;
+    return {
+        kind: MARK_KIND.geometry,
+        boxMin: box.min,
+        boxSize: box.size,
+        globalChange: 0,
+        before: NO_LIGHT,
+        after: NO_LIGHT,
+        geometry: {
+            regionMin: [min[0], min[1], min[2]],
+            regionMax: [max[0], max[1], max[2]],
+            moved: region.moved ?? -1,
+            moverBit: region.instance === undefined ? 0 : movers.bitFor(region.instance),
+        },
+    };
+}
+
+function writeGeometry(words: Uint32Array, floats: Float32Array, base: number, geometry: GeometryRecord): void {
+    floats.set(geometry.regionMin, base + MARK_GEOMETRY_WORD.regionMin);
+    floats[base + MARK_GEOMETRY_WORD.moved] = geometry.moved;
+    floats.set(geometry.regionMax, base + MARK_GEOMETRY_WORD.regionMax);
+    words[base + MARK_GEOMETRY_WORD.moverBit] = geometry.moverBit;
+}
+
 function writeLight(words: Uint32Array, floats: Float32Array, base: number, light: LightRecord): void {
+
     floats.set(light.position, base + MARK_LIGHT_WORD.position);
     words[base + MARK_LIGHT_WORD.kind] = light.kind;
     floats.set(light.direction, base + MARK_LIGHT_WORD.direction);

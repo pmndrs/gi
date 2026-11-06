@@ -62,6 +62,8 @@ M3 adds:
 - **`setDeformedPositions`** as the contract says: a same-device `GPUBuffer`. Also a CPU `Float32Array`, which the platform uploads into its own buffer (Dennis: yes, 2026-11-05). *Why the CPU form:* three r187 gives no supported way to get at a GPU buffer it owns (section 7). It's a host-facing addition beside SPEC's tracing decision, which describes positions arriving "as a GPU buffer, so there's no rebuild and no CPU work", so the M1 lead records it in DECISIONS.
 - **A recompile counter** in `gi.stats`: compute pipelines created after `isReady`. The viewer shows it next to three's own program count. With T2.14, every kernel a configuration needs is compiled in `prepare`, so nothing compiles on first use and the counter means what it says.
 
+*As built (T2.M1, rigid parts):* `setTransforms`, `DirtyRegion.moved` (the farthest corner's travel, from a per-instance world frame) and `.instance` (the slot), and `GIStats.recompiles` (counted at a view of the host's device that the platform's own code and its techniques use, while `isReady`). `receivers`, `deformBounds` and `setDeformedPositions` stay M3. ddgi.md "Moving geometry" has the details and numbers.
+
 ## 2. Per-mesh trees: GPU first, tinybvh as the refinement
 
 ### 2.1 What exists
@@ -220,6 +222,8 @@ Off probes (inside geometry, or no surface nearby) trace their 32 fixed rays whe
 M3 changes one thing: **state 3 ends after 2 blended updates, not 1,** so a probe is used in shading only once it has at least two estimates. One noisy estimate is the pop SPEC forbids. Both off states are in the near set of any change that can free them, so they're scheduled at once.
 
 On → off (a cabinet pushed over a probe) stays immediate, as now; neighbouring probes fill in through the normal sampling weights.
+
+*As built (T2.M1):* state 3 ends after the second blended update (the history flag `warmedOnce`); a probe coming back on keeps the updates its move promised it, and off probes in a move's near set go first (`FREED_PROBE_URGENCY_SHARE` 16), so on two-room a probe freed by a moved crate is active again 3 frames later.
 
 ### 5.3 Moving receivers in empty space
 
