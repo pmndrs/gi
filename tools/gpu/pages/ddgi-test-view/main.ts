@@ -21,6 +21,7 @@
 
 import { assert, runGpuTest } from '../../client.ts';
 import type { DDGISettingsInput, DDGIVolumeSettings } from '../../../../packages/ddgi-core/src/techniques/ddgi/settings.ts';
+import type { CameraBookmark } from '../../../../scenes/src/manifest.ts';
 import { createDdgiScene, floatsToBase64, imageMean, runFrames, TestView, type TestViewImages, releaseDeviceOnPageHide } from '../ddgi-shared/harness.ts';
 import { CORNELL_POINT_IN_AIR_VOLUME } from '../ddgi-shared/volumes.ts';
 
@@ -28,6 +29,11 @@ export interface TestViewJob {
     readonly scene: string;
     /** 1-based bookmark index. */
     readonly camera: number;
+    /**
+     * The Cycles reference's stored camera (`shot.camera` in its cycles.json), used
+     * instead of the bookmark so both images show exactly the same view.
+     */
+    readonly view?: CameraBookmark;
     readonly width: number;
     readonly height: number;
     readonly frames: number;
@@ -44,17 +50,20 @@ export interface TestViewJob {
 
 /**
  * Mean of `bench/references/cornell-box-point/front/cycles-indirect.exr`
- * (Cycles 4.5, 2048 samples, 512 × 512, T1.5 prep), all pixels and channels.
+ * (Cycles 4.5 on OptiX, 8192 samples, 1920 × 1080, Blackman-Harris 1.5 px,
+ * T1.13), all pixels and channels. Lower than the 512 × 512 reference's
+ * 0.083968 only because the 16:9 frame shows more black surroundings.
  */
-const CORNELL_POINT_CYCLES_INDIRECT_MEAN = 0.083968;
+const CORNELL_POINT_CYCLES_INDIRECT_MEAN = 0.047225;
 /** SPEC's M1 accuracy target: indirect light's mean within ±10%. */
 const MEAN_TOLERANCE = 0.1;
 
 const DEFAULT_JOB: TestViewJob = {
     scene: 'cornell-box-point',
     camera: 1,
-    width: 512,
-    height: 512,
+    // The reference's size (its stored shot); bookmark 1 is the shot's camera.
+    width: 1920,
+    height: 1080,
     frames: 600,
     ignoreLightRange: true,
     exportImages: false,
@@ -87,7 +96,7 @@ async function render(device: GPUDevice, settings: Partial<DDGISettingsInput>): 
     try {
         const field = scene.ddgi.field;
         assert(field, 'DDGI has no field after prepare');
-        const camera = scene.manifest.cameras[job.camera - 1];
+        const camera = job.view ?? scene.manifest.cameras[job.camera - 1];
         assert(camera, `${job.scene} has no camera ${job.camera}`);
         const start = performance.now();
         await runFrames(device, scene.platform, job.frames, field.grid.probeCount);

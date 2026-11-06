@@ -175,6 +175,50 @@ Verified: lint, typecheck; DDGI unit tests 43; the full `pnpm test` gave 912/917
 Not verified: Intel settle and flicker with the ramp; the viewer by eye (phase 2b).
 Next: the lead: the ramp's two thresholds for DECISIONS (in my report).
 
+## 2026-11-05 · T1.13 HD references with stored cameras · implementer (opus)
+Did:
+- **References:** `tools/reference/cycles/render.py`, `blender_scene.py`, `run.ts`.
+  - The defaults are now 1920×1080, Blackman-Harris 1.5 px and OptiX.
+  - Every json stores a `shot`: camera, aspect, size, near and far, exposure and tone mapping, the manifest, sky and table hashes, commit, device, samples, seed and filter.
+  - `--from-shot` re-renders a stored view.
+  - `--denoise` writes `cycles-full-denoised.exr` for viewing; its bias against the raw image is stored.
+  - New `combine.ts` averages seed parts into one reference; new `shot.ts` reads shots for the pages.
+  - CPU renders take the CPU lock, GPU renders the GPU lock.
+  - Pre-T1.13 files are kept as `cycles*-lowres.*`. README: "HD references" and "Stored camera".
+- **Viewer** (`reference-files.ts`, `reference-technique.ts`, `viewer-app.ts`, `vite.config.ts`):
+  - Compare moves the camera to the shot, letterboxes the picture to its aspect, and applies its exposure and tone mapping.
+  - The panel warns when the manifest has changed, and says when the render is from an older commit.
+  - GI-only shows `cycles-gi.exr`; the full view prefers the denoised copy.
+- **Test pages:** `ddgi-test-view` and `ddgi-sponza-accuracy` render at the reference's stored camera and size. The test-view gate now runs at HD.
+Verified (RTX 3060, headless Chrome 156):
+- `pnpm test:gpu --filter ddgi-test-view` passes.
+- Compare on point-light Cornell and Sponza: 16:9 letterbox; the green wall's edge sits in the same place in the all-DDGI and all-Cycles views to within 1 px; Sponza's exposure returned to +2.
+- Lint and tests pass; typecheck is clean except Budget v2's `work-budget.ts`.
+Not verified: Intel.
+Renders (seconds, and the GPU lock wait before each):
+- **OptiX:** point-light Cornell front, 8192 samples × 2 seeds: 983 s (wait 383) and 975 s (wait 123). Two-room lit-room, 4096: 1351 s (wait 597). Dark room, 2 × 2048: 564 s (wait 935) and 432 s (wait 11). Untextured Sponza (GI table sha256 7680a2d0…, unchanged), 4 × 2048: 445, 470, 379 and 381 s (waits 1, 1, 92 and 99).
+- **CPU, 12 threads (no GPU lock):**
+  - Point-light Cornell cameras 2 and 3: 1559 and 1745 s.
+  - Emissive Cornell cameras 2 and 3: 1770 and 1802 s.
+  - Open ground: 1019 and 756 s. Through-the-doorway: 2475 s.
+  - Textured Sponza at 512 samples: 2029 s. Emissive Cornell front, 2 × 1024: 1319 and 1303 s. Sponza upper gallery at 512: 2831 s.
+  - Point-light Cornell camera 3 and emissive Cornell camera 2 include sleeps of 161 s and 59 s (`timingNote` in their jsons).
+Numbers:
+- **8×8-block noise:**
+  - Point-light Cornell 8192: the two seeds differ by 0.53% (GI) and 0.24% (full).
+  - Dark-room halves differ by 1.56%; emissive Cornell halves by 0.32% (GI) and 0.15% (full).
+- **Denoised copy against raw:** bias −0.01% to −0.18%.
+- **HD against old** (bias, block error, FLIP 8×8):
+  - Cornell +5.74%, 6.46%, 0.104 against +5.68%, 6.38%, 0.179.
+  - Two-room +5.50%, 5.91%, 0.069 against +5.63%, 5.98%, 0.073.
+  - Sponza +23.07%, 27.66%, 0.324 against +23.03%, 26.71%, 0.326; today's code at 640×360 against the old reference reads +23.18%. Reference noise: two 2048 parts differ by 0.60% (8×8 blocks).
+  - Today's code at 512² reproduces the old Cornell numbers exactly, so resolution moves nothing.
+  - Emissive Cornell front (raw 2048; reference noise 0.16% GI, 0.07% full): DDGI against the GI composite +5.72%, block error 8.35%; full image +2.06%, block error 4.63% (not gating).
+  - Cornell's p95 and FLIP fall only because 16:9 adds black pixels.
+Next:
+- Sponza's HD reference for T1.14's 1440p accuracy: `bench/references/sponza/colonnade-from-the-floor/cycles-untextured-gi.exr` (with `cycles-untextured.json`).
+- `ddgi-leak`'s constants stay valid: the two-room HD means match the old ones within 0.12%.
+
 ## 2026-11-05 · T1.12 phase 2a: hysteresis that knows the time between a probe's updates · implementer (opus)
 Did (uncommitted; the lead's design, docs/design/ddgi.md "Hysteresis that knows the time between updates"):
 - Core: per probe, `n` (effective samples) and `t` (last update, s) in a new storage buffer that only `ddgi/blend` reads and writes (binding 8; 5 storage buffers). On an update: `n ← n·exp(−(T−t)/τ)`, `h = n/(n+1)`, then `n ← min(n+1, nMax)`. State 3 gives n = 0 (h = 0). The same h for distances; the big-change rule and the firefly clamp are unchanged.
@@ -246,27 +290,6 @@ Next:
 - the viewer's "GI composite" toggle;
 - the RTX timing of `three-composite-sponza`, 3 runs under the clock rule.
 
-## 2026-11-05 · Clock-rule timing runs: Budget v2 calibration and B2 Sponza build · measurer
-Did: RTX 3060 Laptop (nvidia, ampere), headless Chrome 156.0.8078.80, each run under `bench-lock run` (cool start below 70 C, 200 ms sampling). No code changes. Rows in `bench/results/timing.csv` (720 rows, `note/set` 1-3, `note/timing_valid,1`, `note/thermal_share,0`, `note/clock_rule_job_budget_v2_calibration,1`). The notes were added by hand with `--note` because to-csv ran after the runs, outside `bench-lock run`, so the rows have no `note/sm_clock_mhz` or `note/start_temp_c`.
-Budget v2 calibration (`ddgi-batch-cost`, `VITE_DDGI_SECTIONS=startup,budget`, `rates` not needed; budget 2 ms). All 12 runs VALID, 0% thermal samples. Update ms is the median of the timed frames at the calibrated batch; the page's check is within ±10% of 2 ms.
-| scene | run | calibrated probes | update ms | vs budget | ±10% | start C | clock MHz |
-|---|---|---|---|---|---|---|---|
-| cornell-box | 1 / 2 / 3 | 1574 / 1821 / 1563 | 1.877 / 2.057 / 1.838 | -6.2 / +2.9 / -8.1% | pass | 61 / 66 / 65 | 1575 / 1552 / 1544 |
-| two-room | 1 / 2 / 3 | 715 / 706 / 707 | 1.923 / 1.937 / 1.953 | -3.8 / -3.1 / -2.4% | pass | 62 | 1522 / 1507 / 1425 |
-| sponza | 1 / 2 / 3 | 268 / 255 / 272 | 2.020 / 1.995 / 2.085 | +1.0 / -0.3 / +4.3% | pass | 62 | 1762 / 1687 / 1762 |
-| bistro-exterior | 1 / 2 / 3 | 124 / 160 / 132 | 1.964 / 2.114 / 1.985 | -1.8 / +5.7 / -0.8% | pass | 63 / 63 / 69 | 1912 / 1729 / 1530 |
-Medians of the 3 VALID runs: cornell 1574 probes, 1.877 ms; two-room 707, 1.937; sponza 268, 2.020; Bistro 132, 1.985. Spread of the calibrated probes: cornell 1563-1821 (16%), two-room 1.3%, Sponza 6.7%, Bistro 29% (124-160). Cornell run 2 calibrated 1821 probes, above the 1728 it has, so all probes fit (`all_probes_fit` 1) and the batch ran at 1728; runs 1 and 3 did not fit them all. Bistro's calibrated count varies most between runs, though every run is inside ±10%.
-B2 Sponza H-PLOC build (`bvh-hploc-profile`, `pnpm test:gpu --gpu nvidia --filter bvh-hploc-profile`, Sponza, 132 meshes, the page's own median of 5 builds after one warm-up; the page is about 6 s, so it only gets 4-8 loaded samples). 5 attempts: runs 1 and 5 VALID, runs 2, 3 and 4 NO VERDICT (3-4 loaded samples, fewer than 5). The page's own timing is short and has no option to lengthen it (changing that is a code change).
-| run | verdict | build ms | clock MHz (loaded median) |
-|---|---|---|---|
-| 1 | VALID (65 C, 8 loaded samples) | 46.899 | 1005 |
-| 2 | NO VERDICT | 47.483 | 1301 |
-| 3 | NO VERDICT | 48.013 | 735 |
-| 4 | NO VERDICT | 46.592 | 382 |
-| 5 | VALID (68 C, 5 loaded samples) | 46.289 | 967 |
-Median of the 2 VALID runs: 46.6 ms (bar 50 ms): pass, but on only 2 VALID runs (the task asked for 3) and loaded clocks near 1,000 MHz with the power limit on in 100% of loaded samples. Climb 26.0-26.8 ms, sort about 8.6, triangles about 5.1. No B2 CSV rows (the profile page has no to-csv).
-Flagged: B2 clocks were low (about 1,000 MHz) even on VALID runs; the rule has no MHz bar, so the verdict stands, but the number is a slow-clock one. Nothing looked wrong in the outputs (no NaNs, adapter was nvidia/ampere every time). A third VALID B2 run needs a longer page or a second pass in one run.
-Next: a longer-running variant of the B2 profile page (repeat builds for 10 s) would give the verdict enough samples.
 ## 2026-11-05 · T1.14 part 1b: GTAO on the GI term, and drift-proof cost timing · implementer (opus)
 Did (uncommitted):
 - `packages/ddgi-three/src/composite.ts`: option `occlusion` on the composite.
@@ -308,6 +331,28 @@ Re-judged the cool-start set (scratchpad clock JSONs, 1 Hz; CSVs untouched): Bud
 Next: `tools/native/bench.ps1` builds its own clock rows and writes no verdict. The NOTES bullet on sustained load still names `note/clock_low`. The DECISIONS pass/fail entry still says ≥ 1,500 MHz (superseded by cca8ab9).
 
 **Lead mistake (2026-11-05):** a lead script opened PROGRESS.md for writing before reading it in the same expression, which emptied the working-tree file and lost the curtain agent's uncommitted entry; the lead restored the file from 08bf097 and the agent rewrote its entry. Nothing committed was lost.
+
+## 2026-11-05 · Curtained Sponza +23%: cause and measured fixes · implementer (opus)
+Did (test tools only; no production change): `ddgi-sponza-accuracy` (census of probes near the curtains, a per-material split in run.ts, the experiment options `partsOutOfGI`, `singleSidedFrontSide` and `diagnosticLookup`/`diagnosticRays`, and `--timeout-minutes`); `ddgi-shared/harness.ts` (albedo and position images, and the diagnostic lookups `tracedVisibility` and `shortRangeOcclusion` in the test view); a new page `three-composite-ao` with its own run.ts (three's GTAO on the composite's GI term, and timing).
+Cause (RTX and Intel agree within 0.1 point): the light changes inside the cloth folds faster than probes 1 m apart can follow. The data is fine: the curtains are single sheets, winding matches the normals on over 99% of their area, and the path tracer matches Cycles on curtain pixels (+0.3%). Curtain pixels read +43%, other pixels +14.5%. The ruled-out causes:
+- treating cloth back faces as surfaces: +22.2%;
+- exact visibility rays instead of Chebyshev: +23.7%;
+- exact irradiance at DDGI's lookup point: curtain pixels already read +19% there.
+Fixes against untextured Cycles (both GPUs):
+- **Ray-traced short-range term** (rays out to 0.5 m; each hit takes away 1 − its albedo; GI only):
+  - Sponza: 4 rays +1.6% (curtain pixels −2.9%), 8 rays +1.4%. Base package −1.3 / −1.4%.
+  - Half resolution moves the mean by under 0.1 point. Per-pixel noise of the factor against 128 rays: 20% (4 rays), 12% (8).
+  - **Cost on the RTX at 2560×1440: 4 rays 123 ms full / 34 ms half; 8 rays 263 / 72 ms** (tracer about 120 Mrays/s): not real-time as built.
+- **three's GTAO on the composite's GI term** (16 samples; Sponza at the 640×360 shot, Cornell at 1920×1080):
+  - Sponza by radius: 0.1 m +15.1%, 0.25 m +10.9%, 0.5 m +7.5%, 1 m +4.3%. Curtain pixels stay at +10.5 to +11%.
+  - Base package −2.1 to −2.7%. Cornell point +5.7% without AO, +2.8% at 0.5 m, +0.6% at 1 m: never darker than Cycles.
+  - **Cost on the RTX at 2560×1440: 5.6 ms full, 1.4 ms half resolution.**
+- A finer 0.25 m volume over the curtains (composited offline): +5.5%.
+Clock: every timing above is flagged low (SM median 731 MHz for GTAO, 1117 MHz for the rays; power limit 86–93%).
+Cornell discrepancy (+0.5% on the three path against +5.7% in the test view): an unconverged field on my page (16 + 64 passes), not a bug. At 600 passes the two paths agree to 0.01% (0.049928 against 0.049934): +5.73% (RTX), +5.67% (Intel). The light's 20 m range window moves it only 0.15 point; the page now drops it (`ignoreLightRange`) and takes `--passes`. Sponza on the short schedule matched the settled test view.
+Verified: lint and typecheck clean; `pnpm test:gpu --filter ddgi-,three-neutrality` passes on the RTX and Intel (two-room leak 0.80%, thin wall 0.59%, closed door 0.06%). No run overlapped the 20:05 or 20:14 sleeps.
+Not verified: GTAO accuracy at 1440p (the Sponza reference is 640×360); any-hit or accumulated ray variants; a real two-volume implementation.
+Next: Dennis picks the fix: GTAO 0.5–1 m on GI (cheap, curtains about +11%), a finer nested volume (M3 work), or a cheaper ray term (accumulated or baked).
 
 ## 2026-11-05 · Cool-start timing set: Budget v2, T1.14 composite, saturation · gpu-tester (sonnet), lead checked
 Did: RTX 3060 Laptop, headless Chrome 156, every run under `bench-lock run` from 61–65 C, one scene per page run. No code changed. Runs checked against the two sleep windows (11:05–11:08 and 11:14–11:15 UTC): none overlapped. HEAD moved during the set (e068896 → 64c9404); the calibration ladder didn't change, the saturation code did. Rows: `timing.csv` (`note/budget_v2_fixes,1`, `note/cool_start,1`), new `three-composite.csv` and `saturation.csv` (converted to the 7-column format by the lead).
@@ -1393,3 +1438,25 @@ Already present: PIX 2603.25, Blender, Vulkan SDK 1.3.283, Nsight Systems 2022.4
 Not done: Nsight Graphics, which needs an NVIDIA developer-account login. Dennis to install it from developer.nvidia.com/nsight-graphics.
 
 Next: T0.1 (implementer). T0.11 can start in parallel in the main session.
+
+## 2026-11-05 · Clock-rule timing runs: Budget v2 calibration and B2 Sponza build · measurer
+Did: RTX 3060 Laptop (nvidia, ampere), headless Chrome 156.0.8078.80, each run under `bench-lock run` (cool start below 70 C, 200 ms sampling). No code changes. Rows in `bench/results/timing.csv` (720 rows, `note/set` 1-3, `note/timing_valid,1`, `note/thermal_share,0`, `note/clock_rule_job_budget_v2_calibration,1`). The notes were added by hand with `--note` because to-csv ran after the runs, outside `bench-lock run`, so the rows have no `note/sm_clock_mhz` or `note/start_temp_c`.
+Budget v2 calibration (`ddgi-batch-cost`, `VITE_DDGI_SECTIONS=startup,budget`, `rates` not needed; budget 2 ms). All 12 runs VALID, 0% thermal samples. Update ms is the median of the timed frames at the calibrated batch; the page's check is within ±10% of 2 ms.
+| scene | run | calibrated probes | update ms | vs budget | ±10% | start C | clock MHz |
+|---|---|---|---|---|---|---|---|
+| cornell-box | 1 / 2 / 3 | 1574 / 1821 / 1563 | 1.877 / 2.057 / 1.838 | -6.2 / +2.9 / -8.1% | pass | 61 / 66 / 65 | 1575 / 1552 / 1544 |
+| two-room | 1 / 2 / 3 | 715 / 706 / 707 | 1.923 / 1.937 / 1.953 | -3.8 / -3.1 / -2.4% | pass | 62 | 1522 / 1507 / 1425 |
+| sponza | 1 / 2 / 3 | 268 / 255 / 272 | 2.020 / 1.995 / 2.085 | +1.0 / -0.3 / +4.3% | pass | 62 | 1762 / 1687 / 1762 |
+| bistro-exterior | 1 / 2 / 3 | 124 / 160 / 132 | 1.964 / 2.114 / 1.985 | -1.8 / +5.7 / -0.8% | pass | 63 / 63 / 69 | 1912 / 1729 / 1530 |
+Medians of the 3 VALID runs: cornell 1574 probes, 1.877 ms; two-room 707, 1.937; sponza 268, 2.020; Bistro 132, 1.985. Spread of the calibrated probes: cornell 1563-1821 (16%), two-room 1.3%, Sponza 6.7%, Bistro 29% (124-160). Cornell run 2 calibrated 1821 probes, above the 1728 it has, so all probes fit (`all_probes_fit` 1) and the batch ran at 1728; runs 1 and 3 did not fit them all. Bistro's calibrated count varies most between runs, though every run is inside ±10%.
+B2 Sponza H-PLOC build (`bvh-hploc-profile`, `pnpm test:gpu --gpu nvidia --filter bvh-hploc-profile`, Sponza, 132 meshes, the page's own median of 5 builds after one warm-up; the page is about 6 s, so it only gets 4-8 loaded samples). 5 attempts: runs 1 and 5 VALID, runs 2, 3 and 4 NO VERDICT (3-4 loaded samples, fewer than 5). The page's own timing is short and has no option to lengthen it (changing that is a code change).
+| run | verdict | build ms | clock MHz (loaded median) |
+|---|---|---|---|
+| 1 | VALID (65 C, 8 loaded samples) | 46.899 | 1005 |
+| 2 | NO VERDICT | 47.483 | 1301 |
+| 3 | NO VERDICT | 48.013 | 735 |
+| 4 | NO VERDICT | 46.592 | 382 |
+| 5 | VALID (68 C, 5 loaded samples) | 46.289 | 967 |
+Median of the 2 VALID runs: 46.6 ms (bar 50 ms): pass, but on only 2 VALID runs (the task asked for 3) and loaded clocks near 1,000 MHz with the power limit on in 100% of loaded samples. Climb 26.0-26.8 ms, sort about 8.6, triangles about 5.1. No B2 CSV rows (the profile page has no to-csv).
+Flagged: B2 clocks were low (about 1,000 MHz) even on VALID runs; the rule has no MHz bar, so the verdict stands, but the number is a slow-clock one. Nothing looked wrong in the outputs (no NaNs, adapter was nvidia/ampere every time). A third VALID B2 run needs a longer page or a second pass in one run.
+Next: a longer-running variant of the B2 profile page (repeat builds for 10 s) would give the verdict enough samples.

@@ -292,7 +292,105 @@ export interface TestViewImages {
     readonly indirect: Float32Array;
     /** emission + albedo / π × (direct + field). */
     readonly full: Float32Array;
+    /** The surface's GI albedo (0 on sky pixels), e.g. to tell materials apart in a comparison. */
+    readonly albedo: Float32Array;
+    /** The surface point in world space (0 on sky pixels), e.g. to split a comparison by region. */
+    readonly position: Float32Array;
 }
+
+/** Images the test view writes per pixel (indirect, full, albedo, position), one vec4f each. */
+const TEST_VIEW_IMAGES = 4;
+
+/**
+ * How the test view reads the field:
+ * - `field`: `ddgiSampleIrradiance`, as renderers do (the default);
+ * - `tracedVisibility`: a diagnostic. The same weights, except that each
+ *   probe's Chebyshev test is replaced by a ray from the lookup point to the
+ *   probe (a blocked probe gets no weight). It tells how much of an error is
+ *   the distance moments' fault and how much the probes' own values;
+ * - `shortRangeOcclusion`: a diagnostic. The field's value times a
+ *   short-range occlusion factor (SHORT_RANGE_OCCLUSION_WGSL).
+ */
+export type TestViewLookup = 'field' | 'tracedVisibility' | 'shortRangeOcclusion';
+
+/** Diagnostic only (TestViewLookup 'tracedVisibility'); never a shading path. */
+const TRACED_VISIBILITY_WGSL = /* wgsl */ `
+fn testFieldIrradianceTracedVisibility(position: vec3f, normal: vec3f, viewDirection: vec3f) -> vec3f {
+    let volume = ddgiVolume(testField.volumeOrigin, testField.volumeSpacing, testField.volumeCounts, testField.volumeTexels);
+    let samplePoint = ddgiBiasedPoint(volume, position, normal, viewDirection);
+    let cage = ddgiCage(volume, samplePoint);
+    let irradianceScale = ddgiAtlasScale(volume.irradianceTexels, volume.counts);
+    let normalInTile = ddgiTileTexel(normal, volume.irradianceTexels);
+    var irradianceSum = vec3f(0.0);
+    var weightSum = 0.0;
+    for (var corner = 0u; corner < 8u; corner++) {
+        let step = ddgiCageStep(corner);
+        let probe = min(cage.baseProbe + step, volume.counts - 1);
+        let data = ddgiReadProbeData(testProbeData, probe);
+        if (data.state != DDGI_STATE_ACTIVE) {
+            continue;
+        }
+        let probePosition = volume.origin + (vec3f(probe) + data.offset) * volume.spacing;
+        let toProbe = probePosition - samplePoint;
+        let probeDistance = length(toProbe);
+        if (probeDistance > DDGI_MIN_PROBE_DISTANCE && giTraceAny(GiRay(samplePoint, 0.0, toProbe / probeDistance, probeDistance))) {
+            continue;
+        }
+        let facing = (dot(normalize(probePosition - position), normal) + 1.0) * 0.5;
+        let weight = (facing * facing + DDGI_DIRECTION_WEIGHT_FLOOR) * ddgiTrilinearWeight(cage, step);
+        irradianceSum += weight * textureSampleLevel(testIrradiance, testSampler, ddgiTileUv(normalInTile, probe, irradianceScale), probe.y, 0.0).rgb;
+        weightSum += weight;
+    }
+    return irradianceSum / max(weightSum, DDGI_MIN_WEIGHT_SUM);
+}
+`;
+
+/**
+ * Diagnostic only (TestViewLookup 'shortRangeOcclusion'); never a shading
+ * path. The field's value times a short-range occlusion factor: of
+ * SHORT_RANGE_RAYS cosine-distributed rays out to half the smallest
+ * spacing, each one that hits something takes away (1 − the albedo there),
+ * a one-bounce guess at what the occluder sends back. It estimates what a
+ * near-surface term (ambient occlusion at the scale the probes can't
+ * resolve) would do.
+ */
+const SHORT_RANGE_RAYS = 32;
+const SHORT_RANGE_OCCLUSION_WGSL = /* wgsl */ `
+// The ray count arrives at run time (testCamera.size.z), not as a constant: a constant
+// bound invites the shader compiler to unroll a loop with a whole traversal in
+// it, which can make the compile very slow.
+fn testShortRangeRays() -> u32 {
+    return testCamera.size.z;
+}
+const TEST_GOLDEN_ANGLE: f32 = 2.39996322972865;
+
+fn testFieldIrradianceShortRangeOcclusion(position: vec3f, normal: vec3f, viewDirection: vec3f) -> vec3f {
+    let field = testFieldIrradiance(position, normal, viewDirection);
+    let volume = ddgiVolume(testField.volumeOrigin, testField.volumeSpacing, testField.volumeCounts, testField.volumeTexels);
+    let radius = 0.5 * min(volume.spacing.x, min(volume.spacing.y, volume.spacing.z));
+    let helper = select(vec3f(1.0, 0.0, 0.0), vec3f(0.0, 1.0, 0.0), abs(normal.x) > 0.9);
+    let tangent = normalize(cross(helper, normal));
+    let bitangent = cross(normal, tangent);
+    let origin = giShadeOffsetRayOrigin(position, normal);
+    // A per-pixel rotation of the spiral, from the position's bits.
+    let rotation = f32(bitcast<u32>(position.x * 7.0 + position.y * 13.0 + position.z * 17.0) & 1023u) / 1024.0 * 6.28318530717959;
+    var occlusion = 0.0;
+    for (var index = 0u; index < testShortRangeRays(); index++) {
+        // Cosine-distributed spiral (Malley's method on a Fibonacci disc).
+        let u = (f32(index) + 0.5) / f32(testShortRangeRays());
+        let angle = f32(index) * TEST_GOLDEN_ANGLE + rotation;
+        let discRadius = sqrt(u);
+        let direction = normalize(tangent * (discRadius * cos(angle)) + bitangent * (discRadius * sin(angle)) + normal * sqrt(max(0.0, 1.0 - u)));
+        let ray = GiRay(origin, 0.0, direction, radius);
+        let hit = giTraceClosest(ray);
+        if (hit.t >= 0.0) {
+            let albedo = giSurfaceAt(ray, hit).albedo;
+            occlusion += 1.0 - (albedo.r + albedo.g + albedo.b) / 3.0;
+        }
+    }
+    return field * (1.0 - occlusion / f32(testShortRangeRays()));
+}
+`;
 
 /**
  * The engine-free test view. Camera rays come from an explicit basis
@@ -303,25 +401,32 @@ export class TestView {
     private constructor(
         private readonly device: GPUDevice,
         private readonly kernel: ComputeKernel,
+        // Rays per pixel of the shortRangeOcclusion lookup (unused by the others).
+        private readonly shortRangeRays: number,
     ) {}
 
-    static async create(device: GPUDevice, platform: GIPlatformImpl): Promise<TestView> {
+    static async create(device: GPUDevice, platform: GIPlatformImpl, lookup: TestViewLookup = 'field', shortRangeRays = SHORT_RANGE_RAYS): Promise<TestView> {
+        const lookupFunction = { field: 'testFieldIrradiance', tracedVisibility: 'testFieldIrradianceTracedVisibility', shortRangeOcclusion: 'testFieldIrradianceShortRangeOcclusion' }[lookup];
+        if (!lookupFunction) throw new Error(`unknown test view lookup '${String(lookup)}'`);
         const kernel = await platform.kernels.computeKernel({
-            label: 'ddgi test view',
+            label: `ddgi test view (${lookup})`,
             modules: [platform.shade.module],
             code: /* wgsl */ `
 ${FIELD_WGSL}
+${{ field: '', tracedVisibility: TRACED_VISIBILITY_WGSL, shortRangeOcclusion: SHORT_RANGE_OCCLUSION_WGSL }[lookup]}
 struct TestCamera {
     position: vec4f,
     forward: vec4f,   // xyz: unit forward; w: tan(fovY / 2)
     right: vec4f,     // xyz: unit right; w: width / height
     up: vec4f,        // xyz: unit up
-    size: vec4u,      // width, height
+    size: vec4u,      // width, height, short-range occlusion rays (shortRangeOcclusion only)
 }
 @group(2) @binding(0) var<storage, read> testCamera: TestCamera;
 @group(2) @binding(1) var<storage, read_write> testPixels: array<vec4f>;
 
 const TEST_INV_PI: f32 = 0.318309886183791;
+// Images written per pixel, interleaved: indirect, full, albedo, position.
+const TEST_IMAGES: u32 = ${TEST_VIEW_IMAGES}u;
 
 @compute @workgroup_size(8, 8)
 fn main(@builtin(global_invocation_id) id: vec3u) {
@@ -337,23 +442,29 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     let hit = giTraceClosest(ray);
     var indirect = vec3f(0.0);
     var full = vec3f(0.0);
+    var albedo = vec3f(0.0);
+    var position = vec3f(0.0);
     if (hit.t >= 0.0) {
         let surface = giSurfaceAt(ray, hit);
-        let field = testFieldIrradiance(surface.position, surface.normal, direction);
+        let field = ${lookupFunction}(surface.position, surface.normal, direction);
         let random = vec2f(fract(f32(id.x) * 0.7548776662), fract(f32(id.y) * 0.5698402910));
         let direct = giDirectIrradiance(surface, 0xfu, random);
         indirect = surface.albedo * TEST_INV_PI * field;
         full = surface.emission + surface.albedo * TEST_INV_PI * (direct + field);
+        albedo = surface.albedo;
+        position = surface.position;
     }
     let pixel = id.y * size.x + id.x;
-    testPixels[2u * pixel] = vec4f(indirect, 0.0);
-    testPixels[2u * pixel + 1u] = vec4f(full, 0.0);
+    testPixels[TEST_IMAGES * pixel] = vec4f(indirect, 0.0);
+    testPixels[TEST_IMAGES * pixel + 1u] = vec4f(full, 0.0);
+    testPixels[TEST_IMAGES * pixel + 2u] = vec4f(albedo, 0.0);
+    testPixels[TEST_IMAGES * pixel + 3u] = vec4f(position, 0.0);
 }
 `,
             entryPoint: 'main',
             ownGroups: [FIELD_GROUP, IO_GROUP],
         });
-        return new TestView(device, kernel);
+        return new TestView(device, kernel, shortRangeRays);
     }
 
     async render(field: DDGIField, camera: CameraBookmark, width: number, height: number): Promise<TestViewImages> {
@@ -364,10 +475,10 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
         const cameraData = new ArrayBuffer(80);
         const floats = new Float32Array(cameraData);
         floats.set([...camera.position, 0, ...forward, Math.tan((camera.fovYDeg * Math.PI) / 360), ...right, width / height, ...up, 0]);
-        new Uint32Array(cameraData, 64, 2).set([width, height]);
+        new Uint32Array(cameraData, 64, 3).set([width, height, this.shortRangeRays]);
         const cameraBuffer = device.createBuffer({ size: cameraData.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
         device.queue.writeBuffer(cameraBuffer, 0, cameraData);
-        const outputBytes = width * height * 32;
+        const outputBytes = width * height * TEST_VIEW_IMAGES * 16;
         const outputBuffer = device.createBuffer({ size: outputBytes, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
         const parameters = device.createBuffer({ size: 64, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
         const encoder = device.createCommandEncoder({ label: 'ddgi test view' });
@@ -391,15 +502,15 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
         cameraBuffer.destroy();
         outputBuffer.destroy();
         parameters.destroy();
-        const indirect = new Float32Array(width * height * 3);
-        const full = new Float32Array(width * height * 3);
+        const [indirect, full, albedo, position] = Array.from({ length: TEST_VIEW_IMAGES }, () => new Float32Array(width * height * 3));
+        const images = [indirect, full, albedo, position];
         for (let pixel = 0; pixel < width * height; pixel++) {
-            for (let channel = 0; channel < 3; channel++) {
-                indirect[pixel * 3 + channel] = pixels[pixel * 8 + channel];
-                full[pixel * 3 + channel] = pixels[pixel * 8 + 4 + channel];
-            }
+            images.forEach((image, imageIndex) => {
+                const base = (pixel * TEST_VIEW_IMAGES + imageIndex) * 4;
+                for (let channel = 0; channel < 3; channel++) image[pixel * 3 + channel] = pixels[base + channel];
+            });
         }
-        return { width, height, indirect, full };
+        return { width, height, indirect, full, albedo, position };
     }
 }
 

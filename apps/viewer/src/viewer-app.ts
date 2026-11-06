@@ -10,7 +10,8 @@
 import { BoxGeometry, Color, Mesh, MeshStandardMaterial } from 'three';
 import { defaultExposureEv, type CameraBookmark, type SceneManifest } from '../../../scenes/src/manifest';
 import { CameraRig } from './controls/camera-rig';
-import { ViewerCore, type ToneMappingName, type ViewLayout } from './core/viewer-core';
+import { TONE_MAPPERS, ViewerCore, type ToneMappingName, type ViewLayout } from './core/viewer-core';
+import { shotBookmark } from './scene/reference-files';
 import { newestFrame, resolveGpuWindow } from './render/gpu-time';
 import { findBookmark, loadAllManifests } from './scene/manifests';
 import { LAYER_VIEW_GEOMETRY } from './scene/layers';
@@ -134,6 +135,15 @@ export class ViewerApp {
     private lastStatusAt = 0;
     private draggingWipe = false;
     private wasPreparing = false;
+    /**
+     * Set when the Cycles reference comes on screen or its camera view changes: once its
+     * image has loaded, the camera moves to the shot it was rendered from
+     * (`alignWithReference`). `display` also takes the shot's exposure and tone mapping
+     * (only when Compare is started, so a later change by the user sticks).
+     */
+    private pendingShot: { display: boolean } | null = null;
+    /** The aspect the picture is letterboxed to (the reference's), or null for the whole canvas area. */
+    private letterboxAspect: number | null = null;
 
     static async start(): Promise<ViewerApp> {
         const app = new ViewerApp();
@@ -213,6 +223,8 @@ export class ViewerApp {
             }
             this.automation.camera = free ? 'free' : manifest.cameras[this.bookmarkIndex ?? 0].name;
             this.core.setReferenceBookmark(this.bookmarkIndex ?? 0);
+            // A link that opens on the reference wipe at a camera view lines up with the reference's shot.
+            this.pendingShot = free ? null : { display: false };
             this.ddgiStats.reset();
             this.rig.update(0);
             this.bookmarkPoseKey = JSON.stringify(this.rig.pose());
@@ -336,6 +348,7 @@ export class ViewerApp {
                 this.url = { ...this.url, camera: String(index + 1), freeCamera: null };
                 this.automation.camera = this.manifest.cameras[index].name;
                 this.core.setReferenceBookmark(index);
+                this.pendingShot = { display: false };
                 this.refreshPanel();
                 this.scheduleUrlUpdate();
             },
@@ -364,7 +377,11 @@ export class ViewerApp {
             onTechnique: (id: ViewerUrlState['technique']) => change({ technique: id }),
             onDdgiSettings: (settings: DdgiPanelSettings) => change({ budgetMs: settings.budgetMs, probes: settings.probes, debug: settings.debug }),
             onDdgiRestart: () => this.core.restartDdgi(),
-            onCompareWithReference: () => change({ wipe: ['ddgi', 'cycles'], gi: this.url.gi === 'off' ? 'on' : this.url.gi }),
+            onCompareWithReference: () => {
+                // Go to the reference's own shot: camera, aspect, exposure and tone mapping.
+                this.pendingShot = { display: true };
+                change({ wipe: ['ddgi', 'cycles'], gi: this.url.gi === 'off' ? 'on' : this.url.gi });
+            },
             onProbeSettings: (settings: { bounces: number; maxProbes: number }) => {
                 this.probeSettings = settings;
                 change({});
@@ -378,6 +395,8 @@ export class ViewerApp {
                 if (!enabled) return change({ wipe: null });
                 // Two different techniques are needed for a wipe.
                 const wipe: [TechniqueId, TechniqueId] = left === right ? [left, left === 'cycles' ? 'ddgi' : 'cycles'] : [left, right];
+                const referenceWasShown = this.url.wipe?.includes('cycles') ?? false;
+                if (wipe.includes('cycles') && !referenceWasShown) this.pendingShot = { display: true };
                 change({ wipe, gi: this.url.gi === 'off' ? 'on' : this.url.gi });
             },
             onUpscale: (quality: ViewerUrlState['upscale']) => change({ upscale: quality }),
@@ -464,7 +483,82 @@ export class ViewerApp {
         // The canvas takes the panel's room (see index.html); the observer below resizes the renderer.
         document.body.classList.toggle('panel-hidden', hidden);
         this.showPanelButton.classList.toggle('visible', hidden);
+        this.applyLetterbox();
         this.updateWipeLabels();
+    }
+
+    // -- lining up with the Cycles reference -------------------------------
+
+    /**
+     * While the Cycles reference is on screen: letterboxes the picture to the
+     * reference's stored aspect, and, when asked (`pendingShot`), moves the
+     * camera to the shot it was rendered from once its image has loaded, so the
+     * wipe lines up pixel for pixel. The camera's near and far planes stay the
+     * viewer's: they only clip, and the reference's 0.01 to 2000 m would cost
+     * depth precision in the raster passes.
+     */
+    private alignWithReference(): void {
+        const reference = this.core.reference;
+        const onScreen = reference !== null && this.url.gi !== 'off' && this.core.activeTechniques().includes(reference);
+        const shot = onScreen ? reference.shot : null;
+        this.setLetterbox(shot ? shot.camera.width / shot.camera.height : null);
+        // A request made while the reference isn't shown is dropped, so it can't move the camera later.
+        if (!onScreen) this.pendingShot = null;
+        if (!this.pendingShot || !onScreen || !reference.ready) return;
+        const pending = this.pendingShot;
+        this.pendingShot = null;
+        // No image, or an old one without a stored shot: nothing to line up with.
+        if (!shot || !this.manifest) return;
+        const bookmark = shotBookmark(shot);
+        this.goToBookmark(bookmark);
+        this.rig.update(0);
+        this.bookmarkPoseKey = JSON.stringify(this.rig.pose());
+        const index = this.manifest.cameras.findIndex((camera) => camera.name === shot.camera.bookmark);
+        if (index >= 0) {
+            this.bookmarkIndex = index;
+            this.url = { ...this.url, camera: String(index + 1), freeCamera: null };
+            this.automation.camera = shot.camera.bookmark;
+        }
+        if (pending.display) {
+            const tone = shot.display.toneMapping in TONE_MAPPERS ? (shot.display.toneMapping as ToneMappingName) : this.url.tone;
+            // The scene's own exposure is the default; only a different one goes into the link.
+            const ev = shot.display.exposureEv === this.sceneExposureEv() ? null : shot.display.exposureEv;
+            this.url = { ...this.url, tone, ev };
+            this.applyState();
+        } else {
+            this.refreshPanel();
+            this.scheduleUrlUpdate();
+        }
+    }
+
+    private setLetterbox(aspect: number | null): void {
+        if (aspect === this.letterboxAspect) return;
+        this.letterboxAspect = aspect;
+        this.applyLetterbox();
+    }
+
+    /**
+     * Fits the canvas to `letterboxAspect` inside the area index.html gives it,
+     * centred, with the page background as the bars. The ResizeObserver then
+     * resizes the renderer, so the camera's aspect is the reference's.
+     */
+    private applyLetterbox(): void {
+        const style = this.canvas.style;
+        style.width = '';
+        style.height = '';
+        style.left = '';
+        style.top = '';
+        const aspect = this.letterboxAspect;
+        if (aspect === null) return;
+        const area = this.canvas.getBoundingClientRect();
+        let width = area.width;
+        let height = area.height;
+        if (width / height > aspect) width = height * aspect;
+        else height = width / aspect;
+        style.width = `${width}px`;
+        style.height = `${height}px`;
+        style.left = `${area.left + (area.width - width) / 2}px`;
+        style.top = `${area.top + (area.height - height) / 2}px`;
     }
 
     /** Sizes the renderer to the canvas's laid-out size. */
@@ -480,6 +574,8 @@ export class ViewerApp {
             this.fitCanvas();
             this.updateWipeLabels();
         }).observe(this.canvas);
+        // A letterboxed canvas has a fixed size, so the observer above wouldn't see the window change.
+        window.addEventListener('resize', () => this.applyLetterbox());
         window.addEventListener('keydown', (event) => {
             const typing = event.target instanceof HTMLElement && ['INPUT', 'SELECT', 'TEXTAREA'].includes(event.target.tagName);
             if (event.code === 'KeyH' && !typing && !event.ctrlKey && !event.metaKey) this.setPanelHidden(!this.panel.hidden);
@@ -633,7 +729,7 @@ export class ViewerApp {
         if (!reference || !this.core.activeTechniques().includes(reference)) return null;
         const lines = [reference.describe()];
         if (reference.available && !reference.isAligned(this.core.camera)) {
-            lines.push(`It lines up only at camera view ${reference.bookmarkNumber}: press that button under Scene to go back.`);
+            lines.push(`It lines up only from the camera it was rendered from: press Compare again, or camera view ${reference.bookmarkNumber} under Scene, to go back.`);
         }
         return lines.join(' ');
     }
@@ -647,6 +743,7 @@ export class ViewerApp {
         this.panel.setStatus(lines);
         this.automation.ddgiStartup = this.core.ddgi ? { ...this.core.ddgi.startup } : null;
         if (this.url.probes) this.panel.setProbeLegend(this.probeLegend());
+        this.alignWithReference();
         this.panel.setReferenceNote(this.referenceNote());
         // The reference loads in the background; its label follows.
         this.updateWipeLabels();

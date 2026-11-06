@@ -3,8 +3,13 @@
  * references (T1.5a done-when 2).
  *
  *   node tools/gpu/pages/ddgi-test-view/render.ts [--scene cornell-box-point] [--camera 1]
- *        [--frames 600] [--width 512] [--height 512] [--gpu nvidia|intel] [--keep-light-range]
+ *        [--frames 600] [--width W] [--height H] [--gpu nvidia|intel] [--keep-light-range]
  *        [--volume manifest|in-air] [--suffix -run2] [--settings '{"viewBias": 0}']
+ *
+ * Camera and size: those the Cycles reference was rendered with (`shot` in
+ * its cycles.json, T1.13: 1920 x 1080), so DDGI and Cycles show exactly the
+ * same view. `--width`/`--height` override the size only. A reference
+ * rendered before shots were stored falls back to the bookmark at 1920 x 1080.
  *
  * `--volume in-air` (Cornell only) uses `CORNELL_POINT_IN_AIR_VOLUME`, T1.5a's
  * measurement, as an extra report: its files get `-in-air` and it never
@@ -37,6 +42,7 @@ import { SITE_ROOT } from '../../server.ts';
 import { BrowserSession } from '../../session.ts';
 import type { TestViewJob } from './main.ts';
 import { CORNELL_POINT_IN_AIR_VOLUME } from '../ddgi-shared/volumes.ts';
+import { DEFAULT_REFERENCE_SIZE, readReferenceShot, referenceSize, shotView } from '../../../reference/shot.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '..', '..', '..', '..');
@@ -79,8 +85,8 @@ async function main(): Promise<void> {
             scene: { type: 'string', default: 'cornell-box-point' },
             camera: { type: 'string', default: '1' },
             frames: { type: 'string', default: '600' },
-            width: { type: 'string', default: '512' },
-            height: { type: 'string', default: '512' },
+            width: { type: 'string' },
+            height: { type: 'string' },
             gpu: { type: 'string', default: 'nvidia' },
             'keep-light-range': { type: 'boolean' },
             suffix: { type: 'string', default: '' },
@@ -100,12 +106,20 @@ async function main(): Promise<void> {
     const referenceIndirect = join(outDir, 'cycles-indirect.exr');
     const referenceFull = join(outDir, 'cycles-full.exr');
     const referenceIndirectMean = existsSync(referenceIndirect) ? mean(readExr(await readFile(referenceIndirect)).rgb) : null;
+    // The reference's own camera and size (T1.13), so the images line up pixel for pixel.
+    const shot = await readReferenceShot(repoRoot, outDir, 'cycles.json');
+    // A reference from before T1.13 has no stored camera: the bookmark, at that reference's size.
+    const size = shot?.camera ?? (await referenceSize(outDir, 'cycles.json')) ?? DEFAULT_REFERENCE_SIZE;
+    if (!shot) console.warn(`no stored camera in ${join(outDir, 'cycles.json')} (rendered before T1.13, or missing): using the bookmark at ${size.width} x ${size.height}`);
+    const width = Number(values.width ?? size.width);
+    const height = Number(values.height ?? size.height);
 
     const job: TestViewJob = {
         scene: manifest.id,
         camera,
-        width: Number(values.width),
-        height: Number(values.height),
+        ...(shot ? { view: shotView(shot) } : {}),
+        width,
+        height,
         frames: Number(values.frames),
         ignoreLightRange: !values['keep-light-range'],
         exportImages: true,

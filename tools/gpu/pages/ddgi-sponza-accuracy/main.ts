@@ -43,7 +43,15 @@
  * the page's path tracer (ddgi-shared/path-tracer.ts; it agrees with Cycles
  * to +0.15% on Sponza, so it is the reference for changed scenes), and
  * `probeCheck` for probes against path-traced irradiance at their own
- * positions. Probe-state counts are always reported.
+ * positions. Probe-state counts are always reported, overall and for the
+ * probes near the curtains (the curtain meshes' boxes grown by 0.5 m).
+ *
+ * The curtains investigation added `partsOutOfGI` (a part loaded but left out
+ * of GI), `singleSidedFrontSide` (only glTF double-sided materials reach the
+ * platform double-sided) and `diagnosticLookup` (the test view with exact
+ * visibility rays, or times short-range occlusion). With `exportImages` the
+ * page also returns the test view's albedo and position images; run.ts uses
+ * the albedo to split the comparison by material.
  *
  * Run `node tools/gpu/pages/ddgi-sponza-accuracy/run.ts` for the EXRs, the
  * material table and the comparison. `pnpm test:gpu --filter
@@ -51,7 +59,7 @@
  * same page and reports the means and the convergence only.
  */
 
-import { PerspectiveCamera, type Material, type Mesh, type Object3D } from 'three/webgpu';
+import { Box3, FrontSide, PerspectiveCamera, Vector3, type Material, type Mesh, type Object3D } from 'three/webgpu';
 import type { DDGISettingsInput, DDGIVolumeSettings } from '../../../../packages/ddgi-core/src/techniques/ddgi/settings.ts';
 import { PathTracer, type PathTraceOptions } from '../ddgi-shared/path-tracer.ts';
 import { ProbeValues } from '../ddgi-shared/probe-values.ts';
@@ -63,12 +71,18 @@ import { ThreeGI } from '../../../../packages/ddgi-three/src/three-gi.ts';
 import { loadAllManifests } from '../../../../apps/viewer/src/scene/manifests.ts';
 import { loadScene } from '../../../../apps/viewer/src/scene/load-scene.ts';
 import { platformSkyEnvironment } from '../../../../scenes/src/sky/sky-image.ts';
-import { floatsToBase64, imageMean, readProbeData, TestView } from '../ddgi-shared/harness.ts';
+import type { CameraBookmark } from '../../../../scenes/src/manifest.ts';
+import { floatsToBase64, imageMean, readProbeData, TestView, type TestViewLookup } from '../ddgi-shared/harness.ts';
 import { runSteps, runThreePage } from '../three-shared/harness.ts';
 
 export interface SponzaAccuracyJob {
     /** 1-based camera bookmark. */
     readonly camera: number;
+    /**
+     * The Cycles reference's stored camera (`shot.camera` in its json, T1.13),
+     * used instead of the bookmark so both images show exactly the same view.
+     */
+    readonly view?: CameraBookmark;
     readonly width: number;
     readonly height: number;
     /** Full passes with a running average before the normal hysteresis. */
@@ -98,6 +112,29 @@ export interface SponzaAccuracyJob {
      * directions, `paths` paths per direction.
      */
     readonly probeCheck: (PathTraceOptions & { readonly probes: number }) | null;
+    /**
+     * Model parts (asset ids) loaded but left out of GI: not traced, not seen
+     * by the test view. Unlike `parts`, their meshes still mark the region the
+     * probe census looks at, so a run without the curtains can be compared
+     * probe for probe with one with them.
+     */
+    readonly partsOutOfGI: readonly string[];
+    /**
+     * Experiment: mark every material three draws `FrontSide` single-sided for
+     * GI (`userData.giSingleSided`), so only materials authored double-sided
+     * (glTF `doubleSided`: the curtains, glass) reach the platform as
+     * double-sided. By default the adapter sends every material double-sided.
+     */
+    readonly singleSidedFrontSide: boolean;
+    /**
+     * Also render the indirect image with one of the test view's diagnostic
+     * lookups (ddgi-shared/harness.ts, `TestViewLookup`): `tracedVisibility`
+     * (exact visibility rays instead of the Chebyshev test) or
+     * `shortRangeOcclusion` (the field times short-range occlusion).
+     */
+    readonly diagnosticLookup: Exclude<TestViewLookup, 'field'> | null;
+    /** `shortRangeOcclusion` only: one image per ray count in the list. */
+    readonly diagnosticRays: readonly number[];
 }
 
 const DEFAULT_SPONZA_ACCURACY_JOB: SponzaAccuracyJob = {
@@ -115,7 +152,15 @@ const DEFAULT_SPONZA_ACCURACY_JOB: SponzaAccuracyJob = {
     excludeMaterials: [],
     pathTrace: null,
     probeCheck: null,
+    partsOutOfGI: [],
+    singleSidedFrontSide: false,
+    diagnosticLookup: null,
+    diagnosticRays: [32],
 };
+
+/** The model part whose probes the census looks at, and how far around its meshes' boxes it looks. */
+const CENSUS_PART = 'sponza-intel-curtains';
+const CENSUS_MARGIN_METRES = 0.5;
 
 declare global {
     interface Window {
@@ -382,7 +427,7 @@ const SETTLE_RULE =
 await runThreePage(async ({ device, data, log }) => {
     const manifest = loadAllManifests().find((candidate) => candidate.id === 'sponza');
     assert(manifest, 'no sponza manifest');
-    const bookmark = manifest.cameras[job.camera - 1];
+    const bookmark = job.view ?? manifest.cameras[job.camera - 1];
     assert(bookmark, `sponza has no camera ${job.camera}`);
     data.job = job;
     data.camera = bookmark.name;
@@ -421,6 +466,40 @@ await runThreePage(async ({ device, data, log }) => {
         }
     });
     data.excludedMeshes = excludedMeshes;
+    // Parts kept for the census but out of GI.
+    let meshesOutOfGI = 0;
+    loaded.content.traverse((object) => {
+        const mesh = object as Mesh;
+        if (!mesh.isMesh) return;
+        const part = partOf(mesh, holders);
+        if (part && job.partsOutOfGI.includes(part)) {
+            mesh.userData.giContributes = false;
+            meshesOutOfGI++;
+        }
+    });
+    data.meshesOutOfGI = meshesOutOfGI;
+    // The census region: the curtain meshes' world boxes, grown by the margin.
+    loaded.content.updateMatrixWorld(true);
+    const censusBoxes: Box3[] = [];
+    loaded.content.traverse((object) => {
+        const mesh = object as Mesh;
+        if (mesh.isMesh && partOf(mesh, holders) === CENSUS_PART) censusBoxes.push(new Box3().setFromObject(mesh).expandByScalar(CENSUS_MARGIN_METRES));
+    });
+    data.censusBoxes = censusBoxes.map((box) => ({ min: box.min.toArray(), max: box.max.toArray() }));
+    if (job.singleSidedFrontSide) {
+        const singleSided = new Set<string>();
+        loaded.content.traverse((object) => {
+            const mesh = object as Mesh;
+            if (!mesh.isMesh) return;
+            for (const material of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) {
+                if (material.side === FrontSide) {
+                    material.userData.giSingleSided = true;
+                    singleSided.add(material.name);
+                }
+            }
+        });
+        data.singleSidedMaterials = [...singleSided];
+    }
 
     const camera = new PerspectiveCamera(bookmark.fovYDeg, job.width / job.height, 0.05, loaded.diagonal * 2);
     camera.position.set(...bookmark.position);
@@ -510,6 +589,24 @@ await runThreePage(async ({ device, data, log }) => {
         if (job.exportImages) {
             data.indirectBase64 = floatsToBase64(images.indirect);
             data.fullBase64 = floatsToBase64(images.full);
+            data.albedoBase64 = floatsToBase64(images.albedo);
+            data.positionBase64 = floatsToBase64(images.position);
+        }
+        if (job.diagnosticLookup) {
+            // One image per ray count for the short-range term; the other lookups take no count.
+            const rayCounts = job.diagnosticLookup === 'shortRangeOcclusion' ? job.diagnosticRays : [0];
+            const means: Record<string, number> = {};
+            const images: Record<string, string> = {};
+            for (const rays of rayCounts) {
+                const diagnosticView = await TestView.create(device, platform, job.diagnosticLookup, rays > 0 ? rays : undefined);
+                const diagnostic = await diagnosticView.render(field, bookmark, job.width, job.height);
+                const key = rays > 0 ? `r${rays}` : 'image';
+                means[key] = imageMean(diagnostic.indirect);
+                log(`indirect mean with the ${job.diagnosticLookup} lookup (${key}): ${means[key].toFixed(6)}`);
+                if (job.exportImages) images[key] = floatsToBase64(diagnostic.indirect);
+            }
+            data.diagnosticMeans = means;
+            if (job.exportImages) data.diagnosticImages = images;
         }
 
         // Probe states and relocations, for comparing experiments (layout.ts PROBE_STATE: 0 active, 1 off inside, 2 off no surface, 3 not updated).
@@ -522,6 +619,37 @@ await runThreePage(async ({ device, data, log }) => {
         }
         data.probeStates = { active: stateCounts[0], offInside: stateCounts[1], offNoSurface: stateCounts[2], notUpdated: stateCounts[3], relocated };
         log(`probe states: ${JSON.stringify(data.probeStates)}`);
+        // The same counts for the probes whose grid point lies near the curtains
+        // (CENSUS_PART's mesh boxes, grown by the margin), with the mean offset.
+        if (censusBoxes.length > 0) {
+            const { counts, origin, spacing } = field.grid;
+            const near = [0, 0, 0, 0];
+            let nearRelocated = 0;
+            let offsetSum = 0;
+            const gridPoint = new Vector3();
+            probeRecords.forEach((record, index) => {
+                const x = index % counts[0];
+                const z = Math.floor(index / counts[0]) % counts[2];
+                const y = Math.floor(index / (counts[0] * counts[2]));
+                gridPoint.set(origin[0] + x * spacing[0], origin[1] + y * spacing[1], origin[2] + z * spacing[2]);
+                if (!censusBoxes.some((box) => box.containsPoint(gridPoint))) return;
+                near[record.state] = (near[record.state] ?? 0) + 1;
+                if (record.offset.some((value) => value !== 0)) nearRelocated++;
+                offsetSum += Math.hypot(record.offset[0] * spacing[0], record.offset[1] * spacing[1], record.offset[2] * spacing[2]);
+            });
+            const total = near.reduce((sum, value) => sum + value, 0);
+            data.probeStatesNearCurtains = {
+                probes: total,
+                active: near[0],
+                offInside: near[1],
+                offNoSurface: near[2],
+                notUpdated: near[3],
+                relocated: nearRelocated,
+                meanOffsetMetres: total > 0 ? offsetSum / total : 0,
+                marginMetres: CENSUS_MARGIN_METRES,
+            };
+            log(`probe states near the curtains: ${JSON.stringify(data.probeStatesNearCurtains)}`);
+        }
 
         if (job.pathTrace || job.probeCheck) {
             const tracer = await PathTracer.create(device, platform);

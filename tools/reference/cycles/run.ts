@@ -23,11 +23,12 @@
  * records its bias against the raw image (`denoiseCheck`); the raw EXRs are
  * what accuracy is measured on.
  *
- * Every render holds the shared bench lock (`$TEMP/ddgi-gpu-bench.lock`), CPU
- * renders included: 16 busy threads skew other agents' build-time and CPU-side
- * numbers just as a GPU job skews GPU numbers. One machine-heavy job at a time.
- * Ctrl-C or SIGTERM kills Blender and releases the lock. The default device is
- * the GPU (OptiX); `--device cpu` uses the CPU. See tools/reference/README.md.
+ * A GPU render (the default, OptiX) holds the GPU bench lock
+ * (`$TEMP/ddgi-gpu-bench.lock`) for the whole render. A CPU render
+ * (`--device cpu --threads 12`) holds only the CPU-heavy lock
+ * (`$TEMP/ddgi-cpu-heavy.lock`) and leaves 4 of the 16 threads free so GPU
+ * benchmarks can still submit. Ctrl-C or SIGTERM kills Blender and releases
+ * the lock. See tools/reference/README.md, "Bench lock".
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -130,7 +131,11 @@ async function main(): Promise<void> {
         });
 
     const scene = forwarded[forwarded.indexOf('--scene') + 1] ?? '?';
-    const result = await withBenchLock(render, { what: calibrate ? 'cycles calibrate' : `cycles ${scene}` });
+    // GPU renders hold the GPU bench lock for the whole render; CPU renders hold only the CPU-heavy
+    // lock (lead's rule, 2026-11-05: a long OptiX render keeps the card hot and blocks every GPU
+    // timing lane, so references move to the CPU with `--threads 12`, leaving cores for GPU
+    // benchmarks to submit, while CPU-timed benchmarks still get the CPU to themselves).
+    const result = await withBenchLock(render, { lock: device === 'cpu' ? 'cpu' : 'gpu', what: calibrate ? 'cycles calibrate' : `cycles ${scene}` });
     if (calibrate) return;
     if (!result) throw new Error('Blender finished without reporting a result');
     const meta = JSON.parse(result);

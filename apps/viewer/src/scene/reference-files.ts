@@ -1,7 +1,9 @@
 /**
  * Finds the path-traced reference images made by `tools/reference/cycles`
  * (`bench/references/<scene>/<camera name>/cycles-full.exr`, gitignored,
- * rendered on demand) and returns URLs the page can fetch.
+ * rendered on demand) and returns URLs the page can fetch, with the stored
+ * shot each one was rendered from (camera, size, exposure, tone mapping,
+ * scene hashes, commit: `shot` in `cycles.json`, written by render.py).
  *
  * Like `model-url.ts`: the viewer's vite config injects the folder's absolute
  * path (`__REFERENCES_DIR__`), and the GPU test runner's config-less server
@@ -9,21 +11,63 @@
  * reference reads as missing there, which is the truth for a deployed copy.
  */
 
-import type { SceneManifest } from '../../../../scenes/src/manifest';
+import type { CameraBookmark, SceneManifest } from '../../../../scenes/src/manifest';
 
 /** Absolute path of `bench/references`, injected by `apps/viewer/vite.config.ts`. */
 declare const __REFERENCES_DIR__: string | undefined;
+/** The repo commit the viewer's dev server started at, injected by `apps/viewer/vite.config.ts`. */
+declare const __VIEWER_COMMIT__: string | undefined;
 
-/** `full`: everything the camera sees. `indirect`: only light that bounced at least once (Cycles' diffuse indirect times colour). */
-export type ReferenceKind = 'full' | 'indirect';
+/**
+ * `full`: everything the camera sees. `gi`: what DDGI's field holds, Cycles'
+ * GI composite (indirect + direct − the manifest lights' direct light;
+ * `tools/reference/README.md`, "The GI composite"); older folders without it
+ * fall back to `cycles-indirect.exr`.
+ */
+export type ReferenceKind = 'full' | 'gi';
 
-/** What `cycles.json` next to the images says about the render (the fields the viewer shows). */
+/** The format render.py writes (`SHOT_FORMAT`); a shot in another format is treated as absent. */
+export const SHOT_FORMAT = 'ddgi-reference-shot/1';
+
+/** What a reference was rendered from: enough to see exactly that view again (render.py `shot`). */
+export interface ReferenceShot {
+    format: string;
+    camera: {
+        bookmark: string;
+        bookmarkNumber: number | null;
+        /** Manifest space: three.js axes, Y up, metres. */
+        position: [number, number, number];
+        target: [number, number, number];
+        fovYDeg: number;
+        aspect: number;
+        width: number;
+        height: number;
+        near: number;
+        far: number;
+    };
+    display: { exposureEv: number; toneMapping: string };
+    scene: { manifest: string; manifestPath: string; manifestSha256: string; skySha256: string | null; giMaterialsSha256: string | null };
+    render: {
+        git: { commit: string; uncommittedChanges: boolean } | null;
+        blender: string;
+        device: string;
+        samplesPerPixel: number;
+        seed: number;
+        pixelFilter: { type: string; widthPixels: number };
+        renderSeconds: number;
+        denoised: { file: string; denoiser: string; check?: { bias: number; blockError: number } } | null;
+    };
+}
+
+/** What `cycles.json` next to the images says about the render (the fields the viewer uses). */
 export interface ReferenceInfo {
     width: number;
     height: number;
     samplesPerPixel: number;
     finishedAt: string;
     materials: string;
+    /** Missing on references rendered before T1.13 (2026-11-05). */
+    shot?: ReferenceShot;
 }
 
 function candidateFolders(sceneId: string, cameraName: string): string[] {
@@ -49,60 +93,109 @@ async function exists(url: string): Promise<boolean> {
 
 export interface FoundReference {
     imageUrl: string;
+    /** The file shown, e.g. `cycles-full-denoised.exr`. */
+    fileName: string;
+    /** True when the file is the denoised viewing copy (render.py `--denoise`). */
+    denoised: boolean;
     info: ReferenceInfo | null;
 }
+
+/**
+ * Files to try for each kind, best first. The full image prefers the
+ * denoised viewing copy when there is one: it is for looking at, and the raw
+ * image stays on disk for accuracy numbers.
+ */
+const FILES: Record<ReferenceKind, readonly string[]> = {
+    full: ['cycles-full-denoised.exr', 'cycles-full.exr'],
+    gi: ['cycles-gi.exr', 'cycles-indirect.exr'],
+};
 
 /** The reference image of one camera view, or null when it hasn't been rendered (or this copy of the viewer can't reach it). */
 export async function findReference(sceneId: string, cameraName: string, kind: ReferenceKind): Promise<FoundReference | null> {
     for (const folder of candidateFolders(sceneId, cameraName)) {
-        const imageUrl = `${folder}/cycles-${kind}.exr`;
-        if (!(await exists(imageUrl))) continue;
-        let info: ReferenceInfo | null = null;
-        try {
-            const response = await fetch(`${folder}/cycles.json`);
-            if (response.ok) info = (await response.json()) as ReferenceInfo;
-        } catch {
-            // The settings file is a nice-to-have for the status line; the image is what matters.
-        }
-        return { imageUrl, info };
-    }
-    return null;
-}
-
-/** A render size, in pixels. */
-export interface RenderSize {
-    width: number;
-    height: number;
-}
-
-/**
- * The size this scene's references were rendered at, read from the `cycles.json` of any of its
- * camera views that has one (Sponza 640 x 360, Cornell 512 x 512), so a new one matches them.
- * Null when the scene has no reference at all.
- */
-export async function renderedSize(manifest: Pick<SceneManifest, 'id' | 'cameras'>): Promise<RenderSize | null> {
-    for (const camera of manifest.cameras) {
-        for (const folder of candidateFolders(manifest.id, camera.name)) {
+        for (const fileName of FILES[kind]) {
+            const imageUrl = `${folder}/${fileName}`;
+            if (!(await exists(imageUrl))) continue;
+            let info: ReferenceInfo | null = null;
             try {
                 const response = await fetch(`${folder}/cycles.json`);
-                if (!response.ok || (response.headers.get('content-type') ?? '').includes('text/html')) continue;
-                const info = (await response.json()) as Partial<ReferenceInfo>;
-                if (typeof info.width === 'number' && typeof info.height === 'number') return { width: info.width, height: info.height };
+                if (response.ok) info = (await response.json()) as ReferenceInfo;
             } catch {
-                // Not there, or not readable: try the next view.
+                // The settings file is a nice-to-have for the status line; the image is what matters.
             }
+            if (info?.shot && info.shot.format !== SHOT_FORMAT) info.shot = undefined;
+            return { imageUrl, fileName, denoised: fileName.includes('denoised'), info };
         }
     }
     return null;
 }
 
+/** The stored shot's camera as a bookmark the camera rig can go to. */
+export function shotBookmark(shot: ReferenceShot): CameraBookmark {
+    const { bookmark, position, target, fovYDeg } = shot.camera;
+    return { name: bookmark, position: [...position], target: [...target], fovYDeg };
+}
+
+// The manifests' exact file text, to compare with the hash a reference stored.
+const rawManifests = import.meta.glob('../../../../scenes/manifests/*.json', { eager: true, query: '?raw', import: 'default' }) as Record<string, string>;
+const manifestHashes = new Map<string, Promise<string | null>>();
+
+async function sha256Hex(text: string): Promise<string> {
+    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+    return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+/** sha256 of `scenes/manifests/<id>.json` as the viewer has it, or null when it can't tell. */
+function manifestSha256(sceneId: string): Promise<string | null> {
+    let hash = manifestHashes.get(sceneId);
+    if (!hash) {
+        const entry = Object.entries(rawManifests).find(([path]) => path.endsWith(`/${sceneId}.json`));
+        hash = entry && typeof crypto !== 'undefined' && crypto.subtle ? sha256Hex(entry[1]) : Promise.resolve(null);
+        manifestHashes.set(sceneId, hash);
+    }
+    return hash;
+}
+
+/** How a stored reference relates to what the viewer is showing now. */
+export interface ShotProvenance {
+    /** False when the scene's manifest changed since the render: the picture may show another scene. */
+    sameManifest: boolean | null;
+    /** The render's commit, short, or null if it wasn't recorded. */
+    commit: string | null;
+    /** True when the viewer runs a different commit (or the render had uncommitted changes). */
+    olderCommit: boolean | null;
+    /** Plain-language lines for the panel; warnings first. */
+    lines: string[];
+}
+
+/** Compares a stored shot with the viewer's manifest and commit. */
+export async function shotProvenance(shot: ReferenceShot): Promise<ShotProvenance> {
+    const lines: string[] = [];
+    const current = await manifestSha256(shot.scene.manifest);
+    const sameManifest = current === null ? null : current === shot.scene.manifestSha256;
+    if (sameManifest === false) {
+        lines.push(`Warning: the scene file (${shot.scene.manifestPath}) has changed since this reference was rendered, so it may not show the same scene. Render it again.`);
+    }
+    const git = shot.render.git;
+    const commit = git ? git.commit.slice(0, 7) : null;
+    const viewerCommit = typeof __VIEWER_COMMIT__ === 'string' && __VIEWER_COMMIT__ ? __VIEWER_COMMIT__ : null;
+    let olderCommit: boolean | null = null;
+    if (git) {
+        olderCommit = git.uncommittedChanges || (viewerCommit !== null && viewerCommit !== git.commit);
+        const changes = git.uncommittedChanges ? ' with uncommitted changes' : '';
+        if (viewerCommit && viewerCommit !== git.commit) lines.push(`Rendered from an older commit (${commit}${changes}); the viewer runs ${viewerCommit.slice(0, 7)}.`);
+        else lines.push(`Rendered at commit ${commit}${changes}.`);
+    } else {
+        lines.push('The commit it was rendered at was not recorded.');
+    }
+    return { sameManifest, commit, olderCommit, lines };
+}
+
 /**
- * The command that renders a missing reference, as `tools/reference/README.md` gives it, at
- * `size` (the scene's other references), or at the render tool's own default size (512 x 512)
- * when the scene has none yet. 1024 samples takes a few minutes on this laptop's CPU (Sponza
- * at 640 x 360: about 5).
+ * The command that renders a missing reference, as `tools/reference/README.md` gives it:
+ * HD on the GPU (OptiX) with a denoised viewing copy. 1024 samples is a quick look
+ * (Cornell about a minute); the README lists what the accuracy references use.
  */
-export function renderCommand(manifest: Pick<SceneManifest, 'id'>, bookmarkNumber: number, size: RenderSize | null): string {
-    const sizeFlags = size ? ` --width ${size.width} --height ${size.height}` : '';
-    return `node tools/reference/cycles/run.ts --scene ${manifest.id} --camera ${bookmarkNumber} --samples 1024${sizeFlags}`;
+export function renderCommand(manifest: Pick<SceneManifest, 'id'>, bookmarkNumber: number): string {
+    return `node tools/reference/cycles/run.ts --scene ${manifest.id} --camera ${bookmarkNumber} --samples 1024 --denoise`;
 }

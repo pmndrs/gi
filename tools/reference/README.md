@@ -35,6 +35,8 @@ Dennis: "640 x 360 is an insane size to judge ANYTHING against." Since T1.13 eve
 - **Clean:** the sample counts in "Sizes, samples and times" below, with the 8 × 8-block noise measured from two seeds.
 - **`--denoise`** (Dennis is fine with denoising tools) also writes `cycles-full-denoised.exr`: the full image through OpenImageDenoise (Blender's compositor Denoise node, HDR, with albedo and normal guides). It is for the viewer's wipe only. The raw EXRs are written unchanged and are what every accuracy number is measured on. `run.ts` measures the denoised copy against the raw image and stores the result (`denoiseCheck`: bias and 8 × 8 block error) in the json and in `shot.render.denoised.check`. The viewer shows the denoised copy when there is one, and says so.
 
+**Long renders in parts.** One bench-lock hold should be one short shot (under about 15 minutes), so other lanes can time between renders. A longer reference is rendered as parts with different seeds (`--seed k --name-suffix=-partk`, same samples each) and averaged with `node tools/reference/cycles/combine.ts --dir <folder> --prefix cycles-untextured --parts=-part0,-part1,...`. The mean of independent renders is the same estimator as one render with all their samples; `combine.ts` refuses parts whose shot, samples, filter or device differ, or that share a seed. The combined json lists the parts (`combinedFrom`) and the seeds. A denoised viewing copy isn't combined; render that whole.
+
 ## Stored camera (`shot`)
 
 Every render writes, in its json (`cycles.json`, `cycles-untextured.json`, ...), a `shot` with everything needed to see exactly that view again (format `ddgi-reference-shot/1`):
@@ -216,6 +218,18 @@ Noise of one image, as relative RMS (half the difference between two seeds, over
 
 All in `bench/references/render-log.csv`.
 
+The rows above are the pre-T1.13 references (now `cycles*-lowres.*`). The HD set (T1.13, 1920 × 1080, Blackman-Harris 1.5 px):
+
+| reference | samples | device | seconds | 8 × 8-block difference between two seeds or halves |
+| --- | --- | --- | --- | --- |
+| point-light Cornell `front` | 8192 (+ a second seed) | OptiX | 983 | GI 0.53%, full 0.24% |
+| two-room `lit-room` | 4096 | OptiX | 1351 | |
+| two-room `dark-room-leak-view` | 2 × 2048, combined | OptiX | 564 + 432 | GI 1.56% |
+| untextured Sponza `colonnade-from-the-floor` | 4 × 2048, combined | OptiX | 445 + 470 + 379 + 381 | GI 0.60% (two parts) |
+| emissive Cornell `front` | 2 × 1024, combined | CPU, 12 threads | 1319 + 1303 | GI 0.32%, full 0.15% |
+| textured Sponza `colonnade-from-the-floor` | 512, denoised copy | CPU, 12 threads | 2029 | |
+| the other bookmarks (Cornell 2 and 3, two-room doorway, Sponza gallery, open ground) | 1024 (Sponza 512), denoised copies | CPU, 12 threads | 756 to 2831 | |
+
 **Sponza's sun.** At the manifest's first sun angle (53 degrees) a ray test from 187 floor points found only 3 unshadowed, so the reference was lit mostly by the sky (mean pixel 0.018). The sun was raised in the manifest; the floor band is now lit and the mean is 0.0349.
 
 ## Denoiser
@@ -237,8 +251,8 @@ Only a single pass at the end is wired up, not the progressive (every N samples)
 
 ## Sample counts, GPU and CPU
 
-- Both tools hold the shared bench lock (`$TEMP/ddgi-gpu-bench.lock`, see "Bench lock" below) for the whole render: one machine-heavy job at a time. Cycles on the CPU (16 threads on this laptop) would skew other agents' build-time and CPU numbers, and the path tracer loads the GPU. A tool waits while someone else holds the lock and releases it when it finishes, fails, or is stopped with Ctrl-C or SIGTERM (the release is on the tools/gpu cleanup list, which also kills Blender). Chrome is closed after the lock is released, since closing can take minutes on a busy machine.
-- Cycles uses the GPU (OptiX) by default since T1.13; `--device cpu` uses the CPU (both under the lock).
+- GPU renders (Cycles on OptiX, the path tracer) hold the shared GPU bench lock (`$TEMP/ddgi-gpu-bench.lock`, see "Bench lock" below) for the whole render, one shot per hold. A tool waits while someone else holds the lock and releases it when it finishes, fails, or is stopped with Ctrl-C or SIGTERM (the release is on the tools/gpu cleanup list, which also kills Blender). Chrome is closed after the lock is released, since closing can take minutes on a busy machine.
+- Cycles uses the GPU (OptiX) by default since T1.13. Since the same day (lead, after GPU renders kept the card at 88 C and blocked the timing lanes, which must start below 70 C) the long references render on the CPU instead: `--device cpu --threads 12`. A CPU render takes only the CPU-heavy lock (`ddgi-cpu-heavy.lock`, see "Bench lock"), not the GPU lock, and leaves 4 of the 16 threads free so GPU benchmarks can still submit; a benchmark that times CPU-side work takes both locks, so it never overlaps a CPU render. The json records the device and threads.
 - Noise: render a second seed (`--seed 1 --name-suffix=-seed1`, note the `=`) and compare the two; half the relative RMS is the noise of one image.
 
 ## Bench lock

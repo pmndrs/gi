@@ -8,21 +8,25 @@
  * other technique's output, so it goes through the same exposure and tone
  * mapping in the viewer's render pipeline and the two sides are comparable.
  *
- * Lining it up: the reference was rendered from the bookmark's position and
- * target with its vertical field of view, at its own size (Sponza 640x360,
- * Cornell 512x512). Here it is scaled about the screen centre so its
- * vertical field of view matches the camera's and its width follows its own
- * aspect ratio: it lines up exactly while the camera sits at that bookmark,
- * even if the window is shaped differently or the field of view slider
- * moved. Outside the image (a wider window than the render) the picture is
- * dark grey. Once the camera moves away from the bookmark the image no
- * longer matches the view, and the viewer says so.
+ * Lining it up: every reference stores the shot it was rendered from
+ * (`shot` in its `cycles.json`: position, target, vertical field of view,
+ * size and aspect, exposure and tone mapping; T1.13). While the reference is
+ * on screen the viewer moves its camera to that shot and letterboxes the
+ * picture to its aspect (viewer-app.ts), so the image covers the canvas one
+ * to one. The image is also scaled about the screen centre so its vertical
+ * field of view matches the camera's and its width follows its own aspect:
+ * it still lines up if the field of view slider moved or, for an old
+ * reference without a stored shot, if the window is shaped differently.
+ * Outside the image the picture is dark grey. Once the camera moves away from
+ * the shot the image no longer matches the view, and the viewer says so.
  *
- * "GI only" shows Cycles' indirect image: light that bounced at least once
- * before reaching the visible surface, times its colour. The viewer's own
- * "GI only" also leaves out the direct lights, so the two match in meaning;
- * glowing surfaces and the sky still show in the viewer, not in Cycles'
- * indirect image.
+ * "GI only" shows Cycles' GI composite (`cycles-gi.exr`): indirect light plus
+ * sky and emitted light reaching a surface straight, without the manifest
+ * lights' direct light. That is what DDGI's field holds and what the
+ * viewer's own "GI only" shows on surfaces (DECISIONS, "What 'indirect light'
+ * means against Cycles in a scene with a sky"). Glowing surfaces and the sky
+ * seen straight by the camera still show in the viewer, not in Cycles'
+ * composite. Older folders without the composite show the indirect pass.
  */
 
 import { DataTexture, FloatType, HalfFloatType, LinearFilter, RGBAFormat, Vector2, type Texture } from 'three';
@@ -31,7 +35,7 @@ import { float, screenUV, texture, uniform, vec2, vec3, vec4 } from 'three/tsl';
 import type { Node, PerspectiveCamera } from 'three/webgpu';
 import type { CameraBookmark } from '../../../../scenes/src/manifest';
 import type { GiMode } from '../scene/layers';
-import { findReference, renderCommand, renderedSize, type ReferenceInfo, type ReferenceKind, type RenderSize } from '../scene/reference-files';
+import { findReference, renderCommand, shotProvenance, type FoundReference, type ReferenceKind, type ReferenceShot, type ShotProvenance } from '../scene/reference-files';
 import type { GiTechnique, TechniqueContext, TechniqueId, UpscaleSettings } from './types';
 import { copyViewerCamera, createViewCamera } from './view-camera';
 
@@ -44,10 +48,10 @@ const AT_BOOKMARK_ANGLE_DEGREES = 0.2;
 
 type ImageState =
     | { status: 'loading' }
-    /** `size`: what the scene's other references were rendered at, for the command that makes this one. */
-    | { status: 'missing'; size: RenderSize | null }
+    | { status: 'missing' }
     | { status: 'failed'; message: string }
-    | { status: 'loaded'; texture: Texture; info: ReferenceInfo | null };
+    /** `provenance`: how the stored shot relates to the viewer's scene and commit (null for an old reference without one). */
+    | { status: 'loaded'; texture: Texture; found: FoundReference; provenance: ShotProvenance | null };
 
 export class ReferenceImageTechnique implements GiTechnique {
     readonly id: TechniqueId = 'cycles';
@@ -85,7 +89,7 @@ export class ReferenceImageTechnique implements GiTechnique {
     // -- which image -------------------------------------------------------
 
     private get kind(): ReferenceKind {
-        return this.giMode === 'only' ? 'indirect' : 'full';
+        return this.giMode === 'only' ? 'gi' : 'full';
     }
 
     private get bookmark(): CameraBookmark {
@@ -140,7 +144,8 @@ export class ReferenceImageTechnique implements GiTechnique {
     private async load(sceneId: string, cameraName: string, kind: ReferenceKind): Promise<ImageState> {
         try {
             const found = await findReference(sceneId, cameraName, kind);
-            if (!found) return { status: 'missing', size: await renderedSize(this.context.loaded.manifest) };
+            if (!found) return { status: 'missing' };
+            const shot = found.info?.shot;
             const loader = new EXRLoader();
             // Half floats are plenty for display, and filterable everywhere.
             loader.setDataType(HalfFloatType);
@@ -150,7 +155,7 @@ export class ReferenceImageTechnique implements GiTechnique {
             image.magFilter = LinearFilter;
             image.generateMipmaps = false;
             image.needsUpdate = true;
-            return { status: 'loaded', texture: image, info: found.info };
+            return { status: 'loaded', texture: image, found, provenance: shot ? await shotProvenance(shot) : null };
         } catch (error) {
             return { status: 'failed', message: error instanceof Error ? error.message : String(error) };
         }
@@ -168,16 +173,26 @@ export class ReferenceImageTechnique implements GiTechnique {
         }
     }
 
+    /** The stored shot of the image on screen; null while none is showing or for an old reference without one. */
+    get shot(): ReferenceShot | null {
+        const state = this.current;
+        return state.status === 'loaded' ? (state.found.info?.shot ?? null) : null;
+    }
+
+    /** Where the image was rendered from: the stored shot, or the bookmark for an old reference. */
+    private get renderedFrom(): { position: readonly number[]; target: readonly number[]; fovYDeg: number } {
+        return this.shot?.camera ?? this.bookmark;
+    }
+
     // -- the frame ---------------------------------------------------------
 
     syncCamera(viewerCamera: PerspectiveCamera): void {
         copyViewerCamera(viewerCamera, this.camera);
         const image = this.shownTexture?.image as { width: number; height: number } | undefined;
         if (!image) return;
-        const bookmark = this.bookmark;
         // Image half-extent per screen half-extent, from the vertical fields of view and the aspect ratios.
         const viewTan = Math.tan((viewerCamera.fov * Math.PI) / 360);
-        const imageTan = Math.tan((bookmark.fovYDeg * Math.PI) / 360);
+        const imageTan = Math.tan((this.renderedFrom.fovYDeg * Math.PI) / 360);
         const imageAspect = image.width / image.height;
         const vertical = viewTan / imageTan;
         this.uvScale.value.set((vertical * viewerCamera.aspect) / imageAspect, vertical);
@@ -185,10 +200,10 @@ export class ReferenceImageTechnique implements GiTechnique {
 
     /** Whether the viewer's camera is where the reference was rendered from (within a centimetre and a fraction of a degree). */
     isAligned(viewerCamera: PerspectiveCamera): boolean {
-        const bookmark = this.bookmark;
-        const [px, py, pz] = bookmark.position;
+        const from = this.renderedFrom;
+        const [px, py, pz] = from.position;
         const offset = Math.hypot(viewerCamera.position.x - px, viewerCamera.position.y - py, viewerCamera.position.z - pz);
-        const wanted = [bookmark.target[0] - px, bookmark.target[1] - py, bookmark.target[2] - pz];
+        const wanted = [from.target[0] - px, from.target[1] - py, from.target[2] - pz];
         const length = Math.hypot(wanted[0], wanted[1], wanted[2]);
         // three cameras look down their -Z axis.
         const e = viewerCamera.matrixWorld.elements;
@@ -216,19 +231,24 @@ export class ReferenceImageTechnique implements GiTechnique {
 
     describe(): string {
         const view = `camera view ${this.bookmarkNumber} (${this.bookmark.name})`;
-        const what = this.kind === 'indirect' ? 'bounced light only' : 'full image';
+        const what = this.kind === 'gi' ? 'GI only (bounced light, plus sky and glow reaching surfaces)' : 'full image';
         const state = this.current;
         switch (state.status) {
             case 'loading':
                 return `Loading the Cycles ${what} for ${view}`;
             case 'missing':
-                return `No Cycles reference for ${view} yet. Render it (a few minutes) with: ${renderCommand(this.context.loaded.manifest, this.bookmarkNumber, state.size)}`;
+                return `No Cycles reference for ${view} yet. Render it (a few minutes) with: ${renderCommand(this.context.loaded.manifest, this.bookmarkNumber)}`;
             case 'failed':
                 return `The Cycles reference for ${view} could not be read: ${state.message}`;
             case 'loaded': {
-                const info = state.info;
-                const details = info ? `, ${info.width} x ${info.height}, ${info.samplesPerPixel.toLocaleString('en')} samples per pixel, rendered ${info.finishedAt.slice(0, 10)}` : '';
-                return `Cycles ${what} for ${view}${details}`;
+                const { info, denoised } = state.found;
+                const details = info
+                    ? `, ${info.width} x ${info.height}, ${info.samplesPerPixel.toLocaleString('en')} samples per pixel${denoised ? ', denoised for viewing' : ''}, rendered ${info.finishedAt.slice(0, 10)}`
+                    : '';
+                const provenance = state.provenance
+                    ? state.provenance.lines
+                    : ['It was rendered before cameras were stored with references (low resolution, no stored camera): render it again.'];
+                return [`Cycles ${what} for ${view}${details}.`, ...provenance].join(' ');
             }
         }
     }

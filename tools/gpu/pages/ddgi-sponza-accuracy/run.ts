@@ -4,7 +4,8 @@
  * Cycles reference. Also prints one accuracy table for the three M1 scenes.
  *
  *   node tools/gpu/pages/ddgi-sponza-accuracy/run.ts [--gpu nvidia|intel] [--camera 1]
- *        [--width 640] [--height 360] [--suffix -run2] [--reference-suffix -base] [--job '{"blockPasses": 32}']
+ *        [--width W] [--height H] [--suffix -run2] [--reference-suffix -base] [--job '{"blockPasses": 32}']
+ *        [--timeout-minutes 40]
  *   node tools/gpu/pages/ddgi-sponza-accuracy/run.ts --compare-only [--suffix ...] [--reference-suffix ...]
  *   node tools/gpu/pages/ddgi-sponza-accuracy/run.ts --table [--cornell-suffix -t19] [--two-room-suffix -t19] [--suffix ...]
  *
@@ -12,7 +13,7 @@
  * - `gi-materials<suffix>.json`: per material (model part and glTF name), the GI
  *   albedo and emission the three adapter sent to the platform. This is what
  *   `render.py --materials-json` renders Cycles with:
- *     node tools/reference/cycles/run.ts --scene sponza --camera 1 --width 640 --height 360 \
+ *     node tools/reference/cycles/run.ts --scene sponza --camera 1 \
  *          --samples 8192 --device gpu --materials-json bench/references/sponza/colonnade-from-the-floor/gi-materials.json
  *   which writes `cycles-untextured-{full,indirect,gi}.exr` next to it. The
  *   table also lists the model parts loaded (render.py loads only those) and,
@@ -56,8 +57,9 @@ import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { createServer } from 'vite';
-import { writeExr } from '../../../compare/exr.ts';
+import { readExr, writeExr } from '../../../compare/exr.ts';
 import { withBenchLock } from '../../../reference/bench-lock.ts';
+import { DEFAULT_REFERENCE_SIZE, readReferenceShot, referenceSize, shotView } from '../../../reference/shot.ts';
 import { installShutdownHandlers, registerCleanup, runCleanups } from '../../cleanup.ts';
 import type { GpuChoice } from '../../contract.ts';
 import { SITE_ROOT } from '../../server.ts';
@@ -104,7 +106,7 @@ async function cameraName(scene: string, camera: number): Promise<string> {
 }
 
 /** Runs the page once in its own vite server and Chrome, with the job injected; returns the page's report data. */
-async function runPage(job: Partial<SponzaAccuracyJob>, gpu: GpuChoice, logDir: string): Promise<{ data: Record<string, unknown>; adapter: unknown }> {
+async function runPage(job: Partial<SponzaAccuracyJob>, gpu: GpuChoice, logDir: string, timeoutMs: number): Promise<{ data: Record<string, unknown>; adapter: unknown }> {
     const pagePath = '/pages/ddgi-sponza-accuracy/job.html';
     const server = await createServer({
         root: SITE_ROOT,
@@ -141,7 +143,6 @@ async function runPage(job: Partial<SponzaAccuracyJob>, gpu: GpuChoice, logDir: 
     let session: BrowserSession | null = null;
     try {
         session = await BrowserSession.launch({ serverOrigin: origin, chromePath: null, gpu, withoutGpu: false });
-        const timeoutMs = 40 * 60_000;
         const result = await session.runPage(
             { name: 'ddgi-sponza-accuracy-job', urlPath: pagePath, description: 'DDGI Sponza accuracy', expectFailure: false, expectMessage: null, manual: false, timeoutMs },
             { timeoutMs, expectFailure: false, screenshotDir: logDir, gpuLabel: gpu },
@@ -218,6 +219,11 @@ Sponza: DDGI indirect mean ${gi.metrics.meanTest.toFixed(6)} against untextured 
     if (cyclesIndirect) {
         console.log(`(against Cycles' own indirect pass, ${cyclesIndirect.metrics.meanReference.toFixed(6)}, which leaves out sky light reaching a surface straight: ${signed(cyclesIndirect.metrics.bias)})`);
     }
+    const albedoFile = join(outDir, `ddgi-untextured-albedo${suffix}.exr`);
+    const tableFile = join(outDir, `gi-materials${suffix}.json`);
+    if (existsSync(albedoFile) && existsSync(tableFile)) {
+        await printMaterialBreakdown({ albedoFile, tableFile, ddgi: indirect, cycles: referenceGi, pathTraced: existsSync(pathTraced) ? pathTraced : null });
+    }
     if (existsSync(pathTraced)) {
         // The path tracer shares DDGI's scene exactly, so it splits the gap in two:
         // how far our scene and shading are from Cycles, and how far DDGI is from them.
@@ -226,6 +232,51 @@ Sponza: DDGI indirect mean ${gi.metrics.meanTest.toFixed(6)} against untextured 
         const ddgiAgainstTracedBlocks = compareJson(pathTraced, indirect, ['--no-images', '--no-flip', '--downsample', '8']);
         console.log(`path traced (our scene and shading) against Cycles GI: ${signed(tracedAgainstCycles.metrics.bias)}`);
         console.log(`DDGI against path traced: ${signed(ddgiAgainstTraced.metrics.bias)}, 8x8 block error ${(ddgiAgainstTracedBlocks.metrics.meanRelativeError * 100).toFixed(2)}%`);
+    }
+}
+
+/** A GI albedo matches a table row when every channel agrees within this share (the shader rounds to f32). */
+const ALBEDO_MATCH_TOLERANCE = 1e-4;
+
+/**
+ * DDGI against Cycles (and the path tracer), split by the material each
+ * pixel shows. The material comes from the test view's albedo image, matched
+ * to the GI material table (Sponza's albedos are all different, except the
+ * curtain rods, which share `metal_door`'s). Pixels whose albedo matches no
+ * row (the sky) are left out.
+ */
+async function printMaterialBreakdown(files: { albedoFile: string; tableFile: string; ddgi: string; cycles: string; pathTraced: string | null }): Promise<void> {
+    const table = JSON.parse(await readFile(files.tableFile, 'utf8')) as { materials: { name: string; albedo: [number, number, number] }[] };
+    const albedo = readExr(await readFile(files.albedoFile)).rgb;
+    const ddgi = readExr(await readFile(files.ddgi)).rgb;
+    const cycles = readExr(await readFile(files.cycles)).rgb;
+    const pathTraced = files.pathTraced ? readExr(await readFile(files.pathTraced)).rgb : null;
+    const sums = new Map<string, { pixels: number; ddgi: number; cycles: number; pathTraced: number }>();
+    const pixels = albedo.length / 3;
+    for (let pixel = 0; pixel < pixels; pixel++) {
+        const pixelAlbedo = [albedo[pixel * 3], albedo[pixel * 3 + 1], albedo[pixel * 3 + 2]];
+        if (pixelAlbedo.every((value) => value === 0)) continue;
+        const row = table.materials.find((material) => material.albedo.every((value, channel) => Math.abs(value - pixelAlbedo[channel]) <= ALBEDO_MATCH_TOLERANCE * Math.max(value, 1e-3)));
+        const name = row?.name.startsWith('curtain') ? 'curtains (all three)' : 'everything else';
+        for (const key of [name, row ? `  ${row.name}` : '  (no match)']) {
+            const entry = sums.get(key) ?? { pixels: 0, ddgi: 0, cycles: 0, pathTraced: 0 };
+            entry.pixels++;
+            for (let channel = 0; channel < 3; channel++) {
+                const index = pixel * 3 + channel;
+                entry.ddgi += ddgi[index];
+                entry.cycles += cycles[index];
+                entry.pathTraced += pathTraced ? pathTraced[index] : 0;
+            }
+            sums.set(key, entry);
+        }
+    }
+    const signed = (value: number): string => `${value >= 0 ? '+' : ''}${(value * 100).toFixed(1)}%`;
+    console.log('\nby material (pixel share; DDGI against Cycles GI; path traced against Cycles; DDGI against path traced; Cycles share of the image sum):');
+    const cyclesTotal = [...sums.entries()].filter(([key]) => !key.startsWith(' ')).reduce((total, [, entry]) => total + entry.cycles, 0);
+    const rows = [...sums.entries()].sort((a, b) => b[1].cycles - a[1].cycles);
+    for (const [key, entry] of [...rows.filter(([key]) => !key.startsWith(' ')), ...rows.filter(([key]) => key.startsWith(' ')).slice(0, 12)]) {
+        const traced = pathTraced ? `${signed(entry.pathTraced / entry.cycles - 1)}, ${signed(entry.ddgi / entry.pathTraced - 1)}` : 'no path-traced image';
+        console.log(`${key.padEnd(28)} ${((entry.pixels / pixels) * 100).toFixed(1).padStart(5)}%  ${signed(entry.ddgi / entry.cycles - 1).padStart(7)}  ${traced}  ${((entry.cycles / cyclesTotal) * 100).toFixed(1)}%`);
     }
 }
 
@@ -276,13 +327,16 @@ async function main(): Promise<void> {
         args: joinDashValues(process.argv.slice(2), ['--suffix', '--reference-suffix', '--cornell-suffix', '--two-room-suffix']),
         options: {
             camera: { type: 'string', default: '1' },
-            width: { type: 'string', default: '640' },
-            height: { type: 'string', default: '360' },
+            // Default: the untextured reference's stored size (T1.13).
+            width: { type: 'string' },
+            height: { type: 'string' },
             gpu: { type: 'string', default: 'nvidia' },
             suffix: { type: 'string', default: '' },
             'reference-suffix': { type: 'string', default: '' },
             job: { type: 'string', default: '{}' },
             'compare-only': { type: 'boolean' },
+            // How long the page may run before it counts as failed (a long job, or a hung shader compile).
+            'timeout-minutes': { type: 'string', default: '40' },
             table: { type: 'boolean' },
             'cornell-suffix': { type: 'string', default: '' },
             'two-room-suffix': { type: 'string', default: '' },
@@ -302,28 +356,44 @@ async function main(): Promise<void> {
     if (values.gpu !== 'nvidia' && values.gpu !== 'intel') throw new Error('--gpu must be nvidia or intel');
     const gpu: GpuChoice = values.gpu;
 
+    // The untextured reference's own camera and size (T1.13), so the images line up pixel for pixel.
+    const referenceJson = `cycles-untextured${values['reference-suffix'] ?? ''}.json`;
+    const shot = await readReferenceShot(repoRoot, outDir, referenceJson);
+    // A reference from before T1.13 has no stored camera: the bookmark, at that reference's size.
+    const size = shot?.camera ?? (await referenceSize(outDir, referenceJson)) ?? DEFAULT_REFERENCE_SIZE;
+    if (!shot) console.warn(`no stored camera in ${referenceJson} (rendered before T1.13, or missing): using the bookmark at ${size.width} x ${size.height}`);
+    const width = Number(values.width ?? size.width);
+    const height = Number(values.height ?? size.height);
     const job: Partial<SponzaAccuracyJob> = {
         ...(JSON.parse(values.job ?? '{}') as Partial<SponzaAccuracyJob>),
         camera,
-        width: Number(values.width),
-        height: Number(values.height),
+        ...(shot ? { view: shotView(shot) } : {}),
+        width,
+        height,
         exportImages: true,
     };
     console.log(`sponza accuracy: camera ${camera}, ${job.width}x${job.height}, on ${gpu}`);
-    const { data, adapter } = await withBenchLock(() => runPage(job, gpu, join(outDir, 'logs')), { what: `ddgi-sponza-accuracy on ${gpu}` });
+    const { data, adapter } = await withBenchLock(() => runPage(job, gpu, join(outDir, 'logs'), Number(values['timeout-minutes']) * 60_000), { what: `ddgi-sponza-accuracy on ${gpu}` });
 
     await mkdir(outDir, { recursive: true });
-    const width = Number(values.width);
-    const height = Number(values.height);
     const image = (key: string) => ({ width, height, rgb: decodeFloats(String(data[key])) });
     const indirectFile = join(outDir, `ddgi-untextured-indirect${suffix}.exr`);
     const fullFile = join(outDir, `ddgi-untextured-full${suffix}.exr`);
     await writeFile(indirectFile, writeExr(image('indirectBase64')));
     await writeFile(fullFile, writeExr(image('fullBase64')));
     if (data.pathTracedBase64) await writeFile(join(outDir, `pt-untextured-indirect${suffix}.exr`), writeExr(image('pathTracedBase64')));
+    if (data.albedoBase64) await writeFile(join(outDir, `ddgi-untextured-albedo${suffix}.exr`), writeExr(image('albedoBase64')));
+    if (data.positionBase64) await writeFile(join(outDir, `ddgi-untextured-position${suffix}.exr`), writeExr(image('positionBase64')));
+    // Diagnostic lookups: one EXR per image (`-r<rays>` for each short-range ray count).
+    const diagnosticImages = (data.diagnosticImages ?? {}) as Record<string, string>;
+    const lookup = String((data.job as SponzaAccuracyJob).diagnosticLookup);
+    for (const [key, base64] of Object.entries(diagnosticImages)) {
+        const name = key === 'image' ? `ddgi-untextured-indirect-${lookup}${suffix}.exr` : `ddgi-untextured-indirect-${lookup}-${key}${suffix}.exr`;
+        await writeFile(join(outDir, name), writeExr({ width, height, rgb: decodeFloats(base64) }));
+    }
     const tableFile = join(outDir, `gi-materials${suffix}.json`);
     await writeFile(tableFile, `${JSON.stringify(data.giMaterials, null, 2)}\n`);
-    const summary = { ...data, indirectBase64: undefined, fullBase64: undefined, pathTracedBase64: undefined, giMaterials: undefined, adapter, finishedAt: new Date().toISOString() };
+    const summary = { ...data, indirectBase64: undefined, fullBase64: undefined, pathTracedBase64: undefined, albedoBase64: undefined, positionBase64: undefined, diagnosticImages: undefined, giMaterials: undefined, adapter, finishedAt: new Date().toISOString() };
     await writeFile(join(outDir, `ddgi-untextured${suffix}.json`), JSON.stringify(summary, null, 2));
     console.log(`wrote ${relative(repoRoot, indirectFile)}, ${relative(repoRoot, fullFile)} and ${relative(repoRoot, tableFile)}`);
     console.log(`${String(data.passes)} passes in ${String(data.convergeMs)} ms; block means ${JSON.stringify(data.blockMeans)}`);
