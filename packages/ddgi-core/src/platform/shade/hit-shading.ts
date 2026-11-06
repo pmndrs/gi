@@ -11,8 +11,9 @@
 
 import type { EnvironmentDescriptor } from '../contract/scene.ts';
 import type { HitShading, HitShadingSettings } from '../contract/shade.ts';
-import type { BindingSlot, WgslModule } from '../contract/wgsl.ts';
+import type { BindingSlot, KernelBuilder, WgslModule } from '../contract/wgsl.ts';
 import { PlatformSky, type PlatformSkyOptions } from '../sky/platform-sky.ts';
+import { PlatformDeferredDirect } from './direct.ts';
 import { LIGHT_FALLOFF_MODULE } from './light-falloff.ts';
 import { SHADE_MODULE_ENTRIES, SHADE_UNIFORM_LAYOUT, shadeModuleWgsl } from './wgsl.ts';
 
@@ -38,6 +39,8 @@ export class PlatformHitShading implements HitShading {
     /** Live: change the fields at any time; the next `encode` uploads them. */
     readonly settings: HitShadingSettings = { ...DEFAULT_HIT_SHADING_SETTINGS };
     readonly sky: PlatformSky;
+    /** Deferred direct light (`gi/direct`, direct.ts); its kernels compile on a technique's first `prepare`. */
+    readonly direct: PlatformDeferredDirect;
 
     private readonly device: GPUDevice;
     /** `GiShadeUniforms`: the sky's irradiance SH (written by the projection), then the settings. */
@@ -47,7 +50,7 @@ export class PlatformHitShading implements HitShading {
     private uploadedSettings = '';
     private disposed = false;
 
-    constructor(device: GPUDevice, sceneModule: WgslModule, raysModule: WgslModule, options: PlatformHitShadingOptions = {}) {
+    constructor(device: GPUDevice, kernels: KernelBuilder, sceneModule: WgslModule, raysModule: WgslModule, options: PlatformHitShadingOptions = {}) {
         const label = options.label ?? 'gi';
         this.device = device;
         this.sky = new PlatformSky(device, { label, warn: options.warn, reduction: options.skyReduction });
@@ -76,11 +79,12 @@ export class PlatformHitShading implements HitShading {
             version: 0,
             storageBufferCount: 0,
         };
+        this.direct = new PlatformDeferredDirect(device, kernels, this.module, label);
     }
 
-    /** GPU bytes held: the uniform buffer and the sky. */
+    /** GPU bytes held: the uniform buffer, the sky and gi/direct's dispatch arguments (techniques hold their ray scratch). */
     get memoryBytes(): number {
-        return SHADE_UNIFORM_LAYOUT.byteLength + this.sky.memoryBytes;
+        return SHADE_UNIFORM_LAYOUT.byteLength + this.sky.memoryBytes + this.direct.memoryBytes;
     }
 
     /** Compiles the sky projection. Called by the platform's `prepare`. */
@@ -104,6 +108,7 @@ export class PlatformHitShading implements HitShading {
         if (this.disposed) return;
         this.disposed = true;
         this.sky.dispose();
+        this.direct.dispose();
         this.uniforms.destroy();
     }
 

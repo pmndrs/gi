@@ -1,0 +1,4 @@
+{
+    "description": "T2.2 checks 1 and 2 on the field: after 300 frames of 4,096 probes (several deferred rounds a frame), DDGI with direct light deferred to gi/direct matches the inline path (atlas and test-view means within 0.5%, per-texel mean and p95), and the subgroup work list's field matches the fallback's within 0.1%. VITE_DDGI_SCENES=a,b picks scenes (default cornell-box-point,two-room; sponza needs the downloads). Correctness only, nothing timed.",
+    "timeoutMs": 1800000
+}

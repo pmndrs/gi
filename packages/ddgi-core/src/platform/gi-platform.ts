@@ -139,7 +139,7 @@ export class GIPlatformImpl implements GIPlatform {
             rays,
             has: (kind: QueryKind) => kind === 'rays',
         };
-        this.shade = new PlatformHitShading(device, this.sceneCopy.module, this.rays.module, {
+        this.shade = new PlatformHitShading(device, this.kernels, this.sceneCopy.module, this.rays.module, {
             label: this.label,
             warn: (message) => this.warnOnce(message),
         });

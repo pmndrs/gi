@@ -318,7 +318,14 @@ export const CENSUS_PROBES_BLENDED_TOTAL = 9;
  */
 export const CENSUS_SCHEDULE_STATE = 10;
 export const SCHEDULE_STATE_REPORTED_WORDS = 8;
-export const CENSUS_WORDS = CENSUS_SCHEDULE_STATE + SCHEDULE_STATE_REPORTED_WORDS;
+/**
+ * Then, with direct light deferred, a copy of the ray scratch's two counts
+ * for the frame (`RayScratch.countsOffset`): the hits `gi/direct` lit, and
+ * the hits dropped because its list was full.
+ */
+export const CENSUS_DIRECT_HITS = CENSUS_SCHEDULE_STATE + SCHEDULE_STATE_REPORTED_WORDS;
+export const CENSUS_DIRECT_DROPPED = CENSUS_DIRECT_HITS + 1;
+export const CENSUS_WORDS = CENSUS_DIRECT_DROPPED + 1;
 
 /**
  * The GPU scheduler's state buffer (wgsl/schedule.ts), one u32 per word:

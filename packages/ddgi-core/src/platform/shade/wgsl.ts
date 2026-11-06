@@ -5,6 +5,8 @@
  * ```wgsl
  * fn giSurfaceAt(ray: GiRay, hit: GiHit) -> GiSurface
  * fn giDirectIrradiance(surface: GiSurface, groupMask: u32, random: vec2f) -> vec3f
+ * fn giDirectReaches(surface: GiSurface, groupMask: u32) -> bool   // any light in the groups lights this side (no shadow rays)
+ * fn giDirectRandom(ray: u32, frame: u32) -> vec2f                  // gi/direct's random numbers for a ray
  * fn giSkyRadiance(direction: vec3f) -> vec3f
  * fn giSkyIrradiance(surface: GiSurface) -> vec3f
  * fn giSkyIrradianceAt(normal: vec3f) -> vec3f        // the same, for any unit normal
@@ -345,6 +347,37 @@ fn giDirectIrradiance(surface: GiSurface, groupMask: u32, random: vec2f) -> vec3
         total += lightSample.irradiance * (scale * giShadeVisibility(light, index, lightSample, origin, random));
     }
     return total;
+}
+
+// Can any light whose group bit is set in groupMask light this surface at
+// all? True when one of them reaches the side the ray arrived on with a
+// non-zero unshadowed contribution: exactly the lights giDirectIrradiance
+// would evaluate. No shadow rays. A tracing kernel asks this before putting
+// a hit on gi/direct's work list, so hits facing away from every light
+// (about half of Sponza's, which face away from the sun; T2.0) cost nothing
+// there.
+fn giDirectReaches(surface: GiSurface, groupMask: u32) -> bool {
+    let raySide = giShadeRaySide(surface);
+    let lightCount = giLightCount();
+    for (var index = 0u; index < lightCount; index++) {
+        let light = giLight(index);
+        if (giShadeInGroup(light, groupMask) && giShadeLuminance(giShadeLightSample(light, surface, raySide).irradiance) > 0.0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// The two numbers in [0, 1) gi/direct hands giDirectIrradiance for the hit of
+// ray 'ray' (an index into a ray scratch's results) in frame 'frame'. They
+// follow the ray, not the hit's place on the work list, so the subgroup and
+// the fallback work lists (which order hits differently) give the same light.
+// A kernel that calls giDirectIrradiance itself with these numbers gets
+// gi/direct's answer for the same surface.
+fn giDirectRandom(ray: u32, frame: u32) -> vec2f {
+    let first = giShadeHash(ray ^ giShadeHash(frame));
+    let second = giShadeHash(first ^ 0x9e3779b9u);
+    return vec2f(f32(first >> 8u), f32(second >> 8u)) * (1.0 / 16777216.0);
 }
 
 // ---- Sky ----------------------------------------------------------------------------------

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { WgslModule } from '../contract/wgsl.ts';
+import type { KernelBuilder, WgslModule } from '../contract/wgsl.ts';
 import { countGroupStorageBuffers, orderModules, placeModules } from '../kernel-builder.ts';
 import { SCENE_MODULE_ENTRIES, sceneModuleWgsl } from '../scene/wgsl.ts';
 import { liftSunAboveMinimum, unusableEnvironmentTexture } from '../sky/platform-sky.ts';
@@ -19,6 +19,11 @@ function fakeDevice(features: string[] = []): GPUDevice {
     } as unknown as GPUDevice;
 }
 
+/** A kernel builder these tests never call: hit shading only compiles gi/direct when a technique prepares it. */
+const NO_KERNELS: KernelBuilder = {
+    computeKernel: () => Promise.reject(new Error('no kernels in these tests')),
+};
+
 function stubModule(name: string, entries: WgslModule['entries'], storageBufferCount: number): WgslModule {
     return { name, dependencies: [], code: () => '', entries, resources: () => [], version: 0, storageBufferCount };
 }
@@ -33,7 +38,7 @@ describe('hit shading', () => {
     const rays = stubModule('gi-rays', [], 3);
 
     it('keeps the scene copy and hit shading at 2 storage buffers together (the binding budget)', () => {
-        const shade = new PlatformHitShading(fakeDevice(), scene, rays);
+        const shade = new PlatformHitShading(fakeDevice(), NO_KERNELS, scene, rays);
         expect(shade.module.storageBufferCount).toBe(0);
         expect(declaredStorageBuffers(shade.module)).toBe(0);
         expect(declaredStorageBuffers(scene)).toBe(2);
@@ -67,7 +72,7 @@ describe('hit shading', () => {
     });
 
     it('places its three entries after the modules it depends on', () => {
-        const shade = new PlatformHitShading(fakeDevice(), scene, rays);
+        const shade = new PlatformHitShading(fakeDevice(), NO_KERNELS, scene, rays);
         const placed = placeModules(orderModules([shade.module]));
         expect(placed[2].slot.firstBinding).toBe(SCENE_MODULE_ENTRIES.length);
         expect(shade.module.entries).toBe(SHADE_MODULE_ENTRIES);
@@ -75,16 +80,16 @@ describe('hit shading', () => {
     });
 
     it('starts from the contract defaults and lays its uniforms out after the 18 SH coefficients', () => {
-        const shade = new PlatformHitShading(fakeDevice(), scene, rays);
+        const shade = new PlatformHitShading(fakeDevice(), NO_KERNELS, scene, rays);
         expect(shade.settings).toEqual(DEFAULT_HIT_SHADING_SETTINGS);
         expect(SHADE_UNIFORM_LAYOUT.maxShadowedLightsPerHit).toBe(288);
         expect(SHADE_UNIFORM_LAYOUT.byteLength % 16).toBe(0);
     });
 
     it('builds the subgroup reduction only on devices that have subgroups', () => {
-        expect(new PlatformHitShading(fakeDevice(['subgroups']), scene, rays).sky.reduction).toBe('subgroups');
-        expect(new PlatformHitShading(fakeDevice(), scene, rays).sky.reduction).toBe('workgroup');
-        expect(() => new PlatformHitShading(fakeDevice(), scene, rays, { skyReduction: 'subgroups' })).toThrow(/subgroups/);
+        expect(new PlatformHitShading(fakeDevice(['subgroups']), NO_KERNELS, scene, rays).sky.reduction).toBe('subgroups');
+        expect(new PlatformHitShading(fakeDevice(), NO_KERNELS, scene, rays).sky.reduction).toBe('workgroup');
+        expect(() => new PlatformHitShading(fakeDevice(), NO_KERNELS, scene, rays, { skyReduction: 'subgroups' })).toThrow(/subgroups/);
         expect(projectionWgsl('subgroups')).toMatch(/^enable subgroups;/);
         expect(projectionWgsl('subgroups')).toContain('subgroupAdd(');
         expect(projectionWgsl('workgroup')).not.toContain('subgroup_invocation_id');
