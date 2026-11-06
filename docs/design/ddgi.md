@@ -196,7 +196,7 @@ The code is `packages/ddgi-core/src/platform/work-budget.ts`; every threshold be
 4. `n ← min(n + 1, nMax)`, `t ← T`, `k ← k + 1`.
 
 - **First update** (state 3: new, after `resetHistory()`, or back on after being off): `n = 0` and `k = 0`, so `h = 0`, as before.
-- **The warm-up** is the same rule with no time between updates: the viewer's warm-up (and ddgi-three's `volume.start`) run with `deltaTime` 0. The viewer's `settings.hysteresis` override during the warm-up is now unused (harmless; phase 2b can drop it).
+- **The warm-up** is the same rule with no time between updates: since T2.4b it is the technique's own ("The warm-up" below), whose clock doesn't advance while it runs; the viewer's `settings.hysteresis` override is gone with the viewer's copy of it.
 - **The ramp (a = 8 for a probe's first K = 16 updates; `hysteresisUpdatesPerSample`, `hysteresisRampUpdates`).** Without it, the warm-up was a plain running average, `h = k/(k+1)`. Its bounce light reads the field it is building, so the first estimates are too dark, and a plain mean keeps them at full weight: the error shrinks only like `k^−(1−ρ)` (ρ: the share of a probe's light that comes back through the field; Cornell fits ρ ≈ 0.65). Cornell came out of the 16-pass warm-up 25% low and took 19 s to get within 1%. Under the ramp, every-frame updates get `h = k/(k+a)`: a mean weighted towards later updates (weights grow like `k^(a−1)`), whose error shrinks like `k^−a(1−ρ)`, at `a/√(2a−1)` times the noise of a plain mean. It is limited to the first K updates because under the cap an every-frame probe reaches nMax only after `a · nMax` updates (1,600) and stays noisy until then; after the ramp it gets there about `K/a + nMax` updates in. 16 is the warm-up's own pass count. A fixed small cap on `n` instead (n ≤ 2 to 16 during the warm-up) does worse by the same model: a cap of 8 leaves Cornell about 23% low, a cap of 2 about 13%.
 - **Where it settles.** A probe updated every Δ seconds settles at `n = e/(1 − e)` with `e = exp(−Δ/τ)`, so `h = e`: an exponential average with a memory of τ seconds, whatever the frame rate. Cornell (Δ = 1/60 s) would reach `n = 60τ`, so it stops at `nMax`; Sponza at 60 Hz (Δ ≈ 1.2 s) settles at a few samples.
 - **nMax** sets the quietest a probe can get: `h ≤ nMax / (nMax + 1)`. 200 gives 0.995, the hold the flicker decision asked for (DECISIONS, Cornell's flicker).
@@ -256,14 +256,43 @@ Settled flicker with the ramp is unchanged (it no longer binds): Cornell 0.094% 
 
 **Not done, and measured not to help:** moving a cut probe back along the warm-up ramp too (so its count would grow back by 1/8 an update instead of 1). It made the transient overshoot larger (0.30 s instead of 0.03 s at scale 0.5; 1.5 s instead of 0.73 s at 0.25), so the count grows back by one an update, as the design has it.
 
-## Which probes update (the budget)
+### Revised in T2.4b: the cut holds, and counts the bounces
+
+T2.4b's larger steps (TASKS, M2 done-when changes) showed why the old lamp's bounce lingered. A cut probe's next estimates bounce off a field that still holds the old light, so each estimate's error is ρ times the field's (ρ: the share of a probe's light that comes back through the field). With the count growing back by one an update the probe becomes a plain average of those estimates, whose error shrinks only like k^−(1−ρ). On two-room at its calibrated 880 probes a frame, the lamp halved was still 45% of the step away after 30 frames.
+
+What changed (wgsl/blend.ts `ddgiChangeLimit`, `ddgiHysteresisStep`; wgsl/mark.ts):
+- **The cut holds for the updates the change promised.** While a probe is owed updates from a mark (the `takingChange` flag), its count doesn't grow back; every promised update replaces as much as the first. After the last one it grows by one an update again.
+- **The cut is solved with the bounce share.** Each held update shrinks the error by `c = h + (1 − h)ρ`. Within ε after K updates needs `c^K r ≤ ε`, so `h = (c − ρ)/(1 − ρ)` with `c = (ε/r)^(1/K)`, `n = h/(1 − h)`, and 0 when even h = 0 can't do it. ρ is `changeBounceShare`, 0.8 by default: two-room's, measured from that halving (the error shrank 0.84 a frame with 82% of the probes updated at h ≈ 0, so ρ ≈ 0.80). With ρ = 0 the rule is the unbiased case, `h = (ε/r)^(1/K)`.
+- **A change promises the updates its bounces need:** at best (h = 0) the error shrinks by ρ an update, so `ddgi/mark` promises `max(K, ⌈ln(ε/e) / ln ρ⌉)`, with e the error against the new light. A light halved on two-room needs 14, not 8. Far probes after a global change still owe `farProbeUpdates` (2), and are left noisier and later for it.
+- **A darkening is measured against the light that's left.** ε is a share of the settled (new) value, so halving a light leaves an error of 100% of it, not 50%: where the light at a probe got weaker, the mark's `r` is `r/(1 − r)` (for a directional light, `old/new − 1`). A brightening stays against the old light, so both directions are cut at least by the change's size; for the promised count a brightening's error against the new light is `r/(1 + r)`.
+- **No firefly clamp on a reported change.** The clamp lets a channel grow by at most 2× its old value an update. A probe that was dark when a lamp came on near it then needed about 8 updates just to climb; the change is known and real, so updates taking it in aren't clamped.
+- **A light with no range is marked at every probe** (mark-table.ts). Its influence radius is set against the sun, but a probe's change is measured against its own light, and inside sunlit Sponza a weak lamp's light reached far past that radius (recall 59% for a lamp of 0.3, a tenth of the sun's number). A light with a range keeps its range as the box. Cost: one mark thread per probe for each such light changing in a frame.
+
+Measured on the RTX 3060 (`ddgi-schedule-step`, `ddgi-change-step`, `ddgi-schedule-sponza`; PROGRESS 2026-11-06, T2.4b): two-room's lamp switched on is within 5% from frame 9 and halved from frame 17, Cornell's from frames 5 and 8, with no overshoot to speak of (0.2-0.3% of the step); T2.4a's 2 m move no longer overshoots (at most +0.8%, against +3.9% before).
+
+### The feedback rule (T2.4b, m2-lights.md §4.6, as built)
+
+`ddgi/blend` tests each quiet update (no change reported, none being taken in, past the probe's warm-up ramp): when the estimate lands more than 6 times the probe's noise from its stored value and more than 2% of it, the probe asks for one more update at the urgency `|estimate − stored| / stored`, and its active face neighbours at half that, through a buffer of its own (`atomicMax` on the urgency's bits); `ddgi/schedule-count` takes the requests into the records as one owed update. It never changes how an update blends.
+- **6σ, not the design's 4σ** (DECISIONS 2026-11-06): DDGI's ray noise has heavy tails. On still Cornell and two-room after the warm-up 4σ fired on about 0.1-0.2% of updates, 6σ on 0.07-0.09% in steady state (bar 0.1%).
+- **The noise word is relative** (its root-mean-square deviation over the stored mean, over 64 quiet updates, the updates that fire included). Ray noise grows with the light, so an absolute noise read too small for dozens of updates after a probe got brighter. Only the feedback rule reads it.
+- An unreported change (two-room's crate made to glow through `updateMaterial`, which DDGI's mark doesn't read) had every probe within a spacing of it revisited within 0.5 s at 64 probes a frame (median 6 frames, against 24 without feedback).
+
+## Which probes update (the budget, and the GPU scheduler since T2.4b)
 
 - **Unit = one probe update.** `TechniqueFrame.units` comes from the platform's budget v2 (above): the calibrated batch, at least the floor, stepped down only when frames are late. `FrameBudget.units` stays a hard cap. Without GPU timings, `FrameBudget.units`, default 512 on Tier A.
-- **Order:** a fixed scrambled order of all probes, `order[i] = (i × stride) mod N` with `stride` coprime with `N` and near `0.618 N`, so each frame's set is spread across the volume, not one slab. A CPU cursor walks it. Each frame's list is `units` consecutive entries, written into the update-list buffer with `queue.writeBuffer` inside `encode` (no readback; probe states stay on the GPU).
-- Off probes in the list still cost a workgroup, but only 32 rays and no blend, so they're cheap. The calibration measures the mix as it is.
-- **Probes near a change first** (SceneChanges) is M2. The design leaves room: a priority list in front of the cursor, in the same buffer.
+- **The round robin:** a fixed scrambled order of all probes, `order[i] = (i × stride) mod N` with `stride` coprime with `N` and near `0.618 N`, so each frame's set is spread across the volume, not one slab (schedule.ts).
+- **The GPU scheduler** (wgsl/schedule.ts, m2-lights.md §4.3; M1's CPU cursor is gone) fills the update list on the GPU, one pass `ddgi/schedule` of four dispatches: `count` (each probe owed updates gets the priority `urgency × camera weight`, in one of 32 buckets each twice the one below; the histogram subgroups first, one atomic per bucket present in a subgroup, or the declared fallback, one per thread), `select` (the bucket where `priorityShare` × units, 75%, fills up), `write` (those probes reserve list slots, subgroups first or per thread, and are stamped with the frame), `fill` (the rest from the round robin, from the cursor, skipping probes stamped this frame; a workgroup scan, subgroups first when the device lays subgroups out in order, checked in the kernel, else in workgroup memory). The cursor moves past the entries used, so the round robin still reaches every probe once a pass. With nothing owed the list is exactly M1's order. The list holds exactly `min(units, N)` entries, so the trace, blend and write dispatches keep sizes the CPU knows.
+- **Owed updates and urgency:** `ddgi/mark` promises updates (owed, 8 bits in history word 2; `takingChange` flag) once a probe's change passes ε, and its urgency is the change; each blend takes one off, and the urgency stays until the last. A feedback request is one owed update.
+- **The camera weight:** `1 / (1 + (d / (4 × spacing))²)`, times 0.25 outside the view (the frustum's planes from `projection × view`, a cell's diagonal of margin; camera.ts and `ddgiCameraWeight`).
+- **Far probes owe 2** (m2-lights.md §6.4): after a global change, on a volume where K updates for every probe wouldn't fit in 120 frames at this batch (Sponza: about 490), probes with a camera weight under 0.5 owe `farProbeUpdates` (2) instead of K.
+- Off probes in the list still cost a workgroup, but only 32 rays and no blend, so they're cheap; a listed probe that isn't blended forgets what it was owed. The calibration measures the mix as it is.
+- Cost: 0.020-0.027 ms at 20,000 probes on the RTX 3060 (`ddgi-schedule-reduction`, VALID), 0.025 ms in Sponza's frames.
 - `maxProbesPerFrame` (default 4,096) sizes the update list and the scratch buffer. Dispatches over 65,535 workgroups use two dimensions.
 - `FrameBudget.paused` skips every DDGI kernel.
+
+## The warm-up (in the technique since T2.4b)
+
+After `prepare` and after `resetHistory`, the technique does no probe work while the ray-tracing trees are still being built (`queries.rays.building`), then makes `warmUpPasses` (16) full passes over every probe, `maxProbesPerFrame` a frame whatever the frame's units, with no time between them for the history (the clock doesn't advance), stopping after `warmUpMaxSeconds` (8) once `warmUpMinPasses` (2) are made. `warmingUp` is true meanwhile (`GITechnique.warmingUp`), and the platform hands it no budget and leaves those frames out of the calibration, which starts at the next frame. It is what the viewer did itself before (now through `volume.start`): a host that only runs frames gets the same field after the same frames, value for value (`ddgi-warmup`). `warmUpPasses: 0` switches it off; GI then fills in at the budget. `volume.start` runs the frames back to back behind the host's loading screen, and `GIVolume.restart` runs them again.
 
 ## Sampling the field (`ddgiSampleIrradiance`): one function, two users
 
@@ -302,8 +331,15 @@ interface DDGISettings {
     irradianceChangeThreshold: number; // Infinity (off; DECISIONS 2026-11-05). A value turns on the lagged probe-mean rule
     changeDrivenHistory: boolean;    // true (T2.4a): reported light and sky changes cut the history ("Change-driven history")
     changeTolerance: number;         // 0.05 (epsilon)
-    changeUpdates: number;           // 8 (K)
+    changeUpdates: number;           // 8 (K), or more when the bounces need more (T2.4b)
+    changeBounceShare: number;       // 0.8 (rho, T2.4b): the share of a probe's light taken to come back through the field, for the cut
     lightChangeScale: number;        // 0.5 (T2.4a; the design's first guess was 0.25)
+    priorityShare: number;           // 0.75 (T2.4b): the share of each frame's probes for probes owed updates
+    farProbeUpdates: number;         // 2 (T2.4b): what far probes owe after a global change on a big volume
+    feedback: boolean;               // true (T2.4b): the feedback rule
+    warmUpPasses: number;            // 16 (T2.4b): the warm-up's passes; 0 switches it off
+    warmUpMaxSeconds: number;        // 8
+    warmUpMinPasses: number;         // 2
     maxBrightnessChange: number;     // 2.0
     distanceSharpness: number;       // 50
     normalBias: number | 'auto';     // auto = 0.1 × min spacing
@@ -322,7 +358,7 @@ interface DDGISettings {
 ## Debug data and counters
 
 - **Points:** the probe-data texture already holds offset and state; a `points` debug view publishes world position and state in an `rgba32float` texture (written by the write kernel for updated probes). Legend: the state table above.
-- **Counters:** probes updated, rays traced, probes active, probes off (each reason), probes not yet updated. Since T2.4a also: frames with changes marked, changes marked this frame, probes marked (this frame) and probes marked (total since `prepare`; the census keeps it and never clears it).
+- **Counters:** probes updated, rays traced, probes active, probes off (each reason), probes not yet updated. Since T2.4a also: frames with changes marked, changes marked this frame, probes marked (this frame) and probes marked (total since `prepare`; the census keeps it and never clears it). Since T2.4b: warming up, warm-up passes, probes owed updates, probes updated at priority, feedback requests (this frame and total), probes blended (total).
 - **Timings:** `ddgi/update` and `ddgi/write` through the timer scope.
 
 ## Done when (T1.5, from the board), and how each is measured
