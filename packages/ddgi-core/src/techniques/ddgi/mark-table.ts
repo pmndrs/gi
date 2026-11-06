@@ -38,6 +38,17 @@ export const FAR_SET_SPACINGS = 8;
  */
 export const FAR_SET_REFERENCE_SOLID_ANGLE = 0.5;
 
+/**
+ * How much more urgent an off probe in a geometry change's near set is than
+ * an active one with the same change (m3-moving.md §5.2: off probes "are
+ * scheduled at once"). An off probe shows nothing until it is back on and
+ * has had its 2 warming updates, which is worse than a stale value, and
+ * until then it is cheap (32 fixed rays, no blend). 16 puts it ahead of keys
+ * (`keyProbeBoost` 4) and near probes at the same camera weight. It keeps
+ * the urgency through its warming updates (they are owed with it).
+ */
+export const FREED_PROBE_URGENCY_SHARE = 16;
+
 /** What `buildMarkTable` needs to know about the hot movers: an instance's mask bit, 0 when it isn't one. */
 export interface MoverBits {
     bitFor(slot: number): number;

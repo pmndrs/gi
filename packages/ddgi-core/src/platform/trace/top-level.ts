@@ -62,7 +62,7 @@ export interface TopLevelBvh {
  * into object space cannot make a ray miss the box of an instance it touches.
  * About four f32 steps.
  */
-const WORLD_BOX_PADDING = 2 ** -21;
+export const WORLD_BOX_PADDING = 2 ** -21;
 
 /** Smallest determinant magnitude we still treat as an invertible transform. */
 const MIN_DETERMINANT = 1e-30;
@@ -129,29 +129,36 @@ export function invertAffineInto(objectToWorld: Mat4, out: Float64Array): number
     return determinant;
 }
 
-/** transformBounds' running box: one scratch, so a call allocates nothing (JS is single-threaded, nothing re-enters it). */
-const boundsLow = new Float64Array(3);
-const boundsHigh = new Float64Array(3);
-
-/** Axis-aligned box around an object-space box after `objectToWorld`, grown by {@link WORLD_BOX_PADDING}. */
+/**
+ * Axis-aligned box around an object-space box after `objectToWorld`, grown by {@link WORLD_BOX_PADDING}.
+ * Each axis takes the smallest and largest of the eight corners' coordinates, each worked out as
+ * `e[axis] x + e[4 + axis] y + e[8 + axis] z + e[12 + axis]` in that order, so the result is the same
+ * to the bit however the loop is written. Written with plain numbers and no arrays: `setTransforms`
+ * calls it for every moved instance, 10,000 a frame (T2.M1).
+ */
 export function transformBounds(meshBounds: ArrayLike<number>, objectToWorld: Mat4, out: Float32Array, offset: number): void {
     const e = objectToWorld;
-    const low = boundsLow.fill(Infinity);
-    const high = boundsHigh.fill(-Infinity);
-    for (let corner = 0; corner < 8; corner++) {
-        const x = corner & 1 ? meshBounds[3] : meshBounds[0];
-        const y = corner & 2 ? meshBounds[4] : meshBounds[1];
-        const z = corner & 4 ? meshBounds[5] : meshBounds[2];
-        for (let axis = 0; axis < 3; axis++) {
-            const value = e[axis] * x + e[4 + axis] * y + e[8 + axis] * z + e[12 + axis];
-            if (value < low[axis]) low[axis] = value;
-            if (value > high[axis]) high[axis] = value;
-        }
-    }
+    const x0 = meshBounds[0];
+    const y0 = meshBounds[1];
+    const z0 = meshBounds[2];
+    const x1 = meshBounds[3];
+    const y1 = meshBounds[4];
+    const z1 = meshBounds[5];
     for (let axis = 0; axis < 3; axis++) {
-        const pad = (Math.max(Math.abs(low[axis]), Math.abs(high[axis])) + (high[axis] - low[axis])) * WORLD_BOX_PADDING;
-        out[offset + axis] = low[axis] - pad;
-        out[offset + 3 + axis] = high[axis] + pad;
+        const mx = e[axis];
+        const my = e[4 + axis];
+        const mz = e[8 + axis];
+        const t = e[12 + axis];
+        let low = Infinity;
+        let high = -Infinity;
+        for (let corner = 0; corner < 8; corner++) {
+            const value = mx * (corner & 1 ? x1 : x0) + my * (corner & 2 ? y1 : y0) + mz * (corner & 4 ? z1 : z0) + t;
+            if (value < low) low = value;
+            if (value > high) high = value;
+        }
+        const pad = (Math.max(Math.abs(low), Math.abs(high)) + (high - low)) * WORLD_BOX_PADDING;
+        out[offset + axis] = low - pad;
+        out[offset + 3 + axis] = high + pad;
     }
 }
 

@@ -34,9 +34,9 @@
  *   hidden): with `s = min(1, moved / spacing)` for a move and 1 for a whole
  *   change,
  *   - the **near set**, probes within NEAR_SET_SPACINGS of the box, off
- *     probes included (the change may free them): `r = s`. They are traced
- *     themselves, with the full count of updates, since their distances
- *     change too;
+ *     probes included (the change may free them, and they go first,
+ *     FREED_PROBE_URGENCY_SHARE): `r = s`. They are traced themselves, with
+ *     the full count of updates, since their distances change too;
  *   - the **far set**, active probes within FAR_SET_SPACINGS that can see the
  *     box: their stored mean distance toward its centre reaches where that
  *     direction enters the box, less half a spacing (a test against the
@@ -99,7 +99,7 @@ import {
     PROBE_HISTORY_WORD,
     PROBE_HISTORY_WORDS,
 } from '../layout.ts';
-import { FAR_SET_REFERENCE_SOLID_ANGLE, FAR_SET_SPACINGS, MAX_GLOBAL_CHANGE, NEAR_SET_SPACINGS } from '../mark-table.ts';
+import { FAR_SET_REFERENCE_SOLID_ANGLE, FAR_SET_SPACINGS, FREED_PROBE_URGENCY_SHARE, MAX_GLOBAL_CHANGE, NEAR_SET_SPACINGS } from '../mark-table.ts';
 import { NEAR_CAMERA_WEIGHT } from '../settings.ts';
 import { DDGI_COMMON_WGSL } from './common.ts';
 import type { PhaseBReduction } from './blend.ts';
@@ -183,6 +183,8 @@ const DDGI_FAR_SET_SPACINGS: f32 = ${FAR_SET_SPACINGS};
 const DDGI_FAR_SET_REFERENCE_SOLID_ANGLE: f32 = ${FAR_SET_REFERENCE_SOLID_ANGLE};
 // A far probe sees the box when its mean distance toward it reaches the box's near face, less this share of a spacing.
 const DDGI_FAR_SET_DISTANCE_SLACK_SPACINGS: f32 = 0.5;
+// An off probe the change may free goes first (FREED_PROBE_URGENCY_SHARE in mark-table.ts).
+const DDGI_FREED_PROBE_URGENCY_SHARE: f32 = ${FREED_PROBE_URGENCY_SHARE};
 const DDGI_HISTORY_MOVER_MASK: u32 = ${PROBE_HISTORY_WORD.moverMask}u;
 const DDGI_MARK_VISIBILITY_FLOOR: f32 = ${MARK_VISIBILITY_FLOOR};
 const DDGI_MARK_DARK_IRRADIANCE: f32 = ${MARK_DARK_IRRADIANCE};
@@ -544,7 +546,8 @@ fn ddgiMarkGeometry(entry: DdgiMarkEntry, probe: vec3i, probeIndex: u32, data: D
     let position = ddgiProbePosition(probe, data.offset);
     let nearMargin = DDGI_NEAR_SET_SPACINGS * spacing;
     if (all(position >= geometry.regionMin - nearMargin) && all(position <= geometry.regionMax + nearMargin)) {
-        ddgiMarkProbe(probeIndex, moveShare, DdgiServing(ddgiFullUpdates(moveShare), 1.0, false));
+        let urgencyShare = select(1.0, DDGI_FREED_PROBE_URGENCY_SHARE, ddgiIsOff(data.state));
+        ddgiMarkProbe(probeIndex, moveShare, DdgiServing(ddgiFullUpdates(moveShare), urgencyShare, false));
         return moveShare;
     }
     if (data.state != DDGI_STATE_ACTIVE) {

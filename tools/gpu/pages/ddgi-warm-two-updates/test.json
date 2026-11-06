@@ -1,0 +1,4 @@
+{
+    "description": "T2.M1 item 5: no probe is used in shading before 2 blended updates. Two-room: after one update no probe is active and the view's GI is 0; a crate moved off the probes it switched off frees them, each warming for exactly 2 blended updates, all active again within 6 frames at 128 probes a frame (off probes near a move go first). Every frame: every active probe has k >= 2. Subgroups and the fallback.",
+    "timeoutMs": 120000
+}

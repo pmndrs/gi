@@ -8,7 +8,8 @@
 import { describe, expect, it } from 'vitest';
 import type { InstanceHandle, MaterialHandle } from '../contract/handles.ts';
 import { MAX_LISTED_LIGHT_CHANGES } from './change-log.ts';
-import { PlatformScene, type SceneUpload } from './platform-scene.ts';
+import { PlatformScene, transformFrame, type SceneUpload } from './platform-scene.ts';
+import { transformBounds } from '../trace/top-level.ts';
 import { createFakeGpu, type FakeBuffer, type FakeGpu } from './testing/fake-gpu.ts';
 import { buildBasicScene, checkReadback, churnScene, composeTransform, cubeMesh, editBasicScene, makeQueries, materialIndices, SceneModel } from './testing/fixture.ts';
 import { SceneReader } from './testing/scene-reader.ts';
@@ -248,6 +249,33 @@ describe('changes and bounds', () => {
 });
 
 describe('moves (T2.M1)', () => {
+    it('works out the world box and the move distance from the frame as the eight corners would', () => {
+        const random = createRandom(21);
+        const meshBounds = new Float32Array([-0.3, 0.1, -2, 1.7, 0.4, 0.5]);
+        const frame = new Float64Array(12);
+        const bounds = new Float32Array(6);
+        const reference = new Float32Array(6);
+        const corners = (matrix: number[]) =>
+            Array.from({ length: 8 }, (_, corner) => {
+                const point = [corner & 1 ? meshBounds[3] : meshBounds[0], corner & 2 ? meshBounds[4] : meshBounds[1], corner & 4 ? meshBounds[5] : meshBounds[2]];
+                return [0, 1, 2].map((axis) => matrix[axis] * point[0] + matrix[4 + axis] * point[1] + matrix[8 + axis] * point[2] + matrix[12 + axis]);
+            });
+        let previous: number[] | null = null;
+        for (let trial = 0; trial < 50; trial++) {
+            const matrix = composeTransform([random() * 20 - 10, random() * 5, random() * 20 - 10], [random() - 0.5, random() - 0.5, random() - 0.5], random() * 6, [0.2 + random() * 2, -1 + random() * 2.5, 0.5 + random()]);
+            const moved = transformFrame(meshBounds, matrix, frame, bounds);
+            transformBounds(meshBounds, matrix, reference, 0);
+            for (let index = 0; index < 6; index++) expect(bounds[index]).toBeCloseTo(reference[index], 4);
+            if (previous) {
+                const before = corners(previous);
+                const after = corners(matrix);
+                const expected = Math.max(...after.map((corner, index) => Math.hypot(corner[0] - before[index][0], corner[1] - before[index][1], corner[2] - before[index][2])));
+                expect(moved).toBeCloseTo(expected, 6);
+            }
+            previous = matrix;
+        }
+    });
+
     /** A cube mesh of known bounds (-0.5 to 0.5) and one material, and a placement of it. */
     function unitCube(model: SceneModel) {
         const half = 0.5;
