@@ -102,20 +102,8 @@ function shadowFar(position: Vector3Tuple, range: number, fitting: LightFitting)
  * Creates a three.js light. Directional lights get a shadow camera that fits
  * `fitting`; the others reach to their range. A range of 0 maps to three's
  * `distance = 0`: no range window, plain inverse-square falloff.
- *
- * A light at intensity 0 (Sponza's arcade lamp, off until one of its
- * motions plays) starts hidden: three r187 still renders a shadowed light's
- * shadow map every frame at intensity 0 (six passes for a point light), and
- * the GI adapter sends a hidden light as intensity 0 anyway. Whatever lights
- * it shows it too.
  */
 export function lightToThree(light: SceneLightData, fitting: LightFitting): Light {
-    const threeLight = makeThreeLight(light, fitting);
-    threeLight.visible = light.intensity > 0;
-    return threeLight;
-}
-
-function makeThreeLight(light: SceneLightData, fitting: LightFitting): Light {
     const color = linearColor(light.color);
     const castShadow = light.castsShadows ?? true;
 

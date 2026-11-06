@@ -55,14 +55,14 @@ async function start(device: GPUDevice, label: string, seconds: number): Promise
     const manifest = base.scene.manifest;
     const motion = manifest.motions?.find((candidate) => candidate.id === BUILT_IN_MOTIONS.step);
     assert(motion, 'Sponza has no light-step motion');
-    const lamp = base.scene.loaded.directLights.find((light) => light.name === motion.target.slice('light:'.length)) as PointLight | undefined;
-    assert(lamp && lamp.isPointLight, `no ${motion.target} in the loaded scene`);
+    // Off in the manifest, so loaded aside (`offLights`); the motion lights it, as a player would.
+    const lamp = base.scene.loaded.offLights.find((light) => light.name === motion.target.slice('light:'.length)) as PointLight | undefined;
+    assert(lamp && lamp.isPointLight, `no ${motion.target} among the loaded scene's off lights`);
+    base.scene.loaded.scene.add(lamp);
     const place = (time: number) => {
         const state = motionState(motion, time);
         if (state.position) lamp.position.set(...(state.position as Vec3));
         if (state.intensity !== undefined) lamp.intensity = state.intensity;
-        // Off in the manifest, so loaded hidden (lightToThree); the motion lights it.
-        lamp.visible = true;
         lamp.updateMatrixWorld();
         base.scene.threeGI.markChanged(lamp);
     };

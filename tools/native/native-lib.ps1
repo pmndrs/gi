@@ -364,7 +364,9 @@ function New-HarnessIni {
     $ini.Add('')
     $ini.Add('# scene lights (directional: lux as power; point and spot: candela as power, range as radius)')
 
-    $lights = @($Manifest.lights)
+    # A light at intensity 0 is off until a manifest motion plays it (Sponza's arcade lamp, T2.1):
+    # left out, as the viewer leaves it out, so an off lamp costs the harness's shading nothing.
+    $lights = @($Manifest.lights | Where-Object { $_.intensity -gt 0 })
     for ($i = 0; $i -lt $lights.Count; $i++) {
         $light = $lights[$i]
         $label = if ($light.PSObject.Properties['label']) { $light.label } else { "$($light.type)-$i" }

@@ -167,7 +167,7 @@ async function loadParts(manifest: SceneManifest, loader: GLTFLoader): Promise<{
 function describeLighting(manifest: SceneManifest, emissiveQuadCount: number): string {
     const parts: string[] = [];
     const countByType = new Map<string, number>();
-    for (const light of manifest.lights) countByType.set(light.type, (countByType.get(light.type) ?? 0) + 1);
+    for (const light of manifest.lights) if (light.intensity > 0) countByType.set(light.type, (countByType.get(light.type) ?? 0) + 1);
     for (const [type, count] of countByType) parts.push(`${count} ${type} light${count > 1 ? 's' : ''} (direct, with shadows)`);
     if (emissiveQuadCount > 0) parts.push(`${emissiveQuadCount} emissive quad${emissiveQuadCount > 1 ? 's' : ''} as area light${emissiveQuadCount > 1 ? 's' : ''} (direct, no shadows)`);
     if (parts.length === 0) return 'none: only surface emission shows (nothing is lit by anything)';
@@ -260,7 +260,8 @@ export async function runCheckPage(canvas: HTMLCanvasElement, status: HTMLElemen
         scene.add(content);
         state.stats = computeSceneStats(content);
 
-        const manifestLights = manifest.lights.map(manifestLightToSceneLight);
+        // A light at intensity 0 is off until a motion plays it (Sponza's arcade lamp): left out, as the viewer leaves it out.
+        const manifestLights = manifest.lights.filter((light) => light.intensity > 0).map(manifestLightToSceneLight);
         const fitting = boundingSphere(content);
         for (const light of manifestLights) {
             const threeLight = lightToThree(light, fitting);

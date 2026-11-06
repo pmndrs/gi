@@ -54,6 +54,15 @@ export interface LoadedScene {
     content: Group;
     /** The manifest's lights, the emissive-quad area lights and a light set's lights. */
     directLights: Light[];
+    /**
+     * Manifest lights at intensity 0, made but not added to the scene: off
+     * until a motion plays them (Sponza's arcade lamp). Left out because an
+     * off light still costs: three renders a shadowed light's shadow map at
+     * intensity 0, and in GI one local light makes hit shading loop over
+     * local lights on every hit (Sponza's calibrated batch fell from 642
+     * probes to 593 with its lamp off, T2.1). Add one to `scene` to light it.
+     */
+    offLights: Light[];
     /** The scene's settings as loaded (`sceneSettingValues`): `sponza-candles`' candle count, say. */
     settings: Record<string, number>;
     /** Each `light-set` part as loaded: its copies and lights. */
@@ -222,9 +231,14 @@ export async function loadScene(manifest: SceneManifest, report: (progress: Load
     // Directional lights get a shadow camera that fits a sphere around the model.
     const fitting = { center: [center.x, center.y, center.z] as [number, number, number], radius: diagonal / 2 };
     const directLights: Light[] = [];
+    const offLights: Light[] = [];
     for (const manifestLight of manifest.lights) {
         const light = lightToThree(manifestLightToSceneLight(manifestLight), fitting);
         light.layers.enable(LAYER_DIRECT_LIGHTS);
+        if (manifestLight.intensity === 0) {
+            offLights.push(light);
+            continue;
+        }
         directLights.push(light);
         scene.add(light);
         const target = (light as unknown as { target?: Object3D }).target;
@@ -246,5 +260,5 @@ export async function loadScene(manifest: SceneManifest, report: (progress: Load
         }
     }
 
-    return { manifest, scene, content, directLights, settings, lightSets, bounds, sky, diagonal, stats: computeSceneStats(content) };
+    return { manifest, scene, content, directLights, offLights, settings, lightSets, bounds, sky, diagonal, stats: computeSceneStats(content) };
 }

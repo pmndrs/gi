@@ -20,7 +20,12 @@
  *   with 1,024 lights, against the same on `sponza` lit by its sun (run the
  *   page with VITE_DDGI_SCENES=sponza for that; the candle sections skip).
  *
- *   VITE_DDGI_SECTIONS=counts,mark   (default both)
+ * - **cost** (information, T2.3's starting point): the calibration's own
+ *   samples, and `ddgi/trace`, `ddgi/gi-direct` and `ddgi/blend` at fixed
+ *   batches of COST_BATCHES probes (the same on `sponza` with
+ *   VITE_DDGI_SCENES=sponza).
+ *
+ *   VITE_DDGI_SECTIONS=counts,mark,cost   (default counts and mark)
  *
  * Manual (needs the Sponza and candle downloads):
  *   node tools/reference/bench-lock.ts run --what "T2.1 sponza-candles" -- pnpm test:gpu --gpu nvidia --filter ddgi-sponza-candles
@@ -49,6 +54,9 @@ const TOGGLES = 8;
 const TOGGLE_GAP_FRAMES = 12;
 const FRAMES_IN_FLIGHT = 2;
 const MARK_PASS = 'ddgi/mark';
+const BLEND_PASS = 'ddgi/blend';
+const COST_BATCHES = [16, 64, 256];
+const COST_FRAMES = 40;
 const DIRECT_PASS = 'ddgi/gi-direct';
 const TRACE_PASS = 'ddgi/trace';
 /** A candle's flicker: its intensity a few percent either way, frame by frame. */
@@ -189,6 +197,25 @@ await runThreePage(async ({ device, data, log: logLine }) => {
         const calibration = scene.platform.budgetReport(scene.ddgi)?.calibration;
         assert(calibration?.measured, `the platform did not calibrate within ${calibrationFrames} frames`);
         const units = calibration.units;
+        results.calibration = { units, frames: calibrationFrames, samples: calibration.samples.map((sample) => ({ units: sample.units, ms: round(sample.ms) })) };
+
+        if (SECTIONS.has('cost')) {
+            const batches: Record<string, unknown>[] = [];
+            for (const batch of COST_BATCHES) {
+                const range = await run(COST_FRAMES, { units: batch });
+                const entry = {
+                    probes: batch,
+                    trace: round(quantile(timings.pass(TRACE_PASS, range.first, range.last), 0.5)),
+                    direct: round(quantile(timings.pass(DIRECT_PASS, range.first, range.last), 0.5)),
+                    blend: round(quantile(timings.pass(BLEND_PASS, range.first, range.last), 0.5)),
+                    hitsLit: scene.ddgi.counters['hits lit by gi/direct'],
+                };
+                batches.push(entry);
+                log(`${SCENE_ID} at ${batch} probes a frame: ddgi/trace ${entry.trace} ms, ddgi/gi-direct ${entry.direct} ms, ddgi/blend ${entry.blend} ms (medians; hits lit ${entry.hitsLit})`);
+            }
+            results.cost = batches;
+            log(`calibration at ${BUDGET_MS} ms: ${units} probes; its samples: ${calibration.samples.map((sample) => `${sample.units}: ${sample.ms.toFixed(3)} ms`).join(', ')}`);
+        }
 
         // Still: nothing marked; gi/direct's cost at the calibrated batch.
         const markedBefore = scene.ddgi.counters['frames with changes marked'];
