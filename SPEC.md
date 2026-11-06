@@ -359,9 +359,9 @@ The viewer measures every number itself, with GPU timestamp queries, on named sc
 | Whole frame | p50 / p95 frame time, GI on vs off | reported; the bar is the sum of the two rows above (≤ 3 ms p50 at the default budget), and no p95 spikes (revised 2026-11-05, DECISIONS) |
 | Light change response | frames until visible; time until within 5% of settled | next frame; ≤ 0.5 s |
 | Object move response | same, for a cabinet move and a door closing | ≤ 1 s, no leak through the closed door |
-| Stability | frame-to-frame flicker on a still scene | threshold set by eye in M1, then locked |
+| Stability | frame-to-frame flicker on a still scene | mean ≤ 0.1%, p95 ≤ 0.5% per-pixel change per frame (set by eye in M1 and locked, DECISIONS 2026-11-06) |
 | Leaks | dark-room light as a share of lit-room light, thin-wall fixtures and furnished rooms | ≤ 1%, and none visible in review |
-| Accuracy | indirect light vs a converged path-traced reference (mean error, FLIP) | mean within ±10%; FLIP threshold set in M1 |
+| Accuracy | indirect light vs a converged path-traced reference (mean error, FLIP) | mean within ±10%; FLIP ≤ 0.15 (8×8 blocks, against the 1920×1080 references; DECISIONS 2026-11-06) |
 | Memory | measured GPU bytes owned by the core | reported for every scene; defaults sized for mid- to high-end GPUs (a 6 GB RTX 3060 must hold Sponza with room for the host). The furnished room's 64 MB stays as a guide, not a gate (measured 40.7 MB) |
 | Startup | from the host handing the scene to GI, to the first frame drawn with GI, with a cold shader compile; time from file request reported too | ≤ 2 s on the target hardware (Dennis: "2s cold is fine", from "Handoff") |
 | Engine neutrality | same scene through the plain-WebGPU example and the three adapter | GI images match within a small tolerance |

@@ -361,14 +361,14 @@ Done-whens for the B stages are in `docs/design/bvh-framework.md`. B1a's: a 10k-
 
 ## M2: dynamic updates (draft breakdown, T1.11)
 
-Draft from the M2/M3 design docs on branch `claude/m2-m3-design-on-m1` (73590ab; `docs/design/m2-lights.md`, `docs/design/m3-moving.md`, `research/ddgi-dynamic-updates.md`), not merged yet. Order follows Dennis (DECISIONS 2026-11-06): dynamic updates first, moving objects and time of day; startup ("fast first GI") lower. Rows marked *pending Dennis* depend on his answers to `dyn-key-probes`, `dyn-movers-early` and `dyn-blas-rebuild`; this draft assumes yes to all three (the parent session's recommendation). Done-whens are in the design docs' "Draft done-whens"; they move here when the docs are merged.
+Draft from the M2/M3 design docs on branch `claude/m2-m3-design-on-m1` (73590ab; `docs/design/m2-lights.md`, `docs/design/m3-moving.md`, `research/ddgi-dynamic-updates.md`), not merged yet. Order follows Dennis (DECISIONS 2026-11-06): dynamic updates first, moving objects and time of day; startup ("fast first GI") lower. Dennis accepted key probes as the main path, rigid moving objects early and the H-PLOC rebuild on drift (DECISIONS 2026-11-06). Done-whens are in the design docs' "Draft done-whens"; they move here when the docs are merged.
 
 | ID | Task | Agent | Size | Depends on | Status |
 | --- | --- | --- | --- | --- | --- |
 | T2.4a | Change-driven history on T1.12's per-probe record, and `ddgi/mark` (the change estimate) | implementer | M | T1.12 | todo |
 | T2.4b | GPU scheduler with camera priority over Budget v2, the feedback rule; far probes owe 2 as the fallback; the warm-up moves into the technique | implementer | M | T2.4a | todo |
-| T2.4c | Key probes (1 in 8) with change propagation, the main path for global changes; first checked on Sponza's sun step and two-room's lamp | implementer | M | T2.4b | todo (*pending Dennis: `dyn-key-probes`*) |
-| T2.M1 | Rigid moving objects, pulled forward from M3: the change feed for transforms (M3's T3.1, rigid part), geometry marks and the mover mask (T3.4, rigid part), three adapter change tracking for transforms | implementer | M | T2.4b (T2.4c for far sets) | todo (*pending Dennis: `dyn-movers-early`*) |
+| T2.4c | Key probes (1 in 8) with change propagation, the main path for global changes; first checked on Sponza's sun step and two-room's lamp | implementer | M | T2.4b | todo |
+| T2.M1 | Rigid moving objects, pulled forward from M3: the change feed for transforms (M3's T3.1, rigid part), geometry marks and the mover mask (T3.4, rigid part), three adapter change tracking for transforms | implementer | M | T2.4b (T2.4c for far sets) | todo |
 | T2.0 | Spike: deferred shadow-ray pass on Sponza (decision rule: go ahead if Sponza fits ≥ 1.25× the probes at 2 ms) | implementer | S | M1 done | todo (runs beside T2.4) |
 | T2.1 | Light buffer v2, manifest `motions`, `sponza-candles` (1,024 lights) | implementer + wrangler | M | none | todo |
 | T2.2 | Deferred direct light (`gi/direct`) in platform hit shading | implementer | M | T2.0 | todo |
@@ -384,7 +384,7 @@ Draft from the M2/M3 design docs on branch `claude/m2-m3-design-on-m1` (73590ab;
 | T2.10 | M2 measurements against targets (one VALID run per gate, DECISIONS 2026-11-06) | gpu-tester, native-runner | M | all above | todo |
 | T2.11 | M2 note and M3 breakdown | main session | S | T2.10 | todo |
 
-M3 keeps deforming meshes and the BVH work: runtime mesh trees, `GpuMeshRefit` wired, and the H-PLOC rebuild when a refit drifts (*pending Dennis: `dyn-blas-rebuild`*, which also needs a DECISIONS entry), several volumes, the camera-following volume, nested finer volumes around thin cloth (carried from M1), and the scenarios (`docs/design/m3-moving.md`, T3.0–T3.11).
+M3 keeps deforming meshes and the BVH work: runtime mesh trees, `GpuMeshRefit` wired, and the H-PLOC rebuild when a refit drifts, several volumes, the camera-following volume, nested finer volumes around thin cloth (carried from M1), and the scenarios (`docs/design/m3-moving.md`, T3.0–T3.11).
 
 ## Carried to M2 (collected during M1)
 
