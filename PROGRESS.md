@@ -21,6 +21,18 @@ Rules:
 
 ---
 
+## 2026-11-06 · T2.4c review and merge; T2.2 started · M2 lead (opus)
+Did: Opus review of T2.4c against its done-when (m2-lights.md checks 1–5, "Show", and the TASKS additions): pass with notes, no must-fix. Lead fixes on the branch (31d5582): a stale "indirect dispatch" comment (`ddgi-technique.ts:250`), find's storage-buffer count in ddgi.md (4, not 3), and the DECISIONS entry marked accepted. Merged `m2-t2.4c` into `m2` (385d85e; DECISIONS conflict resolved, keeping Dennis's confirmations of T2.4b's rulings). Dennis said go for T2.2 beside the spine and confirmed T2.4b's check 2 and check 5 rulings (57c0af8). T2.2 started (worktree `webgpu-ddgi-m2-t22`), and T2.M1 is next. TASKS: T2.4c done; new lines for T2.1 and T2.10.
+Verified (reviewer, RTX 3060 nvidia/ampere, Chrome 156 headless, bench lock, not timed): lint, typecheck, 982 unit tests; the full suite 46/46 (furnace −0.15%, leak 0.83%, subgroups and fallback match bit for bit); two-room 9/17 and Cornell 5/8 frames; sweep per pixel 3.9/4.4/4.1%. Check 1: view from frame 4, field from frame 24 (fallback 54), p95 65.0%. Sun halved: frame 6. Check 2: 62.1% for the sun turn (implementer 63.1%), 92.0% for a sky dimming; the 8,211 held probes stay held, and the value is flat from frame 60. Check 3: 0.13%. Check 4: 0.148% against the fallback's 0.193%. Lead, on the merged tree: lint, typecheck, 982 unit tests.
+Not verified: check 5's timing was not re-run (its one VALID run on c234c10 stands: 0.046 ms, day 2.17 ms against 2.2). The Intel UHD was not re-run by the reviewer.
+Next:
+- Check 2's margin is thin: about 1 point of run-to-run spread on 2 points above the rule.
+- About 45 frames at 2.82 ms after Sponza's sun turn, from trace and blend; no check covers them. Handed to T2.10 (TASKS).
+- A Sponza lamp on the key path: response not measured, only recall. Handed to T2.1 (TASKS).
+- Thin walls and Sponza's floors are untested with propagation.
+- `holdFineProbes` is a uniform-gated test mode in the production blend shader (`blend.ts:561`); build it only into a test variant when blend is next touched.
+- With `keyProbes` on, small volumes still write key deltas and run find, about 0.01 ms.
+
 ## 2026-11-06 · T2.4c key probes and propagation · implementer (opus)
 Did (branch `m2-t2.4c`, 8620c25..HEAD): key probes (every even or last grid index; Sponza 2,717), the change clock (census word, u32 fixed point, advanced by a one-thread dispatch after `ddgi/mark`), keys' deltas written by `ddgi/blend` (7 storage buffers), `ddgi/propagate` (find, args, propagate, and write.ts's new irradiance-tile entry point; subgroups first with a declared fallback; no indirect dispatch), the residual cut, `keyProbes` (on; false = far probes owe 2), `keyProbeBoost` 4, `keyResidualShare` 0.3, `keyProbeUpdates` 4, the test mode `holdFineProbes`. The key path runs where far probes owe 2 did (N×K/U > 120 frames), local changes too. Pages: `ddgi-key-probes-sponza`, `-cost` (manual), `-leak`, `ddgi-propagate-reduction` (suite). The sweep now asserts per pixel; the still page asserts no propagation. Shared helpers in `ddgi-shared/sponza-response.ts`.
 Verified, RTX 3060 (nvidia/ampere), Chrome 156 headless, Sponza at 316, GI only. **Decision checks first:** checks 1 and 2 ran before the rest was built, and passed.
