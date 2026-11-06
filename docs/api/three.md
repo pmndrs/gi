@@ -191,7 +191,7 @@ The extra submit is needed because three r187 records into its own command encod
 | `light` | Settings for the GI light: `intensity`, `priority`, `replaceEnvironmentDiffuse`. |
 | `environment` | A platform environment to use instead of the scene's (the viewer's sky files, say). |
 | `sky` | A pmndrs/sky `Sky`, used as GI's sky. Its `exposure` becomes `sunIlluminance`. |
-| `objectsPerFrame`, `editChecksPerFrame` | How much of the scene is checked each frame (see "How changes are found"). |
+| `objectsPerFrame`, `editChecksPerFrame`, `lightsPerFrame` | How much of the scene is checked each frame (see "How changes are found"). |
 | `updateMatrixWorld` | Update world matrices in every `update` (see below). Default: no. |
 | `updateOnRender` | Run `update` from the GI light's render-time update (see above). Default: no. Can be switched later. |
 | `warn` | Where warnings go. Each message is shown once. |
@@ -258,6 +258,7 @@ This is the mirroring on its own, for hosts that call `gi.encode` themselves.
 - `distance = 0` means no range limit.
 - A spot light's `angle` and `penumbra` become the outer and inner cones.
 - `userData.giLightGroup` (0 to 3) sets the light group.
+- GI traces shadows for a light when three's `castShadow` is on, or when `userData.giCastsShadows` is `true`. Use the second for lights three draws without shadows only because there are too many for shadow maps (hundreds of candles under three's `ClusteredLighting`, which skips shadowed lights). Without GI shadows their light leaks through walls into GI. `false` turns GI's shadows off for a light three shadows.
 
 **The sky**, the first of these that applies:
 1. your `environment` option;
@@ -299,7 +300,7 @@ The adapter does a fixed amount of work per frame instead:
 - **`markChanged(object)`.** Tells the adapter something changed (added, moved, edited or removed). The object and everything under it are picked up in the next `update`. Use it when you move things and want no delay.
 - **Moves go out in one batch.** Every transform an `update` finds changed is sent with one `setTransforms` call at its end. For an `InstancedMesh` whose instance matrices changed, the instances named by `instanceMatrix.addUpdateRange(...)` are the only ones looked at, when the mesh was also checked in the previous update (three clears the ranges at `render`, after `ThreeGI.update` in the documented order); otherwise every instance is compared and only changed ones are sent.
 - **Edits.** Each frame, `editChecksPerFrame` geometries, materials and objects are checked for edits: geometry, material values, the `giContributes` flag, and whether a mesh's materials still all let light through.
-- **Lights** are checked every frame.
+- **Lights** (T2.1). The first 64 lights and every directional light are checked every frame, so a scene with a few lamps sees each light change in the frame it happens. Past 64, lights follow the objects' rules: `lightsPerFrame` (default 64) of them a frame, round robin, and a light found changed stays checked every frame until it has been still for 60 frames. So 1,024 candles cost 128 light checks on a still frame, not 1,024; an unmarked candle change, hide or removal reaches GI within `ceil((lights − 64) / 64)` frames (15 for 1,024 candles), and a flickering candle every frame once seen. `markChanged(light)` sends it the next update.
 
 The first pass over a new scene is done in full, so GI has the whole scene from the first frame.
 

@@ -17,12 +17,13 @@ import {
     type ToneMapping,
 } from 'three';
 import { float, renderOutput, screenUV, select, uniform, vec4 } from 'three/tsl';
-import { RenderPipeline, type Node } from 'three/webgpu';
+import { RenderPipeline, type Lighting, type Node } from 'three/webgpu';
 import type { SceneManifest } from '../../../../scenes/src/manifest';
 import { createRenderer, type RendererBundle } from '../render/create-renderer';
 import { setTimestampTracking } from '../render/gpu-time';
+import { sceneLighting } from '../render/scene-lighting';
 import type { GiMode } from '../scene/layers';
-import { disposeScene, loadScene, type LoadedScene, type LoadProgress } from '../scene/load-scene';
+import { disposeScene, loadScene, type LoadedScene, type LoadProgress, type LoadSceneOptions } from '../scene/load-scene';
 import { DdgiTechnique, DEFAULT_DDGI_VIEWER_SETTINGS, type DdgiViewerSettings } from '../techniques/ddgi-technique';
 import { DEFAULT_LPG_SETTINGS, LightProbeGridTechnique, type LightProbeGridSettings } from '../techniques/light-probe-grid-technique';
 import { NoGiTechnique } from '../techniques/no-gi-technique';
@@ -91,9 +92,12 @@ export class ViewerCore {
     private readonly lineWidthUniform = uniform(0.002);
     private width = 1;
     private height = 1;
+    /** three's own lighting, for scenes that don't need clustered lighting (render/scene-lighting.ts). */
+    private readonly defaultLighting: Lighting;
 
     private constructor(bundle: RendererBundle) {
         this.renderer = bundle.renderer;
+        this.defaultLighting = this.renderer.lighting;
         this.device = bundle.device;
         this.adapterInfo = bundle.adapterInfo;
         this.hasTimestamps = bundle.hasTimestamps;
@@ -134,10 +138,14 @@ export class ViewerCore {
     // -- scene -------------------------------------------------------------
 
     /** Throws away the old scene and its techniques, loads `manifest`, and shows its first technique. */
-    async loadScene(manifest: SceneManifest, report: (progress: LoadProgress) => void): Promise<LoadedScene> {
+    async loadScene(manifest: SceneManifest, report: (progress: LoadProgress) => void, options: LoadSceneOptions = {}): Promise<LoadedScene> {
         this.unloadScene();
-        const loaded = await loadScene(manifest, report);
+        const loaded = await loadScene(manifest, report, options);
         this.loaded = loaded;
+        // Many shadowless lights (sponza-candles) are drawn clustered; everything else as before.
+        const lighting = sceneLighting(loaded.directLights, this.defaultLighting);
+        if (this.renderer.lighting !== this.defaultLighting && this.renderer.lighting !== lighting) this.renderer.lighting.dispose();
+        this.renderer.lighting = lighting;
         const first = manifest.cameras[0];
         this.camera.fov = first.fovYDeg;
         this.camera.near = Math.max(0.02, loaded.diagonal / 20000);

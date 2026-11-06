@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { LightHandle } from '../../platform/contract/handles.ts';
-import type { LightDescriptor } from '../../platform/contract/scene.ts';
+import type { LightDescriptor, PointLightDescriptor } from '../../platform/contract/scene.ts';
 import type { LightChange, SceneChanges } from '../../platform/contract/scene-copy.ts';
 import { MARK_ENTRY_WORD, MARK_ENTRY_WORDS, MARK_GEOMETRY_WORD, MARK_GEOMETRY_WORDS, MARK_HEADER_WORDS, MARK_KIND, MARK_LIGHT_KIND, MARK_LIGHT_WORD, MARK_LIGHT_WORDS } from './layout.ts';
-import { buildMarkTable, ENVIRONMENT_CHANGE, FAR_SET_SPACINGS, MAX_GLOBAL_CHANGE } from './mark-table.ts';
+import { buildMarkTable, ENVIRONMENT_CHANGE, FAR_SET_SPACINGS, FOLDED_NEAR_SPACINGS, foldedFarChange, lightRecord, MAX_GLOBAL_CHANGE, MAX_UNRANGED_LIGHT_ENTRIES } from './mark-table.ts';
 import { probeGrid } from './settings.ts';
 import { markKernelWgsl } from './wgsl/mark.ts';
 
@@ -97,6 +97,104 @@ describe("ddgi/mark's table", () => {
         expect(entry(table, 0).boxMin).toEqual([0, 0, 0]);
         expect(entry(table, 0).boxSize).toEqual([...grid.counts]);
         expect(table.threadCount).toBe(grid.probeCount);
+    });
+
+    describe('many lights with no range changing at once (T2.1)', () => {
+        const candle = (position: [number, number, number], intensity = 1, color: [number, number, number] = [1, 0.234, 0]): PointLightDescriptor => ({ type: 'point', color, intensity, position, range: 0 });
+        // Candles spread through the volume, as in sponza-candles.
+        const positions = Array.from({ length: 1024 }, (_, index): [number, number, number] => [0.3 + ((index * 0.618) % 1) * 7.8, 0.2 + ((index * 0.382) % 1) * 2.6, 0.2 + ((index * 0.137) % 1) * 3.8]);
+        const radius = FOLDED_NEAR_SPACINGS * 0.5;
+
+        it(`marks up to ${MAX_UNRANGED_LIGHT_ENTRIES} of them over every probe, as T2.4b does`, () => {
+            const few = positions.slice(0, MAX_UNRANGED_LIGHT_ENTRIES).map((position) => change(candle(position), candle(position, 0.5), 30));
+            const table = buildMarkTable({ ...NONE, lights: few }, grid)!;
+            expect(table.entryCount).toBe(MAX_UNRANGED_LIGHT_ENTRIES);
+            expect(table.threadCount).toBe(MAX_UNRANGED_LIGHT_ENTRIES * grid.probeCount);
+        });
+
+        it('folds more of them into a small box each and one entry over every probe with their bound', () => {
+            const flicker = positions.map((position, index) => change(candle(position), candle(position, index % 2 === 0 ? 1.1 : 0.95), 30));
+            const table = buildMarkTable({ ...NONE, lights: flicker }, grid)!;
+            expect(table.entryCount).toBe(positions.length + 1);
+            const last = entry(table, positions.length);
+            expect(last.kind).toBe(MARK_KIND.everywhere);
+            expect(last.boxSize).toEqual([...grid.counts]);
+            // Brighter by 10%: 0.1; dimmer by 5%, against what is left: 0.05 / 0.95.
+            expect(last.globalChange).toBeCloseTo(0.1, 5);
+            // Each candle's box: 1 m (2 spacings) around it, half a spacing more for relocation, so at most 6 probes a side.
+            for (let index = 0; index < positions.length; index++) {
+                const near = entry(table, index);
+                expect(near.kind).toBe(MARK_KIND.localLight);
+                for (const size of near.boxSize) expect(size).toBeLessThanOrEqual(6);
+            }
+            // About a global change plus 1,024 small boxes, against 1,024 times every probe.
+            expect(table.threadCount).toBeLessThan(positions.length * 6 ** 3 + grid.probeCount);
+            expect(table.threadCount).toBeLessThan((positions.length * grid.probeCount) / 4);
+        });
+
+        it('bounds a switch or a reshape as a whole change, and still lists ranged lights one by one', () => {
+            const switchedOn = positions.map((position) => change(null, candle(position), 30));
+            const on = buildMarkTable({ ...NONE, lights: switchedOn }, grid)!;
+            expect(entry(on, on.entryCount - 1).globalChange).toBe(MAX_GLOBAL_CHANGE);
+            const ranged = positions.map((position) => change(lamp(position), lamp(position, 6), 1));
+            const listed = buildMarkTable({ ...NONE, lights: ranged }, grid)!;
+            expect(listed.entryCount).toBe(positions.length);
+            expect([...Array(listed.entryCount).keys()].every((index) => entry(listed, index).kind === MARK_KIND.localLight)).toBe(true);
+            // A range window set on a lamp that had none changes the far light from all to nothing.
+            const windowed = foldedFarChange(lightRecord(candle([1, 1, 1])), lightRecord({ ...candle([1, 1, 1]), range: 3 }), radius);
+            expect(windowed).toBe(MAX_GLOBAL_CHANGE);
+            // A spot turned, or moved.
+            const spot: LightDescriptor = { type: 'spot', color: [1, 1, 1], intensity: 1, position: [1, 1, 1], direction: [0, -1, 0], range: 0, innerConeAngle: 0.2, outerConeAngle: 0.4 };
+            expect(foldedFarChange(lightRecord(spot), lightRecord({ ...spot, direction: [0, -0.9, Math.sqrt(0.19)] }), radius)).toBe(MAX_GLOBAL_CHANGE);
+            expect(foldedFarChange(lightRecord(spot), lightRecord({ ...spot, position: [1, 1, 1.01] }), radius)).toBe(MAX_GLOBAL_CHANGE);
+            // A spot dimmed alone is bounded like a point light: 0.2 / 0.8.
+            expect(foldedFarChange(lightRecord(spot), lightRecord({ ...spot, intensity: 0.8 }), radius)).toBeCloseTo(0.25, 6);
+        });
+
+        it("bounds a moved candle's change at every point beyond the radius (checked at random points)", () => {
+            let seed = 7;
+            const random = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+            for (const [moved, scale] of [
+                [0.01, 1],
+                [0.1, 1.2],
+                [0.3, 0.7],
+                [0.9, 1],
+            ] as const) {
+                const from: [number, number, number] = [2, 1.5, 2];
+                const direction = [random() - 0.5, random() - 0.5, random() - 0.5];
+                const length = Math.hypot(...direction);
+                const to: [number, number, number] = [from[0] + (moved * direction[0]) / length, from[1] + (moved * direction[1]) / length, from[2] + (moved * direction[2]) / length];
+                const before = candle(from, 1, [1, 0.5, 0.25]);
+                const after = candle(to, scale, [1, 0.5, 0.25]);
+                const bound = foldedFarChange(lightRecord(before), lightRecord(after), radius);
+                expect(bound).toBeLessThan(MAX_GLOBAL_CHANGE);
+                // The relative change of the unshadowed irradiance vector at a point, largest channel, a dimming against what is left.
+                const vectors = (position: readonly number[], intensity: number, point: number[]) => {
+                    const offset = position.map((value, axis) => value - point[axis]);
+                    const d = Math.hypot(...offset);
+                    return [1, 0.5, 0.25].map((channel) => offset.map((value) => (channel * intensity * value) / (d * d * d)));
+                };
+                let largest = 0;
+                for (let sample = 0; sample < 4000; sample++) {
+                    // A point at least `radius` from both positions, out to 10 m.
+                    const angle = [random() - 0.5, random() - 0.5, random() - 0.5];
+                    const norm = Math.hypot(...angle);
+                    const distance = radius + moved + random() * 10;
+                    const point = angle.map((value, axis) => from[axis] + (distance * value) / norm);
+                    if (Math.hypot(point[0] - to[0], point[1] - to[1], point[2] - to[2]) < radius) continue;
+                    const old = vectors(from, 1, point);
+                    const next = vectors(to, scale, point);
+                    for (let channel = 0; channel < 3; channel++) {
+                        const difference = Math.hypot(...next[channel].map((value, axis) => value - old[channel][axis]));
+                        const against = Math.min(Math.hypot(...old[channel]), Math.hypot(...next[channel]));
+                        largest = Math.max(largest, difference / against);
+                    }
+                }
+                expect(largest).toBeLessThanOrEqual(bound);
+                // And not wildly above it: the bound is the worst case, met near the radius.
+                expect(bound).toBeLessThan(largest * 2.5 + 1e-6);
+            }
+        });
     });
 
     it('marks every probe for a sun change, by the change of its irradiance vector', () => {

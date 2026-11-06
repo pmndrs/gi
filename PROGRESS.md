@@ -21,6 +21,31 @@ Rules:
 
 ---
 
+## 2026-11-06 · T2.1 light buffer v2, motions, sponza-candles · implementer (opus)
+Did (branch `m2-t2.1`, 3f5b9fc..HEAD, `m2` merged in at f388d75):
+- Platform: the light table starts at 64 (doubles; no shader changes). `ddgi/mark`'s table (mark-table.ts only, no WGSL): more than 8 unranged light changes a frame are folded (each exact within 2 spacings, one `everywhere` entry with a bound for the rest; DECISIONS).
+- three adapter: the light walk (first 64 and directional lights every frame, 64 more round robin, hot list, `markChanged`), `lightsPerFrame`, `userData.giCastsShadows`.
+- Scenes: manifest `motions` (format, validator, `motionState`; `light-sweep` and `light-step` in the 8 scenes with a lamp, a geometric clearance test; Sponza's off `arcade-lamp`); `light-set` parts and `settings`; `sponza-candles` (night, 1,024 candles of a stratified order, DECISIONS). Fetch tool: `node` convert steps, `tools/assets/convert/sponza-candles.ts`. Viewer: `?candles=N`, clustered lighting for many shadowless lights, off lights kept out (`offLights`; also the check page and native harness).
+- Pages: `platform-recompiles` (+4,096 lights), `ddgi-sponza-candles`, `ddgi-sponza-lamp-step` (manual), `three-adapter-timing` still-only mode. Docs: three.md, platform.md, m2-lights.md as built; DECISIONS (4), NOTES.
+Verified (RTX 3060 nvidia/ampere, Chrome 156 headless; correctness with `--no-cool-wait`):
+1. 4,096 lights (64 directional, 2,688 point, 1,344 spot) made and destroyed in random order with DDGI running: recompiles 0, control 1. Intel UHD too.
+2. Unit test: every `LightChanges` field of each type, one at a time and all together, through `SceneChanges.lights`.
+3. Adapter still frame on sponza-candles: median of 300 frames **0.10 ms** (the timer's step; mean 0.09-0.115, batched 0.014-0.021 ms) in 3 runs, but **no VALID run**: the clock rule read INVALID each time (thermal throttling 91%, 45%, 62% of loaded samples, the last with DDGI paused). See Next.
+4. `pnpm assets:fetch --only sponza-intel-candles`: licence approval, zip size and sha256, the convert step (10,000 lights, every copy within 2 µm), 4 outputs verified. Scene: 1,024 candles and lights in three and GI; three 7,745,280 triangles (2,000,896 candles); GI 5,746,338 mesh triangles (one candle mesh), 444 of 3,520 instances in GI's rays (the 3,072 candle instances left out).
+5. `ddgi/mark` with every candle changing at once, one VALID run (48 °C, 0% throttled): median **0.074 ms** (flicker 0.074, drift 0.074, off and on 0.073); per-light rule 0.0113 ms for 1, 0.0512 for 8, so about 5.8 ms for 1,024. Still frames: 0 marked.
+6. Sponza lamp step on the key path (two correctness runs; calibrated 500 and 512 probes, key path on: 304-311 frames for every probe's K updates; keys passed the change on 6,639 times): the step moves the view 52%. Lamp in: within 5% for good from frame 8 / 6, overshoot 1.1% / 4.3% of the step. Lamp out: frame 39 / 41 (enters at 2-3, dips to −10%, wanders to +7-9%), overshoot 7.2% / 9.2%.
+- Show: `bench/screenshots/t2.1-sponza-candles/sponza-candles.png` (viewer, 0 errors).
+- Regressions (pre-merge tree d0e13c8): full RTX suite 49 pages + 2 self-tests pass (furnace E/π 0.4992, leak 0.84%, still Cornell 0 marks); `ddgi-key-probes-sponza` view frame 4, field 24, halved 6 (as T2.4c); door 0.17% from 1 s, recall 91%; cabinet frame 15, recall 98% (as T2.M1). Intel: recompiles, change-still, furnace (0.4986), mark-reduction pass. lint, typecheck, 1,052 unit tests (merged tree).
+After merging `m2` (T2.6a, f388d75; one DECISIONS conflict, both sides kept): full RTX suite 49 pages + self-tests pass; `ddgi-sponza-candles` counts and mark (0.074 ms all-candle median, still frames 0 marked, correctness only); lamp step at 521 probes, frames 9 / 37, overshoot 0 / 10.2% of the step; Intel recompiles, mark-reduction, change-still pass.
+Not verified: the Intel on the candles or lamp pages; the viewer by hand; the motions in a player (T2.7, T2.8 read them); Cycles with Sponza's off lamp (zero energy, no effect expected).
+Numbers: here. `gi/direct` on sponza-candles (information): 16 probes trace 3.46 + direct 3.82 ms, 256 probes 6.7 + 7.1 ms (Sponza: 0.36 + 0.16, 0.71 + 0.26); Budget v2 calibrates to 1 probe a frame; the viewer runs at 3 fps (376 ms a frame) and its set-up took 399 s.
+Next:
+- Lead: item 3 has no VALID run. Recommend taking it as met: it's CPU time, 0.10 ms against 0.2 in all three runs, and T2.M1's ruling says the clock rule gives CPU-only pages no verdict. The scene heats the RTX by itself until T2.3.
+- Lead: the commit message of 597f9ac says the off lamp cost 642 → 593 probes; the later run (583 with it out) showed that was run-to-run spread (DECISIONS corrected).
+- T2.3: the light grid (7 ms at 16 probes now); `ddgi/trace`'s reach test loops every light too. T2.8: play motions (`motionState`), add an off light to the scene to light it; a slider for `candles`; sponza-candles' exposure (0 looks over-bright).
+- Shared files touched: `mark-table.ts` (light entries only), `layout.ts` (a comment), `platform-scene.ts` (capacity), `scene-sync.ts`, `convert.ts`, `user-data.ts`, `three-gi.ts`, `fetch.ts`, `sources.json`, `manifest.ts`, `three-scene.ts`, `load-scene.ts`, `viewer-core.ts`, `url-state.ts`, `native-lib.ps1`, 9 manifests, `three-adapter-timing`, `platform-recompiles`.
+- `tools/reference/cycles/render.py` doesn't know `light-set` parts (sponza-candles has no reference; it would fail if asked).
+
 ## 2026-11-06 · T2.6a review and merge; new task T2.4d · M2 lead (opus)
 Did:
 - Opus review of T2.6a against its done-when: pass with notes; check 4 fails.

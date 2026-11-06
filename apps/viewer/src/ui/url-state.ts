@@ -21,6 +21,8 @@
  * - `atlasfill`  `1`: the atlas fills the view instead of the bottom-right corner
  * - `atlasev`    extra exposure for the irradiance atlas, in stops
  * - `change`     DDGI's change-per-frame view, full colour at this many percent (`0.25`, `1` or `4`)
+ * - anything else is kept as a scene setting by name, like `candles=4096` for `sponza-candles`
+ *                (the manifest's `settings`; read when the scene loads, ignored by scenes without it)
  *
  * No engine imports, so it is unit-tested.
  */
@@ -81,6 +83,8 @@ export interface ViewerUrlState {
     atlasEv: number;
     /** The change-per-frame view's full-colour change, in percent; null is off. */
     change: ChangeFullScalePercent | null;
+    /** Scene settings by name (`candles=4096`), as written; the scene's manifest says which it reads. */
+    sceneSettings: Record<string, string>;
 }
 
 export const DEFAULT_URL_STATE: ViewerUrlState = {
@@ -103,7 +107,11 @@ export const DEFAULT_URL_STATE: ViewerUrlState = {
     atlasFill: false,
     atlasEv: 0,
     change: null,
+    sceneSettings: {},
 };
+
+/** The link's own names; any other name is a scene setting. */
+const URL_KEYS = new Set(['scene', 'camera', 'cam', 'technique', 'gi', 'wipe', 'split', 'ev', 'tone', 'nav', 'upscale', 'budget', 'probes', 'debug', 'probecolor', 'atlas', 'atlasfill', 'atlasev', 'change']);
 
 const TECHNIQUES: readonly TechniqueId[] = ['none', 'ddgi', 'lpg', 'vxgi', 'cycles'];
 const GI_TECHNIQUES: readonly GiTechniqueId[] = ['ddgi', 'lpg', 'vxgi'];
@@ -122,7 +130,8 @@ function finiteNumber(text: string | null): number | null {
 /** Reads a query string. Unknown or malformed values fall back to the defaults. */
 export function parseUrlState(search: string): ViewerUrlState {
     const params = new URLSearchParams(search);
-    const state: ViewerUrlState = { ...DEFAULT_URL_STATE };
+    const state: ViewerUrlState = { ...DEFAULT_URL_STATE, sceneSettings: {} };
+    for (const [name, value] of params) if (!URL_KEYS.has(name)) state.sceneSettings[name] = value;
 
     state.scene = params.get('scene');
     state.camera = params.get('camera');
@@ -192,5 +201,6 @@ export function serializeUrlState(state: ViewerUrlState): string {
     if (state.atlasFill) params.set('atlasfill', '1');
     if (state.atlasEv !== DEFAULT_URL_STATE.atlasEv) params.set('atlasev', String(state.atlasEv));
     if (state.change !== null) params.set('change', String(state.change));
+    for (const [name, value] of Object.entries(state.sceneSettings)) if (!URL_KEYS.has(name)) params.set(name, value);
     return params.toString();
 }

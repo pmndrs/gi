@@ -35,7 +35,7 @@ import type {
     TextureDescriptor,
     TextureHandle,
 } from '@pmndrs/ddgi-core';
-import { SceneSync } from './scene-sync.ts';
+import { ALWAYS_CHECKED_LIGHTS, DEFAULT_LIGHTS_PER_FRAME, HOT_FRAMES, SceneSync } from './scene-sync.ts';
 
 /** A SceneApi that records every call and keeps the live objects, for checking what the sync sent. */
 class RecordingSceneApi implements SceneApi {
@@ -740,5 +740,101 @@ describe('lights', () => {
         frame(scene);
         light.removeFromParent();
         expect(frame(scene)).toEqual(['destroyLight']);
+    });
+});
+
+describe('the light walk (T2.1)', () => {
+    const CANDLES = 1024;
+    let scene: Scene;
+    let candles: PointLight[];
+    let sun: DirectionalLight;
+    const roundRobinFrames = Math.ceil((CANDLES + 1 - ALWAYS_CHECKED_LIGHTS) / DEFAULT_LIGHTS_PER_FRAME);
+
+    beforeEach(() => {
+        scene = new Scene();
+        candles = [];
+        for (let index = 0; index < CANDLES; index++) {
+            const candle = new PointLight(0xff3c00, 1, 0, 2);
+            candle.position.set(index % 32, 1, Math.floor(index / 32));
+            candles.push(candle);
+            scene.add(candle);
+        }
+        // Found after the candles: past the first 64 in the light list.
+        sun = new DirectionalLight(0xffffff, 3);
+        scene.add(sun);
+        frame(scene);
+    });
+
+    /** Frames until the next call shows up, up to `limit`. */
+    function framesUntilSent(limit: number): { frames: number; calls: string[] } {
+        for (let count = 1; count <= limit; count++) {
+            const calls = frame(scene);
+            if (calls.length > 0) return { frames: count, calls };
+        }
+        return { frames: Infinity, calls: [] };
+    }
+
+    it('checks a bounded number of lights in a still frame, however many there are', () => {
+        expect(api.lights.size).toBe(CANDLES + 1);
+        expect(frame(scene)).toEqual([]);
+        // The first 64, the sun (directional lights are always checked) and this frame's share of the rest.
+        expect(sync.report.lightsChecked).toBe(ALWAYS_CHECKED_LIGHTS + 1 + DEFAULT_LIGHTS_PER_FRAME);
+    });
+
+    it('sends a change to one of the first 64 lights, or to a directional light, the next frame', () => {
+        candles[10].intensity = 2;
+        expect(frame(scene)).toEqual(['updateLight intensity']);
+        sun.intensity = 4;
+        expect(frame(scene)).toEqual(['updateLight intensity']);
+    });
+
+    it('sees an unmarked change past the first 64 within one round of the round robin, then every frame while it is hot', () => {
+        const candle = candles[700];
+        candle.intensity = 0.5;
+        const seen = framesUntilSent(roundRobinFrames + 1);
+        expect(seen.calls).toEqual(['updateLight intensity']);
+        expect(seen.frames).toBeLessThanOrEqual(roundRobinFrames);
+        // Hot now: a flicker reaches GI every frame.
+        for (let step = 0; step < 5; step++) {
+            candle.intensity = 0.6 + step * 0.1;
+            expect(frame(scene)).toEqual(['updateLight intensity']);
+        }
+        // Still for HOT_FRAMES, it goes back to the round robin.
+        for (let step = 0; step <= HOT_FRAMES; step++) frame(scene);
+        expect(sync.report.lightsChecked).toBe(ALWAYS_CHECKED_LIGHTS + 1 + DEFAULT_LIGHTS_PER_FRAME);
+    });
+
+    it('sends a marked light the next update, wherever it is in the list', () => {
+        const candle = candles[900];
+        candle.position.y = 2;
+        candle.updateMatrixWorld();
+        sync.markChanged(candle);
+        expect(frame(scene)).toEqual(['updateLight position']);
+        candle.position.y = 2.5;
+        expect(frame(scene)).toEqual(['updateLight position']);
+    });
+
+    it('sees lights past the first 64 hidden or removed within one round', () => {
+        candles[600].visible = false;
+        const hidden = framesUntilSent(roundRobinFrames);
+        expect(hidden.calls).toEqual(['updateLight intensity']);
+        expect([...api.lights.values()].filter((light) => light.intensity === 0)).toHaveLength(1);
+        candles[800].removeFromParent();
+        const removed = framesUntilSent(roundRobinFrames);
+        expect(removed.calls).toEqual(['destroyLight']);
+        expect(api.lights.size).toBe(CANDLES);
+    });
+
+    it('takes the sun from the directional lights even when they are far down the list', () => {
+        const sky = new Group() as Group & Record<string, unknown>;
+        Object.assign(sky, { isSkyMesh: true, turbidity: { value: 2 }, sunPosition: { value: { x: 0, y: 1, z: 0 } } });
+        scene.add(sky);
+        sync.markChanged(sky);
+        frame(scene);
+        expect(api.environment?.type === 'procedural' && api.environment.sunIlluminance).toBeCloseTo(3);
+        sun.visible = false;
+        frame(scene);
+        // No visible sun left: the sky takes none.
+        expect(api.environment?.type === 'procedural' && api.environment.sunIlluminance).not.toBeCloseTo(3);
     });
 });

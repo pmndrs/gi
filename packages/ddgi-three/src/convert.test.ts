@@ -24,7 +24,7 @@ import {
 import { describe, expect, it } from 'vitest';
 import type { TextureHandle } from '@pmndrs/ddgi-core';
 import { diffuseAverage, textureAverage } from './texture-average.ts';
-import { sameUvMapping, giAlbedo, lightDescriptor, materialDescriptor, MaterialSnapshot, meshDescriptor, readFloatAttribute, uvMapping } from './convert.ts';
+import { sameUvMapping, giAlbedo, LIGHT_NUMBER_COUNT, lightDescriptor, materialDescriptor, MaterialSnapshot, meshDescriptor, readFloatAttribute, readLightNumbers, uvMapping } from './convert.ts';
 
 const HANDLE = 7 as TextureHandle;
 const noTextures = () => undefined;
@@ -429,6 +429,26 @@ describe('lights', () => {
         expect(lightDescriptor(light, 0)!.intensity).toBe(0);
         light.userData.giLightGroup = 9;
         expect(lightDescriptor(light)!.group).toBe(0);
+    });
+
+    it("shadows a light in GI by three's castShadow, unless userData.giCastsShadows says otherwise", () => {
+        const light = new PointLight(0xffffff, 4);
+        light.updateMatrixWorld();
+        const numbers = new Float64Array(LIGHT_NUMBER_COUNT);
+        const changed = new Float64Array(LIGHT_NUMBER_COUNT);
+        expect(lightDescriptor(light)!.castsShadows).toBe(false);
+        readLightNumbers(light, 1, numbers);
+        // A candle three draws unshadowed (too many for shadow maps), shadowed in GI.
+        light.userData.giCastsShadows = true;
+        expect(lightDescriptor(light)!.castsShadows).toBe(true);
+        readLightNumbers(light, 1, changed);
+        expect([...changed]).not.toEqual([...numbers]);
+        light.castShadow = true;
+        light.userData.giCastsShadows = false;
+        expect(lightDescriptor(light)!.castsShadows).toBe(false);
+        // Only a boolean counts.
+        light.userData.giCastsShadows = 'yes';
+        expect(lightDescriptor(light)!.castsShadows).toBe(true);
     });
 });
 

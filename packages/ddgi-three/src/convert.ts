@@ -40,7 +40,7 @@ import type {
     UvWrap,
     Vec3,
 } from '@pmndrs/ddgi-core';
-import { blocksLightOptIn, lightGroup, singleSidedForGI } from './user-data.ts';
+import { blocksLightOptIn, castsShadowsForGI, lightGroup, singleSidedForGI } from './user-data.ts';
 
 // ---------------------------------------------------------------------------
 // Geometry
@@ -560,7 +560,7 @@ export function lightDescriptor(light: Light, intensityScale = 1): LightDescript
     const common = {
         color: [light.color.r, light.color.g, light.color.b] as ColorRGB,
         intensity: light.intensity * intensityScale,
-        castsShadows: light.castShadow,
+        castsShadows: castsShadowsForGI(light),
         group: lightGroup(light),
         label: light.name || light.type,
     };
@@ -606,7 +606,7 @@ export function readLightNumbers(light: Light, intensityScale: number, target: F
     target[LIGHT_SLOT.colorG] = light.color.g;
     target[LIGHT_SLOT.colorB] = light.color.b;
     target[LIGHT_SLOT.intensity] = light.intensity * intensityScale;
-    target[LIGHT_SLOT.castShadow] = light.castShadow ? 1 : 0;
+    target[LIGHT_SLOT.castShadow] = castsShadowsForGI(light) ? 1 : 0;
     target[LIGHT_SLOT.group] = lightGroup(light);
     target[LIGHT_SLOT.positionX] = position[12];
     target[LIGHT_SLOT.positionY] = position[13];

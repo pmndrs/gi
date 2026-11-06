@@ -59,6 +59,14 @@ describe('url state', () => {
         expect(parseUrlState(serializeUrlState(state))).toEqual(state);
     });
 
+    it("keeps other names as scene settings and writes them back (sponza-candles' candles=4096)", () => {
+        const state = parseUrlState('?scene=sponza-candles&candles=4096&gi=only');
+        expect(state.sceneSettings).toEqual({ candles: '4096' });
+        expect(state.gi).toBe('only');
+        expect(serializeUrlState(state)).toContain('candles=4096');
+        expect(parseUrlState(serializeUrlState(state))).toEqual(state);
+    });
+
     it('prefers a free camera over a bookmark in the link', () => {
         const state = { ...DEFAULT_URL_STATE, scene: 'cornell-box', camera: '2', freeCamera: [1, 2, 3, 4, 5, 6, 60] as [number, number, number, number, number, number, number] };
         const link = serializeUrlState(state);

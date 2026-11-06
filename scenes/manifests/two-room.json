@@ -16,6 +16,31 @@
     "lights": [
         { "type": "point", "label": "room-a-lamp", "color": [1, 0.96, 0.88], "intensity": 12, "position": [2, 2.45, 2], "range": 14 }
     ],
+    "motions": [
+        {
+            "id": "light-sweep",
+            "label": "room-a-lamp sweeps at 1 m/s and back",
+            "target": "light:room-a-lamp",
+            "loop": true,
+            "keyframes": [
+                { "t": 0, "position": [1.0, 1.8, 2.0] },
+                { "t": 5.2, "position": [6.2, 1.8, 2.0] },
+                { "t": 10.4, "position": [1.0, 1.8, 2.0] }
+            ]
+        },
+        {
+            "id": "light-step",
+            "label": "room-a-lamp jumps every 3 s",
+            "target": "light:room-a-lamp",
+            "interpolation": "step",
+            "loop": true,
+            "keyframes": [
+                { "t": 0, "position": [1.0, 1.8, 2.0] },
+                { "t": 3, "position": [6.2, 1.8, 2.0] },
+                { "t": 6, "position": [1.0, 1.8, 2.0] }
+            ]
+        }
+    ],
     "environment": { "type": "none" },
     "volume": { "center": [4.1, 1.4, 2.0], "size": [8.4, 3.0, 4.2], "probeSpacing": 0.5 },
     "nativeCapable": true,

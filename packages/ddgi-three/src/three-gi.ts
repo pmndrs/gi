@@ -65,6 +65,8 @@ export interface ThreeGIOptions {
     readonly objectsPerFrame?: number;
     /** Geometries, and separately materials, checked for edits per frame (scene-sync.ts, `DEFAULT_EDIT_CHECKS_PER_FRAME`). */
     readonly editChecksPerFrame?: number;
+    /** Lights past the first 64 checked per frame, round robin (scene-sync.ts, `DEFAULT_LIGHTS_PER_FRAME`). */
+    readonly lightsPerFrame?: number;
     /** Run `update` from the GI light's render-time update instead of a call per frame (see the file comment). Default false. */
     readonly updateOnRender?: boolean;
 }
@@ -121,7 +123,7 @@ export class ThreeGI {
         this.alwaysUpdateMatrixWorld = options.updateMatrixWorld ?? false;
         this.renderTimeUpdate = options.updateOnRender ?? false;
         this.warnOnce = options.warn ?? ((message) => console.warn(`@pmndrs/ddgi/three: ${message}`));
-        this.sync = new SceneSync(gi.scene, { device: gi.device, warn: options.warn, objectsPerFrame: options.objectsPerFrame, editChecksPerFrame: options.editChecksPerFrame });
+        this.sync = new SceneSync(gi.scene, { device: gi.device, warn: options.warn, objectsPerFrame: options.objectsPerFrame, editChecksPerFrame: options.editChecksPerFrame, lightsPerFrame: options.lightsPerFrame });
         this.sync.environment = options.environment ?? null;
         this.sync.sky = options.sky ?? null;
         const shading = gi.shading;

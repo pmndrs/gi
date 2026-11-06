@@ -12,10 +12,16 @@
  * the way (reallocations, which must rebuild bind groups only). Then the
  * counter must still read 0, and as a control it must count a pipeline the
  * page makes through the platform's kernel builder after that.
+ *
+ * T2.1 check 1 (docs/design/m2-lights.md §1, light buffer v2): then LIGHTS
+ * lights of every type are created over LIGHT_FRAMES frames and destroyed
+ * again in random order, with some edited on the way, still with DDGI
+ * updating. The light table starts with room for 64 and doubles to 4,096 on
+ * the way, and the counter must stay 0 through that too.
  */
 
 import { assert, runGpuTest } from '../../client.ts';
-import type { InstanceHandle, MeshHandle } from '../../../../packages/ddgi-core/src/platform/contract/handles.ts';
+import type { InstanceHandle, LightHandle, MeshHandle } from '../../../../packages/ddgi-core/src/platform/contract/handles.ts';
 import { createRandom } from '../../../../packages/ddgi-core/src/platform/trace/oracle-fixtures.ts';
 import { createDdgiScene, releaseDeviceOnPageHide, runFrame } from '../ddgi-shared/harness.ts';
 
@@ -28,6 +34,12 @@ const CHURN_FRAMES = 200;
 const UNITS = 256;
 /** The scene's instance table starts with room for 64 (DEFAULT_SCENE_CAPACITIES): the churn must outgrow it. */
 const MIN_LIVE_PEAK = 128;
+/** T2.1 check 1: lights created and destroyed, all live at once at the peak (the table doubles from 64 to 4,096). */
+const LIGHTS = 4096;
+const LIGHT_FRAMES = 64;
+/** One light in this many is directional, one in this many a spot; the rest are points. */
+const DIRECTIONAL_EVERY = 64;
+const SPOT_EVERY = 3;
 
 await runGpuTest(
     async ({ device, log }) => {
@@ -113,18 +125,85 @@ await runGpuTest(
         await device.queue.onSubmittedWorkDone();
 
         const after = recompiles();
+
+        // T2.1 check 1: 4,096 lights made (all live at once at the peak), edited, then destroyed in random order.
+        const sceneLights = platform.sceneCopy.counts.lights;
+        const lights: LightHandle[] = [];
+        const lightKinds = { directional: 0, point: 0, spot: 0 };
+        let lightsEdited = 0;
+        const position = (): [number, number, number] => [0.2 + random() * 3.6, 0.2 + random() * 2.4, 0.2 + random() * 2.6];
+        const color = (): [number, number, number] => [0.2 + random() * 0.8, 0.2 + random() * 0.8, 0.2 + random() * 0.8];
+        const makeLight = (index: number): LightHandle => {
+            // A few with no range (range 0), as three's default distance gives; the rest small boxes.
+            const range = random() < 0.1 ? 0 : 0.5 + random() * 2;
+            if (index % DIRECTIONAL_EVERY === 0) {
+                lightKinds.directional++;
+                return api.createLight({ type: 'directional', color: color(), intensity: 0.01, direction: [random() - 0.5, -1, random() - 0.5], label: `churn sun ${index}` });
+            }
+            if (index % SPOT_EVERY === 0) {
+                lightKinds.spot++;
+                return api.createLight({ type: 'spot', color: color(), intensity: 0.05, position: position(), direction: [0, -1, 0], range, innerConeAngle: 0.3, outerConeAngle: 0.6, label: `churn spot ${index}` });
+            }
+            lightKinds.point++;
+            return api.createLight({ type: 'point', color: color(), intensity: 0.05, position: position(), range, label: `churn lamp ${index}` });
+        };
+        for (let frame = 0; frame < LIGHT_FRAMES; frame++) {
+            const target = Math.round(((frame + 1) / LIGHT_FRAMES) * LIGHTS);
+            while (lights.length < target) lights.push(makeLight(lights.length));
+            runFrame(device, platform, UNITS);
+            if (frame % 8 === 7) await device.queue.onSubmittedWorkDone();
+        }
+        const lightPeak = lights.length;
+        const lightsAtPeak = platform.sceneCopy.counts.lights;
+        let lightsDestroyed = 0;
+        while (lights.length > 0) {
+            const toDestroy = Math.min(lights.length, 1 + Math.floor(random() * 2 * (LIGHTS / LIGHT_FRAMES)));
+            for (let index = 0; index < toDestroy; index++) {
+                const [gone] = lights.splice(Math.floor(random() * lights.length), 1);
+                api.destroyLight(gone);
+                lightsDestroyed++;
+            }
+            // Edit a few of the ones left (their packed index moves as others go).
+            for (let index = 0; index < 8 && lights.length > 0; index++) {
+                api.updateLight(lights[Math.floor(random() * lights.length)], { intensity: random() * 0.05 });
+                lightsEdited++;
+            }
+            runFrame(device, platform, UNITS);
+            if (lightsDestroyed % 512 < toDestroy) await device.queue.onSubmittedWorkDone();
+        }
+        runFrame(device, platform, UNITS);
+        await device.queue.onSubmittedWorkDone();
+        const afterLights = recompiles();
+
         assert(created === INSTANCES && destroyed === INSTANCES, `created ${created}, destroyed ${destroyed}`);
         assert(meshesMade >= NEW_MESHES / 2, `only ${meshesMade} new meshes were made`);
         assert(livePeak >= MIN_LIVE_PEAK, `only ${livePeak} instances were live at once; the table never had to grow`);
         assert(after === before && after === 0, `the counter went from ${before} to ${after} during the churn`);
+        assert(lightPeak === LIGHTS && lightsAtPeak === sceneLights + LIGHTS && lightsDestroyed === LIGHTS, `lights: ${lightPeak} made, ${lightsAtPeak} in the scene at the peak (${sceneLights} its own), ${lightsDestroyed} destroyed`);
+        assert(platform.sceneCopy.counts.lights === sceneLights, `${platform.sceneCopy.counts.lights} lights left after the churn (the scene had ${sceneLights})`);
+        assert(afterLights === 0, `the counter went from ${after} to ${afterLights} while ${LIGHTS} lights were made and destroyed`);
 
         // The control: a pipeline made through the platform's kernel builder while it is ready counts.
         await platform.kernels.computeKernel({ label: 'recompile control', modules: [], code: '@compute @workgroup_size(1) fn main() {}', entryPoint: 'main' });
         const control = recompiles();
         assert(control === 1, `the control pipeline was counted as ${control}`);
-        log(`${created} instances created and destroyed (${meshesMade} new meshes among them, at most ${livePeak} live, ${moved} moves); recompiles ${before} -> ${after}; the control kernel counts: ${control}`);
+        log(`${created} instances created and destroyed (${meshesMade} new meshes among them, at most ${livePeak} live, ${moved} moves); recompiles ${before} -> ${after}`);
+        log(
+            `${LIGHTS} lights (${lightKinds.directional} directional, ${lightKinds.point} point, ${lightKinds.spot} spot) created, all live at once, ${lightsEdited} edits, ` +
+                `destroyed in random order; recompiles ${after} -> ${afterLights}; the control kernel counts: ${control}`,
+        );
         platform.dispose();
-        return { created, destroyed, livePeak, moved, newMeshes: meshesMade, recompilesBefore: before, recompilesAfter: after, controlCounted: control };
+        return {
+            created,
+            destroyed,
+            livePeak,
+            moved,
+            newMeshes: meshesMade,
+            recompilesBefore: before,
+            recompilesAfter: after,
+            lights: { created: lightPeak, destroyed: lightsDestroyed, edited: lightsEdited, kinds: lightKinds, recompilesAfter: afterLights },
+            controlCounted: control,
+        };
     },
     { optionalFeatures: ['texture-formats-tier1', 'subgroups'] },
 );

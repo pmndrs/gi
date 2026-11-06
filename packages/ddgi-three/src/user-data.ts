@@ -8,6 +8,12 @@
  *   contribute still *receives* GI through the light.
  * - `userData.giLightGroup` (0..3): the light group of a directional, point or
  *   spot light. Defaults to 0. DDGI can re-weight a whole group instantly.
+ * - `userData.giCastsShadows` (boolean, on a light): whether GI traces shadow
+ *   rays for it. Defaults to three's `castShadow`. Set it `true` on lights
+ *   three draws without shadows only because there are too many for shadow
+ *   maps (hundreds of candles under three's `ClusteredLighting`, which skips
+ *   shadowed lights): GI's shadows cost no shadow map, and without them the
+ *   light leaks through walls into GI.
  * - `material.userData.giSingleSided` (boolean, on a *material*): rays pass
  *   through the back of its surfaces. Defaults to false: every material is
  *   double-sided for GI whatever three's `side`, because back-face hits are
@@ -28,6 +34,7 @@ import type { Object3D } from 'three';
 export const GI_USER_DATA = {
     contributes: 'giContributes',
     lightGroup: 'giLightGroup',
+    castsShadows: 'giCastsShadows',
     singleSided: 'giSingleSided',
     blocksLight: 'giBlocksLight',
 } as const;
@@ -53,6 +60,12 @@ export function singleSidedForGI(userData: Record<string, unknown>): boolean {
 /** Whether a see-through material opted in to blocking light for GI (`userData.giBlocksLight === true`). */
 export function blocksLightOptIn(userData: Record<string, unknown>): boolean {
     return userData[GI_USER_DATA.blocksLight] === true;
+}
+
+/** Whether GI shadows a light: `userData.giCastsShadows` when it is a boolean, otherwise three's `castShadow`. */
+export function castsShadowsForGI(light: Object3D): boolean {
+    const value = light.userData[GI_USER_DATA.castsShadows];
+    return typeof value === 'boolean' ? value : light.castShadow;
 }
 
 /** The light group from userData, or 0 when absent or not a valid group. */
