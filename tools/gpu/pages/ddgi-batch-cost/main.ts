@@ -8,11 +8,11 @@
  * Per scene, in this order:
  *
  * 1. **startup**: load the scene's files, `gi.prepare()` (kernel compiles),
- *    the scene copy and the mesh trees (`rays.whenBuilt`), then the viewer's
- *    warm-up rule (DECISIONS 2026-11-05): steps of `maxProbesPerFrame`
- *    probes with a running-average hysteresis, at most 16 passes over every
- *    probe, stopping after 8 s once 2 passes are done, 4 steps then a wait for
- *    the GPU. Then, as the viewer ends its warm-up, frames with
+ *    the scene copy and the mesh trees (`rays.whenBuilt`), then the warm-up,
+ *    the technique's own since T2.4b (`warmUpPasses`; DECISIONS 2026-11-05):
+ *    steps of `maxProbesPerFrame` probes with no time between them, at most
+ *    16 passes over every probe, stopping after 8 s once 2 passes are done,
+ *    4 steps then a wait for the GPU, as `volume.start` runs it. Then frames with
  *    `budget.gpuMs`, GPU-bound (two in flight, not paced by the display),
  *    until the platform's calibration burst is done
  *    and confirmed (its batch timed over 300 more back-to-back frames). Reported: when each stage was reached, from the start of
@@ -97,8 +97,8 @@ const BUDGET_MS = typeof env.VITE_DDGI_BUDGET_MS === 'string' ? Number(env.VITE_
 /** Fixed batch sizes for the `steady` section; by default the budget's median batch. */
 const STEADY_UNITS = listFromEnv(env.VITE_DDGI_STEADY_UNITS, []).map(Number).filter((units) => units > 0);
 
-/** The viewer's warm-up rule (apps/viewer/src/techniques/ddgi-technique.ts, DECISIONS 2026-11-05). */
-const WARMUP = { passes: 16, maxSeconds: 8, minPasses: 2, stepsPerBatch: 4 } as const;
+/** Warm-up frames recorded before waiting for the GPU, as `volume.start` does (the warm-up itself is the technique's). */
+const WARMUP = { stepsPerBatch: 4 } as const;
 
 /** Batch sizes for the cost curve, in probes per frame. */
 const BATCH_SIZES = [32, 64, 128, 256, 512, 1024, 2048, 4096] as const;
@@ -341,9 +341,7 @@ async function startScene(
     const probeCount = ddgi.field?.grid.probeCount ?? 0;
     const scene: SceneUnderTest = { manifest, platform, ddgi, threeGI, camera, probeCount };
 
-    // The viewer's warm-up (see the file comment).
-    const targetHysteresis = ddgi.settings.hysteresis;
-    const stepUnits = Math.min(probeCount, ddgi.settings.maxProbesPerFrame);
+    // The warm-up (see the file comment): the technique's own since T2.4b, run as volume.start runs it.
     let updates = 0;
     let steps = 0;
     let firstGiAt = NaN;
@@ -351,13 +349,10 @@ async function startScene(
     let firstPassAt = NaN;
     const warmupStartedAt = performance.now();
     for (;;) {
-        const passes = updates / probeCount;
-        const completed = Math.floor(passes);
-        ddgi.settings.hysteresis = Math.min(targetHysteresis, completed / (completed + 1));
-        frame(scene, { units: stepUnits });
+        frame(scene, { gpuMs: BUDGET_MS }, 0);
         updates += ddgi.counters[PROBES_UPDATED] ?? 0;
         steps++;
-        const done = updates / probeCount >= WARMUP.passes || (performance.now() - warmupStartedAt > WARMUP.maxSeconds * 1000 && updates / probeCount >= WARMUP.minPasses);
+        const done = !ddgi.warmingUp;
         // Wait where the viewer waits, and also after the first step and the first full pass to time them.
         const firstStep = steps === 1;
         const firstPass = Number.isNaN(firstPassAt) && updates >= probeCount;
@@ -374,7 +369,6 @@ async function startScene(
         }
         if (done) break;
     }
-    ddgi.settings.hysteresis = targetHysteresis;
     const settledAt = performance.now();
 
     // The calibration (budget v2), as the viewer ends its warm-up: frames with the

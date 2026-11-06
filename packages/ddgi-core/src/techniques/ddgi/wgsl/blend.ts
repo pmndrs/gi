@@ -179,7 +179,7 @@ const DDGI_NO_HISTORY_LIMIT: f32 = 3.0e38;
 // The noise word is a running mean over about this many quiet updates (an
 // exponential average with weight 1 / this). Long enough to average a few
 // outliers away, short enough to follow a probe whose light changed.
-const DDGI_NOISE_UPDATES: f32 = 16.0;
+const DDGI_NOISE_UPDATES: f32 = 64.0;
 // What kind of update this is, for the noise word (ddgiUpdateKind).
 const DDGI_UPDATE_FIRST: u32 = 0u;   // state 3: the history starts again, noise 0
 const DDGI_UPDATE_QUIET: u32 = 1u;   // no change reported: feeds the noise, and may trip the feedback rule
@@ -670,7 +670,7 @@ fn ddgiWriteHistory(probeIndex: u32, probe: vec3i, estimateSum: vec3f, oldSum: v
     var noise = previousNoise;
     if (ddgiUpdateKind == DDGI_UPDATE_FIRST) {
         noise = 0.0;
-    } else if (ddgiUpdateKind == DDGI_UPDATE_QUIET && !fired) {
+    } else if (ddgiUpdateKind == DDGI_UPDATE_QUIET) {
         // An update that tripped the feedback rule saw a change, not noise.
         // The first quiet update starts the average at its own value.
         let averaged = select(mix(previousNoise * previousNoise, deviationSquared, 1.0 / DDGI_NOISE_UPDATES), deviationSquared, previousNoise <= 0.0);

@@ -103,7 +103,11 @@ export interface DdgiScene {
     readonly lights: readonly LightHandle[];
 }
 
-/** A platform with the scene and DDGI on the manifest's volume (unless settings say otherwise), prepared, trees built. */
+/**
+ * A platform with the scene and DDGI on the manifest's volume (unless settings say otherwise), prepared, trees built.
+ * The technique's warm-up is off unless `settings.warmUpPasses` asks for it, so a page's frames run at the
+ * units it gives them from the first (the pages measure from black, or converge in their own way).
+ */
 export async function createDdgiScene(
     device: GPUDevice,
     manifestId: string,
@@ -115,7 +119,7 @@ export async function createDdgiScene(
     const lights: LightHandle[] = [];
     const data = describeScene(platform, manifest, options, lights);
     const volume = settings.volume ?? { center: manifest.volume.center, size: manifest.volume.size, spacing: manifest.volume.probeSpacing };
-    const ddgi = platform.addTechnique(new DDGITechnique({ ...settings, volume }, options.technique));
+    const ddgi = platform.addTechnique(new DDGITechnique({ warmUpPasses: 0, ...settings, volume }, options.technique));
     platform.setOutput(ddgi);
     await platform.prepare();
     // A frame with no probe updates places the scene; then wait for the mesh trees and place them.

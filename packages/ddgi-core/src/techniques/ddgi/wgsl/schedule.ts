@@ -237,6 +237,8 @@ var<workgroup> ddgiFillScan: array<u32, DDGI_SCHEDULE_WORKGROUP_SIZE>;
 var<workgroup> ddgiFillSubgroupTotals: array<u32, ${SCHEDULE_WORKGROUP_SIZE / MIN_SUBGROUP_SIZE}>;
 var<workgroup> ddgiFillChunkTotal: u32;
 var<workgroup> ddgiFillPicked: u32;
+var<workgroup> ddgiFillListed: u32;
+var<workgroup> ddgiFillCursor: u32;
 var<workgroup> ddgiFillUsed: u32;
 var<workgroup> ddgiFillUnordered: atomic<u32>;
 
@@ -426,15 +428,17 @@ fn ${SCHEDULE_ENTRY_POINTS.fill}(
     ${subgroupBuiltins}
 ) {
     let probeCount = ddgiTotalProbes();
-    let listed = atomicLoad(&ddgiScheduleState[DDGI_STATE_LISTED]);
-    let cursorProbe = atomicLoad(&ddgiScheduleState[DDGI_STATE_CURSOR_PROBE]);
-    let need = ddgi.updateCount - min(listed, ddgi.updateCount);
     if (thread == 0u) {
+        ddgiFillListed = atomicLoad(&ddgiScheduleState[DDGI_STATE_LISTED]);
+        ddgiFillCursor = atomicLoad(&ddgiScheduleState[DDGI_STATE_CURSOR_PROBE]);
         ddgiFillPicked = 0u;
         ddgiFillUsed = 0u;
         atomicStore(&ddgiFillUnordered, 0u);
     }
-    workgroupBarrier();
+    // Read through workgroupUniformLoad, so the loop below stays in uniform control flow.
+    let listed = workgroupUniformLoad(&ddgiFillListed);
+    let cursorProbe = workgroupUniformLoad(&ddgiFillCursor);
+    let need = ddgi.updateCount - min(listed, ddgi.updateCount);
     ${reduction === 'subgroups' ? '// Subgroups hold consecutive threads in order (see fillScanWgsl), or this dispatch takes the workgroup scan.\n    if (subgroupBroadcastFirst(thread) + lane != thread) {\n        atomicStore(&ddgiFillUnordered, 1u);\n    }' : ''}
     let ordered = workgroupUniformLoad(&ddgiFillUnordered) == 0u;
     for (var start = 0u; start < ddgi.updateCount; start += DDGI_SCHEDULE_WORKGROUP_SIZE) {

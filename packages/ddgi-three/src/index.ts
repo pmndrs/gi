@@ -7,7 +7,7 @@ export { ThreeGI, type ThreeGIOptions, type ThreeGITimings } from './three-gi.ts
 export { GILight, GI_LIGHT_PRIORITY, entryWgsl, wgslParameterType, type GILightOptions } from './gi-light.ts';
 export { wrapGpuTexture, type GpuTextureWrapOptions } from './external-texture.ts';
 export { GIVolume } from './gi-volume.ts';
-export { DEFAULT_GI_BUDGET, DEFAULT_WARM_UP, ThreeGILimitError, type GIVolumeStartOptions, type WarmUpSettings } from './volume-start.ts';
+export { DEFAULT_GI_BUDGET, DEFAULT_WARM_UP, ThreeGILimitError, type GIVolumeStartOptions, type StartedGI, type WarmUpSettings } from './volume-start.ts';
 export {
     ddgi,
     giAlbedo,

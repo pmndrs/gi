@@ -102,7 +102,7 @@ await runThreePage(async ({ device, renderer, data, log }) => {
     camera.lookAt(...bookmark.target);
 
     const platform = new GIPlatformImpl(device, { label: `three timing ${sceneId}` });
-    const ddgi = platform.addTechnique(new DDGITechnique({ volume: { center: manifest.volume.center, size: manifest.volume.size, spacing: manifest.volume.probeSpacing } }));
+    const ddgi = platform.addTechnique(new DDGITechnique({ volume: { center: manifest.volume.center, size: manifest.volume.size, spacing: manifest.volume.probeSpacing }, warmUpPasses: 0 }));
     platform.setOutput(ddgi);
     await platform.prepare();
     const environment: EnvironmentDescriptor | null = manifest.environment.type === 'procedural' ? platformSkyEnvironment(manifest) : null;
