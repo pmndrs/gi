@@ -63,6 +63,8 @@ export interface GIPlatform {
     removeTechnique(technique: GITechnique): void;
     /** The technique whose shading module renderers read. */
     setOutput(technique: GITechnique): void;
+    /** The technique `setOutput` chose, or undefined before it (adapters reach its optional controls through it, light group weights say). */
+    readonly outputTechnique: GITechnique | undefined;
     /**
      * Stack techniques: `technique` uses `fallback`'s shading module as its
      * bounce source for distant or missed rays. `fallback` is encoded first

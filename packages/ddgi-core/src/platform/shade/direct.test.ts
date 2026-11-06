@@ -9,6 +9,7 @@ import {
     RAY_RESULT_BYTES,
     RAY_SCRATCH_HEADER_BYTES,
     RAY_SCRATCH_WORD,
+    packGroupLayers,
     rayScratchBytes,
     rayScratchTraceWgsl,
     WORK_ITEM_BYTES,
@@ -166,10 +167,36 @@ describe('deferred direct light', () => {
         direct.encode(encoder, scratch, { ...frame, frame: 13 });
         expect(passes.map((pass) => pass.label)).toEqual(['ddgi/gi-direct', 'ddgi/gi-direct', 'ddgi/gi-direct']);
         expect(passes[0].commands.filter((command) => command === 'dispatch' || command === 'indirect')).toEqual(['dispatch', 'indirect']);
-        // The second round of a frame writes nothing new.
+        // The second round of a frame writes nothing new. Every group goes into layer 0 by default.
         expect(writes).toEqual([
             { offset: RAY_SCRATCH_WORD.frame * 4, words: [12, 0xf] },
+            { offset: RAY_SCRATCH_WORD.groupLayers * 4, words: [0] },
             { offset: RAY_SCRATCH_WORD.frame * 4, words: [13, 0xf] },
+            { offset: RAY_SCRATCH_WORD.groupLayers * 4, words: [0] },
         ]);
+    });
+
+    it("holds a result per layer per ray, and packs each group's layer in 8 bits", async () => {
+        const { device, buffers } = fakeDevice();
+        const direct = new PlatformDeferredDirect(device, fakeKernels(), SHADE_MODULE, 'gi');
+        await direct.prepare();
+        const scratch = direct.createScratch({ label: 'rays', rays: 100, workItems: 10, layers: 3 });
+        expect(scratch.layers).toBe(3);
+        expect(scratch.bytes).toBe(RAY_SCRATCH_HEADER_BYTES + 300 * RAY_RESULT_BYTES + 10 * WORK_ITEM_BYTES);
+        expect(scratch.rayResults.size).toBe(300 * RAY_RESULT_BYTES);
+        const header = new Uint32Array(buffers[buffers.length - 1].mapped, 0, RAY_SCRATCH_HEADER_BYTES / 4);
+        // The work list starts after every layer's results.
+        expect(header[RAY_SCRATCH_WORD.itemsStart]).toBe(300);
+        expect(header[RAY_SCRATCH_WORD.layers]).toBe(3);
+        expect(packGroupLayers([0, 1, 1, 2], 3)).toBe(0x02010100);
+        expect(packGroupLayers(undefined, 1)).toBe(0);
+        expect(() => packGroupLayers([0, 3, 0, 0], 3)).toThrow(RangeError);
+        expect(() => direct.createScratch({ label: 'rays', rays: 1, workItems: 1, layers: 9 })).toThrow(RangeError);
+    });
+
+    it('shares one light choice between layers: hit shading splits it by group, gi/direct adds each group into its layer', () => {
+        expect(DIRECT_KERNELS_WGSL.direct).toContain('let byGroup = giDirectGroupIrradiance(surface, giDirectScratch.groupMask, random);');
+        expect(DIRECT_KERNELS_WGSL.direct).toContain('let cell = ray * layers + layer;');
+        expect(rayScratchTraceWgsl('scratch', 'atomics')).toContain('scratch.cells[ray * scratch.layers + layer]');
     });
 });

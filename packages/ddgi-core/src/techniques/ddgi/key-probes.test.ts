@@ -71,8 +71,8 @@ describe('key probes (T2.4c, m2-lights.md §4.5)', () => {
 
 describe('the propagation kernels', () => {
     it('build subgroups first, with the declared fallback free of subgroup calls, binding only group 1', () => {
-        const subgroups = propagateKernelWgsl({ irradianceTexels: 6, reduction: 'subgroups', listCapacity: 1000 });
-        const fallback = propagateKernelWgsl({ irradianceTexels: 6, reduction: 'workgroup', listCapacity: 1000 });
+        const subgroups = propagateKernelWgsl({ irradianceTexels: 6, reduction: 'subgroups', listCapacity: 1000, irradianceLayers: 1 });
+        const fallback = propagateKernelWgsl({ irradianceTexels: 6, reduction: 'workgroup', listCapacity: 1000, irradianceLayers: 1 });
         expect(subgroups.trimStart().startsWith('enable subgroups;')).toBe(true);
         expect(subgroups).toMatch(/subgroupExclusiveAdd\(/);
         expect(fallback).not.toMatch(/subgroup[A-Z_]|enable subgroups/);
@@ -80,7 +80,7 @@ describe('the propagation kernels', () => {
     });
 
     it('use no indirect dispatch: their workgroups loop over the list', () => {
-        const code = propagateKernelWgsl({ irradianceTexels: 6, reduction: 'workgroup', listCapacity: 1000 });
+        const code = propagateKernelWgsl({ irradianceTexels: 6, reduction: 'workgroup', listCapacity: 1000, irradianceLayers: 1 });
         expect(code).toMatch(/entry \+= groups\.x/);
         expect(PROPAGATE_WORKGROUPS).toBeGreaterThan(0);
     });
@@ -95,7 +95,7 @@ describe('the propagation kernels', () => {
     it('stay within 8 storage buffers per kernel (blend 7, propagate 6)', () => {
         const blend = blendKernelWgsl({ irradianceTexels: 6, distanceTexels: 14, scratch: scratchLayout(6, 14), reduction: 'workgroup' });
         expect(blend.match(/var<storage/g)?.length).toBe(7);
-        const propagate = propagateKernelWgsl({ irradianceTexels: 6, reduction: 'workgroup', listCapacity: 1000 });
+        const propagate = propagateKernelWgsl({ irradianceTexels: 6, reduction: 'workgroup', listCapacity: 1000, irradianceLayers: 1 });
         // Declared for the module; ddgi/propagate binds 6 of them (not the writable state, binding 3).
         expect(propagate.match(/var<storage/g)?.length).toBe(7);
     });

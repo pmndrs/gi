@@ -210,6 +210,10 @@ export class GIPlatformImpl implements GIPlatform {
         this.output = technique;
     }
 
+    get outputTechnique(): GITechnique | undefined {
+        return this.output;
+    }
+
     setFallback(technique: GITechnique, fallback: GITechnique | undefined): void {
         const entry = this.find(technique);
         if (!entry) throw new Error(`@pmndrs/ddgi: technique '${technique.id}' is not attached`);

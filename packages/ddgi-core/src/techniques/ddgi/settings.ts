@@ -3,12 +3,14 @@
  * volume they describe.
  *
  * Settings are a live object, as the technique contract asks: the host edits
- * fields and the next `encode` reads them. Four of them need new GPU
+ * fields and the next `encode` reads them. Five of them need new GPU
  * resources and only take effect at the next `prepare`: `volume`,
- * `irradianceTexels`, `distanceTexels` and `maxProbesPerFrame`.
+ * `irradianceTexels`, `distanceTexels`, `maxProbesPerFrame` and
+ * `lightGroups.count` (its weights are live).
  */
 
 import type { Vec3 } from '../../platform/contract/math.ts';
+import type { DDGILightGroups } from './light-groups.ts';
 
 export interface DDGIVolumeSettings {
     /** Centre of the box, metres. */
@@ -200,6 +202,16 @@ export interface DDGISettings {
     /** Largest number of probes updated in one frame: sizes the update list and the scratch buffer. New `prepare` when changed. */
     maxProbesPerFrame: number;
     /**
+     * Light groups (T2.5, light-groups.ts; docs/design/m2-lights.md §5): one
+     * irradiance layer per group plus one for the sky and emission, added up
+     * with live weights, so dimming or recolouring a whole group shows in the
+     * same frame with no update lag. Off (null, the default): one layer.
+     * Opt-in because each layer costs a tile per probe (Sponza with 4 groups:
+     * about 60 MB) and its share of every probe update. `count` needs a new
+     * `prepare`; the weights are read every frame.
+     */
+    lightGroups: DDGILightGroups | null;
+    /**
      * The fewest probes updated per frame under a millisecond budget, so the
      * field keeps converging on every device (budget v2). It wins over the
      * millisecond ceiling; `budget.units` still caps it. `auto` = enough for a
@@ -380,6 +392,7 @@ export const DEFAULT_DDGI_SETTINGS: Readonly<Omit<DDGISettings, 'volume'>> = {
     minFrontFaceDistance: 'auto',
     classification: true,
     maxProbesPerFrame: 4096,
+    lightGroups: null,
     minProbesPerFrame: 'auto',
 };
 

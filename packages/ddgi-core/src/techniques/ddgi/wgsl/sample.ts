@@ -8,7 +8,10 @@
  *
  * The probe loop itself is `ddgiAccumulateField`. It returns the weighted
  * sum and the summed weight; `ddgiSampleIrradiance` divides one by the
- * other, and coverage (`giCoverage`) reads the summed weight.
+ * other, and coverage (`giCoverage`) reads the summed weight. Each corner
+ * probe's weight is `ddgiCornerWeight`, which the update's bounce lookup over
+ * several light-group layers (wgsl/trace.ts) shares, so the weights are
+ * worked out by one piece of code wherever the field is read.
  *
  * Being shared with renderers shapes it the way the shading-module contract
  * needs:
@@ -179,9 +182,78 @@ struct DdgiFieldSum {
     weight: f32,
 }
 
-// The 8 probes around the point, weighted by trilinear position, by how
-// much they face the surface, and by whether they can see the point
-// (Chebyshev test on the distance moments). Only active probes count.
+// One corner probe of a sample point's cage, and how much it counts: by
+// trilinear position, by how much it faces the surface, and by whether it can
+// see the point (Chebyshev test on the distance moments). 'counts' is false
+// for a probe that isn't active, which adds nothing (no irradiance fetch).
+struct DdgiCornerWeight {
+    probe: vec3i,
+    weight: f32,
+    counts: bool,
+}
+
+fn ddgiCornerWeight(
+    corner: u32,
+    volume: DdgiVolume,
+    cage: DdgiCage,
+    samplePoint: vec3f,
+    position: vec3f,
+    normal: vec3f,
+    distanceAtlas: texture_2d_array<f32>,
+    distanceSampler: sampler,
+    probeData: texture_2d_array<f32>,
+    distanceScale: DdgiAtlasScale,
+) -> DdgiCornerWeight {
+    let step = ddgiCageStep(corner);
+    let probe = min(cage.baseProbe + step, volume.counts - 1);
+    let data = ddgiReadProbeData(probeData, probe);
+    if (data.state != DDGI_STATE_ACTIVE) {
+        return DdgiCornerWeight(probe, 0.0, false);
+    }
+    // The probe's relocated position (offsets are stored in spacings).
+    let probePosition = volume.origin + (vec3f(probe) + data.offset) * volume.spacing;
+    let toProbe = probePosition - samplePoint;
+    // One inverse square root gives both the distance and the direction
+    // (capped, so a probe at the point itself keeps a defined direction).
+    let squaredDistance = dot(toProbe, toProbe);
+    let inverseProbeDistance = min(inverseSqrt(squaredDistance), 1.0 / DDGI_MIN_PROBE_DISTANCE);
+    let probeDistance = max(squaredDistance * inverseProbeDistance, DDGI_MIN_PROBE_DISTANCE);
+    let directionToProbe = toProbe * inverseProbeDistance;
+
+    // Probes behind the surface count for little, never zero. Measured
+    // from the surface point itself, not the biased one (Majercik et al.
+    // 2019's "true direction to probe"): from the biased point, probes in
+    // the surface's own plane look like they are in front of it, which
+    // gave the probe layer farther from a wall more weight and read the
+    // Cornell walls about 1% brighter.
+    let surfaceToProbe = probePosition - position;
+    let trueDirectionToProbe = surfaceToProbe * min(inverseSqrt(dot(surfaceToProbe, surfaceToProbe)), 1.0 / DDGI_MIN_PROBE_DISTANCE);
+    let facing = (dot(trueDirectionToProbe, normal) + 1.0) * 0.5;
+    var weight = facing * facing + DDGI_DIRECTION_WEIGHT_FLOOR;
+
+    // Visibility: the probe's mean distance (and mean squared distance)
+    // to the nearest surface in the point's direction. Farther than the
+    // mean means probably occluded; Chebyshev's inequality bounds how
+    // likely the point is visible anyway (variance shadow maps).
+    let distanceUv = ddgiTileUv(ddgiTileTexel(-directionToProbe, volume.distanceTexels), probe, distanceScale);
+    let moments = textureSampleLevel(distanceAtlas, distanceSampler, distanceUv, probe.y, 0.0).xy;
+    if (probeDistance > moments.x) {
+        let variance = abs(moments.y - moments.x * moments.x);
+        let excess = probeDistance - moments.x;
+        let chebyshev = variance / (variance + excess * excess);
+        weight *= max(chebyshev * chebyshev * chebyshev, DDGI_CHEBYSHEV_FLOOR);
+    }
+
+    if (weight < DDGI_CRUSH_THRESHOLD) {
+        weight *= (weight * weight) * (1.0 / (DDGI_CRUSH_THRESHOLD * DDGI_CRUSH_THRESHOLD));
+    }
+
+    weight *= ddgiTrilinearWeight(cage, step);
+    return DdgiCornerWeight(probe, weight, true);
+}
+
+// The 8 probes around the point, each weighted by ddgiCornerWeight. Only
+// active probes count.
 fn ddgiAccumulateField(
     position: vec3f,
     normal: vec3f,
@@ -199,15 +271,14 @@ fn ddgiAccumulateField(
 ) -> DdgiFieldSum {
     let volume = ddgiVolume(volumeOrigin, volumeSpacing, volumeCounts, volumeTexels);
     let samplePoint = ddgiBiasedPoint(volume, position, normal, viewDirection);
-    let spacing = volume.spacing;
-    let counts = volume.counts;
     let cage = ddgiCage(volume, samplePoint);
 
     // Worked out once, not per probe. Why this matters: sampling is
     // arithmetic-heavy as well as fetch-heavy, and T1.6 measured these
-    // hoists plus inverseSqrt below at 16% of a renderer's GI cost at 1440p.
-    let irradianceScale = ddgiAtlasScale(volume.irradianceTexels, counts);
-    let distanceScale = ddgiAtlasScale(volume.distanceTexels, counts);
+    // hoists plus inverseSqrt (ddgiCornerWeight) at 16% of a renderer's GI
+    // cost at 1440p.
+    let irradianceScale = ddgiAtlasScale(volume.irradianceTexels, volume.counts);
+    let distanceScale = ddgiAtlasScale(volume.distanceTexels, volume.counts);
     // Irradiance is read in the normal's direction from every probe, so its
     // place inside a tile is the same for all 8.
     let normalInTile = ddgiTileTexel(normal, volume.irradianceTexels);
@@ -215,55 +286,13 @@ fn ddgiAccumulateField(
     var irradianceSum = vec3f(0.0);
     var weightSum = 0.0;
     for (var corner = 0u; corner < 8u; corner++) {
-        let step = ddgiCageStep(corner);
-        let probe = min(cage.baseProbe + step, counts - 1);
-        let data = ddgiReadProbeData(probeData, probe);
-        if (data.state != DDGI_STATE_ACTIVE) {
+        let weighted = ddgiCornerWeight(corner, volume, cage, samplePoint, position, normal, distanceAtlas, distanceSampler, probeData, distanceScale);
+        if (!weighted.counts) {
             continue;
         }
-        // The probe's relocated position (offsets are stored in spacings).
-        let probePosition = volume.origin + (vec3f(probe) + data.offset) * spacing;
-        let toProbe = probePosition - samplePoint;
-        // One inverse square root gives both the distance and the direction
-        // (capped, so a probe at the point itself keeps a defined direction).
-        let squaredDistance = dot(toProbe, toProbe);
-        let inverseProbeDistance = min(inverseSqrt(squaredDistance), 1.0 / DDGI_MIN_PROBE_DISTANCE);
-        let probeDistance = max(squaredDistance * inverseProbeDistance, DDGI_MIN_PROBE_DISTANCE);
-        let directionToProbe = toProbe * inverseProbeDistance;
-
-        // Probes behind the surface count for little, never zero. Measured
-        // from the surface point itself, not the biased one (Majercik et al.
-        // 2019's "true direction to probe"): from the biased point, probes in
-        // the surface's own plane look like they are in front of it, which
-        // gave the probe layer farther from a wall more weight and read the
-        // Cornell walls about 1% brighter.
-        let surfaceToProbe = probePosition - position;
-        let trueDirectionToProbe = surfaceToProbe * min(inverseSqrt(dot(surfaceToProbe, surfaceToProbe)), 1.0 / DDGI_MIN_PROBE_DISTANCE);
-        let facing = (dot(trueDirectionToProbe, normal) + 1.0) * 0.5;
-        var weight = facing * facing + DDGI_DIRECTION_WEIGHT_FLOOR;
-
-        // Visibility: the probe's mean distance (and mean squared distance)
-        // to the nearest surface in the point's direction. Farther than the
-        // mean means probably occluded; Chebyshev's inequality bounds how
-        // likely the point is visible anyway (variance shadow maps).
-        let distanceUv = ddgiTileUv(ddgiTileTexel(-directionToProbe, volume.distanceTexels), probe, distanceScale);
-        let moments = textureSampleLevel(distanceAtlas, distanceSampler, distanceUv, probe.y, 0.0).xy;
-        if (probeDistance > moments.x) {
-            let variance = abs(moments.y - moments.x * moments.x);
-            let excess = probeDistance - moments.x;
-            let chebyshev = variance / (variance + excess * excess);
-            weight *= max(chebyshev * chebyshev * chebyshev, DDGI_CHEBYSHEV_FLOOR);
-        }
-
-        if (weight < DDGI_CRUSH_THRESHOLD) {
-            weight *= (weight * weight) * (1.0 / (DDGI_CRUSH_THRESHOLD * DDGI_CRUSH_THRESHOLD));
-        }
-
-        weight *= ddgiTrilinearWeight(cage, step);
-
-        let irradiance = textureSampleLevel(irradianceAtlas, irradianceSampler, ddgiTileUv(normalInTile, probe, irradianceScale), probe.y, 0.0).rgb;
-        irradianceSum += weight * irradiance;
-        weightSum += weight;
+        let irradiance = textureSampleLevel(irradianceAtlas, irradianceSampler, ddgiTileUv(normalInTile, weighted.probe, irradianceScale), weighted.probe.y, 0.0).rgb;
+        irradianceSum += weighted.weight * irradiance;
+        weightSum += weighted.weight;
     }
     return DdgiFieldSum(irradianceSum, weightSum);
 }

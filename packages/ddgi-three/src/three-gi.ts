@@ -39,7 +39,7 @@
  * updates them, so GI never starts from matrices three hasn't computed yet.
  */
 
-import type { Camera, Object3D, OrthographicCamera, PerspectiveCamera, Scene } from 'three';
+import { Color, type Camera, type ColorRepresentation, type Object3D, type OrthographicCamera, type PerspectiveCamera, type Scene } from 'three';
 import type { EnvironmentDescriptor, FrameBudget, GIPlatform, ShadingModule } from '@pmndrs/ddgi-core';
 import type { PmndrsSkyLike } from './environment.ts';
 import { GILight, type GILightOptions } from './gi-light.ts';
@@ -202,6 +202,31 @@ export class ThreeGI {
         this.sync.markChanged(object);
     }
 
+    /**
+     * Light groups (T2.5; docs/api/three.md, "Light groups"): dims or
+     * recolours every light of group `group` (`userData.giLightGroup`, 0..3)
+     * in GI at once, with no update lag and nothing traced again. `color` is
+     * any three colour (a `Color`, `'#ffcc88'`, `0xffcc88`), read in three's
+     * linear working colour space, and `intensity` scales it, as a three
+     * light's colour and intensity do: `setGroupWeight(1, 'white', 0.25)` is
+     * group 1 at a quarter. It multiplies the lights' own colour and intensity
+     * (1, white, is the lights as they are), so it changes GI only: dim
+     * three's own lights the same way for the direct light. The output
+     * technique must have light groups on (DDGI: `settings.lightGroups`).
+     */
+    setGroupWeight(group: number, color: Color | ColorRepresentation, intensity = 1): void {
+        const technique = this.gi.outputTechnique;
+        if (!technique?.setGroupWeight) throw new Error(`@pmndrs/ddgi/three: the GI technique '${technique?.id ?? 'none'}' has no light group weights`);
+        technique.setGroupWeight(group, linearWeight(color, intensity));
+    }
+
+    /** The same for the sky and emissive surfaces: GI's environment layer. */
+    setEnvironmentWeight(color: Color | ColorRepresentation, intensity = 1): void {
+        const technique = this.gi.outputTechnique;
+        if (!technique?.setEnvironmentWeight) throw new Error(`@pmndrs/ddgi/three: the GI technique '${technique?.id ?? 'none'}' has no light group weights`);
+        technique.setEnvironmentWeight(linearWeight(color, intensity));
+    }
+
     /** Removes the light and everything the sync created. The platform itself is the host's to dispose. */
     dispose(): void {
         this.light.removeFromParent();
@@ -253,6 +278,15 @@ export class ThreeGI {
         old.dispose();
         this.currentLight = next;
     }
+}
+
+/** One scratch colour for the conversion, so a weight change allocates nothing. */
+const weightColor = new Color();
+
+/** A three colour times an intensity, as the platform's linear RGB (three keeps `Color` in its linear working space). */
+function linearWeight(color: Color | ColorRepresentation, intensity: number): [number, number, number] {
+    weightColor.set(color);
+    return [weightColor.r * intensity, weightColor.g * intensity, weightColor.b * intensity];
 }
 
 /** The platform's plain camera from a three camera (matrices current). */
