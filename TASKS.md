@@ -376,11 +376,11 @@ Status: **started 2026-11-06** on branch `m2` (from main at 3d682dc; M1 merged a
 
 | ID | Task | Agent | Size | Depends on | Status |
 | --- | --- | --- | --- | --- | --- |
-| T2.4a | Change-driven history on T1.12's per-probe record, and `ddgi/mark` (the change estimate); takes T2.1's change-log part (old and new light in `SceneChanges.lights`, influence radius) | implementer | M | T1.12 | todo |
+| T2.4a | Change-driven history on T1.12's per-probe record, and `ddgi/mark` (the change estimate); takes T2.1's change-log part (old and new light in `SceneChanges.lights`, influence radius) | implementer | M | T1.12 | active (implementer, 2026-11-06; worktree `webgpu-ddgi-m2-t24a`, branch `m2-t2.4a`) |
 | T2.4b | GPU scheduler with camera priority over Budget v2's fixed count, the feedback rule; far probes owe 2 as the fallback; the warm-up moves into the technique (the viewer switches to `volume.start`) | implementer | M | T2.4a | todo |
 | T2.4c | Key probes (1 in 8) with change propagation, the main path for global changes; first checked on Sponza's sun step and two-room's lamp | implementer | M | T2.4b | todo |
 | T2.M1 | Rigid moving objects, pulled forward from M3: the change feed for transforms (M3's T3.1, rigid part), geometry marks and the mover mask (T3.4, rigid part), three adapter change tracking for transforms | implementer | M | T2.4b (T2.4c for far sets) | todo |
-| T2.0 | Spike: deferred shadow-ray pass on Sponza (decision rule: go ahead if Sponza fits ≥ 1.25× the probes at 2 ms) | implementer | S | M1 done | todo (runs beside T2.4) |
+| T2.0 | Spike: deferred shadow-ray pass on Sponza (decision rule: go ahead if Sponza fits ≥ 1.25× the probes at 2 ms) | implementer | S | M1 done | active (implementer, 2026-11-06; worktree `webgpu-ddgi-m2-t20`, branch `m2-t2.0`; runs beside T2.4) |
 | T2.1 | Light buffer v2 (capacity, the adapter's light walk), manifest `motions`, `sponza-candles` (1,024 lights) | implementer + wrangler | M | T2.4a (change log) | todo |
 | T2.2 | Deferred direct light (`gi/direct`) in platform hit shading | implementer | M | T2.0 | todo |
 | T2.5 | Light groups: layers, compose, weights, adapter API | implementer | M | T2.2, T2.4a | todo |
