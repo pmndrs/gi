@@ -359,6 +359,33 @@ Done-whens for the B stages are in `docs/design/bvh-framework.md`. B1a's: a 10k-
   - See the T0.12 notes above: the curtains join `sponza`; ivy, trees and candles make `sponza-full`.
   - Done when the viewer shows the curtains at bookmark 1, the fetch verifies, and the Cycles reference is re-rendered.
 
+## M2: dynamic updates (draft breakdown, T1.11)
+
+Draft from the M2/M3 design docs on branch `claude/m2-m3-design-on-m1` (73590ab; `docs/design/m2-lights.md`, `docs/design/m3-moving.md`, `research/ddgi-dynamic-updates.md`), not merged yet. Order follows Dennis (DECISIONS 2026-11-06): dynamic updates first, moving objects and time of day; startup ("fast first GI") lower. Rows marked *pending Dennis* depend on his answers to `dyn-key-probes`, `dyn-movers-early` and `dyn-blas-rebuild`; this draft assumes yes to all three (the parent session's recommendation). Done-whens are in the design docs' "Draft done-whens"; they move here when the docs are merged.
+
+| ID | Task | Agent | Size | Depends on | Status |
+| --- | --- | --- | --- | --- | --- |
+| T2.4a | Change-driven history on T1.12's per-probe record, and `ddgi/mark` (the change estimate) | implementer | M | T1.12 | todo |
+| T2.4b | GPU scheduler with camera priority over Budget v2, the feedback rule; far probes owe 2 as the fallback; the warm-up moves into the technique | implementer | M | T2.4a | todo |
+| T2.4c | Key probes (1 in 8) with change propagation, the main path for global changes; first checked on Sponza's sun step and two-room's lamp | implementer | M | T2.4b | todo (*pending Dennis: `dyn-key-probes`*) |
+| T2.M1 | Rigid moving objects, pulled forward from M3: the change feed for transforms (M3's T3.1, rigid part), geometry marks and the mover mask (T3.4, rigid part), three adapter change tracking for transforms | implementer | M | T2.4b (T2.4c for far sets) | todo (*pending Dennis: `dyn-movers-early`*) |
+| T2.0 | Spike: deferred shadow-ray pass on Sponza (decision rule: go ahead if Sponza fits ≥ 1.25× the probes at 2 ms) | implementer | S | M1 done | todo (runs beside T2.4) |
+| T2.1 | Light buffer v2, manifest `motions`, `sponza-candles` (1,024 lights) | implementer + wrangler | M | none | todo |
+| T2.2 | Deferred direct light (`gi/direct`) in platform hit shading | implementer | M | T2.0 | todo |
+| T2.5 | Light groups: layers, compose, weights, adapter API | implementer | M | T2.2, T2.4a | todo |
+| T2.6a | Sky re-bake for time of day: GPU procedural source, two-level SH with radiance SH, the compile fix | implementer | M | T2.4b | todo |
+| T2.6b | Instant sky: first-order transfer in the blend, the nudge, the fallback; the sun layer in white with T2.5 | implementer | M | T2.4c, T2.5, T2.6a | todo |
+| T2.3 | Many-light sampling: the light grid | implementer | M | T2.1, T2.2 | todo |
+| T2.7 | Native harness: manifest motions, texture sky, animated sun | native-runner | M | T2.1 | todo |
+| T2.8 | Viewer: gizmos, sliders, groups, time of day, motions, a response meter, the native compare page | implementer | M | T2.4b, T2.5, T2.6b, T2.7 | todo |
+| T2.12 | Fast first GI: GPU H-PLOC/LBVH trees at load, tinybvh swapped in per mesh (lower priority) | implementer | M | B1, B2 | todo |
+| T2.13 | Scene copy off the main thread (lower priority) | implementer | M | none | todo |
+| T2.14 | Compile only what's configured (`encodeBatch` on first use, the sky kernel's compile) (lower priority) | implementer | S | T2.6a | todo |
+| T2.10 | M2 measurements against targets (one VALID run per gate, DECISIONS 2026-11-06) | gpu-tester, native-runner | M | all above | todo |
+| T2.11 | M2 note and M3 breakdown | main session | S | T2.10 | todo |
+
+M3 keeps deforming meshes and the BVH work: runtime mesh trees, `GpuMeshRefit` wired, and the H-PLOC rebuild when a refit drifts (*pending Dennis: `dyn-blas-rebuild`*, which also needs a DECISIONS entry), several volumes, the camera-following volume, nested finer volumes around thin cloth (carried from M1), and the scenarios (`docs/design/m3-moving.md`, T3.0–T3.11).
+
 ## Carried to M2 (collected during M1)
 
 - `sponza-candles`: an opt-in scene with a stated subset of Intel's 10,000 candle lights, for the many-lights stress test (DECISIONS 2026-11-05).
