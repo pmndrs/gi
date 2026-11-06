@@ -21,6 +21,34 @@ Rules:
 
 ---
 
+## 2026-11-06 · T2.4d review and merge · M2 lead (opus)
+Did:
+- Opus review of T2.4d against its done-when (TASKS): pass with notes, no must-fix. It ran inside Dennis's timebox ("let's not spend forever on it"): one diagnosis, one fix per miss.
+- Merged `m2-t2.4d` into `m2` (1e791b5). PROGRESS and DECISIONS conflicted, text only; both sides kept (98 headings = 97 + 96 − 95). The T2.4d DECISIONS entries are marked accepted.
+- TASKS: T2.4d done; a T2.8 line for 30 Hz hosts.
+
+Verified (reviewer, RTX 3060 nvidia/ampere, Chrome 157, bench lock, one run at a time, not timed):
+- lint, typecheck, 1,016 unit tests;
+- the full suite: 48 pages plus 2 self-tests, two-room leak 0.84%, still scenes mark 0;
+- furnished-room sun step: frames 11 / 14; per pixel 2.9% / 3.7% at 0.5 s and 1.4% / 1.8% at 3 s;
+- Sponza: view frame 12, field frame 36, sun halved from frame 1;
+- step page: two-room 9/17, Cornell 5/8, the sweep passes;
+- cabinet settled at frame 2; door leak 0.01% once closed.
+
+Lead, on the merged tree: lint, typecheck, 1,056 unit tests.
+
+Not verified: flicker was not re-run by the reviewer (the implementer's Cornell 0.094% stands). The Intel UHD after the merge. A lamp step on the furnished room: no page can do it without a code change.
+
+Numbers: the real day, one VALID run: median 1.98 ms, p95 2.30 ms. The margin is judged on the median (DECISIONS, T2.4c check 5), so it passes with 0.22 ms to spare. The first 45 frames after Sponza's big step run at 2.51 ms median (T2.10). T2.1's lamp jump back is at frame 31 against a bar of 30, with no overshoot (before: about 38 frames and 7–12.6%).
+
+Next:
+- Waiting is bounded at 30 frames from the mark, but the key-neighbour test ignores visibility, so a probe can wait the full 30 frames on keys behind a wall.
+- The second count doesn't subtract propagate's and mark's cost as §4.5 asks, and assumes cost follows rays (shown on the RTX only).
+- `continuing-change.ts:98`: one frame without a mark turns it off, so a 30 Hz host never turns it on (TASKS, T2.8).
+- Data race: `wgsl/schedule.ts:688` writes every probe's flags word, including keys whose flags other threads read. Harmless in practice, but the comment near line 640 says no thread writes it. Write the flag only when it changes, next time the scheduler is touched.
+- Add waiting probes to `ddgi-schedule-reduction`. Nothing tests the "all keys' full counts fit" rule (`ddgi-technique.ts:256`).
+- T2.1's far change for many unranged lights is served as global, so on key-path volumes every fine probe waits and those frames count as continuing. Watch this in T2.3.
+
 ## 2026-11-06 · T2.1 review and merge · M2 lead (opus)
 Did:
 - Opus review of T2.1 against its done-when: pass with notes. The one must-fix was a valid timing for item 3. A gpu-tester ran it after Dennis's PC restart: VALID, met.
@@ -79,6 +107,19 @@ Next:
 - T2.3: the light grid (7 ms at 16 probes now); `ddgi/trace`'s reach test loops every light too. T2.8: play motions (`motionState`), add an off light to the scene to light it; a slider for `candles`; sponza-candles' exposure (0 looks over-bright).
 - Shared files touched: `mark-table.ts` (light entries only), `layout.ts` (a comment), `platform-scene.ts` (capacity), `scene-sync.ts`, `convert.ts`, `user-data.ts`, `three-gi.ts`, `fetch.ts`, `sources.json`, `manifest.ts`, `three-scene.ts`, `load-scene.ts`, `viewer-core.ts`, `url-state.ts`, `native-lib.ps1`, 9 manifests, `three-adapter-timing`, `platform-recompiles`.
 - `tools/reference/cycles/render.py` doesn't know `light-set` parts (sponza-candles has no reference; it would fail if asked).
+
+## 2026-11-06 · T2.4d a global change's response in rooms, and the cost while the sun moves · implementer (opus)
+Did (branch `m2-t2.4d`, fbfe467..HEAD; Dennis's timebox: one diagnosis, one fix per miss):
+- Diagnosis of the room (`ddgi-sky-sun-step`'s new `byClass`, `VITE_DDGI_SETTINGS`): fine probes, near ones and round-robin picks, were traced before the keys took the change in, and kept the stale light. Fix: key path from 30 frames (was 120); keys owe the full count where all keys' counts fit in 30 frames; every fine probe waits for its keys and isn't traced meanwhile (`waitingForKeys`, set in `ddgi/schedule-count` from the keys' `takingChange`; at most `KEY_WAIT_FRAMES` 30; the fill skips them, second pass if nothing else is left). Files: `wgsl/mark.ts` (`ddgiServing`, the awaiting frame), `wgsl/schedule.ts`, `wgsl/blend.ts`, `layout.ts` (flag bit 6, word 13), `settings.ts`, `schedule.ts` (CPU twin).
+- Diagnosis of the day (`ddgi-key-probes-cost`, per-pass and list breakdown, VALID 69 °C, calibrated 586): 2.04 ms still against 3.29 day; `ddgi/trace` +0.96, blend +0.12, `gi/direct` +0.09, propagate and mark +0.10; rays a frame 1.58×. Not the higher sun: the priority share lists only active probes. Fix: the design's fallback, §4.5's second count while changes continue (`continuing-change.ts`).
+- Docs: ddgi.md "Revised in T2.4d", m2-lights.md as built, DECISIONS (2), NOTES (2).
+Verified (RTX 3060 nvidia/ampere, Chrome 157 headless, bench lock):
+1. Furnished room, lamp off, sun 30° lower, 571 a frame: bookmarks within 5% from frame **11 / 17** (bar 30); per pixel 2.8% / 3.8% at 0.5 s, 1.3% / 1.9% at 3 s; field within 5% from frame 18 / 24. Was 25% / 23% at 0.5 s.
+2. Real day, one VALID run (51 °C, 0% throttled, calibrated 548): update median **1.98 ms**, p95 2.30 (bar 2.2); still 1.86; batch through the day about 344.
+3. Sponza true 30° turn at 316: view frame **12** (bar 15), field frame **36** (bar 120); sun halved from frame 1. Two-room 9/17, Cornell 5/8, sweep passes. Full suite 49/49 (leak 0.84%, furnace −0.15%, still scenes 0 marks). Flicker Cornell 0.094% / 0.38% (2 ms). Intel UHD: schedule and propagate reductions, change-still pass.
+Not verified: the waiting path isn't in the subgroup/fallback comparison (`ddgi-schedule-reduction` has no awaiting probes); Bistro; furnished-room lamp changes; Intel responses.
+Numbers: Sponza's first 45 frames after the step run at **2.51 ms** median (calibrated 548), for T2.10. T2.1's lamp step on this code (trial merge, not committed): forward frame 2, overshoot 3.4% of the step; back frame **31** (bar 30), no overshoot (T2.1 had about 38 frames, 7-12.6%).
+Next: T2.10: the step's busy frames. Add waiting probes to `ddgi-schedule-reduction`. Merge with T2.1 conflicts only in DECISIONS.
 
 ## 2026-11-06 · T2.6a review and merge; new task T2.4d · M2 lead (opus)
 Did:

@@ -8,8 +8,11 @@
  *
  * Four dispatches, every frame:
  * 1. `ddgi/schedule-count`, one thread per probe: takes the probe's feedback
- *    request (m2-lights.md §4.6) into its record, and a probe owed updates
- *    gets the priority `urgency × camera weight`, sorted into one of 32
+ *    request (m2-lights.md §4.6) into its record; a fine probe awaiting its
+ *    keys' change is flagged as still waiting while any of its key
+ *    neighbours is taking the change in (T2.4d; at most KEY_WAIT_FRAMES
+ *    since its mark), and a waiting probe is listed by nobody; a probe owed
+ *    updates and not waiting gets the priority `urgency × camera weight`, sorted into one of 32
  *    buckets, each twice as urgent as the one below. The buckets' histogram
  *    is counted **subgroups first** (one atomic per bucket present in a
  *    subgroup) or by the **declared fallback** (one atomic per thread).
@@ -22,8 +25,10 @@
  * 4. `ddgi/schedule-fill`, one workgroup: the rest of the list comes from the
  *    round robin, the scrambled order `order[i] = (i × stride) mod N` from
  *    the cursor on, skipping probes stamped this frame. A window of
- *    `updateCount` entries holds at most the listed ones stamped, so it
- *    always has enough unstamped ones. The cursor moves past the entries it
+ *    `updateCount` entries holds at most the listed ones stamped, but probes
+ *    waiting for their keys are skipped too, so the fill goes on past the
+ *    window, through the whole order if it must, and takes waiting probes
+ *    only in a second pass, when nothing else is left. The cursor moves past the entries it
  *    used (stamped entries it passes were updated this frame anyway), so
  *    every probe still comes up once per pass of the round robin. The
  *    compaction is a workgroup scan: subgroups first, the declared fallback
@@ -38,7 +43,8 @@
  * update list: 4 storage buffers.
  */
 
-import { PRIORITY_BUCKET_OFFSET, PRIORITY_BUCKETS, PROBE_HISTORY_UPDATES, PROBE_HISTORY_WORD, PROBE_HISTORY_WORDS, SCHEDULE_STATE_WORD } from '../layout.ts';
+import { KEY_NEIGHBOURS, PRIORITY_BUCKET_OFFSET, PRIORITY_BUCKETS, PROBE_HISTORY_FLAG, PROBE_HISTORY_UPDATES, PROBE_HISTORY_WORD, PROBE_HISTORY_WORDS, SCHEDULE_STATE_WORD } from '../layout.ts';
+import { KEY_WAIT_FRAMES } from '../settings.ts';
 import { DDGI_COMMON_WGSL } from './common.ts';
 import type { PhaseBReduction } from './blend.ts';
 
@@ -215,6 +221,13 @@ const DDGI_OWED_MASK: u32 = ${PROBE_HISTORY_UPDATES.owedMask}u;
 // The scheduled frame sits above the flags' 8 bits; 24 bits only need to differ from this frame's.
 const DDGI_SCHEDULED_SHIFT: u32 = 8u;
 const DDGI_FLAGS_MASK: u32 = 0xffu;
+const DDGI_FLAG_AWAITING_CHANGE: u32 = ${PROBE_HISTORY_FLAG.awaitingChange}u;
+const DDGI_FLAG_TAKING_CHANGE: u32 = ${PROBE_HISTORY_FLAG.takingChange}u;
+const DDGI_FLAG_WAITING_FOR_KEYS: u32 = ${PROBE_HISTORY_FLAG.waitingForKeys}u;
+const DDGI_HISTORY_AWAITING_SINCE: u32 = ${PROBE_HISTORY_WORD.awaitingSinceFrame}u;
+const DDGI_KEY_NEIGHBOURS: u32 = ${KEY_NEIGHBOURS}u;
+// The longest a fine probe waits for its keys, in frames since its mark (KEY_WAIT_FRAMES in settings.ts).
+const DDGI_KEY_WAIT_FRAMES: u32 = ${KEY_WAIT_FRAMES}u;
 // The schedule state's words (SCHEDULE_STATE_WORD in layout.ts).
 const DDGI_STATE_CURSOR_PROBE: u32 = ${SCHEDULE_STATE_WORD.cursorProbe}u;
 const DDGI_STATE_ABOVE_TOTAL: u32 = ${SCHEDULE_STATE_WORD.aboveTotal}u;
@@ -275,11 +288,55 @@ fn ddgiPriorityBucket(priority: f32) -> u32 {
     return u32(clamp(bucket, 0, i32(DDGI_PRIORITY_BUCKETS) - 1));
 }
 
-// The probe's bucket from its record, or DDGI_NO_BUCKET when it owes nothing.
+fn ddgiWaitingForKeys(probeIndex: u32) -> bool {
+    return (ddgiHistoryWords[probeIndex * DDGI_HISTORY_WORDS + DDGI_HISTORY_SCHEDULE_AND_FLAGS] & DDGI_FLAG_WAITING_FOR_KEYS) != 0u;
+}
+
+// Whether a fine probe awaiting a change still waits for its keys (T2.4d):
+// some key neighbour of it is still taking the change in, and it has waited
+// less than DDGI_KEY_WAIT_FRAMES since its mark. *Why it waits:* a fine
+// probe traced before its keys are done bounces its rays off a field that
+// still holds the old light, and keeps that in its history; meanwhile
+// ddgi/propagate passes it its keys' change. The keys' takingChange flag
+// lives in word 5, which no thread of this dispatch writes (each thread
+// writes only its own word 5 here, and keys never wait), so the read can't race.
+fn ddgiStillWaitsForKeys(probeIndex: u32) -> bool {
+    let base = probeIndex * DDGI_HISTORY_WORDS;
+    if ((ddgiHistoryWords[base + DDGI_HISTORY_SCHEDULE_AND_FLAGS] & DDGI_FLAG_AWAITING_CHANGE) == 0u) {
+        return false;
+    }
+    // Frames compare modulo 2^32, as the frame counter wraps.
+    if (ddgi.frame - ddgiHistoryWords[base + DDGI_HISTORY_AWAITING_SINCE] >= DDGI_KEY_WAIT_FRAMES) {
+        return false;
+    }
+    let counts = ddgiProbeCount();
+    let probe = ddgiProbeCoordinates(probeIndex, counts);
+    for (var neighbour = 0u; neighbour < DDGI_KEY_NEIGHBOURS; neighbour++) {
+        let key = ddgiKeyNeighbourOffset(neighbour, probe);
+        if (!key.exists) {
+            continue;
+        }
+        let keyProbe = vec3u(probe + key.offset);
+        let keyIndex = keyProbe.x + counts.x * (keyProbe.z + counts.z * keyProbe.y);
+        if ((ddgiHistoryWords[keyIndex * DDGI_HISTORY_WORDS + DDGI_HISTORY_SCHEDULE_AND_FLAGS] & DDGI_FLAG_TAKING_CHANGE) != 0u) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Sets or clears the probe's waitingForKeys flag (keeps the rest of word 5).
+fn ddgiSetWaitingForKeys(probeIndex: u32, waiting: bool) {
+    let word = probeIndex * DDGI_HISTORY_WORDS + DDGI_HISTORY_SCHEDULE_AND_FLAGS;
+    ddgiHistoryWords[word] = (ddgiHistoryWords[word] & ~DDGI_FLAG_WAITING_FOR_KEYS) | select(0u, DDGI_FLAG_WAITING_FOR_KEYS, waiting);
+}
+
+// The probe's bucket from its record, or DDGI_NO_BUCKET when it owes nothing
+// or waits for its keys (the flag ddgi/schedule-count set this frame).
 fn ddgiOwedBucket(probeIndex: u32) -> u32 {
     let base = probeIndex * DDGI_HISTORY_WORDS;
     let owed = (ddgiHistoryWords[base + DDGI_HISTORY_UPDATES] >> DDGI_OWED_SHIFT) & DDGI_OWED_MASK;
-    if (owed == 0u) {
+    if (owed == 0u || ddgiWaitingForKeys(probeIndex)) {
         return DDGI_NO_BUCKET;
     }
     let urgency = bitcast<f32>(ddgiHistoryWords[base + DDGI_HISTORY_URGENCY]);
@@ -348,6 +405,7 @@ fn ${SCHEDULE_ENTRY_POINTS.count}(
     var bucket = DDGI_NO_BUCKET;
     if (probeIndex < ddgiTotalProbes()) {
         ddgiTakeFeedbackRequest(probeIndex);
+        ddgiSetWaitingForKeys(probeIndex, ddgiStillWaitsForKeys(probeIndex));
         bucket = ddgiOwedBucket(probeIndex);
     }
     // Every thread, in uniform control flow (the subgroup form needs it).
@@ -441,7 +499,12 @@ fn ${SCHEDULE_ENTRY_POINTS.fill}(
     let need = ddgi.updateCount - min(listed, ddgi.updateCount);
     ${reduction === 'subgroups' ? '// Subgroups hold consecutive threads in order (see fillScanWgsl), or this dispatch takes the workgroup scan.\n    if (subgroupBroadcastFirst(thread) + lane != thread) {\n        atomicStore(&ddgiFillUnordered, 1u);\n    }' : ''}
     let ordered = workgroupUniformLoad(&ddgiFillUnordered) == 0u;
-    for (var start = 0u; start < ddgi.updateCount; start += DDGI_SCHEDULE_WORKGROUP_SIZE) {
+    // Positions run through the order twice at most: the first pass skips
+    // probes waiting for their keys, the second takes only those, so no probe
+    // is taken twice and the list is always full. Usually the first
+    // updateCount positions are enough, as before T2.4d.
+    let positions = 2u * probeCount;
+    for (var start = 0u; start < positions; start += DDGI_SCHEDULE_WORKGROUP_SIZE) {
         let picked = workgroupUniformLoad(&ddgiFillPicked);
         if (picked >= need) {
             break;
@@ -449,9 +512,10 @@ fn ${SCHEDULE_ENTRY_POINTS.fill}(
         let position = start + thread;
         var probeIndex = 0u;
         var free = false;
-        if (position < ddgi.updateCount) {
+        if (position < positions) {
             probeIndex = ddgiOrderAfterCursor(cursorProbe, position, probeCount);
-            free = ddgiStampOf(probeIndex) != ddgiFrameStamp();
+            let secondPass = position >= probeCount;
+            free = ddgiStampOf(probeIndex) != ddgiFrameStamp() && ddgiWaitingForKeys(probeIndex) == secondPass;
         }
         let flag = select(0u, 1u, free);
         let rank = ddgiChunkScan(flag, thread, ${laneArguments}, ordered);

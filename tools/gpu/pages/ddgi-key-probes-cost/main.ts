@@ -26,6 +26,11 @@
  *    gpuMs × 1.1, as a median over the day's timed frames; its p95, and the
  *    trace + blend + write part Budget v2 calibrates on, are reported.
  *
+ * Each section also reports every pass's median and what the update list
+ * held (rays traced, hits lit by gi/direct, probes at priority and owed,
+ * from the census), so a miss can be traced to a pass (T2.4d). Since T2.4d
+ * the day runs with the batch while changes continue (continuing-change.ts).
+ *
  * Manual (needs the Sponza download), under the bench lock:
  *   node tools/reference/bench-lock.ts run --what "T2.4c cost" -- pnpm test:gpu --filter ddgi-key-probes-cost --gpu nvidia --json <file>
  */
@@ -97,6 +102,24 @@ class FrameTimings {
     }
 }
 
+/** Each pass's median over the frames (every pass seen in any of them; 0 in a frame without it), in ms. */
+function passMedians(frames: ReadonlyArray<{ passes: Map<string, number> }>): Record<string, number> {
+    const names = new Set(frames.flatMap((entry) => [...entry.passes.keys()]));
+    const medians: Record<string, number> = {};
+    for (const name of [...names].sort()) medians[name] = round(quantile(frames.map((entry) => entry.passes.get(name) ?? 0), 0.5));
+    return medians;
+}
+
+/** The census counters that say what a frame's update list held, sampled once a frame (they arrive a few frames late). */
+const LIST_COUNTERS = ['rays traced', 'hits lit by gi/direct', 'probes updated at priority', 'probes owed updates', 'probes propagated'] as const;
+
+/** Each list counter's median over the samples. */
+function counterMedians(samples: ReadonlyArray<Readonly<Record<string, number>>>): Record<string, number> {
+    const medians: Record<string, number> = {};
+    for (const name of LIST_COUNTERS) medians[name] = quantile(samples.map((counters) => counters[name] ?? Number.NaN).filter((value) => value >= 0), 0.5);
+    return medians;
+}
+
 function quantile(values: readonly number[], share: number): number {
     const sorted = [...values].sort((a, b) => a - b);
     return sorted[Math.min(sorted.length - 1, Math.floor(share * sorted.length))] ?? Number.NaN;
@@ -114,12 +137,14 @@ await runThreePage(async ({ device, data, log: logLine }) => {
     const { scene } = test;
     const timings = new FrameTimings();
     const pacing = new GpuBoundPacing(device);
-    const run = async (frames: number, budget: Parameters<typeof scene.frame>[0], deltaTime: number, before?: (index: number) => void): Promise<{ first: number; last: number }> => {
+    const run = async (frames: number, budget: Parameters<typeof scene.frame>[0], deltaTime: number, before?: (index: number) => void): Promise<{ first: number; last: number; counters: Array<Readonly<Record<string, number>>> }> => {
         const first = scene.platform.stats.frame + 1;
+        const counters: Array<Readonly<Record<string, number>>> = [];
         for (let index = 0; index < frames; index++) {
             before?.(index);
             scene.frame(budget, deltaTime);
             timings.note(test);
+            counters.push(scene.ddgi.counters);
             await pacing.after();
         }
         await pacing.drain();
@@ -130,7 +155,7 @@ await runThreePage(async ({ device, data, log: logLine }) => {
             await device.queue.onSubmittedWorkDone();
             await yieldToCallbacks();
         }
-        return { first, last: first + frames - 1 };
+        return { first, last: first + frames - 1, counters };
     };
 
     // 1. Warm-up and calibration.
@@ -168,6 +193,8 @@ await runThreePage(async ({ device, data, log: logLine }) => {
         calibratedMedian: round(quantile(still.map((entry) => entry.calibrated), 0.5)),
         propagateMedian: round(quantile(stillPropagate, 0.5)),
         probesPropagatedTotal: stillCounters['probes propagated (total)'],
+        passes: passMedians(still),
+        list: counterMedians(stillRange.counters),
     };
     log(`still, ${still.length} timed frames: update ${round(quantile(still.map((entry) => entry.total), 0.5))} ms (median, every ddgi/ pass), ddgi/propagate ${round(quantile(stillPropagate, 0.5))} ms with nothing to do; probes propagated ${stillCounters['probes propagated (total)']}`);
     if ((stillCounters['probes propagated (total)'] ?? 0) !== 0) failures.push(`still: propagation ran (${stillCounters['probes propagated (total)']} probes)`);
@@ -191,6 +218,8 @@ await runThreePage(async ({ device, data, log: logLine }) => {
         keyChangesPassed: stepCounters['key changes passed (total)'],
         probesPropagated: stepCounters['probes propagated (total)'],
         updateMedian: round(quantile(busy.map((entry) => entry.total), 0.5)),
+        passes: passMedians(busy),
+        list: counterMedians(step.counters.slice(0, 45)),
     };
     log(
         `the sun turned ${SUN_TURN_DEGREES} degrees: ddgi/propagate over ${propagateBusy.length} timed frames of the first 45 median ${round(quantile(propagateBusy, 0.5))} ms, p90 ${round(quantile(propagateBusy, 0.9))}, largest ${round(Math.max(...propagateBusy))} (bar ${PROPAGATE_MS}); ` +
@@ -228,8 +257,16 @@ await runThreePage(async ({ device, data, log: logLine }) => {
         propagateMedian: round(quantile(dayPropagate, 0.5)),
         markMedian: round(quantile(dayMark, 0.5)),
         bar,
+        passes: passMedians(dayFrames),
+        list: counterMedians(day.counters),
         counters: scene.ddgi.counters,
     };
+    // Where the time goes (T2.4d): each pass, and what the update list held, still against the step and the day.
+    const describeSection = (name: string, section: { passes: Record<string, number>; list: Record<string, number> }) =>
+        `${name}: ${Object.entries(section.passes).map(([pass, ms]) => `${pass} ${ms}`).join(', ')}; list (medians): ${Object.entries(section.list).map(([counter, value]) => `${counter} ${value}`).join(', ')}`;
+    log(describeSection('still', results.still as never));
+    log(describeSection('after the step (first 45 frames)', results.step as never));
+    log(describeSection('day', results.day as never));
     log(
         `a 10-second day (elevation ${DAY_LOW_DEGREES}-${DAY_HIGH_DEGREES}-${DAY_LOW_DEGREES} degrees, azimuth through ${DAY_AZIMUTH_DEGREES}, in ${DAY_FRAMES} frames) at ${units} probes, ${dayFrames.length} timed frames: update (every ddgi/ pass) median ${round(quantile(dayTotals, 0.5))} ms, p95 ${round(quantile(dayTotals, 0.95))} (bar ${bar}); ` +
             `trace + blend + write ${round(quantile(dayFrames.map((entry) => entry.calibrated), 0.5))}; ddgi/propagate ${round(quantile(dayPropagate, 0.5))}; ddgi/mark ${round(quantile(dayMark, 0.5))}`,

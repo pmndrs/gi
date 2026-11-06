@@ -248,6 +248,7 @@ const DDGI_FLAG_AWAITING_CHANGE: u32 = ${PROBE_HISTORY_FLAG.awaitingChange}u;
 const DDGI_FLAG_TAKING_CHANGE: u32 = ${PROBE_HISTORY_FLAG.takingChange}u;
 const DDGI_FLAG_PASSED_CHANGE: u32 = ${PROBE_HISTORY_FLAG.passedChange}u;
 const DDGI_FLAG_WARMED_ONCE: u32 = ${PROBE_HISTORY_FLAG.warmedOnce}u;
+const DDGI_FLAG_WAITING_FOR_KEYS: u32 = ${PROBE_HISTORY_FLAG.waitingForKeys}u;
 // The mover mask (T2.M1). The trace stores a miss at 60,000 (wgsl/trace.ts);
 // anything this far or farther is a miss and hits no mover.
 const DDGI_MOVER_MISS_DISTANCE: f32 = 50000.0;
@@ -592,7 +593,7 @@ struct DdgiProbeHistory {
     changeClock: u32,        // the volume's change clock at its last blended update
     keyDeltaSlot: u32,       // a key whose latest update passed its change: the update-list slot of its key-delta entry
     moverMask: u32,          // the hot movers its latest blended update's rays hit (T2.M1)
-    spare0: u32,
+    awaitingSinceFrame: u32, // a fine probe awaiting a change: the frame ddgi/mark flagged it (T2.4d)
     spare1: u32,
     spare2: u32,
 }
@@ -717,7 +718,8 @@ fn ddgiHysteresisStep(history: DdgiProbeHistory, state: u32, changeClock: u32) -
     next.changeClock = changeClock;
     // passedChange is set again below when this update passes its change on.
     // warmedOnce is cleared too: after its second update a state-3 probe is active.
-    let keptFlags = flags & ~(DDGI_FLAG_MARKED | DDGI_FLAG_MARKED_BEFORE_LAST_UPDATE | DDGI_FLAG_AWAITING_CHANGE | DDGI_FLAG_TAKING_CHANGE | DDGI_FLAG_PASSED_CHANGE | DDGI_FLAG_WARMED_ONCE);
+    // waitingForKeys goes with the awaiting flag: traced itself, it waits for nothing.
+    let keptFlags = flags & ~(DDGI_FLAG_MARKED | DDGI_FLAG_MARKED_BEFORE_LAST_UPDATE | DDGI_FLAG_AWAITING_CHANGE | DDGI_FLAG_TAKING_CHANGE | DDGI_FLAG_PASSED_CHANGE | DDGI_FLAG_WARMED_ONCE | DDGI_FLAG_WAITING_FOR_KEYS);
     let stillTaking = takingChange && nextOwed > 0u;
     let nextFlags = keptFlags | select(0u, DDGI_FLAG_MARKED_BEFORE_LAST_UPDATE, marked) | select(0u, DDGI_FLAG_TAKING_CHANGE, stillTaking);
     // A first update starts the flags again, with warmedOnce: one estimate so far.

@@ -55,6 +55,8 @@ export interface ScheduledProbe {
     readonly owed: number;
     /** urgency × camera weight. */
     readonly priority: number;
+    /** Waiting for its keys (T2.4d): listed by nobody, unless the round robin has nothing else left. */
+    readonly waiting?: boolean;
 }
 
 export interface CpuSchedule {
@@ -78,7 +80,7 @@ export function scheduleOnCpu(probes: readonly ScheduledProbe[], count: number, 
     const probeCount = probes.length;
     const listCount = Math.min(count, probeCount);
     const histogram = new Array<number>(PRIORITY_BUCKETS).fill(0);
-    const buckets = probes.map((probe) => (probe.owed > 0 ? priorityBucket(probe.priority) : -1));
+    const buckets = probes.map((probe) => (probe.owed > 0 && probe.waiting !== true ? priorityBucket(probe.priority) : -1));
     for (const bucket of buckets) if (bucket >= 0) histogram[bucket]++;
     const limit = priorityCount(listCount, share);
     const priority: number[] = [];
@@ -88,9 +90,11 @@ export function scheduleOnCpu(probes: readonly ScheduledProbe[], count: number, 
     const stamped = new Set(priority);
     const roundRobin: number[] = [];
     let used = 0;
-    for (let position = 0; position < listCount && priority.length + roundRobin.length < listCount; position++) {
+    // Two passes through the order: waiting probes only in the second, when nothing else is left.
+    for (let position = 0; position < 2 * probeCount && priority.length + roundRobin.length < listCount; position++) {
         const probe = (cursorProbe + position * stride) % probeCount;
-        if (stamped.has(probe)) continue;
+        const secondPass = position >= probeCount;
+        if (stamped.has(probe) || (probes[probe].waiting === true) !== secondPass) continue;
         roundRobin.push(probe);
         used = position + 1;
     }

@@ -62,14 +62,14 @@
  * **Key probes** (T2.4c, m2-lights.md §4.5), when the frame's change takes
  * the key-probe path (`keyProbes`, on a volume too big for every probe's K
  * updates): a marked key probe's urgency is its change times
- * `keyProbeBoost`, and away from the view's core it owes `keyProbeUpdates`;
- * a fine probe away from the view's core (camera weight under 0.5) waits for
- * its keys: its urgency is its change times `keyResidualShare`, it owes
- * `fineOwedUpdates` (1), and it is flagged as awaiting a change, so
- * `ddgi/propagate` passes it its keys' change meanwhile and its own blend
- * cuts its history only for what propagation hasn't brought. Probes near and
- * in view keep their full urgency and owed updates, whatever their level.
- * Without the key-probe path, "far probes owe 2" is the fallback.
+ * `keyProbeBoost`, and away from the view's core it owes `keyOwedUpdates`;
+ * every fine probe (since T2.4d, near the view too) waits for its keys: its
+ * urgency is its change times `keyResidualShare`, it owes `fineOwedUpdates`
+ * (1), and it is flagged as awaiting a change, with the frame it started
+ * waiting, so `ddgi/propagate` passes it its keys' change meanwhile, the
+ * scheduler leaves it untraced until its keys are done, and its own blend
+ * cuts its history only for what propagation hasn't brought. Without the
+ * key-probe path, "far probes owe 2" is the fallback.
  *
  * **The change clock** (T2.4c): the largest change marked this frame goes
  * into the census (`atomicMax`), and a second, one-thread dispatch
@@ -192,6 +192,7 @@ const DDGI_FAR_SET_DISTANCE_SLACK_SPACINGS: f32 = 0.5;
 // An off probe the change may free goes first (FREED_PROBE_URGENCY_SHARE in mark-table.ts).
 const DDGI_FREED_PROBE_URGENCY_SHARE: f32 = ${FREED_PROBE_URGENCY_SHARE};
 const DDGI_HISTORY_MOVER_MASK: u32 = ${PROBE_HISTORY_WORD.moverMask}u;
+const DDGI_HISTORY_AWAITING_SINCE: u32 = ${PROBE_HISTORY_WORD.awaitingSinceFrame}u;
 const DDGI_MARK_VISIBILITY_FLOOR: f32 = ${MARK_VISIBILITY_FLOOR};
 const DDGI_MARK_DARK_IRRADIANCE: f32 = ${MARK_DARK_IRRADIANCE};
 // A darkening leaves at least this share of the light, as far as its change is
@@ -454,7 +455,13 @@ fn ddgiMarkProbe(probeIndex: u32, change: f32, serving: DdgiServing) {
         pending = bitcast<f32>(old) + change;
     }
     atomicMax(&ddgiProbeHistoryWords[base + DDGI_HISTORY_URGENCY], bitcast<u32>(pending * serving.urgencyShare));
-    atomicOr(&ddgiProbeHistoryWords[base + DDGI_HISTORY_SCHEDULE_AND_FLAGS], DDGI_FLAG_MARKED | select(0u, DDGI_FLAG_AWAITING_CHANGE, serving.awaiting));
+    let flagsBefore = atomicOr(&ddgiProbeHistoryWords[base + DDGI_HISTORY_SCHEDULE_AND_FLAGS], DDGI_FLAG_MARKED | select(0u, DDGI_FLAG_AWAITING_CHANGE, serving.awaiting));
+    // The frame it started waiting for its keys, for the scheduler's bound on
+    // the wait (KEY_WAIT_FRAMES). Only the thread whose atomicOr set the flag
+    // writes it: a change that keeps going doesn't restart the wait.
+    if (serving.awaiting && (flagsBefore & DDGI_FLAG_AWAITING_CHANGE) == 0u) {
+        atomicStore(&ddgiProbeHistoryWords[base + DDGI_HISTORY_AWAITING_SINCE], ddgi.frame);
+    }
     if (pending > ddgi.changeTolerance) {
         ddgiOweUpdates(base, serving.promised);
         atomicOr(&ddgiProbeHistoryWords[base + DDGI_HISTORY_SCHEDULE_AND_FLAGS], DDGI_FLAG_TAKING_CHANGE);
@@ -485,28 +492,31 @@ fn ddgiWholeUpdates(updates: f32) -> u32 {
     return clamp(u32(round(updates)), 1u, DDGI_OWED_MASK);
 }
 
-// How a change is served at the probe (m2-lights.md §4.5, §6.4). Near the
-// camera's view (camera weight 0.5 or more), at any level: K updates, or as
-// many as the bounces need (ddgiNeededUpdates) when that is more, at full
-// urgency (a key's boosted). Away from it:
-// - on the key-probe path (keyProbes, this frame): a key owes keyOwedUpdates
-//   at keyProbeBoost times the urgency, so the keys go first; a fine probe
-//   owes fineOwedUpdates at keyResidualShare of it and waits for its keys,
-//   whose updates bring it most of the way through ddgi/propagate;
-// - otherwise, after a global change on a big volume, "far probes owe 2"
-//   (farOwedUpdates is K when that rule is off this frame), left noisier
-//   and later for it; after a local change, the full count.
+// How a change is served at the probe (m2-lights.md §4.5, §6.4):
+// - on the key-probe path (keyProbes, this frame): a key owes K updates, or
+//   as many as the bounces need (ddgiNeededUpdates) when that is more, at
+//   keyProbeBoost times the urgency, so the keys go first; away from the
+//   view's core (camera weight under 0.5) it owes at most keyOwedUpdates
+//   (the full count when every key's fits in the response window, the CPU
+//   decides). Every fine probe, near the view or not (T2.4d), owes
+//   fineOwedUpdates at keyResidualShare of the urgency and waits for its
+//   keys: their updates bring it the change through ddgi/propagate, and it
+//   is traced itself only once they are done (ddgi/schedule-count), so its
+//   own update reads a field that has taken the change in. *Why near fine
+//   probes too:* traced first, they spent their updates while the room they
+//   bounce off still held the old light (the furnished room's view was 23%
+//   off at 0.5 s; PROGRESS 2026-11-06, T2.6a and T2.4d);
+// - otherwise near the view (camera weight 0.5 or more): the full count at
+//   full urgency; away from it, after a global change on a big volume, "far
+//   probes owe 2" (farOwedUpdates is K when that rule is off this frame),
+//   left noisier and later for it; after a local change, the full count.
 fn ddgiServing(entry: DdgiMarkEntry, probe: vec3i, againstNew: f32) -> DdgiServing {
     let full = max(ddgiWholeUpdates(ddgi.changeUpdates), ddgiNeededUpdates(againstNew));
     let near = ddgiCameraWeight(probe) >= DDGI_NEAR_CAMERA_WEIGHT;
     if (ddgi.keyProbes != 0u) {
-        let key = ddgiIsKeyProbe(probe);
-        let share = select(1.0, ddgi.keyProbeBoost, key);
-        if (near) {
-            return DdgiServing(full, share, false);
-        }
-        if (key) {
-            return DdgiServing(min(full, ddgiWholeUpdates(ddgi.keyOwedUpdates)), share, false);
+        if (ddgiIsKeyProbe(probe)) {
+            let promised = select(min(full, ddgiWholeUpdates(ddgi.keyOwedUpdates)), full, near);
+            return DdgiServing(promised, ddgi.keyProbeBoost, false);
         }
         return DdgiServing(ddgiWholeUpdates(ddgi.fineOwedUpdates), ddgi.keyResidualShare, true);
     }

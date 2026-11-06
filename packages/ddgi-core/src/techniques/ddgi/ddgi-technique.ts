@@ -124,6 +124,7 @@ import {
     effectiveRaysPerProbe,
     FAR_RULE_FRAMES,
     FINE_PROBE_UPDATES,
+    MAX_OWED_UPDATES,
     minProbesPerFrame,
     owedUpdates,
     probeGrid,
@@ -139,6 +140,7 @@ import { buildMarkTable, type MarkTable } from './mark-table.ts';
 import { layerPlan, MAX_IRRADIANCE_LAYERS, MAX_LIGHT_GROUPS, writeLayerWeights, type LayerPlan } from './light-groups.ts';
 import { COMPOSE_ENTRY_POINTS, COMPOSE_WEIGHTS_BYTES, composeKernelWgsl } from './wgsl/compose.ts';
 import { MoverTable } from './mover-table.ts';
+import { ContinuingChangeBatch } from './continuing-change.ts';
 import { priorityCount, scrambleStride } from './schedule.ts';
 import { DDGIShadingModule } from './shading.ts';
 import { blendKernelWgsl, type PhaseBReduction } from './wgsl/blend.ts';
@@ -240,6 +242,8 @@ export interface DDGIField {
 interface CensusStaging {
     readonly buffer: GPUBuffer;
     state: 'free' | 'copied' | 'mapping';
+    /** The probes the copied frame listed (its update count). */
+    listedProbes: number;
 }
 
 interface PreparedResources {
@@ -529,6 +533,8 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
     private readonly parameterView = new Float32Array(SAMPLE_PARAMETER_VEC4_COUNT * 4);
     /** The latest census read back: probes per state, then rays traced. Null until the first arrives. */
     private latestCensus: Uint32Array | null = null;
+    /** The batch while changes continue (§4.5's second count, T2.4d), from the census's rays a listed probe. */
+    private readonly continuingChange = new ContinuingChangeBatch();
     private probesUpdated = 0;
     /** Frames since `prepare` whose changes ran `ddgi/mark`, and the entries in the latest one (CPU-side counters). */
     private markFrames = 0;
@@ -804,6 +810,7 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         const censusStaging = Array.from({ length: CENSUS_STAGING_BUFFERS }, (_, index) => ({
             buffer: device.createBuffer({ label: `ddgi census readback ${index}`, size: CENSUS_WORDS * 4, usage: BUFFER_USAGE.mapRead | BUFFER_USAGE.copyDst }),
             state: 'free' as CensusStaging['state'],
+            listedProbes: 0,
         }));
         // Deferred: a DdgiTraceRound per round, each at a uniform-offset boundary for its dynamic offset.
         const traceRoundStride = Math.max(TRACE_ROUND_BYTES, device.limits.minUniformBufferOffsetAlignment);
@@ -998,6 +1005,7 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
             mark: this.createMarkTable(device, partial, INITIAL_MARK_TABLE_BYTES),
         };
         this.latestCensus = null;
+        this.continuingChange.reset();
         this.probesUpdated = 0;
         this.markFrames = 0;
         this.latestMarkEntries = 0;
@@ -1035,11 +1043,6 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         // Time passes whether or not this frame updates any probe; the warm-up's passes have no time between them.
         if (!warming) this.clockSeconds = (this.clockSeconds + clockStep(frame.deltaTime)) % CLOCK_WRAP_SECONDS;
         const probeCount = resources.grid.probeCount;
-        // No probe updates twice in a frame. While warming: a full batch, or none while the trees are built.
-        const requested = this.warmUp.phase === 'warming' ? resources.maxProbesPerFrame : this.warmUp.phase === 'waiting for trees' ? 0 : frame.units;
-        const count = Math.max(0, Math.min(Number.isNaN(requested) ? 0 : Math.floor(requested), resources.maxProbesPerFrame, probeCount));
-        this.probesUpdated = count;
-        if (count > 0) this.lastUpdateCount = count;
         if (frame.deltaTime > 0 && Number.isFinite(frame.deltaTime)) {
             this.frameTimes.push(frame.deltaTime);
             if (this.frameTimes.length > SWEEP_FRAME_TIMES) this.frameTimes.shift();
@@ -1054,6 +1057,13 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         // history for each probe's next update.
         const markTable = this.settings.changeDrivenHistory !== false ? buildMarkTable(frame.changes, resources.grid, this.movers) : null;
         this.latestMarkEntries = markTable?.entryCount ?? 0;
+        this.continuingChange.noteFrame(markTable !== null);
+        // No probe updates twice in a frame. While warming: a full batch, or none while the trees are built.
+        // While changes continue, fewer than the hand-out, so the list costs what the calibrated batch does (continuing-change.ts).
+        const handOut = this.warmUp.phase === 'warming' ? resources.maxProbesPerFrame : this.warmUp.phase === 'waiting for trees' ? 0 : this.continuingChange.batchFor(frame.units);
+        const count = Math.max(0, Math.min(Number.isNaN(handOut) ? 0 : Math.floor(handOut), resources.maxProbesPerFrame, probeCount));
+        this.probesUpdated = count;
+        if (count > 0) this.lastUpdateCount = count;
         // Light groups: a weight changed since the last frame (or the composed atlas is new), so every tile is composed this frame.
         const composeAll = this.updateLayerWeights(context, resources);
         if (count === 0 && !markTable && !this.historyClearPending && !composeAll) return 0;
@@ -1457,6 +1467,7 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         if (!this.resources) return;
         this.historyClearPending = true;
         this.movers.clear();
+        this.continuingChange.reset();
         this.startWarmUp();
         this.markAllNotUpdated();
     }
@@ -1593,6 +1604,7 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         if (resources.directWorkList) encoder.copyBufferToBuffer(resources.rays.scratch.buffer, resources.rays.scratch.countsOffset, resources.census, CENSUS_DIRECT_HITS * 4, 8);
         encoder.copyBufferToBuffer(resources.census, 0, staging.buffer, 0, CENSUS_WORDS * 4);
         staging.state = 'copied';
+        staging.listedProbes = this.probesUpdated;
     }
 
     /**
@@ -1607,7 +1619,9 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
             staging.buffer.mapAsync(MAP_MODE_READ).then(
                 () => {
                     if (this.resources !== resources) return;
-                    this.latestCensus = new Uint32Array(staging.buffer.getMappedRange().slice(0));
+                    const census = new Uint32Array(staging.buffer.getMappedRange().slice(0));
+                    this.latestCensus = census;
+                    this.continuingChange.noteCensus(census[CENSUS_RAYS_TRACED], staging.listedProbes, census[CENSUS_SCHEDULE_STATE + SCHEDULE_STATE_WORD.owed]);
                     staging.buffer.unmap();
                     staging.state = 'free';
                 },
@@ -1739,7 +1753,11 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         data[UNIFORM_WORD.farOwedUpdates] = !blend.keyProbes && bigVolume ? Math.min(blend.farProbeUpdates, fullUpdates) : fullUpdates;
         data[UNIFORM_WORD.keyProbeBoost] = blend.keyProbeBoost;
         data[UNIFORM_WORD.keyResidualShare] = blend.keyResidualShare;
-        data[UNIFORM_WORD.keyOwedUpdates] = blend.keyProbeUpdates;
+        // Every key owes its full count where all the keys' full counts fit in
+        // FAR_RULE_FRAMES at this batch's priority share (T2.4d: the furnished
+        // room), else keyProbeUpdates away from the view (Sponza).
+        const keysFitWindow = (keyProbeCount(grid.counts) * fullUpdates) / Math.max(1, priorityCount(batch, blend.priorityShare)) <= FAR_RULE_FRAMES;
+        data[UNIFORM_WORD.keyOwedUpdates] = keysFitWindow ? MAX_OWED_UPDATES : blend.keyProbeUpdates;
         data[UNIFORM_WORD.fineOwedUpdates] = FINE_PROBE_UPDATES;
         words[UNIFORM_WORD.propagation] = blend.keyProbes ? 1 : 0;
         words[UNIFORM_WORD.holdFineProbes] = blend.holdFineProbes ? 1 : 0;
