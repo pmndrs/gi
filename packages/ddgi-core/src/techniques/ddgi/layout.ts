@@ -269,7 +269,11 @@ export const RAY_RECORD_BYTES = 8;
  *   rays hit, one bit per table entry. Written by every blend, so it holds
  *   exactly the latest update's hits; `ddgi/mark` adds a probe to a moved
  *   object's far set when it has the object's bit;
- * - words 13-15: spare, so the record stays a whole number of 16-byte rows.
+ * - `awaitingSinceFrame` (T2.4d): for a fine probe awaiting a change, the
+ *   frame `ddgi/mark` first flagged it (the full frame number, compared
+ *   modulo 2^32), so the scheduler can bound how long it waits for its keys
+ *   ({@link PROBE_HISTORY_FLAG}'s `waitingForKeys`);
+ * - words 14-15: spare, so the record stays a whole number of 16-byte rows.
  *
  * The history buffer (`DDGIField.probeHistory`) holds one per probe in
  * probe-index order, the order of the `points` debug view's texels. It starts
@@ -289,8 +293,9 @@ export const PROBE_HISTORY_WORD = {
     changeClock: 10,
     keyDeltaSlot: 11,
     moverMask: 12,
+    awaitingSinceFrame: 13,
 } as const;
-/** 64 bytes: 13 words used, padded to 16 (T2.M1 added the mover mask to T2.4a's 48 bytes). */
+/** 64 bytes: 14 words used, padded to 16 (T2.M1 added the mover mask to T2.4a's 48 bytes, T2.4d the awaiting frame). */
 export const PROBE_HISTORY_WORDS = 16;
 export const PROBE_HISTORY_BYTES = PROBE_HISTORY_WORDS * 4;
 
@@ -333,6 +338,16 @@ export const PROBE_HISTORY_FLAG = {
      * noisy estimate is a pop. Cleared when it becomes active or goes off.
      */
     warmedOnce: 1 << 5,
+    /**
+     * A fine probe awaiting a change whose key neighbours are still taking it
+     * in (T2.4d): set and cleared by `ddgi/schedule-count` each frame, which
+     * reads the keys' `takingChange` flags. While it is set the probe is not
+     * listed, neither at priority nor by the round robin: it follows its
+     * keys through `ddgi/propagate` and is traced once they are done (or
+     * after KEY_WAIT_FRAMES), so its own update reads a field that has taken
+     * the change in. Cleared by its own blend with the awaiting flag.
+     */
+    waitingForKeys: 1 << 6,
 } as const;
 /** The packing of `keysReceived` (T2.4c). */
 export const PROBE_HISTORY_KEYS = {

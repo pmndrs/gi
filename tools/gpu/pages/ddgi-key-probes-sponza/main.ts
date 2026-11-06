@@ -217,6 +217,7 @@ await runThreePage(async ({ device, data, log: logLine }) => {
         const test = await startSponza(device, 'sponza sun turned, key probes');
         await convergeSponza(test, 'the sun as it was', log, UNITS);
         const before = await test.mean();
+        if (typeof env.VITE_DDGI_SETTINGS === 'string' && env.VITE_DDGI_SETTINGS !== '') Object.assign(test.scene.ddgi.settings, JSON.parse(env.VITE_DDGI_SETTINGS));
         keyRun = await sunTurnRun(test, turnedReference, startDirection, 60);
         test.scene.dispose();
         const response = stepResponse(before, turnedSettled, keyRun.viewMeans, TOLERANCE);

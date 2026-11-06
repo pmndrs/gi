@@ -52,7 +52,8 @@ import { PointLight, Vector3, type DirectionalLight } from 'three/webgpu';
 import { assert } from '../../client.ts';
 import { loadAllManifests } from '../../../../apps/viewer/src/scene/manifests.ts';
 import { imageMean, TestView } from '../ddgi-shared/harness.ts';
-import { describeErrors, stepResponse } from '../ddgi-shared/response.ts';
+import { describeErrors, probeCoordinates, stepResponse } from '../ddgi-shared/response.ts';
+import { cameraWeight, frustumPlanes } from '../../../../packages/ddgi-core/src/techniques/ddgi/camera.ts';
 import { applyHysteresisMode, parseHysteresisMode } from '../ddgi-shared/hysteresis-modes.ts';
 import { PROBE_HISTORY_FLAG } from '../../../../packages/ddgi-core/src/techniques/ddgi/layout.ts';
 import { convergeSponza, lightWeightedError, probeClasses, probeMeans, sunDirection, turnedSun, VIEW_HEIGHT, VIEW_WIDTH, type ProbeMeans, type SponzaUnderTest } from '../ddgi-shared/sponza-response.ts';
@@ -217,6 +218,61 @@ function trackRows(frame: number, now: ProbeMeans, before: ProbeMeans, settled: 
     });
 }
 
+/**
+ * The field by class of probe, to see where a response's error sits: keys,
+ * fine probes near and in view (camera weight ≥ 0.5), fine probes in view
+ * farther off (0.1..0.5: what most of the view's pixels sample), and the rest.
+ */
+type ProbeClass = 'keys' | 'near fine' | 'view fine' | 'other fine';
+const PROBE_CLASSES: readonly ProbeClass[] = ['keys', 'near fine', 'view fine', 'other fine'];
+/** Fine probes with a camera weight from this up to "near" count as in view, farther off. */
+const VIEW_CAMERA_WEIGHT = 0.1;
+
+function classifyProbes(room: FurnishedRoom): (probe: number) => ProbeClass {
+    const field = room.scene.ddgi.field!;
+    const classes = probeClasses(room, field);
+    const camera = room.scene.camera;
+    camera.updateMatrixWorld();
+    const planes = frustumPlanes({ view: [...camera.matrixWorldInverse.elements], projection: [...camera.projectionMatrix.elements] });
+    const grid = field.grid;
+    return (probe) => {
+        if (classes.key(probe)) return 'keys';
+        if (classes.near(probe)) return 'near fine';
+        const point = probeCoordinates(probe, grid.counts).map((value, axis) => grid.origin[axis] + value * grid.spacing[axis]) as [number, number, number];
+        return cameraWeight(point, { position: [camera.position.x, camera.position.y, camera.position.z] }, planes, grid) >= VIEW_CAMERA_WEIGHT ? 'view fine' : 'other fine';
+    };
+}
+
+interface ClassRow {
+    readonly frame: number;
+    readonly probeClass: ProbeClass;
+    readonly probes: number;
+    /** Light-weighted error against the converged field. */
+    readonly error: number;
+    readonly meanUpdates: number;
+    readonly medianSamples: number;
+    readonly awaitingShare: number;
+    readonly owedShare: number;
+}
+
+function classRows(frame: number, now: ProbeMeans, before: ProbeMeans, settled: ProbeMeans, classOf: (probe: number) => ProbeClass): ClassRow[] {
+    const median = (values: number[]) => [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)] ?? Number.NaN;
+    return PROBE_CLASSES.map((probeClass) => {
+        const members = now.mean.flatMap((_, probe) => (now.active[probe] && settled.active[probe] && classOf(probe) === probeClass ? [probe] : []));
+        const share = (test: (probe: number) => boolean) => members.filter(test).length / Math.max(1, members.length);
+        return {
+            frame,
+            probeClass,
+            probes: members.length,
+            error: lightWeightedError(now, settled, (probe) => classOf(probe) === probeClass),
+            meanUpdates: members.reduce((sum, probe) => sum + now.history[probe].updates - before.history[probe].updates, 0) / Math.max(1, members.length),
+            medianSamples: median(members.map((probe) => now.history[probe].samples)),
+            awaitingShare: share((probe) => (now.history[probe].flags & PROBE_HISTORY_FLAG.awaitingChange) !== 0),
+            owedShare: share((probe) => now.history[probe].owed > 0),
+        };
+    });
+}
+
 /** The first frame from which every value stays at or under the tolerance; null if the last is over. */
 function settledFrom(values: ReadonlyArray<{ frame: number; value: number }>): number | null {
     let settled: number | null = null;
@@ -347,8 +403,11 @@ await runThreePage(async ({ device, data, log: logLine }) => {
         const fieldBefore = await probeMeans(room);
 
         if (BOUNCE_SHARE !== null) room.scene.ddgi.settings.changeBounceShare = BOUNCE_SHARE;
+        if (typeof env.VITE_DDGI_SETTINGS === 'string' && env.VITE_DDGI_SETTINGS !== '') Object.assign(room.scene.ddgi.settings, JSON.parse(env.VITE_DDGI_SETTINGS));
         const tracked = trackedProbes(room, fieldBefore, settledField);
         const tracking: TrackRow[] = [];
+        const classOf = classifyProbes(room);
+        const byClass: ClassRow[] = [];
         stepSun(room, stepped);
         const means: number[] = [];
         const perPixel: Array<{ frame: number; value: number }> = [];
@@ -368,6 +427,7 @@ await runThreePage(async ({ device, data, log: logLine }) => {
             const now = needsField ? await probeMeans(room) : null;
             if (now && (frame === 1 || frame % VOLUME_EVERY === 0)) volume.push({ frame, value: lightWeightedError(now, settledField) });
             if (now && TRACK_FRAMES.includes(frame)) tracking.push(...trackRows(frame, now, fieldBefore, settledField, tracked));
+            if (now && TRACK_FRAMES.includes(frame)) byClass.push(...classRows(frame, now, fieldBefore, settledField, classOf));
         }
         const bakesAfter = room.scene.platform.shade.sky.projections - bakesBefore;
         const counters = room.scene.ddgi.counters;
@@ -399,6 +459,7 @@ await runThreePage(async ({ device, data, log: logLine }) => {
             skyBakes: { inTheStepFrame: bakesAtStep, inAll: bakesAfter },
             marks,
             tracking,
+            byClass,
             probesMarkedTotal: counters['probes marked (total)'],
         };
         log(
