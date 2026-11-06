@@ -44,6 +44,7 @@ import type { GIStats, MemoryReport, PassTiming } from './contract/stats.ts';
 import type { GITechnique, TechniqueContext, TechniqueFrame } from './contract/technique.ts';
 import type { GpuTimerScope } from './contract/timing.ts';
 import { PlatformKernelBuilder } from './kernel-builder.ts';
+import { mergeSceneChanges } from './scene/change-log.ts';
 import { PlatformScene } from './scene/platform-scene.ts';
 import { checkComputeLimits } from './device-requirements.ts';
 import { PlatformHitShading } from './shade/hit-shading.ts';
@@ -56,7 +57,7 @@ import { UnitCostMeter, WorkBudget, type BudgetReport, type UnitCostModel } from
 export { DEFAULT_UNITS_PER_FRAME, type UnitCostModel } from './work-budget.ts';
 
 /** No scene changes: the screen stage runs after `encode`, which already reported them. */
-const NO_CHANGES: SceneChanges = { regions: [], global: [], movedReceivers: 0 };
+const NO_CHANGES: SceneChanges = { regions: [], global: [], movedReceivers: 0, lights: [], lightsOverflowed: false };
 
 interface AttachedTechnique {
     readonly technique: GITechnique;
@@ -99,6 +100,13 @@ export class GIPlatformImpl implements GIPlatform {
      * so a budget made from now on (a technique added at runtime) runs its burst without filler.
      */
     private calibratedOnce = false;
+    /**
+     * Changes from frames the techniques didn't see (the budget was paused),
+     * handed to them with the next frame they do see. Why: a light changed
+     * while paused would otherwise never reach DDGI's change estimate, and
+     * its probes would keep their full history.
+     */
+    private unseenChanges: SceneChanges | null = null;
     private readonly warnedMessages = new Set<string>();
     /** The `uncapturederror` listener, kept so `dispose` can remove it. */
     private readonly onUncapturedError: (event: Event) => void;
@@ -253,7 +261,11 @@ export class GIPlatformImpl implements GIPlatform {
             for (const technique of techniques) this.budgetFor(technique).geometryChanged();
         }
 
-        if (!frame.budget.paused) {
+        if (frame.budget.paused) {
+            this.unseenChanges = this.unseenChanges ? mergeSceneChanges(this.unseenChanges, upload.changes) : upload.changes;
+        } else {
+            const changes = this.unseenChanges ? mergeSceneChanges(this.unseenChanges, upload.changes) : upload.changes;
+            this.unseenChanges = null;
             const gpuMs = frame.budget.gpuMs;
             // The millisecond budget is shared evenly between techniques (docs/api/platform.md, gap 6).
             const shareMs = gpuMs === undefined ? undefined : gpuMs / Math.max(1, techniques.length);
@@ -265,7 +277,7 @@ export class GIPlatformImpl implements GIPlatform {
                     frame: this.frame,
                     deltaTime: frame.deltaTime,
                     camera: frame.camera,
-                    changes: upload.changes,
+                    changes,
                     units,
                 };
                 const reported = technique.encode(encoder, techniqueFrame);

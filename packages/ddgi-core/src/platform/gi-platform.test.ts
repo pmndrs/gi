@@ -468,6 +468,19 @@ describe('the platform object', () => {
         encodeFrame(gpu, platform, { ...FRAME, budget: { paused: true } });
         expect(top.frames.length).toBe(2);
 
+        // A light changed while paused reaches the techniques with the next frame they see (T2.4a).
+        const lamp = platform.scene.createLight({ type: 'point', color: [1, 1, 1], intensity: 5, position: [0, 1, 0], range: 0 });
+        encodeFrame(gpu, platform, { ...FRAME, budget: { paused: true } });
+        platform.scene.updateLight(lamp, { intensity: 7 });
+        encodeFrame(gpu, platform, { ...FRAME, budget: { paused: true } });
+        encodeFrame(gpu, platform);
+        const seen = top.frames[2].changes.lights;
+        expect(seen).toHaveLength(1);
+        expect(seen[0].before).toBeNull();
+        expect(seen[0].after?.intensity).toBe(7);
+        encodeFrame(gpu, platform);
+        expect(top.frames[3].changes.lights).toEqual([]);
+
         const memory = platform.stats.memory;
         expect(memory.techniques).toEqual({ surfels: 1000, ddgi: 1000 });
         expect(memory.total).toBe(memory.sceneCopy + memory.acceleration + 2000);

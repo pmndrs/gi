@@ -75,6 +75,30 @@ export interface DDGISettings {
      * where SceneChanges says a light changed instead.
      */
     irradianceChangeThreshold: number;
+    /**
+     * Change-driven history (docs/design/m2-lights.md §4.1, §4.2). On (the
+     * default): when the scene reports a light change, `ddgi/mark` works out
+     * from the light's own numbers how much the light at each probe changed,
+     * and the probe's next update cuts its history to match, so the change
+     * shows within a few updates instead of fading in over the memory time.
+     * A still scene is never touched. Off: the M1 rule alone (T1.12).
+     */
+    changeDrivenHistory: boolean;
+    /**
+     * ε, the tolerance a changed probe's history is cut for: after
+     * {@link changeUpdates} updates it is within this share of its new light
+     * (SPEC's "within 5% of settled"). Changes at or under it cut nothing.
+     */
+    changeTolerance: number;
+    /** K, the updates a changed probe is expected to get soon after its change (the GPU scheduler, T2.4b, keeps the promise). */
+    changeUpdates: number;
+    /**
+     * How much of a light's change at a probe the probe is taken to see
+     * (m2-lights.md §4.2): a probe sees a light only through the surfaces it
+     * lights, so its own change is a share of the light's. Tuned in T2.4a
+     * against probes that really changed ({@link DEFAULT_LIGHT_CHANGE_SCALE}).
+     */
+    lightChangeScale: number;
     /** Largest change one update may make, as a multiple of the old value (fireflies). */
     maxBrightnessChange: number;
     /** Exponent of the cosine weight when blending distances. */
@@ -146,6 +170,25 @@ export const ADAPTIVE_UPDATES_PER_SAMPLE = 8;
 /** `hysteresisRampUpdates` by default, K (see ADAPTIVE_UPDATES_PER_SAMPLE). */
 export const ADAPTIVE_RAMP_UPDATES = 16;
 
+/** `changeTolerance` by default: SPEC's "within 5% of settled" (m2-lights.md, ε). */
+export const DEFAULT_CHANGE_TOLERANCE = 0.05;
+/** `changeUpdates` by default, K = 8 (m2-lights.md §4.1: at r = 1 the first update keeps 0.30 of the old value, 5% is left after 8). */
+export const DEFAULT_CHANGE_UPDATES = 8;
+/**
+ * `lightChangeScale` by default: 0.5, not the design's first guess of 0.25
+ * (T2.4a, RTX 3060, `ddgi-change-step`: two-room's lamp moved 2 m, every
+ * probe every frame; DECISIONS 2026-11-06). Measured against the two
+ * converged fields, a probe's true change was 0.48 × the mark's unscaled
+ * value at the median (quartiles 0.25-0.73), so 0.5 makes r about the true
+ * change. The scale sets how far a probe's history is cut, not only whether:
+ * at 0.25 every probe that changed by over 5% was still cut (lit-room recall
+ * 99.8%), but by too little, and the view took 0.73 s to get within 5% (the
+ * old lamp's bounce light lingered in probes cut too gently); at 0.5 it took
+ * 2 frames; at 1 also 2 frames, with deeper cuts (more noise right after a
+ * change, the design's risk 2; not measured).
+ */
+export const DEFAULT_LIGHT_CHANGE_SCALE = 0.5;
+
 /** The kernel's stand-in for an endless ramp (no Infinity in a shader that may assume finite floats). */
 const RAMP_UPDATES_ENDLESS = 1e9;
 
@@ -166,6 +209,10 @@ export const DEFAULT_DDGI_SETTINGS: Readonly<Omit<DDGISettings, 'volume'>> = {
     hysteresisUpdatesPerSample: ADAPTIVE_UPDATES_PER_SAMPLE,
     hysteresisRampUpdates: ADAPTIVE_RAMP_UPDATES,
     irradianceChangeThreshold: Infinity,
+    changeDrivenHistory: true,
+    changeTolerance: DEFAULT_CHANGE_TOLERANCE,
+    changeUpdates: DEFAULT_CHANGE_UPDATES,
+    lightChangeScale: DEFAULT_LIGHT_CHANGE_SCALE,
     maxBrightnessChange: 2.0,
     distanceSharpness: 50,
     normalBias: 'auto',
@@ -341,6 +388,10 @@ export function blendSettings(settings: DDGISettings): {
     maxBrightnessChange: number;
     distanceSharpness: number;
     bounceEnergy: number;
+    changeDrivenHistory: boolean;
+    changeTolerance: number;
+    changeUpdates: number;
+    lightChangeScale: number;
 } {
     const defaults = DEFAULT_DDGI_SETTINGS;
     const memorySeconds = settings.hysteresisMemorySeconds;
@@ -360,5 +411,10 @@ export function blendSettings(settings: DDGISettings): {
         maxBrightnessChange: clamp(settings.maxBrightnessChange, 0, Number.MAX_VALUE, defaults.maxBrightnessChange),
         distanceSharpness: clamp(settings.distanceSharpness, 0, 1000, defaults.distanceSharpness),
         bounceEnergy: clamp(settings.bounceEnergy, 0, Number.MAX_VALUE, defaults.bounceEnergy),
+        changeDrivenHistory: settings.changeDrivenHistory !== false,
+        // Above 0 and below 1: the cut divides by (r - ε) only when r > ε, and ε = 1 would never cut.
+        changeTolerance: clamp(settings.changeTolerance, 1e-4, 0.99, defaults.changeTolerance),
+        changeUpdates: clamp(settings.changeUpdates, 1, 1000, defaults.changeUpdates),
+        lightChangeScale: clamp(settings.lightChangeScale, 0, 1000, defaults.lightChangeScale),
     };
 }

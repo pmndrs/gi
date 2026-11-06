@@ -13,6 +13,7 @@ import type { EnvironmentDescriptor } from '../contract/scene.ts';
 import type { HitShading, HitShadingSettings } from '../contract/shade.ts';
 import type { BindingSlot, WgslModule } from '../contract/wgsl.ts';
 import { PlatformSky, type PlatformSkyOptions } from '../sky/platform-sky.ts';
+import { LIGHT_FALLOFF_MODULE } from './light-falloff.ts';
 import { SHADE_MODULE_ENTRIES, SHADE_UNIFORM_LAYOUT, shadeModuleWgsl } from './wgsl.ts';
 
 /** Defaults of the live settings. */
@@ -33,6 +34,7 @@ export interface PlatformHitShadingOptions {
 
 export class PlatformHitShading implements HitShading {
     readonly module: WgslModule;
+    readonly lightFalloff: WgslModule = LIGHT_FALLOFF_MODULE;
     /** Live: change the fields at any time; the next `encode` uploads them. */
     readonly settings: HitShadingSettings = { ...DEFAULT_HIT_SHADING_SETTINGS };
     readonly sky: PlatformSky;
@@ -67,7 +69,7 @@ export class PlatformHitShading implements HitShading {
         const resources: readonly GPUBindingResource[] = [{ buffer: this.uniforms }, this.radianceMapView, this.skySampler];
         this.module = {
             name: 'gi-shade',
-            dependencies: [sceneModule, raysModule],
+            dependencies: [sceneModule, raysModule, LIGHT_FALLOFF_MODULE],
             code: (slot: BindingSlot) => shadeModuleWgsl(slot),
             entries: SHADE_MODULE_ENTRIES,
             resources: () => resources,

@@ -376,7 +376,7 @@ Status: **started 2026-11-06** on branch `m2` (from main at 3d682dc; M1 merged a
 
 | ID | Task | Agent | Size | Depends on | Status |
 | --- | --- | --- | --- | --- | --- |
-| T2.4a | Change-driven history on T1.12's per-probe record, and `ddgi/mark` (the change estimate); takes T2.1's change-log part (old and new light in `SceneChanges.lights`, influence radius) | implementer | M | T1.12 | active (implementer, 2026-11-06; worktree `webgpu-ddgi-m2-t24a`, branch `m2-t2.4a`) |
+| T2.4a | Change-driven history on T1.12's per-probe record, and `ddgi/mark` (the change estimate); takes T2.1's change-log part (old and new light in `SceneChanges.lights`, influence radius) | implementer | M | T1.12 | done (Opus review passed with notes; still scenes match M1 exactly and mark 0 probes on both GPUs; two-room's 2 m lamp step within 5% from the first update, against 1.42 s under M1's rule; recall 100%; `lightChangeScale` 0.5, DECISIONS) |
 | T2.4b | GPU scheduler with camera priority over Budget v2's fixed count, the feedback rule; far probes owe 2 as the fallback; the warm-up moves into the technique (the viewer switches to `volume.start`) | implementer | M | T2.4a | todo |
 | T2.4c | Key probes (1 in 8) with change propagation, the main path for global changes; first checked on Sponza's sun step and two-room's lamp | implementer | M | T2.4b | todo |
 | T2.M1 | Rigid moving objects, pulled forward from M3: the change feed for transforms (M3's T3.1, rigid part), geometry marks and the mover mask (T3.4, rigid part), three adapter change tracking for transforms | implementer | M | T2.4b (T2.4c for far sets) | todo |
@@ -403,9 +403,12 @@ M3 keeps deforming meshes and the BVH work: runtime mesh trees, `GpuMeshRefit` w
 These add to the design docs' draft done-whens. M1's open follow-ups (the M1 note, "What isn't done") are placed here too.
 
 - **T2.4a** builds the change log's light part, which the design put in T2.1: `SceneChanges.lights` with each change's old and new light, the 1,024-a-frame cap, and the influence radius. T2.1 keeps the capacity, the adapter's light walk, `motions` and `sponza-candles`. T2.4a's step test drives the lamp from its test page; it doesn't need manifest motions.
-- **T2.4b** adds two checks:
+- **T2.4b** adds five checks (the first two from M1's follow-ups, the last three from T2.4a's review):
   - *The calibration guard* (M1 follow-up: Budget v2 once gave Sponza 26 probes a frame instead of about 290): the calibration logs its samples, and a result below half of the previous calibration on the same device and scene is re-measured once before it's used. Test with a forced low sample.
   - *The viewer uses `volume.start`* (M1 follow-up): with the warm-up in the technique (check 6), the viewer's own copy of the warm-up is removed.
+  - *A larger step, and the overshoot:* T2.4a's lamp step changed the view by only 6.9%, and the view overshot by 56% of the step (+3.9%), still 29% of it after 2 s. Check 1's steps must change the view by at least 25% (for example the lamp switched on or off), and the overshoot is reported. If the view leaves the 5% band again after entering it, that counts as not settled.
+  - *The steady-change rule has a test:* a lamp moving steadily (the sweep) keeps the view within 5% of a field re-converged at the same moment, measured at 3 points of the sweep.
+  - *A lamp inside sunlit Sponza:* switching a lamp on in Sponza marks the probes it changes by more than 5% (recall ≥ 95%), because its influence radius is set against the sun's irradiance (DECISIONS 2026-11-06, the `range: 0` entry).
 - **T2.M1, rigid moving objects.** Done when, at the default budget, GI only, on the RTX:
   1. 10,000 transforms through `setTransforms` cost ≤ 2 ms of CPU (from 18–20 ms), and a moved instance's change carries `moved`;
   2. a recompile counter is in `gi.stats`, and creating and destroying 1,000 instances in random order leaves it at 0;

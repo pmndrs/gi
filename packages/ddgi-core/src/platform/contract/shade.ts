@@ -64,6 +64,19 @@ import type { WgslModule } from './wgsl';
  */
 export interface HitShading {
     readonly module: WgslModule;
+    /**
+     * The point and spot falloff `module` uses, on its own and with no
+     * bindings, for kernels that need a light's unshadowed irradiance at a
+     * point without tracing (DDGI's change estimate):
+     *
+     * ```wgsl
+     * fn giShadeDistanceAttenuation(lightDistance: f32, range: f32) -> f32  // three r187: 1 / max(d², 0.01), windowed at range (0: no window)
+     * fn giShadeSpotAttenuation(cosine: f32, cosOuterCone: f32, cosInnerCone: f32) -> f32
+     * ```
+     *
+     * `module` depends on it, so a kernel may list both.
+     */
+    readonly lightFalloff: WgslModule;
     readonly settings: HitShadingSettings;
 }
 

@@ -208,6 +208,7 @@ The code is `packages/ddgi-core/src/platform/work-budget.ts`; every threshold be
 - **Wrapped every 4096 s (`CLOCK_WRAP_SECONDS`, about 68 min).** Each probe's `t` is an f32, whose step is 0.49 ms below 2^12 s but 7.8 ms after a day and 62.5 ms after a week of running. Unwrapped, the average fade would stay right (the rounding errors of successive elapsed times cancel), but single gaps between updates would be measured in steps that coarse. Wrapped, every time stays under 4096 s; the blend adds the period back when `T − t` comes out negative. Only a probe left unblended for more than a whole period would be misread. An active probe is blended every sweep (seconds), and an off probe starts again from state 3 when it comes back on.
 
 **Storage.** `DdgiProbeHistory` per probe (`n` and `t` as f32, `k` as u32, saturating) in a storage buffer that only `ddgi/blend` reads and writes (12 bytes a probe; Sponza 233 KB). Each workgroup owns one probe and a probe is listed at most once a frame, so there are no races. New buffers start at zero, and state 3 resets `n` and `k`, so `resetHistory()` needs no clear. Blend now binds 5 storage buffers.
+- *Since T2.4a* the record is m2-lights.md §4.1's 48 bytes (`PROBE_HISTORY_WORD` in layout.ts; Sponza 0.93 MB): `k` moved to the low 16 bits of word 2 (saturating at 65,535), and `ddgi/mark` writes the change words with atomics in its own dispatch before the trace (next section).
 
 **What it trades.** For a texel updated with hysteresis h and per-update noise σ, the wobble is `σ·√((1−h)/(1+h))` and the change per update about `σ·(1−h)·√(2/(1+h))`. Bias from bounce light that hasn't settled shrinks per update by about `(1−h)(1−ρ)` (ρ: how much of a probe's light comes back through the field). So a quieter probe is also slower to settle bounce light: on the accuracy pages, where every probe is updated every frame for 600 frames, the field is still a little low (numbers below). And a running average whose estimates use the field it is building (h = k/(k+1)) settles bounce light only like `k^−(1−ρ)`, so early estimates made with a dark field linger until the clock fades them.
 
@@ -239,6 +240,21 @@ Settled flicker with the ramp is unchanged (it no longer binds): Cornell 0.094% 
 - **Defaults:** τ = 5 s and nMax = 200 (`ADAPTIVE_MEMORY_SECONDS`, `ADAPTIVE_MAX_SAMPLES` in settings.ts). Any τ above about 3.4 s lets Cornell reach the cap, so 5 and 10 are equally quiet there. 5 s follows a light change on Sponza in half the time of 10 s, at about twice the per-frame change on sparsely updated probes (still a fifth of Cornell's adaptive number). 2 s is noisier everywhere and no faster to a steady answer. nMax = 100 (h ≤ 0.99) was measured as well: Cornell 0.185% / 0.76%, furnace −0.80% after 600 frames.
 - **Sparse probes are noisier than before.** Where a probe's updates are more than about 0.15 s apart (τ·ln(1/0.97)), its h is below the old 0.97, so each update moves it more. That is the point (Sponza follows changes in seconds). The cost: Sponza changes about 7× more per frame than at 0.97, and Intel Cornell (a sweep every 0.32 s) 2×. Both stay well under the RTX Cornell's adaptive number.
 - **Every-frame probes settle bounce light more slowly.** On the accuracy pages (every probe every frame), 600 frames left the furnace −1.95% / −2.05% (RTX / Intel; the Intel over the 2% limit) and the two-room lit room 5.4% below its settled value. The pages now run 1800 (furnace) and 3000 (leak) frames, and the settled values match the fixed rule's: furnace −0.24% / −0.36% (fixed 0.97: −0.16% / −0.28%), two-room leak 0.81% (fixed 0.80%). With the ramp (its table above) the furnace settles in 600 frames again (−0.19% at a = 3), the two-room scene still needs more (0.74% at 600 frames with a = 3, settled 0.81%), so the counts stay. Measured with the ramp defaults: furnace (1800) −0.15%, leak (3000) 0.83%, Cornell test view (600) +5.63% (+4.52% without the ramp, which hadn't settled). M2's change-driven reset is what makes light changes fast on every-frame probes.
+
+## Change-driven history (M2, T2.4a; m2-lights.md §4.1, §4.2, as built)
+
+**What it does.** When `SceneChanges` reports a light or sky change, `ddgi/mark` (wgsl/mark.ts) works out from the lights' own numbers how much each probe's light changed, `r`, and adds it to the probe's record (`pendingChange`). At the probe's next blend, `n ← min(n, εK / (r − ε))` when `r > ε` (ε = `changeTolerance` 0.05, K = `changeUpdates` 8), and, for a probe marked before its previous update too, `n ← min(n, ε / r)` (the steady-change rule). Then T1.12's fade, ramp and growth run as before. A still scene runs the mark only once, for the scene's creation, and marks 0 probes, so it is exactly T1.12's rule (checked: `ddgi-change-still` gives M1's field to the last digit on the RTX).
+
+**The mark** (one thread per changed light and probe in its influence box; the table is built on the CPU, mark-table.ts):
+- A point or spot light: per colour channel, the change of its unshadowed irradiance vector at the probe (`E_c × direction`, three's falloff from the platform's light-falloff module, no surface cosine), over the probe's stored mean in that channel (history words 6-7, written by every blend), the largest channel, times `lightChangeScale` and `max(Chebyshev visibility toward the light, 0.25)`. Probes that are off or not updated yet are skipped.
+- A directional light: every probe, `r = max_c |E_new,c d_new − E_old,c d_old| / E_old,c` (a turn alone gives `2 sin(θ/2)`, a dimming alone `|1 − new/old|`), times `0.25 + 0.75 × openness` toward the old and new direction. Until the sun has a layer of its own (T2.5, T2.6b), a colour or intensity change marks this way too; the exception's place is marked in mark-table.ts.
+- The environment: every probe, `r = 1` times the openness over six directions, until T2.6a's GPU sky gives the CPU the sky's SH (the design's formula). Conservative.
+- More than 1,024 light changes in a frame (`lightsOverflowed`): every probe, `r = 1`.
+- The marks are counted subgroups first (fallback: an atomic per marking thread; `ddgi-mark-reduction` checks both agree) into the census: "probes marked" and "probes marked (total)".
+
+**`lightChangeScale` is 0.5, not the design's 0.25** (DECISIONS 2026-11-06). On two-room's 2 m lamp step (`ddgi-change-step`, every probe every frame), a probe's true change was 0.48 × the mark's unscaled value at the median (quartiles 0.25-0.73), so 0.5 makes `r` about the true change. The scale sets how deep a probe's cut is, not only whether it is cut: at 0.25 every probe that really changed by over 5% was still cut (lit-room recall 99.8%), but too gently, and the view took 0.73 s to get within 5%. The lingering error is the old lamp's bounce light: right after the step a probe's new estimates bounce off neighbours that still hold the old light, and probes cut too gently hold it for seconds. At 0.5 the view is within 5% from the first update (+3.9% at most, +2.0% after 2 s); M1's rule alone takes 1.42 s. *The step is small* (the view changes by 6.9%), so that overshoot is 56% of the step and still 29% of it after 2 s; T2.4b re-checks with a larger step (TASKS, M2 done-when changes).
+
+**Not done, and measured not to help:** moving a cut probe back along the warm-up ramp too (so its count would grow back by 1/8 an update instead of 1). It made the transient overshoot larger (0.30 s instead of 0.03 s at scale 0.5; 1.5 s instead of 0.73 s at 0.25), so the count grows back by one an update, as the design has it.
 
 ## Which probes update (the budget)
 
@@ -284,6 +300,10 @@ interface DDGISettings {
     hysteresisUpdatesPerSample: number; // 8 (a, the ramp)
     hysteresisRampUpdates: number;   // 16 (K, how long the ramp lasts)
     irradianceChangeThreshold: number; // Infinity (off; DECISIONS 2026-11-05). A value turns on the lagged probe-mean rule
+    changeDrivenHistory: boolean;    // true (T2.4a): reported light and sky changes cut the history ("Change-driven history")
+    changeTolerance: number;         // 0.05 (epsilon)
+    changeUpdates: number;           // 8 (K)
+    lightChangeScale: number;        // 0.5 (T2.4a; the design's first guess was 0.25)
     maxBrightnessChange: number;     // 2.0
     distanceSharpness: number;       // 50
     normalBias: number | 'auto';     // auto = 0.1 × min spacing
@@ -302,7 +322,7 @@ interface DDGISettings {
 ## Debug data and counters
 
 - **Points:** the probe-data texture already holds offset and state; a `points` debug view publishes world position and state in an `rgba32float` texture (written by the write kernel for updated probes). Legend: the state table above.
-- **Counters:** probes updated, rays traced, probes active, probes off (each reason), probes not yet updated.
+- **Counters:** probes updated, rays traced, probes active, probes off (each reason), probes not yet updated. Since T2.4a also: frames with changes marked, changes marked this frame, probes marked (this frame) and probes marked (total since `prepare`; the census keeps it and never clears it).
 - **Timings:** `ddgi/update` and `ddgi/write` through the timer scope.
 
 ## Done when (T1.5, from the board), and how each is measured

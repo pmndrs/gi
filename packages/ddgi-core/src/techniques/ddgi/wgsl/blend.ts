@@ -22,7 +22,11 @@
  * Hysteresis knows the time between a probe's updates (T1.12): each probe
  * keeps how many updates it remembers (n), when it was last updated (t) and
  * how many blended updates it has had (k, for the warm-up ramp) in the
- * history buffer, which only this kernel reads and writes.
+ * history buffer. Changes the scene reports cut n before that rule runs
+ * (M2, docs/design/m2-lights.md §4.1): `ddgi/mark` adds each probe's change
+ * to its record, and this kernel cuts the history for it, resets the change
+ * and writes the probe's mean irradiance and noise back. Within a frame
+ * `ddgi/mark` runs first, as its own dispatch, so the two never race.
  *
  * Bindings (group 1; no platform module): uniforms, the update list, the ray
  * buffer, the scratch buffer, the census buffer and the probe history (5
@@ -30,7 +34,7 @@
  * (sampled, for the old values).
  */
 
-import { CENSUS_RAYS_TRACED, type ScratchLayout } from '../layout.ts';
+import { CENSUS_RAYS_TRACED, PROBE_HISTORY_FLAG, PROBE_HISTORY_FLAGS_MASK, PROBE_HISTORY_UPDATES, type ScratchLayout } from '../layout.ts';
 import { CLOCK_WRAP_SECONDS, FIXED_RAYS } from '../settings.ts';
 
 /**
@@ -123,6 +127,22 @@ const DDGI_BACK_FACE_DISTANCE_SHARE: f32 = 0.2;
 const DDGI_BIG_CHANGE_HYSTERESIS_SCALE: f32 = 0.75;
 // The technique's clock wraps to 0 every this many seconds (CLOCK_WRAP_SECONDS in settings.ts).
 const DDGI_CLOCK_WRAP_SECONDS: f32 = ${CLOCK_WRAP_SECONDS}.0;
+// The probe history's packed fields (PROBE_HISTORY_UPDATES, PROBE_HISTORY_FLAG in layout.ts).
+const DDGI_HISTORY_COUNT_MASK: u32 = ${PROBE_HISTORY_UPDATES.countMask}u;
+const DDGI_HISTORY_FLAGS_MASK: u32 = ${PROBE_HISTORY_FLAGS_MASK}u;
+const DDGI_FLAG_MARKED: u32 = ${PROBE_HISTORY_FLAG.marked}u;
+const DDGI_FLAG_MARKED_BEFORE_LAST_UPDATE: u32 = ${PROBE_HISTORY_FLAG.markedBeforeLastUpdate}u;
+const DDGI_FLAG_AWAITING_CHANGE: u32 = ${PROBE_HISTORY_FLAG.awaitingChange}u;
+// "No cut": larger than any history count.
+const DDGI_NO_HISTORY_LIMIT: f32 = 3.0e38;
+// The noise word is a running mean over about this many quiet updates (an
+// exponential average with weight 1 / this). Long enough to average a few
+// outliers away, short enough to follow a probe whose light changed.
+const DDGI_NOISE_UPDATES: f32 = 16.0;
+// What kind of update this is, for the noise word (ddgiUpdateKind).
+const DDGI_UPDATE_FIRST: u32 = 0u;   // state 3: the history starts again, noise 0
+const DDGI_UPDATE_QUIET: u32 = 1u;   // no change reported: feeds the noise
+const DDGI_UPDATE_MARKED: u32 = 2u;  // a reported change: the noise is kept as it was
 
 // Phase B rules (Majercik et al. 2021, section 5).
 // More than this share of fixed rays hitting back faces means the probe is inside something.
@@ -193,6 +213,11 @@ var<workgroup> ddgiBlendThisUpdate: u32;
 var<workgroup> ddgiUpdateHysteresis: f32;
 var<workgroup> ddgiFastHysteresis: u32;
 var<workgroup> ddgiChangedNow: u32;
+// The probe's history after this update, decided in phase B and written with
+// its new mean and noise once phase C has them, and what kind of update it is
+// (DDGI_UPDATE_*).
+var<workgroup> ddgiNextHistory: DdgiProbeHistory;
+var<workgroup> ddgiUpdateKind: u32;
 // Phase C: each irradiance texel's new estimate and old value, for the
 // big-change test on the probe's mean.
 var<workgroup> ddgiTexelEstimate: array<vec4f, DDGI_IRRADIANCE_TEXEL_COUNT>;
@@ -357,17 +382,29 @@ fn ddgiDecide(probe: vec3i, offset: vec3f, state: u32) -> DdgiProbeDecision {
 
 // ---- Phase C: blend ----
 
-// One probe's history (PROBE_HISTORY_WORD in layout.ts).
+// One probe's history (PROBE_HISTORY_WORD in layout.ts; 48 bytes). Words
+// later tasks fill are kept as they are.
 struct DdgiProbeHistory {
     samples: f32,            // n: the updates its history counts as
     lastUpdateSeconds: f32,  // t: the technique's clock at its last blended update
-    updates: u32,            // k: blended updates since it was last new, reset or back on
+    updates: u32,            // k in the low 16 bits (blended updates since new, reset or back on); owed (T2.4b) and the sky transfer's count (T2.6b) above
+    pendingChange: f32,      // r: the change ddgi/mark added up since its last update
+    urgency: f32,            // the largest change since its last update (T2.4b's scheduler)
+    scheduleAndFlags: u32,   // flags in the low 8 bits (DDGI_FLAG_*); the frame it was last scheduled above (T2.4b)
+    meanRedGreen: u32,       // its mean irradiance, r and g as half floats
+    meanBlueNoise: u32,      // b, and its noise, as half floats
+    wakeUntil: u32,          // M3
+    keysReceived: u32,       // T2.4c
+    changeClock: u32,        // T2.4c
+    spare: u32,
 }
 
-// This update's hysteresis for one probe, and the probe's history after it.
+// This update's hysteresis for one probe, and the probe's history after it
+// (its mean and noise are filled in once phase C has the estimate).
 struct DdgiHysteresisStep {
     hysteresis: f32,
     history: DdgiProbeHistory,
+    kind: u32,               // DDGI_UPDATE_*
 }
 
 // The ramp: the most a probe with k blended updates may remember. For its
@@ -403,22 +440,80 @@ fn ddgiRampCap(updates: u32) -> f32 {
 // from nothing (n = 0, k = 0), h = 0, so the field shows partial GI at once
 // instead of fading in from black. The history is kept with the fixed rule
 // too, so switching rules mid-run carries on from the right count.
+//
+// Before all that, a change the scene reported cuts n (ddgiChangeLimit), so
+// the probe follows it within a few updates; with no change it does nothing.
 fn ddgiHysteresisStep(history: DdgiProbeHistory, state: u32) -> DdgiHysteresisStep {
     let firstUpdate = state == DDGI_STATE_NOT_UPDATED_YET;
-    let updates = select(history.updates, 0u, firstUpdate);
+    let flags = history.scheduleAndFlags & DDGI_HISTORY_FLAGS_MASK;
+    let marked = (flags & DDGI_FLAG_MARKED) != 0u;
+    let limit = select(ddgiChangeLimit(history.pendingChange, flags), DDGI_NO_HISTORY_LIMIT, firstUpdate);
+    // After a cut the count grows back by one an update, as the design has it.
+    // (Moving the probe back along the warm-up ramp as well was measured and
+    // made it worse: on two-room's lamp step the view overshot further, 0.30 s
+    // against 0.03 s at lightChangeScale 0.5; PROGRESS 2026-11-06, T2.4a.)
+    let updates = select(history.updates & DDGI_HISTORY_COUNT_MASK, 0u, firstUpdate);
     // The clock wraps (CLOCK_WRAP_SECONDS): a negative difference means it
     // wrapped since this probe's last update, so add the period back.
     let sinceLastUpdate = ddgi.clockSeconds - history.lastUpdateSeconds;
     let elapsedSeconds = select(sinceLastUpdate, sinceLastUpdate + DDGI_CLOCK_WRAP_SECONDS, sinceLastUpdate < 0.0);
-    let faded = select(history.samples * exp(-elapsedSeconds * ddgi.inverseMemorySeconds), 0.0, firstUpdate);
+    // The cut comes first, then T1.12's fade and ramp as usual (m2-lights.md §4.1).
+    let faded = select(min(history.samples, limit) * exp(-elapsedSeconds * ddgi.inverseMemorySeconds), 0.0, firstUpdate);
     let remembered = min(faded, ddgiRampCap(updates));
     let adaptive = remembered / (remembered + 1.0);
-    let fixed = select(ddgi.hysteresis, 0.0, firstUpdate);
+    // The fixed rule keeps its h, lowered to what the cut allows. Only when
+    // there is a cut: GPUs divide through a reciprocal, and 1 / (3e38 + 1) is
+    // a denormal they flush to 0, which made "no cut" read as h = 0 (caught by
+    // the flicker page, whose converging runs the fixed rule).
+    let cutHysteresis = select(1.0, limit / (limit + 1.0), limit < DDGI_NO_HISTORY_LIMIT);
+    let fixed = select(min(ddgi.hysteresis, cutHysteresis), 0.0, firstUpdate);
     let hysteresis = select(fixed, adaptive, ddgi.adaptiveHysteresis != 0u);
     let samples = min(remembered + 1.0, ddgi.maxHistorySamples);
-    // Saturating: the count only matters while k / a is below n_max.
-    let nextUpdates = select(updates + 1u, updates, updates == 0xffffffffu);
-    return DdgiHysteresisStep(hysteresis, DdgiProbeHistory(samples, ddgi.clockSeconds, nextUpdates));
+    // Saturating at the field's width: the count only matters while k / a is below n_max.
+    let nextCount = select(updates + 1u, updates, updates == DDGI_HISTORY_COUNT_MASK);
+    var next = history;
+    next.samples = samples;
+    next.lastUpdateSeconds = ddgi.clockSeconds;
+    next.updates = (history.updates & ~DDGI_HISTORY_COUNT_MASK) | nextCount;
+    // This update takes the change in: it starts again from nothing, and the
+    // steady-change rule remembers whether this update had been marked. The
+    // awaiting flag (T2.4c) clears here too: the probe has been traced itself.
+    next.pendingChange = 0.0;
+    next.urgency = 0.0;
+    let keptFlags = flags & ~(DDGI_FLAG_MARKED | DDGI_FLAG_MARKED_BEFORE_LAST_UPDATE | DDGI_FLAG_AWAITING_CHANGE);
+    let nextFlags = keptFlags | select(0u, DDGI_FLAG_MARKED_BEFORE_LAST_UPDATE, marked);
+    next.scheduleAndFlags = (history.scheduleAndFlags & ~DDGI_HISTORY_FLAGS_MASK) | nextFlags;
+    let kind = select(select(DDGI_UPDATE_QUIET, DDGI_UPDATE_MARKED, marked), DDGI_UPDATE_FIRST, firstUpdate);
+    return DdgiHysteresisStep(hysteresis, next, kind);
+}
+
+// The most samples a probe may keep after the changes reported since its
+// last update (docs/design/m2-lights.md §4.1). r is the relative change of
+// its light that ddgi/mark added up, epsilon the tolerance, K the updates it
+// is expected to get soon:
+// - a step: the error left after K updates is r * n / (n + K); setting that
+//   to epsilon gives n <= epsilon K / (r - epsilon) when r > epsilon, and
+//   nothing for smaller changes;
+// - a change that keeps going (marked before its previous update too): it
+//   moves the probe only a little between two updates, so the step rule
+//   alone would leave the history long and the probe trailing the change by
+//   about tau of it; n <= epsilon / r keeps the lag near epsilon.
+// Symmetric on purpose: brighter or darker, the cut is by the size of the
+// change, so a lamp switched on arrives as fast as one switched off.
+fn ddgiChangeLimit(pendingChange: f32, flags: u32) -> f32 {
+    if (ddgi.changeDrivenHistory == 0u || pendingChange <= 0.0) {
+        return DDGI_NO_HISTORY_LIMIT;
+    }
+    let tolerance = ddgi.changeTolerance;
+    var limit = DDGI_NO_HISTORY_LIMIT;
+    if (pendingChange > tolerance) {
+        limit = tolerance * ddgi.changeUpdates / (pendingChange - tolerance);
+    }
+    let steady = (flags & DDGI_FLAG_MARKED) != 0u && (flags & DDGI_FLAG_MARKED_BEFORE_LAST_UPDATE) != 0u;
+    if (steady) {
+        limit = min(limit, tolerance / pendingChange);
+    }
+    return limit;
 }
 
 // The cosine-weighted mean radiance of the blended rays around one
@@ -485,6 +580,42 @@ fn ddgiBlendDistanceTexel(slot: u32, probeIndex: u32, probe: vec3i, texelIndex: 
     ddgiScratch[base] = ddgiPackHalves(blendedValue.x, blendedValue.y, seed);
 }
 
+// Thread 0, once phase C has the estimate: the probe's history after this
+// update, with its new mean irradiance and noise (m2-lights.md §4.1, words
+// 6 and 7). One workgroup per probe and a probe is listed at most once a
+// frame, so this write can't race.
+// - The mean: the blend moves every texel by the same share 1 - h, so the
+//   mean of the new texels is the same mix of the two means (the firefly
+//   clamp aside, which only acts on outliers). ddgi/mark divides a light's
+//   change by it.
+// - The noise: how far an update's mean estimate lands from the stored mean,
+//   |estimate - old| (the blend moves the mean by (1 - h) of that, so this
+//   doesn't depend on h), as the root of a running mean of its square, the
+//   channels averaged. Only quiet updates feed it: a reported change isn't
+//   noise. T2.4b's feedback rule compares an update's change with it.
+fn ddgiWriteHistory(probeIndex: u32, estimateSum: vec3f, oldSum: vec3f, probeHysteresis: f32, fastHysteresis: bool) {
+    let texelCount = f32(DDGI_IRRADIANCE_TEXEL_COUNT);
+    let estimateMean = estimateSum / texelCount;
+    let oldMean = oldSum / texelCount;
+    let hysteresis = select(probeHysteresis, probeHysteresis * DDGI_BIG_CHANGE_HYSTERESIS_SCALE, fastHysteresis);
+    let mean = max(mix(estimateMean, oldMean, hysteresis), vec3f(0.0));
+    var history = ddgiNextHistory;
+    let previousNoise = unpack2x16float(history.meanBlueNoise).y;
+    var noise = previousNoise;
+    if (ddgiUpdateKind == DDGI_UPDATE_FIRST) {
+        noise = 0.0;
+    } else if (ddgiUpdateKind == DDGI_UPDATE_QUIET) {
+        let deviation = abs(estimateMean - oldMean);
+        let deviationSquared = dot(deviation, deviation) / 3.0;
+        // The first quiet update starts the average at its own value.
+        let averaged = select(mix(previousNoise * previousNoise, deviationSquared, 1.0 / DDGI_NOISE_UPDATES), deviationSquared, previousNoise <= 0.0);
+        noise = sqrt(averaged);
+    }
+    history.meanRedGreen = pack2x16float(mean.rg);
+    history.meanBlueNoise = pack2x16float(vec2f(mean.b, noise));
+    ddgiProbeHistory[probeIndex] = history;
+}
+
 @compute @workgroup_size(DDGI_BLEND_WORKGROUP_SIZE)
 fn ddgiBlend(
     @builtin(workgroup_id) group: vec3u,
@@ -536,7 +667,8 @@ fn ddgiBlend(
             // most once a frame, so this read and write can't race.
             let step = ddgiHysteresisStep(ddgiProbeHistory[probeIndex], state);
             ddgiUpdateHysteresis = step.hysteresis;
-            ddgiProbeHistory[probeIndex] = step.history;
+            ddgiNextHistory = step.history;
+            ddgiUpdateKind = step.kind;
         }
         // Offsets and states are small exact values in half floats; no rounding noise wanted.
         let base = slot * DDGI_SCRATCH_STRIDE + DDGI_SCRATCH_PROBE_DATA;
@@ -586,6 +718,7 @@ fn ddgiBlend(
         let ruleOn = ddgi.irradianceChangeThreshold >= 0.0;
         ddgiChangedNow = select(0u, 1u, ruleOn && any(abs(estimateSum - oldSum) > ddgi.irradianceChangeThreshold * oldSum));
         ddgiFastHysteresis = select(0u, 1u, ddgiTexelOld[0].a > 0.5);
+        ddgiWriteHistory(probeIndex, estimateSum, oldSum, hysteresis, ddgiFastHysteresis != 0u);
     }
     let changedNow = workgroupUniformLoad(&ddgiChangedNow) != 0u;
     let fastHysteresis = workgroupUniformLoad(&ddgiFastHysteresis) != 0u;

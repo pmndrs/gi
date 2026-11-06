@@ -163,9 +163,13 @@ export const UNIFORM_WORD = {
     maxHistorySamples: 44,
     updatesPerSample: 45,
     rampUpdates: 46,
+    changeDrivenHistory: 47,
+    changeTolerance: 48,
+    changeUpdates: 49,
+    lightChangeScale: 50,
 } as const;
-/** 47 words, rounded up to the struct's 16-byte alignment. */
-export const UNIFORM_WORDS = 48;
+/** 51 words, rounded up to the struct's 16-byte alignment. */
+export const UNIFORM_WORDS = 52;
 export const UNIFORM_BYTES = UNIFORM_WORDS * 4;
 /** Words per column of the rotation (vec3f columns padded to 16 bytes). */
 export const MAT3_COLUMN_WORDS = 4;
@@ -181,30 +185,144 @@ export const SAMPLE_PARAMETER_VEC4_COUNT = 4;
 export const RAY_RECORD_BYTES = 8;
 
 /**
- * One probe's history for the hysteresis rule (`DdgiProbeHistory` in
- * wgsl/blend.ts), in 32-bit words:
+ * One probe's history (`DdgiProbeHistory` in wgsl/blend.ts): T1.12's sample
+ * count, cut by changes the scene reports (docs/design/m2-lights.md §4.1).
+ * 48 bytes, in 32-bit words. One record and one blend rule for every kind of
+ * change; later tasks fill the words marked so, and until then they stay 0.
+ *
  * - `samples` (f32): n, the updates the probe's light is averaged over after
  *   its last blended update (at most `hysteresisMaxSamples`);
  * - `lastUpdateSeconds` (f32): the technique's clock at that update;
- * - `updates` (u32): k, its blended updates since it was new, reset or back on.
+ * - `updates`: k, its blended updates since it was new, reset or back on, in
+ *   the low 16 bits (saturating); updates owed at priority in bits 16-23
+ *   (T2.4b's scheduler); the sky transfer's own update count in bits 24-31
+ *   (T2.6b). See {@link PROBE_HISTORY_UPDATES};
+ * - `pendingChange` (f32): the relative change of the probe's light since its
+ *   last update, added up over `ddgi/mark`'s marks and reset by the blend,
+ *   which cuts the history for it. An f32, so many small marks don't round
+ *   away;
+ * - `urgency` (f32): the largest change since its last update, for the
+ *   scheduler (written by `ddgi/mark`, read by T2.4b; reset by the blend);
+ * - `scheduleAndFlags`: flags in the low 8 bits ({@link PROBE_HISTORY_FLAG}),
+ *   the frame it was last put in the update list in the high 24 (T2.4b);
+ * - `meanRedGreen`, `meanBlueNoise`: the probe's mean irradiance over its
+ *   texels (rgb as half floats, `pack2x16float`) and its noise: the root of a
+ *   running mean, over quiet updates, of the squared distance between an
+ *   update's mean estimate and the stored mean (a half float; T2.4b's
+ *   feedback rule reads it). Written by every blend; `ddgi/mark` divides a
+ *   light's change by the mean;
+ * - `wakeUntil`: M3 (m3-moving.md 5.2);
+ * - `keysReceived`: which of its up to 8 key neighbours have passed it their
+ *   change since its mark, low 8 bits (T2.4c);
+ * - `changeClock` (u32, fixed point): the volume's change clock at its last
+ *   update (T2.4c);
+ * - `spare`: free.
  *
  * The history buffer (`DDGIField.probeHistory`) holds one per probe in
- * probe-index order, the order of the `points` debug view's texels.
+ * probe-index order, the order of the `points` debug view's texels. It starts
+ * at zero, and a probe's first blended update (state 3) starts it again.
  */
 export const PROBE_HISTORY_WORD = {
     samples: 0,
     lastUpdateSeconds: 1,
     updates: 2,
+    pendingChange: 3,
+    urgency: 4,
+    scheduleAndFlags: 5,
+    meanRedGreen: 6,
+    meanBlueNoise: 7,
+    wakeUntil: 8,
+    keysReceived: 9,
+    changeClock: 10,
+    spare: 11,
 } as const;
-export const PROBE_HISTORY_WORDS = 3;
+export const PROBE_HISTORY_WORDS = 12;
 export const PROBE_HISTORY_BYTES = PROBE_HISTORY_WORDS * 4;
+
+/** The fields packed into the `updates` word. */
+export const PROBE_HISTORY_UPDATES = {
+    /** k, saturating here: the ramp only needs k while k / a is under n_max. */
+    countMask: 0xffff,
+    /** Updates owed at priority (T2.4b): bits 16-23. */
+    owedShift: 16,
+    /** The sky transfer's update count (T2.6b): bits 24-31. */
+    transferShift: 24,
+} as const;
+
+/** Flags in the low 8 bits of `scheduleAndFlags`. */
+export const PROBE_HISTORY_FLAG = {
+    /** `ddgi/mark` marked it since its last blended update. */
+    marked: 1 << 0,
+    /** It was marked before its last blended update too: a change that keeps going (the steady-change rule, m2-lights.md §4.1). */
+    markedBeforeLastUpdate: 1 << 1,
+    /** It waits for its key neighbours' change (T2.4c). */
+    awaitingChange: 1 << 2,
+} as const;
+/** The flags' share of `scheduleAndFlags`; the scheduled frame (T2.4b) is the rest. */
+export const PROBE_HISTORY_FLAGS_MASK = 0xff;
 
 /**
  * The census buffer (read back a few frames late, for the counters): probes
- * per state (indices are the states), then rays traced this frame.
+ * per state (indices are the states), rays traced this frame and the probe
+ * marks `ddgi/mark` made this frame (both cleared every frame), then the
+ * marks since `prepare` (never cleared, so a test can read the total over a
+ * run even though not every frame's census is read back).
  */
-export const CENSUS_WORDS = 5;
+export const CENSUS_WORDS = 7;
 export const CENSUS_RAYS_TRACED = 4;
+export const CENSUS_PROBES_MARKED = 5;
+export const CENSUS_PROBES_MARKED_TOTAL = 6;
+/** Words cleared at the start of every frame: all but the running total. */
+export const CENSUS_PER_FRAME_WORDS = 6;
+
+/**
+ * `ddgi/mark`'s table (`DdgiMarkTable` in wgsl/mark.ts), written by the CPU
+ * in frames with changes: a header (entry count, thread count, 2 spare
+ * words), then one entry per changed light or global change. Each entry
+ * covers a box of probes, one thread per probe; `firstThread` is the running
+ * sum of the boxes before it, so a thread finds its entry by binary search.
+ *
+ * An entry: box min (3 u32) and kind ({@link MARK_KIND}), box size (3 u32)
+ * and first thread, the global change r and 3 spare words, then the light
+ * before and after, `MARK_LIGHT_WORDS` each ({@link MARK_LIGHT_WORD}).
+ */
+export const MARK_HEADER_WORDS = 4;
+export const MARK_LIGHT_WORDS = 16;
+export const MARK_ENTRY_WORD = {
+    boxMin: 0,
+    kind: 3,
+    boxSize: 4,
+    firstThread: 7,
+    globalChange: 8,
+    before: 12,
+    after: 12 + MARK_LIGHT_WORDS,
+} as const;
+export const MARK_ENTRY_WORDS = 12 + 2 * MARK_LIGHT_WORDS;
+/** Inside one light of an entry: position (3) and kind, direction (3) and range, colour × intensity (3) and cos inner cone, cos outer cone and 3 spare. */
+export const MARK_LIGHT_WORD = {
+    position: 0,
+    kind: 3,
+    direction: 4,
+    range: 7,
+    intensity: 8,
+    cosInnerCone: 11,
+    cosOuterCone: 12,
+} as const;
+
+/** What an entry marks. */
+export const MARK_KIND = {
+    /** A point or spot light changed: the change of its irradiance vector at each probe of its box. */
+    localLight: 0,
+    /** A directional light changed: every probe, r times the openness factor toward its old and new direction. */
+    directionalLight: 1,
+    /** The environment changed: every probe, r times the openness factor over six directions. */
+    environment: 2,
+    /** A change with no shape (more light changes than are listed): every probe, r as it is. */
+    everywhere: 3,
+} as const;
+
+/** A light's kind inside an entry. */
+export const MARK_LIGHT_KIND = { point: 0, spot: 1, directional: 2 } as const;
 
 /** The points debug view: one rgba32float texel per probe, in probe-index order, rows as wide as the device allows. */
 export function pointsSize(probeCount: number, maxTextureDimension2D: number): { width: number; height: number } {

@@ -44,7 +44,7 @@ import type {
 import type { SceneChanges, SceneCopy } from '../contract/scene-copy.ts';
 import type { BindingSlot, WgslModule } from '../contract/wgsl.ts';
 import { invertAffine, transformBounds } from '../trace/top-level.ts';
-import { ChangeLog, toAabb } from './change-log.ts';
+import { ChangeLog, copyLight, toAabb, type LightLookup } from './change-log.ts';
 import {
     ENVIRONMENT_TYPE,
     HEADER_VEC4S,
@@ -266,6 +266,14 @@ export class PlatformScene implements SceneApi, SceneCopy {
     private readonly pendingMeshes = new Set<MeshEntry>();
     private removedMeshSlots: number[] = [];
     private readonly changeLog = new ChangeLog();
+    /** How the change log sees the live lights when it builds a frame's light changes. */
+    private readonly lightLookup: LightLookup = {
+        current: (light) => {
+            const entry = this.lightsByHandle.get(light);
+            return entry ? { index: entry.index, descriptor: entry.descriptor } : undefined;
+        },
+        all: () => this.lights.map((entry) => entry.descriptor),
+    };
     private headerDirty = true;
     private topLevelDirty = false;
     private instanceSetDirty = false;
@@ -657,6 +665,7 @@ export class PlatformScene implements SceneApi, SceneCopy {
         const checked = this.checkedLight(descriptor);
         const handle = this.nextHandle++ as LightHandle;
         const entry: LightEntry = { handle, index: -1, descriptor: checked };
+        this.changeLog.noteLight(handle, null);
         // Directional lights stay at the front: the first point or spot light moves to the end to make room.
         if (checked.type === 'directional') {
             const displaced = this.lights[this.directionalLightCount];
@@ -667,7 +676,6 @@ export class PlatformScene implements SceneApi, SceneCopy {
             this.placeLight(entry, this.lights.length);
         }
         this.lightsByHandle.set(handle, entry);
-        this.logLight(entry);
         this.headerDirty = true;
         return handle;
     }
@@ -679,17 +687,16 @@ export class PlatformScene implements SceneApi, SceneCopy {
             throw new Error('@pmndrs/ddgi: a light cannot change type; destroy it and create a new one.');
         }
         const next = this.checkedLight({ ...entry.descriptor, ...changes } as LightDescriptor);
-        this.logLight(entry);
-        if ((next.group ?? 0) !== (entry.descriptor.group ?? 0)) this.changeLog.addGlobal('lights');
+        // The log keeps the state the frame started with; it works out boxes and flags at encode.
+        this.changeLog.noteLight(light, entry.descriptor);
         entry.descriptor = next;
         this.writeLightRecord(entry);
-        this.logLight(entry);
     }
 
     destroyLight(light: LightHandle): void {
         this.checkLive();
         const entry = this.light(light);
-        this.logLight(entry);
+        this.changeLog.noteLight(light, entry.descriptor);
         const last = this.lights.length - 1;
         if (entry.descriptor.type === 'directional') {
             // Fill the hole with the last directional light, and that light's place with the last light.
@@ -755,7 +762,7 @@ export class PlatformScene implements SceneApi, SceneCopy {
         bytesWritten += this.uploadTables();
 
         const upload: SceneUpload = {
-            changes: this.changeLog.take(),
+            changes: this.changeLog.take(this.lightLookup),
             meshesUploaded: uploaded,
             meshesRemoved: this.removedMeshSlots,
             instancesChanged: this.topLevelDirty,
@@ -1199,21 +1206,8 @@ export class PlatformScene implements SceneApi, SceneCopy {
         } else {
             throw new TypeError(`@pmndrs/ddgi: unknown light type ${(descriptor as { type: string }).type}`);
         }
-        return { ...descriptor };
-    }
-
-    /** Logs where a light's influence is: a box for ranged lights, a global change otherwise. */
-    private logLight(light: LightEntry): void {
-        const descriptor = light.descriptor;
-        if (descriptor.type === 'directional') {
-            this.changeLog.addGlobal('sun');
-        } else if (descriptor.range === 0) {
-            this.changeLog.addGlobal('lights');
-        } else {
-            const [x, y, z] = descriptor.position;
-            const range = descriptor.range;
-            this.changeLog.addRegion([x - range, y - range, z - range, x + range, y + range, z + range], 'light', light.handle);
-        }
+        // Its own arrays: the change log compares states, and a host editing a vector in place would change the stored one too.
+        return copyLight(descriptor);
     }
 }
 
