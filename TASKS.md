@@ -382,7 +382,7 @@ Status: **started 2026-11-06** on branch `m2` (from main at 3d682dc; M1 merged a
 | T2.M1 | Rigid moving objects, pulled forward from M3: the change feed for transforms (M3's T3.1, rigid part), geometry marks and the mover mask (T3.4, rigid part), three adapter change tracking for transforms | implementer | M | T2.4b (T2.4c for far sets) | todo |
 | T2.0 | Spike: deferred shadow-ray pass on Sponza (decision rule: go ahead if Sponza fits ≥ 1.25× the probes at 2 ms) | implementer | S | M1 done | done (Opus review passed with notes; **go for T2.2**: Sponza fits 2.2× the probes at 2 ms on the RTX, 646 against 293 by Budget v2; field within 0.04% on both GPUs; spike code stays on branch `m2-t2.0`, 06d5a18) |
 | T2.1 | Light buffer v2 (capacity, the adapter's light walk), manifest `motions`, `sponza-candles` (1,024 lights) | implementer + wrangler | M | T2.4a (change log) | todo |
-| T2.2 | Deferred direct light (`gi/direct`) in platform hit shading | implementer | M | T2.0 | todo |
+| T2.2 | Deferred direct light (`gi/direct`) in platform hit shading | implementer | M | T2.0 | active (implementer, 2026-11-06, beside the T2.4 spine: Dennis said go; worktree `webgpu-ddgi-m2-t22`, branch `m2-t2.2`) |
 | T2.5 | Light groups: layers, compose, weights, adapter API | implementer | M | T2.2, T2.4a | todo |
 | T2.6a | Sky re-bake for time of day: GPU procedural source, two-level SH with radiance SH, the compile fix | implementer | M | T2.4b | todo |
 | T2.6b | Instant sky: first-order transfer in the blend, the nudge, the fallback; the sun layer in white with T2.5 | implementer | M | T2.4c, T2.5, T2.6a | todo |
