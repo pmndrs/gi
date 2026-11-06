@@ -380,7 +380,7 @@ Status: **started 2026-11-06** on branch `m2` (from main at 3d682dc; M1 merged a
 | T2.4b | GPU scheduler with camera priority over Budget v2's fixed count, the feedback rule; far probes owe 2 as the fallback; the warm-up moves into the technique (the viewer switches to `volume.start`) | implementer | M | T2.4a | todo |
 | T2.4c | Key probes (1 in 8) with change propagation, the main path for global changes; first checked on Sponza's sun step and two-room's lamp | implementer | M | T2.4b | todo |
 | T2.M1 | Rigid moving objects, pulled forward from M3: the change feed for transforms (M3's T3.1, rigid part), geometry marks and the mover mask (T3.4, rigid part), three adapter change tracking for transforms | implementer | M | T2.4b (T2.4c for far sets) | todo |
-| T2.0 | Spike: deferred shadow-ray pass on Sponza (decision rule: go ahead if Sponza fits ≥ 1.25× the probes at 2 ms) | implementer | S | M1 done | active (implementer, 2026-11-06; worktree `webgpu-ddgi-m2-t20`, branch `m2-t2.0`; runs beside T2.4) |
+| T2.0 | Spike: deferred shadow-ray pass on Sponza (decision rule: go ahead if Sponza fits ≥ 1.25× the probes at 2 ms) | implementer | S | M1 done | done (Opus review passed with notes; **go for T2.2**: Sponza fits 2.2× the probes at 2 ms on the RTX, 646 against 293 by Budget v2; field within 0.04% on both GPUs; spike code stays on branch `m2-t2.0`, 06d5a18) |
 | T2.1 | Light buffer v2 (capacity, the adapter's light walk), manifest `motions`, `sponza-candles` (1,024 lights) | implementer + wrangler | M | T2.4a (change log) | todo |
 | T2.2 | Deferred direct light (`gi/direct`) in platform hit shading | implementer | M | T2.0 | todo |
 | T2.5 | Light groups: layers, compose, weights, adapter API | implementer | M | T2.2, T2.4a | todo |
@@ -416,6 +416,12 @@ These add to the design docs' draft done-whens. M1's open follow-ups (the M1 not
   7. the three adapter sends moved objects in one `setTransforms` batch, `InstancedMesh` update ranges send only those instances (test), and its CPU cost stays ≤ 0.2 ms still and ≤ 0.5 ms with one mover (T1.7's pages);
   8. marked probes against probes whose true change was > 5% are recorded for the cabinet and the door (the far-set guess, m3-moving.md risk 4).
   - Not in T2.M1 (stays in M3): deforming meshes, `setDeformedPositions`, `receivers` and woken air probes, runtime mesh trees, the `updateMatrixWorld` override.
+- **T2.2** takes these from T2.0's review:
+  - only hits a light can reach go on the work list (half of Sponza's front-face hits face away from the sun);
+  - the deferred trace was at 8 storage buffers, the default limit, so the ray results and the work list share one buffer before the light grid is added;
+  - check 1 adds a per-texel comparison (mean and p95 of the per-texel difference), because a mean can hide errors that cancel. The spike's 0.03% offset is a small fixed bias from the surface record's rounding (10-bit albedo, 16-bit normals), not noise;
+  - don't copy the spike's shortcuts: the `.replace()` struct edit (`direct.ts:230`), the COPY_SRC usage added for a test page and read through a private cast, the light-group mask written twice. The kernel builder's `splitLeadingDirectives` (WGSL `enable` must come first) is worth keeping;
+  - check 3's target is 646 probes at 2 ms on Sponza from T2.0's run in a worktree; T2.2 re-measures both paths in its own environment and compares the ratio (2.2×), not the absolute count.
 - **T2.10** adds the measured whole-frame p50/p95 with GI updating and shading in the same frame (M1 follow-up), and runs the Intel UHD suites in short batches with a device-hang count (M1 follow-up: two `DXGI_ERROR_DEVICE_HUNG` in long back-to-back suites).
 
 ## Carried to M2 (collected during M1)
