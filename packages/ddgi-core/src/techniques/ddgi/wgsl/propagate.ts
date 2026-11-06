@@ -12,13 +12,14 @@
  *    awaiting a change (the flag `ddgi/mark` sets and the probe's own blend
  *    clears), active, with a key neighbour that passed its change this frame,
  *    go into a compacted list. **Subgroups first** (one atomic per subgroup
- *    reserves the slots) or the **declared fallback** (one per thread). It is
- *    dispatched indirectly, its size written at the start of the key-delta
- *    buffer by `ddgi/blend` when a key passes its change on, so in a frame
- *    where none does (a still scene) it runs no workgroup at all.
- * 2. `ddgi/propagate-args`, one thread: the indirect dispatch size for the
- *    list (two dimensions past the per-dimension limit).
- * 3. `ddgi/propagate`, one workgroup per listed fine probe: adds, per texel,
+ *    reserves the slots) or the **declared fallback** (one per thread). In a
+ *    frame where no key passed a change on (a still scene; the census
+ *    counts them), each workgroup stops at once.
+ * 2. `ddgi/propagate-args`, one thread: the list's length, no more than it
+ *    holds.
+ * 3. `ddgi/propagate`, PROPAGATE_WORKGROUPS workgroups looping over the list,
+ *    one listed fine probe at a time (layout.ts says why not an indirect
+ *    dispatch of one workgroup per entry): adds, per texel,
  *    `Σⱼ wⱼ · sⱼ · Δⱼ` over its key neighbours j that passed a change this
  *    frame, clamped so irradiance stays ≥ 0, into propagation's own scratch,
  *    and records which keys passed it theirs (the fine probe's blend cuts its
@@ -41,20 +42,18 @@
  * Distances aren't propagated: a light change doesn't move them.
  *
  * Bindings (group 1, one declaration for the module, a layout per kernel):
- * uniforms (0), the probe history as words (1), the census (2, propagate
- * only), the
+ * uniforms (0), the probe history as words (1), the census (2), the
  * propagation state written by find and args (3), the list (4), the key
  * deltas (5), propagation's scratch (6), the propagation state read-only
- * (7, beside its indirect use), and the irradiance, distance and probe-data
- * atlases (8-10, sampled) and the atlas sampler (11). `ddgi/propagate` binds
- * 6 storage buffers.
+ * (7), and the irradiance, distance and probe-data atlases (8-10, sampled)
+ * and the atlas sampler (11). `ddgi/propagate` binds 6 storage buffers.
  */
 
 import {
     CENSUS_CHANGE_CLOCK,
+    CENSUS_KEY_CHANGES_PASSED,
     CENSUS_PROBES_PROPAGATED,
     CENSUS_PROBES_PROPAGATED_TOTAL,
-    KEY_DELTA_FIND_ARGS_WORDS,
     KEY_DELTA_HEADER,
     KEY_DELTA_HEADER_WORDS,
     KEY_NEIGHBOURS,
@@ -92,8 +91,6 @@ export interface PropagateKernelShape {
     readonly reduction: PropagateReduction;
     /** How many fine probes the list holds (propagationListCapacity in layout.ts). */
     readonly listCapacity: number;
-    /** The device's `maxComputeWorkgroupsPerDimension`, for the indirect dispatch's size. */
-    readonly maxWorkgroupsPerDimension: number;
 }
 
 function reserveWgsl(reduction: PropagateReduction): string {
@@ -127,7 +124,7 @@ fn ddgiReserveListSlot(take: bool) -> u32 {
 }
 
 export function propagateKernelWgsl(shape: PropagateKernelShape): string {
-    const { irradianceTexels, reduction, listCapacity, maxWorkgroupsPerDimension } = shape;
+    const { irradianceTexels, reduction, listCapacity } = shape;
     const enable = reduction === 'subgroups' ? 'enable subgroups;\n' : '';
     return /* wgsl */ `${enable}
 ${DDGI_COMMON_WGSL}
@@ -141,7 +138,6 @@ const DDGI_IRRADIANCE_TEXELS: u32 = ${irradianceTexels}u;
 const DDGI_IRRADIANCE_TEXEL_COUNT: u32 = DDGI_IRRADIANCE_TEXELS * DDGI_IRRADIANCE_TEXELS;
 const DDGI_KEY_NEIGHBOURS: u32 = ${KEY_NEIGHBOURS}u;
 const DDGI_LIST_CAPACITY: u32 = ${listCapacity}u;
-const DDGI_MAX_WORKGROUPS_PER_DIMENSION: u32 = ${maxWorkgroupsPerDimension}u;
 const DDGI_VISIBLE_SHARE: f32 = ${PROPAGATION_VISIBLE_SHARE};
 // The probe history, as words (PROBE_HISTORY_WORD in layout.ts).
 const DDGI_HISTORY_WORDS: u32 = ${PROBE_HISTORY_WORDS}u;
@@ -159,11 +155,9 @@ const DDGI_KEYS_WEIGHT_SHIFT: u32 = ${PROBE_HISTORY_KEYS.weightShift}u;
 const DDGI_SCHEDULED_SHIFT: u32 = 8u;
 // The census and the propagation state (layout.ts).
 const DDGI_CENSUS_CHANGE_CLOCK: u32 = ${CENSUS_CHANGE_CLOCK}u;
+const DDGI_CENSUS_KEY_CHANGES_PASSED: u32 = ${CENSUS_KEY_CHANGES_PASSED}u;
 const DDGI_CENSUS_PROBES_PROPAGATED: u32 = ${CENSUS_PROBES_PROPAGATED}u;
 const DDGI_CENSUS_PROBES_PROPAGATED_TOTAL: u32 = ${CENSUS_PROBES_PROPAGATED_TOTAL}u;
-const DDGI_STATE_GROUPS_X: u32 = ${PROPAGATION_STATE_WORD.groupsX}u;
-const DDGI_STATE_GROUPS_Y: u32 = ${PROPAGATION_STATE_WORD.groupsY}u;
-const DDGI_STATE_GROUPS_Z: u32 = ${PROPAGATION_STATE_WORD.groupsZ}u;
 const DDGI_STATE_LISTED: u32 = ${PROPAGATION_STATE_WORD.listed}u;
 // The key-delta buffer (KEY_DELTA_HEADER in layout.ts).
 const DDGI_KEY_DELTA_STRIDE: u32 = ${keyDeltaStrideWords(irradianceTexels)}u;
@@ -177,14 +171,9 @@ const DDGI_PROPAGATION_STRIDE: u32 = ${propagationScratchStrideWords(irradianceT
 @group(1) @binding(2) var<storage, read_write> ddgiCensus: array<atomic<u32>>;
 @group(1) @binding(3) var<storage, read_write> ddgiPropagationState: array<atomic<u32>>;
 @group(1) @binding(4) var<storage, read_write> ddgiPropagationList: array<u32>;
-// The key deltas (KEY_DELTA_FIND_ARGS_WORDS of find's dispatch size, then the entries).
-struct DdgiKeyDeltas {
-    findGroups: array<u32, ${KEY_DELTA_FIND_ARGS_WORDS}>,
-    words: array<u32>,
-}
-@group(1) @binding(5) var<storage, read> ddgiKeyDeltas: DdgiKeyDeltas;
+@group(1) @binding(5) var<storage, read> ddgiKeyDeltas: array<u32>;
 @group(1) @binding(6) var<storage, read_write> ddgiPropagationScratch: array<u32>;
-// The same state, read-only: ddgi/propagate is dispatched indirectly from it.
+// The same state, read-only, for ddgi/propagate: its loop's bound must be uniform, as a read-only buffer is.
 @group(1) @binding(7) var<storage, read> ddgiPropagationCount: array<u32>;
 @group(1) @binding(8) var ddgiIrradianceAtlas: texture_2d_array<f32>;
 @group(1) @binding(9) var ddgiDistanceAtlas: texture_2d_array<f32>;
@@ -192,6 +181,9 @@ struct DdgiKeyDeltas {
 @group(1) @binding(11) var ddgiAtlasSampler: sampler;
 
 ${reserveWgsl(reduction)}
+
+// Find: whether any key passed its change on this frame, read once per workgroup.
+var<workgroup> ddgiAnyKeyPassed: u32;
 
 fn ddgiProbeIndexOf(probe: vec3i) -> u32 {
     let counts = ddgiProbeCount();
@@ -217,6 +209,14 @@ fn ${PROPAGATE_ENTRY_POINTS.find}(
     @builtin(num_workgroups) groups: vec3u,
     @builtin(local_invocation_index) thread: u32,
 ) {
+    // Nothing to do in a frame where no key passed a change on (a still
+    // scene): the census counts them; one thread reads it for the workgroup.
+    if (thread == 0u) {
+        ddgiAnyKeyPassed = atomicLoad(&ddgiCensus[DDGI_CENSUS_KEY_CHANGES_PASSED]);
+    }
+    if (workgroupUniformLoad(&ddgiAnyKeyPassed) == 0u) {
+        return;
+    }
     let counts = ddgiProbeCount();
     let probeIndex = (group.x + group.y * groups.x) * DDGI_FIND_WORKGROUP_SIZE + thread;
     var take = false;
@@ -241,17 +241,11 @@ fn ${PROPAGATE_ENTRY_POINTS.find}(
 }
 
 // ---- 2. args ----
-// One thread: the list's length (no more than it holds) and the indirect
-// dispatch size, one workgroup per entry, in two dimensions past the limit.
+// One thread: the list's length, no more than it holds (find counts every
+// probe it would take, and writes only those that fit).
 @compute @workgroup_size(1)
 fn ${PROPAGATE_ENTRY_POINTS.args}() {
-    let listed = min(atomicLoad(&ddgiPropagationState[DDGI_STATE_LISTED]), DDGI_LIST_CAPACITY);
-    let groupsX = min(listed, DDGI_MAX_WORKGROUPS_PER_DIMENSION);
-    let groupsY = select(0u, (listed + groupsX - 1u) / max(groupsX, 1u), groupsX > 0u);
-    atomicStore(&ddgiPropagationState[DDGI_STATE_LISTED], listed);
-    atomicStore(&ddgiPropagationState[DDGI_STATE_GROUPS_X], groupsX);
-    atomicStore(&ddgiPropagationState[DDGI_STATE_GROUPS_Y], groupsY);
-    atomicStore(&ddgiPropagationState[DDGI_STATE_GROUPS_Z], 1u);
+    atomicStore(&ddgiPropagationState[DDGI_STATE_LISTED], min(atomicLoad(&ddgiPropagationState[DDGI_STATE_LISTED]), DDGI_LIST_CAPACITY));
 }
 
 // ---- 3. propagate ----
@@ -346,13 +340,13 @@ fn ddgiWeighKey(fine: vec3i, fineIndex: u32, neighbour: u32) {
     let slot = ddgiHistoryWords[keyIndex * DDGI_HISTORY_WORDS + DDGI_HISTORY_KEY_DELTA_SLOT];
     let entry = slot * DDGI_KEY_DELTA_STRIDE;
     // The entry is the key's own (a stale slot can't pass for it).
-    if (ddgiKeyDeltas.words[entry + DDGI_KEY_DELTA_PROBE_INDEX] != keyIndex) {
+    if (ddgiKeyDeltas[entry + DDGI_KEY_DELTA_PROBE_INDEX] != keyIndex) {
         return;
     }
     let clock = atomicLoad(&ddgiCensus[DDGI_CENSUS_CHANGE_CLOCK]);
     let fineStamp = ddgiHistoryWords[fineIndex * DDGI_HISTORY_WORDS + DDGI_HISTORY_CHANGE_CLOCK];
     ddgiKeySlot[neighbour] = slot;
-    ddgiKeyChange[neighbour] = ddgiChangeShare(clock, fineStamp, ddgiKeyDeltas.words[entry + DDGI_KEY_DELTA_CLOCK_BEFORE]);
+    ddgiKeyChange[neighbour] = ddgiChangeShare(clock, fineStamp, ddgiKeyDeltas[entry + DDGI_KEY_DELTA_CLOCK_BEFORE]);
 }
 
 // Thread 0, after ddgiWeighKey: the weights normalised over the keys that
@@ -400,19 +394,11 @@ fn ddgiIrradianceAtlasTexel(probe: vec3i, texelIndex: u32) -> vec2i {
 
 fn ddgiKeyDeltaTexel(slot: u32, texelIndex: u32) -> vec3f {
     let word = slot * DDGI_KEY_DELTA_STRIDE + DDGI_KEY_DELTA_HEADER_WORDS + 2u * texelIndex;
-    return vec3f(unpack2x16float(ddgiKeyDeltas.words[word]), unpack2x16float(ddgiKeyDeltas.words[word + 1u]).x);
+    return vec3f(unpack2x16float(ddgiKeyDeltas[word]), unpack2x16float(ddgiKeyDeltas[word + 1u]).x);
 }
 
-@compute @workgroup_size(DDGI_PROPAGATE_WORKGROUP_SIZE)
-fn ${PROPAGATE_ENTRY_POINTS.propagate}(
-    @builtin(workgroup_id) group: vec3u,
-    @builtin(num_workgroups) groups: vec3u,
-    @builtin(local_invocation_index) thread: u32,
-) {
-    let entry = group.x + group.y * groups.x;
-    if (entry >= ddgiPropagationCount[DDGI_STATE_LISTED]) {
-        return;
-    }
+// One listed fine probe (entry 'entry' of the list), by the whole workgroup.
+fn ddgiPropagateEntry(entry: u32, thread: u32) {
     let fineIndex = ddgiPropagationList[entry];
     let fine = ddgiProbeCoordinates(fineIndex, ddgiProbeCount());
     if (thread < DDGI_KEY_NEIGHBOURS) {
@@ -460,6 +446,23 @@ fn ${PROPAGATE_ENTRY_POINTS.propagate}(
         ddgiHistoryWords[base + DDGI_HISTORY_MEAN_BLUE_NOISE] = pack2x16float(vec2f(mean.b, noise));
         atomicAdd(&ddgiCensus[DDGI_CENSUS_PROBES_PROPAGATED], 1u);
         atomicAdd(&ddgiCensus[DDGI_CENSUS_PROBES_PROPAGATED_TOTAL], 1u);
+    }
+    // The next entry reuses the workgroup's arrays.
+    workgroupBarrier();
+}
+
+// A fixed number of workgroups (PROPAGATE_WORKGROUPS), each taking the
+// list's entries in turn. The list's length is read from a read-only
+// binding, which WGSL counts as uniform, so the loop may hold barriers.
+@compute @workgroup_size(DDGI_PROPAGATE_WORKGROUP_SIZE)
+fn ${PROPAGATE_ENTRY_POINTS.propagate}(
+    @builtin(workgroup_id) group: vec3u,
+    @builtin(num_workgroups) groups: vec3u,
+    @builtin(local_invocation_index) thread: u32,
+) {
+    let length = ddgiPropagationCount[DDGI_STATE_LISTED];
+    for (var entry = group.x; entry < length; entry += groups.x) {
+        ddgiPropagateEntry(entry, thread);
     }
 }
 `;

@@ -187,11 +187,9 @@ export const UNIFORM_WORD = {
     fineOwedUpdates: 89,
     propagation: 90,
     holdFineProbes: 91,
-    propagateFindGroupsX: 92,
-    propagateFindGroupsY: 93,
 } as const;
-/** 94 words, rounded up to the struct's 16-byte alignment. */
-export const UNIFORM_WORDS = 96;
+/** 92 words, a whole number of the struct's 16-byte alignment. */
+export const UNIFORM_WORDS = 92;
 /** The six frustum planes in UNIFORM_WORD, in the order `frustumPlanes` (camera.ts) returns them. */
 export const FRUSTUM_PLANE_WORDS = [
     UNIFORM_WORD.frustumLeft,
@@ -423,18 +421,13 @@ export function keyNeighbourOffset(neighbour: number, coordinates: readonly [num
 }
 
 /**
- * The key-delta buffer (T2.4c): first `ddgi/propagate-find`'s indirect
- * dispatch size (x, y, z workgroups and a spare word), which `ddgi/blend`
- * writes when a key passes its change on and the technique clears every
- * frame, so propagation runs no workgroup in a frame where no key did. Then
- * one entry per update-list slot, written by `ddgi/blend` for a key probe
- * whose update takes in a reported change, and read by `ddgi/propagate` in
- * the same frame. An entry is a header (the key's probe index and its
- * change-clock stamp from before this update, G_prev), then the change this
- * update made, new − old, per interior irradiance texel, as half floats (rg,
- * then b and 0): 288 bytes a layer at 6×6 texels.
+ * The key-delta buffer (T2.4c): one entry per update-list slot, written by
+ * `ddgi/blend` for a key probe whose update takes in a reported change, and
+ * read by `ddgi/propagate` in the same frame. An entry is a header (the key's
+ * probe index and its change-clock stamp from before this update, G_prev),
+ * then the change this update made, new − old, per interior irradiance
+ * texel, as half floats (rg, then b and 0): 288 bytes a layer at 6×6 texels.
  */
-export const KEY_DELTA_FIND_ARGS_WORDS = 4;
 export const KEY_DELTA_HEADER = { probeIndex: 0, clockBefore: 1 } as const;
 export const KEY_DELTA_HEADER_WORDS = 2;
 export function keyDeltaStrideWords(irradianceTexels: number): number {
@@ -461,14 +454,24 @@ export function propagationListCapacity(counts: readonly [number, number, number
 }
 
 /**
- * The propagation state buffer (T2.4c): the indirect dispatch arguments for
- * `ddgi/propagate` and its write (x, y, z workgroups: one workgroup per
- * listed fine probe, in two dimensions past the per-dimension limit), then
- * how many fine probes `ddgi/propagate-find` listed this frame. Cleared every
+ * The propagation state buffer (T2.4c): how many fine probes
+ * `ddgi/propagate-find` listed this frame (no more than the list holds once
+ * `ddgi/propagate-args` has clamped it), and a spare word. Cleared every
  * frame that runs propagation.
  */
-export const PROPAGATION_STATE_WORD = { groupsX: 0, groupsY: 1, groupsZ: 2, listed: 3 } as const;
-export const PROPAGATION_STATE_WORDS = 4;
+export const PROPAGATION_STATE_WORD = { listed: 0 } as const;
+export const PROPAGATION_STATE_WORDS = 2;
+
+/**
+ * `ddgi/propagate` and its write run this many workgroups, each looping over
+ * the list (entry = workgroup, workgroup + this, ...), as a direct dispatch.
+ * Why not one workgroup per entry, dispatched indirectly: on the RTX 3060 in
+ * Chrome each indirect dispatch cost about 0.022 ms even when empty (Dawn
+ * checks the arguments with a dispatch of its own), so three of them made
+ * propagation cost 0.07 ms on every still frame (T2.4c). A few hundred
+ * workgroups fill the GPU and cost a few µs when the list is empty.
+ */
+export const PROPAGATE_WORKGROUPS = 256;
 
 /**
  * The GPU scheduler's state buffer (wgsl/schedule.ts), one u32 per word:

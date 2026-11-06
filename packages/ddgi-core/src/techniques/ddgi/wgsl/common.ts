@@ -79,8 +79,6 @@ struct DdgiUniforms {
     fineOwedUpdates: f32,     // updates a fine probe waiting for its keys owes
     propagation: u32,         // 1: keys taking in a change pass it to their fine neighbours (ddgi/blend, ddgi/propagate)
     holdFineProbes: u32,      // the test mode (settings.holdFineProbes): fine probes waiting for their keys are not blended
-    propagateFindGroupsX: u32, // ddgi/propagate-find's workgroups (one thread per probe), which ddgi/blend writes for its indirect dispatch
-    propagateFindGroupsY: u32,
 }
 
 const DDGI_MAX_RAYS: u32 = ${MAX_RAYS_PER_PROBE}u;

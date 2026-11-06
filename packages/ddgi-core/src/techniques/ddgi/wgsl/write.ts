@@ -13,8 +13,7 @@
  * only, from a compacted list of probes and a scratch of irradiance texels
  * alone, with the same tile code: propagation's write (T2.4c, m2-lights.md
  * §4.5; the instant sky's nudge will use it too). Its list's length is read
- * from a word on the GPU, because the list is built there and the dispatch
- * is indirect.
+ * from a word on the GPU, because the list is built there.
  *
  * Bindings (group 1; it uses no platform module): uniforms, the update list
  * and the scratch buffer (2 storage buffers), and four write-only storage
@@ -130,20 +129,20 @@ fn ${WRITE_ENTRY_POINTS.all}(
     }
 }
 
-// Irradiance tiles only, one workgroup per entry of a list built on the GPU
-// (propagation's, T2.4c), dispatched indirectly.
+// Irradiance tiles only, for a list built on the GPU (propagation's, T2.4c):
+// a fixed number of workgroups, each looping over the list's entries
+// (PROPAGATE_WORKGROUPS in layout.ts says why not an indirect dispatch).
 @compute @workgroup_size(DDGI_WRITE_WORKGROUP_SIZE)
 fn ${WRITE_ENTRY_POINTS.irradianceTiles}(
     @builtin(workgroup_id) group: vec3u,
     @builtin(num_workgroups) groups: vec3u,
     @builtin(local_invocation_index) thread: u32,
 ) {
-    let entry = group.x + group.y * groups.x;
-    if (entry >= ddgiTileListState[DDGI_TILE_LIST_LENGTH]) {
-        return;
+    let length = ddgiTileListState[DDGI_TILE_LIST_LENGTH];
+    for (var entry = group.x; entry < length; entry += groups.x) {
+        let probe = ddgiProbeCoordinates(ddgiUpdateList[entry], ddgiProbeCount());
+        ddgiStoreIrradianceTile(probe, entry * DDGI_IRRADIANCE_TILE_STRIDE, thread);
     }
-    let probe = ddgiProbeCoordinates(ddgiUpdateList[entry], ddgiProbeCount());
-    ddgiStoreIrradianceTile(probe, entry * DDGI_IRRADIANCE_TILE_STRIDE, thread);
 }
 `;
 }
