@@ -45,6 +45,15 @@ Intel UHD (gen-12lp), the whole suite, `--no-cool-wait`: first run 30 PASS, 7 FA
 Also: the two-room startup run had a median SM clock of 382 MHz under load but passed the validity rule (5 loaded samples, 0% thermal); its 1.16 s may be slower than a hot-clock run.
 Next: whole-frame p50/p95 on GI on vs off with the update included needs a page (the three composite pages hold the field frozen); stability threshold with Dennis; Sponza startup (files, trees, copy) is B2/M3.
 
+Lead corrections after the Opus review (pass with notes):
+- The VALID verdicts for startup come from bench-lock's end-of-run lines; the to-csv ran outside `bench-lock run`, so the `timing.csv` rows carry no `note/timing_valid` and can't show it themselves.
+- `wgsl-error` failing under `--filter` is by design (`tools/gpu/run.ts:179-183` expects the failure only in a full run), not a runner bug.
+- Accuracy: Sponza's +6.59% is the composite default path with GTAO; the raw field and the simple `GIVolume` per-fragment path read +23.07% (T1.13). FLIP: no threshold is set yet (SPEC asks for one in M1); HD values Cornell 0.104, two-room 0.069. Proposed to Dennis with the M1 note.
+- Stability: the gate is T1.12's eye check by Dennis; current numbers (after T1.12 2a) are Cornell 0.095% and Sponza 0.027% mean change a frame, not the 2026-11-05 figures.
+- Object-move response is M3 in SPEC, not M2. Adapter cost: T1.7 measured 0.09–0.14 ms still, 0.11–0.19 ms moving (not re-run). Neutrality: `three-neutrality` passes in this entry's RTX and Intel suite runs. The Bistro exterior baseline re-measure was skipped (Dennis 2026-11-06, lean T1.9).
+- Whole frame with the measured Sponza update median (2.02 ms): 2.75 ms. The verdict holds.
+- The Intel has now hung (`DXGI_ERROR_DEVICE_HUNG`) twice in two days during long back-to-back runs (T1.14's `three-examples`, this entry's `trace-bench-hploc-quick`). It's a pattern to look at, under Next.
+
 ## 2026-11-06 · T1.12 phase 2b review fixes: the change view's colours are exact · implementer (opus)
 Did (uncommitted, on top of b002f42), from the Opus review:
 1. **Change view in display space.** `viewer-core.ts` turns the pipeline's output transform off and applies `renderOutput()` to each technique's picture itself; a technique may then draw `overlay(display)` after tone mapping and output colour (`types.ts`: `overlay`, `overlayKey`). `frame-change.ts` paints there with a linear share, change / scale: full colour means a change of at least the scale, half colour half of it, under any tone mapper and exposure. The weight^2.2 is gone. The atlas overlay moved to display space too (on top of the change view; distance greys are no longer tone mapped).
