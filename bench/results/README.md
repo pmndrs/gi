@@ -31,6 +31,10 @@ Columns, in this order:
 - **The date column** is the UTC date the runner started, so a run in the early morning in Japan carries the day before.
 - **The commit column** names the commit the CSV was written at, with `-dirty` only if a measured file had uncommitted changes.
 
+## response.csv
+
+From T2.4b (2026-11-06): how the GI-only view (and on Sponza the whole field) follows a light step at the calibrated batch, counted in frames (DDGI's clock 1/60 s a frame), from `ddgi-schedule-step` and `ddgi-schedule-sponza`. `response/<step>/units<n>/error_frame<k>` is the view's signed error against a field converged in the new state, at frame k after the step (frame 1 is the step's own frame; frames 1–30, then every 6th); `settled_frame` the first frame from which every measured frame is within 5% (-1: never); `overshoot_share_of_step` how far past settled the view went, as a share of the step. Sponza's `sun_turn30` rows add, every 6th frame, the field's light-weighted error (`weighted`, `weightedFar`), the error of its mean (`ofMean`) and the per-probe relative error (`mean`, `p95`, `near`, `far`), and `noise_floor/*`, the same measures for the field before the step against itself converged.
+
 ## native.csv
 
 NVIDIA's RTXGI-DDGI test harness (our fork in `native/rtxgi-ddgi`), written by `tools/native/bench.ps1`. Metric names and what they mean: `tools/native/README.md`, section "Timing".
