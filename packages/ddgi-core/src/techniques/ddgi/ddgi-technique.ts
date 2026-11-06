@@ -15,7 +15,10 @@
  *    list, probes owed updates first by urgency and nearness to the camera,
  *    the rest from the round robin (wgsl/schedule.ts, §4.3);
  * 1. `ddgi/trace`: one thread per ray traces inline, shades the hit and
- *    writes the ray buffer;
+ *    writes the ray results; with direct light deferred (the default), it
+ *    puts hits a light can reach on the ray scratch's work list, and the
+ *    platform's `gi/direct` adds their direct light (`<id>/gi-direct`, timed
+ *    as DDGI's), one round of at most DIRECT_ROUND_PROBES probes at a time;
  * 2. `ddgi/blend`: one workgroup per probe classifies and relocates the
  *    probe (phase B) and blends its rays into the scratch buffer (phase C);
  * 3. `ddgi/write`: copies the scratch into the atlases, the probe data and
@@ -46,10 +49,13 @@
 
 import type { DebugView } from '../../platform/contract/stats.ts';
 import type { GITechnique, TechniqueContext, TechniqueFrame, TechniqueRequirements, WorkFloorRate } from '../../platform/contract/technique.ts';
+import type { DirectWorkList, RayScratch } from '../../platform/contract/shade.ts';
 import type { ComputeKernel } from '../../platform/contract/wgsl.ts';
 import { GILimitError } from '../../platform/contract/errors.ts';
 import {
     CENSUS_CHANGE_CLOCK,
+    CENSUS_DIRECT_DROPPED,
+    CENSUS_DIRECT_HITS,
     CENSUS_FEEDBACK_FIRED,
     CENSUS_FEEDBACK_FIRED_TOTAL,
     CENSUS_KEY_CHANGES_PASSED,
@@ -81,7 +87,6 @@ import {
     PROPAGATION_STATE_WORDS,
     propagationListCapacity,
     propagationScratchStrideWords,
-    RAY_RECORD_BYTES,
     SAMPLE_PARAMETER_VEC4_COUNT,
     SCHEDULE_STATE_REPORTED_WORDS,
     SCHEDULE_STATE_WORD,
@@ -106,6 +111,7 @@ import {
     blendSettings,
     clockStep,
     CLOCK_WRAP_SECONDS,
+    FIXED_RAYS,
     distanceClamp,
     effectiveMaxRayDistance,
     effectiveRaysPerProbe,
@@ -128,7 +134,7 @@ import { priorityCount, scrambleStride } from './schedule.ts';
 import { DDGIShadingModule } from './shading.ts';
 import { blendKernelWgsl, type PhaseBReduction } from './wgsl/blend.ts';
 import { CENSUS_WORKGROUP_SIZE, DDGI_CENSUS_WGSL } from './wgsl/census.ts';
-import { DDGI_TRACE_WGSL, TRACE_WORKGROUP_SIZE } from './wgsl/trace.ts';
+import { DDGI_LIGHT_GROUP_MASK, DDGI_TRACE_WGSL, deferredTraceKernelWgsl, DIRECT_ROUND_PROBES, TRACE_ROUND_BYTES, TRACE_WORKGROUP_SIZE } from './wgsl/trace.ts';
 import { MARK_ENTRY_POINTS, MARK_WORKGROUP_SIZE, markKernelWgsl } from './wgsl/mark.ts';
 import { PROPAGATE_ENTRY_POINTS, PROPAGATE_FIND_WORKGROUP_SIZE, propagateKernelWgsl } from './wgsl/propagate.ts';
 import { SCHEDULE_ENTRY_POINTS, SCHEDULE_WORKGROUP_SIZE, scheduleKernelWgsl } from './wgsl/schedule.ts';
@@ -166,7 +172,26 @@ export interface DDGITechniqueOptions {
      * counts and histograms; tests run both.
      */
     readonly reduction?: PhaseBReduction;
+    /**
+     * Where a blended ray's direct light is computed:
+     * - `deferred` (the default): `ddgi/trace` puts each hit a light can
+     *   reach on a work list, and the platform's `gi/direct` traces the
+     *   shadow rays over that list only (docs/design/m2-lights.md §2; 2.2×
+     *   the probes at 2 ms on Sponza, T2.0);
+     * - `inline`: M1's `ddgi/trace`, which traces the shadow rays itself.
+     *   Kept for comparison.
+     */
+    readonly directLight?: DirectLightPath;
+    /**
+     * With `directLight: 'deferred'`, how `ddgi/trace` fills the work list:
+     * `subgroups` (the default when the device has them) or the declared
+     * fallback `atomics`. Both give the same field; tests run both.
+     */
+    readonly directWorkList?: DirectWorkList;
 }
+
+/** Where DDGI computes direct light (DDGITechniqueOptions.directLight). */
+export type DirectLightPath = 'deferred' | 'inline';
 
 /**
  * What test tools read (renderers use `shading`): the three textures and the
@@ -204,6 +229,9 @@ interface PreparedResources {
     readonly distanceTexels: number;
     readonly maxProbesPerFrame: number;
     readonly reduction: PhaseBReduction;
+    /** Where direct light is computed, and how the deferred work list is filled (null when inline). */
+    readonly directLight: DirectLightPath;
+    readonly directWorkList: DirectWorkList | null;
     readonly irradiance: GPUTexture;
     readonly distance: GPUTexture;
     readonly probeData: GPUTexture;
@@ -236,13 +264,25 @@ interface PreparedResources {
     readonly feedbackRequests: GPUBuffer;
     readonly writeGroup: GPUBindGroup;
     readonly censusGroup: GPUBindGroup;
-    /** The ray buffer and the groups that bind it; replaced when it grows. */
-    rays: { buffer: GPUBuffer; capacity: number; traceGroup: GPUBindGroup; blendGroup: GPUBindGroup };
+    /** The ray scratch (ray results, and the work list when deferred) and the groups that bind it; replaced when it grows. */
+    rays: RayBuffers;
+    /** Deferred only: one `DdgiTraceRound` per round, `traceRoundStride` bytes apart (dynamic offsets). */
+    readonly traceRounds: GPUBuffer | null;
+    readonly traceRoundStride: number;
     /** `ddgi/mark`'s table and the group that binds it; replaced when a frame's table outgrows it. */
     mark: { buffer: GPUBuffer; group: GPUBindGroup };
     /** The round robin's stride: order[i] = (i × stride) mod probe count (schedule.ts). */
     readonly stride: number;
     readonly fixedBytes: number;
+}
+
+/** The ray scratch and the groups that bind it (`createRayBuffer`). */
+interface RayBuffers {
+    readonly scratch: RayScratch;
+    /** Ray results it holds. */
+    readonly capacity: number;
+    readonly traceGroup: GPUBindGroup;
+    readonly blendGroup: GPUBindGroup;
 }
 
 /** Propagation's kernels, buffers and bind groups (T2.4c, wgsl/propagate.ts). */
@@ -282,6 +322,16 @@ const TRACE_GROUP: GPUBindGroupLayoutDescriptor = {
         { binding: 5, visibility: COMPUTE, texture: SAMPLED_ARRAY },
         { binding: 6, visibility: COMPUTE, sampler: { type: 'filtering' } },
     ],
+};
+
+/**
+ * `ddgi/trace` group 1 with direct light deferred: binding 2 is the whole ray
+ * scratch, binding 7 the round (a 16-byte slot of the rounds buffer, chosen
+ * with a dynamic offset).
+ */
+const DEFERRED_TRACE_GROUP: GPUBindGroupLayoutDescriptor = {
+    label: 'ddgi/trace (deferred direct light) group 1',
+    entries: [...TRACE_GROUP.entries, { binding: 7, visibility: COMPUTE, buffer: { type: 'uniform', hasDynamicOffset: true, minBindingSize: TRACE_ROUND_BYTES } }],
 };
 
 /** `ddgi/blend` group 1 (wgsl/blend.ts). */
@@ -510,6 +560,16 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         return this.resources?.reduction;
     }
 
+    /** Where direct light is computed (after `prepare`): `deferred` to the platform's `gi/direct`, or `inline`. */
+    get directLight(): DirectLightPath | undefined {
+        return this.resources?.directLight;
+    }
+
+    /** With direct light deferred, how `ddgi/trace` fills the work list (after `prepare`; null when inline). */
+    get directWorkList(): DirectWorkList | null | undefined {
+        return this.resources?.directWorkList;
+    }
+
     async prepare(): Promise<void> {
         const context = this.context;
         if (!context) throw new Error('@pmndrs/ddgi: attach the DDGI technique (gi.addTechnique) before prepare');
@@ -529,6 +589,10 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         const hasSubgroups = device.features.has('subgroups');
         const reduction = this.options.reduction ?? (hasSubgroups ? 'subgroups' : 'workgroup');
         if (reduction === 'subgroups' && !hasSubgroups) throw new Error("@pmndrs/ddgi: the 'subgroups' reduction needs a device with the 'subgroups' feature");
+        const directLight = this.options.directLight ?? 'deferred';
+        const directWorkList = directLight === 'deferred' ? (this.options.directWorkList ?? context.shade.direct.defaultWorkList) : null;
+        // Throws for a 'subgroups' work list on a device without them.
+        const traceCode = directWorkList ? deferredTraceKernelWgsl(context.shade.direct.traceWgsl('ddgiRayScratch', directWorkList)) : DDGI_TRACE_WGSL;
 
         // Compile first: if a kernel fails, the old resources stay usable.
         const scheduleCode = scheduleKernelWgsl(reduction);
@@ -557,12 +621,12 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
             propagateWrite,
         ] = await Promise.all([
             context.kernels.computeKernel({
-                label: 'ddgi/trace',
+                label: directWorkList ? `ddgi/trace (deferred direct light, ${directWorkList})` : 'ddgi/trace (inline direct light)',
                 // Hit shading brings the scene copy and rays in as its dependencies.
                 modules: [context.shade.module],
-                code: DDGI_TRACE_WGSL,
+                code: traceCode,
                 entryPoint: 'ddgiTrace',
-                ownGroups: [TRACE_GROUP],
+                ownGroups: [directWorkList ? DEFERRED_TRACE_GROUP : TRACE_GROUP],
             }),
             context.kernels.computeKernel({
                 label: `ddgi/blend (${reduction})`,
@@ -614,6 +678,8 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
                 entryPoint: WRITE_ENTRY_POINTS.irradianceTiles,
                 ownGroups: [WRITE_TILES_GROUP],
             }),
+            // gi/direct (also for the inline path: its ray scratch comes from the same place). Last, so it sits past the named kernels.
+            context.shade.direct.prepare(),
         ]);
         if (this.disposed) return;
 
@@ -663,6 +729,11 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
             buffer: device.createBuffer({ label: `ddgi census readback ${index}`, size: CENSUS_WORDS * 4, usage: BUFFER_USAGE.mapRead | BUFFER_USAGE.copyDst }),
             state: 'free' as CensusStaging['state'],
         }));
+        // Deferred: a DdgiTraceRound per round, each at a uniform-offset boundary for its dynamic offset.
+        const traceRoundStride = Math.max(TRACE_ROUND_BYTES, device.limits.minUniformBufferOffsetAlignment);
+        const traceRounds = directWorkList
+            ? device.createBuffer({ label: 'ddgi trace rounds', size: Math.ceil(maxProbesPerFrame / DIRECT_ROUND_PROBES) * traceRoundStride, usage: BUFFER_USAGE.uniform | BUFFER_USAGE.copyDst })
+            : null;
         const sampler = device.createSampler({ label: 'ddgi atlases', magFilter: 'linear', minFilter: 'linear', addressModeU: 'clamp-to-edge', addressModeV: 'clamp-to-edge' });
 
         // Array views explicitly: a one-layer texture's default view would be 2d, not 2d-array.
@@ -768,6 +839,7 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
             probeHistory.size +
             scheduleState.size +
             feedbackRequests.size +
+            (traceRounds?.size ?? 0) +
             keyDeltas.size +
             propagationList.size +
             propagationScratch.size +
@@ -781,6 +853,8 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
             distanceTexels,
             maxProbesPerFrame,
             reduction,
+            directLight,
+            directWorkList,
             irradiance,
             distance,
             probeData,
@@ -807,11 +881,13 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
             writeGroup,
             censusGroup,
             stride: scrambleStride(grid.probeCount),
+            traceRounds,
+            traceRoundStride,
             fixedBytes,
         };
         this.resources = {
             ...partial,
-            rays: this.createRayBuffer(device, partial, Math.min(INITIAL_RAY_CAPACITY, maxProbesPerFrame * 256)),
+            rays: this.createRayBuffer(context, partial, Math.min(INITIAL_RAY_CAPACITY, maxProbesPerFrame * 256), effectiveRaysPerProbe(this.settings.raysPerProbe)),
             mark: this.createMarkTable(device, partial, INITIAL_MARK_TABLE_BYTES),
         };
         this.latestCensus = null;
@@ -890,10 +966,15 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         if (this.warmUp.phase === 'warming') this.finishWarmUpPass(resources, count);
         if (count === 0) return 0;
 
-        if (count * raysPerProbe > resources.rays.capacity) {
-            const old = resources.rays.buffer;
-            resources.rays = this.createRayBuffer(device, resources, Math.max(count * raysPerProbe, resources.rays.capacity * 2));
-            old.destroy();
+        const rays = resources.rays;
+        const roundProbes = Math.min(count, DIRECT_ROUND_PROBES);
+        // raysPerProbe is a live setting, so the work list is checked against this frame's blended rays.
+        const listOutgrown = resources.directWorkList !== null && roundProbes * Math.max(0, raysPerProbe - FIXED_RAYS) > rays.scratch.itemCapacity;
+        const outgrown = count * raysPerProbe > rays.capacity || listOutgrown;
+        if (outgrown) {
+            // Nothing recorded in this frame uses the old scratch yet, and earlier frames are submitted.
+            resources.rays = this.createRayBuffer(context, resources, Math.max(count * raysPerProbe, rays.capacity * 2), raysPerProbe);
+            rays.scratch.destroy();
         }
 
         const probesX = Math.min(count, maxPerDimension);
@@ -901,11 +982,15 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
 
         // Separate passes so each is timed on its own. Passes are separate
         // usage scopes, so ddgi/write may store into the atlases the others sampled.
-        const trace = encoder.beginComputePass({ label: 'ddgi/trace', timestampWrites: context.timer.computePass('ddgi/trace') });
-        resources.traceKernel.bind(trace);
-        trace.setBindGroup(1, resources.rays.traceGroup);
-        trace.dispatchWorkgroups(Math.ceil(raysPerProbe / TRACE_WORKGROUP_SIZE), probesX, probesY);
-        trace.end();
+        if (resources.directWorkList) {
+            this.encodeDeferredTrace(encoder, context, resources, count, raysPerProbe, frame.frame);
+        } else {
+            const trace = encoder.beginComputePass({ label: 'ddgi/trace', timestampWrites: context.timer.computePass('ddgi/trace') });
+            resources.traceKernel.bind(trace);
+            trace.setBindGroup(1, resources.rays.traceGroup);
+            trace.dispatchWorkgroups(Math.ceil(raysPerProbe / TRACE_WORKGROUP_SIZE), probesX, probesY);
+            trace.end();
+        }
 
         const blend = encoder.beginComputePass({ label: 'ddgi/blend', timestampWrites: context.timer.computePass('ddgi/blend') });
         resources.blendKernel.bind(blend);
@@ -922,6 +1007,37 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         if (this.settings.keyProbes !== false) this.encodePropagation(encoder, context, resources, maxPerDimension);
         this.encodeCensus(encoder, context, resources, maxPerDimension);
         return count;
+    }
+
+    /**
+     * `ddgi/trace` with direct light deferred: per round of at most
+     * DIRECT_ROUND_PROBES probes, the trace (which fills the work list), then
+     * the platform's `gi/direct` over that list, which also empties it for
+     * the next round. The rounds' slots go in their own uniform slots, all
+     * written before the host submits, each picked with a dynamic offset.
+     */
+    private encodeDeferredTrace(encoder: GPUCommandEncoder, context: TechniqueContext, resources: PreparedResources, count: number, raysPerProbe: number, frameNumber: number): void {
+        const traceRounds = resources.traceRounds;
+        if (!traceRounds) throw new Error('@pmndrs/ddgi: the deferred trace has no rounds buffer');
+        const stride = resources.traceRoundStride;
+        const rounds = Math.ceil(count / DIRECT_ROUND_PROBES);
+        const words = new Uint32Array((rounds * stride) / 4);
+        for (let round = 0; round < rounds; round++) {
+            const firstSlot = round * DIRECT_ROUND_PROBES;
+            words[(round * stride) / 4] = firstSlot;
+            words[(round * stride) / 4 + 1] = Math.min(DIRECT_ROUND_PROBES, count - firstSlot);
+        }
+        context.device.queue.writeBuffer(traceRounds, 0, words);
+        const direct = { frame: frameNumber, groupMask: DDGI_LIGHT_GROUP_MASK, owner: this.id, timer: context.timer };
+        for (let round = 0; round < rounds; round++) {
+            const slotCount = words[(round * stride) / 4 + 1];
+            const trace = encoder.beginComputePass({ label: 'ddgi/trace', timestampWrites: context.timer.computePass('ddgi/trace') });
+            resources.traceKernel.bind(trace);
+            trace.setBindGroup(1, resources.rays.traceGroup, [round * stride]);
+            trace.dispatchWorkgroups(Math.ceil(raysPerProbe / TRACE_WORKGROUP_SIZE), slotCount);
+            trace.end();
+            context.shade.direct.encode(encoder, resources.rays.scratch, direct);
+        }
     }
 
     /**
@@ -1087,6 +1203,9 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
             'probes propagated (total)': census[CENSUS_PROBES_PROPAGATED_TOTAL],
             'change clock': census[CENSUS_CHANGE_CLOCK],
             'rays traced': census[CENSUS_RAYS_TRACED],
+            ...(this.resources?.directWorkList
+                ? { 'hits lit by gi/direct': census[CENSUS_DIRECT_HITS], 'hits that did not fit gi/direct\'s list': census[CENSUS_DIRECT_DROPPED] }
+                : {}),
             'probes active': census[PROBE_STATE.active],
             'probes off: inside geometry': census[PROBE_STATE.offInsideGeometry],
             'probes off: no surface nearby': census[PROBE_STATE.offNoSurfaceNearby],
@@ -1120,7 +1239,7 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
 
     get memoryBytes(): number {
         const resources = this.resources;
-        return resources ? resources.fixedBytes + resources.rays.buffer.size : 0;
+        return resources ? resources.fixedBytes + resources.rays.scratch.bytes : 0;
     }
 
     /**
@@ -1193,8 +1312,16 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         pass.end();
     }
 
-    private createRayBuffer(device: GPUDevice, resources: Omit<PreparedResources, 'rays' | 'mark'>, capacity: number): PreparedResources['rays'] {
-        const buffer = device.createBuffer({ label: 'ddgi rays', size: capacity * RAY_RECORD_BYTES, usage: BUFFER_USAGE.storage });
+    /**
+     * The ray scratch for `capacity` ray results (`RAY_RECORD_BYTES` each, layout.ts)
+     * and, with direct light deferred, a work list with room for every
+     * blended ray of one round at `raysPerProbe`; and the groups that bind it.
+     */
+    private createRayBuffer(context: TechniqueContext, resources: Omit<PreparedResources, 'rays' | 'mark'>, capacity: number, raysPerProbe: number): RayBuffers {
+        const device = context.device;
+        const deferred = resources.directWorkList !== null;
+        const probesPerRound = deferred ? Math.min(DIRECT_ROUND_PROBES, Math.floor(capacity / raysPerProbe)) : 0;
+        const scratch = context.shade.direct.createScratch({ label: 'ddgi rays', rays: capacity, workItems: probesPerRound * Math.max(0, raysPerProbe - FIXED_RAYS) });
         const arrayView = (target: GPUTexture): GPUTextureView => target.createView({ dimension: '2d-array' });
         const traceGroup = device.createBindGroup({
             label: 'ddgi/trace group 1',
@@ -1202,11 +1329,13 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
             entries: [
                 { binding: 0, resource: { buffer: resources.uniforms } },
                 { binding: 1, resource: { buffer: resources.updateList } },
-                { binding: 2, resource: { buffer } },
+                // The deferred kernel binds the whole scratch (results and work list); M1's kernel the results.
+                { binding: 2, resource: deferred ? { buffer: scratch.buffer } : scratch.rayResults },
                 { binding: 3, resource: arrayView(resources.irradiance) },
                 { binding: 4, resource: arrayView(resources.distance) },
                 { binding: 5, resource: arrayView(resources.probeData) },
                 { binding: 6, resource: resources.sampler },
+                ...(deferred && resources.traceRounds ? [{ binding: 7, resource: { buffer: resources.traceRounds, size: TRACE_ROUND_BYTES } }] : []),
             ],
         });
         const blendGroup = device.createBindGroup({
@@ -1215,7 +1344,7 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
             entries: [
                 { binding: 0, resource: { buffer: resources.uniforms } },
                 { binding: 1, resource: { buffer: resources.updateList } },
-                { binding: 2, resource: { buffer } },
+                { binding: 2, resource: scratch.rayResults },
                 { binding: 3, resource: { buffer: resources.scratchBuffer } },
                 { binding: 4, resource: { buffer: resources.census } },
                 { binding: 5, resource: arrayView(resources.irradiance) },
@@ -1227,7 +1356,7 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
                 { binding: 11, resource: { buffer: resources.movers } },
             ],
         });
-        return { buffer, capacity, traceGroup, blendGroup };
+        return { scratch, capacity, traceGroup, blendGroup };
     }
 
     /**
@@ -1251,6 +1380,8 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         pass.end();
         // The scheduler's counts this frame, for the counters.
         encoder.copyBufferToBuffer(resources.scheduleState, 0, resources.census, CENSUS_SCHEDULE_STATE * 4, SCHEDULE_STATE_REPORTED_WORDS * 4);
+        // gi/direct's two counts for this frame (the scratch's header), for the counters.
+        if (resources.directWorkList) encoder.copyBufferToBuffer(resources.rays.scratch.buffer, resources.rays.scratch.countsOffset, resources.census, CENSUS_DIRECT_HITS * 4, 8);
         encoder.copyBufferToBuffer(resources.census, 0, staging.buffer, 0, CENSUS_WORDS * 4);
         staging.state = 'copied';
     }
@@ -1297,11 +1428,12 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
             resources.propagation.list,
             resources.propagation.scratch,
             resources.propagation.state,
-            resources.rays.buffer,
             resources.mark.buffer,
         ]) {
             buffer.destroy();
         }
+        resources.rays.scratch.destroy();
+        resources.traceRounds?.destroy();
         for (const staging of resources.censusStaging) staging.buffer.destroy();
     }
 

@@ -14,7 +14,7 @@
 import { PerspectiveCamera } from 'three/webgpu';
 import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
 import type { EnvironmentDescriptor } from '../../../../packages/ddgi-core/src/platform/contract/scene.ts';
-import { DDGITechnique } from '../../../../packages/ddgi-core/src/techniques/ddgi/ddgi-technique.ts';
+import { DDGITechnique, type DDGITechniqueOptions } from '../../../../packages/ddgi-core/src/techniques/ddgi/ddgi-technique.ts';
 import { DEFAULT_WARM_UP_PASSES } from '../../../../packages/ddgi-core/src/techniques/ddgi/settings.ts';
 import { ThreeGI } from '../../../../packages/ddgi-three/src/three-gi.ts';
 import { loadScene, type LoadedScene } from '../../../../apps/viewer/src/scene/load-scene.ts';
@@ -61,7 +61,13 @@ export interface ViewerScene {
 export async function startViewerScene(
     device: GPUDevice,
     manifest: SceneManifest,
-    options: { readonly gpuTiming: boolean; readonly label: string; readonly prepareScene?: (loaded: LoadedScene) => void },
+    options: {
+        readonly gpuTiming: boolean;
+        readonly label: string;
+        readonly prepareScene?: (loaded: LoadedScene) => void;
+        /** The technique's fixed options (the direct-light path, say); its defaults otherwise. */
+        readonly technique?: DDGITechniqueOptions;
+    },
 ): Promise<ViewerScene> {
     const loaded = await loadScene(manifest, () => {});
     // A page's own additions (a lamp to switch on later) go in before the adapter's first sync.
@@ -74,7 +80,7 @@ export async function startViewerScene(
 
     const platform = new GIPlatformImpl(device, { label: options.label, gpuTiming: options.gpuTiming });
     const volume = manifest.volume;
-    const ddgi = platform.addTechnique(new DDGITechnique({ volume: { center: volume.center, size: volume.size, spacing: volume.probeSpacing }, warmUpPasses: 0 }));
+    const ddgi = platform.addTechnique(new DDGITechnique({ volume: { center: volume.center, size: volume.size, spacing: volume.probeSpacing }, warmUpPasses: 0 }, options.technique));
     platform.setOutput(ddgi);
     await platform.prepare();
     const threeGI = new ThreeGI(platform, loaded.scene, { budget: { paused: true }, environment: environmentFor(manifest), warn: () => {} });

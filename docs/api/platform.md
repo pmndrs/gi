@@ -160,6 +160,11 @@ The answers go in PROGRESS. Any change to the contract is made in both the TypeS
 
 ## Revisions
 
+### During M2, 2026-11-06
+
+- **Technique-facing (T2.2): `HitShading.direct`, deferred direct light (`gi/direct`; docs/design/m2-lights.md §2).** A tracing kernel no longer has to trace shadow rays itself. It keeps its rays' results in a `RayScratch` from `direct.createScratch` (one storage buffer: a header, the results, a work list), includes `direct.traceWgsl(variable, workList)`, stores results with `giStoreRayResult`, and puts each hit a light can reach (`giNeedsDirect`) on the list with `giSurfaceRecord` and `giDeferDirect`. Then `direct.encode` runs `gi/direct` over the list in one pass timed as `<technique>/gi-direct`, so it counts towards that technique's budget, and empties the list. A ray's result is two `u32`s: radiance as halves, plus one half that is the technique's own (DDGI's hit distance). `gi/direct` adds `albedo / π × direct` to the radiance. The work list is filled with subgroups first; the declared fallback is one atomic per hit (`DirectWorkList`). Hit shading also gains `giDirectReaches` (does any light of the groups light this side) and `giDirectRandom` (`gi/direct`'s random numbers for a ray). Not built yet from the design's sketch: `giDirectLightSamples` (T2.3's light grid) and the `groupLayers` and `gridBounds` arguments (T2.5, T2.3). Hosts don't see this.
+- **`PlatformHitShading` takes the kernel builder** (constructor), because `gi/direct` is a platform kernel compiled on a technique's first `direct.prepare()`. Platform-internal.
+
 ### During M1, 2026-11-04
 
 - **Host-facing (budget v2, 2026-11-05, after its review): `GIPlatform.recalibrate()`.** Measures again how much work fits in `gpuMs`, at the next millisecond frame. The platform calibrates by itself after `prepare`; a geometry change only marks the calibration stale (reported in `stats.counters['<technique> budget']`), since a burst during play makes frames heavier for a moment; a new `gpuMs` is solved from what was measured. `FrameBudget.gpuMs` now says it needs `gpuTiming` (without timings the hand-out is `units`, or 512).

@@ -1,0 +1,4 @@
+{
+    "description": "T2.2 check 1: direct light through the platform's gi/direct (surface records, work list, deferred shadow rays) matches giDirectIrradiance inline on T1.4's oracle points, per light group (mean within 0.5%, per-point mean and p95), under a stochastic choice of 12 lights, and sun-on-plane matches E cos(theta) within 0.5%; only hits a light can reach are listed; the subgroup and fallback work lists light the same.",
+    "timeoutMs": 300000
+}
