@@ -56,7 +56,7 @@ import { UnitCostMeter, WorkBudget, type BudgetReport, type UnitCostModel } from
 export { DEFAULT_UNITS_PER_FRAME, type UnitCostModel } from './work-budget.ts';
 
 /** No scene changes: the screen stage runs after `encode`, which already reported them. */
-const NO_CHANGES: SceneChanges = { regions: [], global: [], movedReceivers: 0 };
+const NO_CHANGES: SceneChanges = { regions: [], global: [], movedReceivers: 0, lights: [], lightsOverflowed: false };
 
 interface AttachedTechnique {
     readonly technique: GITechnique;
