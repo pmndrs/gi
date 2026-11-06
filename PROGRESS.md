@@ -77,6 +77,19 @@ Follow-up (coordinator's two questions; correctness runs, RTX 3060, bench lock):
    - Fixed in `ddgi-shared/sponza-response.ts`: the helper now lowers the elevation. It affects `ddgi-key-probes-sponza`, `ddgi-key-probes-cost` and `ddgi-sky-sun-step`; `ddgi-schedule-sponza` keeps its own old copy (not changed).
    - `ddgi-key-probes-sponza` (turn) with a true 30°-lower sun (70.6° to 40.6°) moves the view by −40.9%. The view is within 5% from frame 13 (bar 15), the field from frame 36 (bar 120), p95 82% at frame 120 (65–68% before), overshoot 0.1% of the step. It passes.
 
+Follow-up 2 (why check 4's view is still 10% off at 3 s; correctness runs, RTX 3060, bench lock; furnished room, lamp off, sun 30° lower, 571 a frame, window bookmark):
+1. **Tracked probes.** Two groups of 12 near and in view: the largest change (the sunlit floor), and the largest relative change of the rest.
+   - In the first 13 frames each group gets 12-13 updates at h = 0 (n = 0, 100% holding a cut). Their error only goes from 24% / 37% to 17-20% / 25-28%, because the rest of the room still holds the old light.
+   - At frame 13 the promises are spent with the error still large. Then n grows back (1 at frame 15, 2.8 at 60, 13.5 at 180), and they get only 2 updates between frames 15 and 60 while the priority share serves the rest of the field.
+   - So yes, the cuts run out while the error is large. The cause is the order of updates: their bounce light comes from probes that haven't changed yet.
+2. **Bounce share.** Measured as T2.4b did (every probe every frame at h = 0): ρ = 0.73 (per-frame ratios 0.69-0.77, noise floor 3.3%), under the 0.8 in use.
+   - At ρ = 0.73: view at 0.5 s −23.4% (per pixel 23.7%), at 3 s −10.2% (10.2%).
+   - Cut held until the probe's own estimate moves less than max(ε, 3× its noise), opt-in: −23.7% (24.0%) and −10.4% (10.4%). It never engages, because the estimate stops moving while it still reads stale light.
+   - Default, for comparison: −23.4% and −10.1%. None gets within 5% in 3 s; no overshoot.
+   - Neither variant helps, so both are removed: no core change. The page keeps the tracking, `rho` and `VITE_DDGI_BOUNCE_SHARE`.
+3. **Regressions** (the core is unchanged since the suite run): two-room 9/17 and Cornell 5/8 frames (`ddgi-schedule-step`); flicker at fixed counts, Cornell 0.0877% / 0.361%, two-room 0.0096% / 0.031%, Sponza 0.0255% / 0.096%. The suite (leak 0.84%, still scenes 0 marks) and the key-probe Sponza page stand from above.
+- DECISIONS and NOTES say what limits check 4: a global change's near probes need their updates spread over the time the rest of the field takes in the change, or the field updated more evenly first (the key path halves the error at 0.5 s). A fixed ρ per scene isn't the lever.
+
 ## 2026-11-06 · T2.2 review and merge · M2 lead (opus)
 Did: Opus review of T2.2 against its done-when (m2-lights.md checks 1–4 and T2.0's review lessons in TASKS): pass with notes, no code must-fix. Lead ruling in DECISIONS (4172acf): check 3 is met on the gain corrected to 2.00 ms. Merged `m2-t2.2` into `m2`; no conflicts, because the implementer had already merged `m2` with T2.4c into the branch (35212bd). TASKS: T2.2 done.
 Verified (reviewer, RTX 3060 nvidia/ampere, Chrome 156 headless, bench lock, on 35212bd): lint, typecheck, 995 unit tests; the full suite 48/48; `ddgi-direct` on Sponza; `ddgi-key-probes-sponza` (turn); `ddgi-schedule-sponza` (sun). Check 1: oracle mean at worst 0.057%, p95 0.062%, sun on a plane 0.070%; per texel Cornell 0.036/0.078%, two-room 0.037/0.076%, Sponza 0.015/0.064%. Check 2: the work lists' fields differ by 2e-11 to 3.4e-9. Check 4: furnace −0.15%, leak 0.84%, Cornell +5.67%, still scenes 0 marks. Storage buffers per kernel 7 / 6 / 2. On the deferred default, Sponza's 30° turn: view from frame 1, field from frame 24; the halved sun frame 11. Lead, on the merged tree: lint, typecheck, 995 unit tests.
