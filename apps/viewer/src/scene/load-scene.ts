@@ -57,10 +57,10 @@ export interface LoadedScene {
     /**
      * Manifest lights at intensity 0, made but not added to the scene: off
      * until a motion plays them (Sponza's arcade lamp). Left out because an
-     * off light still costs: three renders a shadowed light's shadow map at
-     * intensity 0, and in GI one local light makes hit shading loop over
-     * local lights on every hit (Sponza's calibrated batch fell from 642
-     * probes to 593 with its lamp off, T2.1). Add one to `scene` to light it.
+     * off light still costs: three r187 has no intensity test before it
+     * renders a shadowed light's shadow map (six passes for a point light),
+     * and in GI one local light makes hit shading loop over local lights on
+     * every hit. Add one to `scene` to light it.
      */
     offLights: Light[];
     /** The scene's settings as loaded (`sceneSettingValues`): `sponza-candles`' candle count, say. */
