@@ -9,17 +9,29 @@
  * store into it; core WebGPU has read-write storage textures only for 32-bit
  * single-channel formats.
  *
+ * A second entry point, `ddgiWriteIrradianceTiles`, writes irradiance tiles
+ * only, from a compacted list of probes and a scratch of irradiance texels
+ * alone, with the same tile code: propagation's write (T2.4c, m2-lights.md
+ * §4.5; the instant sky's nudge will use it too). Its list's length is read
+ * from a word on the GPU, because the list is built there and the dispatch
+ * is indirect.
+ *
  * Bindings (group 1; it uses no platform module): uniforms, the update list
  * and the scratch buffer (2 storage buffers), and four write-only storage
  * textures (the default per-stage limit): irradiance, distance, probe data
- * and points.
+ * and points. The irradiance-only entry point binds uniforms, its list, its
+ * scratch, the irradiance texture and its list's length (binding 7).
  */
 
 import type { DistanceFormat, ScratchLayout } from '../layout.ts';
+import { PROPAGATION_STATE_WORD, propagationScratchStrideWords } from '../layout.ts';
 import { DDGI_BORDER_SOURCE_WGSL } from './border.ts';
 import { DDGI_COMMON_WGSL } from './common.ts';
 
 export const WRITE_WORKGROUP_SIZE = 64;
+
+/** The write module's entry points. */
+export const WRITE_ENTRY_POINTS = { all: 'ddgiWrite', irradianceTiles: 'ddgiWriteIrradianceTiles' } as const;
 
 export interface WriteKernelShape {
     readonly irradianceTexels: number;
@@ -42,8 +54,13 @@ const DDGI_SCRATCH_STRIDE: u32 = ${scratch.strideWords}u;
 const DDGI_SCRATCH_IRRADIANCE: u32 = ${scratch.irradianceOffset}u;
 const DDGI_SCRATCH_DISTANCE: u32 = ${scratch.distanceOffset}u;
 const DDGI_SCRATCH_PROBE_DATA: u32 = ${scratch.probeDataOffset}u;
+// An irradiance-only scratch (ddgiWriteIrradianceTiles): interior texels alone.
+const DDGI_IRRADIANCE_TILE_STRIDE: u32 = ${propagationScratchStrideWords(irradianceTexels)}u;
+// Where the irradiance-only list's length is (PROPAGATION_STATE_WORD in layout.ts).
+const DDGI_TILE_LIST_LENGTH: u32 = ${PROPAGATION_STATE_WORD.listed}u;
 
 @group(1) @binding(0) var<uniform> ddgi: DdgiUniforms;
+// The probes whose tiles this dispatch writes, and their scratch.
 @group(1) @binding(1) var<storage, read> ddgiUpdateList: array<u32>;
 @group(1) @binding(2) var<storage, read> ddgiScratch: array<u32>;
 @group(1) @binding(3) var ddgiIrradianceOut: texture_storage_2d_array<rgba16float, write>;
@@ -51,11 +68,28 @@ const DDGI_SCRATCH_PROBE_DATA: u32 = ${scratch.probeDataOffset}u;
 @group(1) @binding(5) var ddgiProbeDataOut: texture_storage_2d_array<rgba16float, write>;
 // One texel per probe in probe-index order: world position, state.
 @group(1) @binding(6) var ddgiPointsOut: texture_storage_2d<rgba32float, write>;
+// ddgiWriteIrradianceTiles only: the word holding its list's length.
+@group(1) @binding(7) var<storage, read> ddgiTileListState: array<u32>;
 
 ${DDGI_BORDER_SOURCE_WGSL}
 
+// One probe's irradiance tile, borders included, from its interior texels in
+// the scratch from word 'base' on (two words a texel: rg, then b and alpha).
+fn ddgiStoreIrradianceTile(probe: vec3i, base: u32, thread: u32) {
+    let irradianceTile = DDGI_IRRADIANCE_TEXELS + 2u * u32(DDGI_TILE_BORDER);
+    for (var index = thread; index < irradianceTile * irradianceTile; index += DDGI_WRITE_WORKGROUP_SIZE) {
+        let tileTexel = vec2u(index % irradianceTile, index / irradianceTile);
+        let source = ddgiBorderSource(tileTexel, DDGI_IRRADIANCE_TEXELS);
+        let word = base + 2u * (source.y * DDGI_IRRADIANCE_TEXELS + source.x);
+        let rg = unpack2x16float(ddgiScratch[word]);
+        // b, and in alpha the blend's big-change verdict for the probe's next update.
+        let blueAndChange = unpack2x16float(ddgiScratch[word + 1u]);
+        textureStore(ddgiIrradianceOut, probe.xz * i32(irradianceTile) + vec2i(tileTexel), probe.y, vec4f(rg, blueAndChange));
+    }
+}
+
 @compute @workgroup_size(DDGI_WRITE_WORKGROUP_SIZE)
-fn ddgiWrite(
+fn ${WRITE_ENTRY_POINTS.all}(
     @builtin(workgroup_id) group: vec3u,
     @builtin(num_workgroups) groups: vec3u,
     @builtin(local_invocation_index) thread: u32,
@@ -84,16 +118,7 @@ fn ddgiWrite(
         return;
     }
 
-    let irradianceTile = DDGI_IRRADIANCE_TEXELS + 2u * u32(DDGI_TILE_BORDER);
-    for (var index = thread; index < irradianceTile * irradianceTile; index += DDGI_WRITE_WORKGROUP_SIZE) {
-        let tileTexel = vec2u(index % irradianceTile, index / irradianceTile);
-        let source = ddgiBorderSource(tileTexel, DDGI_IRRADIANCE_TEXELS);
-        let word = slotBase + DDGI_SCRATCH_IRRADIANCE + 2u * (source.y * DDGI_IRRADIANCE_TEXELS + source.x);
-        let rg = unpack2x16float(ddgiScratch[word]);
-        // b, and in alpha the blend's big-change verdict for the probe's next update.
-        let blueAndChange = unpack2x16float(ddgiScratch[word + 1u]);
-        textureStore(ddgiIrradianceOut, probe.xz * i32(irradianceTile) + vec2i(tileTexel), probe.y, vec4f(rg, blueAndChange));
-    }
+    ddgiStoreIrradianceTile(probe, slotBase + DDGI_SCRATCH_IRRADIANCE, thread);
 
     let distanceTile = DDGI_DISTANCE_TEXELS + 2u * u32(DDGI_TILE_BORDER);
     for (var index = thread; index < distanceTile * distanceTile; index += DDGI_WRITE_WORKGROUP_SIZE) {
@@ -103,6 +128,22 @@ fn ddgiWrite(
         // rg16float keeps xy; the rgba16float fallback ignores zw.
         textureStore(ddgiDistanceOut, probe.xz * i32(distanceTile) + vec2i(tileTexel), probe.y, vec4f(moments, 0.0, 0.0));
     }
+}
+
+// Irradiance tiles only, one workgroup per entry of a list built on the GPU
+// (propagation's, T2.4c), dispatched indirectly.
+@compute @workgroup_size(DDGI_WRITE_WORKGROUP_SIZE)
+fn ${WRITE_ENTRY_POINTS.irradianceTiles}(
+    @builtin(workgroup_id) group: vec3u,
+    @builtin(num_workgroups) groups: vec3u,
+    @builtin(local_invocation_index) thread: u32,
+) {
+    let entry = group.x + group.y * groups.x;
+    if (entry >= ddgiTileListState[DDGI_TILE_LIST_LENGTH]) {
+        return;
+    }
+    let probe = ddgiProbeCoordinates(ddgiUpdateList[entry], ddgiProbeCount());
+    ddgiStoreIrradianceTile(probe, entry * DDGI_IRRADIANCE_TILE_STRIDE, thread);
 }
 `;
 }
