@@ -76,6 +76,8 @@ export interface MarkRecall {
     /** The same split by where the probe is: near the object's boxes (within `nearSpacings`) or farther. */
     readonly near: { readonly changed: number; readonly caught: number };
     readonly far: { readonly changed: number; readonly caught: number; readonly marked: number };
+    /** The probes that changed but weren't marked, for a closer look. */
+    readonly missed: readonly number[];
 }
 
 /**
@@ -89,6 +91,7 @@ export function markRecall(marks: ProbeSnapshot, before: ProbeSnapshot, after: P
     let caught = 0;
     const near = { changed: 0, caught: 0 };
     const far = { changed: 0, caught: 0, marked: 0 };
+    const missed: number[] = [];
     for (let probe = 0; probe < marks.pendingChange.length; probe++) {
         if (before.state[probe] !== PROBE_STATE.active || after.state[probe] !== PROBE_STATE.active) continue;
         const reallyChanged = relativeChange(before.mean[probe], after.mean[probe]) > TRUE_CHANGE;
@@ -106,8 +109,32 @@ export function markRecall(marks: ProbeSnapshot, before: ProbeSnapshot, after: P
             caught++;
             side.caught++;
         }
+        if (reallyChanged && !isMarked) missed.push(probe);
     }
-    return { changed, marked, caught, recall: changed > 0 ? caught / changed : 1, precision: marked > 0 ? caught / marked : 1, near, far };
+    return { changed, marked, caught, recall: changed > 0 ? caught / changed : 1, precision: marked > 0 ? caught / marked : 1, near, far, missed };
+}
+
+/**
+ * The missed probes by how far they are from the nearest of some boxes, in
+ * spacings (the largest axis's gap over that axis's spacing): bands up to
+ * the near set's 1.5, 4, the far set's 8, and beyond it.
+ */
+export function missedByDistance(probes: readonly number[], positions: readonly Vec3[], boxes: readonly { min: readonly number[]; max: readonly number[] }[], spacing: readonly number[]): Record<string, number> {
+    const bands: Record<string, number> = { 'within 1.5': 0, '1.5-4': 0, '4-8': 0, 'beyond 8': 0 };
+    for (const probe of probes) {
+        let nearest = Infinity;
+        for (const box of boxes) {
+            let gap = 0;
+            for (let axis = 0; axis < 3; axis++) {
+                const outside = Math.max(box.min[axis] - positions[probe][axis], positions[probe][axis] - box.max[axis], 0);
+                gap = Math.max(gap, outside / spacing[axis]);
+            }
+            nearest = Math.min(nearest, gap);
+        }
+        const band = nearest <= 1.5 ? 'within 1.5' : nearest <= 4 ? '1.5-4' : nearest <= 8 ? '4-8' : 'beyond 8';
+        bands[band]++;
+    }
+    return bands;
 }
 
 /** The mean over pixels of |image − reference|, over the mean of the reference (T2.4b's per-pixel error). */
