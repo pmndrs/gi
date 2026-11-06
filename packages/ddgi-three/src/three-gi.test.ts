@@ -1,4 +1,4 @@
-import { BoxGeometry, Mesh, MeshStandardMaterial, PerspectiveCamera, PointLight, Scene, Texture } from 'three';
+import { BoxGeometry, Color, Mesh, MeshStandardMaterial, PerspectiveCamera, PointLight, Scene, Texture } from 'three';
 import { describe, expect, it } from 'vitest';
 import type { FrameInput, GIPlatform, SceneApi, ShadingModule } from '@pmndrs/ddgi-core';
 import { GIVolume } from './gi-volume.ts';
@@ -154,6 +154,28 @@ describe('ThreeGI', () => {
         expect(threeGI.light.computeCoverage).toBe(true);
         // The GI light itself lights every layer.
         expect(threeGI.light.layers.test(camera.layers)).toBe(true);
+    });
+
+    it("sets light group weights on the output technique, from three's colours in linear space times an intensity", () => {
+        const platform = fakePlatform(fakeShading());
+        const calls: Array<[string, number | null, readonly number[]]> = [];
+        const technique = {
+            id: 'ddgi',
+            setGroupWeight: (group: number, weight: readonly number[]) => calls.push(['group', group, weight]),
+            setEnvironmentWeight: (weight: readonly number[]) => calls.push(['environment', null, weight]),
+        };
+        Object.assign(platform.gi, { outputTechnique: technique });
+        const threeGI = new ThreeGI(platform.gi, new Scene());
+        threeGI.setGroupWeight(1, 'white', 0.25);
+        // '#808080' is sRGB: three keeps colours linear, so 0.5 encoded is about 0.216 linear.
+        threeGI.setGroupWeight(0, new Color('#808080'));
+        threeGI.setEnvironmentWeight(0xff0000, 2);
+        expect(calls[0]).toEqual(['group', 1, [0.25, 0.25, 0.25]]);
+        expect(calls[1][2][0]).toBeCloseTo(0.2158605, 6);
+        expect(calls[2]).toEqual(['environment', null, [2, 0, 0]]);
+        // A technique without light groups is refused with a message that says so.
+        Object.assign(platform.gi, { outputTechnique: { id: 'voxel' } });
+        expect(() => threeGI.setGroupWeight(0, 'white')).toThrow(/voxel.*light group weights/);
     });
 
     it('removes everything it added on dispose', () => {

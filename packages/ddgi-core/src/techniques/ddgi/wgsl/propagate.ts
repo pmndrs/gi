@@ -41,6 +41,10 @@
  *
  * Distances aren't propagated: a light change doesn't move them.
  *
+ * With light groups (T2.5) every irradiance layer is propagated, each from
+ * its keys' change in that layer, with the same weights; the probe's mean is
+ * over the layers' sum, as the blend writes it.
+ *
  * Bindings (group 1, one declaration for the module, a layout per kernel):
  * uniforms (0), the probe history as words (1), the census (2), the
  * propagation state written by find and args (3), the list (4), the key
@@ -88,6 +92,8 @@ export type PropagateReduction = PhaseBReduction;
 
 export interface PropagateKernelShape {
     readonly irradianceTexels: number;
+    /** Irradiance layers (light groups, light-groups.ts); 1 with groups off. */
+    readonly irradianceLayers: number;
     readonly reduction: PropagateReduction;
     /** How many fine probes the list holds (propagationListCapacity in layout.ts). */
     readonly listCapacity: number;
@@ -124,7 +130,7 @@ fn ddgiReserveListSlot(take: bool) -> u32 {
 }
 
 export function propagateKernelWgsl(shape: PropagateKernelShape): string {
-    const { irradianceTexels, reduction, listCapacity } = shape;
+    const { irradianceTexels, irradianceLayers, reduction, listCapacity } = shape;
     const enable = reduction === 'subgroups' ? 'enable subgroups;\n' : '';
     return /* wgsl */ `${enable}
 ${DDGI_COMMON_WGSL}
@@ -160,11 +166,14 @@ const DDGI_CENSUS_PROBES_PROPAGATED: u32 = ${CENSUS_PROBES_PROPAGATED}u;
 const DDGI_CENSUS_PROBES_PROPAGATED_TOTAL: u32 = ${CENSUS_PROBES_PROPAGATED_TOTAL}u;
 const DDGI_STATE_LISTED: u32 = ${PROPAGATION_STATE_WORD.listed}u;
 // The key-delta buffer (KEY_DELTA_HEADER in layout.ts).
-const DDGI_KEY_DELTA_STRIDE: u32 = ${keyDeltaStrideWords(irradianceTexels)}u;
+const DDGI_KEY_DELTA_STRIDE: u32 = ${keyDeltaStrideWords(irradianceTexels, irradianceLayers)}u;
 const DDGI_KEY_DELTA_HEADER_WORDS: u32 = ${KEY_DELTA_HEADER_WORDS}u;
 const DDGI_KEY_DELTA_PROBE_INDEX: u32 = ${KEY_DELTA_HEADER.probeIndex}u;
 const DDGI_KEY_DELTA_CLOCK_BEFORE: u32 = ${KEY_DELTA_HEADER.clockBefore}u;
-const DDGI_PROPAGATION_STRIDE: u32 = ${propagationScratchStrideWords(irradianceTexels)}u;
+const DDGI_PROPAGATION_STRIDE: u32 = ${propagationScratchStrideWords(irradianceTexels, irradianceLayers)}u;
+// Irradiance layers (light groups), each layer's texels after the one before in a key delta and a scratch entry.
+const DDGI_IRRADIANCE_LAYERS: u32 = ${irradianceLayers}u;
+const DDGI_IRRADIANCE_LAYER_WORDS: u32 = ${propagationScratchStrideWords(irradianceTexels)}u;
 
 @group(1) @binding(0) var<uniform> ddgi: DdgiUniforms;
 @group(1) @binding(1) var<storage, read_write> ddgiHistoryWords: array<u32>;
@@ -385,15 +394,18 @@ fn ddgiNormaliseKeys(fineIndex: u32) {
     ddgiHistoryWords[base + DDGI_HISTORY_KEYS_RECEIVED] = receivedBits | (pack2x16float(vec2f(0.0, saturate(receivedWeight))) & (0xffffu << DDGI_KEYS_WEIGHT_SHIFT));
 }
 
-// The atlas texel of interior texel 'texelIndex' of a probe's irradiance tile (the layer is probe.y).
-fn ddgiIrradianceAtlasTexel(probe: vec3i, texelIndex: u32) -> vec2i {
+// The atlas texel of interior texel 'texelIndex' of a probe's tile in
+// irradiance layer 'layer' (the array layer is probe.y; layer L's tiles are L
+// probe grids to the right, light-groups.ts).
+fn ddgiIrradianceAtlasTexel(probe: vec3i, layer: u32, texelIndex: u32) -> vec2i {
     let border = i32(DDGI_TILE_BORDER);
     let texel = vec2i(vec2u(texelIndex % DDGI_IRRADIANCE_TEXELS, texelIndex / DDGI_IRRADIANCE_TEXELS));
-    return probe.xz * (i32(DDGI_IRRADIANCE_TEXELS) + 2 * border) + border + texel;
+    let tile = vec2i(probe.x + i32(layer * ddgiProbeCount().x), probe.z);
+    return tile * (i32(DDGI_IRRADIANCE_TEXELS) + 2 * border) + border + texel;
 }
 
-fn ddgiKeyDeltaTexel(slot: u32, texelIndex: u32) -> vec3f {
-    let word = slot * DDGI_KEY_DELTA_STRIDE + DDGI_KEY_DELTA_HEADER_WORDS + 2u * texelIndex;
+fn ddgiKeyDeltaTexel(slot: u32, layer: u32, texelIndex: u32) -> vec3f {
+    let word = slot * DDGI_KEY_DELTA_STRIDE + DDGI_KEY_DELTA_HEADER_WORDS + layer * DDGI_IRRADIANCE_LAYER_WORDS + 2u * texelIndex;
     return vec3f(unpack2x16float(ddgiKeyDeltas[word]), unpack2x16float(ddgiKeyDeltas[word + 1u]).x);
 }
 
@@ -410,25 +422,31 @@ fn ddgiPropagateEntry(entry: u32, thread: u32) {
     }
     workgroupBarrier();
 
-    // Every texel: old + the keys' shares of their changes, irradiance kept
-    // at 0 or more (where a large darkening meets noise this biases a little
-    // bright; the probe's own update corrects it). Alpha (the opt-in
-    // big-change rule's verdict) is kept as it was.
+    // Every texel of every layer: old + the keys' shares of their changes,
+    // irradiance kept at 0 or more (where a large darkening meets noise this
+    // biases a little bright; the probe's own update corrects it). Alpha (the
+    // opt-in big-change rule's verdict) is kept as it was. ddgiNewTexel sums
+    // the layers, for the probe's mean.
     for (var texelIndex = thread; texelIndex < DDGI_IRRADIANCE_TEXEL_COUNT; texelIndex += DDGI_PROPAGATE_WORKGROUP_SIZE) {
-        var change = vec3f(0.0);
-        for (var neighbour = 0u; neighbour < DDGI_KEY_NEIGHBOURS; neighbour++) {
-            let share = ddgiKeyShare[neighbour];
-            if (share > 0.0) {
-                change += share * ddgiKeyDeltaTexel(ddgiKeySlot[neighbour], texelIndex);
+        var layersSum = vec3f(0.0);
+        for (var layer = 0u; layer < DDGI_IRRADIANCE_LAYERS; layer++) {
+            var change = vec3f(0.0);
+            for (var neighbour = 0u; neighbour < DDGI_KEY_NEIGHBOURS; neighbour++) {
+                let share = ddgiKeyShare[neighbour];
+                if (share > 0.0) {
+                    change += share * ddgiKeyDeltaTexel(ddgiKeySlot[neighbour], layer, texelIndex);
+                }
             }
+            let old = textureLoad(ddgiIrradianceAtlas, ddgiIrradianceAtlasTexel(fine, layer, texelIndex), fine.y, 0);
+            let value = max(old.rgb + change, vec3f(0.0));
+            layersSum += value;
+            // Layer 0 keeps the seeds it had before there were layers.
+            let seed = (fineIndex * DDGI_IRRADIANCE_TEXEL_COUNT + texelIndex) ^ 0x2c1b3c6du ^ (layer * 0x9e3779b9u);
+            let word = entry * DDGI_PROPAGATION_STRIDE + layer * DDGI_IRRADIANCE_LAYER_WORDS + 2u * texelIndex;
+            ddgiPropagationScratch[word] = pack2x16float(vec2f(ddgiStochasticHalf(value.r, ddgiRandom(seed, 1u, ddgi.frame)), ddgiStochasticHalf(value.g, ddgiRandom(seed, 2u, ddgi.frame))));
+            ddgiPropagationScratch[word + 1u] = pack2x16float(vec2f(ddgiStochasticHalf(value.b, ddgiRandom(seed, 3u, ddgi.frame)), old.a));
         }
-        let old = textureLoad(ddgiIrradianceAtlas, ddgiIrradianceAtlasTexel(fine, texelIndex), fine.y, 0);
-        let value = max(old.rgb + change, vec3f(0.0));
-        ddgiNewTexel[texelIndex] = value;
-        let seed = (fineIndex * DDGI_IRRADIANCE_TEXEL_COUNT + texelIndex) ^ 0x2c1b3c6du;
-        let word = entry * DDGI_PROPAGATION_STRIDE + 2u * texelIndex;
-        ddgiPropagationScratch[word] = pack2x16float(vec2f(ddgiStochasticHalf(value.r, ddgiRandom(seed, 1u, ddgi.frame)), ddgiStochasticHalf(value.g, ddgiRandom(seed, 2u, ddgi.frame))));
-        ddgiPropagationScratch[word + 1u] = pack2x16float(vec2f(ddgiStochasticHalf(value.b, ddgiRandom(seed, 3u, ddgi.frame)), old.a));
+        ddgiNewTexel[texelIndex] = layersSum;
     }
     workgroupBarrier();
 

@@ -27,6 +27,12 @@
  *    waiting for their key neighbours take the change those keys' updates
  *    made this frame, and their tiles are written (wgsl/propagate.ts). It
  *    does nothing in a frame where no key passed a change on;
+ * 3c. `ddgi/compose`, with light groups on (T2.5, §5; light-groups.ts,
+ *    wgsl/compose.ts): the composed atlas renderers sample, Σ weight ×
+ *    layer, over the tiles written this frame, or over every tile in a
+ *    frame where a weight changed (and in the first frame after `prepare`).
+ *    A weight change marks nothing and cuts no history: it is a compose, not
+ *    a light change;
  * 4. `ddgi/census`, only when the platform times passes (its `gpuTiming`
  *    option, the one setting that allows readbacks): counts probes per state
  *    for the counters, read back a few frames later.
@@ -50,6 +56,7 @@
 import type { DebugView } from '../../platform/contract/stats.ts';
 import type { GITechnique, TechniqueContext, TechniqueFrame, TechniqueRequirements, WorkFloorRate } from '../../platform/contract/technique.ts';
 import type { DirectWorkList, RayScratch } from '../../platform/contract/shade.ts';
+import type { ColorRGB } from '../../platform/contract/math.ts';
 import type { ComputeKernel } from '../../platform/contract/wgsl.ts';
 import { GILimitError } from '../../platform/contract/errors.ts';
 import {
@@ -130,6 +137,8 @@ import {
 } from './settings.ts';
 import { cameraFalloffDistance, frustumPlanes, inViewMargin } from './camera.ts';
 import { buildMarkTable, type MarkTable } from './mark-table.ts';
+import { layerPlan, MAX_IRRADIANCE_LAYERS, MAX_LIGHT_GROUPS, writeLayerWeights, type LayerPlan } from './light-groups.ts';
+import { COMPOSE_ENTRY_POINTS, COMPOSE_WEIGHTS_BYTES, composeKernelWgsl } from './wgsl/compose.ts';
 import { MoverTable } from './mover-table.ts';
 import { ContinuingChangeBatch } from './continuing-change.ts';
 import { priorityCount, scrambleStride } from './schedule.ts';
@@ -203,7 +212,19 @@ export type DirectLightPath = 'deferred' | 'inline';
 export interface DDGIField {
     readonly grid: ProbeGrid;
     readonly layout: FieldLayout;
+    /**
+     * The irradiance renderers sample: the composed atlas with light groups
+     * on (one block, Σ weight × layer), else the field's one layer.
+     */
     readonly irradiance: GPUTexture;
+    /**
+     * The atlas the update writes, every irradiance layer side by side
+     * (`layout.layeredIrradiance`, light-groups.ts); `irradiance` itself with
+     * one layer.
+     */
+    readonly layeredIrradiance: GPUTexture;
+    /** Which layer holds what (light-groups.ts). */
+    readonly layers: LayerPlan;
     readonly distance: GPUTexture;
     readonly probeData: GPUTexture;
     /** volumeOrigin, volumeSpacing, volumeCounts, volumeTexels: 16 floats, refreshed from the live settings on every read. */
@@ -236,7 +257,12 @@ interface PreparedResources {
     /** Where direct light is computed, and how the deferred work list is filled (null when inline). */
     readonly directLight: DirectLightPath;
     readonly directWorkList: DirectWorkList | null;
+    /** Which irradiance layer holds what (light groups, light-groups.ts). */
+    readonly plan: LayerPlan;
+    /** The layered irradiance atlas the update reads and writes (one block per layer). */
     readonly irradiance: GPUTexture;
+    /** With light groups on: the composed atlas renderers sample, and its kernels (null with one layer). */
+    readonly compose: ComposeResources | null;
     readonly distance: GPUTexture;
     readonly probeData: GPUTexture;
     readonly points: GPUTexture;
@@ -287,6 +313,20 @@ interface RayBuffers {
     readonly capacity: number;
     readonly traceGroup: GPUBindGroup;
     readonly blendGroup: GPUBindGroup;
+}
+
+/** `ddgi/compose`'s kernels, its texture, weights and bind groups (T2.5, wgsl/compose.ts). */
+interface ComposeResources {
+    readonly updatedKernel: ComputeKernel;
+    readonly listedKernel: ComputeKernel;
+    readonly allKernel: ComputeKernel;
+    /** What renderers sample: Σ weight × layer, one block. */
+    readonly composed: GPUTexture;
+    /** The layers' weights (COMPOSE_WEIGHTS_BYTES), written when they change. */
+    readonly weights: GPUBuffer;
+    /** Binds the update list; the listed kernel's binds propagation's list and state. */
+    readonly updatedGroup: GPUBindGroup;
+    readonly listedGroup: GPUBindGroup;
 }
 
 /** Propagation's kernels, buffers and bind groups (T2.4c, wgsl/propagate.ts). */
@@ -449,6 +489,19 @@ const SCHEDULE_GROUP: GPUBindGroupLayoutDescriptor = {
     ],
 };
 
+/** `ddgi/compose` group 1 (wgsl/compose.ts): the same for its three entry points. */
+const COMPOSE_GROUP: GPUBindGroupLayoutDescriptor = {
+    label: 'ddgi/compose group 1',
+    entries: [
+        { binding: 0, visibility: COMPUTE, buffer: { type: 'uniform' } },
+        { binding: 1, visibility: COMPUTE, buffer: { type: 'read-only-storage' } },
+        { binding: 2, visibility: COMPUTE, buffer: { type: 'read-only-storage' } },
+        { binding: 3, visibility: COMPUTE, texture: SAMPLED_ARRAY },
+        { binding: 4, visibility: COMPUTE, storageTexture: { access: 'write-only', format: IRRADIANCE_FORMAT, viewDimension: '2d-array' } },
+        { binding: 5, visibility: COMPUTE, buffer: { type: 'uniform' } },
+    ],
+};
+
 /** `ddgi/census` group 1 (wgsl/census.ts). */
 const CENSUS_GROUP: GPUBindGroupLayoutDescriptor = {
     label: 'ddgi/census group 1',
@@ -504,6 +557,12 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
     private historyClearPending = false;
     /** The objects that moved lately, for the mover mask (mover-table.ts). */
     private readonly movers = new MoverTable();
+    /** The layers' weights as last written to the GPU (light groups), 4 floats a layer. */
+    private readonly layerWeights = new Float32Array(MAX_IRRADIANCE_LAYERS * 4);
+    /** Compose every tile in the next frame: after `prepare`, when the composed atlas starts empty. */
+    private composeAllPending = false;
+    /** Frames since `prepare` that composed every tile (a weight change, or the first frame). */
+    private fullComposeFrames = 0;
     private disposed = false;
 
     constructor(settings: DDGISettingsInput, options: DDGITechniqueOptions = {}) {
@@ -546,7 +605,8 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
             fieldTextures: () => {
                 const resources = this.resources;
                 if (!resources) throw new Error('@pmndrs/ddgi: the DDGI shading module has textures after prepare (await gi.prepare())');
-                return { irradiance: resources.irradiance, distance: resources.distance, probeData: resources.probeData };
+                // With light groups, renderers read the composed atlas: one block, as without them.
+                return { irradiance: resources.compose?.composed ?? resources.irradiance, distance: resources.distance, probeData: resources.probeData };
             },
             sampleParameters: () => {
                 const resources = this.resources;
@@ -585,11 +645,14 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         const grid = probeGrid(this.settings.volume);
         const irradianceTexels = positiveInteger(this.settings.irradianceTexels, 'irradianceTexels');
         const distanceTexels = positiveInteger(this.settings.distanceTexels, 'distanceTexels');
-        const layout = fieldLayout(grid, irradianceTexels, distanceTexels, distanceFormatFor(device.features as ReadonlySet<string>));
+        // Light groups (T2.5): one irradiance layer per group and one for the environment, or one layer with groups off.
+        const plan = layerPlan(this.settings.lightGroups);
+        const layerCount = plan.layers.length;
+        const layout = fieldLayout(grid, irradianceTexels, distanceTexels, distanceFormatFor(device.features as ReadonlySet<string>), layerCount);
         checkFieldLimits(layout, device.limits);
         const points = pointsSize(grid.probeCount, device.limits.maxTextureDimension2D);
         if (points.height > device.limits.maxTextureDimension2D) throw new GILimitError('maxTextureDimension2D', points.height, device.limits.maxTextureDimension2D);
-        const scratch = scratchLayout(irradianceTexels, distanceTexels);
+        const scratch = scratchLayout(irradianceTexels, distanceTexels, layerCount);
         // No probe updates twice in a frame, so more slots than probes would never be used.
         const maxProbesPerFrame = Math.min(positiveInteger(this.settings.maxProbesPerFrame, 'maxProbesPerFrame'), grid.probeCount);
         const hasSubgroups = device.features.has('subgroups');
@@ -597,15 +660,20 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         if (reduction === 'subgroups' && !hasSubgroups) throw new Error("@pmndrs/ddgi: the 'subgroups' reduction needs a device with the 'subgroups' feature");
         const directLight = this.options.directLight ?? 'deferred';
         const directWorkList = directLight === 'deferred' ? (this.options.directWorkList ?? context.shade.direct.defaultWorkList) : null;
+        // The inline trace (kept for comparison) adds every light's direct light into one result.
+        if (!directWorkList && layerCount > 1) throw new Error("@pmndrs/ddgi: light groups need direct light deferred to gi/direct (directLight: 'deferred', the default)");
         // Throws for a 'subgroups' work list on a device without them.
-        const traceCode = directWorkList ? deferredTraceKernelWgsl(context.shade.direct.traceWgsl('ddgiRayScratch', directWorkList)) : DDGI_TRACE_WGSL;
+        const traceCode = directWorkList ? deferredTraceKernelWgsl(context.shade.direct.traceWgsl('ddgiRayScratch', directWorkList), plan) : DDGI_TRACE_WGSL;
 
         // Compile first: if a kernel fails, the old resources stay usable.
         const scheduleCode = scheduleKernelWgsl(reduction);
         const markCode = markKernelWgsl(reduction);
         const writeCode = writeKernelWgsl({ irradianceTexels, distanceTexels, scratch, distanceFormat: layout.distanceFormat });
         const propagationCapacity = propagationListCapacity(grid.counts, maxProbesPerFrame);
-        const propagateCode = propagateKernelWgsl({ irradianceTexels, reduction, listCapacity: propagationCapacity });
+        const propagateCode = propagateKernelWgsl({ irradianceTexels, irradianceLayers: layerCount, reduction, listCapacity: propagationCapacity });
+        const composeCode = plan.composed ? composeKernelWgsl({ irradianceTexels, irradianceLayers: layerCount }) : null;
+        const composeKernel = (entryPoint: string, name: string): Promise<ComputeKernel | null> =>
+            composeCode ? context.kernels.computeKernel({ label: `ddgi/compose-${name}`, modules: [], code: composeCode, entryPoint, ownGroups: [COMPOSE_GROUP] }) : Promise.resolve(null);
         const propagateKernel = (entryPoint: string, name: string, group: GPUBindGroupLayoutDescriptor): Promise<ComputeKernel> =>
             context.kernels.computeKernel({ label: `ddgi/${name} (${reduction})`, modules: [], code: propagateCode, entryPoint, ownGroups: [group] });
         const scheduleKernel = (entryPoint: string, name: string): Promise<ComputeKernel> =>
@@ -625,6 +693,9 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
             propagateArgs,
             propagatePropagate,
             propagateWrite,
+            composeUpdated,
+            composeListed,
+            composeAll,
         ] = await Promise.all([
             context.kernels.computeKernel({
                 label: directWorkList ? `ddgi/trace (deferred direct light, ${directWorkList})` : 'ddgi/trace (inline direct light)',
@@ -684,6 +755,9 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
                 entryPoint: WRITE_ENTRY_POINTS.irradianceTiles,
                 ownGroups: [WRITE_TILES_GROUP],
             }),
+            composeKernel(COMPOSE_ENTRY_POINTS.updated, 'updated'),
+            composeKernel(COMPOSE_ENTRY_POINTS.listed, 'listed'),
+            composeKernel(COMPOSE_ENTRY_POINTS.all, 'all'),
             // gi/direct (also for the inline path: its ray scratch comes from the same place). Last, so it sits past the named kernels.
             context.shade.direct.prepare(),
         ]);
@@ -702,7 +776,9 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
                 // 2d. Every DDGI binding reads these as texture_2d_array.
                 textureBindingViewDimension: '2d-array',
             });
-        const irradiance = arrayTexture('irradiance', layout.irradiance, IRRADIANCE_FORMAT);
+        // The layers side by side (one block with groups off), and the composed atlas renderers sample when there are several.
+        const irradiance = arrayTexture(layerCount > 1 ? 'irradiance layers' : 'irradiance', layout.layeredIrradiance, IRRADIANCE_FORMAT);
+        const composedIrradiance = plan.composed ? arrayTexture('composed irradiance', layout.irradiance, IRRADIANCE_FORMAT) : null;
         const distance = arrayTexture('distance', layout.distance, layout.distanceFormat);
         const probeData = arrayTexture('probe data', layout.probeData, PROBE_DATA_FORMAT, TEXTURE_USAGE.copyDst);
         const pointsTexture = device.createTexture({ label: 'ddgi points', size: points, format: 'rgba32float', usage: atlasUsage | TEXTURE_USAGE.copyDst });
@@ -719,11 +795,11 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         const scheduleState = device.createBuffer({ label: 'ddgi schedule state', size: SCHEDULE_STATE_WORDS * 4, usage: BUFFER_USAGE.storage | BUFFER_USAGE.copySrc | BUFFER_USAGE.copyDst });
         const feedbackRequests = device.createBuffer({ label: 'ddgi feedback requests', size: grid.probeCount * 4, usage: BUFFER_USAGE.storage | BUFFER_USAGE.copyDst });
         // Propagation (T2.4c): a key-delta entry per update-list slot, the list of fine probes, its scratch and its length.
-        const keyDeltas = device.createBuffer({ label: 'ddgi key deltas', size: maxProbesPerFrame * keyDeltaStrideWords(irradianceTexels) * 4, usage: BUFFER_USAGE.storage });
+        const keyDeltas = device.createBuffer({ label: 'ddgi key deltas', size: maxProbesPerFrame * keyDeltaStrideWords(irradianceTexels, layerCount) * 4, usage: BUFFER_USAGE.storage });
         const propagationList = device.createBuffer({ label: 'ddgi propagation list', size: propagationCapacity * 4, usage: BUFFER_USAGE.storage });
         const propagationScratch = device.createBuffer({
             label: 'ddgi propagation scratch',
-            size: propagationCapacity * propagationScratchStrideWords(irradianceTexels) * 4,
+            size: propagationCapacity * propagationScratchStrideWords(irradianceTexels, layerCount) * 4,
             usage: BUFFER_USAGE.storage,
         });
         const propagationState = device.createBuffer({
@@ -836,8 +912,37 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
             }),
         };
 
+        let compose: ComposeResources | null = null;
+        if (composedIrradiance && composeUpdated && composeListed && composeAll) {
+            const weights = device.createBuffer({ label: 'ddgi compose weights', size: COMPOSE_WEIGHTS_BYTES, usage: BUFFER_USAGE.uniform | BUFFER_USAGE.copyDst });
+            const composeGroup = (label: string, list: GPUBuffer, listState: GPUBuffer): GPUBindGroup =>
+                device.createBindGroup({
+                    label,
+                    layout: composeUpdated.ownLayouts[0],
+                    entries: [
+                        { binding: 0, resource: { buffer: uniforms } },
+                        { binding: 1, resource: { buffer: list } },
+                        { binding: 2, resource: { buffer: listState } },
+                        { binding: 3, resource: arrayView(irradiance) },
+                        { binding: 4, resource: arrayView(composedIrradiance) },
+                        { binding: 5, resource: { buffer: weights } },
+                    ],
+                });
+            compose = {
+                updatedKernel: composeUpdated,
+                listedKernel: composeListed,
+                allKernel: composeAll,
+                composed: composedIrradiance,
+                weights,
+                // The update list's length is ddgi.updateCount; its state binding is unused (propagation's is bound to fill it).
+                updatedGroup: composeGroup('ddgi/compose group 1 (update list)', updateList, propagationState),
+                listedGroup: composeGroup('ddgi/compose group 1 (propagation list)', propagationList, propagationState),
+            };
+        }
+
         const fixedBytes =
             fieldBytes(layout) +
+            (compose?.weights.size ?? 0) +
             points.width * points.height * POINT_TEXEL_BYTES +
             UNIFORM_BYTES +
             updateList.size +
@@ -862,7 +967,9 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
             reduction,
             directLight,
             directWorkList,
+            plan,
             irradiance,
+            compose,
             distance,
             probeData,
             points: pointsTexture,
@@ -906,6 +1013,10 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         this.lastUpdateCount = 0;
         this.historyClearPending = false;
         this.movers.clear();
+        // The composed atlas starts empty: the first frame composes every tile, with the weights as they are then.
+        this.layerWeights.fill(Number.NaN);
+        this.composeAllPending = compose !== null;
+        this.fullComposeFrames = 0;
         this.startWarmUp();
         this.markAllNotUpdated();
     }
@@ -944,7 +1055,7 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         }
         // Marks land even in a frame that updates no probe: they wait in the
         // history for each probe's next update.
-        const markTable = this.settings.changeDrivenHistory !== false ? buildMarkTable(frame.changes, resources.grid, this.movers) : null;
+        const markTable = this.settings.changeDrivenHistory !== false ? buildMarkTable(frame.changes, resources.grid, this.movers, resources.plan.groupLayers) : null;
         this.latestMarkEntries = markTable?.entryCount ?? 0;
         this.continuingChange.noteFrame(markTable !== null);
         // No probe updates twice in a frame. While warming: a full batch, or none while the trees are built.
@@ -953,7 +1064,9 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         const count = Math.max(0, Math.min(Number.isNaN(handOut) ? 0 : Math.floor(handOut), resources.maxProbesPerFrame, probeCount));
         this.probesUpdated = count;
         if (count > 0) this.lastUpdateCount = count;
-        if (count === 0 && !markTable && !this.historyClearPending) return 0;
+        // Light groups: a weight changed since the last frame (or the composed atlas is new), so every tile is composed this frame.
+        const composeAll = this.updateLayerWeights(context, resources);
+        if (count === 0 && !markTable && !this.historyClearPending && !composeAll) return 0;
         const raysPerProbe = effectiveRaysPerProbe(this.settings.raysPerProbe);
         const device = context.device;
         const maxPerDimension = device.limits.maxComputeWorkgroupsPerDimension;
@@ -974,7 +1087,10 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         }
         if (count > 0) this.encodeSchedule(encoder, context, resources, maxPerDimension);
         if (this.warmUp.phase === 'warming') this.finishWarmUpPass(resources, count);
-        if (count === 0) return 0;
+        if (count === 0) {
+            if (composeAll) this.encodeCompose(encoder, context, resources, 0, false, true, maxPerDimension);
+            return 0;
+        }
 
         const rays = resources.rays;
         const roundProbes = Math.min(count, DIRECT_ROUND_PROBES);
@@ -1014,9 +1130,90 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         write.dispatchWorkgroups(probesX, probesY);
         write.end();
 
-        if (this.settings.keyProbes !== false) this.encodePropagation(encoder, context, resources, maxPerDimension);
+        const propagation = this.settings.keyProbes !== false;
+        if (propagation) this.encodePropagation(encoder, context, resources, maxPerDimension);
+        this.encodeCompose(encoder, context, resources, count, propagation, composeAll, maxPerDimension);
         this.encodeCensus(encoder, context, resources, maxPerDimension);
         return count;
+    }
+
+    /**
+     * Light groups: writes the layers' weights when they changed, and says
+     * whether this frame must compose every tile (a weight changed, or the
+     * composed atlas is new). Nothing with one layer.
+     */
+    private updateLayerWeights(context: TechniqueContext, resources: PreparedResources): boolean {
+        const compose = resources.compose;
+        if (!compose) return false;
+        const changed = writeLayerWeights(resources.plan, this.settings.lightGroups, this.layerWeights);
+        if (changed) context.device.queue.writeBuffer(compose.weights, 0, this.layerWeights);
+        const composeAll = changed || this.composeAllPending;
+        this.composeAllPending = false;
+        if (composeAll) this.fullComposeFrames++;
+        return composeAll;
+    }
+
+    /**
+     * `ddgi/compose` (wgsl/compose.ts), with light groups on: one pass, timed
+     * as `ddgi/compose`. Every tile after a weight change; otherwise the
+     * update list's tiles, and propagation's (its list's length is on the
+     * GPU, so its dispatch is a fixed number of workgroups that loop, as
+     * propagation's own write is). Each dispatch is its own usage scope, so
+     * the compose reads what `ddgi/write` and propagation's write stored.
+     */
+    private encodeCompose(
+        encoder: GPUCommandEncoder,
+        context: TechniqueContext,
+        resources: PreparedResources,
+        count: number,
+        propagation: boolean,
+        composeAll: boolean,
+        maxPerDimension: number,
+    ): void {
+        const compose = resources.compose;
+        if (!compose) return;
+        const pass = encoder.beginComputePass({ label: 'ddgi/compose', timestampWrites: context.timer.computePass('ddgi/compose') });
+        if (composeAll) {
+            const probes = resources.grid.probeCount;
+            const groupsX = Math.min(probes, maxPerDimension);
+            compose.allKernel.bind(pass);
+            pass.setBindGroup(1, compose.updatedGroup);
+            pass.dispatchWorkgroups(groupsX, Math.ceil(probes / groupsX));
+        } else {
+            if (count > 0) {
+                const groupsX = Math.min(count, maxPerDimension);
+                compose.updatedKernel.bind(pass);
+                pass.setBindGroup(1, compose.updatedGroup);
+                pass.dispatchWorkgroups(groupsX, Math.ceil(count / groupsX));
+            }
+            if (propagation) {
+                compose.listedKernel.bind(pass);
+                pass.setBindGroup(1, compose.listedGroup);
+                pass.dispatchWorkgroups(PROPAGATE_WORKGROUPS);
+            }
+        }
+        pass.end();
+    }
+
+    /**
+     * Sets light group `group`'s weight (0..3, light-groups.ts): a linear RGB
+     * multiplier on top of its lights' colour and intensity. Shows in the
+     * next frame, composed; nothing is marked or traced again. Light groups
+     * must be on (`settings.lightGroups`).
+     */
+    setGroupWeight(group: number, weight: ColorRGB): void {
+        const lightGroups = this.settings.lightGroups;
+        if (!lightGroups) throw new Error('@pmndrs/ddgi: light groups are off; set settings.lightGroups (and prepare) before setting a group weight');
+        if (!Number.isInteger(group) || group < 0 || group >= MAX_LIGHT_GROUPS) throw new RangeError(`@pmndrs/ddgi: light groups are 0 to ${MAX_LIGHT_GROUPS - 1}, got ${group}`);
+        while (lightGroups.weights.length <= group) lightGroups.weights.push([1, 1, 1]);
+        lightGroups.weights[group] = [weight[0], weight[1], weight[2]];
+    }
+
+    /** Sets the environment layer's weight (the sky and emissive surfaces), as {@link setGroupWeight}. */
+    setEnvironmentWeight(weight: ColorRGB): void {
+        const lightGroups = this.settings.lightGroups;
+        if (!lightGroups) throw new Error('@pmndrs/ddgi: light groups are off; set settings.lightGroups (and prepare) before setting the environment weight');
+        lightGroups.environmentWeight = [weight[0], weight[1], weight[2]];
     }
 
     /**
@@ -1038,7 +1235,8 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
             words[(round * stride) / 4 + 1] = Math.min(DIRECT_ROUND_PROBES, count - firstSlot);
         }
         context.device.queue.writeBuffer(traceRounds, 0, words);
-        const direct = { frame: frameNumber, groupMask: DDGI_LIGHT_GROUP_MASK, owner: this.id, timer: context.timer };
+        // Each light group's direct light into its own layer (all into the one layer with groups off).
+        const direct = { frame: frameNumber, groupMask: DDGI_LIGHT_GROUP_MASK, groupLayers: resources.plan.groupLayers, owner: this.id, timer: context.timer };
         for (let round = 0; round < rounds; round++) {
             const slotCount = words[(round * stride) / 4 + 1];
             const trace = encoder.beginComputePass({ label: 'ddgi/trace', timestampWrites: context.timer.computePass('ddgi/trace') });
@@ -1158,7 +1356,9 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         return {
             grid: resources.grid,
             layout: resources.layout,
-            irradiance: resources.irradiance,
+            irradiance: resources.compose?.composed ?? resources.irradiance,
+            layeredIrradiance: resources.irradiance,
+            layers: resources.plan,
             distance: resources.distance,
             probeData: resources.probeData,
             sampleParameters: this.parameterView,
@@ -1195,6 +1395,9 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
             'warming up': this.warmingUp ? 1 : 0,
             'warm-up passes': this.warmUpPasses,
             'key probes': this.resources ? keyProbeCount(this.resources.grid.counts) : 0,
+            // Light groups (T2.5): the irradiance layers (1 with groups off), and the frames that composed every tile.
+            'irradiance layers': this.resources?.plan.layers.length ?? 0,
+            'frames composed in full': this.fullComposeFrames,
         };
         if (sweep !== undefined) updates['seconds per full sweep'] = sweep;
         if (!census) return updates;
@@ -1332,7 +1535,13 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         const device = context.device;
         const deferred = resources.directWorkList !== null;
         const probesPerRound = deferred ? Math.min(DIRECT_ROUND_PROBES, Math.floor(capacity / raysPerProbe)) : 0;
-        const scratch = context.shade.direct.createScratch({ label: 'ddgi rays', rays: capacity, workItems: probesPerRound * Math.max(0, raysPerProbe - FIXED_RAYS) });
+        const scratch = context.shade.direct.createScratch({
+            label: 'ddgi rays',
+            rays: capacity,
+            workItems: probesPerRound * Math.max(0, raysPerProbe - FIXED_RAYS),
+            // A result per irradiance layer (light groups).
+            layers: resources.plan.layers.length,
+        });
         const arrayView = (target: GPUTexture): GPUTextureView => target.createView({ dimension: '2d-array' });
         const traceGroup = device.createBindGroup({
             label: 'ddgi/trace group 1',
@@ -1428,6 +1637,8 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         if (!resources) return;
         this.resources = null;
         for (const texture of [resources.irradiance, resources.distance, resources.probeData, resources.points]) texture.destroy();
+        resources.compose?.composed.destroy();
+        resources.compose?.weights.destroy();
         for (const buffer of [
             resources.uniforms,
             resources.updateList,

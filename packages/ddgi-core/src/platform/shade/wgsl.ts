@@ -5,6 +5,7 @@
  * ```wgsl
  * fn giSurfaceAt(ray: GiRay, hit: GiHit) -> GiSurface
  * fn giDirectIrradiance(surface: GiSurface, groupMask: u32, random: vec2f) -> vec3f
+ * fn giDirectGroupIrradiance(surface: GiSurface, groupMask: u32, random: vec2f) -> GiDirectGroups  // the same, split by light group 0-3
  * fn giDirectReaches(surface: GiSurface, groupMask: u32) -> bool   // any light in the groups lights this side (no shadow rays)
  * fn giDirectRandom(ray: u32, frame: u32) -> vec2f                  // gi/direct's random numbers for a ray
  * fn giSkyRadiance(direction: vec3f) -> vec3f
@@ -344,20 +345,38 @@ fn giShadeLocalCandidate(candidate: u32, directionalCount: u32, useGrid: bool, c
 }
 
 // Direct light from the lights whose group bit is set in groupMask, as
-// irradiance, shadow rays included.
-//
+// irradiance, shadow rays included: the sum of giDirectGroupIrradiance's four
+// groups. With every light in one group (the usual case) the sum is exactly
+// that group's, light by light in the same order as before light groups.
+fn giDirectIrradiance(surface: GiSurface, groupMask: u32, random: vec2f) -> vec3f {
+    let groups = giDirectGroupIrradiance(surface, groupMask, random);
+    return groups.group0 + groups.group1 + groups.group2 + groups.group3;
+}
+
+// Direct irradiance split by the contract's light groups 0-3 (a light's
+// 'group'), for techniques that keep one layer per group (DDGI's light
+// groups, T2.5). The light choice and the shadow rays are shared: each
+// chosen light's contribution goes to its own group, so every group's sum
+// stays unbiased (a group with few lights is noisier).
+struct GiDirectGroups {
+    group0: vec3f,
+    group1: vec3f,
+    group2: vec3f,
+    group3: vec3f,
+}
+
 // Directional lights are always evaluated. Point and spot lights are first
 // gathered as candidates (giShadeLocalCandidate): every one of them when the
 // scene has up to exactLightLimit (the light grid is off), or the R picks of
 // the hit's cell from the light grid (light-grid.ts) when it has more. Each
 // candidate's unshadowed contribution at the surface, times its share, is
 // its weight. If more candidates have a weight than K (maxShadowedLightsPerHit,
-// or lightGridShadowedLightsPerHit with the grid), K of them are chosen at random with
-// probability proportional to their weight (luminance), by systematic
-// sampling: one random number r = random.x places K evenly spaced points
-// (k + r) / K on the candidates' cumulative distribution. A candidate picked
-// n times counts n * share * f / (K q), where q = its share of the total
-// weight, so the sum is unbiased; a candidate with q >= 1/K is always
+// or lightGridShadowedLightsPerHit with the grid), K of them are chosen at
+// random with probability proportional to their weight (luminance), by
+// systematic sampling: one random number r = random.x places K evenly spaced
+// points (k + r) / K on the candidates' cumulative distribution. A candidate
+// picked n times counts n * share * f / (K q), where q = its share of the
+// total weight, so the sum is unbiased; a candidate with q >= 1/K is always
 // picked. With K or fewer weighted candidates every one is traced: without
 // the grid the answer then has no noise; with it, what is left is the
 // grid's own sampling, which a new grid every frame averages out.
@@ -367,9 +386,10 @@ fn giShadeLocalCandidate(candidate: u32, directionalCount: u32, useGrid: bool, c
 // cell's picks follow a bound that knows neither the surface's normal nor
 // its exact place, and the second stage spends the shadow rays where the
 // real contribution is, so lights behind the surface or at grazing angles
-// cost no rays. A candidate outside groupMask counts 0, which keeps the sum
-// over the mask unbiased.
-fn giDirectIrradiance(surface: GiSurface, groupMask: u32, random: vec2f) -> vec3f {
+// cost no rays. Each chosen light's contribution goes to its own group, and
+// a candidate outside groupMask counts 0, which keeps each group's sum
+// unbiased.
+fn giDirectGroupIrradiance(surface: GiSurface, groupMask: u32, random: vec2f) -> GiDirectGroups {
     let raySide = giShadeRaySide(surface);
     let origin = giShadeOffsetRayOrigin(surface.position, raySide);
     let lightCount = giLightCount();
@@ -404,7 +424,7 @@ fn giDirectIrradiance(surface: GiSurface, groupMask: u32, random: vec2f) -> vec3
     // Second pass, over the directional lights and the local candidates again;
     // one shadow-ray call site keeps the tracer inlined once.
     let evaluations = directionalCount + localCandidates;
-    var total = vec3f(0.0);
+    var totals = GiDirectGroups(vec3f(0.0), vec3f(0.0), vec3f(0.0), vec3f(0.0));
     var cumulative = 0.0;
     var seen = 0u;
     for (var evaluation = 0u; evaluation < evaluations; evaluation++) {
@@ -442,9 +462,15 @@ fn giDirectIrradiance(surface: GiSurface, groupMask: u32, random: vec2f) -> vec3
             }
             scale = share * picks * weightSum / (picksPerHit * weight);
         }
-        total += lightSample.irradiance * (scale * giShadeVisibility(light, index, lightSample, origin, random));
+        let contribution = lightSample.irradiance * (scale * giShadeVisibility(light, index, lightSample, origin, random));
+        // Selects, not an array indexed by the group: a private array indexed
+        // at run time goes to local memory, which is slow (NOTES).
+        totals.group0 += select(vec3f(0.0), contribution, light.group == 0u);
+        totals.group1 += select(vec3f(0.0), contribution, light.group == 1u);
+        totals.group2 += select(vec3f(0.0), contribution, light.group == 2u);
+        totals.group3 += select(vec3f(0.0), contribution, light.group == 3u);
     }
-    return total;
+    return totals;
 }
 
 // Can any light whose group bit is set in groupMask light this surface at

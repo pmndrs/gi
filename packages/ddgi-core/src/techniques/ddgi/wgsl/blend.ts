@@ -74,6 +74,22 @@
  * - a probe that comes back on keeps the updates it was owed, so its two
  *   warming updates come at priority.
  *
+ * Light groups (T2.5, light-groups.ts; m2-lights.md §5): with several
+ * irradiance layers, each ray has a result per layer, and phase C blends
+ * every layer's texels with the probe's one hysteresis (the history is per
+ * probe, shared by its layers), one thread per (layer, texel), all in one
+ * step beside the distance texels. The directions and distances are in
+ * workgroup memory as before; with several layers the radiance is read
+ * straight from the ray buffer instead (every layer's would not fit the
+ * 16 KB of workgroup memory; the threads of a texel row read the same ray at
+ * once, so the reads are shared). The design's first sketch blended the
+ * layers one after the other through one radiance array, which left most of
+ * the workgroup idle in every extra layer: on two-room the blend cost 2.6×
+ * with 5 layers (T2.5). The probe's mean irradiance and noise, and the
+ * opt-in big-change test, are over the layers' sum, the probe's whole light;
+ * the big-change verdict lives in layer 0's alpha. With one layer (groups
+ * off) this is the kernel as it was.
+ *
  * Bindings (group 1; no platform module): uniforms, the update list, the ray
  * buffer, the scratch buffer, the census buffer, the probe history, the
  * feedback requests and the key deltas (7 storage buffers), the mover table
@@ -138,6 +154,7 @@ export const KEY_FIRST_UPDATE_SHARE = 0.8;
 export const KEY_INDEX_BITS = Math.ceil(Math.log2(FIXED_RAYS));
 if (KEY_INDEX_BITS > 8) throw new Error(`@pmndrs/ddgi: ${FIXED_RAYS} fixed rays need ${KEY_INDEX_BITS} key bits; phase B's keys allow 8`);
 const KEY_INDEX_MASK = (1 << KEY_INDEX_BITS) - 1;
+import { MAX_IRRADIANCE_LAYERS } from '../light-groups.ts';
 import { DDGI_COMMON_WGSL } from './common.ts';
 import { DDGI_STOCHASTIC_HALF_WGSL } from './half.ts';
 
@@ -195,6 +212,14 @@ fn ddgiReduceFixedRay(ray: DdgiFixedRayResult) {
 
 export function blendKernelWgsl(shape: BlendKernelShape): string {
     const { irradianceTexels, distanceTexels, scratch, reduction } = shape;
+    // Several irradiance layers (light groups): the radiance is read from the ray buffer (the file comment).
+    const layered = scratch.irradianceLayers > 1;
+    // Every layer's texel estimates and old values sit in workgroup memory beside the rays' directions (the file comment).
+    if (scratch.irradianceLayers > MAX_IRRADIANCE_LAYERS) {
+        throw new Error(
+            `@pmndrs/ddgi: ddgi/blend keeps at most ${MAX_IRRADIANCE_LAYERS} irradiance layers in its 16 KB of workgroup memory, got ${scratch.irradianceLayers} (light-groups.ts, MAX_IRRADIANCE_LAYERS)`,
+        );
+    }
     // An enable directive must come before everything else in the module.
     const enable = reduction === 'subgroups' ? 'enable subgroups;\n' : '';
     return /* wgsl */ `${enable}
@@ -215,6 +240,10 @@ const DDGI_SCRATCH_PROBE_DATA: u32 = ${scratch.probeDataOffset}u;
 const DDGI_SCRATCH_OFFSET_XY: u32 = ${SCRATCH_PROBE_DATA_WORD.offsetXy}u;
 const DDGI_SCRATCH_OFFSET_Z_AND_STATE: u32 = ${SCRATCH_PROBE_DATA_WORD.offsetZAndState}u;
 const DDGI_SCRATCH_TILES_WRITTEN: u32 = ${SCRATCH_PROBE_DATA_WORD.tilesWritten}u;
+// Irradiance layers (light groups, light-groups.ts): each ray has a result per
+// layer, side by side; each layer's texels follow the one before in a scratch slot.
+const DDGI_IRRADIANCE_LAYERS: u32 = ${scratch.irradianceLayers}u;
+const DDGI_SCRATCH_IRRADIANCE_LAYER_WORDS: u32 = ${scratch.irradianceWords}u;
 const DDGI_CENSUS_RAYS_TRACED: u32 = ${CENSUS_RAYS_TRACED}u;
 // Must match the trace kernel: a back-face hit was stored at this share of its distance.
 const DDGI_BACK_FACE_DISTANCE_SHARE: f32 = 0.2;
@@ -249,7 +278,7 @@ const DDGI_CENSUS_KEY_CHANGES_PASSED_TOTAL: u32 = ${CENSUS_KEY_CHANGES_PASSED_TO
 // The key-delta buffer (KEY_DELTA_HEADER in layout.ts): per update-list slot,
 // the key's probe index and clock stamp from before this update, then its
 // change per irradiance texel.
-const DDGI_KEY_DELTA_STRIDE: u32 = ${keyDeltaStrideWords(irradianceTexels)}u;
+const DDGI_KEY_DELTA_STRIDE: u32 = ${keyDeltaStrideWords(irradianceTexels, scratch.irradianceLayers)}u;
 const DDGI_KEY_DELTA_HEADER_WORDS: u32 = ${KEY_DELTA_HEADER_WORDS}u;
 const DDGI_KEY_DELTA_PROBE_INDEX: u32 = ${KEY_DELTA_HEADER.probeIndex}u;
 const DDGI_KEY_DELTA_CLOCK_BEFORE: u32 = ${KEY_DELTA_HEADER.clockBefore}u;
@@ -355,8 +384,9 @@ struct DdgiMoverTable {
 // Per ray: its direction (xyz) and signed hit distance (w, negative = back
 // face). Decoded once here: the blend reads every ray once per texel.
 var<workgroup> ddgiRayDirectionDistance: array<vec4f, DDGI_MAX_RAYS>;
-// Per ray: rgb radiance as half floats (rg, then b and the distance), as the trace wrote it.
-var<workgroup> ddgiRayRadiance: array<vec2u, DDGI_MAX_RAYS>;
+${layered ? '' : `// Per ray: rgb radiance as half floats (rg, then b and the distance), as the
+// trace wrote it. (With several layers the blend reads it from the ray buffer.)
+var<workgroup> ddgiRayRadiance: array<vec2u, DDGI_MAX_RAYS>;`}
 // Phase B's reductions over the fixed rays.
 var<workgroup> ddgiBackFaceCount: atomic<u32>;
 var<workgroup> ddgiNearestBackFace: atomic<u32>;
@@ -378,10 +408,11 @@ var<workgroup> ddgiNextHistory: DdgiProbeHistory;
 var<workgroup> ddgiUpdateKind: u32;
 // 1 when this update is a key probe's that passes its change on (ddgiPassesChange).
 var<workgroup> ddgiPassChange: u32;
-// Phase C: each irradiance texel's new estimate and old value, for the
-// big-change test on the probe's mean.
-var<workgroup> ddgiTexelEstimate: array<vec4f, DDGI_IRRADIANCE_TEXEL_COUNT>;
-var<workgroup> ddgiTexelOld: array<vec4f, DDGI_IRRADIANCE_TEXEL_COUNT>;
+// Phase C: each irradiance texel's new estimate and old value, every layer's
+// (layer L's texel t at L × DDGI_IRRADIANCE_TEXEL_COUNT + t), for the
+// big-change test and the mean over the probe.
+var<workgroup> ddgiTexelEstimate: array<vec4f, DDGI_IRRADIANCE_TEXEL_COUNT * DDGI_IRRADIANCE_LAYERS>;
+var<workgroup> ddgiTexelOld: array<vec4f, DDGI_IRRADIANCE_TEXEL_COUNT * DDGI_IRRADIANCE_LAYERS>;
 
 // One thread's fixed ray, as the reduction combines it.
 struct DdgiFixedRayResult {
@@ -420,6 +451,24 @@ fn ddgiTexelDirection(texel: vec2u, texels: u32) -> vec3f {
 fn ddgiAtlasTexel(probe: vec3i, texel: vec2u, texels: u32) -> vec2i {
     let border = i32(DDGI_TILE_BORDER);
     return probe.xz * (i32(texels) + 2 * border) + border + vec2i(texel);
+}
+
+// The same in irradiance layer 'layer': its tiles are 'layer' probe grids to
+// the right in the layered atlas (light-groups.ts).
+fn ddgiIrradianceAtlasTexel(probe: vec3i, texel: vec2u, layer: u32) -> vec2i {
+    let shifted = probe + vec3i(i32(layer) * i32(ddgiProbeCount().x), 0, 0);
+    return ddgiAtlasTexel(shifted, texel, DDGI_IRRADIANCE_TEXELS);
+}
+
+// A layer's own random numbers for the stochastic rounding: layer 0 keeps
+// the seeds it had before there were layers.
+fn ddgiLayerSeed(layer: u32) -> u32 {
+    return layer * 0x9e3779b9u;
+}
+
+// Where a ray's result in layer 'layer' is in the ray buffer.
+fn ddgiRayResult(slot: u32, rayIndex: u32, layer: u32) -> u32 {
+    return (slot * ddgi.raysPerProbe + rayIndex) * DDGI_IRRADIANCE_LAYERS + layer;
 }
 
 // ---- Phase B: classification and relocation ----
@@ -762,8 +811,9 @@ fn ddgiChangeLimit(pendingChange: f32, flags: u32, promised: f32) -> f32 {
 }
 
 // The cosine-weighted mean radiance of the blended rays around one
-// irradiance texel's direction, times pi: the texel's new estimate of E.
-fn ddgiEstimateIrradianceTexel(texelIndex: u32, blendedRays: u32) -> vec3f {
+// irradiance texel's direction in one layer, times pi: the texel's new
+// estimate of E.
+fn ddgiEstimateIrradianceTexel(slot: u32, layer: u32, texelIndex: u32, blendedRays: u32) -> vec3f {
     let texel = vec2u(texelIndex % DDGI_IRRADIANCE_TEXELS, texelIndex / DDGI_IRRADIANCE_TEXELS);
     let normal = ddgiTexelDirection(texel, DDGI_IRRADIANCE_TEXELS);
     var radianceSum = vec3f(0.0);
@@ -771,7 +821,7 @@ fn ddgiEstimateIrradianceTexel(texelIndex: u32, blendedRays: u32) -> vec3f {
     for (var blended = 0u; blended < blendedRays; blended++) {
         let ray = DDGI_FIXED_RAYS + blended;
         let weight = max(0.0, dot(normal, ddgiRayDirectionDistance[ray].xyz));
-        let packed = ddgiRayRadiance[ray];
+        let packed = ${layered ? 'ddgiRays[ddgiRayResult(slot, ray, layer)]' : 'ddgiRayRadiance[ray]'};
         radianceSum += weight * vec3f(unpack2x16float(packed.x), unpack2x16float(packed.y).x);
         weightSum += weight;
     }
@@ -780,17 +830,21 @@ fn ddgiEstimateIrradianceTexel(texelIndex: u32, blendedRays: u32) -> vec3f {
     return DDGI_PI * radianceSum / max(weightSum, 1.0e-6);
 }
 
-fn ddgiWriteIrradianceTexel(slot: u32, probeIndex: u32, state: u32, texelIndex: u32, probeHysteresis: f32, fastHysteresis: bool, changedNow: bool, passChange: bool) {
-    let base = slot * DDGI_SCRATCH_STRIDE + DDGI_SCRATCH_IRRADIANCE + 2u * texelIndex;
+// One texel of irradiance layer 'layer' (its estimate and old value are in
+// ddgiTexelEstimate and ddgiTexelOld). 'changedNow' is the big-change
+// verdict, which only layer 0's alpha carries.
+fn ddgiWriteIrradianceTexel(slot: u32, probeIndex: u32, state: u32, layer: u32, texelIndex: u32, probeHysteresis: f32, fastHysteresis: bool, changedNow: bool, passChange: bool) {
+    let base = slot * DDGI_SCRATCH_STRIDE + DDGI_SCRATCH_IRRADIANCE + layer * DDGI_SCRATCH_IRRADIANCE_LAYER_WORDS + 2u * texelIndex;
+    let item = layer * DDGI_IRRADIANCE_TEXEL_COUNT + texelIndex;
     if (ddgiUpdateKind == DDGI_UPDATE_HELD) {
         // The test mode: the old texel as it is, alpha included (exact half floats pack exactly).
-        let kept = ddgiTexelOld[texelIndex];
+        let kept = ddgiTexelOld[item];
         ddgiScratch[base] = pack2x16float(kept.rg);
         ddgiScratch[base + 1u] = pack2x16float(kept.ba);
         return;
     }
-    let estimate = ddgiTexelEstimate[texelIndex].rgb;
-    let old = ddgiTexelOld[texelIndex].rgb;
+    let estimate = ddgiTexelEstimate[item].rgb;
+    let old = ddgiTexelOld[item].rgb;
     var hysteresis = probeHysteresis;
     if (fastHysteresis) {
         hysteresis *= DDGI_BIG_CHANGE_HYSTERESIS_SCALE;
@@ -808,14 +862,14 @@ fn ddgiWriteIrradianceTexel(slot: u32, probeIndex: u32, state: u32, texelIndex: 
         let limit = ddgi.maxBrightnessChange * max(old, vec3f(DDGI_SMALLEST_NORMAL_HALF));
         blendedValue = old + clamp(blendedValue - old, -limit, limit);
     }
-    let seed = probeIndex * DDGI_IRRADIANCE_TEXEL_COUNT + texelIndex;
+    let seed = (probeIndex * DDGI_IRRADIANCE_TEXEL_COUNT + texelIndex) ^ ddgiLayerSeed(layer);
     ddgiScratch[base] = ddgiPackHalves(blendedValue.r, blendedValue.g, seed);
-    // Alpha carries this update's big-change verdict to the next update.
+    // Alpha carries this update's big-change verdict to the next update (layer 0's).
     ddgiScratch[base + 1u] = ddgiPackHalves(blendedValue.b, select(0.0, 1.0, changedNow), seed ^ 0x5bd1e995u);
     if (passChange) {
         // The change this update made, for the key's fine neighbours (ddgi/propagate).
         let change = blendedValue - old;
-        let deltaBase = slot * DDGI_KEY_DELTA_STRIDE + DDGI_KEY_DELTA_HEADER_WORDS + 2u * texelIndex;
+        let deltaBase = slot * DDGI_KEY_DELTA_STRIDE + DDGI_KEY_DELTA_HEADER_WORDS + layer * DDGI_SCRATCH_IRRADIANCE_LAYER_WORDS + 2u * texelIndex;
         ddgiKeyDeltas[deltaBase] = pack2x16float(change.rg);
         ddgiKeyDeltas[deltaBase + 1u] = pack2x16float(vec2f(change.b, 0.0));
     }
@@ -1013,11 +1067,12 @@ fn ddgiBlend(
     let origin = ddgiProbePosition(probe, probeData.offset);
     var moverBits = 0u;
     for (var rayIndex = thread; rayIndex < tracedRays; rayIndex += DDGI_BLEND_WORKGROUP_SIZE) {
-        let record = ddgiRays[slot * ddgi.raysPerProbe + rayIndex];
+        // Layer 0's result, which carries the hit distance (and is the only one with groups off).
+        let record = ddgiRays[ddgiRayResult(slot, rayIndex, 0u)];
         let signedDistance = unpack2x16float(record.y).y;
         let directionDistance = vec4f(ddgiRayDirection(rayIndex), signedDistance);
         ddgiRayDirectionDistance[rayIndex] = directionDistance;
-        ddgiRayRadiance[rayIndex] = record;
+${layered ? '' : '        ddgiRayRadiance[rayIndex] = record;'}
         // Blended rays only: the mask says what the probe's light came from.
         if (rayIndex >= DDGI_FIXED_RAYS) {
             moverBits |= ddgiMoverBits(origin, directionDistance);
@@ -1040,6 +1095,10 @@ fn ddgiBlend(
         let blendThisUpdate = decision.state == DDGI_STATE_ACTIVE && !ddgiIsOff(state);
         ddgiBlendThisUpdate = select(0u, 1u, blendThisUpdate);
         ddgiPassChange = 0u;
+        ddgiChangedNow = 0u;
+        // The previous update's big-change verdict (layer 0's alpha), read once here:
+        // phase C blends every layer's texels with it at once.
+        ddgiFastHysteresis = select(0u, 1u, textureLoad(ddgiIrradianceAtlas, ddgiIrradianceAtlasTexel(probe, vec2u(0u), 0u), probe.y, 0).a > 0.5);
         var newState = decision.state;
         if (blendThisUpdate) {
             // One workgroup per probe in the list, and a probe is listed at
@@ -1087,25 +1146,31 @@ fn ddgiBlend(
         return;
     }
     let hysteresis = workgroupUniformLoad(&ddgiUpdateHysteresis);
+    let fastHysteresis = workgroupUniformLoad(&ddgiFastHysteresis) != 0u;
+    let passChange = workgroupUniformLoad(&ddgiPassChange) != 0u;
 
     // ---- Phase C ----
-    // Step 1: each irradiance texel's estimate and old value; the distance texels in full.
-    for (var texelIndex = thread; texelIndex < DDGI_IRRADIANCE_TEXEL_COUNT + DDGI_DISTANCE_TEXEL_COUNT; texelIndex += DDGI_BLEND_WORKGROUP_SIZE) {
-        if (texelIndex < DDGI_IRRADIANCE_TEXEL_COUNT) {
+    // Step 1: every layer's irradiance texels (one thread a layer and texel)
+    // and the distance texels, side by side: each texel's estimate and old value.
+    let layerTexels = DDGI_IRRADIANCE_TEXEL_COUNT * DDGI_IRRADIANCE_LAYERS;
+    for (var item = thread; item < layerTexels + DDGI_DISTANCE_TEXEL_COUNT; item += DDGI_BLEND_WORKGROUP_SIZE) {
+        if (item < layerTexels) {
+            let layer = item / DDGI_IRRADIANCE_TEXEL_COUNT;
+            let texelIndex = item % DDGI_IRRADIANCE_TEXEL_COUNT;
             let texel = vec2u(texelIndex % DDGI_IRRADIANCE_TEXELS, texelIndex / DDGI_IRRADIANCE_TEXELS);
-            ddgiTexelEstimate[texelIndex] = vec4f(ddgiEstimateIrradianceTexel(texelIndex, blendedRays), 0.0);
-            ddgiTexelOld[texelIndex] = textureLoad(ddgiIrradianceAtlas, ddgiAtlasTexel(probe, texel, DDGI_IRRADIANCE_TEXELS), probe.y, 0);
+            ddgiTexelEstimate[item] = vec4f(ddgiEstimateIrradianceTexel(slot, layer, texelIndex, blendedRays), 0.0);
+            ddgiTexelOld[item] = textureLoad(ddgiIrradianceAtlas, ddgiIrradianceAtlasTexel(probe, texel, layer), probe.y, 0);
         } else {
-            ddgiBlendDistanceTexel(slot, probeIndex, probe, texelIndex - DDGI_IRRADIANCE_TEXEL_COUNT, blendedRays, hysteresis);
+            ddgiBlendDistanceTexel(slot, probeIndex, probe, item - layerTexels, blendedRays, hysteresis);
         }
     }
     workgroupBarrier();
 
     // Step 2: the big-change test, opt-in (irradianceChangeThreshold; a
     // negative value means off, the M1 default, DECISIONS 2026-11-05). It
-    // looks at the probe's mean irradiance against its old mean, not per
-    // texel, and its verdict sets the hysteresis of the probe's *next* update,
-    // not this one.
+    // looks at the probe's mean irradiance against its old mean (over every
+    // layer, the probe's whole light), not per texel, and its verdict sets the
+    // hysteresis of the probe's *next* update, not this one.
     // Why not this one: a test on this update's estimate is tripped by its own
     // ray noise, and the noise is skewed (a few rays find a small bright spot),
     // so the updates that trip are mostly the bright ones, and they get the
@@ -1114,30 +1179,29 @@ fn ddgiBlend(
     // with no test: +3.3%, T1.5b). The next update's rays are independent of
     // this one's noise, so it blends without bias, and a real light switch
     // still trips the test again and gets the fast hysteresis one update late.
-    // The verdict travels in the irradiance atlas's alpha, which nothing samples.
+    // The verdict travels in layer 0's irradiance alpha, which nothing samples
+    // (thread 0 read it in phase B).
     if (thread == 0u) {
         var estimateSum = vec3f(0.0);
         var oldSum = vec3f(0.0);
-        for (var texelIndex = 0u; texelIndex < DDGI_IRRADIANCE_TEXEL_COUNT; texelIndex++) {
-            estimateSum += ddgiTexelEstimate[texelIndex].rgb;
-            oldSum += ddgiTexelOld[texelIndex].rgb;
+        for (var item = 0u; item < layerTexels; item++) {
+            estimateSum += ddgiTexelEstimate[item].rgb;
+            oldSum += ddgiTexelOld[item].rgb;
         }
         // The same share applies to the sums as to the means.
         let ruleOn = ddgi.irradianceChangeThreshold >= 0.0;
         ddgiChangedNow = select(0u, 1u, ruleOn && any(abs(estimateSum - oldSum) > ddgi.irradianceChangeThreshold * oldSum));
-        ddgiFastHysteresis = select(0u, 1u, ddgiTexelOld[0].a > 0.5);
         // A held probe (the test mode) keeps its record as it is.
         if (ddgiUpdateKind != DDGI_UPDATE_HELD) {
-            ddgiWriteHistory(probeIndex, probe, estimateSum, oldSum, hysteresis, ddgiFastHysteresis != 0u);
+            ddgiWriteHistory(probeIndex, probe, estimateSum, oldSum, hysteresis, fastHysteresis);
         }
     }
     let changedNow = workgroupUniformLoad(&ddgiChangedNow) != 0u;
-    let fastHysteresis = workgroupUniformLoad(&ddgiFastHysteresis) != 0u;
-    let passChange = workgroupUniformLoad(&ddgiPassChange) != 0u;
 
-    // Step 3: blend every irradiance texel with the probe's hysteresis.
-    for (var texelIndex = thread; texelIndex < DDGI_IRRADIANCE_TEXEL_COUNT; texelIndex += DDGI_BLEND_WORKGROUP_SIZE) {
-        ddgiWriteIrradianceTexel(slot, probeIndex, state, texelIndex, hysteresis, fastHysteresis, changedNow, passChange);
+    // Step 3: blend every irradiance texel of every layer with the probe's hysteresis.
+    for (var item = thread; item < layerTexels; item += DDGI_BLEND_WORKGROUP_SIZE) {
+        let layer = item / DDGI_IRRADIANCE_TEXEL_COUNT;
+        ddgiWriteIrradianceTexel(slot, probeIndex, state, layer, item % DDGI_IRRADIANCE_TEXEL_COUNT, hysteresis, fastHysteresis, changedNow && layer == 0u, passChange);
     }
 }
 `;

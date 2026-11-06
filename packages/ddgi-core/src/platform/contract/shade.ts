@@ -43,6 +43,11 @@ import type { WgslModule } from './wgsl';
  * // (random.x) and soft-shadow samples between calls.
  * fn giDirectIrradiance(surface: GiSurface, groupMask: u32, random: vec2f) -> vec3f
  *
+ * // The same light choice and shadow rays, the result split by the lights'
+ * // group (struct GiDirectGroups { group0, group1, group2, group3: vec3f }).
+ * // giDirectIrradiance is the sum of the four.
+ * fn giDirectGroupIrradiance(surface: GiSurface, groupMask: u32, random: vec2f) -> GiDirectGroups
+ *
  * // Whether any light in the groups lights the surface's side at all
  * // (giDirectIrradiance would evaluate it); no shadow rays.
  * fn giDirectReaches(surface: GiSurface, groupMask: u32) -> bool
@@ -133,17 +138,24 @@ export type DirectWorkList = 'subgroups' | 'atomics';
  * `gi/direct` adds `albedo / π × direct` into the radiance and leaves the
  * technique's half alone. The technique owns the scratch: it creates it with
  * {@link DeferredDirectLight.createScratch} and destroys it.
+ *
+ * A scratch may hold several results per ray, its `layers` (T2.5, for a
+ * technique that keeps light groups apart): ray `i`'s layer `l` is result
+ * `i × layers + l`, and each light group's direct light goes into the layer
+ * {@link DirectLightFrame.groupLayers} names.
  */
 export interface RayScratch {
     readonly buffer: GPUBuffer;
-    /** Ray results it holds. */
+    /** Rays it holds results for. */
     readonly rayCapacity: number;
     /** Work items (hits needing direct light) one tracing dispatch may append. */
     readonly itemCapacity: number;
+    /** Results per ray (1 unless the technique asked for more). */
+    readonly layers: number;
     /**
      * The ray results alone, as a binding: kernels that only read finished
      * radiance (a technique's blend) bind this range as `array<vec2u>`,
-     * ray `i` at index `i`.
+     * ray `i`'s layer `l` at index `i × layers + l`.
      */
     readonly rayResults: GPUBufferBinding;
     /**
@@ -164,6 +176,12 @@ export interface DirectLightFrame {
     readonly frame: number;
     /** The light groups whose lights count, a bit per group (bits 0-3). */
     readonly groupMask: number;
+    /**
+     * For light groups 0-3, the result layer that gets the group's direct
+     * light, each below the scratch's `layers`. Omitted: every group goes into
+     * layer 0.
+     */
+    readonly groupLayers?: readonly number[];
     /** The calling technique's id: the pass is timed as `<owner>/gi-direct`, so it counts towards the technique's budget. */
     readonly owner: string;
     readonly timer: GpuTimerScope;
@@ -174,7 +192,8 @@ export interface DirectLightFrame {
  *
  * 1. binds its {@link RayScratch} as one `read_write` storage buffer named
  *    by the technique, and includes {@link traceWgsl} for that name;
- * 2. stores each ray's result with `giStoreRayResult`;
+ * 2. stores each ray's result with `giStoreRayResult` (layer 0), or each
+ *    layer's with `giStoreRayLayerResult`;
  * 3. for a hit that should get direct light, asks `giNeedsDirect(surface)`
  *    (any light of this frame's groups reaching it), makes its record with
  *    `giSurfaceRecord(surface)`, and every thread of the workgroup calls
@@ -185,14 +204,15 @@ export interface DirectLightFrame {
  * struct GiSurfaceRecord { ... }   // opaque: build it with giSurfaceRecord
  * fn giSurfaceRecord(surface: GiSurface) -> GiSurfaceRecord
  * fn giStoreRayResult(ray: u32, radiance: vec3f, techniqueHalf: f32)
+ * fn giStoreRayLayerResult(ray: u32, layer: u32, radiance: vec3f, techniqueHalf: f32)
  * fn giNeedsDirect(surface: GiSurface) -> bool
  * fn giDeferDirect(deferred: bool, record: GiSurfaceRecord, ray: u32)
  * ```
  *
  * Then the technique calls {@link encode} once per tracing dispatch, after
- * it: `gi/direct` adds the direct light into the listed rays' results and
- * empties the list for the next dispatch. Kernels after it read finished
- * radiance.
+ * it: `gi/direct` adds the direct light into the listed rays' results (each
+ * light group's into its layer) and empties the list for the next dispatch.
+ * Kernels after it read finished radiance.
  */
 export interface DeferredDirectLight {
     /** The work list a kernel should use on this device: `subgroups` when it has the feature. */
@@ -201,8 +221,8 @@ export interface DeferredDirectLight {
     prepare(): Promise<void>;
     /** The tracing kernel's side, for a scratch bound as `scratchVariable` (includes `enable subgroups;` for `subgroups`). */
     traceWgsl(scratchVariable: string, workList: DirectWorkList): string;
-    /** A ray scratch for `rays` results and `workItems` work items. */
-    createScratch(options: { readonly label: string; readonly rays: number; readonly workItems: number }): RayScratch;
+    /** A ray scratch for `rays` rays of `layers` results each (default 1, at most 8) and `workItems` work items. */
+    createScratch(options: { readonly label: string; readonly rays: number; readonly workItems: number; readonly layers?: number }): RayScratch;
     /** Records `gi/direct` over the scratch's list into the encoder (one compute pass). */
     encode(encoder: GPUCommandEncoder, scratch: RayScratch, frame: DirectLightFrame): void;
 }

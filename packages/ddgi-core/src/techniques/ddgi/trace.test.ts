@@ -2,10 +2,12 @@ import { describe, expect, it } from 'vitest';
 import { rayScratchTraceWgsl, RAY_RESULT_BYTES, WORK_ITEM_BYTES } from '../../platform/shade/direct.ts';
 import { RAY_RECORD_BYTES } from './layout.ts';
 import { DEFAULT_DDGI_SETTINGS, FIXED_RAYS } from './settings.ts';
+import { defaultLightGroups, layerPlan } from './light-groups.ts';
 import { DDGI_LIGHT_GROUP_MASK, DDGI_TRACE_WGSL, deferredTraceKernelWgsl, DIRECT_ROUND_PROBES } from './wgsl/trace.ts';
 
 describe('ddgi/trace with direct light deferred', () => {
-    const deferred = deferredTraceKernelWgsl(rayScratchTraceWgsl('ddgiRayScratch', 'subgroups'));
+    const deferred = deferredTraceKernelWgsl(rayScratchTraceWgsl('ddgiRayScratch', 'subgroups'), layerPlan(null));
+    const layered = deferredTraceKernelWgsl(rayScratchTraceWgsl('ddgiRayScratch', 'subgroups'), layerPlan(defaultLightGroups(2)));
 
     it("stores its rays in the platform's ray results, which the blend reads as its own records", () => {
         expect(RAY_RECORD_BYTES).toBe(RAY_RESULT_BYTES);
@@ -25,10 +27,27 @@ describe('ddgi/trace with direct light deferred', () => {
     });
 
     it('reaches the append from every thread: no return after the round check', () => {
-        const body = deferred.slice(deferred.indexOf('fn ddgiTrace('));
-        const afterRoundCheck = body.slice(body.indexOf('slot >= ddgi.updateCount'));
-        expect(afterRoundCheck.match(/\breturn\b/g)).toHaveLength(1);
-        expect(afterRoundCheck.trimEnd().endsWith('giDeferDirect(deferred, record, rayRecord);\n}')).toBe(true);
+        for (const code of [deferred, layered]) {
+            const body = code.slice(code.indexOf('fn ddgiTrace('));
+            const afterRoundCheck = body.slice(body.indexOf('slot >= ddgi.updateCount'));
+            expect(afterRoundCheck.match(/\breturn\b/g)).toHaveLength(1);
+            expect(afterRoundCheck.trimEnd().endsWith('giDeferDirect(deferred, record, rayRecord);\n}')).toBe(true);
+        }
+    });
+
+    it("with groups off, reads the bounce through renderers' one sampling function and stores one result per ray", () => {
+        expect(deferred).toContain('ddgiSampleIrradiance(');
+        expect(deferred).toContain('giStoreRayResult(rayRecord, radiance, signedDistance);');
+        expect(deferred).not.toContain('giStoreRayLayerResult(rayRecord');
+    });
+
+    it('with 2 groups, stores 3 layers per ray from one set of probe weights, the sky and emission in the environment layer', () => {
+        for (const layer of [0, 1, 2]) expect(layered).toContain(`giStoreRayLayerResult(rayRecord, ${layer}u, radiance.layer${layer}`);
+        expect(layered).not.toContain('radiance.layer3');
+        // The weights come from the corner-weight function renderers use: in their loop, and once in the layered lookup.
+        expect(layered.match(/ddgiCornerWeight\(corner, volume, cage/g)).toHaveLength(2);
+        expect(layered).toContain('radiance.layer2 = giSkyRadiance(direction);');
+        expect(layered).toContain('result.layer2 += surface.emission;');
     });
 
     it("sizes one round's work list at about 7.3 MB with the default rays per probe", () => {

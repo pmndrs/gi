@@ -61,25 +61,39 @@ export function atlasSize(grid: ProbeGrid, interiorTexels: number): AtlasSize {
 }
 
 export interface FieldLayout {
+    /** What renderers sample: one block (the composed atlas when there are light groups, else the field's one layer). */
     readonly irradiance: AtlasSize;
     readonly distance: AtlasSize;
     readonly probeData: AtlasSize;
     readonly distanceFormat: DistanceFormat;
+    /** Irradiance layers (light groups, light-groups.ts): 1 with groups off. */
+    readonly irradianceLayers: number;
+    /**
+     * The atlas the update writes: the layers as blocks side by side in each
+     * array layer, layer L's tile of probe (x, z) at ((L × nx + x) × tile,
+     * z × tile) (m2-lights.md §5, §6.3 "Layout"). The same as `irradiance`
+     * with one layer.
+     */
+    readonly layeredIrradiance: AtlasSize;
 }
 
-export function fieldLayout(grid: ProbeGrid, irradianceTexels: number, distanceTexels: number, distanceFormat: DistanceFormat): FieldLayout {
+export function fieldLayout(grid: ProbeGrid, irradianceTexels: number, distanceTexels: number, distanceFormat: DistanceFormat, irradianceLayers = 1): FieldLayout {
+    const irradiance = atlasSize(grid, irradianceTexels);
     return {
-        irradiance: atlasSize(grid, irradianceTexels),
+        irradiance,
         distance: atlasSize(grid, distanceTexels),
         // One texel per probe, no border.
         probeData: { width: grid.counts[0], height: grid.counts[2], layers: grid.counts[1], tile: 1 },
         distanceFormat,
+        irradianceLayers,
+        layeredIrradiance: { ...irradiance, width: irradiance.width * irradianceLayers },
     };
 }
 
 /** Throws `GILimitError` naming the first texture limit the layout is past. */
 export function checkFieldLimits(layout: FieldLayout, limits: Pick<GPUSupportedLimits, 'maxTextureDimension2D' | 'maxTextureArrayLayers'>): void {
-    for (const atlas of [layout.irradiance, layout.distance]) {
+    // The layered atlas is the widest (nx × tile × layers ≤ maxTextureDimension2D, m2-lights.md §6.3).
+    for (const atlas of [layout.layeredIrradiance, layout.distance]) {
         const largest = Math.max(atlas.width, atlas.height);
         if (largest > limits.maxTextureDimension2D) throw new GILimitError('maxTextureDimension2D', largest, limits.maxTextureDimension2D);
     }
@@ -88,10 +102,11 @@ export function checkFieldLimits(layout: FieldLayout, limits: Pick<GPUSupportedL
     }
 }
 
-/** Bytes of the three textures. */
+/** Bytes of the atlases: the layered irradiance, the composed one when there are layers to compose, distance and probe data. */
 export function fieldBytes(layout: FieldLayout): number {
     const bytes = (atlas: AtlasSize, bytesPerTexel: number): number => atlas.width * atlas.height * atlas.layers * bytesPerTexel;
-    return bytes(layout.irradiance, 8) + bytes(layout.distance, BYTES_PER_TEXEL[layout.distanceFormat]) + bytes(layout.probeData, 8);
+    const composed = layout.irradianceLayers > 1 ? bytes(layout.irradiance, 8) : 0;
+    return bytes(layout.layeredIrradiance, 8) + composed + bytes(layout.distance, BYTES_PER_TEXEL[layout.distanceFormat]) + bytes(layout.probeData, 8);
 }
 
 /**
@@ -99,12 +114,16 @@ export function fieldBytes(layout: FieldLayout): number {
  * update kernel and copied into the atlases by the write kernel. Values are
  * packed with `pack2x16float`, the atlases' own precision.
  *
- * - irradiance: 2 words per interior texel (rg, then b with 0);
+ * - irradiance: 2 words per interior texel (rg, then b with 0), for each
+ *   irradiance layer in turn (layer L from `irradianceOffset + L × irradianceWords`);
  * - distance: 1 word per interior texel (mean, mean squared);
  * - probe data: 2 words (offset xy, then offset z with the state).
  */
 export interface ScratchLayout {
+    /** Words of one irradiance layer's texels. */
     readonly irradianceWords: number;
+    /** Irradiance layers per slot (light groups; 1 with groups off). */
+    readonly irradianceLayers: number;
     readonly distanceWords: number;
     readonly probeDataWords: number;
     /** Words per probe slot. */
@@ -127,17 +146,19 @@ export const SCRATCH_PROBE_DATA_WORDS = 3;
 /** Where the probe-data words sit inside that part. */
 export const SCRATCH_PROBE_DATA_WORD = { offsetXy: 0, offsetZAndState: 1, tilesWritten: 2 } as const;
 
-export function scratchLayout(irradianceTexels: number, distanceTexels: number): ScratchLayout {
+export function scratchLayout(irradianceTexels: number, distanceTexels: number, irradianceLayers = 1): ScratchLayout {
     const irradianceWords = irradianceTexels * irradianceTexels * SCRATCH_WORDS_PER_IRRADIANCE_TEXEL;
     const distanceWords = distanceTexels * distanceTexels * SCRATCH_WORDS_PER_DISTANCE_TEXEL;
+    const allIrradianceWords = irradianceWords * irradianceLayers;
     return {
         irradianceWords,
+        irradianceLayers,
         distanceWords,
         probeDataWords: SCRATCH_PROBE_DATA_WORDS,
-        strideWords: irradianceWords + distanceWords + SCRATCH_PROBE_DATA_WORDS,
+        strideWords: allIrradianceWords + distanceWords + SCRATCH_PROBE_DATA_WORDS,
         irradianceOffset: 0,
-        distanceOffset: irradianceWords,
-        probeDataOffset: irradianceWords + distanceWords,
+        distanceOffset: allIrradianceWords,
+        probeDataOffset: allIrradianceWords + distanceWords,
     };
 }
 
@@ -472,21 +493,23 @@ export function keyNeighbourOffset(neighbour: number, coordinates: readonly [num
  * read by `ddgi/propagate` in the same frame. An entry is a header (the key's
  * probe index and its change-clock stamp from before this update, G_prev),
  * then the change this update made, new − old, per interior irradiance
- * texel, as half floats (rg, then b and 0): 288 bytes a layer at 6×6 texels.
+ * texel, as half floats (rg, then b and 0): 288 bytes a layer at 6×6 texels,
+ * for each irradiance layer in turn (light groups).
  */
 export const KEY_DELTA_HEADER = { probeIndex: 0, clockBefore: 1 } as const;
 export const KEY_DELTA_HEADER_WORDS = 2;
-export function keyDeltaStrideWords(irradianceTexels: number): number {
-    return KEY_DELTA_HEADER_WORDS + irradianceTexels * irradianceTexels * SCRATCH_WORDS_PER_IRRADIANCE_TEXEL;
+export function keyDeltaStrideWords(irradianceTexels: number, irradianceLayers = 1): number {
+    return KEY_DELTA_HEADER_WORDS + irradianceLayers * irradianceTexels * irradianceTexels * SCRATCH_WORDS_PER_IRRADIANCE_TEXEL;
 }
 
 /**
  * Propagation's own scratch (T2.4c): per entry of its compacted list of fine
  * probes, the probe's new irradiance texels, packed as the update scratch
- * packs them (rg, then b and the alpha the atlas keeps), for its own write.
+ * packs them (rg, then b and the alpha the atlas keeps), for its own write;
+ * each irradiance layer in turn.
  */
-export function propagationScratchStrideWords(irradianceTexels: number): number {
-    return irradianceTexels * irradianceTexels * SCRATCH_WORDS_PER_IRRADIANCE_TEXEL;
+export function propagationScratchStrideWords(irradianceTexels: number, irradianceLayers = 1): number {
+    return irradianceLayers * irradianceTexels * irradianceTexels * SCRATCH_WORDS_PER_IRRADIANCE_TEXEL;
 }
 
 /**

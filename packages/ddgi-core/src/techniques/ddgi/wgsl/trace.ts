@@ -30,19 +30,30 @@
  *   (the ray's index and the frame), as `gi/direct` does, so the two paths'
  *   fields can be compared texel by texel (`ddgi-direct`).
  *
+ * **Light groups** (T2.5, light-groups.ts; deferred only): each irradiance
+ * layer gets a result of its own per ray. One closest hit per ray, as
+ * without layers; the bounce lookup works out the 8 probes' weights once
+ * (`ddgiCornerWeight`, the same code renderers use) and reads each layer's
+ * irradiance with them, so a layer's bounce comes from that layer alone
+ * (SPEC's HomeFig rule 1). The sky and emission go into the environment
+ * layer, and `gi/direct` puts each light group's direct light into its own.
+ *
  * Uses the platform's group 0 (scene copy, rays, hit shading) and its own
  * group 1. Storage buffers: tracer 3 + scene copy 2 + update list + the ray
- * scratch (deferred) or its ray results (inline) = 7.
+ * scratch (deferred) or its ray results (inline) = 7, with or without layers
+ * (the layers are in the one ray scratch).
  */
 
+import type { LayerPlan } from '../light-groups.ts';
 import { DDGI_COMMON_WGSL } from './common.ts';
 
 export const TRACE_WORKGROUP_SIZE = 64;
 
 /**
- * The light groups whose lights reach DDGI's probes: every group, until
- * light groups (T2.5) give each its own layer. The one definition: the inline
- * kernel's WGSL and the deferred path's `gi/direct` both take it from here.
+ * The light groups whose lights reach DDGI's probes: every group. With light
+ * groups on (T2.5) each still reaches them, into its own layer
+ * (`DirectLightFrame.groupLayers`). The one definition: the inline kernel's
+ * WGSL and the deferred path's `gi/direct` both take it from here.
  */
 export const DDGI_LIGHT_GROUP_MASK = 0xf;
 
@@ -161,16 +172,158 @@ fn ddgiTrace(
 }
 `;
 
+/** A ray's shading and its results, with one irradiance layer (groups off): M1's sums. */
+const ONE_LAYER_RESULTS_WGSL = /* wgsl */ `
+        var radiance = vec3f(0.0);
+        var signedDistance: f32;
+        if (hit.t < 0.0) {
+            signedDistance = DDGI_MISS_DISTANCE;
+            if (!isFixed) {
+                radiance = giSkyRadiance(direction);
+            }
+        } else if (!hit.frontFace) {
+            // Back faces are black and short (see DDGI_BACK_FACE_DISTANCE_SHARE).
+            signedDistance = -DDGI_BACK_FACE_DISTANCE_SHARE * hit.t;
+        } else {
+            signedDistance = hit.t;
+            if (!isFixed) {
+                let surface = giSurfaceAt(ray, hit);
+                radiance = ddgiEmittedAndBounced(ray, surface);
+                // Only hits a light can reach go on the list (half of Sponza's face away from the sun).
+                deferred = giNeedsDirect(surface);
+                if (deferred) {
+                    record = giSurfaceRecord(surface);
+                }
+            }
+        }
+        giStoreRayResult(rayRecord, radiance, signedDistance);`;
+
+/** Emission plus albedo / π × bounce, with one irradiance layer: M1's lookup through `ddgiSampleIrradiance`. */
+const ONE_LAYER_SHADING_WGSL = /* wgsl */ `
+// Emission + albedo / pi × bounce light from the current field. The direct
+// part, albedo / pi × direct light, is added by gi/direct.
+fn ddgiEmittedAndBounced(ray: GiRay, surface: GiSurface) -> vec3f {
+    // Bounce light from the current field: the field already holds every
+    // earlier bounce, so this gives unlimited bounces over updates.
+    let bounce = ddgiSampleIrradiance(
+        surface.position, surface.normal, ray.direction,
+        ddgiIrradianceAtlas, ddgiAtlasSampler, ddgiDistanceAtlas, ddgiAtlasSampler, ddgiProbeData,
+        ddgi.volumeOrigin, ddgi.volumeSpacing, ddgi.volumeCounts, ddgi.volumeTexels,
+    );
+    return surface.emission + surface.albedo * (1.0 / DDGI_PI) * (ddgi.bounceEnergy * bounce);
+}
+`;
+
+/** `layer0, layer1, ...` for each layer of a plan, each line built by `line(layer)`. */
+function perLayer(plan: LayerPlan, line: (layer: number) => string, separator = '\n'): string {
+    return plan.layers.map((_, layer) => line(layer)).join(separator);
+}
+
+/**
+ * The layered bounce lookup and shading (light groups): every layer's
+ * irradiance read with one set of probe weights, each written out with a
+ * constant index (a loop indexing a private array would put it in local
+ * memory, NOTES).
+ */
+function layeredShadingWgsl(plan: LayerPlan): string {
+    const layers = plan.layers.length;
+    return /* wgsl */ `
+// One value per irradiance layer (light-groups.ts): ${plan.layers.map((layer, index) => `${index} ${layer.kind}${layer.kind === 'lightGroup' ? ` ${layer.group}` : ''}`).join(', ')}.
+struct DdgiLayerRadiance {
+${perLayer(plan, (layer) => `    layer${layer}: vec3f,`)}
+}
+
+const DDGI_IRRADIANCE_LAYERS: f32 = ${layers}.0;
+
+// The field's irradiance in every layer at a surface point: the 8 probes'
+// weights once (ddgiCornerWeight, as ddgiAccumulateField has them), each
+// layer's tile read with them. Layer L's tile sits L blocks of the probe grid
+// to the right (light-groups.ts), so its coordinates are layer 0's plus L / layers.
+fn ddgiLayeredIrradiance(position: vec3f, normal: vec3f, viewDirection: vec3f) -> DdgiLayerRadiance {
+    let volume = ddgiUniformVolume();
+    let samplePoint = ddgiBiasedPoint(volume, position, normal, viewDirection);
+    let cage = ddgiCage(volume, samplePoint);
+    let blockScale = ddgiAtlasScale(volume.irradianceTexels, volume.counts);
+    // The layered atlas is 'layers' blocks wide.
+    let irradianceScale = DdgiAtlasScale(blockScale.tile, blockScale.inverseSize * vec2f(1.0 / DDGI_IRRADIANCE_LAYERS, 1.0));
+    let distanceScale = ddgiAtlasScale(volume.distanceTexels, volume.counts);
+    let normalInTile = ddgiTileTexel(normal, volume.irradianceTexels);
+    var sums = DdgiLayerRadiance();
+    var weightSum = 0.0;
+    for (var corner = 0u; corner < 8u; corner++) {
+        let weighted = ddgiCornerWeight(corner, volume, cage, samplePoint, position, normal, ddgiDistanceAtlas, ddgiAtlasSampler, ddgiProbeData, distanceScale);
+        if (!weighted.counts) {
+            continue;
+        }
+        let uv = ddgiTileUv(normalInTile, weighted.probe, irradianceScale);
+${perLayer(plan, (layer) => `        sums.layer${layer} += weighted.weight * textureSampleLevel(ddgiIrradianceAtlas, ddgiAtlasSampler, uv + vec2f(${layer}.0 / DDGI_IRRADIANCE_LAYERS, 0.0), weighted.probe.y, 0.0).rgb;`)}
+        weightSum += weighted.weight;
+    }
+    let weight = max(weightSum, DDGI_MIN_WEIGHT_SUM);
+    return DdgiLayerRadiance(${perLayer(plan, (layer) => `sums.layer${layer} / weight`, ', ')});
+}
+
+// Per layer: albedo / pi × that layer's bounce (each layer bounces only its
+// own light), and emission in the environment layer (${plan.environmentLayer}). The direct part,
+// albedo / pi × each group's direct light, is added to its layer by gi/direct.
+fn ddgiEmittedAndBouncedLayers(ray: GiRay, surface: GiSurface) -> DdgiLayerRadiance {
+    let bounce = ddgiLayeredIrradiance(surface.position, surface.normal, ray.direction);
+    let reflected = surface.albedo * (1.0 / DDGI_PI) * ddgi.bounceEnergy;
+    var result = DdgiLayerRadiance(${perLayer(plan, (layer) => `reflected * bounce.layer${layer}`, ', ')});
+    result.layer${plan.environmentLayer} += surface.emission;
+    return result;
+}
+`;
+}
+
+/** A ray's shading and its results with layers: the sky into the environment layer, the hit distance with layer 0. */
+function layeredResultsWgsl(plan: LayerPlan): string {
+    return /* wgsl */ `
+        var radiance = DdgiLayerRadiance();
+        var signedDistance: f32;
+        if (hit.t < 0.0) {
+            signedDistance = DDGI_MISS_DISTANCE;
+            if (!isFixed) {
+                radiance.layer${plan.environmentLayer} = giSkyRadiance(direction);
+            }
+        } else if (!hit.frontFace) {
+            // Back faces are black and short (see DDGI_BACK_FACE_DISTANCE_SHARE).
+            signedDistance = -DDGI_BACK_FACE_DISTANCE_SHARE * hit.t;
+        } else {
+            signedDistance = hit.t;
+            if (!isFixed) {
+                let surface = giSurfaceAt(ray, hit);
+                radiance = ddgiEmittedAndBouncedLayers(ray, surface);
+                // Only hits a light can reach go on the list (half of Sponza's face away from the sun).
+                deferred = giNeedsDirect(surface);
+                if (deferred) {
+                    record = giSurfaceRecord(surface);
+                }
+            }
+        }
+        // The hit distance travels with layer 0; a fixed ray needs nothing else (it isn't blended).
+        giStoreRayLayerResult(rayRecord, 0u, radiance.layer0, signedDistance);
+        if (!isFixed) {
+${plan.layers
+    .slice(1)
+    .map((_, index) => `            giStoreRayLayerResult(rayRecord, ${index + 1}u, radiance.layer${index + 1}, 0.0);`)
+    .join('\n')}
+        }`;
+}
+
 /**
  * The deferred version (see the file comment), around the platform's side
- * of the ray scratch (`HitShading.direct.traceWgsl('ddgiRayScratch', ...)`).
+ * of the ray scratch (`HitShading.direct.traceWgsl('ddgiRayScratch', ...)`),
+ * for the volume's irradiance layers (`plan`; one layer with groups off,
+ * which gives M1's kernel).
  *
  * The body is shaped for the work list's append: no thread returns before
  * `giDeferDirect`, which every thread calls in uniform control flow. The one
  * early return left (a workgroup past its round) depends only on the
  * workgroup and uniforms, so it is uniform for the whole workgroup.
  */
-export function deferredTraceKernelWgsl(directScratchWgsl: string): string {
+export function deferredTraceKernelWgsl(directScratchWgsl: string, plan: LayerPlan): string {
+    const layered = plan.layers.length > 1;
     return /* wgsl */ `
 ${DDGI_COMMON_WGSL}
 
@@ -199,18 +352,7 @@ struct DdgiTraceRound {
 // The platform's side of the ray scratch: giStoreRayResult, giNeedsDirect, giSurfaceRecord, giDeferDirect.
 ${directScratchWgsl}
 
-// Emission + albedo / pi × bounce light from the current field. The direct
-// part, albedo / pi × direct light, is added by gi/direct.
-fn ddgiEmittedAndBounced(ray: GiRay, surface: GiSurface) -> vec3f {
-    // Bounce light from the current field: the field already holds every
-    // earlier bounce, so this gives unlimited bounces over updates.
-    let bounce = ddgiSampleIrradiance(
-        surface.position, surface.normal, ray.direction,
-        ddgiIrradianceAtlas, ddgiAtlasSampler, ddgiDistanceAtlas, ddgiAtlasSampler, ddgiProbeData,
-        ddgi.volumeOrigin, ddgi.volumeSpacing, ddgi.volumeCounts, ddgi.volumeTexels,
-    );
-    return surface.emission + surface.albedo * (1.0 / DDGI_PI) * (ddgi.bounceEnergy * bounce);
-}
+${layered ? layeredShadingWgsl(plan) : ONE_LAYER_SHADING_WGSL}
 
 // Workgroup (x, y): x walks a probe's rays 64 at a time; y is the probe's
 // place in this round (a round has at most DIRECT_ROUND_PROBES probes).
@@ -236,30 +378,7 @@ fn ddgiTrace(
         let direction = ddgiRayDirection(rayIndex);
         let ray = GiRay(ddgiProbePosition(probe, probeData.offset), 0.0, direction, ddgi.maxRayDistance);
         let hit = giTraceClosest(ray);
-
-        var radiance = vec3f(0.0);
-        var signedDistance: f32;
-        if (hit.t < 0.0) {
-            signedDistance = DDGI_MISS_DISTANCE;
-            if (!isFixed) {
-                radiance = giSkyRadiance(direction);
-            }
-        } else if (!hit.frontFace) {
-            // Back faces are black and short (see DDGI_BACK_FACE_DISTANCE_SHARE).
-            signedDistance = -DDGI_BACK_FACE_DISTANCE_SHARE * hit.t;
-        } else {
-            signedDistance = hit.t;
-            if (!isFixed) {
-                let surface = giSurfaceAt(ray, hit);
-                radiance = ddgiEmittedAndBounced(ray, surface);
-                // Only hits a light can reach go on the list (half of Sponza's face away from the sun).
-                deferred = giNeedsDirect(surface);
-                if (deferred) {
-                    record = giSurfaceRecord(surface);
-                }
-            }
-        }
-        giStoreRayResult(rayRecord, radiance, signedDistance);
+${layered ? layeredResultsWgsl(plan) : ONE_LAYER_RESULTS_WGSL}
     }
     giDeferDirect(deferred, record, rayRecord);
 }

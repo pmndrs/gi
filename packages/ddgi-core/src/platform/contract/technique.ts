@@ -8,6 +8,7 @@
  */
 
 import type { FrameCamera, FrameScreen } from './frame';
+import type { ColorRGB } from './math';
 import type { QueryKind, SceneQueries } from './queries';
 import type { SceneChanges, SceneCopy } from './scene-copy';
 import type { BounceSource, HitShading } from './shade';
@@ -131,6 +132,17 @@ export interface GITechnique<Settings extends object = object> {
      * the first frame after it. Absent means never.
      */
     readonly warmingUp?: boolean;
+
+    /**
+     * Optional (light groups, T2.5): re-weight light group `group` (a light's
+     * `group`, 0..3) by a linear RGB multiplier on top of its lights' own
+     * colour and intensity, at once: no update lag, no noise, nothing traced
+     * again (DDGI: `settings.lightGroups` must be on). Group membership is
+     * scene data; the weights are the technique's.
+     */
+    setGroupWeight?(group: number, weight: ColorRGB): void;
+    /** Optional, with `setGroupWeight`: the same for the sky and emissive surfaces. */
+    setEnvironmentWeight?(weight: ColorRGB): void;
 
     /** Forget accumulated history (a camera cut or a scene swap). */
     resetHistory(): void;

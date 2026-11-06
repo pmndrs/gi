@@ -202,7 +202,24 @@ Other members:
 - `threeGI.timings` gives the CPU time of the last update.
 - `threeGI.report` lists what the last update sent.
 - `threeGI.markChanged(object)` is described below.
+- `threeGI.setGroupWeight(group, color, intensity = 1)` and `threeGI.setEnvironmentWeight(color, intensity = 1)` are described in "Light groups" below.
 - `dispose()` removes what the adapter added.
+
+### Light groups
+
+Dimming or recolouring a whole group of lights in GI shows in the same frame, with no update lag and no noise (T2.5; docs/design/m2-lights.md §5). Put each light in a group with `userData.giLightGroup` (0 to 3), turn groups on in DDGI's settings, and set a weight:
+
+```ts
+await volume.start(renderer, scene, { ddgi: { lightGroups: { count: 2, weights: [[1, 1, 1], [1, 1, 1]], environmentWeight: [1, 1, 1] } } });
+volume.threeGI.setGroupWeight(1, 'white', 0.25);   // group 1 at a quarter
+volume.threeGI.setGroupWeight(0, '#ffcc88');       // group 0 warmer
+volume.threeGI.setEnvironmentWeight('white', 0.5); // the sky and emissive surfaces at half
+```
+
+- The colour is any three colour (`Color`, `'#ffcc88'`, `0xffcc88`), read in three's linear working colour space, times `intensity`, as a light's colour and intensity are.
+- A weight multiplies the lights' own colour and intensity, in GI only: dim three's own lights too for the direct light. Changing a light's `intensity` still works as before: it re-traces the probes it reaches.
+- Groups are off by default. Each group costs a layer of the field: on Sponza about 25 MB and 5% of each probe update (4 groups: +10%; two-room +23%), and `count` needs a new `prepare`.
+- Lights in a group at or past `count` share the last group's layer.
 
 ### `GILight`
 
