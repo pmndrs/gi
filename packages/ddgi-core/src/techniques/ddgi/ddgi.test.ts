@@ -1,10 +1,26 @@
 import { describe, expect, it } from 'vitest';
 import { GILimitError } from '../../platform/contract/errors.ts';
-import { checkFieldLimits, distanceFormatFor, fieldBytes, fieldLayout, PROBE_HISTORY_BYTES, PROBE_HISTORY_WORD, PROBE_HISTORY_WORDS, scratchLayout, UNIFORM_BYTES, UNIFORM_WORD } from './layout.ts';
+import {
+    checkFieldLimits,
+    distanceFormatFor,
+    fieldBytes,
+    fieldLayout,
+    PRIORITY_BUCKET_OFFSET,
+    PRIORITY_BUCKETS,
+    PROBE_HISTORY_BYTES,
+    PROBE_HISTORY_WORD,
+    PROBE_HISTORY_WORDS,
+    scratchLayout,
+    UNIFORM_BYTES,
+    UNIFORM_WORD,
+} from './layout.ts';
 import { borderSource, octDecode, octEncode, texelDirection } from './octahedral.ts';
 import { frameRayRotation, quaternionToMatrix, seededRandom, uniformRandomQuaternion } from './ray-rotation.ts';
 import { blendSettings, CHANGE_RULE_OFF, clockStep, FIXED_RAYS, MAX_CLOCK_STEP_SECONDS, distanceClamp, effectiveMaxRayDistance, effectiveRaysPerProbe, probeGrid, resolveBias, UNBOUNDED_RAY_DISTANCE, withDefaults } from './settings.ts';
-import { scrambleStride, UpdateCursor } from './update-order.ts';
+import { cameraWeight, frustumPlanes } from './camera.ts';
+import { priorityBucket, priorityCount, scheduleOnCpu, scrambleStride } from './schedule.ts';
+import { scheduleKernelWgsl } from './wgsl/schedule.ts';
+import { markKernelWgsl } from './wgsl/mark.ts';
 import { DDGI_SAMPLE_WGSL } from './wgsl/sample.ts';
 import { blendKernelWgsl, KEY_INDEX_BITS } from './wgsl/blend.ts';
 import { DDGI_CENSUS_WGSL } from './wgsl/census.ts';
@@ -211,13 +227,14 @@ describe('the octahedral map', () => {
     });
 });
 
-describe('the update order', () => {
-    it('visits every probe once per pass, for many probe counts', () => {
+describe('the update order (the scheduler, schedule.ts)', () => {
+    const still = (count: number) => Array.from({ length: count }, () => ({ owed: 0, priority: 0 }));
+
+    it('visits every probe once per pass of the round robin, for many probe counts', () => {
         for (const count of [1, 2, 3, 7, 64, 693, 1728, 1000, 4096]) {
-            const cursor = new UpdateCursor(count);
-            const list = new Uint32Array(count);
-            expect(cursor.next(count, list)).toBe(count);
-            expect(new Set(list).size).toBe(count);
+            const schedule = scheduleOnCpu(still(count), count, 0.75, 0, scrambleStride(count));
+            expect(schedule.priority).toEqual([]);
+            expect(new Set(schedule.roundRobin).size).toBe(count);
         }
     });
 
@@ -232,35 +249,84 @@ describe('the update order', () => {
 
     it('spreads one frame of updates across the volume, not one slab', () => {
         // 12 x 12 x 12 probes, 144 per frame: a slab order would give one probe row.
-        const cursor = new UpdateCursor(1728);
-        const list = new Uint32Array(144);
-        cursor.next(144, list);
-        const rows = new Set(Array.from(list, (probe) => Math.floor(probe / 144)));
+        const schedule = scheduleOnCpu(still(1728), 144, 0.75, 0, scrambleStride(1728));
+        const rows = new Set(schedule.roundRobin.map((probe) => Math.floor(probe / 144)));
         expect(rows.size).toBe(12);
     });
 
-    it('walks on across frames and counts probes not updated yet', () => {
-        const cursor = new UpdateCursor(10);
-        const list = new Uint32Array(4);
-        expect(cursor.notUpdatedYet).toBe(10);
-        cursor.next(4, list);
-        const first = Array.from(list);
-        cursor.next(4, list);
-        expect(cursor.notUpdatedYet).toBe(2);
-        expect(Array.from(list).some((probe) => first.includes(probe))).toBe(false);
-        cursor.next(4, list);
-        expect(cursor.notUpdatedYet).toBe(0);
-        cursor.resetHistory();
-        expect(cursor.notUpdatedYet).toBe(10);
+    it("with nothing owed, walks M1's cursor order and carries on across frames", () => {
+        const stride = scrambleStride(10);
+        const first = scheduleOnCpu(still(10), 4, 0.75, 0, stride);
+        expect(first.roundRobin).toEqual([0, 1, 2, 3].map((index) => (index * stride) % 10));
+        const second = scheduleOnCpu(still(10), 4, 0.75, first.cursorProbe, stride);
+        expect(second.roundRobin.some((probe) => first.roundRobin.includes(probe))).toBe(false);
+        expect(second.cursorProbe).toBe((8 * stride) % 10);
     });
 
-    it('never hands out more than the probes or the list hold', () => {
-        const cursor = new UpdateCursor(5);
-        expect(cursor.next(100, new Uint32Array(100))).toBe(5);
-        expect(cursor.next(100, new Uint32Array(3))).toBe(3);
-        expect(cursor.next(-2, new Uint32Array(3))).toBe(0);
-        expect(cursor.next(Number.NaN, new Uint32Array(3))).toBe(0);
-        expect(cursor.next(Infinity, new Uint32Array(5))).toBe(5);
+    it('gives owed probes at most the priority share, most urgent first, and fills the rest from the round robin', () => {
+        const probes = Array.from({ length: 100 }, (_, index) => ({ owed: index < 40 ? 8 : 0, priority: index < 40 ? 2 ** -(index % 4) : 0 }));
+        const schedule = scheduleOnCpu(probes, 20, 0.75, 0, scrambleStride(100));
+        expect(schedule.priority.length).toBe(15);
+        // The most urgent bucket (priority 1: indices 0, 4, 8, ...) goes first, all 10 of it.
+        expect(schedule.priority.slice(0, 10).every((probe) => probe % 4 === 0)).toBe(true);
+        expect(schedule.roundRobin.length).toBe(5);
+        const listed = [...schedule.priority, ...schedule.roundRobin];
+        expect(new Set(listed).size).toBe(20);
+        expect(schedule.histogram.reduce((sum, count) => sum + count, 0)).toBe(40);
+    });
+
+    it('never lists a probe twice, and the round robin passes the probes the priority share took', () => {
+        const count = 50;
+        const stride = scrambleStride(count);
+        // Every probe owed: the priority share takes 3 of 4, the round robin the rest, none twice.
+        const probes = Array.from({ length: count }, () => ({ owed: 1, priority: 1 }));
+        const schedule = scheduleOnCpu(probes, count, 0.75, 0, stride);
+        expect(new Set([...schedule.priority, ...schedule.roundRobin]).size).toBe(count);
+    });
+
+    it('sorts priorities into buckets twice as urgent as the one below', () => {
+        expect(priorityBucket(1)).toBe(PRIORITY_BUCKET_OFFSET);
+        expect(priorityBucket(2)).toBe(PRIORITY_BUCKET_OFFSET + 1);
+        expect(priorityBucket(0.5)).toBe(PRIORITY_BUCKET_OFFSET - 1);
+        expect(priorityBucket(1e-30)).toBe(0);
+        expect(priorityBucket(0)).toBe(0);
+        expect(priorityBucket(1e30)).toBe(PRIORITY_BUCKETS - 1);
+    });
+
+    it('keeps the priority share inside the list', () => {
+        expect(priorityCount(290, 0.75)).toBe(217);
+        expect(priorityCount(1, 0.75)).toBe(0);
+        expect(priorityCount(10, 2)).toBe(10);
+    });
+});
+
+describe('the camera weight (camera.ts)', () => {
+    const grid = probeGrid({ center: [0, 0, 0], size: [20, 20, 20], spacing: 1 });
+    // Looking down -z from the origin, 90 degrees, near 0.1, far 100 (WebGPU depth 0..1).
+    const near = 0.1;
+    const far = 100;
+    const projection = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, far / (near - far), -1, 0, 0, (near * far) / (near - far), 0];
+    const identity = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+    const camera = { position: [0, 0, 0] as [number, number, number], view: identity, projection };
+    const planes = frustumPlanes(camera);
+
+    it('is 1 at the camera and falls off over 4 spacings', () => {
+        expect(cameraWeight([0, 0, -0.001], camera, planes, grid)).toBeCloseTo(1, 5);
+        expect(cameraWeight([0, 0, -4], camera, planes, grid)).toBeCloseTo(0.5, 5);
+        expect(cameraWeight([0, 0, -12], camera, planes, grid)).toBeCloseTo(0.1, 5);
+    });
+
+    it('counts a quarter outside the view, and up to a cell diagonal outside still counts as in view', () => {
+        // Behind the camera, 4 m away: 0.5 x 0.25.
+        expect(cameraWeight([0, 0, 4], camera, planes, grid)).toBeCloseTo(0.125, 5);
+        // Just past the left plane at z = -4 (x = -4 is on it): within the margin.
+        expect(cameraWeight([-4.5, 0, -4], camera, planes, grid)).toBeGreaterThan(0.3);
+        expect(cameraWeight([-8, 0, -4], camera, planes, grid)).toBeLessThan(0.1);
+    });
+
+    it('takes every point as in view for a degenerate camera', () => {
+        const flat = frustumPlanes({ view: new Array(16).fill(0), projection: new Array(16).fill(0) });
+        expect(flat.every((plane) => plane[3] === 1 && plane[0] === 0)).toBe(true);
     });
 });
 
@@ -329,6 +395,17 @@ describe('the WGSL', () => {
         expect(subgroups.trimStart().startsWith('enable subgroups;')).toBe(true);
         expect(subgroups).toMatch(/subgroupMin\(/);
         expect(fallback).not.toMatch(/subgroup[A-Z]|enable subgroups/);
+    });
+
+    it('builds the scheduler and the mark subgroups first, with the declared fallbacks free of subgroup calls', () => {
+        for (const build of [scheduleKernelWgsl, markKernelWgsl]) {
+            const subgroups = build('subgroups');
+            const fallback = build('workgroup');
+            expect(subgroups.trimStart().startsWith('enable subgroups;')).toBe(true);
+            expect(subgroups).toMatch(/subgroupAdd\(/);
+            expect(fallback).not.toMatch(/subgroup[A-Z_]|enable subgroups/);
+            expect(subgroups.match(/@group\((\d)\)/g)?.every((match: string) => match === '@group(1)')).toBe(true);
+        }
     });
 });
 

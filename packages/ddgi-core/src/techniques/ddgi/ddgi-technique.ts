@@ -6,7 +6,11 @@
  * 0. `ddgi/mark`, only in frames whose `SceneChanges` report a light or sky
  *    change: tells each probe how much its light changed, from the lights'
  *    own numbers (wgsl/mark.ts, mark-table.ts), so its next blend cuts its
- *    history to match (docs/design/m2-lights.md §4.1, §4.2);
+ *    history to match, and promises it updates at priority
+ *    (docs/design/m2-lights.md §4.1, §4.2);
+ * 0b. `ddgi/schedule`: the GPU scheduler's four dispatches fill the update
+ *    list, probes owed updates first by urgency and nearness to the camera,
+ *    the rest from the round robin (wgsl/schedule.ts, §4.3);
  * 1. `ddgi/trace`: one thread per ray traces inline, shades the hit and
  *    writes the ray buffer;
  * 2. `ddgi/blend`: one workgroup per probe classifies and relocates the
@@ -16,6 +20,16 @@
  * 4. `ddgi/census`, only when the platform times passes (its `gpuTiming`
  *    option, the one setting that allows readbacks): counts probes per state
  *    for the counters, read back a few frames later.
+ *
+ * **The warm-up** (`warmUpPasses`, moved here from the viewer in T2.4b):
+ * after `prepare` and `resetHistory`, the technique does no probe work while
+ * the ray-tracing trees are still being built (rays would see through every
+ * wall of a half-built scene to the sky), then makes full passes over every
+ * probe, `maxProbesPerFrame` a frame whatever the frame's budget, with no
+ * time between them for the history (the same running average the viewer's
+ * warm-up gave). `warmingUp` says so, and the platform leaves those frames
+ * out of the budget's calibration. A host's loading screen runs them, so
+ * the first frame a user sees has converged GI.
  *
  * It sees only its `TechniqueContext`: the scene copy, the `rays` backend,
  * hit shading, the kernel builder and the timer. Never the host or an engine.
@@ -28,11 +42,16 @@ import type { GITechnique, TechniqueContext, TechniqueFrame, TechniqueRequiremen
 import type { ComputeKernel } from '../../platform/contract/wgsl.ts';
 import { GILimitError } from '../../platform/contract/errors.ts';
 import {
+    CENSUS_FEEDBACK_FIRED,
+    CENSUS_FEEDBACK_FIRED_TOTAL,
     CENSUS_PER_FRAME_WORDS,
+    CENSUS_PROBES_BLENDED_TOTAL,
     CENSUS_PROBES_MARKED,
     CENSUS_PROBES_MARKED_TOTAL,
     CENSUS_RAYS_TRACED,
+    CENSUS_SCHEDULE_STATE,
     CENSUS_WORDS,
+    FRUSTUM_PLANE_WORDS,
     checkFieldLimits,
     distanceFormatFor,
     fieldBytes,
@@ -43,8 +62,12 @@ import {
     PROBE_STATE,
     PROBE_STATE_LABELS,
     pointsSize,
+    PRIORITY_BUCKETS,
     RAY_RECORD_BYTES,
     SAMPLE_PARAMETER_VEC4_COUNT,
+    SCHEDULE_STATE_REPORTED_WORDS,
+    SCHEDULE_STATE_WORD,
+    SCHEDULE_STATE_WORDS,
     scratchLayout,
     MAT3_COLUMN_WORDS,
     UNIFORM_BYTES,
@@ -65,21 +88,26 @@ import {
     distanceClamp,
     effectiveMaxRayDistance,
     effectiveRaysPerProbe,
+    FAR_RULE_FRAMES,
     minProbesPerFrame,
+    owedUpdates,
     probeGrid,
     resolveBias,
+    warmUpSettings,
     withDefaults,
     type DDGISettings,
     type DDGISettingsInput,
     type ProbeGrid,
 } from './settings.ts';
+import { cameraFalloffDistance, frustumPlanes, inViewMargin } from './camera.ts';
 import { buildMarkTable, type MarkTable } from './mark-table.ts';
+import { priorityCount, scrambleStride } from './schedule.ts';
 import { DDGIShadingModule } from './shading.ts';
-import { UpdateCursor } from './update-order.ts';
 import { blendKernelWgsl, type PhaseBReduction } from './wgsl/blend.ts';
 import { CENSUS_WORKGROUP_SIZE, DDGI_CENSUS_WGSL } from './wgsl/census.ts';
 import { DDGI_TRACE_WGSL, TRACE_WORKGROUP_SIZE } from './wgsl/trace.ts';
 import { MARK_WORKGROUP_SIZE, markKernelWgsl } from './wgsl/mark.ts';
+import { SCHEDULE_ENTRY_POINTS, SCHEDULE_WORKGROUP_SIZE, scheduleKernelWgsl } from './wgsl/schedule.ts';
 import { DDGI_DEBUG_VIEW } from './wgsl/shading.ts';
 import { writeKernelWgsl } from './wgsl/write.ts';
 
@@ -106,10 +134,11 @@ const INITIAL_MARK_TABLE_BYTES = 64 * 176 + 16;
 /** Options fixed for the technique's life. */
 export interface DDGITechniqueOptions {
     /**
-     * How phase B reduces the fixed rays, and how `ddgi/mark` counts its
-     * marks. Defaults to `subgroups` when the device has the feature,
-     * otherwise the declared fallback `workgroup`. Both give the same states,
-     * offsets and counts; tests run both.
+     * How phase B reduces the fixed rays, how `ddgi/mark` counts its marks,
+     * and how the scheduler counts its histogram and compacts its list.
+     * Defaults to `subgroups` when the device has the feature, otherwise the
+     * declared fallback `workgroup`. Both give the same states, offsets,
+     * counts and histograms; tests run both.
      */
     readonly reduction?: PhaseBReduction;
 }
@@ -167,16 +196,26 @@ interface PreparedResources {
     readonly writeKernel: ComputeKernel;
     readonly censusKernel: ComputeKernel;
     readonly markKernel: ComputeKernel;
+    /** The scheduler's four kernels (wgsl/schedule.ts), one bind group for all. */
+    readonly scheduleKernels: Readonly<Record<keyof typeof SCHEDULE_ENTRY_POINTS, ComputeKernel>>;
+    readonly scheduleGroup: GPUBindGroup;
+    /** The scheduler's state (SCHEDULE_STATE_WORD): the round robin's cursor and this frame's histogram and counts. */
+    readonly scheduleState: GPUBuffer;
+    /** One u32 per probe: an update the feedback rule asked for, as its urgency's bits. */
+    readonly feedbackRequests: GPUBuffer;
     readonly writeGroup: GPUBindGroup;
     readonly censusGroup: GPUBindGroup;
     /** The ray buffer and the groups that bind it; replaced when it grows. */
     rays: { buffer: GPUBuffer; capacity: number; traceGroup: GPUBindGroup; blendGroup: GPUBindGroup };
     /** `ddgi/mark`'s table and the group that binds it; replaced when a frame's table outgrows it. */
     mark: { buffer: GPUBuffer; group: GPUBindGroup };
-    readonly cursor: UpdateCursor;
-    readonly list: Uint32Array<ArrayBuffer>;
+    /** The round robin's stride: order[i] = (i × stride) mod probe count (schedule.ts). */
+    readonly stride: number;
     readonly fixedBytes: number;
 }
+
+/** Where the warm-up is (see the file comment). */
+type WarmUpPhase = 'waiting for trees' | 'warming' | 'done';
 
 const COMPUTE = SHADER_STAGE_COMPUTE;
 const SAMPLED_ARRAY = { sampleType: 'float', viewDimension: '2d-array' } as const;
@@ -208,6 +247,7 @@ const BLEND_GROUP: GPUBindGroupLayoutDescriptor = {
         { binding: 6, visibility: COMPUTE, texture: SAMPLED_ARRAY },
         { binding: 7, visibility: COMPUTE, texture: SAMPLED_ARRAY },
         { binding: 8, visibility: COMPUTE, buffer: { type: 'storage' } },
+        { binding: 9, visibility: COMPUTE, buffer: { type: 'storage' } },
     ],
 };
 
@@ -239,6 +279,18 @@ const MARK_GROUP: GPUBindGroupLayoutDescriptor = {
         { binding: 4, visibility: COMPUTE, texture: SAMPLED_ARRAY },
         { binding: 5, visibility: COMPUTE, texture: SAMPLED_ARRAY },
         { binding: 6, visibility: COMPUTE, sampler: { type: 'filtering' } },
+    ],
+};
+
+/** `ddgi/schedule-*` group 1 (wgsl/schedule.ts): the same for all four kernels. */
+const SCHEDULE_GROUP: GPUBindGroupLayoutDescriptor = {
+    label: 'ddgi/schedule group 1',
+    entries: [
+        { binding: 0, visibility: COMPUTE, buffer: { type: 'uniform' } },
+        { binding: 1, visibility: COMPUTE, buffer: { type: 'storage' } },
+        { binding: 2, visibility: COMPUTE, buffer: { type: 'storage' } },
+        { binding: 3, visibility: COMPUTE, buffer: { type: 'storage' } },
+        { binding: 4, visibility: COMPUTE, buffer: { type: 'storage' } },
     ],
 };
 
@@ -287,6 +339,12 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
     private clockSeconds = 0;
     /** Recent `deltaTime`s above 0, for the sweep counter. */
     private readonly frameTimes: number[] = [];
+    /** The warm-up (see the file comment): its phase, its probe updates and when it started warming (wall clock, ms). */
+    private warmUp: { phase: WarmUpPhase; probeUpdates: number; startedAt: number | null } = { phase: 'done', probeUpdates: 0, startedAt: null };
+    /** The last frame's update count above 0: the batch "far probes owe 2" judges a frame with no updates by. */
+    private lastUpdateCount = 0;
+    /** `resetHistory` asked for the history and the feedback requests to be cleared, in the next encode. */
+    private historyClearPending = false;
     private disposed = false;
 
     constructor(settings: DDGISettingsInput, options: DDGITechniqueOptions = {}) {
@@ -370,7 +428,10 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         if (reduction === 'subgroups' && !hasSubgroups) throw new Error("@pmndrs/ddgi: the 'subgroups' reduction needs a device with the 'subgroups' feature");
 
         // Compile first: if a kernel fails, the old resources stay usable.
-        const [traceKernel, blendKernel, writeKernel, censusKernel, markKernel] = await Promise.all([
+        const scheduleCode = scheduleKernelWgsl(reduction);
+        const scheduleKernel = (entryPoint: string, name: string): Promise<ComputeKernel> =>
+            context.kernels.computeKernel({ label: `ddgi/schedule-${name} (${reduction})`, modules: [], code: scheduleCode, entryPoint, ownGroups: [SCHEDULE_GROUP] });
+        const [traceKernel, blendKernel, writeKernel, censusKernel, markKernel, scheduleCount, scheduleSelect, scheduleWrite, scheduleFill] = await Promise.all([
             context.kernels.computeKernel({
                 label: 'ddgi/trace',
                 // Hit shading brings the scene copy and rays in as its dependencies.
@@ -408,6 +469,10 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
                 entryPoint: 'ddgiMark',
                 ownGroups: [MARK_GROUP],
             }),
+            scheduleKernel(SCHEDULE_ENTRY_POINTS.count, 'count'),
+            scheduleKernel(SCHEDULE_ENTRY_POINTS.select, 'select'),
+            scheduleKernel(SCHEDULE_ENTRY_POINTS.write, 'write'),
+            scheduleKernel(SCHEDULE_ENTRY_POINTS.fill, 'fill'),
         ]);
         if (this.disposed) return;
 
@@ -429,12 +494,16 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         const probeData = arrayTexture('probe data', layout.probeData, PROBE_DATA_FORMAT, TEXTURE_USAGE.copyDst);
         const pointsTexture = device.createTexture({ label: 'ddgi points', size: points, format: 'rgba32float', usage: atlasUsage | TEXTURE_USAGE.copyDst });
         const uniforms = device.createBuffer({ label: 'ddgi uniforms', size: UNIFORM_BYTES, usage: BUFFER_USAGE.uniform | BUFFER_USAGE.copyDst });
-        const updateList = device.createBuffer({ label: 'ddgi update list', size: maxProbesPerFrame * 4, usage: BUFFER_USAGE.storage | BUFFER_USAGE.copyDst });
+        // Written by the GPU scheduler; COPY_SRC so tests can read which probes a frame updated.
+        const updateList = device.createBuffer({ label: 'ddgi update list', size: maxProbesPerFrame * 4, usage: BUFFER_USAGE.storage | BUFFER_USAGE.copySrc });
         const scratchBuffer = device.createBuffer({ label: 'ddgi scratch', size: maxProbesPerFrame * scratch.strideWords * 4, usage: BUFFER_USAGE.storage });
         const census = device.createBuffer({ label: 'ddgi census', size: CENSUS_WORDS * 4, usage: BUFFER_USAGE.storage | BUFFER_USAGE.copySrc | BUFFER_USAGE.copyDst });
         // Starts at zero (WebGPU clears new buffers): no probe remembers anything yet.
         // COPY_SRC so debug tools and tests can copy it out (DDGIField.probeHistory).
-        const probeHistory = device.createBuffer({ label: 'ddgi probe history', size: grid.probeCount * PROBE_HISTORY_BYTES, usage: BUFFER_USAGE.storage | BUFFER_USAGE.copySrc });
+        const probeHistory = device.createBuffer({ label: 'ddgi probe history', size: grid.probeCount * PROBE_HISTORY_BYTES, usage: BUFFER_USAGE.storage | BUFFER_USAGE.copySrc | BUFFER_USAGE.copyDst });
+        // The scheduler's cursor starts at the order's first entry (probe 0) and every count at 0: new buffers are zero.
+        const scheduleState = device.createBuffer({ label: 'ddgi schedule state', size: SCHEDULE_STATE_WORDS * 4, usage: BUFFER_USAGE.storage | BUFFER_USAGE.copySrc | BUFFER_USAGE.copyDst });
+        const feedbackRequests = device.createBuffer({ label: 'ddgi feedback requests', size: grid.probeCount * 4, usage: BUFFER_USAGE.storage | BUFFER_USAGE.copyDst });
         const censusStaging = Array.from({ length: CENSUS_STAGING_BUFFERS }, (_, index) => ({
             buffer: device.createBuffer({ label: `ddgi census readback ${index}`, size: CENSUS_WORDS * 4, usage: BUFFER_USAGE.mapRead | BUFFER_USAGE.copyDst }),
             state: 'free' as CensusStaging['state'],
@@ -465,6 +534,18 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
                 { binding: 2, resource: arrayView(probeData) },
             ],
         });
+        // The four kernels' layouts are made from one descriptor, so one bind group fits them all.
+        const scheduleGroup = device.createBindGroup({
+            label: 'ddgi/schedule group 1',
+            layout: scheduleCount.ownLayouts[0],
+            entries: [
+                { binding: 0, resource: { buffer: uniforms } },
+                { binding: 1, resource: { buffer: probeHistory } },
+                { binding: 2, resource: { buffer: feedbackRequests } },
+                { binding: 3, resource: { buffer: scheduleState } },
+                { binding: 4, resource: { buffer: updateList } },
+            ],
+        });
 
         const fixedBytes =
             fieldBytes(layout) +
@@ -473,6 +554,8 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
             updateList.size +
             scratchBuffer.size +
             probeHistory.size +
+            scheduleState.size +
+            feedbackRequests.size +
             census.size * (1 + CENSUS_STAGING_BUFFERS);
         const partial = {
             grid,
@@ -498,10 +581,13 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
             writeKernel,
             censusKernel,
             markKernel,
+            scheduleKernels: { count: scheduleCount, select: scheduleSelect, write: scheduleWrite, fill: scheduleFill },
+            scheduleGroup,
+            scheduleState,
+            feedbackRequests,
             writeGroup,
             censusGroup,
-            cursor: new UpdateCursor(grid.probeCount),
-            list: new Uint32Array(maxProbesPerFrame),
+            stride: scrambleStride(grid.probeCount),
             fixedBytes,
         };
         this.resources = {
@@ -514,7 +600,21 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         this.markFrames = 0;
         this.latestMarkEntries = 0;
         this.clockSeconds = 0;
+        this.lastUpdateCount = 0;
+        this.historyClearPending = false;
+        this.startWarmUp();
         this.markAllNotUpdated();
+    }
+
+    /**
+     * True from `prepare` (and `resetHistory`) until the warm-up is done: the
+     * technique is waiting for the ray-tracing trees or making its warm-up
+     * passes, and ignores the frame's budget. The platform leaves these
+     * frames out of the budget's calibration. Always false with
+     * `warmUpPasses` 0.
+     */
+    get warmingUp(): boolean {
+        return this.resources !== null && this.warmUp.phase !== 'done';
     }
 
     /** Records this frame's updates; returns the probes it updated (the units it used). */
@@ -524,10 +624,15 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         if (!resources || !context || this.disposed) return 0;
         this.collectCensus(resources);
 
-        // Time passes whether or not this frame updates any probe.
-        this.clockSeconds = (this.clockSeconds + clockStep(frame.deltaTime)) % CLOCK_WRAP_SECONDS;
-        const count = resources.cursor.next(Math.min(frame.units, resources.maxProbesPerFrame), resources.list);
+        const warming = this.advanceWarmUp(context, resources.grid.probeCount);
+        // Time passes whether or not this frame updates any probe; the warm-up's passes have no time between them.
+        if (!warming) this.clockSeconds = (this.clockSeconds + clockStep(frame.deltaTime)) % CLOCK_WRAP_SECONDS;
+        const probeCount = resources.grid.probeCount;
+        // No probe updates twice in a frame. While warming: a full batch, or none while the trees are built.
+        const requested = this.warmUp.phase === 'warming' ? resources.maxProbesPerFrame : this.warmUp.phase === 'waiting for trees' ? 0 : frame.units;
+        const count = Math.max(0, Math.min(Number.isNaN(requested) ? 0 : Math.floor(requested), resources.maxProbesPerFrame, probeCount));
         this.probesUpdated = count;
+        if (count > 0) this.lastUpdateCount = count;
         if (frame.deltaTime > 0 && Number.isFinite(frame.deltaTime)) {
             this.frameTimes.push(frame.deltaTime);
             if (this.frameTimes.length > SWEEP_FRAME_TIMES) this.frameTimes.shift();
@@ -536,22 +641,29 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         // history for each probe's next update.
         const markTable = this.settings.changeDrivenHistory !== false ? buildMarkTable(frame.changes, resources.grid) : null;
         this.latestMarkEntries = markTable?.entryCount ?? 0;
-        if (count === 0 && !markTable) return 0;
+        if (count === 0 && !markTable && !this.historyClearPending) return 0;
         const raysPerProbe = effectiveRaysPerProbe(this.settings.raysPerProbe);
         const device = context.device;
         const maxPerDimension = device.limits.maxComputeWorkgroupsPerDimension;
 
-        this.writeUniforms(resources, frame.frame, count, raysPerProbe);
+        this.writeUniforms(resources, frame, count, raysPerProbe);
         device.queue.writeBuffer(resources.uniforms, 0, this.uniformData);
-        // The census buffer gathers this frame's marks (ddgi/mark) and rays traced (ddgi/blend); the running total of marks stays.
+        if (this.historyClearPending) {
+            // resetHistory: every probe starts again with nothing owed, cut or asked for.
+            encoder.clearBuffer(resources.probeHistory);
+            encoder.clearBuffer(resources.feedbackRequests);
+            this.historyClearPending = false;
+        }
+        // The census buffer gathers this frame's marks (ddgi/mark), rays traced and feedback (ddgi/blend); the running totals stay.
         encoder.clearBuffer(resources.census, 0, CENSUS_PER_FRAME_WORDS * 4);
         if (markTable) {
             this.encodeMark(encoder, context, resources, markTable, maxPerDimension);
             this.markFrames++;
         }
+        if (count > 0) this.encodeSchedule(encoder, context, resources, maxPerDimension);
+        if (this.warmUp.phase === 'warming') this.finishWarmUpPass(resources, count);
         if (count === 0) return 0;
 
-        device.queue.writeBuffer(resources.updateList, 0, resources.list, 0, count);
         if (count * raysPerProbe > resources.rays.capacity) {
             const old = resources.rays.buffer;
             resources.rays = this.createRayBuffer(device, resources, Math.max(count * raysPerProbe, resources.rays.capacity * 2));
@@ -585,6 +697,75 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         return count;
     }
 
+    /**
+     * The GPU scheduler (wgsl/schedule.ts): this frame's update list, in one
+     * pass of four dispatches (WebGPU orders the dispatches of a pass, and
+     * one pass is one timing, `ddgi/schedule`). The histogram starts at zero.
+     */
+    private encodeSchedule(encoder: GPUCommandEncoder, context: TechniqueContext, resources: PreparedResources, maxPerDimension: number): void {
+        encoder.clearBuffer(resources.scheduleState, SCHEDULE_STATE_WORD.histogram * 4, PRIORITY_BUCKETS * 4);
+        const groups = Math.ceil(resources.grid.probeCount / SCHEDULE_WORKGROUP_SIZE);
+        const groupsX = Math.min(groups, maxPerDimension);
+        const groupsY = Math.ceil(groups / groupsX);
+        const pass = encoder.beginComputePass({ label: 'ddgi/schedule', timestampWrites: context.timer.computePass('ddgi/schedule') });
+        const { count, select, write, fill } = resources.scheduleKernels;
+        count.bind(pass);
+        pass.setBindGroup(1, resources.scheduleGroup);
+        pass.dispatchWorkgroups(groupsX, groupsY);
+        select.bind(pass);
+        pass.setBindGroup(1, resources.scheduleGroup);
+        pass.dispatchWorkgroups(1);
+        write.bind(pass);
+        pass.setBindGroup(1, resources.scheduleGroup);
+        pass.dispatchWorkgroups(groupsX, groupsY);
+        fill.bind(pass);
+        pass.setBindGroup(1, resources.scheduleGroup);
+        pass.dispatchWorkgroups(1);
+        pass.end();
+    }
+
+    /** A new warm-up (after `prepare` and `resetHistory`), or none with `warmUpPasses` 0. */
+    private startWarmUp(): void {
+        const passes = warmUpSettings(this.settings).passes;
+        this.warmUp = { phase: passes > 0 ? 'waiting for trees' : 'done', probeUpdates: 0, startedAt: null };
+    }
+
+    /**
+     * The warm-up's phase for this frame; true while it runs. It waits while
+     * the scene's ray-tracing trees are being built, and stops at once when
+     * `warmUpPasses` is set to 0.
+     */
+    private advanceWarmUp(context: TechniqueContext, probeCount: number): boolean {
+        const warmUp = this.warmUp;
+        if (warmUp.phase === 'done') return false;
+        // Nothing to warm (no probes), or switched off meanwhile.
+        if (warmUpSettings(this.settings).passes <= 0 || probeCount <= 0) {
+            warmUp.phase = 'done';
+            return false;
+        }
+        if (warmUp.phase === 'waiting for trees' && !context.queries.rays.building) {
+            warmUp.phase = 'warming';
+            warmUp.startedAt = performance.now();
+        }
+        return true;
+    }
+
+    /** Counts a warm-up frame's probes; ends the warm-up after its passes, or after its time once the fewest passes are made. */
+    private finishWarmUpPass(resources: PreparedResources, count: number): void {
+        const warmUp = this.warmUp;
+        warmUp.probeUpdates += count;
+        const settings = warmUpSettings(this.settings);
+        const passes = warmUp.probeUpdates / resources.grid.probeCount;
+        const elapsedSeconds = warmUp.startedAt === null ? 0 : (performance.now() - warmUp.startedAt) / 1000;
+        if (passes >= settings.passes || (elapsedSeconds > settings.maxSeconds && passes >= settings.minPasses)) warmUp.phase = 'done';
+    }
+
+    /** Full passes over every probe the warm-up has made (fractional while one is under way). */
+    private get warmUpPasses(): number {
+        const probeCount = this.resources?.grid.probeCount ?? 0;
+        return probeCount > 0 ? this.warmUp.probeUpdates / probeCount : 0;
+    }
+
     /** The field's textures and sampling parameters; null before `prepare`. */
     get field(): DDGIField | null {
         const resources = this.resources;
@@ -603,15 +784,20 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
 
     /**
      * Counters for the latest frame. Always there: "probes updated", "frames
-     * with changes marked" (frames since `prepare` that ran `ddgi/mark`) and
+     * with changes marked" (frames since `prepare` that ran `ddgi/mark`),
      * "changes marked this frame" (its table's entries: changed lights and
-     * global changes); "seconds per full sweep" (every probe updated once at
-     * this batch and the recent frame rate) once frames carry a `deltaTime`.
-     * The per-state counts, rays traced, "probes marked" (marks in that
-     * frame; a probe marked by two lights counts twice) and "probes marked
-     * (total)" (every mark since `prepare`) need the GPU census, which runs
-     * only when the platform times passes (`gpuTiming`), and arrive a few
-     * frames late; without them those counters are absent, not guessed.
+     * global changes), "warming up" (1 while `warmingUp`) and "warm-up
+     * passes" (full passes the warm-up has made); "seconds per full sweep"
+     * (every probe updated once at this batch and the recent frame rate)
+     * once frames carry a `deltaTime`. The per-state counts, rays traced,
+     * "probes marked" (marks in that frame; a probe marked by two lights
+     * counts twice), "probes marked (total)" (every mark since `prepare`),
+     * "probes owed updates" and "probes updated at priority" (the
+     * scheduler's), "feedback requests" (updates whose feedback test fired
+     * that frame), "feedback requests (total)" and "probes blended (total)"
+     * (since `prepare`) need the GPU census, which runs only when the
+     * platform times passes (`gpuTiming`), and arrive a few frames late;
+     * without them those counters are absent, not guessed.
      */
     get counters(): Readonly<Record<string, number>> {
         const census = this.latestCensus;
@@ -620,6 +806,8 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
             'probes updated': this.probesUpdated,
             'frames with changes marked': this.markFrames,
             'changes marked this frame': this.latestMarkEntries,
+            'warming up': this.warmingUp ? 1 : 0,
+            'warm-up passes': this.warmUpPasses,
         };
         if (sweep !== undefined) updates['seconds per full sweep'] = sweep;
         if (!census) return updates;
@@ -627,6 +815,11 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
             ...updates,
             'probes marked': census[CENSUS_PROBES_MARKED],
             'probes marked (total)': census[CENSUS_PROBES_MARKED_TOTAL],
+            'probes owed updates': census[CENSUS_SCHEDULE_STATE + SCHEDULE_STATE_WORD.owed],
+            'probes updated at priority': census[CENSUS_SCHEDULE_STATE + SCHEDULE_STATE_WORD.listed],
+            'feedback requests': census[CENSUS_FEEDBACK_FIRED],
+            'feedback requests (total)': census[CENSUS_FEEDBACK_FIRED_TOTAL],
+            'probes blended (total)': census[CENSUS_PROBES_BLENDED_TOTAL],
             'rays traced': census[CENSUS_RAYS_TRACED],
             'probes active': census[PROBE_STATE.active],
             'probes off: inside geometry': census[PROBE_STATE.offInsideGeometry],
@@ -667,11 +860,15 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
     /**
      * Every probe goes back to "not updated yet" at its grid point: its next
      * update replaces it outright (hysteresis 0, and its adaptive-hysteresis
-     * history starts again from that update), and sampling skips it until then.
+     * history starts again from that update), and sampling skips it until
+     * then. Owed updates and feedback requests are forgotten, and the
+     * warm-up runs again (unless `warmUpPasses` is 0). The round robin's
+     * cursor carries on.
      */
     resetHistory(): void {
         if (!this.resources) return;
-        this.resources.cursor.resetHistory();
+        this.historyClearPending = true;
+        this.startWarmUp();
         this.markAllNotUpdated();
     }
 
@@ -754,6 +951,7 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
                 { binding: 6, resource: arrayView(resources.distance) },
                 { binding: 7, resource: arrayView(resources.probeData) },
                 { binding: 8, resource: { buffer: resources.probeHistory } },
+                { binding: 9, resource: { buffer: resources.feedbackRequests } },
             ],
         });
         return { buffer, capacity, traceGroup, blendGroup };
@@ -778,6 +976,8 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         pass.setBindGroup(1, resources.censusGroup);
         pass.dispatchWorkgroups(groupsX, Math.ceil(groups / groupsX));
         pass.end();
+        // The scheduler's counts this frame, for the counters.
+        encoder.copyBufferToBuffer(resources.scheduleState, 0, resources.census, CENSUS_SCHEDULE_STATE * 4, SCHEDULE_STATE_REPORTED_WORDS * 4);
         encoder.copyBufferToBuffer(resources.census, 0, staging.buffer, 0, CENSUS_WORDS * 4);
         staging.state = 'copied';
     }
@@ -810,7 +1010,19 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         if (!resources) return;
         this.resources = null;
         for (const texture of [resources.irradiance, resources.distance, resources.probeData, resources.points]) texture.destroy();
-        for (const buffer of [resources.uniforms, resources.updateList, resources.scratchBuffer, resources.census, resources.probeHistory, resources.rays.buffer, resources.mark.buffer]) buffer.destroy();
+        for (const buffer of [
+            resources.uniforms,
+            resources.updateList,
+            resources.scratchBuffer,
+            resources.census,
+            resources.probeHistory,
+            resources.scheduleState,
+            resources.feedbackRequests,
+            resources.rays.buffer,
+            resources.mark.buffer,
+        ]) {
+            buffer.destroy();
+        }
         for (const staging of resources.censusStaging) staging.buffer.destroy();
     }
 
@@ -853,12 +1065,12 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         data.set([irradianceTexels, distanceTexels, 0, 0], UNIFORM_WORD.volumeTexels);
     }
 
-    private writeUniforms(resources: PreparedResources, frame: number, count: number, raysPerProbe: number): void {
+    private writeUniforms(resources: PreparedResources, frame: TechniqueFrame, count: number, raysPerProbe: number): void {
         const { grid } = resources;
         this.fillSampleParameters(grid, resources.irradianceTexels, resources.distanceTexels);
         const data = this.uniformData;
         const words = this.uniformWords;
-        const rotation = frameRayRotation(frame);
+        const rotation = frameRayRotation(frame.frame);
         for (let column = 0; column < 3; column++) {
             data.set(rotation.slice(column * 3, column * 3 + 3), UNIFORM_WORD.rayRotation + column * MAT3_COLUMN_WORDS);
         }
@@ -881,11 +1093,26 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         words[UNIFORM_WORD.classification] = this.settings.classification ? 1 : 0;
         words[UNIFORM_WORD.raysPerProbe] = raysPerProbe;
         words[UNIFORM_WORD.updateCount] = count;
-        words[UNIFORM_WORD.frame] = frame >>> 0;
+        words[UNIFORM_WORD.frame] = frame.frame >>> 0;
         words[UNIFORM_WORD.changeDrivenHistory] = blend.changeDrivenHistory ? 1 : 0;
         data[UNIFORM_WORD.changeTolerance] = blend.changeTolerance;
         data[UNIFORM_WORD.changeUpdates] = blend.changeUpdates;
         data[UNIFORM_WORD.lightChangeScale] = blend.lightChangeScale;
+
+        // The scheduler (m2-lights.md §4.3, §6.4).
+        words[UNIFORM_WORD.feedback] = blend.feedback ? 1 : 0;
+        words[UNIFORM_WORD.priorityCount] = priorityCount(count, blend.priorityShare);
+        words[UNIFORM_WORD.scrambleStride] = resources.stride;
+        // Far probes owe fewer after a global change only where K for every probe
+        // wouldn't fit in FAR_RULE_FRAMES frames at this batch (the last one, in a
+        // frame that updates nothing).
+        const fullUpdates = owedUpdates(blend.changeUpdates);
+        const batch = count > 0 ? count : this.lastUpdateCount;
+        const framesForEveryProbe = batch > 0 ? (grid.probeCount * fullUpdates) / batch : Number.POSITIVE_INFINITY;
+        data[UNIFORM_WORD.farOwedUpdates] = framesForEveryProbe > FAR_RULE_FRAMES ? Math.min(blend.farProbeUpdates, fullUpdates) : fullUpdates;
+        data[UNIFORM_WORD.cameraFalloffDistance] = cameraFalloffDistance(grid);
+        data.set([...frame.camera.position, inViewMargin(grid)], UNIFORM_WORD.cameraPosition);
+        frustumPlanes(frame.camera).forEach((plane, index) => data.set(plane, FRUSTUM_PLANE_WORDS[index]));
     }
 }
 

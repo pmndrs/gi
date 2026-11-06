@@ -28,14 +28,45 @@
  * and writes the probe's mean irradiance and noise back. Within a frame
  * `ddgi/mark` runs first, as its own dispatch, so the two never race.
  *
+ * The GPU scheduler's promises (T2.4b, m2-lights.md §4.3): a probe owed
+ * updates after a change has its history cut for the updates it was
+ * promised (K, or fewer for far probes after a global change), and each
+ * update takes one off; its urgency stays until the last.
+ *
+ * The feedback rule (T2.4b, m2-lights.md §4.6): a quiet update (no change
+ * reported, none being taken in) whose estimate lands far from the stored
+ * value against the probe's noise asks for one more update for itself and
+ * its 6 neighbours, in a buffer of its own (`atomicMax` on the urgency's
+ * bits), which `ddgi/schedule-count` takes in. It never touches hysteresis.
+ *
  * Bindings (group 1; no platform module): uniforms, the update list, the ray
- * buffer, the scratch buffer, the census buffer and the probe history (5
- * storage buffers), and the irradiance, distance and probe-data atlases
- * (sampled, for the old values).
+ * buffer, the scratch buffer, the census buffer, the probe history and the
+ * feedback requests (6 storage buffers), and the irradiance, distance and
+ * probe-data atlases (sampled, for the old values).
  */
 
-import { CENSUS_RAYS_TRACED, PROBE_HISTORY_FLAG, PROBE_HISTORY_FLAGS_MASK, PROBE_HISTORY_UPDATES, type ScratchLayout } from '../layout.ts';
+import {
+    CENSUS_FEEDBACK_FIRED,
+    CENSUS_FEEDBACK_FIRED_TOTAL,
+    CENSUS_PROBES_BLENDED_TOTAL,
+    CENSUS_RAYS_TRACED,
+    PROBE_HISTORY_FLAG,
+    PROBE_HISTORY_FLAGS_MASK,
+    PROBE_HISTORY_UPDATES,
+    type ScratchLayout,
+} from '../layout.ts';
 import { CLOCK_WRAP_SECONDS, FIXED_RAYS } from '../settings.ts';
+
+/**
+ * The feedback rule's thresholds (m2-lights.md §4.6): an update whose
+ * estimate lands more than this many times the probe's noise from its stored
+ * value, and more than {@link FEEDBACK_MIN_SHARE} of it...
+ */
+export const FEEDBACK_NOISE_MULTIPLE = 4;
+/** ...asks for one more update (2% of the stored mean: below that a change can't matter for the 5% target). */
+export const FEEDBACK_MIN_SHARE = 0.02;
+/** Its 6 face neighbours ask at this share of its urgency: a change nobody reported spreads to the probes around it. */
+export const FEEDBACK_NEIGHBOUR_SHARE = 0.5;
 
 /**
  * Bits of a reduction key that hold the fixed ray's index (the rest is the
@@ -133,6 +164,16 @@ const DDGI_HISTORY_FLAGS_MASK: u32 = ${PROBE_HISTORY_FLAGS_MASK}u;
 const DDGI_FLAG_MARKED: u32 = ${PROBE_HISTORY_FLAG.marked}u;
 const DDGI_FLAG_MARKED_BEFORE_LAST_UPDATE: u32 = ${PROBE_HISTORY_FLAG.markedBeforeLastUpdate}u;
 const DDGI_FLAG_AWAITING_CHANGE: u32 = ${PROBE_HISTORY_FLAG.awaitingChange}u;
+const DDGI_FLAG_TAKING_CHANGE: u32 = ${PROBE_HISTORY_FLAG.takingChange}u;
+const DDGI_OWED_SHIFT: u32 = ${PROBE_HISTORY_UPDATES.owedShift}u;
+const DDGI_OWED_MASK: u32 = ${PROBE_HISTORY_UPDATES.owedMask}u;
+// The feedback rule (FEEDBACK_* above).
+const DDGI_FEEDBACK_NOISE_MULTIPLE: f32 = ${FEEDBACK_NOISE_MULTIPLE}.0;
+const DDGI_FEEDBACK_MIN_SHARE: f32 = ${FEEDBACK_MIN_SHARE};
+const DDGI_FEEDBACK_NEIGHBOUR_SHARE: f32 = ${FEEDBACK_NEIGHBOUR_SHARE};
+const DDGI_CENSUS_FEEDBACK_FIRED: u32 = ${CENSUS_FEEDBACK_FIRED}u;
+const DDGI_CENSUS_FEEDBACK_FIRED_TOTAL: u32 = ${CENSUS_FEEDBACK_FIRED_TOTAL}u;
+const DDGI_CENSUS_PROBES_BLENDED_TOTAL: u32 = ${CENSUS_PROBES_BLENDED_TOTAL}u;
 // "No cut": larger than any history count.
 const DDGI_NO_HISTORY_LIMIT: f32 = 3.0e38;
 // The noise word is a running mean over about this many quiet updates (an
@@ -141,8 +182,8 @@ const DDGI_NO_HISTORY_LIMIT: f32 = 3.0e38;
 const DDGI_NOISE_UPDATES: f32 = 16.0;
 // What kind of update this is, for the noise word (ddgiUpdateKind).
 const DDGI_UPDATE_FIRST: u32 = 0u;   // state 3: the history starts again, noise 0
-const DDGI_UPDATE_QUIET: u32 = 1u;   // no change reported: feeds the noise
-const DDGI_UPDATE_MARKED: u32 = 2u;  // a reported change: the noise is kept as it was
+const DDGI_UPDATE_QUIET: u32 = 1u;   // no change reported: feeds the noise, and may trip the feedback rule
+const DDGI_UPDATE_MARKED: u32 = 2u;  // a reported change, or still taking one in: the noise is kept as it was
 
 // Phase B rules (Majercik et al. 2021, section 5).
 // More than this share of fixed rays hitting back faces means the probe is inside something.
@@ -195,6 +236,8 @@ const DDGI_NO_DISTANCE: f32 = 3.0e38;
 @group(1) @binding(7) var ddgiProbeData: texture_2d_array<f32>;
 // Per probe: its history for the hysteresis rule (DdgiProbeHistory). Zero until first written.
 @group(1) @binding(8) var<storage, read_write> ddgiProbeHistory: array<DdgiProbeHistory>;
+// Per probe: an update asked for by the feedback rule, as its urgency's bits (0: none). Read and cleared by ddgi/schedule-count.
+@group(1) @binding(9) var<storage, read_write> ddgiFeedbackRequests: array<atomic<u32>>;
 
 // Per ray: its direction (xyz) and signed hit distance (w, negative = back
 // face). Decoded once here: the blend reads every ray once per texel.
@@ -387,10 +430,10 @@ fn ddgiDecide(probe: vec3i, offset: vec3f, state: u32) -> DdgiProbeDecision {
 struct DdgiProbeHistory {
     samples: f32,            // n: the updates its history counts as
     lastUpdateSeconds: f32,  // t: the technique's clock at its last blended update
-    updates: u32,            // k in the low 16 bits (blended updates since new, reset or back on); owed (T2.4b) and the sky transfer's count (T2.6b) above
+    updates: u32,            // k in the low 16 bits (blended updates since new, reset or back on); updates owed at priority in bits 16-23; the sky transfer's count (T2.6b) above
     pendingChange: f32,      // r: the change ddgi/mark added up since its last update
-    urgency: f32,            // the largest change since its last update (T2.4b's scheduler)
-    scheduleAndFlags: u32,   // flags in the low 8 bits (DDGI_FLAG_*); the frame it was last scheduled above (T2.4b)
+    urgency: f32,            // the scheduler's urgency: the largest change since the mark, kept while updates are owed
+    scheduleAndFlags: u32,   // flags in the low 8 bits (DDGI_FLAG_*); the frame it was last scheduled above
     meanRedGreen: u32,       // its mean irradiance, r and g as half floats
     meanBlueNoise: u32,      // b, and its noise, as half floats
     wakeUntil: u32,          // M3
@@ -447,7 +490,11 @@ fn ddgiHysteresisStep(history: DdgiProbeHistory, state: u32) -> DdgiHysteresisSt
     let firstUpdate = state == DDGI_STATE_NOT_UPDATED_YET;
     let flags = history.scheduleAndFlags & DDGI_HISTORY_FLAGS_MASK;
     let marked = (flags & DDGI_FLAG_MARKED) != 0u;
-    let limit = select(ddgiChangeLimit(history.pendingChange, flags), DDGI_NO_HISTORY_LIMIT, firstUpdate);
+    let owed = (history.updates >> DDGI_OWED_SHIFT) & DDGI_OWED_MASK;
+    // The cut is for the updates the probe was promised (ddgi/mark: K, or
+    // fewer for far probes after a global change); K when none are owed.
+    let promised = select(ddgi.changeUpdates, f32(owed), owed > 0u);
+    let limit = select(ddgiChangeLimit(history.pendingChange, flags, promised), DDGI_NO_HISTORY_LIMIT, firstUpdate);
     // After a cut the count grows back by one an update, as the design has it.
     // (Moving the probe back along the warm-up ramp as well was measured and
     // made it worse: on two-room's lamp step the view overshot further, 0.30 s
@@ -471,26 +518,33 @@ fn ddgiHysteresisStep(history: DdgiProbeHistory, state: u32) -> DdgiHysteresisSt
     let samples = min(remembered + 1.0, ddgi.maxHistorySamples);
     // Saturating at the field's width: the count only matters while k / a is below n_max.
     let nextCount = select(updates + 1u, updates, updates == DDGI_HISTORY_COUNT_MASK);
+    // One owed update is taken off; a first update starts with nothing owed
+    // (a reset leaves old promises in the record).
+    let nextOwed = select(owed - min(owed, 1u), 0u, firstUpdate);
+    let takingChange = (flags & DDGI_FLAG_TAKING_CHANGE) != 0u;
     var next = history;
     next.samples = samples;
     next.lastUpdateSeconds = ddgi.clockSeconds;
-    next.updates = (history.updates & ~DDGI_HISTORY_COUNT_MASK) | nextCount;
+    next.updates = (history.updates & ~(DDGI_HISTORY_COUNT_MASK | (DDGI_OWED_MASK << DDGI_OWED_SHIFT))) | nextCount | (nextOwed << DDGI_OWED_SHIFT);
     // This update takes the change in: it starts again from nothing, and the
     // steady-change rule remembers whether this update had been marked. The
     // awaiting flag (T2.4c) clears here too: the probe has been traced itself.
+    // The urgency stays while updates are owed, so the scheduler keeps its
+    // promise of all of them, not only the first.
     next.pendingChange = 0.0;
-    next.urgency = 0.0;
-    let keptFlags = flags & ~(DDGI_FLAG_MARKED | DDGI_FLAG_MARKED_BEFORE_LAST_UPDATE | DDGI_FLAG_AWAITING_CHANGE);
-    let nextFlags = keptFlags | select(0u, DDGI_FLAG_MARKED_BEFORE_LAST_UPDATE, marked);
-    next.scheduleAndFlags = (history.scheduleAndFlags & ~DDGI_HISTORY_FLAGS_MASK) | nextFlags;
-    let kind = select(select(DDGI_UPDATE_QUIET, DDGI_UPDATE_MARKED, marked), DDGI_UPDATE_FIRST, firstUpdate);
+    next.urgency = select(0.0, history.urgency, nextOwed > 0u);
+    let keptFlags = flags & ~(DDGI_FLAG_MARKED | DDGI_FLAG_MARKED_BEFORE_LAST_UPDATE | DDGI_FLAG_AWAITING_CHANGE | DDGI_FLAG_TAKING_CHANGE);
+    let stillTaking = takingChange && nextOwed > 0u;
+    let nextFlags = keptFlags | select(0u, DDGI_FLAG_MARKED_BEFORE_LAST_UPDATE, marked) | select(0u, DDGI_FLAG_TAKING_CHANGE, stillTaking);
+    next.scheduleAndFlags = (history.scheduleAndFlags & ~DDGI_HISTORY_FLAGS_MASK) | select(nextFlags, 0u, firstUpdate);
+    let kind = select(select(DDGI_UPDATE_QUIET, DDGI_UPDATE_MARKED, marked || takingChange), DDGI_UPDATE_FIRST, firstUpdate);
     return DdgiHysteresisStep(hysteresis, next, kind);
 }
 
 // The most samples a probe may keep after the changes reported since its
 // last update (docs/design/m2-lights.md §4.1). r is the relative change of
 // its light that ddgi/mark added up, epsilon the tolerance, K the updates it
-// is expected to get soon:
+// was promised (the scheduler serves them soon):
 // - a step: the error left after K updates is r * n / (n + K); setting that
 //   to epsilon gives n <= epsilon K / (r - epsilon) when r > epsilon, and
 //   nothing for smaller changes;
@@ -500,14 +554,14 @@ fn ddgiHysteresisStep(history: DdgiProbeHistory, state: u32) -> DdgiHysteresisSt
 //   about tau of it; n <= epsilon / r keeps the lag near epsilon.
 // Symmetric on purpose: brighter or darker, the cut is by the size of the
 // change, so a lamp switched on arrives as fast as one switched off.
-fn ddgiChangeLimit(pendingChange: f32, flags: u32) -> f32 {
+fn ddgiChangeLimit(pendingChange: f32, flags: u32, promised: f32) -> f32 {
     if (ddgi.changeDrivenHistory == 0u || pendingChange <= 0.0) {
         return DDGI_NO_HISTORY_LIMIT;
     }
     let tolerance = ddgi.changeTolerance;
     var limit = DDGI_NO_HISTORY_LIMIT;
     if (pendingChange > tolerance) {
-        limit = tolerance * ddgi.changeUpdates / (pendingChange - tolerance);
+        limit = tolerance * promised / (pendingChange - tolerance);
     }
     let steady = (flags & DDGI_FLAG_MARKED) != 0u && (flags & DDGI_FLAG_MARKED_BEFORE_LAST_UPDATE) != 0u;
     if (steady) {
@@ -591,9 +645,11 @@ fn ddgiBlendDistanceTexel(slot: u32, probeIndex: u32, probe: vec3i, texelIndex: 
 // - The noise: how far an update's mean estimate lands from the stored mean,
 //   |estimate - old| (the blend moves the mean by (1 - h) of that, so this
 //   doesn't depend on h), as the root of a running mean of its square, the
-//   channels averaged. Only quiet updates feed it: a reported change isn't
-//   noise. T2.4b's feedback rule compares an update's change with it.
-fn ddgiWriteHistory(probeIndex: u32, estimateSum: vec3f, oldSum: vec3f, probeHysteresis: f32, fastHysteresis: bool) {
+//   channels averaged. Only quiet updates feed it: a reported change, or one
+//   still being taken in, isn't noise.
+// - The feedback rule compares a quiet update's change with that noise and
+//   may ask for more updates (ddgiFeedbackFires).
+fn ddgiWriteHistory(probeIndex: u32, probe: vec3i, estimateSum: vec3f, oldSum: vec3f, probeHysteresis: f32, fastHysteresis: bool) {
     let texelCount = f32(DDGI_IRRADIANCE_TEXEL_COUNT);
     let estimateMean = estimateSum / texelCount;
     let oldMean = oldSum / texelCount;
@@ -601,18 +657,79 @@ fn ddgiWriteHistory(probeIndex: u32, estimateSum: vec3f, oldSum: vec3f, probeHys
     let mean = max(mix(estimateMean, oldMean, hysteresis), vec3f(0.0));
     var history = ddgiNextHistory;
     let previousNoise = unpack2x16float(history.meanBlueNoise).y;
+    // |estimate - stored| per channel, the channels' root mean square. The
+    // blend moves the mean by (1 - h) of it, so this is the feedback rule's
+    // |change of the mean| / (1 - h), the same whatever h is (after a cut, say).
+    let deviation = abs(estimateMean - oldMean);
+    let deviationSquared = dot(deviation, deviation) / 3.0;
+    let deviationSize = sqrt(deviationSquared);
+    let meanSize = sqrt(dot(oldMean, oldMean) / 3.0);
+    // The updates blended before this one (the record already counts this one).
+    let blendedBefore = (history.updates & DDGI_HISTORY_COUNT_MASK) - 1u;
+    let fired = ddgiUpdateKind == DDGI_UPDATE_QUIET && ddgiFeedbackFires(deviationSize, previousNoise, meanSize, blendedBefore);
     var noise = previousNoise;
     if (ddgiUpdateKind == DDGI_UPDATE_FIRST) {
         noise = 0.0;
-    } else if (ddgiUpdateKind == DDGI_UPDATE_QUIET) {
-        let deviation = abs(estimateMean - oldMean);
-        let deviationSquared = dot(deviation, deviation) / 3.0;
+    } else if (ddgiUpdateKind == DDGI_UPDATE_QUIET && !fired) {
+        // An update that tripped the feedback rule saw a change, not noise.
         // The first quiet update starts the average at its own value.
         let averaged = select(mix(previousNoise * previousNoise, deviationSquared, 1.0 / DDGI_NOISE_UPDATES), deviationSquared, previousNoise <= 0.0);
         noise = sqrt(averaged);
     }
     history.meanRedGreen = pack2x16float(mean.rg);
     history.meanBlueNoise = pack2x16float(vec2f(mean.b, noise));
+    ddgiProbeHistory[probeIndex] = history;
+    atomicAdd(&ddgiCensus[DDGI_CENSUS_PROBES_BLENDED_TOTAL], 1u);
+    if (fired) {
+        ddgiRequestFeedback(probeIndex, probe, deviationSize / max(meanSize, DDGI_SMALLEST_NORMAL_HALF));
+        atomicAdd(&ddgiCensus[DDGI_CENSUS_FEEDBACK_FIRED], 1u);
+        atomicAdd(&ddgiCensus[DDGI_CENSUS_FEEDBACK_FIRED_TOTAL], 1u);
+    }
+}
+
+// The feedback rule's test (m2-lights.md §4.6) for a quiet update: the
+// estimate lands more than 4 sigma from the stored value (sigma: the probe's
+// noise word) and more than 2% of it. At 4 sigma a Gaussian noise trips about
+// once in 16,000 updates. Not during a probe's warm-up ramp (its first
+// rampUpdates updates are expected to move while bounce light fills in, and
+// its noise isn't averaged yet), nor before it has a noise at all.
+fn ddgiFeedbackFires(deviation: f32, noise: f32, mean: f32, blendedBefore: u32) -> bool {
+    if (ddgi.feedback == 0u || !(noise > 0.0) || f32(blendedBefore) < ddgi.rampUpdates) {
+        return false;
+    }
+    return deviation > DDGI_FEEDBACK_NOISE_MULTIPLE * noise && deviation > DDGI_FEEDBACK_MIN_SHARE * mean;
+}
+
+// One more update for the probe at this urgency, and for its active face
+// neighbours at half of it. In a buffer of its own: the blend never writes
+// another probe's history (each workgroup owns only its own probe).
+// Non-negative floats order like their bits, so atomicMax keeps the largest.
+fn ddgiRequestFeedback(probeIndex: u32, probe: vec3i, urgency: f32) {
+    atomicMax(&ddgiFeedbackRequests[probeIndex], bitcast<u32>(urgency));
+    let counts = vec3i(ddgiProbeCount());
+    let neighbourUrgency = bitcast<u32>(urgency * DDGI_FEEDBACK_NEIGHBOUR_SHARE);
+    for (var face = 0u; face < 6u; face++) {
+        var neighbour = probe;
+        neighbour[face % 3u] += select(1, -1, face >= 3u);
+        if (any(neighbour < vec3i(0)) || any(neighbour >= counts)) {
+            continue;
+        }
+        if (ddgiReadProbeData(ddgiProbeData, neighbour).state != DDGI_STATE_ACTIVE) {
+            continue;
+        }
+        let neighbourIndex = u32(neighbour.x) + u32(counts.x) * (u32(neighbour.z) + u32(counts.z) * u32(neighbour.y));
+        atomicMax(&ddgiFeedbackRequests[neighbourIndex], neighbourUrgency);
+    }
+}
+
+// A listed probe that isn't blended this update (off, or switched off by it)
+// owes nothing: off probes trace only their fixed rays and take no light,
+// and a promise left in its record would keep it at priority for ever.
+fn ddgiForgetPromises(probeIndex: u32) {
+    var history = ddgiProbeHistory[probeIndex];
+    history.updates = history.updates & ~(DDGI_OWED_MASK << DDGI_OWED_SHIFT);
+    history.urgency = 0.0;
+    history.scheduleAndFlags = history.scheduleAndFlags & ~DDGI_FLAG_TAKING_CHANGE;
     ddgiProbeHistory[probeIndex] = history;
 }
 
@@ -669,6 +786,8 @@ fn ddgiBlend(
             ddgiUpdateHysteresis = step.hysteresis;
             ddgiNextHistory = step.history;
             ddgiUpdateKind = step.kind;
+        } else {
+            ddgiForgetPromises(probeIndex);
         }
         // Offsets and states are small exact values in half floats; no rounding noise wanted.
         let base = slot * DDGI_SCRATCH_STRIDE + DDGI_SCRATCH_PROBE_DATA;
@@ -718,7 +837,7 @@ fn ddgiBlend(
         let ruleOn = ddgi.irradianceChangeThreshold >= 0.0;
         ddgiChangedNow = select(0u, 1u, ruleOn && any(abs(estimateSum - oldSum) > ddgi.irradianceChangeThreshold * oldSum));
         ddgiFastHysteresis = select(0u, 1u, ddgiTexelOld[0].a > 0.5);
-        ddgiWriteHistory(probeIndex, estimateSum, oldSum, hysteresis, ddgiFastHysteresis != 0u);
+        ddgiWriteHistory(probeIndex, probe, estimateSum, oldSum, hysteresis, ddgiFastHysteresis != 0u);
     }
     let changedNow = workgroupUniformLoad(&ddgiChangedNow) != 0u;
     let fastHysteresis = workgroupUniformLoad(&ddgiFastHysteresis) != 0u;

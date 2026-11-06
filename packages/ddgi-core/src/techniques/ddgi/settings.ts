@@ -99,6 +99,46 @@ export interface DDGISettings {
      * against probes that really changed ({@link DEFAULT_LIGHT_CHANGE_SCALE}).
      */
     lightChangeScale: number;
+    /**
+     * The share of each frame's probes the GPU scheduler gives to probes that
+     * are owed updates after a change, most urgent and nearest the camera
+     * first (docs/design/m2-lights.md §4.3). The rest always goes to the
+     * round robin through every probe, so no probe is starved. 0..1.
+     */
+    priorityShare: number;
+    /**
+     * After a global change (the sun, the sky) on a volume too big to give
+     * every probe {@link changeUpdates} updates within
+     * {@link FAR_RULE_FRAMES} frames, probes away from the camera's view
+     * (camera weight under {@link NEAR_CAMERA_WEIGHT}) are owed this many
+     * updates instead, and their history is cut for that many (m2-lights.md
+     * §6.4, "far probes owe 2"). They are noisier for a while, and their
+     * history grows back with the round robin.
+     */
+    farProbeUpdates: number;
+    /**
+     * The feedback rule (m2-lights.md §4.6). On (the default): a probe whose
+     * own update lands further from its stored value than its noise allows,
+     * with no change reported, asks for one more update soon, and so do its 6
+     * neighbours. It only schedules; it never changes how an update blends.
+     * Catches changes nobody reported (an emissive texture animated on the
+     * GPU, a material edit).
+     */
+    feedback: boolean;
+    /**
+     * The warm-up (moved from the viewer into the technique, T2.4b): after
+     * `prepare` and after `resetHistory`, once the ray-tracing trees are
+     * built, this many passes over every probe, as many probes a frame as
+     * {@link maxProbesPerFrame} allows, whatever the frame's budget, with no
+     * time between them for the history. What a game does behind its loading
+     * screen: at 2 ms a frame Sponza's 19,425 probes would take a minute to
+     * fill from black. 0 switches it off; GI then fills in at the budget.
+     */
+    warmUpPasses: number;
+    /** The warm-up stops early after this many seconds of warming... */
+    warmUpMaxSeconds: number;
+    /** ...but not before every probe was updated this many times, so no probe is left black. */
+    warmUpMinPasses: number;
     /** Largest change one update may make, as a multiple of the old value (fireflies). */
     maxBrightnessChange: number;
     /** Exponent of the cosine weight when blending distances. */
@@ -189,6 +229,48 @@ export const DEFAULT_CHANGE_UPDATES = 8;
  */
 export const DEFAULT_LIGHT_CHANGE_SCALE = 0.5;
 
+/**
+ * `priorityShare` by default (m2-lights.md §4.3): three quarters of a frame's
+ * probes go to probes owed updates, a quarter always to the round robin.
+ */
+export const DEFAULT_PRIORITY_SHARE = 0.75;
+
+/** `farProbeUpdates` by default: two updates bring a far probe within 5% under the cut (m2-lights.md §6.4). */
+export const DEFAULT_FAR_PROBE_UPDATES = 2;
+
+/**
+ * "Far probes owe 2" applies when giving every probe K updates at this
+ * frame's batch would take more than this many frames (`N × K / units`;
+ * m2-lights.md §6.4: 2 s at 60 Hz). Counted in frames, so the rule doesn't
+ * depend on the host's frame rate. Sponza (19,425 probes, about 290 a frame)
+ * needs about 540 frames, so it applies there; two-room (12) and Cornell (9)
+ * don't.
+ */
+export const FAR_RULE_FRAMES = 120;
+
+/**
+ * The camera weight's distance falloff, in probe spacings (m2-lights.md
+ * §4.3): `1 / (1 + (d / (4 × spacing))²)`. Within about 4 spacings of the
+ * camera a probe counts fully; at 10 spacings about 0.14.
+ */
+export const CAMERA_FALLOFF_SPACINGS = 4;
+
+/** A probe outside the view (frustum plus a cell's diagonal) counts this share as much (m2-lights.md §4.3). */
+export const OUT_OF_VIEW_WEIGHT = 0.25;
+
+/**
+ * Probes with at least this camera weight are "near and in view": after a
+ * global change they owe the full K updates, the rest {@link
+ * DEFAULT_FAR_PROBE_UPDATES} (m2-lights.md §6.4). 0.5 is a probe in view
+ * within 4 spacings of the camera.
+ */
+export const NEAR_CAMERA_WEIGHT = 0.5;
+
+/** The warm-up by default: 16 passes, stopping after 8 s once 2 are done (the viewer's rule since T1.8; DECISIONS 2026-11-05). */
+export const DEFAULT_WARM_UP_PASSES = 16;
+export const DEFAULT_WARM_UP_MAX_SECONDS = 8;
+export const DEFAULT_WARM_UP_MIN_PASSES = 2;
+
 /** The kernel's stand-in for an endless ramp (no Infinity in a shader that may assume finite floats). */
 const RAMP_UPDATES_ENDLESS = 1e9;
 
@@ -213,6 +295,12 @@ export const DEFAULT_DDGI_SETTINGS: Readonly<Omit<DDGISettings, 'volume'>> = {
     changeTolerance: DEFAULT_CHANGE_TOLERANCE,
     changeUpdates: DEFAULT_CHANGE_UPDATES,
     lightChangeScale: DEFAULT_LIGHT_CHANGE_SCALE,
+    priorityShare: DEFAULT_PRIORITY_SHARE,
+    farProbeUpdates: DEFAULT_FAR_PROBE_UPDATES,
+    feedback: true,
+    warmUpPasses: DEFAULT_WARM_UP_PASSES,
+    warmUpMaxSeconds: DEFAULT_WARM_UP_MAX_SECONDS,
+    warmUpMinPasses: DEFAULT_WARM_UP_MIN_PASSES,
     maxBrightnessChange: 2.0,
     distanceSharpness: 50,
     normalBias: 'auto',
@@ -392,6 +480,9 @@ export function blendSettings(settings: DDGISettings): {
     changeTolerance: number;
     changeUpdates: number;
     lightChangeScale: number;
+    priorityShare: number;
+    farProbeUpdates: number;
+    feedback: boolean;
 } {
     const defaults = DEFAULT_DDGI_SETTINGS;
     const memorySeconds = settings.hysteresisMemorySeconds;
@@ -416,5 +507,29 @@ export function blendSettings(settings: DDGISettings): {
         changeTolerance: clamp(settings.changeTolerance, 1e-4, 0.99, defaults.changeTolerance),
         changeUpdates: clamp(settings.changeUpdates, 1, 1000, defaults.changeUpdates),
         lightChangeScale: clamp(settings.lightChangeScale, 0, 1000, defaults.lightChangeScale),
+        priorityShare: clamp(settings.priorityShare, 0, 1, defaults.priorityShare),
+        // Whole updates, 1..255: the owed count is 8 bits of the history record (PROBE_HISTORY_UPDATES).
+        farProbeUpdates: Math.round(clamp(settings.farProbeUpdates, 1, MAX_OWED_UPDATES, defaults.farProbeUpdates)),
+        feedback: settings.feedback !== false,
+    };
+}
+
+/** The most updates a probe can be owed: 8 bits in its history record (PROBE_HISTORY_UPDATES in layout.ts). */
+export const MAX_OWED_UPDATES = 255;
+
+/** K as whole owed updates (the owed count is an integer in the history record). */
+export function owedUpdates(changeUpdates: number): number {
+    return Math.max(1, Math.min(MAX_OWED_UPDATES, Math.round(changeUpdates)));
+}
+
+/** The live warm-up settings, limited to sensible values. */
+export function warmUpSettings(settings: DDGISettings): { passes: number; maxSeconds: number; minPasses: number } {
+    const defaults = DEFAULT_DDGI_SETTINGS;
+    const passes = Number.isFinite(settings.warmUpPasses) && settings.warmUpPasses > 0 ? settings.warmUpPasses : 0;
+    return {
+        passes,
+        maxSeconds: settings.warmUpMaxSeconds >= 0 ? settings.warmUpMaxSeconds : defaults.warmUpMaxSeconds,
+        // Never more than the passes asked for.
+        minPasses: Math.min(passes, settings.warmUpMinPasses >= 0 ? settings.warmUpMinPasses : defaults.warmUpMinPasses),
     };
 }

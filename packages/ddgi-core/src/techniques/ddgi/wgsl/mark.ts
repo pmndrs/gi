@@ -30,9 +30,13 @@
  * - **everywhere:** `r` from the CPU as it is.
  *
  * Then the probe's record (PROBE_HISTORY_WORD in layout.ts):
- * `pendingChange += r`, `urgency = max(urgency, pendingChange)`, and the
- * marked flag. Many entries can mark one probe, so these are atomics. The
- * blend cuts the history from `pendingChange` at the probe's next update.
+ * `pendingChange += r`, `urgency = max(urgency, pendingChange)`, the marked
+ * flag, and once `pendingChange` is over the tolerance, `owed = max(owed, K)`
+ * updates at priority (T2.4b): K for a local change, and after a global
+ * change on a big volume `farProbeUpdates` for probes away from the view
+ * (m2-lights.md §6.4). Many entries can mark one probe, so these are atomics.
+ * The blend cuts the history from `pendingChange` at the probe's next update,
+ * for the updates it was promised.
  * Probes that are off or not updated yet are skipped: off probes owe
  * nothing, and a new probe has no history to cut.
  *
@@ -52,9 +56,11 @@ import {
     MARK_KIND,
     MARK_LIGHT_KIND,
     PROBE_HISTORY_FLAG,
+    PROBE_HISTORY_UPDATES,
     PROBE_HISTORY_WORD,
     PROBE_HISTORY_WORDS,
 } from '../layout.ts';
+import { NEAR_CAMERA_WEIGHT } from '../settings.ts';
 import { DDGI_COMMON_WGSL } from './common.ts';
 import type { PhaseBReduction } from './blend.ts';
 
@@ -130,6 +136,12 @@ const DDGI_HISTORY_SCHEDULE_AND_FLAGS: u32 = ${PROBE_HISTORY_WORD.scheduleAndFla
 const DDGI_HISTORY_MEAN_RED_GREEN: u32 = ${PROBE_HISTORY_WORD.meanRedGreen}u;
 const DDGI_HISTORY_MEAN_BLUE_NOISE: u32 = ${PROBE_HISTORY_WORD.meanBlueNoise}u;
 const DDGI_FLAG_MARKED: u32 = ${PROBE_HISTORY_FLAG.marked}u;
+const DDGI_FLAG_TAKING_CHANGE: u32 = ${PROBE_HISTORY_FLAG.takingChange}u;
+const DDGI_HISTORY_UPDATES: u32 = ${PROBE_HISTORY_WORD.updates}u;
+const DDGI_OWED_SHIFT: u32 = ${PROBE_HISTORY_UPDATES.owedShift}u;
+const DDGI_OWED_MASK: u32 = ${PROBE_HISTORY_UPDATES.owedMask}u;
+// After a global change, probes at least this near the camera's view owe the full K (m2-lights.md §6.4).
+const DDGI_NEAR_CAMERA_WEIGHT: f32 = ${NEAR_CAMERA_WEIGHT};
 
 // One light's state in the table (MARK_LIGHT_WORD in layout.ts). A side that
 // doesn't exist (a light created or destroyed this frame) has intensity 0.
@@ -284,8 +296,11 @@ fn ddgiMarkGlobalChange(entry: DdgiMarkEntry, probe: vec3i) -> f32 {
 // Adds r to the probe's record: pendingChange += r (a compare-and-swap loop,
 // WGSL has no float atomics), urgency = max(urgency, pendingChange) (r and
 // the sums are never negative, and non-negative floats order like their
-// bits), and the marked flag.
-fn ddgiMarkProbe(probeIndex: u32, change: f32) {
+// bits), and the marked flag. Once the change adds up to more than the
+// tolerance, the probe is owed 'promised' updates at priority (the GPU
+// scheduler keeps the promise; a smaller change cuts nothing, so it isn't
+// worth the budget).
+fn ddgiMarkProbe(probeIndex: u32, change: f32, promised: u32) {
     let base = probeIndex * DDGI_HISTORY_WORDS;
     var old = atomicLoad(&ddgiProbeHistoryWords[base + DDGI_HISTORY_PENDING_CHANGE]);
     var pending = bitcast<f32>(old) + change;
@@ -299,6 +314,46 @@ fn ddgiMarkProbe(probeIndex: u32, change: f32) {
     }
     atomicMax(&ddgiProbeHistoryWords[base + DDGI_HISTORY_URGENCY], bitcast<u32>(pending));
     atomicOr(&ddgiProbeHistoryWords[base + DDGI_HISTORY_SCHEDULE_AND_FLAGS], DDGI_FLAG_MARKED);
+    if (pending > ddgi.changeTolerance) {
+        ddgiOweUpdates(base, promised);
+        atomicOr(&ddgiProbeHistoryWords[base + DDGI_HISTORY_SCHEDULE_AND_FLAGS], DDGI_FLAG_TAKING_CHANGE);
+    }
+}
+
+// owed = max(owed, promised), in bits 16-23 of the updates word, whose low
+// bits (k) other threads don't touch in this dispatch: a compare-and-swap
+// loop, because WGSL has no atomic on part of a word.
+fn ddgiOweUpdates(base: u32, promised: u32) {
+    var old = atomicLoad(&ddgiProbeHistoryWords[base + DDGI_HISTORY_UPDATES]);
+    loop {
+        let owed = (old >> DDGI_OWED_SHIFT) & DDGI_OWED_MASK;
+        if (owed >= promised) {
+            break;
+        }
+        let next = (old & ~(DDGI_OWED_MASK << DDGI_OWED_SHIFT)) | (promised << DDGI_OWED_SHIFT);
+        let swapped = atomicCompareExchangeWeak(&ddgiProbeHistoryWords[base + DDGI_HISTORY_UPDATES], old, next);
+        if (swapped.exchanged) {
+            break;
+        }
+        old = swapped.old_value;
+    }
+}
+
+// Whole updates, 1..255 (the owed count's 8 bits).
+fn ddgiWholeUpdates(updates: f32) -> u32 {
+    return clamp(u32(round(updates)), 1u, DDGI_OWED_MASK);
+}
+
+// How many updates a change promises the probe (m2-lights.md §6.4): K for a
+// local change, and for a global one too near the camera's view; far probes
+// owe fewer after a global change on a big volume (farOwedUpdates is K when
+// that rule is off this frame).
+fn ddgiPromisedUpdates(entry: DdgiMarkEntry, probe: vec3i) -> u32 {
+    let full = ddgiWholeUpdates(ddgi.changeUpdates);
+    if (entry.kind == DDGI_MARK_LOCAL_LIGHT || ddgiCameraWeight(probe) >= DDGI_NEAR_CAMERA_WEIGHT) {
+        return full;
+    }
+    return min(full, ddgiWholeUpdates(ddgi.farOwedUpdates));
 }
 
 // The probe's stored mean irradiance (written by ddgi/blend).
@@ -334,7 +389,7 @@ fn ddgiMarkThread(thread: u32) -> bool {
     if (!(change > 0.0)) {
         return false;
     }
-    ddgiMarkProbe(probeIndex, change);
+    ddgiMarkProbe(probeIndex, change, ddgiPromisedUpdates(entry, probe));
     return true;
 }
 

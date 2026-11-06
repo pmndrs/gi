@@ -50,7 +50,7 @@ import { checkComputeLimits } from './device-requirements.ts';
 import { PlatformHitShading } from './shade/hit-shading.ts';
 import { GpuTimer } from './timing/gpu-timer.ts';
 import { PlatformRayQueries } from './trace/ray-queries.ts';
-import { UnitCostMeter, WorkBudget, type BudgetReport, type UnitCostModel } from './work-budget.ts';
+import { UnitCostMeter, WorkBudget, type BudgetReport, type Calibration, type CalibrationMemory, type UnitCostModel } from './work-budget.ts';
 
 
 // Budget v2 lives in work-budget.ts; these names were exported from here before it.
@@ -58,6 +58,15 @@ export { DEFAULT_UNITS_PER_FRAME, type UnitCostModel } from './work-budget.ts';
 
 /** No scene changes: the screen stage runs after `encode`, which already reported them. */
 const NO_CHANGES: SceneChanges = { regions: [], global: [], movedReceivers: 0, lights: [], lightsOverflowed: false };
+
+/**
+ * The last calibration accepted per device, technique and scene, for the
+ * calibration guard (work-budget.ts, CALIBRATION `guardShare`). Per device
+ * and not per platform: a page or host that makes a new platform for the
+ * same scene on the same device (M1's flicker check did, and got one bad
+ * calibration) still has the previous one to compare with.
+ */
+const calibrationsByDevice = new WeakMap<GPUDevice, Map<string, Calibration>>();
 
 interface AttachedTechnique {
     readonly technique: GITechnique;
@@ -271,6 +280,12 @@ export class GIPlatformImpl implements GIPlatform {
             const shareMs = gpuMs === undefined ? undefined : gpuMs / Math.max(1, techniques.length);
             const timed = this.timer?.enabled === true;
             for (const technique of techniques) {
+                if (technique.warmingUp === true) {
+                    // Its own start-up work (GITechnique.warmingUp): no budget, and nothing for the
+                    // calibration to measure, which starts at the first frame after it.
+                    technique.encode(encoder, { frame: this.frame, deltaTime: frame.deltaTime, camera: frame.camera, changes, units: 0 });
+                    continue;
+                }
                 const budget = this.budgetFor(technique);
                 const units = budget.unitsFor({ frame: this.frame, deltaTime: frame.deltaTime, budget: frame.budget, shareMs, timed, sceneSettling });
                 const techniqueFrame: TechniqueFrame = {
@@ -426,10 +441,32 @@ export class GIPlatformImpl implements GIPlatform {
     private budgetFor(technique: GITechnique): WorkBudget {
         let budget = this.budgets.get(technique);
         if (!budget) {
-            budget = new WorkBudget(technique, { fillerAllowed: !this.calibratedOnce });
+            budget = new WorkBudget(technique, { fillerAllowed: !this.calibratedOnce, memory: this.calibrationMemory(technique), warn: (message) => this.warnOnce(message) });
             this.budgets.set(technique, budget);
         }
         return budget;
+    }
+
+    /**
+     * The previous calibration of this technique on this device and scene. The
+     * scene is known by its counts (meshes, instances, triangles) when the
+     * burst ends: a different scene is a different cost.
+     */
+    private calibrationMemory(technique: GITechnique): CalibrationMemory {
+        let byKey = calibrationsByDevice.get(this.device);
+        if (!byKey) {
+            byKey = new Map();
+            calibrationsByDevice.set(this.device, byKey);
+        }
+        const memory = byKey;
+        const key = (): string => {
+            const counts = this.sceneCopy.counts;
+            return `${technique.id}|${counts.meshes}|${counts.instances}|${counts.triangles}`;
+        };
+        return {
+            previous: () => memory.get(key()),
+            remember: (calibration) => memory.set(key(), calibration),
+        };
     }
 
     /** New resources, kernels or techniques: what was measured no longer applies. */
@@ -488,6 +525,8 @@ function budgetCounters(report: BudgetReport): Record<string, number> {
         counters['calibration filler frames'] = calibration.fillerFrames;
         counters['calibration filler ms'] = calibration.fillerMs;
         if (calibration.confirmFactor !== undefined) counters['calibration confirm factor'] = calibration.confirmFactor;
+        // The calibration guard measured again: the first burst's batch.
+        if (calibration.remeasuredFrom !== undefined) counters['calibration re-measured from'] = calibration.remeasuredFrom;
     }
     return counters;
 }
