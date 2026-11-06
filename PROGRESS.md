@@ -21,6 +21,40 @@ Rules:
 
 ---
 
+## 2026-11-06 · T2.M1 review and merge · M2 lead (opus)
+Did:
+- Opus review of T2.M1 against its 8-item done-when (TASKS): pass with notes, no must-fix. The lead sent the first hand-back back for two blockers, fixed in ff5e210..502fba3:
+  - the Intel subgroup/fallback mismatch: the test's input differed, not the mark;
+  - `setTransforms` 3.7 ms: per-slot state moved to flat typed arrays.
+- Lead rulings in DECISIONS (f0f9b14): item 1 is met on the median timed alone; item 6 is judged on converged fields at 3,000 frames; the far set over-marks small movers.
+- Merged `m2-t2.m1` into `m2` with no conflicts (the branch already had `m2`). TASKS: T2.M1 done, plus a T2.10 line for `setTransforms` in a real frame.
+
+Verified (reviewer, RTX 3060 nvidia/ampere, Chrome 156 headless, bench lock, not timed):
+- lint, typecheck, 1,006 unit tests;
+- the full suite, 50 pages, including `ddgi-mark-reduction`, `ddgi-direct`, `ddgi-warm-two-updates` and `platform-recompiles`;
+- the door, cabinet and `scene-set-transforms` pages;
+- `ddgi-key-probes-sponza`: view frame 4, field 24, halved 6, as in T2.4c;
+- the Intel diagnosis: the priority share takes slots by atomics (`schedule.ts:19-21`), and T2.4b's check sorts that part before comparing, so a different order is by design. The page now checks that both fields are identical before the mark.
+
+Lead, on the merged tree: lint, typecheck, 1,006 unit tests.
+
+Not verified: the reviewer re-timed nothing (items 1, 6 and 7 keep the implementer's VALID runs) and ran nothing on the Intel (the implementer's Intel batches stand).
+
+Numbers:
+- Item 1: 1.4 ms median, p95 2.1 (alone, CPU-locked); un-locked 1.8 / 3.1.
+- Item 3: cabinet within 5% from frame 15 at 562 probes; per-pixel error 1.9% at frame 30, 0.9% at frame 60. The summed change over the moved pixels is only 5.4%, because brighter and darker pixels cancel.
+- Item 4: door 0.17–0.18% at 1 s, 0.08% at 10 s.
+- Item 6: within 0.017% at 3,000 frames; cost within 2%.
+- Item 7: adapter 0.062 / 0.065 ms.
+- Item 8: door recall 91%, precision 98%. Cabinet 993 marked, only 106 of 826 far-set marks real (13%); cost about 10 frames of the batch.
+
+Next:
+- T2.10: time `setTransforms` in an adapter frame with rendering.
+- M3's T3.4: scale the far-set angle Ω_ref to the mover's size.
+- `ddgi-mark-reduction` tests light entries only, not geometry entries.
+- The counting device view will fail M3's same-device check for `setDeformedPositions`.
+- Formatting leftovers: stray blank lines (`scene-sync.ts:1289`, `instance-transforms.ts:31`, `write.ts`, `mark.ts`) and indentation at `ddgi-mark-reduction/main.ts:157-158`.
+
 ## 2026-11-06 · T2.M1 rigid moving objects · implementer (opus)
 Did (branch `m2-t2.m1`, a87133b..HEAD, `m2` with T2.2 merged in at 13f0569): `SceneApi.setTransforms`, `DirtyRegion.moved`/`.instance`, `GIStats.recompiles` (compile-counter.ts: a counting view of the host's device for the platform's own code); the change log in typed columns, folding past 256 regions; instance boxes and move distances from a per-instance world frame. DDGI: geometry entries in `ddgi/mark` (near set incl. off probes, `FREED_PROBE_URGENCY_SHARE` 16; far set by entry distance or mover mask, Ω/0.5 sr), the mover table (mover-table.ts) and the blend's hit-point mask (history 48 → 64 B), state 3 ends after 2 blended updates (`warmedOnce`, scratch tiles-written word). three: one `setTransforms` per update; `InstancedMesh` update ranges. Pages: `ddgi-warm-two-updates`, `platform-recompiles` (suite); `scene-set-transforms`, `ddgi-door-swing`, `ddgi-move-cabinet` (manual). Docs: platform.md, three.md, ddgi.md "Moving geometry", m3-moving.md as-built; DECISIONS (5), NOTES.
 Verified, RTX 3060 (nvidia/ampere), Chrome 156 headless, merged code unless said. 1: `setTransforms` ×10,000 **3.7 ms** median, sliding (bar 2 ms: **missed**; one call each 15 ms; CPU-locked run); `moved` per region: unit tests. 2: recompiles 0 through 1,000 instances and 20 meshes made/moved/destroyed, control kernel counts 1 (RTX, Intel). 3: cabinet 1 m slide, changed pixels within 5% for good from frame **15** at a calibrated 580 (pre-merge: frame 29 at 358). 4: door swung shut in 1 s at 880: dark room **0.20%** of the lit room the frame after closing, 0.18% at 1 s, 0.08% at 10 s, converged 0.012% (open 7.5%). 5: `ddgi-warm-two-updates`: no probe active after 1 update, view GI 0; freed probes active in frame 3 after exactly 2 blended updates; both reductions, RTX and Intel. 6: field against `m2` (b50057e), 3,000 frames: within **0.017%** (Cornell, two-room, fixed 0.97; at 600 frames two-room +0.14% atlas / +0.12% view, a settling transient, DECISIONS); cost, one VALID run each, Sponza curve: 256 probes 1.049 against 1.049 ms, 512 1.586 / 1.582, ≤512 fit 0.599 ms + 1.891 µs against 0.591 + 1.903 (within 2% everywhere). 7: adapter batch and ranges unit-tested; `three-adapter-timing` VALID: still **0.062** ms, one mover **0.065** ms. 8: door step recall 91.4% / precision 97.8% (near 130/130, far 723/803; misses 1.5-8 spacings out), swing 91.5% / 97.7%; cabinet recall 98.1%, precision **25.8%** (992 marked).
