@@ -26,6 +26,10 @@
  * Both must meet the targets.
  *
  * Targets (TASKS T1.7): still ≤ 0.2 ms, one object moving ≤ 0.5 ms.
+ * T2.1 checks the still target on `sponza-candles` (1,024 lights) as the
+ * median of 300 frames, reported as `still.frames.syncMs.medianOf300`; the
+ * page draws that scene with three's clustered lighting, as the viewer does
+ * (apps/viewer/src/render/scene-lighting.ts).
  *
  * Also measured: how many frames until a static object's first move reaches
  * GI without `markChanged` (the walk's detection latency), and with it.
@@ -42,6 +46,7 @@ import { ThreeGI } from '../../../../packages/ddgi-three/src/three-gi.ts';
 import { DEFAULT_OBJECTS_PER_FRAME, HOT_FRAMES } from '../../../../packages/ddgi-three/src/scene-sync.ts';
 import { loadAllManifests } from '../../../../apps/viewer/src/scene/manifests.ts';
 import { loadScene } from '../../../../apps/viewer/src/scene/load-scene.ts';
+import { sceneLighting } from '../../../../apps/viewer/src/render/scene-lighting.ts';
 import { platformSkyEnvironment } from '../../../../scenes/src/sky/sky-image.ts';
 import type { EnvironmentDescriptor } from '../../../../packages/ddgi-core/src/platform/contract/scene.ts';
 import { runThreePage } from '../three-shared/harness.ts';
@@ -89,6 +94,7 @@ await runThreePage(async ({ device, renderer, data, log }) => {
     data.scene = sceneId;
     const loaded = await loadScene(manifest, () => {});
     const scene = loaded.scene;
+    renderer.lighting = sceneLighting(loaded.directLights, renderer.lighting);
     // The viewer's sky dome is a picture of the sky, not geometry (T1.8 marks it the same way).
     const content = new Set<Object3D>();
     loaded.content.traverse((object) => content.add(object));
@@ -152,7 +158,7 @@ await runThreePage(async ({ device, renderer, data, log }) => {
             sent.push(threeGI.report.transforms + threeGI.report.materials + threeGI.report.lights + threeGI.report.meshes);
             if (index % 8 === 7) await device.queue.onSubmittedWorkDone();
         }
-        return { syncMs: summary(sync), emptyIntervalMs: summary(empty), matrixWorldMs: summary(matrices), encodeMs: summary(encode), changesSentPerFrame: summary(sent) };
+        return { syncMs: { ...summary(sync), medianOf300: median(sync.slice(0, 300)) }, emptyIntervalMs: summary(empty), matrixWorldMs: summary(matrices), encodeMs: summary(encode), changesSentPerFrame: summary(sent) };
     };
 
     /** Mean ms of BATCH back-to-back syncs, BATCH_REPEATS times; the median of those means. */
@@ -228,7 +234,7 @@ await runThreePage(async ({ device, renderer, data, log }) => {
     data.still = { frames: stillFrames, batched: stillBatched };
     data.moving = { frames: movingFrames, batched: movingBatched };
     data.warnings = warnings;
-    log(`still: sync per frame mean ${stillFrames.syncMs.mean.toFixed(3)} ms (median ${stillFrames.syncMs.median.toFixed(3)}, p95 ${stillFrames.syncMs.p95.toFixed(3)}), batched ${stillBatched.meanMsPerSync.toFixed(4)} ms`);
+    log(`still: sync per frame mean ${stillFrames.syncMs.mean.toFixed(3)} ms (median ${stillFrames.syncMs.median.toFixed(3)}, median of the first 300 ${stillFrames.syncMs.medianOf300.toFixed(3)}, p95 ${stillFrames.syncMs.p95.toFixed(3)}), batched ${stillBatched.meanMsPerSync.toFixed(4)} ms; ${loaded.directLights.length} lights`);
     log(`moving: sync per frame mean ${movingFrames.syncMs.mean.toFixed(3)} ms (median ${movingFrames.syncMs.median.toFixed(3)}, p95 ${movingFrames.syncMs.p95.toFixed(3)}), batched ${movingBatched.meanMsPerSync.toFixed(4)} ms`);
     log(`three's own updateMatrixWorld ${(data.threeUpdateMatrixWorldMs as number).toFixed(3)} ms; platform encode per frame median ${stillFrames.encodeMs.median.toFixed(3)} ms`);
 
@@ -239,6 +245,7 @@ await runThreePage(async ({ device, renderer, data, log }) => {
     assert(movingFrames.changesSentPerFrame.median === 1, `one moving object sent a median of ${movingFrames.changesSentPerFrame.median} changes per frame`);
     assert(stillBatched.meanMsPerSync <= STILL_TARGET_MS, `still scene: ${stillBatched.meanMsPerSync.toFixed(3)} ms per sync (batched), over ${STILL_TARGET_MS} ms`);
     assert(movingBatched.meanMsPerSync <= MOVING_TARGET_MS, `one object moving: ${movingBatched.meanMsPerSync.toFixed(3)} ms per sync (batched), over ${MOVING_TARGET_MS} ms`);
+    assert(stillFrames.syncMs.medianOf300 <= STILL_TARGET_MS, `still scene: median of 300 frames ${stillFrames.syncMs.medianOf300.toFixed(3)} ms, over ${STILL_TARGET_MS} ms`);
     assert(stillFrames.syncMs.mean <= STILL_TARGET_MS, `still scene: ${stillFrames.syncMs.mean.toFixed(3)} ms per frame (mean of ${FRAMES}), over ${STILL_TARGET_MS} ms`);
     assert(movingFrames.syncMs.mean <= MOVING_TARGET_MS, `one object moving: ${movingFrames.syncMs.mean.toFixed(3)} ms per frame (mean of ${FRAMES}), over ${MOVING_TARGET_MS} ms`);
     assert(unmarked <= Math.ceil(objectsInScene / objectsPerFrame) + 1, `a static object's first move took ${unmarked} frames to reach GI`);

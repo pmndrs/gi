@@ -206,7 +206,7 @@ export class ViewerApp {
         this.showLoading(`Loading ${manifest.title}`, { stage: 'Starting', fraction: null });
         await nextFrame();
         try {
-            const loaded = await this.core.loadScene(manifest, (progress) => this.showLoading(`Loading ${manifest.title}`, progress));
+            const loaded = await this.core.loadScene(manifest, (progress) => this.showLoading(`Loading ${manifest.title}`, progress), { settings: this.url.sceneSettings });
             this.manifest = manifest;
             this.url.scene = manifest.id;
             this.rig.setSceneScale(loaded.diagonal);
