@@ -241,7 +241,7 @@ const DDGI_DARK_MEAN: f32 = 1.0e-6;
 const DDGI_UPDATE_FIRST: u32 = 0u;   // state 3: the history starts again, noise 0
 const DDGI_UPDATE_QUIET: u32 = 1u;   // no change reported: feeds the noise, and may trip the feedback rule
 const DDGI_UPDATE_MARKED: u32 = 2u;  // a reported change, or still taking one in: the noise is kept as it was
-const DDGI_UPDATE_HELD: u32 = 3u;    // the test mode holdFineProbes: a fine probe waiting for its keys keeps its tiles and record
+const DDGI_UPDATE_HELD: u32 = 3u;    // the test mode holdFineProbes: a fine probe waiting for its keys keeps its tiles and its change
 
 // Phase B rules (Majercik et al. 2021, section 5).
 // More than this share of fixed rays hitting back faces means the probe is inside something.
@@ -553,9 +553,16 @@ fn ddgiHysteresisStep(history: DdgiProbeHistory, state: u32, changeClock: u32) -
     let flags = history.scheduleAndFlags & DDGI_HISTORY_FLAGS_MASK;
     let marked = (flags & DDGI_FLAG_MARKED) != 0u;
     let awaiting = (flags & DDGI_FLAG_AWAITING_CHANGE) != 0u;
-    // The test mode: a fine probe waiting for its keys keeps everything (ddgiBlend writes its old tiles back).
+    // The test mode: a fine probe waiting for its keys keeps its tiles
+    // (ddgiBlend writes the old ones back), its change and its flags, so only
+    // propagation moves it. It gives up its owed updates: held, it would stay
+    // owed for ever and take priority slots from the keys whose propagation
+    // is being measured.
     if (ddgi.holdFineProbes != 0u && awaiting && !firstUpdate) {
-        return DdgiHysteresisStep(1.0, history, DDGI_UPDATE_HELD);
+        var held = history;
+        held.updates = history.updates & ~(DDGI_OWED_MASK << DDGI_OWED_SHIFT);
+        held.urgency = 0.0;
+        return DdgiHysteresisStep(1.0, held, DDGI_UPDATE_HELD);
     }
     let owed = (history.updates >> DDGI_OWED_SHIFT) & DDGI_OWED_MASK;
     // The cut is for the updates the probe was promised (ddgi/mark: K, or
@@ -933,6 +940,10 @@ fn ddgiBlend(
             ddgiUpdateHysteresis = step.hysteresis;
             ddgiNextHistory = step.history;
             ddgiUpdateKind = step.kind;
+            if (step.kind == DDGI_UPDATE_HELD) {
+                // Its record without the owed updates; nothing else of it changes (ddgiWriteHistory is skipped).
+                ddgiProbeHistory[probeIndex] = step.history;
+            }
             if (step.kind != DDGI_UPDATE_HELD && ddgiPassesChange(probe, history, state)) {
                 // The header of this slot's key-delta entry, and the flag
                 // ddgi/propagate finds it by (valid in this frame, the frame

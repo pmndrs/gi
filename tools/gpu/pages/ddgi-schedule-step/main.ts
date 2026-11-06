@@ -19,7 +19,9 @@
  * - **sweep** (the steady-change rule): the two-room lamp glides along x at
  *   SWEEP_SPEED m/s; at 3 moments the view is compared with a field
  *   converged with the lamp where it is at that moment, and must be within
- *   5% of it.
+ *   5% of it, as a mean and per pixel (the mean over pixels of |view −
+ *   converged|, over the converged mean; TASKS, T2.4c: the swinging lamp
+ *   hardly moves the view's mean).
  * - **census** (check 3, on two-room): the lamp swings back and forth for
  *   60 s (3,600 frames); no probe may go more than 2 full passes of the round
  *   robin without being listed (ScheduleGapCensus). A pass of the round
@@ -242,7 +244,11 @@ await runGpuTest(
                 );
             }
             results.sweep = { speedMetresPerSecond: SWEEP_SPEED, units, ...sweeps };
-            for (const check of sweeps.changeDriven) if (Math.abs(check.error) > TOLERANCE) failures.push(`sweep: ${(check.error * 100).toFixed(1)}% from the converged field at ${check.seconds} s`);
+            for (const check of sweeps.changeDriven) {
+                if (Math.abs(check.error) > TOLERANCE) failures.push(`sweep: ${(check.error * 100).toFixed(1)}% from the converged field at ${check.seconds} s`);
+                // Per pixel too (TASKS, T2.4c): the swinging lamp hardly moves the view's mean, so the mean alone can't tell rules apart.
+                if (check.perPixelError > TOLERANCE) failures.push(`sweep: per pixel ${(check.perPixelError * 100).toFixed(1)}% from the converged field at ${check.seconds} s`);
+            }
         }
 
         if (SECTIONS.has('census')) {
