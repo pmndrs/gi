@@ -61,7 +61,6 @@ import {
     probeErrors,
     probeMeans,
     quantile,
-    sponzaFrames,
     startSponza,
     sunDirection,
     turnedSun,
