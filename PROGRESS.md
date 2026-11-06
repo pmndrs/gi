@@ -21,6 +21,32 @@ Rules:
 
 ---
 
+## 2026-11-07 · T2.5 review and merge · M2 lead (opus)
+Did:
+- Opus review of T2.5 against its done-when (m2-lights.md checks 1–4): pass with notes. One must-fix: a light changing group marked nothing. The implementer fixed it in c7223ac: the light is marked off in its old layer and on in its new one, with a unit test and a page check.
+- Lead ruling in DECISIONS (22bd0f3): check 2's cost is met by reading, not by the timing.
+- Merged `m2-t2.5` into `m2` with no conflicts. TASKS: T2.5 done, and a T2.6b line for the sun layer's route and the 6-layer cap.
+
+Verified:
+- Reviewer, RTX 3060 nvidia/ampere, Chrome 157, bench lock, correctness:
+  - lint, typecheck, 1,068 unit tests;
+  - full suite 51 PASS;
+  - check 1: within 0.002–0.003% of a field re-converged from scratch at three bookmarks, which moved 48% / 48% / 11% in their own frame; 0 marks; history and layers byte-identical;
+  - check 2: Cornell and the 0.97 run match `m2` exactly, and two-room's atlas differs in the 9th digit.
+- Implementer after the fix: a lamp moved from group 1 to 0 on two-room has every layer within 5% from frame 8 (0.8% at frame 30), on the RTX and the Intel UHD.
+- Lead, on the merged tree: lint, typecheck, 1,069 unit tests.
+
+Not verified: no re-timing. Check 3's single re-time on 03a972e stands: 1.23× two-room, 1.10× Sponza. The first build read 1.42× (two runs, 1.417 and 1.430) before the blend rewrite. Check 4 stands at 0.897 ms.
+
+Numbers:
+- Check 2 cost: +1.9% Sponza, +2.0% two-room. The two runs were at different clocks, and groups-off alone spreads about 5%, so the reading is "no measurable change at about ±5%".
+- Memory per extra layer: two-room 3.6 MB, Sponza 25.5 MB, plus one composed atlas. Sponza with 4 groups is +112 MB.
+
+Next:
+- T2.3 (running) must keep `giDirectGroupIrradiance`'s per-group split, and the ray-scratch header words 9–10 (`layers`, `groupLayers`). It merges `m2` before handing back.
+- T2.6b: the sun layer's route for directional lights in `gi/direct`; about 1.2 KB of workgroup headroom under the 6-layer cap.
+- T2.10: same-session A/B pairs for gates with bars under 5%.
+
 ## 2026-11-07 · T2.5 light groups: layers, compose, weights, adapter API · implementer (opus)
 Did (branch `m2-t2.5`, 946c125..HEAD; `m2` cb35896 merged at 8152e48): `settings.lightGroups` (`light-groups.ts`: the layer plan, a layer per group plus the environment; weights live); layers side by side in the atlas (`layout.ts`); `ddgi/trace` reads every layer's bounce with one set of probe weights (`ddgiCornerWeight`, shared with renderers' `ddgiAccumulateField`); the ray scratch holds a result per layer and `gi/direct` adds each group's light into its layer (`giDirectGroupIrradiance`, `groupLayers`); blend, write and propagation per layer; new `ddgi/compose` (`wgsl/compose.ts`) into a composed atlas renderers sample; `setGroupWeight`/`setEnvironmentWeight` on the technique, `GIPlatform.outputTechnique`, `ThreeGI.setGroupWeight(group, color, intensity)`. Pages: `ddgi-light-groups` (suite), `ddgi-light-groups-cost` (manual). Docs: three.md, platform.md, m2-lights.md §5 as built, DECISIONS (3), NOTES.
 Verified (RTX 3060 nvidia/ampere, Chrome 157 headless; merged code):
