@@ -54,13 +54,36 @@
  *   traced but not blended (its tiles and record stay as they are), so only
  *   propagation moves it.
  *
+ * Probes near moved geometry (T2.M1, docs/design/m3-moving.md §5):
+ * - the mover mask: each blended ray's hit point is tested against the boxes
+ *   of the hot movers (the mover table, a uniform buffer the CPU fills from
+ *   the scene's moves, mover-table.ts), and the probe's record keeps which
+ *   of them its rays hit this update. `ddgi/mark` adds a probe to a moved
+ *   object's far set when it has the object's bit. A ray that ends inside a
+ *   mover's box but on something else (the floor under it) only over-marks;
+ *   a ray that hits the mover always ends inside its box, so none is missed.
+ *   *Why here and not in the trace:* the hit point is the probe's position
+ *   plus the ray's direction times its stored distance, so no instance id
+ *   has to travel from the trace, whose storage buffers are full;
+ * - a probe in state 3 (new, reset, or back on) is used in shading only
+ *   after its second blended update (§5.2): one noisy estimate is a pop. Its
+ *   first blended update starts its history from nothing (h = 0) and keeps it
+ *   in state 3 (the `warmedOnce` flag); its second blends as usual and makes
+ *   it active. The scratch's tiles-written word tells `ddgi/write` that both
+ *   have tiles to copy;
+ * - a probe that comes back on keeps the updates it was owed, so its two
+ *   warming updates come at priority.
+ *
  * Bindings (group 1; no platform module): uniforms, the update list, the ray
  * buffer, the scratch buffer, the census buffer, the probe history, the
- * feedback requests and the key deltas (7 storage buffers), and the
- * irradiance, distance and probe-data atlases (sampled, for the old values).
+ * feedback requests and the key deltas (7 storage buffers), the mover table
+ * (a second uniform buffer), and the irradiance, distance and probe-data
+ * atlases (sampled, for the old values).
  */
 
 import {
+    MOVER_TABLE_CAPACITY,
+    SCRATCH_PROBE_DATA_WORD,
     CENSUS_CHANGE_CLOCK,
     CENSUS_FEEDBACK_FIRED,
     CENSUS_FEEDBACK_FIRED_TOTAL,
@@ -189,6 +212,9 @@ const DDGI_SCRATCH_STRIDE: u32 = ${scratch.strideWords}u;
 const DDGI_SCRATCH_IRRADIANCE: u32 = ${scratch.irradianceOffset}u;
 const DDGI_SCRATCH_DISTANCE: u32 = ${scratch.distanceOffset}u;
 const DDGI_SCRATCH_PROBE_DATA: u32 = ${scratch.probeDataOffset}u;
+const DDGI_SCRATCH_OFFSET_XY: u32 = ${SCRATCH_PROBE_DATA_WORD.offsetXy}u;
+const DDGI_SCRATCH_OFFSET_Z_AND_STATE: u32 = ${SCRATCH_PROBE_DATA_WORD.offsetZAndState}u;
+const DDGI_SCRATCH_TILES_WRITTEN: u32 = ${SCRATCH_PROBE_DATA_WORD.tilesWritten}u;
 const DDGI_CENSUS_RAYS_TRACED: u32 = ${CENSUS_RAYS_TRACED}u;
 // Must match the trace kernel: a back-face hit was stored at this share of its distance.
 const DDGI_BACK_FACE_DISTANCE_SHARE: f32 = 0.2;
@@ -205,6 +231,15 @@ const DDGI_FLAG_MARKED_BEFORE_LAST_UPDATE: u32 = ${PROBE_HISTORY_FLAG.markedBefo
 const DDGI_FLAG_AWAITING_CHANGE: u32 = ${PROBE_HISTORY_FLAG.awaitingChange}u;
 const DDGI_FLAG_TAKING_CHANGE: u32 = ${PROBE_HISTORY_FLAG.takingChange}u;
 const DDGI_FLAG_PASSED_CHANGE: u32 = ${PROBE_HISTORY_FLAG.passedChange}u;
+const DDGI_FLAG_WARMED_ONCE: u32 = ${PROBE_HISTORY_FLAG.warmedOnce}u;
+// The mover mask (T2.M1). The trace stores a miss at 60,000 (wgsl/trace.ts);
+// anything this far or farther is a miss and hits no mover.
+const DDGI_MOVER_MISS_DISTANCE: f32 = 50000.0;
+// A hit point is rebuilt from a half-float distance (about 1 part in 2,000)
+// and an f32 direction, so a mover's box is grown by this much plus this
+// share of the ray's length before the point is tested against it.
+const DDGI_MOVER_BOX_MARGIN: f32 = 0.01;
+const DDGI_MOVER_BOX_MARGIN_SHARE: f32 = 0.002;
 const DDGI_KEYS_WEIGHT_SHIFT: u32 = ${PROBE_HISTORY_KEYS.weightShift}u;
 const DDGI_KEY_FIRST_UPDATE_SHARE: f32 = ${KEY_FIRST_UPDATE_SHARE};
 const DDGI_CENSUS_CHANGE_CLOCK: u32 = ${CENSUS_CHANGE_CLOCK}u;
@@ -298,6 +333,23 @@ const DDGI_NO_DISTANCE: f32 = 3.0e38;
 @group(1) @binding(9) var<storage, read_write> ddgiFeedbackRequests: array<atomic<u32>>;
 // Per update-list slot: a key probe's change this update, for ddgi/propagate (DDGI_KEY_DELTA_*).
 @group(1) @binding(10) var<storage, read_write> ddgiKeyDeltas: array<u32>;
+// The hot movers' world boxes and mask bits (T2.M1, mover-table.ts; MOVER_TABLE_* in layout.ts).
+@group(1) @binding(11) var<uniform> ddgiMovers: DdgiMoverTable;
+
+struct DdgiMoverBox {
+    min: vec3f,
+    bit: u32,               // the entry's bit in the probes' mover masks
+    max: vec3f,
+    spare: u32,
+}
+
+struct DdgiMoverTable {
+    count: u32,             // entries in use; 0 when nothing moved lately (then no ray is tested)
+    spare0: u32,
+    spare1: u32,
+    spare2: u32,
+    boxes: array<DdgiMoverBox, ${MOVER_TABLE_CAPACITY}>,
+}
 
 // Per ray: its direction (xyz) and signed hit distance (w, negative = back
 // face). Decoded once here: the blend reads every ray once per texel.
@@ -311,6 +363,8 @@ var<workgroup> ddgiClosestBackFace: atomic<u32>;
 var<workgroup> ddgiClosestFrontFace: atomic<u32>;
 var<workgroup> ddgiFarthestFrontFace: atomic<u32>;
 var<workgroup> ddgiFrontFacesInReach: atomic<u32>;
+// The mover bits this update's blended rays hit (ddgiMoverBits), for the probe's mover mask.
+var<workgroup> ddgiMoverHits: atomic<u32>;
 // Thread 0's verdicts, read by everyone with workgroupUniformLoad.
 var<workgroup> ddgiBlendThisUpdate: u32;
 var<workgroup> ddgiUpdateHysteresis: f32;
@@ -502,6 +556,10 @@ struct DdgiProbeHistory {
     keysReceived: u32,       // a fine probe awaiting a change: the key neighbours that passed it theirs (low 8 bits), their weight (high half)
     changeClock: u32,        // the volume's change clock at its last blended update
     keyDeltaSlot: u32,       // a key whose latest update passed its change: the update-list slot of its key-delta entry
+    moverMask: u32,          // the hot movers its latest blended update's rays hit (T2.M1)
+    spare0: u32,
+    spare1: u32,
+    spare2: u32,
 }
 
 // This update's hysteresis for one probe, and the probe's history after it
@@ -549,8 +607,10 @@ fn ddgiRampCap(updates: u32) -> f32 {
 // Before all that, a change the scene reported cuts n (ddgiChangeLimit), so
 // the probe follows it within a few updates; with no change it does nothing.
 fn ddgiHysteresisStep(history: DdgiProbeHistory, state: u32, changeClock: u32) -> DdgiHysteresisStep {
-    let firstUpdate = state == DDGI_STATE_NOT_UPDATED_YET;
     let flags = history.scheduleAndFlags & DDGI_HISTORY_FLAGS_MASK;
+    // A probe in state 3 starts its history again at its first blended update
+    // only; its second (warmedOnce) blends like any other (m3-moving.md §5.2).
+    let firstUpdate = state == DDGI_STATE_NOT_UPDATED_YET && (flags & DDGI_FLAG_WARMED_ONCE) == 0u;
     let marked = (flags & DDGI_FLAG_MARKED) != 0u;
     let awaiting = (flags & DDGI_FLAG_AWAITING_CHANGE) != 0u;
     // The test mode: a fine probe waiting for its keys keeps its tiles
@@ -594,9 +654,10 @@ fn ddgiHysteresisStep(history: DdgiProbeHistory, state: u32, changeClock: u32) -
     let hysteresis = select(fixed, adaptive, ddgi.adaptiveHysteresis != 0u);
     // Saturating at the field's width: the count only matters while k / a is below n_max.
     let nextCount = select(updates + 1u, updates, updates == DDGI_HISTORY_COUNT_MASK);
-    // One owed update is taken off; a first update starts with nothing owed
-    // (a reset leaves old promises in the record).
-    let nextOwed = select(owed - min(owed, 1u), 0u, firstUpdate);
+    // One owed update is taken off, a first update's too: a probe that came
+    // back on keeps what it was owed (ddgiForgetPromises), so its second
+    // warming update comes at priority as well. (A reset clears the record.)
+    let nextOwed = owed - min(owed, 1u);
     let takingChange = (flags & DDGI_FLAG_TAKING_CHANGE) != 0u;
     // The cut holds for the updates a change promised (ddgiChangeLimit):
     // until the last of them the count doesn't grow back, so every one of
@@ -620,10 +681,12 @@ fn ddgiHysteresisStep(history: DdgiProbeHistory, state: u32, changeClock: u32) -
     next.keysReceived = 0u;
     next.changeClock = changeClock;
     // passedChange is set again below when this update passes its change on.
-    let keptFlags = flags & ~(DDGI_FLAG_MARKED | DDGI_FLAG_MARKED_BEFORE_LAST_UPDATE | DDGI_FLAG_AWAITING_CHANGE | DDGI_FLAG_TAKING_CHANGE | DDGI_FLAG_PASSED_CHANGE);
+    // warmedOnce is cleared too: after its second update a state-3 probe is active.
+    let keptFlags = flags & ~(DDGI_FLAG_MARKED | DDGI_FLAG_MARKED_BEFORE_LAST_UPDATE | DDGI_FLAG_AWAITING_CHANGE | DDGI_FLAG_TAKING_CHANGE | DDGI_FLAG_PASSED_CHANGE | DDGI_FLAG_WARMED_ONCE);
     let stillTaking = takingChange && nextOwed > 0u;
     let nextFlags = keptFlags | select(0u, DDGI_FLAG_MARKED_BEFORE_LAST_UPDATE, marked) | select(0u, DDGI_FLAG_TAKING_CHANGE, stillTaking);
-    next.scheduleAndFlags = (history.scheduleAndFlags & ~DDGI_HISTORY_FLAGS_MASK) | select(nextFlags, 0u, firstUpdate);
+    // A first update starts the flags again, with warmedOnce: one estimate so far.
+    next.scheduleAndFlags = (history.scheduleAndFlags & ~DDGI_HISTORY_FLAGS_MASK) | select(nextFlags, DDGI_FLAG_WARMED_ONCE, firstUpdate);
     let kind = select(select(DDGI_UPDATE_QUIET, DDGI_UPDATE_MARKED, marked || takingChange), DDGI_UPDATE_FIRST, firstUpdate);
     return DdgiHysteresisStep(hysteresis, next, kind);
 }
@@ -873,15 +936,46 @@ fn ddgiRequestFeedback(probeIndex: u32, probe: vec3i, urgency: f32) {
     }
 }
 
-// A listed probe that isn't blended this update (off, or switched off by it)
-// owes nothing: off probes trace only their fixed rays and take no light,
-// and a promise left in its record would keep it at priority for ever.
-fn ddgiForgetPromises(probeIndex: u32) {
+// A listed probe that isn't blended this update. Staying off (or switched
+// off by it), it owes nothing: off probes trace only their fixed rays and
+// take no light, and a promise left in its record would keep it at priority
+// for ever; its change is dropped too, so marks near a dragged object can't
+// pile up and owe it again every frame. Coming back on (new state 3, after
+// a change freed it, m3-moving.md §5.2), it keeps what it was owed, so its
+// two warming updates come at once. Either way it starts warming again.
+fn ddgiForgetPromises(probeIndex: u32, newState: u32) {
     var history = ddgiProbeHistory[probeIndex];
-    history.updates = history.updates & ~(DDGI_OWED_MASK << DDGI_OWED_SHIFT);
-    history.urgency = 0.0;
-    history.scheduleAndFlags = history.scheduleAndFlags & ~DDGI_FLAG_TAKING_CHANGE;
+    history.scheduleAndFlags = history.scheduleAndFlags & ~DDGI_FLAG_WARMED_ONCE;
+    if (newState != DDGI_STATE_NOT_UPDATED_YET) {
+        history.updates = history.updates & ~(DDGI_OWED_MASK << DDGI_OWED_SHIFT);
+        history.urgency = 0.0;
+        history.pendingChange = 0.0;
+        history.scheduleAndFlags = history.scheduleAndFlags & ~DDGI_FLAG_TAKING_CHANGE;
+    }
     ddgiProbeHistory[probeIndex] = history;
+}
+
+// The mover bits a blended ray's hit point falls in (the file comment): the
+// point rebuilt from the probe's position, the ray's direction and its stored
+// distance (a back face's true distance from its shortened one), against
+// each hot mover's box, grown for the distance's rounding.
+fn ddgiMoverBits(origin: vec3f, directionDistance: vec4f) -> u32 {
+    let count = ddgiMovers.count;
+    let signedDistance = directionDistance.w;
+    let distance = select(signedDistance, -signedDistance / DDGI_BACK_FACE_DISTANCE_SHARE, signedDistance < 0.0);
+    if (count == 0u || distance >= DDGI_MOVER_MISS_DISTANCE) {
+        return 0u;
+    }
+    let point = origin + directionDistance.xyz * distance;
+    let margin = vec3f(DDGI_MOVER_BOX_MARGIN + DDGI_MOVER_BOX_MARGIN_SHARE * distance);
+    var bits = 0u;
+    for (var mover = 0u; mover < count; mover++) {
+        let box = ddgiMovers.boxes[mover];
+        if (all(point >= box.min - margin) && all(point <= box.max + margin)) {
+            bits |= box.bit;
+        }
+    }
+    return bits;
 }
 
 @compute @workgroup_size(DDGI_BLEND_WORKGROUP_SIZE)
@@ -911,15 +1005,27 @@ fn ddgiBlend(
         atomicStore(&ddgiClosestFrontFace, DDGI_KEY_NONE_MIN);
         atomicStore(&ddgiFarthestFrontFace, DDGI_KEY_NONE_MAX);
         atomicStore(&ddgiFrontFacesInReach, 0u);
+        atomicStore(&ddgiMoverHits, 0u);
         atomicAdd(&ddgiCensus[DDGI_CENSUS_RAYS_TRACED], tracedRays);
     }
+    let origin = ddgiProbePosition(probe, probeData.offset);
+    var moverBits = 0u;
     for (var rayIndex = thread; rayIndex < tracedRays; rayIndex += DDGI_BLEND_WORKGROUP_SIZE) {
         let record = ddgiRays[slot * ddgi.raysPerProbe + rayIndex];
         let signedDistance = unpack2x16float(record.y).y;
-        ddgiRayDirectionDistance[rayIndex] = vec4f(ddgiRayDirection(rayIndex), signedDistance);
+        let directionDistance = vec4f(ddgiRayDirection(rayIndex), signedDistance);
+        ddgiRayDirectionDistance[rayIndex] = directionDistance;
         ddgiRayRadiance[rayIndex] = record;
+        // Blended rays only: the mask says what the probe's light came from.
+        if (rayIndex >= DDGI_FIXED_RAYS) {
+            moverBits |= ddgiMoverBits(origin, directionDistance);
+        }
     }
     workgroupBarrier();
+    // After the barrier, so thread 0 has cleared the hits first.
+    if (moverBits != 0u) {
+        atomicOr(&ddgiMoverHits, moverBits);
+    }
 
     // ---- Phase B ----
     ddgiReduceFixedRay(ddgiFixedRayResult(thread, probe, probeData.offset));
@@ -931,14 +1037,20 @@ fn ddgiBlend(
         let blendThisUpdate = decision.state == DDGI_STATE_ACTIVE && !ddgiIsOff(state);
         ddgiBlendThisUpdate = select(0u, 1u, blendThisUpdate);
         ddgiPassChange = 0u;
+        var newState = decision.state;
         if (blendThisUpdate) {
             // One workgroup per probe in the list, and a probe is listed at
             // most once a frame, so this read and write can't race.
             let history = ddgiProbeHistory[probeIndex];
+            // Its first estimate since state 3: blended, but not yet used in shading (the file comment).
+            if (state == DDGI_STATE_NOT_UPDATED_YET && (history.scheduleAndFlags & DDGI_FLAG_WARMED_ONCE) == 0u) {
+                newState = DDGI_STATE_NOT_UPDATED_YET;
+            }
             let changeClock = atomicLoad(&ddgiCensus[DDGI_CENSUS_CHANGE_CLOCK]);
             let step = ddgiHysteresisStep(history, state, changeClock);
             ddgiUpdateHysteresis = step.hysteresis;
             ddgiNextHistory = step.history;
+            ddgiNextHistory.moverMask = atomicLoad(&ddgiMoverHits);
             ddgiUpdateKind = step.kind;
             if (step.kind == DDGI_UPDATE_HELD) {
                 // Its record without the owed updates; nothing else of it changes (ddgiWriteHistory is skipped).
@@ -958,13 +1070,16 @@ fn ddgiBlend(
                 atomicAdd(&ddgiCensus[DDGI_CENSUS_KEY_CHANGES_PASSED_TOTAL], 1u);
             }
         } else {
-            ddgiForgetPromises(probeIndex);
+            ddgiForgetPromises(probeIndex, decision.state);
         }
         // Offsets and states are small exact values in half floats; no rounding noise wanted.
         let base = slot * DDGI_SCRATCH_STRIDE + DDGI_SCRATCH_PROBE_DATA;
-        ddgiScratch[base] = pack2x16float(decision.offset.xy);
-        ddgiScratch[base + 1u] = pack2x16float(vec2f(decision.offset.z, f32(decision.state)));
+        ddgiScratch[base + DDGI_SCRATCH_OFFSET_XY] = pack2x16float(decision.offset.xy);
+        ddgiScratch[base + DDGI_SCRATCH_OFFSET_Z_AND_STATE] = pack2x16float(vec2f(decision.offset.z, f32(newState)));
+        // ddgi/write copies the tiles exactly when this update wrote them.
+        ddgiScratch[base + DDGI_SCRATCH_TILES_WRITTEN] = select(0u, 1u, blendThisUpdate);
     }
+
     if (workgroupUniformLoad(&ddgiBlendThisUpdate) == 0u) {
         return;
     }

@@ -43,6 +43,7 @@ import type { ShadingModule } from './contract/shading-module.ts';
 import type { GIStats, MemoryReport, PassTiming } from './contract/stats.ts';
 import type { GITechnique, TechniqueContext, TechniqueFrame } from './contract/technique.ts';
 import type { GpuTimerScope } from './contract/timing.ts';
+import { countComputePipelines, type CompileCounter } from './compile-counter.ts';
 import { PlatformKernelBuilder } from './kernel-builder.ts';
 import { mergeSceneChanges } from './scene/change-log.ts';
 import { PlatformScene } from './scene/platform-scene.ts';
@@ -86,6 +87,8 @@ export class GIPlatformImpl implements GIPlatform {
     readonly kernels: PlatformKernelBuilder;
 
     private readonly label: string;
+    /** Counts compute pipelines made while the platform is ready (`stats.recompiles`); its device view is what the platform's own code and techniques use. */
+    private readonly compiles: CompileCounter;
     private readonly timer: GpuTimer | null;
     private readonly queries: SceneQueries;
     /** Hit shading and the sky (T1.4): `giSurfaceAt`, `giDirectIrradiance`, `giSkyRadiance`, `giSkyIrradiance`. */
@@ -123,23 +126,26 @@ export class GIPlatformImpl implements GIPlatform {
     constructor(device: GPUDevice, options: GIPlatformOptions = {}) {
         this.device = device;
         this.label = options.label ?? 'gi';
-        this.sceneCopy = new PlatformScene(device, { label: this.label });
+        this.compiles = countComputePipelines(device, () => this.isReady);
+        // The platform's own GPU work goes through the counting view; the host keeps its device as it is.
+        const ownDevice = this.compiles.device;
+        this.sceneCopy = new PlatformScene(ownDevice, { label: this.label });
         this.scene = new GuardedScene(this.sceneCopy, () => this.checkUsable());
-        this.rays = new PlatformRayQueries(device, this.sceneCopy, {
+        this.rays = new PlatformRayQueries(ownDevice, this.sceneCopy, {
             label: this.label,
             buildIn: options.buildIn,
             // The top level reads its refit stats back only in stats mode: hosts are promised no readbacks.
             diagnostics: options.gpuTiming === true,
             warn: (message) => this.warnOnce(message),
         });
-        this.kernels = new PlatformKernelBuilder(device, this.label);
-        this.timer = options.gpuTiming ? new GpuTimer(device, { warn: (message) => this.warnOnce(message) }) : null;
+        this.kernels = new PlatformKernelBuilder(ownDevice, this.label);
+        this.timer = options.gpuTiming ? new GpuTimer(ownDevice, { warn: (message) => this.warnOnce(message) }) : null;
         const rays = this.rays;
         this.queries = {
             rays,
             has: (kind: QueryKind) => kind === 'rays',
         };
-        this.shade = new PlatformHitShading(device, this.sceneCopy.module, this.rays.module, {
+        this.shade = new PlatformHitShading(ownDevice, this.sceneCopy.module, this.rays.module, {
             label: this.label,
             warn: (message) => this.warnOnce(message),
         });
@@ -354,7 +360,7 @@ export class GIPlatformImpl implements GIPlatform {
             techniques,
             total: sceneCopy + acceleration + Object.values(techniques).reduce((sum, bytes) => sum + bytes, 0),
         };
-        return { frame: this.frame, passes: this.latestPasses, memory, counters, encodeCpuMs: this.lastEncodeCpuMs };
+        return { frame: this.frame, passes: this.latestPasses, memory, counters, encodeCpuMs: this.lastEncodeCpuMs, recompiles: this.compiles.counted };
     }
 
     resetHistory(): void {
@@ -405,7 +411,7 @@ export class GIPlatformImpl implements GIPlatform {
         const warn = (message: string): void => this.warnOnce(message);
         const timer: GpuTimerScope = this.timer ?? NO_TIMER;
         return {
-            device: this.device,
+            device: this.compiles.device,
             scene: this.sceneCopy,
             queries: this.queries,
             shade: this.shade,
@@ -603,6 +609,10 @@ class GuardedScene implements SceneApi {
     setTransform(instance: InstanceHandle, transform: Mat4): void {
         this.check();
         this.target.setTransform(instance, transform);
+    }
+    setTransforms(instances: Uint32Array, matrices: Float32Array): void {
+        this.check();
+        this.target.setTransforms(instances, matrices);
     }
     setVisible(instance: InstanceHandle, visible: boolean): void {
         this.check();

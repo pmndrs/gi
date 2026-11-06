@@ -43,6 +43,18 @@
  * - **The hot set:** an object found moved (or hidden or shown) is checked
  *   every frame until it has been still for {@link HOT_FRAMES} frames, so
  *   motion reaches GI every frame once it has been seen.
+ * - **Moves go out in one batch:** every transform found changed in an
+ *   `update` is collected and sent with one `setTransforms` call at its end
+ *   (T2.M1; docs/design/m3-moving.md §6), so many movers cost the platform
+ *   one call, not one each.
+ * - **`InstancedMesh` update ranges:** when only the instance matrices
+ *   changed and three's `instanceMatrix.updateRanges` name the instances
+ *   that did, only those are looked at and sent. three clears the ranges
+ *   when it uploads them during `render`, and `ThreeGI.update` runs before
+ *   `render` (the documented order), so they are still there. They're used
+ *   only when the mesh was also checked in the previous update; otherwise
+ *   ranges from frames in between were already cleared, and every instance
+ *   is compared.
  * - **`markChanged(object)`:** the host's shortcut. The object and everything
  *   under it are checked in the next `update` and join the hot set: added,
  *   moved, edited and removed objects all reach GI in that same update.
@@ -162,6 +174,8 @@ interface ObjectRecord {
     /** InstancedMesh: the mesh's own world matrix and the instance-matrix version the matrices were made from. */
     readonly parentMatrix: Float64Array;
     instanceMatrixVersion: number;
+    /** InstancedMesh: the sync's frame when its instances were last checked (update ranges are trusted only from the next frame). */
+    instancesCheckedFrame: number;
     /** The walk pass that last met it; at the end of a pass, records it didn't meet are removed. */
     seenPass: number;
     /** While in the hot set: the frame it may leave if nothing changes before. */
@@ -364,6 +378,8 @@ export class SceneSync {
     private placementVisible = false;
     private sun: DirectionalLight | null = null;
     private readonly scratchMatrix = new Matrix4();
+    /** This update's changed transforms, sent with one `setTransforms` call (TransformBatch). */
+    private readonly transforms = new TransformBatch();
     /** Plain meshes' last-sent world matrices, one block. */
     private readonly matrixPool = new MatrixPool();
     private readonly warned = new Set<string>();
@@ -441,6 +457,7 @@ export class SceneSync {
         if (!fresh) this.walk();
         this.checkLights(scene);
         this.checkEdits();
+        this.flushTransforms();
         const sources = this.environmentSources;
         sources.override = this.environment;
         sources.sky = this.sky;
@@ -450,8 +467,14 @@ export class SceneSync {
         return this.report;
     }
 
+    /** Sends the transforms collected so far in one `setTransforms` call. */
+    private flushTransforms(): void {
+        this.transforms.send(this.api);
+    }
+
     /** Destroys everything this sync created in the platform scene. */
     dispose(): void {
+        this.transforms.clear();
         for (const record of [...this.objects.values()]) this.destroyObject(record);
         for (const record of this.lightList) this.api.destroyLight(record.handle);
         this.lights.clear();
@@ -732,6 +755,7 @@ export class SceneSync {
             skinned: (mesh as Mesh & { isSkinnedMesh?: boolean }).isSkinnedMesh === true,
             parentMatrix: new Float64Array(MATRIX_FLOATS),
             instanceMatrixVersion: -1,
+            instancesCheckedFrame: -1,
             seenPass: this.pass,
             hotUntil: 0,
             hot: false,
@@ -786,6 +810,8 @@ export class SceneSync {
     }
 
     private destroyObject(record: ObjectRecord): void {
+        // Moves collected for its instances go out first, while their handles are still live.
+        this.flushTransforms();
         record.destroyed = true;
         removeFromList(this.objectList, record);
         if (record.matrixSlot >= 0) this.matrixPool.release(record.matrixSlot);
@@ -834,7 +860,7 @@ export class SceneSync {
             changed = true;
         }
         if (copyIfChanged(mesh.matrixWorld.elements, this.matrixPool.values, record.matrixSlot * MATRIX_FLOATS)) {
-            this.api.setTransform(record.instances[0], mesh.matrixWorld.elements);
+            this.transforms.add(record.instances[0], mesh.matrixWorld.elements);
             this.report.transforms++;
             changed = true;
         }
@@ -845,8 +871,11 @@ export class SceneSync {
      * An InstancedMesh: instance i's world matrix is the mesh's world matrix
      * times `instanceMatrix[i]`. Only recomputed when the mesh moved or the
      * instance matrices' version changed; then only changed instances are
-     * sent. Instances past `count` are hidden, not destroyed, so a count that
-     * goes down and up again costs nothing. Returns whether anything was sent.
+     * sent. When only the instance matrices changed and three's update ranges
+     * name the instances that did (see the file header), only those are
+     * looked at. Instances past `count` are hidden, not destroyed, so a count
+     * that goes down and up again costs nothing. Returns whether anything was
+     * sent.
      */
     private syncInstancedMesh(record: ObjectRecord, mesh: InstancedMesh, visible: boolean): boolean {
         const before = this.report.transforms + this.report.visibility;
@@ -859,20 +888,21 @@ export class SceneSync {
             matrices.set(record.matrices);
             record.matrices = matrices;
         }
-        if (parentMoved || instancesChanged || grew) {
+        // The ranges cover every change since the last render only if this mesh was also checked in the previous update.
+        const ranges = mesh.instanceMatrix.updateRanges;
+        const useRanges = instancesChanged && !parentMoved && !grew && ranges.length > 0 && record.instancesCheckedFrame === this.frame - 1;
+        record.instancesCheckedFrame = this.frame;
+        if (useRanges) {
             record.instanceMatrixVersion = mesh.instanceMatrix.version;
-            const instanceMatrices = mesh.instanceMatrix.array;
-            const matrix = this.scratchMatrix;
-            for (let instance = 0; instance < count; instance++) {
-                matrix.fromArray(instanceMatrices, instance * MATRIX_FLOATS).premultiply(mesh.matrixWorld);
-                if (instance >= record.instances.length) {
-                    record.matrices.set(matrix.elements, instance * MATRIX_FLOATS);
-                    this.createInstance(record, matrix.elements, visible);
-                } else if (copyIfChanged(matrix.elements, record.matrices, instance * MATRIX_FLOATS)) {
-                    this.api.setTransform(record.instances[instance], matrix.elements);
-                    this.report.transforms++;
-                }
+            for (const range of ranges) {
+                // Ranges count array elements; an instance is 16 of them.
+                const first = Math.max(0, Math.floor(range.start / MATRIX_FLOATS));
+                const end = Math.min(count, Math.ceil((range.start + range.count) / MATRIX_FLOATS));
+                for (let instance = first; instance < end; instance++) this.syncInstance(record, mesh, instance, visible);
             }
+        } else if (parentMoved || instancesChanged || grew) {
+            record.instanceMatrixVersion = mesh.instanceMatrix.version;
+            for (let instance = 0; instance < count; instance++) this.syncInstance(record, mesh, instance, visible);
         }
         for (let instance = 0; instance < record.instances.length; instance++) {
             const shown = visible && instance < count;
@@ -882,6 +912,19 @@ export class SceneSync {
             this.report.visibility++;
         }
         return this.report.transforms + this.report.visibility > before;
+    }
+
+    /** One instance of an InstancedMesh: created if it is new, its transform collected if it changed. */
+    private syncInstance(record: ObjectRecord, mesh: InstancedMesh, instance: number, visible: boolean): void {
+        const matrix = this.scratchMatrix;
+        matrix.fromArray(mesh.instanceMatrix.array, instance * MATRIX_FLOATS).premultiply(mesh.matrixWorld);
+        if (instance >= record.instances.length) {
+            record.matrices.set(matrix.elements, instance * MATRIX_FLOATS);
+            this.createInstance(record, matrix.elements, visible);
+        } else if (copyIfChanged(matrix.elements, record.matrices, instance * MATRIX_FLOATS)) {
+            this.transforms.add(record.instances[instance], matrix.elements);
+            this.report.transforms++;
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -1201,7 +1244,49 @@ function seeThroughChanged(record: ObjectRecord): boolean {
     return record.seeThrough !== seeThroughOnly(record.materials);
 }
 
+/**
+ * Transforms collected during one `update`, sent with one `setTransforms`
+ * call: handles and matrices in typed arrays that grow as needed and are
+ * reused frame after frame, so a frame with movers allocates nothing once
+ * they are big enough.
+ */
+class TransformBatch {
+    private handles = new Uint32Array(16);
+    private matrices = new Float32Array(16 * MATRIX_FLOATS);
+    private count = 0;
+
+    add(instance: InstanceHandle, matrix: ArrayLike<number>): void {
+        if (this.count === this.handles.length) this.grow();
+        this.handles[this.count] = instance;
+        const base = this.count * MATRIX_FLOATS;
+        for (let index = 0; index < MATRIX_FLOATS; index++) this.matrices[base + index] = matrix[index];
+        this.count++;
+    }
+
+    /** One `setTransforms` call with everything collected, if anything was. */
+    send(api: SceneApi): void {
+        if (this.count === 0) return;
+        const count = this.count;
+        this.count = 0;
+        api.setTransforms(this.handles.subarray(0, count), this.matrices.subarray(0, count * MATRIX_FLOATS));
+    }
+
+    clear(): void {
+        this.count = 0;
+    }
+
+    private grow(): void {
+        const handles = new Uint32Array(this.handles.length * 2);
+        handles.set(this.handles);
+        this.handles = handles;
+        const matrices = new Float32Array(this.matrices.length * 2);
+        matrices.set(this.matrices);
+        this.matrices = matrices;
+    }
+}
+
 class MatrixPool {
+
     values = new Float64Array(64 * MATRIX_FLOATS);
     private readonly free: number[] = [];
     private used = 0;

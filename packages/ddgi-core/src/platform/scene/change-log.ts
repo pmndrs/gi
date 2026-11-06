@@ -113,15 +113,128 @@ export function sameLight(a: LightDescriptor, b: LightDescriptor): boolean {
     return true;
 }
 
+/** The optional facts about a region, as `addRegion` takes them. */
+export interface RegionDetails {
+    /** How far the instance moved (DirtyRegion.moved). */
+    readonly moved?: number;
+    /** The instance's slot (DirtyRegion.instance). */
+    readonly instance?: number;
+}
+
+const REASONS: readonly ChangeReason[] = ['geometry', 'material', 'light'];
+const REASON_CODE: Record<ChangeReason, number> = { geometry: 0, material: 1, light: 2 };
+/** Stands for "none" in the typed columns: no move distance, no instance slot, no source. */
+const NO_VALUE = -1;
+const FIRST_REGION_CAPACITY = 64;
+
+/**
+ * A frame's regions in flat typed columns, so logging one costs no
+ * allocation: `setTransforms` logs two per moved instance, and 10,000
+ * instances moved in a frame made 20,000 region objects one by one (B1a
+ * measured the old `setTransform` at about 2 µs a call). The contract's
+ * `DirtyRegion` objects are made at `take`, at most MAX_DIRTY_REGIONS of
+ * them; past that the regions of each reason are merged straight from the
+ * columns.
+ */
+class RegionColumns {
+    count = 0;
+    private boxes = new Float32Array(FIRST_REGION_CAPACITY * 6);
+    private reasons = new Uint8Array(FIRST_REGION_CAPACITY);
+    private moved = new Float32Array(FIRST_REGION_CAPACITY);
+    private instances = new Int32Array(FIRST_REGION_CAPACITY);
+    /** Handles are positive integers (handles.ts); NO_VALUE when there is none. */
+    private sources = new Float64Array(FIRST_REGION_CAPACITY);
+
+    add(box: ArrayLike<number>, reason: ChangeReason, source: number | undefined, moved: number | undefined, instance: number | undefined): void {
+        if (this.count === this.reasons.length) this.grow();
+        const index = this.count++;
+        const at = index * 6;
+        for (let value = 0; value < 6; value++) this.boxes[at + value] = box[value];
+        this.reasons[index] = REASON_CODE[reason];
+        this.moved[index] = moved ?? NO_VALUE;
+        this.instances[index] = instance ?? NO_VALUE;
+        this.sources[index] = source ?? NO_VALUE;
+    }
+
+    /** The regions as the contract has them, merged by reason when there are more than MAX_DIRTY_REGIONS. */
+    take(): DirtyRegion[] {
+        const regions = this.count > MAX_DIRTY_REGIONS ? this.merged() : this.each();
+        this.count = 0;
+        return regions;
+    }
+
+    private each(): DirtyRegion[] {
+        const regions: DirtyRegion[] = [];
+        for (let index = 0; index < this.count; index++) {
+            const source = this.sources[index];
+            const moved = this.moved[index];
+            const instance = this.instances[index];
+            regions.push({
+                bounds: toAabb(this.boxes.subarray(index * 6, index * 6 + 6)),
+                reason: REASONS[this.reasons[index]],
+                ...(source !== NO_VALUE ? { source: source as InstanceHandle | LightHandle } : {}),
+                ...(moved >= 0 ? { moved } : {}),
+                ...(instance !== NO_VALUE ? { instance } : {}),
+            });
+        }
+        return regions;
+    }
+
+    /**
+     * One box per reason. A merged geometry region carries the largest move
+     * when every region in it was a move, and none (a whole change) when any
+     * wasn't; it names no instance.
+     */
+    private merged(): DirtyRegion[] {
+        const boxes = REASONS.map(() => [Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity]);
+        const largestMove = REASONS.map(() => 0);
+        const allMoves = REASONS.map(() => true);
+        const present = REASONS.map(() => false);
+        for (let index = 0; index < this.count; index++) {
+            const reason = this.reasons[index];
+            const box = boxes[reason];
+            const at = index * 6;
+            for (let axis = 0; axis < 3; axis++) {
+                box[axis] = Math.min(box[axis], this.boxes[at + axis]);
+                box[axis + 3] = Math.max(box[axis + 3], this.boxes[at + 3 + axis]);
+            }
+            present[reason] = true;
+            const moved = this.moved[index];
+            if (moved >= 0) largestMove[reason] = Math.max(largestMove[reason], moved);
+            else allMoves[reason] = false;
+        }
+        const regions: DirtyRegion[] = [];
+        for (let reason = 0; reason < REASONS.length; reason++) {
+            if (!present[reason]) continue;
+            regions.push({ bounds: toAabb(boxes[reason]), reason: REASONS[reason], ...(allMoves[reason] ? { moved: largestMove[reason] } : {}) });
+        }
+        return regions;
+    }
+
+    private grow(): void {
+        const capacity = this.reasons.length * 2;
+        const grown = <T extends Float32Array | Uint8Array | Int32Array | Float64Array>(old: T, make: (length: number) => T, width = 1): T => {
+            const next = make(capacity * width);
+            next.set(old as never);
+            return next;
+        };
+        this.boxes = grown(this.boxes, (length) => new Float32Array(length), 6);
+        this.reasons = grown(this.reasons, (length) => new Uint8Array(length));
+        this.moved = grown(this.moved, (length) => new Float32Array(length));
+        this.instances = grown(this.instances, (length) => new Int32Array(length));
+        this.sources = grown(this.sources, (length) => new Float64Array(length));
+    }
+}
+
 export class ChangeLog {
-    private regions: DirtyRegion[] = [];
+    private readonly regions = new RegionColumns();
     private readonly global = new Set<GlobalChange>();
     private movedReceivers = 0;
     /** Each light touched this frame, with its state before the frame's first change (null: created this frame). In first-touched order. */
     private readonly lightsBefore = new Map<LightHandle, LightDescriptor | null>();
 
-    addRegion(box: ArrayLike<number>, reason: ChangeReason, source?: InstanceHandle | LightHandle): void {
-        this.regions.push({ bounds: toAabb(box), reason, ...(source !== undefined ? { source } : {}) });
+    addRegion(box: ArrayLike<number>, reason: ChangeReason, source?: InstanceHandle | LightHandle, details?: RegionDetails): void {
+        this.regions.add(box, reason, source, details?.moved, details?.instance);
     }
 
     addGlobal(change: GlobalChange): void {
@@ -148,16 +261,13 @@ export class ChangeLog {
         for (const change of lightChanges) this.logLightChange(change);
         if (lightsOverflowed) this.global.add('lights');
 
-        let regions = this.regions;
-        if (regions.length > MAX_DIRTY_REGIONS) regions = mergeByReason(regions);
         const changes: SceneChanges = {
-            regions,
+            regions: this.regions.take(),
             global: [...this.global],
             movedReceivers: this.movedReceivers,
             lights: lightsOverflowed ? [] : lightChanges,
             lightsOverflowed,
         };
-        this.regions = [];
         this.global.clear();
         this.movedReceivers = 0;
         this.lightsBefore.clear();
@@ -249,15 +359,18 @@ export function mergeSceneChanges(earlier: SceneChanges, later: SceneChanges): S
     };
 }
 
+/** One box per reason, as RegionColumns merges a frame's: the largest move when every region merged was a move, no instance. */
 function mergeByReason(regions: readonly DirtyRegion[]): DirtyRegion[] {
-    const boxes = new Map<ChangeReason, number[]>();
+    const merged = new Map<ChangeReason, { box: number[]; largestMove: number; allMoves: boolean }>();
     for (const region of regions) {
-        const box = boxes.get(region.reason) ?? [Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity];
+        const entry = merged.get(region.reason) ?? { box: [Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity], largestMove: 0, allMoves: true };
         for (let axis = 0; axis < 3; axis++) {
-            box[axis] = Math.min(box[axis], region.bounds.min[axis]);
-            box[axis + 3] = Math.max(box[axis + 3], region.bounds.max[axis]);
+            entry.box[axis] = Math.min(entry.box[axis], region.bounds.min[axis]);
+            entry.box[axis + 3] = Math.max(entry.box[axis + 3], region.bounds.max[axis]);
         }
-        boxes.set(region.reason, box);
+        if (region.moved === undefined) entry.allMoves = false;
+        else entry.largestMove = Math.max(entry.largestMove, region.moved);
+        merged.set(region.reason, entry);
     }
-    return [...boxes].map(([reason, box]) => ({ bounds: toAabb(box), reason }));
+    return [...merged].map(([reason, entry]) => ({ bounds: toAabb(entry.box), reason, ...(entry.allMoves ? { moved: entry.largestMove } : {}) }));
 }

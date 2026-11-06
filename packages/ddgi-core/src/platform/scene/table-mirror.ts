@@ -65,19 +65,37 @@ export class TableMirror {
 
     /** First word of record `index` in `section`. */
     recordWord(section: TableSection, index: number): number {
-        const base = {
-            instances: this.layout.instancesBase,
-            meshes: this.layout.meshesBase,
-            materials: this.layout.materialsBase,
-            lights: this.layout.lightsBase,
-        }[section];
-        return (base + index * RECORD_VEC4S[section]) * 4;
+        return (this.sectionBase(section) + index * RECORD_VEC4S[section]) * 4;
     }
 
     /** Marks record `index` of `section` for upload. */
     markRecord(section: TableSection, index: number): void {
         const start = this.recordWord(section, index) / 4;
         this.markDirty(start, start + RECORD_VEC4S[section]);
+    }
+
+    /**
+     * Marks records `first` to `last` (inclusive) of `section` for upload, as
+     * one range. For batches (`setTransforms`): one entry in the dirty list
+     * instead of one per record. Records in between that didn't change are
+     * uploaded too, which costs less than sorting thousands of ranges.
+     */
+    markRecordSpan(section: TableSection, first: number, last: number): void {
+        const start = this.recordWord(section, first) / 4;
+        this.markDirty(start, this.recordWord(section, last) / 4 + RECORD_VEC4S[section]);
+    }
+
+    private sectionBase(section: TableSection): number {
+        switch (section) {
+            case 'instances':
+                return this.layout.instancesBase;
+            case 'meshes':
+                return this.layout.meshesBase;
+            case 'materials':
+                return this.layout.materialsBase;
+            case 'lights':
+                return this.layout.lightsBase;
+        }
     }
 
     clearRecord(section: TableSection, index: number): void {

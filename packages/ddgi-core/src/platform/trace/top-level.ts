@@ -73,6 +73,18 @@ const MIN_DETERMINANT = 1e-30;
  * Returns null if the matrix is singular or has non-finite entries.
  */
 export function invertAffine(objectToWorld: Mat4): { rows: Float64Array; determinant: number } | null {
+    const rows = new Float64Array(12);
+    const determinant = invertAffineInto(objectToWorld, rows);
+    return determinant === 0 ? null : { rows, determinant };
+}
+
+/**
+ * {@link invertAffine} into `out` (12 numbers), without allocating: for the
+ * scene copy's per-instance writes, which `setTransforms` makes thousands
+ * of a frame. Returns the determinant, or 0 when the matrix is singular or
+ * the result isn't finite (then `out` holds garbage).
+ */
+export function invertAffineInto(objectToWorld: Mat4, out: Float64Array): number {
     const e = objectToWorld;
     if (e.length < 16) throw new RangeError('objectToWorld must have 16 entries');
     // The linear part L, with L[row][column] = e[column * 4 + row].
@@ -86,7 +98,7 @@ export function invertAffine(objectToWorld: Mat4): { rows: Float64Array; determi
     const c10 = m12 * m20 - m10 * m22;
     const c20 = m10 * m21 - m11 * m20;
     const determinant = m00 * c00 + m01 * c10 + m02 * c20;
-    if (!Number.isFinite(determinant) || !(Math.abs(determinant) > MIN_DETERMINANT)) return null;
+    if (!Number.isFinite(determinant) || !(Math.abs(determinant) > MIN_DETERMINANT)) return 0;
     const inverseDeterminant = 1 / determinant;
 
     // inverse(L) = adjugate(L) / det, written out by rows.
@@ -101,20 +113,31 @@ export function invertAffine(objectToWorld: Mat4): { rows: Float64Array; determi
     const i22 = (m00 * m11 - m01 * m10) * inverseDeterminant;
 
     // p_object = inverse(L) * (p_world - t) = inverse(L) * p_world - inverse(L) * t
-    const rows = new Float64Array([
-        i00, i01, i02, -(i00 * tx + i01 * ty + i02 * tz),
-        i10, i11, i12, -(i10 * tx + i11 * ty + i12 * tz),
-        i20, i21, i22, -(i20 * tx + i21 * ty + i22 * tz),
-    ]);
-    if (rows.some((value) => !Number.isFinite(value))) return null;
-    return { rows, determinant };
+    out[0] = i00;
+    out[1] = i01;
+    out[2] = i02;
+    out[3] = -(i00 * tx + i01 * ty + i02 * tz);
+    out[4] = i10;
+    out[5] = i11;
+    out[6] = i12;
+    out[7] = -(i10 * tx + i11 * ty + i12 * tz);
+    out[8] = i20;
+    out[9] = i21;
+    out[10] = i22;
+    out[11] = -(i20 * tx + i21 * ty + i22 * tz);
+    for (let index = 0; index < 12; index++) if (!Number.isFinite(out[index])) return 0;
+    return determinant;
 }
+
+/** transformBounds' running box: one scratch, so a call allocates nothing (JS is single-threaded, nothing re-enters it). */
+const boundsLow = new Float64Array(3);
+const boundsHigh = new Float64Array(3);
 
 /** Axis-aligned box around an object-space box after `objectToWorld`, grown by {@link WORLD_BOX_PADDING}. */
 export function transformBounds(meshBounds: ArrayLike<number>, objectToWorld: Mat4, out: Float32Array, offset: number): void {
     const e = objectToWorld;
-    const low = [Infinity, Infinity, Infinity];
-    const high = [-Infinity, -Infinity, -Infinity];
+    const low = boundsLow.fill(Infinity);
+    const high = boundsHigh.fill(-Infinity);
     for (let corner = 0; corner < 8; corner++) {
         const x = corner & 1 ? meshBounds[3] : meshBounds[0];
         const y = corner & 2 ? meshBounds[4] : meshBounds[1];

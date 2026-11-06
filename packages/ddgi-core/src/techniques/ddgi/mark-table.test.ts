@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 import type { LightHandle } from '../../platform/contract/handles.ts';
 import type { LightDescriptor } from '../../platform/contract/scene.ts';
 import type { LightChange, SceneChanges } from '../../platform/contract/scene-copy.ts';
-import { MARK_ENTRY_WORD, MARK_ENTRY_WORDS, MARK_HEADER_WORDS, MARK_KIND, MARK_LIGHT_KIND, MARK_LIGHT_WORD, MARK_LIGHT_WORDS } from './layout.ts';
-import { buildMarkTable, ENVIRONMENT_CHANGE, MAX_GLOBAL_CHANGE } from './mark-table.ts';
+import { MARK_ENTRY_WORD, MARK_ENTRY_WORDS, MARK_GEOMETRY_WORD, MARK_GEOMETRY_WORDS, MARK_HEADER_WORDS, MARK_KIND, MARK_LIGHT_KIND, MARK_LIGHT_WORD, MARK_LIGHT_WORDS } from './layout.ts';
+import { buildMarkTable, ENVIRONMENT_CHANGE, FAR_SET_SPACINGS, MAX_GLOBAL_CHANGE } from './mark-table.ts';
 import { probeGrid } from './settings.ts';
 import { markKernelWgsl } from './wgsl/mark.ts';
 
@@ -38,6 +38,12 @@ function entry(table: NonNullable<ReturnType<typeof buildMarkTable>>, index: num
         globalChange: floats[base + MARK_ENTRY_WORD.globalChange],
         before: light(MARK_ENTRY_WORD.before),
         after: light(MARK_ENTRY_WORD.after),
+        geometry: {
+            regionMin: [...floats.subarray(base + MARK_ENTRY_WORD.geometry + MARK_GEOMETRY_WORD.regionMin, base + MARK_ENTRY_WORD.geometry + MARK_GEOMETRY_WORD.regionMin + 3)],
+            regionMax: [...floats.subarray(base + MARK_ENTRY_WORD.geometry + MARK_GEOMETRY_WORD.regionMax, base + MARK_ENTRY_WORD.geometry + MARK_GEOMETRY_WORD.regionMax + 3)],
+            moved: floats[base + MARK_ENTRY_WORD.geometry + MARK_GEOMETRY_WORD.moved],
+            moverBit: words[base + MARK_ENTRY_WORD.geometry + MARK_GEOMETRY_WORD.moverBit],
+        },
     };
 }
 
@@ -120,13 +126,43 @@ describe("ddgi/mark's table", () => {
         expect(entry(table, 0).globalChange).toBe(ENVIRONMENT_CHANGE);
     });
 
+    it('gives each geometry region one entry over the probes within the far reach, with its box, move and mover bit (T2.M1)', () => {
+        // A 1 m crate in room A moved 0.25 m, and one hidden (no move: a whole change); the first is a hot mover.
+        const before = { min: [2.5, 0, 2.5] as [number, number, number], max: [3.5, 1, 3.5] as [number, number, number] };
+        const after = { min: [2.75, 0, 2.5] as [number, number, number], max: [3.75, 1, 3.5] as [number, number, number] };
+        const regions = [
+            { bounds: before, reason: 'geometry' as const, moved: 0.25, instance: 7 },
+            { bounds: after, reason: 'geometry' as const, moved: 0.25, instance: 7 },
+            { bounds: after, reason: 'geometry' as const, instance: 9 },
+            // Material changes and moves of nothing mark no geometry.
+            { bounds: after, reason: 'material' as const, instance: 7 },
+            { bounds: after, reason: 'geometry' as const, moved: 0, instance: 7 },
+        ];
+        const movers = { bitFor: (slot: number) => (slot === 7 ? 1 << 3 : 0) };
+        const table = buildMarkTable({ ...NONE, regions }, grid, movers)!;
+        expect(table.entryCount).toBe(3);
+        const [old, now, hidden] = [entry(table, 0), entry(table, 1), entry(table, 2)];
+        expect(old.kind).toBe(MARK_KIND.geometry);
+        expect(old.geometry.regionMin).toEqual(before.min);
+        expect(old.geometry.regionMax).toEqual(before.max);
+        expect(old.geometry.moved).toBeCloseTo(0.25, 6);
+        expect([old.geometry.moverBit, now.geometry.moverBit, hidden.geometry.moverBit]).toEqual([8, 8, 0]);
+        expect(hidden.geometry.moved).toBe(-1);
+        // The probe box: the region grown by 8 spacings (4 m) and the relocation margin, clipped to the 17 x 7 x 9 grid.
+        // x: (2.5 - 4 - 0.1) / 0.5 - 0.5 = -3.7 -> 0; (3.5 + 4 - 0.1) / 0.5 + 0.5 = 15.3 -> 15.
+        expect(FAR_SET_SPACINGS).toBe(8);
+        expect(old.boxMin).toEqual([0, 0, 0]);
+        expect(old.boxSize).toEqual([16, 7, 9]);
+        expect(table.threadCount).toBe(old.boxSize[0] * 7 * 9 + now.boxSize[0] * 7 * 9 + hidden.boxSize[0] * 7 * 9);
+    });
+
     it("matches the kernel's structs word for word", () => {
         const wgsl = markKernelWgsl('workgroup');
         const members = (name: string) => {
             const body = new RegExp(`struct ${name} \\{([\\s\\S]*?)\\n\\}`).exec(wgsl)?.[1] ?? '';
             return [...body.matchAll(/^\s*(\w+): ([\w<>]+),/gm)].map((match) => ({ name: match[1], type: match[2] }));
         };
-        const words = (type: string) => (type.startsWith('vec3') ? 3 : type === 'DdgiMarkLight' ? MARK_LIGHT_WORDS : 1);
+        const words = (type: string) => (type.startsWith('vec3') ? 3 : type === 'DdgiMarkLight' ? MARK_LIGHT_WORDS : type === 'DdgiMarkGeometry' ? MARK_GEOMETRY_WORDS : 1);
         // vec3 members are followed by a scalar here, so each vec3 + scalar pair fills one 16-byte slot.
         const offsets = (list: { name: string; type: string }[]) => {
             let offset = 0;
@@ -143,6 +179,9 @@ describe("ddgi/mark's table", () => {
         const entryLayout = offsets(members('DdgiMarkEntry'));
         expect(entryLayout.total).toBe(MARK_ENTRY_WORDS);
         for (const [name, word] of Object.entries(MARK_ENTRY_WORD)) expect(entryLayout.result[name], name).toBe(word);
+        const geometry = offsets(members('DdgiMarkGeometry'));
+        expect(geometry.total).toBe(MARK_GEOMETRY_WORDS);
+        for (const [name, word] of Object.entries(MARK_GEOMETRY_WORD)) expect(geometry.result[name], name).toBe(word);
         expect(offsets(members('DdgiMarkTable').filter((member) => member.name !== 'entries')).total).toBe(MARK_HEADER_WORDS);
     });
 });

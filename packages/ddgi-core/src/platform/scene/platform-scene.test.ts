@@ -6,7 +6,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import type { MaterialHandle } from '../contract/handles.ts';
+import type { InstanceHandle, MaterialHandle } from '../contract/handles.ts';
 import { MAX_LISTED_LIGHT_CHANGES } from './change-log.ts';
 import { PlatformScene, type SceneUpload } from './platform-scene.ts';
 import { createFakeGpu, type FakeBuffer, type FakeGpu } from './testing/fake-gpu.ts';
@@ -244,6 +244,99 @@ describe('changes and bounds', () => {
         expect(scene.bounds.max[1]).toBeCloseTo(3, 4);
         model.setVisible(hidden, true);
         expect(scene.bounds.min[0]).toBeCloseTo(-100.5, 3);
+    });
+});
+
+describe('moves (T2.M1)', () => {
+    /** A cube mesh of known bounds (-0.5 to 0.5) and one material, and a placement of it. */
+    function unitCube(model: SceneModel) {
+        const half = 0.5;
+        const positions = new Float32Array([-half, -half, -half, half, -half, -half, half, half, -half, -half, half, -half, -half, -half, half, half, -half, half, half, half, half, -half, half, half]);
+        const indices = new Uint32Array([0, 1, 2, 0, 2, 3, 4, 6, 5, 4, 7, 6, 0, 4, 5, 0, 5, 1, 3, 2, 6, 3, 6, 7, 0, 3, 7, 0, 7, 4, 1, 5, 6, 1, 6, 2]);
+        return { mesh: model.createMesh({ positions, indices }), material: model.createMaterial({}) };
+    }
+
+    it('says how far a moved instance went, as its farthest corner, in both regions, with its slot', () => {
+        const { gpu, scene, model } = setup();
+        const { mesh, material } = unitCube(model);
+        const instance = model.createInstance({ mesh, materials: [material], transform: composeTransform([0, 0, 0], [0, 1, 0], 0, [1, 1, 1]) });
+        const created = encodeAndSubmit(gpu, scene).changes.regions;
+        // Created: a whole change there, no move distance.
+        expect(created).toHaveLength(1);
+        expect(created[0].moved).toBeUndefined();
+        expect(created[0].instance).toBe(scene.instanceSlot(instance));
+
+        model.setTransform(instance, composeTransform([1, 0, 0], [0, 1, 0], 0, [1, 1, 1]));
+        const slid = encodeAndSubmit(gpu, scene).changes.regions;
+        expect(slid.map((region) => region.moved)).toEqual([1, 1]);
+        expect(slid.map((region) => region.instance)).toEqual([scene.instanceSlot(instance), scene.instanceSlot(instance)]);
+
+        // A quarter turn in place: the world box is the same, but its corners moved by the chord sqrt(2) x 0.707 = 1.
+        model.setTransform(instance, composeTransform([1, 0, 0], [0, 1, 0], Math.PI / 2, [1, 1, 1]));
+        const turned = encodeAndSubmit(gpu, scene).changes.regions;
+        expect(turned[0].bounds.min[0]).toBeCloseTo(turned[1].bounds.min[0], 5);
+        expect(turned[0].moved).toBeCloseTo(1, 5);
+    });
+
+    it('setTransforms moves instances exactly as setTransform does, with the same regions', () => {
+        const one = setup();
+        const batch = setup();
+        const random = createRandom(9);
+        const transforms: number[][] = [];
+        const handles: { one: InstanceHandle[]; batch: InstanceHandle[] } = { one: [], batch: [] };
+        for (const [which, { model }] of [['one', one], ['batch', batch]] as const) {
+            const { mesh, material } = unitCube(model);
+            for (let index = 0; index < 20; index++) handles[which].push(model.createInstance({ mesh, materials: [material], transform: composeTransform([index, 0, 0], [0, 1, 0], 0, [1, 1, 1]) }));
+        }
+        encodeAndSubmit(one.gpu, one.scene);
+        encodeAndSubmit(batch.gpu, batch.scene);
+        // Every other instance moves; f32 values, so both paths see the same numbers.
+        const moving = [0, 2, 4, 6, 8, 10, 12, 14, 16, 18];
+        for (const _ of moving) transforms.push(Array.from(new Float32Array(composeTransform([random() * 10, random(), random() * 10], [0, 1, 0], random() * 3, [1 + random(), 1, 1]))));
+        moving.forEach((index, entry) => one.model.setTransform(handles.one[index], transforms[entry]));
+        batch.scene.setTransforms(
+            Uint32Array.from(moving.map((index) => handles.batch[index])),
+            Float32Array.from(transforms.flat()),
+        );
+        moving.forEach((index, entry) => (batch.model.instances.get(handles.batch[index])!.transform = transforms[entry]));
+        const fromOne = encodeAndSubmit(one.gpu, one.scene);
+        const fromBatch = encodeAndSubmit(batch.gpu, batch.scene);
+        expect(fromBatch.changes.regions).toEqual(fromOne.changes.regions);
+        expect(fromBatch.instancesChanged).toBe(true);
+        expect(readBack(batch.scene, batch.model)).toEqual([]);
+        expect(readBack(one.scene, one.model)).toEqual([]);
+    });
+
+    it('setTransforms changes nothing when an entry is bad', () => {
+        const { gpu, scene, model } = setup();
+        const { mesh, material } = unitCube(model);
+        const instance = model.createInstance({ mesh, materials: [material], transform: composeTransform([0, 0, 0], [0, 1, 0], 0, [1, 1, 1]) });
+        encodeAndSubmit(gpu, scene);
+        const moved = new Float32Array(composeTransform([5, 0, 0], [0, 1, 0], 0, [1, 1, 1]));
+        const broken = new Float32Array(32);
+        broken.set(moved);
+        broken[16 + 12] = Number.NaN;
+        expect(() => scene.setTransforms(Uint32Array.of(instance, instance), broken)).toThrow(/finite/);
+        expect(() => scene.setTransforms(Uint32Array.of(instance, 12345), new Float32Array(32))).toThrow(/unknown or destroyed instance/);
+        expect(() => scene.setTransforms(Uint32Array.of(instance), new Float32Array(8))).toThrow(/16 numbers/);
+        expect(encodeAndSubmit(gpu, scene).changes.regions).toEqual([]);
+        expect(scene.bounds.min[0]).toBeCloseTo(-0.5, 4);
+    });
+
+    it('merges a frame of more than MAX_DIRTY_REGIONS moves into one region with the largest move and no instance', () => {
+        const { gpu, scene, model } = setup();
+        const { mesh, material } = unitCube(model);
+        const instances = Array.from({ length: 300 }, (_, index) => model.createInstance({ mesh, materials: [material], transform: composeTransform([index, 0, 0], [0, 1, 0], 0, [1, 1, 1]) }));
+        encodeAndSubmit(gpu, scene);
+        const matrices = new Float32Array(instances.length * 16);
+        instances.forEach((_, index) => matrices.set(composeTransform([index, index === 7 ? 3 : 0.5, 0], [0, 1, 0], 0, [1, 1, 1]), index * 16));
+        scene.setTransforms(Uint32Array.from(instances), matrices);
+        const regions = encodeAndSubmit(gpu, scene).changes.regions;
+        expect(regions).toHaveLength(1);
+        expect(regions[0].reason).toBe('geometry');
+        expect(regions[0].moved).toBeCloseTo(3, 5);
+        expect(regions[0].instance).toBeUndefined();
+        expect(regions[0].bounds.max[0]).toBeCloseTo(299.5, 3);
     });
 });
 

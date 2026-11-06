@@ -391,6 +391,14 @@ export interface SceneApi {
 
     createInstance(descriptor: InstanceDescriptor): InstanceHandle;
     setTransform(instance: InstanceHandle, transform: Mat4): void;
+    /**
+     * Many transforms in one call: `matrices` holds 16 numbers per entry of
+     * `instances` (column-major, as `setTransform` takes them), in the same
+     * order. The same result as calling `setTransform` for each, without the
+     * per-call bookkeeping, for hosts that move many objects a frame.
+     * Throws before changing anything if an entry is invalid.
+     */
+    setTransforms(instances: Uint32Array, matrices: Float32Array): void;
     setVisible(instance: InstanceHandle, visible: boolean): void;
     setMaterials(instance: InstanceHandle, materials: readonly MaterialHandle[]): void;
     destroyInstance(instance: InstanceHandle): void;

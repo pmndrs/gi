@@ -23,7 +23,7 @@
  */
 
 import type { DistanceFormat, ScratchLayout } from '../layout.ts';
-import { PROPAGATION_STATE_WORD, propagationScratchStrideWords } from '../layout.ts';
+import { PROPAGATION_STATE_WORD, propagationScratchStrideWords, SCRATCH_PROBE_DATA_WORD } from '../layout.ts';
 import { DDGI_BORDER_SOURCE_WGSL } from './border.ts';
 import { DDGI_COMMON_WGSL } from './common.ts';
 
@@ -53,6 +53,9 @@ const DDGI_SCRATCH_STRIDE: u32 = ${scratch.strideWords}u;
 const DDGI_SCRATCH_IRRADIANCE: u32 = ${scratch.irradianceOffset}u;
 const DDGI_SCRATCH_DISTANCE: u32 = ${scratch.distanceOffset}u;
 const DDGI_SCRATCH_PROBE_DATA: u32 = ${scratch.probeDataOffset}u;
+const DDGI_SCRATCH_OFFSET_XY: u32 = ${SCRATCH_PROBE_DATA_WORD.offsetXy}u;
+const DDGI_SCRATCH_OFFSET_Z_AND_STATE: u32 = ${SCRATCH_PROBE_DATA_WORD.offsetZAndState}u;
+const DDGI_SCRATCH_TILES_WRITTEN: u32 = ${SCRATCH_PROBE_DATA_WORD.tilesWritten}u;
 // An irradiance-only scratch (ddgiWriteIrradianceTiles): interior texels alone.
 const DDGI_IRRADIANCE_TILE_STRIDE: u32 = ${propagationScratchStrideWords(irradianceTexels)}u;
 // Where the irradiance-only list's length is (PROPAGATION_STATE_WORD in layout.ts).
@@ -102,8 +105,8 @@ fn ${WRITE_ENTRY_POINTS.all}(
     let probe = ddgiProbeCoordinates(probeIndex, ddgiProbeCount());
     let slotBase = slot * DDGI_SCRATCH_STRIDE;
 
-    let offsetXy = unpack2x16float(ddgiScratch[slotBase + DDGI_SCRATCH_PROBE_DATA]);
-    let offsetZAndState = unpack2x16float(ddgiScratch[slotBase + DDGI_SCRATCH_PROBE_DATA + 1u]);
+    let offsetXy = unpack2x16float(ddgiScratch[slotBase + DDGI_SCRATCH_PROBE_DATA + DDGI_SCRATCH_OFFSET_XY]);
+    let offsetZAndState = unpack2x16float(ddgiScratch[slotBase + DDGI_SCRATCH_PROBE_DATA + DDGI_SCRATCH_OFFSET_Z_AND_STATE]);
     let offset = vec3f(offsetXy, offsetZAndState.x);
     let state = u32(round(offsetZAndState.y));
     if (thread == 0u) {
@@ -111,11 +114,14 @@ fn ${WRITE_ENTRY_POINTS.all}(
         let pointsWidth = textureDimensions(ddgiPointsOut).x;
         textureStore(ddgiPointsOut, vec2u(probeIndex % pointsWidth, probeIndex / pointsWidth), vec4f(ddgiProbePosition(probe, offset), f32(state)));
     }
-    // The blend wrote tiles exactly for probes that are active after this
-    // update; off probes and probes coming back on keep what they had.
-    if (state != DDGI_STATE_ACTIVE) {
+    // The blend says whether it wrote this probe's tiles: it did for every
+    // probe it blended, active afterwards or still warming in state 3 after
+    // its first estimate (T2.M1); off probes and probes coming back on keep
+    // what they had.
+    if (ddgiScratch[slotBase + DDGI_SCRATCH_PROBE_DATA + DDGI_SCRATCH_TILES_WRITTEN] == 0u) {
         return;
     }
+
 
     ddgiStoreIrradianceTile(probe, slotBase + DDGI_SCRATCH_IRRADIANCE, thread);
 
