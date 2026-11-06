@@ -21,6 +21,9 @@ Rules:
 
 ---
 
+## 2026-11-06 · T1.12 flicker against Dennis's threshold · implementer (opus)
+Verified (RTX 3060, Chrome 156, `ddgi-flicker`, `--no-cool-wait`, default rule τ 5 s with the ramp, 1200 frames settled, one run each; threshold mean ≤ 0.1%, p95 ≤ 0.5%, DECISIONS e7a6e88): **all pass.** At `gpuMs:2` (mean / p95 per-pixel change a frame): Cornell 0.082% / 0.34%, two-room 0.0099% / 0.032%, Sponza 0.027% / 0.096%. At the calibrated batch as a fixed count (1574 / 707 / 268 probes): 0.088% / 0.36%, 0.0096% / 0.031%, 0.024% / 0.081%. Cornell has the least margin (12–18% under the mean bar). Rows: `bench/results/flicker.csv`, `note/flicker_threshold_check`. No code changed.
+
 ## 2026-11-06 · T1.9 M1 measurements against the SPEC targets · gpu-tester (sonnet)
 Did: one VALID run per target, no code changes (HEAD 3701d8f). RTX 3060 Laptop (nvidia, ampere), headless Chrome 156, under the bench lock. Leaks, memory and the Intel suite are correctness runs (`--no-cool-wait`); startup runs were timing runs (VALID by the clock rule). Rows added: `memory.csv` (48), `timing.csv` (3 x 35, `batch_cost/startup/...`, one scene per run, so the compile is cold). The leak page has no to-csv; its numbers are below.
 Reused, not re-run: update (T1.9b), shading (T1.14), accuracy (T1.13, T1.14), native matched counts ("T1.9 quiet-window measurements").
