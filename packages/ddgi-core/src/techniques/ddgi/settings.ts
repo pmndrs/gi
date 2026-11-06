@@ -302,12 +302,12 @@ export const DEFAULT_KEY_PROBE_UPDATES = 4;
 export const FINE_PROBE_UPDATES = 1;
 
 /**
- * "Far probes owe 2" applies when giving every probe K updates at this
- * frame's batch would take more than this many frames (`N × K / units`;
- * m2-lights.md §6.4: 2 s at 60 Hz). Counted in frames, so the rule doesn't
- * depend on the host's frame rate. Sponza (19,425 probes, about 290 a frame)
- * needs about 540 frames, so it applies there; two-room (12) and Cornell (9)
- * don't.
+ * Key probes and propagation (T2.4c), or with `keyProbes` off "far probes
+ * owe 2", apply when giving every probe K updates at this frame's batch
+ * would take more than this many frames (`N × K / units`; m2-lights.md §6.4:
+ * 2 s at 60 Hz). Counted in frames, so the rule doesn't depend on the host's
+ * frame rate. Sponza (19,425 probes, about 290 a frame) needs about 540
+ * frames, so it applies there; two-room (12) and Cornell (9) don't.
  */
 export const FAR_RULE_FRAMES = 120;
 
