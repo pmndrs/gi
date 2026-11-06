@@ -53,6 +53,10 @@ $bad = $rows | Where-Object { ($_.metric -eq 'probe_update_every_frame' -and $_.
 $rows | Where-Object { $_.browser -eq 'native' -and "$($_.date),$($_.commit),$($_.device),$($_.browser),$($_.scene)" -notin $bad }
 ```
 
+## timing.csv
+
+- **`batch_cost/inline/...` and `batch_cost/deferred/...` (from 2026-11-06, commit 06d5a18 on the spike branch `m2-t2.0`):** T2.0's A/B of where DDGI computes direct light, M1's inline shadow rays or the deferred `gi/direct` pass. The path sits after `batch_cost/`; the rest of the name is the `ddgi-batch-cost` page's usual metric (`tools/gpu/pages/ddgi-batch-cost/to-csv.ts`). New with them: `bound_batch<n>/...` (the GPU-bound curve from 16 to 512 probes, each pass's median ms), `bound_fit/...` (fixed ms, µs per probe, the probes at the budget from the fit and from the curve) and, deferred only, `shadow_rays/batch<n>/...`. Each path is one run with its own `note/timing_valid`.
+
 ## memory.csv
 
 `gi.stats.memory` per scene at the manifest's volume, from the `ddgi-memory` page (`tools/gpu/pages/ddgi-memory`, T1.9). Bytes unless the name ends in `_mb` (1 MB = 1,000,000 bytes, as the viewer shows them). Byte counts of what the core created, so they don't depend on the GPU.
