@@ -384,7 +384,7 @@ Status: **started 2026-11-06** on branch `m2` (from main at 3d682dc; M1 merged a
 | T2.1 | Light buffer v2 (capacity, the adapter's light walk), manifest `motions`, `sponza-candles` (1,024 lights) | implementer + wrangler | M | T2.4a (change log) | todo |
 | T2.2 | Deferred direct light (`gi/direct`) in platform hit shading | implementer | M | T2.0 | done (merged into `m2` 2026-11-06 after Opus review; deferred is the default, inline behind `directLight: 'inline'`; Sponza 2.03× the probes at 2 ms, DECISIONS) |
 | T2.5 | Light groups: layers, compose, weights, adapter API | implementer | M | T2.2, T2.4a | todo |
-| T2.6a | Sky re-bake for time of day: GPU procedural source, two-level SH with radiance SH, the compile fix | implementer | M | T2.4b | todo |
+| T2.6a | Sky re-bake for time of day: GPU procedural source, two-level SH with radiance SH, the compile fix | implementer | M | T2.4b | active (implementer, 2026-11-06, beside T2.M1; worktree `webgpu-ddgi-m2-t26a`, branch `m2-t2.6a`) |
 | T2.6b | Instant sky: first-order transfer in the blend, the nudge, the fallback; the sun layer in white with T2.5 | implementer | M | T2.4c, T2.5, T2.6a | todo |
 | T2.3 | Many-light sampling: the light grid | implementer | M | T2.1, T2.2 | todo |
 | T2.7 | Native harness: manifest motions, texture sky, animated sun | native-runner | M | T2.1 | todo |
