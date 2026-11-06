@@ -1,6 +1,6 @@
 # M3 design draft: moving objects and the camera
 
-Status: **draft for Dennis's review, 2026-11-05, revised after an Opus review and again after Dennis's answers the same day** (listed at the end). Apart from those answers, nothing here is decided. It is the input for M3's breakdown (the last task of M2) and, for the startup items DECISIONS moved to M2, for T1.11.
+Status: **approved by Dennis 2026-11-06 and merged into main.** Written 2026-11-05, revised after an Opus review and again after Dennis's answers the same day (listed at the end). It is the input for M3's breakdown (the last task of M2). Rigid moving objects (T3.1 and T3.4, rigid parts) and the startup lane (T2.12–T2.14) run in M2; see [TASKS.md](../../TASKS.md). Dennis also approved the H-PLOC rebuild on drift (section 3.1; DECISIONS 2026-11-06).
 
 It builds on [ddgi.md](ddgi.md), [bvh-framework.md](bvh-framework.md), [platform.md](../api/platform.md), [three.md](../api/three.md), the B1 hand-over (branch `bvh-b1`: `packages/bvh/README.md` and its PROGRESS entry) and the M2 draft, [m2-lights.md](m2-lights.md). M3 reuses M2's per-probe history and GPU scheduler (m2-lights.md section 4) for moved geometry; if M2 changes them, this page follows.
 
@@ -142,7 +142,7 @@ SPEC's tracing decision: deforming meshes "keep their BVH shape", refit every fr
 
 **Gaps for moving objects:**
 
-1. **Rebuilding a deforming mesh's tree when its refit drifts.** SPEC says deforming meshes keep their tree's shape, and section 3 planned no rebuilds. A sway stays near its rest pose, but a character's arm raised for a minute, or a cloth falling, doesn't. Proposal (needs a DECISIONS entry, since it departs from SPEC):
+1. **Rebuilding a deforming mesh's tree when its refit drifts.** SPEC says deforming meshes keep their tree's shape, and section 3 planned no rebuilds. A sway stays near its rest pose, but a character's arm raised for a minute, or a cloth falling, doesn't. Approved by Dennis 2026-11-06 (DECISIONS, `dyn-blas-rebuild`, recorded as an exception to SPEC):
    - **The signal:** with the CPU form of `setDeformedPositions` the CPU has the positions and can compute the relative cost itself, like the top level. With the GPU-buffer form it needs the refit's stats: one small asynchronous readback a few frames late. Dennis called readbacks a preference, not a rule ("prefer GPU-resident; read back when it clearly pays"), but DECISIONS still says no GPU readbacks by default, so this readback goes in the same DECISIONS entry.
    - **The rebuild:** past **1.1×** the built cost (a mesh tree is most of a ray's walk, unlike the top level, so its cost tracks trace speed closely; 1.1× matches the done-when below), rebuild that mesh's tree with H-PLOC on the GPU from the current positions, and swap it in when it's done, as the top level does. Scaling Sponza's 46.6 ms by triangle count, a 100,000-triangle mesh is roughly 1–2 ms with H-PLOC's fixed passes. At most one such rebuild starts per frame.
    - The swap needs the new tree's layout on the CPU for the refit (`GpuMeshRefit.setTree`). `readLayouts` gives it, also a readback, once per rebuild.

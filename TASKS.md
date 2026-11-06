@@ -274,7 +274,7 @@ Rules for every M1 task:
 | T1.12 | Stability: Cornell flicker fixed, debug views of the source channels, threshold set by eye; hysteresis aware of the time between a probe's updates, and Sponza's settle time measured GPU-bound (frames and seconds) | implementer | M | T1.5, T1.8 | done (Opus reviews passed with notes, all fixed; Dennis's eye check: steady; threshold locked at mean ≤ 0.1%, p95 ≤ 0.5%: Cornell 0.082% / 0.34%, two-room 0.0099% / 0.032%, Sponza 0.027% / 0.096%) |
 | T1.13 | HD Cycles references with stored cameras; the viewer's Compare matches them | implementer, then gpu-tester | M | T1.8, T0.7 | done (Opus review passed with notes, all fixed; every reference 1920×1080 with its stored camera; HD accuracy Cornell +5.74%, two-room +5.50%; noise per view shown in the viewer, some viewing-only bookmarks over 3% per pixel on GI, listed in the M1 note) |
 | T1.14 | GI composite for three (`docs/design/three-composite.md`): a drop-in TSL node on three's `pass()` and `mrt()`, with three's GTAO on the GI term by default (curtains, DECISIONS); `GIVolume` stays the simple path; usage bar against LightProbeGrid | main session designs, implementer builds | M | T1.7, T1.8 | done (Opus reviews passed with notes, all fixed; default: upscaler Performance + half-resolution GTAO, 0.73 ms, Sponza +6.59% vs HD Cycles) |
-| T1.11 | M1 note and M2 breakdown | main session | S | all M1 | review (M1 note in docs/milestones/M1.md; M2 breakdown on the board; PR m1 → main open, waiting on Dennis) |
+| T1.11 | M1 note and M2 breakdown | main session | S | all M1 | done (M1 note in docs/milestones/M1.md; M2 breakdown on the board; Dennis merged PR #3, m1 → main, on 2026-11-06) |
 
 ### BVH lane (runs alongside; DECISIONS 2026-11-04)
 
@@ -359,18 +359,29 @@ Done-whens for the B stages are in `docs/design/bvh-framework.md`. B1a's: a 10k-
   - See the T0.12 notes above: the curtains join `sponza`; ivy, trees and candles make `sponza-full`.
   - Done when the viewer shows the curtains at bookmark 1, the fetch verifies, and the Cycles reference is re-rendered.
 
-## M2: dynamic updates (draft breakdown, T1.11)
+## M2: dynamic updates
 
-Draft from the M2/M3 design docs on branch `claude/m2-m3-design-on-m1` (73590ab; `docs/design/m2-lights.md`, `docs/design/m3-moving.md`, `research/ddgi-dynamic-updates.md`), not merged yet. Order follows Dennis (DECISIONS 2026-11-06): dynamic updates first, moving objects and time of day; startup ("fast first GI") lower. Dennis accepted key probes as the main path, rigid moving objects early and the H-PLOC rebuild on drift (DECISIONS 2026-11-06). Done-whens are in the design docs' "Draft done-whens"; they move here when the docs are merged.
+Status: **started 2026-11-06** on branch `m2` (from main at 3d682dc; M1 merged as PR #3). The design is on main: [docs/design/m2-lights.md](docs/design/m2-lights.md) (§4.1–4.8 are the dynamic-update design), [docs/design/m3-moving.md](docs/design/m3-moving.md) (moving objects; the startup lane T2.12–T2.14) and [research/ddgi-dynamic-updates.md](research/ddgi-dynamic-updates.md). Dennis approved key probes as the main path, rigid moving objects in M2 and the H-PLOC rebuild on drift (DECISIONS 2026-11-06).
+
+**Order (Dennis, DECISIONS 2026-11-06):** dynamic updates first (moving objects, time of day); startup lower.
+1. The dynamic-update spine: T2.4a → T2.4b → T2.4c. T2.4c's first check decides whether key probes stay the main path ("far probes owe 2" is the fallback).
+2. Rigid moving objects (T2.M1). The T2.0 shadow spike runs beside these.
+3. Lights and time of day: T2.1, T2.2, T2.5, T2.6a/b, T2.3, T2.7, T2.8.
+4. Startup, lower: T2.12, T2.13, T2.14.
+5. Close: T2.10, then T2.11.
+
+**How M2 is run (Dennis, 2026-11-06):** features over timing, so each gate gets one VALID timing run under the clock rule (`tools/reference/bench-lock.ts`) and no re-time rounds unless a decision depends on the number. Targets are the RTX 3060 and up and the Apple M5 Pro, GPU-bound; the Intel UHD is correctness only. Every task gets an Opus review against its done-when before it is marked done.
+
+**Done-whens:** M2's are in m2-lights.md "Draft done-whens" (T2.0–T2.10) and m3-moving.md "Startup lane" (T2.12–T2.14). They are the board's done-whens as written, with the changes listed under "M2 done-when changes" below. T2.M1's is below too.
 
 | ID | Task | Agent | Size | Depends on | Status |
 | --- | --- | --- | --- | --- | --- |
-| T2.4a | Change-driven history on T1.12's per-probe record, and `ddgi/mark` (the change estimate) | implementer | M | T1.12 | todo |
-| T2.4b | GPU scheduler with camera priority over Budget v2, the feedback rule; far probes owe 2 as the fallback; the warm-up moves into the technique | implementer | M | T2.4a | todo |
+| T2.4a | Change-driven history on T1.12's per-probe record, and `ddgi/mark` (the change estimate); takes T2.1's change-log part (old and new light in `SceneChanges.lights`, influence radius) | implementer | M | T1.12 | todo |
+| T2.4b | GPU scheduler with camera priority over Budget v2's fixed count, the feedback rule; far probes owe 2 as the fallback; the warm-up moves into the technique (the viewer switches to `volume.start`) | implementer | M | T2.4a | todo |
 | T2.4c | Key probes (1 in 8) with change propagation, the main path for global changes; first checked on Sponza's sun step and two-room's lamp | implementer | M | T2.4b | todo |
 | T2.M1 | Rigid moving objects, pulled forward from M3: the change feed for transforms (M3's T3.1, rigid part), geometry marks and the mover mask (T3.4, rigid part), three adapter change tracking for transforms | implementer | M | T2.4b (T2.4c for far sets) | todo |
 | T2.0 | Spike: deferred shadow-ray pass on Sponza (decision rule: go ahead if Sponza fits ≥ 1.25× the probes at 2 ms) | implementer | S | M1 done | todo (runs beside T2.4) |
-| T2.1 | Light buffer v2, manifest `motions`, `sponza-candles` (1,024 lights) | implementer + wrangler | M | none | todo |
+| T2.1 | Light buffer v2 (capacity, the adapter's light walk), manifest `motions`, `sponza-candles` (1,024 lights) | implementer + wrangler | M | T2.4a (change log) | todo |
 | T2.2 | Deferred direct light (`gi/direct`) in platform hit shading | implementer | M | T2.0 | todo |
 | T2.5 | Light groups: layers, compose, weights, adapter API | implementer | M | T2.2, T2.4a | todo |
 | T2.6a | Sky re-bake for time of day: GPU procedural source, two-level SH with radiance SH, the compile fix | implementer | M | T2.4b | todo |
@@ -381,10 +392,31 @@ Draft from the M2/M3 design docs on branch `claude/m2-m3-design-on-m1` (73590ab;
 | T2.12 | Fast first GI: GPU H-PLOC/LBVH trees at load, tinybvh swapped in per mesh (lower priority) | implementer | M | B1, B2 | todo |
 | T2.13 | Scene copy off the main thread (lower priority) | implementer | M | none | todo |
 | T2.14 | Compile only what's configured (`encodeBatch` on first use, the sky kernel's compile) (lower priority) | implementer | S | T2.6a | todo |
-| T2.10 | M2 measurements against targets (one VALID run per gate, DECISIONS 2026-11-06) | gpu-tester, native-runner | M | all above | todo |
+| T2.16 | Re-render the noisy viewing-only reference bookmarks (M1 note), or mark them viewing-only in the viewer (lower priority) | wrangler, then gpu-tester | S | none | todo |
+| T2.10 | M2 measurements against targets (one VALID run per gate, DECISIONS 2026-11-06), with the measured whole-frame p50/p95 | gpu-tester, native-runner | M | all above | todo |
 | T2.11 | M2 note and M3 breakdown | main session | S | T2.10 | todo |
 
 M3 keeps deforming meshes and the BVH work: runtime mesh trees, `GpuMeshRefit` wired, and the H-PLOC rebuild when a refit drifts, several volumes, the camera-following volume, nested finer volumes around thin cloth (carried from M1), and the scenarios (`docs/design/m3-moving.md`, T3.0–T3.11).
+
+### M2 done-when changes
+
+These add to the design docs' draft done-whens. M1's open follow-ups (the M1 note, "What isn't done") are placed here too.
+
+- **T2.4a** builds the change log's light part, which the design put in T2.1: `SceneChanges.lights` with each change's old and new light, the 1,024-a-frame cap, and the influence radius. T2.1 keeps the capacity, the adapter's light walk, `motions` and `sponza-candles`. T2.4a's step test drives the lamp from its test page; it doesn't need manifest motions.
+- **T2.4b** adds two checks:
+  - *The calibration guard* (M1 follow-up: Budget v2 once gave Sponza 26 probes a frame instead of about 290): the calibration logs its samples, and a result below half of the previous calibration on the same device and scene is re-measured once before it's used. Test with a forced low sample.
+  - *The viewer uses `volume.start`* (M1 follow-up): with the warm-up in the technique (check 6), the viewer's own copy of the warm-up is removed.
+- **T2.M1, rigid moving objects.** Done when, at the default budget, GI only, on the RTX:
+  1. 10,000 transforms through `setTransforms` cost ≤ 2 ms of CPU (from 18–20 ms), and a moved instance's change carries `moved`;
+  2. a recompile counter is in `gi.stats`, and creating and destroying 1,000 instances in random order leaves it at 0;
+  3. on the furnished room, a 1 m cabinet move is within 5% of settled in ≤ 1 s;
+  4. on the closed-door scene with its door moving, the dark room's leak (DECISIONS' definition) is ≤ 1% within 1 s of the door closing and stays there;
+  5. no probe is used in shading before 2 blended updates (m3-moving.md 5.2; test);
+  6. a still scene's field and cost match T2.4c's (mean within 0.1%, cost within 3%);
+  7. the three adapter sends moved objects in one `setTransforms` batch, `InstancedMesh` update ranges send only those instances (test), and its CPU cost stays ≤ 0.2 ms still and ≤ 0.5 ms with one mover (T1.7's pages);
+  8. marked probes against probes whose true change was > 5% are recorded for the cabinet and the door (the far-set guess, m3-moving.md risk 4).
+  - Not in T2.M1 (stays in M3): deforming meshes, `setDeformedPositions`, `receivers` and woken air probes, runtime mesh trees, the `updateMatrixWorld` override.
+- **T2.10** adds the measured whole-frame p50/p95 with GI updating and shading in the same frame (M1 follow-up), and runs the Intel UHD suites in short batches with a device-hang count (M1 follow-up: two `DXGI_ERROR_DEVICE_HUNG` in long back-to-back suites).
 
 ## Carried to M2 (collected during M1)
 

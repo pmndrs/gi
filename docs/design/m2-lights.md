@@ -1,6 +1,6 @@
 # M2 design draft: dynamic lights
 
-Status: **draft for Dennis's review, 2026-11-05, revised after an Opus review the same day and again after Dennis's answers (time of day rebuilt so nothing takes minutes to build; memory sized for mid- to high-end GPUs; the Intel UHD for correctness only).** Nothing here is decided. It is the input for T1.11 ("M1 note and M2 breakdown"). Where it would change a default or a settled choice from M1, it says so; those become DECISIONS entries only once Dennis agrees.
+Status: **approved by Dennis 2026-11-06 and merged into main; M2's board is in [TASKS.md](../../TASKS.md).** Written 2026-11-05, revised after an Opus review the same day and again after Dennis's answers (time of day rebuilt so nothing takes minutes to build; memory sized for mid- to high-end GPUs; the Intel UHD for correctness only). Where it changes a default or a settled choice from M1, it says so; those are DECISIONS entries.
 
 It builds on [ddgi.md](ddgi.md) (the field and update loop), [platform.md](../api/platform.md) (the contract), [three.md](../api/three.md) (the adapter) and the M1 entries in [DECISIONS](../DECISIONS.md). The M3 draft, [m3-moving.md](m3-moving.md), reuses the change-driven scheduler designed here for moved geometry.
 
@@ -865,9 +865,11 @@ The startup items DECISIONS moved to M2 ("fast first GI", the scene copy off the
 10. **Measurement:** benchmarks and estimates assume a loaded GPU with its clocks up ("Running at 60hz seems like a fail"). Budget v2 is accepted (work per frame, calibrated with the clocks up, a 4 s sweep floor); this doc's rates are its measured medians (T1.9b: Sponza 268 a frame).
 11. **Sun layer in white**, weighted by colour × intensity: kept, as an exception to SPEC's rule 3, after comparing what Unity APV, RTXGI and Godot SDFGI do ("go with what we need to get to the improvement passes but i would look at what other godot systems do"). The three conditions are in 6.3.
 
-## Still open
+## Decided by Dennis (2026-11-06)
 
-1. **Key probes and propagation as the main path for global changes** (4.5), with "far probes owe 2" as the fallback. On Sponza: the view in ~0.13 s, the whole volume visibly changed in ~1 s, every probe traced in ~1.8 s, against ~2.5 s with noisier far probes for the fallback. It's new (no shipped DDGI system propagates changes between levels this way, research note), so T2.4c's first check decides. Go ahead?
-2. **Moving objects sooner?** Rigid moving objects (M3's change feed and geometry marks) could run right after T2.4c, ahead of the instant sky, since they reuse the same scheduler. Deforming meshes and the BVH work stay in M3.
+1. **Key probes and propagation are the main path for global changes** (4.5), with "far probes owe 2" as the fallback. On Sponza: the view in ~0.13 s, the whole volume visibly changed in ~1 s, every probe traced in ~1.8 s, against ~2.5 s with noisier far probes for the fallback. It's new (no shipped DDGI system propagates changes between levels this way, research note), so T2.4c's first check decides.
+2. **Rigid moving objects come into M2,** right after T2.4c and ahead of the instant sky (board row T2.M1), since they reuse the same scheduler. Deforming meshes and the BVH work stay in M3.
+
+Nothing is left open in this doc.
 
 The times in sections 4.3–4.8, 6.3, 6.4 and 6.5 come from T1.9b's measured medians (the rates section).
