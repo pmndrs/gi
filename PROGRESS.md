@@ -21,6 +21,86 @@ Rules:
 
 ---
 
+## 2026-11-06 · T2.6a sky re-bake for time of day · implementer (opus)
+Did (branch `m2-t2.6a`, b50057e..HEAD):
+- A `procedural` sky is baked on the GPU. `platform/sky/procedural-sky.ts` holds the per-sky Preetham and calibration numbers and the re-bake rule (the sun turned more than 0.05°, or any other change).
+- The bake (`projection-wgsl.ts`, `platform-sky.ts`) is three dispatches in one pass, timed as `platform/sky bake`:
+  - the resample, the only kernel that reads the source (a procedural map is written unscaled);
+  - partial sums over the 256 × 128 map, in 64 workgroups;
+  - a one-workgroup sum, which writes the radiance SH (bands 0-2, for T2.6b), the irradiance SH and the map's scale. `giSkyRadiance` applies the scale.
+- The reductions are subgroups first, with the workgroup tree as the declared fallback. Hit shading's uniforms now start with these harmonics.
+- New platform module `HitShading.skyChange`: the radiance SH now, and as it was when the techniques last saw a sky change (copied at the end of such frames).
+- `ddgi/mark` now takes a sky change's r from those SH, not r = 1. The sky's kernels compile first in `prepare`.
+- Pages: `hit-shading-sky` (check 1 and the re-bake rule, in the suite), `ddgi-mark-reduction` (the sky's r), `sky-rebake-cost` and `ddgi-sky-sun-step` (manual), and `ddgi-batch-cost` (now lists every sky kernel's compile). Docs: ddgi.md, platform.md.
+Why the old projection compiled slowly: it inlined 18 copies of the workgroup reduction, each with its barriers and its loop (640 ms alone; 60 ms with one reduction in a loop). Even 19 `subgroupAdd`s written out took 400 ms, so the reductions stay loops (NOTES).
+Verified (RTX 3060 nvidia/ampere, Chrome 156 headless, bench lock):
+1. Check 1 (correctness run). Six skies, a 5° to an 89° sun, turbidity 1.7 to 10.
+   - The GPU map against the CPU sky: channel means within 0.027%, worst texel 0.11% (bars 0.1% / 1%); black below the horizon.
+   - SH against the CPU projection of the map: within 3.5e-4 of the largest coefficient. Subgroups against the fallback: 1.7e-7.
+   - Open ground (bar ±0.5%): texture +0.278 / −0.136 / −0.284%; procedural +0.307 / −0.106 / −0.253%.
+2. Check 2 (one VALID run: 50 °C start, 0% throttled). A bake costs 0.039 ms of GPU (median; p90 0.041; bar 0.1) and 0.0043 ms of CPU (bar 0.05). An earlier try read NO VERDICT (69% use) and isn't counted.
+3. Check 3 (one VALID run: 56 °C, 0% throttled; furnished room, cold, one scene): the four sky kernels take 165-177 ms in start-up (bar 200; T1.9a 0.9-1.1 s).
+4. Check 4: **not met on a view the step really moves (DECISIONS, for the lead).** The sun is lowered 30° (43.5° to 13.5°).
+   - Lamp on: the bookmarks move only +8.9% / +7.7%, and no view of 24 moves more than 13.5%. The views are within 5% from frame 22, but only because the step is small.
+   - Pendant lamp off: the bookmarks move +85% / +69% (per pixel 52% / 47%). At 571 probes a frame they are 25% / 23% off at frame 30 and about 10% off at 3 s; the volume is 25% off at frame 30 and 10% at 3 s.
+   - With every probe updated every frame they settle at frame 10, and the marked r matches the true change (1.07 against 1.19). So the limit is updates per frame.
+- The sky's r (`ddgi-mark-reduction`): from black 25-100, the red halved 0.25-1, the same sky again 0.
+Regressions:
+- Full RTX suite 47/47: furnace −0.15%, leak 0.84%, Cornell test view +5.67%, still scenes 0 marks and within 0.03% of M1.
+- `ddgi-key-probes-sponza`: view from frame 1, field from frame 24, sun halved frame 11, propagation 62.5% / 91.6%, noise 0.147% against 0.188%.
+- Intel UHD, correctness only, in short batches: `hit-shading-sky` (means within 0.021%, worst texel 0.134%, subgroups = fallback within 2.1e-7), `ddgi-mark-reduction`, `ddgi-furnace` (−0.28%), `ddgi-change-still` (0 marks), `three-environment`: all pass.
+- `pnpm lint && pnpm typecheck && pnpm test` pass (1,001 tests).
+Not verified: the viewer's time-of-day by hand; T2.6b's use of the radiance SH; Intel timings (not asked).
+Numbers: timing.csv (check 3 and the furnished room's 571-probe calibration, f6175f6, VALID); the rest above.
+Next:
+- Lead: check 4 (DECISIONS). The sky re-bake isn't the limit: it baked once in the step's frame. The furnished room's response at 2 ms is.
+- `turnedSun` (`ddgi-shared/sponza-response.ts`) raises the sun. T2.4b/T2.4c's "30° lower" Sponza turn actually went from 70.6° over the zenith to 79.4° (NOTES), which may be why Sponza's view moved only 4%.
+- Check 3's margin is inside the run-to-run spread of start-up compiles. T2.14 can drop the unfilterable resample from start-up.
+- Shared files touched:
+  - `wgsl/mark.ts` (the environment branch) and the two mark kernels' module lists (`ddgi-technique.ts:643,650`);
+  - `mark-table.ts` (the comment on ENVIRONMENT_CHANGE);
+  - `gi-platform.ts` (the prepare order, and `recordSkySeen` after the techniques);
+  - the `HitShading` contract;
+  - `ddgi-mark-reduction` and `ddgi-batch-cost`.
+  
+  T2.M1 may see small merge conflicts in `mark.ts` and `ddgi-mark-reduction`.
+- A frame can now carry one more timed pass (`platform/sky bake`). The timer allows 16 passes per frame.
+
+Follow-up (coordinator's two questions; correctness runs, RTX 3060, bench lock):
+1. **Check 4 on the key-probe path** (furnished room, lamp off, sun 30° lower, 571 a frame). With the path forced on, and with the rule at 30 frames instead of 120 (same numbers):
+   - the views are 20% / 16% off at frame 6 (36% before);
+   - at 0.5 s they are still 13% / 12% off (per pixel 13% / 12%), and at 3 s 8% / 7%;
+   - no overshoot. Neither the view nor the field gets within 5% in 3 s.
+
+   At 30 frames the path would engage on the furnished room (70 frames) and Sponza (492), not on Cornell (9) or two-room (10). It doesn't meet 0.5 s, so the rule stays at 120 (no code change). DECISIONS updated.
+2. **`turnedSun` was wrong.** T2.4b/T2.4c's "30° lower" Sponza turn took the sun from 70.6° over the zenith to 79.4°, its azimuth flipped by 180°. That is a 30° change of direction, but it moved the view by only 4%.
+   - Fixed in `ddgi-shared/sponza-response.ts`: the helper now lowers the elevation. It affects `ddgi-key-probes-sponza`, `ddgi-key-probes-cost` and `ddgi-sky-sun-step`; `ddgi-schedule-sponza` keeps its own old copy (not changed).
+   - `ddgi-key-probes-sponza` (turn) with a true 30°-lower sun (70.6° to 40.6°) moves the view by −40.9%. The view is within 5% from frame 13 (bar 15), the field from frame 36 (bar 120), p95 82% at frame 120 (65–68% before), overshoot 0.1% of the step. It passes.
+
+Follow-up 2 (why check 4's view is still 10% off at 3 s; correctness runs, RTX 3060, bench lock; furnished room, lamp off, sun 30° lower, 571 a frame, window bookmark):
+1. **Tracked probes.** Two groups of 12 near and in view: the largest change (the sunlit floor), and the largest relative change of the rest.
+   - In the first 13 frames each group gets 12-13 updates at h = 0 (n = 0, 100% holding a cut). Their error only goes from 24% / 37% to 17-20% / 25-28%, because the rest of the room still holds the old light.
+   - At frame 13 the promises are spent with the error still large. Then n grows back (1 at frame 15, 2.8 at 60, 13.5 at 180), and they get only 2 updates between frames 15 and 60 while the priority share serves the rest of the field.
+   - So yes, the cuts run out while the error is large. The cause is the order of updates: their bounce light comes from probes that haven't changed yet.
+2. **Bounce share.** Measured as T2.4b did (every probe every frame at h = 0): ρ = 0.73 (per-frame ratios 0.69-0.77, noise floor 3.3%), under the 0.8 in use.
+   - At ρ = 0.73: view at 0.5 s −23.4% (per pixel 23.7%), at 3 s −10.2% (10.2%).
+   - Cut held until the probe's own estimate moves less than max(ε, 3× its noise), opt-in: −23.7% (24.0%) and −10.4% (10.4%). It never engages, because the estimate stops moving while it still reads stale light.
+   - Default, for comparison: −23.4% and −10.1%. None gets within 5% in 3 s; no overshoot.
+   - Neither variant helps, so both are removed: no core change. The page keeps the tracking, `rho` and `VITE_DDGI_BOUNCE_SHARE`.
+3. **Regressions** (the core is unchanged since the suite run): two-room 9/17 and Cornell 5/8 frames (`ddgi-schedule-step`); flicker at fixed counts, Cornell 0.0877% / 0.361%, two-room 0.0096% / 0.031%, Sponza 0.0255% / 0.096%. The suite (leak 0.84%, still scenes 0 marks) and the key-probe Sponza page stand from above.
+- DECISIONS and NOTES say what limits check 4: a global change's near probes need their updates spread over the time the rest of the field takes in the change, or the field updated more evenly first (the key path halves the error at 0.5 s). A fixed ρ per scene isn't the lever.
+
+Review fixes and merge (after the Opus review, which passed with notes):
+- Review (RTX 3060, correctness): suite 48/48; check 1 reproduced (means 0.02%, worst texel 0.11%); check 4 reproduced (25% / 23% at 0.5 s, 10% at 3 s); Sponza turn −40.9%, view within 5% from frame 13, field from frame 36; the same sky set again marks 0.
+- **Check 4 is not met** for a view the step really moves (lamp off: 25% / 23% off at 0.5 s, 10% at 3 s; bar 5% in 0.5 s). Diagnosis (above, DECISIONS): the view's probes spend their promised updates in the first 13 frames while their bounce light still comes from probes that haven't changed, then wait for the round robin. It's the order of updates, not the mark, ρ or throughput. The lead takes it forward as a new task.
+- **The 10-second day in `ddgi-key-probes-cost` (must-fix):** now an explicit path (`sunFromAngles` in `ddgi-shared/sponza-response.ts`): elevation 5° to 75° and back as a sine over 600 frames, azimuth through 160° steadily. Before, repeated `turnedSun` calls took the sun below the horizon after about 77 frames, so T2.4c's "2.17 ms during a day" wasn't measured over a day.
+  - One VALID run (c780ff5; 62 °C start, 0% throttled, 1,717 MHz, calibrated 629 probes): the day's update median is **3.40 ms**, p95 3.77 ms, against Budget v2's 2.2 ms margin: **a miss**, reported, not tuned. The calibrated passes alone (trace, blend, write) take 2.72 ms in the day, against 1.56 ms still: the priority share during a change lists only active probes (NOTES, T2.4c).
+  - Also: still 2.02 ms, propagate 0.011 ms still and 0.022 ms after the step (p90 0.083; bar 0.1). Rows in timing.csv (`key_probes_cost/day_elevation_path/...`, c780ff5).
+- **`ddgi-schedule-sponza`:** its 30° step now uses the shared `turnedSun` (a true 30° lower). Its census sun had reached the zenith after 13 s and stayed there; it now keeps its elevation and moves in azimuth at a true 1.5° a second. Correctness re-run: lamp recall 98.3% / 98.9%, sun halved within 5% from frame 6, the turn's view from frame 14 and field from frame 36 (p95 73% at 3 s, floor 37%), census longest wait 61 frames (bound 492), schedule 0.026 ms. Pass.
+- `procedural-sky.ts`: the comment says the sums run over the 256 × 128 map.
+- **Merged `m2` (17e3b7b, T2.M1)** as c780ff5. The conflicts in PROGRESS, DECISIONS, `wgsl/mark.ts`'s header (both bullets kept) and `ddgi-mark-reduction`'s imports (both taken) were resolved by hand. PROGRESS has 94 `## ` headings (91 shared + 1 + 2).
+  - After the merge: lint, typecheck, 1,012 unit tests; `ddgi-mark-reduction`, `scene-set-transforms`, `ddgi-door-swing`, `ddgi-move-cabinet` pass; the full RTX suite 49/49.
+
 ## 2026-11-06 · T2.M1 review and merge · M2 lead (opus)
 Did:
 - Opus review of T2.M1 against its 8-item done-when (TASKS): pass with notes, no must-fix. The lead sent the first hand-back back for two blockers, fixed in ff5e210..502fba3:

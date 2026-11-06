@@ -237,7 +237,7 @@ export class GIPlatformImpl implements GIPlatform {
         // after the other, a cold start spent about 2.5 s compiling on the RTX 3060
         // (the tracer's kernels, then the sky projection's 0.7 s, then DDGI's trace
         // kernel's 1.1 s; T1.9a). Techniques still prepare in encode order among themselves.
-        const platformReady = Promise.all([this.rays.prepare(this.kernels), this.shade.prepare()]);
+        const platformReady = Promise.all([this.shade.prepare(), this.rays.prepare(this.kernels)]);
         const techniquesReady = (async () => {
             for (const technique of this.encodeOrder()) await technique.prepare();
         })();
@@ -264,8 +264,8 @@ export class GIPlatformImpl implements GIPlatform {
 
         const upload = this.sceneCopy.encode(encoder);
         this.rays.update(encoder, upload, this.timer ?? undefined);
-        // Settings, and the sky's projection when the environment changed.
-        this.shade.encode(encoder, this.sceneCopy.environment, this.sceneCopy.environmentVersion);
+        // Settings, and the sky's bake when the environment changed.
+        this.shade.encode(encoder, this.sceneCopy.environment, this.sceneCopy.environmentVersion, this.timer ?? undefined);
 
         const techniques = this.encodeOrder();
         // A calibration no longer describes the scene once the geometry rays see changed: a geometry
@@ -309,6 +309,9 @@ export class GIPlatformImpl implements GIPlatform {
                 budget.record(units, used);
                 if (budget.report.calibration?.measured) this.calibratedOnce = true;
             }
+            // The techniques have been told about the sky as it is now: the next sky change is measured from it
+            // (shade/sky-change.ts). Recorded after their kernels, which read the sky as it was before.
+            if (changes.global.includes('environment')) this.shade.recordSkySeen(encoder);
         }
 
         if (this.timer) {

@@ -3,18 +3,21 @@
  * techniques include in their tracing kernels, plus the sky it reads.
  *
  * Per frame (`encode`), it writes its live settings when they changed and
- * re-projects the sky when the environment changed. The module's resources
+ * re-bakes the sky when the environment changed. The module's resources
  * never change after construction (the sky's textures and the uniform buffer
  * are allocated once), so its `version` stays 0 and kernels never rebuild
- * their bind group for it.
+ * their bind group for it. The same holds for the sky-change module
+ * (`sky-change.ts`).
  */
 
 import type { EnvironmentDescriptor } from '../contract/scene.ts';
 import type { HitShading, HitShadingSettings } from '../contract/shade.ts';
+import type { GpuTimerScope } from '../contract/timing.ts';
 import type { BindingSlot, KernelBuilder, WgslModule } from '../contract/wgsl.ts';
 import { PlatformSky, type PlatformSkyOptions } from '../sky/platform-sky.ts';
 import { PlatformDeferredDirect } from './direct.ts';
 import { LIGHT_FALLOFF_MODULE } from './light-falloff.ts';
+import { SKY_CHANGE_MODULE_ENTRIES, SKY_RADIANCE_SH_BYTES, skyChangeModuleWgsl } from './sky-change.ts';
 import { SHADE_MODULE_ENTRIES, SHADE_UNIFORM_LAYOUT, shadeModuleWgsl } from './wgsl.ts';
 
 /** Defaults of the live settings. */
@@ -24,7 +27,7 @@ export const DEFAULT_HIT_SHADING_SETTINGS: Readonly<HitShadingSettings> = {
 };
 
 /** `GPUBufferUsage` bits; the globals don't exist in Node, where tests import this file. */
-const BUFFER_USAGE = { copyDst: 0x8, uniform: 0x40, storage: 0x80 } as const;
+const BUFFER_USAGE = { copySrc: 0x4, copyDst: 0x8, uniform: 0x40, storage: 0x80 } as const;
 
 export interface PlatformHitShadingOptions {
     readonly label?: string;
@@ -36,6 +39,7 @@ export interface PlatformHitShadingOptions {
 export class PlatformHitShading implements HitShading {
     readonly module: WgslModule;
     readonly lightFalloff: WgslModule = LIGHT_FALLOFF_MODULE;
+    readonly skyChange: WgslModule;
     /** Live: change the fields at any time; the next `encode` uploads them. */
     readonly settings: HitShadingSettings = { ...DEFAULT_HIT_SHADING_SETTINGS };
     readonly sky: PlatformSky;
@@ -43,8 +47,10 @@ export class PlatformHitShading implements HitShading {
     readonly direct: PlatformDeferredDirect;
 
     private readonly device: GPUDevice;
-    /** `GiShadeUniforms`: the sky's irradiance SH (written by the projection), then the settings. */
+    /** `GiShadeUniforms`: the sky's harmonics (written by the bake), then the settings. */
     private readonly uniforms: GPUBuffer;
+    /** The sky's radiance SH when the techniques last saw an environment change (sky-change.ts). */
+    private readonly skyRadianceBefore: GPUBuffer;
     private readonly radianceMapView: GPUTextureView;
     private readonly skySampler: GPUSampler;
     private uploadedSettings = '';
@@ -54,11 +60,17 @@ export class PlatformHitShading implements HitShading {
         const label = options.label ?? 'gi';
         this.device = device;
         this.sky = new PlatformSky(device, { label, warn: options.warn, reduction: options.skyReduction });
-        // STORAGE because the sky projection writes the SH range of it; tracing kernels bind it as a uniform.
+        // STORAGE because the sky bake writes the harmonics' range of it; tracing kernels bind it as a
+        // uniform. COPY_SRC for the sky-change module's copy of the radiance SH.
         this.uniforms = device.createBuffer({
             label: `${label} hit shading uniforms`,
             size: SHADE_UNIFORM_LAYOUT.byteLength,
-            usage: BUFFER_USAGE.uniform | BUFFER_USAGE.storage | BUFFER_USAGE.copyDst,
+            usage: BUFFER_USAGE.uniform | BUFFER_USAGE.storage | BUFFER_USAGE.copyDst | BUFFER_USAGE.copySrc,
+        });
+        this.skyRadianceBefore = device.createBuffer({
+            label: `${label} sky radiance SH last seen`,
+            size: SKY_RADIANCE_SH_BYTES,
+            usage: BUFFER_USAGE.uniform | BUFFER_USAGE.copyDst,
         });
         this.radianceMapView = this.sky.radianceMap.createView({ label: `${label} sky radiance map` });
         this.skySampler = device.createSampler({
@@ -80,28 +92,53 @@ export class PlatformHitShading implements HitShading {
             storageBufferCount: 0,
         };
         this.direct = new PlatformDeferredDirect(device, kernels, this.module, label);
+
+        const skyChangeResources: readonly GPUBindingResource[] = [
+            { buffer: this.uniforms, offset: SHADE_UNIFORM_LAYOUT.skyRadiance, size: SKY_RADIANCE_SH_BYTES },
+            { buffer: this.skyRadianceBefore },
+        ];
+        this.skyChange = {
+            name: 'gi-sky-change',
+            dependencies: [],
+            code: (slot: BindingSlot) => skyChangeModuleWgsl(slot),
+            entries: SKY_CHANGE_MODULE_ENTRIES,
+            resources: () => skyChangeResources,
+            version: 0,
+            storageBufferCount: 0,
+        };
     }
 
-    /** GPU bytes held: the uniform buffer, the sky and gi/direct's dispatch arguments (techniques hold their ray scratch). */
+    /** GPU bytes held: the uniform buffers, the sky and gi/direct's dispatch arguments (techniques hold their ray scratch). */
     get memoryBytes(): number {
-        return SHADE_UNIFORM_LAYOUT.byteLength + this.sky.memoryBytes + this.direct.memoryBytes;
+        return SHADE_UNIFORM_LAYOUT.byteLength + SKY_RADIANCE_SH_BYTES + this.sky.memoryBytes + this.direct.memoryBytes;
     }
 
-    /** Compiles the sky projection. Called by the platform's `prepare`. */
+    /** Compiles the sky bake. Called by the platform's `prepare`. */
     prepare(): Promise<void> {
         return this.sky.prepare();
     }
 
     /**
-     * Uploads changed settings and re-projects the environment when
-     * `environmentVersion` changed (every `setEnvironment` call bumps it), into
-     * the host's encoder. Called by the platform's `encode` after the scene
-     * copy's uploads and before any technique.
+     * Uploads changed settings and re-bakes the environment when
+     * `environmentVersion` changed (every `setEnvironment` call bumps it) and
+     * the change needs a bake (`PlatformSky`), into the host's encoder.
+     * Called by the platform's `encode` after the scene copy's uploads and
+     * before any technique.
      */
-    encode(encoder: GPUCommandEncoder, environment: EnvironmentDescriptor, environmentVersion: number): void {
+    encode(encoder: GPUCommandEncoder, environment: EnvironmentDescriptor, environmentVersion: number, timer?: GpuTimerScope): void {
         if (this.disposed) throw new Error('@pmndrs/ddgi: hit shading was disposed');
         this.uploadSettings();
-        this.sky.encode(encoder, environment, environmentVersion, { buffer: this.uniforms, offset: SHADE_UNIFORM_LAYOUT.skyIrradiance });
+        this.sky.encode(encoder, environment, environmentVersion, { buffer: this.uniforms, offset: SHADE_UNIFORM_LAYOUT.skyHarmonics }, timer);
+    }
+
+    /**
+     * Records that the techniques have now seen the sky as it is: copies the
+     * radiance SH into the sky-change module's "before". Called by the
+     * platform after the techniques of a frame whose changes included the
+     * environment, so the copy lands after every kernel of that frame read it.
+     */
+    recordSkySeen(encoder: GPUCommandEncoder): void {
+        encoder.copyBufferToBuffer(this.uniforms, SHADE_UNIFORM_LAYOUT.skyRadiance, this.skyRadianceBefore, 0, SKY_RADIANCE_SH_BYTES);
     }
 
     dispose(): void {
@@ -110,6 +147,7 @@ export class PlatformHitShading implements HitShading {
         this.sky.dispose();
         this.direct.dispose();
         this.uniforms.destroy();
+        this.skyRadianceBefore.destroy();
     }
 
     private uploadSettings(): void {

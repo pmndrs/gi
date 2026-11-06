@@ -1,80 +1,91 @@
 /**
  * The platform's own copy of the sky: whatever the host set with
- * `setEnvironment`, projected by compute into an engine-neutral form that
- * hit shading reads (contract/scene.ts, `EnvironmentDescriptor`):
+ * `setEnvironment`, baked by compute into an engine-neutral form that hit
+ * shading reads (contract/scene.ts, `EnvironmentDescriptor`):
  *
  * - a radiance map for rays that miss: equirectangular, 256 x 128,
- *   `rgba16float`, in the contract's texture order (first row the nadir);
- * - irradiance as spherical harmonics, bands 0, 1, 2 and 4 (18 coefficients,
- *   `spherical-harmonics.ts`), already convolved with the cosine lobe.
+ *   `rgba16float`, in the contract's texture order (first row the nadir),
+ *   read times a scale (1 but for a procedural sky, whose map is written
+ *   before its calibration is known; `giSkyRadiance` applies it);
+ * - the sky's harmonics (`SKY_HARMONICS_LAYOUT`), integrated over that map:
+ *   its irradiance as spherical harmonics, bands 0, 1, 2 and 4 (18
+ *   coefficients, `spherical-harmonics.ts`), already convolved with the
+ *   cosine lobe, its radiance SH, bands 0-2, which the instant sky reads
+ *   (T2.6b), and the map's scale.
  *
- * The projection runs inside `encode`, only when the environment changed
- * (a new descriptor from `setEnvironment`), never every frame. The host's
- * texture is read at that moment only; to pick up new contents, call
- * `setEnvironment` again.
+ * The bake runs inside `encode`, only when the environment changed, never
+ * every frame, at most once a frame. The host's texture is read at that
+ * moment only; to pick up new contents, call `setEnvironment` again.
  *
  * Sources:
  * - `texture`, `equirect` or `cube`, times `intensity`, turned by `rotationY`;
  * - `color` (times `intensity`) and `none` (black), as constant radiance;
- * - `procedural`: the calibrated Preetham sky built on the CPU by the same
- *   code as the shared sky files (`calibrated-sky.ts`), uploaded to a texture
- *   of the platform's, then projected like an equirect texture.
+ * - `procedural`: the calibrated Preetham sky, evaluated by the bake's
+ *   kernels on the GPU (T2.6a, `procedural-sky.ts`). The CPU code that builds
+ *   the same sky as an image (`calibrated-sky.ts`) still writes the shared
+ *   sky files, and the GPU test holds this map to it.
+ *
+ * **When a procedural sky re-bakes** (m2-lights.md §6.2): when the sun has
+ * turned more than 0.05 degrees since the last bake, or the turbidity,
+ * `intensity` or `sunIlluminance` changed. A host animating time of day can
+ * call `setEnvironment` every frame; turns smaller than that cost nothing.
+ * Every other source re-bakes on every `setEnvironment`.
  *
  * Nothing here is a storage buffer a tracing kernel binds: hit shading reads
- * the map as a texture and the SH from its uniform buffer (binding budget,
- * docs/api/platform.md).
+ * the map as a texture and the harmonics from its uniform buffer (binding
+ * budget, docs/api/platform.md).
  */
 
 import type { EnvironmentDescriptor } from '../contract/scene.ts';
-import { buildCalibratedSky, DEFAULT_TURBIDITY } from './calibrated-sky.ts';
-import { MIN_SUN_ELEVATION_DEG } from './clear-sky-ratio.ts';
-import { halfImageToTextureRgba } from './half-float.ts';
-import { MAX_TURBIDITY, MIN_TURBIDITY } from './preetham.ts';
+import type { GpuTimerScope } from '../contract/timing.ts';
+import { PROCEDURAL_GRID_WIDTH, proceduralSkyNeedsRebake, proceduralSkyParameters, type GpuPerez, type ProceduralSkyParameters } from './procedural-sky.ts';
 import {
+    PARTIAL_SUM_COUNT,
+    PEREZ_WORDS,
     PROJECTION_BINDING,
+    PROJECTION_ENTRY_POINTS,
     PROJECTION_PARAMS_BYTES,
-    PROJECTION_WORKGROUP_SIZE,
+    PROJECTION_PARAMS_WORD,
     projectionWgsl,
+    RADIANCE_MAP_HEIGHT,
+    RADIANCE_MAP_WIDTH,
+    REDUCTION_BYTES,
     RESAMPLE_WORKGROUP_SIZE,
-    SH_BYTES,
-    SKY_GRID_KIND,
+    SKY_HARMONICS_LAYOUT,
     SKY_SOURCE_KIND,
     type SkyReduction,
 } from './projection-wgsl.ts';
 
-/** Size of the radiance map rays see on a miss: 1.4 degrees per texel, enough for a sky without a sun disc. */
-export const RADIANCE_MAP_WIDTH = 256;
-export const RADIANCE_MAP_HEIGHT = 128;
+export { liftSunAboveMinimum } from './procedural-sky.ts';
+export { RADIANCE_MAP_HEIGHT, RADIANCE_MAP_WIDTH } from './projection-wgsl.ts';
+
 export const RADIANCE_MAP_FORMAT: GPUTextureFormat = 'rgba16float';
 
-/** Largest projection grid: source texels beyond this are averaged by the sampler's bilinear taps. */
-const MAX_EQUIRECT_GRID_WIDTH = 1024;
-const MAX_EQUIRECT_GRID_HEIGHT = 512;
-const MAX_CUBE_GRID_SIZE = 256;
-/** Grid for a constant sky: the SH of a constant are exact on any grid; this one just keeps the sum short. */
-const CONSTANT_GRID_WIDTH = 64;
-const CONSTANT_GRID_HEIGHT = 32;
 /** Most resample samples per texel along each axis. */
 const MAX_SUPERSAMPLE = 8;
 
+/** The name the bake's pass is timed under, in the platform's stats. */
+export const SKY_BAKE_PASS = 'platform/sky bake';
+
 /**
  * Formats a float texture can have but no filtering sampler may read: these
- * use the projection's unfilterable variant (nearest samples). Unrotated, the
- * projection's cells sit on texel centres, so nearest samples are exact; with
- * `rotationY` they shift the sky by up to half a source texel. Bigger skies
- * than the radiance map get a box filter from the supersampling either way.
+ * use the resample's unfilterable variant (nearest samples). Unrotated, for
+ * a source a whole multiple of the map's size, the samples sit on texel
+ * centres, so nearest samples are exact; with `rotationY` they shift the sky
+ * by up to half a source texel. Bigger skies than the radiance map get a box
+ * filter from the supersampling either way.
  */
 const UNFILTERABLE_FLOAT_FORMATS: ReadonlySet<GPUTextureFormat> = new Set(['r32float', 'rg32float', 'rgba32float']);
 
 /** `GPUTextureUsage` and `GPUBufferUsage` bits; the globals don't exist in Node, where tests import this file. */
-const TEXTURE_USAGE = { copyDst: 0x2, textureBinding: 0x4, storageBinding: 0x8 } as const;
+const TEXTURE_USAGE = { textureBinding: 0x4, storageBinding: 0x8 } as const;
 const BUFFER_USAGE = { copyDst: 0x8, uniform: 0x40, storage: 0x80 } as const;
 const SHADER_STAGE_COMPUTE = 0x4;
 
 export interface PlatformSkyOptions {
     readonly label?: string;
     /**
-     * Which SH reduction to build. Defaults to `subgroups` when the device has
+     * Which reduction to build. Defaults to `subgroups` when the device has
      * the feature, `workgroup` (the declared fallback) otherwise. Choosing
      * `workgroup` on a device with subgroups is how the test compares the two.
      */
@@ -97,8 +108,8 @@ export function unusableEnvironmentTexture(texture: GPUTexture, layout: 'cube' |
     return null;
 }
 
-/** What one projection reads, worked out on the CPU. */
-interface ProjectionSource {
+/** What one bake reads, worked out on the CPU. */
+interface BakeSource {
     readonly kind: number;
     readonly constantRadiance: readonly [number, number, number];
     readonly intensity: number;
@@ -106,16 +117,41 @@ interface ProjectionSource {
     readonly equirect: GPUTexture | null;
     readonly cube: GPUTexture | null;
     readonly filterable: boolean;
-    readonly gridKind: number;
-    readonly gridWidth: number;
-    readonly gridHeight: number;
     readonly supersample: number;
+    /** Only for `procedural`. */
+    readonly procedural: ProceduralSkyParameters | null;
 }
 
-interface ProjectionPipelines {
-    readonly layout: GPUBindGroupLayout;
-    readonly resample: GPUComputePipeline;
-    readonly project: GPUComputePipeline;
+/** The resample for one kind of source texture: filterable, or not (32-bit floats). */
+interface ResamplePipeline {
+    readonly sourceLayout: GPUBindGroupLayout;
+    readonly pipeline: GPUComputePipeline;
+}
+
+interface BakePipelines {
+    readonly sharedLayout: GPUBindGroupLayout;
+    readonly resample: { readonly filterable: ResamplePipeline; readonly unfilterable: ResamplePipeline };
+    /** The partial sums read the map through a group 1 of their own. */
+    readonly mapInputLayout: GPUBindGroupLayout;
+    readonly partialSums: GPUComputePipeline;
+    readonly sum: GPUComputePipeline;
+}
+
+/** A bind group, and what it was made for, so a bake of the same textures (every procedural bake) makes none. */
+interface Cached<Key> {
+    readonly group: GPUBindGroup;
+    readonly key: Key;
+}
+
+interface SourceKey {
+    readonly equirect: GPUTexture | null;
+    readonly cube: GPUTexture | null;
+    readonly filterable: boolean;
+}
+
+interface HarmonicsKey {
+    readonly buffer: GPUBuffer;
+    readonly offset: number;
 }
 
 export class PlatformSky {
@@ -127,15 +163,24 @@ export class PlatformSky {
     private readonly label: string;
     private readonly warn: (message: string) => void;
     private readonly params: GPUBuffer;
+    /** The bake's partial sums and calibration scale (`GiSkyReduction`). */
+    private readonly reductionBuffer: GPUBuffer;
+    private readonly paramsData = new ArrayBuffer(PROJECTION_PARAMS_BYTES);
     private readonly filteringSampler: GPUSampler;
     private readonly nearestSampler: GPUSampler;
-    private readonly placeholder2d: GPUTexture;
-    private readonly placeholderCube: GPUTexture;
-    private proceduralTexture: GPUTexture | null = null;
-    private pipelines: { filterable: ProjectionPipelines; unfilterable: ProjectionPipelines } | null = null;
-    /** The `version` last projected; null before the first projection. */
-    private projectedVersion: number | null = null;
-    private projectionCount = 0;
+    private readonly placeholder2dView: GPUTextureView;
+    private readonly placeholderCubeView: GPUTextureView;
+    private readonly radianceMapView: GPUTextureView;
+    private readonly placeholders: GPUTexture[];
+    private pipelines: BakePipelines | null = null;
+    private sharedGroup: Cached<HarmonicsKey> | null = null;
+    private sourceGroup: Cached<SourceKey> | null = null;
+    private mapInputGroup: GPUBindGroup | null = null;
+    /** The `version` last looked at; null before the first bake. */
+    private seenVersion: number | null = null;
+    /** The procedural sky's numbers at the last bake; null when the last bake was another source. */
+    private bakedProcedural: ProceduralSkyParameters | null = null;
+    private bakeCount = 0;
     private disposed = false;
 
     constructor(device: GPUDevice, options: PlatformSkyOptions = {}) {
@@ -153,10 +198,16 @@ export class PlatformSky {
             format: RADIANCE_MAP_FORMAT,
             usage: TEXTURE_USAGE.textureBinding | TEXTURE_USAGE.storageBinding,
         });
+        this.radianceMapView = this.radianceMap.createView({ label: `${this.label} sky radiance map (bake)` });
         this.params = device.createBuffer({
-            label: `${this.label} sky projection parameters`,
+            label: `${this.label} sky bake parameters`,
             size: PROJECTION_PARAMS_BYTES,
             usage: BUFFER_USAGE.uniform | BUFFER_USAGE.copyDst,
+        });
+        this.reductionBuffer = device.createBuffer({
+            label: `${this.label} sky bake partial sums`,
+            size: REDUCTION_BYTES,
+            usage: BUFFER_USAGE.storage,
         });
         // Repeat across the -X seam of an equirect map, clamp at the poles.
         this.filteringSampler = device.createSampler({
@@ -171,14 +222,15 @@ export class PlatformSky {
             addressModeU: 'repeat',
             addressModeV: 'clamp-to-edge',
         });
-        // The kernels declare both a 2D and a cube source; the one not in use gets a 1-texel stand-in.
-        this.placeholder2d = device.createTexture({
+        // The kernels declare both a 2D and a cube source; the one not in use (both, for
+        // a colour or a procedural sky) gets a 1-texel stand-in.
+        const placeholder2d = device.createTexture({
             label: `${this.label} sky placeholder 2d`,
             size: { width: 1, height: 1 },
             format: 'rgba16float',
             usage: TEXTURE_USAGE.textureBinding,
         });
-        this.placeholderCube = device.createTexture({
+        const placeholderCube = device.createTexture({
             label: `${this.label} sky placeholder cube`,
             size: { width: 1, height: 1, depthOrArrayLayers: 6 },
             format: 'rgba16float',
@@ -187,94 +239,116 @@ export class PlatformSky {
             // dimension it was created for; 6 layers would default to 2d-array.
             textureBindingViewDimension: 'cube',
         });
+        this.placeholders = [placeholder2d, placeholderCube];
+        this.placeholder2dView = placeholder2d.createView({ dimension: '2d' });
+        this.placeholderCubeView = placeholderCube.createView({ dimension: 'cube' });
     }
 
-    /** How many times the environment has been projected (it should be once per change). */
+    /** How many times the environment has been baked (once per change that needs it). */
     get projections(): number {
-        return this.projectionCount;
+        return this.bakeCount;
     }
 
-    /** GPU bytes: the radiance map, plus the procedural sky's source texture while one is in use. */
+    /** GPU bytes: the radiance map, the parameters and the partial sums. */
     get memoryBytes(): number {
-        const proceduralBytes = this.proceduralTexture ? this.proceduralTexture.width * this.proceduralTexture.height * 8 : 0;
-        return RADIANCE_MAP_WIDTH * RADIANCE_MAP_HEIGHT * 8 + PROJECTION_PARAMS_BYTES + proceduralBytes;
+        return RADIANCE_MAP_WIDTH * RADIANCE_MAP_HEIGHT * 8 + PROJECTION_PARAMS_BYTES + REDUCTION_BYTES;
     }
 
-    /** Compiles the projection kernels (both texture-sampling variants). */
+    /** Compiles the bake's kernels: the resample (for filterable and unfilterable sources), the partial sums, the sum. */
     async prepare(): Promise<void> {
         if (this.pipelines) return;
-        const module = this.device.createShaderModule({ label: `${this.label} sky projection (${this.reduction})`, code: projectionWgsl(this.reduction) });
-        const build = async (filterable: boolean): Promise<ProjectionPipelines> => {
+        const device = this.device;
+        const module = device.createShaderModule({ label: `${this.label} sky bake (${this.reduction})`, code: projectionWgsl(this.reduction) });
+        const sharedLayout = device.createBindGroupLayout({
+            label: `${this.label} sky bake`,
+            entries: [
+                { binding: PROJECTION_BINDING.params, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'uniform' } },
+                { binding: PROJECTION_BINDING.reduction, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'storage' } },
+                { binding: PROJECTION_BINDING.harmonics, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'storage' } },
+            ],
+        });
+        const sourceLayout = (filterable: boolean): GPUBindGroupLayout => {
             const sampleType: GPUTextureSampleType = filterable ? 'float' : 'unfilterable-float';
-            const layout = this.device.createBindGroupLayout({
-                label: `${this.label} sky projection (${filterable ? 'filterable' : 'unfilterable'})`,
+            return device.createBindGroupLayout({
+                label: `${this.label} sky source (${filterable ? 'filterable' : 'unfilterable'})`,
                 entries: [
-                    { binding: PROJECTION_BINDING.params, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'uniform' } },
                     { binding: PROJECTION_BINDING.sourceEquirect, visibility: SHADER_STAGE_COMPUTE, texture: { sampleType, viewDimension: '2d' } },
                     { binding: PROJECTION_BINDING.sourceCube, visibility: SHADER_STAGE_COMPUTE, texture: { sampleType, viewDimension: 'cube' } },
                     { binding: PROJECTION_BINDING.sourceSampler, visibility: SHADER_STAGE_COMPUTE, sampler: { type: filterable ? 'filtering' : 'non-filtering' } },
                     {
-                        binding: PROJECTION_BINDING.radianceMap,
+                        binding: PROJECTION_BINDING.radianceMapOutput,
                         visibility: SHADER_STAGE_COMPUTE,
                         storageTexture: { access: 'write-only', format: RADIANCE_MAP_FORMAT, viewDimension: '2d' },
                     },
-                    { binding: PROJECTION_BINDING.irradianceSh, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'storage' } },
                 ],
             });
-            const pipelineLayout = this.device.createPipelineLayout({ label: layout.label, bindGroupLayouts: [layout] });
-            const [resample, project] = await Promise.all([
-                this.device.createComputePipelineAsync({ label: `${this.label} sky resample`, layout: pipelineLayout, compute: { module, entryPoint: 'giSkyResample' } }),
-                this.device.createComputePipelineAsync({ label: `${this.label} sky SH projection`, layout: pipelineLayout, compute: { module, entryPoint: 'giSkyProject' } }),
-            ]);
-            return { layout, resample, project };
         };
-        const [filterable, unfilterable] = await Promise.all([build(true), build(false)]);
-        this.pipelines = { filterable, unfilterable };
+        // The partial sums only load texels, so the map's binding needs no filtering.
+        const mapInputLayout = device.createBindGroupLayout({
+            label: `${this.label} sky map input`,
+            entries: [{ binding: PROJECTION_BINDING.radianceMapInput, visibility: SHADER_STAGE_COMPUTE, texture: { sampleType: 'unfilterable-float', viewDimension: '2d' } }],
+        });
+        const pipeline = (name: string, entryPoint: string, groups: GPUBindGroupLayout[]): Promise<GPUComputePipeline> =>
+            device.createComputePipelineAsync({
+                label: `${this.label} sky ${name}`,
+                layout: device.createPipelineLayout({ label: `${this.label} sky ${name}`, bindGroupLayouts: groups }),
+                compute: { module, entryPoint },
+            });
+        const resample = async (filterable: boolean): Promise<ResamplePipeline> => {
+            const layout = sourceLayout(filterable);
+            return { sourceLayout: layout, pipeline: await pipeline(`resample${filterable ? '' : ' (unfilterable)'}`, PROJECTION_ENTRY_POINTS.resample, [sharedLayout, layout]) };
+        };
+        // The partial sums first: the slowest of the four to compile.
+        const [partialSums, sum, filterable, unfilterable] = await Promise.all([
+            pipeline('partial sums', PROJECTION_ENTRY_POINTS.partialSums, [sharedLayout, mapInputLayout]),
+            pipeline('SH sum', PROJECTION_ENTRY_POINTS.sum, [sharedLayout]),
+            resample(true),
+            resample(false),
+        ]);
+        this.pipelines = { sharedLayout, resample: { filterable, unfilterable }, mapInputLayout, partialSums, sum };
     }
 
     /**
-     * Projects the environment if `version` differs from the one last
-     * projected, writing the radiance map and the irradiance SH (into
-     * `irradianceSh`, a range of a buffer with STORAGE usage, {@link SH_BYTES}
-     * long). Records into the host's encoder; returns whether it projected.
+     * Bakes the environment if `version` differs from the one last seen and
+     * the change needs a bake (the file comment), writing the radiance map and
+     * the sky's harmonics into `harmonics`, a range of a buffer with STORAGE
+     * usage, {@link SKY_HARMONICS_LAYOUT}.byteLength long. Records into the
+     * host's encoder, timed as {@link SKY_BAKE_PASS}; returns whether it baked.
      *
      * Why a version and not the descriptor's identity: the contract tells
      * hosts to call `setEnvironment` again after changing a texture's
      * contents, and they may pass the same object. The platform passes
      * `PlatformScene.environmentVersion`, which every call bumps.
      */
-    encode(encoder: GPUCommandEncoder, environment: EnvironmentDescriptor, version: number, irradianceSh: GPUBufferBinding): boolean {
+    encode(encoder: GPUCommandEncoder, environment: EnvironmentDescriptor, version: number, harmonics: GPUBufferBinding, timer?: GpuTimerScope): boolean {
         if (this.disposed) throw new Error('@pmndrs/ddgi: the sky was disposed');
-        if (version === this.projectedVersion) return false;
+        if (version === this.seenVersion) return false;
         const pipelines = this.pipelines;
-        if (!pipelines) throw new Error('@pmndrs/ddgi: the sky projection is not compiled yet; call prepare() first');
+        if (!pipelines) throw new Error('@pmndrs/ddgi: the sky bake is not compiled yet; call prepare() first');
+        this.seenVersion = version;
 
-        const source = this.sourceFor(environment);
+        const procedural = environment.type === 'procedural' ? proceduralSkyParameters(environment) : null;
+        if (procedural && this.bakedProcedural && !proceduralSkyNeedsRebake(this.bakedProcedural, procedural)) return false;
+
+        const source = procedural ? this.proceduralSource(procedural) : this.sourceFor(environment as Exclude<EnvironmentDescriptor, { type: 'procedural' }>);
         this.writeParams(source);
-        const variant = source.filterable ? pipelines.filterable : pipelines.unfilterable;
-        const bindGroup = this.device.createBindGroup({
-            label: `${this.label} sky projection`,
-            layout: variant.layout,
-            entries: [
-                { binding: PROJECTION_BINDING.params, resource: { buffer: this.params } },
-                { binding: PROJECTION_BINDING.sourceEquirect, resource: (source.equirect ?? this.placeholder2d).createView({ dimension: '2d' }) },
-                { binding: PROJECTION_BINDING.sourceCube, resource: (source.cube ?? this.placeholderCube).createView({ dimension: 'cube' }) },
-                { binding: PROJECTION_BINDING.sourceSampler, resource: source.filterable ? this.filteringSampler : this.nearestSampler },
-                { binding: PROJECTION_BINDING.radianceMap, resource: this.radianceMap.createView() },
-                { binding: PROJECTION_BINDING.irradianceSh, resource: { ...irradianceSh, size: SH_BYTES } },
-            ],
-        });
+        const resample = source.filterable ? pipelines.resample.filterable : pipelines.resample.unfilterable;
 
-        const pass = encoder.beginComputePass({ label: `${this.label} sky projection` });
-        pass.setBindGroup(0, bindGroup);
-        pass.setPipeline(variant.resample);
+        const pass = encoder.beginComputePass({ label: `${this.label} sky bake`, timestampWrites: timer?.computePass(SKY_BAKE_PASS) });
+        pass.setBindGroup(0, this.sharedGroupFor(pipelines, harmonics));
+        // The map first: the sums integrate it.
+        pass.setBindGroup(1, this.sourceGroupFor(source, resample));
+        pass.setPipeline(resample.pipeline);
         pass.dispatchWorkgroups(Math.ceil(RADIANCE_MAP_WIDTH / RESAMPLE_WORKGROUP_SIZE), Math.ceil(RADIANCE_MAP_HEIGHT / RESAMPLE_WORKGROUP_SIZE));
-        pass.setPipeline(variant.project);
+        pass.setBindGroup(1, this.mapInputGroupFor(pipelines));
+        pass.setPipeline(pipelines.partialSums);
+        pass.dispatchWorkgroups(PARTIAL_SUM_COUNT);
+        pass.setPipeline(pipelines.sum);
         pass.dispatchWorkgroups(1);
         pass.end();
 
-        this.projectedVersion = version;
-        this.projectionCount++;
+        this.bakedProcedural = procedural;
+        this.bakeCount++;
         return true;
     }
 
@@ -283,16 +357,76 @@ export class PlatformSky {
         this.disposed = true;
         this.radianceMap.destroy();
         this.params.destroy();
-        this.placeholder2d.destroy();
-        this.placeholderCube.destroy();
-        this.proceduralTexture?.destroy();
-        this.proceduralTexture = null;
+        this.reductionBuffer.destroy();
+        for (const texture of this.placeholders) texture.destroy();
+        this.sharedGroup = null;
+        this.sourceGroup = null;
+        this.mapInputGroup = null;
     }
 
     // -----------------------------------------------------------------------
 
-    private sourceFor(environment: EnvironmentDescriptor): ProjectionSource {
-        const constant = (radiance: readonly [number, number, number]): ProjectionSource => ({
+    private sharedGroupFor(pipelines: BakePipelines, harmonics: GPUBufferBinding): GPUBindGroup {
+        const key: HarmonicsKey = { buffer: harmonics.buffer, offset: harmonics.offset ?? 0 };
+        const cached = this.sharedGroup;
+        if (cached && cached.key.buffer === key.buffer && cached.key.offset === key.offset) return cached.group;
+        const group = this.device.createBindGroup({
+            label: `${this.label} sky bake`,
+            layout: pipelines.sharedLayout,
+            entries: [
+                { binding: PROJECTION_BINDING.params, resource: { buffer: this.params } },
+                { binding: PROJECTION_BINDING.reduction, resource: { buffer: this.reductionBuffer } },
+                { binding: PROJECTION_BINDING.harmonics, resource: { buffer: key.buffer, offset: key.offset, size: SKY_HARMONICS_LAYOUT.byteLength } },
+            ],
+        });
+        this.sharedGroup = { group, key };
+        return group;
+    }
+
+    private sourceGroupFor(source: BakeSource, resample: ResamplePipeline): GPUBindGroup {
+        const cached = this.sourceGroup;
+        if (cached && cached.key.equirect === source.equirect && cached.key.cube === source.cube && cached.key.filterable === source.filterable) return cached.group;
+        const group = this.device.createBindGroup({
+            label: `${this.label} sky source`,
+            layout: resample.sourceLayout,
+            entries: [
+                { binding: PROJECTION_BINDING.sourceEquirect, resource: source.equirect ? source.equirect.createView({ dimension: '2d' }) : this.placeholder2dView },
+                { binding: PROJECTION_BINDING.sourceCube, resource: source.cube ? source.cube.createView({ dimension: 'cube' }) : this.placeholderCubeView },
+                { binding: PROJECTION_BINDING.sourceSampler, resource: source.filterable ? this.filteringSampler : this.nearestSampler },
+                { binding: PROJECTION_BINDING.radianceMapOutput, resource: this.radianceMapView },
+            ],
+        });
+        this.sourceGroup = { group, key: { equirect: source.equirect, cube: source.cube, filterable: source.filterable } };
+        return group;
+    }
+
+    private mapInputGroupFor(pipelines: BakePipelines): GPUBindGroup {
+        this.mapInputGroup ??= this.device.createBindGroup({
+            label: `${this.label} sky map input`,
+            layout: pipelines.mapInputLayout,
+            entries: [{ binding: PROJECTION_BINDING.radianceMapInput, resource: this.radianceMapView }],
+        });
+        return this.mapInputGroup;
+    }
+
+    private proceduralSource(procedural: ProceduralSkyParameters): BakeSource {
+        return {
+            kind: SKY_SOURCE_KIND.procedural,
+            constantRadiance: [0, 0, 0],
+            intensity: 1,
+            rotationY: 0,
+            equirect: null,
+            cube: null,
+            filterable: true,
+            // The CPU sky has 2 x 2 of its texels in each map texel; the resample evaluates
+            // the sky at their centres, as it sampled the CPU sky's texture in M1.
+            supersample: PROCEDURAL_GRID_WIDTH / RADIANCE_MAP_WIDTH,
+            procedural,
+        };
+    }
+
+    private sourceFor(environment: Exclude<EnvironmentDescriptor, { type: 'procedural' }>): BakeSource {
+        const constant = (radiance: readonly [number, number, number]): BakeSource => ({
             kind: SKY_SOURCE_KIND.constant,
             constantRadiance: radiance,
             intensity: 1,
@@ -300,10 +434,8 @@ export class PlatformSky {
             equirect: null,
             cube: null,
             filterable: true,
-            gridKind: SKY_GRID_KIND.equirect,
-            gridWidth: CONSTANT_GRID_WIDTH,
-            gridHeight: CONSTANT_GRID_HEIGHT,
             supersample: 1,
+            procedural: null,
         });
 
         switch (environment.type) {
@@ -314,8 +446,6 @@ export class PlatformSky {
                 const [r, g, b] = environment.color;
                 return constant([r * intensity, g * intensity, b * intensity]);
             }
-            case 'procedural':
-                return this.equirectSource(this.uploadProceduralSky(environment), 1, 0);
             case 'texture': {
                 const problem = unusableEnvironmentTexture(environment.texture, environment.layout);
                 if (problem) {
@@ -334,17 +464,15 @@ export class PlatformSky {
                     equirect: null,
                     cube: environment.texture,
                     filterable: !UNFILTERABLE_FLOAT_FORMATS.has(environment.texture.format),
-                    gridKind: SKY_GRID_KIND.cube,
-                    gridWidth: Math.min(faceSize, MAX_CUBE_GRID_SIZE),
-                    gridHeight: Math.min(faceSize, MAX_CUBE_GRID_SIZE),
                     // A face spans 90 degrees, the radiance map 360 across 256 texels: face texels per map texel = size / 64.
                     supersample: clampSupersample(Math.ceil(faceSize / 64)),
+                    procedural: null,
                 };
             }
         }
     }
 
-    private equirectSource(texture: GPUTexture, intensity: number, rotationY: number): ProjectionSource {
+    private equirectSource(texture: GPUTexture, intensity: number, rotationY: number): BakeSource {
         return {
             kind: SKY_SOURCE_KIND.equirect,
             constantRadiance: [0, 0, 0],
@@ -353,82 +481,37 @@ export class PlatformSky {
             equirect: texture,
             cube: null,
             filterable: !UNFILTERABLE_FLOAT_FORMATS.has(texture.format),
-            gridKind: SKY_GRID_KIND.equirect,
-            // At the source's own resolution (up to a cap), cell centres land on texel centres, so the
-            // bilinear sampler returns each texel exactly and the sum is the texels' own integral.
-            gridWidth: Math.min(texture.width, MAX_EQUIRECT_GRID_WIDTH),
-            gridHeight: Math.min(texture.height, MAX_EQUIRECT_GRID_HEIGHT),
             supersample: clampSupersample(Math.ceil(texture.width / RADIANCE_MAP_WIDTH)),
+            procedural: null,
         };
     }
 
-    /**
-     * Builds the calibrated Preetham sky for a `procedural` environment with
-     * the sky files' own code and uploads it: calibrated to a sun of
-     * `sunIlluminance`, times `intensity` (contract/scene.ts), the same two
-     * numbers the sky files use. Values outside the
-     * model's range are clamped: turbidity to 1.7..20, and the sun to at least
-     * 5 degrees above the horizon (same azimuth); a lower sun is M2 (time of day).
-     */
-    private uploadProceduralSky(environment: Extract<EnvironmentDescriptor, { type: 'procedural' }>): GPUTexture {
-        const turbidity = Math.min(MAX_TURBIDITY, Math.max(MIN_TURBIDITY, environment.turbidity ?? DEFAULT_TURBIDITY));
-        const sky = buildCalibratedSky({
-            sunDirection: liftSunAboveMinimum(environment.sunDirection),
-            turbidity,
-            sunIlluminance: environment.sunIlluminance ?? 1,
-            intensity: environment.intensity ?? 1,
-        });
-        const { width, height } = sky.image;
-        if (!this.proceduralTexture || this.proceduralTexture.width !== width || this.proceduralTexture.height !== height) {
-            this.proceduralTexture?.destroy();
-            this.proceduralTexture = this.device.createTexture({
-                label: `${this.label} procedural sky`,
-                size: { width, height },
-                format: 'rgba16float',
-                usage: TEXTURE_USAGE.textureBinding | TEXTURE_USAGE.copyDst,
-            });
-        }
-        const bytesPerTexel = 8;
-        this.device.queue.writeTexture(
-            { texture: this.proceduralTexture },
-            halfImageToTextureRgba(sky.image) as Uint16Array<ArrayBuffer>,
-            { bytesPerRow: width * bytesPerTexel, rowsPerImage: height },
-            { width, height },
-        );
-        return this.proceduralTexture;
+    /** Writes the bake's parameters. */
+    private writeParams(source: BakeSource): void {
+        const floats = new Float32Array(this.paramsData);
+        const words = new Uint32Array(this.paramsData);
+        const sky = source.procedural;
+        floats.set(source.constantRadiance, PROJECTION_PARAMS_WORD.constantRadiance);
+        floats[PROJECTION_PARAMS_WORD.intensity] = source.intensity;
+        floats.set(sky ? sky.sunDirection : [0, 1, 0], PROJECTION_PARAMS_WORD.sunDirection);
+        words[PROJECTION_PARAMS_WORD.sourceKind] = source.kind;
+        floats[PROJECTION_PARAMS_WORD.rotationCos] = Math.cos(source.rotationY);
+        floats[PROJECTION_PARAMS_WORD.rotationSin] = Math.sin(source.rotationY);
+        words[PROJECTION_PARAMS_WORD.supersample] = source.supersample;
+        floats[PROJECTION_PARAMS_WORD.targetHorizontalLuminance] = sky?.targetHorizontalLuminance ?? 0;
+        writePerez(floats, PROJECTION_PARAMS_WORD.perezLuminance, sky?.luminance);
+        writePerez(floats, PROJECTION_PARAMS_WORD.perezX, sky?.chromaticityX);
+        writePerez(floats, PROJECTION_PARAMS_WORD.perezY, sky?.chromaticityY);
+        this.device.queue.writeBuffer(this.params, 0, this.paramsData);
     }
+}
 
-    private writeParams(source: ProjectionSource): void {
-        const data = new ArrayBuffer(PROJECTION_PARAMS_BYTES);
-        const floats = new Float32Array(data);
-        const words = new Uint32Array(data);
-        floats.set(source.constantRadiance, 0);
-        floats[3] = source.intensity;
-        words[4] = source.kind;
-        words[5] = source.gridKind;
-        words[6] = source.gridWidth;
-        words[7] = source.gridHeight;
-        floats[8] = Math.cos(source.rotationY);
-        floats[9] = Math.sin(source.rotationY);
-        words[10] = source.supersample;
-        const cells = source.gridWidth * source.gridHeight * (source.gridKind === SKY_GRID_KIND.cube ? 6 : 1);
-        words[11] = Math.ceil(cells / PROJECTION_WORKGROUP_SIZE);
-        this.device.queue.writeBuffer(this.params, 0, data);
-    }
+function writePerez(floats: Float32Array, offset: number, perez: GpuPerez | undefined): void {
+    const values = perez ? [perez.a, perez.b, perez.c, perez.d, perez.e, perez.zenithScale] : [0, 0, 0, 0, 0, 0];
+    floats.set(values, offset);
+    floats.fill(0, offset + values.length, offset + PEREZ_WORDS);
 }
 
 function clampSupersample(samples: number): number {
     return Math.min(MAX_SUPERSAMPLE, Math.max(1, samples));
-}
-
-/** The sun direction, raised to the clear-sky model's lowest elevation if it is below it (same azimuth). */
-export function liftSunAboveMinimum(sunDirection: readonly [number, number, number]): [number, number, number] {
-    const length = Math.hypot(sunDirection[0], sunDirection[1], sunDirection[2]);
-    // A thousandth of a degree above the model's limit, so rounding can't put it just under.
-    const minimumElevation = ((MIN_SUN_ELEVATION_DEG + 0.001) * Math.PI) / 180;
-    if (sunDirection[1] / length >= Math.sin(minimumElevation)) return [sunDirection[0], sunDirection[1], sunDirection[2]];
-    const horizontal = Math.hypot(sunDirection[0], sunDirection[2]);
-    // Straight down has no azimuth: put the sun towards +X.
-    const [x, z] = horizontal > 0 ? [sunDirection[0] / horizontal, sunDirection[2] / horizontal] : [1, 0];
-    return [x * Math.cos(minimumElevation), Math.sin(minimumElevation), z * Math.cos(minimumElevation)];
 }
