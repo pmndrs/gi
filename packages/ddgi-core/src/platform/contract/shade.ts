@@ -85,6 +85,25 @@ export interface HitShading {
      * `module` depends on it, so a kernel may list both.
      */
     readonly lightFalloff: WgslModule;
+    /**
+     * How the sky changed, for kernels that size a sky change on the GPU
+     * (DDGI's change estimate; the instant sky's nudge): the sky's radiance
+     * SH, bands 0-2, now and as it was when the techniques were last handed
+     * an environment change in `SceneChanges`. Two uniform bindings, no
+     * storage buffers:
+     *
+     * ```wgsl
+     * fn giSkyRadianceShNow(index: u32) -> vec3f     // coefficient index 0..8, rgb
+     * fn giSkyRadianceShBefore(index: u32) -> vec3f
+     * ```
+     *
+     * The coefficients are the real SH of `platform/sky/spherical-harmonics.ts`
+     * (z polar), unconvolved: the sky's radiance is about
+     * `sum of c_k Y_k(direction)`. A `setEnvironment` that changed nothing,
+     * or turned a procedural sun too little to re-bake (0.05 degrees), gives
+     * now = before.
+     */
+    readonly skyChange: WgslModule;
     readonly settings: HitShadingSettings;
     /**
      * Deferred direct light (`gi/direct`, docs/design/m2-lights.md §2): a

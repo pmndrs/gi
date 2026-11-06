@@ -1,4 +1,4 @@
 {
-    "description": "Hit shading's sky (T1.4): open-ground sky irradiance within ±0.5% of the reference, procedural = the sky file, the equirect and cube layouts with direction-coded textures, color/none, projection only on change, subgroups against the fallback.",
+    "description": "Hit shading's sky (T1.4, T2.6a): the GPU's procedural sky against the CPU sky (map and SH) and the re-bake rule; open-ground sky irradiance within ±0.5% of the reference, procedural = the sky file, the equirect and cube layouts with direction-coded textures, color/none, projection only on change, subgroups against the fallback.",
     "timeoutMs": 60000
 }

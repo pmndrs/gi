@@ -65,12 +65,12 @@ const NO_MOVERS: MoverBits = { bitFor: () => 0 };
 export const MAX_GLOBAL_CHANGE = 100;
 
 /**
- * The environment's change, until the sky's own numbers reach the CPU. The
- * design's rule (m2-lights.md §4.2) is the change of the sky's band-0 and
- * band-1 radiance SH relative to its mean, which needs T2.6a's GPU sky
- * re-bake; until then a sky change counts as a full change (r = 1), times
- * the openness factor. Conservative: it cuts more history than a small sky
- * change needs, never less.
+ * The environment entry's factor on the sky's own change. Since T2.6a the
+ * kernel works out the sky's change itself, on the GPU, from its radiance SH
+ * now and when the field last took a sky change (m2-lights.md §4.2:
+ * bands 0 and 1 relative to the sky's mean; wgsl/mark.ts,
+ * ddgiMarkSkyChange), and multiplies it by this. 1: the sky's change as it
+ * is (until T2.6a every sky change counted as r = 1).
  */
 export const ENVIRONMENT_CHANGE = 1;
 
@@ -370,8 +370,9 @@ function localBox(change: LightChange, grid: ProbeGrid): { min: Vec3; size: Vec3
  *   nothing: it becomes that layer's weight (m2-lights.md §4.2, §6.1). Until
  *   then such a change is in the field's light, so it marks every probe by
  *   its change per channel (old / new − 1 for a dimming), like a turn.
- * - The environment: one entry over every probe (ENVIRONMENT_CHANGE). The sky
- *   transfer's exceptions (`skyResidualShare`) are T2.6b's.
+ * - The environment: one entry over every probe; its r comes from the sky's
+ *   SH on the GPU (ENVIRONMENT_CHANGE). The sky transfer's exceptions
+ *   (`skyResidualShare`) are T2.6b's.
  * - More light changes than are listed: one entry over every probe
  *   (OVERFLOW_CHANGE).
  * - A light's group changing marks nothing by itself: every group is in the

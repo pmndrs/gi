@@ -454,8 +454,9 @@ async function startScene(
         calibration_filler_frames: calibration.fillerFrames,
         calibration_confirm_factor: round(calibration.confirmFactor ?? NaN),
     };
-    // The slowest pipelines this scene's start-up compiled.
-    for (const [label, ms] of [...pipelineCompileMs].sort((a, b) => b[1] - a[1]).slice(0, 6)) {
+    // The slowest pipelines this scene's start-up compiled, and every sky bake kernel (T2.6a's check 3).
+    const sorted = [...pipelineCompileMs].sort((a, b) => b[1] - a[1]);
+    for (const [label, ms] of [...sorted.slice(0, 6), ...sorted.slice(6).filter(([label]) => label.includes(' sky '))]) {
         (startup as Record<string, number>)[`compile_ms/${label}`] = round(ms, 1);
     }
     log(
