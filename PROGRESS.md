@@ -21,6 +21,7 @@ Rules:
 
 ---
 
+<<<<<<< HEAD
 ## 2026-11-07 · T2.3 many-light sampling: the light grid · implementer (opus)
 Did (branch `m2-t2.3`, cb35896..f5aaf53, `m2` with T2.5 merged in at e416a85):
 - The grid (`platform/shade/light-grid.ts`). `gi/light-grid` is a platform pass, run every unpaused frame with more than `exactLightLimit` (8) point and spot lights. It covers the scene's bounds with at most `lightGridMaxCells` (2,048) cubic cells. Every light is weighed per cell by an upper bound over the cell; each cell gets R = 16 systematic picks, stored as a `rgba32uint` texture in the hit-shading module (still no storage buffer).
@@ -50,6 +51,23 @@ Next:
 - Lead: checks 3 and 4 need one VALID run each on a cool machine (gpu-tester). If the build reads over 0.1 ms, 1,024 cells is the lever.
 - T2.8: three's candle lighting (a range for three's clustered lights only, or fewer candles drawn). DDGI's GI-on frame adds 33 ms there; not looked into.
 - Shared files touched: `contract/shade.ts`, `gi-platform.ts` (one call), `scene/platform-scene.ts` (a getter), `shade/wgsl.ts`, `shade/hit-shading.ts`, platform.md, m2-lights.md, `ddgi-batch-cost`, `hit-shading-lights`. Not touched: `direct.ts`, `ddgi-technique.ts`.
+=======
+## 2026-11-07 · T2.6b instant sky: the decision check fails, stopped as the rule says · implementer (opus)
+Did (branch `m2-t2.6b` from `m2` ccb2809; d26cb01, then docs):
+- Built only what check 1 needs, all off by default: the first-order sky transfer in `ddgi/blend` from the sky layer's own miss rays (3 transfer blocks after the layers, its own count in history bits 24-31; no extra rays, no workgroup memory), `ddgi/sky-nudge` (`wgsl/sky-nudge.ts`, before the trace in a sky-change frame) and `ddgi/write`'s sky mode, compose of every tile that frame, `ddgi/mark`'s residual share for nudged probes. Settings `instantSky`, `skyNudgeRescale`, `skyResidualShare`, and `sunLayer` (the layer plan only: no route in `gi/direct` yet). `instant-sky.ts` (constants, CPU twin), unit tests. Page `ddgi-instant-sky` (manual): sections `decision` and `ceiling`.
+- The sun route in `gi/direct` was not started (the rule stops the task first), so `platform/shade/*` is untouched.
+Verified (RTX 3060 nvidia/ampere, Chrome headless, bench lock, correctness runs; the sun 30° lower with `turnedSun`; the sun kept out of the image as one light group at weight 0, so the image is the sky layer alone):
+1. **Check 1 fails** (rule: ≥ 70% on both, bands 0-2). Removed in the step frame, per pixel of the GI-only view: furnished room `towards-the-window` **52.8%** with the bounce rescale, 9.7% direct part alone (the step moves the view 25.6%); Sponza bookmark 1 **35.6%** / 35.8% (45.6%); Sponza's whole field 51%, out of view 55%. DECISIONS 2026-11-07.
+2. Ceiling (the sky seen directly, every band, from fields traced with `bounceEnergy` 0): furnished room 9.0% of the change is seen directly, every band would remove 52.9% (the nudge as built 52.7%), so bands 0-4 can't reach 70% there; Sponza 94% seen directly, every band 89%, bands 0-2 36%.
+3. Gain (§6.5), view within 5%: furnished room frame 6 against 7 by re-tracing alone (field 24 / 24), Sponza 12 against 13 (field 1 / 12). Memory +12.1 MB furnished room, +37.2 MB Sponza (two-layer configuration).
+4. With everything off (the defaults): `ddgi-change-still` passes (Cornell atlas mean 0.335474, 0 marks) and `ddgi-light-groups` passes (RTX). `pnpm lint`, `pnpm typecheck`, `pnpm test` (1,079 tests) pass.
+Not verified: checks 2-6 and the Record items (stopped by the rule); bands 0-4 (no band count can pass on the furnished room); the full RTX suite and the other regressions the brief lists; the Intel UHD; timings (all runs were correctness runs; the clock rule read INVALID, nothing timed was judged). One combined two-scene run stopped with `DevTools call Runtime.evaluate timed out` after the furnished room (NOTES); the per-scene runs completed.
+Numbers: here and in DECISIONS 2026-11-07.
+Next:
+- Lead and Dennis: confirm dropping the instant sky (recommended: don't merge d26cb01; keep the branch as the record).
+- The sun layer is independent of it (Dennis 2026-11-05, decision 11): re-scope T2.6b to the sun layer, its route for directional lights in `gi/direct` (T2.3 is rewriting that loop: one sun light index, white reference, `giDirectReaches` must ignore the sun's intensity or a sun at 0 stops its layer updating) and the mark-table's sun exception. If it goes ahead from this branch, `light-groups.ts`'s plan (`sunLayer`, `lights` kind, `writeLayerWeights`'s sun weight) is already there.
+- Shared files touched: `ddgi-technique.ts`, `layout.ts` (uniform words 92-95, scratch and atlas blocks, nudge scratch), `settings.ts`, `light-groups.ts`, `wgsl/{blend,write,trace,mark,common}.ts`, `key-probes.test.ts`, `tools/gpu/pages/ddgi-shared/viewer-scene.ts` (a `settings` option). No `platform/` file.
+>>>>>>> m2
 
 ## 2026-11-07 · T2.5 review and merge · M2 lead (opus)
 Did:
