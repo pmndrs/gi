@@ -62,6 +62,9 @@ const POINTS_WITHIN_SHARE = 0.99;
 /** The two scans must agree on at least this share of picks. */
 const MIN_SAME_PICKS = 0.999;
 const WORKGROUP_SIZE = 64;
+/** The grid's cell cap: the platform's default, or VITE_DDGI_GRID_CELLS to record the noise at another (T2.3: 1,024). */
+const pageEnv = import.meta.env as Record<string, unknown>;
+const GRID_CELLS = typeof pageEnv.VITE_DDGI_GRID_CELLS === 'string' && pageEnv.VITE_DDGI_GRID_CELLS !== '' ? Number(pageEnv.VITE_DDGI_GRID_CELLS) : undefined;
 const ALL_GROUPS = 0xf;
 /** 32-bit words a pick takes in the picks texture. */
 const PICK_WORDS = LIGHT_GRID_PICK_BYTES / 4;
@@ -420,7 +423,7 @@ async function compareScans(device: GPUDevice, platform: GIPlatformImpl, log: (l
         const grid = new PlatformLightGrid(device, platform.kernels, platform.sceneCopy.module, platform.shade.lightFalloff, { label: `many lights ${reduction}`, reduction });
         await grid.prepare();
         const encoder = device.createCommandEncoder();
-        const lookup = grid.encode(encoder, { frame: 12345, bounds: platform.scene.bounds, localLights: LIGHTS, exactLightLimit: 8, maxCells: 2048 });
+        const lookup = grid.encode(encoder, { frame: 12345, bounds: platform.scene.bounds, localLights: LIGHTS, exactLightLimit: 8, maxCells: platform.shade.settings.lightGridMaxCells });
         device.queue.submit([encoder.finish()]);
         assert(lookup.active, `the ${reduction} grid did not build`);
         const words = await readTexture(device, grid.texture);
@@ -466,6 +469,8 @@ await runGpuTest(
         const platform = new GIPlatformImpl(device, { label: 'many lights' });
         try {
             buildScene(platform);
+            if (GRID_CELLS !== undefined) platform.shade.settings.lightGridMaxCells = GRID_CELLS;
+            results.lightGridMaxCells = platform.shade.settings.lightGridMaxCells;
             await ready(device, platform);
             const bench = await PointBench.create(device, platform, testRays());
             // The two scans first: they read the grid's picks back.
