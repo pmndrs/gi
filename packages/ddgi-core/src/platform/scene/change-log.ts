@@ -114,7 +114,17 @@ export function sameLight(a: LightDescriptor, b: LightDescriptor): boolean {
 }
 
 const REASONS: readonly ChangeReason[] = ['geometry', 'material', 'light'];
-const REASON_CODE: Record<ChangeReason, number> = { geometry: 0, material: 1, light: 2 };
+/** A reason's index in REASONS. A switch, not an object lookup by string: this runs twice per moved instance. */
+function reasonCode(reason: ChangeReason): number {
+    switch (reason) {
+        case 'geometry':
+            return 0;
+        case 'material':
+            return 1;
+        case 'light':
+            return 2;
+    }
+}
 /** Stands for "none" in the typed columns: no move distance, no instance slot, no source. */
 const NO_VALUE = -1;
 /**
@@ -143,17 +153,18 @@ class RegionColumns {
     private readonly mergedAllMoves = new Uint8Array(REASONS.length);
     private readonly mergedPresent = new Uint8Array(REASONS.length);
 
-    add(box: ArrayLike<number>, reason: ChangeReason, source: number | undefined, moved: number | undefined, instance: number | undefined): void {
-        const code = REASON_CODE[reason];
+    /** A region whose box is the 6 numbers from `boxAt` in `box`. */
+    add(box: ArrayLike<number>, boxAt: number, reason: ChangeReason, source: number | undefined, moved: number | undefined, instance: number | undefined): void {
+        const code = reasonCode(reason);
         const movedValue = moved ?? NO_VALUE;
         if (!this.merging && this.count === MAX_DIRTY_REGIONS) this.startMerging();
         if (this.merging) {
-            this.fold(box, 0, code, movedValue);
+            this.fold(box, boxAt, code, movedValue);
             return;
         }
         const index = this.count++;
         const at = index * 6;
-        for (let value = 0; value < 6; value++) this.boxes[at + value] = box[value];
+        for (let value = 0; value < 6; value++) this.boxes[at + value] = box[boxAt + value];
         this.reasons[index] = code;
         this.moved[index] = movedValue;
         this.instances[index] = instance ?? NO_VALUE;
@@ -236,9 +247,9 @@ export class ChangeLog {
     /** Each light touched this frame, with its state before the frame's first change (null: created this frame). In first-touched order. */
     private readonly lightsBefore = new Map<LightHandle, LightDescriptor | null>();
 
-    /** A region; `moved` and `instance` as `DirtyRegion` has them (positional, so logging one allocates nothing). */
-    addRegion(box: ArrayLike<number>, reason: ChangeReason, source?: InstanceHandle | LightHandle, moved?: number, instance?: number): void {
-        this.regions.add(box, reason, source, moved, instance);
+    /** A region; `moved` and `instance` as `DirtyRegion` has them, its box the 6 numbers from `boxAt` in `box` (positional, so logging one allocates nothing). */
+    addRegion(box: ArrayLike<number>, reason: ChangeReason, source?: InstanceHandle | LightHandle, moved?: number, instance?: number, boxAt = 0): void {
+        this.regions.add(box, boxAt, reason, source, moved, instance);
     }
 
     addGlobal(change: GlobalChange): void {

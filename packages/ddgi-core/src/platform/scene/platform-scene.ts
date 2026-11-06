@@ -43,8 +43,9 @@ import type {
 } from '../contract/scene.ts';
 import type { SceneChanges, SceneCopy } from '../contract/scene-copy.ts';
 import type { BindingSlot, WgslModule } from '../contract/wgsl.ts';
-import { invertAffineInto, WORLD_BOX_PADDING } from '../trace/top-level.ts';
+import { invertAffineInto } from '../trace/top-level.ts';
 import { ChangeLog, copyLight, toAabb, type LightLookup } from './change-log.ts';
+import { BOX_NUMBERS, InstanceTransforms, MATRIX_NUMBERS } from './instance-transforms.ts';
 import {
     ENVIRONMENT_TYPE,
     HEADER_VEC4S,
@@ -189,17 +190,11 @@ interface InstanceEntry {
     label: string | undefined;
     mesh: MeshEntry;
     materials: MaterialEntry[];
-    readonly objectToWorld: Float64Array;
     contributesToGi: boolean;
     visible: boolean;
     /** Word offset of the material list inside the list section. */
     listOffset: number;
-    /** World box `[min, max]`, padded like the tracer's. */
-    readonly worldBounds: Float32Array;
-    /** Its mesh box's world frame (transformFrame), for how far a move takes its corners. */
-    readonly worldFrame: Float64Array;
-    /** INSTANCE_FLAG.mirrored and .singular, as its transform's linear part has them (writeNormalMatrix). */
-    transformFlags: number;
+    // Its transform, world box and frame are in the scene's InstanceTransforms, at its slot.
 }
 
 interface LightEntry {
@@ -213,103 +208,6 @@ const IDENTITY_UV: readonly number[] = [1, 0, 0, 1, 0, 0];
 
 /** The rows `invertAffineInto` would give the identity: what a singular transform's normal matrix is written as. */
 const IDENTITY_ROWS: readonly number[] = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0];
-
-/**
- * Numbers in an instance's world frame: its mesh box's lowest corner in world
- * space, then the box's three edges from it (xyz each). Every corner is that
- * corner plus some of the edges.
- */
-const FRAME_NUMBERS = 12;
-
-/**
- * Writes an instance's world frame (FRAME_NUMBERS) into `frame`, and its
- * padded world box into `bounds`, and returns how far its mesh box's corners
- * moved from the frame `frame` held: the largest distance any of the eight
- * travelled (`DirtyRegion.moved`; meaningless the first time, when `frame`
- * held nothing). Corners rather than the world box, so a turn in place that
- * leaves the box as it was still counts.
- *
- * *Why a frame and not the eight corners:* the box around the corners is
- * the frame's corner plus, per axis, the edges that point down (min) or up
- * (max), and a corner's move is the corner's move plus the edges' moves, so
- * nothing is worked out eight times. `setTransforms` does this for every
- * instance it moves, 10,000 a frame; the eight-corner version took about
- * twice as long (T2.M1). The box equals `trace/top-level.ts`'
- * `transformBounds` up to rounding, far inside the padding both add.
- */
-export function transformFrame(meshBounds: ArrayLike<number>, objectToWorld: ArrayLike<number>, frame: Float64Array, bounds: Float32Array): number {
-    const e = objectToWorld;
-    const x0 = meshBounds[0];
-    const y0 = meshBounds[1];
-    const z0 = meshBounds[2];
-    const sizeX = meshBounds[3] - x0;
-    const sizeY = meshBounds[4] - y0;
-    const sizeZ = meshBounds[5] - z0;
-    // The lowest corner, and the three edges: each column of the matrix times the box's size along it.
-    const cornerX = e[0] * x0 + e[4] * y0 + e[8] * z0 + e[12];
-    const cornerY = e[1] * x0 + e[5] * y0 + e[9] * z0 + e[13];
-    const cornerZ = e[2] * x0 + e[6] * y0 + e[10] * z0 + e[14];
-    const edgeXx = e[0] * sizeX, edgeXy = e[1] * sizeX, edgeXz = e[2] * sizeX;
-    const edgeYx = e[4] * sizeY, edgeYy = e[5] * sizeY, edgeYz = e[6] * sizeY;
-    const edgeZx = e[8] * sizeZ, edgeZy = e[9] * sizeZ, edgeZz = e[10] * sizeZ;
-
-    // How far each part moved since the frame held.
-    const moveCornerX = cornerX - frame[0], moveCornerY = cornerY - frame[1], moveCornerZ = cornerZ - frame[2];
-    const moveXx = edgeXx - frame[3], moveXy = edgeXy - frame[4], moveXz = edgeXz - frame[5];
-    const moveYx = edgeYx - frame[6], moveYy = edgeYy - frame[7], moveYz = edgeYz - frame[8];
-    const moveZx = edgeZx - frame[9], moveZy = edgeZy - frame[10], moveZz = edgeZz - frame[11];
-    // Each corner's move is the lowest corner's move plus the moves of the edges that lead to it,
-    // built up corner from corner: the x edge for bit 0 of its index, y for bit 1, z for bit 2.
-    const move1x = moveCornerX + moveXx, move1y = moveCornerY + moveXy, move1z = moveCornerZ + moveXz;
-    const move2x = moveCornerX + moveYx, move2y = moveCornerY + moveYy, move2z = moveCornerZ + moveYz;
-    const move3x = move1x + moveYx, move3y = move1y + moveYy, move3z = move1z + moveYz;
-    const largestSquared = Math.max(
-        squaredLength(moveCornerX, moveCornerY, moveCornerZ),
-        squaredLength(move1x, move1y, move1z),
-        squaredLength(move2x, move2y, move2z),
-        squaredLength(move3x, move3y, move3z),
-        squaredLength(moveCornerX + moveZx, moveCornerY + moveZy, moveCornerZ + moveZz),
-        squaredLength(move1x + moveZx, move1y + moveZy, move1z + moveZz),
-        squaredLength(move2x + moveZx, move2y + moveZy, move2z + moveZz),
-        squaredLength(move3x + moveZx, move3y + moveZy, move3z + moveZz),
-    );
-
-    frame[0] = cornerX;
-    frame[1] = cornerY;
-    frame[2] = cornerZ;
-    frame[3] = edgeXx;
-    frame[4] = edgeXy;
-    frame[5] = edgeXz;
-    frame[6] = edgeYx;
-    frame[7] = edgeYy;
-    frame[8] = edgeYz;
-    frame[9] = edgeZx;
-    frame[10] = edgeZy;
-    frame[11] = edgeZz;
-
-    // Per axis, the edges pointing down make the box's min, those pointing up its max.
-    const lowX = cornerX + Math.min(edgeXx, 0) + Math.min(edgeYx, 0) + Math.min(edgeZx, 0);
-    const lowY = cornerY + Math.min(edgeXy, 0) + Math.min(edgeYy, 0) + Math.min(edgeZy, 0);
-    const lowZ = cornerZ + Math.min(edgeXz, 0) + Math.min(edgeYz, 0) + Math.min(edgeZz, 0);
-    const highX = cornerX + Math.max(edgeXx, 0) + Math.max(edgeYx, 0) + Math.max(edgeZx, 0);
-    const highY = cornerY + Math.max(edgeXy, 0) + Math.max(edgeYy, 0) + Math.max(edgeZy, 0);
-    const highZ = cornerZ + Math.max(edgeXz, 0) + Math.max(edgeYz, 0) + Math.max(edgeZz, 0);
-    // The tracer's padding (trace/top-level.ts, WORLD_BOX_PADDING), so rounding can't make a ray miss the box.
-    const padX = (Math.max(Math.abs(lowX), Math.abs(highX)) + (highX - lowX)) * WORLD_BOX_PADDING;
-    const padY = (Math.max(Math.abs(lowY), Math.abs(highY)) + (highY - lowY)) * WORLD_BOX_PADDING;
-    const padZ = (Math.max(Math.abs(lowZ), Math.abs(highZ)) + (highZ - lowZ)) * WORLD_BOX_PADDING;
-    bounds[0] = lowX - padX;
-    bounds[1] = lowY - padY;
-    bounds[2] = lowZ - padZ;
-    bounds[3] = highX + padX;
-    bounds[4] = highY + padY;
-    bounds[5] = highZ + padZ;
-    return Math.sqrt(largestSquared);
-}
-
-function squaredLength(x: number, y: number, z: number): number {
-    return x * x + y * y + z * z;
-}
 
 const EMPTY_WORDS: Uint32Array<ArrayBuffer> = new Uint32Array(0);
 
@@ -354,6 +252,8 @@ export class PlatformScene implements SceneApi, SceneCopy {
     private readonly textures = new Map<number, TextureEntry>();
     private readonly materials = new Map<number, MaterialEntry>();
     private readonly instances = new Map<number, InstanceEntry>();
+    /** Every instance's matrix, world box and frame, by slot (instance-transforms.ts says why flat). */
+    private readonly transforms = new InstanceTransforms();
     private readonly lightsByHandle = new Map<number, LightEntry>();
     /** Packed: directional lights first, then point and spot lights. */
     private readonly lights: LightEntry[] = [];
@@ -385,10 +285,23 @@ export class PlatformScene implements SceneApi, SceneCopy {
     private cachedBounds: Aabb | null = null;
     /** The inverse transform while an instance record is written (invertAffineInto), so writing one allocates nothing. */
     private readonly inverseScratch = new Float64Array(12);
+    /** checkedTransform's copy of a host's transform. */
+    private readonly transformScratch = new Float64Array(16);
     /** An instance's world box before a move, while it is written (moveInstance). */
     private readonly boundsBefore = new Float32Array(6);
-    /** `setTransforms`' instances, looked up before anything changes; emptied after each call. */
-    private readonly batchEntries: InstanceEntry[] = [];
+    /**
+     * The last `setTransforms` call's instances, looked up before anything
+     * changed, and the handles they were for. A host that moves the same
+     * objects frame after frame (an animation, a crowd) sends the same list;
+     * while no instance was created or destroyed since (`instanceSetVersion`),
+     * the lookups are reused instead of made again, which was a sixth of the
+     * call's time at 10,000 instances.
+     */
+    private batchEntries: InstanceEntry[] = [];
+    private batchHandles = new Uint32Array(0);
+    private batchVersion = -1;
+    /** Bumped by every instance created or destroyed. */
+    private instanceSetVersion = 0;
 
     constructor(device: GPUDevice, options: PlatformSceneOptions = {}) {
         this.device = device;
@@ -461,11 +374,13 @@ export class PlatformScene implements SceneApi, SceneCopy {
     get bounds(): Aabb {
         if (this.cachedBounds) return this.cachedBounds;
         const box = [Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity];
+        const worldBounds = this.transforms.bounds;
         for (const instance of this.instances.values()) {
             if (!instance.contributesToGi || !instance.visible) continue;
+            const at = instance.slot * BOX_NUMBERS;
             for (let axis = 0; axis < 3; axis++) {
-                box[axis] = Math.min(box[axis], instance.worldBounds[axis]);
-                box[axis + 3] = Math.max(box[axis + 3], instance.worldBounds[axis + 3]);
+                box[axis] = Math.min(box[axis], worldBounds[at + axis]);
+                box[axis + 3] = Math.max(box[axis + 3], worldBounds[at + 3 + axis]);
             }
         }
         this.cachedBounds = box[0] === Infinity ? { min: [0, 0, 0], max: [0, 0, 0] } : toAabb(box);
@@ -510,7 +425,7 @@ export class PlatformScene implements SceneApi, SceneCopy {
             packed.slots[index] = instance.slot;
             packed.meshSlots[index] = instance.mesh.slot;
             packed.visible[index] = instance.visible ? 1 : 0;
-            packed.objectToWorld.set(instance.objectToWorld, index * 16);
+            packed.objectToWorld.set(this.transforms.matrix(instance.slot), index * 16);
             index++;
         }
         return packed;
@@ -522,7 +437,8 @@ export class PlatformScene implements SceneApi, SceneCopy {
             slot: instance.slot,
             handle: instance.handle,
             meshSlot: instance.mesh.slot,
-            objectToWorld: instance.objectToWorld,
+            // A copy: the flat arrays are replaced when they grow.
+            objectToWorld: this.transforms.matrix(instance.slot).slice(),
             contributesToGi: instance.contributesToGi,
             visible: instance.visible,
         }));
@@ -566,10 +482,11 @@ export class PlatformScene implements SceneApi, SceneCopy {
         this.pendingMeshes.add(entry);
         for (const instance of entry.instances) {
             const traceable = this.isTraceable(instance);
-            if (traceable) this.changeLog.addRegion(instance.worldBounds, 'geometry', instance.handle, undefined, instance.slot);
+            if (traceable) this.changeLog.addRegion(this.transforms.box(instance.slot), 'geometry', instance.handle, undefined, instance.slot);
+            this.transforms.setMeshBounds(instance.slot, packed.bounds);
             this.writeInstanceRecord(instance);
             if (traceable) {
-                this.changeLog.addRegion(instance.worldBounds, 'geometry', instance.handle, undefined, instance.slot);
+                this.changeLog.addRegion(this.transforms.box(instance.slot), 'geometry', instance.handle, undefined, instance.slot);
                 this.topLevelDirty = true;
             }
         }
@@ -646,7 +563,7 @@ export class PlatformScene implements SceneApi, SceneCopy {
         this.attachTextures(entry);
         this.writeMaterialRecord(entry);
         for (const instance of entry.users) {
-            if (this.isTraceable(instance)) this.changeLog.addRegion(instance.worldBounds, 'material', instance.handle);
+            if (this.isTraceable(instance)) this.changeLog.addRegion(this.transforms.box(instance.slot), 'material', instance.handle);
         }
     }
 
@@ -681,21 +598,21 @@ export class PlatformScene implements SceneApi, SceneCopy {
             label: descriptor.label,
             mesh,
             materials,
-            objectToWorld,
             contributesToGi: descriptor.contributesToGI !== false,
             visible: descriptor.visible !== false,
             listOffset: this.mirror.allocateList(materials.length),
-            worldBounds: new Float32Array(6),
-            worldFrame: new Float64Array(FRAME_NUMBERS),
-            transformFlags: 0,
         };
+        this.transforms.ensure(slot);
+        this.transforms.setMatrix(slot, objectToWorld, 0);
+        this.transforms.setMeshBounds(slot, mesh.packed.bounds);
         this.instances.set(handle, entry);
+        this.instanceSetVersion++;
         mesh.instances.add(entry);
         for (const material of materials) material.users.add(entry);
         this.mirror.writeList(entry.listOffset, materials.map((material) => material.slot));
         this.writeInstanceRecord(entry);
         if (this.isTraceable(entry)) {
-            this.changeLog.addRegion(entry.worldBounds, 'geometry', handle, undefined, entry.slot);
+            this.changeLog.addRegion(this.transforms.box(slot), 'geometry', handle, undefined, slot);
             this.topLevelDirty = true;
         }
         if (entry.contributesToGi) this.instanceSetDirty = true;
@@ -725,25 +642,50 @@ export class PlatformScene implements SceneApi, SceneCopy {
         if (matrices.length < count * 16) {
             throw new RangeError(`@pmndrs/ddgi: setTransforms needs 16 numbers per instance: ${count} instances, ${matrices.length} numbers.`);
         }
-        const entries = this.batchEntries;
-        try {
-            for (let index = 0; index < count; index++) entries.push(this.instance(instances[index] as InstanceHandle));
-            for (let index = 0; index < count * 16; index++) {
-                if (!Number.isFinite(matrices[index])) throw new RangeError(`@pmndrs/ddgi: a transform must be finite (setTransforms entry ${Math.floor(index / 16)}).`);
-            }
-            let firstSlot = Infinity;
-            let lastSlot = -1;
-            for (let index = 0; index < count; index++) {
-                const entry = entries[index];
-                this.moveInstance(entry, matrices, index * 16);
-                if (entry.slot < firstSlot) firstSlot = entry.slot;
-                if (entry.slot > lastSlot) lastSlot = entry.slot;
-            }
-            if (lastSlot >= 0) this.mirror.markRecordSpan('instances', firstSlot, lastSlot);
-        } finally {
-            // Don't keep instances alive through the scratch list.
-            entries.length = 0;
+        const entries = this.batchEntriesFor(instances);
+        // Any non-finite number makes the sum of number × 0 NaN: one pass with no branch per number.
+        // Four sums, one per matrix column, so the additions don't wait on each other.
+        let column0 = 0;
+        let column1 = 0;
+        let column2 = 0;
+        let column3 = 0;
+        for (let index = 0; index < count * 16; index += 4) {
+            column0 += matrices[index] * 0;
+            column1 += matrices[index + 1] * 0;
+            column2 += matrices[index + 2] * 0;
+            column3 += matrices[index + 3] * 0;
         }
+        if (column0 + column1 + column2 + column3 !== 0) {
+            const bad = matrices.subarray(0, count * 16).findIndex((value) => !Number.isFinite(value));
+            throw new RangeError(`@pmndrs/ddgi: a transform must be finite (setTransforms entry ${Math.floor(bad / 16)}).`);
+        }
+        let firstSlot = Infinity;
+        let lastSlot = -1;
+        for (let index = 0; index < count; index++) {
+            const entry = entries[index];
+            // A slide in one pass when it is one (slideInstance), else the whole work.
+            if (!(this.isTraceable(entry) && this.slideInstance(entry, matrices, index * 16))) this.moveInstance(entry, matrices, index * 16);
+            if (entry.slot < firstSlot) firstSlot = entry.slot;
+            if (entry.slot > lastSlot) lastSlot = entry.slot;
+        }
+        if (lastSlot >= 0) this.mirror.markRecordSpan('instances', firstSlot, lastSlot);
+    }
+
+    /** The instances `setTransforms` names, looked up (throwing for an unknown one), or the last call's when they're the same (batchEntries). */
+    private batchEntriesFor(instances: Uint32Array): InstanceEntry[] {
+        const count = instances.length;
+        const previous = this.batchHandles;
+        if (this.batchVersion === this.instanceSetVersion && previous.length === count) {
+            let same = true;
+            for (let index = 0; index < count && same; index++) same = previous[index] === instances[index];
+            if (same) return this.batchEntries;
+        }
+        const entries: InstanceEntry[] = new Array(count);
+        for (let index = 0; index < count; index++) entries[index] = this.instance(instances[index] as InstanceHandle);
+        this.batchEntries = entries;
+        this.batchHandles = instances.slice();
+        this.batchVersion = this.instanceSetVersion;
+        return entries;
     }
 
     /**
@@ -753,15 +695,9 @@ export class PlatformScene implements SceneApi, SceneCopy {
      * not marked for upload; the caller marks it, alone or in a span.
      */
     private moveInstance(entry: InstanceEntry, matrices: ArrayLike<number>, offset: number): void {
-        const objectToWorld = entry.objectToWorld;
-        // Whether the linear part (rotation, scale) changed: a move that only translates keeps the normal matrix.
-        let linearChanged = false;
-        for (let index = 0; index < 12; index++) {
-            const value = matrices[offset + index];
-            if (value !== objectToWorld[index]) linearChanged = true;
-            objectToWorld[index] = value;
-        }
-        for (let index = 12; index < 16; index++) objectToWorld[index] = matrices[offset + index];
+        const transforms = this.transforms;
+        const slot = entry.slot;
+        const linearChanged = transforms.setMatrix(slot, matrices, offset);
         if (!this.isTraceable(entry)) {
             this.writeInstanceWords(entry, linearChanged);
             this.changeLog.addMovedReceiver();
@@ -770,12 +706,59 @@ export class PlatformScene implements SceneApi, SceneCopy {
         // Where it was, kept before the record is rewritten (copied number by number:
         // TypedArray.set costs more than six on this path).
         const boundsBefore = this.boundsBefore;
-        for (let index = 0; index < 6; index++) boundsBefore[index] = entry.worldBounds[index];
+        const at = slot * BOX_NUMBERS;
+        for (let index = 0; index < BOX_NUMBERS; index++) boundsBefore[index] = transforms.bounds[at + index];
         const moved = this.writeInstanceWords(entry, linearChanged);
-        this.changeLog.addRegion(boundsBefore, 'geometry', entry.handle, moved, entry.slot);
-        this.changeLog.addRegion(entry.worldBounds, 'geometry', entry.handle, moved, entry.slot);
+        this.changeLog.addRegion(boundsBefore, 'geometry', entry.handle, moved, slot);
+        this.changeLog.addRegion(transforms.bounds, 'geometry', entry.handle, moved, slot, at);
         this.topLevelDirty = true;
         this.cachedBounds = null;
+    }
+
+    /**
+     * `moveInstance` for a traceable instance whose move only translates, in
+     * one pass: the matrix is read once, the frame slides (InstanceTransforms
+     * .slide), and only what a slide changes in the record is rewritten, the
+     * translation column and the world box (the normal matrix, the flags, the
+     * mesh and material words stay). Returns false, having changed nothing,
+     * when the linear part changed; `moveInstance` then does the whole work.
+     * *Why a path of its own:* most moves are slides (drags, B1a's bench), and
+     * at 10,000 a frame the general path's three reads of each matrix and its
+     * full record were most of `setTransforms`' time (T2.M1).
+     * Only `setTransforms` uses it, always with a Float32Array: fed
+     * `setTransform`'s Float64Array matrices as well, Chrome compiled its
+     * reads for both kinds and the call took 2.65 ms instead of 1.6.
+     */
+    private slideInstance(entry: InstanceEntry, matrices: Float32Array, offset: number): boolean {
+        const transforms = this.transforms;
+        const slot = entry.slot;
+        const stored = transforms.matrices;
+        const m = slot * MATRIX_NUMBERS;
+        for (let index = 0; index < 12; index++) if (matrices[offset + index] !== stored[m + index]) return false;
+        const bounds = transforms.bounds;
+        const at = slot * BOX_NUMBERS;
+        const boundsBefore = this.boundsBefore;
+        for (let index = 0; index < BOX_NUMBERS; index++) boundsBefore[index] = bounds[at + index];
+        stored[m + 12] = matrices[offset + 12];
+        stored[m + 13] = matrices[offset + 13];
+        stored[m + 14] = matrices[offset + 14];
+        stored[m + 15] = matrices[offset + 15];
+        const moved = transforms.slide(slot);
+        const floats = this.mirror.floats;
+        const base = this.mirror.recordWord('instances', slot);
+        // Column-major input: the translation is elements 12-14, each row's last number.
+        floats[base + INSTANCE_WORD.objectToWorldRow0 + 3] = stored[m + 12];
+        floats[base + INSTANCE_WORD.objectToWorldRow1 + 3] = stored[m + 13];
+        floats[base + INSTANCE_WORD.objectToWorldRow2 + 3] = stored[m + 14];
+        for (let axis = 0; axis < 3; axis++) {
+            floats[base + INSTANCE_WORD.boundsMin + axis] = bounds[at + axis];
+            floats[base + INSTANCE_WORD.boundsMax + axis] = bounds[at + 3 + axis];
+        }
+        this.changeLog.addRegion(boundsBefore, 'geometry', entry.handle, moved, slot);
+        this.changeLog.addRegion(bounds, 'geometry', entry.handle, moved, slot, at);
+        this.topLevelDirty = true;
+        this.cachedBounds = null;
+        return true;
     }
 
     setVisible(instance: InstanceHandle, visible: boolean): void {
@@ -785,7 +768,7 @@ export class PlatformScene implements SceneApi, SceneCopy {
         entry.visible = visible;
         this.writeInstanceRecord(entry);
         if (entry.contributesToGi) {
-            this.changeLog.addRegion(entry.worldBounds, 'geometry', instance, undefined, entry.slot);
+            this.changeLog.addRegion(this.transforms.box(entry.slot), 'geometry', instance, undefined, entry.slot);
             this.topLevelDirty = true;
             this.cachedBounds = null;
         }
@@ -804,14 +787,14 @@ export class PlatformScene implements SceneApi, SceneCopy {
         for (const material of next) material.users.add(entry);
         this.mirror.writeList(entry.listOffset, next.map((material) => material.slot));
         this.writeInstanceRecord(entry);
-        if (this.isTraceable(entry)) this.changeLog.addRegion(entry.worldBounds, 'material', instance);
+        if (this.isTraceable(entry)) this.changeLog.addRegion(this.transforms.box(entry.slot), 'material', instance);
     }
 
     destroyInstance(instance: InstanceHandle): void {
         this.checkLive();
         const entry = this.instance(instance);
         if (this.isTraceable(entry)) {
-            this.changeLog.addRegion(entry.worldBounds, 'geometry', instance, undefined, entry.slot);
+            this.changeLog.addRegion(this.transforms.box(entry.slot), 'geometry', instance, undefined, entry.slot);
             this.topLevelDirty = true;
         }
         if (entry.contributesToGi) this.instanceSetDirty = true;
@@ -821,6 +804,10 @@ export class PlatformScene implements SceneApi, SceneCopy {
         this.mirror.clearRecord('instances', entry.slot);
         this.instanceSlots.release(entry.slot);
         this.instances.delete(instance);
+        this.instanceSetVersion++;
+        // The last batch may name it: drop the reused lookups, and the instance with them.
+        this.batchEntries = [];
+        this.batchVersion = -1;
         this.cachedBounds = null;
         this.headerDirty = true;
     }
@@ -1166,51 +1153,56 @@ export class PlatformScene implements SceneApi, SceneCopy {
         const words = this.mirror.words;
         const floats = this.mirror.floats;
         const base = this.mirror.recordWord('instances', instance.slot);
-        const matrix = instance.objectToWorld;
-        if (linearChanged) this.writeNormalMatrix(instance, base);
+        const transforms = this.transforms;
+        const slot = instance.slot;
+        if (linearChanged) this.writeNormalMatrix(slot, base);
+        const matrix = transforms.matrices;
+        const m = slot * MATRIX_NUMBERS;
         // Written out rather than looped: this runs for every instance `setTransforms` moves.
         // Column-major input: row r of the 3x4 matrix is elements r, 4 + r, 8 + r, 12 + r.
         const row0 = base + INSTANCE_WORD.objectToWorldRow0;
         const row1 = base + INSTANCE_WORD.objectToWorldRow1;
         const row2 = base + INSTANCE_WORD.objectToWorldRow2;
-        floats[row0] = matrix[0];
-        floats[row0 + 1] = matrix[4];
-        floats[row0 + 2] = matrix[8];
-        floats[row0 + 3] = matrix[12];
-        floats[row1] = matrix[1];
-        floats[row1 + 1] = matrix[5];
-        floats[row1 + 2] = matrix[9];
-        floats[row1 + 3] = matrix[13];
-        floats[row2] = matrix[2];
-        floats[row2 + 1] = matrix[6];
-        floats[row2 + 2] = matrix[10];
-        floats[row2 + 3] = matrix[14];
+        floats[row0] = matrix[m + 0];
+        floats[row0 + 1] = matrix[m + 4];
+        floats[row0 + 2] = matrix[m + 8];
+        floats[row0 + 3] = matrix[m + 12];
+        floats[row1] = matrix[m + 1];
+        floats[row1 + 1] = matrix[m + 5];
+        floats[row1 + 2] = matrix[m + 9];
+        floats[row1 + 3] = matrix[m + 13];
+        floats[row2] = matrix[m + 2];
+        floats[row2 + 1] = matrix[m + 6];
+        floats[row2 + 2] = matrix[m + 10];
+        floats[row2 + 3] = matrix[m + 14];
         words[base + INSTANCE_WORD.materialListStart] = instance.listOffset;
         words[base + INSTANCE_WORD.materialListCount] = instance.materials.length;
         words[base + INSTANCE_WORD.reserved] = 0;
 
-        const bounds = instance.worldBounds;
-        const moved = transformFrame(instance.mesh.packed.bounds, matrix, instance.worldFrame, bounds);
+        // A slide keeps the frame's edges: only its corner moves (InstanceTransforms.slide).
+        const moved = linearChanged ? transforms.place(slot) : transforms.slide(slot);
+        const bounds = transforms.bounds;
+        const at = slot * BOX_NUMBERS;
 
         for (let axis = 0; axis < 3; axis++) {
-            floats[base + INSTANCE_WORD.boundsMin + axis] = bounds[axis];
-            floats[base + INSTANCE_WORD.boundsMax + axis] = bounds[3 + axis];
+            floats[base + INSTANCE_WORD.boundsMin + axis] = bounds[at + axis];
+            floats[base + INSTANCE_WORD.boundsMax + axis] = bounds[at + 3 + axis];
         }
         words[base + INSTANCE_WORD.mesh] = instance.mesh.slot;
         words[base + INSTANCE_WORD.flags] =
             INSTANCE_FLAG.live |
             (instance.contributesToGi ? INSTANCE_FLAG.contributesToGi : 0) |
             (instance.visible ? INSTANCE_FLAG.visible : 0) |
-            instance.transformFlags;
+            transforms.flags[slot];
         return moved;
     }
 
     /** The record's normal matrix (the inverse's linear part), and whether the transform mirrors or is singular. */
-    private writeNormalMatrix(instance: InstanceEntry, base: number): void {
+    private writeNormalMatrix(slot: number, base: number): void {
         const floats = this.mirror.floats;
         // A singular transform has no normal matrix; identity keeps the accessors finite.
         const inverse = this.inverseScratch;
-        const determinant = invertAffineInto(instance.objectToWorld, inverse);
+        const determinant = invertAffineInto(this.transforms.matrices, inverse, slot * MATRIX_NUMBERS);
         const invertible = determinant !== 0;
         if (!invertible) inverse.set(IDENTITY_ROWS);
         // The normal matrix's rows: the inverse's linear part (its rows 0-2, columns 0-2).
@@ -1226,7 +1218,7 @@ export class PlatformScene implements SceneApi, SceneCopy {
         floats[normal2] = inverse[8];
         floats[normal2 + 1] = inverse[9];
         floats[normal2 + 2] = inverse[10];
-        instance.transformFlags = (invertible && determinant < 0 ? INSTANCE_FLAG.mirrored : 0) | (invertible ? 0 : INSTANCE_FLAG.singular);
+        this.transforms.flags[slot] = (invertible && determinant < 0 ? INSTANCE_FLAG.mirrored : 0) | (invertible ? 0 : INSTANCE_FLAG.singular);
     }
 
     private writeMaterialRecord(material: MaterialEntry): void {
@@ -1345,9 +1337,13 @@ export class PlatformScene implements SceneApi, SceneCopy {
         return handles.map((handle) => this.material(handle));
     }
 
+    /**
+     * A checked copy of a host's transform, in a scratch the caller copies
+     * from at once (into InstanceTransforms), so a call allocates nothing.
+     */
     private checkedTransform(transform: Mat4): Float64Array {
         if (!transform || transform.length < 16) throw new RangeError('@pmndrs/ddgi: a transform needs 16 numbers (column-major 4x4).');
-        const matrix = new Float64Array(16);
+        const matrix = this.transformScratch;
         for (let index = 0; index < 16; index++) {
             if (!Number.isFinite(transform[index])) throw new RangeError('@pmndrs/ddgi: a transform must be finite.');
             matrix[index] = transform[index];

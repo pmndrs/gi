@@ -79,19 +79,20 @@ export function invertAffine(objectToWorld: Mat4): { rows: Float64Array; determi
 }
 
 /**
- * {@link invertAffine} into `out` (12 numbers), without allocating: for the
+ * {@link invertAffine} into `out` (12 numbers), reading the matrix from `offset` in `objectToWorld`, without allocating: for the
  * scene copy's per-instance writes, which `setTransforms` makes thousands
  * of a frame. Returns the determinant, or 0 when the matrix is singular or
  * the result isn't finite (then `out` holds garbage).
  */
-export function invertAffineInto(objectToWorld: Mat4, out: Float64Array): number {
+export function invertAffineInto(objectToWorld: Mat4, out: Float64Array, offset = 0): number {
     const e = objectToWorld;
-    if (e.length < 16) throw new RangeError('objectToWorld must have 16 entries');
+    const o = offset;
+    if (e.length < o + 16) throw new RangeError('objectToWorld must have 16 entries');
     // The linear part L, with L[row][column] = e[column * 4 + row].
-    const m00 = e[0], m01 = e[4], m02 = e[8];
-    const m10 = e[1], m11 = e[5], m12 = e[9];
-    const m20 = e[2], m21 = e[6], m22 = e[10];
-    const tx = e[12], ty = e[13], tz = e[14];
+    const m00 = e[o], m01 = e[o + 4], m02 = e[o + 8];
+    const m10 = e[o + 1], m11 = e[o + 5], m12 = e[o + 9];
+    const m20 = e[o + 2], m21 = e[o + 6], m22 = e[o + 10];
+    const tx = e[o + 12], ty = e[o + 13], tz = e[o + 14];
 
     // Cofactors of the first column and the determinant.
     const c00 = m11 * m22 - m12 * m21;

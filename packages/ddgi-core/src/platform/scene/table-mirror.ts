@@ -174,6 +174,14 @@ export class TableMirror {
     }
 
     private markDirty(start: number, end: number): void {
+        // A range that touches or overlaps the last one joins it: records marked one after another
+        // (a loop of setTransform calls in slot order) then make one range, not one array each.
+        const last = this.dirty[this.dirty.length - 1];
+        if (last && start <= last[1] && end >= last[0]) {
+            last[0] = Math.min(last[0], start);
+            last[1] = Math.max(last[1], end);
+            return;
+        }
         this.dirty.push([start, end]);
         // Keep the list bounded between uploads; merging is cheap at this size.
         if (this.dirty.length > MAX_DIRTY_RANGES * 4) this.dirty = this.takeDirtyRanges();

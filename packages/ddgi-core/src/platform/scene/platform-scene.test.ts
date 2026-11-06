@@ -8,7 +8,8 @@
 import { describe, expect, it } from 'vitest';
 import type { InstanceHandle, MaterialHandle } from '../contract/handles.ts';
 import { MAX_LISTED_LIGHT_CHANGES } from './change-log.ts';
-import { PlatformScene, transformFrame, type SceneUpload } from './platform-scene.ts';
+import { PlatformScene, type SceneUpload } from './platform-scene.ts';
+import { transformFrame } from './instance-transforms.ts';
 import { transformBounds } from '../trace/top-level.ts';
 import { createFakeGpu, type FakeBuffer, type FakeGpu } from './testing/fake-gpu.ts';
 import { buildBasicScene, checkReadback, churnScene, composeTransform, cubeMesh, editBasicScene, makeQueries, materialIndices, SceneModel } from './testing/fixture.ts';
@@ -263,7 +264,7 @@ describe('moves (T2.M1)', () => {
         let previous: number[] | null = null;
         for (let trial = 0; trial < 50; trial++) {
             const matrix = composeTransform([random() * 20 - 10, random() * 5, random() * 20 - 10], [random() - 0.5, random() - 0.5, random() - 0.5], random() * 6, [0.2 + random() * 2, -1 + random() * 2.5, 0.5 + random()]);
-            const moved = transformFrame(meshBounds, matrix, frame, bounds);
+            const moved = transformFrame(meshBounds, 0, matrix, 0, frame, 0, bounds, 0);
             transformBounds(meshBounds, matrix, reference, 0);
             for (let index = 0; index < 6; index++) expect(bounds[index]).toBeCloseTo(reference[index], 4);
             if (previous) {
