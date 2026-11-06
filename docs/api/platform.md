@@ -40,7 +40,7 @@ The host owns the device, the scene and the frame. The platform keeps its own si
 ## How a host uses it
 
 1. **Device.** The host asks the adapter for the device using `requiredLimits(adapter)` and `optionalFeatures(adapter)`, then calls `createGI(device)`. The platform never creates, configures or destroys a device. It watches `device.lost`, and after a loss `isReady` turns false and calls throw `GINotReadyError('device-lost')`. The host makes a new platform on the new device, the same rule as the upscaler.
-2. **Scene.** The adapter calls `gi.scene.createMesh(...)`, `createMaterial(...)`, `createInstance(...)`, `createLight(...)` and `setEnvironment(...)`, then sends only what changed (`setTransform`, `updateLight`, ...). The calls are cheap. Changes are queued and uploaded inside the next `encode`.
+2. **Scene.** The adapter calls `gi.scene.createMesh(...)`, `createMaterial(...)`, `createInstance(...)`, `createLight(...)` and `setEnvironment(...)`, then sends only what changed (`setTransform`, `updateLight`, ...). The calls are cheap. Changes are queued and uploaded inside the next `encode`. Many moves at once go through `setTransforms(instances, matrices)`, one call with 16 numbers per instance (T2.M1: 10,000 in about 1-3 ms of CPU, against 15-20 ms one call each).
 3. **Techniques.** `gi.addTechnique(new DDGITechnique(settings))`, `gi.setOutput(ddgi)`, then `await gi.prepare()`, which compiles everything asynchronously.
 4. **Every frame.** `gi.encode(encoder, { deltaTime, budget, camera })` comes before the host's own passes, in the same encoder. There are no extra submits and no readbacks. Hosts with screen-space techniques also call `gi.encodeScreen(encoder, screen)` after their depth/normal pass. It does nothing when no technique needs it.
 5. **Shading.** The adapter injects `gi.shading` into its engine once, and rebuilds only when `shading.version` changes.
@@ -56,7 +56,8 @@ The lifecycle names match the pmndrs siblings: `prepare()`, `isReady`, `encode()
 - **`contributesToGI`** per instance. Characters and small props still *receive* GI through the shading module, but rays ignore them, which is what shipping engines do.
 - **Deforming meshes** keep their triangles. The host hands over a GPU buffer of positions each frame, and the BVH is refit on the GPU from it.
 - **Lights** use three.js's physical units: directional intensity is irradiance, point and spot intensity is radiant intensity, and emission and sky are radiance. So the three adapter passes values straight through. `range` is required for point and spot lights. `range: 0` means "no limit", as in three.js (`distance = 0`): such a light is never culled, so it costs every probe. Light **group** membership (0–3) is scene data, so it lives on the light. Group *weights* belong to the technique.
-- **Nothing recompiles.** Every table (meshes, instances, materials, lights) is fixed capacity and grows by reallocating, never by changing shader code.
+- **Nothing recompiles.** Every table (meshes, instances, materials, lights) is fixed capacity and grows by reallocating, never by changing shader code. `gi.stats.recompiles` counts the compute pipelines made while the platform is ready, so a host can see that it stays 0 (T2.M1).
+- **Moves say how far they went.** A moved instance's two dirty regions (where it was, where it is) carry `moved`, the farthest any corner of its mesh's box travelled, and its slot (`instance`), so a technique can size the change and follow the object (DDGI's geometry marks and mover mask, docs/design/ddgi.md).
 
 ### What techniques see
 

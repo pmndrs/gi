@@ -297,6 +297,7 @@ The adapter does a fixed amount of work per frame instead:
 - **The walk.** Each frame checks `objectsPerFrame` objects for new, moved, hidden or removed ones, then carries on where it stopped. A whole pass takes `ceil(objects / objectsPerFrame)` frames. Removals can take up to two passes.
 - **The hot list.** Once an object is seen moving, it is checked every frame until it has been still for 60 frames. Continuous motion is therefore sent every frame.
 - **`markChanged(object)`.** Tells the adapter something changed (added, moved, edited or removed). The object and everything under it are picked up in the next `update`. Use it when you move things and want no delay.
+- **Moves go out in one batch.** Every transform an `update` finds changed is sent with one `setTransforms` call at its end. For an `InstancedMesh` whose instance matrices changed, the instances named by `instanceMatrix.addUpdateRange(...)` are the only ones looked at, when the mesh was also checked in the previous update (three clears the ranges at `render`, after `ThreeGI.update` in the documented order); otherwise every instance is compared and only changed ones are sent.
 - **Edits.** Each frame, `editChecksPerFrame` geometries, materials and objects are checked for edits: geometry, material values, the `giContributes` flag, and whether a mesh's materials still all let light through.
 - **Lights** are checked every frame.
 
