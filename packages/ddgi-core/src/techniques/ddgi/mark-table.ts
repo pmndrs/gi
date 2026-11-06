@@ -354,6 +354,31 @@ function localBox(change: LightChange, grid: ProbeGrid): { min: Vec3; size: Vec3
     return probeBox(grid, [min[0], min[1], min[2]], [max[0], max[1], max[2]]);
 }
 
+/** Every light group in the one layer (groups off). */
+const ONE_LAYER: readonly number[] = [0, 0, 0, 0];
+
+/**
+ * The frame's light changes as `ddgi/mark` treats them: a light that moved to
+ * another irradiance layer (its group changed, and the groups' layers differ)
+ * becomes two changes, its removal from the old layer (before → none) and
+ * its arrival in the new one (none → after). Why not one: each layer changes
+ * by the light's whole irradiance, though the field's sum doesn't (with
+ * every weight 1), and the history is cut for what changed in a layer.
+ */
+function byLayer(changes: readonly LightChange[], groupLayers: readonly number[]): LightChange[] {
+    const layerOf = (light: LightDescriptor): number => groupLayers[light.group ?? 0] ?? groupLayers[groupLayers.length - 1] ?? 0;
+    const result: LightChange[] = [];
+    for (const change of changes) {
+        if (change.before && change.after && layerOf(change.before) !== layerOf(change.after)) {
+            result.push({ ...change, after: null, influenceRadius: { before: change.influenceRadius.before, after: 0 } });
+            result.push({ ...change, before: null, influenceRadius: { before: 0, after: change.influenceRadius.after } });
+        } else {
+            result.push(change);
+        }
+    }
+    return result;
+}
+
 /**
  * The table for one frame, or null when nothing changed that marks probes
  * (then `ddgi/mark` doesn't run at all).
@@ -375,18 +400,23 @@ function localBox(change: LightChange, grid: ProbeGrid): { min: Vec3; size: Vec3
  *   (`skyResidualShare`) are T2.6b's.
  * - More light changes than are listed: one entry over every probe
  *   (OVERFLOW_CHANGE).
- * - A light's group changing marks nothing by itself: every group is in the
- *   field's one layer until light groups (T2.5).
+ * - A light whose group changes so that it moves to another irradiance
+ *   layer (light groups, T2.5; `groupLayers`) leaves its old layer and joins
+ *   the new one: it is marked as two changes, switched off where it was and
+ *   switched on where it is (byLayer), so the probes of both layers settle as
+ *   after a light switch. With groups off (one layer) a group change alone
+ *   marks nothing: the light's numbers didn't change.
  */
-export function buildMarkTable(changes: SceneChanges, grid: ProbeGrid, movers: MoverBits = NO_MOVERS): MarkTable | null {
+export function buildMarkTable(changes: SceneChanges, grid: ProbeGrid, movers: MoverBits = NO_MOVERS, groupLayers: readonly number[] = ONE_LAYER): MarkTable | null {
     const entries: Entry[] = [];
     const everywhere = { boxMin: [0, 0, 0] as Vec3, boxSize: [grid.counts[0], grid.counts[1], grid.counts[2]] as Vec3, geometry: NO_GEOMETRY };
+    const lightChanges = byLayer(changes.lights, groupLayers);
     let unranged = 0;
-    for (const change of changes.lights) if (isUnrangedLocal(change)) unranged++;
+    for (const change of lightChanges) if (isUnrangedLocal(change)) unranged++;
     const fold = unranged > MAX_UNRANGED_LIGHT_ENTRIES;
     const foldedRadius = FOLDED_NEAR_SPACINGS * Math.max(grid.spacing[0], grid.spacing[1], grid.spacing[2]);
     let foldedChange = 0;
-    for (const change of changes.lights) {
+    for (const change of lightChanges) {
         const [before, after] = bothSides(change);
         const directional = change.before?.type === 'directional' || change.after?.type === 'directional';
         if (directional) {

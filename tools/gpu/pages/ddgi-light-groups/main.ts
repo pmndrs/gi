@@ -24,6 +24,14 @@
  *    work list) gives the same layered field after FALLBACK_FRAMES frames
  *    (atlas mean within 0.1%, T2.2's bar for two compiled variants).
  *
+ * 5. **A lamp moved to another group** (room B's lamp from group 1 to 0, the
+ *    review's must-fix): it leaves layer 1 and joins layer 0, which
+ *    `ddgi/mark` marks as a switch off and a switch on. Each layer's mean
+ *    must be within REGROUP_TOLERANCE of a field converged from scratch with
+ *    the lamp in group 0 (relative to the probe's whole light) within
+ *    REGROUP_FRAMES frames, as after a light switch; with no mark it
+ *    would fade over T1.12's 5 s memory instead.
+ *
  * Also recorded: GPU memory with 2 groups against groups off (per layer).
  * Runs on the RTX and, for correctness, the Intel UHD.
  */
@@ -48,6 +56,25 @@ const LINEARITY_TOLERANCE = 0.01;
 const SHOWS_THRESHOLD = 0.01;
 /** Two compiled variants of the kernels: atlas mean within 0.1% (T2.2, DECISIONS 2026-11-06). */
 const REDUCTION_TOLERANCE = 0.001;
+/** Check 5: each layer within 5% (SPEC's "within 5% of settled") in 30 frames (0.5 s at 60 Hz). */
+const REGROUP_TOLERANCE = 0.05;
+const REGROUP_FRAMES = 30;
+
+/** Mean of rgb per irradiance layer of the layered atlas (layer L is the L-th block of nx tiles across). */
+async function layerMeans(device: GPUDevice, field: DDGIField): Promise<number[]> {
+    const halves = new Uint16Array((await readTextureBytes(device, field.layeredIrradiance, 8)).buffer);
+    const layers = field.layers.layers.length;
+    const width = field.layout.layeredIrradiance.width;
+    const blockWidth = width / layers;
+    const sums = new Array<number>(layers).fill(0);
+    const counts = new Array<number>(layers).fill(0);
+    for (let texel = 0; texel < halves.length / 4; texel++) {
+        const layer = Math.floor((texel % width) / blockWidth);
+        sums[layer] += halfToFloat(halves[texel * 4]) + halfToFloat(halves[texel * 4 + 1]) + halfToFloat(halves[texel * 4 + 2]);
+        counts[layer] += 3;
+    }
+    return sums.map((sum, layer) => sum / counts[layer]);
+}
 
 /** Room B's lamp, in group 1 (two-room's own lamp lights room A and is in group 0). Cooler than room A's. */
 const LAMP_B: LightDescriptor = { type: 'point', color: [0.75, 0.85, 1.0], intensity: 8, position: [6.2, 2.45, 2.0], range: 14, group: 1, label: 'room-b-lamp' };
@@ -193,6 +220,37 @@ await runGpuTest(
         log(`layered atlas after ${FALLBACK_FRAMES} frames: default ${layeredAt300.toPrecision(7)}, fallbacks ${fallbackAt300.toPrecision(7)} (${percent(reductionDifference)}; bar ${percent(REDUCTION_TOLERANCE)})`);
         if (!(Math.abs(reductionDifference) <= REDUCTION_TOLERANCE)) failures.push(`the fallback reductions' layered field is ${percent(reductionDifference)} from the default's`);
         results.reductions = { defaultMean: layeredAt300, fallbackMean: fallbackAt300, difference: reductionDifference, hasSubgroups: device.features.has('subgroups') };
+
+        // 5. A lamp moved to another group settles like a light switch.
+        const regroupFrames = Math.min(FRAMES, 600);
+        const settled = await createDdgiScene(device, 'two-room', { lightGroups: defaultLightGroups(2) });
+        settled.platform.scene.createLight({ ...LAMP_B, group: 0 });
+        await runFrames(device, settled.platform, regroupFrames + REGROUP_FRAMES, probes);
+        const target = await layerMeans(device, settled.ddgi.field!);
+        settled.platform.dispose();
+        const moving = await createDdgiScene(device, 'two-room', { lightGroups: defaultLightGroups(2) }, { gpuTiming: true });
+        const lampB = moving.platform.scene.createLight(LAMP_B);
+        await runFrames(device, moving.platform, regroupFrames, probes);
+        await runFrames(device, moving.platform, 4, 0);
+        const markedBeforeRegroup = moving.ddgi.counters['probes marked (total)'];
+        const total = target.reduce((sum, mean) => sum + mean, 0);
+        const errorAgainstTarget = (means: number[]): number => Math.max(...means.map((mean, layer) => Math.abs(mean - target[layer]) / total));
+        const regroupStart = await layerMeans(device, moving.ddgi.field!);
+        moving.platform.scene.updateLight(lampB, { group: 0 });
+        const regroupCurve: { frame: number; error: number }[] = [{ frame: 0, error: errorAgainstTarget(regroupStart) }];
+        for (let frame = 1; frame <= REGROUP_FRAMES; frame++) {
+            await runFrames(device, moving.platform, 1, probes);
+            if ([1, 2, 4, 8, 15, 20, 25, 30].includes(frame)) regroupCurve.push({ frame, error: errorAgainstTarget(await layerMeans(device, moving.ddgi.field!)) });
+        }
+        await runFrames(device, moving.platform, 4, 0);
+        const regroupMarks = moving.ddgi.counters['probes marked (total)'] - markedBeforeRegroup;
+        moving.platform.dispose();
+        const regroupEnd = regroupCurve[regroupCurve.length - 1].error;
+        const regroupWithin = regroupCurve.find((point, index) => regroupCurve.slice(index).every((later) => later.error <= REGROUP_TOLERANCE))?.frame ?? null;
+        log(`lamp moved from group 1 to 0: layers ${percent(regroupCurve[0].error)} from settled before, ${regroupCurve.map((point) => `frame ${point.frame} ${percent(point.error)}`).join(', ')}; within ${percent(REGROUP_TOLERANCE)} from frame ${regroupWithin}; ${regroupMarks} probes marked`);
+        if (!(regroupEnd <= REGROUP_TOLERANCE)) failures.push(`the lamp moved to another group: the layers are ${percent(regroupEnd)} from settled after ${REGROUP_FRAMES} frames`);
+        if (!(regroupMarks > 0)) failures.push('the lamp moved to another group marked no probe');
+        results.regroup = { curve: regroupCurve, withinFrame: regroupWithin, probesMarked: regroupMarks, target };
 
         // Memory: 2 groups (3 layers and the composed atlas) against groups off.
         results.memory = { groupsOffBytes: asTheyAre.memory, twoGroupsBytes: groupsMemory, perExtraLayerBytes: (groupsMemory - asTheyAre.memory) / 2, probes };

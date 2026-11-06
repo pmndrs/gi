@@ -154,6 +154,7 @@ export const KEY_FIRST_UPDATE_SHARE = 0.8;
 export const KEY_INDEX_BITS = Math.ceil(Math.log2(FIXED_RAYS));
 if (KEY_INDEX_BITS > 8) throw new Error(`@pmndrs/ddgi: ${FIXED_RAYS} fixed rays need ${KEY_INDEX_BITS} key bits; phase B's keys allow 8`);
 const KEY_INDEX_MASK = (1 << KEY_INDEX_BITS) - 1;
+import { MAX_IRRADIANCE_LAYERS } from '../light-groups.ts';
 import { DDGI_COMMON_WGSL } from './common.ts';
 import { DDGI_STOCHASTIC_HALF_WGSL } from './half.ts';
 
@@ -213,6 +214,12 @@ export function blendKernelWgsl(shape: BlendKernelShape): string {
     const { irradianceTexels, distanceTexels, scratch, reduction } = shape;
     // Several irradiance layers (light groups): the radiance is read from the ray buffer (the file comment).
     const layered = scratch.irradianceLayers > 1;
+    // Every layer's texel estimates and old values sit in workgroup memory beside the rays' directions (the file comment).
+    if (scratch.irradianceLayers > MAX_IRRADIANCE_LAYERS) {
+        throw new Error(
+            `@pmndrs/ddgi: ddgi/blend keeps at most ${MAX_IRRADIANCE_LAYERS} irradiance layers in its 16 KB of workgroup memory, got ${scratch.irradianceLayers} (light-groups.ts, MAX_IRRADIANCE_LAYERS)`,
+        );
+    }
     // An enable directive must come before everything else in the module.
     const enable = reduction === 'subgroups' ? 'enable subgroups;\n' : '';
     return /* wgsl */ `${enable}
@@ -1089,8 +1096,8 @@ ${layered ? '' : '        ddgiRayRadiance[rayIndex] = record;'}
         ddgiBlendThisUpdate = select(0u, 1u, blendThisUpdate);
         ddgiPassChange = 0u;
         ddgiChangedNow = 0u;
-        // The previous update's big-change verdict (layer 0's alpha), read here because
-        // every layer is blended with it and layer 0 comes last.
+        // The previous update's big-change verdict (layer 0's alpha), read once here:
+        // phase C blends every layer's texels with it at once.
         ddgiFastHysteresis = select(0u, 1u, textureLoad(ddgiIrradianceAtlas, ddgiIrradianceAtlasTexel(probe, vec2u(0u), 0u), probe.y, 0).a > 0.5);
         var newState = decision.state;
         if (blendThisUpdate) {

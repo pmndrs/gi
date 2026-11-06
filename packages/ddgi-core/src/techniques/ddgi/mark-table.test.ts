@@ -50,12 +50,36 @@ function entry(table: NonNullable<ReturnType<typeof buildMarkTable>>, index: num
 describe("ddgi/mark's table", () => {
     it('is empty for a still frame, so the kernel never runs', () => {
         expect(buildMarkTable(NONE, grid)).toBeNull();
-        // A group change alone marks nothing until light groups (T2.5).
+        // With groups off (one layer) a group change alone marks nothing.
         const regrouped = change(lamp([2, 2.45, 2]), { ...lamp([2, 2.45, 2]), group: 1 }, 14);
         const table = buildMarkTable({ ...NONE, lights: [regrouped], global: ['lights'] }, grid);
         // The light is still listed (its numbers didn't change, so the kernel finds no change), but nothing global is added.
         expect(table?.entryCount).toBe(1);
         expect(entry(table!, 0).kind).toBe(MARK_KIND.localLight);
+    });
+
+    it('marks a light that moves to another layer as switched off in the old one and on in the new one (light groups)', () => {
+        const before = lamp([2, 2.45, 2]);
+        const regrouped = change(before, { ...before, group: 1 }, 1);
+        // 2 groups: group 0 in layer 0, groups 1-3 in layer 1.
+        const table = buildMarkTable({ ...NONE, lights: [regrouped], global: ['lights'] }, grid, undefined, [0, 1, 1, 1])!;
+        expect(table.entryCount).toBe(2);
+        const off = entry(table, 0);
+        const on = entry(table, 1);
+        // Off: the lamp before, nothing after; on: nothing before, the lamp after. The same box (it didn't move).
+        expect(off.before.intensity[0]).toBeGreaterThan(0);
+        expect(off.after.intensity).toEqual([0, 0, 0]);
+        expect(on.before.intensity).toEqual([0, 0, 0]);
+        expect(on.after.intensity[0]).toBeGreaterThan(0);
+        expect(off.boxMin).toEqual(on.boxMin);
+        expect(off.boxSize).toEqual(on.boxSize);
+        // Between two groups that share a layer it is no change of layer: one entry, as with groups off.
+        const sameLayer = change({ ...before, group: 1 }, { ...before, group: 3 }, 1);
+        expect(buildMarkTable({ ...NONE, lights: [sameLayer] }, grid, undefined, [0, 1, 1, 1])!.entryCount).toBe(1);
+        // Moved as well: each side over its own box.
+        const movedAndRegrouped = change(before, { ...lamp([6, 2.45, 2]), group: 1 }, 1);
+        const both = buildMarkTable({ ...NONE, lights: [movedAndRegrouped] }, grid, undefined, [0, 1, 1, 1])!;
+        expect(entry(both, 0).boxMin[0]).toBeLessThan(entry(both, 1).boxMin[0]);
     });
 
     it('gives a moved lamp one entry over its influence box, clipped to the volume, with both states', () => {

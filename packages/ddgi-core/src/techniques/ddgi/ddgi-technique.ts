@@ -1055,7 +1055,7 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         }
         // Marks land even in a frame that updates no probe: they wait in the
         // history for each probe's next update.
-        const markTable = this.settings.changeDrivenHistory !== false ? buildMarkTable(frame.changes, resources.grid, this.movers) : null;
+        const markTable = this.settings.changeDrivenHistory !== false ? buildMarkTable(frame.changes, resources.grid, this.movers, resources.plan.groupLayers) : null;
         this.latestMarkEntries = markTable?.entryCount ?? 0;
         this.continuingChange.noteFrame(markTable !== null);
         // No probe updates twice in a frame. While warming: a full batch, or none while the trees are built.

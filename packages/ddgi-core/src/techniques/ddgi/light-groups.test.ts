@@ -97,6 +97,9 @@ describe('light groups: the layout', () => {
         expect(propagate).toContain('const DDGI_IRRADIANCE_LAYERS: u32 = 3u;');
         expect(blendKernelWgsl({ irradianceTexels: 6, distanceTexels: 14, scratch: scratchLayout(6, 14), reduction: 'workgroup' })).toContain('const DDGI_IRRADIANCE_LAYERS: u32 = 1u;');
         expect(() => composeKernelWgsl({ irradianceTexels: 6, irradianceLayers: 1 })).toThrow(RangeError);
+        // The blend's workgroup memory holds at most MAX_IRRADIANCE_LAYERS layers; past it, a clear error when it is set up.
+        expect(() => blendKernelWgsl({ irradianceTexels: 6, distanceTexels: 14, scratch: scratchLayout(6, 14, MAX_IRRADIANCE_LAYERS + 1), reduction: 'workgroup' })).toThrow(/at most 6 irradiance layers/);
+        expect(() => blendKernelWgsl({ irradianceTexels: 6, distanceTexels: 14, scratch: scratchLayout(6, 14, MAX_IRRADIANCE_LAYERS), reduction: 'workgroup' })).not.toThrow();
         // Compose binds 2 storage buffers: the list and its state.
         expect(composeKernelWgsl({ irradianceTexels: 6, irradianceLayers: 3 }).match(/var<storage/g)).toHaveLength(2);
     });
