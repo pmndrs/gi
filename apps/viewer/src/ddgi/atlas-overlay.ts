@@ -11,20 +11,23 @@
  * lowest row of probes first (top left), with a dark gap between layers, one
  * screen pixel per texel or a whole multiple of it, so tiles stay sharp.
  *
+ * It is drawn in display space, over the picture as the screen shows it
+ * (after tone mapping and output colour; the viewer's pipeline calls
+ * `overlay`), so it sits on top of the change-per-frame view too.
+ *
  * Colours:
  * - irradiance: E / π, the light a white matte surface facing that way would
- *   show, times 2^(atlas exposure); the viewer's own exposure and tone
- *   mapping apply on top, as they do to the picture;
- * - distance: the mean distance as grey, black at the probe and white at
- *   DISTANCE_WHITE_CELL_DIAGONALS cell diagonals, the most the atlas stores.
- *   The viewer's exposure is divided out, so the greys mean the same in
- *   every scene.
+ *   show, times 2^(atlas exposure), then the viewer's exposure, tone mapping
+ *   and output colour, as the picture gets them;
+ * - distance: the mean distance as a display grey, black at the probe and
+ *   white at DISTANCE_WHITE_CELL_DIAGONALS cell diagonals, the most the atlas
+ *   stores; no tone mapping, so the greys mean the same in every scene.
  *
  * The overlay reads the same `GPUTexture`s the shading module hands three
  * (through `ShadingNodes`), so it shows exactly what the picture is lit from.
  */
 
-import { mix, screenUV, uniform, vec4, wgslFn } from 'three/tsl';
+import { mix, renderOutput, screenUV, uniform, vec4, wgslFn } from 'three/tsl';
 import { Vector2, Vector4, type Node, type WebGPURenderer } from 'three/webgpu';
 import type { DDGIField, ShadingModule } from './library';
 import { ShadingNodes } from './shading-nodes';
@@ -48,20 +51,19 @@ const LAYER_GAP_TEXELS = 2;
 
 /** In the corner, the overlay is at most this share of the view's width and height. */
 const CORNER_MAX_SHARE = { width: 0.5, height: 0.6 } as const;
-/** Filling the view, it leaves this share of the view's width and height as a margin. */
-const FILL_MAX_SHARE = 0.96;
-/** Pixels between the corner overlay and the view's edges. */
-const CORNER_MARGIN_PIXELS = 12;
+/** Pixels between the overlay and the edges of the room it has. */
+const MARGIN_PIXELS = 12;
 
-/** Linear grey behind the layers and in the gaps (exposure divided out). */
-const BACKGROUND_GREY = 0.01;
+/** Grey behind the layers and in the gaps: display grey for distance, linear (before tone mapping) for irradiance. */
+const BACKGROUND_GREY = 0.02;
 
 const OVERLAY_WGSL = /* wgsl */ `
 // One texel of the atlas overlay at this screen position, or alpha 0 outside it.
 //  placement:   the overlay's rectangle in screen UV: x, y of its top-left corner, then width, height
 //  arrangement: one layer's width and height in texels, the layer count, the columns of layers
 //  display:     x: 0 irradiance, 1 distance; y: the irradiance scale (2^stops / pi);
-//               z: 1 / the distance shown white; w: 1 / the viewer's exposure
+//               z: 1 / the distance shown white; w: unused
+// Irradiance comes back linear (the caller tone maps it), distance as a display grey.
 fn viewerDdgiAtlasOverlay(
     screenPosition: vec2f,
     atlas: texture_2d_array<f32>,
@@ -73,7 +75,7 @@ fn viewerDdgiAtlasOverlay(
     if (any(local < vec2f(0.0)) || any(local >= vec2f(1.0))) {
         return vec4f(0.0);
     }
-    let background = vec4f(vec3f(${BACKGROUND_GREY}) * display.w, 1.0);
+    let background = vec4f(vec3f(${BACKGROUND_GREY}), 1.0);
     let layerSize = arrangement.xy;
     let layers = u32(arrangement.z + 0.5);
     let columns = u32(arrangement.w + 0.5);
@@ -94,7 +96,7 @@ fn viewerDdgiAtlasOverlay(
         return vec4f(texel.rgb * display.y, 1.0);
     }
     // The distance atlas holds the mean distance and its square; show the mean.
-    return vec4f(vec3f(saturate(texel.r * display.z)) * display.w, 1.0);
+    return vec4f(vec3f(saturate(texel.r * display.z)), 1.0);
 }
 `;
 
@@ -112,25 +114,32 @@ export class AtlasOverlay {
         this.nodes = new ShadingNodes(shading);
     }
 
-    /** `picture` with the chosen atlas drawn over it. Build again when the atlas choice changes. */
-    compose(picture: Node, choice: AtlasChoice): Node {
+    /**
+     * `display` (the picture as the screen shows it) with the chosen atlas drawn over it. Build
+     * again when the atlas choice changes.
+     */
+    overlay(display: Node, choice: AtlasChoice): Node {
         this.choice = choice;
         const atlas = this.nodes.byName[ATLAS_PARAMETER[choice]];
-        const overlay = this.entry({
+        const texel = this.entry({
             screenPosition: screenUV,
             atlas,
             placement: this.placement,
             arrangement: this.arrangement,
             display: this.display,
         }) as unknown as Node<'vec4'>;
-        return mix(picture as Node<'vec4'>, vec4(overlay.rgb, 1), overlay.a) as unknown as Node;
+        // Irradiance is light, so it gets the picture's exposure, tone mapping and output colour; distance is already a display grey.
+        const shown = choice === 'irradiance' ? (renderOutput(vec4(texel.rgb, 1)) as unknown as Node<'vec4'>) : texel;
+        return mix(display as Node<'vec4'>, vec4(shown.rgb, 1), texel.a) as unknown as Node;
     }
 
     /**
      * Once per frame, before drawing: follows a reallocated atlas, and places the overlay for the
      * current view size. `fill` fills the view; otherwise it sits in the bottom-right corner.
+     * `topInsetShare` is the share of the view's height at the top that something else covers (the
+     * stats box): the overlay stays below it.
      */
-    refresh(renderer: WebGPURenderer, field: DDGIField, options: { fill: boolean; exposureStops: number }): void {
+    refresh(renderer: WebGPURenderer, field: DDGIField, options: { fill: boolean; exposureStops: number; topInsetShare: number }): void {
         this.nodes.refresh();
         const atlas = this.choice === 'irradiance' ? field.layout.irradiance : field.layout.distance;
         // Layers in a near-square grid of columns.
@@ -143,16 +152,19 @@ export class AtlasOverlay {
         renderer.getDrawingBufferSize(drawingBufferSize);
         const viewWidth = Math.max(1, drawingBufferSize.width);
         const viewHeight = Math.max(1, drawingBufferSize.height);
-        const boxWidth = viewWidth * (options.fill ? FILL_MAX_SHARE : CORNER_MAX_SHARE.width);
-        const boxHeight = viewHeight * (options.fill ? FILL_MAX_SHARE : CORNER_MAX_SHARE.height);
-        const fitted = Math.min(boxWidth / canvasWidth, boxHeight / canvasHeight);
+        // The room it has: below the covered top, inside the margins.
+        const roomTop = Math.min(0.9, Math.max(0, options.topInsetShare)) * viewHeight;
+        const roomHeight = viewHeight - roomTop;
+        const boxWidth = options.fill ? viewWidth - 2 * MARGIN_PIXELS : viewWidth * CORNER_MAX_SHARE.width;
+        const boxHeight = options.fill ? roomHeight - 2 * MARGIN_PIXELS : Math.min(viewHeight * CORNER_MAX_SHARE.height, roomHeight - 2 * MARGIN_PIXELS);
+        const fitted = Math.max(1e-3, Math.min(boxWidth / canvasWidth, boxHeight / canvasHeight));
         // Whole screen pixels per texel when there is room, so every texel is a sharp square.
         const pixelsPerTexel = fitted >= 1 ? Math.floor(fitted) : fitted;
         const width = canvasWidth * pixelsPerTexel;
         const height = canvasHeight * pixelsPerTexel;
         // Screen UV runs from the top-left corner.
-        const left = options.fill ? (viewWidth - width) / 2 : viewWidth - width - CORNER_MARGIN_PIXELS;
-        const top = options.fill ? (viewHeight - height) / 2 : viewHeight - height - CORNER_MARGIN_PIXELS;
+        const left = options.fill ? (viewWidth - width) / 2 : viewWidth - width - MARGIN_PIXELS;
+        const top = options.fill ? roomTop + (roomHeight - height) / 2 : viewHeight - height - MARGIN_PIXELS;
         this.placement.value.set(left / viewWidth, top / viewHeight, width / viewWidth, height / viewHeight);
 
         const cellDiagonal = Math.hypot(...field.grid.spacing);
@@ -160,7 +172,7 @@ export class AtlasOverlay {
             this.choice === 'irradiance' ? 0 : 1,
             2 ** options.exposureStops / Math.PI,
             1 / (DISTANCE_WHITE_CELL_DIAGONALS * cellDiagonal),
-            1 / Math.max(1e-6, renderer.toneMappingExposure),
+            0,
         );
     }
 }

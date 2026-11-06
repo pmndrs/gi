@@ -48,6 +48,9 @@ describe('url state', () => {
         // Only the offered scales; anything else is off. The atlas exposure is clamped to the slider.
         const nonsense = parseUrlState('?probecolor=rainbow&atlas=normals&atlasfill=yes&atlasev=99&change=3');
         expect(nonsense).toMatchObject({ probeColor: 'state', atlas: null, atlasFill: false, atlasEv: 10, change: null });
+        // The atlas exposure lands on the slider's half-stop steps.
+        expect(parseUrlState('?atlasev=1.3').atlasEv).toBe(1.5);
+        expect(parseUrlState('?atlasev=-2.2').atlasEv).toBe(-2);
     });
 
     it('round-trips a state and keeps the default link empty', () => {

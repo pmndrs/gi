@@ -49,8 +49,9 @@ const ATLAS_NAMES: readonly AtlasName[] = ['irradiance', 'distance'];
 export const CHANGE_FULL_SCALE_PERCENTS = [0.25, 1, 4] as const;
 export type ChangeFullScalePercent = (typeof CHANGE_FULL_SCALE_PERCENTS)[number];
 
-/** The irradiance atlas's own exposure range, in stops (the slider's ends). */
+/** The irradiance atlas's own exposure range, in stops (the slider's ends), and the slider's step. */
 export const MAX_ATLAS_EV = 10;
+export const ATLAS_EV_STEP = 0.5;
 
 /** DDGI's per-frame budget range, in GPU milliseconds (the slider's ends). */
 export const MIN_BUDGET_MS = 0.25;
@@ -160,7 +161,8 @@ export function parseUrlState(search: string): ViewerUrlState {
     state.atlas = ATLAS_NAMES.find((name) => name === params.get('atlas')) ?? null;
     state.atlasFill = params.get('atlasfill') === '1';
     const atlasEv = finiteNumber(params.get('atlasev'));
-    if (atlasEv !== null) state.atlasEv = Math.min(MAX_ATLAS_EV, Math.max(-MAX_ATLAS_EV, atlasEv));
+    // On the slider's steps, so the link and the slider agree.
+    if (atlasEv !== null) state.atlasEv = Math.min(MAX_ATLAS_EV, Math.max(-MAX_ATLAS_EV, Math.round(atlasEv / ATLAS_EV_STEP) * ATLAS_EV_STEP));
     const change = finiteNumber(params.get('change'));
     state.change = CHANGE_FULL_SCALE_PERCENTS.find((percent) => percent === change) ?? null;
     return state;

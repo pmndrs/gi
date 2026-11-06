@@ -198,8 +198,8 @@ export class DdgiTechnique extends ScenePassTechnique {
     private debugMaterial: DdgiDebugMaterial | null = null;
     private atlasOverlay: AtlasOverlay | null = null;
     private readonly frameChange = new FrameChangeView();
-    /** The picture `outputNode` last wrapped with the debug overlays, what it was wrapped with, and the result. */
-    private composed: { from: Node; key: string; node: Node } | null = null;
+    /** The share of the view's height at the top that the stats box covers; the atlas stays below it. */
+    private overlayTopInsetShare = 0;
     private settings: DdgiViewerSettings;
     private budget: FrameBudget;
     private phase: Phase = 'preparing';
@@ -461,7 +461,7 @@ export class DdgiTechnique extends ScenePassTechnique {
         return this.settings;
     }
 
-    /** Settings that are uniforms: no shader is rebuilt. (The atlas choice and the change view rebuild `outputNode`.) */
+    /** Settings that are uniforms: no shader is rebuilt. (The atlas choice and the change view change `overlayKey`.) */
     private applyDisplaySettings(): void {
         if (this.debugMaterial && this.settings.screenView) this.debugMaterial.view = DDGI_SCREEN_VIEWS[this.settings.screenView];
         if (this.spheres) this.spheres.colorBy = this.settings.probeColor;
@@ -493,21 +493,26 @@ export class DdgiTechnique extends ScenePassTechnique {
         return settings.atlas;
     }
 
+    /** What `overlay` draws; the viewer rebuilds its pipeline when this changes. */
+    get overlayKey(): string {
+        return `${this.shownAtlas ?? 'no atlas'}|${this.showsChange ? 'change' : 'picture'}`;
+    }
+
     /**
-     * The picture with the debug overlays on top. A new node only when what is overlaid changes
-     * (or the base picture was rebuilt); the viewer rebuilds its pipeline when this changes.
+     * The debug overlays, drawn over `display` (DDGI's picture after tone mapping and output colour),
+     * so their colours are exactly what reaches the screen: the change per frame, then the atlas on top.
      */
-    override get outputNode(): Node {
-        const base = super.outputNode;
+    overlay(display: Node): Node {
+        let node = display;
+        if (this.showsChange) node = this.frameChange.overlay(node, this.sceneTarget);
         const atlas = this.shownAtlas;
-        const change = this.showsChange;
-        if (!atlas && !change) return base;
-        const key = `${atlas ?? 'no atlas'}|${change ? 'change' : 'picture'}`;
-        if (this.composed?.from === base && this.composed.key === key) return this.composed.node;
-        let node = change ? this.frameChange.node(this.sceneTarget) : base;
-        if (atlas && this.atlasOverlay) node = this.atlasOverlay.compose(node, atlas);
-        this.composed = { from: base, key, node };
+        if (atlas && this.atlasOverlay) node = this.atlasOverlay.overlay(node, atlas);
         return node;
+    }
+
+    /** The share of the view's height, from the top, that the stats box covers (0 when it is hidden). */
+    setOverlayTopInset(share: number): void {
+        this.overlayTopInsetShare = Number.isFinite(share) ? Math.min(1, Math.max(0, share)) : 0;
     }
 
     /** Once per frame, after DDGI's update and before anything is drawn: the debug views' inputs. */
@@ -519,7 +524,11 @@ export class DdgiTechnique extends ScenePassTechnique {
         }
         this.spheres?.refresh();
         if (field && this.atlasOverlay && this.shownAtlas) {
-            this.atlasOverlay.refresh(this.context.renderer, field, { fill: this.settings.atlasFill, exposureStops: this.settings.atlasExposureEv });
+            this.atlasOverlay.refresh(this.context.renderer, field, {
+                fill: this.settings.atlasFill,
+                exposureStops: this.settings.atlasExposureEv,
+                topInsetShare: this.overlayTopInsetShare,
+            });
         }
         // Keep the last frame's picture before this frame draws over it.
         if (this.showsChange) this.frameChange.capturePrevious(this.context.renderer, this.sceneTarget, this.camera);
@@ -547,17 +556,19 @@ export class DdgiTechnique extends ScenePassTechnique {
         this.refreshDebugViews();
         const scene = this.context.loaded.scene;
         const override = this.settings.screenView && this.debugMaterial && this.giMode !== 'off' && this.phase !== 'failed' ? this.debugMaterial : null;
-        if (!override) {
-            super.renderBeforePipeline();
-            return;
-        }
-        override.refresh();
-        const previous = scene.overrideMaterial;
-        scene.overrideMaterial = override.material;
+        override?.refresh();
+        const renderer = this.context.renderer;
+        const previousOverride = scene.overrideMaterial;
+        const previousClearAlpha = renderer.getClearAlpha();
+        if (override) scene.overrideMaterial = override.material;
+        // Alpha 1 where nothing is drawn: in DDGI's picture only the probe spheres write alpha 0,
+        // which is how the change view finds them (frame-change.ts). The renderer itself clears to 0.
+        renderer.setClearAlpha(1);
         try {
             super.renderBeforePipeline();
         } finally {
-            scene.overrideMaterial = previous;
+            scene.overrideMaterial = previousOverride;
+            renderer.setClearAlpha(previousClearAlpha);
         }
     }
 

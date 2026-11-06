@@ -20,10 +20,6 @@ import { PROBE_HISTORY_WORD, PROBE_HISTORY_WORDS, type DDGIField } from './libra
 /** Threads per workgroup; one per probe. */
 const WORKGROUP_SIZE = 64;
 
-/** Usage bits written out: the GPUTextureUsage and GPUBufferUsage globals would work too, but these read plainly. */
-const TEXTURE_USAGE = { textureBinding: 0x4, storageBinding: 0x8 } as const;
-const BUFFER_USAGE = { copyDst: 0x8, uniform: 0x40 } as const;
-
 const COPY_SAMPLES_WGSL = /* wgsl */ `
 // The history buffer read as plain words: PROBE_HISTORY_WORDS per probe.
 @group(0) @binding(0) var<storage, read> probeHistory: array<u32>;
@@ -58,7 +54,7 @@ export class ProbeHistoryTexture {
     constructor(private readonly device: GPUDevice) {
         const module = device.createShaderModule({ label: 'viewer probe history copy', code: COPY_SAMPLES_WGSL });
         this.pipeline = device.createComputePipeline({ label: 'viewer probe history copy', layout: 'auto', compute: { module, entryPoint: 'copySamples' } });
-        this.shape = device.createBuffer({ label: 'viewer probe history shape', size: 16, usage: BUFFER_USAGE.uniform | BUFFER_USAGE.copyDst });
+        this.shape = device.createBuffer({ label: 'viewer probe history shape', size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     }
 
     /**
@@ -73,7 +69,7 @@ export class ProbeHistoryTexture {
             label: 'viewer probe history samples',
             size: { width, height },
             format: 'r32float',
-            usage: TEXTURE_USAGE.textureBinding | TEXTURE_USAGE.storageBinding,
+            usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.STORAGE_BINDING,
         });
         this.bindGroup = null;
         return this.target;

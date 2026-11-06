@@ -21,6 +21,18 @@ Rules:
 
 ---
 
+## 2026-11-06 · T1.12 phase 2b review fixes: the change view's colours are exact · implementer (opus)
+Did (uncommitted, on top of b002f42), from the Opus review:
+1. **Change view in display space.** `viewer-core.ts` turns the pipeline's output transform off and applies `renderOutput()` to each technique's picture itself; a technique may then draw `overlay(display)` after tone mapping and output colour (`types.ts`: `overlay`, `overlayKey`). `frame-change.ts` paints there with a linear share, change / scale: full colour means a change of at least the scale, half colour half of it, under any tone mapper and exposure. The weight^2.2 is gone. The atlas overlay moved to display space too (on top of the change view; distance greys are no longer tone mapped).
+2. **Probe spheres keep their colours** under the change view: they write alpha 0 (`NoBlending`, since three forces opaque alpha to 1), DDGI's pass clears alpha to 1, and the change view shows marked pixels unchanged.
+3. **"Fill the picture"** places the atlas below the stats box (`viewer-app.ts` passes how far down the box reaches; 1 px per texel there on Cornell at 1280x720, 2 px with the stats hidden).
+4. `atlasev` snaps to the slider's 0.5 steps (test); `probe-history.ts` uses `GPUTextureUsage`/`GPUBufferUsage`. Help text: what full colour, half colour and the speckle mean; spheres keep colours; fill stays below the stats.
+Verified (RTX 3060, headless Chrome 156): share of pixels in exact full colour on screen (canvas drawn to a 2D canvas, 6 frames) against the share whose change reaches the scale (temporary readback of the two pictures, 8 frames, removed): GI only 0.25% ACES 5.1% / 4.8%, AgX 4.6% / 4.3%, Linear +1 EV 4.7% / 4.2%; full picture 0.25% 0.58% / 0.48%; GI only 1% 0.007% / 0.014%. At 0.25% GI only, 19% of pixels reach half colour or more and 60% change at all. Screenshots in `bench/screenshots/t1.12-debug-views/` (new 7, 8, 9, 10, 11, 13 change 1%, 14 change with history spheres, 15 wipe, 16 upscaler with spheres, 17 light probe grid), all 0 errors. lint, typecheck, `pnpm test` 944/944, `pnpm build:apps`.
+Not verified: the Intel this round; the GPU suite not re-run (no core change since b002f42).
+Next:
+- **Dennis** (replaces the instructions in the entry below): Cornell box, camera still, GI only (indirect), "Change per frame: 0.25%". Full orange or blue = that pixel moved 0.25% or more since the last frame; faint scattered speckle = the picture's own precision, not flicker. Then 1%: what is still coloured moves by 1% a frame. Show the probes by "How settled" (they keep their colours in this view), and the irradiance atlas filled at +2 EV (hide the stats for a bigger atlas). Say whether the flicker is acceptable: that sets the threshold.
+- The probe spheres look speckled through the upscaler; it is the upscaler's reconstruction (same with the old alpha), not this change.
+
 ## 2026-11-06 · T1.12 phase 2b: the viewer's debug views for the flicker eye check · implementer (opus)
 Did (uncommitted; DDGI section of the viewer panel; hover help for each in `apps/viewer/src/ui/help-text.ts`; link keys in `url-state.ts` and the viewer README):
 - **Probe atlas over the picture** (`src/ddgi/atlas-overlay.ts`): irradiance or distance, bottom-right corner or "Fill the picture", one block per layer of probes (lowest first, top left), sharp texels; "Atlas exposure" (stops) for irradiance. Reads the same textures three is lit from.

@@ -13,6 +13,7 @@ import { TECHNIQUE_LABELS, type GiTechniqueId, type TechniqueId, type UpscaleQua
 import { h } from './dom';
 import { DEFAULT_HELP, HELP, type HelpKey } from './help-text';
 import {
+    ATLAS_EV_STEP,
     CHANGE_FULL_SCALE_PERCENTS,
     MAX_ATLAS_EV,
     MAX_BUDGET_MS,
@@ -146,8 +147,6 @@ const GI_CHOICES: readonly GiTechniqueId[] = ['ddgi', 'lpg', 'vxgi'];
 /** The budget slider's step, in milliseconds. */
 const BUDGET_STEP_MS = 0.25;
 
-/** The atlas exposure slider's step, in stops. */
-const ATLAS_EV_STEP = 0.5;
 
 function withHelp<T extends HTMLElement>(element: T, key: HelpKey): T {
     element.dataset.help = HELP[key];

@@ -16,7 +16,7 @@ import {
     ReinhardToneMapping,
     type ToneMapping,
 } from 'three';
-import { float, screenUV, select, uniform, vec4 } from 'three/tsl';
+import { float, renderOutput, screenUV, select, uniform, vec4 } from 'three/tsl';
 import { RenderPipeline, type Node } from 'three/webgpu';
 import type { SceneManifest } from '../../../../scenes/src/manifest';
 import { createRenderer, type RendererBundle } from '../render/create-renderer';
@@ -85,7 +85,8 @@ export class ViewerCore {
     private readonly frameWaiters: Array<(startedAt: number) => void> = [];
     /** When the current set-up of each technique began, by technique, with the generation it belongs to. */
     private readonly prepareStarts = new Map<GiTechnique, { generation: number; startedAt: number }>();
-    private readonly shownNodes = new Map<TechniqueId, Node>();
+    /** What each technique on screen had when the pipeline was built: its picture and its overlay key. */
+    private readonly shownNodes = new Map<TechniqueId, { picture: Node; overlayKey: string | undefined }>();
     private readonly splitUniform = uniform(0.5);
     private readonly lineWidthUniform = uniform(0.002);
     private width = 1;
@@ -98,6 +99,9 @@ export class ViewerCore {
         this.hasTimestamps = bundle.hasTimestamps;
         this.gpuErrors = bundle.gpuErrors;
         this.pipeline = new RenderPipeline(this.renderer);
+        // The output transform (tone mapping, exposure, output colour) is applied per technique in
+        // `rebuildOutput`, so debug overlays can be drawn after it, in display space.
+        this.pipeline.outputColorTransform = false;
         this.pipeline.outputNode = vec4(0, 0, 0, 1);
         this.setToneMapping('aces');
         this.setExposureEv(0);
@@ -334,20 +338,33 @@ export class ViewerCore {
         this.applyUpscale();
         const leftTechnique = this.getTechnique(left);
         leftTechnique.setGiMode(giMode);
-        let output: Node = leftTechnique.outputNode;
+        let output = this.displayNode(leftTechnique);
         if (right) {
             const rightTechnique = this.getTechnique(right);
             rightTechnique.setGiMode(giMode);
             const distanceFromLine = screenUV.x.sub(this.splitUniform).abs();
             const onLine = distanceFromLine.lessThan(this.lineWidthUniform);
-            const side = select(screenUV.x.lessThan(this.splitUniform), leftTechnique.outputNode, rightTechnique.outputNode);
+            const side = select(screenUV.x.lessThan(this.splitUniform), output, this.displayNode(rightTechnique));
             output = select(onLine, vec4(1, 1, 1, float(1)), side);
         }
         this.pipeline.outputNode = output;
         this.pipeline.needsUpdate = true;
         this.shownNodes.clear();
-        this.shownNodes.set(left, leftTechnique.outputNode);
-        if (right) this.shownNodes.set(right, this.getTechnique(right).outputNode);
+        this.shownNodes.set(left, { picture: leftTechnique.outputNode, overlayKey: leftTechnique.overlayKey });
+        if (right) {
+            const rightTechnique = this.getTechnique(right);
+            this.shownNodes.set(right, { picture: rightTechnique.outputNode, overlayKey: rightTechnique.overlayKey });
+        }
+    }
+
+    /**
+     * A technique's picture as the screen shows it: its linear HDR picture through the renderer's
+     * exposure, tone mapping and output colour (`renderOutput`, what the pipeline would otherwise
+     * apply to the whole frame), then its debug overlay, if any, in display space.
+     */
+    private displayNode(technique: GiTechnique): Node {
+        const display = renderOutput(technique.outputNode) as unknown as Node;
+        return technique.overlay ? technique.overlay(display) : display;
     }
 
     // -- display -----------------------------------------------------------
@@ -377,8 +394,12 @@ export class ViewerCore {
     renderFrame(): void {
         if (!this.loaded) return;
         const active = this.activeTechniques();
-        // A technique that rebuilt its graph (upscaler toggled, render target recreated) needs the pipeline rebuilt.
-        if (active.some((technique) => this.shownNodes.get(technique.id) !== technique.outputNode)) this.rebuildOutput();
+        // A technique that rebuilt its graph (upscaler toggled, render target recreated) or changed its overlay needs the pipeline rebuilt.
+        const changed = (technique: GiTechnique): boolean => {
+            const shown = this.shownNodes.get(technique.id);
+            return !shown || shown.picture !== technique.outputNode || shown.overlayKey !== technique.overlayKey;
+        };
+        if (active.some(changed)) this.rebuildOutput();
         for (const technique of active) technique.syncCamera(this.camera);
         for (const technique of active) technique.renderBeforePipeline?.();
         this.pipeline.render();

@@ -743,6 +743,18 @@ export class ViewerApp {
     }
 
     /**
+     * How far down the picture the stats box reaches, as a share of the picture's height (0 while it
+     * is hidden). DDGI's probe atlas stays below it when it fills the picture.
+     */
+    private statsBoxCoverShare(): number {
+        if (!this.statsVisible) return 0;
+        const box = this.stats.element.getBoundingClientRect();
+        const picture = this.canvas.getBoundingClientRect();
+        if (box.height === 0 || picture.height === 0) return 0;
+        return (box.bottom - picture.top) / picture.height;
+    }
+
+    /**
      * The probe legend. By state: each state's colour and, once the GPU has counted them, how many
      * probes are in it. By history: the colour scale from a few updates to the full count.
      */
@@ -784,6 +796,7 @@ export class ViewerApp {
         lines.push(`${stats.triangles.toLocaleString('en')} triangles, ${stats.meshes} meshes`);
         this.panel.setStatus(lines);
         this.automation.ddgiStartup = this.core.ddgi ? { ...this.core.ddgi.startup } : null;
+        this.core.ddgi?.setOverlayTopInset(this.statsBoxCoverShare());
         if (this.url.probes) this.panel.setProbeLegend(this.probeLegend());
         this.alignWithReference();
         this.panel.setReferenceNote(this.referenceNote());

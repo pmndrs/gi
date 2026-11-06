@@ -62,6 +62,14 @@ export interface GiTechnique {
     syncCamera(viewerCamera: PerspectiveCamera): void;
     /** Draws anything the technique wants drawn outside the render pipeline. Called once per frame, after `syncCamera`. */
     renderBeforePipeline?(): void;
+    /**
+     * Optional debug drawing over this technique's picture in display space: `display` is the picture
+     * after tone mapping and output colour (what the screen shows, 0 to 1), so the overlay's colours
+     * reach the screen exactly. The viewer builds it again whenever `overlayKey` changes.
+     */
+    overlay?(display: Node): Node;
+    /** What `overlay` draws, as a string that changes whenever its result would. */
+    readonly overlayKey?: string;
 
     /**
      * Set-up (a probe bake, a re-voxelization) is done in steps that only

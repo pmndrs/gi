@@ -15,34 +15,40 @@
  * lit areas and this one reads higher in shadow, which is how the eye judges.
  *
  * Shown as colour over a dimmed grey copy of the picture: orange where the
- * pixel got brighter, blue where it got darker, full colour at the chosen
- * change (`fullScalePercent`) and above. The colour's weight is
- * (change / full scale)^2.2, so that after the display's sRGB encoding half
- * the full-scale change looks about half as strong (a linear weight of 13%
- * looked like 40%). Colours are divided by the viewer's exposure, so the same
- * change looks the same in every scene.
+ * pixel got brighter, blue where it got darker. It is painted in display
+ * space, after tone mapping and the output colour encoding (`overlay`, called
+ * by the viewer's pipeline), so its colours are exactly what reaches the
+ * screen whatever the tone mapper and exposure: the colour's share is
+ * change / full scale, so full colour means a change of at least the chosen
+ * scale (`fullScalePercent`) and half colour exactly half of it.
+ *
+ * The probe spheres keep their own colours: they mark their pixels with
+ * alpha 0 in the scene target (`probe-spheres.ts`; DDGI's pass clears alpha
+ * to 1), and those pixels show the picture unchanged.
  *
  * The comparison is only meaningful from the same camera: while the camera
  * moves (or right after the view was resized or switched on) there is no
  * colour, only the grey picture.
  *
- * Precision: the scene target is half float, about 0.1% per step, so changes
- * below about 0.1% show as a speckle of single steps.
+ * Precision: the scene target is half float, whose steps are 0.05-0.1% of a
+ * value, so a pixel can't change by less than that. At the 0.25% scale a
+ * single step shows at 20-40% colour: that is the speckle on otherwise still
+ * pixels.
  */
 
 import { HalfFloatType, Matrix4, type PerspectiveCamera } from 'three';
-import { abs, float, max, mix, pow, select, texture, toneMappingExposure, uniform, vec3, vec4 } from 'three/tsl';
+import { abs, dot, float, max, mix, select, texture, toneMappingExposure, uniform, vec3, vec4 } from 'three/tsl';
 import { RenderTarget, type Node, type WebGPURenderer } from 'three/webgpu';
 
-/** Linear colours, chosen to read apart from each other and from grey. */
-const BRIGHTER_COLOR = [1.0, 0.45, 0.05] as const;
-const DARKER_COLOR = [0.1, 0.45, 1.0] as const;
+/** Display colours (what the screen shows, 0 to 1), chosen to read apart from each other and from grey. */
+const BRIGHTER_COLOR = [1.0, 0.6, 0.1] as const;
+const DARKER_COLOR = [0.25, 0.6, 1.0] as const;
 
-/** Undoes the display's gamma for the colour's weight (see the file comment). */
-const PERCEIVED_WEIGHT_POWER = 2.2;
+/** The grey copy of the picture underneath, as a share of its display brightness. */
+const DIMMED_PICTURE = 0.4;
 
-/** The grey copy of the picture underneath, as a share of its brightness. */
-const DIMMED_PICTURE = 0.35;
+/** Rec. 709 luma weights, for the grey copy of the display picture. */
+const LUMA_WEIGHTS = [0.2126, 0.7152, 0.0722] as const;
 
 /**
  * Brightness below which a pixel counts as this dark when dividing, in display units (after
@@ -86,9 +92,14 @@ export class FrameChangeView {
         this.fullScale.value = percent / 100;
     }
 
-    /** The change picture for `current`, the scene target's (resolved) texture. */
-    node(current: RenderTarget): Node {
-        const now = texture(current.texture).rgb;
+    /**
+     * The change view over `display`, the picture as the screen shows it (after tone mapping and
+     * output colour). `current` is the scene target the picture came from (linear HDR), which the
+     * change is measured on.
+     */
+    overlay(display: Node, current: RenderTarget): Node {
+        const scene = texture(current.texture);
+        const now = scene.rgb;
         const before = texture(this.previous.texture).rgb;
         const brightnessNow = now.r.add(now.g).add(now.b).div(3);
         const brightnessBefore = before.r.add(before.g).add(before.b).div(3);
@@ -97,11 +108,15 @@ export class FrameChangeView {
         // The floor is in display units, so divide it by the exposure to compare it with scene values.
         const divisor = max(brightnessBefore, float(DARKEST_DIVISOR).div(exposure));
         const change = meanDifference.div(divisor);
-        const strength = pow(change.div(this.fullScale).clamp(0, 1), PERCEIVED_WEIGHT_POWER).mul(this.comparable);
+        // Linear in display space: full colour from the scale up, half colour at half of it.
+        const share = change.div(this.fullScale).clamp(0, 1).mul(this.comparable);
         const direction = select(brightnessNow.greaterThanEqual(brightnessBefore), rgbNode(BRIGHTER_COLOR), rgbNode(DARKER_COLOR));
-        const grey = vec3(brightnessNow.mul(DIMMED_PICTURE));
-        const colour = mix(grey, direction.div(exposure), strength);
-        return vec4(colour, float(1)) as unknown as Node;
+        const shown = (display as Node<'vec4'>).rgb;
+        const grey = vec3(dot(shown, rgbNode(LUMA_WEIGHTS)).mul(DIMMED_PICTURE));
+        const changeView = mix(grey, direction, share);
+        // Probe spheres wrote alpha 0 (edges in between, from multisampling): show them as they are.
+        const keepPicture = float(1).sub(scene.a).clamp(0, 1);
+        return vec4(mix(changeView, shown, keepPicture), float(1)) as unknown as Node;
     }
 
     /**

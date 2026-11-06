@@ -20,7 +20,7 @@
  * probe in the same order as the points.
  */
 
-import { Mesh, SphereGeometry } from 'three';
+import { Mesh, NoBlending, SphereGeometry } from 'three';
 import { NodeMaterial, type Node } from 'three/webgpu';
 import { clamp, float, instanceIndex, int, ivec2, log, mix, normalView, positionLocal, select, textureLoad, uniform, varying, vec3, vec4 } from 'three/tsl';
 import { DDGI_DEBUG_COLORS, GI_USER_DATA, PROBE_STATE, wrapGpuTexture, type DebugView } from './library';
@@ -130,7 +130,12 @@ export class ProbeSpheres {
         material.allowOverride = false;
         material.positionNode = positionLocal.mul(radius).add(point.xyz);
         const facing = normalView.z.abs();
-        material.colorNode = vec4(varying(stateColor).mul(float(1 - RIM_DARKENING).add(facing.mul(RIM_DARKENING))), 1);
+        // Alpha 0 marks the spheres' pixels in DDGI's picture, so the change-per-frame view can leave
+        // them in their own colours (frame-change.ts); everything else there is alpha 1. Nothing else
+        // reads that alpha. NoBlending writes the alpha as given: with three's default (NormalBlending)
+        // an opaque material's alpha is forced to 1 (NodeMaterial, builder.isOpaque()).
+        material.blending = NoBlending;
+        material.colorNode = vec4(varying(stateColor).mul(float(1 - RIM_DARKENING).add(facing.mul(RIM_DARKENING))), 0);
         this.material = material;
 
         const mesh = new Mesh(this.geometry, material);
