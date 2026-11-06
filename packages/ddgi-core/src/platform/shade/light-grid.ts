@@ -425,6 +425,23 @@ fn giLightGridStore(cell: u32, slot: u32, light: u32, share: f32) {
     textureStore(giGridPicksOut, vec2u(texel % GI_LIGHT_GRID_TEXTURE_WIDTH, texel / GI_LIGHT_GRID_TEXTURE_WIDTH), vec4u(light, bitcast<u32>(share), 0u, 0u));
 }
 
+// The first pick at or after 'start' that run 'run' hands out (R when none is left).
+fn giLightGridNextPick(firstPickOfCell: u32, start: u32, run: u32) -> u32 {
+    var pick = start;
+    while (pick < GI_LIGHT_GRID_PICKS && giGridPickRun[firstPickOfCell + pick] != run) {
+        pick++;
+    }
+    return pick;
+}
+
+// A pick's place within its run's weight; past every weight (3e38, near the largest f32) when no pick is left.
+fn giLightGridPickPlace(firstPickOfCell: u32, pick: u32) -> f32 {
+    if (pick >= GI_LIGHT_GRID_PICKS) {
+        return 3.0e38;
+    }
+    return giGridPickOffset[firstPickOfCell + pick];
+}
+
 // Loads tile 'tileStart' of the packed lights into workgroup memory. Every
 // thread calls it (it holds barriers): one light each.
 fn giLightGridLoadTile(tileStart: u32, localCount: u32, thread: u32) {
@@ -524,10 +541,9 @@ fn giLightGridBuildCell(
     // stores its share m / (R p) on the first of them and 0 on the rest, so
     // a hit weighs it once (giShadeLocalCandidate).
     let firstPickOfCell = cellSlot * GI_LIGHT_GRID_PICKS;
-    var nextPick = 0u;
-    while (nextPick < GI_LIGHT_GRID_PICKS && giGridPickRun[firstPickOfCell + nextPick] != run) {
-        nextPick++;
-    }
+    var nextPick = giLightGridNextPick(firstPickOfCell, 0u, run);
+    // The next pick's place, kept in a register: pass 2 compares it with every light.
+    var nextPlace = giLightGridPickPlace(firstPickOfCell, nextPick);
     var running = 0.0;
     var lastLit = GI_LIGHT_GRID_NO_LIGHT;
     var lastWeight = 0.0;
@@ -544,17 +560,15 @@ fn giLightGridBuildCell(
             lastWeight = weight;
             var firstPick = 0u;
             var picked = 0u;
-            while (nextPick < GI_LIGHT_GRID_PICKS && giGridPickOffset[firstPickOfCell + nextPick] < running) {
+            while (nextPlace < running) {
                 if (picked == 0u) {
                     firstPick = nextPick;
                 } else {
                     giLightGridStore(cell, nextPick, index, 0.0);
                 }
                 picked++;
-                nextPick++;
-                while (nextPick < GI_LIGHT_GRID_PICKS && giGridPickRun[firstPickOfCell + nextPick] != run) {
-                    nextPick++;
-                }
+                nextPick = giLightGridNextPick(firstPickOfCell, nextPick + 1u, run);
+                nextPlace = giLightGridPickPlace(firstPickOfCell, nextPick);
             }
             if (picked > 0u) {
                 giLightGridStore(cell, firstPick, index, giLightGridShare(picked, weight, cellTotal));

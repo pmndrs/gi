@@ -238,7 +238,7 @@ export interface HitShadingSettings {
      * The most cells the light grid may divide the scene's bounds into
      * (cubic cells, at most 32,768). More cells fit each cell's light picks
      * closer to its hits (less noise) and cost more to build each frame.
-     * Defaults to 4,096.
+     * Defaults to 2,048 (on Sponza, cells of about 2 m: two probe spacings).
      */
     lightGridMaxCells: number;
 }

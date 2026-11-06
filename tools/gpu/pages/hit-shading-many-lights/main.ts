@@ -416,7 +416,7 @@ async function compareScans(device: GPUDevice, platform: GIPlatformImpl, log: (l
         const grid = new PlatformLightGrid(device, platform.kernels, platform.sceneCopy.module, platform.shade.lightFalloff, { label: `many lights ${reduction}`, reduction });
         await grid.prepare();
         const encoder = device.createCommandEncoder();
-        const lookup = grid.encode(encoder, { frame: 12345, bounds: platform.scene.bounds, localLights: LIGHTS, exactLightLimit: 8, maxCells: 4096 });
+        const lookup = grid.encode(encoder, { frame: 12345, bounds: platform.scene.bounds, localLights: LIGHTS, exactLightLimit: 8, maxCells: 2048 });
         device.queue.submit([encoder.finish()]);
         assert(lookup.active, `the ${reduction} grid did not build`);
         const words = await readTexture(device, grid.texture);

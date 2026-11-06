@@ -29,7 +29,7 @@ export const DEFAULT_HIT_SHADING_SETTINGS: Readonly<HitShadingSettings> = {
     maxShadowedLightsPerHit: 4,
     bounceAlbedoCap: 1,
     exactLightLimit: 8,
-    lightGridMaxCells: 4096,
+    lightGridMaxCells: 2048,
 };
 
 /** What hit shading needs to know of the scene's lights each frame, for the light grid. */
