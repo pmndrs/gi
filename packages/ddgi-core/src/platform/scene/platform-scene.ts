@@ -75,7 +75,12 @@ export interface SceneCapacities {
     readonly instances: number;
     readonly meshes: number;
     readonly materials: number;
-    /** 32 is the light count hit shading is designed to keep flat cost up to. */
+    /**
+     * 64 records (4 KB) to start (m2-lights.md §1). Like every table it
+     * doubles when it fills, by reallocating the table buffer: records are
+     * read by index from the same binding, so no kernel is rebuilt (the
+     * `platform-recompiles` page churns 4,096 lights to check it).
+     */
     readonly lights: number;
     /** Words of instance material lists (one per material slot per instance). */
     readonly materialListWords: number;
@@ -87,7 +92,7 @@ export const DEFAULT_SCENE_CAPACITIES: SceneCapacities = {
     instances: 64,
     meshes: 64,
     materials: 64,
-    lights: 32,
+    lights: 64,
     materialListWords: 256,
     vertexWords: 256 * 1024,
 };

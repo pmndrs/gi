@@ -7,6 +7,8 @@
 
 import { describe, expect, it } from 'vitest';
 import type { InstanceHandle, MaterialHandle } from '../contract/handles.ts';
+import type { ColorRGB } from '../contract/math.ts';
+import type { DirectionalLightDescriptor, LightChanges, LightDescriptor, PointLightDescriptor, SpotLightDescriptor } from '../contract/scene.ts';
 import { MAX_LISTED_LIGHT_CHANGES } from './change-log.ts';
 import { PlatformScene, type SceneUpload } from './platform-scene.ts';
 import { transformFrame } from './instance-transforms.ts';
@@ -202,6 +204,58 @@ describe('changes and bounds', () => {
         // Created and destroyed in one frame: nothing happened.
         model.destroyLight(model.createLight({ type: 'point', color: [1, 1, 1], intensity: 1, position: [0, 0, 0], range: 1 }));
         expect(encodeAndSubmit(gpu, scene).changes.lights).toEqual([]);
+    });
+
+    it('round-trips every LightChanges field of each light type through SceneChanges.lights (T2.1 check 2)', () => {
+        // One full state and one changed value per field. The mapped types over each descriptor's
+        // own keys make this fail to compile when the contract gains a field the test doesn't cover.
+        type Fields<Descriptor> = { [Key in Exclude<keyof Descriptor, 'type'>]-?: Descriptor[Key] };
+        const common = { color: [1, 0.9, 0.8] as ColorRGB, intensity: 3, castsShadows: true, group: 1, label: 'first' };
+        const changedCommon = { color: [0.2, 0.4, 1] as ColorRGB, intensity: 7, castsShadows: false, group: 3, label: 'second' };
+        const directional: Fields<DirectionalLightDescriptor> = { ...common, direction: [0, -1, 0], angularRadius: 0.01 };
+        const directionalChanged: Fields<DirectionalLightDescriptor> = { ...changedCommon, direction: [0.6, -0.8, 0], angularRadius: 0.05 };
+        const point: Fields<PointLightDescriptor> = { ...common, position: [1, 2, 3], range: 0, radius: 0.1 };
+        const pointChanged: Fields<PointLightDescriptor> = { ...changedCommon, position: [-4, 0.5, 2], range: 6, radius: 0.3 };
+        const spot: Fields<SpotLightDescriptor> = { ...common, position: [1, 2, 3], direction: [0, -1, 0], range: 8, innerConeAngle: 0.2, outerConeAngle: 0.5, radius: 0.05 };
+        const spotChanged: Fields<SpotLightDescriptor> = { ...changedCommon, position: [2, 3, 4], direction: [0, 0, -1], range: 0, innerConeAngle: 0.4, outerConeAngle: 0.9, radius: 0.2 };
+        const cases: Array<{ type: LightDescriptor['type']; start: Record<string, unknown>; changed: Record<string, unknown> }> = [
+            { type: 'directional', start: directional, changed: directionalChanged },
+            { type: 'point', start: point, changed: pointChanged },
+            { type: 'spot', start: spot, changed: spotChanged },
+        ];
+
+        for (const { type, start, changed } of cases) {
+            const { gpu, scene, model } = setup();
+            let state = { type, ...start } as LightDescriptor;
+            const light = model.createLight(state);
+            const created = encodeAndSubmit(gpu, scene).changes.lights;
+            expect(created).toEqual([expect.objectContaining({ light, before: null, after: state, index: scene.lightIndex(light) })]);
+
+            // One field at a time: before is the whole old state, after the whole new one, and nothing else moved.
+            for (const field of Object.keys(changed)) {
+                const next = { ...state, [field]: changed[field] } as LightDescriptor;
+                model.updateLight(light, { [field]: changed[field] } as LightChanges);
+                const listed = encodeAndSubmit(gpu, scene).changes.lights;
+                expect(listed, `${type}.${field}`).toHaveLength(1);
+                expect(listed[0].light).toBe(light);
+                expect(listed[0].index).toBe(scene.lightIndex(light));
+                expect(listed[0].before, `${type}.${field} before`).toEqual(state);
+                expect(listed[0].after, `${type}.${field} after`).toEqual(next);
+                state = next;
+            }
+
+            // Every field back at once, in one change.
+            const original = { type, ...start } as LightDescriptor;
+            model.updateLight(light, start as LightChanges);
+            const together = encodeAndSubmit(gpu, scene).changes.lights;
+            expect(together).toHaveLength(1);
+            expect(together[0].before).toEqual(state);
+            expect(together[0].after).toEqual(original);
+
+            model.destroyLight(light);
+            const destroyed = encodeAndSubmit(gpu, scene).changes.lights;
+            expect(destroyed).toEqual([expect.objectContaining({ light, before: original, after: null, index: -1 })]);
+        }
     });
 
     it('keeps the old state even when the host edits its arrays in place', () => {

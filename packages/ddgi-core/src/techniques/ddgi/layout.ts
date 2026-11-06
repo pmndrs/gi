@@ -600,7 +600,7 @@ export const MARK_KIND = {
     directionalLight: 1,
     /** The environment changed: every probe, r times the openness factor over six directions. */
     environment: 2,
-    /** A change with no shape (more light changes than are listed): every probe, r as it is. */
+    /** A change with no shape (more light changes than are listed; the far part of many unranged lights changing at once, T2.1): every probe, r as it is. */
     everywhere: 3,
     /**
      * Geometry changed in a region (an object moved, added, removed, shown or

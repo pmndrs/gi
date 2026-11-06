@@ -78,6 +78,31 @@ export const ENVIRONMENT_CHANGE = 1;
 export const OVERFLOW_CHANGE = 1;
 
 /**
+ * Up to this many changes of lights with no range in one frame are each
+ * marked over every probe, against each probe's own light (T2.4b's rule).
+ * Past it the frame's unranged changes are folded (T2.1, DECISIONS
+ * 2026-11-06): each light is marked exactly only within
+ * FOLDED_NEAR_SPACINGS of where it was and where it is, and one entry over
+ * every probe carries a bound on what any of them changes farther away
+ * ({@link foldedFarChange}). So the cost is about one global change plus a
+ * small box per light, instead of one thread per probe per light: 1,024
+ * candles changing at once on Sponza would otherwise be 1,024 x 19,425 =
+ * 20 M threads. 8 is `exactLightLimit`'s count (m2-lights.md §3): a few
+ * lamps stay exact.
+ */
+export const MAX_UNRANGED_LIGHT_ENTRIES = 8;
+
+/**
+ * How far around a folded light (in probe spacings, the largest axis) its
+ * change is marked probe by probe. Beyond it a move of d changes the
+ * light's own irradiance at a probe by a bounded share, about 3d / R, so
+ * the far entry's bound stays small for small moves (a flame's flicker, a
+ * candle drifting), while the probes right next to it, where a move or a
+ * switch matters most, are judged exactly.
+ */
+export const FOLDED_NEAR_SPACINGS = 2;
+
+/**
  * How far past a light's influence box a probe's grid point may lie and
  * still be marked, in spacings: relocation moves probes up to 0.45 spacing
  * off their grid points (DDGI_MAX_OFFSET in wgsl/blend.ts), so half a
@@ -117,7 +142,8 @@ interface GeometryRecord {
 
 const NO_GEOMETRY: GeometryRecord = { regionMin: [0, 0, 0], regionMax: [0, 0, 0], moved: 0, moverBit: 0 };
 
-interface LightRecord {
+/** A light as the kernel reads it (MARK_LIGHT_WORD). */
+export interface LightRecord {
     readonly kind: number;
     readonly position: Vec3;
     readonly direction: Vec3;
@@ -141,7 +167,7 @@ function colourTimesIntensity(light: LightDescriptor): Vec3 {
 }
 
 /** A light as the kernel reads it; cones as the platform's light table writes them (point and directional: every angle inside). */
-function lightRecord(light: LightDescriptor): LightRecord {
+export function lightRecord(light: LightDescriptor): LightRecord {
     const intensity = colourTimesIntensity(light);
     if (light.type === 'directional') {
         return { ...NO_LIGHT, kind: MARK_LIGHT_KIND.directional, direction: normalized(light.direction), intensity };
@@ -216,6 +242,83 @@ function probeBox(grid: ProbeGrid, min: Vec3, max: Vec3): { min: Vec3; size: Vec
     return { min: [low[0], low[1], low[2]], size: [size[0], size[1], size[2]] };
 }
 
+/** Whether a light change is one of a light with no range (a point or spot light with range 0 on either side): T2.4b marks those over every probe. */
+function isUnrangedLocal(change: LightChange): boolean {
+    for (const light of [change.before, change.after]) {
+        if (light && light.type !== 'directional' && !(light.range > 0)) return true;
+    }
+    return false;
+}
+
+function sameVector(a: Vec3, b: Vec3): boolean {
+    return a[0] === b[0] && a[1] === b[1] && a[2] === b[2];
+}
+
+/**
+ * A folded light's change beyond `radius` of both its positions (T2.1): an
+ * upper bound on the relative change of its own unshadowed irradiance
+ * vector there, per colour channel, the largest. Where a channel got weaker
+ * it is measured against what is left, as the kernel does (T2.4b). A
+ * probe's light is this light's plus others', so the relative change of
+ * the probe's whole light is at most the largest such bound over the
+ * changed lights (a weighted average of their changes): one number covers
+ * them all.
+ *
+ * - Colour or intensity alone: |new / old - 1| per channel (old / new - 1
+ *   for a dimming), the same at every distance.
+ * - A point light moved by d < radius: a probe at least `radius` from both
+ *   positions sees its distance change by at most d, so the irradiance by a
+ *   factor between (R / (R + d))^2 and ((R + d) / R)^2, and the direction
+ *   by at most asin(d / R). The vector's change is at most the magnitudes'
+ *   difference plus the smaller magnitude times that angle.
+ * - Anything that can switch the light on or off at a far probe (on from
+ *   black, off to black, a spot's cone or aim changed, a range window set
+ *   or changed, a move of `radius` or more): MAX_GLOBAL_CHANGE.
+ *
+ * Only the direct light is bounded. Its bounce off surfaces near the light
+ * can change more, as with the per-light rule, which also measures direct
+ * light only.
+ */
+export function foldedFarChange(before: LightRecord, after: LightRecord, radius: number): number {
+    const reshaped = before.kind !== after.kind || before.range !== after.range || before.cosInnerCone !== after.cosInnerCone || before.cosOuterCone !== after.cosOuterCone;
+    const moved = Math.hypot(after.position[0] - before.position[0], after.position[1] - before.position[1], after.position[2] - before.position[2]);
+    const reaimed = after.kind === MARK_LIGHT_KIND.spot && (!sameVector(before.direction, after.direction) || moved > 0);
+    if (reshaped || reaimed || before.range > 0 || !(moved < radius)) return MAX_GLOBAL_CHANGE;
+    // The irradiance at the new position over that at the old: its smallest and largest, and the largest turn.
+    const nearer = ((radius + moved) / radius) ** 2;
+    const farther = (radius / (radius + moved)) ** 2;
+    const turn = Math.asin(moved / radius);
+    let largest = 0;
+    for (let channel = 0; channel < 3; channel++) {
+        const old = before.intensity[channel];
+        const next = after.intensity[channel];
+        if (old <= 0 && next <= 0) continue;
+        if (old <= 0 || next <= 0) return MAX_GLOBAL_CHANGE;
+        for (const magnitude of [farther, nearer]) {
+            const now = next * magnitude;
+            const difference = Math.abs(now - old) + Math.min(now, old) * turn;
+            const against = now < old ? now : old;
+            largest = Math.max(largest, difference / against);
+        }
+    }
+    return Math.min(largest, MAX_GLOBAL_CHANGE);
+}
+
+/** A folded light's own box: `radius` around where it was and where it is (T2.1). */
+function foldedNearBox(change: LightChange, grid: ProbeGrid, radius: number): { min: Vec3; size: Vec3 } | null {
+    const min = [Infinity, Infinity, Infinity];
+    const max = [-Infinity, -Infinity, -Infinity];
+    for (const light of [change.before, change.after]) {
+        if (!light || light.type === 'directional') continue;
+        for (let axis = 0; axis < 3; axis++) {
+            min[axis] = Math.min(min[axis], light.position[axis] - radius);
+            max[axis] = Math.max(max[axis], light.position[axis] + radius);
+        }
+    }
+    if (!(min[0] <= max[0])) return null;
+    return probeBox(grid, [min[0], min[1], min[2]], [max[0], max[1], max[2]]);
+}
+
 /**
  * The probe box of a local light's change: its range around where it was and
  * where it is, or every probe for a light with no range.
@@ -255,7 +358,12 @@ function localBox(change: LightChange, grid: ProbeGrid): { min: Vec3; size: Vec3
  * The table for one frame, or null when nothing changed that marks probes
  * (then `ddgi/mark` doesn't run at all).
  *
- * - A point or spot light: one entry, over its influence box.
+ * - A point or spot light: one entry, over its influence box (every probe
+ *   for a light with no range).
+ * - More than MAX_UNRANGED_LIGHT_ENTRIES lights with no range changing in
+ *   one frame (T2.1): each gets one entry over FOLDED_NEAR_SPACINGS around
+ *   it, and one entry over every probe carries the largest of their bounds
+ *   beyond that ({@link foldedFarChange}), served as a global change.
  * - A directional light: one entry over every probe with its r.
  *   **The sun-layer exception goes here.** Once the sun has a layer of its
  *   own (T2.5 with T2.6b), a change of its colour or intensity alone marks
@@ -272,6 +380,11 @@ function localBox(change: LightChange, grid: ProbeGrid): { min: Vec3; size: Vec3
 export function buildMarkTable(changes: SceneChanges, grid: ProbeGrid, movers: MoverBits = NO_MOVERS): MarkTable | null {
     const entries: Entry[] = [];
     const everywhere = { boxMin: [0, 0, 0] as Vec3, boxSize: [grid.counts[0], grid.counts[1], grid.counts[2]] as Vec3, geometry: NO_GEOMETRY };
+    let unranged = 0;
+    for (const change of changes.lights) if (isUnrangedLocal(change)) unranged++;
+    const fold = unranged > MAX_UNRANGED_LIGHT_ENTRIES;
+    const foldedRadius = FOLDED_NEAR_SPACINGS * Math.max(grid.spacing[0], grid.spacing[1], grid.spacing[2]);
+    let foldedChange = 0;
     for (const change of changes.lights) {
         const [before, after] = bothSides(change);
         const directional = change.before?.type === 'directional' || change.after?.type === 'directional';
@@ -283,9 +396,18 @@ export function buildMarkTable(changes: SceneChanges, grid: ProbeGrid, movers: M
             if (globalChange > 0) entries.push({ kind: MARK_KIND.directionalLight, ...everywhere, globalChange, before: beforeFacing, after: afterFacing });
             continue;
         }
+        if (fold && isUnrangedLocal(change)) {
+            foldedChange = Math.max(foldedChange, foldedFarChange(before, after, foldedRadius));
+            const near = foldedNearBox(change, grid, foldedRadius);
+            if (near) entries.push({ kind: MARK_KIND.localLight, boxMin: near.min, boxSize: near.size, globalChange: 0, before, after, geometry: NO_GEOMETRY });
+            continue;
+        }
         const box = localBox(change, grid);
         if (!box) continue;
         entries.push({ kind: MARK_KIND.localLight, boxMin: box.min, boxSize: box.size, globalChange: 0, before, after, geometry: NO_GEOMETRY });
+    }
+    if (foldedChange > 0) {
+        entries.push({ kind: MARK_KIND.everywhere, ...everywhere, globalChange: foldedChange, before: NO_LIGHT, after: NO_LIGHT });
     }
     for (const region of changes.regions) {
         const entry = geometryEntry(region, grid, movers);
