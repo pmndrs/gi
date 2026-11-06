@@ -19,9 +19,10 @@
  * - **a local light:** its unshadowed irradiance vector per colour channel,
  *   `E_c × direction to the light`, before and after (three's falloff, range
  *   window and cone: the light-falloff module hit shading uses, without a
- *   surface cosine). `r_c = |after_c − before_c| / mean_c`, with `mean_c` the
- *   probe's stored mean irradiance in that channel, and
- *   `r = lightChangeScale × max_c r_c × max(visibility, 0.25)`;
+ *   surface cosine). `r_c = lightChangeScale × |after_c − before_c| / mean_c
+ *   × max(visibility, 0.25)`, with `mean_c` the probe's stored mean
+ *   irradiance in that channel; where the light at the probe got weaker,
+ *   against what is left, `r_c / (1 − r_c)`; `r = max_c r_c`;
  * - **a directional light:** `r` from the CPU (the change of its irradiance
  *   vector relative to the old one), times `0.25 + 0.75 × openness` toward
  *   the old and new direction;
@@ -30,9 +31,13 @@
  * - **everywhere:** `r` from the CPU as it is.
  *
  * Then the probe's record (PROBE_HISTORY_WORD in layout.ts):
- * `pendingChange += r`, `urgency = max(urgency, pendingChange)`, and the
- * marked flag. Many entries can mark one probe, so these are atomics. The
- * blend cuts the history from `pendingChange` at the probe's next update.
+ * `pendingChange += r`, `urgency = max(urgency, pendingChange)`, the marked
+ * flag, and once `pendingChange` is over the tolerance, `owed = max(owed, K)`
+ * updates at priority (T2.4b): K for a local change, and after a global
+ * change on a big volume `farProbeUpdates` for probes away from the view
+ * (m2-lights.md §6.4). Many entries can mark one probe, so these are atomics.
+ * The blend cuts the history from `pendingChange` at the probe's next update,
+ * for the updates it was promised.
  * Probes that are off or not updated yet are skipped: off probes owe
  * nothing, and a new probe has no history to cut.
  *
@@ -52,9 +57,12 @@ import {
     MARK_KIND,
     MARK_LIGHT_KIND,
     PROBE_HISTORY_FLAG,
+    PROBE_HISTORY_UPDATES,
     PROBE_HISTORY_WORD,
     PROBE_HISTORY_WORDS,
 } from '../layout.ts';
+import { MAX_GLOBAL_CHANGE } from '../mark-table.ts';
+import { NEAR_CAMERA_WEIGHT } from '../settings.ts';
 import { DDGI_COMMON_WGSL } from './common.ts';
 import type { PhaseBReduction } from './blend.ts';
 
@@ -119,6 +127,11 @@ const DDGI_MARK_ENVIRONMENT: u32 = ${MARK_KIND.environment}u;
 const DDGI_MARK_LIGHT_SPOT: u32 = ${MARK_LIGHT_KIND.spot}u;
 const DDGI_MARK_VISIBILITY_FLOOR: f32 = ${MARK_VISIBILITY_FLOOR};
 const DDGI_MARK_DARK_IRRADIANCE: f32 = ${MARK_DARK_IRRADIANCE};
+// A darkening leaves at least this share of the light, as far as its change is
+// measured (so a light switched off counts as a change of 100x, MAX_GLOBAL_CHANGE).
+const DDGI_MARK_SMALLEST_REMAINDER: f32 = ${1 / MAX_GLOBAL_CHANGE};
+// Keeps ln(rho) finite in ddgiNeededUpdates.
+const DDGI_MARK_SMALLEST_BOUNCE_SHARE: f32 = 0.001;
 // The openness factor for global changes (m2-lights.md §4.2): a probe that
 // sees open sky sees the change directly, one deep inside still gets a quarter.
 const DDGI_OPENNESS_FLOOR: f32 = 0.25;
@@ -130,6 +143,12 @@ const DDGI_HISTORY_SCHEDULE_AND_FLAGS: u32 = ${PROBE_HISTORY_WORD.scheduleAndFla
 const DDGI_HISTORY_MEAN_RED_GREEN: u32 = ${PROBE_HISTORY_WORD.meanRedGreen}u;
 const DDGI_HISTORY_MEAN_BLUE_NOISE: u32 = ${PROBE_HISTORY_WORD.meanBlueNoise}u;
 const DDGI_FLAG_MARKED: u32 = ${PROBE_HISTORY_FLAG.marked}u;
+const DDGI_FLAG_TAKING_CHANGE: u32 = ${PROBE_HISTORY_FLAG.takingChange}u;
+const DDGI_HISTORY_UPDATES: u32 = ${PROBE_HISTORY_WORD.updates}u;
+const DDGI_OWED_SHIFT: u32 = ${PROBE_HISTORY_UPDATES.owedShift}u;
+const DDGI_OWED_MASK: u32 = ${PROBE_HISTORY_UPDATES.owedMask}u;
+// After a global change, probes at least this near the camera's view owe the full K (m2-lights.md §6.4).
+const DDGI_NEAR_CAMERA_WEIGHT: f32 = ${NEAR_CAMERA_WEIGHT};
 
 // One light's state in the table (MARK_LIGHT_WORD in layout.ts). A side that
 // doesn't exist (a light created or destroyed this frame) has intensity 0.
@@ -229,8 +248,15 @@ fn ddgiMarkVisibility(probe: vec3i, direction: vec3f, distance: f32) -> f32 {
     return variance / (variance + excess * excess);
 }
 
+// A change at one probe: r, which cuts its history, and the error it leaves
+// against the new light, which sets how many updates it needs (ddgiNeededUpdates).
+struct DdgiProbeChange {
+    change: f32,
+    againstNew: f32,
+}
+
 // A local light's change at one probe (the file comment).
-fn ddgiMarkLocalChange(entry: DdgiMarkEntry, probe: vec3i, position: vec3f, mean: vec3f) -> f32 {
+fn ddgiMarkLocalChange(entry: DdgiMarkEntry, probe: vec3i, position: vec3f, mean: vec3f) -> DdgiProbeChange {
     let before = ddgiMarkIrradianceVectors(entry.before, position);
     let after = ddgiMarkIrradianceVectors(entry.after, position);
     // Per channel, as vectors: a light that keeps its distance but moves to
@@ -238,10 +264,20 @@ fn ddgiMarkLocalChange(entry: DdgiMarkEntry, probe: vec3i, position: vec3f, mean
     // a colour change at equal brightness changes a channel and not the
     // luminance; a luminance difference would miss both.
     let change = vec3f(length(after[0] - before[0]), length(after[1] - before[1]), length(after[2] - before[2]));
-    let relative = change / max(mean, vec3f(DDGI_MARK_DARK_IRRADIANCE));
     // Visibility toward wherever the light is lit: the larger of the two sides.
     let visibility = max(ddgiMarkLightVisibility(entry.before, probe, position), ddgiMarkLightVisibility(entry.after, probe, position));
-    return ddgi.lightChangeScale * max(relative.r, max(relative.g, relative.b)) * max(visibility, DDGI_MARK_VISIBILITY_FLOOR);
+    let relative = ddgi.lightChangeScale * change / max(mean, vec3f(DDGI_MARK_DARK_IRRADIANCE)) * max(visibility, DDGI_MARK_VISIBILITY_FLOOR);
+    // A darkening is measured against the light that is left: the tolerance
+    // is a share of the new light, and a light halved leaves an error of 100%
+    // of it, not 50% (T2.4b). A brightening stays against the old light, so
+    // both directions are cut at least by the size of the change.
+    let darker = vec3<bool>(length(after[0]) < length(before[0]), length(after[1]) < length(before[1]), length(after[2]) < length(before[2]));
+    let cut = select(relative, relative / max(vec3f(1.0) - relative, vec3f(DDGI_MARK_SMALLEST_REMAINDER)), darker);
+    // Against the new light a brightening by r is r / (1 + r): a lamp switched
+    // on next to a dark probe is a 100% error, which the bounces carry in a
+    // known number of updates, however dark the probe was.
+    let againstNew = select(relative / (vec3f(1.0) + relative), cut, darker);
+    return DdgiProbeChange(max(cut.r, max(cut.g, cut.b)), max(againstNew.r, max(againstNew.g, againstNew.b)));
 }
 
 // Visibility of a local light's position from the probe; 0 for a side that
@@ -284,8 +320,11 @@ fn ddgiMarkGlobalChange(entry: DdgiMarkEntry, probe: vec3i) -> f32 {
 // Adds r to the probe's record: pendingChange += r (a compare-and-swap loop,
 // WGSL has no float atomics), urgency = max(urgency, pendingChange) (r and
 // the sums are never negative, and non-negative floats order like their
-// bits), and the marked flag.
-fn ddgiMarkProbe(probeIndex: u32, change: f32) {
+// bits), and the marked flag. Once the change adds up to more than the
+// tolerance, the probe is owed 'promised' updates at priority (the GPU
+// scheduler keeps the promise; a smaller change cuts nothing, so it isn't
+// worth the budget).
+fn ddgiMarkProbe(probeIndex: u32, change: f32, promised: u32) {
     let base = probeIndex * DDGI_HISTORY_WORDS;
     var old = atomicLoad(&ddgiProbeHistoryWords[base + DDGI_HISTORY_PENDING_CHANGE]);
     var pending = bitcast<f32>(old) + change;
@@ -299,6 +338,62 @@ fn ddgiMarkProbe(probeIndex: u32, change: f32) {
     }
     atomicMax(&ddgiProbeHistoryWords[base + DDGI_HISTORY_URGENCY], bitcast<u32>(pending));
     atomicOr(&ddgiProbeHistoryWords[base + DDGI_HISTORY_SCHEDULE_AND_FLAGS], DDGI_FLAG_MARKED);
+    if (pending > ddgi.changeTolerance) {
+        ddgiOweUpdates(base, promised);
+        atomicOr(&ddgiProbeHistoryWords[base + DDGI_HISTORY_SCHEDULE_AND_FLAGS], DDGI_FLAG_TAKING_CHANGE);
+    }
+}
+
+// owed = max(owed, promised), in bits 16-23 of the updates word, whose low
+// bits (k) other threads don't touch in this dispatch: a compare-and-swap
+// loop, because WGSL has no atomic on part of a word.
+fn ddgiOweUpdates(base: u32, promised: u32) {
+    var old = atomicLoad(&ddgiProbeHistoryWords[base + DDGI_HISTORY_UPDATES]);
+    loop {
+        let owed = (old >> DDGI_OWED_SHIFT) & DDGI_OWED_MASK;
+        if (owed >= promised) {
+            break;
+        }
+        let next = (old & ~(DDGI_OWED_MASK << DDGI_OWED_SHIFT)) | (promised << DDGI_OWED_SHIFT);
+        let swapped = atomicCompareExchangeWeak(&ddgiProbeHistoryWords[base + DDGI_HISTORY_UPDATES], old, next);
+        if (swapped.exchanged) {
+            break;
+        }
+        old = swapped.old_value;
+    }
+}
+
+// Whole updates, 1..255 (the owed count's 8 bits).
+fn ddgiWholeUpdates(updates: f32) -> u32 {
+    return clamp(u32(round(updates)), 1u, DDGI_OWED_MASK);
+}
+
+// How many updates a change promises the probe (m2-lights.md §6.4): for a
+// local change, and for a global one near the camera's view, K, or as many as
+// the bounces need (ddgiNeededUpdates) when that is more; far probes owe
+// fewer after a global change on a big volume (farOwedUpdates is K when that
+// rule is off this frame), and are left noisier and later for it.
+fn ddgiPromisedUpdates(entry: DdgiMarkEntry, probe: vec3i, againstNew: f32) -> u32 {
+    let full = max(ddgiWholeUpdates(ddgi.changeUpdates), ddgiNeededUpdates(againstNew));
+    if (entry.kind == DDGI_MARK_LOCAL_LIGHT || ddgiCameraWeight(probe) >= DDGI_NEAR_CAMERA_WEIGHT) {
+        return full;
+    }
+    return min(full, ddgiWholeUpdates(ddgi.farOwedUpdates));
+}
+
+// The updates a change needs at best (T2.4b): even an update that keeps
+// nothing of the old value (h = 0) bounces its estimate off the field, which
+// still holds the old light, so the error against the new light shrinks by
+// rho (changeBounceShare) an update at most. Within the tolerance after
+// ln(epsilon / error) / ln(rho) of them. On two-room (rho about 0.8) a light
+// halved needs 14, not K = 8.
+fn ddgiNeededUpdates(againstNew: f32) -> u32 {
+    let tolerance = ddgi.changeTolerance;
+    if (!(againstNew > tolerance)) {
+        return 0u;
+    }
+    let bounce = clamp(ddgi.changeBounceShare, DDGI_MARK_SMALLEST_BOUNCE_SHARE, 1.0 - DDGI_MARK_SMALLEST_BOUNCE_SHARE);
+    return min(u32(ceil(log(tolerance / againstNew) / log(bounce))), DDGI_OWED_MASK);
 }
 
 // The probe's stored mean irradiance (written by ddgi/blend).
@@ -325,16 +420,18 @@ fn ddgiMarkThread(thread: u32) -> bool {
     if (data.state != DDGI_STATE_ACTIVE) {
         return false;
     }
-    var change = 0.0;
+    var change = DdgiProbeChange(0.0, 0.0);
     if (entry.kind == DDGI_MARK_LOCAL_LIGHT) {
         change = ddgiMarkLocalChange(entry, probe, ddgiProbePosition(probe, data.offset), ddgiMarkStoredMean(probeIndex));
     } else {
-        change = ddgiMarkGlobalChange(entry, probe);
+        // The CPU's r is already against the new light where the light got weaker (mark-table.ts).
+        let global = ddgiMarkGlobalChange(entry, probe);
+        change = DdgiProbeChange(global, global);
     }
-    if (!(change > 0.0)) {
+    if (!(change.change > 0.0)) {
         return false;
     }
-    ddgiMarkProbe(probeIndex, change);
+    ddgiMarkProbe(probeIndex, change.change, ddgiPromisedUpdates(entry, probe, change.againstNew));
     return true;
 }
 

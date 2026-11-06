@@ -1,0 +1,5 @@
+{
+    "description": "T2.4b checks 1 and 3, the larger step and the steady-change rule: two-room and point-light Cornell lamp switched on and halved at the calibrated batch (shows the next frame, within 5% of settled in 30 frames and stays), the overshoot reported; a sweeping lamp within 5% of re-converged fields at 3 moments; no probe waits more than 2 round-robin passes over a 60 s swing.",
+    "timeoutMs": 1800000,
+    "manual": true
+}

@@ -167,9 +167,31 @@ export const UNIFORM_WORD = {
     changeTolerance: 48,
     changeUpdates: 49,
     lightChangeScale: 50,
+    feedback: 51,
+    priorityCount: 52,
+    scrambleStride: 53,
+    farOwedUpdates: 54,
+    cameraFalloffDistance: 55,
+    cameraPosition: 56,
+    frustumLeft: 60,
+    frustumRight: 64,
+    frustumBottom: 68,
+    frustumTop: 72,
+    frustumNear: 76,
+    frustumFar: 80,
+    changeBounceShare: 84,
 } as const;
-/** 51 words, rounded up to the struct's 16-byte alignment. */
-export const UNIFORM_WORDS = 52;
+/** 85 words, rounded up to the struct's 16-byte alignment. */
+export const UNIFORM_WORDS = 88;
+/** The six frustum planes in UNIFORM_WORD, in the order `frustumPlanes` (camera.ts) returns them. */
+export const FRUSTUM_PLANE_WORDS = [
+    UNIFORM_WORD.frustumLeft,
+    UNIFORM_WORD.frustumRight,
+    UNIFORM_WORD.frustumBottom,
+    UNIFORM_WORD.frustumTop,
+    UNIFORM_WORD.frustumNear,
+    UNIFORM_WORD.frustumFar,
+] as const;
 export const UNIFORM_BYTES = UNIFORM_WORDS * 4;
 /** Words per column of the rotation (vec3f columns padded to 16 bytes). */
 export const MAT3_COLUMN_WORDS = 4;
@@ -195,16 +217,19 @@ export const RAY_RECORD_BYTES = 8;
  * - `lastUpdateSeconds` (f32): the technique's clock at that update;
  * - `updates`: k, its blended updates since it was new, reset or back on, in
  *   the low 16 bits (saturating); updates owed at priority in bits 16-23
- *   (T2.4b's scheduler); the sky transfer's own update count in bits 24-31
+ *   (set by `ddgi/mark` and feedback requests, one taken off by each
+ *   blend); the sky transfer's own update count in bits 24-31
  *   (T2.6b). See {@link PROBE_HISTORY_UPDATES};
  * - `pendingChange` (f32): the relative change of the probe's light since its
  *   last update, added up over `ddgi/mark`'s marks and reset by the blend,
  *   which cuts the history for it. An f32, so many small marks don't round
  *   away;
  * - `urgency` (f32): the largest change since its last update, for the
- *   scheduler (written by `ddgi/mark`, read by T2.4b; reset by the blend);
+ *   scheduler's priority (written by `ddgi/mark` and by feedback requests;
+ *   kept while the probe is owed updates and reset with the last of them);
  * - `scheduleAndFlags`: flags in the low 8 bits ({@link PROBE_HISTORY_FLAG}),
- *   the frame it was last put in the update list in the high 24 (T2.4b);
+ *   the frame it was last put in the update list in the high 24 (the
+ *   scheduler's stamp, so no probe is listed twice in a frame);
  * - `meanRedGreen`, `meanBlueNoise`: the probe's mean irradiance over its
  *   texels (rgb as half floats, `pack2x16float`) and its noise: the root of a
  *   running mean, over quiet updates, of the squared distance between an
@@ -243,8 +268,9 @@ export const PROBE_HISTORY_BYTES = PROBE_HISTORY_WORDS * 4;
 export const PROBE_HISTORY_UPDATES = {
     /** k, saturating here: the ramp only needs k while k / a is under n_max. */
     countMask: 0xffff,
-    /** Updates owed at priority (T2.4b): bits 16-23. */
+    /** Updates owed at priority (T2.4b's scheduler): bits 16-23. */
     owedShift: 16,
+    owedMask: 0xff,
     /** The sky transfer's update count (T2.6b): bits 24-31. */
     transferShift: 24,
 } as const;
@@ -257,23 +283,81 @@ export const PROBE_HISTORY_FLAG = {
     markedBeforeLastUpdate: 1 << 1,
     /** It waits for its key neighbours' change (T2.4c). */
     awaitingChange: 1 << 2,
+    /**
+     * It is taking in a reported change: owed updates since a mark (T2.4b).
+     * Its updates are expected to move, so they neither feed its noise nor
+     * trip the feedback rule (m2-lights.md §4.6). Cleared with the last owed update.
+     */
+    takingChange: 1 << 3,
 } as const;
 /** The flags' share of `scheduleAndFlags`; the scheduled frame (T2.4b) is the rest. */
 export const PROBE_HISTORY_FLAGS_MASK = 0xff;
 
 /**
  * The census buffer (read back a few frames late, for the counters): probes
- * per state (indices are the states), rays traced this frame and the probe
- * marks `ddgi/mark` made this frame (both cleared every frame), then the
- * marks since `prepare` (never cleared, so a test can read the total over a
- * run even though not every frame's census is read back).
+ * per state (indices are the states), rays traced this frame, the probe marks
+ * `ddgi/mark` made this frame and the feedback tests that fired (cleared
+ * every frame), then totals since `prepare` (never cleared, so a test can
+ * read the total over a run even though not every frame's census is read
+ * back), then the scheduler's state.
  */
-export const CENSUS_WORDS = 7;
 export const CENSUS_RAYS_TRACED = 4;
 export const CENSUS_PROBES_MARKED = 5;
-export const CENSUS_PROBES_MARKED_TOTAL = 6;
-/** Words cleared at the start of every frame: all but the running total. */
-export const CENSUS_PER_FRAME_WORDS = 6;
+/** Probe updates whose feedback test fired this frame (`ddgi/blend`, m2-lights.md §4.6). */
+export const CENSUS_FEEDBACK_FIRED = 6;
+/** Words cleared at the start of every frame: those above. */
+export const CENSUS_PER_FRAME_WORDS = 7;
+export const CENSUS_PROBES_MARKED_TOTAL = 7;
+/** Feedback tests that fired since `prepare`, and probe updates blended since `prepare` (never cleared): the share that fired. */
+export const CENSUS_FEEDBACK_FIRED_TOTAL = 8;
+export const CENSUS_PROBES_BLENDED_TOTAL = 9;
+/**
+ * Then a copy of the scheduler's state words 0..SCHEDULE_STATE_REPORTED_WORDS
+ * (SCHEDULE_STATE_WORD), copied in before the census is read back, for the
+ * counters ("probes owed", "probes updated at priority").
+ */
+export const CENSUS_SCHEDULE_STATE = 10;
+export const SCHEDULE_STATE_REPORTED_WORDS = 8;
+export const CENSUS_WORDS = CENSUS_SCHEDULE_STATE + SCHEDULE_STATE_REPORTED_WORDS;
+
+/**
+ * The GPU scheduler's state buffer (wgsl/schedule.ts), one u32 per word:
+ *
+ * - `cursorProbe`: the probe at the round robin's cursor in the scrambled
+ *   order (the order's next entry), kept from frame to frame;
+ * - `aboveTotal`: probes listed this frame from buckets above the boundary
+ *   bucket (all of them fit), written by `ddgi/schedule-select`;
+ * - `aboveSlots`, `boundarySlots`: running counters `ddgi/schedule-write`
+ *   reserves list slots with;
+ * - `boundaryBucket`: the bucket where the priority share fills up, as an
+ *   i32 (−1: every owed probe fits);
+ * - `boundaryRoom`: how many probes of the boundary bucket fit;
+ * - `listed`: probes listed at priority this frame (min(owed, P));
+ * - `owed`: probes owed updates this frame;
+ * - `histogram`: probes per priority bucket (PRIORITY_BUCKETS words).
+ */
+export const SCHEDULE_STATE_WORD = {
+    cursorProbe: 0,
+    aboveTotal: 1,
+    aboveSlots: 2,
+    boundarySlots: 3,
+    boundaryBucket: 4,
+    boundaryRoom: 5,
+    listed: 6,
+    owed: 7,
+    histogram: 8,
+} as const;
+/** Priority buckets, each twice as urgent as the one below (m2-lights.md §4.3). */
+export const PRIORITY_BUCKETS = 32;
+/**
+ * Bucket b holds priorities (urgency × camera weight) in
+ * [2^(b − offset), 2^(b + 1 − offset)); bucket 0 also everything smaller and
+ * the top bucket everything larger. With 20, the buckets span about 1e-6 to
+ * 2,000: urgencies run from the 5% tolerance to MAX_GLOBAL_CHANGE (100), and
+ * camera weights from 1 down to about 0.001 (far and out of view).
+ */
+export const PRIORITY_BUCKET_OFFSET = 20;
+export const SCHEDULE_STATE_WORDS = SCHEDULE_STATE_WORD.histogram + PRIORITY_BUCKETS;
 
 /**
  * `ddgi/mark`'s table (`DdgiMarkTable` in wgsl/mark.ts), written by the CPU

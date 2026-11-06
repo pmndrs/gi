@@ -205,6 +205,8 @@ So a probe updated every frame (Cornell) reaches the cap, `h` ≈ 0.995, a memor
 
 That's applied to T1.12's `n` before the blend's own rule, which then fades and grows it as usual.
 
+*As built (T2.4b, DECISIONS 2026-11-06):* the cut **holds** for the promised updates and is solved with a bounce share ρ (`changeBounceShare`, 0.8): `h = (c − ρ)/(1 − ρ)` with `c = (ε/r)^(1/K)`, and a change promises `max(K, ⌈ln(ε/e)/ln ρ⌉)` updates. The formula above takes each estimate as unbiased, but estimates bounce off a field that still holds the old light; with the count growing back by one an update, two-room's lamp halved was 45% of the step away after 30 frames. A darkening's r is measured against the light that's left. ddgi.md "Change-driven history" has the details.
+
 **The steady-change rule, for changes that keep going** (not to be confused with T1.12's warm-up ramp). A slow, steady change (a lamp gliding, a day passing) moves a probe only a little between two of its updates, so the step rule leaves its history alone, and T1.12's 5 s memory would trail the change by about 5 s of it: about 7° of sun at 1.5° a second. So when a probe was marked before its previous update too (a flag in word 5), the blend also applies
 
 > `n ← min(n, ε / r)`, with `r` the change since its last update,
@@ -267,6 +269,8 @@ The update list moves from the CPU (`UpdateCursor` plus `writeBuffer`) to the GP
 4. **`ddgi/schedule-fill`** (one workgroup): the rest of the list comes from the existing scrambled order, `order[i] = (i × stride) mod N`. A window of `units` consecutive entries holds at most `P` stamped probes, so it always has enough unstamped ones. A running sum over the window picks them, and the cursor (now one GPU word) moves past the entries used.
 
 Cost: four dispatches of a few µs each, plus one thread per probe. Estimate: under 0.05 ms on the RTX at 20,000 probes. They run every frame: the CPU can't see on the GPU whether probes are still owed, and skipping them would leave owed probes stranded (a Sponza-wide change keeps probes owed for hundreds of frames).
+
+*As built (T2.4b):* one pass `ddgi/schedule` of the four dispatches, 0.020–0.027 ms at 20,000 probes on the RTX (VALID); the fill's scan is subgroups first when the device lays subgroups out in order (checked in the kernel), else in workgroup memory. Every listed probe is stamped, the round robin's too. A probe's urgency stays while it is owed updates.
 
 **What the budget buys.** With `U` probes per frame (the rates section), a window of `W` frames and K owed updates, at most `P × W / K` changed probes get all their updates in time. With W = 30 and K = 8:
 
@@ -356,6 +360,8 @@ Not every change is reported: an emissive texture a host animates without tellin
 - The blend already computes the probe's mean irradiance. It looks at how far this update's estimate sits from the stored mean, `|Δmean| / (1 − h)` (the blend moves the mean by `1 − h` of that), and compares it with the probe's **noise** `σ`, the root of a running average of the same quantity squared over its quiet updates (history word 7). Dividing by `1 − h` keeps the test fair when `h` changes, after a cut for example.
 - **Marked probes are skipped:** their change is already known and scheduled, and after a global change every probe would otherwise ask for its neighbours too.
 - **If it's above 4σ and above 2% of the mean,** the probe asks for one more update at an urgency of `|Δmean| / mean`, and so do its 6 face neighbours, at half that. So a change nobody reported spreads to the probes around it within a few frames, nearest the camera first.
+
+  - *As built (T2.4b, DECISIONS 2026-11-06):* **6σ**, because DDGI's ray noise has heavy tails (4σ fired on 0.1–0.2% of still updates); the noise word is relative to the mean and averaged over 64 quiet updates; the test skips probes in their warm-up ramp and probes still taking in a reported change.
 - **No race.** The requests go to a separate buffer, one `u32` per probe, written with `atomicMax` on the urgency's bits. The blend never writes another probe's history record (T1.12's blend is race-free because each workgroup writes only its own probe). `ddgi/schedule-count` reads the requests and clears them. Blend goes from 5 storage buffers to 6.
 - **It never touches hysteresis.** Every rule that cut hysteresis from a probe's own noisy estimate biased the field (T1.5b), because bright outliers won. Scheduling an extra update doesn't change how any update is blended. Because the choice depends on the value, a small bias over time is still possible, so T2.4b checks the still-scene mean with feedback on and off.
 - **False triggers:** at 4σ, a Gaussian noise trips about once in 16,000 updates; bright outliers make it more. T2.4b counts it on a still scene; the bar is under 0.1%.
@@ -582,6 +588,8 @@ A change of the sun's direction (or of the sky) marks every probe (section 4.2).
 - the rest owe 2.
 
 This applies only to volumes where 8 updates for every probe wouldn't fit in 2 s at the current rate (`N × 8 / U > 120` frames): Sponza and Bistro's camera volume, not the rooms.
+
+*As built (T2.4b):* with the bounces counted (4.1), two updates leave far probes about ρ² of their error (64% at ρ = 0.8); on Sponza after a 30° sun turn the field's light-weighted error is within 5% in 0.8 s and 1.7% at 3 s, while each far probe stays about 4 points noisier than before the step for a while (12.6% against 8.4%, per-probe relative).
 
 - Two updates bring a far probe within 5% (that's what the history rule in 4.1 gives for K = 2), but it's noisier: it holds about 2 updates' rays instead of 8. Its history then grows by itself with the round robin.
 - When the camera turns toward it, its camera weight raises its priority as usual.

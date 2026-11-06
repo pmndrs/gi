@@ -84,6 +84,15 @@ describe("ddgi/mark's table", () => {
         expect(only.boxSize).toEqual([...grid.counts]);
     });
 
+    it("gives a lamp with no range every probe: its change is judged against each probe's own light (T2.4b)", () => {
+        // A 1 m influence radius, as the change log sets it against a bright sun; with no range the box is the volume anyway.
+        const unranged = change({ type: 'point', color: [1, 1, 1], intensity: 12, position: [2, 2.45, 2], range: 0 }, { type: 'point', color: [1, 1, 1], intensity: 6, position: [2, 2.45, 2], range: 0 }, 1);
+        const table = buildMarkTable({ ...NONE, lights: [unranged] }, grid)!;
+        expect(entry(table, 0).boxMin).toEqual([0, 0, 0]);
+        expect(entry(table, 0).boxSize).toEqual([...grid.counts]);
+        expect(table.threadCount).toBe(grid.probeCount);
+    });
+
     it('marks every probe for a sun change, by the change of its irradiance vector', () => {
         const sun = (intensity: number, direction: [number, number, number]): LightDescriptor => ({ type: 'directional', color: [1, 1, 1], intensity, direction });
         const turned = change(sun(3, [0, -1, 0]), sun(3, [Math.sin(Math.PI / 6), -Math.cos(Math.PI / 6), 0]), Infinity);
@@ -96,8 +105,8 @@ describe("ddgi/mark's table", () => {
         expect(turn.boxSize).toEqual([...grid.counts]);
         // 30 degrees: the chord 2 sin(15 degrees).
         expect(turn.globalChange).toBeCloseTo(2 * Math.sin(Math.PI / 12), 5);
-        // Half the sun: |1 - new / old|. (Until the sun layer exists, T2.5/T2.6b.)
-        expect(half.globalChange).toBeCloseTo(0.5, 6);
+        // Half the sun, against the light that is left: old / new - 1 = 1 (T2.4b). (Until the sun layer exists, T2.5/T2.6b.)
+        expect(half.globalChange).toBeCloseTo(1, 6);
         expect(on.globalChange).toBe(MAX_GLOBAL_CHANGE);
         // The missing side faces the same way, for the openness test.
         expect(on.before.direction).toEqual(on.after.direction);

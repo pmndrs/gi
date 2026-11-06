@@ -507,7 +507,7 @@ await runThreePage(async ({ device, data, log }) => {
 
     const platform = new GIPlatformImpl(device, { label: 'ddgi sponza accuracy' });
     const volume: DDGIVolumeSettings = { center: manifest.volume.center, size: manifest.volume.size, spacing: manifest.volume.probeSpacing, ...job.ddgi.volume };
-    const ddgi = platform.addTechnique(new DDGITechnique({ ...job.ddgi, volume }));
+    const ddgi = platform.addTechnique(new DDGITechnique({ warmUpPasses: 0, ...job.ddgi, volume }));
     platform.setOutput(ddgi);
     await platform.prepare();
     const threeGI = new ThreeGI(platform, scene, { budget: { units: 0 }, environment: platformSkyEnvironment(manifest) });

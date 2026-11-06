@@ -36,7 +36,7 @@ await runThreePage(async ({ device, renderer, data, log }) => {
     const camera = new PerspectiveCamera(50, 1, 0.1, 100);
     camera.position.set(0, 0, 5);
     const platform = new GIPlatformImpl(device, { label: 'unmarked wgsl' });
-    platform.setOutput(platform.addTechnique(new DDGITechnique({ volume: { center: [0, 0, 0], size: [4, 4, 4], spacing: 1 } })));
+    platform.setOutput(platform.addTechnique(new DDGITechnique({ volume: { center: [0, 0, 0], size: [4, 4, 4], spacing: 1 }, warmUpPasses: 0 })));
     await platform.prepare();
     const threeGI = new ThreeGI(platform, scene, { budget: { units: 0 } });
     threeGI.update(camera);

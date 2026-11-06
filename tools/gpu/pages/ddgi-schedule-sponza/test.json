@@ -1,0 +1,5 @@
+{
+    "description": "T2.4b on Sponza at the calibrated batch (316): a lamp switched on in sunlit Sponza (recall >= 95%); the sun halved (check 2) and turned 30 degrees (check 5: the mean probe error within 5% in 3 s, the view in 0.5 s; far probes owe 2); no probe waits more than 2 round-robin passes while the sun turns for 60 s (check 3). Needs the Sponza download.",
+    "timeoutMs": 3600000,
+    "manual": true
+}

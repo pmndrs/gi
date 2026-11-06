@@ -32,7 +32,7 @@ export async function createHelloScene(
     const platform = new GIPlatformImpl(device, { label: `hello ${sceneId}`, gpuTiming: options.gpuTiming });
     const scene = describeScene(platform.scene, manifest, options);
     const volume = { center: manifest.volume.center, size: manifest.volume.size, spacing: manifest.volume.probeSpacing };
-    const ddgi = platform.addTechnique(new DDGITechnique({ ...options.settings, volume }));
+    const ddgi = platform.addTechnique(new DDGITechnique({ warmUpPasses: 0, ...options.settings, volume }));
     platform.setOutput(ddgi);
     await platform.prepare();
     // A frame with no probe updates places the scene; then wait for the mesh trees and place them.

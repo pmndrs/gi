@@ -324,7 +324,7 @@ await runThreePage(async ({ device, renderer, data, log }) => {
     camera.lookAt(0, 0, 0);
 
     const giPlatform = new GIPlatformImpl(device, { label: 'three environment diffuse' });
-    const ddgi = giPlatform.addTechnique(new DDGITechnique({ volume: { center: [0, 1.25, 0], size: [4, 2, 4], spacing: 0.5 } }));
+    const ddgi = giPlatform.addTechnique(new DDGITechnique({ volume: { center: [0, 1.25, 0], size: [4, 2, 4], spacing: 0.5 }, warmUpPasses: 0 }));
     giPlatform.setOutput(ddgi);
     await giPlatform.prepare();
     const threeGI = new ThreeGI(giPlatform, scene, { budget: { units: 0 }, warn: (message) => log(`warning: ${message}`) });

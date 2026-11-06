@@ -12,6 +12,8 @@ import {
     unitsOnCurve,
     WorkBudget,
     type BudgetReport,
+    type Calibration,
+    type CalibrationMemory,
 } from './work-budget.ts';
 import { FLOOR_MAX_CALIBRATED_SHARE, FLOOR_SWEEP_SECONDS, minProbesPerFrame } from '../techniques/ddgi/settings.ts';
 
@@ -327,6 +329,83 @@ describe('calibration on sustained frames (budget v2, after the review)', () => 
         const run = simulate({ frames: 300, budget: () => ({ gpuMs: 2 }), cost: line, sceneSettling: (frame) => frame <= 100 });
         expect(run.reports.slice(0, 100).every((report) => report.state === 'not calibrated')).toBe(true);
         expect(burstStarts(run)).toEqual([101]);
+    });
+});
+
+describe('the calibration guard (T2.4b)', () => {
+    /** One remembered calibration, as the platform keeps per device and scene. */
+    function memory(): CalibrationMemory & { stored: Calibration | undefined } {
+        const store: { stored: Calibration | undefined } & CalibrationMemory = {
+            stored: undefined,
+            previous: () => store.stored,
+            remember: (calibration) => {
+                store.stored = calibration;
+            },
+        };
+        return store;
+    }
+
+    it('logs every timing a burst took', () => {
+        const run = simulate({ frames: 300, budget: () => ({ gpuMs: 2 }), cost: line, deltaTime: () => 0 });
+        const calibration = run.budget.report.calibration;
+        expect(calibration?.samples.length).toBeGreaterThanOrEqual(2 * CALIBRATION.agreeSamples);
+        expect(calibration?.samples.every((sample) => sample.units > 0 && sample.ms > 0)).toBe(true);
+    });
+
+    it('measures once more when a result is under half of the previous calibration on the device and scene (a forced low sample), and uses the second', () => {
+        const remembered = memory();
+        const first = simulate({ frames: 300, budget: () => ({ gpuMs: 2 }), cost: line, deltaTime: () => 0, workBudget: new WorkBudget(undefined, { memory: remembered }) });
+        const normal = first.budget.report.calibratedUnits ?? 0;
+        expect(within(line(normal), 2, 0.1)).toBe(true);
+        expect(remembered.stored?.units).toBe(normal);
+
+        // A new platform on the same device and scene. Its first burst reads the GPU 4x slow
+        // (a passing state of the GPU, like M1's 26 probes for Sponza); then the clocks are normal.
+        const warnings: string[] = [];
+        let firstBurstDone = false;
+        const second = simulate({
+            frames: 600,
+            budget: () => ({ gpuMs: 2 }),
+            cost: line,
+            deltaTime: () => 0,
+            clockFactor: () => (firstBurstDone ? 1 : 4),
+            // The clocks are back once the guard has spoken (its warning).
+            beforeFrame: () => {
+                if (warnings.length > 0) firstBurstDone = true;
+            },
+            workBudget: new WorkBudget(undefined, { memory: remembered, warn: (message) => warnings.push(message) }),
+        });
+        expect(warnings.length).toBe(1);
+        expect(warnings[0]).toMatch(/under half of the previous calibration/);
+        const calibration = second.budget.report.calibration;
+        expect(calibration?.remeasuredFrom).toBeLessThan(0.5 * normal);
+        expect(within(calibration?.units ?? 0, normal, 0.1)).toBe(true);
+        expect(burstStarts(second).length).toBeGreaterThanOrEqual(1);
+    });
+
+    it('takes the second result whatever it is: a scene that really got slower costs one more burst', () => {
+        const remembered = memory();
+        simulate({ frames: 300, budget: () => ({ gpuMs: 2 }), cost: line, deltaTime: () => 0, workBudget: new WorkBudget(undefined, { memory: remembered }) });
+        const normal = remembered.stored?.units ?? 0;
+        const warnings: string[] = [];
+        // Five times the cost per probe for good.
+        const heavier = (units: number) => 1.2 + 0.025 * units;
+        const run = simulate({ frames: 600, budget: () => ({ gpuMs: 2 }), cost: heavier, deltaTime: () => 0, workBudget: new WorkBudget(undefined, { memory: remembered, warn: (message) => warnings.push(message) }) });
+        expect(warnings.length).toBe(1);
+        const calibration = run.budget.report.calibration;
+        expect(calibration?.measured).toBe(true);
+        expect(calibration?.units).toBeLessThan(0.5 * normal);
+        expect(within(heavier(calibration?.units ?? 0), 2, 0.1)).toBe(true);
+        expect(calibration?.remeasuredFrom).toBeDefined();
+    });
+
+    it("doesn't re-measure a result at or above half of the previous one", () => {
+        const remembered = memory();
+        simulate({ frames: 300, budget: () => ({ gpuMs: 2 }), cost: line, deltaTime: () => 0, workBudget: new WorkBudget(undefined, { memory: remembered }) });
+        const warnings: string[] = [];
+        const run = simulate({ frames: 300, budget: () => ({ gpuMs: 2 }), cost: line, deltaTime: () => 0, clockFactor: () => 1.1, workBudget: new WorkBudget(undefined, { memory: remembered, warn: (message) => warnings.push(message) }) });
+        expect(warnings).toEqual([]);
+        expect(run.budget.report.calibration?.remeasuredFrom).toBeUndefined();
     });
 });
 

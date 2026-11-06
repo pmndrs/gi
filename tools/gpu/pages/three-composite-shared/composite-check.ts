@@ -88,7 +88,7 @@ export async function loadCompositeScene(device: GPUDevice, sceneId: string, opt
     const camera = shotCamera(manifest, options.width, options.height);
     const platform = new GIPlatformImpl(device, { label: `three composite ${sceneId}` });
     const volume = manifest.volume;
-    platform.setOutput(platform.addTechnique(new DDGITechnique({ volume: { center: volume.center, size: volume.size, spacing: volume.probeSpacing } })));
+    platform.setOutput(platform.addTechnique(new DDGITechnique({ volume: { center: volume.center, size: volume.size, spacing: volume.probeSpacing }, warmUpPasses: 0 })));
     await platform.prepare();
     const environment = manifest.environment.type === 'procedural' ? platformSkyEnvironment(manifest) : null;
     const threeGI = new ThreeGI(platform, scene, { budget: { units: 0 }, environment });

@@ -1,11 +1,12 @@
 /**
  * WGSL shared by DDGI's kernels (`ddgi/trace`, `ddgi/blend`, `ddgi/write`,
- * `ddgi/census`): the sampling function and its constants, the uniform
- * block, probe indexing, ray directions and random numbers. Every kernel
+ * `ddgi/census`, `ddgi/mark`, `ddgi/schedule-*`): the sampling function and
+ * its constants, the uniform block, probe indexing, the camera weight, ray
+ * directions and random numbers. Every kernel
  * includes it once; none of it binds anything.
  */
 
-import { FIXED_RAYS, MAX_RAYS_PER_PROBE } from '../settings.ts';
+import { FIXED_RAYS, MAX_RAYS_PER_PROBE, OUT_OF_VIEW_WEIGHT } from '../settings.ts';
 import { DDGI_SAMPLE_WGSL } from './sample.ts';
 
 /** `DdgiUniforms`; its byte layout is `UNIFORM_WORD` in layout.ts (checked by a unit test). */
@@ -53,6 +54,23 @@ struct DdgiUniforms {
     changeTolerance: f32,     // epsilon: what a changed probe's history is cut for
     changeUpdates: f32,       // K: updates a changed probe is expected to get soon
     lightChangeScale: f32,    // the share of a light's change at a probe the probe is taken to see
+    // The GPU scheduler (docs/design/m2-lights.md §4.3, §4.6, §6.4).
+    feedback: u32,            // 0: the feedback rule is off
+    priorityCount: u32,       // P: at most this many probes of the list go to probes owed updates
+    scrambleStride: u32,      // the round robin's order: order[i] = (i * stride) mod probe count
+    farOwedUpdates: f32,      // updates far probes owe after a global change this frame (K when the rule is off)
+    cameraFalloffDistance: f32, // the camera weight's falloff: 4 spacings
+    cameraPosition: vec4f,    // xyz: the camera; w: how far outside the frustum still counts as in view
+    // The view's planes, xyz pointing inwards and normalised, w the offset:
+    // a point p is inside when dot(xyz, p) + w >= 0 for all six.
+    frustumLeft: vec4f,
+    frustumRight: vec4f,
+    frustumBottom: vec4f,
+    frustumTop: vec4f,
+    frustumNear: vec4f,
+    frustumFar: vec4f,
+    // The share of a probe's light taken to come back through the field (rho), for the cut (ddgi/blend).
+    changeBounceShare: f32,
 }
 
 const DDGI_MAX_RAYS: u32 = ${MAX_RAYS_PER_PROBE}u;
@@ -92,6 +110,35 @@ fn ddgiIsOff(state: u32) -> bool {
 
 fn ddgiTracedRays(state: u32) -> u32 {
     return select(ddgi.raysPerProbe, DDGI_FIXED_RAYS, ddgiIsOff(state));
+}
+
+// ---- The camera weight (docs/design/m2-lights.md §4.3) ----
+// SPEC's response target is judged on the image, and nearby, visible probes
+// are what the image shows, so the scheduler serves them first (Lumen's
+// priority does the same). Used by ddgi/schedule-* and by ddgi/mark (which
+// probes count as near after a global change).
+
+// A probe outside the view counts this much less.
+const DDGI_OUT_OF_VIEW_WEIGHT: f32 = ${OUT_OF_VIEW_WEIGHT};
+
+// Inside the view's six planes, or within the margin (cameraPosition.w) of
+// them: a probe up to a cell's diagonal outside still lights visible points.
+fn ddgiInView(position: vec3f) -> bool {
+    let margin = -ddgi.cameraPosition.w;
+    let point = vec4f(position, 1.0);
+    return dot(ddgi.frustumLeft, point) >= margin && dot(ddgi.frustumRight, point) >= margin
+        && dot(ddgi.frustumBottom, point) >= margin && dot(ddgi.frustumTop, point) >= margin
+        && dot(ddgi.frustumNear, point) >= margin && dot(ddgi.frustumFar, point) >= margin;
+}
+
+// 1 / (1 + (d / (4 spacings))^2), times DDGI_OUT_OF_VIEW_WEIGHT outside the
+// view. Taken at the probe's grid point: relocation moves it less than half a
+// spacing, which the falloff hardly notices.
+fn ddgiCameraWeight(probe: vec3i) -> f32 {
+    let position = ddgiProbePosition(probe, vec3f(0.0));
+    let scaled = length(position - ddgi.cameraPosition.xyz) / ddgi.cameraFalloffDistance;
+    let weight = 1.0 / (1.0 + scaled * scaled);
+    return select(weight * DDGI_OUT_OF_VIEW_WEIGHT, weight, ddgiInView(position));
 }
 
 // Point i of n spherical Fibonacci points (Keinert et al. 2015): equal-area

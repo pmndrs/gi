@@ -13,8 +13,8 @@
  * `start` (volume-start.ts) makes the platform and DDGI on three's own
  * device, warms the probes up, and switches on the render-time update: from
  * then on GI updates itself inside `renderer.render`, with no per-frame
- * call. `recalibrate()` measures the GPU budget again; `dispose()` removes
- * the GI light and frees the platform. Hosts that want control (several
+ * call. `recalibrate()` measures the GPU budget again; `restart()` starts
+ * the probes over; `dispose()` removes the GI light and frees the platform. Hosts that want control (several
  * techniques, a shared platform) still build it by hand: `ddgiVolume()`
  * gives the DDGI settings, and `ThreeGI` takes `{ volume }`.
  *
@@ -37,10 +37,10 @@
  */
 
 import { AnalyticLightNode, Box3, Light, Vector3, type Node, type Scene, type WebGPURenderer } from 'three/webgpu';
-import type { DDGIVolumeSettings, GIPlatform, Vec3 } from '@pmndrs/ddgi-core';
+import { probeGrid, type DDGIVolumeSettings, type GIPlatform, type Vec3 } from '@pmndrs/ddgi-core';
 import { GI_LIGHT_PRIORITY, type GILight } from './gi-light.ts';
 import type { ThreeGI } from './three-gi.ts';
-import { startVolume, type GIVolumeStartOptions, type StartedGI } from './volume-start.ts';
+import { restartVolume, startVolume, type GIVolumeStartOptions, type StartedGI } from './volume-start.ts';
 
 /** `LightProbeGrid`'s default probe count for an axis: one per unit of length, at least one. */
 function defaultProbes(length: number): number {
@@ -70,6 +70,22 @@ export class GIVolume extends Light {
         this.height = height;
         this.depth = depth;
         this.resolution = new Vector3(widthProbes ?? defaultProbes(width), heightProbes ?? defaultProbes(height), depthProbes ?? defaultProbes(depth));
+    }
+
+    /**
+     * A volume whose probes are exactly DDGI's grid for these settings (a box
+     * and a spacing): `floor(size / spacing) + 1` probes per axis, `spacing`
+     * apart, centred on `center`. For hosts that describe DDGI volumes that
+     * way (the viewer's scene manifests). Its position is `center`.
+     */
+    static fromDDGIVolume(settings: DDGIVolumeSettings): GIVolume {
+        const grid = probeGrid(settings);
+        const [nx, ny, nz] = grid.counts;
+        const [sx, sy, sz] = grid.spacing;
+        const volume = new GIVolume(nx * sx, ny * sy, nz * sz, nx, ny, nz);
+        volume.position.set(settings.center[0], settings.center[1], settings.center[2]);
+        volume.updateMatrixWorld();
+        return volume;
     }
 
     /** The volume's centre: its world position (`matrixWorld` must be current). */
@@ -121,6 +137,17 @@ export class GIVolume extends Light {
             },
         );
         return this.starting;
+    }
+
+    /**
+     * "Start the probes over": forgets the field and the budget's
+     * calibration, and runs `start`'s start-up frames again (the warm-up and
+     * the calibration, volume-start.ts), for after the scene changed a lot.
+     * Resolves when the probes are warm again.
+     */
+    restart(options: Pick<GIVolumeStartOptions, 'budget' | 'warmUp'> = {}): Promise<void> {
+        if (!this.started) throw new Error('@pmndrs/ddgi/three: the GIVolume has no GI yet; await volume.start(renderer, scene) before restarting it.');
+        return restartVolume(this, this.started, options);
     }
 
     /** Whether `start` has finished. */

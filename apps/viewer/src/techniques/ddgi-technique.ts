@@ -8,33 +8,24 @@
  * render, `ThreeGI.update` mirrors scene changes and submits the GI update
  * within the frame budget (2 ms by default).
  *
- * Start-up, in the order the viewer shows it:
+ * Start-up goes through the library's own `GIVolume.start` (T2.4b), the
+ * simple path any three user takes, so the viewer shows what they get. In
+ * the order the viewer shows it:
  *  1. **Preparing:** the platform compiles its kernels (`gi.prepare()`).
  *  2. **Building:** the first update copies the scene into the platform, and
  *     the mesh trees for ray tracing are built in a worker.
- *  3. **Warming up:** up to {@link WARMUP_PASSES} passes over every probe,
- *     as many probes per step as the technique allows, with a running
- *     average instead of the usual hysteresis (below). This is what a game
- *     would do behind its loading screen: at 2 ms a frame Sponza updates
- *     about 45 probes a frame (RTX 3060 at a locked 1200 MHz), so filling
- *     its 19,425 probes from black would take minutes. The warm-up stops
- *     early after {@link WARMUP_MAX_SECONDS} (at least
- *     {@link WARMUP_MIN_PASSES} passes), so a slow GPU isn't kept waiting.
+ *  3. **Warming up:** the DDGI technique's own warm-up (its `warmUpPasses`,
+ *     16 passes over every probe, stopping after 8 s once 2 are done):
+ *     what a game does behind its loading screen, because at 2 ms a frame
+ *     filling Sponza's 19,425 probes from black would take a minute.
  *     Then the platform's calibration (budget v2): frames with the
  *     millisecond budget, GPU-bound (two in flight, so the GPU never waits)
- *     and not paced by the display (at 60 Hz, or with every frame waited
- *     for, the GPU is partly idle and its clocks wander). It ends when the
- *     platform reports it calibrated and confirmed (about 20-170 burst
- *     frames, then 300 confirming frames), or after
- *     {@link CALIBRATION_MAX_STEPS}. "Start the probes over" runs it again
- *     (for after the scene changed).
+ *     and not paced by the display. `start` runs those frames and resolves
+ *     when the platform reports it calibrated and confirmed. "Start the
+ *     probes over" runs them again (`GIVolume.restart`).
  *  4. **Ready:** the calibrated number of probes every frame, and the field
- *     keeps converging live.
- *
- * Why a running average during warm-up: pass k keeps k/(k+1) of the old
- * value, which makes the field the plain mean of every estimate so far, the
- * fastest way to average out ray noise. After 16 passes it is the mean of 16
- * estimates; the normal hysteresis (0.97) then carries on from there.
+ *     keeps converging live. The viewer then runs the GI frames itself
+ *     (`updateOnRender` off), so "GI off" means no GI work at all.
  *
  * Debug views (T1.12), for seeing where noise and error come from:
  *  - the probe spheres, coloured by state or by history (how many updates
@@ -53,15 +44,16 @@ import { AtlasOverlay, type AtlasChoice } from '../ddgi/atlas-overlay';
 import { DdgiDebugMaterial } from '../ddgi/debug-material';
 import { FrameChangeView } from '../ddgi/frame-change';
 import {
-    createGI,
     DDGI_DEBUG_VIEW,
-    DDGITechnique,
+    GIVolume,
     PROBE_STATE_LABELS,
-    ThreeGI,
+    type DDGITechnique,
     type DebugView,
     type EnvironmentDescriptor,
     type FrameBudget,
     type GIPlatform,
+    type StartedGI,
+    type ThreeGI,
 } from '../ddgi/library';
 import { ProbeHistoryTexture } from '../ddgi/probe-history';
 import { ProbeSpheres, type ProbeColorBy } from '../ddgi/probe-spheres';
@@ -109,33 +101,8 @@ export const DEFAULT_DDGI_VIEWER_SETTINGS: DdgiViewerSettings = {
     changeFullScalePercent: null,
 };
 
-/** Full passes over every probe before the frame budget applies (see the file comment). */
-export const WARMUP_PASSES = 16;
-
-/** The warm-up ends after this long even if it hasn't made all its passes (the Intel UHD on Sponza)... */
-const WARMUP_MAX_SECONDS = 8;
-/** ...but not before every probe has been updated this many times, so no probe is left black. */
-const WARMUP_MIN_PASSES = 2;
-
-/** The frame budget while the scene's trees are still being built: no probe updates at all. */
-const PAUSED: FrameBudget = { paused: true };
-
-/** Warm-up steps recorded per batch before the viewer waits for the GPU. Each can be a few thousand probes. */
-const WARMUP_STEPS_PER_BATCH = 4;
-
-/**
- * The calibration frames at the end of the warm-up stop after this many even
- * if the platform is still measuring. It covers the platform's own limits,
- * which aren't part of the package's public surface, so they are copied here
- * (`CALIBRATION` in packages/ddgi-core/src/platform/work-budget.ts): a burst
- * gives up after `maxFrames` (400), and its confirmation ends after twice
- * `confirmFrames` (2 × 300). 400 + 600 = 1,000. Bursts on the test scenes
- * took 20-170 frames, then 300 to confirm.
- */
-const CALIBRATION_MAX_STEPS = 1000;
-
-/** Calibration frames queued at once: the GPU never waits for the CPU between them (see the file comment). */
-const CALIBRATION_FRAMES_IN_FLIGHT = 2;
+/** Set-up steps the viewer records per batch (`pumpPrepare`); `start` runs the real frames itself, so a step only looks at its progress. */
+const PREPARE_STEPS_PER_BATCH = 1;
 
 /** The adapter's warning about area lights. The viewer's emissive quads carry emissive materials, which GI does see, so it is expected. */
 const EXPECTED_WARNING = 'RectAreaLight is not mirrored into GI';
@@ -167,32 +134,32 @@ const STATE_COUNTERS: ReadonlyArray<{ readonly state: number; readonly label: st
 const PROBES_UPDATED_COUNTER = 'probes updated';
 /** The counter DDGI reports how long a pass over every probe takes under (seconds). */
 const SWEEP_COUNTER = 'seconds per full sweep';
+/** The technique's counter of full passes its warm-up has made. */
+const WARM_UP_PASSES_COUNTER = 'warm-up passes';
 
 /** Start-up times, milliseconds from when the technique was created. Null until reached. */
 export interface DdgiStartupTimes {
     preparedMs: number | null;
-    /** The scene copied and its ray-tracing trees built: the first frame with real GI. */
+    /** The scene copied and its ray-tracing trees built: the first frame with real GI (seen at the viewer's next frame). */
     firstGiMs: number | null;
     warmedMs: number | null;
-}
-
-/** The platform's ray-tracing trees, as far as the viewer needs them (see `waitForTrees`). */
-interface TreesBuiltSignal {
-    rays?: { whenBuilt?: () => Promise<void> };
 }
 
 export class DdgiTechnique extends ScenePassTechnique {
     readonly id = 'ddgi';
     readonly label = 'DDGI (ours)';
-    readonly prepareStepsPerBatch = WARMUP_STEPS_PER_BATCH;
+    readonly prepareStepsPerBatch = PREPARE_STEPS_PER_BATCH;
     readonly startup: DdgiStartupTimes = { preparedMs: null, firstGiMs: null, warmedMs: null };
 
-    private readonly platform: GIPlatform;
-    private readonly ddgi: DDGITechnique;
-    private readonly targetHysteresis: number;
+    /** The library's volume on the manifest's probe grid; `start` makes the platform, DDGI and ThreeGI on it. */
+    private readonly volume: GIVolume;
+    /** What `volume.start` made, from the moment it exists (before the warm-up). */
+    private gi: StartedGI | null = null;
     private readonly createdAt = performance.now();
-    private readonly started: Promise<void>;
-    private threeGI: ThreeGI | null = null;
+    /** Resolves once the platform is prepared and ThreeGI exists (the benchmark's `warmUp`). */
+    private readonly created: Promise<void>;
+    /** `volume.start` or `volume.restart` while it runs; null when the probes are warm. */
+    private starting: Promise<void> | null;
     private spheres: ProbeSpheres | null = null;
     private probeHistory: ProbeHistoryTexture | null = null;
     private debugMaterial: DdgiDebugMaterial | null = null;
@@ -202,17 +169,11 @@ export class DdgiTechnique extends ScenePassTechnique {
     private overlayTopInsetShare = 0;
     private settings: DdgiViewerSettings;
     private budget: FrameBudget;
-    private phase: Phase = 'preparing';
     private failure: string | null = null;
     private generation = 0;
-    private warmupProbeUpdates = 0;
-    /** The calibration's own loop of waited frames, while it runs. */
-    private calibrationRun: Promise<void> | null = null;
-    /** When the first warm-up step ran (null until then): the time limit counts warm-up work, not time spent off screen. */
-    private warmupStartedAt: number | null = null;
     private finishedWallMs: number | null = null;
-    /** The platform frame the warm-up ended on: GPU timings from it or before are warm-up work, not normal frames. */
-    private warmupEndFrame = 0;
+    /** The platform frame the start-up ended on: GPU timings from it or before are start-up work, not normal frames. */
+    private warmupEndFrame = Number.POSITIVE_INFINITY;
     private disposed = false;
     private readonly warnings = new Set<string>();
     private readonly snapshot: DdgiStatsSnapshot = {
@@ -237,36 +198,42 @@ export class DdgiTechnique extends ScenePassTechnique {
         // The base class chose layers before the settings existed; choose again with them.
         this.applyLayers();
         const { manifest } = context.loaded;
-        // GPU timing feeds the millisecond budget (the platform turns ms into probes from measured costs) and the stats.
-        this.platform = createGI(context.device, { gpuTiming: context.hasTimestamps, label: `viewer ${manifest.id}` });
-        this.ddgi = this.platform.addTechnique(
-            new DDGITechnique({ volume: { center: manifest.volume.center, size: manifest.volume.size, spacing: manifest.volume.probeSpacing } }),
-        );
-        this.platform.setOutput(this.ddgi);
-        this.targetHysteresis = this.ddgi.settings.hysteresis;
-        this.started = this.start().catch((error: unknown) => this.fail(error));
+        this.volume = GIVolume.fromDDGIVolume({ center: manifest.volume.center, size: manifest.volume.size, spacing: manifest.volume.probeSpacing });
+        // Only DDGI's camera sees the volume (a light in three's terms), as its GI light.
+        this.volume.layers.set(LAYER_DDGI);
+        let created: () => void = () => {};
+        this.created = new Promise<void>((resolve) => (created = resolve));
+        this.starting = this.start(created).catch((error: unknown) => this.fail(error));
     }
 
     // -- set-up ------------------------------------------------------------
 
-    private async start(): Promise<void> {
-        await this.platform.prepare();
-        if (this.disposed) return;
-        this.startup.preparedMs = performance.now() - this.createdAt;
-        this.phase = 'building';
-
-        const { loaded } = this.context;
-        this.threeGI = new ThreeGI(this.platform, loaded.scene, {
-            // No probe work until the ray-tracing trees exist: rays would see through every wall
-            // of a half-built scene to the sky. The warm-up sets the real budget.
-            budget: PAUSED,
+    private async start(created: () => void): Promise<void> {
+        const { loaded, renderer } = this.context;
+        await this.volume.start(renderer, loaded.scene, {
+            budget: this.budget,
             environment: environmentFor(loaded.manifest),
             warn: (message) => this.warn(message),
+            label: `viewer ${loaded.manifest.id}`,
+            onCreated: (started) => {
+                this.attach(started);
+                created();
+            },
         });
+        if (this.disposed) return;
+        this.finishStartUp();
+    }
+
+    /** The platform, DDGI and ThreeGI exist (prepared, before the warm-up): the debug views can be made. */
+    private attach(started: StartedGI): void {
+        if (this.disposed) return;
+        this.gi = started;
+        this.startup.preparedMs = performance.now() - this.createdAt;
+        const { loaded } = this.context;
         // The adapter puts its light on every layer; here only DDGI's camera may see it, so the other
         // techniques in a wipe (and the probe grid's bake cameras on layer 0) get no DDGI light.
         // The adapter keeps the layers when it replaces the light.
-        this.threeGI.light.layers.set(LAYER_DDGI);
+        started.threeGI.light.layers.set(LAYER_DDGI);
 
         const points = this.pointsView;
         if (points) {
@@ -275,45 +242,29 @@ export class DdgiTechnique extends ScenePassTechnique {
             // The history texture has the points texture's shape: probe i at texel (i mod width, i div width).
             this.spheres = new ProbeSpheres(points, loaded.manifest.volume.probeSpacing, {
                 texture: () => history.texture(points.texture().width, points.texture().height),
-                maxSamples: () => this.ddgi.settings.hysteresisMaxSamples,
+                maxSamples: () => started.technique.settings.hysteresisMaxSamples,
             });
             loaded.scene.add(this.spheres.mesh);
         }
-        this.debugMaterial = new DdgiDebugMaterial(this.platform.shading);
-        this.atlasOverlay = new AtlasOverlay(this.platform.shading);
+        this.debugMaterial = new DdgiDebugMaterial(started.platform.shading);
+        this.atlasOverlay = new AtlasOverlay(started.platform.shading);
         this.applyDisplaySettings();
-
-        // The first update copies the scene in and starts the tree builds (still paused).
-        this.threeGI.update(this.camera, 0);
-        await this.waitForTrees();
-        if (this.disposed) return;
-        // Finished trees reach the GPU in the platform's next encode, still with no probe work.
-        this.threeGI.update(this.camera, 0);
-        this.startup.firstGiMs = performance.now() - this.createdAt;
-        this.beginWarmup();
     }
 
-    /**
-     * Waits until the platform has built every mesh tree and the top level. The contract has no
-     * public signal for that yet (reported for the platform), so this reads the platform object's
-     * `rays.whenBuilt()` where it exists, and otherwise goes on at once.
-     */
-    private async waitForTrees(): Promise<void> {
-        const whenBuilt = (this.platform as unknown as TreesBuiltSignal).rays?.whenBuilt;
-        if (whenBuilt) await whenBuilt.call((this.platform as unknown as TreesBuiltSignal).rays);
-    }
-
-    private beginWarmup(): void {
-        this.phase = 'warming';
-        this.calibrationRun = null;
-        this.warmupProbeUpdates = 0;
-        this.warmupStartedAt = null;
-        this.warmupEndFrame = Number.POSITIVE_INFINITY;
+    /** `start` or `restart` resolved: the viewer runs the GI frames from here (`updateOnRender` off). */
+    private finishStartUp(): void {
+        const gi = this.gi;
+        if (!gi) return;
+        gi.threeGI.updateOnRender = false;
+        gi.threeGI.budget = this.budget;
+        this.starting = null;
+        this.warmupEndFrame = gi.platform.stats.frame;
+        this.startup.warmedMs ??= performance.now() - this.createdAt;
     }
 
     private fail(error: unknown): void {
         if (this.disposed) return;
-        this.phase = 'failed';
+        this.starting = null;
         this.failure = error instanceof Error ? error.message : String(error);
         console.error(`DDGI could not start: ${this.failure}`);
     }
@@ -324,8 +275,32 @@ export class DdgiTechnique extends ScenePassTechnique {
         console.warn(`DDGI: ${message}`);
     }
 
+    /** The library's DDGI technique, once `start` made it. */
+    private get ddgi(): DDGITechnique | null {
+        return this.gi?.technique ?? null;
+    }
+
+    private get platform(): GIPlatform | null {
+        return this.gi?.platform ?? null;
+    }
+
+    private get threeGI(): ThreeGI | null {
+        return this.gi?.threeGI ?? null;
+    }
+
+    /** Where start-up is, from what `start` made and the technique's warm-up counters. */
+    private get phase(): Phase {
+        if (this.failure !== null) return 'failed';
+        if (this.starting === null) return 'ready';
+        const ddgi = this.ddgi;
+        if (!ddgi) return 'preparing';
+        if (ddgi.warmingUp) return (ddgi.counters[WARM_UP_PASSES_COUNTER] ?? 0) > 0 ? 'warming' : 'building';
+        return 'calibrating';
+    }
+
     get ready(): boolean {
-        return this.phase === 'ready' || this.phase === 'failed';
+        const phase = this.phase;
+        return phase === 'ready' || phase === 'failed';
     }
 
     /** Past its warm-up: the budget applies, and per-frame numbers mean what they say. */
@@ -348,7 +323,7 @@ export class DdgiTechnique extends ScenePassTechnique {
             case 'building':
                 return 0.05;
             case 'warming':
-                return 0.1 + 0.85 * Math.min(1, this.warmupPasses / WARMUP_PASSES);
+                return 0.1 + 0.85 * Math.min(1, this.warmupPasses / this.warmUpPassesWanted);
             case 'calibrating':
                 return 0.95;
             default:
@@ -357,91 +332,49 @@ export class DdgiTechnique extends ScenePassTechnique {
     }
 
     private get probeCount(): number {
-        return this.ddgi.field?.grid.probeCount ?? 0;
+        return this.ddgi?.field?.grid.probeCount ?? 0;
     }
 
     /** Full passes over every probe the warm-up made (fractional while a pass is under way). */
     get warmupPasses(): number {
-        return this.probeCount > 0 ? this.warmupProbeUpdates / this.probeCount : 0;
+        return this.ddgi?.counters[WARM_UP_PASSES_COUNTER] ?? 0;
+    }
+
+    /** The passes the technique's warm-up makes at most (its `warmUpPasses`). */
+    private get warmUpPassesWanted(): number {
+        return Math.max(1, this.ddgi?.settings.warmUpPasses ?? 1);
     }
 
     /**
-     * One warm-up step: as many probes as the technique takes in a frame, with the
-     * running-average hysteresis; then the calibration steps (see the file comment).
+     * One set-up step. `volume.start` (or `restart`) runs the warm-up's and the calibration's
+     * frames itself, so this only notes how far it got (the first frame with real GI).
      */
     encodePrepareStep(): boolean {
-        if (!this.threeGI) return this.ready;
-        if (this.phase === 'calibrating') return this.encodeCalibrationStep(this.threeGI);
-        if (this.phase !== 'warming') return this.ready;
-        this.warmupStartedAt ??= performance.now();
-        const completedPasses = Math.floor(this.warmupPasses);
-        this.ddgi.settings.hysteresis = Math.min(this.targetHysteresis, completedPasses / (completedPasses + 1));
-        this.threeGI.budget = { units: Math.min(this.probeCount, this.ddgi.settings.maxProbesPerFrame) };
-        this.threeGI.update(this.camera, 0);
-        this.threeGI.budget = this.budget;
-        this.warmupProbeUpdates += this.ddgi.counters[PROBES_UPDATED_COUNTER] ?? 0;
-        const outOfTime = performance.now() - this.warmupStartedAt > WARMUP_MAX_SECONDS * 1000 && this.warmupPasses >= WARMUP_MIN_PASSES;
-        if (this.warmupPasses >= WARMUP_PASSES || outOfTime) {
-            this.ddgi.settings.hysteresis = this.targetHysteresis;
-            this.phase = 'calibrating';
-        }
+        if (this.startup.firstGiMs === null && this.warmupPasses > 0) this.startup.firstGiMs = performance.now() - this.createdAt;
         return this.ready;
     }
 
-    /** While the platform measures the GPU: starts the calibration loop once; later calls wait for it. */
-    private encodeCalibrationStep(threeGI: ThreeGI): boolean {
-        this.calibrationRun ??= this.runCalibration(threeGI, this.generation).catch((error: unknown) => this.fail(error));
-        return this.ready;
-    }
-
-    /**
-     * Frames with the millisecond budget, back to back with two in flight, until the platform has calibrated
-     * (see the file comment). Stops early if the warm-up was restarted meanwhile.
-     */
-    private async runCalibration(threeGI: ThreeGI, generation: number): Promise<void> {
-        threeGI.budget = this.budget;
-        const queued: Promise<void>[] = [];
-        for (let step = 0; step < CALIBRATION_MAX_STEPS; step++) {
-            threeGI.update(this.camera, 0);
-            // No report (paused, no technique) or calibrated and confirmed: done. Without GPU
-            // timestamps the platform never calibrates, and says so at once.
-            const budget = this.platform.stats.counters[this.budgetCounterKey];
-            if (budget?.calibrating !== 1 && budget?.confirming !== 1) break;
-            // Two frames in flight: wait for the one before this, never for this one.
-            queued.push(this.platform.device.queue.onSubmittedWorkDone());
-            if (queued.length >= CALIBRATION_FRAMES_IN_FLIGHT) await queued.shift();
-            // Lets the timestamp read-backs land before the next frame collects them.
-            await new Promise((resolve) => setTimeout(resolve, 0));
-            if (this.disposed || generation !== this.generation || this.phase !== 'calibrating') return;
-        }
-        this.phase = 'ready';
-        this.warmupEndFrame = this.platform.stats.frame;
-        this.startup.warmedMs ??= performance.now() - this.createdAt;
-    }
-
-    /** Where the platform reports DDGI's budget in `stats.counters` (budget v2). */
-    private get budgetCounterKey(): string {
-        return `${this.ddgi.id} budget`;
-    }
-
-    /** "Start the probes over": forget the field and warm up again. */
+    /** "Start the probes over": forget the field and the calibration, and warm up again (`GIVolume.restart`). */
     restartPrepare(): void {
         this.generation++;
         this.finishedWallMs = null;
-        if (this.phase !== 'warming' && this.phase !== 'calibrating' && this.phase !== 'ready') return;
-        this.platform.resetHistory();
-        // Measure the GPU again too: after the scene changed, the old calibration is stale.
-        this.platform.recalibrate();
-        this.beginWarmup();
+        if (this.phase !== 'ready') return;
+        this.warmupEndFrame = Number.POSITIVE_INFINITY;
+        this.starting = this.volume
+            .restart({ budget: this.budget })
+            .then(() => {
+                if (!this.disposed) this.finishStartUp();
+            })
+            .catch((error: unknown) => this.fail(error));
     }
 
     notePrepareFinished(generation: number, wallMs: number): void {
         if (generation === this.generation && this.phase === 'ready') this.finishedWallMs = wallMs;
     }
 
-    /** Waits until the platform is prepared and the trees are built (for the benchmark). */
+    /** Waits until the platform is prepared and DDGI exists (for the benchmark); the warm-up runs on from there. */
     async warmUp(): Promise<void> {
-        await this.started;
+        await Promise.race([this.created, this.starting ?? Promise.resolve()]);
     }
 
     // -- settings ----------------------------------------------------------
@@ -451,8 +384,8 @@ export class DdgiTechnique extends ScenePassTechnique {
         this.settings = { ...settings };
         // A new object: ThreeGI reads its `budget` field every update.
         this.budget = { gpuMs: settings.budgetMs };
-        // Before the warm-up the platform stays paused (see `start`); the warm-up takes the new budget.
-        if (this.threeGI && (this.phase === 'warming' || this.phase === 'calibrating' || this.phase === 'ready')) this.threeGI.budget = this.budget;
+        // While `start` runs it owns the frames, and it takes the budget it was given; later frames take this one.
+        if (this.threeGI && this.phase === 'ready') this.threeGI.budget = this.budget;
         this.applyDisplaySettings();
         if (probesChanged) this.applyLayers();
     }
@@ -472,7 +405,7 @@ export class DdgiTechnique extends ScenePassTechnique {
 
     /** DDGI's `points` debug view (the probe positions and states). */
     private get pointsView(): Extract<DebugView, { kind: 'points' }> | undefined {
-        return this.ddgi.debugViews.find((view): view is Extract<DebugView, { kind: 'points' }> => view.kind === 'points');
+        return this.ddgi?.debugViews.find((view): view is Extract<DebugView, { kind: 'points' }> => view.kind === 'points');
     }
 
     /**
@@ -517,7 +450,7 @@ export class DdgiTechnique extends ScenePassTechnique {
 
     /** Once per frame, after DDGI's update and before anything is drawn: the debug views' inputs. */
     private refreshDebugViews(): void {
-        const field = this.ddgi.field;
+        const field = this.ddgi?.field ?? null;
         const points = this.pointsView;
         if (field && points && this.probeHistory && this.settings.showProbes && this.settings.probeColor === 'history') {
             this.probeHistory.update(field, points.texture().width, points.texture().height);
@@ -575,7 +508,7 @@ export class DdgiTechnique extends ScenePassTechnique {
     // -- reporting ---------------------------------------------------------
 
     describe(): string {
-        const field = this.ddgi.field;
+        const field = this.ddgi?.field ?? null;
         const grid = field ? `${field.grid.probeCount.toLocaleString('en')} probes (${field.grid.counts.join(' x ')}), ${this.context.loaded.manifest.volume.probeSpacing} m apart` : '';
         switch (this.phase) {
             case 'preparing':
@@ -583,13 +516,13 @@ export class DdgiTechnique extends ScenePassTechnique {
             case 'building':
                 return `Starting: copying the scene for ray tracing; ${grid}`;
             case 'warming':
-                return `Warming up ${grid}: pass ${Math.min(WARMUP_PASSES, Math.floor(this.warmupPasses) + 1)} of ${WARMUP_PASSES}`;
+                return `Warming up ${grid}: pass ${Math.min(this.warmUpPassesWanted, Math.floor(this.warmupPasses) + 1)} of ${this.warmUpPassesWanted}`;
             case 'calibrating':
                 return `Warming up ${grid}: measuring how many probes fit in ${this.settings.budgetMs} ms`;
             case 'failed':
                 return `Could not start: ${this.failure}`;
             case 'ready': {
-                const updated = this.ddgi.counters[PROBES_UPDATED_COUNTER] ?? 0;
+                const updated = this.ddgi?.counters[PROBES_UPDATED_COUNTER] ?? 0;
                 const warm = this.finishedWallMs === null ? '' : `; warmed up in ${(this.finishedWallMs / 1000).toFixed(1)} s`;
                 return `${grid}; ${updated.toLocaleString('en')} updated per frame (budget ${this.settings.budgetMs} ms)${warm}`;
             }
@@ -597,23 +530,25 @@ export class DdgiTechnique extends ScenePassTechnique {
     }
 
     describeSettings(): Record<string, number | string> {
-        const field = this.ddgi.field;
+        const ddgi = this.ddgi;
+        const field = ddgi?.field ?? null;
         return {
             probes: field?.grid.probeCount ?? 0,
             probe_grid: field ? field.grid.counts.join('x') : '',
             probe_spacing_m: this.context.loaded.manifest.volume.probeSpacing,
-            rays_per_probe: this.ddgi.settings.raysPerProbe,
+            rays_per_probe: ddgi?.settings.raysPerProbe ?? 0,
             budget_ms: this.settings.budgetMs,
-            warmup_passes: WARMUP_PASSES,
+            warmup_passes: ddgi?.settings.warmUpPasses ?? 0,
         };
     }
 
     /** The latest frame's numbers for the stats overlay, or null before the platform runs. The same object every call. */
     statsSnapshot(): DdgiStatsSnapshot | null {
-        const threeGI = this.threeGI;
-        if (!threeGI) return null;
+        const gi = this.gi;
+        if (!gi) return null;
+        const { threeGI, platform, technique } = gi;
         const snapshot = this.snapshot;
-        const stats = this.platform.stats;
+        const stats = platform.stats;
         snapshot.updatePasses.clear();
         snapshot.platformPasses.clear();
         // Timings arrive a few frames late; right after the warm-up they still describe warm-up frames.
@@ -630,11 +565,11 @@ export class DdgiTechnique extends ScenePassTechnique {
                 target.set(name, (target.get(name) ?? 0) + pass.gpuMs);
             }
         }
-        const counters = this.ddgi.counters;
+        const counters = technique.counters;
         snapshot.probeCount = this.probeCount;
         snapshot.probesUpdated = counters[PROBES_UPDATED_COUNTER] ?? 0;
         snapshot.sweepSeconds = counters[SWEEP_COUNTER] ?? null;
-        snapshot.budget = budgetStats(stats.counters[this.budgetCounterKey], snapshot.budget);
+        snapshot.budget = budgetStats(stats.counters[`${technique.id} budget`], snapshot.budget);
         snapshot.budgetMs = this.settings.budgetMs;
         snapshot.memory = stats.memory;
         snapshot.syncCpuMs = threeGI.timings.syncMs;
@@ -653,13 +588,13 @@ export class DdgiTechnique extends ScenePassTechnique {
 
     /** The most updates a probe's history keeps (`hysteresisMaxSamples`): the "settled" end of the history colours. */
     get historyMaxSamples(): number {
-        return this.ddgi.settings.hysteresisMaxSamples;
+        return this.ddgi?.settings.hysteresisMaxSamples ?? 1;
     }
 
     /** How many probes are in `state` (a `PROBE_STATE` value), from the GPU census; null until it has counted. */
     probeStateCount(state: number): number | null {
         const entry = STATE_COUNTERS.find((candidate) => candidate.state === state);
-        const count = entry ? this.ddgi.counters[entry.counter] : undefined;
+        const count = entry ? this.ddgi?.counters[entry.counter] : undefined;
         return count ?? null;
     }
 
@@ -671,7 +606,7 @@ export class DdgiTechnique extends ScenePassTechnique {
      * fixed budget the same work runs every frame.
      */
     platformGpuMs(): number | null {
-        const passes = this.platform.stats.passes;
+        const passes = this.platform?.stats.passes ?? [];
         if (passes.length === 0) return null;
         let total = 0;
         for (const pass of passes) {
@@ -684,12 +619,19 @@ export class DdgiTechnique extends ScenePassTechnique {
 
     dispose(): void {
         this.disposed = true;
-        this.threeGI?.dispose();
         this.spheres?.dispose();
         this.probeHistory?.dispose();
         this.debugMaterial?.dispose();
         this.frameChange.dispose();
-        this.platform.dispose();
+        // The GI light, ThreeGI and the platform `start` made. While `start` still runs the volume
+        // doesn't hold them yet: free them here, and the start's next frame fails and stops it.
+        if (this.volume.isStarted) {
+            this.volume.dispose();
+        } else {
+            this.gi?.threeGI.dispose();
+            this.gi?.platform.dispose();
+        }
+        this.volume.removeFromParent();
         this.disposeTarget();
     }
 }

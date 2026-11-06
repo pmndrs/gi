@@ -122,6 +122,15 @@ export interface GITechnique<Settings extends object = object> {
      * no floor.
      */
     minUnitsPerFrame?(rate: WorkFloorRate): number;
+    /**
+     * Optional: true while the technique runs its own start-up work, which
+     * ignores the frame's units (DDGI's warm-up: full passes over every
+     * probe behind the host's loading screen, docs/design/ddgi.md). The
+     * platform then hands it no budget and leaves those frames out of the
+     * budget's calibration and cost measurements; the calibration starts at
+     * the first frame after it. Absent means never.
+     */
+    readonly warmingUp?: boolean;
 
     /** Forget accumulated history (a camera cut or a scene swap). */
     resetHistory(): void;
