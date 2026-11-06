@@ -96,8 +96,8 @@ describe("ddgi/mark's table", () => {
         expect(turn.boxSize).toEqual([...grid.counts]);
         // 30 degrees: the chord 2 sin(15 degrees).
         expect(turn.globalChange).toBeCloseTo(2 * Math.sin(Math.PI / 12), 5);
-        // Half the sun: |1 - new / old|. (Until the sun layer exists, T2.5/T2.6b.)
-        expect(half.globalChange).toBeCloseTo(0.5, 6);
+        // Half the sun, against the light that is left: old / new - 1 = 1 (T2.4b). (Until the sun layer exists, T2.5/T2.6b.)
+        expect(half.globalChange).toBeCloseTo(1, 6);
         expect(on.globalChange).toBe(MAX_GLOBAL_CHANGE);
         // The missing side faces the same way, for the openness test.
         expect(on.before.direction).toEqual(on.after.direction);

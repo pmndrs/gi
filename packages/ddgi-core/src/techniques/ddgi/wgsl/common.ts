@@ -69,6 +69,8 @@ struct DdgiUniforms {
     frustumTop: vec4f,
     frustumNear: vec4f,
     frustumFar: vec4f,
+    // The share of a probe's light taken to come back through the field (rho), for the cut (ddgi/blend).
+    changeBounceShare: f32,
 }
 
 const DDGI_MAX_RAYS: u32 = ${MAX_RAYS_PER_PROBE}u;

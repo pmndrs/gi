@@ -1097,6 +1097,7 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         words[UNIFORM_WORD.changeDrivenHistory] = blend.changeDrivenHistory ? 1 : 0;
         data[UNIFORM_WORD.changeTolerance] = blend.changeTolerance;
         data[UNIFORM_WORD.changeUpdates] = blend.changeUpdates;
+        data[UNIFORM_WORD.changeBounceShare] = blend.changeBounceShare;
         data[UNIFORM_WORD.lightChangeScale] = blend.lightChangeScale;
 
         // The scheduler (m2-lights.md §4.3, §6.4).

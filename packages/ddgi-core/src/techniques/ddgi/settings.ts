@@ -93,6 +93,17 @@ export interface DDGISettings {
     /** K, the updates a changed probe is expected to get soon after its change (the GPU scheduler, T2.4b, keeps the promise). */
     changeUpdates: number;
     /**
+     * ρ, the share of a probe's light taken to come back through the field
+     * (bounces), 0..0.95, for how deep a change cuts the history (T2.4b,
+     * docs/design/ddgi.md "Change-driven history"). An update's estimate
+     * bounces off a field that still holds the old light, so its error shrinks
+     * only by h + (1 − h)ρ an update; the cut is solved with it so the probe
+     * is within {@link changeTolerance} after its {@link changeUpdates}
+     * promised updates. Higher: deeper cuts, noisier for a few updates; 0
+     * takes estimates as unbiased (the design's first rule).
+     */
+    changeBounceShare: number;
+    /**
      * How much of a light's change at a probe the probe is taken to see
      * (m2-lights.md §4.2): a probe sees a light only through the surfaces it
      * lights, so its own change is a share of the light's. Tuned in T2.4a
@@ -215,6 +226,16 @@ export const DEFAULT_CHANGE_TOLERANCE = 0.05;
 /** `changeUpdates` by default, K = 8 (m2-lights.md §4.1: at r = 1 the first update keeps 0.30 of the old value, 5% is left after 8). */
 export const DEFAULT_CHANGE_UPDATES = 8;
 /**
+ * `changeBounceShare` by default, ρ = 0.8 (T2.4b, DECISIONS 2026-11-06):
+ * two-room's, measured: after its lamp was halved, with nearly every probe
+ * updated at h ≈ 0 each frame (880 of 1,071), the view's error shrank by
+ * 0.84 a frame, so ρ ≈ (0.84 − 0.18) / 0.82 = 0.80. Cornell's fit is 0.65
+ * (T1.12); open scenes are lower, and get cuts somewhat deeper than they
+ * need. With the design's rule (ρ taken as 0, the count growing back by one
+ * an update) the halving was still 45% of the step away after 30 frames.
+ */
+export const DEFAULT_CHANGE_BOUNCE_SHARE = 0.8;
+/**
  * `lightChangeScale` by default: 0.5, not the design's first guess of 0.25
  * (T2.4a, RTX 3060, `ddgi-change-step`: two-room's lamp moved 2 m, every
  * probe every frame; DECISIONS 2026-11-06). Measured against the two
@@ -294,6 +315,7 @@ export const DEFAULT_DDGI_SETTINGS: Readonly<Omit<DDGISettings, 'volume'>> = {
     changeDrivenHistory: true,
     changeTolerance: DEFAULT_CHANGE_TOLERANCE,
     changeUpdates: DEFAULT_CHANGE_UPDATES,
+    changeBounceShare: DEFAULT_CHANGE_BOUNCE_SHARE,
     lightChangeScale: DEFAULT_LIGHT_CHANGE_SCALE,
     priorityShare: DEFAULT_PRIORITY_SHARE,
     farProbeUpdates: DEFAULT_FAR_PROBE_UPDATES,
@@ -479,6 +501,7 @@ export function blendSettings(settings: DDGISettings): {
     changeDrivenHistory: boolean;
     changeTolerance: number;
     changeUpdates: number;
+    changeBounceShare: number;
     lightChangeScale: number;
     priorityShare: number;
     farProbeUpdates: number;
@@ -506,6 +529,8 @@ export function blendSettings(settings: DDGISettings): {
         // Above 0 and below 1: the cut divides by (r - ε) only when r > ε, and ε = 1 would never cut.
         changeTolerance: clamp(settings.changeTolerance, 1e-4, 0.99, defaults.changeTolerance),
         changeUpdates: clamp(settings.changeUpdates, 1, 1000, defaults.changeUpdates),
+        // Below 1: the cut divides by 1 - rho.
+        changeBounceShare: clamp(settings.changeBounceShare, 0, 0.95, defaults.changeBounceShare),
         lightChangeScale: clamp(settings.lightChangeScale, 0, 1000, defaults.lightChangeScale),
         priorityShare: clamp(settings.priorityShare, 0, 1, defaults.priorityShare),
         // Whole updates, 1..255: the owed count is 8 bits of the history record (PROBE_HISTORY_UPDATES).

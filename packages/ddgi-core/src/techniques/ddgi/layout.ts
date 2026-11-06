@@ -179,9 +179,10 @@ export const UNIFORM_WORD = {
     frustumTop: 72,
     frustumNear: 76,
     frustumFar: 80,
+    changeBounceShare: 84,
 } as const;
-/** 84 words (a multiple of the struct's 16-byte alignment). */
-export const UNIFORM_WORDS = 84;
+/** 85 words, rounded up to the struct's 16-byte alignment. */
+export const UNIFORM_WORDS = 88;
 /** The six frustum planes in UNIFORM_WORD, in the order `frustumPlanes` (camera.ts) returns them. */
 export const FRUSTUM_PLANE_WORDS = [
     UNIFORM_WORD.frustumLeft,

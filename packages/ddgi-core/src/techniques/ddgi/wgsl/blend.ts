@@ -528,13 +528,18 @@ fn ddgiHysteresisStep(history: DdgiProbeHistory, state: u32) -> DdgiHysteresisSt
     let cutHysteresis = select(1.0, limit / (limit + 1.0), limit < DDGI_NO_HISTORY_LIMIT);
     let fixed = select(min(ddgi.hysteresis, cutHysteresis), 0.0, firstUpdate);
     let hysteresis = select(fixed, adaptive, ddgi.adaptiveHysteresis != 0u);
-    let samples = min(remembered + 1.0, ddgi.maxHistorySamples);
     // Saturating at the field's width: the count only matters while k / a is below n_max.
     let nextCount = select(updates + 1u, updates, updates == DDGI_HISTORY_COUNT_MASK);
     // One owed update is taken off; a first update starts with nothing owed
     // (a reset leaves old promises in the record).
     let nextOwed = select(owed - min(owed, 1u), 0u, firstUpdate);
     let takingChange = (flags & DDGI_FLAG_TAKING_CHANGE) != 0u;
+    // The cut holds for the updates a change promised (ddgiChangeLimit):
+    // until the last of them the count doesn't grow back, so every one of
+    // them replaces as much as the first. Then it grows by one an update,
+    // as T1.12's rule has it.
+    let holding = takingChange && nextOwed > 0u;
+    let samples = select(min(remembered + 1.0, ddgi.maxHistorySamples), remembered, holding);
     var next = history;
     next.samples = samples;
     next.lastUpdateSeconds = ddgi.clockSeconds;
@@ -555,18 +560,32 @@ fn ddgiHysteresisStep(history: DdgiProbeHistory, state: u32) -> DdgiHysteresisSt
 }
 
 // The most samples a probe may keep after the changes reported since its
-// last update (docs/design/m2-lights.md §4.1). r is the relative change of
-// its light that ddgi/mark added up, epsilon the tolerance, K the updates it
-// was promised (the scheduler serves them soon):
-// - a step: the error left after K updates is r * n / (n + K); setting that
-//   to epsilon gives n <= epsilon K / (r - epsilon) when r > epsilon, and
-//   nothing for smaller changes;
+// last update (docs/design/m2-lights.md §4.1, as revised in T2.4b). r is the
+// relative change of its light that ddgi/mark added up (against the new
+// light), epsilon the tolerance, K the updates it was promised (the
+// scheduler serves them soon), rho the share of its light that comes back
+// through the field (changeBounceShare):
+// - a step: each held update (the count stays at this limit for the K
+//   updates, ddgiHysteresisStep) leaves h of the error, plus the share of
+//   the new estimate that bounces off the field's own error, (1 - h) rho:
+//   the error shrinks by c = h + (1 - h) rho an update. Within epsilon after
+//   K updates needs c^K r <= epsilon, so h = (c - rho) / (1 - rho) with
+//   c = (epsilon / r)^(1 / K), and n = h / (1 - h); 0 when even h = 0 can't
+//   do it (then the bounces set the pace). Nothing for r <= epsilon.
+//   *Why not the design's n <= epsilon K / (r - epsilon):* that takes each
+//   estimate as unbiased and lets the count grow back by one an update, so
+//   the probe ends up a plain average of estimates that read the old light
+//   through their bounces; their error shrinks only like k^-(1 - rho). On
+//   two-room (every probe nearly every frame) the lamp halved was still 45%
+//   of the step away after 30 frames (PROGRESS 2026-11-06, T2.4b). With
+//   rho = 0 this rule gives h = (epsilon / r)^(1 / K), the unbiased case.
 // - a change that keeps going (marked before its previous update too): it
 //   moves the probe only a little between two updates, so the step rule
 //   alone would leave the history long and the probe trailing the change by
 //   about tau of it; n <= epsilon / r keeps the lag near epsilon.
 // Symmetric on purpose: brighter or darker, the cut is by the size of the
-// change, so a lamp switched on arrives as fast as one switched off.
+// change against the new light, so a lamp switched on arrives as fast as one
+// switched off.
 fn ddgiChangeLimit(pendingChange: f32, flags: u32, promised: f32) -> f32 {
     if (ddgi.changeDrivenHistory == 0u || pendingChange <= 0.0) {
         return DDGI_NO_HISTORY_LIMIT;
@@ -574,7 +593,10 @@ fn ddgiChangeLimit(pendingChange: f32, flags: u32, promised: f32) -> f32 {
     let tolerance = ddgi.changeTolerance;
     var limit = DDGI_NO_HISTORY_LIMIT;
     if (pendingChange > tolerance) {
-        limit = tolerance * promised / (pendingChange - tolerance);
+        let bounce = ddgi.changeBounceShare;
+        let contraction = pow(tolerance / pendingChange, 1.0 / max(promised, 1.0));
+        let hysteresis = max(0.0, (contraction - bounce) / (1.0 - bounce));
+        limit = hysteresis / (1.0 - hysteresis);
     }
     let steady = (flags & DDGI_FLAG_MARKED) != 0u && (flags & DDGI_FLAG_MARKED_BEFORE_LAST_UPDATE) != 0u;
     if (steady) {
@@ -610,7 +632,12 @@ fn ddgiWriteIrradianceTexel(slot: u32, probeIndex: u32, state: u32, texelIndex: 
         hysteresis *= DDGI_BIG_CHANGE_HYSTERESIS_SCALE;
     }
     var blendedValue = mix(estimate, old, hysteresis);
-    if (state != DDGI_STATE_NOT_UPDATED_YET) {
+    // Not for a probe taking in a reported change (T2.4b): the change is
+    // known and real, and the clamp would hold a probe that was dark when a
+    // lamp came on near it to 3x a frame from almost nothing (two-room's lamp
+    // switched on showed nothing for 7 frames).
+    let takingChange = ddgiUpdateKind == DDGI_UPDATE_MARKED;
+    if (state != DDGI_STATE_NOT_UPDATED_YET && !takingChange) {
         // Firefly clamp: one update may change a channel by at most
         // maxBrightnessChange times its old value, so one lucky ray can't
         // flash the probe.

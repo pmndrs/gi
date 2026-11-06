@@ -218,3 +218,93 @@ function normalize(a: Vec3): Vec3 {
     const length = Math.hypot(...a);
     return [a[0] / length, a[1] / length, a[2] / length];
 }
+
+/**
+ * Check 3's census (T2.4b): the longest any probe went without being put in
+ * the update list. A test kernel reads the history's scheduled-frame stamps
+ * (24 bits, PROBE_HISTORY_WORD.scheduleAndFlags) after each frame and keeps
+ * the largest `frame − stamp` over every probe, on the GPU, so a long run on
+ * Sponza needs no read-back per frame. Start it once every probe has been
+ * listed at least once (a stamp of 0 would read as a huge gap).
+ */
+export class ScheduleGapCensus {
+    private constructor(
+        private readonly device: GPUDevice,
+        private readonly kernel: Awaited<ReturnType<GIPlatformImpl['kernels']['computeKernel']>>,
+        private readonly uniforms: GPUBuffer,
+        private readonly result: GPUBuffer,
+        private readonly group: GPUBindGroup,
+        private readonly probeCount: number,
+    ) {}
+
+    static async create(device: GPUDevice, platform: GIPlatformImpl, field: DDGIField): Promise<ScheduleGapCensus> {
+        const layout: GPUBindGroupLayoutDescriptor = {
+            label: 'ddgi test schedule gap',
+            entries: [
+                { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },
+                { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
+                { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
+            ],
+        };
+        const kernel = await platform.kernels.computeKernel({
+            label: 'ddgi test schedule gap',
+            modules: [],
+            code: /* wgsl */ `
+struct GapUniforms { frameStamp: u32, probeCount: u32, spare0: u32, spare1: u32 }
+@group(1) @binding(0) var<uniform> gap: GapUniforms;
+@group(1) @binding(1) var<storage, read> gapHistory: array<u32>;
+// The largest gap, then the probe it was at.
+@group(1) @binding(2) var<storage, read_write> gapResult: array<atomic<u32>, 2>;
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) id: vec3u) {
+    if (id.x >= gap.probeCount) {
+        return;
+    }
+    let stamp = gapHistory[id.x * ${PROBE_HISTORY_WORDS}u + ${PROBE_HISTORY_WORD.scheduleAndFlags}u] >> 8u;
+    let frames = (gap.frameStamp - stamp) & 0xffffffu;
+    let previous = atomicMax(&gapResult[0], frames);
+    if (frames > previous) {
+        atomicStore(&gapResult[1], id.x);
+    }
+}
+`,
+            entryPoint: 'main',
+            ownGroups: [layout],
+        });
+        const uniforms = device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+        const result = device.createBuffer({ size: 8, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST });
+        const group = device.createBindGroup({
+            layout: kernel.ownLayouts[0],
+            entries: [
+                { binding: 0, resource: { buffer: uniforms } },
+                { binding: 1, resource: { buffer: field.probeHistory } },
+                { binding: 2, resource: { buffer: result } },
+            ],
+        });
+        return new ScheduleGapCensus(device, kernel, uniforms, result, group, field.grid.probeCount);
+    }
+
+    /** After the platform's frame `frame` (its `stats.frame`): every probe's gap since it was last listed. */
+    measure(frame: number): void {
+        this.device.queue.writeBuffer(this.uniforms, 0, new Uint32Array([frame & 0xffffff, this.probeCount, 0, 0]));
+        const encoder = this.device.createCommandEncoder({ label: 'ddgi test schedule gap' });
+        const pass = encoder.beginComputePass();
+        this.kernel.bind(pass);
+        pass.setBindGroup(1, this.group);
+        pass.dispatchWorkgroups(Math.ceil(this.probeCount / 64));
+        pass.end();
+        this.device.queue.submit([encoder.finish()]);
+    }
+
+    /** The largest gap measured, in frames, and the probe. */
+    async read(): Promise<{ frames: number; probe: number }> {
+        const values = new Uint32Array(await readBuffer(this.device, this.result, 8));
+        return { frames: values[0], probe: values[1] };
+    }
+
+    dispose(): void {
+        this.uniforms.destroy();
+        this.result.destroy();
+    }
+}

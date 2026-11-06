@@ -122,10 +122,11 @@ function bothSides(change: LightChange): [LightRecord, LightRecord] {
 
 /**
  * A directional light's r (m2-lights.md §4.2): the change of its irradiance
- * vector relative to the old irradiance, per channel, the largest. For a turn
- * alone that is the angle's chord, 2 sin(θ / 2); for a colour or intensity
- * change alone, |1 − new / old| per channel. A channel that was black and
- * isn't any more is MAX_GLOBAL_CHANGE.
+ * vector relative to the old irradiance, per channel, the largest; where the
+ * channel got weaker, relative to the new one (T2.4b). For a turn alone that
+ * is the angle's chord, 2 sin(θ / 2); for a brightening alone new / old − 1,
+ * for a dimming alone old / new − 1, per channel. A channel that was black
+ * and isn't any more is MAX_GLOBAL_CHANGE.
  */
 function directionalChange(before: LightRecord, after: LightRecord): number {
     let largest = 0;
@@ -137,7 +138,10 @@ function directionalChange(before: LightRecord, after: LightRecord): number {
             next * after.direction[1] - old * before.direction[1],
             next * after.direction[2] - old * before.direction[2],
         );
-        const relative = old > 0 ? difference / old : next > 0 ? MAX_GLOBAL_CHANGE : 0;
+        // Where the channel got weaker, against the new light: the tolerance is a share of it,
+        // and a sun halved leaves an error of 100% of it (T2.4b). A dimming alone gives old / new − 1.
+        const against = next < old ? Math.max(next, old / MAX_GLOBAL_CHANGE) : old;
+        const relative = old > 0 ? difference / against : next > 0 ? MAX_GLOBAL_CHANGE : 0;
         largest = Math.max(largest, relative);
     }
     return Math.min(largest, MAX_GLOBAL_CHANGE);
@@ -187,7 +191,7 @@ function localBox(change: LightChange, grid: ProbeGrid): { min: Vec3; size: Vec3
  *   own (T2.5 with T2.6b), a change of its colour or intensity alone marks
  *   nothing: it becomes that layer's weight (m2-lights.md §4.2, §6.1). Until
  *   then such a change is in the field's light, so it marks every probe by
- *   |1 − new / old| per channel, like a turn.
+ *   its change per channel (old / new − 1 for a dimming), like a turn.
  * - The environment: one entry over every probe (ENVIRONMENT_CHANGE). The sky
  *   transfer's exceptions (`skyResidualShare`) are T2.6b's.
  * - More light changes than are listed: one entry over every probe
