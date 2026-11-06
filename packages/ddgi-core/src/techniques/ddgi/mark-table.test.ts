@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { LightHandle } from '../../platform/contract/handles.ts';
-import type { LightDescriptor } from '../../platform/contract/scene.ts';
+import type { LightDescriptor, PointLightDescriptor } from '../../platform/contract/scene.ts';
 import type { LightChange, SceneChanges } from '../../platform/contract/scene-copy.ts';
 import { MARK_ENTRY_WORD, MARK_ENTRY_WORDS, MARK_GEOMETRY_WORD, MARK_GEOMETRY_WORDS, MARK_HEADER_WORDS, MARK_KIND, MARK_LIGHT_KIND, MARK_LIGHT_WORD, MARK_LIGHT_WORDS } from './layout.ts';
 import { buildMarkTable, ENVIRONMENT_CHANGE, FAR_SET_SPACINGS, FOLDED_NEAR_SPACINGS, foldedFarChange, lightRecord, MAX_GLOBAL_CHANGE, MAX_UNRANGED_LIGHT_ENTRIES } from './mark-table.ts';
@@ -100,7 +100,7 @@ describe("ddgi/mark's table", () => {
     });
 
     describe('many lights with no range changing at once (T2.1)', () => {
-        const candle = (position: [number, number, number], intensity = 1, color: [number, number, number] = [1, 0.234, 0]): LightDescriptor => ({ type: 'point', color, intensity, position, range: 0 });
+        const candle = (position: [number, number, number], intensity = 1, color: [number, number, number] = [1, 0.234, 0]): PointLightDescriptor => ({ type: 'point', color, intensity, position, range: 0 });
         // Candles spread through the volume, as in sponza-candles.
         const positions = Array.from({ length: 1024 }, (_, index): [number, number, number] => [0.3 + ((index * 0.618) % 1) * 7.8, 0.2 + ((index * 0.382) % 1) * 2.6, 0.2 + ((index * 0.137) % 1) * 3.8]);
         const radius = FOLDED_NEAR_SPACINGS * 0.5;

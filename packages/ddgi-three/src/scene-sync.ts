@@ -58,7 +58,15 @@
  * - **`markChanged(object)`:** the host's shortcut. The object and everything
  *   under it are checked in the next `update` and join the hot set: added,
  *   moved, edited and removed objects all reach GI in that same update.
- * - **Lights:** every light record every frame (lights are few).
+ * - **Lights** (T2.1, m2-lights.md §1): the first {@link ALWAYS_CHECKED_LIGHTS}
+ *   lights and every directional light are checked every frame; the rest
+ *   share the walk's rules: `lightsPerFrame` of them a frame, round robin,
+ *   and a light found changed (or marked) is checked every frame until it
+ *   has been still for {@link HOT_FRAMES} frames. A scene with a few lamps
+ *   behaves as before; one with 1,024 candles costs 64 + 64 light checks a
+ *   still frame, not 1,024. An unmarked change to a light past the first 64
+ *   is seen within ceil((lights - 64) / lightsPerFrame) frames; a hidden or
+ *   removed one too. `markChanged(light)` sends it the next update.
  * - **Edits:** geometry attribute versions and material values
  *   ({@link MaterialSnapshot}; three bumps `material.version` only on
  *   `needsUpdate`), `editChecksPerFrame` of each a frame, round robin.
@@ -106,6 +114,24 @@ export const DEFAULT_EDIT_CHECKS_PER_FRAME = 8;
 
 /** An object stays in the hot set (checked every frame) until it has been still this many frames: a second at 60 fps. */
 export const HOT_FRAMES = 60;
+
+/**
+ * Lights checked every frame whatever else happens: the first this many in
+ * the order they were found, and every directional light (the sun is picked
+ * from them each frame). A scene with a few lamps sees every light change in
+ * the frame it happens, as before T2.1. 64 is the light table's starting
+ * size (m2-lights.md §1).
+ */
+export const ALWAYS_CHECKED_LIGHTS = 64;
+
+/**
+ * Lights past {@link ALWAYS_CHECKED_LIGHTS} checked per frame, round robin.
+ * A light check costs about as much as an object's (a world matrix and a
+ * few numbers read), so 64 keeps a still frame with 1,024 candles near the
+ * cost of one with 128 lights; an unmarked candle change is seen within
+ * 15 frames (a quarter of a second at 60 fps).
+ */
+export const DEFAULT_LIGHTS_PER_FRAME = 64;
 
 type Attribute = BufferAttribute | InterleavedBufferAttribute;
 
@@ -199,6 +225,15 @@ interface LightRecord {
     seenPass: number;
     /** Where it sits in the light list. */
     listIndex: number;
+    readonly directional: boolean;
+    /** Whether it and its parents were visible when last checked (for picking the sun). */
+    visible: boolean;
+    /** The frame it was last checked in, so no light is checked twice in one update. */
+    checkedFrame: number;
+    /** In the hot list until this frame (checked every frame). */
+    hotUntil: number;
+    hot: boolean;
+    destroyed: boolean;
 }
 
 /** What the last `update` did, for stats and tests. */
@@ -210,6 +245,8 @@ export interface SyncFrameReport {
     materials: number;
     meshes: number;
     lights: number;
+    /** Lights looked at (the first 64 and directional ones, hot ones, and this frame's share of the rest). */
+    lightsChecked: number;
     /** Objects the walk looked at. */
     walked: number;
     /** Objects checked because they were in the hot set or marked changed. */
@@ -225,6 +262,8 @@ export interface SceneSyncOptions {
     readonly objectsPerFrame?: number;
     /** Geometries, and separately materials, checked for edits per frame ({@link DEFAULT_EDIT_CHECKS_PER_FRAME}). */
     readonly editChecksPerFrame?: number;
+    /** Lights past the first {@link ALWAYS_CHECKED_LIGHTS} checked per frame ({@link DEFAULT_LIGHTS_PER_FRAME}). */
+    readonly lightsPerFrame?: number;
 }
 
 /** Zeroes a report in place (no allocation each frame). */
@@ -236,12 +275,13 @@ function resetReport(report: SyncFrameReport): void {
     report.materials = 0;
     report.meshes = 0;
     report.lights = 0;
+    report.lightsChecked = 0;
     report.walked = 0;
     report.hot = 0;
 }
 
 function emptyReport(): SyncFrameReport {
-    return { created: 0, destroyed: 0, transforms: 0, visibility: 0, materials: 0, meshes: 0, lights: 0, walked: 0, hot: 0 };
+    return { created: 0, destroyed: 0, transforms: 0, visibility: 0, materials: 0, meshes: 0, lights: 0, lightsChecked: 0, walked: 0, hot: 0 };
 }
 
 function positiveInteger(value: number | undefined, fallback: number, name: string): number {
@@ -311,6 +351,7 @@ export class SceneSync {
     private readonly environmentSync: EnvironmentSync;
     private readonly objectsPerFrame: number;
     private readonly editChecksPerFrame: number;
+    private readonly lightsPerFrame: number;
 
     private readonly geometries = new Map<BufferGeometry, GeometryRecord>();
     private readonly materials = new Map<Material, MaterialRecord>();
@@ -343,6 +384,12 @@ export class SceneSync {
     /** Arrays beside the maps, walked by index each frame: a Map or Set iterator is an allocation. */
     private readonly objectList: ObjectRecord[] = [];
     private readonly lightList: LightRecord[] = [];
+    /** Directional lights, also in lightList: checked every frame, and the sun is picked from them. */
+    private readonly directionalLights: LightRecord[] = [];
+    /** Lights found changed or marked, checked every frame until still for HOT_FRAMES. */
+    private readonly hotLights: LightRecord[] = [];
+    /** Where the round robin over the lights past ALWAYS_CHECKED_LIGHTS goes on. */
+    private lightCursor = 0;
     private readonly probeGrids: Light[] = [];
     private objectCursor = 0;
 
@@ -400,6 +447,7 @@ export class SceneSync {
         this.environmentSync = new EnvironmentSync(api, options.device, this.warnOnce);
         this.objectsPerFrame = positiveInteger(options.objectsPerFrame, DEFAULT_OBJECTS_PER_FRAME, 'objectsPerFrame');
         this.editChecksPerFrame = positiveInteger(options.editChecksPerFrame, DEFAULT_EDIT_CHECKS_PER_FRAME, 'editChecksPerFrame');
+        this.lightsPerFrame = positiveInteger(options.lightsPerFrame, DEFAULT_LIGHTS_PER_FRAME, 'lightsPerFrame');
     }
 
     /** How many things are mirrored. */
@@ -479,6 +527,8 @@ export class SceneSync {
         for (const record of this.lightList) this.api.destroyLight(record.handle);
         this.lights.clear();
         this.lightList.length = 0;
+        this.directionalLights.length = 0;
+        this.hotLights.length = 0;
         this.hotList.length = 0;
         this.passOrder.length = 0;
         this.marked.clear();
@@ -574,7 +624,7 @@ export class SceneSync {
             if (flags.isBatchedMesh) this.warnOnce('BatchedMesh is not mirrored into GI yet; its objects neither block nor bounce light.');
             else this.visitMesh(object as Mesh, visible, source);
         } else if (flags.isLight) {
-            this.visitLight(object as Light, visible);
+            this.visitLight(object as Light, visible, source);
         } else if (flags.isSkyMesh) {
             if (visible) {
                 this.passSkyMesh = object as unknown as SkyMeshLike;
@@ -1134,8 +1184,12 @@ export class SceneSync {
     // Lights
     // -----------------------------------------------------------------------
 
-    /** A light met by the walk or marked: warnings for kinds GI doesn't mirror, a record for those it does. */
-    private visitLight(light: Light, visible: boolean): void {
+    /**
+     * A light met by the walk or marked: warnings for kinds GI doesn't mirror,
+     * a record for those it does. A marked light joins the hot lights, so
+     * checkLights looks at it in this same update.
+     */
+    private visitLight(light: Light, visible: boolean, source: VisitSource): void {
         const flags = light as ObjectFlags;
         if (flags.isLightProbeGrid) {
             if (!this.probeGrids.includes(light)) this.probeGrids.push(light);
@@ -1156,50 +1210,73 @@ export class SceneSync {
         const existing = this.lights.get(light);
         if (existing) {
             existing.seenPass = this.pass;
+            if (source === 'marked') this.makeLightHot(existing);
             return;
         }
         const descriptor = lightDescriptor(light, visible ? 1 : 0);
         if (!descriptor) return;
         const numbers = new Float64Array(LIGHT_NUMBER_COUNT);
         readLightNumbers(light, visible ? 1 : 0, numbers);
-        const record: LightRecord = { light, handle: this.api.createLight(descriptor), descriptor, numbers, scratch: new Float64Array(LIGHT_NUMBER_COUNT), seenPass: this.pass, listIndex: this.lightList.length };
+        const record: LightRecord = {
+            light,
+            handle: this.api.createLight(descriptor),
+            descriptor,
+            numbers,
+            scratch: new Float64Array(LIGHT_NUMBER_COUNT),
+            seenPass: this.pass,
+            listIndex: this.lightList.length,
+            directional: (light as DirectionalLight).isDirectionalLight === true,
+            visible,
+            // Just read: nothing to check again this update.
+            checkedFrame: this.frame,
+            hotUntil: 0,
+            hot: false,
+            destroyed: false,
+        };
         this.lights.set(light, record);
         this.lightList.push(record);
+        if (record.directional) this.directionalLights.push(record);
         this.report.created++;
     }
 
-    /** Every mirrored light every frame (lights are few): gone, removed; otherwise only changed fields sent. Also picks the sun. */
+    /**
+     * This frame's light checks (the file header): the first
+     * ALWAYS_CHECKED_LIGHTS and every directional light, the hot lights, and
+     * `lightsPerFrame` of the rest, round robin. Then picks the sun from the
+     * directional lights, which are all current.
+     */
     private checkLights(scene: Scene): void {
+        // Backwards, since destroying swaps the last record into the hole.
+        for (let index = Math.min(this.lightList.length, ALWAYS_CHECKED_LIGHTS) - 1; index >= 0; index--) this.checkLight(this.lightList[index], scene);
+        for (let index = this.directionalLights.length - 1; index >= 0; index--) this.checkLight(this.directionalLights[index], scene);
+        const hot = this.hotLights;
+        for (let index = hot.length - 1; index >= 0; index--) {
+            const record = hot[index];
+            if (!record.destroyed) this.checkLight(record, scene);
+            if (record.destroyed || this.frame > record.hotUntil) {
+                record.hot = false;
+                const last = hot.pop()!;
+                if (index < hot.length) hot[index] = last;
+            }
+        }
+        const rest = this.lightList.length - ALWAYS_CHECKED_LIGHTS;
+        for (let count = 0; count < Math.min(rest, this.lightsPerFrame); count++) {
+            // The list can shrink while this runs (a light found removed): wrap on its current length.
+            const remaining = this.lightList.length - ALWAYS_CHECKED_LIGHTS;
+            if (remaining <= 0) break;
+            this.lightCursor = this.lightCursor % remaining;
+            this.checkLight(this.lightList[ALWAYS_CHECKED_LIGHTS + this.lightCursor], scene);
+            this.lightCursor++;
+        }
+
         this.sun = null;
         let sunIlluminance = 0;
-        // Backwards, since destroying swaps the last record into the hole.
-        for (let index = this.lightList.length - 1; index >= 0; index--) {
-            const record = this.lightList[index];
-            const light = record.light;
-            if (!this.placement(light, scene)) {
-                this.destroyLight(record);
-                continue;
-            }
-            const visible = this.placementVisible;
-            // Numbers first: a descriptor (and its arrays) is built only when something changed.
-            readLightNumbers(light, visible ? 1 : 0, record.scratch);
-            if (!sameNumbers(record.scratch, record.numbers)) {
-                [record.numbers, record.scratch] = [record.scratch, record.numbers];
-                const descriptor = lightDescriptor(light, visible ? 1 : 0)!;
-                // A three light never changes type, so the descriptor types always match.
-                const changes = lightChanges(record.descriptor, descriptor);
-                if (changes) {
-                    this.api.updateLight(record.handle, changes);
-                    record.descriptor = descriptor;
-                    this.report.lights++;
-                }
-            }
-            if ((light as DirectionalLight).isDirectionalLight && visible) {
-                const illuminance = light.intensity * luminance(light.color);
-                if (!this.sun || illuminance > sunIlluminance) {
-                    this.sun = light as DirectionalLight;
-                    sunIlluminance = illuminance;
-                }
+        for (const record of this.directionalLights) {
+            if (!record.visible) continue;
+            const illuminance = record.light.intensity * luminance(record.light.color);
+            if (!this.sun || illuminance > sunIlluminance) {
+                this.sun = record.light as DirectionalLight;
+                sunIlluminance = illuminance;
             }
         }
         this.otherProbeLights = 0;
@@ -1210,10 +1287,47 @@ export class SceneSync {
         }
     }
 
+    /** One light, at most once an update: gone, removed; otherwise only changed fields sent, and a changed light turns hot. */
+    private checkLight(record: LightRecord, scene: Scene): void {
+        if (record.checkedFrame === this.frame) return;
+        record.checkedFrame = this.frame;
+        this.report.lightsChecked++;
+        const light = record.light;
+        if (!this.placement(light, scene)) {
+            this.destroyLight(record);
+            return;
+        }
+        const visible = this.placementVisible;
+        record.visible = visible;
+        // Numbers first: a descriptor (and its arrays) is built only when something changed.
+        readLightNumbers(light, visible ? 1 : 0, record.scratch);
+        if (sameNumbers(record.scratch, record.numbers)) return;
+        [record.numbers, record.scratch] = [record.scratch, record.numbers];
+        this.makeLightHot(record);
+        const descriptor = lightDescriptor(light, visible ? 1 : 0)!;
+        // A three light never changes type, so the descriptor types always match.
+        const changes = lightChanges(record.descriptor, descriptor);
+        if (changes) {
+            this.api.updateLight(record.handle, changes);
+            record.descriptor = descriptor;
+            this.report.lights++;
+        }
+    }
+
+    private makeLightHot(record: LightRecord): void {
+        record.hotUntil = this.frame + HOT_FRAMES;
+        if (record.hot) return;
+        record.hot = true;
+        this.hotLights.push(record);
+    }
+
     private destroyLight(record: LightRecord): void {
         this.api.destroyLight(record.handle);
         this.lights.delete(record.light);
         removeFromList(this.lightList, record);
+        if (record.directional) this.directionalLights.splice(this.directionalLights.indexOf(record), 1);
+        // The hot list drops it on its next pass.
+        record.destroyed = true;
         this.report.destroyed++;
     }
 }
