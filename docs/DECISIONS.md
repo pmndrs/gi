@@ -2,7 +2,22 @@
 
 Settled choices, newest first. Each entry is short: the decision, why, and what would make us revisit it. Changing a threshold or target counts as a decision and goes here.
 
-## 2026-11-06
+## 2026-11-07
+
+- **The light grid weighs every point and spot light for every cell, and a hit weighs its cell's 16 picks before it chooses where its shadow rays go** (T2.3 implementer; for the M2 lead's review). m2-lights.md §3 sketched ReGIR's R = 8 reservoirs filled from C = 16 candidates drawn by power, with K of the 8 traced directly.
+  - *Why every light:* with 1,024 candles of one power, 16 random candidates find the candle beside a hit 1.6% of the time, so a point lit mostly by one candle stays noisy. Weighing all of them costs cells × lights a frame (check 3: about 0.1 ms at 2,048 cells and 1,024 lights).
+  - *Why the second stage and R = 16:* measured on check 1's scene (`hit-shading-many-lights`, K = 4, 4,096 cells): K of R = 8 picks traced directly left 94.7% of points within 5% (bar 99%); weighing the 8 at the hit first, 98.4%; R = 16, 99.8%.
+  - *Revisit* for thousands of lights (the build grows with lights × cells): candidate subsets, or Moreau's light tree.
+- **The grid covers the scene's bounds with at most `lightGridMaxCells` cubic cells, default 2,048**, not bounds a technique passes (the design's `gridBounds`): the platform knows the scene's bounds, and a technique would only narrow them. 2,048 cells are about 2 m on Sponza, the design's two probe spacings, and keep the build near 0.1 ms. 4,096 cells cut the noise a frame from 34% to 27% (median, K = 4, check 1's scene) but cost about 0.19 ms. *Revisit* for a large open scene with many lights (Bistro exterior at 2,048 cells: about 5 m a cell).
+- **The grid's shadow rays per hit are their own setting, `lightGridShadowedLightsPerHit`, default 1**; `maxShadowedLightsPerHit` (4) stays the exact path's, so a scene with up to 8 lamps keeps M1's light. *Why 1:* after the second stage K changes the noise little and the cost a lot. On check 1's scene (2,048 cells), the median noise a frame is 41% at K = 1, 36% at 2 and 34% at 4. On `sponza-candles` the update costs 4.2, 7.9 and 9.6 µs per probe (INVALID clock, information).
+- **`exactLightLimit` (default 8, the design's number) is a live setting.** T1.4's stochastic-choice test (12 lights) raises it to 16, because one frame's grid is one random draw that only a new grid each frame averages out.
+- **Check 1's test scene and bars** (`hit-shading-many-lights`; the done-when names only "a test scene with 1,024 point lights"):
+  - the scene: a 24 m floor with 16 pillars and 8 blocks, and 1,024 shadowed point lights 0.2-3.5 m up (a third without range, the rest 3-10 m);
+  - radius 0, so the exhaustive answer has no noise;
+  - 1,000 points: 700 seen from above, 300 on pillar sides;
+  - 1,024 frames, each with a new grid;
+  - gated at K = 1, 2 and 4, not only the default.
+- **`ddgi-batch-cost` draws a loaded scene with the viewer's lighting (`sceneLighting`)**, and its start-up splits the load stage into fetch and parse, three's compile and the first draw (T2.3; the TASKS line for `sponza-candles`' set-up). T2.1's "load files 420.6 s" was this page compiling three's default lighting with 1,024 lights in every material: the lighting is the only change to that stage (it holds no GI work), and the stage fell to 2.6 s. The old configuration was not re-run (minutes of compile). The viewer already drew the candles clustered, so `sponza-candles` now loads like the viewer loads it: load 2.6 s, against 1.8 s for `sponza`.
 
 - **T2.5 check 2's cost (groups off within 3% of `m2`) is met by reading, not by the timing** (M2 lead, after the Opus review). The two VALID runs were at different GPU clocks (2,025 against 1,879 MHz), and the page doesn't normalise by clock. Groups-off runs of the same code alone spread about 5% (1.285–1.355 ms at 512 probes on two-room), so the 3% bar is below what one run per side can resolve: "no measurable change at about ±5% resolution". The field is identical to `m2`'s, and groups off changes only four `select`s per light in `gi/direct`, so a 3% cost isn't plausible. *Revisit:* T2.10 gives same-session A/B pairs to any gate whose bar is under 5%.
 - **T2.5 light groups, as built** (T2.5 implementer; for the M2 lead's review; m2-lights.md §5 "As built"):
