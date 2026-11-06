@@ -9,7 +9,12 @@
  * work, not timed), then one `gi.scene.setTransforms` call is timed, then the
  * frame is encoded and submitted (the scene copy's upload and the GPU top
  * level's refit; `stats.encodeCpuMs` reported beside it, not part of the
- * target). Three sets of frames, taking turns frame by frame:
+ * target). Three sets of frames, each timed in a block of its own (warm-up
+ * frames, then the timed ones), sliding first. *Why blocks, not taking turns
+ * frame by frame:* a host uses one of the calls frame after frame; mixed
+ * frame by frame, Chrome's compiled code for each call had to handle the
+ * others' arrays too, and the sliding call read 2.1-2.65 ms against 1.6-1.7
+ * alone (T2.M1, DECISIONS 2026-11-06). The sets:
  * - **translating** (the gate): every instance slides, as in B1a's bench,
  *   so the number compares with its 18-20 ms;
  * - **turning:** every instance also turns a little, so the scene copy
@@ -105,9 +110,11 @@ await runGpuTest(
             const singleMs: number[] = [];
             const encodeMs: number[] = [];
             const one = new Array<number>(16);
-            for (let index = 0; index < WARMUP_FRAMES + 3 * TIMED_FRAMES; index++) {
+            for (let index = 0; index < 3 * (WARMUP_FRAMES + TIMED_FRAMES); index++) {
                 slide();
-                const set = index % 3;
+                // Sliding, then turning, then one call each, each in a block (the file comment).
+                const set = Math.floor(index / (WARMUP_FRAMES + TIMED_FRAMES));
+                const inBlock = index % (WARMUP_FRAMES + TIMED_FRAMES);
                 if (set === 1) turn();
                 const start = performance.now();
                 if (set === 2) {
@@ -121,7 +128,7 @@ await runGpuTest(
                 }
                 const elapsed = performance.now() - start;
                 const encoded = await frame();
-                if (index < WARMUP_FRAMES) continue;
+                if (inBlock < WARMUP_FRAMES) continue;
                 [slidingMs, turningMs, singleMs][set].push(elapsed);
                 if (set === 0) encodeMs.push(encoded);
             }
