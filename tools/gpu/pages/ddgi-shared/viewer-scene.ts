@@ -58,8 +58,14 @@ export interface ViewerScene {
 }
 
 /** Loads the scene and creates DDGI with the trees built; the probes are black until frames run. */
-export async function startViewerScene(device: GPUDevice, manifest: SceneManifest, options: { readonly gpuTiming: boolean; readonly label: string }): Promise<ViewerScene> {
+export async function startViewerScene(
+    device: GPUDevice,
+    manifest: SceneManifest,
+    options: { readonly gpuTiming: boolean; readonly label: string; readonly prepareScene?: (loaded: LoadedScene) => void },
+): Promise<ViewerScene> {
     const loaded = await loadScene(manifest, () => {});
+    // A page's own additions (a lamp to switch on later) go in before the adapter's first sync.
+    options.prepareScene?.(loaded);
     const bookmark = manifest.cameras[0];
     const camera = new PerspectiveCamera(bookmark.fovYDeg, 1, 0.05, loaded.diagonal * 2);
     camera.position.set(...bookmark.position);

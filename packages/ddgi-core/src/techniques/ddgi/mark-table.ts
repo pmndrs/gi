@@ -162,7 +162,22 @@ function probeBox(grid: ProbeGrid, min: Vec3, max: Vec3): { min: Vec3; size: Vec
     return { min: [low[0], low[1], low[2]], size: [size[0], size[1], size[2]] };
 }
 
-/** The probe box of a local light's change: its influence radius around where it was and where it is. */
+/**
+ * The probe box of a local light's change: its range around where it was and
+ * where it is, or every probe for a light with no range.
+ *
+ * *Why every probe for a light with no range (T2.4b, DECISIONS 2026-11-06):*
+ * the change log's influence radius is set against the scene's reference
+ * irradiance, the sun's when there is one, but a probe's change is measured
+ * against its own light, and inside sunlit Sponza many probes see much less
+ * than the sun. A lamp of 0.3 (a tenth of Sponza's sun) got a 10 m radius,
+ * and the probes beyond it that its light reached through the colonnade
+ * changed by far more than 5% (dark ones by thousands of percent): recall
+ * 59%. Over the whole volume the mark measures each probe against its own
+ * stored mean, as it already does. A light with a range can't reach past it,
+ * so that box stays. Cost: one thread per probe for each such light that
+ * changes in a frame (Sponza: 19,425 each).
+ */
 function localBox(change: LightChange, grid: ProbeGrid): { min: Vec3; size: Vec3 } | null {
     const min = [Infinity, Infinity, Infinity];
     const max = [-Infinity, -Infinity, -Infinity];
@@ -172,6 +187,7 @@ function localBox(change: LightChange, grid: ProbeGrid): { min: Vec3; size: Vec3
     ];
     for (const [light, radius] of sides) {
         if (!light || light.type === 'directional' || !(radius > 0)) continue;
+        if (!(light.range > 0)) return { min: [0, 0, 0], size: [grid.counts[0], grid.counts[1], grid.counts[2]] };
         for (let axis = 0; axis < 3; axis++) {
             min[axis] = Math.min(min[axis], light.position[axis] - radius);
             max[axis] = Math.max(max[axis], light.position[axis] + radius);
