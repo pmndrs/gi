@@ -318,6 +318,10 @@ async function measureSetting(
         probes_per_frame_mean: round(mean(probesPerFrame)),
         probes_per_frame_median: median(probesPerFrame),
         probes_share_per_frame: round(mean(probesPerFrame) / scene.probeCount, 5),
+        // T2.4a: a still scene is never marked by ddgi/mark. The census total since prepare (the warm-up
+        // and converging included), and the frames whose changes ran the mark (the scene's creation is one).
+        probes_marked_total: scene.ddgi.counters['probes marked (total)'] ?? null,
+        frames_with_changes_marked: scene.ddgi.counters['frames with changes marked'] ?? null,
     };
     log(
         `${scene.manifest.id} ${mode.name} ${budgetText}: mean ${(result.rel_change_mean * 100).toFixed(3)}%, p95 ${(result.rel_change_p95 * 100).toFixed(3)}% per pixel; ` +

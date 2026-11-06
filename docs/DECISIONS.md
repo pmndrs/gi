@@ -2,6 +2,16 @@
 
 Settled choices, newest first. Each entry is short: the decision, why, and what would make us revisit it. Changing a threshold or target counts as a decision and goes here.
 
+## 2026-11-06
+
+- **`lightChangeScale` defaults to 0.5, not the design's 0.25** (T2.4a implementer; for the M2 lead's review). The design called 0.25 a guess to be tuned in T2.4a.
+  - *Measured* (RTX 3060, `ddgi-change-step`: two-room's lamp moved 2 m, every probe every frame, both fields converged): a probe's true change was 0.48 × the mark's unscaled value at the median (quartiles 0.25–0.73), so 0.5 makes r about the true change for the median probe.
+  - *Why it matters beyond recall:* the scale sets how deep a probe's cut is, not only whether it is cut. At 0.25 the right probes were cut (lit-room recall 99.8%) but too gently, and the GI view took 0.73 s to get within 5% (done-when: 0.5 s); the lingering part is the old lamp's bounce light held in probes cut too gently. At 0.5: within 5% from the first update, recall 100%, precision 97.5%. At 1: as fast, with deeper cuts (more noise right after a change; not measured).
+  - *Revisit* if T2.4b's or T2.4c's checks on Sponza or Cornell show a different ratio, or if changed probes flicker visibly.
+- **A cut probe's history grows back by one an update, as designed; the warm-up ramp is not rewound** (T2.4a, measured). Rewinding the ramp to the cut count looked like T1.12's cure for estimates biased by bounce light that hasn't settled, but on the same step it made the transient overshoot larger (0.30 s instead of 0.03 s at scale 0.5).
+- **Until T2.6a, an environment change marks every probe with r = 1** (times the openness factor), because the design's formula needs the sky's SH on the CPU. Conservative: it cuts more history than a small sky change needs, never less. A sun colour or intensity change marks every probe by `|1 − new/old|` until the sun layer exists (T2.5, T2.6b), as the task asked.
+- **Point and spot lights with `range: 0` are local changes now, bounded by their influence radius** (T2.4a), instead of flagging `global: 'lights'`. `'lights'` now means a group change or more than 1,024 light changes in one frame.
+
 ## 2026-11-05
 
 - **Cornell's flicker: the fix in M1 is per-probe adaptive hysteresis; sampling emitters directly goes to M2** (M1 lead, after T1.12 phase 1).
