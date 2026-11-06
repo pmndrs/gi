@@ -31,10 +31,13 @@
  * page draws that scene with three's clustered lighting, as the viewer does
  * (apps/viewer/src/render/scene-lighting.ts). `VITE_DDGI_ADAPTER_CHECK=still`
  * measures only that: 300 still frames and the batched still syncs, no
- * moving object or detection latency. On `sponza-candles` every frame is
- * heavy GPU work (DDGI's light selection with 1,024 lights costs about 7 ms
- * at any batch, NOTES), and the full page's 90 s of it throttled the RTX
- * laptop, which the clock rule doesn't accept.
+ * moving object or detection latency, with DDGI's updates paused (the
+ * budget `{ paused: true }`). On `sponza-candles` every DDGI frame is heavy
+ * GPU work (its light selection with 1,024 lights costs about 7 ms at any
+ * batch, NOTES), and two runs of it throttled the RTX laptop, which the
+ * clock rule doesn't accept. Paused, the adapter's sync does the same work
+ * (it runs before the budget is looked at, and a still scene sends
+ * nothing), three still renders every frame, and the GPU stays cool.
  *
  * Also measured: how many frames until a static object's first move reaches
  * GI without `markChanged` (the walk's detection latency), and with it.
@@ -124,7 +127,7 @@ await runThreePage(async ({ device, renderer, data, log }) => {
     const objectsPerFrame = Number(env.VITE_DDGI_OBJECTS_PER_FRAME) || DEFAULT_OBJECTS_PER_FRAME;
     const editChecksPerFrame = Number(env.VITE_DDGI_EDIT_CHECKS) || undefined;
     data.budgets = { objectsPerFrame, editChecksPerFrame: editChecksPerFrame ?? 'default' };
-    const threeGI = new ThreeGI(platform, scene, { budget: { gpuMs: 2 }, environment, warn: (message) => warnings.push(message), objectsPerFrame, editChecksPerFrame });
+    const threeGI = new ThreeGI(platform, scene, { budget: STILL_ONLY ? { paused: true } : { gpuMs: 2 }, environment, warn: (message) => warnings.push(message), objectsPerFrame, editChecksPerFrame });
 
     const firstStart = performance.now();
     threeGI.update(camera);
