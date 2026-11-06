@@ -21,6 +21,34 @@ Rules:
 
 ---
 
+## 2026-11-06 · T2.4d review and merge · M2 lead (opus)
+Did:
+- Opus review of T2.4d against its done-when (TASKS): pass with notes, no must-fix. It ran inside Dennis's timebox ("let's not spend forever on it"): one diagnosis, one fix per miss.
+- Merged `m2-t2.4d` into `m2` (1e791b5). PROGRESS and DECISIONS conflicted, text only; both sides kept (98 headings = 97 + 96 − 95). The T2.4d DECISIONS entries are marked accepted.
+- TASKS: T2.4d done; a T2.8 line for 30 Hz hosts.
+
+Verified (reviewer, RTX 3060 nvidia/ampere, Chrome 157, bench lock, one run at a time, not timed):
+- lint, typecheck, 1,016 unit tests;
+- the full suite: 48 pages plus 2 self-tests, two-room leak 0.84%, still scenes mark 0;
+- furnished-room sun step: frames 11 / 14; per pixel 2.9% / 3.7% at 0.5 s and 1.4% / 1.8% at 3 s;
+- Sponza: view frame 12, field frame 36, sun halved from frame 1;
+- step page: two-room 9/17, Cornell 5/8, the sweep passes;
+- cabinet settled at frame 2; door leak 0.01% once closed.
+
+Lead, on the merged tree: lint, typecheck, 1,056 unit tests.
+
+Not verified: flicker was not re-run by the reviewer (the implementer's Cornell 0.094% stands). The Intel UHD after the merge. A lamp step on the furnished room: no page can do it without a code change.
+
+Numbers: the real day, one VALID run: median 1.98 ms, p95 2.30 ms. The margin is judged on the median (DECISIONS, T2.4c check 5), so it passes with 0.22 ms to spare. The first 45 frames after Sponza's big step run at 2.51 ms median (T2.10). T2.1's lamp jump back is at frame 31 against a bar of 30, with no overshoot (before: about 38 frames and 7–12.6%).
+
+Next:
+- Waiting is bounded at 30 frames from the mark, but the key-neighbour test ignores visibility, so a probe can wait the full 30 frames on keys behind a wall.
+- The second count doesn't subtract propagate's and mark's cost as §4.5 asks, and assumes cost follows rays (shown on the RTX only).
+- `continuing-change.ts:98`: one frame without a mark turns it off, so a 30 Hz host never turns it on (TASKS, T2.8).
+- Data race: `wgsl/schedule.ts:688` writes every probe's flags word, including keys whose flags other threads read. Harmless in practice, but the comment near line 640 says no thread writes it. Write the flag only when it changes, next time the scheduler is touched.
+- Add waiting probes to `ddgi-schedule-reduction`. Nothing tests the "all keys' full counts fit" rule (`ddgi-technique.ts:256`).
+- T2.1's far change for many unranged lights is served as global, so on key-path volumes every fine probe waits and those frames count as continuing. Watch this in T2.3.
+
 ## 2026-11-06 · T2.1 review and merge · M2 lead (opus)
 Did:
 - Opus review of T2.1 against its done-when: pass with notes. The one must-fix was a valid timing for item 3. A gpu-tester ran it after Dennis's PC restart: VALID, met.
