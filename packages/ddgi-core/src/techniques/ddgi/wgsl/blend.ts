@@ -61,8 +61,16 @@ import { CLOCK_WRAP_SECONDS, FIXED_RAYS } from '../settings.ts';
  * The feedback rule's thresholds (m2-lights.md §4.6): an update whose
  * estimate lands more than this many times the probe's noise from its stored
  * value, and more than {@link FEEDBACK_MIN_SHARE} of it...
+ *
+ * 6, not the design's 4 (T2.4b, DECISIONS 2026-11-06): DDGI's ray noise has
+ * heavy tails (a few rays find a bright patch), so far more updates pass 4σ
+ * than a Gaussian's 1 in 16,000. Measured on the RTX 3060 (`ddgi-feedback`,
+ * still Cornell and two-room after the warm-up, frames 600-1,800): 4σ fired
+ * on about 0.1-0.2% of updates, 5σ on 0.11-0.12%, 6σ on 0.07-0.09%, against
+ * the bar of 0.1%. The unreported change still reached every probe within a
+ * spacing of it within 0.5 s at 6.
  */
-export const FEEDBACK_NOISE_MULTIPLE = 4;
+export const FEEDBACK_NOISE_MULTIPLE = 6;
 /** ...asks for one more update (2% of the stored mean: below that a change can't matter for the 5% target). */
 export const FEEDBACK_MIN_SHARE = 0.02;
 /** Its 6 face neighbours ask at this share of its urgency: a change nobody reported spreads to the probes around it. */
@@ -177,9 +185,14 @@ const DDGI_CENSUS_PROBES_BLENDED_TOTAL: u32 = ${CENSUS_PROBES_BLENDED_TOTAL}u;
 // "No cut": larger than any history count.
 const DDGI_NO_HISTORY_LIMIT: f32 = 3.0e38;
 // The noise word is a running mean over about this many quiet updates (an
-// exponential average with weight 1 / this). Long enough to average a few
-// outliers away, short enough to follow a probe whose light changed.
+// exponential average with weight 1 / this). Long, because the feedback rule
+// compares single updates with it, and a noise read from few updates is often
+// low by chance (at 16 the rule fired on 0.21% of still updates, at 64 on
+// 0.18%, T2.4b). It is relative to the mean, so it needn't follow a change of
+// the light's brightness.
 const DDGI_NOISE_UPDATES: f32 = 64.0;
+// Below this mean a probe counts as dark for the relative noise (MARK_DARK_IRRADIANCE in mark.ts).
+const DDGI_DARK_MEAN: f32 = 1.0e-6;
 // What kind of update this is, for the noise word (ddgiUpdateKind).
 const DDGI_UPDATE_FIRST: u32 = 0u;   // state 3: the history starts again, noise 0
 const DDGI_UPDATE_QUIET: u32 = 1u;   // no change reported: feeds the noise, and may trip the feedback rule
@@ -644,9 +657,14 @@ fn ddgiBlendDistanceTexel(slot: u32, probeIndex: u32, probe: vec3i, texelIndex: 
 //   change by it.
 // - The noise: how far an update's mean estimate lands from the stored mean,
 //   |estimate - old| (the blend moves the mean by (1 - h) of that, so this
-//   doesn't depend on h), as the root of a running mean of its square, the
-//   channels averaged. Only quiet updates feed it: a reported change, or one
-//   still being taken in, isn't noise.
+//   doesn't depend on h), relative to the stored mean, as the root of a
+//   running mean of its square, the channels' root mean square. Relative
+//   because ray noise grows with the light: after a lamp makes a probe 10x
+//   brighter, an absolute noise would read 10x too small until dozens of
+//   quiet updates had passed, and the feedback rule would fire on every one
+//   of them. Only quiet updates feed it: a reported change, or one still
+//   being taken in, isn't noise. (Until T2.4b it was absolute, over 16
+//   updates; only the feedback rule reads it.)
 // - The feedback rule compares a quiet update's change with that noise and
 //   may ask for more updates (ddgiFeedbackFires).
 fn ddgiWriteHistory(probeIndex: u32, probe: vec3i, estimateSum: vec3f, oldSum: vec3f, probeHysteresis: f32, fastHysteresis: bool) {
@@ -661,19 +679,20 @@ fn ddgiWriteHistory(probeIndex: u32, probe: vec3i, estimateSum: vec3f, oldSum: v
     // blend moves the mean by (1 - h) of it, so this is the feedback rule's
     // |change of the mean| / (1 - h), the same whatever h is (after a cut, say).
     let deviation = abs(estimateMean - oldMean);
-    let deviationSquared = dot(deviation, deviation) / 3.0;
-    let deviationSize = sqrt(deviationSquared);
-    let meanSize = sqrt(dot(oldMean, oldMean) / 3.0);
+    // Relative to the stored mean (a dark probe's against DDGI_DARK_MEAN, so nothing divides by 0).
+    let relativeDeviation = sqrt(dot(deviation, deviation) / 3.0) / max(sqrt(dot(oldMean, oldMean) / 3.0), DDGI_DARK_MEAN);
     // The updates blended before this one (the record already counts this one).
     let blendedBefore = (history.updates & DDGI_HISTORY_COUNT_MASK) - 1u;
-    let fired = ddgiUpdateKind == DDGI_UPDATE_QUIET && ddgiFeedbackFires(deviationSize, previousNoise, meanSize, blendedBefore);
+    let fired = ddgiUpdateKind == DDGI_UPDATE_QUIET && ddgiFeedbackFires(relativeDeviation, previousNoise, blendedBefore);
     var noise = previousNoise;
     if (ddgiUpdateKind == DDGI_UPDATE_FIRST) {
         noise = 0.0;
     } else if (ddgiUpdateKind == DDGI_UPDATE_QUIET) {
-        // An update that tripped the feedback rule saw a change, not noise.
+        // Every quiet update feeds it, those that trip the rule too: left out,
+        // the tail the noise has would be cut off and the noise read low.
         // The first quiet update starts the average at its own value.
-        let averaged = select(mix(previousNoise * previousNoise, deviationSquared, 1.0 / DDGI_NOISE_UPDATES), deviationSquared, previousNoise <= 0.0);
+        let squared = relativeDeviation * relativeDeviation;
+        let averaged = select(mix(previousNoise * previousNoise, squared, 1.0 / DDGI_NOISE_UPDATES), squared, previousNoise <= 0.0);
         noise = sqrt(averaged);
     }
     history.meanRedGreen = pack2x16float(mean.rg);
@@ -681,23 +700,23 @@ fn ddgiWriteHistory(probeIndex: u32, probe: vec3i, estimateSum: vec3f, oldSum: v
     ddgiProbeHistory[probeIndex] = history;
     atomicAdd(&ddgiCensus[DDGI_CENSUS_PROBES_BLENDED_TOTAL], 1u);
     if (fired) {
-        ddgiRequestFeedback(probeIndex, probe, deviationSize / max(meanSize, DDGI_SMALLEST_NORMAL_HALF));
+        ddgiRequestFeedback(probeIndex, probe, relativeDeviation);
         atomicAdd(&ddgiCensus[DDGI_CENSUS_FEEDBACK_FIRED], 1u);
         atomicAdd(&ddgiCensus[DDGI_CENSUS_FEEDBACK_FIRED_TOTAL], 1u);
     }
 }
 
 // The feedback rule's test (m2-lights.md §4.6) for a quiet update: the
-// estimate lands more than 4 sigma from the stored value (sigma: the probe's
-// noise word) and more than 2% of it. At 4 sigma a Gaussian noise trips about
-// once in 16,000 updates. Not during a probe's warm-up ramp (its first
-// rampUpdates updates are expected to move while bounce light fills in, and
-// its noise isn't averaged yet), nor before it has a noise at all.
-fn ddgiFeedbackFires(deviation: f32, noise: f32, mean: f32, blendedBefore: u32) -> bool {
+// estimate lands more than FEEDBACK_NOISE_MULTIPLE times the probe's noise
+// from the stored value, and more than 2% of it (both relative to the stored
+// mean). Not during a probe's warm-up ramp (its first rampUpdates updates are
+// expected to move while bounce light fills in, and its noise isn't averaged
+// yet), nor before it has a noise at all.
+fn ddgiFeedbackFires(relativeDeviation: f32, noise: f32, blendedBefore: u32) -> bool {
     if (ddgi.feedback == 0u || !(noise > 0.0) || f32(blendedBefore) < ddgi.rampUpdates) {
         return false;
     }
-    return deviation > DDGI_FEEDBACK_NOISE_MULTIPLE * noise && deviation > DDGI_FEEDBACK_MIN_SHARE * mean;
+    return relativeDeviation > DDGI_FEEDBACK_NOISE_MULTIPLE * noise && relativeDeviation > DDGI_FEEDBACK_MIN_SHARE;
 }
 
 // One more update for the probe at this urgency, and for its active face

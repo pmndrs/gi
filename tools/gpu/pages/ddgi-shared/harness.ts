@@ -14,7 +14,7 @@
  */
 
 import type { FrameBudget, FrameInput } from '../../../../packages/ddgi-core/src/platform/contract/frame.ts';
-import type { LightHandle } from '../../../../packages/ddgi-core/src/platform/contract/handles.ts';
+import type { LightHandle, MaterialHandle } from '../../../../packages/ddgi-core/src/platform/contract/handles.ts';
 import type { EnvironmentDescriptor, LightDescriptor } from '../../../../packages/ddgi-core/src/platform/contract/scene.ts';
 import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
 import { DDGITechnique, type DDGIField, type DDGITechniqueOptions } from '../../../../packages/ddgi-core/src/techniques/ddgi/ddgi-technique.ts';
@@ -79,13 +79,14 @@ function toPlatformEnvironment(manifest: SceneManifest): EnvironmentDescriptor {
  * from the manifest, as every renderer takes them; their handles are pushed
  * to `lightHandles` (in manifest order) when given, for pages that change them.
  */
-export function describeScene(platform: GIPlatformImpl, manifest: SceneManifest, options: SceneOptions = {}, lightHandles: LightHandle[] = []): ProceduralScene {
+export function describeScene(platform: GIPlatformImpl, manifest: SceneManifest, options: SceneOptions = {}, lightHandles: LightHandle[] = [], materialHandles: MaterialHandle[] = []): ProceduralScene {
     const data = mergeScenes(buildProceduralParts(manifest));
     const scene = platform.scene;
     const meshes = data.meshes.map((mesh) => scene.createMesh({ positions: mesh.positions, indices: mesh.indices, normals: mesh.normals, uvs: mesh.uvs, label: mesh.name }));
     const materials = data.materials.map((material) =>
         scene.createMaterial({ albedo: material.albedo, emissive: material.emissive, doubleSided: material.doubleSided, label: material.name }),
     );
+    materialHandles.push(...materials);
     for (const instance of data.instances) {
         scene.createInstance({ mesh: meshes[instance.mesh], materials: [materials[instance.material]], transform: instance.transform, label: instance.name });
     }
@@ -101,6 +102,8 @@ export interface DdgiScene {
     readonly data: ProceduralScene;
     /** The manifest's lights, in manifest order. */
     readonly lights: readonly LightHandle[];
+    /** The scene's materials, in `data.materials` order. */
+    readonly materials: readonly MaterialHandle[];
 }
 
 /**
@@ -117,7 +120,8 @@ export async function createDdgiScene(
     const manifest = loadManifest(manifestId);
     const platform = new GIPlatformImpl(device, { label: `ddgi ${manifestId}`, gpuTiming: options.gpuTiming });
     const lights: LightHandle[] = [];
-    const data = describeScene(platform, manifest, options, lights);
+    const materials: MaterialHandle[] = [];
+    const data = describeScene(platform, manifest, options, lights, materials);
     const volume = settings.volume ?? { center: manifest.volume.center, size: manifest.volume.size, spacing: manifest.volume.probeSpacing };
     const ddgi = platform.addTechnique(new DDGITechnique({ warmUpPasses: 0, ...settings, volume }, options.technique));
     platform.setOutput(ddgi);
@@ -127,7 +131,7 @@ export async function createDdgiScene(
     await platform.rays.whenBuilt();
     runFrame(device, platform, 0);
     if (platform.rays.building) throw new Error('the platform still reports trees building');
-    return { platform, ddgi, manifest, data, lights };
+    return { platform, ddgi, manifest, data, lights, materials };
 }
 
 export function runFrame(device: GPUDevice, platform: GIPlatformImpl, budget: number | FrameBudget): void {

@@ -1,0 +1,4 @@
+{
+    "description": "T2.4b check 7: the feedback rule fires on under 0.1% of updates on still Cornell and two-room after the warm-up (600 frames), the view mean with it on is within 0.2% of off, and an unreported emissive change in two-room (64 probes a frame) has its nearest probes revisited within 0.5 s.",
+    "timeoutMs": 600000
+}
