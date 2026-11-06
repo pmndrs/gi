@@ -1,5 +1,5 @@
 {
-    "description": "T2.6a check 4: a 30-degree sun step (the light and the procedural sky together) on the furnished room, by re-tracing alone, GI only: each bookmark's view within 5% of settled (mean and per pixel), the step's size, and the whole volume's light-weighted error. VITE_DDGI_UNITS sets the batch, VITE_DDGI_BOOKMARKS the views (1-based). Needs the furnished-room download.",
+    "description": "T2.6a check 4: the sun 30 degrees lower (the light and the procedural sky together) on the furnished room, pendant lamp off, by re-tracing alone, GI only: each bookmark's view within 5% of settled (mean and per pixel), the step's size, the marked r against the true change, and the whole volume's light-weighted error. VITE_DDGI_UNITS, VITE_DDGI_BOOKMARKS, VITE_DDGI_LAMP=on, VITE_DDGI_SECTIONS=explore. Needs the furnished-room download.",
     "timeoutMs": 1800000,
     "manual": true
 }
