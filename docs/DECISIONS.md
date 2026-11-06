@@ -4,6 +4,7 @@ Settled choices, newest first. Each entry is short: the decision, why, and what 
 
 ## 2026-11-06
 
+- **T2.5 check 2's cost (groups off within 3% of `m2`) is met by reading, not by the timing** (M2 lead, after the Opus review). The two VALID runs were at different GPU clocks (2,025 against 1,879 MHz), and the page doesn't normalise by clock. Groups-off runs of the same code alone spread about 5% (1.285–1.355 ms at 512 probes on two-room), so the 3% bar is below what one run per side can resolve: "no measurable change at about ±5% resolution". The field is identical to `m2`'s, and groups off changes only four `select`s per light in `gi/direct`, so a 3% cost isn't plausible. *Revisit:* T2.10 gives same-session A/B pairs to any gate whose bar is under 5%.
 - **T2.5 light groups, as built** (T2.5 implementer; for the M2 lead's review; m2-lights.md §5 "As built"):
   - *The blend does every layer's texels in one step*, one thread per (layer, texel), reading the radiance from the ray buffer when there are several layers, not the design's one layer at a time through one workgroup array. *Why:* that left 220 of 256 threads idle in each extra layer; on two-room the blend cost 2.6× with 5 layers, 1.6× this way (diagnostic runs). *Cost:* workgroup memory is 8 KB + 1,152 bytes a layer, so `MAX_IRRADIANCE_LAYERS` is 6 (4 groups, the environment, T2.6b's sun). *Revisit* if T2.6b's transfer needs more workgroup memory in the blend.
   - *Light groups need `directLight: 'deferred'`* (the default); the inline trace, kept for comparison, throws with groups on.
