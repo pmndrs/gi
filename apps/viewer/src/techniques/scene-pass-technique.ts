@@ -89,6 +89,19 @@ export abstract class ScenePassTechnique implements GiTechnique {
     }
 
     /**
+     * The scene target `renderBeforePipeline` draws into (resolved, linear HDR), for views that
+     * look at the picture itself. Replaced by `recreateTarget`, which also rebuilds `outputNode`.
+     */
+    protected get sceneTarget(): RenderTarget {
+        return this.target;
+    }
+
+    /** True while the upscaler draws the picture in its own pass: the scene target is then unused. */
+    protected get upscaling(): boolean {
+        return this.upscale !== null;
+    }
+
+    /**
      * Draws into a fresh render target from now on, which makes three build new pipelines
      * and bind groups for the scene. Needed once the probe grid's atlas has been rendered
      * to for the first time: until then every long-lived pipeline reads it as empty.

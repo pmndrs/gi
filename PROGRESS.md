@@ -21,6 +21,20 @@ Rules:
 
 ---
 
+## 2026-11-06 · T1.12 phase 2b: the viewer's debug views for the flicker eye check · implementer (opus)
+Did (uncommitted; DDGI section of the viewer panel; hover help for each in `apps/viewer/src/ui/help-text.ts`; link keys in `url-state.ts` and the viewer README):
+- **Probe atlas over the picture** (`src/ddgi/atlas-overlay.ts`): irradiance or distance, bottom-right corner or "Fill the picture", one block per layer of probes (lowest first, top left), sharp texels; "Atlas exposure" (stops) for irradiance. Reads the same textures three is lit from.
+- **Probes coloured by history** ("Colour the probes by: How settled"): n, the updates each probe's light is averaged over, red (1) to yellow (~13) to green (200, the most kept), log scale (`history-colors.ts`); inactive probes grey. Core addition: `DDGIField.probeHistory` (the blend kernel's history buffer) and `PROBE_HISTORY_WORD`/`PROBE_HISTORY_WORDS` in `layout.ts`, with a unit test tying them to the WGSL struct; the viewer copies n into an r32float texture with a small compute pass (`probe-history.ts`).
+- **Direct against indirect:** the existing GI radios, relabelled "Off (direct)", "On (both)", "GI only (indirect)", with clearer help.
+- **Change per frame** (`frame-change.ts`): with the camera still, orange where a pixel got brighter since the last frame, blue where darker, over a dim grey picture; full colour at 0.25%, 1% or 4% (weight^2.2, so it reads linearly after sRGB). Works on top of GI only and the screen views; no colour while the camera moves; off under the upscaler.
+- `scene-pass-technique.ts` gains `sceneTarget`/`upscaling` accessors; `ddgi-technique.ts` wraps `outputNode` with the overlays only while one is on.
+Verified (RTX 3060, headless Chrome 156 via `apps/viewer/scripts/contact-sheet.ts`): every view on Cornell (`cornell-box`, camera 1), 0 errors; screenshots in `bench/screenshots/t1.12-debug-views/` (1-normal ... 12-panel-controls). A readback of the two pictures the change view compares (temporary, removed): settled Cornell changes 0.055% mean / 0.16% p95 per pixel a frame (own-brightness metric), GI only 0.086% / 0.26% (flicker-page metric 0.04% / 0.16%), in line with phase 2a; 18-25% of pixels change by exactly 0 (half-float target). lint, typecheck clean; `pnpm test` 943/944, the one failure `tools/assets/fetch.test.ts` (listed flaky under load) passes alone 104/104; `pnpm build:apps` builds. `test:gpu --filter ddgi-` under bench-lock (`--no-cool-wait`, "T1.12 2b"): RTX 8 of 8 pass, numbers unchanged (furnace −0.15%, leak 0.83%, test view +5.63%).
+Not verified: the Intel UHD (the viewer views and the GPU suite); Sponza; an interactive session in a real window (headless screenshots only).
+Next:
+- **Dennis:** open the viewer on the Cornell box, keep the camera still, and try: GI only (indirect) plus "Change per frame: 0.25%" (where and how much it flickers); "Show the probes" coloured by "How settled" (green = averaging 200 updates); "Probe atlas: Irradiance", filled, +2 EV (squares that shimmer are noisy probes). Then say whether the flicker is acceptable: that sets the threshold.
+- Phase 2a said the viewer's warm-up `hysteresis` override can go (unused under the adaptive rule); not done here, it's harmless.
+- Possible later: a number for the change view in the stats box (mean / p95 per frame) would need a readback; not built.
+
 ## 2026-11-06 · T1.14 cleanups after the final Opus review · implementer (opus)
 Did (uncommitted):
 - `packages/ddgi-three/src/composite.ts`: the GI evaluation is back inline in the composite (no helper, no `Vec2Node`/`FloatNode` aliases, none of their casts); the stray blank lines are gone; a default GTAO replaced when the pass's scale crosses 1 is `dispose()`d; the `occlusionNode` comment says it is re-chosen at any build where the scale has crossed 1.

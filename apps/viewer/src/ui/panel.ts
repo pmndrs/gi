@@ -12,12 +12,28 @@ import type { NavigationMode } from '../controls/camera-rig';
 import { TECHNIQUE_LABELS, type GiTechniqueId, type TechniqueId, type UpscaleQuality } from '../techniques/types';
 import { h } from './dom';
 import { DEFAULT_HELP, HELP, type HelpKey } from './help-text';
-import { MAX_BUDGET_MS, MAX_EXPOSURE_EV, MIN_BUDGET_MS, type DdgiScreenViewName, type GiChoice } from './url-state';
+import {
+    CHANGE_FULL_SCALE_PERCENTS,
+    MAX_ATLAS_EV,
+    MAX_BUDGET_MS,
+    MAX_EXPOSURE_EV,
+    MIN_BUDGET_MS,
+    type AtlasName,
+    type ChangeFullScalePercent,
+    type DdgiScreenViewName,
+    type GiChoice,
+    type ProbeColorName,
+} from './url-state';
 
 export interface DdgiPanelSettings {
     budgetMs: number;
     probes: boolean;
+    probeColor: ProbeColorName;
     debug: DdgiScreenViewName | null;
+    atlas: AtlasName | null;
+    atlasFill: boolean;
+    atlasEv: number;
+    change: ChangeFullScalePercent | null;
 }
 
 export interface PanelHandlers {
@@ -45,7 +61,7 @@ export interface PanelHandlers {
     onPanelHidden(hidden: boolean): void;
 }
 
-/** One line of the probe legend: a state's colour, its name, and how many probes are in it (null until counted). */
+/** One line of the probe legend: a colour, what it means, and how many probes have it (null until counted, or not counted). */
 export interface ProbeLegendEntry {
     color: readonly [number, number, number];
     label: string;
@@ -93,6 +109,21 @@ const SCREEN_VIEW_LABELS: Record<DdgiScreenViewName | 'none', string> = {
     'probe-states': 'Probes near this point',
 };
 
+const PROBE_COLOR_LABELS: Record<ProbeColorName, string> = {
+    state: 'State (active, off, not updated yet)',
+    history: 'How settled (updates averaged)',
+};
+
+const ATLAS_LABELS: Record<AtlasName | 'none', string> = {
+    none: 'Off',
+    irradiance: 'Irradiance (light gathered)',
+    distance: 'Distance (how far each probe sees)',
+};
+
+function changeLabel(percent: ChangeFullScalePercent | 'none'): string {
+    return percent === 'none' ? 'Off (normal picture)' : `On: full colour at ${percent}% change`;
+}
+
 const PROBE_BUDGETS = [100, 300, 600, 1500, 3000];
 
 /** The stats box's lines, as they are labelled there, with their explanations. */
@@ -114,6 +145,9 @@ const GI_CHOICES: readonly GiTechniqueId[] = ['ddgi', 'lpg', 'vxgi'];
 
 /** The budget slider's step, in milliseconds. */
 const BUDGET_STEP_MS = 0.25;
+
+/** The atlas exposure slider's step, in stops. */
+const ATLAS_EV_STEP = 0.5;
 
 function withHelp<T extends HTMLElement>(element: T, key: HelpKey): T {
     element.dataset.help = HELP[key];
@@ -154,8 +188,17 @@ export class Panel {
     private readonly budget = h('input', { type: 'range', min: MIN_BUDGET_MS, max: MAX_BUDGET_MS, step: BUDGET_STEP_MS });
     private readonly budgetValue = h('span', { className: 'value' });
     private readonly showProbes = h('input', { type: 'checkbox' });
+    private readonly probeColor = h('select');
+    private readonly probeColorRow = h('div', { className: 'indented' });
     private readonly probeLegend = h('div', { className: 'legend' });
     private readonly screenView = h('select');
+    private readonly atlas = h('select');
+    private readonly atlasOptions = h('div', { className: 'indented' });
+    private readonly atlasFill = h('input', { type: 'checkbox' });
+    private readonly atlasEv = h('input', { type: 'range', min: -MAX_ATLAS_EV, max: MAX_ATLAS_EV, step: ATLAS_EV_STEP });
+    private readonly atlasEvValue = h('span', { className: 'value' });
+    private readonly atlasEvRow = h('div');
+    private readonly change = h('select');
     private readonly probeSettings = h('div', { className: 'group' });
     private readonly probeBounces = h('select');
     private readonly probeBudget = h('select');
@@ -195,6 +238,9 @@ export class Panel {
             for (const id of WIPE_CHOICES) side.append(h('option', { value: id, text: TECHNIQUE_LABELS[id] }));
         }
         for (const [view, label] of Object.entries(SCREEN_VIEW_LABELS)) this.screenView.append(h('option', { value: view, text: label }));
+        for (const [choice, label] of Object.entries(PROBE_COLOR_LABELS)) this.probeColor.append(h('option', { value: choice, text: label }));
+        for (const [choice, label] of Object.entries(ATLAS_LABELS)) this.atlas.append(h('option', { value: choice, text: label }));
+        for (const percent of ['none', ...CHANGE_FULL_SCALE_PERCENTS] as const) this.change.append(h('option', { value: String(percent), text: changeLabel(percent) }));
         for (const [quality, label] of Object.entries(UPSCALE_LABELS)) this.upscaleQuality.append(h('option', { value: quality, text: label }));
 
         this.element.append(
@@ -283,6 +329,10 @@ export class Panel {
         withHelp(this.budget, 'ddgiBudget');
         withHelp(this.probeLegend, 'ddgiProbes');
         withHelp(this.screenView, 'ddgiScreenView');
+        withHelp(this.probeColor, 'ddgiProbeColor');
+        withHelp(this.atlas, 'ddgiAtlas');
+        withHelp(this.atlasEv, 'ddgiAtlasExposure');
+        withHelp(this.change, 'ddgiChange');
         withHelp(this.probeBounces, 'lpgBounces');
         withHelp(this.probeBudget, 'lpgProbes');
         withHelp(this.vxgiBounces, 'vxgiBounces');
@@ -291,13 +341,22 @@ export class Panel {
         const restart = withHelp(h('button', { text: 'Start the probes over' }), 'ddgiRestart');
         restart.addEventListener('click', () => this.handlers.onDdgiRestart());
 
+        this.probeColorRow.append(withHelp(h('div', { className: 'label', text: 'Colour the probes by' }), 'ddgiProbeColor'), this.probeColor);
+        this.atlasEvRow.append(withHelp(h('div', { className: 'label' }, 'Atlas exposure ', this.atlasEvValue), 'ddgiAtlasExposure'), this.atlasEv);
+        this.atlasOptions.append(withHelp(h('label', { className: 'inline' }, this.atlasFill, ' Fill the picture'), 'ddgiAtlasFill'), this.atlasEvRow);
         this.ddgiSettings.append(
             withHelp(h('div', { className: 'label' }, 'Update budget per frame ', this.budgetValue), 'ddgiBudget'),
             this.budget,
             withHelp(h('label', { className: 'inline' }, this.showProbes, ' Show the probes'), 'ddgiProbes'),
+            this.probeColorRow,
             this.probeLegend,
-            h('div', { className: 'label', text: 'Debug view' }),
+            withHelp(h('div', { className: 'label', text: 'Debug view' }), 'ddgiScreenView'),
             this.screenView,
+            withHelp(h('div', { className: 'label', text: 'Probe atlas over the picture' }), 'ddgiAtlas'),
+            this.atlas,
+            this.atlasOptions,
+            withHelp(h('div', { className: 'label', text: 'Change per frame (flicker check)' }), 'ddgiChange'),
+            this.change,
             restart,
         );
         this.probeSettings.append(
@@ -315,9 +374,9 @@ export class Panel {
             h(
                 'div',
                 { className: 'row' },
-                radio('off', 'Off', 'giOff'),
-                radio('on', 'On', 'giOn'),
-                radio('only', 'GI only', 'giOnly'),
+                radio('off', 'Off (direct)', 'giOff'),
+                radio('on', 'On (both)', 'giOn'),
+                radio('only', 'GI only (indirect)', 'giOnly'),
             ),
             h('div', { className: 'label', text: 'Technique' }),
             this.techniqueSelect,
@@ -385,10 +444,17 @@ export class Panel {
 
     private ddgiPanelSettings(): DdgiPanelSettings {
         const view = this.screenView.value;
+        const atlas = this.atlas.value;
+        const change = this.change.value;
         return {
             budgetMs: Number(this.budget.value),
             probes: this.showProbes.checked,
+            probeColor: this.probeColor.value as ProbeColorName,
             debug: view === 'none' ? null : (view as DdgiScreenViewName),
+            atlas: atlas === 'none' ? null : (atlas as AtlasName),
+            atlasFill: this.atlasFill.checked,
+            atlasEv: Number(this.atlasEv.value),
+            change: change === 'none' ? null : (Number(change) as ChangeFullScalePercent),
         };
     }
 
@@ -413,6 +479,13 @@ export class Panel {
         });
         this.showProbes.addEventListener('change', () => handlers.onDdgiSettings(this.ddgiPanelSettings()));
         this.screenView.addEventListener('change', () => handlers.onDdgiSettings(this.ddgiPanelSettings()));
+        for (const control of [this.probeColor, this.atlas, this.atlasFill, this.change]) {
+            control.addEventListener('change', () => handlers.onDdgiSettings(this.ddgiPanelSettings()));
+        }
+        this.atlasEv.addEventListener('input', () => {
+            this.showAtlasEv(Number(this.atlasEv.value));
+            handlers.onDdgiSettings(this.ddgiPanelSettings());
+        });
         const probeChanged = () =>
             handlers.onProbeSettings({ bounces: Number(this.probeBounces.value), maxProbes: Number(this.probeBudget.value) });
         this.probeBounces.addEventListener('change', probeChanged);
@@ -498,6 +571,10 @@ export class Panel {
         this.budgetValue.textContent = `${ms.toFixed(2)} ms`;
     }
 
+    private showAtlasEv(ev: number): void {
+        this.atlasEvValue.textContent = formatEv(ev);
+    }
+
     /** Shows `state` without firing any handler. */
     setState(state: PanelState): void {
         if (state.sceneId) this.sceneSelect.value = state.sceneId;
@@ -516,6 +593,12 @@ export class Panel {
         this.showBudget(state.ddgi.budgetMs);
         this.showProbes.checked = state.ddgi.probes;
         this.screenView.value = state.ddgi.debug ?? 'none';
+        this.probeColor.value = state.ddgi.probeColor;
+        this.atlas.value = state.ddgi.atlas ?? 'none';
+        this.atlasFill.checked = state.ddgi.atlasFill;
+        this.atlasEv.value = String(state.ddgi.atlasEv);
+        this.showAtlasEv(state.ddgi.atlasEv);
+        this.change.value = state.ddgi.change === null ? 'none' : String(state.ddgi.change);
         this.probeBounces.value = String(state.probeBounces);
         this.probeBudget.value = String(state.maxProbes);
         this.vxgiBounces.value = String(state.vxgiBounces);
@@ -530,6 +613,10 @@ export class Panel {
         const giShown = state.gi !== 'off';
         this.ddgiSettings.hidden = !(giShown && onScreen.includes('ddgi'));
         this.probeLegend.hidden = !state.ddgi.probes;
+        this.probeColorRow.hidden = !state.ddgi.probes;
+        this.atlasOptions.hidden = state.ddgi.atlas === null;
+        // The exposure is the irradiance atlas's; distances are shown on a fixed scale.
+        this.atlasEvRow.hidden = state.ddgi.atlas !== 'irradiance';
         this.probeSettings.hidden = !(giShown && onScreen.includes('lpg'));
         this.vxgiSettings.hidden = !(giShown && onScreen.includes('vxgi'));
         this.techniqueSelect.disabled = state.wipe !== null;

@@ -32,6 +32,7 @@ import {
     fieldLayout,
     IRRADIANCE_FORMAT,
     PROBE_DATA_FORMAT,
+    PROBE_HISTORY_BYTES,
     PROBE_STATE,
     PROBE_STATE_LABELS,
     pointsSize,
@@ -90,8 +91,6 @@ const CENSUS_STAGING_BUFFERS = 3;
 const INITIAL_RAY_CAPACITY = 512 * 256;
 /** Frame times kept for the sweep counter (its median), about half a second at 60 Hz. */
 const SWEEP_FRAME_TIMES = 31;
-/** Bytes of one probe's history: n and t as f32, k as u32 (`DdgiProbeHistory` in wgsl/blend.ts). */
-const PROBE_HISTORY_BYTES = 12;
 
 /** Options fixed for the technique's life. */
 export interface DDGITechniqueOptions {
@@ -116,6 +115,14 @@ export interface DDGIField {
     readonly probeData: GPUTexture;
     /** volumeOrigin, volumeSpacing, volumeCounts, volumeTexels: 16 floats, refreshed from the live settings on every read. */
     readonly sampleParameters: Float32Array;
+    /**
+     * Each probe's hysteresis history, for debug tools (the viewer colours
+     * probes by how many updates they average): `PROBE_HISTORY_WORDS` words
+     * per probe in probe-index order, laid out as `PROBE_HISTORY_WORD` says.
+     * A storage buffer, so compute only: copy what you need into a texture to
+     * draw it. Written by `ddgi/blend` during `encode`.
+     */
+    readonly probeHistory: GPUBuffer;
 }
 
 interface CensusStaging {
@@ -532,6 +539,7 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
             distance: resources.distance,
             probeData: resources.probeData,
             sampleParameters: this.parameterView,
+            probeHistory: resources.probeHistory,
         };
     }
 

@@ -16,6 +16,11 @@
  * - `budget`     DDGI's GPU milliseconds per frame for probe updates (default 2)
  * - `probes`     `1` draws DDGI's probes as spheres coloured by state
  * - `debug`      one of DDGI's screen debug views: `gi-only`, `coverage`, `probe-states`
+ * - `probecolor` `history` colours DDGI's probe spheres by how settled they are (default: by state)
+ * - `atlas`      `irradiance` or `distance`: that probe atlas drawn over the picture
+ * - `atlasfill`  `1`: the atlas fills the view instead of the bottom-right corner
+ * - `atlasev`    extra exposure for the irradiance atlas, in stops
+ * - `change`     DDGI's change-per-frame view, full colour at this many percent (`0.25`, `1` or `4`)
  *
  * No engine imports, so it is unit-tested.
  */
@@ -31,6 +36,21 @@ export type GiChoice = 'off' | 'on' | 'only';
 /** DDGI's screen debug views by their link names (ids in `techniques/ddgi-technique.ts`). */
 export type DdgiScreenViewName = 'gi-only' | 'coverage' | 'probe-states';
 export const DDGI_SCREEN_VIEW_NAMES: readonly DdgiScreenViewName[] = ['gi-only', 'coverage', 'probe-states'];
+
+export type ProbeColorName = 'state' | 'history';
+export type AtlasName = 'irradiance' | 'distance';
+const ATLAS_NAMES: readonly AtlasName[] = ['irradiance', 'distance'];
+
+/**
+ * DDGI's change-per-frame view (`ddgi/frame-change.ts`): full colour at 0.25%, 1% or 4% change
+ * per frame. Settled Cornell changes about 0.05-0.09% a frame on average and 0.16-0.26% at the
+ * 95th percentile (T1.12 phase 2b, RTX), so 0.25% shows its faintest flicker.
+ */
+export const CHANGE_FULL_SCALE_PERCENTS = [0.25, 1, 4] as const;
+export type ChangeFullScalePercent = (typeof CHANGE_FULL_SCALE_PERCENTS)[number];
+
+/** The irradiance atlas's own exposure range, in stops (the slider's ends). */
+export const MAX_ATLAS_EV = 10;
 
 /** DDGI's per-frame budget range, in GPU milliseconds (the slider's ends). */
 export const MIN_BUDGET_MS = 0.25;
@@ -53,7 +73,13 @@ export interface ViewerUrlState {
     upscale: UpscaleQuality | null;
     budgetMs: number;
     probes: boolean;
+    probeColor: ProbeColorName;
     debug: DdgiScreenViewName | null;
+    atlas: AtlasName | null;
+    atlasFill: boolean;
+    atlasEv: number;
+    /** The change-per-frame view's full-colour change, in percent; null is off. */
+    change: ChangeFullScalePercent | null;
 }
 
 export const DEFAULT_URL_STATE: ViewerUrlState = {
@@ -70,7 +96,12 @@ export const DEFAULT_URL_STATE: ViewerUrlState = {
     upscale: null,
     budgetMs: DEFAULT_BUDGET_MS,
     probes: false,
+    probeColor: 'state',
     debug: null,
+    atlas: null,
+    atlasFill: false,
+    atlasEv: 0,
+    change: null,
 };
 
 const TECHNIQUES: readonly TechniqueId[] = ['none', 'ddgi', 'lpg', 'vxgi', 'cycles'];
@@ -125,6 +156,13 @@ export function parseUrlState(search: string): ViewerUrlState {
     if (budget !== null) state.budgetMs = Math.min(MAX_BUDGET_MS, Math.max(MIN_BUDGET_MS, budget));
     state.probes = params.get('probes') === '1';
     state.debug = DDGI_SCREEN_VIEW_NAMES.find((name) => name === params.get('debug')) ?? null;
+    if (params.get('probecolor') === 'history') state.probeColor = 'history';
+    state.atlas = ATLAS_NAMES.find((name) => name === params.get('atlas')) ?? null;
+    state.atlasFill = params.get('atlasfill') === '1';
+    const atlasEv = finiteNumber(params.get('atlasev'));
+    if (atlasEv !== null) state.atlasEv = Math.min(MAX_ATLAS_EV, Math.max(-MAX_ATLAS_EV, atlasEv));
+    const change = finiteNumber(params.get('change'));
+    state.change = CHANGE_FULL_SCALE_PERCENTS.find((percent) => percent === change) ?? null;
     return state;
 }
 
@@ -147,5 +185,10 @@ export function serializeUrlState(state: ViewerUrlState): string {
     if (state.budgetMs !== DEFAULT_BUDGET_MS) params.set('budget', String(state.budgetMs));
     if (state.probes) params.set('probes', '1');
     if (state.debug) params.set('debug', state.debug);
+    if (state.probeColor !== DEFAULT_URL_STATE.probeColor) params.set('probecolor', state.probeColor);
+    if (state.atlas) params.set('atlas', state.atlas);
+    if (state.atlasFill) params.set('atlasfill', '1');
+    if (state.atlasEv !== DEFAULT_URL_STATE.atlasEv) params.set('atlasev', String(state.atlasEv));
+    if (state.change !== null) params.set('change', String(state.change));
     return params.toString();
 }

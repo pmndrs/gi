@@ -21,8 +21,10 @@ The picture sits to the left of the panel, never under it. Hover over any contro
 - **Technique:** DDGI (ours, the default), light probe grid (baked, with bounces) or VXGI (traced live).
 - **DDGI's settings:**
   - the update budget per frame (2 ms by default; the stats box shows how many probes that buys);
-  - "Show the probes": every probe as a small ball coloured by its state, with a legend and counts;
+  - "Show the probes": every probe as a small ball coloured by its state (with a legend and counts), or by how settled it is: how many updates its light is averaged over (red few, green the most DDGI keeps, 200);
   - a debug view: GI only on white surfaces, coverage (where DDGI answers), or the probes near each point;
+  - a probe atlas over the picture, in the corner or filling it: irradiance (one small square per probe, the light it gathered, with its own exposure) or distance;
+  - change per frame (the flicker check): with the camera still, orange where a pixel got brighter since the last frame and blue where it got darker, full colour at 0.25%, 1% or 4%. It works on top of GI only and the debug views;
   - "Start the probes over": warm up again from black.
 - **How DDGI starts:** it compiles its GPU programs, copies the scene and builds the ray-tracing trees, then warms up (up to 16 fast passes over every probe, at most 8 seconds of them) before the budget applies. The scene is drawn throughout.
 - **Compare with the Cycles reference:** one button puts DDGI on the left and the path-traced Cycles picture of the current camera view on the right, at the same exposure and tone mapping. It lines up at the camera view it was rendered from (the panel says so when you move away). "GI only" shows Cycles' bounced-light image. A view without a reference says so, with the command that renders it. References live in `bench/references` (gitignored), so a built copy of the viewer has none.
@@ -39,7 +41,7 @@ The address bar follows what you do, so a link reopens the same view:
 ?scene=sponza&camera=1&wipe=lpg,vxgi&split=0.5
 ```
 
-`scene`, `camera` (number or name), `technique` (`ddgi`, `lpg` or `vxgi`), `gi` (`off`, `on`, `only`), `wipe` (two of `none`, `ddgi`, `lpg`, `vxgi`, `cycles`), `split`, `ev` (absent: the scene's own), `tone`, `nav` (`orbit` or `fly`), `upscale` (a quality preset), `budget` (DDGI's ms per frame), `probes=1`, `debug` (`gi-only`, `coverage`, `probe-states`), and `cam=px,py,pz,tx,ty,tz,fov` for a free camera. See `src/ui/url-state.ts`.
+`scene`, `camera` (number or name), `technique` (`ddgi`, `lpg` or `vxgi`), `gi` (`off`, `on`, `only`), `wipe` (two of `none`, `ddgi`, `lpg`, `vxgi`, `cycles`), `split`, `ev` (absent: the scene's own), `tone`, `nav` (`orbit` or `fly`), `upscale` (a quality preset), `budget` (DDGI's ms per frame), `probes=1`, `probecolor=history`, `debug` (`gi-only`, `coverage`, `probe-states`), `atlas` (`irradiance`, `distance`), `atlasfill=1`, `atlasev` (stops), `change` (`0.25`, `1`, `4`), and `cam=px,py,pz,tx,ty,tz,fov` for a free camera. See `src/ui/url-state.ts`.
 
 ## Checks and measurements
 
@@ -69,7 +71,7 @@ The address bar follows what you do, so a link reopens the same view:
 
 - `src/core/viewer-core.ts`: renderer, scene, techniques, render pipeline and the wipe. No page code.
 - `src/techniques/`: the `GiTechnique` contract and its implementations (no GI, DDGI, light probe grid, VXGI, and the Cycles reference image).
-- `src/ddgi/`: the library's entry points as the viewer reads them, and DDGI's debug drawing (probe spheres, screen debug views).
+- `src/ddgi/`: the library's entry points as the viewer reads them, and DDGI's debug drawing (probe spheres and their history colours, screen debug views, the atlas overlay, the change per frame).
 - `src/scene/`: manifest loading, scene building (reuses `scenes/src`), model lookup, layers.
 - `src/ui/`: panel, hover help text, link state.
 - `src/bench/`: the baseline benchmark.

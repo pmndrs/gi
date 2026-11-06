@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { GILimitError } from '../../platform/contract/errors.ts';
-import { checkFieldLimits, distanceFormatFor, fieldBytes, fieldLayout, scratchLayout, UNIFORM_BYTES, UNIFORM_WORD } from './layout.ts';
+import { checkFieldLimits, distanceFormatFor, fieldBytes, fieldLayout, PROBE_HISTORY_BYTES, PROBE_HISTORY_WORD, PROBE_HISTORY_WORDS, scratchLayout, UNIFORM_BYTES, UNIFORM_WORD } from './layout.ts';
 import { borderSource, octDecode, octEncode, texelDirection } from './octahedral.ts';
 import { frameRayRotation, quaternionToMatrix, seededRandom, uniformRandomQuaternion } from './ray-rotation.ts';
 import { blendSettings, CHANGE_RULE_OFF, clockStep, FIXED_RAYS, MAX_CLOCK_STEP_SECONDS, distanceClamp, effectiveMaxRayDistance, effectiveRaysPerProbe, probeGrid, resolveBias, UNBOUNDED_RAY_DISTANCE, withDefaults } from './settings.ts';
@@ -359,6 +359,20 @@ describe('the uniform block', () => {
         }
         expect(words).toEqual(UNIFORM_WORD);
         expect(Math.ceil(offset / structAlign) * structAlign).toBe(UNIFORM_BYTES);
+    });
+});
+
+describe('the probe history', () => {
+    it('has the members PROBE_HISTORY_WORD says, one 32-bit word each, in that order', () => {
+        // Debug tools read the history buffer by these offsets (DDGIField.probeHistory), so they must match the kernel's struct.
+        const wgsl = blendKernelWgsl({ irradianceTexels: 6, distanceTexels: 14, scratch: scratchLayout(6, 14), reduction: 'workgroup' });
+        const body = /struct DdgiProbeHistory \{([\s\S]*?)\n\}/.exec(wgsl)?.[1];
+        expect(body).toBeDefined();
+        const members = [...(body ?? '').matchAll(/^\s*(\w+): (\w+),/gm)].map((match) => ({ name: match[1], type: match[2] }));
+        expect(members.map((member) => member.type).every((type) => type === 'f32' || type === 'u32')).toBe(true);
+        expect(Object.fromEntries(members.map((member, index) => [member.name, index]))).toEqual(PROBE_HISTORY_WORD);
+        expect(members.length).toBe(PROBE_HISTORY_WORDS);
+        expect(PROBE_HISTORY_BYTES).toBe(PROBE_HISTORY_WORDS * 4);
     });
 });
 

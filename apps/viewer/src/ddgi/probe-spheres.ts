@@ -12,15 +12,32 @@
  *
  * The colours are DDGI's own debug colours (`DDGI_DEBUG_COLORS`), the ones
  * its "probes near this point" view uses, so the two views agree.
+ *
+ * Or, coloured by history (`colorBy = 'history'`): how many updates each
+ * active probe's light is averaged over (adaptive hysteresis' n), red for
+ * few, green for the full count (`history-colors.ts`); probes that aren't
+ * active are grey. The counts come from `ProbeHistoryTexture`, one texel per
+ * probe in the same order as the points.
  */
 
 import { Mesh, SphereGeometry } from 'three';
 import { NodeMaterial, type Node } from 'three/webgpu';
-import { float, instanceIndex, int, ivec2, normalView, positionLocal, select, textureLoad, uniform, varying, vec3, vec4 } from 'three/tsl';
+import { clamp, float, instanceIndex, int, ivec2, log, mix, normalView, positionLocal, select, textureLoad, uniform, varying, vec3, vec4 } from 'three/tsl';
 import { DDGI_DEBUG_COLORS, GI_USER_DATA, PROBE_STATE, wrapGpuTexture, type DebugView } from './library';
 import { LAYER_DDGI_PROBES } from '../scene/layers';
+import { HISTORY_COLORS } from './history-colors';
 
 type PointsView = Extract<DebugView, { kind: 'points' }>;
+
+/** What the spheres' colour shows: the probe's state, or how settled its history is. */
+export type ProbeColorBy = 'state' | 'history';
+
+/** Where each probe's history count is: a texture laid out like the points texture (`ProbeHistoryTexture`). */
+export interface ProbeHistorySource {
+    texture(): GPUTexture;
+    /** The full count (`hysteresisMaxSamples`): green. */
+    maxSamples(): number;
+}
 
 /** Linear RGB per probe state, from DDGI's own debug colours. */
 export const PROBE_STATE_COLORS: Readonly<Record<number, readonly [number, number, number]>> = {
@@ -58,10 +75,16 @@ export class ProbeSpheres {
     private readonly textureWidth = uniform(1, 'int');
     private gpuTexture: GPUTexture;
     private readonly pointsNode: ReturnType<typeof textureLoad>;
+    private historyTexture: GPUTexture;
+    private readonly historyNode: ReturnType<typeof textureLoad>;
+    /** 0: colour by state; 1: by history. A uniform, so switching costs nothing. */
+    private readonly colorByHistory = uniform(0);
+    private readonly maxSamples = uniform(1);
 
     constructor(
         private readonly view: PointsView,
         smallestSpacing: number,
+        private readonly history: ProbeHistorySource,
     ) {
         this.gpuTexture = view.texture();
         this.textureWidth.value = this.gpuTexture.width;
@@ -75,7 +98,7 @@ export class ProbeSpheres {
 
         // The state's colour, chosen per vertex (one state per instance) and passed on.
         const state = int(point.w.add(0.5));
-        const stateColor = select(
+        const byState = select(
             state.equal(PROBE_STATE.active),
             colorNode(PROBE_STATE_COLORS[PROBE_STATE.active]),
             select(
@@ -88,6 +111,17 @@ export class ProbeSpheres {
                 ),
             ),
         );
+
+        // The history colour: the mirror of `historyColor` in history-colors.ts (log scale, red to yellow to green).
+        this.historyTexture = history.texture();
+        this.historyNode = textureLoad(wrapGpuTexture(this.historyTexture, { dimension: '2d', sampleType: 'unfilterable-float' }), texel);
+        const samples = (this.historyNode as unknown as Node<'vec4'>).x;
+        const settled = clamp(log(samples.max(0).add(1)).div(log(this.maxSamples.add(1))), 0, 1);
+        const towardsHalfway = mix(colorNode(HISTORY_COLORS.fewUpdates), colorNode(HISTORY_COLORS.halfway), settled.mul(2));
+        const towardsSettled = mix(colorNode(HISTORY_COLORS.halfway), colorNode(HISTORY_COLORS.settled), settled.mul(2).sub(1));
+        const activeHistory = select(settled.lessThan(0.5), towardsHalfway, towardsSettled);
+        const byHistory = select(state.equal(PROBE_STATE.active), activeHistory, colorNode(HISTORY_COLORS.notActive));
+        const stateColor = select(this.colorByHistory.greaterThan(0.5), byHistory, byState);
 
         const material = new NodeMaterial();
         material.name = 'ddgi probe spheres';
@@ -112,6 +146,11 @@ export class ProbeSpheres {
         this.mesh = mesh;
     }
 
+    /** Colour by state or by history. Free: it's a uniform. */
+    set colorBy(choice: ProbeColorBy) {
+        this.colorByHistory.value = choice === 'history' ? 1 : 0;
+    }
+
     /** Once per frame: follow a reallocated texture (a new `prepare`) and the probe count. */
     refresh(): void {
         const current = this.view.texture();
@@ -120,6 +159,12 @@ export class ProbeSpheres {
             this.pointsNode.value = wrapGpuTexture(current, { dimension: '2d', sampleType: 'unfilterable-float' });
             this.textureWidth.value = current.width;
         }
+        const history = this.history.texture();
+        if (history !== this.historyTexture) {
+            this.historyTexture = history;
+            this.historyNode.value = wrapGpuTexture(history, { dimension: '2d', sampleType: 'unfilterable-float' });
+        }
+        this.maxSamples.value = this.history.maxSamples();
         this.mesh.count = this.view.count();
     }
 

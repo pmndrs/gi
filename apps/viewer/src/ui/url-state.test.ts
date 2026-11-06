@@ -41,6 +41,15 @@ describe('url state', () => {
         expect(serializeUrlState({ ...DEFAULT_URL_STATE, ev: 0 })).toBe('ev=0');
     });
 
+    it("reads DDGI's debug views and round-trips them", () => {
+        const state = parseUrlState('?probes=1&probecolor=history&atlas=irradiance&atlasfill=1&atlasev=2.5&change=0.25&gi=only');
+        expect(state).toMatchObject({ probes: true, probeColor: 'history', atlas: 'irradiance', atlasFill: true, atlasEv: 2.5, change: 0.25, gi: 'only' });
+        expect(parseUrlState(serializeUrlState(state))).toEqual(state);
+        // Only the offered scales; anything else is off. The atlas exposure is clamped to the slider.
+        const nonsense = parseUrlState('?probecolor=rainbow&atlas=normals&atlasfill=yes&atlasev=99&change=3');
+        expect(nonsense).toMatchObject({ probeColor: 'state', atlas: null, atlasFill: false, atlasEv: 10, change: null });
+    });
+
     it('round-trips a state and keeps the default link empty', () => {
         expect(serializeUrlState(DEFAULT_URL_STATE)).toBe('');
         const state = parseUrlState('?scene=sponza&camera=1&wipe=lpg,vxgi&split=0.4');

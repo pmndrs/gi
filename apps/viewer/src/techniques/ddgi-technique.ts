@@ -35,10 +35,23 @@
  * value, which makes the field the plain mean of every estimate so far, the
  * fastest way to average out ray noise. After 16 passes it is the mean of 16
  * estimates; the normal hysteresis (0.97) then carries on from there.
+ *
+ * Debug views (T1.12), for seeing where noise and error come from:
+ *  - the probe spheres, coloured by state or by history (how many updates
+ *    each probe's light is averaged over; `ProbeHistoryTexture`);
+ *  - the screen views (`DDGI_SCREEN_VIEWS`: GI only, coverage, probes near
+ *    this point), drawn through `scene.overrideMaterial`;
+ *  - a probe atlas over the picture (`AtlasOverlay`);
+ *  - the change per frame (`FrameChangeView`), which works on whatever DDGI
+ *    draws: the normal picture, GI only, or a screen view.
+ * Direct light against GI is the viewer's GI off / on / GI only choice.
  */
 
+import type { Node } from 'three/webgpu';
 import { platformSkyEnvironment } from '../../../../scenes/src/sky/sky-image';
+import { AtlasOverlay, type AtlasChoice } from '../ddgi/atlas-overlay';
 import { DdgiDebugMaterial } from '../ddgi/debug-material';
+import { FrameChangeView } from '../ddgi/frame-change';
 import {
     createGI,
     DDGI_DEBUG_VIEW,
@@ -50,7 +63,8 @@ import {
     type FrameBudget,
     type GIPlatform,
 } from '../ddgi/library';
-import { ProbeSpheres } from '../ddgi/probe-spheres';
+import { ProbeHistoryTexture } from '../ddgi/probe-history';
+import { ProbeSpheres, type ProbeColorBy } from '../ddgi/probe-spheres';
 import type { DdgiBudgetStats, DdgiFrameStats } from '../stats/ddgi-stats';
 import { LAYER_DDGI, LAYER_DDGI_PROBES } from '../scene/layers';
 import { ScenePassTechnique } from './scene-pass-technique';
@@ -68,13 +82,32 @@ export type DdgiScreenView = keyof typeof DDGI_SCREEN_VIEWS;
 export interface DdgiViewerSettings {
     /** GPU milliseconds per frame for probe updates. */
     budgetMs: number;
-    /** Draw every probe as a small sphere coloured by its state. */
+    /** Draw every probe as a small sphere. */
     showProbes: boolean;
+    /** What the spheres' colour shows: the probe's state, or how many updates its light is averaged over. */
+    probeColor: ProbeColorBy;
     /** A screen debug view instead of the normal picture, or null. */
     screenView: DdgiScreenView | null;
+    /** A probe atlas drawn over the picture, or null. */
+    atlas: AtlasChoice | null;
+    /** The atlas fills the view instead of sitting in the bottom-right corner. */
+    atlasFill: boolean;
+    /** Extra exposure for the irradiance atlas, in stops, on top of the viewer's. */
+    atlasExposureEv: number;
+    /** The change-per-frame view, full colour at this change in percent; null shows the picture itself. */
+    changeFullScalePercent: number | null;
 }
 
-export const DEFAULT_DDGI_VIEWER_SETTINGS: DdgiViewerSettings = { budgetMs: 2, showProbes: false, screenView: null };
+export const DEFAULT_DDGI_VIEWER_SETTINGS: DdgiViewerSettings = {
+    budgetMs: 2,
+    showProbes: false,
+    probeColor: 'state',
+    screenView: null,
+    atlas: null,
+    atlasFill: false,
+    atlasExposureEv: 0,
+    changeFullScalePercent: null,
+};
 
 /** Full passes over every probe before the frame budget applies (see the file comment). */
 export const WARMUP_PASSES = 16;
@@ -161,7 +194,12 @@ export class DdgiTechnique extends ScenePassTechnique {
     private readonly started: Promise<void>;
     private threeGI: ThreeGI | null = null;
     private spheres: ProbeSpheres | null = null;
+    private probeHistory: ProbeHistoryTexture | null = null;
     private debugMaterial: DdgiDebugMaterial | null = null;
+    private atlasOverlay: AtlasOverlay | null = null;
+    private readonly frameChange = new FrameChangeView();
+    /** The picture `outputNode` last wrapped with the debug overlays, what it was wrapped with, and the result. */
+    private composed: { from: Node; key: string; node: Node } | null = null;
     private settings: DdgiViewerSettings;
     private budget: FrameBudget;
     private phase: Phase = 'preparing';
@@ -230,13 +268,20 @@ export class DdgiTechnique extends ScenePassTechnique {
         // The adapter keeps the layers when it replaces the light.
         this.threeGI.light.layers.set(LAYER_DDGI);
 
-        const points = this.ddgi.debugViews.find((view): view is Extract<DebugView, { kind: 'points' }> => view.kind === 'points');
+        const points = this.pointsView;
         if (points) {
-            this.spheres = new ProbeSpheres(points, loaded.manifest.volume.probeSpacing);
+            const history = new ProbeHistoryTexture(this.context.device);
+            this.probeHistory = history;
+            // The history texture has the points texture's shape: probe i at texel (i mod width, i div width).
+            this.spheres = new ProbeSpheres(points, loaded.manifest.volume.probeSpacing, {
+                texture: () => history.texture(points.texture().width, points.texture().height),
+                maxSamples: () => this.ddgi.settings.hysteresisMaxSamples,
+            });
             loaded.scene.add(this.spheres.mesh);
         }
         this.debugMaterial = new DdgiDebugMaterial(this.platform.shading);
-        this.applyScreenView();
+        this.atlasOverlay = new AtlasOverlay(this.platform.shading);
+        this.applyDisplaySettings();
 
         // The first update copies the scene in and starts the tree builds (still paused).
         this.threeGI.update(this.camera, 0);
@@ -408,7 +453,7 @@ export class DdgiTechnique extends ScenePassTechnique {
         this.budget = { gpuMs: settings.budgetMs };
         // Before the warm-up the platform stays paused (see `start`); the warm-up takes the new budget.
         if (this.threeGI && (this.phase === 'warming' || this.phase === 'calibrating' || this.phase === 'ready')) this.threeGI.budget = this.budget;
-        this.applyScreenView();
+        this.applyDisplaySettings();
         if (probesChanged) this.applyLayers();
     }
 
@@ -416,8 +461,69 @@ export class DdgiTechnique extends ScenePassTechnique {
         return this.settings;
     }
 
-    private applyScreenView(): void {
+    /** Settings that are uniforms: no shader is rebuilt. (The atlas choice and the change view rebuild `outputNode`.) */
+    private applyDisplaySettings(): void {
         if (this.debugMaterial && this.settings.screenView) this.debugMaterial.view = DDGI_SCREEN_VIEWS[this.settings.screenView];
+        if (this.spheres) this.spheres.colorBy = this.settings.probeColor;
+        if (this.settings.changeFullScalePercent !== null) this.frameChange.fullScalePercent = this.settings.changeFullScalePercent;
+    }
+
+    // -- the debug overlays --------------------------------------------------
+
+    /** DDGI's `points` debug view (the probe positions and states). */
+    private get pointsView(): Extract<DebugView, { kind: 'points' }> | undefined {
+        return this.ddgi.debugViews.find((view): view is Extract<DebugView, { kind: 'points' }> => view.kind === 'points');
+    }
+
+    /**
+     * Whether the change per frame is on screen. It compares DDGI's own scene target, which the
+     * upscaler doesn't draw into, so it is off while the upscaler is on.
+     */
+    private get showsChange(): boolean {
+        // `settings` is still unset while the base class's constructor runs.
+        const settings = this.settings as DdgiViewerSettings | undefined;
+        if (!settings || settings.changeFullScalePercent === null) return false;
+        return !this.upscaling && this.giMode !== 'off';
+    }
+
+    /** The atlas shown over the picture, once the platform has textures to show. */
+    private get shownAtlas(): AtlasChoice | null {
+        const settings = this.settings as DdgiViewerSettings | undefined;
+        if (!settings?.atlas || !this.atlasOverlay || this.giMode === 'off') return null;
+        return settings.atlas;
+    }
+
+    /**
+     * The picture with the debug overlays on top. A new node only when what is overlaid changes
+     * (or the base picture was rebuilt); the viewer rebuilds its pipeline when this changes.
+     */
+    override get outputNode(): Node {
+        const base = super.outputNode;
+        const atlas = this.shownAtlas;
+        const change = this.showsChange;
+        if (!atlas && !change) return base;
+        const key = `${atlas ?? 'no atlas'}|${change ? 'change' : 'picture'}`;
+        if (this.composed?.from === base && this.composed.key === key) return this.composed.node;
+        let node = change ? this.frameChange.node(this.sceneTarget) : base;
+        if (atlas && this.atlasOverlay) node = this.atlasOverlay.compose(node, atlas);
+        this.composed = { from: base, key, node };
+        return node;
+    }
+
+    /** Once per frame, after DDGI's update and before anything is drawn: the debug views' inputs. */
+    private refreshDebugViews(): void {
+        const field = this.ddgi.field;
+        const points = this.pointsView;
+        if (field && points && this.probeHistory && this.settings.showProbes && this.settings.probeColor === 'history') {
+            this.probeHistory.update(field, points.texture().width, points.texture().height);
+        }
+        this.spheres?.refresh();
+        if (field && this.atlasOverlay && this.shownAtlas) {
+            this.atlasOverlay.refresh(this.context.renderer, field, { fill: this.settings.atlasFill, exposureStops: this.settings.atlasExposureEv });
+        }
+        // Keep the last frame's picture before this frame draws over it.
+        if (this.showsChange) this.frameChange.capturePrevious(this.context.renderer, this.sceneTarget, this.camera);
+        else this.frameChange.forget();
     }
 
     protected giLayers(): readonly number[] {
@@ -438,7 +544,7 @@ export class DdgiTechnique extends ScenePassTechnique {
         if (threeGI && this.phase === 'ready' && this.giMode !== 'off') {
             threeGI.update(this.camera);
         }
-        this.spheres?.refresh();
+        this.refreshDebugViews();
         const scene = this.context.loaded.scene;
         const override = this.settings.screenView && this.debugMaterial && this.giMode !== 'off' && this.phase !== 'failed' ? this.debugMaterial : null;
         if (!override) {
@@ -534,6 +640,11 @@ export class DdgiTechnique extends ScenePassTechnique {
         return snapshot;
     }
 
+    /** The most updates a probe's history keeps (`hysteresisMaxSamples`): the "settled" end of the history colours. */
+    get historyMaxSamples(): number {
+        return this.ddgi.settings.hysteresisMaxSamples;
+    }
+
     /** How many probes are in `state` (a `PROBE_STATE` value), from the GPU census; null until it has counted. */
     probeStateCount(state: number): number | null {
         const entry = STATE_COUNTERS.find((candidate) => candidate.state === state);
@@ -564,7 +675,9 @@ export class DdgiTechnique extends ScenePassTechnique {
         this.disposed = true;
         this.threeGI?.dispose();
         this.spheres?.dispose();
+        this.probeHistory?.dispose();
         this.debugMaterial?.dispose();
+        this.frameChange.dispose();
         this.platform.dispose();
         this.disposeTarget();
     }

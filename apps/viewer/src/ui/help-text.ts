@@ -19,18 +19,27 @@ export const HELP = {
     toneMapping:
         'How very bright light is squeezed onto the screen. ACES is the usual film look. AgX and Neutral keep colours truer. Linear clips bright areas to white.',
     referenceCube: 'Shows a 1 metre cube so you can judge the size of the scene.',
-    giOff: 'Direct light only: the sun and lamps, plus shadows, but no light bouncing off walls. Shadowed areas go dark.',
-    giOn: 'Direct light plus global illumination: light that has bounced around the scene, giving soft fill, colour bleeding and brighter shadows.',
+    giOff: 'Direct light only: the sun and lamps, plus shadows, but no light bouncing off walls. Shadowed areas go dark. Nothing here comes from DDGI, so this side never flickers.',
+    giOn: 'Direct light plus global illumination (the indirect light): light that has bounced around the scene, giving soft fill, colour bleeding and brighter shadows.',
     giOnly:
-        'Only the bounced light, with the direct sun and lamps hidden. Use it to see what the GI technique alone contributes. Surfaces still show their colour, and glowing surfaces still glow.',
+        "Only the indirect light (the GI), with the direct sun and lamps hidden. Use it to see what the GI technique alone contributes, and where DDGI's noise is: without the steady direct light on top, any flicker is easier to see. Surfaces still show their colour, and glowing surfaces still glow.",
     technique:
         'Which global illumination technique to use. DDGI is ours: probes in a grid, each tracing rays every frame, so light, sky and moving things update live. The other two come from three.js and are the baselines DDGI has to beat. Light probe grid: light stored at points in the scene, baked once. VXGI: a voxel copy of the scene traced live every frame. All get the same lights, sky and exposure, at full physical strength, so the comparison is fair.',
     ddgiBudget:
         'How much GPU time DDGI may spend per frame updating its probes, in milliseconds, with the GPU working at full speed. DDGI measures once how many probes that buys and then updates that many every frame; changing this works out the new number from what it measured. More updates more probes each frame, so light settles faster after a change; less leaves more time for drawing. 2 ms is the default and the target. The stats box (top left) shows how many probes that buys.',
     ddgiProbes:
         'Draws every DDGI probe as a small ball where it really sits (probes stuck in walls are moved out), coloured by what it is doing. The legend below says what each colour means; the numbers count the probes in each state.',
+    ddgiProbeColor:
+        "What the probe balls' colour shows. State: active, switched off, or not updated yet. How settled: how many updates each probe's light is averaged over, red for a few (a new or rarely updated probe, noisy), yellow for about 13, green for the most DDGI keeps (200, as quiet as it gets). Probes that are not active are grey. A probe updated every frame turns green within a few seconds; in a big scene each probe is updated less often, and DDGI lets older updates fade after a few seconds so light changes still come through, so those probes stay orange or yellow on purpose.",
     ddgiScreenView:
         "Replaces the picture with one of DDGI's check views. GI only: just the bounced light, as it would fall on plain white surfaces. Coverage: green where DDGI answers fully, red where it gives way (outside the probe box, or where no probe can see). Probes near this point: the colours of the 8 probes each point reads from. Turns off while the upscaler is on.",
+    ddgiAtlas:
+        "Draws one of DDGI's probe textures over the picture. Each small square is one probe: the light it has gathered from every direction (irradiance), or how far it can see in every direction (distance). Each block of squares is one horizontal layer of probes, the lowest first (top left). A square that changes from frame to frame is a noisy probe; a black one is switched off or not updated yet. Irradiance is shown as the light on a white wall facing that way, at the picture's exposure plus the atlas exposure below; distance goes from black (right at the probe) to white (one and a half probe cells away or more).",
+    ddgiAtlasFill: 'Makes the probe texture fill the picture instead of sitting in the bottom-right corner, so single squares are easier to see.',
+    ddgiAtlasExposure:
+        'Brightens or darkens the irradiance texture only, in stops, on top of the picture\'s exposure. Dark probes become readable at +2 to +4. It does not affect the distance texture.',
+    ddgiChange:
+        "Shows how much each pixel changed since the previous frame: the flicker check. Hold the camera still (a moving camera shows no colour). Orange: the pixel got brighter; blue: darker; the brighter the colour, the bigger the change, with full colour at the percentage chosen here (0.25% shows the faintest flicker, 4% only big jumps). The rest of the picture is shown dim and grey. With a still camera the direct light never changes, so every coloured pixel is the GI changing as probes update. Try it with GI only, where nothing steady sits on top of the GI; it also works with the other debug views, and is off while the upscaler is on. Changes under about 0.1% are at the picture's own precision and show as a faint speckle.",
     ddgiRestart:
         'Throws away what the probes have learned and warms them up again from black, the way a scene starts. Useful to watch how fast the light settles.',
     lpgBounces:

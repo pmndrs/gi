@@ -181,6 +181,25 @@ export const SAMPLE_PARAMETER_VEC4_COUNT = 4;
 export const RAY_RECORD_BYTES = 8;
 
 /**
+ * One probe's history for the hysteresis rule (`DdgiProbeHistory` in
+ * wgsl/blend.ts), in 32-bit words:
+ * - `samples` (f32): n, the updates the probe's light is averaged over after
+ *   its last blended update (at most `hysteresisMaxSamples`);
+ * - `lastUpdateSeconds` (f32): the technique's clock at that update;
+ * - `updates` (u32): k, its blended updates since it was new, reset or back on.
+ *
+ * The history buffer (`DDGIField.probeHistory`) holds one per probe in
+ * probe-index order, the order of the `points` debug view's texels.
+ */
+export const PROBE_HISTORY_WORD = {
+    samples: 0,
+    lastUpdateSeconds: 1,
+    updates: 2,
+} as const;
+export const PROBE_HISTORY_WORDS = 3;
+export const PROBE_HISTORY_BYTES = PROBE_HISTORY_WORDS * 4;
+
+/**
  * The census buffer (read back a few frames late, for the counters): probes
  * per state (indices are the states), then rays traced this frame.
  */

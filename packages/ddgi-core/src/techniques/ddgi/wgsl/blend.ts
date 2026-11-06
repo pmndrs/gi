@@ -357,7 +357,7 @@ fn ddgiDecide(probe: vec3i, offset: vec3f, state: u32) -> DdgiProbeDecision {
 
 // ---- Phase C: blend ----
 
-// One probe's history (PROBE_HISTORY_BYTES in ddgi-technique.ts).
+// One probe's history (PROBE_HISTORY_WORD in layout.ts).
 struct DdgiProbeHistory {
     samples: f32,            // n: the updates its history counts as
     lastUpdateSeconds: f32,  // t: the technique's clock at its last blended update

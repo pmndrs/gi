@@ -17,6 +17,7 @@ import { findBookmark, loadAllManifests } from './scene/manifests';
 import { LAYER_VIEW_GEOMETRY } from './scene/layers';
 import { nextFrame, type LoadProgress } from './scene/load-scene';
 import { PROBE_STATE_LABELS } from './ddgi/library';
+import { halfwaySamples, historyColor, HISTORY_COLORS } from './ddgi/history-colors';
 import { PROBE_STATE_COLORS } from './ddgi/probe-spheres';
 import { DdgiStatsText, StatsOverlay } from './stats';
 import { DEFAULT_LPG_SETTINGS } from './techniques/light-probe-grid-technique';
@@ -278,7 +279,16 @@ export class ViewerApp {
     private applyState(): void {
         this.core.configureProbeGrid({ ...DEFAULT_LPG_SETTINGS, ...this.probeSettings });
         this.core.configureVxgi({ ...DEFAULT_VXGI_SETTINGS, ...this.vxgiSettings });
-        this.core.configureDdgi({ budgetMs: this.url.budgetMs, showProbes: this.url.probes, screenView: this.url.debug });
+        this.core.configureDdgi({
+            budgetMs: this.url.budgetMs,
+            showProbes: this.url.probes,
+            probeColor: this.url.probeColor,
+            screenView: this.url.debug,
+            atlas: this.url.atlas,
+            atlasFill: this.url.atlasFill,
+            atlasExposureEv: this.url.atlasEv,
+            changeFullScalePercent: this.url.change,
+        });
         this.core.setToneMapping(this.url.tone as ToneMappingName);
         this.core.setExposureEv(this.exposureEv());
         this.core.setUpscale(this.url.upscale ? { quality: this.url.upscale } : null);
@@ -313,7 +323,16 @@ export class ViewerApp {
             referenceCube: this.referenceCubeVisible,
             gi: this.url.gi,
             technique: this.url.technique,
-            ddgi: { budgetMs: this.url.budgetMs, probes: this.url.probes, debug: this.url.debug },
+            ddgi: {
+                budgetMs: this.url.budgetMs,
+                probes: this.url.probes,
+                probeColor: this.url.probeColor,
+                debug: this.url.debug,
+                atlas: this.url.atlas,
+                atlasFill: this.url.atlasFill,
+                atlasEv: this.url.atlasEv,
+                change: this.url.change,
+            },
             probeBounces: this.probeSettings.bounces,
             maxProbes: this.probeSettings.maxProbes,
             vxgiBounces: this.vxgiSettings.bounces,
@@ -375,7 +394,17 @@ export class ViewerApp {
             },
             onGi: (choice: ViewerUrlState['gi']) => change({ gi: choice }),
             onTechnique: (id: ViewerUrlState['technique']) => change({ technique: id }),
-            onDdgiSettings: (settings: DdgiPanelSettings) => change({ budgetMs: settings.budgetMs, probes: settings.probes, debug: settings.debug }),
+            onDdgiSettings: (settings: DdgiPanelSettings) =>
+                change({
+                    budgetMs: settings.budgetMs,
+                    probes: settings.probes,
+                    probeColor: settings.probeColor,
+                    debug: settings.debug,
+                    atlas: settings.atlas,
+                    atlasFill: settings.atlasFill,
+                    atlasEv: settings.atlasEv,
+                    change: settings.change,
+                }),
             onDdgiRestart: () => this.core.restartDdgi(),
             onCompareWithReference: () => {
                 // Go to the reference's own shot: camera, aspect, exposure and tone mapping.
@@ -713,9 +742,22 @@ export class ViewerApp {
         else this.ddgiStats.reset();
     }
 
-    /** The probe legend: each state's colour and, once the GPU has counted them, how many probes are in it. */
+    /**
+     * The probe legend. By state: each state's colour and, once the GPU has counted them, how many
+     * probes are in it. By history: the colour scale from a few updates to the full count.
+     */
     private probeLegend(): ProbeLegendEntry[] {
         const ddgi = this.core.ddgi;
+        if (this.url.probeColor === 'history') {
+            const maxSamples = ddgi?.historyMaxSamples ?? 0;
+            const halfway = halfwaySamples(maxSamples);
+            return [
+                { color: historyColor(1, maxSamples), label: '1 update: new, or rarely updated (noisy)', count: null },
+                { color: historyColor(halfway, maxSamples), label: `about ${Math.round(halfway)} updates`, count: null },
+                { color: historyColor(maxSamples, maxSamples), label: `${maxSamples} updates: settled, the most kept`, count: null },
+                { color: HISTORY_COLORS.notActive, label: 'not active (off, or not updated yet)', count: null },
+            ];
+        }
         return Object.entries(PROBE_STATE_LABELS).map(([state, label]) => ({
             color: PROBE_STATE_COLORS[Number(state)],
             label,
