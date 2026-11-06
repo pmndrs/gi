@@ -201,6 +201,27 @@ function probeErrors(now: ProbeMeans, reference: ProbeMeans): { errors: number[]
     return { errors, probes };
 }
 
+/**
+ * The field's error weighted by its light: the sum of |now - reference| over
+ * the sum of the reference, every active probe and channel. Dark probes,
+ * whose relative error is large and says little about the picture, count by
+ * their light. Also the error of the volume's mean light.
+ */
+function lightWeightedError(now: ProbeMeans, reference: ProbeMeans, include: (probe: number) => boolean = () => true): { weighted: number; ofMean: number } {
+    let difference = 0;
+    let sum = 0;
+    let nowSum = 0;
+    for (let probe = 0; probe < reference.mean.length; probe++) {
+        if (!reference.active[probe] || !now.active[probe] || !include(probe)) continue;
+        for (let channel = 0; channel < 3; channel++) {
+            difference += Math.abs(now.mean[probe][channel] - reference.mean[probe][channel]);
+            sum += reference.mean[probe][channel];
+            nowSum += now.mean[probe][channel];
+        }
+    }
+    return { weighted: sum > 0 ? difference / sum : 0, ofMean: sum > 0 ? Math.abs(nowSum / sum - 1) : 0 };
+}
+
 const meanOf = (values: readonly number[]) => values.reduce((sum, value) => sum + value, 0) / Math.max(1, values.length);
 function quantile(values: readonly number[], share: number): number {
     const sorted = [...values].sort((a, b) => a - b);
@@ -317,7 +338,9 @@ await runThreePage(
                 await frames(test, SETTLE_FRAMES, UNITS);
                 const before = await test.mean();
                 // The noise floor: the same field after the settle frames at the batch, against itself converged.
-                const floor = probeErrors(await probeMeans(test), convergedMeans);
+                const settledMeans = await probeMeans(test);
+                const floor = probeErrors(settledMeans, convergedMeans);
+                const weightedFloor = lightWeightedError(settledMeans, convergedMeans);
                 aimSun(test, turnedSun(startDirection, SUN_TURN_DEGREES));
                 // Near and far probes, by their camera weight from bookmark 1.
                 const camera = test.scene.camera;
@@ -330,20 +353,24 @@ await runThreePage(
                     return cameraWeight(point, { position: [camera.position.x, camera.position.y, camera.position.z] }, planes, grid) >= NEAR_CAMERA_WEIGHT;
                 };
                 const viewMeans: number[] = [];
-                const volume: Array<{ frame: number; mean: number; p95: number; near: number; far: number }> = [];
+                const volume: Array<{ frame: number; mean: number; p95: number; near: number; far: number; weighted: number; ofMean: number; weightedFar: number }> = [];
                 for (let frame = 1; frame <= MEASURED_FRAMES; frame++) {
                     test.scene.frame({ units: UNITS });
                     viewMeans.push(await test.mean());
                     if (frame % 6 === 0 || frame === 1) {
-                        const { errors, probes } = probeErrors(await probeMeans(test), turnedReference);
+                        const now = await probeMeans(test);
+                        const { errors, probes } = probeErrors(now, turnedReference);
                         const nearErrors = errors.filter((_, index) => near(probes[index]));
                         const farErrors = errors.filter((_, index) => !near(probes[index]));
-                        volume.push({ frame, mean: meanOf(errors), p95: quantile(errors, 0.95), near: meanOf(nearErrors), far: meanOf(farErrors) });
+                        const light = lightWeightedError(now, turnedReference);
+                        const farLight = lightWeightedError(now, turnedReference, (probeIndex) => !near(probeIndex));
+                        volume.push({ frame, mean: meanOf(errors), p95: quantile(errors, 0.95), near: meanOf(nearErrors), far: meanOf(farErrors), weighted: light.weighted, ofMean: light.ofMean, weightedFar: farLight.weighted });
                     }
                 }
                 test.scene.dispose();
                 const response = stepResponse(before, turnedSettled, viewMeans, TOLERANCE);
-                const volumeWithin = volume.find((entry, index) => volume.slice(index).every((later) => later.mean <= TOLERANCE));
+                // Check 5's measure: the field's error weighted by its light (the per-probe relative error is reported, with its noise floor).
+                const volumeWithin = volume.find((entry, index) => volume.slice(index).every((later) => later.weighted <= TOLERANCE));
                 const atThreeSeconds = volume.find((entry) => entry.frame === VOLUME_FRAMES);
                 const floorNear = meanOf(floor.errors.filter((_, index) => near(floor.probes[index])));
                 const floorFar = meanOf(floor.errors.filter((_, index) => !near(floor.probes[index])));
@@ -356,18 +383,19 @@ await runThreePage(
                     viewOvershootShareOfStep: response.overshootShareOfStep,
                     volumeWithinFrame: volumeWithin?.frame ?? null,
                     atThreeSeconds,
-                    noiseFloor: { mean: meanOf(floor.errors), p95: quantile(floor.errors, 0.95), near: floorNear, far: floorFar },
+                    noiseFloor: { mean: meanOf(floor.errors), p95: quantile(floor.errors, 0.95), near: floorNear, far: floorFar, weighted: weightedFloor.weighted, ofMean: weightedFloor.ofMean },
                     volume,
                     viewErrors: response.errors,
                 };
                 log(
                     `the sun ${SUN_TURN_DEGREES} degrees lower: the view ${before.toPrecision(4)} -> ${turnedSettled.toPrecision(4)}, within ${TOLERANCE * 100}% for good from frame ${response.settledFrame ?? 'never'}; ` +
-                        `the mean probe error within ${TOLERANCE * 100}% for good from frame ${volumeWithin?.frame ?? 'never'}; at ${VOLUME_FRAMES} frames mean ${((atThreeSeconds?.mean ?? NaN) * 100).toFixed(1)}%, p95 ${((atThreeSeconds?.p95 ?? NaN) * 100).toFixed(1)}%, ` +
+                        `the field's light-weighted error within ${TOLERANCE * 100}% for good from frame ${volumeWithin?.frame ?? 'never'} (at ${VOLUME_FRAMES} frames ${((atThreeSeconds?.weighted ?? NaN) * 100).toFixed(1)}%, far probes ${((atThreeSeconds?.weightedFar ?? NaN) * 100).toFixed(1)}%, the volume's mean ${((atThreeSeconds?.ofMean ?? NaN) * 100).toFixed(1)}%; floor ${(weightedFloor.weighted * 100).toFixed(1)}%); ` +
+                        `per-probe relative error at ${VOLUME_FRAMES} frames mean ${((atThreeSeconds?.mean ?? NaN) * 100).toFixed(1)}%, p95 ${((atThreeSeconds?.p95 ?? NaN) * 100).toFixed(1)}%, ` +
                         `near ${((atThreeSeconds?.near ?? NaN) * 100).toFixed(1)}%, far ${((atThreeSeconds?.far ?? NaN) * 100).toFixed(1)}% (before the step, against itself converged: near ${(floorNear * 100).toFixed(1)}%, far ${(floorFar * 100).toFixed(1)}%)\n` +
-                        `    view error by frame: ${describeErrors(response.errors)}\n    probe error by frame: ${volume.map((entry) => `${entry.frame}: ${(entry.mean * 100).toFixed(1)}%`).join(', ')}`,
+                        `    view error by frame: ${describeErrors(response.errors)}\n    light-weighted error by frame: ${volume.map((entry) => `${entry.frame}: ${(entry.weighted * 100).toFixed(1)}%`).join(', ')}`,
                 );
                 if (response.settledFrame === null || response.settledFrame > VIEW_FRAMES) failures.push(`the sun turned: the view within 5% for good only from frame ${response.settledFrame ?? 'never'} (bar ${VIEW_FRAMES})`);
-                if (!volumeWithin || volumeWithin.frame > VOLUME_FRAMES) failures.push(`the sun turned: the mean probe error within 5% for good only from frame ${volumeWithin?.frame ?? 'never'} (bar ${VOLUME_FRAMES})`);
+                if (!volumeWithin || volumeWithin.frame > VOLUME_FRAMES) failures.push(`the sun turned: the field's light-weighted error within 5% for good only from frame ${volumeWithin?.frame ?? 'never'} (bar ${VOLUME_FRAMES})`);
             }
         }
 
