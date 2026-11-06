@@ -164,9 +164,9 @@ describe('the atlases', () => {
         expect(() => checkFieldLimits(fits, DEFAULT_LIMITS)).not.toThrow();
     });
 
-    it('size the scratch slot as the design says (36 x 8 + 196 x 4 + 8 bytes)', () => {
+    it('size the scratch slot as the design says (36 x 8 + 196 x 4 + 12 bytes: offset and state, and the tiles-written word since T2.M1)', () => {
         const scratch = scratchLayout(6, 14);
-        expect(scratch.strideWords * 4).toBe(36 * 8 + 196 * 4 + 8);
+        expect(scratch.strideWords * 4).toBe(36 * 8 + 196 * 4 + 12);
         expect(scratch.distanceOffset).toBe(72);
         expect(scratch.probeDataOffset).toBe(72 + 196);
     });
@@ -447,7 +447,9 @@ describe('the probe history', () => {
         expect(body).toBeDefined();
         const members = [...(body ?? '').matchAll(/^\s*(\w+): (\w+),/gm)].map((match) => ({ name: match[1], type: match[2] }));
         expect(members.map((member) => member.type).every((type) => type === 'f32' || type === 'u32')).toBe(true);
-        expect(Object.fromEntries(members.map((member, index) => [member.name, index]))).toEqual(PROBE_HISTORY_WORD);
+        // Spare words pad the record to whole 16-byte rows; every other member is named in PROBE_HISTORY_WORD at its index.
+        const named = members.map((member, index) => [member.name, index] as const).filter(([name]) => !name.startsWith('spare'));
+        expect(Object.fromEntries(named)).toEqual(PROBE_HISTORY_WORD);
         expect(members.length).toBe(PROBE_HISTORY_WORDS);
         expect(PROBE_HISTORY_BYTES).toBe(PROBE_HISTORY_WORDS * 4);
     });

@@ -33,7 +33,24 @@
  *   is left; the largest channel; times `0.25 + 0.75 × openness` over six
  *   directions. A `setEnvironment` that changed nothing gives 0 and marks
  *   nothing;
- * - **everywhere:** `r` from the CPU as it is.
+ * - **everywhere:** `r` from the CPU as it is;
+ * - **geometry** (T2.M1, docs/design/m3-moving.md §5.1; one entry per old or
+ *   new box of a moved object, or the box of one added, removed, shown or
+ *   hidden): with `s = min(1, moved / spacing)` for a move and 1 for a whole
+ *   change,
+ *   - the **near set**, probes within NEAR_SET_SPACINGS of the box, off
+ *     probes included (the change may free them, and they go first,
+ *     FREED_PROBE_URGENCY_SHARE): `r = s`. They are traced themselves, with
+ *     the full count of updates, since their distances change too;
+ *   - the **far set**, active probes within FAR_SET_SPACINGS that can see the
+ *     box: their stored mean distance toward its centre reaches where that
+ *     direction enters the box, less half a spacing (a test against the
+ *     centre itself would fail for the old box, since the object hid its own
+ *     centre); or their mover mask has the object's bit (they saw it at their
+ *     last update). `r = min(1, Ω / Ω_ref) × s`, Ω about
+ *     π × radius² / distance², the share of the view the object covers.
+ *     They are served like a local light's probes (keys and propagation on
+ *     the key-probe path).
  *
  * Then the probe's record (PROBE_HISTORY_WORD in layout.ts):
  * `pendingChange += r`, `urgency = max(urgency, pendingChange)`, the marked
@@ -88,7 +105,7 @@ import {
     PROBE_HISTORY_WORD,
     PROBE_HISTORY_WORDS,
 } from '../layout.ts';
-import { MAX_GLOBAL_CHANGE } from '../mark-table.ts';
+import { FAR_SET_REFERENCE_SOLID_ANGLE, FAR_SET_SPACINGS, FREED_PROBE_URGENCY_SHARE, MAX_GLOBAL_CHANGE, NEAR_SET_SPACINGS } from '../mark-table.ts';
 import { NEAR_CAMERA_WEIGHT } from '../settings.ts';
 import { DDGI_COMMON_WGSL } from './common.ts';
 import type { PhaseBReduction } from './blend.ts';
@@ -165,6 +182,16 @@ const DDGI_MARK_LOCAL_LIGHT: u32 = ${MARK_KIND.localLight}u;
 const DDGI_MARK_DIRECTIONAL_LIGHT: u32 = ${MARK_KIND.directionalLight}u;
 const DDGI_MARK_ENVIRONMENT: u32 = ${MARK_KIND.environment}u;
 const DDGI_MARK_LIGHT_SPOT: u32 = ${MARK_LIGHT_KIND.spot}u;
+const DDGI_MARK_GEOMETRY: u32 = ${MARK_KIND.geometry}u;
+// Geometry changes (m3-moving.md §5.1; NEAR_SET_SPACINGS etc. in mark-table.ts).
+const DDGI_NEAR_SET_SPACINGS: f32 = ${NEAR_SET_SPACINGS};
+const DDGI_FAR_SET_SPACINGS: f32 = ${FAR_SET_SPACINGS};
+const DDGI_FAR_SET_REFERENCE_SOLID_ANGLE: f32 = ${FAR_SET_REFERENCE_SOLID_ANGLE};
+// A far probe sees the box when its mean distance toward it reaches the box's near face, less this share of a spacing.
+const DDGI_FAR_SET_DISTANCE_SLACK_SPACINGS: f32 = 0.5;
+// An off probe the change may free goes first (FREED_PROBE_URGENCY_SHARE in mark-table.ts).
+const DDGI_FREED_PROBE_URGENCY_SHARE: f32 = ${FREED_PROBE_URGENCY_SHARE};
+const DDGI_HISTORY_MOVER_MASK: u32 = ${PROBE_HISTORY_WORD.moverMask}u;
 const DDGI_MARK_VISIBILITY_FLOOR: f32 = ${MARK_VISIBILITY_FLOOR};
 const DDGI_MARK_DARK_IRRADIANCE: f32 = ${MARK_DARK_IRRADIANCE};
 // A darkening leaves at least this share of the light, as far as its change is
@@ -208,6 +235,14 @@ struct DdgiMarkLight {
     spare2: f32,
 }
 
+// An entry's geometry block (MARK_GEOMETRY_WORD in layout.ts), for MARK_KIND.geometry.
+struct DdgiMarkGeometry {
+    regionMin: vec3f,       // the changed region's world box
+    moved: f32,             // how far the object moved, metres; negative for a whole change (added, removed, shown, hidden)
+    regionMax: vec3f,
+    moverBit: u32,          // its bit in the probes' mover masks; 0 when it isn't a hot mover
+}
+
 // One entry (MARK_ENTRY_WORD in layout.ts): a box of probes and what changed there.
 struct DdgiMarkEntry {
     boxMin: vec3u,
@@ -220,6 +255,7 @@ struct DdgiMarkEntry {
     spare2: f32,
     before: DdgiMarkLight,
     after: DdgiMarkLight,
+    geometry: DdgiMarkGeometry,
 }
 
 struct DdgiMarkTable {
@@ -474,7 +510,8 @@ fn ddgiServing(entry: DdgiMarkEntry, probe: vec3i, againstNew: f32) -> DdgiServi
         }
         return DdgiServing(ddgiWholeUpdates(ddgi.fineOwedUpdates), ddgi.keyResidualShare, true);
     }
-    if (entry.kind == DDGI_MARK_LOCAL_LIGHT || near) {
+    // A geometry change's far set is local too: the full count, like a light's.
+    if (entry.kind == DDGI_MARK_LOCAL_LIGHT || entry.kind == DDGI_MARK_GEOMETRY || near) {
         return DdgiServing(full, 1.0, false);
     }
     return DdgiServing(min(full, ddgiWholeUpdates(ddgi.farOwedUpdates)), 1.0, false);
@@ -493,6 +530,84 @@ fn ddgiNeededUpdates(againstNew: f32) -> u32 {
     }
     let bounce = clamp(ddgi.changeBounceShare, DDGI_MARK_SMALLEST_BOUNCE_SHARE, 1.0 - DDGI_MARK_SMALLEST_BOUNCE_SHARE);
     return min(u32(ceil(log(tolerance / againstNew) / log(bounce))), DDGI_OWED_MASK);
+}
+
+// The updates a change of r promises a probe that is traced itself: K, or as many as the bounces need.
+fn ddgiFullUpdates(againstNew: f32) -> u32 {
+    return max(ddgiWholeUpdates(ddgi.changeUpdates), ddgiNeededUpdates(againstNew));
+}
+
+// Where a ray from 'origin' along 'direction' enters a box: 0 when it starts
+// inside, a large distance when it misses (the slab test).
+fn ddgiRayBoxEntry(origin: vec3f, direction: vec3f, boxMin: vec3f, boxMax: vec3f) -> f32 {
+    let inverse = 1.0 / select(direction, vec3f(1.0e-12), abs(direction) < vec3f(1.0e-12));
+    let toMin = (boxMin - origin) * inverse;
+    let toMax = (boxMax - origin) * inverse;
+    let near = max(max(min(toMin.x, toMax.x), min(toMin.y, toMax.y)), min(toMin.z, toMax.z));
+    let far = min(min(max(toMin.x, toMax.x), max(toMin.y, toMax.y)), max(toMin.z, toMax.z));
+    return select(3.0e38, max(near, 0.0), far >= max(near, 0.0));
+}
+
+// Whether the probe can see the region: its stored mean distance toward the
+// box's centre reaches where that direction enters the box, less half a
+// spacing. The stored distances stop at distanceClamp, so past it "nothing
+// nearer than the clamp" is the most the moments can say, and that counts.
+fn ddgiMarkSeesRegion(probe: vec3i, direction: vec3f, entryDistance: f32, smallestSpacing: f32) -> bool {
+    let volume = ddgiUniformVolume();
+    let scale = ddgiAtlasScale(volume.distanceTexels, volume.counts);
+    let uv = ddgiTileUv(ddgiTileTexel(direction, volume.distanceTexels), probe, scale);
+    let meanDistance = textureSampleLevel(ddgiDistanceAtlas, ddgiAtlasSampler, uv, probe.y, 0.0).x;
+    return meanDistance >= min(entryDistance, ddgi.distanceClamp) - DDGI_FAR_SET_DISTANCE_SLACK_SPACINGS * smallestSpacing;
+}
+
+// Whether the probe's latest blended update saw the object (its mover mask has the object's bit).
+fn ddgiMarkSawMover(probeIndex: u32, moverBit: u32) -> bool {
+    let mask = atomicLoad(&ddgiProbeHistoryWords[probeIndex * DDGI_HISTORY_WORDS + DDGI_HISTORY_MOVER_MASK]);
+    return (mask & moverBit) != 0u;
+}
+
+// A geometry entry's mark at one probe (the file comment): returns the change
+// it marked, 0 for none. Off probes count in the near set (the change may
+// free them); probes not updated yet never do (their first update starts
+// from nothing anyway).
+fn ddgiMarkGeometry(entry: DdgiMarkEntry, probe: vec3i, probeIndex: u32, data: DdgiProbeData) -> f32 {
+    let geometry = entry.geometry;
+    let spacing = ddgiUniformVolume().spacing;
+    let smallestSpacing = min(spacing.x, min(spacing.y, spacing.z));
+    // How much of a whole change the move is: a drag that moves a little every frame marks a little every frame.
+    let moveShare = select(min(1.0, geometry.moved / smallestSpacing), 1.0, geometry.moved < 0.0);
+    if (!(moveShare > 0.0) || data.state == DDGI_STATE_NOT_UPDATED_YET) {
+        return 0.0;
+    }
+    let position = ddgiProbePosition(probe, data.offset);
+    let nearMargin = DDGI_NEAR_SET_SPACINGS * spacing;
+    if (all(position >= geometry.regionMin - nearMargin) && all(position <= geometry.regionMax + nearMargin)) {
+        let urgencyShare = select(1.0, DDGI_FREED_PROBE_URGENCY_SHARE, ddgiIsOff(data.state));
+        ddgiMarkProbe(probeIndex, moveShare, DdgiServing(ddgiFullUpdates(moveShare), urgencyShare, false));
+        return moveShare;
+    }
+    if (data.state != DDGI_STATE_ACTIVE) {
+        return 0.0;
+    }
+    // The probe box covers the reach by grid index; this checks the probe where relocation put it.
+    let farMargin = DDGI_FAR_SET_SPACINGS * spacing;
+    if (any(position < geometry.regionMin - farMargin) || any(position > geometry.regionMax + farMargin)) {
+        return 0.0;
+    }
+    let toCentre = 0.5 * (geometry.regionMin + geometry.regionMax) - position;
+    let distance = max(length(toCentre), 1.0e-6);
+    let direction = toCentre / distance;
+    let entryDistance = ddgiRayBoxEntry(position, direction, geometry.regionMin, geometry.regionMax);
+    let seen = ddgiMarkSeesRegion(probe, direction, entryDistance, smallestSpacing) || (geometry.moverBit != 0u && ddgiMarkSawMover(probeIndex, geometry.moverBit));
+    if (!seen) {
+        return 0.0;
+    }
+    // The share of the probe's view the object covers, as a share of Omega_ref (capped at a whole change).
+    let radius = 0.5 * length(geometry.regionMax - geometry.regionMin);
+    let solidAngle = DDGI_PI * radius * radius / (distance * distance);
+    let change = min(1.0, solidAngle / DDGI_FAR_SET_REFERENCE_SOLID_ANGLE) * moveShare;
+    ddgiMarkProbe(probeIndex, change, ddgiServing(entry, probe, change));
+    return change;
 }
 
 // The probe's stored mean irradiance (written by ddgi/blend).
@@ -516,9 +631,13 @@ fn ddgiMarkThread(thread: u32) -> f32 {
     let counts = ddgiProbeCount();
     let probeIndex = u32(probe.x) + counts.x * (u32(probe.z) + counts.z * u32(probe.y));
     let data = ddgiReadProbeData(ddgiProbeData, probe);
+    if (entry.kind == DDGI_MARK_GEOMETRY) {
+        return ddgiMarkGeometry(entry, probe, probeIndex, data);
+    }
     if (data.state != DDGI_STATE_ACTIVE) {
         return 0.0;
     }
+
     var change = DdgiProbeChange(0.0, 0.0);
     if (entry.kind == DDGI_MARK_LOCAL_LIGHT) {
         change = ddgiMarkLocalChange(entry, probe, ddgiProbePosition(probe, data.offset), ddgiMarkStoredMean(probeIndex));

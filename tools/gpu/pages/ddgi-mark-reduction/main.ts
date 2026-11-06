@@ -5,7 +5,14 @@
  *
  * Two two-room scenes, one per reduction (`DDGITechniqueOptions.reduction`,
  * which also picks phase B's reduction in `ddgi/blend`; both reductions give
- * the same states and offsets, so the two fields are the same). Each runs
+ * the same states and offsets). The feedback rule is off in them: its
+ * requests put probes in the scheduler's priority share, whose list slots
+ * the two reductions may fill in a different order, and since T2.2 a ray's
+ * random numbers are keyed by its slot (`giDirectRandom(rayRecord, frame)`),
+ * so the two fields would be two different, equally valid realizations
+ * (T2.M1, DECISIONS 2026-11-06). Without it every list is the round robin's,
+ * slot for slot, and the fields must be the same to the bit (checked on the
+ * irradiance atlas before the mark). Each runs
  * WARM_FRAMES frames of every probe, then the lamp moves 2 m and one frame
  * runs `ddgi/mark` alone. Checked:
  * - the census's "probes marked (total)" is the same for both, and equals
@@ -32,7 +39,7 @@ import { PROBE_HISTORY_WORD, PROBE_HISTORY_WORDS } from '../../../../packages/dd
 import type { PhaseBReduction } from '../../../../packages/ddgi-core/src/techniques/ddgi/wgsl/blend.ts';
 import { ENVIRONMENT_CHANGE, MAX_GLOBAL_CHANGE } from '../../../../packages/ddgi-core/src/techniques/ddgi/mark-table.ts';
 import type { EnvironmentDescriptor } from '../../../../packages/ddgi-core/src/platform/contract/scene.ts';
-import { createDdgiScene, readBuffer, readProbeData, releaseDeviceOnPageHide, runFrames } from '../ddgi-shared/harness.ts';
+import { createDdgiScene, readBuffer, readProbeData, readTextureBytes, releaseDeviceOnPageHide, runFrames } from '../ddgi-shared/harness.ts';
 
 const WARM_FRAMES = 64;
 const MARKED_TOTAL = 'probes marked (total)';
@@ -40,6 +47,8 @@ const MARKED_TOTAL = 'probes marked (total)';
 const READBACK_FRAMES = 6;
 
 interface MarkResult {
+    /** The irradiance atlas just before the mark, for checking that both scenes start from the same field. */
+    readonly atlas: Uint8Array;
     readonly markedTotal: number | undefined;
     readonly pending: Uint32Array;
     readonly urgency: Uint32Array;
@@ -47,13 +56,15 @@ interface MarkResult {
 }
 
 async function markOnce(device: GPUDevice, reduction: PhaseBReduction): Promise<MarkResult> {
-    const scene = await createDdgiScene(device, 'two-room', {}, { gpuTiming: true, technique: { reduction } });
+    // Feedback off: the file comment says why.
+    const scene = await createDdgiScene(device, 'two-room', { feedback: false }, { gpuTiming: true, technique: { reduction } });
     try {
         assert(scene.ddgi.reduction === reduction, `asked for the ${reduction} reduction, got ${scene.ddgi.reduction}`);
         const field = scene.ddgi.field;
         assert(field, 'no field');
         const probeCount = field.grid.probeCount;
         await runFrames(device, scene.platform, WARM_FRAMES, probeCount);
+        const atlas = await readTextureBytes(device, field.irradiance, 8);
         const lamp = scene.manifest.lights[0] as { position: [number, number, number] };
         scene.platform.scene.updateLight(scene.lights[0], { position: [lamp.position[0] - Math.SQRT2, lamp.position[1], lamp.position[2] - Math.SQRT2] });
         await runFrames(device, scene.platform, 1, 0);
@@ -71,7 +82,7 @@ async function markOnce(device: GPUDevice, reduction: PhaseBReduction): Promise<
             await new Promise((resolve) => setTimeout(resolve, 0));
         }
         const probesWithChange = [...new Float32Array(pending.buffer)].filter((value) => value > 0).length;
-        return { markedTotal: scene.ddgi.counters[MARKED_TOTAL], pending, urgency, probesWithChange };
+        return { atlas, markedTotal: scene.ddgi.counters[MARKED_TOTAL], pending, urgency, probesWithChange };
     } finally {
         scene.platform.dispose();
     }
@@ -156,7 +167,11 @@ await runGpuTest(
         }
         const subgroups = await markOnce(device, 'subgroups');
         log(`subgroups: ${subgroups.markedTotal} marks, ${subgroups.probesWithChange} probes with a change`);
-        assert(subgroups.markedTotal === fallback.markedTotal, `subgroups counted ${subgroups.markedTotal} marks, the fallback ${fallback.markedTotal}`);
+        let atlasDiffers = 0;
+        for (let index = 0; index < fallback.atlas.length; index++) if (subgroups.atlas[index] !== fallback.atlas[index]) atlasDiffers++;
+        assert(atlasDiffers === 0, `the two scenes' fields differ before the mark (${atlasDiffers} bytes of the irradiance atlas), so their marks can't be compared`);
+        assert(subgroups.markedTotal === fallback.markedTotal,
+ `subgroups counted ${subgroups.markedTotal} marks, the fallback ${fallback.markedTotal}`);
         let differing = 0;
         for (let probe = 0; probe < fallback.pending.length; probe++) {
             if (subgroups.pending[probe] !== fallback.pending[probe] || subgroups.urgency[probe] !== fallback.urgency[probe]) differing++;

@@ -1,0 +1,5 @@
+{
+    "description": "T2.M1 item 1 timing: 10,000 transforms through one gi.scene.setTransforms call cost <= 2 ms of CPU (median of 40 frames of every instance sliding, as B1a moved them), against 10,000 setTransform calls (B1a: 18-20 ms); instances turning too reported. CPU-timed: run under the bench lock with --cpu-timed.",
+    "timeoutMs": 300000,
+    "manual": true
+}

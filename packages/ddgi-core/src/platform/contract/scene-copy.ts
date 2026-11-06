@@ -56,6 +56,26 @@ export interface DirtyRegion {
     readonly reason: ChangeReason;
     /** The object behind the change, when there is one, for debug output. */
     readonly source?: InstanceHandle | LightHandle;
+    /**
+     * For a geometry region from a move (`setTransform`, `setTransforms`):
+     * how far the instance moved, in metres, as the largest distance any
+     * corner of its mesh's box travelled (so a turn in place counts too).
+     * Both regions of a move (where it was and where it is) carry it.
+     * Undefined for everything else: an instance created, destroyed, shown,
+     * hidden or given a new mesh is a whole change there.
+     *
+     * Why: a technique can then size a move's effect by how far the object
+     * went, so a drag that moves a little every frame isn't a full change
+     * every frame (docs/design/m3-moving.md §1, §5.1).
+     */
+    readonly moved?: number;
+    /**
+     * For a geometry region about one instance: its slot, the index rays
+     * report it by (`GiHit.instance`). Lets a technique follow an object
+     * across frames and recognise its hits (DDGI's mover mask). Regions
+     * merged because a frame had more than `MAX_DIRTY_REGIONS` have none.
+     */
+    readonly instance?: number;
 }
 
 /**

@@ -47,9 +47,9 @@ All three are `texture_2d_array`s with **one layer per probe row `y`**. Inside a
 | 0 | active | all rays | yes | yes |
 | 1 | off: inside geometry | 32 fixed rays | no | no |
 | 2 | off: no surface nearby | 32 fixed rays | no | no |
-| 3 | not updated yet | all rays | yes, hysteresis 0 | no |
+| 3 | not updated yet (fewer than 2 blended updates) | all rays | yes: the first with hysteresis 0, the second as usual | no |
 
-State 3 is the starting state, so the first frames show partial GI instead of black probes. Off probes keep tracing their fixed rays so they can come back on when the scene changes (M3).
+State 3 is the starting state, so the first frames show partial GI instead of black probes. Off probes keep tracing their fixed rays so they can come back on when the scene changes (M3). Since T2.M1 a probe leaves state 3 after its **second** blended update, not its first (m3-moving.md §5.2: one noisy estimate is a pop); the history flag `warmedOnce` says the first has happened, and the scratch's tiles-written word tells `ddgi/write` to copy the tiles of both.
 
 ## Rays
 
@@ -299,7 +299,19 @@ Measured on the RTX 3060 (PROGRESS 2026-11-06, T2.4c; `ddgi-key-probes-sponza`, 
 - Out-of-view fine probes' noise at 3 s: 0.15% against 0.18% for far probes owe 2.
 - Cost (VALID): `ddgi/propagate` 0.010 ms on still frames, median 0.046 ms after the sun turn; a 10-second day's update median 2.17 ms at the calibrated 311 (Budget v2's bar 2.2).
 
+## Moving geometry (T2.M1, m3-moving.md §1 and §5, rigid objects, as built)
+
+The platform's change feed says what moved and how far: a moved instance's two dirty regions (its old and new world box) carry `moved`, the farthest any corner of its mesh's box travelled, and its slot. `setTransforms` sends many in one call. `ddgi/mark` turns each geometry region (moved, added, removed, shown, hidden) into one entry over the probes within 8 spacings of it (mark-table.ts, wgsl/mark.ts):
+
+- **The near set** (within 1.5 spacings of the box): `r = min(1, moved / spacing)`, or 1 for a whole change. Off probes are included, since the change may free them, and go first (`FREED_PROBE_URGENCY_SHARE` 16: they show nothing until they're back and warmed, and until then they cost 32 rays). Probes not updated yet are left alone. Every near probe is traced itself, with the full count of updates: its distances change too.
+- **The far set** (active probes up to 8 spacings away that see the box): the probe's stored mean distance toward the box's centre reaches where that direction enters the box, less half a spacing (past the distance clamp, "nothing nearer than the clamp" counts); or its mover mask has the object's bit. `r = min(1, Ω / 0.5 sr) × min(1, moved / spacing)` with `Ω ≈ π radius² / distance²`. Served like a local light's probes: the full count, or keys and propagation on the key-probe path.
+- **The mover mask** (history word 12): the technique keeps up to 32 hot movers (mover-table.ts: objects that moved in the last 300 frames, each with a bit and its current box) in a uniform buffer for `ddgi/blend`, which tests each blended ray's hit point (the probe's position plus direction times stored distance) against their boxes and keeps the bits hit. A hit on the mover always lands in its box, so nothing is missed; a hit on the floor under it over-marks. *Why in the blend and not the trace:* no instance id has to travel from the trace, whose storage buffers are full (T2.2 needs the last one).
+- A move that slides a little every frame marks a little every frame: `pendingChange` adds up until the probe's next update, and the steady-change rule shortens the history, as for a light sweep.
+
+Measured on the RTX 3060 (PROGRESS 2026-11-06, T2.M1; `ddgi-door-swing`, `ddgi-move-cabinet`, `ddgi-warm-two-updates`): the closed door swung shut over 1 s at 880 probes a frame leaves the dark room at 0.20% of the lit room's GI the frame after it closes and 0.17–0.18% 1 s later over two runs (open: 7.5%); a 1 m cabinet slide in the furnished room at 358 probes a frame has the pixels it changed within 5% of settled from frame 15-29 (580 and 358 probes a frame, two runs); probes freed by a move are active again 3 frames later, after exactly 2 blended updates.
+
 ## Which probes update (the budget, and the GPU scheduler since T2.4b)
+
 
 - **Unit = one probe update.** `TechniqueFrame.units` comes from the platform's budget v2 (above): the calibrated batch, at least the floor, stepped down only when frames are late. `FrameBudget.units` stays a hard cap. Without GPU timings, `FrameBudget.units`, default 512 on Tier A.
 - **The round robin:** a fixed scrambled order of all probes, `order[i] = (i × stride) mod N` with `stride` coprime with `N` and near `0.618 N`, so each frame's set is spread across the volume, not one slab (schedule.ts).
