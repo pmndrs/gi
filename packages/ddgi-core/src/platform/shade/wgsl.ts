@@ -39,14 +39,15 @@ export const SHADE_MODULE_ENTRIES: readonly ModuleBindingEntry[] = [
 
 /**
  * Byte layout of `GiShadeUniforms`: the sky's harmonics first (radiance SH
- * bands 0-2, then irradiance SH; written by the sky bake, which binds that
- * range as storage, `SKY_HARMONICS_LAYOUT`), then the live settings (written
- * with `queue.writeBuffer`).
+ * bands 0-2, irradiance SH, the radiance map's scale; written by the sky
+ * bake, which binds that range as storage, `SKY_HARMONICS_LAYOUT`), then the
+ * live settings (written with `queue.writeBuffer`).
  */
 export const SHADE_UNIFORM_LAYOUT = {
     skyHarmonics: 0,
     skyRadiance: SKY_HARMONICS_LAYOUT.radiance,
     skyIrradiance: SKY_HARMONICS_LAYOUT.irradiance,
+    skyRadianceMapScale: SKY_HARMONICS_LAYOUT.radianceMapScale,
     maxShadowedLightsPerHit: SKY_HARMONICS_LAYOUT.byteLength,
     bounceAlbedoCap: SKY_HARMONICS_LAYOUT.byteLength + 4,
     /** Rounded up to the struct's 16-byte alignment. */
@@ -83,6 +84,9 @@ struct GiShadeUniforms {
     // The sky's irradiance as SH, bands 0, 1, 2 and 4, already convolved with
     // the cosine lobe (platform/sky). rgb per coefficient; w unused.
     skyIrradiance: array<vec4f, ${SH_COEFFICIENT_COUNT}>,
+    // x: what the radiance map is read times (1 but for a procedural sky,
+    // whose map is written before its calibration is known; platform/sky).
+    skyRadianceMapScale: vec4f,
     maxShadowedLightsPerHit: u32,
     bounceAlbedoCap: f32,
 }
@@ -395,7 +399,7 @@ ${SH_BASIS_WGSL}
 fn giSkyRadiance(direction: vec3f) -> vec3f {
     let d = normalize(direction);
     let uv = vec2f(atan2(d.z, d.x) * GI_SHADE_INV_TWO_PI + 0.5, asin(clamp(d.y, -1.0, 1.0)) * GI_SHADE_INV_PI + 0.5);
-    return textureSampleLevel(giSkyRadianceMap, giSkySampler, uv, 0.0).rgb;
+    return textureSampleLevel(giSkyRadianceMap, giSkySampler, uv, 0.0).rgb * giShade.skyRadianceMapScale.x;
 }
 
 // Irradiance from the whole sky on a surface facing 'normal' (unit), with

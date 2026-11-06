@@ -231,7 +231,7 @@ export class GIPlatformImpl implements GIPlatform {
         // after the other, a cold start spent about 2.5 s compiling on the RTX 3060
         // (the tracer's kernels, then the sky projection's 0.7 s, then DDGI's trace
         // kernel's 1.1 s; T1.9a). Techniques still prepare in encode order among themselves.
-        const platformReady = Promise.all([this.rays.prepare(this.kernels), this.shade.prepare()]);
+        const platformReady = Promise.all([this.shade.prepare(), this.rays.prepare(this.kernels)]);
         const techniquesReady = (async () => {
             for (const technique of this.encodeOrder()) await technique.prepare();
         })();

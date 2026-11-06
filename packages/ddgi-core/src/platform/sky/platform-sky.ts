@@ -4,11 +4,14 @@
  * shading reads (contract/scene.ts, `EnvironmentDescriptor`):
  *
  * - a radiance map for rays that miss: equirectangular, 256 x 128,
- *   `rgba16float`, in the contract's texture order (first row the nadir);
- * - the sky's harmonics (`SKY_HARMONICS_LAYOUT`): its irradiance as
- *   spherical harmonics, bands 0, 1, 2 and 4 (18 coefficients,
- *   `spherical-harmonics.ts`), already convolved with the cosine lobe, and
- *   its radiance SH, bands 0-2, which the instant sky reads (T2.6b).
+ *   `rgba16float`, in the contract's texture order (first row the nadir),
+ *   read times a scale (1 but for a procedural sky, whose map is written
+ *   before its calibration is known; `giSkyRadiance` applies it);
+ * - the sky's harmonics (`SKY_HARMONICS_LAYOUT`), integrated over that map:
+ *   its irradiance as spherical harmonics, bands 0, 1, 2 and 4 (18
+ *   coefficients, `spherical-harmonics.ts`), already convolved with the
+ *   cosine lobe, its radiance SH, bands 0-2, which the instant sky reads
+ *   (T2.6b), and the map's scale.
  *
  * The bake runs inside `encode`, only when the environment changed, never
  * every frame, at most once a frame. The host's texture is read at that
@@ -35,38 +38,29 @@
 
 import type { EnvironmentDescriptor } from '../contract/scene.ts';
 import type { GpuTimerScope } from '../contract/timing.ts';
-import { PROCEDURAL_GRID_HEIGHT, PROCEDURAL_GRID_WIDTH, proceduralSkyNeedsRebake, proceduralSkyParameters, type GpuPerez, type ProceduralSkyParameters } from './procedural-sky.ts';
+import { PROCEDURAL_GRID_WIDTH, proceduralSkyNeedsRebake, proceduralSkyParameters, type GpuPerez, type ProceduralSkyParameters } from './procedural-sky.ts';
 import {
-    MAX_PARTIAL_SUMS,
+    PARTIAL_SUM_COUNT,
     PEREZ_WORDS,
     PROJECTION_BINDING,
     PROJECTION_ENTRY_POINTS,
     PROJECTION_PARAMS_BYTES,
     PROJECTION_PARAMS_WORD,
-    PROJECTION_WORKGROUP_SIZE,
     projectionWgsl,
+    RADIANCE_MAP_HEIGHT,
+    RADIANCE_MAP_WIDTH,
     REDUCTION_BYTES,
     RESAMPLE_WORKGROUP_SIZE,
-    SKY_GRID_KIND,
     SKY_HARMONICS_LAYOUT,
     SKY_SOURCE_KIND,
     type SkyReduction,
 } from './projection-wgsl.ts';
 
 export { liftSunAboveMinimum } from './procedural-sky.ts';
+export { RADIANCE_MAP_HEIGHT, RADIANCE_MAP_WIDTH } from './projection-wgsl.ts';
 
-/** Size of the radiance map rays see on a miss: 1.4 degrees per texel, enough for a sky without a sun disc. */
-export const RADIANCE_MAP_WIDTH = 256;
-export const RADIANCE_MAP_HEIGHT = 128;
 export const RADIANCE_MAP_FORMAT: GPUTextureFormat = 'rgba16float';
 
-/** Largest integration grid: source texels beyond this are averaged by the sampler's bilinear taps. */
-const MAX_EQUIRECT_GRID_WIDTH = 1024;
-const MAX_EQUIRECT_GRID_HEIGHT = 512;
-const MAX_CUBE_GRID_SIZE = 256;
-/** Grid for a constant sky: the SH of a constant are exact on any grid; this one just keeps the sum short. */
-const CONSTANT_GRID_WIDTH = 64;
-const CONSTANT_GRID_HEIGHT = 32;
 /** Most resample samples per texel along each axis. */
 const MAX_SUPERSAMPLE = 8;
 
@@ -75,15 +69,16 @@ export const SKY_BAKE_PASS = 'platform/sky bake';
 
 /**
  * Formats a float texture can have but no filtering sampler may read: these
- * use the bake's unfilterable variant (nearest samples). Unrotated, the
- * grid's cells sit on texel centres, so nearest samples are exact; with
- * `rotationY` they shift the sky by up to half a source texel. Bigger skies
- * than the radiance map get a box filter from the supersampling either way.
+ * use the resample's unfilterable variant (nearest samples). Unrotated, for
+ * a source a whole multiple of the map's size, the samples sit on texel
+ * centres, so nearest samples are exact; with `rotationY` they shift the sky
+ * by up to half a source texel. Bigger skies than the radiance map get a box
+ * filter from the supersampling either way.
  */
 const UNFILTERABLE_FLOAT_FORMATS: ReadonlySet<GPUTextureFormat> = new Set(['r32float', 'rg32float', 'rgba32float']);
 
 /** `GPUTextureUsage` and `GPUBufferUsage` bits; the globals don't exist in Node, where tests import this file. */
-const TEXTURE_USAGE = { copyDst: 0x2, textureBinding: 0x4, storageBinding: 0x8 } as const;
+const TEXTURE_USAGE = { textureBinding: 0x4, storageBinding: 0x8 } as const;
 const BUFFER_USAGE = { copyDst: 0x8, uniform: 0x40, storage: 0x80 } as const;
 const SHADER_STAGE_COMPUTE = 0x4;
 
@@ -122,29 +117,41 @@ interface BakeSource {
     readonly equirect: GPUTexture | null;
     readonly cube: GPUTexture | null;
     readonly filterable: boolean;
-    readonly gridKind: number;
-    readonly gridWidth: number;
-    readonly gridHeight: number;
     readonly supersample: number;
     /** Only for `procedural`. */
     readonly procedural: ProceduralSkyParameters | null;
 }
 
-interface BakePipelines {
-    readonly layout: GPUBindGroupLayout;
-    readonly partialSums: GPUComputePipeline;
-    readonly sum: GPUComputePipeline;
-    readonly resample: GPUComputePipeline;
+/** The resample for one kind of source texture: filterable, or not (32-bit floats). */
+interface ResamplePipeline {
+    readonly sourceLayout: GPUBindGroupLayout;
+    readonly pipeline: GPUComputePipeline;
 }
 
-/** The bind group last made, and what it was made for, so a bake of the same textures (every procedural bake) makes none. */
-interface CachedBindGroup {
+interface BakePipelines {
+    readonly sharedLayout: GPUBindGroupLayout;
+    readonly resample: { readonly filterable: ResamplePipeline; readonly unfilterable: ResamplePipeline };
+    /** The partial sums read the map through a group 1 of their own. */
+    readonly mapInputLayout: GPUBindGroupLayout;
+    readonly partialSums: GPUComputePipeline;
+    readonly sum: GPUComputePipeline;
+}
+
+/** A bind group, and what it was made for, so a bake of the same textures (every procedural bake) makes none. */
+interface Cached<Key> {
     readonly group: GPUBindGroup;
+    readonly key: Key;
+}
+
+interface SourceKey {
     readonly equirect: GPUTexture | null;
     readonly cube: GPUTexture | null;
     readonly filterable: boolean;
-    readonly harmonics: GPUBuffer;
-    readonly harmonicsOffset: number;
+}
+
+interface HarmonicsKey {
+    readonly buffer: GPUBuffer;
+    readonly offset: number;
 }
 
 export class PlatformSky {
@@ -165,8 +172,10 @@ export class PlatformSky {
     private readonly placeholderCubeView: GPUTextureView;
     private readonly radianceMapView: GPUTextureView;
     private readonly placeholders: GPUTexture[];
-    private pipelines: { filterable: BakePipelines; unfilterable: BakePipelines } | null = null;
-    private cachedBindGroup: CachedBindGroup | null = null;
+    private pipelines: BakePipelines | null = null;
+    private sharedGroup: Cached<HarmonicsKey> | null = null;
+    private sourceGroup: Cached<SourceKey> | null = null;
+    private mapInputGroup: GPUBindGroup | null = null;
     /** The `version` last looked at; null before the first bake. */
     private seenVersion: number | null = null;
     /** The procedural sky's numbers at the last bake; null when the last bake was another source. */
@@ -245,41 +254,58 @@ export class PlatformSky {
         return RADIANCE_MAP_WIDTH * RADIANCE_MAP_HEIGHT * 8 + PROJECTION_PARAMS_BYTES + REDUCTION_BYTES;
     }
 
-    /** Compiles the bake's kernels (both texture-sampling variants). */
+    /** Compiles the bake's kernels: the resample (for filterable and unfilterable sources), the partial sums, the sum. */
     async prepare(): Promise<void> {
         if (this.pipelines) return;
-        const module = this.device.createShaderModule({ label: `${this.label} sky bake (${this.reduction})`, code: projectionWgsl(this.reduction) });
-        const build = async (filterable: boolean): Promise<BakePipelines> => {
+        const device = this.device;
+        const module = device.createShaderModule({ label: `${this.label} sky bake (${this.reduction})`, code: projectionWgsl(this.reduction) });
+        const sharedLayout = device.createBindGroupLayout({
+            label: `${this.label} sky bake`,
+            entries: [
+                { binding: PROJECTION_BINDING.params, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'uniform' } },
+                { binding: PROJECTION_BINDING.reduction, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'storage' } },
+                { binding: PROJECTION_BINDING.harmonics, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'storage' } },
+            ],
+        });
+        const sourceLayout = (filterable: boolean): GPUBindGroupLayout => {
             const sampleType: GPUTextureSampleType = filterable ? 'float' : 'unfilterable-float';
-            const variant = filterable ? 'filterable' : 'unfilterable';
-            const layout = this.device.createBindGroupLayout({
-                label: `${this.label} sky bake (${variant})`,
+            return device.createBindGroupLayout({
+                label: `${this.label} sky source (${filterable ? 'filterable' : 'unfilterable'})`,
                 entries: [
-                    { binding: PROJECTION_BINDING.params, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'uniform' } },
                     { binding: PROJECTION_BINDING.sourceEquirect, visibility: SHADER_STAGE_COMPUTE, texture: { sampleType, viewDimension: '2d' } },
                     { binding: PROJECTION_BINDING.sourceCube, visibility: SHADER_STAGE_COMPUTE, texture: { sampleType, viewDimension: 'cube' } },
                     { binding: PROJECTION_BINDING.sourceSampler, visibility: SHADER_STAGE_COMPUTE, sampler: { type: filterable ? 'filtering' : 'non-filtering' } },
                     {
-                        binding: PROJECTION_BINDING.radianceMap,
+                        binding: PROJECTION_BINDING.radianceMapOutput,
                         visibility: SHADER_STAGE_COMPUTE,
                         storageTexture: { access: 'write-only', format: RADIANCE_MAP_FORMAT, viewDimension: '2d' },
                     },
-                    { binding: PROJECTION_BINDING.reduction, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'storage' } },
-                    { binding: PROJECTION_BINDING.harmonics, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'storage' } },
                 ],
             });
-            const pipelineLayout = this.device.createPipelineLayout({ label: layout.label, bindGroupLayouts: [layout] });
-            const pipeline = (name: string, entryPoint: string) =>
-                this.device.createComputePipelineAsync({ label: `${this.label} sky ${name}${filterable ? '' : ' (unfilterable)'}`, layout: pipelineLayout, compute: { module, entryPoint } });
-            const [partialSums, sum, resample] = await Promise.all([
-                pipeline('partial sums', PROJECTION_ENTRY_POINTS.partialSums),
-                pipeline('SH sum', PROJECTION_ENTRY_POINTS.sum),
-                pipeline('resample', PROJECTION_ENTRY_POINTS.resample),
-            ]);
-            return { layout, partialSums, sum, resample };
         };
-        const [filterable, unfilterable] = await Promise.all([build(true), build(false)]);
-        this.pipelines = { filterable, unfilterable };
+        // The partial sums only load texels, so the map's binding needs no filtering.
+        const mapInputLayout = device.createBindGroupLayout({
+            label: `${this.label} sky map input`,
+            entries: [{ binding: PROJECTION_BINDING.radianceMapInput, visibility: SHADER_STAGE_COMPUTE, texture: { sampleType: 'unfilterable-float', viewDimension: '2d' } }],
+        });
+        const pipeline = (name: string, entryPoint: string, groups: GPUBindGroupLayout[]): Promise<GPUComputePipeline> =>
+            device.createComputePipelineAsync({
+                label: `${this.label} sky ${name}`,
+                layout: device.createPipelineLayout({ label: `${this.label} sky ${name}`, bindGroupLayouts: groups }),
+                compute: { module, entryPoint },
+            });
+        const resample = async (filterable: boolean): Promise<ResamplePipeline> => {
+            const layout = sourceLayout(filterable);
+            return { sourceLayout: layout, pipeline: await pipeline(`resample${filterable ? '' : ' (unfilterable)'}`, PROJECTION_ENTRY_POINTS.resample, [sharedLayout, layout]) };
+        };
+        // The partial sums first: the slowest of the four to compile.
+        const [partialSums, sum, filterable, unfilterable] = await Promise.all([
+            pipeline('partial sums', PROJECTION_ENTRY_POINTS.partialSums, [sharedLayout, mapInputLayout]),
+            pipeline('SH sum', PROJECTION_ENTRY_POINTS.sum, [sharedLayout]),
+            resample(true),
+            resample(false),
+        ]);
+        this.pipelines = { sharedLayout, resample: { filterable, unfilterable }, mapInputLayout, partialSums, sum };
     }
 
     /**
@@ -305,19 +331,20 @@ export class PlatformSky {
         if (procedural && this.bakedProcedural && !proceduralSkyNeedsRebake(this.bakedProcedural, procedural)) return false;
 
         const source = procedural ? this.proceduralSource(procedural) : this.sourceFor(environment as Exclude<EnvironmentDescriptor, { type: 'procedural' }>);
-        const partialCount = this.writeParams(source);
-        const variant = source.filterable ? pipelines.filterable : pipelines.unfilterable;
-        const bindGroup = this.bindGroupFor(source, variant, harmonics);
+        this.writeParams(source);
+        const resample = source.filterable ? pipelines.resample.filterable : pipelines.resample.unfilterable;
 
         const pass = encoder.beginComputePass({ label: `${this.label} sky bake`, timestampWrites: timer?.computePass(SKY_BAKE_PASS) });
-        pass.setBindGroup(0, bindGroup);
-        pass.setPipeline(variant.partialSums);
-        pass.dispatchWorkgroups(partialCount);
-        pass.setPipeline(variant.sum);
-        pass.dispatchWorkgroups(1);
-        // After the sum: the resample applies the calibration scale it wrote.
-        pass.setPipeline(variant.resample);
+        pass.setBindGroup(0, this.sharedGroupFor(pipelines, harmonics));
+        // The map first: the sums integrate it.
+        pass.setBindGroup(1, this.sourceGroupFor(source, resample));
+        pass.setPipeline(resample.pipeline);
         pass.dispatchWorkgroups(Math.ceil(RADIANCE_MAP_WIDTH / RESAMPLE_WORKGROUP_SIZE), Math.ceil(RADIANCE_MAP_HEIGHT / RESAMPLE_WORKGROUP_SIZE));
+        pass.setBindGroup(1, this.mapInputGroupFor(pipelines));
+        pass.setPipeline(pipelines.partialSums);
+        pass.dispatchWorkgroups(PARTIAL_SUM_COUNT);
+        pass.setPipeline(pipelines.sum);
+        pass.dispatchWorkgroups(1);
         pass.end();
 
         this.bakedProcedural = procedural;
@@ -332,39 +359,54 @@ export class PlatformSky {
         this.params.destroy();
         this.reductionBuffer.destroy();
         for (const texture of this.placeholders) texture.destroy();
-        this.cachedBindGroup = null;
+        this.sharedGroup = null;
+        this.sourceGroup = null;
+        this.mapInputGroup = null;
     }
 
     // -----------------------------------------------------------------------
 
-    private bindGroupFor(source: BakeSource, variant: BakePipelines, harmonics: GPUBufferBinding): GPUBindGroup {
-        const offset = harmonics.offset ?? 0;
-        const cached = this.cachedBindGroup;
-        if (
-            cached &&
-            cached.equirect === source.equirect &&
-            cached.cube === source.cube &&
-            cached.filterable === source.filterable &&
-            cached.harmonics === harmonics.buffer &&
-            cached.harmonicsOffset === offset
-        ) {
-            return cached.group;
-        }
+    private sharedGroupFor(pipelines: BakePipelines, harmonics: GPUBufferBinding): GPUBindGroup {
+        const key: HarmonicsKey = { buffer: harmonics.buffer, offset: harmonics.offset ?? 0 };
+        const cached = this.sharedGroup;
+        if (cached && cached.key.buffer === key.buffer && cached.key.offset === key.offset) return cached.group;
         const group = this.device.createBindGroup({
             label: `${this.label} sky bake`,
-            layout: variant.layout,
+            layout: pipelines.sharedLayout,
             entries: [
                 { binding: PROJECTION_BINDING.params, resource: { buffer: this.params } },
+                { binding: PROJECTION_BINDING.reduction, resource: { buffer: this.reductionBuffer } },
+                { binding: PROJECTION_BINDING.harmonics, resource: { buffer: key.buffer, offset: key.offset, size: SKY_HARMONICS_LAYOUT.byteLength } },
+            ],
+        });
+        this.sharedGroup = { group, key };
+        return group;
+    }
+
+    private sourceGroupFor(source: BakeSource, resample: ResamplePipeline): GPUBindGroup {
+        const cached = this.sourceGroup;
+        if (cached && cached.key.equirect === source.equirect && cached.key.cube === source.cube && cached.key.filterable === source.filterable) return cached.group;
+        const group = this.device.createBindGroup({
+            label: `${this.label} sky source`,
+            layout: resample.sourceLayout,
+            entries: [
                 { binding: PROJECTION_BINDING.sourceEquirect, resource: source.equirect ? source.equirect.createView({ dimension: '2d' }) : this.placeholder2dView },
                 { binding: PROJECTION_BINDING.sourceCube, resource: source.cube ? source.cube.createView({ dimension: 'cube' }) : this.placeholderCubeView },
                 { binding: PROJECTION_BINDING.sourceSampler, resource: source.filterable ? this.filteringSampler : this.nearestSampler },
-                { binding: PROJECTION_BINDING.radianceMap, resource: this.radianceMapView },
-                { binding: PROJECTION_BINDING.reduction, resource: { buffer: this.reductionBuffer } },
-                { binding: PROJECTION_BINDING.harmonics, resource: { buffer: harmonics.buffer, offset, size: SKY_HARMONICS_LAYOUT.byteLength } },
+                { binding: PROJECTION_BINDING.radianceMapOutput, resource: this.radianceMapView },
             ],
         });
-        this.cachedBindGroup = { group, equirect: source.equirect, cube: source.cube, filterable: source.filterable, harmonics: harmonics.buffer, harmonicsOffset: offset };
+        this.sourceGroup = { group, key: { equirect: source.equirect, cube: source.cube, filterable: source.filterable } };
         return group;
+    }
+
+    private mapInputGroupFor(pipelines: BakePipelines): GPUBindGroup {
+        this.mapInputGroup ??= this.device.createBindGroup({
+            label: `${this.label} sky map input`,
+            layout: pipelines.mapInputLayout,
+            entries: [{ binding: PROJECTION_BINDING.radianceMapInput, resource: this.radianceMapView }],
+        });
+        return this.mapInputGroup;
     }
 
     private proceduralSource(procedural: ProceduralSkyParameters): BakeSource {
@@ -376,11 +418,8 @@ export class PlatformSky {
             equirect: null,
             cube: null,
             filterable: true,
-            gridKind: SKY_GRID_KIND.equirect,
-            gridWidth: PROCEDURAL_GRID_WIDTH,
-            gridHeight: PROCEDURAL_GRID_HEIGHT,
-            // The CPU sky has 2 x 2 of its texels in each map texel; the resample
-            // evaluates the sky at those texels' centres, where it sampled the CPU sky's texture.
+            // The CPU sky has 2 x 2 of its texels in each map texel; the resample evaluates
+            // the sky at their centres, as it sampled the CPU sky's texture in M1.
             supersample: PROCEDURAL_GRID_WIDTH / RADIANCE_MAP_WIDTH,
             procedural,
         };
@@ -395,9 +434,6 @@ export class PlatformSky {
             equirect: null,
             cube: null,
             filterable: true,
-            gridKind: SKY_GRID_KIND.equirect,
-            gridWidth: CONSTANT_GRID_WIDTH,
-            gridHeight: CONSTANT_GRID_HEIGHT,
             supersample: 1,
             procedural: null,
         });
@@ -428,9 +464,6 @@ export class PlatformSky {
                     equirect: null,
                     cube: environment.texture,
                     filterable: !UNFILTERABLE_FLOAT_FORMATS.has(environment.texture.format),
-                    gridKind: SKY_GRID_KIND.cube,
-                    gridWidth: Math.min(faceSize, MAX_CUBE_GRID_SIZE),
-                    gridHeight: Math.min(faceSize, MAX_CUBE_GRID_SIZE),
                     // A face spans 90 degrees, the radiance map 360 across 256 texels: face texels per map texel = size / 64.
                     supersample: clampSupersample(Math.ceil(faceSize / 64)),
                     procedural: null,
@@ -448,43 +481,28 @@ export class PlatformSky {
             equirect: texture,
             cube: null,
             filterable: !UNFILTERABLE_FLOAT_FORMATS.has(texture.format),
-            gridKind: SKY_GRID_KIND.equirect,
-            // At the source's own resolution (up to a cap), cell centres land on texel centres, so the
-            // bilinear sampler returns each texel exactly and the sum is the texels' own integral.
-            gridWidth: Math.min(texture.width, MAX_EQUIRECT_GRID_WIDTH),
-            gridHeight: Math.min(texture.height, MAX_EQUIRECT_GRID_HEIGHT),
             supersample: clampSupersample(Math.ceil(texture.width / RADIANCE_MAP_WIDTH)),
             procedural: null,
         };
     }
 
-    /** Writes the bake's parameters; returns the number of partial-sum workgroups. */
-    private writeParams(source: BakeSource): number {
+    /** Writes the bake's parameters. */
+    private writeParams(source: BakeSource): void {
         const floats = new Float32Array(this.paramsData);
         const words = new Uint32Array(this.paramsData);
-        const cells = source.gridWidth * source.gridHeight * (source.gridKind === SKY_GRID_KIND.cube ? 6 : 1);
-        // Enough cells per thread that the final workgroup has at most MAX_PARTIAL_SUMS to add.
-        const cellsPerThread = Math.max(1, Math.ceil(cells / (PROJECTION_WORKGROUP_SIZE * MAX_PARTIAL_SUMS)));
-        const partialCount = Math.ceil(cells / (PROJECTION_WORKGROUP_SIZE * cellsPerThread));
+        const sky = source.procedural;
         floats.set(source.constantRadiance, PROJECTION_PARAMS_WORD.constantRadiance);
         floats[PROJECTION_PARAMS_WORD.intensity] = source.intensity;
+        floats.set(sky ? sky.sunDirection : [0, 1, 0], PROJECTION_PARAMS_WORD.sunDirection);
         words[PROJECTION_PARAMS_WORD.sourceKind] = source.kind;
-        words[PROJECTION_PARAMS_WORD.gridKind] = source.gridKind;
-        words[PROJECTION_PARAMS_WORD.gridWidth] = source.gridWidth;
-        words[PROJECTION_PARAMS_WORD.gridHeight] = source.gridHeight;
         floats[PROJECTION_PARAMS_WORD.rotationCos] = Math.cos(source.rotationY);
         floats[PROJECTION_PARAMS_WORD.rotationSin] = Math.sin(source.rotationY);
         words[PROJECTION_PARAMS_WORD.supersample] = source.supersample;
-        words[PROJECTION_PARAMS_WORD.cellsPerThread] = cellsPerThread;
-        words[PROJECTION_PARAMS_WORD.partialCount] = partialCount;
-        const sky = source.procedural;
-        floats.set(sky ? sky.sunDirection : [0, 1, 0], PROJECTION_PARAMS_WORD.sunDirection);
+        floats[PROJECTION_PARAMS_WORD.targetHorizontalLuminance] = sky?.targetHorizontalLuminance ?? 0;
         writePerez(floats, PROJECTION_PARAMS_WORD.perezLuminance, sky?.luminance);
         writePerez(floats, PROJECTION_PARAMS_WORD.perezX, sky?.chromaticityX);
         writePerez(floats, PROJECTION_PARAMS_WORD.perezY, sky?.chromaticityY);
-        floats[PROJECTION_PARAMS_WORD.targetHorizontalLuminance] = sky?.targetHorizontalLuminance ?? 0;
         this.device.queue.writeBuffer(this.params, 0, this.paramsData);
-        return partialCount;
     }
 }
 

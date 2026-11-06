@@ -14,9 +14,14 @@
  * - every probe's pendingChange and urgency are bit for bit the same.
  *
  * Also the global changes' paths on the GPU (one scene, the default
- * reduction): an environment change marks every active probe with r = 1
- * times its openness factor (0.25 to 1), and nothing else; a sun switched on
- * marks every active probe with MAX_GLOBAL_CHANGE times its openness factor.
+ * reduction): an environment change marks every active probe with the sky's
+ * own change times its openness factor (0.25 to 1), and nothing else
+ * (T2.6a: the change of the sky's band-0 and band-1 radiance SH against its
+ * mean; for a constant colour, the colour's change per channel, where it got
+ * darker against what is left). A sky switched on from black marks with
+ * MAX_GLOBAL_CHANGE, a colour with its red halved with 1, and the same
+ * colour set again marks nothing. A sun switched on marks every active
+ * probe with MAX_GLOBAL_CHANGE times its openness factor.
  *
  * Runs on any GPU; without the `subgroups` feature only the fallback runs,
  * and the page says so.
@@ -26,6 +31,7 @@ import { assert, runGpuTest } from '../../client.ts';
 import { PROBE_HISTORY_WORD, PROBE_HISTORY_WORDS } from '../../../../packages/ddgi-core/src/techniques/ddgi/layout.ts';
 import type { PhaseBReduction } from '../../../../packages/ddgi-core/src/techniques/ddgi/wgsl/blend.ts';
 import { ENVIRONMENT_CHANGE, MAX_GLOBAL_CHANGE } from '../../../../packages/ddgi-core/src/techniques/ddgi/mark-table.ts';
+import type { EnvironmentDescriptor } from '../../../../packages/ddgi-core/src/platform/contract/scene.ts';
 import { createDdgiScene, readBuffer, readProbeData, releaseDeviceOnPageHide, runFrames } from '../ddgi-shared/harness.ts';
 
 const WARM_FRAMES = 64;
@@ -109,15 +115,25 @@ async function globalMarks(device: GPUDevice): Promise<Record<string, unknown>> 
             assert(outOfBounds === 0 && strayMarks === 0, `${label}: ${outOfBounds} active probes outside ${change * OPENNESS_FLOOR}..${change}, ${strayMarks} inactive probes marked`);
             return { marked, smallest, largest };
         };
-        const start = await pending();
-        scene.platform.scene.setEnvironment({ type: 'color', color: [0.2, 0.3, 0.4] });
-        await runFrames(device, scene.platform, 1, 0);
-        const afterSky = await pending();
-        const sky = check('environment', start, afterSky, ENVIRONMENT_CHANGE);
+        // Constant skies (two-room starts with none): black to a colour, its red halved, the same again.
+        const skySteps: Array<[string, EnvironmentDescriptor, number]> = [
+            ['a sky switched on from black', { type: 'color', color: [0.2, 0.3, 0.4] }, MAX_GLOBAL_CHANGE],
+            ["the sky's red halved", { type: 'color', color: [0.1, 0.3, 0.4] }, 1],
+            ['the same sky set again', { type: 'color', color: [0.1, 0.3, 0.4] }, 0],
+        ];
+        let before = await pending();
+        const environment: Record<string, unknown> = {};
+        for (const [label, sky, change] of skySteps) {
+            scene.platform.scene.setEnvironment(sky);
+            await runFrames(device, scene.platform, 1, 0);
+            const after = await pending();
+            environment[label] = check(`environment, ${label}`, before, after, change * ENVIRONMENT_CHANGE);
+            before = after;
+        }
         scene.platform.scene.createLight({ type: 'directional', color: [1, 1, 1], intensity: 2, direction: [0.3, -1, 0.2] });
         await runFrames(device, scene.platform, 1, 0);
-        const sun = check('sun switched on', afterSky, await pending(), MAX_GLOBAL_CHANGE);
-        return { environment: sky, sunSwitchedOn: sun };
+        const sun = check('sun switched on', before, await pending(), MAX_GLOBAL_CHANGE);
+        return { environment, sunSwitchedOn: sun };
     } finally {
         scene.platform.dispose();
     }

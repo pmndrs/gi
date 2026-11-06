@@ -28,7 +28,9 @@
  * 6. **Re-projection only on change**, counted, and again when the same
  *    environment object is set again after its texture changed.
  * 7. **Subgroups and the fallback** reduce the same sky to the same SH,
- *    and the fallback matches the CPU projection (`spherical-harmonics.ts`).
+ *    and the fallback matches the CPU projection (`spherical-harmonics.ts`)
+ *    of the file's radiance map; how far the map's SH are from the file's
+ *    is reported.
  * 8. **The GPU's procedural sky is the CPU's** (T2.6a check 1). For skies
  *    from a 2-degree sun (made at 5) to 89 degrees and turbidity 1.7 to 10,
  *    the radiance map the bake writes, read at every texel centre, against
@@ -36,9 +38,11 @@
  *    the map's texels as the resample filters a 512 x 256 source: each
  *    channel's mean within 0.1%, every texel's channels within 1% (a channel
  *    the gamut clamp made 0 on the CPU: against the texel's brightest),
- *    black below the horizon; the radiance
- *    and irradiance SH against the CPU projection of that sky, with
- *    subgroups and with the fallback; the ground's irradiance against the
+ *    black below the horizon; the radiance and irradiance SH against the
+ *    CPU projection of that sky's map (since T2.6a the SH integrate the
+ *    map, within 5e-4 of the largest coefficient: the GPU stores the map in
+ *    halves, DECISIONS 2026-11-06), with subgroups and with the fallback,
+ *    which agree within 1e-4; the ground's irradiance against the
  *    CPU sky's own (reported; ±0.5% is gated on the open-ground and Sponza
  *    skies, section 2).
  * 9. **When a procedural sky re-bakes** (m2-lights.md §6.2): not for the
@@ -78,8 +82,17 @@ const MISS_RADIANCE_TOLERANCE = 0.02;
 const CODED_RADIANCE_TOLERANCE = 0.01;
 /** Their irradiance against the exact answer. */
 const CODED_IRRADIANCE_TOLERANCE = 0.003;
-/** Subgroup against fallback SH, and GPU against CPU SH: relative to the largest coefficient. */
+/** Subgroup against fallback SH: relative to the largest coefficient. */
 const SH_AGREEMENT_TOLERANCE = 1e-4;
+/**
+ * GPU SH against the CPU projection of the same map, and the procedural sky
+ * against the sky file: relative to the largest coefficient. Looser than the
+ * reductions' agreement because the GPU integrates the map it stored in
+ * halves, and the RTX 3060 stores halves by truncation (-0.035% on average,
+ * NOTES); a procedural sky is calibrated after that store, a texture isn't
+ * (DECISIONS 2026-11-06).
+ */
+const MAP_SH_TOLERANCE = 5e-4;
 /** T2.6a check 1: the GPU's procedural map against the CPU sky, each channel's mean and every texel's channels. */
 const PROCEDURAL_MEAN_TOLERANCE = 0.001;
 const PROCEDURAL_TEXEL_TOLERANCE = 0.01;
@@ -281,8 +294,8 @@ function cpuSkyFor(environment: ProceduralEnvironment): ReturnType<typeof buildC
  * a 512 x 256 source: the 2 x 2 source texels in each map texel, weighted by
  * cos(latitude) at their centres. RGB per texel.
  */
-function cpuRadianceMap(sky: ReturnType<typeof buildCalibratedSky>): Float64Array {
-    const { width, height, halves } = sky.image;
+function cpuRadianceMap(image: { width: number; height: number; halves: Uint16Array }): Float64Array {
+    const { width, height, halves } = image;
     const across = width / RADIANCE_MAP_WIDTH;
     const down = height / RADIANCE_MAP_HEIGHT;
     const map = new Float64Array(RADIANCE_MAP_WIDTH * RADIANCE_MAP_HEIGHT * 3);
@@ -366,10 +379,17 @@ function compareMaps(gpu: readonly Vec3[], cpu: Float64Array): MapComparison {
     };
 }
 
-/** The CPU sky's SH (irradiance and radiance), as vec4f rows like the GPU's. */
-function cpuHarmonics(sky: ReturnType<typeof buildCalibratedSky>): Harmonics {
-    const floats = Float64Array.from(sky.image.halves, (half) => halfToFloat(half));
-    const radiance = projectEquirectRadiance(floats, sky.image.width, sky.image.height);
+/** A radiance map's SH (radiance coefficients), the map in texture order (row 0 the nadir), projected as the GPU does: its own texels. */
+function projectMap(map: Float64Array): Float64Array {
+    const imageOrder = new Float64Array(map.length);
+    const rowLength = RADIANCE_MAP_WIDTH * 3;
+    for (let row = 0; row < RADIANCE_MAP_HEIGHT; row++) imageOrder.set(map.subarray(row * rowLength, (row + 1) * rowLength), (RADIANCE_MAP_HEIGHT - 1 - row) * rowLength);
+    return projectEquirectRadiance(imageOrder, RADIANCE_MAP_WIDTH, RADIANCE_MAP_HEIGHT);
+}
+
+/** The SH of an image's radiance map (irradiance and radiance), as vec4f rows like the GPU's. */
+function cpuHarmonics(image: { width: number; height: number; halves: Uint16Array }): Harmonics {
+    const radiance = projectMap(cpuRadianceMap(image));
     const irradiance = convolveWithCosineLobe(radiance);
     const rows = (coefficients: Float64Array, count: number): Float32Array => {
         const out = new Float32Array(count * 4);
@@ -609,7 +629,7 @@ await runGpuTest(
                 setEnvironment(environment);
                 const samples = await sampleSky(kernel, [up, ...texelDirections]);
                 const cpuSky = cpuSkyFor(environment);
-                const comparison = compareMaps(samples.radiance.slice(1), cpuRadianceMap(cpuSky));
+                const comparison = compareMaps(samples.radiance.slice(1), cpuRadianceMap(cpuSky.image));
                 const groundError = samples.irradiance[0].map((value, channel) => value / cpuSky.measured.rgb[channel] - 1);
                 proceduralResults[name] = { ...comparison, groundIrradianceError: groundError.map(percent) };
                 log(
@@ -659,31 +679,39 @@ await runGpuTest(
         const skyEnvironment: EnvironmentDescriptor = { type: 'texture', texture: skyTexture, layout: 'equirect' };
         const fallbackHarmonics = await projectStandalone(device, fallback, skyEnvironment);
         const fallbackSh = fallbackHarmonics.irradiance;
-        const cpuSh = convolveWithCosineLobe(projectEquirectRadiance(skyFloats, skyImage.width, skyImage.height));
-        const cpuShVec4 = new Float32Array(SH_COEFFICIENT_COUNT * 4);
-        for (let index = 0; index < SH_COEFFICIENT_COUNT; index++) cpuShVec4.set(cpuSh.subarray(index * 3, index * 3 + 3), index * 4);
+        // Since T2.6a the SH integrate the radiance map: against the CPU projection of the file's map.
+        const cpuShVec4 = cpuHarmonics(skyImage).irradiance;
         const fallbackVsCpu = largestDifference(fallbackSh, cpuShVec4);
         results.shFallbackVsCpu = fallbackVsCpu.difference / fallbackVsCpu.scale;
-        log(`SH, workgroup fallback against the CPU projection: largest difference ${(fallbackVsCpu.difference / fallbackVsCpu.scale).toExponential(2)} of the largest coefficient`);
-        assert(fallbackVsCpu.difference <= SH_AGREEMENT_TOLERANCE * fallbackVsCpu.scale, 'the fallback SH reduction disagrees with the CPU projection');
+        // What integrating the 256 x 128 map instead of the 512 x 256 file changes (reported).
+        const fileSh = convolveWithCosineLobe(projectEquirectRadiance(skyFloats, skyImage.width, skyImage.height));
+        const fileShVec4 = new Float32Array(SH_COEFFICIENT_COUNT * 4);
+        for (let index = 0; index < SH_COEFFICIENT_COUNT; index++) fileShVec4.set(fileSh.subarray(index * 3, index * 3 + 3), index * 4);
+        const mapVsFile = largestDifference(cpuShVec4, fileShVec4);
+        results.shMapVsFile = mapVsFile.difference / mapVsFile.scale;
+        log(
+            `SH, workgroup fallback against the CPU projection of the map: largest difference ${(fallbackVsCpu.difference / fallbackVsCpu.scale).toExponential(2)} of the largest coefficient; ` +
+                `the map's SH against the file's (both on the CPU): ${(mapVsFile.difference / mapVsFile.scale).toExponential(2)}`,
+        );
+        assert(fallbackVsCpu.difference <= MAP_SH_TOLERANCE * fallbackVsCpu.scale, 'the fallback SH reduction disagrees with the CPU projection');
         // 2 (continued). The procedural open-ground sky is the sky file, coefficient for coefficient.
         const proceduralSh = (await projectStandalone(device, fallback, platformSkyEnvironment(openGroundManifest))).irradiance;
         const proceduralVsTexture = largestDifference(proceduralSh, fallbackSh);
         results.shProceduralVsTexture = proceduralVsTexture.difference / proceduralVsTexture.scale;
         log(`SH, procedural open ground against the sky file: largest difference ${(proceduralVsTexture.difference / proceduralVsTexture.scale).toExponential(2)}`);
-        assert(proceduralVsTexture.difference <= SH_AGREEMENT_TOLERANCE * proceduralVsTexture.scale, 'the procedural open-ground sky differs from the sky file');
+        assert(proceduralVsTexture.difference <= MAP_SH_TOLERANCE * proceduralVsTexture.scale, 'the procedural open-ground sky differs from the sky file');
         // 8 (continued). The procedural skies' SH against the CPU projection of the CPU sky, radiance and irradiance.
         const proceduralShAgreement: Record<string, { irradiance: number; radiance: number }> = {};
         const fallbackProceduralSh = new Map<string, Harmonics>();
         for (const { name, environment } of PROCEDURAL_SKIES) {
             const gpu = await projectStandalone(device, fallback, environment);
             fallbackProceduralSh.set(name, gpu);
-            const cpu = cpuHarmonics(cpuSkyFor(environment));
+            const cpu = cpuHarmonics(cpuSkyFor(environment).image);
             const irradianceAgreement = largestDifference(gpu.irradiance, cpu.irradiance);
             const radianceAgreement = largestDifference(gpu.radiance, cpu.radiance, RADIANCE_SH_COUNT);
             proceduralShAgreement[name] = { irradiance: irradianceAgreement.difference / irradianceAgreement.scale, radiance: radianceAgreement.difference / radianceAgreement.scale };
-            assert(irradianceAgreement.difference <= SH_AGREEMENT_TOLERANCE * irradianceAgreement.scale, `procedural ${name}: the irradiance SH differs from the CPU sky's by ${proceduralShAgreement[name].irradiance.toExponential(2)} of the largest coefficient`);
-            assert(radianceAgreement.difference <= SH_AGREEMENT_TOLERANCE * radianceAgreement.scale, `procedural ${name}: the radiance SH differs from the CPU sky's by ${proceduralShAgreement[name].radiance.toExponential(2)} of the largest coefficient`);
+            assert(irradianceAgreement.difference <= MAP_SH_TOLERANCE * irradianceAgreement.scale, `procedural ${name}: the irradiance SH differs from the CPU sky's by ${proceduralShAgreement[name].irradiance.toExponential(2)} of the largest coefficient`);
+            assert(radianceAgreement.difference <= MAP_SH_TOLERANCE * radianceAgreement.scale, `procedural ${name}: the radiance SH differs from the CPU sky's by ${proceduralShAgreement[name].radiance.toExponential(2)} of the largest coefficient`);
         }
         results.proceduralShVsCpu = proceduralShAgreement;
         log(`SH, procedural skies against the CPU projection of the CPU sky (largest difference over the largest coefficient, irradiance / radiance): ${Object.entries(proceduralShAgreement).map(([name, value]) => `${name} ${value.irradiance.toExponential(1)} / ${value.radiance.toExponential(1)}`).join('; ')}`);

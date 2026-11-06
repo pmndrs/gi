@@ -62,7 +62,10 @@ describe('the GPU procedural sky (T2.6a)', () => {
     it("lays its parameter block out like the WGSL struct (uniform rules: a struct member starts on 16 bytes)", () => {
         for (const offset of [PROJECTION_PARAMS_WORD.perezLuminance, PROJECTION_PARAMS_WORD.perezX, PROJECTION_PARAMS_WORD.perezY]) expect(offset % 4).toBe(0);
         expect(PROJECTION_PARAMS_WORD.perezX - PROJECTION_PARAMS_WORD.perezLuminance).toBe(PEREZ_WORDS);
-        expect(PROJECTION_PARAMS_WORD.targetHorizontalLuminance).toBe(PROJECTION_PARAMS_WORD.perezY + PEREZ_WORDS);
-        expect(PROJECTION_PARAMS_BYTES).toBe(Math.ceil(((PROJECTION_PARAMS_WORD.targetHorizontalLuminance + 1) * 4) / 16) * 16);
+        expect(PROJECTION_PARAMS_WORD.perezY - PROJECTION_PARAMS_WORD.perezX).toBe(PEREZ_WORDS);
+        // The vec3f sun direction starts on 16 bytes, with the source kind in its fourth word.
+        expect(PROJECTION_PARAMS_WORD.sunDirection % 4).toBe(0);
+        expect(PROJECTION_PARAMS_WORD.sourceKind).toBe(PROJECTION_PARAMS_WORD.sunDirection + 3);
+        expect(PROJECTION_PARAMS_BYTES).toBe((PROJECTION_PARAMS_WORD.perezY + PEREZ_WORDS) * 4);
     });
 });

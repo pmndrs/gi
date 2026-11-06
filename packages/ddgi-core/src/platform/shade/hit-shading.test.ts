@@ -87,8 +87,9 @@ describe('hit shading', () => {
         // Radiance SH bands 0-2 at 0 (so a uniform binding of it alone needs no offset), then the 18 irradiance coefficients.
         expect(SHADE_UNIFORM_LAYOUT.skyRadiance).toBe(0);
         expect(SHADE_UNIFORM_LAYOUT.skyIrradiance).toBe(RADIANCE_SH_COUNT * 16);
-        expect(SHADE_UNIFORM_LAYOUT.maxShadowedLightsPerHit).toBe((RADIANCE_SH_COUNT + SH_COEFFICIENT_COUNT) * 16);
-        expect(SKY_HARMONICS_LAYOUT.byteLength).toBe(432);
+        expect(SHADE_UNIFORM_LAYOUT.skyRadianceMapScale).toBe((RADIANCE_SH_COUNT + SH_COEFFICIENT_COUNT) * 16);
+        expect(SHADE_UNIFORM_LAYOUT.maxShadowedLightsPerHit).toBe(SKY_HARMONICS_LAYOUT.byteLength);
+        expect(SKY_HARMONICS_LAYOUT.byteLength).toBe(448);
         expect(SHADE_UNIFORM_LAYOUT.byteLength % 16).toBe(0);
         const code = shadeModuleWgsl({ group: 0, firstBinding: 0 });
         expect(code.indexOf('skyRadiance: array<vec4f, 9>')).toBeLessThan(code.indexOf('skyIrradiance: array<vec4f, 18>'));
