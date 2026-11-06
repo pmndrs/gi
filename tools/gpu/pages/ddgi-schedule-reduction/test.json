@@ -1,0 +1,4 @@
+{
+    "description": "T2.4b check 4: the GPU scheduler's subgroup and fallback histograms and compactions agree exactly on the same input (still, local and global scenarios on 20,000 probes), match the CPU twin, and list no probe twice. VITE_DDGI_SCHEDULE_TIMING=1 times the four dispatches (bar 0.05 ms; run under the bench lock).",
+    "timeoutMs": 300000
+}
