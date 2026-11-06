@@ -48,6 +48,31 @@
             "range": 10
         }
     ],
+    "motions": [
+        {
+            "id": "light-sweep",
+            "label": "pendant-lamp sweeps at 1 m/s and back",
+            "target": "light:pendant-lamp",
+            "loop": true,
+            "keyframes": [
+                { "t": 0, "position": [-0.01, 1.5, -1.58] },
+                { "t": 2.38, "position": [-0.01, 1.5, 0.8] },
+                { "t": 4.76, "position": [-0.01, 1.5, -1.58] }
+            ]
+        },
+        {
+            "id": "light-step",
+            "label": "pendant-lamp jumps every 3 s",
+            "target": "light:pendant-lamp",
+            "interpolation": "step",
+            "loop": true,
+            "keyframes": [
+                { "t": 0, "position": [-0.01, 1.5, -1.58] },
+                { "t": 3, "position": [-0.01, 1.5, 0.8] },
+                { "t": 6, "position": [-0.01, 1.5, -1.58] }
+            ]
+        }
+    ],
     "environment": {
         "type": "procedural",
         "sunDirection": [0.6, 0.6, -0.2],

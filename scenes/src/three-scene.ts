@@ -15,6 +15,8 @@ import {
     DoubleSide,
     FrontSide,
     Group,
+    InstancedMesh,
+    Matrix4,
     Mesh,
     MeshStandardMaterial,
     PointLight,
@@ -22,7 +24,9 @@ import {
     SpotLight,
     Vector3,
     type Light,
+    type Object3D,
 } from 'three';
+import type { LightSetFile, LightSetPart } from './manifest';
 import type { ProceduralScene, SceneLightData, SceneMaterialData, SceneMeshData, Vector3Tuple } from './scene-data';
 
 function linearColor(rgb: readonly [number, number, number]): Color {
@@ -98,8 +102,20 @@ function shadowFar(position: Vector3Tuple, range: number, fitting: LightFitting)
  * Creates a three.js light. Directional lights get a shadow camera that fits
  * `fitting`; the others reach to their range. A range of 0 maps to three's
  * `distance = 0`: no range window, plain inverse-square falloff.
+ *
+ * A light at intensity 0 (Sponza's arcade lamp, off until one of its
+ * motions plays) starts hidden: three r187 still renders a shadowed light's
+ * shadow map every frame at intensity 0 (six passes for a point light), and
+ * the GI adapter sends a hidden light as intensity 0 anyway. Whatever lights
+ * it shows it too.
  */
 export function lightToThree(light: SceneLightData, fitting: LightFitting): Light {
+    const threeLight = makeThreeLight(light, fitting);
+    threeLight.visible = light.intensity > 0;
+    return threeLight;
+}
+
+function makeThreeLight(light: SceneLightData, fitting: LightFitting): Light {
     const color = linearColor(light.color);
     const castShadow = light.castsShadows ?? true;
 
@@ -207,4 +223,88 @@ export function applyModelTransform(
     );
     object.scale.setScalar(transform.scale);
     object.updateMatrix();
+}
+
+/** What a light set needs to load its model: a glTF loader (three's `GLTFLoader` fits). */
+export interface ModelLoader {
+    loadAsync(url: string): Promise<{ scene: Object3D }>;
+}
+
+/** A `light-set` part as three objects: one InstancedMesh per mesh of the model in `group`, and one point light per copy (not in the group: the caller places lights). */
+export interface LoadedLightSet {
+    readonly group: Group;
+    readonly lights: PointLight[];
+    readonly set: LightSetFile;
+    /** Copies placed: the scene setting, at most the set's count. */
+    readonly count: number;
+    /** Triangles in all copies together. */
+    readonly triangles: number;
+}
+
+/**
+ * Loads a `light-set` part (T2.1, `sponza-candles`): the set file, then its
+ * model, placed at the first `count` lights of the set's order. Only the one
+ * model is loaded, whatever the count.
+ *
+ * - **The copies are InstancedMeshes**, one per mesh in the model (a candle's
+ *   wax, wick and flame), with `userData.giContributes = false`: they don't
+ *   block or bounce GI's rays. Each copy surrounds its own light (the flame
+ *   sits on it, the wax top 2 mm under it), so in GI its surfaces would be
+ *   lit at a few millimetres by inverse-square falloff and turn into
+ *   fireflies in every probe ray that hits one, and the flame would shadow its
+ *   own light. A candle 2 cm wide changes nothing else GI can see. three
+ *   still draws them.
+ * - **The lights** have no range (three's distance 0, as the set file says)
+ *   and decay 2. three draws them without shadows (`castShadow = false`: no
+ *   renderer has shadow maps for hundreds of point lights), while GI traces
+ *   their shadows (`userData.giCastsShadows`), so candle light doesn't leak
+ *   through Sponza's walls into GI.
+ */
+export async function loadLightSet(part: LightSetPart, count: number, find: (asset: string, path: string) => Promise<string>, loader: ModelLoader): Promise<LoadedLightSet> {
+    const setUrl = await find(part.asset, part.path);
+    const response = await fetch(setUrl);
+    if (!response.ok) throw new Error(`light set ${part.asset}/${part.path}: HTTP ${response.status}`);
+    const set = (await response.json()) as LightSetFile;
+    if (!(set.positions.length === set.count * 3) || set.light.type !== 'point') throw new Error(`light set ${part.asset}/${part.path} is not a set of point lights`);
+    const folder = part.path.includes('/') ? part.path.slice(0, part.path.lastIndexOf('/') + 1) : '';
+    const model = (await loader.loadAsync(await find(part.asset, `${folder}${set.prototype}`))).scene;
+    model.updateMatrixWorld(true);
+    const placed = Math.max(0, Math.min(count, set.count));
+
+    const group = new Group();
+    group.name = `${part.asset}/${part.path} (${placed} of ${set.count})`;
+    const place = new Matrix4();
+    const copy = new Matrix4();
+    let triangles = 0;
+    model.traverse((object) => {
+        const mesh = object as Mesh;
+        if (!mesh.isMesh) return;
+        const instanced = new InstancedMesh(mesh.geometry, mesh.material, placed);
+        instanced.name = `${mesh.name || 'mesh'} x ${placed}`;
+        for (let index = 0; index < placed; index++) {
+            place.makeTranslation(set.positions[index * 3], set.positions[index * 3 + 1], set.positions[index * 3 + 2]);
+            instanced.setMatrixAt(index, copy.multiplyMatrices(place, mesh.matrixWorld));
+        }
+        instanced.instanceMatrix.needsUpdate = true;
+        instanced.computeBoundingBox();
+        instanced.computeBoundingSphere();
+        instanced.userData.giContributes = false;
+        instanced.castShadow = false;
+        instanced.receiveShadow = true;
+        const indices = mesh.geometry.index ? mesh.geometry.index.count : mesh.geometry.getAttribute('position').count;
+        triangles += (indices / 3) * placed;
+        group.add(instanced);
+    });
+
+    const lights: PointLight[] = [];
+    const color = linearColor(set.light.color);
+    for (let index = 0; index < placed; index++) {
+        const light = new PointLight(color, set.light.intensity, set.light.range, 2);
+        light.position.set(set.positions[index * 3], set.positions[index * 3 + 1], set.positions[index * 3 + 2]);
+        light.castShadow = false;
+        light.userData.giCastsShadows = true;
+        light.name = `${part.countSetting} ${set.packageIndices[index]}`;
+        lights.push(light);
+    }
+    return { group, lights, set, count: placed, triangles };
 }

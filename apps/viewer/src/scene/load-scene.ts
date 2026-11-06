@@ -1,8 +1,8 @@
 /**
  * Builds a three.js scene from a manifest: every part (procedural, or a
  * downloaded glTF; Sponza is the base package plus add-ons, each its own
- * part in one shared coordinate frame), the manifest's direct lights, and the
- * manifest's sky.
+ * part in one shared coordinate frame; or a light set, `sponza-candles`'
+ * candles), the manifest's direct lights, and the manifest's sky.
  *
  * This reuses the scenes package's helpers (`proceduralSceneToThree`,
  * `lightToThree`, `emissiveQuadLights`, `applyModelTransform`). The only
@@ -32,10 +32,10 @@ import {
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { RectAreaLightTexturesLib } from 'three/addons/lights/RectAreaLightTexturesLib.js';
 import { RectAreaLightNode } from 'three/webgpu';
-import { manifestLightToSceneLight, type ManifestEnvironment, type SceneManifest } from '../../../../scenes/src/manifest';
+import { manifestLightToSceneLight, sceneSettingValues, type ManifestEnvironment, type SceneManifest } from '../../../../scenes/src/manifest';
 import { buildProcedural } from '../../../../scenes/src/procedural';
 import { computeSceneStats, type SceneStats } from '../../../../scenes/src/stats';
-import { applyModelTransform, emissiveQuadLights, lightToThree, proceduralSceneToThree } from '../../../../scenes/src/three-scene';
+import { applyModelTransform, emissiveQuadLights, lightToThree, loadLightSet, proceduralSceneToThree, type LoadedLightSet } from '../../../../scenes/src/three-scene';
 import { LAYER_DIRECT_LIGHTS, LAYER_VIEW_GEOMETRY } from './layers';
 import { findModelUrl } from './model-url';
 import { createSkyDome, loadSkyTexture } from './sky';
@@ -52,8 +52,12 @@ export interface LoadedScene {
     scene: Scene;
     /** The model only, without lights. */
     content: Group;
-    /** The manifest's lights and the emissive-quad area lights. */
+    /** The manifest's lights, the emissive-quad area lights and a light set's lights. */
     directLights: Light[];
+    /** The scene's settings as loaded (`sceneSettingValues`): `sponza-candles`' candle count, say. */
+    settings: Record<string, number>;
+    /** Each `light-set` part as loaded: its copies and lights. */
+    lightSets: LoadedLightSet[];
     bounds: Box3;
     /** The shared sky file as a three.js texture, for a procedural environment; null otherwise. */
     sky: DataTexture | null;
@@ -165,9 +169,16 @@ export function disposeScene(loaded: LoadedScene): void {
     });
 }
 
-export async function loadScene(manifest: SceneManifest, report: (progress: LoadProgress) => void): Promise<LoadedScene> {
+export interface LoadSceneOptions {
+    /** Scene settings by name, as a link gives them (`?candles=4096`); the manifest's defaults otherwise. */
+    readonly settings?: Readonly<Record<string, unknown>>;
+}
+
+export async function loadScene(manifest: SceneManifest, report: (progress: LoadProgress) => void, options: LoadSceneOptions = {}): Promise<LoadedScene> {
     const scene = new Scene();
     const sky = await addSky(scene, manifest);
+    const settings = sceneSettingValues(manifest, options.settings);
+    const lightSets: LoadedLightSet[] = [];
 
     const content = new Group();
     content.name = manifest.id;
@@ -180,6 +191,11 @@ export async function loadScene(manifest: SceneManifest, report: (progress: Load
             const built = buildProcedural(part.builder, part.options);
             content.add(proceduralSceneToThree(built, part.builder));
             emitters.push(...emissiveQuadLights(built));
+        } else if (part.kind === 'light-set') {
+            report({ stage: `Loading ${settings[part.countSetting]} ${part.countSetting} (${part.asset})`, fraction: null });
+            const loaded = await loadLightSet(part, settings[part.countSetting], findModelUrl, new GLTFLoader());
+            lightSets.push(loaded);
+            content.add(loaded.group);
         } else {
             // Scenes made of several downloads (Sponza and its add-ons) say which one is loading.
             modelPartNumber++;
@@ -194,6 +210,8 @@ export async function loadScene(manifest: SceneManifest, report: (progress: Load
         }
     }
     prepareMeshes(content);
+    // A light set's copies don't cast three's shadows (loadLightSet says why); prepareMeshes turned them on for everything.
+    for (const set of lightSets) set.group.traverse((object) => (object.castShadow = false));
     scene.add(content);
     content.updateMatrixWorld(true);
 
@@ -212,6 +230,13 @@ export async function loadScene(manifest: SceneManifest, report: (progress: Load
         const target = (light as unknown as { target?: Object3D }).target;
         if (target) scene.add(target);
     }
+    for (const set of lightSets) {
+        for (const light of set.lights) {
+            light.layers.enable(LAYER_DIRECT_LIGHTS);
+            directLights.push(light);
+            scene.add(light);
+        }
+    }
     if (emitters.length > 0) {
         RectAreaLightNode.setLTC(RectAreaLightTexturesLib.init());
         for (const emitter of emitters) {
@@ -221,5 +246,5 @@ export async function loadScene(manifest: SceneManifest, report: (progress: Load
         }
     }
 
-    return { manifest, scene, content, directLights, bounds, sky, diagonal, stats: computeSceneStats(content) };
+    return { manifest, scene, content, directLights, settings, lightSets, bounds, sky, diagonal, stats: computeSceneStats(content) };
 }

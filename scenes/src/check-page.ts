@@ -36,6 +36,7 @@ import { RectAreaLightTexturesLib } from 'three/addons/lights/RectAreaLightTextu
 import { RectAreaLightNode, WebGPURenderer } from 'three/webgpu';
 import {
     manifestLightToSceneLight,
+    sceneSettingValues,
     validateManifest,
     type CameraBookmark,
     type ManifestEnvironment,
@@ -43,7 +44,7 @@ import {
 } from './manifest';
 import { buildProcedural, proceduralBuilders } from './procedural';
 import { computeSceneStats, type SceneStats } from './stats';
-import { applyModelTransform, emissiveQuadLights, lightToThree, proceduralSceneToThree } from './three-scene';
+import { applyModelTransform, emissiveQuadLights, lightToThree, loadLightSet, proceduralSceneToThree } from './three-scene';
 
 /** Absolute paths of the downloads folders, injected by `scenes/vite.config.ts`. */
 declare const __DOWNLOADS_DIRS__: string[];
@@ -137,6 +138,11 @@ async function loadParts(manifest: SceneManifest, loader: GLTFLoader): Promise<{
             const built = buildProcedural(part.builder, part.options);
             content.add(proceduralSceneToThree(built, part.builder));
             emitters.push(...emissiveQuadLights(built));
+        } else if (part.kind === 'light-set') {
+            // The candles, at the scene's default count; their lights go with them (shadowless in three, loadLightSet says why).
+            const set = await loadLightSet(part, sceneSettingValues(manifest)[part.countSetting], findModelUrl, loader);
+            set.group.add(...set.lights);
+            content.add(set.group);
         } else {
             const gltf = await loader.loadAsync(await findModelUrl(part.asset, part.path));
             // GLTFLoader leaves shadows off; without these the lights would shine through everything.

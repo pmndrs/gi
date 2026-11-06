@@ -557,6 +557,13 @@ describe('picking a Blender by version', () => {
         expect(validateSources({ assets: [rawAsset({ convert: noVersion })] }).join('\n')).toContain('blenderVersion: required');
     });
 
+    it('takes a node conversion (a .ts script, no Blender version) and refuses other tools', () => {
+        const node = { tool: 'node' as const, script: 'tools/assets/convert/x.ts', args: ['{dir}'] };
+        expect(validateSources({ assets: [asset({ convert: node })] })).toEqual([]);
+        expect(validateSources({ assets: [rawAsset({ convert: { ...node, script: 'tools/assets/convert/x.py' } })] }).join('\n')).toContain('a node conversion is a .ts script');
+        expect(validateSources({ assets: [rawAsset({ convert: { ...node, tool: 'python' } })] }).join('\n')).toContain('tool: "node"');
+    });
+
     it('blames the conversion when a converted output has the wrong hash, and says how to re-record', async () => {
         const directory = await mkdtemp(join(tmpdir(), 'ddgi-convhash-'));
         await writeFile(join(directory, 'a.glb'), 'bytes');

@@ -57,6 +57,31 @@
             "range": 12
         }
     ],
+    "motions": [
+        {
+            "id": "light-sweep",
+            "label": "lamp-3 sweeps at 1 m/s and back",
+            "target": "light:lamp-3",
+            "loop": true,
+            "keyframes": [
+                { "t": 0, "position": [3.75, 3.2, -1.0] },
+                { "t": 4.0, "position": [7.75, 3.2, -1.0] },
+                { "t": 8.0, "position": [3.75, 3.2, -1.0] }
+            ]
+        },
+        {
+            "id": "light-step",
+            "label": "lamp-3 jumps every 3 s",
+            "target": "light:lamp-3",
+            "interpolation": "step",
+            "loop": true,
+            "keyframes": [
+                { "t": 0, "position": [3.75, 3.2, -1.0] },
+                { "t": 3, "position": [7.75, 3.2, -1.0] },
+                { "t": 6, "position": [3.75, 3.2, -1.0] }
+            ]
+        }
+    ],
     "environment": {
         "type": "none"
     },

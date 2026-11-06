@@ -1,0 +1,91 @@
+{
+    "id": "sponza-candles",
+    "title": "Sponza at night with candles (Intel New Sponza, curtains, candles add-on)",
+    "description": "The many-lights stress test: Intel's New Sponza with the curtains at night, lit only by a spread-out subset of the 10,000 floating candles of Intel's candles add-on (1,024 by default, the candles setting), each a point light with no range. Opt-in: only loaded when named.",
+    "tags": ["interior", "classic", "large", "textured", "alpha-cutout", "many-lights", "night", "heavy"],
+    "units": "meters",
+    "upAxis": "y",
+    "parts": [
+        {
+            "kind": "model",
+            "asset": "sponza-intel",
+            "path": "main_sponza_1k/NewSponza_Main_1k.gltf",
+            "transform": {
+                "position": [0, 0, 0],
+                "rotationDeg": [0, 0, 0],
+                "scale": 1
+            }
+        },
+        {
+            "kind": "model",
+            "asset": "sponza-intel-curtains",
+            "path": "pkg_a_curtains_1k/NewSponza_Curtains_1k.gltf",
+            "transform": {
+                "position": [0, 0, 0],
+                "rotationDeg": [0, 0, 0],
+                "scale": 1
+            }
+        },
+        {
+            "kind": "light-set",
+            "asset": "sponza-intel-candles",
+            "path": "candles/sponza-candles.json",
+            "countSetting": "candles"
+        }
+    ],
+    "settings": {
+        "candles": {
+            "label": "Candles",
+            "description": "How many of Intel's 10,000 candles to place: the first N of an order that spreads them through the scene. More is a heavier many-lights test.",
+            "default": 1024,
+            "min": 1,
+            "max": 10000
+        }
+    },
+    "cameras": [
+        {
+            "name": "upper-gallery",
+            "position": [-6.5, 7.0, 0.8],
+            "target": [10, 5.5, 0],
+            "fovYDeg": 75
+        },
+        {
+            "name": "colonnade-from-the-floor",
+            "position": [-1.5, 1.7, 0.3],
+            "target": [10, 2.4, 0],
+            "fovYDeg": 75
+        }
+    ],
+    "lights": [],
+    "environment": { "type": "none" },
+    "volume": {
+        "center": [1.88, 8.81, 2.48],
+        "size": [36.5, 20, 24],
+        "probeSpacing": 1
+    },
+    "exposureEv": 0,
+    "nativeCapable": false,
+    "credits": [
+        {
+            "asset": "sponza-intel",
+            "license": "CC-BY-4.0+intel-preface",
+            "attribution": "Base package: Sponza 2022 Scene commissioned by Frank Meinl, sponsored by Anton Kaplanyan. Intel Sample Library. License text in the package is CC BY 4.0, with the preface \"For personal use and educational use. Limited commercial use for marketing and print purposes.\"",
+            "sourceUrl": "https://web.archive.org/web/20251206023318/https://www.intel.com/content/www/us/en/developer/topic-technology/graphics-research/samples.html"
+        },
+        {
+            "asset": "sponza-intel-curtains",
+            "license": "CC-BY-4.0+intel-preface",
+            "attribution": "Curtains add-on: Sponza 2022 Scene commissioned by Frank Meinl, sponsored by Anton Kaplanyan. Add-on package by the Sponza Addon Package Crew. Intel Sample Library. License text in the package is CC BY 4.0, with the preface \"For personal use and educational use. Limited commercial use for marketing and print purposes.\"",
+            "sourceUrl": "https://web.archive.org/web/20251206023318/https://www.intel.com/content/www/us/en/developer/topic-technology/graphics-research/samples.html"
+        },
+        {
+            "asset": "sponza-intel-candles",
+            "license": "CC-BY-4.0+intel-preface",
+            "attribution": "Candles add-on (10,000 candles): Sponza 2022 Scene commissioned by Frank Meinl, sponsored by Anton Kaplanyan. Add-on package by the Sponza Addon Package Crew. Intel Sample Library. License text in the package is CC BY 4.0, with the preface \"For personal use and educational use. Limited commercial use for marketing and print purposes.\"",
+            "sourceUrl": "https://web.archive.org/web/20251206023318/https://www.intel.com/content/www/us/en/developer/topic-technology/graphics-research/samples.html"
+        }
+    ],
+    "referenceCube": {
+        "position": [3, 0.5, -1.0]
+    }
+}
