@@ -21,6 +21,36 @@ Rules:
 
 ---
 
+## 2026-11-07 · T2.3 many-light sampling: the light grid · implementer (opus)
+Did (branch `m2-t2.3`, cb35896..f5aaf53, `m2` with T2.5 merged in at e416a85):
+- The grid (`platform/shade/light-grid.ts`). `gi/light-grid` is a platform pass, run every unpaused frame with more than `exactLightLimit` (8) point and spot lights. It covers the scene's bounds with at most `lightGridMaxCells` (2,048) cubic cells. Every light is weighed per cell by an upper bound over the cell; each cell gets R = 16 systematic picks, stored as a `rgba32uint` texture in the hit-shading module (still no storage buffer).
+- At the hit (`shade/wgsl.ts`): ReGIR's second stage. The 16 picks are weighed with the real cosine and distance, then `lightGridShadowedLightsPerHit` (new, default 1) shadow rays go out by the exact path's systematic choice. Each light's contribution goes to its group (T2.5). `giDirectReaches` reads the picks too.
+- The build loads lights in tiles of 128 into workgroup memory for 16 cells. Its scan is subgroups first, with a serial fallback; a test runs both.
+- Settings `exactLightLimit`, `lightGridMaxCells`, `lightGridShadowedLightsPerHit` (contract, platform.md).
+- Pages: `hit-shading-many-lights` (check 1, in the suite) and `ddgi-light-grid-cost` (checks 2 and 3, manual). `ddgi-batch-cost` draws with the viewer's lighting and splits the load stage. `hit-shading-lights` keeps 12 lights on the exact path.
+- Docs: m2-lights.md as built, DECISIONS (6), NOTES (5).
+
+Verified (RTX 3060 nvidia/ampere, Chrome headless, bench lock for every run):
+- Check 1 met. 1,000 points, 1,024 frames against exhaustive. Mean −0.09 / +0.01 / −0.05% at K = 1 / 2 / 4; within 5%: 99.4 / 99.5 / 99.7% (bar 99%). The two scans agree on 99.989% of picks; no slot left unwritten. Intel UHD passes too.
+- Regressions: full RTX suite 51 pages, then `ddgi-shading-compat` after the texture fix; leak 0.84%, still scenes 0 marks. `ddgi-direct`, `hit-shading-deferred`, `ddgi-light-groups` and `ddgi-key-probes-sponza` pass on the merged code. Intel: `hit-shading-many-lights`, `hit-shading-deferred`, `hit-shading-lights` pass. Lint, typecheck, 1,077 unit tests.
+
+Not verified: no timing run was VALID. SW thermal slowdown stayed active even at 48-63 °C, and another lane was using the GPU. Two attempts read INVALID (73%, 100%), the rest INVALID or NO VERDICT. All timings below are information only.
+
+Numbers (information):
+- Check 2: per updated probe, `sponza-candles` K = 1: 4.18 µs; `sponza` 1.93 µs, so **2.2×** against a bar of 1.3×. K = 2: 7.9 µs; K = 4: 9.6 µs. Without its shadow rays `gi/direct` costs 0.13 ms at 512 probes (1.9 ms with them). Candle rays run at about 12 M/s against 60 M/s for the sun's.
+- Check 3: the build takes 0.105-0.131 ms at 2,048 cells (bar 0.1). At 1,024 cells 0.09 ms (dev); at 4,096 cells 0.19 ms.
+- Check 4: ready from load **10.35 s** against `sponza`'s 8.18 s, so 1.27× (bar 2×; T2.1: 958 s).
+  - The load stage is 2.58 s: fetch and parse 1.17, three compile 0.66, first draw 0.75.
+  - Then: trees 2.38 s, warm-up 3.04 s (16 passes), calibration 1.03 s to 174 probes a frame (`sponza` 459).
+  - T2.1's 420 s was this page compiling three's default lighting for 1,024 lights.
+- Viewer at 1280×720 (`viewer-baselines`): 431 ms a frame with GI off, 470 with GI. So the 2-3 fps is three's clustered lighting looping over 1,024 unranged candles in every pixel. DDGI is warmed 7.4 s after creation (was 399 s).
+
+Next:
+- Lead: check 2 is a real miss, not noise; it is shadow rays. Options are roulette on shadow rays, or accepting about 2×, which Budget v2 absorbs (174 against 459 probes).
+- Lead: checks 3 and 4 need one VALID run each on a cool machine (gpu-tester). If the build reads over 0.1 ms, 1,024 cells is the lever.
+- T2.8: three's candle lighting (a range for three's clustered lights only, or fewer candles drawn). DDGI's GI-on frame adds 33 ms there; not looked into.
+- Shared files touched: `contract/shade.ts`, `gi-platform.ts` (one call), `scene/platform-scene.ts` (a getter), `shade/wgsl.ts`, `shade/hit-shading.ts`, platform.md, m2-lights.md, `ddgi-batch-cost`, `hit-shading-lights`. Not touched: `direct.ts`, `ddgi-technique.ts`.
+
 ## 2026-11-07 · T2.5 review and merge · M2 lead (opus)
 Did:
 - Opus review of T2.5 against its done-when (m2-lights.md checks 1–4): pass with notes. One must-fix: a light changing group marked nothing. The implementer fixed it in c7223ac: the light is marked off in its old layer and on in its new one, with a unit test and a page check.
