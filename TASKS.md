@@ -387,7 +387,7 @@ Status: **started 2026-11-06** on branch `m2` (from main at 3d682dc; M1 merged a
 | T2.5 | Light groups: layers, compose, weights, adapter API | implementer | M | T2.2, T2.4a | active (implementer, 2026-11-06; worktree `webgpu-ddgi-m2-t25`, branch `m2-t2.5`) |
 | T2.6a | Sky re-bake for time of day: GPU procedural source, two-level SH with radiance SH, the compile fix | implementer | M | T2.4b | done (merged into `m2` 2026-11-06 after Opus review; checks 1–3 pass; check 4, the furnished room's sun step, not met and moved to T2.4d) |
 | T2.6b | Instant sky: first-order transfer in the blend, the nudge, the fallback; the sun layer in white with T2.5 | implementer | M | T2.4c, T2.5, T2.6a | todo |
-| T2.3 | Many-light sampling: the light grid | implementer | M | T2.1, T2.2 | todo |
+| T2.3 | Many-light sampling: the light grid | implementer | M | T2.1, T2.2 | active (implementer, 2026-11-06; worktree `webgpu-ddgi-m2-t23`, branch `m2-t2.3`) |
 | T2.7 | Native harness: manifest motions, texture sky, animated sun | native-runner | M | T2.1 | todo |
 | T2.8 | Viewer: gizmos, sliders, groups, time of day, motions, a response meter, the native compare page | implementer | M | T2.4b, T2.5, T2.6b, T2.7 | todo |
 | T2.12 | Fast first GI: GPU H-PLOC/LBVH trees at load, tinybvh swapped in per mesh (lower priority) | implementer | M | B1, B2 | todo |
