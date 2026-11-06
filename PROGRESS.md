@@ -21,6 +21,30 @@ Rules:
 
 ---
 
+## 2026-11-06 · T1.9 M1 measurements against the SPEC targets · gpu-tester (sonnet)
+Did: one VALID run per target, no code changes (HEAD 3701d8f). RTX 3060 Laptop (nvidia, ampere), headless Chrome 156, under the bench lock. Leaks, memory and the Intel suite are correctness runs (`--no-cool-wait`); startup runs were timing runs (VALID by the clock rule). Rows added: `memory.csv` (48), `timing.csv` (3 x 35, `batch_cost/startup/...`, one scene per run, so the compile is cold). The leak page has no to-csv; its numbers are below.
+Reused, not re-run: update (T1.9b), shading (T1.14), accuracy (T1.13, T1.14), native matched counts ("T1.9 quiet-window measurements").
+
+| SPEC row (RTX, 1440p) | Number | Valid | Verdict |
+| --- | --- | --- | --- |
+| Cost of showing GI (<= 1.0 ms) | 0.73 ms through the upscaler Performance preset with half-res GTAO (plus the upscaler's own 1.55 ms); native composite 1.26-1.41 ms (T1.14) | VALID (T1.14) | met on the default path; native composite misses 1.0 |
+| Cost of updating GI (<= 2.0 ms) | 12/12 runs within +-10% of 2 ms (T1.9b). Probes at 2 ms: Cornell 1,574 / two-room 707 / Sponza 268 / Bistro exterior 132 | VALID (T1.9b) | met |
+| Whole frame, p50/p95 GI on vs off (<= 3 ms p50 = update + shading, no p95 spikes) | No existing page measures update plus shading in one frame on all three scenes without new code. Sum of rows: 2.0 + 0.73 = 2.73 ms on the default path (4.28 ms with the upscaler's 1.55 ms, which is the user's upscale and not GI); native composite 2.0 + 1.26-1.41 = 3.3-3.4 ms. Measured p95 not available. Earlier unvalid quiet-window deltas (power-state inflated, 1440p): Cornell +2.41 (p95 +4.83), two-room +3.18 (+2.85), Sponza +6.18 (+5.43) | sum of VALID rows | not measured directly; sum met (2.73) on the default path without the upscaler's own cost; p95 not measured |
+| Leaks (<= 1%) | two-room 0.83% (lit 0.715, dark 0.0658; Cycles 0.676 / 0.0602); thin-wall 0.59%; closed-door 0.060% | correctness | met (3000 frames, `--no-cool-wait`, the clock was throttled and doesn't matter here) |
+| Accuracy (+-10% mean) | Cornell +5.74%, two-room +5.50% (T1.13, HD); Sponza +6.59% (T1.14 default path, HD) | T1.13/T1.14 | met |
+| Memory (guide 64 MB) | MB scene copy / acceleration / DDGI / total (+ sky 0.26-1.31): Cornell 1.33 / 0.17 / 5.64 / 7.14; two-room 1.33 / 0.17 / 3.89 / 5.40; Sponza 115.4 / 469.9 / 36.1 / **621.4** (622.7 with sky). Furnished room 40.7 earlier | deterministic | reported; Sponza fits a 6 GB card with room |
+| Startup (<= 2 s from handoff, cold compile) | handoff / file request, first GI drawn: Cornell 1.54 / 1.77 s; two-room 1.16 / 1.29 s; **Sponza 4.50 / 7.23 s** | VALID (start 52-68 C, 0% throttled) | met on Cornell and two-room; **Sponza missed**: files 2.7 s, mesh trees 2.5 s, scene copy 0.85 s, compile 0.8 s (known gap, B2 and M3 per DECISIONS) |
+| Light change / object move response | M2 | | not in M1 |
+| Stability | flicker numbers from the 2026-11-05 entry; the threshold by eye is still with Dennis | | not measured here |
+| Engine neutrality | `three-neutrality` passes on both GPUs | pass | met |
+| Adapter cost | not re-measured | | not measured |
+| Native RTXGI at matched counts | earlier entry: trace/blend Cornell 0.68/0.40, two-room 0.53/0.35, Sponza 11.4/4.02 ms | | cited |
+
+Intel UHD (gen-12lp), the whole suite, `--no-cool-wait`: first run 30 PASS, 7 FAIL. `trace-bench-hploc-quick` hit **DXGI_ERROR_DEVICE_HUNG** (device lost), and every page after it failed with "no usable GPU" (trace-bench-lbvh-quick, trace-bench-quick, trace-inline, trace-oracle, viewer-baselines, wgsl-error): a cascade, not seven failures. Re-running those seven alone: the six real pages all PASS (hploc 20 s, lbvh 13 s, quick 4.6 s, trace-inline 76 s, trace-oracle 71 s, viewer-baselines 76 s). So every correctness page passes on the Intel, but one run of the full suite does not finish clean: the hploc quick bench hung the Intel's device once (not reproduced alone; GPU timeout on a slow adapter, I did not investigate). `ddgi-leak` passes on the Intel (165 s).
+**Flag:** the self-test page `wgsl-error` reports plain FAIL when run alone on both the RTX and the Intel, with the expected error text ("Error while parsing WGSL: ... cannot initialize 'let' of type 'f32'") present. It looks like the runner's expect-failure handling under `--filter`, not a GPU issue. Not investigated.
+Also: the two-room startup run had a median SM clock of 382 MHz under load but passed the validity rule (5 loaded samples, 0% thermal); its 1.16 s may be slower than a hot-clock run.
+Next: whole-frame p50/p95 on GI on vs off with the update included needs a page (the three composite pages hold the field frozen); stability threshold with Dennis; Sponza startup (files, trees, copy) is B2/M3.
+
 ## 2026-11-06 · T1.12 phase 2b review fixes: the change view's colours are exact · implementer (opus)
 Did (uncommitted, on top of b002f42), from the Opus review:
 1. **Change view in display space.** `viewer-core.ts` turns the pipeline's output transform off and applies `renderOutput()` to each technique's picture itself; a technique may then draw `overlay(display)` after tone mapping and output colour (`types.ts`: `overlay`, `overlayKey`). `frame-change.ts` paints there with a linear share, change / scale: full colour means a change of at least the scale, half colour half of it, under any tone mapper and exposure. The weight^2.2 is gone. The atlas overlay moved to display space too (on top of the change view; distance greys are no longer tone mapped).
