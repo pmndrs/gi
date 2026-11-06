@@ -1022,13 +1022,14 @@ fn ddgiBlend(
         }
     }
     workgroupBarrier();
-    // After the barrier, so thread 0 has cleared the hits first.
-    if (moverBits != 0u) {
-        atomicOr(&ddgiMoverHits, moverBits);
-    }
 
     // ---- Phase B ----
     ddgiReduceFixedRay(ddgiFixedRayResult(thread, probe, probeData.offset));
+    // The mover hits join after the reduction (which needs every thread in step, for its subgroup
+    // operations), and after the first barrier, so thread 0 has cleared them first.
+    if (moverBits != 0u) {
+        atomicOr(&ddgiMoverHits, moverBits);
+    }
     workgroupBarrier();
     if (thread == 0u) {
         let decision = ddgiDecide(probe, probeData.offset, state);
