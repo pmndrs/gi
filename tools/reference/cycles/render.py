@@ -127,12 +127,31 @@ def file_sha256(path):
         return hashlib.sha256(handle.read()).hexdigest()
 
 
+# The repo paths whose uncommitted edits can change a reference: the render tools, the
+# scenes (manifests, procedural builders, sky files) and the sky generator. Edits
+# elsewhere (DDGI, the viewer, docs) can't, so they don't mark a render as made from
+# uncommitted files. The GI material table is gitignored; its sha256 is in `shot.scene`.
+RENDER_INPUT_PATHS = ('tools/reference', 'scenes', 'tools/sky')
+
+
 def git_state():
-    """The repo commit the render was made at, and whether the working tree had changes; None when git isn't there."""
+    """
+    The repo commit the render was made at, and whether files that affect it
+    (RENDER_INPUT_PATHS) had uncommitted changes, with up to 20 of them listed.
+    None when git isn't there.
+    """
     try:
         commit = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=REPO_ROOT, capture_output=True, text=True, check=True).stdout.strip()
-        status = subprocess.run(['git', 'status', '--porcelain'], cwd=REPO_ROOT, capture_output=True, text=True, check=True).stdout
-        return {'commit': commit, 'uncommittedChanges': bool(status.strip())}
+        status = subprocess.run(
+            ['git', 'status', '--porcelain', '--', *RENDER_INPUT_PATHS], cwd=REPO_ROOT, capture_output=True, text=True, check=True
+        ).stdout
+        changed = [line[3:] for line in status.splitlines() if line.strip()]
+        return {
+            'commit': commit,
+            'uncommittedChanges': bool(changed),
+            'uncommittedScope': list(RENDER_INPUT_PATHS),
+            'uncommittedFiles': changed[:20],
+        }
     except (OSError, subprocess.CalledProcessError):
         return None
 

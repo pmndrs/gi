@@ -40,6 +40,7 @@ import { readExr, writeExr } from '../../compare/exr.ts';
 import { installShutdownHandlers, registerCleanup } from '../../gpu/cleanup.ts';
 import { withBenchLock } from '../bench-lock.ts';
 import { compareImages, downsample } from '../../compare/metrics.ts';
+import { benchLockFor, renderDevice } from './device.ts';
 import { checkLightsOnlyImage, composeGiImage, type LightsOnlyExpectation } from './gi-composite.ts';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
@@ -77,8 +78,8 @@ async function main(): Promise<void> {
         console.log('usage: node tools/reference/cycles/run.ts --scene <id> [--camera 1 | --from-shot cycles.json] --samples N [--width 1920] [--height 1080] [--seed N] [--name-suffix S] [--device gpu|cpu] [--threads N] [--materials-json file] [--pixel-filter blackman-harris|gaussian|box] [--filter-width 1.5] [--denoise] [--exposure-ev N] [--tone-mapping aces]');
         process.exit(forwarded.length === 0 ? 1 : 0);
     }
-    // render.py's default is the GPU (OptiX).
-    const device = forwarded.includes('--device') && forwarded[forwarded.indexOf('--device') + 1] === 'cpu' ? 'cpu' : 'gpu';
+    // render.py's default is the GPU (OptiX); `--device cpu` and `--device=cpu` both mean the CPU.
+    const device = renderDevice(forwarded);
     const blender = await findBlender(BLENDER_VERSION);
     console.log(`Blender ${blender.version} at ${blender.path}, device ${device}`);
 
@@ -135,7 +136,7 @@ async function main(): Promise<void> {
     // lock (lead's rule, 2026-11-05: a long OptiX render keeps the card hot and blocks every GPU
     // timing lane, so references move to the CPU with `--threads 12`, leaving cores for GPU
     // benchmarks to submit, while CPU-timed benchmarks still get the CPU to themselves).
-    const result = await withBenchLock(render, { lock: device === 'cpu' ? 'cpu' : 'gpu', what: calibrate ? 'cycles calibrate' : `cycles ${scene}` });
+    const result = await withBenchLock(render, { lock: benchLockFor(device), what: calibrate ? 'cycles calibrate' : `cycles ${scene}` });
     if (calibrate) return;
     if (!result) throw new Error('Blender finished without reporting a result');
     const meta = JSON.parse(result);

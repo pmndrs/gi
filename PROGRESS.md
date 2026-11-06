@@ -69,6 +69,19 @@ Next:
 - **Dennis** (replaces the instructions in the entry below): Cornell box, camera still, GI only (indirect), "Change per frame: 0.25%". Full orange or blue = that pixel moved 0.25% or more since the last frame; faint scattered speckle = the picture's own precision, not flicker. Then 1%: what is still coloured moves by 1% a frame. Show the probes by "How settled" (they keep their colours in this view), and the irradiance atlas filled at +2 EV (hide the stats for a bigger atlas). Say whether the flicker is acceptable: that sets the threshold.
 - The probe spheres look speckled through the upscaler; it is the upscaler's reconstruction (same with the old alpha), not this change.
 
+## 2026-11-06 · T1.14 cleanups after the final Opus review · implementer (opus)
+Did (uncommitted):
+- `packages/ddgi-three/src/composite.ts`: the GI evaluation is back inline in the composite (no helper, no `Vec2Node`/`FloatNode` aliases, none of their casts); the stray blank lines are gone; a default GTAO replaced when the pass's scale crosses 1 is `dispose()`d; the `occlusionNode` comment says it is re-chosen at any build where the scale has crossed 1.
+- `render-time-update.test.ts`: the default occlusion is tested through `setup()` (the build): it's made when the pass is reduced after `ddgi()`, then dropped and disposed when the pass is back at full resolution. This replaces the test of the private method.
+- `docs/api/three.md`: the base package's −1.2% is against its 640×360 reference.
+- `examples/three` is a workspace package (`@pmndrs/ddgi-example-three`: `@pmndrs/ddgi` workspace, `@pmndrs/upscaler` 0.5.0, `three` 0.187.0, `vite`), listed in `pnpm-workspace.yaml`. The root has `@pmndrs/upscaler` 0.5.0 as a devDependency for the GPU pages (`three-composite-shared/variants.ts` now imports it by name). The aliases into `apps/viewer/node_modules` are gone (examples vite config, `tools/gpu/server.ts`, tsconfig paths). `pnpm install`: the lockfile gained 19 lines, the two importer entries and nothing else (no new packages resolved).
+Verified (RTX 3060, headless Chrome 156):
+- lint, typecheck and `pnpm test` (944 passed);
+- `pnpm build`, and `pnpm --filter @pmndrs/ddgi-example-three build`;
+- `test:gpu --filter three-`: 9 of 9 (Cornell point 0.042% / 0.16%; examples GI 45.8% simple, 44.8% composite through the upscaler).
+Not verified: the Intel this round (the lead ran all 9 on it before these cleanups).
+FLIP on the default path (upscaler Performance, GTAO at half the render resolution; RTX; `three-composite-ao/run.ts --upscale performance --resolution-scale 0.5`, which now also writes each upscaled GI term as an EXR, then `tools/compare --downsample 8`, FLIP at 8 ppd), against the 1920×1080 references: **Sponza FLIP 8×8 0.283** (over the 0.15 bar; bias +6.59%, 8×8 block error mean 18.3%, p95 114%); **Cornell 0.124** (within it; bias +0.22%, block error mean 8.8%, p95 40.4%). FLIP's output has a mean and a weighted median but no p95 (Sponza 0.408, Cornell 0.410), so the p95 given is the 8×8 block error's.
+
 ## 2026-11-06 · T1.12 phase 2b: the viewer's debug views for the flicker eye check · implementer (opus)
 Did (uncommitted; DDGI section of the viewer panel; hover help for each in `apps/viewer/src/ui/help-text.ts`; link keys in `url-state.ts` and the viewer README):
 - **Probe atlas over the picture** (`src/ddgi/atlas-overlay.ts`): irradiance or distance, bottom-right corner or "Fill the picture", one block per layer of probes (lowest first, top left), sharp texels; "Atlas exposure" (stops) for irradiance. Reads the same textures three is lit from.
@@ -82,19 +95,6 @@ Next:
 - **Dennis:** open the viewer on the Cornell box, keep the camera still, and try: GI only (indirect) plus "Change per frame: 0.25%" (where and how much it flickers); "Show the probes" coloured by "How settled" (green = averaging 200 updates); "Probe atlas: Irradiance", filled, +2 EV (squares that shimmer are noisy probes). Then say whether the flicker is acceptable: that sets the threshold.
 - Phase 2a said the viewer's warm-up `hysteresis` override can go (unused under the adaptive rule); not done here, it's harmless.
 - Possible later: a number for the change view in the stats box (mean / p95 per frame) would need a readback; not built.
-
-## 2026-11-06 · T1.14 cleanups after the final Opus review · implementer (opus)
-Did (uncommitted):
-- `packages/ddgi-three/src/composite.ts`: the GI evaluation is back inline in the composite (no helper, no `Vec2Node`/`FloatNode` aliases, none of their casts); the stray blank lines are gone; a default GTAO replaced when the pass's scale crosses 1 is `dispose()`d; the `occlusionNode` comment says it is re-chosen at any build where the scale has crossed 1.
-- `render-time-update.test.ts`: the default occlusion is tested through `setup()` (the build): it's made when the pass is reduced after `ddgi()`, then dropped and disposed when the pass is back at full resolution. This replaces the test of the private method.
-- `docs/api/three.md`: the base package's −1.2% is against its 640×360 reference.
-- `examples/three` is a workspace package (`@pmndrs/ddgi-example-three`: `@pmndrs/ddgi` workspace, `@pmndrs/upscaler` 0.5.0, `three` 0.187.0, `vite`), listed in `pnpm-workspace.yaml`. The root has `@pmndrs/upscaler` 0.5.0 as a devDependency for the GPU pages (`three-composite-shared/variants.ts` now imports it by name). The aliases into `apps/viewer/node_modules` are gone (examples vite config, `tools/gpu/server.ts`, tsconfig paths). `pnpm install`: the lockfile gained 19 lines, the two importer entries and nothing else (no new packages resolved).
-Verified (RTX 3060, headless Chrome 156):
-- lint, typecheck and `pnpm test` (944 passed);
-- `pnpm build`, and `pnpm --filter @pmndrs/ddgi-example-three build`;
-- `test:gpu --filter three-`: 9 of 9 (Cornell point 0.042% / 0.16%; examples GI 45.8% simple, 44.8% composite through the upscaler).
-Not verified: the Intel this round (the lead ran all 9 on it before these cleanups).
-FLIP on the default path (upscaler Performance, GTAO at half the render resolution; RTX; `three-composite-ao/run.ts --upscale performance --resolution-scale 0.5`, which now also writes each upscaled GI term as an EXR, then `tools/compare --downsample 8`, FLIP at 8 ppd), against the 1920×1080 references: **Sponza FLIP 8×8 0.283** (over the 0.15 bar; bias +6.59%, 8×8 block error mean 18.3%, p95 114%); **Cornell 0.124** (within it; bias +0.22%, block error mean 8.8%, p95 40.4%). FLIP's output has a mean and a weighted median but no p95 (Sponza 0.408, Cornell 0.410), so the p95 given is the 8×8 block error's.
 
 ## 2026-11-06 · T1.14 default locked: the upscaler's Performance preset with half-resolution GTAO · implementer (opus)
 Did (uncommitted):
@@ -290,9 +290,15 @@ Did:
 - **Test pages:** `ddgi-test-view` and `ddgi-sponza-accuracy` render at the reference's stored camera and size. The test-view gate now runs at HD.
 Verified (RTX 3060, headless Chrome 156):
 - `pnpm test:gpu --filter ddgi-test-view` passes.
-- Compare on point-light Cornell and Sponza: 16:9 letterbox; the green wall's edge sits in the same place in the all-DDGI and all-Cycles views to within 1 px; Sponza's exposure returned to +2.
+- Compare on point-light Cornell and Sponza: 16:9 letterbox; the green wall's edge sits in the same place in the all-DDGI and all-Cycles views to within 1 px; Sponza's exposure returned to +2. This alignment was checked by hand with a scratch script on the RTX only; no automated test guards it.
 - Lint and tests pass; typecheck is clean except Budget v2's `work-budget.ts`.
 Not verified: Intel.
+Committed as 689b5f6, which also carries the curtain investigation's test pages, because they share `ddgi-shared/harness.ts`.
+After the review of 689b5f6 (uncommitted):
+- `noise.ts` stores each reference's measured noise; the viewer states it and the sample count next to the picture, and the README has the table. GI per pixel is over 3% on point-light Cornell views 2 and 3 (9–10%), the dark room (6.2%), the doorway (3.5%) and textured Sponza at 512 (14%); every reference is under 2% over 8×8 blocks. No re-renders.
+- `combine.ts` also refuses a different commit or bounce count; unit tests cover every refusal.
+- `--device=cpu` takes the CPU lock (`device.ts`, tested).
+- `uncommittedChanges` counts only tools/reference, scenes and tools/sky.
 Renders (seconds, and the GPU lock wait before each):
 - **OptiX:** point-light Cornell front, 8192 samples × 2 seeds: 983 s (wait 383) and 975 s (wait 123). Two-room lit-room, 4096: 1351 s (wait 597). Dark room, 2 × 2048: 564 s (wait 935) and 432 s (wait 11). Untextured Sponza (GI table sha256 7680a2d0…, unchanged), 4 × 2048: 445, 470, 379 and 381 s (waits 1, 1, 92 and 99).
 - **CPU, 12 threads (no GPU lock):**

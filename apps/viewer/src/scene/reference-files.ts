@@ -48,7 +48,12 @@ export interface ReferenceShot {
     display: { exposureEv: number; toneMapping: string };
     scene: { manifest: string; manifestPath: string; manifestSha256: string; skySha256: string | null; giMaterialsSha256: string | null };
     render: {
-        git: { commit: string; uncommittedChanges: boolean } | null;
+        /**
+         * `uncommittedChanges`: render-affecting files (`uncommittedScope`: tools/reference,
+         * scenes, tools/sky) had uncommitted edits. References rendered before the scope was
+         * recorded flagged any edit in the repo, so their flag isn't shown.
+         */
+        git: { commit: string; uncommittedChanges: boolean; uncommittedScope?: string[] } | null;
         blender: string;
         device: string;
         samplesPerPixel: number;
@@ -56,7 +61,25 @@ export interface ReferenceShot {
         pixelFilter: { type: string; widthPixels: number };
         renderSeconds: number;
         denoised: { file: string; denoiser: string; check?: { bias: number; blockError: number } } | null;
+        /** The raw images' noise, measured against an independent render (tools/reference/cycles/noise.ts). */
+        noise?: ReferenceNoise;
     };
+}
+
+/**
+ * One image's Monte Carlo noise: the mean relative error it would show against
+ * the converged image, per pixel and after 8 x 8 block averaging (noise.ts).
+ */
+export interface ImageNoise {
+    pixel: number;
+    block8: number;
+}
+
+export interface ReferenceNoise {
+    gi: ImageNoise;
+    full: ImageNoise;
+    /** How it was measured, e.g. 'against a second render, seed 7, 128 samples'. */
+    method: string;
 }
 
 /** What `cycles.json` next to the images says about the render (the fields the viewer uses). */
@@ -176,13 +199,25 @@ export async function shotProvenance(shot: ReferenceShot): Promise<ShotProvenanc
     if (sameManifest === false) {
         lines.push(`Warning: the scene file (${shot.scene.manifestPath}) has changed since this reference was rendered, so it may not show the same scene. Render it again.`);
     }
+    const noise = shot.render.noise;
+    if (noise) {
+        const percent = (value: number): string => `${(value * 100).toFixed(1)}%`;
+        lines.push(
+            `Its noise (raw ${shot.render.samplesPerPixel.toLocaleString('en')}-sample image): GI only ${percent(noise.gi.pixel)} per pixel, ${percent(noise.gi.block8)} over 8 x 8 blocks; ` +
+                `full image ${percent(noise.full.pixel)} per pixel, ${percent(noise.full.block8)} over 8 x 8 blocks.`,
+        );
+    } else {
+        lines.push('Its noise was not measured.');
+    }
     const git = shot.render.git;
     const commit = git ? git.commit.slice(0, 7) : null;
     const viewerCommit = typeof __VIEWER_COMMIT__ === 'string' && __VIEWER_COMMIT__ ? __VIEWER_COMMIT__ : null;
     let olderCommit: boolean | null = null;
     if (git) {
-        olderCommit = git.uncommittedChanges || (viewerCommit !== null && viewerCommit !== git.commit);
-        const changes = git.uncommittedChanges ? ' with uncommitted changes' : '';
+        // Only a flag recorded with its scope means the render's own inputs were edited.
+        const inputsEdited = git.uncommittedChanges && git.uncommittedScope !== undefined;
+        olderCommit = inputsEdited || (viewerCommit !== null && viewerCommit !== git.commit);
+        const changes = inputsEdited ? ' with uncommitted edits to the render tools or scene files' : '';
         if (viewerCommit && viewerCommit !== git.commit) lines.push(`Rendered from an older commit (${commit}${changes}); the viewer runs ${viewerCommit.slice(0, 7)}.`);
         else lines.push(`Rendered at commit ${commit}${changes}.`);
     } else {

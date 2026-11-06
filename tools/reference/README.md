@@ -33,7 +33,7 @@ Dennis: "640 x 360 is an insane size to judge ANYTHING against." Since T1.13 eve
 - **Anti-aliased:** Cycles' Blackman-Harris pixel filter, 1.5 px wide (its default). It was a 1 px box before. Cycles importance-samples the filter, so an image's mean doesn't change; edges are softer by about half a pixel. What it means for comparisons: DDGI's test view shoots one ray through each pixel centre (no anti-aliasing), so per-pixel numbers and per-pixel FLIP now include an edge-softness difference along every silhouette. The 8 × 8 block numbers, which the tolerances use, barely move (an edge's light stays in its block), and the bias doesn't move at all. `--pixel-filter box --filter-width 1` renders the old way.
 - **On the GPU:** `--device gpu` (OptiX on the RTX 3060 Laptop) is now the default; `--device cpu` still works. OptiX and CPU references agree to about 0.1% (DECISIONS, the sky-aware composite review). The json records the device by name.
 - **Clean:** the sample counts in "Sizes, samples and times" below, with the 8 × 8-block noise measured from two seeds.
-- **`--denoise`** (Dennis is fine with denoising tools) also writes `cycles-full-denoised.exr`: the full image through OpenImageDenoise (Blender's compositor Denoise node, HDR, with albedo and normal guides). It is for the viewer's wipe only. The raw EXRs are written unchanged and are what every accuracy number is measured on. `run.ts` measures the denoised copy against the raw image and stores the result (`denoiseCheck`: bias and 8 × 8 block error) in the json and in `shot.render.denoised.check`. The viewer shows the denoised copy when there is one, and says so.
+- **`--denoise`** (Dennis is fine with denoising tools) also writes `cycles-full-denoised.exr`: the full image through OpenImageDenoise (Blender's compositor Denoise node, HDR, with albedo and normal guides). It is for the viewer's wipe only. The raw EXRs are written unchanged and are what every accuracy number is measured on. `run.ts` measures the denoised copy against the raw image and stores the result (`denoiseCheck`: bias and 8 × 8 block error) in the json and in `shot.render.denoised.check`. The viewer shows the denoised copy when there is one, and says so. The GI-only view (`cycles-gi.exr`) is never denoised: it is the raw composite, and the viewer states its sample count and measured noise next to it ("Noise of each reference").
 
 **Long renders in parts.** One bench-lock hold should be one short shot (under about 15 minutes), so other lanes can time between renders. A longer reference is rendered as parts with different seeds (`--seed k --name-suffix=-partk`, same samples each) and averaged with `node tools/reference/cycles/combine.ts --dir <folder> --prefix cycles-untextured --parts=-part0,-part1,...`. The mean of independent renders is the same estimator as one render with all their samples; `combine.ts` refuses parts whose shot, samples, filter or device differ, or that share a seed. The combined json lists the parts (`combinedFrom`) and the seeds. A denoised viewing copy isn't combined; render that whole.
 
@@ -46,7 +46,7 @@ Every render writes, in its json (`cycles.json`, `cycles-untextured.json`, ...),
 | `camera` | `bookmark` name and number; `position`, `target`, `up` (+Y) in manifest space (three.js axes, metres); `fovYDeg` (vertical); `aspect`, `width`, `height`; `near` 0.01 and `far` 2000 (m) |
 | `display` | `exposureEv` (default the manifest's `exposureEv`) and `toneMapping` (default `aces`): what the viewer shows it with. The EXRs are linear and never tone-mapped |
 | `scene` | the manifest id, path and sha256 of its file; the sky file's sha256; the GI material table's sha256 (untextured renders) |
-| `render` | `git` (commit, and whether the tree had uncommitted changes), Blender version, `device` (e.g. `OPTIX: NVIDIA GeForce RTX 3060 Laptop GPU`), samples, seed, pixel filter, render seconds, and `denoised` (null, or the viewing copy's file, denoiser and its check) |
+| `render` | `git` (commit; `uncommittedChanges` is true only when files that affect a render had uncommitted edits: `uncommittedScope` = tools/reference, scenes, tools/sky, listed in `uncommittedFiles`; the GI material table is gitignored and hashed instead), Blender version, `device` (e.g. `OPTIX: NVIDIA GeForce RTX 3060 Laptop GPU`), samples, seed, pixel filter, render seconds, `denoised` (null, or the viewing copy's file, denoiser and its check), and `noise` (see "Noise of each reference") |
 
 Who reads it:
 
@@ -220,15 +220,40 @@ All in `bench/references/render-log.csv`.
 
 The rows above are the pre-T1.13 references (now `cycles*-lowres.*`). The HD set (T1.13, 1920 × 1080, Blackman-Harris 1.5 px):
 
-| reference | samples | device | seconds | 8 × 8-block difference between two seeds or halves |
-| --- | --- | --- | --- | --- |
-| point-light Cornell `front` | 8192 (+ a second seed) | OptiX | 983 | GI 0.53%, full 0.24% |
-| two-room `lit-room` | 4096 | OptiX | 1351 | |
-| two-room `dark-room-leak-view` | 2 × 2048, combined | OptiX | 564 + 432 | GI 1.56% |
-| untextured Sponza `colonnade-from-the-floor` | 4 × 2048, combined | OptiX | 445 + 470 + 379 + 381 | GI 0.60% (two parts) |
-| emissive Cornell `front` | 2 × 1024, combined | CPU, 12 threads | 1319 + 1303 | GI 0.32%, full 0.15% |
-| textured Sponza `colonnade-from-the-floor` | 512, denoised copy | CPU, 12 threads | 2029 | |
-| the other bookmarks (Cornell 2 and 3, two-room doorway, Sponza gallery, open ground) | 1024 (Sponza 512), denoised copies | CPU, 12 threads | 756 to 2831 | |
+| reference | samples | device | seconds |
+| --- | --- | --- | --- |
+| point-light Cornell `front` | 8192 (+ a second seed) | OptiX | 983 |
+| two-room `lit-room` | 4096 | OptiX | 1351 |
+| two-room `dark-room-leak-view` | 2 × 2048, combined | OptiX | 564 + 432 |
+| untextured Sponza `colonnade-from-the-floor` | 4 × 2048, combined | OptiX | 445 + 470 + 379 + 381 |
+| emissive Cornell `front` | 2 × 1024, combined | CPU, 12 threads | 1319 + 1303 |
+| textured Sponza `colonnade-from-the-floor` | 512, denoised copy | CPU, 12 threads | 2029 |
+| the other bookmarks (Cornell 2 and 3, two-room doorway, Sponza gallery, open ground) | 1024 (Sponza 512), denoised copies | CPU, 12 threads | 756 to 2831 |
+
+## Noise of each reference
+
+`node tools/reference/cycles/noise.ts --dir <folder> [--other-dir <second render> | --other-suffix=-seed1]` measures a reference's own noise and stores it in its json (`noise`, and `shot.render.noise`, which the viewer shows next to the picture). The number is the mean relative error the raw image would show against the converged one, per pixel and over 8 × 8 blocks, derived from the difference to an independent render (another seed; for references combined from parts, two of the parts). The formula is in `noise.ts`. Single renders were measured against a short second seed (seed 7, 128 samples on the CPU; Sponza 64), kept in a scratch folder.
+
+The GI-only view (`cycles-gi.exr`) is the raw composite, never denoised; the full view shows the denoised copy where there is one, so its on-screen noise is lower than the raw number below.
+
+| reference (HD, T1.13) | samples | GI per pixel | GI 8 × 8 | full per pixel | full 8 × 8 |
+| --- | --- | --- | --- | --- | --- |
+| point-light Cornell `front` | 8192 | 3.00% | 0.37% | 1.35% | 0.17% |
+| point-light Cornell `inside-from-red-wall` | 1024 | 9.80% | 1.06% | 6.50% | 0.71% |
+| point-light Cornell `diagonal-to-the-red-wall` | 1024 | 8.96% | 0.87% | 5.36% | 0.52% |
+| emissive Cornell `front` | 2048 | 1.21% | 0.16% | 0.57% | 0.07% |
+| emissive Cornell `inside-from-red-wall` | 1024 | 1.54% | 0.20% | 1.54% | 0.20% |
+| emissive Cornell `diagonal-to-the-red-wall` | 1024 | 1.27% | 0.17% | 1.27% | 0.17% |
+| two-room `lit-room` | 4096 | 1.83% | 0.22% | 1.29% | 0.16% |
+| two-room `dark-room-leak-view` | 4096 | 6.20% | 0.78% | 5.54% | 0.70% |
+| two-room `through-the-doorway` | 1024 | 3.54% | 0.41% | 2.54% | 0.29% |
+| untextured Sponza `colonnade-from-the-floor` (accuracy) | 8192 | 1.72% | 0.21% | 0.17% | 0.02% |
+| textured Sponza `colonnade-from-the-floor` | 512 | 14.42% | 1.69% | 1.49% | 0.18% |
+| textured Sponza `upper-gallery` | 512 | 14.03% | 1.79% | 2.27% | 0.29% |
+| open ground `ground-from-above` | 1024 | 0.07% | 0.00% | 0.07% | 0.00% |
+| open ground `towards-the-sun-glow` | 1024 | 0.13% | 0.01% | 0.04% | 0.00% |
+
+Per pixel, the GI image is visibly grainy where it is over a few percent: the point-light Cornell inside views (indirect light from a small source), the dark room (little light), and textured Sponza at 512 samples. Over 8 × 8 blocks, which the accuracy tolerances use, every reference is under 2%.
 
 **Sponza's sun.** At the manifest's first sun angle (53 degrees) a ray test from 187 floor points found only 3 unshadowed, so the reference was lit mostly by the sky (mean pixel 0.018). The sun was raised in the manifest; the floor band is now lit and the mean is 0.0349.
 
