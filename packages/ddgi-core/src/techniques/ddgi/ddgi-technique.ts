@@ -433,7 +433,8 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         const scratchBuffer = device.createBuffer({ label: 'ddgi scratch', size: maxProbesPerFrame * scratch.strideWords * 4, usage: BUFFER_USAGE.storage });
         const census = device.createBuffer({ label: 'ddgi census', size: CENSUS_WORDS * 4, usage: BUFFER_USAGE.storage | BUFFER_USAGE.copySrc | BUFFER_USAGE.copyDst });
         // Starts at zero (WebGPU clears new buffers): no probe remembers anything yet.
-        const probeHistory = device.createBuffer({ label: 'ddgi probe history', size: grid.probeCount * PROBE_HISTORY_BYTES, usage: BUFFER_USAGE.storage });
+        // COPY_SRC so debug tools and tests can copy it out (DDGIField.probeHistory).
+        const probeHistory = device.createBuffer({ label: 'ddgi probe history', size: grid.probeCount * PROBE_HISTORY_BYTES, usage: BUFFER_USAGE.storage | BUFFER_USAGE.copySrc });
         const censusStaging = Array.from({ length: CENSUS_STAGING_BUFFERS }, (_, index) => ({
             buffer: device.createBuffer({ label: `ddgi census readback ${index}`, size: CENSUS_WORDS * 4, usage: BUFFER_USAGE.mapRead | BUFFER_USAGE.copyDst }),
             state: 'free' as CensusStaging['state'],

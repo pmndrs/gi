@@ -445,10 +445,14 @@ fn ddgiRampCap(updates: u32) -> f32 {
 // the probe follows it within a few updates; with no change it does nothing.
 fn ddgiHysteresisStep(history: DdgiProbeHistory, state: u32) -> DdgiHysteresisStep {
     let firstUpdate = state == DDGI_STATE_NOT_UPDATED_YET;
-    let updates = select(history.updates & DDGI_HISTORY_COUNT_MASK, 0u, firstUpdate);
     let flags = history.scheduleAndFlags & DDGI_HISTORY_FLAGS_MASK;
     let marked = (flags & DDGI_FLAG_MARKED) != 0u;
     let limit = select(ddgiChangeLimit(history.pendingChange, flags), DDGI_NO_HISTORY_LIMIT, firstUpdate);
+    // After a cut the count grows back by one an update, as the design has it.
+    // (Moving the probe back along the warm-up ramp as well was measured and
+    // made it worse: on two-room's lamp step the view overshot further, 0.30 s
+    // against 0.03 s at lightChangeScale 0.5; PROGRESS 2026-11-06, T2.4a.)
+    let updates = select(history.updates & DDGI_HISTORY_COUNT_MASK, 0u, firstUpdate);
     // The clock wraps (CLOCK_WRAP_SECONDS): a negative difference means it
     // wrapped since this probe's last update, so add the period back.
     let sinceLastUpdate = ddgi.clockSeconds - history.lastUpdateSeconds;

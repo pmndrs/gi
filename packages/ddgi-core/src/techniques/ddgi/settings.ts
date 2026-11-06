@@ -174,8 +174,20 @@ export const ADAPTIVE_RAMP_UPDATES = 16;
 export const DEFAULT_CHANGE_TOLERANCE = 0.05;
 /** `changeUpdates` by default, K = 8 (m2-lights.md §4.1: at r = 1 the first update keeps 0.30 of the old value, 5% is left after 8). */
 export const DEFAULT_CHANGE_UPDATES = 8;
-/** `lightChangeScale` by default (m2-lights.md §4.2's 0.25; T2.4a's recall check, PROGRESS 2026-11-06). */
-export const DEFAULT_LIGHT_CHANGE_SCALE = 0.25;
+/**
+ * `lightChangeScale` by default: 0.5, not the design's first guess of 0.25
+ * (T2.4a, RTX 3060, `ddgi-change-step`: two-room's lamp moved 2 m, every
+ * probe every frame; DECISIONS 2026-11-06). Measured against the two
+ * converged fields, a probe's true change was 0.48 × the mark's unscaled
+ * value at the median (quartiles 0.25-0.73), so 0.5 makes r about the true
+ * change. The scale sets how far a probe's history is cut, not only whether:
+ * at 0.25 every probe that changed by over 5% was still cut (lit-room recall
+ * 99.8%), but by too little, and the view took 0.73 s to get within 5% (the
+ * old lamp's bounce light lingered in probes cut too gently); at 0.5 it took
+ * 2 frames; at 1 also 2 frames, with deeper cuts (more noise right after a
+ * change, the design's risk 2; not measured).
+ */
+export const DEFAULT_LIGHT_CHANGE_SCALE = 0.5;
 
 /** The kernel's stand-in for an endless ramp (no Infinity in a shader that may assume finite floats). */
 const RAMP_UPDATES_ENDLESS = 1e9;
