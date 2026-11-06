@@ -274,7 +274,7 @@ Rules for every M1 task:
 | T1.12 | Stability: Cornell flicker fixed, debug views of the source channels, threshold set by eye; hysteresis aware of the time between a probe's updates, and Sponza's settle time measured GPU-bound (frames and seconds) | implementer | M | T1.5, T1.8 | done (Opus reviews passed with notes, all fixed; Dennis's eye check: steady; threshold locked at mean ≤ 0.1%, p95 ≤ 0.5%: Cornell 0.082% / 0.34%, two-room 0.0099% / 0.032%, Sponza 0.027% / 0.096%) |
 | T1.13 | HD Cycles references with stored cameras; the viewer's Compare matches them | implementer, then gpu-tester | M | T1.8, T0.7 | done (Opus review passed with notes, all fixed; every reference 1920×1080 with its stored camera; HD accuracy Cornell +5.74%, two-room +5.50%; noise per view shown in the viewer, some viewing-only bookmarks over 3% per pixel on GI, listed in the M1 note) |
 | T1.14 | GI composite for three (`docs/design/three-composite.md`): a drop-in TSL node on three's `pass()` and `mrt()`, with three's GTAO on the GI term by default (curtains, DECISIONS); `GIVolume` stays the simple path; usage bar against LightProbeGrid | main session designs, implementer builds | M | T1.7, T1.8 | done (Opus reviews passed with notes, all fixed; default: upscaler Performance + half-resolution GTAO, 0.73 ms, Sponza +6.59% vs HD Cycles) |
-| T1.11 | M1 note and M2 breakdown | main session | S | all M1 | todo |
+| T1.11 | M1 note and M2 breakdown | main session | S | all M1 | review (M1 note in docs/milestones/M1.md; M2 breakdown on the board; PR m1 → main open, waiting on Dennis) |
 
 ### BVH lane (runs alongside; DECISIONS 2026-11-04)
 
