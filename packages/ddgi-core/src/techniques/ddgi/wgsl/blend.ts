@@ -39,19 +39,41 @@
  * its 6 neighbours, in a buffer of its own (`atomicMax` on the urgency's
  * bits), which `ddgi/schedule-count` takes in. It never touches hysteresis.
  *
+ * Key probes and propagation (T2.4c, m2-lights.md §4.5):
+ * - every blended update stamps the volume's change clock (census) in the
+ *   probe's record;
+ * - a key probe whose update takes in a reported change writes the change
+ *   it made, new − old per irradiance texel, to the key-delta buffer at its
+ *   update-list slot, with its clock stamp from before this update, and
+ *   flags itself, for `ddgi/propagate` later in the frame;
+ * - a fine probe that was waiting for its keys is cut only for what
+ *   propagation hasn't brought it: its change times
+ *   max(keyResidualShare, 1 − 0.8 × the weight of the keys that passed it
+ *   theirs), since a key's first update moves it about 80% of the way;
+ * - the test mode `holdFineProbes`: a fine probe waiting for its keys is
+ *   traced but not blended (its tiles and record stay as they are), so only
+ *   propagation moves it.
+ *
  * Bindings (group 1; no platform module): uniforms, the update list, the ray
- * buffer, the scratch buffer, the census buffer, the probe history and the
- * feedback requests (6 storage buffers), and the irradiance, distance and
- * probe-data atlases (sampled, for the old values).
+ * buffer, the scratch buffer, the census buffer, the probe history, the
+ * feedback requests and the key deltas (7 storage buffers), and the
+ * irradiance, distance and probe-data atlases (sampled, for the old values).
  */
 
 import {
+    CENSUS_CHANGE_CLOCK,
     CENSUS_FEEDBACK_FIRED,
     CENSUS_FEEDBACK_FIRED_TOTAL,
+    CENSUS_KEY_CHANGES_PASSED,
+    CENSUS_KEY_CHANGES_PASSED_TOTAL,
     CENSUS_PROBES_BLENDED_TOTAL,
     CENSUS_RAYS_TRACED,
+    KEY_DELTA_HEADER,
+    KEY_DELTA_HEADER_WORDS,
+    keyDeltaStrideWords,
     PROBE_HISTORY_FLAG,
     PROBE_HISTORY_FLAGS_MASK,
+    PROBE_HISTORY_KEYS,
     PROBE_HISTORY_UPDATES,
     type ScratchLayout,
 } from '../layout.ts';
@@ -75,6 +97,15 @@ export const FEEDBACK_NOISE_MULTIPLE = 6;
 export const FEEDBACK_MIN_SHARE = 0.02;
 /** Its 6 face neighbours ask at this share of its urgency: a change nobody reported spreads to the probes around it. */
 export const FEEDBACK_NEIGHBOUR_SHARE = 0.5;
+
+/**
+ * How much of a change a key's first owed update is taken to pass on
+ * (m2-lights.md §4.5): a fine probe whose keys have all passed theirs is
+ * taken to have received this share of its change, and is cut for the rest
+ * (at least keyResidualShare) when it is traced itself. The design's
+ * estimate, from the cut a key gets for a large change.
+ */
+export const KEY_FIRST_UPDATE_SHARE = 0.8;
 
 /**
  * Bits of a reduction key that hold the fixed ray's index (the rest is the
@@ -173,6 +204,19 @@ const DDGI_FLAG_MARKED: u32 = ${PROBE_HISTORY_FLAG.marked}u;
 const DDGI_FLAG_MARKED_BEFORE_LAST_UPDATE: u32 = ${PROBE_HISTORY_FLAG.markedBeforeLastUpdate}u;
 const DDGI_FLAG_AWAITING_CHANGE: u32 = ${PROBE_HISTORY_FLAG.awaitingChange}u;
 const DDGI_FLAG_TAKING_CHANGE: u32 = ${PROBE_HISTORY_FLAG.takingChange}u;
+const DDGI_FLAG_PASSED_CHANGE: u32 = ${PROBE_HISTORY_FLAG.passedChange}u;
+const DDGI_KEYS_WEIGHT_SHIFT: u32 = ${PROBE_HISTORY_KEYS.weightShift}u;
+const DDGI_KEY_FIRST_UPDATE_SHARE: f32 = ${KEY_FIRST_UPDATE_SHARE};
+const DDGI_CENSUS_CHANGE_CLOCK: u32 = ${CENSUS_CHANGE_CLOCK}u;
+const DDGI_CENSUS_KEY_CHANGES_PASSED: u32 = ${CENSUS_KEY_CHANGES_PASSED}u;
+const DDGI_CENSUS_KEY_CHANGES_PASSED_TOTAL: u32 = ${CENSUS_KEY_CHANGES_PASSED_TOTAL}u;
+// The key-delta buffer (KEY_DELTA_HEADER in layout.ts): per update-list slot,
+// the key's probe index and clock stamp from before this update, then its
+// change per irradiance texel.
+const DDGI_KEY_DELTA_STRIDE: u32 = ${keyDeltaStrideWords(irradianceTexels)}u;
+const DDGI_KEY_DELTA_HEADER_WORDS: u32 = ${KEY_DELTA_HEADER_WORDS}u;
+const DDGI_KEY_DELTA_PROBE_INDEX: u32 = ${KEY_DELTA_HEADER.probeIndex}u;
+const DDGI_KEY_DELTA_CLOCK_BEFORE: u32 = ${KEY_DELTA_HEADER.clockBefore}u;
 const DDGI_OWED_SHIFT: u32 = ${PROBE_HISTORY_UPDATES.owedShift}u;
 const DDGI_OWED_MASK: u32 = ${PROBE_HISTORY_UPDATES.owedMask}u;
 // The feedback rule (FEEDBACK_* above).
@@ -197,6 +241,7 @@ const DDGI_DARK_MEAN: f32 = 1.0e-6;
 const DDGI_UPDATE_FIRST: u32 = 0u;   // state 3: the history starts again, noise 0
 const DDGI_UPDATE_QUIET: u32 = 1u;   // no change reported: feeds the noise, and may trip the feedback rule
 const DDGI_UPDATE_MARKED: u32 = 2u;  // a reported change, or still taking one in: the noise is kept as it was
+const DDGI_UPDATE_HELD: u32 = 3u;    // the test mode holdFineProbes: a fine probe waiting for its keys keeps its tiles and its change
 
 // Phase B rules (Majercik et al. 2021, section 5).
 // More than this share of fixed rays hitting back faces means the probe is inside something.
@@ -251,6 +296,8 @@ const DDGI_NO_DISTANCE: f32 = 3.0e38;
 @group(1) @binding(8) var<storage, read_write> ddgiProbeHistory: array<DdgiProbeHistory>;
 // Per probe: an update asked for by the feedback rule, as its urgency's bits (0: none). Read and cleared by ddgi/schedule-count.
 @group(1) @binding(9) var<storage, read_write> ddgiFeedbackRequests: array<atomic<u32>>;
+// Per update-list slot: a key probe's change this update, for ddgi/propagate (DDGI_KEY_DELTA_*).
+@group(1) @binding(10) var<storage, read_write> ddgiKeyDeltas: array<u32>;
 
 // Per ray: its direction (xyz) and signed hit distance (w, negative = back
 // face). Decoded once here: the blend reads every ray once per texel.
@@ -274,6 +321,8 @@ var<workgroup> ddgiChangedNow: u32;
 // (DDGI_UPDATE_*).
 var<workgroup> ddgiNextHistory: DdgiProbeHistory;
 var<workgroup> ddgiUpdateKind: u32;
+// 1 when this update is a key probe's that passes its change on (ddgiPassesChange).
+var<workgroup> ddgiPassChange: u32;
 // Phase C: each irradiance texel's new estimate and old value, for the
 // big-change test on the probe's mean.
 var<workgroup> ddgiTexelEstimate: array<vec4f, DDGI_IRRADIANCE_TEXEL_COUNT>;
@@ -450,9 +499,9 @@ struct DdgiProbeHistory {
     meanRedGreen: u32,       // its mean irradiance, r and g as half floats
     meanBlueNoise: u32,      // b, and its noise, as half floats
     wakeUntil: u32,          // M3
-    keysReceived: u32,       // T2.4c
-    changeClock: u32,        // T2.4c
-    spare: u32,
+    keysReceived: u32,       // a fine probe awaiting a change: the key neighbours that passed it theirs (low 8 bits), their weight (high half)
+    changeClock: u32,        // the volume's change clock at its last blended update
+    keyDeltaSlot: u32,       // a key whose latest update passed its change: the update-list slot of its key-delta entry
 }
 
 // This update's hysteresis for one probe, and the probe's history after it
@@ -499,15 +548,30 @@ fn ddgiRampCap(updates: u32) -> f32 {
 //
 // Before all that, a change the scene reported cuts n (ddgiChangeLimit), so
 // the probe follows it within a few updates; with no change it does nothing.
-fn ddgiHysteresisStep(history: DdgiProbeHistory, state: u32) -> DdgiHysteresisStep {
+fn ddgiHysteresisStep(history: DdgiProbeHistory, state: u32, changeClock: u32) -> DdgiHysteresisStep {
     let firstUpdate = state == DDGI_STATE_NOT_UPDATED_YET;
     let flags = history.scheduleAndFlags & DDGI_HISTORY_FLAGS_MASK;
     let marked = (flags & DDGI_FLAG_MARKED) != 0u;
+    let awaiting = (flags & DDGI_FLAG_AWAITING_CHANGE) != 0u;
+    // The test mode: a fine probe waiting for its keys keeps its tiles
+    // (ddgiBlend writes the old ones back), its change and its flags, so only
+    // propagation moves it. It gives up its owed updates: held, it would stay
+    // owed for ever and take priority slots from the keys whose propagation
+    // is being measured.
+    if (ddgi.holdFineProbes != 0u && awaiting && !firstUpdate) {
+        var held = history;
+        held.updates = history.updates & ~(DDGI_OWED_MASK << DDGI_OWED_SHIFT);
+        held.urgency = 0.0;
+        return DdgiHysteresisStep(1.0, held, DDGI_UPDATE_HELD);
+    }
     let owed = (history.updates >> DDGI_OWED_SHIFT) & DDGI_OWED_MASK;
     // The cut is for the updates the probe was promised (ddgi/mark: K, or
     // fewer for far probes after a global change); K when none are owed.
     let promised = select(ddgi.changeUpdates, f32(owed), owed > 0u);
-    let limit = select(ddgiChangeLimit(history.pendingChange, flags, promised), DDGI_NO_HISTORY_LIMIT, firstUpdate);
+    // A fine probe that waited for its keys is cut only for what propagation
+    // hasn't brought it (ddgiResidualChange).
+    let change = select(history.pendingChange, ddgiResidualChange(history), awaiting);
+    let limit = select(ddgiChangeLimit(change, flags, promised), DDGI_NO_HISTORY_LIMIT, firstUpdate);
     // After a cut the count grows back by one an update, as the design has it.
     // (Moving the probe back along the warm-up ramp as well was measured and
     // made it worse: on two-room's lamp step the view overshot further, 0.30 s
@@ -551,12 +615,39 @@ fn ddgiHysteresisStep(history: DdgiProbeHistory, state: u32) -> DdgiHysteresisSt
     // promise of all of them, not only the first.
     next.pendingChange = 0.0;
     next.urgency = select(0.0, history.urgency, nextOwed > 0u);
-    let keptFlags = flags & ~(DDGI_FLAG_MARKED | DDGI_FLAG_MARKED_BEFORE_LAST_UPDATE | DDGI_FLAG_AWAITING_CHANGE | DDGI_FLAG_TAKING_CHANGE);
+    // Traced itself: what its keys passed it is part of its history now. The
+    // clock stamp says how much change it has seen (ddgi/propagate's share).
+    next.keysReceived = 0u;
+    next.changeClock = changeClock;
+    // passedChange is set again below when this update passes its change on.
+    let keptFlags = flags & ~(DDGI_FLAG_MARKED | DDGI_FLAG_MARKED_BEFORE_LAST_UPDATE | DDGI_FLAG_AWAITING_CHANGE | DDGI_FLAG_TAKING_CHANGE | DDGI_FLAG_PASSED_CHANGE);
     let stillTaking = takingChange && nextOwed > 0u;
     let nextFlags = keptFlags | select(0u, DDGI_FLAG_MARKED_BEFORE_LAST_UPDATE, marked) | select(0u, DDGI_FLAG_TAKING_CHANGE, stillTaking);
     next.scheduleAndFlags = (history.scheduleAndFlags & ~DDGI_HISTORY_FLAGS_MASK) | select(nextFlags, 0u, firstUpdate);
     let kind = select(select(DDGI_UPDATE_QUIET, DDGI_UPDATE_MARKED, marked || takingChange), DDGI_UPDATE_FIRST, firstUpdate);
     return DdgiHysteresisStep(hysteresis, next, kind);
+}
+
+// The change a fine probe that waited for its keys is cut for at its own
+// update (m2-lights.md §4.5): r × max(keyResidualShare, 1 − 0.8 × received),
+// with 'received' the summed propagation weight of the keys that passed it
+// their change since its last update (ddgi/propagate keeps it in the record).
+// Why not the residual alone: a fine probe the round robin reaches before its
+// keys are done has received little, and cutting it only for the residual
+// would leave it lagging.
+fn ddgiResidualChange(history: DdgiProbeHistory) -> f32 {
+    let received = unpack2x16float(history.keysReceived >> DDGI_KEYS_WEIGHT_SHIFT).x;
+    let share = max(ddgi.keyResidualShare, 1.0 - DDGI_KEY_FIRST_UPDATE_SHARE * saturate(received));
+    return history.pendingChange * share;
+}
+
+// Whether this update of a probe passes its change on to its fine neighbours
+// (m2-lights.md §4.5): a key probe, propagation on, its update taking in a
+// reported change (owed updates since a mark), and not its first update
+// (that starts from nothing, so new − old isn't a change of light).
+fn ddgiPassesChange(probe: vec3i, history: DdgiProbeHistory, state: u32) -> bool {
+    let takingChange = (history.scheduleAndFlags & DDGI_FLAG_TAKING_CHANGE) != 0u;
+    return ddgi.propagation != 0u && takingChange && state != DDGI_STATE_NOT_UPDATED_YET && ddgiIsKeyProbe(probe);
 }
 
 // The most samples a probe may keep after the changes reported since its
@@ -624,7 +715,15 @@ fn ddgiEstimateIrradianceTexel(texelIndex: u32, blendedRays: u32) -> vec3f {
     return DDGI_PI * radianceSum / max(weightSum, 1.0e-6);
 }
 
-fn ddgiWriteIrradianceTexel(slot: u32, probeIndex: u32, state: u32, texelIndex: u32, probeHysteresis: f32, fastHysteresis: bool, changedNow: bool) {
+fn ddgiWriteIrradianceTexel(slot: u32, probeIndex: u32, state: u32, texelIndex: u32, probeHysteresis: f32, fastHysteresis: bool, changedNow: bool, passChange: bool) {
+    let base = slot * DDGI_SCRATCH_STRIDE + DDGI_SCRATCH_IRRADIANCE + 2u * texelIndex;
+    if (ddgiUpdateKind == DDGI_UPDATE_HELD) {
+        // The test mode: the old texel as it is, alpha included (exact half floats pack exactly).
+        let kept = ddgiTexelOld[texelIndex];
+        ddgiScratch[base] = pack2x16float(kept.rg);
+        ddgiScratch[base + 1u] = pack2x16float(kept.ba);
+        return;
+    }
     let estimate = ddgiTexelEstimate[texelIndex].rgb;
     let old = ddgiTexelOld[texelIndex].rgb;
     var hysteresis = probeHysteresis;
@@ -644,11 +743,17 @@ fn ddgiWriteIrradianceTexel(slot: u32, probeIndex: u32, state: u32, texelIndex: 
         let limit = ddgi.maxBrightnessChange * max(old, vec3f(DDGI_SMALLEST_NORMAL_HALF));
         blendedValue = old + clamp(blendedValue - old, -limit, limit);
     }
-    let base = slot * DDGI_SCRATCH_STRIDE + DDGI_SCRATCH_IRRADIANCE + 2u * texelIndex;
     let seed = probeIndex * DDGI_IRRADIANCE_TEXEL_COUNT + texelIndex;
     ddgiScratch[base] = ddgiPackHalves(blendedValue.r, blendedValue.g, seed);
     // Alpha carries this update's big-change verdict to the next update.
     ddgiScratch[base + 1u] = ddgiPackHalves(blendedValue.b, select(0.0, 1.0, changedNow), seed ^ 0x5bd1e995u);
+    if (passChange) {
+        // The change this update made, for the key's fine neighbours (ddgi/propagate).
+        let change = blendedValue - old;
+        let deltaBase = slot * DDGI_KEY_DELTA_STRIDE + DDGI_KEY_DELTA_HEADER_WORDS + 2u * texelIndex;
+        ddgiKeyDeltas[deltaBase] = pack2x16float(change.rg);
+        ddgiKeyDeltas[deltaBase + 1u] = pack2x16float(vec2f(change.b, 0.0));
+    }
 }
 
 fn ddgiBlendDistanceTexel(slot: u32, probeIndex: u32, probe: vec3i, texelIndex: u32, blendedRays: u32, hysteresis: f32) {
@@ -825,13 +930,33 @@ fn ddgiBlend(
         // (The write kernel copies the tiles exactly when the new state is active.)
         let blendThisUpdate = decision.state == DDGI_STATE_ACTIVE && !ddgiIsOff(state);
         ddgiBlendThisUpdate = select(0u, 1u, blendThisUpdate);
+        ddgiPassChange = 0u;
         if (blendThisUpdate) {
             // One workgroup per probe in the list, and a probe is listed at
             // most once a frame, so this read and write can't race.
-            let step = ddgiHysteresisStep(ddgiProbeHistory[probeIndex], state);
+            let history = ddgiProbeHistory[probeIndex];
+            let changeClock = atomicLoad(&ddgiCensus[DDGI_CENSUS_CHANGE_CLOCK]);
+            let step = ddgiHysteresisStep(history, state, changeClock);
             ddgiUpdateHysteresis = step.hysteresis;
             ddgiNextHistory = step.history;
             ddgiUpdateKind = step.kind;
+            if (step.kind == DDGI_UPDATE_HELD) {
+                // Its record without the owed updates; nothing else of it changes (ddgiWriteHistory is skipped).
+                ddgiProbeHistory[probeIndex] = step.history;
+            }
+            if (step.kind != DDGI_UPDATE_HELD && ddgiPassesChange(probe, history, state)) {
+                // The header of this slot's key-delta entry, and the flag
+                // ddgi/propagate finds it by (valid in this frame, the frame
+                // of the probe's scheduled stamp).
+                ddgiPassChange = 1u;
+                let deltaBase = slot * DDGI_KEY_DELTA_STRIDE;
+                ddgiKeyDeltas[deltaBase + DDGI_KEY_DELTA_PROBE_INDEX] = probeIndex;
+                ddgiKeyDeltas[deltaBase + DDGI_KEY_DELTA_CLOCK_BEFORE] = history.changeClock;
+                ddgiNextHistory.scheduleAndFlags = ddgiNextHistory.scheduleAndFlags | DDGI_FLAG_PASSED_CHANGE;
+                ddgiNextHistory.keyDeltaSlot = slot;
+                atomicAdd(&ddgiCensus[DDGI_CENSUS_KEY_CHANGES_PASSED], 1u);
+                atomicAdd(&ddgiCensus[DDGI_CENSUS_KEY_CHANGES_PASSED_TOTAL], 1u);
+            }
         } else {
             ddgiForgetPromises(probeIndex);
         }
@@ -883,14 +1008,18 @@ fn ddgiBlend(
         let ruleOn = ddgi.irradianceChangeThreshold >= 0.0;
         ddgiChangedNow = select(0u, 1u, ruleOn && any(abs(estimateSum - oldSum) > ddgi.irradianceChangeThreshold * oldSum));
         ddgiFastHysteresis = select(0u, 1u, ddgiTexelOld[0].a > 0.5);
-        ddgiWriteHistory(probeIndex, probe, estimateSum, oldSum, hysteresis, ddgiFastHysteresis != 0u);
+        // A held probe (the test mode) keeps its record as it is.
+        if (ddgiUpdateKind != DDGI_UPDATE_HELD) {
+            ddgiWriteHistory(probeIndex, probe, estimateSum, oldSum, hysteresis, ddgiFastHysteresis != 0u);
+        }
     }
     let changedNow = workgroupUniformLoad(&ddgiChangedNow) != 0u;
     let fastHysteresis = workgroupUniformLoad(&ddgiFastHysteresis) != 0u;
+    let passChange = workgroupUniformLoad(&ddgiPassChange) != 0u;
 
     // Step 3: blend every irradiance texel with the probe's hysteresis.
     for (var texelIndex = thread; texelIndex < DDGI_IRRADIANCE_TEXEL_COUNT; texelIndex += DDGI_BLEND_WORKGROUP_SIZE) {
-        ddgiWriteIrradianceTexel(slot, probeIndex, state, texelIndex, hysteresis, fastHysteresis, changedNow);
+        ddgiWriteIrradianceTexel(slot, probeIndex, state, texelIndex, hysteresis, fastHysteresis, changedNow, passChange);
     }
 }
 `;

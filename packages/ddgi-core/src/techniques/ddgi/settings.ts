@@ -128,6 +128,35 @@ export interface DDGISettings {
      */
     farProbeUpdates: number;
     /**
+     * Key probes and propagation (T2.4c, m2-lights.md §4.5), the main path
+     * for big changes. On (the default): on a volume too big to give every
+     * changed probe {@link changeUpdates} updates within
+     * {@link FAR_RULE_FRAMES} frames, after a change one probe in 8 (the key
+     * probes, every even grid index) goes first, and each update of a key
+     * passes the change it made on to the fine probes around it, which show
+     * it at once and are traced themselves later at a lower priority. Off:
+     * "far probes owe 2" ({@link farProbeUpdates}), the fallback.
+     */
+    keyProbes: boolean;
+    /** A marked key probe's urgency is its change times this (m2-lights.md §4.5), so keys come before fine probes away from the view. */
+    keyProbeBoost: number;
+    /**
+     * A marked fine probe away from the view's core (camera weight under
+     * {@link NEAR_CAMERA_WEIGHT}) waits for its keys: its urgency is its
+     * change times this, and its own update is cut for at least this share
+     * of the change (what propagation is taken not to bring).
+     */
+    keyResidualShare: number;
+    /** Updates a key probe away from the view's core owes after a change (near probes owe {@link changeUpdates}). */
+    keyProbeUpdates: number;
+    /**
+     * A test mode, off by default (T2.4c's checks of propagation alone):
+     * fine probes waiting for their keys' change are traced but not blended,
+     * so only propagation moves them. Never on in an application: those
+     * probes would keep their old light until it is switched off.
+     */
+    holdFineProbes: boolean;
+    /**
      * The feedback rule (m2-lights.md §4.6). On (the default): a probe whose
      * own update lands further from its stored value than its noise allows,
      * with no change reported, asks for one more update soon, and so do its 6
@@ -259,13 +288,26 @@ export const DEFAULT_PRIORITY_SHARE = 0.75;
 /** `farProbeUpdates` by default: two updates bring a far probe within 5% under the cut (m2-lights.md §6.4). */
 export const DEFAULT_FAR_PROBE_UPDATES = 2;
 
+/** `keyProbeBoost` by default (m2-lights.md §4.5): a key 10 spacings away scores about 0.03 × 4 = 0.14, a probe in view at least 0.5, so near probes still come first. */
+export const DEFAULT_KEY_PROBE_BOOST = 4;
+/** `keyResidualShare` by default (m2-lights.md §4.5). */
+export const DEFAULT_KEY_RESIDUAL_SHARE = 0.3;
+/** `keyProbeUpdates` by default (m2-lights.md §4.5): every key out of the view's core owes 4 after a global change. */
+export const DEFAULT_KEY_PROBE_UPDATES = 4;
 /**
- * "Far probes owe 2" applies when giving every probe K updates at this
- * frame's batch would take more than this many frames (`N × K / units`;
- * m2-lights.md §6.4: 2 s at 60 Hz). Counted in frames, so the rule doesn't
- * depend on the host's frame rate. Sponza (19,425 probes, about 290 a frame)
- * needs about 540 frames, so it applies there; two-room (12) and Cornell (9)
- * don't.
+ * Updates a fine probe waiting for its keys owes (m2-lights.md §4.5's
+ * table: every fine probe traced once since the change). Its keys have
+ * already brought it most of the way, and its cut is for what is left.
+ */
+export const FINE_PROBE_UPDATES = 1;
+
+/**
+ * Key probes and propagation (T2.4c), or with `keyProbes` off "far probes
+ * owe 2", apply when giving every probe K updates at this frame's batch
+ * would take more than this many frames (`N × K / units`; m2-lights.md §6.4:
+ * 2 s at 60 Hz). Counted in frames, so the rule doesn't depend on the host's
+ * frame rate. Sponza (19,425 probes, about 290 a frame) needs about 540
+ * frames, so it applies there; two-room (12) and Cornell (9) don't.
  */
 export const FAR_RULE_FRAMES = 120;
 
@@ -319,6 +361,11 @@ export const DEFAULT_DDGI_SETTINGS: Readonly<Omit<DDGISettings, 'volume'>> = {
     lightChangeScale: DEFAULT_LIGHT_CHANGE_SCALE,
     priorityShare: DEFAULT_PRIORITY_SHARE,
     farProbeUpdates: DEFAULT_FAR_PROBE_UPDATES,
+    keyProbes: true,
+    keyProbeBoost: DEFAULT_KEY_PROBE_BOOST,
+    keyResidualShare: DEFAULT_KEY_RESIDUAL_SHARE,
+    keyProbeUpdates: DEFAULT_KEY_PROBE_UPDATES,
+    holdFineProbes: false,
     feedback: true,
     warmUpPasses: DEFAULT_WARM_UP_PASSES,
     warmUpMaxSeconds: DEFAULT_WARM_UP_MAX_SECONDS,
@@ -505,6 +552,11 @@ export function blendSettings(settings: DDGISettings): {
     lightChangeScale: number;
     priorityShare: number;
     farProbeUpdates: number;
+    keyProbes: boolean;
+    keyProbeBoost: number;
+    keyResidualShare: number;
+    keyProbeUpdates: number;
+    holdFineProbes: boolean;
     feedback: boolean;
 } {
     const defaults = DEFAULT_DDGI_SETTINGS;
@@ -535,6 +587,11 @@ export function blendSettings(settings: DDGISettings): {
         priorityShare: clamp(settings.priorityShare, 0, 1, defaults.priorityShare),
         // Whole updates, 1..255: the owed count is 8 bits of the history record (PROBE_HISTORY_UPDATES).
         farProbeUpdates: Math.round(clamp(settings.farProbeUpdates, 1, MAX_OWED_UPDATES, defaults.farProbeUpdates)),
+        keyProbes: settings.keyProbes !== false,
+        keyProbeBoost: clamp(settings.keyProbeBoost, 0, 1000, defaults.keyProbeBoost),
+        keyResidualShare: clamp(settings.keyResidualShare, 0, 1, defaults.keyResidualShare),
+        keyProbeUpdates: Math.round(clamp(settings.keyProbeUpdates, 1, MAX_OWED_UPDATES, defaults.keyProbeUpdates)),
+        holdFineProbes: settings.holdFineProbes === true,
         feedback: settings.feedback !== false,
     };
 }

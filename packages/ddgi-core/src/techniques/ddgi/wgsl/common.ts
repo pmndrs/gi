@@ -71,6 +71,14 @@ struct DdgiUniforms {
     frustumFar: vec4f,
     // The share of a probe's light taken to come back through the field (rho), for the cut (ddgi/blend).
     changeBounceShare: f32,
+    // Key probes and propagation (T2.4c, docs/design/m2-lights.md §4.5).
+    keyProbes: u32,           // 1: changes marked this frame take the key-probe path (the setting, on a volume too big for every probe's K updates)
+    keyProbeBoost: f32,       // a marked key's urgency is its change times this
+    keyResidualShare: f32,    // a fine probe waiting for its keys: urgency share, and the least of its change its own update is cut for
+    keyOwedUpdates: f32,      // updates a key away from the view's core owes
+    fineOwedUpdates: f32,     // updates a fine probe waiting for its keys owes
+    propagation: u32,         // 1: keys taking in a change pass it to their fine neighbours (ddgi/blend, ddgi/propagate)
+    holdFineProbes: u32,      // the test mode (settings.holdFineProbes): fine probes waiting for their keys are not blended
 }
 
 const DDGI_MAX_RAYS: u32 = ${MAX_RAYS_PER_PROBE}u;
@@ -139,6 +147,47 @@ fn ddgiCameraWeight(probe: vec3i) -> f32 {
     let scaled = length(position - ddgi.cameraPosition.xyz) / ddgi.cameraFalloffDistance;
     let weight = 1.0 / (1.0 + scaled * scaled);
     return select(weight * DDGI_OUT_OF_VIEW_WEIGHT, weight, ddgiInView(position));
+}
+
+// ---- Key probes (T2.4c, docs/design/m2-lights.md §4.5) ----
+// A key probe's grid index is even or the last one on every axis: about one
+// probe in 8, the coarse level of a virtual two-level grid at twice the
+// spacing. (isKeyProbe in layout.ts is the CPU twin.)
+
+fn ddgiIsKeyAxis(index: i32, count: i32) -> bool {
+    return index % 2 == 0 || index == count - 1;
+}
+
+fn ddgiIsKeyProbe(probe: vec3i) -> bool {
+    let counts = vec3i(ddgiProbeCount());
+    return ddgiIsKeyAxis(probe.x, counts.x) && ddgiIsKeyAxis(probe.y, counts.y) && ddgiIsKeyAxis(probe.z, counts.z);
+}
+
+// Key neighbour j (0..7) of a fine probe as an offset in grid steps, and
+// whether j is one of its neighbours (keyNeighbourOffset in layout.ts): on an
+// axis where the probe's index is a key index the offset is 0 and that
+// axis's bit of j must be 0; otherwise the bit chooses the key one step
+// below (0) or above (1). Every key neighbour has the same trilinear weight:
+// on the key lattice a fine probe sits halfway between its keys on each axis
+// where it isn't a key.
+struct DdgiKeyNeighbour {
+    offset: vec3i,
+    exists: bool,
+}
+
+fn ddgiKeyNeighbourOffset(neighbour: u32, probe: vec3i) -> DdgiKeyNeighbour {
+    let counts = vec3i(ddgiProbeCount());
+    var offset = vec3i(0);
+    var exists = true;
+    for (var axis = 0u; axis < 3u; axis++) {
+        let above = ((neighbour >> axis) & 1u) != 0u;
+        if (ddgiIsKeyAxis(probe[axis], counts[axis])) {
+            exists = exists && !above;
+        } else {
+            offset[axis] = select(-1, 1, above);
+        }
+    }
+    return DdgiKeyNeighbour(offset, exists);
 }
 
 // Point i of n spherical Fibonacci points (Keinert et al. 2015): equal-area

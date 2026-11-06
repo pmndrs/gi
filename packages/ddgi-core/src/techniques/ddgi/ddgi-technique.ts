@@ -17,6 +17,10 @@
  *    probe (phase B) and blends its rays into the scratch buffer (phase C);
  * 3. `ddgi/write`: copies the scratch into the atlases, the probe data and
  *    the `points` debug view;
+ * 3b. `ddgi/propagate`, with key probes on (T2.4c, §4.5): fine probes
+ *    waiting for their key neighbours take the change those keys' updates
+ *    made this frame, and their tiles are written (wgsl/propagate.ts). It
+ *    does nothing in a frame where no key passed a change on;
  * 4. `ddgi/census`, only when the platform times passes (its `gpuTiming`
  *    option, the one setting that allows readbacks): counts probes per state
  *    for the counters, read back a few frames later.
@@ -42,12 +46,17 @@ import type { GITechnique, TechniqueContext, TechniqueFrame, TechniqueRequiremen
 import type { ComputeKernel } from '../../platform/contract/wgsl.ts';
 import { GILimitError } from '../../platform/contract/errors.ts';
 import {
+    CENSUS_CHANGE_CLOCK,
     CENSUS_FEEDBACK_FIRED,
     CENSUS_FEEDBACK_FIRED_TOTAL,
+    CENSUS_KEY_CHANGES_PASSED,
+    CENSUS_KEY_CHANGES_PASSED_TOTAL,
     CENSUS_PER_FRAME_WORDS,
     CENSUS_PROBES_BLENDED_TOTAL,
     CENSUS_PROBES_MARKED,
     CENSUS_PROBES_MARKED_TOTAL,
+    CENSUS_PROBES_PROPAGATED,
+    CENSUS_PROBES_PROPAGATED_TOTAL,
     CENSUS_RAYS_TRACED,
     CENSUS_SCHEDULE_STATE,
     CENSUS_WORDS,
@@ -57,12 +66,18 @@ import {
     fieldBytes,
     fieldLayout,
     IRRADIANCE_FORMAT,
+    keyDeltaStrideWords,
+    keyProbeCount,
     PROBE_DATA_FORMAT,
     PROBE_HISTORY_BYTES,
     PROBE_STATE,
     PROBE_STATE_LABELS,
     pointsSize,
     PRIORITY_BUCKETS,
+    PROPAGATE_WORKGROUPS,
+    PROPAGATION_STATE_WORDS,
+    propagationListCapacity,
+    propagationScratchStrideWords,
     RAY_RECORD_BYTES,
     SAMPLE_PARAMETER_VEC4_COUNT,
     SCHEDULE_STATE_REPORTED_WORDS,
@@ -89,6 +104,7 @@ import {
     effectiveMaxRayDistance,
     effectiveRaysPerProbe,
     FAR_RULE_FRAMES,
+    FINE_PROBE_UPDATES,
     minProbesPerFrame,
     owedUpdates,
     probeGrid,
@@ -106,10 +122,11 @@ import { DDGIShadingModule } from './shading.ts';
 import { blendKernelWgsl, type PhaseBReduction } from './wgsl/blend.ts';
 import { CENSUS_WORKGROUP_SIZE, DDGI_CENSUS_WGSL } from './wgsl/census.ts';
 import { DDGI_TRACE_WGSL, TRACE_WORKGROUP_SIZE } from './wgsl/trace.ts';
-import { MARK_WORKGROUP_SIZE, markKernelWgsl } from './wgsl/mark.ts';
+import { MARK_ENTRY_POINTS, MARK_WORKGROUP_SIZE, markKernelWgsl } from './wgsl/mark.ts';
+import { PROPAGATE_ENTRY_POINTS, PROPAGATE_FIND_WORKGROUP_SIZE, propagateKernelWgsl } from './wgsl/propagate.ts';
 import { SCHEDULE_ENTRY_POINTS, SCHEDULE_WORKGROUP_SIZE, scheduleKernelWgsl } from './wgsl/schedule.ts';
 import { DDGI_DEBUG_VIEW } from './wgsl/shading.ts';
-import { writeKernelWgsl } from './wgsl/write.ts';
+import { WRITE_ENTRY_POINTS, writeKernelWgsl } from './wgsl/write.ts';
 
 /** WebGPU usage bits; the globals don't exist in Node, where tests import this file. */
 const BUFFER_USAGE = { mapRead: 0x1, copySrc: 0x4, copyDst: 0x8, uniform: 0x40, storage: 0x80 } as const;
@@ -135,7 +152,8 @@ const INITIAL_MARK_TABLE_BYTES = 64 * 176 + 16;
 export interface DDGITechniqueOptions {
     /**
      * How phase B reduces the fixed rays, how `ddgi/mark` counts its marks,
-     * and how the scheduler counts its histogram and compacts its list.
+     * how the scheduler counts its histogram and compacts its list, and how
+     * `ddgi/propagate-find` compacts its list.
      * Defaults to `subgroups` when the device has the feature, otherwise the
      * declared fallback `workgroup`. Both give the same states, offsets,
      * counts and histograms; tests run both.
@@ -196,6 +214,10 @@ interface PreparedResources {
     readonly writeKernel: ComputeKernel;
     readonly censusKernel: ComputeKernel;
     readonly markKernel: ComputeKernel;
+    /** The change clock's one-thread dispatch after the mark (same bind group). */
+    readonly markClockKernel: ComputeKernel;
+    /** Propagation (T2.4c, wgsl/propagate.ts): find, args, propagate, and the irradiance-tile write. */
+    readonly propagation: PropagationResources;
     /** The scheduler's four kernels (wgsl/schedule.ts), one bind group for all. */
     readonly scheduleKernels: Readonly<Record<keyof typeof SCHEDULE_ENTRY_POINTS, ComputeKernel>>;
     readonly scheduleGroup: GPUBindGroup;
@@ -212,6 +234,25 @@ interface PreparedResources {
     /** The round robin's stride: order[i] = (i × stride) mod probe count (schedule.ts). */
     readonly stride: number;
     readonly fixedBytes: number;
+}
+
+/** Propagation's kernels, buffers and bind groups (T2.4c, wgsl/propagate.ts). */
+interface PropagationResources {
+    readonly findKernel: ComputeKernel;
+    readonly argsKernel: ComputeKernel;
+    readonly propagateKernel: ComputeKernel;
+    readonly writeKernel: ComputeKernel;
+    /** Per update-list slot: a key's change this update (KEY_DELTA_HEADER); written by ddgi/blend. */
+    readonly keyDeltas: GPUBuffer;
+    /** The compacted list of fine probes and its scratch of new irradiance texels. */
+    readonly list: GPUBuffer;
+    readonly scratch: GPUBuffer;
+    /** The list's length (PROPAGATION_STATE_WORD.listed). Read by the kernels directly, not as indirect dispatch arguments: each empty indirect dispatch cost about 0.022 ms (ddgi.md). */
+    readonly state: GPUBuffer;
+    readonly findGroup: GPUBindGroup;
+    readonly argsGroup: GPUBindGroup;
+    readonly propagateGroup: GPUBindGroup;
+    readonly writeGroup: GPUBindGroup;
 }
 
 /** Where the warm-up is (see the file comment). */
@@ -248,6 +289,56 @@ const BLEND_GROUP: GPUBindGroupLayoutDescriptor = {
         { binding: 7, visibility: COMPUTE, texture: SAMPLED_ARRAY },
         { binding: 8, visibility: COMPUTE, buffer: { type: 'storage' } },
         { binding: 9, visibility: COMPUTE, buffer: { type: 'storage' } },
+        { binding: 10, visibility: COMPUTE, buffer: { type: 'storage' } },
+    ],
+};
+
+/** `ddgi/write`'s irradiance-tile entry point, propagation's write (wgsl/write.ts). */
+const WRITE_TILES_GROUP: GPUBindGroupLayoutDescriptor = {
+    label: 'ddgi/propagate-write group 1',
+    entries: [
+        { binding: 0, visibility: COMPUTE, buffer: { type: 'uniform' } },
+        { binding: 1, visibility: COMPUTE, buffer: { type: 'read-only-storage' } },
+        { binding: 2, visibility: COMPUTE, buffer: { type: 'read-only-storage' } },
+        { binding: 3, visibility: COMPUTE, storageTexture: { access: 'write-only', format: IRRADIANCE_FORMAT, viewDimension: '2d-array' } },
+        { binding: 7, visibility: COMPUTE, buffer: { type: 'read-only-storage' } },
+    ],
+};
+
+/** `ddgi/propagate-find` group 1 (wgsl/propagate.ts). */
+const PROPAGATE_FIND_GROUP: GPUBindGroupLayoutDescriptor = {
+    label: 'ddgi/propagate-find group 1',
+    entries: [
+        { binding: 0, visibility: COMPUTE, buffer: { type: 'uniform' } },
+        { binding: 1, visibility: COMPUTE, buffer: { type: 'storage' } },
+        { binding: 2, visibility: COMPUTE, buffer: { type: 'storage' } },
+        { binding: 3, visibility: COMPUTE, buffer: { type: 'storage' } },
+        { binding: 4, visibility: COMPUTE, buffer: { type: 'storage' } },
+        { binding: 10, visibility: COMPUTE, texture: SAMPLED_ARRAY },
+    ],
+};
+
+/** `ddgi/propagate-args` group 1 (wgsl/propagate.ts). */
+const PROPAGATE_ARGS_GROUP: GPUBindGroupLayoutDescriptor = {
+    label: 'ddgi/propagate-args group 1',
+    entries: [{ binding: 3, visibility: COMPUTE, buffer: { type: 'storage' } }],
+};
+
+/** `ddgi/propagate` group 1 (wgsl/propagate.ts): 6 storage buffers. */
+const PROPAGATE_GROUP: GPUBindGroupLayoutDescriptor = {
+    label: 'ddgi/propagate group 1',
+    entries: [
+        { binding: 0, visibility: COMPUTE, buffer: { type: 'uniform' } },
+        { binding: 1, visibility: COMPUTE, buffer: { type: 'storage' } },
+        { binding: 2, visibility: COMPUTE, buffer: { type: 'storage' } },
+        { binding: 4, visibility: COMPUTE, buffer: { type: 'storage' } },
+        { binding: 5, visibility: COMPUTE, buffer: { type: 'read-only-storage' } },
+        { binding: 6, visibility: COMPUTE, buffer: { type: 'storage' } },
+        { binding: 7, visibility: COMPUTE, buffer: { type: 'read-only-storage' } },
+        { binding: 8, visibility: COMPUTE, texture: SAMPLED_ARRAY },
+        { binding: 9, visibility: COMPUTE, texture: SAMPLED_ARRAY },
+        { binding: 10, visibility: COMPUTE, texture: SAMPLED_ARRAY },
+        { binding: 11, visibility: COMPUTE, sampler: { type: 'filtering' } },
     ],
 };
 
@@ -429,9 +520,30 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
 
         // Compile first: if a kernel fails, the old resources stay usable.
         const scheduleCode = scheduleKernelWgsl(reduction);
+        const markCode = markKernelWgsl(reduction);
+        const writeCode = writeKernelWgsl({ irradianceTexels, distanceTexels, scratch, distanceFormat: layout.distanceFormat });
+        const propagationCapacity = propagationListCapacity(grid.counts, maxProbesPerFrame);
+        const propagateCode = propagateKernelWgsl({ irradianceTexels, reduction, listCapacity: propagationCapacity });
+        const propagateKernel = (entryPoint: string, name: string, group: GPUBindGroupLayoutDescriptor): Promise<ComputeKernel> =>
+            context.kernels.computeKernel({ label: `ddgi/${name} (${reduction})`, modules: [], code: propagateCode, entryPoint, ownGroups: [group] });
         const scheduleKernel = (entryPoint: string, name: string): Promise<ComputeKernel> =>
             context.kernels.computeKernel({ label: `ddgi/schedule-${name} (${reduction})`, modules: [], code: scheduleCode, entryPoint, ownGroups: [SCHEDULE_GROUP] });
-        const [traceKernel, blendKernel, writeKernel, censusKernel, markKernel, scheduleCount, scheduleSelect, scheduleWrite, scheduleFill] = await Promise.all([
+        const [
+            traceKernel,
+            blendKernel,
+            writeKernel,
+            censusKernel,
+            markKernel,
+            markClockKernel,
+            scheduleCount,
+            scheduleSelect,
+            scheduleWrite,
+            scheduleFill,
+            propagateFind,
+            propagateArgs,
+            propagatePropagate,
+            propagateWrite,
+        ] = await Promise.all([
             context.kernels.computeKernel({
                 label: 'ddgi/trace',
                 // Hit shading brings the scene copy and rays in as its dependencies.
@@ -450,8 +562,8 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
             context.kernels.computeKernel({
                 label: 'ddgi/write',
                 modules: [],
-                code: writeKernelWgsl({ irradianceTexels, distanceTexels, scratch, distanceFormat: layout.distanceFormat }),
-                entryPoint: 'ddgiWrite',
+                code: writeCode,
+                entryPoint: WRITE_ENTRY_POINTS.all,
                 ownGroups: [writeGroupLayout(layout.distanceFormat)],
             }),
             context.kernels.computeKernel({
@@ -465,14 +577,31 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
                 label: `ddgi/mark (${reduction})`,
                 // The point and spot falloff hit shading uses, and nothing it binds.
                 modules: [context.shade.lightFalloff],
-                code: markKernelWgsl(reduction),
-                entryPoint: 'ddgiMark',
+                code: markCode,
+                entryPoint: MARK_ENTRY_POINTS.mark,
+                ownGroups: [MARK_GROUP],
+            }),
+            context.kernels.computeKernel({
+                label: 'ddgi/mark-clock',
+                modules: [context.shade.lightFalloff],
+                code: markCode,
+                entryPoint: MARK_ENTRY_POINTS.clock,
                 ownGroups: [MARK_GROUP],
             }),
             scheduleKernel(SCHEDULE_ENTRY_POINTS.count, 'count'),
             scheduleKernel(SCHEDULE_ENTRY_POINTS.select, 'select'),
             scheduleKernel(SCHEDULE_ENTRY_POINTS.write, 'write'),
             scheduleKernel(SCHEDULE_ENTRY_POINTS.fill, 'fill'),
+            propagateKernel(PROPAGATE_ENTRY_POINTS.find, 'propagate-find', PROPAGATE_FIND_GROUP),
+            propagateKernel(PROPAGATE_ENTRY_POINTS.args, 'propagate-args', PROPAGATE_ARGS_GROUP),
+            propagateKernel(PROPAGATE_ENTRY_POINTS.propagate, 'propagate', PROPAGATE_GROUP),
+            context.kernels.computeKernel({
+                label: 'ddgi/propagate-write',
+                modules: [],
+                code: writeCode,
+                entryPoint: WRITE_ENTRY_POINTS.irradianceTiles,
+                ownGroups: [WRITE_TILES_GROUP],
+            }),
         ]);
         if (this.disposed) return;
 
@@ -494,8 +623,8 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         const probeData = arrayTexture('probe data', layout.probeData, PROBE_DATA_FORMAT, TEXTURE_USAGE.copyDst);
         const pointsTexture = device.createTexture({ label: 'ddgi points', size: points, format: 'rgba32float', usage: atlasUsage | TEXTURE_USAGE.copyDst });
         const uniforms = device.createBuffer({ label: 'ddgi uniforms', size: UNIFORM_BYTES, usage: BUFFER_USAGE.uniform | BUFFER_USAGE.copyDst });
-        // Written by the GPU scheduler; COPY_SRC so tests can read which probes a frame updated.
-        const updateList = device.createBuffer({ label: 'ddgi update list', size: maxProbesPerFrame * 4, usage: BUFFER_USAGE.storage | BUFFER_USAGE.copySrc });
+        // Written by the GPU scheduler.
+        const updateList = device.createBuffer({ label: 'ddgi update list', size: maxProbesPerFrame * 4, usage: BUFFER_USAGE.storage });
         const scratchBuffer = device.createBuffer({ label: 'ddgi scratch', size: maxProbesPerFrame * scratch.strideWords * 4, usage: BUFFER_USAGE.storage });
         const census = device.createBuffer({ label: 'ddgi census', size: CENSUS_WORDS * 4, usage: BUFFER_USAGE.storage | BUFFER_USAGE.copySrc | BUFFER_USAGE.copyDst });
         // Starts at zero (WebGPU clears new buffers): no probe remembers anything yet.
@@ -504,6 +633,19 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         // The scheduler's cursor starts at the order's first entry (probe 0) and every count at 0: new buffers are zero.
         const scheduleState = device.createBuffer({ label: 'ddgi schedule state', size: SCHEDULE_STATE_WORDS * 4, usage: BUFFER_USAGE.storage | BUFFER_USAGE.copySrc | BUFFER_USAGE.copyDst });
         const feedbackRequests = device.createBuffer({ label: 'ddgi feedback requests', size: grid.probeCount * 4, usage: BUFFER_USAGE.storage | BUFFER_USAGE.copyDst });
+        // Propagation (T2.4c): a key-delta entry per update-list slot, the list of fine probes, its scratch and its length.
+        const keyDeltas = device.createBuffer({ label: 'ddgi key deltas', size: maxProbesPerFrame * keyDeltaStrideWords(irradianceTexels) * 4, usage: BUFFER_USAGE.storage });
+        const propagationList = device.createBuffer({ label: 'ddgi propagation list', size: propagationCapacity * 4, usage: BUFFER_USAGE.storage });
+        const propagationScratch = device.createBuffer({
+            label: 'ddgi propagation scratch',
+            size: propagationCapacity * propagationScratchStrideWords(irradianceTexels) * 4,
+            usage: BUFFER_USAGE.storage,
+        });
+        const propagationState = device.createBuffer({
+            label: 'ddgi propagation state',
+            size: PROPAGATION_STATE_WORDS * 4,
+            usage: BUFFER_USAGE.storage | BUFFER_USAGE.copyDst | BUFFER_USAGE.copySrc,
+        });
         const censusStaging = Array.from({ length: CENSUS_STAGING_BUFFERS }, (_, index) => ({
             buffer: device.createBuffer({ label: `ddgi census readback ${index}`, size: CENSUS_WORDS * 4, usage: BUFFER_USAGE.mapRead | BUFFER_USAGE.copyDst }),
             state: 'free' as CensusStaging['state'],
@@ -547,6 +689,62 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
             ],
         });
 
+        const propagation: PropagationResources = {
+            findKernel: propagateFind,
+            argsKernel: propagateArgs,
+            propagateKernel: propagatePropagate,
+            writeKernel: propagateWrite,
+            keyDeltas,
+            list: propagationList,
+            scratch: propagationScratch,
+            state: propagationState,
+            findGroup: device.createBindGroup({
+                label: 'ddgi/propagate-find group 1',
+                layout: propagateFind.ownLayouts[0],
+                entries: [
+                    { binding: 0, resource: { buffer: uniforms } },
+                    { binding: 1, resource: { buffer: probeHistory } },
+                    { binding: 2, resource: { buffer: census } },
+                    { binding: 3, resource: { buffer: propagationState } },
+                    { binding: 4, resource: { buffer: propagationList } },
+                    { binding: 10, resource: arrayView(probeData) },
+                ],
+            }),
+            argsGroup: device.createBindGroup({
+                label: 'ddgi/propagate-args group 1',
+                layout: propagateArgs.ownLayouts[0],
+                entries: [{ binding: 3, resource: { buffer: propagationState } }],
+            }),
+            propagateGroup: device.createBindGroup({
+                label: 'ddgi/propagate group 1',
+                layout: propagatePropagate.ownLayouts[0],
+                entries: [
+                    { binding: 0, resource: { buffer: uniforms } },
+                    { binding: 1, resource: { buffer: probeHistory } },
+                    { binding: 2, resource: { buffer: census } },
+                    { binding: 4, resource: { buffer: propagationList } },
+                    { binding: 5, resource: { buffer: keyDeltas } },
+                    { binding: 6, resource: { buffer: propagationScratch } },
+                    { binding: 7, resource: { buffer: propagationState } },
+                    { binding: 8, resource: arrayView(irradiance) },
+                    { binding: 9, resource: arrayView(distance) },
+                    { binding: 10, resource: arrayView(probeData) },
+                    { binding: 11, resource: sampler },
+                ],
+            }),
+            writeGroup: device.createBindGroup({
+                label: 'ddgi/propagate-write group 1',
+                layout: propagateWrite.ownLayouts[0],
+                entries: [
+                    { binding: 0, resource: { buffer: uniforms } },
+                    { binding: 1, resource: { buffer: propagationList } },
+                    { binding: 2, resource: { buffer: propagationScratch } },
+                    { binding: 3, resource: arrayView(irradiance) },
+                    { binding: 7, resource: { buffer: propagationState } },
+                ],
+            }),
+        };
+
         const fixedBytes =
             fieldBytes(layout) +
             points.width * points.height * POINT_TEXEL_BYTES +
@@ -556,6 +754,10 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
             probeHistory.size +
             scheduleState.size +
             feedbackRequests.size +
+            keyDeltas.size +
+            propagationList.size +
+            propagationScratch.size +
+            propagationState.size +
             census.size * (1 + CENSUS_STAGING_BUFFERS);
         const partial = {
             grid,
@@ -581,6 +783,8 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
             writeKernel,
             censusKernel,
             markKernel,
+            markClockKernel,
+            propagation,
             scheduleKernels: { count: scheduleCount, select: scheduleSelect, write: scheduleWrite, fill: scheduleFill },
             scheduleGroup,
             scheduleState,
@@ -693,8 +897,40 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         write.dispatchWorkgroups(probesX, probesY);
         write.end();
 
+        if (this.settings.keyProbes !== false) this.encodePropagation(encoder, context, resources, maxPerDimension);
         this.encodeCensus(encoder, context, resources, maxPerDimension);
         return count;
+    }
+
+    /**
+     * Propagation (wgsl/propagate.ts): one pass of four dispatches, find
+     * (one thread per probe), args (one thread), propagate and its write
+     * (PROPAGATE_WORKGROUPS workgroups looping over the fine probes found).
+     * A compute pass's dispatches are separate usage scopes, so the write may
+     * store into the irradiance atlas propagate sampled. In a frame where no
+     * key passed a change on, find's workgroups stop at once and the list is
+     * empty.
+     */
+    private encodePropagation(encoder: GPUCommandEncoder, context: TechniqueContext, resources: PreparedResources, maxPerDimension: number): void {
+        const propagation = resources.propagation;
+        encoder.clearBuffer(propagation.state);
+        const groups = Math.ceil(resources.grid.probeCount / PROPAGATE_FIND_WORKGROUP_SIZE);
+        const groupsX = Math.min(groups, maxPerDimension);
+        const pass = encoder.beginComputePass({ label: 'ddgi/propagate', timestampWrites: context.timer.computePass('ddgi/propagate') });
+        propagation.findKernel.bind(pass);
+        pass.setBindGroup(1, propagation.findGroup);
+        pass.dispatchWorkgroups(groupsX, Math.ceil(groups / groupsX));
+        propagation.argsKernel.bind(pass);
+        pass.setBindGroup(1, propagation.argsGroup);
+        pass.dispatchWorkgroups(1);
+        // A fixed number of workgroups looping over the list (PROPAGATE_WORKGROUPS says why not indirect).
+        propagation.propagateKernel.bind(pass);
+        pass.setBindGroup(1, propagation.propagateGroup);
+        pass.dispatchWorkgroups(PROPAGATE_WORKGROUPS);
+        propagation.writeKernel.bind(pass);
+        pass.setBindGroup(1, propagation.writeGroup);
+        pass.dispatchWorkgroups(PROPAGATE_WORKGROUPS);
+        pass.end();
     }
 
     /**
@@ -795,7 +1031,9 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
      * "probes owed updates" and "probes updated at priority" (the
      * scheduler's), "feedback requests" (updates whose feedback test fired
      * that frame), "feedback requests (total)" and "probes blended (total)"
-     * (since `prepare`) need the GPU census, which runs only when the
+     * (since `prepare`), "key probes passing a change" and "probes
+     * propagated" (that frame; T2.4c), their totals since `prepare`, and the
+     * volume's "change clock" need the GPU census, which runs only when the
      * platform times passes (`gpuTiming`), and arrive a few frames late;
      * without them those counters are absent, not guessed.
      */
@@ -808,6 +1046,7 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
             'changes marked this frame': this.latestMarkEntries,
             'warming up': this.warmingUp ? 1 : 0,
             'warm-up passes': this.warmUpPasses,
+            'key probes': this.resources ? keyProbeCount(this.resources.grid.counts) : 0,
         };
         if (sweep !== undefined) updates['seconds per full sweep'] = sweep;
         if (!census) return updates;
@@ -820,6 +1059,11 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
             'feedback requests': census[CENSUS_FEEDBACK_FIRED],
             'feedback requests (total)': census[CENSUS_FEEDBACK_FIRED_TOTAL],
             'probes blended (total)': census[CENSUS_PROBES_BLENDED_TOTAL],
+            'key probes passing a change': census[CENSUS_KEY_CHANGES_PASSED],
+            'key changes passed (total)': census[CENSUS_KEY_CHANGES_PASSED_TOTAL],
+            'probes propagated': census[CENSUS_PROBES_PROPAGATED],
+            'probes propagated (total)': census[CENSUS_PROBES_PROPAGATED_TOTAL],
+            'change clock': census[CENSUS_CHANGE_CLOCK],
             'rays traced': census[CENSUS_RAYS_TRACED],
             'probes active': census[PROBE_STATE.active],
             'probes off: inside geometry': census[PROBE_STATE.offInsideGeometry],
@@ -919,6 +1163,10 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         resources.markKernel.bind(pass);
         pass.setBindGroup(1, resources.mark.group);
         pass.dispatchWorkgroups(groupsX, Math.ceil(groups / groupsX));
+        // The change clock takes this frame's largest change (one thread, the same group).
+        resources.markClockKernel.bind(pass);
+        pass.setBindGroup(1, resources.mark.group);
+        pass.dispatchWorkgroups(1);
         pass.end();
     }
 
@@ -952,6 +1200,7 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
                 { binding: 7, resource: arrayView(resources.probeData) },
                 { binding: 8, resource: { buffer: resources.probeHistory } },
                 { binding: 9, resource: { buffer: resources.feedbackRequests } },
+                { binding: 10, resource: { buffer: resources.propagation.keyDeltas } },
             ],
         });
         return { buffer, capacity, traceGroup, blendGroup };
@@ -1018,6 +1267,10 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
             resources.probeHistory,
             resources.scheduleState,
             resources.feedbackRequests,
+            resources.propagation.keyDeltas,
+            resources.propagation.list,
+            resources.propagation.scratch,
+            resources.propagation.state,
             resources.rays.buffer,
             resources.mark.buffer,
         ]) {
@@ -1110,7 +1363,17 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         const fullUpdates = owedUpdates(blend.changeUpdates);
         const batch = count > 0 ? count : this.lastUpdateCount;
         const framesForEveryProbe = batch > 0 ? (grid.probeCount * fullUpdates) / batch : Number.POSITIVE_INFINITY;
-        data[UNIFORM_WORD.farOwedUpdates] = framesForEveryProbe > FAR_RULE_FRAMES ? Math.min(blend.farProbeUpdates, fullUpdates) : fullUpdates;
+        // On such a volume a big change takes the key-probe path (T2.4c,
+        // m2-lights.md §4.5), or with key probes off, "far probes owe 2" (§6.4).
+        const bigVolume = framesForEveryProbe > FAR_RULE_FRAMES;
+        words[UNIFORM_WORD.keyProbes] = blend.keyProbes && bigVolume ? 1 : 0;
+        data[UNIFORM_WORD.farOwedUpdates] = !blend.keyProbes && bigVolume ? Math.min(blend.farProbeUpdates, fullUpdates) : fullUpdates;
+        data[UNIFORM_WORD.keyProbeBoost] = blend.keyProbeBoost;
+        data[UNIFORM_WORD.keyResidualShare] = blend.keyResidualShare;
+        data[UNIFORM_WORD.keyOwedUpdates] = blend.keyProbeUpdates;
+        data[UNIFORM_WORD.fineOwedUpdates] = FINE_PROBE_UPDATES;
+        words[UNIFORM_WORD.propagation] = blend.keyProbes ? 1 : 0;
+        words[UNIFORM_WORD.holdFineProbes] = blend.holdFineProbes ? 1 : 0;
         data[UNIFORM_WORD.cameraFalloffDistance] = cameraFalloffDistance(grid);
         data.set([...frame.camera.position, inViewMargin(grid)], UNIFORM_WORD.cameraPosition);
         frustumPlanes(frame.camera).forEach((plane, index) => data.set(plane, FRUSTUM_PLANE_WORDS[index]));
