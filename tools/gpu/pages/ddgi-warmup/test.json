@@ -1,0 +1,4 @@
+{
+    "description": "T2.4b check 6: the warm-up runs in the technique, on by default: a host that only runs frames gets the same field after the same frames as the viewer's old warm-up (16 passes once the trees are built), and the calibration starts after it.",
+    "timeoutMs": 300000
+}
