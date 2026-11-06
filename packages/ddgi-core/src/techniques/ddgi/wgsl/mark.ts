@@ -26,8 +26,13 @@
  * - **a directional light:** `r` from the CPU (the change of its irradiance
  *   vector relative to the old one), times `0.25 + 0.75 × openness` toward
  *   the old and new direction;
- * - **the environment:** `r` from the CPU, times `0.25 + 0.75 × openness`
- *   over six directions;
+ * - **the environment:** `r` from the sky's radiance SH, now against when
+ *   the field last took a sky change (T2.6a; the platform's sky-change
+ *   module): per channel, `(|Δc₀| + |Δc₁…₃|) / c₀`, the change of bands 0
+ *   and 1 relative to the sky's mean, where the sky got darker against what
+ *   is left; the largest channel; times `0.25 + 0.75 × openness` over six
+ *   directions. A `setEnvironment` that changed nothing gives 0 and marks
+ *   nothing;
  * - **everywhere:** `r` from the CPU as it is.
  *
  * Then the probe's record (PROBE_HISTORY_WORD in layout.ts):
@@ -66,7 +71,8 @@
  * Bindings (group 1): uniforms, the mark table, the probe history (as
  * atomic words), the census (3 storage buffers), the probe-data and
  * distance atlases (sampled) and the atlas sampler. Platform modules: the
- * light falloff only (no bindings). The clock dispatch uses the same group.
+ * light falloff (no bindings) and the sky change (two uniforms). The clock
+ * dispatch uses the same groups.
  */
 
 import {
@@ -164,6 +170,8 @@ const DDGI_MARK_DARK_IRRADIANCE: f32 = ${MARK_DARK_IRRADIANCE};
 // A darkening leaves at least this share of the light, as far as its change is
 // measured (so a light switched off counts as a change of 100x, MAX_GLOBAL_CHANGE).
 const DDGI_MARK_SMALLEST_REMAINDER: f32 = ${1 / MAX_GLOBAL_CHANGE};
+// The largest relative change a global change carries (MAX_GLOBAL_CHANGE in mark-table.ts).
+const DDGI_MARK_LARGEST_CHANGE: f32 = ${MAX_GLOBAL_CHANGE}.0;
 // Keeps ln(rho) finite in ddgiNeededUpdates.
 const DDGI_MARK_SMALLEST_BOUNCE_SHARE: f32 = 0.001;
 // The openness factor for global changes (m2-lights.md §4.2): a probe that
@@ -340,6 +348,10 @@ fn ddgiMarkGlobalChange(entry: DdgiMarkEntry, probe: vec3i) -> f32 {
         return entry.globalChange * (DDGI_OPENNESS_FLOOR + (1.0 - DDGI_OPENNESS_FLOOR) * openness);
     }
     if (entry.kind == DDGI_MARK_ENVIRONMENT) {
+        let skyChange = ddgiMarkSkyChange();
+        if (!(skyChange > 0.0)) {
+            return 0.0;
+        }
         // The sky can come from anywhere: the mean over the six axis directions.
         var openness = 0.0;
         for (var axis = 0u; axis < 6u; axis++) {
@@ -347,9 +359,33 @@ fn ddgiMarkGlobalChange(entry: DdgiMarkEntry, probe: vec3i) -> f32 {
             direction[axis % 3u] = select(1.0, -1.0, axis >= 3u);
             openness += ddgiMarkOpenness(probe, direction);
         }
-        return entry.globalChange * (DDGI_OPENNESS_FLOOR + (1.0 - DDGI_OPENNESS_FLOOR) * openness / 6.0);
+        return entry.globalChange * skyChange * (DDGI_OPENNESS_FLOOR + (1.0 - DDGI_OPENNESS_FLOOR) * openness / 6.0);
     }
     return entry.globalChange;
+}
+
+// How much the sky changed since the field last took a sky change
+// (m2-lights.md §4.2): per channel, the change of its band-0 and band-1
+// radiance SH, |Δc₀| + |Δ(c₁, c₂, c₃)|, relative to its mean c₀. Band 0 is
+// the sky's brightness, band 1 which way its light comes from (the bright
+// side following the sun); bands 0-1 carry nearly all of what a probe's
+// irradiance sees of a smooth sky. Where the channel got darker, against
+// what is left, as for the lights (T2.4b); a channel that was black and
+// isn't any more is a full replacement (DDGI_MARK_LARGEST_CHANGE).
+fn ddgiMarkSkyChange() -> f32 {
+    let before0 = giSkyRadianceShBefore(0u);
+    let now0 = giSkyRadianceShNow(0u);
+    var difference = abs(now0 - before0);
+    for (var channel = 0u; channel < 3u; channel++) {
+        let before1 = vec3f(giSkyRadianceShBefore(1u)[channel], giSkyRadianceShBefore(2u)[channel], giSkyRadianceShBefore(3u)[channel]);
+        let now1 = vec3f(giSkyRadianceShNow(1u)[channel], giSkyRadianceShNow(2u)[channel], giSkyRadianceShNow(3u)[channel]);
+        difference[channel] += length(now1 - before1);
+    }
+    let darker = now0 < before0;
+    let against = select(before0, max(now0, before0 * DDGI_MARK_SMALLEST_REMAINDER), darker);
+    // A channel black before and after has no light to change; one black only before is new light.
+    let relative = select(select(vec3f(0.0), vec3f(DDGI_MARK_LARGEST_CHANGE), difference > vec3f(0.0)), difference / against, against > vec3f(0.0));
+    return min(max(relative.r, max(relative.g, relative.b)), DDGI_MARK_LARGEST_CHANGE);
 }
 
 // How a change is served at one probe (ddgiServing): the updates it is

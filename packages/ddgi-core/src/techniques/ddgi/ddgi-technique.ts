@@ -640,14 +640,14 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
             context.kernels.computeKernel({
                 label: `ddgi/mark (${reduction})`,
                 // The point and spot falloff hit shading uses, and nothing it binds.
-                modules: [context.shade.lightFalloff],
+                modules: [context.shade.lightFalloff, context.shade.skyChange],
                 code: markCode,
                 entryPoint: MARK_ENTRY_POINTS.mark,
                 ownGroups: [MARK_GROUP],
             }),
             context.kernels.computeKernel({
                 label: 'ddgi/mark-clock',
-                modules: [context.shade.lightFalloff],
+                modules: [context.shade.lightFalloff, context.shade.skyChange],
                 code: markCode,
                 entryPoint: MARK_ENTRY_POINTS.clock,
                 ownGroups: [MARK_GROUP],

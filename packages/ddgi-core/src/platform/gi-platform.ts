@@ -258,8 +258,8 @@ export class GIPlatformImpl implements GIPlatform {
 
         const upload = this.sceneCopy.encode(encoder);
         this.rays.update(encoder, upload, this.timer ?? undefined);
-        // Settings, and the sky's projection when the environment changed.
-        this.shade.encode(encoder, this.sceneCopy.environment, this.sceneCopy.environmentVersion);
+        // Settings, and the sky's bake when the environment changed.
+        this.shade.encode(encoder, this.sceneCopy.environment, this.sceneCopy.environmentVersion, this.timer ?? undefined);
 
         const techniques = this.encodeOrder();
         // A calibration no longer describes the scene once the geometry rays see changed: a geometry
@@ -303,6 +303,9 @@ export class GIPlatformImpl implements GIPlatform {
                 budget.record(units, used);
                 if (budget.report.calibration?.measured) this.calibratedOnce = true;
             }
+            // The techniques have been told about the sky as it is now: the next sky change is measured from it
+            // (shade/sky-change.ts). Recorded after their kernels, which read the sky as it was before.
+            if (changes.global.includes('environment')) this.shade.recordSkySeen(encoder);
         }
 
         if (this.timer) {

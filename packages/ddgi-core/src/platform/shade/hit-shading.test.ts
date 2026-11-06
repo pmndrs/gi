@@ -3,7 +3,9 @@ import type { KernelBuilder, WgslModule } from '../contract/wgsl.ts';
 import { countGroupStorageBuffers, orderModules, placeModules } from '../kernel-builder.ts';
 import { SCENE_MODULE_ENTRIES, sceneModuleWgsl } from '../scene/wgsl.ts';
 import { liftSunAboveMinimum, unusableEnvironmentTexture } from '../sky/platform-sky.ts';
-import { projectionWgsl } from '../sky/projection-wgsl.ts';
+import { projectionWgsl, RADIANCE_SH_COUNT, SKY_HARMONICS_LAYOUT } from '../sky/projection-wgsl.ts';
+import { SH_COEFFICIENT_COUNT } from '../sky/spherical-harmonics.ts';
+import { SKY_CHANGE_MODULE_ENTRIES, SKY_RADIANCE_SH_BYTES, skyChangeModuleWgsl } from './sky-change.ts';
 import { DEFAULT_HIT_SHADING_SETTINGS, PlatformHitShading } from './hit-shading.ts';
 import { SHADE_MODULE_ENTRIES, SHADE_UNIFORM_LAYOUT, shadeModuleWgsl } from './wgsl.ts';
 
@@ -79,11 +81,46 @@ describe('hit shading', () => {
         expect(shade.module.resources()).toHaveLength(3);
     });
 
-    it('starts from the contract defaults and lays its uniforms out after the 18 SH coefficients', () => {
+    it("starts from the contract defaults and lays its uniforms out after the sky's harmonics", () => {
         const shade = new PlatformHitShading(fakeDevice(), NO_KERNELS, scene, rays);
         expect(shade.settings).toEqual(DEFAULT_HIT_SHADING_SETTINGS);
-        expect(SHADE_UNIFORM_LAYOUT.maxShadowedLightsPerHit).toBe(288);
+        // Radiance SH bands 0-2 at 0 (so a uniform binding of it alone needs no offset), then the 18 irradiance coefficients.
+        expect(SHADE_UNIFORM_LAYOUT.skyRadiance).toBe(0);
+        expect(SHADE_UNIFORM_LAYOUT.skyIrradiance).toBe(RADIANCE_SH_COUNT * 16);
+        expect(SHADE_UNIFORM_LAYOUT.maxShadowedLightsPerHit).toBe((RADIANCE_SH_COUNT + SH_COEFFICIENT_COUNT) * 16);
+        expect(SKY_HARMONICS_LAYOUT.byteLength).toBe(432);
         expect(SHADE_UNIFORM_LAYOUT.byteLength % 16).toBe(0);
+        const code = shadeModuleWgsl({ group: 0, firstBinding: 0 });
+        expect(code.indexOf('skyRadiance: array<vec4f, 9>')).toBeLessThan(code.indexOf('skyIrradiance: array<vec4f, 18>'));
+    });
+
+    it("hands techniques the sky's change as a module of two uniforms and no storage buffers", () => {
+        const shade = new PlatformHitShading(fakeDevice(), NO_KERNELS, scene, rays);
+        expect(shade.skyChange.entries).toBe(SKY_CHANGE_MODULE_ENTRIES);
+        expect(shade.skyChange.storageBufferCount).toBe(0);
+        expect(declaredStorageBuffers(shade.skyChange)).toBe(0);
+        expect(shade.skyChange.entries.every((entry) => entry.buffer?.type === 'uniform')).toBe(true);
+        // "Now" is the radiance SH range of hit shading's own uniforms; "before" a copy of the same size.
+        const [now, before] = shade.skyChange.resources() as GPUBufferBinding[];
+        expect(now.offset).toBe(SHADE_UNIFORM_LAYOUT.skyRadiance);
+        expect(now.size).toBe(SKY_RADIANCE_SH_BYTES);
+        expect((before.buffer as unknown as GPUBufferDescriptor).size).toBe(SKY_RADIANCE_SH_BYTES);
+        const code = skyChangeModuleWgsl({ group: 0, firstBinding: 4 });
+        expect(code).toContain('fn giSkyRadianceShNow(index: u32) -> vec3f');
+        expect(code).toContain('fn giSkyRadianceShBefore(index: u32) -> vec3f');
+        expect(code).toContain('@group(0) @binding(5) var<uniform> giSkyRadianceBefore');
+        for (const match of code.matchAll(/^(?:fn|struct|const|var<[^>]*>|var)\s+([A-Za-z_]\w*)/gm)) {
+            expect(match[1].toLowerCase().startsWith('gi'), match[1]).toBe(true);
+        }
+    });
+
+    it('records the sky as seen by copying the radiance SH into "before"', () => {
+        const shade = new PlatformHitShading(fakeDevice(), NO_KERNELS, scene, rays);
+        const copies: unknown[][] = [];
+        const encoder = { copyBufferToBuffer: (...args: unknown[]) => copies.push(args) } as unknown as GPUCommandEncoder;
+        shade.recordSkySeen(encoder);
+        const [now, before] = shade.skyChange.resources() as GPUBufferBinding[];
+        expect(copies).toEqual([[now.buffer, SHADE_UNIFORM_LAYOUT.skyRadiance, before.buffer, 0, SKY_RADIANCE_SH_BYTES]]);
     });
 
     it('builds the subgroup reduction only on devices that have subgroups', () => {
@@ -93,6 +130,11 @@ describe('hit shading', () => {
         expect(projectionWgsl('subgroups')).toMatch(/^enable subgroups;/);
         expect(projectionWgsl('subgroups')).toContain('subgroupAdd(');
         expect(projectionWgsl('workgroup')).not.toContain('subgroup_invocation_id');
+        // T2.6a: the reductions loop over the coefficients instead of writing out 18 inlined copies
+        // (the cause of M1's slow compile), so the kernel holds one call site of the reduction per entry point.
+        for (const reduction of ['subgroups', 'workgroup'] as const) {
+            expect(projectionWgsl(reduction).match(/= giSkyReduce\(/g)).toHaveLength(2);
+        }
     });
 });
 

@@ -29,13 +29,31 @@
  *    environment object is set again after its texture changed.
  * 7. **Subgroups and the fallback** reduce the same sky to the same SH,
  *    and the fallback matches the CPU projection (`spherical-harmonics.ts`).
+ * 8. **The GPU's procedural sky is the CPU's** (T2.6a check 1). For skies
+ *    from a 2-degree sun (made at 5) to 89 degrees and turbidity 1.7 to 10,
+ *    the radiance map the bake writes, read at every texel centre, against
+ *    the CPU sky (`buildCalibratedSky`, the sky files' code) box filtered to
+ *    the map's texels as the resample filters a 512 x 256 source: each
+ *    channel's mean within 0.1%, every texel's channels within 1% (a channel
+ *    the gamut clamp made 0 on the CPU: against the texel's brightest),
+ *    black below the horizon; the radiance
+ *    and irradiance SH against the CPU projection of that sky, with
+ *    subgroups and with the fallback; the ground's irradiance against the
+ *    CPU sky's own (reported; ±0.5% is gated on the open-ground and Sponza
+ *    skies, section 2).
+ * 9. **When a procedural sky re-bakes** (m2-lights.md §6.2): not for the
+ *    same numbers again or a sun turned 0.03 degrees; for a turn of more
+ *    than 0.05 degrees since the last bake, and for any change of
+ *    turbidity, intensity or sunIlluminance.
  */
 
 import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
-import { buildCalibratedSky } from '../../../../packages/ddgi-core/src/platform/sky/calibrated-sky.ts';
+import { buildCalibratedSky, DEFAULT_TURBIDITY } from '../../../../packages/ddgi-core/src/platform/sky/calibrated-sky.ts';
+import { liftSunAboveMinimum } from '../../../../packages/ddgi-core/src/platform/sky/procedural-sky.ts';
+import { MAX_TURBIDITY, MIN_TURBIDITY } from '../../../../packages/ddgi-core/src/platform/sky/preetham.ts';
 import { floatToHalf, halfImageToTextureRgba, halfToFloat } from '../../../../packages/ddgi-core/src/platform/sky/half-float.ts';
-import { PlatformSky } from '../../../../packages/ddgi-core/src/platform/sky/platform-sky.ts';
-import { SH_BYTES } from '../../../../packages/ddgi-core/src/platform/sky/projection-wgsl.ts';
+import { PlatformSky, RADIANCE_MAP_HEIGHT, RADIANCE_MAP_WIDTH } from '../../../../packages/ddgi-core/src/platform/sky/platform-sky.ts';
+import { RADIANCE_SH_COUNT, SKY_HARMONICS_LAYOUT } from '../../../../packages/ddgi-core/src/platform/sky/projection-wgsl.ts';
 import {
     bruteForceIrradiance,
     convolveWithCosineLobe,
@@ -62,6 +80,9 @@ const CODED_RADIANCE_TOLERANCE = 0.01;
 const CODED_IRRADIANCE_TOLERANCE = 0.003;
 /** Subgroup against fallback SH, and GPU against CPU SH: relative to the largest coefficient. */
 const SH_AGREEMENT_TOLERANCE = 1e-4;
+/** T2.6a check 1: the GPU's procedural map against the CPU sky, each channel's mean and every texel's channels. */
+const PROCEDURAL_MEAN_TOLERANCE = 0.001;
+const PROCEDURAL_TEXEL_TOLERANCE = 0.01;
 
 const urls = (pattern: Record<string, unknown>): string => Object.values(pattern)[0] as string;
 const openGroundSkyUrl = urls(import.meta.glob('../../../../scenes/sky/open-ground.exr', { query: '?url', import: 'default', eager: true }));
@@ -196,24 +217,35 @@ function codedCubeTexture(device: GPUDevice, size: number, threeConvention = fal
     return texture;
 }
 
-/** Projects one environment with a stand-alone sky and reads the SH back. */
 /** Versions for the stand-alone skies: each call is a new environment. */
 let standaloneVersion = 0;
 
-async function projectStandalone(device: GPUDevice, sky: PlatformSky, environment: EnvironmentDescriptor): Promise<Float32Array> {
-    const output = device.createBuffer({ label: 'standalone sky SH', size: SH_BYTES, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
-    const encoder = device.createCommandEncoder({ label: 'standalone sky projection' });
-    sky.encode(encoder, environment, ++standaloneVersion, { buffer: output });
-    device.queue.submit([encoder.finish()]);
-    const result = new Float32Array(await readBuffer(device, output, SH_BYTES));
-    output.destroy();
-    return result;
+/** The sky's harmonics as the bake writes them: irradiance SH (18 vec4f) and radiance SH bands 0-2 (9 vec4f). */
+interface Harmonics {
+    irradiance: Float32Array;
+    radiance: Float32Array;
 }
 
-function largestDifference(a: ArrayLike<number>, b: ArrayLike<number>): { difference: number; scale: number } {
+/** Bakes one environment with a stand-alone sky and reads the harmonics back. */
+async function projectStandalone(device: GPUDevice, sky: PlatformSky, environment: EnvironmentDescriptor): Promise<Harmonics> {
+    const bytes = SKY_HARMONICS_LAYOUT.byteLength;
+    const output = device.createBuffer({ label: 'standalone sky harmonics', size: bytes, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
+    const encoder = device.createCommandEncoder({ label: 'standalone sky bake' });
+    const baked = sky.encode(encoder, environment, ++standaloneVersion, { buffer: output });
+    assert(baked, 'the stand-alone sky did not bake a new environment');
+    device.queue.submit([encoder.finish()]);
+    const result = new Float32Array(await readBuffer(device, output, bytes));
+    output.destroy();
+    return {
+        irradiance: result.slice(SKY_HARMONICS_LAYOUT.irradiance / 4, SKY_HARMONICS_LAYOUT.irradiance / 4 + SH_COEFFICIENT_COUNT * 4),
+        radiance: result.slice(SKY_HARMONICS_LAYOUT.radiance / 4, SKY_HARMONICS_LAYOUT.radiance / 4 + RADIANCE_SH_COUNT * 4),
+    };
+}
+
+function largestDifference(a: ArrayLike<number>, b: ArrayLike<number>, count = SH_COEFFICIENT_COUNT): { difference: number; scale: number } {
     let difference = 0;
     let scale = 0;
-    for (let index = 0; index < SH_COEFFICIENT_COUNT; index++) {
+    for (let index = 0; index < count; index++) {
         for (let channel = 0; channel < 3; channel++) {
             difference = Math.max(difference, Math.abs(a[index * 4 + channel] - b[index * 4 + channel]));
             scale = Math.max(scale, Math.abs(b[index * 4 + channel]));
@@ -223,6 +255,138 @@ function largestDifference(a: ArrayLike<number>, b: ArrayLike<number>): { differ
 }
 
 const percent = (value: number): string => `${(value * 100).toFixed(3)}%`;
+
+type ProceduralEnvironment = Extract<EnvironmentDescriptor, { type: 'procedural' }>;
+
+/** A unit direction toward a sun at `elevation` degrees, `azimuth` degrees from +X toward +Z. */
+function sunAt(elevation: number, azimuth: number): Vec3 {
+    const e = (elevation * Math.PI) / 180;
+    const a = (azimuth * Math.PI) / 180;
+    return [Math.cos(e) * Math.cos(a), Math.sin(e), Math.cos(e) * Math.sin(a)];
+}
+
+/** The CPU sky the platform's procedural bake must match: the sky files' builder, with the platform's clamps. */
+function cpuSkyFor(environment: ProceduralEnvironment): ReturnType<typeof buildCalibratedSky> {
+    return buildCalibratedSky({
+        sunDirection: liftSunAboveMinimum(environment.sunDirection),
+        turbidity: Math.min(MAX_TURBIDITY, Math.max(MIN_TURBIDITY, environment.turbidity ?? DEFAULT_TURBIDITY)),
+        sunIlluminance: environment.sunIlluminance ?? 1,
+        intensity: environment.intensity ?? 1,
+    });
+}
+
+/**
+ * The CPU sky (image order, 512 x 256) box filtered to the radiance map's
+ * texels in texture order (row 0 the nadir), as the bake's resample filters
+ * a 512 x 256 source: the 2 x 2 source texels in each map texel, weighted by
+ * cos(latitude) at their centres. RGB per texel.
+ */
+function cpuRadianceMap(sky: ReturnType<typeof buildCalibratedSky>): Float64Array {
+    const { width, height, halves } = sky.image;
+    const across = width / RADIANCE_MAP_WIDTH;
+    const down = height / RADIANCE_MAP_HEIGHT;
+    const map = new Float64Array(RADIANCE_MAP_WIDTH * RADIANCE_MAP_HEIGHT * 3);
+    for (let row = 0; row < RADIANCE_MAP_HEIGHT; row++) {
+        for (let column = 0; column < RADIANCE_MAP_WIDTH; column++) {
+            let weightSum = 0;
+            const sum = [0, 0, 0];
+            for (let j = 0; j < down; j++) {
+                // The source row in texture order, its latitude at the centre, and its row in the image.
+                const sourceRow = row * down + j;
+                const weight = Math.cos(((sourceRow + 0.5) / height - 0.5) * Math.PI);
+                const imageRow = height - 1 - sourceRow;
+                for (let i = 0; i < across; i++) {
+                    const base = (imageRow * width + column * across + i) * 3;
+                    for (let channel = 0; channel < 3; channel++) sum[channel] += halfToFloat(halves[base + channel]) * weight;
+                    weightSum += weight;
+                }
+            }
+            for (let channel = 0; channel < 3; channel++) map[(row * RADIANCE_MAP_WIDTH + column) * 3 + channel] = sum[channel] / weightSum;
+        }
+    }
+    return map;
+}
+
+/** Every radiance-map texel's centre as a direction, texel by texel in texture order. */
+function radianceMapTexelDirections(): Vec3[] {
+    const directions: Vec3[] = [];
+    for (let row = 0; row < RADIANCE_MAP_HEIGHT; row++) {
+        for (let column = 0; column < RADIANCE_MAP_WIDTH; column++) directions.push(textureEquirectDirection((column + 0.5) / RADIANCE_MAP_WIDTH, (row + 0.5) / RADIANCE_MAP_HEIGHT));
+    }
+    return directions;
+}
+
+interface MapComparison {
+    /** Per channel: the sum of the GPU's texels over the CPU's, minus 1. */
+    meanError: Vec3;
+    /** The worst texel: its largest relative error per channel (a channel black on the CPU: over the texel's brightest). */
+    worstTexelError: number;
+    worstTexel: { column: number; row: number; gpu: Vec3; cpu: Vec3 };
+    /** The mean of every lit texel's error, the same measure. */
+    meanTexelError: number;
+    /** Texels black on the CPU (below the horizon) that aren't black on the GPU. */
+    litBelowHorizon: number;
+}
+
+function compareMaps(gpu: readonly Vec3[], cpu: Float64Array): MapComparison {
+    const gpuSum = [0, 0, 0];
+    const cpuSum = [0, 0, 0];
+    let worst = 0;
+    let worstIndex = 0;
+    let errorSum = 0;
+    let lit = 0;
+    let litBelowHorizon = 0;
+    gpu.forEach((texel, index) => {
+        const reference: Vec3 = [cpu[index * 3], cpu[index * 3 + 1], cpu[index * 3 + 2]];
+        const brightest = Math.max(...reference);
+        for (let channel = 0; channel < 3; channel++) {
+            gpuSum[channel] += texel[channel];
+            cpuSum[channel] += reference[channel];
+        }
+        if (brightest === 0) {
+            if (texel.some((value) => value !== 0)) litBelowHorizon++;
+            return;
+        }
+        // Each channel against itself; a channel the gamut clamp took to 0 on the CPU against the texel's brightest.
+        const error = Math.max(...texel.map((value, channel) => Math.abs(value - reference[channel]) / (reference[channel] > 0 ? reference[channel] : brightest)));
+        errorSum += error;
+        lit++;
+        if (error > worst) {
+            worst = error;
+            worstIndex = index;
+        }
+    });
+    const reference: Vec3 = [cpu[worstIndex * 3], cpu[worstIndex * 3 + 1], cpu[worstIndex * 3 + 2]];
+    return {
+        meanError: [gpuSum[0] / cpuSum[0] - 1, gpuSum[1] / cpuSum[1] - 1, gpuSum[2] / cpuSum[2] - 1],
+        worstTexelError: worst,
+        worstTexel: { column: worstIndex % RADIANCE_MAP_WIDTH, row: Math.floor(worstIndex / RADIANCE_MAP_WIDTH), gpu: gpu[worstIndex], cpu: reference },
+        meanTexelError: errorSum / Math.max(1, lit),
+        litBelowHorizon,
+    };
+}
+
+/** The CPU sky's SH (irradiance and radiance), as vec4f rows like the GPU's. */
+function cpuHarmonics(sky: ReturnType<typeof buildCalibratedSky>): Harmonics {
+    const floats = Float64Array.from(sky.image.halves, (half) => halfToFloat(half));
+    const radiance = projectEquirectRadiance(floats, sky.image.width, sky.image.height);
+    const irradiance = convolveWithCosineLobe(radiance);
+    const rows = (coefficients: Float64Array, count: number): Float32Array => {
+        const out = new Float32Array(count * 4);
+        for (let index = 0; index < count; index++) out.set(coefficients.subarray(index * 3, index * 3 + 3), index * 4);
+        return out;
+    };
+    return { irradiance: rows(irradiance, SH_COEFFICIENT_COUNT), radiance: rows(radiance, RADIANCE_SH_COUNT) };
+}
+
+/** T2.6a's skies: low, middle and high suns, clear to hazy, and the brightness numbers. */
+const PROCEDURAL_SKIES: ReadonlyArray<{ name: string; environment: ProceduralEnvironment }> = [
+    { name: 'sun 2 degrees (made at 5), turbidity 2', environment: { type: 'procedural', sunDirection: sunAt(2, 40), turbidity: 2 } },
+    { name: 'sun 12 degrees, turbidity 3', environment: { type: 'procedural', sunDirection: sunAt(12, 200), turbidity: 3 } },
+    { name: 'sun 30 degrees, turbidity 6, sunIlluminance 3', environment: { type: 'procedural', sunDirection: sunAt(30, -75), turbidity: 6, sunIlluminance: 3 } },
+    { name: 'sun 60 degrees, turbidity 10, intensity 0.5', environment: { type: 'procedural', sunDirection: sunAt(60, 130), turbidity: 10, intensity: 0.5 } },
+    { name: 'sun 89 degrees, turbidity 1.7', environment: { type: 'procedural', sunDirection: sunAt(89, 10), turbidity: 1.7 } },
+];
 
 await runGpuTest(
     async ({ device, log }) => {
@@ -436,6 +600,53 @@ await runGpuTest(
             assert(worstRefreshed <= 1e-3, `after the same object was set again, the sky still shows the old contents (off by ${worstRefreshed})`);
             changing.destroy();
             results.projectionsCounted = true;
+
+            // 8. T2.6a: the GPU's procedural sky against the CPU sky.
+            const texelDirections = radianceMapTexelDirections();
+            const proceduralResults: Record<string, unknown> = {};
+            const skies = [{ name: 'open ground (manifest)', environment: platformSkyEnvironment(openGroundManifest) as ProceduralEnvironment }, ...PROCEDURAL_SKIES];
+            for (const { name, environment } of skies) {
+                setEnvironment(environment);
+                const samples = await sampleSky(kernel, [up, ...texelDirections]);
+                const cpuSky = cpuSkyFor(environment);
+                const comparison = compareMaps(samples.radiance.slice(1), cpuRadianceMap(cpuSky));
+                const groundError = samples.irradiance[0].map((value, channel) => value / cpuSky.measured.rgb[channel] - 1);
+                proceduralResults[name] = { ...comparison, groundIrradianceError: groundError.map(percent) };
+                log(
+                    `procedural ${name}: map mean ${comparison.meanError.map(percent).join(' / ')}, texels mean ${percent(comparison.meanTexelError)}, worst ${percent(comparison.worstTexelError)} ` +
+                        `(texel ${comparison.worstTexel.column}, ${comparison.worstTexel.row}); ground irradiance ${groundError.map(percent).join(' / ')} against the CPU sky's own`,
+                );
+                comparison.meanError.forEach((error, channel) => assert(Math.abs(error) <= PROCEDURAL_MEAN_TOLERANCE, `procedural ${name}: channel ${'RGB'[channel]}'s mean is off the CPU sky by ${percent(error)} (limit 0.1%)`));
+                assert(
+                    comparison.worstTexelError <= PROCEDURAL_TEXEL_TOLERANCE,
+                    `procedural ${name}: texel ${comparison.worstTexel.column}, ${comparison.worstTexel.row} is off the CPU sky by ${percent(comparison.worstTexelError)} in a channel (limit 1%)`,
+                );
+                assert(comparison.litBelowHorizon === 0, `procedural ${name}: ${comparison.litBelowHorizon} texels below the horizon aren't black`);
+            }
+            results.procedural = proceduralResults;
+
+            // 9. When a procedural sky re-bakes.
+            const baseSky: ProceduralEnvironment = { type: 'procedural', sunDirection: sunAt(30, 20), turbidity: 3 };
+            setEnvironment(baseSky);
+            const later: ProceduralEnvironment = { ...baseSky, sunDirection: sunAt(30.06, 20), turbidity: 3.01, intensity: 0.99, sunIlluminance: 1.01 };
+            const rebakeCases: Array<[string, ProceduralEnvironment, boolean]> = [
+                ['the same numbers again', { ...baseSky }, false],
+                ['the sun 0.03 degrees higher', { ...baseSky, sunDirection: sunAt(30.03, 20) }, false],
+                ['the sun 0.06 degrees higher than the last bake', { ...baseSky, sunDirection: sunAt(30.06, 20) }, true],
+                ['turbidity 3.01', { ...baseSky, sunDirection: sunAt(30.06, 20), turbidity: 3.01 }, true],
+                ['intensity 0.99', { ...baseSky, sunDirection: sunAt(30.06, 20), turbidity: 3.01, intensity: 0.99 }, true],
+                ['sunIlluminance 1.01', later, true],
+                ['the sun 0.04 degrees along', { ...later, sunDirection: sunAt(30.06, 20.04) }, false],
+                ['0.04 degrees more (0.08 from the last bake)', { ...later, sunDirection: sunAt(30.06, 20.08) }, true],
+            ];
+            for (const [what, environment, expected] of rebakeCases) {
+                const before = sky.projections;
+                setEnvironment(environment);
+                const baked = sky.projections > before;
+                assert(baked === expected, `procedural re-bake rule: ${what} ${baked ? 'baked' : 'did not bake'} (expected ${expected ? 'a bake' : 'none'})`);
+            }
+            results.rebakeRule = rebakeCases.map(([what, , expected]) => `${what}: ${expected ? 'bakes' : 'no bake'}`);
+            log(`procedural re-bake rule: ${rebakeCases.map(([what, , expected]) => `${what} ${expected ? 'bakes' : 'does not'}`).join('; ')}`);
         } finally {
             platform.dispose();
         }
@@ -446,7 +657,8 @@ await runGpuTest(
         const fallback = new PlatformSky(device, { label: 'fallback', reduction: 'workgroup' });
         await fallback.prepare();
         const skyEnvironment: EnvironmentDescriptor = { type: 'texture', texture: skyTexture, layout: 'equirect' };
-        const fallbackSh = await projectStandalone(device, fallback, skyEnvironment);
+        const fallbackHarmonics = await projectStandalone(device, fallback, skyEnvironment);
+        const fallbackSh = fallbackHarmonics.irradiance;
         const cpuSh = convolveWithCosineLobe(projectEquirectRadiance(skyFloats, skyImage.width, skyImage.height));
         const cpuShVec4 = new Float32Array(SH_COEFFICIENT_COUNT * 4);
         for (let index = 0; index < SH_COEFFICIENT_COUNT; index++) cpuShVec4.set(cpuSh.subarray(index * 3, index * 3 + 3), index * 4);
@@ -455,19 +667,46 @@ await runGpuTest(
         log(`SH, workgroup fallback against the CPU projection: largest difference ${(fallbackVsCpu.difference / fallbackVsCpu.scale).toExponential(2)} of the largest coefficient`);
         assert(fallbackVsCpu.difference <= SH_AGREEMENT_TOLERANCE * fallbackVsCpu.scale, 'the fallback SH reduction disagrees with the CPU projection');
         // 2 (continued). The procedural open-ground sky is the sky file, coefficient for coefficient.
-        const proceduralSh = await projectStandalone(device, fallback, platformSkyEnvironment(openGroundManifest));
+        const proceduralSh = (await projectStandalone(device, fallback, platformSkyEnvironment(openGroundManifest))).irradiance;
         const proceduralVsTexture = largestDifference(proceduralSh, fallbackSh);
         results.shProceduralVsTexture = proceduralVsTexture.difference / proceduralVsTexture.scale;
         log(`SH, procedural open ground against the sky file: largest difference ${(proceduralVsTexture.difference / proceduralVsTexture.scale).toExponential(2)}`);
         assert(proceduralVsTexture.difference <= SH_AGREEMENT_TOLERANCE * proceduralVsTexture.scale, 'the procedural open-ground sky differs from the sky file');
+        // 8 (continued). The procedural skies' SH against the CPU projection of the CPU sky, radiance and irradiance.
+        const proceduralShAgreement: Record<string, { irradiance: number; radiance: number }> = {};
+        const fallbackProceduralSh = new Map<string, Harmonics>();
+        for (const { name, environment } of PROCEDURAL_SKIES) {
+            const gpu = await projectStandalone(device, fallback, environment);
+            fallbackProceduralSh.set(name, gpu);
+            const cpu = cpuHarmonics(cpuSkyFor(environment));
+            const irradianceAgreement = largestDifference(gpu.irradiance, cpu.irradiance);
+            const radianceAgreement = largestDifference(gpu.radiance, cpu.radiance, RADIANCE_SH_COUNT);
+            proceduralShAgreement[name] = { irradiance: irradianceAgreement.difference / irradianceAgreement.scale, radiance: radianceAgreement.difference / radianceAgreement.scale };
+            assert(irradianceAgreement.difference <= SH_AGREEMENT_TOLERANCE * irradianceAgreement.scale, `procedural ${name}: the irradiance SH differs from the CPU sky's by ${proceduralShAgreement[name].irradiance.toExponential(2)} of the largest coefficient`);
+            assert(radianceAgreement.difference <= SH_AGREEMENT_TOLERANCE * radianceAgreement.scale, `procedural ${name}: the radiance SH differs from the CPU sky's by ${proceduralShAgreement[name].radiance.toExponential(2)} of the largest coefficient`);
+        }
+        results.proceduralShVsCpu = proceduralShAgreement;
+        log(`SH, procedural skies against the CPU projection of the CPU sky (largest difference over the largest coefficient, irradiance / radiance): ${Object.entries(proceduralShAgreement).map(([name, value]) => `${name} ${value.irradiance.toExponential(1)} / ${value.radiance.toExponential(1)}`).join('; ')}`);
         if (hasSubgroups) {
             const withSubgroups = new PlatformSky(device, { label: 'subgroups', reduction: 'subgroups' });
             await withSubgroups.prepare();
-            const subgroupSh = await projectStandalone(device, withSubgroups, skyEnvironment);
+            const subgroupSh = (await projectStandalone(device, withSubgroups, skyEnvironment)).irradiance;
             const agreement = largestDifference(subgroupSh, fallbackSh);
             results.shSubgroupsVsFallback = agreement.difference / agreement.scale;
             log(`SH, subgroups against the workgroup fallback: largest difference ${(agreement.difference / agreement.scale).toExponential(2)} of the largest coefficient`);
             assert(agreement.difference <= SH_AGREEMENT_TOLERANCE * agreement.scale, 'subgroups and the fallback reduce the sky to different SH');
+            // The procedural skies too: radiance and irradiance (the GPU's own Preetham, and its calibration sum).
+            let worstProcedural = 0;
+            for (const { name, environment } of PROCEDURAL_SKIES) {
+                const withSubgroupsSh = await projectStandalone(device, withSubgroups, environment);
+                const withFallbackSh = fallbackProceduralSh.get(name)!;
+                const irradiance = largestDifference(withSubgroupsSh.irradiance, withFallbackSh.irradiance);
+                const radiance = largestDifference(withSubgroupsSh.radiance, withFallbackSh.radiance, RADIANCE_SH_COUNT);
+                worstProcedural = Math.max(worstProcedural, irradiance.difference / irradiance.scale, radiance.difference / radiance.scale);
+            }
+            results.shSubgroupsVsFallbackProcedural = worstProcedural;
+            log(`SH, procedural skies, subgroups against the fallback: largest difference ${worstProcedural.toExponential(2)} of the largest coefficient`);
+            assert(worstProcedural <= SH_AGREEMENT_TOLERANCE, 'subgroups and the fallback bake the procedural skies to different SH');
             withSubgroups.dispose();
         } else {
             log('this device has no subgroups: only the fallback ran');

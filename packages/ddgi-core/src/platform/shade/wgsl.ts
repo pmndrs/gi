@@ -24,6 +24,7 @@
  */
 
 import type { BindingSlot, ModuleBindingEntry } from '../contract/wgsl.ts';
+import { RADIANCE_SH_COUNT, SKY_HARMONICS_LAYOUT } from '../sky/projection-wgsl.ts';
 import { SH_BASIS_WGSL, SH_COEFFICIENT_COUNT } from '../sky/spherical-harmonics.ts';
 
 /** `GPUShaderStage.COMPUTE`. The global does not exist in Node, where the tests import this file. */
@@ -37,16 +38,19 @@ export const SHADE_MODULE_ENTRIES: readonly ModuleBindingEntry[] = [
 ];
 
 /**
- * Byte layout of `GiShadeUniforms`: the sky's irradiance SH first (written by
- * the sky projection kernel, which binds that range as storage), then the
- * live settings (written with `queue.writeBuffer`).
+ * Byte layout of `GiShadeUniforms`: the sky's harmonics first (radiance SH
+ * bands 0-2, then irradiance SH; written by the sky bake, which binds that
+ * range as storage, `SKY_HARMONICS_LAYOUT`), then the live settings (written
+ * with `queue.writeBuffer`).
  */
 export const SHADE_UNIFORM_LAYOUT = {
-    skyIrradiance: 0,
-    maxShadowedLightsPerHit: SH_COEFFICIENT_COUNT * 16,
-    bounceAlbedoCap: SH_COEFFICIENT_COUNT * 16 + 4,
+    skyHarmonics: 0,
+    skyRadiance: SKY_HARMONICS_LAYOUT.radiance,
+    skyIrradiance: SKY_HARMONICS_LAYOUT.irradiance,
+    maxShadowedLightsPerHit: SKY_HARMONICS_LAYOUT.byteLength,
+    bounceAlbedoCap: SKY_HARMONICS_LAYOUT.byteLength + 4,
     /** Rounded up to the struct's 16-byte alignment. */
-    byteLength: SH_COEFFICIENT_COUNT * 16 + 16,
+    byteLength: SKY_HARMONICS_LAYOUT.byteLength + 16,
 } as const;
 
 /** The module's source, with its bindings at `slot`. */
@@ -73,6 +77,9 @@ struct GiSurface {
 }
 
 struct GiShadeUniforms {
+    // The sky's radiance as SH, bands 0-2 (platform/sky), for techniques that
+    // follow the sky's own shape (the instant sky). rgb per coefficient; w unused.
+    skyRadiance: array<vec4f, ${RADIANCE_SH_COUNT}>,
     // The sky's irradiance as SH, bands 0, 1, 2 and 4, already convolved with
     // the cosine lobe (platform/sky). rgb per coefficient; w unused.
     skyIrradiance: array<vec4f, ${SH_COEFFICIENT_COUNT}>,
