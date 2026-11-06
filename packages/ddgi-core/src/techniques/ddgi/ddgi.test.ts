@@ -284,6 +284,23 @@ describe('the update order (the scheduler, schedule.ts)', () => {
         expect(new Set([...schedule.priority, ...schedule.roundRobin]).size).toBe(count);
     });
 
+    it('lists no probe waiting for its keys, unless the round robin has nothing else left (T2.4d)', () => {
+        const count = 40;
+        const stride = scrambleStride(count);
+        // Probes 0-29 owe updates and wait for their keys; 30-39 owe nothing.
+        const probes = Array.from({ length: count }, (_, index) => ({ owed: index < 30 ? 1 : 0, priority: 1, waiting: index < 30 }));
+        const short = scheduleOnCpu(probes, 8, 0.75, 0, stride);
+        expect(short.priority).toEqual([]);
+        expect(short.roundRobin.every((probe) => probe >= 30)).toBe(true);
+        expect(short.roundRobin.length).toBe(8);
+        // A list longer than the probes not waiting: those first, then waiting ones, none twice.
+        const long = scheduleOnCpu(probes, 16, 0.75, 0, stride);
+        expect(long.roundRobin.length).toBe(16);
+        expect(new Set(long.roundRobin).size).toBe(16);
+        expect(long.roundRobin.slice(0, 10).every((probe) => probe >= 30)).toBe(true);
+        expect(long.roundRobin.slice(10).every((probe) => probe < 30)).toBe(true);
+    });
+
     it('sorts priorities into buckets twice as urgent as the one below', () => {
         expect(priorityBucket(1)).toBe(PRIORITY_BUCKET_OFFSET);
         expect(priorityBucket(2)).toBe(PRIORITY_BUCKET_OFFSET + 1);

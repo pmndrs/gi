@@ -292,7 +292,14 @@ export const DEFAULT_FAR_PROBE_UPDATES = 2;
 export const DEFAULT_KEY_PROBE_BOOST = 4;
 /** `keyResidualShare` by default (m2-lights.md §4.5). */
 export const DEFAULT_KEY_RESIDUAL_SHARE = 0.3;
-/** `keyProbeUpdates` by default (m2-lights.md §4.5): every key out of the view's core owes 4 after a global change. */
+/**
+ * `keyProbeUpdates` by default (m2-lights.md §4.5): every key out of the
+ * view's core owes 4 after a change, on a volume whose keys couldn't all get
+ * the full count within FAR_RULE_FRAMES (Sponza: 2,717 keys). Where they can
+ * (the furnished room: 792 keys at 428 priority slots a frame), every key
+ * owes the full count instead (T2.4d): the keys are the level that carries
+ * the bounces, and a room's bounces need about 14 updates at ρ 0.8.
+ */
 export const DEFAULT_KEY_PROBE_UPDATES = 4;
 /**
  * Updates a fine probe waiting for its keys owes (m2-lights.md §4.5's
@@ -304,12 +311,44 @@ export const FINE_PROBE_UPDATES = 1;
 /**
  * Key probes and propagation (T2.4c), or with `keyProbes` off "far probes
  * owe 2", apply when giving every probe K updates at this frame's batch
- * would take more than this many frames (`N × K / units`; m2-lights.md §6.4:
- * 2 s at 60 Hz). Counted in frames, so the rule doesn't depend on the host's
- * frame rate. Sponza (19,425 probes, about 290 a frame) needs about 540
- * frames, so it applies there; two-room (12) and Cornell (9) don't.
+ * would take more than this many frames (`N × K / units`). Counted in
+ * frames, so the rule doesn't depend on the host's frame rate.
+ *
+ * 30, the response target's 0.5 s at 60 Hz (T2.4d, DECISIONS 2026-11-06;
+ * m2-lights.md §6.4 had 120, 2 s): where every probe's K updates don't fit in
+ * the time the view has to respond, a global change has to reach the field
+ * through the coarse level first. The furnished room (4,998 probes, 571 a
+ * frame: 70 frames) takes the key path now, Sponza (about 250) as before;
+ * two-room (10) and Cornell (9) don't. The same window decides whether every
+ * key can owe its full count (DEFAULT_KEY_PROBE_UPDATES).
  */
-export const FAR_RULE_FRAMES = 120;
+export const FAR_RULE_FRAMES = 30;
+
+/**
+ * How long a fine probe waiting for its keys' change may go untraced, in
+ * frames since `ddgi/mark` flagged it (T2.4d). Its keys usually take the
+ * change in within about 15 frames; the bound is for changes that keep going
+ * (a day passing re-marks the keys every frame, so they never finish) and for
+ * keys the priority share doesn't reach. 30, the response target's 0.5 s at
+ * 60 Hz: during a long change every fine probe is still traced about twice a
+ * second, with its keys' change passed to it in between.
+ */
+export const KEY_WAIT_FRAMES = 30;
+
+/**
+ * Changes continue (§4.5's second count, T2.4d) once `ddgi/mark` has run in
+ * this many frames in a row: a sun moving through a day, a lamp swinging, a
+ * door swinging. A single step is not a continuing change: its response is
+ * judged at the calibrated count.
+ */
+export const CONTINUING_CHANGE_FRAMES = 30;
+
+/**
+ * While changes continue, the batch is at least this share of the hand-out,
+ * whatever the rays say: a guard against a census that reads oddly, not a
+ * tuned number (the day on Sponza needs about 0.63).
+ */
+export const CONTINUING_CHANGE_MIN_SHARE = 0.5;
 
 /**
  * The camera weight's distance falloff, in probe spacings (m2-lights.md
