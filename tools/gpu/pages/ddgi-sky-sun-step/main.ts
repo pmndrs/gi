@@ -51,7 +51,7 @@ function listFromEnv(value: unknown, fallback: readonly string[]): string[] {
 
 const SCENE_ID = 'furnished-room';
 /** The furnished room's batch at Budget v2's 2 ms on the RTX 3060 (T2.6a's VALID calibration, PROGRESS). */
-const DEFAULT_UNITS = 1000;
+const DEFAULT_UNITS = 571;
 const UNITS = Number(env.VITE_DDGI_UNITS ?? DEFAULT_UNITS);
 const BOOKMARKS = listFromEnv(env.VITE_DDGI_BOOKMARKS, ['1', '2']).map(Number);
 const SUN_STEP_DEGREES = 30;

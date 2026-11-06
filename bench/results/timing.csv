@@ -11367,3 +11367,73 @@ date,commit,device,browser,scene,metric,value
 2026-11-06,c234c10,RTX 3060 Laptop,Chrome 156.0.8078.80 headless,sponza,key_probes_cost/day/markMedian,0.0154
 2026-11-06,c234c10,RTX 3060 Laptop,Chrome 156.0.8078.80 headless,sponza,key_probes_cost/day/bar,2.2
 2026-11-06,c234c10,RTX 3060 Laptop,Chrome 156.0.8078.80 headless,sponza,note/timing_valid,1
+2026-11-06,f6175f6,RTX 3060 Laptop,Chrome 156.0.8078.80 headless,furnished-room,batch_cost/deferred/probes_in_volume,4998
+2026-11-06,f6175f6,RTX 3060 Laptop,Chrome 156.0.8078.80 headless,furnished-room,batch_cost/deferred/startup/probes,4998
+2026-11-06,f6175f6,RTX 3060 Laptop,Chrome 156.0.8078.80 headless,furnished-room,batch_cost/deferred/startup/load_files_ms,584.3
+2026-11-06,f6175f6,RTX 3060 Laptop,Chrome 156.0.8078.80 headless,furnished-room,batch_cost/deferred/startup/scene_shown_from_load_ms,584.3
+2026-11-06,f6175f6,RTX 3060 Laptop,Chrome 156.0.8078.80 headless,furnished-room,batch_cost/deferred/startup/prepare_ms,1002.4
+2026-11-06,f6175f6,RTX 3060 Laptop,Chrome 156.0.8078.80 headless,furnished-room,batch_cost/deferred/startup/scene_copy_cpu_ms,144.7
+2026-11-06,f6175f6,RTX 3060 Laptop,Chrome 156.0.8078.80 headless,furnished-room,batch_cost/deferred/startup/trees_ms,208.9
+2026-11-06,f6175f6,RTX 3060 Laptop,Chrome 156.0.8078.80 headless,furnished-room,batch_cost/deferred/startup/first_gi_step_from_load_ms,2088.8
+2026-11-06,f6175f6,RTX 3060 Laptop,Chrome 156.0.8078.80 headless,furnished-room,batch_cost/deferred/startup/first_gi_shown_from_load_ms,2271
+2026-11-06,f6175f6,RTX 3060 Laptop,Chrome 156.0.8078.80 headless,furnished-room,batch_cost/deferred/startup/first_pass_from_load_ms,2332.5
+2026-11-06,f6175f6,RTX 3060 Laptop,Chrome 156.0.8078.80 headless,furnished-room,batch_cost/deferred/startup/settled_from_load_ms,2770.3
+2026-11-06,f6175f6,RTX 3060 Laptop,Chrome 156.0.8078.80 headless,furnished-room,batch_cost/deferred/startup/first_gi_step_from_creation_ms,1504.5
+2026-11-06,f6175f6,RTX 3060 Laptop,Chrome 156.0.8078.80 headless,furnished-room,batch_cost/deferred/startup/first_gi_shown_from_creation_ms,1686.7
+2026-11-06,f6175f6,RTX 3060 Laptop,Chrome 156.0.8078.80 headless,furnished-room,batch_cost/deferred/startup/first_pass_from_creation_ms,1748.2
+2026-11-06,f6175f6,RTX 3060 Laptop,Chrome 156.0.8078.80 headless,furnished-room,batch_cost/deferred/startup/settled_from_creation_ms,2186
+2026-11-06,f6175f6,RTX 3060 Laptop,Chrome 156.0.8078.80 headless,furnished-room,batch_cost/deferred/startup/warmup_ms,829.8
+2026-11-06,f6175f6,RTX 3060 Laptop,Chrome 156.0.8078.80 headless,furnished-room,batch_cost/deferred/startup/warmup_steps,20
+2026-11-06,f6175f6,RTX 3060 Laptop,Chrome 156.0.8078.80 headless,furnished-room,batch_cost/deferred/startup/warmup_passes,16.39
+2026-11-06,f6175f6,RTX 3060 Laptop,Chrome 156.0.8078.80 headless,furnished-room,batch_cost/deferred/startup/calibrated_from_load_ms,3932.7
+2026-11-06,f6175f6,RTX 3060 Laptop,Chrome 156.0.8078.80 headless,furnished-room,batch_cost/deferred/startup/calibration_ms,1162.4
+2026-11-06,f6175f6,RTX 3060 Laptop,Chrome 156.0.8078.80 headless,furnished-room,batch_cost/deferred/startup/calibration_steps,423
+2026-11-06,f6175f6,RTX 3060 Laptop,Chrome 156.0.8078.80 headless,furnished-room,batch_cost/deferred/startup/calibration_frames,121
+2026-11-06,f6175f6,RTX 3060 Laptop,Chrome 156.0.8078.80 headless,furnished-room,batch_cost/deferred/startup/calibrated_probes,571
+2026-11-06,f6175f6,RTX 3060 Laptop,Chrome 156.0.8078.80 headless,furnished-room,batch_cost/deferred/startup/calibration_fixed_ms,-0.8344
+2026-11-06,f6175f6,RTX 3060 Laptop,Chrome 156.0.8078.80 headless,furnished-room,batch_cost/deferred/startup/calibration_us_per_probe,4.96
+2026-11-06,f6175f6,RTX 3060 Laptop,Chrome 156.0.8078.80 headless,furnished-room,batch_cost/deferred/startup/calibration_spread,0.1638
+2026-11-06,f6175f6,RTX 3060 Laptop,Chrome 156.0.8078.80 headless,furnished-room,batch_cost/deferred/startup/calibration_sizes,4
+2026-11-06,f6175f6,RTX 3060 Laptop,Chrome 156.0.8078.80 headless,furnished-room,batch_cost/deferred/startup/calibration_filler_frames,0
+2026-11-06,f6175f6,RTX 3060 Laptop,Chrome 156.0.8078.80 headless,furnished-room,batch_cost/deferred/startup/calibration_confirm_factor,1
+2026-11-06,f6175f6,RTX 3060 Laptop,Chrome 156.0.8078.80 headless,furnished-room,batch_cost/deferred/startup/compile_ms/ddgi/trace (deferred direct light, subgroups),982.6
+2026-11-06,f6175f6,RTX 3060 Laptop,Chrome 156.0.8078.80 headless,furnished-room,batch_cost/deferred/startup/compile_ms/gi/direct,652.1
+2026-11-06,f6175f6,RTX 3060 Laptop,Chrome 156.0.8078.80 headless,furnished-room,batch_cost/deferred/startup/compile_ms/ddgi/blend (subgroups),644.6
+2026-11-06,f6175f6,RTX 3060 Laptop,Chrome 156.0.8078.80 headless,furnished-room,batch_cost/deferred/startup/compile_ms/ddgi/mark (subgroups),537.4
+2026-11-06,f6175f6,RTX 3060 Laptop,Chrome 156.0.8078.80 headless,furnished-room,batch_cost/deferred/startup/compile_ms/ddgi/propagate (subgroups),442.4
+2026-11-06,f6175f6,RTX 3060 Laptop,Chrome 156.0.8078.80 headless,furnished-room,batch_cost/deferred/startup/compile_ms/ddgi/schedule-fill (subgroups),262.8
+2026-11-06,f6175f6,RTX 3060 Laptop,Chrome 156.0.8078.80 headless,furnished-room,batch_cost/deferred/startup/compile_ms/sky partial sums,176.5
+2026-11-06,f6175f6,RTX 3060 Laptop,Chrome 156.0.8078.80 headless,furnished-room,batch_cost/deferred/startup/compile_ms/sky resample (unfilterable),175.9
+2026-11-06,f6175f6,RTX 3060 Laptop,Chrome 156.0.8078.80 headless,furnished-room,batch_cost/deferred/startup/compile_ms/sky SH sum,164.9
+2026-11-06,f6175f6,RTX 3060 Laptop,Chrome 156.0.8078.80 headless,furnished-room,batch_cost/deferred/startup/compile_ms/sky resample,164.9
+2026-11-06,f6175f6,RTX 3060 Laptop,Chrome 156.0.8078.80 headless,furnished-room,batch_cost/deferred/v2_budget2ms/budget_ms,2
+2026-11-06,f6175f6,RTX 3060 Laptop,Chrome 156.0.8078.80 headless,furnished-room,batch_cost/deferred/v2_budget2ms/calibrated_probes,571
+2026-11-06,f6175f6,RTX 3060 Laptop,Chrome 156.0.8078.80 headless,furnished-room,batch_cost/deferred/v2_budget2ms/probes_run,571
+2026-11-06,f6175f6,RTX 3060 Laptop,Chrome 156.0.8078.80 headless,furnished-room,batch_cost/deferred/v2_budget2ms/all_probes_fit,0
+2026-11-06,f6175f6,RTX 3060 Laptop,Chrome 156.0.8078.80 headless,furnished-room,batch_cost/deferred/v2_budget2ms/floor_binds,0
+2026-11-06,f6175f6,RTX 3060 Laptop,Chrome 156.0.8078.80 headless,furnished-room,batch_cost/deferred/v2_budget2ms/frame_interval_ms_median,3
+2026-11-06,f6175f6,RTX 3060 Laptop,Chrome 156.0.8078.80 headless,furnished-room,batch_cost/deferred/v2_budget2ms/update_ms_median,1.8289
+2026-11-06,f6175f6,RTX 3060 Laptop,Chrome 156.0.8078.80 headless,furnished-room,batch_cost/deferred/v2_budget2ms/update_ms_p05,1.6906
+2026-11-06,f6175f6,RTX 3060 Laptop,Chrome 156.0.8078.80 headless,furnished-room,batch_cost/deferred/v2_budget2ms/update_ms_p95,1.9999
+2026-11-06,f6175f6,RTX 3060 Laptop,Chrome 156.0.8078.80 headless,furnished-room,batch_cost/deferred/v2_budget2ms/update_over_budget_share,-0.0856
+2026-11-06,f6175f6,RTX 3060 Laptop,Chrome 156.0.8078.80 headless,furnished-room,batch_cost/deferred/v2_budget2ms/timed_frames,468
+2026-11-06,f6175f6,RTX 3060 Laptop,Chrome 156.0.8078.80 headless,furnished-room,batch_cost/deferred/v2_budget2ms/probes_median,571
+2026-11-06,f6175f6,RTX 3060 Laptop,Chrome 156.0.8078.80 headless,furnished-room,batch_cost/deferred/v2_budget2ms/probes_p05,571
+2026-11-06,f6175f6,RTX 3060 Laptop,Chrome 156.0.8078.80 headless,furnished-room,batch_cost/deferred/v2_budget2ms/probes_p95,571
+2026-11-06,f6175f6,RTX 3060 Laptop,Chrome 156.0.8078.80 headless,furnished-room,batch_cost/deferred/v2_budget2ms/frames_stepped_down,0
+2026-11-06,f6175f6,RTX 3060 Laptop,Chrome 156.0.8078.80 headless,furnished-room,batch_cost/deferred/v2_budget2ms/frames_calibrating,0
+2026-11-06,f6175f6,RTX 3060 Laptop,Chrome 156.0.8078.80 headless,furnished-room,batch_cost/deferred/v2_budget2ms/floor_probes_at_60hz,21
+2026-11-06,f6175f6,RTX 3060 Laptop,Chrome 156.0.8078.80 headless,furnished-room,batch_cost/deferred/v2_budget2ms/probes_per_frame_at_60hz,571
+2026-11-06,f6175f6,RTX 3060 Laptop,Chrome 156.0.8078.80 headless,furnished-room,batch_cost/deferred/v2_budget2ms/sweep_s_at_60hz,0.15
+2026-11-06,f6175f6,RTX 3060 Laptop,Chrome 156.0.8078.80 headless,furnished-room,batch_cost/deferred/v2_budget2ms/calibration_fixed_ms,-0.8344
+2026-11-06,f6175f6,RTX 3060 Laptop,Chrome 156.0.8078.80 headless,furnished-room,batch_cost/deferred/v2_budget2ms/calibration_us_per_probe,4.96
+2026-11-06,f6175f6,RTX 3060 Laptop,Chrome 156.0.8078.80 headless,furnished-room,batch_cost/deferred/v2_budget2ms/gi_direct_ms_median,0.4593
+2026-11-06,f6175f6,RTX 3060 Laptop,Chrome 156.0.8078.80 headless,furnished-room,batch_cost/deferred/v2_budget2ms/gi_direct_hits_per_probe,121.83
+2026-11-06,f6175f6,RTX 3060 Laptop,Chrome 156.0.8078.80 headless,furnished-room,batch_cost/deferred/v2_budget2ms/gi_direct_mhits_per_s,151.47
+2026-11-06,f6175f6,RTX 3060 Laptop,Chrome 156.0.8078.80 headless,all,note/sm_clock_mhz,1860
+2026-11-06,f6175f6,RTX 3060 Laptop,Chrome 156.0.8078.80 headless,all,note/sm_clock_min_mhz,352
+2026-11-06,f6175f6,RTX 3060 Laptop,Chrome 156.0.8078.80 headless,all,note/sm_clock_max_mhz,1890
+2026-11-06,f6175f6,RTX 3060 Laptop,Chrome 156.0.8078.80 headless,all,note/mem_clock_mhz,7151
+2026-11-06,f6175f6,RTX 3060 Laptop,Chrome 156.0.8078.80 headless,all,note/start_temp_c,56
+2026-11-06,f6175f6,RTX 3060 Laptop,Chrome 156.0.8078.80 headless,all,note/thermal_share,0
+2026-11-06,f6175f6,RTX 3060 Laptop,Chrome 156.0.8078.80 headless,all,note/timing_valid,1

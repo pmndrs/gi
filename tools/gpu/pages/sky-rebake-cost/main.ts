@@ -38,14 +38,14 @@ const CPU_BAR_MS = 0.05;
 /** Frames before measuring, so the clocks are up and the field has started. */
 const WARM_FRAMES = 120;
 const BAKE_FRAMES = 600;
-const FRAMES_IN_FLIGHT = 2;
+const FRAMES_IN_FLIGHT = 3;
 const CPU_BAKES = 2000;
 /** More than the 0.05-degree threshold, so every step re-bakes. */
 const STEP_DEGREES = 0.1;
 const SUN_ELEVATION_DEGREES = 35;
-/** The busy pass: workgroups of 64 threads, and multiply-adds per thread (about 1 ms on the RTX 3060). */
+/** The busy pass: workgroups of 64 threads, and multiply-adds per thread (a few ms on the RTX 3060, so the clock rule sees it loaded). */
 const BUSY_WORKGROUPS = 1024;
-const BUSY_ITERATIONS = 40000;
+const BUSY_ITERATIONS = 200000;
 
 const BUSY_WGSL = /* wgsl */ `
 @group(0) @binding(0) var<storage, read_write> sink: array<f32>;
