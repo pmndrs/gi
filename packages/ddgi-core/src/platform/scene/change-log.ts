@@ -213,6 +213,42 @@ export class ChangeLog {
     }
 }
 
+/**
+ * Two frames' changes as one, `earlier` first: for frames a technique didn't
+ * see (the budget was paused), so it gets them all at its next frame instead
+ * of losing them. A light changed in both keeps its state from before the
+ * earlier frame and its state after the later one; if that comes back to
+ * where it began, it is left out, as within a frame. Past
+ * MAX_LISTED_LIGHT_CHANGES the merged list overflows like a single frame's.
+ */
+export function mergeSceneChanges(earlier: SceneChanges, later: SceneChanges): SceneChanges {
+    const lights = new Map<LightHandle, LightChange>();
+    for (const change of earlier.lights) lights.set(change.light, change);
+    for (const change of later.lights) {
+        const first = lights.get(change.light);
+        if (!first) {
+            lights.set(change.light, change);
+            continue;
+        }
+        const merged: LightChange = { ...change, before: first.before, influenceRadius: { before: first.influenceRadius.before, after: change.influenceRadius.after } };
+        const unchanged = (!merged.before && !merged.after) || (merged.before && merged.after && sameLight(merged.before, merged.after));
+        if (unchanged) lights.delete(change.light);
+        else lights.set(change.light, merged);
+    }
+    const lightsOverflowed = earlier.lightsOverflowed || later.lightsOverflowed || lights.size > MAX_LISTED_LIGHT_CHANGES;
+    const global = new Set([...earlier.global, ...later.global]);
+    if (lightsOverflowed) global.add('lights');
+    let regions = [...earlier.regions, ...later.regions];
+    if (regions.length > MAX_DIRTY_REGIONS) regions = mergeByReason(regions);
+    return {
+        regions,
+        global: [...global],
+        movedReceivers: earlier.movedReceivers + later.movedReceivers,
+        lights: lightsOverflowed ? [] : [...lights.values()],
+        lightsOverflowed,
+    };
+}
+
 function mergeByReason(regions: readonly DirtyRegion[]): DirtyRegion[] {
     const boxes = new Map<ChangeReason, number[]>();
     for (const region of regions) {
