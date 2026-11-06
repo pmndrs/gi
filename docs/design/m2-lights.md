@@ -146,6 +146,16 @@ So the gain in probes per frame is unknown, somewhere between "little" and "abou
 
 Bindings: `gi/direct` = tracer 3 + scene copy and shading 2 + ray scratch 1 + light grid 1 = **7**.
 
+**As built (T2.2, 2026-11-06; `platform/shade/direct.ts`, contract in `contract/shade.ts`).** Where it differs from the sketch above:
+
+- **The work item is 32 bytes:** position (f32 × 3), the two octahedral normals, albedo as unorm16 per channel over a power-of-two scale (so a cap above 1 fits), and the ray's index. 10:10:10 albedo rounded by up to 0.75% of a dark channel (T2.0's fixed 0.03% offset); unorm16 rounds by at most 0.012% of it (DECISIONS 2026-11-06).
+- **Rounds cover the trace and `gi/direct` only.** Batches above 1,024 probes trace in rounds (one `ddgi/trace` and one `gi/direct` pass each, the round's slots in a uniform picked with a dynamic offset), so the work list holds one round (7.3 MB). Ray results stay sized for the whole batch, as in M1, and `ddgi/blend` and `ddgi/write` run once.
+- **The scratch's layout:** a 256-byte header (the count, this frame's number and light groups, the frame's counts of hits lit and dropped), the ray results, then the work list. `ddgi/blend` binds the results alone, as before. The indirect dispatch arguments live in a small platform buffer, since `gi/direct` binds the scratch as writable storage and a buffer can't be that and the indirect buffer of one dispatch.
+- **Only hits a light can reach are listed** (`giDirectReaches`, the unshadowed test, no rays): 39 of Sponza's 81 blended front-face hits a probe.
+- **`gi/direct` rounds its sum to halves stochastically.** The result goes through half floats twice on this path, and `pack2x16float` truncates on the RTX 3060 (−0.035% a store).
+- **Light selection is still `giDirectIrradiance`,** called by `gi/direct` on the rebuilt surface; `giDirectLightSamples` comes with T2.3's grid. The inline path draws its numbers with `giDirectRandom` as `gi/direct` does, so the two fields compare texel by texel.
+- Storage buffers: `ddgi/trace` 7 (unchanged), `gi/direct` 6 (7 with T2.3's grid).
+
 ## 3. Many lights: a world-space grid of light candidates (ReGIR-style)
 
 **Today:** `giDirectIrradiance` loops over every local light twice: first to find which lights reach the hit and how much, then to pick `maxShadowedLightsPerHit` (4) of them by systematic sampling. It decides *per hit* whether to sample, from how many lights reach that hit. The cost per hit grows with the light count. With 1,024 candles, 512 probes × 224 rays × 2 × 1,024 is 235 M light evaluations per frame, which doesn't fit.
