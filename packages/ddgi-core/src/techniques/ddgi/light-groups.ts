@@ -39,10 +39,12 @@ export const ALL_LIGHT_GROUPS_MASK = (1 << MAX_LIGHT_GROUPS) - 1;
 
 /**
  * The most irradiance layers a volume keeps: four groups and the environment,
- * with room for T2.6b's sun layer. The compose weights uniform is sized for
- * it, and the ray scratch allows 8 result layers.
+ * with room for T2.6b's sun layer. `ddgi/blend` keeps every layer's texel
+ * estimates and old values in workgroup memory beside the rays' directions:
+ * 8 KB + 1,152 bytes a layer at 6×6 texels, 14.9 KB at 6 layers, within the
+ * 16 KB default. The compose weights uniform is sized for it.
  */
-export const MAX_IRRADIANCE_LAYERS = 8;
+export const MAX_IRRADIANCE_LAYERS = 6;
 
 /**
  * `DDGISettings.lightGroups`: light groups on, how many, and their weights.

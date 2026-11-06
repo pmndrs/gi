@@ -90,8 +90,12 @@ function median(values: readonly number[]): number {
     return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
 }
 
-/** Runs `frames` frames of `units` probes GPU-bound; returns each timed frame's update ms (every update pass summed). */
-async function timedFrames(scene: ViewerScene, units: number, frames: number): Promise<number[]> {
+/**
+ * Runs `frames` frames of `units` probes GPU-bound; returns each timed frame's
+ * update ms (every update pass summed). Each pass's own ms per timed frame
+ * go into `byPass` when given (a breakdown, reported).
+ */
+async function timedFrames(scene: ViewerScene, units: number, frames: number, byPass?: Map<string, number[]>): Promise<number[]> {
     const byFrame = new Map<number, number>();
     const pending: Promise<void>[] = [];
     const collect = (): void => {
@@ -99,7 +103,13 @@ async function timedFrames(scene: ViewerScene, units: number, frames: number): P
         if (passes.length === 0) return;
         // A frame's passes arrive together: the newest timed frame only.
         const frame = passes[0].frame;
-        byFrame.set(frame, passes.filter((pass) => pass.frame === frame).reduce((sum, pass) => sum + (pass.gpuMs ?? 0), 0));
+        if (byFrame.has(frame)) return;
+        const ofFrame = passes.filter((pass) => pass.frame === frame);
+        byFrame.set(frame, ofFrame.reduce((sum, pass) => sum + (pass.gpuMs ?? 0), 0));
+        // Passes that run more than once a frame (rounds) are summed.
+        const perName = new Map<string, number>();
+        for (const pass of ofFrame) perName.set(pass.name, (perName.get(pass.name) ?? 0) + (pass.gpuMs ?? 0));
+        for (const [name, ms] of perName) byPass?.set(name, [...(byPass.get(name) ?? []), ms]);
     };
     for (let index = 0; index < frames; index++) {
         scene.frame({ units }, 0);
@@ -153,6 +163,7 @@ await runThreePage(async ({ device, data, log: logLine }) => {
         });
         const settings = scene.ddgi.settings as unknown as Record<string, unknown>;
         const times = new Map<string, number[]>();
+        const passTimes = new Map<string, Map<string, number[]>>();
         const memory: Record<string, number> = {};
         for (let round = 0; round < ROUNDS; round++) {
             const order = round % 2 === 0 ? CONFIGS : [...CONFIGS].reverse();
@@ -164,7 +175,8 @@ await runThreePage(async ({ device, data, log: logLine }) => {
                 memory[String(groups)] = scene.ddgi.memoryBytes;
                 for (const batch of BATCHES) {
                     const key = `${groups}/${batch}`;
-                    times.set(key, [...(times.get(key) ?? []), ...(await timedFrames(scene, batch, FRAMES_PER_BATCH))]);
+                    if (!passTimes.has(key)) passTimes.set(key, new Map());
+                    times.set(key, [...(times.get(key) ?? []), ...(await timedFrames(scene, batch, FRAMES_PER_BATCH, passTimes.get(key)))]);
                 }
             }
         }
@@ -178,7 +190,8 @@ await runThreePage(async ({ device, data, log: logLine }) => {
                 assert(frames.length >= (FRAMES_PER_BATCH * ROUNDS) / 3, `${sceneId}: only ${frames.length} timed frames for ${groups} groups at ${batch}`);
                 const ms = median(frames);
                 const offMs = median(times.get(`0/${batch}`) ?? [NaN]);
-                byBatch[batch] = { updateMs: ms, usPerProbe: (ms * 1000) / batch, againstGroupsOff: ms / offMs, timedFrames: frames.length };
+                const passes = Object.fromEntries([...(passTimes.get(`${groups}/${batch}`) ?? new Map<string, number[]>())].map(([name, values]) => [name, median(values)]));
+                byBatch[batch] = { updateMs: ms, usPerProbe: (ms * 1000) / batch, againstGroupsOff: ms / offMs, timedFrames: frames.length, passes };
                 log(`${sceneId} ${groups === 0 ? 'groups off' : `${groups} groups`} at ${batch}: update ${ms.toFixed(3)} ms, ${((ms * 1000) / batch).toFixed(3)} µs a probe, ${(ms / offMs).toFixed(3)}× groups off (${frames.length} frames)`);
             }
             perConfig[groups === 0 ? 'off' : `${groups} groups`] = { batches: byBatch, memoryBytes: memory[String(groups)] };

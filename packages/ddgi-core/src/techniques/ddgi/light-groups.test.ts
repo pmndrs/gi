@@ -89,7 +89,8 @@ describe('light groups: the layout', () => {
         const scratch = scratchLayout(6, 14, 3);
         const blend = blendKernelWgsl({ irradianceTexels: 6, distanceTexels: 14, scratch, reduction: 'workgroup' });
         expect(blend).toContain('const DDGI_IRRADIANCE_LAYERS: u32 = 3u;');
-        expect(blend).toContain('for (var turn = 0u; turn < DDGI_IRRADIANCE_LAYERS; turn++)');
+        expect(blend).toContain('let packed = ddgiRays[ddgiRayResult(slot, ray, layer)];');
+        expect(blend).not.toContain('var<workgroup> ddgiRayRadiance');
         const write = writeKernelWgsl({ irradianceTexels: 6, distanceTexels: 14, scratch, distanceFormat: 'rg16float' });
         expect(write).toContain('const DDGI_IRRADIANCE_LAYERS: u32 = 3u;');
         const propagate = propagateKernelWgsl({ irradianceTexels: 6, irradianceLayers: 3, reduction: 'workgroup', listCapacity: 10 });
