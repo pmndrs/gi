@@ -645,6 +645,8 @@ This applies only to volumes where 8 updates for every probe wouldn't fit in 2 s
 
 ### 6.5 Re-tracing alone, or with the instant sky: the comparison
 
+*As built (T2.6b, DECISIONS 2026-11-07):* **the instant sky was dropped** by its decision check (52.8% on the furnished room, 35.6% on Sponza, against 70%). On the furnished room 91% of the change is sky light bounced through the window, which no first-order transfer can follow. Re-tracing nearest the camera (T2.4b–d) with the sun layer is the path. The code stays on branch `m2-t2.6b` (d26cb01) as the record.
+
 On Sponza, on the RTX, at T1.9b's 268 probes a frame:
 
 | | Re-tracing near the camera, with the sun layer | The same, plus the first-order sky transfer |
