@@ -42,6 +42,9 @@ const K_VALUES = typeof env.VITE_DDGI_K === 'string' && env.VITE_DDGI_K !== '' ?
 const SMALL_BATCH = 64;
 const LARGE_BATCH = 512;
 const FRAMES = 60;
+/** Frames of WARM_BATCH probes before timing: about two passes over Sponza's 19,425 probes. */
+const WARM_FRAMES = 10;
+const WARM_BATCH = 4096;
 /** Frames before timing: probes get classified and lists settle. */
 const SETTLE_FRAMES = 20;
 const FRAMES_IN_FLIGHT = 2;
@@ -124,6 +127,9 @@ await runThreePage(async ({ device, data, log: logLine }) => {
 
         if (GRID_CELLS !== undefined) scene.platform.shade.settings.lightGridMaxCells = GRID_CELLS;
         data.lightGridMaxCells = scene.platform.shade.settings.lightGridMaxCells;
+        // About two passes over the volume first, so the field holds bounce light: gi/direct's
+        // shadow-ray roulette is measured against it. Kept short for the clock rule.
+        await run(WARM_FRAMES, WARM_BATCH);
         await run(SETTLE_FRAMES, LARGE_BATCH);
         const byK: Record<string, unknown> = {};
         for (const k of K_VALUES) {
