@@ -244,7 +244,8 @@ async function main(): Promise<void> {
     // The readback's row order: take the one that agrees with the reference (printed).
     const asIs = compare(giTerm, reference, curtain, surface, width, height);
     const flipped = compare(giTerm, flipRows(reference, width, height), curtain, surface, width, height);
-    if (flipped.blockError < asIs.blockError) {
+    const readbackBottomUp = flipped.blockError < asIs.blockError;
+    if (readbackBottomUp) {
         reference = flipRows(reference, width, height);
         console.log('row order: the readback is bottom-up; the reference was flipped to match');
     }
@@ -265,7 +266,13 @@ async function main(): Promise<void> {
         report(`${values['ao-kind'] === 'gtao' ? 'GTAO' : values['ao-kind']} ${radius} m`, occluded);
     }
     // Through the upscaler: the GI term at the output size, with the occlusion already inside.
-    for (const [name, base64] of Object.entries((data.upscaledBase64 ?? {}) as Record<string, string>)) report(name, image(base64));
+    for (const [name, base64] of Object.entries((data.upscaledBase64 ?? {}) as Record<string, string>)) {
+        const upscaled = image(base64);
+        report(name, upscaled);
+        // Kept as an EXR in the reference's row order, for tools/compare (FLIP 8 x 8, block errors).
+        const slug = name.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase();
+        await writeFile(join(outDir, `three-ao-${slug}${suffix}.exr`), writeExr({ width, height, rgb: readbackBottomUp ? flipRows(upscaled, width, height) : upscaled }));
+    }
     await writeFile(join(outDir, `three-ao-${sceneId}-${gpu}${suffix}.json`), JSON.stringify({ job, rows, finishedAt: new Date().toISOString() }, null, 2));
 }
 

@@ -94,6 +94,7 @@ Verified (RTX 3060, headless Chrome 156):
 - `pnpm build`, and `pnpm --filter @pmndrs/ddgi-example-three build`;
 - `test:gpu --filter three-`: 9 of 9 (Cornell point 0.042% / 0.16%; examples GI 45.8% simple, 44.8% composite through the upscaler).
 Not verified: the Intel this round (the lead ran all 9 on it before these cleanups).
+FLIP on the default path (upscaler Performance, GTAO at half the render resolution; RTX; `three-composite-ao/run.ts --upscale performance --resolution-scale 0.5`, which now also writes each upscaled GI term as an EXR, then `tools/compare --downsample 8`, FLIP at 8 ppd), against the 1920×1080 references: **Sponza FLIP 8×8 0.283** (over the 0.15 bar; bias +6.59%, 8×8 block error mean 18.3%, p95 114%); **Cornell 0.124** (within it; bias +0.22%, block error mean 8.8%, p95 40.4%). FLIP's output has a mean and a weighted median but no p95 (Sponza 0.408, Cornell 0.410), so the p95 given is the 8×8 block error's.
 
 ## 2026-11-06 · T1.14 default locked: the upscaler's Performance preset with half-resolution GTAO · implementer (opus)
 Did (uncommitted):
