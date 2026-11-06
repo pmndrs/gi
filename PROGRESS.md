@@ -21,6 +21,12 @@ Rules:
 
 ---
 
+## 2026-11-06 · T2.4a review and merge · M2 lead (opus), reviewer (opus)
+Did: Opus review of `m2-t2.4a`: **PASS WITH NOTES.** Merged into `m2` (cf0369d) with the review's doc fixes (ddgi.md, NOTES, the change-index wording in `contract/scene-copy.ts`, the `range: 0` risk in DECISIONS). T2.4a marked done.
+Verified (reviewer, RTX 3060 nvidia/ampere): `ddgi-change-still` differs from M1 by exactly 0 on Cornell, two-room and two-room fixed 0.97, 0 marks; `ddgi-mark-reduction` subgroups = fallback (964 marks); `ddgi-change-step` frame 1 −6.9%, frame 2 +0.4%, peak +3.9% at frame 7, +2.0% at 2 s, M1's rule 1.417 s, recall 472/472, precision 97.5%. Lead: lint, typecheck, `pnpm test` (960) on the merged tree. No GPU run on the merged tree (the merge conflicted only in PROGRESS).
+Notes carried to T2.4b (TASKS "M2 done-when changes"): the step was small (6.9% of the view), so its +3.9% overshoot is 56% of the step; a ≥ 25% step and an overshoot report; a test of the steady-change rule; a lamp inside sunlit Sponza, because the influence radius is set against the sun.
+The four DECISIONS entries stand (`lightChangeScale` 0.5, the ramp not rewound, environment r = 1 until T2.6a, `range: 0` lights local).
+
 ## 2026-11-06 · T2.4a change-driven history and `ddgi/mark` · implementer (opus)
 Did (branch `m2-t2.4a`, 8add5c0..b07d0bd): `SceneChanges.lights` (old and new light, index, influence radius; 1,024 a frame, then `lightsOverflowed` + global; `range: 0` lights are local now) in `platform/scene/change-log.ts`; changes made while the budget is paused now reach the next frame (they were dropped; the three adapter's first sync runs paused). Light falloff as a binding-free module (`HitShading.lightFalloff`); the kernel builder hoists `enable` directives. DDGI: 48-byte history (§4.1 words laid out; owed/schedule/keys/clock/wakeUntil left 0 for T2.4b/c/M3), the cut and steady-change rule in `ddgi/blend` before T1.12's fade, mean irradiance and noise written by every blend, `ddgi/mark` (wgsl/mark.ts, mark-table.ts) with subgroup-first mark counting, counters "probes marked", "probes marked (total)", "frames with changes marked". Pages: `ddgi-change-still`, `ddgi-change-step` (manual), `ddgi-mark-reduction`; `ddgi-flicker` reports marks.
 Verified (RTX 3060 = nvidia, Intel UHD = intel, Chrome 156 headless, `--no-cool-wait`):
