@@ -21,6 +21,18 @@ Rules:
 
 ---
 
+## 2026-11-07 · T2.5 light groups: layers, compose, weights, adapter API · implementer (opus)
+Did (branch `m2-t2.5`, 946c125..HEAD; `m2` cb35896 merged at 8152e48): `settings.lightGroups` (`light-groups.ts`: the layer plan, a layer per group plus the environment; weights live); layers side by side in the atlas (`layout.ts`); `ddgi/trace` reads every layer's bounce with one set of probe weights (`ddgiCornerWeight`, shared with renderers' `ddgiAccumulateField`); the ray scratch holds a result per layer and `gi/direct` adds each group's light into its layer (`giDirectGroupIrradiance`, `groupLayers`); blend, write and propagation per layer; new `ddgi/compose` (`wgsl/compose.ts`) into a composed atlas renderers sample; `setGroupWeight`/`setEnvironmentWeight` on the technique, `GIPlatform.outputTechnique`, `ThreeGI.setGroupWeight(group, color, intensity)`. Pages: `ddgi-light-groups` (suite), `ddgi-light-groups-cost` (manual). Docs: three.md, platform.md, m2-lights.md §5 as built, DECISIONS (3), NOTES.
+Verified (RTX 3060 nvidia/ampere, Chrome 157 headless; merged code):
+1. Check 1 (`ddgi-light-groups`, two-room, 2 groups, 900 frames): the weight change's own frame matches a field re-converged with the lamps dimmed/recoloured within 0.004% at all 3 bookmarks (bar 1%), and moved the image 48% / 48% / 11%. That frame: history and layers byte-identical, 0 marks, 1 full compose; 0 probes marked in the 30 frames after. Weights 1 against groups off: within 0.008%. Fallback reductions: identical field. Intel UHD (600 frames): the same, within 0.017%.
+2. Check 2: field with groups off equals `m2`'s (`ddgi-change-still`, same 8 digits on Cornell and two-room). Cost, one VALID run each on `m2` and the branch, 512 probes: Sponza +1.9%, two-room +2.0% (at 256: +0.3% / −13%; the runs' clocks differ, DECISIONS).
+3. Check 3 (VALID, 51 °C, 0% throttled), per probe at 512: 4 groups Sponza 1.10×, two-room 1.23×; 2 groups 1.05× / 1.04× (bar 1.4). The first VALID run, before the blend change, was 1.15× / 1.42×.
+4. Check 4 (`ddgi-shading-timing`, VALID): GI sampling 0.897 ms at 1440p (bar 1.0; T1.6 0.905).
+Regressions: full RTX suite 50 pages + self-tests pass (furnace E/π 0.4992, leak 0.84%, still scenes 0 marks); `ddgi-key-probes-sponza` view frame 12, field frame 36; door recall 91%; cabinet passes. Intel: change-still, furnace (0.4986). lint, typecheck, 1,068 unit tests.
+Numbers, memory per extra layer: two-room 3.6 MB, Cornell 5.8, furnished room 14.5, Sponza 25.5 (+ composed 0.55 / 0.88 / 2.6 / 9.9 MB); Sponza DDGI 58 MB off, 119 MB with 2 groups, 170 MB with 4. Compose 0.011-0.015 ms a frame.
+Not verified: the viewer by hand (T2.8 adds the sliders); Bistro and the furnished room's costs; `ThreeGI.setGroupWeight` on a GPU (unit-tested only). Cornell and furnished-room memory are computed from the measured per-layer parts, not allocated.
+Next: T2.6b adds the sun as a layer kind and a route for directional lights in `gi/direct` (`groupLayers` routes by group today); at most 6 layers fit the blend's workgroup memory. Most of a layer's memory is the ray results sized for the 4,096-probe warm-up batch. Shared files: `ddgi-technique.ts`, `layout.ts`, `settings.ts` (one field), `wgsl/blend.ts`, `wgsl/write.ts`, `wgsl/propagate.ts`, `wgsl/trace.ts`, `wgsl/sample.ts`, `platform/shade/direct.ts` and `wgsl.ts` (T2.3 works there), contract `shade.ts`/`technique.ts`/`platform.ts`, `gi-platform.ts`, `three-gi.ts`.
+
 ## 2026-11-06 · T2.4d review and merge · M2 lead (opus)
 Did:
 - Opus review of T2.4d against its done-when (TASKS): pass with notes, no must-fix. It ran inside Dennis's timebox ("let's not spend forever on it"): one diagnosis, one fix per miss.
