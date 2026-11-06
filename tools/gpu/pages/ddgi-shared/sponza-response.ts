@@ -121,10 +121,16 @@ export function aimSun(test: SponzaUnderTest, direction: Vector3): void {
     test.scene.threeGI.markChanged(test.sun);
 }
 
-/** The sun turned `degrees` lower (about the horizontal axis across its direction). */
+/**
+ * The sun turned `degrees` lower: its elevation lowered, its azimuth kept.
+ * `direction` is the way the light travels. Until T2.6a this turned about
+ * cross(direction, up) by −degrees, which raises the sun instead: Sponza's
+ * from 70.6° over the zenith to 79.4° (NOTES).
+ */
 export function turnedSun(direction: Vector3, degrees: number): Vector3 {
-    const axis = new Vector3().crossVectors(direction, new Vector3(0, 1, 0)).normalize();
-    return direction.clone().applyAxisAngle(axis, (-degrees * Math.PI) / 180).normalize();
+    const elevation = Math.asin(-direction.y) - (degrees * Math.PI) / 180;
+    const horizontal = new Vector3(direction.x, 0, direction.z).normalize();
+    return new Vector3(horizontal.x * Math.cos(elevation), -Math.sin(elevation), horizontal.z * Math.cos(elevation));
 }
 
 /** The sky's brightness times `factor` (the adapter sends the environment again: a global change). */

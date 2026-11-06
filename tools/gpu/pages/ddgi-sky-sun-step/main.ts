@@ -46,7 +46,7 @@ import { assert } from '../../client.ts';
 import { loadAllManifests } from '../../../../apps/viewer/src/scene/manifests.ts';
 import { imageMean, TestView } from '../ddgi-shared/harness.ts';
 import { describeErrors, stepResponse } from '../ddgi-shared/response.ts';
-import { convergeSponza, lightWeightedError, probeMeans, sunDirection, VIEW_HEIGHT, VIEW_WIDTH, type ProbeMeans, type SponzaUnderTest } from '../ddgi-shared/sponza-response.ts';
+import { convergeSponza, lightWeightedError, probeMeans, sunDirection, turnedSun, VIEW_HEIGHT, VIEW_WIDTH, type ProbeMeans, type SponzaUnderTest } from '../ddgi-shared/sponza-response.ts';
 import { startViewerScene } from '../ddgi-shared/viewer-scene.ts';
 import { runThreePage } from '../three-shared/harness.ts';
 import type { CameraBookmark } from '../../../../scenes/src/manifest.ts';
@@ -78,6 +78,7 @@ const MEASURED_FRAMES = 180;
  * 13.5% at most.
  */
 const LAMP_ON = env.VITE_DDGI_LAMP === 'on';
+
 /** `explore`: only the step's size on candidate views (EXPLORE_VIEWS), from two converged fields, no response runs. */
 const EXPLORE = env.VITE_DDGI_SECTIONS === 'explore';
 
@@ -110,17 +111,6 @@ function perPixelError(image: Float32Array, reference: Float32Array): number {
         sum += reference[index];
     }
     return sum > 0 ? difference / sum : 0;
-}
-
-/**
- * The sun's travel direction with its elevation lowered by `degrees`, the
- * azimuth kept. (`turnedSun` in sponza-response.ts turns about an axis whose
- * sense depends on the light: on this room it raised the sun.)
- */
-function loweredSun(direction: Vector3, degrees: number): Vector3 {
-    const elevation = Math.asin(-direction.y) - (degrees * Math.PI) / 180;
-    const horizontal = new Vector3(direction.x, 0, direction.z).normalize();
-    return new Vector3(horizontal.x * Math.cos(elevation), -Math.sin(elevation), horizontal.z * Math.cos(elevation));
 }
 
 /**
@@ -216,7 +206,7 @@ await runThreePage(async ({ device, data, log: logLine }) => {
     // Settled: converged from the start in the new light.
     const reference = await startRoom(device, 'furnished room, the sun stepped, from the start', BOOKMARKS[0]);
     const startDirection = sunDirection(reference.sun);
-    const stepped = loweredSun(startDirection, SUN_STEP_DEGREES);
+    const stepped = turnedSun(startDirection, SUN_STEP_DEGREES);
     results.sunElevationDegrees = { before: (Math.asin(-startDirection.y) * 180) / Math.PI, after: (Math.asin(-stepped.y) * 180) / Math.PI };
     stepSun(reference, stepped);
     await convergeSponza(reference, `the sun ${SUN_STEP_DEGREES} degrees lower, from the start`, log, null);
@@ -294,6 +284,9 @@ await runThreePage(async ({ device, data, log: logLine }) => {
             overshootShareOfStep: response.overshootShareOfStep,
             perPixelSettledFrame: perPixelSettled,
             perPixelAtViewBound: perPixel[VIEW_FRAMES - 1]?.value,
+            perPixelAt3s: perPixel[MEASURED_FRAMES - 1]?.value,
+            viewAt3s: response.errors[MEASURED_FRAMES - 1],
+            probesPropagatedTotal: counters['probes propagated (total)'],
             volumeSettledFrame: volumeSettled,
             volume,
             viewErrors: response.errors,
