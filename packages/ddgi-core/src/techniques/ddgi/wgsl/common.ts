@@ -47,6 +47,12 @@ struct DdgiUniforms {
     maxHistorySamples: f32,   // n_max
     updatesPerSample: f32,    // a: n is at most (blended updates) / a during the ramp; 1 = a plain mean
     rampUpdates: f32,         // K: the ramp lasts a probe's first K blended updates
+    // Change-driven history (docs/design/m2-lights.md §4.1, §4.2): ddgi/mark
+    // and the cut in ddgi/blend.
+    changeDrivenHistory: u32, // 0: no cut, the M1 rule alone
+    changeTolerance: f32,     // epsilon: what a changed probe's history is cut for
+    changeUpdates: f32,       // K: updates a changed probe is expected to get soon
+    lightChangeScale: f32,    // the share of a light's change at a probe the probe is taken to see
 }
 
 const DDGI_MAX_RAYS: u32 = ${MAX_RAYS_PER_PROBE}u;

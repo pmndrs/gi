@@ -3,6 +3,10 @@
  * irradiance and distance atlases are updated a budget of probes per frame.
  *
  * Each frame, into the host's encoder:
+ * 0. `ddgi/mark`, only in frames whose `SceneChanges` report a light or sky
+ *    change: tells each probe how much its light changed, from the lights'
+ *    own numbers (wgsl/mark.ts, mark-table.ts), so its next blend cuts its
+ *    history to match (docs/design/m2-lights.md §4.1, §4.2);
  * 1. `ddgi/trace`: one thread per ray traces inline, shades the hit and
  *    writes the ray buffer;
  * 2. `ddgi/blend`: one workgroup per probe classifies and relocates the
@@ -24,6 +28,9 @@ import type { GITechnique, TechniqueContext, TechniqueFrame, TechniqueRequiremen
 import type { ComputeKernel } from '../../platform/contract/wgsl.ts';
 import { GILimitError } from '../../platform/contract/errors.ts';
 import {
+    CENSUS_PER_FRAME_WORDS,
+    CENSUS_PROBES_MARKED,
+    CENSUS_PROBES_MARKED_TOTAL,
     CENSUS_RAYS_TRACED,
     CENSUS_WORDS,
     checkFieldLimits,
@@ -66,11 +73,13 @@ import {
     type DDGISettingsInput,
     type ProbeGrid,
 } from './settings.ts';
+import { buildMarkTable, type MarkTable } from './mark-table.ts';
 import { DDGIShadingModule } from './shading.ts';
 import { UpdateCursor } from './update-order.ts';
 import { blendKernelWgsl, type PhaseBReduction } from './wgsl/blend.ts';
 import { CENSUS_WORKGROUP_SIZE, DDGI_CENSUS_WGSL } from './wgsl/census.ts';
 import { DDGI_TRACE_WGSL, TRACE_WORKGROUP_SIZE } from './wgsl/trace.ts';
+import { MARK_WORKGROUP_SIZE, markKernelWgsl } from './wgsl/mark.ts';
 import { DDGI_DEBUG_VIEW } from './wgsl/shading.ts';
 import { writeKernelWgsl } from './wgsl/write.ts';
 
@@ -91,13 +100,16 @@ const CENSUS_STAGING_BUFFERS = 3;
 const INITIAL_RAY_CAPACITY = 512 * 256;
 /** Frame times kept for the sweep counter (its median), about half a second at 60 Hz. */
 const SWEEP_FRAME_TIMES = 31;
+/** The mark table's first size in bytes (it grows when a frame needs more): room for 64 entries. */
+const INITIAL_MARK_TABLE_BYTES = 64 * 176 + 16;
 
 /** Options fixed for the technique's life. */
 export interface DDGITechniqueOptions {
     /**
-     * How phase B reduces the fixed rays. Defaults to `subgroups` when the
-     * device has the feature, otherwise the declared fallback `workgroup`.
-     * Both give the same states and offsets; tests run both.
+     * How phase B reduces the fixed rays, and how `ddgi/mark` counts its
+     * marks. Defaults to `subgroups` when the device has the feature,
+     * otherwise the declared fallback `workgroup`. Both give the same states,
+     * offsets and counts; tests run both.
      */
     readonly reduction?: PhaseBReduction;
 }
@@ -154,10 +166,13 @@ interface PreparedResources {
     readonly blendKernel: ComputeKernel;
     readonly writeKernel: ComputeKernel;
     readonly censusKernel: ComputeKernel;
+    readonly markKernel: ComputeKernel;
     readonly writeGroup: GPUBindGroup;
     readonly censusGroup: GPUBindGroup;
     /** The ray buffer and the groups that bind it; replaced when it grows. */
     rays: { buffer: GPUBuffer; capacity: number; traceGroup: GPUBindGroup; blendGroup: GPUBindGroup };
+    /** `ddgi/mark`'s table and the group that binds it; replaced when a frame's table outgrows it. */
+    mark: { buffer: GPUBuffer; group: GPUBindGroup };
     readonly cursor: UpdateCursor;
     readonly list: Uint32Array<ArrayBuffer>;
     readonly fixedBytes: number;
@@ -213,6 +228,20 @@ function writeGroupLayout(distanceFormat: DistanceFormat): GPUBindGroupLayoutDes
     };
 }
 
+/** `ddgi/mark` group 1 (wgsl/mark.ts). */
+const MARK_GROUP: GPUBindGroupLayoutDescriptor = {
+    label: 'ddgi/mark group 1',
+    entries: [
+        { binding: 0, visibility: COMPUTE, buffer: { type: 'uniform' } },
+        { binding: 1, visibility: COMPUTE, buffer: { type: 'read-only-storage' } },
+        { binding: 2, visibility: COMPUTE, buffer: { type: 'storage' } },
+        { binding: 3, visibility: COMPUTE, buffer: { type: 'storage' } },
+        { binding: 4, visibility: COMPUTE, texture: SAMPLED_ARRAY },
+        { binding: 5, visibility: COMPUTE, texture: SAMPLED_ARRAY },
+        { binding: 6, visibility: COMPUTE, sampler: { type: 'filtering' } },
+    ],
+};
+
 /** `ddgi/census` group 1 (wgsl/census.ts). */
 const CENSUS_GROUP: GPUBindGroupLayoutDescriptor = {
     label: 'ddgi/census group 1',
@@ -245,6 +274,9 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
     /** The latest census read back: probes per state, then rays traced. Null until the first arrives. */
     private latestCensus: Uint32Array | null = null;
     private probesUpdated = 0;
+    /** Frames since `prepare` whose changes ran `ddgi/mark`, and the entries in the latest one (CPU-side counters). */
+    private markFrames = 0;
+    private latestMarkEntries = 0;
     /**
      * The technique's own clock in seconds: the sum of every frame's
      * `deltaTime` since `prepare` (each at most MAX_CLOCK_STEP_SECONDS),
@@ -338,7 +370,7 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         if (reduction === 'subgroups' && !hasSubgroups) throw new Error("@pmndrs/ddgi: the 'subgroups' reduction needs a device with the 'subgroups' feature");
 
         // Compile first: if a kernel fails, the old resources stay usable.
-        const [traceKernel, blendKernel, writeKernel, censusKernel] = await Promise.all([
+        const [traceKernel, blendKernel, writeKernel, censusKernel, markKernel] = await Promise.all([
             context.kernels.computeKernel({
                 label: 'ddgi/trace',
                 // Hit shading brings the scene copy and rays in as its dependencies.
@@ -367,6 +399,14 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
                 code: DDGI_CENSUS_WGSL,
                 entryPoint: 'ddgiCountStates',
                 ownGroups: [CENSUS_GROUP],
+            }),
+            context.kernels.computeKernel({
+                label: `ddgi/mark (${reduction})`,
+                // The point and spot falloff hit shading uses, and nothing it binds.
+                modules: [context.shade.lightFalloff],
+                code: markKernelWgsl(reduction),
+                entryPoint: 'ddgiMark',
+                ownGroups: [MARK_GROUP],
             }),
         ]);
         if (this.disposed) return;
@@ -456,15 +496,22 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
             blendKernel,
             writeKernel,
             censusKernel,
+            markKernel,
             writeGroup,
             censusGroup,
             cursor: new UpdateCursor(grid.probeCount),
             list: new Uint32Array(maxProbesPerFrame),
             fixedBytes,
         };
-        this.resources = { ...partial, rays: this.createRayBuffer(device, partial, Math.min(INITIAL_RAY_CAPACITY, maxProbesPerFrame * 256)) };
+        this.resources = {
+            ...partial,
+            rays: this.createRayBuffer(device, partial, Math.min(INITIAL_RAY_CAPACITY, maxProbesPerFrame * 256)),
+            mark: this.createMarkTable(device, partial, INITIAL_MARK_TABLE_BYTES),
+        };
         this.latestCensus = null;
         this.probesUpdated = 0;
+        this.markFrames = 0;
+        this.latestMarkEntries = 0;
         this.clockSeconds = 0;
         this.markAllNotUpdated();
     }
@@ -484,22 +531,32 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
             this.frameTimes.push(frame.deltaTime);
             if (this.frameTimes.length > SWEEP_FRAME_TIMES) this.frameTimes.shift();
         }
-        if (count === 0) return 0;
+        // Marks land even in a frame that updates no probe: they wait in the
+        // history for each probe's next update.
+        const markTable = this.settings.changeDrivenHistory !== false ? buildMarkTable(frame.changes, resources.grid) : null;
+        this.latestMarkEntries = markTable?.entryCount ?? 0;
+        if (count === 0 && !markTable) return 0;
         const raysPerProbe = effectiveRaysPerProbe(this.settings.raysPerProbe);
         const device = context.device;
+        const maxPerDimension = device.limits.maxComputeWorkgroupsPerDimension;
 
         this.writeUniforms(resources, frame.frame, count, raysPerProbe);
         device.queue.writeBuffer(resources.uniforms, 0, this.uniformData);
+        // The census buffer gathers this frame's marks (ddgi/mark) and rays traced (ddgi/blend); the running total of marks stays.
+        encoder.clearBuffer(resources.census, 0, CENSUS_PER_FRAME_WORDS * 4);
+        if (markTable) {
+            this.encodeMark(encoder, context, resources, markTable, maxPerDimension);
+            this.markFrames++;
+        }
+        if (count === 0) return 0;
+
         device.queue.writeBuffer(resources.updateList, 0, resources.list, 0, count);
         if (count * raysPerProbe > resources.rays.capacity) {
             const old = resources.rays.buffer;
             resources.rays = this.createRayBuffer(device, resources, Math.max(count * raysPerProbe, resources.rays.capacity * 2));
             old.destroy();
         }
-        // The census buffer also gathers this frame's rays traced (in ddgi/blend).
-        encoder.clearBuffer(resources.census);
 
-        const maxPerDimension = device.limits.maxComputeWorkgroupsPerDimension;
         const probesX = Math.min(count, maxPerDimension);
         const probesY = Math.ceil(count / probesX);
 
@@ -544,20 +601,31 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
     }
 
     /**
-     * Counters for the latest frame. "probes updated" is always there;
-     * "seconds per full sweep" (every probe updated once at this batch and the
-     * recent frame rate) once frames carry a `deltaTime`. The per-state counts and rays traced need the GPU census, which runs only
-     * when the platform times passes (`gpuTiming`), and arrive a few frames
-     * late; without them those counters are absent, not guessed.
+     * Counters for the latest frame. Always there: "probes updated", "frames
+     * with changes marked" (frames since `prepare` that ran `ddgi/mark`) and
+     * "changes marked this frame" (its table's entries: changed lights and
+     * global changes); "seconds per full sweep" (every probe updated once at
+     * this batch and the recent frame rate) once frames carry a `deltaTime`.
+     * The per-state counts, rays traced, "probes marked" (marks in that
+     * frame; a probe marked by two lights counts twice) and "probes marked
+     * (total)" (every mark since `prepare`) need the GPU census, which runs
+     * only when the platform times passes (`gpuTiming`), and arrive a few
+     * frames late; without them those counters are absent, not guessed.
      */
     get counters(): Readonly<Record<string, number>> {
         const census = this.latestCensus;
         const sweep = this.sweepSeconds();
-        const updates: Record<string, number> = { 'probes updated': this.probesUpdated };
+        const updates: Record<string, number> = {
+            'probes updated': this.probesUpdated,
+            'frames with changes marked': this.markFrames,
+            'changes marked this frame': this.latestMarkEntries,
+        };
         if (sweep !== undefined) updates['seconds per full sweep'] = sweep;
         if (!census) return updates;
         return {
             ...updates,
+            'probes marked': census[CENSUS_PROBES_MARKED],
+            'probes marked (total)': census[CENSUS_PROBES_MARKED_TOTAL],
             'rays traced': census[CENSUS_RAYS_TRACED],
             'probes active': census[PROBE_STATE.active],
             'probes off: inside geometry': census[PROBE_STATE.offInsideGeometry],
@@ -612,7 +680,51 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         this.releaseResources();
     }
 
-    private createRayBuffer(device: GPUDevice, resources: Omit<PreparedResources, 'rays'>, capacity: number): PreparedResources['rays'] {
+    /** The mark table's buffer of at least `bytes`, and its bind group. */
+    private createMarkTable(device: GPUDevice, resources: Omit<PreparedResources, 'rays' | 'mark'>, bytes: number): PreparedResources['mark'] {
+        const buffer = device.createBuffer({ label: 'ddgi mark table', size: Math.ceil(bytes / 16) * 16, usage: BUFFER_USAGE.storage | BUFFER_USAGE.copyDst });
+        const arrayView = (target: GPUTexture): GPUTextureView => target.createView({ dimension: '2d-array' });
+        const group = device.createBindGroup({
+            label: 'ddgi/mark group 1',
+            layout: resources.markKernel.ownLayouts[0],
+            entries: [
+                { binding: 0, resource: { buffer: resources.uniforms } },
+                { binding: 1, resource: { buffer } },
+                { binding: 2, resource: { buffer: resources.probeHistory } },
+                { binding: 3, resource: { buffer: resources.census } },
+                { binding: 4, resource: arrayView(resources.probeData) },
+                { binding: 5, resource: arrayView(resources.distance) },
+                { binding: 6, resource: resources.sampler },
+            ],
+        });
+        return { buffer, group };
+    }
+
+    /**
+     * Writes this frame's mark table and dispatches `ddgi/mark`, one thread
+     * per (entry, probe in its box). The table lands before the host submits
+     * (queue.writeBuffer), so the dispatch reads it.
+     */
+    private encodeMark(encoder: GPUCommandEncoder, context: TechniqueContext, resources: PreparedResources, table: MarkTable, maxPerDimension: number): void {
+        const device = context.device;
+        if (table.words.byteLength > resources.mark.buffer.size) {
+            // Nothing recorded this frame uses the old buffer yet (one mark a frame), and earlier frames are submitted.
+            const old = resources.mark.buffer;
+            resources.mark = this.createMarkTable(device, resources, Math.max(table.words.byteLength, old.size * 2));
+            old.destroy();
+        }
+        device.queue.writeBuffer(resources.mark.buffer, 0, table.words);
+        const groups = Math.ceil(table.threadCount / MARK_WORKGROUP_SIZE);
+        if (groups === 0) return;
+        const groupsX = Math.min(groups, maxPerDimension);
+        const pass = encoder.beginComputePass({ label: 'ddgi/mark', timestampWrites: context.timer.computePass('ddgi/mark') });
+        resources.markKernel.bind(pass);
+        pass.setBindGroup(1, resources.mark.group);
+        pass.dispatchWorkgroups(groupsX, Math.ceil(groups / groupsX));
+        pass.end();
+    }
+
+    private createRayBuffer(device: GPUDevice, resources: Omit<PreparedResources, 'rays' | 'mark'>, capacity: number): PreparedResources['rays'] {
         const buffer = device.createBuffer({ label: 'ddgi rays', size: capacity * RAY_RECORD_BYTES, usage: BUFFER_USAGE.storage });
         const arrayView = (target: GPUTexture): GPUTextureView => target.createView({ dimension: '2d-array' });
         const traceGroup = device.createBindGroup({
@@ -697,7 +809,7 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         if (!resources) return;
         this.resources = null;
         for (const texture of [resources.irradiance, resources.distance, resources.probeData, resources.points]) texture.destroy();
-        for (const buffer of [resources.uniforms, resources.updateList, resources.scratchBuffer, resources.census, resources.probeHistory, resources.rays.buffer]) buffer.destroy();
+        for (const buffer of [resources.uniforms, resources.updateList, resources.scratchBuffer, resources.census, resources.probeHistory, resources.rays.buffer, resources.mark.buffer]) buffer.destroy();
         for (const staging of resources.censusStaging) staging.buffer.destroy();
     }
 
@@ -769,6 +881,10 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         words[UNIFORM_WORD.raysPerProbe] = raysPerProbe;
         words[UNIFORM_WORD.updateCount] = count;
         words[UNIFORM_WORD.frame] = frame >>> 0;
+        words[UNIFORM_WORD.changeDrivenHistory] = blend.changeDrivenHistory ? 1 : 0;
+        data[UNIFORM_WORD.changeTolerance] = blend.changeTolerance;
+        data[UNIFORM_WORD.changeUpdates] = blend.changeUpdates;
+        data[UNIFORM_WORD.lightChangeScale] = blend.lightChangeScale;
     }
 }
 
