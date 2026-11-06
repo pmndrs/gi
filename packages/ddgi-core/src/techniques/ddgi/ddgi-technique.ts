@@ -66,6 +66,7 @@ import {
     fieldBytes,
     fieldLayout,
     IRRADIANCE_FORMAT,
+    KEY_DELTA_FIND_ARGS_WORDS,
     keyDeltaStrideWords,
     keyProbeCount,
     PROBE_DATA_FORMAT,
@@ -310,7 +311,6 @@ const PROPAGATE_FIND_GROUP: GPUBindGroupLayoutDescriptor = {
     entries: [
         { binding: 0, visibility: COMPUTE, buffer: { type: 'uniform' } },
         { binding: 1, visibility: COMPUTE, buffer: { type: 'storage' } },
-        { binding: 2, visibility: COMPUTE, buffer: { type: 'storage' } },
         { binding: 3, visibility: COMPUTE, buffer: { type: 'storage' } },
         { binding: 4, visibility: COMPUTE, buffer: { type: 'storage' } },
         { binding: 10, visibility: COMPUTE, texture: SAMPLED_ARRAY },
@@ -638,7 +638,11 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         const scheduleState = device.createBuffer({ label: 'ddgi schedule state', size: SCHEDULE_STATE_WORDS * 4, usage: BUFFER_USAGE.storage | BUFFER_USAGE.copySrc | BUFFER_USAGE.copyDst });
         const feedbackRequests = device.createBuffer({ label: 'ddgi feedback requests', size: grid.probeCount * 4, usage: BUFFER_USAGE.storage | BUFFER_USAGE.copyDst });
         // Propagation (T2.4c): a key-delta entry per update-list slot, the list of fine probes and its scratch, the indirect arguments.
-        const keyDeltas = device.createBuffer({ label: 'ddgi key deltas', size: maxProbesPerFrame * keyDeltaStrideWords(irradianceTexels) * 4, usage: BUFFER_USAGE.storage });
+        const keyDeltas = device.createBuffer({
+            label: 'ddgi key deltas',
+            size: (KEY_DELTA_FIND_ARGS_WORDS + maxProbesPerFrame * keyDeltaStrideWords(irradianceTexels)) * 4,
+            usage: BUFFER_USAGE.storage | BUFFER_USAGE.indirect | BUFFER_USAGE.copyDst,
+        });
         const propagationList = device.createBuffer({ label: 'ddgi propagation list', size: propagationCapacity * 4, usage: BUFFER_USAGE.storage });
         const propagationScratch = device.createBuffer({
             label: 'ddgi propagation scratch',
@@ -708,7 +712,6 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
                 entries: [
                     { binding: 0, resource: { buffer: uniforms } },
                     { binding: 1, resource: { buffer: probeHistory } },
-                    { binding: 2, resource: { buffer: census } },
                     { binding: 3, resource: { buffer: propagationState } },
                     { binding: 4, resource: { buffer: propagationList } },
                     { binding: 10, resource: arrayView(probeData) },
@@ -864,6 +867,8 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         }
         // The census buffer gathers this frame's marks (ddgi/mark), rays traced and feedback (ddgi/blend); the running totals stay.
         encoder.clearBuffer(resources.census, 0, CENSUS_PER_FRAME_WORDS * 4);
+        // No key has passed a change on yet this frame: propagation's find runs only if ddgi/blend says one did.
+        if (this.settings.keyProbes !== false) encoder.clearBuffer(resources.propagation.keyDeltas, 0, KEY_DELTA_FIND_ARGS_WORDS * 4);
         if (markTable) {
             this.encodeMark(encoder, context, resources, markTable, maxPerDimension);
             this.markFrames++;
@@ -908,21 +913,21 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
 
     /**
      * Propagation (wgsl/propagate.ts): one pass of four dispatches, find
-     * (one thread per probe), args (one thread), propagate and its write
-     * (indirect, one workgroup per fine probe found). A compute pass's
-     * dispatches are separate usage scopes, so the write may store into the
-     * irradiance atlas propagate sampled. In a frame where no key passed a
-     * change on, find lists nothing and the indirect dispatches are empty.
+     * (one thread per probe, indirect: ddgi/blend sizes it when a key passes
+     * its change on), args (one thread), propagate and its write (indirect,
+     * one workgroup per fine probe found). A compute pass's dispatches are
+     * separate usage scopes, so the write may store into the irradiance
+     * atlas propagate sampled. In a frame where no key passed a change on,
+     * every dispatch but the one-thread args is empty.
      */
     private encodePropagation(encoder: GPUCommandEncoder, context: TechniqueContext, resources: PreparedResources, maxPerDimension: number): void {
         const propagation = resources.propagation;
         encoder.clearBuffer(propagation.state);
-        const groups = Math.ceil(resources.grid.probeCount / PROPAGATE_FIND_WORKGROUP_SIZE);
-        const groupsX = Math.min(groups, maxPerDimension);
         const pass = encoder.beginComputePass({ label: 'ddgi/propagate', timestampWrites: context.timer.computePass('ddgi/propagate') });
+        // Indirect: ddgi/blend wrote the size when a key passed its change on (propagateFindGroups), else it is 0.
         propagation.findKernel.bind(pass);
         pass.setBindGroup(1, propagation.findGroup);
-        pass.dispatchWorkgroups(groupsX, Math.ceil(groups / groupsX));
+        pass.dispatchWorkgroupsIndirect(propagation.keyDeltas, 0);
         propagation.argsKernel.bind(pass);
         pass.setBindGroup(1, propagation.argsGroup);
         pass.dispatchWorkgroups(1);
@@ -1376,6 +1381,10 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         data[UNIFORM_WORD.fineOwedUpdates] = FINE_PROBE_UPDATES;
         words[UNIFORM_WORD.propagation] = blend.keyProbes ? 1 : 0;
         words[UNIFORM_WORD.holdFineProbes] = blend.holdFineProbes ? 1 : 0;
+        const findGroups = Math.ceil(grid.probeCount / PROPAGATE_FIND_WORKGROUP_SIZE);
+        const findGroupsX = Math.min(findGroups, this.context?.device.limits.maxComputeWorkgroupsPerDimension ?? findGroups);
+        words[UNIFORM_WORD.propagateFindGroupsX] = findGroupsX;
+        words[UNIFORM_WORD.propagateFindGroupsY] = Math.ceil(findGroups / findGroupsX);
         data[UNIFORM_WORD.cameraFalloffDistance] = cameraFalloffDistance(grid);
         data.set([...frame.camera.position, inViewMargin(grid)], UNIFORM_WORD.cameraPosition);
         frustumPlanes(frame.camera).forEach((plane, index) => data.set(plane, FRUSTUM_PLANE_WORDS[index]));

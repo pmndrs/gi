@@ -68,6 +68,7 @@ import {
     CENSUS_KEY_CHANGES_PASSED_TOTAL,
     CENSUS_PROBES_BLENDED_TOTAL,
     CENSUS_RAYS_TRACED,
+    KEY_DELTA_FIND_ARGS_WORDS,
     KEY_DELTA_HEADER,
     KEY_DELTA_HEADER_WORDS,
     keyDeltaStrideWords,
@@ -296,8 +297,15 @@ const DDGI_NO_DISTANCE: f32 = 3.0e38;
 @group(1) @binding(8) var<storage, read_write> ddgiProbeHistory: array<DdgiProbeHistory>;
 // Per probe: an update asked for by the feedback rule, as its urgency's bits (0: none). Read and cleared by ddgi/schedule-count.
 @group(1) @binding(9) var<storage, read_write> ddgiFeedbackRequests: array<atomic<u32>>;
-// Per update-list slot: a key probe's change this update, for ddgi/propagate (DDGI_KEY_DELTA_*).
-@group(1) @binding(10) var<storage, read_write> ddgiKeyDeltas: array<u32>;
+// Per update-list slot: a key probe's change this update, for ddgi/propagate
+// (DDGI_KEY_DELTA_*), after ddgi/propagate-find's dispatch size, which a key
+// that passes its change on sets (cleared every frame; all such keys write
+// the same values).
+struct DdgiKeyDeltas {
+    findGroups: array<atomic<u32>, ${KEY_DELTA_FIND_ARGS_WORDS}>,
+    words: array<u32>,
+}
+@group(1) @binding(10) var<storage, read_write> ddgiKeyDeltas: DdgiKeyDeltas;
 
 // Per ray: its direction (xyz) and signed hit distance (w, negative = back
 // face). Decoded once here: the blend reads every ray once per texel.
@@ -751,8 +759,8 @@ fn ddgiWriteIrradianceTexel(slot: u32, probeIndex: u32, state: u32, texelIndex: 
         // The change this update made, for the key's fine neighbours (ddgi/propagate).
         let change = blendedValue - old;
         let deltaBase = slot * DDGI_KEY_DELTA_STRIDE + DDGI_KEY_DELTA_HEADER_WORDS + 2u * texelIndex;
-        ddgiKeyDeltas[deltaBase] = pack2x16float(change.rg);
-        ddgiKeyDeltas[deltaBase + 1u] = pack2x16float(vec2f(change.b, 0.0));
+        ddgiKeyDeltas.words[deltaBase] = pack2x16float(change.rg);
+        ddgiKeyDeltas.words[deltaBase + 1u] = pack2x16float(vec2f(change.b, 0.0));
     }
 }
 
@@ -950,8 +958,12 @@ fn ddgiBlend(
                 // of the probe's scheduled stamp).
                 ddgiPassChange = 1u;
                 let deltaBase = slot * DDGI_KEY_DELTA_STRIDE;
-                ddgiKeyDeltas[deltaBase + DDGI_KEY_DELTA_PROBE_INDEX] = probeIndex;
-                ddgiKeyDeltas[deltaBase + DDGI_KEY_DELTA_CLOCK_BEFORE] = history.changeClock;
+                ddgiKeyDeltas.words[deltaBase + DDGI_KEY_DELTA_PROBE_INDEX] = probeIndex;
+                ddgiKeyDeltas.words[deltaBase + DDGI_KEY_DELTA_CLOCK_BEFORE] = history.changeClock;
+                // ddgi/propagate-find runs this frame: one thread per probe.
+                atomicStore(&ddgiKeyDeltas.findGroups[0], ddgi.propagateFindGroupsX);
+                atomicStore(&ddgiKeyDeltas.findGroups[1], ddgi.propagateFindGroupsY);
+                atomicStore(&ddgiKeyDeltas.findGroups[2], 1u);
                 ddgiNextHistory.scheduleAndFlags = ddgiNextHistory.scheduleAndFlags | DDGI_FLAG_PASSED_CHANGE;
                 ddgiNextHistory.keyDeltaSlot = slot;
                 atomicAdd(&ddgiCensus[DDGI_CENSUS_KEY_CHANGES_PASSED], 1u);

@@ -14,7 +14,9 @@
  * - **Check 3 (the counter):** the technique's "probes marked (total)"
  *   counter stays 0 over the run. A still scene has no light changes, so
  *   `ddgi/mark` runs only once, for the scene's creation, and marks nothing; the counter is the GPU's own count of probes it
- *   marked, so a mark that ran on a still frame would show here too.
+ *   marked, so a mark that ran on a still frame would show here too. The
+ *   same for propagation (T2.4c check 5): "key changes passed (total)" and
+ *   "probes propagated (total)" stay 0.
  *
  * Each case: DDGI on the manifest's volume, default settings (or the fixed
  * 0.97 rule, `adaptiveHysteresis: false`, which the converging steps of the
@@ -45,6 +47,8 @@ const HEIGHT = 360;
 /** Check 1's bar: the field's mean within 0.5% of M1's. */
 const MEAN_TOLERANCE = 0.005;
 const MARKED_TOTAL = 'probes marked (total)';
+const PROPAGATED_TOTAL = 'probes propagated (total)';
+const KEY_CHANGES_TOTAL = 'key changes passed (total)';
 
 /**
  * This page's numbers at M1 (commit db431f6, T1.12's rule), per GPU vendor:
@@ -106,6 +110,10 @@ await runGpuTest(
                     `; probes marked ${marked ?? 'not counted (M1 code)'}`,
             );
             if (marked !== undefined && marked !== 0) failures.push(`${sceneId}: a still scene marked ${marked} probes`);
+            // T2.4c check 5: propagation never runs on a still scene (absent on older code).
+            const propagated = counters[PROPAGATED_TOTAL];
+            const keyChanges = counters[KEY_CHANGES_TOTAL];
+            if ((propagated ?? 0) !== 0 || (keyChanges ?? 0) !== 0) failures.push(`${sceneId}: a still scene propagated (${keyChanges} key changes passed, ${propagated} probes propagated)`);
             if (atlasChange !== null && Math.abs(atlasChange) > MEAN_TOLERANCE) failures.push(`${sceneId}: the field's mean moved ${(atlasChange * 100).toFixed(3)}% from M1's`);
             if (viewChange !== null && Math.abs(viewChange) > MEAN_TOLERANCE) failures.push(`${sceneId}: the view's mean moved ${(viewChange * 100).toFixed(3)}% from M1's`);
         }

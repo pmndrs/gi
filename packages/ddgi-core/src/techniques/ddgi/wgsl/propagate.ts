@@ -12,8 +12,10 @@
  *    awaiting a change (the flag `ddgi/mark` sets and the probe's own blend
  *    clears), active, with a key neighbour that passed its change this frame,
  *    go into a compacted list. **Subgroups first** (one atomic per subgroup
- *    reserves the slots) or the **declared fallback** (one per thread). It
- *    does nothing in a frame where no key passed a change (the census says).
+ *    reserves the slots) or the **declared fallback** (one per thread). It is
+ *    dispatched indirectly, its size written at the start of the key-delta
+ *    buffer by `ddgi/blend` when a key passes its change on, so in a frame
+ *    where none does (a still scene) it runs no workgroup at all.
  * 2. `ddgi/propagate-args`, one thread: the indirect dispatch size for the
  *    list (two dimensions past the per-dimension limit).
  * 3. `ddgi/propagate`, one workgroup per listed fine probe: adds, per texel,
@@ -39,7 +41,8 @@
  * Distances aren't propagated: a light change doesn't move them.
  *
  * Bindings (group 1, one declaration for the module, a layout per kernel):
- * uniforms (0), the probe history as words (1), the census (2), the
+ * uniforms (0), the probe history as words (1), the census (2, propagate
+ * only), the
  * propagation state written by find and args (3), the list (4), the key
  * deltas (5), propagation's scratch (6), the propagation state read-only
  * (7, beside its indirect use), and the irradiance, distance and probe-data
@@ -49,9 +52,9 @@
 
 import {
     CENSUS_CHANGE_CLOCK,
-    CENSUS_KEY_CHANGES_PASSED,
     CENSUS_PROBES_PROPAGATED,
     CENSUS_PROBES_PROPAGATED_TOTAL,
+    KEY_DELTA_FIND_ARGS_WORDS,
     KEY_DELTA_HEADER,
     KEY_DELTA_HEADER_WORDS,
     KEY_NEIGHBOURS,
@@ -156,7 +159,6 @@ const DDGI_KEYS_WEIGHT_SHIFT: u32 = ${PROBE_HISTORY_KEYS.weightShift}u;
 const DDGI_SCHEDULED_SHIFT: u32 = 8u;
 // The census and the propagation state (layout.ts).
 const DDGI_CENSUS_CHANGE_CLOCK: u32 = ${CENSUS_CHANGE_CLOCK}u;
-const DDGI_CENSUS_KEY_CHANGES_PASSED: u32 = ${CENSUS_KEY_CHANGES_PASSED}u;
 const DDGI_CENSUS_PROBES_PROPAGATED: u32 = ${CENSUS_PROBES_PROPAGATED}u;
 const DDGI_CENSUS_PROBES_PROPAGATED_TOTAL: u32 = ${CENSUS_PROBES_PROPAGATED_TOTAL}u;
 const DDGI_STATE_GROUPS_X: u32 = ${PROPAGATION_STATE_WORD.groupsX}u;
@@ -175,7 +177,12 @@ const DDGI_PROPAGATION_STRIDE: u32 = ${propagationScratchStrideWords(irradianceT
 @group(1) @binding(2) var<storage, read_write> ddgiCensus: array<atomic<u32>>;
 @group(1) @binding(3) var<storage, read_write> ddgiPropagationState: array<atomic<u32>>;
 @group(1) @binding(4) var<storage, read_write> ddgiPropagationList: array<u32>;
-@group(1) @binding(5) var<storage, read> ddgiKeyDeltas: array<u32>;
+// The key deltas (KEY_DELTA_FIND_ARGS_WORDS of find's dispatch size, then the entries).
+struct DdgiKeyDeltas {
+    findGroups: array<u32, ${KEY_DELTA_FIND_ARGS_WORDS}>,
+    words: array<u32>,
+}
+@group(1) @binding(5) var<storage, read> ddgiKeyDeltas: DdgiKeyDeltas;
 @group(1) @binding(6) var<storage, read_write> ddgiPropagationScratch: array<u32>;
 // The same state, read-only: ddgi/propagate is dispatched indirectly from it.
 @group(1) @binding(7) var<storage, read> ddgiPropagationCount: array<u32>;
@@ -213,8 +220,7 @@ fn ${PROPAGATE_ENTRY_POINTS.find}(
     let counts = ddgiProbeCount();
     let probeIndex = (group.x + group.y * groups.x) * DDGI_FIND_WORKGROUP_SIZE + thread;
     var take = false;
-    // Nothing to do in a frame where no key passed a change (a still scene).
-    if (atomicLoad(&ddgiCensus[DDGI_CENSUS_KEY_CHANGES_PASSED]) > 0u && probeIndex < counts.x * counts.y * counts.z) {
+    if (probeIndex < counts.x * counts.y * counts.z) {
         let probe = ddgiProbeCoordinates(probeIndex, counts);
         let flags = ddgiHistoryWords[probeIndex * DDGI_HISTORY_WORDS + DDGI_HISTORY_SCHEDULE_AND_FLAGS];
         if ((flags & DDGI_FLAG_AWAITING_CHANGE) != 0u && !ddgiIsKeyProbe(probe) && ddgiReadProbeData(ddgiProbeData, probe).state == DDGI_STATE_ACTIVE) {
@@ -287,12 +293,12 @@ fn ddgiPairVisibility(fine: vec3i, finePosition: vec3f, key: vec3i, keyPosition:
     return ddgiEndVisibility(fine, finePosition, keyPosition) * ddgiEndVisibility(key, keyPosition, finePosition);
 }
 
-// Thread 0's view of the probe's keys, for every thread.
-var<workgroup> ddgiKeyWeight: array<f32, DDGI_KEY_NEIGHBOURS>;     // w_j, normalised; 0 for a key that doesn't count
+// The probe's keys, one thread each, then normalised by thread 0, for every thread.
+var<workgroup> ddgiKeyWeight: array<f32, DDGI_KEY_NEIGHBOURS>;     // its visibility, then w_j normalised; 0 for a key that doesn't count
+var<workgroup> ddgiKeyChange: array<f32, DDGI_KEY_NEIGHBOURS>;     // s_j for a key that passed its change this frame, else -1
 var<workgroup> ddgiKeyShare: array<f32, DDGI_KEY_NEIGHBOURS>;      // w_j s_j for a key that passed its change this frame, else 0
 var<workgroup> ddgiKeySlot: array<u32, DDGI_KEY_NEIGHBOURS>;       // its key-delta entry
 var<workgroup> ddgiNewTexel: array<vec3f, DDGI_IRRADIANCE_TEXEL_COUNT>;
-var<workgroup> ddgiFineProbe: u32;
 var<workgroup> ddgiReceived: u32;                                   // 1 when any key passed it a change this frame
 
 // The share s_j of a key's change that came after the fine probe's own last
@@ -309,59 +315,68 @@ fn ddgiChangeShare(clock: u32, fineStamp: u32, keyStampBefore: u32) -> f32 {
     return saturate(f32(min(sinceFine, sinceKey)) / f32(sinceKey));
 }
 
-// Thread 0: the fine probe's keys, their weights and shares (the file comment).
-fn ddgiWeighKeys(fine: vec3i, fineIndex: u32) {
-    let fineData = ddgiReadProbeData(ddgiProbeData, fine);
-    let finePosition = ddgiProbePosition(fine, fineData.offset);
+// One thread per key neighbour j: whether the key counts (active, and
+// visible from both ends), its visibility (the trilinear weight on the key
+// lattice is the same for every key neighbour, so it cancels in the
+// normalisation), and, when it passed its change this frame, its key-delta
+// entry and s_j (the file comment). One thread each because each test reads
+// two distance texels: done in turn by one thread they set the pass's time.
+fn ddgiWeighKey(fine: vec3i, fineIndex: u32, neighbour: u32) {
+    ddgiKeyWeight[neighbour] = 0.0;
+    ddgiKeyChange[neighbour] = -1.0;
+    let key = ddgiKeyNeighbourOffset(neighbour, fine);
+    if (!key.exists) {
+        return;
+    }
+    let keyProbe = fine + key.offset;
+    let keyData = ddgiReadProbeData(ddgiProbeData, keyProbe);
+    if (keyData.state != DDGI_STATE_ACTIVE) {
+        return;
+    }
+    let finePosition = ddgiProbePosition(fine, ddgiReadProbeData(ddgiProbeData, fine).offset);
+    let visibility = ddgiPairVisibility(fine, finePosition, keyProbe, ddgiProbePosition(keyProbe, keyData.offset));
+    if (visibility < DDGI_VISIBLE_SHARE) {
+        return;
+    }
+    ddgiKeyWeight[neighbour] = visibility;
+    let keyIndex = ddgiProbeIndexOf(keyProbe);
+    if (!ddgiKeyPassedThisFrame(keyIndex)) {
+        return;
+    }
+    let slot = ddgiHistoryWords[keyIndex * DDGI_HISTORY_WORDS + DDGI_HISTORY_KEY_DELTA_SLOT];
+    let entry = slot * DDGI_KEY_DELTA_STRIDE;
+    // The entry is the key's own (a stale slot can't pass for it).
+    if (ddgiKeyDeltas.words[entry + DDGI_KEY_DELTA_PROBE_INDEX] != keyIndex) {
+        return;
+    }
+    let clock = atomicLoad(&ddgiCensus[DDGI_CENSUS_CHANGE_CLOCK]);
+    let fineStamp = ddgiHistoryWords[fineIndex * DDGI_HISTORY_WORDS + DDGI_HISTORY_CHANGE_CLOCK];
+    ddgiKeySlot[neighbour] = slot;
+    ddgiKeyChange[neighbour] = ddgiChangeShare(clock, fineStamp, ddgiKeyDeltas.words[entry + DDGI_KEY_DELTA_CLOCK_BEFORE]);
+}
+
+// Thread 0, after ddgiWeighKey: the weights normalised over the keys that
+// count, the shares w_j s_j, and what the probe has received.
+fn ddgiNormaliseKeys(fineIndex: u32) {
     var weightSum = 0.0;
     for (var neighbour = 0u; neighbour < DDGI_KEY_NEIGHBOURS; neighbour++) {
-        ddgiKeyWeight[neighbour] = 0.0;
-        ddgiKeyShare[neighbour] = 0.0;
-        let key = ddgiKeyNeighbourOffset(neighbour, fine);
-        if (!key.exists) {
-            continue;
-        }
-        let keyProbe = fine + key.offset;
-        let keyData = ddgiReadProbeData(ddgiProbeData, keyProbe);
-        if (keyData.state != DDGI_STATE_ACTIVE) {
-            continue;
-        }
-        let visibility = ddgiPairVisibility(fine, finePosition, keyProbe, ddgiProbePosition(keyProbe, keyData.offset));
-        if (visibility < DDGI_VISIBLE_SHARE) {
-            continue;
-        }
-        // The trilinear weight on the key lattice is the same for every key
-        // neighbour, so it cancels in the normalisation.
-        ddgiKeyWeight[neighbour] = visibility;
-        weightSum += visibility;
+        weightSum += ddgiKeyWeight[neighbour];
     }
-
     let base = fineIndex * DDGI_HISTORY_WORDS;
-    let clock = atomicLoad(&ddgiCensus[DDGI_CENSUS_CHANGE_CLOCK]);
-    let fineStamp = ddgiHistoryWords[base + DDGI_HISTORY_CHANGE_CLOCK];
-    let receivedWord = ddgiHistoryWords[base + DDGI_HISTORY_KEYS_RECEIVED];
-    var receivedBits = receivedWord & DDGI_KEYS_BITS_MASK;
+    var receivedBits = ddgiHistoryWords[base + DDGI_HISTORY_KEYS_RECEIVED] & DDGI_KEYS_BITS_MASK;
     var passed = false;
     for (var neighbour = 0u; neighbour < DDGI_KEY_NEIGHBOURS; neighbour++) {
+        ddgiKeyShare[neighbour] = 0.0;
         if (!(ddgiKeyWeight[neighbour] > 0.0)) {
             continue;
         }
         let weight = ddgiKeyWeight[neighbour] / weightSum;
         ddgiKeyWeight[neighbour] = weight;
-        let keyIndex = ddgiProbeIndexOf(fine + ddgiKeyNeighbourOffset(neighbour, fine).offset);
-        if (!ddgiKeyPassedThisFrame(keyIndex)) {
-            continue;
+        if (ddgiKeyChange[neighbour] >= 0.0) {
+            ddgiKeyShare[neighbour] = weight * ddgiKeyChange[neighbour];
+            receivedBits = receivedBits | (1u << neighbour);
+            passed = true;
         }
-        let slot = ddgiHistoryWords[keyIndex * DDGI_HISTORY_WORDS + DDGI_HISTORY_KEY_DELTA_SLOT];
-        let entry = slot * DDGI_KEY_DELTA_STRIDE;
-        // The entry is the key's own (a stale slot can't pass for it).
-        if (ddgiKeyDeltas[entry + DDGI_KEY_DELTA_PROBE_INDEX] != keyIndex) {
-            continue;
-        }
-        ddgiKeySlot[neighbour] = slot;
-        ddgiKeyShare[neighbour] = weight * ddgiChangeShare(clock, fineStamp, ddgiKeyDeltas[entry + DDGI_KEY_DELTA_CLOCK_BEFORE]);
-        receivedBits = receivedBits | (1u << neighbour);
-        passed = true;
     }
     ddgiReceived = select(0u, 1u, passed);
     // What the probe has received since its own last update: each key's
@@ -385,7 +400,7 @@ fn ddgiIrradianceAtlasTexel(probe: vec3i, texelIndex: u32) -> vec2i {
 
 fn ddgiKeyDeltaTexel(slot: u32, texelIndex: u32) -> vec3f {
     let word = slot * DDGI_KEY_DELTA_STRIDE + DDGI_KEY_DELTA_HEADER_WORDS + 2u * texelIndex;
-    return vec3f(unpack2x16float(ddgiKeyDeltas[word]), unpack2x16float(ddgiKeyDeltas[word + 1u]).x);
+    return vec3f(unpack2x16float(ddgiKeyDeltas.words[word]), unpack2x16float(ddgiKeyDeltas.words[word + 1u]).x);
 }
 
 @compute @workgroup_size(DDGI_PROPAGATE_WORKGROUP_SIZE)
@@ -400,8 +415,12 @@ fn ${PROPAGATE_ENTRY_POINTS.propagate}(
     }
     let fineIndex = ddgiPropagationList[entry];
     let fine = ddgiProbeCoordinates(fineIndex, ddgiProbeCount());
+    if (thread < DDGI_KEY_NEIGHBOURS) {
+        ddgiWeighKey(fine, fineIndex, thread);
+    }
+    workgroupBarrier();
     if (thread == 0u) {
-        ddgiWeighKeys(fine, fineIndex);
+        ddgiNormaliseKeys(fineIndex);
     }
     workgroupBarrier();
 
