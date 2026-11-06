@@ -21,6 +21,40 @@ Rules:
 
 ---
 
+## 2026-11-06 · T2.1 review and merge · M2 lead (opus)
+Did:
+- Opus review of T2.1 against its done-when: pass with notes. The one must-fix was a valid timing for item 3. A gpu-tester ran it after Dennis's PC restart: VALID, met.
+- Lead rulings in DECISIONS (b498b5c on the branch, plus two on `m2`):
+  - the candle selection rule is confirmed;
+  - motion targets are named by label;
+  - from 9 unranged changes in a frame, the change goes global;
+  - item 3 is met;
+  - a new bar: `sponza-candles` ready from load in ≤ 2× `sponza`'s time.
+- Merged `m2-t2.1` into `m2` with no conflicts. Lint, typecheck and 1,052 unit tests pass.
+- TASKS: T2.1 done; new done-when lines for T2.3 (the set-up time) and T2.7 (motion label checks).
+
+Verified (reviewer, RTX 3060 nvidia/ampere, Chrome 156 headless, correctness):
+- the full suite, 48 pages plus 2 self-tests;
+- `platform-recompiles`: 4,096 lights (64 directional, 2,688 point, 1,344 spot), 0 recompiles, control 1;
+- `assets:fetch --verify-only` passes, and the main checkout's shared folder still verifies;
+- `ddgi-sponza-candles`: counts as claimed, still frames mark 0;
+- `ddgi-schedule-sponza`: lamp recall 98.4% / 98.9%.
+
+Nothing from the candle package is committed.
+
+Numbers:
+- Item 3, gpu-tester: `three-adapter-timing` on `sponza-candles`, still mode, DDGI paused, CPU-timed, both locks held, VALID (48 °C, 0% of 51 samples throttled). Median **0.10 ms**, p95 0.20 ms.
+- Mark with all candles changing: 0.074 ms. That is the implementer's VALID run; the reviewer's own run, 0.074–0.086 ms, was INVALID.
+- Sponza lamp on the key path, view moved 52%: lamp in, within 5% from frame 8, overshoot 0.4%; lamp jumped 6 m back, frame 38, overshoot 7–12.6% across runs.
+- Set-up, gpu-tester, `ddgi-batch-cost` startup, VALID: ready from load 958 s against 7.8 s for `sponza`. That splits into load files 420.6 s, warm-up 530.8 s (2.1 passes) and calibration 2.6 s at 1 probe.
+- Triangles: three 7,745,280; GI 5,746,338. 1,024 candles.
+
+Next:
+- T2.3: the set-up time (≤ 2× `sponza`), the 3 fps, and `gi/direct` with 1,024 lights.
+- T2.4d: record the lamp jumped 6 m back (38 frames, against a bar of 30).
+- The loader's motion-label check (TASKS, T2.7).
+- The viewer took 399 s to set up `sponza-candles`; that is a different measure from the 958 s.
+
 ## 2026-11-06 · T2.1 light buffer v2, motions, sponza-candles · implementer (opus)
 Did (branch `m2-t2.1`, 3f5b9fc..HEAD, `m2` merged in at f388d75):
 - Platform: the light table starts at 64 (doubles; no shader changes). `ddgi/mark`'s table (mark-table.ts only, no WGSL): more than 8 unranged light changes a frame are folded (each exact within 2 spacings, one `everywhere` entry with a bound for the rest; DECISIONS).
