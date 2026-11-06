@@ -26,6 +26,11 @@
  *    gpuMs × 1.1, as a median over the day's timed frames; its p95, and the
  *    trace + blend + write part Budget v2 calibrates on, are reported.
  *
+ * Each section also reports every pass's median and what the update list
+ * held (rays traced, hits lit by gi/direct, probes at priority and owed,
+ * from the census), so a miss can be traced to a pass (T2.4d). Since T2.4d
+ * the day runs with the batch while changes continue (continuing-change.ts).
+ *
  * Manual (needs the Sponza download), under the bench lock:
  *   node tools/reference/bench-lock.ts run --what "T2.4c cost" -- pnpm test:gpu --filter ddgi-key-probes-cost --gpu nvidia --json <file>
  */

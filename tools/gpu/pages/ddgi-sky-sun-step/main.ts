@@ -34,11 +34,15 @@
  *   VITE_DDGI_SECTIONS=explore         (only the step's size on 24 candidate views)
  *   VITE_DDGI_SECTIONS=rho             (the room's bounce share, every probe every frame at h = 0)
  *   VITE_DDGI_BOUNCE_SHARE=<rho>       (changeBounceShare for the step's run)
+ *   VITE_DDGI_SETTINGS=<json>          (DDGI settings for the step's run, Object.assign-ed: for comparing rules)
  *
  * The step's run also follows two groups of 12 probes near and in the view
  * (the largest change, and the largest relative change of the rest) at
  * TRACK_FRAMES: their error against the converged field, updates since the
  * step, history count n, owed updates, and how many still hold a cut.
+ * And the field by class (T2.4d, 'byClass'): keys, fine probes near the
+ * view, in view farther off, and the rest, each with its light-weighted
+ * error, updates since the step, history count, and how many wait for keys.
  *
  * Also reported per bookmark: the probes' marked r against their true
  * change (medians), which tells a mark that underestimates the change from

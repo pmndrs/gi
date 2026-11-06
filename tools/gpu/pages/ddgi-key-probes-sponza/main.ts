@@ -38,6 +38,7 @@
  * each converged from the start (ddgi-shared/sponza-response.ts).
  *
  *   VITE_DDGI_SECTIONS=turn,halved,hold,fallback   (default all)
+ *   VITE_DDGI_SETTINGS=<json>                      (DDGI settings for the turn's run, Object.assign-ed: for comparing rules)
  *
  * Manual (needs the Sponza download): `pnpm test:gpu --filter ddgi-key-probes-sponza --gpu nvidia`.
  */
