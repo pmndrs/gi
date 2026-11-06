@@ -9,8 +9,6 @@ export default defineConfig({
         alias: [
             { find: /^@pmndrs\/ddgi$/, replacement: resolve(__dirname, '../../packages/ddgi/src/index.ts') },
             { find: /^@pmndrs\/ddgi\/(core|three)$/, replacement: resolve(__dirname, '../../packages/ddgi/src/$1.ts') },
-            // The composite example's upscaler: a dependency of the viewer for now (this folder isn't a workspace package yet).
-            { find: /^@pmndrs\/upscaler$/, replacement: resolve(__dirname, '../../apps/viewer/node_modules/@pmndrs/upscaler/dist/index.js') },
         ],
     },
     build: {

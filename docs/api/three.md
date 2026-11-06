@@ -67,7 +67,7 @@ renderer.setAnimationLoop(() => pipeline.render());
 | GI per fragment (no pipeline) | 3.4 ms | as the composite without occlusion |
 
 - **The upscaler's own cost is separate:** 1.55 ms per frame (Performance) or 1.72 ms (Quality), with or without GI. On Sponza at 1440p the upscaled frame without GI costs more than native (2.58 + 1.72 ms against 3.0 ms). You'd use it for the frame as a whole, not for GI.
-- The accuracy figures use the HD Cycles reference at 1920 × 1080; the base package (no curtains) reads −1.2%, and Cornell +0.2%.
+- The Sponza accuracy figures use the HD Cycles reference at 1920 × 1080 (except where marked). The base package (no curtains) reads −1.2% against its 640 × 360 reference, the only one it has so far; Cornell reads +0.2% at 1920 × 1080.
 
 - `giAlbedo` is the weight three's lighting gives indirect diffuse light, per pixel: the diffuse colour × (1 − F_ss − F_ms) × ambient occlusion for Standard and Physical materials, as r187's `PhysicalLightingModel` applies it.
 - `ddgi()` adds `giAlbedo × E / π` to the pass's linear HDR colour before the pipeline's tone mapping. It matches the per-fragment image to 0.04–0.08% on average (p95 under 0.25%) on Cornell and Sponza, on both test GPUs.

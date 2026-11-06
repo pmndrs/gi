@@ -21,6 +21,18 @@ Rules:
 
 ---
 
+## 2026-11-06 · T1.14 cleanups after the final Opus review · implementer (opus)
+Did (uncommitted):
+- `packages/ddgi-three/src/composite.ts`: the GI evaluation is back inline in the composite (no helper, no `Vec2Node`/`FloatNode` aliases, none of their casts); the stray blank lines are gone; a default GTAO replaced when the pass's scale crosses 1 is `dispose()`d; the `occlusionNode` comment says it is re-chosen at any build where the scale has crossed 1.
+- `render-time-update.test.ts`: the default occlusion is tested through `setup()` (the build): it's made when the pass is reduced after `ddgi()`, then dropped and disposed when the pass is back at full resolution. This replaces the test of the private method.
+- `docs/api/three.md`: the base package's −1.2% is against its 640×360 reference.
+- `examples/three` is a workspace package (`@pmndrs/ddgi-example-three`: `@pmndrs/ddgi` workspace, `@pmndrs/upscaler` 0.5.0, `three` 0.187.0, `vite`), listed in `pnpm-workspace.yaml`. The root has `@pmndrs/upscaler` 0.5.0 as a devDependency for the GPU pages (`three-composite-shared/variants.ts` now imports it by name). The aliases into `apps/viewer/node_modules` are gone (examples vite config, `tools/gpu/server.ts`, tsconfig paths). `pnpm install`: the lockfile gained 19 lines, the two importer entries and nothing else (no new packages resolved).
+Verified (RTX 3060, headless Chrome 156):
+- lint, typecheck and `pnpm test` (944 passed);
+- `pnpm build`, and `pnpm --filter @pmndrs/ddgi-example-three build`;
+- `test:gpu --filter three-`: 9 of 9 (Cornell point 0.042% / 0.16%; examples GI 45.8% simple, 44.8% composite through the upscaler).
+Not verified: the Intel this round (the lead ran all 9 on it before these cleanups).
+
 ## 2026-11-06 · T1.14 default locked: the upscaler's Performance preset with half-resolution GTAO · implementer (opus)
 Did (uncommitted):
 - **HD re-measure** (`three-composite-ao/run.ts`, whose `sponza` default is now the HD reference: `cycles-untextured-gi.exr` at 1920×1080 with `gi-materials.json`, `7680a2d0…`). The GI term through `@pmndrs/upscaler` at the stored camera, GTAO 1 m, 16 samples, at half the render resolution, RTX:

@@ -89,7 +89,6 @@ import {
     positionViewDirection,
     roughness,
     sample,
-    select,
     specularColor,
     specularF90,
     uniform,
@@ -239,10 +238,6 @@ export interface DDGICompositeOptions {
     readonly occlusion?: false | GIOcclusionSettings | { readonly source: GIOcclusionSource };
 }
 
-type Vec2Node = Node<'vec2'>;
-type Vec3Node = Node<'vec3'>;
-type FloatNode = Node<'float'>;
-
 /** 1 / π: three's Lambert BRDF factor (`BRDF_Lambert`), which turns irradiance into reflected radiance. */
 const RECIPROCAL_PI = 1 / Math.PI;
 
@@ -278,7 +273,8 @@ export class DDGICompositeNode extends Node {
      * The composite's own GTAO on the GI term, when it makes one: change its
      * `radius.value` or `samples.value` live. Null when occlusion is off or
      * comes from the pipeline (`occlusion: { source }`). With the default
-     * occlusion it can change at the first build (the class comment).
+     * occlusion it is re-chosen at any build where the pass's resolution
+     * scale has crossed 1 since the last choice (the file comment).
      */
     get occlusionNode(): GTAONode | null {
         return this.ownOcclusion;
@@ -345,6 +341,8 @@ export class DDGICompositeNode extends Node {
         const reduced = this.scenePass.getResolutionScale() < 1;
         if (reduced === this.defaultForReducedPass) return;
         this.defaultForReducedPass = reduced;
+        // The GTAO the previous choice made is no longer read: free its render target and material.
+        this.ownOcclusion?.dispose();
         const occlusion = defaultOcclusion(this.scenePass);
         this.ownOcclusion = occlusion === false ? null : makeOcclusion(this.scenePass, occlusion);
         this.occlusionSource = this.ownOcclusion;
@@ -413,33 +411,6 @@ export class DDGICompositeNode extends Node {
         const depthTexture = scenePass.getTextureNode('depth');
         const occlusionTexture = this.occlusionSource?.getTextureNode() ?? null;
 
-        /**
-         * GI irradiance at one pixel, from its depth and packed normal: E × intensity
-         * where GI's coverage claims the probe slot (as the per-fragment path does), else 0.
-         */
-        const irradianceAt = (screen: Vec2Node, depth: FloatNode, packedNormal: Vec3Node): Vec3Node => {
-            const viewPosition = getViewPosition(screen as never, depth as never, projectionMatrixInverse);
-            const worldPosition = cameraWorldMatrix.mul(vec4(viewPosition, 1)).xyz.toVar();
-            // The pass stores the view-space shading normal; the camera's world matrix turns it into world space.
-            const worldNormal = cameraWorldMatrix.mul(vec4(unpackRGBToNormal(packedNormal as never), 0)).xyz.normalize();
-            const eye = cameraWorldMatrix.mul(vec4(0, 0, 0, 1)).xyz;
-            // From the eye towards the point, as the shading module expects (gi-light.ts does the same).
-            const viewDirection = worldPosition.sub(eye).normalize();
-            const lighting = (
-                entry({
-                    position: worldPosition,
-                    normal: worldNormal,
-                    viewDirection,
-                    screenUV: screen,
-                    computeCoverage: this.computeCoverage,
-                    ...moduleNodes.resources(),
-                }) as unknown as ReturnType<typeof vec4>
-            ).toVar();
-            // The per-fragment path adds GI only where its coverage claims the probe slot.
-            return select(lighting.w.greaterThan(0), lighting.xyz.mul(this.intensity), vec3(0)) as unknown as Vec3Node;
-        };
-
-
         const composite = Fn(() => {
             const screen = uv();
             const sceneColor = colorTexture.sample(screen).toVar('threeGiSceneColor');
@@ -449,20 +420,37 @@ export class DDGICompositeNode extends Node {
             // Background pixels and surfaces that shade GI themselves (weight 0) skip the probe lookup.
             const lit = isBackgroundDepth(depth).not().and(weight.r.add(weight.g).add(weight.b).greaterThan(0));
             If(lit, () => {
-                const packedNormal = normalTexture.sample(screen).rgb as unknown as Vec3Node;
-                const pixelUV = screen as unknown as Vec2Node;
-                const pixelDepth = depth as unknown as FloatNode;
-                let irradiance: Vec3Node = irradianceAt(pixelUV, pixelDepth, packedNormal).toVar('threeGiIrradiance');
-                // Short-range occlusion on the GI term only (file comment).
-                if (occlusionTexture) irradiance = irradiance.mul(occlusionTexture.sample(screen).r);
-                const indirectDiffuse = weight.mul(irradiance).mul(RECIPROCAL_PI);
-                result.assign(vec4(sceneColor.rgb.add(indirectDiffuse), sceneColor.a));
+                const viewPosition = getViewPosition(screen, depth, projectionMatrixInverse);
+                const worldPosition = cameraWorldMatrix.mul(vec4(viewPosition, 1)).xyz.toVar('threeGiPosition');
+                // The pass stores the view-space shading normal; the camera's world matrix turns it into world space.
+                const viewNormal = unpackRGBToNormal(normalTexture.sample(screen).rgb);
+                const worldNormal = cameraWorldMatrix.mul(vec4(viewNormal, 0)).xyz.normalize();
+                const eye = cameraWorldMatrix.mul(vec4(0, 0, 0, 1)).xyz;
+                // From the eye towards the point, as the shading module expects (gi-light.ts does the same).
+                const viewDirection = worldPosition.sub(eye).normalize();
+                const lighting = (
+                    entry({
+                        position: worldPosition,
+                        normal: worldNormal,
+                        viewDirection,
+                        screenUV: screen,
+                        computeCoverage: this.computeCoverage,
+                        ...moduleNodes.resources(),
+                    }) as unknown as ReturnType<typeof vec4>
+                ).toVar('threeGiLighting');
+                // The per-fragment path adds GI only where its coverage claims the probe slot.
+                If(lighting.w.greaterThan(0), () => {
+                    let irradiance = lighting.xyz.mul(this.intensity);
+                    // Short-range occlusion on the GI term only (file comment).
+                    if (occlusionTexture) irradiance = irradiance.mul(occlusionTexture.sample(screen).r);
+                    const indirectDiffuse = weight.mul(irradiance).mul(RECIPROCAL_PI);
+                    result.assign(vec4(sceneColor.rgb.add(indirectDiffuse), sceneColor.a));
+                });
             });
             return result;
         });
         return composite() as unknown as Node;
     }
-
 }
 
 /**

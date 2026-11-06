@@ -18,8 +18,7 @@
  *   nothing reprojects the history, see `AccumulatedOcclusion`); three's
  *   SSAO (`SSAONode`, its own blur, half resolution by default).
  *
- * The upscaler is a dependency of the viewer only, so it is imported from
- * there by path; vite resolves its `three` to the same copy as ours.
+ * The upscaler is a devDependency of the workspace root, for these pages.
  */
 
 import { HalfFloatType, Node, NodeMaterial, NodeUpdateType, QuadMesh, RenderTarget, type Camera, type NodeFrame, type PassNode, type Texture, type TextureNode, type WebGPURenderer } from 'three/webgpu';
@@ -27,7 +26,7 @@ import { mix, mrt, normalView, output, packNormalToRGB, pass, passTexture, rtt, 
 import { ao } from 'three/addons/tsl/display/GTAONode.js';
 import type GTAONode from 'three/addons/tsl/display/GTAONode.js';
 import { ssao } from 'three/addons/tsl/display/SSAONode.js';
-import { QualityMode, getQualityModeRatio, upscale, upscaleScene, type UpscalerNode } from '../../../../apps/viewer/node_modules/@pmndrs/upscaler/dist/index.js';
+import { QualityMode, getQualityModeRatio, upscale, upscaleScene, type UpscalerNode } from '@pmndrs/upscaler';
 import { DDGICompositeNode, giAlbedo, DEFAULT_GI_OCCLUSION_RADIUS, GI_ALBEDO_OUTPUT, GI_NORMAL_OUTPUT, type CompositeGISource, type GIOcclusionSource } from '../../../../packages/ddgi-three/src/composite.ts';
 
 export { QualityMode };

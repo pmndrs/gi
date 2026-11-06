@@ -130,15 +130,22 @@ describe('the composite node, ddgi(scenePass, volume)', () => {
         expect(ddgi(compositePass(), new GIVolume()).occlusionNode).toBeNull();
     });
 
-    it('re-chooses the default when the pass is reduced after ddgi(), at the build', () => {
+    it('chooses the default occlusion when the pipeline builds it (setup), and frees a GTAO it replaces', () => {
         const scenePass = compositePass();
-        const node = ddgi(scenePass, new GIVolume());
+        const node = ddgi(scenePass, { light: new GILight(fakeShading()) });
         expect(node.occlusionNode).toBeNull();
-        scenePass.setResolutionScale(1 / 2);
-        // What setup() does first: the default follows the pass as it is at the build.
-        (node as unknown as { resolveOcclusion(): void }).resolveOcclusion();
-        expect(node.occlusionNode).not.toBeNull();
-        expect(node.occlusionNode!.resolutionScale).toBe(0.5);
+        // The pass is reduced after ddgi(): the build follows the pass as it is then.
+        scenePass.setResolutionScale(0.5);
+        node.setup({} as Parameters<typeof node.setup>[0]);
+        const gtao = node.occlusionNode!;
+        expect(gtao).not.toBeNull();
+        expect(gtao.resolutionScale).toBe(0.5);
+        // Back to full resolution: the next build drops the default GTAO and frees it.
+        const dispose = vi.spyOn(gtao, 'dispose');
+        scenePass.setResolutionScale(1);
+        node.setup({} as Parameters<typeof node.setup>[0]);
+        expect(node.occlusionNode).toBeNull();
+        expect(dispose).toHaveBeenCalledTimes(1);
     });
 
     it("sizes its GTAO from the scene pass (not the drawing buffer), with GTAO's own scale relative to the pass", () => {
