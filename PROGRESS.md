@@ -21,6 +21,29 @@ Rules:
 
 ---
 
+## 2026-11-06 · T2.6a review and merge; new task T2.4d · M2 lead (opus)
+Did:
+- Opus review of T2.6a against its done-when: pass with notes; check 4 fails.
+- I sent the implementer back three times on check 4 (the key path forced on; why the 3 s tail; the bounce share and a held cut). The cause is the order of updates, not throughput.
+- Review must-fix: the 10-second day in `ddgi-key-probes-cost` was not a day. Fixed as an explicit path (5°→75°→5°, azimuth 160°) and re-timed once: it misses.
+- Merged `m2-t2.6a` into `m2`. The branch already had `m2` with T2.M1 (c780ff5).
+- TASKS: T2.6a done with check 4 moved; T2.4c's status notes its day; new row T2.4d with a done-when (check 4, the real day, no regressions). It is proposed to Dennis via the orchestrator.
+
+Verified:
+- Reviewer, RTX 3060 nvidia/ampere, Chrome 156 headless, correctness only: suite 48/48; check 1 reproduced (means 0.02%, worst texel 0.11%); check 4 reproduced (25% / 23% at 0.5 s, 10% at 3 s); Sponza turn −40.9%, view within 5% from frame 13, field from frame 36; the same sky set again marks 0.
+- Implementer after the merge: RTX suite 49/49; `ddgi-mark-reduction`, `scene-set-transforms`, door and cabinet pass.
+- Lead, on the merged tree: lint, typecheck, 1,012 unit tests.
+
+Not verified: the Intel UHD after the merge. Check 4's miss was not compared against `m2` with r = 1; the reviewer estimates the real r is not the cause.
+
+Numbers:
+- The real day: median 3.40 ms, p95 3.77, against the 2.2 ms margin. One VALID run: 62 °C start, 0% throttled, 629 probes. The still update is 2.02 ms.
+- T2.4c's earlier "2.17 ms during a day" and its Sponza turns before b4e1fad had the sun over the zenith or below the horizon (NOTES).
+
+Next:
+- T2.4d (proposed): the room's response order, and the cost while the sun moves. First find where the extra 1.4 ms goes. Propagate and mark were 0.06 ms, so a likely suspect is more lit hits for `gi/direct` with a higher sun than at calibration.
+- T2.10 still measures the frames after a big step.
+
 ## 2026-11-06 · T2.6a sky re-bake for time of day · implementer (opus)
 Did (branch `m2-t2.6a`, b50057e..HEAD):
 - A `procedural` sky is baked on the GPU. `platform/sky/procedural-sky.ts` holds the per-sky Preetham and calibration numbers and the re-bake rule (the sun turned more than 0.05°, or any other change).
