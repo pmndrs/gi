@@ -131,7 +131,7 @@ await runThreePage(async ({ device, data, log: logLine }) => {
     results.keyPath = { probes, framesForEveryProbe: Number(framesForEveryProbe.toFixed(1)), ruleFrames: FAR_RULE_FRAMES, on: framesForEveryProbe > FAR_RULE_FRAMES && test.scene.ddgi.settings.keyProbes !== false };
     if (!(results.keyPath as { on: boolean }).on) failures.push(`the key-probe path is off at ${units} probes a frame (${framesForEveryProbe.toFixed(0)} frames for every probe's K updates)`);
     const settledFirst = await convergeSponza(test, 'the lamp at its first place', log, units);
-    const passedBefore = test.scene.ddgi.counters['key probes passing a change (total)'] ?? 0;
+    const passedBefore = test.scene.ddgi.counters['key changes passed (total)'] ?? 0;
 
     const steps: Record<string, unknown>[] = [];
     for (const [name, time, before, settled] of [
@@ -159,7 +159,7 @@ await runThreePage(async ({ device, data, log: logLine }) => {
         if (response.settledFrame === null) failures.push(`the step ${name}: the view never settled within 5% in ${STEP_FRAMES} frames`);
         await sponzaFrames(test, 0, units);
     }
-    const passedAfter = test.scene.ddgi.counters['key probes passing a change (total)'] ?? 0;
+    const passedAfter = test.scene.ddgi.counters['key changes passed (total)'] ?? 0;
     results.keyProbesPassingAChange = passedAfter - passedBefore;
     if (!(passedAfter > passedBefore)) failures.push('no key probe passed a change on: the step did not take the key-probe path');
     log(`calibrated at ${BUDGET_MS} ms to ${units} probes a frame; key path on (${framesForEveryProbe.toFixed(0)} frames for every probe's K updates, over ${FAR_RULE_FRAMES}); key probes passed a change on ${passedAfter - passedBefore} times`);
