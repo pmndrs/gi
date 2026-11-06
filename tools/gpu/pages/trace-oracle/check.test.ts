@@ -6,12 +6,10 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import {
-    assembleTraceScene,
-    buildMeshBvh,
-    createCpuTracer,
-    type TracedHit,
-} from '../../../../packages/ddgi-core/src/platform/trace/index.ts';
+import { assembleTraceScene, createCpuTracer } from '../../../../packages/ddgi-core/src/platform/trace/index.ts';
+import { buildMeshBvhWithTinyBvh } from '../../../../packages/ddgi-core/src/platform/trace/mesh-bvh-topology.ts';
+import { createTinyBvhBuilder } from '../../../../packages/bvh/src/index.ts';
+import { type TracedHit } from '../../../../packages/ddgi-core/src/platform/trace/oracle-compare.ts';
 import { buildOracleCases, sharedEdgeCase, SMALL_SIZES, unpackRay, type OracleCase } from './cases.ts';
 import {
     computeReferenceAnswers,
@@ -22,10 +20,13 @@ import {
     type TracerAnswers,
 } from './check.ts';
 
+// Mesh trees come from tinybvh (WASM), the only mesh builder since B0.
+const tinyBvh = await createTinyBvhBuilder();
+
 /** Answers from the CPU port of the walk: the tracer that passes every case (see cases.test.ts). */
 function cpuAnswers(oracleCase: OracleCase): TracerAnswers {
     const scene = assembleTraceScene(
-        oracleCase.meshes.map((mesh) => buildMeshBvh(mesh)),
+        oracleCase.meshes.map((mesh) => buildMeshBvhWithTinyBvh(mesh, tinyBvh)),
         oracleCase.instances,
     );
     const tracer = createCpuTracer(scene);

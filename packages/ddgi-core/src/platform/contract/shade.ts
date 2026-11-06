@@ -21,11 +21,11 @@ import type { WgslModule } from './wgsl';
  *
  * ```wgsl
  * struct GiSurface {
- *     position: vec3f,       // world space
+ *     position: vec3f,       // world space, on the triangle (moved 64 rounding steps in from its edges, so a shadow ray can't start outside a closed shell)
  *     normal: vec3f,         // shading normal (interpolated vertex normal if the mesh has one), facing the ray's origin side
  *     geometricNormal: vec3f, // the triangle's own normal; used for front/back decisions
  *     uv: vec2f,
- *     albedo: vec3f,         // diffuse albedo, cutout already applied
+ *     albedo: vec3f,         // diffuse albedo, cutout already applied, capped per channel at bounceAlbedoCap
  *     emission: vec3f,       // emitted radiance
  *     material: u32,
  *     instance: u32,
@@ -36,16 +36,26 @@ import type { WgslModule } from './wgsl';
  * fn giSurfaceAt(ray: GiRay, hit: GiHit) -> GiSurface
  *
  * // Direct light arriving at the surface from the lights whose group bit is
- * // set in `groupMask`, as irradiance (shadow rays included).
- * // `random` decorrelates stochastic light selection between calls.
+ * // set in `groupMask` (bits 0-3), as irradiance (shadow rays included).
+ * // Lights only: the sky reaches a technique through its rays that miss.
+ * // `random`, uniform in [0, 1)^2, decorrelates stochastic light selection
+ * // (random.x) and soft-shadow samples between calls.
  * fn giDirectIrradiance(surface: GiSurface, groupMask: u32, random: vec2f) -> vec3f
  *
  * // Radiance seen along a ray that missed everything.
  * fn giSkyRadiance(direction: vec3f) -> vec3f
  *
- * // Irradiance from the sky alone at a surface (for the sky light group).
+ * // Irradiance from the sky alone at a surface (for the sky light group),
+ * // with nothing in the way (no visibility).
  * fn giSkyIrradiance(surface: GiSurface) -> vec3f
+ * // The same for any unit normal.
+ * fn giSkyIrradianceAt(normal: vec3f) -> vec3f
  * ```
+ *
+ * Point and spot lights fall off exactly as in three.js r187 (inverse square,
+ * d^2 clamped at 0.01, windowed to zero at `range`; spot cones by smoothstep
+ * between the outer and inner cone), so the three adapter matches what three
+ * renders. Implemented in `platform/shade/`.
  *
  * A technique adds bounce light itself, from its bounce source:
  * `radiance = surface.emission + surface.albedo / π * (direct + bounce)`.
@@ -64,7 +74,8 @@ export interface HitShadingSettings {
      * evaluated; local lights beyond this count are chosen stochastically,
      * weighted by their estimated contribution, and the result is rescaled so
      * it stays unbiased. Keeps hit cost flat as light count grows toward the
-     * 32-light minimum capacity.
+     * 32-light minimum capacity. At least 1 (smaller values count as 1).
+     * Defaults to 4.
      */
     maxShadowedLightsPerHit: number;
     /**

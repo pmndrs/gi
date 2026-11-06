@@ -1,7 +1,8 @@
 /**
  * What every GI technique in the viewer provides, so the view, the wipe and
- * the benchmark treat three's `LightProbeGrid`, three's VXGI and (later) our
- * own DDGI the same way. SPEC: "one output contract".
+ * the benchmark treat our DDGI, three's `LightProbeGrid` and three's VXGI the
+ * same way. SPEC: "one output contract". The Cycles reference image fits the
+ * same shape, so the wipe can put it next to any technique.
  */
 
 import type { PerspectiveCamera } from 'three';
@@ -9,18 +10,31 @@ import type { Node, WebGPURenderer } from 'three/webgpu';
 import type { GiMode } from '../scene/layers';
 import type { LoadedScene } from '../scene/load-scene';
 
-export type TechniqueId = 'none' | 'lpg' | 'vxgi';
+/**
+ * - `none`: direct light only;
+ * - `ddgi`: our DDGI, through the three.js adapter;
+ * - `lpg`, `vxgi`: three.js's own baselines;
+ * - `cycles`: the path-traced Cycles reference image of the current camera view (not a live technique).
+ */
+export type TechniqueId = 'none' | 'ddgi' | 'lpg' | 'vxgi' | 'cycles';
+
+/** Techniques that light the live scene (everything but "none" and the reference image). */
+export type GiTechniqueId = 'ddgi' | 'lpg' | 'vxgi';
 
 export const TECHNIQUE_LABELS: Record<TechniqueId, string> = {
     none: 'No GI (direct light only)',
+    ddgi: 'DDGI (ours)',
     lpg: 'Light probe grid (three.js)',
     vxgi: 'VXGI (three.js)',
+    cycles: 'Cycles reference (path traced)',
 };
 
 export interface TechniqueContext {
     renderer: WebGPURenderer;
     device: GPUDevice;
     loaded: LoadedScene;
+    /** Whether the device has GPU timestamp queries (DDGI's millisecond budget and its stats need them). */
+    hasTimestamps: boolean;
 }
 
 /** Quality presets of the optional temporal upscaler. */
@@ -48,6 +62,14 @@ export interface GiTechnique {
     syncCamera(viewerCamera: PerspectiveCamera): void;
     /** Draws anything the technique wants drawn outside the render pipeline. Called once per frame, after `syncCamera`. */
     renderBeforePipeline?(): void;
+    /**
+     * Optional debug drawing over this technique's picture in display space: `display` is the picture
+     * after tone mapping and output colour (what the screen shows, 0 to 1), so the overlay's colours
+     * reach the screen exactly. The viewer builds it again whenever `overlayKey` changes.
+     */
+    overlay?(display: Node): Node;
+    /** What `overlay` draws, as a string that changes whenever its result would. */
+    readonly overlayKey?: string;
 
     /**
      * Set-up (a probe bake, a re-voxelization) is done in steps that only
@@ -68,6 +90,12 @@ export interface GiTechnique {
     describe(): string;
     /** Records and submits the next slice of set-up. Returns true when no set-up is left. Never waits. */
     encodePrepareStep(): boolean;
+    /**
+     * The most set-up steps worth recording before the driver waits for the GPU. Absent means
+     * as many as fit the driver's CPU time slice. DDGI's steps are cheap to record but heavy
+     * on the GPU, so it asks for a few at a time.
+     */
+    readonly prepareStepsPerBatch?: number;
     /** Throws the finished set-up away; the next step starts again from the beginning. */
     restartPrepare(): void;
     /**

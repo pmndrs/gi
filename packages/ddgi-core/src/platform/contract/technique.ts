@@ -53,6 +53,14 @@ export interface TechniqueFrame {
     readonly units: number;
 }
 
+/** What a technique's floor (`GITechnique.minUnitsPerFrame`) depends on. */
+export interface WorkFloorRate {
+    /** The frame rate the host runs at: `budget.targetFps`, else the rate observed from `deltaTime` (60 until known). */
+    readonly framesPerSecond: number;
+    /** The batch the host's `gpuMs` buys with the GPU's clocks up (the platform's calibration). */
+    readonly calibratedUnits: number;
+}
+
 /** Per-frame inputs for the optional screen stage. */
 export interface TechniqueScreenFrame extends TechniqueFrame {
     readonly screen: FrameScreen;
@@ -80,8 +88,14 @@ export interface GITechnique<Settings extends object = object> {
     /**
      * World-space work: record this frame's updates into the host's encoder.
      * No queue submits and no CPU readbacks.
+     *
+     * May return the units it actually used (at most `frame.units`; DDGI: the
+     * probes it updated, which can be fewer when the volume has fewer). The
+     * platform measures cost per unit against that, so a budget bigger than
+     * the work can't make units look cheaper than they are. Returning nothing
+     * means all of `frame.units` were used.
      */
-    encode(encoder: GPUCommandEncoder, frame: TechniqueFrame): void;
+    encode(encoder: GPUCommandEncoder, frame: TechniqueFrame): number | void;
     /**
      * Optional screen-space work, run after the host has rendered its depth and
      * normals and before it shades (see `GIPlatform.encodeScreen`).
@@ -100,6 +114,14 @@ export interface GITechnique<Settings extends object = object> {
      * platform uses it to turn the host's ms budget into units.
      */
     readonly msPerUnit: number | undefined;
+    /**
+     * Optional: the fewest units the technique should get per frame under a
+     * millisecond budget, so its work keeps converging on every device
+     * (budget v2's floor; DDGI: `minProbesPerFrame`). It wins over the
+     * millisecond ceiling; `budget.units` still caps it. Without it there is
+     * no floor.
+     */
+    minUnitsPerFrame?(rate: WorkFloorRate): number;
 
     /** Forget accumulated history (a camera cut or a scene swap). */
     resetHistory(): void;

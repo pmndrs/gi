@@ -1,0 +1,4 @@
+{
+    "description": "Hit shading's shadow rays (T1.4) against the CPU reference tracer on every oracle scene (thin walls, mirrored boxes, a closed thin box, random scenes): no disagreement outside ambiguous edges, no self-shadowing, no light into the closed box.",
+    "timeoutMs": 120000
+}

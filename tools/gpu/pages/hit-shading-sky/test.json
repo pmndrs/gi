@@ -1,0 +1,4 @@
+{
+    "description": "Hit shading's sky (T1.4): open-ground sky irradiance within ±0.5% of the reference, procedural = the sky file, the equirect and cube layouts with direction-coded textures, color/none, projection only on change, subgroups against the fallback.",
+    "timeoutMs": 60000
+}

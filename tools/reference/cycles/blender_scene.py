@@ -19,8 +19,13 @@ Settings that matter for a reference (and why):
     0.8, so the energy left after 32 bounces is below 1e-3 of the first bounce; the
     pathtracer side uses the same count. No Russian-roulette-style albedo cap is
     applied (NVIDIA's 0.9 cap in the native harness is a harness detail).
-  * Pixel filter BOX, width 1: matches a path tracer that jitters inside the
-    pixel. Cycles' default Blackman-Harris at 1.5 px would blur edges.
+  * Pixel filter Blackman-Harris, 1.5 px wide (Cycles' default) for references
+    (T1.13, 2026-11-05): anti-aliased edges at HD, so the viewer's wipe can be
+    judged by eye. Cycles importance-samples the filter (no negative lobes), so
+    an image's mean is unchanged; only edges are softened, by about half a
+    pixel. References before T1.13 used a 1 px box; `--pixel-filter box`
+    renders that way again. The calibration scenes keep the box (flat areas,
+    where the filter makes no difference).
   * Colour management: Standard view transform, look None, exposure 0, gamma 1.
     The EXRs are scene-linear and never see the view transform anyway; it is set
     so a stray PNG would not be tone-mapped either.
@@ -46,6 +51,8 @@ from units import (
 
 MAX_BOUNCES = 32
 
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', '..'))
+
 # Axis change as a 3x3 matrix: manifest (x, y, z) -> Blender (x, -z, y).
 AXIS_CHANGE = mathutils.Matrix(((1, 0, 0), (0, 0, -1), (0, 1, 0)))
 
@@ -60,7 +67,15 @@ def reset_scene():
     return bpy.context.scene
 
 
-def configure_cycles(scene, width, height, samples, seed, device, max_bounces=MAX_BOUNCES):
+# Cycles' pixel filters by the names the command line uses.
+PIXEL_FILTERS = {'blackman-harris': 'BLACKMAN_HARRIS', 'gaussian': 'GAUSSIAN', 'box': 'BOX'}
+
+
+def configure_cycles(scene, width, height, samples, seed, device, max_bounces=MAX_BOUNCES, pixel_filter='box', filter_width=1.0):
+    """
+    Render settings (see the file comment). Returns a readable description of
+    the device that renders, e.g. 'OPTIX: NVIDIA GeForce RTX 3060 Laptop GPU'.
+    """
     scene.render.engine = 'CYCLES'
     scene.render.resolution_x = width
     scene.render.resolution_y = height
@@ -86,8 +101,8 @@ def configure_cycles(scene, width, height, samples, seed, device, max_bounces=MA
     cycles.caustics_reflective = False
     cycles.caustics_refractive = False
     cycles.blur_glossy = 0.0
-    cycles.pixel_filter_type = 'BOX'
-    cycles.filter_width = 1.0
+    cycles.pixel_filter_type = PIXEL_FILTERS[pixel_filter]
+    cycles.filter_width = filter_width
 
     scene.view_settings.view_transform = 'Standard'
     scene.view_settings.look = 'None'
@@ -96,24 +111,32 @@ def configure_cycles(scene, width, height, samples, seed, device, max_bounces=MA
 
     if device == 'cpu':
         cycles.device = 'CPU'
+        device_description = f'CPU ({os.cpu_count()} logical cores)'
     else:
         prefs = bpy.context.preferences.addons['cycles'].preferences
+        compute_type_used = None
         for compute_type in ('OPTIX', 'CUDA'):
             try:
                 prefs.compute_device_type = compute_type
                 prefs.get_devices()
+                compute_type_used = compute_type
                 break
             except TypeError:
                 continue
         for gpu in prefs.devices:
             gpu.use = gpu.type in ('OPTIX', 'CUDA') and 'NVIDIA' in gpu.name.upper()
+        used = [gpu.name for gpu in prefs.devices if gpu.use and gpu.type == compute_type_used]
+        if not used:
+            raise SystemExit('--device gpu: Blender found no NVIDIA OptiX or CUDA device')
         cycles.device = 'GPU'
+        device_description = f"{compute_type_used}: {', '.join(used)}"
 
     view_layer = scene.view_layers[0]
     # Passes used to build the indirect-only image (see add_compositor_outputs).
     view_layer.use_pass_diffuse_direct = True
     view_layer.use_pass_diffuse_indirect = True
     view_layer.use_pass_diffuse_color = True
+    return device_description
 
 
 # ---------------------------------------------------------------------------
@@ -346,12 +369,24 @@ def add_manifest_lights(scene, lights):
             obj.location = to_blender_space(light['position'])
 
 
-def add_environment(scene, environment):
+def sky_file_path(scene_id):
+    """The shared sky file of a scene with a procedural environment (tools/sky/generate.ts)."""
+    return os.path.join(REPO_ROOT, 'scenes', 'sky', f'{scene_id}.exr')
+
+
+def add_environment(scene, environment, sky_file=None):
     """
-    'none' is a black world. 'color' is a uniform radiance. 'procedural' is
-    Cycles' Nishita sky with the sun disc off (the sun comes from the
-    directional light, so it is not counted twice); it is an approximation of
-    the viewer's sky, not a match, and only Sponza uses it.
+    'none' is a black world. 'color' is a uniform radiance. 'procedural' is the
+    shared sky file (`sky_file`, see sky_file_path): the same equirectangular
+    half-float EXR the viewer and the platform read, with no sun disc (the sun
+    is the directional light) and calibrated brightness, so `intensity` is
+    already in it and the Background strength is 1.
+
+    Orientation: Cycles' equirectangular lookup puts image u = 0.5 at Blender
+    +X and u = 0.25 at Blender +Y, which is manifest -Z after the axis mapping
+    (x, y, z) -> (x, -z, y); that is the layout the file is written in
+    (scenes/src/sky/equirect.ts), so no rotation is applied.
+    `calibrate.py` checks this by rendering known directions.
     """
     world = bpy.data.worlds.new('world')
     scene.world = world
@@ -368,15 +403,16 @@ def add_environment(scene, environment):
         background.inputs['Color'].default_value = (color[0], color[1], color[2], 1.0)
         background.inputs['Strength'].default_value = environment_to_background_strength(environment.get('intensity', 1.0))
     elif kind == 'procedural':
-        sky = nodes.new('ShaderNodeTexSky')
-        sky.sky_type = 'NISHITA'
-        sky.sun_disc = False
-        toward_sun = mathutils.Vector(to_blender_space(environment['sunDirection'])).normalized()
-        sky.sun_elevation = math.asin(max(-1.0, min(1.0, toward_sun.z)))
-        # Nishita's rotation is measured from +Y, clockwise seen from above.
-        sky.sun_rotation = math.atan2(toward_sun.x, toward_sun.y) % (2.0 * math.pi)
+        if not sky_file or not os.path.exists(sky_file):
+            raise SystemExit(f'sky file {sky_file} is missing; run `node tools/sky/generate.ts`')
+        sky = nodes.new('ShaderNodeTexEnvironment')
+        sky.image = bpy.data.images.load(sky_file, check_existing=True)
+        # Float data as stored: no view transform or colour conversion on the way in.
+        sky.image.colorspace_settings.name = 'Linear Rec.709'
+        sky.projection = 'EQUIRECTANGULAR'
+        sky.interpolation = 'Linear'
         links.new(sky.outputs['Color'], background.inputs['Color'])
-        background.inputs['Strength'].default_value = environment_to_background_strength(environment.get('intensity', 1.0))
+        background.inputs['Strength'].default_value = 1.0
     else:
         raise ValueError(f'unknown environment type {kind!r}')
 
@@ -384,6 +420,12 @@ def add_environment(scene, environment):
 # ---------------------------------------------------------------------------
 # Camera
 # ---------------------------------------------------------------------------
+
+# The reference camera's clip distances (metres). Recorded with every render
+# (render.py `shot`); nothing in the scenes is nearer or farther.
+CAMERA_NEAR = 0.01
+CAMERA_FAR = 2000.0
+
 
 def add_camera(scene, position, target, fov_y_deg):
     """
@@ -415,8 +457,8 @@ def add_camera(scene, position, target, fov_y_deg):
     data = bpy.data.cameras.new('reference-camera')
     data.sensor_fit = 'VERTICAL'
     data.angle = math.radians(fov_y_deg)
-    data.clip_start = 0.01
-    data.clip_end = 2000.0
+    data.clip_start = CAMERA_NEAR
+    data.clip_end = CAMERA_FAR
     obj = bpy.data.objects.new('reference-camera', data)
     obj.matrix_world = matrix
     scene.collection.objects.link(obj)

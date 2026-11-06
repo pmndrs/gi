@@ -1,0 +1,5 @@
+{
+    "description": "T1.7 timing: the three adapter's CPU time per frame on Sponza with the curtains (VITE_DDGI_SCENES picks another scene): still <= 0.2 ms, one object moving <= 0.5 ms. Needs the downloaded Sponza; for hand use under the bench lock.",
+    "timeoutMs": 900000,
+    "manual": true
+}

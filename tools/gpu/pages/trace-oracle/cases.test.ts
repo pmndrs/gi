@@ -7,19 +7,22 @@
 import { describe, expect, it } from 'vitest';
 import {
     assembleTraceScene,
-    buildMeshBvh,
-    buildReferenceScene,
     createCpuTracer,
     newTraceStats,
-    traceClosestReference,
-    type TracedHit,
 } from '../../../../packages/ddgi-core/src/platform/trace/index.ts';
+import { buildMeshBvhWithTinyBvh } from '../../../../packages/ddgi-core/src/platform/trace/mesh-bvh-topology.ts';
+import { createTinyBvhBuilder } from '../../../../packages/bvh/src/index.ts';
+import { buildReferenceScene, traceClosestReference } from '../../../../packages/ddgi-core/src/platform/trace/reference-tracer.ts';
+import { type TracedHit } from '../../../../packages/ddgi-core/src/platform/trace/oracle-compare.ts';
 import { buildOracleCases, sharedEdgeCase, SMALL_SIZES, unpackRay, type OracleCase } from './cases.ts';
 import { computeReferenceAnswers, evaluateCase } from './check.ts';
 
+// Mesh trees come from tinybvh (WASM), the only mesh builder since B0.
+const tinyBvh = await createTinyBvhBuilder();
+
 function traceOnCpu(oracleCase: OracleCase, reference: ReturnType<typeof computeReferenceAnswers>) {
     const scene = assembleTraceScene(
-        oracleCase.meshes.map((mesh) => buildMeshBvh(mesh)),
+        oracleCase.meshes.map((mesh) => buildMeshBvhWithTinyBvh(mesh, tinyBvh)),
         oracleCase.instances,
     );
     const tracer = createCpuTracer(scene);
@@ -54,7 +57,7 @@ describe('shared edges on the CPU traversal', () => {
         it(`no ray slips between triangles (${transformed ? 'transformed' : 'plain'} quad)`, { timeout: 60_000 }, () => {
             const oracleCase = sharedEdgeCase(20000, transformed);
             const scene = assembleTraceScene(
-                oracleCase.meshes.map((mesh) => buildMeshBvh(mesh)),
+                oracleCase.meshes.map((mesh) => buildMeshBvhWithTinyBvh(mesh, tinyBvh)),
                 oracleCase.instances,
             );
             const tracer = createCpuTracer(scene);

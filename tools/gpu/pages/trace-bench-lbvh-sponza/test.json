@@ -1,0 +1,5 @@
+{
+    "description": "B1 benchmark on sponza: GPU LBVH build time, tree cost, and trace speed on its trees against tinybvh's. Slow; run under the bench lock, on its own.",
+    "timeoutMs": 900000,
+    "manual": true
+}

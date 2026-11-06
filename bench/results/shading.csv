@@ -1,0 +1,424 @@
+date,commit,device,browser,scene,metric,value
+2026-11-04,954d393-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run1/shading/width_px,2560
+2026-11-04,954d393-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run1/shading/height_px,1440
+2026-11-04,954d393-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run1/shading/forward_gpu_ms_with_gi_median,0.703488
+2026-11-04,954d393-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run1/shading/forward_gpu_ms_constant_median,0.08192
+2026-11-04,954d393-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run1/shading/gi_sampling_gpu_ms,0.621568
+2026-11-04,954d393-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run1/shading/passes_timed,200
+2026-11-04,954d393-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run1/shading/width_px,2560
+2026-11-04,954d393-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run1/shading/height_px,1440
+2026-11-04,954d393-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run1/shading/forward_gpu_ms_with_gi_median,1.21958
+2026-11-04,954d393-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run1/shading/forward_gpu_ms_constant_median,0.145408
+2026-11-04,954d393-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run1/shading/gi_sampling_gpu_ms,1.07418
+2026-11-04,954d393-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run1/shading/passes_timed,200
+2026-11-04,954d393-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run2/shading/width_px,2560
+2026-11-04,954d393-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run2/shading/height_px,1440
+2026-11-04,954d393-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run2/shading/forward_gpu_ms_with_gi_median,0.703488
+2026-11-04,954d393-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run2/shading/forward_gpu_ms_constant_median,0.08192
+2026-11-04,954d393-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run2/shading/gi_sampling_gpu_ms,0.621568
+2026-11-04,954d393-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run2/shading/passes_timed,200
+2026-11-04,954d393-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run2/shading/width_px,2560
+2026-11-04,954d393-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run2/shading/height_px,1440
+2026-11-04,954d393-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run2/shading/forward_gpu_ms_with_gi_median,1.22061
+2026-11-04,954d393-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run2/shading/forward_gpu_ms_constant_median,0.145408
+2026-11-04,954d393-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run2/shading/gi_sampling_gpu_ms,1.0752
+2026-11-04,954d393-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run2/shading/passes_timed,200
+2026-11-04,954d393-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run3/shading/width_px,2560
+2026-11-04,954d393-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run3/shading/height_px,1440
+2026-11-04,954d393-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run3/shading/forward_gpu_ms_with_gi_median,0.703488
+2026-11-04,954d393-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run3/shading/forward_gpu_ms_constant_median,0.08192
+2026-11-04,954d393-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run3/shading/gi_sampling_gpu_ms,0.621568
+2026-11-04,954d393-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run3/shading/passes_timed,200
+2026-11-04,954d393-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run3/shading/width_px,2560
+2026-11-04,954d393-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run3/shading/height_px,1440
+2026-11-04,954d393-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run3/shading/forward_gpu_ms_with_gi_median,1.21958
+2026-11-04,954d393-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run3/shading/forward_gpu_ms_constant_median,0.145408
+2026-11-04,954d393-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run3/shading/gi_sampling_gpu_ms,1.07418
+2026-11-04,954d393-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run3/shading/passes_timed,200
+2026-11-04,954d393-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,median/shading/width_px,2560
+2026-11-04,954d393-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,median/shading/height_px,1440
+2026-11-04,954d393-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,median/shading/forward_gpu_ms_with_gi_median,0.703488
+2026-11-04,954d393-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,median/shading/forward_gpu_ms_constant_median,0.08192
+2026-11-04,954d393-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,median/shading/gi_sampling_gpu_ms,0.621568
+2026-11-04,954d393-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,median/shading/passes_timed,200
+2026-11-04,954d393-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,median/shading/width_px,2560
+2026-11-04,954d393-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,median/shading/height_px,1440
+2026-11-04,954d393-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,median/shading/forward_gpu_ms_with_gi_median,1.21958
+2026-11-04,954d393-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,median/shading/forward_gpu_ms_constant_median,0.145408
+2026-11-04,954d393-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,median/shading/gi_sampling_gpu_ms,1.07418
+2026-11-04,954d393-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,median/shading/passes_timed,200
+2026-11-04,954d393-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,median/runs,3
+2026-11-04,954d393-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,median/runs,3
+2026-11-04,954d393-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,all,note/sm_clock_locked_mhz,1200
+2026-11-04,954d393-dirty,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/front,run1/shading/width_px,2560
+2026-11-04,954d393-dirty,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/front,run1/shading/height_px,1440
+2026-11-04,954d393-dirty,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/front,run1/shading/forward_gpu_ms_with_gi_median,9.89671
+2026-11-04,954d393-dirty,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/front,run1/shading/forward_gpu_ms_constant_median,1.54426
+2026-11-04,954d393-dirty,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/front,run1/shading/gi_sampling_gpu_ms,8.35245
+2026-11-04,954d393-dirty,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/front,run1/shading/passes_timed,200
+2026-11-04,954d393-dirty,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run1/shading/width_px,2560
+2026-11-04,954d393-dirty,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run1/shading/height_px,1440
+2026-11-04,954d393-dirty,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run1/shading/forward_gpu_ms_with_gi_median,16.031
+2026-11-04,954d393-dirty,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run1/shading/forward_gpu_ms_constant_median,2.40079
+2026-11-04,954d393-dirty,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run1/shading/gi_sampling_gpu_ms,13.6302
+2026-11-04,954d393-dirty,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run1/shading/passes_timed,200
+2026-11-04,954d393-dirty,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/front,run2/shading/width_px,2560
+2026-11-04,954d393-dirty,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/front,run2/shading/height_px,1440
+2026-11-04,954d393-dirty,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/front,run2/shading/forward_gpu_ms_with_gi_median,9.69788
+2026-11-04,954d393-dirty,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/front,run2/shading/forward_gpu_ms_constant_median,1.59697
+2026-11-04,954d393-dirty,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/front,run2/shading/gi_sampling_gpu_ms,8.10091
+2026-11-04,954d393-dirty,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/front,run2/shading/passes_timed,200
+2026-11-04,954d393-dirty,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run2/shading/width_px,2560
+2026-11-04,954d393-dirty,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run2/shading/height_px,1440
+2026-11-04,954d393-dirty,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run2/shading/forward_gpu_ms_with_gi_median,15.9854
+2026-11-04,954d393-dirty,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run2/shading/forward_gpu_ms_constant_median,2.39038
+2026-11-04,954d393-dirty,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run2/shading/gi_sampling_gpu_ms,13.595
+2026-11-04,954d393-dirty,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run2/shading/passes_timed,200
+2026-11-04,954d393-dirty,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/front,run3/shading/width_px,2560
+2026-11-04,954d393-dirty,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/front,run3/shading/height_px,1440
+2026-11-04,954d393-dirty,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/front,run3/shading/forward_gpu_ms_with_gi_median,9.72752
+2026-11-04,954d393-dirty,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/front,run3/shading/forward_gpu_ms_constant_median,1.56929
+2026-11-04,954d393-dirty,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/front,run3/shading/gi_sampling_gpu_ms,8.15823
+2026-11-04,954d393-dirty,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/front,run3/shading/passes_timed,200
+2026-11-04,954d393-dirty,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run3/shading/width_px,2560
+2026-11-04,954d393-dirty,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run3/shading/height_px,1440
+2026-11-04,954d393-dirty,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run3/shading/forward_gpu_ms_with_gi_median,15.9649
+2026-11-04,954d393-dirty,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run3/shading/forward_gpu_ms_constant_median,2.38204
+2026-11-04,954d393-dirty,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run3/shading/gi_sampling_gpu_ms,13.5829
+2026-11-04,954d393-dirty,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run3/shading/passes_timed,200
+2026-11-04,954d393-dirty,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/front,median/shading/width_px,2560
+2026-11-04,954d393-dirty,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/front,median/shading/height_px,1440
+2026-11-04,954d393-dirty,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/front,median/shading/forward_gpu_ms_with_gi_median,9.72752
+2026-11-04,954d393-dirty,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/front,median/shading/forward_gpu_ms_constant_median,1.56929
+2026-11-04,954d393-dirty,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/front,median/shading/gi_sampling_gpu_ms,8.15823
+2026-11-04,954d393-dirty,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/front,median/shading/passes_timed,200
+2026-11-04,954d393-dirty,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,median/shading/width_px,2560
+2026-11-04,954d393-dirty,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,median/shading/height_px,1440
+2026-11-04,954d393-dirty,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,median/shading/forward_gpu_ms_with_gi_median,15.9854
+2026-11-04,954d393-dirty,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,median/shading/forward_gpu_ms_constant_median,2.39038
+2026-11-04,954d393-dirty,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,median/shading/gi_sampling_gpu_ms,13.595
+2026-11-04,954d393-dirty,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,median/shading/passes_timed,200
+2026-11-04,954d393-dirty,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/front,median/runs,3
+2026-11-04,954d393-dirty,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,median/runs,3
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run1/shading/width_px,2560
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run1/shading/height_px,1440
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run1/shading/forward_gpu_ms_with_gi_median,0.677888
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run1/shading/forward_gpu_ms_constant_median,0.078848
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run1/shading/gi_sampling_gpu_ms,0.59904
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run1/shading/passes_timed,200
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run1/shading/width_px,2560
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run1/shading/height_px,1440
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run1/shading/forward_gpu_ms_with_gi_median,1.24928
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run1/shading/forward_gpu_ms_constant_median,0.14848
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run1/shading/gi_sampling_gpu_ms,1.1008
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run1/shading/passes_timed,200
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run2/shading/width_px,2560
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run2/shading/height_px,1440
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run2/shading/forward_gpu_ms_with_gi_median,0.574464
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run2/shading/forward_gpu_ms_constant_median,0.067584
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run2/shading/gi_sampling_gpu_ms,0.50688
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run2/shading/passes_timed,200
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run2/shading/width_px,2560
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run2/shading/height_px,1440
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run2/shading/forward_gpu_ms_with_gi_median,1.2841
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run2/shading/forward_gpu_ms_constant_median,0.152576
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run2/shading/gi_sampling_gpu_ms,1.13152
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run2/shading/passes_timed,200
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run3/shading/width_px,2560
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run3/shading/height_px,1440
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run3/shading/forward_gpu_ms_with_gi_median,0.591872
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run3/shading/forward_gpu_ms_constant_median,0.068608
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run3/shading/gi_sampling_gpu_ms,0.523264
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run3/shading/passes_timed,200
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run3/shading/width_px,2560
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run3/shading/height_px,1440
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run3/shading/forward_gpu_ms_with_gi_median,1.02707
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run3/shading/forward_gpu_ms_constant_median,0.121856
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run3/shading/gi_sampling_gpu_ms,0.905216
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run3/shading/passes_timed,200
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,median/shading/width_px,2560
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,median/shading/height_px,1440
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,median/shading/forward_gpu_ms_with_gi_median,0.591872
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,median/shading/forward_gpu_ms_constant_median,0.068608
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,median/shading/gi_sampling_gpu_ms,0.523264
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,median/shading/passes_timed,200
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,median/shading/width_px,2560
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,median/shading/height_px,1440
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,median/shading/forward_gpu_ms_with_gi_median,1.24928
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,median/shading/forward_gpu_ms_constant_median,0.14848
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,median/shading/gi_sampling_gpu_ms,1.1008
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,median/shading/passes_timed,200
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,median/runs,3
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,median/runs,3
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,all,note/set,1
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,all,note/sm_clock_mhz,1608.5
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,all,note/sm_clock_min_mhz,1125
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,all,note/sm_clock_max_mhz,1740
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,all,note/mem_clock_mhz,7151
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run1/shading/width_px,2560
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run1/shading/height_px,1440
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run1/shading/forward_gpu_ms_with_gi_median,0.559104
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run1/shading/forward_gpu_ms_constant_median,0.065536
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run1/shading/gi_sampling_gpu_ms,0.493568
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run1/shading/passes_timed,200
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run1/shading/width_px,2560
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run1/shading/height_px,1440
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run1/shading/forward_gpu_ms_with_gi_median,0.995328
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run1/shading/forward_gpu_ms_constant_median,0.118784
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run1/shading/gi_sampling_gpu_ms,0.876544
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run1/shading/passes_timed,200
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run2/shading/width_px,2560
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run2/shading/height_px,1440
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run2/shading/forward_gpu_ms_with_gi_median,0.616448
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run2/shading/forward_gpu_ms_constant_median,0.07168
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run2/shading/gi_sampling_gpu_ms,0.544768
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run2/shading/passes_timed,200
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run2/shading/width_px,2560
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run2/shading/height_px,1440
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run2/shading/forward_gpu_ms_with_gi_median,1.02758
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run2/shading/forward_gpu_ms_constant_median,0.122368
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run2/shading/gi_sampling_gpu_ms,0.905216
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run2/shading/passes_timed,200
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run3/shading/width_px,2560
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run3/shading/height_px,1440
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run3/shading/forward_gpu_ms_with_gi_median,0.584704
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run3/shading/forward_gpu_ms_constant_median,0.067584
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run3/shading/gi_sampling_gpu_ms,0.51712
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run3/shading/passes_timed,200
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run3/shading/width_px,2560
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run3/shading/height_px,1440
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run3/shading/forward_gpu_ms_with_gi_median,1.00147
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run3/shading/forward_gpu_ms_constant_median,0.119808
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run3/shading/gi_sampling_gpu_ms,0.881664
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run3/shading/passes_timed,200
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,median/shading/width_px,2560
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,median/shading/height_px,1440
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,median/shading/forward_gpu_ms_with_gi_median,0.584704
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,median/shading/forward_gpu_ms_constant_median,0.067584
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,median/shading/gi_sampling_gpu_ms,0.51712
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,median/shading/passes_timed,200
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,median/shading/width_px,2560
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,median/shading/height_px,1440
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,median/shading/forward_gpu_ms_with_gi_median,1.00147
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,median/shading/forward_gpu_ms_constant_median,0.119808
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,median/shading/gi_sampling_gpu_ms,0.881664
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,median/shading/passes_timed,200
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,median/runs,3
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,median/runs,3
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,all,note/set,2
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,all,note/sm_clock_mhz,1612
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,all,note/sm_clock_min_mhz,1350
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,all,note/sm_clock_max_mhz,1912
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,all,note/mem_clock_mhz,7151
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run1/shading/width_px,2560
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run1/shading/height_px,1440
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run1/shading/forward_gpu_ms_with_gi_median,0.606208
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run1/shading/forward_gpu_ms_constant_median,0.070656
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run1/shading/gi_sampling_gpu_ms,0.535552
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run1/shading/passes_timed,200
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run1/shading/width_px,2560
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run1/shading/height_px,1440
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run1/shading/forward_gpu_ms_with_gi_median,1.04448
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run1/shading/forward_gpu_ms_constant_median,0.124928
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run1/shading/gi_sampling_gpu_ms,0.919552
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run1/shading/passes_timed,200
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run2/shading/width_px,2560
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run2/shading/height_px,1440
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run2/shading/forward_gpu_ms_with_gi_median,0.595968
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run2/shading/forward_gpu_ms_constant_median,0.069632
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run2/shading/gi_sampling_gpu_ms,0.526336
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run2/shading/passes_timed,200
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run2/shading/width_px,2560
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run2/shading/height_px,1440
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run2/shading/forward_gpu_ms_with_gi_median,1.03322
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run2/shading/forward_gpu_ms_constant_median,0.12288
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run2/shading/gi_sampling_gpu_ms,0.910336
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run2/shading/passes_timed,200
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run3/shading/width_px,2560
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run3/shading/height_px,1440
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run3/shading/forward_gpu_ms_with_gi_median,0.559104
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run3/shading/forward_gpu_ms_constant_median,0.065536
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run3/shading/gi_sampling_gpu_ms,0.493568
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run3/shading/passes_timed,200
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run3/shading/width_px,2560
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run3/shading/height_px,1440
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run3/shading/forward_gpu_ms_with_gi_median,1.00506
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run3/shading/forward_gpu_ms_constant_median,0.119808
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run3/shading/gi_sampling_gpu_ms,0.885248
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run3/shading/passes_timed,200
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,median/shading/width_px,2560
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,median/shading/height_px,1440
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,median/shading/forward_gpu_ms_with_gi_median,0.595968
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,median/shading/forward_gpu_ms_constant_median,0.069632
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,median/shading/gi_sampling_gpu_ms,0.526336
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,median/shading/passes_timed,200
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,median/shading/width_px,2560
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,median/shading/height_px,1440
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,median/shading/forward_gpu_ms_with_gi_median,1.03322
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,median/shading/forward_gpu_ms_constant_median,0.12288
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,median/shading/gi_sampling_gpu_ms,0.910336
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,median/shading/passes_timed,200
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,median/runs,3
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,median/runs,3
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,all,note/set,3
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,all,note/sm_clock_mhz,1642
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,all,note/sm_clock_min_mhz,1440
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,all,note/sm_clock_max_mhz,1732
+2026-11-04,6555a1c-dirty,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,all,note/mem_clock_mhz,7151
+2026-11-05,90c54e2,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run1/shading/width_px,2560
+2026-11-05,90c54e2,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run1/shading/height_px,1440
+2026-11-05,90c54e2,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run1/shading/forward_gpu_ms_with_gi_median,0.61952
+2026-11-05,90c54e2,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run1/shading/forward_gpu_ms_constant_median,0.07168
+2026-11-05,90c54e2,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run1/shading/gi_sampling_gpu_ms,0.54784
+2026-11-05,90c54e2,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run1/shading/passes_timed,200
+2026-11-05,90c54e2,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run1/shading/width_px,2560
+2026-11-05,90c54e2,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run1/shading/height_px,1440
+2026-11-05,90c54e2,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run1/shading/forward_gpu_ms_with_gi_median,1.09056
+2026-11-05,90c54e2,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run1/shading/forward_gpu_ms_constant_median,0.130048
+2026-11-05,90c54e2,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run1/shading/gi_sampling_gpu_ms,0.960512
+2026-11-05,90c54e2,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run1/shading/passes_timed,200
+2026-11-05,90c54e2,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run2/shading/width_px,2560
+2026-11-05,90c54e2,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run2/shading/height_px,1440
+2026-11-05,90c54e2,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run2/shading/forward_gpu_ms_with_gi_median,0.620544
+2026-11-05,90c54e2,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run2/shading/forward_gpu_ms_constant_median,0.07168
+2026-11-05,90c54e2,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run2/shading/gi_sampling_gpu_ms,0.548864
+2026-11-05,90c54e2,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run2/shading/passes_timed,200
+2026-11-05,90c54e2,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run2/shading/width_px,2560
+2026-11-05,90c54e2,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run2/shading/height_px,1440
+2026-11-05,90c54e2,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run2/shading/forward_gpu_ms_with_gi_median,1.04704
+2026-11-05,90c54e2,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run2/shading/forward_gpu_ms_constant_median,0.124928
+2026-11-05,90c54e2,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run2/shading/gi_sampling_gpu_ms,0.922112
+2026-11-05,90c54e2,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run2/shading/passes_timed,200
+2026-11-05,90c54e2,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run3/shading/width_px,2560
+2026-11-05,90c54e2,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run3/shading/height_px,1440
+2026-11-05,90c54e2,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run3/shading/forward_gpu_ms_with_gi_median,0.615424
+2026-11-05,90c54e2,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run3/shading/forward_gpu_ms_constant_median,0.07168
+2026-11-05,90c54e2,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run3/shading/gi_sampling_gpu_ms,0.543744
+2026-11-05,90c54e2,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,run3/shading/passes_timed,200
+2026-11-05,90c54e2,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run3/shading/width_px,2560
+2026-11-05,90c54e2,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run3/shading/height_px,1440
+2026-11-05,90c54e2,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run3/shading/forward_gpu_ms_with_gi_median,1.04806
+2026-11-05,90c54e2,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run3/shading/forward_gpu_ms_constant_median,0.124928
+2026-11-05,90c54e2,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run3/shading/gi_sampling_gpu_ms,0.923136
+2026-11-05,90c54e2,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,run3/shading/passes_timed,200
+2026-11-05,90c54e2,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,median/shading/width_px,2560
+2026-11-05,90c54e2,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,median/shading/height_px,1440
+2026-11-05,90c54e2,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,median/shading/forward_gpu_ms_with_gi_median,0.61952
+2026-11-05,90c54e2,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,median/shading/forward_gpu_ms_constant_median,0.07168
+2026-11-05,90c54e2,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,median/shading/gi_sampling_gpu_ms,0.54784
+2026-11-05,90c54e2,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,median/shading/passes_timed,200
+2026-11-05,90c54e2,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,median/shading/width_px,2560
+2026-11-05,90c54e2,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,median/shading/height_px,1440
+2026-11-05,90c54e2,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,median/shading/forward_gpu_ms_with_gi_median,1.04806
+2026-11-05,90c54e2,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,median/shading/forward_gpu_ms_constant_median,0.124928
+2026-11-05,90c54e2,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,median/shading/gi_sampling_gpu_ms,0.923136
+2026-11-05,90c54e2,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,median/shading/passes_timed,200
+2026-11-05,90c54e2,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/front,median/runs,3
+2026-11-05,90c54e2,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall,median/runs,3
+2026-11-05,90c54e2,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,all,note/quiet,1
+2026-11-05,90c54e2,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,all,note/sm_clock_mhz,1398.5
+2026-11-05,90c54e2,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,all,note/sm_clock_min_mhz,1297
+2026-11-05,90c54e2,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,all,note/sm_clock_max_mhz,1477
+2026-11-05,90c54e2,RTX 3060 Laptop,Chrome 156.0.8078.74 headless,all,note/mem_clock_mhz,7151
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/front@1280x720,run1/shading/width_px,1280
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/front@1280x720,run1/shading/height_px,720
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/front@1280x720,run1/shading/forward_gpu_ms_with_gi_median,2.65754
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/front@1280x720,run1/shading/forward_gpu_ms_constant_median,0.502939
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/front@1280x720,run1/shading/gi_sampling_gpu_ms,2.1546
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/front@1280x720,run1/shading/passes_timed,200
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall@1280x720,run1/shading/width_px,1280
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall@1280x720,run1/shading/height_px,720
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall@1280x720,run1/shading/forward_gpu_ms_with_gi_median,4.13159
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall@1280x720,run1/shading/forward_gpu_ms_constant_median,0.596767
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall@1280x720,run1/shading/gi_sampling_gpu_ms,3.53482
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall@1280x720,run1/shading/passes_timed,200
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/front@1280x720,run2/shading/width_px,1280
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/front@1280x720,run2/shading/height_px,720
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/front@1280x720,run2/shading/forward_gpu_ms_with_gi_median,2.65678
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/front@1280x720,run2/shading/forward_gpu_ms_constant_median,0.515101
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/front@1280x720,run2/shading/gi_sampling_gpu_ms,2.14168
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/front@1280x720,run2/shading/passes_timed,200
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall@1280x720,run2/shading/width_px,1280
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall@1280x720,run2/shading/height_px,720
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall@1280x720,run2/shading/forward_gpu_ms_with_gi_median,4.13708
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall@1280x720,run2/shading/forward_gpu_ms_constant_median,0.604059
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall@1280x720,run2/shading/gi_sampling_gpu_ms,3.53303
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall@1280x720,run2/shading/passes_timed,200
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/front@1280x720,run3/shading/width_px,1280
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/front@1280x720,run3/shading/height_px,720
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/front@1280x720,run3/shading/forward_gpu_ms_with_gi_median,2.67514
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/front@1280x720,run3/shading/forward_gpu_ms_constant_median,0.540126
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/front@1280x720,run3/shading/gi_sampling_gpu_ms,2.13501
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/front@1280x720,run3/shading/passes_timed,200
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall@1280x720,run3/shading/width_px,1280
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall@1280x720,run3/shading/height_px,720
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall@1280x720,run3/shading/forward_gpu_ms_with_gi_median,4.15214
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall@1280x720,run3/shading/forward_gpu_ms_constant_median,0.604085
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall@1280x720,run3/shading/gi_sampling_gpu_ms,3.54805
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall@1280x720,run3/shading/passes_timed,200
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/front@1280x720,median/shading/width_px,1280
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/front@1280x720,median/shading/height_px,720
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/front@1280x720,median/shading/forward_gpu_ms_with_gi_median,2.65754
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/front@1280x720,median/shading/forward_gpu_ms_constant_median,0.515101
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/front@1280x720,median/shading/gi_sampling_gpu_ms,2.14168
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/front@1280x720,median/shading/passes_timed,200
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall@1280x720,median/shading/width_px,1280
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall@1280x720,median/shading/height_px,720
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall@1280x720,median/shading/forward_gpu_ms_with_gi_median,4.13708
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall@1280x720,median/shading/forward_gpu_ms_constant_median,0.604059
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall@1280x720,median/shading/gi_sampling_gpu_ms,3.53482
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall@1280x720,median/shading/passes_timed,200
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/front@1280x720,median/runs,3
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall@1280x720,median/runs,3
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,all,note/t1.9-intel,1
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/front@1920x1080,run1/shading/width_px,1920
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/front@1920x1080,run1/shading/height_px,1080
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/front@1920x1080,run1/shading/forward_gpu_ms_with_gi_median,5.59926
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/front@1920x1080,run1/shading/forward_gpu_ms_constant_median,0.943666
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/front@1920x1080,run1/shading/gi_sampling_gpu_ms,4.6556
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/front@1920x1080,run1/shading/passes_timed,200
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall@1920x1080,run1/shading/width_px,1920
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall@1920x1080,run1/shading/height_px,1080
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall@1920x1080,run1/shading/forward_gpu_ms_with_gi_median,9.13911
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall@1920x1080,run1/shading/forward_gpu_ms_constant_median,1.32523
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall@1920x1080,run1/shading/gi_sampling_gpu_ms,7.81388
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall@1920x1080,run1/shading/passes_timed,200
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/front@1920x1080,run2/shading/width_px,1920
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/front@1920x1080,run2/shading/height_px,1080
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/front@1920x1080,run2/shading/forward_gpu_ms_with_gi_median,5.65254
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/front@1920x1080,run2/shading/forward_gpu_ms_constant_median,0.954942
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/front@1920x1080,run2/shading/gi_sampling_gpu_ms,4.6976
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/front@1920x1080,run2/shading/passes_timed,200
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall@1920x1080,run2/shading/width_px,1920
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall@1920x1080,run2/shading/height_px,1080
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall@1920x1080,run2/shading/forward_gpu_ms_with_gi_median,9.13367
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall@1920x1080,run2/shading/forward_gpu_ms_constant_median,1.32158
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall@1920x1080,run2/shading/gi_sampling_gpu_ms,7.81209
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall@1920x1080,run2/shading/passes_timed,200
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/front@1920x1080,run3/shading/width_px,1920
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/front@1920x1080,run3/shading/height_px,1080
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/front@1920x1080,run3/shading/forward_gpu_ms_with_gi_median,5.58556
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/front@1920x1080,run3/shading/forward_gpu_ms_constant_median,0.952441
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/front@1920x1080,run3/shading/gi_sampling_gpu_ms,4.63312
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/front@1920x1080,run3/shading/passes_timed,200
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall@1920x1080,run3/shading/width_px,1920
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall@1920x1080,run3/shading/height_px,1080
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall@1920x1080,run3/shading/forward_gpu_ms_with_gi_median,9.12026
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall@1920x1080,run3/shading/forward_gpu_ms_constant_median,1.33213
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall@1920x1080,run3/shading/gi_sampling_gpu_ms,7.78813
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall@1920x1080,run3/shading/passes_timed,200
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/front@1920x1080,median/shading/width_px,1920
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/front@1920x1080,median/shading/height_px,1080
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/front@1920x1080,median/shading/forward_gpu_ms_with_gi_median,5.59926
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/front@1920x1080,median/shading/forward_gpu_ms_constant_median,0.952441
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/front@1920x1080,median/shading/gi_sampling_gpu_ms,4.6556
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/front@1920x1080,median/shading/passes_timed,200
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall@1920x1080,median/shading/width_px,1920
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall@1920x1080,median/shading/height_px,1080
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall@1920x1080,median/shading/forward_gpu_ms_with_gi_median,9.13367
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall@1920x1080,median/shading/forward_gpu_ms_constant_median,1.32523
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall@1920x1080,median/shading/gi_sampling_gpu_ms,7.81209
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall@1920x1080,median/shading/passes_timed,200
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/front@1920x1080,median/runs,3
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall@1920x1080,median/runs,3
+2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,all,note/t1.9-intel,1

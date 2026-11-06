@@ -1,4 +1,4 @@
 {
-    "description": "T0.5: baseline GI costs (three.js LightProbeGrid and VXGI) per scene. Default: two small scenes. VITE_DDGI_BASELINES=full runs every scene; VITE_DDGI_SCENES=a,b picks scenes.",
+    "description": "T0.5/T1.8: GI costs per scene of three.js's LightProbeGrid and VXGI, and of our DDGI (start-up, GPU ms GI on against off, frame p50/p95). Default: two small scenes. VITE_DDGI_BASELINES=full runs every scene; VITE_DDGI_SCENES=a,b and VITE_DDGI_TECHNIQUES=none,ddgi narrow it.",
     "timeoutMs": 7200000
 }

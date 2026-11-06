@@ -1,0 +1,4 @@
+{
+    "description": "T1.6: DDGI and the hello renderer on a compatibility-mode device (featureLevel compatibility): the rasterized GI-only image against the engine-free test view, as ddgi-shading-consistency.",
+    "timeoutMs": 300000
+}

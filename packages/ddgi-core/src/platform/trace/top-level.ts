@@ -2,10 +2,12 @@
  * The top level of the two-level BVH: one record per instance, and a small
  * tree over the instances' world-space boxes.
  *
- * It is rebuilt on the CPU whenever a transform changes. That is cheap
- * because there are thousands of instances, not millions of triangles, and
- * moving an object never touches its mesh tree: the GPU moves the ray into
- * the object's space instead (see the WGSL).
+ * This file builds it whole on the CPU. On a device with subgroups that is
+ * only the tests' and benchmarks' path: the tracer keeps the top level on the
+ * GPU instead (top-level-gpu.ts, B1a). Without subgroups it is the declared
+ * fallback, rebuilt whenever a transform changes. Moving an object never
+ * touches its mesh tree either way: the GPU moves the ray into the object's
+ * space instead (see the WGSL).
  *
  * Buffer layout: `[64-byte header][instance records][top-level nodes]`, all
  * in tree order (records are sorted so a leaf's `index` is a record index).

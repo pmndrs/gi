@@ -1,0 +1,20 @@
+{
+    "name": "@pmndrs/ddgi-example-three",
+    "version": "0.0.0",
+    "private": true,
+    "description": "three.js examples of @pmndrs/ddgi: GIVolume alone, and with the GI composite through @pmndrs/upscaler. Not published.",
+    "license": "MIT",
+    "type": "module",
+    "scripts": {
+        "dev": "vite",
+        "build": "vite build"
+    },
+    "dependencies": {
+        "@pmndrs/ddgi": "workspace:*",
+        "@pmndrs/upscaler": "0.5.0",
+        "three": "0.187.0"
+    },
+    "devDependencies": {
+        "vite": "^6.1.0"
+    }
+}

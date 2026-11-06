@@ -1,0 +1,5 @@
+{
+    "description": "DDGI GPU ms per probe (ddgi/trace, ddgi/blend, ddgi/write through the platform timer), probes per frame in 2 ms, and the platform turning a 2 ms gpuMs budget into probes. For hand use under the bench lock.",
+    "timeoutMs": 600000,
+    "manual": true
+}

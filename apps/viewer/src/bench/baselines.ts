@@ -1,6 +1,8 @@
 /**
  * The baseline benchmark: for each scene and each technique, how long the
- * set-up takes and what a frame costs on the GPU.
+ * set-up takes and what a frame costs on the GPU. The techniques are three's
+ * `LightProbeGrid` and VXGI (the baselines) and our DDGI (T1.8), so T1.9 can
+ * measure DDGI's frame cost the same way the baselines were measured.
  *
  * Definitions (they are written into every result so nobody has to guess).
  * The view is 1280x720 at the scene's first bookmark, nothing moving.
@@ -22,11 +24,29 @@
  *    wall time; it is not "GPU busy time".
  *  Each bake is repeated `bakeRuns` times; the median is reported.
  *
+ * DDGI's set-up is not a bake but a start-up, timed from when the technique
+ * is created (the scene is already loaded):
+ *  - `prepared_wall_ms`: the platform's kernels compiled (`gi.prepare()`);
+ *  - `first_gi_wall_ms`: the scene copied into the platform and its
+ *    ray-tracing trees built, so the next frame shows real GI;
+ *  - `warmed_wall_ms`: the viewer's warm-up done (up to 16 full passes over
+ *    every probe; `techniques/ddgi-technique.ts`), after which the frame
+ *    budget applies. Frames are only measured after this.
+ *
  * Frames:
  *  - `first_frame_wall_ms`: the first frame after the technique appears,
  *    until the GPU finished it. Contains shader compilation.
  *  - `frame_gpu_ms`: GPU time of every render and compute pass in one frame
  *    (shadow maps included), median over the sampled frames, with GI on.
+ *    For DDGI it includes the platform's own passes (the probe update and
+ *    the top-level refit), which it records in an encoder of its own that
+ *    three's timestamps don't see. Those come from the platform's newest
+ *    timed frame, one or two frames behind the frame they're added to
+ *    (timestamps are read back late); on a still view with a fixed budget
+ *    the same work runs every frame. DDGI's update runs within its default
+ *    2 ms budget.
+ *  - `frame_gpu_p95_ms`: the same frames' 95th percentile (nearest rank),
+ *    per round, then the median over rounds: whether some frames spike.
  *  - `gi_off_frame_gpu_ms`: the same, through the same technique's pipeline
  *    (same MSAA, same TRAA, same targets) with only the GI taken out: for the
  *    probe grid, the grid is hidden from the camera; for VXGI, the gather and
@@ -38,7 +58,11 @@
  *    resolve: the value is written as measured, negative included, and marked
  *    `_below_noise`. Only an interval entirely below 0 is a failed
  *    measurement. See `measurement.ts`.
- *  - `frame_wall_ms`: median wall time of render-then-wait-for-the-GPU, GI on.
+ *  - `frame_wall_ms` and `frame_wall_p95_ms`: median and 95th percentile of
+ *    render-then-wait-for-the-GPU wall time, GI on; `gi_off_frame_wall_ms`
+ *    and `gi_off_frame_wall_p95_ms` with GI off. CPU work counts here (for
+ *    DDGI, the adapter's scene sync and the platform's encode), GPU work in
+ *    parallel with it doesn't.
  *  GI on and GI off are measured in `frameRounds` alternating rounds
  *  (off-on, on-off, ...), so GPU clock drift cancels out of the difference.
  *  "No GI" has no GI to take out; its `frame_gpu_ms` is the plain frame of
@@ -56,20 +80,22 @@
  * numbers of the viewer's own render path.
  */
 
-import type { SceneManifest } from '../../../../scenes/src/manifest';
+import { isHeavyScene, type SceneManifest } from '../../../../scenes/src/manifest';
 import { ViewerCore } from '../core/viewer-core';
 import { resolveGpuTotals, timestampPoolsFillingUp } from '../render/gpu-time';
 import type { GiMode } from '../scene/layers';
 import { loadAllManifests } from '../scene/manifests';
+import { DdgiTechnique } from '../techniques/ddgi-technique';
 import type { GiTechnique, TechniqueId } from '../techniques/types';
-import { failedMeasurement, median, NOISY_CV_THRESHOLD, summarize, summarizeDifference, type Measurement } from './measurement';
+import { failedMeasurement, median, NOISY_CV_THRESHOLD, percentile, summarize, summarizeDifference, type Measurement } from './measurement';
 
 export { NOISY_CV_THRESHOLD, type Measurement } from './measurement';
 
 export interface BaselineOptions {
-    /** Scene ids; null means every manifest scene. */
+    /** Scene ids; null means every manifest scene except the heavy ones (`isHeavyScene`). */
     scenes: string[] | null;
-    techniques: TechniqueId[];
+    /** Live techniques only: the reference image (`cycles`) has nothing to time. */
+    techniques: Exclude<TechniqueId, 'cycles'>[];
     /** Frames timed per round and GI mode. */
     sampleFrames: number;
     /** Rounds of GI-off and GI-on frame timing. Their spread is the noise figure of the frame numbers. */
@@ -83,7 +109,7 @@ export interface BaselineOptions {
 
 export const DEFAULT_BASELINE_OPTIONS: Omit<BaselineOptions, 'log'> = {
     scenes: null,
-    techniques: ['none', 'lpg', 'vxgi'],
+    techniques: ['none', 'lpg', 'vxgi', 'ddgi'],
     sampleFrames: 20,
     frameRounds: 5,
     bakeRuns: 3,
@@ -122,12 +148,25 @@ function useFirstBookmark(core: ViewerCore, manifest: SceneManifest): void {
     core.camera.updateMatrixWorld(true);
 }
 
+/** The 95th percentile used for frame spikes. */
+const P95 = 0.95;
+
 interface FrameSample {
     wallMs: number;
     /** Null when the frame had an impossible timestamp, or the device has no timestamps. */
     gpuMs: number | null;
     passes: number;
     drawCalls: number;
+}
+
+/**
+ * GPU work a technique records outside three's passes, for this frame, in ms; 0 when it has
+ * none, null when it has some but no timing for it yet (the sample is then left out).
+ */
+function workOutsideThree(core: ViewerCore): number | null {
+    const ddgi = core.activeTechniques().find((technique): technique is DdgiTechnique => technique instanceof DdgiTechnique);
+    if (!ddgi || core.layout.giMode === 'off' || !ddgi.running) return 0;
+    return ddgi.platformGpuMs();
 }
 
 /** Draws one frame and waits until the GPU has finished it. */
@@ -140,7 +179,8 @@ async function timedFrame(core: ViewerCore): Promise<FrameSample> {
     if (!core.hasTimestamps) return { wallMs, gpuMs: null, passes: 0, drawCalls };
     const totals = await resolveGpuTotals(core.renderer);
     // A frame with an impossible timestamp is left out of the median rather than poisoning it.
-    const gpuMs = totals.invalidPasses > 0 ? null : totals.renderMs + totals.computeMs;
+    const outside = workOutsideThree(core);
+    const gpuMs = totals.invalidPasses > 0 || outside === null ? null : totals.renderMs + totals.computeMs + outside;
     return { wallMs, gpuMs, passes: totals.passCount, drawCalls };
 }
 
@@ -177,8 +217,17 @@ async function settle(core: ViewerCore, minimumFrames: number): Promise<void> {
     }
 }
 
-/** Medians of `count` timed frames. */
-async function sampleFrames(core: ViewerCore, count: number): Promise<{ gpuMs: number | null; wallMs: number; passes: number }> {
+interface SampledFrames {
+    /** Median and 95th percentile of the frames' GPU time; null when no frame had a valid one. */
+    gpuMs: number | null;
+    gpuP95Ms: number | null;
+    wallMs: number;
+    wallP95Ms: number;
+    passes: number;
+}
+
+/** Medians and 95th percentiles of `count` timed frames. */
+async function sampleFrames(core: ViewerCore, count: number): Promise<SampledFrames> {
     const gpu: number[] = [];
     const wall: number[] = [];
     const passes: number[] = [];
@@ -188,7 +237,13 @@ async function sampleFrames(core: ViewerCore, count: number): Promise<{ gpuMs: n
         passes.push(sample.passes);
         if (sample.gpuMs !== null) gpu.push(sample.gpuMs);
     }
-    return { gpuMs: gpu.length > 0 ? median(gpu) : null, wallMs: median(wall), passes: median(passes) };
+    return {
+        gpuMs: gpu.length > 0 ? median(gpu) : null,
+        gpuP95Ms: gpu.length > 0 ? percentile(gpu, P95) : null,
+        wallMs: median(wall),
+        wallP95Ms: percentile(wall, P95),
+        passes: median(passes),
+    };
 }
 
 /** One whole bake, timed on the wall clock: timestamps off, no read-back, one wait at the end. */
@@ -260,11 +315,35 @@ async function measureBake(core: ViewerCore, technique: GiTechnique, options: Ba
     return measurements;
 }
 
+/**
+ * DDGI's start-up: waits for the platform and the trees, then runs the warm-up the way the
+ * viewer does (a few steps, then one wait for the GPU), and reports when each stage was
+ * reached, counted from the technique's creation.
+ */
+async function measureDdgiStartup(core: ViewerCore, technique: DdgiTechnique): Promise<TechniqueResult> {
+    await technique.warmUp();
+    if (technique.failed) throw new Error(`DDGI could not start: ${technique.failed}`);
+    const stepsPerBatch = technique.prepareStepsPerBatch;
+    let steps = 0;
+    while (!technique.ready) {
+        for (let step = 0; step < stepsPerBatch && !technique.ready; step++, steps++) technique.encodePrepareStep();
+        await core.device.queue.onSubmittedWorkDone();
+    }
+    const { preparedMs, firstGiMs, warmedMs } = technique.startup;
+    const stage = (name: string, value: number | null) => (value === null ? failedMeasurement(name, 'not reached') : summarize(name, [value]));
+    return {
+        measurements: [stage('prepared_wall_ms', preparedMs), stage('first_gi_wall_ms', firstGiMs), stage('warmed_wall_ms', warmedMs)],
+        details: { warmup_steps: steps, warmup_passes_made: Number(technique.warmupPasses.toFixed(2)) },
+    };
+}
+
 async function measureFrames(core: ViewerCore, id: TechniqueId, options: BaselineOptions): Promise<TechniqueResult> {
     // "No GI" has nothing to take out: its GI-on frame is the plain frame.
     const modes: GiMode[] = id === 'none' ? ['on'] : ['off', 'on'];
     const gpu: Record<string, Array<number | null>> = { on: [], off: [] };
-    const wall: number[] = [];
+    const gpuP95: Record<string, number[]> = { on: [], off: [] };
+    const wall: Record<string, number[]> = { on: [], off: [] };
+    const wallP95: Record<string, number[]> = { on: [], off: [] };
     const passes: number[] = [];
     const shown = new Set<GiMode>();
     for (let round = 0; round < options.frameRounds; round++) {
@@ -276,10 +355,10 @@ async function measureFrames(core: ViewerCore, id: TechniqueId, options: Baselin
             shown.add(mode);
             const sampled = await sampleFrames(core, options.sampleFrames);
             gpu[mode].push(sampled.gpuMs);
-            if (mode === 'on') {
-                wall.push(sampled.wallMs);
-                passes.push(sampled.passes);
-            }
+            if (sampled.gpuP95Ms !== null) gpuP95[mode].push(sampled.gpuP95Ms);
+            wall[mode].push(sampled.wallMs);
+            wallP95[mode].push(sampled.wallP95Ms);
+            if (mode === 'on') passes.push(sampled.passes);
         }
     }
     core.setLayout({ giMode: 'on' });
@@ -290,8 +369,10 @@ async function measureFrames(core: ViewerCore, id: TechniqueId, options: Baselin
         measurements.push(failedMeasurement('frame_gpu_ms', 'the device has no timestamp queries'));
     } else {
         measurements.push(summarize('frame_gpu_ms', valid(gpu.on)));
+        measurements.push(summarize('frame_gpu_p95_ms', gpuP95.on));
         if (id !== 'none') {
             measurements.push(summarize('gi_off_frame_gpu_ms', valid(gpu.off)));
+            measurements.push(summarize('gi_off_frame_gpu_p95_ms', gpuP95.off));
             // Paired per round; a round with a missing side is left out.
             const differences = gpu.on.flatMap((on, round) => {
                 const off = gpu.off[round];
@@ -300,7 +381,12 @@ async function measureFrames(core: ViewerCore, id: TechniqueId, options: Baselin
             measurements.push(summarizeDifference('gi_gpu_ms', differences));
         }
     }
-    measurements.push(summarize('frame_wall_ms', wall));
+    measurements.push(summarize('frame_wall_ms', wall.on));
+    measurements.push(summarize('frame_wall_p95_ms', wallP95.on));
+    if (id !== 'none') {
+        measurements.push(summarize('gi_off_frame_wall_ms', wall.off));
+        measurements.push(summarize('gi_off_frame_wall_p95_ms', wallP95.off));
+    }
     return { measurements, details: { timed_passes_per_frame: median(passes) } };
 }
 
@@ -309,12 +395,27 @@ async function measureTechnique(core: ViewerCore, id: TechniqueId, options: Base
     const technique = core.getTechnique(id);
     const firstFrame = await timedFrame(core);
     const measurements: Measurement[] = [summarize('first_frame_wall_ms', [firstFrame.wallMs])];
-    if (id !== 'none') measurements.push(...(await measureBake(core, technique, options)));
+    // DDGI starts up rather than bakes; the baselines bake (or voxelize).
+    let startupDetails: Record<string, number | string> = {};
+    if (technique instanceof DdgiTechnique) {
+        const startup = await measureDdgiStartup(core, technique);
+        measurements.push(...startup.measurements);
+        startupDetails = startup.details;
+    } else if (id !== 'none') {
+        measurements.push(...(await measureBake(core, technique, options)));
+    }
     const frames = await measureFrames(core, id, options);
     measurements.push(...frames.measurements);
     return {
         measurements,
-        details: { ...technique.describeSettings(), ...frames.details, frame_rounds: options.frameRounds, bake_runs: options.bakeRuns, sample_frames: options.sampleFrames },
+        details: {
+            ...technique.describeSettings(),
+            ...startupDetails,
+            ...frames.details,
+            frame_rounds: options.frameRounds,
+            bake_runs: options.bakeRuns,
+            sample_frames: options.sampleFrames,
+        },
     };
 }
 
@@ -345,16 +446,18 @@ export async function runBaselines(canvas: HTMLCanvasElement, options: BaselineO
     const core = await ViewerCore.create(canvas);
     core.resize(options.width, options.height);
 
-    const manifests = loadAllManifests().filter((manifest) => options.scenes === null || options.scenes.includes(manifest.id));
+    // "Every scene" leaves out the heavy ones (sponza-full); they run only when named.
+    const manifests = loadAllManifests().filter((manifest) => (options.scenes === null ? !isHeavyScene(manifest) : options.scenes.includes(manifest.id)));
     if (options.scenes !== null && manifests.length !== options.scenes.length) {
         throw new Error(`Unknown scene id in ${options.scenes.join(',')}; known: ${loadAllManifests().map((m) => m.id).join(', ')}`);
     }
 
     const rows: BaselineRow[] = [];
-    // Start from "no GI" so loading a scene doesn't create a probe grid nobody asked for.
-    core.layout = { left: 'none', right: null, giMode: 'on', split: 0.5 };
     for (const manifest of manifests) {
         options.log(`scene ${manifest.id}: loading`);
+        // Start every scene from "no GI": loading creates the technique the layout shows, and
+        // DDGI's start-up times count from its creation, so it must be created when measured.
+        core.layout = { left: 'none', right: null, giMode: 'on', split: 0.5 };
         let triangles = 0;
         try {
             const loaded = await core.loadScene(manifest, () => {});

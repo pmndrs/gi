@@ -1,0 +1,4 @@
+{
+    "description": "T1.5a: engine-free DDGI test view of the point-light Cornell box (bookmark 1); indirect mean within ±10% of Cycles. For EXRs and FLIP run node tools/gpu/pages/ddgi-test-view/render.ts.",
+    "timeoutMs": 300000
+}

@@ -62,6 +62,12 @@ export interface WgslModule {
 export interface ComputeKernel {
     readonly pipeline: GPUComputePipeline;
     /**
+     * The layouts the builder made from {@link ComputeKernelOptions.ownGroups},
+     * in the same order (groups 1, 2, 3). The technique makes its bind groups
+     * with these.
+     */
+    readonly ownLayouts: readonly GPUBindGroupLayout[];
+    /**
      * Sets the pipeline and group 0 (all platform modules) on the pass,
      * rebuilding that bind group first if any module's `version` changed.
      * The technique then sets its own groups 1–3.
@@ -77,8 +83,13 @@ export interface ComputeKernelOptions {
     /** The technique's WGSL, including its entry point, using groups 1–3. */
     readonly code: string;
     readonly entryPoint: string;
-    /** The technique's own bind group layouts for groups 1, 2, 3. */
-    readonly ownLayouts?: readonly GPUBindGroupLayout[];
+    /**
+     * The technique's own bind groups 1, 2, 3, as layout descriptors (not
+     * layouts), so the builder can count their storage buffers together with
+     * the platform modules' against `maxStorageBuffersPerShaderStage`, and
+     * throw a `GILimitError` before compiling instead of a validation error.
+     */
+    readonly ownGroups?: readonly GPUBindGroupLayoutDescriptor[];
     /** Pipeline-overridable constants (`override` declarations). */
     readonly constants?: Record<string, number>;
 }
@@ -86,8 +97,9 @@ export interface ComputeKernelOptions {
 /**
  * Builds compute kernels. Compiles asynchronously
  * (`createComputePipelineAsync`) so {@link GIPlatform.prepare} never stalls
- * the main thread, and throws a `GILimitError` if the modules together need
- * more storage buffers than the device allows.
+ * the main thread, and throws a `GILimitError` if the modules and the
+ * technique's own groups together need more storage buffers than the device
+ * allows.
  */
 export interface KernelBuilder {
     computeKernel(options: ComputeKernelOptions): Promise<ComputeKernel>;

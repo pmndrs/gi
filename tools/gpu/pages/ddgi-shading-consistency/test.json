@@ -1,0 +1,4 @@
+{
+    "description": "T1.6: DDGI's shading module on the point-light Cornell box: its shape (<= 6 textures, no storage), the parameter path equal to the test view, coverage at chosen points (inside, fade band, past the margin, unseen), the hello renderer's rasterized GI-only image against the engine-free test view (mean within 0.2%, at most 1% of pixels off by more than 1%), and each debug view against what it should show.",
+    "timeoutMs": 300000
+}

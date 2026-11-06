@@ -4,7 +4,7 @@
  * converter script and its test share them.
  *
  * Metric names are `<group>/<what>_<unit>`, with the tracer and mode in the
- * group, for example `ours-wt/closest/mrays_per_s` or `tmbvh/build_ms_total`.
+ * group, for example `ours-tinybvh/closest/mrays_per_s` or `tmbvh/build_ms_total`.
  */
 
 import type { AgreementResult, ModeResult, SceneResult, SyntheticResult, TraceBenchData } from './results.ts';
@@ -117,6 +117,50 @@ function sceneRows(result: SceneResult): MetricRow[] {
             { scene, metric: 'ours-tmbuild/memory_bytes_nodes', value: tmbuild.bytesNodes },
             { scene, metric: 'ours-tmbuild/memory_bytes_triangles', value: tmbuild.bytesTriangles },
             { scene, metric: 'ours-tmbuild/memory_bytes', value: tmbuild.bytesTotal },
+        );
+    }
+    for (const [tracer, built] of [
+        ['ours-lbvh', result.oursLbvh],
+        ['ours-hploc', result.oursHploc],
+    ] as const) {
+        if (!built) continue;
+        rows.push(
+            { scene, metric: `${tracer}/build_gpu_ms_median`, value: built.gpuBuildMsMedian },
+            { scene, metric: `${tracer}/build_gpu_ms_min`, value: built.gpuBuildMsMin },
+            { scene, metric: `${tracer}/build_gpu_ms_max`, value: built.gpuBuildMsMax },
+            { scene, metric: `${tracer}/build_gpu_runs`, value: built.gpuBuildRuns },
+            { scene, metric: `${tracer}/build_timestamp_timed`, value: built.gpuBuildTimestampTimed },
+            { scene, metric: `${tracer}/build_gpu_loaded_ms_median`, value: built.gpuBuildLoadedMsMedian },
+            { scene, metric: `${tracer}/build_gpu_loaded_ms_min`, value: built.gpuBuildLoadedMsMin },
+            { scene, metric: `${tracer}/build_gpu_loaded_ms_max`, value: built.gpuBuildLoadedMsMax },
+            { scene, metric: `${tracer}/build_gpu_loaded_runs`, value: built.gpuBuildLoadedRuns },
+            { scene, metric: `${tracer}/build_gpu_loaded_seconds`, value: built.gpuBuildLoadedSeconds },
+            { scene, metric: `${tracer}/build_ms_wall`, value: built.wallBuildMs },
+            { scene, metric: `${tracer}/readback_ms`, value: built.readbackMs },
+            { scene, metric: `${tracer}/sah_cost_vs_tinybvh`, value: built.sahCostVsTinybvh },
+            { scene, metric: `${tracer}/meshes_fallen_back`, value: built.meshesFallenBack },
+            { scene, metric: `${tracer}/nodes`, value: built.nodeCount },
+            { scene, metric: `${tracer}/max_mesh_depth`, value: built.maxMeshDepth },
+            { scene, metric: `${tracer}/stack_entries_needed`, value: built.requiredStackSize },
+            { scene, metric: `${tracer}/memory_bytes_nodes`, value: built.bytesNodes },
+            { scene, metric: `${tracer}/memory_bytes_triangles`, value: built.bytesTriangles },
+            { scene, metric: `${tracer}/memory_bytes`, value: built.bytesTotal },
+        );
+        if (built.sahCostVsTinybvhHploc !== undefined) {
+            rows.push(
+                { scene, metric: `${tracer}/sah_cost_vs_tinybvh_hploc`, value: built.sahCostVsTinybvhHploc },
+                { scene, metric: `${tracer}/hploc_match_meshes_refused`, value: built.hplocMatchMeshesRefused ?? 0 },
+            );
+        }
+    }
+    const platform = result.platform;
+    if (platform) {
+        rows.push(
+            { scene, metric: 'platform/describe_ms', value: platform.describeMs },
+            { scene, metric: 'platform/ready_ms', value: platform.readyMs },
+            { scene, metric: 'platform/memory_bytes_scene_copy', value: platform.bytesSceneCopy },
+            { scene, metric: 'platform/memory_bytes_acceleration', value: platform.bytesAcceleration },
+            { scene, metric: 'platform/memory_bytes_triangles', value: platform.bytesTriangles },
         );
     }
     const tmbvh = result.tmbvh;

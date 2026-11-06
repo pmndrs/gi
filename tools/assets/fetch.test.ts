@@ -3,6 +3,7 @@ import { EventEmitter } from 'node:events';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo, Socket } from 'node:net';
 import { appendFile, link, mkdir, mkdtemp, readdir, readFile, rm, utimes, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -10,15 +11,20 @@ import {
     checkGlbStructure,
     checkLicenseApprovals,
     checkOutputs,
+    chooseDownloader,
     conversionFailure,
+    CURL_HOSTS,
+    curlArguments,
     DEFAULT_DOWNLOAD_TIMEOUTS,
     downloadFile,
     downloadsOf,
+    downloadWithCurl,
     endedByGuardKill,
     extractWithCache,
     fetchAsset,
     fileFingerprints,
     findBlender,
+    findSystemCurl,
     formatBytes,
     formatGlbViewRecord,
     GUARD_KILL_EXIT_CODE,
@@ -36,6 +42,7 @@ import {
     sha256OfFile,
     sortBlenderFolders,
     substitutePlaceholders,
+    systemCurlPath,
     validateSources,
     versionMatches,
     type AssetEntry,
@@ -615,6 +622,118 @@ describe('download timeouts', () => {
         const destination = join(workDirectory, 'z.bin');
         expect(await downloadFile(download, destination, { connectMs: 2000, stallMs: 2000 })).toBe(sha256('ok'));
         expect(await readFile(destination, 'utf8')).toBe('ok');
+    });
+});
+
+describe('choosing the downloader', () => {
+    it('uses curl for Intel, whose server refuses Node fetch', () => {
+        expect(CURL_HOSTS).toEqual(['cdrdv2.intel.com']);
+        expect(chooseDownloader('https://cdrdv2.intel.com/v1/dl/getContent/726650')).toBe('curl');
+        expect(chooseDownloader('https://CDRDV2.Intel.com/v1/dl/getContent/830833')).toBe('curl');
+    });
+
+    it('uses Node fetch for every other host, including look-alikes of Intel', () => {
+        expect(chooseDownloader('https://developer.nvidia.com/bistro.zip')).toBe('node-fetch');
+        expect(chooseDownloader('https://raw.githubusercontent.com/x/y/main/a.glb')).toBe('node-fetch');
+        expect(chooseDownloader('https://www.intel.com/content/samples.html')).toBe('node-fetch');
+        expect(chooseDownloader('https://cdrdv2.intel.com.example.org/file.zip')).toBe('node-fetch');
+        expect(chooseDownloader('https://example.org/cdrdv2.intel.com/file.zip')).toBe('node-fetch');
+        expect(chooseDownloader('http://127.0.0.1:8080/file.zip')).toBe('node-fetch');
+    });
+
+    it('refuses a URL it cannot read', () => {
+        expect(() => chooseDownloader('not a url')).toThrow(/not a valid download URL/);
+    });
+
+    it("finds Windows' own curl.exe, never one on PATH", () => {
+        expect(systemCurlPath('win32', { SystemRoot: 'D:\\Win', PATH: 'C:\\Program Files\\Git\\mingw64\\bin' })).toBe(join('D:\\Win', 'System32', 'curl.exe'));
+        expect(systemCurlPath('linux', {})).toBe('/usr/bin/curl');
+    });
+
+    it('runs curl plainly: follows redirects, fails on HTTP errors, no disguise', () => {
+        const args = curlArguments('https://cdrdv2.intel.com/v1/dl/getContent/726650', 'out.zip.part', { connectMs: 60_000, stallMs: 60_000 });
+        expect(args).toEqual([
+            // Skips the user's .curlrc, which could otherwise add headers.
+            '--disable',
+            '--location',
+            '--fail',
+            '--silent',
+            '--show-error',
+            '--connect-timeout',
+            '60',
+            '--speed-limit',
+            '1',
+            '--speed-time',
+            '60',
+            '--output',
+            'out.zip.part',
+            'https://cdrdv2.intel.com/v1/dl/getContent/726650',
+        ]);
+        for (const disguise of ['-A', '--user-agent', '-H', '--header', '-e', '--referer', '-b', '--cookie']) expect(args).not.toContain(disguise);
+        // curl's stall limit is whole seconds, at least 1.
+        const short = curlArguments('https://x.org/a', 'a', { connectMs: 150, stallMs: 200 });
+        expect(short[short.indexOf('--speed-time') + 1]).toBe('1');
+        expect(short[short.indexOf('--connect-timeout') + 1]).toBe('0.15');
+    });
+
+    it('says what to do when curl is missing', async () => {
+        const download = { url: 'https://cdrdv2.intel.com/v1/dl/getContent/726650', file: 'pkg_a_curtains.zip', bytes: 1, sha256: 'AB'.repeat(32) };
+        const missing = join(tmpdir(), 'ddgi-no-such-folder', 'curl.exe');
+        const failure = findSystemCurl(download, missing);
+        await expect(failure).rejects.toThrow(/refuses Node's fetch/);
+        await expect(findSystemCurl(download, missing)).rejects.toThrow(/does not exist/);
+        await expect(findSystemCurl(download, missing)).rejects.toThrow(`assets/downloads/.cache/${'ab'.repeat(32)}`);
+    });
+});
+
+// The real curl, against a local server. Skipped where the system has no curl.
+describe.skipIf(!existsSync(systemCurlPath()))('downloading with the system curl', () => {
+    const rejection = '<html><head><title>Request Rejected</title></head><body>The requested URL was rejected.</body></html>';
+    let server: Server;
+    let baseUrl: string;
+    let workDirectory: string;
+
+    beforeAll(async () => {
+        workDirectory = await mkdtemp(join(tmpdir(), 'ddgi-curl-'));
+        server = createServer((request, response) => {
+            if (request.url === '/redirect') return response.writeHead(302, { location: '/file' }).end();
+            if (request.url === '/file') return response.writeHead(200, { 'content-length': 7 }).end('payload');
+            if (request.url === '/rejected') return response.writeHead(200, { 'content-type': 'text/html' }).end(rejection);
+            response.writeHead(404).end('not here');
+        });
+        await new Promise<void>((resolvePromise) => server.listen(0, '127.0.0.1', resolvePromise));
+        baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    });
+
+    afterAll(async () => {
+        server.close();
+        await rm(workDirectory, { recursive: true, force: true });
+    });
+
+    it('follows a redirect, checks the hash and leaves the file in place', async () => {
+        const download = { url: `${baseUrl}/redirect`, file: 'a.bin', bytes: 7, sha256: sha256('payload') };
+        const destination = join(workDirectory, 'a.bin');
+        expect(await downloadWithCurl(download, destination)).toBe(sha256('payload'));
+        expect(await readFile(destination, 'utf8')).toBe('payload');
+        await expect(readFile(`${destination}.part`)).rejects.toThrow();
+    });
+
+    it('refuses a small refusal page by its size, and leaves no partial file', async () => {
+        const download = { url: `${baseUrl}/rejected`, file: 'b.zip', bytes: 786_898_766, sha256: 'c'.repeat(64) };
+        const destination = join(workDirectory, 'b.zip');
+        await expect(downloadWithCurl(download, destination)).rejects.toThrow(/bytes but sources.json says 786898766 \(a file this small is usually an error or refusal page/);
+        await expect(readFile(destination)).rejects.toThrow();
+        await expect(readFile(`${destination}.part`)).rejects.toThrow();
+    });
+
+    it('reports an HTTP error instead of saving the error page', async () => {
+        const download = { url: `${baseUrl}/missing`, file: 'c.bin', bytes: 7, sha256: sha256('payload') };
+        await expect(downloadWithCurl(download, join(workDirectory, 'c.bin'))).rejects.toThrow(/answered with an HTTP error \(curl: .*404/);
+    });
+
+    it('reports a wrong hash', async () => {
+        const download = { url: `${baseUrl}/file`, file: 'd.bin', bytes: 7, sha256: sha256('other!!') };
+        await expect(downloadWithCurl(download, join(workDirectory, 'd.bin'))).rejects.toThrow(/download sha256 is .* but sources.json says/);
     });
 });
 

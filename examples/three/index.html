@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <title>ddgi + three.js examples</title>
+        <link rel="icon" href="data:," />
+        <style>
+            body {
+                margin: 2em;
+                background: #111;
+                color: #ddd;
+                font: 15px/1.6 system-ui, sans-serif;
+            }
+            a {
+                color: #8cf;
+            }
+        </style>
+    </head>
+    <body>
+        <h1>ddgi + three.js</h1>
+        <p>Both pages use the scene of three's <code>webgpu_lightprobes.html</code>, with a <code>GIVolume</code> in place of its <code>LightProbeGrid</code>.</p>
+        <ul>
+            <li><a href="./simple.html">simple.html</a>: the volume alone. GI updates itself on every render.</li>
+            <li><a href="./composite.html">composite.html</a>: the same, plus three's pipeline with <code>ddgi()</code> and <code>@pmndrs/upscaler</code>, the intended path for dense scenes.</li>
+        </ul>
+    </body>
+</html>

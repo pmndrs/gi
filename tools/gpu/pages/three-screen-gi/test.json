@@ -1,0 +1,5 @@
+{
+    "description": "Sponza: the cost of shading DDGI once per pixel through three's forward path (MRT or a depth-and-normal prepass, a full-screen GI pass, materials reading it by screenUV) against per-fragment GI. A timing page: run it under the bench lock.",
+    "timeoutMs": 2400000,
+    "manual": true
+}

@@ -1,0 +1,599 @@
+/**
+ * The `ddgi/blend` kernel (docs/design/ddgi.md): one workgroup per probe in
+ * this frame's update list. It loads the probe's rays from the ray buffer
+ * into workgroup memory, then
+ *
+ * - **phase B, classification and relocation**, over the 32 fixed rays
+ *   (Majercik et al. 2021, section 5): a workgroup reduction finds how many
+ *   fixed rays hit back faces, the closest back face, the closest and
+ *   farthest front faces, and the front faces within the probe's reach, and
+ *   thread 0 decides the probe's new offset and state;
+ * - **phase C, blend**, for probes that traced all their rays and stay
+ *   active: one thread per atlas texel loops over the blended rays and blends
+ *   with the old value (hysteresis), writing the scratch buffer.
+ *
+ * The reduction is **subgroups first**: each subgroup reduces with
+ * `subgroupAdd` / `subgroupMin` / `subgroupMax`, and one lane per subgroup
+ * combines with workgroup atomics. The **declared fallback** (no `subgroups`
+ * feature) has every thread do the workgroup atomics itself. The keys are
+ * integers, so both give exactly the same result. Chosen when the kernel is
+ * built; nothing assumes a subgroup size.
+ *
+ * Hysteresis knows the time between a probe's updates (T1.12): each probe
+ * keeps how many updates it remembers (n), when it was last updated (t) and
+ * how many blended updates it has had (k, for the warm-up ramp) in the
+ * history buffer, which only this kernel reads and writes.
+ *
+ * Bindings (group 1; no platform module): uniforms, the update list, the ray
+ * buffer, the scratch buffer, the census buffer and the probe history (5
+ * storage buffers), and the irradiance, distance and probe-data atlases
+ * (sampled, for the old values).
+ */
+
+import { CENSUS_RAYS_TRACED, type ScratchLayout } from '../layout.ts';
+import { CLOCK_WRAP_SECONDS, FIXED_RAYS } from '../settings.ts';
+
+/**
+ * Bits of a reduction key that hold the fixed ray's index (the rest is the
+ * hit distance's float bits). Derived from the fixed-ray count, and kept to
+ * at most 8 of the 23 mantissa bits so the distance stays precise.
+ */
+export const KEY_INDEX_BITS = Math.ceil(Math.log2(FIXED_RAYS));
+if (KEY_INDEX_BITS > 8) throw new Error(`@pmndrs/ddgi: ${FIXED_RAYS} fixed rays need ${KEY_INDEX_BITS} key bits; phase B's keys allow 8`);
+const KEY_INDEX_MASK = (1 << KEY_INDEX_BITS) - 1;
+import { DDGI_COMMON_WGSL } from './common.ts';
+import { DDGI_STOCHASTIC_HALF_WGSL } from './half.ts';
+
+/** The default `maxComputeInvocationsPerWorkgroup`. */
+export const BLEND_WORKGROUP_SIZE = 256;
+
+/** How phase B combines the fixed rays: subgroups first, or the declared fallback. */
+export type PhaseBReduction = 'subgroups' | 'workgroup';
+
+export interface BlendKernelShape {
+    readonly irradianceTexels: number;
+    readonly distanceTexels: number;
+    readonly scratch: ScratchLayout;
+    readonly reduction: PhaseBReduction;
+}
+
+/** Per-thread reduction into the workgroup atomics, in the two declared forms. */
+function reductionWgsl(reduction: PhaseBReduction): string {
+    if (reduction === 'subgroups') {
+        return /* wgsl */ `
+// Subgroups first: each subgroup reduces in hardware, then one lane per
+// subgroup meets the others in the workgroup atomics. Called by every thread
+// in uniform control flow (threads without a fixed ray pass neutral values).
+fn ddgiReduceFixedRay(ray: DdgiFixedRayResult) {
+    let backFaces = subgroupAdd(ray.backFace);
+    let nearestBack = subgroupMin(ray.nearestBack);
+    let closestBack = subgroupMin(ray.closestBack);
+    let closestFront = subgroupMin(ray.closestFront);
+    let farthestFront = subgroupMax(ray.farthestFront);
+    let frontInReach = subgroupAdd(ray.frontInReach);
+    if (subgroupElect()) {
+        atomicAdd(&ddgiBackFaceCount, backFaces);
+        atomicMin(&ddgiNearestBackFace, nearestBack);
+        atomicMin(&ddgiClosestBackFace, closestBack);
+        atomicMin(&ddgiClosestFrontFace, closestFront);
+        atomicMax(&ddgiFarthestFrontFace, farthestFront);
+        atomicAdd(&ddgiFrontFacesInReach, frontInReach);
+    }
+}
+`;
+    }
+    return /* wgsl */ `
+// The declared fallback without subgroups: every thread combines its own
+// fixed ray in the workgroup atomics.
+fn ddgiReduceFixedRay(ray: DdgiFixedRayResult) {
+    atomicAdd(&ddgiBackFaceCount, ray.backFace);
+    atomicMin(&ddgiNearestBackFace, ray.nearestBack);
+    atomicMin(&ddgiClosestBackFace, ray.closestBack);
+    atomicMin(&ddgiClosestFrontFace, ray.closestFront);
+    atomicMax(&ddgiFarthestFrontFace, ray.farthestFront);
+    atomicAdd(&ddgiFrontFacesInReach, ray.frontInReach);
+}
+`;
+}
+
+export function blendKernelWgsl(shape: BlendKernelShape): string {
+    const { irradianceTexels, distanceTexels, scratch, reduction } = shape;
+    // An enable directive must come before everything else in the module.
+    const enable = reduction === 'subgroups' ? 'enable subgroups;\n' : '';
+    return /* wgsl */ `${enable}
+${DDGI_COMMON_WGSL}
+${DDGI_STOCHASTIC_HALF_WGSL}
+
+// ---- DDGI blend kernel (techniques/ddgi) -----------------------------------------------
+
+const DDGI_BLEND_WORKGROUP_SIZE: u32 = ${BLEND_WORKGROUP_SIZE}u;
+const DDGI_IRRADIANCE_TEXELS: u32 = ${irradianceTexels}u;
+const DDGI_DISTANCE_TEXELS: u32 = ${distanceTexels}u;
+const DDGI_IRRADIANCE_TEXEL_COUNT: u32 = DDGI_IRRADIANCE_TEXELS * DDGI_IRRADIANCE_TEXELS;
+const DDGI_DISTANCE_TEXEL_COUNT: u32 = DDGI_DISTANCE_TEXELS * DDGI_DISTANCE_TEXELS;
+const DDGI_SCRATCH_STRIDE: u32 = ${scratch.strideWords}u;
+const DDGI_SCRATCH_IRRADIANCE: u32 = ${scratch.irradianceOffset}u;
+const DDGI_SCRATCH_DISTANCE: u32 = ${scratch.distanceOffset}u;
+const DDGI_SCRATCH_PROBE_DATA: u32 = ${scratch.probeDataOffset}u;
+const DDGI_CENSUS_RAYS_TRACED: u32 = ${CENSUS_RAYS_TRACED}u;
+// Must match the trace kernel: a back-face hit was stored at this share of its distance.
+const DDGI_BACK_FACE_DISTANCE_SHARE: f32 = 0.2;
+// When the probe's mean irradiance changed by more than the change threshold,
+// its hysteresis is multiplied by this, so a light switch shows up quickly.
+const DDGI_BIG_CHANGE_HYSTERESIS_SCALE: f32 = 0.75;
+// The technique's clock wraps to 0 every this many seconds (CLOCK_WRAP_SECONDS in settings.ts).
+const DDGI_CLOCK_WRAP_SECONDS: f32 = ${CLOCK_WRAP_SECONDS}.0;
+
+// Phase B rules (Majercik et al. 2021, section 5).
+// More than this share of fixed rays hitting back faces means the probe is inside something.
+const DDGI_INSIDE_BACK_FACE_SHARE: f32 = 0.25;
+// Offsets stay within this share of the spacing on every axis, so a probe
+// never leaves its own cell and the grid lookup stays valid.
+const DDGI_MAX_OFFSET: f32 = 0.45;
+// A probe moved out of geometry lands this share of minFrontFaceDistance past the surface.
+const DDGI_PAST_SURFACE_SHARE: f32 = 0.5;
+// Moving away from a close face along the most open direction is allowed
+// unless that heads back towards the face (more than 60 degrees towards it,
+// the paper's rule). A move that runs nearly along the face keeps the probe
+// close to it, so it repeats each update and the probe slides along the face
+// until its offset limit stops it (about 75 updates at most, T1.5b review).
+// Requiring moves to head clearly away stopped the sliding, but raised the
+// two-room leak from 0.80% to 0.97% (thin wall 0.59% to 0.70%, closed door
+// 0.06% to 0.13%); moving straight away from the face raised it to 1.49%.
+const DDGI_MAX_COS_TOWARDS_CLOSEST: f32 = 0.5;
+// Moves shorter than this share of minFrontFaceDistance are dropped. A dead
+// band, so the "too close" and "ease back" rules can't trade tiny moves for
+// ever, and half-float rounding of the offset can't keep a probe jittering
+// (123 Cornell probes were still creeping by fractions of a millimetre after
+// 60 frames without it, T1.5b review).
+const DDGI_MIN_MOVE_SHARE: f32 = 0.25;
+// A probe takes part in interpolating surfaces up to one spacing away on each
+// axis (its 8 cells). Its 32 fixed rays are about 40 degrees apart, so they
+// can miss a sliver of surface poking into that box near its corners; such a
+// surface nearly always reaches on past the box, where the rays do find it.
+// So a front face within this many spacings counts as "in reach" (T1.5b: at 1,
+// the Cornell box switched off 25 probes that a surface needed).
+const DDGI_REACH_SPACINGS: f32 = 1.5;
+// Share of its offset a probe in open space moves back towards its grid point per update.
+const DDGI_EASE_BACK_SHARE: f32 = 0.1;
+// Distances and ray indices share one 32-bit key: the distance's float bits
+// (non-negative floats order like their bits) with the low 5 bits replaced by
+// the fixed ray's index, so min and max return both. Costs ${KEY_INDEX_BITS} of 23 mantissa bits.
+const DDGI_KEY_INDEX_MASK: u32 = ${KEY_INDEX_MASK}u;
+const DDGI_KEY_NONE_MIN: u32 = 0xffffffffu;
+const DDGI_KEY_NONE_MAX: u32 = 0u;
+// Stands in for "no front face hit at all" when distances are compared.
+const DDGI_NO_DISTANCE: f32 = 3.0e38;
+
+@group(1) @binding(0) var<uniform> ddgi: DdgiUniforms;
+@group(1) @binding(1) var<storage, read> ddgiUpdateList: array<u32>;
+@group(1) @binding(2) var<storage, read> ddgiRays: array<vec2u>;
+@group(1) @binding(3) var<storage, read_write> ddgiScratch: array<u32>;
+@group(1) @binding(4) var<storage, read_write> ddgiCensus: array<atomic<u32>>;
+@group(1) @binding(5) var ddgiIrradianceAtlas: texture_2d_array<f32>;
+@group(1) @binding(6) var ddgiDistanceAtlas: texture_2d_array<f32>;
+@group(1) @binding(7) var ddgiProbeData: texture_2d_array<f32>;
+// Per probe: its history for the hysteresis rule (DdgiProbeHistory). Zero until first written.
+@group(1) @binding(8) var<storage, read_write> ddgiProbeHistory: array<DdgiProbeHistory>;
+
+// Per ray: its direction (xyz) and signed hit distance (w, negative = back
+// face). Decoded once here: the blend reads every ray once per texel.
+var<workgroup> ddgiRayDirectionDistance: array<vec4f, DDGI_MAX_RAYS>;
+// Per ray: rgb radiance as half floats (rg, then b and the distance), as the trace wrote it.
+var<workgroup> ddgiRayRadiance: array<vec2u, DDGI_MAX_RAYS>;
+// Phase B's reductions over the fixed rays.
+var<workgroup> ddgiBackFaceCount: atomic<u32>;
+var<workgroup> ddgiNearestBackFace: atomic<u32>;
+var<workgroup> ddgiClosestBackFace: atomic<u32>;
+var<workgroup> ddgiClosestFrontFace: atomic<u32>;
+var<workgroup> ddgiFarthestFrontFace: atomic<u32>;
+var<workgroup> ddgiFrontFacesInReach: atomic<u32>;
+// Thread 0's verdicts, read by everyone with workgroupUniformLoad.
+var<workgroup> ddgiBlendThisUpdate: u32;
+var<workgroup> ddgiUpdateHysteresis: f32;
+var<workgroup> ddgiFastHysteresis: u32;
+var<workgroup> ddgiChangedNow: u32;
+// Phase C: each irradiance texel's new estimate and old value, for the
+// big-change test on the probe's mean.
+var<workgroup> ddgiTexelEstimate: array<vec4f, DDGI_IRRADIANCE_TEXEL_COUNT>;
+var<workgroup> ddgiTexelOld: array<vec4f, DDGI_IRRADIANCE_TEXEL_COUNT>;
+
+// One thread's fixed ray, as the reduction combines it.
+struct DdgiFixedRayResult {
+    backFace: u32,       // 1 for a back-face hit
+    nearestBack: u32,    // key of any back-face hit, or DDGI_KEY_NONE_MIN
+    closestBack: u32,    // key of a back-face hit the probe may leave through, or DDGI_KEY_NONE_MIN
+    closestFront: u32,   // key of a front-face hit (or miss), or DDGI_KEY_NONE_MIN
+    farthestFront: u32,  // the same key, or DDGI_KEY_NONE_MAX
+    frontInReach: u32,   // 1 for a front-face hit inside the probe's reach
+}
+
+${reductionWgsl(reduction)}
+
+fn ddgiDistanceKey(distance: f32, rayIndex: u32) -> u32 {
+    return (bitcast<u32>(distance) & ~DDGI_KEY_INDEX_MASK) | rayIndex;
+}
+
+fn ddgiKeyDistance(key: u32) -> f32 {
+    return bitcast<f32>(key & ~DDGI_KEY_INDEX_MASK);
+}
+
+fn ddgiKeyDirection(key: u32) -> vec3f {
+    return ddgiRayDirectionDistance[key & DDGI_KEY_INDEX_MASK].xyz;
+}
+
+fn ddgiPackHalves(a: f32, b: f32, seed: u32) -> u32 {
+    return pack2x16float(vec2f(ddgiStochasticHalf(a, ddgiRandom(seed, 1u, ddgi.frame)), ddgiStochasticHalf(b, ddgiRandom(seed, 2u, ddgi.frame))));
+}
+
+// Direction at the centre of interior texel 'texel' of a tile 'texels' wide.
+fn ddgiTexelDirection(texel: vec2u, texels: u32) -> vec3f {
+    return ddgiOctDecode((vec2f(texel) + 0.5) / f32(texels) * 2.0 - 1.0);
+}
+
+// Atlas texel of interior texel 'texel' of a probe's tile (the layer is probe.y).
+fn ddgiAtlasTexel(probe: vec3i, texel: vec2u, texels: u32) -> vec2i {
+    let border = i32(DDGI_TILE_BORDER);
+    return probe.xz * (i32(texels) + 2 * border) + border + vec2i(texel);
+}
+
+// ---- Phase B: classification and relocation ----
+
+// Whether a probe may sit at this offset (in spacings): inside its own cell
+// (so the grid lookup stays valid) and inside the volume's box of probes.
+// Why the box: a probe in an outer wall would otherwise often leave through
+// the wall's outer face, the nearest one, and end up outside the room,
+// where the room's own outside keeps it "near a surface" and active.
+fn ddgiOffsetAllowed(probe: vec3i, offset: vec3f) -> bool {
+    let position = vec3f(probe) + offset;
+    let lastProbe = vec3f(ddgiProbeCount() - 1u);
+    return all(abs(offset) <= vec3f(DDGI_MAX_OFFSET)) && all(position >= vec3f(0.0)) && all(position <= lastProbe);
+}
+
+// Each thread's share of the reduction: its fixed ray, or neutral values.
+fn ddgiFixedRayResult(thread: u32, probe: vec3i, offset: vec3f) -> DdgiFixedRayResult {
+    var result = DdgiFixedRayResult(0u, DDGI_KEY_NONE_MIN, DDGI_KEY_NONE_MIN, DDGI_KEY_NONE_MIN, DDGI_KEY_NONE_MAX, 0u);
+    if (thread >= DDGI_FIXED_RAYS) {
+        return result;
+    }
+    let ray = ddgiRayDirectionDistance[thread];
+    let signedDistance = ray.w;
+    if (signedDistance < 0.0) {
+        result.backFace = 1u;
+        // The true hit distance, from the stored shortened one.
+        let distance = -signedDistance / DDGI_BACK_FACE_DISTANCE_SHARE;
+        result.nearestBack = ddgiDistanceKey(distance, thread);
+        // Only back faces the probe may leave through count for relocation.
+        let exit = offset + ray.xyz * (distance + DDGI_PAST_SURFACE_SHARE * ddgi.minFrontFaceDistance) / ddgiUniformVolume().spacing;
+        if (ddgiOffsetAllowed(probe, exit)) {
+            result.closestBack = ddgiDistanceKey(distance, thread);
+        }
+    } else {
+        // A miss counts as a front face very far away: the most open direction.
+        result.closestFront = ddgiDistanceKey(signedDistance, thread);
+        result.farthestFront = result.closestFront;
+        // Within reach (see DDGI_REACH_SPACINGS).
+        if (all(abs(ray.xyz * signedDistance) <= DDGI_REACH_SPACINGS * ddgiUniformVolume().spacing)) {
+            result.frontInReach = 1u;
+        }
+    }
+    return result;
+}
+
+struct DdgiProbeDecision {
+    offset: vec3f,
+    state: u32,
+}
+
+// Thread 0's verdict from the reductions (design: "Phase B").
+fn ddgiDecide(probe: vec3i, offset: vec3f, state: u32) -> DdgiProbeDecision {
+    let spacing = ddgiUniformVolume().spacing;
+    let minFrontFace = ddgi.minFrontFaceDistance;
+    let backFaces = atomicLoad(&ddgiBackFaceCount);
+    let closestBack = atomicLoad(&ddgiClosestBackFace);  // the nearest one the probe may leave through
+    let closestFront = atomicLoad(&ddgiClosestFrontFace);
+    let farthestFront = atomicLoad(&ddgiFarthestFrontFace);
+    let hasFront = closestFront != DDGI_KEY_NONE_MIN;
+    let closestFrontDistance = select(DDGI_NO_DISTANCE, ddgiKeyDistance(closestFront), hasFront);
+    let nearestBack = atomicLoad(&ddgiNearestBackFace);
+    let nearestBackDistance = select(DDGI_NO_DISTANCE, ddgiKeyDistance(nearestBack), nearestBack != DDGI_KEY_NONE_MIN);
+    // Inside something: the paper's rule (more than 25% back faces), or the
+    // nearest thing the probe sees is a back face. The second catches probes
+    // inside thin boards that overlap other solids: there many fixed rays hit
+    // the other solids' faces, which count as front faces, and the share of
+    // back faces stays under 25% (T1.5b, three probes in the cabinet row).
+    let inside = f32(backFaces) > DDGI_INSIDE_BACK_FACE_SHARE * f32(DDGI_FIXED_RAYS) || nearestBackDistance < closestFrontDistance;
+
+    var newOffset = offset;
+    if (ddgi.relocation != 0u) {
+        var step = vec3f(0.0);
+        if (inside && closestBack != DDGI_KEY_NONE_MIN && state != DDGI_STATE_OFF_INSIDE_GEOMETRY) {
+            // Inside something: through the closest back face it may leave by,
+            // to just past it. Once: a probe already off for being inside had
+            // its chance and stays put while it is still inside. Where solids
+            // overlap (corners of wall and floor slabs), hopping on put it in
+            // the other solid and back again for ever (T1.5b review).
+            step = ddgiKeyDirection(closestBack) * (ddgiKeyDistance(closestBack) + DDGI_PAST_SURFACE_SHARE * minFrontFace);
+        } else if (!inside && closestFrontDistance < minFrontFace) {
+            // Too close to a surface: away along the most open direction, by
+            // the shortfall, unless that heads back towards the close face.
+            let away = ddgiKeyDirection(farthestFront);
+            if (dot(away, ddgiKeyDirection(closestFront)) <= DDGI_MAX_COS_TOWARDS_CLOSEST) {
+                step = away * (minFrontFace - closestFrontDistance);
+            }
+        } else if (!inside) {
+            // In open space: ease back towards the grid point, unless that
+            // brings the closest front face nearer than minFrontFaceDistance
+            // (a probe moved out of a wall must not drift back into it).
+            let back = -offset * spacing * DDGI_EASE_BACK_SHARE;
+            let towardsClosest = select(0.0, dot(back, ddgiKeyDirection(closestFront)), hasFront);
+            if (closestFrontDistance - towardsClosest >= minFrontFace) {
+                step = back;
+            }
+        }
+        let candidate = offset + step / spacing;
+        // A new offset only where the probe may sit, and only for a real move;
+        // otherwise the old one stays.
+        if (length(step) >= DDGI_MIN_MOVE_SHARE * minFrontFace && ddgiOffsetAllowed(probe, candidate)) {
+            newOffset = candidate;
+        }
+    }
+
+    var newState = DDGI_STATE_ACTIVE;
+    if (ddgi.classification != 0u && inside) {
+        // Inside geometry, after relocation had its chance: if it moved, the
+        // next update looks again from the new place.
+        newState = DDGI_STATE_OFF_INSIDE_GEOMETRY;
+    } else if (ddgi.classification != 0u && atomicLoad(&ddgiFrontFacesInReach) == 0u) {
+        // No surface within reach: the probe helps no surface's interpolation.
+        newState = DDGI_STATE_OFF_NO_SURFACE_NEARBY;
+    } else if (ddgiIsOff(state)) {
+        // Coming back on: it traced only its fixed rays this time, so it is
+        // blended (from scratch) at its next update.
+        newState = DDGI_STATE_NOT_UPDATED_YET;
+    }
+    return DdgiProbeDecision(newOffset, newState);
+}
+
+// ---- Phase C: blend ----
+
+// One probe's history (PROBE_HISTORY_WORD in layout.ts).
+struct DdgiProbeHistory {
+    samples: f32,            // n: the updates its history counts as
+    lastUpdateSeconds: f32,  // t: the technique's clock at its last blended update
+    updates: u32,            // k: blended updates since it was last new, reset or back on
+}
+
+// This update's hysteresis for one probe, and the probe's history after it.
+struct DdgiHysteresisStep {
+    hysteresis: f32,
+    history: DdgiProbeHistory,
+}
+
+// The ramp: the most a probe with k blended updates may remember. For its
+// first K updates (rampUpdates, 16) that is k / a (updatesPerSample, 8); then
+// one more per update, as a plain mean grows.
+// Why: an update's bounce light reads the field the probe is still building,
+// so its first estimates are too dark, and a plain mean (h = k / (k + 1))
+// keeps them at full weight: its error from them shrinks only like
+// k^-(1 - rho), with rho the share of a probe's light that comes back through
+// the field. Cornell's 16-pass warm-up came out 25% low that way. Capped at
+// k / a, every-frame updates get h = k / (k + a): a mean weighted towards
+// later updates (weights grow like k^(a - 1)), whose error shrinks like
+// k^-(a (1 - rho)), at a / sqrt(2a - 1) times the noise of a plain mean.
+// Why only K updates: under the cap an every-frame probe would reach n_max
+// only after a * n_max updates and stay noisy until then; after the ramp it
+// gets there K / a + n_max updates in. A sparse probe settles on the clock at
+// a few samples, so the ramp no longer binds once it has had a few updates.
+fn ddgiRampCap(updates: u32) -> f32 {
+    let k = f32(updates);
+    let rampEnd = ddgi.rampUpdates;
+    return select(rampEnd / ddgi.updatesPerSample + (k - rampEnd), k / ddgi.updatesPerSample, k <= rampEnd);
+}
+
+// The hysteresis rule (docs/design/ddgi.md, "Hysteresis that knows the time
+// between updates"). A probe's history counts as n updates. Before this
+// update, n fades with the time since the last one, n * exp(-elapsed / tau),
+// so a probe updated rarely remembers less and follows changes within
+// seconds, while one updated every frame builds up to n_max and goes quiet;
+// it is also held to the ramp above. The new estimate then counts as one more
+// update: h = n / (n + 1). After it, n + 1, capped at n_max, so h never
+// exceeds n_max / (n_max + 1).
+// A probe's first blended update (state 3: new, reset, or back on) starts
+// from nothing (n = 0, k = 0), h = 0, so the field shows partial GI at once
+// instead of fading in from black. The history is kept with the fixed rule
+// too, so switching rules mid-run carries on from the right count.
+fn ddgiHysteresisStep(history: DdgiProbeHistory, state: u32) -> DdgiHysteresisStep {
+    let firstUpdate = state == DDGI_STATE_NOT_UPDATED_YET;
+    let updates = select(history.updates, 0u, firstUpdate);
+    // The clock wraps (CLOCK_WRAP_SECONDS): a negative difference means it
+    // wrapped since this probe's last update, so add the period back.
+    let sinceLastUpdate = ddgi.clockSeconds - history.lastUpdateSeconds;
+    let elapsedSeconds = select(sinceLastUpdate, sinceLastUpdate + DDGI_CLOCK_WRAP_SECONDS, sinceLastUpdate < 0.0);
+    let faded = select(history.samples * exp(-elapsedSeconds * ddgi.inverseMemorySeconds), 0.0, firstUpdate);
+    let remembered = min(faded, ddgiRampCap(updates));
+    let adaptive = remembered / (remembered + 1.0);
+    let fixed = select(ddgi.hysteresis, 0.0, firstUpdate);
+    let hysteresis = select(fixed, adaptive, ddgi.adaptiveHysteresis != 0u);
+    let samples = min(remembered + 1.0, ddgi.maxHistorySamples);
+    // Saturating: the count only matters while k / a is below n_max.
+    let nextUpdates = select(updates + 1u, updates, updates == 0xffffffffu);
+    return DdgiHysteresisStep(hysteresis, DdgiProbeHistory(samples, ddgi.clockSeconds, nextUpdates));
+}
+
+// The cosine-weighted mean radiance of the blended rays around one
+// irradiance texel's direction, times pi: the texel's new estimate of E.
+fn ddgiEstimateIrradianceTexel(texelIndex: u32, blendedRays: u32) -> vec3f {
+    let texel = vec2u(texelIndex % DDGI_IRRADIANCE_TEXELS, texelIndex / DDGI_IRRADIANCE_TEXELS);
+    let normal = ddgiTexelDirection(texel, DDGI_IRRADIANCE_TEXELS);
+    var radianceSum = vec3f(0.0);
+    var weightSum = 0.0;
+    for (var blended = 0u; blended < blendedRays; blended++) {
+        let ray = DDGI_FIXED_RAYS + blended;
+        let weight = max(0.0, dot(normal, ddgiRayDirectionDistance[ray].xyz));
+        let packed = ddgiRayRadiance[ray];
+        radianceSum += weight * vec3f(unpack2x16float(packed.x), unpack2x16float(packed.y).x);
+        weightSum += weight;
+    }
+    // With rays spread evenly over the sphere, the cosine-weighted mean of the
+    // radiance over the hemisphere is E / pi; the field stores E.
+    return DDGI_PI * radianceSum / max(weightSum, 1.0e-6);
+}
+
+fn ddgiWriteIrradianceTexel(slot: u32, probeIndex: u32, state: u32, texelIndex: u32, probeHysteresis: f32, fastHysteresis: bool, changedNow: bool) {
+    let estimate = ddgiTexelEstimate[texelIndex].rgb;
+    let old = ddgiTexelOld[texelIndex].rgb;
+    var hysteresis = probeHysteresis;
+    if (fastHysteresis) {
+        hysteresis *= DDGI_BIG_CHANGE_HYSTERESIS_SCALE;
+    }
+    var blendedValue = mix(estimate, old, hysteresis);
+    if (state != DDGI_STATE_NOT_UPDATED_YET) {
+        // Firefly clamp: one update may change a channel by at most
+        // maxBrightnessChange times its old value, so one lucky ray can't
+        // flash the probe.
+        let limit = ddgi.maxBrightnessChange * max(old, vec3f(DDGI_SMALLEST_NORMAL_HALF));
+        blendedValue = old + clamp(blendedValue - old, -limit, limit);
+    }
+    let base = slot * DDGI_SCRATCH_STRIDE + DDGI_SCRATCH_IRRADIANCE + 2u * texelIndex;
+    let seed = probeIndex * DDGI_IRRADIANCE_TEXEL_COUNT + texelIndex;
+    ddgiScratch[base] = ddgiPackHalves(blendedValue.r, blendedValue.g, seed);
+    // Alpha carries this update's big-change verdict to the next update.
+    ddgiScratch[base + 1u] = ddgiPackHalves(blendedValue.b, select(0.0, 1.0, changedNow), seed ^ 0x5bd1e995u);
+}
+
+fn ddgiBlendDistanceTexel(slot: u32, probeIndex: u32, probe: vec3i, texelIndex: u32, blendedRays: u32, hysteresis: f32) {
+    let texel = vec2u(texelIndex % DDGI_DISTANCE_TEXELS, texelIndex / DDGI_DISTANCE_TEXELS);
+    let normal = ddgiTexelDirection(texel, DDGI_DISTANCE_TEXELS);
+    var moments = vec2f(0.0);
+    var weightSum = 0.0;
+    for (var blended = 0u; blended < blendedRays; blended++) {
+        let directionDistance = ddgiRayDirectionDistance[DDGI_FIXED_RAYS + blended];
+        // A sharp cosine power: distances are about one direction, not a hemisphere.
+        let weight = pow(max(0.0, dot(normal, directionDistance.xyz)), ddgi.distanceSharpness);
+        let distance = min(abs(directionDistance.w), ddgi.distanceClamp);
+        moments += weight * vec2f(distance, distance * distance);
+        weightSum += weight;
+    }
+    let old = textureLoad(ddgiDistanceAtlas, ddgiAtlasTexel(probe, texel, DDGI_DISTANCE_TEXELS), probe.y, 0).xy;
+    // A texel no ray came near this update keeps its old value.
+    let estimate = select(old, moments / weightSum, weightSum > 1.0e-6);
+    let blendedValue = mix(estimate, old, hysteresis);
+
+    let base = slot * DDGI_SCRATCH_STRIDE + DDGI_SCRATCH_DISTANCE + texelIndex;
+    let seed = (probeIndex * DDGI_DISTANCE_TEXEL_COUNT + texelIndex) ^ 0x68e31da4u;
+    ddgiScratch[base] = ddgiPackHalves(blendedValue.x, blendedValue.y, seed);
+}
+
+@compute @workgroup_size(DDGI_BLEND_WORKGROUP_SIZE)
+fn ddgiBlend(
+    @builtin(workgroup_id) group: vec3u,
+    @builtin(num_workgroups) groups: vec3u,
+    @builtin(local_invocation_index) thread: u32,
+) {
+    // Dispatches past 65,535 workgroups use two dimensions.
+    let slot = group.x + group.y * groups.x;
+    if (slot >= ddgi.updateCount) {
+        return;
+    }
+    let probeIndex = ddgiUpdateList[slot];
+    let probe = ddgiProbeCoordinates(probeIndex, ddgiProbeCount());
+    let probeData = ddgiReadProbeData(ddgiProbeData, probe);
+    let state = probeData.state;
+    let tracedRays = ddgiTracedRays(state);
+    let blendedRays = ddgi.raysPerProbe - DDGI_FIXED_RAYS;
+
+    if (thread == 0u) {
+        // Every reduction starts from its neutral value, set here rather
+        // than relying on workgroup memory starting at zero.
+        atomicStore(&ddgiBackFaceCount, 0u);
+        atomicStore(&ddgiNearestBackFace, DDGI_KEY_NONE_MIN);
+        atomicStore(&ddgiClosestBackFace, DDGI_KEY_NONE_MIN);
+        atomicStore(&ddgiClosestFrontFace, DDGI_KEY_NONE_MIN);
+        atomicStore(&ddgiFarthestFrontFace, DDGI_KEY_NONE_MAX);
+        atomicStore(&ddgiFrontFacesInReach, 0u);
+        atomicAdd(&ddgiCensus[DDGI_CENSUS_RAYS_TRACED], tracedRays);
+    }
+    for (var rayIndex = thread; rayIndex < tracedRays; rayIndex += DDGI_BLEND_WORKGROUP_SIZE) {
+        let record = ddgiRays[slot * ddgi.raysPerProbe + rayIndex];
+        let signedDistance = unpack2x16float(record.y).y;
+        ddgiRayDirectionDistance[rayIndex] = vec4f(ddgiRayDirection(rayIndex), signedDistance);
+        ddgiRayRadiance[rayIndex] = record;
+    }
+    workgroupBarrier();
+
+    // ---- Phase B ----
+    ddgiReduceFixedRay(ddgiFixedRayResult(thread, probe, probeData.offset));
+    workgroupBarrier();
+    if (thread == 0u) {
+        let decision = ddgiDecide(probe, probeData.offset, state);
+        // Phase C runs for probes that traced all their rays and stay active.
+        // (The write kernel copies the tiles exactly when the new state is active.)
+        let blendThisUpdate = decision.state == DDGI_STATE_ACTIVE && !ddgiIsOff(state);
+        ddgiBlendThisUpdate = select(0u, 1u, blendThisUpdate);
+        if (blendThisUpdate) {
+            // One workgroup per probe in the list, and a probe is listed at
+            // most once a frame, so this read and write can't race.
+            let step = ddgiHysteresisStep(ddgiProbeHistory[probeIndex], state);
+            ddgiUpdateHysteresis = step.hysteresis;
+            ddgiProbeHistory[probeIndex] = step.history;
+        }
+        // Offsets and states are small exact values in half floats; no rounding noise wanted.
+        let base = slot * DDGI_SCRATCH_STRIDE + DDGI_SCRATCH_PROBE_DATA;
+        ddgiScratch[base] = pack2x16float(decision.offset.xy);
+        ddgiScratch[base + 1u] = pack2x16float(vec2f(decision.offset.z, f32(decision.state)));
+    }
+    if (workgroupUniformLoad(&ddgiBlendThisUpdate) == 0u) {
+        return;
+    }
+    let hysteresis = workgroupUniformLoad(&ddgiUpdateHysteresis);
+
+    // ---- Phase C ----
+    // Step 1: each irradiance texel's estimate and old value; the distance texels in full.
+    for (var texelIndex = thread; texelIndex < DDGI_IRRADIANCE_TEXEL_COUNT + DDGI_DISTANCE_TEXEL_COUNT; texelIndex += DDGI_BLEND_WORKGROUP_SIZE) {
+        if (texelIndex < DDGI_IRRADIANCE_TEXEL_COUNT) {
+            let texel = vec2u(texelIndex % DDGI_IRRADIANCE_TEXELS, texelIndex / DDGI_IRRADIANCE_TEXELS);
+            ddgiTexelEstimate[texelIndex] = vec4f(ddgiEstimateIrradianceTexel(texelIndex, blendedRays), 0.0);
+            ddgiTexelOld[texelIndex] = textureLoad(ddgiIrradianceAtlas, ddgiAtlasTexel(probe, texel, DDGI_IRRADIANCE_TEXELS), probe.y, 0);
+        } else {
+            ddgiBlendDistanceTexel(slot, probeIndex, probe, texelIndex - DDGI_IRRADIANCE_TEXEL_COUNT, blendedRays, hysteresis);
+        }
+    }
+    workgroupBarrier();
+
+    // Step 2: the big-change test, opt-in (irradianceChangeThreshold; a
+    // negative value means off, the M1 default, DECISIONS 2026-11-05). It
+    // looks at the probe's mean irradiance against its old mean, not per
+    // texel, and its verdict sets the hysteresis of the probe's *next* update,
+    // not this one.
+    // Why not this one: a test on this update's estimate is tripped by its own
+    // ray noise, and the noise is skewed (a few rays find a small bright spot),
+    // so the updates that trip are mostly the bright ones, and they get the
+    // lower hysteresis: about 9x the weight. That biased the field upwards
+    // (per texel: in-air Cornell +8.3%; on the probe mean as well: +21.7%;
+    // with no test: +3.3%, T1.5b). The next update's rays are independent of
+    // this one's noise, so it blends without bias, and a real light switch
+    // still trips the test again and gets the fast hysteresis one update late.
+    // The verdict travels in the irradiance atlas's alpha, which nothing samples.
+    if (thread == 0u) {
+        var estimateSum = vec3f(0.0);
+        var oldSum = vec3f(0.0);
+        for (var texelIndex = 0u; texelIndex < DDGI_IRRADIANCE_TEXEL_COUNT; texelIndex++) {
+            estimateSum += ddgiTexelEstimate[texelIndex].rgb;
+            oldSum += ddgiTexelOld[texelIndex].rgb;
+        }
+        // The same share applies to the sums as to the means.
+        let ruleOn = ddgi.irradianceChangeThreshold >= 0.0;
+        ddgiChangedNow = select(0u, 1u, ruleOn && any(abs(estimateSum - oldSum) > ddgi.irradianceChangeThreshold * oldSum));
+        ddgiFastHysteresis = select(0u, 1u, ddgiTexelOld[0].a > 0.5);
+    }
+    let changedNow = workgroupUniformLoad(&ddgiChangedNow) != 0u;
+    let fastHysteresis = workgroupUniformLoad(&ddgiFastHysteresis) != 0u;
+
+    // Step 3: blend every irradiance texel with the probe's hysteresis.
+    for (var texelIndex = thread; texelIndex < DDGI_IRRADIANCE_TEXEL_COUNT; texelIndex += DDGI_BLEND_WORKGROUP_SIZE) {
+        ddgiWriteIrradianceTexel(slot, probeIndex, state, texelIndex, hysteresis, fastHysteresis, changedNow);
+    }
+}
+`;
+}

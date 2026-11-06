@@ -44,17 +44,23 @@ All meshes' nodes go in one node buffer, and all triangles in one triangle buffe
 
 - **Instance record: 64 bytes.** It holds the world-to-object transform as a 3×4 matrix (48 bytes), the mesh's root node offset, its triangle offset, the platform instance index, and flags (contributes to GI, visible). Rays are moved into object space, so moving an object never touches its tree. Mirrored and non-uniform scales work because the hit distance is measured on the object-space ray, whose direction we deliberately *don't* renormalize, so `t` stays in world units.
 - **Top-level tree:** the same 64-byte node layout, over instance world boxes. Leaves point at instance records. It is rebuilt on the CPU with binned SAH whenever a transform changes, and uploaded with `writeBuffer`. This is fast because instance counts are in the thousands. The spike measures it on Bistro and on a synthetic 10,000-instance scene. If it gets too slow, a GPU build is the follow-up.
+  - **Settled in B1a (2026-11-05):** on a device with subgroups the top level lives on the GPU. Every frame something moves, one compute pass gathers each instance's record and world box from the scene copy and refits the tree bottom-up (`@pmndrs/bvh` `gpu-refit.ts`, `trace/top-level-gpu.ts`): 0.084 ms for 10,000 moving instances on the RTX 3060, 0.44 ms on Intel UHD, with no CPU work per instance. A new shape is built in a worker when an instance is created or when the refit tree's relative SAH cost passes 1.25× its as-built value, and swapped in a frame or so later. Without subgroups the CPU rebuild above stays, as the declared fallback. The walk's WGSL is unchanged.
 - **Buffers:** instance records and top-level nodes share one buffer (records first). That gives three storage buffers for tracing: nodes, triangles, and top level. This matters because a default device allows only 8 per shader stage (see docs/api/platform.md).
 
 ### Size limits
 
 A default device caps one storage binding at 128 MB. At 48 bytes per triangle that's about 2.7 M triangles in one binding. Sponza (about 262k triangles) fits easily. Bistro exterior (about 2.8 M) doesn't. For the spike, request a larger `maxStorageBufferBindingSize` through `requiredLimits` (the RTX 3060 and the Mac allow far more) and record what was needed. Splitting across bindings, so default limits still work, is M1 work if the spike shows we need it.
 
+**Settled in T1.3 (DECISIONS 2026-11-05): nothing is split across bindings.** The tracer keeps its 48-byte triangle records, because reading corners through the scene copy's index buffer instead cost 10-30% of trace speed. `requiredLimits(adapter)` asks for the adapter's largest storage binding and buffer (both laptop GPUs allow about 2 GiB). Small scenes work at default limits; on a device that can't hold a large scene, the platform throws a `GILimitError` naming the limit and the size needed.
+
 ## The walk (WGSL)
 
 - **One loop, one small stack per thread** (`array<u32, 64>` in private memory; three-mesh-bvh uses 60), shared by both levels. Entering an instance pushes a marker, switches the ray to object space and continues with that mesh's root. Popping the marker switches back to the world-space ray.
-- **Nearer child first:** both child boxes are tested (slab test with a precomputed inverse direction). Both hit means push the farther one and go to the nearer one. Boxes beyond the current closest hit are skipped.
+- **Child order:** both child boxes are tested (slab test with a precomputed inverse direction). When both are hit, one is pushed and the walk goes to the other. Boxes beyond the current closest hit are skipped.
+  - **Closest hit** goes to the nearer child first.
+  - **Any hit** goes to the *farther* child first (T1.3, DECISIONS 2026-11-05). A shadow ray starts on a surface, so the nearer child is mostly the geometry it starts on, and what blocks it lies ahead. Any blocker will do. This made any-hit 1.1-2.8× faster on the bench scenes, with the same answers; the numbers are in PROGRESS and `bench/results/trace.csv`.
 - **Closest hit** keeps the nearest `t`, instance, triangle and barycentrics, and whether the hit was on the front face. Back-face hits count as hits, because DDGI uses them to find probes inside geometry.
+- **Front face means the side the mesh was authored as front,** also through a mirrored transform (DECISIONS 2026-11-04, done in T1.3). The triangle test runs in object space, where the winding is the authored one, so no flip is needed. The scene copy's `giInstanceGeometricNormal` follows the same rule.
 - **Any hit** returns at the first triangle hit within `[tMin, tMax]`.
 - **Triangle test: watertight** (Woop, Benthin and Wald 2013), with per-ray shear rows computed once per ray. The design started with Möller–Trumbore, but it let up to 12% of edge-aimed rays slip (part A), so it was deleted in part C (DECISIONS 2026-11-04).
 - **Stack overflow:** the builder reports the maximum depth, and the spike asserts that the top-level and mesh depths together fit in the stack. If 32 would always fit, the spike measures whether the smaller stack is faster, since private arrays cost registers.
@@ -68,7 +74,7 @@ A default device caps one storage binding at 128 MB. At 48 bytes per triangle th
 - **Other small changes:**
   - Mesh triangle indices are mesh-relative.
   - The top-level buffer starts with a 64-byte header.
-  - Instances carry a `mirrored` flag, so front-face stays correct under mirroring.
+  - Instances carry a `mirrored` flag, so front-face stays correct under mirroring. (Superseded in T1.3: front faces follow the authored side, which the object-space test gives directly; the flag is informational now.)
   - A single-triangle tree has an empty right child.
 - **Budget:** the trace module binds 3 storage buffers, and a batch kernel 5 of the 8 allowed. The worst-case stack depth is 19 of 64 on the oracle scenes; the busiest ray used 12.
 

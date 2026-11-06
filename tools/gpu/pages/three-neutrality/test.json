@@ -1,0 +1,4 @@
+{
+    "description": "T1.7: the same Cornell scenes through the plain-WebGPU hello example and through three.js with the adapter give the same image (Lambert materials, GI-only or emission + GI).",
+    "timeoutMs": 240000
+}

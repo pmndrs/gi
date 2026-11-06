@@ -174,7 +174,9 @@ function analyticCase(): OracleCase {
         { label: 'back side', ray: ray([0, 0, -1], [0, 0, 1]), expected: { hit: true, instanceIndex: 10, t: 1, frontFace: false } },
         { label: 'reversed winding', ray: ray([6, 0, 3], down), expected: { hit: true, instanceIndex: 30, t: 3, frontFace: false } },
         { label: 'non-uniform scale', ray: alongNormal(nonUniform), expected: { hit: true, instanceIndex: 60, t: 3, frontFace: true } },
-        { label: 'mirrored', ray: alongNormal(mirrored), expected: { hit: true, instanceIndex: 70, t: 3, frontFace: false } },
+        // Front faces follow the authored side, also through a mirror (DECISIONS 2026-11-04): the
+        // mirrored copy's authored normal points the same way as the non-uniform one's.
+        { label: 'mirrored', ray: alongNormal(mirrored), expected: { hit: true, instanceIndex: 70, t: 3, frontFace: true } },
         { label: 'miss', ray: ray([30, 30, 3], down), expected: { hit: false } },
         { label: 'parallel to the triangles', ray: ray([0, 0, 3], [1, 0, 0]), expected: { hit: false } },
         { label: 'pointing away', ray: ray([0, 0, 3], [0, 0, 1]), expected: { hit: false } },
@@ -201,15 +203,75 @@ function instancingCase(): OracleCase {
     const curated: CuratedRay[] = [
         { label: 'instance 7', ray: ray([-4, 0, 3], down), expected: { hit: true, instanceIndex: 7, triangleIndex: 0, t: 3, frontFace: true } },
         { label: 'scaled instance 3', ray: ray([0, 0, 3], down), expected: { hit: true, instanceIndex: 3, triangleIndex: 0, t: 5, frontFace: true } },
-        { label: 'mirrored instance 11', ray: ray([4, 0, 3], down), expected: { hit: true, instanceIndex: 11, triangleIndex: 0, t: 3, frontFace: false } },
+        // Mirroring x keeps the authored +z normal, so a ray from +z still sees the front.
+        { label: 'mirrored instance 11', ray: ray([4, 0, 3], down), expected: { hit: true, instanceIndex: 11, triangleIndex: 0, t: 3, frontFace: true } },
         { label: 'between instances', ray: ray([-2, 0, 3], down), expected: { hit: false } },
         { label: 'inside the scaled box, outside the triangle', ray: ray([1.9, 0.4, 3], down), expected: { hit: false } },
         { label: 'scaled instance, off centre', ray: ray([0.5, -0.2, 3], down), expected: { hit: true, instanceIndex: 3, t: 5, frontFace: true } },
-        { label: 'mirrored instance, off centre', ray: ray([3.5, -0.5, 3], down), expected: { hit: true, instanceIndex: 11, t: 3, frontFace: false } },
+        { label: 'mirrored instance, off centre', ray: ray([3.5, -0.5, 3], down), expected: { hit: true, instanceIndex: 11, t: 3, frontFace: true } },
         { label: 'from below through two instances', ray: ray([0, 0, -5], [0, 0, 1]), expected: { hit: true, instanceIndex: 3, t: 3, frontFace: false } },
         { label: 'slanted ray at instance 7', ray: ray([-4 + 3, 0, 3], [-1, 0, -1]), expected: { hit: true, instanceIndex: 7, t: 3 * Math.SQRT2, frontFace: true } },
     ];
     return curatedCase('instancing', 'Ported: instances with distinct ids, scaled and mirrored copies, hidden instances ignored.', [mesh], instances, curated);
+}
+
+// ---------------------------------------------------------------------------
+// Mirrored closed boxes: front faces outside, back faces inside
+// ---------------------------------------------------------------------------
+
+/**
+ * A closed box with outward-facing triangles, placed plain and through three
+ * kinds of mirror (one axis, three axes, and a rotated non-uniform mirror).
+ * Rays from outside, aimed at the middle of each face, must report front
+ * faces; rays from the centre must report back faces. Under the old
+ * world-winding rule every mirrored copy came out the other way round, so DDGI
+ * would have counted a probe next to a mirrored wardrobe as inside it.
+ */
+function mirroredBoxCase(): OracleCase {
+    const half: Vector3 = [1, 0.75, 0.5];
+    const placements: { instanceIndex: number; matrix: number[] }[] = [
+        { instanceIndex: 1, matrix: compose([-6, 0, 0], 0, [1, 1, 1]) },
+        { instanceIndex: 2, matrix: compose([-2, 0, 0], 0, [-1, 1, 1]) },
+        { instanceIndex: 3, matrix: compose([2, 0, 0], 0.4, [-1, -1, -1]) },
+        { instanceIndex: 4, matrix: compose([6, 0, 0], -0.9, [1.5, -0.6, 2]) },
+    ];
+    const instances: TraceSceneInstance[] = placements.map(({ instanceIndex, matrix }) => ({ meshIndex: 0, instanceIndex, objectToWorld: matrix }));
+    const curated: CuratedRay[] = [];
+    for (const { instanceIndex, matrix } of placements) {
+        const centre = transformPoint(matrix, [0, 0, 0]);
+        for (let axis = 0; axis < 3; axis++) {
+            for (const sign of [1, -1]) {
+                // A point on one face, off its diagonal (the seam between its two triangles, where
+                // which triangle is hit is a tie), and a point well outside it along the face's normal.
+                const onFace: Vector3 = [0, 0, 0];
+                onFace[axis] = sign * half[axis];
+                onFace[(axis + 1) % 3] = 0.4 * half[(axis + 1) % 3];
+                onFace[(axis + 2) % 3] = -0.3 * half[(axis + 2) % 3];
+                const outside: Vector3 = [...onFace];
+                outside[axis] = sign * (half[axis] + 0.3);
+                const target = transformPoint(matrix, onFace);
+                const from = transformPoint(matrix, outside);
+                const name = `${'xyz'[axis]}${sign > 0 ? '+' : '-'}`;
+                curated.push({
+                    label: `instance ${instanceIndex}, face ${name} from outside`,
+                    ray: ray(from, sub(target, from)),
+                    expected: { hit: true, instanceIndex, frontFace: true },
+                });
+                curated.push({
+                    label: `instance ${instanceIndex}, face ${name} from the centre`,
+                    ray: ray(centre, sub(target, centre)),
+                    expected: { hit: true, instanceIndex, frontFace: false },
+                });
+            }
+        }
+    }
+    return curatedCase(
+        'mirrored-box',
+        'Closed boxes, plain and mirrored: hit from outside they show front faces, from inside back faces.',
+        [boxMesh(half)],
+        instances,
+        curated,
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -524,6 +586,7 @@ export function buildOracleCases(sizes: CaseSizes = FULL_SIZES): OracleCase[] {
     return [
         analyticCase(),
         instancingCase(),
+        mirroredBoxCase(),
         thinWallCase(),
         thinBoxCase(sizes.thinBoxRays),
         randomSoupCase(sizes.randomRays),

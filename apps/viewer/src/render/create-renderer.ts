@@ -1,14 +1,19 @@
 /**
- * Creates the three.js WebGPU renderer on a device we create ourselves.
+ * Creates the three.js WebGPU renderer on a device we create ourselves,
+ * through the library's `createGIRenderer`, so three and the GI platform
+ * share one device (the host owns the device).
  *
  * Why not let three create it: three asks for a compatibility-mode adapter
  * with default limits (a 128 MB storage-buffer binding, 8 storage buffers per
- * stage). The Bistro exterior alone needs about 136 MB of triangles for
- * VXGI's voxelizer, so the viewer asks for everything the adapter offers.
- * The host owning the device is also how the platform will work.
+ * stage). DDGI on Sponza needs about 276 MB of triangle records in one
+ * binding, and the Bistro exterior alone needs about 136 MB of triangles for
+ * VXGI's voxelizer. `createGIRenderer` asks for the platform's limits
+ * (`requiredLimits`); the viewer adds every other limit the adapter offers,
+ * as it did before DDGI arrived, so the three.js baselines keep their room.
  */
 
-import { WebGPURenderer } from 'three/webgpu';
+import type { WebGPURenderer } from 'three/webgpu';
+import { createGIRenderer } from '../ddgi/library';
 
 export interface RendererBundle {
     renderer: WebGPURenderer;
@@ -20,7 +25,7 @@ export interface RendererBundle {
     gpuErrors: string[];
 }
 
-/** Copies every limit the adapter offers, so the device gets the adapter's maximum. */
+/** Every limit the adapter offers, so the device gets the adapter's maximum. */
 function maximumLimits(adapter: GPUAdapter): Record<string, number> {
     const limits: Record<string, number> = {};
     // GPUSupportedLimits exposes its values as prototype getters, so `Object.entries` finds none.
@@ -36,9 +41,14 @@ export async function createRenderer(canvas: HTMLCanvasElement): Promise<Rendere
     const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
     if (!adapter) throw new Error('WebGPU is available but no graphics adapter was found.');
 
-    const device = await adapter.requestDevice({
-        requiredFeatures: [...adapter.features] as GPUFeatureName[],
+    // No canvas antialiasing: the picture goes through a render pipeline, so MSAA on the canvas would do
+    // nothing, and VXGI's depth copy fails when the renderer's default sample count is 4. The scene
+    // targets of the scene-pass techniques ask for MSAA themselves.
+    const { renderer, device } = await createGIRenderer({
+        adapter,
+        label: 'ddgi viewer',
         requiredLimits: maximumLimits(adapter),
+        renderer: { canvas, antialias: false, trackTimestamp: adapter.features.has('timestamp-query') },
     });
 
     // addEventListener, never `device.onuncapturederror =`: three assigns that slot.
@@ -56,14 +66,9 @@ export async function createRenderer(canvas: HTMLCanvasElement): Promise<Rendere
         console.error(`GPU error: ${message}`);
     });
 
-    // No canvas antialiasing: the picture goes through a render pipeline, so MSAA on the canvas would do
-    // nothing, and VXGI's depth copy fails when the renderer's default sample count is 4. The scene
-    // targets of the no-GI and probe-grid techniques ask for MSAA themselves.
-    const renderer = new WebGPURenderer({ canvas, device, antialias: false, trackTimestamp: device.features.has('timestamp-query') });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
     renderer.setSize(canvas.clientWidth || window.innerWidth, canvas.clientHeight || window.innerHeight, false);
     renderer.shadowMap.enabled = true;
-    await renderer.init();
 
     return { renderer, device, adapterInfo: device.adapterInfo, hasTimestamps: device.features.has('timestamp-query'), gpuErrors };
 }

@@ -1,0 +1,4 @@
+{
+    "description": "B1: the GPU scan and radix sort against CPU results, then GPU LBVH trees (edge cases, random soups, a grid, duplicates, flat meshes, GPU-resident input) through the layout checker, with SAH cost against tinybvh and the CPU twin.",
+    "timeoutMs": 240000
+}

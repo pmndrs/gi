@@ -6,21 +6,24 @@
 import {
     assembleTraceScene,
     buildTopLevel,
-    DEFAULT_SAH_OPTIONS,
+    MAX_LEAF_PRIMITIVES,
     HIT_RECORD_BYTES,
     RAY_FLOATS,
     TraceBatchKernel,
     uploadTraceScene,
     type MeshBvh,
     type MeshBvhBuilder,
-    type MeshBvhBuilderKind,
     type TraceInstance,
     type TraceSceneData,
 } from '../../../../packages/ddgi-core/src/platform/trace/index.ts';
-import { TOP_LEVEL_REBUILD_RUNS, type TracerId } from './config.ts';
+import { GpuHplocBuilder } from '../../../../packages/bvh/src/gpu-hploc.ts';
+import { GpuLbvhBuilder, type GpuLbvhGeometry } from '../../../../packages/bvh/src/gpu-lbvh.ts';
+import { treeSahCost } from '../../../../packages/bvh/src/layout-check.ts';
+import { createTinyBvhBuilder, type TinyBvhBuilder } from '../../../../packages/bvh/src/tinybvh.ts';
+import { GPU_BUILD_LOADED_MS, GPU_BUILD_LOADED_RUNS, GPU_BUILD_TIMED_RUNS, TOP_LEVEL_REBUILD_RUNS, type TracerId } from './config.ts';
 import { measureDispatches, type DispatchTimer } from './dispatch-timer.ts';
 import type { BenchInstance, BenchMeshGeometry } from './gltf-geometry.ts';
-import type { ModeResult, OursBuildResult, TmbuildBuildResult, TraceMode } from './results.ts';
+import type { GpuBuildResult, ModeResult, OursBuildResult, TmbuildBuildResult, TraceMode } from './results.ts';
 import { buildMeshBvhWithTmbvh } from './tmbvh-convert.ts';
 import { maximum, median, megaRaysPerSecond, sum } from './statistics.ts';
 
@@ -37,20 +40,19 @@ export function yieldToBrowser(): Promise<void> {
 }
 
 /**
- * Builds every mesh's tree in the worker, one mesh after another, so each
- * mesh's time is its own.
+ * Builds every mesh's tree in the worker (tinybvh, the only mesh builder),
+ * one mesh after another, so each mesh's time is its own.
  */
 export async function buildOursScene(
     builder: MeshBvhBuilder,
     meshes: readonly BenchMeshGeometry[],
     instances: readonly BenchInstance[],
-    kind: MeshBvhBuilderKind = 'sah',
 ): Promise<OursBuild> {
     const perMeshMs: number[] = [];
     const bvhs: MeshBvh[] = [];
     for (const mesh of meshes) {
         const start = performance.now();
-        bvhs.push(await builder.build({ positions: mesh.positions, indices: mesh.indices }, { builder: kind }));
+        bvhs.push(await builder.build({ positions: mesh.positions, indices: mesh.indices }));
         perMeshMs.push(performance.now() - start);
     }
     return assembleOursScene(bvhs, perMeshMs, instances, builder.usesWorker);
@@ -84,6 +86,192 @@ export async function buildTmbuildScene(
     }
     const scene = await assembleOursScene(bvhs, perMeshMs, instances, false);
     return { ...scene, result: { ...scene.result, tmbvhBuildMsTotal, convertMsTotal, targetLeafSize } };
+}
+
+export interface GpuBuiltScene extends OursBuild {
+    result: GpuBuildResult;
+}
+
+/** The GPU builders behind the Builder contract, as the bench uses them. */
+export type GpuBuilderKind = 'lbvh' | 'hploc';
+
+function createGpuBuilder(device: GPUDevice, kind: GpuBuilderKind): GpuLbvhBuilder | GpuHplocBuilder {
+    return kind === 'lbvh' ? new GpuLbvhBuilder(device, { label: 'trace-bench lbvh' }) : new GpuHplocBuilder(device, { label: 'trace-bench hploc' });
+}
+
+/** A tree's SAH cost in absolute terms (relative cost times its box's half-area), so meshes can be summed. */
+function absoluteSahCost(bvh: MeshBvh): number {
+    const size = [bvh.bounds[3] - bvh.bounds[0], bvh.bounds[4] - bvh.bounds[1], bvh.bounds[5] - bvh.bounds[2]];
+    return treeSahCost(bvh) * (size[0] * size[1] + size[1] * size[2] + size[2] * size[0]);
+}
+
+/**
+ * The `ours-lbvh` (B1) or `ours-hploc` (B2) trees: every mesh built on the
+ * GPU in one batch. The batch is recorded once and built
+ * `1 + GPU_BUILD_TIMED_RUNS` times through the dispatch timer (one compute
+ * pass, so the timestamps cover exactly the build); the first is the warm-up.
+ * The trees are then read back and assembled like the others, and their SAH
+ * cost is compared with tinybvh's trees of the same meshes (`reference`).
+ */
+export async function buildGpuScene(
+    device: GPUDevice,
+    timer: DispatchTimer,
+    kind: GpuBuilderKind,
+    meshes: readonly BenchMeshGeometry[],
+    instances: readonly BenchInstance[],
+    reference: readonly MeshBvh[],
+): Promise<GpuBuiltScene> {
+    const builder = createGpuBuilder(device, kind);
+    await builder.prepare();
+    const geometries = meshes.map((mesh) => ({ positions: mesh.positions, indices: mesh.indices }));
+
+    const wallStart = performance.now();
+    const batch = builder.createBatch(geometries);
+    const gpuMs: number[] = [];
+    let loadedMs: number[] = [];
+    let loadedSeconds = 0;
+    let wallBuildMs = 0;
+    let builds;
+    try {
+        for (let run = 0; run <= GPU_BUILD_TIMED_RUNS; run++) {
+            const ms = await timer.time((encoder, timestampWrites) => batch.encode(encoder, timestampWrites));
+            if (run === 0) wallBuildMs = performance.now() - wallStart;
+            else gpuMs.push(ms);
+        }
+        const loadedRuns = Math.min(GPU_BUILD_LOADED_RUNS.max, Math.max(GPU_BUILD_LOADED_RUNS.min, Math.round(GPU_BUILD_LOADED_MS / Math.max(1, median(gpuMs)))));
+        const loadedStart = performance.now();
+        loadedMs = await timeBuildsBackToBack(device, (encoder, timestampWrites) => batch.encode(encoder, timestampWrites), loadedRuns);
+        loadedSeconds = (performance.now() - loadedStart) / 1000;
+        const statsStart = performance.now();
+        builds = await batch.finish();
+        wallBuildMs += performance.now() - statsStart;
+    } finally {
+        batch.destroy();
+    }
+
+    const readbackStart = performance.now();
+    const layouts = await builder.readLayouts(builds);
+    builds.destroy();
+    const readbackMs = performance.now() - readbackStart;
+    const bvhs: MeshBvh[] = [];
+    let meshesFallenBack = 0;
+    let tinyBvh: TinyBvhBuilder | null = null;
+    for (const [index, layout] of layouts.entries()) {
+        if (layout) {
+            bvhs.push(layout);
+            continue;
+        }
+        meshesFallenBack++;
+        tinyBvh ??= await createTinyBvhBuilder();
+        bvhs.push(tinyBvh.buildLayout(geometries[index]).layout);
+    }
+
+    const scene = await assembleOursScene(bvhs, bvhs.map(() => 0), instances, false);
+    const sahCostVsTinybvh = sum(bvhs.map(absoluteSahCost)) / sum(reference.map(absoluteSahCost));
+    const match = builder instanceof GpuHplocBuilder ? await compareWithTinybvhHploc(builder, geometries) : null;
+    return {
+        ...scene,
+        result: {
+            ...scene.result,
+            buildMsTotal: wallBuildMs,
+            // One batch for every mesh: there is no per-mesh time.
+            buildMsMaxMesh: Number.NaN,
+            gpuBuildMsMedian: median(gpuMs),
+            gpuBuildMsMin: Math.min(...gpuMs),
+            gpuBuildMsMax: Math.max(...gpuMs),
+            gpuBuildRuns: gpuMs.length,
+            gpuBuildTimestampTimed: timer.source === 'timestamp-query' ? 1 : 0,
+            gpuBuildLoadedMsMedian: median(loadedMs),
+            gpuBuildLoadedMsMin: Math.min(...loadedMs),
+            gpuBuildLoadedMsMax: Math.max(...loadedMs),
+            gpuBuildLoadedRuns: loadedMs.length,
+            gpuBuildLoadedSeconds: loadedSeconds,
+            wallBuildMs,
+            readbackMs,
+            sahCostVsTinybvh,
+            meshesFallenBack,
+            ...(match ? { sahCostVsTinybvhHploc: match.sahCostRatio, hplocMatchMeshesRefused: match.refused } : {}),
+        },
+    };
+}
+
+/**
+ * Times `count` builds submitted back to back, without waiting between
+ * them, so the GPU stays loaded: each build is its own compute pass with
+ * timestamps, and the builds go in submits of a few (a single submit of
+ * seconds of work could trip Windows' GPU timeout). Returns each build's ms;
+ * without timestamp queries, one value, the wall time over the count.
+ */
+async function timeBuildsBackToBack(
+    device: GPUDevice,
+    encode: (encoder: GPUCommandEncoder, timestampWrites?: GPUComputePassTimestampWrites) => void,
+    count: number,
+): Promise<number[]> {
+    if (!device.features.has('timestamp-query')) {
+        const start = performance.now();
+        for (let run = 0; run < count; run++) {
+            const encoder = device.createCommandEncoder({ label: 'loaded build' });
+            encode(encoder);
+            device.queue.submit([encoder.finish()]);
+        }
+        await device.queue.onSubmittedWorkDone();
+        return [(performance.now() - start) / count];
+    }
+    const perSubmit = 8;
+    const reads: Promise<number[]>[] = [];
+    for (let first = 0; first < count; first += perSubmit) {
+        const builds = Math.min(perSubmit, count - first);
+        const querySet = device.createQuerySet({ type: 'timestamp', count: builds * 2 });
+        const resolve = device.createBuffer({ size: builds * 16, usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC });
+        const readback = device.createBuffer({ size: builds * 16, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
+        const encoder = device.createCommandEncoder({ label: 'loaded builds' });
+        for (let build = 0; build < builds; build++) encode(encoder, { querySet, beginningOfPassWriteIndex: build * 2, endOfPassWriteIndex: build * 2 + 1 });
+        encoder.resolveQuerySet(querySet, 0, builds * 2, resolve, 0);
+        encoder.copyBufferToBuffer(resolve, 0, readback, 0, builds * 16);
+        device.queue.submit([encoder.finish()]);
+        reads.push(
+            readback.mapAsync(GPUMapMode.READ).then(() => {
+                const stamps = new BigUint64Array(readback.getMappedRange().slice(0));
+                readback.destroy();
+                resolve.destroy();
+                querySet.destroy();
+                return Array.from({ length: builds }, (_, build) => Number(stamps[build * 2 + 1] - stamps[build * 2]) / 1e6);
+            }),
+        );
+    }
+    return (await Promise.all(reads)).flat();
+}
+
+/**
+ * B2's match: the scene built on the GPU with tinybvh's codes, tie rule and
+ * one-triangle leaves (not timed), against tinybvh's scalar `BuildHPLOC` of
+ * each mesh, by summed SAH cost. tinybvh runs here on the page, a mesh at a
+ * time with a yield between meshes (Sponza: tens of seconds). A mesh the GPU
+ * refuses is left out of both sums and counted.
+ */
+async function compareWithTinybvhHploc(builder: GpuHplocBuilder, geometries: readonly GpuLbvhGeometry[]): Promise<{ sahCostRatio: number; refused: number }> {
+    const built = await builder.buildMany(geometries, { mortonCodes: 'tinybvh-63', tieBreak: 'tinybvh', maxLeafPrimitives: 1 });
+    let layouts;
+    try {
+        layouts = await builder.readLayouts(built);
+    } finally {
+        built.destroy();
+    }
+    const tinyBvh = await createTinyBvhBuilder();
+    let ours = 0;
+    let theirs = 0;
+    let refused = 0;
+    for (const [index, layout] of layouts.entries()) {
+        if (!layout) {
+            refused++;
+            continue;
+        }
+        const geometry = geometries[index] as Parameters<TinyBvhBuilder['buildLayout']>[0];
+        ours += absoluteSahCost(layout);
+        theirs += absoluteSahCost(tinyBvh.buildLayout(geometry, { builder: 'hploc', maxLeafPrimitives: 1 }).layout);
+        await yieldToBrowser();
+    }
+    return { sahCostRatio: ours / theirs, refused };
 }
 
 async function assembleOursScene(
@@ -128,7 +316,7 @@ async function assembleOursScene(
         nodeCount: sum(bvhs.map((bvh) => bvh.nodeCount)),
         maxMeshDepth: data.maxMeshDepth,
         requiredStackSize: data.requiredStackSize,
-        leafSize: DEFAULT_SAH_OPTIONS.maxLeafPrimitives,
+        leafSize: MAX_LEAF_PRIMITIVES,
         bytesNodes: data.nodes.byteLength,
         bytesTriangles: data.triangles.byteLength,
         bytesTopLevel: data.topLevel.buffer.byteLength,
@@ -226,7 +414,7 @@ export function extractHitDistances(hitRecords: ArrayBuffer): Float32Array {
 export async function runOursTracer(
     device: GPUDevice,
     timer: DispatchTimer,
-    tracer: 'ours-wt' | 'ours-tinybvh' | 'ours-tmbuild',
+    tracer: 'ours-tinybvh' | 'ours-tmbuild' | 'ours-lbvh' | 'ours-hploc',
     data: TraceSceneData,
     rays: OursRayBuffers,
     plan: TimingPlan,
@@ -299,8 +487,8 @@ export async function estimateNsPerRay(device: GPUDevice, timer: DispatchTimer, 
     const resources = new Resources();
     try {
         const count = sampleRays.length / RAY_FLOATS;
-        const kernel = await TraceBatchKernel.create(device, 'ours-wt calibrate');
-        const scene = resources.add(uploadTraceScene(device, data, 'ours-wt calibrate'));
+        const kernel = await TraceBatchKernel.create(device, 'ours calibrate');
+        const scene = resources.add(uploadTraceScene(device, data, 'ours calibrate'));
         const rays = resources.add(uploadRays(device, 'calibration rays', sampleRays));
         const hits = resources.add(
             device.createBuffer({ label: 'calibration hits', size: count * HIT_RECORD_BYTES, usage: GPUBufferUsage.STORAGE }),
@@ -331,8 +519,8 @@ export async function traceClosestOnce(
 ): Promise<ArrayBuffer> {
     const resources = new Resources();
     try {
-        const kernel = await TraceBatchKernel.create(device, 'ours-wt prepare');
-        const scene = resources.add(uploadTraceScene(device, data, 'ours-wt prepare'));
+        const kernel = await TraceBatchKernel.create(device, 'ours prepare');
+        const scene = resources.add(uploadTraceScene(device, data, 'ours prepare'));
         const hits = resources.add(
             device.createBuffer({
                 label: 'prepare hits',

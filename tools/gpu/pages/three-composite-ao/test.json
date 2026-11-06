@@ -1,0 +1,5 @@
+{
+    "description": "Curtained Sponza follow-up: a short-range occlusion term on DDGI's GI only. Match mode returns the three composite's GI term, three's GTAO at several radii and the GI weight (run.ts compares them with Cycles); timing mode times GTAO in three's pipeline and a ray-traced short-range term at 2560x1440. Needs the downloaded Sponza; run it through run.ts.",
+    "timeoutMs": 2400000,
+    "manual": true
+}

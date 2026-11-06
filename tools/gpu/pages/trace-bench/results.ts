@@ -67,6 +67,57 @@ export interface TmbuildBuildResult extends OursBuildResult {
     targetLeafSize: number;
 }
 
+/** A GPU builder's trees (`ours-lbvh`, B1; `ours-hploc`, B2): the usual numbers plus the GPU build time and the tree quality. */
+export interface GpuBuildResult extends OursBuildResult {
+    /** GPU time of building every mesh's tree in one batch (one compute pass, timestamps): median, fastest, slowest. */
+    gpuBuildMsMedian: number;
+    gpuBuildMsMin: number;
+    gpuBuildMsMax: number;
+    gpuBuildRuns: number;
+    /** 1 when the build was timed with GPU timestamps, 0 for the wall-clock fallback. */
+    gpuBuildTimestampTimed: number;
+    /**
+     * The loaded section (config.ts, GPU_BUILD_LOADED_MS): builds submitted back to back, each timed on its
+     * own. The pass/fail number; median, fastest, slowest, how many, and the section's wall time in seconds.
+     */
+    gpuBuildLoadedMsMedian: number;
+    gpuBuildLoadedMsMin: number;
+    gpuBuildLoadedMsMax: number;
+    gpuBuildLoadedRuns: number;
+    gpuBuildLoadedSeconds: number;
+    /** Wall time of the first build: uploading the meshes, building, and reading the stats back. */
+    wallBuildMs: number;
+    /** Reading every tree back into CPU memory for the tracer's scene assembly (not part of a GPU-resident build). */
+    readbackMs: number;
+    /** The scene's summed SAH cost on these trees over tinybvh's, mesh by mesh (each mesh's cost scaled by its box's area). */
+    sahCostVsTinybvh: number;
+    /** Meshes the GPU refused and tinybvh built instead. Should be 0. */
+    meshesFallenBack: number;
+    /**
+     * H-PLOC only: the scene built again with tinybvh's codes, tie rule and one-triangle leaves, its
+     * summed SAH cost over that of tinybvh's `BuildHPLOC` trees of the same meshes (B2: within 1%).
+     */
+    sahCostVsTinybvhHploc?: number;
+    /** H-PLOC only: meshes that comparison left out because the GPU refused them. */
+    hplocMatchMeshesRefused?: number;
+}
+
+/** The `platform` tracer: the scene described through `createGI` and its scene API (T1.3). */
+export interface PlatformBuildResult {
+    /** Creating every mesh, material and instance through the scene API (CPU: checking and packing). */
+    describeMs: number;
+    /** From the first scene call until every tree is placed and the top level is built. */
+    readyMs: number;
+    usesWorker: boolean;
+    /** GPU bytes of the platform's scene copy (vertices and tables). */
+    bytesSceneCopy: number;
+    /** GPU bytes of the tracer's buffers (allocated, so with room to grow). */
+    bytesAcceleration: number;
+    bytesNodes: number;
+    bytesTriangles: number;
+    bytesTopLevel: number;
+}
+
 export interface TmbvhBuildResult {
     meshCount: number;
     /** Wall time to build every mesh's tree on the main thread (SAH), one after another. */
@@ -84,7 +135,7 @@ export interface TmbvhBuildResult {
 }
 
 export interface AgreementResult {
-    /** For example `ours-wt vs tmbvh`. */
+    /** For example `ours-tinybvh vs tmbvh`. */
     pair: string;
     closestRate: number;
     closestRays: number;
@@ -114,7 +165,7 @@ export interface SceneResult {
     thinned?: boolean;
     /** The estimate that decided it: GPU nanoseconds per closest-hit ray on a sample, or null when the check was off. */
     estimatedNsPerRay: number | null;
-    /** Closest-hit rays that hit something (by ours-wt). */
+    /** Closest-hit rays that hit something (by ours-tinybvh). */
     closestHits: number;
     /** Shadow rays traced; hits facing away from the sun get none. */
     shadowRays: number;
@@ -122,11 +173,18 @@ export interface SceneResult {
     sunSource: 'manifest' | 'fallback';
     modelFiles: string[];
     loadMs: number;
+    /** Our trees (tinybvh's since T1.3; our own SAH builder's before): build times, top-level rebuilds, memory. */
     ours: OursBuildResult | null;
     /** Missing in results from before T0.10 part C. */
     oursTmbuild?: TmbuildBuildResult | null;
     /** Trees built by tinybvh (WASM) in the worker. Missing in results from before T0.10 part C. */
     oursTinybvh?: OursBuildResult | null;
+    /** The GPU LBVH's trees (B1). Missing before B1. */
+    oursLbvh?: GpuBuildResult | null;
+    /** The GPU H-PLOC's trees (B2). Missing before B2. */
+    oursHploc?: GpuBuildResult | null;
+    /** The same scene through the platform API. Missing before T1.3. */
+    platform?: PlatformBuildResult | null;
     tmbvh: TmbvhBuildResult | null;
     modes: ModeResult[];
     agreement: AgreementResult[];

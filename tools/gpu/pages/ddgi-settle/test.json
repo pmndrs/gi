@@ -1,0 +1,5 @@
+{
+    "description": "T1.12: how long the GI image mean takes to settle within 5% and 1% of a converged field at the calibrated batch (Sponza under budget v2), per hysteresis rule, after the warm-up and after a restart with no warm-up. One scene per run (VITE_DDGI_SCENES, default sponza); rules in VITE_DDGI_HYSTERESIS. Manual, under the bench lock.",
+    "timeoutMs": 3600000,
+    "manual": true
+}

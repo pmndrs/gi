@@ -1,5 +1,11 @@
 /**
- * A small corner panel with CPU frame time and per-pass GPU milliseconds.
+ * A small corner panel with CPU frame time, per-pass GPU milliseconds, and
+ * (when DDGI is on screen) DDGI's own numbers.
+ *
+ * The box never takes the mouse (`pointer-events: none`): dragging over it
+ * must orbit the camera like anywhere else on the picture. What each line
+ * means is explained in the panel instead ("What the stats mean", from
+ * `ui/help-text.ts`).
  *
  * It only needs numbers, not the GPU timer itself, so the viewer decides
  * where they come from:
@@ -8,18 +14,27 @@
  *     // every frame:
  *     stats.recordFrame(frameMs);
  *     stats.setPassTimings(timer.timings);   // or an empty map when timing is off
+ *     stats.setExtraLines(ddgiText.lines()); // or [] when DDGI isn't shown
  */
 
+import type { StatsLine } from './ddgi-stats.ts';
 import { formatStats, SmoothedValue } from './format-stats.ts';
 
 /** Redraw the text a few times a second; faster than that is unreadable. */
 const REDRAW_INTERVAL_MS = 250;
 
+const NO_EXTRA_LINES = (): readonly StatsLine[] => [];
+
 export class StatsOverlay {
-    readonly element: HTMLPreElement;
+    readonly element: HTMLDivElement;
 
     private readonly frameTime = new SmoothedValue();
     private readonly passTimes = new Map<string, SmoothedValue>();
+    /** Smoothed pass times handed to `formatStats`, refilled on each redraw. */
+    private readonly smoothedMs = new Map<string, number>();
+    private extraLines: () => readonly StatsLine[] = NO_EXTRA_LINES;
+    /** One element per line, kept and reused: only their text changes between redraws. */
+    private readonly rows: HTMLDivElement[] = [];
     private lastRedrawAt = 0;
 
     /**
@@ -30,7 +45,8 @@ export class StatsOverlay {
         parent: HTMLElement = document.body,
         private readonly gpuCaption = '',
     ) {
-        this.element = document.createElement('pre');
+        this.element = document.createElement('div');
+        this.element.className = 'stats-overlay';
         this.element.style.cssText = [
             'position: fixed',
             'top: 8px',
@@ -40,6 +56,8 @@ export class StatsOverlay {
             'background: rgba(0, 0, 0, 0.6)',
             'color: #cfd8e3',
             'font: 12px/1.4 ui-monospace, Menlo, Consolas, monospace',
+            'white-space: pre',
+            // The mouse goes straight through to the picture (camera controls, the wipe line).
             'pointer-events: none',
             'z-index: 10',
         ].join(';');
@@ -57,7 +75,8 @@ export class StatsOverlay {
      * Passes missing from `timings` drop out of the panel.
      */
     setPassTimings(timings: ReadonlyMap<string, number>): void {
-        for (const name of [...this.passTimes.keys()]) {
+        // Deleting the entry being visited is safe in a Map iteration.
+        for (const name of this.passTimes.keys()) {
             if (!timings.has(name)) this.passTimes.delete(name);
         }
         for (const [name, ms] of timings) {
@@ -70,6 +89,16 @@ export class StatsOverlay {
         }
     }
 
+    /** Starts the frame-time average again (after a set-up, whose frames are drawn only a few times a second). */
+    resetFrameTime(): void {
+        this.frameTime.reset();
+    }
+
+    /** Where the lines under the frame and GPU numbers (DDGI's) come from; read only when the box is redrawn. */
+    setExtraLines(source: () => readonly StatsLine[]): void {
+        this.extraLines = source;
+    }
+
     dispose(): void {
         this.element.remove();
     }
@@ -79,12 +108,31 @@ export class StatsOverlay {
         if (now - this.lastRedrawAt < REDRAW_INTERVAL_MS) return;
         this.lastRedrawAt = now;
 
-        const smoothedMs = new Map<string, number>();
+        this.smoothedMs.clear();
         for (const [name, smoothed] of this.passTimes) {
-            if (smoothed.value !== undefined) smoothedMs.set(name, smoothed.value);
+            if (smoothed.value !== undefined) this.smoothedMs.set(name, smoothed.value);
         }
-        const text = formatStats(this.frameTime.value, smoothedMs);
-        const caption = text.passLines.length > 0 ? this.gpuCaption : '';
-        this.element.textContent = [text.frameLine, caption, ...text.passLines, text.totalLine].filter((line) => line !== '').join('\n');
+        const text = formatStats(this.frameTime.value, this.smoothedMs);
+        let row = 0;
+        this.setRow(row++, text.frameLine);
+        if (text.passLines.length > 0) {
+            if (this.gpuCaption) this.setRow(row++, this.gpuCaption);
+            for (const line of text.passLines) this.setRow(row++, line);
+            this.setRow(row++, text.totalLine);
+        }
+        for (const line of this.extraLines()) this.setRow(row++, line.text);
+        for (let unused = row; unused < this.rows.length; unused++) this.rows[unused].hidden = true;
+    }
+
+    /** Shows `text` on line `index`, making the line the first time it is needed. */
+    private setRow(index: number, text: string): void {
+        let element = this.rows[index];
+        if (!element) {
+            element = document.createElement('div');
+            this.rows.push(element);
+            this.element.append(element);
+        }
+        element.hidden = false;
+        if (element.textContent !== text) element.textContent = text;
     }
 }

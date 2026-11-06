@@ -11,9 +11,10 @@
  * leaf pushes a marker, moves the ray into that instance's object space, and
  * continues at the root of the instance's mesh tree. The mesh tree's leaves
  * are triangles. When the marker is popped, the mesh tree is finished and the
- * world-space ray is restored. At every node both child boxes are tested and
- * the nearer one is visited first; the farther one is pushed. Boxes that start
- * beyond the closest hit found so far are skipped.
+ * world-space ray is restored. At every node both child boxes are tested; one
+ * is visited and the other pushed (closest-hit: the nearer first; any-hit: the
+ * farther first, see `walkWgsl`). Boxes that start beyond the closest hit
+ * found so far are skipped.
  *
  * Distances stay in world units because the ray's direction is *not*
  * renormalized after the transform into object space: a point at parameter
@@ -23,7 +24,6 @@
 
 import type { BindingSlot, ModuleBindingEntry } from '../contract/wgsl.ts';
 import {
-    INSTANCE_FLAG,
     EMPTY_CHILD_INDEX,
     REF_COUNT_SHIFT,
     REF_INDEX_MASK,
@@ -66,7 +66,7 @@ struct GiHit {
     instance: u32,       // platform instance index
     triangle: u32,       // triangle index within the instance's mesh
     barycentrics: vec2f, // weights of vertices 1 and 2
-    frontFace: bool,     // false when the ray hit the back side
+    frontFace: bool,     // true on the side the mesh was authored as front (also when mirrored)
 }
 
 // ---- Memory layout (generated from layout.ts) -------------------------------
@@ -98,8 +98,6 @@ struct GiInstance {
     instanceIndex: u32,    // platform instance index
     flags: u32,
 }
-
-const GI_INSTANCE_FLAG_MIRRORED: u32 = ${INSTANCE_FLAG.mirrored}u;
 
 // Mesh trees and the top level use the same 64-byte node.
 const GI_VEC4_PER_NODE: u32 = ${BVH_NODE_BYTES / 16}u;
@@ -135,6 +133,150 @@ const GI_MIN_DIRECTION: f32 = 1.0e-30;
 // much keeps such rays (Ize, "Robust BVH Ray Traversal"). About 3 f32 steps.
 const GI_BOX_EXIT_PADDING: f32 = 1.0000004;
 `;
+
+/**
+ * The walk, written once and generated as two functions:
+ *
+ * - `giWalkClosest` keeps the nearest hit and, after each one, skips boxes
+ *   that start beyond it;
+ * - `giWalkAny` returns at the first triangle in [tMin, tMax], so it needs no
+ *   hit record at all, and it visits the *farther* child first.
+ *
+ * Why any-hit goes far first (T1.3, measured on shadow rays toward the sun):
+ * a shadow ray starts on a surface, so the nearer child is usually the
+ * geometry it starts on, which can't block it. What blocks it (a ceiling, a
+ * roof, a wall across the room) lies ahead, in the farther child. Any blocker
+ * will do, so there is nothing to gain from finding the nearest one first.
+ * On the bench scenes far-first made any-hit much faster than near-first, with
+ * every answer unchanged (numbers: PROGRESS, T1.3, and bench/results/trace.csv).
+ */
+function walkWgsl(kind: 'closest' | 'any'): string {
+    const closest = kind === 'closest';
+    const name = closest ? 'giWalkClosest' : 'giWalkAny';
+    const returnType = closest ? 'GiHit' : 'bool';
+    const noHit = closest ? 'result' : 'false';
+    const resultDeclaration = closest ? 'var result = GiHit(-1.0, 0u, 0u, vec2f(0.0), true);' : '';
+    // Closest-hit narrows the ray after every hit; any-hit never needs to.
+    const farDeclaration = closest ? 'var farthest = ray.tMax;   // hits beyond this are not interesting any more' : 'let farthest = ray.tMax;';
+    const onTriangleHit = closest
+        ? `// The test ran in object space, where the winding is the one the mesh was
+                    // authored with, so frontFacing is the authored side even for a mirrored
+                    // instance (DECISIONS 2026-11-04).
+                    result = GiHit(candidate.t, instance.instanceIndex, triangle.originalIndex, candidate.barycentrics, candidate.frontFacing);
+                    farthest = candidate.t;`
+        : 'return true;';
+    return /* wgsl */ `
+fn ${name}(ray: GiRay) -> ${returnType} {
+    ${resultDeclaration}
+    let header = giTraceTopLevel[0];
+    let instanceCount = header.x;
+    let topLevelNodeCount = header.y;
+    if (topLevelNodeCount == 0u) {
+        return ${noHit};
+    }
+    let firstTopLevelNode = GI_TOP_HEADER_VEC4S + instanceCount * GI_TOP_VEC4_PER_RECORD;
+
+    let worldSetup = giMakeRaySetup(ray.origin, ray.direction);
+    var setup = worldSetup;
+
+    var insideInstance = false;
+    var instance: GiInstance;
+    ${farDeclaration}
+
+    var stack: array<u32, GI_STACK_SIZE>;
+    var stackSize = 0u;
+    var current = giMakeReference(0u, 0u);   // the root of the top level
+
+    loop {
+        let count = current >> GI_REF_COUNT_SHIFT;
+        let index = current & GI_REF_INDEX_MASK;
+
+        if (count == 0u) {
+            // An inner node: test both children, then go to one and push the other.
+            var node: GiBvhNode;
+            if (insideInstance) {
+                node = giLoadMeshNode(instance.rootNodeOffset + index);
+            } else {
+                node = giLoadTopLevelNode(firstTopLevelNode, index);
+            }
+
+            // Only a tree with a single primitive has an empty child, and it is the right one.
+            let leftEntry = giBoxEntry(node.leftMin, node.leftMax, setup, ray.tMin, farthest);
+            var rightEntry = GI_BOX_MISS;
+            if (node.rightIndex != GI_EMPTY_CHILD) {
+                rightEntry = giBoxEntry(node.rightMin, node.rightMax, setup, ray.tMin, farthest);
+            }
+            let leftReference = giMakeReference(node.leftIndex, node.leftCount);
+            let rightReference = giMakeReference(node.rightIndex, node.rightCount);
+            let hitLeft = leftEntry < GI_BOX_MISS;
+            let hitRight = rightEntry < GI_BOX_MISS;
+
+            if (hitLeft && hitRight) {
+                // Closest-hit visits the nearer child first, any-hit the farther one (see above).
+                if (${closest ? 'leftEntry <= rightEntry' : 'leftEntry > rightEntry'}) {
+                    stack[stackSize] = rightReference;
+                    current = leftReference;
+                } else {
+                    stack[stackSize] = leftReference;
+                    current = rightReference;
+                }
+                stackSize += 1u;
+                continue;
+            }
+            if (hitLeft) {
+                current = leftReference;
+                continue;
+            }
+            if (hitRight) {
+                current = rightReference;
+                continue;
+            }
+            // Neither child is hit: fall through to pop.
+        } else if (!insideInstance) {
+            // A top-level leaf is one instance. Move the ray into its object space
+            // and start at the root of its mesh tree.
+            instance = giLoadInstance(index);
+            setup = giMakeRaySetup(
+                giTransformPoint(instance, ray.origin),
+                giTransformDirection(instance, ray.direction),
+            );
+            stack[stackSize] = GI_REF_INSTANCE_MARKER;
+            stackSize += 1u;
+            insideInstance = true;
+            current = giMakeReference(0u, 0u);
+            continue;
+        } else {
+            // A mesh leaf: 'count' triangles starting at 'index'.
+            for (var i = 0u; i < count; i += 1u) {
+                let triangle = giLoadTriangle(instance.triangleOffset + index + i);
+                let candidate = giIntersectWatertight(triangle, setup, ray.tMin, farthest);
+                if (candidate.hit) {
+                    ${onTriangleHit}
+                }
+            }
+        }
+
+        // Nothing left to descend into here: take the next entry off the stack.
+        loop {
+            if (stackSize == 0u) {
+                return ${noHit};
+            }
+            stackSize -= 1u;
+            let entry = stack[stackSize];
+            if (entry == GI_REF_INSTANCE_MARKER) {
+                // The instance's tree is finished; go back to the world-space ray.
+                insideInstance = false;
+                setup = worldSetup;
+                continue;
+            }
+            current = entry;
+            break;
+        }
+    }
+    // No return here: the loop above only exits through 'return'.
+}
+`;
+}
 
 /**
  * The trace module: contract types, layout, and `giTraceClosest` / `giTraceAny`.
@@ -361,139 +503,16 @@ fn giIntersectWatertight(triangle: GiBvhTriangle, setup: GiRaySetup, tMin: f32, 
     return GiTriangleHit(true, t, vec2f(weight1, weight2) * inverseDeterminant, determinant > 0.0);
 }
 
-// ---- The walk -----------------------------------------------------------------------
-
-// With stopAtFirstHit the walk returns on the first triangle found in
-// [tMin, tMax] (t >= 0 in the result means "something blocks the ray").
-// Without it, the result is the nearest hit.
-fn giTraverse(ray: GiRay, stopAtFirstHit: bool) -> GiHit {
-    var result = GiHit(-1.0, 0u, 0u, vec2f(0.0), true);
-
-    let header = giTraceTopLevel[0];
-    let instanceCount = header.x;
-    let topLevelNodeCount = header.y;
-    if (topLevelNodeCount == 0u) {
-        return result;
-    }
-    let firstTopLevelNode = GI_TOP_HEADER_VEC4S + instanceCount * GI_TOP_VEC4_PER_RECORD;
-
-    let worldSetup = giMakeRaySetup(ray.origin, ray.direction);
-    var setup = worldSetup;
-
-    var insideInstance = false;
-    var instance: GiInstance;
-    var mirrored = false;
-
-    // Hits farther than this are not interesting any more.
-    var closestT = ray.tMax;
-
-    var stack: array<u32, GI_STACK_SIZE>;
-    var stackSize = 0u;
-    var current = giMakeReference(0u, 0u);   // the root of the top level
-
-    loop {
-        let count = current >> GI_REF_COUNT_SHIFT;
-        let index = current & GI_REF_INDEX_MASK;
-
-        if (count == 0u) {
-            // An inner node: test both children, go to the nearer one first.
-            var node: GiBvhNode;
-            if (insideInstance) {
-                node = giLoadMeshNode(instance.rootNodeOffset + index);
-            } else {
-                node = giLoadTopLevelNode(firstTopLevelNode, index);
-            }
-
-            // Only a tree with a single primitive has an empty child, and it is the right one.
-            let leftEntry = giBoxEntry(node.leftMin, node.leftMax, setup, ray.tMin, closestT);
-            var rightEntry = GI_BOX_MISS;
-            if (node.rightIndex != GI_EMPTY_CHILD) {
-                rightEntry = giBoxEntry(node.rightMin, node.rightMax, setup, ray.tMin, closestT);
-            }
-            let leftReference = giMakeReference(node.leftIndex, node.leftCount);
-            let rightReference = giMakeReference(node.rightIndex, node.rightCount);
-            let hitLeft = leftEntry < GI_BOX_MISS;
-            let hitRight = rightEntry < GI_BOX_MISS;
-
-            if (hitLeft && hitRight) {
-                if (leftEntry <= rightEntry) {
-                    stack[stackSize] = rightReference;
-                    current = leftReference;
-                } else {
-                    stack[stackSize] = leftReference;
-                    current = rightReference;
-                }
-                stackSize += 1u;
-                continue;
-            }
-            if (hitLeft) {
-                current = leftReference;
-                continue;
-            }
-            if (hitRight) {
-                current = rightReference;
-                continue;
-            }
-            // Neither child is hit: fall through to pop.
-        } else if (!insideInstance) {
-            // A top-level leaf is one instance. Move the ray into its object space
-            // and start at the root of its mesh tree.
-            instance = giLoadInstance(index);
-            mirrored = (instance.flags & GI_INSTANCE_FLAG_MIRRORED) != 0u;
-            setup = giMakeRaySetup(
-                giTransformPoint(instance, ray.origin),
-                giTransformDirection(instance, ray.direction),
-            );
-            stack[stackSize] = GI_REF_INSTANCE_MARKER;
-            stackSize += 1u;
-            insideInstance = true;
-            current = giMakeReference(0u, 0u);
-            continue;
-        } else {
-            // A mesh leaf: 'count' triangles starting at 'index'.
-            for (var i = 0u; i < count; i += 1u) {
-                let triangle = giLoadTriangle(instance.triangleOffset + index + i);
-                let candidate = giIntersectWatertight(triangle, setup, ray.tMin, closestT);
-                if (candidate.hit) {
-                    // A mirrored instance flips the winding as seen in world space.
-                    let frontFace = candidate.frontFacing != mirrored;
-                    result = GiHit(candidate.t, instance.instanceIndex, triangle.originalIndex, candidate.barycentrics, frontFace);
-                    closestT = candidate.t;
-                    if (stopAtFirstHit) {
-                        return result;
-                    }
-                }
-            }
-        }
-
-        // Nothing left to descend into here: take the next entry off the stack.
-        loop {
-            if (stackSize == 0u) {
-                return result;
-            }
-            stackSize -= 1u;
-            let entry = stack[stackSize];
-            if (entry == GI_REF_INSTANCE_MARKER) {
-                // The instance's tree is finished; go back to the world-space ray.
-                insideInstance = false;
-                setup = worldSetup;
-                continue;
-            }
-            current = entry;
-            break;
-        }
-    }
-    // No return here: the loop above only exits through 'return'.
-}
-
+${walkWgsl('closest')}
+${walkWgsl('any')}
 // Nearest hit, honouring alpha cutouts and blocksLight (cutouts arrive in M4).
 fn giTraceClosest(ray: GiRay) -> GiHit {
-    return giTraverse(ray, false);
+    return giWalkClosest(ray);
 }
 
 // True if anything blocks the ray. Stops at the first blocker found.
 fn giTraceAny(ray: GiRay) -> bool {
-    return giTraverse(ray, true).t >= 0.0;
+    return giWalkAny(ray);
 }
 `;
 }
@@ -505,20 +524,33 @@ fn giTraceAny(ray: GiRay) -> bool {
  */
 export const HIT_RECORD_BYTES = 24;
 
+/**
+ * Word positions inside a `GiHitRecord`, for code that reads batch results
+ * back. `frontFace` sits before `barycentrics` so the `vec2f` starts on an
+ * 8-byte boundary and the record has no padding (`wgsl.test.ts` checks this
+ * against the struct in `batchEntryWgsl`).
+ */
+export const HIT_RECORD_WORD = {
+    t: 0,
+    instance: 1,
+    triangle: 2,
+    frontFace: 3,
+    barycentrics: 4,
+} as const;
+
 /** Workgroup size of the batch kernels. */
 export const BATCH_WORKGROUP_SIZE = 64;
 
 /**
- * Batch kernel: traces `arrayLength(giBatchRays)` rays and writes one result
- * per ray. The trace module sits in group 0; the batch's own buffers in group 1.
+ * The batch kernel's own part: its two bindings in `group` (rays in, results
+ * out) and the entry point `giBatch`, which traces `arrayLength(giBatchRays)`
+ * rays and writes one result per ray. The trace module comes separately (the
+ * platform's kernel builder puts it in group 0).
  *
  * The ray count is the size of the bound `rays` range, so there is no uniform
  * to keep in step between several dispatches recorded into one command buffer.
  */
-export function batchKernelWgsl(
-    mode: 'closest' | 'any',
-    traceSlot: BindingSlot = { group: 0, firstBinding: 0 },
-): string {
+export function batchEntryWgsl(mode: 'closest' | 'any', group: number): string {
     const resultDeclaration =
         mode === 'closest'
             ? `struct GiHitRecord {
@@ -529,9 +561,9 @@ export function batchKernelWgsl(
     barycentrics: vec2f,
 }
 
-@group(1) @binding(1) var<storage, read_write> giBatchResults: array<GiHitRecord>;`
+@group(${group}) @binding(1) var<storage, read_write> giBatchResults: array<GiHitRecord>;`
             : `// 1 when the ray is blocked, 0 when it is clear.
-@group(1) @binding(1) var<storage, read_write> giBatchResults: array<u32>;`;
+@group(${group}) @binding(1) var<storage, read_write> giBatchResults: array<u32>;`;
 
     const body =
         mode === 'closest'
@@ -539,8 +571,8 @@ export function batchKernelWgsl(
     giBatchResults[rayIndex] = GiHitRecord(hit.t, hit.instance, hit.triangle, select(0u, 1u, hit.frontFace), hit.barycentrics);`
             : `giBatchResults[rayIndex] = select(0u, 1u, giTraceAny(giBatchRays[rayIndex]));`;
 
-    return /* wgsl */ `${traceModuleWgsl(traceSlot)}
-@group(1) @binding(0) var<storage, read> giBatchRays: array<GiRay>;
+    return /* wgsl */ `
+@group(${group}) @binding(0) var<storage, read> giBatchRays: array<GiRay>;
 ${resultDeclaration}
 
 @compute @workgroup_size(${BATCH_WORKGROUP_SIZE})
@@ -557,4 +589,10 @@ fn giBatch(
     ${body}
 }
 `;
+}
+
+/** A whole batch kernel: the trace module at `traceSlot` plus the batch's own group 1. */
+export function batchKernelWgsl(mode: 'closest' | 'any', traceSlot: BindingSlot = { group: 0, firstBinding: 0 }): string {
+    return `${traceModuleWgsl(traceSlot)}
+${batchEntryWgsl(mode, 1)}`;
 }

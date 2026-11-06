@@ -1,15 +1,17 @@
 /**
- * The tracer benchmark (T0.10 parts B and C): ours, on trees from three builders,
- * against three-mesh-bvh on probe-style rays, per scene.
+ * The tracer benchmark (T0.10 parts B and C, T1.3): ours, on trees from two
+ * builders and through the platform API, against three-mesh-bvh on
+ * probe-style rays, per scene.
  *
  * Per scene, in order:
  *   1. load the geometry (positions, indices, instance transforms; no textures);
- *   2. build our trees in the worker, assemble, time top-level rebuilds;
+ *   2. build our trees in the worker (tinybvh), assemble, time top-level rebuilds;
  *   3. generate the probe rays, trace them once to find the hits, and turn the
  *      hits into shadow rays toward the sun (the same rays go to every tracer);
- *   4. time ours-wt, then ours-tinybvh (tinybvh's trees, our walk), then
- *      ours-tmbuild (three-mesh-bvh's trees in our layout, our walk), then
- *      three-mesh-bvh, each on closest and any;
+ *   4. time ours-tinybvh (tinybvh's trees, our walk), then ours-tmbuild
+ *      (three-mesh-bvh's trees in our layout, our walk), then platform (the
+ *      same scene through createGI and its scene API), then three-mesh-bvh,
+ *      each on closest and any;
  *   5. compare the closest hits between tracers.
  *
  * Everything the GPU holds for a tracer is freed before the next one starts, so
@@ -32,7 +34,9 @@ import {
     type BenchProfileName,
 } from './config.ts';
 import { createDispatchTimer, type DispatchTimer } from './dispatch-timer.ts';
+import { GpuLbvhBuilder } from '../../../../packages/bvh/src/gpu-lbvh.ts';
 import {
+    buildGpuScene,
     buildOursScene,
     buildTmbuildScene,
     estimateNsPerRay,
@@ -48,6 +52,7 @@ import { makeProbeGrid, makeProbeRays, makeShadowRays, makeSphereDirections, typ
 import type { AgreementResult, DeviceRecord, ModeResult, SceneResult, TraceBenchData } from './results.ts';
 import { loadBenchScene } from './scene-source.ts';
 import { compareBlocked, compareClosestDistances } from './statistics.ts';
+import { runPlatformTracer } from './platform-bench.ts';
 import { runSynthetic } from './synthetic.ts';
 import { createTmbvhRenderer, runTmbvh, TMBVH_TIMING_METHOD, type TmbvhRun } from './tmbvh-bench.ts';
 import type { WebGPURenderer } from 'three/webgpu';
@@ -141,6 +146,8 @@ async function runScene(context: BenchContext, sceneId: string): Promise<SceneRe
         loadMs: scene.loadMs,
         ours: null,
         oursTmbuild: null,
+        oursLbvh: null,
+        oursHploc: null,
         oursTinybvh: null,
         tmbvh: null,
         modes: [],
@@ -148,9 +155,10 @@ async function runScene(context: BenchContext, sceneId: string): Promise<SceneRe
         skipped: [],
     };
 
-    progress(`${sceneId}: building our trees`);
+    progress(`${sceneId}: building our trees (tinybvh, in the worker)`);
     const ours = await buildOursScene(context.builder, scene.meshes, scene.instances);
     result.ours = ours.result;
+    result.oursTinybvh = ours.result;
     progress(
         `${sceneId}: ours built in ${Math.round(ours.result.buildMsTotal)} ms (slowest mesh ${Math.round(ours.result.buildMsMaxMesh)} ms), ` +
             `${(ours.result.bytesTotal / 1e6).toFixed(1)} MB, top level rebuild ${ours.result.topLevelRebuildMsMedian.toFixed(2)} ms`,
@@ -235,29 +243,43 @@ async function runScene(context: BenchContext, sceneId: string): Promise<SceneRe
             for (const mode of run.modes) progress(describeMode(sceneId, mode));
         };
 
-        for (const tracer of ['ours-wt'] as const) {
-            if (!config.tracers.includes(tracer)) continue;
-            if (!oursAvailable) continue;
+        // tinybvh's trees (WASM, built in the worker), traced by our watertight walk.
+        if (config.tracers.includes('ours-tinybvh') && oursAvailable) {
             try {
-                finish(tracer, await runOursTracer(device, context.timer, tracer, ours.data, oursRays, plan));
+                finish('ours-tinybvh', await runOursTracer(device, context.timer, 'ours-tinybvh', ours.data, oursRays, plan));
             } catch (error) {
-                result.skipped.push(`${tracer}: ${error instanceof Error ? error.message : String(error)}`);
-                progress(`${sceneId}: ${tracer} skipped (${error instanceof Error ? error.message : String(error)})`);
+                result.skipped.push(`ours-tinybvh: ${error instanceof Error ? error.message : String(error)}`);
+                progress(`${sceneId}: ours-tinybvh skipped (${error instanceof Error ? error.message : String(error)})`);
             }
             await yieldToBrowser();
         }
 
-        // tinybvh's trees (WASM, built in the same worker as ours), traced by our watertight walk.
-        if (config.tracers.includes('ours-tinybvh') && oursAvailable) {
+        // The GPU builders' trees (B1 LBVH, B2 H-PLOC), traced by our watertight walk; built after tinybvh's are done with the GPU.
+        const gpuBuilders = [
+            { tracer: 'ours-lbvh', kind: 'lbvh', name: 'LBVH' },
+            { tracer: 'ours-hploc', kind: 'hploc', name: 'H-PLOC' },
+        ] as const;
+        for (const { tracer, kind, name } of gpuBuilders) {
+            if (!config.tracers.includes(tracer) || !oursAvailable) continue;
             try {
-                progress(`${sceneId}: building with tinybvh (WASM, in the worker)`);
-                const tinybvh = await buildOursScene(context.builder, scene.meshes, scene.instances, 'tinybvh');
-                result.oursTinybvh = tinybvh.result;
-                progress(`${sceneId}: ours-tinybvh built in ${Math.round(tinybvh.result.buildMsTotal)} ms, ${(tinybvh.result.bytesTotal / 1e6).toFixed(1)} MB`);
-                finish('ours-tinybvh', await runOursTracer(device, context.timer, 'ours-tinybvh', tinybvh.data, oursRays, plan));
+                if (!GpuLbvhBuilder.isSupported(device)) throw new Error(`the device has no subgroups, so the GPU ${name} does not run (its fallback is tinybvh)`);
+                progress(`${sceneId}: building on the GPU (${name}, one batch of ${scene.meshes.length} meshes)`);
+                const built = await buildGpuScene(device, context.timer, kind, scene.meshes, scene.instances, ours.bvhs);
+                if (kind === 'lbvh') result.oursLbvh = built.result;
+                else result.oursHploc = built.result;
+                const match = built.result.sahCostVsTinybvhHploc;
+                progress(
+                    `${sceneId}: ${tracer} built in ${built.result.gpuBuildMsMedian.toFixed(2)} ms of GPU time (median of ${built.result.gpuBuildRuns}; ` +
+                        `loaded, back to back: ${built.result.gpuBuildLoadedMsMedian.toFixed(2)} ms, median of ${built.result.gpuBuildLoadedRuns} over ${built.result.gpuBuildLoadedSeconds.toFixed(1)} s; ` +
+                        `${Math.round(built.result.wallBuildMs)} ms wall for the first, with uploads), read back in ${Math.round(built.result.readbackMs)} ms; ` +
+                        `SAH cost ${built.result.sahCostVsTinybvh.toFixed(3)}x tinybvh's, depth ${built.result.maxMeshDepth}, ` +
+                        `${(built.result.bytesTotal / 1e6).toFixed(1)} MB, ${built.result.meshesFallenBack} meshes fell back` +
+                        (match === undefined ? '' : `; with tinybvh's codes and ties, ${match.toFixed(4)}x the SAH cost of tinybvh's BuildHPLOC`),
+                );
+                finish(tracer, await runOursTracer(device, context.timer, tracer, built.data, oursRays, plan));
             } catch (error) {
-                result.skipped.push(`ours-tinybvh: ${error instanceof Error ? error.message : String(error)}`);
-                progress(`${sceneId}: ours-tinybvh skipped (${error instanceof Error ? error.message : String(error)})`);
+                result.skipped.push(`${tracer}: ${error instanceof Error ? error.message : String(error)}`);
+                progress(`${sceneId}: ${tracer} skipped (${error instanceof Error ? error.message : String(error)})`);
             }
             await yieldToBrowser();
         }
@@ -278,6 +300,24 @@ async function runScene(context: BenchContext, sceneId: string): Promise<SceneRe
             } catch (error) {
                 result.skipped.push(`ours-tmbuild: ${error instanceof Error ? error.message : String(error)}`);
                 progress(`${sceneId}: ours-tmbuild skipped (${error instanceof Error ? error.message : String(error)})`);
+            }
+            await yieldToBrowser();
+        }
+
+        // The same scene through the platform API (createGI, scene API, queries.rays).
+        if (config.tracers.includes('platform') && oursAvailable) {
+            try {
+                progress(`${sceneId}: describing the scene through the platform API`);
+                const run = await runPlatformTracer(device, context.timer, scene.meshes, scene.instances, oursRays, plan);
+                result.platform = run.build;
+                progress(
+                    `${sceneId}: platform ready in ${Math.round(run.build.readyMs)} ms; scene copy ${(run.build.bytesSceneCopy / 1e6).toFixed(1)} MB, ` +
+                        `acceleration ${(run.build.bytesAcceleration / 1e6).toFixed(1)} MB`,
+                );
+                finish('platform', run);
+            } catch (error) {
+                result.skipped.push(`platform: ${error instanceof Error ? error.message : String(error)}`);
+                progress(`${sceneId}: platform skipped (${error instanceof Error ? error.message : String(error)})`);
             }
             await yieldToBrowser();
         }
@@ -314,11 +354,12 @@ async function runScene(context: BenchContext, sceneId: string): Promise<SceneRe
     }
 
     const pairs: [string, string][] = [
-        ['ours-wt', 'tmbvh'],
-        ['ours-wt', 'ours-tinybvh'],
         ['ours-tinybvh', 'tmbvh'],
-        ['ours-wt', 'ours-tmbuild'],
+        ['ours-tinybvh', 'ours-tmbuild'],
         ['ours-tmbuild', 'tmbvh'],
+        ['ours-tinybvh', 'platform'],
+        ['ours-tinybvh', 'ours-lbvh'],
+        ['ours-tinybvh', 'ours-hploc'],
     ];
     for (const [a, b] of pairs) {
         const runA = runs.get(a);
@@ -342,7 +383,7 @@ function describeMode(sceneId: string, mode: ModeResult): string {
 }
 
 /** The user-agent string freezes the version at 156.0.0.0; the client hints still know the real one. */
-async function fullBrowserVersion(): Promise<string | null> {
+export async function fullBrowserVersion(): Promise<string | null> {
     const hints = (
         navigator as unknown as {
             userAgentData?: { getHighEntropyValues(hints: string[]): Promise<{ fullVersionList?: { brand: string; version: string }[] }> };

@@ -40,16 +40,17 @@ Keys in the harness: F2 dumps DDGI textures, F4 runs the 1024-frame benchmark, J
 | Manifest | Harness `.ini` |
 |---|---|
 | `parts[0]` model, or the procedural scene's `assets/generated/<id>.glb` | `scene.path` / `scene.file` |
+| several model `parts`, or one with a `transform` | one merged `native/build/scenes/<id>/<id>.gltf` (see "Scenes with several parts") |
 | `cameras[]` (position, target, fovYDeg) | `scene.cameras.N` as yaw, pitch, position, fov (vertical) |
 | `lights[]` directional | type 0; `power` = intensity (lux), `direction` = travel direction |
 | `lights[]` point | type 2; `power` = intensity (candela), `radius` = range |
 | `lights[]` spot | type 1; angles in radians (outer = umbra, inner = penumbra) |
-| `environment` | `none` is black; `color` is a flat colour; `procedural` is a flat blue-white sky at half intensity (the harness has no sky model) |
+| `environment` | `none` is black; `color` is a flat colour; `procedural` is the shared sky file's flat equivalent (`flatEquivalentRadianceRgb` in `scenes/sky/<scene>.json`: the uniform radiance that lights a flat open ground like the file does). The harness's shaders take one constant sky radiance (`app.skyRadiance`) for every missed ray, not an image, so it can't read the sky file itself. Nor can it tell a ray going up from one going down without a shader change, so it also returns this colour below the horizon, where the file is black: in open scenes (Bistro exterior, the courtyard, open ground), rays that leave the model downwards pick up sky light that the other renderers don't have. M1 keeps this; a texture sky in the fork's miss shader is an M2 sky and time-of-day item |
 | `volume` | `ddgi.volume.0`, see below |
 
 Biases scale with the smallest probe spacing `s`: normal bias `0.1 s`, view bias `0.3 s`, relocation minimum front-face distance `0.3 s`. Everything else in the DDGI block is the upstream Sponza sample: relocation, classification and variability on, no scrolling, hysteresis 0.97, 8x8 irradiance and 16x16 distance texels per probe.
 
-### Probe grid (the rule the browser side must copy)
+### Probe grid
 
 Probes sit at the **centres of equal cells that cover the manifest volume exactly**, the same layout as three.js `LightProbeGrid`:
 
@@ -59,15 +60,33 @@ spacing[axis] = size[axis] / count[axis]        (so it can be a little smaller t
 origin        = volume.center
 ```
 
+Our DDGI technique uses a different rule (`floor(size / spacing) + 1` per axis at exactly the given spacing, centred on `volume.center`; `probeGrid()` in ddgi-core). `bench.ps1 -GridRule ddgi` gives the harness that grid, for timing at matched probe counts and positions; the default stays the cell-centre grid. Counts for our scenes:
+
+| Scene | default (`cells`) | `-GridRule ddgi` |
+|---|---|---|
+| cornell-box | 12 x 12 x 12 = 1728 (spacing 0.483, 0.467, 0.483) | 12 x 12 x 12 = 1728 (spacing 0.5) |
+| two-room | 17 x 6 x 9 = 918 | 17 x 7 x 9 = 1071 |
+| sponza | 37 x 20 x 24 = 17760 | 37 x 21 x 25 = 19425 |
+
 ### Scenes the harness cannot read directly
 
 - **A `.glb` with textures** is refused by the harness ("GLB format not supported for scenes with texture data"). The Bistro files are like that. `play.ps1` splits them once with `glb-to-gltf.mjs` into `native/build/scenes/<id>/` (a `.gltf`, a `.bin` and the images). Nothing in `assets/` is touched. While doing that the script also fixes two more things the harness cannot handle in the Bistro files:
   - **WebP textures** (Blender 4.5 wrote `EXT_texture_webp`): converted to PNG with ImageMagick (`magick` must be on PATH). Without this the harness silently finds no textures and renders black.
   - **Normal maps without tangents**: the harness needs a `TANGENT` attribute to use a normal map and shades garbage (black and purple, NaN probes) without one. If a file has no tangents at all, the staged copy drops its normal maps. The current Bistro exports (2026-11-04, 14:00) have tangents, so their normal maps are kept.
-- **Model transforms.** The harness cannot place a model, so a scene whose model part has a non-identity transform (`furnished-room`) is refused with a clear message. Scenes with more than one part (`courtyard-tree`) are refused too.
+- **Several parts, and model transforms.** The harness loads one glTF file and cannot place it. See the next section: such scenes are merged into one file. Scenes that mix a procedural part with a model part (`courtyard-tree`) are still refused, because `pnpm scenes:export` writes no file for their procedural part.
 - **File names** must be letters, digits, `_` and `-` only (`NewSponza_Main_1k.gltf` is fine).
-- The first load of a textured scene converts every texture to BC7 on the CPU, one thread, with no progress bar, and writes a cache to `native/build/cache/<id>/` (Sponza: about 2 minutes; Bistro: see the measured times below). The scripts do this first by themselves in a **minimized** window under the GPU lock (`play.ps1`, `bench.ps1` and `prepare-cache.ps1 -Scene a,b` all call the same step, one scene at a time), so an interactive window never has to. The harness now keeps its window answering Windows during this, but if you ever see "Not Responding", do not close it. Delete the cache folder if you change the scene file. Never run two Bistro loads at once: they use most of the 6 GB card.
+- The first load of a textured scene converts every texture to BC7 on the CPU, one thread, with no progress bar, and writes a cache to `native/build/cache/<id>/` (Sponza with curtains: about 2 minutes; Bistro: see the measured times below). The scripts do this first by themselves in a **minimized** window under the GPU lock (`play.ps1`, `bench.ps1` and `prepare-cache.ps1 -Scene a,b` all call the same step, one scene at a time), so an interactive window never has to. The harness now keeps its window answering Windows during this, but if you ever see "Not Responding", do not close it. Delete the cache folder if you change the scene file. Never run two Bistro loads at once: they use most of the 6 GB card.
 - If `assets/downloads/<asset>/<file>` is missing, the script falls back to `assets/downloads.bak/` and says so.
+
+### Scenes with several parts
+
+`sponza` is Intel's base package plus the curtains add-on: two model parts. A scene with more than one model part, or with one model part that has a non-identity `transform` (`furnished-room`), is merged by `merge-gltf.mjs` into one `native/build/scenes/<id>/<id>.gltf`, the way the viewer and Cycles load it: every part, each with its manifest transform. A part with a transform gets one extra root node with that transform (XYZ Euler degrees as a quaternion, the three.js order); identity parts are added as they are. The merged file refers to each part's own `.bin` and images with relative paths (`../../../../assets/downloads/...`), so nothing is copied and nothing in `assets/` changes. A `.glb` part is split first (`native/build/scenes/<id>/part<n>/`, the same step as above).
+
+The merge runs every time a script resolves the scene (it takes well under a second) and rewrites the file only when its content changes or a part's file is newer. When it rewrites it, the scene cache `native/build/cache/<id>/<id>.cache` is deleted, so it is rebuilt from the new file. The merged Sponza has 132 meshes (448 primitives) and 80 textures, well under the Vulkan mesh limit (see Known problems).
+
+Single-part scenes without a transform (all procedural scenes, Bistro) are loaded exactly as before: same `.ini`, same cache.
+
+Sponza timing rows from before the merge (all `9bd7f3c`, `1df1f97` and the earlier `c7d0162-dirty` rows) are Intel's base package alone, without curtains. Rows written since have a `scene_parts` row (2 for Sponza).
 
 ## Timing: `bench.ps1`
 
@@ -75,7 +94,12 @@ origin        = volume.center
 ./tools/native/bench.ps1                                   # the default scene list, Vulkan, 256 rays, RTX 3060
 ./tools/native/bench.ps1 -Scene sponza -Api d3d12
 ./tools/native/bench.ps1 -Scene two-room -NoAppend         # print only, leave bench/results/native.csv alone
+./tools/native/bench.ps1 -Scene cornell-box,two-room,sponza -GridRule ddgi -Runs 3 -Label t1.9-matched   # the T1.9 set
 ```
+
+- `-GridRule ddgi`: our DDGI's probe grid (see "Probe grid"). Its rows get `grid_ddgi,1`; keep them apart from default runs.
+- `-Runs n`: the whole scene list n times, interleaved (a, b, c, a, b, c, ...), in one hold of the lock. Each run is its own block of rows.
+- `-Label text`: a `label,text` row in every run, to name a set (`t1.9-matched`).
 
 Per scene it writes a clean-mode config (1920x1080, vsync off, 256 rays per probe, grid from the manifest), **takes the shared GPU lock once for the whole run** (`%TEMP%\ddgi-gpu-bench.lock`; it waits while another job holds it, and gives it back at the end, also on an error or Ctrl-C), builds the scene cache if it is missing, waits 300 frames for the probes to settle, records the harness's own 1024-frame benchmark (the same code as F4: `app.autoBenchmark=1` in the `.ini` runs it by itself and exits), and appends that scene's rows to `bench/results/native.csv` as soon as the scene is done. A scene that fails is reported and skipped; the scenes before it stay in the CSV, the ones after it still run, and the script exits with code 1 at the end.
 
@@ -95,6 +119,7 @@ CSV conventions (columns, and how to pick valid rows: `bench/results/README.md`,
 | `gpu_ms_<pass>`, `gpu_ms_<pass>_median` | the harness's GPU timestamps around that pass, mean and median over the 1024 frames |
 | `cpu_ms_frame`, `cpu_ms_frame_median` | CPU time of one main-loop iteration (see below) |
 | `mrays_per_s` | `rays_traced_per_frame / gpu_ms_probe_trace_median`, in millions per second |
+| `scene_parts` | how many manifest parts the harness loaded (several are merged into one glTF). Missing in rows from before the merge |
 
 What the passes are, in the harness's own timers: `frame` (whole command buffer), `gbuffer`, `ddgi` (all probe work plus the screen-space gather), and inside it `probe_trace`, `blend`, `relocate`, `classify`, `variability`, `lighting` (the screen-space gather that applies the probes to the image).
 

@@ -1,4 +1,4 @@
 {
-    "description": "Tracer benchmark, quick profile on the furnished room: ours (on our, tinybvh and three-mesh-bvh trees) and three-mesh-bvh must run and agree.",
+    "description": "Tracer benchmark, quick profile on the furnished room: ours (on tinybvh and three-mesh-bvh trees, and through the platform API) and three-mesh-bvh must run and agree.",
     "timeoutMs": 180000
 }

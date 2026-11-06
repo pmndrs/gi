@@ -100,6 +100,11 @@ export interface ShadingModule {
      * and so on) for hosts that bind globals, written at the given group with
      * bindings from 0. Uniforms become one uniform buffer the host fills from
      * {@link writeUniforms}.
+     *
+     * Self-contained: it starts with {@link code}, so a host includes this
+     * string alone. Bindings: every `texture` and `sampler` parameter in
+     * parameter order from 0, then the uniform buffer (the `vec4f`
+     * parameters in order) at the next binding.
      */
     globalsCode(group: number): string;
     /** Writes all `vec4f` parameters, in order, into `target` for the globals path. */

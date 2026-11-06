@@ -1,7 +1,17 @@
+import { execFileSync } from 'child_process';
 import { delimiter, resolve } from 'path';
 import { defineConfig } from 'vite';
 
 const repoRoot = resolve(__dirname, '../..');
+
+/** The repo's HEAD commit when the dev server starts, or '' outside a git checkout. */
+function currentCommit(): string {
+    try {
+        return execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, encoding: 'utf8' }).trim();
+    } catch {
+        return '';
+    }
+}
 
 // Downloaded models are read from these folders, first match wins:
 // assets/downloads, then assets/downloads.bak (a clean re-fetch can leave a
@@ -25,6 +35,10 @@ export default defineConfig({
     define: {
         // `src/scene/model-url.ts` reads models through /@fs/<one of these>/<asset id>/<path>.
         __DOWNLOADS_DIRS__: JSON.stringify(downloadsDirectories),
+        // `src/scene/reference-files.ts` reads the Cycles references (gitignored, rendered on demand) from here.
+        __REFERENCES_DIR__: JSON.stringify(resolve(repoRoot, 'bench', 'references')),
+        // The commit the viewer runs, so the Compare panel can say when a reference is from an older one.
+        __VIEWER_COMMIT__: JSON.stringify(currentCommit()),
     },
     // Top-level await (renderer.init) needs a modern target.
     build: { target: 'esnext' },

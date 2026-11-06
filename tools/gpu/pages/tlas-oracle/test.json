@@ -1,0 +1,4 @@
+{
+    "description": "B1a: instances move every frame (mirrored, non-uniformly scaled, hidden, singular, created, destroyed); rays checked against the CPU reference after every move, and the top level checked node by node. Runs the GPU refit (device with subgroups) and the CPU fallback (device without) and compares them.",
+    "timeoutMs": 300000
+}

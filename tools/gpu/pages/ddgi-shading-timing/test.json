@@ -1,0 +1,5 @@
+{
+    "description": "T1.6 timing: GPU ms of DDGI sampling at 2560x1440 in the hello forward pass (the pass with giIrradiance minus the same pass with a constant), point-light Cornell, bookmarks 1 and 2. For hand use under the bench lock; 3 runs per GPU, then to-csv.ts.",
+    "timeoutMs": 600000,
+    "manual": true
+}

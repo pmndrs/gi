@@ -61,35 +61,42 @@ function Test-GlbHasTextures([string]$Path) {
 
 # Finds the scene file for a manifest and returns what the .ini needs:
 # an absolute folder (with a trailing slash), a file name, and a cache folder.
+function Test-IdentityTransform($Transform) {
+    return @(@($Transform.position) | Where-Object { $_ -ne 0 }).Count -eq 0 -and
+           @(@($Transform.rotationDeg) | Where-Object { $_ -ne 0 }).Count -eq 0 -and
+           $Transform.scale -eq 1
+}
+
+# The downloaded file of a model part. A clean re-fetch can still be running; the previous download
+# is kept in downloads.bak, so that is used (with a warning) while assets/downloads has no copy.
+function Resolve-ModelPartSource($Part) {
+    $root = Get-RepoRoot
+    $source = "$root/assets/downloads/$($Part.asset)/$($Part.path)"
+    if (Test-Path -LiteralPath $source) { return $source }
+    $backup = "$root/assets/downloads.bak/$($Part.asset)/$($Part.path)"
+    if (Test-Path -LiteralPath $backup) {
+        Write-Warning "Using $backup (not found in assets/downloads yet)"
+        return $backup
+    }
+    throw "Missing $source. Run 'pnpm assets:fetch' (do not run it while another fetch is going)."
+}
+
 function Resolve-SceneFile($Manifest) {
     $root = Get-RepoRoot
-    if (@($Manifest.parts).Count -ne 1) {
-        throw "Scene '$($Manifest.id)' has $(@($Manifest.parts).Count) parts. The native harness loads one glTF file; multi-part scenes are not supported."
+    $parts = @($Manifest.parts)
+    # The harness loads one glTF file and cannot place it. Scenes with several parts, or with one
+    # model part that has a transform, are merged into one file first (see Resolve-MergedSceneFile).
+    # A single part without a transform is loaded as it is, exactly as before.
+    if ($parts.Count -gt 1 -or ($parts[0].kind -eq 'model' -and -not (Test-IdentityTransform $parts[0].transform))) {
+        return Resolve-MergedSceneFile $Manifest
     }
-    $part = @($Manifest.parts)[0]
+    $part = $parts[0]
 
     if ($part.kind -eq 'procedural') {
         $source = "$root/assets/generated/$($Manifest.id).glb"
         if (-not (Test-Path -LiteralPath $source)) { throw "Missing $source. Run 'pnpm scenes:export' first." }
     } else {
-        $transform = $part.transform
-        $identity = @(@($transform.position) | Where-Object { $_ -ne 0 }).Count -eq 0 -and
-                    @(@($transform.rotationDeg) | Where-Object { $_ -ne 0 }).Count -eq 0 -and
-                    $transform.scale -eq 1
-        if (-not $identity) {
-            throw "Scene '$($Manifest.id)' places its model with a transform (position/rotation/scale). The harness cannot apply one."
-        }
-        $source = "$root/assets/downloads/$($part.asset)/$($part.path)"
-        if (-not (Test-Path -LiteralPath $source)) {
-            # A clean re-fetch can still be running. The previous download is kept in downloads.bak.
-            $backup = "$root/assets/downloads.bak/$($part.asset)/$($part.path)"
-            if (Test-Path -LiteralPath $backup) {
-                Write-Warning "Using $backup (not found in assets/downloads yet)"
-                $source = $backup
-            } else {
-                throw "Missing $source. Run 'pnpm assets:fetch' (do not run it while another fetch is going)."
-            }
-        }
+        $source = Resolve-ModelPartSource $part
     }
 
     $cacheDir = "$root/native/build/cache/$($Manifest.id)/"
@@ -118,6 +125,72 @@ function Resolve-SceneFile($Manifest) {
     return @{ Directory = $directory; File = $fileName; CacheDir = $cacheDir }
 }
 
+# Scenes with several model parts (sponza = Intel's base package + curtains), or one model part
+# with a manifest transform: merge-gltf.mjs writes one native/build/scenes/<id>/<id>.gltf that
+# loads every part with its transform, as the viewer and Cycles do. The merged file points at the
+# parts' own buffers and images (nothing in assets/ is copied or changed). A .glb part is first
+# split into .gltf + .bin + images (glb-to-gltf.mjs, the same step as for single .glb scenes),
+# because a .gltf cannot refer into a .glb. The scene cache is <id>.cache and is deleted whenever
+# the merged file changes.
+function Resolve-MergedSceneFile($Manifest) {
+    $root = Get-RepoRoot
+    $id = $Manifest.id
+    $stage = "$root/native/build/scenes/$id"
+    $cacheDir = "$root/native/build/cache/$id/"
+    New-Item -ItemType Directory -Force -Path $stage, $cacheDir | Out-Null
+
+    $specParts = @()
+    $index = 0
+    foreach ($part in @($Manifest.parts)) {
+        $index++
+        if ($part.kind -ne 'model') {
+            # pnpm scenes:export only writes assets/generated/<id>.glb for procedural-only scenes.
+            throw "Scene '$id' mixes procedural and model parts. There is no exported file for its procedural part, so the native harness cannot load it."
+        }
+        $source = Resolve-ModelPartSource $part
+        $sourceItem = Get-Item -LiteralPath $source
+        if ($sourceItem.Extension -eq '.glb') {
+            $partName = "part$index"
+            $partStage = "$stage/$partName"
+            $staged = "$partStage/$partName.gltf"
+            if (-not (Test-Path -LiteralPath $staged) -or (Get-Item $staged).LastWriteTime -lt $sourceItem.LastWriteTime) {
+                Write-Host "Splitting $($sourceItem.Name) into glTF + images for the merge..."
+                & node "$PSScriptRoot/glb-to-gltf.mjs" $source $partStage $partName | Out-Host
+                if ($LASTEXITCODE -ne 0) { throw 'glb-to-gltf.mjs failed' }
+            }
+            $source = $staged
+        }
+        $specParts += [ordered]@{
+            path = $source.Replace('\', '/')
+            label = "$($part.asset)"
+            transform = [ordered]@{
+                position = @($part.transform.position | ForEach-Object { [double]$_ })
+                rotationDeg = @($part.transform.rotationDeg | ForEach-Object { [double]$_ })
+                scale = [double]$part.transform.scale
+            }
+        }
+    }
+
+    $spec = [ordered]@{ output = $stage; name = $id; parts = $specParts }
+    $specPath = "$stage/$id.merge.json"
+    [System.IO.File]::WriteAllText($specPath, ($spec | ConvertTo-Json -Depth 6))
+    Write-Host "Merging the $($specParts.Count) model parts of '$id' into one glTF for the harness:"
+    & node "$PSScriptRoot/merge-gltf.mjs" $specPath | Out-Host
+    switch ($LASTEXITCODE) {
+        0 { }
+        3 {
+            # The merged file is new or changed: a cache built from the old one would load the old scene.
+            $cacheFile = "$cacheDir$id.cache"
+            if (Test-Path -LiteralPath $cacheFile) {
+                Write-Host "The merged scene changed; deleting its old cache $cacheFile"
+                Remove-Item -LiteralPath $cacheFile -Force
+            }
+        }
+        default { throw "merge-gltf.mjs failed (exit code $LASTEXITCODE)" }
+    }
+    return @{ Directory = "$stage/"; File = "$id.gltf"; CacheDir = $cacheDir }
+}
+
 # Deletes everything inside a folder and keeps the folder. (-LiteralPath "$dir*" would look for a
 # file literally named '*' and silently delete nothing.)
 function Clear-FolderContents([string]$Path) {
@@ -127,19 +200,29 @@ function Clear-FolderContents([string]$Path) {
 
 # --- Probe volume ------------------------------------------------------------
 
-# Probes sit at the centres of equal cells that cover the manifest volume exactly
-# (the same layout as three.js LightProbeGrid): counts = ceil(size / spacing),
-# actual spacing = size / counts. The browser side must use the same rule.
-function Get-VolumeGrid($Volume, [double]$ProbeSpacing = 0) {
+# Two layouts, both centred on volume.center (the harness's volume origin is the grid's centre):
+#   'cells' (default): probes sit at the centres of equal cells that cover the manifest volume
+#           exactly (the same layout as three.js LightProbeGrid): counts = ceil(size / spacing),
+#           actual spacing = size / counts.
+#   'ddgi'  : the grid of our DDGI technique (probeGrid() in packages/ddgi-core, see
+#           docs/design/ddgi.md): counts = floor(size / spacing) + 1 per axis, spacing exactly as
+#           given. Used for timing at matched probe counts and positions (T1.9).
+function Get-VolumeGrid($Volume, [double]$ProbeSpacing = 0, [ValidateSet('cells', 'ddgi')][string]$GridRule = 'cells') {
     # $ProbeSpacing > 0 replaces the manifest's spacing (for timing sweeps over the probe count)
     $target = if ($ProbeSpacing -gt 0) { $ProbeSpacing } else { [double]$Volume.probeSpacing }
     $counts = @()
     $spacing = @()
     for ($axis = 0; $axis -lt 3; $axis++) {
         $size = [double]$Volume.size[$axis]
-        $n = [int][math]::Max(1, [math]::Ceiling($size / $target - 1e-4))
-        $counts += $n
-        $spacing += $size / $n
+        if ($GridRule -eq 'ddgi') {
+            # The same small tolerance as probeGrid(), so 3.0 / 0.5 does not floor to 5
+            $counts += [int]([math]::Floor($size / $target + 1e-6) + 1)
+            $spacing += $target
+        } else {
+            $n = [int][math]::Max(1, [math]::Ceiling($size / $target - 1e-4))
+            $counts += $n
+            $spacing += $size / $n
+        }
     }
     return @{
         Center = @($Volume.center | ForEach-Object { [double]$_ })
@@ -184,6 +267,7 @@ function ConvertTo-Vec([object[]]$Values, [int]$Digits = 4) {
 #                 which no probe work happens at all. Timing runs set this (fork ini option
 #                 ddgi.volume.0.probeVariability.skipConverged=0).
 #   ProbeSpacing: > 0 replaces the manifest probe spacing (timing sweeps over the probe count)
+#   GridRule    : 'cells' (default) or 'ddgi' (our DDGI's floor(size / spacing) + 1 grid), see Get-VolumeGrid
 function New-HarnessIni {
     param(
         $Manifest,
@@ -200,11 +284,12 @@ function New-HarnessIni {
         [switch]$HideUi,
         [int]$WarmupFrames = 300,
         [switch]$UpdateEveryFrame,
-        [double]$ProbeSpacing = 0
+        [double]$ProbeSpacing = 0,
+        [ValidateSet('cells', 'ddgi')][string]$GridRule = 'cells'
     )
     $root = Get-RepoRoot
     $harness = "$root/native/rtxgi-ddgi/samples/test-harness"
-    $grid = Get-VolumeGrid $Manifest.volume $ProbeSpacing
+    $grid = Get-VolumeGrid $Manifest.volume $ProbeSpacing $GridRule
     $s = $grid.MinSpacing
     $cameras = @($Manifest.cameras)
     if ($Camera -lt 1 -or $Camera -gt $cameras.Count) {
@@ -215,8 +300,19 @@ function New-HarnessIni {
     switch ($env.type) {
         'none' { $skyColor = '0 0 0'; $skyIntensity = 1 }
         'color' { $skyColor = ConvertTo-Vec $env.color; $skyIntensity = if ($null -ne $env.intensity) { $env.intensity } else { 1 } }
-        # The harness only has a flat sky colour, so a procedural sky becomes a plain blue-white sky.
-        'procedural' { $skyColor = '0.6 0.75 1.0'; $skyIntensity = 0.5 * $(if ($null -ne $env.intensity) { $env.intensity } else { 1 }) }
+        # The harness's shaders take one flat sky radiance for every ray that misses
+        # (app.skyRadiance), not an image, so a procedural sky becomes the shared sky
+        # file's flat equivalent: the uniform radiance that gives a flat open ground the
+        # same irradiance as the file, per channel (scenes/sky/<id>.json, written by
+        # tools/sky/generate.ts; environment.intensity is already in it). Unlike the file,
+        # the harness also returns it below the horizon.
+        'procedural' {
+            $sidecarPath = "$root/scenes/sky/$($Manifest.id).json"
+            if (-not (Test-Path $sidecarPath)) { throw "Sky sidecar $sidecarPath is missing; run 'node tools/sky/generate.ts'." }
+            $radiance = @((Get-Content -Raw $sidecarPath | ConvertFrom-Json).flatEquivalentRadianceRgb)
+            $skyIntensity = ($radiance | Measure-Object -Maximum).Maximum
+            $skyColor = ($radiance | ForEach-Object { Format-Number ($_ / $skyIntensity) 6 }) -join ' '
+        }
     }
 
     $showProbes = if ($Clean) { 0 } else { 1 }
@@ -264,7 +360,7 @@ function New-HarnessIni {
     $ini.Add("scene.screenshotPath=$screenshots")
     $ini.Add("scene.activeCamera=$($Camera - 1)")
     $ini.Add("scene.skyColor=$skyColor")
-    $ini.Add("scene.skyIntensity=$(Format-Number $skyIntensity)")
+    $ini.Add("scene.skyIntensity=$(Format-Number $skyIntensity 6)")
     $ini.Add('')
     $ini.Add('# scene lights (directional: lux as power; point and spot: candela as power, range as radius)')
 
@@ -463,7 +559,7 @@ function Assert-HarnessCompleted([string]$RunDir, [datetime]$LaunchTime, [string
 # --- Scene cache ---------------------------------------------------------------
 
 # Measured first-load times on the RTX 3060 laptop (texture conversion on the CPU, one thread, no progress):
-# Sponza about 100 s, Bistro exterior about 18.5 minutes (277 textures, 1.4 GB cache).
+# Sponza about 100 s (base package alone; 112 s with the curtains merged in, 330 MB cache), Bistro exterior about 18.5 minutes (277 textures, 1.4 GB cache).
 $script:CacheBuildEstimate = @{
     'sponza' = 'about 2 minutes'
     'bistro-interior' = 'about 8 to 10 minutes'

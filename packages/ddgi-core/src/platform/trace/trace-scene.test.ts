@@ -10,12 +10,18 @@ import {
     TOP_LEVEL_HEADER_WORDS,
     TRACE_STACK_SIZE,
 } from './layout.ts';
-import { buildMeshBvh } from './mesh-bvh.ts';
+import { createTinyBvhBuilder } from '@pmndrs/bvh';
+import type { MeshBvh, MeshGeometry } from './mesh-bvh.ts';
+import { buildMeshBvhWithTinyBvh } from './mesh-bvh-topology.ts';
 import { addToTally, compareAny, compareClosest, newTally } from './oracle-compare.ts';
 import { createRandom, randomAffine, randomRays, randomTriangleSoup, tessellatedQuad } from './oracle-fixtures.ts';
 import { buildReferenceScene, traceAnyReference, traceClosestReference } from './reference-tracer.ts';
 import { assembleTraceScene, type TraceSceneInstance } from './scene-assembly.ts';
 import { buildTopLevel, invertAffine, transformBounds } from './top-level.ts';
+
+// Mesh trees come from tinybvh (WASM), the only mesh builder since B0 (DECISIONS 2026-11-04).
+const tinyBvh = await createTinyBvhBuilder();
+const buildMeshBvh = (geometry: MeshGeometry): MeshBvh => buildMeshBvhWithTinyBvh(geometry, tinyBvh);
 
 function multiplyAffine(a: ArrayLike<number>, b: ArrayLike<number>): number[] {
     // Column-major 4x4 product a * b.
@@ -228,8 +234,9 @@ describe('CPU traversal against the brute-force reference', () => {
         expect(stats.maxStackSize).toBeLessThanOrEqual(scene.requiredStackSize);
     });
 
-    it('gives front faces from world-space winding, including for mirrored instances', () => {
+    it('gives front faces on the authored side, also for mirrored instances (DECISIONS 2026-11-04)', () => {
         // One triangle facing +Z, seen from above and below, plain and mirrored in x.
+        // Mirroring x keeps the authored +Z side, so both copies show their front from above.
         const mesh = { positions: new Float32Array([-1, -1, 0, 1, -1, 0, 0, 1, 0]) };
         const plain = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
         const mirror = [-1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 10, 0, 0, 1];
@@ -242,8 +249,8 @@ describe('CPU traversal against the brute-force reference', () => {
         const up = { direction: [0, 0, 1] as const, tMin: 0, tMax: 100 };
         expect(tracer.closest({ ...down, origin: [0, 0, 5] })?.frontFace).toBe(true);
         expect(tracer.closest({ ...up, origin: [0, 0, -5] })?.frontFace).toBe(false);
-        expect(tracer.closest({ ...down, origin: [10, 0, 5] })?.frontFace).toBe(false);
-        expect(tracer.closest({ ...up, origin: [10, 0, -5] })?.frontFace).toBe(true);
+        expect(tracer.closest({ ...down, origin: [10, 0, 5] })?.frontFace).toBe(true);
+        expect(tracer.closest({ ...up, origin: [10, 0, -5] })?.frontFace).toBe(false);
     });
 
     it('refuses a scene whose trees could overflow the stack', () => {

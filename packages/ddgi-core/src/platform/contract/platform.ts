@@ -97,6 +97,16 @@ export interface GIPlatform {
 
     /** Forget all accumulated history (a camera cut or a scene swap). */
     resetHistory(): void;
+    /**
+     * Measure again how much work fits in `budget.gpuMs` (budget v2), at the
+     * next frame with a millisecond budget: a short burst of frames, best run
+     * back to back behind a loading screen. The platform calibrates by itself
+     * after `prepare`; a geometry change only marks the calibration stale
+     * (`stats.counters['<technique> budget'].stale`), because a burst during
+     * play makes frames heavier for a moment. A new `gpuMs` needs no new
+     * calibration.
+     */
+    recalibrate(): void;
     /** Free everything the platform allocated. The device and host resources are untouched. */
     dispose(): void;
 }
@@ -111,9 +121,12 @@ export type RequiredLimits = Partial<Record<Exclude<keyof GPUSupportedLimits, '_
 export interface GIPlatformModule {
     createGI(device: GPUDevice, options?: GIPlatformOptions): GIPlatform;
     /**
-     * Limits to request from this adapter: raised storage-buffer counts and
-     * binding sizes, capped at what the adapter supports. Typical scenes work
-     * at default limits too, by splitting large buffers across bindings.
+     * Limits to request from this adapter: the largest storage binding and
+     * buffer, and every storage buffer per stage, capped at what the adapter
+     * supports. Small scenes (Cornell, two-room, the furnished room) work at
+     * default limits; large ones (Sponza, Bistro) need these raised limits,
+     * because nothing is split across bindings (DECISIONS 2026-11-05). Without
+     * them the platform throws a `GILimitError` naming the limit.
      */
     requiredLimits(adapter: GPUAdapter): RequiredLimits;
     /** Optional features worth requesting (`timestamp-query`, `float32-filterable`). */

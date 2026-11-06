@@ -5,7 +5,7 @@ Status: **package and H-PLOC target decided by Dennis 2026-11-04** (see "Decided
 - [research/bvh-libraries.md](../../research/bvh-libraries.md) (code we can port);
 - [research/webgpu-compute-for-bvh.md](../../research/webgpu-compute-for-bvh.md) (what WebGPU allows).
 
-It extends [trace.md](trace.md), which covers the T0.10 spike. Decisions it relies on are in [DECISIONS](../DECISIONS.md) (2026-11-04):
+It extends [trace.md](trace.md), which covers the T0.10 spike. How the builders work inside is in [bvh-builders.md](bvh-builders.md), how to use the package in [packages/bvh/README.md](../../packages/bvh/README.md), and an outline for splitting it out in [bvh-package-split.md](bvh-package-split.md). Decisions it relies on are in [DECISIONS](../DECISIONS.md) (2026-11-04):
 - BVH work on the GPU where possible;
 - subgroups first, with one declared fallback;
 - three.js is the only adapter until v1.
@@ -35,7 +35,7 @@ An engine-free BVH module inside the platform, with its own tests and benchmark.
 | Mesh build | Our binned SAH on the CPU, 28 s for Sponza | **Now:** tinybvh compiled to WASM in a worker, as the CPU path and the high-quality "bake". **Then:** a GPU build, LBVH first, then PLOC or H-PLOC | H-PLOC builds Sponza in 0.74 ms (7900 XT) and 0.44 ms (RTX 4080 SUPER), with trees within 9% of the best builder. LBVH trees are 33% worse. |
 | Top level | CPU rebuild, 1–10 ms per move, 86–121 ms for 10k instances | GPU LBVH or PLOC every frame when instances move | H-PLOC: 1M instances in 2.2 ms. Our estimate for 10k on the 3060 is under 0.2 ms. |
 | Deforming meshes | Planned GPU refit (M3) | Same refit, done bottom-up with a parent counter, so no float atomics. Rebuild on the GPU when SAH cost drifts past a limit. | Standard practice in production engines |
-| Node layout | 64-byte two-child (Aila–Laine) | **Keep.** tinybvh's `BVH_GPU` is byte-for-byte ours. CWBVH (compressed 8-wide) gets its own spike later. | CWBVH: 1.9–2.1× faster, but those numbers use CUDA-specific instructions and an old baseline. |
+| Node layout | 64-byte two-child (Aila–Laine) | **Keep.** tinybvh's `BVH_GPU` is byte-for-byte ours. CWBVH (compressed 8-wide) was tried in B3 and dropped. | CWBVH: 1.9–2.1× faster in the paper, on CUDA against an old baseline. Re-checked in B3 (2026-11-05, WebGPU, RTX 3060, same tinybvh trees and rays): closest-hit about 1.0× on Sponza and 0.82× on Bistro interior, for nodes about 4× smaller. |
 | Sort and scan | None yet | Reduce-then-scan radix sort, subgroup version first. One-sweep decoupled look-back only as an optional fast path behind a self-test. | WebGPU doesn't guarantee forward progress. Gridwise's own docs say look-back can fail on Apple and ARM. |
 | Trace | Stack walk, watertight test | Part C fixes as planned (row vectors, any-hit early exit). Cross-check our walk against tinybvh's `traverse_bvh2.cl`. | Watertight costs 45% on NVIDIA versus 20% on Intel, which points at how the code is written. |
 
@@ -43,7 +43,7 @@ An engine-free BVH module inside the platform, with its own tests and benchmark.
 
 1. **tinybvh** (MIT, active): the WASM CPU builder, `BVH_GPU` layout, traversal reference, and `BuildHPLOC` as the CPU oracle for our GPU H-PLOC. NexusBVH reports identical trees from it.
    - Without cross-origin isolation, WASM threads need SharedArrayBuffer, so the drop-in default is single-threaded. Measure that.
-2. **HIPRT** (MIT): `LbvhBuilderKernels.h` (186 lines), `PlocBuilderKernels.h` (311 lines) and `MortonCode.h`, ported to WGSL with subgroup operations.
+2. **HIPRT** (MIT): `LbvhBuilderKernels.h` (186 lines), `PlocBuilderKernels.h` (311 lines) and `MortonCode.h`, ported to WGSL with subgroup operations. (B2 ported tinybvh's `BuildHPLOC` instead of the PLOC kernels; whether a separate PLOC builder is still wanted is Dennis's call.)
    - **Port rule:** never assume a 32- or 64-wide warp; read `subgroup_size`.
 3. **NexusBVH** (Apache-2.0, CUDA): the H-PLOC reference. It is heavy on warp ballots.
    - **Morton codes:** WGSL has no u64, so its 64-bit codes would be emulated as `vec2<u32>`. That costs twice the radix-sort passes (8 instead of 4).
@@ -59,9 +59,9 @@ An engine-free BVH module inside the platform, with its own tests and benchmark.
 | Stage | What | Done when (RTX 3060 Laptop, Chrome; Intel UHD must also pass, with no speed bar) | Where |
 | --- | --- | --- | --- |
 | **B0** | tinybvh WASM builder in a worker, behind the Builder contract (SIMD Bonsai builder, emsdk 6.0.13 pinned). Our CPU builder is deleted once the checks pass. Status 2026-11-04: Sponza 2.2-2.7 s; B0b moves the layout conversion into the WASM. | Sponza builds in ≤ 2 s single-threaded, with the time recorded. The oracle passes. Trace speed on tinybvh trees is ≥ our current trees. | T0.10 part C, with the three-mesh-bvh experiment |
-| **B1** | GPU LBVH, subgroups first: Morton codes, sort, Apetrei build, SAH leaf collapse. GPU top-level rebuild every frame, and BLAS refit. | Sponza GPU build ≤ 50 ms. 10k-instance top level ≤ 0.5 ms of GPU time. The oracle passes on both GPUs. No subgroups: the BVH falls back to B0, and a test covers that. | M1 |
-| **B2** | GPU PLOC, then H-PLOC | H-PLOC trees match tinybvh `BuildHPLOC` (same SAH cost ±1%). SAH cost ≤ 1.15× tinybvh's best CPU build. Sponza build ≤ 50 ms. Trace ≥ 0.9× of B0 trees. | M1 or M2, by speed need |
-| **B3** | CWBVH spike: compressed 8-wide nodes and traversal, with tinybvh's builder and kernels as reference | Adopt if closest-hit Mrays/s ≥ 1.3× BVH2 on Sponza on both GPUs. Otherwise record the result and drop it. | After B2 |
+| **B1** | GPU LBVH, subgroups first: Morton codes, sort, Apetrei build, SAH leaf collapse. GPU top-level rebuild every frame, and BLAS refit. Status 2026-11-05: in review. The top level is B1a's GPU refit. Mesh trees are built in batches (every mesh with the same dispatches), Morton codes use cubic cells (stretched cells made flat meshes 2.4-2.6x worse), the climb runs in two rounds; [bvh-builders.md](bvh-builders.md) has the design and PROGRESS (B1) the numbers. | Sponza GPU build ≤ 50 ms. 10k-instance top level ≤ 0.5 ms of GPU time. The oracle passes on both GPUs. No subgroups: the BVH falls back to B0, and a test covers that. | M1 |
+| **B2** | GPU PLOC, then H-PLOC. Status 2026-11-05: in review. H-PLOC only: its PLOC merge is the PLOC step, so no separate PLOC builder was built (the lead's proposal; Dennis to confirm). tinybvh's `BuildHPLOC` ported (with the WASM's own `BuildHPLOC` as the oracle), the merge done by a subgroup with cluster slots for any subgroup size, exact ties paired up instead of chaining the tree, nodes numbered without a counter, B1's cubic 30-bit codes by default; [bvh-builders.md](bvh-builders.md) has the design and PROGRESS (B2) the numbers. | H-PLOC trees match tinybvh `BuildHPLOC` (same SAH cost ±1%). SAH cost ≤ 1.15× tinybvh's best CPU build. Sponza build ≤ 50 ms. Trace ≥ 0.9× of B0 trees. | M1 or M2, by speed need |
+| **B3** | CWBVH spike: compressed 8-wide nodes and traversal, with tinybvh's builder and kernels as reference. Status 2026-11-05: measured and dropped by Dennis (cool-start RTX 3060: closest-hit about 1.0× BVH2 on Sponza, 0.96× or 1.02× by timing order, and 0.82× on Bistro interior; the oracle passes on both GPUs). PROGRESS (B3) has the numbers and reasons; the code stays on branch `bvh-b3`. | Adopt if closest-hit Mrays/s ≥ 1.3× BVH2 on Sponza on both GPUs. Otherwise record the result and drop it. | After B2 |
 | **Ongoing** | Paper watch: a new method is a new builder or layout behind the contract | Runs the same oracle and `bench/results/trace.csv` rows | Any time |
 
 The speed limits above are planning numbers. Like any threshold, changing one is a DECISIONS entry.

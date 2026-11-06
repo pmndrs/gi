@@ -85,9 +85,12 @@ describe.each(Object.keys(proceduralBuilders))('builder %s', (name) => {
 
     it('is built in realistic metres', () => {
         const { min, max } = sceneBounds(scene);
+        // The open ground is a 200 m slab with a 1 m cube on it: open land under the
+        // sky, deliberately wide and flat. Every other scene is room-sized.
+        const limits = name === 'open-ground' ? { smallest: 1, largest: 250 } : { smallest: 2, largest: 20 };
         for (let axis = 0; axis < 3; axis++) {
-            expect(max[axis] - min[axis]).toBeGreaterThan(2);
-            expect(max[axis] - min[axis]).toBeLessThan(20);
+            expect(max[axis] - min[axis]).toBeGreaterThan(limits.smallest);
+            expect(max[axis] - min[axis]).toBeLessThan(limits.largest);
         }
     });
 });

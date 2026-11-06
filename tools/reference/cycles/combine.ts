@@ -1,0 +1,179 @@
+/**
+ * Averages several renders of the same shot made with different seeds into
+ * one reference, so a long render can be split into short bench-lock holds
+ * (one shot per hold; other lanes time between them).
+ *
+ *   node tools/reference/cycles/run.ts --scene sponza --camera 1 --samples 2048 --seed 0 --name-suffix=-part0 ...
+ *   node tools/reference/cycles/run.ts --scene sponza --camera 1 --samples 2048 --seed 1 --name-suffix=-part1 ...
+ *   node tools/reference/cycles/combine.ts --dir bench/references/sponza/colonnade-from-the-floor \
+ *        --prefix cycles-untextured --parts=-part0,-part1
+ *
+ * Writes `<prefix>-{full,indirect,direct,lights-direct,gi}.exr` and `<prefix>.json`.
+ *
+ * Why averaging is exact: each part is an unbiased Monte Carlo estimate of the
+ * same pixel values with independent random numbers (a different seed), so
+ * the mean of N parts of S samples each is the same estimator as one render of
+ * N × S samples. That holds only if the parts render the same thing the same
+ * way, so `checkParts` refuses parts that differ in their shot (camera, size,
+ * scene and material-table hashes, display), sample count, pixel filter,
+ * device, commit or bounce count, or that share a seed.
+ *
+ * Denoised viewing copies are not averaged; `--denoised-from -part0` keeps
+ * that part's denoised copy (rendered with --denoise) as the reference's
+ * viewing copy, with its stored check.
+ *
+ * Two parts also give the reference's noise: `noise.ts` compares them.
+ */
+
+import { readFile, writeFile } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
+import { parseArgs } from 'node:util';
+import { readExr, writeExr, type FloatImage } from '../../compare/exr.ts';
+
+/** The images every render writes (render.py and run.ts), by kind. */
+const KINDS = ['full', 'indirect', 'direct', 'lights-direct', 'gi'] as const;
+
+/** The parts of a render's json (render.py `meta`) that combining reads. */
+export interface PartMeta {
+    readonly seed: number;
+    readonly samplesPerPixel: number;
+    readonly maxBounces: number;
+    readonly shot?: {
+        readonly camera: unknown;
+        readonly scene: unknown;
+        readonly display: unknown;
+        readonly render: {
+            readonly pixelFilter: unknown;
+            readonly device: string;
+            readonly git: { readonly commit: string } | null;
+        };
+    };
+    readonly [field: string]: unknown;
+}
+
+/**
+ * What must agree between parts, as (readable name, value) pairs. Compared as
+ * JSON, so nested objects (camera, scene hashes) compare field by field.
+ */
+function partSettings(meta: PartMeta): ReadonlyArray<readonly [string, unknown]> {
+    const shot = meta.shot;
+    if (!shot) throw new Error('a part has no stored shot (rendered before T1.13)');
+    return [
+        ['camera and size', shot.camera],
+        ['scene, sky or material table', shot.scene],
+        ['exposure or tone mapping', shot.display],
+        ['sample count', meta.samplesPerPixel],
+        ['pixel filter', shot.render.pixelFilter],
+        ['device', shot.render.device],
+        ['commit', shot.render.git?.commit ?? null],
+        ['bounce count', meta.maxBounces],
+    ];
+}
+
+/**
+ * Throws, naming the first difference, unless every part can be averaged
+ * with the first: the same settings (`partSettings`) and all seeds different.
+ */
+export function checkParts(names: readonly string[], metas: readonly PartMeta[]): void {
+    if (metas.length < 2) throw new Error('give at least two parts');
+    const first = partSettings(metas[0]);
+    metas.forEach((meta, index) => {
+        const settings = partSettings(meta);
+        settings.forEach(([label, value], settingIndex) => {
+            if (JSON.stringify(value) !== JSON.stringify(first[settingIndex][1])) {
+                throw new Error(`part ${names[index]} has a different ${label} than ${names[0]}`);
+            }
+        });
+    });
+    const seeds = metas.map((meta) => meta.seed);
+    if (new Set(seeds).size !== seeds.length) throw new Error(`the parts must use different seeds; got ${seeds.join(', ')}`);
+}
+
+/** The pixel-by-pixel mean of images of one size. */
+export function averageImages(images: readonly FloatImage[]): FloatImage {
+    const [first] = images;
+    for (const image of images) {
+        if (image.width !== first.width || image.height !== first.height) throw new Error('the parts differ in size');
+    }
+    const rgb = new Float32Array(first.rgb.length);
+    for (const image of images) {
+        for (let index = 0; index < rgb.length; index++) {
+            rgb[index] += image.rgb[index];
+        }
+    }
+    for (let index = 0; index < rgb.length; index++) {
+        rgb[index] /= images.length;
+    }
+    return { width: first.width, height: first.height, rgb };
+}
+
+async function main(): Promise<void> {
+    const { values } = parseArgs({
+        options: {
+            dir: { type: 'string' },
+            prefix: { type: 'string', default: 'cycles' },
+            parts: { type: 'string' },
+            // A part rendered with --denoise whose denoised copy becomes the reference's viewing copy.
+            'denoised-from': { type: 'string' },
+        },
+    });
+    if (!values.dir || !values.parts) throw new Error('usage: combine.ts --dir <reference folder> [--prefix cycles] --parts=-part0,-part1');
+    const directory = resolve(values.dir);
+    const prefix = values.prefix ?? 'cycles';
+    const parts = values.parts.split(',').filter(Boolean);
+
+    const readMeta = async (part: string): Promise<PartMeta> => JSON.parse(await readFile(join(directory, `${prefix}${part}.json`), 'utf8')) as PartMeta;
+    const metas = await Promise.all(parts.map(readMeta));
+    checkParts(parts, metas);
+    const seeds = metas.map((meta) => meta.seed);
+
+    const files: string[] = [];
+    for (const kind of KINDS) {
+        const images = await Promise.all(parts.map(async (part) => readExr(await readFile(join(directory, `${prefix}-${kind}${part}.exr`)))));
+        const name = `${prefix}-${kind}.exr`;
+        await writeFile(join(directory, name), writeExr(averageImages(images)));
+        files.push(name);
+    }
+
+    const samplesEach = metas[0].samplesPerPixel;
+    const sum = (field: string): number => Math.round(metas.reduce((total, meta) => total + (meta[field] as number), 0) * 100) / 100;
+    const combined = structuredClone(metas[0]) as Record<string, unknown> & { shot: { render: Record<string, unknown> } };
+    combined.samplesPerPixel = samplesEach * parts.length;
+    combined.seed = seeds;
+    combined.renderSeconds = sum('renderSeconds');
+    combined.lightsOnlySeconds = sum('lightsOnlySeconds');
+    combined.files = files;
+    combined.jsonFile = `${prefix}.json`;
+    combined.denoisedFile = null;
+    combined.denoiseCheck = undefined;
+    combined.combinedFrom = { parts, samplesEach, note: 'the mean of independent renders with different seeds (tools/reference/cycles/combine.ts)' };
+    combined.finishedAt = metas.map((meta) => meta.finishedAt as string).sort().at(-1);
+    combined.shot.render.samplesPerPixel = combined.samplesPerPixel;
+    combined.shot.render.seed = seeds;
+    combined.shot.render.renderSeconds = combined.renderSeconds;
+    combined.shot.render.denoised = null;
+    combined.shot.render.combinedFrom = parts;
+    const denoisedFrom = values['denoised-from'];
+    if (denoisedFrom) {
+        // The viewing copy is one part's denoised image (fewer samples than the average; it is only looked at).
+        const index = parts.indexOf(denoisedFrom);
+        if (index < 0) throw new Error(`--denoised-from ${denoisedFrom} is not one of the parts`);
+        const part = metas[index] as PartMeta & { denoisedFile?: string | null; denoiseCheck?: unknown; shot: { render: { denoised?: object } } };
+        if (!part.denoisedFile) throw new Error(`part ${denoisedFrom} has no denoised copy (render it with --denoise)`);
+        const name = `${prefix}-full-denoised.exr`;
+        await writeFile(join(directory, name), await readFile(join(directory, part.denoisedFile)));
+        combined.denoisedFile = name;
+        combined.denoiseCheck = part.denoiseCheck;
+        combined.shot.render.denoised = { ...part.shot.render.denoised, file: name, fromPart: denoisedFrom, samplesPerPixel: samplesEach };
+    }
+    await writeFile(join(directory, `${prefix}.json`), JSON.stringify(combined, null, 2));
+    console.log(`wrote ${files.join(', ')} and ${prefix}.json: ${parts.length} parts × ${samplesEach} samples = ${combined.samplesPerPixel} (seeds ${seeds.join(', ')})`);
+}
+
+// Run only as a command, not when the tests import the checks.
+if (process.argv[1] && resolve(process.argv[1]) === resolve(import.meta.filename)) {
+    main().catch((error) => {
+        console.error(error instanceof Error ? error.message : error);
+        process.exit(1);
+    });
+}

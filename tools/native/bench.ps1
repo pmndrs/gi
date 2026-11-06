@@ -28,6 +28,7 @@
     gpu_ms_<pass>, _median            GPU timestamps around that pass, mean and median
     cpu_ms_frame, _median             CPU time of the whole frame loop iteration
     mrays_per_s                       rays_traced_per_frame / median probe trace time
+    scene_parts                       manifest parts loaded (multi-part scenes are merged into one glTF)
 
   Never run this while a browser GPU benchmark is running. The lock enforces that for scripts
   that also use it; if you time something by hand, take the lock yourself.
@@ -40,6 +41,20 @@
 
 .PARAMETER ProbeSpacing
   Replaces the manifest probe spacing (metres), for sweeps over the probe count.
+
+.PARAMETER GridRule
+  'cells' (default): the harness's usual grid, ceil(size / spacing) probes per axis at cell centres.
+  'ddgi': our DDGI technique's grid, floor(size / spacing) + 1 per axis at exactly the manifest
+  spacing, centred on the volume centre (matched probe counts and positions). Its rows get
+  grid_ddgi,1, so they are not mixed with the default runs.
+
+.PARAMETER Runs
+  Repeat the whole scene list this many times (interleaved: a, b, c, a, b, c, ...) inside one
+  hold of the GPU lock. Run-to-run drift is 15-30%, so take 3 or more.
+
+.PARAMETER Label
+  Free text written as a 'label' row with each run (letters, digits, '.', '-', '_'), to mark a
+  set of runs, for example t1.9-matched.
 
 .PARAMETER Tag
   Added to the run folder name, so sweep runs do not overwrite each other.
@@ -71,6 +86,9 @@ param(
     [string]$Csv = '',
     [double]$ProbeSpacing = 0,
     [string]$Tag = '',
+    [ValidateSet('cells', 'ddgi')][string]$GridRule = 'cells',
+    [ValidateRange(1, 20)][int]$Runs = 1,
+    [ValidatePattern('^[A-Za-z0-9._-]*$')][string]$Label = '',
     [switch]$SkipConverged,
     [switch]$HideUi,
     [switch]$NoAppend
@@ -101,6 +119,24 @@ function Add-NativeCsvRows([string[]]$Rows) {
     if (-not (Test-Path -LiteralPath $Csv)) { Set-Content -LiteralPath $Csv -Value 'date,commit,device,browser,scene,metric,value' }
     Add-Content -LiteralPath $Csv -Value $Rows
     Write-Host "Appended $($Rows.Count) rows for this scene to $Csv"
+}
+
+# The NVIDIA GPU's clock while this run was going: tools/reference/bench-lock.ts `run` samples nvidia-smi and
+# keeps a summary in the file named by DDGI_CLOCK_FILE (tools/gpu/clock-note.ts). Rows are note/sm_clock_mhz
+# (median over the samples under load, all samples if fewer than three) plus min, max and the memory clock.
+# Returns nothing when the file is missing, so a run outside `bench-lock run` simply has no note.
+function Get-ClockNoteRows {
+    if (-not $env:DDGI_CLOCK_FILE -or -not (Test-Path -LiteralPath $env:DDGI_CLOCK_FILE)) { return @() }
+    try { $clock = Get-Content -LiteralPath $env:DDGI_CLOCK_FILE -Raw | ConvertFrom-Json } catch { return @() }
+    $useLoaded = $clock.smMhzLoaded -and $clock.memMhzLoaded -and $clock.loadedSamples -ge 3
+    $sm = if ($useLoaded) { $clock.smMhzLoaded } else { $clock.smMhz }
+    $mem = if ($useLoaded) { $clock.memMhzLoaded } else { $clock.memMhz }
+    return @(
+        ,@('note/sm_clock_mhz', [double]$sm.median)
+        ,@('note/sm_clock_min_mhz', [double]$sm.min)
+        ,@('note/sm_clock_max_mhz', [double]$sm.max)
+        ,@('note/mem_clock_mhz', [double]$mem.median)
+    )
 }
 
 # "NVIDIA GeForce RTX 3060 Laptop GPU" -> "RTX 3060 Laptop"
@@ -168,15 +204,17 @@ $failedScenes = @()
 # whichever job polls next. The Use-BenchLock calls inside reuse this hold.
 $null = Enter-BenchLock -What "native bench $($Scene -join ',') ($Api)"
 try {
-    foreach ($sceneId in $Scene) {
-        Write-Host "=== $sceneId ($Api) ==="
+    $queue = foreach ($runIndex in 1..$Runs) { foreach ($id in $Scene) { [pscustomobject]@{ Run = $runIndex; Scene = $id } } }
+    foreach ($entry in $queue) {
+        $sceneId = $entry.Scene
+        Write-Host "=== $sceneId ($Api), run $($entry.Run) of $Runs ==="
         try {
             $manifest = Read-SceneManifest $sceneId
             $sceneFile = Resolve-SceneFile $manifest
             $runDir = Get-HarnessRunDir $sceneId $Api "-bench$Tag"
             $config = New-HarnessIni -Manifest $manifest -SceneFile $sceneFile -OutputDir $runDir -Gpu $Gpu `
                 -Width $Width -Height $Height -Vsync 0 -Clean -Camera $Camera -Rays $Rays -AutoBench -WarmupFrames $WarmupFrames `
-                -UpdateEveryFrame:(-not $SkipConverged) -ProbeSpacing $ProbeSpacing -HideUi:$HideUi
+                -UpdateEveryFrame:(-not $SkipConverged) -ProbeSpacing $ProbeSpacing -GridRule $GridRule -HideUi:$HideUi
             Write-Host "Probe grid: $($config.Grid.Counts -join ' x ') = $($config.Grid.Total) probes, $Rays rays per probe, probes updated $(if ($SkipConverged) { 'until converged (upstream)' } else { 'every frame' })"
             $iniPath = "$runDir/$sceneId.ini"
             [System.IO.File]::WriteAllText($iniPath, $config.Text)
@@ -277,8 +315,14 @@ try {
                 resolution_width = $Width; resolution_height = $Height
                 benchmark_frames = $traceValues.Count; warmup_frames = $WarmupFrames
                 camera_bookmark = $Camera
+                # How many manifest parts the harness loaded (several are merged into one glTF).
+                # Sponza rows without this row are older runs of Intel's base package alone, before
+                # the curtains part was added to the manifest.
+                scene_parts = @($manifest.parts).Count
             }
             if ($isSweep) { $fixed['sweep'] = 1 }
+            if ($GridRule -eq 'ddgi') { $fixed['grid_ddgi'] = 1 }
+            if ($Label) { $fixed['label'] = $Label }
             foreach ($key in $fixed.Keys) { $rows.Add(@($key, $fixed[$key])) }
             # Passes that clean mode switches off are left out (always 0)
             $skipped = @('Path Tracing', 'DDGI Probe Vis', 'DDGI Texture Vis', 'RTAO')
@@ -292,6 +336,7 @@ try {
                 $rows.Add(@('cpu_ms_frame', [math]::Round($cpuStats['Frame'].Mean, 3)))
                 $rows.Add(@('cpu_ms_frame_median', [math]::Round($cpuStats['Frame'].Median, 3)))
             }
+            foreach ($note in (Get-ClockNoteRows)) { $rows.Add($note) }
             if ($traceMedian -gt 0) { $rows.Add(@('mrays_per_s', [math]::Round($raysTraced / $traceMedian / 1000, 0))) }
             $sceneRows = foreach ($row in $rows) {
                 $value = if ($row[1] -is [double]) { $row[1].ToString('0.####', $script:Invariant) } else { [string]$row[1] }
@@ -302,7 +347,7 @@ try {
 
             $pick = { param($n) if ($stats.Contains($n)) { [math]::Round($stats[$n].Mean, 3) } else { $null } }
             $summary.Add([pscustomobject]@{
-                scene = $sceneId; api = $Api; device = $deviceName
+                scene = $sceneId; run = $entry.Run; api = $Api; device = $deviceName
                 probes = "$($grid.Counts -join 'x') = $($grid.Total)"
                 active = $states.Active
                 rays = $Rays
@@ -310,6 +355,7 @@ try {
                 trace_ms = & $pick 'Probe Trace'; blend_ms = & $pick 'Blend'; relocate_ms = & $pick 'Relocate'
                 classify_ms = & $pick 'Classify'; lighting_ms = & $pick 'Lighting'; variability_ms = & $pick 'Variability'
                 ddgi_ms = & $pick 'DDGI'; frame_ms = & $pick 'Frame'
+                rays_traced = $raysTraced
                 trace_median = [math]::Round($traceMedian, 3)
                 cpu_frame_ms = $(if ($cpuStats.Contains('Frame')) { [math]::Round($cpuStats['Frame'].Median, 1) } else { $null })
             })

@@ -1,0 +1,5 @@
+{
+    "description": "B2 build timing on sponza: the GPU H-PLOC build first, back to back for about 10 s from a cool card (the pass/fail number, DECISIONS f3e3bba), then its trees traced and matched with tinybvh's BuildHPLOC. tinybvh's trees are built (for the SAH reference) but not traced, so the GPU starts cool. Run under the bench lock, on its own.",
+    "timeoutMs": 900000,
+    "manual": true
+}

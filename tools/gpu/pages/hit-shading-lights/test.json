@@ -1,0 +1,4 @@
+{
+    "description": "Hit shading's direct light (T1.4): a sun on a plane gives E cos(theta), point and spot falloff match three.js r187, light groups, giSurfaceAt and bounceAlbedoCap, and the stochastic light choice is unbiased.",
+    "timeoutMs": 90000
+}

@@ -8,19 +8,23 @@
  */
 
 import { BoxGeometry, Color, Mesh, MeshStandardMaterial } from 'three';
-import type { CameraBookmark, SceneManifest } from '../../../scenes/src/manifest';
+import { defaultExposureEv, type CameraBookmark, type SceneManifest } from '../../../scenes/src/manifest';
 import { CameraRig } from './controls/camera-rig';
-import { ViewerCore, type ToneMappingName, type ViewLayout } from './core/viewer-core';
+import { TONE_MAPPERS, ViewerCore, type ToneMappingName, type ViewLayout } from './core/viewer-core';
+import { shotBookmark } from './scene/reference-files';
 import { newestFrame, resolveGpuWindow } from './render/gpu-time';
 import { findBookmark, loadAllManifests } from './scene/manifests';
 import { LAYER_VIEW_GEOMETRY } from './scene/layers';
 import { nextFrame, type LoadProgress } from './scene/load-scene';
-import { StatsOverlay } from './stats';
+import { PROBE_STATE_LABELS } from './ddgi/library';
+import { halfwaySamples, historyColor, HISTORY_COLORS } from './ddgi/history-colors';
+import { PROBE_STATE_COLORS } from './ddgi/probe-spheres';
+import { DdgiStatsText, StatsOverlay } from './stats';
 import { DEFAULT_LPG_SETTINGS } from './techniques/light-probe-grid-technique';
 import { DEFAULT_VXGI_SETTINGS } from './techniques/vxgi-technique';
 import { TECHNIQUE_LABELS, type TechniqueId } from './techniques/types';
 import { HELP } from './ui/help-text';
-import { Panel, type PanelState } from './ui/panel';
+import { Panel, type DdgiPanelSettings, type PanelState, type ProbeLegendEntry } from './ui/panel';
 import { DEFAULT_URL_STATE, parseUrlState, serializeUrlState, type ViewerUrlState } from './ui/url-state';
 
 export interface ViewerAutomationState {
@@ -34,6 +38,8 @@ export interface ViewerAutomationState {
     prepareMs: number | null;
     frames: number;
     adapter: string;
+    /** DDGI's start-up, milliseconds from when it was created (null until reached, or when DDGI isn't used). */
+    ddgiStartup: { preparedMs: number | null; firstGiMs: number | null; warmedMs: number | null } | null;
 }
 
 declare global {
@@ -96,12 +102,14 @@ export class ViewerApp {
         prepareMs: null,
         frames: 0,
         adapter: '',
+        ddgiStartup: null,
     };
 
     private core!: ViewerCore;
     private rig!: CameraRig;
     private panel!: Panel;
     private stats!: StatsOverlay;
+    private readonly ddgiStats = new DdgiStatsText();
 
     private url: ViewerUrlState = { ...DEFAULT_URL_STATE };
     private manifest: SceneManifest | null = null;
@@ -127,6 +135,16 @@ export class ViewerApp {
     private lastViewCostMs = 0;
     private lastStatusAt = 0;
     private draggingWipe = false;
+    private wasPreparing = false;
+    /**
+     * Set when the Cycles reference comes on screen or its camera view changes: once its
+     * image has loaded, the camera moves to the shot it was rendered from
+     * (`alignWithReference`). `display` also takes the shot's exposure and tone mapping
+     * (only when Compare is started, so a later change by the user sticks).
+     */
+    private pendingShot: { display: boolean } | null = null;
+    /** The aspect the picture is letterboxed to (the reference's), or null for the whole canvas area. */
+    private letterboxAspect: number | null = null;
 
     static async start(): Promise<ViewerApp> {
         const app = new ViewerApp();
@@ -159,6 +177,7 @@ export class ViewerApp {
             this.rig.onPoseChanged(() => this.onCameraMoved());
             // Each GPU sample is one whole frame (see updateTimestamps); the overlay smooths them.
             this.stats = new StatsOverlay(document.body, 'GPU per frame, averaged over recent frames:');
+            this.stats.setExtraLines(() => this.ddgiStats.lines());
             this.panel = new Panel(document.body, this.manifests, this.panelHandlers());
             this.buildWipeLabels();
             this.installPageEvents();
@@ -204,6 +223,10 @@ export class ViewerApp {
                 this.goToBookmark(bookmark);
             }
             this.automation.camera = free ? 'free' : manifest.cameras[this.bookmarkIndex ?? 0].name;
+            this.core.setReferenceBookmark(this.bookmarkIndex ?? 0);
+            // A link that opens on the reference wipe at a camera view lines up with the reference's shot.
+            this.pendingShot = free ? null : { display: false };
+            this.ddgiStats.reset();
             this.rig.update(0);
             this.bookmarkPoseKey = JSON.stringify(this.rig.pose());
 
@@ -256,8 +279,18 @@ export class ViewerApp {
     private applyState(): void {
         this.core.configureProbeGrid({ ...DEFAULT_LPG_SETTINGS, ...this.probeSettings });
         this.core.configureVxgi({ ...DEFAULT_VXGI_SETTINGS, ...this.vxgiSettings });
+        this.core.configureDdgi({
+            budgetMs: this.url.budgetMs,
+            showProbes: this.url.probes,
+            probeColor: this.url.probeColor,
+            screenView: this.url.debug,
+            atlas: this.url.atlas,
+            atlasFill: this.url.atlasFill,
+            atlasExposureEv: this.url.atlasEv,
+            changeFullScalePercent: this.url.change,
+        });
         this.core.setToneMapping(this.url.tone as ToneMappingName);
-        this.core.setExposureEv(this.url.ev);
+        this.core.setExposureEv(this.exposureEv());
         this.core.setUpscale(this.url.upscale ? { quality: this.url.upscale } : null);
         this.core.setLayout(layoutFromState(this.url));
         // The picture changed: an automated run waits a few frames before its screenshot.
@@ -268,6 +301,15 @@ export class ViewerApp {
         this.scheduleUrlUpdate();
     }
 
+    /** The scene's own exposure (manifest `exposureEv`), unless the user or the link chose one. */
+    private sceneExposureEv(): number {
+        return this.manifest ? defaultExposureEv(this.manifest) : 0;
+    }
+
+    private exposureEv(): number {
+        return this.url.ev ?? this.sceneExposureEv();
+    }
+
     private refreshPanel(): void {
         const state: PanelState = {
             sceneId: this.manifest?.id ?? null,
@@ -275,11 +317,22 @@ export class ViewerApp {
             navigation: this.rig.mode,
             flySpeed: this.rig.flySpeed,
             fieldOfView: this.core.camera.fov,
-            exposureEv: this.url.ev,
+            exposureEv: this.exposureEv(),
+            sceneExposureEv: this.sceneExposureEv(),
             toneMapping: this.url.tone as ToneMappingName,
             referenceCube: this.referenceCubeVisible,
             gi: this.url.gi,
             technique: this.url.technique,
+            ddgi: {
+                budgetMs: this.url.budgetMs,
+                probes: this.url.probes,
+                probeColor: this.url.probeColor,
+                debug: this.url.debug,
+                atlas: this.url.atlas,
+                atlasFill: this.url.atlasFill,
+                atlasEv: this.url.atlasEv,
+                change: this.url.change,
+            },
             probeBounces: this.probeSettings.bounces,
             maxProbes: this.probeSettings.maxProbes,
             vxgiBounces: this.vxgiSettings.bounces,
@@ -301,7 +354,8 @@ export class ViewerApp {
             onScene: (id: string) => {
                 const manifest = this.manifests.find((candidate) => candidate.id === id);
                 if (!manifest) return;
-                this.url = { ...this.url, camera: null, freeCamera: null };
+                // Each scene opens at its own exposure.
+                this.url = { ...this.url, camera: null, freeCamera: null, ev: null };
                 void this.openScene(manifest, null);
             },
             onBookmark: (index: number) => {
@@ -312,6 +366,8 @@ export class ViewerApp {
                 this.bookmarkPoseKey = JSON.stringify(this.rig.pose());
                 this.url = { ...this.url, camera: String(index + 1), freeCamera: null };
                 this.automation.camera = this.manifest.cameras[index].name;
+                this.core.setReferenceBookmark(index);
+                this.pendingShot = { display: false };
                 this.refreshPanel();
                 this.scheduleUrlUpdate();
             },
@@ -330,7 +386,7 @@ export class ViewerApp {
                 this.core.camera.fov = degrees;
                 this.core.camera.updateProjectionMatrix();
             },
-            onExposure: (ev: number) => change({ ev }),
+            onExposure: (ev: number | null) => change({ ev }),
             onToneMapping: (name: ToneMappingName) => change({ tone: name }),
             onReferenceCube: (visible: boolean) => {
                 this.referenceCubeVisible = visible;
@@ -338,6 +394,23 @@ export class ViewerApp {
             },
             onGi: (choice: ViewerUrlState['gi']) => change({ gi: choice }),
             onTechnique: (id: ViewerUrlState['technique']) => change({ technique: id }),
+            onDdgiSettings: (settings: DdgiPanelSettings) =>
+                change({
+                    budgetMs: settings.budgetMs,
+                    probes: settings.probes,
+                    probeColor: settings.probeColor,
+                    debug: settings.debug,
+                    atlas: settings.atlas,
+                    atlasFill: settings.atlasFill,
+                    atlasEv: settings.atlasEv,
+                    change: settings.change,
+                }),
+            onDdgiRestart: () => this.core.restartDdgi(),
+            onCompareWithReference: () => {
+                // Go to the reference's own shot: camera, aspect, exposure and tone mapping.
+                this.pendingShot = { display: true };
+                change({ wipe: ['ddgi', 'cycles'], gi: this.url.gi === 'off' ? 'on' : this.url.gi });
+            },
             onProbeSettings: (settings: { bounces: number; maxProbes: number }) => {
                 this.probeSettings = settings;
                 change({});
@@ -350,7 +423,9 @@ export class ViewerApp {
             onWipe: (enabled: boolean, left: TechniqueId, right: TechniqueId) => {
                 if (!enabled) return change({ wipe: null });
                 // Two different techniques are needed for a wipe.
-                const wipe: [TechniqueId, TechniqueId] = left === right ? [left, left === 'none' ? 'lpg' : 'none'] : [left, right];
+                const wipe: [TechniqueId, TechniqueId] = left === right ? [left, left === 'cycles' ? 'ddgi' : 'cycles'] : [left, right];
+                const referenceWasShown = this.url.wipe?.includes('cycles') ?? false;
+                if (wipe.includes('cycles') && !referenceWasShown) this.pendingShot = { display: true };
                 change({ wipe, gi: this.url.gi === 'off' ? 'on' : this.url.gi });
             },
             onUpscale: (quality: ViewerUrlState['upscale']) => change({ upscale: quality }),
@@ -405,13 +480,20 @@ export class ViewerApp {
         this.leftLabel.style.display = wipe ? '' : 'none';
         this.rightLabel.style.display = wipe ? '' : 'none';
         if (!wipe) return;
-        this.leftLabel.textContent = TECHNIQUE_LABELS[wipe[0]];
-        this.rightLabel.textContent = TECHNIQUE_LABELS[wipe[1]];
+        this.leftLabel.textContent = this.wipeLabel(wipe[0]);
+        this.rightLabel.textContent = this.wipeLabel(wipe[1]);
         const box = this.canvasBox();
         const x = `${box.left + this.url.split * box.width}px`;
         this.leftLabel.style.left = x;
         this.rightLabel.style.left = x;
         this.canvas.title = HELP.wipeLine;
+    }
+
+    /** A side's name over the picture; the reference also says when this view has none, so the grey side explains itself. */
+    private wipeLabel(id: TechniqueId): string {
+        const reference = this.core.reference;
+        if (id === 'cycles' && reference?.ready && !reference.available) return `${TECHNIQUE_LABELS.cycles}: none for this camera view (see the panel)`;
+        return TECHNIQUE_LABELS[id];
     }
 
     private wipeActive(): boolean {
@@ -430,7 +512,82 @@ export class ViewerApp {
         // The canvas takes the panel's room (see index.html); the observer below resizes the renderer.
         document.body.classList.toggle('panel-hidden', hidden);
         this.showPanelButton.classList.toggle('visible', hidden);
+        this.applyLetterbox();
         this.updateWipeLabels();
+    }
+
+    // -- lining up with the Cycles reference -------------------------------
+
+    /**
+     * While the Cycles reference is on screen: letterboxes the picture to the
+     * reference's stored aspect, and, when asked (`pendingShot`), moves the
+     * camera to the shot it was rendered from once its image has loaded, so the
+     * wipe lines up pixel for pixel. The camera's near and far planes stay the
+     * viewer's: they only clip, and the reference's 0.01 to 2000 m would cost
+     * depth precision in the raster passes.
+     */
+    private alignWithReference(): void {
+        const reference = this.core.reference;
+        const onScreen = reference !== null && this.url.gi !== 'off' && this.core.activeTechniques().includes(reference);
+        const shot = onScreen ? reference.shot : null;
+        this.setLetterbox(shot ? shot.camera.width / shot.camera.height : null);
+        // A request made while the reference isn't shown is dropped, so it can't move the camera later.
+        if (!onScreen) this.pendingShot = null;
+        if (!this.pendingShot || !onScreen || !reference.ready) return;
+        const pending = this.pendingShot;
+        this.pendingShot = null;
+        // No image, or an old one without a stored shot: nothing to line up with.
+        if (!shot || !this.manifest) return;
+        const bookmark = shotBookmark(shot);
+        this.goToBookmark(bookmark);
+        this.rig.update(0);
+        this.bookmarkPoseKey = JSON.stringify(this.rig.pose());
+        const index = this.manifest.cameras.findIndex((camera) => camera.name === shot.camera.bookmark);
+        if (index >= 0) {
+            this.bookmarkIndex = index;
+            this.url = { ...this.url, camera: String(index + 1), freeCamera: null };
+            this.automation.camera = shot.camera.bookmark;
+        }
+        if (pending.display) {
+            const tone = shot.display.toneMapping in TONE_MAPPERS ? (shot.display.toneMapping as ToneMappingName) : this.url.tone;
+            // The scene's own exposure is the default; only a different one goes into the link.
+            const ev = shot.display.exposureEv === this.sceneExposureEv() ? null : shot.display.exposureEv;
+            this.url = { ...this.url, tone, ev };
+            this.applyState();
+        } else {
+            this.refreshPanel();
+            this.scheduleUrlUpdate();
+        }
+    }
+
+    private setLetterbox(aspect: number | null): void {
+        if (aspect === this.letterboxAspect) return;
+        this.letterboxAspect = aspect;
+        this.applyLetterbox();
+    }
+
+    /**
+     * Fits the canvas to `letterboxAspect` inside the area index.html gives it,
+     * centred, with the page background as the bars. The ResizeObserver then
+     * resizes the renderer, so the camera's aspect is the reference's.
+     */
+    private applyLetterbox(): void {
+        const style = this.canvas.style;
+        style.width = '';
+        style.height = '';
+        style.left = '';
+        style.top = '';
+        const aspect = this.letterboxAspect;
+        if (aspect === null) return;
+        const area = this.canvas.getBoundingClientRect();
+        let width = area.width;
+        let height = area.height;
+        if (width / height > aspect) width = height * aspect;
+        else height = width / aspect;
+        style.width = `${width}px`;
+        style.height = `${height}px`;
+        style.left = `${area.left + (area.width - width) / 2}px`;
+        style.top = `${area.top + (area.height - height) / 2}px`;
     }
 
     /** Sizes the renderer to the canvas's laid-out size. */
@@ -446,6 +603,8 @@ export class ViewerApp {
             this.fitCanvas();
             this.updateWipeLabels();
         }).observe(this.canvas);
+        // A letterboxed canvas has a fixed size, so the observer above wouldn't see the window change.
+        window.addEventListener('resize', () => this.applyLetterbox());
         window.addEventListener('keydown', (event) => {
             const typing = event.target instanceof HTMLElement && ['INPUT', 'SELECT', 'TEXTAREA'].includes(event.target.tagName);
             if (event.code === 'KeyH' && !typing && !event.ctrlKey && !event.metaKey) this.setPanelHidden(!this.panel.hidden);
@@ -489,6 +648,12 @@ export class ViewerApp {
         try {
             this.rig.update(deltaMs / 1000);
             const preparing = this.core.preparing;
+            // Set-up frames are drawn a few times a second on purpose; don't let them into the frame-time average.
+            if (preparing !== this.wasPreparing) {
+                this.wasPreparing = preparing;
+                this.stats.resetFrameTime();
+                this.lastViewStartedAt = null;
+            }
             // While a set-up runs, most of the time goes to it (see VIEW_INTERVAL_WHILE_PREPARING_MS).
             const viewInterval = Math.min(
                 VIEW_INTERVAL_WHILE_PREPARING_MAX_MS,
@@ -503,6 +668,7 @@ export class ViewerApp {
                 if (this.lastViewStartedAt !== null) this.stats.recordFrame(viewStartedAt - this.lastViewStartedAt);
                 this.lastViewStartedAt = viewStartedAt;
                 this.updateTimestamps(preparing);
+                this.updateDdgiStats();
             }
             this.pumpPreparation(preparing, now);
             this.updateStatus(now);
@@ -565,6 +731,63 @@ export class ViewerApp {
             });
     }
 
+    /** DDGI's lines in the stats box, while it is on screen and running. */
+    private updateDdgiStats(): void {
+        const ddgi = this.core.ddgi;
+        const shown = ddgi !== null && this.core.activeTechniques().includes(ddgi) && this.url.gi !== 'off';
+        // Warm-up frames update thousands of probes each; they would swamp the averages of normal frames.
+        const snapshot = shown && this.statsVisible && ddgi.running ? ddgi.statsSnapshot() : null;
+        // The overlay reads the lines itself when it redraws (a few times a second), not every frame.
+        if (snapshot) this.ddgiStats.add(snapshot);
+        else this.ddgiStats.reset();
+    }
+
+    /**
+     * How far down the picture the stats box reaches, as a share of the picture's height (0 while it
+     * is hidden). DDGI's probe atlas stays below it when it fills the picture.
+     */
+    private statsBoxCoverShare(): number {
+        if (!this.statsVisible) return 0;
+        const box = this.stats.element.getBoundingClientRect();
+        const picture = this.canvas.getBoundingClientRect();
+        if (box.height === 0 || picture.height === 0) return 0;
+        return (box.bottom - picture.top) / picture.height;
+    }
+
+    /**
+     * The probe legend. By state: each state's colour and, once the GPU has counted them, how many
+     * probes are in it. By history: the colour scale from a few updates to the full count.
+     */
+    private probeLegend(): ProbeLegendEntry[] {
+        const ddgi = this.core.ddgi;
+        if (this.url.probeColor === 'history') {
+            const maxSamples = ddgi?.historyMaxSamples ?? 0;
+            const halfway = halfwaySamples(maxSamples);
+            return [
+                { color: historyColor(1, maxSamples), label: '1 update: new, or rarely updated (noisy)', count: null },
+                { color: historyColor(halfway, maxSamples), label: `about ${Math.round(halfway)} updates`, count: null },
+                { color: historyColor(maxSamples, maxSamples), label: `${maxSamples} updates: settled, the most kept`, count: null },
+                { color: HISTORY_COLORS.notActive, label: 'not active (off, or not updated yet)', count: null },
+            ];
+        }
+        return Object.entries(PROBE_STATE_LABELS).map(([state, label]) => ({
+            color: PROBE_STATE_COLORS[Number(state)],
+            label,
+            count: ddgi?.probeStateCount(Number(state)) ?? null,
+        }));
+    }
+
+    /** What the panel says about the reference image while it is on screen: what it is, how to make it, or how to line it up. */
+    private referenceNote(): string | null {
+        const reference = this.core.reference;
+        if (!reference || !this.core.activeTechniques().includes(reference)) return null;
+        const lines = [reference.describe()];
+        if (reference.available && !reference.isAligned(this.core.camera)) {
+            lines.push(`It lines up only from the camera it was rendered from: press Compare again, or camera view ${reference.bookmarkNumber} under Scene, to go back.`);
+        }
+        return lines.join(' ');
+    }
+
     private updateStatus(now: number): void {
         if (now - this.lastStatusAt < 200 || !this.core.loaded) return;
         this.lastStatusAt = now;
@@ -572,6 +795,13 @@ export class ViewerApp {
         const { stats } = this.core.loaded;
         lines.push(`${stats.triangles.toLocaleString('en')} triangles, ${stats.meshes} meshes`);
         this.panel.setStatus(lines);
+        this.automation.ddgiStartup = this.core.ddgi ? { ...this.core.ddgi.startup } : null;
+        this.core.ddgi?.setOverlayTopInset(this.statsBoxCoverShare());
+        if (this.url.probes) this.panel.setProbeLegend(this.probeLegend());
+        this.alignWithReference();
+        this.panel.setReferenceNote(this.referenceNote());
+        // The reference loads in the background; its label follows.
+        this.updateWipeLabels();
         const baking = this.core.activeTechniques().find((technique) => !technique.ready);
         this.statusPill.textContent = baking ? `${TECHNIQUE_LABELS[baking.id]}: ${baking.describe()}` : '';
     }

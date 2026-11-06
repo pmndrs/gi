@@ -14,7 +14,11 @@
  *      `download` is one object or an array (a glTF with its .bin and
  *      textures; `file` may name subfolders). Downloads go through a cache in
  *      assets/downloads/.cache/<sha256>, so assets that share a download (the
- *      two Bistro halves) fetch it once.
+ *      two Bistro halves) fetch it once. Downloads use Node's `fetch`, except
+ *      from the hosts in `CURL_HOSTS` (Intel's cdrdv2.intel.com, which refuses
+ *      Node's `fetch`): those use the system's own curl, on Windows
+ *      %SystemRoot%\System32\curl.exe. A file downloaded by hand and put at
+ *      .cache/<sha256> is checked and used like a downloaded one.
  *   3. Unpack zips: `tar` (bsdtar, ships with Windows 10+) on Windows,
  *      PowerShell `Expand-Archive` if tar is missing, `unzip` elsewhere.
  *      No npm dependency. The unpacked files are kept once in
@@ -1070,8 +1074,165 @@ export interface DownloadTimeouts {
 export const DEFAULT_DOWNLOAD_TIMEOUTS: DownloadTimeouts = { connectMs: 60_000, stallMs: 60_000 };
 
 /**
- * Streams a URL to `destination`, checks size and hash, and returns the sha256
- * it computed. Gives up with a plain message if the server does not answer
+ * Hosts we download from with the operating system's own curl instead of
+ * Node's `fetch`. Since 2026-11-04 `cdrdv2.intel.com` answers Node's `fetch`
+ * with HTTP 200 and a 247-byte "Request Rejected" page, while Windows'
+ * `curl.exe` gets the zip (DECISIONS 2026-11-04). curl is run plainly, with its
+ * own user agent: we use a client the server accepts, we do not disguise one
+ * it refuses.
+ */
+export const CURL_HOSTS: readonly string[] = ['cdrdv2.intel.com'];
+
+export type Downloader = 'node-fetch' | 'curl';
+
+/** Which client downloads `url`: curl for the hosts in `CURL_HOSTS`, Node's `fetch` for everything else. */
+export function chooseDownloader(url: string): Downloader {
+    let host: string;
+    try {
+        host = new URL(url).hostname.toLowerCase();
+    } catch {
+        throw new Error(`not a valid download URL: ${url}`);
+    }
+    return CURL_HOSTS.includes(host) ? 'curl' : 'node-fetch';
+}
+
+/**
+ * Where the system's own curl lives. On Windows that is always
+ * `%SystemRoot%\System32\curl.exe` (shipped since Windows 10 1803), never a
+ * curl found on PATH: Git Bash's curl fails TLS to cdrdv2.intel.com ("self
+ * signed certificate in certificate chain"), because it does not use the
+ * Windows certificate store. Elsewhere it is `/usr/bin/curl`.
+ */
+export function systemCurlPath(platform: NodeJS.Platform = process.platform, env: NodeJS.ProcessEnv = process.env): string {
+    if (platform === 'win32') return join(env.SystemRoot ?? 'C:\\Windows', 'System32', 'curl.exe');
+    return '/usr/bin/curl';
+}
+
+/** The system curl's path, or an error that says what to do instead. */
+export async function findSystemCurl(download: AssetDownload, curlPath: string = systemCurlPath()): Promise<string> {
+    if (await fileExists(curlPath)) return curlPath;
+    throw new Error(
+        [
+            `${download.file} comes from ${new URL(download.url).hostname}, which refuses Node's fetch, so it is downloaded with the system's curl,`,
+            `but ${curlPath} does not exist. Windows 10 (1803) and later include it.`,
+            `Or download ${download.url} by hand and put it at assets/downloads/.cache/${download.sha256.toLowerCase()};`,
+            'the tool checks its size and sha256 and takes it from there.',
+        ].join('\n    '),
+    );
+}
+
+/**
+ * The curl command line for one download: follow redirects (Intel answers with
+ * a 302 to a signed CloudFront URL), fail on an HTTP error instead of saving
+ * the error page, print nothing but errors, and give up after the same
+ * timeouts as the `fetch` path. curl's stall limit is whole seconds, at least 1.
+ * No `--user-agent` or `--header`: curl's own request, as typed by hand.
+ * `--disable` (it must come first) skips the user's `.curlrc`, so a local
+ * config can't add headers or change behaviour. The URLs come from the
+ * committed sources.json (HTTPS) and the downloaded file is checked against
+ * its sha256, so the protocol isn't pinned here; the tests run curl against
+ * a plain-HTTP local server.
+ */
+export function curlArguments(url: string, outputPath: string, timeouts: DownloadTimeouts): string[] {
+    const connectSeconds = timeouts.connectMs / 1000;
+    const stallSeconds = Math.max(1, Math.ceil(timeouts.stallMs / 1000));
+    return [
+        '--disable',
+        '--location',
+        '--fail',
+        '--silent',
+        '--show-error',
+        '--connect-timeout',
+        String(connectSeconds),
+        // Less than 1 byte per second for `stallSeconds` counts as stalled.
+        '--speed-limit',
+        '1',
+        '--speed-time',
+        String(stallSeconds),
+        '--output',
+        outputPath,
+        url,
+    ];
+}
+
+/** curl's exit codes that have a plainer explanation than its own message. */
+const CURL_EXIT_HTTP_ERROR = 22;
+const CURL_EXIT_TIMEOUT = 28;
+
+/** How often the curl path looks at the partial file to print progress. */
+const CURL_PROGRESS_POLL_MS = 500;
+
+/**
+ * Checks a finished download's size and sha256 against sources.json. A wrong
+ * size is reported first: a refusal page (Intel's is 247 bytes) is a wrong
+ * size, and saying so is plainer than a hash mismatch.
+ */
+function checkDownloadedFile(download: AssetDownload, received: number, actualSha256: string): void {
+    if (received !== download.bytes) {
+        const hint = received < 4096 ? ' (a file this small is usually an error or refusal page from the server)' : '';
+        throw new Error(`download is ${received} bytes but sources.json says ${download.bytes}${hint}`);
+    }
+    if (!sameHash(actualSha256, download.sha256)) {
+        throw new Error(`download sha256 is ${actualSha256} but sources.json says ${download.sha256}`);
+    }
+}
+
+/**
+ * Downloads with the system curl (see `CURL_HOSTS`) into `destination`, then
+ * checks size and hash like the `fetch` path and returns the sha256. Progress
+ * is printed from the growing partial file.
+ */
+export async function downloadWithCurl(
+    download: AssetDownload,
+    destination: string,
+    timeouts: DownloadTimeouts = DEFAULT_DOWNLOAD_TIMEOUTS,
+    curlPath: string = systemCurlPath(),
+): Promise<string> {
+    const curl = await findSystemCurl(download, curlPath);
+    const partial = `${destination}.part`;
+    await rm(partial, { force: true });
+    const progress = makeProgress(download.file, download.bytes);
+    const poll = setInterval(() => {
+        stat(partial).then(
+            (info) => progress.update(info.size),
+            () => undefined, // not created yet: curl writes the file once data arrives
+        );
+    }, CURL_PROGRESS_POLL_MS);
+    try {
+        const { code, stderr } = await new Promise<{ code: number | null; stderr: string }>((resolvePromise, reject) => {
+            const child = spawn(curl, curlArguments(download.url, partial, timeouts), { stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true });
+            let errorText = '';
+            child.stderr.on('data', (chunk: Buffer) => (errorText += chunk.toString()));
+            child.on('error', reject);
+            child.on('close', (exitCode) => resolvePromise({ code: exitCode, stderr: errorText.trim() }));
+        });
+        if (code !== 0) {
+            const said = stderr ? ` (curl: ${stderr})` : '';
+            if (code === CURL_EXIT_HTTP_ERROR) throw new Error(`download failed: ${download.url} answered with an HTTP error${said}`);
+            if (code === CURL_EXIT_TIMEOUT) {
+                throw new Error(`download of ${download.file} timed out: no connection within ${timeouts.connectMs / 1000} s or no data for ${timeouts.stallMs / 1000} s${said}`);
+            }
+            throw new Error(`download of ${download.file} failed: curl exited with code ${code}${said}`);
+        }
+        const received = (await stat(partial)).size;
+        const actual = await sha256OfFile(partial);
+        checkDownloadedFile(download, received, actual);
+        await rename(partial, destination);
+        return actual;
+    } catch (error) {
+        await rm(partial, { force: true });
+        throw error;
+    } finally {
+        clearInterval(poll);
+        progress.finish();
+    }
+}
+
+/**
+ * Downloads `download` to `destination`, checks size and hash, and returns
+ * the sha256 it computed. Hosts in `CURL_HOSTS` go through the system curl
+ * (`downloadWithCurl`); everything else is streamed with Node's `fetch`.
+ * Either way it gives up with a plain message if the server does not answer
  * within `connectMs`, or goes quiet for `stallMs` mid-download.
  */
 export async function downloadFile(
@@ -1079,6 +1240,12 @@ export async function downloadFile(
     destination: string,
     timeouts: DownloadTimeouts = DEFAULT_DOWNLOAD_TIMEOUTS,
 ): Promise<string> {
+    if (chooseDownloader(download.url) === 'curl') return downloadWithCurl(download, destination, timeouts);
+    return downloadWithFetch(download, destination, timeouts);
+}
+
+/** The Node `fetch` path of `downloadFile`: streams the body to disk, hashing as it goes. */
+async function downloadWithFetch(download: AssetDownload, destination: string, timeouts: DownloadTimeouts): Promise<string> {
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
     const armTimer = (milliseconds: number, message: string): void => {
@@ -1120,13 +1287,8 @@ export async function downloadFile(
             progress.finish();
         }
 
-        if (received !== download.bytes) {
-            throw new Error(`download is ${received} bytes but sources.json says ${download.bytes}`);
-        }
         const actual = hash.digest('hex');
-        if (!sameHash(actual, download.sha256)) {
-            throw new Error(`download sha256 is ${actual} but sources.json says ${download.sha256}`);
-        }
+        checkDownloadedFile(download, received, actual);
         await rename(partial, destination);
         return actual;
     } catch (error) {

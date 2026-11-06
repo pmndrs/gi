@@ -1,0 +1,5 @@
+{
+    "description": "T1.7: Sponza's GI through the three adapter (mean GI-only irradiance and GI albedo); VITE_DDGI_NO_METALNESS_MAPS=1 gives the before-the-metalness-fold number. Needs the downloaded Sponza.",
+    "timeoutMs": 900000,
+    "manual": true
+}

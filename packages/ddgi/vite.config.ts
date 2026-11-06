@@ -16,7 +16,8 @@ export default defineConfig({
             formats: ['es'],
         },
         rollupOptions: {
-            external: ['three', 'three/tsl', 'three/webgpu'],
+            // three and its addons (the composite uses three's own GTAO) stay the user's copy.
+            external: [/^three(\/|$)/],
             output: { chunkFileNames: 'chunks/ddgi-[hash].js' },
         },
     },

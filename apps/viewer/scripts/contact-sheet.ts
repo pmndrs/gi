@@ -7,7 +7,7 @@
  *
  *   node apps/viewer/scripts/contact-sheet.ts
  *     [--gpu nvidia|intel]        which GPU Chrome gets (default nvidia)
- *     [--only a,b]                only these scene ids
+ *     [--only a,b]                only these scene ids (heavy scenes, like sponza-full, only when named here)
  *     [--camera 1]                bookmark number (default 1)
  *     [--query "technique=vxgi&gi=only"]   extra URL parameters for every shot
  *     [--out <dir>]               default bench/screenshots/viewer-sheet (gitignored)
@@ -19,7 +19,7 @@
  */
 
 import { mkdtempSync } from 'node:fs';
-import { mkdir, readdir, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -27,6 +27,7 @@ import { createServer } from 'vite';
 import { CdpClient } from '../../../tools/gpu/cdp.ts';
 import { discoverGpuLuid, findBrowser, removeProfile, startChrome } from '../../../tools/gpu/chrome.ts';
 import { installShutdownHandlers, registerCleanup, runCleanups } from '../../../tools/gpu/cleanup.ts';
+import { isHeavyScene } from '../../../scenes/src/manifest.ts';
 
 const viewerDirectory = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const repoRoot = resolve(viewerDirectory, '..', '..');
@@ -127,9 +128,19 @@ ${cells}
 `;
 }
 
-async function sceneIds(): Promise<string[]> {
+/** Every scene id, and which of them are heavy (left out unless named with --only). */
+async function sceneIds(): Promise<{ all: string[]; heavy: string[] }> {
     const directory = join(repoRoot, 'scenes', 'manifests');
-    return (await readdir(directory)).filter((file) => file.endsWith('.json')).map((file) => file.slice(0, -'.json'.length)).sort();
+    const files = (await readdir(directory)).filter((file) => file.endsWith('.json')).sort();
+    const all: string[] = [];
+    const heavy: string[] = [];
+    for (const file of files) {
+        const id = file.slice(0, -'.json'.length);
+        all.push(id);
+        const manifest = JSON.parse(await readFile(join(directory, file), 'utf8')) as { tags: string[] };
+        if (isHeavyScene(manifest)) heavy.push(id);
+    }
+    return { all, heavy };
 }
 
 async function main(): Promise<number> {
@@ -191,8 +202,8 @@ async function main(): Promise<number> {
         if (!adapter.toLowerCase().includes(options.gpu)) throw new Error(`Asked for ${options.gpu}, but Chrome gave "${adapter}".`);
 
         const known = await sceneIds();
-        const ids = options.only.length > 0 ? options.only : known;
-        for (const id of ids) if (!known.includes(id)) throw new Error(`Unknown scene id "${id}". Known: ${known.join(', ')}`);
+        const ids = options.only.length > 0 ? options.only : known.all.filter((id) => !known.heavy.includes(id));
+        for (const id of ids) if (!known.all.includes(id)) throw new Error(`Unknown scene id "${id}". Known: ${known.all.join(', ')}`);
 
         await mkdir(options.out, { recursive: true });
         const shots: Shot[] = [];

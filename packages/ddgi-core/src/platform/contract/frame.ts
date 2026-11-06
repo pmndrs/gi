@@ -8,20 +8,41 @@ import type { Mat4, Vec3 } from './math';
 /**
  * How much GPU work the platform may record this frame.
  *
- * A millisecond budget can't be enforced directly: GPU timings arrive a few
- * frames late, and not at all without `timestamp-query`. So the platform
- * converts milliseconds into work units (probes for DDGI) using each
- * technique's measured cost per unit, and falls back to `units` when it has
- * no measurements yet. Probes near a change are spent first.
+ * Work is the control (budget v2, docs/design/ddgi.md): with `gpuMs`, the
+ * platform calibrates once, with the GPU loaded, how many work units (probes
+ * for DDGI) fit in `gpuMs`, and hands out that many every frame. It doesn't
+ * steer on GPU milliseconds while frames arrive on time, because an idle GPU
+ * lowers its clocks and makes the same work look slower. Only when frames are
+ * late (against `targetFps`, or an observed vsync rate) does it hand out
+ * fewer, down to the technique's floor. It calibrates after
+ * `prepare` and on `GIPlatform.recalibrate()`; a new `gpuMs` is solved from
+ * what it measured. Without GPU timings it uses `units`. Probes near a change
+ * are spent first.
  */
 export interface FrameBudget {
-    /** Target GPU time for all GI updates this frame. */
+    /**
+     * GPU time for all GI updates per frame, measured with the GPU's clocks
+     * up. Needs GPU timings: the platform's `gpuTiming` option on a device
+     * with `timestamp-query`. Without them `gpuMs` can't be measured, and the
+     * hand-out is `units`, or 512 per technique.
+     */
     readonly gpuMs?: number;
     /**
      * Work units per frame when no timings are available, or a hard cap when
-     * `gpuMs` is also set. The technique defines its unit (DDGI: probes).
+     * `gpuMs` is also set (over the technique's floor too). The technique
+     * defines its unit (DDGI: probes).
      */
     readonly units?: number;
+    /**
+     * The frame rate the host aims for, frames per second. Optional: without
+     * it the platform takes the rate it observes from `deltaTime` when frames
+     * are on time, if that is a display refresh rate (vsync, up to 165 Hz);
+     * otherwise it treats the host as uncapped, with no frame-rate ceiling
+     * (the batch never steps down). Used to tell when frames are late (the
+     * only time the batch steps down) and for floors given in seconds (DDGI: a
+     * full sweep within 4 s).
+     */
+    readonly targetFps?: number;
     /** Skip all update work this frame; shading keeps using the last result. */
     readonly paused?: boolean;
 }

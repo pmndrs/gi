@@ -1,0 +1,29 @@
+{
+    "id": "open-ground",
+    "title": "Open ground under the sky",
+    "description": "A flat grey ground and one cube under the shared sky, with no sun: the ground's brightness checks the sky's calibration (albedo x sky irradiance / pi), and the second view looks towards the sun's glow to check the sky's orientation.",
+    "tags": ["exterior", "known-answer", "sky-only"],
+    "units": "meters",
+    "upAxis": "y",
+    "parts": [
+        { "kind": "procedural", "builder": "open-ground" }
+    ],
+    "cameras": [
+        { "name": "ground-from-above", "position": [10, 4, 8], "target": [10, 0, 10], "fovYDeg": 50 },
+        { "name": "towards-the-sun-glow", "position": [3.5, 1.6, 4.3], "target": [0, 0.9, 0], "fovYDeg": 60 }
+    ],
+    "lights": [],
+    "environment": {
+        "type": "procedural",
+        "sunDirection": [-0.5, 0.6, -0.62],
+        "turbidity": 3,
+        "intensity": 1,
+        "sunIlluminance": 3
+    },
+    "volume": { "center": [0, 0.9, 0], "size": [16, 1.8, 16], "probeSpacing": 1 },
+    "nativeCapable": true,
+    "referenceCube": { "position": [0, 0.5, 0] },
+    "credits": [
+        { "asset": null, "license": "MIT", "attribution": "MIT, this repo." }
+    ]
+}

@@ -12,48 +12,34 @@
  *
  *   --append            add the rows to bench/results/trace.csv (written with its header if new)
  *   --out <file>        add them to this file instead (implies --append)
- *   --commit <hash>     default: `git rev-parse --short HEAD`, plus "-dirty" if the measured code differs from it (see MEASURED_PATHS)
+ *   --commit <hash>     default: the commit the runner recorded when the pages ran (RunSummary.commit:
+ *                       HEAD, plus "-dirty" if the measured code differed, see MEASURED_PATHS); for runner
+ *                       files from before that field, HEAD now, with a warning
  *   --device <name>     default: derived from the adapter, for example "RTX 3060 Laptop"
  *   --browser <text>    default: derived from the page's user agent, for example "Chrome 156.0.8078.74 headless"
  *   --date <YYYY-MM-DD> default: the day the run started
  *   --include-failed    also take pages that did not pass (a disagreement fails a page; its speeds are suspect)
+ *   --clock-file <file> add `note/sm_clock_mhz` (and min, max, memory) rows to the NVIDIA runs, from the summary
+ *                       `bench-lock run` writes; default: the file named by DDGI_CLOCK_FILE, which it sets
  *
  * Without --append or --out the rows are printed. Columns are those of
  * bench/results/README.md: date, commit, device, browser, scene, metric, value.
  */
 
-import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { appendFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import type { PageSummary, RunSummary } from '../../contract.ts';
+import { gitCommit } from '../../measured-commit.ts';
+import { clockNoteRowsFromOption, isNvidiaDeviceName } from '../../clock-note.ts';
 import { browserFromUserAgent, deviceNameFromAdapter, formatValue, repeatedRunRows, traceBenchRows, type MetricRow } from './csv-rows.ts';
 import type { TraceBenchData } from './results.ts';
 
-export const CSV_HEADER = 'date,commit,device,browser,scene,metric,value';
+// Kept here for older callers (repeat.ts); the definition moved next to the runner.
+export { gitCommit, MEASURED_PATHS } from '../../measured-commit.ts';
 
-/**
- * The files whose changes can move a trace-bench number, as git pathspecs:
- * - the core (tracer, builder, timer) and the BVH package (tinybvh);
- * - the GPU runner and page client (the files directly in tools/gpu);
- * - the trace pages themselves (trace-bench*, trace-oracle);
- * - the scene manifests, which set the probe volume and the sun;
- * - the lockfile, which pins three and three-mesh-bvh.
- * Other agents keep uncommitted work elsewhere all the time (apps/viewer,
- * native/, other pages under tools/gpu/pages), so a whole-tree check would mark
- * every row dirty. bench/results is output, and the scene assets are checked by
- * hash when fetched, so neither counts.
- */
-export const MEASURED_PATHS = [
-    'packages/ddgi-core',
-    'packages/bvh',
-    ':(glob)tools/gpu/*',
-    ':(glob)tools/gpu/pages/trace-*/**',
-    'scenes/manifests',
-    'scenes/src',
-    'pnpm-lock.yaml',
-] as const;
+export const CSV_HEADER = 'date,commit,device,browser,scene,metric,value';
 
 const REPOSITORY_ROOT = resolve(import.meta.dirname, '..', '..', '..', '..');
 const DEFAULT_CSV = resolve(REPOSITORY_ROOT, 'bench', 'results', 'trace.csv');
@@ -76,14 +62,6 @@ export function pageToCsvLines(page: PageSummary, context: CsvContext): string[]
     return traceBenchRows(data).map((row) => [...prefix, row.scene, row.metric, formatValue(row.value)].join(','));
 }
 
-/** HEAD's short hash, with "-dirty" when a measured file differs from HEAD (modified, staged or new and not ignored). */
-export function gitCommit(): string {
-    const git = (...args: string[]) => execFileSync('git', args, { cwd: REPOSITORY_ROOT, encoding: 'utf8' }).trim();
-    const hash = git('rev-parse', '--short', 'HEAD');
-    const changes = git('status', '--porcelain', '--untracked-files=all', '--', ...MEASURED_PATHS);
-    return changes === '' ? hash : `${hash}-dirty`;
-}
-
 interface PageRun {
     key: string;
     context: CsvContext;
@@ -102,21 +80,27 @@ async function main(): Promise<void> {
             browser: { type: 'string' },
             date: { type: 'string' },
             'include-failed': { type: 'boolean' },
+            'clock-file': { type: 'string' },
         },
     });
     if (positionals.length < 1) {
         console.error(
-            'Usage: node tools/gpu/pages/trace-bench/to-csv.ts <runner.json> [more.json ...] [--append] [--out file] [--commit h] [--device n] [--browser b] [--date d] [--include-failed]',
+            'Usage: node tools/gpu/pages/trace-bench/to-csv.ts <runner.json> [more.json ...] [--append] [--out file] [--commit h] [--device n] [--browser b] [--date d] [--include-failed] [--clock-file f]',
         );
         process.exit(2);
     }
-    const commit = values.commit ?? gitCommit();
 
     // Every passing trace-bench page of every file, grouped by page and device.
     const groups = new Map<string, PageRun[]>();
     for (const file of positionals) {
         const summary = JSON.parse(await readFile(file, 'utf8')) as RunSummary;
         const date = values.date ?? summary.startedAt.slice(0, 10);
+        // The commit belongs to the moment the pages ran, not to now: the tree may have moved since.
+        let commit = values.commit ?? summary.commit;
+        if (commit === undefined) {
+            commit = gitCommit();
+            console.error(`${file} has no recorded commit (runner from before T1.3); using the current one, ${commit}`);
+        }
         const device = values.device ?? deviceNameFromAdapter(summary.adapter);
         for (const page of summary.pages.filter(isTraceBenchPage)) {
             if (page.outcome !== 'pass' && !values['include-failed']) {
@@ -131,11 +115,12 @@ async function main(): Promise<void> {
         }
     }
 
+    const clockNotes = clockNoteRowsFromOption(values['clock-file']);
     const lines: string[] = [];
     for (const runs of groups.values()) {
         // Repeated runs share the first run's date and browser; the rows say how many there were.
         const context = runs[0].context;
-        const rows = runs.length === 1 ? runs[0].rows : repeatedRunRows(runs.map((run) => run.rows));
+        const rows = [...(runs.length === 1 ? runs[0].rows : repeatedRunRows(runs.map((run) => run.rows))), ...(isNvidiaDeviceName(context.device) ? clockNotes : [])];
         const prefix = [context.date, context.commit, context.device, context.browser];
         lines.push(...rows.map((row) => [...prefix, row.scene, row.metric, formatValue(row.value)].join(',')));
     }

@@ -5,22 +5,58 @@
  * but every default and every number the design fixed lives here.
  */
 
-/** The scenes the design benchmarks. Ids are scene manifest ids. */
+/**
+ * The scenes the design benchmarks. Ids are scene manifest ids, or one of
+ * {@link BENCH_SCENE_SUBSETS}.
+ */
 export const BENCH_SCENE_IDS = ['sponza', 'bistro-exterior', 'bistro-interior', 'furnished-room'] as const;
 export type BenchSceneId = (typeof BENCH_SCENE_IDS)[number];
+
+/**
+ * Bench scenes that load only some parts of a manifest, so rows stay
+ * comparable when a manifest grows. `sponza-base` is Intel's base package
+ * alone (3.75 M triangles): what the `sponza` rows measured until T1.10 added
+ * the curtains to the manifest. From then on `sponza` rows mean base plus
+ * curtains; compare older `sponza` rows with `sponza-base`.
+ */
+export const BENCH_SCENE_SUBSETS: Readonly<Record<string, { readonly manifest: string; readonly assets: readonly string[] }>> = {
+    'sponza-base': { manifest: 'sponza', assets: ['sponza-intel'] },
+};
 
 /** Pseudo-scene for the top-level rebuild timing: many instances of one small mesh. */
 export const SYNTHETIC_SCENE_ID = 'synthetic-10k';
 export const SYNTHETIC_INSTANCE_COUNT = 10_000;
 
 /**
- * - `ours-wt`: our builder and our (watertight) walk.
  * - `ours-tinybvh`: tinybvh (WASM, in our worker) builds each mesh's tree, traced by our watertight walk.
+ *   Our own SAH mesh builder (`ours-wt` in rows before T1.3) was deleted once B0's checks passed.
  * - `ours-tmbuild`: three-mesh-bvh builds each mesh's tree, converted to our layout, traced by our watertight walk.
+ * - `platform`: the same as `ours-tinybvh`, but through the platform API (`createGI`, its scene API, `queries.rays`).
  * - `tmbvh`: three-mesh-bvh's own trees and its own WebGPU walk.
+ * - `ours-lbvh`: the GPU LBVH (B1, `@pmndrs/bvh`) builds every mesh's tree on the GPU in one batch, timed
+ *   with GPU timestamps; the trees are read back and traced by our watertight walk. Needs subgroups.
+ * - `ours-hploc`: the same with the GPU H-PLOC (B2). Also builds the scene once more with tinybvh's
+ *   codes, tie rule and one-triangle leaves, and compares its SAH cost with tinybvh's `BuildHPLOC`.
  */
-export const TRACER_IDS = ['ours-wt', 'ours-tinybvh', 'ours-tmbuild', 'tmbvh'] as const;
+export const TRACER_IDS = ['ours-tinybvh', 'ours-tmbuild', 'platform', 'tmbvh', 'ours-lbvh', 'ours-hploc'] as const;
 export type TracerId = (typeof TRACER_IDS)[number];
+
+/** What runs when the URL names no tracer. `ours-lbvh` and `ours-hploc` are asked for by their own pages (trace-bench-lbvh*, trace-bench-hploc*). */
+export const DEFAULT_TRACER_IDS: readonly TracerId[] = ['ours-tinybvh', 'ours-tmbuild', 'platform', 'tmbvh'];
+
+/** GPU builds (LBVH, H-PLOC) timed per scene after one warm-up (median, fastest and slowest are reported). */
+export const GPU_BUILD_TIMED_RUNS = 5;
+
+/**
+ * Then the loaded section: builds submitted back to back for about this long,
+ * so the GPU stays busy and its clock is the loaded one (DECISIONS f3e3bba:
+ * pass/fail timing is taken GPU-bound, over sections of 10-15 s, from a cool
+ * card). The single builds above wait for each result, so the GPU idles
+ * between them and the bench lock's once-a-second clock sampler barely sees them.
+ */
+export const GPU_BUILD_LOADED_MS = 10_000;
+/** Bounds on the loaded section's build count, whatever one build takes. */
+export const GPU_BUILD_LOADED_RUNS = { min: 10, max: 400 } as const;
 
 /**
  * How big a run is.
@@ -144,7 +180,7 @@ function readList(params: URLSearchParams, name: string): string[] | null {
  * Query parameters (all optional):
  *
  *   ?scene=sponza,bistro-interior   scene manifest ids, or `all` (default: what the page folder says)
- *   &tracer=ours-wt,tmbvh           any of TRACER_IDS (default: all)
+ *   &tracer=ours-tinybvh,tmbvh      any of TRACER_IDS (default: DEFAULT_TRACER_IDS)
  *   &rays=256                       rays per probe
  *   &targetRays=2097152             total rays per dispatch, about
  *   &profile=quick|full             defaults for the numbers above and the timing counts
@@ -169,7 +205,7 @@ export function parseBenchConfig(
     let scenes = readList(params, 'scene') ?? defaults.scenes;
     if (scenes.includes('all')) scenes = [...BENCH_SCENE_IDS];
 
-    const tracerNames = readList(params, 'tracer') ?? [...TRACER_IDS];
+    const tracerNames = readList(params, 'tracer') ?? [...DEFAULT_TRACER_IDS];
     const tracers = tracerNames.map((name) => {
         if (!(TRACER_IDS as readonly string[]).includes(name)) {
             throw new BenchConfigError(`?tracer= entries must be from ${TRACER_IDS.join(', ')}, got "${name}"`);

@@ -286,11 +286,20 @@ function writeChildBox(
 }
 
 /**
- * Builds a mesh BVH with tinybvh's builder (WASM, from @pmndrs/bvh): tinybvh
- * decides the tree's shape, and {@link buildMeshBvhFromTopology} writes our
- * layout. `tinyBvh` comes from `createTinyBvhBuilder()`; one build at a time.
+ * Builds a mesh BVH with tinybvh's builder (WASM, from @pmndrs/bvh). The WASM
+ * also writes our layout (stage B0b), byte for byte what
+ * {@link buildMeshBvhFromTopology} makes from tinybvh's tree
+ * (`mesh-bvh-tinybvh-layout.test.ts`), without the JavaScript pass over every
+ * node and triangle: on a large mesh that pass is a big share of the build
+ * time, whatever the code does (NOTES, "JS memory speed"). `tinyBvh` comes
+ * from `createTinyBvhBuilder()`; one build at a time.
  */
 export function buildMeshBvhWithTinyBvh(geometry: MeshGeometry, tinyBvh: TinyBvhBuilder, options: MeshTreeTopologyOptions = {}): MeshBvh {
-    const { topology } = tinyBvh.build(geometry);
-    return buildMeshBvhFromTopology(geometry, topology, options);
+    // tinybvh builds over NaN or infinite corners without complaint, and the tree would then
+    // miss rays without a word. One pass in the builder's thread (the worker) to refuse them.
+    const positions = geometry.positions;
+    for (let index = 0; index < positions.length; index++) {
+        if (!Number.isFinite(positions[index])) throw new RangeError(`vertex ${Math.floor(index / 3)} has a non-finite position`);
+    }
+    return tinyBvh.buildLayout(geometry, options).layout;
 }

@@ -1,0 +1,4 @@
+{
+    "description": "B1a timing: the GPU top level with 10,000 instances all moving every frame. GPU time of the refit pass (per-instance gather + bottom-up refit) by timestamp queries; the tree is then checked node by node.",
+    "timeoutMs": 300000
+}

@@ -19,14 +19,38 @@ describe('url state', () => {
     });
 
     it('falls back to defaults for nonsense', () => {
-        const state = parseUrlState('?technique=banana&gi=maybe&wipe=lpg,lpg&split=abc&ev=999&upscale=ludicrous&cam=1,2,3');
-        expect(state.technique).toBe('lpg');
+        const state = parseUrlState('?technique=banana&gi=maybe&wipe=lpg,lpg&split=abc&ev=999&upscale=ludicrous&cam=1,2,3&budget=-4&debug=nope&probes=yes');
+        expect(state.technique).toBe('ddgi');
         expect(state.gi).toBe('on');
         expect(state.wipe).toBeNull();
         expect(state.split).toBe(0.5);
-        expect(state.ev).toBe(6);
+        expect(state.ev).toBe(8);
         expect(state.upscale).toBeNull();
         expect(state.freeCamera).toBeNull();
+        expect(state.budgetMs).toBe(0.25);
+        expect(state.debug).toBeNull();
+        expect(state.probes).toBe(false);
+    });
+
+    it('reads the DDGI settings and the reference in a wipe, and leaves the exposure to the scene unless given', () => {
+        const state = parseUrlState('?technique=ddgi&wipe=ddgi,cycles&budget=1.5&probes=1&debug=coverage');
+        expect(state).toMatchObject({ technique: 'ddgi', wipe: ['ddgi', 'cycles'], budgetMs: 1.5, probes: true, debug: 'coverage', ev: null });
+        // The reference image is never the technique itself, only one side of a wipe.
+        expect(parseUrlState('?technique=cycles').technique).toBe('ddgi');
+        expect(parseUrlState(serializeUrlState(state))).toEqual(state);
+        expect(serializeUrlState({ ...DEFAULT_URL_STATE, ev: 0 })).toBe('ev=0');
+    });
+
+    it("reads DDGI's debug views and round-trips them", () => {
+        const state = parseUrlState('?probes=1&probecolor=history&atlas=irradiance&atlasfill=1&atlasev=2.5&change=0.25&gi=only');
+        expect(state).toMatchObject({ probes: true, probeColor: 'history', atlas: 'irradiance', atlasFill: true, atlasEv: 2.5, change: 0.25, gi: 'only' });
+        expect(parseUrlState(serializeUrlState(state))).toEqual(state);
+        // Only the offered scales; anything else is off. The atlas exposure is clamped to the slider.
+        const nonsense = parseUrlState('?probecolor=rainbow&atlas=normals&atlasfill=yes&atlasev=99&change=3');
+        expect(nonsense).toMatchObject({ probeColor: 'state', atlas: null, atlasFill: false, atlasEv: 10, change: null });
+        // The atlas exposure lands on the slider's half-stop steps.
+        expect(parseUrlState('?atlasev=1.3').atlasEv).toBe(1.5);
+        expect(parseUrlState('?atlasev=-2.2').atlasEv).toBe(-2);
     });
 
     it('round-trips a state and keeps the default link empty', () => {

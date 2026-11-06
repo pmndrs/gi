@@ -256,30 +256,36 @@ Rules for every M1 task:
 - **No Babylon work** (DECISIONS 2026-11-04).
 - **Native comparisons take 3 or more runs per scene,** because native timings drift 15-30% between runs (NOTES).
 
-| ID | Task | Agent | Size | Depends on |
-| --- | --- | --- | --- | --- |
-| T1.1 | Shared sky | implementer | S | none |
-| T1.2 | Platform scene copy | implementer | M | none |
-| T1.3 | Tracer as a platform module | implementer | M | T1.2 (B0 as built) |
-| T1.4 | Hit shading | implementer | M | T1.1, T1.3 |
-| T1.5 | DDGI field and update loop | main session designs, implementer builds | L | T1.4 |
-| T1.6 | Shading module and plain-WebGPU example | implementer | M | T1.5 |
-| T1.7 | three.js adapter | implementer | M | T1.6 |
-| T1.8 | Viewer integration | implementer | M | T1.7 |
-| T1.9 | M1 measurements against targets | gpu-tester, native-runner | M | T1.8 |
-| T1.10 | Sponza add-ons | wrangler + implementer | M | T1.1 (for the re-rendered reference) |
-| T1.11 | M1 note and M2 breakdown | main session | S | all M1 |
+| ID | Task | Agent | Size | Depends on | Status |
+| --- | --- | --- | --- | --- | --- |
+| T1.1 | Shared sky | implementer | S | none | done (Opus re-review passed; viewer check redefined, DECISIONS) |
+| T1.2 | Platform scene copy | implementer | M | none | done (Opus review passed with notes, all fixed; both GPUs) |
+| T1.3 | Tracer as a platform module | implementer | M | T1.2 (B0 as built) | done (Opus review passed with notes, fixed; any-hit 1.03-1.22× three-mesh-bvh on the RTX, except Bistro interior 0.93×) |
+| T1.4 | Hit shading | implementer | M | T1.1, T1.3 | done (Opus review passed with notes, fixed; `sunIlluminance` added per Dennis) |
+| T1.5a | DDGI field and update loop | main session designs, implementer builds | M | T1.4 | done (Opus review passed with notes; fixes carried into T1.5b) |
+| T1.5b | DDGI classification and relocation | implementer | M | T1.5a | done (Opus review passed with notes, fixed; Cornell +5.7%, two-room leak 0.80%) |
+| T1.6 | Shading module and plain-WebGPU example | implementer | M | T1.5 | done (Opus review passed with notes, fixed; GI sampling 1440p inside view 0.905 ms median of 9 against 1.0) |
+| T1.7 | three.js adapter | implementer | M | T1.6 | done (Opus review failed, fixed, re-review passed; neutrality 1e-8; CPU 0.09–0.14 ms still, 0.11–0.19 moving, lead re-timed) |
+| T1.8 | Viewer integration | implementer | M | T1.7 | done (Dennis: "The viewer loads but quality has issues, they may be addressed later"; usability met, quality notes go to T1.9 and sign-off) |
+| T1.9a | DDGI performance pass (budget model, small-batch cost, p95, startup) | implementer | M | T1.6, T1.8 | done (budget median within ±5% on four scenes; Sponza 30–43 probes per 2 ms; gaps in DECISIONS) |
+| T1.9 | M1 measurements against targets | gpu-tester, native-runner | M | T1.8, T1.9a | done (lean pass per Dennis 2026-11-06; Opus review passed with notes, recorded in PROGRESS; FLIP threshold and stability wait on Dennis, see the M1 note) |
+| T1.10 | Sponza add-ons | wrangler + implementer | M | T1.1 (for the re-rendered reference) | done (Opus review passed with notes, fixed; candles waiting on Dennis) |
+| T1.9b | Budget v2 (work-based, calibrated with the clocks up; DECISIONS 2026-11-05) | implementer | M | T1.9a | done (Opus reviews passed with notes, all fixed through 037476d; RTX 3-run timing under the clock rule: 12 of 12 VALID and within ±10% of 2 ms; Cornell 1,574 / two-room 707 / Sponza 268 / Bistro exterior 132 probes; saturation check passes on both GPUs) |
+| T1.12 | Stability: Cornell flicker fixed, debug views of the source channels, threshold set by eye; hysteresis aware of the time between a probe's updates, and Sponza's settle time measured GPU-bound (frames and seconds) | implementer | M | T1.5, T1.8 | done (Opus reviews passed with notes, all fixed; Dennis's eye check: steady; threshold locked at mean ≤ 0.1%, p95 ≤ 0.5%: Cornell 0.082% / 0.34%, two-room 0.0099% / 0.032%, Sponza 0.027% / 0.096%) |
+| T1.13 | HD Cycles references with stored cameras; the viewer's Compare matches them | implementer, then gpu-tester | M | T1.8, T0.7 | done (Opus review passed with notes, all fixed; every reference 1920×1080 with its stored camera; HD accuracy Cornell +5.74%, two-room +5.50%; noise per view shown in the viewer, some viewing-only bookmarks over 3% per pixel on GI, listed in the M1 note) |
+| T1.14 | GI composite for three (`docs/design/three-composite.md`): a drop-in TSL node on three's `pass()` and `mrt()`, with three's GTAO on the GI term by default (curtains, DECISIONS); `GIVolume` stays the simple path; usage bar against LightProbeGrid | main session designs, implementer builds | M | T1.7, T1.8 | done (Opus reviews passed with notes, all fixed; default: upscaler Performance + half-resolution GTAO, 0.73 ms, Sponza +6.59% vs HD Cycles) |
+| T1.11 | M1 note and M2 breakdown | main session | S | all M1 | review (M1 note in docs/milestones/M1.md; M2 breakdown on the board; PR m1 → main open, waiting on Dennis) |
 
 ### BVH lane (runs alongside; DECISIONS 2026-11-04)
 
 | ID | Stage | Must be done before | Status |
 | --- | --- | --- | --- |
-| B0 | tinybvh WASM builder in a worker (`packages/bvh`) | M1 starts (M1 can start without the ≤ 2 s, DECISIONS 2026-11-04) | SIMD build with emsdk 6.0.13 pinned; oracle passes; Sponza 2.2-2.7 s, not ≤ 2 s |
-| B0b | Write our GPU layout from inside the WASM (no JS conversion pass); re-run the RTX trace bench on an idle GPU | T1.3 ends | todo |
-| B1a | GPU top-level tree: refit every frame from instance transforms, rebuild now and then | T1.3 ends (moved up to M1) | todo |
-| B1 | GPU LBVH per mesh (subgroups first), BLAS refit | M3 | todo |
-| B2 | GPU PLOC, then H-PLOC | M3 | todo |
-| B3 | Wide or compressed nodes, short-stack traversal | the performance review | todo |
+| B0 | tinybvh WASM builder in a worker (`packages/bvh`) | M1 starts (M1 can start without the ≤ 2 s, DECISIONS 2026-11-04) | done with B0b (DECISIONS: the median of 3 worker runs ≤ 2 s; our CPU builder deleted in T1.3) |
+| B0b | Write our GPU layout from inside the WASM (no JS conversion pass); re-run the RTX trace bench on an idle GPU | T1.3 ends | done (Opus review passed; B0 passed: Sponza worker median 1.89 / 1.61 s) |
+| B1a | GPU top-level tree: refit every frame from instance transforms, rebuild now and then | M1 ends (after T1.3's review fixes, alongside T1.4; DECISIONS 2026-11-05) | done (Opus review and re-review passed; 10k instances: RTX 0.086 ms, Intel 0.43 ms) |
+| B1 | GPU LBVH per mesh (subgroups first), BLAS refit | M3 | done (merged into m1, Dennis approved; not wired into ddgi-core until M2's fast first GI. Opus review passed with notes, fixed: Sponza GPU build 31.2 ms on the RTX; oracle passes on both GPUs; trace 0.82x / 0.80x of tinybvh trees; 10k top level 0.091 ms; no-subgroups fallback to tinybvh tested) |
+| B2 | GPU PLOC, then H-PLOC | M3 | done: merged into m1 (Dennis: merge once reviewed; Opus review passed with notes, fixed; the 50 ms build bar passed on the re-time under the clock rule: 46.6 ms median of the VALID runs, every run under 50, DECISIONS). GPU H-PLOC behind the B1 contract; its trees match tinybvh's `BuildHPLOC` (SAH 1.00001x on Sponza); SAH 1.032x tinybvh's best; trace 0.95x closest / 1.02x any of B0's trees; oracle passes on the RTX and the Intel UHD. Sponza loaded build 47.8 ms (45.3 ms building first), but every timing row is `clock_low` (power-limited ~1,000-1,100 MHz even from a cool card), so the 50 ms bar is not formally passed: Dennis's call. No separate PLOC builder: H-PLOC's merge is the PLOC step, also Dennis's call) |
+| B3 | Wide or compressed nodes, short-stack traversal | the performance review | done: dropped (Dennis, 2026-11-05). CWBVH closest-hit about 1.0× BVH2 on Sponza against the 1.3× bar, 0.82× on Bistro interior; oracle passed on both GPUs. Findings in PROGRESS and NOTES; code on branch `bvh-b3` |
 
 Done-whens for the B stages are in `docs/design/bvh-framework.md`. B1a's: a 10k-instance top level costs ≤ 0.5 ms of GPU time, and the oracle passes with instances moving every frame.
 
@@ -288,7 +294,7 @@ Done-whens for the B stages are in `docs/design/bvh-framework.md`. B1a's: a 10k-
 - **T1.1 Shared sky.**
   - One sky definition becomes one HDR sky file, made by a script from the manifest (sun direction, turbidity). Its brightness is set so the sky lights a flat open ground with a stated, realistic share of the sun's light.
   - The viewer, Cycles, the native harness and the platform's environment all read that same file.
-  - Done when an open-ground test scene lit only by the sky renders within the reference tolerance in the viewer and in Cycles, and Sponza's probe-grid view is no longer blue.
+  - Done when an open-ground test scene lit only by the sky renders within the reference tolerance in Cycles, the viewer shows the same sky file the right way round, and Sponza's probe-grid view is no longer blue. (Changed 2026-11-04, DECISIONS: the viewer never lights surfaces with three's environment, so sky-lighting accuracy is checked on the platform's own sky irradiance in T1.4.)
 - **T1.2 Platform scene copy.**
   - `SceneApi` is implemented: meshes with optional normals and uvs, constant-colour materials (metalness already folded in by the adapter), instances, lights and environment, with changes queued and uploaded inside `encode`.
   - Binding budget (`docs/api/platform.md`, "After T0.10"): the scene copy and hit shading use at most 2 storage buffers together. Vertex attributes share one buffer; instances, materials and lights share one table buffer.
@@ -302,18 +308,26 @@ Done-whens for the B stages are in `docs/design/bvh-framework.md`. B1a's: a 10k-
 - **T1.4 Hit shading.**
   - `giSurfaceAt` (interpolated normals), `giDirectIrradiance` (sun and sky, shadow rays, light-group mask), and `giSkyRadiance` and `giSkyIrradiance` from the shared sky.
   - Done when a sun on a plane matches E·cos θ, sky irradiance matches Cycles within tolerance, and shadow rays agree with the oracle.
+  - From the T1.1 review (DECISIONS 2026-11-04):
+    - `giSkyIrradiance` on the open-ground scene meets the reference tolerance (±0.5%) against Cycles.
+    - The `procedural` environment type uses the same Preetham and calibration code as the sky files: move it from `scenes/src/sky` into the core (scenes then imports it), with one turbidity default.
+    - The contract states the `equirect` layout (which row is the zenith, where u = 0 points), matching three's `equirectUV`, so three's textures can be passed straight in.
 - **T1.5 DDGI field and update loop.**
   - Main session design first: probe layout, octahedral irradiance and distance atlases, rays with a random rotation each update, hysteresis, unlimited bounce from the current field, a budget in probes per frame, and classification and relocation on the GPU.
   - Tracing is inline (trace, shade and accumulate in one kernel). If the update cost comes near its budget, time inline against batch once.
-  - Done when:
+  - Split before starting, as PLAN asks of L tasks (2026-11-05). Design and measurements: `docs/design/ddgi.md`.
+  - **T1.5a, field and update loop:** the volume, the atlases, the `ddgi/update` and `ddgi/write` kernels with every probe treated as active, the budget and update order, `ddgiSampleIrradiance`, and the engine-free test view. Done when:
     - the furnace room converges to its analytic value within 2%;
-    - Cornell's indirect light matches Cycles within the M1 accuracy target;
+    - Cornell's indirect light matches Cycles within the M1 accuracy target (the point-light Cornell, DECISIONS).
+  - **T1.5b, classification and relocation:** first the trace/blend split (DECISIONS 2026-11-05), then the fixed-ray reductions (subgroups first, plus the fallback and its test), relocation, the probe states and their effect on sampling, and converting the ms budget into units. Done when:
     - probes inside walls are classified off;
-    - the two-room leak is ≤ 1%.
+    - the two-room leak is ≤ 1% (DECISIONS defines it);
+    - the furnace and Cornell checks of T1.5a still pass, Cornell now on the manifest's own volume (DECISIONS 2026-11-05).
 - **T1.6 Shading module and plain-WebGPU example.**
   - `giIrradiance` (Chebyshev visibility, coverage) and `globalsCode`; `examples/webgpu/hello` renders Cornell with GI.
   - Done when GI sampling costs ≤ 1.0 ms at 1440p on the RTX 3060.
 - **T1.7 three.js adapter.**
+  - Sky: map a pmndrs/sky instance's `exposure` to `sunIlluminance`, otherwise take it from the sun `DirectionalLight` intensity; mirror three's cube maps in x; pass `environmentRotation` (DECISIONS 2026-11-05).
   - A `Light` subclass with a registered node. Scene sync covers meshes, materials, instances and lights, plus the env-diffuse workaround.
   - Checks, each with a test: metalness folded into GI albedo; UV mappings passed through; vertex normals passed through; a point light with `distance = 0` arrives as `range: 0`.
   - Done when:
@@ -321,19 +335,75 @@ Done-whens for the B stages are in `docs/design/bvh-framework.md`. B1a's: a 10k-
     - adapter CPU time is ≤ 0.2 ms per frame for a still scene and ≤ 0.5 ms with one object moving.
   - No Babylon work.
 - **T1.8 Viewer integration.**
+  - A default exposure per scene in the manifest (Sponza about +2 EV), with values picked with our DDGI on (DECISIONS 2026-11-05).
   - DDGI as a technique in the viewer, with probe debug spheres coloured by state.
   - Stats: probes per frame, update ms, memory, adapter sync ms.
   - A wipe against the Cycles reference image.
   - Done when Dennis can use it without instructions.
 - **T1.9 M1 measurements.**
-  - Measure on Sponza (untextured), Cornell and two-rooms: GI cost, update cost, whole-frame p50/p95, accuracy against Cycles, leaks, memory and startup.
+  - Measure on Sponza (with its curtains, untextured materials), Cornell and two-rooms: GI cost, update cost, whole-frame p50/p95, accuracy against Cycles, leaks, memory and startup.
   - Native RTXGI numbers on the same scenes, side by side, at matched probe counts and rays, 3 runs each.
   - Re-measure the Bistro exterior baselines on the RTX 3060; T0.5's are too noisy to quote.
   - Set the stability threshold by eye with Dennis.
-  - Done when the targets are met or a gap is explained and agreed, and Tier B's mode is decided from the Intel numbers.
+  - Done when the targets are met or a gap is explained and agreed, measured GPU-bound on the target hardware (RTX 3060), and the Intel UHD passes every correctness check (SPEC revised 2026-11-05: no Tier B mode decision in M1).
+- **T1.14 GI composite for three** (DECISIONS 2026-11-05).
+  - A TSL node built like three r187's SSGI and GTAO nodes: the user's post-processing pipeline renders `pass(scene, camera)` with `mrt({...})`, and `ddgi(...)` adds `albedo/π × E` into the HDR colour before tone mapping. No custom render path in the adapter.
+  - In composite mode the GI light returns no indirect diffuse for opaque surfaces. Transparent objects and cube captures keep the per-fragment path. `GIVolume` alone, with no pipeline changes, keeps working as today.
+  - `examples/three/` next to three's LightProbeGrid example: about as many setup lines. Report the line counts, every API a user touches, and anything still harder than LightProbeGrid.
+  - Done when:
+    - the composite matches the per-fragment path on Sponza and Cornell: per-pixel relative luminance difference mean ≤ 0.5%, p95 ≤ 2%, opaque pixels, HDR before tone mapping;
+    - the cost of showing GI (MRT extra plus the composite) is ≤ 1.0 ms on Sponza at 1440p, GPU-bound on the RTX 3060;
+    - the usage report is written, and the scout's list of differences from three's examples is either fixed or explained;
+    - both GPUs pass, and the Opus review passes.
 - **T1.10 Sponza add-ons.**
   - See the T0.12 notes above: the curtains join `sponza`; ivy, trees and candles make `sponza-full`.
   - Done when the viewer shows the curtains at bookmark 1, the fetch verifies, and the Cycles reference is re-rendered.
+
+## M2: dynamic updates (draft breakdown, T1.11)
+
+Draft from the M2/M3 design docs on branch `claude/m2-m3-design-on-m1` (73590ab; `docs/design/m2-lights.md`, `docs/design/m3-moving.md`, `research/ddgi-dynamic-updates.md`), not merged yet. Order follows Dennis (DECISIONS 2026-11-06): dynamic updates first, moving objects and time of day; startup ("fast first GI") lower. Dennis accepted key probes as the main path, rigid moving objects early and the H-PLOC rebuild on drift (DECISIONS 2026-11-06). Done-whens are in the design docs' "Draft done-whens"; they move here when the docs are merged.
+
+| ID | Task | Agent | Size | Depends on | Status |
+| --- | --- | --- | --- | --- | --- |
+| T2.4a | Change-driven history on T1.12's per-probe record, and `ddgi/mark` (the change estimate) | implementer | M | T1.12 | todo |
+| T2.4b | GPU scheduler with camera priority over Budget v2, the feedback rule; far probes owe 2 as the fallback; the warm-up moves into the technique | implementer | M | T2.4a | todo |
+| T2.4c | Key probes (1 in 8) with change propagation, the main path for global changes; first checked on Sponza's sun step and two-room's lamp | implementer | M | T2.4b | todo |
+| T2.M1 | Rigid moving objects, pulled forward from M3: the change feed for transforms (M3's T3.1, rigid part), geometry marks and the mover mask (T3.4, rigid part), three adapter change tracking for transforms | implementer | M | T2.4b (T2.4c for far sets) | todo |
+| T2.0 | Spike: deferred shadow-ray pass on Sponza (decision rule: go ahead if Sponza fits ≥ 1.25× the probes at 2 ms) | implementer | S | M1 done | todo (runs beside T2.4) |
+| T2.1 | Light buffer v2, manifest `motions`, `sponza-candles` (1,024 lights) | implementer + wrangler | M | none | todo |
+| T2.2 | Deferred direct light (`gi/direct`) in platform hit shading | implementer | M | T2.0 | todo |
+| T2.5 | Light groups: layers, compose, weights, adapter API | implementer | M | T2.2, T2.4a | todo |
+| T2.6a | Sky re-bake for time of day: GPU procedural source, two-level SH with radiance SH, the compile fix | implementer | M | T2.4b | todo |
+| T2.6b | Instant sky: first-order transfer in the blend, the nudge, the fallback; the sun layer in white with T2.5 | implementer | M | T2.4c, T2.5, T2.6a | todo |
+| T2.3 | Many-light sampling: the light grid | implementer | M | T2.1, T2.2 | todo |
+| T2.7 | Native harness: manifest motions, texture sky, animated sun | native-runner | M | T2.1 | todo |
+| T2.8 | Viewer: gizmos, sliders, groups, time of day, motions, a response meter, the native compare page | implementer | M | T2.4b, T2.5, T2.6b, T2.7 | todo |
+| T2.12 | Fast first GI: GPU H-PLOC/LBVH trees at load, tinybvh swapped in per mesh (lower priority) | implementer | M | B1, B2 | todo |
+| T2.13 | Scene copy off the main thread (lower priority) | implementer | M | none | todo |
+| T2.14 | Compile only what's configured (`encodeBatch` on first use, the sky kernel's compile) (lower priority) | implementer | S | T2.6a | todo |
+| T2.10 | M2 measurements against targets (one VALID run per gate, DECISIONS 2026-11-06) | gpu-tester, native-runner | M | all above | todo |
+| T2.11 | M2 note and M3 breakdown | main session | S | T2.10 | todo |
+
+M3 keeps deforming meshes and the BVH work: runtime mesh trees, `GpuMeshRefit` wired, and the H-PLOC rebuild when a refit drifts, several volumes, the camera-following volume, nested finer volumes around thin cloth (carried from M1), and the scenarios (`docs/design/m3-moving.md`, T3.0–T3.11).
+
+## Carried to M2 (collected during M1)
+
+- `sponza-candles`: an opt-in scene with a stated subset of Intel's 10,000 candle lights, for the many-lights stress test (DECISIONS 2026-11-05).
+- A texture sky in the native harness's miss shader (DECISIONS 2026-11-04).
+- Area lights on the platform, so an emitter's direct light can be analytic and DDGI holds only its bounced light (DECISIONS 2026-11-05, the viewer entry).
+- A public "acceleration structures built" signal on the platform (the viewer duck-types `rays.whenBuilt`).
+- **Fast first GI** (Dennis, provisional): first GI from B1's GPU-built trees, swapping to tinybvh's when the worker finishes; plus the other startup levers: file loading, the scene copy off the main thread, the cold shader compile.
+- Light-change response from `SceneChanges` (the big-change rule is off; DECISIONS 2026-11-05).
+- A deferred shadow-ray pass in platform hit shading: shadow rays take 53% of Sponza's DDGI trace and run at 1/7 of the bench any-hit rate (T1.9a).
+- `encodeBatch` kernels compiled only on first use; why the sky SH projection takes 1 s to compile.
+
+## Carried to M3 (collected during M1)
+
+- Probes in empty space are switched off by classification ("no surface nearby"; 347 of Cornell's 1,728). Moving objects in mid-air then get no GI. M3 (moving objects) needs those probes active near receivers, or a fallback.
+- The three adapter's change-detection latency (up to 41 frames on Bistro without `markChanged`).
+- The main-thread scene copy (1.3 s Sponza, 4.1 s Bistro exterior at load) moves off the main thread.
+- A flaky `tools/assets/fetch.test.ts` under load.
+- Nested finer DDGI volumes around thin cloth (Sponza's curtains: 0.25 m around them measured +5.5% offline, about 40k probes, 60 MB, about 1 ms of update): the quality route behind M1's GTAO fix (DECISIONS 2026-11-05).
 
 ## Later
 

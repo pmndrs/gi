@@ -130,7 +130,7 @@ Gaps:
 
 4. **Deformed vertices from three.js.** `setDeformedPositions` wants a GPU buffer. three's skinned and morphed positions aren't exposed as one. The adapter may have to run its own skinning compute. To decide in M3.
 5. **Compressed textures** (KTX2). `TextureSource` accepts a `GPUTexture`, but getting three's `GPUTexture` means reaching into the renderer's backend, which we've ruled out. Alternatives: decode the KTX2 ourselves, or have the adapter keep the original image. To decide in M4.
-6. **Splitting the budget between stacked techniques.** For now the platform shares units in proportion to each technique's `msPerUnit`. This needs a real policy once there are two techniques.
+6. **Splitting the budget between stacked techniques.** For now the platform splits the millisecond budget evenly between techniques and turns each share into units with that technique's measured `msPerUnit` (T1.5b). This needs a real policy once there are two techniques.
 7. **Storage-buffer budget for tracing kernels.** The scene copy (about 3), the BVH (about 2) and lights (1) leave about 2 of the default 8 for the technique. T0.10 must count the real numbers. If it's too tight, `requiredLimits` asks for more where the adapter has it (most desktop adapters allow 10 or more), and we pack tables into fewer buffers.
 8. **Texture tiling (UV transforms).** Engines tile, offset and rotate textures, and may read a second uv set. Without that information, the GI copy of a tiled floor samples the wrong texels.
    - The contract now has optional `albedoUv` and `emissiveUv` (`UvMapping`: uv channel, a 3×2 matrix, and wrap per axis) and a second uv set, `MeshDescriptor.uvs1`. From three.js the adapter passes `texture.matrix` and `texture.channel` straight through.
@@ -157,6 +157,24 @@ Gaps:
 The answers go in PROGRESS. Any change to the contract is made in both the TypeScript and this page, and listed in a "Revisions" section here.
 
 ## Revisions
+
+### During M1, 2026-11-04
+
+- **Host-facing (budget v2, 2026-11-05, after its review): `GIPlatform.recalibrate()`.** Measures again how much work fits in `gpuMs`, at the next millisecond frame. The platform calibrates by itself after `prepare`; a geometry change only marks the calibration stale (reported in `stats.counters['<technique> budget']`), since a burst during play makes frames heavier for a moment; a new `gpuMs` is solved from what was measured. `FrameBudget.gpuMs` now says it needs `gpuTiming` (without timings the hand-out is `units`, or 512).
+- **Technique-facing (budget v2, 2026-11-05): optional `GITechnique.minUnitsPerFrame(rate)`,** the fewest units the technique wants per frame under a millisecond budget, given the host's frame rate and the calibrated batch (`WorkFloorRate`). It wins over the millisecond ceiling; `budget.units` caps it. DDGI implements it from `minProbesPerFrame`.
+- **Host-facing, accepted by Dennis with budget v2 (2026-11-05): `FrameBudget.targetFps`, optional.** The frame rate the host aims for. Budget v2 (docs/design/ddgi.md) hands out a calibrated number of work units each frame and steps it down only when frames are late, so it needs the target interval; without `targetFps` it uses the rate it observes from `deltaTime` when frames are on time. Without it, an observed rate that isn't a display refresh rate (up to 165 Hz) means an uncapped host, which gets no frame-rate ceiling. It also sets the frame rate for floors given in seconds (DDGI's `minProbesPerFrame: 'auto'`, a full sweep within 4 s). `gpuMs` now means "per frame, measured with the GPU's clocks up", and `units` caps the floor too. (Budget v2 implementation, 2026-11-05.)
+
+- **`requiredLimits` also covers compute workgroups:** it asks for 256 invocations per workgroup (and size X 256), capped at the adapter, because compatibility-mode devices default to 128. Host-facing only in that hosts get one more limit in the list they already pass through. (T1.6, 2026-11-05)
+
+- **Technique-facing: `GITechnique.encode` may return the number of units it actually used** (T1.5b). The platform's budget meter divides the measured GPU time by that, not by the units it handed out, so a budget bigger than the work doesn't inflate the next frame's hand-out. Returning nothing means "all of them". Hosts don't see this.
+
+- **Host-facing, approved by Dennis (2026-11-05): a procedural environment gets an optional `sunIlluminance`,** the illuminance of the sun the sky is calibrated to (default 1); `intensity` stays a plain multiplier, as for 'color' and 'texture'. It's the same quantity as pmndrs/sky's `exposure`. See DECISIONS.
+- **Stated in the contract (T1.4):** the `equirect` layout (nadir at memory row 0, u = 0 at −X, as three's `equirectUV`), and the cube convention (WebGPU's faces, direction unchanged). three r187 looks cubes up at (−x, y, z), so the three adapter mirrors them.
+
+- **Technique-facing: `ComputeKernelOptions.ownLayouts` became `ownGroups`,** bind-group layout *descriptors*, so the kernel builder can count the technique's own storage buffers too and throw `GILimitError` instead of a pipeline validation error past the device's limit. `ComputeKernel.ownLayouts` returns the layouts it made. Hosts don't see this. (T1.3 review, 2026-11-05)
+- **`requiredLimits` says what's true now:** small scenes run at default limits; large ones (Sponza with curtains, Bistro exterior) need the raised limits it asks for, which are the adapter's maximum binding and buffer sizes. Nothing is split across bindings. Dennis approved raising limits (DECISIONS 2026-11-05).
+
+- **Fix: `updateLight` takes `LightChanges`,** a union of each light type's partial fields. The old type, `Partial<Omit<LightDescriptor, 'type'>>`, kept only the keys every light type shares (that's how `Omit` treats a union), so a host couldn't update a point light's `position` or `range` without a cast. The documented behaviour (any field except `type`) is unchanged. Found by T1.2; fixed by the M1 lead, and Dennis was told.
 
 ### After T0.10 (BVH), 2026-11-04
 

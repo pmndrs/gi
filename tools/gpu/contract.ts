@@ -61,6 +61,12 @@ export interface PageManifest {
 export interface RunSummary {
     schema: 1;
     startedAt: string;
+    /**
+     * The code that ran: HEAD's short hash, plus "-dirty" when a measured file
+     * differed from it (tools/gpu/measured-commit.ts), read when the run started.
+     * Missing in runs from before T1.3, or when git wasn't available.
+     */
+    commit?: string;
     gpuRequested: GpuChoice | null;
     /** What the preflight check saw; null if the run failed before that. */
     adapter: AdapterSummary | null;

@@ -1,0 +1,5 @@
+{
+    "description": "Diagnostic (T1.5a): DDGI field against a GPU path-traced irradiance at Cornell (point light) surface points, per surface, for the manifest volume and a volume with every probe in the air near the surfaces; plus how fast the true irradiance changes off each surface.",
+    "timeoutMs": 600000,
+    "manual": true
+}

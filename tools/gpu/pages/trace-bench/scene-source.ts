@@ -9,7 +9,7 @@
 
 import type { ModelPart, SceneManifest } from '../../../../scenes/src/manifest.ts';
 import repositoryPackageUrl from '../../../../package.json?url';
-import { FALLBACK_TOWARD_SUN } from './config.ts';
+import { BENCH_SCENE_SUBSETS, FALLBACK_TOWARD_SUN } from './config.ts';
 import { fetchGltfGeometry, modelTransformMatrix, type BenchInstance, type BenchMeshGeometry } from './gltf-geometry.ts';
 import { normalizeVector, worldBounds, type Box, type Vec3 } from './rays.ts';
 
@@ -94,16 +94,25 @@ export function volumeBox(volume: SceneManifest['volume']): Box {
     };
 }
 
-/** Downloads and flattens a manifest scene. `volume` picks which box the probes fill. */
+/**
+ * Downloads and flattens a manifest scene, or a subset of one
+ * (`BENCH_SCENE_SUBSETS`: only the listed assets, with the manifest's volume
+ * and sun). `volume` picks which box the probes fill.
+ */
 export async function loadBenchScene(id: string, volume: 'manifest' | 'scene'): Promise<BenchScene> {
     const start = performance.now();
-    const manifest = findManifest(id);
+    const subset = BENCH_SCENE_SUBSETS[id];
+    const manifest = findManifest(subset?.manifest ?? id);
     const meshes: BenchMeshGeometry[] = [];
     const instances: BenchInstance[] = [];
     const modelFiles: string[] = [];
     let skippedPrimitives = 0;
 
-    for (const part of manifest.parts) {
+    const parts = subset ? manifest.parts.filter((part) => part.kind === 'model' && subset.assets.includes(part.asset)) : manifest.parts;
+    if (subset && parts.length !== subset.assets.length) {
+        throw new Error(`scene "${id}" needs the parts ${subset.assets.join(', ')} of "${subset.manifest}", and the manifest doesn't have them all`);
+    }
+    for (const part of parts) {
         if (part.kind !== 'model') throw new Error(`scene "${id}" has a procedural part; the benchmark only loads model files`);
         const modelPart: ModelPart = part;
         const url = findModelUrl(modelPart.asset, modelPart.path);

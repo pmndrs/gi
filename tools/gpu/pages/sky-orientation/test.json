@@ -1,0 +1,3 @@
+{
+    "description": "T1.1: the shared sky file (open-ground) reads the same in the platform loader (compute shader) and the viewer sky dome (three.js) at known directions, and the sun glow is where the manifest puts the sun."
+}

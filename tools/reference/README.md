@@ -3,7 +3,7 @@
 Ground truth on demand, and one way to compare images.
 
 ```
-node tools/reference/cycles/run.ts       --scene cornell-box --camera 1 --samples 2048 --width 512 --height 512
+node tools/reference/cycles/run.ts       --scene cornell-box --camera 1 --samples 4096 [--denoise]     # 1920 x 1080, OptiX
 node tools/reference/pathtracer/run.ts   --scene cornell-box --camera 1 --samples 8192 --width 512 --height 512
 node tools/compare/index.ts bench/references/cornell-box/front/cycles-full.exr bench/references/cornell-box/front/pathtracer-full.exr
 node tools/reference/cycles/run.ts --calibrate      # known-answer checks of the unit conversions
@@ -14,13 +14,45 @@ Output goes to `bench/references/<scene>/<camera name>/` (gitignored):
 | file | what |
 | --- | --- |
 | `cycles-full.exr`, `cycles-indirect.exr` | Blender Cycles, 32-bit linear float, no denoising |
+| `cycles-direct.exr`, `cycles-lights-direct.exr`, `cycles-gi.exr` | the GI composite and its parts: what DDGI is compared with (see "The GI composite") |
+| `cycles-untextured-*` | the same from an untextured render (see "Untextured references") |
 | `pathtracer-full.exr`, `pathtracer-indirect.exr` | three-gpu-pathtracer (WebGPU), same |
-| `*.json` | every setting, sample count, adapter and time |
+| `cycles-full-denoised.exr` | with `--denoise`: a denoised copy of the full image, for viewing only (see "HD references") |
+| `*.json` | every setting, sample count, adapter and time, and the stored shot (see "Stored camera") |
 | `compare-*.png` | heatmaps from `tools/compare` |
 
 `bench/references/render-log.csv` gets one row per render (sample count, size, seconds).
 
-Cameras are the manifest bookmarks: `--camera 1` is the first, or give the name. Both renderers build the camera from the manifest position, target and vertical fov, with the same aspect and size.
+Cameras are the manifest bookmarks: `--camera 1` is the first, or give the name. Both renderers build the camera from the manifest position, target and vertical fov, with the same aspect and size. `--from-shot <cycles.json>` renders an earlier reference's stored camera and size instead.
+
+## HD references (T1.13, 2026-11-05)
+
+Dennis: "640 x 360 is an insane size to judge ANYTHING against." Since T1.13 every reference is:
+
+- **1920 × 1080** by default. 16:9 was chosen over the viewer's window shape because the window changes; the viewer instead letterboxes to the reference's stored aspect. It is also two-room's and Sponza's earlier 640 × 360 shape, so their means stay comparable (the `ddgi-leak` page's constants, for one). Cornell's earlier references were 512 × 512; at 16:9 the frame shows more of the black surroundings, which changes the image mean but not the bias (sum against sum on the same view).
+- **Anti-aliased:** Cycles' Blackman-Harris pixel filter, 1.5 px wide (its default). It was a 1 px box before. Cycles importance-samples the filter, so an image's mean doesn't change; edges are softer by about half a pixel. What it means for comparisons: DDGI's test view shoots one ray through each pixel centre (no anti-aliasing), so per-pixel numbers and per-pixel FLIP now include an edge-softness difference along every silhouette. The 8 × 8 block numbers, which the tolerances use, barely move (an edge's light stays in its block), and the bias doesn't move at all. `--pixel-filter box --filter-width 1` renders the old way.
+- **On the GPU:** `--device gpu` (OptiX on the RTX 3060 Laptop) is now the default; `--device cpu` still works. OptiX and CPU references agree to about 0.1% (DECISIONS, the sky-aware composite review). The json records the device by name.
+- **Clean:** the sample counts in "Sizes, samples and times" below, with the 8 × 8-block noise measured from two seeds.
+- **`--denoise`** (Dennis is fine with denoising tools) also writes `cycles-full-denoised.exr`: the full image through OpenImageDenoise (Blender's compositor Denoise node, HDR, with albedo and normal guides). It is for the viewer's wipe only. The raw EXRs are written unchanged and are what every accuracy number is measured on. `run.ts` measures the denoised copy against the raw image and stores the result (`denoiseCheck`: bias and 8 × 8 block error) in the json and in `shot.render.denoised.check`. The viewer shows the denoised copy when there is one, and says so. The GI-only view (`cycles-gi.exr`) is never denoised: it is the raw composite, and the viewer states its sample count and measured noise next to it ("Noise of each reference").
+
+**Long renders in parts.** One bench-lock hold should be one short shot (under about 15 minutes), so other lanes can time between renders. A longer reference is rendered as parts with different seeds (`--seed k --name-suffix=-partk`, same samples each) and averaged with `node tools/reference/cycles/combine.ts --dir <folder> --prefix cycles-untextured --parts=-part0,-part1,...`. The mean of independent renders is the same estimator as one render with all their samples; `combine.ts` refuses parts whose shot, samples, filter or device differ, or that share a seed. The combined json lists the parts (`combinedFrom`) and the seeds. A denoised viewing copy isn't combined; render that whole.
+
+## Stored camera (`shot`)
+
+Every render writes, in its json (`cycles.json`, `cycles-untextured.json`, ...), a `shot` with everything needed to see exactly that view again (format `ddgi-reference-shot/1`):
+
+| field | what |
+| --- | --- |
+| `camera` | `bookmark` name and number; `position`, `target`, `up` (+Y) in manifest space (three.js axes, metres); `fovYDeg` (vertical); `aspect`, `width`, `height`; `near` 0.01 and `far` 2000 (m) |
+| `display` | `exposureEv` (default the manifest's `exposureEv`) and `toneMapping` (default `aces`): what the viewer shows it with. The EXRs are linear and never tone-mapped |
+| `scene` | the manifest id, path and sha256 of its file; the sky file's sha256; the GI material table's sha256 (untextured renders) |
+| `render` | `git` (commit; `uncommittedChanges` is true only when files that affect a render had uncommitted edits: `uncommittedScope` = tools/reference, scenes, tools/sky, listed in `uncommittedFiles`; the GI material table is gitignored and hashed instead), Blender version, `device` (e.g. `OPTIX: NVIDIA GeForce RTX 3060 Laptop GPU`), samples, seed, pixel filter, render seconds, `denoised` (null, or the viewing copy's file, denoiser and its check), and `noise` (see "Noise of each reference") |
+
+Who reads it:
+
+- **The viewer's Compare** (`apps/viewer/src/scene/reference-files.ts`, `viewer-app.ts`): moves the camera to the stored position, target and field of view, letterboxes the picture to the stored aspect, and (on pressing Compare) sets the stored exposure and tone mapping, so the wipe lines up pixel for pixel. The panel says when the scene's manifest has changed since the render (a warning: re-render), and when the render is from another commit than the viewer runs. The viewer keeps its own near and far planes: they only clip, and 0.01 to 2000 m would cost depth precision.
+- **The DDGI test images:** `tools/gpu/pages/ddgi-test-view/render.ts` and `ddgi-sponza-accuracy/run.ts` render DDGI from the stored camera at the stored size (`tools/reference/shot.ts`), and warn if the manifest has changed since.
+- **Blender:** `run.ts --scene <id> --from-shot <json> --samples N` renders the same view again.
 
 ## What "full" and "indirect-only" mean
 
@@ -29,6 +61,66 @@ Cameras are the manifest bookmarks: `--camera 1` is the first, or give the name.
   - Cycles: the Diffuse Indirect pass times Diffuse Colour. Materials are purely diffuse, so full = emission + environment + direct + indirect.
   - Path tracer: full minus a direct image. The library counts the camera hit as bounce 1 and samples point, directional and spot lights explicitly at every hit, but finds emissive surfaces only by following a scattered ray. So a single bounce limit means different things for the two kinds of source. The direct image is therefore two runs added together (light is additive): lights only (emission switched off, `maxBounces` 1) and emission only (lights switched off, `maxBounces` 2). The same random numbers are used in every run, which keeps the difference quiet.
   - Checked against known answers and against each other: furnace room (albedo 0.5, emission 0.25) gives full 0.5, indirect 0.125 in both renderers; two-room (a point light) agrees on indirect to 0.1 percent; Cornell (emissive quad) agrees to 0.3 percent. Using the emission setting (2 bounces) on a point-light scene drops the indirect by 36 percent, which is how the split was found.
+
+## The GI composite: what DDGI is compared with
+
+`cycles-gi.exr` = `cycles-indirect.exr` + `cycles-direct.exr` − `cycles-lights-direct.exr`. Every Cycles render writes it (`render.py` renders the parts, `run.ts` adds them up), and every DDGI accuracy number is taken against it, for Cornell, two-room and Sponza alike (`node tools/gpu/pages/ddgi-sponza-accuracy/run.ts --table`).
+
+**Why.** DDGI's field holds every light a probe ray brings back: bounces, and also the sky and emitters seen straight. Only the manifest's analytic lights (sun, point, spot) are drawn by the renderer, outside the field. Cycles' indirect pass leaves out the sky and emitters seen straight from the surface (it counts them as direct), so on Sponza's open courtyard it holds about half of what DDGI's field holds. So the reference is everything diffuse except the analytic lights' direct light. The decision and its history are in DECISIONS ("What 'indirect light' means against Cycles in a scene with a sky", set 2026-11-05 at T1.9).
+
+**The parts** (both × Diffuse Colour, so they are radiance like the indirect pass):
+
+| file | what |
+| --- | --- |
+| `cycles-direct.exr` | Diffuse Direct from the normal render: the lights, the sky and emitters, reaching the visible surface without a bounce |
+| `cycles-lights-direct.exr` | Diffuse Direct from a second render with only the manifest lights on and no bounces, same seed and samples (so pixel jitter matches and edges cancel) |
+
+**The lights-only render really is lights-only.** `switch_off_emitters` (render.py) replaces the world with a black one (no nodes, colour 0), whatever it held. In every material and shader node group it unlinks and zeroes every emitting input: Principled surface emission, the Emission shader (on a surface or in a volume), a Background shader used in a material, and Principled Volume emission and blackbody. Then `find_emitters` must find nothing left, or the run stops with the list. A shader node of a kind it doesn't know that has an emission input also stops it. Light objects in the glTF files are deleted on import, so the only light objects are the manifest's.
+
+**Checks, on every render.** Before the normal render, `render.py` records what else emits (`otherEmitters` in `cycles.json`) and what the lights-only image must therefore be (`giComposite.lightsOnlyExpected`). `run.ts` checks it (`gi-composite.ts`). If the check fails, it stops with exit code 1 and writes no `cycles-gi.exr`.
+
+- `equals-direct`: the manifest lights are the only source (no sky, no emitter: point-light Cornell, two-room). The lights-only direct image must equal the normal direct image: bias within ±0.5% and 8 × 8 block error at most 2%. This catches a lights-only render that lost or changed the lights' own light. In these scenes the composite equals the indirect pass.
+- `black`: the scene has no manifest lights (emissive Cornell). The lights-only image must be 0 (at most 0.01% of the direct light). This catches an emitter the switch-off missed.
+- not checked: both kinds of source (Sponza). There is no known image to compare with; the calibration case below covers the switch-off.
+
+`node tools/reference/cycles/run.ts --calibrate` has a known-answer case, "lights only": a white floor under a point light, with a coloured world and four emitting quads around it (an Emission shader, one inside a node group, a Background shader as a material, Principled emission). `find_emitters` must list 5 sources, and the lights-only image must show the point light's E / π alone: 3.97888 against 3.97887. With everything on, the floor reads 5.895, so a missed source would show. (The switch-off before 2026-11-05 zeroed only Principled emission and the world's Background node; it would have left three of the four quads on.)
+
+Cheap end-to-end runs of the check (seconds each; they take the bench lock and add rows to `render-log.csv`):
+
+```
+node tools/reference/cycles/run.ts --scene cornell-box-point --samples 64 --width 128 --height 128 --out-dir <scratch folder>   # equals-direct
+node tools/reference/cycles/run.ts --scene cornell-box --samples 64 --width 128 --height 128 --out-dir <scratch folder>         # black
+node tools/reference/cycles/run.ts --calibrate                                                                                  # the switch-off, known answers
+npx vitest run tools/reference/cycles                                                                                           # the image check itself
+```
+
+Measured 2026-11-05 (CPU, 2048 samples, seed 0, the references' sizes): on point-light Cornell (512 × 512) and two-room `lit-room` (640 × 360) the lights-only direct image equals the normal direct image exactly (bias 0.000%, block error 0.000%: same seed, same first-hit samples), so `cycles-gi.exr` equals `cycles-indirect.exr` there, and the re-rendered `cycles-full`/`cycles-indirect` are pixel-identical to the earlier ones. The lights-only render costs 116 s (Cornell) and 110 s (two-room) on top of 211 s and 340 s.
+
+## Untextured references (`--materials-json`)
+
+```
+node tools/reference/cycles/run.ts --scene sponza --camera 1 --width 640 --height 360 --samples 8192 --device gpu \
+     --materials-json bench/references/sponza/colonnade-from-the-floor/gi-materials.json
+```
+
+renders the scene with the materials DDGI actually sees, and names the files `cycles-untextured-*` (`full`, `indirect`, `direct`, `lights-direct`, `gi`, and `cycles-untextured.json`).
+
+**What it replaces.** In M1 the platform's GI sees one constant colour per material: the three adapter folds each texture's average into the colour, and the core samples no textures until M4 (DECISIONS 2026-11-05, T1.7). A textured Cycles render would judge that simplification together with DDGI. The GI material table (`gi-materials.json`, written by `tools/gpu/pages/ddgi-sponza-accuracy/run.ts` from `SceneSync.sentMaterial`) lists, per model part and glTF material name, the albedo and emission the adapter sent to the platform. `apply_gi_material_table` puts them on every Principled BSDF, replacing the textured inputs:
+
+| input | set to | why |
+| --- | --- | --- |
+| Base Color | the table's albedo; texture, vertex colour and factor nodes cut off | the GI albedo is one constant per material |
+| Emission Color, Strength | emission / its peak, strength = the peak | strength is radiance (units.py) |
+| Alpha | 1 | the M1 tracer treats every surface as opaque (alpha cutouts and see-through materials arrive with M4). So `glass` is an opaque surface on both sides, as in DDGI: consistent, not physical |
+| Normal | cut off (normal maps removed) | the platform shades with interpolated vertex normals |
+
+Metallic, Roughness, Transmission, Specular and the other lobes are forced to the diffuse values as for every reference (`make_materials_diffuse_only`; "Diffuse only, checked" below). `require_untextured` then refuses to render if any input in the table above is still linked.
+
+**Matching.** Materials are matched by model part and glTF name (Blender's `.001` suffixes for repeated names are stripped). A material used in the scene with no row, or a row with no material, stops the run. Only the model parts the table lists (`parts`) are imported, so a table made from the base package renders the base package.
+
+**Left-out faces.** The three adapter leaves a mesh out of GI when all its materials let light through (alpha-blended glTF materials such as Sponza's `dirt_decal`, `blocksLight: false`), because the M1 tracer can't honour that per triangle. The table counts those meshes per material (`leftOutMeshes`), and `remove_left_out_faces` deletes the faces of every such material (Sponza: `dirt_decal`, 8,140 faces; recorded as `leftOutOfGiFaces` in the json). three makes one mesh per glTF primitive, with one material each, so a material's faces are exactly those meshes; a material with only some of its meshes left out stops the run.
+
+**The table hash.** `cycles-untextured.json` records the table's path and sha256 (`giMaterials`). `ddgi-sponza-accuracy/run.ts` hashes the table it has just written and says whether the reference was rendered from it, or warns that the reference must be rendered again (a changed adapter can send different colours).
 
 ## Settings, and why
 
@@ -41,8 +133,8 @@ Both sides, matched on purpose:
 | Bounces | 32 | 33 (the library counts the camera hit as the first) |
 | Clamping | off (Blender's default indirect clamp of 10 is a bias) | off (the library's default indirect clamp is 10) |
 | Denoising | off | off (see "Denoiser") |
-| Pixel filter | box, 1 px | jitter inside the pixel |
-| Environment | none = black | none = black; other types unsupported |
+| Pixel filter | Blackman-Harris, 1.5 px (box, 1 px before T1.13; see "HD references") | jitter inside the pixel |
+| Environment | none = black; procedural = the shared sky file `scenes/sky/<scene>.exr` | none = black; other types unsupported |
 | Direct light range | not applied | three's range window is applied (see below) |
 
 **Diffuse only, checked.** Blender's glTF importer links Metallic and Roughness to the metallicRoughness texture (24 of the 28 New Sponza materials), and a linked input ignores the value set on it. So `make_materials_diffuse_only` unlinks every input in `NEUTRAL_PRINCIPLED_INPUTS` (Metallic, Roughness, Diffuse Roughness, Subsurface, Specular IOR Level and Tint, Anisotropic, Transmission, Coat, Sheen, Thin Film) and then sets it. `render.py` then refuses to render, listing each culprit, if any Principled BSDF still has one of those inputs linked or not neutral, or if a glossy-type shader node is present. On Sponza it removes 76 texture links. Sponza references rendered before 2026-11-04 16:00 had metal texels with no diffuse and a glossy sun highlight; the re-render is 2.3 percent brighter overall and 17.9 percent brighter in indirect light (mean 0.0341 to 0.0349, indirect 0.00420 to 0.00495), because glossy bounces are switched off, so those metal texels absorbed bounce light instead of passing it on. Cornell and two-room have no texture links and are unaffected.
@@ -51,7 +143,7 @@ Cycles also: adaptive sampling off; light sampling threshold 0 (the default 1 pe
 
 ## Unit conversions (manifest, three.js physical units, to Cycles)
 
-All in `tools/reference/cycles/units.py`, each with its reason. Pinned by measurement in Blender 4.5.0 and checked by `--calibrate` (point, sun, spot, furnace; all within 0.05 percent):
+All in `tools/reference/cycles/units.py`, each with its reason. Pinned by measurement in Blender 4.5.0 and checked by `--calibrate` (point, sun, spot, furnace; all within 0.05 percent; it also checks the shared sky's orientation and its light on a floor):
 
 | manifest | Cycles | note |
 | --- | --- | --- |
@@ -65,7 +157,7 @@ All in `tools/reference/cycles/units.py`, each with its reason. Pinned by measur
 
 **Range window.** three.js and the path tracer fade a point light to zero at `range` (`(1 - (d/range)^4)^2`). Cycles has no such window and the reference is the plain inverse-square answer. On two-room (range 14) that makes three about 12 percent dimmer than Cycles at 7 m from the lamp and 3 percent at 5 m. This is a difference to remember when comparing DDGI with a Cycles reference; Cornell and Sponza are unaffected (emissive geometry, directional light).
 
-**Procedural sky** (Sponza only): Cycles' Nishita sky with the sun disc off, since the directional light is the sun. It stands in for the viewer's sky; it is not the same model. `turbidity` is not mapped.
+**Procedural sky:** the shared sky file `scenes/sky/<scene>.exr` (T1.1, `tools/sky/README.md`) as an Environment Texture, the same file the viewer and the platform read: no sun disc (the directional light is the sun), black below the horizon, brightness calibrated. Until 2026-11-04 it was Cycles' Nishita sky, which was brighter: references with a procedural sky rendered before then (Sponza) must be rendered again. The before and after means are in PROGRESS (T1.1).
 
 ## Compare
 
@@ -126,6 +218,43 @@ Noise of one image, as relative RMS (half the difference between two seeds, over
 
 All in `bench/references/render-log.csv`.
 
+The rows above are the pre-T1.13 references (now `cycles*-lowres.*`). The HD set (T1.13, 1920 × 1080, Blackman-Harris 1.5 px):
+
+| reference | samples | device | seconds |
+| --- | --- | --- | --- |
+| point-light Cornell `front` | 8192 (+ a second seed) | OptiX | 983 |
+| two-room `lit-room` | 4096 | OptiX | 1351 |
+| two-room `dark-room-leak-view` | 2 × 2048, combined | OptiX | 564 + 432 |
+| untextured Sponza `colonnade-from-the-floor` | 4 × 2048, combined | OptiX | 445 + 470 + 379 + 381 |
+| emissive Cornell `front` | 2 × 1024, combined | CPU, 12 threads | 1319 + 1303 |
+| textured Sponza `colonnade-from-the-floor` | 512, denoised copy | CPU, 12 threads | 2029 |
+| the other bookmarks (Cornell 2 and 3, two-room doorway, Sponza gallery, open ground) | 1024 (Sponza 512), denoised copies | CPU, 12 threads | 756 to 2831 |
+
+## Noise of each reference
+
+`node tools/reference/cycles/noise.ts --dir <folder> [--other-dir <second render> | --other-suffix=-seed1]` measures a reference's own noise and stores it in its json (`noise`, and `shot.render.noise`, which the viewer shows next to the picture). The number is the mean relative error the raw image would show against the converged one, per pixel and over 8 × 8 blocks, derived from the difference to an independent render (another seed; for references combined from parts, two of the parts). The formula is in `noise.ts`. Single renders were measured against a short second seed (seed 7, 128 samples on the CPU; Sponza 64), kept in a scratch folder.
+
+The GI-only view (`cycles-gi.exr`) is the raw composite, never denoised; the full view shows the denoised copy where there is one, so its on-screen noise is lower than the raw number below.
+
+| reference (HD, T1.13) | samples | GI per pixel | GI 8 × 8 | full per pixel | full 8 × 8 |
+| --- | --- | --- | --- | --- | --- |
+| point-light Cornell `front` | 8192 | 3.00% | 0.37% | 1.35% | 0.17% |
+| point-light Cornell `inside-from-red-wall` | 1024 | 9.80% | 1.06% | 6.50% | 0.71% |
+| point-light Cornell `diagonal-to-the-red-wall` | 1024 | 8.96% | 0.87% | 5.36% | 0.52% |
+| emissive Cornell `front` | 2048 | 1.21% | 0.16% | 0.57% | 0.07% |
+| emissive Cornell `inside-from-red-wall` | 1024 | 1.54% | 0.20% | 1.54% | 0.20% |
+| emissive Cornell `diagonal-to-the-red-wall` | 1024 | 1.27% | 0.17% | 1.27% | 0.17% |
+| two-room `lit-room` | 4096 | 1.83% | 0.22% | 1.29% | 0.16% |
+| two-room `dark-room-leak-view` | 4096 | 6.20% | 0.78% | 5.54% | 0.70% |
+| two-room `through-the-doorway` | 1024 | 3.54% | 0.41% | 2.54% | 0.29% |
+| untextured Sponza `colonnade-from-the-floor` (accuracy) | 8192 | 1.72% | 0.21% | 0.17% | 0.02% |
+| textured Sponza `colonnade-from-the-floor` | 512 | 14.42% | 1.69% | 1.49% | 0.18% |
+| textured Sponza `upper-gallery` | 512 | 14.03% | 1.79% | 2.27% | 0.29% |
+| open ground `ground-from-above` | 1024 | 0.07% | 0.00% | 0.07% | 0.00% |
+| open ground `towards-the-sun-glow` | 1024 | 0.13% | 0.01% | 0.04% | 0.00% |
+
+Per pixel, the GI image is visibly grainy where it is over a few percent: the point-light Cornell inside views (indirect light from a small source), the dark room (little light), and textured Sponza at 512 samples. Over 8 × 8 blocks, which the accuracy tolerances use, every reference is under 2%.
+
 **Sponza's sun.** At the manifest's first sun angle (53 degrees) a ray test from 187 floor points found only 3 unshadowed, so the reference was lit mostly by the sky (mean pixel 0.018). The sun was raised in the manifest; the floor band is now lit and the mean is 0.0349.
 
 ## Denoiser
@@ -147,26 +276,44 @@ Only a single pass at the end is wired up, not the progressive (every N samples)
 
 ## Sample counts, GPU and CPU
 
-- Both tools hold the shared bench lock (`$TEMP/ddgi-gpu-bench.lock`, see "Bench lock" below) for the whole render: one machine-heavy job at a time. Cycles on the CPU (16 threads on this laptop) would skew other agents' build-time and CPU numbers, and the path tracer loads the GPU. A tool waits while someone else holds the lock and releases it when it finishes, fails, or is stopped with Ctrl-C or SIGTERM (the release is on the tools/gpu cleanup list, which also kills Blender). Chrome is closed after the lock is released, since closing can take minutes on a busy machine.
-- Cycles uses the CPU by default; `--device gpu` uses OptiX (still under the lock).
+- GPU renders (Cycles on OptiX, the path tracer) hold the shared GPU bench lock (`$TEMP/ddgi-gpu-bench.lock`, see "Bench lock" below) for the whole render, one shot per hold. A tool waits while someone else holds the lock and releases it when it finishes, fails, or is stopped with Ctrl-C or SIGTERM (the release is on the tools/gpu cleanup list, which also kills Blender). Chrome is closed after the lock is released, since closing can take minutes on a busy machine.
+- Cycles uses the GPU (OptiX) by default since T1.13. Since the same day (lead, after GPU renders kept the card at 88 C and blocked the timing lanes, which must start below 70 C) the long references render on the CPU instead: `--device cpu --threads 12`. A CPU render takes only the CPU-heavy lock (`ddgi-cpu-heavy.lock`, see "Bench lock"), not the GPU lock, and leaves 4 of the 16 threads free so GPU benchmarks can still submit; a benchmark that times CPU-side work takes both locks, so it never overlaps a CPU render. The json records the device and threads.
 - Noise: render a second seed (`--seed 1 --name-suffix=-seed1`, note the `=`) and compare the two; half the relative RMS is the noise of one image.
 
 ## Bench lock
 
-One machine-heavy job at a time on this machine: GPU timing, native harness runs, Cycles renders, path-tracer renders. The lock is the folder `$TEMP/ddgi-gpu-bench.lock`; `tools/reference/bench-lock.ts` implements it, for Node code (`withBenchLock`) and as a command line for everyone else.
+Two locks, both folders in `$TEMP`, with the same protocol and code (`tools/reference/bench-lock.ts`, for Node code as `withBenchLock` and as a command line for everyone else):
+
+- **GPU lock** `ddgi-gpu-bench.lock` (the default): GPU timing, native harness runs, GPU renders (Cycles on OptiX, the path tracer). One at a time.
+- **CPU lock** `ddgi-cpu-heavy.lock` (`--lock cpu`, or `withBenchLock(work, { lock: 'cpu' })`): CPU renders (Cycles on the CPU, long CPU path tracers). They take only this one, not the GPU lock.
+- **Benchmarks that time CPU-side work take both** with `run --cpu-timed` (GPU lock first, then CPU): the three adapter's CPU cost pages, B0's worker build times, scene-copy timings.
+
+So a GPU-timed run may overlap a CPU render; a CPU-timed one may not.
+
+**GPU timing waits for the GPU to cool.** After taking its lock and before starting the command, `run` waits until nvidia-smi reads the GPU below 70 C (pass/fail timing starts there, DECISIONS 2026-11-05), checking every 5 s. It prints the temperature at the start and when it is cool. `--cool-below <C>` changes the limit. After 15 minutes (`--cool-wait-max-minutes`) it runs anyway with a warning. Without nvidia-smi there is no wait. `--no-cool-wait` skips it for jobs that time nothing on the GPU (correctness checks, renders), and `--lock cpu` never waits. The clock summary records the start temperature (`start`).
+
+**The timing verdict** (the clock rule, DECISIONS 2026-11-05). While the command runs, `run` samples nvidia-smi every 200 ms. At the end it prints one line:
+- **VALID:** the run started below 70 C and fewer than 5% of its loaded samples (70% GPU use or more) show thermal throttling.
+- **INVALID:** a hot start, or 5% or more thermal samples; the line says which.
+- **NO VERDICT:** fewer than 5 loaded samples.
+
+There is no MHz bar; the clock median is printed for information. The to-csv scripts write the same verdict as `note/timing_valid,1|0` (and `note/timing_no_verdict,1`), with `note/thermal_share` and `note/start_temp_c`.
 
 ```
-node tools/reference/bench-lock.ts status                               # who holds it; exit 0 free, 3 held, 4 held but stale
+node tools/reference/bench-lock.ts status                               # who holds each lock; exit 0 free, 3 held, 4 held but stale (GPU lock, or --lock cpu)
 node tools/reference/bench-lock.ts run --what "trace bench" -- pnpm test:gpu --filter trace-bench
+node tools/reference/bench-lock.ts run --no-cool-wait --what "ddgi checks" -- pnpm test:gpu --filter ddgi-
+node tools/reference/bench-lock.ts run --lock cpu --what "cpu render" -- <command>
+node tools/reference/bench-lock.ts run --cpu-timed --what "adapter cpu cost" -- <command>
 node tools/reference/bench-lock.ts acquire --pid $PID --what "native cache build"   # PowerShell: $PID is the script itself
 node tools/reference/bench-lock.ts release --pid $PID
 ```
 
 `run` is the easy one for agents: it holds the lock exactly as long as the command runs, and releases it on failure and Ctrl-C too. `acquire` needs `--pid`, the long-lived process that holds the lock (the command itself exits at once, so its own pid would look dead straight away). `--timeout-minutes n` gives up after n minutes (exit code 5).
 
-**Commands that take the lock themselves can run under `run`.** `run` starts its command with the environment variable `DDGI_BENCH_LOCK_HELD=<pid of the lock owner>`. `withBenchLock` (Cycles, path tracer) and the `tools/native` scripts check it: if that pid owns the lock right now (owner file, this host, process running), they work under the parent's hold and neither take nor release the lock. Without this they would wait forever for a lock their own parent holds. A variable that does not match the current owner is ignored and the lock is taken normally, so a leftover value never skips the lock. `status --json` reports the match as `heldByParent` (the pid, or `null`).
+**Commands that take the lock themselves can run under `run`.** `run` starts its command with the environment variable `DDGI_BENCH_LOCK_HELD=<pid of the lock owner>`. `withBenchLock` (Cycles, path tracer) and the `tools/native` scripts check it: if that pid owns the lock right now (owner file, this host, process running), they work under the parent's hold and neither take nor release the lock. Without this they would wait forever for a lock their own parent holds. A variable that does not match the current owner is ignored and the lock is taken normally, so a leftover value never skips the lock. `status --json` reports the match as `heldByParent` (the pid, or `null`) for the chosen lock, and for both under `locks`. With `--cpu-timed` under a parent that already held the GPU lock, the variable lists two pids (`1234,5678`).
 
-The protocol, for anything that cannot call the tool:
+The protocol, for anything that cannot call the tool (the same for either lock; to hold both, take the GPU lock first):
 
 1. **Take:** `mkdir` the folder. It fails if the folder exists; that is the atomic step.
 2. **Claim:** straight away write `owner.json` inside it (to a temporary name, then rename): `pid`, `processStart` (the OS start time of that pid, so a reused pid is recognised; on Windows `(Get-Process -Id <pid>).StartTime.ToUniversalTime().ToString('o')`), `host`, `startedAt` (ISO), `what` (a short label) and `command`.
