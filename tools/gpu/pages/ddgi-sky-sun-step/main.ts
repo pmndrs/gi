@@ -32,6 +32,13 @@
  *   VITE_DDGI_LAMP=on                  (the pendant lamp as the manifest has it; default off, see LAMP_ON)
  *   VITE_DDGI_SUN_STEP_DEGREES=30
  *   VITE_DDGI_SECTIONS=explore         (only the step's size on 24 candidate views)
+ *   VITE_DDGI_SECTIONS=rho             (the room's bounce share, every probe every frame at h = 0)
+ *   VITE_DDGI_BOUNCE_SHARE=<rho>       (changeBounceShare for the step's run)
+ *
+ * The step's run also follows two groups of 12 probes near and in the view
+ * (the largest change, and the largest relative change of the rest) at
+ * TRACK_FRAMES: their error against the converged field, updates since the
+ * step, history count n, owed updates, and how many still hold a cut.
  *
  * Also reported per bookmark: the probes' marked r against their true
  * change (medians), which tells a mark that underestimates the change from
@@ -46,7 +53,9 @@ import { assert } from '../../client.ts';
 import { loadAllManifests } from '../../../../apps/viewer/src/scene/manifests.ts';
 import { imageMean, TestView } from '../ddgi-shared/harness.ts';
 import { describeErrors, stepResponse } from '../ddgi-shared/response.ts';
-import { convergeSponza, lightWeightedError, probeMeans, sunDirection, turnedSun, VIEW_HEIGHT, VIEW_WIDTH, type ProbeMeans, type SponzaUnderTest } from '../ddgi-shared/sponza-response.ts';
+import { applyHysteresisMode, parseHysteresisMode } from '../ddgi-shared/hysteresis-modes.ts';
+import { PROBE_HISTORY_FLAG } from '../../../../packages/ddgi-core/src/techniques/ddgi/layout.ts';
+import { convergeSponza, lightWeightedError, probeClasses, probeMeans, sunDirection, turnedSun, VIEW_HEIGHT, VIEW_WIDTH, type ProbeMeans, type SponzaUnderTest } from '../ddgi-shared/sponza-response.ts';
 import { startViewerScene } from '../ddgi-shared/viewer-scene.ts';
 import { runThreePage } from '../three-shared/harness.ts';
 import type { CameraBookmark } from '../../../../scenes/src/manifest.ts';
@@ -78,6 +87,21 @@ const MEASURED_FRAMES = 180;
  * 13.5% at most.
  */
 const LAMP_ON = env.VITE_DDGI_LAMP === 'on';
+
+/** `VITE_DDGI_BOUNCE_SHARE`: the technique's `changeBounceShare` (ρ) for the step's run; its default (0.8) otherwise. */
+const BOUNCE_SHARE = env.VITE_DDGI_BOUNCE_SHARE === undefined || env.VITE_DDGI_BOUNCE_SHARE === '' ? null : Number(env.VITE_DDGI_BOUNCE_SHARE);
+/**
+ * `rho`: the room's bounce share measured as T2.4b measured two-room's: after
+ * the step, every probe every frame at h = 0 (each update keeps nothing of
+ * the old value), so the field's error shrinks only by what comes back
+ * through the field: the light-weighted error against the converged field,
+ * less its noise floor, shrinks by ρ a frame.
+ */
+const MEASURE_RHO = env.VITE_DDGI_SECTIONS === 'rho';
+/** Probes followed after the step: in each group, this many. */
+const TRACKED_PER_GROUP = 12;
+/** Frames the tracked probes are summarised at. */
+const TRACK_FRAMES = [1, 2, 3, 5, 8, 10, 15, 20, 30, 45, 60, 90, 120, 150, 180];
 
 /** `explore`: only the step's size on candidate views (EXPLORE_VIEWS), from two converged fields, no response runs. */
 const EXPLORE = env.VITE_DDGI_SECTIONS === 'explore';
@@ -140,6 +164,59 @@ function markedAgainstTrue(before: ProbeMeans, afterMark: ProbeMeans, settled: P
     return { probes: marked.length, medianMarked: median(marked), medianTrue: median(truth) };
 }
 
+/** The probes followed after the step: two groups of the probes near and in the view (camera weight ≥ 0.5). */
+interface TrackedProbes {
+    /** The largest change in light (light-weighted): the sunlit floor and what it lights. */
+    readonly largest: number[];
+    /** The largest relative change, of the rest: probes the window's light reaches mostly by bounce. */
+    readonly relative: number[];
+}
+
+function trackedProbes(room: FurnishedRoom, before: ProbeMeans, settled: ProbeMeans): TrackedProbes {
+    const classes = probeClasses(room, room.scene.ddgi.field!);
+    const luminance = (rgb: readonly number[]) => (rgb[0] + rgb[1] + rgb[2]) / 3;
+    const candidates = before.mean.flatMap((mean, probe) => (before.active[probe] && settled.active[probe] && classes.near(probe) ? [probe] : []));
+    const absolute = (probe: number) => Math.abs(luminance(settled.mean[probe]) - luminance(before.mean[probe]));
+    const relative = (probe: number) => absolute(probe) / Math.max(luminance(before.mean[probe]), 1e-6);
+    const largest = [...candidates].sort((a, b) => absolute(b) - absolute(a)).slice(0, TRACKED_PER_GROUP);
+    const rest = candidates.filter((probe) => !largest.includes(probe));
+    return { largest, relative: rest.sort((a, b) => relative(b) - relative(a)).slice(0, TRACKED_PER_GROUP) };
+}
+
+/** One group's summary at one frame. */
+interface TrackRow {
+    readonly group: string;
+    readonly frame: number;
+    /** Median of the probes' errors against the converged field (largest channel, relative). */
+    readonly medianError: number;
+    /** Updates since the step (the record's count k, less its count before). */
+    readonly meanUpdates: number;
+    /** Median history count n after the update (the next update's h is about n / (n + 1)). */
+    readonly medianSamples: number;
+    readonly meanOwed: number;
+    /** Share still holding a cut (taking a change, updates owed). */
+    readonly holdingShare: number;
+}
+
+function trackRows(frame: number, now: ProbeMeans, before: ProbeMeans, settled: ProbeMeans, tracked: TrackedProbes): TrackRow[] {
+    const median = (values: number[]) => [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)] ?? Number.NaN;
+    const mean = (values: number[]) => values.reduce((sum, value) => sum + value, 0) / Math.max(1, values.length);
+    return (['largest', 'relative'] as const).map((group) => {
+        const probes = tracked[group];
+        const error = (probe: number) =>
+            Math.max(...[0, 1, 2].map((channel) => Math.abs(now.mean[probe][channel] - settled.mean[probe][channel]) / Math.max(settled.mean[probe][channel], 1e-6)));
+        return {
+            group: group === 'largest' ? 'largest change' : 'largest relative change',
+            frame,
+            medianError: median(probes.map(error)),
+            meanUpdates: mean(probes.map((probe) => now.history[probe].updates - before.history[probe].updates)),
+            medianSamples: median(probes.map((probe) => now.history[probe].samples)),
+            meanOwed: mean(probes.map((probe) => now.history[probe].owed)),
+            holdingShare: mean(probes.map((probe) => ((now.history[probe].flags & PROBE_HISTORY_FLAG.takingChange) !== 0 && now.history[probe].owed > 0 ? 1 : 0))),
+        };
+    });
+}
+
 /** The first frame from which every value stays at or under the tolerance; null if the last is over. */
 function settledFrom(values: ReadonlyArray<{ frame: number; value: number }>): number | null {
     let settled: number | null = null;
@@ -200,6 +277,7 @@ await runThreePage(async ({ device, data, log: logLine }) => {
     const results = data;
     results.units = UNITS;
     results.pendantLamp = LAMP_ON ? 'on' : 'off';
+    results.bounceShare = BOUNCE_SHARE ?? 'default';
     results.sunStepDegrees = SUN_STEP_DEGREES;
     const failures: string[] = [];
 
@@ -232,6 +310,27 @@ await runThreePage(async ({ device, data, log: logLine }) => {
     const settledImages = new Map<number, Float32Array>();
     for (const bookmark of BOOKMARKS) settledImages.set(bookmark, await reference.imageOf(bookmark));
     const settledField: ProbeMeans = await probeMeans(reference);
+    if (MEASURE_RHO) {
+        reference.scene.dispose();
+        const room = await startRoom(device, 'furnished room, rho', BOOKMARKS[0]);
+        await convergeSponza(room, 'the sun as it was, from the start', log, null);
+        applyHysteresisMode(room.scene.ddgi.settings, parseHysteresisMode('fixed:0'));
+        stepSun(room, stepped);
+        const errors: number[] = [];
+        const all = room.scene.probeCount;
+        for (let frame = 1; frame <= 60; frame++) {
+            room.scene.frame({ units: all });
+            errors.push(lightWeightedError(await probeMeans(room), settledField));
+        }
+        room.scene.dispose();
+        // The floor: one update's noise, where the error stops shrinking (the last 20 frames).
+        const floor = errors.slice(40).reduce((sum, value) => sum + value, 0) / 20;
+        const ratios = errors.slice(1, 12).map((value, index) => (value - floor) / (errors[index] - floor));
+        const sortedRatios = [...ratios].sort((a, b) => a - b);
+        results.rho = { errors, floor, ratios, median: sortedRatios[Math.floor(sortedRatios.length / 2)] };
+        log(`rho: light-weighted error by frame ${errors.slice(0, 15).map((value) => (value * 100).toFixed(1)).join(', ')} ... floor ${(floor * 100).toFixed(2)}%; ratios ${ratios.map((value) => value.toFixed(3)).join(', ')}`);
+        return;
+    }
     results.probes = reference.scene.probeCount;
     reference.scene.dispose();
 
@@ -247,6 +346,9 @@ await runThreePage(async ({ device, data, log: logLine }) => {
         const bakesBefore = room.scene.platform.shade.sky.projections;
         const fieldBefore = await probeMeans(room);
 
+        if (BOUNCE_SHARE !== null) room.scene.ddgi.settings.changeBounceShare = BOUNCE_SHARE;
+        const tracked = trackedProbes(room, fieldBefore, settledField);
+        const tracking: TrackRow[] = [];
         stepSun(room, stepped);
         const means: number[] = [];
         const perPixel: Array<{ frame: number; value: number }> = [];
@@ -262,7 +364,10 @@ await runThreePage(async ({ device, data, log: logLine }) => {
             const image = await room.imageOf(bookmark);
             means.push(imageMean(image));
             perPixel.push({ frame, value: perPixelError(image, settledImage) });
-            if (frame === 1 || frame % VOLUME_EVERY === 0) volume.push({ frame, value: lightWeightedError(await probeMeans(room), settledField) });
+            const needsField = frame === 1 || frame % VOLUME_EVERY === 0 || TRACK_FRAMES.includes(frame);
+            const now = needsField ? await probeMeans(room) : null;
+            if (now && (frame === 1 || frame % VOLUME_EVERY === 0)) volume.push({ frame, value: lightWeightedError(now, settledField) });
+            if (now && TRACK_FRAMES.includes(frame)) tracking.push(...trackRows(frame, now, fieldBefore, settledField, tracked));
         }
         const bakesAfter = room.scene.platform.shade.sky.projections - bakesBefore;
         const counters = room.scene.ddgi.counters;
@@ -293,6 +398,7 @@ await runThreePage(async ({ device, data, log: logLine }) => {
             perPixel: perPixel.map((entry) => entry.value),
             skyBakes: { inTheStepFrame: bakesAtStep, inAll: bakesAfter },
             marks,
+            tracking,
             probesMarkedTotal: counters['probes marked (total)'],
         };
         log(
@@ -301,7 +407,8 @@ await runThreePage(async ({ device, data, log: logLine }) => {
                 `whole volume within 5% from frame ${volumeSettled ?? 'never'}; the sky baked ${bakesAtStep} time(s) in the step's frame, ${bakesAfter} in all; ` +
                 `marked r against the true change (medians over ${marks?.probes ?? 0} probes not updated in the step's frame): ${marks?.medianMarked.toFixed(3)} against ${marks?.medianTrue.toFixed(3)}\n` +
                 `    view error by frame: ${describeErrors(response.errors)}\n    per pixel: ${perPixel.filter((entry) => entry.frame <= 12 || entry.frame % 6 === 0).map((entry) => `${entry.frame}: ${(entry.value * 100).toFixed(1)}%`).join(', ')}\n` +
-                `    volume (light-weighted): ${volume.map((entry) => `${entry.frame}: ${(entry.value * 100).toFixed(1)}%`).join(', ')}`,
+                `    volume (light-weighted): ${volume.map((entry) => `${entry.frame}: ${(entry.value * 100).toFixed(1)}%`).join(', ')}\n` +
+                tracking.map((row) => `    ${row.group} frame ${row.frame}: error ${(row.medianError * 100).toFixed(1)}%, updates ${row.meanUpdates.toFixed(1)}, n ${row.medianSamples.toFixed(2)}, owed ${row.meanOwed.toFixed(1)}, holding ${(row.holdingShare * 100).toFixed(0)}%`).join('\n'),
         );
         if (bakesAtStep !== 1 || bakesAfter !== 1) failures.push(`bookmark ${bookmark}: the sky baked ${bakesAtStep} time(s) in the step's frame and ${bakesAfter} in all (expected 1 and 1)`);
         if (judged && (response.settledFrame === null || response.settledFrame > VIEW_FRAMES)) {
