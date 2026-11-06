@@ -13,6 +13,11 @@
  *   marked at most once);
  * - every probe's pendingChange and urgency are bit for bit the same.
  *
+ * Also the global changes' paths on the GPU (one scene, the default
+ * reduction): an environment change marks every active probe with r = 1
+ * times its openness factor (0.25 to 1), and nothing else; a sun switched on
+ * marks every active probe with MAX_GLOBAL_CHANGE times its openness factor.
+ *
  * Runs on any GPU; without the `subgroups` feature only the fallback runs,
  * and the page says so.
  */
@@ -20,7 +25,8 @@
 import { assert, runGpuTest } from '../../client.ts';
 import { PROBE_HISTORY_WORD, PROBE_HISTORY_WORDS } from '../../../../packages/ddgi-core/src/techniques/ddgi/layout.ts';
 import type { PhaseBReduction } from '../../../../packages/ddgi-core/src/techniques/ddgi/wgsl/blend.ts';
-import { createDdgiScene, readBuffer, releaseDeviceOnPageHide, runFrames } from '../ddgi-shared/harness.ts';
+import { ENVIRONMENT_CHANGE, MAX_GLOBAL_CHANGE } from '../../../../packages/ddgi-core/src/techniques/ddgi/mark-table.ts';
+import { createDdgiScene, readBuffer, readProbeData, releaseDeviceOnPageHide, runFrames } from '../ddgi-shared/harness.ts';
 
 const WARM_FRAMES = 64;
 const MARKED_TOTAL = 'probes marked (total)';
@@ -65,6 +71,58 @@ async function markOnce(device: GPUDevice, reduction: PhaseBReduction): Promise<
     }
 }
 
+/** Float rounding allowance on the openness factor's bounds. */
+const FACTOR_SLACK = 1e-5;
+/** The openness factor's floor (DDGI_OPENNESS_FLOOR in wgsl/mark.ts). */
+const OPENNESS_FLOOR = 0.25;
+
+/** The global kinds' marks on the GPU: every active probe within its factor's bounds, every other probe untouched. */
+async function globalMarks(device: GPUDevice): Promise<Record<string, unknown>> {
+    const scene = await createDdgiScene(device, 'two-room', {}, { gpuTiming: true });
+    try {
+        const field = scene.ddgi.field;
+        assert(field, 'no field');
+        const probeCount = field.grid.probeCount;
+        await runFrames(device, scene.platform, WARM_FRAMES, probeCount);
+        const pending = async (): Promise<Float32Array> => {
+            const words = new Float32Array(await readBuffer(device, field.probeHistory, probeCount * PROBE_HISTORY_WORDS * 4));
+            return Float32Array.from({ length: probeCount }, (_, probe) => words[probe * PROBE_HISTORY_WORDS + PROBE_HISTORY_WORD.pendingChange]);
+        };
+        const active = (await readProbeData(device, field)).map((probe) => probe.state === 0);
+        const check = (label: string, before: Float32Array, after: Float32Array, change: number): Record<string, number> => {
+            let marked = 0;
+            let outOfBounds = 0;
+            let strayMarks = 0;
+            let smallest = Infinity;
+            let largest = 0;
+            for (let probe = 0; probe < probeCount; probe++) {
+                const added = after[probe] - before[probe];
+                if (!active[probe]) {
+                    if (added !== 0) strayMarks++;
+                    continue;
+                }
+                marked++;
+                smallest = Math.min(smallest, added);
+                largest = Math.max(largest, added);
+                if (added < change * OPENNESS_FLOOR * (1 - FACTOR_SLACK) || added > change * (1 + FACTOR_SLACK)) outOfBounds++;
+            }
+            assert(outOfBounds === 0 && strayMarks === 0, `${label}: ${outOfBounds} active probes outside ${change * OPENNESS_FLOOR}..${change}, ${strayMarks} inactive probes marked`);
+            return { marked, smallest, largest };
+        };
+        const start = await pending();
+        scene.platform.scene.setEnvironment({ type: 'color', color: [0.2, 0.3, 0.4] });
+        await runFrames(device, scene.platform, 1, 0);
+        const afterSky = await pending();
+        const sky = check('environment', start, afterSky, ENVIRONMENT_CHANGE);
+        scene.platform.scene.createLight({ type: 'directional', color: [1, 1, 1], intensity: 2, direction: [0.3, -1, 0.2] });
+        await runFrames(device, scene.platform, 1, 0);
+        const sun = check('sun switched on', afterSky, await pending(), MAX_GLOBAL_CHANGE);
+        return { environment: sky, sunSwitchedOn: sun };
+    } finally {
+        scene.platform.dispose();
+    }
+}
+
 await runGpuTest(
     async ({ device, log }) => {
         releaseDeviceOnPageHide(device);
@@ -74,9 +132,11 @@ await runGpuTest(
         assert(fallback.probesWithChange > 0, 'the lamp step marked nothing');
         assert(fallback.markedTotal === fallback.probesWithChange, `the fallback counted ${fallback.markedTotal} marks for ${fallback.probesWithChange} marked probes`);
         log(`fallback: ${fallback.markedTotal} marks, ${fallback.probesWithChange} probes with a change`);
+        const global = await globalMarks(device);
+        log(`global marks: ${JSON.stringify(global)}`);
         if (!hasSubgroups) {
             log('no subgroups on this device: only the fallback ran');
-            return { subgroups: false, fallbackMarks: fallback.markedTotal };
+            return { subgroups: false, fallbackMarks: fallback.markedTotal, global };
         }
         const subgroups = await markOnce(device, 'subgroups');
         log(`subgroups: ${subgroups.markedTotal} marks, ${subgroups.probesWithChange} probes with a change`);
@@ -86,7 +146,7 @@ await runGpuTest(
             if (subgroups.pending[probe] !== fallback.pending[probe] || subgroups.urgency[probe] !== fallback.urgency[probe]) differing++;
         }
         assert(differing === 0, `${differing} probes' marks differ between the two reductions`);
-        return { subgroups: true, marks: fallback.markedTotal, probesWithChange: fallback.probesWithChange };
+        return { subgroups: true, marks: fallback.markedTotal, probesWithChange: fallback.probesWithChange, global };
     },
     { optionalFeatures: ['texture-formats-tier1', 'subgroups', 'timestamp-query'] },
 );

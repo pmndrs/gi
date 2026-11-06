@@ -461,8 +461,12 @@ fn ddgiHysteresisStep(history: DdgiProbeHistory, state: u32) -> DdgiHysteresisSt
     let faded = select(min(history.samples, limit) * exp(-elapsedSeconds * ddgi.inverseMemorySeconds), 0.0, firstUpdate);
     let remembered = min(faded, ddgiRampCap(updates));
     let adaptive = remembered / (remembered + 1.0);
-    // The fixed rule keeps its h, lowered to what the cut allows.
-    let fixed = select(min(ddgi.hysteresis, limit / (limit + 1.0)), 0.0, firstUpdate);
+    // The fixed rule keeps its h, lowered to what the cut allows. Only when
+    // there is a cut: GPUs divide through a reciprocal, and 1 / (3e38 + 1) is
+    // a denormal they flush to 0, which made "no cut" read as h = 0 (caught by
+    // the flicker page, whose converging runs the fixed rule).
+    let cutHysteresis = select(1.0, limit / (limit + 1.0), limit < DDGI_NO_HISTORY_LIMIT);
+    let fixed = select(min(ddgi.hysteresis, cutHysteresis), 0.0, firstUpdate);
     let hysteresis = select(fixed, adaptive, ddgi.adaptiveHysteresis != 0u);
     let samples = min(remembered + 1.0, ddgi.maxHistorySamples);
     // Saturating at the field's width: the count only matters while k / a is below n_max.
