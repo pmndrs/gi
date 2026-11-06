@@ -94,10 +94,23 @@ interface SceneUnderTest {
     readonly view: TestView;
     readonly camera: FrameCamera;
     readonly mean: () => Promise<number>;
+    /** The view's indirect image (rgb per pixel). */
+    readonly image: () => Promise<Float32Array>;
 }
 
-async function startScene(device: GPUDevice, sceneId: string, lamp: { intensity?: number; position?: Vec3 }): Promise<SceneUnderTest> {
-    const scene = await createDdgiScene(device, sceneId, {}, { gpuTiming: true });
+/** The mean over pixels of |a − b|, over the mean of b: a per-pixel error no averaging over the view can hide. */
+function perPixelError(image: Float32Array, reference: Float32Array): number {
+    let difference = 0;
+    let sum = 0;
+    for (let index = 0; index < image.length; index++) {
+        difference += Math.abs(image[index] - reference[index]);
+        sum += reference[index];
+    }
+    return sum > 0 ? difference / sum : 0;
+}
+
+async function startScene(device: GPUDevice, sceneId: string, lamp: { intensity?: number; position?: Vec3 }, settings: { changeDrivenHistory?: boolean } = {}): Promise<SceneUnderTest> {
+    const scene = await createDdgiScene(device, sceneId, settings, { gpuTiming: true });
     const bookmark = scene.manifest.cameras.find((camera) => camera.name === STEP_SCENES[sceneId].camera);
     assert(bookmark, `${sceneId} has no camera ${STEP_SCENES[sceneId].camera}`);
     const camera = bookmarkCamera(bookmark, WIDTH / HEIGHT);
@@ -109,12 +122,20 @@ async function startScene(device: GPUDevice, sceneId: string, lamp: { intensity?
     const view = await TestView.create(device, scene.platform);
     const field = scene.ddgi.field;
     assert(field, 'no field');
-    const mean = async () => imageMean((await view.render(field, bookmark, WIDTH, HEIGHT)).indirect);
-    return { scene, view, camera, mean };
+    const image = async () => (await view.render(field, bookmark, WIDTH, HEIGHT)).indirect;
+    const mean = async () => imageMean(await image());
+    return { scene, view, camera, mean, image };
 }
 
-async function converged(device: GPUDevice, sceneId: string, lamp: { intensity?: number; position?: Vec3 }, label: string, log: (line: string) => void): Promise<SceneUnderTest & { settled: number }> {
-    const test = await startScene(device, sceneId, lamp);
+async function converged(
+    device: GPUDevice,
+    sceneId: string,
+    lamp: { intensity?: number; position?: Vec3 },
+    label: string,
+    log: (line: string) => void,
+    settings: { changeDrivenHistory?: boolean } = {},
+): Promise<SceneUnderTest & { settled: number }> {
+    const test = await startScene(device, sceneId, lamp, settings);
     const settled = await convergeField(device, test.scene.platform, test.scene.ddgi.settings, test.camera, test.mean, { ...CONVERGE, settleUnits: STEP_SCENES[sceneId].units }, label, log);
     return { ...test, settled };
 }
@@ -187,30 +208,41 @@ await runGpuTest(
             const { units } = STEP_SCENES[sceneId];
             const lamp = loadManifest(sceneId).lights[0] as { position: Vec3 };
             const at = (x: number): Vec3 => [x, lamp.position[1], lamp.position[2]];
-            const references: number[] = [];
+            const references: Array<{ mean: number; image: Float32Array }> = [];
             for (const seconds of SWEEP_CHECK_SECONDS) {
                 const reference = await converged(device, sceneId, { position: at(SWEEP_FROM_X + SWEEP_SPEED * seconds) }, `${sceneId}, the lamp at x = ${(SWEEP_FROM_X + SWEEP_SPEED * seconds).toFixed(2)}`, log);
-                references.push(reference.settled);
+                references.push({ mean: reference.settled, image: await reference.image() });
                 reference.scene.platform.dispose();
             }
-            const sweep = await converged(device, sceneId, { position: at(SWEEP_FROM_X) }, `${sceneId}, the sweep's start`, log);
-            const checks: Array<{ seconds: number; mean: number; reference: number; error: number }> = [];
-            const frames = Math.round(SWEEP_CHECK_SECONDS[SWEEP_CHECK_SECONDS.length - 1] * 60);
-            for (let frame = 1; frame <= frames; frame++) {
-                sweep.scene.platform.scene.updateLight(sweep.scene.lights[0], { position: at(SWEEP_FROM_X + (SWEEP_SPEED * frame) / 60) });
-                runCameraFrame(device, sweep.scene.platform, units, sweep.camera);
-                const index = SWEEP_CHECK_SECONDS.findIndex((seconds) => Math.round(seconds * 60) === frame);
-                if (index >= 0) {
-                    const mean = await sweep.mean();
-                    checks.push({ seconds: SWEEP_CHECK_SECONDS[index], mean, reference: references[index], error: mean / references[index] - 1 });
-                } else if (frame % 8 === 0) {
-                    await device.queue.onSubmittedWorkDone();
+            // The sweep with change-driven history, and under M1's rule beside it (does the check tell them apart?).
+            const sweeps: Record<string, Array<{ seconds: number; mean: number; reference: number; error: number; perPixelError: number }>> = {};
+            for (const changeDrivenHistory of [true, false]) {
+                const sweep = await converged(device, sceneId, { position: at(SWEEP_FROM_X) }, `${sceneId}, the sweep's start${changeDrivenHistory ? '' : " (M1's rule)"}`, log, { changeDrivenHistory });
+                const checks: Array<{ seconds: number; mean: number; reference: number; error: number; perPixelError: number }> = [];
+                const frames = Math.round(SWEEP_CHECK_SECONDS[SWEEP_CHECK_SECONDS.length - 1] * 60);
+                for (let frame = 1; frame <= frames; frame++) {
+                    sweep.scene.platform.scene.updateLight(sweep.scene.lights[0], { position: at(SWEEP_FROM_X + (SWEEP_SPEED * frame) / 60) });
+                    runCameraFrame(device, sweep.scene.platform, units, sweep.camera);
+                    const index = SWEEP_CHECK_SECONDS.findIndex((seconds) => Math.round(seconds * 60) === frame);
+                    if (index >= 0) {
+                        const image = await sweep.image();
+                        const mean = imageMean(image);
+                        const reference = references[index];
+                        checks.push({ seconds: SWEEP_CHECK_SECONDS[index], mean, reference: reference.mean, error: mean / reference.mean - 1, perPixelError: perPixelError(image, reference.image) });
+                    } else if (frame % 8 === 0) {
+                        await device.queue.onSubmittedWorkDone();
+                    }
                 }
+                sweep.scene.platform.dispose();
+                sweeps[changeDrivenHistory ? 'changeDriven' : 'm1Rule'] = checks;
+                log(
+                    `sweep at ${SWEEP_SPEED} m/s, ${units} a frame${changeDrivenHistory ? '' : ", M1's rule"}: ` +
+                        checks.map((check) => `at ${check.seconds} s view ${(check.error * 100).toFixed(1)}%, per pixel ${(check.perPixelError * 100).toFixed(1)}%`).join('; ') +
+                        ' (against fields converged there)',
+                );
             }
-            sweep.scene.platform.dispose();
-            results.sweep = { speedMetresPerSecond: SWEEP_SPEED, units, checks };
-            log(`sweep at ${SWEEP_SPEED} m/s, ${units} a frame: ${checks.map((check) => `at ${check.seconds} s ${(check.error * 100).toFixed(1)}%`).join(', ')} (against fields converged there)`);
-            for (const check of checks) if (Math.abs(check.error) > TOLERANCE) failures.push(`sweep: ${(check.error * 100).toFixed(1)}% from the converged field at ${check.seconds} s`);
+            results.sweep = { speedMetresPerSecond: SWEEP_SPEED, units, ...sweeps };
+            for (const check of sweeps.changeDriven) if (Math.abs(check.error) > TOLERANCE) failures.push(`sweep: ${(check.error * 100).toFixed(1)}% from the converged field at ${check.seconds} s`);
         }
 
         if (SECTIONS.has('census')) {
