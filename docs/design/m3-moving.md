@@ -21,7 +21,7 @@ Moving geometry already works at the tracing level. The top-level tree is refit 
 - **SAH cost:** a standard estimate of how expensive a tree is to trace; lower is better.
 - **Solid angle (Ω, in steradians, sr):** how much of a probe's view an object covers. The whole sphere is 4π ≈ 12.6 sr.
 - **Toroidal addressing:** storage that wraps around. When the window moves one step, the slot that falls off one end is reused for the new step at the other end, so nothing else moves. Clipmaps (Tanner et al. 1998) use it for textures.
-- **History length, τ, K, owed updates, the scheduler:** as defined in m2-lights.md ("Words used here", section 4).
+- **History length, ε, K, owed updates, the scheduler:** as defined in m2-lights.md ("Words used here", section 4).
 
 ## What M3 must deliver (SPEC)
 
@@ -128,9 +128,28 @@ SPEC's tracing decision: deforming meshes "keep their BVH shape", refit every fr
 - **The scene copy's positions too.** Hit shading rebuilds the hit point from the scene copy's positions (`giSurfaceAt` → `giInstanceTriangle`), not from the tracer's records. So the same kernel also writes that mesh's positions into the scene copy's vertex buffer.
 - **Normals:** the scene copy's octahedral normals belong to the rest pose. A deforming mesh shades with each triangle's geometric normal, worked out from the fresh positions. At probe resolution that's invisible on foliage; an optional normals buffer can come later.
 - **How much it moved:** the triangle kernel also writes the frame's largest vertex movement since the last frame (an `atomicMax`) into a GPU word. `ddgi/mark` reads it for the change size (section 5.1). The CPU logs `deformBounds` as the region.
-- **Quality:** refits drift from the shape the tree was built for. A sway stays near its rest pose, so the plan has no rebuilds. T3.0 measures trace-speed decay on the wind tree. If it's bad, a periodic GPU rebuild would be a DECISIONS entry, because it departs from SPEC's "keep the shape".
+- **Quality:** refits drift from the shape the tree was built for. A sway stays near its rest pose; a bend held for a minute doesn't. Section 3.1 proposes rebuilding with H-PLOC when the refit's cost passes 1.25× (a DECISIONS entry, because it departs from SPEC's "keep the shape"). T3.0 measures trace-speed decay on the wind tree.
 - **Without subgroups:** B1a's refit uses subgroups for its pairing step. On such devices `isSupported` reports deforming meshes as unsupported, and they're traced in their rest pose with a one-time warning (the declared fallback; no slower second path).
 - **Cost estimate:** B1a's top-level refit is 0.086 ms for 10,000 instances. A mesh refit also rewrites triangles and positions, so a 100,000-triangle tree should be about 0.1–0.2 ms on the RTX (not yet timed). Planning number: ≤ 0.3 ms a frame for the wind tree.
+
+### 3.1 The BVH under motion: what's built, and the gaps
+
+**Built (on `m1`):**
+
+- **Rigid movers: the top level is refit on the GPU every frame** (B1a, in `ddgi-core`'s tracer, `ray-queries.ts` and `top-level-gpu.ts`): 0.084 ms for 10,000 moving instances on the RTX. Its quality is tracked without a GPU readback: every 250 ms a worker computes the same relative SAH cost (`refitOnCpu`) from transforms the main thread packs for it (about 1.3 ms for 10,000 instances), and past 1.25× the built cost the top level is rebuilt in the worker (`top-level-async.ts`) and swapped in. The counters show `quality rebuilds`. 1.25× suits the top level because it's a small share of trace time.
+- **Deforming meshes: the mesh-tree refit** (`GpuMeshRefit`, B1, in `packages/bvh`): it rewrites a mesh's triangle records from a vertex buffer and refits its boxes, with the same relative-cost signal (`latestStats.relativeCost`, behind `diagnostics: true`). Section 3 above plans its use.
+- **GPU builders:** the LBVH (B1) and H-PLOC (B2, the default GPU builder: Sponza's 5.74 M triangles in 46.6 ms, SAH 1.03× tinybvh's, trace speed 0.95–1.02×). Neither is wired into `ddgi-core` yet; that's the M2 item "fast first GI" (DECISIONS 2026-11-06 keeps it, as a lower item).
+
+**Gaps for moving objects:**
+
+1. **Rebuilding a deforming mesh's tree when its refit drifts.** SPEC says deforming meshes keep their tree's shape, and section 3 planned no rebuilds. A sway stays near its rest pose, but a character's arm raised for a minute, or a cloth falling, doesn't. Proposal (needs a DECISIONS entry, since it departs from SPEC):
+   - **The signal:** with the CPU form of `setDeformedPositions` the CPU has the positions and can compute the relative cost itself, like the top level. With the GPU-buffer form it needs the refit's stats: one small asynchronous readback a few frames late. Dennis called readbacks a preference, not a rule ("prefer GPU-resident; read back when it clearly pays"), but DECISIONS still says no GPU readbacks by default, so this readback goes in the same DECISIONS entry.
+   - **The rebuild:** past **1.1×** the built cost (a mesh tree is most of a ray's walk, unlike the top level, so its cost tracks trace speed closely; 1.1× matches the done-when below), rebuild that mesh's tree with H-PLOC on the GPU from the current positions, and swap it in when it's done, as the top level does. Scaling Sponza's 46.6 ms by triangle count, a 100,000-triangle mesh is roughly 1–2 ms with H-PLOC's fixed passes. At most one such rebuild starts per frame.
+   - The swap needs the new tree's layout on the CPU for the refit (`GpuMeshRefit.setTree`). `readLayouts` gives it, also a readback, once per rebuild.
+2. **Wiring the GPU builders for deforming meshes.** Today a deforming mesh's rest-pose tree comes from tinybvh on the CPU (section 3). With H-PLOC wired in (the M2 item), the rest-pose tree is built on the GPU too, and gap 1 reuses the same builder.
+3. **Rigid objects that are added or removed** need their mesh tree before they're traced. That's 2.2's GPU-first plan (an object traces as soon as its LBVH or H-PLOC tree exists, and tinybvh's replaces it later).
+
+**What "done" means for the BVH side:** a 60 s wind-tree run and a 60 s character-like bend (a test mesh folding its arm through 90° and holding it) keep trace speed within 10% of a fresh build, with at most one rebuild per second (counter), and the oracle passing mid-swap.
 
 ## 4. Several volumes, and the camera-following volume
 
@@ -156,8 +175,8 @@ The volume is a fixed-size window of probes over a lattice fixed in world space 
 - **Speed:** entering probes need their 2 warming updates before they're shown (section 5.2).
   - With a 32 × 12 × 32 window at spacing `s`, each plane on the x or z axis holds 384 probes. At `v` m/s that's `384 × v / s / 60` entering probes a frame, and twice that in warming updates: `8.5 v` a frame at 1.5 m spacing.
   - **Measured:** Bistro exterior fits **20–27** probe updates a frame at 2 ms (T1.9a, with the fixed controller). An earlier estimate here, about 90, came from its cost curve and was wrong.
-  - **Budget v2, with the GPU loaded** (the M1 lead's 88dbe45, in review): Sponza updates about 266 probes a frame against T1.9a's 30–43; the old numbers were mostly the GPU's low-power state. Bistro exterior isn't re-measured yet, so it's **scaled by Sponza's ratio** (7.4×): about **170** probes a frame. Provisional until T1.9's numbers land.
-  - At about 170, **5 m/s at 1.5 m needs about 43 a frame, a quarter of the budget**, well inside the scheduler's priority share (0.75 × 170 ≈ 127). Half the budget allows about 10 m/s.
+  - **Budget v2, with the GPU loaded** (T1.9b, medians of 3 runs): Bistro exterior updates **132** probes a frame at 2 ms (124–160), against T1.9a's 20–27; the old numbers were mostly the GPU's low-power state. The camera volume is the same scene, so 132 is used for it.
+  - At 132, **5 m/s at 1.5 m needs about 43 a frame, a third of the budget**, inside the scheduler's priority share (0.75 × 132 ≈ 99). Half the budget allows about 7.8 m/s.
   - (At T1.9a's old rate of 20–27, half the budget allowed only about 1.4 m/s.)
   - Levers:
     - **coarser spacing:** at 3 m (a 96 × 36 × 96 m window, the same memory), 5 m/s needs about 21 a frame;
@@ -182,11 +201,13 @@ M2's `ddgi/mark` (m2-lights.md 4.2) gets geometry entries. For each geometry reg
 - **Far set:** probes within 8 spacings (clipped to the volume) that can see the box. The test: in the direction of the box centre, the probe's stored mean distance (from its distance moments) must reach at least the distance to where that direction **enters** the box, minus half a spacing. A test against the box centre would fail for the old box, because the object hid its own centre: the stored distance stops at its near face.
   - The change size is the share of the view the object covers: `r = min(1, Ω / Ω_ref)`, with `Ω ≈ π × boxRadius² / distance²` and `Ω_ref = 0.5 sr` (an object covering about 1/25 of the sphere counts as a full change).
   - For a move, `r` is also scaled by `min(1, moved / spacing)`, so a slow drag doesn't count as a full change every frame.
-- Then the same history rule as for lights: `n ← min(n, τK / (pendingChange − τ))`, owed K, urgency from `pendingChange` and the camera weight.
+- **Probes that saw it last update** (an addition to the geometric tests, so a thin or odd-shaped object isn't missed or over-counted): each probe keeps a 32-bit **mover mask**. When one of its blended rays hits an instance on the hot list of movers (section 6), the trace sets bit `moverSlot mod 32` with one `atomicOr`. `ddgi/mark` then adds to the far set every probe within 8 spacings whose mask has the moved object's bit. A shared bit only over-marks, never misses. 4 bytes a probe. The trace collects the bits in a workgroup atomic while its rays run, and one thread stores the result at the end, so each mask holds exactly its latest update's hits and needs no storage atomics. It's `ddgi/trace`'s 8th storage buffer, the default limit; if anything else needs one, the mask moves into the history record and the blend sets it from the ray scratch.
+- Then the same history rule as for lights: `n ← min(n, εK / (pendingChange − ε))`, owed K, urgency from `pendingChange` and the camera weight.
+- **How they're served** (m2-lights.md 4.5, 4.7): the near set is traced itself, every probe, because its distances change. The far set, whose light changes through a shadow or a closed door, goes through key probes and propagation.
 
 **Example: a door between two rooms** (1 × 2 m, radius about 1.1 m), closed in one step. A probe 4 m into the dark room that saw the open doorway has `Ω ≈ 0.24 sr` and `r ≈ 0.47`. Its history drops to `n ≈ 0.95`, and it is owed 8 updates. A probe behind a wall doesn't pass the far-set test and isn't marked.
 
-**What the budget buys** (the same arithmetic as m2-lights.md 4.3): the door's near and far sets are a few hundred probes on two-room, where every probe is updated every frame at the scaled GPU-loaded rate (m2-lights.md, the rates section; provisional), so all of them get their 8 updates in 8 frames, about 0.13 s. A cabinet moved in the furnished room touches fewer. On Sponza-sized scenes the probes nearest the camera are served first.
+**What the budget buys** (the same arithmetic as m2-lights.md 4.3): the door's near and far sets are a few hundred probes on two-room, where 707 probes are updated a frame (T1.9b), so all of them get their 8 updates within about 12 frames, 0.2 s. A cabinet moved in the furnished room touches fewer. On Sponza-sized scenes the probes nearest the camera are served first.
 
 **With M2's instant sky on** (m2-lights.md 6.3), marked probes' first-order sky transfers are reset with their history. They re-accumulate from the updates the probes are owed anyway, and count as built again after 8, under a second on two-room for the door's few hundred probes. Until then, sky changes reach them by re-tracing. The sky layer itself keeps updating, so nothing jumps.
 
@@ -206,7 +227,7 @@ TASKS carries this from M1: classification turns off probes in empty space (347 
 
 - **Woken air probes:** a probe that is off for "no surface nearby" and lies within 2 spacings of a receiver region (`SceneChanges.receivers`) or a geometry region is **woken** for 300 frames (5 s) after the last touch. While awake it traces all rays, blends, and is used in shading once warmed. Then it goes back to sleep.
 - *Why not keep every air probe awake at a slow rate:* that would change M1's still-scene cost and results. Waking keeps a still scene exactly as M1 has it.
-- Data: a `wakeUntil` frame, in the history record's spare word.
+- Data: a `wakeUntil` frame, in word 8 of the history record (m2-lights.md 4.1).
 
 ## 6. Change tracking in the three adapter
 
@@ -407,8 +428,8 @@ Memory: the camera-following volume is 19 MB, 60 MB with M2's instant sky. LBVH 
 | T3.0 | Spike: deformed positions from three (storage `ExternalTexture`); the `updateMatrixWorld` override's cost and safety on Bistro interior; refit decay on a swaying tree | implementer | S | M2 done |
 | T3.1 | Change feed: `setTransforms`, `moved`, `receivers`, `deformBounds`, `setDeformedPositions`, recompile counter | implementer | M | none |
 | T3.2 | Runtime mesh trees: GPU builds for added and updated meshes, tinybvh refinement | implementer | M | T2.12 |
-| T3.3 | Deforming meshes: `GpuMeshRefit` wired, scene-copy positions, geometric normals, movement word | implementer | M | T3.1, T3.2 |
-| T3.4 | Probes near moved geometry: geometry entries in `ddgi/mark`, the 2-update warm-up, woken air probes | implementer | M | T3.1, M2's T2.4b |
+| T3.3 | Deforming meshes: `GpuMeshRefit` wired, scene-copy positions, geometric normals, movement word; H-PLOC rebuild when the refit drifts (3.1) | implementer | M | T3.1, T3.2 |
+| T3.4 | Probes near moved geometry: geometry entries in `ddgi/mark`, the mover mask, far sets through key probes, the 2-update warm-up, woken air probes | implementer | M | T3.1, M2's T2.4b |
 | T3.5 | Several volumes: shared atlas, volume table, priority blending | implementer | M | none |
 | T3.6 | Camera-following volume: wrapping slots, `ddgi/scroll`, window rule, fade-in | implementer | M | T3.5 |
 | T3.7 | three adapter change tracking v2 | implementer | M | T3.0, T3.1 |
@@ -469,7 +490,7 @@ B1 is done before M3 starts. B2 (H-PLOC) is done before M3 sign-off, and doesn't
 2. **Change tracking at scale.** Cache misses, not code, set the walk's cost (0.7 µs per object). If the `updateMatrixWorld` override is unsafe or no cheaper, unmarked moves on Bistro-sized scenes keep a latency of tens of frames, and `markChanged` stays the answer for interactive moves.
 3. **The door's leak window.** Until the near probes' distance tiles learn the closed door, light leaks for a few frames. With `n` near 0.4 and the door's probes updated every frame, that should be 2–4 frames. If it shows, those probes' first update could use 2× rays.
 4. **The far-set estimate** (`Ω_ref`, the 8-spacing radius, the entry-distance test) is a guess. T3.4 compares marked probes against probes that really changed by more than 5%.
-5. **Scrolling speed.** At the scaled ~170 probes a frame (provisional), 5 m/s at 1.5 m uses about a quarter of the budget and half allows about 10 m/s. If Bistro's measured rate comes out much lower than the scaling says, this comes back. Faster flights show the environment longer at the edge (section 4.2).
+5. **Scrolling speed.** At 132 probes a frame (T1.9b), 5 m/s at 1.5 m uses about a third of the budget, and half allows about 7.8 m/s. Faster flights show the environment longer at the edge (section 4.2).
 6. **The stats readback adds 1–3 frames** before a GPU tree is used. That's harmless at load. For an object added at run time it adds to the top level's worker delay; if it shows in the cabinet scenario, the top level can move to the GPU (section 2.2).
 7. **Refit quality** on large deformations (cloth, fan blades) may need rebuilds, which SPEC's tracing decision rules out today.
 
@@ -485,7 +506,7 @@ B1 is done before M3 starts. B2 (H-PLOC) is done before M3 sign-off, and doesn't
 1. **Deformed positions:** `setDeformedPositions` also takes a CPU array. The `ExternalBufferAttribute` PR is drafted in section 7.1 for him to see; nothing is posted.
 2. **`setTransforms`:** yes.
 3. **Readbacks** aren't a rule but a preference: "prefer GPU-resident; read back when it clearly pays". GPU trees use one small asynchronous stats readback (section 2.2); the provisional pool is gone.
-4. **The fly-through:** Bistro exterior, a 32 × 12 × 32 camera-following volume at 1.5 m (19 MB; 60 MB with M2's instant sky), up to 5 m/s. (It rested on a wrong rate at first; at the scaled GPU-loaded rate it fits, pending T1.9's Bistro number: "Still open".)
+4. **The fly-through:** Bistro exterior, a 32 × 12 × 32 camera-following volume at 1.5 m (19 MB; 60 MB with M2's instant sky), up to 5 m/s. (It rested on a wrong rate at first; at T1.9b's measured 132 probes a frame it fits.)
 5. **Startup:** measured from the hand-off to GI, ≤ 2 s with a cold shader compile.
 6. **The wind tree:** a game-ready tree (section 8.1), not a 2 M-triangle one. Solid leaf cards until M4 are fine.
 7. **B2 (H-PLOC):** before M3 sign-off, not before M3 starts. It must not block; the fallbacks always stay.
@@ -493,6 +514,6 @@ B1 is done before M3 starts. B2 (H-PLOC) is done before M3 sign-off, and doesn't
 
 ## Still open
 
-1. **The fly-through's speed and spacing: probably settled, pending a measurement.** Dennis's pick (5 m/s at 1.5 m) first rested on a wrong estimate (about 90 a frame), then T1.9a measured 20–27, which didn't fit. With the GPU loaded, Sponza runs about 7.4× T1.9a's rate (Budget v2, in review); scaled the same way, Bistro exterior gets about 170 a frame, and 5 m/s at 1.5 m needs about 43 of them. So the pick stands, provisionally. T1.9's GPU-loaded Bistro number confirms it; if it's under about 90, the options are again 3 m spacing or a slower speed.
+1. **The fly-through's speed and spacing: settled by the measured rate, pending T3.9.** Dennis's pick (5 m/s at 1.5 m) first rested on a wrong estimate (about 90 a frame), then T1.9a's low-power 20–27 didn't fit. T1.9b measured 132 with the GPU loaded: 5 m/s at 1.5 m needs about 43 of them, a third of the budget. So the pick stands; T3.9 measures the fly-through itself.
 
 Apart from this, nothing is left open in this doc. The M1 lead records 1, 3, 5 and 7 in DECISIONS: they change or add to SPEC's tracing decision, the B1a review's no-readback wording, the startup target and the B-lane gate.
