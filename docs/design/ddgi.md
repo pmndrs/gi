@@ -277,6 +277,28 @@ Measured on the RTX 3060 (`ddgi-schedule-step`, `ddgi-change-step`, `ddgi-schedu
 - **The noise word is relative** (its root-mean-square deviation over the stored mean, over 64 quiet updates, the updates that fire included). Ray noise grows with the light, so an absolute noise read too small for dozens of updates after a probe got brighter. Only the feedback rule reads it.
 - An unreported change (two-room's crate made to glow through `updateMaterial`, which DDGI's mark doesn't read) had every probe within a spacing of it revisited within 0.5 s at 64 probes a frame (median 6 frames, against 24 without feedback).
 
+### Key probes and propagation (T2.4c, m2-lights.md §4.5, as built)
+
+The main path for big changes on a big volume (the rule above: K updates for every probe wouldn't fit in 120 frames at this batch; Sponza yes, the rooms no), on by default (`keyProbes`); "far probes owe 2" is the fallback.
+
+- **Key probes:** grid index even or the last on every axis (`isKeyProbe`, `ddgiIsKeyProbe`): Sponza 2,717 of 19,425, two-room 180, Cornell 343. Ordinary probes otherwise.
+- **The mark** (wgsl/mark.ts, `ddgiServing`): probes near and in view (camera weight ≥ 0.5) at any level owe the full count at full urgency (a key's boosted). Away from it, a key owes `keyProbeUpdates` (4) at `keyProbeBoost` (4) × its change; a fine probe owes 1 (`FINE_PROBE_UPDATES`) at `keyResidualShare` (0.3) × its change and is flagged as awaiting a change. Local light changes take the same path on such a volume.
+- **The change clock** G (census word, u32 fixed point, 1/4096 of r): each mark frame a one-thread dispatch adds the frame's largest r; every blended update stamps G in the probe's record (word 10).
+- **What a key passes on** (`ddgi/blend`): a key's update that takes in a reported change (owed updates since a mark, not its first update) writes new − old per irradiance texel, as halves, into the key-delta buffer at its update-list slot, with its stamp from before this update, and flags itself (`passedChange`, word 11 the slot; valid in the frame of its scheduled stamp).
+- **`ddgi/propagate`**, one pass after `ddgi/write`, four dispatches: find (one thread per probe: awaiting, active fine probes with a key neighbour that passed its change this frame, into a compacted list, subgroups first or one atomic per thread; each workgroup stops at once when the census says no key passed one), args (clamps the list's length), propagate (256 workgroups looping over the list: per fine probe, 8 threads weigh its keys, both ends' Chebyshev tests multiplied, a key counts when that is at least 0.5, weights normalised over the keys that count; then per texel old + Σ w s Δ, clamped at 0, into its own scratch; the probe's mean follows; which keys passed it theirs and their summed weight go in word 9), and the write (write.ts's irradiance-tile entry point, the same tile code as `ddgi/write`).
+- **The fine probe's own update** cuts its history for r × max(0.3, 1 − 0.8 × received) instead of r, then clears the awaiting flag and word 9.
+- **No indirect dispatches:** in Chrome on the RTX 3060 each `dispatchWorkgroupsIndirect` cost about 0.022 ms even when empty (Dawn checks its arguments with a dispatch of its own), so a version with three of them cost 0.07 ms on every still frame. Now a still frame's `ddgi/propagate` costs 0.010 ms.
+- **Storage buffers per kernel:** blend 7, propagate 6, find 4, the tile write 3.
+- **The test mode** `holdFineProbes`: awaiting fine probes are traced but not blended (their tiles written back as they were), and give up their owed updates so they don't take priority slots from the keys. It measures propagation alone.
+
+Measured on the RTX 3060 (PROGRESS 2026-11-06, T2.4c; `ddgi-key-probes-sponza`, `-leak`, `-cost`, `ddgi-propagate-reduction`), Sponza at 316 probes a frame, GI only:
+- 30° sun turn: the view within 5% from frame 4; the field's light-weighted error within 5% from frame 24 (far probes owe 2: 48), 1.98% at 2 s; every fine probe traced by frame 60.
+- Sun halved: the view within 5% from frame 11 (T2.4b: 19-34).
+- Propagation alone, fine probes held: 63.1% of the change removed for the sun turn, 91.4% for the sky at a quarter (the decision rule: 60%).
+- No leak through the two-room wall with fine probes held (the dark room's fine probes at most 0.18-0.24% of the lit room's light past their settled values, three runs).
+- Out-of-view fine probes' noise at 3 s: 0.15% against 0.18% for far probes owe 2.
+- Cost (VALID): `ddgi/propagate` 0.010 ms on still frames, median 0.046 ms after the sun turn; a 10-second day's update median 2.17 ms at the calibrated 311 (Budget v2's bar 2.2).
+
 ## Which probes update (the budget, and the GPU scheduler since T2.4b)
 
 - **Unit = one probe update.** `TechniqueFrame.units` comes from the platform's budget v2 (above): the calibrated batch, at least the floor, stepped down only when frames are late. `FrameBudget.units` stays a hard cap. Without GPU timings, `FrameBudget.units`, default 512 on Tier A.
@@ -284,7 +306,7 @@ Measured on the RTX 3060 (`ddgi-schedule-step`, `ddgi-change-step`, `ddgi-schedu
 - **The GPU scheduler** (wgsl/schedule.ts, m2-lights.md §4.3; M1's CPU cursor is gone) fills the update list on the GPU, one pass `ddgi/schedule` of four dispatches: `count` (each probe owed updates gets the priority `urgency × camera weight`, in one of 32 buckets each twice the one below; the histogram subgroups first, one atomic per bucket present in a subgroup, or the declared fallback, one per thread), `select` (the bucket where `priorityShare` × units, 75%, fills up), `write` (those probes reserve list slots, subgroups first or per thread, and are stamped with the frame), `fill` (the rest from the round robin, from the cursor, skipping probes stamped this frame; a workgroup scan, subgroups first when the device lays subgroups out in order, checked in the kernel, else in workgroup memory). The cursor moves past the entries used, so the round robin still reaches every probe once a pass. With nothing owed the list is exactly M1's order. The list holds exactly `min(units, N)` entries, so the trace, blend and write dispatches keep sizes the CPU knows.
 - **Owed updates and urgency:** `ddgi/mark` promises updates (owed, 8 bits in history word 2; `takingChange` flag) once a probe's change passes ε, and its urgency is the change; each blend takes one off, and the urgency stays until the last. A feedback request is one owed update.
 - **The camera weight:** `1 / (1 + (d / (4 × spacing))²)`, times 0.25 outside the view (the frustum's planes from `projection × view`, a cell's diagonal of margin; camera.ts and `ddgiCameraWeight`).
-- **Far probes owe 2** (m2-lights.md §6.4): after a global change, on a volume where K updates for every probe wouldn't fit in 120 frames at this batch (Sponza: about 490), probes with a camera weight under 0.5 owe `farProbeUpdates` (2) instead of K.
+- **On a big volume** (K updates for every probe wouldn't fit in 120 frames at this batch; Sponza: about 490), a change takes the key-probe path ("Key probes and propagation" above; `keyProbes`, on by default), or with `keyProbes` off **far probes owe 2** (m2-lights.md §6.4): after a global change, probes with a camera weight under 0.5 owe `farProbeUpdates` (2) instead of K.
 - Off probes in the list still cost a workgroup, but only 32 rays and no blend, so they're cheap; a listed probe that isn't blended forgets what it was owed. The calibration measures the mix as it is.
 - Cost: 0.020-0.027 ms at 20,000 probes on the RTX 3060 (`ddgi-schedule-reduction`, VALID), 0.025 ms in Sponza's frames.
 - `maxProbesPerFrame` (default 4,096) sizes the update list and the scratch buffer. Dispatches over 65,535 workgroups use two dimensions.
@@ -335,7 +357,12 @@ interface DDGISettings {
     changeBounceShare: number;       // 0.8 (rho, T2.4b): the share of a probe's light taken to come back through the field, for the cut
     lightChangeScale: number;        // 0.5 (T2.4a; the design's first guess was 0.25)
     priorityShare: number;           // 0.75 (T2.4b): the share of each frame's probes for probes owed updates
-    farProbeUpdates: number;         // 2 (T2.4b): what far probes owe after a global change on a big volume
+    farProbeUpdates: number;         // 2 (T2.4b): what far probes owe after a global change on a big volume, with keyProbes off
+    keyProbes: boolean;              // true (T2.4c): key probes and propagation on a big volume; false: far probes owe 2
+    keyProbeBoost: number;           // 4 (T2.4c): a marked key's urgency is its change times this
+    keyResidualShare: number;        // 0.3 (T2.4c): a fine probe waiting for its keys: urgency share, and the least of its change it is cut for
+    keyProbeUpdates: number;         // 4 (T2.4c): what a key away from the view's core owes
+    holdFineProbes: boolean;         // false: a test mode (fine probes waiting for their keys aren't blended), for measuring propagation alone
     feedback: boolean;               // true (T2.4b): the feedback rule
     warmUpPasses: number;            // 16 (T2.4b): the warm-up's passes; 0 switches it off
     warmUpMaxSeconds: number;        // 8

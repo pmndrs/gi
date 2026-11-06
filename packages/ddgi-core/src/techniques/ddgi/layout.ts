@@ -180,9 +180,16 @@ export const UNIFORM_WORD = {
     frustumNear: 76,
     frustumFar: 80,
     changeBounceShare: 84,
+    keyProbes: 85,
+    keyProbeBoost: 86,
+    keyResidualShare: 87,
+    keyOwedUpdates: 88,
+    fineOwedUpdates: 89,
+    propagation: 90,
+    holdFineProbes: 91,
 } as const;
-/** 85 words, rounded up to the struct's 16-byte alignment. */
-export const UNIFORM_WORDS = 88;
+/** 92 words, a whole number of the struct's 16-byte alignment. */
+export const UNIFORM_WORDS = 92;
 /** The six frustum planes in UNIFORM_WORD, in the order `frustumPlanes` (camera.ts) returns them. */
 export const FRUSTUM_PLANE_WORDS = [
     UNIFORM_WORD.frustumLeft,
@@ -237,11 +244,17 @@ export const RAY_RECORD_BYTES = 8;
  *   feedback rule reads it). Written by every blend; `ddgi/mark` divides a
  *   light's change by the mean;
  * - `wakeUntil`: M3 (m3-moving.md 5.2);
- * - `keysReceived`: which of its up to 8 key neighbours have passed it their
- *   change since its mark, low 8 bits (T2.4c);
- * - `changeClock` (u32, fixed point): the volume's change clock at its last
- *   update (T2.4c);
- * - `spare`: free.
+ * - `keysReceived`: for a fine probe awaiting a change (T2.4c, m2-lights.md
+ *   §4.5), which of its up to 8 key neighbours have passed it their change
+ *   since its own last update, in the low 8 bits (bit j: key neighbour j,
+ *   {@link keyNeighbourOffset}), and the sum of their propagation weights
+ *   as a half float in the high 16 bits ({@link PROBE_HISTORY_KEYS});
+ *   cleared by its own blend;
+ * - `changeClock` (u32, fixed point, {@link CHANGE_CLOCK_UNITS}): the
+ *   volume's change clock at its last blended update (T2.4c);
+ * - `keyDeltaSlot`: for a key probe whose latest update passed its change on
+ *   (the `passedChange` flag), the update-list slot of that update: where
+ *   its entry in the key-delta buffer is (T2.4c).
  *
  * The history buffer (`DDGIField.probeHistory`) holds one per probe in
  * probe-index order, the order of the `points` debug view's texels. It starts
@@ -259,7 +272,7 @@ export const PROBE_HISTORY_WORD = {
     wakeUntil: 8,
     keysReceived: 9,
     changeClock: 10,
-    spare: 11,
+    keyDeltaSlot: 11,
 } as const;
 export const PROBE_HISTORY_WORDS = 12;
 export const PROBE_HISTORY_BYTES = PROBE_HISTORY_WORDS * 4;
@@ -289,34 +302,71 @@ export const PROBE_HISTORY_FLAG = {
      * trip the feedback rule (m2-lights.md §4.6). Cleared with the last owed update.
      */
     takingChange: 1 << 3,
+    /**
+     * A key probe's latest update passed its change to its fine neighbours
+     * (T2.4c): its entry is in the key-delta buffer at `keyDeltaSlot`. Only
+     * meaningful in the frame of its scheduled stamp: propagation looks at
+     * keys updated this frame.
+     */
+    passedChange: 1 << 4,
 } as const;
+/** The packing of `keysReceived` (T2.4c). */
+export const PROBE_HISTORY_KEYS = {
+    /** Which key neighbours have passed their change: bit j for neighbour j. */
+    bitsMask: 0xff,
+    /** The sum of their weights, a half float in the high 16 bits. */
+    weightShift: 16,
+} as const;
+
 /** The flags' share of `scheduleAndFlags`; the scheduled frame (T2.4b) is the rest. */
 export const PROBE_HISTORY_FLAGS_MASK = 0xff;
 
 /**
  * The census buffer (read back a few frames late, for the counters): probes
  * per state (indices are the states), rays traced this frame, the probe marks
- * `ddgi/mark` made this frame and the feedback tests that fired (cleared
- * every frame), then totals since `prepare` (never cleared, so a test can
- * read the total over a run even though not every frame's census is read
- * back), then the scheduler's state.
+ * `ddgi/mark` made this frame, the feedback tests that fired, the key probes
+ * that passed their change on, the fine probes propagation reached and the
+ * largest change marked (cleared every frame), then totals since `prepare`
+ * (never cleared, so a test can read the total over a run even though not
+ * every frame's census is read back), the volume's change clock, then the
+ * scheduler's state.
+ *
+ * The change clock (T2.4c, m2-lights.md §4.5) is state rather than a count,
+ * but it lives here because every kernel that reads or advances it
+ * (`ddgi/mark`, `ddgi/blend`, `ddgi/propagate`) already binds the census.
  */
 export const CENSUS_RAYS_TRACED = 4;
 export const CENSUS_PROBES_MARKED = 5;
 /** Probe updates whose feedback test fired this frame (`ddgi/blend`, m2-lights.md §4.6). */
 export const CENSUS_FEEDBACK_FIRED = 6;
+/** Key probes whose update this frame passed their change to their fine neighbours (`ddgi/blend`, T2.4c). */
+export const CENSUS_KEY_CHANGES_PASSED = 7;
+/** Fine probes that took in their keys' change this frame (`ddgi/propagate`, T2.4c). */
+export const CENSUS_PROBES_PROPAGATED = 8;
+/** The largest change `ddgi/mark` marked this frame, as its f32 bits (atomicMax; non-negative floats order like their bits). */
+export const CENSUS_LARGEST_CHANGE = 9;
 /** Words cleared at the start of every frame: those above. */
-export const CENSUS_PER_FRAME_WORDS = 7;
-export const CENSUS_PROBES_MARKED_TOTAL = 7;
+export const CENSUS_PER_FRAME_WORDS = 10;
+export const CENSUS_PROBES_MARKED_TOTAL = 10;
 /** Feedback tests that fired since `prepare`, and probe updates blended since `prepare` (never cleared): the share that fired. */
-export const CENSUS_FEEDBACK_FIRED_TOTAL = 8;
-export const CENSUS_PROBES_BLENDED_TOTAL = 9;
+export const CENSUS_FEEDBACK_FIRED_TOTAL = 11;
+export const CENSUS_PROBES_BLENDED_TOTAL = 12;
+/** Fine probes propagation reached since `prepare` (a probe reached in two frames counts twice). */
+export const CENSUS_PROBES_PROPAGATED_TOTAL = 13;
+/** Key-probe updates that passed their change on since `prepare`. */
+export const CENSUS_KEY_CHANGES_PASSED_TOTAL = 14;
+/**
+ * The volume's change clock G (T2.4c): every frame `ddgi/mark` adds the
+ * largest change it marked, in fixed point ({@link CHANGE_CLOCK_UNITS}),
+ * wrapping modulo 2^32. Never cleared.
+ */
+export const CENSUS_CHANGE_CLOCK = 15;
 /**
  * Then a copy of the scheduler's state words 0..SCHEDULE_STATE_REPORTED_WORDS
  * (SCHEDULE_STATE_WORD), copied in before the census is read back, for the
  * counters ("probes owed", "probes updated at priority").
  */
-export const CENSUS_SCHEDULE_STATE = 10;
+export const CENSUS_SCHEDULE_STATE = 16;
 export const SCHEDULE_STATE_REPORTED_WORDS = 8;
 /**
  * Then, with direct light deferred, a copy of the ray scratch's two counts
@@ -326,6 +376,109 @@ export const SCHEDULE_STATE_REPORTED_WORDS = 8;
 export const CENSUS_DIRECT_HITS = CENSUS_SCHEDULE_STATE + SCHEDULE_STATE_REPORTED_WORDS;
 export const CENSUS_DIRECT_DROPPED = CENSUS_DIRECT_HITS + 1;
 export const CENSUS_WORDS = CENSUS_DIRECT_DROPPED + 1;
+
+/**
+ * The change clock counts changes in units of 1/4096 of a relative change r
+ * (m2-lights.md §4.5). A u32 in fixed point rather than an f32: an f32 that
+ * grows for hours stops advancing once its step passes the size of small
+ * marks. Differences are taken modulo 2^32, like T1.12's wrapping clock.
+ */
+export const CHANGE_CLOCK_UNITS = 4096;
+
+/**
+ * Key probes (T2.4c, m2-lights.md §4.5): a probe is a key when its grid
+ * index on every axis is even or the last one, about one probe in 8. The
+ * last one matters on even-sized grids, which would otherwise have no keys
+ * on their far faces. Ordinary probes otherwise: the same atlas, traced and
+ * blended by the same kernels. (The WGSL twin is `ddgiIsKeyProbe`.)
+ */
+export function isKeyProbe(coordinates: readonly [number, number, number], counts: readonly [number, number, number]): boolean {
+    return coordinates.every((value, axis) => value % 2 === 0 || value === counts[axis] - 1);
+}
+
+/** Key probes in a grid: per axis, the even indices plus the last when it is odd. */
+export function keyProbeCount(counts: readonly [number, number, number]): number {
+    return counts.map((count) => Math.ceil(count / 2) + (count > 1 && count % 2 === 0 ? 1 : 0)).reduce((product, axisKeys) => product * axisKeys, 1);
+}
+
+/** Key neighbours a fine probe can have (2 per axis where its index isn't a key index). */
+export const KEY_NEIGHBOURS = 8;
+
+/**
+ * Key neighbour j (0..7) of a fine probe, as an offset in grid steps (the
+ * WGSL twin is `ddgiKeyNeighbourOffset`): on an axis where the probe's index
+ * is a key index (even or last) the offset is 0 and that axis's bit of j
+ * must be 0; otherwise the bit (x: 0, y: 1, z: 2) chooses the key one step
+ * below (0) or above (1). Null when j isn't a neighbour of this probe. A fine
+ * probe has 2, 4 or 8 key neighbours, all at equal trilinear weight: on the
+ * key lattice it sits halfway between its keys on each such axis.
+ */
+export function keyNeighbourOffset(neighbour: number, coordinates: readonly [number, number, number], counts: readonly [number, number, number]): [number, number, number] | null {
+    const offset: [number, number, number] = [0, 0, 0];
+    for (let axis = 0; axis < 3; axis++) {
+        const above = (neighbour >> axis) & 1;
+        const keyAxis = coordinates[axis] % 2 === 0 || coordinates[axis] === counts[axis] - 1;
+        if (keyAxis) {
+            if (above) return null;
+        } else {
+            offset[axis] = above ? 1 : -1;
+        }
+    }
+    return offset;
+}
+
+/**
+ * The key-delta buffer (T2.4c): one entry per update-list slot, written by
+ * `ddgi/blend` for a key probe whose update takes in a reported change, and
+ * read by `ddgi/propagate` in the same frame. An entry is a header (the key's
+ * probe index and its change-clock stamp from before this update, G_prev),
+ * then the change this update made, new − old, per interior irradiance
+ * texel, as half floats (rg, then b and 0): 288 bytes a layer at 6×6 texels.
+ */
+export const KEY_DELTA_HEADER = { probeIndex: 0, clockBefore: 1 } as const;
+export const KEY_DELTA_HEADER_WORDS = 2;
+export function keyDeltaStrideWords(irradianceTexels: number): number {
+    return KEY_DELTA_HEADER_WORDS + irradianceTexels * irradianceTexels * SCRATCH_WORDS_PER_IRRADIANCE_TEXEL;
+}
+
+/**
+ * Propagation's own scratch (T2.4c): per entry of its compacted list of fine
+ * probes, the probe's new irradiance texels, packed as the update scratch
+ * packs them (rg, then b and the alpha the atlas keeps), for its own write.
+ */
+export function propagationScratchStrideWords(irradianceTexels: number): number {
+    return irradianceTexels * irradianceTexels * SCRATCH_WORDS_PER_IRRADIANCE_TEXEL;
+}
+
+/**
+ * How many fine probes propagation can list in one frame: every fine probe,
+ * but no more than the fine neighbours of a full update list of keys (each
+ * key has at most 26).
+ */
+export function propagationListCapacity(counts: readonly [number, number, number], maxProbesPerFrame: number): number {
+    const fineProbes = counts[0] * counts[1] * counts[2] - keyProbeCount(counts);
+    return Math.max(1, Math.min(fineProbes, 26 * maxProbesPerFrame));
+}
+
+/**
+ * The propagation state buffer (T2.4c): how many fine probes
+ * `ddgi/propagate-find` listed this frame (no more than the list holds once
+ * `ddgi/propagate-args` has clamped it), and a spare word. Cleared every
+ * frame that runs propagation.
+ */
+export const PROPAGATION_STATE_WORD = { listed: 0 } as const;
+export const PROPAGATION_STATE_WORDS = 2;
+
+/**
+ * `ddgi/propagate` and its write run this many workgroups, each looping over
+ * the list (entry = workgroup, workgroup + this, ...), as a direct dispatch.
+ * Why not one workgroup per entry, dispatched indirectly: on the RTX 3060 in
+ * Chrome each indirect dispatch cost about 0.022 ms even when empty (Dawn
+ * checks the arguments with a dispatch of its own), so three of them made
+ * propagation cost 0.07 ms on every still frame (T2.4c). A few hundred
+ * workgroups fill the GPU and cost a few µs when the list is empty.
+ */
+export const PROPAGATE_WORKGROUPS = 256;
 
 /**
  * The GPU scheduler's state buffer (wgsl/schedule.ts), one u32 per word:

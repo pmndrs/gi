@@ -36,6 +36,24 @@
  * updates at priority (T2.4b): K for a local change, and after a global
  * change on a big volume `farProbeUpdates` for probes away from the view
  * (m2-lights.md §6.4). Many entries can mark one probe, so these are atomics.
+ *
+ * **Key probes** (T2.4c, m2-lights.md §4.5), when the frame's change takes
+ * the key-probe path (`keyProbes`, on a volume too big for every probe's K
+ * updates): a marked key probe's urgency is its change times
+ * `keyProbeBoost`, and away from the view's core it owes `keyProbeUpdates`;
+ * a fine probe away from the view's core (camera weight under 0.5) waits for
+ * its keys: its urgency is its change times `keyResidualShare`, it owes
+ * `fineOwedUpdates` (1), and it is flagged as awaiting a change, so
+ * `ddgi/propagate` passes it its keys' change meanwhile and its own blend
+ * cuts its history only for what propagation hasn't brought. Probes near and
+ * in view keep their full urgency and owed updates, whatever their level.
+ * Without the key-probe path, "far probes owe 2" is the fallback.
+ *
+ * **The change clock** (T2.4c): the largest change marked this frame goes
+ * into the census (`atomicMax`), and a second, one-thread dispatch
+ * (`ddgiAdvanceChangeClock`) adds it to the volume's change clock, which
+ * every probe stamps at its update and propagation measures shares of a
+ * key's change by.
  * The blend cuts the history from `pendingChange` at the probe's next update,
  * for the updates it was promised.
  * Probes that are off or not updated yet are skipped: off probes owe
@@ -48,12 +66,15 @@
  * Bindings (group 1): uniforms, the mark table, the probe history (as
  * atomic words), the census (3 storage buffers), the probe-data and
  * distance atlases (sampled) and the atlas sampler. Platform modules: the
- * light falloff only (no bindings).
+ * light falloff only (no bindings). The clock dispatch uses the same group.
  */
 
 import {
+    CENSUS_CHANGE_CLOCK,
+    CENSUS_LARGEST_CHANGE,
     CENSUS_PROBES_MARKED,
     CENSUS_PROBES_MARKED_TOTAL,
+    CHANGE_CLOCK_UNITS,
     MARK_KIND,
     MARK_LIGHT_KIND,
     PROBE_HISTORY_FLAG,
@@ -67,6 +88,9 @@ import { DDGI_COMMON_WGSL } from './common.ts';
 import type { PhaseBReduction } from './blend.ts';
 
 export const MARK_WORKGROUP_SIZE = 64;
+
+/** The mark module's entry points: the mark, then the clock (one thread). */
+export const MARK_ENTRY_POINTS = { mark: 'ddgiMark', clock: 'ddgiAdvanceChangeClock' } as const;
 
 /**
  * The visibility filter's floor (m2-lights.md §4.2): a probe whose distance
@@ -89,23 +113,29 @@ export type MarkReduction = PhaseBReduction;
 function countWgsl(reduction: MarkReduction): string {
     if (reduction === 'subgroups') {
         return /* wgsl */ `
-// Subgroups first: one atomic per subgroup for the census. Called by every
-// thread, in uniform control flow.
-fn ddgiCountMarks(marked: bool) {
+// Subgroups first: one atomic per subgroup for the census, and the largest
+// change for the change clock. Called by every thread, in uniform control
+// flow; the change is 0 for a thread that marked nothing.
+fn ddgiCountMarks(change: f32) {
+    let marked = change > 0.0;
     let marks = subgroupAdd(select(0u, 1u, marked));
+    let largest = subgroupMax(change);
     if (subgroupElect() && marks > 0u) {
         atomicAdd(&ddgiCensus[DDGI_CENSUS_PROBES_MARKED], marks);
         atomicAdd(&ddgiCensus[DDGI_CENSUS_PROBES_MARKED_TOTAL], marks);
+        // Non-negative floats order like their bits.
+        atomicMax(&ddgiCensus[DDGI_CENSUS_LARGEST_CHANGE], bitcast<u32>(largest));
     }
 }
 `;
     }
     return /* wgsl */ `
 // The declared fallback without subgroups: each marking thread counts itself.
-fn ddgiCountMarks(marked: bool) {
-    if (marked) {
+fn ddgiCountMarks(change: f32) {
+    if (change > 0.0) {
         atomicAdd(&ddgiCensus[DDGI_CENSUS_PROBES_MARKED], 1u);
         atomicAdd(&ddgiCensus[DDGI_CENSUS_PROBES_MARKED_TOTAL], 1u);
+        atomicMax(&ddgiCensus[DDGI_CENSUS_LARGEST_CHANGE], bitcast<u32>(change));
     }
 }
 `;
@@ -121,6 +151,10 @@ ${DDGI_COMMON_WGSL}
 const DDGI_MARK_WORKGROUP_SIZE: u32 = ${MARK_WORKGROUP_SIZE}u;
 const DDGI_CENSUS_PROBES_MARKED: u32 = ${CENSUS_PROBES_MARKED}u;
 const DDGI_CENSUS_PROBES_MARKED_TOTAL: u32 = ${CENSUS_PROBES_MARKED_TOTAL}u;
+const DDGI_CENSUS_LARGEST_CHANGE: u32 = ${CENSUS_LARGEST_CHANGE}u;
+const DDGI_CENSUS_CHANGE_CLOCK: u32 = ${CENSUS_CHANGE_CLOCK}u;
+// The change clock's fixed point: units per 1.0 of relative change (CHANGE_CLOCK_UNITS in layout.ts).
+const DDGI_CHANGE_CLOCK_UNITS: f32 = ${CHANGE_CLOCK_UNITS}.0;
 const DDGI_MARK_LOCAL_LIGHT: u32 = ${MARK_KIND.localLight}u;
 const DDGI_MARK_DIRECTIONAL_LIGHT: u32 = ${MARK_KIND.directionalLight}u;
 const DDGI_MARK_ENVIRONMENT: u32 = ${MARK_KIND.environment}u;
@@ -144,6 +178,7 @@ const DDGI_HISTORY_MEAN_RED_GREEN: u32 = ${PROBE_HISTORY_WORD.meanRedGreen}u;
 const DDGI_HISTORY_MEAN_BLUE_NOISE: u32 = ${PROBE_HISTORY_WORD.meanBlueNoise}u;
 const DDGI_FLAG_MARKED: u32 = ${PROBE_HISTORY_FLAG.marked}u;
 const DDGI_FLAG_TAKING_CHANGE: u32 = ${PROBE_HISTORY_FLAG.takingChange}u;
+const DDGI_FLAG_AWAITING_CHANGE: u32 = ${PROBE_HISTORY_FLAG.awaitingChange}u;
 const DDGI_HISTORY_UPDATES: u32 = ${PROBE_HISTORY_WORD.updates}u;
 const DDGI_OWED_SHIFT: u32 = ${PROBE_HISTORY_UPDATES.owedShift}u;
 const DDGI_OWED_MASK: u32 = ${PROBE_HISTORY_UPDATES.owedMask}u;
@@ -317,14 +352,24 @@ fn ddgiMarkGlobalChange(entry: DdgiMarkEntry, probe: vec3i) -> f32 {
     return entry.globalChange;
 }
 
+// How a change is served at one probe (ddgiServing): the updates it is
+// promised, the share of its change its urgency is, and whether it waits for
+// its keys (a fine probe away from the view on the key-probe path).
+struct DdgiServing {
+    promised: u32,
+    urgencyShare: f32,
+    awaiting: bool,
+}
+
 // Adds r to the probe's record: pendingChange += r (a compare-and-swap loop,
-// WGSL has no float atomics), urgency = max(urgency, pendingChange) (r and
-// the sums are never negative, and non-negative floats order like their
-// bits), and the marked flag. Once the change adds up to more than the
-// tolerance, the probe is owed 'promised' updates at priority (the GPU
+// WGSL has no float atomics), urgency = max(urgency, pendingChange times its
+// share) (r and the sums are never negative, and non-negative floats order
+// like their bits), the marked flag, and the awaiting flag for a fine probe
+// that waits for its keys. Once the change adds up to more than the
+// tolerance, the probe is owed its promised updates at priority (the GPU
 // scheduler keeps the promise; a smaller change cuts nothing, so it isn't
 // worth the budget).
-fn ddgiMarkProbe(probeIndex: u32, change: f32, promised: u32) {
+fn ddgiMarkProbe(probeIndex: u32, change: f32, serving: DdgiServing) {
     let base = probeIndex * DDGI_HISTORY_WORDS;
     var old = atomicLoad(&ddgiProbeHistoryWords[base + DDGI_HISTORY_PENDING_CHANGE]);
     var pending = bitcast<f32>(old) + change;
@@ -336,10 +381,10 @@ fn ddgiMarkProbe(probeIndex: u32, change: f32, promised: u32) {
         old = swapped.old_value;
         pending = bitcast<f32>(old) + change;
     }
-    atomicMax(&ddgiProbeHistoryWords[base + DDGI_HISTORY_URGENCY], bitcast<u32>(pending));
-    atomicOr(&ddgiProbeHistoryWords[base + DDGI_HISTORY_SCHEDULE_AND_FLAGS], DDGI_FLAG_MARKED);
+    atomicMax(&ddgiProbeHistoryWords[base + DDGI_HISTORY_URGENCY], bitcast<u32>(pending * serving.urgencyShare));
+    atomicOr(&ddgiProbeHistoryWords[base + DDGI_HISTORY_SCHEDULE_AND_FLAGS], DDGI_FLAG_MARKED | select(0u, DDGI_FLAG_AWAITING_CHANGE, serving.awaiting));
     if (pending > ddgi.changeTolerance) {
-        ddgiOweUpdates(base, promised);
+        ddgiOweUpdates(base, serving.promised);
         atomicOr(&ddgiProbeHistoryWords[base + DDGI_HISTORY_SCHEDULE_AND_FLAGS], DDGI_FLAG_TAKING_CHANGE);
     }
 }
@@ -368,17 +413,35 @@ fn ddgiWholeUpdates(updates: f32) -> u32 {
     return clamp(u32(round(updates)), 1u, DDGI_OWED_MASK);
 }
 
-// How many updates a change promises the probe (m2-lights.md §6.4): for a
-// local change, and for a global one near the camera's view, K, or as many as
-// the bounces need (ddgiNeededUpdates) when that is more; far probes owe
-// fewer after a global change on a big volume (farOwedUpdates is K when that
-// rule is off this frame), and are left noisier and later for it.
-fn ddgiPromisedUpdates(entry: DdgiMarkEntry, probe: vec3i, againstNew: f32) -> u32 {
+// How a change is served at the probe (m2-lights.md §4.5, §6.4). Near the
+// camera's view (camera weight 0.5 or more), at any level: K updates, or as
+// many as the bounces need (ddgiNeededUpdates) when that is more, at full
+// urgency (a key's boosted). Away from it:
+// - on the key-probe path (keyProbes, this frame): a key owes keyOwedUpdates
+//   at keyProbeBoost times the urgency, so the keys go first; a fine probe
+//   owes fineOwedUpdates at keyResidualShare of it and waits for its keys,
+//   whose updates bring it most of the way through ddgi/propagate;
+// - otherwise, after a global change on a big volume, "far probes owe 2"
+//   (farOwedUpdates is K when that rule is off this frame), left noisier
+//   and later for it; after a local change, the full count.
+fn ddgiServing(entry: DdgiMarkEntry, probe: vec3i, againstNew: f32) -> DdgiServing {
     let full = max(ddgiWholeUpdates(ddgi.changeUpdates), ddgiNeededUpdates(againstNew));
-    if (entry.kind == DDGI_MARK_LOCAL_LIGHT || ddgiCameraWeight(probe) >= DDGI_NEAR_CAMERA_WEIGHT) {
-        return full;
+    let near = ddgiCameraWeight(probe) >= DDGI_NEAR_CAMERA_WEIGHT;
+    if (ddgi.keyProbes != 0u) {
+        let key = ddgiIsKeyProbe(probe);
+        let share = select(1.0, ddgi.keyProbeBoost, key);
+        if (near) {
+            return DdgiServing(full, share, false);
+        }
+        if (key) {
+            return DdgiServing(min(full, ddgiWholeUpdates(ddgi.keyOwedUpdates)), share, false);
+        }
+        return DdgiServing(ddgiWholeUpdates(ddgi.fineOwedUpdates), ddgi.keyResidualShare, true);
     }
-    return min(full, ddgiWholeUpdates(ddgi.farOwedUpdates));
+    if (entry.kind == DDGI_MARK_LOCAL_LIGHT || near) {
+        return DdgiServing(full, 1.0, false);
+    }
+    return DdgiServing(min(full, ddgiWholeUpdates(ddgi.farOwedUpdates)), 1.0, false);
 }
 
 // The updates a change needs at best (T2.4b): even an update that keeps
@@ -406,9 +469,9 @@ fn ddgiMarkStoredMean(probeIndex: u32) -> vec3f {
 
 // One thread's mark: the change at its probe for its entry, or 0 when it has
 // none (past the end, a probe that is off or new, or no change there).
-fn ddgiMarkThread(thread: u32) -> bool {
+fn ddgiMarkThread(thread: u32) -> f32 {
     if (thread >= ddgiMarkTable.threadCount) {
-        return false;
+        return 0.0;
     }
     let entry = ddgiMarkTable.entries[ddgiMarkEntryOf(thread)];
     let local = thread - entry.firstThread;
@@ -418,7 +481,7 @@ fn ddgiMarkThread(thread: u32) -> bool {
     let probeIndex = u32(probe.x) + counts.x * (u32(probe.z) + counts.z * u32(probe.y));
     let data = ddgiReadProbeData(ddgiProbeData, probe);
     if (data.state != DDGI_STATE_ACTIVE) {
-        return false;
+        return 0.0;
     }
     var change = DdgiProbeChange(0.0, 0.0);
     if (entry.kind == DDGI_MARK_LOCAL_LIGHT) {
@@ -429,10 +492,10 @@ fn ddgiMarkThread(thread: u32) -> bool {
         change = DdgiProbeChange(global, global);
     }
     if (!(change.change > 0.0)) {
-        return false;
+        return 0.0;
     }
-    ddgiMarkProbe(probeIndex, change.change, ddgiPromisedUpdates(entry, probe, change.againstNew));
-    return true;
+    ddgiMarkProbe(probeIndex, change.change, ddgiServing(entry, probe, change.againstNew));
+    return change.change;
 }
 
 @compute @workgroup_size(DDGI_MARK_WORKGROUP_SIZE)
@@ -443,8 +506,20 @@ fn ddgiMark(
 ) {
     // Dispatches past 65,535 workgroups use two dimensions.
     let thread = (group.x + group.y * groups.x) * DDGI_MARK_WORKGROUP_SIZE + localThread;
-    let marked = ddgiMarkThread(thread);
-    ddgiCountMarks(marked);
+    let change = ddgiMarkThread(thread);
+    ddgiCountMarks(change);
+}
+
+// The change clock (T2.4c, m2-lights.md §4.5): adds this frame's largest
+// change to the volume's clock, in fixed point, wrapping modulo 2^32; at
+// least one unit for any change, so a frame with a change always moves it.
+// One thread, after the mark.
+@compute @workgroup_size(1)
+fn ddgiAdvanceChangeClock() {
+    let largest = bitcast<f32>(atomicLoad(&ddgiCensus[DDGI_CENSUS_LARGEST_CHANGE]));
+    if (largest > 0.0) {
+        atomicAdd(&ddgiCensus[DDGI_CENSUS_CHANGE_CLOCK], u32(ceil(largest * DDGI_CHANGE_CLOCK_UNITS)));
+    }
 }
 `;
 }

@@ -363,6 +363,8 @@ Dennis (2026-11-06) asked about "subdividing probe grids and giving priority to 
 - **Scrolling (M3):** entering planes are new probes with no distance data, so propagation can't help them. Of each pair of entering planes, the even one holds keys (a quarter of its probes) and is warmed first; the odd one has none.
 - **The fallback** is "far probes owe 2" (6.4). If T2.4c shows propagation removing too little, keys stay as a scheduling order and propagation is switched off.
 
+*As built (T2.4c, PROGRESS and DECISIONS 2026-11-06; ddgi.md "Key probes and propagation"):* the decision checks passed, so key probes and propagation are the main path (`keyProbes`, on by default) on volumes where K updates for every probe wouldn't fit in 120 frames (the same rule as 6.4), for local changes too; "far probes owe 2" stays behind the setting. A fine probe out of the view's core owes 1 update. The visibility test multiplies the two ends' Chebyshev values and a key counts when that is at least 0.5. Propagation's passes use no indirect dispatch (each cost 0.022 ms empty in Chrome). On Sponza at 316 a frame after a 30° sun turn: the view within 5% from frame 4, the field from frame 24 (fallback 48), every fine probe traced by frame 60; propagation alone removes 63.1% of the sun turn's change at the fine probes and 91.4% of a sky dimming's.
+
 ### 4.6 Feedback: revisit probes that changed more than their noise
 
 Not every change is reported: an emissive texture a host animates without telling us, a material edit, or what's left after propagation and the instant sky. So the blend checks each probe's own update.
