@@ -6,7 +6,8 @@
  *
  * 1. the GPU device is three's own (`renderer.backend.device`), so GI and
  *    three share it (SPEC: the host owns the device);
- * 2. the platform and a DDGI technique on the volume's probe grid, prepared;
+ * 2. the platform and a DDGI technique on the volume's probe grid, prepared,
+ *    with the scene copied in while the kernels compile (T2.14);
  * 3. `ThreeGI` on the scene, with `updateOnRender`: the GI light's node runs
  *    each GI frame from inside three's render (gi-light.ts), so there is no
  *    per-frame call;
@@ -153,6 +154,11 @@ function warmUpTechniqueSettings(warmUp: GIVolumeStartOptions['warmUp']): Pick<D
     return { warmUpPasses: settings.passes, warmUpMaxSeconds: settings.maxSeconds, warmUpMinPasses: settings.minPasses };
 }
 
+/** Resolves in a later JavaScript task, after the browser has sent this task's WebGPU calls. */
+function nextTask(): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
 /** The start-up frames (file comment): the technique's warm-up, then the calibration. */
 async function runStartUpFrames(started: StartedGI, camera: Camera, budget: FrameBudget, calibrate: boolean): Promise<void> {
     const { platform, technique, threeGI } = started;
@@ -212,7 +218,14 @@ export async function startVolume(volume: GIVolume, renderer: WebGPURenderer, sc
     try {
         const technique = platform.addTechnique(new DDGITechnique({ ...options.ddgi, ...warmUpTechniqueSettings(options.warmUp), volume: volume.ddgiVolume() }));
         platform.setOutput(technique);
-        await platform.prepare();
+        // The scene is copied in while the kernels compile (T2.14): `prepare` asks for every
+        // compile at once, and the copy is CPU work on this thread, so the two overlap.
+        const preparing = platform.prepare();
+        // Its failure is thrown by the `await preparing` below; until then it isn't unhandled.
+        preparing.catch(() => {});
+        // Chrome sends WebGPU calls to its GPU process when the JavaScript task ends, so a
+        // long copy in this task would hold the compile requests back until it's done (NOTES).
+        await nextTask();
         threeGI = new ThreeGI(platform, scene, {
             // No probe work until the trees exist (file comment); the warm-up sets the real budget.
             budget: { paused: true },
@@ -224,10 +237,13 @@ export async function startVolume(volume: GIVolume, renderer: WebGPURenderer, sc
             // Switched on after the warm-up: a render loop already running must not add GI frames to it.
             updateOnRender: false,
         });
+        const camera = camerasAt(volume);
+        // The scene copy, while the kernels compile (the platform isn't ready: no GI frame yet).
+        threeGI.update(camera, 0);
+        await preparing;
         const started: StartedGI = { platform, technique, threeGI };
         options.onCreated?.(started);
-        const camera = camerasAt(volume);
-        // The first update copies the scene in and starts the tree builds; the second sends the finished trees.
+        // The first GI frame uploads the scene and starts the tree builds; the one after them sends the finished trees.
         threeGI.update(camera, 0);
         await (platform as unknown as TreesBuiltSignal).rays?.whenBuilt?.();
         threeGI.update(camera, 0);

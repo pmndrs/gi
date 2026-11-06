@@ -199,6 +199,7 @@ The answers go in PROGRESS. Any change to the contract is made in both the TypeS
 - **Both tracing modes stay. Inline is the default.**
   - DDGI traces, shades and accumulates in one kernel, so rays and hits never go to memory. The DDGI update loop (T1.5) uses inline tracing.
   - `encodeBatch` stays for techniques that want separate passes, and the oracle and benchmarks use it. It costs 2 more storage buffers.
+  - *Since T2.14:* its two kernels are compiled in `prepare` only when an attached technique sets `requirements.rayBatches` (the repository's tools pass the implementation's `rayBatches` option). Otherwise `encodeBatch` throws; it never compiles on first use, so `stats.recompiles` stays 0.
   - T0.10 didn't time inline against batch. T1.5 does, if the update cost comes near its budget.
 - **Change: `range: 0` on a point or spot light means "no limit".** Before, `range` had to be positive. three's `distance = 0` already means unlimited, so the three adapter passes it straight through. Such a light is never culled. This is host-facing, but it only allows a value three already uses.
 

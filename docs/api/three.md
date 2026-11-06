@@ -174,7 +174,17 @@ renderer.setAnimationLoop(() => {
 });
 ```
 
-`new ThreeGI(gi, scene, options)` needs a prepared platform. It adds the GI light to the scene.
+`new ThreeGI(gi, scene, options)` needs the platform's output technique. It adds the GI light to the scene once the platform is prepared.
+
+It may be made while the platform is still preparing (T2.14), so the scene is copied in while the kernels compile. Until `prepare` resolves, `update` only copies the scene (the scene sync's CPU work) and the light stays out of the scene, so a render meanwhile draws without GI. Chrome sends WebGPU calls to its GPU process when the JavaScript task ends, so let the task end between `prepare()` and a long copy, or the compiles wait for the copy. `GIVolume.start` does this:
+
+```ts
+const preparing = gi.prepare();
+await new Promise((resolve) => setTimeout(resolve, 0)); // the compile requests go out
+const threeGI = new ThreeGI(gi, scene, { volume });
+threeGI.update(camera, 0);                               // the scene copy, while compiling
+await preparing;                                         // the next update adds the light and runs GI
+```
 
 `update(camera, deltaTime?)` is called once per frame, before `renderer.render` (or by the GI light itself, with `updateOnRender`). Each call:
 

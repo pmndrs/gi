@@ -15,6 +15,22 @@
  * });
  * ```
  *
+ * **Copying the scene while kernels compile** (T2.14). `ThreeGI` may also be
+ * made while the platform is still preparing. Until `prepare` resolves,
+ * `update` only copies the scene into the platform (the scene sync's CPU
+ * work), and the GI light waits outside the scene, so a render meanwhile
+ * draws without GI. The first `update` after `prepare` resolves adds the
+ * light and runs the first GI frame. `GIVolume.start` does it this way:
+ *
+ * ```ts
+ * const preparing = gi.prepare();
+ * // Chrome sends the compile requests when this JavaScript task ends.
+ * await new Promise((resolve) => setTimeout(resolve, 0));
+ * const threeGI = new ThreeGI(gi, scene);
+ * threeGI.update(camera, 0); // the scene copy, while the kernels compile
+ * await preparing;
+ * ```
+ *
  * **Command order in r187.** three makes and submits its own command
  * encoders, one or more per `render()` (WebGPUBackend `beginRender` /
  * `finishRender`), and offers no hook to record into them. So `update`
@@ -112,10 +128,18 @@ export class ThreeGI {
     private renderTimeUpdate: boolean;
     private readonly warnOnce: (message: string) => void;
     private updates = 0;
+    /**
+     * The GI light is in the scene. False while the platform is still preparing:
+     * the light wraps the technique's textures, which exist only after `prepare`.
+     */
+    private lightInScene = false;
 
-    /** The platform must be prepared (`await gi.prepare()`), because the light wraps the technique's textures. */
+    /**
+     * The platform needs its output technique (`gi.setOutput`). It may still be
+     * preparing: `update` then copies the scene in, and the GI light joins the
+     * scene at the first `update` after `prepare` resolves (file comment).
+     */
     constructor(gi: GIPlatform, scene: Scene, options: ThreeGIOptions = {}) {
-        if (!gi.isReady) throw new Error('@pmndrs/ddgi/three: prepare the platform first (await gi.prepare()), then make ThreeGI.');
         this.gi = gi;
         this.scene = scene;
         this.budget = options.budget ?? DEFAULT_BUDGET;
@@ -133,7 +157,12 @@ export class ThreeGI {
         this.connectRenderTimeUpdate(this.currentLight);
         // three only lights with lights on the camera's layers; GI is for every camera.
         this.currentLight.layers.enableAll();
-        scene.add(this.currentLight);
+        if (gi.isReady) this.addLightToScene();
+    }
+
+    private addLightToScene(): void {
+        this.scene.add(this.currentLight);
+        this.lightInScene = true;
     }
 
     /** An environment for GI rays instead of the scene's, or null to read the scene's. */
@@ -167,6 +196,18 @@ export class ThreeGI {
         this.updates++;
         const afterMatrices = performance.now();
 
+        if (!this.lightInScene && !this.gi.isReady) {
+            // The platform is still preparing (file comment): copy the scene in while its
+            // kernels compile, and nothing else. There is no GI frame to encode yet.
+            this.sync.update(this.scene, camera.layers);
+            const afterCopy = performance.now();
+            this.timings.matrixWorldMs = afterMatrices - start;
+            this.timings.syncMs = afterCopy - afterMatrices;
+            this.timings.encodeMs = 0;
+            return;
+        }
+        // Once only: the platform is ready, so the light's textures exist.
+        if (!this.lightInScene) this.addLightToScene();
         this.followShadingModule();
         if (this.volume) {
             this.light.intensity = this.volume.intensity;

@@ -74,6 +74,17 @@ interface AttachedTechnique {
     fallback: GITechnique | undefined;
 }
 
+/** The implementation's options: the host's, plus what the repository's own tools need. */
+export interface GIPlatformImplOptions extends GIPlatformOptions {
+    /**
+     * Compile `rays.encodeBatch`'s kernels in `prepare` even when no attached
+     * technique asks for them (`requirements.rayBatches`). For tools that
+     * call `rays.encodeBatch` themselves (the trace oracle and benchmarks);
+     * hosts can't reach `rays`, so the host contract has no such option.
+     */
+    readonly rayBatches?: boolean;
+}
+
 export function createGI(device: GPUDevice, options: GIPlatformOptions = {}): GIPlatform {
     return new GIPlatformImpl(device, options);
 }
@@ -87,6 +98,8 @@ export class GIPlatformImpl implements GIPlatform {
     readonly kernels: PlatformKernelBuilder;
 
     private readonly label: string;
+    /** The `rayBatches` option: compile the batch kernels whatever the techniques ask. */
+    private readonly rayBatchesForTools: boolean;
     /** Counts compute pipelines made while the platform is ready (`stats.recompiles`); its device view is what the platform's own code and techniques use. */
     private readonly compiles: CompileCounter;
     private readonly timer: GpuTimer | null;
@@ -123,9 +136,10 @@ export class GIPlatformImpl implements GIPlatform {
     /** The `uncapturederror` listener, kept so `dispose` can remove it. */
     private readonly onUncapturedError: (event: Event) => void;
 
-    constructor(device: GPUDevice, options: GIPlatformOptions = {}) {
+    constructor(device: GPUDevice, options: GIPlatformImplOptions = {}) {
         this.device = device;
         this.label = options.label ?? 'gi';
+        this.rayBatchesForTools = options.rayBatches === true;
         this.compiles = countComputePipelines(device, () => this.isReady);
         // The platform's own GPU work goes through the counting view; the host keeps its device as it is.
         const ownDevice = this.compiles.device;
@@ -241,7 +255,18 @@ export class GIPlatformImpl implements GIPlatform {
         // after the other, a cold start spent about 2.5 s compiling on the RTX 3060
         // (the tracer's kernels, then the sky projection's 0.7 s, then DDGI's trace
         // kernel's 1.1 s; T1.9a). Techniques still prepare in encode order among themselves.
-        const platformReady = Promise.all([this.shade.prepare(), this.rays.prepare(this.kernels)]);
+        //
+        // Only what this configuration uses is compiled (T2.14), and all of it here, so
+        // nothing compiles on first use while ready (`stats.recompiles`). The batch kernels
+        // behind `rays.encodeBatch` are two more compiles of the whole tracer that DDGI
+        // never runs (it traces inline): only when a technique asks for them.
+        //
+        // Every compile is asked for before the first `await` below (the first technique's
+        // included), so a host may copy its scene in while they compile: call `prepare()`,
+        // let the task end (Chrome sends WebGPU calls to its GPU process when the
+        // JavaScript task ends; NOTES), then describe the scene, then await.
+        const rayBatches = this.rayBatchesForTools || this.attached.some(({ technique }) => technique.requirements.rayBatches === true);
+        const platformReady = Promise.all([this.shade.prepare(), this.rays.prepare(this.kernels, { batches: rayBatches })]);
         const techniquesReady = (async () => {
             for (const technique of this.encodeOrder()) await technique.prepare();
         })();

@@ -156,7 +156,7 @@ describe('the rays backend’s top level', () => {
         const gpu = createGpu(features, options.limits);
         const scene = new PlatformScene(gpu.device);
         const rays = new PlatformRayQueries(gpu.device, scene, { buildIn: 'main', diagnostics: options.diagnostics });
-        await rays.prepare(new PlatformKernelBuilder(gpu.device, 'test'));
+        await rays.prepare(new PlatformKernelBuilder(gpu.device, 'test'), { batches: false });
         const frame = () => {
             const encoder = gpu.createEncoder();
             rays.update(encoder, scene.encode(encoder));
@@ -298,7 +298,7 @@ describe('the rays backend’s top level', () => {
         const warnings: string[] = [];
         const scene = new PlatformScene(gpu.device);
         const rays = new PlatformRayQueries(gpu.device, scene, { buildIn: 'main', diagnostics: true, warn: (message) => warnings.push(message) });
-        await rays.prepare(new PlatformKernelBuilder(gpu.device, 'test'));
+        await rays.prepare(new PlatformKernelBuilder(gpu.device, 'test'), { batches: false });
         const frame = () => {
             const encoder = gpu.createEncoder();
             rays.update(encoder, scene.encode(encoder));

@@ -7,8 +7,9 @@
  *
  * Per scene, in this order:
  *
- * 1. **startup**: load the scene's files, `gi.prepare()` (kernel compiles),
- *    the scene copy and the mesh trees (`rays.whenBuilt`), then the warm-up,
+ * 1. **startup**: load the scene's files, `gi.prepare()` (kernel compiles)
+ *    with the scene copy's CPU part alongside it (T2.14, as `volume.start`),
+ *    the uploads and the mesh trees (`rays.whenBuilt`), then the warm-up,
  *    the technique's own since T2.4b (`warmUpPasses`; DECISIONS 2026-11-05):
  *    steps of `maxProbesPerFrame` probes with no time between them, at most
  *    16 passes over every probe, stopping after 8 s once 2 passes are done,
@@ -361,10 +362,20 @@ async function startScene(
     const volume = manifest.volume;
     const ddgi = platform.addTechnique(new DDGITechnique({ volume: { center: volume.center, size: volume.size, spacing: volume.probeSpacing } }, { directLight: direct }));
     platform.setOutput(ddgi);
-    await platform.prepare();
+    // As `volume.start` runs it since T2.14: the scene copied in (CPU) while the kernels
+    // compile, after a task boundary so Chrome has sent the compile requests (NOTES).
+    const preparing = platform.prepare();
+    preparing.catch(() => {});
+    await yieldToCallbacks();
+    const threeGI = new ThreeGI(platform, loaded.scene, { budget: { paused: true }, environment: environmentFor(manifest), warn: () => {} });
+    const copyStartedAt = performance.now();
+    threeGI.update(camera, 0);
+    const copiedWhileCompilingAt = performance.now();
+    const copyWhileCompilingMs = copiedWhileCompilingAt - copyStartedAt;
+    await preparing;
     const preparedAt = performance.now();
 
-    const threeGI = new ThreeGI(platform, loaded.scene, { budget: { paused: true }, environment: environmentFor(manifest), warn: () => {} });
+    // The first GI frame: the scene's uploads, and the tree builds start.
     threeGI.update(camera, 0);
     const copiedAt = performance.now();
     await platform.rays.whenBuilt();
@@ -428,8 +439,14 @@ async function startScene(
         // From the start of the load: files fetched and parsed, then the first frame drawn without GI.
         load_files_ms: round(sceneShownAt - loadStartedAt, 1),
         scene_shown_from_load_ms: fromLoad(sceneShownAt),
+        // Since T2.14 the scene copy's CPU part overlaps the compiles: `prepare_ms` is from the
+        // platform's creation to `prepare` resolved, that copy included; `compile_wait_ms` is
+        // what was left to wait for after it; `scene_copy_cpu_ms` is the copy while compiling
+        // plus the first GI frame (the uploads) after `prepare`.
         prepare_ms: round(preparedAt - createdAt, 1),
-        scene_copy_cpu_ms: round(copiedAt - preparedAt, 1),
+        compile_wait_ms: round(preparedAt - copiedWhileCompilingAt, 1),
+        scene_copy_while_compiling_ms: round(copyWhileCompilingMs, 1),
+        scene_copy_cpu_ms: round(copyWhileCompilingMs + (copiedAt - preparedAt), 1),
         trees_ms: round(treesAt - copiedAt, 1),
         first_gi_step_from_load_ms: fromLoad(firstGiAt),
         first_gi_shown_from_load_ms: fromLoad(firstGiShownAt),
@@ -456,6 +473,8 @@ async function startScene(
     };
     // The slowest pipelines this scene's start-up compiled, and every sky bake kernel (T2.6a's check 3).
     const sorted = [...pipelineCompileMs].sort((a, b) => b[1] - a[1]);
+    // How many compute pipelines the start-up made (T2.14: only what the configuration uses).
+    (startup as Record<string, number>).pipelines_compiled = sorted.filter(([label]) => label.startsWith(`batch cost ${manifest.id} `)).length;
     for (const [label, ms] of [...sorted.slice(0, 6), ...sorted.slice(6).filter(([label]) => label.includes(' sky '))]) {
         (startup as Record<string, number>)[`compile_ms/${label}`] = round(ms, 1);
     }

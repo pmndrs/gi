@@ -46,10 +46,26 @@ function fakePlatform(shading: ShadingModule) {
 }
 
 describe('ThreeGI', () => {
-    it('refuses a platform that is not prepared', () => {
+    it('copies the scene in while the platform prepares, and adds its light at the first update once it is ready (T2.14)', () => {
         const platform = fakePlatform(fakeShading());
         (platform.gi as { isReady: boolean }).isReady = false;
-        expect(() => new ThreeGI(platform.gi, new Scene())).toThrow(/prepare/);
+        const scene = new Scene();
+        scene.add(new Mesh(new BoxGeometry(), new MeshStandardMaterial()));
+        const threeGI = new ThreeGI(platform.gi, scene);
+        // The light wraps the technique's textures, which don't exist yet: a render meanwhile draws without GI.
+        expect(scene.children).not.toContain(threeGI.light);
+        const camera = new PerspectiveCamera();
+        threeGI.update(camera, 0);
+        expect(threeGI.sync.counts.instances).toBe(1);
+        expect(platform.frames).toHaveLength(0);
+        expect(platform.submits()).toBe(0);
+        expect(scene.children).not.toContain(threeGI.light);
+
+        (platform.gi as { isReady: boolean }).isReady = true;
+        threeGI.update(camera, 0);
+        expect(scene.children).toContain(threeGI.light);
+        expect(platform.frames).toHaveLength(1);
+        expect(platform.submits()).toBe(1);
     });
 
     it('adds its light, encodes once per update with the camera, and submits before three renders', () => {

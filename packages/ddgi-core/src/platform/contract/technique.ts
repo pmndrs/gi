@@ -20,6 +20,15 @@ import type { KernelBuilder } from './wgsl';
 /** What a technique needs from the platform, checked before `prepare`. */
 export interface TechniqueRequirements {
     readonly queries: readonly QueryKind[];
+    /**
+     * Calls `queries.rays.encodeBatch` (rays and hits in buffers, traced in
+     * passes of their own). The platform compiles the batch kernels in
+     * `prepare` only when an attached technique says so: they are two more
+     * cold compiles of the whole tracer (T1.9a: about 0.3 s each on the RTX
+     * 3060), and DDGI traces inline. Without it `encodeBatch` throws; it never
+     * compiles on first use.
+     */
+    readonly rayBatches?: boolean;
     /** Needs {@link FrameScreen} every frame (screen-space techniques). */
     readonly screen?: boolean;
     /** Needs another technique as a bounce source or fallback. */
