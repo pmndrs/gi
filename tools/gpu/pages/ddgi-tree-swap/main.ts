@@ -12,8 +12,9 @@
  * GPU-bound (two frames in flight):
  *
  * 1. both converge for CONVERGE_FRAMES frames;
- * 2. **trace speed on GPU trees**: ROUNDS blocks of BLOCK_FRAMES frames of A,
- *    then of B, in turn (so a clock that drifts affects both alike); the
+ * 2. **trace speed on GPU trees**: ROUNDS blocks of BLOCK_FRAMES frames of A
+ *    and of B in turn, each first in half the rounds (so a clock that drifts,
+ *    and the second timing's slowdown, affect both alike); the
  *    median GPU ms of the passes that walk the trees (`ddgi/trace` and,
  *    with direct light deferred, `ddgi/gi-direct`) per frame;
  * 3. **the swap frame**: once every tinybvh tree is built, A runs a few
@@ -51,7 +52,8 @@ const SCENES = listFromEnv(env.VITE_DDGI_SCENES, ['sponza']);
 /** Probes a frame: a little over Sponza's batch at 2 ms (T2.4b calibrated 316), so the trace dominates the frame. */
 const UNITS = Number(env.VITE_DDGI_UNITS) > 0 ? Math.round(Number(env.VITE_DDGI_UNITS)) : 512;
 const CONVERGE_FRAMES = 240;
-const ROUNDS = 5;
+/** Even, so each side is timed first in half the rounds (see `timeInTurn`). */
+const ROUNDS = 6;
 const BLOCK_FRAMES = 120;
 /** Frames before the swap whose atlas mean is read, for the normal change from one frame to the next. */
 const FRAMES_BEFORE_SWAP = 4;
@@ -146,11 +148,18 @@ async function runFrames(side: Side, count: number): Promise<number[]> {
     return frames;
 }
 
-/** ROUNDS blocks of each side in turn: the median tree-walking ms per frame of each. */
+/**
+ * ROUNDS blocks of each side in turn: the median tree-walking ms per frame of
+ * each. The side that goes first swaps every round: on the power-limited RTX
+ * the second of two back-to-back timings runs about 6% slow (NOTES, B3), and
+ * a first version that always timed A first read A 0.93x of B with the same
+ * trees in both.
+ */
 async function timeInTurn(sides: readonly Side[]): Promise<Record<string, number>> {
     const frames = new Map<string, number[]>(sides.map((side) => [side.name, []]));
     for (let round = 0; round < ROUNDS; round++) {
-        for (const side of sides) frames.get(side.name)?.push(...(await runFrames(side, BLOCK_FRAMES)));
+        const order = round % 2 === 0 ? sides : [...sides].reverse();
+        for (const side of order) frames.get(side.name)?.push(...(await runFrames(side, BLOCK_FRAMES)));
     }
     return Object.fromEntries(sides.map((side) => [side.name, median(side.times.msOf(frames.get(side.name) ?? []))]));
 }
