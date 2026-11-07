@@ -234,7 +234,7 @@ sun.intensity = 1.5;
 - The sun is the scene's first `DirectionalLight` (the first the adapter met). DDGI traces it in a layer of its own at a white reference and weighs that layer by the light's colour × intensity.
 - Turning the sun still re-traces, nearest the camera first, as before.
 - Dim or hide it (`intensity` 0 or `visible` false is fine: GI sees a sun at 0), but don't remove it: a removed sun makes another directional light the sun, and every probe is traced again.
-- Off by default. It costs a layer of the field and its share of every probe update (PROGRESS, T2.6b). It works with light groups: the sun's layer is then also weighed by its group's weight. 4 groups, the environment and the sun are the most a volume holds.
+- Off by default. It costs a layer of the field (Sponza: 58 MB of GI becomes 93 MB) and its share of every probe update (PROGRESS, T2.6b). It works with light groups: the sun's layer is then also weighed by its group's weight. 4 groups, the environment and the sun are the most a volume holds.
 
 ### `GILight`
 
