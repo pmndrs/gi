@@ -21,6 +21,9 @@
  * - `atlasfill`  `1`: the atlas fills the view instead of the bottom-right corner
  * - `atlasev`    extra exposure for the irradiance atlas, in stops
  * - `change`     DDGI's change-per-frame view, full colour at this many percent (`0.25`, `1` or `4`)
+ * - `reach`      metres of reach for many shadowless lights with no range (`sponza-candles`' candles),
+ *                so three can cull them; `0` keeps them unranged (exact and very slow). Read when the
+ *                scene loads (render/scene-lighting.ts)
  * - anything else is kept as a scene setting by name, like `candles=4096` for `sponza-candles`
  *                (the manifest's `settings`; read when the scene loads, ignored by scenes without it)
  *
@@ -83,6 +86,8 @@ export interface ViewerUrlState {
     atlasEv: number;
     /** The change-per-frame view's full-colour change, in percent; null is off. */
     change: ChangeFullScalePercent | null;
+    /** Reach in metres for many unranged shadowless lights (render/scene-lighting.ts); null is the viewer's default. */
+    lightReach: number | null;
     /** Scene settings by name (`candles=4096`), as written; the scene's manifest says which it reads. */
     sceneSettings: Record<string, string>;
 }
@@ -107,11 +112,12 @@ export const DEFAULT_URL_STATE: ViewerUrlState = {
     atlasFill: false,
     atlasEv: 0,
     change: null,
+    lightReach: null,
     sceneSettings: {},
 };
 
 /** The link's own names; any other name is a scene setting. */
-const URL_KEYS = new Set(['scene', 'camera', 'cam', 'technique', 'gi', 'wipe', 'split', 'ev', 'tone', 'nav', 'upscale', 'budget', 'probes', 'debug', 'probecolor', 'atlas', 'atlasfill', 'atlasev', 'change']);
+const URL_KEYS = new Set(['scene', 'camera', 'cam', 'technique', 'gi', 'wipe', 'split', 'ev', 'tone', 'nav', 'upscale', 'budget', 'probes', 'debug', 'probecolor', 'atlas', 'atlasfill', 'atlasev', 'change', 'reach']);
 
 const TECHNIQUES: readonly TechniqueId[] = ['none', 'ddgi', 'lpg', 'vxgi', 'cycles'];
 const GI_TECHNIQUES: readonly GiTechniqueId[] = ['ddgi', 'lpg', 'vxgi'];
@@ -174,6 +180,8 @@ export function parseUrlState(search: string): ViewerUrlState {
     if (atlasEv !== null) state.atlasEv = Math.min(MAX_ATLAS_EV, Math.max(-MAX_ATLAS_EV, Math.round(atlasEv / ATLAS_EV_STEP) * ATLAS_EV_STEP));
     const change = finiteNumber(params.get('change'));
     state.change = CHANGE_FULL_SCALE_PERCENTS.find((percent) => percent === change) ?? null;
+    const reach = finiteNumber(params.get('reach'));
+    if (reach !== null && reach >= 0) state.lightReach = reach;
     return state;
 }
 
@@ -201,6 +209,7 @@ export function serializeUrlState(state: ViewerUrlState): string {
     if (state.atlasFill) params.set('atlasfill', '1');
     if (state.atlasEv !== DEFAULT_URL_STATE.atlasEv) params.set('atlasev', String(state.atlasEv));
     if (state.change !== null) params.set('change', String(state.change));
+    if (state.lightReach !== null) params.set('reach', String(state.lightReach));
     for (const [name, value] of Object.entries(state.sceneSettings)) if (!URL_KEYS.has(name)) params.set(name, value);
     return params.toString();
 }

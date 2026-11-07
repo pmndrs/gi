@@ -21,7 +21,7 @@ import { RenderPipeline, type Lighting, type Node } from 'three/webgpu';
 import type { SceneManifest } from '../../../../scenes/src/manifest';
 import { createRenderer, type RendererBundle } from '../render/create-renderer';
 import { setTimestampTracking } from '../render/gpu-time';
-import { sceneLighting } from '../render/scene-lighting';
+import { DEFAULT_CLUSTERED_LIGHT_REACH_M, limitClusteredLightReach, sceneLighting } from '../render/scene-lighting';
 import type { GiMode } from '../scene/layers';
 import { disposeScene, loadScene, type LoadedScene, type LoadProgress, type LoadSceneOptions } from '../scene/load-scene';
 import { DdgiTechnique, DEFAULT_DDGI_VIEWER_SETTINGS, type DdgiViewerSettings } from '../techniques/ddgi-technique';
@@ -55,6 +55,16 @@ export interface ViewLayout {
 }
 
 export const DEFAULT_LAYOUT: ViewLayout = { left: 'ddgi', right: null, giMode: 'on', split: 0.5 };
+
+/** How the viewer draws a scene's lights (render/scene-lighting.ts). */
+export interface ViewerLightingOptions {
+    /**
+     * The reach, in metres, given to many shadowless lights with no range of their
+     * own (`sponza-candles`), for three's clustered lighting; 0 keeps them unranged
+     * (exact, about 0.4 s a frame on the RTX 3060). Default DEFAULT_CLUSTERED_LIGHT_REACH_M.
+     */
+    readonly clusteredLightReachMetres?: number;
+}
 
 /** Width of the wipe line, in screen pixels. */
 const WIPE_LINE_PIXELS = 2;
@@ -138,10 +148,12 @@ export class ViewerCore {
     // -- scene -------------------------------------------------------------
 
     /** Throws away the old scene and its techniques, loads `manifest`, and shows its first technique. */
-    async loadScene(manifest: SceneManifest, report: (progress: LoadProgress) => void, options: LoadSceneOptions = {}): Promise<LoadedScene> {
+    async loadScene(manifest: SceneManifest, report: (progress: LoadProgress) => void, options: LoadSceneOptions & ViewerLightingOptions = {}): Promise<LoadedScene> {
         this.unloadScene();
         const loaded = await loadScene(manifest, report, options);
         this.loaded = loaded;
+        // Many shadowless lights with no range (sponza-candles) get a reach, so three can cull them per cluster (scene-lighting.ts).
+        limitClusteredLightReach(loaded.directLights, options.clusteredLightReachMetres ?? DEFAULT_CLUSTERED_LIGHT_REACH_M);
         // Many shadowless lights (sponza-candles) are drawn clustered; everything else as before.
         const lighting = sceneLighting(loaded.directLights, this.defaultLighting);
         if (this.renderer.lighting !== this.defaultLighting && this.renderer.lighting !== lighting) this.renderer.lighting.dispose();
