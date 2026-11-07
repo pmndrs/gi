@@ -177,6 +177,8 @@ await runThreePage(async ({ device, adapterSummary, log, data }) => {
         };
         const rays = gpuFirst.scene.platform.rays;
         const firstCounts = rays.meshTreeCounts;
+        // The GPU trees were just copied in: their batch's buffers are freed at the next update.
+        const memoryAtFirstTrees = rays.memory;
         log(
             `${sceneId}: first trees ${firstCounts.onGpuTrees} on the GPU, ${firstCounts.onTinybvhTrees} from tinybvh ` +
                 `(${firstCounts.gpuTreesRefused} GPU trees refused); GPU build ${round(firstCounts.lastGpuBuildMs, 1)} ms to its stats`,
@@ -230,7 +232,9 @@ await runThreePage(async ({ device, adapterSummary, log, data }) => {
             gpuTreesRatio: round(gpuTreesRatio),
             afterSwapRatio: round(afterRatio),
             swap: { atlasMeanBefore: lastBefore, atlasMeanAfter: afterSwapFrame, change: swapChange, normalChanges, atlasMeanLater: later, swaps: swapCounts.swaps, recompiles },
+            memoryAtFirstTrees,
             memoryAfterSwap: gpuFirst.scene.platform.rays.memory,
+            memoryTinybvhOnly: tinybvhOnly.scene.platform.rays.memory,
         };
         gpuFirst.scene.dispose();
         tinybvhOnly.scene.dispose();
