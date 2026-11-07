@@ -618,19 +618,26 @@ export class PlatformRayQueries implements RayQueries {
     }
 
     /**
-     * Meshes whose current version has no tree yet and still has one coming:
-     * a GPU build still running, or tinybvh's when the GPU gave none. While
-     * a GPU build runs, tinybvh's tree waits for it (`takeArrived`), so the
-     * first tree a mesh gets is the GPU's whenever it has one.
+     * Meshes whose current version has no tree yet and still has one coming.
+     * A mesh's first tree is whichever builder's arrives first (tinybvh's
+     * small meshes often beat the GPU's batch, and a busy GPU may be slower
+     * than the worker), except where tinybvh's trees are held: there a
+     * running GPU build goes first (`takeArrived`).
      */
     private meshesWaitingForFirstTree(): number {
         let waiting = 0;
-        for (const state of this.treeStates.values()) {
-            const hasTree = state.gpu === 'built' || (state.tinybvh === 'built' && state.gpu !== 'building');
+        for (const [slot, state] of this.treeStates) {
+            const tinybvhUsable = state.tinybvh === 'built' && !(state.gpu === 'building' && this.holdsRefinement(slot));
+            const hasTree = state.gpu === 'built' || tinybvhUsable;
             const treeComing = state.gpu === 'building' || state.tinybvh === 'building';
             if (!hasTree && treeComing) waiting++;
         }
         return waiting;
+    }
+
+    /** Whether tinybvh's tree for this slot waits for `releaseRefinements` (the `holdRefinements` option). */
+    private holdsRefinement(slot: number): boolean {
+        return this.refinementHold !== null && this.refinementHold(slot);
     }
 
     /** Resolves `whenBuilt` and `whenRefined` waiters whose condition now holds. */
@@ -731,11 +738,12 @@ export class PlatformRayQueries implements RayQueries {
 
     /**
      * The finished builds to place this frame, for meshes that still exist in
-     * the version they were built from. tinybvh's tree waits while the
-     * mesh's GPU build runs (so the GPU's tree, when there is one, is always
-     * the first), and while a held refinement waits for `releaseRefinements`.
-     * A GPU tree whose mesh already has tinybvh's (placed, or placed this
-     * frame) is dropped: it would only be worse.
+     * the version they were built from. A GPU tree whose mesh already has
+     * tinybvh's (placed, or placed this frame) is dropped: it would only be
+     * worse. Where tinybvh's trees are held (`holdRefinements`, for tools),
+     * tinybvh's tree waits while the mesh's GPU build runs or would replace
+     * its GPU tree, until `releaseRefinements`: the GPU's tree, when there is
+     * one, is then always the first, and the swap comes when the tool says.
      */
     private takeArrived(): ArrivedTree[] {
         const taken: ArrivedTree[] = [];
@@ -747,9 +755,8 @@ export class PlatformRayQueries implements RayQueries {
             const state = this.currentState(tree.slot, tree.generation);
             if (!state || tree.source !== 'tinybvh') continue;
             const placed = this.placed.get(tree.slot);
-            const gpuTreeFirst = (placed?.source === 'gpu' && placed.generation === tree.generation) || gpuQueued.has(tree.slot);
-            const held = gpuTreeFirst && this.refinementHold !== null && this.refinementHold(tree.slot);
-            if (state.gpu === 'building' || held) {
+            const gpuTreeFirst = state.gpu === 'building' || (placed?.source === 'gpu' && placed.generation === tree.generation) || gpuQueued.has(tree.slot);
+            if (gpuTreeFirst && this.holdsRefinement(tree.slot)) {
                 waiting.push(tree);
             } else {
                 taken.push(tree);

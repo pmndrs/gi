@@ -51,9 +51,10 @@ await runGpuTest(async ({ adapter, device, log }) => {
     assert(field, 'no field after prepare');
     await runFrames(device, scene.platform, FRAMES, UNITS);
     const fieldMean = await atlasMean(device, field.irradiance);
+    // Read before the test view: its own kernel is compiled through the platform while ready, and would count.
+    const recompiles = scene.platform.stats.recompiles;
     const view = await TestView.create(device, scene.platform);
     const viewMean = imageMean((await view.render(field, scene.manifest.cameras[0], 320, 180)).indirect);
-    const recompiles = scene.platform.stats.recompiles;
     scene.platform.dispose();
 
     const reference = M1_ATLAS_MEAN[vendor];

@@ -47,7 +47,10 @@ class StandInGpuBuilder implements FirstTreeBuilder {
         this.device = device;
     }
 
-    async prepare(): Promise<void> {}
+    /** Loads tinybvh's WASM now, so `finishBatch` answers within the task that calls it, ahead of the worker's later tasks. */
+    async prepare(): Promise<void> {
+        await buildMeshBvhAsync({ positions: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]) });
+    }
 
     build(requests: readonly GpuTreeRequest[]): GpuTreeBuilds {
         this.requests.push([...requests]);
@@ -172,30 +175,47 @@ async function until(condition: () => boolean): Promise<void> {
 }
 
 describe('first trees from the GPU, tinybvh swapped in (T2.12)', () => {
-    it("makes tinybvh's trees wait for a GPU build still running, and drops GPU trees that arrive after tinybvh's", async () => {
+    it("gives each mesh the first tree to arrive, and drops a GPU tree that comes after tinybvh's", async () => {
         const { rays, gpuBuilder, frame, gpu } = await setUp();
         frame();
         // One batch for all meshes.
         expect(gpuBuilder.requests).toHaveLength(1);
         expect(gpuBuilder.requests[0].map((request) => request.slot)).toEqual([0, 1, 2]);
-        // tinybvh's trees finish on their own, and wait for the GPU's.
-        await until(() => rays.meshTreeCounts.tinybvhBuilding === 0);
-        expect(rays.building).toBe(true);
+        // tinybvh's trees finish while the GPU build still runs (the stand-in waits for the test): they go in.
+        await rays.whenBuilt();
+        expect(gpuBuilder.waiting).toBe(1);
         frame();
-        expect(rays.meshTreeCounts.onTinybvhTrees).toBe(0);
+        expect(rays.meshTreeCounts).toMatchObject({ onGpuTrees: 0, onTinybvhTrees: 3 });
+        expect(hitsDown(rays, 3).filter((hit) => hit === '-1')).toHaveLength(0);
 
+        // The GPU's trees come later and are dropped; their batch's buffers go at the next update.
         await gpuBuilder.finishBatch();
-        expect(rays.building).toBe(false);
         expect(rays.memory.gpuBuildOutputs).toBeGreaterThan(0);
-        // tinybvh's are ready too, so they go in and the worse GPU trees are dropped.
         frame();
         expect(rays.meshTreeCounts).toMatchObject({ onGpuTrees: 0, onTinybvhTrees: 3, gpuTreesBuilt: 3, swaps: 0 });
-        expect(hitsDown(rays, 3).filter((hit) => hit === '-1')).toHaveLength(0);
-        // The batch's buffers are freed at the next update.
         frame();
         expect(gpuBuilder.outputs[0].isDestroyed).toBe(true);
         expect(rays.memory.gpuBuildOutputs).toBe(0);
         expect(gpu.buffers.filter((buffer) => buffer.label.startsWith('stand-in') && !buffer.destroyed)).toHaveLength(0);
+        rays.dispose();
+    });
+
+    it("swaps tinybvh's trees in by themselves when the GPU's came first, with the same hits", async () => {
+        const { rays, gpuBuilder, frame } = await setUp();
+        frame();
+        // The stand-in answers within this task, before the worker's (here: a later task's) trees arrive.
+        await gpuBuilder.finishBatch();
+        frame();
+        expect(rays.meshTreeCounts).toMatchObject({ onGpuTrees: 3, onTinybvhTrees: 0, tinybvhBuilding: 3 });
+        expect(rays.building).toBe(false);
+        expect(rays.refining).toBe(true);
+        const onGpuTrees = hitsDown(rays, 3);
+        expect(onGpuTrees.filter((hit) => hit === '-1')).toHaveLength(0);
+        await rays.whenRefined();
+        frame();
+        expect(rays.meshTreeCounts).toMatchObject({ onGpuTrees: 0, onTinybvhTrees: 3, swaps: 3 });
+        expect(rays.refining).toBe(false);
+        expect(hitsDown(rays, 3)).toEqual(onGpuTrees);
         rays.dispose();
     });
 

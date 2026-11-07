@@ -378,6 +378,9 @@ export class GpuTopLevel {
     }
 
     async prepare(kernels: KernelBuilder): Promise<void> {
+        // The shape worker starts here, so its module loads while the kernels compile instead of
+        // when the first frame asks for a shape: the first shape is on the way to first GI (T2.12).
+        this.builder ??= createTopLevelBuilder({ worker: this.buildIn === 'main' ? 'never' : 'auto' });
         if (this.gatherKernel && this.refit.ready) return;
         const [gather] = await Promise.all([
             kernels.computeKernel({
