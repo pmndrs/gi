@@ -191,7 +191,7 @@ try {
         if ($recording) {
             $seconds = if ($RecordSeconds -gt 0) { $RecordSeconds } else { $motionSeconds }
             $recordFrames = [int][math]::Round($seconds * 60) + 1
-            $recordFolder = if ($RecordDir) { $RecordDir.Replace('\', '/') } else { "$root/native/build/recordings/$Scene-$Motion$(if ($Tag) { "-$Tag" })" }
+            $recordFolder = if ($RecordDir) { $RecordDir.Replace('\', '/') } else { "$root/native/build/recordings/$Scene-$Motion$(if ($Log) { '-log' })$(if ($Tag) { "-$Tag" })" }
             if (Test-Path -LiteralPath $recordFolder) { Clear-FolderContents $recordFolder }
             New-Item -ItemType Directory -Force -Path $recordFolder | Out-Null
             $appLines += "app.recordDir=$recordFolder"
