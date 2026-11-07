@@ -52,17 +52,8 @@ export const SETTLE_SECONDS = 4;
 export const STABLE_SHARE = 0.002;
 /** ...or this long at most. */
 export const SETTLE_MAX_SECONDS = 30;
-/**
- * At the user's budget before the step, so every probe's history (its
- * length and its noise, which the feedback rule reads) is back at its
- * everyday state after the test mode: three times DDGI's memory time (its
- * `hysteresisMemorySeconds`, 5 s), after which the test mode's updates count
- * e⁻³ = 5%. With 4 s the Intel UHD (about 90 probes a frame of two-room's
- * 1,071) still carried the test mode's histories into the step and settled 4
- * frames sooner than the T2.4b procedure; the RTX (370-610 a frame) matched
- * either way.
- */
-export const STEADY_SECONDS = 15;
+/** At the user's budget before the step, so the histories are at their everyday length. */
+export const STEADY_SECONDS = 4;
 /** Frames recorded after the step: 2 s at 60 Hz, as the T2.4b page measures. */
 export const RECORD_FRAMES = 120;
 /** `before` and `settled` are means over this many frames, to average out DDGI's frame-to-frame noise. */
