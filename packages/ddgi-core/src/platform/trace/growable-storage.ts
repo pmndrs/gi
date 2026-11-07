@@ -30,11 +30,20 @@ export class GrowableStorage {
     private current: GPUBuffer;
     private readonly allocator: RangeAllocator;
     private retired: GPUBuffer[] = [];
+    /** Share of room kept free when a growth is sized by what must fit (see the constructor). */
+    private readonly headroom: number;
 
-    constructor(device: GPUDevice, label: string, unitBytes: number, initialUnits: number) {
+    /**
+     * `headroom` (default 0): when the buffer grows by more than doubling (a
+     * scene's trees arriving at once), it is made this share larger than
+     * what must fit, so ranges that are replaced by slightly larger ones
+     * soon after still fit without doubling it.
+     */
+    constructor(device: GPUDevice, label: string, unitBytes: number, initialUnits: number, options: { readonly headroom?: number } = {}) {
         this.device = device;
         this.label = label;
         this.unitBytes = unitBytes;
+        this.headroom = options.headroom ?? 0;
         this.allocator = new RangeAllocator(initialUnits);
         this.current = this.createBuffer(initialUnits);
     }
@@ -75,8 +84,8 @@ export class GrowableStorage {
             const limit = limits.maxStorageBufferBindingSize <= limits.maxBufferSize ? 'maxStorageBufferBindingSize' : 'maxBufferSize';
             throw new GILimitError(limit, minimumUnits * this.unitBytes, limitBytes);
         }
-        // Doubling keeps reallocations logarithmic while a scene loads.
-        const units = Math.min(limitUnits, Math.max(minimumUnits, this.allocator.capacity * 2));
+        // Doubling keeps reallocations logarithmic while a scene loads; a bigger jump gets its headroom.
+        const units = Math.min(limitUnits, Math.max(Math.ceil(minimumUnits * (1 + this.headroom)), this.allocator.capacity * 2));
         const buffer = this.createBuffer(units);
 
         // Neighbouring ranges are copied as one.

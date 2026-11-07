@@ -174,6 +174,16 @@ export interface AccelerationMemory {
 const INITIAL_NODES = 1024;
 const INITIAL_TRIANGLES = 2048;
 
+/**
+ * Room kept free in the node buffer when a scene's trees arrive at once
+ * (growable-storage.ts). tinybvh's trees replace the GPU's first trees and
+ * can have more nodes (Sponza: 0.6% more in all, more for single meshes;
+ * the triangles are the same). Without room, the first replacement that
+ * doesn't fit its old range doubled the buffer: Sponza's nodes went from
+ * 193 MB to 386 MB (T2.12). An eighth covers the difference with margin.
+ */
+const NODE_HEADROOM = 1 / 8;
+
 /** Bindings of a batch kernel's own group (group 1): rays in, results out. */
 const BATCH_GROUP = 1;
 
@@ -252,7 +262,7 @@ export class PlatformRayQueries implements RayQueries {
             transferInput: true,
         });
 
-        this.nodes = new GrowableStorage(device, `${this.label} trace nodes`, BVH_NODE_BYTES, INITIAL_NODES);
+        this.nodes = new GrowableStorage(device, `${this.label} trace nodes`, BVH_NODE_BYTES, INITIAL_NODES, { headroom: NODE_HEADROOM });
         this.triangles = new GrowableStorage(device, `${this.label} trace triangles`, TRIANGLE_BYTES, INITIAL_TRIANGLES);
         // An empty top level: the header says 0 nodes, so every ray misses.
         this.topLevelBuffer = this.createTopLevelBuffer(TOP_LEVEL_HEADER_BYTES);
