@@ -251,14 +251,15 @@ writeFileSync(${JSON.stringify(out)}, process.env.${LOCK_HELD_ENV} ?? 'unset');
         console.log = () => undefined;
         console.error = () => undefined;
         try {
-            expect(await benchLockCli(['run', '--what', 'outer', '--path', lockPath, '--', 'node', script])).toBe(0);
+            // --no-cool-wait: without it, run waits for the real GPU to cool, so this test failed whenever the GPU was busy.
+            expect(await benchLockCli(['run', '--no-cool-wait', '--what', 'outer', '--path', lockPath, '--', 'node', script])).toBe(0);
             expect(await readFile(out, 'utf8')).toBe(String(process.pid));
             expect(existsSync(lockPath)).toBe(false);
 
             // Nested: hold the lock as this process, mark it as the parent's, and run again.
             const handle = await acquireBenchLock({ ...quiet, path: lockPath });
             process.env[LOCK_HELD_ENV] = String(process.pid);
-            expect(await benchLockCli(['run', '--what', 'inner', '--timeout-minutes', '0.05', '--path', lockPath, '--', 'node', script])).toBe(0);
+            expect(await benchLockCli(['run', '--no-cool-wait', '--what', 'inner', '--timeout-minutes', '0.05', '--path', lockPath, '--', 'node', script])).toBe(0);
             expect(await readFile(out, 'utf8')).toBe(String(process.pid));
             // The inner run did not release the outer hold.
             expect((await ownerOnDisk()).pid).toBe(process.pid);

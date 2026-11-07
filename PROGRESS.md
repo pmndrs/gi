@@ -69,6 +69,37 @@ Next:
 - The firefly clamp acts per layer, so a layer that starts dark is limited by its own old value. Nothing here showed it; watch it if a group or the sun settles slowly after a big step.
 - Tools: `bench-lock.test.ts`'s nested run should pass `--no-cool-wait`.
 - Shared files touched: `contract/{shade,scene-copy}.ts`, `scene/platform-scene.ts` (a getter), `shade/{wgsl,direct}.ts`, `ddgi-technique.ts`, `layout.ts` (uniform words 92–95), `settings.ts`, `light-groups.ts`, `mark-table.ts`, `wgsl/{blend,propagate,common}.ts`, `ddgi-shared/viewer-scene.ts`, `ddgi-light-groups-cost`.
+## 2026-11-08 · T2.14 review and merge · lead (opus)
+Did: An Opus review passed T2.14 with notes. The must-fix went back to the implementer, who fixed it in 741a713: a host that only uses `updateOnRender` got no GI light, and a forgotten `prepare` gave no error. The implementer also merged `m2` into `m2-t2.14`. I read the fix and merged it into `m2`. I also fixed `tools/reference/bench-lock.test.ts`: its nested-run test called `bench-lock run` without `--no-cool-wait`, so it waited for the real GPU to cool and timed out whenever the GPU was busy. T2.14 is done.
+Verified: on `m2` after the merge, typecheck and lint are clean and 1,081 unit tests pass (`bench-lock.test.ts` 37/37 after the fix). Review re-check on the RTX 3060: `ddgi-session-recompiles` counter 0 and control kernel 1 on 14 scenes, one scene per run, plus `sponza-candles` and the light grid on and off (implementer, after the merge). `platform-recompiles` passes.
+Not verified: check 1 (cold Cornell start) has no verdict: the CPU and GPU were busy, and the `m2` baseline of 1.00 s has no CSV row and an INVALID clock. It is owed to T2.10, as a cold run on a quiet machine with `VITE_DDGI_SECTIONS=startup,budget`. The reviewer saw `bistro-exterior` with light groups on block the page for 30 s twice under CPU load, and `ddgi-leak` and `ddgi-light-groups` time out on the hot, shared GPU; neither was reproduced or attributed. Intel UHD not re-run after the fixes.
+Next: T2.10 runs check 1 and re-runs the full suite on a cool GPU. Separately, `sponza-candles` with three drawing every frame blocks the page for 30 s; the page now runs it with `VITE_DDGI_RENDER_EVERY=0`. Three's lighting of 1,024 candles goes to T2.8.
+
+## 2026-11-08 · T2.14 review fixes and `m2` merge · implementer (opus)
+Did (branch `m2-t2.14`; 741a713, merge 13344d1 of `m2` bcb1af8, 784fa0e, fb4c0c4, then docs):
+- Must-fix: `ThreeGI` takes `prepare`'s promise as `preparing`. The GI light joins the scene when it resolves, so an `updateOnRender`-only host gets GI. A rejected `prepare` is thrown by the next `update`, with a warning. Without `preparing`, an unprepared platform is refused as before. `GIVolume.start` and `ddgi-batch-cost` pass it. Unit tests: refusal, copy-then-light, render-only host, rejection.
+- Should-fix: `encodeBatch` before any `prepare` throws `GINotReadyError('preparing')`; the `rayBatches` message stays for a prepared platform that wasn't asked (unit test).
+- Merged `m2`: PROGRESS and DECISIONS conflicts kept both blocks; 106 `## ` headings (102 base + 1 + 3), no markers left.
+- `ddgi-session-recompiles`: 12 point lights added and removed, so the light grid switches on and off mid-session; frames with `gi/light-grid` reported per step; `VITE_DDGI_RENDER_EVERY` (0 = no three draws).
+Verified (RTX 3060 nvidia/ampere, Chrome 157 headless, bench lock, correctness only):
+- `platform-recompiles` passes.
+- `ddgi-session-recompiles`, one scene per run, light groups off and on: counter 0 after every step and control kernel 1 on cornell-box, two-room, sponza and bistro-interior. The grid ran in the 12-light step on each (16-18 of 20 frames). Also on `sponza-candles` (grid in 23 of 24 steps), run without three's draws: with them the page stopped answering DevTools for 30 s (NOTES).
+- typecheck and lint pass. Unit tests: 1,080 pass. One fails: `bench-lock.test.ts`'s nested-run test, because the GPU was at 89 C and the test waits for it to cool. It fails the same way on the code before the change (NOTES).
+Not verified: check 1 (still owed to a cold Cornell run on a quiet machine); the Intel UHD after these fixes; the viewer by hand.
+Next: T2.8, `sponza-candles` drawn in three (the stall above).
+
+## 2026-11-07 · T2.14 compile only what's configured · implementer (opus)
+Did (branch `m2-t2.14` from `m2` 4468ddf; 5859876, 0dd91b6, 5e4e4c6, then this entry):
+- `rays.encodeBatch`'s two kernels compile in `prepare` only for a technique with `requirements.rayBatches` (contract `technique.ts`); tools that call it pass `GIPlatformImplOptions.rayBatches` (trace-oracle, tlas-oracle, platform-bench). Otherwise `encodeBatch` throws; it never compiles on first use. Top-level and batch kernels are asked for together (`ray-queries.ts`, `gi-platform.ts`).
+- Compile while uploading: `ThreeGI` may be made while the platform prepares (`update` copies the scene only; the light joins the scene once ready). `GIVolume.start` and `ddgi-batch-cost`'s startup call `prepare()`, let the task end (Chrome sends WebGPU calls then, NOTES), copy, then await.
+- New suite page `ddgi-session-recompiles`; unit tests (batch kernels on request only, ThreeGI before ready); three.md, platform.md, NOTES, DECISIONS (3 entries).
+Verified (RTX 3060 nvidia/ampere, Chrome 157 headless, bench lock):
+1. **Check 2 met.** `ddgi-session-recompiles`: counter 0 after every step, control kernel counts 1, light groups off and on, on 14 scenes (every manifest but `sponza-candles`: cornell-box, cornell-box-point, two-room, furnished-room, open-ground, closed-door, thin-wall, furnace-room, cabinet-row, sponza, sponza-full, courtyard-tree, bistro-interior, bistro-exterior). Intel UHD: cornell-box, two-room, open-ground, cornell-box-point and `platform-recompiles` pass.
+2. **Check 1 not judged: no VALID run.** Two runs of this code read NO VERDICT (3 and 1 loaded samples): first GI drawn 1.84 / 2.41 s from load, with the CPU 55-100% busy from other work (files 369 / 544 ms; `prepare` 980 / 1,280). The same page on `m2` 4468ddf at a quiet moment earlier: 1.00 s (files 183, `prepare` 565, trees 25, three's GI compile 187; INVALID clock). 24 pipelines compile now (no batch kernels).
+3. **Sponza, for the record** (VALID clock, CPU contended): handoff to first GI drawn 8.13 s against 2 s: `prepare` 1.96 s, which is the scene copy (1.89 s) with only 0.04 s of compiling left after it; uploads 0.35, trees 4.98, three's GI compile 0.69. Files 5.5 s. Rows: `timing.csv` (5859876).
+Regressions: full RTX suite 51 PASS plus self-tests (`spike-babylon` timed out once in it while the CPU was busy, passes alone); `ddgi-change-still` Cornell atlas 0.335474, 0 marks. lint, typecheck, 1,070 unit tests.
+Not verified: check 1 on a quiet CPU; the viewer by hand; `sponza-candles` (958 s set-up, T2.3's).
+Next: lead re-times check 1 on a quiet CPU (`VITE_DDGI_SECTIONS=startup,budget` gives the clock rule enough samples). T2.12/T2.13: ask for their kernels first and start the uploads and tree builds during `prepare` (trees still start after it). Hosts: three's GI material compile (0.19–0.69 s) could overlap the warm-up with `renderer.compileAsync` on the host's camera. Shared files: contract `technique.ts`, `queries.ts`; `gi-platform.ts`, `ray-queries.ts`, `three-gi.ts`, `volume-start.ts`; nothing in `shade/` or the light grid.
 
 ## 2026-11-07 · T2.3 review and merge · M2 lead (opus)
 Did:

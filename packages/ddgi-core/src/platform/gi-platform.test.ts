@@ -425,6 +425,37 @@ describe('the platform object', () => {
         expect(platform.isReady).toBe(false);
     });
 
+    it('compiles the ray-batch kernels only for a technique that asks for them, and never on first use (T2.14)', async () => {
+        const gpu = createPlatformGpu();
+        const platform = new GIPlatformImpl(gpu.device);
+        platform.addTechnique(new RecordingTechnique('inline tracer', []));
+        const batch = { mode: 'closest' as const, rays: gpu.device.createBuffer({ size: 32, usage: 0 }), hits: gpu.device.createBuffer({ size: 24, usage: 0 }), count: 1 };
+        // Before any prepare: not ready, whatever the techniques asked for.
+        expect(() => platform.rays.encodeBatch(gpu.createEncoder(), batch)).toThrow(GINotReadyError);
+        await platform.prepare();
+        expect(platform.rays.batchesReady).toBe(false);
+        const pipelinesWithout = gpu.counters.pipelines;
+        expect(() => platform.rays.encodeBatch(gpu.createEncoder(), batch)).toThrow(/rayBatches/);
+        // Refusing compiled nothing.
+        expect(gpu.counters.pipelines).toBe(pipelinesWithout);
+        expect(platform.stats.recompiles).toBe(0);
+
+        // A technique that traces in batches says so; the next prepare compiles the two batch kernels.
+        const batching = new RecordingTechnique('batch tracer', []);
+        (batching as { requirements: GITechnique['requirements'] }).requirements = { queries: ['rays'], rayBatches: true };
+        platform.addTechnique(batching);
+        await platform.prepare();
+        expect(platform.rays.batchesReady).toBe(true);
+        expect(gpu.counters.pipelines - pipelinesWithout).toBe(2);
+        expect(() => platform.rays.encodeBatch(gpu.createEncoder(), batch)).not.toThrow();
+        expect(platform.stats.recompiles).toBe(0);
+
+        // Tools that call encodeBatch themselves ask with the platform option.
+        const tool = new GIPlatformImpl(createPlatformGpu().device, { rayBatches: true });
+        await tool.prepare();
+        expect(tool.rays.batchesReady).toBe(true);
+    });
+
     it('disposes once: buffers destroyed, techniques disposed, later calls refused', async () => {
         const gpu = createPlatformGpu();
         const platform = new GIPlatformImpl(gpu.device, { buildIn: 'main' });

@@ -119,6 +119,8 @@ export class PlatformRayQueries implements RayQueries {
 
     private closestKernel: ComputeKernel | null = null;
     private anyKernel: ComputeKernel | null = null;
+    /** A `prepare` has finished, so missing batch kernels mean nobody asked for them. */
+    private preparedOnce = false;
     private disposed = false;
 
     /** `gpu-refit` on a device with subgroups; `cpu` otherwise. Fixed for the backend's life. */
@@ -222,10 +224,25 @@ export class PlatformRayQueries implements RayQueries {
         await this.gpuTopLevel?.whenIdle();
     }
 
-    /** Compiles the batch kernels. Called by the platform's `prepare`. */
-    async prepare(kernels: KernelBuilder): Promise<void> {
-        await this.gpuTopLevel?.prepare(kernels);
-        if (this.closestKernel && this.anyKernel) return;
+    /**
+     * Compiles the GPU top level's kernels, and the batch kernels when
+     * `batches` is true (a technique asked for `encodeBatch`, or a tool
+     * that calls it itself). Called by the platform's `prepare`. Everything
+     * is asked for at once, so the batch kernels don't wait for the top
+     * level's to finish compiling.
+     */
+    async prepare(kernels: KernelBuilder, options: { readonly batches: boolean }): Promise<void> {
+        await Promise.all([this.gpuTopLevel?.prepare(kernels), options.batches ? this.prepareBatches(kernels) : undefined]);
+        this.preparedOnce = true;
+    }
+
+    /** Whether `encodeBatch` can run: its kernels were compiled by a `prepare` that asked for them. */
+    get batchesReady(): boolean {
+        return this.closestKernel !== null && this.anyKernel !== null;
+    }
+
+    private async prepareBatches(kernels: KernelBuilder): Promise<void> {
+        if (this.batchesReady) return;
         const batchGroup: GPUBindGroupLayoutDescriptor = {
             label: `${this.label} trace batch`,
             entries: [
@@ -330,7 +347,14 @@ export class PlatformRayQueries implements RayQueries {
     ): void {
         this.checkLive();
         const kernel = batch.mode === 'closest' ? this.closestKernel : this.anyKernel;
-        if (!kernel) throw new GINotReadyError('preparing');
+        // Never compiled here on first use: that would be a compile while the platform is
+        // ready, which `stats.recompiles` exists to catch (docs/design/m3-moving.md §1).
+        if (!kernel) {
+            if (!this.preparedOnce) throw new GINotReadyError('preparing');
+            throw new Error(
+                '@pmndrs/ddgi: rays.encodeBatch needs its kernels compiled in prepare: give the technique that calls it `requirements.rayBatches: true` (tools: the platform option `rayBatches`), then prepare',
+            );
+        }
         if (batch.count <= 0) return;
         const resultBytes = batch.mode === 'closest' ? HIT_RECORD_BYTES : 4;
         if (batch.rays.size < batch.count * RAY_BYTES) throw new RangeError(`the ray buffer holds fewer than ${batch.count} rays`);

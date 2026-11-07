@@ -230,7 +230,7 @@ const IDLE_FRAME: FrameInput = {
  * are mapped back to the case's own instance indices for the checks.
  */
 async function traceThroughPlatform(device: GPUDevice, oracleCase: OracleCase): Promise<GpuAnswers> {
-    const platform = new GIPlatformImpl(device, { label: `oracle ${oracleCase.name}` });
+    const platform = new GIPlatformImpl(device, { label: `oracle ${oracleCase.name}`, rayBatches: true });
     try {
         const material = platform.scene.createMaterial({ albedo: [1, 1, 1] });
         const meshes = oracleCase.meshes.map((mesh) =>

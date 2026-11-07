@@ -15,6 +15,26 @@
  * });
  * ```
  *
+ * **Copying the scene while kernels compile** (T2.14). `ThreeGI` may also be
+ * made while the platform is still preparing, if it is given `prepare`'s
+ * promise (`preparing`). Until that resolves, `update` only copies the scene
+ * into the platform (the scene sync's CPU work), and the GI light waits
+ * outside the scene, so a render meanwhile draws without GI. When it
+ * resolves the light joins the scene, so a host that only renders
+ * (`updateOnRender`) gets GI too; if it rejects, the next `update` throws
+ * its error. Without `preparing` the platform must already be ready, so a
+ * host that forgot `prepare` hears so at once. `GIVolume.start` does it
+ * this way:
+ *
+ * ```ts
+ * const preparing = gi.prepare();
+ * // Chrome sends the compile requests when this JavaScript task ends.
+ * await new Promise((resolve) => setTimeout(resolve, 0));
+ * const threeGI = new ThreeGI(gi, scene, { preparing });
+ * threeGI.update(camera, 0); // the scene copy, while the kernels compile
+ * await preparing;
+ * ```
+ *
  * **Command order in r187.** three makes and submits its own command
  * encoders, one or more per `render()` (WebGPUBackend `beginRender` /
  * `finishRender`), and offers no hook to record into them. So `update`
@@ -69,6 +89,12 @@ export interface ThreeGIOptions {
     readonly lightsPerFrame?: number;
     /** Run `update` from the GI light's render-time update instead of a call per frame (see the file comment). Default false. */
     readonly updateOnRender?: boolean;
+    /**
+     * The promise of the platform's `prepare()` still running: `ThreeGI` may
+     * then be made before it resolves, and copies the scene in meanwhile
+     * (file comment, T2.14). Without it the platform must be ready.
+     */
+    readonly preparing?: Promise<void>;
 }
 
 /** CPU time of the last `update`, milliseconds (`performance.now()`, so steps of up to 0.1 ms in some browsers). */
@@ -112,10 +138,25 @@ export class ThreeGI {
     private renderTimeUpdate: boolean;
     private readonly warnOnce: (message: string) => void;
     private updates = 0;
+    private disposed = false;
+    /**
+     * The GI light is in the scene. False while the platform is still preparing:
+     * the light wraps the technique's textures, which exist only after `prepare`.
+     */
+    private lightInScene = false;
+    /** `prepare` failed (the `preparing` option): the next `update` throws this. */
+    private prepareFailure: { readonly error: unknown } | null = null;
 
-    /** The platform must be prepared (`await gi.prepare()`), because the light wraps the technique's textures. */
+    /**
+     * The platform needs its output technique (`gi.setOutput`). It must be
+     * prepared, or still preparing with its promise passed as `preparing`:
+     * `update` then copies the scene in, and the GI light joins the scene when
+     * `prepare` resolves (file comment).
+     */
     constructor(gi: GIPlatform, scene: Scene, options: ThreeGIOptions = {}) {
-        if (!gi.isReady) throw new Error('@pmndrs/ddgi/three: prepare the platform first (await gi.prepare()), then make ThreeGI.');
+        if (!gi.isReady && !options.preparing) {
+            throw new Error('@pmndrs/ddgi/three: prepare the platform first (await gi.prepare()), or pass its promise (`preparing: gi.prepare()`) to copy the scene in while it compiles.');
+        }
         this.gi = gi;
         this.scene = scene;
         this.budget = options.budget ?? DEFAULT_BUDGET;
@@ -133,7 +174,29 @@ export class ThreeGI {
         this.connectRenderTimeUpdate(this.currentLight);
         // three only lights with lights on the camera's layers; GI is for every camera.
         this.currentLight.layers.enableAll();
-        scene.add(this.currentLight);
+        if (gi.isReady) {
+            this.addLightToScene();
+        } else if (options.preparing) {
+            // The light joins as soon as the platform is ready, not at the next `update`: a host
+            // that only renders (`updateOnRender`) never calls `update`, and the light's own
+            // render-time update can't run while the light is outside the scene.
+            options.preparing.then(
+                () => {
+                    if (this.gi.isReady && !this.disposed) this.addLightToScene();
+                },
+                (error: unknown) => {
+                    this.prepareFailure = { error };
+                    this.warnOnce(`the platform's prepare failed, so GI won't start: ${error instanceof Error ? error.message : String(error)}`);
+                },
+            );
+        }
+    }
+
+    /** Puts the GI light into the scene, once (the platform is ready, so its textures exist). */
+    private addLightToScene(): void {
+        if (this.lightInScene) return;
+        this.scene.add(this.currentLight);
+        this.lightInScene = true;
     }
 
     /** An environment for GI rays instead of the scene's, or null to read the scene's. */
@@ -167,6 +230,19 @@ export class ThreeGI {
         this.updates++;
         const afterMatrices = performance.now();
 
+        if (this.prepareFailure) throw this.prepareFailure.error;
+        if (!this.lightInScene && !this.gi.isReady) {
+            // The platform is still preparing (file comment): copy the scene in while its
+            // kernels compile, and nothing else. There is no GI frame to encode yet.
+            this.sync.update(this.scene, camera.layers);
+            const afterCopy = performance.now();
+            this.timings.matrixWorldMs = afterMatrices - start;
+            this.timings.syncMs = afterCopy - afterMatrices;
+            this.timings.encodeMs = 0;
+            return;
+        }
+        // Usually done when `preparing` resolved; here too in case this update runs first.
+        this.addLightToScene();
         this.followShadingModule();
         if (this.volume) {
             this.light.intensity = this.volume.intensity;
@@ -229,6 +305,7 @@ export class ThreeGI {
 
     /** Removes the light and everything the sync created. The platform itself is the host's to dispose. */
     dispose(): void {
+        this.disposed = true;
         this.light.removeFromParent();
         this.light.dispose();
         this.sync.dispose();

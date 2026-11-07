@@ -150,7 +150,7 @@ async function runSequence(device: GPUDevice, plan: SequencePlan, expectedPath: 
     const caseMeshes = plan.meshes(random);
     const objectBoxes = caseMeshes.map((mesh) => objectBoxOf(mesh.positions));
     const label = `${plan.name} ${expectedPath}`;
-    const platform = new GIPlatformImpl(device, { label: `tlas-oracle ${label}`, gpuTiming: true });
+    const platform = new GIPlatformImpl(device, { label: `tlas-oracle ${label}`, gpuTiming: true, rayBatches: true });
     const result: RunResult = { name: plan.name, path: expectedPath, frames: [], references: [], failures: [], rays: 0, mismatches: 0, ambiguous: 0, nodeChecks: 0, counters: null };
     try {
         assert(platform.rays.topLevelPath === expectedPath, `expected the ${expectedPath} top level, got ${platform.rays.topLevelPath}`);
