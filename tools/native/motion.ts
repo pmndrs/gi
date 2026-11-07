@@ -102,6 +102,18 @@ export function manifestMotionFile(manifest: SceneManifest, motion: ManifestMoti
     return `${lines.join('\n')}\n`;
 }
 
+/**
+ * A still motion file holding one keyframe of a motion: its light stays where
+ * that key puts it. Recorded after a long warm-up, it gives the field
+ * converged in that state, the "settled" level a step's response is held
+ * against (response.ts).
+ */
+export function settleMotionFile(manifest: SceneManifest, motion: ManifestMotion, keyIndex: number): string {
+    if (!(Number.isInteger(keyIndex) && keyIndex >= 0 && keyIndex < motion.keyframes.length)) throw new Error(`${motion.id} has keys 0 to ${motion.keyframes.length - 1}`);
+    const held: ManifestMotion = { ...motion, interpolation: 'step', loop: false, keyframes: [{ ...motion.keyframes[keyIndex], t: 0 }, { ...motion.keyframes[keyIndex], t: 1 }] };
+    return manifestMotionFile(manifest, held).replace(/^# (.*)$/m, `# $1; held at key ${keyIndex} (a settled level)`);
+}
+
 /** The way a sun's light travels for an elevation and azimuth (degrees; azimuth from +X toward +Z), as sponza-response.ts's sunFromAngles. */
 function sunTravel(elevationDeg: number, azimuthDeg: number): Vec3 {
     const e = (elevationDeg * Math.PI) / 180;
@@ -253,6 +265,7 @@ async function main(): Promise<void> {
             high: { type: 'string', default: String(DAY_DEFAULTS.high) },
             sweep: { type: 'string', default: String(DAY_DEFAULTS.sweep) },
             'sky-step': { type: 'string', default: String(DAY_DEFAULTS.skyStep) },
+            'settle-key': { type: 'string' },
         },
     });
     const command = positionals[0];
@@ -275,6 +288,12 @@ async function main(): Promise<void> {
         } else {
             if (!values.motion) throw new Error('write needs --motion <id> or --day');
             const motion = findMotion(manifest, values.motion);
+            if (values['settle-key'] !== undefined) {
+                const key = Number(values['settle-key']);
+                writeFileSync(out, settleMotionFile(manifest, motion, key));
+                console.log(`wrote ${out}: ${manifest.id} ${motion.id} held at key ${key}`);
+                return;
+            }
             writeFileSync(out, manifestMotionFile(manifest, motion));
             const duration = motion.keyframes[motion.keyframes.length - 1].t;
             console.log(`wrote ${out}: ${manifest.id} ${motion.id}, ${motion.keyframes.length} keys over ${duration} s${motion.loop ? ', looping' : ''}`);

@@ -3,14 +3,16 @@
  * recordings made by `play.ps1 -Motion <step> -Record` (frames.csv: the
  * GI-only mean of the view each frame, at a fixed 1/60 s a frame).
  *
- *   node tools/native/response.ts <recording folder> [<recording folder> ...] [--append] [--label t2.7]
+ *   node tools/native/response.ts <recording folder> [...] [--settled <folder> ...] [--append] [--label t2.7]
  *
  * For each jump of the motion (each key after the first), the view's mean
  * each frame from the jump's own frame (frame 1) to the next jump is held
- * against "settled": the mean of the last SETTLED_FRAMES frames of that
- * hold. The harness traces and blends every probe every frame, so a 3 s
- * hold (180 frames at hysteresis 0.97) ends converged; the script reports
- * how far the hold's end still drifts so that can be checked. Measures as
+ * against "settled": the view converged with the light held at the new
+ * place, from a `play.ps1 -SettleKey <key>` recording passed with --settled
+ * (3,600 warm-up frames). Without one, the mean of the hold's last
+ * SETTLED_FRAMES frames stands in, and the script reports how far that end
+ * still drifts: on two-room the lamp leaving the room is not settled after
+ * the 3 s hold (T2.7: still about 60% above settled). Measures as
  * T2.4b's `stepResponse` (tools/gpu/pages/ddgi-shared/response.ts): the
  * signed error against settled each frame, the first frame inside 5%, the
  * first frame from which every frame stays inside 5%, the overshoot as a
@@ -54,6 +56,8 @@ interface JumpResponse {
     overshootShareOfStep: number;
     /** How much the hold's last SETTLED_FRAMES frames still move: (last 10 mean − first 10 mean) / settled. */
     endDrift: number;
+    /** The settled level came from a long-held recording (-SettleKey), not the end of the hold. */
+    settledFromLongHold: boolean;
     errors: number[];
 }
 
@@ -62,9 +66,9 @@ function mean(values: readonly number[]): number {
 }
 
 /** The view's response to one jump: `means` from the jump's own frame to the frame before the next jump. */
-function jumpResponse(name: string, startFrame: number, before: number, means: readonly number[]): JumpResponse {
+function jumpResponse(name: string, startFrame: number, before: number, means: readonly number[], settledLevel?: number): JumpResponse {
     const tail = means.slice(-SETTLED_FRAMES);
-    const settled = mean(tail);
+    const settled = settledLevel ?? mean(tail);
     const errors = means.map((value) => value / settled - 1);
     const inBand = errors.map((error) => Math.abs(error) <= TOLERANCE);
     const entered = inBand.indexOf(true);
@@ -85,12 +89,22 @@ function jumpResponse(name: string, startFrame: number, before: number, means: r
         settledFrame: settledIndex === null ? null : settledIndex + 1,
         overshootShareOfStep: step > 0 ? past / step : 0,
         endDrift: (mean(tail.slice(-10)) - mean(tail.slice(0, 10))) / settled,
+        settledFromLongHold: settledLevel !== undefined,
         errors,
     };
 }
 
 /** The jumps in a recording of a looping step motion: one per key time crossed after 0. */
-function analyse(folder: string): { recording: Recording; jumps: JumpResponse[] } {
+/** The settled level of a light position, from a `play.ps1 -SettleKey` recording: its mean over all its frames. */
+function settledLevel(folder: string): { position: string; level: number } {
+    const recording = JSON.parse(readFileSync(join(folder, 'recording.json'), 'utf8')) as Recording & { settleKey: number };
+    const motion = (readManifest(recording.scene).motions ?? []).find((candidate) => candidate.id === recording.motion);
+    if (!motion || !(recording.settleKey >= 0)) throw new Error(`${folder} is not a -SettleKey recording`);
+    const frames = readFramesCsv(join(folder, 'frames.csv'));
+    return { position: String(motion.keyframes[recording.settleKey].position), level: mean(frames.map((frame) => frame.values.gi_mean_luminance)) };
+}
+
+function analyse(folder: string, settledByPosition: ReadonlyMap<string, number>): { recording: Recording; jumps: JumpResponse[] } {
     const recording = JSON.parse(readFileSync(join(folder, 'recording.json'), 'utf8')) as Recording;
     const manifest = readManifest(recording.scene);
     const motion = (manifest.motions ?? []).find((candidate) => candidate.id === recording.motion);
@@ -121,7 +135,7 @@ function analyse(folder: string): { recording: Recording; jumps: JumpResponse[] 
         const from = motion.keyframes[jumpTimes[index].key - 1].position;
         const to = motion.keyframes[jumpTimes[index].key].position;
         const name = `jump${index + 1}_x${from?.[0]}_to_x${to?.[0]}`;
-        jumps.push(jumpResponse(name, start, before, luminance.slice(start, end)));
+        jumps.push(jumpResponse(name, start, before, luminance.slice(start, end), settledByPosition.get(String(to))));
         previousJump = start;
     }
     return { recording, jumps };
@@ -134,16 +148,23 @@ function round(value: number, digits = 5): number {
 function main(): void {
     const { values, positionals } = parseArgs({
         allowPositionals: true,
-        options: { append: { type: 'boolean', default: false }, label: { type: 'string', default: '' } },
+        options: { append: { type: 'boolean', default: false }, label: { type: 'string', default: '' }, settled: { type: 'string', multiple: true, default: [] } },
     });
     if (positionals.length === 0) {
-        console.log('usage: node tools/native/response.ts <recording folder> [...] [--append] [--label text]');
+        console.log('usage: node tools/native/response.ts <recording folder> [...] [--settled <-SettleKey recording> ...] [--append] [--label text]');
         process.exitCode = 2;
         return;
     }
+    // Settled levels from long-held recordings; without one, a jump's settled level is the end of its own hold
+    const settledByPosition = new Map<string, number>();
+    for (const folder of values.settled) {
+        const { position, level } = settledLevel(resolve(folder));
+        settledByPosition.set(position, level);
+        console.log(`settled level with the light at ${position}: ${level.toPrecision(6)} (${folder})`);
+    }
     const rows: string[] = [];
     positionals.forEach((folder, runIndex) => {
-        const { recording, jumps } = analyse(resolve(folder));
+        const { recording, jumps } = analyse(resolve(folder), settledByPosition);
         const run = runIndex + 1;
         console.log(`run ${run}: ${recording.scene} ${recording.motion} (${folder}), fork ${recording.harnessCommit}`);
         for (const jump of jumps) {
@@ -167,6 +188,7 @@ function main(): void {
             rows.push(`${prefix}/settled_frame,${jump.settledFrame ?? -1}`);
             rows.push(`${prefix}/overshoot_share_of_step,${round(jump.overshootShareOfStep)}`);
             rows.push(`${prefix}/settled_end_drift,${round(jump.endDrift)}`);
+            rows.push(`${prefix}/settled_from_long_hold,${jump.settledFromLongHold ? 1 : 0}`);
             jump.errors.forEach((error, index) => {
                 const frame = index + 1;
                 if (frame <= 30 || frame % 6 === 0) rows.push(`${prefix}/error_frame${frame},${round(error)}`);

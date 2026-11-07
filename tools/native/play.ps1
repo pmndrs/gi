@@ -30,6 +30,10 @@
   Render this many frames, save the back buffer as a PNG and exit. The PNG path is printed.
   For checking a scene without a person at the keyboard.
 
+.PARAMETER CaptureField
+  With -CaptureFrames: also write the linear direct and indirect images, the probe field and the
+  G-buffer next to the PNG (tools/native/sky-check.ts reads them). Vulkan only.
+
 .PARAMETER Sky
   flat (default): a procedural sky is the sky file's flat equivalent, one colour for every
   missed ray, as before. texture: the shared sky file itself (scenes/sky/<scene>.exr), read by
@@ -61,6 +65,11 @@
 .PARAMETER View
   full (default): the normal image. indirect: the GI alone (the harness's DDGI indirect view).
 
+.PARAMETER SettleKey
+  With -Motion: hold the light at this key of the motion (0 = the first) instead of playing it.
+  Recorded after a long -WarmupFrames, it is the field converged in that state: the settled
+  level tools/native/response.ts holds a step's response against.
+
 .PARAMETER NoWait
   The script holds the shared GPU lock (%TEMP%\ddgi-gpu-bench.lock) for as long as the harness
   is open, so no benchmark runs while you look at a scene. If another GPU job holds the lock, the
@@ -83,6 +92,7 @@ param(
     [int]$Height = 900,
     [int]$Rays = 256,
     [int]$CaptureFrames = 0,
+    [switch]$CaptureField,
     [ValidateSet('flat', 'texture')][string]$Sky = 'flat',
     [string]$Motion = '',
     [double]$DaySeconds = 10,
@@ -93,6 +103,7 @@ param(
     [int]$WarmupFrames = -1,
     [ValidateSet('full', 'indirect')][string]$View = 'full',
     [string]$Tag = '',
+    [int]$SettleKey = -1,
     [switch]$NoVsync,
     [switch]$NoWait
 )
@@ -147,7 +158,8 @@ try {
         } else {
             $definition = @($manifest.motions | Where-Object { $_.id -eq $Motion })
             if ($definition.Count -ne 1) { throw "Scene '$Scene' has no motion '$Motion' (its motions: $(@($manifest.motions | ForEach-Object { $_.id }) -join ', '); or time-of-day)." }
-            & node "$root/tools/native/motion.ts" write --scene $Scene --motion $Motion --out $motionFile
+            if ($SettleKey -ge 0) { & node "$root/tools/native/motion.ts" write --scene $Scene --motion $Motion --settle-key $SettleKey --out $motionFile }
+            else { & node "$root/tools/native/motion.ts" write --scene $Scene --motion $Motion --out $motionFile }
             $motionSeconds = [double](@($definition[0].keyframes)[-1].t)
             $keepLights += ($definition[0].target -replace '^light:', '')
         }
@@ -180,6 +192,8 @@ try {
 
     $environment = @{}
     if ($CaptureFrames -gt 0) { $environment['DDGI_CAPTURE_FRAMES'] = $CaptureFrames }
+    # With -CaptureField the capture also writes the linear images, the probe field and the G-buffer (fork capture options; sky-check.ts reads them)
+    if ($CaptureFrames -gt 0 -and $CaptureField) { $environment['DDGI_CAPTURE_LINEAR'] = 1; $environment['DDGI_CAPTURE_FIELD'] = 1 }
     if ($View -eq 'indirect') { $environment['DDGI_CAPTURE_MODE'] = 'indirect' }
 
     $cameraName = @($manifest.cameras)[$Camera - 1].name
@@ -235,6 +249,7 @@ try {
             warmupFrames = $warmup
             frames = $recordFrames
             imageEvery = $RecordImageEvery
+            settleKey = $SettleKey
             images = $images.Count
             framesCsv = 'frames.csv'
             motionFile = "$Motion.motion"
@@ -265,7 +280,7 @@ try {
         if ($timeOfDay) { & node "$root/tools/native/motion.ts" check --scene $Scene --day --seconds $DaySeconds --log $framesCsv }
         else {
             $firstKey = @(@($manifest.motions | Where-Object { $_.id -eq $Motion })[0].keyframes)[0]
-            if ($firstKey.PSObject.Properties['position']) { & node "$root/tools/native/motion.ts" check --scene $Scene --motion $Motion --log $framesCsv }
+            if ($SettleKey -lt 0 -and $firstKey.PSObject.Properties['position']) { & node "$root/tools/native/motion.ts" check --scene $Scene --motion $Motion --log $framesCsv }
         }
         if ($device) { Write-Host "Device      : $device" }
         Write-Host "Recording   : $recordFolder ($recordFrames frames, $($images.Count) images)"

@@ -21,6 +21,18 @@ Rules:
 
 ---
 
+## 2026-11-08 · T2.7 native harness: motions, texture sky, animated sun · native-runner (opus)
+Did: fork branch `m2-t2.7` (`Motion.h/.cpp`; `GetSkyRadiance` in `Descriptors.hlsl` for probe, G-buffer and path-tracer misses; `LightingConsts`' padding carries the sky image; recording in `main.cpp`); `tools/native/motion.ts`, `response.ts`, `sky-check.ts`, `motion.test.ts`; `play.ps1 -Motion -Record -Sky -SettleKey -CaptureField`. All opt-in. Time: a fixed 1/60 s a frame when recording, the wall clock in a watched window (NOTES).
+Verified (RTX 3060 Laptop, Vulkan; built with VS 2022 17.10 / MSVC 19.40.33811, Windows SDK 10.0.22621.0, Vulkan SDK 1.3.283.0, CMake 3.24.0):
+- check 1: `play.ps1 -Scene two-room -Motion light-sweep -Record` puts the lamp 0.0000 cm from `motionState` over all 625 frames (`motion.ts check`); the step also 0.0000 cm over 721 frames, 3 runs.
+- check 2: `sky-check.ts` on open-ground: the G-buffer sky matches the file sampled in the same direction (mean 0.37/255, all pixels within 1.5); a mirrored map would be 38.8 off; below the horizon is black (the flat sky wasn't).
+- check 3: Sponza `-Motion time-of-day` (T2.4d's day): the sun is 0.00000° from the path on all 601 frames; 41 sky images blended; the GI-only mean rises from 2e-8 at 5° to 0.0125 at noon and falls again.
+- check 4: default config against c7d0162, `play.ps1 -Clean -CaptureFrames 600`: two-room 0.13–0.20% mean relative error (c7d0162 against itself 0.18–0.20%), open-ground 0.16% (0.29%); looked the same by eye. `pnpm typecheck` and the motion tests pass.
+Numbers: `bench/results/response.csv`, `response/native/light-step/run1-3/*` (558 rows). Lamp back into the room: within 5% from frame 131–132, every run. Lamp out: still 60% above settled at frame 180 (11x in its own frame). Settled levels come from 3,600-frame holds. The runs agree to 0.1%.
+Not verified: D3D12 (it builds; texture sky and recording are Vulkan only); the sky's effect on native probe GI (open-ground gives 0 GI with either sky, a pre-existing problem, NOTES); a watched wall-clock window (only recorded runs).
+Recordings (git-ignored, `native/build/recordings/`): `two-room-light-sweep`, `two-room-light-step-run1..3`, `sponza-time-of-day`. Each folder has `recording.json`, `frames.csv`, PNGs every 4th frame and a 15 fps `video.mp4`. The format is in `tools/native/README.md`, "Motions and recordings".
+Next: T2.8's compare page reads those folders; the lead decides whether to commit them (71 to 244 MB each) or the mp4 and CSV alone. The open-ground zero-GI cause goes to T2.10 or a native follow-up. Push the fork branch `m2-t2.7`.
+
 ## 2026-11-08 · T2.13 review and merge · lead (opus)
 Did: The Opus review passed packing (done-when 2) and found the main-thread bar (done-when 1) missed. Under the timebox (one diagnosis, one fix attempt) I merged T2.13 as a known miss, since it is a clear gain. I fixed the review's doc notes on the branch (b2b6720):
 - `m3-moving.md`'s upload budget gets an as-built note;
