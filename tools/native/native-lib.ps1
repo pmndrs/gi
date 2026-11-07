@@ -268,6 +268,10 @@ function ConvertTo-Vec([object[]]$Values, [int]$Digits = 4) {
 #                 ddgi.volume.0.probeVariability.skipConverged=0).
 #   ProbeSpacing: > 0 replaces the manifest probe spacing (timing sweeps over the probe count)
 #   GridRule    : 'cells' (default) or 'ddgi' (our DDGI's floor(size / spacing) + 1 grid), see Get-VolumeGrid
+#   SkyTexture  : (fork, T2.7) the shared sky file (scenes/sky/<id>.exr) for every missed ray, instead of
+#                 its flat equivalent. Empty (default): the flat sky, as before. Vulkan only.
+#   KeepLights  : labels of lights to keep even at intensity 0 (a motion's target: Sponza's arcade lamp)
+#   AppLines    : extra app.* ini lines (fork options: the motion and recording keys, see Motion.h in the fork)
 function New-HarnessIni {
     param(
         $Manifest,
@@ -285,7 +289,10 @@ function New-HarnessIni {
         [int]$WarmupFrames = 300,
         [switch]$UpdateEveryFrame,
         [double]$ProbeSpacing = 0,
-        [ValidateSet('cells', 'ddgi')][string]$GridRule = 'cells'
+        [ValidateSet('cells', 'ddgi')][string]$GridRule = 'cells',
+        [string]$SkyTexture = '',
+        [string[]]$KeepLights = @(),
+        [string[]]$AppLines = @()
     )
     $root = Get-RepoRoot
     $harness = "$root/native/rtxgi-ddgi/samples/test-harness"
@@ -344,6 +351,7 @@ function New-HarnessIni {
         $ini.Add('app.autoBenchmark=1')
         $ini.Add("app.benchmarkWarmupFrames=$WarmupFrames")
     }
+    foreach ($line in $AppLines) { $ini.Add($line) }
     $ini.Add('')
     $ini.Add('# shader compilation')
     $ini.Add('shaders.warningsAsErrors=1')
@@ -361,12 +369,15 @@ function New-HarnessIni {
     $ini.Add("scene.activeCamera=$($Camera - 1)")
     $ini.Add("scene.skyColor=$skyColor")
     $ini.Add("scene.skyIntensity=$(Format-Number $skyIntensity 6)")
+    # Fork option (T2.7): the sky file itself for every missed ray. skyColor stays as the fallback (D3D12).
+    if ($SkyTexture) { $ini.Add("scene.skyTexture=$SkyTexture") }
     $ini.Add('')
     $ini.Add('# scene lights (directional: lux as power; point and spot: candela as power, range as radius)')
 
     # A light at intensity 0 is off until a manifest motion plays it (Sponza's arcade lamp, T2.1):
     # left out, as the viewer leaves it out, so an off lamp costs the harness's shading nothing.
-    $lights = @($Manifest.lights | Where-Object { $_.intensity -gt 0 })
+    # A motion's target is kept (KeepLights), since the motion turns it on.
+    $lights = @($Manifest.lights | Where-Object { $_.intensity -gt 0 -or ($_.PSObject.Properties['label'] -and $KeepLights -contains $_.label) })
     for ($i = 0; $i -lt $lights.Count; $i++) {
         $light = $lights[$i]
         $label = if ($light.PSObject.Properties['label']) { $light.label } else { "$($light.type)-$i" }
