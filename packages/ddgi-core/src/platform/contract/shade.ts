@@ -233,9 +233,9 @@ export interface HitShadingSettings {
      * Shadowed lights evaluated per hit. Directional lights are always
      * evaluated; local lights beyond this count are chosen stochastically,
      * weighted by their estimated contribution, and the result is rescaled so
-     * it stays unbiased. Keeps hit cost flat as light count grows toward the
-     * 32-light minimum capacity. At least 1 (smaller values count as 1).
-     * Defaults to 4.
+     * it stays unbiased. With the light grid (more point and spot lights
+     * than `exactLightLimit`), `lightGridShadowedLightsPerHit` counts
+     * instead. At least 1 (smaller values count as 1). Defaults to 4.
      */
     maxShadowedLightsPerHit: number;
     /**
@@ -244,6 +244,30 @@ export interface HitShadingSettings {
      * difference in indirect light). Defaults to 1.0.
      */
     bounceAlbedoCap: number;
+    /**
+     * With up to this many point and spot lights in the scene, every hit
+     * weighs all of them (M1's path; noise-free when no more than
+     * `maxShadowedLightsPerHit` reach it). With more, hits draw their lights
+     * from the light grid (docs/design/m2-lights.md §3), so a hit costs the
+     * same whatever the light count, with some noise that averages out over
+     * frames. `Infinity` keeps every scene on the exact path. Defaults to 8.
+     */
+    exactLightLimit: number;
+    /**
+     * The most cells the light grid may divide the scene's bounds into
+     * (cubic cells, at most 32,768). More cells fit each cell's light picks
+     * closer to its hits (less noise) and cost more to build each frame.
+     * Defaults to 2,048 (on Sponza, cells of about 2 m: two probe spacings).
+     */
+    lightGridMaxCells: number;
+    /**
+     * Shadowed lights evaluated per hit with the light grid: of the hit's
+     * cell's 16 light picks, weighed at the hit, this many get a shadow ray,
+     * chosen by their weight. Each shadow ray costs far more than the
+     * weighing (T2.3: on `sponza-candles` 1 instead of 4 halved the update's
+     * cost per probe, for a little more noise). At least 1. Defaults to 1.
+     */
+    lightGridShadowedLightsPerHit: number;
 }
 
 /**

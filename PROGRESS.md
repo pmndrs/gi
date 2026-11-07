@@ -34,6 +34,88 @@ Regressions: full RTX suite 51 PASS plus self-tests (`spike-babylon` timed out o
 Not verified: check 1 on a quiet CPU; the viewer by hand; `sponza-candles` (958 s set-up, T2.3's).
 Next: lead re-times check 1 on a quiet CPU (`VITE_DDGI_SECTIONS=startup,budget` gives the clock rule enough samples). T2.12/T2.13: ask for their kernels first and start the uploads and tree builds during `prepare` (trees still start after it). Hosts: three's GI material compile (0.19–0.69 s) could overlap the warm-up with `renderer.compileAsync` on the host's camera. Shared files: contract `technique.ts`, `queries.ts`; `gi-platform.ts`, `ray-queries.ts`, `three-gi.ts`, `volume-start.ts`; nothing in `shade/` or the light grid.
 
+## 2026-11-07 · T2.3 review and merge · M2 lead (opus)
+Did:
+- Opus review of T2.3 against its done-when: pass with notes. I fixed the review's two must-fixes on the branch (9c31731): `docs/api/platform.md` now names `lightGridShadowedLightsPerHit`, and the stale comments in `light-grid.ts` and `ddgi-light-grid-cost` are corrected.
+- Lead rulings in DECISIONS: check 2 is a known miss, sent to Dennis; checks 3 and 4 are merged with their VALID runs owed.
+- Merged `m2-t2.3` into `m2` with no conflicts and no stray markers.
+- TASKS: T2.3 done; T2.6b next; a T2.10 line for the owed runs.
+
+Verified (reviewer, RTX 3060 nvidia/ampere, bench lock, head 5bed4d3, correctness):
+- lint, typecheck, 1,077 unit tests (`fetch.test.ts` did not flake);
+- full suite: 52 pages pass, including `hit-shading-many-lights`, `ddgi-direct`, `ddgi-light-groups`, `hit-shading-deferred` and `ddgi-shading-compat`;
+- check 1 reproduced: mean −0.094 / +0.014 / −0.045% at K = 1 / 2 / 4, with 99.4 / 99.5 / 99.7% of points within 5%;
+- subgroup and fallback scans agree on 99.989% of picks (3 of 27,664).
+
+Lead, on the merged tree: lint, typecheck, 1,077 unit tests.
+
+Not verified:
+- No VALID timing. Every heavy run read INVALID: the thermal flag came up within seconds even from 45–48 °C (86% of samples in the reviewer's suite). The machine is on AC power with the Turbo plan; nothing was changed.
+- The Intel UHD was not re-run by the reviewer.
+- Sun-only Sponza's probe count was not re-checked.
+
+Numbers:
+- Check 2: 6.2 against 2.47 µs per probe, 2.2–2.5× (INVALID); Budget v2 calibrates 174 against 459 probes.
+- Check 3: 0.105–0.131 ms at 2,048 cells (INVALID); 1,024 cells 0.087 ms VALID, but check 1 fails there at 97.9%.
+- Check 4: 10.34 / 10.63 s against 8.18 s, 1.26–1.30× (INVALID). It was 958 s; the 420 s load was three's shader compile for 1,024 default lights on the test page.
+- The viewer's 2–3 fps on `sponza-candles` is three's clustered lighting: 431 ms with GI off.
+
+Next:
+- One VALID run each for checks 3 and 4, by a gpu-tester when the machine allows, or in T2.10.
+- `hit-shading-deferred`'s 12 lights now go through the grid, not the exact path.
+- The scan-agreement page should show that the disagreeing picks sit on a run boundary.
+
+## 2026-11-07 · T2.3 follow-up: check 2's diagnosis and one fix attempt, the timing runs, `m2` merged · implementer (opus)
+Did (`m2-t2.3` up to the PROGRESS commit; `m2` merged at 7e88933, PROGRESS and DECISIONS kept in full, the merge markers removed in bbd8226):
+- Check 2 diagnosis, temporary edits on `ddgi-light-grid-cost`: not a bug.
+  - Shadow rays stop at the light and at their first hit, and the candles are out of GI's rays.
+  - Ray length doesn't matter: tMax at 10% costs the same.
+  - Incoherent directions are about a third: one fixed direction took `gi/direct` from 1.9 to 1.27 ms.
+  - The rest is 1.4-1.9× as many hits needing a ray.
+- One fix attempt, a shadow-ray roulette against the ray's bounce light. Check 1 held, but it bought nothing on `sponza-candles` (6.15 against 5.65 µs), so it was taken out. DECISIONS 2026-11-07: a known miss at 2.2-2.5×.
+- `ddgi-light-grid-cost` now warms the field first. `hit-shading-many-lights` takes `VITE_DDGI_GRID_CELLS`.
+
+Verified (RTX, bench lock): check 1 at 1,024 cells fails (97.9% at K = 1), so the default stays 2,048. Lint and typecheck pass. Unit tests: 1,070 of 1,077 under another lane's CPU load (7 time-outs in tool tests). Run alone, 146 of 147 pass; the one left is `tools/assets/fetch.test.ts`, the known flaky test under load (TASKS, carried to M3), which this task doesn't touch.
+
+Not verified: VALID timings for checks 2 and 4, and check 3 at 2,048 cells. Every heavy run, including the retries after 13-15 minutes of cooling (45-48 °C starts), read INVALID: SW thermal slowdown in 60-100% of loaded samples (NOTES).
+
+Numbers:
+- Check 3 at 1,024 cells: build **0.087 ms**, the one VALID run.
+- Check 2 (INVALID): 6.19-6.28 against 2.47 µs per probe (warmed).
+- Check 4 (INVALID): 10.34 / 10.63 s against 8.18 s.
+
+Next: lead: one VALID run each for checks 3 and 4 at 2,048 cells when the RTX stops flagging thermal slowdown (gpu-tester).
+
+## 2026-11-07 · T2.3 many-light sampling: the light grid · implementer (opus)
+Did (branch `m2-t2.3`, cb35896..f5aaf53, `m2` with T2.5 merged in at e416a85):
+- The grid (`platform/shade/light-grid.ts`). `gi/light-grid` is a platform pass, run every unpaused frame with more than `exactLightLimit` (8) point and spot lights. It covers the scene's bounds with at most `lightGridMaxCells` (2,048) cubic cells. Every light is weighed per cell by an upper bound over the cell; each cell gets R = 16 systematic picks, stored as a `rgba32uint` texture in the hit-shading module (still no storage buffer).
+- At the hit (`shade/wgsl.ts`): ReGIR's second stage. The 16 picks are weighed with the real cosine and distance, then `lightGridShadowedLightsPerHit` (new, default 1) shadow rays go out by the exact path's systematic choice. Each light's contribution goes to its group (T2.5). `giDirectReaches` reads the picks too.
+- The build loads lights in tiles of 128 into workgroup memory for 16 cells. Its scan is subgroups first, with a serial fallback; a test runs both.
+- Settings `exactLightLimit`, `lightGridMaxCells`, `lightGridShadowedLightsPerHit` (contract, platform.md).
+- Pages: `hit-shading-many-lights` (check 1, in the suite) and `ddgi-light-grid-cost` (checks 2 and 3, manual). `ddgi-batch-cost` draws with the viewer's lighting and splits the load stage. `hit-shading-lights` keeps 12 lights on the exact path.
+- Docs: m2-lights.md as built, DECISIONS (6), NOTES (5).
+
+Verified (RTX 3060 nvidia/ampere, Chrome headless, bench lock for every run):
+- Check 1 met. 1,000 points, 1,024 frames against exhaustive. Mean −0.09 / +0.01 / −0.05% at K = 1 / 2 / 4; within 5%: 99.4 / 99.5 / 99.7% (bar 99%). The two scans agree on 99.989% of picks; no slot left unwritten. Intel UHD passes too.
+- Regressions: full RTX suite 51 pages, then `ddgi-shading-compat` after the texture fix; leak 0.84%, still scenes 0 marks. `ddgi-direct`, `hit-shading-deferred`, `ddgi-light-groups` and `ddgi-key-probes-sponza` pass on the merged code. Intel: `hit-shading-many-lights`, `hit-shading-deferred`, `hit-shading-lights` pass. Lint, typecheck, 1,077 unit tests.
+
+Not verified: no timing run was VALID. SW thermal slowdown stayed active even at 48-63 °C, and another lane was using the GPU. Two attempts read INVALID (73%, 100%), the rest INVALID or NO VERDICT. All timings below are information only.
+
+Numbers (information):
+- Check 2: per updated probe, `sponza-candles` K = 1: 4.18 µs; `sponza` 1.93 µs, so **2.2×** against a bar of 1.3×. K = 2: 7.9 µs; K = 4: 9.6 µs. Without its shadow rays `gi/direct` costs 0.13 ms at 512 probes (1.9 ms with them). Candle rays run at about 12 M/s against 60 M/s for the sun's.
+- Check 3: the build takes 0.105-0.131 ms at 2,048 cells (bar 0.1). At 1,024 cells 0.09 ms (dev); at 4,096 cells 0.19 ms.
+- Check 4: ready from load **10.35 s** against `sponza`'s 8.18 s, so 1.27× (bar 2×; T2.1: 958 s).
+  - The load stage is 2.58 s: fetch and parse 1.17, three compile 0.66, first draw 0.75.
+  - Then: trees 2.38 s, warm-up 3.04 s (16 passes), calibration 1.03 s to 174 probes a frame (`sponza` 459).
+  - T2.1's 420 s was this page compiling three's default lighting for 1,024 lights.
+- Viewer at 1280×720 (`viewer-baselines`): 431 ms a frame with GI off, 470 with GI. So the 2-3 fps is three's clustered lighting looping over 1,024 unranged candles in every pixel. DDGI is warmed 7.4 s after creation (was 399 s).
+
+Next:
+- Lead: check 2 is a real miss, not noise; it is shadow rays. Options are roulette on shadow rays, or accepting about 2×, which Budget v2 absorbs (174 against 459 probes).
+- Lead: checks 3 and 4 need one VALID run each on a cool machine (gpu-tester). If the build reads over 0.1 ms, 1,024 cells is the lever.
+- T2.8: three's candle lighting (a range for three's clustered lights only, or fewer candles drawn). DDGI's GI-on frame adds 33 ms there; not looked into.
+- Shared files touched: `contract/shade.ts`, `gi-platform.ts` (one call), `scene/platform-scene.ts` (a getter), `shade/wgsl.ts`, `shade/hit-shading.ts`, platform.md, m2-lights.md, `ddgi-batch-cost`, `hit-shading-lights`. Not touched: `direct.ts`, `ddgi-technique.ts`.
+
 ## 2026-11-07 · T2.6b instant sky: the decision check fails, stopped as the rule says · implementer (opus)
 Did (branch `m2-t2.6b` from `m2` ccb2809; d26cb01, then docs):
 - Built only what check 1 needs, all off by default: the first-order sky transfer in `ddgi/blend` from the sky layer's own miss rays (3 transfer blocks after the layers, its own count in history bits 24-31; no extra rays, no workgroup memory), `ddgi/sky-nudge` (`wgsl/sky-nudge.ts`, before the trace in a sky-change frame) and `ddgi/write`'s sky mode, compose of every tile that frame, `ddgi/mark`'s residual share for nudged probes. Settings `instantSky`, `skyNudgeRescale`, `skyResidualShare`, and `sunLayer` (the layer plan only: no route in `gi/direct` yet). `instant-sky.ts` (constants, CPU twin), unit tests. Page `ddgi-instant-sky` (manual): sections `decision` and `ceiling`.

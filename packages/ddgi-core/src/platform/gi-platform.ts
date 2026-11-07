@@ -293,8 +293,10 @@ export class GIPlatformImpl implements GIPlatform {
 
         const upload = this.sceneCopy.encode(encoder);
         this.rays.update(encoder, upload, this.timer ?? undefined);
-        // Settings, and the sky's bake when the environment changed.
-        this.shade.encode(encoder, this.sceneCopy.environment, this.sceneCopy.environmentVersion, this.timer ?? undefined);
+        // Settings, the sky's bake when the environment changed, and the light grid when there are many
+        // point and spot lights. No technique traces in a paused frame, so the grid is not built then.
+        const lights = frame.budget.paused ? undefined : { frame: this.frame, localLights: this.sceneCopy.localLightCount, bounds: this.sceneCopy.bounds };
+        this.shade.encode(encoder, this.sceneCopy.environment, this.sceneCopy.environmentVersion, this.timer ?? undefined, lights);
 
         const techniques = this.encodeOrder();
         // A calibration no longer describes the scene once the geometry rays see changed: a geometry

@@ -352,6 +352,11 @@ export class PlatformScene implements SceneApi, SceneCopy {
         };
     }
 
+    /** Point and spot lights (every light that isn't directional): hit shading picks its light path from this (the light grid, T2.3). */
+    get localLightCount(): number {
+        return this.lights.length - this.directionalLightCount;
+    }
+
     get memoryBytes(): number {
         return this.memory.total;
     }
