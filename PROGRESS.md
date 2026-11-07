@@ -21,6 +21,13 @@ Rules:
 
 ---
 
+## 2026-11-08 · T2.6b review and merge · lead (opus)
+Did: An Opus review passed T2.6b with notes. I fixed the notes on the branch: `m2-lights.md` said "no run read VALID" (there is one VALID run, 1.055×), and its tables were stale (memory 20 MB, "on by default"); one WGSL spacing fix. I recorded the lead rulings in DECISIONS: `sunLayer` off by default, the first directional light is the sun, the memory over the estimate accepted. I merged `m2` (T2.14) into the branch; PROGRESS, DECISIONS and NOTES conflicts kept both sides, 109 headings = 108 + 106 − 105. Then I merged it into `m2`. T2.6b is done.
+Verified: review on the RTX 3060: checks 1 and 2 pass (check 2 re-run on bcb1af8 itself: identical atlas and views); the 6-layer cap passes; the full suite passes after the propagate fix a60cdca (51 pages). Me on the merged tree (RTX, correctness, `--no-cool-wait`): typecheck, lint and 1,088 unit tests pass; `ddgi-sun-layer` passes; `ddgi-session-recompiles` with the sun layer switched on (a temporary local edit, not committed) gives 0 recompiles and control 1 on Cornell, two-room and Sponza, light groups off and on.
+Not verified: check 3 not re-timed (the review's code reading agrees with 1.055×). Intel UHD not re-run after the merge.
+Correction to the implementer's entry below: Sponza's sun turn with the layer on is not "as with the sun layer off". The review's two runs settled the view at frames 16 and 13 (bar 15); with it off, 12. The field settles at 36 either way.
+Next: T2.8 checks Sponza's turn with the layer on (TASKS). T2.13 starts now; it was waiting for this merge because both touch the scene copy.
+
 ## 2026-11-08 · T2.6b the sun layer · implementer (opus)
 Did (branch `m2-t2.6b-sun` from `m2` bcb1af8: a88f65f, a60cdca, docs):
 - Platform: `gi/direct` keeps the sun (the first directional light, light 0) apart at a white reference when a technique names a layer for it (`DirectLightFrame.sunLayer`, scratch header word 11). This goes through `giDirectSplitIrradiance` and `giDirectReachesSplit`, so a sun at intensity 0 still lists its hits. Also new: `SceneCopy.firstDirectionalLight`. The light choice and shadow rays stay shared, so T2.3's grid and T2.5's group split are unchanged.
