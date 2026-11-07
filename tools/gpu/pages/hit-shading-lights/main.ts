@@ -23,7 +23,9 @@
  *    random numbers per point must be within 1% and 4 standard errors of the
  *    all-lights answer (or within 1e-5, float rounding, where every light is
  *    picked every time). With the cap at or above the light count the answer is
- *    exact and the same for every random number.
+ *    exact and the same for every random number. This is the exact path's
+ *    choice (`exactLightLimit` raised to 16 for it); the light grid's is
+ *    checked by `hit-shading-many-lights`.
  */
 
 import type { LightHandle } from '../../../../packages/ddgi-core/src/platform/contract/handles.ts';
@@ -287,6 +289,10 @@ await runGpuTest(async ({ device, log }) => {
         }
         // A sun too: directional lights are always evaluated, outside the cap.
         stochasticLights.push(scene.createLight({ type: 'directional', color: [1, 1, 1], intensity: 2, direction: normalize([0.3, -1, 0.2]), castsShadows: true }));
+        // This checks the exact path's stochastic choice over every light, so its 12 lights stay below
+        // exactLightLimit. With the light grid (more than 8 by default) one frame's grid is a single random
+        // draw, and only a new grid every frame averages it out (hit-shading-many-lights checks that).
+        platform.shade.settings.exactLightLimit = 16;
         await ready(device, platform);
         const points: Query[] = [down(0, 0), down(-1, 0.5), down(1.5, -1), down(0.4, 1.1), down(-2, -2), down(2.5, 0.3), down(0.9, -0.2), down(-0.3, -1.3)];
 
