@@ -393,7 +393,7 @@ Status: **started 2026-11-06** on branch `m2` (from main at 3d682dc; M1 merged a
 | T2.12 | Fast first GI: GPU H-PLOC/LBVH trees at load, tinybvh swapped in per mesh (lower priority) | implementer | M | B1, B2 | done (2026-11-08; check 1 1.90 s median VALID against 2.0; swap −0.0019%; trace 0.98× after the swap; SPEC's no-submit wording amended for load, for Dennis) |
 | T2.13 | Scene copy off the main thread (lower priority) | implementer | M | none | done (2026-11-08; GPU packing matches on both GPUs; main-thread bar missed, Sponza 816 ms median VALID vs 150: a known miss for Dennis, guards proposed in DECISIONS) |
 | T2.14 | Compile only what's configured (`encodeBatch` on first use, the sky kernel's compile) (lower priority) | implementer | S | T2.6a | done (2026-11-08; check 2 met on 14 scenes; check 1, the cold Cornell start, owed to T2.10) |
-| T2.16 | Re-render the noisy viewing-only reference bookmarks (M1 note), or mark them viewing-only in the viewer (lower priority) | wrangler, then gpu-tester | S | none | todo |
+| T2.16 | Re-render the noisy viewing-only reference bookmarks (M1 note), or mark them viewing-only in the viewer (lower priority) | wrangler, then gpu-tester | S | none | active (gpu-tester, 2026-11-08; worktree `webgpu-ddgi-m2-t216`) |
 | T2.10 | M2 measurements against targets (one VALID run per gate, DECISIONS 2026-11-06), with the measured whole-frame p50/p95 | gpu-tester, native-runner | M | all above | todo |
 | T2.11 | M2 note and M3 breakdown | main session | S | T2.10 | todo |
 
