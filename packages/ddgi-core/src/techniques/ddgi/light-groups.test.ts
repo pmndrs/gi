@@ -104,10 +104,15 @@ describe('the sun layer (T2.6b, m2-lights.md §6.1)', () => {
 
     it("weighs the sun layer by the sun's light in the probe's mean, and leaves the blend as it was without one", () => {
         const withSun = blendKernelWgsl({ irradianceTexels: 6, distanceTexels: 14, scratch: scratchLayout(6, 14, 2), reduction: 'workgroup', sunLayer: 1 });
-        expect(withSun).toContain('const sunLayer: u32 = 1u;');
+        expect(withSun).toContain('const DDGI_SUN_LAYER: u32 = 1u;');
         expect(withSun).toContain('ddgi.sunLight.rgb');
         const without = blendKernelWgsl({ irradianceTexels: 6, distanceTexels: 14, scratch: scratchLayout(6, 14, 2), reduction: 'workgroup' });
         expect(without).not.toContain('ddgi.sunLight');
+        // Propagation writes a fine probe's mean the same way.
+        const propagateWithSun = propagateKernelWgsl({ irradianceTexels: 6, irradianceLayers: 2, reduction: 'workgroup', listCapacity: 10, sunLayer: 1 });
+        expect(propagateWithSun).toContain('const DDGI_SUN_LAYER: u32 = 1u;');
+        expect(propagateWithSun).toContain('select(vec3f(1.0), ddgi.sunLight.rgb, layer == DDGI_SUN_LAYER) * value');
+        expect(propagateKernelWgsl({ irradianceTexels: 6, irradianceLayers: 2, reduction: 'workgroup', listCapacity: 10 })).not.toContain('ddgi.sunLight');
     });
 });
 

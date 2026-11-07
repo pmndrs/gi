@@ -679,7 +679,7 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         const markCode = markKernelWgsl(reduction);
         const writeCode = writeKernelWgsl({ irradianceTexels, distanceTexels, scratch, distanceFormat: layout.distanceFormat });
         const propagationCapacity = propagationListCapacity(grid.counts, maxProbesPerFrame);
-        const propagateCode = propagateKernelWgsl({ irradianceTexels, irradianceLayers: layerCount, reduction, listCapacity: propagationCapacity });
+        const propagateCode = propagateKernelWgsl({ irradianceTexels, irradianceLayers: layerCount, reduction, listCapacity: propagationCapacity, sunLayer: plan.sunLayer });
         const composeCode = plan.composed ? composeKernelWgsl({ irradianceTexels, irradianceLayers: layerCount }) : null;
         const composeKernel = (entryPoint: string, name: string): Promise<ComputeKernel | null> =>
             composeCode ? context.kernels.computeKernel({ label: `ddgi/compose-${name}`, modules: [], code: composeCode, entryPoint, ownGroups: [COMPOSE_GROUP] }) : Promise.resolve(null);

@@ -227,9 +227,8 @@ export function blendKernelWgsl(shape: BlendKernelShape): string {
         // The sun layer holds the sun at a white reference: weighed
         // by the sun's colour x intensity, the mean is the probe's real light,
         // as without a sun layer (ddgi/mark divides a light's change by it).
-        const sunLayer: u32 = ${sunLayer}u;
         for (var item = 0u; item < layerTexels; item++) {
-            let meanWeight = select(vec3f(1.0), ddgi.sunLight.rgb, item / DDGI_IRRADIANCE_TEXEL_COUNT == sunLayer);
+            let meanWeight = select(vec3f(1.0), ddgi.sunLight.rgb, item / DDGI_IRRADIANCE_TEXEL_COUNT == DDGI_SUN_LAYER);
             estimateSum += meanWeight * ddgiTexelEstimate[item].rgb;
             oldSum += meanWeight * ddgiTexelOld[item].rgb;
         }`
@@ -270,6 +269,8 @@ const DDGI_SCRATCH_TILES_WRITTEN: u32 = ${SCRATCH_PROBE_DATA_WORD.tilesWritten}u
 // layer, side by side; each layer's texels follow the one before in a scratch slot.
 const DDGI_IRRADIANCE_LAYERS: u32 = ${scratch.irradianceLayers}u;
 const DDGI_SCRATCH_IRRADIANCE_LAYER_WORDS: u32 = ${scratch.irradianceWords}u;
+${sunLayer >= 0 ? `// The sun layer (T2.6b): at a white reference, weighed by ddgi.sunLight in the probe's mean.
+const DDGI_SUN_LAYER: u32 = ${sunLayer}u;` : ''}
 const DDGI_CENSUS_RAYS_TRACED: u32 = ${CENSUS_RAYS_TRACED}u;
 // Must match the trace kernel: a back-face hit was stored at this share of its distance.
 const DDGI_BACK_FACE_DISTANCE_SHARE: f32 = 0.2;

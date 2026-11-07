@@ -43,7 +43,8 @@
  *
  * With light groups (T2.5) every irradiance layer is propagated, each from
  * its keys' change in that layer, with the same weights; the probe's mean is
- * over the layers' sum, as the blend writes it.
+ * over the layers' sum, as the blend writes it (the sun layer weighed by the
+ * sun's light, T2.6b).
  *
  * Bindings (group 1, one declaration for the module, a layout per kernel):
  * uniforms (0), the probe history as words (1), the census (2), the
@@ -97,6 +98,12 @@ export interface PropagateKernelShape {
     readonly reduction: PropagateReduction;
     /** How many fine probes the list holds (propagationListCapacity in layout.ts). */
     readonly listCapacity: number;
+    /**
+     * The sun layer's index (T2.6b, `LayerPlan.sunLayer`), or -1 / omitted
+     * without one: its texels are at the sun's white reference, so the
+     * probe's mean weighs them by the sun's light, as the blend does.
+     */
+    readonly sunLayer?: number;
 }
 
 function reserveWgsl(reduction: PropagateReduction): string {
@@ -131,6 +138,17 @@ fn ddgiReserveListSlot(take: bool) -> u32 {
 
 export function propagateKernelWgsl(shape: PropagateKernelShape): string {
     const { irradianceTexels, irradianceLayers, reduction, listCapacity } = shape;
+    const sunLayer = shape.sunLayer ?? -1;
+    if (sunLayer >= irradianceLayers) throw new RangeError(`@pmndrs/ddgi: the sun layer is ${sunLayer}, but propagation has ${irradianceLayers} layer(s)`);
+    // A layer's share of the probe's mean: the sun layer weighed by the sun's light (as in ddgi/blend), the others as they are.
+    const addToMean =
+        sunLayer >= 0
+            ? /* wgsl */ `
+            // The sun layer (${sunLayer}) is at a white reference: weighed by the
+            // sun's colour x intensity, the mean is the probe's real light.
+            layersSum += select(vec3f(1.0), ddgi.sunLight.rgb, layer == DDGI_SUN_LAYER) * value;`
+            : /* wgsl */ `
+            layersSum += value;`;
     const enable = reduction === 'subgroups' ? 'enable subgroups;\n' : '';
     return /* wgsl */ `${enable}
 ${DDGI_COMMON_WGSL}
@@ -148,7 +166,9 @@ const DDGI_VISIBLE_SHARE: f32 = ${PROPAGATION_VISIBLE_SHARE};
 // The probe history, as words (PROBE_HISTORY_WORD in layout.ts).
 const DDGI_HISTORY_WORDS: u32 = ${PROBE_HISTORY_WORDS}u;
 const DDGI_HISTORY_SCHEDULE_AND_FLAGS: u32 = ${PROBE_HISTORY_WORD.scheduleAndFlags}u;
-const DDGI_HISTORY_MEAN_RED_GREEN: u32 = ${PROBE_HISTORY_WORD.meanRedGreen}u;
+${sunLayer >= 0 ? `// The sun layer (T2.6b): at a white reference, weighed by ddgi.sunLight in the probe's mean.
+const DDGI_SUN_LAYER: u32 = ${sunLayer}u;
+` : ''}const DDGI_HISTORY_MEAN_RED_GREEN: u32 = ${PROBE_HISTORY_WORD.meanRedGreen}u;
 const DDGI_HISTORY_MEAN_BLUE_NOISE: u32 = ${PROBE_HISTORY_WORD.meanBlueNoise}u;
 const DDGI_HISTORY_KEYS_RECEIVED: u32 = ${PROBE_HISTORY_WORD.keysReceived}u;
 const DDGI_HISTORY_CHANGE_CLOCK: u32 = ${PROBE_HISTORY_WORD.changeClock}u;
@@ -438,8 +458,7 @@ fn ddgiPropagateEntry(entry: u32, thread: u32) {
                 }
             }
             let old = textureLoad(ddgiIrradianceAtlas, ddgiIrradianceAtlasTexel(fine, layer, texelIndex), fine.y, 0);
-            let value = max(old.rgb + change, vec3f(0.0));
-            layersSum += value;
+            let value = max(old.rgb + change, vec3f(0.0));${addToMean}
             // Layer 0 keeps the seeds it had before there were layers.
             let seed = (fineIndex * DDGI_IRRADIANCE_TEXEL_COUNT + texelIndex) ^ 0x2c1b3c6du ^ (layer * 0x9e3779b9u);
             let word = entry * DDGI_PROPAGATION_STRIDE + layer * DDGI_IRRADIANCE_LAYER_WORDS + 2u * texelIndex;
