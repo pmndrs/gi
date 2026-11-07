@@ -4,7 +4,7 @@ BVH builders for WebGPU that don't depend on any engine. You give it triangles, 
 
 DDGI (`@pmndrs/ddgi`) is its first user. The package imports nothing from DDGI, from GI code or from any engine, so picking, a path tracer or another GI technique can use it too.
 
-**Status.** For now it lives in this repo and ships bundled inside `@pmndrs/ddgi`; it is planned as a standalone package later ([docs/design/bvh-package-split.md](../../docs/design/bvh-package-split.md)). ddgi-core uses the CPU builder and the GPU refit today. **The GPU mesh builders (LBVH and H-PLOC) are not wired into ddgi-core yet.** That is M2's "fast first GI" item. The API may change when that happens.
+**Status.** For now it lives in this repo and ships bundled inside `@pmndrs/ddgi`; it is planned as a standalone package later ([docs/design/bvh-package-split.md](../../docs/design/bvh-package-split.md)). ddgi-core uses the CPU builder, the GPU refit, and, since M2's "fast first GI" (T2.12), the GPU H-PLOC for the first trees of a scene as it loads: one batch for all meshes, its trees copied into the tracer's buffers after a small stats readback, then replaced mesh by mesh by tinybvh's from a worker (ddgi-core's `trace/gpu-mesh-trees.ts` and `trace/ray-queries.ts`). The LBVH isn't used by ddgi-core.
 
 How the builders work inside: [docs/design/bvh-builders.md](../../docs/design/bvh-builders.md). The plan and its stages: [docs/design/bvh-framework.md](../../docs/design/bvh-framework.md).
 

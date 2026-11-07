@@ -9,7 +9,7 @@
  * swapped in, so the build may use boxes that are a little stale.
  *
  * **When to build a new one, without reading anything back from the GPU.**
- * The platform promises hosts no readbacks, so the refit's own quality
+ * The platform promises hosts no readbacks frame after frame, so the refit's own quality
  * numbers stay on the GPU. Instead {@link TopLevelShapeKeeper} (one per
  * worker) remembers the last shape it built, and a *check* request refits
  * that shape on the CPU from the current transforms (`refitOnCpu`, the same

@@ -21,6 +21,59 @@ Rules:
 
 ---
 
+## 2026-11-08 · T2.12 review fixes, `m2` merged, check 1 timed · implementer (opus)
+Did (after the Opus review; b11de2a, 2de4893, merge 66f6653 of `m2` 423fe75):
+- **SPEC promise:** SPEC.md, platform.md and the code comments now say "no extra submits and no readbacks, frame after frame". At load, the first-tree build submits once and reads back a few words of stats per mesh. DECISIONS has this as a departure from SPEC, for Dennis to confirm, beside the accepted own-submit entry.
+- **Node headroom:** `GrowableStorage.grow` takes `headroom` per call, and only placing GPU trees asks for it (1/8, used when it is larger than doubling). The doc says exactly that. tinybvh-only growth is exact again: Sponza 194.0 MB, as M1. `AccelerationMemory.nodesInUse` added. Unit tests: storage growth; a GPU-tree jump gets headroom and tinybvh doesn't.
+- **Check 1:** judged in series, per the ruling. `GIVolume.start` can't compile three's materials for the host: hosts draw through their own passes and MRT targets, and `compileAsync` culls against its camera (NOTES). `ddgi-batch-cost` compiles in series by default; `VITE_DDGI_THREE_COMPILE=when-light-joins` gives the overlapped number. The DECISIONS entry is rewritten to the ruling.
+- **Decision (b)** is noted as accepted. The swap stays on (decision (d) ruling).
+- `ddgi-tree-swap` gains step 5, the natural swap: default options, frames until tinybvh is all in.
+- NOTES now gives −0.0019%, and `firstTreeBuilder` is in the platform.md revision.
+- Merge: PROGRESS, DECISIONS and platform.md kept both sides; `viewer-scene.ts` keeps `settings` and `meshTrees`. PROGRESS has 111 `## ` headings = 109 + 110 − 108, and no markers are left.
+
+Verified (RTX 3060, Chrome 157, bench lock; the machine quiet, CPU 17-34%, RTX idle at 46 C before each run):
+- **Check 1 met, VALID** (`--cpu-timed`, started at 46 C, 0% thermal in 71 loaded samples, 780 MHz). Sponza handoff to first GI drawn, cold, in series: 2.437 / 1.866 / 1.902 s, median **1.902 s** (bar 2.0).
+  - The median run's stages: `prepare` 1,122 ms (scene copy 1,099, compiles done 8 ms later), first GI frame 296, first trees 10 (GPU build 82 ms to its stats; 449 of 449 meshes on GPU trees), placing 42, first warm-up step 99, three's first GI frame 332 (its compile 316, in series).
+  - With the compile started when the light joins (one run, information only): **1.824 s**; the draw still waited 193 ms of the compile's 416.
+  - tinybvh's trees were all in 3.8-4.7 s after the handoff.
+  - Rows: `timing.csv` (2de4893, `note/timing_valid,1`). The earlier INVALID set (ac325fb) stays as the shared-GPU record.
+- **Post-merge `ddgi-tree-swap` on Sponza, VALID** (45 C, 0% thermal, 83 samples):
+  - swap frame −0.0019%, 0 recompiles;
+  - tree passes after the swap 0.980× tinybvh-only's, on GPU trees 1.018×;
+  - memory: tinybvh-only nodes 194.0 MB; held swap 216.9 MB (194.0 in use);
+  - **natural swap:** 410 trees swapped over 83 frames, 35 ms to 2.09 s after the first trees (39 small meshes took tinybvh's first). The node buffer stayed at **216.8 MB** (194.0 in use) and never doubled.
+- Post-merge `trace-oracle` passes (every variant, 0 rays slipped), and `ddgi-session-recompiles` on Sponza with groups off and on gives 0 recompiles, control 1.
+- lint, typecheck, 1,097 unit tests pass.
+
+Not verified: the Intel UHD after the merge (it passed before; the merge brought T2.6b's code); `ddgi-session-recompiles` on scenes other than Sponza after the merge.
+Next: none for T2.12 beyond the lead's review. T2.13 adapts `packedGeometryView` when it merges.
+
+## 2026-11-08 · T2.12 fast first GI: GPU H-PLOC trees at load, tinybvh swapped in · implementer (opus)
+Did (branch `m2-t2.12` from `m2` 536fe41; 4ca5355 … 3d0d909, then this entry):
+- `trace/gpu-mesh-trees.ts` (new): the scene's meshes, as first loaded, built with H-PLOC in one batch (split only if the device's buffers need it), in a command buffer the platform submits itself, then a stats readback (DECISIONS 2026-11-08). `trace/ray-queries.ts`: per-mesh tree states; usable GPU trees are copied into the shared buffers; tinybvh's tree replaces each as the worker finishes (one range and one mesh-table entry, no recompile). A mesh's first tree is whichever arrives first. Refused, too deep (> 47 levels) or too big: the mesh waits for tinybvh. Without subgroups, or if the H-PLOC kernels fail to compile: tinybvh only. `building` now means "first trees"; `refining`, `whenRefined()`, `meshTreeCounts`, `stats.counters['platform mesh trees']`. Tools: `GIPlatformImplOptions.meshTrees` (`gpuFirst`, `holdRefinements` with `releaseRefinements()`, `gpuMaxDepth`).
+- Start-up: the H-PLOC kernels are asked for in `prepare` with the rest, in one task (`GpuHplocBuilder.prepare` no longer waits for the scan's compile first); the top-level shape worker starts in `prepare`. The node buffer keeps an eighth free on a big jump: without it tinybvh's slightly larger trees doubled Sponza's to 386 MB.
+- Pages: `trace-oracle` gains `platform-gpu-trees`, `platform-mid-swap` and `platform-refused`; new `ddgi-tree-swap` (check 2) and `ddgi-trees-no-subgroups` (check 4); `ddgi-batch-cost` start-up reports T2.12's stages and starts three's GI material compile when the GI light joins, as a drawing host does (DECISIONS). Unit tests: `mesh-tree-swap.test.ts` (6), `growable-storage.test.ts` (2).
+
+Checks (RTX 3060 nvidia/ampere, Intel UHD gen-12lp; Chrome 157 headless; bench lock):
+| Check | Result | Clock |
+| --- | --- | --- |
+| 1. Sponza handoff to first GI drawn ≤ 2.0 s, cold, median of 3 | **NO VERDICT.** 35.96 / 37.69 / 17.16 s (tinybvh only 33.25 s): the scene copy alone took 16.3-22.8 s in every run, tinybvh-only too (T2.14: 1.89 s), because another project's capture held the RTX at 100% and 87-89 C outside our lock (NOTES) | INVALID, hot start 87 C |
+| 2a. Field mean across the swap frame ≤ 0.5% | **Met.** Sponza, 449 meshes swapped in one frame: −0.0019% (normal frames 0.0004-0.003%); 0 recompiles. Two-room −0.0007% on both GPUs | VALID (57 C start, 0% thermal, 86 loaded samples, 885 MHz) |
+| 2b. Trace speed after the swap within 5% of tinybvh-only (M1) | **Met.** Tree passes (`ddgi/trace` + `ddgi/gi-direct`, 512 probes) 1.024× tinybvh-only's, 6 rounds, order alternated | VALID (same run) |
+| 3. Oracle mid-swap and with refused trees, both GPUs | **Met.** On the final code (after 3d0d909), both GPUs: all four platform states (`platform` after the swap, `platform-gpu-trees`, `platform-mid-swap`, `platform-refused`) and the GPU-builder variants pass, 0 of 2 M shared-edge rays slipped (mid-swap 13 meshes on GPU trees and 3 on tinybvh's; refused 8 of 16) | correctness |
+| 4. No subgroups: tinybvh trees and GI | **Met.** `ddgi-trees-no-subgroups`: CPU top level, every mesh on tinybvh, Cornell atlas +0.032% from M1 on both GPUs, 0 recompiles; unit tests | correctness |
+
+Check 1, the stages after `prepare` (run 3, when the RTX was less contended; T1.9a's "0.9 s not broken down" is these plus three's compile): first GI frame (the scene's uploads, the GPU build's upload and submit, tinybvh's copies) 297 ms; until the first trees 153 ms (the GPU build took 222 ms from submit to stats; 439 meshes on GPU trees, 10 small ones from tinybvh); the frame that places them 123 ms; the first warm-up step 203 ms; three's GI material compile 499 ms, now alongside the trees (the draw waited 21 ms for it); the draw 47 ms. So 0.84 s from `prepare` resolved to the first frame drawn. `prepare` is the scene copy's CPU time (T2.14 VALID: 1.96 s, of which 0.04 s compile wait), so expect about 2.8 s at T2.14's copy and 1.9-2.1 s at T1.9's 0.85 s: check 1 needs T2.13 to have a margin. Rows: `timing.csv` (ac325fb, `run1`-`run4`, `note/timing_valid,0`).
+Final correctness run on both GPUs: `trace-oracle`, `tlas-oracle`, `trace-inline`, `ddgi-trees-no-subgroups`, `ddgi-change-still`, `platform-recompiles` and `ddgi-tree-swap` (two-room) pass. The RTX swap page first failed on two-room's speed bar (0.80× with the same trees: a 2 ms trace on a hot GPU), so the bar is now judged on Sponza only (the done-when's scene); two-room passes after that.
+Also: Sponza's GPU build 105-222 ms to its stats on a quiet GPU (8.4-9.8 s with the outside job). Acceleration memory with the GPU trees' outputs alive (one update): 1,159 MB (666 MB of them outputs; the build's scratch is freed at its readback); after the swap 493 MB, tinybvh-only 494 MB. `ddgi-session-recompiles` passes (0 recompiles, control 1) on Cornell, two-room and Sponza, groups off and on; `ddgi-change-still` within 0.16% of M1 on both GPUs; `platform-recompiles` passes. lint and typecheck pass; unit tests 1,086 pass, with `tools/assets/fetch.test.ts` timing out at 5 s under other agents' CPU load (43%) and passing alone (108).
+Not verified: check 1 (no VALID run; the lead's rule: no re-time on an INVALID shared-GPU reading); Bistro or any scene but Sponza for the trace ratio; the viewer by hand; the M5 Pro. Two earlier swap-timing runs were INVALID and the first had a bias (A always timed first read 0.93× with the same trees), fixed in 3d0d909 before the VALID run.
+Next:
+- Lead: one VALID cold Sponza start-up set on a quiet machine: `node tools/reference/bench-lock.ts run --cpu-timed --what "T2.12 check 1" -- pnpm test:gpu --gpu nvidia --filter ddgi-batch-cost` with `VITE_DDGI_SCENES=sponza VITE_DDGI_SECTIONS=startup`, three runs (fresh profile each).
+- Proposal for the lead: H-PLOC trees alone traced at 1.024× tinybvh-only's on Sponza (VALID), the same as after the swap (1.024×, same trees): the refinement buys nothing measurable there. Making it optional (`meshTreeRefinement: 'none'`) would save tinybvh's 2-5 s of worker CPU, its copies and the swap. Recommend checking one more scene (Bistro exterior) before changing the default.
+- T2.13: once the GPU packs the scene copy, the first-tree build could read the packed vertex buffer instead of its own upload (DECISIONS 2026-11-08). The scene copy (ThreeGI's sync before ready) took 10× longer while the GPU was saturated by another process, in tinybvh-only runs too; not investigated.
+- T2.14's "Revisit" (start the builds during `prepare`) wasn't done: the H-PLOC kernels are asked for in the same task as the rest, but the builds need the scene's upload, and on Sponza the copy, not the compile, is the long pole.
+- Shared files touched: `gi-platform.ts` (option, counters), `trace/ray-queries.ts`, `trace/growable-storage.ts`, `trace/top-level-gpu.ts` (worker in `prepare`), `contract/queries.ts` (a comment), `@pmndrs/bvh` `gpu-hploc.ts` and `gpu-radix-sort.ts` (compile order); pages `ddgi-batch-cost`, `ddgi-shared/viewer-scene.ts`, `trace-oracle`; not `platform-scene.ts` or `scene-copy.ts`.
+
 ## 2026-11-08 · T2.6b review and merge · lead (opus)
 Did: An Opus review passed T2.6b with notes. I fixed the notes on the branch: `m2-lights.md` said "no run read VALID" (there is one VALID run, 1.055×), and its tables were stale (memory 20 MB, "on by default"); one WGSL spacing fix. I recorded the lead rulings in DECISIONS: `sunLayer` off by default, the first directional light is the sun, the memory over the estimate accepted. I merged `m2` (T2.14) into the branch; PROGRESS, DECISIONS and NOTES conflicts kept both sides, 109 headings = 108 + 106 − 105. Then I merged it into `m2`. T2.6b is done.
 Verified: review on the RTX 3060: checks 1 and 2 pass (check 2 re-run on bcb1af8 itself: identical atlas and views); the 6-layer cap passes; the full suite passes after the propagate fix a60cdca (51 pages). Me on the merged tree (RTX, correctness, `--no-cool-wait`): typecheck, lint and 1,088 unit tests pass; `ddgi-sun-layer` passes; `ddgi-session-recompiles` with the sun layer switched on (a temporary local edit, not committed) gives 0 recompiles and control 1 on Cornell, two-room and Sponza, light groups off and on.
@@ -76,6 +129,7 @@ Next:
 - The firefly clamp acts per layer, so a layer that starts dark is limited by its own old value. Nothing here showed it; watch it if a group or the sun settles slowly after a big step.
 - Tools: `bench-lock.test.ts`'s nested run should pass `--no-cool-wait`.
 - Shared files touched: `contract/{shade,scene-copy}.ts`, `scene/platform-scene.ts` (a getter), `shade/{wgsl,direct}.ts`, `ddgi-technique.ts`, `layout.ts` (uniform words 92–95), `settings.ts`, `light-groups.ts`, `mark-table.ts`, `wgsl/{blend,propagate,common}.ts`, `ddgi-shared/viewer-scene.ts`, `ddgi-light-groups-cost`.
+
 ## 2026-11-08 · T2.14 review and merge · lead (opus)
 Did: An Opus review passed T2.14 with notes. The must-fix went back to the implementer, who fixed it in 741a713: a host that only uses `updateOnRender` got no GI light, and a forgotten `prepare` gave no error. The implementer also merged `m2` into `m2-t2.14`. I read the fix and merged it into `m2`. I also fixed `tools/reference/bench-lock.test.ts`: its nested-run test called `bench-lock run` without `--no-cool-wait`, so it waited for the real GPU to cool and timed out whenever the GPU was busy. T2.14 is done.
 Verified: on `m2` after the merge, typecheck and lint are clean and 1,081 unit tests pass (`bench-lock.test.ts` 37/37 after the fix). Review re-check on the RTX 3060: `ddgi-session-recompiles` counter 0 and control kernel 1 on 14 scenes, one scene per run, plus `sponza-candles` and the light grid on and off (implementer, after the merge). `platform-recompiles` passes.

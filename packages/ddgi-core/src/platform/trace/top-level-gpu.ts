@@ -29,7 +29,7 @@
  *   the CPU from the current transforms and builds a new one if its relative
  *   SAH cost is more than {@link TOP_LEVEL_REBUILD_COST_RATIO} times its cost
  *   as built. Nothing is read back from the GPU for this: the platform
- *   promises hosts no readbacks.
+ *   promises hosts no readbacks frame after frame.
  *
  * Shapes include hidden instances too (their boxes are empty while hidden),
  * so hiding and showing take effect in the same frame. Removed instances
@@ -378,6 +378,9 @@ export class GpuTopLevel {
     }
 
     async prepare(kernels: KernelBuilder): Promise<void> {
+        // The shape worker starts here, so its module loads while the kernels compile instead of
+        // when the first frame asks for a shape: the first shape is on the way to first GI (T2.12).
+        this.builder ??= createTopLevelBuilder({ worker: this.buildIn === 'main' ? 'never' : 'auto' });
         if (this.gatherKernel && this.refit.ready) return;
         const [gather] = await Promise.all([
             kernels.computeKernel({

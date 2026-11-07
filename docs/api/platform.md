@@ -42,7 +42,7 @@ The host owns the device, the scene and the frame. The platform keeps its own si
 1. **Device.** The host asks the adapter for the device using `requiredLimits(adapter)` and `optionalFeatures(adapter)`, then calls `createGI(device)`. The platform never creates, configures or destroys a device. It watches `device.lost`, and after a loss `isReady` turns false and calls throw `GINotReadyError('device-lost')`. The host makes a new platform on the new device, the same rule as the upscaler.
 2. **Scene.** The adapter calls `gi.scene.createMesh(...)`, `createMaterial(...)`, `createInstance(...)`, `createLight(...)` and `setEnvironment(...)`, then sends only what changed (`setTransform`, `updateLight`, ...). The calls are cheap. Changes are queued and uploaded inside the next `encode`. Many moves at once go through `setTransforms(instances, matrices)`, one call with 16 numbers per instance (T2.M1, Chrome on the RTX laptop: 10,000 sliding in 1.4 ms of CPU, 3.5 ms turning).
 3. **Techniques.** `gi.addTechnique(new DDGITechnique(settings))`, `gi.setOutput(ddgi)`, then `await gi.prepare()`, which compiles everything asynchronously.
-4. **Every frame.** `gi.encode(encoder, { deltaTime, budget, camera })` comes before the host's own passes, in the same encoder. There are no extra submits and no readbacks. Hosts with screen-space techniques also call `gi.encodeScreen(encoder, screen)` after their depth/normal pass. It does nothing when no technique needs it.
+4. **Every frame.** `gi.encode(encoder, { deltaTime, budget, camera })` comes before the host's own passes, in the same encoder. There are no extra submits and no readbacks frame after frame; at load, the GPU's build of the scene's first mesh trees is submitted once by the platform and reads back a few words of stats per mesh (T2.12, DECISIONS 2026-11-08). Hosts with screen-space techniques also call `gi.encodeScreen(encoder, screen)` after their depth/normal pass. It does nothing when no technique needs it.
 5. **Shading.** The adapter injects `gi.shading` into its engine once, and rebuilds only when `shading.version` changes.
 
 The lifecycle names match the pmndrs siblings: `prepare()`, `isReady`, `encode()`, `resetHistory()`, `dispose()`, `gpuTiming`, and settings as live objects. Note one rename from SPEC: the per-frame call is `encode(encoder, frame)`, not `update(encoder, budget)`. The budget is a field of `frame`.
@@ -160,6 +160,10 @@ Gaps:
 The answers go in PROGRESS. Any change to the contract is made in both the TypeScript and this page, and listed in a "Revisions" section here.
 
 ## Revisions
+
+### During M2, 2026-11-08
+
+- **Technique-facing meaning of `RayQueries.building` (T2.12): true until every mesh has its first tree**, the GPU's (H-PLOC, built at load) or tinybvh's, whichever arrives first. tinybvh's trees replacing GPU trees afterwards don't count: rays see the same triangles either way, and the swap changes no binding layout and compiles nothing. **Host-visible: `stats.counters['platform mesh trees']`** (meshes on GPU and tinybvh trees, meshes waiting, tinybvh builds running, GPU trees built and refused, swaps, the last GPU build's time to its stats), and `stats.memory.acceleration` includes the GPU build's output buffers while they live (a few frames at load). Implementation-only, for the repository's tools: `GIPlatformImplOptions.meshTrees` (`gpuFirst`, `holdRefinements`, `gpuMaxDepth`, and `firstTreeBuilder`, a stand-in first-tree builder for unit tests in Node) and `rays.whenRefined()`, `rays.releaseRefinements()`, `rays.meshTreeCounts`. DECISIONS 2026-11-08.
 
 ### During M2, 2026-11-07
 

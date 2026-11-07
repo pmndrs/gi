@@ -220,12 +220,13 @@ export interface RadixSortPipelines {
     readonly scan: ScanPipelines;
 }
 
-export async function createRadixSortPipelines(device: GPUDevice, scan: ScanPipelines, label: string): Promise<RadixSortPipelines> {
+export async function createRadixSortPipelines(device: GPUDevice, scan: ScanPipelines | Promise<ScanPipelines>, label: string): Promise<RadixSortPipelines> {
     const module = device.createShaderModule({ label: `${label} radix sort`, code: radixSortWgsl() });
     const pipeline = (entryPoint: string) =>
         device.createComputePipelineAsync({ label: `${label} ${entryPoint}`, layout: 'auto', compute: { module, entryPoint } });
-    const [count, scatter] = await Promise.all([pipeline('sortCount'), pipeline('sortScatter')]);
-    return { count, scatter, scan };
+    // The scan may still be compiling (a promise): the sort's own compiles are asked for first, so they run alongside it.
+    const [count, scatter, scanPipelines] = await Promise.all([pipeline('sortCount'), pipeline('sortScatter'), scan]);
+    return { count, scatter, scan: scanPipelines };
 }
 
 /** The buffers one sort uses. Keys and values ping-pong between `a` and `b`: the result ends in `a` after an even number of passes, in `b` after an odd one. */
