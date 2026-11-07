@@ -201,12 +201,17 @@ export class GpuHplocBuilder {
         this.slots = hplocSlotsFor(minSubgroupSize(device));
     }
 
-    /** Compiles the kernels (asynchronously, so the main thread doesn't stall). */
+    /**
+     * Compiles the kernels (asynchronously, so the main thread doesn't stall).
+     * Every compile is asked for before the first `await`, so a caller that
+     * starts other compiles in the same task (ddgi-core's `prepare`) has these
+     * queued alongside, not behind them.
+     */
     async prepare(): Promise<void> {
         if (this.pipelines) return;
         const device = this.device;
         const module = device.createShaderModule({ label: this.label, code: hplocWgsl(this.slots) });
-        const scan = await createScanPipelines(device, this.label);
+        const scan = createScanPipelines(device, this.label);
         const [sort, ...kernels] = await Promise.all([
             createRadixSortPipelines(device, scan, this.label),
             ...KERNELS.map((entryPoint) =>

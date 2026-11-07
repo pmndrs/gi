@@ -16,6 +16,7 @@ import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-p
 import type { EnvironmentDescriptor } from '../../../../packages/ddgi-core/src/platform/contract/scene.ts';
 import { DDGITechnique, type DDGITechniqueOptions } from '../../../../packages/ddgi-core/src/techniques/ddgi/ddgi-technique.ts';
 import { DEFAULT_WARM_UP_PASSES } from '../../../../packages/ddgi-core/src/techniques/ddgi/settings.ts';
+import type { MeshTreeOptions } from '../../../../packages/ddgi-core/src/platform/trace/ray-queries.ts';
 import { ThreeGI } from '../../../../packages/ddgi-three/src/three-gi.ts';
 import { loadScene, type LoadedScene } from '../../../../apps/viewer/src/scene/load-scene.ts';
 import type { SceneManifest } from '../../../../scenes/src/manifest.ts';
@@ -67,6 +68,8 @@ export async function startViewerScene(
         readonly prepareScene?: (loaded: LoadedScene) => void;
         /** The technique's fixed options (the direct-light path, say); its defaults otherwise. */
         readonly technique?: DDGITechniqueOptions;
+        /** How the platform makes mesh trees (T2.12); its defaults otherwise. */
+        readonly meshTrees?: MeshTreeOptions;
     },
 ): Promise<ViewerScene> {
     const loaded = await loadScene(manifest, () => {});
@@ -78,7 +81,7 @@ export async function startViewerScene(
     camera.lookAt(...bookmark.target);
     camera.updateMatrixWorld();
 
-    const platform = new GIPlatformImpl(device, { label: options.label, gpuTiming: options.gpuTiming });
+    const platform = new GIPlatformImpl(device, { label: options.label, gpuTiming: options.gpuTiming, meshTrees: options.meshTrees });
     const volume = manifest.volume;
     const ddgi = platform.addTechnique(new DDGITechnique({ volume: { center: volume.center, size: volume.size, spacing: volume.probeSpacing }, warmUpPasses: 0 }, options.technique));
     platform.setOutput(ddgi);
