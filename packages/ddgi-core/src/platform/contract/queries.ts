@@ -78,6 +78,8 @@ export interface RayQueries {
     /**
      * Trace `count` rays from a storage buffer of `GiRay` into a storage buffer
      * of `GiHitRecord` (or of `u32` 0/1 for `any`). Recorded into the given encoder.
+     * Only for a technique whose `requirements.rayBatches` is true: the batch
+     * kernels are compiled in `prepare` for such techniques only, never on first use.
      */
     encodeBatch(
         encoder: GPUCommandEncoder,
