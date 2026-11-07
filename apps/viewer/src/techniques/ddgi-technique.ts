@@ -357,6 +357,11 @@ export class DdgiTechnique extends ScenePassTechnique {
         this.threeGI?.markChanged(object);
     }
 
+    /** Whether this DDGI runs with its sun layer (its technique's `sun layer` counter, T2.6b). */
+    get sunLayerOn(): boolean {
+        return this.ddgi?.counters['sun layer'] === 1;
+    }
+
     /** Probes DDGI updated in its latest frame. */
     get probesUpdated(): number {
         return this.ddgi?.counters[PROBES_UPDATED_COUNTER] ?? 0;

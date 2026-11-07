@@ -268,8 +268,10 @@ export class LightEditor {
     /** Once a frame: markers follow their lights (motions move them) and show their colour. */
     update(): void {
         for (const entry of this.lights) {
-            if (entry.marker && entry.marker !== this.controls.object) this.refreshMarker(entry);
-            else if (entry.marker) this.refreshMarkerLook(entry);
+            if (!entry.marker) continue;
+            // A marker being dragged leads its light; every other marker follows its light (motions move them).
+            if (this.controls.dragging && entry.marker === this.controls.object) this.refreshMarkerLook(entry);
+            else this.refreshMarker(entry);
         }
     }
 
@@ -318,8 +320,8 @@ export class LightEditor {
         marker.visible = this.helpersShown;
     }
 
-    /** The gizmo moved a marker: its light follows (a spot's target follows its aim). */
-    private followMarker(): void {
+    /** The chosen light follows its marker (the gizmo moved it); a spot's target follows its aim. */
+    followMarker(): void {
         const entry = this.selected;
         const marker = entry?.marker;
         if (!entry || !marker) return;

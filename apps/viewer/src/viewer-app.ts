@@ -392,8 +392,8 @@ export class ViewerApp {
             onScene: (id: string) => {
                 const manifest = this.manifests.find((candidate) => candidate.id === id);
                 if (!manifest) return;
-                // Each scene opens at its own exposure.
-                this.url = { ...this.url, camera: null, freeCamera: null, ev: null };
+                // Each scene opens at its own exposure, with its own sun and no motion playing.
+                this.url = { ...this.url, camera: null, freeCamera: null, ev: null, timeOfDay: null, motion: null };
                 void this.openScene(manifest, null);
             },
             onBookmark: (index: number) => {
@@ -846,7 +846,10 @@ export class ViewerApp {
         // The reference loads in the background; its label follows.
         this.updateWipeLabels();
         const baking = this.core.activeTechniques().find((technique) => !technique.ready);
-        this.statusPill.textContent = baking ? `${TECHNIQUE_LABELS[baking.id]}: ${baking.describe()}` : '';
+        const meter = this.lighting?.meter;
+        // The meter's test mode says so on the picture too, so it is never mistaken for the normal picture.
+        if (meter?.running) this.statusPill.textContent = `Response meter: ${meter.describe(now)}`;
+        else this.statusPill.textContent = baking ? `${TECHNIQUE_LABELS[baking.id]}: ${baking.describe()}` : '';
     }
 
     // -- lights, motions, time of day, light groups, the response meter -----
@@ -1084,23 +1087,29 @@ export class ViewerApp {
         }
     }
 
-    /** The lighting controls as things are now (the chosen light, the motion, time of day, groups, the meter). */
-    private refreshLightingControls(): void {
+    /**
+     * The lighting controls as things are now: with `everything`, the chosen light's sliders
+     * and the group weights too (after a choice, a gizmo move or a scene change). The
+     * periodic refresh leaves those alone, so a slider being dragged isn't written over.
+     */
+    private refreshLightingControls(everything = true): void {
         const lighting = this.lighting;
         const controls = this.lightingControls;
         if (!lighting || !controls) return;
         const { editor, player, timeOfDay, meter } = lighting;
-        const entry = editor.selected;
-        const index = entry ? editor.lights.indexOf(entry) : null;
-        controls.setLight(index, entry ? { kind: entry.kind, settings: editor.settings(entry) } : null, entry ? (entry.original.intensity > 0 ? entry.original.intensity : entry.onIntensity) : 1);
-        controls.setGizmoMode(editor.gizmoMode);
+        if (everything) {
+            const entry = editor.selected;
+            const index = entry ? editor.lights.indexOf(entry) : null;
+            controls.setLight(index, entry ? { kind: entry.kind, settings: editor.settings(entry) } : null, entry ? (entry.original.intensity > 0 ? entry.original.intensity : entry.onIntensity) : 1);
+            controls.setGizmoMode(editor.gizmoMode);
+            const ddgiShown = this.url.gi !== 'off' && (this.url.wipe ? this.url.wipe.includes('ddgi') : this.url.technique === 'ddgi');
+            controls.setGroups(this.url.lightGroups, this.groupWeights, this.environmentWeight, ddgiShown);
+        }
         const now = performance.now();
         const playing = player.playing;
         controls.setMotionPlaying(playing?.id ?? null, playing ? `Playing ${playing.label}: ${player.seconds(now).toFixed(1)} s` : '');
         controls.setTimeOfDayEnabled(timeOfDay.enabled, timeOfDay.playing);
         if (timeOfDay.playing) controls.setTime(timeOfDay.hour, timeOfDay.dayOfYear);
-        const ddgiShown = this.url.gi !== 'off' && (this.url.wipe ? this.url.wipe.includes('ddgi') : this.url.technique === 'ddgi');
-        controls.setGroups(this.url.lightGroups, this.groupWeights, this.environmentWeight, ddgiShown);
         controls.setMeterStatus(meter.describe(now), meter.running);
         controls.setMeterResult(meter.result, meter.live);
     }
@@ -1114,7 +1123,7 @@ export class ViewerApp {
         // A played day writes its time into the link when it stops.
         if (lighting.timeOfDay.playing) this.scheduleUrlUpdate();
         this.regionPicker.refresh();
-        this.refreshLightingControls();
+        this.refreshLightingControls(false);
     }
 
     // -- loading and failure -----------------------------------------------

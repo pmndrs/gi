@@ -105,7 +105,7 @@ export const HELP = {
         "Scripted light movements from the scene file. Light sweep: a lamp gliding at walking pace (1 metre a second) and back. Light step: the same lamp jumping between two places every 3 seconds, to see how fast GI catches up. Choose one, then press Play.",
     motionPlay: 'Plays the chosen movement, over and over. Stop puts the lamp back where it was.',
     timeOfDayToggle:
-        "Moves the sun with the hour and the day of the year below; the sky and GI follow. Turning it on also turns on DDGI's sun layer, which makes changes of the sun's brightness and colour show in GI at once; DDGI starts over once for that (a few seconds; Sponza about 10). The time it opens at puts the sun exactly where the scene has it.",
+        "Moves the sun with the hour and the day of the year below; the sky and GI follow. Turning it on also turns on DDGI's sun layer, which makes changes of the sun's brightness and colour show in GI at once; DDGI starts over for that, when you turn it on and again when you turn it off (a few seconds; Sponza about 10). Moving a slider turns it on. The time it opens at puts the sun exactly where the scene has it.",
     timeOfDayHour:
         'The time of day (sun time: the sun is highest at 12:00). The sun moves along its real path for the chosen day. Near sunrise and sunset the sky model stops at 5 degrees above the horizon, so the viewer fades the sun and sky out towards night instead.',
     timeOfDayDay: 'The day of the year, which sets how high the sun climbs: highest around 21 June, lowest around 21 December.',
