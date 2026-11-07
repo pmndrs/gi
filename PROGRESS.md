@@ -31,7 +31,7 @@ Did (`m2-t2.3` up to the PROGRESS commit; `m2` merged at 7e88933, PROGRESS and D
 - One fix attempt, a shadow-ray roulette against the ray's bounce light. Check 1 held, but it bought nothing on `sponza-candles` (6.15 against 5.65 µs), so it was taken out. DECISIONS 2026-11-07: a known miss at 2.2-2.5×.
 - `ddgi-light-grid-cost` now warms the field first. `hit-shading-many-lights` takes `VITE_DDGI_GRID_CELLS`.
 
-Verified (RTX, bench lock): check 1 at 1,024 cells fails (97.9% at K = 1), so the default stays 2,048.
+Verified (RTX, bench lock): check 1 at 1,024 cells fails (97.9% at K = 1), so the default stays 2,048. Lint and typecheck pass. Unit tests: 1,070 of 1,077 under another lane's CPU load (7 time-outs in tool tests). Run alone, 146 of 147 pass; the one left is `tools/assets/fetch.test.ts`, the known flaky test under load (TASKS, carried to M3), which this task doesn't touch.
 
 Not verified: VALID timings for checks 2 and 4, and check 3 at 2,048 cells. Every heavy run, including the retries after 13-15 minutes of cooling (45-48 °C starts), read INVALID: SW thermal slowdown in 60-100% of loaded samples (NOTES).
 
