@@ -31,7 +31,6 @@ import type { GpuTimerScope } from '../contract/timing.ts';
 import type { BindingSlot, ComputeKernel, KernelBuilder, WgslModule } from '../contract/wgsl.ts';
 import { SHADER_STAGE_COMPUTE } from '../kernel-builder.ts';
 import type { PlatformScene, SceneUpload, UploadedMesh } from '../scene/platform-scene.ts';
-import { packedIndices, packedPositions } from '../scene/mesh-packing.ts';
 import { GrowableStorage, type ResidentRange } from './growable-storage.ts';
 import { BVH_NODE_BYTES, TOP_LEVEL_HEADER_BYTES, TRACE_STACK_SIZE, TRIANGLE_BYTES } from './layout.ts';
 import type { MeshBvh } from './mesh-bvh.ts';
@@ -283,7 +282,7 @@ export class PlatformRayQueries implements RayQueries {
             this.topLevelStale = true;
         }
         for (const mesh of upload.meshesUploaded) {
-            this.gpuTopLevel?.meshUploaded(mesh.slot, mesh.packed.bounds);
+            this.gpuTopLevel?.meshUploaded(mesh.slot, mesh.layout.bounds);
             this.startBuild(mesh);
         }
 
@@ -404,8 +403,8 @@ export class PlatformRayQueries implements RayQueries {
 
     private startBuild(mesh: UploadedMesh): void {
         const generation = this.bumpGeneration(mesh.slot);
-        // Compact copies: the packed words also hold normals and uvs, and the scene drops them after upload.
-        const geometry = { positions: packedPositions(mesh.packed).slice(), indices: packedIndices(mesh.packed) };
+        // The scene's own copies of the host's arrays, handed over: the worker builder may transfer them.
+        const geometry = mesh.geometry;
         this.pendingBuilds++;
         const finished = (bvh: MeshBvh | null): void => {
             this.pendingBuilds--;

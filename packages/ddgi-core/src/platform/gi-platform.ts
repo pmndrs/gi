@@ -265,8 +265,13 @@ export class GIPlatformImpl implements GIPlatform {
         // included), so a host may copy its scene in while they compile: call `prepare()`,
         // let the task end (Chrome sends WebGPU calls to its GPU process when the
         // JavaScript task ends; NOTES), then describe the scene, then await.
+        //
+        // The mesh packing kernel is asked for first (T2.13): it is small, so it is ready
+        // early, and from this call on the scene stages meshes' raw arrays for it, so a host
+        // copying its scene in now uploads it while the rest compiles.
+        const packingReady = this.sceneCopy.prepareGpuPacking();
         const rayBatches = this.rayBatchesForTools || this.attached.some(({ technique }) => technique.requirements.rayBatches === true);
-        const platformReady = Promise.all([this.shade.prepare(), this.rays.prepare(this.kernels, { batches: rayBatches })]);
+        const platformReady = Promise.all([packingReady, this.shade.prepare(), this.rays.prepare(this.kernels, { batches: rayBatches })]);
         const techniquesReady = (async () => {
             for (const technique of this.encodeOrder()) await technique.prepare();
         })();
@@ -291,7 +296,7 @@ export class GIPlatformImpl implements GIPlatform {
             this.timer.beginFrame(this.frame);
         }
 
-        const upload = this.sceneCopy.encode(encoder);
+        const upload = this.sceneCopy.encode(encoder, this.timer ?? undefined);
         this.rays.update(encoder, upload, this.timer ?? undefined);
         // Settings, the sky's bake when the environment changed, and the light grid when there are many
         // point and spot lights. No technique traces in a paused frame, so the grid is not built then.
