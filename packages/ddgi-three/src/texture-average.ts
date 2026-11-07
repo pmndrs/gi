@@ -117,7 +117,10 @@ export function readLinearPixels(texture: Texture): LinearPixels | undefined {
         const targetWidth = Math.max(1, Math.round(width * scale));
         const targetHeight = Math.max(1, Math.round(height * scale));
         const canvas = new OffscreenCanvas(targetWidth, targetHeight);
-        const context = canvas.getContext('2d');
+        // A canvas kept on the CPU: without the hint Chrome draws on the GPU, and every
+        // getImageData then waits for the GPU to finish, so on a busy GPU each image could
+        // block the main thread for many milliseconds (T2.13, NOTES).
+        const context = canvas.getContext('2d', { willReadFrequently: true });
         if (!context) return undefined;
         context.imageSmoothingQuality = 'high';
         context.drawImage(image as CanvasImageSource, 0, 0, targetWidth, targetHeight);
