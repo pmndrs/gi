@@ -390,7 +390,7 @@ Status: **started 2026-11-06** on branch `m2` (from main at 3d682dc; M1 merged a
 | T2.3 | Many-light sampling: the light grid | implementer | M | T2.1, T2.2 | done (merged into `m2` 2026-11-07 after Opus review; check 2 a known miss at 2.2–2.5×; checks 3 and 4 owe a VALID run, DECISIONS) |
 | T2.7 | Native harness: manifest motions, texture sky, animated sun | native-runner | M | T2.1 | todo |
 | T2.8 | Viewer: gizmos, sliders, groups, time of day, motions, a response meter, the native compare page | implementer | M | T2.4b, T2.5, T2.6b, T2.7 | todo |
-| T2.12 | Fast first GI: GPU H-PLOC/LBVH trees at load, tinybvh swapped in per mesh (lower priority) | implementer | M | B1, B2 | todo |
+| T2.12 | Fast first GI: GPU H-PLOC/LBVH trees at load, tinybvh swapped in per mesh (lower priority) | implementer | M | B1, B2 | active (implementer, 2026-11-08; worktree `webgpu-ddgi-m2-t212`, branch `m2-t2.12`) |
 | T2.13 | Scene copy off the main thread (lower priority) | implementer | M | none | todo |
 | T2.14 | Compile only what's configured (`encodeBatch` on first use, the sky kernel's compile) (lower priority) | implementer | S | T2.6a | done (2026-11-08; check 2 met on 14 scenes; check 1, the cold Cornell start, owed to T2.10) |
 | T2.16 | Re-render the noisy viewing-only reference bookmarks (M1 note), or mark them viewing-only in the viewer (lower priority) | wrangler, then gpu-tester | S | none | todo |
