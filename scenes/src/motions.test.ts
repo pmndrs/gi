@@ -65,6 +65,12 @@ describe('the motions format', () => {
     it('names what is wrong', () => {
         const errors = (motions: unknown) => validateManifest(withLamp(motions)).errors.join('\n');
         expect(errors([{ ...sweep([1, 1, 1], [2, 1, 1], 1), target: 'light:nobody' }])).toContain('no light has the label "nobody"');
+        expect(errors([{ ...sweep([1, 1, 1], [2, 1, 1], 1), target: undefined }])).toContain('must be "light:<label>"');
+        expect(errors([{ ...sweep([1, 1, 1], [2, 1, 1], 1), target: 'light:' }])).toContain('must be "light:<label>"');
+        // Labels are optional and may repeat: a target naming two lights is refused.
+        const twoLamps = withLamp([sweep([1, 1, 1], [2, 1, 1], 1)]);
+        (twoLamps.lights as unknown[]).push({ type: 'point', label: 'lamp', color: [1, 1, 1], intensity: 1, position: [2, 1, 1], range: 0 });
+        expect(validateManifest(twoLamps).errors.join('\n')).toContain('2 lights have the label "lamp"');
         expect(errors([{ ...sweep([1, 1, 1], [2, 1, 1], 1), target: 'lamp' }])).toContain('must be "light:<label>"');
         expect(errors([sweep([1, 1, 1], [2, 1, 1], 1), sweep([1, 1, 1], [2, 1, 1], 1)])).toContain('is used twice');
         expect(errors([{ ...sweep([1, 1, 1], [2, 1, 1], 1), keyframes: [{ t: 0, position: [1, 1, 1] }] }])).toContain('at least two keyframes');

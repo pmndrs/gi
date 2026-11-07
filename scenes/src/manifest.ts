@@ -487,9 +487,12 @@ function validateMotions(value: Record<string, Json>, c: ErrorCollector): void {
         if (typeof motion.loop !== 'boolean') c.add(`${path}.loop`, 'must be true or false');
         if (motion.interpolation !== undefined && motion.interpolation !== 'linear' && motion.interpolation !== 'step') c.add(`${path}.interpolation`, 'must be "linear" or "step"');
         const target = typeof motion.target === 'string' ? /^light:(.+)$/.exec(motion.target) : null;
-        const light = target ? lights.find((candidate) => candidate.label === target[1]) : undefined;
+        // Labels are optional and need not be unique, so the target must name exactly one light.
+        const named = target ? lights.filter((candidate) => candidate.label === target[1]) : [];
+        const light = named.length === 1 ? named[0] : undefined;
         if (!target) c.add(`${path}.target`, 'must be "light:<label>", naming one of the manifest\'s lights by its label');
-        else if (!light) c.add(`${path}.target`, `no light has the label "${target[1]}"`);
+        else if (named.length === 0) c.add(`${path}.target`, `no light has the label "${target[1]}"`);
+        else if (named.length > 1) c.add(`${path}.target`, `${named.length} lights have the label "${target[1]}"; a motion must name exactly one`);
         if (!Array.isArray(motion.keyframes) || motion.keyframes.length < 2) {
             c.add(`${path}.keyframes`, 'must have at least two keyframes');
             return;
