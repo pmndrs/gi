@@ -255,7 +255,8 @@ export class ViewerCore {
             ddgi.dispose();
             this.techniques.delete('ddgi');
             this.prepareStarts.delete(ddgi);
-            if (this.loaded) {
+            const shown = this.layout.left === 'ddgi' || this.layout.right === 'ddgi';
+            if (this.loaded && shown) {
                 // Create it again now, with the same environment (time of day), so it starts at once.
                 this.getTechnique('ddgi');
                 this.ddgi?.setEnvironment(environment);

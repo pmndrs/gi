@@ -35,13 +35,14 @@
  * the T2.4b page's definitions.
  *
  * A camera move cancels it (the picture would change for another reason).
+ * When it ends, done or not, the step's light is put back as it was.
  */
 
 import type { Light } from 'three';
 import type { ManifestMotion } from '../../../../scenes/src/manifest';
 import { responseCsv, stepMarks, type ResponseSample, type StepMarks } from '../stats/response-curve';
 import type { DdgiTechnique } from '../techniques/ddgi-technique';
-import type { MotionPlayer } from './motion-player';
+import { restoreLight, saveLight, type MotionPlayer, type SavedLight } from './motion-player';
 
 /** The test mode's budget, GPU ms a frame (m2-lights.md §7: "the budget raised to 16 ms"). */
 export const SETTLE_BUDGET_MS = 16;
@@ -97,6 +98,8 @@ export class ResponseMeter {
     /** The jump measured: from keyframe `jump` to `jump + 1`. */
     private jump = 0;
     private light: Light | null = null;
+    /** The step's light as it was before the measurement, to put back. */
+    private savedLight: SavedLight | null = null;
     /** Frames counted in the current phase. */
     private phaseFrames = 0;
     private stepStartedAt = 0;
@@ -176,6 +179,8 @@ export class ResponseMeter {
         this.userBudgetMs = ddgi.currentSettings.budgetMs;
         const size = this.context.drawingBufferSize();
         this.usedRegion = this.region ?? { x: 0, y: 0, width: size.width, height: size.height };
+        const light = this.context.player.lightFor(motion);
+        this.savedLight = light ? saveLight(light) : null;
         this.light = this.context.player.pose(motion, motion.keyframes[this.jump].t);
         if (this.light) this.context.markChanged(this.light);
         this.enter('settle-before', now);
@@ -186,6 +191,7 @@ export class ResponseMeter {
     cancel(reason?: string): void {
         if (!this.running) return;
         this.context.ddgi()?.setBudgetOverride(null);
+        this.putLightBack();
         if (reason) this.fail(reason);
         else this.enter('idle', 0);
     }
@@ -229,6 +235,7 @@ export class ResponseMeter {
                     this.settleSeconds = seconds;
                     this.settledInTime = stable;
                     ddgi.setBudgetOverride(null);
+                    this.putLightBack();
                     this.enter('reading', now);
                     void this.finish();
                 }
@@ -325,6 +332,16 @@ export class ResponseMeter {
         } catch (error) {
             this.fail(error instanceof Error ? error.message : String(error));
         }
+    }
+
+    /** The step's light back as it was before the measurement. */
+    private putLightBack(): void {
+        const light = this.light;
+        const saved = this.savedLight;
+        this.savedLight = null;
+        if (!light || !saved) return;
+        restoreLight(light, saved);
+        this.context.markChanged(light);
     }
 
     /** The step's name in the CSV: the motion and its jump. */

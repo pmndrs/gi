@@ -26,11 +26,30 @@ import { motionState, type ManifestMotion } from '../../../../scenes/src/manifes
 import type { LoadedScene } from '../scene/load-scene';
 
 /** A light's state a motion can change, to put it back afterwards. */
-interface SavedLight {
+export interface SavedLight {
     position: [number, number, number];
     intensity: number;
     color: [number, number, number];
     inScene: boolean;
+}
+
+/** What a motion (or the response meter's step) may change on a light. */
+export function saveLight(light: Light): SavedLight {
+    return {
+        position: [light.position.x, light.position.y, light.position.z],
+        intensity: light.intensity,
+        color: [light.color.r, light.color.g, light.color.b],
+        inScene: light.parent !== null,
+    };
+}
+
+/** Puts a light back as `saveLight` found it (out of the scene again if it was out). */
+export function restoreLight(light: Light, saved: SavedLight): void {
+    light.position.set(...saved.position);
+    light.intensity = saved.intensity;
+    light.color.setRGB(...saved.color);
+    updateLightMatrices(light);
+    if (!saved.inScene) light.removeFromParent();
 }
 
 export class MotionPlayer {
@@ -74,12 +93,7 @@ export class MotionPlayer {
         const motion = this.motions.find((candidate) => candidate.id === motionId);
         if (!motion) return;
         const light = this.lightFor(motion)!;
-        const saved: SavedLight = {
-            position: [light.position.x, light.position.y, light.position.z],
-            intensity: light.intensity,
-            color: [light.color.r, light.color.g, light.color.b],
-            inScene: light.parent !== null,
-        };
+        const saved = saveLight(light);
         this.current = { motion, light, saved, startedAt: now };
         this.pausedAt = null;
         addToScene(this.loaded, light);
@@ -104,12 +118,7 @@ export class MotionPlayer {
         this.current = null;
         this.pausedAt = null;
         if (!current) return;
-        const { light, saved } = current;
-        light.position.set(...saved.position);
-        light.intensity = saved.intensity;
-        light.color.setRGB(...saved.color);
-        updateLightMatrices(light);
-        if (!saved.inScene) light.removeFromParent();
+        restoreLight(current.light, current.saved);
     }
 
     /** Sets the light to the motion's state at `now`. Call once a frame, before GI's update. */

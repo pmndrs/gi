@@ -173,6 +173,14 @@ async function runMotions(core: ViewerCore, failures: string[]): Promise<MotionR
         const ddgi = await openScene(core, sceneId, null);
         const loaded = core.loaded!;
         const player = new MotionPlayer(loaded);
+        // The picture's own change with nothing moving, over a motion's time and sampling: once, on the settled scene
+        // (after a motion stops, the lamp is put back and the picture moves while GI follows).
+        const stillMean = await pictureMean(core, ddgi);
+        let stillChange = 0;
+        for (let frame = 1, startedStill = performance.now(); performance.now() - startedStill < MOTION_SECONDS * 1000; frame++) {
+            await core.renderThroughLoop();
+            if (frame % 15 === 0) stillChange = Math.max(stillChange, Math.abs((await pictureMean(core, ddgi)) / stillMean - 1));
+        }
         for (const motionId of ['light-sweep', 'light-step']) {
             const motion = player.motions.find((candidate) => candidate.id === motionId);
             if (!motion) {
@@ -182,13 +190,9 @@ async function runMotions(core: ViewerCore, failures: string[]): Promise<MotionR
             const light = player.lightFor(motion)!;
             const before = light.position.clone();
             const beforeIntensity = light.intensity;
+            // After the previous motion its lamp is back: let GI settle there first.
+            for (let frame = 0; frame < 240; frame++) await core.renderThroughLoop();
             const meanBefore = await pictureMean(core, ddgi);
-            // The picture's own change with nothing moving, over the same time and sampling.
-            let stillChange = 0;
-            for (let frame = 1, startedStill = performance.now(); performance.now() - startedStill < MOTION_SECONDS * 1000; frame++) {
-                await core.renderThroughLoop();
-                if (frame % 15 === 0) stillChange = Math.max(stillChange, Math.abs((await pictureMean(core, ddgi)) / meanBefore - 1));
-            }
             let worst = 0;
             let pictureChange = 0;
             let frames = 0;
