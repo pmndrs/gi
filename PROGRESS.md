@@ -21,6 +21,20 @@ Rules:
 
 ---
 
+## 2026-11-08 · T2.12 review and merge · lead (opus)
+Did: An Opus review passed T2.12 with notes. I sent the notes back to the implementer, who fixed them in b11de2a:
+- SPEC's "no extra submits and no readbacks" now applies frame after frame, with the one load-time build as the exception (DECISIONS, for Dennis to confirm).
+- The node-buffer headroom applies only when placing GPU trees.
+- Check 1 is judged in series.
+- The minor doc fixes.
+The implementer merged `m2` (T2.6b) into the branch and timed check 1. I read the SPEC change and the DECISIONS entries, then merged the branch into `m2`. T2.12 is done.
+Verified:
+- Check 1, RTX 3060, `--cpu-timed`, VALID (46 °C start): 2.437 / 1.866 / 1.902 s, median 1.902 s against 2.0. Of that, `prepare` takes 1.12 s, including the 1.10 s scene copy, which T2.13 is shrinking.
+- The review reproduced checks 2a, 3 and 4 and the recompile checks. It also found that the 16–23 s scene copies in the implementer's first runs were contention (GPU-backed texture averages waiting on another project's GPU job), not a regression: 1.39 s on the branch against 1.59 s on `m2`, quiet GPU.
+- Me on `m2` after the merge: typecheck and lint clean, 1,097 unit tests pass.
+Not verified: Intel UHD after the merges, and `ddgi-session-recompiles` beyond Sponza after the merge. Both are in T2.10's lines.
+Next: T2.13 merges after this and moves T2.12's `packedGeometryView` onto `mesh.geometry`. T2.10 measures H-PLOC alone on Bistro exterior, for the optional-swap proposal (lead: not yet).
+
 ## 2026-11-08 · T2.12 review fixes, `m2` merged, check 1 timed · implementer (opus)
 Did (after the Opus review; b11de2a, 2de4893, merge 66f6653 of `m2` 423fe75):
 - **SPEC promise:** SPEC.md, platform.md and the code comments now say "no extra submits and no readbacks, frame after frame". At load, the first-tree build submits once and reads back a few words of stats per mesh. DECISIONS has this as a departure from SPEC, for Dennis to confirm, beside the accepted own-submit entry.
