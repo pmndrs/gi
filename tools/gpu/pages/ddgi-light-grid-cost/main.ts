@@ -12,7 +12,7 @@
  *   compares `sponza-candles` against `sponza` lit by its sun: run the page
  *   once per scene (VITE_DDGI_SCENES=sponza, then sponza-candles) and divide.
  * - **K:** the batches run once per value in VITE_DDGI_K (default 1,2,4;
- *   `maxShadowedLightsPerHit`), for the noise-against-cost record. On
+ *   `lightGridShadowedLightsPerHit`), for the noise-against-cost record. On
  *   `sponza` (a sun only) K changes nothing.
  * - **The grid's build** (check 3, ≤ 0.1 ms): `gi/light-grid`'s median over
  *   the same frames. `sponza` has no grid (one sun).

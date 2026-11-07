@@ -47,11 +47,11 @@
  * design's sketch): with 1,024 candles of the same power, 16 random
  * candidates per reservoir find the candle next to a hit 1.6% of the time,
  * so a point lit mostly by one nearby candle is very noisy. Weighing every
- * light per cell costs cells x lights evaluations (4,096 x 1,024 = 4.2 M a
- * frame on Sponza), which the GPU does in a few hundredths of a ms, and the
+ * light per cell costs cells x lights evaluations (2,048 x 1,024 = 2.1 M a
+ * frame on Sponza), which the GPU does in about 0.1 ms, and the
  * dominant candle is in the cell's picks almost every frame. The cost grows
  * with the light count; above some thousands of lights a light tree or
- * candidate subsets are the next step (DECISIONS 2026-11-06).
+ * candidate subsets are the next step (DECISIONS 2026-11-07).
  *
  * **Why the grid is rebuilt every frame:** its picks are random. A grid kept
  * fixed would make the field converge to that one draw instead of the true
