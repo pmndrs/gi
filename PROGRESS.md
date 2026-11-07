@@ -21,6 +21,33 @@ Rules:
 
 ---
 
+## 2026-11-08 · T2.12 review fixes, `m2` merged, check 1 timed · implementer (opus)
+Did (after the Opus review; b11de2a, 2de4893, merge 66f6653 of `m2` 423fe75):
+- **SPEC promise:** SPEC.md, platform.md and the code comments now say "no extra submits and no readbacks, frame after frame". At load, the first-tree build submits once and reads back a few words of stats per mesh. DECISIONS has this as a departure from SPEC, for Dennis to confirm, beside the accepted own-submit entry.
+- **Node headroom:** `GrowableStorage.grow` takes `headroom` per call, and only placing GPU trees asks for it (1/8, used when it is larger than doubling). The doc says exactly that. tinybvh-only growth is exact again: Sponza 194.0 MB, as M1. `AccelerationMemory.nodesInUse` added. Unit tests: storage growth; a GPU-tree jump gets headroom and tinybvh doesn't.
+- **Check 1:** judged in series, per the ruling. `GIVolume.start` can't compile three's materials for the host: hosts draw through their own passes and MRT targets, and `compileAsync` culls against its camera (NOTES). `ddgi-batch-cost` compiles in series by default; `VITE_DDGI_THREE_COMPILE=when-light-joins` gives the overlapped number. The DECISIONS entry is rewritten to the ruling.
+- **Decision (b)** is noted as accepted. The swap stays on (decision (d) ruling).
+- `ddgi-tree-swap` gains step 5, the natural swap: default options, frames until tinybvh is all in.
+- NOTES now gives −0.0019%, and `firstTreeBuilder` is in the platform.md revision.
+- Merge: PROGRESS, DECISIONS and platform.md kept both sides; `viewer-scene.ts` keeps `settings` and `meshTrees`. PROGRESS has 111 `## ` headings = 109 + 110 − 108, and no markers are left.
+
+Verified (RTX 3060, Chrome 157, bench lock; the machine quiet, CPU 17-34%, RTX idle at 46 C before each run):
+- **Check 1 met, VALID** (`--cpu-timed`, started at 46 C, 0% thermal in 71 loaded samples, 780 MHz). Sponza handoff to first GI drawn, cold, in series: 2.437 / 1.866 / 1.902 s, median **1.902 s** (bar 2.0).
+  - The median run's stages: `prepare` 1,122 ms (scene copy 1,099, compiles done 8 ms later), first GI frame 296, first trees 10 (GPU build 82 ms to its stats; 449 of 449 meshes on GPU trees), placing 42, first warm-up step 99, three's first GI frame 332 (its compile 316, in series).
+  - With the compile started when the light joins (one run, information only): **1.824 s**; the draw still waited 193 ms of the compile's 416.
+  - tinybvh's trees were all in 3.8-4.7 s after the handoff.
+  - Rows: `timing.csv` (2de4893, `note/timing_valid,1`). The earlier INVALID set (ac325fb) stays as the shared-GPU record.
+- **Post-merge `ddgi-tree-swap` on Sponza, VALID** (45 C, 0% thermal, 83 samples):
+  - swap frame −0.0019%, 0 recompiles;
+  - tree passes after the swap 0.980× tinybvh-only's, on GPU trees 1.018×;
+  - memory: tinybvh-only nodes 194.0 MB; held swap 216.9 MB (194.0 in use);
+  - **natural swap:** 410 trees swapped over 83 frames, 35 ms to 2.09 s after the first trees (39 small meshes took tinybvh's first). The node buffer stayed at **216.8 MB** (194.0 in use) and never doubled.
+- Post-merge `trace-oracle` passes (every variant, 0 rays slipped), and `ddgi-session-recompiles` on Sponza with groups off and on gives 0 recompiles, control 1.
+- lint, typecheck, 1,097 unit tests pass.
+
+Not verified: the Intel UHD after the merge (it passed before; the merge brought T2.6b's code); `ddgi-session-recompiles` on scenes other than Sponza after the merge.
+Next: none for T2.12 beyond the lead's review. T2.13 adapts `packedGeometryView` when it merges.
+
 ## 2026-11-08 · T2.12 fast first GI: GPU H-PLOC trees at load, tinybvh swapped in · implementer (opus)
 Did (branch `m2-t2.12` from `m2` 536fe41; 4ca5355 … 3d0d909, then this entry):
 - `trace/gpu-mesh-trees.ts` (new): the scene's meshes, as first loaded, built with H-PLOC in one batch (split only if the device's buffers need it), in a command buffer the platform submits itself, then a stats readback (DECISIONS 2026-11-08). `trace/ray-queries.ts`: per-mesh tree states; usable GPU trees are copied into the shared buffers; tinybvh's tree replaces each as the worker finishes (one range and one mesh-table entry, no recompile). A mesh's first tree is whichever arrives first. Refused, too deep (> 47 levels) or too big: the mesh waits for tinybvh. Without subgroups, or if the H-PLOC kernels fail to compile: tinybvh only. `building` now means "first trees"; `refining`, `whenRefined()`, `meshTreeCounts`, `stats.counters['platform mesh trees']`. Tools: `GIPlatformImplOptions.meshTrees` (`gpuFirst`, `holdRefinements` with `releaseRefinements()`, `gpuMaxDepth`).
