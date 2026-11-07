@@ -21,6 +21,19 @@ Rules:
 
 ---
 
+## 2026-11-08 · T2.14 review fixes and `m2` merge · implementer (opus)
+Did (branch `m2-t2.14`; 741a713, merge 13344d1 of `m2` bcb1af8, 784fa0e, fb4c0c4, then docs):
+- Must-fix: `ThreeGI` takes `prepare`'s promise as `preparing`. The GI light joins the scene when it resolves, so an `updateOnRender`-only host gets GI. A rejected `prepare` is thrown by the next `update`, with a warning. Without `preparing`, an unprepared platform is refused as before. `GIVolume.start` and `ddgi-batch-cost` pass it. Unit tests: refusal, copy-then-light, render-only host, rejection.
+- Should-fix: `encodeBatch` before any `prepare` throws `GINotReadyError('preparing')`; the `rayBatches` message stays for a prepared platform that wasn't asked (unit test).
+- Merged `m2`: PROGRESS and DECISIONS conflicts kept both blocks; 106 `## ` headings (102 base + 1 + 3), no markers left.
+- `ddgi-session-recompiles`: 12 point lights added and removed, so the light grid switches on and off mid-session; frames with `gi/light-grid` reported per step; `VITE_DDGI_RENDER_EVERY` (0 = no three draws).
+Verified (RTX 3060 nvidia/ampere, Chrome 157 headless, bench lock, correctness only):
+- `platform-recompiles` passes.
+- `ddgi-session-recompiles`, one scene per run, light groups off and on: counter 0 after every step and control kernel 1 on cornell-box, two-room, sponza and bistro-interior. The grid ran in the 12-light step on each (16-18 of 20 frames). Also on `sponza-candles` (grid in 23 of 24 steps), run without three's draws: with them the page stopped answering DevTools for 30 s (NOTES).
+- typecheck and lint pass. Unit tests: 1,080 pass. One fails: `bench-lock.test.ts`'s nested-run test, because the GPU was at 89 C and the test waits for it to cool. It fails the same way on the code before the change (NOTES).
+Not verified: check 1 (still owed to a cold Cornell run on a quiet machine); the Intel UHD after these fixes; the viewer by hand.
+Next: T2.8, `sponza-candles` drawn in three (the stall above).
+
 ## 2026-11-07 · T2.14 compile only what's configured · implementer (opus)
 Did (branch `m2-t2.14` from `m2` 4468ddf; 5859876, 0dd91b6, 5e4e4c6, then this entry):
 - `rays.encodeBatch`'s two kernels compile in `prepare` only for a technique with `requirements.rayBatches` (contract `technique.ts`); tools that call it pass `GIPlatformImplOptions.rayBatches` (trace-oracle, tlas-oracle, platform-bench). Otherwise `encodeBatch` throws; it never compiles on first use. Top-level and batch kernels are asked for together (`ray-queries.ts`, `gi-platform.ts`).
