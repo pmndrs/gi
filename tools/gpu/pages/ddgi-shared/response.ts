@@ -164,6 +164,12 @@ export interface ConvergeOptions {
     /** Probes a frame while converging (every probe, or as many as fit). */
     readonly convergeUnits: number;
     readonly settleUnits: number;
+    /**
+     * The frame time of the settle frames, seconds (default 1/60): DDGI's
+     * history clock advances by it, so a comparison with a host running at
+     * another frame rate settles at that host's (T2.8, `viewer-lighting`).
+     */
+    readonly settleDeltaTime?: number;
 }
 
 /**
@@ -201,7 +207,7 @@ export async function convergeField(
     }
     if (!settled) throw new Error(`${label}: the view's mean did not settle within ${options.maxBlocks} blocks`);
     applyHysteresisMode(settings, defaults);
-    await runCameraFrames(device, platform, options.settleFrames, options.settleUnits, camera);
+    await runCameraFrames(device, platform, options.settleFrames, options.settleUnits, camera, options.settleDeltaTime);
     return viewMean();
 }
 

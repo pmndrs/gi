@@ -358,7 +358,7 @@ The defaults are `objectsPerFrame` 64 and `editChecksPerFrame` 8. The table show
 - The adapter's CPU time on a still frame is about 0.06–0.10 ms on Sponza and 0.11–0.15 ms on Bistro interior.
 - Bigger budgets find changes sooner and cost more per frame.
 
-By default `update` doesn't recompute world matrices: it reads the ones three's last render made. A move therefore reaches GI one frame late, which DDGI's blending over many frames hides. Recomputing them would make three do it twice per frame (1 ms on Bistro interior). `updateMatrixWorld: true` turns it on.
+By default `update` doesn't recompute world matrices: it reads the ones three's last render made. A move therefore reaches GI one frame late, which DDGI's blending over many frames hides. Recomputing them would make three do it twice per frame (1 ms on Bistro interior). `updateMatrixWorld: true` turns it on. A host that moves an object or light outside three's render (a gizmo, an animation step) and wants GI to see it in the same frame can call that object's `updateMatrixWorld()` right after the move, as the viewer's motion player does.
 
 ## Environment light counted twice
 

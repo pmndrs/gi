@@ -137,6 +137,13 @@ export abstract class ScenePassTechnique implements GiTechnique {
         const previousTarget = renderer.getRenderTarget();
         renderer.setRenderTarget(this.target);
         renderer.render(loaded.scene, this.camera);
+        // The light markers and gizmo over the picture, from a scene GI never sees (LoadedScene.helpers).
+        if (loaded.helpers.children.some((child) => child.visible)) {
+            const autoClear = renderer.autoClear;
+            renderer.autoClear = false;
+            renderer.render(loaded.helpers, this.camera);
+            renderer.autoClear = autoClear;
+        }
         renderer.setRenderTarget(previousTarget);
     }
 

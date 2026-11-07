@@ -1,0 +1,5 @@
+{
+    "description": "T2.8: the viewer's lighting controls on the viewer's own code. Check 1: the sweep and step motions run on two-room, point-light Cornell and Sponza (lamp on its script, DDGI's picture moves, recompiles 0); the other controls (light edits, light groups and weights, time of day with the sun layer) keep recompiles at 0; check 2: the response meter's CSV for two-room's step against the T2.4b page's measurement of the same step, within 2 frames.",
+    "timeoutMs": 2400000,
+    "manual": true
+}

@@ -15,7 +15,7 @@
  *    to measure three's PMREM on its own.
  */
 
-import { BackSide, BoxGeometry, EquirectangularReflectionMapping, HalfFloatType, LinearFilter, Mesh, RepeatWrapping, type Scene, type DataTexture } from 'three';
+import { BackSide, BoxGeometry, EquirectangularReflectionMapping, HalfFloatType, LinearFilter, Mesh, RepeatWrapping, type Scene, type DataTexture, type Texture } from 'three';
 import { EXRLoader } from 'three/addons/loaders/EXRLoader.js';
 import { cameraPosition, equirectUV, Fn, modelViewProjection, positionWorld, texture, vec4 } from 'three/tsl';
 import { NodeMaterial, type Node } from 'three/webgpu';
@@ -80,7 +80,8 @@ export function createSkyDome(sky: DataTexture): Mesh {
     })();
     // The view direction from whichever camera is drawing (cube cameras too).
     const viewDirection = positionWorld.sub(cameraPosition).normalize();
-    material.colorNode = vec4(texture(sky, equirectUV(viewDirection)).rgb, 1);
+    const skyNode = texture(sky, equirectUV(viewDirection));
+    material.colorNode = vec4(skyNode.rgb, 1);
 
     // DDGI's screen debug views replace every material (scene.overrideMaterial); the sky stays the sky.
     material.allowOverride = false;
@@ -92,7 +93,24 @@ export function createSkyDome(sky: DataTexture): Mesh {
     // A picture of the sky, not geometry: DDGI's rays get the same sky from the platform's
     // own environment (platformSkyEnvironment), and must not hit a 450 km box instead.
     dome.userData[GI_USER_DATA.contributes] = false;
+    domeTextures.set(dome, skyNode);
     return dome;
+}
+
+/** Each dome's texture node, so its picture can be swapped (time of day) without a new shader. */
+const domeTextures = new WeakMap<Mesh, { value: Texture }>();
+
+/**
+ * Shows `sky` on a dome from {@link createSkyDome} instead of what it showed:
+ * a new texture value for the same node, so three compiles nothing. Time of day
+ * swaps in a sky it builds for the sun's new place. Returns the texture shown before.
+ */
+export function setSkyDomeTexture(dome: Mesh, sky: Texture): Texture | null {
+    const node = domeTextures.get(dome);
+    if (!node) return null;
+    const previous = node.value;
+    node.value = sky;
+    return previous;
 }
 
 /** Lights the scene's materials with the sky through three's environment map (PMREM). Not used by the viewer; see the file comment. */

@@ -63,6 +63,20 @@ export interface LoadedScene {
      * every hit. Add one to `scene` to light it.
      */
     offLights: Light[];
+    /**
+     * The manifest's own lights, in manifest order (`manifest.lights[i]` is
+     * `manifestLights[i]`), on or off: what the viewer's light controls and
+     * motions work on. Each is named by its manifest label.
+     */
+    manifestLights: Light[];
+    /**
+     * The viewer's light markers and gizmo (lighting/light-editor.ts): a scene
+     * of their own, drawn over the picture after the main one, so GI's scene
+     * sync (which walks `scene`) and the bakes never see them.
+     */
+    helpers: Scene;
+    /** The sky dome of a procedural sky (scene/sky.ts), whose picture time of day replaces; null otherwise. */
+    skyDome: Mesh | null;
     /** The scene's settings as loaded (`sceneSettingValues`): `sponza-candles`' candle count, say. */
     settings: Record<string, number>;
     /** Each `light-set` part as loaded: its copies and lights. */
@@ -98,18 +112,18 @@ const NO_SKY = new Color(0, 0, 0);
  *   and this viewer all read that one file, so the skies match. `intensity` is already
  *   in the file.
  *
- * Returns the sky texture for a procedural sky, null otherwise.
+ * Returns the sky texture and its dome for a procedural sky, nulls otherwise.
  */
-async function addSky(scene: Scene, manifest: SceneManifest): Promise<DataTexture | null> {
+async function addSky(scene: Scene, manifest: SceneManifest): Promise<{ sky: DataTexture | null; dome: Mesh | null }> {
     const environment: ManifestEnvironment = manifest.environment;
     switch (environment.type) {
         case 'none':
             scene.background = NO_SKY.clone();
-            return null;
+            return { sky: null, dome: null };
         case 'color': {
             const scale = environment.intensity ?? 1;
             scene.background = new Color().setRGB(environment.color[0] * scale, environment.color[1] * scale, environment.color[2] * scale);
-            return null;
+            return { sky: null, dome: null };
         }
         case 'procedural': {
             scene.background = NO_SKY.clone();
@@ -118,7 +132,7 @@ async function addSky(scene: Scene, manifest: SceneManifest): Promise<DataTextur
             // Layer 0 for the probe bake; the viewing layer for the cameras.
             dome.layers.enable(LAYER_VIEW_GEOMETRY);
             scene.add(dome);
-            return sky;
+            return { sky, dome };
         }
     }
 }
@@ -165,9 +179,12 @@ function prepareMeshes(root: Object3D): void {
 /** Frees the GPU memory of a scene's geometry, materials and textures. Large scenes would otherwise pile up when switching. */
 export function disposeScene(loaded: LoadedScene): void {
     loaded.sky?.dispose();
-    loaded.scene.traverse((object) => {
+    const objects: Object3D[] = [];
+    loaded.scene.traverse((object) => objects.push(object));
+    loaded.helpers.traverse((object) => objects.push(object));
+    for (const object of objects) {
         const mesh = object as Mesh;
-        if (!mesh.isMesh) return;
+        if (!mesh.isMesh) continue;
         mesh.geometry.dispose();
         for (const material of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) {
             for (const value of Object.values(material)) {
@@ -175,7 +192,7 @@ export function disposeScene(loaded: LoadedScene): void {
             }
             material.dispose();
         }
-    });
+    }
 }
 
 export interface LoadSceneOptions {
@@ -185,7 +202,7 @@ export interface LoadSceneOptions {
 
 export async function loadScene(manifest: SceneManifest, report: (progress: LoadProgress) => void, options: LoadSceneOptions = {}): Promise<LoadedScene> {
     const scene = new Scene();
-    const sky = await addSky(scene, manifest);
+    const { sky, dome: skyDome } = await addSky(scene, manifest);
     const settings = sceneSettingValues(manifest, options.settings);
     const lightSets: LoadedLightSet[] = [];
 
@@ -232,9 +249,11 @@ export async function loadScene(manifest: SceneManifest, report: (progress: Load
     const fitting = { center: [center.x, center.y, center.z] as [number, number, number], radius: diagonal / 2 };
     const directLights: Light[] = [];
     const offLights: Light[] = [];
+    const manifestLights: Light[] = [];
     for (const manifestLight of manifest.lights) {
         const light = lightToThree(manifestLightToSceneLight(manifestLight), fitting);
         light.layers.enable(LAYER_DIRECT_LIGHTS);
+        manifestLights.push(light);
         if (manifestLight.intensity === 0) {
             offLights.push(light);
             continue;
@@ -260,5 +279,7 @@ export async function loadScene(manifest: SceneManifest, report: (progress: Load
         }
     }
 
-    return { manifest, scene, content, directLights, offLights, settings, lightSets, bounds, sky, diagonal, stats: computeSceneStats(content) };
+    const helpers = new Scene();
+    helpers.name = `${manifest.id} viewer helpers`;
+    return { manifest, scene, content, directLights, offLights, manifestLights, helpers, skyDome, settings, lightSets, bounds, sky, diagonal, stats: computeSceneStats(content) };
 }

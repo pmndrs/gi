@@ -22,7 +22,7 @@
  * a few frames behind; during a long change that is what matters.
  */
 
-import { CONTINUING_CHANGE_FRAMES, CONTINUING_CHANGE_MIN_SHARE } from './settings.ts';
+import { CONTINUING_CHANGE_FRAMES, CONTINUING_CHANGE_GAP_FRAMES, CONTINUING_CHANGE_MIN_SHARE } from './settings.ts';
 
 /**
  * How fast the still frames' rays a probe follow new readings: a running
@@ -31,13 +31,32 @@ import { CONTINUING_CHANGE_FRAMES, CONTINUING_CHANGE_MIN_SHARE } from './setting
 const STILL_RAYS_READINGS = 16;
 
 export class ContinuingChangeBatch {
-    private markedInARow = 0;
+    /**
+     * Frames the current run of marks spans, from its first mark to its
+     * latest, counting the unmarked frames between them (0: no run).
+     */
+    private runFrames = 0;
+    /** Unmarked frames since the latest mark (infinite before the first). */
+    private framesSinceMark = Number.POSITIVE_INFINITY;
     private stillRaysPerProbe: number | null = null;
     private latestRaysPerProbe: number | null = null;
 
-    /** Call once a frame, before the batch is chosen: whether `ddgi/mark` runs this frame. */
+    /**
+     * Call once a frame, before the batch is chosen: whether `ddgi/mark` runs
+     * this frame. A host animating slower than it draws (30 Hz on a 60 Hz
+     * display) marks only some frames; gaps of up to
+     * CONTINUING_CHANGE_GAP_FRAMES unmarked frames keep the run going, so its
+     * change still counts as continuing (T2.8).
+     */
     noteFrame(marked: boolean): void {
-        this.markedInARow = marked ? this.markedInARow + 1 : 0;
+        if (marked) {
+            const joinsRun = this.runFrames > 0 && this.framesSinceMark <= CONTINUING_CHANGE_GAP_FRAMES;
+            this.runFrames = joinsRun ? this.runFrames + this.framesSinceMark + 1 : 1;
+            this.framesSinceMark = 0;
+            return;
+        }
+        this.framesSinceMark++;
+        if (this.framesSinceMark > CONTINUING_CHANGE_GAP_FRAMES) this.runFrames = 0;
     }
 
     /**
@@ -53,9 +72,13 @@ export class ContinuingChangeBatch {
         this.stillRaysPerProbe = this.stillRaysPerProbe === null ? perProbe : this.stillRaysPerProbe + (perProbe - this.stillRaysPerProbe) / STILL_RAYS_READINGS;
     }
 
-    /** Whether changes continue: the mark has run in each of the last CONTINUING_CHANGE_FRAMES frames. */
+    /**
+     * Whether changes continue: a run of marks, with no gap longer than
+     * CONTINUING_CHANGE_GAP_FRAMES, has spanned CONTINUING_CHANGE_FRAMES
+     * frames, and its latest mark is at most that gap ago.
+     */
     get continuing(): boolean {
-        return this.markedInARow >= CONTINUING_CHANGE_FRAMES;
+        return this.runFrames >= CONTINUING_CHANGE_FRAMES;
     }
 
     /**
@@ -75,7 +98,8 @@ export class ContinuingChangeBatch {
 
     /** Forget everything (a new field: `prepare`, `resetHistory`). */
     reset(): void {
-        this.markedInARow = 0;
+        this.runFrames = 0;
+        this.framesSinceMark = Number.POSITIVE_INFINITY;
         this.stillRaysPerProbe = null;
         this.latestRaysPerProbe = null;
     }
