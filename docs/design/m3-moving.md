@@ -116,7 +116,7 @@ So Sponza lands near the 2 s target, with no margin: the 0.9 s not yet broken do
 
 The 1.2 s (Sponza) and 4.1 s (Bistro exterior) are JS loops on the main thread, one mesh at a time: octahedral normals, 16-bit indices, interleaving. A worker would still need the arrays copied in and the results copied back, followed by a `writeBuffer` from the main thread (the device lives there; the host owns it). The GPU can do the packing instead:
 
-- **Upload the raw arrays** (positions, normals, uvs and indices, as the host gave them) with `writeBuffer` into a staging buffer. At load this happens in one go. For meshes added later it happens a few meshes per frame, at most `uploadMsPerFrame` (default 4 ms) of main-thread time.
+- **Upload the raw arrays** (positions, normals, uvs and indices, as the host gave them) with `writeBuffer` into a staging buffer. At load this happens in one go. For meshes added later it happens a few meshes per frame, at most `uploadMsPerFrame` (default 4 ms) of main-thread time. *As built (T2.13):* there is no per-frame budget; a mesh added later is staged in its `createMesh` call and packed by the next `encode`.
 - **`gi/pack-mesh`** (compute, one thread per vertex, then one per triangle) writes octahedral normals, narrows indices to 16 bits where they all fit, and lays them out as `mesh-packing.ts` does today.
 - **The CPU packer stays as the test oracle.** Positions and indices must match it byte for byte; normals within one octahedral step (the GPU encodes in f32, the CPU in f64).
 - **The floor** is the raw copy itself. NOTES: reading 300 MB in JS takes about 110 ms on this laptop, so Sponza's ~180 MB of raw arrays costs about 60–100 ms of main-thread copying however it's done. The tinybvh worker's own copy adds to that.
