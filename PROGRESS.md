@@ -21,6 +21,37 @@ Rules:
 
 ---
 
+## 2026-11-07 · T2.3 review and merge · M2 lead (opus)
+Did:
+- Opus review of T2.3 against its done-when: pass with notes. I fixed the review's two must-fixes on the branch (9c31731): `docs/api/platform.md` now names `lightGridShadowedLightsPerHit`, and the stale comments in `light-grid.ts` and `ddgi-light-grid-cost` are corrected.
+- Lead rulings in DECISIONS: check 2 is a known miss, sent to Dennis; checks 3 and 4 are merged with their VALID runs owed.
+- Merged `m2-t2.3` into `m2` with no conflicts and no stray markers.
+- TASKS: T2.3 done; T2.6b next; a T2.10 line for the owed runs.
+
+Verified (reviewer, RTX 3060 nvidia/ampere, bench lock, head 5bed4d3, correctness):
+- lint, typecheck, 1,077 unit tests (`fetch.test.ts` did not flake);
+- full suite: 52 pages pass, including `hit-shading-many-lights`, `ddgi-direct`, `ddgi-light-groups`, `hit-shading-deferred` and `ddgi-shading-compat`;
+- check 1 reproduced: mean −0.094 / +0.014 / −0.045% at K = 1 / 2 / 4, with 99.4 / 99.5 / 99.7% of points within 5%;
+- subgroup and fallback scans agree on 99.989% of picks (3 of 27,664).
+
+Lead, on the merged tree: lint, typecheck, 1,077 unit tests.
+
+Not verified:
+- No VALID timing. Every heavy run read INVALID: the thermal flag came up within seconds even from 45–48 °C (86% of samples in the reviewer's suite). The machine is on AC power with the Turbo plan; nothing was changed.
+- The Intel UHD was not re-run by the reviewer.
+- Sun-only Sponza's probe count was not re-checked.
+
+Numbers:
+- Check 2: 6.2 against 2.47 µs per probe, 2.2–2.5× (INVALID); Budget v2 calibrates 174 against 459 probes.
+- Check 3: 0.105–0.131 ms at 2,048 cells (INVALID); 1,024 cells 0.087 ms VALID, but check 1 fails there at 97.9%.
+- Check 4: 10.34 / 10.63 s against 8.18 s, 1.26–1.30× (INVALID). It was 958 s; the 420 s load was three's shader compile for 1,024 default lights on the test page.
+- The viewer's 2–3 fps on `sponza-candles` is three's clustered lighting: 431 ms with GI off.
+
+Next:
+- One VALID run each for checks 3 and 4, by a gpu-tester when the machine allows, or in T2.10.
+- `hit-shading-deferred`'s 12 lights now go through the grid, not the exact path.
+- The scan-agreement page should show that the disagreeing picks sit on a run boundary.
+
 ## 2026-11-07 · T2.3 follow-up: check 2's diagnosis and one fix attempt, the timing runs, `m2` merged · implementer (opus)
 Did (`m2-t2.3` up to the PROGRESS commit; `m2` merged at 7e88933, PROGRESS and DECISIONS kept in full, the merge markers removed in bbd8226):
 - Check 2 diagnosis, temporary edits on `ddgi-light-grid-cost`: not a bug.
