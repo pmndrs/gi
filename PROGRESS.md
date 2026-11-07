@@ -50,7 +50,7 @@ Also verified:
 - Regressions:
   - full RTX suite, 51 pages and both self-tests, before the propagate fix (leak 0.84%, still scenes 0 marks; `ddgi-light-groups` and `hit-shading-many-lights` included);
   - Intel UHD: `ddgi-sun-layer` colour and cap at 200 frames (within 0.0034%), `ddgi-light-groups`, `hit-shading-many-lights`;
-  - lint, typecheck, unit tests 1,083 of 1,084. The one failure is `bench-lock.test.ts`'s nested run, which waits for a cool GPU and timed out on the hot one (NOTES).
+  - lint, typecheck, unit tests 1,084 of 1,084 on the final tree. An earlier run had 1,083: `bench-lock.test.ts`'s nested run waits for a cool GPU and timed out on a hot one (NOTES).
 
 Not verified:
 - The full suite after a60cdca (re-run after it: `ddgi-sun-layer`, the furnished-room step, Sponza's turn). That fix changes only kernels with a sun layer; with it off the WGSL text is as before.
