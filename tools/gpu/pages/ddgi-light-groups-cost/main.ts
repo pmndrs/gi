@@ -2,8 +2,10 @@
  * T2.5 checks 2 and 3, the cost (docs/design/m2-lights.md §5, "Cost
  * estimate"): DDGI's update per updated probe with light groups off, 2 and 4
  * groups, on two-room and Sponza through the three adapter (`loadScene`, as
- * the viewer loads them). A timing page: run it alone under the bench lock,
- * which judges the clock (VALID / INVALID).
+ * the viewer loads them). Also T2.6b's check 3: the sun layer (`sun`, groups
+ * off: 2 layers) against everything off, and the 6-layer cap (`4+sun`). A
+ * timing page: run it alone under the bench lock, which judges the clock
+ * (VALID / INVALID).
  *
  * - Every config runs on the same scene and platform: the technique's
  *   `lightGroups` is set and `ddgi.prepare()` runs again (kernels come from
@@ -24,7 +26,9 @@
  *
  * Check 3: with 4 groups the update per probe is at most 1.4× groups off,
  * at the 512-probe batch (near Budget v2's calibrated batch on Sponza). The
- * page asserts it; it counts only from a VALID run. Check 2 (groups off
+ * page asserts it; it counts only from a VALID run. T2.6b's check 3: the sun
+ * layer at most 1.10× everything off at that batch (§6.5's estimate, +8-10%
+ * per probe update), on scenes with a sun. Check 2 (groups off
  * within 3% of `m2`) compares this page's groups-off numbers with a run of
  * the same page on `m2`'s code (`VITE_DDGI_LIGHT_GROUPS=0`), which it
  * supports: with 0 alone it never touches `lightGroups`.
@@ -33,7 +37,8 @@
  *
  * Choose with environment variables:
  *   VITE_DDGI_SCENES=two-room,sponza     (default two-room,sponza)
- *   VITE_DDGI_LIGHT_GROUPS=0,2,4         (default 0,2,4; 0 is groups off)
+ *   VITE_DDGI_LIGHT_GROUPS=0,2,4         (default 0,2,4; 0 is groups off; `sun` the sun layer
+ *                                         with groups off, `4+sun` 4 groups and the sun layer)
  *
  * Manual (Sponza needs the download), under the bench lock:
  *   node tools/reference/bench-lock.ts run --what "T2.5 cost" -- pnpm test:gpu --filter ddgi-light-groups-cost --gpu nvidia --json <file>
@@ -52,8 +57,8 @@ function listFromEnv(value: unknown, fallback: readonly string[]): string[] {
 }
 
 const SCENES = listFromEnv(env.VITE_DDGI_SCENES, ['two-room', 'sponza']);
-/** Light-group counts to time; 0 is groups off. */
-const CONFIGS = listFromEnv(env.VITE_DDGI_LIGHT_GROUPS, ['0', '2', '4']).map(Number);
+/** Configs to time: a light-group count (0 is groups off), with `+sun` the sun layer too; `sun` alone is the sun layer with groups off. */
+const CONFIGS = listFromEnv(env.VITE_DDGI_LIGHT_GROUPS, ['0', '2', '4']);
 const BATCHES = [256, 512] as const;
 /** The batch check 3 is judged at. */
 const JUDGED_BATCH = 512;
@@ -62,6 +67,8 @@ const ROUNDS = 2;
 const WARM_SWEEPS = 3;
 /** Check 3's bar: 4 groups at most this times groups off, per updated probe. */
 const FOUR_GROUPS_BAR = 1.4;
+/** T2.6b check 3's bar: the sun layer at most this times everything off (m2-lights.md §6.5: about +8-10%). */
+const SUN_LAYER_BAR = 1.1;
 /** Frames kept queued, so the GPU never waits for the CPU between them. */
 const FRAMES_IN_FLIGHT = 2;
 
@@ -134,6 +141,19 @@ function lightGroupsFor(count: number): unknown {
     return { count, weights: [1, 2, 3, 4].map(() => [1, 1, 1]), environmentWeight: [1, 1, 1] };
 }
 
+/** A config's light-group count and sun layer: `2`, `sun` (0 groups and the sun), `4+sun`. */
+function parseConfig(config: string): { groups: number; sun: boolean } {
+    const sun = config === 'sun' || config.endsWith('+sun');
+    const groups = config === 'sun' ? 0 : Number(config.replace('+sun', ''));
+    return { groups, sun };
+}
+
+function configLabel(config: string): string {
+    const { groups, sun } = parseConfig(config);
+    const groupLabel = groups === 0 ? 'groups off' : `${groups} groups`;
+    return sun ? `${groupLabel}, sun layer` : groupLabel;
+}
+
 await runThreePage(async ({ device, data, log: logLine }) => {
     const log = (line: string): void => {
         logLine(line);
@@ -167,14 +187,17 @@ await runThreePage(async ({ device, data, log: logLine }) => {
         const memory: Record<string, number> = {};
         for (let round = 0; round < ROUNDS; round++) {
             const order = round % 2 === 0 ? CONFIGS : [...CONFIGS].reverse();
-            for (const groups of order) {
+            for (const config of order) {
+                const { groups, sun } = parseConfig(config);
                 if (groups !== 0 || settings.lightGroups !== undefined) settings.lightGroups = lightGroupsFor(groups);
+                // Only touched with the sun layer asked for (or already there), so the page also runs on code without it.
+                if (sun || settings.sunLayer !== undefined) settings.sunLayer = sun;
                 await scene.ddgi.prepare();
                 const warmFrames = Math.ceil((WARM_SWEEPS * scene.probeCount) / scene.ddgi.settings.maxProbesPerFrame);
                 await timedFrames(scene, scene.ddgi.settings.maxProbesPerFrame, warmFrames);
-                memory[String(groups)] = scene.ddgi.memoryBytes;
+                memory[config] = scene.ddgi.memoryBytes;
                 for (const batch of BATCHES) {
-                    const key = `${groups}/${batch}`;
+                    const key = `${config}/${batch}`;
                     if (!passTimes.has(key)) passTimes.set(key, new Map());
                     times.set(key, [...(times.get(key) ?? []), ...(await timedFrames(scene, batch, FRAMES_PER_BATCH, passTimes.get(key)))]);
                 }
@@ -183,24 +206,30 @@ await runThreePage(async ({ device, data, log: logLine }) => {
         scene.dispose();
 
         const perConfig: Record<string, unknown> = {};
-        for (const groups of CONFIGS) {
+        for (const config of CONFIGS) {
             const byBatch: Record<string, unknown> = {};
             for (const batch of BATCHES) {
-                const frames = times.get(`${groups}/${batch}`) ?? [];
-                assert(frames.length >= (FRAMES_PER_BATCH * ROUNDS) / 3, `${sceneId}: only ${frames.length} timed frames for ${groups} groups at ${batch}`);
+                const frames = times.get(`${config}/${batch}`) ?? [];
+                assert(frames.length >= (FRAMES_PER_BATCH * ROUNDS) / 3, `${sceneId}: only ${frames.length} timed frames for ${configLabel(config)} at ${batch}`);
                 const ms = median(frames);
                 const offMs = median(times.get(`0/${batch}`) ?? [NaN]);
-                const passes = Object.fromEntries([...(passTimes.get(`${groups}/${batch}`) ?? new Map<string, number[]>())].map(([name, values]) => [name, median(values)]));
+                const passes = Object.fromEntries([...(passTimes.get(`${config}/${batch}`) ?? new Map<string, number[]>())].map(([name, values]) => [name, median(values)]));
                 byBatch[batch] = { updateMs: ms, usPerProbe: (ms * 1000) / batch, againstGroupsOff: ms / offMs, timedFrames: frames.length, passes };
-                log(`${sceneId} ${groups === 0 ? 'groups off' : `${groups} groups`} at ${batch}: update ${ms.toFixed(3)} ms, ${((ms * 1000) / batch).toFixed(3)} µs a probe, ${(ms / offMs).toFixed(3)}× groups off (${frames.length} frames)`);
+                log(`${sceneId} ${configLabel(config)} at ${batch}: update ${ms.toFixed(3)} ms, ${((ms * 1000) / batch).toFixed(3)} µs a probe, ${(ms / offMs).toFixed(3)}× groups off (${frames.length} frames)`);
             }
-            perConfig[groups === 0 ? 'off' : `${groups} groups`] = { batches: byBatch, memoryBytes: memory[String(groups)] };
+            perConfig[config === '0' ? 'off' : configLabel(config)] = { batches: byBatch, memoryBytes: memory[config] };
         }
-        if (CONFIGS.includes(4) && CONFIGS.includes(0)) {
-            const ratio = median(times.get(`4/${JUDGED_BATCH}`) ?? [NaN]) / median(times.get(`0/${JUDGED_BATCH}`) ?? [NaN]);
+        const judged = (config: string): number => median(times.get(`${config}/${JUDGED_BATCH}`) ?? [NaN]) / median(times.get(`0/${JUDGED_BATCH}`) ?? [NaN]);
+        if (CONFIGS.includes('4') && CONFIGS.includes('0')) {
+            const ratio = judged('4');
             if (!(ratio <= FOUR_GROUPS_BAR)) failures.push(`${sceneId}: 4 groups cost ${ratio.toFixed(3)}× groups off per probe at ${JUDGED_BATCH} (bar ${FOUR_GROUPS_BAR})`);
         }
-        log(`${sceneId} memory: ${CONFIGS.map((groups) => `${groups === 0 ? 'off' : `${groups} groups`} ${(memory[String(groups)] / 1e6).toFixed(2)} MB`).join(', ')}`);
+        if (CONFIGS.includes('sun') && CONFIGS.includes('0')) {
+            const ratio = judged('sun');
+            log(`${sceneId}: the sun layer costs ${ratio.toFixed(3)}× everything off per probe at ${JUDGED_BATCH} (bar ${SUN_LAYER_BAR})`);
+            if (!(ratio <= SUN_LAYER_BAR)) failures.push(`${sceneId}: the sun layer costs ${ratio.toFixed(3)}× everything off per probe at ${JUDGED_BATCH} (bar ${SUN_LAYER_BAR})`);
+        }
+        log(`${sceneId} memory: ${CONFIGS.map((config) => `${config === '0' ? 'off' : configLabel(config)} ${(memory[config] / 1e6).toFixed(2)} MB`).join(', ')}`);
         results[sceneId] = { probes: scene.probeCount, configs: perConfig };
     }
     assert(failures.length === 0, failures.join('; '));

@@ -217,9 +217,10 @@ export const UNIFORM_WORD = {
     fineOwedUpdates: 89,
     propagation: 90,
     holdFineProbes: 91,
+    sunLight: 92,
 } as const;
-/** 92 words, a whole number of the struct's 16-byte alignment. */
-export const UNIFORM_WORDS = 92;
+/** 96 words, a whole number of the struct's 16-byte alignment. */
+export const UNIFORM_WORDS = 96;
 /** The six frustum planes in UNIFORM_WORD, in the order `frustumPlanes` (camera.ts) returns them. */
 export const FRUSTUM_PLANE_WORDS = [
     UNIFORM_WORD.frustumLeft,

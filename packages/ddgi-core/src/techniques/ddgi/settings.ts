@@ -3,10 +3,10 @@
  * volume they describe.
  *
  * Settings are a live object, as the technique contract asks: the host edits
- * fields and the next `encode` reads them. Five of them need new GPU
+ * fields and the next `encode` reads them. Six of them need new GPU
  * resources and only take effect at the next `prepare`: `volume`,
- * `irradianceTexels`, `distanceTexels`, `maxProbesPerFrame` and
- * `lightGroups.count` (its weights are live).
+ * `irradianceTexels`, `distanceTexels`, `maxProbesPerFrame`,
+ * `lightGroups.count` (its weights are live) and `sunLayer`.
  */
 
 import type { Vec3 } from '../../platform/contract/math.ts';
@@ -215,6 +215,19 @@ export interface DDGISettings {
      * read every frame.
      */
     lightGroups: DDGILightGroups | null;
+    /**
+     * The sun layer (T2.6b, light-groups.ts; docs/design/m2-lights.md §6.1):
+     * the sun, the scene's first directional light, traced at a white
+     * reference in an irradiance layer of its own and weighed by its colour ×
+     * intensity when the layers are added up. A change of the sun's colour or
+     * brightness then shows exactly in the frame it happens, with nothing
+     * marked and nothing traced again; a change of its direction still
+     * re-traces. Works with or without light groups (at most 4 groups, the
+     * environment and the sun). Off by default: like a light group it costs a
+     * layer's memory and its share of every probe update (PROGRESS, T2.6b).
+     * Needs direct light deferred (the default). New `prepare` when changed.
+     */
+    sunLayer: boolean;
     /**
      * The fewest probes updated per frame under a millisecond budget, so the
      * field keeps converging on every device (budget v2). It wins over the
@@ -436,6 +449,7 @@ export const DEFAULT_DDGI_SETTINGS: Readonly<Omit<DDGISettings, 'volume'>> = {
     classification: true,
     maxProbesPerFrame: 4096,
     lightGroups: null,
+    sunLayer: false,
     minProbesPerFrame: 'auto',
 };
 

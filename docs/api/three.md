@@ -231,6 +231,21 @@ volume.threeGI.setEnvironmentWeight('white', 0.5); // the sky and emissive surfa
 - Groups are off by default. Each group costs a layer of the field: on Sponza about 25 MB and 5% of each probe update (4 groups: +10%; two-room +23%), and `count` needs a new `prepare`.
 - Lights in a group at or past `count` share the last group's layer.
 
+### The sun layer
+
+With DDGI's `sunLayer` setting, a change of the sun's colour or brightness shows in GI exactly, in the frame it happens, with nothing traced again (T2.6b; docs/design/m2-lights.md §6.1). Change the sun as usual:
+
+```ts
+await volume.start(renderer, scene, { ddgi: { sunLayer: true } });
+sun.color.set('#ffb070');   // an evening sun: GI follows in the same frame
+sun.intensity = 1.5;
+```
+
+- The sun is the scene's first `DirectionalLight` (the first the adapter met). DDGI traces it in a layer of its own at a white reference and weighs that layer by the light's colour × intensity.
+- Turning the sun still re-traces, nearest the camera first, as before.
+- Dim or hide it (`intensity` 0 or `visible` false is fine: GI sees a sun at 0), but don't remove it: a removed sun makes another directional light the sun, and every probe is traced again.
+- Off by default. It costs a layer of the field (Sponza: 58 MB of GI becomes 93 MB) and its share of every probe update (PROGRESS, T2.6b). It works with light groups: the sun's layer is then also weighed by its group's weight. 4 groups, the environment and the sun are the most a volume holds.
+
 ### `GILight`
 
 This is the light that brings GI into three's materials. `ThreeGI` makes one, so you rarely make one yourself.

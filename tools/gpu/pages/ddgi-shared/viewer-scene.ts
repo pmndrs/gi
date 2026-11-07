@@ -15,12 +15,20 @@ import { PerspectiveCamera } from 'three/webgpu';
 import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
 import type { EnvironmentDescriptor } from '../../../../packages/ddgi-core/src/platform/contract/scene.ts';
 import { DDGITechnique, type DDGITechniqueOptions } from '../../../../packages/ddgi-core/src/techniques/ddgi/ddgi-technique.ts';
-import { DEFAULT_WARM_UP_PASSES } from '../../../../packages/ddgi-core/src/techniques/ddgi/settings.ts';
+import { DEFAULT_WARM_UP_PASSES, type DDGISettingsInput } from '../../../../packages/ddgi-core/src/techniques/ddgi/settings.ts';
 import type { MeshTreeOptions } from '../../../../packages/ddgi-core/src/platform/trace/ray-queries.ts';
 import { ThreeGI } from '../../../../packages/ddgi-three/src/three-gi.ts';
 import { loadScene, type LoadedScene } from '../../../../apps/viewer/src/scene/load-scene.ts';
 import type { SceneManifest } from '../../../../scenes/src/manifest.ts';
 import { platformSkyEnvironment } from '../../../../scenes/src/sky/sky-image.ts';
+
+/**
+ * `VITE_DDGI_SUN_LAYER=on` runs any page built on this helper with the sun
+ * layer (T2.6b, `settings.sunLayer`), for checking that a page's results
+ * hold with it (the sun steps of T2.4d and T2.4c, say). Off by default, as
+ * the setting is.
+ */
+const SUN_LAYER_FROM_ENV = (import.meta.env as Record<string, unknown>).VITE_DDGI_SUN_LAYER === 'on';
 
 /** Warm-up frames recorded before waiting for the GPU, as `volume.start` does. */
 const WARM_UP_STEPS_PER_BATCH = 4;
@@ -68,6 +76,8 @@ export async function startViewerScene(
         readonly prepareScene?: (loaded: LoadedScene) => void;
         /** The technique's fixed options (the direct-light path, say); its defaults otherwise. */
         readonly technique?: DDGITechniqueOptions;
+        /** Settings the technique is made with, those that need a `prepare` (light groups, the sun layer); its defaults otherwise. */
+        readonly settings?: Omit<DDGISettingsInput, 'volume'>;
         /** How the platform makes mesh trees (T2.12); its defaults otherwise. */
         readonly meshTrees?: MeshTreeOptions;
     },
@@ -83,7 +93,10 @@ export async function startViewerScene(
 
     const platform = new GIPlatformImpl(device, { label: options.label, gpuTiming: options.gpuTiming, meshTrees: options.meshTrees });
     const volume = manifest.volume;
-    const ddgi = platform.addTechnique(new DDGITechnique({ volume: { center: volume.center, size: volume.size, spacing: volume.probeSpacing }, warmUpPasses: 0 }, options.technique));
+    const settings = { ...(SUN_LAYER_FROM_ENV ? { sunLayer: true } : {}), ...options.settings };
+    const ddgi = platform.addTechnique(
+        new DDGITechnique({ ...settings, volume: { center: volume.center, size: volume.size, spacing: volume.probeSpacing }, warmUpPasses: 0 }, options.technique),
+    );
     platform.setOutput(ddgi);
     await platform.prepare();
     const threeGI = new ThreeGI(platform, loaded.scene, { budget: { paused: true }, environment: environmentFor(manifest), warn: () => {} });

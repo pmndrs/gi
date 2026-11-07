@@ -47,6 +47,62 @@ Next:
 - T2.14's "Revisit" (start the builds during `prepare`) wasn't done: the H-PLOC kernels are asked for in the same task as the rest, but the builds need the scene's upload, and on Sponza the copy, not the compile, is the long pole.
 - Shared files touched: `gi-platform.ts` (option, counters), `trace/ray-queries.ts`, `trace/growable-storage.ts`, `trace/top-level-gpu.ts` (worker in `prepare`), `contract/queries.ts` (a comment), `@pmndrs/bvh` `gpu-hploc.ts` and `gpu-radix-sort.ts` (compile order); pages `ddgi-batch-cost`, `ddgi-shared/viewer-scene.ts`, `trace-oracle`; not `platform-scene.ts` or `scene-copy.ts`.
 
+## 2026-11-08 · T2.6b review and merge · lead (opus)
+Did: An Opus review passed T2.6b with notes. I fixed the notes on the branch: `m2-lights.md` said "no run read VALID" (there is one VALID run, 1.055×), and its tables were stale (memory 20 MB, "on by default"); one WGSL spacing fix. I recorded the lead rulings in DECISIONS: `sunLayer` off by default, the first directional light is the sun, the memory over the estimate accepted. I merged `m2` (T2.14) into the branch; PROGRESS, DECISIONS and NOTES conflicts kept both sides, 109 headings = 108 + 106 − 105. Then I merged it into `m2`. T2.6b is done.
+Verified: review on the RTX 3060: checks 1 and 2 pass (check 2 re-run on bcb1af8 itself: identical atlas and views); the 6-layer cap passes; the full suite passes after the propagate fix a60cdca (51 pages). Me on the merged tree (RTX, correctness, `--no-cool-wait`): typecheck, lint and 1,088 unit tests pass; `ddgi-sun-layer` passes; `ddgi-session-recompiles` with the sun layer switched on (a temporary local edit, not committed) gives 0 recompiles and control 1 on Cornell, two-room and Sponza, light groups off and on.
+Not verified: check 3 not re-timed (the review's code reading agrees with 1.055×). Intel UHD not re-run after the merge.
+Correction to the implementer's entry below: Sponza's sun turn with the layer on is not "as with the sun layer off". The review's two runs settled the view at frames 16 and 13 (bar 15); with it off, 12. The field settles at 36 either way.
+Next: T2.8 checks Sponza's turn with the layer on (TASKS). T2.13 starts now; it was waiting for this merge because both touch the scene copy.
+
+## 2026-11-08 · T2.6b the sun layer · implementer (opus)
+Did (branch `m2-t2.6b-sun` from `m2` bcb1af8: a88f65f, a60cdca, docs):
+- Platform: `gi/direct` keeps the sun (the first directional light, light 0) apart at a white reference when a technique names a layer for it (`DirectLightFrame.sunLayer`, scratch header word 11). This goes through `giDirectSplitIrradiance` and `giDirectReachesSplit`, so a sun at intensity 0 still lists its hits. Also new: `SceneCopy.firstDirectionalLight`. The light choice and shadow rays stay shared, so T2.3's grid and T2.5's group split are unchanged.
+- DDGI: `settings.sunLayer`, off by default.
+  - The sun is the plan's last layer: 2 layers with groups off; the groups, the environment and the sun with groups (cap 6).
+  - Its weight is the sun's colour × intensity, times its group's weight.
+  - Marks: a change of the sun's colour, intensity or group marks nothing. A turn is judged at white. If the sun becomes another light, every probe is marked.
+  - The probe mean weighs the sun layer by the sun's light, in the blend and in propagation (`DdgiUniforms.sunLight`).
+- Pages:
+  - `ddgi-sun-layer` (suite): checks 1 and 2, the 6-layer cap, both reductions;
+  - `ddgi-light-groups-cost` takes `sun` and `4+sun`;
+  - `VITE_DDGI_SUN_LAYER=on` turns the sun layer on for every page built on `viewer-scene`.
+- Docs: DECISIONS (as built), NOTES (4), platform.md, three.md, m2-lights.md §6.1.
+
+Verified (RTX 3060 nvidia/ampere, Chrome headless, bench lock; correctness runs at 84–89 °C):
+1. **Check 1 met** (`ddgi-sun-layer`: the courtyard, 4,840 probes every frame, 600 frames).
+   - The sun goes to (1, 0.6, 0.35) × 1.5 in a frame with no updates. The views match a field re-converged at that sun within 0.002% (bar 1%), and moved 36–43% in that frame.
+   - History and layers byte-identical; 0 marks in that frame and in the 30 after; 1 full compose.
+2. **Check 2 met:** with the sun layer off, the field is `m2`'s to the last digit (atlas 0.230758261 and all 3 views; `m2` measured with the page's `off` section at bcb1af8).
+3. **Check 3 met, VALID retry:** 1.055× everything off per probe at 512 probes (bar 1.10), 1.094× at 256. The first try was INVALID (hot start; another project's golden-capture Chrome held the RTX at 100% outside the lock).
+
+Also verified:
+- A sun turn still re-traces, with the sun layer on:
+  - the furnished-room sun step passes, before and after a60cdca (view within 5% from frames 11 and 13, per pixel 2.9% / 3.8% at frame 15; T2.4d's review 11 and 14, 2.9% / 3.7%);
+  - Sponza's key-probe turn passes: view frame 13 (bar 15), field frame 36 (bar 120), as with the sun layer off (12 / 36). Before a60cdca it was 54: the propagate fix.
+- The 6-layer cap (4 groups, environment, sun) holds: after a sun change with group 0 halved, within 0.011% of a field converged that way. The fallback reductions and work list give the identical layered atlas.
+- Regressions:
+  - full RTX suite, 51 pages and both self-tests, before the propagate fix (leak 0.84%, still scenes 0 marks; `ddgi-light-groups` and `hit-shading-many-lights` included);
+  - Intel UHD: `ddgi-sun-layer` colour and cap at 200 frames (within 0.0034%), `ddgi-light-groups`, `hit-shading-many-lights`;
+  - lint, typecheck, unit tests 1,084 of 1,084 on the final tree. An earlier run had 1,083: `bench-lock.test.ts`'s nested run waits for a cool GPU and timed out on a hot one (NOTES).
+
+Not verified:
+- The full suite after a60cdca (re-run after it: `ddgi-sun-layer`, the furnished-room step, Sponza's turn). That fix changes only kernels with a sun layer; with it off the WGSL text is as before.
+- Check 2 on the Intel UHD (no `m2` baseline there).
+- The viewer by hand.
+
+Numbers:
+- Check 3 (VALID, SM 817 MHz median), Sponza at 512 probes: 4.951 → 5.222 ms. By pass: trace 2.600 → 2.722, gi-direct 1.923 → 2.004, blend 0.322 → 0.374, compose 0.023.
+- Memory:
+  - Sponza 58.0 → 93.4 MB (+35.5 MB, against §6.5's 20 MB, which counted the atlas tiles alone);
+  - courtyard 30.4 → 47.3 MB;
+  - 6 layers on the courtyard 104.8 MB.
+
+Next:
+- Lead and Dennis: the default for `sunLayer`. Recommend off until T2.8's time-of-day slider turns it on in the viewer; the design had it on.
+- The firefly clamp acts per layer, so a layer that starts dark is limited by its own old value. Nothing here showed it; watch it if a group or the sun settles slowly after a big step.
+- Tools: `bench-lock.test.ts`'s nested run should pass `--no-cool-wait`.
+- Shared files touched: `contract/{shade,scene-copy}.ts`, `scene/platform-scene.ts` (a getter), `shade/{wgsl,direct}.ts`, `ddgi-technique.ts`, `layout.ts` (uniform words 92–95), `settings.ts`, `light-groups.ts`, `mark-table.ts`, `wgsl/{blend,propagate,common}.ts`, `ddgi-shared/viewer-scene.ts`, `ddgi-light-groups-cost`.
+
 ## 2026-11-08 · T2.14 review and merge · lead (opus)
 Did: An Opus review passed T2.14 with notes. The must-fix went back to the implementer, who fixed it in 741a713: a host that only uses `updateOnRender` got no GI light, and a forgotten `prepare` gave no error. The implementer also merged `m2` into `m2-t2.14`. I read the fix and merged it into `m2`. I also fixed `tools/reference/bench-lock.test.ts`: its nested-run test called `bench-lock run` without `--no-cool-wait`, so it waited for the real GPU to cool and timed out whenever the GPU was busy. T2.14 is done.
 Verified: on `m2` after the merge, typecheck and lint are clean and 1,081 unit tests pass (`bench-lock.test.ts` 37/37 after the fix). Review re-check on the RTX 3060: `ddgi-session-recompiles` counter 0 and control kernel 1 on 14 scenes, one scene per run, plus `sponza-candles` and the light grid on and off (implementer, after the merge). `platform-recompiles` passes.

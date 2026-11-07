@@ -8,7 +8,7 @@
  */
 
 import type { InstanceHandle, LightHandle } from './handles';
-import type { LightDescriptor } from './scene';
+import type { DirectionalLightDescriptor, LightDescriptor } from './scene';
 import type { Aabb } from './math';
 import type { WgslModule } from './wgsl';
 
@@ -41,6 +41,18 @@ export interface SceneCopy {
     };
     /** GPU bytes held by the copy (geometry, tables, atlas). */
     readonly memoryBytes: number;
+    /**
+     * The scene's first directional light as it is now: light 0 of the light
+     * table (directional lights come first, `giDirectionalLightCount`), which
+     * hit shading's `sunApart` treats as the sun. Null without directional
+     * lights. It stays the same light until it is destroyed (then the last
+     * directional light takes its place) or, with none before, one is created.
+     *
+     * Why techniques read it: a sun layer is weighed by the sun's current
+     * colour x intensity (DDGI, T2.6b), and has to know when the sun became
+     * another light.
+     */
+    readonly firstDirectionalLight: { readonly light: LightHandle; readonly descriptor: DirectionalLightDescriptor } | null;
 }
 
 /**
