@@ -373,6 +373,17 @@ export const KEY_WAIT_FRAMES = 30;
 export const CONTINUING_CHANGE_FRAMES = 30;
 
 /**
+ * Frames without a mark that still count as part of a continuing change
+ * (T2.8). A host that animates slower than it draws marks a change only on
+ * some frames: at 30 Hz on a 60 Hz display, every other frame; at 30 Hz on
+ * 144 Hz, about one frame in five. Those gaps are the host's update rate,
+ * not the change stopping, so a run of marks survives up to this many
+ * unmarked frames in a row. 4 covers an animation at a fifth of the frame
+ * rate; after a real stop the smaller batch lasts at most 4 more frames.
+ */
+export const CONTINUING_CHANGE_GAP_FRAMES = 4;
+
+/**
  * While changes continue, the batch is at least this share of the hand-out,
  * whatever the rays say: a guard against a census that reads oddly, not a
  * tuned number (the day on Sponza needs about 0.63).
