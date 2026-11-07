@@ -168,12 +168,6 @@ function hitsDown(rays: PlatformRayQueries, meshes: number): string[] {
     return hits;
 }
 
-/** Waits (in later tasks) until `condition` holds. */
-async function until(condition: () => boolean): Promise<void> {
-    for (let step = 0; step < 200 && !condition(); step++) await new Promise((resolve) => setTimeout(resolve, 1));
-    expect(condition()).toBe(true);
-}
-
 describe('first trees from the GPU, tinybvh swapped in (T2.12)', () => {
     it("gives each mesh the first tree to arrive, and drops a GPU tree that comes after tinybvh's", async () => {
         const { rays, gpuBuilder, frame, gpu } = await setUp();
