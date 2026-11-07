@@ -24,7 +24,7 @@ import { setTimestampTracking } from '../render/gpu-time';
 import { DEFAULT_CLUSTERED_LIGHT_REACH_M, limitClusteredLightReach, sceneLighting } from '../render/scene-lighting';
 import type { GiMode } from '../scene/layers';
 import { disposeScene, loadScene, type LoadedScene, type LoadProgress, type LoadSceneOptions } from '../scene/load-scene';
-import { DdgiTechnique, DEFAULT_DDGI_VIEWER_SETTINGS, type DdgiViewerSettings } from '../techniques/ddgi-technique';
+import { DdgiTechnique, DEFAULT_DDGI_VIEWER_SETTINGS, layerKey, type DdgiViewerSettings } from '../techniques/ddgi-technique';
 import { DEFAULT_LPG_SETTINGS, LightProbeGridTechnique, type LightProbeGridSettings } from '../techniques/light-probe-grid-technique';
 import { NoGiTechnique } from '../techniques/no-gi-technique';
 import { ReferenceImageTechnique } from '../techniques/reference-technique';
@@ -241,10 +241,29 @@ export class ViewerCore {
         (this.techniques.get('vxgi') as VxgiTechnique | undefined)?.configure(settings);
     }
 
-    /** Applies to DDGI now if it exists, and to the one created later. Display settings only: nothing recompiles. */
+    /**
+     * Applies to DDGI now if it exists, and to the one created later. Display settings and
+     * weights recompile nothing. Light groups and the sun layer shape DDGI's layers, which
+     * are made when it starts: changing them starts a new DDGI (a new warm-up), the same as
+     * reloading the scene with them.
+     */
     configureDdgi(settings: DdgiViewerSettings): void {
         this.ddgiSettings = { ...settings };
-        this.ddgi?.configure(settings);
+        const ddgi = this.ddgi;
+        if (ddgi && ddgi.layerKey !== layerKey(settings)) {
+            const environment = ddgi.environment;
+            ddgi.dispose();
+            this.techniques.delete('ddgi');
+            this.prepareStarts.delete(ddgi);
+            if (this.loaded) {
+                // Create it again now, with the same environment (time of day), so it starts at once.
+                this.getTechnique('ddgi');
+                this.ddgi?.setEnvironment(environment);
+                this.rebuildOutput();
+            }
+            return;
+        }
+        ddgi?.configure(settings);
     }
 
     /** Bakes the probe grid again with its current settings. */

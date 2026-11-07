@@ -49,11 +49,13 @@ export interface DdgiFrameStats {
     memory: { sceneCopy: number; acceleration: number; techniques: Readonly<Record<string, number>>; total: number };
     syncCpuMs: number;
     encodeCpuMs: number;
+    /** Compute pipelines the GI platform made while ready (`gi.stats.recompiles`): 0 unless something compiled during use. */
+    recompiles?: number;
     /** Probes per state, in state order (`active 812`); empty until the GPU census arrives. */
     states: ReadonlyArray<{ readonly label: string; readonly count: number }>;
 }
 
-export type DdgiStatsHelpKey = 'statsProbes' | 'statsBudget' | 'statsDdgiUpdate' | 'statsRefit' | 'statsMemory' | 'statsSync' | 'statsStates';
+export type DdgiStatsHelpKey = 'statsProbes' | 'statsBudget' | 'statsDdgiUpdate' | 'statsRefit' | 'statsMemory' | 'statsSync' | 'statsRecompiles' | 'statsStates';
 
 export interface StatsLine {
     text: string;
@@ -168,6 +170,11 @@ export class DdgiStatsText {
             text: `  adapter (CPU)   sync ${milliseconds(this.syncCpu.value ?? frame.syncCpuMs)}, record ${milliseconds(this.encodeCpu.value ?? frame.encodeCpuMs)}`,
             help: 'statsSync',
         });
+
+        if (frame.recompiles !== undefined) {
+            const note = frame.recompiles === 0 ? ' (none since start-up, as it should be)' : ' (GPU programs compiled while in use: should be 0)';
+            lines.push({ text: `  recompiles      ${frame.recompiles}${note}`, help: 'statsRecompiles' });
+        }
 
         if (frame.states.length > 0) {
             lines.push({ text: `  ${frame.states.map((state) => `${state.label} ${state.count.toLocaleString('en')}`).join(', ')}`, help: 'statsStates' });

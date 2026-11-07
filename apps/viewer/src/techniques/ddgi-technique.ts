@@ -38,6 +38,7 @@
  * Direct light against GI is the viewer's GI off / on / GI only choice.
  */
 
+import { Color, type Object3D } from 'three';
 import type { Node } from 'three/webgpu';
 import { platformSkyEnvironment } from '../../../../scenes/src/sky/sky-image';
 import { AtlasOverlay, type AtlasChoice } from '../ddgi/atlas-overlay';
@@ -71,9 +72,33 @@ export const DDGI_SCREEN_VIEWS = {
 
 export type DdgiScreenView = keyof typeof DDGI_SCREEN_VIEWS;
 
+/** A light group's weight in GI (T2.5): a linear RGB colour times an intensity. */
+export interface GroupWeight {
+    color: [number, number, number];
+    intensity: number;
+}
+
+/** Light groups the viewer offers: off, or 2 or 4 groups (each a layer of its own; m2-lights.md §5). */
+export type LightGroupCount = 0 | 2 | 4;
+
 export interface DdgiViewerSettings {
     /** GPU milliseconds per frame for probe updates. */
     budgetMs: number;
+    /**
+     * Light groups with a layer of their own, 0 (off) to 4 (T2.5). Changing it
+     * starts DDGI over: the layers are made when it starts (`layerKey`).
+     */
+    lightGroups: LightGroupCount;
+    /**
+     * The sun's own layer (T2.6b): the sun's colour and brightness then change
+     * GI at once, with nothing traced again. Time of day turns it on (DECISIONS
+     * 2026-11-08). Changing it starts DDGI over, as `lightGroups` does.
+     */
+    sunLayer: boolean;
+    /** Each group's weight (index = group), live; missing ones are white at 1. */
+    groupWeights: GroupWeight[];
+    /** The environment layer's weight (the sky and glowing surfaces), live. */
+    environmentWeight: GroupWeight;
     /** Draw every probe as a small sphere. */
     showProbes: boolean;
     /** What the spheres' colour shows: the probe's state, or how many updates its light is averaged over. */
@@ -90,8 +115,14 @@ export interface DdgiViewerSettings {
     changeFullScalePercent: number | null;
 }
 
+export const WHITE_WEIGHT: GroupWeight = { color: [1, 1, 1], intensity: 1 };
+
 export const DEFAULT_DDGI_VIEWER_SETTINGS: DdgiViewerSettings = {
     budgetMs: 2,
+    lightGroups: 0,
+    sunLayer: false,
+    groupWeights: [],
+    environmentWeight: WHITE_WEIGHT,
     showProbes: false,
     probeColor: 'state',
     screenView: null,
@@ -100,6 +131,11 @@ export const DEFAULT_DDGI_VIEWER_SETTINGS: DdgiViewerSettings = {
     atlasExposureEv: 0,
     changeFullScalePercent: null,
 };
+
+/** The settings that shape DDGI's layers, which only a new start can change (`ViewerCore.configureDdgi`). */
+export function layerKey(settings: Pick<DdgiViewerSettings, 'lightGroups' | 'sunLayer'>): string {
+    return `groups ${settings.lightGroups}, sun layer ${settings.sunLayer ? 'on' : 'off'}`;
+}
 
 /** Set-up steps the viewer records per batch (`pumpPrepare`); `start` runs the real frames itself, so a step only looks at its progress. */
 const PREPARE_STEPS_PER_BATCH = 1;
@@ -169,6 +205,12 @@ export class DdgiTechnique extends ScenePassTechnique {
     private overlayTopInsetShare = 0;
     private settings: DdgiViewerSettings;
     private budget: FrameBudget;
+    /** The layer settings this DDGI started with (`layerKey`): changing them needs a new DDGI. */
+    readonly layerKey: string;
+    /** GI's environment set by the viewer (time of day), or null for the manifest's. */
+    private environmentOverride: EnvironmentDescriptor | null = null;
+    /** The response meter's test-mode budget (GPU ms), over the user's; null when not measuring. */
+    private budgetOverrideMs: number | null = null;
     private failure: string | null = null;
     private generation = 0;
     private finishedWallMs: number | null = null;
@@ -188,6 +230,7 @@ export class DdgiTechnique extends ScenePassTechnique {
         memory: { sceneCopy: 0, acceleration: 0, techniques: {}, total: 0 },
         syncCpuMs: 0,
         encodeCpuMs: 0,
+        recompiles: 0,
         states: [],
     };
 
@@ -195,6 +238,7 @@ export class DdgiTechnique extends ScenePassTechnique {
         super(context);
         this.settings = { ...settings };
         this.budget = { gpuMs: settings.budgetMs };
+        this.layerKey = layerKey(settings);
         // The base class chose layers before the settings existed; choose again with them.
         this.applyLayers();
         const { manifest } = context.loaded;
@@ -212,7 +256,12 @@ export class DdgiTechnique extends ScenePassTechnique {
         const { loaded, renderer } = this.context;
         await this.volume.start(renderer, loaded.scene, {
             budget: this.budget,
-            environment: environmentFor(loaded.manifest),
+            ddgi: {
+                // The weights are set once the technique exists (`applyGroupWeights`); they are live.
+                lightGroups: this.settings.lightGroups > 0 ? { count: this.settings.lightGroups, weights: [], environmentWeight: [1, 1, 1] } : null,
+                sunLayer: this.settings.sunLayer,
+            },
+            environment: this.environmentOverride ?? environmentFor(loaded.manifest),
             warn: (message) => this.warn(message),
             label: `viewer ${loaded.manifest.id}`,
             onCreated: (started) => {
@@ -249,6 +298,91 @@ export class DdgiTechnique extends ScenePassTechnique {
         this.debugMaterial = new DdgiDebugMaterial(started.platform.shading);
         this.atlasOverlay = new AtlasOverlay(started.platform.shading);
         this.applyDisplaySettings();
+        this.applyGroupWeights();
+        // An environment set after `start` was called (time of day, on a new DDGI) reaches GI here.
+        if (this.environmentOverride) started.threeGI.environment = this.environmentOverride;
+    }
+
+    /** The group and environment weights into GI (live: a new weight shows in the next frame, nothing is traced again). */
+    private applyGroupWeights(): void {
+        const threeGI = this.threeGI;
+        const groups = this.startedGroups;
+        if (!threeGI || groups === 0) return;
+        for (let group = 0; group < groups; group++) {
+            const weight = this.settings.groupWeights[group] ?? WHITE_WEIGHT;
+            threeGI.setGroupWeight(group, new Color().setRGB(...weight.color), weight.intensity);
+        }
+        const environment = this.settings.environmentWeight;
+        threeGI.setEnvironmentWeight(new Color().setRGB(...environment.color), environment.intensity);
+    }
+
+    /** The light groups this DDGI started with (the settings may already ask for others). */
+    private get startedGroups(): number {
+        return this.ddgi?.settings.lightGroups?.count ?? 0;
+    }
+
+    /**
+     * GI's environment instead of the manifest's (time of day moves the sun
+     * and the sky), or null to go back to it. The adapter sends a changed
+     * environment as a scene change: the sky is baked again on the GPU and
+     * the probes it changes are marked.
+     */
+    /** GI's environment set by the viewer (time of day), or null for the manifest's. */
+    get environment(): EnvironmentDescriptor | null {
+        return this.environmentOverride;
+    }
+
+    setEnvironment(environment: EnvironmentDescriptor | null): void {
+        this.environmentOverride = environment;
+        const threeGI = this.threeGI;
+        if (threeGI) threeGI.environment = environment ?? environmentFor(this.context.loaded.manifest);
+    }
+
+    /**
+     * The response meter's test mode: this budget (GPU ms per frame) instead
+     * of the user's while it finds the settled picture; null goes back.
+     */
+    setBudgetOverride(gpuMs: number | null): void {
+        this.budgetOverrideMs = gpuMs;
+        this.budget = { gpuMs: gpuMs ?? this.settings.budgetMs };
+        if (this.threeGI && this.phase === 'ready') this.threeGI.budget = this.budget;
+    }
+
+    /**
+     * Tells GI that `object` changed, so the next update sends it (the adapter
+     * would otherwise find a light past its first 64, or one just added, a few
+     * frames later). Nothing happens before GI exists.
+     */
+    markChanged(object: Object3D): void {
+        this.threeGI?.markChanged(object);
+    }
+
+    /** Probes DDGI updated in its latest frame. */
+    get probesUpdated(): number {
+        return this.ddgi?.counters[PROBES_UPDATED_COUNTER] ?? 0;
+    }
+
+    /** Compute pipelines the platform made while ready (`gi.stats.recompiles`); it should stay 0. */
+    get recompiles(): number {
+        return this.platform?.stats.recompiles ?? 0;
+    }
+
+    /**
+     * The mean of DDGI's picture (linear, before exposure and tone mapping)
+     * over a region of the drawing buffer, read back from the frame just
+     * drawn: the response meter's reading. Averaged over pixels and the three
+     * colour channels, as the T2.4b page averages its test view. Null while
+     * the upscaler draws the picture (the scene target isn't drawn then).
+     * x, y from the top left, in drawing-buffer pixels.
+     */
+    readRegionMean(x: number, y: number, width: number, height: number): Promise<number> | null {
+        if (this.upscaling) return null;
+        const target = this.sceneTarget;
+        const left = Math.max(0, Math.min(target.width - 1, Math.floor(x)));
+        const top = Math.max(0, Math.min(target.height - 1, Math.floor(y)));
+        const right = Math.max(left + 1, Math.min(target.width, Math.floor(x + width)));
+        const bottom = Math.max(top + 1, Math.min(target.height, Math.floor(y + height)));
+        return this.context.renderer.readRenderTargetPixelsAsync(target, left, top, right - left, bottom - top).then((pixels) => halfRgbaMean(pixels as Uint16Array));
     }
 
     /** `start` or `restart` resolved: the viewer runs the GI frames from here (`updateOnRender` off). */
@@ -383,10 +517,11 @@ export class DdgiTechnique extends ScenePassTechnique {
         const probesChanged = settings.showProbes !== this.settings.showProbes;
         this.settings = { ...settings };
         // A new object: ThreeGI reads its `budget` field every update.
-        this.budget = { gpuMs: settings.budgetMs };
+        this.budget = { gpuMs: this.budgetOverrideMs ?? settings.budgetMs };
         // While `start` runs it owns the frames, and it takes the budget it was given; later frames take this one.
         if (this.threeGI && this.phase === 'ready') this.threeGI.budget = this.budget;
         this.applyDisplaySettings();
+        this.applyGroupWeights();
         if (probesChanged) this.applyLayers();
     }
 
@@ -572,6 +707,7 @@ export class DdgiTechnique extends ScenePassTechnique {
         snapshot.budget = budgetStats(stats.counters[`${technique.id} budget`], snapshot.budget);
         snapshot.budgetMs = this.settings.budgetMs;
         snapshot.memory = stats.memory;
+        snapshot.recompiles = stats.recompiles;
         snapshot.syncCpuMs = threeGI.timings.syncMs;
         snapshot.encodeCpuMs = threeGI.timings.encodeMs;
         // The census needs GPU timing and arrives late: until then there are no state counts.
@@ -652,6 +788,37 @@ function budgetStats(counters: Readonly<Record<string, number>> | undefined, pre
     const msPerProbe = counters['calibration ms per unit'];
     stats.usPerProbe = msPerProbe === undefined ? null : msPerProbe * 1000;
     return stats;
+}
+
+/** Half floats to floats, by table: the response meter reads a region every frame. */
+let halfTable: Float32Array | null = null;
+
+function halfToFloatTable(): Float32Array {
+    if (halfTable) return halfTable;
+    halfTable = new Float32Array(65536);
+    for (let bits = 0; bits < 65536; bits++) {
+        const sign = bits & 0x8000 ? -1 : 1;
+        const exponent = (bits >> 10) & 0x1f;
+        const mantissa = bits & 0x3ff;
+        let value: number;
+        if (exponent === 0) value = mantissa * 2 ** -24;
+        else if (exponent === 31) value = mantissa === 0 ? Infinity : NaN;
+        else value = (1 + mantissa / 1024) * 2 ** (exponent - 15);
+        halfTable[bits] = sign * value;
+    }
+    return halfTable;
+}
+
+/** The mean of the RGB channels of RGBA half-float pixels (alpha left out). */
+function halfRgbaMean(pixels: Uint16Array): number {
+    const table = halfToFloatTable();
+    let sum = 0;
+    let count = 0;
+    for (let index = 0; index + 3 < pixels.length; index += 4) {
+        sum += table[pixels[index]] + table[pixels[index + 1]] + table[pixels[index + 2]];
+        count += 3;
+    }
+    return count > 0 ? sum / count : 0;
 }
 
 /**

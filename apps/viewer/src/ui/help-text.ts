@@ -80,6 +80,52 @@ export const HELP = {
     statsSync:
         "CPU time the three.js adapter spends per frame looking for changes in the scene and sending them to the GI library (target: 0.2 ms for a still scene), and then recording the GI work.",
     statsStates: 'How many probes are in each state, counted on the GPU a few frames ago.',
+    statsRecompiles:
+        'GPU programs the GI library had to compile while you used the viewer. It should stay at 0: moving, dimming, recolouring, switching lights and changing the time of day only change data. Starting DDGI over with light groups or the sun layer builds a new DDGI, which counts from 0 again.',
+
+    // Lights, motions, time of day, light groups and the response meter (T2.8).
+    lightSelect:
+        "Choose one of the scene's lights to change. You can also click a light's marker in the picture (a small ball, or a cone for a spotlight). The chosen light gets arrows you can drag to move it.",
+    lightOn: 'Switches the light on or off. Off sets its brightness to 0 rather than removing it, so nothing has to be rebuilt; GI follows within a frame or two.',
+    lightIntensity:
+        "How bright the light is, on a stepped scale: each notch to the right is about twice as bright. The number is in the light's own unit (candela for lamps, lux for the sun). GI follows: the probes near the light are updated first.",
+    lightColor: 'The colour of the light. GI picks up the new colour in the bounced light within a few frames.',
+    lightRange:
+        'How far the light reaches, in metres: its light fades out to nothing at this distance. 0 means no limit (light falls off naturally with distance). GI uses the same reach.',
+    lightCone: "How wide the spotlight's cone is, in degrees from its centre to its edge.",
+    lightPenumbra: "How soft the edge of the spotlight's cone is: 0 is a hard edge, 1 fades all the way from the centre.",
+    lightShadows:
+        "Whether the light casts shadows. GI follows at once. three.js has to rebuild its own drawing programs when a light's shadow is switched, so the picture may pause for a moment the first time.",
+    lightGroup:
+        'Which light group the light belongs to in GI (0 to 3). With light groups on (below), each group can be dimmed or tinted in GI at once, with no update needed.',
+    lightGizmoMove: 'Drag the arrows on the chosen light to move it. Drag a square to move it within a plane.',
+    lightGizmoTurn: 'Drag the rings on the chosen spotlight to turn it and aim it somewhere else.',
+    lightPutBack: 'Puts the chosen light back exactly as the scene has it: place, aim, brightness, colour, reach and group.',
+    motionSelect:
+        "Scripted light movements from the scene file. Light sweep: a lamp gliding at walking pace (1 metre a second) and back. Light step: the same lamp jumping between two places every 3 seconds, to see how fast GI catches up. Choose one, then press Play.",
+    motionPlay: 'Plays the chosen movement, over and over. Stop puts the lamp back where it was.',
+    timeOfDayToggle:
+        "Moves the sun with the hour and the day of the year below; the sky and GI follow. Turning it on also turns on DDGI's sun layer, which makes changes of the sun's brightness and colour show in GI at once; DDGI starts over once for that (a few seconds; Sponza about 10). The time it opens at puts the sun exactly where the scene has it.",
+    timeOfDayHour:
+        'The time of day (sun time: the sun is highest at 12:00). The sun moves along its real path for the chosen day. Near sunrise and sunset the sky model stops at 5 degrees above the horizon, so the viewer fades the sun and sky out towards night instead.',
+    timeOfDayDay: 'The day of the year, which sets how high the sun climbs: highest around 21 June, lowest around 21 December.',
+    timeOfDayPlay: 'Plays one day from just before sunrise to just after sunset in 10 seconds, to watch GI follow a moving sun.',
+    lightGroupsCount:
+        "Gives GI a separate layer for each light group (0 to 3, set per light above) and one for the sky and glowing surfaces, so each can be dimmed or tinted at once with the sliders below. Off is the default: each layer costs memory and a little GPU time per probe. Changing this starts DDGI over (a few seconds).",
+    lightGroupWeight:
+        "Dims or tints this group's light in GI only. Instant: no update needed, nothing is traced again. The lamps' own direct light in the picture doesn't change; switch to GI only to see just the bounced light.",
+    environmentWeight:
+        "Dims or tints the light GI gets from the sky and from glowing surfaces. Instant: no update needed, nothing is traced again. The sky you see doesn't change.",
+    meterPickRegion:
+        'Drag a rectangle over the picture to choose what the meter watches: it averages that part of the picture each frame. Without one it watches the whole picture.',
+    meterWholePicture: 'Watch the whole picture instead of a picked rectangle.',
+    meterMeasure:
+        "Measures how fast GI follows a step: the scene's step motion's lamp jumps once, and the meter plots the picked region frame by frame, in GI only. It first raises DDGI's budget to 16 ms for 4 seconds so the light has settled (a test mode, not what a game would do), waits 4 seconds at your budget, makes the jump, records 2 seconds, then raises the budget again for 4 seconds to find the settled picture. Keep the camera still: moving it stops the measurement. About 15 seconds in all.",
+    meterCancel: 'Stops the measurement and gives DDGI its normal budget back.',
+    meterPlot:
+        "The picked region's brightness frame by frame after the step (frame 1 is the jump's own frame). Grey dashed: before the step; white: settled; the shaded band is within 5% of settled. Orange line: the first frame that changed by more than 1%; green line: the first frame within 5% of settled.",
+    meterSaveCsv:
+        "Saves the measurement as a CSV file: one row per frame (frame, milliseconds since the step, the region's brightness, its change from before and its distance from settled, probes updated), with the marks and how it was measured at the top.",
 } as const;
 
 export type HelpKey = keyof typeof HELP;
