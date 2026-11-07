@@ -393,12 +393,13 @@ async function startScene(
     const copyWhileCompilingMs = copiedWhileCompilingAt - copyStartedAt;
     await preparing;
     const preparedAt = performance.now();
-    let refinedAt = NaN;
-    void platform.rays.whenRefined().then(() => (refinedAt = performance.now()));
 
     // The first GI frame: the scene's uploads, and the tree builds start (the GPU's first, T2.12).
     threeGI.update(camera, 0);
     const copiedAt = performance.now();
+    // Asked for once the builds have started (before, nothing is pending and it resolves at once).
+    let refinedAt = NaN;
+    void platform.rays.whenRefined().then(() => (refinedAt = performance.now()));
     // The GI light joined the scene when `prepare` resolved (ThreeGI). A host that draws every frame,
     // as the viewer does, compiles three's materials for it at its next frame, while the trees build:
     // started here the same way (after the uploads, which start the GPU's tree build), and awaited
