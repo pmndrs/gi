@@ -25,7 +25,10 @@
  *    frames later, and `stats.recompiles` (must stay 0: a swap changes
  *    buffers and the mesh table, never a kernel);
  * 4. **trace speed after the swap**, as in 2. The done-when: A within 5% of
- *    B (judged on the RTX only, under the clock rule; DECISIONS 2026-11-05).
+ *    B, judged on Sponza (the done-when's scene) on the RTX, under the clock
+ *    rule (DECISIONS 2026-11-05); other scenes and GPUs report it. A small
+ *    scene's tree passes take about 2 ms a frame, and in a correctness run on
+ *    a hot RTX two-room read 0.80x with the same trees on both sides.
  *    The ratio before the swap is reported for the lead (H-PLOC trees alone).
  *
  * VITE_DDGI_SCENES=a,b picks scenes (Sponza needs the downloads; a small
@@ -61,6 +64,8 @@ const FRAMES_AFTER_SWAP = 60;
 /** The done-when's bars. */
 const SWAP_MEAN_TOLERANCE = 0.005;
 const TRACE_SPEED_TOLERANCE = 0.05;
+/** The scene the speed bar is judged on (see the file comment). */
+const SPEED_SCENE = 'sponza';
 /** The passes that walk the mesh trees. */
 const TREE_PASSES = ['ddgi/trace', 'ddgi/gi-direct'];
 /** Frames kept queued so the GPU never waits for the CPU. */
@@ -166,10 +171,10 @@ async function timeInTurn(sides: readonly Side[]): Promise<Record<string, number
 
 // The adapter's own device and limits (Sponza outgrows the default 128 MiB storage binding), as the viewer makes them.
 await runThreePage(async ({ device, adapterSummary, log, data }) => {
-    const judgeSpeed = /nvidia/i.test(adapterSummary.vendor);
+    const onRtx = /nvidia/i.test(adapterSummary.vendor);
     const manifests = loadAllManifests();
     const failures: string[] = [];
-    Object.assign(data, { units: UNITS, rounds: ROUNDS, blockFrames: BLOCK_FRAMES, speedJudged: judgeSpeed });
+    Object.assign(data, { units: UNITS, rounds: ROUNDS, blockFrames: BLOCK_FRAMES });
 
     for (const sceneId of SCENES) {
         const manifest = manifests.find((entry) => entry.id === sceneId);
@@ -232,12 +237,14 @@ await runThreePage(async ({ device, adapterSummary, log, data }) => {
         const afterSwap = await timeInTurn([gpuFirst, tinybvhOnly]);
         const afterRatio = afterSwap['gpu-first'] / afterSwap['tinybvh-only'];
         log(`${sceneId}: tree passes after the swap ${round(afterSwap['gpu-first'])} ms, tinybvh only ${round(afterSwap['tinybvh-only'])} ms (${round(afterRatio)}x)`);
+        const judgeSpeed = onRtx && sceneId === SPEED_SCENE;
         if (judgeSpeed && Math.abs(afterRatio - 1) > TRACE_SPEED_TOLERANCE) failures.push(`${sceneId}: after the swap the tree passes take ${round(afterRatio)}x tinybvh-only's (bar within 5%)`);
 
         data[sceneId] = {
             meshes: firstCounts.onGpuTrees + firstCounts.onTinybvhTrees,
             firstTrees: firstCounts,
             treePassMs: { beforeSwap, afterSwap },
+            speedJudged: judgeSpeed,
             gpuTreesRatio: round(gpuTreesRatio),
             afterSwapRatio: round(afterRatio),
             swap: { atlasMeanBefore: lastBefore, atlasMeanAfter: afterSwapFrame, change: swapChange, normalChanges, atlasMeanLater: later, swaps: swapCounts.swaps, recompiles },
