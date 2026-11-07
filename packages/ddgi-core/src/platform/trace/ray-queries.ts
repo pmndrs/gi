@@ -47,7 +47,7 @@ import type { PlatformScene, SceneUpload, UploadedMesh } from '../scene/platform
 import { GpuMeshTrees, type FirstTreeBuilder, type GpuBuiltTree, type GpuTreeBatchResult, type GpuTreeOutputs, type GpuTreeRequest } from './gpu-mesh-trees.ts';
 import { GrowableStorage, type ResidentRange } from './growable-storage.ts';
 import { BVH_NODE_BYTES, TOP_LEVEL_HEADER_BYTES, TRACE_STACK_SIZE, TRIANGLE_BYTES } from './layout.ts';
-import type { MeshBvh, MeshGeometry } from './mesh-bvh.ts';
+import type { MeshBvh } from './mesh-bvh.ts';
 import { createMeshBvhBuilder, type MeshBvhBuilder } from './mesh-bvh-async.ts';
 import { buildTopLevel, type TraceInstance } from './top-level.ts';
 import { GpuTopLevel } from './top-level-gpu.ts';
