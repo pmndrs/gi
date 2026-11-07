@@ -21,6 +21,24 @@ Rules:
 
 ---
 
+## 2026-11-08 · T2.13 review and merge · lead (opus)
+Did: The Opus review passed packing (done-when 2) and found the main-thread bar (done-when 1) missed. Under the timebox (one diagnosis, one fix attempt) I merged T2.13 as a known miss, since it is a clear gain. I fixed the review's doc notes on the branch (b2b6720):
+- `m3-moving.md`'s upload budget gets an as-built note;
+- DECISIONS' geometry-upload wording;
+- the proposed guard, now from a median of 3;
+- the NOTES normal counts.
+
+I kept the CPU-backed texture canvas (lead ruling). It also removed the stall that made the copy take 16–26 s while another process held the GPU. T2.13 is done.
+Verified:
+- Review: VALID post-merge set, RTX 3060, 61 °C start. `scene_copy_cpu_ms` 918 / 816 / 776 ms, median 816; before T2.13 it was 1,744 / 1,357 / 1,395.
+- T2.12's check 1 improved to 1.687 s median (it was 1.902).
+- Packing: 0 wrong words, normals at most 1 step off, on all procedural scenes, Sponza and Bistro exterior (RTX) and on the Intel UHD after the merge.
+- The T2.12 merge is safe by reading: the geometry uploads before tinybvh's transfer, and nothing reads a detached array. Its pages pass.
+- Recompiles 0 on Sponza and two-room.
+- Me on `m2` after the merge: typecheck clean, 1,111 unit tests pass.
+Not verified: the staging-buffer peak (estimated 188 MB, never measured); the packing fallbacks on a real GPU (fake GPU only); Bistro exterior's copy after the merge. These are in T2.10's and T2.11's lines.
+Known miss for Dennis: 816 ms against 150 on Sponza; Bistro exterior 2,478 ms against 200 (one run, before the merge). What's left is texture averages, the raw upload and the mesh checks that the contract keeps on the main thread. Recommendation: accept the miss, with guards from a median of 3 (about 1.0 s on Sponza; Bistro after 3 runs in T2.10). The options without a contract change (mip readback, H-PLOC from the staging buffers) go to the M3 breakdown.
+
 ## 2026-11-08 · T2.13 `m2` merged (T2.12 in) · implementer (opus)
 Did: merged `m2` twice, 7c1e707 (merge 8d05d69) and cbf172d (merge 1cbfc04). PROGRESS, DECISIONS and `timing.csv` keep both sides: PROGRESS has 114 = 112 + 112 − 110 headings, then 115 = 114 + 113 − 112. In `ray-queries.ts`, T2.12's GPU first-tree requests and its tinybvh start now take `mesh.geometry`, and the top level takes `mesh.layout.bounds`; `packedGeometryView` is gone (d338682 drops its import). The order is kept and commented: the GPU build's `writeBuffer` copies `geometry` inside `build()`, before the tinybvh start transfers (detaches) the same arrays. `gi-platform.ts` merged cleanly.
 Verified (RTX 3060, Chrome 157, correctness, `--no-cool-wait`):
