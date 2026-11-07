@@ -39,6 +39,11 @@
  * Choose with environment variables (vite passes `VITE_*` to the page):
  *   VITE_DDGI_SCENES=cornell-box,two-room,sponza   (default cornell-box,two-room; `all` = every manifest)
  *   VITE_DDGI_GROUPS=off,on                          (default both)
+ *   VITE_DDGI_RENDER_EVERY=0                         (three draws every n-th frame, 0 never; default 1)
+ * `sponza-candles` runs with 0: drawing its 1,024 point lights in three held
+ * the page past DevTools' 30 s (`Runtime.evaluate timed out`, T2.14 review
+ * re-check). Its candle lighting in three is T2.8's. The counter is about the
+ * platform's kernels, and the GI frames still run every frame.
  * Sponza, Bistro and the furnished room need the downloads.
  */
 
@@ -62,6 +67,8 @@ function listFromEnv(value: unknown, fallback: readonly string[]): string[] {
 }
 
 const SCENES = listFromEnv(env.VITE_DDGI_SCENES, ['cornell-box', 'two-room']);
+/** three draws every this many frames (the GI frames run every frame). */
+const RENDER_EVERY = typeof env.VITE_DDGI_RENDER_EVERY === 'string' && env.VITE_DDGI_RENDER_EVERY !== '' ? Math.max(0, Number(env.VITE_DDGI_RENDER_EVERY)) : 1;
 const GROUP_SETTINGS = listFromEnv(env.VITE_DDGI_GROUPS, ['off', 'on']).map((setting) => {
     if (setting !== 'off' && setting !== 'on') throw new Error(`VITE_DDGI_GROUPS: '${setting}' is neither off nor on`);
     return setting;
@@ -147,10 +154,12 @@ await runThreePage(
                     for (let frame = 0; frame < count; frame++) {
                         each?.(frame);
                         session.started.threeGI.update(session.camera, 1 / 60);
-                        renderer.render(session.loaded.scene, session.camera);
+                        const drawn = RENDER_EVERY > 0 && frameCount % RENDER_EVERY === 0;
+                        if (drawn) renderer.render(session.loaded.scene, session.camera);
                         frameCount++;
                         if (session.platform.stats.passes.some((pass) => pass.name === LIGHT_GRID_PASS)) lightGridFrames++;
-                        if (frameCount % FRAMES_PER_WAIT === 0) {
+                        // A slow scene to draw waits after every draw, so the page keeps answering DevTools.
+                        if (frameCount % FRAMES_PER_WAIT === 0 || (drawn && RENDER_EVERY > 1)) {
                             await device.queue.onSubmittedWorkDone();
                             await nextTask();
                         }
