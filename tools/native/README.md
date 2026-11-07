@@ -126,6 +126,8 @@ What the passes are, in the harness's own timers: `frame` (whole command buffer)
 
 ### What differs from the browser side
 
+- **How a probe follows a change (native's blend rule, `ProbeBlendingCS.hlsl:516-551`, with this ini):** a fixed hysteresis of 0.97 a frame, blended in a gamma-5 encoding (`irradiance^(1/5)`). Hysteresis drops by 0.75 only while a texel's encoded value darkens by more than `probeIrradianceThreshold` (0.2). The step is cut to a quarter when the brightening is more than `probeBrightnessThreshold` (1.0). Darkening steps at least 1/1024. Because of the encoding, a large darkening in linear light is a small one encoded, so native's darkening has a long tail: two-room's lamp leaving the room is still about 60% above settled after 3 s (`response.csv`, `response/native/...`). Our DDGI's rule is different (m2-lights.md §4.1). Compare like events only: our `lamp_halved` rows are a dimming, not the lamp leaving the room.
+
 - **Hardware ray tracing** (Vulkan ray tracing pipeline, or DXR) against a real acceleration structure. The browser side traces in software in compute shaders. Native trace times are therefore not a target to hit, they are a reference point.
 - **Recursion / albedo cap.** NVIDIA caps the albedo at **0.9** when a probe ray hit is lit with the volume's own previous irradiance (`ProbeTraceRGS.hlsl`), and at 0.9 per bounce in the path tracer. The browser side must use 0.9 too, or its indirect light is about 23% off (see docs/NOTES.md).
 - One ray bounce per probe ray plus a lookup in the volume's own irradiance (that is how it gets more bounces over time). There is no recursion limit setting beyond that.
@@ -165,7 +167,9 @@ Executables: `native/build/rtxgi/samples/bin/vulkan/Release/TestHarness-VK.exe` 
 
 ```powershell
 ./tools/native/play.ps1 -Scene two-room -Clean -Motion light-sweep              # watch it, in real time
+./tools/native/play.ps1 -Scene two-room -Clean -Motion light-sweep -Log         # the same in a visible window, logging every frame's time and lamp position, then checked
 ./tools/native/play.ps1 -Scene two-room -Clean -Motion light-step -Record -RecordSeconds 12 -Tag run1
+./tools/native/play.ps1 -Scene two-room -Clean -Motion light-step -Record -RecordSeconds 12 -GridRule ddgi -Tag ddgi-run1   # our DDGI's probe grid, for T2.10
 ./tools/native/play.ps1 -Scene sponza -Clean -Motion time-of-day -Record         # T2.4d's 10-second day; the sky follows the sun
 ./tools/native/play.ps1 -Scene open-ground -Camera 2 -Clean -Sky texture -CaptureFrames 120 -CaptureField
 node tools/native/sky-check.ts --scene open-ground --capture native/build/runs/open-ground-vulkan-clean-sky/screenshots
@@ -175,7 +179,7 @@ node tools/native/response.ts native/build/recordings/two-room-light-step-run1 [
 ```
 
 - **The motion file** (`motion.ts write`): `track <light:name | sky> <linear|step> <loop|once> <fields>` then `key <t> <values>` lines. A manifest motion's keys are copied as they are; the harness interpolates them as `motionState` does (wrap on the last key's time when looping, hold for `step`). `time-of-day` is T2.4d's day (elevation 5 → 75 → 5 degrees as a sine, azimuth through 160 degrees around the manifest sun's, 10 s): a sun direction key every 1/60 s, and a sky image every 0.25 s made by the sky file's own recipe (`buildSkyImage`), blended between.
-- **How time is taken.** Recordings use a **fixed step of 1/60 s a frame** (`app.motionClock=fixed`): frame k shows the motion at k/60 s, the web side's DDGI clock, however long the frame took. The harness is CPU-bound and recording waits for the GPU each frame (about 0.1 s a frame on two-room), so a wall clock would make the motion jump between frames and tie the response to the harness's frame rate. A window you watch uses the wall clock instead (`wall`), so the motion runs at the viewer's speed in real time. 600 frames at the motion's start state come first (`app.motionWarmupFrames`), so the probes have settled.
+- **How time is taken.** Recordings use a **fixed step of 1/60 s a frame** (`app.motionClock=fixed`, `app.motionFrameRate=60`): frame k shows the motion at k/60 s, the web side's DDGI clock, however long the frame took. The harness works the time out as k / 60 in double, not by adding up a float step, so a step key at 3 s fires on frame 180 exactly. The harness is CPU-bound and recording waits for the GPU each frame (about 0.1 s a frame on two-room), so a wall clock would make the motion jump between frames and tie the response to the harness's frame rate. A window you watch uses the wall clock instead (`wall`), so the motion runs at the viewer's speed in real time. 600 frames at the motion's start state come first (`app.motionWarmupFrames`), so the probes have settled.
 - **While a motion plays every probe is traced and blended every frame** (`skipConverged=0`); otherwise the harness stops updating a converged volume and never sees the light move. A light at intensity 0 that a motion targets is kept in the scene.
 - **A recording** (`native/build/recordings/<scene>-<motion>[-<tag>]/`, git-ignored):
   - `recording.json`: scene, motion, camera, size, clock and step, warm-up, frames, image interval, probes, device, fork commit;
@@ -183,7 +187,8 @@ node tools/native/response.ts native/build/recordings/two-room-light-step-run1 [
   - `frames/frame-NNNNNN.png`: every 4th frame (NNNNNN is the frame number, so the time is NNNNNN / 60 s), the full image (`-View indirect` for GI only), settings panel hidden;
   - `video.mp4` (when ffmpeg is on PATH): those images at 15 frames a second, so video time equals motion time;
   - the motion file, and for `time-of-day` its sky images.
-- `play.ps1 -Record` ends by checking the played motion against the manifest at the logged times (`motion.ts check`: light positions within 1 cm; the day's sun within 0.01 degrees).
+- `play.ps1 -Record` and `-Log` end by checking the played motion against the manifest (`motion.ts check`: light positions within 1 cm; the day's sun within 0.01 degrees). On the fixed clock the check's times are frame / 60, worked out in TypeScript from the frame numbers, so a harness clock bug can't pass by agreeing with itself; the harness's own logged time is compared too. A `-Log` run (wall clock) is checked at the harness's clock reading, and reports the frame interval and how long after its time each frame finished.
+- `-GridRule ddgi` gives the harness our DDGI's probe grid (as `bench.ps1`); `response.csv` rows from it carry `grid_ddgi/` in their path and a `grid_rule` row.
 
 ### Checking that the default config is unchanged
 

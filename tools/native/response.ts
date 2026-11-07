@@ -41,6 +41,8 @@ interface Recording {
     harnessCommit: string;
     device: string;
     recorded: string;
+    /** play.ps1 -GridRule; absent in the first recordings, which used the harness's own cells grid. */
+    gridRule?: string;
 }
 
 interface JumpResponse {
@@ -165,8 +167,8 @@ function main(): void {
     const rows: string[] = [];
     positionals.forEach((folder, runIndex) => {
         const { recording, jumps } = analyse(resolve(folder), settledByPosition);
-        const run = runIndex + 1;
-        console.log(`run ${run}: ${recording.scene} ${recording.motion} (${folder}), fork ${recording.harnessCommit}`);
+        const runNumber = runIndex + 1;
+        console.log(`run ${runNumber}: ${recording.scene} ${recording.motion} (${folder}), fork ${recording.harnessCommit}`);
         for (const jump of jumps) {
             const describe = jump.errors
                 .map((error, index) => ({ frame: index + 1, error }))
@@ -181,7 +183,11 @@ function main(): void {
             console.log(`    error by frame: ${describe}`);
             const date = recording.recorded.slice(0, 10);
             const device = recording.device.replace(/^NVIDIA GeForce /, '').replace(/ GPU$/, '');
-            const prefix = `${date},${recording.harnessCommit},${device},native,${recording.scene},response/native/${recording.motion}/run${run}/${jump.name}`;
+            // The probe grid (play.ps1 -GridRule) is in the path for every grid but the harness's own cells grid, whose rows came first
+            const grid = recording.gridRule ?? 'cells';
+            const run = `${grid === 'cells' ? '' : `grid_${grid}/`}run${runNumber}`;
+            const prefix = `${date},${recording.harnessCommit},${device},native,${recording.scene},response/native/${recording.motion}/${run}/${jump.name}`;
+            rows.push(`${prefix}/grid_rule,${grid}`);
             rows.push(`${prefix}/step_size,${round(jump.stepShare)}`);
             rows.push(`${prefix}/first_frame_move,${round(jump.firstFrameChange)}`);
             rows.push(`${prefix}/entered_frame,${jump.enteredFrame ?? -1}`);

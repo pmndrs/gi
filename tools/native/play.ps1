@@ -55,6 +55,17 @@
   (default native/build/recordings/<scene>-<motion>[-<Tag>]). See tools/native/README.md,
   "Motions and recordings".
 
+.PARAMETER Log
+  Plays the motion in a visible window on the wall clock, as a person watching would see it,
+  and writes frames.csv (the motion's time and the moving light, every frame; no images, no GI
+  mean, so nothing slows the window down) for -RecordSeconds, then closes. The played positions
+  are then checked against the manifest at the logged times.
+
+.PARAMETER GridRule
+  cells (default): the harness's own probe grid, ceil(size / spacing) cell centres. ddgi: our
+  DDGI's grid (floor(size / spacing) + 1 probes at the manifest spacing), as bench.ps1 -GridRule
+  ddgi, for comparing with our response at the same probes.
+
 .PARAMETER RecordSeconds
   How much of the motion to record (default: one pass of the motion, its last key's time).
 
@@ -97,6 +108,8 @@ param(
     [string]$Motion = '',
     [double]$DaySeconds = 10,
     [switch]$Record,
+    [switch]$Log,
+    [ValidateSet('cells', 'ddgi')][string]$GridRule = 'cells',
     [string]$RecordDir = '',
     [double]$RecordSeconds = 0,
     [int]$RecordImageEvery = 4,
@@ -115,11 +128,14 @@ $manifest = Read-SceneManifest $Scene
 $sceneFile = Resolve-SceneFile $manifest
 $root = Get-RepoRoot
 
-if ($Record -and -not $Motion) { throw '-Record needs -Motion.' }
-if ($Record -and $CaptureFrames -gt 0) { throw 'Use -Record or -CaptureFrames, not both.' }
+if ($Record -and $Log) { throw 'Use -Record (fixed clock, unattended) or -Log (wall clock, a visible window), not both.' }
+# Both write frames.csv; -Record on the fixed 1/60 s clock in a minimized window, -Log on the wall clock in a visible one
+$recording = $Record -or $Log
+if ($recording -and -not $Motion) { throw '-Record and -Log need -Motion.' }
+if ($recording -and $CaptureFrames -gt 0) { throw 'Use -Record, -Log or -CaptureFrames, not two of them.' }
 $timeOfDay = $Motion -eq 'time-of-day'
 if ($timeOfDay) { $Sky = 'texture' }
-if (($Sky -eq 'texture' -or $Record) -and $Api -ne 'vulkan') { throw 'The texture sky and recording are built for the Vulkan harness only.' }
+if (($Sky -eq 'texture' -or $recording) -and $Api -ne 'vulkan') { throw 'The texture sky and recording are built for the Vulkan harness only.' }
 $unattended = $CaptureFrames -gt 0 -or $Record
 
 $skyTexture = ''
@@ -140,6 +156,7 @@ try {
     if ($Clean) { $tagParts += 'clean' }
     if ($Motion) { $tagParts += $Motion }
     if ($Sky -eq 'texture') { $tagParts += 'sky' }
+    if ($GridRule -ne 'cells') { $tagParts += "grid-$GridRule" }
     $runDir = Get-HarnessRunDir $Scene $Api $(if ($tagParts.Count) { '-' + ($tagParts -join '-') } else { '' })
 
     # The motion (fork options, see include/Motion.h in the fork): a motion file written from the manifest
@@ -166,12 +183,12 @@ try {
         if ($LASTEXITCODE -ne 0) { throw "Could not write the motion file for '$Motion'." }
         $warmup = if ($WarmupFrames -ge 0) { $WarmupFrames } elseif ($Record) { 600 } else { 60 }
         $appLines += "app.motionFile=$motionFile"
-        # Watched: the motion runs in real time. Recorded: a fixed 1/60 s a frame (DDGI's clock on the
-        # web side), so frame k is the motion at k/60 s however long recording the frame takes.
+        # Watched: the motion runs in real time. Recorded: frame k is the motion at exactly k/60 s (DDGI's
+        # clock on the web side), however long recording the frame takes.
         $appLines += "app.motionClock=$(if ($Record) { 'fixed' } else { 'wall' })"
-        $appLines += 'app.motionTimeStep=0.016666667'
+        $appLines += 'app.motionFrameRate=60'
         $appLines += "app.motionWarmupFrames=$warmup"
-        if ($Record) {
+        if ($recording) {
             $seconds = if ($RecordSeconds -gt 0) { $RecordSeconds } else { $motionSeconds }
             $recordFrames = [int][math]::Round($seconds * 60) + 1
             $recordFolder = if ($RecordDir) { $RecordDir.Replace('\', '/') } else { "$root/native/build/recordings/$Scene-$Motion$(if ($Tag) { "-$Tag" })" }
@@ -179,14 +196,19 @@ try {
             New-Item -ItemType Directory -Force -Path $recordFolder | Out-Null
             $appLines += "app.recordDir=$recordFolder"
             $appLines += "app.recordFrames=$recordFrames"
+            if ($Log) {
+                # Nothing that waits for the GPU, so the window plays at its own (vsync) rate
+                $RecordImageEvery = 0
+                $appLines += 'app.recordGiMean=0'
+            }
             $appLines += "app.recordImageEvery=$RecordImageEvery"
         }
     }
 
     $vsync = if ($NoVsync -or $Record) { 0 } else { 1 }
     $config = New-HarnessIni -Manifest $manifest -SceneFile $sceneFile -OutputDir $runDir -Gpu $Gpu `
-        -Width $Width -Height $Height -Vsync $vsync -Clean:$Clean -Camera $Camera -Rays $Rays -HideUi:$unattended `
-        -UpdateEveryFrame:([bool]$Motion) -SkyTexture $skyTexture -KeepLights $keepLights -AppLines $appLines
+        -Width $Width -Height $Height -Vsync $vsync -Clean:$Clean -Camera $Camera -Rays $Rays -HideUi:($unattended -or $Log) `
+        -UpdateEveryFrame:([bool]$Motion) -SkyTexture $skyTexture -KeepLights $keepLights -AppLines $appLines -GridRule $GridRule
     $iniPath = "$runDir/$Scene.ini"
     [System.IO.File]::WriteAllText($iniPath, $config.Text)
 
@@ -202,7 +224,7 @@ try {
     Write-Host "Probe volume: $($config.Grid.Counts -join ' x ') = $($config.Grid.Total) probes, $Rays rays per probe"
     Write-Host "API         : $Api$(if ($Clean) { ', clean mode' })"
     Write-Host "Sky         : $(if ($skyTexture) { "texture, $skyTexture" } else { 'flat (the sky file''s flat equivalent, or the manifest colour)' })"
-    if ($Motion) { Write-Host "Motion      : $Motion, $motionSeconds s$(if ($Record) { ", recording $recordFrames frames at a fixed 1/60 s after $warmup warm-up frames" } else { ', wall clock' }), probes updated every frame" }
+    if ($Motion) { Write-Host "Motion      : $Motion, $motionSeconds s$(if ($Record) { ", recording $recordFrames frames at a fixed 1/60 s after $warmup warm-up frames" } elseif ($Log) { ", wall clock, logging $recordFrames frames" } else { ', wall clock' }), probes updated every frame" }
     Write-Host "Config      : $iniPath"
 
     $launched = Get-Date
@@ -216,17 +238,17 @@ try {
         $result = Wait-Harness $process 30
         $screenshot = "$($config.Screenshots)/R-BackBuffer.png"
         Assert-HarnessCompleted $runDir $launched @($screenshot) "capture run of $Scene ($result)"
-        $log = Get-Content -LiteralPath "$runDir/log.txt" -Raw
-        if ($log -match 'device: (.+)') { Write-Host "Device      : $($Matches[1].Trim())" }
+        $harnessLog = Get-Content -LiteralPath "$runDir/log.txt" -Raw
+        if ($harnessLog -match 'device: (.+)') { Write-Host "Device      : $($Matches[1].Trim())" }
         Write-Host "Screenshot  : $((Resolve-Path $screenshot).Path)"
     }
-    elseif ($Record) {
+    elseif ($recording) {
         $result = Wait-Harness $process 60
         $framesCsv = "$recordFolder/frames.csv"
         Assert-HarnessCompleted $runDir $launched @($framesCsv) "recording of $Scene $Motion ($result)"
-        $log = Get-Content -LiteralPath "$runDir/log.txt" -Raw
-        if ($log -notmatch 'Recording complete') { throw "The recording of $Scene $Motion stopped early; see $runDir/log.txt." }
-        $device = if ($log -match 'device: (.+)') { $Matches[1].Trim() } else { '' }
+        $harnessLog = Get-Content -LiteralPath "$runDir/log.txt" -Raw
+        if ($harnessLog -notmatch 'Recording complete') { throw "The recording of $Scene $Motion stopped early; see $runDir/log.txt." }
+        $device = if ($harnessLog -match 'device: (.+)') { $Matches[1].Trim() } else { '' }
         Copy-Item -LiteralPath $motionFile -Destination "$recordFolder/$Motion.motion"
         if ($timeOfDay) { Copy-Item -LiteralPath "$runDir/$Motion-sky" -Destination "$recordFolder/$Motion-sky" -Recurse -Force }
         $fork = "$(git -C "$root/native/rtxgi-ddgi" rev-parse --short HEAD)".Trim()
@@ -244,8 +266,10 @@ try {
             view = $View
             clean = [bool]$Clean
             sky = $Sky
-            clock = 'fixed'
-            frameSeconds = 1 / 60
+            clock = $(if ($Log) { 'wall' } else { 'fixed' })
+            frameSeconds = $(if ($Log) { $null } else { 1 / 60 })
+            frameRate = 60
+            gridRule = $GridRule
             warmupFrames = $warmup
             frames = $recordFrames
             imageEvery = $RecordImageEvery
@@ -255,6 +279,7 @@ try {
             motionFile = "$Motion.motion"
             probeUpdate = 'every probe every frame (probeVariability.skipConverged=0)'
             probes = $config.Grid.Total
+            probeCounts = $config.Grid.Counts
             raysPerProbe = $Rays
             device = $device
             harnessCommit = $fork
@@ -276,7 +301,8 @@ try {
             else { Write-Host "Video       : $recordFolder/video.mp4" }
         }
 
-        # The played motion against the manifest's, at the same times
+        # The played motion against the manifest's, at the same times (motion.ts reads recording.json's clock: on the
+        # fixed clock the time is the frame number / 60, worked out there, not the harness's logged time)
         if ($timeOfDay) { & node "$root/tools/native/motion.ts" check --scene $Scene --day --seconds $DaySeconds --log $framesCsv }
         else {
             $firstKey = @(@($manifest.motions | Where-Object { $_.id -eq $Motion })[0].keyframes)[0]

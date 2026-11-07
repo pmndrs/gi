@@ -34,7 +34,7 @@
  * file's own recipe (`buildSkyImage`) for that sun, and blended between.
  */
 
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
@@ -250,6 +250,40 @@ export function checkDay(manifest: SceneManifest, options: DayOptions, frames: r
     return { worst, worstFrame, checked };
 }
 
+/**
+ * The times a log is checked at. On the fixed clock (a `-Record` run, or a log
+ * with no recording.json beside it) frame k is due at k / frameRate seconds,
+ * worked out here from the frame number alone, so a bug in the harness's
+ * clock can't hide behind its own logged time; the logged time is compared
+ * with it as well. On the wall clock (`-Log`) the harness's own clock reading
+ * is the only time there is; how far that runs behind the moment the frame
+ * was finished (wall_time_s) is reported.
+ */
+export function checkTimes(logPath: string): LoggedFrame[] {
+    const frames = readFramesCsv(logPath);
+    const descriptionPath = join(dirname(logPath), 'recording.json');
+    const description = existsSync(descriptionPath) ? (JSON.parse(readFileSync(descriptionPath, 'utf8')) as { clock?: string; frameRate?: number }) : {};
+    const frameRate = description.frameRate ?? 1 / FRAME_SECONDS;
+    if (description.clock === 'wall') {
+        const start = frames[0].values.wall_time_s - frames[0].seconds;
+        const lags = frames.map((frame) => frame.values.wall_time_s - start - frame.seconds);
+        const intervals = frames.slice(1).map((frame, index) => frame.seconds - frames[index].seconds);
+        console.log(
+            `wall clock: ${frames.length} frames over ${frames[frames.length - 1].seconds.toFixed(3)} s; frame interval median ${(median(intervals) * 1000).toFixed(2)} ms, largest ${(Math.max(...intervals) * 1000).toFixed(2)} ms; ` +
+                `each frame finished ${(median(lags) * 1000).toFixed(2)} ms (median) after the time it shows`,
+        );
+        return frames;
+    }
+    const clockError = Math.max(...frames.map((frame) => Math.abs(frame.seconds - frame.frame / frameRate)));
+    console.log(`fixed clock: ${frames.length} frames checked at frame / ${frameRate} s; the harness's logged time differs from that by at most ${(clockError * 1e6).toFixed(3)} microseconds`);
+    return frames.map((frame) => ({ ...frame, seconds: frame.frame / frameRate }));
+}
+
+function median(values: readonly number[]): number {
+    const sorted = [...values].sort((a, b) => a - b);
+    return sorted[Math.floor(sorted.length / 2)];
+}
+
 async function main(): Promise<void> {
     const { values, positionals } = parseArgs({
         allowPositionals: true,
@@ -302,10 +336,11 @@ async function main(): Promise<void> {
     }
 
     if (!values.log) throw new Error('check needs --log');
+    const frames = checkTimes(resolve(values.log));
     if (values.day) {
         const options: DayOptions = { seconds: Number(values.seconds), low: Number(values.low), high: Number(values.high), sweep: Number(values.sweep), skyStep: Number(values['sky-step']) };
         const tolerance = 0.01;
-        const result = checkDay(manifest, options, readFramesCsv(resolve(values.log)));
+        const result = checkDay(manifest, options, frames);
         const verdict = result.checked > 0 && result.worst <= tolerance;
         console.log(`${verdict ? 'ok' : 'FAIL'}: ${result.checked} frames of ${manifest.id}'s day; largest angle from the day's sun at the same time ${result.worst.toFixed(5)} degrees (frame ${result.worstFrame}; tolerance ${tolerance})`);
         if (!verdict) process.exitCode = 1;
@@ -314,7 +349,7 @@ async function main(): Promise<void> {
     if (!values.motion) throw new Error('check needs --motion or --day');
     const motion = findMotion(manifest, values.motion);
     const tolerance = Number(values.tolerance);
-    const result = checkPositions(manifest, motion, readFramesCsv(resolve(values.log)));
+    const result = checkPositions(manifest, motion, frames);
     const verdict = result.checked > 0 && result.worst <= tolerance;
     console.log(
         `${verdict ? 'ok' : 'FAIL'}: ${result.checked} frames of ${manifest.id} ${motion.id}; largest distance from the manifest motion at the same time ${(result.worst * 100).toFixed(4)} cm` +
