@@ -21,6 +21,27 @@ Rules:
 
 ---
 
+## 2026-11-07 · T2.3 follow-up: check 2's diagnosis and one fix attempt, the timing runs, `m2` merged · implementer (opus)
+Did (`m2-t2.3` up to the PROGRESS commit; `m2` merged at 7e88933, PROGRESS and DECISIONS kept in full, the merge markers removed in bbd8226):
+- Check 2 diagnosis, temporary edits on `ddgi-light-grid-cost`: not a bug.
+  - Shadow rays stop at the light and at their first hit, and the candles are out of GI's rays.
+  - Ray length doesn't matter: tMax at 10% costs the same.
+  - Incoherent directions are about a third: one fixed direction took `gi/direct` from 1.9 to 1.27 ms.
+  - The rest is 1.4-1.9× as many hits needing a ray.
+- One fix attempt, a shadow-ray roulette against the ray's bounce light. Check 1 held, but it bought nothing on `sponza-candles` (6.15 against 5.65 µs), so it was taken out. DECISIONS 2026-11-07: a known miss at 2.2-2.5×.
+- `ddgi-light-grid-cost` now warms the field first. `hit-shading-many-lights` takes `VITE_DDGI_GRID_CELLS`.
+
+Verified (RTX, bench lock): check 1 at 1,024 cells fails (97.9% at K = 1), so the default stays 2,048.
+
+Not verified: VALID timings for checks 2 and 4, and check 3 at 2,048 cells. Every heavy run, including the retries after 13-15 minutes of cooling (45-48 °C starts), read INVALID: SW thermal slowdown in 60-100% of loaded samples (NOTES).
+
+Numbers:
+- Check 3 at 1,024 cells: build **0.087 ms**, the one VALID run.
+- Check 2 (INVALID): 6.19-6.28 against 2.47 µs per probe (warmed).
+- Check 4 (INVALID): 10.34 / 10.63 s against 8.18 s.
+
+Next: lead: one VALID run each for checks 3 and 4 at 2,048 cells when the RTX stops flagging thermal slowdown (gpu-tester).
+
 ## 2026-11-07 · T2.3 many-light sampling: the light grid · implementer (opus)
 Did (branch `m2-t2.3`, cb35896..f5aaf53, `m2` with T2.5 merged in at e416a85):
 - The grid (`platform/shade/light-grid.ts`). `gi/light-grid` is a platform pass, run every unpaused frame with more than `exactLightLimit` (8) point and spot lights. It covers the scene's bounds with at most `lightGridMaxCells` (2,048) cubic cells. Every light is weighed per cell by an upper bound over the cell; each cell gets R = 16 systematic picks, stored as a `rgba32uint` texture in the hit-shading module (still no storage buffer).
