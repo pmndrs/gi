@@ -17,8 +17,9 @@
  *   and on two-room 2 light groups with their weights changed. The counter
  *   must stay 0 throughout.
  * - **meter** (check 2): the response meter's CSV for two-room's step (the
- *   `light-step` motion: the lamp jumps from x = 1 to x = 6.2 m, `lit-room`
- *   view) against the T2.4b test page's measurement of the same step
+ *   `light-step` motion's second jump: the lamp back from x = 6.2 to x = 1 m,
+ *   into the `lit-room` view; the first jump, out of it, is reported beside
+ *   it, METER_JUMPS says why) against the T2.4b test page's measurement of the same step
  *   (`ddgi-shared/response.ts`: fields converged before and after, the step
  *   at the same probes a frame as the viewer ran, its test view's mean): the
  *   first frame within 5% of settled, and the frame from which it stays
@@ -58,8 +59,14 @@ const HEIGHT = 720;
 const MOTION_SECONDS = 4;
 /** The lamp's place must match `motionState` to this many metres every frame. */
 const POSITION_TOLERANCE_M = 1e-6;
-/** While a motion plays, DDGI's picture of the room must change by more than this share. */
-const MIN_PICTURE_CHANGE = 0.01;
+/**
+ * While a motion plays, DDGI's picture must change by more than this many
+ * times its own change over the same time with nothing moving (DDGI's
+ * noise), and by more than MIN_PICTURE_CHANGE. Sponza's arcade lamp (3 cd)
+ * in its sunlit courtyard moves the whole picture by about 1%.
+ */
+const NOISE_MULTIPLE = 3;
+const MIN_PICTURE_CHANGE = 0.002;
 /** Check 2: the meter and the T2.4b page agree within this many frames. */
 const MATCH_FRAMES = 2;
 /** The T2.4b page's test view size and convergence (ddgi-schedule-step). */
@@ -153,6 +160,8 @@ interface MotionResult {
     frames: number;
     worstPositionErrorM: number;
     pictureChange: number;
+    /** The picture's own change with nothing moving, over the same time. */
+    stillChange: number;
     recompiles: number;
     putBack: boolean;
 }
@@ -174,6 +183,12 @@ async function runMotions(core: ViewerCore, failures: string[]): Promise<MotionR
             const before = light.position.clone();
             const beforeIntensity = light.intensity;
             const meanBefore = await pictureMean(core, ddgi);
+            // The picture's own change with nothing moving, over the same time and sampling.
+            let stillChange = 0;
+            for (let frame = 1, startedStill = performance.now(); performance.now() - startedStill < MOTION_SECONDS * 1000; frame++) {
+                await core.renderThroughLoop();
+                if (frame % 15 === 0) stillChange = Math.max(stillChange, Math.abs((await pictureMean(core, ddgi)) / meanBefore - 1));
+            }
             let worst = 0;
             let pictureChange = 0;
             let frames = 0;
@@ -192,11 +207,15 @@ async function runMotions(core: ViewerCore, failures: string[]): Promise<MotionR
             player.stop();
             const putBack = light.position.distanceTo(before) < 1e-9 && light.intensity === beforeIntensity && (beforeIntensity > 0 || light.parent === null);
             await core.renderThroughLoop();
-            const result: MotionResult = { scene: sceneId, motion: motionId, frames, worstPositionErrorM: worst, pictureChange, recompiles: ddgi.recompiles, putBack };
+            const result: MotionResult = { scene: sceneId, motion: motionId, frames, worstPositionErrorM: worst, pictureChange, stillChange, recompiles: ddgi.recompiles, putBack };
             results.push(result);
-            log(`  ${motionId}: ${frames} frames, lamp within ${worst.toExponential(1)} m of the script, picture moved up to ${(pictureChange * 100).toFixed(1)}%, recompiles ${ddgi.recompiles}, put back ${putBack}`);
+            log(
+                `  ${motionId}: ${frames} frames, lamp within ${worst.toExponential(1)} m of the script, picture moved up to ${(pictureChange * 100).toFixed(2)}% (still: ${(stillChange * 100).toFixed(2)}%), recompiles ${ddgi.recompiles}, put back ${putBack}`,
+            );
             if (worst > POSITION_TOLERANCE_M) failures.push(`${sceneId} ${motionId}: the lamp was ${worst} m from the script`);
-            if (!(pictureChange > MIN_PICTURE_CHANGE)) failures.push(`${sceneId} ${motionId}: DDGI's picture moved only ${(pictureChange * 100).toFixed(2)}%`);
+            if (!(pictureChange > Math.max(MIN_PICTURE_CHANGE, NOISE_MULTIPLE * stillChange))) {
+                failures.push(`${sceneId} ${motionId}: DDGI's picture moved only ${(pictureChange * 100).toFixed(2)}% (${(stillChange * 100).toFixed(2)}% with nothing moving)`);
+            }
             if (ddgi.recompiles !== 0) failures.push(`${sceneId} ${motionId}: ${ddgi.recompiles} recompiles`);
             if (!putBack) failures.push(`${sceneId} ${motionId}: stopping did not put the lamp back`);
         }
@@ -296,15 +315,38 @@ async function runControls(core: ViewerCore, failures: string[]): Promise<Record
 }
 
 interface MeterComparison {
+    jump: number;
+    judged: boolean;
     units: number;
-    meter: { enteredFrame: number | null; settledFrame: number | null; firstChangedFrame: number | null; before: number; settled: number };
+    meter: { enteredFrame: number | null; settledFrame: number | null; firstChangedFrame: number | null; before: number; settled: number; settleCurve: ReadonlyArray<{ seconds: number; mean: number }> };
     page: { enteredFrame: number | null; settledFrame: number | null; firstFrameMove: number; before: number; settled: number; errors: string };
     csv: string;
 }
 
+/**
+ * The step's jumps, in the order measured: jump 2 (the lamp back into the lit
+ * room, the view brightening tenfold) is check 2's; jump 1 (the lamp leaving,
+ * the view ending at a tenth) is reported beside it. Leaving, 5% of settled
+ * is 0.5% of the picture before the step, where the old light's bounce fades
+ * by about 0.3% a second, so both methods' "within 5%" frame there depends on
+ * that slow tail more than on the response (DECISIONS 2026-11-08).
+ */
+const METER_JUMPS: ReadonlyArray<{ jump: number; judged: boolean }> = [
+    { jump: 1, judged: true },
+    { jump: 0, judged: false },
+];
+
 /** Check 2: the meter's CSV on two-room's step against the T2.4b page's measurement of the same step. */
-async function runMeter(core: ViewerCore, failures: string[]): Promise<MeterComparison> {
-    log('meter: two-room, lit-room, light-step');
+async function runMeter(core: ViewerCore, failures: string[]): Promise<MeterComparison[]> {
+    const comparisons: MeterComparison[] = [];
+    for (const { jump, judged } of METER_JUMPS) {
+        log(`meter: two-room, lit-room, light-step jump ${jump + 1}${judged ? '' : ' (reported, not judged)'}`);
+        comparisons.push(await compareJump(core, jump, judged, failures));
+    }
+    return comparisons;
+}
+
+async function compareJump(core: ViewerCore, jump: number, judged: boolean, failures: string[]): Promise<MeterComparison> {
     await openScene(core, 'two-room', 'lit-room');
     const player = new MotionPlayer(core.loaded!);
     const motion = player.motions.find((candidate) => candidate.id === 'light-step')!;
@@ -327,7 +369,7 @@ async function runMeter(core: ViewerCore, failures: string[]): Promise<MeterComp
         await core.renderThroughLoop();
     };
     for (let frame = 0; frame < 120; frame++) await pacedFrame();
-    meter.start(motion, performance.now());
+    meter.start(motion, performance.now(), jump);
     while (meter.running) {
         meter.beforeFrame(performance.now());
         await pacedFrame();
@@ -340,14 +382,17 @@ async function runMeter(core: ViewerCore, failures: string[]): Promise<MeterComp
     const units = unitsByFrame[Math.floor(unitsByFrame.length / 2)];
     log(`  meter: ${units} probes a frame; first change frame ${parsed.firstChangedFrame}, within ${TOLERANCE * 100}% from frame ${parsed.enteredFrame}, for good from ${parsed.settledFrame}`);
     log(`  meter curve: ${describeErrors(result.samples.map((sample) => sample.mean / result.marks.settled - 1))}`);
+    // How the test mode's settled picture moved: the mean at whole seconds, against the final settled.
+    const settleBySecond = result.settleCurve.filter((reading, index, all) => index === 0 || Math.floor(reading.seconds) !== Math.floor(all[index - 1].seconds));
+    log(`  meter settling: ${settleBySecond.map((reading) => `${reading.seconds.toFixed(1)} s ${((reading.mean / result.marks.settled - 1) * 100).toFixed(2)}%`).join(', ')}`);
 
-    // The T2.4b page's procedure on the same step, at the same probes a frame.
+    // The T2.4b page's procedure on the same jump, at the same probes a frame.
     const device = core.device;
     const manifest = manifestById('two-room');
     const bookmark = manifest.cameras.find((camera) => camera.name === 'lit-room')!;
     const camera = bookmarkCamera(bookmark, TEST_VIEW_WIDTH / TEST_VIEW_HEIGHT);
-    const from = motion.keyframes[0].position as Vec3;
-    const to = motion.keyframes[1].position as Vec3;
+    const from = motion.keyframes[jump].position as Vec3;
+    const to = motion.keyframes[jump + 1].position as Vec3;
     const converged = async (position: Vec3, label: string) => {
         const scene = await createDdgiScene(device, 'two-room', {}, { gpuTiming: true });
         scene.platform.scene.updateLight(scene.lights[0], { position });
@@ -373,12 +418,23 @@ async function runMeter(core: ViewerCore, failures: string[]): Promise<MeterComp
     log(`  T2.4b page: within ${TOLERANCE * 100}% from frame ${response.enteredFrame}, for good from ${response.settledFrame}; frame 1 moved ${(firstFrameMove * 100).toFixed(1)}%`);
     log(`  T2.4b curve: ${describeErrors(response.errors)}`);
 
-    const differs = (a: number | null, b: number | null) => a === null || b === null || Math.abs(a - b) > MATCH_FRAMES;
-    if (differs(parsed.enteredFrame, response.enteredFrame)) failures.push(`meter: within 5% from frame ${parsed.enteredFrame}, the T2.4b page ${response.enteredFrame} (more than ${MATCH_FRAMES} apart)`);
-    if (differs(parsed.settledFrame, response.settledFrame)) failures.push(`meter: for good from frame ${parsed.settledFrame}, the T2.4b page ${response.settledFrame} (more than ${MATCH_FRAMES} apart)`);
+    if (judged) {
+        const differs = (a: number | null, b: number | null) => a === null || b === null || Math.abs(a - b) > MATCH_FRAMES;
+        if (differs(parsed.enteredFrame, response.enteredFrame)) failures.push(`meter, jump ${jump + 1}: within 5% from frame ${parsed.enteredFrame}, the T2.4b page ${response.enteredFrame} (more than ${MATCH_FRAMES} apart)`);
+        if (differs(parsed.settledFrame, response.settledFrame)) failures.push(`meter, jump ${jump + 1}: for good from frame ${parsed.settledFrame}, the T2.4b page ${response.settledFrame} (more than ${MATCH_FRAMES} apart)`);
+    }
     return {
+        jump: jump + 1,
+        judged,
         units,
-        meter: { enteredFrame: parsed.enteredFrame, settledFrame: parsed.settledFrame, firstChangedFrame: parsed.firstChangedFrame, before: result.marks.before, settled: result.marks.settled },
+        meter: {
+            enteredFrame: parsed.enteredFrame,
+            settledFrame: parsed.settledFrame,
+            firstChangedFrame: parsed.firstChangedFrame,
+            before: result.marks.before,
+            settled: result.marks.settled,
+            settleCurve: settleBySecond,
+        },
         page: { enteredFrame: response.enteredFrame, settledFrame: response.settledFrame, firstFrameMove, before: before.settled, settled: after.settled, errors: describeErrors(response.errors) },
         csv: result.csv,
     };

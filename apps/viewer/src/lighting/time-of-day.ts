@@ -164,6 +164,8 @@ export class TimeOfDay {
         const toward = new Vector3(...state.towardSun);
         sun.position.copy(sun.target.position).addScaledVector(toward, this.sunDistance);
         sun.intensity = this.baseIntensity * state.daylight;
+        // GI reads world matrices as three's last render left them: bring the sun's up to date for this frame's update.
+        sun.updateMatrixWorld();
         const manifestSky = platformSkyEnvironment(this.loaded.manifest);
         if (manifestSky.type !== 'procedural') throw new Error('time of day needs a procedural sky');
         const environment: EnvironmentDescriptor = { ...manifestSky, sunDirection: state.towardSun, intensity: (manifestSky.intensity ?? 1) * state.daylight };
@@ -218,6 +220,7 @@ export class TimeOfDay {
         if (!sun) return;
         sun.position.copy(sun.target.position).addScaledVector(this.baseDirection, this.sunDistance);
         sun.intensity = this.baseIntensity;
+        sun.updateMatrixWorld();
         if (this.loaded.skyDome && this.fileSky) setSkyDomeTexture(this.loaded.skyDome, this.fileSky);
         this.lastDome = null;
     }

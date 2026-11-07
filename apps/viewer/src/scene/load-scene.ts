@@ -69,6 +69,12 @@ export interface LoadedScene {
      * motions work on. Each is named by its manifest label.
      */
     manifestLights: Light[];
+    /**
+     * The viewer's light markers and gizmo (lighting/light-editor.ts): a scene
+     * of their own, drawn over the picture after the main one, so GI's scene
+     * sync (which walks `scene`) and the bakes never see them.
+     */
+    helpers: Scene;
     /** The sky dome of a procedural sky (scene/sky.ts), whose picture time of day replaces; null otherwise. */
     skyDome: Mesh | null;
     /** The scene's settings as loaded (`sceneSettingValues`): `sponza-candles`' candle count, say. */
@@ -173,9 +179,12 @@ function prepareMeshes(root: Object3D): void {
 /** Frees the GPU memory of a scene's geometry, materials and textures. Large scenes would otherwise pile up when switching. */
 export function disposeScene(loaded: LoadedScene): void {
     loaded.sky?.dispose();
-    loaded.scene.traverse((object) => {
+    const objects: Object3D[] = [];
+    loaded.scene.traverse((object) => objects.push(object));
+    loaded.helpers.traverse((object) => objects.push(object));
+    for (const object of objects) {
         const mesh = object as Mesh;
-        if (!mesh.isMesh) return;
+        if (!mesh.isMesh) continue;
         mesh.geometry.dispose();
         for (const material of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) {
             for (const value of Object.values(material)) {
@@ -183,7 +192,7 @@ export function disposeScene(loaded: LoadedScene): void {
             }
             material.dispose();
         }
-    });
+    }
 }
 
 export interface LoadSceneOptions {
@@ -270,5 +279,7 @@ export async function loadScene(manifest: SceneManifest, report: (progress: Load
         }
     }
 
-    return { manifest, scene, content, directLights, offLights, manifestLights, skyDome, settings, lightSets, bounds, sky, diagonal, stats: computeSceneStats(content) };
+    const helpers = new Scene();
+    helpers.name = `${manifest.id} viewer helpers`;
+    return { manifest, scene, content, directLights, offLights, manifestLights, helpers, skyDome, settings, lightSets, bounds, sky, diagonal, stats: computeSceneStats(content) };
 }

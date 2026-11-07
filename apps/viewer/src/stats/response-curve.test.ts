@@ -36,7 +36,7 @@ describe('the response meter', () => {
         const samples = curve([1.3, 1.95, 2.0]);
         const marks = stepMarks(1, 2, samples);
         const text = responseCsv(
-            { scene: 'two-room', camera: 'lit-room', motion: 'light-step', region: [0, 0, 640, 360], budgetMs: 2, adapter: 'nvidia ampere', settleFrames: 240, settleBudgetMs: 16 },
+            { scene: 'two-room', camera: 'lit-room', motion: 'light-step', region: [0, 0, 640, 360], budgetMs: 2, adapter: 'nvidia ampere', settleFrames: 240, settleSeconds: 4, settledInTime: true, settleBudgetMs: 16 },
             marks,
             samples,
         );

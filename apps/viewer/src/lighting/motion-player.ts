@@ -14,6 +14,11 @@
  * which makes three compile its materials once, each time.
  *
  * Stopping puts the light back as it was before the motion started.
+ *
+ * A moved light's world matrix is brought up to date at once
+ * (`updateLightMatrices`): the adapter reads world matrices as three's last
+ * render left them, so without it GI would see each move a frame late, and
+ * the response meter would count that frame.
  */
 
 import type { Light, Object3D } from 'three';
@@ -103,6 +108,7 @@ export class MotionPlayer {
         light.position.set(...saved.position);
         light.intensity = saved.intensity;
         light.color.setRGB(...saved.color);
+        updateLightMatrices(light);
         if (!saved.inScene) light.removeFromParent();
     }
 
@@ -132,6 +138,17 @@ function applyState(light: Light, state: ReturnType<typeof motionState>): void {
     if (state.intensity !== undefined) light.intensity = state.intensity;
     // Manifest colours are linear, three's working colour space.
     if (state.color) light.color.setRGB(...state.color);
+    updateLightMatrices(light);
+}
+
+/**
+ * Brings a moved light's world matrix (and its target's) up to date now, so
+ * GI's update in this frame sees the move: the three adapter reads world
+ * matrices as three's last render left them (three-gi.ts), one frame late.
+ */
+export function updateLightMatrices(light: Light): void {
+    light.updateMatrixWorld();
+    (light as unknown as { target?: Object3D }).target?.updateMatrixWorld();
 }
 
 /** Adds a light left out of the scene (an off light, `LoadedScene.offLights`), with its target. */

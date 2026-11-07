@@ -30,7 +30,8 @@ export interface LightingHandlers {
     onGroupWeight(group: number | 'environment', weight: GroupWeight): void;
     onPickRegion(): void;
     onWholePicture(): void;
-    onMeasureStep(motionId: string): void;
+    /** One jump of a motion: from keyframe `jump` to keyframe `jump + 1`. */
+    onMeasureStep(motionId: string, jump: number): void;
     onCancelMeasure(): void;
     onSaveCsv(): void;
 }
@@ -270,7 +271,11 @@ export class LightingControls {
         const whole = withHelp(h('button', { text: 'Whole picture' }), 'meterWholePicture');
         pick.addEventListener('click', () => this.handlers.onPickRegion());
         whole.addEventListener('click', () => this.handlers.onWholePicture());
-        this.meterMeasure.addEventListener('click', () => (this.measuring ? this.handlers.onCancelMeasure() : this.handlers.onMeasureStep(this.meterMotion.value)));
+        this.meterMeasure.addEventListener('click', () => {
+            if (this.measuring) return this.handlers.onCancelMeasure();
+            const [motionId, jump] = this.meterMotion.value.split('#');
+            this.handlers.onMeasureStep(motionId, Number(jump));
+        });
         this.meterSave.addEventListener('click', () => this.handlers.onSaveCsv());
         this.meterSave.disabled = true;
         this.meterSection.append(
@@ -327,9 +332,15 @@ export class LightingControls {
         this.motionSelect.replaceChildren(...motions.map((motion) => h('option', { value: motion.id, text: motion.label })));
         this.motionsSection.hidden = motions.length === 0;
         this.setMotionPlaying(null, '');
-        // Steps are measured from motions with keyframes to jump between; `light-step` first.
+        // Each jump of a motion is a step to measure, from one keyframe to the next; step motions first.
         const steps = [...motions].sort((a, b) => Number(b.interpolation === 'step') - Number(a.interpolation === 'step'));
-        this.meterMotion.replaceChildren(...steps.map((motion) => h('option', { value: motion.id, text: `${motion.label} (${motion.id})` })));
+        this.meterMotion.replaceChildren(
+            ...steps.flatMap((motion) =>
+                motion.keyframes.slice(1).map((keyframe, jump) =>
+                    h('option', { value: `${motion.id}#${jump}`, text: `${motion.label}: jump ${jump + 1} (${motion.keyframes[jump].t} s to ${keyframe.t} s)` }),
+                ),
+            ),
+        );
         this.meterMeasure.disabled = steps.length === 0;
         this.meterStatus.textContent = steps.length === 0 ? 'This scene has no light motion to make a step with.' : '';
 

@@ -5,18 +5,29 @@
  *
  * A measurement, frame by frame, with the camera still:
  *
- * 1. **settle before** (a test mode): the step motion's light at its first
+ * The step is one jump of a motion: from keyframe `jump` to keyframe
+ * `jump + 1` (a step motion's lamp jumping, `light-step`; its first jump
+ * takes two-room's lamp out of the lit room, its second brings it back).
+ *
+ * 1. **settle before** (a test mode): the motion's light at the jump's first
  *    keyframe, DDGI's budget raised to SETTLE_BUDGET_MS for SETTLE_SECONDS,
  *    so the field has converged there;
  * 2. **steady before:** the user's budget again for STEADY_SECONDS, so every
  *    probe's history is back at its everyday length when the step comes, as
  *    the T2.4b page's 1,200 frames at the batch do; `before` is the mean of
  *    the last AVERAGED_FRAMES frames;
- * 3. **record:** the light jumps to its second keyframe (frame 1 is the
+ * 3. **record:** the light jumps to the next keyframe (frame 1 is the
  *    jump's own frame: the light moves before GI's update in that frame) and
  *    RECORD_FRAMES frames are read at the user's budget;
- * 4. **settle after** (the test mode again): SETTLE_SECONDS at
- *    SETTLE_BUDGET_MS; `settled` is the mean of the last AVERAGED_FRAMES.
+ * 4. **settle after** (the test mode again): at SETTLE_BUDGET_MS for at
+ *    least SETTLE_SECONDS and until the region's mean over the last second
+ *    is within STABLE_SHARE of the second before (at most
+ *    SETTLE_MAX_SECONDS); `settled` is the mean of the last AVERAGED_FRAMES.
+ *    The design's fixed 4 s (m2-lights.md §7) can leave the old light's
+ *    bounce in "settled": with two-room's lamp leaving the lit room the
+ *    region was still falling by about 0.3% a second after 4 s at 16 ms
+ *    (0.2% after 10 s), and near a slow tail a 1% error in settled moves
+ *    the "within 5%" frame by several frames (DECISIONS 2026-11-08).
  *
  * Every frame of those that counts is read back from DDGI's own picture
  * (`DdgiTechnique.readRegionMean`, the picked region's mean over pixels and
@@ -34,8 +45,12 @@ import type { MotionPlayer } from './motion-player';
 
 /** The test mode's budget, GPU ms a frame (m2-lights.md §7: "the budget raised to 16 ms"). */
 export const SETTLE_BUDGET_MS = 16;
-/** How long the test mode runs before and after the step (m2-lights.md §7: "the mean after 4 s"). */
+/** How long the test mode runs before the step, and at least after it (m2-lights.md §7: "the mean after 4 s"). */
 export const SETTLE_SECONDS = 4;
+/** After the step, the test mode runs until a second's mean is within this share of the second before... */
+export const STABLE_SHARE = 0.002;
+/** ...or this long at most. */
+export const SETTLE_MAX_SECONDS = 30;
 /** At the user's budget before the step, so the histories are at their everyday length. */
 export const STEADY_SECONDS = 4;
 /** Frames recorded after the step: 2 s at 60 Hz, as the T2.4b page measures. */
@@ -58,6 +73,8 @@ export interface MeterResult {
     readonly marks: StepMarks;
     readonly csv: string;
     readonly motion: string;
+    /** The region's mean while the test mode looked for the settled picture: seconds into it, and the mean. */
+    readonly settleCurve: ReadonlyArray<{ seconds: number; mean: number }>;
 }
 
 export interface MeterContext {
@@ -77,13 +94,18 @@ export class ResponseMeter {
     private phaseValue: MeterPhase = 'idle';
     private phaseStartedAt = 0;
     private motion: ManifestMotion | null = null;
+    /** The jump measured: from keyframe `jump` to `jump + 1`. */
+    private jump = 0;
     private light: Light | null = null;
     /** Frames counted in the current phase. */
     private phaseFrames = 0;
     private stepStartedAt = 0;
     private beforeReadings: Array<Promise<number>> = [];
-    private afterReadings: Array<Promise<number>> = [];
+    /** Settle-after readings as they arrive: seconds into the phase, and the mean. */
+    private afterReadings: Array<{ seconds: number; mean: number }> = [];
     private settleFrames = 0;
+    private settleSeconds = 0;
+    private settledInTime = false;
     private recorded: Array<{ frame: number; timeMs: number; probesUpdated: number; mean: Promise<number> }> = [];
     /** Means that have arrived, frame 1 first, for the live plot. */
     readonly live: Array<{ frame: number; mean: number }> = [];
@@ -124,7 +146,7 @@ export class ResponseMeter {
             case 'record':
                 return `Recording the step: frame ${this.phaseFrames} of ${RECORD_FRAMES}.`;
             case 'settle-after':
-                return `Test mode, budget raised to ${SETTLE_BUDGET_MS} ms: finding the settled picture (${left(SETTLE_SECONDS)}).`;
+                return `Test mode, budget raised to ${SETTLE_BUDGET_MS} ms: finding the settled picture (${Math.floor(seconds)} s; it stops when the picture stops changing, at most ${SETTLE_MAX_SECONDS} s).`;
             case 'reading':
                 return 'Reading the last frames back...';
             case 'done':
@@ -134,8 +156,8 @@ export class ResponseMeter {
         }
     }
 
-    /** Starts measuring `motion`'s step (its first keyframe, then its second). */
-    start(motion: ManifestMotion, now: number): void {
+    /** Starts measuring one jump of `motion`: from keyframe `jump` to keyframe `jump + 1`. */
+    start(motion: ManifestMotion, now: number, jump = 0): void {
         const ddgi = this.context.ddgi();
         if (!ddgi || !ddgi.running) {
             this.fail('DDGI is not running yet; wait for it to warm up.');
@@ -144,6 +166,7 @@ export class ResponseMeter {
         this.cancel();
         this.context.player.stop();
         this.motion = motion;
+        this.jump = Math.min(Math.max(0, Math.floor(jump)), motion.keyframes.length - 2);
         this.failure = null;
         this.resultValue = null;
         this.live.length = 0;
@@ -153,7 +176,7 @@ export class ResponseMeter {
         this.userBudgetMs = ddgi.currentSettings.budgetMs;
         const size = this.context.drawingBufferSize();
         this.usedRegion = this.region ?? { x: 0, y: 0, width: size.width, height: size.height };
-        this.light = this.context.player.pose(motion, 0);
+        this.light = this.context.player.pose(motion, motion.keyframes[this.jump].t);
         if (this.light) this.context.markChanged(this.light);
         this.enter('settle-before', now);
         ddgi.setBudgetOverride(SETTLE_BUDGET_MS);
@@ -187,7 +210,7 @@ export class ResponseMeter {
                 if (seconds >= STEADY_SECONDS && this.beforeReadings.length >= AVERAGED_FRAMES) {
                     // The step: the light jumps to the motion's second keyframe before this frame's GI update.
                     const motion = this.motion!;
-                    const light = this.context.player.pose(motion, motion.keyframes[1].t);
+                    const light = this.context.player.pose(motion, motion.keyframes[this.jump + 1].t);
                     if (light) this.context.markChanged(light);
                     this.stepStartedAt = now;
                     this.enter('record', now);
@@ -200,13 +223,17 @@ export class ResponseMeter {
                     this.enter('settle-after', now);
                 }
                 break;
-            case 'settle-after':
-                if (seconds >= SETTLE_SECONDS && this.afterReadings.length >= AVERAGED_FRAMES) {
+            case 'settle-after': {
+                const stable = seconds >= SETTLE_SECONDS && this.afterReadings.length >= AVERAGED_FRAMES && this.stable();
+                if (stable || seconds >= SETTLE_MAX_SECONDS) {
+                    this.settleSeconds = seconds;
+                    this.settledInTime = stable;
                     ddgi.setBudgetOverride(null);
                     this.enter('reading', now);
                     void this.finish();
                 }
                 break;
+            }
             default:
                 break;
         }
@@ -239,13 +266,27 @@ export class ResponseMeter {
                 void reading.then((mean) => this.live.push({ frame, mean }));
                 break;
             }
-            case 'settle-after':
+            case 'settle-after': {
                 this.settleFrames++;
-                if (seconds >= SETTLE_SECONDS - 0.5) this.keepLast(this.afterReadings, read());
+                const reading = read();
+                void reading?.then((mean) => this.afterReadings.push({ seconds, mean }));
                 break;
+            }
             default:
                 break;
         }
+    }
+
+    /** The region's mean over the last second of readings is within STABLE_SHARE of the second before. */
+    private stable(): boolean {
+        const readings = this.afterReadings;
+        const last = readings[readings.length - 1].seconds;
+        const window = (from: number, to: number) => readings.filter((reading) => reading.seconds > from && reading.seconds <= to).map((reading) => reading.mean);
+        const recent = window(last - 1, last);
+        const earlier = window(last - 2, last - 1);
+        if (recent.length === 0 || earlier.length === 0) return false;
+        const mean = (values: number[]) => values.reduce((sum, value) => sum + value, 0) / values.length;
+        return Math.abs(mean(recent) / mean(earlier) - 1) < STABLE_SHARE;
     }
 
     private keepLast(readings: Array<Promise<number>>, reading: Promise<number> | null): void {
@@ -258,7 +299,8 @@ export class ResponseMeter {
         try {
             const mean = (values: number[]) => values.reduce((sum, value) => sum + value, 0) / values.length;
             const before = mean(await Promise.all(this.beforeReadings));
-            const settled = mean(await Promise.all(this.afterReadings));
+            // Readings arrive in order; the last ones are the most settled.
+            const settled = mean(this.afterReadings.slice(-AVERAGED_FRAMES).map((reading) => reading.mean));
             const samples: ResponseSample[] = [];
             for (const entry of this.recorded) samples.push({ frame: entry.frame, timeMs: entry.timeMs, probesUpdated: entry.probesUpdated, mean: await entry.mean });
             const marks = stepMarks(before, settled, samples);
@@ -267,20 +309,27 @@ export class ResponseMeter {
             const csv = responseCsv(
                 {
                     ...described,
-                    motion: this.motion?.id ?? '',
+                    motion: this.stepName(),
                     region: [region.x, region.y, region.width, region.height],
                     budgetMs: this.userBudgetMs,
                     settleFrames: this.settleFrames,
+                    settleSeconds: this.settleSeconds,
+                    settledInTime: this.settledInTime,
                     settleBudgetMs: SETTLE_BUDGET_MS,
                 },
                 marks,
                 samples,
             );
-            this.resultValue = { samples, marks, csv, motion: this.motion?.id ?? '' };
+            this.resultValue = { samples, marks, csv, motion: this.stepName(), settleCurve: [...this.afterReadings] };
             this.enter('done', performance.now());
         } catch (error) {
             this.fail(error instanceof Error ? error.message : String(error));
         }
+    }
+
+    /** The step's name in the CSV: the motion and its jump. */
+    private stepName(): string {
+        return this.motion ? `${this.motion.id} jump ${this.jump + 1}` : '';
     }
 
     private enter(phase: MeterPhase, now: number): void {

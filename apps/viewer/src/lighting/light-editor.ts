@@ -6,14 +6,15 @@
  * sliders (`ui/lighting-controls.ts`).
  *
  * What may not happen while editing:
- * - **GI must not see the markers or the gizmo:** they carry
- *   `userData.giContributes = false` (every object, since the adapter reads
- *   the flag from the object itself, not its parents), so GI's rays pass
- *   through them.
- * - **Baking cameras must not see them:** they live on LAYER_HELPERS only,
- *   which viewing cameras see (`applyViewLayers`) and the light probe
- *   grid's bake cameras and VXGI's voxelizer (layer 0) don't. The gizmo's own
- *   picking raycaster is set to that layer too.
+ * - **GI must not see the markers or the gizmo:** they live in a scene of
+ *   their own (`LoadedScene.helpers`), drawn over the picture after the
+ *   main one, which GI's scene sync never walks. In the main scene GI would
+ *   copy them: the gizmo's picking plane is a 100 km mesh hidden only by its
+ *   material (NOTES), and its handles change `visible` every frame.
+ * - **Baking cameras must not see them:** that scene is drawn only by the
+ *   viewing pass (`ScenePassTechnique`), and they live on LAYER_HELPERS,
+ *   which viewing cameras see (`applyViewLayers`). The gizmo's own picking
+ *   raycaster is set to that layer too.
  * - **Nothing may recompile in GI:** every edit is a light's position,
  *   direction, colour, intensity, range, cone or group, which the adapter
  *   sends as a light change; switching a light off sets its intensity to 0
@@ -43,7 +44,7 @@ import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { GI_USER_DATA } from '../ddgi/library';
 import { LAYER_HELPERS } from '../scene/layers';
 import type { LoadedScene } from '../scene/load-scene';
-import { addToScene } from './motion-player';
+import { addToScene, updateLightMatrices } from './motion-player';
 
 export type LightKind = 'point' | 'spot' | 'directional';
 
@@ -89,15 +90,12 @@ function kindOf(light: Light): LightKind | null {
     return null;
 }
 
-/** Puts an object and everything under it on the helpers' layer only, out of GI's rays and out of three's override material. */
+/** Puts an object and everything under it on the helpers' layer only, with no shadows. */
 function makeHelper(root: Object3D): void {
     root.traverse((object) => {
         object.layers.set(LAYER_HELPERS);
-        object.userData[GI_USER_DATA.contributes] = false;
         object.castShadow = false;
         object.receiveShadow = false;
-        const materials = (object as Mesh).material;
-        for (const material of Array.isArray(materials) ? materials : materials ? [materials] : []) (material as Material).allowOverride = false;
     });
 }
 
@@ -164,7 +162,7 @@ export class LightEditor {
         makeHelper(gizmo);
         this.controls.getRaycaster().layers.set(LAYER_HELPERS);
         this.raycaster.layers.set(LAYER_HELPERS);
-        loaded.scene.add(gizmo);
+        loaded.helpers.add(gizmo);
         this.controls.addEventListener('dragging-changed', (event) => handlers.onDragging(Boolean((event as unknown as { value: boolean }).value)));
         this.controls.addEventListener('objectChange', () => {
             this.followMarker();
@@ -251,6 +249,7 @@ export class LightEditor {
         // three compiles its materials again when a light's shadow is switched (once each way); GI follows `castShadow`.
         light.castShadow = settings.shadows;
         light.userData[GI_USER_DATA.lightGroup] = Math.min(3, Math.max(0, Math.round(settings.group)));
+        updateLightMatrices(light);
         this.refreshMarker(entry);
         return light;
     }
@@ -296,7 +295,7 @@ export class LightEditor {
         const marker = new Mesh(geometry, new MeshBasicMaterial());
         marker.name = `light marker ${light.name}`;
         makeHelper(marker);
-        this.loaded.scene.add(marker);
+        this.loaded.helpers.add(marker);
         return marker;
     }
 
@@ -332,9 +331,9 @@ export class LightEditor {
             const reach = Math.max(1, target.position.distanceTo(light.position));
             const forward = new Vector3(0, 0, 1).applyQuaternion(marker.quaternion);
             target.position.copy(marker.position).addScaledVector(forward, reach);
-            target.updateMatrixWorld();
         }
         light.position.copy(marker.position);
+        updateLightMatrices(light);
     }
 
     /** The light whose marker is under the pointer, or null. */

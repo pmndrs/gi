@@ -79,8 +79,10 @@ export interface ResponseRunInfo {
     region: readonly [number, number, number, number];
     budgetMs: number;
     adapter: string;
-    /** Frames at the settling budget and their budget, for the `settled` line. */
+    /** Frames and seconds at the settling budget, whether the picture stopped changing in that time, and the budget, for the `settled` line. */
     settleFrames: number;
+    settleSeconds: number;
+    settledInTime: boolean;
     settleBudgetMs: number;
 }
 
@@ -99,7 +101,7 @@ export function responseCsv(info: ResponseRunInfo, marks: StepMarks, samples: re
     const lines = [
         `# DDGI viewer response meter (GI only): ${csvField(info.scene)}, camera ${csvField(info.camera)}, motion ${csvField(info.motion)}`,
         `# region x,y,width,height (pixels, top left): ${info.region.join(',')}; budget ${info.budgetMs} ms; adapter ${csvField(info.adapter)}`,
-        `# before ${marks.before}; settled ${marks.settled} (mean of the last frames after ${info.settleFrames} frames at ${info.settleBudgetMs} ms, a test mode); step ${(marks.stepShare * 100).toFixed(1)}%`,
+        `# before ${marks.before}; settled ${marks.settled} (mean of the last frames after ${info.settleFrames} frames, ${info.settleSeconds.toFixed(1)} s, at ${info.settleBudgetMs} ms, a test mode${info.settledInTime ? '' : '; the picture was still changing when it stopped'}); step ${(marks.stepShare * 100).toFixed(1)}%`,
         `# first frame changed by more than ${CHANGE_SHARE * 100}%: ${mark(marks.firstChangedFrame)}; first within ${TOLERANCE * 100}% of settled: ${mark(marks.enteredFrame)}; within it for good from: ${mark(marks.settledFrame)}${marks.leftBandAgain ? ' (left the band again)' : ''}; overshoot ${(marks.overshootShareOfStep * 100).toFixed(1)}% of the step`,
         'frame,ms,mean,change_from_before,error_from_settled,probes_updated',
     ];

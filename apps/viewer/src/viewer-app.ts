@@ -1029,7 +1029,7 @@ export class ViewerApp {
                 this.regionPicker.clear();
                 this.lightingControls.setMeterRegion('Watching the whole picture.');
             },
-            onMeasureStep: (motionId) => this.startMeasurement(motionId),
+            onMeasureStep: (motionId, jump) => this.startMeasurement(motionId, jump),
             onCancelMeasure: () => {
                 this.lighting?.meter.cancel();
                 this.restoreAfterMeter();
@@ -1047,7 +1047,7 @@ export class ViewerApp {
     }
 
     /** Starts the response meter on a step motion: in GI only, without the light markers, at the picked region. */
-    private startMeasurement(motionId: string): void {
+    private startMeasurement(motionId: string, jump: number): void {
         const lighting = this.lighting;
         if (!lighting) return;
         const motion = lighting.player.motions.find((candidate) => candidate.id === motionId);
@@ -1072,7 +1072,7 @@ export class ViewerApp {
         lighting.editor.setHelpersVisible(false);
         const size = this.core.renderer.getDrawingBufferSize(new Vector2());
         lighting.meter.region = this.regionPicker.pixels(size.x, size.y);
-        lighting.meter.start(motion, performance.now());
+        lighting.meter.start(motion, performance.now(), jump);
         this.refreshLightingControls();
     }
 
