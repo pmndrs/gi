@@ -61,18 +61,83 @@ interface RecordedCopy {
     size: number;
 }
 
+/** A bound buffer range, as a kernel stand-in sees it. */
+export interface FakeBinding {
+    readonly buffer: FakeBuffer;
+    readonly offset: number;
+    readonly size: number;
+}
+
+/**
+ * A CPU stand-in for a compute kernel, keyed by entry point: called at
+ * submit with the dispatch's bindings (group 0, by binding number) and its
+ * workgroup counts.
+ */
+export type FakeKernel = (bindings: ReadonlyMap<number, FakeBinding>, workgroupsX: number, workgroupsY: number) => void;
+
+interface RecordedDispatch {
+    entryPoint: string;
+    bindings: ReadonlyMap<number, FakeBinding>;
+    workgroupsX: number;
+    workgroupsY: number;
+}
+
+type RecordedCommand = { copy: RecordedCopy } | { dispatch: RecordedDispatch };
+
+interface FakePipeline {
+    readonly entryPoint: string;
+}
+
+interface FakeBindGroup {
+    readonly entries: readonly GPUBindGroupEntry[];
+}
+
 export class FakeEncoder {
-    readonly copies: RecordedCopy[] = [];
+    /** Copies and dispatches in recording order: submit runs them in this order. */
+    readonly commands: RecordedCommand[] = [];
+
+    get copies(): RecordedCopy[] {
+        return this.commands.flatMap((command) => ('copy' in command ? [command.copy] : []));
+    }
 
     copyBufferToBuffer(source: GPUBuffer, sourceOffset: number, destination: GPUBuffer, destinationOffset: number, size: number): void {
         if (sourceOffset % 4 !== 0 || destinationOffset % 4 !== 0 || size % 4 !== 0) throw new Error('copy offsets and size must be multiples of 4');
-        this.copies.push({
-            source: source as unknown as FakeBuffer,
-            sourceOffset,
-            destination: destination as unknown as FakeBuffer,
-            destinationOffset,
-            size,
+        this.commands.push({
+            copy: {
+                source: source as unknown as FakeBuffer,
+                sourceOffset,
+                destination: destination as unknown as FakeBuffer,
+                destinationOffset,
+                size,
+            },
         });
+    }
+
+    /** Records dispatches; bind group 0's buffers are what a kernel stand-in gets. */
+    beginComputePass(): GPUComputePassEncoder {
+        let pipeline: FakePipeline | null = null;
+        let group: FakeBindGroup | null = null;
+        const pass = {
+            setPipeline: (value: GPUComputePipeline) => {
+                pipeline = value as unknown as FakePipeline;
+            },
+            setBindGroup: (index: number, value: GPUBindGroup) => {
+                if (index === 0) group = value as unknown as FakeBindGroup;
+            },
+            dispatchWorkgroups: (workgroupsX: number, workgroupsY = 1) => {
+                if (!pipeline || !group) throw new Error('dispatch without a pipeline and bind group 0');
+                const bindings = new Map<number, FakeBinding>();
+                for (const entry of group.entries) {
+                    const resource = entry.resource as GPUBufferBinding;
+                    const buffer = resource.buffer as unknown as FakeBuffer;
+                    const offset = resource.offset ?? 0;
+                    bindings.set(entry.binding, { buffer, offset, size: resource.size ?? buffer.size - offset });
+                }
+                this.commands.push({ dispatch: { entryPoint: pipeline.entryPoint, bindings, workgroupsX, workgroupsY } });
+            },
+            end: () => {},
+        };
+        return pass as unknown as GPUComputePassEncoder;
     }
 }
 
@@ -81,11 +146,16 @@ export interface FakeGpu {
     readonly buffers: FakeBuffer[];
     readonly counters: { shaderModules: number; pipelines: number; bindGroups: number };
     createEncoder(): GPUCommandEncoder;
-    /** Runs the encoder's copies, failing like WebGPU would if a buffer it uses was destroyed. */
+    /** Runs the encoder's copies and dispatches, failing like WebGPU would if a buffer it uses was destroyed. */
     submit(encoder: GPUCommandEncoder): void;
 }
 
-export function createFakeGpu(limits: Partial<GPUSupportedLimits> = {}): FakeGpu {
+export interface FakeGpuOptions {
+    /** Kernels to run on the CPU at submit, by entry point. A dispatch of any other kernel does nothing. */
+    readonly kernels?: Readonly<Record<string, FakeKernel>>;
+}
+
+export function createFakeGpu(limits: Partial<GPUSupportedLimits> = {}, options: FakeGpuOptions = {}): FakeGpu {
     installWebGpuGlobals();
     const buffers: FakeBuffer[] = [];
     const counters = { shaderModules: 0, pipelines: 0, bindGroups: 0 };
@@ -110,17 +180,23 @@ export function createFakeGpu(limits: Partial<GPUSupportedLimits> = {}): FakeGpu
             counters.shaderModules++;
             return {};
         },
-        createComputePipeline() {
+        createComputePipeline(descriptor: GPUComputePipelineDescriptor) {
             counters.pipelines++;
-            return {};
+            return { entryPoint: descriptor.compute.entryPoint ?? '' } satisfies FakePipeline;
         },
-        createComputePipelineAsync() {
+        createComputePipelineAsync(descriptor: GPUComputePipelineDescriptor) {
             counters.pipelines++;
-            return Promise.resolve({});
+            return Promise.resolve({ entryPoint: descriptor.compute.entryPoint ?? '' } satisfies FakePipeline);
         },
-        createBindGroup() {
+        createBindGroupLayout(descriptor: GPUBindGroupLayoutDescriptor) {
+            return { descriptor };
+        },
+        createPipelineLayout(descriptor: GPUPipelineLayoutDescriptor) {
+            return { descriptor };
+        },
+        createBindGroup(descriptor: GPUBindGroupDescriptor) {
             counters.bindGroups++;
-            return {};
+            return { entries: [...descriptor.entries] } satisfies FakeBindGroup;
         },
         queue: {
             writeBuffer(buffer: GPUBuffer, bufferOffset: number, data: ArrayBufferView | ArrayBuffer, dataOffset = 0, size?: number) {
@@ -146,7 +222,14 @@ export function createFakeGpu(limits: Partial<GPUSupportedLimits> = {}): FakeGpu
         counters,
         createEncoder: () => new FakeEncoder() as unknown as GPUCommandEncoder,
         submit(encoder) {
-            for (const copy of (encoder as unknown as FakeEncoder).copies) {
+            for (const command of (encoder as unknown as FakeEncoder).commands) {
+                if ('dispatch' in command) {
+                    const { entryPoint, bindings, workgroupsX, workgroupsY } = command.dispatch;
+                    for (const binding of bindings.values()) if (binding.buffer.destroyed) throw new Error('submit uses a destroyed buffer');
+                    options.kernels?.[entryPoint]?.(bindings, workgroupsX, workgroupsY);
+                    continue;
+                }
+                const copy = command.copy;
                 if (copy.source.destroyed || copy.destination.destroyed) throw new Error('submit uses a destroyed buffer');
                 if (copy.sourceOffset + copy.size > copy.source.size || copy.destinationOffset + copy.size > copy.destination.size) {
                     throw new Error('copy out of range');

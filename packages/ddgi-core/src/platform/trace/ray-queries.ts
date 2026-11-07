@@ -44,11 +44,10 @@ import type { GpuTimerScope } from '../contract/timing.ts';
 import type { BindingSlot, ComputeKernel, KernelBuilder, WgslModule } from '../contract/wgsl.ts';
 import { SHADER_STAGE_COMPUTE } from '../kernel-builder.ts';
 import type { PlatformScene, SceneUpload, UploadedMesh } from '../scene/platform-scene.ts';
-import { packedIndices, packedPositions } from '../scene/mesh-packing.ts';
 import { GpuMeshTrees, type FirstTreeBuilder, type GpuBuiltTree, type GpuTreeBatchResult, type GpuTreeOutputs, type GpuTreeRequest } from './gpu-mesh-trees.ts';
 import { GrowableStorage, type ResidentRange } from './growable-storage.ts';
 import { BVH_NODE_BYTES, TOP_LEVEL_HEADER_BYTES, TRACE_STACK_SIZE, TRIANGLE_BYTES } from './layout.ts';
-import type { MeshBvh, MeshGeometry } from './mesh-bvh.ts';
+import type { MeshBvh } from './mesh-bvh.ts';
 import { createMeshBvhBuilder, type MeshBvhBuilder } from './mesh-bvh-async.ts';
 import { buildTopLevel, type TraceInstance } from './top-level.ts';
 import { GpuTopLevel } from './top-level-gpu.ts';
@@ -505,7 +504,7 @@ export class PlatformRayQueries implements RayQueries {
             this.releaseTree(slot);
             this.topLevelStale = true;
         }
-        for (const mesh of upload.meshesUploaded) this.gpuTopLevel?.meshUploaded(mesh.slot, mesh.packed.bounds);
+        for (const mesh of upload.meshesUploaded) this.gpuTopLevel?.meshUploaded(mesh.slot, mesh.layout.bounds);
         if (upload.meshesUploaded.length > 0) this.startBuilds(upload.meshesUploaded);
         // A removed mesh may have been the last one waiting.
         if (upload.meshesRemoved.length > 0) this.notifyWaiters();
@@ -676,11 +675,13 @@ export class PlatformRayQueries implements RayQueries {
         for (const mesh of meshes) {
             const generation = this.bumpGeneration(mesh.slot);
             this.treeStates.set(mesh.slot, { generation, gpu: builder ? 'building' : 'none', tinybvh: 'building' });
-            // Views of the packed words, no copies: the build writes them to its own buffers before it returns.
-            if (builder) gpuRequests.push({ slot: mesh.slot, generation, geometry: packedGeometryView(mesh) });
+            // The scene's copies of the mesh's positions and indices (UploadedMesh.geometry). The GPU build
+            // writes them into its own buffers (queue.writeBuffer) before build() returns.
+            if (builder) gpuRequests.push({ slot: mesh.slot, generation, geometry: mesh.geometry });
         }
         if (builder && gpuRequests.length > 0) this.startGpuBuilds(builder, gpuRequests);
-        // tinybvh after the GPU's submit, so its copies (main-thread work) don't hold the GPU build back.
+        // tinybvh after the GPU's build has started: the worker builder transfers mesh.geometry's arrays,
+        // which detaches them, so the GPU's writeBuffer must already have copied them (keep this order).
         for (const mesh of meshes) this.startTinybvhBuild(mesh);
     }
 
@@ -731,8 +732,8 @@ export class PlatformRayQueries implements RayQueries {
 
     private startTinybvhBuild(mesh: UploadedMesh): void {
         const generation = this.generations.get(mesh.slot) ?? 0;
-        // Compact copies: the packed words also hold normals and uvs, and the scene drops them after upload.
-        const geometry = { positions: packedPositions(mesh.packed).slice(), indices: packedIndices(mesh.packed) };
+        // The scene's own copies, handed over once (UploadedMesh.geometry): the worker builder transfers them.
+        const geometry = mesh.geometry;
         this.pendingBuilds++;
         const finished = (bvh: MeshBvh | null): void => {
             this.pendingBuilds--;
@@ -985,17 +986,4 @@ function describe(error: unknown): string {
 /** A tree's counts, depth and box, whichever builder made it. */
 function treeSize(tree: ArrivedTree): { readonly nodeCount: number; readonly triangleCount: number; readonly maxDepth: number; readonly bounds: Float32Array } {
     return tree.source === 'tinybvh' ? tree.bvh : tree.built.tree;
-}
-
-/**
- * A mesh's positions and indices as views of its packed words (mesh-packing.ts), for the GPU
- * build: no copies. 16-bit indices sit two to a word, low half first, which is exactly a
- * little-endian `Uint16Array`.
- */
-function packedGeometryView(mesh: UploadedMesh): MeshGeometry {
-    const { words, offsets, triangleCount, indices16 } = mesh.packed;
-    const indexCount = triangleCount * 3;
-    const indexByteStart = words.byteOffset + offsets.indices * 4;
-    const indices = indices16 ? new Uint16Array(words.buffer, indexByteStart, indexCount) : new Uint32Array(words.buffer, indexByteStart, indexCount);
-    return { positions: packedPositions(mesh.packed), indices };
 }
