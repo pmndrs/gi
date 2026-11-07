@@ -21,6 +21,24 @@ Rules:
 
 ---
 
+## 2026-11-08 · T2.13 fix attempt on the missed bar, lead rulings applied · implementer (opus)
+Did: the one timeboxed attempt the lead asked for, on `m2-t2.13` (`m2` hadn't moved, so no merge). b7afa1d (CPU-backed texture canvas) is kept by lead ruling. Nothing from the attempt is in the code: both items proved impossible as asked.
+- (a) Asynchronous texture averages. Three temporary experiment pages, deleted, measured the main-thread time on three's own images (Sponza 55, Bistro 135):
+  - a resizing `createImageBitmap` resizes inside the call: 0.12-0.13 s and 0.80-0.84 s;
+  - cloning the bitmaps to a worker blocks the main thread: 0.4-0.54 s and 3.5-3.8 s in all;
+  - `copyExternalImageToTexture`: 0.38 s and 2.0 s in all.
+  The CPU canvas (0.16 s and 1.1 s) stays the cheapest, so the averages stay synchronous. The first GI frame uses the averages, as before.
+- (b) The tree builders' copies can't leave the main thread without a contract change: the host's arrays can't be transferred, and cloning copies. One copy, transferred to the worker, as built.
+Verified (RTX 3060, Chrome 157, correctness runs):
+- Albedo shift, CPU canvas against GPU canvas, linear averages: Sponza mean 0.07% (max 2.2%, one map), Bistro 0.04% (max 4.2%).
+- `ddgi-sponza-accuracy` indirect mean 0.00160352201 against 0.00160352200 with b7afa1d reverted in the working tree; full mean equal to 9 digits.
+- There is no Bistro accuracy page, so Bistro is judged by the albedo shift only.
+Not re-measured: `scene_copy_cpu_ms`. The code is unchanged since the VALID run at b7afa1d (Sponza 1,030 ms, Bistro exterior 2,478 ms; previous entry), and the rule is one VALID run per gate.
+Remaining stages (profile outside the compiles; the gate runs about 1.4-1.7× slower while compiling):
+- Sponza: raw upload 115-160 ms, checks 100-120, tree builders' copies 45-70, rest of the sync about 95, texture averages 160-300.
+- Bistro: texture averages about 1.1 s; raw upload, checks and copies about 175 ms; the rest of the sync not split out.
+Next: Dennis rules on the proposed bar in DECISIONS (≤ 1.1 s Sponza, ≤ 2.7 s Bistro exterior, as a regression guard). Going further needs host-facing changes (DECISIONS lists them).
+
 ## 2026-11-08 · T2.13 scene copy: raw upload and GPU packing · implementer (opus)
 Did (branch `m2-t2.13` from 423fe75; 9f10ecc, b7afa1d, then docs):
 - `gi/pack-mesh` (`scene/pack-mesh-wgsl.ts`, `gpu-mesh-packing.ts`). After `prepare` asks for it (`PlatformScene.prepareGpuPacking`, first in `GIPlatformImpl.prepare`), `createMesh`/`updateMesh` stage the host's raw arrays with `writeBuffer` and `encode` packs them: one dispatch per staging buffer from a job table, timed as `gi/pack-mesh`.
