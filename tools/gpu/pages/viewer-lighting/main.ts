@@ -21,7 +21,8 @@
  *   into the `lit-room` view; the first jump, out of it, is reported beside
  *   it, METER_JUMPS says why) against the T2.4b test page's measurement of the same step
  *   (`ddgi-shared/response.ts`: fields converged before and after, the step
- *   at the same probes a frame as the viewer ran, its test view's mean): the
+ *   at the same probes a frame and frame time as the viewer ran, its test
+ *   view's mean): the
  *   first frame within 5% of settled, and the frame from which it stays
  *   there, must agree within MATCH_FRAMES frames.
  *
@@ -322,6 +323,8 @@ interface MeterComparison {
     jump: number;
     judged: boolean;
     units: number;
+    /** The viewer's median frame time while it recorded, seconds; the T2.4b procedure's frames use it too. */
+    deltaTime: number;
     meter: { enteredFrame: number | null; settledFrame: number | null; firstChangedFrame: number | null; before: number; settled: number; settleCurve: ReadonlyArray<{ seconds: number; mean: number }> };
     page: { enteredFrame: number | null; settledFrame: number | null; firstFrameMove: number; before: number; settled: number; errors: string };
     csv: string;
@@ -384,7 +387,11 @@ async function compareJump(core: ViewerCore, jump: number, judged: boolean, fail
     const parsed = parseResponseCsv(result.csv);
     const unitsByFrame = result.samples.map((sample) => sample.probesUpdated).sort((a, b) => a - b);
     const units = unitsByFrame[Math.floor(unitsByFrame.length / 2)];
-    log(`  meter: ${units} probes a frame; first change frame ${parsed.firstChangedFrame}, within ${TOLERANCE * 100}% from frame ${parsed.enteredFrame}, for good from ${parsed.settledFrame}`);
+    // The viewer's frame time while it recorded (60 Hz when the GPU keeps up; slower on the Intel UHD). DDGI's history
+    // clock advances by each frame's time, so the T2.4b procedure runs its frames at the same time a frame.
+    const frameTimes = result.samples.slice(1).map((sample, index) => (sample.timeMs - result.samples[index].timeMs) / 1000).sort((a, b) => a - b);
+    const deltaTime = frameTimes[Math.floor(frameTimes.length / 2)];
+    log(`  meter: ${units} probes a frame, ${(1 / deltaTime).toFixed(1)} frames a second; first change frame ${parsed.firstChangedFrame}, within ${TOLERANCE * 100}% from frame ${parsed.enteredFrame}, for good from ${parsed.settledFrame}`);
     log(`  meter curve: ${describeErrors(result.samples.map((sample) => sample.mean / result.marks.settled - 1))}`);
     // How the test mode's settled picture moved: the mean at whole seconds, against the final settled.
     const settleBySecond = result.settleCurve.filter((reading, index, all) => index === 0 || Math.floor(reading.seconds) !== Math.floor(all[index - 1].seconds));
@@ -404,7 +411,7 @@ async function compareJump(core: ViewerCore, jump: number, judged: boolean, fail
         const view = await TestView.create(device, scene.platform);
         const field = scene.ddgi.field!;
         const mean = async () => imageMean((await view.render(field, bookmark, TEST_VIEW_WIDTH, TEST_VIEW_HEIGHT)).indirect);
-        const settled = await convergeField(device, scene.platform, scene.ddgi.settings, camera, mean, { ...CONVERGE, settleUnits: units }, label, log);
+        const settled = await convergeField(device, scene.platform, scene.ddgi.settings, camera, mean, { ...CONVERGE, settleUnits: units, settleDeltaTime: deltaTime }, label, log);
         return { scene, mean, settled };
     };
     const after = await converged(to, `two-room, lamp at x = ${to[0]}`);
@@ -413,7 +420,7 @@ async function compareJump(core: ViewerCore, jump: number, judged: boolean, fail
     before.scene.platform.scene.updateLight(before.scene.lights[0], { position: to });
     const means: number[] = [];
     for (let frame = 1; frame <= MEASURED_FRAMES; frame++) {
-        runCameraFrame(device, before.scene.platform, units, camera);
+        runCameraFrame(device, before.scene.platform, units, camera, deltaTime);
         means.push(await before.mean());
     }
     before.scene.platform.dispose();
@@ -431,6 +438,7 @@ async function compareJump(core: ViewerCore, jump: number, judged: boolean, fail
         jump: jump + 1,
         judged,
         units,
+        deltaTime,
         meter: {
             enteredFrame: parsed.enteredFrame,
             settledFrame: parsed.settledFrame,
