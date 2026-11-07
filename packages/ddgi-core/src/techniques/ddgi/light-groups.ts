@@ -22,14 +22,29 @@
  * ((L × nx + x) × tile, z × tile)), not as more array layers: the atlas
  * already uses one array layer per probe row, and the default limit is 256.
  *
+ * **The sun layer** (T2.6b, `sunLayer`; m2-lights.md §6.1): the sun, the
+ * scene's first directional light, traced at a white reference (colour 1,
+ * intensity 1) in a layer of its own, the last one, weighed by the sun's
+ * real colour × intensity (and by its group's weight with groups on). A
+ * change of the sun's colour or brightness is then a new weight, composed in
+ * the frame it happens: nothing marked, nothing traced again. Its direction
+ * still re-traces. With groups off the plan is two layers: everything but
+ * the sun (other lights, the sky and emission), then the sun.
+ *
+ * *Why white, against SPEC's HomeFig rule 3 ("bake each group in its real
+ * colours"):* for one light, white × its colour is the same thing, channel by
+ * channel; baked in its real colour, probes updated before and after a
+ * colour change would disagree and no one weight could serve both (Dennis,
+ * 2026-11-05; DECISIONS). Its bounces read only its own layer (rule 1), so
+ * the layer stays the one light's response, scaled as a whole.
+ *
  * This file is the plan only (which layer holds what, and the weights):
  * plain numbers, unit-tested without a GPU, read by the technique and its
- * WGSL generators. T2.6b adds a sun layer to the same plan (§6.3): a layer
- * kind, its place in the list and its weight; the kernels loop over
- * whatever the plan lists.
+ * WGSL generators; the kernels loop over whatever the plan lists.
  */
 
 import type { ColorRGB } from '../../platform/contract/math.ts';
+import type { DirectionalLightDescriptor } from '../../platform/contract/scene.ts';
 
 /** Light groups of the contract: a light's `group` is 0..3 (contract/scene.ts). */
 export const MAX_LIGHT_GROUPS = 4;
@@ -38,8 +53,8 @@ export const MAX_LIGHT_GROUPS = 4;
 export const ALL_LIGHT_GROUPS_MASK = (1 << MAX_LIGHT_GROUPS) - 1;
 
 /**
- * The most irradiance layers a volume keeps: four groups and the environment,
- * with room for T2.6b's sun layer. `ddgi/blend` keeps every layer's texel
+ * The most irradiance layers a volume keeps: four groups, the environment and
+ * the sun (T2.6b). `ddgi/blend` keeps every layer's texel
  * estimates and old values in workgroup memory beside the rays' directions:
  * 8 KB + 1,152 bytes a layer at 6×6 texels, 14.9 KB at 6 layers, within the
  * 16 KB default. The compose weights uniform is sized for it.
@@ -70,18 +85,20 @@ export interface DDGILightGroups {
 
 /** What a layer holds. */
 export type IrradianceLayerKind =
-    /** Groups off: the one layer, every light, the sky and emission. */
+    /** Groups off: every light, the sky and emission (every light but the sun, with a sun layer). */
     | 'everything'
     /** One light group's lights (its direct light and its own bounces). */
     | 'lightGroup'
     /** The sky (rays that miss) and emissive surfaces, and their own bounces. */
-    | 'environment';
+    | 'environment'
+    /** The sun at a white reference (T2.6b): its weight is the sun's colour × intensity. */
+    | 'sun';
 
 export interface IrradianceLayer {
     readonly kind: IrradianceLayerKind;
     /** For `lightGroup`: which group's weight scales it. */
     readonly group: number;
-    /** The contract groups (bits 0..3) whose direct light goes into this layer. */
+    /** The contract groups (bits 0..3) whose direct light goes into this layer (the sun's goes into the sun layer when there is one). */
     readonly groupMask: number;
     /** Whether rays that miss (the sky) and emissive surfaces add their light here. */
     readonly holdsEnvironment: boolean;
@@ -94,6 +111,8 @@ export interface LayerPlan {
     readonly groupCount: number;
     /** The layer the sky and emission go into. */
     readonly environmentLayer: number;
+    /** The sun's layer (`DirectLightFrame.sunLayer`), the last; -1 without one (the sun is in its group's layer). */
+    readonly sunLayer: number;
     /** For contract groups 0..3, the layer their direct light goes into (`DirectLightFrame.groupLayers`). */
     readonly groupLayers: readonly number[];
     /** False with one layer: renderers sample the irradiance atlas itself and nothing is composed. */
@@ -108,20 +127,28 @@ export function lightGroupCount(lightGroups: DDGILightGroups | null | undefined)
     return Math.min(MAX_LIGHT_GROUPS, Math.max(1, Math.round(count)));
 }
 
+/** The sun's own layer (T2.6b): no group's light, no environment. */
+const SUN_LAYER: IrradianceLayer = { kind: 'sun', group: 0, groupMask: 0, holdsEnvironment: false };
+
 /**
- * The layers for a light-group setting: one layer holding everything with
- * groups off; otherwise one per group (groups at or past the count share the
- * last group's), then the environment.
+ * The layers for a light-group setting and the sun layer: one layer holding
+ * everything with groups and the sun layer off; otherwise one per group
+ * (groups at or past the count share the last group's) then the
+ * environment, or with groups off one layer for everything but the sun; and
+ * the sun's layer last when asked for. At most MAX_IRRADIANCE_LAYERS (4
+ * groups, the environment and the sun).
  */
-export function layerPlan(lightGroups: DDGILightGroups | null | undefined): LayerPlan {
+export function layerPlan(lightGroups: DDGILightGroups | null | undefined, sunLayer = false): LayerPlan {
     const groupCount = lightGroupCount(lightGroups);
     if (groupCount === 0) {
+        const everything: IrradianceLayer = { kind: 'everything', group: 0, groupMask: ALL_LIGHT_GROUPS_MASK, holdsEnvironment: true };
         return {
-            layers: [{ kind: 'everything', group: 0, groupMask: ALL_LIGHT_GROUPS_MASK, holdsEnvironment: true }],
+            layers: sunLayer ? [everything, SUN_LAYER] : [everything],
             groupCount: 0,
             environmentLayer: 0,
+            sunLayer: sunLayer ? 1 : -1,
             groupLayers: [0, 0, 0, 0],
-            composed: false,
+            composed: sunLayer,
         };
     }
     const groupLayers = Array.from({ length: MAX_LIGHT_GROUPS }, (_, group) => Math.min(group, groupCount - 1));
@@ -131,7 +158,28 @@ export function layerPlan(lightGroups: DDGILightGroups | null | undefined): Laye
         layers.push({ kind: 'lightGroup', group, groupMask, holdsEnvironment: false });
     }
     layers.push({ kind: 'environment', group: 0, groupMask: 0, holdsEnvironment: true });
-    return { layers, groupCount, environmentLayer: groupCount, groupLayers, composed: true };
+    if (sunLayer) layers.push(SUN_LAYER);
+    return { layers, groupCount, environmentLayer: groupCount, sunLayer: sunLayer ? groupCount + 1 : -1, groupLayers, composed: true };
+}
+
+/**
+ * The sun layer's weight: the sun's colour × intensity (its light per unit of
+ * the white reference the layer is traced at), times its group's weight with
+ * groups on, as its light would have in its group's layer. Black without a
+ * sun (no directional light): the layer then holds nothing worth showing.
+ */
+export function sunLayerWeight(plan: LayerPlan, lightGroups: DDGILightGroups | null | undefined, sun: DirectionalLightDescriptor | null): ColorRGB {
+    if (!sun) return [0, 0, 0];
+    const own = sunLightOf(sun);
+    if (plan.groupCount === 0) return own;
+    const layer = plan.groupLayers[sun.group ?? 0] ?? plan.groupCount - 1;
+    const groupWeight = sanitizedWeight(lightGroups?.weights[layer]);
+    return [own[0] * groupWeight[0], own[1] * groupWeight[1], own[2] * groupWeight[2]];
+}
+
+/** The sun's own light, colour × intensity, per channel: what the sun layer's white reference stands for. */
+export function sunLightOf(sun: DirectionalLightDescriptor): ColorRGB {
+    return [sun.color[0] * sun.intensity, sun.color[1] * sun.intensity, sun.color[2] * sun.intensity];
 }
 
 /** A weight as the kernel takes it: three finite, non-negative numbers (anything else counts as 1). */
@@ -143,18 +191,33 @@ function sanitizedWeight(weight: ColorRGB | undefined): [number, number, number]
     }) as [number, number, number];
 }
 
+/** A layer's weight: its group's, the environment's, the sun's (`sunWeight`), or 1 for everything else. */
+function layerWeight(layer: IrradianceLayer, lightGroups: DDGILightGroups | null | undefined, sunWeight: ColorRGB): readonly [number, number, number] {
+    switch (layer.kind) {
+        case 'lightGroup':
+            return sanitizedWeight(lightGroups?.weights[layer.group]);
+        case 'environment':
+            return sanitizedWeight(lightGroups?.environmentWeight);
+        case 'sun':
+            // 0 is a real weight here (a sun at intensity 0, or no sun), unlike a group's missing weight.
+            return [0, 1, 2].map((channel) => (Number.isFinite(sunWeight[channel]) && sunWeight[channel] > 0 ? sunWeight[channel] : 0)) as [number, number, number];
+        case 'everything':
+            return [1, 1, 1];
+    }
+}
+
 /**
  * Each layer's weight, 4 floats a layer (rgb and 0), in the plan's order:
  * a light group's from `weights`, the environment's from
- * `environmentWeight`. Written into `target` (MAX_IRRADIANCE_LAYERS × 4
- * floats); returns whether anything changed, so the technique knows when a
- * weight change needs every tile composed again.
+ * `environmentWeight`, the sun's `sunWeight` ({@link sunLayerWeight}).
+ * Written into `target` (MAX_IRRADIANCE_LAYERS × 4 floats); returns whether
+ * anything changed, so the technique knows when a weight change needs every
+ * tile composed again.
  */
-export function writeLayerWeights(plan: LayerPlan, lightGroups: DDGILightGroups | null | undefined, target: Float32Array): boolean {
+export function writeLayerWeights(plan: LayerPlan, lightGroups: DDGILightGroups | null | undefined, target: Float32Array, sunWeight: ColorRGB = [0, 0, 0]): boolean {
     let changed = false;
     plan.layers.forEach((layer, index) => {
-        const weight =
-            layer.kind === 'lightGroup' ? sanitizedWeight(lightGroups?.weights[layer.group]) : layer.kind === 'environment' ? sanitizedWeight(lightGroups?.environmentWeight) : ([1, 1, 1] as const);
+        const weight = layerWeight(layer, lightGroups, sunWeight);
         for (let channel = 0; channel < 3; channel++) {
             // Compared as the f32 the uniform holds, so a weight set again to the same value changes nothing.
             if (target[index * 4 + channel] !== Math.fround(weight[channel])) changed = true;

@@ -495,6 +495,15 @@ Dennis (2026-11-05): time of day should be **"instant with a delayed fallback"**
 
 The last row is the largest. On open ground the sky is only 11–14% of daylight (T1.1's sky-to-sun ratios: Sponza 11.0%, furnished room 13.2%, open ground 14.3%), and in a sunlit interior the sun's bounce is often most of the GI. So how time of day looks on Sponza depends mostly on how fast re-tracing is (6.4), with or without the instant sky. An instant sun direction needs a different idea; it's on the Later list.
 
+*As built (T2.6b, the sun layer; `settings.sunLayer`, `light-groups.ts`; DECISIONS 2026-11-07):*
+
+- **The sun is the scene's first directional light** (light 0 of the platform's light table, `SceneCopy.firstDirectionalLight`). `gi/direct` keeps it apart when the technique names a layer for it (`DirectLightFrame.sunLayer`): `giDirectSplitIrradiance` evaluates it at a white reference and returns it beside the four groups, and `giDirectReachesSplit` weighs it in white, so a sun at intensity 0 still lists the hits it faces and its layer keeps updating. The light choice and the shadow rays stay shared.
+- **The plan:** the sun's layer comes last. With groups off it is 2 layers (everything but the sun, then the sun), the "+8–10%" case of §5's estimate; with groups, the groups, the environment, then the sun, at most 6 (the blend's cap).
+- **The weight** is the sun's colour × intensity, times its group's weight with groups on, read from the scene each frame; a change is a full compose in its frame.
+- **The marks:** a change of the sun's colour, intensity or group alone marks nothing; a turn is judged with both sides at white (its angle alone, whatever its brightness did). When the sun becomes another light (destroyed, or a first directional light created), every probe is marked as a whole change.
+- **The probe's mean** (history words 6–7) weighs the sun layer by the sun's light (a new uniform, `DdgiUniforms.sunLight`), so `ddgi/mark` still divides a light's change by the probe's real light, whatever the sun's brightness.
+- **Off by default**, like light groups (for the lead and Dennis; the table in "How it fits" assumed on).
+
 ### 6.2 Re-baking the sky (needed by every path)
 
 **Today:** a `procedural` environment is built on the CPU (Preetham, calibrated with the Ineichen–Perez ratio; `calibrated-sky.ts`) and uploaded. One workgroup then resamples it to the 256 × 128 radiance map and projects it to 18 SH coefficients. That runs only when `setEnvironment` is called. The projection kernel takes about 1 s to compile (T1.9a), and the CPU build isn't meant to run every frame.

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { checkFieldLimits, fieldBytes, fieldLayout, keyDeltaStrideWords, propagationScratchStrideWords, scratchLayout } from './layout.ts';
-import { ALL_LIGHT_GROUPS_MASK, defaultLightGroups, layerPlan, lightGroupCount, MAX_IRRADIANCE_LAYERS, writeLayerWeights } from './light-groups.ts';
+import { ALL_LIGHT_GROUPS_MASK, defaultLightGroups, layerPlan, lightGroupCount, MAX_IRRADIANCE_LAYERS, sunLayerWeight, writeLayerWeights } from './light-groups.ts';
 import { probeGrid } from './settings.ts';
 import { blendKernelWgsl } from './wgsl/blend.ts';
 import { composeKernelWgsl } from './wgsl/compose.ts';
@@ -51,6 +51,63 @@ describe('light groups: the layer plan (T2.5, m2-lights.md §5)', () => {
         groups.weights = [[Number.NaN, -1, 3]];
         writeLayerWeights(plan, groups, weights);
         expect(Array.from(weights.subarray(0, 8))).toEqual([1, 1, 3, 0, 1, 1, 1, 0]);
+    });
+});
+
+describe('the sun layer (T2.6b, m2-lights.md §6.1)', () => {
+    const sun = { type: 'directional', color: [1, 0.5, 0.25], intensity: 4, direction: [0, -1, 0] } as const;
+
+    it('adds the sun as the last layer: after everything else with groups off, after the environment with groups', () => {
+        const alone = layerPlan(null, true);
+        expect(alone.layers.map((layer) => layer.kind)).toEqual(['everything', 'sun']);
+        expect(alone.sunLayer).toBe(1);
+        expect(alone.environmentLayer).toBe(0);
+        expect(alone.composed).toBe(true);
+        expect(alone.groupLayers).toEqual([0, 0, 0, 0]);
+        expect(layerPlan(null).sunLayer).toBe(-1);
+        const withGroups = layerPlan(defaultLightGroups(2), true);
+        expect(withGroups.layers.map((layer) => layer.kind)).toEqual(['lightGroup', 'lightGroup', 'environment', 'sun']);
+        expect(withGroups.sunLayer).toBe(3);
+        expect(withGroups.environmentLayer).toBe(2);
+        // The sun's layer holds no group's light and no environment.
+        expect(withGroups.layers[3]).toMatchObject({ groupMask: 0, holdsEnvironment: false });
+    });
+
+    it('holds at most 6 layers: 4 groups, the environment and the sun, which the blend accepts', () => {
+        const full = layerPlan(defaultLightGroups(4), true);
+        expect(full.layers).toHaveLength(MAX_IRRADIANCE_LAYERS);
+        expect(full.sunLayer).toBe(5);
+        expect(layerPlan(defaultLightGroups(9), true).layers).toHaveLength(MAX_IRRADIANCE_LAYERS);
+        const scratch = scratchLayout(6, 14, full.layers.length);
+        expect(() => blendKernelWgsl({ irradianceTexels: 6, distanceTexels: 14, scratch, reduction: 'subgroups', sunLayer: full.sunLayer })).not.toThrow();
+        expect(() => blendKernelWgsl({ irradianceTexels: 6, distanceTexels: 14, scratch, reduction: 'subgroups', sunLayer: 6 })).toThrow(RangeError);
+    });
+
+    it("weighs the sun layer by the sun's colour x intensity, times its group's weight with groups on", () => {
+        expect(sunLayerWeight(layerPlan(null, true), null, sun)).toEqual([4, 2, 1]);
+        expect(sunLayerWeight(layerPlan(null, true), null, null)).toEqual([0, 0, 0]);
+        const groups = defaultLightGroups(2);
+        groups.weights[0] = [0.5, 0.5, 0.5];
+        groups.weights[1] = [1, 0, 2];
+        const plan = layerPlan(groups, true);
+        expect(sunLayerWeight(plan, groups, sun)).toEqual([2, 1, 0.5]);
+        // A sun in group 3 shares group 1's layer (2 groups), so group 1's weight.
+        expect(sunLayerWeight(plan, groups, { ...sun, group: 3 })).toEqual([4, 0, 2]);
+        const weights = new Float32Array(MAX_IRRADIANCE_LAYERS * 4).fill(Number.NaN);
+        expect(writeLayerWeights(plan, groups, weights, sunLayerWeight(plan, groups, sun))).toBe(true);
+        expect(Array.from(weights.subarray(12, 16))).toEqual([2, 1, 0.5, 0]);
+        // A new sun colour is a weight change; the same again is none. A sun at 0 weighs 0, not 1.
+        expect(writeLayerWeights(plan, groups, weights, [2, 1, 0.5])).toBe(false);
+        expect(writeLayerWeights(plan, groups, weights, [0, 0, 0])).toBe(true);
+        expect(Array.from(weights.subarray(12, 16))).toEqual([0, 0, 0, 0]);
+    });
+
+    it("weighs the sun layer by the sun's light in the probe's mean, and leaves the blend as it was without one", () => {
+        const withSun = blendKernelWgsl({ irradianceTexels: 6, distanceTexels: 14, scratch: scratchLayout(6, 14, 2), reduction: 'workgroup', sunLayer: 1 });
+        expect(withSun).toContain('const sunLayer: u32 = 1u;');
+        expect(withSun).toContain('ddgi.sunLight.rgb');
+        const without = blendKernelWgsl({ irradianceTexels: 6, distanceTexels: 14, scratch: scratchLayout(6, 14, 2), reduction: 'workgroup' });
+        expect(without).not.toContain('ddgi.sunLight');
     });
 });
 

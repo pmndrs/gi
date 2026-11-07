@@ -6,7 +6,9 @@
  * fn giSurfaceAt(ray: GiRay, hit: GiHit) -> GiSurface
  * fn giDirectIrradiance(surface: GiSurface, groupMask: u32, random: vec2f) -> vec3f
  * fn giDirectGroupIrradiance(surface: GiSurface, groupMask: u32, random: vec2f) -> GiDirectGroups  // the same, split by light group 0-3
+ * fn giDirectSplitIrradiance(surface: GiSurface, groupMask: u32, sunApart: bool, random: vec2f) -> GiDirectGroups  // and the sun apart, in white
  * fn giDirectReaches(surface: GiSurface, groupMask: u32) -> bool   // any light in the groups lights this side (no shadow rays)
+ * fn giDirectReachesSplit(surface: GiSurface, groupMask: u32, sunApart: bool) -> bool  // the same, the sun in white when apart
  * fn giDirectRandom(ray: u32, frame: u32) -> vec2f                  // gi/direct's random numbers for a ray
  * fn giSkyRadiance(direction: vec3f) -> vec3f
  * fn giSkyIrradiance(surface: GiSurface) -> vec3f
@@ -358,11 +360,42 @@ fn giDirectIrradiance(surface: GiSurface, groupMask: u32, random: vec2f) -> vec3
 // groups, T2.5). The light choice and the shadow rays are shared: each
 // chosen light's contribution goes to its own group, so every group's sum
 // stays unbiased (a group with few lights is noisier).
+//
+// 'sun' is the sun kept apart (giDirectSplitIrradiance with sunApart; T2.6b):
+// the first directional light, at a white reference (colour 1, intensity 1)
+// and in no group. A technique that keeps it in a layer of its own weighs
+// that layer by the sun's real colour x intensity, so a change of the sun's
+// colour or brightness needs no new rays. 0 when not asked for.
 struct GiDirectGroups {
     group0: vec3f,
     group1: vec3f,
     group2: vec3f,
     group3: vec3f,
+    sun: vec3f,
+}
+
+// giDirectSplitIrradiance with every light in its own group, the sun included.
+fn giDirectGroupIrradiance(surface: GiSurface, groupMask: u32, random: vec2f) -> GiDirectGroups {
+    return giDirectSplitIrradiance(surface, groupMask, false, random);
+}
+
+// Is evaluation 'evaluation' of the light loops below the sun kept apart? The
+// sun is the first directional light: directional lights come first in the
+// light table (giDirectionalLightCount), and the loops evaluate them first,
+// so it is evaluation 0 when the scene has one.
+fn giShadeIsSunApart(sunApart: bool, evaluation: u32, directionalCount: u32) -> bool {
+    return sunApart && evaluation == 0u && directionalCount > 0u;
+}
+
+// A light as the sun's own layer sees it: the same light with its colour x
+// intensity replaced by white 1, so the result is per unit of the sun's
+// light. The light choice never weighs a directional light (they are always
+// evaluated), so this changes no other light's odds; and a sun at intensity
+// 0 still lights its layer, ready for the moment it comes back.
+fn giShadeAtWhite(light: GiLight) -> GiLight {
+    var white = light;
+    white.intensity = vec3f(1.0);
+    return white;
 }
 
 // Directional lights are always evaluated. Point and spot lights are first
@@ -388,8 +421,9 @@ struct GiDirectGroups {
 // real contribution is, so lights behind the surface or at grazing angles
 // cost no rays. Each chosen light's contribution goes to its own group, and
 // a candidate outside groupMask counts 0, which keeps each group's sum
-// unbiased.
-fn giDirectGroupIrradiance(surface: GiSurface, groupMask: u32, random: vec2f) -> GiDirectGroups {
+// unbiased. With sunApart the sun (light 0, directional) is evaluated at its
+// white reference and goes into 'sun' instead of its group.
+fn giDirectSplitIrradiance(surface: GiSurface, groupMask: u32, sunApart: bool, random: vec2f) -> GiDirectGroups {
     let raySide = giShadeRaySide(surface);
     let origin = giShadeOffsetRayOrigin(surface.position, raySide);
     let lightCount = giLightCount();
@@ -424,7 +458,7 @@ fn giDirectGroupIrradiance(surface: GiSurface, groupMask: u32, random: vec2f) ->
     // Second pass, over the directional lights and the local candidates again;
     // one shadow-ray call site keeps the tracer inlined once.
     let evaluations = directionalCount + localCandidates;
-    var totals = GiDirectGroups(vec3f(0.0), vec3f(0.0), vec3f(0.0), vec3f(0.0));
+    var totals = GiDirectGroups(vec3f(0.0), vec3f(0.0), vec3f(0.0), vec3f(0.0), vec3f(0.0));
     var cumulative = 0.0;
     var seen = 0u;
     for (var evaluation = 0u; evaluation < evaluations; evaluation++) {
@@ -439,9 +473,13 @@ fn giDirectGroupIrradiance(surface: GiSurface, groupMask: u32, random: vec2f) ->
             index = candidate.light;
             share = candidate.share;
         }
-        let light = giLight(index);
+        let isSun = giShadeIsSunApart(sunApart, evaluation, directionalCount);
+        var light = giLight(index);
         if (!giShadeInGroup(light, groupMask)) {
             continue;
+        }
+        if (isSun) {
+            light = giShadeAtWhite(light);
         }
         let lightSample = giShadeLightSample(light, surface, raySide);
         let weight = giShadeLuminance(lightSample.irradiance) * share;
@@ -465,10 +503,11 @@ fn giDirectGroupIrradiance(surface: GiSurface, groupMask: u32, random: vec2f) ->
         let contribution = lightSample.irradiance * (scale * giShadeVisibility(light, index, lightSample, origin, random));
         // Selects, not an array indexed by the group: a private array indexed
         // at run time goes to local memory, which is slow (NOTES).
-        totals.group0 += select(vec3f(0.0), contribution, light.group == 0u);
-        totals.group1 += select(vec3f(0.0), contribution, light.group == 1u);
-        totals.group2 += select(vec3f(0.0), contribution, light.group == 2u);
-        totals.group3 += select(vec3f(0.0), contribution, light.group == 3u);
+        totals.group0 += select(vec3f(0.0), contribution, light.group == 0u && !isSun);
+        totals.group1 += select(vec3f(0.0), contribution, light.group == 1u && !isSun);
+        totals.group2 += select(vec3f(0.0), contribution, light.group == 2u && !isSun);
+        totals.group3 += select(vec3f(0.0), contribution, light.group == 3u && !isSun);
+        totals.sun += select(vec3f(0.0), contribution, isSun);
     }
     return totals;
 }
@@ -483,6 +522,14 @@ fn giDirectGroupIrradiance(surface: GiSurface, groupMask: u32, random: vec2f) ->
 // (about half of Sponza's, which face away from the sun; T2.0) cost nothing
 // there.
 fn giDirectReaches(surface: GiSurface, groupMask: u32) -> bool {
+    return giDirectReachesSplit(surface, groupMask, false);
+}
+
+// giDirectReaches for giDirectSplitIrradiance: with sunApart the sun is
+// weighed at its white reference, so a hit it faces is listed even while the
+// sun's own intensity is 0 (its layer must keep updating for when it comes
+// back).
+fn giDirectReachesSplit(surface: GiSurface, groupMask: u32, sunApart: bool) -> bool {
     let raySide = giShadeRaySide(surface);
     let lightCount = giLightCount();
     let useGrid = giShadeUsesLightGrid();
@@ -499,8 +546,11 @@ fn giDirectReaches(surface: GiSurface, groupMask: u32) -> bool {
             }
             index = pick.light;
         }
-        let light = giLight(index);
-        if (giShadeInGroup(light, groupMask) && giShadeLuminance(giShadeLightSample(light, surface, raySide).irradiance) > 0.0) {
+        var light = giLight(index);
+        if (giShadeIsSunApart(sunApart, candidate, directionalCount)) {
+            light = giShadeAtWhite(light);
+        }
+        if (giShadeInGroup(light, groupMask) &&giShadeLuminance(giShadeLightSample(light, surface, raySide).irradiance) > 0.0) {
             return true;
         }
     }

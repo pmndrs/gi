@@ -161,6 +161,10 @@ The answers go in PROGRESS. Any change to the contract is made in both the TypeS
 
 ## Revisions
 
+### During M2, 2026-11-07
+
+- **Technique-facing (T2.6b): the sun kept apart, for a sun layer.** `DirectLightFrame.sunLayer` names a result layer for the sun; `gi/direct` then puts the sun's direct light there at a white reference (colour 1, intensity 1) instead of into its group's layer, and the technique weighs that layer by the sun's colour × intensity, so a change of the sun's colour or brightness needs no new rays. The sun is the scene's first directional light, light 0 of the light table. Hit shading gains `giDirectSplitIrradiance(surface, groupMask, sunApart, random)` (the `GiDirectGroups` struct has a `sun` field, 0 unless asked for) and `giDirectReachesSplit(surface, groupMask, sunApart)`, which weighs the sun in white so a sun at intensity 0 still lists the hits it faces (its layer keeps updating); the old functions are these with `sunApart` false. The ray scratch header's word 11 holds the sun layer. **`SceneCopy.firstDirectionalLight`** (`{ light, descriptor }` or null) gives techniques the sun as it is now: its colour and intensity for the weight, its handle to see it become another light (it changes only when it is destroyed, or a first directional light is created). Hosts don't see this; DDGI's `settings.sunLayer` uses it.
+
 ### During M2, 2026-11-06
 
 - **Technique-facing (T2.5): light groups in `gi/direct` and the ray scratch.** `direct.createScratch` takes `layers` (1 to 8, default 1): a result per ray per layer, ray `i`'s layer `l` at result `i × layers + l` (`RayScratch.layers`). `DirectLightFrame.groupLayers` names the layer each light group's direct light goes into (default all 0). Tracing kernels store a layer with `giStoreRayLayerResult(ray, layer, radiance, half)`; `giStoreRayResult` is layer 0. Hit shading gains `giDirectGroupIrradiance(surface, groupMask, random) -> GiDirectGroups`, the same light choice and shadow rays split by group; `giDirectIrradiance` is its sum. With one layer everything is as before.

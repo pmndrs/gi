@@ -352,6 +352,13 @@ export class PlatformScene implements SceneApi, SceneCopy {
         };
     }
 
+    get firstDirectionalLight(): SceneCopy['firstDirectionalLight'] {
+        // Directional lights are packed first, so light 0 is the first of them when there is one.
+        const first = this.directionalLightCount > 0 ? this.lights[0] : undefined;
+        if (!first || first.descriptor.type !== 'directional') return null;
+        return { light: first.handle, descriptor: first.descriptor };
+    }
+
     /** Point and spot lights (every light that isn't directional): hit shading picks its light path from this (the light grid, T2.3). */
     get localLightCount(): number {
         return this.lights.length - this.directionalLightCount;
