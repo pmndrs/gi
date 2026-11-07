@@ -92,7 +92,11 @@ export interface RayQueries {
     ): void;
     /** GPU bytes held by acceleration structures. */
     readonly memoryBytes: number;
-    /** True while a mesh BVH is still building in a worker. Rays meanwhile see its previous shape, or miss it if it is new. */
+    /**
+     * True while a mesh waits for its first tree (the GPU's at load, or tinybvh's from the worker).
+     * Rays meanwhile see its previous shape, or miss it if it is new. A better tree replacing one
+     * already in use doesn't count: rays see the same triangles either way.
+     */
     readonly building: boolean;
 }
 

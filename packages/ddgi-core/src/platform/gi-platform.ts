@@ -7,8 +7,9 @@
  * encoder:
  *
  * 1. the scene copy's uploads (`PlatformScene.encode`);
- * 2. the tracer acting on them: removed meshes, new mesh trees from the
- *    worker, and the top-level rebuild (CPU for now; B1a moves it to the GPU);
+ * 2. the tracer acting on them: removed meshes, new mesh trees (the GPU's
+ *    first trees at load, then tinybvh's from the worker), and the top
+ *    level's refit or rebuild;
  * 2b. hit shading: its settings, and the sky's projection when the
  *    environment changed (`shade/hit-shading.ts`, T1.4);
  * 3. each technique's `encode`, fallbacks before the techniques stacked on them,
@@ -50,7 +51,7 @@ import { PlatformScene } from './scene/platform-scene.ts';
 import { checkComputeLimits } from './device-requirements.ts';
 import { PlatformHitShading } from './shade/hit-shading.ts';
 import { GpuTimer } from './timing/gpu-timer.ts';
-import { PlatformRayQueries } from './trace/ray-queries.ts';
+import { PlatformRayQueries, type MeshTreeOptions } from './trace/ray-queries.ts';
 import { UnitCostMeter, WorkBudget, type BudgetReport, type Calibration, type CalibrationMemory, type UnitCostModel } from './work-budget.ts';
 
 
@@ -83,6 +84,13 @@ export interface GIPlatformImplOptions extends GIPlatformOptions {
      * hosts can't reach `rays`, so the host contract has no such option.
      */
     readonly rayBatches?: boolean;
+    /**
+     * How mesh trees are made (T2.12): by default the scene's first trees come
+     * from the GPU (H-PLOC) on a device with subgroups, and tinybvh's replace
+     * them as they arrive. Tools turn the GPU off (M1's path), hold the swap
+     * to check a scene mid-swap, or refuse deeper GPU trees.
+     */
+    readonly meshTrees?: MeshTreeOptions;
 }
 
 export function createGI(device: GPUDevice, options: GIPlatformOptions = {}): GIPlatform {
@@ -148,9 +156,11 @@ export class GIPlatformImpl implements GIPlatform {
         this.rays = new PlatformRayQueries(ownDevice, this.sceneCopy, {
             label: this.label,
             buildIn: options.buildIn,
-            // The top level reads its refit stats back only in stats mode: hosts are promised no readbacks.
+            // The top level reads its refit stats back only in stats mode: hosts are promised no readbacks frame
+            // after frame (the only one is the first mesh trees' stats, once at load; DECISIONS 2026-11-08).
             diagnostics: options.gpuTiming === true,
             warn: (message) => this.warnOnce(message),
+            meshTrees: options.meshTrees,
         });
         this.kernels = new PlatformKernelBuilder(ownDevice, this.label);
         this.timer = options.gpuTiming ? new GpuTimer(ownDevice, { warn: (message) => this.warnOnce(message) }) : null;
@@ -387,6 +397,7 @@ export class GIPlatformImpl implements GIPlatform {
         }
         const topLevel = this.rays.topLevelCounters;
         if (topLevel) counters['platform top level'] = topLevel;
+        counters['platform mesh trees'] = this.rays.meshTreeCounters;
         for (const [technique, budget] of this.budgets) counters[`${technique.id} budget`] = budgetCounters(budget.report);
         // The sky the rays see (radiance map, procedural source texture) and the hit-shading
         // uniforms are part of the scene as the platform holds it, so they count as scene copy;

@@ -65,8 +65,13 @@ export class GrowableStorage {
      * Grows so that `extraUnits` more units fit after the current high-water
      * mark, copying `resident` ranges into the new buffer. Throws a
      * `GILimitError` naming the limit when one storage binding can't hold it.
+     *
+     * The new size is the larger of double the old one and what must fit
+     * times `1 + headroom` (default 0). A caller that knows ranges will soon
+     * be replaced by slightly larger ones asks for headroom, so they fit
+     * without another growth; a growth that doubles has room anyway.
      */
-    grow(encoder: GPUCommandEncoder, extraUnits: number, resident: readonly ResidentRange[]): void {
+    grow(encoder: GPUCommandEncoder, extraUnits: number, resident: readonly ResidentRange[], headroom = 0): void {
         const limits = this.device.limits;
         const limitBytes = Math.min(limits.maxStorageBufferBindingSize, limits.maxBufferSize);
         const limitUnits = Math.floor(limitBytes / this.unitBytes);
@@ -76,7 +81,7 @@ export class GrowableStorage {
             throw new GILimitError(limit, minimumUnits * this.unitBytes, limitBytes);
         }
         // Doubling keeps reallocations logarithmic while a scene loads.
-        const units = Math.min(limitUnits, Math.max(minimumUnits, this.allocator.capacity * 2));
+        const units = Math.min(limitUnits, Math.max(Math.ceil(minimumUnits * (1 + headroom)), this.allocator.capacity * 2));
         const buffer = this.createBuffer(units);
 
         // Neighbouring ranges are copied as one.
