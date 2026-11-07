@@ -156,7 +156,8 @@ export class GIPlatformImpl implements GIPlatform {
         this.rays = new PlatformRayQueries(ownDevice, this.sceneCopy, {
             label: this.label,
             buildIn: options.buildIn,
-            // The top level reads its refit stats back only in stats mode: hosts are promised no readbacks.
+            // The top level reads its refit stats back only in stats mode: hosts are promised no readbacks frame
+            // after frame (the only one is the first mesh trees' stats, once at load; DECISIONS 2026-11-08).
             diagnostics: options.gpuTiming === true,
             warn: (message) => this.warnOnce(message),
             meshTrees: options.meshTrees,

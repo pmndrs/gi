@@ -1,4 +1,4 @@
-/** The tracer's growable node and triangle buffers: doubling, and the headroom a big jump gets (T2.12). */
+/** The tracer's growable node and triangle buffers: doubling, and the headroom a growth may ask for (T2.12). */
 
 import { describe, expect, it } from 'vitest';
 import { createFakeGpu } from '../scene/testing/fake-gpu.ts';
@@ -20,15 +20,16 @@ describe('growable storage', () => {
         expect(storage.allocate(40)).toBe(80);
     });
 
-    it('sizes a big jump by what must fit, plus its headroom, so a slightly larger replacement still fits', () => {
+    it('sizes a big jump by what must fit, plus the headroom a growth asks for, so a slightly larger replacement still fits', () => {
         const gpu = createFakeGpu();
         const exact = new GrowableStorage(gpu.device, 'exact', 4, 10);
-        const roomy = new GrowableStorage(gpu.device, 'roomy', 4, 10, { headroom: 1 / 8 });
-        for (const storage of [exact, roomy]) storage.grow(gpu.createEncoder(), 1000, []);
+        const roomy = new GrowableStorage(gpu.device, 'roomy', 4, 10);
+        exact.grow(gpu.createEncoder(), 1000, []);
+        roomy.grow(gpu.createEncoder(), 1000, [], 1 / 8);
         expect(exact.byteLength).toBe(1000 * 4);
         expect(roomy.byteLength).toBe(1125 * 4);
 
-        // A scene's first trees fill it; then one is replaced by a tree 5% larger.
+        // A scene's first trees fill it; then they are replaced by trees 5% larger.
         for (const storage of [exact, roomy]) {
             expect(storage.allocate(1000)).toBe(0);
             storage.release(0, 1000);
@@ -36,5 +37,10 @@ describe('growable storage', () => {
         }
         expect(exact.allocate(100)).toBeNull();
         expect(roomy.allocate(100)).toBe(950);
+
+        // A growth that doubles needs no headroom: the doubling is the larger.
+        const small = new GrowableStorage(gpu.device, 'small', 4, 100);
+        small.grow(gpu.createEncoder(), 50, [], 1 / 8);
+        expect(small.byteLength).toBe(200 * 4);
     });
 });

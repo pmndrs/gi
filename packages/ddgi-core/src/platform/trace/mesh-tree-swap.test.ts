@@ -123,7 +123,7 @@ function grid(x: number, size = 1, cells = 4): { positions: Float32Array; indice
 
 const IDENTITY = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
 
-async function setUp(options: { meshes?: number; meshTrees?: MeshTreeOptions; stillBuilding?: boolean } = {}) {
+async function setUp(options: { meshes?: number; meshTrees?: MeshTreeOptions; cells?: number } = {}) {
     const gpu = createGpu();
     const scene = new PlatformScene(gpu.device);
     const gpuBuilder = new StandInGpuBuilder(gpu.device);
@@ -135,7 +135,7 @@ async function setUp(options: { meshes?: number; meshTrees?: MeshTreeOptions; st
         gpu.submit(encoder);
     };
     const material = scene.createMaterial({});
-    const meshes = Array.from({ length: options.meshes ?? 3 }, (_, index) => scene.createMesh(grid(index * 3)));
+    const meshes = Array.from({ length: options.meshes ?? 3 }, (_, index) => scene.createMesh(grid(index * 3, 1, options.cells)));
     const instances = meshes.map((mesh) => scene.createInstance({ mesh, materials: [material], transform: IDENTITY }));
     return { gpu, scene, rays, gpuBuilder, frame, material, meshes, instances };
 }
@@ -211,6 +211,28 @@ describe('first trees from the GPU, tinybvh swapped in (T2.12)', () => {
         expect(rays.refining).toBe(false);
         expect(hitsDown(rays, 3)).toEqual(onGpuTrees);
         rays.dispose();
+    });
+
+    it('asks for node headroom when GPU trees make the node buffer jump, and not for tinybvh trees', async () => {
+        // Meshes big enough that their trees outgrow the starting buffer several times over.
+        const gpuFirst = await setUp({ cells: 48, meshTrees: { holdRefinements: true } });
+        gpuFirst.frame();
+        await gpuFirst.gpuBuilder.finishBatch();
+        gpuFirst.frame();
+        expect(gpuFirst.rays.meshTreeCounts.onGpuTrees).toBe(3);
+        const withRoom = gpuFirst.rays.memory.nodes;
+        const gpuNodes = (gpuFirst.gpuBuilder.outputs[0].nodes as unknown as { size: number }).size;
+        expect(withRoom).toBe(Math.ceil((gpuNodes / 64) * (1 + 1 / 8)) * 64);
+        gpuFirst.rays.dispose();
+
+        const tinybvhOnly = await setUp({ cells: 48, meshTrees: { gpuFirst: false } });
+        tinybvhOnly.frame();
+        await tinybvhOnly.rays.whenBuilt();
+        tinybvhOnly.frame();
+        // Sized by what fits (the jump is more than double), with nothing added.
+        const memory = tinybvhOnly.rays.memory;
+        expect(memory.nodes).toBe(memory.nodesInUse);
+        tinybvhOnly.rays.dispose();
     });
 
     it('holds tinybvh trees while asked, and releases some (mid-swap) or all, with the same hits in every state', async () => {

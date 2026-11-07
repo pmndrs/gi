@@ -31,6 +31,12 @@
  *    a hot RTX two-room read 0.80x with the same trees on both sides.
  *    The ratio before the swap is reported for the lead (H-PLOC trees alone).
  *
+ * 5. **The natural swap**, for the node buffer's size: a third platform with
+ *    the defaults (no hold), frames at UNITS probes from its first trees
+ *    until every tinybvh tree is in, so the swaps spread over the frames
+ *    as the worker finishes them. Reported: the swaps and the frames they
+ *    fell in, and the node buffer against tinybvh-only's.
+ *
  * VITE_DDGI_SCENES=a,b picks scenes (Sponza needs the downloads; a small
  * scene such as two-room checks the swap's correctness quickly). For hand
  * use under the bench lock: `node tools/reference/bench-lock.ts run --what
@@ -38,6 +44,7 @@
  */
 
 import type { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
+import type { AccelerationMemory } from '../../../../packages/ddgi-core/src/platform/trace/ray-queries.ts';
 import type { DDGITechnique } from '../../../../packages/ddgi-core/src/techniques/ddgi/ddgi-technique.ts';
 import { loadAllManifests } from '../../../../apps/viewer/src/scene/manifests.ts';
 import { assert } from '../../client.ts';
@@ -169,6 +176,49 @@ async function timeInTurn(sides: readonly Side[]): Promise<Record<string, number
     return Object.fromEntries(sides.map((side) => [side.name, median(side.times.msOf(frames.get(side.name) ?? []))]));
 }
 
+/** What the natural swap did (step 5). */
+interface NaturalSwap {
+    readonly swaps: number;
+    readonly framesWithSwaps: number;
+    readonly frames: number;
+    readonly firstSwapMs: number;
+    readonly lastSwapMs: number;
+    readonly gpuTreesAtStart: number;
+    readonly memory: AccelerationMemory;
+}
+
+/** Step 5: the defaults, frames until tinybvh's trees are all in, the swaps' spread and the node buffer. */
+async function naturalSwap(device: GPUDevice, manifest: Parameters<typeof startViewerScene>[1]): Promise<NaturalSwap> {
+    const scene = await startViewerScene(device, manifest, { gpuTiming: true, label: `swap ${manifest.id} natural` });
+    const side: Side = { name: 'natural', scene, times: new TreePassTimes() };
+    const rays = scene.platform.rays;
+    const startedAt = performance.now();
+    const gpuTreesAtStart = rays.meshTreeCounts.onGpuTrees;
+    let swaps = rays.meshTreeCounts.swaps;
+    let framesWithSwaps = 0;
+    let frames = 0;
+    let firstSwapMs = NaN;
+    let lastSwapMs = NaN;
+    // Until no tinybvh build runs and none waits to be placed (a frame after the last arrives), at most a minute.
+    let quietFrames = 0;
+    while (quietFrames < 2 && performance.now() - startedAt < 60_000) {
+        await runFrames(side, 1);
+        frames++;
+        const now = rays.meshTreeCounts.swaps;
+        if (now > swaps) {
+            framesWithSwaps++;
+            const at = performance.now() - startedAt;
+            if (Number.isNaN(firstSwapMs)) firstSwapMs = at;
+            lastSwapMs = at;
+        }
+        swaps = now;
+        quietFrames = rays.refining || rays.meshTreeCounts.onGpuTrees > 0 ? 0 : quietFrames + 1;
+    }
+    const result = { swaps, framesWithSwaps, frames, firstSwapMs, lastSwapMs, gpuTreesAtStart, memory: rays.memory };
+    scene.dispose();
+    return result;
+}
+
 // The adapter's own device and limits (Sponza outgrows the default 128 MiB storage binding), as the viewer makes them.
 await runThreePage(async ({ device, adapterSummary, log, data }) => {
     const onRtx = /nvidia/i.test(adapterSummary.vendor);
@@ -240,6 +290,7 @@ await runThreePage(async ({ device, adapterSummary, log, data }) => {
         const judgeSpeed = onRtx && sceneId === SPEED_SCENE;
         if (judgeSpeed && Math.abs(afterRatio - 1) > TRACE_SPEED_TOLERANCE) failures.push(`${sceneId}: after the swap the tree passes take ${round(afterRatio)}x tinybvh-only's (bar within 5%)`);
 
+        const tinybvhNodes = tinybvhOnly.scene.platform.rays.memory.nodes;
         data[sceneId] = {
             meshes: firstCounts.onGpuTrees + firstCounts.onTinybvhTrees,
             firstTrees: firstCounts,
@@ -254,6 +305,14 @@ await runThreePage(async ({ device, adapterSummary, log, data }) => {
         };
         gpuFirst.scene.dispose();
         tinybvhOnly.scene.dispose();
+
+        // 5. The natural swap: a third platform with the defaults, as a host gets them.
+        const natural = await naturalSwap(device, manifest);
+        log(
+            `${sceneId}: natural swap: ${natural.swaps} trees swapped over ${natural.framesWithSwaps} frames, ${round(natural.firstSwapMs)}-${round(natural.lastSwapMs)} ms after the first trees; ` +
+                `node buffer ${round(natural.memory.nodes / 1e6, 1)} MB (${round(natural.memory.nodesInUse / 1e6, 1)} MB in use), tinybvh only ${round(tinybvhNodes / 1e6, 1)} MB`,
+        );
+        (data[sceneId] as Record<string, unknown>).naturalSwap = { ...natural, tinybvhOnlyNodes: tinybvhNodes };
     }
     assert(failures.length === 0, failures.join('\n'));
 });

@@ -10,8 +10,7 @@
  * 1. **startup**: load the scene's files, `gi.prepare()` (kernel compiles)
  *    with the scene copy's CPU part alongside it (T2.14, as `volume.start`),
  *    the uploads and the mesh trees (`rays.whenBuilt`: every mesh's first
- *    tree, the GPU's since T2.12; three's material compile for the GI light
- *    runs meanwhile, as in a host that draws every frame), then the warm-up,
+ *    tree, the GPU's since T2.12), then the warm-up,
  *    the technique's own since T2.4b (`warmUpPasses`; DECISIONS 2026-11-05):
  *    steps of `maxProbesPerFrame` probes with no time between them, at most
  *    16 passes over every probe, stopping after 8 s once 2 passes are done,
@@ -78,6 +77,7 @@
  *   VITE_DDGI_BUDGET_MS=2
  *   VITE_DDGI_STEADY_UNITS=16,512                                    (default: the budget's median batch)
  *   VITE_DDGI_MESH_TREES=tinybvh                                     (default gpu: first trees from the GPU, T2.12)
+ *   VITE_DDGI_THREE_COMPILE=when-light-joins                         (default after-first-step; see THREE_COMPILE)
  *
  * Manual (Sponza and Bistro need the downloads). Run it under the bench lock:
  *   node tools/reference/bench-lock.ts run --what "batch cost" -- pnpm test:gpu --filter ddgi-batch-cost --json <file>
@@ -118,6 +118,16 @@ const DIRECT_PATHS: DirectLightPath[] = listFromEnv(env.VITE_DDGI_DIRECT, ['defe
 const STEADY_UNITS = listFromEnv(env.VITE_DDGI_STEADY_UNITS, []).map(Number).filter((units) => units > 0);
 /** T2.12: `gpu` (default) builds the first mesh trees on the GPU; `tinybvh` is M1's path, for a comparison. */
 const MESH_TREES = env.VITE_DDGI_MESH_TREES === 'tinybvh' ? 'tinybvh' : 'gpu';
+/**
+ * When three compiles its materials for the GI light. `after-first-step`
+ * (default): after the first warm-up step, in series, as T2.12's check 1 is
+ * judged (lead ruling 2026-11-08: `GIVolume.start` can't compile for the
+ * host's own render passes, so hosts get it in series). `when-light-joins`:
+ * as soon as the light joins the scene (`prepare` resolved), alongside the
+ * tree builds, as a host that draws every frame and renders straight to the
+ * canvas would; reported for information.
+ */
+const THREE_COMPILE = env.VITE_DDGI_THREE_COMPILE === 'when-light-joins' ? 'when-light-joins' : 'after-first-step';
 
 /** Warm-up frames recorded before waiting for the GPU, as `volume.start` does (the warm-up itself is the technique's). */
 const WARMUP = { stepsPerBatch: 4 } as const;
@@ -400,12 +410,11 @@ async function startScene(
     // Asked for once the builds have started (before, nothing is pending and it resolves at once).
     let refinedAt = NaN;
     void platform.rays.whenRefined().then(() => (refinedAt = performance.now()));
-    // The GI light joined the scene when `prepare` resolved (ThreeGI). A host that draws every frame,
-    // as the viewer does, compiles three's materials for it at its next frame, while the trees build:
-    // started here the same way (after the uploads, which start the GPU's tree build), and awaited
-    // by the first frame drawn with GI.
-    const threeGiCompileStartedAt = performance.now();
-    const threeGiCompiled = renderer.compileAsync(loaded.scene, camera).then(() => performance.now());
+    // The GI light joined the scene when `prepare` resolved (ThreeGI). With `when-light-joins`, three's
+    // materials for it start compiling now, alongside the tree builds (after the uploads, which start the
+    // GPU's build); by default they compile in series, after the first warm-up step (THREE_COMPILE).
+    let threeGiCompileStartedAt = performance.now();
+    let threeGiCompiled: Promise<number> | null = THREE_COMPILE === 'when-light-joins' ? renderer.compileAsync(loaded.scene, camera).then(() => performance.now()) : null;
     await platform.rays.whenBuilt();
     const firstTreesAt = performance.now();
     threeGI.update(camera, 0);
@@ -435,7 +444,11 @@ async function startScene(
             await device.queue.onSubmittedWorkDone();
             if (firstStep) {
                 firstGiAt = performance.now();
-                // The first frame drawn with GI: three's materials for the GI light, compiled since the light joined.
+                // The first frame drawn with GI: three's materials for the GI light (compiled now, or since the light joined).
+                if (!threeGiCompiled) {
+                    threeGiCompileStartedAt = performance.now();
+                    threeGiCompiled = renderer.compileAsync(loaded.scene, camera).then(() => performance.now());
+                }
                 await threeGiCompiled;
                 await drawFrame(device, renderer, loaded.scene, camera);
                 firstGiShownAt = performance.now();
@@ -463,7 +476,7 @@ async function startScene(
     const calibration = platform.budgetReport(ddgi)?.calibration;
     assert(calibration?.measured, `${manifest.id}: the platform did not calibrate within ${calibrationSteps} steps`);
 
-    const threeGiCompileEndedAt = await threeGiCompiled;
+    const threeGiCompileEndedAt = threeGiCompiled ? await threeGiCompiled : NaN;
     const fromLoad = (at: number) => round(at - loadStartedAt, 1);
     const fromCreation = (at: number) => round(at - createdAt, 1);
     const startup = {
@@ -486,9 +499,9 @@ async function startScene(
         // T2.12's stages from `prepare` to the first frame drawn with GI. The first GI frame (the
         // uploads, the GPU's tree build submitted, tinybvh's copies sent to the worker); then the wait
         // for every mesh's first tree; then the frame that places them; then the first warm-up step
-        // on the GPU; then three's first frame with the GI light, whose material compile ran since
-        // the light joined (`three_gi_compile_ms`; `three_gi_compile_wait_ms` is what the draw still
-        // waited for it).
+        // on the GPU; then three's first frame with the GI light (`first_gi_draw_ms`), which includes
+        // its material compile (`three_gi_compile_ms`) in series by default, or only what the draw still
+        // waited for it (`three_gi_compile_wait_ms`) when it started as the light joined.
         first_gi_frame_ms: round(copiedAt - preparedAt, 1),
         trees_ms: round(treesAt - copiedAt, 1),
         first_trees_wait_ms: round(firstTreesAt - copiedAt, 1),
@@ -497,6 +510,7 @@ async function startScene(
         first_gi_draw_ms: round(firstGiShownAt - firstGiAt, 1),
         three_gi_compile_ms: round(threeGiCompileEndedAt - threeGiCompileStartedAt, 1),
         three_gi_compile_wait_ms: round(Math.max(0, threeGiCompileEndedAt - firstGiAt), 1),
+        three_gi_compile_when_light_joins: THREE_COMPILE === 'when-light-joins' ? 1 : 0,
         gpu_first_trees: platform.rays.gpuFirstTrees ? 1 : 0,
         gpu_tree_build_ms: round(treesAtFirstGi.lastGpuBuildMs, 1),
         meshes_on_gpu_trees_at_first_gi: treesAtFirstGi.onGpuTrees,

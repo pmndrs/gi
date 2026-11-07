@@ -62,7 +62,7 @@ export interface PlatformRayQueriesOptions {
     readonly buildIn?: 'worker' | 'main';
     /**
      * Read the GPU top level's refit stats back, for counters and warnings.
-     * Off by default (hosts are promised no readbacks); the platform turns it
+     * Off by default (hosts are promised no readbacks frame after frame); the platform turns it
      * on with `gpuTiming`.
      */
     readonly diagnostics?: boolean;
@@ -163,6 +163,8 @@ export interface MeshTreeCounts {
 /** GPU bytes the tracer holds, by buffer. */
 export interface AccelerationMemory {
     readonly nodes: number;
+    /** Of `nodes`, the bytes holding placed trees (the rest is free room). */
+    readonly nodesInUse: number;
     readonly triangles: number;
     readonly topLevel: number;
     /** GPU-built trees in their batches' own buffers, until they are copied into `nodes` and `triangles` (a few frames at load). */
@@ -175,14 +177,15 @@ const INITIAL_NODES = 1024;
 const INITIAL_TRIANGLES = 2048;
 
 /**
- * Room kept free in the node buffer when a scene's trees arrive at once
- * (growable-storage.ts). tinybvh's trees replace the GPU's first trees and
- * can have more nodes (Sponza: 0.6% more in all, more for single meshes;
- * the triangles are the same). Without room, the first replacement that
- * doesn't fit its old range doubled the buffer: Sponza's nodes went from
- * 193 MB to 386 MB (T2.12). An eighth covers the difference with margin.
+ * Room asked for when placing GPU trees makes the node buffer grow
+ * (growable-storage.ts). tinybvh's trees replace them soon after and can
+ * have more nodes (Sponza: 0.6% more in all, more for single meshes; the
+ * triangles are the same). Without room, the first replacement that didn't
+ * fit its old range doubled the buffer: Sponza's nodes went from 193 MB to
+ * 386 MB (T2.12). An eighth covers the difference with margin. Only GPU
+ * trees ask: tinybvh's are final, and grow the buffer as in M1.
  */
-const NODE_HEADROOM = 1 / 8;
+const GPU_TREE_NODE_HEADROOM = 1 / 8;
 
 /** Bindings of a batch kernel's own group (group 1): rays in, results out. */
 const BATCH_GROUP = 1;
@@ -262,7 +265,7 @@ export class PlatformRayQueries implements RayQueries {
             transferInput: true,
         });
 
-        this.nodes = new GrowableStorage(device, `${this.label} trace nodes`, BVH_NODE_BYTES, INITIAL_NODES, { headroom: NODE_HEADROOM });
+        this.nodes = new GrowableStorage(device, `${this.label} trace nodes`, BVH_NODE_BYTES, INITIAL_NODES);
         this.triangles = new GrowableStorage(device, `${this.label} trace triangles`, TRIANGLE_BYTES, INITIAL_TRIANGLES);
         // An empty top level: the header says 0 nodes, so every ray misses.
         this.topLevelBuffer = this.createTopLevelBuffer(TOP_LEVEL_HEADER_BYTES);
@@ -382,7 +385,7 @@ export class PlatformRayQueries implements RayQueries {
         const topLevel = this.gpuTopLevel ? this.gpuTopLevel.memoryBytes : this.topLevelBuffer.size;
         let gpuBuildOutputs = 0;
         for (const outputs of this.liveOutputs) gpuBuildOutputs += outputs.bytes;
-        return { nodes, triangles, topLevel, gpuBuildOutputs, total: nodes + triangles + topLevel + gpuBuildOutputs };
+        return { nodes, nodesInUse: this.nodes.usedBytes, triangles, topLevel, gpuBuildOutputs, total: nodes + triangles + topLevel + gpuBuildOutputs };
     }
 
     /** Whether builds run in a worker. */
@@ -818,7 +821,9 @@ export class PlatformRayQueries implements RayQueries {
         let nodeOffsets: number[] | null = null;
         let triangleOffsets: number[];
         try {
-            nodeOffsets = this.allocateAll(this.nodes, encoder, nodeCounts, (placed) => ({ offset: placed.nodeOffset, count: placed.nodeCount }));
+            // GPU trees will be replaced by tinybvh's, which may need a little more room.
+            const nodeHeadroom = arrived.some((tree) => tree.source === 'gpu') ? GPU_TREE_NODE_HEADROOM : 0;
+            nodeOffsets = this.allocateAll(this.nodes, encoder, nodeCounts, (placed) => ({ offset: placed.nodeOffset, count: placed.nodeCount }), nodeHeadroom);
             triangleOffsets = this.allocateAll(this.triangles, encoder, triangleCounts, (placed) => ({
                 offset: placed.triangleOffset,
                 count: placed.triangleCount,
@@ -873,14 +878,15 @@ export class PlatformRayQueries implements RayQueries {
 
     /**
      * Allocates one range per entry of `counts`. If they don't all fit, the
-     * storage grows once (copying the trees already placed) and they are
-     * allocated again.
+     * storage grows once (copying the trees already placed), with `headroom`
+     * (growable-storage.ts), and they are allocated again.
      */
     private allocateAll(
         storage: GrowableStorage,
         encoder: GPUCommandEncoder,
         counts: readonly number[],
         rangeOf: (tree: PlacedTree) => ResidentRange,
+        headroom = 0,
     ): number[] {
         const offsets: number[] = [];
         for (const count of counts) {
@@ -889,7 +895,7 @@ export class PlatformRayQueries implements RayQueries {
                 // Undo, grow once for everything, then allocate again.
                 offsets.forEach((placedOffset, index) => storage.release(placedOffset, counts[index]));
                 const total = counts.reduce((sum, value) => sum + value, 0);
-                storage.grow(encoder, total, [...this.placed.values()].map(rangeOf));
+                storage.grow(encoder, total, [...this.placed.values()].map(rangeOf), headroom);
                 return counts.map((value) => {
                     const grown = storage.allocate(value);
                     if (grown === null) throw new Error('trace buffer allocation failed after growing');

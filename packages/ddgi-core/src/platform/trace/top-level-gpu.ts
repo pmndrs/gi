@@ -29,7 +29,7 @@
  *   the CPU from the current transforms and builds a new one if its relative
  *   SAH cost is more than {@link TOP_LEVEL_REBUILD_COST_RATIO} times its cost
  *   as built. Nothing is read back from the GPU for this: the platform
- *   promises hosts no readbacks.
+ *   promises hosts no readbacks frame after frame.
  *
  * Shapes include hidden instances too (their boxes are empty while hidden),
  * so hiding and showing take effect in the same frame. Removed instances
