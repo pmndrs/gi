@@ -21,6 +21,15 @@ Rules:
 
 ---
 
+## 2026-11-08 · T2.13 `m2` merged (T2.12 in) · implementer (opus)
+Did: merged `m2` twice, 7c1e707 (merge 8d05d69) and cbf172d (merge 1cbfc04). PROGRESS, DECISIONS and `timing.csv` keep both sides: PROGRESS has 114 = 112 + 112 − 110 headings, then 115 = 114 + 113 − 112. In `ray-queries.ts`, T2.12's GPU first-tree requests and its tinybvh start now take `mesh.geometry`, and the top level takes `mesh.layout.bounds`; `packedGeometryView` is gone (d338682 drops its import). The order is kept and commented: the GPU build's `writeBuffer` copies `geometry` inside `build()`, before the tinybvh start transfers (detaches) the same arrays. `gi-platform.ts` merged cleanly.
+Verified (RTX 3060, Chrome 157, correctness, `--no-cool-wait`):
+- `ddgi-tree-swap`, `trace-oracle` and `scene-gpu-packing` pass on the procedural scenes. On Sponza: 449 meshes on GPU first trees, 0 refused, 0 wrong words, normals ≤ 1 step.
+- `ddgi-session-recompiles` on Sponza: 0 recompiles, control 1, groups off and on.
+- typecheck and lint clean; 1,111 unit tests pass.
+Not verified: the Intel UHD after the merge; `scene_copy_cpu_ms` after the merge (T2.12 changed the startup path; my VALID readings are from before it).
+Next: the lead's review and merge.
+
 ## 2026-11-08 · T2.13 fix attempt on the missed bar, lead rulings applied · implementer (opus)
 Did: the one timeboxed attempt the lead asked for, on `m2-t2.13` (`m2` hadn't moved, so no merge). b7afa1d (CPU-backed texture canvas) is kept by lead ruling. Nothing from the attempt is in the code: both items proved impossible as asked.
 - (a) Asynchronous texture averages. Three temporary experiment pages, deleted, measured the main-thread time on three's own images (Sponza 55, Bistro 135):
