@@ -392,7 +392,7 @@ Status: **started 2026-11-06** on branch `m2` (from main at 3d682dc; M1 merged a
 | T2.8 | Viewer: gizmos, sliders, groups, time of day, motions, a response meter, the native compare page | implementer | M | T2.4b, T2.5, T2.6b, T2.7 | todo |
 | T2.12 | Fast first GI: GPU H-PLOC/LBVH trees at load, tinybvh swapped in per mesh (lower priority) | implementer | M | B1, B2 | todo |
 | T2.13 | Scene copy off the main thread (lower priority) | implementer | M | none | todo |
-| T2.14 | Compile only what's configured (`encodeBatch` on first use, the sky kernel's compile) (lower priority) | implementer | S | T2.6a | active (implementer, 2026-11-07; worktree `webgpu-ddgi-m2-t214`, branch `m2-t2.14`) |
+| T2.14 | Compile only what's configured (`encodeBatch` on first use, the sky kernel's compile) (lower priority) | implementer | S | T2.6a | done (2026-11-08; check 2 met on 14 scenes; check 1, the cold Cornell start, owed to T2.10) |
 | T2.16 | Re-render the noisy viewing-only reference bookmarks (M1 note), or mark them viewing-only in the viewer (lower priority) | wrangler, then gpu-tester | S | none | todo |
 | T2.10 | M2 measurements against targets (one VALID run per gate, DECISIONS 2026-11-06), with the measured whole-frame p50/p95 | gpu-tester, native-runner | M | all above | todo |
 | T2.11 | M2 note and M3 breakdown | main session | S | T2.10 | todo |
@@ -440,6 +440,8 @@ These add to the design docs' draft done-whens. M1's open follow-ups (the M1 not
 - **T2.10** takes the VALID runs T2.3 still owes if a gpu-tester can't get them sooner: the light grid's build at 2,048 cells (≤ 0.1 ms; INVALID readings 0.105–0.131) and `sponza-candles`' set-up (≤ 2× `sponza`; INVALID 1.26–1.30×).
 - **T2.10** times `setTransforms` with 10,000 transforms inside a three adapter frame with rendering (T2.M1's review: 1.4 ms median timed alone, 1.8 ms median / p95 3.1 without the CPU lock; T1.7 saw real frames run 2–4× slower after three's render).
 - **T2.10** records the update's GPU time for the 60 frames after a big step (T2.4c's review: about 45 frames at 2.82 ms on Sponza after a 30° sun turn, from trace and blend; no check covers them). If they're over the 2 ms budget on the targets, m2-lights.md §4.5's second calibrated count while changes continue is built.
+- **T2.10** times T2.14's check 1 from a cold shader cache on a quiet machine (`VITE_DDGI_SECTIONS=startup,budget`, Cornell); the review found no usable `m2` baseline (1.00 s, INVALID clock, no CSV row), so time both. It also re-runs `bistro-exterior` with light groups on in `ddgi-session-recompiles`, plus `ddgi-leak` and `ddgi-light-groups`, on a cool GPU (T2.14's review: 30 s page blocks and timeouts under load, not attributed).
+- **T2.8** makes three's lighting of `sponza-candles` usable: with three drawing every frame the page stops answering for 30 s (T2.14's re-check; the session page runs it with `VITE_DDGI_RENDER_EVERY=0`).
 - **T2.10** adds the measured whole-frame p50/p95 with GI updating and shading in the same frame (M1 follow-up), and runs the Intel UHD suites in short batches with a device-hang count (M1 follow-up: two `DXGI_ERROR_DEVICE_HUNG` in long back-to-back suites).
 
 ## Carried to M2 (collected during M1)
