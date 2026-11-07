@@ -21,6 +21,25 @@ Rules:
 
 ---
 
+## 2026-11-08 · T2.8 part 1 review and merge · lead (opus)
+Did: An Opus review passed T2.8 with notes. I fixed the doc notes on the branch:
+- DECISIONS now says that any page loading through `ViewerCore` also gets the candle reach;
+- `giRange` goes to the M3 breakdown;
+- `three.md` tells hosts that move objects outside three's render to call `updateMatrixWorld()` after the move.
+I merged `m2` (T2.13) into the branch, then the branch into `m2`. T2.8 stays active for check 3 (the native compare page, after T2.7) and for Dennis to try the viewer by eye.
+
+Lead rulings:
+- Check 2 is judged on the RTX, on the jump back into the lit room. The Intel UHD is for correctness only, and on the jump out the room ends 10× darker, so neither method gets within 5% in 120 frames.
+- The meter's settled rule is accepted.
+- The candle reach is accepted as a viewer setting (`reach=0` gives exact lights).
+- Sponza's sun turn with the sun layer on is a known miss by one frame (16, 16, 13 against 15) and goes to the M3 breakdown.
+
+Verified:
+- Review (RTX 3060): `viewer-lighting` PASS (check 1 on two-room, Cornell and Sponza, 0 recompiles; controls 0 recompiles; check 2 15/15 against 15/15); `ddgi-session-recompiles` on two-room 0; 42 unit tests.
+- Me after merging `m2` into the branch: typecheck and lint clean, 1,123 unit tests pass; `viewer-lighting` PASS on the RTX (149 s, correctness run).
+
+Not verified: the Intel UHD after the merge; "62 of 62" hover help (no test counts it; the reviewer spot-checked 21); Dennis driving the viewer by eye.
+
 ## 2026-11-08 · T2.8 viewer controls for M2 (checks 1, 2, 4; check 3 waits for T2.7) · implementer (opus)
 Did (branch `m2-t2.8`, worktree `webgpu-ddgi-m2-t28`):
 - Viewer panel sections (`apps/viewer/src/ui/lighting-controls.ts`, `src/lighting/`): Lights (choose from a list or click a marker; three's `TransformControls` to move, and turn spots; on/off, brightness, colour, reach, cone, soft edge, shadows, GI group, put back), Light motions (play/stop the manifest's `light-sweep`/`light-step`), Time of day (hour, day, a 10-second day; turns DDGI's sun layer on, DDGI restarts once; `solar-position.ts`), Light groups (off/2/4, colour and dimmer per group and for the sky), Response meter (pick a region, measure a jump of a motion in GI only, plot, CSV). Every control has hover help (`help-text.ts`). Stats show `recompiles`. Links: `motion=`, `tod=hour,day`, `groups=`, `reach=`.
