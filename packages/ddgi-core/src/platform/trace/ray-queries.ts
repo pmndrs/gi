@@ -25,7 +25,7 @@
  */
 
 import { GpuBvhRefit } from '@pmndrs/bvh/gpu-refit';
-import { GILimitError } from '../contract/errors.ts';
+import { GILimitError, GINotReadyError } from '../contract/errors.ts';
 import type { RayQueries } from '../contract/queries.ts';
 import type { GpuTimerScope } from '../contract/timing.ts';
 import type { BindingSlot, ComputeKernel, KernelBuilder, WgslModule } from '../contract/wgsl.ts';
@@ -119,6 +119,8 @@ export class PlatformRayQueries implements RayQueries {
 
     private closestKernel: ComputeKernel | null = null;
     private anyKernel: ComputeKernel | null = null;
+    /** A `prepare` has finished, so missing batch kernels mean nobody asked for them. */
+    private preparedOnce = false;
     private disposed = false;
 
     /** `gpu-refit` on a device with subgroups; `cpu` otherwise. Fixed for the backend's life. */
@@ -231,6 +233,7 @@ export class PlatformRayQueries implements RayQueries {
      */
     async prepare(kernels: KernelBuilder, options: { readonly batches: boolean }): Promise<void> {
         await Promise.all([this.gpuTopLevel?.prepare(kernels), options.batches ? this.prepareBatches(kernels) : undefined]);
+        this.preparedOnce = true;
     }
 
     /** Whether `encodeBatch` can run: its kernels were compiled by a `prepare` that asked for them. */
@@ -347,6 +350,7 @@ export class PlatformRayQueries implements RayQueries {
         // Never compiled here on first use: that would be a compile while the platform is
         // ready, which `stats.recompiles` exists to catch (docs/design/m3-moving.md §1).
         if (!kernel) {
+            if (!this.preparedOnce) throw new GINotReadyError('preparing');
             throw new Error(
                 '@pmndrs/ddgi: rays.encodeBatch needs its kernels compiled in prepare: give the technique that calls it `requirements.rayBatches: true` (tools: the platform option `rayBatches`), then prepare',
             );

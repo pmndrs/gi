@@ -429,10 +429,12 @@ describe('the platform object', () => {
         const gpu = createPlatformGpu();
         const platform = new GIPlatformImpl(gpu.device);
         platform.addTechnique(new RecordingTechnique('inline tracer', []));
+        const batch = { mode: 'closest' as const, rays: gpu.device.createBuffer({ size: 32, usage: 0 }), hits: gpu.device.createBuffer({ size: 24, usage: 0 }), count: 1 };
+        // Before any prepare: not ready, whatever the techniques asked for.
+        expect(() => platform.rays.encodeBatch(gpu.createEncoder(), batch)).toThrow(GINotReadyError);
         await platform.prepare();
         expect(platform.rays.batchesReady).toBe(false);
         const pipelinesWithout = gpu.counters.pipelines;
-        const batch = { mode: 'closest' as const, rays: gpu.device.createBuffer({ size: 32, usage: 0 }), hits: gpu.device.createBuffer({ size: 24, usage: 0 }), count: 1 };
         expect(() => platform.rays.encodeBatch(gpu.createEncoder(), batch)).toThrow(/rayBatches/);
         // Refusing compiled nothing.
         expect(gpu.counters.pipelines).toBe(pipelinesWithout);

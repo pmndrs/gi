@@ -367,7 +367,7 @@ async function startScene(
     const preparing = platform.prepare();
     preparing.catch(() => {});
     await yieldToCallbacks();
-    const threeGI = new ThreeGI(platform, loaded.scene, { budget: { paused: true }, environment: environmentFor(manifest), warn: () => {} });
+    const threeGI = new ThreeGI(platform, loaded.scene, { budget: { paused: true }, preparing, environment: environmentFor(manifest), warn: () => {} });
     const copyStartedAt = performance.now();
     threeGI.update(camera, 0);
     const copiedWhileCompilingAt = performance.now();

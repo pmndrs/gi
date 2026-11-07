@@ -229,6 +229,8 @@ export async function startVolume(volume: GIVolume, renderer: WebGPURenderer, sc
         threeGI = new ThreeGI(platform, scene, {
             // No probe work until the trees exist (file comment); the warm-up sets the real budget.
             budget: { paused: true },
+            // Copy the scene in while the kernels compile (three-gi.ts, T2.14).
+            preparing,
             volume,
             environment: options.environment,
             sky: options.sky,
