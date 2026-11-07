@@ -9,7 +9,9 @@ import {
     RAY_RESULT_BYTES,
     RAY_SCRATCH_HEADER_BYTES,
     RAY_SCRATCH_WORD,
+    NO_SUN_LAYER,
     packGroupLayers,
+    packSunLayer,
     rayScratchBytes,
     rayScratchTraceWgsl,
     WORK_ITEM_BYTES,
@@ -170,9 +172,9 @@ describe('deferred direct light', () => {
         // The second round of a frame writes nothing new. Every group goes into layer 0 by default.
         expect(writes).toEqual([
             { offset: RAY_SCRATCH_WORD.frame * 4, words: [12, 0xf] },
-            { offset: RAY_SCRATCH_WORD.groupLayers * 4, words: [0] },
+            { offset: RAY_SCRATCH_WORD.groupLayers * 4, words: [0, NO_SUN_LAYER] },
             { offset: RAY_SCRATCH_WORD.frame * 4, words: [13, 0xf] },
-            { offset: RAY_SCRATCH_WORD.groupLayers * 4, words: [0] },
+            { offset: RAY_SCRATCH_WORD.groupLayers * 4, words: [0, NO_SUN_LAYER] },
         ]);
     });
 
@@ -188,14 +190,22 @@ describe('deferred direct light', () => {
         // The work list starts after every layer's results.
         expect(header[RAY_SCRATCH_WORD.itemsStart]).toBe(300);
         expect(header[RAY_SCRATCH_WORD.layers]).toBe(3);
+        // No layer holds the sun apart until a frame names one.
+        expect(header[RAY_SCRATCH_WORD.sunLayer]).toBe(NO_SUN_LAYER);
         expect(packGroupLayers([0, 1, 1, 2], 3)).toBe(0x02010100);
         expect(packGroupLayers(undefined, 1)).toBe(0);
         expect(() => packGroupLayers([0, 3, 0, 0], 3)).toThrow(RangeError);
+        expect(packSunLayer(undefined, 3)).toBe(NO_SUN_LAYER);
+        expect(packSunLayer(2, 3)).toBe(2);
+        expect(() => packSunLayer(3, 3)).toThrow(RangeError);
         expect(() => direct.createScratch({ label: 'rays', rays: 1, workItems: 1, layers: 9 })).toThrow(RangeError);
     });
 
     it('shares one light choice between layers: hit shading splits it by group, gi/direct adds each group into its layer', () => {
-        expect(DIRECT_KERNELS_WGSL.direct).toContain('let byGroup = giDirectGroupIrradiance(surface, giDirectScratch.groupMask, random);');
+        expect(DIRECT_KERNELS_WGSL.direct).toContain('let byGroup = giDirectSplitIrradiance(surface, giDirectScratch.groupMask, sunLayer != GI_DIRECT_NO_SUN_LAYER, random);');
+        // The sun apart goes into its own layer, and the work list weighs it in white.
+        expect(DIRECT_KERNELS_WGSL.direct).toContain('select(vec3f(0.0), byGroup.sun, sunLayer == layer)');
+        expect(rayScratchTraceWgsl('scratch', 'atomics')).toContain('giDirectReachesSplit(surface, scratch.groupMask, scratch.sunLayer != GI_DIRECT_NO_SUN_LAYER)');
         expect(DIRECT_KERNELS_WGSL.direct).toContain('let cell = ray * layers + layer;');
         expect(rayScratchTraceWgsl('scratch', 'atomics')).toContain('scratch.cells[ray * scratch.layers + layer]');
     });

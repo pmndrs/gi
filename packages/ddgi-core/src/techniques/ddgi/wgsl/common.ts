@@ -79,6 +79,10 @@ struct DdgiUniforms {
     fineOwedUpdates: f32,     // updates a fine probe waiting for its keys owes
     propagation: u32,         // 1: keys taking in a change pass it to their fine neighbours (ddgi/blend, ddgi/propagate)
     holdFineProbes: u32,      // the test mode (settings.holdFineProbes): fine probes waiting for their keys are not blended
+    // The sun layer (T2.6b): the sun's colour x intensity (rgb; w unused), what
+    // one unit of its white-reference layer stands for. ddgi/blend weighs that
+    // layer by it in the probe's mean, so the mean is the probe's real light.
+    sunLight: vec4f,
 }
 
 const DDGI_MAX_RAYS: u32 = ${MAX_RAYS_PER_PROBE}u;

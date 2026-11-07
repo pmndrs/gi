@@ -16,6 +16,7 @@
  * mover mask has the object's bit).
  */
 
+import type { LightHandle } from '../../platform/contract/handles.ts';
 import type { LightDescriptor } from '../../platform/contract/scene.ts';
 import type { DirtyRegion, LightChange, SceneChanges } from '../../platform/contract/scene-copy.ts';
 import { MARK_ENTRY_WORD, MARK_ENTRY_WORDS, MARK_GEOMETRY_WORD, MARK_HEADER_WORDS, MARK_KIND, MARK_LIGHT_KIND, MARK_LIGHT_WORD } from './layout.ts';
@@ -358,6 +359,21 @@ function localBox(change: LightChange, grid: ProbeGrid): { min: Vec3; size: Vec3
 const ONE_LAYER: readonly number[] = [0, 0, 0, 0];
 
 /**
+ * The sun layer, as `ddgi/mark` needs it (T2.6b; light-groups.ts): which
+ * light the layer holds this frame and which it held in the frame before
+ * (`SceneCopy.firstDirectionalLight`'s handle; null with no directional light).
+ */
+export interface SunLayerMarks {
+    readonly sun: LightHandle | null;
+    readonly previousSun: LightHandle | null;
+}
+
+/** The sun as its layer holds it: at the white reference (colour 1, intensity 1). */
+function atWhite(light: LightRecord): LightRecord {
+    return { ...light, intensity: [1, 1, 1] };
+}
+
+/**
  * The frame's light changes as `ddgi/mark` treats them: a light that moved to
  * another irradiance layer (its group changed, and the groups' layers differ)
  * becomes two changes, its removal from the old layer (before → none) and
@@ -365,11 +381,13 @@ const ONE_LAYER: readonly number[] = [0, 0, 0, 0];
  * by the light's whole irradiance, though the field's sum doesn't (with
  * every weight 1), and the history is cut for what changed in a layer.
  */
-function byLayer(changes: readonly LightChange[], groupLayers: readonly number[]): LightChange[] {
+function byLayer(changes: readonly LightChange[], groupLayers: readonly number[], sunInItsLayer: LightHandle | null): LightChange[] {
     const layerOf = (light: LightDescriptor): number => groupLayers[light.group ?? 0] ?? groupLayers[groupLayers.length - 1] ?? 0;
     const result: LightChange[] = [];
     for (const change of changes) {
-        if (change.before && change.after && layerOf(change.before) !== layerOf(change.after)) {
+        // The sun in its own layer stays there whatever its group: a group change only changes its weight.
+        const moves = change.light !== sunInItsLayer && change.before && change.after && layerOf(change.before) !== layerOf(change.after);
+        if (moves && change.before && change.after) {
             result.push({ ...change, after: null, influenceRadius: { before: change.influenceRadius.before, after: 0 } });
             result.push({ ...change, before: null, influenceRadius: { before: 0, after: change.influenceRadius.after } });
         } else {
@@ -389,12 +407,20 @@ function byLayer(changes: readonly LightChange[], groupLayers: readonly number[]
  *   one frame (T2.1): each gets one entry over FOLDED_NEAR_SPACINGS around
  *   it, and one entry over every probe carries the largest of their bounds
  *   beyond that ({@link foldedFarChange}), served as a global change.
- * - A directional light: one entry over every probe with its r.
- *   **The sun-layer exception goes here.** Once the sun has a layer of its
- *   own (T2.5 with T2.6b), a change of its colour or intensity alone marks
- *   nothing: it becomes that layer's weight (m2-lights.md §4.2, §6.1). Until
- *   then such a change is in the field's light, so it marks every probe by
+ * - A directional light: one entry over every probe with its r. A change of
+ *   colour or intensity is in the field's light, so it marks every probe by
  *   its change per channel (old / new − 1 for a dimming), like a turn.
+ * - **The sun-layer exception** (T2.6b, `sunLayer`; m2-lights.md §4.2,
+ *   §6.1): the sun in a layer of its own is traced at a white reference, so
+ *   a change of its colour, intensity or group alone marks nothing: it is
+ *   the layer's weight, composed in its frame. Its r is worked out with both
+ *   sides at white, so a turn marks by its angle alone, whatever its
+ *   brightness did in the same frame (a turn of a sun at intensity 0 too: its
+ *   layer must follow for when it comes back). When the sun becomes another
+ *   light (the sun destroyed, or a first directional light created), the
+ *   layer holds the wrong light's response: every probe is marked as a whole
+ *   change (MAX_GLOBAL_CHANGE). Rare: it takes destroying or creating
+ *   directional lights.
  * - The environment: one entry over every probe; its r comes from the sky's
  *   SH on the GPU (ENVIRONMENT_CHANGE). The sky transfer's exceptions
  *   (`skyResidualShare`) are T2.6b's.
@@ -407,10 +433,18 @@ function byLayer(changes: readonly LightChange[], groupLayers: readonly number[]
  *   after a light switch. With groups off (one layer) a group change alone
  *   marks nothing: the light's numbers didn't change.
  */
-export function buildMarkTable(changes: SceneChanges, grid: ProbeGrid, movers: MoverBits = NO_MOVERS, groupLayers: readonly number[] = ONE_LAYER): MarkTable | null {
+export function buildMarkTable(
+    changes: SceneChanges,
+    grid: ProbeGrid,
+    movers: MoverBits = NO_MOVERS,
+    groupLayers: readonly number[] = ONE_LAYER,
+    sunLayer: SunLayerMarks | null = null,
+): MarkTable | null {
     const entries: Entry[] = [];
     const everywhere = { boxMin: [0, 0, 0] as Vec3, boxSize: [grid.counts[0], grid.counts[1], grid.counts[2]] as Vec3, geometry: NO_GEOMETRY };
-    const lightChanges = byLayer(changes.lights, groupLayers);
+    // The sun keeps its layer this frame: its changes are judged at the white reference.
+    const steadySun = sunLayer && sunLayer.sun !== null && sunLayer.sun === sunLayer.previousSun ? sunLayer.sun : null;
+    const lightChanges = byLayer(changes.lights, groupLayers, steadySun);
     let unranged = 0;
     for (const change of lightChanges) if (isUnrangedLocal(change)) unranged++;
     const fold = unranged > MAX_UNRANGED_LIGHT_ENTRIES;
@@ -420,7 +454,12 @@ export function buildMarkTable(changes: SceneChanges, grid: ProbeGrid, movers: M
         const [before, after] = bothSides(change);
         const directional = change.before?.type === 'directional' || change.after?.type === 'directional';
         if (directional) {
-            const globalChange = directionalChange(before, after);
+            const isSun = change.light === steadySun;
+            // The sun in its own layer: both sides at white, so only a turn (or a switch on or off) counts.
+            // (A side that doesn't exist stays dark; for a sun that keeps its layer both sides exist.)
+            const globalChange = isSun
+                ? directionalChange(change.before ? atWhite(before) : before, change.after ? atWhite(after) : after)
+                : directionalChange(before, after);
             // A missing side faces the same way as the other, for the openness test.
             const beforeFacing = change.before ? before : { ...before, direction: after.direction };
             const afterFacing = change.after ? after : { ...after, direction: before.direction };
@@ -439,6 +478,10 @@ export function buildMarkTable(changes: SceneChanges, grid: ProbeGrid, movers: M
     }
     if (foldedChange > 0) {
         entries.push({ kind: MARK_KIND.everywhere, ...everywhere, globalChange: foldedChange, before: NO_LIGHT, after: NO_LIGHT });
+    }
+    if (sunLayer && sunLayer.sun !== sunLayer.previousSun) {
+        // The sun layer now holds another light (or none): a whole change everywhere.
+        entries.push({ kind: MARK_KIND.everywhere, ...everywhere, globalChange: MAX_GLOBAL_CHANGE, before: NO_LIGHT, after: NO_LIGHT });
     }
     for (const region of changes.regions) {
         const entry = geometryEntry(region, grid, movers);

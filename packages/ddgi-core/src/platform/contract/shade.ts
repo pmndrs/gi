@@ -44,13 +44,23 @@ import type { WgslModule } from './wgsl';
  * fn giDirectIrradiance(surface: GiSurface, groupMask: u32, random: vec2f) -> vec3f
  *
  * // The same light choice and shadow rays, the result split by the lights'
- * // group (struct GiDirectGroups { group0, group1, group2, group3: vec3f }).
- * // giDirectIrradiance is the sum of the four.
+ * // group (struct GiDirectGroups { group0, group1, group2, group3, sun: vec3f }).
+ * // giDirectIrradiance is the sum of the four groups; `sun` is 0 here.
  * fn giDirectGroupIrradiance(surface: GiSurface, groupMask: u32, random: vec2f) -> GiDirectGroups
+ *
+ * // The same, and with `sunApart` the sun kept apart (T2.6b): the first
+ * // directional light (light 0) is evaluated at a white reference (colour 1,
+ * // intensity 1) and goes into `sun` instead of its group, for a technique
+ * // that keeps the sun in a layer of its own and weighs that layer by the
+ * // sun's colour x intensity.
+ * fn giDirectSplitIrradiance(surface: GiSurface, groupMask: u32, sunApart: bool, random: vec2f) -> GiDirectGroups
  *
  * // Whether any light in the groups lights the surface's side at all
  * // (giDirectIrradiance would evaluate it); no shadow rays.
  * fn giDirectReaches(surface: GiSurface, groupMask: u32) -> bool
+ * // The same for giDirectSplitIrradiance: with `sunApart` the sun is weighed
+ * // in white, so a sun at intensity 0 still lists the hits it faces.
+ * fn giDirectReachesSplit(surface: GiSurface, groupMask: u32, sunApart: bool) -> bool
  *
  * // The random numbers gi/direct uses for a ray of a ray scratch (see `direct`).
  * fn giDirectRandom(ray: u32, frame: u32) -> vec2f
@@ -182,6 +192,14 @@ export interface DirectLightFrame {
      * layer 0.
      */
     readonly groupLayers?: readonly number[];
+    /**
+     * The result layer that gets the sun's direct light at a white reference
+     * (colour 1, intensity 1), the sun kept apart from its group
+     * (`giDirectSplitIrradiance`; T2.6b, a technique's sun layer). The sun is
+     * the scene's first directional light (`SceneCopy.firstDirectionalLight`).
+     * Omitted: the sun is a light like any other, in its group's layer.
+     */
+    readonly sunLayer?: number;
     /** The calling technique's id: the pass is timed as `<owner>/gi-direct`, so it counts towards the technique's budget. */
     readonly owner: string;
     readonly timer: GpuTimerScope;

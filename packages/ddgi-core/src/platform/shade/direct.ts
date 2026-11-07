@@ -34,6 +34,13 @@
  * (`giDirectGroupIrradiance`). With one layer (the default) every group goes
  * into it, as before.
  *
+ * **The sun's layer** (T2.6b): a technique may also name a layer for the sun
+ * (`DirectLightFrame.sunLayer`). The sun, the scene's first directional
+ * light, then goes into that layer at a white reference instead of into its
+ * group's (`giDirectSplitIrradiance` with `sunApart`), and the technique
+ * weighs the layer by the sun's colour x intensity. The light choice and the
+ * shadow rays are still shared.
+ *
  * **A work item** (32 bytes): the surface record and the index of the ray
  * whose result gets the light.
  *
@@ -126,7 +133,12 @@ export const RAY_SCRATCH_WORD = {
     layers: 9,
     /** For light groups 0-3, the result layer that gets the group's direct light, 8 bits each (group 0 lowest). Written by `encode`. */
     groupLayers: 10,
+    /** The result layer that gets the sun apart, at a white reference; {@link NO_SUN_LAYER} when the sun is in its group's. Written by `encode`. */
+    sunLayer: 11,
 } as const;
+
+/** `RAY_SCRATCH_WORD.sunLayer` when no layer holds the sun apart: the sun is in its group's layer. */
+export const NO_SUN_LAYER = 0xffffffff;
 
 /** The most result layers a scratch holds: each group's layer number is 8 bits of a header word. */
 export const MAX_RAY_RESULT_LAYERS = 8;
@@ -152,12 +164,14 @@ struct GiRayScratch {
     droppedThisFrame: u32,
     layers: u32,
     groupLayers: u32,
-    reserved0: u32,
+    sunLayer: u32,
     reserved: array<vec4u, 13>,
     cells: array<vec2u>,
 }
 
 const GI_DIRECT_ITEM_CELLS: u32 = ${WORK_ITEM_CELLS}u;
+// GiRayScratch.sunLayer when the sun is a light like any other, in its group's layer.
+const GI_DIRECT_NO_SUN_LAYER: u32 = ${NO_SUN_LAYER}u;
 `;
 
 /** The surface record and the ray result's packing; needs the hit-shading module (`GiSurface`). */
@@ -313,9 +327,11 @@ fn giStoreRayResult(ray: u32, radiance: vec3f, techniqueHalf: f32) {
     giStoreRayLayerResult(ray, 0u, radiance, techniqueHalf);
 }
 
-// Does this hit go on the work list? Only if a light of this frame's groups can reach it.
+// Does this hit go on the work list? Only if a light of this frame's groups
+// can reach it; the sun weighed in white when it has a layer of its own, so
+// its layer keeps updating while the sun's intensity is 0.
 fn giNeedsDirect(surface: GiSurface) -> bool {
-    return giDirectReaches(surface, ${variable}.groupMask);
+    return giDirectReachesSplit(surface, ${variable}.groupMask, ${variable}.sunLayer != GI_DIRECT_NO_SUN_LAYER);
 }
 
 // A hit past the capacity is counted (gi/direct-args reports it dropped) but not stored.
@@ -400,19 +416,23 @@ fn giDirect(
 
     // The same light selection and shadow rays as a kernel that calls
     // giDirectIrradiance inline (its four groups summed): one code path.
+    // With a sun layer, the sun apart at its white reference.
     let random = giDirectRandom(ray, giDirectScratch.frame);
-    let byGroup = giDirectGroupIrradiance(surface, giDirectScratch.groupMask, random);
+    let sunLayer = giDirectScratch.sunLayer;
+    let byGroup = giDirectSplitIrradiance(surface, giDirectScratch.groupMask, sunLayer != GI_DIRECT_NO_SUN_LAYER, random);
     // Three more numbers per layer for the rounding, from the light's random numbers.
     let roundingSeed = giShadeHash(bitcast<u32>(random.x) ^ giShadeHash(bitcast<u32>(random.y) ^ 0x85ebca6bu));
     let layers = giDirectScratch.layers;
     let groupLayers = giDirectScratch.groupLayers;
     for (var layer = 0u; layer < layers; layer++) {
-        // The groups whose direct light goes into this layer (all of them with one layer).
+        // The groups whose direct light goes into this layer (all of them with
+        // one layer), and the sun apart if this is its layer.
         let direct =
             select(vec3f(0.0), byGroup.group0, giDirectGroupLayer(groupLayers, 0u) == layer) +
             select(vec3f(0.0), byGroup.group1, giDirectGroupLayer(groupLayers, 1u) == layer) +
             select(vec3f(0.0), byGroup.group2, giDirectGroupLayer(groupLayers, 2u) == layer) +
-            select(vec3f(0.0), byGroup.group3, giDirectGroupLayer(groupLayers, 3u) == layer);
+            select(vec3f(0.0), byGroup.group3, giDirectGroupLayer(groupLayers, 3u) == layer) +
+            select(vec3f(0.0), byGroup.sun, sunLayer == layer);
         if (all(direct == vec3f(0.0))) {
             // Every light of the layer blocked (or none in it): the result already holds the rest of the ray's light.
             continue;
@@ -465,6 +485,15 @@ export function rayScratchBytes(rays: number, workItems: number, layers = 1): nu
     return RAY_SCRATCH_HEADER_BYTES + rays * layers * RAY_RESULT_BYTES + workItems * WORK_ITEM_BYTES;
 }
 
+/** The header word of `sunLayer` (RAY_SCRATCH_WORD.sunLayer): the layer, or NO_SUN_LAYER when the sun stays in its group's. */
+export function packSunLayer(sunLayer: number | undefined, layers: number): number {
+    if (sunLayer === undefined) return NO_SUN_LAYER;
+    if (!Number.isInteger(sunLayer) || sunLayer < 0 || sunLayer >= layers) {
+        throw new RangeError(`@pmndrs/ddgi: the sun goes into result layer ${sunLayer}, but the ray scratch has ${layers} layer(s)`);
+    }
+    return sunLayer;
+}
+
 /** The header word of `groupLayers` (RAY_SCRATCH_WORD.groupLayers): 8 bits a group, every group in layer 0 by default. */
 export function packGroupLayers(groupLayers: readonly number[] | undefined, layers: number): number {
     let packed = 0;
@@ -493,7 +522,7 @@ class PlatformRayScratch implements RayScratch {
     readonly bytes: number;
     readonly argsGroup: GPUBindGroup;
     readonly directGroup: GPUBindGroup;
-    /** The frame, group mask and group layers last written into the header ("" before any). */
+    /** The frame, group mask, group layers and sun layer last written into the header ("" before any). */
     writtenFrame = '';
 
     constructor(device: GPUDevice, kernels: DirectKernels, dispatch: GPUBuffer, label: string, rays: number, workItems: number, layers: number) {
@@ -514,6 +543,7 @@ class PlatformRayScratch implements RayScratch {
         header[RAY_SCRATCH_WORD.itemsStart] = rays * layers;
         header[RAY_SCRATCH_WORD.itemCapacity] = workItems;
         header[RAY_SCRATCH_WORD.layers] = layers;
+        header[RAY_SCRATCH_WORD.sunLayer] = NO_SUN_LAYER;
         // No frame is counted yet: the first frame's counts start from zero, whatever its number.
         header[RAY_SCRATCH_WORD.countedFrame] = 0xffffffff;
         this.buffer.unmap();
@@ -544,9 +574,9 @@ export class PlatformDeferredDirect implements DeferredDirectLight {
     private readonly dispatch: GPUBuffer;
     private kernels: DirectKernels | null = null;
     private preparing: Promise<void> | null = null;
-    /** The header's frame and group mask words, then (after the counts) its group layers. */
+    /** The header's frame and group mask words, then (after the counts) its group layers and sun layer. */
     private readonly headerWords = new Uint32Array(2);
-    private readonly groupLayerWord = new Uint32Array(1);
+    private readonly layerWords = new Uint32Array(2);
 
     constructor(device: GPUDevice, kernels: KernelBuilder, shadeModule: WgslModule, label: string) {
         this.device = device;
@@ -609,13 +639,16 @@ export class PlatformDeferredDirect implements DeferredDirectLight {
         // host submits this encoder, so the tracing kernel recorded before this call reads the
         // same group mask as gi/direct.
         const groupLayers = packGroupLayers(frame.groupLayers, scratch.layers);
-        const frameKey = `${frame.frame >>> 0}/${frame.groupMask >>> 0}/${groupLayers}`;
+        const sunLayer = packSunLayer(frame.sunLayer, scratch.layers);
+        const frameKey = `${frame.frame >>> 0}/${frame.groupMask >>> 0}/${groupLayers}/${sunLayer}`;
         if (frameKey !== scratch.writtenFrame) {
             this.headerWords[0] = frame.frame >>> 0;
             this.headerWords[1] = frame.groupMask >>> 0;
             this.device.queue.writeBuffer(scratch.buffer, RAY_SCRATCH_WORD.frame * 4, this.headerWords);
-            this.groupLayerWord[0] = groupLayers;
-            this.device.queue.writeBuffer(scratch.buffer, RAY_SCRATCH_WORD.groupLayers * 4, this.groupLayerWord);
+            // groupLayers and sunLayer are neighbours (words 10 and 11): one write.
+            this.layerWords[0] = groupLayers;
+            this.layerWords[1] = sunLayer;
+            this.device.queue.writeBuffer(scratch.buffer, RAY_SCRATCH_WORD.groupLayers * 4, this.layerWords);
             scratch.writtenFrame = frameKey;
         }
         // One pass, two dispatches: each dispatch is its own usage scope, so the arguments

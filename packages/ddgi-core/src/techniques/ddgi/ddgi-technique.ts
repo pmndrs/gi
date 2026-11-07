@@ -57,6 +57,8 @@ import type { DebugView } from '../../platform/contract/stats.ts';
 import type { GITechnique, TechniqueContext, TechniqueFrame, TechniqueRequirements, WorkFloorRate } from '../../platform/contract/technique.ts';
 import type { DirectWorkList, RayScratch } from '../../platform/contract/shade.ts';
 import type { ColorRGB } from '../../platform/contract/math.ts';
+import type { LightHandle } from '../../platform/contract/handles.ts';
+import type { DirectionalLightDescriptor } from '../../platform/contract/scene.ts';
 import type { ComputeKernel } from '../../platform/contract/wgsl.ts';
 import { GILimitError } from '../../platform/contract/errors.ts';
 import {
@@ -137,7 +139,7 @@ import {
 } from './settings.ts';
 import { cameraFalloffDistance, frustumPlanes, inViewMargin } from './camera.ts';
 import { buildMarkTable, type MarkTable } from './mark-table.ts';
-import { layerPlan, MAX_IRRADIANCE_LAYERS, MAX_LIGHT_GROUPS, writeLayerWeights, type LayerPlan } from './light-groups.ts';
+import { layerPlan, MAX_IRRADIANCE_LAYERS, MAX_LIGHT_GROUPS, sunLayerWeight, sunLightOf, writeLayerWeights, type LayerPlan } from './light-groups.ts';
 import { COMPOSE_ENTRY_POINTS, COMPOSE_WEIGHTS_BYTES, composeKernelWgsl } from './wgsl/compose.ts';
 import { MoverTable } from './mover-table.ts';
 import { ContinuingChangeBatch } from './continuing-change.ts';
@@ -563,6 +565,12 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
     private composeAllPending = false;
     /** Frames since `prepare` that composed every tile (a weight change, or the first frame). */
     private fullComposeFrames = 0;
+    /**
+     * With a sun layer: the light it held at the end of the last frame (the
+     * scene's first directional light then), so `ddgi/mark` sees the sun
+     * becoming another light (mark-table.ts, `SunLayerMarks`).
+     */
+    private sunInLayer: LightHandle | null = null;
     private disposed = false;
 
     constructor(settings: DDGISettingsInput, options: DDGITechniqueOptions = {}) {
@@ -645,8 +653,9 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         const grid = probeGrid(this.settings.volume);
         const irradianceTexels = positiveInteger(this.settings.irradianceTexels, 'irradianceTexels');
         const distanceTexels = positiveInteger(this.settings.distanceTexels, 'distanceTexels');
-        // Light groups (T2.5): one irradiance layer per group and one for the environment, or one layer with groups off.
-        const plan = layerPlan(this.settings.lightGroups);
+        // Light groups (T2.5): one irradiance layer per group and one for the environment, or one layer with groups off;
+        // and the sun's own layer last (T2.6b).
+        const plan = layerPlan(this.settings.lightGroups, this.settings.sunLayer === true);
         const layerCount = plan.layers.length;
         const layout = fieldLayout(grid, irradianceTexels, distanceTexels, distanceFormatFor(device.features as ReadonlySet<string>), layerCount);
         checkFieldLimits(layout, device.limits);
@@ -661,7 +670,7 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         const directLight = this.options.directLight ?? 'deferred';
         const directWorkList = directLight === 'deferred' ? (this.options.directWorkList ?? context.shade.direct.defaultWorkList) : null;
         // The inline trace (kept for comparison) adds every light's direct light into one result.
-        if (!directWorkList && layerCount > 1) throw new Error("@pmndrs/ddgi: light groups need direct light deferred to gi/direct (directLight: 'deferred', the default)");
+        if (!directWorkList && layerCount > 1) throw new Error("@pmndrs/ddgi: light groups and the sun layer need direct light deferred to gi/direct (directLight: 'deferred', the default)");
         // Throws for a 'subgroups' work list on a device without them.
         const traceCode = directWorkList ? deferredTraceKernelWgsl(context.shade.direct.traceWgsl('ddgiRayScratch', directWorkList), plan) : DDGI_TRACE_WGSL;
 
@@ -670,7 +679,7 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         const markCode = markKernelWgsl(reduction);
         const writeCode = writeKernelWgsl({ irradianceTexels, distanceTexels, scratch, distanceFormat: layout.distanceFormat });
         const propagationCapacity = propagationListCapacity(grid.counts, maxProbesPerFrame);
-        const propagateCode = propagateKernelWgsl({ irradianceTexels, irradianceLayers: layerCount, reduction, listCapacity: propagationCapacity });
+        const propagateCode = propagateKernelWgsl({ irradianceTexels, irradianceLayers: layerCount, reduction, listCapacity: propagationCapacity, sunLayer: plan.sunLayer });
         const composeCode = plan.composed ? composeKernelWgsl({ irradianceTexels, irradianceLayers: layerCount }) : null;
         const composeKernel = (entryPoint: string, name: string): Promise<ComputeKernel | null> =>
             composeCode ? context.kernels.computeKernel({ label: `ddgi/compose-${name}`, modules: [], code: composeCode, entryPoint, ownGroups: [COMPOSE_GROUP] }) : Promise.resolve(null);
@@ -708,7 +717,7 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
             context.kernels.computeKernel({
                 label: `ddgi/blend (${reduction})`,
                 modules: [],
-                code: blendKernelWgsl({ irradianceTexels, distanceTexels, scratch, reduction }),
+                code: blendKernelWgsl({ irradianceTexels, distanceTexels, scratch, reduction, sunLayer: plan.sunLayer }),
                 entryPoint: 'ddgiBlend',
                 ownGroups: [BLEND_GROUP],
             }),
@@ -1017,6 +1026,8 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         this.layerWeights.fill(Number.NaN);
         this.composeAllPending = compose !== null;
         this.fullComposeFrames = 0;
+        // The field is new, so the sun layer holds nothing yet to be wrong about.
+        this.sunInLayer = context.scene.firstDirectionalLight?.light ?? null;
         this.startWarmUp();
         this.markAllNotUpdated();
     }
@@ -1053,9 +1064,14 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
             context.device.queue.writeBuffer(resources.movers, 0, this.movers.words);
             this.movers.dirty = false;
         }
+        // The sun layer (T2.6b): the light it holds now, and the one it held last frame.
+        const sun = context.scene.firstDirectionalLight;
+        const sunMarks = resources.plan.sunLayer >= 0 ? { sun: sun?.light ?? null, previousSun: this.sunInLayer } : null;
+        this.sunInLayer = sun?.light ?? null;
         // Marks land even in a frame that updates no probe: they wait in the
         // history for each probe's next update.
-        const markTable = this.settings.changeDrivenHistory !== false ? buildMarkTable(frame.changes, resources.grid, this.movers, resources.plan.groupLayers) : null;
+        const markTable =
+            this.settings.changeDrivenHistory !== false ? buildMarkTable(frame.changes, resources.grid, this.movers, resources.plan.groupLayers, sunMarks) : null;
         this.latestMarkEntries = markTable?.entryCount ?? 0;
         this.continuingChange.noteFrame(markTable !== null);
         // No probe updates twice in a frame. While warming: a full batch, or none while the trees are built.
@@ -1064,14 +1080,15 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         const count = Math.max(0, Math.min(Number.isNaN(handOut) ? 0 : Math.floor(handOut), resources.maxProbesPerFrame, probeCount));
         this.probesUpdated = count;
         if (count > 0) this.lastUpdateCount = count;
-        // Light groups: a weight changed since the last frame (or the composed atlas is new), so every tile is composed this frame.
-        const composeAll = this.updateLayerWeights(context, resources);
+        // Light groups and the sun layer: a weight changed since the last frame (or the composed atlas is new), so every
+        // tile is composed this frame. A change of the sun's colour or intensity is one, with a sun layer.
+        const composeAll = this.updateLayerWeights(context, resources, sun?.descriptor ?? null);
         if (count === 0 && !markTable && !this.historyClearPending && !composeAll) return 0;
         const raysPerProbe = effectiveRaysPerProbe(this.settings.raysPerProbe);
         const device = context.device;
         const maxPerDimension = device.limits.maxComputeWorkgroupsPerDimension;
 
-        this.writeUniforms(resources, frame, count, raysPerProbe);
+        this.writeUniforms(resources, frame, count, raysPerProbe, sun?.descriptor ?? null);
         device.queue.writeBuffer(resources.uniforms, 0, this.uniformData);
         if (this.historyClearPending) {
             // resetHistory: every probe starts again with nothing owed, cut or asked for.
@@ -1138,14 +1155,16 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
     }
 
     /**
-     * Light groups: writes the layers' weights when they changed, and says
-     * whether this frame must compose every tile (a weight changed, or the
-     * composed atlas is new). Nothing with one layer.
+     * Light groups and the sun layer: writes the layers' weights when they
+     * changed, and says whether this frame must compose every tile (a weight
+     * changed, or the composed atlas is new). Nothing with one layer. The sun
+     * layer's weight is the sun's colour × intensity now (light-groups.ts).
      */
-    private updateLayerWeights(context: TechniqueContext, resources: PreparedResources): boolean {
+    private updateLayerWeights(context: TechniqueContext, resources: PreparedResources, sun: DirectionalLightDescriptor | null): boolean {
         const compose = resources.compose;
         if (!compose) return false;
-        const changed = writeLayerWeights(resources.plan, this.settings.lightGroups, this.layerWeights);
+        const sunWeight = sunLayerWeight(resources.plan, this.settings.lightGroups, sun);
+        const changed = writeLayerWeights(resources.plan, this.settings.lightGroups, this.layerWeights, sunWeight);
         if (changed) context.device.queue.writeBuffer(compose.weights, 0, this.layerWeights);
         const composeAll = changed || this.composeAllPending;
         this.composeAllPending = false;
@@ -1235,8 +1254,10 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
             words[(round * stride) / 4 + 1] = Math.min(DIRECT_ROUND_PROBES, count - firstSlot);
         }
         context.device.queue.writeBuffer(traceRounds, 0, words);
-        // Each light group's direct light into its own layer (all into the one layer with groups off).
-        const direct = { frame: frameNumber, groupMask: DDGI_LIGHT_GROUP_MASK, groupLayers: resources.plan.groupLayers, owner: this.id, timer: context.timer };
+        // Each light group's direct light into its own layer (all into the one layer with groups off), and the sun at
+        // its white reference into the sun layer when there is one.
+        const sunLayer = resources.plan.sunLayer >= 0 ? resources.plan.sunLayer : undefined;
+        const direct = { frame: frameNumber, groupMask: DDGI_LIGHT_GROUP_MASK, groupLayers: resources.plan.groupLayers, sunLayer, owner: this.id, timer: context.timer };
         for (let round = 0; round < rounds; round++) {
             const slotCount = words[(round * stride) / 4 + 1];
             const trace = encoder.beginComputePass({ label: 'ddgi/trace', timestampWrites: context.timer.computePass('ddgi/trace') });
@@ -1397,6 +1418,8 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
             'key probes': this.resources ? keyProbeCount(this.resources.grid.counts) : 0,
             // Light groups (T2.5): the irradiance layers (1 with groups off), and the frames that composed every tile.
             'irradiance layers': this.resources?.plan.layers.length ?? 0,
+            // The sun layer (T2.6b): 1 when the sun has a layer of its own.
+            'sun layer': (this.resources?.plan.sunLayer ?? -1) >= 0 ? 1 : 0,
             'frames composed in full': this.fullComposeFrames,
         };
         if (sweep !== undefined) updates['seconds per full sweep'] = sweep;
@@ -1701,7 +1724,7 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         data.set([irradianceTexels, distanceTexels, 0, 0], UNIFORM_WORD.volumeTexels);
     }
 
-    private writeUniforms(resources: PreparedResources, frame: TechniqueFrame, count: number, raysPerProbe: number): void {
+    private writeUniforms(resources: PreparedResources, frame: TechniqueFrame, count: number, raysPerProbe: number, sun: DirectionalLightDescriptor | null): void {
         const { grid } = resources;
         this.fillSampleParameters(grid, resources.irradianceTexels, resources.distanceTexels);
         const data = this.uniformData;
@@ -1761,6 +1784,8 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         data[UNIFORM_WORD.fineOwedUpdates] = FINE_PROBE_UPDATES;
         words[UNIFORM_WORD.propagation] = blend.keyProbes ? 1 : 0;
         words[UNIFORM_WORD.holdFineProbes] = blend.holdFineProbes ? 1 : 0;
+        // The sun layer's unit (T2.6b): the blend weighs that layer by it in the probe's mean. Read only with a sun layer.
+        data.set([...(sun ? sunLightOf(sun) : [0, 0, 0]), 0], UNIFORM_WORD.sunLight);
         data[UNIFORM_WORD.cameraFalloffDistance] = cameraFalloffDistance(grid);
         data.set([...frame.camera.position, inViewMargin(grid)], UNIFORM_WORD.cameraPosition);
         frustumPlanes(frame.camera).forEach((plane, index) => data.set(plane, FRUSTUM_PLANE_WORDS[index]));

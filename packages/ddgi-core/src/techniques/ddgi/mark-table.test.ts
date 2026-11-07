@@ -233,13 +233,68 @@ describe("ddgi/mark's table", () => {
         expect(turn.boxSize).toEqual([...grid.counts]);
         // 30 degrees: the chord 2 sin(15 degrees).
         expect(turn.globalChange).toBeCloseTo(2 * Math.sin(Math.PI / 12), 5);
-        // Half the sun, against the light that is left: old / new - 1 = 1 (T2.4b). (Until the sun layer exists, T2.5/T2.6b.)
+        // Half the sun, against the light that is left: old / new - 1 = 1 (T2.4b). (Without a sun layer; with one, below.)
         expect(half.globalChange).toBeCloseTo(1, 6);
         expect(on.globalChange).toBe(MAX_GLOBAL_CHANGE);
         // The missing side faces the same way, for the openness test.
         expect(on.before.direction).toEqual(on.after.direction);
         expect(table.threadCount).toBe(3 * grid.probeCount);
         expect(half.firstThread).toBe(grid.probeCount);
+    });
+
+    describe('the sun in a layer of its own (T2.6b)', () => {
+        const sunHandle = 7 as LightHandle;
+        const sun = (intensity: number, direction: [number, number, number], color: [number, number, number] = [1, 0.95, 0.85], group = 0): LightDescriptor => ({
+            type: 'directional',
+            color,
+            intensity,
+            direction,
+            group,
+        });
+        const sunChange = (before: LightDescriptor | null, after: LightDescriptor | null): LightChange => ({ ...change(before, after, Infinity), light: sunHandle });
+        const steady = { sun: sunHandle, previousSun: sunHandle };
+        const down: [number, number, number] = [0, -1, 0];
+        const turned: [number, number, number] = [Math.sin(Math.PI / 6), -Math.cos(Math.PI / 6), 0];
+
+        it('marks nothing for a change of its colour, intensity or group alone: that is its weight', () => {
+            const recoloured = sunChange(sun(3, down), sun(0.5, down, [1, 0.5, 0.2]));
+            const off = sunChange(sun(3, down), sun(0, down));
+            const backOn = sunChange(sun(0, down), sun(3, down));
+            const regrouped = sunChange(sun(3, down), sun(3, down, undefined, 1));
+            for (const only of [recoloured, off, backOn, regrouped]) {
+                expect(buildMarkTable({ ...NONE, lights: [only], global: ['sun'] }, grid, undefined, [0, 1, 1, 1], steady)).toBeNull();
+            }
+            // Without a sun layer the same colour change marks every probe, as before.
+            expect(buildMarkTable({ ...NONE, lights: [recoloured], global: ['sun'] }, grid)?.entryCount).toBe(1);
+        });
+
+        it('marks a turn by its angle alone, whatever its brightness did, and a turn of a sun at intensity 0 too', () => {
+            for (const [before, after] of [
+                [sun(3, down), sun(3, turned)],
+                [sun(3, down), sun(0.3, turned, [1, 0.4, 0.1])],
+                [sun(0, down), sun(0, turned)],
+            ] as const) {
+                const table = buildMarkTable({ ...NONE, lights: [sunChange(before, after)], global: ['sun'] }, grid, undefined, undefined, steady)!;
+                expect(table.entryCount).toBe(1);
+                expect(entry(table, 0).kind).toBe(MARK_KIND.directionalLight);
+                expect(entry(table, 0).globalChange).toBeCloseTo(2 * Math.sin(Math.PI / 12), 5);
+            }
+        });
+
+        it('treats other directional lights as before, and a sun that became another light as a whole change', () => {
+            const otherLight = change(sun(3, down), sun(1.5, down), Infinity);
+            const table = buildMarkTable({ ...NONE, lights: [otherLight], global: ['sun'] }, grid, undefined, undefined, steady)!;
+            expect(entry(table, 0).globalChange).toBeCloseTo(1, 6);
+            // The sun destroyed; another directional light (or none) is the sun now.
+            for (const next of [8 as LightHandle, null]) {
+                const replaced = buildMarkTable({ ...NONE, lights: [sunChange(sun(3, down), null)], global: ['sun'] }, grid, undefined, undefined, { sun: next, previousSun: sunHandle })!;
+                const kinds = Array.from({ length: replaced.entryCount }, (_, index) => entry(replaced, index));
+                expect(kinds.some((row) => row.kind === MARK_KIND.everywhere && row.globalChange === MAX_GLOBAL_CHANGE)).toBe(true);
+            }
+            // A first directional light created where there was none.
+            const created = buildMarkTable({ ...NONE, lights: [sunChange(null, sun(3, down))], global: ['sun'] }, grid, undefined, undefined, { sun: sunHandle, previousSun: null })!;
+            expect(Array.from({ length: created.entryCount }, (_, index) => entry(created, index).globalChange)).toContain(MAX_GLOBAL_CHANGE);
+        });
     });
 
     it('marks every probe for an environment change and for more light changes than are listed', () => {

@@ -169,6 +169,12 @@ export interface BlendKernelShape {
     readonly distanceTexels: number;
     readonly scratch: ScratchLayout;
     readonly reduction: PhaseBReduction;
+    /**
+     * The sun layer's index (T2.6b, `LayerPlan.sunLayer`), or -1 / omitted
+     * without one. Its texels are at the sun's white reference, so the probe's
+     * mean weighs them by the sun's light (`DdgiUniforms.sunLight`).
+     */
+    readonly sunLayer?: number;
 }
 
 /** Per-thread reduction into the workgroup atomics, in the two declared forms. */
@@ -212,6 +218,25 @@ fn ddgiReduceFixedRay(ray: DdgiFixedRayResult) {
 
 export function blendKernelWgsl(shape: BlendKernelShape): string {
     const { irradianceTexels, distanceTexels, scratch, reduction } = shape;
+    const sunLayer = shape.sunLayer ?? -1;
+    if (sunLayer >= scratch.irradianceLayers) throw new RangeError(`@pmndrs/ddgi: the sun layer is ${sunLayer}, but the blend has ${scratch.irradianceLayers} layer(s)`);
+    // The probe's mean over every layer: the sun layer weighed by the sun's light, the others as they are.
+    const meanSum =
+        sunLayer >= 0
+            ? /* wgsl */ `
+        // The sun layer holds the sun at a white reference: weighed
+        // by the sun's colour x intensity, the mean is the probe's real light,
+        // as without a sun layer (ddgi/mark divides a light's change by it).
+        for (var item = 0u; item < layerTexels; item++) {
+            let meanWeight = select(vec3f(1.0), ddgi.sunLight.rgb, item / DDGI_IRRADIANCE_TEXEL_COUNT == DDGI_SUN_LAYER);
+            estimateSum += meanWeight * ddgiTexelEstimate[item].rgb;
+            oldSum += meanWeight * ddgiTexelOld[item].rgb;
+        }`
+            : /* wgsl */ `
+        for (var item = 0u; item < layerTexels; item++) {
+            estimateSum += ddgiTexelEstimate[item].rgb;
+            oldSum += ddgiTexelOld[item].rgb;
+        }`;
     // Several irradiance layers (light groups): the radiance is read from the ray buffer (the file comment).
     const layered = scratch.irradianceLayers > 1;
     // Every layer's texel estimates and old values sit in workgroup memory beside the rays' directions (the file comment).
@@ -244,6 +269,8 @@ const DDGI_SCRATCH_TILES_WRITTEN: u32 = ${SCRATCH_PROBE_DATA_WORD.tilesWritten}u
 // layer, side by side; each layer's texels follow the one before in a scratch slot.
 const DDGI_IRRADIANCE_LAYERS: u32 = ${scratch.irradianceLayers}u;
 const DDGI_SCRATCH_IRRADIANCE_LAYER_WORDS: u32 = ${scratch.irradianceWords}u;
+${sunLayer >= 0 ? `// The sun layer (T2.6b): at a white reference, weighed by ddgi.sunLight in the probe's mean.
+const DDGI_SUN_LAYER: u32 = ${sunLayer}u;` : ''}
 const DDGI_CENSUS_RAYS_TRACED: u32 = ${CENSUS_RAYS_TRACED}u;
 // Must match the trace kernel: a back-face hit was stored at this share of its distance.
 const DDGI_BACK_FACE_DISTANCE_SHARE: f32 = 0.2;
@@ -1183,11 +1210,7 @@ ${layered ? '' : '        ddgiRayRadiance[rayIndex] = record;'}
     // (thread 0 read it in phase B).
     if (thread == 0u) {
         var estimateSum = vec3f(0.0);
-        var oldSum = vec3f(0.0);
-        for (var item = 0u; item < layerTexels; item++) {
-            estimateSum += ddgiTexelEstimate[item].rgb;
-            oldSum += ddgiTexelOld[item].rgb;
-        }
+        var oldSum = vec3f(0.0);${meanSum}
         // The same share applies to the sums as to the means.
         let ruleOn = ddgi.irradianceChangeThreshold >= 0.0;
         ddgiChangedNow = select(0u, 1u, ruleOn && any(abs(estimateSum - oldSum) > ddgi.irradianceChangeThreshold * oldSum));
