@@ -1,10 +1,12 @@
 /**
- * Turns a `MeshDescriptor` into the exact words the vertex buffer holds for
- * that mesh, after checking it.
+ * The layout of one mesh in the vertex buffer, and the CPU packer that fills
+ * it: the reference for the GPU packer (`gpu-mesh-packing.ts`, T2.13) and its
+ * fallback where the GPU path can't run.
  *
- * Packing happens when the mesh is created, so the host may reuse or free its
- * arrays straight after the call, and an invalid mesh throws at the call that
- * made it rather than frames later.
+ * Every mesh is checked and laid out on the CPU when it is created
+ * ({@link planMesh}), so an invalid mesh throws at the call that made it, not
+ * frames later. Since T2.13 the words themselves are usually made on the GPU
+ * from the host's raw arrays; {@link packMesh} makes the same words on the CPU.
  *
  * Word layout of one mesh (offsets relative to the mesh's first word; see layout.ts):
  *
@@ -37,10 +39,11 @@ export interface PackedMeshOffsets {
     readonly materialSlots: number;
 }
 
-export interface PackedMesh {
-    /** The words to upload, starting at the mesh's offset in the vertex buffer. */
-    readonly words: Uint32Array<ArrayBuffer>;
+/** Where a mesh's parts go in the vertex buffer, and what the CPU learned from checking it. */
+export interface MeshLayout {
     readonly offsets: PackedMeshOffsets;
+    /** Words the whole mesh occupies. */
+    readonly wordCount: number;
     readonly triangleCount: number;
     readonly vertexCount: number;
     readonly indices16: boolean;
@@ -51,6 +54,18 @@ export interface PackedMesh {
     /** Object-space box `[minX, minY, minZ, maxX, maxY, maxZ]`. */
     readonly bounds: Float32Array;
     readonly deforming: boolean;
+}
+
+/** A mesh as the CPU packs it: its layout and the words to upload, starting at the mesh's offset in the vertex buffer. */
+export interface PackedMesh extends MeshLayout {
+    readonly words: Uint32Array<ArrayBuffer>;
+}
+
+/** {@link planMesh}'s result: the layout, and the material-slot words, which the CPU always makes (they come from `groups`, not from an array). */
+export interface MeshPlan {
+    readonly layout: MeshLayout;
+    /** The packed per-triangle slots (`layout.offsets.materialSlots`'s words), or null when every triangle uses one slot. */
+    readonly materialSlotWords: Uint32Array<ArrayBuffer> | null;
 }
 
 function describe(descriptor: MeshDescriptor): string {
@@ -87,7 +102,68 @@ function triangleSlots(descriptor: MeshDescriptor, triangleCount: number, label:
     return slots;
 }
 
-export function packMesh(descriptor: MeshDescriptor): PackedMesh {
+/**
+ * The highest index, in one tight pass. Where it is past the last vertex, a
+ * second pass finds the first bad index for the message: the common case
+ * (every index valid) costs one comparison per index and no branch that
+ * throws (Sponza: 17 M indices on every load).
+ */
+function checkIndices(indices: Uint16Array | Uint32Array, vertexCount: number, label: string): void {
+    // A 16-bit index can't be past the last vertex of a mesh with 65,536 or more.
+    if (indices instanceof Uint16Array && vertexCount >= 0x10000) return;
+    let highest = 0;
+    for (let index = 0; index < indices.length; index++) {
+        const vertex = indices[index];
+        if (vertex > highest) highest = vertex;
+    }
+    if (highest < vertexCount) return;
+    for (let index = 0; index < indices.length; index++) {
+        if (indices[index] >= vertexCount) {
+            throw new RangeError(`${label}: index ${index} is vertex ${indices[index]}, but there are ${vertexCount} vertices`);
+        }
+    }
+}
+
+/**
+ * The object-space box `[minX, minY, minZ, maxX, maxY, maxZ]`, checking every
+ * coordinate is finite. `value * 0` is 0 for a finite value and NaN for an
+ * infinite or NaN one, so one sum says whether any coordinate was bad without
+ * a test per value; a second pass finds the vertex for the message.
+ */
+function checkedBounds(positions: Float32Array, label: string): Float32Array {
+    let minX = Infinity;
+    let minY = Infinity;
+    let minZ = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    let maxZ = -Infinity;
+    let finiteCheck = 0;
+    for (let at = 0; at < positions.length; at += 3) {
+        const x = positions[at];
+        const y = positions[at + 1];
+        const z = positions[at + 2];
+        finiteCheck += x * 0 + y * 0 + z * 0;
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+        if (z < minZ) minZ = z;
+        if (z > maxZ) maxZ = z;
+    }
+    if (finiteCheck !== 0) {
+        for (let at = 0; at < positions.length; at++) {
+            if (!Number.isFinite(positions[at])) throw new RangeError(`${label}: vertex ${Math.floor(at / 3)} has a non-finite position`);
+        }
+    }
+    return new Float32Array([minX, minY, minZ, maxX, maxY, maxZ]);
+}
+
+/**
+ * Checks a mesh and lays it out: everything about it except the words of
+ * its arrays. Throws a `RangeError` that says what is wrong for an invalid
+ * mesh. Reads the arrays (the index check and the box) but keeps none of them.
+ */
+export function planMesh(descriptor: MeshDescriptor): MeshPlan {
     const label = describe(descriptor);
     const { positions, indices, normals, uvs, uvs1 } = descriptor;
 
@@ -99,22 +175,8 @@ export function packMesh(descriptor: MeshDescriptor): PackedMesh {
     checkPerVertex('normals', normals, 3, vertexCount, label);
     checkPerVertex('uvs', uvs, 2, vertexCount, label);
     checkPerVertex('uvs1', uvs1, 2, vertexCount, label);
-
-    for (let index = 0; index < indices.length; index++) {
-        if (indices[index] >= vertexCount) {
-            throw new RangeError(`${label}: index ${index} is vertex ${indices[index]}, but there are ${vertexCount} vertices`);
-        }
-    }
-
-    const bounds = new Float32Array([Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity]);
-    for (let vertex = 0; vertex < vertexCount; vertex++) {
-        for (let axis = 0; axis < 3; axis++) {
-            const value = positions[vertex * 3 + axis];
-            if (!Number.isFinite(value)) throw new RangeError(`${label}: vertex ${vertex} has a non-finite position`);
-            if (value < bounds[axis]) bounds[axis] = value;
-            if (value > bounds[axis + 3]) bounds[axis + 3] = value;
-        }
-    }
+    checkIndices(indices, vertexCount, label);
+    const bounds = checkedBounds(positions, label);
 
     const slots = triangleSlots(descriptor, triangleCount, label);
     let constantMaterialSlot = 0;
@@ -149,7 +211,38 @@ export function packMesh(descriptor: MeshDescriptor): PackedMesh {
         materialSlots: constantMaterialSlot === NONE ? take(Math.ceil(triangleCount / 2)) : NONE,
     };
 
-    const words = new Uint32Array(cursor);
+    let materialSlotWords: Uint32Array<ArrayBuffer> | null = null;
+    if (slots && offsets.materialSlots !== NONE) {
+        materialSlotWords = new Uint32Array(Math.ceil(triangleCount / 2));
+        for (let triangle = 0; triangle < triangleCount; triangle++) {
+            materialSlotWords[triangle >> 1] |= slots[triangle] << ((triangle & 1) * 16);
+        }
+    }
+
+    const layout: MeshLayout = {
+        offsets,
+        wordCount: cursor,
+        triangleCount,
+        vertexCount,
+        indices16,
+        constantMaterialSlot,
+        materialSlotCount,
+        bounds,
+        deforming: descriptor.deforming === true,
+    };
+    return { layout, materialSlotWords };
+}
+
+/**
+ * The words of a planned mesh, made on the CPU: the reference the GPU packer
+ * must match (positions and indices bit for bit, normals within one
+ * octahedral step), and its fallback.
+ */
+export function packMeshWords(descriptor: MeshDescriptor, plan: MeshPlan): Uint32Array<ArrayBuffer> {
+    const { layout, materialSlotWords } = plan;
+    const { offsets, vertexCount, indices16 } = layout;
+    const { positions, indices, normals, uvs, uvs1 } = descriptor;
+    const words = new Uint32Array(layout.wordCount);
     const floats = new Float32Array(words.buffer);
 
     if (indices16) {
@@ -169,23 +262,14 @@ export function packMesh(descriptor: MeshDescriptor): PackedMesh {
     }
     if (uvs) floats.set(uvs, offsets.uvs0);
     if (uvs1) floats.set(uvs1, offsets.uvs1);
-    if (slots && offsets.materialSlots !== NONE) {
-        for (let triangle = 0; triangle < triangleCount; triangle++) {
-            words[offsets.materialSlots + (triangle >> 1)] |= slots[triangle] << ((triangle & 1) * 16);
-        }
-    }
+    if (materialSlotWords) words.set(materialSlotWords, offsets.materialSlots);
+    return words;
+}
 
-    return {
-        words,
-        offsets,
-        triangleCount,
-        vertexCount,
-        indices16,
-        constantMaterialSlot,
-        materialSlotCount,
-        bounds,
-        deforming: descriptor.deforming === true,
-    };
+/** Checks, lays out and packs a mesh on the CPU (see {@link planMesh} and {@link packMeshWords}). */
+export function packMesh(descriptor: MeshDescriptor): PackedMesh {
+    const plan = planMesh(descriptor);
+    return { ...plan.layout, words: packMeshWords(descriptor, plan) };
 }
 
 /** Reads triangle `triangle`'s three vertex indices back out of packed words (tests, and the tracer's BVH build). */

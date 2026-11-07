@@ -2,10 +2,16 @@
  * The platform's scene: the host-facing `SceneApi` and the technique-facing
  * `SceneCopy`, over two GPU storage buffers (see layout.ts).
  *
- * Calls from the host only change CPU state: meshes are checked and packed,
+ * Calls from the host change CPU state: meshes are checked and laid out,
  * records are written into a CPU mirror of the table buffer, and what moved
- * is logged. Nothing touches the GPU until {@link PlatformScene.encode},
- * which the platform calls at the start of its own `encode`.
+ * is logged. The one exception is a mesh's raw arrays: once the platform has
+ * called {@link PlatformScene.prepareGpuPacking}, `createMesh` and
+ * `updateMesh` copy them straight into a staging buffer, and the next
+ * {@link PlatformScene.encode} packs them on the GPU (T2.13,
+ * gpu-mesh-packing.ts). Without that call, or for a mesh too large to stage,
+ * the CPU packs the mesh (mesh-packing.ts) and `encode` uploads its words.
+ * Everything else reaches the GPU in `encode`, which the platform calls at
+ * the start of its own.
  *
  * **How uploads reach the GPU, and why `queue.writeBuffer`.** Uploads use
  * `queue.writeBuffer`. It needs no extra submit and no mapping round trips,
@@ -26,7 +32,7 @@
  */
 
 import { DEFAULT_TURBIDITY } from '../sky/calibrated-sky.ts';
-import { GILimitError } from '../contract/errors.ts';
+import { GILimitError, GINotReadyError } from '../contract/errors.ts';
 import type { InstanceHandle, LightHandle, MaterialHandle, MeshHandle, TextureHandle } from '../contract/handles.ts';
 import type { Aabb, ColorRGB, Mat4, Vec3 } from '../contract/math.ts';
 import type {
@@ -42,6 +48,7 @@ import type {
     UvMapping,
 } from '../contract/scene.ts';
 import type { SceneChanges, SceneCopy } from '../contract/scene-copy.ts';
+import type { GpuTimerScope } from '../contract/timing.ts';
 import type { BindingSlot, WgslModule } from '../contract/wgsl.ts';
 import { invertAffineInto } from '../trace/top-level.ts';
 import { ChangeLog, copyLight, toAabb, type LightLookup } from './change-log.ts';
@@ -64,7 +71,8 @@ import {
     UV_PACK_SHIFT,
     UV_WRAP,
 } from './layout.ts';
-import { packMesh, type PackedMesh } from './mesh-packing.ts';
+import { GpuMeshPacker, type MeshToPack, type StagedMesh } from './gpu-mesh-packing.ts';
+import { packMeshWords, planMesh, type MeshLayout } from './mesh-packing.ts';
 import { RangeAllocator } from './range-allocator.ts';
 import { SlotAllocator } from './slot-allocator.ts';
 import { TableMirror } from './table-mirror.ts';
@@ -103,12 +111,35 @@ export interface PlatformSceneOptions {
     readonly initialCapacities?: Partial<SceneCapacities>;
 }
 
-/** A mesh whose geometry went to the GPU in this `encode`, for builders that need it (the tracer's BVH). */
+/**
+ * A mesh's positions and indices on the CPU, for tree builders: copies the
+ * scene made when the mesh was created (the host may reuse its arrays after
+ * the call). The indices keep the host's type, whatever width the vertex
+ * buffer stores them in.
+ */
+export interface MeshGeometryCopy {
+    readonly positions: Float32Array<ArrayBuffer>;
+    readonly indices: Uint16Array<ArrayBuffer> | Uint32Array<ArrayBuffer>;
+}
+
+/**
+ * A mesh whose geometry went to the GPU in this `encode`, for builders that
+ * need it (the tracer's BVH).
+ *
+ * Since T2.13 it carries no packed words, because the GPU usually packs the
+ * mesh. Read it on the CPU from `geometry`, or on the GPU from the vertex
+ * buffer at `vertexOffset` + `layout.offsets` (positions 3 floats per vertex;
+ * indices 16-bit two to a word when `layout.indices16`, else 32-bit) in
+ * commands recorded after this `encode`'s.
+ */
 export interface UploadedMesh {
     readonly slot: number;
     readonly handle: MeshHandle;
-    /** The packed mesh, words included. Read positions and indices with `packedPositions` / `packedIndices`. */
-    readonly packed: PackedMesh;
+    readonly layout: MeshLayout;
+    /** Word offset of the mesh's first word in the vertex buffer. */
+    readonly vertexOffset: number;
+    /** Handed over once: the receiver owns these arrays and may transfer them (to a worker). */
+    readonly geometry: MeshGeometryCopy;
 }
 
 /** One instance as the tracer's top level needs it. */
@@ -148,7 +179,7 @@ export interface SceneUpload {
     readonly instanceSetChanged: boolean;
     /** A scene buffer was reallocated; `module.version` has changed too. */
     readonly reallocated: boolean;
-    /** Bytes written with `queue.writeBuffer` this frame. */
+    /** Bytes written with `queue.writeBuffer` since the last encode (a mesh staged for the GPU counts when it was staged). */
     readonly bytesWritten: number;
 }
 
@@ -158,16 +189,27 @@ export interface SceneMemory {
     /** Of `vertexBuffer`, the bytes holding live meshes. */
     readonly vertexBytesUsed: number;
     readonly tableBuffer: number;
+    /** Staging buffers of meshes waiting for the GPU to pack them (T2.13); 0 once a load is packed. */
+    readonly stagingBuffers: number;
     readonly total: number;
+}
+
+/** A mesh's data on its way to the vertex buffer: packed on the CPU, or staged for the GPU. Dropped once uploaded. */
+interface PendingMeshData {
+    /** The CPU packer's words (the fallback), or null when `staged`. */
+    readonly words: Uint32Array<ArrayBuffer> | null;
+    /** The raw arrays in a staging buffer, or null when packed on the CPU. */
+    readonly staged: StagedMesh | null;
+    readonly geometry: MeshGeometryCopy;
 }
 
 interface MeshEntry {
     readonly handle: MeshHandle;
     readonly slot: number;
     label: string | undefined;
-    packed: PackedMesh;
-    /** Words the mesh occupies; kept apart from `packed.words`, which is dropped after upload. */
-    wordCount: number;
+    layout: MeshLayout;
+    /** What the next encode uploads; null once uploaded. */
+    pending: PendingMeshData | null;
     /** Word offset in the vertex buffer, or -1 until uploaded. */
     vertexOffset: number;
     readonly instances: Set<InstanceEntry>;
@@ -213,8 +255,6 @@ const IDENTITY_UV: readonly number[] = [1, 0, 0, 1, 0, 0];
 
 /** The rows `invertAffineInto` would give the identity: what a singular transform's normal matrix is written as. */
 const IDENTITY_ROWS: readonly number[] = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0];
-
-const EMPTY_WORDS: Uint32Array<ArrayBuffer> = new Uint32Array(0);
 
 function isFiniteVector(value: ArrayLike<number> | undefined, length: number): boolean {
     if (value === undefined || value.length !== length) return false;
@@ -273,6 +313,11 @@ export class PlatformScene implements SceneApi, SceneCopy {
     private readonly instanceSlots = new SlotAllocator();
 
     private readonly pendingMeshes = new Set<MeshEntry>();
+    /** Packs meshes on the GPU once {@link prepareGpuPacking} was called (T2.13). */
+    private readonly packer: GpuMeshPacker;
+    private gpuPacking = false;
+    /** Bytes staged for the GPU since the last encode, reported in its `bytesWritten`. */
+    private stagedBytes = 0;
     private removedMeshSlots: number[] = [];
     private readonly changeLog = new ChangeLog();
     /** How the change log sees the live lights when it builds a frame's light changes. */
@@ -323,6 +368,7 @@ export class PlatformScene implements SceneApi, SceneCopy {
         this.vertexBuffer = this.createStorageBuffer('scene vertices', capacities.vertexWords * 4);
         this.tableBuffer = this.createStorageBuffer('scene tables', this.mirror.byteLength);
         this.uploadedLayoutVersion = -1;
+        this.packer = new GpuMeshPacker(device, { label: this.label });
 
         const currentVersion = () => this.bufferVersion;
         this.module = {
@@ -371,7 +417,8 @@ export class PlatformScene implements SceneApi, SceneCopy {
     get memory(): SceneMemory {
         const vertexBuffer = this.vertexBuffer.size;
         const tableBuffer = this.tableBuffer.size;
-        return { vertexBuffer, vertexBytesUsed: this.vertexAllocator.used * 4, tableBuffer, total: vertexBuffer + tableBuffer };
+        const stagingBuffers = this.packer.stagingBytes;
+        return { vertexBuffer, vertexBytesUsed: this.vertexAllocator.used * 4, tableBuffer, stagingBuffers, total: vertexBuffer + tableBuffer + stagingBuffers };
     }
 
     get environment(): EnvironmentDescriptor {
@@ -465,9 +512,25 @@ export class PlatformScene implements SceneApi, SceneCopy {
     // Meshes
     // -----------------------------------------------------------------------
 
+    /**
+     * From now on meshes are packed on the GPU (T2.13): `createMesh` and
+     * `updateMesh` stage the host's raw arrays, and `encode` packs them. Asks
+     * for the packing kernel's compile and resolves when it is compiled;
+     * until then `encode` refuses staged meshes (`GINotReadyError`). The
+     * platform calls this first in `prepare`, so a host that copies its scene
+     * in while preparing stages it at once, alongside the compiles. Meshes
+     * created before the call stay with the CPU packer, as does a standalone
+     * scene that never calls it (tools and tests).
+     */
+    prepareGpuPacking(): Promise<void> {
+        this.checkLive();
+        this.gpuPacking = true;
+        return this.packer.prepare();
+    }
+
     createMesh(descriptor: MeshDescriptor): MeshHandle {
         this.checkLive();
-        const packed = packMesh(descriptor);
+        const { layout, pending } = this.prepareMeshData(descriptor);
         const handle = this.nextHandle++ as MeshHandle;
         const slot = this.meshSlots.take();
         this.mirror.ensureRecord('meshes', slot);
@@ -475,14 +538,14 @@ export class PlatformScene implements SceneApi, SceneCopy {
             handle,
             slot,
             label: descriptor.label,
-            packed,
-            wordCount: packed.words.length,
+            layout,
+            pending,
             vertexOffset: -1,
             instances: new Set(),
         };
         this.meshes.set(handle, entry);
         this.pendingMeshes.add(entry);
-        this.triangleTotal += packed.triangleCount;
+        this.triangleTotal += layout.triangleCount;
         this.headerDirty = true;
         return handle;
     }
@@ -490,17 +553,18 @@ export class PlatformScene implements SceneApi, SceneCopy {
     updateMesh(mesh: MeshHandle, descriptor: MeshDescriptor): void {
         this.checkLive();
         const entry = this.mesh(mesh);
-        const packed = packMesh(descriptor);
+        const { layout, pending } = this.prepareMeshData(descriptor);
         this.releaseVertexRange(entry);
-        this.triangleTotal += packed.triangleCount - entry.packed.triangleCount;
-        entry.packed = packed;
-        entry.wordCount = packed.words.length;
+        this.forgetPending(entry);
+        this.triangleTotal += layout.triangleCount - entry.layout.triangleCount;
+        entry.layout = layout;
+        entry.pending = pending;
         entry.label = descriptor.label ?? entry.label;
         this.pendingMeshes.add(entry);
         for (const instance of entry.instances) {
             const traceable = this.isTraceable(instance);
             if (traceable) this.changeLog.addRegion(this.transforms.box(instance.slot), 'geometry', instance.handle, undefined, instance.slot);
-            this.transforms.setMeshBounds(instance.slot, packed.bounds);
+            this.transforms.setMeshBounds(instance.slot, layout.bounds);
             this.writeInstanceRecord(instance);
             if (traceable) {
                 this.changeLog.addRegion(this.transforms.box(instance.slot), 'geometry', instance.handle, undefined, instance.slot);
@@ -523,11 +587,12 @@ export class PlatformScene implements SceneApi, SceneCopy {
             throw new Error(`@pmndrs/ddgi: ${this.name('mesh', entry.handle, entry.label)} is still used by ${entry.instances.size} instance(s); destroy them first.`);
         }
         this.releaseVertexRange(entry);
+        this.forgetPending(entry);
         this.pendingMeshes.delete(entry);
         this.mirror.clearRecord('meshes', entry.slot);
         this.meshSlots.release(entry.slot);
         this.removedMeshSlots.push(entry.slot);
-        this.triangleTotal -= entry.packed.triangleCount;
+        this.triangleTotal -= entry.layout.triangleCount;
         this.meshes.delete(mesh);
         this.headerDirty = true;
     }
@@ -621,7 +686,7 @@ export class PlatformScene implements SceneApi, SceneCopy {
         };
         this.transforms.ensure(slot);
         this.transforms.setMatrix(slot, objectToWorld, 0);
-        this.transforms.setMeshBounds(slot, mesh.packed.bounds);
+        this.transforms.setMeshBounds(slot, mesh.layout.bounds);
         this.instances.set(handle, entry);
         this.instanceSetVersion++;
         mesh.instances.add(entry);
@@ -923,20 +988,26 @@ export class PlatformScene implements SceneApi, SceneCopy {
      * per frame, and submit the encoder before the next call: buffers replaced
      * here are destroyed at the next call.
      */
-    encode(encoder: GPUCommandEncoder): SceneUpload {
+    encode(encoder: GPUCommandEncoder, timer?: GpuTimerScope): SceneUpload {
         this.checkLive();
+        if (!this.packer.ready) {
+            // Checked before anything changes, so staged meshes stay queued for the encode after prepare.
+            for (const mesh of this.pendingMeshes) if (mesh.pending?.staged) throw new GINotReadyError('preparing');
+        }
         for (const buffer of this.retired) buffer.destroy();
         this.retired = [];
 
-        let bytesWritten = 0;
         const versionBefore = this.bufferVersion;
-        const uploaded = this.uploadMeshes(encoder);
-        for (const mesh of uploaded) bytesWritten += mesh.packed.words.byteLength;
+        // Staged meshes' bytes were written when they were staged.
+        let bytesWritten = this.stagedBytes;
+        this.stagedBytes = 0;
+        const meshes = this.uploadMeshes(encoder, timer);
+        bytesWritten += meshes.bytesWritten;
         bytesWritten += this.uploadTables();
 
         const upload: SceneUpload = {
             changes: this.changeLog.take(this.lightLookup),
-            meshesUploaded: uploaded,
+            meshesUploaded: meshes.uploaded,
             meshesRemoved: this.removedMeshSlots,
             instancesChanged: this.topLevelDirty,
             instanceSetChanged: this.instanceSetDirty,
@@ -957,25 +1028,36 @@ export class PlatformScene implements SceneApi, SceneCopy {
         this.retired = [];
         this.vertexBuffer.destroy();
         this.tableBuffer.destroy();
+        this.packer.dispose();
     }
 
     // -----------------------------------------------------------------------
     // Uploads
     // -----------------------------------------------------------------------
 
-    private uploadMeshes(encoder: GPUCommandEncoder): UploadedMesh[] {
-        if (this.pendingMeshes.size === 0) return [];
+    /**
+     * Places the queued meshes in the vertex buffer and uploads them: the CPU
+     * packer's words with `writeBuffer`, staged meshes with the packing
+     * kernel, recorded after any growth copies so it writes into the new
+     * buffer. `bytesWritten` counts the CPU-packed meshes' writes.
+     */
+    private uploadMeshes(encoder: GPUCommandEncoder, timer: GpuTimerScope | undefined): { readonly uploaded: UploadedMesh[]; readonly bytesWritten: number } {
+        if (this.pendingMeshes.size === 0) {
+            // Still called: it destroys the staging buffers the last encode packed from.
+            this.packer.encode(encoder, this.vertexBuffer, [], timer);
+            return { uploaded: [], bytesWritten: 0 };
+        }
         const pending = [...this.pendingMeshes];
         this.pendingMeshes.clear();
 
         const unplaced: MeshEntry[] = [];
         for (const mesh of pending) {
-            const offset = this.vertexAllocator.allocate(mesh.wordCount);
+            const offset = this.vertexAllocator.allocate(mesh.layout.wordCount);
             if (offset === null) unplaced.push(mesh);
             else mesh.vertexOffset = offset;
         }
         if (unplaced.length > 0) {
-            const wordsNeeded = unplaced.reduce((sum, mesh) => sum + mesh.wordCount, 0);
+            const wordsNeeded = unplaced.reduce((sum, mesh) => sum + mesh.layout.wordCount, 0);
             try {
                 this.growVertexBuffer(encoder, this.vertexAllocator.capacityToFit(wordsNeeded), new Set(pending));
             } catch (error) {
@@ -987,23 +1069,32 @@ export class PlatformScene implements SceneApi, SceneCopy {
                 throw error;
             }
             for (const mesh of unplaced) {
-                const offset = this.vertexAllocator.allocate(mesh.wordCount);
+                const offset = this.vertexAllocator.allocate(mesh.layout.wordCount);
                 if (offset === null) throw new Error('vertex allocation failed after growing the buffer');
                 mesh.vertexOffset = offset;
             }
         }
 
         const uploaded: UploadedMesh[] = [];
+        const toPack: MeshToPack[] = [];
+        let bytesWritten = 0;
         for (const mesh of pending) {
-            this.device.queue.writeBuffer(this.vertexBuffer, mesh.vertexOffset * 4, mesh.packed.words);
+            const data = mesh.pending;
+            if (!data) throw new Error('a queued mesh has no data to upload');
+            if (data.staged) {
+                toPack.push({ staged: data.staged, vertexOffset: mesh.vertexOffset });
+            } else if (data.words) {
+                this.device.queue.writeBuffer(this.vertexBuffer, mesh.vertexOffset * 4, data.words);
+                bytesWritten += data.words.byteLength;
+            }
             this.writeMeshRecord(mesh);
-            uploaded.push({ slot: mesh.slot, handle: mesh.handle, packed: mesh.packed });
-            // The GPU has the words now; keep only the layout.
-            mesh.packed = { ...mesh.packed, words: EMPTY_WORDS };
+            uploaded.push({ slot: mesh.slot, handle: mesh.handle, layout: mesh.layout, vertexOffset: mesh.vertexOffset, geometry: data.geometry });
+            // The GPU has the words, or will once the kernel below runs; keep only the layout.
+            mesh.pending = null;
         }
-        return uploaded;
+        this.packer.encode(encoder, this.vertexBuffer, toPack, timer);
+        return { uploaded, bytesWritten };
     }
-
     /**
      * Replaces the vertex buffer with one of at least `minimumWords`, and
      * records copies of every mesh already on the GPU into it. Meshes in
@@ -1032,11 +1123,11 @@ export class PlatformScene implements SceneApi, SceneCopy {
         };
         for (const mesh of resident) {
             if (mesh.vertexOffset === runEnd) {
-                runEnd += mesh.wordCount;
+                runEnd += mesh.layout.wordCount;
             } else {
                 flush();
                 runStart = mesh.vertexOffset;
-                runEnd = mesh.vertexOffset + mesh.wordCount;
+                runEnd = mesh.vertexOffset + mesh.layout.wordCount;
             }
         }
         flush();
@@ -1087,8 +1178,31 @@ export class PlatformScene implements SceneApi, SceneCopy {
 
     private releaseVertexRange(mesh: MeshEntry): void {
         if (mesh.vertexOffset < 0) return;
-        this.vertexAllocator.release(mesh.vertexOffset, mesh.wordCount);
+        this.vertexAllocator.release(mesh.vertexOffset, mesh.layout.wordCount);
         mesh.vertexOffset = -1;
+    }
+
+    /**
+     * Checks and lays out a mesh, copies what the scene keeps of the host's
+     * arrays, and stages them for the GPU or packs them on the CPU.
+     */
+    private prepareMeshData(descriptor: MeshDescriptor): { layout: MeshLayout; pending: PendingMeshData } {
+        const plan = planMesh(descriptor);
+        // Tree builders read positions and indices after this call has returned, when
+        // the host may have changed its arrays: they get copies, made now.
+        const geometry: MeshGeometryCopy = { positions: descriptor.positions.slice(), indices: descriptor.indices.slice() };
+        if (this.gpuPacking && this.packer.fits(descriptor, plan.layout)) {
+            const staged = this.packer.stage(descriptor, plan.layout, plan.materialSlotWords);
+            this.stagedBytes += staged.bytes;
+            return { layout: plan.layout, pending: { words: null, staged, geometry } };
+        }
+        return { layout: plan.layout, pending: { words: packMeshWords(descriptor, plan), staged: null, geometry } };
+    }
+
+    /** Drops a mesh's data that was never uploaded (the mesh was replaced or destroyed first). */
+    private forgetPending(mesh: MeshEntry): void {
+        if (mesh.pending?.staged) this.packer.forget(mesh.pending.staged);
+        mesh.pending = null;
     }
 
     // -----------------------------------------------------------------------
@@ -1135,7 +1249,7 @@ export class PlatformScene implements SceneApi, SceneCopy {
         const words = this.mirror.words;
         const floats = this.mirror.floats;
         const base = this.mirror.recordWord('meshes', mesh.slot);
-        const packed = mesh.packed;
+        const packed = mesh.layout;
         const absolute = (offset: number) => (offset === NONE ? NONE : mesh.vertexOffset + offset);
         words[base + MESH_WORD.indices] = absolute(packed.offsets.indices);
         words[base + MESH_WORD.positions] = absolute(packed.offsets.positions);
@@ -1346,9 +1460,9 @@ export class PlatformScene implements SceneApi, SceneCopy {
     }
 
     private materialList(handles: readonly MaterialHandle[], mesh: MeshEntry): MaterialEntry[] {
-        if (handles.length < mesh.packed.materialSlotCount) {
+        if (handles.length < mesh.layout.materialSlotCount) {
             throw new RangeError(
-                `@pmndrs/ddgi: ${this.name('mesh', mesh.handle, mesh.label)} uses ${mesh.packed.materialSlotCount} material slot(s), but the instance gives ${handles.length} material(s).`,
+                `@pmndrs/ddgi: ${this.name('mesh', mesh.handle, mesh.label)} uses ${mesh.layout.materialSlotCount} material slot(s), but the instance gives ${handles.length} material(s).`,
             );
         }
         return handles.map((handle) => this.material(handle));

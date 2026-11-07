@@ -32,6 +32,69 @@ Verified (RTX 3060, Chrome headless, correctness runs): `viewer-lighting`: the s
 Not verified: Dennis driving it by eye (check 4's second half); the gizmo by mouse (headless runs pick by the list); VXGI and the upscaler don't draw the markers; Sponza's sun turn with the layer on misses (below).
 Numbers: Sponza key-probe sun turn, sun layer on (`ddgi-key-probes-sponza`, `VITE_DDGI_SUN_LAYER=on`, 3 runs): view within 5% for good from frames 16, 16, 13 (bar 15), field 36; layer off the same day 12, 11, 12. One diagnosis (the per-layer firefly clamp: clamp off still 15), no cause found, so no fix attempt (DECISIONS, for the lead).
 Next: the sun-layer excess near the view (a task of its own, DECISIONS); T2.8 check 3 (the native compare page) after T2.7; a `userData.giRange` if the lead wants GI's candles unranged; `sponza-candles`' calibration read 1-9 probes a frame in the viewer (fixed part 1.9-2.2 ms measured while three drew), for T2.10 to look at.
+## 2026-11-08 · T2.13 review and merge · lead (opus)
+Did: The Opus review passed packing (done-when 2) and found the main-thread bar (done-when 1) missed. Under the timebox (one diagnosis, one fix attempt) I merged T2.13 as a known miss, since it is a clear gain. I fixed the review's doc notes on the branch (b2b6720):
+- `m3-moving.md`'s upload budget gets an as-built note;
+- DECISIONS' geometry-upload wording;
+- the proposed guard, now from a median of 3;
+- the NOTES normal counts.
+
+I kept the CPU-backed texture canvas (lead ruling). It also removed the stall that made the copy take 16–26 s while another process held the GPU. T2.13 is done.
+Verified:
+- Review: VALID post-merge set, RTX 3060, 61 °C start. `scene_copy_cpu_ms` 918 / 816 / 776 ms, median 816; before T2.13 it was 1,744 / 1,357 / 1,395.
+- T2.12's check 1 improved to 1.687 s median (it was 1.902).
+- Packing: 0 wrong words, normals at most 1 step off, on all procedural scenes, Sponza and Bistro exterior (RTX) and on the Intel UHD after the merge.
+- The T2.12 merge is safe by reading: the geometry uploads before tinybvh's transfer, and nothing reads a detached array. Its pages pass.
+- Recompiles 0 on Sponza and two-room.
+- Me on `m2` after the merge: typecheck clean, 1,111 unit tests pass.
+Not verified: the staging-buffer peak (estimated 188 MB, never measured); the packing fallbacks on a real GPU (fake GPU only); Bistro exterior's copy after the merge. These are in T2.10's and T2.11's lines.
+Known miss for Dennis: 816 ms against 150 on Sponza; Bistro exterior 2,478 ms against 200 (one run, before the merge). What's left is texture averages, the raw upload and the mesh checks that the contract keeps on the main thread. Recommendation: accept the miss, with guards from a median of 3 (about 1.0 s on Sponza; Bistro after 3 runs in T2.10). The options without a contract change (mip readback, H-PLOC from the staging buffers) go to the M3 breakdown.
+
+## 2026-11-08 · T2.13 `m2` merged (T2.12 in) · implementer (opus)
+Did: merged `m2` twice, 7c1e707 (merge 8d05d69) and cbf172d (merge 1cbfc04). PROGRESS, DECISIONS and `timing.csv` keep both sides: PROGRESS has 114 = 112 + 112 − 110 headings, then 115 = 114 + 113 − 112. In `ray-queries.ts`, T2.12's GPU first-tree requests and its tinybvh start now take `mesh.geometry`, and the top level takes `mesh.layout.bounds`; `packedGeometryView` is gone (d338682 drops its import). The order is kept and commented: the GPU build's `writeBuffer` copies `geometry` inside `build()`, before the tinybvh start transfers (detaches) the same arrays. `gi-platform.ts` merged cleanly.
+Verified (RTX 3060, Chrome 157, correctness, `--no-cool-wait`):
+- `ddgi-tree-swap`, `trace-oracle` and `scene-gpu-packing` pass on the procedural scenes. On Sponza: 449 meshes on GPU first trees, 0 refused, 0 wrong words, normals ≤ 1 step.
+- `ddgi-session-recompiles` on Sponza: 0 recompiles, control 1, groups off and on.
+- typecheck and lint clean; 1,111 unit tests pass.
+Not verified: the Intel UHD after the merge; `scene_copy_cpu_ms` after the merge (T2.12 changed the startup path; my VALID readings are from before it).
+Next: the lead's review and merge.
+
+## 2026-11-08 · T2.13 fix attempt on the missed bar, lead rulings applied · implementer (opus)
+Did: the one timeboxed attempt the lead asked for, on `m2-t2.13` (`m2` hadn't moved, so no merge). b7afa1d (CPU-backed texture canvas) is kept by lead ruling. Nothing from the attempt is in the code: both items proved impossible as asked.
+- (a) Asynchronous texture averages. Three temporary experiment pages, deleted, measured the main-thread time on three's own images (Sponza 55, Bistro 135):
+  - a resizing `createImageBitmap` resizes inside the call: 0.12-0.13 s and 0.80-0.84 s;
+  - cloning the bitmaps to a worker blocks the main thread: 0.4-0.54 s and 3.5-3.8 s in all;
+  - `copyExternalImageToTexture`: 0.38 s and 2.0 s in all.
+  The CPU canvas (0.16 s and 1.1 s) stays the cheapest, so the averages stay synchronous. The first GI frame uses the averages, as before.
+- (b) The tree builders' copies can't leave the main thread without a contract change: the host's arrays can't be transferred, and cloning copies. One copy, transferred to the worker, as built.
+Verified (RTX 3060, Chrome 157, correctness runs):
+- Albedo shift, CPU canvas against GPU canvas, linear averages: Sponza mean 0.07% (max 2.2%, one map), Bistro 0.04% (max 4.2%).
+- `ddgi-sponza-accuracy` indirect mean 0.00160352201 against 0.00160352200 with b7afa1d reverted in the working tree; full mean equal to 9 digits.
+- There is no Bistro accuracy page, so Bistro is judged by the albedo shift only.
+Not re-measured: `scene_copy_cpu_ms`. The code is unchanged since the VALID run at b7afa1d (Sponza 1,030 ms, Bistro exterior 2,478 ms; previous entry), and the rule is one VALID run per gate.
+Remaining stages (profile outside the compiles; the gate runs about 1.4-1.7× slower while compiling):
+- Sponza: raw upload 115-160 ms, checks 100-120, tree builders' copies 45-70, rest of the sync about 95, texture averages 160-300.
+- Bistro: texture averages about 1.1 s; raw upload, checks and copies about 175 ms; the rest of the sync not split out.
+Next: Dennis rules on the proposed bar in DECISIONS (≤ 1.1 s Sponza, ≤ 2.7 s Bistro exterior, as a regression guard). Going further needs host-facing changes (DECISIONS lists them).
+
+## 2026-11-08 · T2.13 scene copy: raw upload and GPU packing · implementer (opus)
+Did (branch `m2-t2.13` from 423fe75; 9f10ecc, b7afa1d, then docs):
+- `gi/pack-mesh` (`scene/pack-mesh-wgsl.ts`, `gpu-mesh-packing.ts`). After `prepare` asks for it (`PlatformScene.prepareGpuPacking`, first in `GIPlatformImpl.prepare`), `createMesh`/`updateMesh` stage the host's raw arrays with `writeBuffer` and `encode` packs them: one dispatch per staging buffer from a job table, timed as `gi/pack-mesh`.
+- `mesh-packing.ts` is split into `planMesh` (checks, box, layout; faster loops) and `packMeshWords` (reference and fallback). `UploadedMesh` carries `layout`, `vertexOffset` and `geometry`; `ray-queries.ts` uses `geometry`. The vertex buffer's layout is unchanged.
+- three adapter: texture averages through a CPU-backed canvas (b7afa1d, a separate commit for the lead's ruling).
+- Tests: `gpu-mesh-packing.test.ts`, where the fake device runs the kernel's CPU twin (`testing/pack-mesh-cpu.ts`). New GPU page `scene-gpu-packing`.
+Verified:
+- GPU packing matches the CPU packer, 0 wrong words and normals ≤ 1 step, on the RTX 3060 and the Intel UHD: all 8 procedural scenes and Sponza (5,632 of 3.1 M normals one step off). On the RTX also Bistro exterior, courtyard-tree and furnished-room.
+- Recompiles 0 (control 1): `ddgi-session-recompiles` on Cornell, two-room and Sponza with groups off and on, and `platform-recompiles` (RTX, Intel).
+- RTX: `scene-copy` passes. Intel: `scene-copy` and `ddgi-change-still` pass.
+- lint and typecheck clean; 1,102 unit tests pass.
+Numbers (VALID, `--cpu-timed`, RTX, `timing.csv` b7afa1d), `scene_copy_cpu_ms`: **Sponza 1,030 ms, Bistro exterior 2,478 ms, against ≤ 150 and ≤ 200: not met.** DECISIONS 2026-11-08 has why and a recommendation.
+- Profile (T2.13 temporary page, not during compiles): Sponza old path 1.37 s, new 0.73 s. The first GI frame's upload went from 154-247 ms to 9.5 ms.
+- What is left on Sponza: raw upload 115-160, checks 100-120, the tree builders' copies 45-70, the rest of the sync about 95, texture averages 290 ms.
+- Texture averages through the GPU canvas: Sponza 0.46-0.67 s, Bistro 4.25 s. Through the CPU canvas: 0.16 and 1.1 s.
+- `gi/pack-mesh` GPU time: Sponza 5.1 ms on the RTX (while another process used the GPU), 72 ms on the Intel.
+Not verified: accuracy pages after the texture change (`ddgi-sponza-accuracy`, the composite pages); the viewer by hand. Another project's renderer (`golden/driver.mjs`, outside our lock) kept the RTX near 100% for most of the session.
+Next: lead rulings (texture canvas; the missed bar). An async texture-average task (DECISIONS). T2.12 merge: `UploadedMesh` no longer has `packed`; use `mesh.geometry`, or read the vertex buffer at `vertexOffset`.
 
 ## 2026-11-08 · T2.12 review and merge · lead (opus)
 Did: An Opus review passed T2.12 with notes. I sent the notes back to the implementer, who fixed them in b11de2a:
