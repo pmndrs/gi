@@ -502,8 +502,8 @@ The last row is the largest. On open ground the sky is only 11–14% of daylight
 - **The weight** is the sun's colour × intensity, times its group's weight with groups on, read from the scene each frame; a change is a full compose in its frame.
 - **The marks:** a change of the sun's colour, intensity or group alone marks nothing; a turn is judged with both sides at white (its angle alone, whatever its brightness did). When the sun becomes another light (destroyed, or a first directional light created), every probe is marked as a whole change.
 - **The probe's mean** (history words 6–7) weighs the sun layer by the sun's light (a new uniform, `DdgiUniforms.sunLight`), so `ddgi/mark` still divides a light's change by the probe's real light, whatever the sun's brightness.
-- **Off by default**, like light groups (for the lead and Dennis; the table in "How it fits" assumed on).
-- **Measured** (RTX 3060, `ddgi-sun-layer` on the courtyard, correctness runs): a sun colour and brightness change composed in its own frame matches a field re-converged at the new sun within 0.002% (it moved the views 36–43%), with the history and layers byte-identical and nothing marked; with the sun layer off the field is `m2`'s to the last digit; 6 layers (4 groups, the environment, the sun) within 0.011%. Sun turns still settle as before: the furnished room's view within 5% from frames 11 and 13, Sponza's view at frame 13 and its field at 36 (the same as without the sun layer). Memory: Sponza 58.0 MB off, 93.4 MB with the sun layer (+35.5 MB: the layer's 25.5 MB as in §5, plus the composed atlas), not the 20 MB of §6.5's table; the courtyard (4,840 probes) +16.8 MB. The cost is in PROGRESS (T2.6b): no run read VALID.
+- **Off by default**, like light groups (lead ruling 2026-11-08, DECISIONS). T2.8's time-of-day slider turns it on in the viewer.
+- **Measured** (RTX 3060, `ddgi-sun-layer` on the courtyard, correctness runs): a sun colour and brightness change composed in its own frame matches a field re-converged at the new sun within 0.002% (it moved the views 36–43%), with the history and layers byte-identical and nothing marked; with the sun layer off the field is `m2`'s to the last digit; 6 layers (4 groups, the environment, the sun) within 0.011%. Sun turns still settle: the furnished room's view within 5% from frames 11 and 13. Sponza's view settled at frame 13 in the implementer's run and at 16 and 13 in the reviewer's two runs (T2.4c's bar is 15; 12 with the layer off), its field at 36 either way. So with the layer on, Sponza's turn is at the edge of the bar; T2.8 checks it. Memory: Sponza 58.0 MB off, 93.4 MB with the sun layer (+35.5 MB: the layer's 25.5 MB as in §5, plus the composed atlas), not the 20 MB of §6.5's table; the courtyard (4,840 probes) +16.8 MB. The cost: 1.055× per probe at 512 probes, against a 1.10 bar (one VALID run; PROGRESS, T2.6b).
 
 ### 6.2 Re-baking the sky (needed by every path)
 
@@ -674,7 +674,7 @@ On Sponza, on the RTX, at T1.9b's 268 probes a frame:
 | Sky change, in view | within 5% in ~0.13 s | most of it in the same frame (T2.6b measures how much); the rest ~0.13 s |
 | Sky change, whole volume | ~1 s at the key level, ~2 s every probe | most of it within 4 frames; the rest as on the left, at lower priority |
 | Build | none | from the field's rays: ~1.2 s into the warm-up; with the warm-up off, the view in ~0.13 s and the whole volume in ~10 s, as the field itself converges |
-| Extra memory | 20 MB (the sun layer and the composed atlas) | 65 MB |
+| Extra memory | 20 MB estimated, 35.5 MB measured on Sponza (the sun layer and the composed atlas; T2.6b) | 65 MB |
 | Extra GPU cost | the sun layer (about +8–10% per probe update) | also +2–3% per probe update, and ~0.1 ms in frames where the sky changed |
 | New code | the layers (shared with light groups) | also the blend's accumulation, `ddgi/sky-nudge` and `ddgi/write`'s sky mode |
 
@@ -735,7 +735,7 @@ The native harness's miss shader sees one flat colour (DECISIONS 2026-11-04). M2
 | `gi/direct` (platform) | none | new; takes over direct light for every technique that traces |
 | light grid build (platform) | none | new; only above `exactLightLimit` local lights |
 | `ddgi/blend` | one global hysteresis | per-probe `h` from the history record; loops layers; writes the probe's mean; accumulates the first-order sky transfer from its miss rays |
-| `ddgi/compose` | none | whenever there's more than one layer (the sun layer is on by default); over the update list and propagation's list |
+| `ddgi/compose` | none | whenever there's more than one layer (the sun layer or light groups, both off by default); over the update list and propagation's list |
 | `ddgi/propagate` | none | new; only in frames where key probes were updated because of a change (4.5); its tiles go through `ddgi/write` and `ddgi/compose` over its own list |
 | `ddgi/sky-nudge` | none | new; only in frames where the sky changed, with the instant sky on |
 | `ddgi/write` | one block per probe | loops the layer blocks (the transfer's 3 included); a second dispatch in sky mode writes nudged sky tiles |

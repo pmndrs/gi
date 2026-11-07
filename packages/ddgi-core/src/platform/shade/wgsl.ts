@@ -550,7 +550,7 @@ fn giDirectReachesSplit(surface: GiSurface, groupMask: u32, sunApart: bool) -> b
         if (giShadeIsSunApart(sunApart, candidate, directionalCount)) {
             light = giShadeAtWhite(light);
         }
-        if (giShadeInGroup(light, groupMask) &&giShadeLuminance(giShadeLightSample(light, surface, raySide).irradiance) > 0.0) {
+        if (giShadeInGroup(light, groupMask) && giShadeLuminance(giShadeLightSample(light, surface, raySide).irradiance) > 0.0) {
             return true;
         }
     }

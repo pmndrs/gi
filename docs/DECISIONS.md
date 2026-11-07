@@ -2,6 +2,14 @@
 
 Settled choices, newest first. Each entry is short: the decision, why, and what would make us revisit it. Changing a threshold or target counts as a decision and goes here.
 
+## 2026-11-08
+
+- **T2.6b lead rulings** (M2 lead, after the Opus review; for Dennis to confirm):
+  - *`sunLayer` is off by default.* T2.8's time-of-day slider turns it on in the viewer. *Why:* it costs 35.5 MB on Sponza and 5–9% per probe update, and with it on Sponza's sun turn is at the edge of T2.4c's bar (finding below). *Revisit* when T2.8 has measured the turn with the layer on.
+  - *The sun is the first directional light, with no flag.* *Why:* if a different light gets the layer, GI is still exact; that light only loses the instant colour change, and switching suns marks every probe, which is safe. *Revisit* if a host adds a fill directional light before its sun.
+  - *Memory is over the estimate and accepted:* +35.5 MB on Sponza against §6.5's 20 MB (the layer as in §5, plus the composed atlas). No done-when sets a memory limit, and it is allocated only when the layer is on.
+  - *Known edge, handed to T2.8:* with the sun layer on, Sponza's key-probe sun turn settled the view at frames 13, 16 and 13 over three runs (bar 15; 12 with the layer off, as on `m2`). The field settled at frame 36 every time. It is not a T2.6b bar; T2.8 checks it when it turns the layer on.
+
 ## 2026-11-07
 
 - **T2.6b, the sun layer as built** (T2.6b implementer; for the M2 lead's review; m2-lights.md §6.1 "As built"):
