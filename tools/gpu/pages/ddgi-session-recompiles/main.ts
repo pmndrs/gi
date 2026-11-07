@@ -15,7 +15,9 @@
  * - still frames;
  * - each light dimmed, recoloured, switched off and on, and moved over
  *   several frames (point and spot lights), then put back; a new point light
- *   added and later removed;
+ *   added and later removed; MANY_LIGHTS point lights added and removed, so
+ *   the light grid (`gi/light-grid`, T2.3: more point and spot lights than
+ *   `exactLightLimit`) switches on and off mid-session;
  * - an object moved over several frames and back (T2.M1's rigid moves),
  *   then hidden and shown;
  * - the sky: a procedural sky's sun moving for 2 s (time of day: key probes,
@@ -29,8 +31,9 @@
  *
  * The page fails if the counter reads anything but 0 after any step, naming
  * the step. As a control it then compiles one kernel through the platform's
- * kernel builder, which must count 1. three's own pipelines made during the
- * session are reported beside it (information: three compiles its materials
+ * kernel builder, which must count 1. Each step also reports the frames whose
+ * newest GPU timings include `gi/light-grid`, so a reader sees where the grid
+ * ran. three's own pipelines made during the session are reported beside it (information: three compiles its materials
  * again when a light is added, say).
  *
  * Choose with environment variables (vite passes `VITE_*` to the page):
@@ -75,6 +78,10 @@ const MOVING_FRAMES = 30;
 /** The sun's time of day: degrees of elevation it climbs over SUN_FRAMES frames. */
 const SUN_DEGREES = 20;
 const SUN_FRAMES = 120;
+/** Point lights added at once: more than the platform's `exactLightLimit` (8), so the light grid runs. */
+const MANY_LIGHTS = 12;
+/** The light grid's pass name in `stats.passes` (light-grid.ts, `LIGHT_GRID_PASS`). */
+const LIGHT_GRID_PASS = 'gi/light-grid';
 /** Wait for the GPU every this many frames, and let the timestamp read-backs land. */
 const FRAMES_PER_WAIT = 8;
 
@@ -112,6 +119,8 @@ interface StepRecord {
     readonly recompiles: number;
     readonly threeRenderPipelines: number;
     readonly threeComputePipelines: number;
+    /** Frames whose newest GPU timings had a `gi/light-grid` pass (timings run a few frames behind). */
+    readonly lightGridFrames: number;
 }
 
 await runThreePage(
@@ -133,12 +142,14 @@ await runThreePage(
                 let renderBefore = pipelines.render;
                 let computeBefore = pipelines.compute;
                 let frameCount = 0;
+                let lightGridFrames = 0;
                 const frames = async (count: number, each?: (frame: number) => void): Promise<void> => {
                     for (let frame = 0; frame < count; frame++) {
                         each?.(frame);
                         session.started.threeGI.update(session.camera, 1 / 60);
                         renderer.render(session.loaded.scene, session.camera);
                         frameCount++;
+                        if (session.platform.stats.passes.some((pass) => pass.name === LIGHT_GRID_PASS)) lightGridFrames++;
                         if (frameCount % FRAMES_PER_WAIT === 0) {
                             await device.queue.onSubmittedWorkDone();
                             await nextTask();
@@ -147,6 +158,7 @@ await runThreePage(
                 };
                 const step = async (name: string, run: () => Promise<void>): Promise<void> => {
                     const framesBefore = frameCount;
+                    const gridFramesBefore = lightGridFrames;
                     await run();
                     await device.queue.onSubmittedWorkDone();
                     const record: StepRecord = {
@@ -155,6 +167,7 @@ await runThreePage(
                         recompiles: recompiles(),
                         threeRenderPipelines: pipelines.render - renderBefore,
                         threeComputePipelines: pipelines.compute - computeBefore,
+                        lightGridFrames: lightGridFrames - gridFramesBefore,
                     };
                     renderBefore = pipelines.render;
                     computeBefore = pipelines.compute;
@@ -281,6 +294,26 @@ async function runLightSteps(session: Session, step: StepRunner, frames: FrameRu
             await frames(FRAMES_AFTER_CHANGE);
         });
     }
+    const many = Array.from({ length: MANY_LIGHTS }, (_, index) => {
+        const light = new PointLight(0xffd8b0, 0.5, session.loaded.diagonal * 0.25);
+        const [x, y, z] = session.loaded.manifest.volume.center;
+        const angle = (index / MANY_LIGHTS) * Math.PI * 2;
+        light.position.set(x + Math.cos(angle) * 0.2 * session.loaded.diagonal, y, z + Math.sin(angle) * 0.2 * session.loaded.diagonal);
+        return light;
+    });
+    await step(`${MANY_LIGHTS} point lights added (the light grid on)`, async () => {
+        for (const light of many) {
+            session.loaded.scene.add(light);
+            changed(light);
+        }
+        await frames(FRAMES_AFTER_CHANGE);
+    });
+    await step(`the ${MANY_LIGHTS} lights removed`, async () => {
+        for (const light of many) light.removeFromParent();
+        threeGI.markChanged(session.loaded.scene);
+        await frames(FRAMES_AFTER_CHANGE);
+        for (const light of many) light.dispose();
+    });
     const added = new PointLight(0xffeedd, 2, session.loaded.diagonal * 0.5);
     added.position.set(...session.loaded.manifest.volume.center);
     await step('a point light added', async () => {
