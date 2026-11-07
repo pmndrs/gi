@@ -161,6 +161,10 @@ The answers go in PROGRESS. Any change to the contract is made in both the TypeS
 
 ## Revisions
 
+### During M2, 2026-11-08
+
+- **Technique-facing meaning of `RayQueries.building` (T2.12): true until every mesh has its first tree**, the GPU's (H-PLOC, built at load) or tinybvh's, whichever arrives first. tinybvh's trees replacing GPU trees afterwards don't count: rays see the same triangles either way, and the swap changes no binding layout and compiles nothing. **Host-visible: `stats.counters['platform mesh trees']`** (meshes on GPU and tinybvh trees, meshes waiting, tinybvh builds running, GPU trees built and refused, swaps, the last GPU build's time to its stats), and `stats.memory.acceleration` includes the GPU build's output buffers while they live (a few frames at load). Implementation-only, for the repository's tools: `GIPlatformImplOptions.meshTrees` (`gpuFirst`, `holdRefinements`, `gpuMaxDepth`) and `rays.whenRefined()`, `rays.releaseRefinements()`, `rays.meshTreeCounts`. DECISIONS 2026-11-08.
+
 ### During M2, 2026-11-06
 
 - **Technique-facing (T2.5): light groups in `gi/direct` and the ray scratch.** `direct.createScratch` takes `layers` (1 to 8, default 1): a result per ray per layer, ray `i`'s layer `l` at result `i × layers + l` (`RayScratch.layers`). `DirectLightFrame.groupLayers` names the layer each light group's direct light goes into (default all 0). Tracing kernels store a layer with `giStoreRayLayerResult(ray, layer, radiance, half)`; `giStoreRayResult` is layer 0. Hit shading gains `giDirectGroupIrradiance(surface, groupMask, random) -> GiDirectGroups`, the same light choice and shadow rays split by group; `giDirectIrradiance` is its sum. With one layer everything is as before.
