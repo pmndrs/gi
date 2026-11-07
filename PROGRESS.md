@@ -21,6 +21,25 @@ Rules:
 
 ---
 
+## 2026-11-08 · T2.13 scene copy: raw upload and GPU packing · implementer (opus)
+Did (branch `m2-t2.13` from 423fe75; 9f10ecc, b7afa1d, then docs):
+- `gi/pack-mesh` (`scene/pack-mesh-wgsl.ts`, `gpu-mesh-packing.ts`). After `prepare` asks for it (`PlatformScene.prepareGpuPacking`, first in `GIPlatformImpl.prepare`), `createMesh`/`updateMesh` stage the host's raw arrays with `writeBuffer` and `encode` packs them: one dispatch per staging buffer from a job table, timed as `gi/pack-mesh`.
+- `mesh-packing.ts` is split into `planMesh` (checks, box, layout; faster loops) and `packMeshWords` (reference and fallback). `UploadedMesh` carries `layout`, `vertexOffset` and `geometry`; `ray-queries.ts` uses `geometry`. The vertex buffer's layout is unchanged.
+- three adapter: texture averages through a CPU-backed canvas (b7afa1d, a separate commit for the lead's ruling).
+- Tests: `gpu-mesh-packing.test.ts`, where the fake device runs the kernel's CPU twin (`testing/pack-mesh-cpu.ts`). New GPU page `scene-gpu-packing`.
+Verified:
+- GPU packing matches the CPU packer, 0 wrong words and normals ≤ 1 step, on the RTX 3060 and the Intel UHD: all 8 procedural scenes and Sponza (5,632 of 3.1 M normals one step off). On the RTX also Bistro exterior, courtyard-tree and furnished-room.
+- Recompiles 0 (control 1): `ddgi-session-recompiles` on Cornell, two-room and Sponza with groups off and on, and `platform-recompiles` (RTX, Intel).
+- RTX: `scene-copy` passes. Intel: `scene-copy` and `ddgi-change-still` pass.
+- lint and typecheck clean; 1,102 unit tests pass.
+Numbers (VALID, `--cpu-timed`, RTX, `timing.csv` b7afa1d), `scene_copy_cpu_ms`: **Sponza 1,030 ms, Bistro exterior 2,478 ms, against ≤ 150 and ≤ 200: not met.** DECISIONS 2026-11-08 has why and a recommendation.
+- Profile (T2.13 temporary page, not during compiles): Sponza old path 1.37 s, new 0.73 s. The first GI frame's upload went from 154-247 ms to 9.5 ms.
+- What is left on Sponza: raw upload 115-160, checks 100-120, the tree builders' copies 45-70, the rest of the sync about 95, texture averages 290 ms.
+- Texture averages through the GPU canvas: Sponza 0.46-0.67 s, Bistro 4.25 s. Through the CPU canvas: 0.16 and 1.1 s.
+- `gi/pack-mesh` GPU time: Sponza 5.1 ms on the RTX (while another process used the GPU), 72 ms on the Intel.
+Not verified: accuracy pages after the texture change (`ddgi-sponza-accuracy`, the composite pages); the viewer by hand. Another project's renderer (`golden/driver.mjs`, outside our lock) kept the RTX near 100% for most of the session.
+Next: lead rulings (texture canvas; the missed bar). An async texture-average task (DECISIONS). T2.12 merge: `UploadedMesh` no longer has `packed`; use `mesh.geometry`, or read the vertex buffer at `vertexOffset`.
+
 ## 2026-11-08 · T2.6b review and merge · lead (opus)
 Did: An Opus review passed T2.6b with notes. I fixed the notes on the branch: `m2-lights.md` said "no run read VALID" (there is one VALID run, 1.055×), and its tables were stale (memory 20 MB, "on by default"); one WGSL spacing fix. I recorded the lead rulings in DECISIONS: `sunLayer` off by default, the first directional light is the sun, the memory over the estimate accepted. I merged `m2` (T2.14) into the branch; PROGRESS, DECISIONS and NOTES conflicts kept both sides, 109 headings = 108 + 106 − 105. Then I merged it into `m2`. T2.6b is done.
 Verified: review on the RTX 3060: checks 1 and 2 pass (check 2 re-run on bcb1af8 itself: identical atlas and views); the 6-layer cap passes; the full suite passes after the propagate fix a60cdca (51 pages). Me on the merged tree (RTX, correctness, `--no-cool-wait`): typecheck, lint and 1,088 unit tests pass; `ddgi-sun-layer` passes; `ddgi-session-recompiles` with the sun layer switched on (a temporary local edit, not committed) gives 0 recompiles and control 1 on Cornell, two-room and Sponza, light groups off and on.

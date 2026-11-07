@@ -11570,3 +11570,99 @@ date,commit,device,browser,scene,metric,value
 2026-11-07,5859876,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,note/thermal_share,0
 2026-11-07,5859876,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,note/timing_valid,0
 2026-11-07,5859876,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,note/timing_no_verdict,1
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,sponza,batch_cost/deferred/probes_in_volume,19425
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,sponza,batch_cost/deferred/startup/probes,19425
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,sponza,batch_cost/deferred/startup/load_files_ms,4078.6
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,sponza,batch_cost/deferred/startup/load_fetch_parse_ms,2793
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,sponza,batch_cost/deferred/startup/load_three_compile_ms,1200.1
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,sponza,batch_cost/deferred/startup/load_three_first_draw_ms,85.5
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,sponza,batch_cost/deferred/startup/scene_shown_from_load_ms,4078.6
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,sponza,batch_cost/deferred/startup/prepare_ms,1383.4
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,sponza,batch_cost/deferred/startup/compile_wait_ms,351.7
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,sponza,batch_cost/deferred/startup/scene_copy_while_compiling_ms,1007.2
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,sponza,batch_cost/deferred/startup/scene_copy_cpu_ms,1030.3
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,sponza,batch_cost/deferred/startup/trees_ms,4336.6
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,sponza,batch_cost/deferred/startup/first_gi_step_from_load_ms,9985.1
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,sponza,batch_cost/deferred/startup/first_gi_shown_from_load_ms,10539.5
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,sponza,batch_cost/deferred/startup/first_pass_from_load_ms,10677.3
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,sponza,batch_cost/deferred/startup/settled_from_load_ms,12695.6
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,sponza,batch_cost/deferred/startup/first_gi_step_from_creation_ms,5906.5
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,sponza,batch_cost/deferred/startup/first_gi_shown_from_creation_ms,6460.9
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,sponza,batch_cost/deferred/startup/first_pass_from_creation_ms,6598.7
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,sponza,batch_cost/deferred/startup/settled_from_creation_ms,8617
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,sponza,batch_cost/deferred/startup/warmup_ms,2873.5
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,sponza,batch_cost/deferred/startup/warmup_steps,76
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,sponza,batch_cost/deferred/startup/warmup_passes,16.03
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,sponza,batch_cost/deferred/startup/calibrated_from_load_ms,14098.9
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,sponza,batch_cost/deferred/startup/calibration_ms,1403.3
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,sponza,batch_cost/deferred/startup/calibration_steps,367
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,sponza,batch_cost/deferred/startup/calibration_frames,65
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,sponza,batch_cost/deferred/startup/calibrated_probes,155
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,sponza,batch_cost/deferred/startup/calibration_fixed_ms,1.6306
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,sponza,batch_cost/deferred/startup/calibration_us_per_probe,2.971
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,sponza,batch_cost/deferred/startup/calibration_spread,0.1532
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,sponza,batch_cost/deferred/startup/calibration_sizes,4
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,sponza,batch_cost/deferred/startup/calibration_filler_frames,0
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,sponza,batch_cost/deferred/startup/calibration_confirm_factor,1
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,sponza,batch_cost/deferred/startup/pipelines_compiled,27
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,sponza,batch_cost/deferred/startup/compile_ms/ddgi/trace (deferred direct light, subgroups),1360.4
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,sponza,batch_cost/deferred/startup/compile_ms/gi/pack-mesh,1030.5
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,sponza,batch_cost/deferred/startup/compile_ms/sky partial sums,1030.1
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,sponza,batch_cost/deferred/startup/compile_ms/sky SH sum,1030
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,sponza,batch_cost/deferred/startup/compile_ms/sky resample,1029.9
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,sponza,batch_cost/deferred/startup/compile_ms/sky resample (unfilterable),1029.9
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,note/sm_clock_mhz,825
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,note/sm_clock_min_mhz,210
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,note/sm_clock_max_mhz,1125
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,note/mem_clock_mhz,7151
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,note/start_temp_c,64
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,note/thermal_share,0
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,note/timing_valid,1
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,bistro-exterior,batch_cost/deferred/probes_in_volume,28952
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,bistro-exterior,batch_cost/deferred/startup/probes,28952
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,bistro-exterior,batch_cost/deferred/startup/load_files_ms,12266.9
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,bistro-exterior,batch_cost/deferred/startup/load_fetch_parse_ms,7552.8
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,bistro-exterior,batch_cost/deferred/startup/load_three_compile_ms,3167.6
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,bistro-exterior,batch_cost/deferred/startup/load_three_first_draw_ms,1546.5
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,bistro-exterior,batch_cost/deferred/startup/scene_shown_from_load_ms,12266.9
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,bistro-exterior,batch_cost/deferred/startup/prepare_ms,2502.7
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,bistro-exterior,batch_cost/deferred/startup/compile_wait_ms,17.2
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,bistro-exterior,batch_cost/deferred/startup/scene_copy_while_compiling_ms,2439.1
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,bistro-exterior,batch_cost/deferred/startup/scene_copy_cpu_ms,2478.4
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,bistro-exterior,batch_cost/deferred/startup/trees_ms,2211.8
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,bistro-exterior,batch_cost/deferred/startup/first_gi_step_from_load_ms,17200.9
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,bistro-exterior,batch_cost/deferred/startup/first_gi_shown_from_load_ms,17702.5
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,bistro-exterior,batch_cost/deferred/startup/first_pass_from_load_ms,18117
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,bistro-exterior,batch_cost/deferred/startup/settled_from_load_ms,21508
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,bistro-exterior,batch_cost/deferred/startup/first_gi_step_from_creation_ms,4934
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,bistro-exterior,batch_cost/deferred/startup/first_gi_shown_from_creation_ms,5435.6
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,bistro-exterior,batch_cost/deferred/startup/first_pass_from_creation_ms,5850.1
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,bistro-exterior,batch_cost/deferred/startup/settled_from_creation_ms,9241.1
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,bistro-exterior,batch_cost/deferred/startup/warmup_ms,4486.9
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,bistro-exterior,batch_cost/deferred/startup/warmup_steps,114
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,bistro-exterior,batch_cost/deferred/startup/warmup_passes,16.13
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,bistro-exterior,batch_cost/deferred/startup/calibrated_from_load_ms,23021.2
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,bistro-exterior,batch_cost/deferred/startup/calibration_ms,1513.2
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,bistro-exterior,batch_cost/deferred/startup/calibration_steps,452
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,bistro-exterior,batch_cost/deferred/startup/calibration_frames,150
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,bistro-exterior,batch_cost/deferred/startup/calibrated_probes,159
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,bistro-exterior,batch_cost/deferred/startup/calibration_fixed_ms,1.7002
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,bistro-exterior,batch_cost/deferred/startup/calibration_us_per_probe,1.876
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,bistro-exterior,batch_cost/deferred/startup/calibration_spread,0.4959
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,bistro-exterior,batch_cost/deferred/startup/calibration_sizes,5
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,bistro-exterior,batch_cost/deferred/startup/calibration_filler_frames,0
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,bistro-exterior,batch_cost/deferred/startup/calibration_confirm_factor,0.7695
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,bistro-exterior,batch_cost/deferred/startup/pipelines_compiled,27
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,bistro-exterior,batch_cost/deferred/startup/compile_ms/gi/pack-mesh,2481.4
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,bistro-exterior,batch_cost/deferred/startup/compile_ms/sky partial sums,2480.4
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,bistro-exterior,batch_cost/deferred/startup/compile_ms/sky SH sum,2480.4
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,bistro-exterior,batch_cost/deferred/startup/compile_ms/sky resample,2480.3
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,bistro-exterior,batch_cost/deferred/startup/compile_ms/sky resample (unfilterable),2480.3
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,bistro-exterior,batch_cost/deferred/startup/compile_ms/gi/light-grid pack,2478.2
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,note/sm_clock_mhz,825
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,note/sm_clock_min_mhz,210
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,note/sm_clock_max_mhz,1125
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,note/mem_clock_mhz,7151
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,note/start_temp_c,64
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,note/thermal_share,0
+2026-11-07,b7afa1d,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,note/timing_valid,1

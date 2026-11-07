@@ -4,6 +4,18 @@ Settled choices, newest first. Each entry is short: the decision, why, and what 
 
 ## 2026-11-08
 
+- **T2.13: the scene copy's meshes are packed on the GPU, as built** (T2.13 implementer; for the M2 lead's review):
+  - *When GPU packing starts:* when `prepare` asks for its kernel (`PlatformScene.prepareGpuPacking`, the first compile `prepare` asks for). From then on `createMesh` and `updateMesh` write the host's raw arrays into staging buffers at once, and the next `encode` packs them with `gi/pack-mesh`.
+    - *Why in the call:* the host may reuse its arrays after `createMesh` (the contract), so they must be copied in the call anyway, and `writeBuffer` is that copy. It also starts the uploads during `prepare`, as the T2.14 entry's revisit note asked.
+    - *The CPU packer stays* as the reference and the fallback: for meshes made before `prepare`, for a scene that never prepares (tools, tests), and for a mesh whose raw arrays don't fit one storage binding. The vertex buffer's layout is unchanged.
+  - *`UploadedMesh` changed* (internal; T2.12 reads it). It now carries `layout`, `vertexOffset` and `geometry` instead of the packed words. `geometry` holds the scene's copies of positions and indices, in the host's index type, made at `createMesh`. GPU tree builders could read positions and indices from the vertex buffer instead.
+  - *Texture averages are read through a CPU-backed canvas* (`willReadFrequently`, three adapter, commit b7afa1d). It is 3-4× faster and doesn't wait for the GPU. Its averages are as close to a full-resolution average as before (NOTES), but not identical, so the GI albedo of a textured material can move by a few percent. **For the lead:** keep it (my recommendation), or drop the commit.
+  - *The done-when is not met.* **For the lead and Dennis.**
+    - *Measured (VALID):* the main-thread copy takes 1,030 ms on Sponza and 2,478 ms on Bistro exterior, against 150 and 200 ms.
+    - *Why the estimate missed:* the design assumed the 1.2 s and 4.1 s were mostly packing. On Sponza, packing and its upload were about 0.6 s of about 1.4 s. The texture averages were 0.5-0.7 s on Sponza and most of Bistro's 4.1 s.
+    - *What is left on Sponza* (profile, not during compiles): the raw upload 115-160 ms, the checks 100-120 ms, the tree builders' copies 45-70 ms, the rest of the scene sync about 95 ms, and texture averages about 0.3 s.
+    - *Recommendation:* a follow-up task that makes texture averages asynchronous (an off-thread `createImageBitmap` resize, with materials updated when the averages arrive, before the first GI frame). Then measure again and set T2.13's bar from that. 150 ms on Sponza also needs the checks and the tree builders' copies off the main thread, and moving the checks changes when an invalid mesh is reported (a contract question).
+
 - **T2.6b lead rulings** (M2 lead, after the Opus review; for Dennis to confirm):
   - *`sunLayer` is off by default.* T2.8's time-of-day slider turns it on in the viewer. *Why:* it costs 35.5 MB on Sponza and 5–9% per probe update, and with it on Sponza's sun turn is at the edge of T2.4c's bar (finding below). *Revisit* when T2.8 has measured the turn with the layer on.
   - *The sun is the first directional light, with no flag.* *Why:* if a different light gets the layer, GI is still exact; that light only loses the instant colour change, and switching suns marks every probe, which is safe. *Revisit* if a host adds a fill directional light before its sun.

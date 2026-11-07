@@ -121,6 +121,14 @@ The 1.2 s (Sponza) and 4.1 s (Bistro exterior) are JS loops on the main thread, 
 - **The CPU packer stays as the test oracle.** Positions and indices must match it byte for byte; normals within one octahedral step (the GPU encodes in f32, the CPU in f64).
 - **The floor** is the raw copy itself. NOTES: reading 300 MB in JS takes about 110 ms on this laptop, so Sponza's ~180 MB of raw arrays costs about 60–100 ms of main-thread copying however it's done. The tinybvh worker's own copy adds to that.
 
+**As built (T2.13).** `gi/pack-mesh` (`platform/scene/pack-mesh-wgsl.ts`, `gpu-mesh-packing.ts`):
+
+- *When the copy happens:* `createMesh` and `updateMesh` write the host's arrays into staging buffers straight away, once `prepare` has asked for the kernel (`PlatformScene.prepareGpuPacking`, the first compile `prepare` asks for). So the host may still reuse its arrays after the call, and a scene copied in while preparing uploads alongside the compiles (DECISIONS 2026-11-08's revisit note). The next `encode` packs.
+- *One dispatch per staging buffer, not per mesh:* the CPU writes a job table, one job per part (copy, normals, narrow or widen), one thread per output word, and a thread finds its job by binary search. Parts already in packed form (positions, uvs, slots, indices of the right width) are copy jobs.
+- *The CPU packer stays,* split into `planMesh` (checks, box, layout and slot words, always on the CPU) and `packMeshWords` (the reference, and the fallback for a scene that never prepares and for a mesh too large to stage). The vertex buffer's layout is unchanged.
+- *Tree builders* get the scene's own copies of positions and indices (`UploadedMesh.geometry`, in the host's index type), made at `createMesh`, instead of views of packed words.
+- *What the estimate missed:* packing was not most of the main thread's copy time. Most of it was the three adapter's texture averages (texture-average.ts), and what is left after packing moves to the GPU is close to the floor above plus the checks. PROGRESS (T2.13) has the breakdown.
+
 ## 3. Deforming meshes (mesh-tree refit)
 
 SPEC's tracing decision: deforming meshes "keep their BVH shape", refit every frame on the GPU, "no rebuild and no CPU work". The plan follows it.
