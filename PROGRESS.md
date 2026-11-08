@@ -21,6 +21,14 @@ Rules:
 
 ---
 
+## 2026-11-08 · T2.16 review and merge · lead (opus)
+Did: reviewed T2.16 and merged it into `m2`.
+- Updated the tables in `tools/reference/README.md` for the six re-rendered views: samples, parts, minutes and noise. Removed the stale dark-room row.
+- I'm accepting the three views at 3.05–3.22% GI per pixel without more renders. These are viewing references, judged by eye. Over 8 × 8 blocks every reference is now under 0.5%. Another 36 GPU minutes would move them about 0.1–0.2 points.
+Verified: I read the six `cycles.json` files the viewer loads. The samples, the OptiX device, the commit (c59a4a9, no uncommitted render changes) and the noise (GI and full image) match the gpu-tester's table.
+Not verified: I didn't open the viewer on these references, and I didn't measure the accuracy references, which T2.16 didn't touch.
+Next: none for T2.16.
+
 ## 2026-11-08 · T2.16 · gpu-tester
 Did: re-rendered the six noisy viewing-only bookmarks with Cycles on the RTX 3060 Laptop (OptiX), 1920 x 1080, in parts with different seeds (one bench-lock hold per part, 3.5 to 9.5 minutes each), then `combine.ts` and `noise.ts`. Samples set from noise falling as 1/sqrt(samples). Old files are in `bench/references/<scene>/<camera>/old-t2.16/` (raw EXRs, jsons and the old denoised copies). The old `cycles-full-denoised.exr` was moved there, so the viewer now shows the raw (clean) full image. Accuracy references and Sponza's untextured set untouched. No library code changed.
 Verified: each `cycles.json` (the file the viewer reads for sample count and noise) holds the new values: samples, seeds, device OptiX RTX 3060 Laptop, noise from two of its parts. Did not take viewer screenshots; I read the JSON the viewer loads instead.
