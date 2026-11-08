@@ -365,30 +365,25 @@ export const FAR_RULE_FRAMES = 30;
 export const KEY_WAIT_FRAMES = 30;
 
 /**
- * Changes continue (§4.5's second count, T2.4d) once `ddgi/mark` has run in
- * this many frames in a row: a sun moving through a day, a lamp swinging, a
- * door swinging. A single step is not a continuing change: its response is
- * judged at the calibrated count.
+ * While a change is taken in (§4.5's second count; change-intake-batch.ts),
+ * the batch is at least this share of the hand-out, whatever the census
+ * says: a guard against a census that reads oddly, not a tuned number (the
+ * day on Sponza needs about 0.63, a sun turn's first frames about 0.56).
  */
-export const CONTINUING_CHANGE_FRAMES = 30;
+export const CHANGE_BATCH_MIN_SHARE = 0.5;
 
 /**
- * Frames without a mark that still count as part of a continuing change
- * (T2.8). A host that animates slower than it draws marks a change only on
- * some frames: at 30 Hz on a 60 Hz display, every other frame; at 30 Hz on
- * 144 Hz, about one frame in five. Those gaps are the host's update rate,
- * not the change stopping, so a run of marks survives up to this many
- * unmarked frames in a row. 4 covers an animation at a fifth of the frame
- * rate; after a real stop the smaller batch lasts at most 4 more frames.
+ * What one fine probe `ddgi/propagate` passes a key's change to costs, in
+ * traced rays, for the batch while a change is taken in. Propagation reads
+ * up to 8 key tiles per layer and traces nothing, but it runs in every frame
+ * in which keys take a change in, on top of the list. Measured on Sponza
+ * after a 30° sun turn (RTX 3060, about 800 MHz, T2.10's VALID run): the
+ * pass rose 0.053 ms over a still frame for a median 926 probes propagated,
+ * 5.7e-5 ms each, while each extra ray traced cost `ddgi/trace` 2.3e-5 ms
+ * (0.22 ms for 9,408 more rays at the same batch): about 2.5 rays a probe.
+ * Both scale with the GPU's clock, so the ratio holds as it moves.
  */
-export const CONTINUING_CHANGE_GAP_FRAMES = 4;
-
-/**
- * While changes continue, the batch is at least this share of the hand-out,
- * whatever the rays say: a guard against a census that reads oddly, not a
- * tuned number (the day on Sponza needs about 0.63).
- */
-export const CONTINUING_CHANGE_MIN_SHARE = 0.5;
+export const PROPAGATED_PROBE_RAYS = 2.5;
 
 /**
  * The camera weight's distance falloff, in probe spacings (m2-lights.md

@@ -142,7 +142,7 @@ import { buildMarkTable, type MarkTable } from './mark-table.ts';
 import { layerPlan, MAX_IRRADIANCE_LAYERS, MAX_LIGHT_GROUPS, sunLayerWeight, sunLightOf, writeLayerWeights, type LayerPlan } from './light-groups.ts';
 import { COMPOSE_ENTRY_POINTS, COMPOSE_WEIGHTS_BYTES, composeKernelWgsl } from './wgsl/compose.ts';
 import { MoverTable } from './mover-table.ts';
-import { ContinuingChangeBatch } from './continuing-change.ts';
+import { ChangeIntakeBatch } from './change-intake-batch.ts';
 import { priorityCount, scrambleStride } from './schedule.ts';
 import { DDGIShadingModule } from './shading.ts';
 import { blendKernelWgsl, type PhaseBReduction } from './wgsl/blend.ts';
@@ -246,6 +246,8 @@ interface CensusStaging {
     state: 'free' | 'copied' | 'mapping';
     /** The probes the copied frame listed (its update count). */
     listedProbes: number;
+    /** The platform frame the copy was recorded in. */
+    frame: number;
 }
 
 interface PreparedResources {
@@ -535,8 +537,8 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
     private readonly parameterView = new Float32Array(SAMPLE_PARAMETER_VEC4_COUNT * 4);
     /** The latest census read back: probes per state, then rays traced. Null until the first arrives. */
     private latestCensus: Uint32Array | null = null;
-    /** The batch while changes continue (§4.5's second count, T2.4d), from the census's rays a listed probe. */
-    private readonly continuingChange = new ContinuingChangeBatch();
+    /** The batch while a change is taken in (§4.5's second count; T2.4d, T2.18), from the census's rays a listed probe. */
+    private readonly changeIntake = new ChangeIntakeBatch();
     private probesUpdated = 0;
     /** Frames since `prepare` whose changes ran `ddgi/mark`, and the entries in the latest one (CPU-side counters). */
     private markFrames = 0;
@@ -820,6 +822,7 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
             buffer: device.createBuffer({ label: `ddgi census readback ${index}`, size: CENSUS_WORDS * 4, usage: BUFFER_USAGE.mapRead | BUFFER_USAGE.copyDst }),
             state: 'free' as CensusStaging['state'],
             listedProbes: 0,
+            frame: 0,
         }));
         // Deferred: a DdgiTraceRound per round, each at a uniform-offset boundary for its dynamic offset.
         const traceRoundStride = Math.max(TRACE_ROUND_BYTES, device.limits.minUniformBufferOffsetAlignment);
@@ -1014,7 +1017,7 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
             mark: this.createMarkTable(device, partial, INITIAL_MARK_TABLE_BYTES),
         };
         this.latestCensus = null;
-        this.continuingChange.reset();
+        this.changeIntake.reset();
         this.probesUpdated = 0;
         this.markFrames = 0;
         this.latestMarkEntries = 0;
@@ -1073,10 +1076,16 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         const markTable =
             this.settings.changeDrivenHistory !== false ? buildMarkTable(frame.changes, resources.grid, this.movers, resources.plan.groupLayers, sunMarks) : null;
         this.latestMarkEntries = markTable?.entryCount ?? 0;
-        this.continuingChange.noteFrame(markTable !== null);
+        this.changeIntake.noteFrame(frame.frame, markTable !== null);
+        const raysPerProbe = effectiveRaysPerProbe(this.settings.raysPerProbe);
         // No probe updates twice in a frame. While warming: a full batch, or none while the trees are built.
-        // While changes continue, fewer than the hand-out, so the list costs what the calibrated batch does (continuing-change.ts).
-        const handOut = this.warmUp.phase === 'warming' ? resources.maxProbesPerFrame : this.warmUp.phase === 'waiting for trees' ? 0 : this.continuingChange.batchFor(frame.units);
+        // While a change is taken in, fewer than the hand-out, so the list costs what the calibrated batch does (change-intake-batch.ts).
+        const handOut =
+            this.warmUp.phase === 'warming'
+                ? resources.maxProbesPerFrame
+                : this.warmUp.phase === 'waiting for trees'
+                  ? 0
+                  : this.changeIntake.batchFor(Math.min(frame.units, resources.maxProbesPerFrame, probeCount), { full: raysPerProbe, fixed: FIXED_RAYS });
         const count = Math.max(0, Math.min(Number.isNaN(handOut) ? 0 : Math.floor(handOut), resources.maxProbesPerFrame, probeCount));
         this.probesUpdated = count;
         if (count > 0) this.lastUpdateCount = count;
@@ -1084,7 +1093,6 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         // tile is composed this frame. A change of the sun's colour or intensity is one, with a sun layer.
         const composeAll = this.updateLayerWeights(context, resources, sun?.descriptor ?? null);
         if (count === 0 && !markTable && !this.historyClearPending && !composeAll) return 0;
-        const raysPerProbe = effectiveRaysPerProbe(this.settings.raysPerProbe);
         const device = context.device;
         const maxPerDimension = device.limits.maxComputeWorkgroupsPerDimension;
 
@@ -1150,7 +1158,7 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         const propagation = this.settings.keyProbes !== false;
         if (propagation) this.encodePropagation(encoder, context, resources, maxPerDimension);
         this.encodeCompose(encoder, context, resources, count, propagation, composeAll, maxPerDimension);
-        this.encodeCensus(encoder, context, resources, maxPerDimension);
+        this.encodeCensus(encoder, context, resources, maxPerDimension, frame.frame);
         return count;
     }
 
@@ -1392,7 +1400,9 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
      * with changes marked" (frames since `prepare` that ran `ddgi/mark`),
      * "changes marked this frame" (its table's entries: changed lights and
      * global changes), "warming up" (1 while `warmingUp`) and "warm-up
-     * passes" (full passes the warm-up has made); "seconds per full sweep"
+     * passes" (full passes the warm-up has made); "taking in a change" (1
+     * from a mark until the census shows nothing owed: the batch may be
+     * under the hand-out then); "seconds per full sweep"
      * (every probe updated once at this batch and the recent frame rate)
      * once frames carry a `deltaTime`. The per-state counts, rays traced,
      * "probes marked" (marks in that frame; a probe marked by two lights
@@ -1421,6 +1431,8 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
             // The sun layer (T2.6b): 1 when the sun has a layer of its own.
             'sun layer': (this.resources?.plan.sunLayer ?? -1) >= 0 ? 1 : 0,
             'frames composed in full': this.fullComposeFrames,
+            // §4.5's second count (change-intake-batch.ts): 1 while a change is taken in, when the batch may be under the hand-out.
+            'taking in a change': this.changeIntake.takingInChange ? 1 : 0,
         };
         if (sweep !== undefined) updates['seconds per full sweep'] = sweep;
         if (!census) return updates;
@@ -1490,7 +1502,7 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         if (!this.resources) return;
         this.historyClearPending = true;
         this.movers.clear();
-        this.continuingChange.reset();
+        this.changeIntake.reset();
         this.startWarmUp();
         this.markAllNotUpdated();
     }
@@ -1609,7 +1621,7 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
      * this pass timestamp writes exactly then. Also skipped while every
      * readback buffer is still in flight.
      */
-    private encodeCensus(encoder: GPUCommandEncoder, context: TechniqueContext, resources: PreparedResources, maxPerDimension: number): void {
+    private encodeCensus(encoder: GPUCommandEncoder, context: TechniqueContext, resources: PreparedResources, maxPerDimension: number, frame: number): void {
         const staging = resources.censusStaging.find((slot) => slot.state === 'free');
         if (!staging) return;
         const timestampWrites = context.timer.computePass('ddgi/census');
@@ -1628,6 +1640,7 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         encoder.copyBufferToBuffer(resources.census, 0, staging.buffer, 0, CENSUS_WORDS * 4);
         staging.state = 'copied';
         staging.listedProbes = this.probesUpdated;
+        staging.frame = frame;
     }
 
     /**
@@ -1644,7 +1657,14 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
                     if (this.resources !== resources) return;
                     const census = new Uint32Array(staging.buffer.getMappedRange().slice(0));
                     this.latestCensus = census;
-                    this.continuingChange.noteCensus(census[CENSUS_RAYS_TRACED], staging.listedProbes, census[CENSUS_SCHEDULE_STATE + SCHEDULE_STATE_WORD.owed]);
+                    this.changeIntake.noteCensus({
+                        frame: staging.frame,
+                        raysTraced: census[CENSUS_RAYS_TRACED],
+                        listedProbes: staging.listedProbes,
+                        owedProbes: census[CENSUS_SCHEDULE_STATE + SCHEDULE_STATE_WORD.owed],
+                        probesPropagated: census[CENSUS_PROBES_PROPAGATED],
+                        activeProbes: census[PROBE_STATE.active] + census[PROBE_STATE.notUpdatedYet],
+                    });
                     staging.buffer.unmap();
                     staging.state = 'free';
                 },
