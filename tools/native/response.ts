@@ -9,7 +9,7 @@
  *   meter's mean of red, green and blue, on the same fixed motion clock).
  *
  *   node tools/native/response.ts <recording folder> [...] [--settled <folder> ...] [--against <folder> ...]
- *                                 [--commit <ours: this repo's commit>] [--append] [--label t2.7]
+ *                                 [--commit <ours: this repo's commit>] [--device <ours: the GPU>] [--append] [--label t2.7]
  *
  * **A step motion.** For each jump (each key after the first), the view's
  * mean each frame from the jump's own frame (frame 1) to the next jump is held
@@ -289,7 +289,7 @@ function browserLabel(recording: Recording): string {
 
 const USAGE =
     'usage: node tools/native/response.ts <recording folder> [...] [--settled <settle recording> ...] ' +
-    "[--against <the other side's recording> ...] [--commit <ours: this repo's commit>] [--append] [--label text]";
+    "[--against <the other side's recording> ...] [--commit <ours: this repo's commit>] [--device <ours: the GPU>] [--append] [--label text]";
 
 function main(): void {
     const { values, positionals } = parseArgs({
@@ -300,6 +300,8 @@ function main(): void {
             settled: { type: 'string', multiple: true, default: [] },
             against: { type: 'string', multiple: true, default: [] },
             commit: { type: 'string', default: '' },
+            // Ours: the GPU's name when the browser's adapter gives none (headless Chrome says only "nvidia ampere")
+            device: { type: 'string', default: '' },
         },
     });
     if (positionals.length === 0) {
@@ -323,7 +325,7 @@ function main(): void {
         const runNumber = runIndex + 1;
         console.log(`run ${runNumber} (${side}): ${recording.scene} ${recording.motion} (${folder}), commit ${commit}, brightness ${brightnessColumn(frames)}`);
         const date = recording.recorded.slice(0, 10);
-        const device = recording.device.replace(/^NVIDIA GeForce /, '').replace(/ GPU$/, '');
+        const device = (side === 'ours' && values.device ? values.device : recording.device).replace(/^NVIDIA GeForce /, '').replace(/ GPU$/, '');
         // The probe grid (play.ps1 -GridRule) is in native's path for every grid but its own cells grid, whose rows came
         // first; ours always uses DDGI's own grid, so its path has none.
         const grid = recording.gridRule ?? 'cells';
