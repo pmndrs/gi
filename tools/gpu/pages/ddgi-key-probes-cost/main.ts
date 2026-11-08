@@ -226,6 +226,30 @@ await runThreePage(async ({ device, data, log: logLine }) => {
             `ddgi/mark in the step's frame ${markMs[0] ?? 'not timed'} ms; update median ${round(quantile(busy.map((entry) => entry.total), 0.5))} ms; ${stepCounters['key changes passed (total)']} key changes passed, ${stepCounters['probes propagated (total)']} probes propagated`,
     );
     if (!(quantile(propagateBusy, 0.5) <= PROPAGATE_MS)) failures.push(`step: ddgi/propagate median ${round(quantile(propagateBusy, 0.5))} ms (bar ${PROPAGATE_MS})`);
+    // T2.10 (TASKS, T2.4c's review): the update's GPU time over the 60 frames after the step, at the
+    // calibrated count. Recorded, not judged here: over the 2 ms budget on the targets would mean
+    // m2-lights.md §4.5's second count is built for single steps too. Only frames whose timings
+    // reached the page are in it (NOTES: about half are overtaken with two frames in flight).
+    const afterStep = timings.frames(step.first, step.last).filter((entry) => entry.frame - step.first < 60);
+    const afterStepTotals = afterStep.map((entry) => entry.total);
+    const overBudgetOffsets = afterStep.filter((entry) => entry.total > BUDGET_MS).map((entry) => entry.frame - step.first);
+    results.stepFirst60 = {
+        framesTimed: afterStep.length,
+        updateMedian: round(quantile(afterStepTotals, 0.5)),
+        updateP95: round(quantile(afterStepTotals, 0.95)),
+        updateMax: round(Math.max(...afterStepTotals)),
+        updateMean: round(afterStepTotals.reduce((sum, ms) => sum + ms, 0) / afterStepTotals.length),
+        calibratedMedian: round(quantile(afterStep.map((entry) => entry.calibrated), 0.5)),
+        framesOverBudget: overBudgetOffsets.length,
+        framesOverBudgetMargin: afterStep.filter((entry) => entry.total > BUDGET_MS * (1 + BUDGET_MARGIN)).length,
+        lastFrameOverBudget: overBudgetOffsets.length > 0 ? Math.max(...overBudgetOffsets) : -1,
+        // Frame offset after the step (0 = the step's own frame) to the update's ms.
+        byFrame: Object.fromEntries(afterStep.map((entry) => [entry.frame - step.first, round(entry.total)])),
+    };
+    log(
+        `the 60 frames after the step, ${afterStep.length} timed: update median ${round(quantile(afterStepTotals, 0.5))} ms, p95 ${round(quantile(afterStepTotals, 0.95))}, largest ${round(Math.max(...afterStepTotals))}; ` +
+            `${overBudgetOffsets.length} frames over ${BUDGET_MS} ms (the last at frame ${overBudgetOffsets.length > 0 ? Math.max(...overBudgetOffsets) : 'none'})`,
+    );
 
     // 4. A 10-second day.
     const startAzimuth = sunAngles(startDirection).azimuth;

@@ -401,12 +401,17 @@ async function startScene(
     threeGI.update(camera, 0);
     const copiedWhileCompilingAt = performance.now();
     const copyWhileCompilingMs = copiedWhileCompilingAt - copyStartedAt;
+    // T2.10: the scene copy's staging buffers (T2.13), meshes waiting for the GPU to pack them. They
+    // peak once the copy has staged every mesh and before the first encode packs them.
+    const stagingAfterCopyBytes = platform.sceneCopy.memory.stagingBuffers;
     await preparing;
     const preparedAt = performance.now();
+    const stagingBeforeFirstEncodeBytes = platform.sceneCopy.memory.stagingBuffers;
 
     // The first GI frame: the scene's uploads, and the tree builds start (the GPU's first, T2.12).
     threeGI.update(camera, 0);
     const copiedAt = performance.now();
+    const stagingAfterFirstEncodeBytes = platform.sceneCopy.memory.stagingBuffers;
     // Asked for once the builds have started (before, nothing is pending and it resolves at once).
     let refinedAt = NaN;
     void platform.rays.whenRefined().then(() => (refinedAt = performance.now()));
@@ -496,6 +501,10 @@ async function startScene(
         compile_wait_ms: round(preparedAt - copiedWhileCompilingAt, 1),
         scene_copy_while_compiling_ms: round(copyWhileCompilingMs, 1),
         scene_copy_cpu_ms: round(copyWhileCompilingMs + (copiedAt - preparedAt), 1),
+        // T2.10: SceneMemory.stagingBuffers (MB, 1e6 bytes) after the copy, before and after the first encode.
+        staging_after_copy_mb: round(stagingAfterCopyBytes / 1e6, 1),
+        staging_before_first_encode_mb: round(stagingBeforeFirstEncodeBytes / 1e6, 1),
+        staging_after_first_encode_mb: round(stagingAfterFirstEncodeBytes / 1e6, 1),
         // T2.12's stages from `prepare` to the first frame drawn with GI. The first GI frame (the
         // uploads, the GPU's tree build submitted, tinybvh's copies sent to the worker); then the wait
         // for every mesh's first tree; then the frame that places them; then the first warm-up step
