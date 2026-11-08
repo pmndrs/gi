@@ -78,6 +78,7 @@
  *   VITE_DDGI_STEADY_UNITS=16,512                                    (default: the budget's median batch)
  *   VITE_DDGI_MESH_TREES=tinybvh                                     (default gpu: first trees from the GPU, T2.12)
  *   VITE_DDGI_THREE_COMPILE=when-light-joins                         (default after-first-step; see THREE_COMPILE)
+ *   VITE_DDGI_RAMP_SECONDS=8                                         (default 0: off; see rampAndRecalibrate)
  *
  * Manual (Sponza and Bistro need the downloads). Run it under the bench lock:
  *   node tools/reference/bench-lock.ts run --what "batch cost" -- pnpm test:gpu --filter ddgi-batch-cost --json <file>
@@ -118,6 +119,10 @@ const DIRECT_PATHS: DirectLightPath[] = listFromEnv(env.VITE_DDGI_DIRECT, ['defe
 const STEADY_UNITS = listFromEnv(env.VITE_DDGI_STEADY_UNITS, []).map(Number).filter((units) => units > 0);
 /** T2.12: `gpu` (default) builds the first mesh trees on the GPU; `tinybvh` is M1's path, for a comparison. */
 const MESH_TREES = env.VITE_DDGI_MESH_TREES === 'tinybvh' ? 'tinybvh' : 'gpu';
+/** T2.10: seconds of GPU-bound frames after the start-up, then a re-calibration, before the other sections (0: off). */
+const RAMP_SECONDS = typeof env.VITE_DDGI_RAMP_SECONDS === 'string' ? Number(env.VITE_DDGI_RAMP_SECONDS) : 0;
+/** The fixed batch of the ramp's frames: a heavy, steady load. */
+const RAMP_UNITS = 1024;
 /**
  * When three compiles its materials for the GI light. `after-first-step`
  * (default): after the first warm-up step, in series, as T2.12's check 1 is
@@ -672,6 +677,33 @@ async function measureBudget(device: GPUDevice, scene: SceneUnderTest, log: (lin
             (Number.isFinite(directMedianMs) ? `; gi/direct ${result.gi_direct_ms_median} ms, ${result.gi_direct_hits_per_probe} hits a probe, ${result.gi_direct_mhits_per_s} M hits/s` : ''),
     );
     return result;
+}
+
+/**
+ * Opt-in ramp (T2.10, `VITE_DDGI_RAMP_SECONDS`): GPU-bound frames of RAMP_UNITS
+ * probes for that many seconds, then `recalibrate()` with its burst run as at
+ * start-up, so the sections after it run at a batch calibrated with the clocks
+ * up. *Why:* on the RTX laptop under Chrome 157 the start-up's bursty load
+ * leaves the GPU in a low-power state (about 780 MHz under load, nvidia-smi),
+ * and the start-up's calibration then reads it slow (Sponza 154 probes at
+ * 2 ms against 640 at 1,800-1,900 MHz in T2.2). Budget v2 calibrates with the
+ * clocks up (DECISIONS 2026-11-05), and SPEC's timings are GPU-bound. The
+ * start-up's own calibration is still reported in `startup`.
+ */
+async function rampAndRecalibrate(device: GPUDevice, scene: SceneUnderTest, firstUnits: number, log: (line: string) => void): Promise<Record<string, number>> {
+    const pacing = new GpuBoundPacing(device);
+    const startedAt = performance.now();
+    let rampFrames = 0;
+    while (performance.now() - startedAt < RAMP_SECONDS * 1000) {
+        frame(scene, { units: RAMP_UNITS }, 0);
+        rampFrames++;
+        await pacing.after();
+    }
+    await pacing.drain();
+    const rampMs = performance.now() - startedAt;
+    const recheck = await recheckCalibration(device, scene, firstUnits, log);
+    log(`${scene.manifest.id} ramp: ${rampFrames} frames of ${RAMP_UNITS} probes in ${round(rampMs / 1000, 1)} s, then re-calibrated: ${recheck.recalibrated_probes} probes (start-up's ${firstUnits})`);
+    return { ramp_seconds: round(rampMs / 1000, 2), ramp_frames: rampFrames, ramp_units: RAMP_UNITS, ...recheck };
 }
 
 /**
@@ -1341,6 +1373,7 @@ await runThreePage(async ({ device, renderer, data, log }) => {
         const sceneResult: Record<string, unknown> = { scene: id, directLight: direct, probes: scene.probeCount, raysPerProbe: scene.ddgi.settings.raysPerProbe };
         results[DIRECT_PATHS.length > 1 ? `${id}/${direct}` : id] = sceneResult;
         if (SECTIONS.has('startup')) sceneResult.startup = startup;
+        if (RAMP_SECONDS > 0) sceneResult.ramp = await rampAndRecalibrate(device, scene, startup.calibrated_probes, log);
         // Rates first, in rising order: the platform remembers the fastest on-time rate it saw for
         // 10 s, so a slower rate straight after the GPU-bound frames would read as late frames.
         if (SECTIONS.has('rates')) {
