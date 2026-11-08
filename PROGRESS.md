@@ -21,6 +21,42 @@ Rules:
 
 ---
 
+## 2026-11-08 · T2.10 response follow-up: Sponza's lamp lit on native, exposure, brightness diagnosis · native-runner (opus)
+Did: the coordinator's follow-up to my "T2.10 response times" entry below.
+- **Correction to that entry:** native's Sponza arcade lamp lit nothing in those runs. The manifest's `range: 0` (three: no cut-off) became `radius=0`, which the harness reads as a hard cut-off, including in the probe trace. The 0.0–0.8% steps were the unlit lamp, not the view. Those rows are superseded (a `superseded` row per run).
+- **The fix (320ff31):** in `tools/native/native-lib.ps1`, a range of 0 becomes 10× the probe volume's diagonal (Sponza 480.44 m). The harness applies three's window `(1 − (d/r)⁴)²`, and at that radius it stays above 0.9998 anywhere in the scene. Cornell, two-room and closed-door inis come out the same as before; only Sponza's radius line changes.
+- **Exposure (0233355):** the `viewer-recording` page applies the scene's own exposure through `ViewerCore.setExposureEv`, as `viewer-app.ts` does, and records `exposureEv`. Two-room has none (0 EV), so its earlier pictures were right. The measured mean is read before exposure, so no number changed.
+- **`response.ts --set <name>`** puts the set name in the row path. The re-recorded set is `lamp_lit`.
+- **How I ran it:** I copied the fixed `native-lib.ps1` into t27 for the native runs, then restored t27's file. t27 is unchanged and the fork is unchanged.
+
+Verified (RTX 3060 Laptop):
+- Native: Vulkan, fork 350f9de, our grid (19,425 probes), texture sky. The new run's ini has `radius=480.4425`, and the lamp is 0.0000 cm from the manifest path on every frame.
+- Ours: Chrome 157 headless at 0233355; the pictures show the GI at +2 EV, with the lamp's light visible.
+- 3 runs each side plus 2 settle holds each side. Every run went through the bench lock.
+
+Numbers (`response.csv` `.../lamp_lit/run1-3`; first frame within 5% of the 3,600-frame settled level; median in brackets):
+
+| Sponza jump | native | ours |
+| --- | --- | --- |
+| 1, lamp x −2 → 4 (step +9.6–9.9% / +8.7–9.2%) | 62, 59, 61 (61) | 19, 11, 33 (19) |
+| 2, lamp 4 → −2 (step −4.9 to −5.1% / −7.5 to −8.8%) | 4, 2, 5 (4) | 1, 1, 9 (1) |
+| 3, lamp −2 → 4 (step +8.8–9.0% / +8.7–8.9%) | 50, 45, 44 (45) | 10, 21, 20 (20) |
+
+The steps are only about 9% of the whole view, so jump 2 sits near the 5% band and its frames mean little. Our overshoot is 8–43% of the step: our noise is a large share of a step this small.
+
+**Native's brightness diagnosis (one run, no fix):**
+- Set-up: Sponza at bookmark 1, still, our grid, 600 frames, `-CaptureFrames -CaptureField`. The arcade lamp was off, as in Cycles.
+- GI-only mean of red, green and blue (`ddgi.output`, `albedo / π × irradiance`):
+  - native, flat sky: 0.01172;
+  - native, texture sky: 0.01231;
+  - Cycles `cycles-gi.exr` at the same bookmark: 0.001525. That file is everything diffuse except the manifest lights' direct light.
+- So native is 7.7× Cycles with the flat sky and 8.1× with the texture sky. **The texture sky does not explain it:** the two skies differ by 5%.
+- One more number: native's direct diffuse (its G-buffer's `albedo / π × sun`) is 0.0410 against Cycles' direct 0.0140, 2.9× (close to π). So the sun may already arrive brighter on native, and the bounces would compound that.
+- Not settled. Recorded as found.
+
+Not verified: the cause of native's Sponza brightness. Whether a π in native's sun (lux as power) is the cause. The Intel UHD. Two-room's level gap: I measured it at 1.6× (ours 0.666, native 0.413, mean of red, green and blue, lamp in the room), not the 2.5× in the brief. NOTES records native's `1/max(d,1)²` falloff as a possible part, unmeasured.
+Next: the native sun-scale question (π or units in `EvaluateDirectionalLight` against three's and Cycles' sun), for the lead to assign. The fork is unchanged by this follow-up, so the push list doesn't grow.
+
 ## 2026-11-08 · T2.10 M2 measurements on the RTX 3060 Laptop · gpu-tester (opus)
 Did: one run per gate under `bench-lock run`, on `m2-t2.10` (M2's final code). RTX 3060 Laptop (nvidia/ampere), headless Chrome 157.0.8103.38. Test-page additions only, nothing in `packages/`:
 - `ddgi-batch-cost` gained the staging peak and `VITE_DDGI_RAMP_SECONDS`;

@@ -41,7 +41,8 @@
  *   up best with the other's (positive: this side later).
  *
  * With --append, rows go to bench/results/response.csv as
- * `response/<native|ours>/<motion>/[grid_<rule>/]run<n>/<jump or sweep>/<measure>`
+ * `response/<native|ours>/<motion>/[grid_<rule>/][<set>/]run<n>/<jump or sweep>/<measure>`
+ * (`--set <name>`: a re-recorded set whose runs would otherwise share the paths of an earlier, superseded one)
  * (bench/results/README.md). Native's rows carry browser `native` and the
  * fork's commit (recording.json); ours the browser from recording.json and
  * --commit. Native is a reference, not a target (m2-lights.md §7, Dennis
@@ -300,6 +301,7 @@ function main(): void {
             settled: { type: 'string', multiple: true, default: [] },
             against: { type: 'string', multiple: true, default: [] },
             commit: { type: 'string', default: '' },
+            set: { type: 'string', default: '' },
             // Ours: the GPU's name when the browser's adapter gives none (headless Chrome says only "nvidia ampere")
             device: { type: 'string', default: '' },
         },
@@ -329,7 +331,7 @@ function main(): void {
         // The probe grid (play.ps1 -GridRule) is in native's path for every grid but its own cells grid, whose rows came
         // first; ours always uses DDGI's own grid, so its path has none.
         const grid = recording.gridRule ?? 'cells';
-        const run = `${side === 'native' && grid !== 'cells' ? `grid_${grid}/` : ''}run${runNumber}`;
+        const run = `${side === 'native' && grid !== 'cells' ? `grid_${grid}/` : ''}${values.set ? `${values.set}/` : ''}run${runNumber}`;
         const runPrefix = `${date},${commit},${device},${browserLabel(recording)},${recording.scene},response/${side}/${recording.motion}/${run}`;
         // The run's conditions: the grid, the brightness column, and for ours the probes a frame and the real frame
         // interval DDGI aged its histories by

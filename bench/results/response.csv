@@ -6867,3 +6867,1197 @@ date,commit,device,browser,scene,metric,value
 2026-11-08,0233355,RTX 3060 Laptop,Chrome headless,all,response/t2.10/sponza_lamp_step_units316/steps/1/errors/177,-0.014683
 2026-11-08,0233355,RTX 3060 Laptop,Chrome headless,all,response/t2.10/sponza_lamp_step_units316/steps/1/errors/178,-0.0138521
 2026-11-08,0233355,RTX 3060 Laptop,Chrome headless,all,response/t2.10/sponza_lamp_step_units316/steps/1/errors/179,-0.0138453
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/run1/superseded,lamp_unlit_radius_0_see_grid_ddgi/lamp_lit
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/run2/superseded,lamp_unlit_radius_0_see_grid_ddgi/lamp_lit
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/run3/superseded,lamp_unlit_radius_0_see_grid_ddgi/lamp_lit
+2026-11-08,c7af54c,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/run1/superseded,paired_with_unlit_native_and_pictures_at_0EV_see_lamp_lit
+2026-11-08,c7af54c,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/run2/superseded,paired_with_unlit_native_and_pictures_at_0EV_see_lamp_lit
+2026-11-08,c7af54c,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/run3/superseded,paired_with_unlit_native_and_pictures_at_0EV_see_lamp_lit
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump1_x-2_to_x4/grid_rule,ddgi
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump1_x-2_to_x4/brightness,gi_mean_luminance
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump1_x-2_to_x4/label,t2.10
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump1_x-2_to_x4/step_size,0.09881
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump1_x-2_to_x4/first_frame_move,0.0005261
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump1_x-2_to_x4/entered_frame,62
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump1_x-2_to_x4/settled_frame,62
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump1_x-2_to_x4/overshoot_share_of_step,0
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump1_x-2_to_x4/settled_end_drift,0.00088385
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump1_x-2_to_x4/settled_from_long_hold,1
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump1_x-2_to_x4/error_frame1,-0.089445
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump1_x-2_to_x4/error_frame2,-0.088583
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump1_x-2_to_x4/error_frame3,-0.088206
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump1_x-2_to_x4/error_frame4,-0.087591
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump1_x-2_to_x4/error_frame5,-0.08656
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump1_x-2_to_x4/error_frame6,-0.085398
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump1_x-2_to_x4/error_frame7,-0.084712
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump1_x-2_to_x4/error_frame8,-0.084076
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump1_x-2_to_x4/error_frame9,-0.083233
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump1_x-2_to_x4/error_frame10,-0.082274
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump1_x-2_to_x4/error_frame11,-0.081133
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump1_x-2_to_x4/error_frame12,-0.080477
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump1_x-2_to_x4/error_frame13,-0.078308
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump1_x-2_to_x4/error_frame14,-0.077581
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump1_x-2_to_x4/error_frame15,-0.077471
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump1_x-2_to_x4/error_frame16,-0.076698
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump1_x-2_to_x4/error_frame17,-0.075988
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump1_x-2_to_x4/error_frame18,-0.075919
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump1_x-2_to_x4/error_frame19,-0.074922
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump1_x-2_to_x4/error_frame20,-0.07424
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump1_x-2_to_x4/error_frame21,-0.073409
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump1_x-2_to_x4/error_frame22,-0.073111
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump1_x-2_to_x4/error_frame23,-0.072657
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump1_x-2_to_x4/error_frame24,-0.071776
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump1_x-2_to_x4/error_frame25,-0.071087
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump1_x-2_to_x4/error_frame26,-0.070131
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump1_x-2_to_x4/error_frame27,-0.069084
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump1_x-2_to_x4/error_frame28,-0.067697
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump1_x-2_to_x4/error_frame29,-0.067325
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump1_x-2_to_x4/error_frame30,-0.066808
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump1_x-2_to_x4/error_frame36,-0.063447
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump1_x-2_to_x4/error_frame42,-0.059002
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump1_x-2_to_x4/error_frame48,-0.055887
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump1_x-2_to_x4/error_frame54,-0.05355
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump1_x-2_to_x4/error_frame60,-0.050736
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump1_x-2_to_x4/error_frame66,-0.047374
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump1_x-2_to_x4/error_frame72,-0.045253
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump1_x-2_to_x4/error_frame78,-0.044214
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump1_x-2_to_x4/error_frame84,-0.043494
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump1_x-2_to_x4/error_frame90,-0.041641
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump1_x-2_to_x4/error_frame96,-0.040923
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump1_x-2_to_x4/error_frame102,-0.039805
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump1_x-2_to_x4/error_frame108,-0.038348
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump1_x-2_to_x4/error_frame114,-0.037584
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump1_x-2_to_x4/error_frame120,-0.037413
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump1_x-2_to_x4/error_frame126,-0.03665
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump1_x-2_to_x4/error_frame132,-0.035176
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump1_x-2_to_x4/error_frame138,-0.034599
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump1_x-2_to_x4/error_frame144,-0.034605
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump1_x-2_to_x4/error_frame150,-0.034057
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump1_x-2_to_x4/error_frame156,-0.033467
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump1_x-2_to_x4/error_frame162,-0.032984
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump1_x-2_to_x4/error_frame168,-0.033015
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump1_x-2_to_x4/error_frame174,-0.032825
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump1_x-2_to_x4/error_frame180,-0.032266
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump2_x4_to_x-2/grid_rule,ddgi
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump2_x4_to_x-2/brightness,gi_mean_luminance
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump2_x4_to_x-2/label,t2.10
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump2_x4_to_x-2/step_size,-0.05108
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump2_x4_to_x-2/first_frame_move,-0.0014614
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump2_x4_to_x-2/entered_frame,4
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump2_x4_to_x-2/settled_frame,4
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump2_x4_to_x-2/overshoot_share_of_step,0.022999
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump2_x4_to_x-2/settled_end_drift,-0.0021596
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump2_x4_to_x-2/settled_from_long_hold,1
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump2_x4_to_x-2/error_frame1,0.052289
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump2_x4_to_x-2/error_frame2,0.050666
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump2_x4_to_x-2/error_frame3,0.050046
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump2_x4_to_x-2/error_frame4,0.048654
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump2_x4_to_x-2/error_frame5,0.046912
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump2_x4_to_x-2/error_frame6,0.045139
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump2_x4_to_x-2/error_frame7,0.043761
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump2_x4_to_x-2/error_frame8,0.042669
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump2_x4_to_x-2/error_frame9,0.040839
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump2_x4_to_x-2/error_frame10,0.040334
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump2_x4_to_x-2/error_frame11,0.039134
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump2_x4_to_x-2/error_frame12,0.038375
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump2_x4_to_x-2/error_frame13,0.036957
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump2_x4_to_x-2/error_frame14,0.036484
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump2_x4_to_x-2/error_frame15,0.035425
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump2_x4_to_x-2/error_frame16,0.033896
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump2_x4_to_x-2/error_frame17,0.033587
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump2_x4_to_x-2/error_frame18,0.032725
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump2_x4_to_x-2/error_frame19,0.032388
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump2_x4_to_x-2/error_frame20,0.031242
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump2_x4_to_x-2/error_frame21,0.030929
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump2_x4_to_x-2/error_frame22,0.030244
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump2_x4_to_x-2/error_frame23,0.029586
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump2_x4_to_x-2/error_frame24,0.028975
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump2_x4_to_x-2/error_frame25,0.028483
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump2_x4_to_x-2/error_frame26,0.027972
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump2_x4_to_x-2/error_frame27,0.02787
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump2_x4_to_x-2/error_frame28,0.027114
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump2_x4_to_x-2/error_frame29,0.026758
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump2_x4_to_x-2/error_frame30,0.026133
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump2_x4_to_x-2/error_frame36,0.022331
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump2_x4_to_x-2/error_frame42,0.01783
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump2_x4_to_x-2/error_frame48,0.014034
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump2_x4_to_x-2/error_frame54,0.01169
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump2_x4_to_x-2/error_frame60,0.01107
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump2_x4_to_x-2/error_frame66,0.010199
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump2_x4_to_x-2/error_frame72,0.0094266
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump2_x4_to_x-2/error_frame78,0.0089003
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump2_x4_to_x-2/error_frame84,0.0065719
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump2_x4_to_x-2/error_frame90,0.0050041
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump2_x4_to_x-2/error_frame96,0.0058515
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump2_x4_to_x-2/error_frame102,0.0056015
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump2_x4_to_x-2/error_frame108,0.0044253
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump2_x4_to_x-2/error_frame114,0.0033089
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump2_x4_to_x-2/error_frame120,0.0032737
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump2_x4_to_x-2/error_frame126,0.0016429
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump2_x4_to_x-2/error_frame132,0.0023406
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump2_x4_to_x-2/error_frame138,0.0020277
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump2_x4_to_x-2/error_frame144,0.0027688
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump2_x4_to_x-2/error_frame150,0.0030423
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump2_x4_to_x-2/error_frame156,0.0019074
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump2_x4_to_x-2/error_frame162,0.00098242
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump2_x4_to_x-2/error_frame168,0.0013781
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump2_x4_to_x-2/error_frame174,0.00033992
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump2_x4_to_x-2/error_frame180,-0.001238
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump3_x-2_to_x4/grid_rule,ddgi
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump3_x-2_to_x4/brightness,gi_mean_luminance
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump3_x-2_to_x4/label,t2.10
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump3_x-2_to_x4/step_size,0.088672
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump3_x-2_to_x4/first_frame_move,-0.0018263
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump3_x-2_to_x4/entered_frame,50
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump3_x-2_to_x4/settled_frame,50
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump3_x-2_to_x4/overshoot_share_of_step,0
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump3_x-2_to_x4/settled_end_drift,0.0025017
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump3_x-2_to_x4/settled_from_long_hold,1
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump3_x-2_to_x4/error_frame1,-0.083127
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump3_x-2_to_x4/error_frame2,-0.082311
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump3_x-2_to_x4/error_frame3,-0.080942
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump3_x-2_to_x4/error_frame4,-0.079408
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump3_x-2_to_x4/error_frame5,-0.078314
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump3_x-2_to_x4/error_frame6,-0.077505
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump3_x-2_to_x4/error_frame7,-0.076651
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump3_x-2_to_x4/error_frame8,-0.076577
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump3_x-2_to_x4/error_frame9,-0.076326
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump3_x-2_to_x4/error_frame10,-0.075485
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump3_x-2_to_x4/error_frame11,-0.074711
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump3_x-2_to_x4/error_frame12,-0.073914
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump3_x-2_to_x4/error_frame13,-0.073317
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump3_x-2_to_x4/error_frame14,-0.072609
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump3_x-2_to_x4/error_frame15,-0.071587
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump3_x-2_to_x4/error_frame16,-0.070185
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump3_x-2_to_x4/error_frame17,-0.069208
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump3_x-2_to_x4/error_frame18,-0.068236
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump3_x-2_to_x4/error_frame19,-0.067641
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump3_x-2_to_x4/error_frame20,-0.067507
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump3_x-2_to_x4/error_frame21,-0.06657
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump3_x-2_to_x4/error_frame22,-0.06566
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump3_x-2_to_x4/error_frame23,-0.0647
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump3_x-2_to_x4/error_frame24,-0.064205
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump3_x-2_to_x4/error_frame25,-0.063806
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump3_x-2_to_x4/error_frame26,-0.062987
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump3_x-2_to_x4/error_frame27,-0.062429
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump3_x-2_to_x4/error_frame28,-0.061701
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump3_x-2_to_x4/error_frame29,-0.06069
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump3_x-2_to_x4/error_frame30,-0.060008
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump3_x-2_to_x4/error_frame36,-0.056212
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump3_x-2_to_x4/error_frame42,-0.053704
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump3_x-2_to_x4/error_frame48,-0.051249
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump3_x-2_to_x4/error_frame54,-0.048348
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump3_x-2_to_x4/error_frame60,-0.046049
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump3_x-2_to_x4/error_frame66,-0.04276
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump3_x-2_to_x4/error_frame72,-0.040158
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump3_x-2_to_x4/error_frame78,-0.038963
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump3_x-2_to_x4/error_frame84,-0.037401
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump3_x-2_to_x4/error_frame90,-0.035852
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump3_x-2_to_x4/error_frame96,-0.03507
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump3_x-2_to_x4/error_frame102,-0.034166
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump3_x-2_to_x4/error_frame108,-0.032697
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump3_x-2_to_x4/error_frame114,-0.032137
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump3_x-2_to_x4/error_frame120,-0.032386
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump3_x-2_to_x4/error_frame126,-0.030395
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump3_x-2_to_x4/error_frame132,-0.030042
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump3_x-2_to_x4/error_frame138,-0.029656
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump3_x-2_to_x4/error_frame144,-0.029089
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump3_x-2_to_x4/error_frame150,-0.028798
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump3_x-2_to_x4/error_frame156,-0.028425
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump3_x-2_to_x4/error_frame162,-0.027272
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump3_x-2_to_x4/error_frame168,-0.027212
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump3_x-2_to_x4/error_frame174,-0.025589
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run1/jump3_x-2_to_x4/error_frame180,-0.025457
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump1_x-2_to_x4/grid_rule,ddgi
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump1_x-2_to_x4/brightness,gi_mean_luminance
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump1_x-2_to_x4/label,t2.10
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump1_x-2_to_x4/step_size,0.096184
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump1_x-2_to_x4/first_frame_move,0.0024916
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump1_x-2_to_x4/entered_frame,59
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump1_x-2_to_x4/settled_frame,59
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump1_x-2_to_x4/overshoot_share_of_step,0
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump1_x-2_to_x4/settled_end_drift,-0.00088901
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump1_x-2_to_x4/settled_from_long_hold,1
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump1_x-2_to_x4/error_frame1,-0.085471
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump1_x-2_to_x4/error_frame2,-0.084953
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump1_x-2_to_x4/error_frame3,-0.084389
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump1_x-2_to_x4/error_frame4,-0.08372
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump1_x-2_to_x4/error_frame5,-0.083239
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump1_x-2_to_x4/error_frame6,-0.082279
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump1_x-2_to_x4/error_frame7,-0.081179
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump1_x-2_to_x4/error_frame8,-0.080192
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump1_x-2_to_x4/error_frame9,-0.07954
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump1_x-2_to_x4/error_frame10,-0.078282
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump1_x-2_to_x4/error_frame11,-0.077983
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump1_x-2_to_x4/error_frame12,-0.077737
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump1_x-2_to_x4/error_frame13,-0.077054
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump1_x-2_to_x4/error_frame14,-0.076511
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump1_x-2_to_x4/error_frame15,-0.075121
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump1_x-2_to_x4/error_frame16,-0.074391
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump1_x-2_to_x4/error_frame17,-0.074188
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump1_x-2_to_x4/error_frame18,-0.073564
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump1_x-2_to_x4/error_frame19,-0.072999
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump1_x-2_to_x4/error_frame20,-0.072302
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump1_x-2_to_x4/error_frame21,-0.071316
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump1_x-2_to_x4/error_frame22,-0.070562
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump1_x-2_to_x4/error_frame23,-0.069731
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump1_x-2_to_x4/error_frame24,-0.068949
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump1_x-2_to_x4/error_frame25,-0.068518
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump1_x-2_to_x4/error_frame26,-0.068482
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump1_x-2_to_x4/error_frame27,-0.06827
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump1_x-2_to_x4/error_frame28,-0.067393
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump1_x-2_to_x4/error_frame29,-0.067206
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump1_x-2_to_x4/error_frame30,-0.066942
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump1_x-2_to_x4/error_frame36,-0.063544
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump1_x-2_to_x4/error_frame42,-0.059825
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump1_x-2_to_x4/error_frame48,-0.057438
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump1_x-2_to_x4/error_frame54,-0.052965
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump1_x-2_to_x4/error_frame60,-0.049234
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump1_x-2_to_x4/error_frame66,-0.046986
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump1_x-2_to_x4/error_frame72,-0.046288
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump1_x-2_to_x4/error_frame78,-0.044155
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump1_x-2_to_x4/error_frame84,-0.042484
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump1_x-2_to_x4/error_frame90,-0.042082
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump1_x-2_to_x4/error_frame96,-0.040922
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump1_x-2_to_x4/error_frame102,-0.039228
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump1_x-2_to_x4/error_frame108,-0.037915
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump1_x-2_to_x4/error_frame114,-0.038392
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump1_x-2_to_x4/error_frame120,-0.037618
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump1_x-2_to_x4/error_frame126,-0.037406
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump1_x-2_to_x4/error_frame132,-0.036603
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump1_x-2_to_x4/error_frame138,-0.035829
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump1_x-2_to_x4/error_frame144,-0.03484
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump1_x-2_to_x4/error_frame150,-0.034521
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump1_x-2_to_x4/error_frame156,-0.03437
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump1_x-2_to_x4/error_frame162,-0.034193
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump1_x-2_to_x4/error_frame168,-0.035202
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump1_x-2_to_x4/error_frame174,-0.035855
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump1_x-2_to_x4/error_frame180,-0.03484
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump2_x4_to_x-2/grid_rule,ddgi
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump2_x4_to_x-2/brightness,gi_mean_luminance
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump2_x4_to_x-2/label,t2.10
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump2_x4_to_x-2/step_size,-0.049271
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump2_x4_to_x-2/first_frame_move,-0.0009913
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump2_x4_to_x-2/entered_frame,2
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump2_x4_to_x-2/settled_frame,2
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump2_x4_to_x-2/overshoot_share_of_step,0.017499
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump2_x4_to_x-2/settled_end_drift,-0.00082536
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump2_x4_to_x-2/settled_from_long_hold,1
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump2_x4_to_x-2/error_frame1,0.050782
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump2_x4_to_x-2/error_frame2,0.049203
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump2_x4_to_x-2/error_frame3,0.048335
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump2_x4_to_x-2/error_frame4,0.047833
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump2_x4_to_x-2/error_frame5,0.046338
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump2_x4_to_x-2/error_frame6,0.044935
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump2_x4_to_x-2/error_frame7,0.043428
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump2_x4_to_x-2/error_frame8,0.042489
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump2_x4_to_x-2/error_frame9,0.041564
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump2_x4_to_x-2/error_frame10,0.040233
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump2_x4_to_x-2/error_frame11,0.039212
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump2_x4_to_x-2/error_frame12,0.037703
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump2_x4_to_x-2/error_frame13,0.036715
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump2_x4_to_x-2/error_frame14,0.035348
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump2_x4_to_x-2/error_frame15,0.034213
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump2_x4_to_x-2/error_frame16,0.032806
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump2_x4_to_x-2/error_frame17,0.032101
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump2_x4_to_x-2/error_frame18,0.030972
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump2_x4_to_x-2/error_frame19,0.029986
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump2_x4_to_x-2/error_frame20,0.028535
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump2_x4_to_x-2/error_frame21,0.027791
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump2_x4_to_x-2/error_frame22,0.027125
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump2_x4_to_x-2/error_frame23,0.026071
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump2_x4_to_x-2/error_frame24,0.025554
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump2_x4_to_x-2/error_frame25,0.024448
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump2_x4_to_x-2/error_frame26,0.023543
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump2_x4_to_x-2/error_frame27,0.023063
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump2_x4_to_x-2/error_frame28,0.022265
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump2_x4_to_x-2/error_frame29,0.021878
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump2_x4_to_x-2/error_frame30,0.021188
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump2_x4_to_x-2/error_frame36,0.016611
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump2_x4_to_x-2/error_frame42,0.014556
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump2_x4_to_x-2/error_frame48,0.012994
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump2_x4_to_x-2/error_frame54,0.010512
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump2_x4_to_x-2/error_frame60,0.0089652
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump2_x4_to_x-2/error_frame66,0.0076372
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump2_x4_to_x-2/error_frame72,0.0074973
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump2_x4_to_x-2/error_frame78,0.0079512
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump2_x4_to_x-2/error_frame84,0.0059185
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump2_x4_to_x-2/error_frame90,0.0048927
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump2_x4_to_x-2/error_frame96,0.0031505
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump2_x4_to_x-2/error_frame102,0.0044617
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump2_x4_to_x-2/error_frame108,0.0034399
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump2_x4_to_x-2/error_frame114,0.0020559
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump2_x4_to_x-2/error_frame120,0.0018816
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump2_x4_to_x-2/error_frame126,0.0017572
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump2_x4_to_x-2/error_frame132,0.00099706
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump2_x4_to_x-2/error_frame138,0.0012251
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump2_x4_to_x-2/error_frame144,0.00055973
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump2_x4_to_x-2/error_frame150,0.0003786
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump2_x4_to_x-2/error_frame156,0.00029982
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump2_x4_to_x-2/error_frame162,-0.00045203
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump2_x4_to_x-2/error_frame168,-0.00046607
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump2_x4_to_x-2/error_frame174,-0.00090686
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump2_x4_to_x-2/error_frame180,-0.00078178
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump3_x-2_to_x4/grid_rule,ddgi
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump3_x-2_to_x4/brightness,gi_mean_luminance
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump3_x-2_to_x4/label,t2.10
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump3_x-2_to_x4/step_size,0.090106
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump3_x-2_to_x4/first_frame_move,0.00016807
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump3_x-2_to_x4/entered_frame,45
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump3_x-2_to_x4/settled_frame,45
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump3_x-2_to_x4/overshoot_share_of_step,0
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump3_x-2_to_x4/settled_end_drift,0.00056241
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump3_x-2_to_x4/settled_from_long_hold,1
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump3_x-2_to_x4/error_frame1,-0.082504
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump3_x-2_to_x4/error_frame2,-0.081968
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump3_x-2_to_x4/error_frame3,-0.08075
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump3_x-2_to_x4/error_frame4,-0.079539
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump3_x-2_to_x4/error_frame5,-0.078382
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump3_x-2_to_x4/error_frame6,-0.077144
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump3_x-2_to_x4/error_frame7,-0.076362
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump3_x-2_to_x4/error_frame8,-0.075841
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump3_x-2_to_x4/error_frame9,-0.075389
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump3_x-2_to_x4/error_frame10,-0.074769
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump3_x-2_to_x4/error_frame11,-0.073799
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump3_x-2_to_x4/error_frame12,-0.072878
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump3_x-2_to_x4/error_frame13,-0.071965
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump3_x-2_to_x4/error_frame14,-0.070955
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump3_x-2_to_x4/error_frame15,-0.069006
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump3_x-2_to_x4/error_frame16,-0.068151
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump3_x-2_to_x4/error_frame17,-0.067062
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump3_x-2_to_x4/error_frame18,-0.066262
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump3_x-2_to_x4/error_frame19,-0.065251
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump3_x-2_to_x4/error_frame20,-0.06503
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump3_x-2_to_x4/error_frame21,-0.064594
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump3_x-2_to_x4/error_frame22,-0.063965
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump3_x-2_to_x4/error_frame23,-0.063036
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump3_x-2_to_x4/error_frame24,-0.062591
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump3_x-2_to_x4/error_frame25,-0.061559
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump3_x-2_to_x4/error_frame26,-0.060803
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump3_x-2_to_x4/error_frame27,-0.059906
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump3_x-2_to_x4/error_frame28,-0.059057
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump3_x-2_to_x4/error_frame29,-0.058437
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump3_x-2_to_x4/error_frame30,-0.057626
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump3_x-2_to_x4/error_frame36,-0.054235
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump3_x-2_to_x4/error_frame42,-0.051526
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump3_x-2_to_x4/error_frame48,-0.04907
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump3_x-2_to_x4/error_frame54,-0.046158
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump3_x-2_to_x4/error_frame60,-0.044419
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump3_x-2_to_x4/error_frame66,-0.042135
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump3_x-2_to_x4/error_frame72,-0.039618
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump3_x-2_to_x4/error_frame78,-0.038188
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump3_x-2_to_x4/error_frame84,-0.037361
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump3_x-2_to_x4/error_frame90,-0.03565
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump3_x-2_to_x4/error_frame96,-0.034061
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump3_x-2_to_x4/error_frame102,-0.032525
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump3_x-2_to_x4/error_frame108,-0.031954
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump3_x-2_to_x4/error_frame114,-0.031508
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump3_x-2_to_x4/error_frame120,-0.031212
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump3_x-2_to_x4/error_frame126,-0.030502
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump3_x-2_to_x4/error_frame132,-0.029182
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump3_x-2_to_x4/error_frame138,-0.028723
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump3_x-2_to_x4/error_frame144,-0.028812
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump3_x-2_to_x4/error_frame150,-0.027229
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump3_x-2_to_x4/error_frame156,-0.026465
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump3_x-2_to_x4/error_frame162,-0.026569
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump3_x-2_to_x4/error_frame168,-0.026819
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump3_x-2_to_x4/error_frame174,-0.02635
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run2/jump3_x-2_to_x4/error_frame180,-0.026038
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump1_x-2_to_x4/grid_rule,ddgi
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump1_x-2_to_x4/brightness,gi_mean_luminance
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump1_x-2_to_x4/label,t2.10
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump1_x-2_to_x4/step_size,0.096779
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump1_x-2_to_x4/first_frame_move,0.0011835
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump1_x-2_to_x4/entered_frame,61
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump1_x-2_to_x4/settled_frame,61
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump1_x-2_to_x4/overshoot_share_of_step,0
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump1_x-2_to_x4/settled_end_drift,0.0019589
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump1_x-2_to_x4/settled_from_long_hold,1
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump1_x-2_to_x4/error_frame1,-0.08716
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump1_x-2_to_x4/error_frame2,-0.085689
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump1_x-2_to_x4/error_frame3,-0.084912
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump1_x-2_to_x4/error_frame4,-0.083738
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump1_x-2_to_x4/error_frame5,-0.082458
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump1_x-2_to_x4/error_frame6,-0.081086
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump1_x-2_to_x4/error_frame7,-0.080322
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump1_x-2_to_x4/error_frame8,-0.079198
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump1_x-2_to_x4/error_frame9,-0.078417
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump1_x-2_to_x4/error_frame10,-0.077301
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump1_x-2_to_x4/error_frame11,-0.076109
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump1_x-2_to_x4/error_frame12,-0.075765
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump1_x-2_to_x4/error_frame13,-0.07489
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump1_x-2_to_x4/error_frame14,-0.074441
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump1_x-2_to_x4/error_frame15,-0.073675
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump1_x-2_to_x4/error_frame16,-0.072654
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump1_x-2_to_x4/error_frame17,-0.071711
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump1_x-2_to_x4/error_frame18,-0.071373
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump1_x-2_to_x4/error_frame19,-0.070273
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump1_x-2_to_x4/error_frame20,-0.069393
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump1_x-2_to_x4/error_frame21,-0.068669
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump1_x-2_to_x4/error_frame22,-0.06826
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump1_x-2_to_x4/error_frame23,-0.067566
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump1_x-2_to_x4/error_frame24,-0.067299
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump1_x-2_to_x4/error_frame25,-0.066455
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump1_x-2_to_x4/error_frame26,-0.065249
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump1_x-2_to_x4/error_frame27,-0.064709
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump1_x-2_to_x4/error_frame28,-0.063823
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump1_x-2_to_x4/error_frame29,-0.063477
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump1_x-2_to_x4/error_frame30,-0.062831
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump1_x-2_to_x4/error_frame36,-0.059867
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump1_x-2_to_x4/error_frame42,-0.056649
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump1_x-2_to_x4/error_frame48,-0.054913
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump1_x-2_to_x4/error_frame54,-0.052227
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump1_x-2_to_x4/error_frame60,-0.05041
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump1_x-2_to_x4/error_frame66,-0.047941
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump1_x-2_to_x4/error_frame72,-0.04585
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump1_x-2_to_x4/error_frame78,-0.043103
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump1_x-2_to_x4/error_frame84,-0.042245
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump1_x-2_to_x4/error_frame90,-0.040543
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump1_x-2_to_x4/error_frame96,-0.038244
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump1_x-2_to_x4/error_frame102,-0.037436
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump1_x-2_to_x4/error_frame108,-0.035999
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump1_x-2_to_x4/error_frame114,-0.035322
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump1_x-2_to_x4/error_frame120,-0.034655
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump1_x-2_to_x4/error_frame126,-0.035038
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump1_x-2_to_x4/error_frame132,-0.035299
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump1_x-2_to_x4/error_frame138,-0.035055
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump1_x-2_to_x4/error_frame144,-0.035279
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump1_x-2_to_x4/error_frame150,-0.035664
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump1_x-2_to_x4/error_frame156,-0.0354
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump1_x-2_to_x4/error_frame162,-0.034215
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump1_x-2_to_x4/error_frame168,-0.033934
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump1_x-2_to_x4/error_frame174,-0.033294
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump1_x-2_to_x4/error_frame180,-0.032488
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump2_x4_to_x-2/grid_rule,ddgi
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump2_x4_to_x-2/brightness,gi_mean_luminance
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump2_x4_to_x-2/label,t2.10
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump2_x4_to_x-2/step_size,-0.049889
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump2_x4_to_x-2/first_frame_move,0.00077761
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump2_x4_to_x-2/entered_frame,5
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump2_x4_to_x-2/settled_frame,5
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump2_x4_to_x-2/overshoot_share_of_step,0
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump2_x4_to_x-2/settled_end_drift,-0.0017653
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump2_x4_to_x-2/settled_from_long_hold,1
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump2_x4_to_x-2/error_frame1,0.053327
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump2_x4_to_x-2/error_frame2,0.052139
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump2_x4_to_x-2/error_frame3,0.051496
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump2_x4_to_x-2/error_frame4,0.050536
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump2_x4_to_x-2/error_frame5,0.048698
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump2_x4_to_x-2/error_frame6,0.047584
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump2_x4_to_x-2/error_frame7,0.0465
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump2_x4_to_x-2/error_frame8,0.044826
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump2_x4_to_x-2/error_frame9,0.044411
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump2_x4_to_x-2/error_frame10,0.043215
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump2_x4_to_x-2/error_frame11,0.042314
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump2_x4_to_x-2/error_frame12,0.041652
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump2_x4_to_x-2/error_frame13,0.040753
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump2_x4_to_x-2/error_frame14,0.039178
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump2_x4_to_x-2/error_frame15,0.038417
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump2_x4_to_x-2/error_frame16,0.03731
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump2_x4_to_x-2/error_frame17,0.036846
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump2_x4_to_x-2/error_frame18,0.037424
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump2_x4_to_x-2/error_frame19,0.035833
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump2_x4_to_x-2/error_frame20,0.035344
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump2_x4_to_x-2/error_frame21,0.034983
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump2_x4_to_x-2/error_frame22,0.034374
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump2_x4_to_x-2/error_frame23,0.033241
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump2_x4_to_x-2/error_frame24,0.032301
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump2_x4_to_x-2/error_frame25,0.031987
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump2_x4_to_x-2/error_frame26,0.031602
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump2_x4_to_x-2/error_frame27,0.031076
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump2_x4_to_x-2/error_frame28,0.030538
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump2_x4_to_x-2/error_frame29,0.029288
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump2_x4_to_x-2/error_frame30,0.028271
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump2_x4_to_x-2/error_frame36,0.024292
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump2_x4_to_x-2/error_frame42,0.021226
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump2_x4_to_x-2/error_frame48,0.01831
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump2_x4_to_x-2/error_frame54,0.01524
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump2_x4_to_x-2/error_frame60,0.01292
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump2_x4_to_x-2/error_frame66,0.010893
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump2_x4_to_x-2/error_frame72,0.0085739
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump2_x4_to_x-2/error_frame78,0.0082369
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump2_x4_to_x-2/error_frame84,0.0067047
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump2_x4_to_x-2/error_frame90,0.0063398
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump2_x4_to_x-2/error_frame96,0.0055767
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump2_x4_to_x-2/error_frame102,0.0052614
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump2_x4_to_x-2/error_frame108,0.0047938
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump2_x4_to_x-2/error_frame114,0.0046942
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump2_x4_to_x-2/error_frame120,0.0047887
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump2_x4_to_x-2/error_frame126,0.0047041
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump2_x4_to_x-2/error_frame132,0.0031161
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump2_x4_to_x-2/error_frame138,0.0020031
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump2_x4_to_x-2/error_frame144,0.0026237
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump2_x4_to_x-2/error_frame150,0.0026499
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump2_x4_to_x-2/error_frame156,0.0035828
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump2_x4_to_x-2/error_frame162,0.0029936
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump2_x4_to_x-2/error_frame168,0.0012645
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump2_x4_to_x-2/error_frame174,0.00073704
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump2_x4_to_x-2/error_frame180,0.0012526
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump3_x-2_to_x4/grid_rule,ddgi
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump3_x-2_to_x4/brightness,gi_mean_luminance
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump3_x-2_to_x4/label,t2.10
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump3_x-2_to_x4/step_size,0.087542
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump3_x-2_to_x4/first_frame_move,0.00026915
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump3_x-2_to_x4/entered_frame,44
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump3_x-2_to_x4/settled_frame,44
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump3_x-2_to_x4/overshoot_share_of_step,0
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump3_x-2_to_x4/settled_end_drift,0.0016651
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump3_x-2_to_x4/settled_from_long_hold,1
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump3_x-2_to_x4/error_frame1,-0.080248
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump3_x-2_to_x4/error_frame2,-0.079286
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump3_x-2_to_x4/error_frame3,-0.078439
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump3_x-2_to_x4/error_frame4,-0.077679
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump3_x-2_to_x4/error_frame5,-0.076725
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump3_x-2_to_x4/error_frame6,-0.075621
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump3_x-2_to_x4/error_frame7,-0.07446
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump3_x-2_to_x4/error_frame8,-0.074314
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump3_x-2_to_x4/error_frame9,-0.073227
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump3_x-2_to_x4/error_frame10,-0.07216
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump3_x-2_to_x4/error_frame11,-0.071411
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump3_x-2_to_x4/error_frame12,-0.070206
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump3_x-2_to_x4/error_frame13,-0.069875
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump3_x-2_to_x4/error_frame14,-0.068892
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump3_x-2_to_x4/error_frame15,-0.068267
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump3_x-2_to_x4/error_frame16,-0.067529
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump3_x-2_to_x4/error_frame17,-0.066785
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump3_x-2_to_x4/error_frame18,-0.065778
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump3_x-2_to_x4/error_frame19,-0.064337
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump3_x-2_to_x4/error_frame20,-0.064274
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump3_x-2_to_x4/error_frame21,-0.063904
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump3_x-2_to_x4/error_frame22,-0.063552
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump3_x-2_to_x4/error_frame23,-0.06276
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump3_x-2_to_x4/error_frame24,-0.061729
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump3_x-2_to_x4/error_frame25,-0.061003
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump3_x-2_to_x4/error_frame26,-0.0606
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump3_x-2_to_x4/error_frame27,-0.060064
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump3_x-2_to_x4/error_frame28,-0.05937
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump3_x-2_to_x4/error_frame29,-0.058815
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump3_x-2_to_x4/error_frame30,-0.057669
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump3_x-2_to_x4/error_frame36,-0.053291
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump3_x-2_to_x4/error_frame42,-0.050558
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump3_x-2_to_x4/error_frame48,-0.048514
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump3_x-2_to_x4/error_frame54,-0.046586
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump3_x-2_to_x4/error_frame60,-0.045293
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump3_x-2_to_x4/error_frame66,-0.044111
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump3_x-2_to_x4/error_frame72,-0.04185
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump3_x-2_to_x4/error_frame78,-0.04003
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump3_x-2_to_x4/error_frame84,-0.038758
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump3_x-2_to_x4/error_frame90,-0.037904
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump3_x-2_to_x4/error_frame96,-0.037228
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump3_x-2_to_x4/error_frame102,-0.035518
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump3_x-2_to_x4/error_frame108,-0.034019
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump3_x-2_to_x4/error_frame114,-0.033261
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump3_x-2_to_x4/error_frame120,-0.032251
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump3_x-2_to_x4/error_frame126,-0.032584
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump3_x-2_to_x4/error_frame132,-0.031712
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump3_x-2_to_x4/error_frame138,-0.031222
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump3_x-2_to_x4/error_frame144,-0.030676
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump3_x-2_to_x4/error_frame150,-0.030328
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump3_x-2_to_x4/error_frame156,-0.029487
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump3_x-2_to_x4/error_frame162,-0.027941
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump3_x-2_to_x4/error_frame168,-0.028863
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump3_x-2_to_x4/error_frame174,-0.027656
+2026-11-08,350f9de,RTX 3060 Laptop,native,sponza,response/native/light-step/grid_ddgi/lamp_lit/run3/jump3_x-2_to_x4/error_frame180,-0.028244
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump1_x-2_to_x4/grid_rule,ddgi
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump1_x-2_to_x4/brightness,gi_mean
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump1_x-2_to_x4/probes_per_frame_median,129
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump1_x-2_to_x4/frame_interval_mean_ms,16.76
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump1_x-2_to_x4/label,t2.10
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump1_x-2_to_x4/step_size,0.092418
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump1_x-2_to_x4/first_frame_move,-0.000070228
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump1_x-2_to_x4/entered_frame,19
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump1_x-2_to_x4/settled_frame,19
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump1_x-2_to_x4/overshoot_share_of_step,0.077518
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump1_x-2_to_x4/settled_end_drift,0.00030508
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump1_x-2_to_x4/settled_from_long_hold,1
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump1_x-2_to_x4/error_frame1,-0.084663
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump1_x-2_to_x4/error_frame2,-0.08465
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump1_x-2_to_x4/error_frame3,-0.084635
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump1_x-2_to_x4/error_frame4,-0.08461
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump1_x-2_to_x4/error_frame5,-0.084877
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump1_x-2_to_x4/error_frame6,-0.084956
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump1_x-2_to_x4/error_frame7,-0.084956
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump1_x-2_to_x4/error_frame8,-0.084956
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump1_x-2_to_x4/error_frame9,-0.081014
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump1_x-2_to_x4/error_frame10,-0.054464
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump1_x-2_to_x4/error_frame11,-0.054704
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump1_x-2_to_x4/error_frame12,-0.052731
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump1_x-2_to_x4/error_frame13,-0.051711
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump1_x-2_to_x4/error_frame14,-0.051711
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump1_x-2_to_x4/error_frame15,-0.051711
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump1_x-2_to_x4/error_frame16,-0.051676
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump1_x-2_to_x4/error_frame17,-0.051677
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump1_x-2_to_x4/error_frame18,-0.051677
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump1_x-2_to_x4/error_frame19,-0.04499
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump1_x-2_to_x4/error_frame20,-0.039597
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump1_x-2_to_x4/error_frame21,-0.036934
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump1_x-2_to_x4/error_frame22,-0.03937
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump1_x-2_to_x4/error_frame23,-0.0373
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump1_x-2_to_x4/error_frame24,-0.029397
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump1_x-2_to_x4/error_frame25,-0.028171
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump1_x-2_to_x4/error_frame26,-0.032471
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump1_x-2_to_x4/error_frame27,-0.027184
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump1_x-2_to_x4/error_frame28,-0.020666
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump1_x-2_to_x4/error_frame29,-0.024197
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump1_x-2_to_x4/error_frame30,-0.0216
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump1_x-2_to_x4/error_frame36,-0.024681
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump1_x-2_to_x4/error_frame42,-0.033477
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump1_x-2_to_x4/error_frame48,-0.0029014
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump1_x-2_to_x4/error_frame54,-0.0013108
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump1_x-2_to_x4/error_frame60,0.0010658
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump1_x-2_to_x4/error_frame66,0.006558
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump1_x-2_to_x4/error_frame72,-0.0014282
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump1_x-2_to_x4/error_frame78,-0.0021246
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump1_x-2_to_x4/error_frame84,-0.0015126
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump1_x-2_to_x4/error_frame90,-0.00019083
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump1_x-2_to_x4/error_frame96,-0.00015611
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump1_x-2_to_x4/error_frame102,-0.0012853
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump1_x-2_to_x4/error_frame108,0.00038046
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump1_x-2_to_x4/error_frame114,-0.000061116
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump1_x-2_to_x4/error_frame120,-0.00027175
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump1_x-2_to_x4/error_frame126,-0.0016763
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump1_x-2_to_x4/error_frame132,-0.0022732
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump1_x-2_to_x4/error_frame138,-0.0030783
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump1_x-2_to_x4/error_frame144,-0.0034161
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump1_x-2_to_x4/error_frame150,-0.002705
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump1_x-2_to_x4/error_frame156,-0.0037077
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump1_x-2_to_x4/error_frame162,-0.0022656
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump1_x-2_to_x4/error_frame168,-0.0028174
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump1_x-2_to_x4/error_frame174,-0.0036926
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump1_x-2_to_x4/error_frame180,-0.0027606
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump2_x4_to_x-2/grid_rule,ddgi
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump2_x4_to_x-2/brightness,gi_mean
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump2_x4_to_x-2/probes_per_frame_median,129
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump2_x4_to_x-2/frame_interval_mean_ms,16.76
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump2_x4_to_x-2/label,t2.10
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump2_x4_to_x-2/step_size,-0.075291
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump2_x4_to_x-2/first_frame_move,-0.041345
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump2_x4_to_x-2/entered_frame,1
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump2_x4_to_x-2/settled_frame,1
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump2_x4_to_x-2/overshoot_share_of_step,0.13006
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump2_x4_to_x-2/settled_end_drift,0.00027752
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump2_x4_to_x-2/settled_from_long_hold,1
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump2_x4_to_x-2/error_frame1,0.036709
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump2_x4_to_x-2/error_frame2,0.020444
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump2_x4_to_x-2/error_frame3,0.037712
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump2_x4_to_x-2/error_frame4,0.027621
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump2_x4_to_x-2/error_frame5,0.027621
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump2_x4_to_x-2/error_frame6,0.027581
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump2_x4_to_x-2/error_frame7,0.027684
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump2_x4_to_x-2/error_frame8,0.01886
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump2_x4_to_x-2/error_frame9,0.013371
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump2_x4_to_x-2/error_frame10,0.017028
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump2_x4_to_x-2/error_frame11,0.014974
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump2_x4_to_x-2/error_frame12,0.014663
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump2_x4_to_x-2/error_frame13,0.0044414
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump2_x4_to_x-2/error_frame14,0.007782
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump2_x4_to_x-2/error_frame15,-0.0019265
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump2_x4_to_x-2/error_frame16,0.0025962
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump2_x4_to_x-2/error_frame17,-0.00015335
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump2_x4_to_x-2/error_frame18,-0.00012244
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump2_x4_to_x-2/error_frame19,-0.00075417
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump2_x4_to_x-2/error_frame20,-0.0009729
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump2_x4_to_x-2/error_frame21,-0.0026247
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump2_x4_to_x-2/error_frame22,-0.0026182
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump2_x4_to_x-2/error_frame23,-0.0057437
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump2_x4_to_x-2/error_frame24,-0.01059
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump2_x4_to_x-2/error_frame25,-0.0092231
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump2_x4_to_x-2/error_frame26,-0.00061767
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump2_x4_to_x-2/error_frame27,0.00023712
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump2_x4_to_x-2/error_frame28,0.019617
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump2_x4_to_x-2/error_frame29,0.0083483
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump2_x4_to_x-2/error_frame30,0.0029796
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump2_x4_to_x-2/error_frame36,0.0042459
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump2_x4_to_x-2/error_frame42,-0.0079639
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump2_x4_to_x-2/error_frame48,0.00019535
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump2_x4_to_x-2/error_frame54,0.0026985
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump2_x4_to_x-2/error_frame60,0.0011748
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump2_x4_to_x-2/error_frame66,0.0055814
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump2_x4_to_x-2/error_frame72,0.004958
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump2_x4_to_x-2/error_frame78,0.0055123
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump2_x4_to_x-2/error_frame84,0.0056669
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump2_x4_to_x-2/error_frame90,0.0058917
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump2_x4_to_x-2/error_frame96,0.0040673
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump2_x4_to_x-2/error_frame102,0.0041624
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump2_x4_to_x-2/error_frame108,0.0026192
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump2_x4_to_x-2/error_frame114,0.0022969
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump2_x4_to_x-2/error_frame120,0.0012804
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump2_x4_to_x-2/error_frame126,0.001878
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump2_x4_to_x-2/error_frame132,0.000066654
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump2_x4_to_x-2/error_frame138,0.00060222
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump2_x4_to_x-2/error_frame144,-0.0010047
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump2_x4_to_x-2/error_frame150,-0.0041355
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump2_x4_to_x-2/error_frame156,-0.001483
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump2_x4_to_x-2/error_frame162,-0.0024377
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump2_x4_to_x-2/error_frame168,-0.0018414
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump2_x4_to_x-2/error_frame174,-0.0020541
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump2_x4_to_x-2/error_frame180,-0.0017814
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump3_x-2_to_x4/grid_rule,ddgi
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump3_x-2_to_x4/brightness,gi_mean
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump3_x-2_to_x4/probes_per_frame_median,129
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump3_x-2_to_x4/frame_interval_mean_ms,16.76
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump3_x-2_to_x4/label,t2.10
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump3_x-2_to_x4/step_size,0.087128
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump3_x-2_to_x4/first_frame_move,0.00011802
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump3_x-2_to_x4/entered_frame,10
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump3_x-2_to_x4/settled_frame,10
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump3_x-2_to_x4/overshoot_share_of_step,0.25292
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump3_x-2_to_x4/settled_end_drift,0.00043293
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump3_x-2_to_x4/settled_from_long_hold,1
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump3_x-2_to_x4/error_frame1,-0.080037
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump3_x-2_to_x4/error_frame2,-0.080081
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump3_x-2_to_x4/error_frame3,-0.080089
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump3_x-2_to_x4/error_frame4,-0.080088
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump3_x-2_to_x4/error_frame5,-0.080032
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump3_x-2_to_x4/error_frame6,-0.079467
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump3_x-2_to_x4/error_frame7,-0.079468
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump3_x-2_to_x4/error_frame8,-0.075087
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump3_x-2_to_x4/error_frame9,-0.075348
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump3_x-2_to_x4/error_frame10,-0.046818
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump3_x-2_to_x4/error_frame11,-0.046552
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump3_x-2_to_x4/error_frame12,-0.046572
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump3_x-2_to_x4/error_frame13,-0.045808
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump3_x-2_to_x4/error_frame14,-0.045808
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump3_x-2_to_x4/error_frame15,-0.044036
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump3_x-2_to_x4/error_frame16,-0.044036
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump3_x-2_to_x4/error_frame17,-0.044036
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump3_x-2_to_x4/error_frame18,-0.040546
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump3_x-2_to_x4/error_frame19,-0.037437
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump3_x-2_to_x4/error_frame20,-0.030239
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump3_x-2_to_x4/error_frame21,-0.029777
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump3_x-2_to_x4/error_frame22,-0.031235
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump3_x-2_to_x4/error_frame23,-0.031303
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump3_x-2_to_x4/error_frame24,-0.029955
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump3_x-2_to_x4/error_frame25,-0.031644
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump3_x-2_to_x4/error_frame26,-0.033159
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump3_x-2_to_x4/error_frame27,-0.024403
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump3_x-2_to_x4/error_frame28,-0.021432
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump3_x-2_to_x4/error_frame29,-0.027321
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump3_x-2_to_x4/error_frame30,-0.025513
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump3_x-2_to_x4/error_frame36,-0.024151
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump3_x-2_to_x4/error_frame42,-0.0042839
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump3_x-2_to_x4/error_frame48,0.0055047
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump3_x-2_to_x4/error_frame54,0.0035468
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump3_x-2_to_x4/error_frame60,-0.0017019
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump3_x-2_to_x4/error_frame66,-0.0013737
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump3_x-2_to_x4/error_frame72,-0.00017069
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump3_x-2_to_x4/error_frame78,-0.0013078
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump3_x-2_to_x4/error_frame84,-0.00074354
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump3_x-2_to_x4/error_frame90,-0.00073525
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump3_x-2_to_x4/error_frame96,0.00059665
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump3_x-2_to_x4/error_frame102,0.0012117
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump3_x-2_to_x4/error_frame108,0.00039365
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump3_x-2_to_x4/error_frame114,0.00096774
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump3_x-2_to_x4/error_frame120,0.00097845
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump3_x-2_to_x4/error_frame126,0.0014145
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump3_x-2_to_x4/error_frame132,0.0010594
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump3_x-2_to_x4/error_frame138,-0.00057311
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump3_x-2_to_x4/error_frame144,0.00054375
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump3_x-2_to_x4/error_frame150,0.00083955
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump3_x-2_to_x4/error_frame156,0.00086961
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump3_x-2_to_x4/error_frame162,0.001439
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump3_x-2_to_x4/error_frame168,0.001807
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump3_x-2_to_x4/error_frame174,0.0022803
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run1/jump3_x-2_to_x4/error_frame180,0.00069502
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump1_x-2_to_x4/grid_rule,ddgi
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump1_x-2_to_x4/brightness,gi_mean
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump1_x-2_to_x4/probes_per_frame_median,123
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump1_x-2_to_x4/frame_interval_mean_ms,16.68
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump1_x-2_to_x4/label,t2.10
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump1_x-2_to_x4/step_size,0.087484
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump1_x-2_to_x4/first_frame_move,-0.00076833
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump1_x-2_to_x4/entered_frame,11
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump1_x-2_to_x4/settled_frame,11
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump1_x-2_to_x4/overshoot_share_of_step,0.4247
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump1_x-2_to_x4/settled_end_drift,-0.0032336
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump1_x-2_to_x4/settled_from_long_hold,1
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump1_x-2_to_x4/error_frame1,-0.081153
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump1_x-2_to_x4/error_frame2,-0.081197
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump1_x-2_to_x4/error_frame3,-0.081189
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump1_x-2_to_x4/error_frame4,-0.081141
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump1_x-2_to_x4/error_frame5,-0.080782
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump1_x-2_to_x4/error_frame6,-0.080782
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump1_x-2_to_x4/error_frame7,-0.080768
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump1_x-2_to_x4/error_frame8,-0.08131
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump1_x-2_to_x4/error_frame9,-0.077566
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump1_x-2_to_x4/error_frame10,-0.077576
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump1_x-2_to_x4/error_frame11,-0.048372
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump1_x-2_to_x4/error_frame12,-0.047517
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump1_x-2_to_x4/error_frame13,-0.046983
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump1_x-2_to_x4/error_frame14,-0.04707
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump1_x-2_to_x4/error_frame15,-0.04709
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump1_x-2_to_x4/error_frame16,-0.047089
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump1_x-2_to_x4/error_frame17,-0.04709
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump1_x-2_to_x4/error_frame18,-0.047073
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump1_x-2_to_x4/error_frame19,-0.043915
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump1_x-2_to_x4/error_frame20,-0.043771
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump1_x-2_to_x4/error_frame21,-0.040327
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump1_x-2_to_x4/error_frame22,-0.035948
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump1_x-2_to_x4/error_frame23,-0.035642
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump1_x-2_to_x4/error_frame24,-0.028788
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump1_x-2_to_x4/error_frame25,-0.027225
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump1_x-2_to_x4/error_frame26,-0.02566
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump1_x-2_to_x4/error_frame27,-0.028727
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump1_x-2_to_x4/error_frame28,-0.027248
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump1_x-2_to_x4/error_frame29,-0.023775
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump1_x-2_to_x4/error_frame30,-0.021707
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump1_x-2_to_x4/error_frame36,-0.017189
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump1_x-2_to_x4/error_frame42,0.019145
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump1_x-2_to_x4/error_frame48,0.029601
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump1_x-2_to_x4/error_frame54,0.017469
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump1_x-2_to_x4/error_frame60,0.020359
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump1_x-2_to_x4/error_frame66,0.021725
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump1_x-2_to_x4/error_frame72,0.018996
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump1_x-2_to_x4/error_frame78,0.015173
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump1_x-2_to_x4/error_frame84,0.014359
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump1_x-2_to_x4/error_frame90,0.015127
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump1_x-2_to_x4/error_frame96,0.014241
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump1_x-2_to_x4/error_frame102,0.014558
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump1_x-2_to_x4/error_frame108,0.014471
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump1_x-2_to_x4/error_frame114,0.015084
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump1_x-2_to_x4/error_frame120,0.01443
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump1_x-2_to_x4/error_frame126,0.013725
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump1_x-2_to_x4/error_frame132,0.011766
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump1_x-2_to_x4/error_frame138,0.012285
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump1_x-2_to_x4/error_frame144,0.011811
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump1_x-2_to_x4/error_frame150,0.011426
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump1_x-2_to_x4/error_frame156,0.01265
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump1_x-2_to_x4/error_frame162,0.012497
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump1_x-2_to_x4/error_frame168,0.0091684
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump1_x-2_to_x4/error_frame174,0.0091468
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump1_x-2_to_x4/error_frame180,0.0073889
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump2_x4_to_x-2/grid_rule,ddgi
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump2_x4_to_x-2/brightness,gi_mean
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump2_x4_to_x-2/probes_per_frame_median,123
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump2_x4_to_x-2/frame_interval_mean_ms,16.68
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump2_x4_to_x-2/label,t2.10
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump2_x4_to_x-2/step_size,-0.087686
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump2_x4_to_x-2/first_frame_move,-0.044782
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump2_x4_to_x-2/entered_frame,1
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump2_x4_to_x-2/settled_frame,1
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump2_x4_to_x-2/overshoot_share_of_step,0.10171
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump2_x4_to_x-2/settled_end_drift,0.000013591
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump2_x4_to_x-2/settled_from_long_hold,1
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump2_x4_to_x-2/error_frame1,0.047028
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump2_x4_to_x-2/error_frame2,0.046553
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump2_x4_to_x-2/error_frame3,0.036715
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump2_x4_to_x-2/error_frame4,0.042352
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump2_x4_to_x-2/error_frame5,0.042352
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump2_x4_to_x-2/error_frame6,0.042351
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump2_x4_to_x-2/error_frame7,0.042351
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump2_x4_to_x-2/error_frame8,0.038725
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump2_x4_to_x-2/error_frame9,0.024628
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump2_x4_to_x-2/error_frame10,0.011789
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump2_x4_to_x-2/error_frame11,0.021178
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump2_x4_to_x-2/error_frame12,0.020954
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump2_x4_to_x-2/error_frame13,0.018714
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump2_x4_to_x-2/error_frame14,0.01106
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump2_x4_to_x-2/error_frame15,0.011627
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump2_x4_to_x-2/error_frame16,0.0093615
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump2_x4_to_x-2/error_frame17,0.011941
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump2_x4_to_x-2/error_frame18,0.011473
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump2_x4_to_x-2/error_frame19,0.0099727
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump2_x4_to_x-2/error_frame20,0.014331
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump2_x4_to_x-2/error_frame21,0.01213
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump2_x4_to_x-2/error_frame22,0.012208
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump2_x4_to_x-2/error_frame23,0.013675
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump2_x4_to_x-2/error_frame24,0.017196
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump2_x4_to_x-2/error_frame25,0.013985
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump2_x4_to_x-2/error_frame26,0.013939
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump2_x4_to_x-2/error_frame27,0.014736
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump2_x4_to_x-2/error_frame28,0.022992
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump2_x4_to_x-2/error_frame29,0.019495
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump2_x4_to_x-2/error_frame30,-0.0076967
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump2_x4_to_x-2/error_frame36,-0.0044866
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump2_x4_to_x-2/error_frame42,0.01732
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump2_x4_to_x-2/error_frame48,0.0018736
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump2_x4_to_x-2/error_frame54,0.0016459
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump2_x4_to_x-2/error_frame60,-0.0029786
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump2_x4_to_x-2/error_frame66,-0.0041464
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump2_x4_to_x-2/error_frame72,-0.0020859
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump2_x4_to_x-2/error_frame78,-0.0031932
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump2_x4_to_x-2/error_frame84,-0.0041977
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump2_x4_to_x-2/error_frame90,-0.004256
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump2_x4_to_x-2/error_frame96,-0.0040905
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump2_x4_to_x-2/error_frame102,-0.0051341
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump2_x4_to_x-2/error_frame108,-0.0041637
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump2_x4_to_x-2/error_frame114,-0.0046184
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump2_x4_to_x-2/error_frame120,-0.0049466
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump2_x4_to_x-2/error_frame126,-0.0024111
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump2_x4_to_x-2/error_frame132,-0.002919
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump2_x4_to_x-2/error_frame138,-0.0035959
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump2_x4_to_x-2/error_frame144,-0.0036739
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump2_x4_to_x-2/error_frame150,-0.005139
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump2_x4_to_x-2/error_frame156,-0.0045619
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump2_x4_to_x-2/error_frame162,-0.0049182
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump2_x4_to_x-2/error_frame168,-0.0035677
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump2_x4_to_x-2/error_frame174,-0.0035762
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump2_x4_to_x-2/error_frame180,-0.0055721
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump3_x-2_to_x4/grid_rule,ddgi
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump3_x-2_to_x4/brightness,gi_mean
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump3_x-2_to_x4/probes_per_frame_median,123
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump3_x-2_to_x4/frame_interval_mean_ms,16.68
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump3_x-2_to_x4/label,t2.10
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump3_x-2_to_x4/step_size,0.089426
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump3_x-2_to_x4/first_frame_move,-0.0016572
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump3_x-2_to_x4/entered_frame,21
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump3_x-2_to_x4/settled_frame,21
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump3_x-2_to_x4/overshoot_share_of_step,0.31592
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump3_x-2_to_x4/settled_end_drift,-0.0015929
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump3_x-2_to_x4/settled_from_long_hold,1
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump3_x-2_to_x4/error_frame1,-0.083606
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump3_x-2_to_x4/error_frame2,-0.083625
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump3_x-2_to_x4/error_frame3,-0.0836
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump3_x-2_to_x4/error_frame4,-0.083815
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump3_x-2_to_x4/error_frame5,-0.083815
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump3_x-2_to_x4/error_frame6,-0.083931
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump3_x-2_to_x4/error_frame7,-0.083929
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump3_x-2_to_x4/error_frame8,-0.08393
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump3_x-2_to_x4/error_frame9,-0.08393
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump3_x-2_to_x4/error_frame10,-0.08393
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump3_x-2_to_x4/error_frame11,-0.081402
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump3_x-2_to_x4/error_frame12,-0.081364
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump3_x-2_to_x4/error_frame13,-0.053811
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump3_x-2_to_x4/error_frame14,-0.0534
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump3_x-2_to_x4/error_frame15,-0.054773
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump3_x-2_to_x4/error_frame16,-0.052595
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump3_x-2_to_x4/error_frame17,-0.052593
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump3_x-2_to_x4/error_frame18,-0.052593
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump3_x-2_to_x4/error_frame19,-0.053513
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump3_x-2_to_x4/error_frame20,-0.052126
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump3_x-2_to_x4/error_frame21,-0.045277
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump3_x-2_to_x4/error_frame22,-0.043699
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump3_x-2_to_x4/error_frame23,-0.037461
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump3_x-2_to_x4/error_frame24,-0.04199
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump3_x-2_to_x4/error_frame25,-0.031685
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump3_x-2_to_x4/error_frame26,-0.033006
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump3_x-2_to_x4/error_frame27,-0.030853
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump3_x-2_to_x4/error_frame28,-0.033785
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump3_x-2_to_x4/error_frame29,-0.028698
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump3_x-2_to_x4/error_frame30,-0.025834
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump3_x-2_to_x4/error_frame36,-0.026884
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump3_x-2_to_x4/error_frame42,-0.012371
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump3_x-2_to_x4/error_frame48,0.011211
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump3_x-2_to_x4/error_frame54,0.019246
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump3_x-2_to_x4/error_frame60,0.025167
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump3_x-2_to_x4/error_frame66,0.015357
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump3_x-2_to_x4/error_frame72,0.010708
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump3_x-2_to_x4/error_frame78,0.006307
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump3_x-2_to_x4/error_frame84,0.006464
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump3_x-2_to_x4/error_frame90,0.005506
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump3_x-2_to_x4/error_frame96,0.0055303
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump3_x-2_to_x4/error_frame102,0.0032045
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump3_x-2_to_x4/error_frame108,0.0032301
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump3_x-2_to_x4/error_frame114,0.0042462
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump3_x-2_to_x4/error_frame120,0.0043703
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump3_x-2_to_x4/error_frame126,0.0029685
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump3_x-2_to_x4/error_frame132,0.0023931
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump3_x-2_to_x4/error_frame138,0.0014555
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump3_x-2_to_x4/error_frame144,0.0014286
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump3_x-2_to_x4/error_frame150,0.00057699
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump3_x-2_to_x4/error_frame156,0.00045244
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump3_x-2_to_x4/error_frame162,0.000021762
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump3_x-2_to_x4/error_frame168,-0.0019276
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump3_x-2_to_x4/error_frame174,-0.0017921
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run2/jump3_x-2_to_x4/error_frame180,-0.00077553
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump1_x-2_to_x4/grid_rule,ddgi
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump1_x-2_to_x4/brightness,gi_mean
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump1_x-2_to_x4/probes_per_frame_median,75
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump1_x-2_to_x4/frame_interval_mean_ms,16.68
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump1_x-2_to_x4/label,t2.10
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump1_x-2_to_x4/step_size,0.088183
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump1_x-2_to_x4/first_frame_move,-0.0012035
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump1_x-2_to_x4/entered_frame,33
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump1_x-2_to_x4/settled_frame,40
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump1_x-2_to_x4/overshoot_share_of_step,0.37869
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump1_x-2_to_x4/settled_end_drift,0.0010087
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump1_x-2_to_x4/settled_from_long_hold,1
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump1_x-2_to_x4/error_frame1,-0.082143
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump1_x-2_to_x4/error_frame2,-0.081667
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump1_x-2_to_x4/error_frame3,-0.081668
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump1_x-2_to_x4/error_frame4,-0.081668
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump1_x-2_to_x4/error_frame5,-0.081667
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump1_x-2_to_x4/error_frame6,-0.08212
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump1_x-2_to_x4/error_frame7,-0.082132
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump1_x-2_to_x4/error_frame8,-0.082123
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump1_x-2_to_x4/error_frame9,-0.082525
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump1_x-2_to_x4/error_frame10,-0.082522
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump1_x-2_to_x4/error_frame11,-0.082525
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump1_x-2_to_x4/error_frame12,-0.082525
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump1_x-2_to_x4/error_frame13,-0.082525
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump1_x-2_to_x4/error_frame14,-0.078747
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump1_x-2_to_x4/error_frame15,-0.078886
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump1_x-2_to_x4/error_frame16,-0.078766
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump1_x-2_to_x4/error_frame17,-0.07839
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump1_x-2_to_x4/error_frame18,-0.07839
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump1_x-2_to_x4/error_frame19,-0.050672
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump1_x-2_to_x4/error_frame20,-0.050799
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump1_x-2_to_x4/error_frame21,-0.05034
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump1_x-2_to_x4/error_frame22,-0.050847
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump1_x-2_to_x4/error_frame23,-0.050847
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump1_x-2_to_x4/error_frame24,-0.050847
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump1_x-2_to_x4/error_frame25,-0.050847
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump1_x-2_to_x4/error_frame26,-0.050847
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump1_x-2_to_x4/error_frame27,-0.050847
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump1_x-2_to_x4/error_frame28,-0.050858
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump1_x-2_to_x4/error_frame29,-0.050858
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump1_x-2_to_x4/error_frame30,-0.050858
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump1_x-2_to_x4/error_frame36,-0.051322
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump1_x-2_to_x4/error_frame42,-0.045577
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump1_x-2_to_x4/error_frame48,-0.030543
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump1_x-2_to_x4/error_frame54,-0.029094
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump1_x-2_to_x4/error_frame60,-0.029181
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump1_x-2_to_x4/error_frame66,-0.019896
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump1_x-2_to_x4/error_frame72,0.01433
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump1_x-2_to_x4/error_frame78,-0.00034436
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump1_x-2_to_x4/error_frame84,0.021818
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump1_x-2_to_x4/error_frame90,0.024863
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump1_x-2_to_x4/error_frame96,0.022107
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump1_x-2_to_x4/error_frame102,0.020654
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump1_x-2_to_x4/error_frame108,0.011573
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump1_x-2_to_x4/error_frame114,0.0073448
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump1_x-2_to_x4/error_frame120,0.0065117
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump1_x-2_to_x4/error_frame126,0.0080436
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump1_x-2_to_x4/error_frame132,0.0081633
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump1_x-2_to_x4/error_frame138,0.0084856
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump1_x-2_to_x4/error_frame144,0.0091028
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump1_x-2_to_x4/error_frame150,0.0090598
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump1_x-2_to_x4/error_frame156,0.0086448
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump1_x-2_to_x4/error_frame162,0.0091459
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump1_x-2_to_x4/error_frame168,0.0091659
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump1_x-2_to_x4/error_frame174,0.0095056
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump1_x-2_to_x4/error_frame180,0.0099635
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump2_x4_to_x-2/grid_rule,ddgi
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump2_x4_to_x-2/brightness,gi_mean
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump2_x4_to_x-2/probes_per_frame_median,75
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump2_x4_to_x-2/frame_interval_mean_ms,16.68
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump2_x4_to_x-2/label,t2.10
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump2_x4_to_x-2/step_size,-0.086509
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump2_x4_to_x-2/first_frame_move,-0.031265
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump2_x4_to_x-2/entered_frame,9
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump2_x4_to_x-2/settled_frame,9
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump2_x4_to_x-2/overshoot_share_of_step,0.26306
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump2_x4_to_x-2/settled_end_drift,-0.00090017
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump2_x4_to_x-2/settled_from_long_hold,1
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump2_x4_to_x-2/error_frame1,0.060476
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump2_x4_to_x-2/error_frame2,0.061919
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump2_x4_to_x-2/error_frame3,0.061493
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump2_x4_to_x-2/error_frame4,0.059561
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump2_x4_to_x-2/error_frame5,0.059561
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump2_x4_to_x-2/error_frame6,0.059561
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump2_x4_to_x-2/error_frame7,0.059561
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump2_x4_to_x-2/error_frame8,0.059594
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump2_x4_to_x-2/error_frame9,0.045964
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump2_x4_to_x-2/error_frame10,0.043052
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump2_x4_to_x-2/error_frame11,0.040287
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump2_x4_to_x-2/error_frame12,0.039423
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump2_x4_to_x-2/error_frame13,0.04176
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump2_x4_to_x-2/error_frame14,0.0018989
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump2_x4_to_x-2/error_frame15,0.0064134
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump2_x4_to_x-2/error_frame16,0.009049
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump2_x4_to_x-2/error_frame17,0.015553
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump2_x4_to_x-2/error_frame18,0.015701
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump2_x4_to_x-2/error_frame19,0.017073
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump2_x4_to_x-2/error_frame20,0.015286
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump2_x4_to_x-2/error_frame21,0.015385
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump2_x4_to_x-2/error_frame22,0.013642
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump2_x4_to_x-2/error_frame23,0.0039936
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump2_x4_to_x-2/error_frame24,0.004119
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump2_x4_to_x-2/error_frame25,0.0040256
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump2_x4_to_x-2/error_frame26,0.0026076
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump2_x4_to_x-2/error_frame27,0.0013316
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump2_x4_to_x-2/error_frame28,0.002175
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump2_x4_to_x-2/error_frame29,0.0046613
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump2_x4_to_x-2/error_frame30,0.0021146
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump2_x4_to_x-2/error_frame36,0.00012567
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump2_x4_to_x-2/error_frame42,0.0078321
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump2_x4_to_x-2/error_frame48,-0.0010946
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump2_x4_to_x-2/error_frame54,-0.0014375
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump2_x4_to_x-2/error_frame60,-0.007608
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump2_x4_to_x-2/error_frame66,-0.014559
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump2_x4_to_x-2/error_frame72,-0.010618
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump2_x4_to_x-2/error_frame78,-0.013396
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump2_x4_to_x-2/error_frame84,-0.012928
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump2_x4_to_x-2/error_frame90,-0.0037324
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump2_x4_to_x-2/error_frame96,-0.0055911
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump2_x4_to_x-2/error_frame102,0.0042649
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump2_x4_to_x-2/error_frame108,0.0073217
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump2_x4_to_x-2/error_frame114,0.0023097
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump2_x4_to_x-2/error_frame120,0.0021943
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump2_x4_to_x-2/error_frame126,-0.0008304
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump2_x4_to_x-2/error_frame132,-0.00098248
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump2_x4_to_x-2/error_frame138,-0.00056467
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump2_x4_to_x-2/error_frame144,-0.00099055
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump2_x4_to_x-2/error_frame150,-0.0012349
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump2_x4_to_x-2/error_frame156,-0.0010728
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump2_x4_to_x-2/error_frame162,-0.0019623
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump2_x4_to_x-2/error_frame168,-0.0020826
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump2_x4_to_x-2/error_frame174,-0.002515
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump2_x4_to_x-2/error_frame180,-0.0024254
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump3_x-2_to_x4/grid_rule,ddgi
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump3_x-2_to_x4/brightness,gi_mean
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump3_x-2_to_x4/probes_per_frame_median,75
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump3_x-2_to_x4/frame_interval_mean_ms,16.68
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump3_x-2_to_x4/label,t2.10
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump3_x-2_to_x4/step_size,0.086676
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump3_x-2_to_x4/first_frame_move,-0.00069015
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump3_x-2_to_x4/entered_frame,20
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump3_x-2_to_x4/settled_frame,20
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump3_x-2_to_x4/overshoot_share_of_step,0.3437
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump3_x-2_to_x4/settled_end_drift,-0.00013249
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump3_x-2_to_x4/settled_from_long_hold,1
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump3_x-2_to_x4/error_frame1,-0.080398
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump3_x-2_to_x4/error_frame2,-0.080398
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump3_x-2_to_x4/error_frame3,-0.079696
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump3_x-2_to_x4/error_frame4,-0.079697
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump3_x-2_to_x4/error_frame5,-0.080844
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump3_x-2_to_x4/error_frame6,-0.081293
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump3_x-2_to_x4/error_frame7,-0.081306
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump3_x-2_to_x4/error_frame8,-0.081296
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump3_x-2_to_x4/error_frame9,-0.081277
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump3_x-2_to_x4/error_frame10,-0.081277
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump3_x-2_to_x4/error_frame11,-0.081257
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump3_x-2_to_x4/error_frame12,-0.081254
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump3_x-2_to_x4/error_frame13,-0.081257
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump3_x-2_to_x4/error_frame14,-0.081257
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump3_x-2_to_x4/error_frame15,-0.081257
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump3_x-2_to_x4/error_frame16,-0.081221
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump3_x-2_to_x4/error_frame17,-0.081221
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump3_x-2_to_x4/error_frame18,-0.081221
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump3_x-2_to_x4/error_frame19,-0.07683
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump3_x-2_to_x4/error_frame20,-0.049543
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump3_x-2_to_x4/error_frame21,-0.045833
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump3_x-2_to_x4/error_frame22,-0.045946
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump3_x-2_to_x4/error_frame23,-0.046791
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump3_x-2_to_x4/error_frame24,-0.046791
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump3_x-2_to_x4/error_frame25,-0.046791
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump3_x-2_to_x4/error_frame26,-0.045272
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump3_x-2_to_x4/error_frame27,-0.048124
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump3_x-2_to_x4/error_frame28,-0.048398
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump3_x-2_to_x4/error_frame29,-0.046712
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump3_x-2_to_x4/error_frame30,-0.046078
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump3_x-2_to_x4/error_frame36,-0.044517
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump3_x-2_to_x4/error_frame42,-0.036396
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump3_x-2_to_x4/error_frame48,-0.026192
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump3_x-2_to_x4/error_frame54,-0.016482
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump3_x-2_to_x4/error_frame60,-0.013818
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump3_x-2_to_x4/error_frame66,0.0018663
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump3_x-2_to_x4/error_frame72,0.013615
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump3_x-2_to_x4/error_frame78,0.027414
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump3_x-2_to_x4/error_frame84,0.017752
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump3_x-2_to_x4/error_frame90,0.016546
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump3_x-2_to_x4/error_frame96,0.013164
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump3_x-2_to_x4/error_frame102,0.01264
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump3_x-2_to_x4/error_frame108,0.0015473
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump3_x-2_to_x4/error_frame114,0.0050798
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump3_x-2_to_x4/error_frame120,0.00095851
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump3_x-2_to_x4/error_frame126,-0.0022256
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump3_x-2_to_x4/error_frame132,-0.0031456
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump3_x-2_to_x4/error_frame138,-0.0059252
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump3_x-2_to_x4/error_frame144,-0.004812
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump3_x-2_to_x4/error_frame150,-0.0044971
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump3_x-2_to_x4/error_frame156,-0.0045204
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump3_x-2_to_x4/error_frame162,-0.0046255
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump3_x-2_to_x4/error_frame168,-0.0047602
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump3_x-2_to_x4/error_frame174,-0.0046974
+2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump3_x-2_to_x4/error_frame180,-0.0046283

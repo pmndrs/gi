@@ -49,6 +49,13 @@ From T2.4b (2026-11-06): how the GI-only view (and on Sponza the whole field) fo
 - `lowest_share_of_start`, `highest_share_of_start`, `share_of_start_frame<k>` (every 12th frame): the curve as a share of its first frame, where the lamp sits settled at the path's start.
 - `against_<side>_run<n>/*`: this run against the other side's run n, both as shares of their own starts. `mean_abs_difference_share_of_start` and `largest_...` are the mean and largest gap between the two curves; `lag_frames` is the shift that lines this side up best with the other (positive: this side later).
 
+**Sponza's step: use the `lamp_lit` rows.**
+- The rows to use are `response/native/light-step/grid_ddgi/lamp_lit/run<n>/*` and `response/ours/light-step/lamp_lit/run<n>/*`.
+- Sponza's first T2.10 set (`.../grid_ddgi/run<n>/` and `response/ours/light-step/run<n>/` on `sponza`) is superseded. Each of those runs has a `superseded` row:
+  - native's arcade lamp lit nothing then (`range: 0` became radius 0, NOTES);
+  - our first runs were paired with those, and their pictures were at 0 EV. Their measures were read before exposure and stand on their own.
+- `response.ts --set <name>` puts the set name in the path, so a re-recorded set doesn't share the old one's paths.
+
 ## native.csv
 
 NVIDIA's RTXGI-DDGI test harness (our fork in `native/rtxgi-ddgi`), written by `tools/native/bench.ps1`. Metric names and what they mean: `tools/native/README.md`, section "Timing".
