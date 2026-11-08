@@ -384,6 +384,15 @@ export const CONTINUING_CHANGE_FRAMES = 30;
 export const CONTINUING_CHANGE_GAP_FRAMES = 4;
 
 /**
+ * The longest a single change counts as being taken in, in frames after its
+ * latest mark (change-intake-batch.ts, T2.18): 120, the frames T2.4c gives
+ * the field to come within 5% (2 s at 60 Hz). Normally the census ends the
+ * intake much sooner, once nothing is owed; the cap is for a frame without
+ * a census (no GPU timings) and for owed work that never quite runs out.
+ */
+export const CHANGE_INTAKE_MAX_FRAMES = 120;
+
+/**
  * While a change is taken in (§4.5's second count; change-intake-batch.ts),
  * the batch is at least this share of the hand-out, whatever the census
  * says: a guard against a census that reads oddly, not a tuned number (the
@@ -505,6 +514,12 @@ export const AUTO_MIN_FRONT_FACE_SHARE = 0.02;
  * needs 81 a frame, Cornell 8.
  */
 export const FLOOR_SWEEP_SECONDS = 4;
+
+/**
+ * The frame rate the floor assumes before frames carry a `deltaTime`, as the
+ * platform's Budget v2 does (work-budget.ts).
+ */
+export const FLOOR_ASSUMED_FRAMES_PER_SECOND = 60;
 
 /**
  * ...but `auto` never asks for more than this many times the calibrated batch

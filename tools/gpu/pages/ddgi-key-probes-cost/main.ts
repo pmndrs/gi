@@ -31,8 +31,13 @@
  * from the census), so a miss can be traced to a pass (T2.4d). Since T2.4d
  * the day, and since T2.18 the step too, run with the batch while a change
  * is taken in (change-intake-batch.ts): the 60 frames after the step
- * (`stepFirst60`) must have the update's median within the budget and its
- * p95 within Budget v2's margin, and report the batch they listed.
+ * (`stepFirst60`) must have the update's median within STEP_MEDIAN_SHARE
+ * (5%) of the same run's still median, so after a change a frame costs what
+ * a still frame costs. A fixed 2.0 ms bar passed or failed on the
+ * calibration's own spread (still medians 1.98-2.13 ms across runs; lead
+ * ruling, DECISIONS 2026-11-08, T2.18). Their p95 is reported beside the
+ * still frames' p95, not judged (the first ~12 frames cost more than their
+ * rays say; NOTES), and so is the batch they listed.
  *
  * Manual (needs the Sponza download), under the bench lock:
  *   node tools/reference/bench-lock.ts run --what "T2.4c cost" -- pnpm test:gpu --filter ddgi-key-probes-cost --gpu nvidia --json <file>
@@ -46,6 +51,11 @@ import { runThreePage } from '../three-shared/harness.ts';
 const BUDGET_MS = 2;
 /** Budget v2's margin (docs/design/ddgi.md, "Defined measurements": ≤ gpuMs +10%). */
 const BUDGET_MARGIN = 0.1;
+/**
+ * T2.18 (lead ruling, DECISIONS 2026-11-08): the 60 frames after the step
+ * may have a median at most this much above the same run's still median.
+ */
+const STEP_MEDIAN_SHARE = 0.05;
 /** Check 5's bound on `ddgi/propagate` in a frame with a global change. */
 const PROPAGATE_MS = 0.1;
 const WARM_UP_PASSES = 4;
@@ -195,6 +205,7 @@ await runThreePage(async ({ device, data, log: logLine }) => {
     results.still = {
         frames: still.length,
         updateMedian: round(quantile(still.map((entry) => entry.total), 0.5)),
+        updateP95: round(quantile(still.map((entry) => entry.total), 0.95)),
         calibratedMedian: round(quantile(still.map((entry) => entry.calibrated), 0.5)),
         propagateMedian: round(quantile(stillPropagate, 0.5)),
         probesPropagatedTotal: stillCounters['probes propagated (total)'],
@@ -270,8 +281,25 @@ await runThreePage(async ({ device, data, log: logLine }) => {
             `${overBudgetOffsets.length} frames over ${BUDGET_MS} ms (the last at frame ${overBudgetOffsets.length > 0 ? Math.max(...overBudgetOffsets) : 'none'}); ` +
             `batch median ${quantile(stepBatches, 0.5)} of ${units} (first five ${stepBatches.slice(0, 5).join(', ')}), taking the change in until frame ${takingInOffsets.length > 0 ? Math.max(...takingInOffsets) : 'none'}`,
     );
-    if (!(quantile(afterStepTotals, 0.5) <= BUDGET_MS)) failures.push(`step: the 60 frames after it have the update's median at ${round(quantile(afterStepTotals, 0.5))} ms (budget ${BUDGET_MS})`);
-    if (!(quantile(afterStepTotals, 0.95) <= BUDGET_MS * (1 + BUDGET_MARGIN))) failures.push(`step: the 60 frames after it have the update's p95 at ${round(quantile(afterStepTotals, 0.95))} ms (margin ${BUDGET_MS * (1 + BUDGET_MARGIN)})`);
+    // Judged against the same run's still frames (lead ruling, DECISIONS 2026-11-08, T2.18): the median, not the p95.
+    const stillTotals = still.map((entry) => entry.total);
+    const stepMedianBar = quantile(stillTotals, 0.5) * (1 + STEP_MEDIAN_SHARE);
+    const stepVersusStill = {
+        stillMedian: round(quantile(stillTotals, 0.5)),
+        stillP95: round(quantile(stillTotals, 0.95)),
+        medianBar: round(stepMedianBar),
+        medianOverStill: round(quantile(afterStepTotals, 0.5) / quantile(stillTotals, 0.5)),
+        p95OverStill: round(quantile(afterStepTotals, 0.95) / quantile(stillTotals, 0.95)),
+        p95Judged: false,
+    };
+    (results.stepFirst60 as Record<string, unknown>).versusStill = stepVersusStill;
+    log(
+        `the 60 frames after the step against still frames: median ${round(quantile(afterStepTotals, 0.5))} against ${stepVersusStill.stillMedian} (bar ${stepVersusStill.medianBar}, ${Math.round(STEP_MEDIAN_SHARE * 100)}% over), ` +
+            `p95 ${round(quantile(afterStepTotals, 0.95))} against ${stepVersusStill.stillP95} (reported, not judged)`,
+    );
+    if (!(quantile(afterStepTotals, 0.5) <= stepMedianBar)) {
+        failures.push(`step: the 60 frames after it have the update's median at ${round(quantile(afterStepTotals, 0.5))} ms, over the still median ${stepVersusStill.stillMedian} by more than ${Math.round(STEP_MEDIAN_SHARE * 100)}%`);
+    }
 
     // 4. A 10-second day.
     const startAzimuth = sunAngles(startDirection).azimuth;

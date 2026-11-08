@@ -45,12 +45,19 @@
  * lists the whole volume (a test mode updating every probe every frame)
  * costs the same as on still frames and is not cut.
  *
+ * The intake ends at the latest CHANGE_INTAKE_MAX_FRAMES frames after the
+ * latest mark, census or not: without GPU timings there is no census to end
+ * it, and a census that never reads "nothing owed" (a feedback request that
+ * keeps coming back) must not hold the smaller batch for good. The batch is
+ * never cut below Budget v2's floor (`minProbesPerFrame`), which wins over
+ * the millisecond ceiling everywhere else too.
+ *
  * This reads only the census DDGI already copies back for its counters
  * (when the platform times passes); nothing new is read back. Without it,
  * the batch is the hand-out.
  */
 
-import { CHANGE_BATCH_MIN_SHARE, CONTINUING_CHANGE_FRAMES, CONTINUING_CHANGE_GAP_FRAMES, PROPAGATED_PROBE_RAYS } from './settings.ts';
+import { CHANGE_BATCH_MIN_SHARE, CHANGE_INTAKE_MAX_FRAMES, CONTINUING_CHANGE_FRAMES, CONTINUING_CHANGE_GAP_FRAMES, PROPAGATED_PROBE_RAYS } from './settings.ts';
 
 /**
  * How fast the still frames' cost a probe follows new readings: a running
@@ -106,6 +113,8 @@ export class ChangeIntakeBatch {
         if (!marked) {
             this.framesSinceMark++;
             if (this.framesSinceMark > CONTINUING_CHANGE_GAP_FRAMES) this.runFrames = 0;
+            // The cap: CHANGE_INTAKE_MAX_FRAMES after the latest mark the change counts as taken in, census or not.
+            if (this.intakeStartFrame !== null && frame - this.lastMarkFrame > CHANGE_INTAKE_MAX_FRAMES) this.intakeStartFrame = null;
             return;
         }
         const joinsRun = this.runFrames > 0 && this.framesSinceMark <= CONTINUING_CHANGE_GAP_FRAMES;
@@ -170,9 +179,12 @@ export class ChangeIntakeBatch {
      * The batch for a hand-out of `units` probes, at most the volume's.
      * `changeOutlastsWindow`: a change on this volume is taken in over more
      * than FAR_RULE_FRAMES at this hand-out (the technique's own rule).
+     * `floorUnits`: Budget v2's floor; the batch is never cut below it (nor
+     * raised above the hand-out by it).
      */
-    batchFor(units: number, rays: RaysPerProbe, changeOutlastsWindow: boolean): number {
-        return Math.floor(units * this.share(units, rays, changeOutlastsWindow));
+    batchFor(units: number, rays: RaysPerProbe, changeOutlastsWindow: boolean, floorUnits: number): number {
+        const cut = Math.floor(units * this.share(units, rays, changeOutlastsWindow));
+        return Math.max(cut, Math.min(units, Math.max(0, Math.floor(floorUnits))));
     }
 
     /** The most a list of `units` probes can cost a probe in rays: every active probe it can hold at full rays, the rest off. */

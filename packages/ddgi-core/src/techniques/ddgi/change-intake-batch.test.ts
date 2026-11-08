@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { ChangeIntakeBatch, type CensusReading } from './change-intake-batch.ts';
-import { CHANGE_BATCH_MIN_SHARE, CONTINUING_CHANGE_FRAMES, CONTINUING_CHANGE_GAP_FRAMES, PROPAGATED_PROBE_RAYS } from './settings.ts';
+import { changeServing } from './ddgi-technique.ts';
+import { CHANGE_BATCH_MIN_SHARE, CHANGE_INTAKE_MAX_FRAMES, CONTINUING_CHANGE_FRAMES, CONTINUING_CHANGE_GAP_FRAMES, PROPAGATED_PROBE_RAYS, probeGrid, withDefaults } from './settings.ts';
 
 /** Sponza's census in T2.10's VALID run: 136 probes listed, still and after a 30° sun turn (medians). */
 const LISTED = 136;
@@ -10,6 +11,8 @@ const STEP_PROPAGATED = 926;
 const RAYS = { full: 256, fixed: 32 };
 /** Sponza takes a change in over more than FAR_RULE_FRAMES (its keys don't all owe their full count). */
 const OUTLASTS = true;
+/** No Budget v2 floor, so the share alone decides. */
+const NO_FLOOR = 0;
 /** Sponza's active probes (about half its 19,425 are off). */
 const ACTIVE = 9_000;
 
@@ -27,7 +30,7 @@ describe('the batch while a change is taken in (T2.4d, T2.18)', () => {
         batch.noteCensus(still(0));
         batch.noteFrame(5, false);
         expect(batch.takingInChange).toBe(false);
-        expect(batch.batchFor(LISTED, RAYS, OUTLASTS)).toBe(LISTED);
+        expect(batch.batchFor(LISTED, RAYS, OUTLASTS, NO_FLOOR)).toBe(LISTED);
     });
 
     it('lists fewer from the step itself: every listed probe counted at its full rays until a reading from the change arrives', () => {
@@ -50,7 +53,7 @@ describe('the batch while a change is taken in (T2.4d, T2.18)', () => {
         const batch = new ChangeIntakeBatch();
         batch.noteCensus({ frame: 0, raysTraced: wholeVolume, listedProbes: probes, owedProbes: 0, probesPropagated: 0, activeProbes: active });
         batch.noteFrame(10, true);
-        expect(batch.batchFor(probes, RAYS, OUTLASTS)).toBe(probes);
+        expect(batch.batchFor(probes, RAYS, OUTLASTS, NO_FLOOR)).toBe(probes);
     });
 
     it('then follows the census: still cost a probe over the cost now, propagation counted in rays', () => {
@@ -60,7 +63,7 @@ describe('the batch while a change is taken in (T2.4d, T2.18)', () => {
         batch.noteCensus(busy(10));
         const busyCost = (STEP_RAYS + STEP_PROPAGATED * PROPAGATED_PROBE_RAYS) / LISTED;
         expect(batch.share(LISTED, RAYS, OUTLASTS)).toBeCloseTo(STILL_RAYS / LISTED / busyCost, 6);
-        expect(batch.batchFor(LISTED, RAYS, OUTLASTS)).toBe(Math.floor((LISTED * STILL_RAYS) / LISTED / busyCost));
+        expect(batch.batchFor(LISTED, RAYS, OUTLASTS, NO_FLOOR)).toBe(Math.floor((LISTED * STILL_RAYS) / LISTED / busyCost));
     });
 
     it('ends when a reading from at or after the latest mark shows nothing owed, not before', () => {
@@ -76,7 +79,7 @@ describe('the batch while a change is taken in (T2.4d, T2.18)', () => {
         expect(batch.takingInChange).toBe(true);
         batch.noteCensus(still(40));
         expect(batch.takingInChange).toBe(false);
-        expect(batch.batchFor(LISTED, RAYS, OUTLASTS)).toBe(LISTED);
+        expect(batch.batchFor(LISTED, RAYS, OUTLASTS, NO_FLOOR)).toBe(LISTED);
     });
 
     it('takes in a change marked every other frame (a host animating at 30 Hz on a 60 Hz display) for as long as it goes on', () => {
@@ -127,7 +130,7 @@ describe('the batch while a change is taken in (T2.4d, T2.18)', () => {
         batch.noteFrame(10, true);
         batch.noteCensus(busy(10));
         expect(batch.takingInChange).toBe(true);
-        expect(batch.batchFor(LISTED, RAYS, false)).toBe(LISTED);
+        expect(batch.batchFor(LISTED, RAYS, false, NO_FLOOR)).toBe(LISTED);
     });
 
     it('cuts a change that continues there too, once its marks span CONTINUING_CHANGE_FRAMES (T2.4d), gaps included (T2.8)', () => {
@@ -140,11 +143,11 @@ describe('the batch while a change is taken in (T2.4d, T2.18)', () => {
             if (frame >= 3) batch.noteCensus(busy(100 + frame - 3));
             if (continuingFrom === null && batch.continuing) continuingFrom = frame;
             if (continuingFrom !== null) expect(batch.continuing).toBe(true);
-            else expect(batch.batchFor(LISTED, RAYS, false)).toBe(LISTED);
+            else expect(batch.batchFor(LISTED, RAYS, false, NO_FLOOR)).toBe(LISTED);
         }
         // From the first mark at which the run spans CONTINUING_CHANGE_FRAMES frames (frame 30: 0 to 30 is 31 frames).
         expect(continuingFrom).toBe(CONTINUING_CHANGE_FRAMES);
-        expect(batch.batchFor(LISTED, RAYS, false)).toBeLessThan(LISTED);
+        expect(batch.batchFor(LISTED, RAYS, false, NO_FLOOR)).toBeLessThan(LISTED);
         // A few frames without a mark are the host's update rate; one more ends the run. The loop
         // ended on an unmarked frame, so CONTINUING_CHANGE_GAP_FRAMES - 1 more keep it going.
         const last = 100 + 3 * CONTINUING_CHANGE_FRAMES;
@@ -152,5 +155,66 @@ describe('the batch while a change is taken in (T2.4d, T2.18)', () => {
         expect(batch.continuing).toBe(true);
         batch.noteFrame(last + CONTINUING_CHANGE_GAP_FRAMES, false);
         expect(batch.continuing).toBe(false);
+    });
+
+    it("never cuts below Budget v2's floor, and the floor never lifts the batch above the hand-out", () => {
+        const batch = new ChangeIntakeBatch();
+        batch.noteCensus(still(0));
+        batch.noteFrame(10, true);
+        // The full-rays guess cuts 136 to 76; Sponza's floor at 60 Hz is 81.
+        expect(batch.batchFor(LISTED, RAYS, OUTLASTS, NO_FLOOR)).toBe(76);
+        expect(batch.batchFor(LISTED, RAYS, OUTLASTS, 81)).toBe(81);
+        expect(batch.batchFor(LISTED, RAYS, OUTLASTS, 500)).toBe(LISTED);
+    });
+
+    it('ends the intake CHANGE_INTAKE_MAX_FRAMES after the latest mark even while the census still shows work owed', () => {
+        const batch = new ChangeIntakeBatch();
+        batch.noteCensus(still(0));
+        batch.noteFrame(10, true);
+        for (let frame = 11; frame <= 10 + CHANGE_INTAKE_MAX_FRAMES; frame++) {
+            batch.noteFrame(frame, false);
+            batch.noteCensus(busy(frame - 3));
+            expect(batch.takingInChange).toBe(true);
+        }
+        batch.noteFrame(11 + CHANGE_INTAKE_MAX_FRAMES, false);
+        expect(batch.takingInChange).toBe(false);
+        expect(batch.batchFor(LISTED, RAYS, OUTLASTS, NO_FLOOR)).toBe(LISTED);
+    });
+
+    it('ends the intake on the cap with no census at all (GPU timings off), and lists the hand-out meanwhile', () => {
+        const batch = new ChangeIntakeBatch();
+        batch.noteFrame(10, true);
+        expect(batch.takingInChange).toBe(true);
+        expect(batch.batchFor(LISTED, RAYS, OUTLASTS, NO_FLOOR)).toBe(LISTED);
+        for (let frame = 11; frame <= 11 + CHANGE_INTAKE_MAX_FRAMES; frame++) batch.noteFrame(frame, false);
+        expect(batch.takingInChange).toBe(false);
+    });
+});
+
+describe('changeServing: where a single change gets the smaller batch (T2.18)', () => {
+    /** A volume of `counts` probes at 1 m spacing, and its grid. */
+    const volumeOf = (counts: readonly [number, number, number]) => {
+        const volume = { center: [0, 0, 0] as [number, number, number], size: [counts[0] - 1, counts[1] - 1, counts[2] - 1] as [number, number, number], spacing: 1 };
+        return { volume, grid: probeGrid(volume) };
+    };
+
+    it("Sponza at its calibrated batch: the key path, keys away from the view owing 4, so a change outlasts the window", () => {
+        const { volume, grid: sponza } = volumeOf([37, 21, 25]);
+        expect(sponza.probeCount).toBe(19_425);
+        const serving = changeServing(sponza, 134, withDefaults({ volume }));
+        expect(serving).toEqual({ bigVolume: true, keysFitWindow: false, changeOutlastsWindow: true });
+        // With key probes off, "far probes owe 2" spreads a change over many frames too.
+        expect(changeServing(sponza, 134, withDefaults({ volume, keyProbes: false })).changeOutlastsWindow).toBe(true);
+    });
+
+    it('the furnished room: the key path, but every key owes its full count, so a step is served at the hand-out', () => {
+        const { volume, grid: room } = volumeOf([17, 14, 21]);
+        expect(room.probeCount).toBe(4_998);
+        expect(changeServing(room, 571, withDefaults({ volume }))).toEqual({ bigVolume: true, keysFitWindow: true, changeOutlastsWindow: false });
+    });
+
+    it('two-room: every probe owes its full count within the window, no key path', () => {
+        const { volume, grid: twoRoom } = volumeOf([17, 7, 9]);
+        expect(changeServing(twoRoom, 880, withDefaults({ volume })).changeOutlastsWindow).toBe(false);
     });
 });

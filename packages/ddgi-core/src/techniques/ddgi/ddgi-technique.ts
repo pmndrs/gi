@@ -125,6 +125,7 @@ import {
     effectiveMaxRayDistance,
     effectiveRaysPerProbe,
     FAR_RULE_FRAMES,
+    FLOOR_ASSUMED_FRAMES_PER_SECOND,
     FINE_PROBE_UPDATES,
     MAX_OWED_UPDATES,
     minProbesPerFrame,
@@ -539,6 +540,8 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
     private latestCensus: Uint32Array | null = null;
     /** The batch while a change is taken in (§4.5's second count; T2.4d, T2.18), from the census's rays a listed probe. */
     private readonly changeIntake = new ChangeIntakeBatch();
+    /** The rate the platform last asked Budget v2's floor for (`minUnitsPerFrame`); null under a units budget. */
+    private platformFloorRate: WorkFloorRate | null = null;
     private probesUpdated = 0;
     /** Frames since `prepare` whose changes ran `ddgi/mark`, and the entries in the latest one (CPU-side counters). */
     private markFrames = 0;
@@ -1087,7 +1090,12 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
                 ? resources.maxProbesPerFrame
                 : this.warmUp.phase === 'waiting for trees'
                   ? 0
-                  : this.changeIntake.batchFor(offered, { full: raysPerProbe, fixed: FIXED_RAYS }, changeServing(resources.grid, offered, this.settings).changeOutlastsWindow);
+                  : this.changeIntake.batchFor(
+                        offered,
+                        { full: raysPerProbe, fixed: FIXED_RAYS },
+                        changeServing(resources.grid, offered, this.settings).changeOutlastsWindow,
+                        this.floorUnits(offered, probeCount, resources.maxProbesPerFrame),
+                    );
         const count = Math.max(0, Math.min(Number.isNaN(handOut) ? 0 : Math.floor(handOut), resources.maxProbesPerFrame, probeCount));
         this.probesUpdated = count;
         if (count > 0) this.lastUpdateCount = count;
@@ -1469,9 +1477,31 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
      * `prepare`.
      */
     minUnitsPerFrame(rate: WorkFloorRate): number {
+        // Kept for the batch while a change is taken in, which must not go under this floor either.
+        this.platformFloorRate = rate;
         const resources = this.resources;
         if (!resources) return 0;
         return minProbesPerFrame(this.settings.minProbesPerFrame, resources.grid.probeCount, resources.maxProbesPerFrame, rate);
+    }
+
+    /**
+     * Budget v2's floor for this frame's batch: at the frame rate and
+     * calibration the platform last asked about, or, when the host hands out
+     * units itself (no millisecond budget, so the platform never asks), at
+     * the observed frame rate (60 until known) with the hand-out standing in
+     * for the calibrated batch.
+     */
+    private floorUnits(handOut: number, probeCount: number, maxProbesPerFrame: number): number {
+        const rate = this.platformFloorRate ?? { framesPerSecond: this.observedFramesPerSecond() ?? FLOOR_ASSUMED_FRAMES_PER_SECOND, calibratedUnits: handOut };
+        return minProbesPerFrame(this.settings.minProbesPerFrame, probeCount, maxProbesPerFrame, rate);
+    }
+
+    /** The frame rate from the recent frames' median `deltaTime`; undefined before any. */
+    private observedFramesPerSecond(): number | undefined {
+        if (this.frameTimes.length === 0) return undefined;
+        const sorted = [...this.frameTimes].sort((a, b) => a - b);
+        const median = sorted[Math.floor(sorted.length / 2)];
+        return median > 0 ? 1 / median : undefined;
     }
 
     /**
@@ -1826,7 +1856,7 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
  *   keys all fit: they converge a round a frame only while the priority share
  *   holds them all.
  */
-function changeServing(grid: ProbeGrid, batch: number, settings: DDGISettings): { bigVolume: boolean; keysFitWindow: boolean; changeOutlastsWindow: boolean } {
+export function changeServing(grid: ProbeGrid, batch: number, settings: DDGISettings): { bigVolume: boolean; keysFitWindow: boolean; changeOutlastsWindow: boolean } {
     const blend = blendSettings(settings);
     const fullUpdates = owedUpdates(blend.changeUpdates);
     const framesForEveryProbe = batch > 0 ? (grid.probeCount * fullUpdates) / batch : Number.POSITIVE_INFINITY;
