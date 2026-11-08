@@ -4,9 +4,12 @@
  *
  * Both sides write the same folder shape (tools/native/README.md, "Motions
  * and recordings"): `recording.json`, `frames.csv` with one row a frame, and
- * an image every few frames. Both run on a fixed clock of 1/60 s a frame
- * (frame k shows the motion at k / 60 s), so the motion's time lines them up
- * frame for frame, whatever either took to draw.
+ * an image every few frames. In both the motion runs on a fixed clock of
+ * 1/60 s a frame (frame k shows the motion at k / 60 s), so the motion's time
+ * lines them up frame for frame, whatever either took to draw. Only the
+ * motion's clock is fixed: our DDGI ages its histories by the real time
+ * between frames (`recording.json`'s `frameIntervalMs`), native's blend by
+ * frames.
  *
  * - **Native** (the RTXGI harness, T2.7): `frames.csv` holds `gi_mean_r`,
  *   `gi_mean_g`, `gi_mean_b`: the mean over the view of its GI-only image
@@ -131,6 +134,28 @@ export function frameAt(recording: Recording, time: number): RecordedFrame | nul
     if (frames.length === 0) return null;
     const index = Math.max(0, Math.min(frames.length - 1, Math.floor(time * recording.info.frameRate + 1e-6)));
     return frames[index];
+}
+
+/**
+ * A recording's probe grid, as its `gridRule` says: `ddgi` (our DDGI's) or
+ * `cells` (native's own). Without one, ours is DDGI's and native's its own
+ * (native's recordings name it only since `-GridRule`).
+ */
+export function gridOf(info: RecordingInfo): string {
+    if (typeof info.gridRule === 'string') return info.gridRule;
+    return info.source === 'viewer' ? 'ddgi' : 'cells';
+}
+
+/**
+ * When the two sides' probe grids differ, a sentence saying so: native's
+ * own grid places its probes differently from ours (two-room: 918 probes
+ * against 1,071), so the two answer from different probes. Only native's
+ * `-GridRule ddgi` runs use ours.
+ */
+export function gridNote(ours: RecordingInfo, native: RecordingInfo): string | null {
+    if (gridOf(ours) === gridOf(native)) return null;
+    const count = (info: RecordingInfo) => (typeof info.probes === 'number' ? `, ${info.probes.toLocaleString('en')} probes` : '');
+    return `Different probe grids: native used its own ("${gridOf(native)}"${count(native)}), ours DDGI's ("${gridOf(ours)}"${count(ours)}).`;
 }
 
 export type CurveScale = 'relative' | 'measured';

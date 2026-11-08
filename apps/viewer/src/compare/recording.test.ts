@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { curveValues, duration, frameAt, framesCsv, imageAt, makeRecording, type RecordingInfo } from './recording';
+import { curveValues, duration, frameAt, framesCsv, gridNote, imageAt, makeRecording, type RecordingInfo } from './recording';
 
 const INFO: RecordingInfo = { format: 'test', scene: 'two-room', motion: 'light-sweep', camera: 'lit-room', width: 16, height: 9, view: 'full', clock: 'fixed', frameRate: 60, frames: 9, imageEvery: 4 };
 
@@ -38,6 +38,14 @@ describe('motion recordings', () => {
         expect(imageAt(recording, -1)?.frame).toBe(0);
         expect(frameAt(recording, 5 / 60)?.frame).toBe(5);
         expect(frameAt(recording, 100)?.frame).toBe(8);
+    });
+
+    it('says when the two sides used different probe grids', () => {
+        const ours: RecordingInfo = { ...INFO, source: 'viewer', gridRule: 'ddgi', probes: 1071 };
+        expect(gridNote(ours, { ...INFO, gridRule: 'ddgi', probes: 1071 })).toBeNull();
+        // Native's recordings without a gridRule used its own cells grid.
+        expect(gridNote(ours, { ...INFO, probes: 918 })).toBe('Different probe grids: native used its own ("cells", 918 probes), ours DDGI\'s ("ddgi", 1,071 probes).');
+        expect(gridNote({ ...INFO, source: 'viewer' }, { ...INFO, gridRule: 'ddgi' })).toBeNull();
     });
 
     it('scales a curve to its first frame, or leaves it as measured', () => {

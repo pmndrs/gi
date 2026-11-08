@@ -4,10 +4,12 @@
  * native RTXGI harness's recording of the same motion, played together on
  * the motion's clock, with both brightness curves on one plot.
  *
- * Both recordings run on a fixed clock of 1/60 s a frame, so one time,
- * seconds into the motion, picks each side's frame (`recording.ts`). Play
- * moves that time on at the chosen speed; the scrub bar and a click on the
- * plot set it. Native shows live inside the viewer is not attempted; the
+ * In both recordings the motion runs on a fixed clock of 1/60 s a frame, so
+ * one time, seconds into the motion, picks each side's frame (`recording.ts`).
+ * (Only the motion's clock is fixed: our DDGI ages its histories by the real
+ * time between frames, paced at about 60 Hz; native's blend has no time in
+ * it.) Play moves that time on at the chosen speed; the scrub bar and a click
+ * on the plot set it. Showing native live inside the viewer is not attempted; the
  * recordings come from:
  * - ours: `tools/gpu/pages/viewer-recording` (the viewer's own code, GI only,
  *   the response meter's reading each frame), saved by
@@ -23,7 +25,7 @@
 
 import { h } from '../ui/dom';
 import { pairRecordings, type ListedRecording, type RecordingPair } from './pairs';
-import { curveValues, duration, frameAt, imageAt, makeRecording, type CurveScale, type Recording, type RecordingInfo } from './recording';
+import { curveValues, duration, frameAt, gridNote, imageAt, makeRecording, type CurveScale, type Recording, type RecordingInfo } from './recording';
 
 const HELP = {
     default: 'Hover over any control to see what it does.',
@@ -42,14 +44,16 @@ const HELP = {
         "Each side's GI-only brightness (the mean of the picture's red, green and blue) over the motion. Blue: ours; orange: native. The white line is the moment shown. Click or drag here to move to a moment.",
 } as const;
 
-/** How long each side's images take to load before the page plays; the progress shows meanwhile. */
+/** Our recording, or native's. */
 type Side = 'ours' | 'native';
 
 interface LoadedSide {
     listed: ListedRecording;
     recording: Recording;
-    /** The images, by path, loaded before playing so the sides never wait on a download. */
+    /** The images, by path, all loaded before playing (the status shows the progress) so the sides never wait on a download. */
     images: Map<string, HTMLImageElement>;
+    /** Images that failed to load: the side then says so instead of showing an older picture. */
+    missing: Set<string>;
 }
 
 function withHelp<T extends HTMLElement>(element: T, text: string): T {
@@ -90,22 +94,29 @@ async function loadSide(listed: ListedRecording, onImage: () => void): Promise<L
     const info = await fetchJson<RecordingInfo>(`${listed.url}recording.json`);
     const recording = makeRecording(info, await fetchText(`${listed.url}frames.csv`));
     const images = new Map<string, HTMLImageElement>();
+    const missing = new Set<string>();
     await Promise.all(
         recording.imageFrames.map(
             (frame) =>
                 new Promise<void>((resolve) => {
+                    const path = frame.image!;
                     const image = new Image();
                     image.decoding = 'async';
-                    image.onload = image.onerror = () => {
+                    image.onload = () => {
                         onImage();
                         resolve();
                     };
-                    image.src = `${listed.url}${frame.image}`;
-                    images.set(frame.image!, image);
+                    image.onerror = () => {
+                        missing.add(path);
+                        onImage();
+                        resolve();
+                    };
+                    image.src = `${listed.url}${path}`;
+                    images.set(path, image);
                 }),
         ),
     );
-    return { listed, recording, images };
+    return { listed, recording, images, missing };
 }
 
 class ComparePage {
@@ -136,7 +147,6 @@ class ComparePage {
             const titleElement = h('h2', { text: title });
             const caption = h('p', { className: 'caption' });
             const readout = h('p', { className: 'caption readout' });
-            this.root.append();
             const element = withHelp(h('section', { className: `side ${which}` }, titleElement, h('div', { className: 'frame' }, image), readout, caption), help);
             return { element, parts: { image, title: titleElement, caption, readout } };
         };
@@ -152,7 +162,7 @@ class ComparePage {
             h(
                 'p',
                 { className: 'note' },
-                "The same light motion, recorded on the same clock, played together. Native traces with hardware ray tracing and updates every probe every frame; ours runs in the browser at a 2 ms budget. Matching native is not a requirement: the look is judged by eye (Dennis, 2026-11-05). Both sides are GI-only brightness on the plot.",
+                "The same light motion, recorded on the same clock, played together. Native traces with hardware ray tracing and updates every probe every frame; ours runs in the browser within a GPU budget a frame (each caption says how it was recorded). Matching native is not a requirement: the look is judged by eye (Dennis, 2026-11-05). Both sides are GI-only brightness on the plot.",
             ),
             h(
                 'div',
@@ -261,7 +271,8 @@ class ComparePage {
             if (generation === this.loadGeneration) this.setStatus(`Could not load the recordings: ${error instanceof Error ? error.message : String(error)}`, true);
             return;
         }
-        for (const which of ['ours', 'native'] as const) this.sides[which].caption.textContent = describe(this.loaded[which].recording.info);
+        const grids = gridNote(this.loaded.ours.recording.info, this.loaded.native.recording.info);
+        for (const which of ['ours', 'native'] as const) this.sides[which].caption.textContent = `${describe(this.loaded[which].recording.info)}${grids ? ` ${grids}` : ''}`;
         this.scrub.max = String(this.length);
         this.setStatus(`Loaded ${ours.name} and ${native.name}: ${loadedImages} pictures.`);
         this.writeLink();
@@ -309,16 +320,22 @@ class ComparePage {
             const side = loaded[which];
             const shown = imageAt(side.recording, this.time);
             const parts = this.sides[which];
-            const image = shown?.image ? side.images.get(shown.image) : undefined;
-            if (image && parts.image.src !== image.src) parts.image.src = image.src;
+            const missing = shown?.image ? side.missing.has(shown.image) : true;
+            const image = shown?.image && !missing ? side.images.get(shown.image) : undefined;
+            // A picture that didn't load shows nothing, never an older picture under a newer frame number.
+            if (!image) parts.image.removeAttribute('src');
+            else if (parts.image.src !== image.src) parts.image.src = image.src;
             const frame = frameAt(side.recording, this.time);
             const first = side.recording.frames[0]?.value ?? 0;
+            const picture = missing ? `picture from frame ${shown?.frame ?? '-'} missing (it did not load)` : `picture from frame ${shown?.frame ?? '-'}`;
             parts.readout.textContent = frame
-                ? `frame ${frame.frame} (picture from frame ${shown?.frame ?? '-'}); GI-only brightness ${frame.value.toPrecision(4)}, ${first > 0 ? `${((frame.value / first) * 100).toFixed(1)}% of its start` : ''}`
+                ? `frame ${frame.frame} (${picture}); GI-only brightness ${frame.value.toPrecision(4)}, ${first > 0 ? `${((frame.value / first) * 100).toFixed(1)}% of its start` : ''}`
                 : '';
         }
         this.scrub.value = String(this.time);
-        this.timeReadout.textContent = `${this.time.toFixed(2)} s of ${this.length.toFixed(2)} s (frame ${Math.round(this.time * 60)})`;
+        // The frame of the longer recording, at its own frame rate (past the shorter one's end it holds its last).
+        const longer = duration(loaded.ours.recording) >= duration(loaded.native.recording) ? loaded.ours.recording : loaded.native.recording;
+        this.timeReadout.textContent = `${this.time.toFixed(2)} s of ${this.length.toFixed(2)} s (frame ${frameAt(longer, this.time)?.frame ?? 0})`;
         this.draw();
     }
 

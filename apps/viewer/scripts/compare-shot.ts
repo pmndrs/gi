@@ -28,6 +28,8 @@ const viewerDirectory = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const repoRoot = resolve(viewerDirectory, '..', '..');
 const VIEWPORT = { width: 1600, height: 1100 };
 const LOAD_TIMEOUT_MS = 120_000;
+/** Both sides keep a picture every 4th frame (native's `imageEvery`, and ours to match). */
+const PICTURE_STEP = 4;
 
 interface PageState {
     status: string;
@@ -119,10 +121,19 @@ async function main(): Promise<number> {
         state = await cdp.evaluate<PageState>(READ_STATE);
         console.log(`time: ${state.time}`);
         for (const readout of state.readouts) console.log(`  ${readout}`);
-        // In sync: both sides at the same frame of the motion.
-        const frames = state.readouts.map((readout) => /^frame (\d+)/.exec(readout)?.[1]);
-        if (frames.length !== 2 || frames[0] === undefined || frames[0] !== frames[1]) problems.push(`the sides are not at the same frame: ${frames.join(' and ')}`);
-        if (state.images.some((source) => source === '')) problems.push('a side shows no picture');
+        // In sync, read from what each side shows, not from the shared time: the picture each <img> holds is named
+        // after its frame (frame-NNNNNN), and the two must be within one picture step (every 4th frame) of each other.
+        const frames = state.readouts.map((readout) => Number(/^frame (\d+)/.exec(readout)?.[1]));
+        const pictures = state.images.map((source) => Number(/frame-(\d+)\.(?:png|jpg)$/.exec(source)?.[1]));
+        console.log(`  pictures shown: frame ${pictures.join(' and frame ')}`);
+        if (state.images.some((source) => source === '') || state.readouts.some((readout) => readout.includes('missing'))) problems.push('a side shows no picture');
+        else if (pictures.length !== 2 || pictures.some((frame) => !Number.isFinite(frame))) problems.push(`could not read the pictures' frames: ${state.images.join(', ')}`);
+        else if (Math.abs(pictures[0] - pictures[1]) > PICTURE_STEP) problems.push(`the sides show pictures ${Math.abs(pictures[0] - pictures[1])} frames apart (${pictures.join(' and ')}), more than one picture step (${PICTURE_STEP})`);
+        // Each picture is the latest at or before its side's frame.
+        frames.forEach((frame, index) => {
+            const picture = pictures[index];
+            if (Number.isFinite(frame) && Number.isFinite(picture) && !(picture <= frame && frame - picture < PICTURE_STEP)) problems.push(`side ${index + 1} is at frame ${frame} but shows the picture from frame ${picture}`);
+        });
     }
     const { data } = await cdp.send<{ data: string }>('Page.captureScreenshot', { format: 'png' }, 60_000);
     await mkdir(dirname(out), { recursive: true });

@@ -8,7 +8,7 @@
  * budget, GI only, at the scene's first bookmark (two-room: `lit-room`, as
  * native's), and the viewer's `MotionPlayer` poses the light. Like native:
  *
- * - a fixed clock: frame k shows the motion at k / 60 s;
+ * - the motion on a fixed clock: frame k shows it at k / 60 s;
  * - 600 frames at the motion's start first, so the probes have settled
  *   (native's `app.motionWarmupFrames`);
  * - each frame's brightness is the response meter's reading over the whole
@@ -17,9 +17,16 @@
  * - an image every 4th frame: the picture on screen (GI only, after exposure
  *   and tone mapping), as a JPEG at 960 x 540.
  *
- * The frames are paced at 60 Hz, so DDGI's history clock, which follows each
- * frame's real time, advances 1/60 s a frame as the motion's clock does
- * (NOTES: headless Chrome otherwise draws about 150 frames a second).
+ * What isn't fixed: DDGI ages each probe's history by the real time between
+ * frames (`ThreeGI.update` measures it; the blend's memory is in seconds),
+ * where native's blend has no time in it (a fixed hysteresis a frame,
+ * tools/native/README.md). So the frames are paced at 60 Hz (headless Chrome
+ * otherwise draws about 150 a second, NOTES), and nothing slow runs between
+ * them: a picture frame only snapshots the canvas (`createImageBitmap`), and
+ * the JPEGs are encoded after the run. An encode inside the loop made each
+ * picture frame about 31 ms and the next 5 ms. The real intervals are in
+ * `frames.csv` (`wall_time_s`, from each frame's start), and their median,
+ * mean and largest in `recording.json` (`frameIntervalMs`).
  *
  * The page hands the recording back in its report (data.recordings, images
  * as data URLs); `node tools/native/save-viewer-recording.ts <report.json>`
@@ -115,13 +122,17 @@ try {
     if (!motion) throw new Error(`${SCENE} has no motion ${MOTION}`);
     const light = player.lightFor(motion)!;
 
-    // Paced at 60 Hz (the file comment says why).
-    let lastFrameAt = performance.now();
-    const pacedFrame = async () => {
-        const wait = lastFrameAt + 1000 / FRAME_RATE - performance.now();
+    // Paced at 60 Hz (the file comment says why) on a fixed schedule, so a late frame (the browser's next animation frame
+    // comes a few ms after the timer) doesn't push every later frame back: the intervals average 1/60 s. Returns when the
+    // frame began drawing (`renderThroughLoop`), just before DDGI's update measures its time.
+    const frameMs = 1000 / FRAME_RATE;
+    let nextFrameAt = performance.now();
+    const pacedFrame = async (): Promise<number> => {
+        const wait = nextFrameAt - performance.now();
         if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
-        lastFrameAt = performance.now();
-        await core.renderThroughLoop();
+        // After a long stall start the schedule again rather than racing to catch up.
+        nextFrameAt = Math.max(nextFrameAt + frameMs, performance.now());
+        return core.renderThroughLoop();
     };
 
     // Native's warm-up: the motion's start for 600 frames.
@@ -130,30 +141,59 @@ try {
     for (let frame = 0; frame < WARMUP_FRAMES; frame++) await pacedFrame();
     log(`${SCENE} ${MOTION}: ${WARMUP_FRAMES} frames at the start, now recording ${FRAMES}`);
 
-    const capture = document.createElement('canvas');
-    capture.width = IMAGE_WIDTH;
-    capture.height = IMAGE_HEIGHT;
-    const captureContext = capture.getContext('2d')!;
     const size = core.renderer.getDrawingBufferSize(new Vector2());
     const rows: Array<{ frame: number; time: number; wallTime: number; image: string | null; value: number; probesUpdated: number; light: readonly [number, number, number]; mean: Promise<number> }> = [];
-    const images: Array<{ path: string; dataUrl: string }> = [];
-    const recordStart = performance.now();
+    const snapshots: Array<{ path: string; bitmap: Promise<ImageBitmap> }> = [];
+    const frameStarts: number[] = [];
     for (let frame = 0; frame < FRAMES; frame++) {
         const time = frame / FRAME_RATE;
         player.pose(motion, time);
-        await pacedFrame();
+        const startedAt = await pacedFrame();
+        frameStarts.push(startedAt);
         const reading = ddgi.readRegionMean(0, 0, size.x, size.y);
         if (!reading) throw new Error('the picture could not be read');
         let image: string | null = null;
         if (frame % IMAGE_EVERY === 0) {
-            // Right after the frame, before the browser shows the next: the picture on screen.
-            captureContext.drawImage(canvas, 0, 0, IMAGE_WIDTH, IMAGE_HEIGHT);
+            // Right after the frame, before the browser shows the next: a snapshot of the picture on screen, encoded after the run.
             image = `frames/frame-${String(frame).padStart(6, '0')}.jpg`;
-            images.push({ path: image, dataUrl: capture.toDataURL('image/jpeg', JPEG_QUALITY) });
+            snapshots.push({ path: image, bitmap: createImageBitmap(canvas, { resizeWidth: IMAGE_WIDTH, resizeHeight: IMAGE_HEIGHT, resizeQuality: 'high' }) });
         }
-        rows.push({ frame, time, wallTime: (performance.now() - recordStart) / 1000, image, value: 0, probesUpdated: ddgi.probesUpdated, light: [light.position.x, light.position.y, light.position.z], mean: reading });
+        rows.push({ frame, time, wallTime: (startedAt - frameStarts[0]) / 1000, image, value: 0, probesUpdated: ddgi.probesUpdated, light: [light.position.x, light.position.y, light.position.z], mean: reading });
     }
     for (const row of rows) row.value = await row.mean;
+
+    // The real time between frames: what DDGI aged its histories by.
+    const intervals = frameStarts.slice(1).map((start, index) => start - frameStarts[index]);
+    const sorted = [...intervals].sort((a, b) => a - b);
+    const mean = (values: number[]) => values.reduce((sum, value) => sum + value, 0) / Math.max(1, values.length);
+    // Intervals ending at the frame after a picture frame, and the rest: the snapshot must not slow the picture frames.
+    const afterPicture = intervals.filter((_, index) => index % IMAGE_EVERY === 0);
+    const others = intervals.filter((_, index) => index % IMAGE_EVERY !== 0);
+    const frameIntervalMs = {
+        median: sorted[Math.floor(sorted.length / 2)],
+        mean: mean(intervals),
+        largest: sorted[sorted.length - 1],
+        meanAfterPicture: mean(afterPicture),
+        meanOthers: mean(others),
+        over25: intervals.filter((interval) => interval > 25).length,
+    };
+    log(
+        `frame intervals: median ${frameIntervalMs.median.toFixed(2)} ms, mean ${frameIntervalMs.mean.toFixed(2)} ms, largest ${frameIntervalMs.largest.toFixed(2)} ms; ` +
+            `after a picture frame ${frameIntervalMs.meanAfterPicture.toFixed(2)} ms, others ${frameIntervalMs.meanOthers.toFixed(2)} ms; ${frameIntervalMs.over25} over 25 ms`,
+    );
+
+    // The JPEGs, now that the timed frames are over.
+    const capture = document.createElement('canvas');
+    capture.width = IMAGE_WIDTH;
+    capture.height = IMAGE_HEIGHT;
+    const captureContext = capture.getContext('2d')!;
+    const images: Array<{ path: string; dataUrl: string }> = [];
+    for (const snapshot of snapshots) {
+        const bitmap = await snapshot.bitmap;
+        captureContext.drawImage(bitmap, 0, 0);
+        bitmap.close();
+        images.push({ path: snapshot.path, dataUrl: capture.toDataURL('image/jpeg', JPEG_QUALITY) });
+    }
     log(`recorded ${rows.length} frames, ${images.length} images; brightness ${rows[0].value.toPrecision(4)} at the start`);
 
     const info: RecordingInfo = {
@@ -169,6 +209,10 @@ try {
         view: 'indirect',
         clock: 'fixed',
         frameSeconds: 1 / FRAME_RATE,
+        // The motion's clock is fixed; DDGI's histories follow these real intervals (the file comment).
+        frameIntervalMs,
+        // DDGI's own probe grid (native's recording.json says which grid it used; without one, its own `cells`).
+        gridRule: 'ddgi',
         frameRate: FRAME_RATE,
         warmupFrames: WARMUP_FRAMES,
         frames: FRAMES,
@@ -177,7 +221,8 @@ try {
         framesCsv: 'frames.csv',
         probeUpdate: `DDGI at the viewer's default budget (${DEFAULT_DDGI_VIEWER_SETTINGS.budgetMs} ms a frame): ${rows[Math.floor(rows.length / 2)].probesUpdated} probes a frame`,
         probes: ddgi.describeSettings().probes,
-        device: `${core.adapterInfo.vendor} ${core.adapterInfo.architecture} ${core.adapterInfo.description}`.trim(),
+        // The adapter's description, or what else it says about itself when that is empty.
+        device: core.adapterInfo.description || [core.adapterInfo.vendor, core.adapterInfo.architecture, core.adapterInfo.device].filter(Boolean).join(' '),
         recorded: new Date().toISOString(),
     };
     const recording = { name: `${SCENE}-${MOTION}`, info, framesCsv: framesCsv(rows, light.name), images };
