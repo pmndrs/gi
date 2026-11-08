@@ -21,6 +21,21 @@ Rules:
 
 ---
 
+## 2026-11-08 · T2.18 review fixes · implementer (opus)
+Did (27a63e3):
+- The batch never goes under Budget v2's floor. It uses the rate the platform last asked about; under a units budget it uses the observed frame rate.
+- The intake ends `CHANGE_INTAKE_MAX_FRAMES` (120) after the latest mark, census or not.
+- Unit tests for the floor, the cap (with a census and with none) and `changeServing`.
+- `ddgi-key-probes-cost` judges the post-step median against the same run's still median (≤ 1.05×) and reports the p95 against the still p95.
+- DECISIONS lead-ruling entry; ddgi.md; CSV rows for 27a63e3.
+Verified (RTX 3060 Laptop, nvidia/ampere, Chrome 157, bench lock, all VALID, about 780 MHz): typecheck, lint, 1,147 unit tests.
+- `ddgi-key-probes-cost` passes: post-step median 2.083 against still 2.112 (0.986×); p95 2.50 against 2.37 (1.05×, reported). Calibrated 152; the first frames list 85-99, above the floor of 81; the day 2.16 / 2.44.
+- `ddgi-key-probes-sponza` turn: view frame 15, field 60.
+- `ddgi-sky-sun-step`: furnished room 11 / 17 (T2.4d's 11 / 17; 11 / 13 earlier today; bar 30).
+- `ddgi-session-recompiles` (Cornell and two-room, groups off and on): 0, control 1. `platform-recompiles`: 0.
+Not verified: the turn with the sun layer on. On this branch `ddgi-key-probes-sponza` has no option for it: `VITE_DDGI_SETTINGS` is applied after the field converges, and `sunLayer` only takes effect at `prepare`. T2.8's `VITE_DDGI_SUN_LAYER` isn't on this branch. Skipped as briefed, with no hook added.
+Next: M3 breakdown: count `gi/direct`'s lit hits in the second count's cost (the first ~12 frames after a turn; NOTES). After the merge onto `m2`, re-run the sun-layer turn with T2.8's `VITE_DDGI_SUN_LAYER=on`.
+
 ## 2026-11-08 · T2.18 the second count after a single step · implementer (opus)
 Did: on `m2-t2.18` (from `m2-t2.10`), §4.5's smaller batch now also applies while a single change is taken in: from its mark until a census after its latest mark shows nothing owed. It applies only on volumes where a change outlasts `FAR_RULE_FRAMES` (Sponza, Bistro). Files: `packages/ddgi-core/src/techniques/ddgi/change-intake-batch.ts` (was `continuing-change.ts`) and its test, `ddgi-technique.ts` (`changeServing`, a census frame stamp, the "taking in a change" counter), `settings.ts` (`PROPAGATED_PROBE_RAYS`, `CHANGE_BATCH_MIN_SHARE`). The `ddgi-key-probes-cost` page now judges the 60 frames after the step and reports their first 20 frames pass by pass. Docs: ddgi.md, m2-lights.md, DECISIONS, NOTES. Commits 21f2462 (design), 3c93a29 (adjustment).
 Verified (RTX 3060 Laptop, nvidia/ampere, Chrome 157 headless, all under `bench-lock run`): lint, typecheck, unit tests (one asset-unpack test timed out in the full run under GPU load and passes alone). On 3c93a29: `ddgi-key-probes-cost` VALID with the p95 **failing** (below); `ddgi-key-probes-sponza` turn, `ddgi-sky-sun-step`, `ddgi-schedule-step` steps, `ddgi-session-recompiles` (Cornell and two-room, groups off and on: 0, control 1) and `platform-recompiles` (0) all pass.

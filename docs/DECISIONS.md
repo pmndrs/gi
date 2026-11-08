@@ -4,6 +4,17 @@ Settled choices, newest first. Each entry is short: the decision, why, and what 
 
 ## 2026-11-08
 
+- **T2.18 check 1 compares the frames after a step with still frames, not with a fixed 2.0 / 2.2 ms; lead ruling** (M2 lead, after the Opus review; recorded by the T2.18 implementer).
+  - *Old bar:* the 60 frames after Sponza's 30° sun turn have a median ≤ 2.0 ms and a p95 within 10% of the budget (2.2 ms).
+  - *New bar:* their median is within 5% of the same run's still-frame median (`ddgi-key-probes-cost`, `STEP_MEDIAN_SHARE`). The p95 is reported beside the still p95 and not judged. The p95 miss is accepted for M2.
+  - *Why:* the budget means that after a change a frame costs what a still frame costs. The calibration's own spread moves still frames by more than the fixed bar allows. At about 780 MHz, still medians were 1.98-2.13 ms across runs, so a fixed 2.0 ms passed or failed on the calibration, not on the change.
+  - *Numbers* (RTX 3060, VALID; post-step median against still median, post-step p95):
+    - The implementer's runs: 2.05 against 2.05 (p95 2.42; first build); 1.91 against 1.98 (p95 2.27); 1.99 against 2.02 (p95 2.38; 3c93a29).
+    - The reviewer's run: 2.135 against 2.13 (p95 2.58).
+    - After the review fixes (27a63e3): 2.083 against 2.112, 0.986× (p95 2.50 against still p95 2.37, 1.05×).
+    - Before T2.18 (T2.10): 2.44 against 2.04 (p95 3.12).
+  - *Follow-up for the M3 breakdown:* the first ~12 frames after the turn cost more than their rays say. `gi/direct` lights 30-50% more hits, and the second count's cost model doesn't count them (NOTES).
+  - *Also from the review:* the second count never goes under Budget v2's floor (`minProbesPerFrame`; Sponza 81 at 60 Hz), and a single change counts as taken in for at most `CHANGE_INTAKE_MAX_FRAMES` (120, the field's bar) after its latest mark, census or not.
 - **T2.18: the second count (§4.5) now also covers a single change while it is taken in, on volumes where a change outlasts `FAR_RULE_FRAMES` anyway; for the M2 lead** (T2.18 implementer). This changes T2.4d's "*Not covered, on purpose:* a single step". T2.10 measured Sponza's 60 frames after a 30° sun turn at 2.44 ms median, p95 3.12, against the 2 ms budget. The rule (change-intake-batch.ts):
   - *When:* from the frame `ddgi/mark` runs until a census recorded at or after its latest mark shows nothing owed. Only where a change outlasts `FAR_RULE_FRAMES` anyway (the key path with keys away from the view owing 4, or "far probes owe 2"): Sponza and Bistro, not two-room, Cornell or the furnished room. Continuing changes keep T2.4d's run rule everywhere (30 frames, gaps of 4).
   - *Why not everywhere:* the first build cut steps everywhere. The furnished room's sun step then settled at frames 162 / 124 instead of 11 / 13 (bar 30). Its 448 active keys converge a round a frame only while its 428-probe priority share holds them all. With the batch cut, the most urgent keys spent their owed updates bouncing off keys that had not moved yet (keys 21% off at frame 10 against 7%), the failure T2.4d fixed. Two-room and Cornell moved by at most a frame.
