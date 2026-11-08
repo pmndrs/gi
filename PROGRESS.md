@@ -21,6 +21,34 @@ Rules:
 
 ---
 
+## 2026-11-08 · T2.17 Bistro exterior's slow GI-on frame · implementer (opus)
+Did: found the cause, which needs a design choice, so I'm reporting options instead of a fix. Branch `m2-t2.17`. Added an opt-in texture cap at load: `LoadSceneOptions.maxTextureSize` and `limitTextureSize` in `apps/viewer/src/scene/load-scene.ts`, used by `viewer-baselines` and `ddgi-batch-cost` through `VITE_DDGI_MAX_TEXTURE_SIZE`. Nothing changes unless it's set. Nothing in `packages/`.
+
+**Cause: the GPU runs out of memory.** three keeps Bistro's 224 textures of 2048² uncompressed, which is 5.11 GB (`renderer.info.memory`). The platform adds 621 MB, so the 6 GB card is full: dedicated memory sits at 5.8 GB, and system memory used by the GPU grows from 119 to 500 MB. Windows then moves memory in and out on every frame that runs the GI update. Evidence from the diagnosis runs (CPU spans, an `nvidia-smi` memory log and the Windows `GPU Adapter Memory` counters):
+- **The time is a wait, not CPU work:** three's CPU recording takes 23-30 ms, the GI update's CPU 0.4 ms, and the wait in `onSubmittedWorkDone` 430-660 ms. The timestamps add up to only 19-22 ms.
+- **Only frames with the GI update pay:** GI shading without the update takes 46-60 ms, the same as GI off.
+- **The texture cap removes it:** at 1024, three's textures take 1.44 GB and VRAM 2.87 GB.
+- **It's not one merge:** M2's platform memory grew from 360 to 621 MB (NOTES), and the frame grew with it. Bisected in a throwaway worktree, since removed: M1's end (49832d9) 103 ms wall, T2.3's merge (e2e8dcd) 286 ms, the branch tip 480-625 ms. Each of those VALID runs was 2 rounds × 10 frames.
+
+Numbers (`viewer-baselines`, 1440p, DDGI only, 5 × 20 frames, VALID, 780-787 MHz; `baselines.csv` `note/t2.17_bistro_frame`):
+
+| | GI-on wall p50 / p95 | GI-on GPU | GI-off wall |
+| --- | --- | --- | --- |
+| before (textures as loaded) | 517 / 690 ms | 21.8 ms | 52.2 ms |
+| after (textures capped at 1024) | 46.9 / 53.4 ms | 19.5 ms | 45.9 ms |
+
+The 27 ms left between wall and GPU time is three's CPU recording of 1,592 meshes. The page records, then waits, so the two add up, and GI off has the same gap.
+
+Calibrated probes (`ddgi-batch-cost` start-up and budget, VALID, 780-810 MHz; `timing.csv` `note/t2.17_bistro_calibration`): 116 as loaded (fixed 1.54 ms; the budget check then failed at 3.13 ms) and 35 capped (fixed 1.03 ms, fit spread 0.91; the page failed its own "only 280 timed frames" check). Memory doesn't explain T2.10's 14-20 probes. Bistro's calibration moves a lot between runs at 780 MHz with a fixed cost of 1-1.5 ms. That's still open.
+
+Verified: RTX 3060 Laptop, headless Chrome 157.0.8103.38. Typecheck and lint clean, 1,136 unit tests pass. `viewer-baselines` and `ddgi-batch-cost` PASS with their default scenes (correctness, `--no-cool-wait`), and `viewer-baselines` on Bistro passes capped and uncapped.
+Not verified: the viewer app with the cap (it isn't wired into the UI). How the capped Bistro looks. The Intel UHD. T2.12 and T2.13 as separate bisect points. Whether removing the doubling slack alone would be enough; probably not, since M1's 360 MB still took 103 ms.
+Next (lead):
+- **Pick a fix.** (a) A per-scene texture cap in the manifest, so Bistro loads at 1024 everywhere, the M5 Pro included. (b) Compressed textures (KTX2/BC7) in `fbx-to-glb.py`, about 1.3 GB at full size. (c) Leave it, record Bistro on 6 GB cards as a known miss, and time Bistro on the M5 Pro.
+- **Platform slack, about 237 MB on Bistro:** the scene vertex buffer is 176 MB for 88 MB used, tracer triangles 272 MB for about 136 MB, nodes 97 MB for 84 MB. Trim to fit once the scene settles. A library change, not done here.
+- **Re-measure every Bistro exterior GPU number with the cap,** including T2.10's 19.2 / 11.2 ms, its fixed cost and its probe counts.
+- **Bistro's calibration:** its spread and its 1-1.5 ms fixed cost at 780 MHz (relevant to T2.18).
+
 ## 2026-11-08 · T2.10 M2 measurements on the RTX 3060 Laptop · gpu-tester (opus)
 Did: one run per gate under `bench-lock run`, on `m2-t2.10` (M2's final code). RTX 3060 Laptop (nvidia/ampere), headless Chrome 157.0.8103.38. Test-page additions only, nothing in `packages/`:
 - `ddgi-batch-cost` gained the staging peak and `VITE_DDGI_RAMP_SECONDS`;
