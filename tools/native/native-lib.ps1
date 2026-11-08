@@ -378,6 +378,13 @@ function New-HarnessIni {
     # left out, as the viewer leaves it out, so an off lamp costs the harness's shading nothing.
     # A motion's target is kept (KeepLights), since the motion turns it on.
     $lights = @($Manifest.lights | Where-Object { $_.intensity -gt 0 -or ($_.PSObject.Properties['label'] -and $KeepLights -contains $_.label) })
+    # A range of 0 means "no cut-off" in three (the manifest's convention, Sponza's arcade lamp). The harness
+    # reads the radius as a hard cut-off: Lighting.hlsl returns 0 beyond it, so a radius of 0 lit nothing,
+    # in the probe trace too (T2.10). It also applies the same window as three's ranged lights,
+    # (1 - (d / radius)^4)^2. Ten times the probe volume's diagonal keeps that window above 0.9998
+    # anywhere in the scene, which is as close to "no cut-off" as a finite radius gets.
+    $volumeDiagonal = [math]::Sqrt((@($Manifest.volume.size) | ForEach-Object { [double]$_ * [double]$_ } | Measure-Object -Sum).Sum)
+    $unlimitedRadius = 10 * $volumeDiagonal
     for ($i = 0; $i -lt $lights.Count; $i++) {
         $light = $lights[$i]
         $label = if ($light.PSObject.Properties['label']) { $light.label } else { "$($light.type)-$i" }
@@ -393,14 +400,14 @@ function New-HarnessIni {
                 $ini.Add("scene.lights.$i.type=1")
                 $ini.Add("scene.lights.$i.position=$(ConvertTo-Vec $light.position)")
                 $ini.Add("scene.lights.$i.direction=$(ConvertTo-Vec $light.direction)")
-                $ini.Add("scene.lights.$i.radius=$(Format-Number $light.range)")
+                $ini.Add("scene.lights.$i.radius=$(Format-Number $(if ([double]$light.range -gt 0) { $light.range } else { $unlimitedRadius }))")
                 $ini.Add("scene.lights.$i.umbraAngle=$(Format-Number ($light.outerConeDeg * [math]::PI / 180) 6)")
                 $ini.Add("scene.lights.$i.penumbraAngle=$(Format-Number ($light.innerConeDeg * [math]::PI / 180) 6)")
             }
             'point' {
                 $ini.Add("scene.lights.$i.type=2")
                 $ini.Add("scene.lights.$i.position=$(ConvertTo-Vec $light.position)")
-                $ini.Add("scene.lights.$i.radius=$(Format-Number $light.range)")
+                $ini.Add("scene.lights.$i.radius=$(Format-Number $(if ([double]$light.range -gt 0) { $light.range } else { $unlimitedRadius }))")
             }
         }
     }
