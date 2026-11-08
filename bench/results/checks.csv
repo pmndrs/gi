@@ -1,0 +1,189 @@
+date,commit,device,browser,scene,metric,value
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,bistro-exterior/groups on,t2.10/session_recompiles/recompiles,0
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,bistro-exterior/groups on,t2.10/session_recompiles/control,1
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,bistro-exterior/groups on,t2.10/session_recompiles/frames,750
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,note/sm_clock_mhz,900
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,note/sm_clock_min_mhz,780
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,note/sm_clock_max_mhz,1192
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,note/mem_clock_mhz,7151
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,note/start_temp_c,66
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,note/thermal_share,0
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,note/timing_valid,1
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/leak/frames,3000
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/leak/two-room/litMean,0.715269
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/leak/two-room/darkMean,0.065816
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/leak/two-room/cyclesLitMean,0.676064
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/leak/two-room/cyclesDarkMean,0.060163
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/leak/two-room/leak,0.00836163
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/leak/two-room/litBias,0.0579893
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/leak/two-room/darkBias,0.0939613
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/leak/thin-wall/litMean,0.856816
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/leak/thin-wall/darkMean,0.00505197
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/leak/thin-wall/leak,0.00589621
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/leak/closed-door/litMean,0.743156
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/leak/closed-door/darkMean,0.000448958
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/leak/closed-door/leak,0.000604124
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,note/sm_clock_mhz,780
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,note/sm_clock_min_mhz,780
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,note/sm_clock_max_mhz,802
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,note/mem_clock_mhz,7151
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,note/start_temp_c,63
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,note/thermal_share,0
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,note/timing_valid,1
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/light_groups/frames,900
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/light_groups/linearity/0/composedBefore,0.750943
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/light_groups/linearity/0/composedAfter,0.388387
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/light_groups/linearity/0/reconverged,0.388378
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/light_groups/linearity/0/againstReconverged,0.0000240297
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/light_groups/linearity/0/movedInItsFrame,-0.4828
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/light_groups/linearity/0/weightsOneAgainstGroupsOff,0.0000374683
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/light_groups/linearity/1/composedBefore,0.814292
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/light_groups/linearity/1/composedAfter,0.426618
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/light_groups/linearity/1/reconverged,0.426631
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/light_groups/linearity/1/againstReconverged,-0.0000302267
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/light_groups/linearity/1/movedInItsFrame,-0.476087
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/light_groups/linearity/1/weightsOneAgainstGroupsOff,-0.0000394526
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/light_groups/linearity/2/composedBefore,0.522805
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/light_groups/linearity/2/composedAfter,0.464468
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/light_groups/linearity/2/reconverged,0.464476
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/light_groups/linearity/2/againstReconverged,-0.0000186533
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/light_groups/linearity/2/movedInItsFrame,-0.111586
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/light_groups/linearity/2/weightsOneAgainstGroupsOff,-0.0000803434
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/light_groups/composeOnly/historyUnchanged,1
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/light_groups/composeOnly/layersUnchanged,1
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/light_groups/composeOnly/composedChanged,1
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/light_groups/composeOnly/changesMarkedInItsFrame,0
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/light_groups/composeOnly/framesWithChangesMarked,0
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/light_groups/composeOnly/fullComposes,1
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/light_groups/composeOnly/probesMarkedAfter,0
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/light_groups/reductions/defaultMean,0.880761
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/light_groups/reductions/fallbackMean,0.880761
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/light_groups/reductions/difference,0
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/light_groups/reductions/hasSubgroups,1
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/light_groups/regroup/curve/0/frame,0
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/light_groups/regroup/curve/0/error,0.365938
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/light_groups/regroup/curve/1/frame,1
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/light_groups/regroup/curve/1/error,0.238218
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/light_groups/regroup/curve/2/frame,2
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/light_groups/regroup/curve/2/error,0.15789
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/light_groups/regroup/curve/3/frame,4
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/light_groups/regroup/curve/3/error,0.0717241
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/light_groups/regroup/curve/4/frame,8
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/light_groups/regroup/curve/4/error,0.0199253
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/light_groups/regroup/curve/5/frame,15
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/light_groups/regroup/curve/5/error,0.0106196
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/light_groups/regroup/curve/6/frame,20
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/light_groups/regroup/curve/6/error,0.00940565
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/light_groups/regroup/curve/7/frame,25
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/light_groups/regroup/curve/7/error,0.00864492
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/light_groups/regroup/curve/8/frame,30
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/light_groups/regroup/curve/8/error,0.00809467
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/light_groups/regroup/withinFrame,8
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/light_groups/regroup/probesMarked,1928
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/light_groups/regroup/target/0,2.64993
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/light_groups/regroup/target/1,0
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/light_groups/regroup/target/2,0
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/light_groups/memory/groupsOffBytes,13022240
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/light_groups/memory/twoGroupsBytes,20801216
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/light_groups/memory/perExtraLayerBytes,3889488
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/light_groups/memory/probes,1071
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,note/sm_clock_mhz,780
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,note/sm_clock_min_mhz,780
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,note/sm_clock_max_mhz,795
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,note/mem_clock_mhz,7151
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,note/start_temp_c,65
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,note/thermal_share,0
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,note/timing_valid,1
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,cornell-box/groups off,t2.10/session_recompiles/recompiles,0
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,cornell-box/groups off,t2.10/session_recompiles/control,1
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,cornell-box/groups off,t2.10/session_recompiles/frames,550
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,cornell-box/groups on,t2.10/session_recompiles/recompiles,0
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,cornell-box/groups on,t2.10/session_recompiles/control,1
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,cornell-box/groups on,t2.10/session_recompiles/frames,630
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,two-room/groups off,t2.10/session_recompiles/recompiles,0
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,two-room/groups off,t2.10/session_recompiles/control,1
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,two-room/groups off,t2.10/session_recompiles/frames,600
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,two-room/groups on,t2.10/session_recompiles/recompiles,0
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,two-room/groups on,t2.10/session_recompiles/control,1
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,two-room/groups on,t2.10/session_recompiles/frames,680
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,sponza/groups off,t2.10/session_recompiles/recompiles,0
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,sponza/groups off,t2.10/session_recompiles/control,1
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,sponza/groups off,t2.10/session_recompiles/frames,670
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,sponza/groups on,t2.10/session_recompiles/recompiles,0
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,sponza/groups on,t2.10/session_recompiles/control,1
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,sponza/groups on,t2.10/session_recompiles/frames,750
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,note/sm_clock_mhz,780
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,note/sm_clock_min_mhz,210
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,note/sm_clock_max_mhz,975
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,note/mem_clock_mhz,7151
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,note/start_temp_c,58
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,note/thermal_share,0
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,note/timing_valid,1
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/platform_recompiles/created,1000
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/platform_recompiles/destroyed,1000
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/platform_recompiles/livePeak,784
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/platform_recompiles/moved,9494
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/platform_recompiles/newMeshes,20
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/platform_recompiles/recompilesBefore,0
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/platform_recompiles/recompilesAfter,0
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/platform_recompiles/lights/created,4096
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/platform_recompiles/lights/destroyed,4096
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/platform_recompiles/lights/edited,440
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/platform_recompiles/lights/kinds/directional,64
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/platform_recompiles/lights/kinds/point,2688
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/platform_recompiles/lights/kinds/spot,1344
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/platform_recompiles/lights/recompilesAfter,0
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome headless,all,t2.10/platform_recompiles/controlCounted,1
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,t2.10/ddgi_change_still/frames,600
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,t2.10/ddgi_change_still/cornell-box/units,1574
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,t2.10/ddgi_change_still/cornell-box/atlasMean,0.335474
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,t2.10/ddgi_change_still/cornell-box/viewMean,0.0332801
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,t2.10/ddgi_change_still/cornell-box/m1/atlas,0.335366
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,t2.10/ddgi_change_still/cornell-box/m1/view,0.0332848
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,t2.10/ddgi_change_still/cornell-box/atlasChange,0.000321905
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,t2.10/ddgi_change_still/cornell-box/viewChange,-0.000141434
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,t2.10/ddgi_change_still/cornell-box/probesMarkedTotal,0
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,t2.10/ddgi_change_still/two-room/units,707
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,t2.10/ddgi_change_still/two-room/atlasMean,1.68121
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,t2.10/ddgi_change_still/two-room/viewMean,0.711946
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,t2.10/ddgi_change_still/two-room/m1/atlas,1.67839
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,t2.10/ddgi_change_still/two-room/m1/view,0.711
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,t2.10/ddgi_change_still/two-room/atlasChange,0.0016791
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,t2.10/ddgi_change_still/two-room/viewChange,0.00133128
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,t2.10/ddgi_change_still/two-room/probesMarkedTotal,0
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,t2.10/ddgi_change_still/two-room fixed 0.97/units,707
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,t2.10/ddgi_change_still/two-room fixed 0.97/atlasMean,1.66875
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,t2.10/ddgi_change_still/two-room fixed 0.97/viewMean,0.70726
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,t2.10/ddgi_change_still/two-room fixed 0.97/m1/atlas,1.67031
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,t2.10/ddgi_change_still/two-room fixed 0.97/m1/view,0.708005
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,t2.10/ddgi_change_still/two-room fixed 0.97/atlasChange,-0.000934495
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,t2.10/ddgi_change_still/two-room fixed 0.97/viewChange,-0.00105331
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,t2.10/ddgi_change_still/two-room fixed 0.97/probesMarkedTotal,0
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,t2.10/ddgi_furnace/frames,1800
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,t2.10/ddgi_furnace/probesPerFrame,693
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,t2.10/ddgi_furnace/probes/0,11
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,t2.10/ddgi_furnace/probes/1,7
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,t2.10/ddgi_furnace/probes/2,9
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,t2.10/ddgi_furnace/points,1367
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,t2.10/ddgi_furnace/meanEOverPi,0.499248
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,t2.10/ddgi_furnace/meanRelativeError,0.00150337
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,t2.10/ddgi_furnace/meanBias,-0.00150337
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,t2.10/ddgi_furnace/worstRelativeError,0.0371249
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,t2.10/ddgi_furnace/worstEOverPi,0.481438
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,t2.10/ddgi_furnace/runMs,4275
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,t2.10/ddgi_test_view/width,1920
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,t2.10/ddgi_test_view/height,1080
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,t2.10/ddgi_test_view/frames,600
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,t2.10/ddgi_test_view/probes/0,12
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,t2.10/ddgi_test_view/probes/1,12
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,t2.10/ddgi_test_view/probes/2,12
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,t2.10/ddgi_test_view/ignoreLightRange,1
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,t2.10/ddgi_test_view/indirectMean,0.0498954
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,t2.10/ddgi_test_view/emissiveSurfaces,0
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,t2.10/ddgi_test_view/fullMean,0.107677
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,t2.10/ddgi_test_view/convergeMs,2790
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,t2.10/ddgi_test_view/referenceIndirectMean,0.047225
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,t2.10/ddgi_test_view/indirectBias,0.0565456
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,t2.10/ddgi_test_view/extraVolumes/in air/indirectMean,0.0492544
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,t2.10/ddgi_test_view/extraVolumes/in air/indirectBias,0.0429721
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,t2.10/ddgi_test_view/extraVolumes/in air/fullMean,0.107036

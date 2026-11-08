@@ -5099,3 +5099,566 @@ date,commit,device,browser,scene,metric,value
 2026-11-08,c7af54c,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/run3/jump3_x-2_to_x4/error_frame168,-0.015244
 2026-11-08,c7af54c,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/run3/jump3_x-2_to_x4/error_frame174,-0.014928
 2026-11-08,c7af54c,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/run3/jump3_x-2_to_x4/error_frame180,-0.013683
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/responseFrames,30
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/tolerance,0.05
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/units,880
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/priorityShare,660
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/before,0
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/settled,0.714037
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/firstFrameMove,0.334711
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/stepSize,1
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/enteredFrame,9
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/settledFrame,9
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/leftBandAgain,0
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/overshootShareOfStep,0
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/overshoot,0
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/0,-0.665289
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/1,-0.470108
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/2,-0.315693
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/3,-0.232068
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/4,-0.155674
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/5,-0.110643
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/6,-0.0811003
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/7,-0.0606399
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/8,-0.0365085
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/9,-0.0318636
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/10,-0.0257896
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/11,-0.0227786
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/12,-0.0191667
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/13,-0.0121964
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/14,-0.0131995
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/15,-0.00854511
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/16,-0.00602835
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/17,-0.00902992
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/18,-0.00882483
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/19,-0.00664453
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/20,-0.00665538
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/21,-0.00705937
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/22,-0.00673629
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/23,-0.0061648
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/24,-0.00623505
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/25,-0.00644756
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/26,-0.00618301
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/27,-0.00597215
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/28,-0.0056638
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/29,-0.00540488
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/30,-0.00502903
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/31,-0.00444982
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/32,-0.00425335
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/33,-0.00395727
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/34,-0.00423204
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/35,-0.00419797
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/36,-0.0039255
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/37,-0.00347382
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/38,-0.00335895
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/39,-0.00363785
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/40,-0.00359009
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/41,-0.00333748
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/42,-0.00333199
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/43,-0.00322718
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/44,-0.00306211
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/45,-0.00319899
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/46,-0.00309031
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/47,-0.00299859
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/48,-0.00314416
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/49,-0.00310953
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/50,-0.00293916
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/51,-0.00306035
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/52,-0.00312847
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/53,-0.00313701
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/54,-0.00308118
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/55,-0.00308973
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/56,-0.0030033
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/57,-0.00281534
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/58,-0.00270477
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/59,-0.00266101
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/60,-0.00267679
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/61,-0.00269561
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/62,-0.0027408
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/63,-0.00283924
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/64,-0.00294876
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/65,-0.00287087
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/66,-0.00292034
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/67,-0.00274886
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/68,-0.00273995
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/69,-0.00266118
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/70,-0.00265195
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/71,-0.00257167
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/72,-0.00252935
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/73,-0.00263329
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/74,-0.00252841
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/75,-0.00257414
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/76,-0.00244004
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/77,-0.00237295
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/78,-0.00235187
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/79,-0.0023208
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/80,-0.00225303
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/81,-0.00230001
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/82,-0.00241759
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/83,-0.00226223
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/84,-0.00227786
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/85,-0.00234788
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/86,-0.00243339
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/87,-0.00245575
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/88,-0.00243405
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/89,-0.00230534
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/90,-0.00233554
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/91,-0.00227138
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/92,-0.00218817
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/93,-0.00218172
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/94,-0.00224285
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/95,-0.00235292
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/96,-0.00219356
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/97,-0.00200474
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/98,-0.0020847
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/99,-0.00206621
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/100,-0.00210378
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/101,-0.00198409
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/102,-0.00201417
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/103,-0.00196671
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/104,-0.0019547
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/105,-0.00198993
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/106,-0.00192153
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/107,-0.00191075
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/108,-0.00195138
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/109,-0.00199796
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/110,-0.00202021
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/111,-0.00208493
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/112,-0.00206495
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/113,-0.00200467
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/114,-0.00195954
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/115,-0.00197566
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/116,-0.00197169
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/117,-0.00197102
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/118,-0.00196883
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp switched on/errors/119,-0.00199677
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/before,0.714037
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/settled,0.35703
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/firstFrameMove,0.127895
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/stepSize,0.499984
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/firstFrameChange,-0.127895
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/stepShare,-0.499984
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/enteredFrame,18
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/settledFrame,18
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/leftBandAgain,0
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/overshootShareOfStep,0
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/overshoot,0
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/0,0.744155
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/1,0.544814
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/2,0.431365
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/3,0.324649
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/4,0.262129
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/5,0.205068
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/6,0.155178
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/7,0.129836
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/8,0.104373
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/9,0.0881514
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/10,0.0791029
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/11,0.0686736
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/12,0.0637197
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/13,0.059433
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/14,0.0552772
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/15,0.0528662
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/16,0.0501783
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/17,0.0484144
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/18,0.0466304
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/19,0.0444534
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/20,0.0432067
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/21,0.0419212
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/22,0.0405481
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/23,0.0397733
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/24,0.0392382
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/25,0.0384297
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/26,0.0370286
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/27,0.0363786
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/28,0.0358115
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/29,0.0349966
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/30,0.0337323
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/31,0.0331419
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/32,0.032457
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/33,0.0323572
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/34,0.0319512
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/35,0.0315391
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/36,0.0308908
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/37,0.0304211
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/38,0.0300316
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/39,0.0300258
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/40,0.0297619
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/41,0.0294851
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/42,0.02935
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/43,0.0291144
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/44,0.0287461
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/45,0.0286848
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/46,0.0282518
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/47,0.0279467
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/48,0.0276143
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/49,0.0271189
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/50,0.026717
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/51,0.0266933
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/52,0.0265592
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/53,0.0262912
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/54,0.0261093
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/55,0.0260332
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/56,0.025855
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/57,0.0256106
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/58,0.025465
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/59,0.0253115
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/60,0.0252068
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/61,0.0250967
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/62,0.0249954
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/63,0.0248832
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/64,0.024825
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/65,0.0246326
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/66,0.0245214
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/67,0.0244673
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/68,0.0244513
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/69,0.0244116
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/70,0.0241469
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/71,0.0240025
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/72,0.0238856
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/73,0.023808
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/74,0.0235779
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/75,0.0234319
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/76,0.0233159
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/77,0.0231623
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/78,0.023039
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/79,0.023065
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/80,0.0228797
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/81,0.0226531
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/82,0.0224944
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/83,0.0223045
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/84,0.0220947
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/85,0.0219762
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/86,0.0219195
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/87,0.0218355
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/88,0.0216715
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/89,0.0215898
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/90,0.0214558
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/91,0.0213024
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/92,0.0211208
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/93,0.0211558
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/94,0.0210981
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/95,0.0208936
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/96,0.0208209
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/97,0.0206231
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/98,0.0205559
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/99,0.0203128
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/100,0.0201792
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/101,0.0200295
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/102,0.0198749
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/103,0.0197595
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/104,0.0197275
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/105,0.019663
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/106,0.0196652
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/107,0.0195521
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/108,0.0194079
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/109,0.0193844
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/110,0.0193131
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/111,0.0193261
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/112,0.0191916
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/113,0.0190391
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/114,0.0189245
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/115,0.0188256
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/116,0.0187219
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/117,0.0186119
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/118,0.018586
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/two-room/two-room: the lamp halved/errors/119,0.0185643
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/units,1463
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/priorityShare,1097
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/before,0
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/settled,0.0497842
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/firstFrameMove,0.467986
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/stepSize,1
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/enteredFrame,5
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/settledFrame,5
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/leftBandAgain,0
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/overshootShareOfStep,0.00461073
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/overshoot,0.00461073
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/0,-0.532014
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/1,-0.271342
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/2,-0.140651
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/3,-0.0927499
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/4,-0.0395361
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/5,-0.0239266
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/6,-0.020306
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/7,-0.0208767
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/8,-0.0033417
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/9,-0.0114256
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/10,-0.0102907
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/11,-0.0136023
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/12,-0.0198102
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/13,-0.00236025
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/14,-0.0021371
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/15,0.000428686
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/16,-0.00409968
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/17,0.00378605
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/18,0.00214448
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/19,-0.00153128
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/20,0.00141681
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/21,0.00128998
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/22,0.000166471
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/23,0.00132145
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/24,0.00218237
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/25,0.00377966
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/26,0.00431364
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/27,0.00405992
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/28,0.00461073
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/29,0.00372773
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/30,0.00291915
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/31,0.00283368
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/32,0.00234441
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/33,0.00245796
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/34,0.00280888
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/35,0.0023736
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/36,0.00299575
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/37,0.00301094
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/38,0.00320167
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/39,0.0032093
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/40,0.00308531
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/41,0.00297268
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/42,0.00288396
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/43,0.0025943
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/44,0.00258621
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/45,0.00269805
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/46,0.00239757
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/47,0.00255126
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/48,0.00255462
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/49,0.00288848
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/50,0.00274088
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/51,0.00292769
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/52,0.00281552
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/53,0.00292493
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/54,0.00338641
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/55,0.00328835
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/56,0.00322303
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/57,0.00309096
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/58,0.00296998
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/59,0.00291403
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/60,0.00308423
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/61,0.00293108
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/62,0.00264389
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/63,0.00282768
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/64,0.00287523
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/65,0.00289702
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/66,0.0029634
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/67,0.0026816
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/68,0.00298036
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/69,0.00300866
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/70,0.00301103
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/71,0.00282059
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/72,0.00281751
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/73,0.00269956
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/74,0.0026216
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/75,0.00248227
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/76,0.00236326
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/77,0.00236843
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/78,0.00227664
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/79,0.0020275
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/80,0.00205466
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/81,0.00208284
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/82,0.00205706
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/83,0.00230106
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/84,0.00244411
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/85,0.00258347
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/86,0.0024137
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/87,0.00230144
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/88,0.00239442
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/89,0.00250756
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/90,0.00255832
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/91,0.00242889
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/92,0.0023829
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/93,0.00228088
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/94,0.00207649
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/95,0.00193565
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/96,0.0019083
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/97,0.00180562
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/98,0.00191809
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/99,0.00177852
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/100,0.00179438
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/101,0.00177821
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/102,0.00189885
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/103,0.00167596
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/104,0.00167194
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/105,0.00171965
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/106,0.00164064
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/107,0.00149754
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/108,0.00153325
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/109,0.00145928
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/110,0.00131171
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/111,0.00138097
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/112,0.00149813
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/113,0.00139792
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/114,0.00133912
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/115,0.0015796
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/116,0.00156792
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/117,0.00141817
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/118,0.00144731
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp switched on/errors/119,0.00142533
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/before,0.0497842
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/settled,0.0248965
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/firstFrameMove,0.232763
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/stepSize,0.499911
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/firstFrameChange,-0.232763
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/stepShare,-0.499911
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/enteredFrame,8
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/settledFrame,8
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/leftBandAgain,0
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/overshootShareOfStep,0.00203025
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/overshoot,0.00202953
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/0,0.534202
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/1,0.28424
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/2,0.166533
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/3,0.110453
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/4,0.0675254
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/5,0.0543511
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/6,0.0585546
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/7,0.0338685
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/8,0.0177205
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/9,0.0367496
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/10,0.00460502
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/11,0.00920878
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/12,-0.00202953
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/13,0.00329492
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/14,-0.00135651
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/15,0.00449579
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/16,0.00828005
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/17,0.00349255
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/18,0.0018983
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/19,0.000850542
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/20,0.00235108
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/21,0.00623875
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/22,0.00380734
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/23,0.00331042
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/24,0.00440174
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/25,0.00455129
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/26,0.00214511
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/27,0.000541875
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/28,0.00027278
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/29,0.00175872
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/30,0.00351366
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/31,0.00361746
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/32,0.00287711
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/33,0.00308833
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/34,0.00242312
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/35,0.00247902
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/36,0.00189203
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/37,0.00111398
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/38,0.00206324
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/39,0.0017909
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/40,0.00188424
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/41,0.00167457
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/42,0.00123435
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/43,0.00044398
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/44,0.000823954
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/45,0.00122037
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/46,0.000608459
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/47,0.000357458
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/48,0.000364249
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/49,0.000492044
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/50,0.000690968
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/51,0.000131791
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/52,0.000105867
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/53,0.000143438
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/54,0.000805222
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/55,0.000839919
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/56,0.00078753
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/57,0.000787428
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/58,0.000690395
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/59,0.000580345
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/60,0.000529255
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/61,0.000668554
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/62,0.000493687
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/63,0.000556922
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/64,0.000183033
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/65,0.0000119881
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/66,0.000114465
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/67,-0.000181866
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/68,0.000216409
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/69,0.000343648
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/70,0.000178193
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/71,0.000271015
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/72,0.000279416
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/73,-0.0000925761
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/74,-0.000193514
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/75,-0.00027616
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/76,-0.000130653
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/77,0.000274679
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/78,0.000353186
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/79,0.000274048
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/80,0.000311114
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/81,0.0000577026
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/82,-0.000099916
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/83,-0.000111747
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/84,-0.0000187226
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/85,-0.000190208
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/86,-0.0000991665
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/87,-0.0000677614
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/88,-0.000113764
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/89,-0.000160897
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/90,-0.000162314
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/91,-0.000143348
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/92,-0.000104121
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/93,0.0000242268
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/94,0.0000155849
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/95,0.0000692561
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/96,0.000123397
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/97,-0.0000154389
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/98,0.000121958
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/99,0.000224279
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/100,0.000218631
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/101,0.000117098
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/102,0.000171576
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/103,0.000103225
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/104,-0.0000141916
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/105,-0.0000137587
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/106,0.0000328802
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/107,-0.0000751847
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/108,0.000207345
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/109,0.000254333
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/110,0.000183321
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/111,0.000243076
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/112,0.00030382
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/113,0.000308179
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/114,0.000139163
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/115,0.000131857
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/116,-0.0000819778
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/117,-0.000194266
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/118,-0.000236925
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/cornell-box-point/cornell-box-point: the lamp halved/errors/119,-0.000228408
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/sweep/speedMetresPerSecond,1
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/sweep/units,880
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/sweep/changeDriven/0/seconds,0.8
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/sweep/changeDriven/0/mean,0.70353
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/sweep/changeDriven/0/reference,0.709928
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/sweep/changeDriven/0/error,-0.00901216
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/sweep/changeDriven/0/perPixelError,0.0398025
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/sweep/changeDriven/1/seconds,1.6
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/sweep/changeDriven/1/mean,0.721341
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/sweep/changeDriven/1/reference,0.718026
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/sweep/changeDriven/1/error,0.00461627
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/sweep/changeDriven/1/perPixelError,0.0438784
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/sweep/changeDriven/2/seconds,2.4
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/sweep/changeDriven/2/mean,0.744651
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/sweep/changeDriven/2/reference,0.719991
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/sweep/changeDriven/2/error,0.0342502
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/sweep/changeDriven/2/perPixelError,0.0412278
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/sweep/m1Rule/0/seconds,0.8
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/sweep/m1Rule/0/mean,0.698829
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/sweep/m1Rule/0/reference,0.709928
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/sweep/m1Rule/0/error,-0.0156343
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/sweep/m1Rule/0/perPixelError,0.0926589
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/sweep/m1Rule/1/seconds,1.6
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/sweep/m1Rule/1/mean,0.701463
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/sweep/m1Rule/1/reference,0.718026
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/sweep/m1Rule/1/error,-0.0230674
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/sweep/m1Rule/1/perPixelError,0.20254
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/sweep/m1Rule/2/seconds,2.4
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/sweep/m1Rule/2/mean,0.705339
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/sweep/m1Rule/2/reference,0.719991
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/sweep/m1Rule/2/error,-0.0203513
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/sweep/m1Rule/2/perPixelError,0.275132
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/census/units,880
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/census/frames,3600
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/census/longestGapFrames,1
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/census/atProbe,352
+2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome headless,all,response/t2.10/schedule_step/census/roundRobinPassFrames,5
