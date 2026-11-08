@@ -21,6 +21,24 @@ Rules:
 
 ---
 
+## 2026-11-08 · T2.16 · gpu-tester
+Did: re-rendered the six noisy viewing-only bookmarks with Cycles on the RTX 3060 Laptop (OptiX), 1920 x 1080, in parts with different seeds (one bench-lock hold per part, 3.5 to 9.5 minutes each), then `combine.ts` and `noise.ts`. Samples set from noise falling as 1/sqrt(samples). Old files are in `bench/references/<scene>/<camera>/old-t2.16/` (raw EXRs, jsons and the old denoised copies). The old `cycles-full-denoised.exr` was moved there, so the viewer now shows the raw (clean) full image. Accuracy references and Sponza's untextured set untouched. No library code changed.
+Verified: each `cycles.json` (the file the viewer reads for sample count and noise) holds the new values: samples, seeds, device OptiX RTX 3060 Laptop, noise from two of its parts. Did not take viewer screenshots; I read the JSON the viewer loads instead.
+Not verified / caveats: dark room is 3.1% (just over 3%) and the two Sponza views 3.05% and 3.22%, because I stopped near 45 GPU minutes. Many timing verdicts say INVALID (the card throttled to about 900 MHz); that affects minutes only, not the images. The dark room's old parts could not be reused (combine refuses parts from other commits), so it was re-rendered from scratch.
+Numbers (GI noise = mean relative error vs converged, per pixel; per 8 x 8 block in brackets; minutes = Cycles render seconds summed over parts):
+
+| view | old samples, noise | new samples, noise | minutes |
+| --- | --- | --- | --- |
+| point-light Cornell `inside-from-red-wall` | 1024, 9.80% (1.06%) | 3 x 4096 = 12288, 2.46% (0.30%) | 27.1 |
+| point-light Cornell `diagonal-to-the-red-wall` | 1024, 8.96% (0.87%) | 3 x 3584 = 10752, 2.24% (0.27%) | 23.7 |
+| two-room `dark-room-leak-view` | 4096, 6.20% (0.78%) | 8 x 2048 = 16384, 3.10% (0.39%) | 47.7 |
+| two-room `through-the-doorway` | 1024, 3.54% (0.41%) | 2 x 1024 = 2048, 2.34% (0.29%) | 7.3 |
+| textured Sponza `colonnade-from-the-floor` | 512, 14.42% (1.69%) | 9 x 1024 = 9216, 3.05% (0.40%) | 41.3 |
+| textured Sponza `upper-gallery` | 512, 14.03% (1.79%) | 9 x 1024 = 9216, 3.22% (0.42%) | 48.4 |
+
+Full-image noise per pixel is now 0.3 to 2.8% (dark room 2.77%, Cornell inside 1.63%). Seconds per sample over both renders: Cornell inside 0.13, doorway 0.21, dark room 0.17, Sponza 0.27 to 0.32.
+Next: for exactly 3% the dark room needs about one more 2048 part (about 6 min) and each Sponza view about three more 1024 parts (about 15 min). Otherwise 3.1 to 3.2% is within "about 3%". The README's noise table still lists the old values (the numbers now live in the jsons); update it when convenient.
+
 ## 2026-11-08 · T2.8 part 1 review and merge · lead (opus)
 Did: An Opus review passed T2.8 with notes. I fixed the doc notes on the branch:
 - DECISIONS now says that any page loading through `ViewerCore` also gets the candle reach;
