@@ -1,0 +1,5 @@
+{
+    "description": "T2.8 check 3: records a light motion in the viewer (two-room by default) the way the native harness records it (fixed 60 Hz clock, 600 frames at the start, the response meter's reading each frame, a picture every 4th frame), for the compare page. Save it with node tools/native/save-viewer-recording.ts <report.json>.",
+    "timeoutMs": 900000,
+    "manual": true
+}

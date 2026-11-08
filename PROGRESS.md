@@ -66,6 +66,32 @@ Verified:
 
 Not verified: the Intel UHD after the merge; "62 of 62" hover help (no test counts it; the reviewer spot-checked 21); Dennis driving the viewer by eye.
 
+## 2026-11-08 · T2.8 part 2 review fixes · implementer (opus)
+Did: the Opus review's notes on the compare page.
+- **Real frame time** (`tools/gpu/pages/viewer-recording`): the JPEG encode ran inside the paced loop (each picture frame about 31 ms, the next 5 ms). Picture frames now only snapshot the canvas (`createImageBitmap`); the JPEGs are encoded after the run. Frames are paced on a fixed 60 Hz schedule, so a late frame doesn't push the rest back. `recording.json` records `frameIntervalMs` (median, mean, largest, after picture frames, others, how many over 25 ms). No ThreeGI frame-time option was used: the viewer gives none, and none was added.
+- **Correction to the entry below:** only the motion's clock is fixed (frame k = k / 60 s on both sides). Our DDGI ages its histories by the real time between frames; native's blend works per frame. The comments now say so (`recording.ts`, `compare-page.ts`, the recorder page, the viewer README).
+- `compare-shot.ts`: the sync check reads the frame each side's picture file is named after, and fails if the two differ by more than one picture step (4 frames). It also fails if a side's picture isn't the latest at or before its frame.
+- `compare-page.ts`:
+  - a picture that fails to load says "missing" in its side's readout and shows nothing;
+  - the frame readout uses `frameAt` with the recording's own frame rate;
+  - the empty `append()` is removed and the misplaced comment fixed;
+  - the note no longer writes "2 ms" (each caption gives the recording's own budget);
+  - when the grids differ, the captions say so (`gridNote` in `recording.ts`, tested).
+- `device` falls back to vendor, architecture and device when the description is empty.
+- **The sweep pair uses different probe grids:** native's sweep used its own `cells` grid (918 probes), ours DDGI's (1,071). Only the step has a native run on our grid (`-ddgi-run1`). A native sweep on our grid is T2.10's.
+Verified (RTX 3060, headless Chrome, under the lock): re-recorded both.
+- Sweep (434 probes a frame): frame interval median 17.3 ms, mean 16.67, largest 44.5; 10 of 624 over 25 ms. After picture frames the mean is 16.69 ms, others 16.66.
+- Step (434 a frame): median 17.8 ms, mean 16.68, largest 41.9; 15 of 720 over 25 ms. After picture frames 17.33 ms, others 16.46.
+- `compare-shot` passes on both. The sweep shows frame 180 with pictures from frame 180 on both sides, and the grid note in its captions. The step shows frame 217 with pictures from frame 216 on both sides, and no grid note. I looked at both screenshots.
+- lint, typecheck and tests pass. `bench-lock.test.ts` failed once in the full run (its GPU clock sampling, while another lane's Cycles render held the RTX) and passed alone.
+Not verified: the median sits above 16.7 ms because the browser's animation frame comes a few ms after the timer; the schedule keeps the mean at 1/60 s. The few long frames (up to 45 ms) were not traced to a cause.
+
+## 2026-11-08 · T2.8 part 2: the native compare page (check 3) · implementer (opus)
+Did: merged `m2-t2.7` into `m2-t2.8` (PROGRESS kept both sides, 120 = 118 + 119 − 117; the `native/rtxgi-ddgi` submodule left as the merge set it, not updated). New `apps/viewer/compare.html` (`src/compare/compare-page.ts`): our recording and native's of the same motion played together on the motion clock (frame k = k / 60 s), side by side, both GI-only brightness curves on one plot (relative to each start, or as measured), scrub bar, play/pause, speed, click-to-seek on the plot, hover help, and the note that native traces with hardware ray tracing and matching it is not a requirement. The dev server lists recordings at `/__recordings` (vite.config.ts: `native/build/recordings` and `bench/recordings/viewer`, or `DDGI_NATIVE_RECORDINGS` / `DDGI_VIEWER_RECORDINGS`). Ours come from `tools/gpu/pages/viewer-recording` (the viewer's own code: GI only, the meter's reading over the whole view each frame, native's fixed clock and 600-frame start, a JPEG every 4th frame) and `tools/native/save-viewer-recording.ts`. `apps/viewer/scripts/compare-shot.ts` checks the page headless. Pure parts (`recording.ts`, `pairs.ts`) unit-tested. `/bench/recordings/` git-ignored.
+Verified (RTX 3060, headless Chrome, under the lock): recorded two-room `light-sweep` (625 frames, 157 pictures, 400 probes a frame) and `light-step` (721 frames, 181 pictures, 466 a frame). The page loaded each with native's (`two-room-light-sweep`, `two-room-light-step-ddgi-run1`, copied from the t27 worktree into this one's git-ignored `native/build/recordings`), played 3 s and 3.6 s, and both sides stood at the same frame (180, 216) with pictures from the same frame; I looked at both screenshots: the lamps sit at the same place, the sweep's curves nearly overlap (88.1% and 88.4% of their starts at 3 s), and on the step ours falls within about 0.2 s while native, updating every probe at a fixed hysteresis, is still at 71% at 3.6 s. lint, typecheck, tests (1,132) pass.
+Not verified: by Dennis's eye; the Intel UHD; the page in a production build (it needs the dev server's recordings list). Native's pictures are the full picture (its recordings are `view: full`), ours GI only; the captions say so, the curves are GI-only on both.
+Next: native's GI-only pictures (`-View indirect`) if Dennis wants the pictures like for like; more scenes (Sponza's day) once both sides have them.
+
 ## 2026-11-08 · T2.8 viewer controls for M2 (checks 1, 2, 4; check 3 waits for T2.7) · implementer (opus)
 Did (branch `m2-t2.8`, worktree `webgpu-ddgi-m2-t28`):
 - Viewer panel sections (`apps/viewer/src/ui/lighting-controls.ts`, `src/lighting/`): Lights (choose from a list or click a marker; three's `TransformControls` to move, and turn spots; on/off, brightness, colour, reach, cone, soft edge, shadows, GI group, put back), Light motions (play/stop the manifest's `light-sweep`/`light-step`), Time of day (hour, day, a 10-second day; turns DDGI's sun layer on, DDGI restarts once; `solar-position.ts`), Light groups (off/2/4, colour and dimmer per group and for the sky), Response meter (pick a region, measure a jump of a motion in GI only, plot, CSV). Every control has hover help (`help-text.ts`). Stats show `recompiles`. Links: `motion=`, `tod=hour,day`, `groups=`, `reach=`.
@@ -77,6 +103,33 @@ Verified (RTX 3060, Chrome headless, correctness runs): `viewer-lighting`: the s
 Not verified: Dennis driving it by eye (check 4's second half); the gizmo by mouse (headless runs pick by the list); VXGI and the upscaler don't draw the markers; Sponza's sun turn with the layer on misses (below).
 Numbers: Sponza key-probe sun turn, sun layer on (`ddgi-key-probes-sponza`, `VITE_DDGI_SUN_LAYER=on`, 3 runs): view within 5% for good from frames 16, 16, 13 (bar 15), field 36; layer off the same day 12, 11, 12. One diagnosis (the per-layer firefly clamp: clamp off still 15), no cause found, so no fix attempt (DECISIONS, for the lead).
 Next: the sun-layer excess near the view (a task of its own, DECISIONS); T2.8 check 3 (the native compare page) after T2.7; a `userData.giRange` if the lead wants GI's candles unranged; `sponza-candles`' calibration read 1-9 probes a frame in the viewer (fixed part 1.9-2.2 ms measured while three drew), for T2.10 to look at.
+
+## 2026-11-08 · T2.7 review fixes · native-runner (opus)
+Did: the fork's clock is now frame / `app.motionFrameRate` in double, not a float step (3d6cd8e). `motion.ts check` checks fixed-clock runs at frame / 60, worked out in TS (test added). New `play.ps1` options: `-Log` (a visible window on the wall clock, its own `-log` folder) and `-GridRule ddgi`. NOTES and README give native's blend rule, and warn that `lamp_halved` is a dimming, not the same event. **Found and fixed a texture-sky bug** (350f9de): each harness pass has its own descriptor set, so only the G-buffer had the sky images and probe misses read 0. The reviewer's lights-buffer cause was checked: not it, reverted.
+Verified (RTX 3060 Laptop, Vulkan, bench lock):
+- the watched `-Log` sweep: 0.0000 cm over 2,401 frames (14.5 s, frames 6 ms apart);
+- the fixed sweep: 0.0000 cm at frame / 60, logged clock within 0.033 µs;
+- the Sponza day re-recorded: sun 0.00000° off; dawn GI 6e-4, where before the fix it was 2e-8;
+- open-ground's probe GI with the texture sky is within 0.14% of its flat equivalent (it was 0 before);
+- `sky-check` still ok;
+- two-room default against c7d0162: 0.16–0.19%, the same as c7d0162 against itself;
+- tests, typecheck and lint pass.
+Numbers: `response.csv` `response/native/light-step/grid_ddgi/run1-3/*` (1,071 probes, settled from 3,600-frame holds). Lamp back: within 5% at frames 116–117. Lamp out: 135% above settled at frame 180. The old cells-grid rows got `grid_rule,cells` rows.
+Correction: the T2.7 entry below said open-ground had no GI with either sky; that was the descriptor bug plus a misread capture. Its Sponza day had no sky light in the probes; it is re-recorded (350f9de).
+Next: the fork push waits for Dennis. Recordings stay git-ignored.
+
+## 2026-11-08 · T2.7 native harness: motions, texture sky, animated sun · native-runner (opus)
+Did: fork branch `m2-t2.7` (`Motion.h/.cpp`; `GetSkyRadiance` in `Descriptors.hlsl` for probe, G-buffer and path-tracer misses; `LightingConsts`' padding carries the sky image; recording in `main.cpp`); `tools/native/motion.ts`, `response.ts`, `sky-check.ts`, `motion.test.ts`; `play.ps1 -Motion -Record -Sky -SettleKey -CaptureField`. All opt-in. Time: a fixed 1/60 s a frame when recording, the wall clock in a watched window (NOTES).
+Verified (RTX 3060 Laptop, Vulkan; built with VS 2022 17.10 / MSVC 19.40.33811, Windows SDK 10.0.22621.0, Vulkan SDK 1.3.283.0, CMake 3.24.0):
+- check 1: `play.ps1 -Scene two-room -Motion light-sweep -Record` puts the lamp 0.0000 cm from `motionState` over all 625 frames (`motion.ts check`); the step also 0.0000 cm over 721 frames, 3 runs.
+- check 2: `sky-check.ts` on open-ground: the G-buffer sky matches the file sampled in the same direction (mean 0.37/255, all pixels within 1.5); a mirrored map would be 38.8 off; below the horizon is black (the flat sky wasn't).
+- check 3: Sponza `-Motion time-of-day` (T2.4d's day): the sun is 0.00000° from the path on all 601 frames; 41 sky images blended; the GI-only mean rises from 2e-8 at 5° to 0.0125 at noon and falls again.
+- check 4: default config against c7d0162, `play.ps1 -Clean -CaptureFrames 600`: two-room 0.13–0.20% mean relative error (c7d0162 against itself 0.18–0.20%), open-ground 0.16% (0.29%); looked the same by eye. `pnpm typecheck` and the motion tests pass.
+Numbers: `bench/results/response.csv`, `response/native/light-step/run1-3/*` (558 rows). Lamp back into the room: within 5% from frame 131–132, every run. Lamp out: still 60% above settled at frame 180 (11x in its own frame). Settled levels come from 3,600-frame holds. The runs agree to 0.1%.
+Not verified: D3D12 (it builds; texture sky and recording are Vulkan only); the sky's effect on native probe GI (open-ground gives 0 GI with either sky, a pre-existing problem, NOTES); a watched wall-clock window (only recorded runs).
+Recordings (git-ignored, `native/build/recordings/`): `two-room-light-sweep`, `two-room-light-step-run1..3`, `sponza-time-of-day`. Each folder has `recording.json`, `frames.csv`, PNGs every 4th frame and a 15 fps `video.mp4`. The format is in `tools/native/README.md`, "Motions and recordings".
+Next: T2.8's compare page reads those folders; the lead decides whether to commit them (71 to 244 MB each) or the mp4 and CSV alone. The open-ground zero-GI cause goes to T2.10 or a native follow-up. Push the fork branch `m2-t2.7`.
+
 ## 2026-11-08 · T2.13 review and merge · lead (opus)
 Did: The Opus review passed packing (done-when 2) and found the main-thread bar (done-when 1) missed. Under the timebox (one diagnosis, one fix attempt) I merged T2.13 as a known miss, since it is a clear gain. I fixed the review's doc notes on the branch (b2b6720):
 - `m3-moving.md`'s upload budget gets an as-built note;
