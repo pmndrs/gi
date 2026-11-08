@@ -224,11 +224,15 @@ The rows above are the pre-T1.13 references (now `cycles*-lowres.*`). The HD set
 | --- | --- | --- | --- |
 | point-light Cornell `front` | 8192 (+ a second seed) | OptiX | 983 |
 | two-room `lit-room` | 4096 | OptiX | 1351 |
-| two-room `dark-room-leak-view` | 2 × 2048, combined | OptiX | 564 + 432 |
 | untextured Sponza `colonnade-from-the-floor` | 4 × 2048, combined | OptiX | 445 + 470 + 379 + 381 |
 | emissive Cornell `front` | 2 × 1024, combined | CPU, 12 threads | 1319 + 1303 |
-| textured Sponza `colonnade-from-the-floor` | 512, denoised copy | CPU, 12 threads | 2029 |
-| the other bookmarks (Cornell 2 and 3, two-room doorway, Sponza gallery, open ground) | 1024 (Sponza 512), denoised copies | CPU, 12 threads | 756 to 2831 |
+| point-light Cornell `inside-from-red-wall` (T2.16) | 3 × 4096, combined | OptiX | 27.1 minutes in all |
+| point-light Cornell `diagonal-to-the-red-wall` (T2.16) | 3 × 3584, combined | OptiX | 23.7 minutes |
+| two-room `dark-room-leak-view` (T2.16) | 8 × 2048, combined | OptiX | 47.7 minutes |
+| two-room `through-the-doorway` (T2.16) | 2 × 1024, combined | OptiX | 7.3 minutes |
+| textured Sponza `colonnade-from-the-floor` (T2.16) | 9 × 1024, combined | OptiX | 41.3 minutes |
+| textured Sponza `upper-gallery` (T2.16) | 9 × 1024, combined | OptiX | 48.4 minutes |
+| the other bookmarks (emissive Cornell 2 and 3, open ground) | 1024, denoised copies | CPU, 12 threads | 756 to 2831 |
 
 ## Noise of each reference
 
@@ -239,21 +243,21 @@ The GI-only view (`cycles-gi.exr`) is the raw composite, never denoised; the ful
 | reference (HD, T1.13) | samples | GI per pixel | GI 8 × 8 | full per pixel | full 8 × 8 |
 | --- | --- | --- | --- | --- | --- |
 | point-light Cornell `front` | 8192 | 3.00% | 0.37% | 1.35% | 0.17% |
-| point-light Cornell `inside-from-red-wall` | 1024 | 9.80% | 1.06% | 6.50% | 0.71% |
-| point-light Cornell `diagonal-to-the-red-wall` | 1024 | 8.96% | 0.87% | 5.36% | 0.52% |
+| point-light Cornell `inside-from-red-wall` | 12288 | 2.46% | 0.30% | 1.63% | 0.20% |
+| point-light Cornell `diagonal-to-the-red-wall` | 10752 | 2.24% | 0.27% | 1.34% | 0.16% |
 | emissive Cornell `front` | 2048 | 1.21% | 0.16% | 0.57% | 0.07% |
 | emissive Cornell `inside-from-red-wall` | 1024 | 1.54% | 0.20% | 1.54% | 0.20% |
 | emissive Cornell `diagonal-to-the-red-wall` | 1024 | 1.27% | 0.17% | 1.27% | 0.17% |
 | two-room `lit-room` | 4096 | 1.83% | 0.22% | 1.29% | 0.16% |
-| two-room `dark-room-leak-view` | 4096 | 6.20% | 0.78% | 5.54% | 0.70% |
-| two-room `through-the-doorway` | 1024 | 3.54% | 0.41% | 2.54% | 0.29% |
+| two-room `dark-room-leak-view` | 16384 | 3.10% | 0.39% | 2.77% | 0.35% |
+| two-room `through-the-doorway` | 2048 | 2.34% | 0.29% | 1.68% | 0.21% |
 | untextured Sponza `colonnade-from-the-floor` (accuracy) | 8192 | 1.72% | 0.21% | 0.17% | 0.02% |
-| textured Sponza `colonnade-from-the-floor` | 512 | 14.42% | 1.69% | 1.49% | 0.18% |
-| textured Sponza `upper-gallery` | 512 | 14.03% | 1.79% | 2.27% | 0.29% |
+| textured Sponza `colonnade-from-the-floor` | 9216 | 3.05% | 0.40% | 0.31% | 0.04% |
+| textured Sponza `upper-gallery` | 9216 | 3.22% | 0.42% | 0.51% | 0.07% |
 | open ground `ground-from-above` | 1024 | 0.07% | 0.00% | 0.07% | 0.00% |
 | open ground `towards-the-sun-glow` | 1024 | 0.13% | 0.01% | 0.04% | 0.00% |
 
-Per pixel, the GI image is visibly grainy where it is over a few percent: the point-light Cornell inside views (indirect light from a small source), the dark room (little light), and textured Sponza at 512 samples. Over 8 × 8 blocks, which the accuracy tolerances use, every reference is under 2%.
+T2.16 (2026-11-08) re-rendered the six noisiest viewing references in parts on the RTX (OptiX), so every reference's GI is now at most 3.2% per pixel; the dark room and both textured Sponza views stopped near 45 GPU minutes each, just above 3%. Their old renders and the old denoised copies are kept in an `old-t2.16/` folder beside each, so the viewer now shows the raw image for these six. Over 8 × 8 blocks, which the accuracy tolerances use, every reference is under 0.5%.
 
 **Sponza's sun.** At the manifest's first sun angle (53 degrees) a ray test from 187 floor points found only 3 unshadowed, so the reference was lit mostly by the sky (mean pixel 0.018). The sun was raised in the manifest; the floor band is now lit and the mean is 0.0349.
 
