@@ -39,6 +39,12 @@ const SCENE_ID = typeof env.VITE_DDGI_SCENES === 'string' && env.VITE_DDGI_SCENE
 const GRID_CELLS = typeof env.VITE_DDGI_GRID_CELLS === 'string' && env.VITE_DDGI_GRID_CELLS !== '' ? Number(env.VITE_DDGI_GRID_CELLS) : undefined;
 const K_VALUES = typeof env.VITE_DDGI_K === 'string' && env.VITE_DDGI_K !== '' ? env.VITE_DDGI_K.split(',').map(Number) : [1, 2, 4];
 
+/**
+ * `VITE_DDGI_RAMP_SECONDS` (T2.10): seconds of frames at LARGE_BATCH before timing, so the clock
+ * is up. On the RTX laptop under Chrome 157 a short run like this one stays at about 780 MHz.
+ */
+const RAMP_SECONDS = Number(env.VITE_DDGI_RAMP_SECONDS) || 0;
+
 const SMALL_BATCH = 64;
 const LARGE_BATCH = 512;
 const FRAMES = 60;
@@ -131,6 +137,9 @@ await runThreePage(async ({ device, data, log: logLine }) => {
         // shadow-ray roulette is measured against it. Kept short for the clock rule.
         await run(WARM_FRAMES, WARM_BATCH);
         await run(SETTLE_FRAMES, LARGE_BATCH);
+        const rampStartedAt = performance.now();
+        while (performance.now() - rampStartedAt < RAMP_SECONDS * 1000) await run(SETTLE_FRAMES, LARGE_BATCH);
+        data.rampSeconds = round((performance.now() - rampStartedAt) / 1000, 2);
         const byK: Record<string, unknown> = {};
         for (const k of K_VALUES) {
             scene.platform.shade.settings.lightGridShadowedLightsPerHit = k;
