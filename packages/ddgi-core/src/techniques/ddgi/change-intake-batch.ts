@@ -17,13 +17,25 @@
  *   (VALID, PROGRESS 2026-11-08, T2.10): the rays traced 1.48×, and
  *   `ddgi/propagate` +0.05 ms.
  *
- * So from the frame a change is marked until the census says nothing is
- * owed any more, the batch is the hand-out times what a listed probe cost
- * on still frames over what it costs now: the design's "second calibrated
- * count", worked out from the census instead of a second calibration burst,
- * which would make frames heavier during play. A probe's cost is counted in
- * rays: the rays it traced, plus the propagation the frame did, at
- * PROPAGATED_PROBE_RAYS a propagated probe.
+ * So the batch is the hand-out times what a listed probe cost on still
+ * frames over what it costs now: the design's "second calibrated count",
+ * worked out from the census instead of a second calibration burst, which
+ * would make frames heavier during play. A probe's cost is counted in rays:
+ * the rays it traced, plus the propagation the frame did, at
+ * PROPAGATED_PROBE_RAYS a propagated probe. It applies
+ * - **while changes continue** (T2.4d): `ddgi/mark` has run in a run of
+ *   CONTINUING_CHANGE_FRAMES frames, with gaps of at most
+ *   CONTINUING_CHANGE_GAP_FRAMES (a host animating at 30 Hz on a 60 Hz
+ *   display marks every other frame; T2.8);
+ * - **while a single change is taken in, on a volume that takes a change in
+ *   over more than FAR_RULE_FRAMES anyway** (T2.18): from the frame it is
+ *   marked until a census from after its latest mark shows nothing owed. On
+ *   Sponza that is about two seconds of a full priority share. Where a change
+ *   fits the window (two-room, Cornell, and the furnished room, whose keys
+ *   all owe their full count), a step is served at the hand-out: there the
+ *   keys converge a round a frame because the priority share holds them all,
+ *   and a smaller batch broke that (the furnished room's sun step settled at
+ *   frames 162 / 124 against 11 / 13, PROGRESS 2026-11-08, T2.18).
  *
  * The census arrives a few frames late. Until a reading from the change's
  * own frames arrives, the list is assumed to cost the most it can: active
@@ -31,17 +43,14 @@
  * only) after them only once the volume's active probes are all listed. So
  * the first frames after a step are not the heaviest, and a hand-out that
  * lists the whole volume (a test mode updating every probe every frame)
- * costs the same as on still frames and is not cut. A change that keeps going
- * (a day passing, a lamp swinging, a host animating at 30 Hz on a 60 Hz
- * display) is taken in for as long as it is marked: a census reading from
- * after its latest mark still shows probes owed.
+ * costs the same as on still frames and is not cut.
  *
  * This reads only the census DDGI already copies back for its counters
  * (when the platform times passes); nothing new is read back. Without it,
  * the batch is the hand-out.
  */
 
-import { CHANGE_BATCH_MIN_SHARE, PROPAGATED_PROBE_RAYS } from './settings.ts';
+import { CHANGE_BATCH_MIN_SHARE, CONTINUING_CHANGE_FRAMES, CONTINUING_CHANGE_GAP_FRAMES, PROPAGATED_PROBE_RAYS } from './settings.ts';
 
 /**
  * How fast the still frames' cost a probe follows new readings: a running
@@ -72,6 +81,13 @@ export interface RaysPerProbe {
 }
 
 export class ChangeIntakeBatch {
+    /**
+     * Frames the current run of marks spans, from its first mark to its
+     * latest, counting the unmarked frames between them (0: no run).
+     */
+    private runFrames = 0;
+    /** Unmarked frames since the latest mark (infinite before the first). */
+    private framesSinceMark = Number.POSITIVE_INFINITY;
     /** The frame of the first mark of the change being taken in now; null when none is. */
     private intakeStartFrame: number | null = null;
     /** The frame of the latest mark. */
@@ -87,7 +103,14 @@ export class ChangeIntakeBatch {
 
     /** Call once a frame, before the batch is chosen: the frame, and whether `ddgi/mark` runs in it. */
     noteFrame(frame: number, marked: boolean): void {
-        if (!marked) return;
+        if (!marked) {
+            this.framesSinceMark++;
+            if (this.framesSinceMark > CONTINUING_CHANGE_GAP_FRAMES) this.runFrames = 0;
+            return;
+        }
+        const joinsRun = this.runFrames > 0 && this.framesSinceMark <= CONTINUING_CHANGE_GAP_FRAMES;
+        this.runFrames = joinsRun ? this.runFrames + this.framesSinceMark + 1 : 1;
+        this.framesSinceMark = 0;
         this.lastMarkFrame = frame;
         if (this.intakeStartFrame === null) this.intakeStartFrame = frame;
     }
@@ -116,23 +139,40 @@ export class ChangeIntakeBatch {
     }
 
     /**
-     * The share of a hand-out of `units` probes (at most the volume's) to
-     * list this frame: 1 on still frames or before any still reading; while
-     * a change is taken in, the still cost a probe over the current one (the
-     * most the list can cost until a reading from the change's frames
-     * arrives), at most 1 and at least CHANGE_BATCH_MIN_SHARE.
+     * Whether changes continue: a run of marks, with no gap longer than
+     * CONTINUING_CHANGE_GAP_FRAMES, has spanned CONTINUING_CHANGE_FRAMES
+     * frames, and its latest mark is at most that gap ago.
      */
-    share(units: number, rays: RaysPerProbe): number {
-        if (this.intakeStartFrame === null || this.stillCostPerProbe === null || !(units > 0)) return 1;
-        const readingSinceChange = this.latestCostPerProbe !== null && this.latestReadingFrame >= this.intakeStartFrame;
+    get continuing(): boolean {
+        return this.runFrames >= CONTINUING_CHANGE_FRAMES;
+    }
+
+    /**
+     * The share of a hand-out of `units` probes (at most the volume's) to
+     * list this frame. 1 on still frames, before any still reading, and while
+     * a single change is taken in on a volume where `changeOutlastsWindow` is
+     * false. Otherwise, while changes continue or a change is taken in, the
+     * still cost a probe over the current one (the most the list can cost
+     * until a reading from the change's frames arrives), at most 1 and at
+     * least CHANGE_BATCH_MIN_SHARE.
+     */
+    share(units: number, rays: RaysPerProbe, changeOutlastsWindow: boolean): number {
+        const applies = this.continuing || (changeOutlastsWindow && this.intakeStartFrame !== null);
+        if (!applies || this.stillCostPerProbe === null || !(units > 0)) return 1;
+        // A change that continues may have had its intake ended by a census in one of its gaps: then any reading describes it.
+        const readingSinceChange = this.latestCostPerProbe !== null && this.latestReadingFrame >= (this.intakeStartFrame ?? Number.NEGATIVE_INFINITY);
         const currentCost = readingSinceChange && this.latestCostPerProbe !== null ? this.latestCostPerProbe : this.mostCostPerProbe(units, rays);
         if (!(currentCost > 0)) return 1;
         return Math.min(1, Math.max(CHANGE_BATCH_MIN_SHARE, this.stillCostPerProbe / currentCost));
     }
 
-    /** The batch for a hand-out of `units` probes, at most the volume's. */
-    batchFor(units: number, rays: RaysPerProbe): number {
-        return Math.floor(units * this.share(units, rays));
+    /**
+     * The batch for a hand-out of `units` probes, at most the volume's.
+     * `changeOutlastsWindow`: a change on this volume is taken in over more
+     * than FAR_RULE_FRAMES at this hand-out (the technique's own rule).
+     */
+    batchFor(units: number, rays: RaysPerProbe, changeOutlastsWindow: boolean): number {
+        return Math.floor(units * this.share(units, rays, changeOutlastsWindow));
     }
 
     /** The most a list of `units` probes can cost a probe in rays: every active probe it can hold at full rays, the rest off. */
@@ -143,6 +183,8 @@ export class ChangeIntakeBatch {
 
     /** Forget everything (a new field: `prepare`, `resetHistory`). */
     reset(): void {
+        this.runFrames = 0;
+        this.framesSinceMark = Number.POSITIVE_INFINITY;
         this.intakeStartFrame = null;
         this.lastMarkFrame = Number.NEGATIVE_INFINITY;
         this.latestReadingFrame = Number.NEGATIVE_INFINITY;

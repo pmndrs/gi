@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ChangeIntakeBatch, type CensusReading } from './change-intake-batch.ts';
-import { CHANGE_BATCH_MIN_SHARE, PROPAGATED_PROBE_RAYS } from './settings.ts';
+import { CHANGE_BATCH_MIN_SHARE, CONTINUING_CHANGE_FRAMES, CONTINUING_CHANGE_GAP_FRAMES, PROPAGATED_PROBE_RAYS } from './settings.ts';
 
 /** Sponza's census in T2.10's VALID run: 136 probes listed, still and after a 30° sun turn (medians). */
 const LISTED = 136;
@@ -8,6 +8,8 @@ const STILL_RAYS = 19_584;
 const STEP_RAYS = 28_992;
 const STEP_PROPAGATED = 926;
 const RAYS = { full: 256, fixed: 32 };
+/** Sponza takes a change in over more than FAR_RULE_FRAMES (its keys don't all owe their full count). */
+const OUTLASTS = true;
 /** Sponza's active probes (about half its 19,425 are off). */
 const ACTIVE = 9_000;
 
@@ -25,7 +27,7 @@ describe('the batch while a change is taken in (T2.4d, T2.18)', () => {
         batch.noteCensus(still(0));
         batch.noteFrame(5, false);
         expect(batch.takingInChange).toBe(false);
-        expect(batch.batchFor(LISTED, RAYS)).toBe(LISTED);
+        expect(batch.batchFor(LISTED, RAYS, OUTLASTS)).toBe(LISTED);
     });
 
     it('lists fewer from the step itself: every listed probe counted at its full rays until a reading from the change arrives', () => {
@@ -33,11 +35,11 @@ describe('the batch while a change is taken in (T2.4d, T2.18)', () => {
         batch.noteCensus(still(0));
         batch.noteFrame(10, true);
         expect(batch.takingInChange).toBe(true);
-        expect(batch.share(LISTED, RAYS)).toBeCloseTo(STILL_RAYS / LISTED / RAYS.full, 6);
+        expect(batch.share(LISTED, RAYS, OUTLASTS)).toBeCloseTo(STILL_RAYS / LISTED / RAYS.full, 6);
         // A still reading from before the step arrives late: still the full-rays guess.
         batch.noteCensus(still(8));
         batch.noteFrame(11, false);
-        expect(batch.share(LISTED, RAYS)).toBeCloseTo(STILL_RAYS / LISTED / RAYS.full, 6);
+        expect(batch.share(LISTED, RAYS, OUTLASTS)).toBeCloseTo(STILL_RAYS / LISTED / RAYS.full, 6);
     });
 
     it('does not cut a hand-out that lists the whole volume (a test mode updating every probe every frame)', () => {
@@ -48,7 +50,7 @@ describe('the batch while a change is taken in (T2.4d, T2.18)', () => {
         const batch = new ChangeIntakeBatch();
         batch.noteCensus({ frame: 0, raysTraced: wholeVolume, listedProbes: probes, owedProbes: 0, probesPropagated: 0, activeProbes: active });
         batch.noteFrame(10, true);
-        expect(batch.batchFor(probes, RAYS)).toBe(probes);
+        expect(batch.batchFor(probes, RAYS, OUTLASTS)).toBe(probes);
     });
 
     it('then follows the census: still cost a probe over the cost now, propagation counted in rays', () => {
@@ -57,8 +59,8 @@ describe('the batch while a change is taken in (T2.4d, T2.18)', () => {
         batch.noteFrame(10, true);
         batch.noteCensus(busy(10));
         const busyCost = (STEP_RAYS + STEP_PROPAGATED * PROPAGATED_PROBE_RAYS) / LISTED;
-        expect(batch.share(LISTED, RAYS)).toBeCloseTo(STILL_RAYS / LISTED / busyCost, 6);
-        expect(batch.batchFor(LISTED, RAYS)).toBe(Math.floor((LISTED * STILL_RAYS) / LISTED / busyCost));
+        expect(batch.share(LISTED, RAYS, OUTLASTS)).toBeCloseTo(STILL_RAYS / LISTED / busyCost, 6);
+        expect(batch.batchFor(LISTED, RAYS, OUTLASTS)).toBe(Math.floor((LISTED * STILL_RAYS) / LISTED / busyCost));
     });
 
     it('ends when a reading from at or after the latest mark shows nothing owed, not before', () => {
@@ -74,7 +76,7 @@ describe('the batch while a change is taken in (T2.4d, T2.18)', () => {
         expect(batch.takingInChange).toBe(true);
         batch.noteCensus(still(40));
         expect(batch.takingInChange).toBe(false);
-        expect(batch.batchFor(LISTED, RAYS)).toBe(LISTED);
+        expect(batch.batchFor(LISTED, RAYS, OUTLASTS)).toBe(LISTED);
     });
 
     it('takes in a change marked every other frame (a host animating at 30 Hz on a 60 Hz display) for as long as it goes on', () => {
@@ -93,29 +95,62 @@ describe('the batch while a change is taken in (T2.4d, T2.18)', () => {
         batch.noteCensus(still(0));
         batch.noteFrame(10, true);
         batch.noteCensus(busy(12));
-        const share = batch.share(LISTED, RAYS);
+        const share = batch.share(LISTED, RAYS, OUTLASTS);
         batch.noteCensus({ ...busy(11), raysTraced: STEP_RAYS * 4 });
-        expect(batch.share(LISTED, RAYS)).toBe(share);
+        expect(batch.share(LISTED, RAYS, OUTLASTS)).toBe(share);
     });
 
     it('never goes below its floor, never above the hand-out, and needs a still reading first', () => {
         const batch = new ChangeIntakeBatch();
         batch.noteFrame(1, true);
         batch.noteCensus(busy(1));
-        expect(batch.share(LISTED, RAYS)).toBe(1);
+        expect(batch.share(LISTED, RAYS, OUTLASTS)).toBe(1);
         batch.noteFrame(2, true);
         batch.noteCensus(still(0));
         // Frame 0 is older than the newest reading: ignored, still nothing to compare with.
-        expect(batch.share(LISTED, RAYS)).toBe(1);
+        expect(batch.share(LISTED, RAYS, OUTLASTS)).toBe(1);
         const fresh = new ChangeIntakeBatch();
         fresh.noteCensus(still(0));
         fresh.noteFrame(1, true);
         fresh.noteCensus({ ...busy(1), raysTraced: STILL_RAYS * 10 });
-        expect(fresh.share(LISTED, RAYS)).toBe(CHANGE_BATCH_MIN_SHARE);
+        expect(fresh.share(LISTED, RAYS, OUTLASTS)).toBe(CHANGE_BATCH_MIN_SHARE);
         fresh.noteCensus({ ...busy(2), raysTraced: STILL_RAYS / 2, probesPropagated: 0 });
-        expect(fresh.share(LISTED, RAYS)).toBe(1);
+        expect(fresh.share(LISTED, RAYS, OUTLASTS)).toBe(1);
         fresh.reset();
         expect(fresh.takingInChange).toBe(false);
-        expect(fresh.share(LISTED, RAYS)).toBe(1);
+        expect(fresh.share(LISTED, RAYS, OUTLASTS)).toBe(1);
+    });
+
+    it('serves a single step at the hand-out where a change fits the window (the furnished room, two-room, Cornell)', () => {
+        const batch = new ChangeIntakeBatch();
+        batch.noteCensus(still(0));
+        batch.noteFrame(10, true);
+        batch.noteCensus(busy(10));
+        expect(batch.takingInChange).toBe(true);
+        expect(batch.batchFor(LISTED, RAYS, false)).toBe(LISTED);
+    });
+
+    it('cuts a change that continues there too, once its marks span CONTINUING_CHANGE_FRAMES (T2.4d), gaps included (T2.8)', () => {
+        const batch = new ChangeIntakeBatch();
+        batch.noteCensus(still(0));
+        let continuingFrom: number | null = null;
+        for (let frame = 0; frame < 3 * CONTINUING_CHANGE_FRAMES; frame++) {
+            // Marked every other frame: a host animating at 30 Hz on a 60 Hz display.
+            batch.noteFrame(100 + frame, frame % 2 === 0);
+            if (frame >= 3) batch.noteCensus(busy(100 + frame - 3));
+            if (continuingFrom === null && batch.continuing) continuingFrom = frame;
+            if (continuingFrom !== null) expect(batch.continuing).toBe(true);
+            else expect(batch.batchFor(LISTED, RAYS, false)).toBe(LISTED);
+        }
+        // From the first mark at which the run spans CONTINUING_CHANGE_FRAMES frames (frame 30: 0 to 30 is 31 frames).
+        expect(continuingFrom).toBe(CONTINUING_CHANGE_FRAMES);
+        expect(batch.batchFor(LISTED, RAYS, false)).toBeLessThan(LISTED);
+        // A few frames without a mark are the host's update rate; one more ends the run. The loop
+        // ended on an unmarked frame, so CONTINUING_CHANGE_GAP_FRAMES - 1 more keep it going.
+        const last = 100 + 3 * CONTINUING_CHANGE_FRAMES;
+        for (let gap = 1; gap < CONTINUING_CHANGE_GAP_FRAMES; gap++) batch.noteFrame(last + gap, false);
+        expect(batch.continuing).toBe(true);
+        batch.noteFrame(last + CONTINUING_CHANGE_GAP_FRAMES, false);
+        expect(batch.continuing).toBe(false);
     });
 });

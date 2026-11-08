@@ -1080,12 +1080,14 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         const raysPerProbe = effectiveRaysPerProbe(this.settings.raysPerProbe);
         // No probe updates twice in a frame. While warming: a full batch, or none while the trees are built.
         // While a change is taken in, fewer than the hand-out, so the list costs what the calibrated batch does (change-intake-batch.ts).
+        // Whether a single change counts is the volume's rule at the hand-out, not at the smaller batch.
+        const offered = Math.min(frame.units, resources.maxProbesPerFrame, probeCount);
         const handOut =
             this.warmUp.phase === 'warming'
                 ? resources.maxProbesPerFrame
                 : this.warmUp.phase === 'waiting for trees'
                   ? 0
-                  : this.changeIntake.batchFor(Math.min(frame.units, resources.maxProbesPerFrame, probeCount), { full: raysPerProbe, fixed: FIXED_RAYS });
+                  : this.changeIntake.batchFor(offered, { full: raysPerProbe, fixed: FIXED_RAYS }, changeServing(resources.grid, offered, this.settings).changeOutlastsWindow);
         const count = Math.max(0, Math.min(Number.isNaN(handOut) ? 0 : Math.floor(handOut), resources.maxProbesPerFrame, probeCount));
         this.probesUpdated = count;
         if (count > 0) this.lastUpdateCount = count;
@@ -1788,18 +1790,15 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         // frame that updates nothing).
         const fullUpdates = owedUpdates(blend.changeUpdates);
         const batch = count > 0 ? count : this.lastUpdateCount;
-        const framesForEveryProbe = batch > 0 ? (grid.probeCount * fullUpdates) / batch : Number.POSITIVE_INFINITY;
-        // On such a volume a big change takes the key-probe path (T2.4c,
+        // On a big volume a big change takes the key-probe path (T2.4c,
         // m2-lights.md §4.5), or with key probes off, "far probes owe 2" (§6.4).
-        const bigVolume = framesForEveryProbe > FAR_RULE_FRAMES;
+        const { bigVolume, keysFitWindow } = changeServing(grid, batch, this.settings);
         words[UNIFORM_WORD.keyProbes] = blend.keyProbes && bigVolume ? 1 : 0;
         data[UNIFORM_WORD.farOwedUpdates] = !blend.keyProbes && bigVolume ? Math.min(blend.farProbeUpdates, fullUpdates) : fullUpdates;
         data[UNIFORM_WORD.keyProbeBoost] = blend.keyProbeBoost;
         data[UNIFORM_WORD.keyResidualShare] = blend.keyResidualShare;
-        // Every key owes its full count where all the keys' full counts fit in
-        // FAR_RULE_FRAMES at this batch's priority share (T2.4d: the furnished
-        // room), else keyProbeUpdates away from the view (Sponza).
-        const keysFitWindow = (keyProbeCount(grid.counts) * fullUpdates) / Math.max(1, priorityCount(batch, blend.priorityShare)) <= FAR_RULE_FRAMES;
+        // Every key owes its full count where all the keys' full counts fit
+        // (T2.4d: the furnished room), else keyProbeUpdates away from the view (Sponza).
         data[UNIFORM_WORD.keyOwedUpdates] = keysFitWindow ? MAX_OWED_UPDATES : blend.keyProbeUpdates;
         data[UNIFORM_WORD.fineOwedUpdates] = FINE_PROBE_UPDATES;
         words[UNIFORM_WORD.propagation] = blend.keyProbes ? 1 : 0;
@@ -1810,6 +1809,31 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         data.set([...frame.camera.position, inViewMargin(grid)], UNIFORM_WORD.cameraPosition);
         frustumPlanes(frame.camera).forEach((plane, index) => data.set(plane, FRUSTUM_PLANE_WORDS[index]));
     }
+}
+
+/**
+ * How a big change is served on this volume at a batch of `batch` probes a
+ * frame (m2-lights.md §4.5 and §6.4; T2.4c, T2.4d):
+ * - `bigVolume`: K updates for every probe wouldn't fit in FAR_RULE_FRAMES
+ *   frames, so a change takes the key-probe path (or, with key probes off,
+ *   far probes owe 2);
+ * - `keysFitWindow`: all the keys' full counts fit in FAR_RULE_FRAMES at the
+ *   batch's priority share, so every key owes its full count (the furnished
+ *   room), else keys away from the view owe `keyProbeUpdates` (Sponza);
+ * - `changeOutlastsWindow`: either way, a change here is taken in over more
+ *   than FAR_RULE_FRAMES frames, so the batch while it is taken in may be
+ *   smaller than the hand-out (T2.18, change-intake-batch.ts). Not where the
+ *   keys all fit: they converge a round a frame only while the priority share
+ *   holds them all.
+ */
+function changeServing(grid: ProbeGrid, batch: number, settings: DDGISettings): { bigVolume: boolean; keysFitWindow: boolean; changeOutlastsWindow: boolean } {
+    const blend = blendSettings(settings);
+    const fullUpdates = owedUpdates(blend.changeUpdates);
+    const framesForEveryProbe = batch > 0 ? (grid.probeCount * fullUpdates) / batch : Number.POSITIVE_INFINITY;
+    const bigVolume = framesForEveryProbe > FAR_RULE_FRAMES;
+    const keysFitWindow = (keyProbeCount(grid.counts) * fullUpdates) / Math.max(1, priorityCount(batch, blend.priorityShare)) <= FAR_RULE_FRAMES;
+    const changeOutlastsWindow = bigVolume && (!blend.keyProbes || !keysFitWindow);
+    return { bigVolume, keysFitWindow, changeOutlastsWindow };
 }
 
 function positiveInteger(value: number, name: string): number {

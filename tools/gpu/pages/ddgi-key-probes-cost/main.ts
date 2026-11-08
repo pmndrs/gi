@@ -59,6 +59,8 @@ const DAY_LOW_DEGREES = 5;
 const DAY_HIGH_DEGREES = 75;
 const DAY_AZIMUTH_DEGREES = 160;
 const FRAMES_IN_FLIGHT = 2;
+/** The first frames after the step reported pass by pass. */
+const STEP_DETAIL_FRAMES = 20;
 const PROPAGATE_PASS = 'ddgi/propagate';
 const MARK_PASS = 'ddgi/mark';
 const CALIBRATED_PASSES = ['ddgi/trace', 'ddgi/blend', 'ddgi/write'];
@@ -255,6 +257,13 @@ await runThreePage(async ({ device, data, log: logLine }) => {
         lastFrameTakingIn: takingInOffsets.length > 0 ? Math.max(...takingInOffsets) : -1,
         // Frame offset after the step (0 = the step's own frame) to the update's ms.
         byFrame: Object.fromEntries(afterStep.map((entry) => [entry.frame - step.first, round(entry.total)])),
+        // The first STEP_DETAIL_FRAMES frames pass by pass, and what the census said in each (it arrives a few
+        // frames late, so a frame's census row describes a list a few frames earlier): where the step's first
+        // frames spend their time.
+        firstFramesPasses: Object.fromEntries(
+            afterStep.filter((entry) => entry.frame - step.first < STEP_DETAIL_FRAMES).map((entry) => [entry.frame - step.first, Object.fromEntries([...entry.passes].map(([name, ms]) => [name, round(ms)]))]),
+        ),
+        firstFramesCensus: step.counters.slice(0, STEP_DETAIL_FRAMES).map((counters) => Object.fromEntries(['probes updated', ...LIST_COUNTERS].map((name) => [name, counters[name] ?? null]))),
     };
     log(
         `the 60 frames after the step, ${afterStep.length} timed: update median ${round(quantile(afterStepTotals, 0.5))} ms, p95 ${round(quantile(afterStepTotals, 0.95))}, largest ${round(Math.max(...afterStepTotals))}; ` +
