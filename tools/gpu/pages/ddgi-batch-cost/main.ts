@@ -79,6 +79,8 @@
  *   VITE_DDGI_MESH_TREES=tinybvh                                     (default gpu: first trees from the GPU, T2.12)
  *   VITE_DDGI_THREE_COMPILE=when-light-joins                         (default after-first-step; see THREE_COMPILE)
  *   VITE_DDGI_RAMP_SECONDS=8                                         (default 0: off; see rampAndRecalibrate)
+ *   VITE_DDGI_MAX_TEXTURE_SIZE=1024                                  (default: textures as the files have them; T2.17,
+ *                                                                     Bistro exterior's take 5.1 GB, more than a 6 GB GPU holds with DDGI)
  *
  * Manual (Sponza and Bistro need the downloads). Run it under the bench lock:
  *   node tools/reference/bench-lock.ts run --what "batch cost" -- pnpm test:gpu --filter ddgi-batch-cost --json <file>
@@ -123,6 +125,8 @@ const MESH_TREES = env.VITE_DDGI_MESH_TREES === 'tinybvh' ? 'tinybvh' : 'gpu';
 const RAMP_SECONDS = typeof env.VITE_DDGI_RAMP_SECONDS === 'string' ? Number(env.VITE_DDGI_RAMP_SECONDS) : 0;
 /** The fixed batch of the ramp's frames: a heavy, steady load. */
 const RAMP_UNITS = 1024;
+/** T2.17: scale model textures down to this side at load (`LoadSceneOptions.maxTextureSize`); undefined keeps them. */
+const MAX_TEXTURE_SIZE = typeof env.VITE_DDGI_MAX_TEXTURE_SIZE === 'string' ? Number(env.VITE_DDGI_MAX_TEXTURE_SIZE) : undefined;
 /**
  * When three compiles its materials for the GI light. `after-first-step`
  * (default): after the first warm-up step, in series, as T2.12's check 1 is
@@ -373,7 +377,7 @@ async function startScene(
 ): Promise<{ scene: SceneUnderTest; startup: Record<string, number> }> {
     pipelineCompileMs.clear();
     const loadStartedAt = performance.now();
-    const loaded = await loadScene(manifest, () => {});
+    const loaded = await loadScene(manifest, () => {}, MAX_TEXTURE_SIZE === undefined ? {} : { maxTextureSize: MAX_TEXTURE_SIZE });
     const filesLoadedAt = performance.now();
     const bookmark = manifest.cameras[0];
     const camera = new PerspectiveCamera(bookmark.fovYDeg, 1, 0.05, loaded.diagonal * 2);
@@ -1364,6 +1368,8 @@ await runThreePage(async ({ device, renderer, data, log }) => {
     const judgeCost = device.adapterInfo.vendor !== 'intel';
     data.costJudged = judgeCost;
     data.directPaths = DIRECT_PATHS.join(',');
+    // Textures scaled down at load change the GPU memory the scene takes (T2.17), so the run says so.
+    if (MAX_TEXTURE_SIZE !== undefined) data.maxTextureSize = MAX_TEXTURE_SIZE;
     const runs = SCENES.flatMap((sceneId) => DIRECT_PATHS.map((direct) => ({ sceneId, direct })));
     for (const { sceneId, direct } of runs) {
         const id = sceneId;
