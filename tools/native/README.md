@@ -176,6 +176,10 @@ node tools/native/sky-check.ts --scene open-ground --capture native/build/runs/o
 # the field converged with the lamp held at a key of the step (3,600 frames), the settled level for response.ts
 ./tools/native/play.ps1 -Scene two-room -Clean -Motion light-step -SettleKey 1 -Record -RecordSeconds 1 -WarmupFrames 3600 -RecordImageEvery 0 -Tag settle1
 node tools/native/response.ts native/build/recordings/two-room-light-step-run1 [...] --settled native/build/recordings/two-room-light-step-settle0 --settled native/build/recordings/two-room-light-step-settle1 [--append]
+# ours, measured the same way (T2.10): the viewer's recordings (VITE_DDGI_TAG names the run, VITE_DDGI_SETTLE_KEY=1 makes a settle recording)
+node tools/native/response.ts bench/recordings/viewer/two-room-light-step-run1 [...] --settled bench/recordings/viewer/two-room-light-step-settle1 [...] --commit <commit> --device "RTX 3060 Laptop" [--append]
+# a sweep: lag behind its own path, and against the other side's run of the same number
+node tools/native/response.ts bench/recordings/viewer/two-room-light-sweep-run1 [...] --against native/build/recordings/two-room-light-sweep-ddgi-run1 [...] --commit <commit> [--append]
 ```
 
 - **The motion file** (`motion.ts write`): `track <light:name | sky> <linear|step> <loop|once> <fields>` then `key <t> <values>` lines. A manifest motion's keys are copied as they are; the harness interpolates them as `motionState` does (wrap on the last key's time when looping, hold for `step`). `time-of-day` is T2.4d's day (elevation 5 → 75 → 5 degrees as a sine, azimuth through 160 degrees around the manifest sun's, 10 s): a sun direction key every 1/60 s, and a sky image every 0.25 s made by the sky file's own recipe (`buildSkyImage`), blended between.

@@ -41,6 +41,14 @@ From T2.4b (2026-11-06): how the GI-only view (and on Sponza the whole field) fo
 - Commit `3d6cd8e-dirty` on the `grid_ddgi` rows: the fork's uncommitted change at the time touched only the texture sky's descriptor writes (350f9de). These runs use the flat sky, so it didn't change them.
 - Don't set native's lamp-leaving jump beside our `lamp_halved` rows: a dimming is a different event (NOTES).
 
+`response/ours/<motion>/run<n>/*` (T2.10, browser Chrome, commit this repo's): our viewer playing the same manifest motion (`tools/gpu/pages/viewer-recording`, saved by `save-viewer-recording.ts`), measured by the same `tools/native/response.ts`, so the step rows mean what native's do. Our DDGI's own grid at the viewer's default budget; `probes_per_frame_median` and `frame_interval_mean_ms` (the real time between frames, which our DDGI ages its histories by) say how it ran. `brightness` names the column: native's `gi_mean_luminance`, ours `gi_mean` (the meter's mean of red, green and blue). Re-measuring native's two-room step with the mean of red, green and blue gives the same frames. "Settled" is the same on both sides: the lamp held at the new place for 3,600 frames, then the mean of the next 61 (native `play.ps1 -SettleKey`, ours the page's `VITE_DDGI_SETTLE_KEY`).
+
+**Sweep rows** (`.../run<n>/sweep/*`, both sides): the sweep goes out and back along the same path, so at time t and at the end minus t the lamp is in the same place.
+- `lag_frames`: how far the view runs behind the lamp, in frames. It is half the shift that best lines the way back up with the way out (least squares).
+- `out_back_gap`: the mean difference between the view on the way out and on the way back at the same lamp place, as a share of the view's mean.
+- `lowest_share_of_start`, `highest_share_of_start`, `share_of_start_frame<k>` (every 12th frame): the curve as a share of its first frame, where the lamp sits settled at the path's start.
+- `against_<side>_run<n>/*`: this run against the other side's run n, both as shares of their own starts. `mean_abs_difference_share_of_start` and `largest_...` are the mean and largest gap between the two curves; `lag_frames` is the shift that lines this side up best with the other (positive: this side later).
+
 ## native.csv
 
 NVIDIA's RTXGI-DDGI test harness (our fork in `native/rtxgi-ddgi`), written by `tools/native/bench.ps1`. Metric names and what they mean: `tools/native/README.md`, section "Timing".

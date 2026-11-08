@@ -21,6 +21,35 @@ Rules:
 
 ---
 
+## 2026-11-08 · T2.10 response times, ours and native · native-runner (opus)
+Did: recorded the same manifest motions on both sides, 3 runs each, and measured them with one script. These are records, not gates (Dennis 2026-11-05).
+- `tools/native/response.ts` now also reads our viewer recordings (rows `response/ours/...`). It measures sweeps too and takes `--against`, `--commit` and `--device`. `response.test.ts` covers the two new measures.
+- `viewer-recording` page: `VITE_DDGI_SETTLE_KEY` (hold the lamp at a key for 3,600 frames, then record 61, no pictures; the same as native's `-SettleKey`), `VITE_DDGI_TAG`, and the browser in `recording.json`.
+- **"Settled" means the same on both sides:** the lamp held at the new place for 3,600 frames, then the mean of the next 61 frames.
+- **The sweep measure:** the lamp goes out and back along one path, so at time t and at the end minus t it is in the same place. A view running d frames late reads on the way back what it read on the way out 2d frames later. The lag is half the shift that best lines the two halves up. Against the other side, each curve is taken as a share of its own start.
+
+Verified: RTX 3060 Laptop. Native on Vulkan, fork 350f9de, our 1,071-probe grid (Sponza 19,425), run in the t27 worktree. Two-room used the flat sky, as T2.7 did; Sponza used `-Sky texture`, the sky file itself. Ours in headless Chrome 157 at c7af54c, at the viewer's 2 ms budget (two-room 455–482 probes a frame, Sponza 78–137), with frames 16.67–16.71 ms apart on average. Every run went through the bench lock. Native's lamp is 0.0000 cm from the manifest on every frame. Re-measured, native's T2.7 step rows come out the same (116/116/117). Measuring native by the mean of red, green and blue (our meter's weighting) instead of luminance gives the same frames. Tests, typecheck and lint pass.
+
+Numbers (`response.csv`, label `t2.10`; frames at 60 a second; native / ours, the 3 runs, median in brackets):
+
+| motion | measure | native | ours |
+| --- | --- | --- | --- |
+| two-room step, lamp back into the room | first frame within 5% of settled | 116, 116, 117 (116) | 14, 15, 15 (15) |
+| two-room step, lamp out (jump 1) | first frame within 5% | never in 180; +135% at frame 180 | 145, 161, 166 (161); +4.5–4.8% at 180 |
+| two-room step, lamp out (jump 3) | first frame within 5% | never; +134% at 180 | 156, never, never; +4.7–5.5% at 180 |
+| two-room sweep | lag behind its own path, frames | 58.40, 58.40, 58.45 (58.4, 0.97 s) | 29.40, 30.10, 28.45 (29.4, 0.49 s) |
+| two-room sweep | way out against way back, share of mean | 41.1%, 41.1%, 41.1% | 25.5%, 26.1%, 25.5% (25.5%) |
+| two-room sweep | ours against native: mean / largest gap, points of start; shift | | 10.0 / 22.1, 10.1 / 21.8, 10.8 / 22.3; ours 27.0, 26.3, 27.8 frames ahead |
+| Sponza step (arcade lamp) | size of the step in the view | 0.0–0.8% | 8.0–9.6% |
+| Sponza step, jump 1 | first frame within 5% | 1, 1, 1 (the step is inside the band) | 18, 13, 13 (13) |
+
+Found, not fixed:
+- **Our lamp-out tail.** Measured against the end of its own 3 s hold, our lamp-out jump is within 5% by frames 37–44. Against the long-hold level it stays about 4.5% above settled until frame 145 or later. The last few percent close slowly.
+- **Sponza is not like for like.** Our GI-only view mean is about 9× below native's (0.0016 against 0.0148), and our GI-only pictures are nearly black, while native's view is lit by the sun's bounce. So the lamp is about 10% of our view and under 1% of native's, and native's 5% measures say nothing here. The diagnosis stopped at the pictures (one look); no cause was found.
+
+Not verified: the Intel UHD. A watched (non-headless) Chrome. Native D3D12. Whether our Sponza GI level is right (above). Dennis judging the sweep side by side. Recordings stay git-ignored: ours in t210's `bench/recordings/viewer`, native's in t27's `native/build/recordings`.
+Next: the cause of our dark Sponza GI-only view against native (lead to assign). A Sponza step measured over a region near the lamp (the meter supports regions; response.ts doesn't yet). The fork push is still held for Dennis.
+
 ## 2026-11-08 · T2.16 review and merge · lead (opus)
 Did: reviewed T2.16 and merged it into `m2`.
 - Updated the tables in `tools/reference/README.md` for the six re-rendered views: samples, parts, minutes and noise. Removed the stale dark-room row.
