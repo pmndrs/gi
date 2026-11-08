@@ -75,6 +75,12 @@ $rows | Where-Object { $_.browser -eq 'native' -and "$($_.date),$($_.commit),$($
 
 - **`batch_cost/inline/...` and `batch_cost/deferred/...` (from 2026-11-06, commit 06d5a18 on the spike branch `m2-t2.0`):** T2.0's A/B of where DDGI computes direct light, M1's inline shadow rays or the deferred `gi/direct` pass. The path sits after `batch_cost/`; the rest of the name is the `ddgi-batch-cost` page's usual metric (`tools/gpu/pages/ddgi-batch-cost/to-csv.ts`). New with them: `bound_batch<n>/...` (the GPU-bound curve from 16 to 512 probes, each pass's median ms), `bound_fit/...` (fixed ms, µs per probe, the probes at the budget from the fit and from the curve) and, deferred only, `shadow_rays/batch<n>/...`. Each path is one run with its own `note/timing_valid`.
 
+- **`t2.10/...` rows (2026-11-08, T2.10's M2 measurements):** pages with no to-csv of their own, flattened with `tools/gpu/flatten-to-csv.ts` (every number in the page's data, named by its path). `t2.10/adapter/...` is `three-adapter-timing`, `t2.10/set_transforms_in_frame/...` its `set-transforms` mode, `t2.10/key_probes_cost/...` `ddgi-key-probes-cost` (with `stepFirst60/...`, the 60 frames after Sponza's sun turn), `t2.10/light_grid_cost[_ramp]/...` `ddgi-light-grid-cost`. `batch_cost/ramp/...` rows are `ddgi-batch-cost`'s `VITE_DDGI_RAMP_SECONDS` re-calibration. Each run has its own `note/timing_valid`.
+
+## checks.csv
+
+From T2.10 (2026-11-08): correctness checks with numbers (recompile counts, leaks, light groups, the still-scene checks, accuracy against the Cycles references), one block per run, metrics `t2.10/<page>/...`. The accuracy rows (`t2.10/accuracy/...`) were copied from `ddgi-test-view/render.ts` and `ddgi-sponza-accuracy/run.ts` output, which have no CSV route; `note/correctness_run,1` marks rows whose clock doesn't matter.
+
 ## memory.csv
 
 `gi.stats.memory` per scene at the manifest's volume, from the `ddgi-memory` page (`tools/gpu/pages/ddgi-memory`, T1.9). Bytes unless the name ends in `_mb` (1 MB = 1,000,000 bytes, as the viewer shows them). Byte counts of what the core created, so they don't depend on the GPU.

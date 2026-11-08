@@ -21,6 +21,51 @@ Rules:
 
 ---
 
+## 2026-11-08 · T2.10 M2 measurements on the RTX 3060 Laptop · gpu-tester (opus)
+Did: one run per gate under `bench-lock run`, on `m2-t2.10` (M2's final code). RTX 3060 Laptop (nvidia/ampere), headless Chrome 157.0.8103.38. Test-page additions only, nothing in `packages/`:
+- `ddgi-batch-cost` gained the staging peak and `VITE_DDGI_RAMP_SECONDS`;
+- `ddgi-key-probes-cost` gained `stepFirst60`;
+- `three-adapter-timing` gained `VITE_DDGI_ADAPTER_CHECK=set-transforms`;
+- `ddgi-sponza-lamp-step` gained `VITE_DDGI_UNITS`, and `ddgi-light-grid-cost` a ramp;
+- `tools/gpu/flatten-to-csv.ts` writes rows for pages without a to-csv.
+Rows: `timing.csv`, `response.csv`, `baselines.csv`, `shading.csv`, `three-composite.csv`, `flicker.csv`, `bvh.csv`, and the new `checks.csv`. Prefixes are `t2.10/...` and `batch_cost/...`, with a `note/t2.10_*` row.
+
+**Flag: the clock.** WebGPU runs held the RTX at 780-830 MHz under load. Only the saturated composite page reached 1,370 MHz, and native reached 1,650 MHz at the same hour. Chrome 156 runs on 11-06 read 1,800-1,900 MHz. Details are in NOTES. Everything below is VALID by the clock rule, but at about 0.45× the clock of M1's numbers. Budget v2 calibrates to that clock: Sponza gets 154 probes a frame, against T2.2's 640.
+
+| Target / owed item | Number | Verdict |
+| --- | --- | --- |
+| Change shows next frame | How far frame 1 moves the view, as a share of the brighter level (the full step in brackets). two-room halved 13% (50%), switched on 33% (100%). Cornell 23% (50%), 47% (100%). Sponza lamp at 316 probes: out 34% (52%), back 45% (52%). At the calibrated 85: out 0.1%, back 32%. Sponza sun turn: frame 1 is already within 5.4% of settled (step 41%) | met; **missed** for the Sponza lamp moving out at 85 |
+| Within 5% in ≤ 30 frames | two-room 9 / 18; Cornell 5 / 8; Sponza sun turn 13 (field 36), sun halved 1. Sponza lamp 13 / **31** at 316, **50 / 42** at 85 | met, except the Sponza lamp |
+| Update ≤ 2.0 ms | At load: Cornell 1.94 ms (826 probes), two-room 1.94 (477), Sponza 2.03 (154). After a ramp: Sponza 2.51 ms at 260 probes (the clock fell back). Bistro calibrates to **14-20 probes**, 1 after a ramp; its fixed cost is about 2 ms | met at load; **Bistro broken** |
+| Sampling ≤ 1.0 ms (1440p) | Default path 0.714 ms (1,380 MHz). T1.6's hello-forward Cornell case 1.65 ms at 780 MHz (0.86 ms scaled to 1,500 MHz; was 0.905) | met on the default path |
+| ≥ 32 lights, no recompiles | 4,096 lights: 0. Session on Cornell, two-room, Sponza (groups off and on) and Bistro (groups on): 0, control 1 | met |
+| Adapter ≤ 0.2 / 0.5 ms | Sponza 0.052 / 0.059 ms mean; Bistro 0.091 / 0.103 ms | met |
+| Whole frame, 1440p, viewer path (GPU ms, p50 / p95, GI on vs off) | Cornell 4.92 / 5.06 vs 1.02 / 1.02. two-room 7.64 / 8.01 vs 2.82 / 2.83. Sponza 21.07 / 21.28 vs 8.92 / 8.94 (GI per fragment adds 10.1 ms). Bistro 19.2 / 20.3 vs 11.2 / 12.0; **Bistro wall time 545 / 683 ms with GI, 40 / 48 off** | recorded |
+| M1 still checks | Leak 0.84% (thin wall 0.59%, closed door 0.06%). Furnace 0.4992. Accuracy: Cornell +5.66%, two-room +5.25%, Sponza raw +23.14% (M1 +23.07%). Fields within 0.17% of M1, 0 marks. Flicker: Cornell 0.074 / 0.33%, two-room 0.010 / 0.035%, Sponza 0.025 / 0.11% | pass |
+| Light grid, 2,048 cells ≤ 0.1 ms | 0.232 ms; 0.198 ms with a ramp (still about 800 MHz) | **missed** |
+| `sponza-candles` set-up ≤ 2× `sponza` | 11.85 s vs 7.41 s = 1.60× | met |
+| `setTransforms` × 10,000 in three frames | 1.40 ms median, p95 2.2 | met |
+| Update in the 60 frames after Sponza's turn | Median 2.44 ms, p95 3.12, at 136 probes. 51 of 52 timed frames are over 2 ms; still over at frame 59 | **over the budget** |
+| T2.14 check 1, cold Cornell ≤ 1.5 s | Branch 1.439 s; pre-T2.14 `m2` (4468ddf) 1.326 s | met |
+| Bistro groups on, leak, light groups (cool GPU) | Pass in 35 s, 42 s and 27 s; no page blocked | pass |
+| H-PLOC vs tinybvh, Bistro exterior | GPU trees alone 0.981×; after the swap 1.016× | recorded |
+| Bistro `scene_copy_cpu_ms` × 3 | 2,723 / 1,862 / 1,636 ms, median 1,862 | recorded |
+| Staging-buffer peak | Sponza 197.1 MB, Bistro 130.0 MB | recorded |
+
+Not verified:
+- Bistro response: no page measures it.
+- Any timing with the clock up, except the composite page.
+- The cold start ran with a fresh browser profile, but the driver's shader cache was not cleared, and other processes (java) used about 18% of the CPU.
+- Intel UHD: skipped, as briefed.
+- The sweep's look: left to Dennis.
+
+Next:
+- **Lead:** the clock flag, since it decides every GPU-bound verdict.
+- **Lead:** Bistro's fixed update cost (`ddgi/trace` takes 1.2-1.5 ms at 16 probes). Bistro's GI-on wall time of 545 ms is CPU-side and not the adapter; its cause is not found.
+- **Lead:** the 60 frames after a step are over budget, which per TASKS means §4.5's second count is built for single steps.
+- **Missing:** a page that times the default composite path with the update running in the same frame. The viewer shades GI per fragment with MSAA (NOTES).
+- **Missing:** a Bistro response page.
+
 ## 2026-11-08 · T2.10 response times, ours and native · native-runner (opus)
 Did: recorded the same manifest motions on both sides, 3 runs each, and measured them with one script. These are records, not gates (Dennis 2026-11-05).
 - `tools/native/response.ts` now also reads our viewer recordings (rows `response/ours/...`). It measures sweeps too and takes `--against`, `--commit` and `--device`. `response.test.ts` covers the two new measures.
