@@ -28,6 +28,7 @@ import {
     type MeshStandardMaterial,
     type Object3D,
     type RectAreaLight,
+    type Texture,
 } from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { RectAreaLightTexturesLib } from 'three/addons/lights/RectAreaLightTexturesLib.js';
@@ -198,6 +199,61 @@ export function disposeScene(loaded: LoadedScene): void {
 export interface LoadSceneOptions {
     /** Scene settings by name, as a link gives them (`?candles=4096`); the manifest's defaults otherwise. */
     readonly settings?: Readonly<Record<string, unknown>>;
+    /**
+     * The largest texture side, in pixels, a model's images keep; bigger ones are scaled down
+     * at load (`limitTextureSize`). Unset keeps every image as the file has it.
+     */
+    readonly maxTextureSize?: number;
+}
+
+/**
+ * Scales down every image in `root`'s materials whose larger side is over `maxSize`
+ * (halving until it fits, so mipmaps stay powers of two where they were).
+ *
+ * Why: three keeps every texture uncompressed (RGBA8 with mipmaps, 4/3 × 4 bytes a pixel).
+ * Bistro exterior's 224 images of 2048 × 2048 then take 5.1 GB of GPU memory, which with
+ * DDGI's 0.6 GB is more than a 6 GB RTX 3060 Laptop has. The driver then moves memory between
+ * the GPU and system memory every frame the GI update runs, and a frame takes about 0.5 s
+ * instead of 0.05 s (T2.17, NOTES). At 1024 the images take a quarter of that.
+ * Returns how many images were scaled down.
+ */
+export async function limitTextureSize(root: Object3D, maxSize: number): Promise<number> {
+    const textures = new Set<Texture>();
+    root.traverse((object) => {
+        const mesh = object as Mesh;
+        if (!mesh.isMesh) return;
+        for (const material of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) {
+            for (const value of Object.values(material)) {
+                if ((value as Texture | null)?.isTexture) textures.add(value as Texture);
+            }
+        }
+    });
+    // GLTFLoader shares one decoded image between textures that use the same file: resize it once.
+    const resizedImages = new Map<ImageBitmap | HTMLImageElement, ImageBitmap>();
+    for (const texture of textures) {
+        const image = texture.image as unknown;
+        // Only decoded images can be resized here; data textures and canvases are left as they are.
+        if (!(image instanceof ImageBitmap || image instanceof HTMLImageElement)) continue;
+        let resized = resizedImages.get(image);
+        if (!resized) {
+            let width = image.width;
+            let height = image.height;
+            while (Math.max(width, height) > maxSize) {
+                width = Math.max(1, Math.floor(width / 2));
+                height = Math.max(1, Math.floor(height / 2));
+            }
+            if (width === image.width && height === image.height) continue;
+            // 'none' for alpha and colour space: the pixels stay the file's values (sRGB stays encoded,
+            // alpha is not premultiplied), as GLTFLoader decoded them.
+            resized = await createImageBitmap(image, { resizeWidth: width, resizeHeight: height, resizeQuality: 'high', premultiplyAlpha: 'none', colorSpaceConversion: 'none' });
+            resizedImages.set(image, resized);
+        }
+        texture.image = resized;
+        texture.needsUpdate = true;
+    }
+    // The full-size images are no longer used by any texture.
+    for (const image of resizedImages.keys()) if (image instanceof ImageBitmap) image.close();
+    return resizedImages.size;
 }
 
 export async function loadScene(manifest: SceneManifest, report: (progress: LoadProgress) => void, options: LoadSceneOptions = {}): Promise<LoadedScene> {
@@ -228,6 +284,7 @@ export async function loadScene(manifest: SceneManifest, report: (progress: Load
             const label = modelPartCount > 1 ? `${manifest.title}, part ${modelPartNumber} of ${modelPartCount} (${part.asset})` : manifest.title;
             const url = await findModelUrl(part.asset, part.path);
             const model = await loadGltf(url, label, report);
+            if (options.maxTextureSize !== undefined) await limitTextureSize(model, options.maxTextureSize);
             const holder = new Group();
             holder.name = `${part.asset}/${part.path}`;
             holder.add(model);

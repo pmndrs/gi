@@ -104,6 +104,8 @@ export interface BaselineOptions {
     bakeRuns: number;
     width: number;
     height: number;
+    /** Scale model textures down to this side at load (`LoadSceneOptions.maxTextureSize`); null keeps them as the files have them. */
+    maxTextureSize: number | null;
     log(message: string): void;
 }
 
@@ -115,6 +117,7 @@ export const DEFAULT_BASELINE_OPTIONS: Omit<BaselineOptions, 'log'> = {
     bakeRuns: 3,
     width: 1280,
     height: 720,
+    maxTextureSize: null,
 };
 
 export interface BaselineRow {
@@ -460,7 +463,7 @@ export async function runBaselines(canvas: HTMLCanvasElement, options: BaselineO
         core.layout = { left: 'none', right: null, giMode: 'on', split: 0.5 };
         let triangles = 0;
         try {
-            const loaded = await core.loadScene(manifest, () => {});
+            const loaded = await core.loadScene(manifest, () => {}, options.maxTextureSize === null ? {} : { maxTextureSize: options.maxTextureSize });
             triangles = loaded.stats.triangles;
             useFirstBookmark(core, manifest);
         } catch (error) {
@@ -505,6 +508,7 @@ export async function runBaselines(canvas: HTMLCanvasElement, options: BaselineO
             bakeRuns: options.bakeRuns,
             width: options.width,
             height: options.height,
+            maxTextureSize: options.maxTextureSize,
         },
         noisyCvThreshold: NOISY_CV_THRESHOLD,
         userAgent: navigator.userAgent,
