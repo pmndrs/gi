@@ -4613,3 +4613,46 @@ date,commit,device,browser,scene,metric,value
 2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome 157.0.0.0 headless,all,note/start_temp_c,62
 2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome 157.0.0.0 headless,all,note/thermal_share,0
 2026-11-08,dcc5e3a,RTX 3060 Laptop,Chrome 157.0.0.0 headless,all,note/timing_valid,1
+2026-11-08,3fbb161,RTX 3060 Laptop,Chrome headless,sponza,t2.10/breakdown_1440p_burst8/scenes/0/triangles,5744384
+2026-11-08,3fbb161,RTX 3060 Laptop,Chrome headless,sponza,t2.10/breakdown_1440p_burst8/scenes/0/meshes,449
+2026-11-08,3fbb161,RTX 3060 Laptop,Chrome headless,sponza,t2.10/breakdown_1440p_burst8/scenes/0/materials,50
+2026-11-08,3fbb161,RTX 3060 Laptop,Chrome headless,sponza,t2.10/breakdown_1440p_burst8/scenes/0/probes,19425
+2026-11-08,3fbb161,RTX 3060 Laptop,Chrome headless,sponza,t2.10/breakdown_1440p_burst8/scenes/0/variants/off/threeMs/scene,5.69434
+2026-11-08,3fbb161,RTX 3060 Laptop,Chrome headless,sponza,t2.10/breakdown_1440p_burst8/scenes/0/variants/off/threeMs/shadow,2.74816
+2026-11-08,3fbb161,RTX 3060 Laptop,Chrome headless,sponza,t2.10/breakdown_1440p_burst8/scenes/0/variants/off/threeMs/output,0.151424
+2026-11-08,3fbb161,RTX 3060 Laptop,Chrome headless,sponza,t2.10/breakdown_1440p_burst8/scenes/0/variants/off/threeTotalMs,8.59533
+2026-11-08,3fbb161,RTX 3060 Laptop,Chrome headless,sponza,t2.10/breakdown_1440p_burst8/scenes/0/variants/off/platformTotalMs,0
+2026-11-08,3fbb161,RTX 3060 Laptop,Chrome headless,sponza,t2.10/breakdown_1440p_burst8/scenes/0/variants/off/frameMs,8.59533
+2026-11-08,3fbb161,RTX 3060 Laptop,Chrome headless,sponza,t2.10/breakdown_1440p_burst8/scenes/0/variants/off/probesUpdated,0
+2026-11-08,3fbb161,RTX 3060 Laptop,Chrome headless,sponza,t2.10/breakdown_1440p_burst8/scenes/0/variants/off/framesUsed,45
+2026-11-08,3fbb161,RTX 3060 Laptop,Chrome headless,sponza,t2.10/breakdown_1440p_burst8/scenes/0/variants/on/threeMs/scene,15.7569
+2026-11-08,3fbb161,RTX 3060 Laptop,Chrome headless,sponza,t2.10/breakdown_1440p_burst8/scenes/0/variants/on/threeMs/shadow,2.74752
+2026-11-08,3fbb161,RTX 3060 Laptop,Chrome headless,sponza,t2.10/breakdown_1440p_burst8/scenes/0/variants/on/threeMs/output,0.15232
+2026-11-08,3fbb161,RTX 3060 Laptop,Chrome headless,sponza,t2.10/breakdown_1440p_burst8/scenes/0/variants/on/platformMs/ddgi/schedule,0.049152
+2026-11-08,3fbb161,RTX 3060 Laptop,Chrome headless,sponza,t2.10/breakdown_1440p_burst8/scenes/0/variants/on/platformMs/ddgi/trace,1.14995
+2026-11-08,3fbb161,RTX 3060 Laptop,Chrome headless,sponza,t2.10/breakdown_1440p_burst8/scenes/0/variants/on/platformMs/ddgi/gi-direct,0.574464
+2026-11-08,3fbb161,RTX 3060 Laptop,Chrome headless,sponza,t2.10/breakdown_1440p_burst8/scenes/0/variants/on/platformMs/ddgi/blend,0.126976
+2026-11-08,3fbb161,RTX 3060 Laptop,Chrome headless,sponza,t2.10/breakdown_1440p_burst8/scenes/0/variants/on/platformMs/ddgi/write,0.01024
+2026-11-08,3fbb161,RTX 3060 Laptop,Chrome headless,sponza,t2.10/breakdown_1440p_burst8/scenes/0/variants/on/platformMs/ddgi/propagate,0.02048
+2026-11-08,3fbb161,RTX 3060 Laptop,Chrome headless,sponza,t2.10/breakdown_1440p_burst8/scenes/0/variants/on/threeTotalMs,18.6569
+2026-11-08,3fbb161,RTX 3060 Laptop,Chrome headless,sponza,t2.10/breakdown_1440p_burst8/scenes/0/variants/on/platformTotalMs,1.92922
+2026-11-08,3fbb161,RTX 3060 Laptop,Chrome headless,sponza,t2.10/breakdown_1440p_burst8/scenes/0/variants/on/frameMs,20.6054
+2026-11-08,3fbb161,RTX 3060 Laptop,Chrome headless,sponza,t2.10/breakdown_1440p_burst8/scenes/0/variants/on/probesUpdated,132
+2026-11-08,3fbb161,RTX 3060 Laptop,Chrome headless,sponza,t2.10/breakdown_1440p_burst8/scenes/0/variants/on/framesUsed,45
+2026-11-08,3fbb161,RTX 3060 Laptop,Chrome headless,sponza,t2.10/breakdown_1440p_burst8/scenes/0/variants/on-paused/threeMs/scene,15.7618
+2026-11-08,3fbb161,RTX 3060 Laptop,Chrome headless,sponza,t2.10/breakdown_1440p_burst8/scenes/0/variants/on-paused/threeMs/shadow,2.74739
+2026-11-08,3fbb161,RTX 3060 Laptop,Chrome headless,sponza,t2.10/breakdown_1440p_burst8/scenes/0/variants/on-paused/threeMs/output,0.152832
+2026-11-08,3fbb161,RTX 3060 Laptop,Chrome headless,sponza,t2.10/breakdown_1440p_burst8/scenes/0/variants/on-paused/threeTotalMs,18.6632
+2026-11-08,3fbb161,RTX 3060 Laptop,Chrome headless,sponza,t2.10/breakdown_1440p_burst8/scenes/0/variants/on-paused/platformTotalMs,0
+2026-11-08,3fbb161,RTX 3060 Laptop,Chrome headless,sponza,t2.10/breakdown_1440p_burst8/scenes/0/variants/on-paused/frameMs,18.6632
+2026-11-08,3fbb161,RTX 3060 Laptop,Chrome headless,sponza,t2.10/breakdown_1440p_burst8/scenes/0/variants/on-paused/probesUpdated,0
+2026-11-08,3fbb161,RTX 3060 Laptop,Chrome headless,sponza,t2.10/breakdown_1440p_burst8/scenes/0/variants/on-paused/framesUsed,45
+2026-11-08,3fbb161,RTX 3060 Laptop,Chrome headless,sponza,t2.10/breakdown_1440p_burst8/scenes/0/fragmentsPerPixel,1.98356
+2026-11-08,3fbb161,RTX 3060 Laptop,Chrome headless,sponza,t2.10/breakdown_1440p_burst8/scenes/0/fragmentsPerPixelP95,5
+2026-11-08,3fbb161,RTX 3060 Laptop,Chrome headless,all,note/sm_clock_mhz,780
+2026-11-08,3fbb161,RTX 3060 Laptop,Chrome headless,all,note/sm_clock_min_mhz,780
+2026-11-08,3fbb161,RTX 3060 Laptop,Chrome headless,all,note/sm_clock_max_mhz,795
+2026-11-08,3fbb161,RTX 3060 Laptop,Chrome headless,all,note/mem_clock_mhz,7151
+2026-11-08,3fbb161,RTX 3060 Laptop,Chrome headless,all,note/start_temp_c,53
+2026-11-08,3fbb161,RTX 3060 Laptop,Chrome headless,all,note/thermal_share,0
+2026-11-08,3fbb161,RTX 3060 Laptop,Chrome headless,all,note/timing_valid,1
