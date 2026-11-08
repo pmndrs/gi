@@ -32,6 +32,33 @@ Verified (RTX 3060, Chrome headless, correctness runs): `viewer-lighting`: the s
 Not verified: Dennis driving it by eye (check 4's second half); the gizmo by mouse (headless runs pick by the list); VXGI and the upscaler don't draw the markers; Sponza's sun turn with the layer on misses (below).
 Numbers: Sponza key-probe sun turn, sun layer on (`ddgi-key-probes-sponza`, `VITE_DDGI_SUN_LAYER=on`, 3 runs): view within 5% for good from frames 16, 16, 13 (bar 15), field 36; layer off the same day 12, 11, 12. One diagnosis (the per-layer firefly clamp: clamp off still 15), no cause found, so no fix attempt (DECISIONS, for the lead).
 Next: the sun-layer excess near the view (a task of its own, DECISIONS); T2.8 check 3 (the native compare page) after T2.7; a `userData.giRange` if the lead wants GI's candles unranged; `sponza-candles`' calibration read 1-9 probes a frame in the viewer (fixed part 1.9-2.2 ms measured while three drew), for T2.10 to look at.
+
+## 2026-11-08 · T2.7 review fixes · native-runner (opus)
+Did: the fork's clock is now frame / `app.motionFrameRate` in double, not a float step (3d6cd8e). `motion.ts check` checks fixed-clock runs at frame / 60, worked out in TS (test added). New `play.ps1` options: `-Log` (a visible window on the wall clock, its own `-log` folder) and `-GridRule ddgi`. NOTES and README give native's blend rule, and warn that `lamp_halved` is a dimming, not the same event. **Found and fixed a texture-sky bug** (350f9de): each harness pass has its own descriptor set, so only the G-buffer had the sky images and probe misses read 0. The reviewer's lights-buffer cause was checked: not it, reverted.
+Verified (RTX 3060 Laptop, Vulkan, bench lock):
+- the watched `-Log` sweep: 0.0000 cm over 2,401 frames (14.5 s, frames 6 ms apart);
+- the fixed sweep: 0.0000 cm at frame / 60, logged clock within 0.033 µs;
+- the Sponza day re-recorded: sun 0.00000° off; dawn GI 6e-4, where before the fix it was 2e-8;
+- open-ground's probe GI with the texture sky is within 0.14% of its flat equivalent (it was 0 before);
+- `sky-check` still ok;
+- two-room default against c7d0162: 0.16–0.19%, the same as c7d0162 against itself;
+- tests, typecheck and lint pass.
+Numbers: `response.csv` `response/native/light-step/grid_ddgi/run1-3/*` (1,071 probes, settled from 3,600-frame holds). Lamp back: within 5% at frames 116–117. Lamp out: 135% above settled at frame 180. The old cells-grid rows got `grid_rule,cells` rows.
+Correction: the T2.7 entry below said open-ground had no GI with either sky; that was the descriptor bug plus a misread capture. Its Sponza day had no sky light in the probes; it is re-recorded (350f9de).
+Next: the fork push waits for Dennis. Recordings stay git-ignored.
+
+## 2026-11-08 · T2.7 native harness: motions, texture sky, animated sun · native-runner (opus)
+Did: fork branch `m2-t2.7` (`Motion.h/.cpp`; `GetSkyRadiance` in `Descriptors.hlsl` for probe, G-buffer and path-tracer misses; `LightingConsts`' padding carries the sky image; recording in `main.cpp`); `tools/native/motion.ts`, `response.ts`, `sky-check.ts`, `motion.test.ts`; `play.ps1 -Motion -Record -Sky -SettleKey -CaptureField`. All opt-in. Time: a fixed 1/60 s a frame when recording, the wall clock in a watched window (NOTES).
+Verified (RTX 3060 Laptop, Vulkan; built with VS 2022 17.10 / MSVC 19.40.33811, Windows SDK 10.0.22621.0, Vulkan SDK 1.3.283.0, CMake 3.24.0):
+- check 1: `play.ps1 -Scene two-room -Motion light-sweep -Record` puts the lamp 0.0000 cm from `motionState` over all 625 frames (`motion.ts check`); the step also 0.0000 cm over 721 frames, 3 runs.
+- check 2: `sky-check.ts` on open-ground: the G-buffer sky matches the file sampled in the same direction (mean 0.37/255, all pixels within 1.5); a mirrored map would be 38.8 off; below the horizon is black (the flat sky wasn't).
+- check 3: Sponza `-Motion time-of-day` (T2.4d's day): the sun is 0.00000° from the path on all 601 frames; 41 sky images blended; the GI-only mean rises from 2e-8 at 5° to 0.0125 at noon and falls again.
+- check 4: default config against c7d0162, `play.ps1 -Clean -CaptureFrames 600`: two-room 0.13–0.20% mean relative error (c7d0162 against itself 0.18–0.20%), open-ground 0.16% (0.29%); looked the same by eye. `pnpm typecheck` and the motion tests pass.
+Numbers: `bench/results/response.csv`, `response/native/light-step/run1-3/*` (558 rows). Lamp back into the room: within 5% from frame 131–132, every run. Lamp out: still 60% above settled at frame 180 (11x in its own frame). Settled levels come from 3,600-frame holds. The runs agree to 0.1%.
+Not verified: D3D12 (it builds; texture sky and recording are Vulkan only); the sky's effect on native probe GI (open-ground gives 0 GI with either sky, a pre-existing problem, NOTES); a watched wall-clock window (only recorded runs).
+Recordings (git-ignored, `native/build/recordings/`): `two-room-light-sweep`, `two-room-light-step-run1..3`, `sponza-time-of-day`. Each folder has `recording.json`, `frames.csv`, PNGs every 4th frame and a 15 fps `video.mp4`. The format is in `tools/native/README.md`, "Motions and recordings".
+Next: T2.8's compare page reads those folders; the lead decides whether to commit them (71 to 244 MB each) or the mp4 and CSV alone. The open-ground zero-GI cause goes to T2.10 or a native follow-up. Push the fork branch `m2-t2.7`.
+
 ## 2026-11-08 · T2.13 review and merge · lead (opus)
 Did: The Opus review passed packing (done-when 2) and found the main-thread bar (done-when 1) missed. Under the timebox (one diagnosis, one fix attempt) I merged T2.13 as a known miss, since it is a clear gain. I fixed the review's doc notes on the branch (b2b6720):
 - `m3-moving.md`'s upload budget gets an as-built note;
