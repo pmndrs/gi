@@ -51,6 +51,7 @@ import { ViewerCore } from '../../../../apps/viewer/src/core/viewer-core.ts';
 import { framesCsv, type RecordingInfo } from '../../../../apps/viewer/src/compare/recording.ts';
 import { MotionPlayer } from '../../../../apps/viewer/src/lighting/motion-player.ts';
 import { loadAllManifests } from '../../../../apps/viewer/src/scene/manifests.ts';
+import { defaultExposureEv } from '../../../../scenes/src/manifest.ts';
 import { DEFAULT_DDGI_VIEWER_SETTINGS, type DdgiTechnique } from '../../../../apps/viewer/src/techniques/ddgi-technique.ts';
 
 const env = import.meta.env as Record<string, unknown>;
@@ -117,6 +118,10 @@ try {
     core.layout = { left: 'none', right: null, giMode: 'only', split: 0.5 };
     core.configureDdgi(DEFAULT_DDGI_VIEWER_SETTINGS);
     await core.loadScene(manifest, () => {});
+    // The scene's own exposure, as the viewer applies it (viewer-app.ts); ViewerCore starts at 0 EV. Only the pictures
+    // change: the brightness is read before exposure.
+    const exposureEv = defaultExposureEv(manifest);
+    core.setExposureEv(exposureEv);
     core.camera.position.set(...bookmark.position);
     core.camera.fov = bookmark.fovYDeg;
     core.camera.lookAt(...bookmark.target);
@@ -220,6 +225,8 @@ try {
         width: IMAGE_WIDTH,
         height: IMAGE_HEIGHT,
         view: 'indirect',
+        // The pictures' exposure in stops (the scene's own, manifest `exposureEv`)
+        exposureEv,
         clock: 'fixed',
         frameSeconds: 1 / FRAME_RATE,
         // The motion's clock is fixed; DDGI's histories follow these real intervals (the file comment).
