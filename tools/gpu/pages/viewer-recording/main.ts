@@ -36,6 +36,11 @@
  *   VITE_DDGI_MOTION=light-sweep   (or light-step; default light-sweep)
  *   VITE_DDGI_SCENE=two-room       (default two-room)
  *   VITE_DDGI_FRAMES=625           (default: as native's recordings, MOTION_FRAMES)
+ *   VITE_DDGI_TAG=run1             (optional: the folder is <scene>-<motion>-<tag>, as play.ps1 -Tag)
+ *   VITE_DDGI_SETTLE_KEY=1         (optional: hold the light at this key of the motion instead of
+ *                                   playing it, as play.ps1 -SettleKey: 3,600 frames held, then 61
+ *                                   recorded and no images; tools/native/response.ts takes the mean
+ *                                   of those as the settled level, the same rule as native's)
  *
  * `node tools/reference/bench-lock.ts run --no-cool-wait -- pnpm test:gpu --filter viewer-recording --gpu nvidia --json <report.json>`.
  */
@@ -56,10 +61,15 @@ const MOTION = typeof env.VITE_DDGI_MOTION === 'string' && env.VITE_DDGI_MOTION 
  * loop and its last frame (10.4 s, 625), the step 12 s (`-RecordSeconds 12`, 721).
  */
 const MOTION_FRAMES: Readonly<Record<string, number>> = { 'light-sweep': 625, 'light-step': 721 };
-const FRAMES = Number(env.VITE_DDGI_FRAMES) > 0 ? Number(env.VITE_DDGI_FRAMES) : (MOTION_FRAMES[MOTION] ?? 625);
+const TAG = typeof env.VITE_DDGI_TAG === 'string' ? env.VITE_DDGI_TAG : '';
+/** -1: play the motion. A key index: hold the light there (native's `play.ps1 -SettleKey`, with its frame counts). */
+const SETTLE_KEY = env.VITE_DDGI_SETTLE_KEY !== undefined && env.VITE_DDGI_SETTLE_KEY !== '' ? Number(env.VITE_DDGI_SETTLE_KEY) : -1;
+const SETTLING = SETTLE_KEY >= 0;
+const FRAMES = Number(env.VITE_DDGI_FRAMES) > 0 ? Number(env.VITE_DDGI_FRAMES) : SETTLING ? 61 : (MOTION_FRAMES[MOTION] ?? 625);
 const FRAME_RATE = 60;
-const WARMUP_FRAMES = 600;
-const IMAGE_EVERY = 4;
+const WARMUP_FRAMES = SETTLING ? 3600 : 600;
+/** No pictures while settling (native's settle recordings use -RecordImageEvery 0); only the brightness is wanted. */
+const IMAGE_EVERY = SETTLING ? 0 : 4;
 const WIDTH = 1280;
 const HEIGHT = 720;
 const IMAGE_WIDTH = 960;
@@ -121,6 +131,9 @@ try {
     const motion = player.motions.find((candidate) => candidate.id === MOTION);
     if (!motion) throw new Error(`${SCENE} has no motion ${MOTION}`);
     const light = player.lightFor(motion)!;
+    if (SETTLING && !(SETTLE_KEY < motion.keyframes.length)) throw new Error(`${MOTION} has no key ${SETTLE_KEY}`);
+    // The motion's time each frame: its own clock, or the settle key's time held (a step motion shows that key from then on)
+    const motionTime = (frame: number): number => (SETTLING ? motion.keyframes[SETTLE_KEY].t : frame / FRAME_RATE);
 
     // Paced at 60 Hz (the file comment says why) on a fixed schedule, so a late frame (the browser's next animation frame
     // comes a few ms after the timer) doesn't push every later frame back: the intervals average 1/60 s. Returns when the
@@ -136,24 +149,24 @@ try {
     };
 
     // Native's warm-up: the motion's start for 600 frames.
-    player.pose(motion, 0);
+    player.pose(motion, motionTime(0));
     ddgi.markChanged(light);
     for (let frame = 0; frame < WARMUP_FRAMES; frame++) await pacedFrame();
-    log(`${SCENE} ${MOTION}: ${WARMUP_FRAMES} frames at the start, now recording ${FRAMES}`);
+    log(`${SCENE} ${MOTION}: ${WARMUP_FRAMES} frames ${SETTLING ? `held at key ${SETTLE_KEY}` : 'at the start'}, now recording ${FRAMES}`);
 
     const size = core.renderer.getDrawingBufferSize(new Vector2());
     const rows: Array<{ frame: number; time: number; wallTime: number; image: string | null; value: number; probesUpdated: number; light: readonly [number, number, number]; mean: Promise<number> }> = [];
     const snapshots: Array<{ path: string; bitmap: Promise<ImageBitmap> }> = [];
     const frameStarts: number[] = [];
     for (let frame = 0; frame < FRAMES; frame++) {
-        const time = frame / FRAME_RATE;
+        const time = motionTime(frame);
         player.pose(motion, time);
         const startedAt = await pacedFrame();
         frameStarts.push(startedAt);
         const reading = ddgi.readRegionMean(0, 0, size.x, size.y);
         if (!reading) throw new Error('the picture could not be read');
         let image: string | null = null;
-        if (frame % IMAGE_EVERY === 0) {
+        if (IMAGE_EVERY > 0 && frame % IMAGE_EVERY === 0) {
             // Right after the frame, before the browser shows the next: a snapshot of the picture on screen, encoded after the run.
             image = `frames/frame-${String(frame).padStart(6, '0')}.jpg`;
             snapshots.push({ path: image, bitmap: createImageBitmap(canvas, { resizeWidth: IMAGE_WIDTH, resizeHeight: IMAGE_HEIGHT, resizeQuality: 'high' }) });
@@ -167,8 +180,8 @@ try {
     const sorted = [...intervals].sort((a, b) => a - b);
     const mean = (values: number[]) => values.reduce((sum, value) => sum + value, 0) / Math.max(1, values.length);
     // Intervals ending at the frame after a picture frame, and the rest: the snapshot must not slow the picture frames.
-    const afterPicture = intervals.filter((_, index) => index % IMAGE_EVERY === 0);
-    const others = intervals.filter((_, index) => index % IMAGE_EVERY !== 0);
+    const afterPicture = IMAGE_EVERY > 0 ? intervals.filter((_, index) => index % IMAGE_EVERY === 0) : [];
+    const others = IMAGE_EVERY > 0 ? intervals.filter((_, index) => index % IMAGE_EVERY !== 0) : intervals;
     const frameIntervalMs = {
         median: sorted[Math.floor(sorted.length / 2)],
         mean: mean(intervals),
@@ -215,6 +228,8 @@ try {
         gridRule: 'ddgi',
         frameRate: FRAME_RATE,
         warmupFrames: WARMUP_FRAMES,
+        // As native's recording.json: -1 when the motion played, else the key the light was held at
+        settleKey: SETTLE_KEY,
         frames: FRAMES,
         imageEvery: IMAGE_EVERY,
         images: images.length,
@@ -223,9 +238,11 @@ try {
         probes: ddgi.describeSettings().probes,
         // The adapter's description, or what else it says about itself when that is empty.
         device: core.adapterInfo.description || [core.adapterInfo.vendor, core.adapterInfo.architecture, core.adapterInfo.device].filter(Boolean).join(' '),
+        // The browser, for response.ts's rows (headless Chrome says HeadlessChrome/<version>)
+        browser: navigator.userAgent,
         recorded: new Date().toISOString(),
     };
-    const recording = { name: `${SCENE}-${MOTION}`, info, framesCsv: framesCsv(rows, light.name), images };
+    const recording = { name: `${SCENE}-${MOTION}${TAG ? `-${TAG}` : ''}`, info, framesCsv: framesCsv(rows, light.name), images };
     const problems = [...pageErrors];
     const adapter = core.adapterInfo;
     reportGpuTest({
