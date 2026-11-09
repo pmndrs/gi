@@ -7,6 +7,11 @@
  * transforms or the traversal shows up as a disagreement with this file.
  * Never use it for rendering.
  *
+ * Materials (T4.2): given a material lookup, a triangle whose material lets
+ * the ray through (see-through, or the back face of a single-sided one;
+ * `materialLetsRayPass` in material-test-wgsl.ts) is skipped, as if it
+ * weren't there. Every triangle is looked at: the reference has no flags.
+ *
  * Besides the answer it reports how *certain* the answer is. An f32 tracer and
  * a double-precision one may legitimately differ for a ray that lands within
  * rounding distance of a triangle edge or of the ray's own `tMin`/`tMax`, so
@@ -14,6 +19,7 @@
  * when it is set.
  */
 
+import { materialLetsRayPass, type WalkMaterialLookup } from './material-test-wgsl.ts';
 import type { MeshGeometry } from './mesh-bvh.ts';
 import { countTriangles } from './mesh-bvh.ts';
 import { invertAffine } from './top-level.ts';
@@ -50,12 +56,21 @@ export interface ReferenceScene {
     readonly triangleIndices: Uint32Array;
     /** 1 for triangles of a mirrored instance, whose world-space winding is the reverse of the authored one. */
     readonly mirrored: Uint8Array;
+    /** Each triangle's material as the walk sees it: 1 when it blocks light. All 1 without a material lookup. */
+    readonly blocksLight: Uint8Array;
+    /** 1 when the triangle's material is double-sided. All 1 without a material lookup. */
+    readonly doubleSided: Uint8Array;
 }
 
-/** Transforms every triangle of every traceable instance to world space. */
+/**
+ * Transforms every triangle of every traceable instance to world space.
+ * `materialAt` gives each triangle's material (T4.2); without it every
+ * triangle is opaque and double-sided.
+ */
 export function buildReferenceScene(
     meshes: readonly MeshGeometry[],
     instances: readonly TraceSceneInstance[],
+    materialAt?: WalkMaterialLookup,
 ): ReferenceScene {
     let total = 0;
     const traceable = instances.filter((instance) => {
@@ -69,6 +84,8 @@ export function buildReferenceScene(
     const instanceIndices = new Uint32Array(total);
     const triangleIndices = new Uint32Array(total);
     const mirrored = new Uint8Array(total);
+    const blocksLight = new Uint8Array(total).fill(1);
+    const doubleSided = new Uint8Array(total).fill(1);
     let slot = 0;
     for (const instance of traceable) {
         const mesh = meshes[instance.meshIndex];
@@ -99,10 +116,15 @@ export function buildReferenceScene(
             instanceIndices[slot] = instance.instanceIndex;
             triangleIndices[slot] = triangle;
             mirrored[slot] = instanceMirrored;
+            const material = materialAt?.(instance.instanceIndex, triangle);
+            if (material) {
+                blocksLight[slot] = material.blocksLight ? 1 : 0;
+                doubleSided[slot] = material.doubleSided ? 1 : 0;
+            }
             slot++;
         }
     }
-    return { triangleCount: total, geometry, instanceIndices, triangleIndices, mirrored };
+    return { triangleCount: total, geometry, instanceIndices, triangleIndices, mirrored, blocksLight, doubleSided };
 }
 
 /** Möller-Trumbore in doubles. Writes `t, u, v, determinant` to `out` and returns false when the ray misses the triangle's plane region. */
@@ -145,6 +167,17 @@ function edgeMargin(u: number, v: number): number {
     return Math.min(u, v, 1 - u - v);
 }
 
+/**
+ * Whether the triangle's material lets the ray through. The side is the
+ * authored one: the world-space winding test, flipped back for a mirrored
+ * instance (as `frontFace` below).
+ */
+function letsRayPass(scene: ReferenceScene, triangle: number, determinant: number): boolean {
+    if (scene.blocksLight[triangle] === 1 && scene.doubleSided[triangle] === 1) return false;
+    const frontFace = determinant > 0 !== (scene.mirrored[triangle] === 1);
+    return materialLetsRayPass({ blocksLight: scene.blocksLight[triangle] === 1, doubleSided: scene.doubleSided[triangle] === 1 }, frontFace);
+}
+
 function nearIntervalEnd(t: number, ray: TraceRay): boolean {
     const slack = REFERENCE_TOLERANCE * Math.max(1, Math.abs(t));
     return Math.abs(t - ray.tMin) <= slack || Math.abs(t - ray.tMax) <= slack;
@@ -160,6 +193,8 @@ export function traceClosestReference(scene: ReferenceScene, ray: TraceRay): Ref
     let bestV = 0;
     let bestDeterminant = 0;
     const hitTimes: number[] = [];
+    // The nearest blocking triangle the ray misses by less than the tolerance (just past an edge).
+    let nearestNearMiss = Infinity;
 
     for (let triangle = 0; triangle < scene.triangleCount; triangle++) {
         if (!intersect(scene, triangle, ray, scratch)) continue;
@@ -167,7 +202,12 @@ export function traceClosestReference(scene: ReferenceScene, ray: TraceRay): Ref
         const u = scratch[1];
         const v = scratch[2];
         const determinant = scratch[3];
-        if (edgeMargin(u, v) < 0 || t < ray.tMin || t > ray.tMax) continue;
+        if (t < ray.tMin || t > ray.tMax || letsRayPass(scene, triangle, determinant)) continue;
+        const margin = edgeMargin(u, v);
+        if (margin < 0) {
+            if (margin >= -REFERENCE_TOLERANCE) nearestNearMiss = Math.min(nearestNearMiss, t);
+            continue;
+        }
         hitTimes.push(t);
         if (t < bestT) {
             bestT = t;
@@ -188,6 +228,10 @@ export function traceClosestReference(scene: ReferenceScene, ray: TraceRay): Ref
         for (const t of hitTimes) if (t - bestT <= tieSlack) closeHits++;
         bestIsAmbiguous = closeHits > 1;
     }
+    // A blocker missed by a hair in front of the hit: an f32 tracer may hit it instead. Without
+    // materials its neighbour across the edge is usually hit too (a tie, above); next to a
+    // see-through triangle (a glass pane in a wall) nothing else stands in for it.
+    if (nearestNearMiss < bestT + tieSlack) bestIsAmbiguous = true;
 
     return {
         t: bestT,
@@ -218,6 +262,7 @@ export function traceAnyReference(scene: ReferenceScene, ray: TraceRay): Referen
         const t = scratch[0];
         const u = scratch[1];
         const v = scratch[2];
+        if (letsRayPass(scene, triangle, scratch[3])) continue;
         const margin = edgeMargin(u, v);
         const slack = REFERENCE_TOLERANCE * Math.max(1, Math.abs(t));
         const inside = margin >= 0 && t >= ray.tMin && t <= ray.tMax;

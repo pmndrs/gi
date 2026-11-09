@@ -9,6 +9,7 @@
 
 import type { GpuLbvhMeshTree } from '@pmndrs/bvh/gpu-lbvh';
 import { describe, expect, it } from 'vitest';
+import { PlatformKernelBuilder } from '../kernel-builder.ts';
 import { PlatformScene } from '../scene/platform-scene.ts';
 import { createFakeGpu, type FakeBuffer, type FakeGpu } from '../scene/testing/fake-gpu.ts';
 import { createCpuTracer } from './cpu-traversal.ts';
@@ -128,7 +129,7 @@ async function setUp(options: { meshes?: number; meshTrees?: MeshTreeOptions; ce
     const scene = new PlatformScene(gpu.device);
     const gpuBuilder = new StandInGpuBuilder(gpu.device);
     const rays = new PlatformRayQueries(gpu.device, scene, { buildIn: 'main', meshTrees: { firstTreeBuilder: gpuBuilder, ...options.meshTrees } });
-    await rays.prepare({} as never, { batches: false });
+    await rays.prepare(new PlatformKernelBuilder(gpu.device, 'test'), { batches: false });
     const frame = () => {
         const encoder = gpu.createEncoder();
         rays.update(encoder, scene.encode(encoder));
@@ -320,7 +321,7 @@ describe('first trees from the GPU, tinybvh swapped in (T2.12)', () => {
         // No stand-in builder: the device's features decide, and it has no subgroups.
         const rays = new PlatformRayQueries(gpu.device, scene, { buildIn: 'main' });
         expect(rays.gpuFirstTrees).toBe(false);
-        await rays.prepare({} as never, { batches: false });
+        await rays.prepare(new PlatformKernelBuilder(gpu.device, 'test'), { batches: false });
         scene.createInstance({ mesh: scene.createMesh(grid(0)), materials: [scene.createMaterial({})], transform: IDENTITY });
         const frame = () => {
             const encoder = gpu.createEncoder();
@@ -340,7 +341,7 @@ describe('first trees from the GPU, tinybvh swapped in (T2.12)', () => {
         const warnings: string[] = [];
         const failing: FirstTreeBuilder = { prepare: () => Promise.reject(new Error('no compile')), build: () => ({ notBuilt: [], batches: [] }) };
         const brokenRays = new PlatformRayQueries(broken.device, brokenScene, { buildIn: 'main', warn: (message) => warnings.push(message), meshTrees: { firstTreeBuilder: failing } });
-        await brokenRays.prepare({} as never, { batches: false });
+        await brokenRays.prepare(new PlatformKernelBuilder(broken.device, 'test'), { batches: false });
         expect(brokenRays.gpuFirstTrees).toBe(false);
         expect(warnings).toEqual([expect.stringContaining('no compile')]);
         brokenScene.createInstance({ mesh: brokenScene.createMesh(grid(0)), materials: [brokenScene.createMaterial({})], transform: IDENTITY });

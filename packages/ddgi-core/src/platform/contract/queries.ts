@@ -72,6 +72,12 @@ export interface RayQueries {
     readonly capabilities: {
         /** Cutout holes are skipped during traversal (M4). */
         readonly alphaCutouts: boolean;
+        /**
+         * Rays pass see-through materials (`blocksLight: false`) and the back
+         * faces of single-sided ones (`doubleSided: false`), triangle by
+         * triangle, for closest hit and any hit alike (M4, T4.2).
+         */
+        readonly perTriangleMaterials: boolean;
         /** `GiHit.frontFace` is meaningful. Required by DDGI probe classification. */
         readonly backFaceHits: true;
     };

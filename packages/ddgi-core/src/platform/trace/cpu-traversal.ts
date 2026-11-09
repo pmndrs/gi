@@ -6,6 +6,11 @@
  * against the brute-force reference, with no GPU. It also reports the deepest
  * stack the walk used, which the GPU cannot tell us without a debug counter.
  * It runs in doubles, so it matches the GPU's decisions but not its rounding.
+ *
+ * Materials (T4.2), as the WGSL walk: a triangle whose flag bit 0 is set has
+ * its material consulted (`materialAt`), and a ray it lets through goes on
+ * without narrowing. Without `materialAt` a flagged triangle blocks, as in a
+ * tracer with no scene copy (`NO_MATERIALS_WGSL`).
  */
 
 import {
@@ -24,6 +29,7 @@ import {
     referenceCount,
     referenceIndex,
 } from './layout.ts';
+import { materialLetsRayPass, TRIANGLE_FLAG_CONSULT_MATERIAL, type WalkMaterialLookup } from './material-test-wgsl.ts';
 import type { TraceRay } from './trace-gpu.ts';
 import type { TraceSceneData } from './scene-assembly.ts';
 
@@ -97,7 +103,13 @@ interface TriangleHit {
     frontFace: boolean;
 }
 
-export function createCpuTracer(scene: TraceSceneData): CpuTracer {
+export interface CpuTracerOptions {
+    /** Materials for flagged triangles (T4.2); without it they block. */
+    readonly materialAt?: WalkMaterialLookup;
+}
+
+export function createCpuTracer(scene: TraceSceneData, options: CpuTracerOptions = {}): CpuTracer {
+    const materialAt = options.materialAt;
     const nodeFloats = new Float32Array(scene.nodes);
     const nodeWords = new Uint32Array(scene.nodes);
     const triangleFloats = new Float32Array(scene.triangles);
@@ -215,10 +227,15 @@ export function createCpuTracer(scene: TraceSceneData): CpuTracer {
                     const base = (triangleOffset + index + i) * TRIANGLE_WORDS;
                     const hit = intersectWatertight(triangleFloats, base, setup, ray.tMin, closestT);
                     if (hit === null) continue;
+                    const triangleIndex = triangleWords[base + TRIANGLE_WORD.originalIndex];
+                    // As the WGSL leaf test: a flagged triangle's material may let the ray through,
+                    // and then nothing is recorded and closestT stays.
+                    const consult = (triangleWords[base + TRIANGLE_WORD.flags] & TRIANGLE_FLAG_CONSULT_MATERIAL) !== 0;
+                    if (consult && materialAt && materialLetsRayPass(materialAt(instanceIndex, triangleIndex), hit.frontFace)) continue;
                     result = {
                         t: hit.t,
                         instanceIndex,
-                        triangleIndex: triangleWords[base + TRIANGLE_WORD.originalIndex],
+                        triangleIndex,
                         u: hit.u,
                         v: hit.v,
                         // Object-space winding is the authored one, so this is the authored side even when mirrored.

@@ -34,6 +34,7 @@ import {
     TRIANGLE_BYTES,
     TRACE_STACK_SIZE,
 } from './layout.ts';
+import { NO_MATERIALS_WGSL, TRIANGLE_FLAG_CONSULT_MATERIAL } from './material-test-wgsl.ts';
 
 /** `GPUShaderStage.COMPUTE`. The global does not exist in Node, where the tests import this file. */
 const SHADER_STAGE_COMPUTE = 0x4;
@@ -250,7 +251,12 @@ fn ${name}(ray: GiRay) -> ${returnType} {
             for (var i = 0u; i < count; i += 1u) {
                 let triangle = giLoadTriangle(instance.triangleOffset + index + i);
                 let candidate = giIntersectWatertight(triangle, setup, ray.tMin, farthest);
-                if (candidate.hit) {
+                // A flagged triangle's material may let the ray through (see-through,
+                // a single-sided back face; material-test-wgsl.ts). A ray that passes
+                // records nothing and leaves 'farthest' alone, so what lies behind
+                // the triangle is still found.
+                let consultMaterial = (triangle.flags & GI_TRIANGLE_CONSULT_MATERIAL) != 0u;
+                if (candidate.hit && !(consultMaterial && giMaterialPasses(instance.instanceIndex, triangle.originalIndex, candidate.barycentrics, candidate.frontFacing))) {
                     ${onTriangleHit}
                 }
             }
@@ -280,7 +286,10 @@ fn ${name}(ray: GiRay) -> ${returnType} {
 
 /**
  * The trace module: contract types, layout, and `giTraceClosest` / `giTraceAny`.
- * Bindings land at `slot`: nodes, triangles, top level, in that order.
+ * Bindings land at `slot`: nodes, triangles, top level, in that order. The
+ * walk calls `giMaterialPasses`, which the kernel gets from elsewhere: the
+ * material test module over the scene copy, or `NO_MATERIALS_WGSL` for a
+ * tracer without one (material-test-wgsl.ts).
  */
 export function traceModuleWgsl(slot: BindingSlot): string {
     const group = slot.group;
@@ -301,6 +310,10 @@ fn giMakeReference(index: u32, count: u32) -> u32 {
 // ---- Loading mesh nodes and triangles -----------------------------------------
 
 const GI_VEC4_PER_TRIANGLE: u32 = ${TRIANGLE_BYTES / 16}u;
+
+// Triangle flags bit 0: consult the material (giMaterialPasses, which comes
+// from material-test-wgsl.ts as its own piece of the kernel).
+const GI_TRIANGLE_CONSULT_MATERIAL: u32 = ${TRIANGLE_FLAG_CONSULT_MATERIAL}u;
 
 fn giLoadMeshNode(nodeIndex: u32) -> GiBvhNode {
     let base = nodeIndex * GI_VEC4_PER_NODE;
@@ -505,7 +518,8 @@ fn giIntersectWatertight(triangle: GiBvhTriangle, setup: GiRaySetup, tMin: f32, 
 
 ${walkWgsl('closest')}
 ${walkWgsl('any')}
-// Nearest hit, honouring alpha cutouts and blocksLight (cutouts arrive in M4).
+// Nearest hit, honouring see-through and single-sided materials (M4; cutouts
+// arrive with T4.2's second half).
 fn giTraceClosest(ray: GiRay) -> GiHit {
     return giWalkClosest(ray);
 }
@@ -591,8 +605,13 @@ fn giBatch(
 `;
 }
 
-/** A whole batch kernel: the trace module at `traceSlot` plus the batch's own group 1. */
+/**
+ * A whole batch kernel without a scene copy: the trace module at `traceSlot`,
+ * no materials (every triangle blocks; material-test-wgsl.ts), and the
+ * batch's own group 1.
+ */
 export function batchKernelWgsl(mode: 'closest' | 'any', traceSlot: BindingSlot = { group: 0, firstBinding: 0 }): string {
     return `${traceModuleWgsl(traceSlot)}
+${NO_MATERIALS_WGSL}
 ${batchEntryWgsl(mode, 1)}`;
 }

@@ -5,7 +5,9 @@
  * Everything is seeded so a failing case can be reproduced exactly.
  */
 
+import type { WalkMaterial, WalkMaterialLookup } from './material-test-wgsl.ts';
 import type { MeshGeometry } from './mesh-bvh.ts';
+import type { TraceSceneInstance } from './scene-assembly.ts';
 import type { TraceRay } from './trace-gpu.ts';
 
 export type Random = () => number;
@@ -132,4 +134,252 @@ export function randomRays(
         rays.push(toFloat32Ray(origin, direction, tMin, tMax));
     }
     return rays;
+}
+
+// ---------------------------------------------------------------------------
+// Materials in the walk (T4.2)
+// ---------------------------------------------------------------------------
+
+/** Opaque and double-sided: what every material was before M4. */
+export const OPAQUE: WalkMaterial = { blocksLight: true, doubleSided: true };
+/** `blocksLight: false`: glass, hidden. */
+export const SEE_THROUGH: WalkMaterial = { blocksLight: false, doubleSided: true };
+/** `doubleSided: false`: rays pass its back face. */
+export const SINGLE_SIDED: WalkMaterial = { blocksLight: true, doubleSided: false };
+
+/**
+ * A scene for the material rules: meshes whose triangles use material slots,
+ * instances that give each slot a material, and rays aimed at the surfaces
+ * from both sides. Instance `i` of `instances` has `instanceIndex` `i`.
+ */
+export interface MaterialCase {
+    readonly name: string;
+    readonly description: string;
+    /** Indexed meshes. */
+    readonly meshes: readonly MeshGeometry[];
+    /** Per mesh, each triangle's material slot, in index order. */
+    readonly triangleSlots: readonly Uint32Array[];
+    readonly instances: readonly TraceSceneInstance[];
+    /** Per instance, its material for each slot (`InstanceDescriptor.materials`). */
+    readonly materials: readonly (readonly WalkMaterial[])[];
+    readonly rays: readonly TraceRay[];
+}
+
+/**
+ * The material a triangle of an instance uses in a case, with `materials`
+ * standing in for the case's own (a page that edits materials at run time
+ * passes the edited lists). Slots past an instance's list use its last
+ * material, as `giMaterialAt` does.
+ */
+export function materialLookup(materialCase: MaterialCase, materials: readonly (readonly WalkMaterial[])[] = materialCase.materials): WalkMaterialLookup {
+    return (instanceIndex, triangleIndex) => {
+        const meshIndex = materialCase.instances[instanceIndex].meshIndex;
+        const list = materials[instanceIndex];
+        return list[Math.min(materialCase.triangleSlots[meshIndex][triangleIndex], list.length - 1)];
+    };
+}
+
+/** Runs of consecutive triangles with one slot, as `MeshDescriptor.groups` takes them (in indices, not triangles). */
+export function slotRuns(slots: Uint32Array): { start: number; count: number; materialSlot: number }[] {
+    const runs: { start: number; count: number; materialSlot: number }[] = [];
+    slots.forEach((slot, triangle) => {
+        const last = runs[runs.length - 1];
+        if (last && last.materialSlot === slot) last.count += 3;
+        else runs.push({ start: triangle * 3, count: 3, materialSlot: slot });
+    });
+    return runs;
+}
+
+/** Collects quads and grids with a material slot per triangle. */
+class SlottedMeshBuilder {
+    private readonly positions: number[] = [];
+    private readonly indices: number[] = [];
+    private readonly slots: number[] = [];
+
+    /** One quad, its corners counter-clockwise seen from its front. */
+    quad(corners: readonly Vector3[], slot: number): void {
+        const first = this.positions.length / 3;
+        for (const corner of corners) this.positions.push(...corner);
+        this.indices.push(first, first + 1, first + 2, first, first + 2, first + 3);
+        this.slots.push(slot, slot);
+    }
+
+    /**
+     * A grid in the plane z = 0, front facing +z, with vertices shared between
+     * cells (so a pane shares its edges with the wall around it). `slotOf`
+     * gives each cell's slot by column and row.
+     */
+    grid(xs: readonly number[], ys: readonly number[], slotOf: (column: number, row: number) => number): void {
+        const first = this.positions.length / 3;
+        for (const y of ys) for (const x of xs) this.positions.push(x, y, 0);
+        const columns = xs.length;
+        for (let row = 0; row + 1 < ys.length; row++) {
+            for (let column = 0; column + 1 < columns; column++) {
+                const a = first + row * columns + column;
+                const b = a + 1;
+                const c = a + columns;
+                const d = c + 1;
+                // Counter-clockwise seen from +z, as tessellatedQuad.
+                this.indices.push(a, b, d, a, d, c);
+                const slot = slotOf(column, row);
+                this.slots.push(slot, slot);
+            }
+        }
+    }
+
+    build(): { mesh: MeshGeometry; slots: Uint32Array } {
+        return {
+            mesh: { positions: Float32Array.from(this.positions, Math.fround), indices: Uint32Array.from(this.indices) },
+            slots: Uint32Array.from(this.slots),
+        };
+    }
+}
+
+/** A column-major translation after an optional per-axis scale (a negative one mirrors). */
+function placement(translation: Vector3, scale: Vector3 = [1, 1, 1]): number[] {
+    return [scale[0], 0, 0, 0, 0, scale[1], 0, 0, 0, 0, scale[2], 0, translation[0], translation[1], translation[2], 1];
+}
+
+/** A half turn about +y (the front then faces -z), then a translation. */
+function turnedAround(translation: Vector3): number[] {
+    return [-1, 0, 0, 0, 0, 1, 0, 0, 0, 0, -1, 0, translation[0], translation[1], translation[2], 1];
+}
+
+/** An axis-aligned box: its low and high corners. */
+type Box = readonly [Vector3, Vector3];
+
+/**
+ * Rays from a random point of a random box in `origins` toward a random point
+ * of a random box in `targets`: aimed at the surfaces under test, from both
+ * sides, at every angle the boxes allow.
+ */
+function aimedRays(random: Random, count: number, origins: readonly Box[], targets: readonly Box[]): TraceRay[] {
+    const pointIn = (boxes: readonly Box[]): Vector3 => {
+        const [low, high] = boxes[Math.floor(random() * boxes.length)];
+        return [low[0] + random() * (high[0] - low[0]), low[1] + random() * (high[1] - low[1]), low[2] + random() * (high[2] - low[2])];
+    };
+    const rays: TraceRay[] = [];
+    while (rays.length < count) {
+        const origin = pointIn(origins);
+        const target = pointIn(targets);
+        const direction = [target[0] - origin[0], target[1] - origin[1], target[2] - origin[2]];
+        const length = Math.hypot(direction[0], direction[1], direction[2]);
+        if (!(length > 1e-3)) continue;
+        rays.push(toFloat32Ray(origin, direction.map((component) => component / length), 0, 1e6));
+    }
+    return rays;
+}
+
+/** A large opaque quad facing +z, as a backdrop behind the surfaces under test. */
+function backdropMesh(half: number): { mesh: MeshGeometry; slots: Uint32Array } {
+    const builder = new SlottedMeshBuilder();
+    builder.quad(
+        [
+            [-half, -half, 0],
+            [half, -half, 0],
+            [half, half, 0],
+            [-half, half, 0],
+        ],
+        0,
+    );
+    return builder.build();
+}
+
+/**
+ * The three scenes of T4.2's first check:
+ *
+ * - `glass-pane-in-wall`: one wall mesh with two slots, a 1 x 1 m pane
+ *   (slot 1, see-through) in a 4 x 3 m wall (slot 0, opaque), sharing its
+ *   edges; opaque walls 2 m in front and behind catch what goes through.
+ * - `single-sided-quad`: a single-sided tessellated quad in three instances
+ *   (as authored, mirrored, turned around), hit from both sides, between two
+ *   opaque backdrops.
+ * - `per-instance-see-through`: one mesh with two slots (left and right
+ *   halves) in two instances: one all opaque, one whose right half is
+ *   see-through. A mesh's flags are a union over its instances, so the
+ *   opaque instance's right half is consulted too, and must still block.
+ */
+export function buildMaterialCases(raysPerCase: number, seed = 0x7a42): MaterialCase[] {
+    const random = createRandom(seed);
+    const inFront: Box = [
+        [-4.5, -1, 0.2],
+        [4.5, 4, 1.8],
+    ];
+    const behind: Box = [
+        [-4.5, -1, -1.8],
+        [4.5, 4, -0.2],
+    ];
+
+    const wall = new SlottedMeshBuilder();
+    // A 3 x 3 grid of cells; the middle one is the pane.
+    wall.grid([-2, -0.5, 0.5, 2], [0, 1, 2, 3], (column, row) => (column === 1 && row === 1 ? 1 : 0));
+    const wallMesh = wall.build();
+    const backdrop = backdropMesh(6);
+    const glass: MaterialCase = {
+        name: 'glass-pane-in-wall',
+        description: 'a see-through pane (slot 1) in an opaque wall (slot 0) of one mesh, opaque walls in front and behind',
+        meshes: [wallMesh.mesh, backdrop.mesh],
+        triangleSlots: [wallMesh.slots, backdrop.slots],
+        instances: [
+            { meshIndex: 0, instanceIndex: 0, objectToWorld: placement([0, 0, 0]) },
+            { meshIndex: 1, instanceIndex: 1, objectToWorld: placement([0, 1.5, -2]) },
+            { meshIndex: 1, instanceIndex: 2, objectToWorld: placement([0, 1.5, 2]) },
+        ],
+        materials: [[OPAQUE, SEE_THROUGH], [OPAQUE], [OPAQUE]],
+        // Aimed at the pane and the wall around it.
+        rays: aimedRays(random, raysPerCase, [inFront, behind], [
+            [
+                [-1.2, 0.3, 0],
+                [1.2, 2.7, 0],
+            ],
+        ]),
+    };
+
+    const quad = tessellatedQuad(4, 1);
+    const singleSided: MaterialCase = {
+        name: 'single-sided-quad',
+        description: 'a single-sided quad as authored, mirrored and turned around, hit from both sides, between opaque backdrops',
+        meshes: [quad, backdrop.mesh],
+        triangleSlots: [new Uint32Array((quad.indices?.length ?? 0) / 3), backdrop.slots],
+        instances: [
+            { meshIndex: 0, instanceIndex: 0, objectToWorld: placement([-3, 1.5, 0]) },
+            { meshIndex: 0, instanceIndex: 1, objectToWorld: placement([0, 1.5, 0], [-1, 1, 1]) },
+            { meshIndex: 0, instanceIndex: 2, objectToWorld: turnedAround([3, 1.5, 0]) },
+            { meshIndex: 1, instanceIndex: 3, objectToWorld: placement([0, 1.5, -2]) },
+            { meshIndex: 1, instanceIndex: 4, objectToWorld: placement([0, 1.5, 2]) },
+        ],
+        materials: [[SINGLE_SIDED], [SINGLE_SIDED], [SINGLE_SIDED], [OPAQUE], [OPAQUE]],
+        rays: aimedRays(random, raysPerCase, [inFront, behind], [
+            [
+                [-4.2, 0.3, 0],
+                [4.2, 2.7, 0],
+            ],
+        ]),
+    };
+
+    const halves = new SlottedMeshBuilder();
+    // Left half slot 0, right half slot 1.
+    halves.grid([-1, -0.5, 0, 0.5, 1], [-1, -0.5, 0, 0.5, 1], (column) => (column < 2 ? 0 : 1));
+    const halvesMesh = halves.build();
+    const perInstance: MaterialCase = {
+        name: 'per-instance-see-through',
+        description: 'one two-slot mesh in two instances: all opaque, and with its right half see-through',
+        meshes: [halvesMesh.mesh, backdrop.mesh],
+        triangleSlots: [halvesMesh.slots, backdrop.slots],
+        instances: [
+            { meshIndex: 0, instanceIndex: 0, objectToWorld: placement([-1.5, 1.5, 0]) },
+            { meshIndex: 0, instanceIndex: 1, objectToWorld: placement([1.5, 1.5, 0]) },
+            { meshIndex: 1, instanceIndex: 2, objectToWorld: placement([0, 1.5, -2]) },
+            { meshIndex: 1, instanceIndex: 3, objectToWorld: placement([0, 1.5, 2]) },
+        ],
+        materials: [[OPAQUE, OPAQUE], [OPAQUE, SEE_THROUGH], [OPAQUE], [OPAQUE]],
+        rays: aimedRays(random, raysPerCase, [inFront, behind], [
+            [
+                [-2.7, 0.3, 0],
+                [2.7, 2.7, 0],
+            ],
+        ]),
+    };
+
+    return [glass, singleSided, perInstance];
 }
