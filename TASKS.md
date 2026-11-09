@@ -585,6 +585,40 @@ Same rules as phase 2 (no timing; correctness gates; faithful port with Capsaici
   - The furnace room (white, closed, constant emitter or sky) moves toward the multi-bounce value against single bounce; the expected direction and size are stated before the run.
   - Cornell's indirect light against the Cycles reference is reported (single and multi-bounce), as information.
 
+### radiance-cache phase 4: temporal quality, faithful
+
+Same rules (no timing; correctness gates; faithful port with sources cited; register rows from the next free number). Source map rows 4-6, 9, 10 (ray guiding), 23 (hysteresis), 24, 26, 28 (bent normal), 34, 35, and the SSGI technique (`src/core/src/render_techniques/ssgi/`).
+
+| ID | Task | Agent | Size | Depends on | Status |
+| --- | --- | --- | --- | --- | --- |
+| RC4.1 | Temporal screen probes: `ReprojectScreenProbes` (plane and normal tests, the 3×3 taps, backup radiance), the off-screen LRU probe cache (`CountScreenProbes`, the scan, `ScatterScreenProbes`, `ReorderScreenProbes`), `PatchScreenProbes` (adaptive sampling of empty tiles), luminance-CDF ray guiding in `SampleScreenProbes`, biased hysteresis in `BlendScreenProbes` | implementer | M | RC3.2 | todo |
+| RC4.2 | `FilterScreenProbes` (the separable probe filter) and Capsaicin's SSGI technique (near-field GI and bent-normal occlusion) feeding `InterpolateScreenProbes` | implementer | M | RC4.1 | todo |
+| RC4.3 | The image-space GI denoiser (`ReprojectGI`, `FilterGI` ×2, `gi_denoiser.hlsl`), built as a self-contained module with no dependency on `ddgi-core`'s internals, ready to move into `pmndrs/denoiser` | implementer | M | RC4.1 | todo |
+
+- **RC4.1 done-when.**
+  - The passes listed in the row, ported with their source lines cited, at Capsaicin's constants.
+  - GPU tests:
+    - a still camera reprojects every probe to itself;
+    - a camera pan marks the disoccluded tiles empty, and `PatchScreenProbes` moves probes into them;
+    - a probe that leaves the screen and comes back is found in the LRU cache;
+    - with history, `SampleScreenProbes` sends rays in proportion to its CDF (a chi-square check on a probe with one bright cell).
+  - Flicker on Cornell and Sponza with a still camera: T1.12's measure (per-pixel frame-to-frame change of the GI term), reported against DDGI's thresholds (mean ≤ 0.1%, p95 ≤ 0.5%), as information.
+- **RC4.2 done-when.**
+  - `FilterScreenProbes` (radius 3, plane, hemisphere and hit-angle tests, depth weight) and the SSGI technique ported, the latter as a platform or technique module that reads `FrameScreen`.
+  - GPU tests:
+    - the filter leaves a constant field unchanged and doesn't blur across a depth edge;
+    - SSGI's bent normal points away from a nearby wall on a test corner.
+  - The image on Cornell, two-room and Sponza in the viewer, with no errors and no NaN or negative pixels.
+- **RC4.3 done-when.**
+  - The denoiser ported with its source lines cited, in `packages/ddgi-core/src/denoise/` (or a sibling package): engine-free, its inputs named as `@pmndrs/denoiser`'s are (colour, depth, normal, velocity, history), and its own README section saying how it would move into `pmndrs/denoiser`.
+  - GPU tests:
+    - a still constant image passes through unchanged;
+    - a disoccluded region gets the blur mask and is blurred, while a converged region is not;
+    - history reprojection under a known camera move lands on the right pixels.
+  - The radiance-cache technique uses it by default, as Capsaicin does.
+  - **Phase 4's by-eye check is Dennis's** (the plan's done-when: steady by eye on Cornell and Sponza, no popping on a fly-through). The viewer is made ready for it and the check is listed in PROGRESS "Next"; it doesn't block the track.
+  - Moving the module into `pmndrs/denoiser` (a PR there) needs Dennis's go-ahead: listed in PROGRESS "Next".
+
 ## Carried to M2 (collected during M1)
 
 - `sponza-candles`: an opt-in scene with a stated subset of Intel's 10,000 candle lights, for the many-lights stress test (DECISIONS 2026-11-05).
