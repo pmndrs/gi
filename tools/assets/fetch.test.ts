@@ -18,6 +18,7 @@ import {
     DEFAULT_DOWNLOAD_TIMEOUTS,
     downloadFile,
     downloadsOf,
+    generatedConvert,
     downloadWithCurl,
     endedByGuardKill,
     extractWithCache,
@@ -1426,5 +1427,54 @@ describe('outputs that must have no metal (dielectric)', () => {
         expect(validateSources({ assets: [rawAsset({ outputs: [output] })] })).toEqual([]);
         expect(validateSources({ assets: [rawAsset({ outputs: [{ ...output, dielectric: 'yes' }] })] }).join('\n')).toContain('dielectric: must be true or false');
         expect(validateSources({ assets: [rawAsset({ outputs: [{ ...output, path: 'room.gltf' }] })] }).join('\n')).toContain('dielectric: only supported for .glb');
+    });
+});
+
+describe('generated assets (made by one of our scripts, no download)', () => {
+    const generatedEntry = (overrides: Partial<AssetEntry> = {}): AssetEntry => {
+        const { download: _download, ...rest } = asset();
+        return {
+            ...rest,
+            license: 'MIT',
+            sourceUrl: 'tools/assets/convert/x.ts',
+            generated: { script: 'tools/assets/convert/x.ts', seed: 7, args: ['{dir}/x.glb'] },
+            ...overrides,
+        };
+    };
+
+    it('accepts an entry with a generator and a seed in place of a download', () => {
+        expect(validateSources({ assets: [generatedEntry()] })).toEqual([]);
+        expect(downloadsOf(generatedEntry())).toEqual([]);
+    });
+
+    it('turns the seed and arguments into a node conversion', () => {
+        expect(generatedConvert({ script: 'tools/assets/convert/x.ts', seed: 7, args: ['out.glb'] })).toEqual({
+            tool: 'node',
+            script: 'tools/assets/convert/x.ts',
+            args: ['--seed', '7', 'out.glb'],
+        });
+    });
+
+    it('still needs a recorded sha256 and size for the output, so a changed generator shows up', () => {
+        const entry = generatedEntry({ outputs: [{ path: 'x.glb' } as AssetOutput] });
+        const text = validateSources({ assets: [entry] }).join('\n');
+        expect(text).toContain('outputs[0].sha256');
+        expect(text).toContain('outputs[0].bytes');
+    });
+
+    it('rejects a bad script, a missing seed, a download beside the generator, and a license that is not MIT', () => {
+        const bad = (generated: unknown, overrides: Partial<AssetEntry> = {}) =>
+            validateSources({ assets: [generatedEntry({ generated: generated as AssetEntry['generated'], ...overrides })] }).join('\n');
+        expect(bad({ script: '../x.ts', seed: 1, args: [] })).toContain('script must be a repo-relative .ts path');
+        expect(bad({ script: 'x.py', seed: 1, args: [] })).toContain('script must be a repo-relative .ts path');
+        expect(bad({ script: 'x.ts', seed: 1.5, args: [] })).toContain('seed must be a whole number');
+        expect(bad({ script: 'x.ts', seed: 1, args: [] }, { download: asset().download })).toContain('a generated asset has no download');
+        expect(bad({ script: 'x.ts', seed: 1, args: [] }, { license: 'CC0-1.0' })).toContain('license is "MIT"');
+    });
+
+    it('still demands a download from an ordinary asset, and an allow-listed license (MIT alone is not enough)', () => {
+        const { download: _download, ...noDownload } = asset();
+        expect(validateSources({ assets: [noDownload] }).join('\n')).toContain('download: required');
+        expect(validateSources({ assets: [asset({ license: 'MIT' })] }).join('\n')).toContain('allow list');
     });
 });
