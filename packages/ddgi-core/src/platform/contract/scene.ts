@@ -68,11 +68,14 @@ export interface MeshDescriptor {
      * Why: the platform logs this box (moved to world space by each instance)
      * as the mesh's changed region whenever new positions arrive, and its
      * instances keep this box in the top-level tree, so a pose change never
-     * changes the tree's shape. Positions outside it are still traced
-     * correctly: the box grows to hold them, with a one-time console warning.
-     * Omitted, the box starts as the rest pose's and grows the same way. It
-     * will be required for positions given as a GPU buffer, which the
-     * platform can't read on the CPU.
+     * changes the tree's shape. Positions given as a `Float32Array` outside
+     * it are still traced correctly: the box grows to hold them, with a
+     * one-time console warning. Omitted, the box starts as the rest pose's and
+     * grows the same way.
+     *
+     * Required for positions given on the GPU ({@link DeformedPositions}),
+     * which the platform can't read on the CPU: there the box can't grow, and
+     * parts of a pose outside it may be missed by rays.
      */
     readonly deformBounds?: Aabb;
     /** Shown in debug output and errors. */
@@ -80,20 +83,36 @@ export interface MeshDescriptor {
 }
 
 /**
- * Deformed positions supplied by the host each frame, already on the GPU.
- * Not supported yet: {@link SceneApi.setDeformedPositions} takes a
- * `Float32Array` until the GPU refit lands (M3, T3.3).
+ * Deformed positions supplied by the host each frame, already on the GPU:
+ * a buffer ({@link DeformedPositionsBuffer}) or a texture
+ * ({@link DeformedPositionsTexture}).
  *
- * The buffer belongs to the host and must come from the same device, with
- * `STORAGE` usage. The platform reads it inside {@link GIPlatform.encode} and
+ * The buffer or texture belongs to the host and must come from the same
+ * device. The platform copies it into its scene copy inside the next
+ * {@link GIPlatform.encode} (one GPU copy, recorded into the host's encoder),
+ * so it must hold the pose when the host submits that frame. The platform
  * never writes or destroys it.
  */
-export interface DeformedPositions {
+export type DeformedPositions = DeformedPositionsBuffer | DeformedPositionsTexture;
+
+/** Positions in a GPU buffer with `STORAGE` usage, x, y and z as f32 at the start of each vertex. */
+export interface DeformedPositionsBuffer {
     readonly buffer: GPUBuffer;
     /** Byte offset of the first vertex. Must be a multiple of 4. */
     readonly offset?: number;
-    /** Bytes between consecutive vertices. Defaults to 12 (tightly packed xyz). */
+    /** Bytes between consecutive vertices: at least 12, a multiple of 4. Defaults to 12 (tightly packed xyz). */
     readonly stride?: number;
+}
+
+/**
+ * Positions in an `rgba32float` texture with `COPY_SRC` usage: vertex `i` in
+ * texel `(i mod width, floor(i / width))`, xyz in rgb (alpha is ignored).
+ * The width must be a multiple of 16 (whole 256-byte rows for the copy).
+ * This is the form a three.js TSL compute can write (a storage
+ * `ExternalTexture`, the three adapter's GPU skinning).
+ */
+export interface DeformedPositionsTexture {
+    readonly texture: GPUTexture;
 }
 
 // ---------------------------------------------------------------------------
@@ -396,20 +415,27 @@ export interface SceneApi {
     /**
      * Supply new positions for a mesh created with `deforming: true`: xyz per
      * vertex in the mesh's own space, the same vertex count and order as its
-     * descriptor. The triangle list, normals and uvs stay as they were.
+     * descriptor. The triangle list and uvs stay as they were. A deforming
+     * mesh's normals are ignored: GI shades it with each triangle's own
+     * normal, worked out from the current positions (at probe resolution the
+     * difference doesn't show).
      *
-     * - **A `Float32Array`** (the CPU form; works today): copied at the call,
-     *   so the host may reuse its array. Calls between two frames are merged:
-     *   only the last one counts.
-     * - **A {@link DeformedPositions} GPU buffer**: not supported yet (it
-     *   arrives with the GPU refit, M3's T3.3); throws.
+     * - **A `Float32Array`** (the CPU form): copied at the call, so the host
+     *   may reuse its array.
+     * - **{@link DeformedPositions} on the GPU** (a buffer or a texture):
+     *   copied on the GPU in the next frame. The mesh needs `deformBounds`.
      *
-     * Rays see the new pose once its mesh tree is ready, usually within a few
-     * frames; until then they see the previous pose. While any mesh tree is
-     * being built, new positions wait (the latest one is kept), so a mesh
-     * deformed every frame still gets trees. The change is logged as the
-     * mesh's `deformBounds` region with how far its vertices moved
-     * (`DirtyRegion.moved`).
+     * Calls between two frames are merged: only the last one counts. Rays see
+     * the pose in the next frame the platform encodes: the scene copy takes
+     * the positions and the mesh's tree is refit on the GPU from them, in the
+     * same commands (the mesh's first tree, from a builder, comes a few frames
+     * after `createMesh`; until then rays miss the mesh). The change is logged
+     * as the mesh's `deformBounds` region with how far its vertices moved
+     * (`DirtyRegion.moved`; for positions on the GPU, which the platform
+     * can't read, the box's diagonal: the most any vertex inside it can move).
+     *
+     * On a device without the `subgroups` feature the refit can't run: the
+     * mesh stays in its rest pose, and the first call warns once.
      */
     setDeformedPositions(mesh: MeshHandle, positions: Float32Array | DeformedPositions): void;
     destroyMesh(mesh: MeshHandle): void;

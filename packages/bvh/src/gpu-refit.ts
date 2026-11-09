@@ -533,6 +533,67 @@ export interface GpuBvhRefitOptions {
      * gives up is repaired on the GPU in the same frame either way.
      */
     readonly diagnostics?: boolean;
+    /**
+     * Compiled pipelines to share with other refits. Without them each refit
+     * compiles its own in `prepare`. Why share: a caller with many trees (one
+     * per deforming mesh) needs one refit object each, for its own topology
+     * and parameters, but compiling the same kernels again for each would be a
+     * compile every time a mesh is added.
+     */
+    readonly kernels?: GpuBvhRefitKernels;
+}
+
+/**
+ * The refit's pipelines and their bind-group layout, compiled once and shared
+ * by any number of {@link GpuBvhRefit}s on the same device.
+ */
+export class GpuBvhRefitKernels {
+    readonly layout: GPUBindGroupLayout;
+    private readonly device: GPUDevice;
+    private readonly label: string;
+    private pipelines: { clear: GPUComputePipeline; climb: GPUComputePipeline; repair: GPUComputePipeline } | null = null;
+    private compiling: Promise<void> | null = null;
+
+    constructor(device: GPUDevice, label = 'bvh refit') {
+        if (!GpuBvhRefit.isSupported(device)) throw new Error('@pmndrs/bvh: the GPU refit needs a device with the "subgroups" feature');
+        this.device = device;
+        this.label = label;
+        const storage = (type: GPUBufferBindingType): GPUBindGroupLayoutEntry['buffer'] => ({ type });
+        this.layout = device.createBindGroupLayout({
+            label: this.label,
+            entries: [
+                { binding: 0, visibility: SHADER_STAGE_COMPUTE, buffer: storage('storage') },
+                { binding: 1, visibility: SHADER_STAGE_COMPUTE, buffer: storage('read-only-storage') },
+                { binding: 2, visibility: SHADER_STAGE_COMPUTE, buffer: storage('read-only-storage') },
+                { binding: 3, visibility: SHADER_STAGE_COMPUTE, buffer: storage('storage') },
+                { binding: 4, visibility: SHADER_STAGE_COMPUTE, buffer: storage('storage') },
+                { binding: 5, visibility: SHADER_STAGE_COMPUTE, buffer: storage('uniform') },
+            ],
+        });
+    }
+
+    /** Compiles the kernels (asynchronously, so the main thread doesn't stall); later calls share the first. */
+    prepare(): Promise<void> {
+        this.compiling ??= (async () => {
+            const module = this.device.createShaderModule({ label: this.label, code: bvhRefitWgsl() });
+            const layout = this.device.createPipelineLayout({ label: this.label, bindGroupLayouts: [this.layout] });
+            const pipeline = (entryPoint: string) =>
+                this.device.createComputePipelineAsync({ label: `${this.label} ${entryPoint}`, layout, compute: { module, entryPoint } });
+            const [clear, climb, repair] = await Promise.all([pipeline('bvhRefitClear'), pipeline('bvhRefitClimb'), pipeline('bvhRefitRepair')]);
+            this.pipelines = { clear, climb, repair };
+        })();
+        return this.compiling;
+    }
+
+    get ready(): boolean {
+        return this.pipelines !== null;
+    }
+
+    /** The pipelines; throws before `prepare` has finished. */
+    get compiled(): { readonly clear: GPUComputePipeline; readonly climb: GPUComputePipeline; readonly repair: GPUComputePipeline } {
+        if (!this.pipelines) throw new Error('@pmndrs/bvh: call prepare() before encode()');
+        return this.pipelines;
+    }
 }
 
 function dispatch2d(pass: GPUComputePassEncoder, threads: number, maxPerDimension: number): void {
@@ -554,10 +615,7 @@ export class GpuBvhRefit {
 
     private readonly device: GPUDevice;
     private readonly label: string;
-    private readonly layout: GPUBindGroupLayout;
-    private clearPipeline: GPUComputePipeline | null = null;
-    private climbPipeline: GPUComputePipeline | null = null;
-    private repairPipeline: GPUComputePipeline | null = null;
+    private readonly kernels: GpuBvhRefitKernels;
     private readonly diagnostics: boolean;
     private topology: GPUBuffer;
     private scratch: GPUBuffer;
@@ -577,18 +635,7 @@ export class GpuBvhRefit {
         this.device = device;
         this.label = options.label ?? 'bvh refit';
         this.diagnostics = options.diagnostics ?? false;
-        const storage = (type: GPUBufferBindingType): GPUBindGroupLayoutEntry['buffer'] => ({ type });
-        this.layout = device.createBindGroupLayout({
-            label: this.label,
-            entries: [
-                { binding: 0, visibility: SHADER_STAGE_COMPUTE, buffer: storage('storage') },
-                { binding: 1, visibility: SHADER_STAGE_COMPUTE, buffer: storage('read-only-storage') },
-                { binding: 2, visibility: SHADER_STAGE_COMPUTE, buffer: storage('read-only-storage') },
-                { binding: 3, visibility: SHADER_STAGE_COMPUTE, buffer: storage('storage') },
-                { binding: 4, visibility: SHADER_STAGE_COMPUTE, buffer: storage('storage') },
-                { binding: 5, visibility: SHADER_STAGE_COMPUTE, buffer: storage('uniform') },
-            ],
-        });
+        this.kernels = options.kernels ?? new GpuBvhRefitKernels(device, this.label);
         this.topology = this.createStorage('topology', 64);
         this.scratch = this.createStorage('scratch', 64);
         this.stats = device.createBuffer({ label: `${this.label} stats`, size: BVH_REFIT_STATS_BYTES, usage: USAGE.STORAGE | USAGE.COPY_SRC });
@@ -596,22 +643,13 @@ export class GpuBvhRefit {
         this.statsReadback = device.createBuffer({ label: `${this.label} stats readback`, size: BVH_REFIT_STATS_BYTES, usage: USAGE.MAP_READ | USAGE.COPY_DST });
     }
 
-    /** Compiles the kernels (asynchronously, so the main thread doesn't stall). */
-    async prepare(): Promise<void> {
-        if (this.ready) return;
-        const module = this.device.createShaderModule({ label: this.label, code: bvhRefitWgsl() });
-        const layout = this.device.createPipelineLayout({ label: this.label, bindGroupLayouts: [this.layout] });
-        const pipeline = (entryPoint: string) =>
-            this.device.createComputePipelineAsync({ label: `${this.label} ${entryPoint}`, layout, compute: { module, entryPoint } });
-        [this.clearPipeline, this.climbPipeline, this.repairPipeline] = await Promise.all([
-            pipeline('bvhRefitClear'),
-            pipeline('bvhRefitClimb'),
-            pipeline('bvhRefitRepair'),
-        ]);
+    /** Compiles the kernels (asynchronously, so the main thread doesn't stall), or waits for the shared ones. */
+    prepare(): Promise<void> {
+        return this.kernels.prepare();
     }
 
     get ready(): boolean {
-        return this.clearPipeline !== null && this.climbPipeline !== null && this.repairPipeline !== null;
+        return this.kernels.ready;
     }
 
     /** Takes a new tree shape. Its buffers are written with `queue.writeBuffer`, so they are in place for the next submit. */
@@ -653,15 +691,15 @@ export class GpuBvhRefit {
      * by an earlier dispatch or command.
      */
     encode(pass: GPUComputePassEncoder, tree: GPUBuffer, primitiveBoxes: GPUBuffer): void {
-        if (!this.clearPipeline || !this.climbPipeline || !this.repairPipeline) throw new Error('@pmndrs/bvh: call prepare() before encode()');
+        const pipelines = this.kernels.compiled;
         if (this.shape.nodeCount === 0) return;
         const maxPerDimension = this.device.limits.maxComputeWorkgroupsPerDimension;
         pass.setBindGroup(0, this.bindGroup(tree, primitiveBoxes));
-        pass.setPipeline(this.clearPipeline);
+        pass.setPipeline(pipelines.clear);
         dispatch2d(pass, this.shape.nodeCount, maxPerDimension);
-        pass.setPipeline(this.climbPipeline);
+        pass.setPipeline(pipelines.climb);
         dispatch2d(pass, this.shape.leafCount, maxPerDimension);
-        pass.setPipeline(this.repairPipeline);
+        pass.setPipeline(pipelines.repair);
         pass.dispatchWorkgroups(1);
     }
 
@@ -728,7 +766,7 @@ export class GpuBvhRefit {
         }
         const group = this.device.createBindGroup({
             label: this.label,
-            layout: this.layout,
+            layout: this.kernels.layout,
             entries: [
                 { binding: 0, resource: { buffer: tree } },
                 { binding: 1, resource: { buffer: boxes } },

@@ -1,47 +1,72 @@
 /**
  * What the scene keeps for a mesh created `deforming: true`, and the CPU
- * arithmetic for new positions from `setDeformedPositions` (the CPU form).
+ * arithmetic for new positions from `setDeformedPositions`.
  *
- * **How a pose reaches rays today (M3 prototype, T3.1).** The scene writes
- * the new positions into the mesh's own range of the vertex buffer (the
- * scene copy's positions are plain xyz floats, 3 words a vertex, so no
- * layout changes), and reports the mesh as uploaded again. The tracer then
- * builds the mesh a new tree from the positions, as for `updateMesh`, and
- * uses the old one until it arrives. That is a rebuild per pose, not the
- * refit SPEC asks for: the GPU refit (`GpuMeshRefit`) is wired in T3.3,
- * which replaces the rebuild and needs no change to this storage.
+ * **How a pose reaches rays (T3.3).** The scene writes the new positions
+ * into the mesh's own range of the vertex buffer (the scene copy's positions
+ * are plain xyz floats, 3 words a vertex, so no layout changes): with
+ * `queue.writeBuffer` for the CPU form, with one GPU copy for the GPU forms
+ * (gpu-pose-copy.ts). It reports the mesh in `SceneUpload.meshesPosed`, and
+ * the tracer refits the mesh's tree from the scene copy's positions on the
+ * GPU in the same frame's commands (trace/deforming-trees.ts). The shape of
+ * the tree stays; only a drift held for about a second rebuilds it
+ * (DECISIONS 2026-11-09).
  */
 
 import type { Aabb } from '../contract/math.ts';
+import type { GpuPose } from './gpu-pose-copy.ts';
 import { BOX_NUMBERS, MATRIX_NUMBERS } from './instance-transforms.ts';
 
 export class DeformState {
-    /** The triangle list, copied at create: each new pose's tree build gets its own copy (the builder's worker takes the arrays it is given). */
-    readonly indices: Uint16Array<ArrayBuffer> | Uint32Array<ArrayBuffer>;
     /** The host's `deformBounds`, min then max in mesh space, or null when it gave none. */
     readonly declaredBounds: Float32Array | null;
-    /** The positions the scene copy holds now: the last pose applied (the rest pose at first). */
+    /**
+     * The positions the scene copy holds now, when the CPU knows them: the
+     * last CPU pose applied (the rest pose at first). After a GPU pose it is
+     * out of date (`currentKnown` false) until the next CPU pose.
+     */
     current: Float32Array<ArrayBuffer>;
-    /** The newest positions given and not applied yet. Its array is reused from pose to pose (swapped with `current`). */
+    currentKnown = true;
+    /** The newest CPU positions given and not applied yet. Its array is reused from pose to pose (swapped with `current`). */
     waiting: Float32Array<ArrayBuffer>;
+    /** The newest GPU pose given and not applied yet; it replaces a waiting CPU pose and the other way round. */
+    waitingOnGpu: GpuPose | null = null;
     hasWaiting = false;
     /** Positions outside `declaredBounds` were already reported once. */
     warnedOutside = false;
 
-    constructor(restPositions: Float32Array, indices: Uint16Array | Uint32Array, declaredBounds: Float32Array | null) {
+    constructor(restPositions: Float32Array, declaredBounds: Float32Array | null) {
         this.current = Float32Array.from(restPositions);
         this.waiting = new Float32Array(restPositions.length);
-        this.indices = indices.slice() as Uint16Array<ArrayBuffer> | Uint32Array<ArrayBuffer>;
         this.declaredBounds = declaredBounds;
     }
 
-    /** The waiting pose becomes the current one; the old current array is reused for the next pose. */
+    get vertexCount(): number {
+        return this.current.length / 3;
+    }
+
+    /** The waiting CPU pose becomes the current one; the old current array is reused for the next pose. */
     swap(): void {
         const previous = this.current;
         this.current = this.waiting;
         this.waiting = previous;
+        this.currentKnown = true;
         this.hasWaiting = false;
     }
+
+    /** The waiting GPU pose is applied: the CPU no longer knows the positions. */
+    takeGpuPose(): GpuPose | null {
+        const pose = this.waitingOnGpu;
+        this.waitingOnGpu = null;
+        this.currentKnown = false;
+        this.hasWaiting = false;
+        return pose;
+    }
+}
+
+/** The diagonal of a box (min then max): the farthest any point inside it can move and stay inside. */
+export function boxDiagonal(box: ArrayLike<number>): number {
+    return Math.hypot(box[3] - box[0], box[4] - box[1], box[5] - box[2]);
 }
 
 /** `deformBounds` as `[minX, minY, minZ, maxX, maxY, maxZ]`, checked: finite, and min ≤ max on every axis. */

@@ -13,7 +13,8 @@ import { MAX_LISTED_LIGHT_CHANGES } from './change-log.ts';
 import { PlatformScene, type SceneUpload } from './platform-scene.ts';
 import { transformFrame } from './instance-transforms.ts';
 import { transformBounds } from '../trace/top-level.ts';
-import { createFakeGpu, type FakeBuffer, type FakeGpu } from './testing/fake-gpu.ts';
+import { createFakeGpu, type FakeBuffer, type FakeGpu, type FakeKernel } from './testing/fake-gpu.ts';
+import { NONE } from './layout.ts';
 import { buildBasicScene, checkReadback, churnScene, composeTransform, cubeMesh, editBasicScene, makeQueries, materialIndices, SceneModel } from './testing/fixture.ts';
 import { SceneReader } from './testing/scene-reader.ts';
 import { createRandom } from '../trace/oracle-fixtures.ts';
@@ -432,10 +433,21 @@ describe('deforming meshes and receivers (T3.1)', () => {
     const CUBE_INDICES = new Uint32Array([0, 1, 2, 0, 2, 3, 4, 6, 5, 4, 7, 6, 0, 4, 5, 0, 5, 1, 3, 2, 6, 3, 6, 7, 0, 3, 7, 0, 7, 4, 1, 5, 6, 1, 6, 2]);
     const scaled = (factor: number) => CUBE_POSITIONS.map((value) => value * factor);
 
-    function setupDeforming(deformBounds?: Aabb) {
+    /** gi/pose-copy on the CPU: xyz of each vertex from the source (offset and stride in floats) into the vertex buffer. */
+    const poseCopy: FakeKernel = (bindings) => {
+        const source = new Float32Array(bindings.get(0)!.buffer.bytes.buffer);
+        const vertices = new Float32Array(bindings.get(1)!.buffer.bytes.buffer);
+        const params = bindings.get(2)!;
+        const [vertexCount, offset, stride, destination] = new Uint32Array(params.buffer.bytes.buffer, params.offset, 4);
+        for (let vertex = 0; vertex < vertexCount; vertex++) {
+            for (let axis = 0; axis < 3; axis++) vertices[destination + vertex * 3 + axis] = source[offset + vertex * stride + axis];
+        }
+    };
+
+    function setupDeforming(deformBounds?: Aabb, options: { posesTraced?: boolean } = {}) {
         const warnings: string[] = [];
-        const gpu = createFakeGpu();
-        const scene = new PlatformScene(gpu.device, { warn: (message) => warnings.push(message) });
+        const gpu = createFakeGpu({}, { kernels: { poseCopy } });
+        const scene = new PlatformScene(gpu.device, { warn: (message) => warnings.push(message), posesTraced: options.posesTraced });
         const model = new SceneModel(scene);
         const descriptor = { positions: CUBE_POSITIONS, indices: CUBE_INDICES, deforming: true, deformBounds, label: 'jelly' };
         const mesh = model.createMesh(descriptor);
@@ -443,7 +455,7 @@ describe('deforming meshes and receivers (T3.1)', () => {
         return { gpu, scene, model, mesh, material, descriptor, warnings };
     }
 
-    it('applies a pose: new positions in the scene copy, the mesh uploaded again for its tree, and its box with how far it moved', () => {
+    it('applies a pose: new positions in the scene copy, the mesh reported posed (not uploaded) for its refit, and its box with how far it moved', () => {
         const { gpu, scene, model, mesh, material, descriptor } = setupDeforming();
         const instance = model.createInstance({ mesh, materials: [material], transform: composeTransform([3, 0, 0], [0, 1, 0], 0, [2, 2, 2]) });
         encodeAndSubmit(gpu, scene);
@@ -453,9 +465,9 @@ describe('deforming meshes and receivers (T3.1)', () => {
         scene.setDeformedPositions(mesh, grown);
         model.meshes.set(mesh, { ...descriptor, positions: grown });
         const first = encodeAndSubmit(gpu, scene);
-        expect(first.meshesUploaded.map((uploaded) => uploaded.slot)).toEqual([scene.meshSlot(mesh)]);
-        expect(Array.from(first.meshesUploaded[0].geometry.positions)).toEqual(Array.from(grown));
-        expect(Array.from(first.meshesUploaded[0].geometry.indices)).toEqual(Array.from(CUBE_INDICES));
+        expect(first.meshesUploaded).toEqual([]);
+        expect(first.meshesPosed.map((posed) => posed.slot)).toEqual([scene.meshSlot(mesh)]);
+        expect(first.meshesPosed[0].layout.bounds[3]).toBeCloseTo(0.75, 5);
         expect(first.instancesChanged).toBe(true);
         // The box before (a whole change: its box changed), then the box now with the move:
         // each corner travelled 0.25 x sqrt(3) in mesh space, x 2 for the instance's scale.
@@ -467,14 +479,82 @@ describe('deforming meshes and receivers (T3.1)', () => {
         // Back to the rest pose: inside the grown box, which stays, so the top level doesn't change.
         scene.setDeformedPositions(mesh, CUBE_POSITIONS);
         const back = encodeAndSubmit(gpu, scene);
-        expect(back.meshesUploaded).toHaveLength(1);
+        expect(back.meshesPosed).toHaveLength(1);
         expect(back.instancesChanged).toBe(false);
         expect(back.changes.regions).toHaveLength(1);
         expect(back.changes.regions[0].moved).toBeCloseTo(0.5 * Math.sqrt(3), 5);
         expect(back.changes.regions[0].bounds.min[0]).toBeCloseTo(3 - 1.5, 4);
 
-        // Nothing given: nothing uploaded.
-        expect(encodeAndSubmit(gpu, scene).meshesUploaded).toEqual([]);
+        // Nothing given: nothing posed.
+        expect(encodeAndSubmit(gpu, scene).meshesPosed).toEqual([]);
+    });
+
+    it('drops a deforming mesh\'s normals: the scene copy has none, so hits use the posed triangle\'s own normal', () => {
+        const { gpu, scene, model, descriptor } = setupDeforming();
+        const normals = new Float32Array(CUBE_POSITIONS.length).fill(0).map((_, index) => (index % 3 === 1 ? 1 : 0));
+        const withNormals = model.createMesh({ ...descriptor, normals });
+        const rigid = model.createMesh({ positions: CUBE_POSITIONS, indices: CUBE_INDICES, normals });
+        const uploaded = encodeAndSubmit(gpu, scene).meshesUploaded;
+        const layoutOf = (handle: typeof rigid) => uploaded.find((mesh) => mesh.slot === scene.meshSlot(handle))!.layout;
+        expect(layoutOf(withNormals).offsets.normals).toBe(NONE);
+        expect(layoutOf(rigid).offsets.normals).not.toBe(NONE);
+    });
+
+    it('copies a pose given in a GPU buffer (any stride) into the scene copy, and reports the box\'s diagonal as its move', async () => {
+        const { gpu, scene, model, mesh, material, descriptor } = setupDeforming({ min: [-1, -1, -1], max: [1, 1, 1] });
+        model.createInstance({ mesh, materials: [material], transform: composeTransform([0, 0, 0], [0, 1, 0], 0, [1, 1, 1]) });
+        encodeAndSubmit(gpu, scene);
+        await scene.prepareGpuPoses();
+        // Four floats a vertex, from the second vertex slot on: offset 16 bytes, stride 16.
+        const pose = scaled(1.5);
+        const source = gpu.device.createBuffer({ size: 16 + 8 * 16, usage: GPUBufferUsage.STORAGE });
+        const floats = new Float32Array((source as unknown as FakeBuffer).bytes.buffer);
+        for (let vertex = 0; vertex < 8; vertex++) floats.set(pose.subarray(vertex * 3, vertex * 3 + 3), 4 + vertex * 4);
+        {
+            scene.setDeformedPositions(mesh, { buffer: source, offset: 16, stride: 16 });
+            const upload = encodeAndSubmit(gpu, scene);
+            expect(upload.meshesPosed.map((posed) => posed.slot)).toEqual([scene.meshSlot(mesh)]);
+            // The declared box stays (it can't grow from positions the CPU can't see), and the move is its diagonal.
+            expect(upload.instancesChanged).toBe(false);
+            expect(upload.changes.regions).toHaveLength(1);
+            expect(upload.changes.regions[0].moved).toBeCloseTo(2 * Math.sqrt(3), 5);
+            // The positions are the pose's; the instance's box is the declared one, not the pose's tight box the checker expects.
+            model.meshes.set(mesh, { ...descriptor, positions: pose });
+            const problems = readBack(scene, model);
+            expect(problems.filter((problem) => !/bounds: got \[-1\.0+,-1\.0+,-1\.0+,1\.0+,1\.0+,1\.0+\]/.test(problem))).toEqual([]);
+        }
+    });
+
+    it('checks GPU poses at the call: deformBounds required, usage, size and texture shape', () => {
+        const unbounded = setupDeforming();
+        const storage = (size: number) => unbounded.gpu.device.createBuffer({ size, usage: GPUBufferUsage.STORAGE });
+        expect(() => unbounded.scene.setDeformedPositions(unbounded.mesh, { buffer: storage(96) })).toThrow(/needs deformBounds/);
+        const { gpu, scene, mesh } = setupDeforming({ min: [-1, -1, -1], max: [1, 1, 1] });
+        expect(() => scene.setDeformedPositions(mesh, { buffer: gpu.device.createBuffer({ size: 96, usage: GPUBufferUsage.COPY_SRC }) })).toThrow(/STORAGE/);
+        expect(() => scene.setDeformedPositions(mesh, { buffer: storage(95) })).toThrow(/96/);
+        expect(() => scene.setDeformedPositions(mesh, { buffer: storage(96), stride: 8 })).toThrow(/stride/);
+        const texture = (format: string, width: number, height: number, usage = 0x1) => ({ texture: { format, width, height, usage } as unknown as GPUTexture });
+        expect(() => scene.setDeformedPositions(mesh, texture('rgba16float', 16, 1))).toThrow(/rgba32float/);
+        expect(() => scene.setDeformedPositions(mesh, texture('rgba32float', 8, 1))).toThrow(/multiple of 16/);
+        expect(() => scene.setDeformedPositions(mesh, texture('rgba32float', 16, 1, 0x4))).toThrow(/COPY_SRC/);
+        scene.setDeformedPositions(mesh, texture('rgba32float', 16, 1));
+    });
+
+    it('without subgroups (posesTraced false), keeps the rest pose and warns once', () => {
+        const { gpu, scene, model, mesh, material, descriptor, warnings } = setupDeforming(undefined, { posesTraced: false });
+        model.createInstance({ mesh, materials: [material], transform: composeTransform([0, 0, 0], [0, 1, 0], 0, [1, 1, 1]) });
+        encodeAndSubmit(gpu, scene);
+        scene.setDeformedPositions(mesh, scaled(2));
+        scene.setDeformedPositions(mesh, scaled(3));
+        const upload = encodeAndSubmit(gpu, scene);
+        expect(upload.meshesPosed).toEqual([]);
+        expect(upload.changes.regions).toEqual([]);
+        expect(warnings).toHaveLength(1);
+        expect(warnings[0]).toMatch(/no subgroups.*rest pose/);
+        model.meshes.set(mesh, descriptor);
+        expect(readBack(scene, model)).toEqual([]);
+        // Bad calls still throw.
+        expect(() => scene.setDeformedPositions(mesh, new Float32Array(9))).toThrow(/8 vertices/);
     });
 
     it('starts from deformBounds, and grows it with one warning when a pose leaves it', () => {
@@ -501,35 +581,34 @@ describe('deforming meshes and receivers (T3.1)', () => {
         expect(scene.bounds.max[0]).toBeCloseTo(3, 4);
     });
 
-    it('keeps only the newest pose, holds poses when asked, and waits for a mesh not on the GPU yet', () => {
+    it('keeps only the newest pose, and waits for a mesh not on the GPU yet', () => {
         const { gpu, scene, model, mesh, material, descriptor } = setupDeforming();
         model.createInstance({ mesh, materials: [material], transform: composeTransform([0, 0, 0], [0, 1, 0], 0, [1, 1, 1]) });
-        // Given before the mesh's first upload: that encode uploads the rest pose, the next one the pose.
+        // Given before the mesh's first upload: that encode uploads the rest pose, the next one applies the pose.
         scene.setDeformedPositions(mesh, scaled(2));
-        expect(encodeAndSubmit(gpu, scene).meshesUploaded).toHaveLength(1);
-        const late = encodeAndSubmit(gpu, scene);
-        expect(late.meshesUploaded).toHaveLength(1);
-        expect(late.meshesUploaded[0].geometry.positions[0]).toBe(-1);
+        const first = encodeAndSubmit(gpu, scene);
+        expect(first.meshesUploaded).toHaveLength(1);
+        expect(first.meshesPosed).toEqual([]);
+        expect(encodeAndSubmit(gpu, scene).meshesPosed).toHaveLength(1);
 
-        // Held: nothing happens; released: only the newest of two poses arrives, and the host's array was copied.
+        // Only the newest of two poses arrives, and the host's array was copied.
         const host = scaled(3);
         scene.setDeformedPositions(mesh, scaled(2.5));
         scene.setDeformedPositions(mesh, host);
         host.fill(0);
-        const held = scene.encode(gpu.createEncoder(), undefined, { holdDeformedPositions: true });
-        expect(held.meshesUploaded).toEqual([]);
-        expect(held.changes.regions).toEqual([]);
-        const released = encodeAndSubmit(gpu, scene);
-        expect(released.meshesUploaded).toHaveLength(1);
-        expect(released.meshesUploaded[0].geometry.positions[0]).toBe(-1.5);
+        const applied = encodeAndSubmit(gpu, scene);
+        expect(applied.meshesPosed).toHaveLength(1);
+        expect(applied.changes.regions.at(-1)!.moved).toBeCloseTo(0.5 * Math.sqrt(3), 5);
         model.meshes.set(mesh, { ...descriptor, positions: scaled(3) });
         expect(readBack(scene, model)).toEqual([]);
 
         // A new shape drops a waiting pose (it may not even have the same vertex count).
         scene.setDeformedPositions(mesh, scaled(4));
         model.updateMesh(mesh, descriptor);
-        expect(encodeAndSubmit(gpu, scene).meshesUploaded).toHaveLength(1);
-        expect(encodeAndSubmit(gpu, scene).meshesUploaded).toEqual([]);
+        const reshaped = encodeAndSubmit(gpu, scene);
+        expect(reshaped.meshesUploaded).toHaveLength(1);
+        expect(reshaped.meshesPosed).toEqual([]);
+        expect(encodeAndSubmit(gpu, scene).meshesPosed).toEqual([]);
     });
 
     it('refuses bad poses at the call and keeps nothing of them', () => {
@@ -541,8 +620,6 @@ describe('deforming meshes and receivers (T3.1)', () => {
         const broken = scaled(1);
         broken[7] = Number.NaN;
         expect(() => scene.setDeformedPositions(mesh, broken)).toThrow(/vertex 2 .*non-finite/);
-        const gpuBuffer = { buffer: {} as GPUBuffer };
-        expect(() => scene.setDeformedPositions(mesh, gpuBuffer)).toThrow(/GPU buffer are not supported yet/);
         expect(() => scene.createMesh({ positions: CUBE_POSITIONS, indices: CUBE_INDICES, deforming: true, deformBounds: { min: [0, 2, 0], max: [1, 1, 1] } })).toThrow(/min above max/);
         // Only the new rigid mesh's first upload.
         expect(encodeAndSubmit(gpu, scene).meshesUploaded.map((uploaded) => uploaded.slot)).toEqual([scene.meshSlot(rigid)]);

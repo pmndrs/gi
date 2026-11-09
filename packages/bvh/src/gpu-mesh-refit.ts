@@ -10,7 +10,10 @@
  *    the slot's original triangle number, fetches its three corners from the
  *    vertex buffer, writes them into the tree's triangle record (so the
  *    tracer's watertight test sees the moved triangle) and writes the slot's
- *    box for the refit.
+ *    box for the refit. Only the corners' xyz words are written: the
+ *    original index (word 3), the flags (word 7: alpha test and the like)
+ *    and the padding stay as the builder, or whoever wrote them since, left
+ *    them.
  * 2. The B1a refit (gpu-refit.ts) over the mesh's nodes: a bottom-up climb
  *    with a per-node counter, its subgroup pairing, and its repair pass.
  *
@@ -23,12 +26,13 @@
  * A refit tree slowly gets worse as triangles move away from where it was
  * built. The refit's quality signal (`latestStats.relativeCost`, with
  * `diagnostics: true`) is the same as the top level's, so a caller can rebuild
- * (with the GPU LBVH) when it drifts, as B1a does at 1.25x.
+ * (with a GPU builder) when it drifts. ddgi-core rebuilds only on drift held
+ * for about a second (DECISIONS 2026-11-09).
  */
 
 import { GPU_LAYOUT_TRIANGLE_BYTES, GPU_LAYOUT_TRIANGLE_WORD, type GpuLayoutMeshBvh } from './gpu-layout.ts';
 import { LBVH_INDEX_FORMAT } from './gpu-lbvh-wgsl.ts';
-import { GpuBvhRefit, type BvhRefitStats, type GpuBvhRefitOptions } from './gpu-refit.ts';
+import { GpuBvhRefit, GpuBvhRefitKernels, type BvhRefitStats, type GpuBvhRefitOptions } from './gpu-refit.ts';
 import { leafSlotsOf, parentSlotsOf, PRIMITIVE_BOX_FLOATS } from './refit-cpu.ts';
 import { dispatchWorkgroups2d, WORKGROUP_INDEX_WGSL } from './gpu-workgroup-scan.ts';
 
@@ -130,6 +134,55 @@ export interface MeshRefitTarget {
     readonly triangles: GPUBuffer;
 }
 
+/**
+ * The mesh refit's pipelines (the triangle step and the B1a refit), compiled
+ * once and shared by any number of {@link GpuMeshRefit}s on one device. A
+ * caller with several deforming meshes needs one `GpuMeshRefit` per mesh
+ * (each has its own parameters and topology, written with
+ * `queue.writeBuffer`, so two meshes can't share one in a frame), and
+ * sharing the kernels means a mesh added later compiles nothing.
+ */
+export class GpuMeshRefitKernels {
+    readonly refit: GpuBvhRefitKernels;
+    private readonly device: GPUDevice;
+    private readonly label: string;
+    private trianglePipeline: GPUComputePipeline | null = null;
+    private compiling: Promise<void> | null = null;
+
+    constructor(device: GPUDevice, label = 'mesh refit') {
+        this.device = device;
+        this.label = label;
+        this.refit = new GpuBvhRefitKernels(device, label);
+    }
+
+    prepare(): Promise<void> {
+        this.compiling ??= (async () => {
+            const module = this.device.createShaderModule({ label: this.label, code: meshRefitTrianglesWgsl() });
+            const [pipeline] = await Promise.all([
+                this.device.createComputePipelineAsync({ label: this.label, layout: 'auto', compute: { module, entryPoint: 'meshRefitTriangles' } }),
+                this.refit.prepare(),
+            ]);
+            this.trianglePipeline = pipeline;
+        })();
+        return this.compiling;
+    }
+
+    get ready(): boolean {
+        return this.trianglePipeline !== null && this.refit.ready;
+    }
+
+    /** The triangle step's pipeline, or null before `prepare` has finished. */
+    get triangles(): GPUComputePipeline | null {
+        return this.trianglePipeline;
+    }
+}
+
+/** Options of one mesh refit: {@link GpuBvhRefitOptions}, with the shared kernels of the mesh refit. */
+export interface GpuMeshRefitOptions extends Omit<GpuBvhRefitOptions, 'kernels'> {
+    /** Kernels shared with other mesh refits; without them this refit compiles its own in `prepare`. */
+    readonly kernels?: GpuMeshRefitKernels;
+}
+
 /** Refits one mesh's tree from moved vertices, every frame if need be. Needs `subgroups` (for the refit). */
 export class GpuMeshRefit {
     static isSupported(device: GPUDevice): boolean {
@@ -139,33 +192,29 @@ export class GpuMeshRefit {
     private readonly device: GPUDevice;
     private readonly label: string;
     private readonly refit: GpuBvhRefit;
-    private pipeline: GPUComputePipeline | null = null;
+    private readonly kernels: GpuMeshRefitKernels;
     private readonly params: GPUBuffer;
     private boxes: GPUBuffer;
     private triangleCount = 0;
     private triangleWordOffset = 0;
     private group: { group: GPUBindGroup; key: readonly unknown[] } | null = null;
 
-    constructor(device: GPUDevice, options: GpuBvhRefitOptions = {}) {
+    constructor(device: GPUDevice, options: GpuMeshRefitOptions = {}) {
         this.device = device;
         this.label = options.label ?? 'mesh refit';
-        this.refit = new GpuBvhRefit(device, { ...options, label: this.label });
+        this.kernels = options.kernels ?? new GpuMeshRefitKernels(device, this.label);
+        this.refit = new GpuBvhRefit(device, { label: this.label, diagnostics: options.diagnostics, kernels: this.kernels.refit });
         this.params = device.createBuffer({ label: `${this.label} params`, size: PARAM_WORDS * 4, usage: USAGE.UNIFORM | USAGE.COPY_DST });
         this.boxes = device.createBuffer({ label: `${this.label} boxes`, size: 64, usage: USAGE.STORAGE });
     }
 
-    async prepare(): Promise<void> {
-        if (this.pipeline) return;
-        const module = this.device.createShaderModule({ label: this.label, code: meshRefitTrianglesWgsl() });
-        const [pipeline] = await Promise.all([
-            this.device.createComputePipelineAsync({ label: this.label, layout: 'auto', compute: { module, entryPoint: 'meshRefitTriangles' } }),
-            this.refit.prepare(),
-        ]);
-        this.pipeline = pipeline;
+    /** Compiles the kernels, or waits for the shared ones. */
+    prepare(): Promise<void> {
+        return this.kernels.prepare();
     }
 
     get ready(): boolean {
-        return this.pipeline !== null && this.refit.ready;
+        return this.kernels.ready;
     }
 
     /** The refit's stats with `diagnostics: true` (see gpu-refit.ts). */
@@ -198,7 +247,8 @@ export class GpuMeshRefit {
 
     /** Records the triangle step and the refit into `pass`. The vertices must be written by an earlier command. */
     encode(pass: GPUComputePassEncoder, target: MeshRefitTarget, vertices: MeshRefitVertices): void {
-        if (!this.pipeline) throw new Error('@pmndrs/bvh: call prepare() before encode()');
+        const pipeline = this.kernels.triangles;
+        if (!pipeline) throw new Error('@pmndrs/bvh: call prepare() before encode()');
         if (this.triangleCount === 0) return;
         const indexFormat = vertices.indexBuffer ? LBVH_INDEX_FORMAT[vertices.indexFormat ?? 'uint32'] : LBVH_INDEX_FORMAT.none;
         this.device.queue.writeBuffer(
@@ -216,10 +266,15 @@ export class GpuMeshRefit {
                 0, // unused
             ]),
         );
-        pass.setPipeline(this.pipeline);
-        pass.setBindGroup(0, this.bindGroup(target.triangles, vertices.positionBuffer, vertices.indexBuffer ?? vertices.positionBuffer));
+        pass.setPipeline(pipeline);
+        pass.setBindGroup(0, this.bindGroup(pipeline, target.triangles, vertices.positionBuffer, vertices.indexBuffer ?? vertices.positionBuffer));
         dispatchWorkgroups2d(pass, Math.ceil(this.triangleCount / WORKGROUP_SIZE), this.device.limits.maxComputeWorkgroupsPerDimension);
         this.refit.encode(pass, target.nodes, this.boxes);
+    }
+
+    /** GPU bytes of this refit's own buffers (the tree belongs to the caller). */
+    get memoryBytes(): number {
+        return this.refit.memoryBytes + this.params.size + this.boxes.size;
     }
 
     /** Stats readback (diagnostics only), as for the top-level refit: poll at a frame's start, copy after the submit's encode. */
@@ -237,13 +292,12 @@ export class GpuMeshRefit {
         this.boxes.destroy();
     }
 
-    private bindGroup(triangles: GPUBuffer, positions: GPUBuffer, indices: GPUBuffer): GPUBindGroup {
+    private bindGroup(pipeline: GPUComputePipeline, triangles: GPUBuffer, positions: GPUBuffer, indices: GPUBuffer): GPUBindGroup {
         const key = [triangles, positions, indices, this.boxes];
         if (this.group && this.group.key.every((entry, index) => entry === key[index])) return this.group.group;
-        if (!this.pipeline) throw new Error('@pmndrs/bvh: call prepare() first');
         const group = this.device.createBindGroup({
             label: this.label,
-            layout: this.pipeline.getBindGroupLayout(0),
+            layout: pipeline.getBindGroupLayout(0),
             entries: [
                 { binding: 0, resource: { buffer: triangles } },
                 { binding: 1, resource: { buffer: positions } },
