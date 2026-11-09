@@ -10,7 +10,7 @@ import { markKernelWgsl } from './wgsl/mark.ts';
 // Two-room's volume: 17 x 7 x 9 probes at 0.5 m, origin (0.1, -0.1, 0).
 const grid = probeGrid({ center: [4.1, 1.4, 2.0], size: [8.4, 3.0, 4.2], spacing: 0.5 });
 
-const NONE: SceneChanges = { regions: [], global: [], movedReceivers: 0, lights: [], lightsOverflowed: false };
+const NONE: SceneChanges = { regions: [], global: [], receivers: [], lights: [], lightsOverflowed: false };
 
 function lamp(position: [number, number, number], intensity = 12): LightDescriptor {
     return { type: 'point', color: [1, 0.96, 0.88], intensity, position, range: 14 };

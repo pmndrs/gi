@@ -1,14 +1,17 @@
 /**
- * T2.M1 item 2 (docs/design/m3-moving.md §1, T3.1 check 4): a recompile
- * counter is in `gi.stats` (`recompiles`: compute pipelines the platform and
- * its techniques made while ready), and creating and destroying 1,000
- * instances in random order leaves it at 0.
+ * T2.M1 item 2 and T3.1 item 3 (docs/design/m3-moving.md §1, T3.1 check 4):
+ * a recompile counter is in `gi.stats` (`recompiles`: compute pipelines the
+ * platform and its techniques made while ready), and creating and destroying
+ * 1,000 instances and 100 meshes in random order leaves it at 0.
  *
  * The cabinet row with DDGI updating every frame: over CHURN_FRAMES frames,
  * each frame creates a few instances (of the scene's meshes and of
  * NEW_MESHES meshes made along the way), destroys a few live ones, and moves
  * some (`setTransforms`), until INSTANCES have been created and every one of
- * them destroyed again. The instance table grows past its first capacity on
+ * them destroyed again. Every DEFORMING_EVERY-th new mesh is `deforming` and
+ * gets new positions now and then (`setDeformedPositions`), and one instance
+ * in RECEIVER_EVERY only receives GI (`contributesToGI: false`), so the
+ * change feed's T3.1 parts run through the churn too. The instance table grows past its first capacity on
  * the way (reallocations, which must rebuild bind groups only). Then the
  * counter must still read 0, and as a control it must count a pipeline the
  * page makes through the platform's kernel builder after that.
@@ -27,8 +30,14 @@ import { createDdgiScene, releaseDeviceOnPageHide, runFrame } from '../ddgi-shar
 
 /** Instances created (and destroyed) over the run: the done-when's 1,000. */
 const INSTANCES = 1000;
-/** New meshes made among them, each destroyed once its last instance is gone. */
-const NEW_MESHES = 20;
+/** New meshes made among them (T3.1 item 3: 100), each destroyed once its last instance is gone. */
+const NEW_MESHES = 100;
+/** One new mesh in this many is deforming. */
+const DEFORMING_EVERY = 4;
+/** One instance in this many is a receiver (left out of rays). */
+const RECEIVER_EVERY = 10;
+/** A live deforming mesh gets a new pose in a frame with this chance. */
+const POSE_CHANCE = 0.3;
 const CHURN_FRAMES = 200;
 /** DDGI's probes a frame during the churn. */
 const UNITS = 256;
@@ -61,6 +70,11 @@ await runGpuTest(
 
         const live: { instance: InstanceHandle; mesh: MeshHandle }[] = [];
         const newMeshes = new Map<MeshHandle, number>();
+        const deformingMeshes = new Set<MeshHandle>();
+        let posesGiven = 0;
+        let receivers = 0;
+        // A pose: the box's corners pushed out or in by up to 20%.
+        const pose = (): Float32Array => boxMesh.positions.map((value) => value * (0.8 + random() * 0.4));
         let created = 0;
         let destroyed = 0;
         let livePeak = 0;
@@ -77,15 +91,19 @@ await runGpuTest(
                 let mesh = sharedMesh;
                 // About NEW_MESHES new meshes over the run (more likely early, so some live long).
                 if (meshesMade < NEW_MESHES && random() < (2 * NEW_MESHES) / INSTANCES) {
-                    mesh = api.createMesh({ positions: boxMesh.positions, indices: boxMesh.indices, label: `churn mesh ${meshesMade}` });
+                    const deforming = meshesMade % DEFORMING_EVERY === 0;
+                    mesh = api.createMesh({ positions: boxMesh.positions, indices: boxMesh.indices, deforming, label: `churn mesh ${meshesMade}` });
                     newMeshes.set(mesh, 0);
+                    if (deforming) deformingMeshes.add(mesh);
                     meshesMade++;
                 } else if (newMeshes.size > 0 && random() < 0.3) {
                     const choices = [...newMeshes.keys()];
                     mesh = choices[Math.floor(random() * choices.length)];
                 }
                 if (newMeshes.has(mesh)) newMeshes.set(mesh, newMeshes.get(mesh)! + 1);
-                live.push({ instance: api.createInstance({ mesh, materials: [material], transform: transform(), label: `churn ${created}` }), mesh });
+                const contributesToGI = created % RECEIVER_EVERY !== 0;
+                if (!contributesToGI) receivers++;
+                live.push({ instance: api.createInstance({ mesh, materials: [material], transform: transform(), contributesToGI, label: `churn ${created}` }), mesh });
                 created++;
             }
             livePeak = Math.max(livePeak, live.length);
@@ -100,6 +118,7 @@ await runGpuTest(
                     if (users <= 1) {
                         api.destroyMesh(gone.mesh);
                         newMeshes.delete(gone.mesh);
+                        deformingMeshes.delete(gone.mesh);
                     } else {
                         newMeshes.set(gone.mesh, users - 1);
                     }
@@ -112,6 +131,12 @@ await runGpuTest(
                 movers.forEach((_, index) => matrices.set(transform(), index * 16));
                 api.setTransforms(Uint32Array.from(movers.map((mover) => mover.instance)), matrices);
                 moved += movers.length;
+            }
+            // New poses for some deforming meshes.
+            for (const mesh of deformingMeshes) {
+                if (random() >= POSE_CHANCE) continue;
+                api.setDeformedPositions(mesh, pose());
+                posesGiven++;
             }
             runFrame(device, platform, UNITS);
             if (frame % 8 === 7) await device.queue.onSubmittedWorkDone();
@@ -176,7 +201,8 @@ await runGpuTest(
         const afterLights = recompiles();
 
         assert(created === INSTANCES && destroyed === INSTANCES, `created ${created}, destroyed ${destroyed}`);
-        assert(meshesMade >= NEW_MESHES / 2, `only ${meshesMade} new meshes were made`);
+        assert(meshesMade === NEW_MESHES, `only ${meshesMade} of ${NEW_MESHES} new meshes were made`);
+        assert(posesGiven > 0 && receivers > 0, `${posesGiven} poses given, ${receivers} receivers made`);
         assert(livePeak >= MIN_LIVE_PEAK, `only ${livePeak} instances were live at once; the table never had to grow`);
         assert(after === before && after === 0, `the counter went from ${before} to ${after} during the churn`);
         assert(lightPeak === LIGHTS && lightsAtPeak === sceneLights + LIGHTS && lightsDestroyed === LIGHTS, `lights: ${lightPeak} made, ${lightsAtPeak} in the scene at the peak (${sceneLights} its own), ${lightsDestroyed} destroyed`);
@@ -187,7 +213,10 @@ await runGpuTest(
         await platform.kernels.computeKernel({ label: 'recompile control', modules: [], code: '@compute @workgroup_size(1) fn main() {}', entryPoint: 'main' });
         const control = recompiles();
         assert(control === 1, `the control pipeline was counted as ${control}`);
-        log(`${created} instances created and destroyed (${meshesMade} new meshes among them, at most ${livePeak} live, ${moved} moves); recompiles ${before} -> ${after}`);
+        log(
+            `${created} instances created and destroyed (${receivers} receivers; ${meshesMade} new meshes among them, ${Math.ceil(meshesMade / DEFORMING_EVERY)} deforming, ` +
+                `${posesGiven} poses; at most ${livePeak} live, ${moved} moves); recompiles ${before} -> ${after}`,
+        );
         log(
             `${LIGHTS} lights (${lightKinds.directional} directional, ${lightKinds.point} point, ${lightKinds.spot} spot) created, all live at once, ${lightsEdited} edits, ` +
                 `destroyed in random order; recompiles ${after} -> ${afterLights}; the control kernel counts: ${control}`,
@@ -199,6 +228,9 @@ await runGpuTest(
             livePeak,
             moved,
             newMeshes: meshesMade,
+            deformingMeshes: Math.ceil(meshesMade / DEFORMING_EVERY),
+            posesGiven,
+            receivers,
             recompilesBefore: before,
             recompilesAfter: after,
             lights: { created: lightPeak, destroyed: lightsDestroyed, edited: lightsEdited, kinds: lightKinds, recompilesAfter: afterLights },

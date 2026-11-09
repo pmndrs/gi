@@ -7,7 +7,7 @@
 
 import { describe, expect, it } from 'vitest';
 import type { InstanceHandle, MaterialHandle } from '../contract/handles.ts';
-import type { ColorRGB } from '../contract/math.ts';
+import type { Aabb, ColorRGB } from '../contract/math.ts';
 import type { DirectionalLightDescriptor, LightChanges, LightDescriptor, PointLightDescriptor, SpotLightDescriptor } from '../contract/scene.ts';
 import { MAX_LISTED_LIGHT_CHANGES } from './change-log.ts';
 import { PlatformScene, type SceneUpload } from './platform-scene.ts';
@@ -163,7 +163,10 @@ describe('changes and bounds', () => {
         const receiver = encodeAndSubmit(gpu, scene);
         expect(receiver.instancesChanged).toBe(false);
         expect(receiver.changes.regions).toEqual([]);
-        expect(receiver.changes.movedReceivers).toBe(1);
+        // It is listed where it is now, for techniques that wake probes near receivers.
+        expect(receiver.changes.receivers).toHaveLength(1);
+        expect(receiver.changes.receivers[0].min[1]).toBeGreaterThan(8);
+        expect(receiver.changes.receivers[0].max[1]).toBeLessThan(10);
 
         model.updateLight(basic.lights[4], { position: [0, 0, 0] });
         const light = encodeAndSubmit(gpu, scene);
@@ -420,6 +423,159 @@ describe('moves (T2.M1)', () => {
         expect(regions[0].moved).toBeCloseTo(3, 5);
         expect(regions[0].instance).toBeUndefined();
         expect(regions[0].bounds.max[0]).toBeCloseTo(299.5, 3);
+    });
+});
+
+describe('deforming meshes and receivers (T3.1)', () => {
+    const half = 0.5;
+    const CUBE_POSITIONS = new Float32Array([-half, -half, -half, half, -half, -half, half, half, -half, -half, half, -half, -half, -half, half, half, -half, half, half, half, half, -half, half, half]);
+    const CUBE_INDICES = new Uint32Array([0, 1, 2, 0, 2, 3, 4, 6, 5, 4, 7, 6, 0, 4, 5, 0, 5, 1, 3, 2, 6, 3, 6, 7, 0, 3, 7, 0, 7, 4, 1, 5, 6, 1, 6, 2]);
+    const scaled = (factor: number) => CUBE_POSITIONS.map((value) => value * factor);
+
+    function setupDeforming(deformBounds?: Aabb) {
+        const warnings: string[] = [];
+        const gpu = createFakeGpu();
+        const scene = new PlatformScene(gpu.device, { warn: (message) => warnings.push(message) });
+        const model = new SceneModel(scene);
+        const descriptor = { positions: CUBE_POSITIONS, indices: CUBE_INDICES, deforming: true, deformBounds, label: 'jelly' };
+        const mesh = model.createMesh(descriptor);
+        const material = model.createMaterial({});
+        return { gpu, scene, model, mesh, material, descriptor, warnings };
+    }
+
+    it('applies a pose: new positions in the scene copy, the mesh uploaded again for its tree, and its box with how far it moved', () => {
+        const { gpu, scene, model, mesh, material, descriptor } = setupDeforming();
+        const instance = model.createInstance({ mesh, materials: [material], transform: composeTransform([3, 0, 0], [0, 1, 0], 0, [2, 2, 2]) });
+        encodeAndSubmit(gpu, scene);
+
+        // A pose that grows the cube by half: it leaves the rest box, so the box grows with it.
+        const grown = scaled(1.5);
+        scene.setDeformedPositions(mesh, grown);
+        model.meshes.set(mesh, { ...descriptor, positions: grown });
+        const first = encodeAndSubmit(gpu, scene);
+        expect(first.meshesUploaded.map((uploaded) => uploaded.slot)).toEqual([scene.meshSlot(mesh)]);
+        expect(Array.from(first.meshesUploaded[0].geometry.positions)).toEqual(Array.from(grown));
+        expect(Array.from(first.meshesUploaded[0].geometry.indices)).toEqual(Array.from(CUBE_INDICES));
+        expect(first.instancesChanged).toBe(true);
+        // The box before (a whole change: its box changed), then the box now with the move:
+        // each corner travelled 0.25 x sqrt(3) in mesh space, x 2 for the instance's scale.
+        expect(first.changes.regions.map((region) => region.moved)).toEqual([undefined, expect.closeTo(0.5 * Math.sqrt(3), 5)]);
+        expect(first.changes.regions.map((region) => region.instance)).toEqual([scene.instanceSlot(instance), scene.instanceSlot(instance)]);
+        expect(first.changes.regions[1].bounds.min[0]).toBeCloseTo(3 - 1.5, 4);
+        expect(readBack(scene, model)).toEqual([]);
+
+        // Back to the rest pose: inside the grown box, which stays, so the top level doesn't change.
+        scene.setDeformedPositions(mesh, CUBE_POSITIONS);
+        const back = encodeAndSubmit(gpu, scene);
+        expect(back.meshesUploaded).toHaveLength(1);
+        expect(back.instancesChanged).toBe(false);
+        expect(back.changes.regions).toHaveLength(1);
+        expect(back.changes.regions[0].moved).toBeCloseTo(0.5 * Math.sqrt(3), 5);
+        expect(back.changes.regions[0].bounds.min[0]).toBeCloseTo(3 - 1.5, 4);
+
+        // Nothing given: nothing uploaded.
+        expect(encodeAndSubmit(gpu, scene).meshesUploaded).toEqual([]);
+    });
+
+    it('starts from deformBounds, and grows it with one warning when a pose leaves it', () => {
+        const { gpu, scene, model, mesh, material, warnings } = setupDeforming({ min: [-1, -1, -1], max: [1, 2, 1] });
+        model.createInstance({ mesh, materials: [material], transform: composeTransform([0, 0, 0], [0, 1, 0], 0, [1, 1, 1]) });
+        const created = encodeAndSubmit(gpu, scene).changes.regions;
+        expect(created[0].bounds.max[1]).toBeCloseTo(2, 4);
+        expect(scene.bounds.max[1]).toBeCloseTo(2, 4);
+
+        // Inside the declared box: one region, the box as declared, no warning.
+        scene.setDeformedPositions(mesh, scaled(1.8));
+        const inside = encodeAndSubmit(gpu, scene);
+        expect(inside.changes.regions).toHaveLength(1);
+        expect(inside.changes.regions[0].bounds.max[1]).toBeCloseTo(2, 4);
+        expect(warnings).toEqual([]);
+
+        // Outside it twice: the box grows, and the warning is shown once.
+        scene.setDeformedPositions(mesh, scaled(5));
+        expect(encodeAndSubmit(gpu, scene).changes.regions[1].bounds.max[0]).toBeCloseTo(2.5, 4);
+        scene.setDeformedPositions(mesh, scaled(6));
+        encodeAndSubmit(gpu, scene);
+        expect(warnings).toHaveLength(1);
+        expect(warnings[0]).toMatch(/jelly.*deformBounds/);
+        expect(scene.bounds.max[0]).toBeCloseTo(3, 4);
+    });
+
+    it('keeps only the newest pose, holds poses when asked, and waits for a mesh not on the GPU yet', () => {
+        const { gpu, scene, model, mesh, material, descriptor } = setupDeforming();
+        model.createInstance({ mesh, materials: [material], transform: composeTransform([0, 0, 0], [0, 1, 0], 0, [1, 1, 1]) });
+        // Given before the mesh's first upload: that encode uploads the rest pose, the next one the pose.
+        scene.setDeformedPositions(mesh, scaled(2));
+        expect(encodeAndSubmit(gpu, scene).meshesUploaded).toHaveLength(1);
+        const late = encodeAndSubmit(gpu, scene);
+        expect(late.meshesUploaded).toHaveLength(1);
+        expect(late.meshesUploaded[0].geometry.positions[0]).toBe(-1);
+
+        // Held: nothing happens; released: only the newest of two poses arrives, and the host's array was copied.
+        const host = scaled(3);
+        scene.setDeformedPositions(mesh, scaled(2.5));
+        scene.setDeformedPositions(mesh, host);
+        host.fill(0);
+        const held = scene.encode(gpu.createEncoder(), undefined, { holdDeformedPositions: true });
+        expect(held.meshesUploaded).toEqual([]);
+        expect(held.changes.regions).toEqual([]);
+        const released = encodeAndSubmit(gpu, scene);
+        expect(released.meshesUploaded).toHaveLength(1);
+        expect(released.meshesUploaded[0].geometry.positions[0]).toBe(-1.5);
+        model.meshes.set(mesh, { ...descriptor, positions: scaled(3) });
+        expect(readBack(scene, model)).toEqual([]);
+
+        // A new shape drops a waiting pose (it may not even have the same vertex count).
+        scene.setDeformedPositions(mesh, scaled(4));
+        model.updateMesh(mesh, descriptor);
+        expect(encodeAndSubmit(gpu, scene).meshesUploaded).toHaveLength(1);
+        expect(encodeAndSubmit(gpu, scene).meshesUploaded).toEqual([]);
+    });
+
+    it('refuses bad poses at the call and keeps nothing of them', () => {
+        const { gpu, scene, model, mesh } = setupDeforming();
+        encodeAndSubmit(gpu, scene);
+        const rigid = model.createMesh({ positions: CUBE_POSITIONS, indices: CUBE_INDICES });
+        expect(() => scene.setDeformedPositions(rigid, CUBE_POSITIONS)).toThrow(/deforming: true/);
+        expect(() => scene.setDeformedPositions(mesh, new Float32Array(9))).toThrow(/8 vertices/);
+        const broken = scaled(1);
+        broken[7] = Number.NaN;
+        expect(() => scene.setDeformedPositions(mesh, broken)).toThrow(/vertex 2 .*non-finite/);
+        const gpuBuffer = { buffer: {} as GPUBuffer };
+        expect(() => scene.setDeformedPositions(mesh, gpuBuffer)).toThrow(/GPU buffer are not supported yet/);
+        expect(() => scene.createMesh({ positions: CUBE_POSITIONS, indices: CUBE_INDICES, deforming: true, deformBounds: { min: [0, 2, 0], max: [1, 1, 1] } })).toThrow(/min above max/);
+        // Only the new rigid mesh's first upload.
+        expect(encodeAndSubmit(gpu, scene).meshesUploaded.map((uploaded) => uploaded.slot)).toEqual([scene.meshSlot(rigid)]);
+    });
+
+    it('lists receivers where they are when created, shown, moved or deformed, and not when hidden', () => {
+        const { gpu, scene, model, mesh, material } = setupDeforming();
+        const receiver = model.createInstance({ mesh, materials: [material], transform: composeTransform([5, 0, 0], [0, 1, 0], 0, [1, 1, 1]), contributesToGI: false });
+        const created = encodeAndSubmit(gpu, scene).changes;
+        expect(created.regions).toEqual([]);
+        expect(created.receivers).toHaveLength(1);
+        expect(created.receivers[0].min[0]).toBeCloseTo(4.5, 4);
+
+        model.setVisible(receiver, false);
+        model.setTransform(receiver, composeTransform([6, 0, 0], [0, 1, 0], 0, [1, 1, 1]));
+        expect(encodeAndSubmit(gpu, scene).changes.receivers).toEqual([]);
+
+        model.setVisible(receiver, true);
+        const shown = encodeAndSubmit(gpu, scene).changes.receivers;
+        expect(shown).toHaveLength(1);
+        expect(shown[0].min[0]).toBeCloseTo(5.5, 4);
+
+        // Moved with setTransforms, as the three adapter sends moves.
+        scene.setTransforms(Uint32Array.of(receiver), new Float32Array(composeTransform([0, 7, 0], [0, 1, 0], 0, [1, 1, 1])));
+        const moved = encodeAndSubmit(gpu, scene).changes;
+        expect(moved.regions).toEqual([]);
+        expect(moved.receivers).toHaveLength(1);
+        expect(moved.receivers[0].min[1]).toBeCloseTo(6.5, 4);
+
+        scene.setDeformedPositions(mesh, scaled(1.2));
+        const deformed = encodeAndSubmit(gpu, scene).changes;
+        expect(deformed.regions).toEqual([]);
+        expect(deformed.receivers).toHaveLength(1);
     });
 });
 

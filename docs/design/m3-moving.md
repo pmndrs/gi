@@ -64,6 +64,8 @@ M3 adds:
 
 *As built (T2.M1, rigid parts):* `setTransforms`, `DirtyRegion.moved` (the farthest corner's travel, from a per-instance world frame) and `.instance` (the slot), and `GIStats.recompiles` (counted at a view of the host's device that the platform's own code and its techniques use, while `isReady`). `receivers`, `deformBounds` and `setDeformedPositions` stay M3. ddgi.md "Moving geometry" has the details and numbers.
 
+*As built (T3.1, prototype):* `SceneChanges.receivers` (boxes where receivers are now: created, shown, moved or deformed; 256 a frame, then one merged box), `MeshDescriptor.deformBounds`, and `setDeformedPositions` with a `Float32Array` (`platform/scene/deformed-positions.ts`). Until T3.3, a pose reaches rays by a tree rebuild, as `updateMesh` does: the positions go into the mesh's scene-copy range in place (no layout change), the mesh is reported uploaded, and new poses wait until the trees being built are placed (`GIPlatformImpl.treesWaitingAfterUpdate`), so a mesh posed every frame isn't starved of trees. Its region carries `moved` (the largest vertex travel × the instance's largest scale) and `instance`. The GPU-buffer form throws until T3.3.
+
 ## 2. Per-mesh trees: GPU first, tinybvh as the refinement
 
 ### 2.1 What exists

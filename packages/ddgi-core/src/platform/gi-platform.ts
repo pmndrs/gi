@@ -59,7 +59,7 @@ import { UnitCostMeter, WorkBudget, type BudgetReport, type Calibration, type Ca
 export { DEFAULT_UNITS_PER_FRAME, type UnitCostModel } from './work-budget.ts';
 
 /** No scene changes: the screen stage runs after `encode`, which already reported them. */
-const NO_CHANGES: SceneChanges = { regions: [], global: [], movedReceivers: 0, lights: [], lightsOverflowed: false };
+const NO_CHANGES: SceneChanges = { regions: [], global: [], receivers: [], lights: [], lightsOverflowed: false };
 
 /**
  * The last calibration accepted per device, technique and scene, for the
@@ -140,6 +140,16 @@ export class GIPlatformImpl implements GIPlatform {
      * its probes would keep their full history.
      */
     private unseenChanges: SceneChanges | null = null;
+    /**
+     * Whether a mesh still waited for its tree at the end of the last frame's
+     * tracer update. New poses of deforming meshes wait while it's true (see
+     * `encode`). Why the last frame's and not `rays.building` now: a tree
+     * finished between two frames counts as built at once, but it is only
+     * placed in the next update, after the scene's encode; a pose applied in
+     * that encode would replace its mesh's build first, and the finished tree
+     * would be dropped as out of date.
+     */
+    private treesWaitingAfterUpdate = false;
     private readonly warnedMessages = new Set<string>();
     /** The `uncapturederror` listener, kept so `dispose` can remove it. */
     private readonly onUncapturedError: (event: Event) => void;
@@ -151,7 +161,7 @@ export class GIPlatformImpl implements GIPlatform {
         this.compiles = countComputePipelines(device, () => this.isReady);
         // The platform's own GPU work goes through the counting view; the host keeps its device as it is.
         const ownDevice = this.compiles.device;
-        this.sceneCopy = new PlatformScene(ownDevice, { label: this.label });
+        this.sceneCopy = new PlatformScene(ownDevice, { label: this.label, warn: (message) => this.warnOnce(message) });
         this.scene = new GuardedScene(this.sceneCopy, () => this.checkUsable());
         this.rays = new PlatformRayQueries(ownDevice, this.sceneCopy, {
             label: this.label,
@@ -306,8 +316,12 @@ export class GIPlatformImpl implements GIPlatform {
             this.timer.beginFrame(this.frame);
         }
 
-        const upload = this.sceneCopy.encode(encoder, this.timer ?? undefined);
+        // Until the trees being built are placed, new poses of deforming meshes wait: each would restart
+        // its mesh's build, and a mesh deformed every frame would never get a tree (SceneEncodeOptions).
+        const holdDeformedPositions = this.treesWaitingAfterUpdate || this.rays.building;
+        const upload = this.sceneCopy.encode(encoder, this.timer ?? undefined, { holdDeformedPositions });
         this.rays.update(encoder, upload, this.timer ?? undefined);
+        this.treesWaitingAfterUpdate = this.rays.building;
         // Settings, the sky's bake when the environment changed, and the light grid when there are many
         // point and spot lights. No technique traces in a paused frame, so the grid is not built then.
         const lights = frame.budget.paused ? undefined : { frame: this.frame, localLights: this.sceneCopy.localLightCount, bounds: this.sceneCopy.bounds };
@@ -624,7 +638,7 @@ class GuardedScene implements SceneApi {
         this.check();
         this.target.updateMesh(mesh, descriptor);
     }
-    setDeformedPositions(mesh: MeshHandle, positions: DeformedPositions): void {
+    setDeformedPositions(mesh: MeshHandle, positions: Float32Array | DeformedPositions): void {
         this.check();
         this.target.setDeformedPositions(mesh, positions);
     }
