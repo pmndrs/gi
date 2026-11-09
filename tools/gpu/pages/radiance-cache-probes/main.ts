@@ -23,7 +23,8 @@
  * 3. **Ray directions:** the ray count on the GPU is 64 × the probes; every
  *    ray of every probe points to the normal's side and lies in its own
  *    hemi-octahedral cell (a ray that half precision moved across a cell
- *    edge, within 0.02 of a cell, is counted and reported, as Capsaicin's
+ *    edge, within 0.02 of a cell, or just below the tangent plane, within a
+ *    cosine of 0.001, is counted and reported, as Capsaicin's
  *    `BlendScreenProbes` would put it in the neighbour too); every ray carries
  *    the bypass flag (phase 2 lights every ray directly).
  *
@@ -68,6 +69,8 @@ const WIDTH = 1280;
 const HEIGHT = 720;
 /** How far a ray may sit past its cell's edge, in cells, and still count as moved by half precision. */
 const HALF_PRECISION_EDGE = 0.02;
+/** How far below the tangent plane (cosine) a grazing ray may sit after its direction is packed as halves (a half's step near 1 is 2^-11). */
+const GRAZING_BY_HALF_PRECISION = 1e-3;
 /** The sky check's tolerance (RC2.1 done-when). */
 const SKY_TOLERANCE = 0.01;
 /** The sky-plane scene's sky radiance. */
@@ -255,6 +258,7 @@ async function checkScene(device: GPUDevice, run: SceneRun, skyCheck: boolean): 
     /** Per probe: its ray nearest a cell edge, in cells (where the GPU's f32 and the CPU's f64 could disagree on the cell). */
     const nearestEdge = new Float64Array(spawned.length).fill(Infinity);
     let wrongSide = 0;
+    let grazingByHalfPrecision = 0;
     let wrongCell = 0;
     let movedByHalfPrecision = 0;
     let withoutBypass = 0;
@@ -273,6 +277,12 @@ async function checkScene(device: GPUDevice, run: SceneRun, skyCheck: boolean): 
             const [u, v] = mapToHemiOctahedronInverse(toProbeFrame(direction, normal)).map((value) => value * PROBE_SIZE);
             nearestEdge[probe] = Math.min(nearestEdge[probe], Math.abs(u - Math.round(u)), Math.abs(v - Math.round(v)));
             blendCell[ray] = probeCellOf(direction, normal);
+            if (!(facing > 0) && facing > -GRAZING_BY_HALF_PRECISION) {
+                // A ray along the surface (an outer cell) that packing its direction as halves tipped just
+                // below the tangent plane: Capsaicin stores the same halves (packHalf3).
+                grazingByHalfPrecision++;
+                continue;
+            }
             if (!(facing > 0)) {
                 wrongSide++;
                 fail(`probe ${probe} cell ${cell}: direction (${direction.map((value) => value.toFixed(4)).join(', ')}) is not on the normal's side`);
@@ -337,7 +347,10 @@ async function checkScene(device: GPUDevice, run: SceneRun, skyCheck: boolean): 
             const backupErrors: number[] = [];
             for (let cell = 0; cell < PROBE_CELLS; cell++) {
                 const texel = ((tileY + Math.floor(cell / PROBE_SIZE)) * atlasWidth + tileX + (cell % PROBE_SIZE)) * 4;
-                const expectedValue = samples[cell] > 0 ? SKY_RADIANCE : SKY_RADIANCE / Math.max(empty, 1);
+                // The backup sums each reached cell's summed (not averaged) radiance, so a cell with two
+            // rays counts twice: all 64 rays' radiance over the reached cells, over the empty cells.
+            const backup = (SKY_RADIANCE * PROBE_CELLS) / (PROBE_CELLS - empty) / Math.max(empty, 1);
+            const expectedValue = samples[cell] > 0 ? SKY_RADIANCE : backup;
                 let cellError = 0;
                 let readsTheSky = true;
                 for (let channel = 0; channel < 3; channel++) {
@@ -409,6 +422,7 @@ async function checkScene(device: GPUDevice, run: SceneRun, skyCheck: boolean): 
             rays: rayWords[0],
             rayHits: hits,
             wrongSide,
+            grazingByHalfPrecision,
             wrongCell,
             movedByHalfPrecision,
             minNormalDot,
