@@ -556,6 +556,35 @@ The port reads AMD's source directly: Capsaicin v1.3 at `C:/Users/denni/Document
   - A single-bounce image on Cornell, two-room and Sponza in the viewer, with no errors and no NaN or negative pixels (checked by readback). A contact sheet in PROGRESS beside DDGI's image of the same view.
   - Debug views of the SH (irradiance from the probe's SH along the normal) join the atlas and mask views.
 
+### radiance-cache phase 3: the world cache, faithful
+
+Same rules as phase 2 (no timing; correctness gates; faithful port with Capsaicin's source cited; register rows from the next free number). The interface between the screen cache and the world cache is in the design doc ("The world-cache interface"). Source map rows 3, 11, 12, 15, 16, 19-22 and §4.2.
+
+| ID | Task | Agent | Size | Depends on | Status |
+| --- | --- | --- | --- | --- | --- |
+| RC3.1 | The hash grid: one shared WGSL function for the cell descriptor and both hashes; CAS insert into 16-slot buckets, find, decay stamps and `PurgeTiles`; buffers packed at Capsaicin's default capacity; the `WorldCache` interface with the hash grid behind it | implementer | M | RC2.1 | todo |
+| RC3.2 | Population and resolve: probe-ray hits insert cells (`PopulateScreenProbes`' cache half), `GenerateReservoirs` (a light per hit through the platform light grid, D4, with the bypass rules), `PopulateCells` (shadow ray, quantised accumulation), `UpdateTiles` (temporal accumulation and the tile mips), `ResolveCells` (filtered lookup into the probe rays); phase 2's staging retired | implementer | M | RC3.1, RC2.2 | todo |
+| RC3.3 | GI-1.2 multi-bounce: `PopulateMultibounceCells`, `GenerateMultibounceReservoirs`, `UpdateMultibounceCells` and the indirect value array | implementer | M | RC3.2 | todo |
+
+- **RC3.1 done-when.**
+  - The descriptor, the bucket hash (pcg chain) and the checksum (xxHash chain, never 0) live in one WGSL function that every pass calls, ported from `hash_grid_cache.hlsl:96-192` with `src/math/hash.hlsl`. A CPU port of the same function gives the same bits on a fixed set of hits (unit test), and the GPU agrees with it (GPU test).
+  - The capacity is Capsaicin's default (2^14 buckets × 16 tiles × 85 cells; value, indirect value and update-scratch arrays), allocated in a few large packed buffers under the adapter-maximum limits (D6). Its memory is in the technique's stats. A device whose limits can't hold it gets `GILimitError` naming the limit (D14: three's own device does).
+  - GPU tests, on the RTX and the Intel UHD: insert then find; two different tiles colliding in a bucket both found; a full bucket refusing the 17th tile, counted as an overflow; a tile untouched for 50 frames purged by `PurgeTiles`, including across the frame counter's wrap; concurrent inserts of the same tile from many threads giving one slot.
+  - `WorldCache` as in the design doc, the hash grid its implementation, wired into the technique with no change yet to the image (RC3.2 switches it on).
+- **RC3.2 done-when.**
+  - The passes listed in the row, ported with their source lines cited. Hits are lit by one sampled light and one shadow ray each, through the platform light grid (D4) and `giAnyHit`. Emissive hits and rays shorter than their cell take the bypass path exactly as `gi1.comp:2439-2456` and `:2538-2561` say.
+  - The design doc's phase-2 staging note is marked retired.
+  - GPU tests:
+    - a lit plane seen through probe rays converges in its cells to the analytic outgoing radiance (albedo/π × E) within 2%;
+    - `UpdateTiles`' sample count caps at 16 and its mips are 2×2 sums;
+    - `ResolveCells` picks the coarser mip while a cell has fewer than 16 samples.
+  - Cornell, two-room and Sponza render in the viewer with no errors, NaN or negative pixels. Bucket overflow is measured on Sponza and Bistro exterior by counting, not timing; the count goes in PROGRESS.
+- **RC3.3 done-when.**
+  - The multi-bounce passes are ported with their source lines cited, including the 0.7 discard, the forced-diffuse second vertex and the one-frame lag of the indirect accumulator.
+  - Two-room's closed room is visibly lit by the second bounce against RC3.2's image: its mean luminance rises, and the contact sheet is in PROGRESS.
+  - The furnace room (white, closed, constant emitter or sky) moves toward the multi-bounce value against single bounce; the expected direction and size are stated before the run.
+  - Cornell's indirect light against the Cycles reference is reported (single and multi-bounce), as information.
+
 ## Carried to M2 (collected during M1)
 
 - `sponza-candles`: an opt-in scene with a stated subset of Intel's 10,000 candle lights, for the many-lights stress test (DECISIONS 2026-11-05).

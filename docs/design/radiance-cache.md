@@ -101,6 +101,16 @@ The technique needs the per-pixel data three already renders. The platform takes
 
 The baseline world cache is Capsaicin's hash grid. Behind one interface ("radiance leaving this hit point toward this ray", plus "these cells need updating"), others can plug in: Brixelizer GI's brick cache (from the separate port, which also brings SDF tracing as a second query backend), a Lumen-style surface cache, or the DDGI volume as the last level (id Tech 8 style). The interface is designed in phase 3 with the Brixelizer port's needs in view, so plugging it in later doesn't change the screen cache.
 
+### The world-cache interface (lead, 2026-11-09, phase 3)
+
+The seam sits where Capsaicin's screen cache hands its probe rays to the hash grid: after the probe rays are traced, before they are blended. Everything between is the world cache's business, so a Brixelizer brick cache, a surface cache or the DDGI field can replace the hash grid without the screen cache changing.
+
+- **Input:** the frame's traced probe rays in one GPU buffer: per ray its origin, direction, hit record (instance, primitive, barycentrics, distance, front face; a miss is marked) and a "bypass" flag, plus the ray count in a GPU counter (RC1.3's indirect arguments size the dispatches). Rays that took Capsaicin's bypass path (emissive hits, rays shorter than a cell) are already lit and carry the flag.
+- **Output:** for every ray without the bypass flag, the world cache **adds** the radiance leaving the hit toward the ray's origin into that ray's radiance slot (the buffer `BlendScreenProbes` reads). Misses are the screen cache's (the sky).
+- **TypeScript:** a `WorldCache` object the technique owns: `prepare(context)` (allocate; may throw `GILimitError` naming the limit), `encodeFrame(encoder, frame, rays)` (all of its per-frame work: purge, insert, populate, update, resolve), `memoryBytes`, `stats`, `dispose()`. The hash grid is the default and only implementation in phase 3.
+- **WGSL for other readers:** an optional `worldCacheLookup(position, normal, direction) -> vec4f` (radiance and a validity weight) for later consumers that look up without inserting (Capsaicin's reflections read `HashGridCache_FindCell`). A cache that can't answer returns weight 0.
+- **Why here:** Capsaicin's per-hit population, multi-bounce and resolve stay intact inside the hash grid, so the faithful path is unchanged. A brick or surface cache has its own population (from its own tracing or SDF), and needs only the hits and a place to write radiance.
+
 ## World-cache memory
 
 Capsaicin's defaults allocate about 1 GiB for the hash cache (2^14 buckets × 16 tiles × 85 cells, two value arrays and two per-cell scratch arrays; `source-map.md` §4.2). We allocate the same, under the adapter-maximum limits the platform already asks for; never a cap from WebGPU's default 128 MiB binding (DECISIONS 2026-11-09). A device that can't fit it throws `GILimitError` naming the limit. Capacity is a setting chosen by measured bucket overflow and quality. Sizing the update scratch per updated tile instead of per cell is a lever (it frees several hundred MB). The technique reports its GPU memory in stats.
