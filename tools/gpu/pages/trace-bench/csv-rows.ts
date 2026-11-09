@@ -144,8 +144,8 @@ function rcRows(result: SceneResult): MetricRow[] {
         { scene, metric: 'rc/tiles_missed', value: rc.tilesMissed },
         { scene, metric: 'rc/rays_per_probe', value: rc.raysPerProbe },
         { scene, metric: 'rc/multi_bounce_ratio', value: rc.multiBounceRatio },
-        { scene, metric: 'rc/light_is_sun', value: rc.lightKind === 'sun' ? 1 : 0 },
         { scene, metric: 'rc/light_count', value: rc.lightCount },
+        { scene, metric: 'rc/light_has_sun', value: rc.lightHasSun ? 1 : 0 },
     ];
     for (const entry of rc.sets) {
         const prefix = `rc/${entry.set}`;
@@ -156,7 +156,9 @@ function rcRows(result: SceneResult): MetricRow[] {
             { scene, metric: `${prefix}/oracle_mismatches`, value: entry.oracleMismatches },
             { scene, metric: `${prefix}/oracle_ambiguous`, value: entry.oracleAmbiguous },
         );
-        if (entry.facingAway !== undefined) rows.push({ scene, metric: `${prefix}/facing_away`, value: entry.facingAway });
+        if (entry.noLight !== undefined) rows.push({ scene, metric: `${prefix}/hits_no_light`, value: entry.noLight });
+        if (entry.raysPerHit !== undefined) rows.push({ scene, metric: `${prefix}/rays_per_hit`, value: entry.raysPerHit });
+        entry.picksPerLight?.forEach((picks, light) => rows.push({ scene, metric: `${prefix}/rays_to_light${light}`, value: picks }));
         if (entry.agreementRate !== null) rows.push({ scene, metric: `${prefix}/agreement_ours-tinybvh_vs_platform`, value: entry.agreementRate });
     }
     for (const mode of result.modes) {

@@ -21,10 +21,11 @@
  *    hits; the count and the kind of ray (diffuse, from a surface, closest
  *    hit) are what matter for cost.
  * 4. **Shadow rays (any hit):** one per hit of sets 2 and 3, toward one light
- *    sampled per hit: the sun where the scene has one, otherwise one of the
- *    manifest's point and spot lights chosen uniformly, with the ray ending at
- *    the light. A hit facing away from its light gets none, since shading
- *    would skip it.
+ *    chosen per hit among every manifest light (sun, point, spot), in
+ *    proportion to its unshadowed irradiance there, as Capsaicin's light
+ *    sampler weights lights by contribution. A light behind the hit, out of
+ *    range or of zero intensity is never chosen; a hit gets no ray only when
+ *    no light reaches it, since shading would skip it.
  *
  * Every random choice comes from one seeded generator (mulberry32, the
  * oracle fixtures'), so every tracer and every run sees the same rays.
@@ -426,72 +427,153 @@ export function makeBounceRays(surfaces: Pick<HitSurfaces, 'positions' | 'normal
 
 // ---- 4. Shadow rays ------------------------------------------------------------------------
 
-/** Which light a hit's shadow ray goes to. */
-export type RcLights =
-    | { kind: 'sun'; /** Unit vector from a surface toward the sun. */ towardSun: Vec3 }
-    | { kind: 'local'; /** Point and spot light positions; one is chosen uniformly per hit. */ positions: Vec3[] };
+/** A manifest light as the shadow-ray choice needs it. */
+export type RcLight =
+    | {
+          kind: 'directional';
+          /** Unit vector from a surface toward the light. */
+          towardLight: Vec3;
+          /** Luminance of colour times intensity (lux at normal incidence). */
+          power: number;
+      }
+    | {
+          kind: 'point' | 'spot';
+          position: Vec3;
+          /** Luminance of colour times intensity (candela). */
+          power: number;
+          /** Metres where the light reaches zero, or 0 for no range window. */
+          range: number;
+          /** Spot only: unit direction the light travels, and the cone's cosines. */
+          travel?: Vec3;
+          cosOuterCone?: number;
+          cosInnerCone?: number;
+      };
+
+/** Rec. 709 luminance, as the platform's `giShadeLuminance`. */
+function luminance(rgb: readonly number[]): number {
+    return 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2];
+}
+
+/** Every manifest light: the sun and every point and spot light. */
+export function rcLightsFromManifest(lights: readonly ManifestLight[]): RcLight[] {
+    if (lights.length === 0) throw new Error('the scene has no light to aim shadow rays at');
+    return lights.map((light): RcLight => {
+        const power = luminance(light.color) * light.intensity;
+        if (light.type === 'directional') {
+            const travel = normalizeVector(light.direction);
+            return { kind: 'directional', towardLight: [-travel[0], -travel[1], -travel[2]], power };
+        }
+        if (light.type === 'point') return { kind: 'point', position: [...light.position], power, range: light.range };
+        return {
+            kind: 'spot',
+            position: [...light.position],
+            power,
+            range: light.range,
+            travel: normalizeVector(light.direction),
+            cosOuterCone: Math.cos((light.outerConeDeg * Math.PI) / 180),
+            cosInnerCone: Math.cos((light.innerConeDeg * Math.PI) / 180),
+        };
+    });
+}
 
 /**
- * The sun where the manifest has a directional light (the first), else every
- * point and spot light (a hit picks one uniformly). Capsaicin samples one
- * light per hit from its light sampler; uniform is the simplest stand-in
- * with the same one-ray-per-hit cost.
+ * three.js r187's distance falloff with decay 2, as the platform's
+ * `giShadeDistanceAttenuation`: 1 / max(d², 0.01), windowed to zero at
+ * `range` when range > 0.
  */
-export function rcLightsFromManifest(lights: readonly ManifestLight[]): RcLights {
-    const sun = lights.find((light) => light.type === 'directional');
-    if (sun?.type === 'directional') {
-        const travel = normalizeVector(sun.direction);
-        return { kind: 'sun', towardSun: [-travel[0], -travel[1], -travel[2]] };
+function distanceAttenuation(distance: number, range: number): number {
+    const inverseSquare = 1 / Math.max(distance * distance, 0.01);
+    if (range <= 0) return inverseSquare;
+    const ratio = distance / range;
+    const window = Math.min(Math.max(1 - ratio ** 4, 0), 1);
+    return inverseSquare * window * window;
+}
+
+/** three's spot cone, as the platform's `giShadeSpotAttenuation`. */
+function spotAttenuation(cosine: number, cosOuter: number, cosInner: number): number {
+    if (cosInner <= cosOuter) return cosine > cosOuter ? 1 : 0;
+    const x = Math.min(Math.max((cosine - cosOuter) / (cosInner - cosOuter), 0), 1);
+    return x * x * (3 - 2 * x);
+}
+
+/**
+ * A light's unshadowed irradiance luminance at a surface, with the direction
+ * and length of the shadow ray from `origin`. 0 when the light can't reach
+ * it: behind the surface (cos ≤ 0 at the normal of the side the ray arrived
+ * on), outside its range, outside a spot's cone, or of zero intensity.
+ * The platform's `giShadeLightSample`, in luminance.
+ */
+export function lightContribution(light: RcLight, origin: Vec3, normal: ArrayLike<number>): { weight: number; direction: Vec3; length: number } {
+    let direction: Vec3;
+    let length: number;
+    let attenuation = 1;
+    if (light.kind === 'directional') {
+        direction = light.towardLight;
+        length = SUN_SHADOW_RAY_LENGTH;
+    } else {
+        const toLight: Vec3 = [light.position[0] - origin[0], light.position[1] - origin[1], light.position[2] - origin[2]];
+        length = Math.hypot(toLight[0], toLight[1], toLight[2]);
+        if (!(length > 0)) return { weight: 0, direction: [0, 0, 1], length: 0 };
+        direction = [toLight[0] / length, toLight[1] / length, toLight[2] / length];
+        attenuation = distanceAttenuation(length, light.range);
+        if (light.kind === 'spot' && light.travel) {
+            const cosine = -(direction[0] * light.travel[0] + direction[1] * light.travel[1] + direction[2] * light.travel[2]);
+            attenuation *= spotAttenuation(cosine, light.cosOuterCone ?? -1, light.cosInnerCone ?? -1);
+        }
     }
-    const positions = lights.flatMap((light) => (light.type === 'directional' ? [] : [[...light.position] as Vec3]));
-    if (positions.length === 0) throw new Error('the scene has no light to aim shadow rays at');
-    return { kind: 'local', positions };
+    const cosine = normal[0] * direction[0] + normal[1] * direction[1] + normal[2] * direction[2];
+    return { weight: cosine > 0 ? light.power * attenuation * cosine : 0, direction, length };
 }
 
 export interface RcShadowRays {
     rays: Float32Array;
     count: number;
-    /** Hits that got no shadow ray because they face away from the light sampled for them. */
-    facingAwayCount: number;
+    /** Surfaces that got no shadow ray because no light reaches them. */
+    noLightCount: number;
+    /** How many rays went to each light, in the order of the lights given. */
+    picksPerLight: number[];
 }
 
 /**
- * One any-hit ray per surface toward one light: from the platform's offset
- * origin, toward the sun (length `SUN_SHADOW_RAY_LENGTH`, as the platform's
- * shadow rays) or toward a uniformly chosen local light's position (ending
- * at the light). Surfaces facing away from their light get none.
+ * One any-hit ray per surface toward one light, chosen in proportion to its
+ * unshadowed irradiance at the surface (luminance; the weight the platform's
+ * own light choice uses, `giDirectSplitIrradiance`). Like Capsaicin's light
+ * sampler, which weights lights by their contribution, a light that can't
+ * reach the surface is never chosen, and a surface gets no ray only when no
+ * light reaches it. The ray leaves from the platform's offset origin and
+ * runs `SUN_SHADOW_RAY_LENGTH` toward a directional light, or ends at a point
+ * or spot light.
  */
-export function makeLightShadowRays(surfaces: Pick<HitSurfaces, 'positions' | 'normals' | 'count'>, lights: RcLights, random: Random): RcShadowRays {
+export function makeLightShadowRays(surfaces: Pick<HitSurfaces, 'positions' | 'normals' | 'count'>, lights: readonly RcLight[], random: Random): RcShadowRays {
     const output = new Float32Array(surfaces.count * RAY_FLOATS);
+    const picksPerLight = lights.map(() => 0);
     let written = 0;
-    let facingAwayCount = 0;
+    let noLightCount = 0;
     for (let surface = 0; surface < surfaces.count; surface++) {
         const position = surfaces.positions.subarray(surface * 3, surface * 3 + 3);
         const normal = surfaces.normals.subarray(surface * 3, surface * 3 + 3);
         const origin = offsetRayOrigin(position, normal);
-        let direction: Vec3;
-        let length: number;
-        if (lights.kind === 'sun') {
-            direction = lights.towardSun;
-            length = SUN_SHADOW_RAY_LENGTH;
-        } else {
-            const light = lights.positions[Math.min(lights.positions.length - 1, Math.floor(random() * lights.positions.length))];
-            const toLight: Vec3 = [light[0] - origin[0], light[1] - origin[1], light[2] - origin[2]];
-            length = Math.hypot(toLight[0], toLight[1], toLight[2]);
-            if (!(length > 0)) {
-                facingAwayCount++;
-                continue;
-            }
-            direction = [toLight[0] / length, toLight[1] / length, toLight[2] / length];
-        }
-        if (normal[0] * direction[0] + normal[1] * direction[1] + normal[2] * direction[2] <= 0) {
-            facingAwayCount++;
+        const candidates = lights.map((light) => lightContribution(light, origin, normal));
+        const total = candidates.reduce((sum, candidate) => sum + candidate.weight, 0);
+        if (!(total > 0)) {
+            noLightCount++;
             continue;
         }
-        writeRay(output, written, origin, direction, length);
+        // Walk the cumulative weights to the drawn point; the last light with weight catches rounding.
+        const target = random() * total;
+        let chosen = -1;
+        let cumulative = 0;
+        for (let index = 0; index < candidates.length; index++) {
+            if (!(candidates[index].weight > 0)) continue;
+            chosen = index;
+            cumulative += candidates[index].weight;
+            if (target < cumulative) break;
+        }
+        picksPerLight[chosen]++;
+        writeRay(output, written, origin, candidates[chosen].direction, candidates[chosen].length);
         written++;
     }
-    return { rays: output.slice(0, written * RAY_FLOATS), count: written, facingAwayCount };
+    return { rays: output.slice(0, written * RAY_FLOATS), count: written, noLightCount, picksPerLight };
 }
 
 // ---- Checks --------------------------------------------------------------------------------

@@ -64,8 +64,12 @@ export interface RcSetResult {
     hits: number;
     /** `hits / rays`, or 0 for an empty set. */
     hitFraction: number;
-    /** Shadow sets: hits of the source set that got no shadow ray because they face away from their light. */
-    facingAway?: number;
+    /** Shadow sets: hits of the source set that no light reaches (no shadow ray). */
+    noLight?: number;
+    /** Shadow sets: shadow rays per hit of the source set (rays / its hits). */
+    raysPerHit?: number;
+    /** Shadow sets: rays aimed at each manifest light, in manifest order. */
+    picksPerLight?: number[];
     /** Rays checked against the brute-force reference, and how they came out. */
     oracleRays: number;
     oracleMismatches: number;
@@ -88,9 +92,10 @@ export interface RcSceneResult {
     raysPerProbe: number;
     multiBounceRatio: number;
     seed: number;
-    /** `sun`: every shadow ray goes to the manifest's directional light; `local`: a uniformly chosen point or spot light. */
-    lightKind: 'sun' | 'local';
+    /** Manifest lights a shadow ray may go to (each hit picks one, weighted by its unshadowed irradiance). */
     lightCount: number;
+    /** Whether one of them is a directional light (the sun). */
+    lightHasSun: boolean;
     sets: RcSetResult[];
 }
 

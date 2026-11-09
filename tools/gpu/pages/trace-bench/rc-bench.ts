@@ -92,7 +92,8 @@ interface RcSet {
     rays: Float32Array;
     count: number;
     buffer: GPUBuffer | null;
-    facingAway?: number;
+    /** Shadow sets: hits no light reaches, rays per source hit, rays per light. */
+    shadow?: { noLight: number; raysPerHit: number; picksPerLight: number[] };
 }
 
 /** A ray of a packed set, as the reference tracer takes it. */
@@ -258,14 +259,22 @@ export async function runRcScene(context: RcBenchContext, sceneId: string): Prom
             await yieldToBrowser();
 
             const noSurfaces = { positions: new Float64Array(0), normals: new Float64Array(0), count: 0 };
+            const shadowSet = (name: RcSetName, sourceHits: number, shadow: ReturnType<typeof makeLightShadowRays>): Omit<RcSet, 'buffer'> => ({
+                name,
+                mode: 'any',
+                rays: shadow.rays,
+                count: shadow.count,
+                shadow: { noLight: shadow.noLightCount, raysPerHit: sourceHits > 0 ? shadow.count / sourceHits : 0, picksPerLight: shadow.picksPerLight },
+            });
             const shadowOfProbe = makeLightShadowRays(probeSurfaces ?? noSurfaces, lights, random);
-            await addSet({ name: 'shadow-probe', mode: 'any', rays: shadowOfProbe.rays, count: shadowOfProbe.count, facingAway: shadowOfProbe.facingAwayCount });
+            await addSet(shadowSet('shadow-probe', probeSurfaces?.count ?? 0, shadowOfProbe));
             const shadowOfBounce = makeLightShadowRays(bounceSurfaces ?? noSurfaces, lights, random);
-            await addSet({ name: 'shadow-bounce', mode: 'any', rays: shadowOfBounce.rays, count: shadowOfBounce.count, facingAway: shadowOfBounce.facingAwayCount });
+            await addSet(shadowSet('shadow-bounce', bounceSurfaces?.count ?? 0, shadowOfBounce));
             progress(
                 `${label}: ${probeCount} probe rays (${probeSurfaces?.count ?? 0} hit), ${bounceCount} multi-bounce rays (${bounceSurfaces?.count ?? 0} hit), ` +
-                    `${shadowOfProbe.count} + ${shadowOfBounce.count} shadow rays toward ${lights.kind === 'sun' ? 'the sun' : `one of ${lights.positions.length} lights`} ` +
-                    `(${shadowOfProbe.facingAwayCount} + ${shadowOfBounce.facingAwayCount} hits face away from theirs)`,
+                    `${shadowOfProbe.count} + ${shadowOfBounce.count} shadow rays, each toward one of ${lights.length} lights chosen by unshadowed irradiance ` +
+                    `(picks per light ${shadowOfProbe.picksPerLight.join('/')} + ${shadowOfBounce.picksPerLight.join('/')}; ` +
+                    `${shadowOfProbe.noLightCount} + ${shadowOfBounce.noLightCount} hits no light reaches)`,
             );
         } finally {
             prepare.dispose();
@@ -344,7 +353,7 @@ export async function runRcScene(context: RcBenchContext, sceneId: string): Prom
                 rays: set.count,
                 hits,
                 hitFraction: set.count > 0 ? hits / set.count : 0,
-                ...(set.facingAway === undefined ? {} : { facingAway: set.facingAway }),
+                ...(set.shadow ?? {}),
                 oracleRays: tally.rays,
                 oracleMismatches: tally.mismatches,
                 oracleAmbiguous: tally.ambiguous,
@@ -362,14 +371,15 @@ export async function runRcScene(context: RcBenchContext, sceneId: string): Prom
             raysPerProbe: RC_RAYS_PER_PROBE,
             multiBounceRatio: RC_MULTI_BOUNCE_RATIO,
             seed: RC_SEED,
-            lightKind: lights.kind,
-            lightCount: lights.kind === 'sun' ? 1 : lights.positions.length,
+            lightCount: lights.length,
+            lightHasSun: lights.some((light) => light.kind === 'directional'),
             sets: RC_SET_NAMES.flatMap((name) => setResults.filter((entry) => entry.set === name)),
         };
         result.rc = rc;
         for (const entry of rc.sets) {
             progress(
                 `${label}: ${entry.set}: ${entry.rays} rays, ${(entry.hitFraction * 100).toFixed(1)}% ${entry.mode === 'closest' ? 'hit' : 'blocked'}` +
+                    (entry.raysPerHit === undefined ? '' : `, ${entry.raysPerHit.toFixed(3)} per source hit`) +
                     (entry.agreementRate === null ? '' : `, tracers agree on ${(entry.agreementRate * 100).toFixed(3)}%`) +
                     `, reference: ${entry.oracleRays - entry.oracleMismatches - entry.oracleAmbiguous} match, ${entry.oracleAmbiguous} ambiguous, ${entry.oracleMismatches} mismatch`,
             );

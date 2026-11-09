@@ -175,8 +175,9 @@ export const RC_SEED = 0x0c4b_5a1c;
 export const RC_HALTON_FIRST_INDEX = 1;
 /**
  * The loaded section's dispatch count is `rcLoadedMs` over one dispatch's
- * median time, within these bounds. The upper bound keeps the tiny placement
- * set (3,600 rays, about 0.03 ms) from submitting tens of thousands.
+ * median time, within these bounds. The upper bound keeps a very short
+ * dispatch from submitting tens of thousands (the placement set, 3,600 rays,
+ * takes about 0.42 ms on Sponza on the RTX 3060, so it stays well under it).
  */
 export const RC_LOADED_DISPATCHES = { min: 10, max: 4_000 } as const;
 /**

@@ -281,44 +281,60 @@ describe('rc ray sets: multi-bounce and shadow rays', () => {
         expect(makeBounceRays(surfaces, 0, createRandom(5)).length).toBe(0);
     });
 
-    it('aims one ray per surface at the sun, unbounded, and none from surfaces facing away', () => {
-        const lights = rcLightsFromManifest([
-            { type: 'directional', color: [1, 1, 1], intensity: 3, direction: [0, -1, 0] },
-            { type: 'point', color: [1, 1, 1], intensity: 1, position: [0, 5, 0], range: 0 },
-        ]);
-        expect(lights).toEqual({ kind: 'sun', towardSun: [-0, 1, -0] });
-        const shadow = makeLightShadowRays(surfaces, lights, createRandom(9));
+    const white: [number, number, number] = [1, 1, 1];
+    const sun = { type: 'directional' as const, color: white, intensity: 3, direction: [0, -1, 0] as [number, number, number] };
+    const lamp = (position: [number, number, number], intensity = 40, range = 0) => ({ type: 'point' as const, color: white, intensity, position, range });
+
+    it('with only the sun, aims the hits it reaches at it, unbounded, and gives the rest none', () => {
+        const shadow = makeLightShadowRays(surfaces, rcLightsFromManifest([sun]), createRandom(9));
         // Only the floor (normal +y inside the room) faces the sun straight up; walls and the ceiling don't.
         let facingUp = 0;
         for (let surface = 0; surface < surfaces.count; surface++) if (surfaces.normals[surface * 3 + 1] > 0) facingUp++;
         expect(shadow.count).toBe(facingUp);
-        expect(shadow.count + shadow.facingAwayCount).toBe(surfaces.count);
+        expect(shadow.noLightCount).toBe(surfaces.count - facingUp);
         for (let ray = 0; ray < shadow.count; ray++) {
             expect(direction(shadow.rays, ray)).toEqual([0, 1, 0]);
             expect(shadow.rays[ray * RAY_FLOATS + 7]).toBe(Math.fround(SUN_SHADOW_RAY_LENGTH));
         }
     });
 
-    it('picks one local light per surface when there is no sun, ending the ray at it', () => {
-        const positions: [number, number, number][] = [
-            [-5, 5, 0],
-            [5, 5, 0],
-        ];
-        const lights = rcLightsFromManifest(positions.map((position) => ({ type: 'point' as const, color: [1, 1, 1] as [number, number, number], intensity: 1, position, range: 12 })));
-        expect(lights.kind).toBe('local');
-        const shadow = makeLightShadowRays(surfaces, lights, createRandom(11));
-        expect(shadow.count).toBeGreaterThan(0);
-        expect(shadow.count + shadow.facingAwayCount).toBe(surfaces.count);
+    it('gives every hit a ray when some light reaches it: the walls and ceiling the sun misses go to the lamp', () => {
+        // A lamp in the middle of the closed room reaches every inside surface.
+        const shadow = makeLightShadowRays(surfaces, rcLightsFromManifest([sun, lamp([0, 3, 0])]), createRandom(9));
+        expect(shadow.count).toBe(surfaces.count);
+        expect(shadow.noLightCount).toBe(0);
+        expect(shadow.picksPerLight[0] + shadow.picksPerLight[1]).toBe(surfaces.count);
+        expect(shadow.picksPerLight[1]).toBeGreaterThan(0);
         expect(rayProblems('shadow', shadow.rays)).toEqual([]);
-        const chosen = new Set<number>();
+        // A lamp ray ends at the lamp.
         for (let ray = 0; ray < shadow.count; ray++) {
             const base = ray * RAY_FLOATS;
+            if (shadow.rays[base + 7] > 1e6) continue;
             const end = [0, 1, 2].map((axis) => shadow.rays[base + axis] + shadow.rays[base + 4 + axis] * shadow.rays[base + 7]);
-            const light = positions.findIndex((position) => Math.hypot(end[0] - position[0], end[1] - position[1], end[2] - position[2]) < 1e-4);
-            expect(light).toBeGreaterThanOrEqual(0);
-            chosen.add(light);
+            expect(Math.hypot(end[0], end[1] - 3, end[2])).toBeLessThan(1e-4);
         }
-        expect(chosen.size).toBe(2);
+    });
+
+    it('chooses lights in proportion to their unshadowed irradiance, and never one that cannot reach the hit', () => {
+        // 4,000 copies of one floor point at the origin, facing up.
+        const count = 4000;
+        const floor = { positions: new Float64Array(count * 3), normals: Float64Array.from({ length: count * 3 }, (_, index) => (index % 3 === 1 ? 1 : 0)), count };
+        const lights = rcLightsFromManifest([
+            lamp([0, 2, 0], 30), // straight above, 2 m: 30 / 4 = 7.5
+            lamp([0, 2, 0], 10), // the same place, a third as bright: 2.5
+            lamp([0, 2, 0], 0), // zero intensity: never
+            lamp([0, -2, 0], 1000), // below the floor (cos < 0): never
+            lamp([0, 20, 0], 1000, 12), // out of its 12 m range: never
+        ]);
+        const shadow = makeLightShadowRays(floor, lights, createRandom(21));
+        expect(shadow.count).toBe(count);
+        expect(shadow.picksPerLight.slice(2)).toEqual([0, 0, 0]);
+        expect(shadow.picksPerLight[0] / count).toBeCloseTo(0.75, 1);
+        expect(shadow.picksPerLight[1] / count).toBeCloseTo(0.25, 1);
+        // No light reaches: none of them can.
+        const dark = makeLightShadowRays(floor, rcLightsFromManifest([lamp([0, 2, 0], 0), lamp([0, -2, 0])]), createRandom(21));
+        expect(dark.count).toBe(0);
+        expect(dark.noLightCount).toBe(count);
         expect(() => rcLightsFromManifest([])).toThrow(/no light/);
     });
 });
@@ -344,12 +360,12 @@ describe('rc CSV rows and predictions', () => {
         rc: {
             camera: { name: 'a', position: [0, 0, 0], target: [1, 0, 0], fovYDeg: 75 },
             width: 1280, height: 720, tileSize: 16, tiles: 3600, probesPlaced: 3000, tilesMissed: 600,
-            raysPerProbe: 64, multiBounceRatio: 0.3, seed: 1, lightKind: 'sun', lightCount: 1,
+            raysPerProbe: 64, multiBounceRatio: 0.3, seed: 1, lightCount: 2, lightHasSun: true,
             sets: [
                 set('placement', 'closest', 3600),
                 set('probe', 'closest', 192_000),
                 set('bounce', 'closest', 57_600),
-                { ...set('shadow-probe', 'any', 100_000), facingAway: 20_000 },
+                { ...set('shadow-probe', 'any', 100_000), noLight: 20_000, raysPerHit: 0.9, picksPerLight: [90_000, 10_000] },
                 set('shadow-bounce', 'any', 30_000),
             ],
         },
@@ -379,7 +395,9 @@ describe('rc CSV rows and predictions', () => {
         expect(value('note/ray_set_rc')).toBe(1);
         expect(value('rc/probes_placed')).toBe(3000);
         expect(value('rc/probe/rays')).toBe(192_000);
-        expect(value('rc/shadow-probe/facing_away')).toBe(20_000);
+        expect(value('rc/shadow-probe/hits_no_light')).toBe(20_000);
+        expect(value('rc/shadow-probe/rays_per_hit')).toBe(0.9);
+        expect(value('rc/shadow-probe/rays_to_light1')).toBe(10_000);
         expect(value('rc/probe/platform/closest/mrays_per_s')).toBeCloseTo(96, 9);
         expect(value('rc/probe/platform/closest/loaded_mrays_per_s')).toBeCloseTo(120, 9);
         expect(value('rc/probe/platform/closest/predicted_ms')).toBeCloseTo(1.6, 9);
