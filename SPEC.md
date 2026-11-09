@@ -190,7 +190,7 @@ An adapter does four things. Nothing else is required.
    - The adapter watches its engine for changes and sends only what changed.
    - The core keeps its own GPU copy. That copy is simplified on purpose: diffuse albedo, emissive and cutout only.
 3. **Drive a frame.** The host calls `gi.update(commandEncoder, budget)` once per frame.
-   - The core records its work into the host's encoder: no extra queue submits and no CPU readback, frame after frame. The one exception is at load: the GPU's build of the scene's first mesh trees is submitted once by the core and reads back a few words of stats per mesh (T2.12; DECISIONS 2026-11-08, for Dennis to confirm).
+   - The core records its work into the host's encoder: no extra queue submits and no CPU readback, frame after frame. The one exception is a frame that uploads meshes (at load, and meshes added or replaced later): the GPU's build of those meshes' first trees is submitted by the core and reads back a few words of stats per mesh (T2.12 and T3.2; DECISIONS 2026-11-08, confirmed at M2 sign-off, and 2026-11-09, for Dennis to confirm).
    - The host decides when to call it, how much time to spend, and whether to pause.
 4. **Read the GI while shading.** The active technique publishes a **shading module**, the same shape for every technique. It has three parts:
    - WGSL functions:

@@ -93,6 +93,7 @@ The platform's habit is **"prefer GPU-resident; read back when it clearly pays"*
 - **When B2 lands** and its trees trace at ≥ 0.95× tinybvh's, the swap can become optional (`meshTreeRefinement: 'tinybvh' | 'none'`), which saves the worker's copy and time.
 - **Without subgroups:** tinybvh only, as in M1 (the declared fallback). First GI waits for the worker on those devices.
 - **The top level** stays as B1a decided. If "add a cabinet" shows the worker's delay, the GPU LBVH could build the top level in the same frame from the instance boxes. It's the same code, but not planned.
+- *As built (T3.2):* the builder is H-PLOC (B2), not the LBVH, at load and at runtime alike: T2.12's path, with the "scene as first loaded" limit removed. Each frame's uploaded meshes go in one batch with its own submit and stats readback (DECISIONS 2026-11-09). The GPU tree's node and triangle ranges are released in the frame that places tinybvh's tree, and the batch's own buffers one update after the copy. tinybvh builds one version of a mesh at a time; a mesh replaced again meanwhile keeps only its newest version waiting. Page: `trace-runtime-trees`.
 
 ### 2.3 First GI from GPU trees (scheduled in M2)
 
