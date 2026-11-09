@@ -523,6 +523,39 @@ Rules for every row:
   - Closest-hit and any-hit Mrays/s for each set through the platform's tracer, on `sponza` (with curtains), `bistro-interior` and `bistro-exterior`, on the RTX, 3 VALID runs (median and spread), into `bench/results/trace.csv`. The Intel UHD runs once for correctness (no timing claims).
   - A table in PROGRESS: per scene, each set's ray count, rate and predicted ms, their sum, beside Capsaicin's native "probe tracing and cell population" group (the design doc's yardstick). This predicts the baseline's tracing cost; it doesn't change the baseline.
 
+### radiance-cache phase 2: screen probes, first image
+
+Started 2026-11-09 on Dennis's word through the starting session ("lets build what we can before we hit our usage limit"): **no timing runs until he asks** (correctness gates only, GPU checks through the bench lock with `--no-cool-wait`; every skipped timing is written down as deferred). Phases 2-4 run in the plan's order without waiting for a sign-off; only a decision that blocks the whole project stops the track.
+
+The port reads AMD's source directly: Capsaicin v1.3 at `C:/Users/denni/Documents/dev/ddgi/.claude/worktrees/amd-gi-cache-research-e46e2e/native/references/capsaicin/src/core/src/render_techniques/gi1/` (`gi1.comp`, `gi1.h`, `gi1.cpp`, `screen_probes.hlsl`, `gi1.hlsl`) and the shared `src/core/src/math/` files, mapped pass by pass in the research folder's `source-map.md` §3 (rows 2-11, 23, 25, 27, 28 for this phase). Ported WGSL keeps AMD's MIT notice.
+
+| ID | Task | Agent | Size | Depends on | Status |
+| --- | --- | --- | --- | --- | --- |
+| RC2.1 | Technique skeleton and screen probes: spawn (16×16 tiles, Halton jitter), compact, sample (64 rays, one per hemi-octahedral cell), trace, light hits directly, blend into the probe atlas; debug views of the atlas and the mask | implementer | M | RC1.1, RC1.3 | todo |
+| RC2.2 | First image: the probe mask mips, SH projection, interpolation per pixel, the shading module by `screenUV`, the three composite and the viewer's technique entry; the Lambert check | implementer | M | RC2.1 | todo |
+
+- **RC2.1 done-when.**
+  - `packages/ddgi-core/src/techniques/radiance-cache/` exists, importing only `platform/contract` (the RC1.2 rule), declaring the screen channels it needs, with its settings as Capsaicin's defaults (`gi1.h` `RenderOptions`, `probe_size` 8, `QuarterSpp`), each named and cited.
+  - Ported passes, each a WGSL kernel named after its Capsaicin entry point with the source line cited: `ClearCounters`, `SpawnScreenProbes` (Halton from `gi1.hlsl`; sky tiles spawn none), the scan and `CompactScreenProbes` through RC1.3's compaction, `SampleScreenProbes` as Capsaicin runs it for a probe with no history (ray guiding and the previous-probe taps arrive in phase 4), `PopulateScreenProbes` with the platform's closest-hit query, and `BlendScreenProbes` without temporal history (phase 4). Dispatches sized on the GPU go through RC1.3's indirect arguments.
+  - **Staging, not a divergence:** until the world cache (phase 3), every probe-ray hit takes Capsaicin's cache-bypass path, lit directly through platform hit shading (`giSurfaceAt`, `giDirectIrradiance`, emission; misses read `giSkyRadiance`). Capsaicin lights emissive and short-ray hits this way; phase 3 switches the rest to the cache. Written in the design doc's phase notes, not the register.
+  - GPU tests (RTX and Intel, correctness):
+    - spawn count and positions match a CPU port of the spawn rule on a fixed frame;
+    - compaction keeps exactly the non-sky tiles;
+    - every ray direction lies in its cell and on the normal's side;
+    - a probe under a constant white sky with nothing above it reads the sky's radiance in every cell within 1%.
+  - Debug views (probe atlas, probe mask) in the core, engine-free, and in the viewer's debug menu.
+- **RC2.2 done-when.**
+  - Ported passes, each with its source lines cited:
+    - `FilterProbeMask` (the mask mip chain);
+    - `ProjectScreenProbes` (SH L2, nine coefficients per probe);
+    - `InterpolateScreenProbes` without SSGI's bent normal (phase 4).
+
+    Units are checked against `ResolveGI1` so the output is irradiance E, and three's composite applies `albedo/π × E`.
+  - The technique's shading module returns E by `screenUV` from the interpolated screen texture. The three composite (T1.14) and the viewer's technique switcher take it like DDGI, with GI off/on/only and the split wipe against DDGI.
+  - **Lambert check (GPU test):** an open plane under a constant sky of radiance L reads E = πL within 1% per pixel (mean and p95) at the interpolated output.
+  - A single-bounce image on Cornell, two-room and Sponza in the viewer, with no errors and no NaN or negative pixels (checked by readback). A contact sheet in PROGRESS beside DDGI's image of the same view.
+  - Debug views of the SH (irradiance from the probe's SH along the normal) join the atlas and mask views.
+
 ## Carried to M2 (collected during M1)
 
 - `sponza-candles`: an opt-in scene with a stated subset of Intel's 10,000 candle lights, for the many-lights stress test (DECISIONS 2026-11-05).
