@@ -153,7 +153,8 @@ const ORIENTATION_GRID_CELLS = 8;
  * quadrants of different colours (any mirror or rotation moves at least two
  * of them), a white square marker near the uv origin (it says which corner is
  * (0, 0)), a white bar along the u axis from the marker (it says which way u
- * runs), and dark grid lines every eighth (they show tiling and scale).
+ * runs), and dark grid lines every eighth inside it (they show tiling and
+ * scale).
  */
 export function createOrientationTexture(name: string, palette: QuadrantPalette): SceneTextureData {
     const size = ORIENTATION_TEXTURE_SIZE;
@@ -170,8 +171,10 @@ export function createOrientationTexture(name: string, palette: QuadrantPalette)
         const inMarker = x >= markerMin && x < markerMax && y >= markerMin && y < markerMax;
         const inBar = x >= markerMax && x < barEnd && Math.abs(y + 0.5 - barCentre) < barHalfWidth;
         if (inMarker || inBar) return white;
-        // Grid lines one texel wide on each side of a cell edge, including the texture's own edges.
-        const onGrid = x % cell === 0 || x % cell === cell - 1 || y % cell === 0 || y % cell === cell - 1;
+        // Grid lines one texel wide on each side of every inner cell edge. Not on the texture's own
+        // edges: a clamped mapping smears its edge texels outwards, and those should show the quadrants.
+        const onGridLine = (coordinate: number) => (coordinate % cell === 0 && coordinate > 0) || (coordinate % cell === cell - 1 && coordinate < size - 1);
+        const onGrid = onGridLine(x) || onGridLine(y);
         if (onGrid) return gridLine;
         const quadrant = (x < size / 2 ? 0 : 1) + (y < size / 2 ? 0 : 2);
         return quadrants[quadrant];
