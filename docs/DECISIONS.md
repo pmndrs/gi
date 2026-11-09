@@ -4,6 +4,18 @@ Settled choices, newest first. Each entry is short: the decision, why, and what 
 
 ## 2026-11-09
 
+- **radiance-cache: a second technique, AMD's two-level radiance cache** (Dennis, 2026-11-09, from the research plan in the `ddgi` repo, `research/gi-1.0/PLAN.md`; the track's design is [docs/design/radiance-cache.md](design/radiance-cache.md)).
+  - *Home and name:* in this repo, beside DDGI, at `packages/ddgi-core/src/techniques/radiance-cache/`, import path `@pmndrs/ddgi/radiance-cache`, branch `radiance-cache` off `m2`. Docs say "based on AMD GI-1.0/1.2". Other names considered: `screen-cache`, `cached-gi`, `two-level`, `screen-probes`; `radiance-cache` is the paper's own term and covers any world-cache backend.
+  - *Faithful port first:* build Capsaicin v1.3's default configuration (GI-1.2) as AMD built it: algorithms, ray counts, rates, cache sizes, per-hit cache population. Performance ideas are measured levers beside the faithful path, never up-front rewrites. Why: a slow faithful path tells us what to fix (our BVH, a missing WebGPU feature); a rewrite up front hides it.
+  - *Divergence register:* every difference from Capsaicin is recorded with its kind (platform, license, quality, speed), its reason and a way back, including workarounds others use. It lives in the design doc.
+  - *No memory caps from WebGPU defaults:* the platform's `requiredLimits` asks for the adapter maximum (about 2 GiB bindings on both laptops), and the hash cache starts at Capsaicin's default (about 1 GiB). Capacity is a setting chosen by measured overflow and quality. A device that can't fit it gets `GILimitError` naming the limit.
+  - *Screen inputs, the most flexible route:* the host provides depth, normal, velocity, albedo and instance id through the platform's `FrameScreen` contract; the three adapter fills it from its MRT scene pass; a platform raster pass over the scene copy is the fallback for hosts that can't. If three r187 needs a backend step to hand over its targets, the smallest version-pinned one is taken and recorded.
+  - *Denoisers and upscaling* go to the sibling libraries `pmndrs/denoiser` and `pmndrs/upscaler`, used through their public APIs.
+  - *Start now, alongside M2's close-out.* Platform work lands as small, separable changes that M3/M4 agents can also use.
+  - *Brixelizer:* another workstream is porting it, so the world cache is a pluggable slot, designed in phase 3 with that port's needs in view.
+  - *id Tech 8* is a welcome source of performance levers (after the baseline).
+  - Revisit: the package split (platform into its own package) was to be revisited when a second technique ships; it ships behind the subpath until then.
+
 - **M2 sign-off answers** (Dennis, 2026-11-09, through the orchestrator's form; his choices quoted).
   - *The fork push:* "Lead pushes (Recommended)". The lead pushed branch `m2-t2.7` (665ef06, 3d6cd8e, 350f9de) to DennisSmolek/ddgi-rtxgi, and `m2-t2.10` was merged into `m2`.
   - *The Chrome 157 clock:* "Accept as floor (Recommended)". M2's numbers are a low-clock floor, with the clock recorded beside each (about 780–830 MHz for our pages; the Bistro re-runs at a fixed 1,200 MHz). M3's measurements (T3.9) re-time the clock-sensitive gates if the clock comes back.

@@ -479,6 +479,50 @@ Status: **draft, from T2.11 (2026-11-09).** Starts when Dennis signs off M2 (PR 
 | T3.18 | `userData.giRange` in the three adapter, so a host can cull a light in three without shortening its GI range (T2.8's candle reach). Host-facing API: the main session designs it first | main session, then implementer | S | none | todo |
 | T3.19 | Test flakes: `tools/assets/fetch.test.ts` and two other unit tests time out at 5 s when the CPU is busy (carried from M1 and seen again in M2); the Intel UHD hangs on the 4th page of 4-page GPU batches (run batches of 3 or fewer) | implementer | S | none | todo |
 
+## radiance-cache track (second technique)
+
+Status: **phase 1 started 2026-11-09** on branch `radiance-cache` (cut from `m2` at 5de856b), alongside M2's close-out. The design, the divergence register and the later phases are in [docs/design/radiance-cache.md](docs/design/radiance-cache.md); Dennis's decisions are in DECISIONS (2026-11-09, "radiance-cache"). The technique is a faithful port of AMD's GI-1.0/1.2 (Capsaicin v1.3) first; performance ideas are levers beside it.
+
+Rules for every row:
+- **Separable.** Each row is built on its own branch (`rc1-<n>`, from `radiance-cache`) and merged into `radiance-cache` after review, so each platform change can also merge to the main line alone.
+- **Subgroups first** with one declared fallback and a test of it (DECISIONS 2026-11-04).
+- **Hardware:** the RTX 3060 is the target and GPU timing is taken GPU-loaded under the bench lock (`tools/reference/bench-lock.ts`), VALID runs only; the Intel UHD is correctness only. Never time anything while a native Capsaicin run (`scene_viewer.exe`) is going.
+- **Every divergence from Capsaicin** (a three backend step, a missing feature) gets a register row in the design doc, numbered from D13, with its kind, reason and way back.
+- An Opus review against the done-when before a row is marked done.
+
+| ID | Task | Agent | Size | Depends on | Status |
+| --- | --- | --- | --- | --- | --- |
+| RC1.1 | Screen inputs: `FrameScreen` gets albedo; `ddgi-three` fills it from the host's MRT scene pass every frame; a debug view of every channel on Sponza; its cost measured | implementer, then gpu-tester (cost) | M | none | todo |
+| RC1.2 | Lint rule: technique code imports only `platform/contract` (SPEC claims this is enforced; only the engine boundary is) | main session | S | none | todo |
+| RC1.3 | Platform GPU utilities: prefix scan, stream compaction, indirect-dispatch arguments, shared with `packages/bvh`'s scans; subgroups first with one fallback | implementer | M | none | todo |
+| RC1.4 | Feature checks in three r187 and Chrome on the RTX 3060 and Intel UHD: indirect compute dispatch, `texture-formats-tier2` read-write `rgba16float`, subgroups, `shader-f16`, `timestamp-query` | implementer | S | none | todo |
+| RC1.5 | Ray cost table: closest-hit and any-hit Mrays/s for Capsaicin-shaped ray sets on Sponza with curtains and Bistro | implementer (ray sets), then gpu-tester (timing) | M | none | todo |
+
+### RC1 done-whens
+
+- **RC1.1 Screen inputs.**
+  - `FrameScreen` (`platform/contract/frame.ts`) gets an optional `albedo`: diffuse albedo in linear rgb, with metalness folded in exactly as the adapter folds it for GI albedo (T1.7), its format and encoding documented. DDGI and every existing page work unchanged without it.
+  - `ddgi-three` fills `FrameScreen` from the host's MRT scene pass (`pass(scene, camera)` with `mrt({...})`, as the T1.14 composite): depth, normal, velocity, albedo and instance id (instance id only when a technique asks for it), every frame, through resizes, without a copy when three's own textures can be handed over. If three r187 won't expose a target as a `GPUTexture` without reaching into its backend, the smallest version-pinned step is taken, tested against r187 (a check that fails loudly on another version), and recorded as a register row and a DECISIONS entry.
+  - A debug view in the core (engine-free) shows each channel: depth, normal, velocity, albedo, instance id. A GPU test page on Sponza (with curtains) checks, by readback, that each channel holds what three drew (normal and albedo against three's own MRT readback at sample pixels; instance id against the adapter's mesh-to-instance map; velocity zero for a still camera and non-zero for a moving one) on the RTX and the Intel UHD. The viewer gets the same views in its debug menu.
+  - The cost of filling `FrameScreen` (the extra MRT outputs and anything else the fill adds, against the T1.14 composite's own MRT) on Sponza at 1280×720 and 2560×1440, GPU-bound on the RTX, VALID, recorded in `bench/results/` and PROGRESS.
+- **RC1.2 Lint rule.**
+  - Production files under `packages/ddgi-core/src/techniques/**` may import from `platform/contract` (and their own technique) only; any other platform path fails `pnpm lint` with a message that says why. Tests under `techniques/` may use platform internals as fixtures (stated in the rule's comment).
+  - The platform may not import a technique (`platform/**` → `techniques/**`), except the core's entry points that assemble them.
+  - Checked by adding a forbidden import to a DDGI file and to a platform file (lint fails with the message), then reverting. SPEC's "lint-enforced" sentence matches what the rule does. `pnpm lint && pnpm typecheck && pnpm test` pass.
+- **RC1.3 Platform GPU utilities.**
+  - Exclusive prefix scan of `u32`, stream compaction (kept indices and their count, from a flag or predicate buffer), and an indirect-dispatch arguments writer (a GPU count to `[x, y, 1]` workgroups, split over two dimensions past `maxComputeWorkgroupsPerDimension`), as platform modules a technique uses through `platform/contract`.
+  - One scan implementation: `packages/bvh`'s subgroup scan is reused (or moved and shared), not copied. Subgroups first, with one declared fallback (workgroup memory) that doesn't assume subgroup lane order (NOTES).
+  - Tests: CPU references for every utility; GPU tests on the RTX and the Intel UHD at sizes 0, 1, one tile ± 1, and 10 M, with the subgroup path and the fallback (on a device without `subgroups`) giving identical results, and the indirect arguments consumed by a real `dispatchWorkgroupsIndirect`.
+  - The cost at 1 M and 10 M items on the RTX (one VALID run), in `bench/results/` and PROGRESS.
+- **RC1.4 Feature checks.**
+  - A GPU page runs a functional check of each feature (not just `features.has`): a GPU-written indirect dispatch runs the right number of workgroups; a kernel reads and writes the same `rgba16float` storage texture with `texture-formats-tier2`; `subgroupAdd` gives the right sum and the sizes are reported; an `f16` kernel computes the right result; timestamps come back ordered and non-zero.
+  - Each is checked on a device our code creates, and on the device three r187's `WebGPURenderer` creates for itself (which features three asks for), on the RTX and the Intel UHD in Chrome.
+  - A results table (feature × GPU × our device / three's device) in PROGRESS and rows in `bench/results/checks.csv`. Every gap gets a register row (D13 on) with its declared fallback (the design doc's "Feature fallbacks" table).
+- **RC1.5 Ray cost table.**
+  - Ray sets shaped like Capsaicin's defaults, from the scene's first bookmark at 1280×720 (the cameras `native-capsaicin.md` used): one probe per 16×16 tile placed by a primary ray through a jittered point in the tile (80 × 45 = 3,600 tiles; tiles that see sky place none), 64 cosine-weighted rays per probe about the surface normal (closest hit, no length limit); multi-bounce rays, 0.3× the probe rays, one cosine ray each from a random subset of probe-ray hits (an approximation of Capsaicin's multi-bounce cells, stated as such); one shadow ray (any hit) per hit of both sets toward one light sampled per hit (the sun where the scene has one).
+  - Closest-hit and any-hit Mrays/s for each set through the platform's tracer, on `sponza` (with curtains), `bistro-interior` and `bistro-exterior`, on the RTX, 3 VALID runs (median and spread), into `bench/results/trace.csv`. The Intel UHD runs once for correctness (no timing claims).
+  - A table in PROGRESS: per scene, each set's ray count, rate and predicted ms, their sum, beside Capsaicin's native "probe tracing and cell population" group (the design doc's yardstick). This predicts the baseline's tracing cost; it doesn't change the baseline.
+
 ## Carried to M2 (collected during M1)
 
 - `sponza-candles`: an opt-in scene with a stated subset of Intel's 10,000 candle lights, for the many-lights stress test (DECISIONS 2026-11-05).
