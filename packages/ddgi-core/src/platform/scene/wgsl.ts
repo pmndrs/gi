@@ -480,16 +480,28 @@ fn giSceneTriangleMaterialSlot(mesh: u32, triangle: u32) -> u32 {
     return (word >> ((triangle & 1u) * 16u)) & 0xffffu;
 }
 
-// The material (an index for giMaterial) this triangle of this instance uses.
-fn giMaterialAt(instance: u32, triangle: u32) -> u32 {
+// An instance's material list: (its first word, relative to the list section;
+// its number of entries, one per material slot of the mesh).
+fn giSceneInstanceMaterialList(instance: u32) -> vec2u {
     let base = giSceneInstanceBase(instance);
     let listStart = giSceneTables[base + ${vec4Of(INSTANCE_WORD.materialListStart)}u].${componentOf(INSTANCE_WORD.materialListStart)};
     let listCount = giSceneTables[base + ${vec4Of(INSTANCE_WORD.materialListCount)}u].${componentOf(INSTANCE_WORD.materialListCount)};
+    return vec2u(listStart, listCount);
+}
+
+// The material (an index for giMaterial) at 'position' of a list starting at 'listStart'.
+fn giSceneMaterialListEntry(listStart: u32, position: u32) -> u32 {
+    let listsBase = giSceneTables[${headerExtra}].${componentOf(HEADER_WORD.materialListsBase)};
+    return giSceneTableWord(listsBase * 4u + listStart + position);
+}
+
+// The material (an index for giMaterial) this triangle of this instance uses.
+fn giMaterialAt(instance: u32, triangle: u32) -> u32 {
+    let list = giSceneInstanceMaterialList(instance);
     // The CPU checks that an instance names a material for every slot. If the
     // mesh changes shape later and uses more slots, the last material stands in.
-    let slot = min(giSceneTriangleMaterialSlot(giInstanceMesh(instance), triangle), max(listCount, 1u) - 1u);
-    let listsBase = giSceneTables[${headerExtra}].${componentOf(HEADER_WORD.materialListsBase)};
-    return giSceneTableWord(listsBase * 4u + listStart + slot);
+    let slot = min(giSceneTriangleMaterialSlot(giInstanceMesh(instance), triangle), max(list.y, 1u) - 1u);
+    return giSceneMaterialListEntry(list.x, slot);
 }
 
 fn giSceneUvMapping(transform: vec4u, translationAndPacked: vec4u) -> GiUvMapping {

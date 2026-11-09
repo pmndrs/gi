@@ -94,14 +94,31 @@ export function stageSource(device: GPUDevice, source: TextureSource, srgb: bool
         format: 'rgba8unorm',
         usage: TEXTURE_USAGE.textureBinding | TEXTURE_USAGE.copyDst | TEXTURE_USAGE.renderAttachment,
     });
-    if (kind === 'pixels') {
-        const pixels = source as PixelData;
-        device.queue.writeTexture({ texture: staging }, pixels.data as Uint8Array<ArrayBuffer>, { bytesPerRow: width * 4, rowsPerImage: height }, { width, height });
-    } else {
-        // The image's own bytes, unconverted: no premultiplication, no flip, sRGB-encoded as image files are.
-        device.queue.copyExternalImageToTexture({ source: source as GPUCopyExternalImageSource, flipY: false }, { texture: staging, premultipliedAlpha: false }, { width, height });
-    }
+    uploadOrDestroy(staging, () => {
+        if (kind === 'pixels') {
+            const pixels = source as PixelData;
+            device.queue.writeTexture({ texture: staging }, pixels.data as Uint8Array<ArrayBuffer>, { bytesPerRow: width * 4, rowsPerImage: height }, { width, height });
+        } else {
+            // The image's own bytes, unconverted: no premultiplication, no flip, sRGB-encoded as image files are.
+            device.queue.copyExternalImageToTexture({ source: source as GPUCopyExternalImageSource, flipY: false }, { texture: staging, premultipliedAlpha: false }, { width, height });
+        }
+    });
     return { view: staging.createView({ label: `${label} staging`, dimension: '2d' }), encoded: srgb, staging };
+}
+
+/**
+ * Runs a staging texture's upload; if it throws (a closed image, a detached
+ * buffer), the texture is destroyed before the error goes on to the store,
+ * which refuses that source alone (texture-store.ts, `stageCatching`). Nothing
+ * else holds the texture then, so it would only wait for garbage collection.
+ */
+function uploadOrDestroy(staging: GPUTexture, upload: () => void): void {
+    try {
+        upload();
+    } catch (error) {
+        staging.destroy();
+        throw error;
+    }
 }
 
 function hostTexture(texture: GPUTexture, srgb: boolean): StagedSource | UnusableSource {
@@ -136,6 +153,6 @@ function compressedTexture(device: GPUDevice, source: CompressedPixelData, srgb:
     }
     const size = { width: blocksWide * block.width, height: blocksHigh * block.height };
     const staging = device.createTexture({ label: `${label} staging (${format})`, size, format, usage: TEXTURE_USAGE.textureBinding | TEXTURE_USAGE.copyDst });
-    device.queue.writeTexture({ texture: staging }, level.data as Uint8Array<ArrayBuffer>, { bytesPerRow: blocksWide * block.bytes, rowsPerImage: blocksHigh }, size);
+    uploadOrDestroy(staging, () => device.queue.writeTexture({ texture: staging }, level.data as Uint8Array<ArrayBuffer>, { bytesPerRow: blocksWide * block.bytes, rowsPerImage: blocksHigh }, size));
     return { view: staging.createView({ label: `${label} staging`, dimension: '2d' }), encoded: srgb && !decodesSrgb(format), staging };
 }

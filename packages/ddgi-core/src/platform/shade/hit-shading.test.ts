@@ -5,6 +5,7 @@ import { SCENE_MODULE_ENTRIES, sceneModuleWgsl } from '../scene/wgsl.ts';
 import { liftSunAboveMinimum, unusableEnvironmentTexture } from '../sky/platform-sky.ts';
 import { projectionWgsl, RADIANCE_SH_COUNT, SKY_HARMONICS_LAYOUT } from '../sky/projection-wgsl.ts';
 import { SH_COEFFICIENT_COUNT } from '../sky/spherical-harmonics.ts';
+import { createTextureSamplingModule, TEXTURE_SAMPLING_ENTRIES, textureSamplingWgsl } from '../textures/texture-sampling-wgsl.ts';
 import { SKY_CHANGE_MODULE_ENTRIES, SKY_RADIANCE_SH_BYTES, skyChangeModuleWgsl } from './sky-change.ts';
 import { DEFAULT_HIT_SHADING_SETTINGS, PlatformHitShading } from './hit-shading.ts';
 import { SHADE_MODULE_ENTRIES, SHADE_UNIFORM_LAYOUT, shadeModuleWgsl } from './wgsl.ts';
@@ -21,8 +22,16 @@ function fakeDevice(features: string[] = []): GPUDevice {
     } as unknown as GPUDevice;
 }
 
-/** The texture store as hit shading binds it: a view and a version (textures/texture-store.ts). */
-const TEXTURES = { view: { label: 'texture store' } as unknown as GPUTextureView, version: 0 };
+/** The texture store as its sampling module binds it: a view, a sampler and a version (textures/texture-sampling-wgsl.ts). */
+const STORE_BINDING = { view: { label: 'texture store' } as unknown as GPUTextureView, sampler: { label: 'store sampler' } as unknown as GPUSampler, version: 0 };
+
+/** A store stand-in that hands out one sampling module, as `PlatformTextureStore.samplingModule` does. */
+function storeFor(binding: { view: GPUTextureView; sampler: GPUSampler; version: number }) {
+    let module: WgslModule | null = null;
+    return { samplingModule: (sceneModule: WgslModule) => (module ??= createTextureSamplingModule(sceneModule, binding)) };
+}
+
+const TEXTURES = storeFor(STORE_BINDING);
 
 /** A kernel builder these tests never call: hit shading only compiles gi/direct when a technique prepares it. */
 const NO_KERNELS: KernelBuilder = {
@@ -50,7 +59,7 @@ describe('hit shading', () => {
         expect(scene.storageBufferCount + shade.module.storageBufferCount).toBe(2);
         // With the tracer's 3, a DDGI update kernel has 3 of its 8 left for its own buffers (it uses 2).
         const modules = orderModules([shade.module]);
-        expect(modules.map((module) => module.name)).toEqual(['gi-scene', 'gi-rays', 'gi-light-falloff', 'gi-shade']);
+        expect(modules.map((module) => module.name)).toEqual(['gi-scene', 'gi-rays', 'gi-texture-store', 'gi-light-falloff', 'gi-shade']);
         // The falloff is the same object as the platform's, so a kernel listing both includes it once.
         expect(orderModules([shade.lightFalloff, shade.module]).filter((module) => module === shade.lightFalloff)).toHaveLength(1);
         expect(shade.lightFalloff.storageBufferCount + shade.lightFalloff.entries.length).toBe(0);
@@ -76,30 +85,37 @@ describe('hit shading', () => {
         }
     });
 
-    it('places its six entries after the modules it depends on: the light grid picks, then the texture store and its sampler', () => {
+    it('places its four entries after the modules it depends on, the texture store with its sampler among them', () => {
         const shade = new PlatformHitShading(fakeDevice(), NO_KERNELS, scene, rays, TEXTURES);
         const placed = placeModules(orderModules([shade.module]));
+        // Scene, rays (no entries in this stub), the texture store's two, the falloff (none), then hit shading's.
+        expect(placed[2].module.name).toBe('gi-texture-store');
         expect(placed[2].slot.firstBinding).toBe(SCENE_MODULE_ENTRIES.length);
+        expect(placed[4].slot.firstBinding).toBe(SCENE_MODULE_ENTRIES.length + TEXTURE_SAMPLING_ENTRIES.length);
         expect(shade.module.entries).toBe(SHADE_MODULE_ENTRIES);
-        expect(shade.module.resources()).toHaveLength(6);
-        expect(shade.module.resources()[4]).toBe(TEXTURES.view);
+        expect(shade.module.resources()).toHaveLength(4);
         expect(SHADE_MODULE_ENTRIES[3].texture?.sampleType).toBe('uint');
-        expect(SHADE_MODULE_ENTRIES[4].texture?.viewDimension).toBe('2d-array');
-        expect(SHADE_MODULE_ENTRIES[5].sampler?.type).toBe('filtering');
+        expect(TEXTURE_SAMPLING_ENTRIES[0].texture?.viewDimension).toBe('2d-array');
+        expect(TEXTURE_SAMPLING_ENTRIES[1].sampler?.type).toBe('filtering');
+        expect(placed[2].module.resources()).toEqual([STORE_BINDING.view, STORE_BINDING.sampler]);
         const code = shadeModuleWgsl({ group: 0, firstBinding: 7 });
         expect(code).toContain('@group(0) @binding(10) var giLightGridPicks: texture_2d<u32>');
-        expect(code).toContain('@group(0) @binding(11) var giTextureStore: texture_2d_array<f32>');
-        expect(code).toContain('@group(0) @binding(12) var giTextureSampler: sampler');
+        const samplingCode = textureSamplingWgsl({ group: 0, firstBinding: 11 });
+        expect(samplingCode).toContain('@group(0) @binding(11) var giTextureStore: texture_2d_array<f32>');
+        expect(samplingCode).toContain('@group(0) @binding(12) var giTextureSampler: sampler');
         // No grid until a scene has many lights: the module's resources are those it was made with.
         expect(shade.module.version).toBe(0);
     });
 
-    it("follows the texture store's version, so kernels rebind when its array grows", () => {
-        const textures = { view: TEXTURES.view, version: 0 };
-        const shade = new PlatformHitShading(fakeDevice(), NO_KERNELS, scene, rays, textures);
-        const before = shade.module.version;
-        textures.version = 1;
-        expect(shade.module.version).not.toBe(before);
+    it("binds the texture store through a module that follows the store's version, so kernels rebind when its array grows", () => {
+        const binding = { ...STORE_BINDING, version: 0 };
+        const shade = new PlatformHitShading(fakeDevice(), NO_KERNELS, scene, rays, storeFor(binding));
+        const sampling = shade.module.dependencies.find((module) => module.name === 'gi-texture-store');
+        expect(sampling).toBeDefined();
+        const before = sampling!.version;
+        binding.version = 1;
+        expect(sampling!.version).not.toBe(before);
+        expect(sampling!.storageBufferCount).toBe(0);
     });
 
     it('writes the sampleTextures setting when it changes, on by default', () => {

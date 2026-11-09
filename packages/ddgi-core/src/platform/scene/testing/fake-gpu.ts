@@ -4,8 +4,9 @@
  * buffer copies run when the test "submits" them.
  *
  * The order matches WebGPU's queue timeline: `writeBuffer` lands at once
- * (it is queued ahead of any later submit), while copies recorded in an
- * encoder happen at `submit`. It also counts shader modules and pipelines,
+ * (it is queued ahead of any later submit), while copies and clears recorded
+ * in an encoder happen at `submit`. A buffer made `mappedAtCreation` holds
+ * what was written into its mapped range. It also counts shader modules and pipelines,
  * so a test can show that scene changes never create any. Test-only: not
  * exported from the package.
  */
@@ -48,6 +49,13 @@ export class FakeBuffer {
         this.destroyed = true;
     }
 
+    /** The whole buffer's bytes, for a buffer made `mappedAtCreation`. */
+    getMappedRange(): ArrayBuffer {
+        return this.bytes.buffer as ArrayBuffer;
+    }
+
+    unmap(): void {}
+
     get words(): Uint32Array {
         return new Uint32Array(this.bytes.buffer);
     }
@@ -82,7 +90,13 @@ interface RecordedDispatch {
     workgroupsY: number;
 }
 
-type RecordedCommand = { copy: RecordedCopy } | { dispatch: RecordedDispatch };
+interface RecordedClear {
+    buffer: FakeBuffer;
+    offset: number;
+    size: number;
+}
+
+type RecordedCommand = { copy: RecordedCopy } | { dispatch: RecordedDispatch } | { clear: RecordedClear };
 
 interface FakePipeline {
     readonly entryPoint: string;
@@ -113,6 +127,11 @@ export class FakeEncoder {
         });
     }
 
+    clearBuffer(buffer: GPUBuffer, offset = 0, size?: number): void {
+        const target = buffer as unknown as FakeBuffer;
+        this.commands.push({ clear: { buffer: target, offset, size: size ?? target.size - offset } });
+    }
+
     /** Records dispatches; bind group 0's buffers are what a kernel stand-in gets. */
     beginComputePass(): GPUComputePassEncoder {
         let pipeline: FakePipeline | null = null;
@@ -128,6 +147,8 @@ export class FakeEncoder {
                 if (!pipeline || !group) throw new Error('dispatch without a pipeline and bind group 0');
                 const bindings = new Map<number, FakeBinding>();
                 for (const entry of group.entries) {
+                    // Texture views and samplers (the texture store's) have nothing for a kernel stand-in.
+                    if (!('buffer' in (entry.resource as object))) continue;
                     const resource = entry.resource as GPUBufferBinding;
                     const buffer = resource.buffer as unknown as FakeBuffer;
                     const offset = resource.offset ?? 0;
@@ -166,6 +187,7 @@ export function createFakeGpu(limits: Partial<GPUSupportedLimits> = {}, options:
         // Core defaults, which the platform's kernels need (KERNEL_COMPUTE_LIMITS).
         maxComputeInvocationsPerWorkgroup: 256,
         maxComputeWorkgroupSizeX: 256,
+        maxTextureArrayLayers: 256,
         ...limits,
     };
     const device = {
@@ -178,6 +200,13 @@ export function createFakeGpu(limits: Partial<GPUSupportedLimits> = {}, options:
         },
         createShaderModule() {
             counters.shaderModules++;
+            return {};
+        },
+        // Textures and samplers hold nothing here: kernels that sample them (the texture store's) have no CPU stand-in.
+        createTexture(descriptor: GPUTextureDescriptor) {
+            return { ...descriptor, createView: () => ({}), destroy() {} };
+        },
+        createSampler() {
             return {};
         },
         createComputePipeline(descriptor: GPUComputePipelineDescriptor) {
@@ -227,6 +256,12 @@ export function createFakeGpu(limits: Partial<GPUSupportedLimits> = {}, options:
                     const { entryPoint, bindings, workgroupsX, workgroupsY } = command.dispatch;
                     for (const binding of bindings.values()) if (binding.buffer.destroyed) throw new Error('submit uses a destroyed buffer');
                     options.kernels?.[entryPoint]?.(bindings, workgroupsX, workgroupsY);
+                    continue;
+                }
+                if ('clear' in command) {
+                    const { buffer, offset, size } = command.clear;
+                    if (buffer.destroyed) throw new Error('submit uses a destroyed buffer');
+                    buffer.bytes.fill(0, offset, offset + size);
                     continue;
                 }
                 const copy = command.copy;

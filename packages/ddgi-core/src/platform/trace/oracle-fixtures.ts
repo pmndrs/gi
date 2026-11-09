@@ -5,7 +5,9 @@
  * Everything is seeded so a failing case can be reproduced exactly.
  */
 
-import type { WalkMaterial, WalkMaterialLookup } from './material-test-wgsl.ts';
+import type { UvMapping } from '../contract/scene.ts';
+import { buildStoreLayerOnCpu, type CpuPixelSource, type CpuStoreLayer } from '../textures/texture-store-cpu.ts';
+import type { WalkMaterial, WalkMaterialLookup, WalkUvLookup } from './material-test-wgsl.ts';
 import type { MeshGeometry } from './mesh-bvh.ts';
 import type { TraceSceneInstance } from './scene-assembly.ts';
 import type { TraceRay } from './trace-gpu.ts';
@@ -148,6 +150,19 @@ export const SEE_THROUGH: WalkMaterial = { blocksLight: false, doubleSided: true
 export const SINGLE_SIDED: WalkMaterial = { blocksLight: true, doubleSided: false };
 
 /**
+ * A texture of a material case: the test's own RGBA8 pixels (what a page
+ * hands the platform as `PixelData`) and the store layer the CPU makes from
+ * them (`buildStoreLayerOnCpu`), which the reference's alpha reads. A
+ * material's `albedoTexture.layer` is this `layer` object.
+ */
+export interface CaseTexture {
+    readonly name: string;
+    readonly pixels: CpuPixelSource;
+    readonly srgb: boolean;
+    readonly layer: CpuStoreLayer;
+}
+
+/**
  * A scene for the material rules: meshes whose triangles use material slots,
  * instances that give each slot a material, and rays aimed at the surfaces
  * from both sides. Instance `i` of `instances` has `instanceIndex` `i`.
@@ -159,6 +174,10 @@ export interface MaterialCase {
     readonly meshes: readonly MeshGeometry[];
     /** Per mesh, each triangle's material slot, in index order. */
     readonly triangleSlots: readonly Uint32Array[];
+    /** Per mesh, its uv sets 0 and 1 (two numbers a vertex; `MeshDescriptor.uvs`, `uvs1`), or null where it has none. */
+    readonly uvs?: readonly (readonly [Float32Array | null, Float32Array | null])[];
+    /** The textures the materials use. */
+    readonly textures?: readonly CaseTexture[];
     readonly instances: readonly TraceSceneInstance[];
     /** Per instance, its material for each slot (`InstanceDescriptor.materials`). */
     readonly materials: readonly (readonly WalkMaterial[])[];
@@ -179,6 +198,26 @@ export function materialLookup(materialCase: MaterialCase, materials: readonly (
     };
 }
 
+/**
+ * A triangle's corner uvs in a case, `[u0, v0, u1, v1, u2, v2]`, from its
+ * mesh's uv set; null where the mesh has no such set.
+ */
+export function uvLookup(materialCase: MaterialCase): WalkUvLookup {
+    return (instanceIndex, triangleIndex, channel) => {
+        const meshIndex = materialCase.instances[instanceIndex].meshIndex;
+        const uvs = materialCase.uvs?.[meshIndex]?.[channel];
+        const indices = materialCase.meshes[meshIndex].indices;
+        if (!uvs || !indices) return null;
+        const corners = new Float64Array(6);
+        for (let corner = 0; corner < 3; corner++) {
+            const vertex = indices[triangleIndex * 3 + corner];
+            corners[corner * 2] = uvs[vertex * 2];
+            corners[corner * 2 + 1] = uvs[vertex * 2 + 1];
+        }
+        return corners;
+    };
+}
+
 /** Runs of consecutive triangles with one slot, as `MeshDescriptor.groups` takes them (in indices, not triangles). */
 export function slotRuns(slots: Uint32Array): { start: number; count: number; materialSlot: number }[] {
     const runs: { start: number; count: number; materialSlot: number }[] = [];
@@ -190,9 +229,10 @@ export function slotRuns(slots: Uint32Array): { start: number; count: number; ma
     return runs;
 }
 
-/** Collects quads and grids with a material slot per triangle. */
+/** Collects quads and grids with a material slot per triangle, and uvs where they have them. */
 class SlottedMeshBuilder {
     private readonly positions: number[] = [];
+    private readonly uvs: number[] = [];
     private readonly indices: number[] = [];
     private readonly slots: number[] = [];
 
@@ -200,6 +240,9 @@ class SlottedMeshBuilder {
     quad(corners: readonly Vector3[], slot: number): void {
         const first = this.positions.length / 3;
         for (const corner of corners) this.positions.push(...corner);
+        // Texture (0, 0) at the second corner's opposite: corners 0 1 2 3 get (0,1) (1,1) (1,0) (0,0),
+        // so a quad listed bottom-left first, counter-clockwise, shows the image upright.
+        this.uvs.push(0, 1, 1, 1, 1, 0, 0, 0);
         this.indices.push(first, first + 1, first + 2, first, first + 2, first + 3);
         this.slots.push(slot, slot);
     }
@@ -211,7 +254,15 @@ class SlottedMeshBuilder {
      */
     grid(xs: readonly number[], ys: readonly number[], slotOf: (column: number, row: number) => number): void {
         const first = this.positions.length / 3;
-        for (const y of ys) for (const x of xs) this.positions.push(x, y, 0);
+        // uvs over the whole grid: u left to right, v top to bottom (texture (0, 0) is the image's top-left).
+        const [left, right] = [xs[0], xs[xs.length - 1]];
+        const [bottom, top] = [ys[0], ys[ys.length - 1]];
+        for (const y of ys) {
+            for (const x of xs) {
+                this.positions.push(x, y, 0);
+                this.uvs.push((x - left) / (right - left), (top - y) / (top - bottom));
+            }
+        }
         const columns = xs.length;
         for (let row = 0; row + 1 < ys.length; row++) {
             for (let column = 0; column + 1 < columns; column++) {
@@ -227,10 +278,11 @@ class SlottedMeshBuilder {
         }
     }
 
-    build(): { mesh: MeshGeometry; slots: Uint32Array } {
+    build(): { mesh: MeshGeometry; slots: Uint32Array; uvs: Float32Array } {
         return {
             mesh: { positions: Float32Array.from(this.positions, Math.fround), indices: Uint32Array.from(this.indices) },
             slots: Uint32Array.from(this.slots),
+            uvs: Float32Array.from(this.uvs),
         };
     }
 }
@@ -382,4 +434,193 @@ export function buildMaterialCases(raysPerCase: number, seed = 0x7a42): Material
     };
 
     return [glass, singleSided, perInstance];
+}
+
+// ---------------------------------------------------------------------------
+// Alpha in the walk (T4.2, second half)
+// ---------------------------------------------------------------------------
+
+/**
+ * An RGBA8 image of `size` × `size` whose texel (x, y) (row 0 at the top) is
+ * opaque red where `opaque(x, y)` and clear blue elsewhere. Red and blue so
+ * a coarse mip that took in the clear texels' colour shows it (the
+ * alpha-weighted mips check).
+ */
+export function alphaPatternImage(size: number, opaque: (x: number, y: number) => boolean): CpuPixelSource {
+    const data = new Uint8Array(size * size * 4);
+    for (let y = 0; y < size; y++) {
+        for (let x = 0; x < size; x++) {
+            data.set(opaque(x, y) ? [255, 0, 0, 255] : [0, 0, 255, 0], (y * size + x) * 4);
+        }
+    }
+    return { width: size, height: size, data };
+}
+
+/** A case texture: the pixels, and their store layer made on the CPU. */
+export function caseTexture(name: string, pixels: CpuPixelSource, srgb = true): CaseTexture {
+    return { name, pixels, srgb, layer: buildStoreLayerOnCpu(pixels, srgb) };
+}
+
+/** A 16 × 16 checkerboard of opaque and clear texels: half of a wall it covers is open. */
+export const CHECKER_SIZE = 16;
+export function checkerImage(): CpuPixelSource {
+    return alphaPatternImage(CHECKER_SIZE, (x, y) => (x + y) % 2 === 0);
+}
+
+/** A 16 × 16 pattern with no symmetry a mirror or a turn would hide: rows of different lengths, offset. */
+export function asymmetricImage(): CpuPixelSource {
+    return alphaPatternImage(16, (x, y) => (x * 7 + y * 3) % 11 < 5 || (y < 4 && x < 9));
+}
+
+/** A cutout material (cutoff 0.5) whose alpha is a case texture's, through `uv`. */
+export function cutoutMaterial(texture: CaseTexture, uv?: UvMapping): WalkMaterial {
+    return { blocksLight: true, doubleSided: true, alphaMode: 'cutout', alphaCutoff: 0.5, opacity: 1, albedoTexture: { layer: texture.layer, uv } };
+}
+
+/** A stochastic material of constant alpha (no texture): a share 1 − `opacity` of the rays passes. */
+export function stochasticMaterial(opacity: number): WalkMaterial {
+    return { blocksLight: true, doubleSided: true, alphaMode: 'stochastic', alphaCutoff: 0, opacity };
+}
+
+/** A uniform 16 × 16 texture whose alpha is the byte `alphaByte` everywhere (colour grey). */
+export function uniformAlphaImage(alphaByte: number): CpuPixelSource {
+    const data = new Uint8Array(16 * 16 * 4);
+    for (let texel = 0; texel < 16 * 16; texel++) data.set([128, 128, 128, alphaByte], texel * 4);
+    return { width: 16, height: 16, data };
+}
+
+/** The byte the stochastic case's texture holds in alpha: about a half, so texture and opacity both matter. */
+const STOCHASTIC_TEXTURE_ALPHA = 128;
+
+/** The uv transform of the mirrored-cutout case: turned 30°, scaled, offset, so mirror wrap folds it several times. */
+export const TURNED_UV: UvMapping = (() => {
+    const angle = Math.PI / 6;
+    const [scaleU, scaleV] = [2.3, 1.7];
+    const cos = Math.cos(angle);
+    const sin = Math.sin(angle);
+    return { channel: 1, matrix: [cos * scaleU, sin * scaleV, -sin * scaleU, cos * scaleV, 0.37, -0.21], wrapU: 'mirror', wrapV: 'mirror' };
+})();
+
+/**
+ * The alpha cases of T4.2's second half (done-when 1):
+ *
+ * - `checker-cutout-wall`: a 3 x 3 m wall mesh (a grid of 4 x 4 cells,
+ *   shared vertices) whose albedo texture is a 16 x 16 checkerboard of clear
+ *   and opaque texels (one texel = 1/16 of the wall), cutout at 0.5; opaque
+ *   walls 2 m in front and behind.
+ * - `cutout-uv-mirror`: a cutout quad reading an asymmetric pattern through
+ *   uv set 1 (the quad's uvs turned around) and a turned, scaled, offset uv
+ *   transform with mirror wrap on both axes; a second, mirrored instance.
+ * - `stochastic-quad`: a quad of constant alpha `stochasticAlpha`, stochastic:
+ *   a share 1 − alpha of the rays that meet it pass. Judged on that share.
+ *   The alpha is opacity × a texture's alpha (a uniform texture of alpha
+ *   128/255, and the opacity that makes the product `stochasticAlpha`), so the
+ *   GPU's stochastic rule reads the texture too: one that ignored the texture
+ *   would let about half the rays through instead.
+ */
+export function buildAlphaCases(raysPerCase: number, stochasticRays = raysPerCase, stochasticAlpha = 0.25, seed = 0xa1fa): MaterialCase[] {
+    const random = createRandom(seed);
+    const inFront: Box = [
+        [-4.5, -1, 0.2],
+        [4.5, 4, 1.8],
+    ];
+    const behind: Box = [
+        [-4.5, -1, -1.8],
+        [4.5, 4, -0.2],
+    ];
+    const backdrop = backdropMesh(6);
+    const backdropInstances = (first: number): TraceSceneInstance[] => [
+        { meshIndex: 1, instanceIndex: first, objectToWorld: placement([0, 1.5, -2]) },
+        { meshIndex: 1, instanceIndex: first + 1, objectToWorld: placement([0, 1.5, 2]) },
+    ];
+
+    const checker = caseTexture('checker', checkerImage());
+    const wall = new SlottedMeshBuilder();
+    wall.grid([-1.5, -0.75, 0, 0.75, 1.5], [0, 0.75, 1.5, 2.25, 3], () => 0);
+    const wallMesh = wall.build();
+    const checkerWall: MaterialCase = {
+        name: 'checker-cutout-wall',
+        description: 'a 3 x 3 m wall cut out by a 16 x 16 checkerboard texture (cutoff 0.5), opaque walls in front and behind',
+        meshes: [wallMesh.mesh, backdrop.mesh],
+        triangleSlots: [wallMesh.slots, backdrop.slots],
+        uvs: [
+            [wallMesh.uvs, null],
+            [null, null],
+        ],
+        textures: [checker],
+        instances: [{ meshIndex: 0, instanceIndex: 0, objectToWorld: placement([0, 0, 0]) }, ...backdropInstances(1)],
+        materials: [[cutoutMaterial(checker)], [OPAQUE], [OPAQUE]],
+        rays: aimedRays(random, raysPerCase, [inFront, behind], [
+            [
+                [-1.6, -0.1, 0],
+                [1.6, 3.1, 0],
+            ],
+        ]),
+    };
+
+    const asymmetric = caseTexture('asymmetric', asymmetricImage());
+    const quad = new SlottedMeshBuilder();
+    quad.quad(
+        [
+            [-1, -1, 0],
+            [1, -1, 0],
+            [1, 1, 0],
+            [-1, 1, 0],
+        ],
+        0,
+    );
+    const quadMesh = quad.build();
+    // uv set 1: set 0 turned half around, so reading the wrong set shows.
+    const turnedUvs = quadMesh.uvs.map((value) => 1 - value);
+    const mirrored: MaterialCase = {
+        name: 'cutout-uv-mirror',
+        description: 'a cutout quad read through uv set 1, a turned, scaled, offset uv transform and mirror wrap; a mirrored second instance',
+        meshes: [quadMesh.mesh, backdrop.mesh],
+        triangleSlots: [quadMesh.slots, backdrop.slots],
+        uvs: [
+            [quadMesh.uvs, turnedUvs],
+            [null, null],
+        ],
+        textures: [asymmetric],
+        instances: [
+            { meshIndex: 0, instanceIndex: 0, objectToWorld: placement([-1.5, 1.5, 0]) },
+            { meshIndex: 0, instanceIndex: 1, objectToWorld: placement([1.5, 1.5, 0], [-1, 1, 1]) },
+            ...backdropInstances(2),
+        ],
+        materials: [[cutoutMaterial(asymmetric, TURNED_UV)], [cutoutMaterial(asymmetric, TURNED_UV)], [OPAQUE], [OPAQUE]],
+        rays: aimedRays(random, raysPerCase, [inFront, behind], [
+            [
+                [-2.6, 0.4, 0],
+                [2.6, 2.6, 0],
+            ],
+        ]),
+    };
+
+    const halfAlpha = caseTexture('half alpha', uniformAlphaImage(STOCHASTIC_TEXTURE_ALPHA));
+    const textureAlpha = STOCHASTIC_TEXTURE_ALPHA / 255;
+    const stochasticTextured: WalkMaterial = {
+        ...stochasticMaterial(Math.min(1, stochasticAlpha / textureAlpha)),
+        albedoTexture: { layer: halfAlpha.layer },
+    };
+    const stochastic: MaterialCase = {
+        name: 'stochastic-quad',
+        description: `a quad of constant alpha ${stochasticAlpha} (opacity x a uniform texture alpha), stochastic, opaque walls in front and behind`,
+        meshes: [quadMesh.mesh, backdrop.mesh],
+        triangleSlots: [quadMesh.slots, backdrop.slots],
+        uvs: [
+            [quadMesh.uvs, null],
+            [null, null],
+        ],
+        textures: [halfAlpha],
+        instances: [{ meshIndex: 0, instanceIndex: 0, objectToWorld: placement([0, 1.5, 0], [1.5, 1.5, 1]) }, ...backdropInstances(1)],
+        materials: [[stochasticTextured], [OPAQUE], [OPAQUE]],
+        rays: aimedRays(random, stochasticRays, [inFront, behind], [
+            [
+                [-1.4, 0.1, 0],
+                [1.4, 2.9, 0],
+            ],
+        ]),
+    };
+
+    return [checkerWall, mirrored, stochastic];
 }

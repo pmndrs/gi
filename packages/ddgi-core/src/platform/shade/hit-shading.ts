@@ -8,9 +8,10 @@
  * when the scene has more point and spot lights than `exactLightLimit`. The
  * module's resources are allocated once, except the light grid's picks
  * texture, which is made when a scene first needs the grid and grows with
- * its cells, and the texture store's array, which grows with the scene's
- * textures (textures/texture-store.ts); the module's `version` follows both,
- * so kernels rebuild their bind group only then. The sky-change module
+ * its cells; the module's `version` follows it, so kernels rebuild their
+ * bind group only then. The texture store's array and sampler are bound by
+ * the store's sampling module (textures/texture-sampling-wgsl.ts), which
+ * this module depends on and which follows the array's growth itself. The sky-change module
  * (`sky-change.ts`) never changes.
  */
 
@@ -19,7 +20,7 @@ import type { EnvironmentDescriptor } from '../contract/scene.ts';
 import type { HitShading, HitShadingSettings } from '../contract/shade.ts';
 import type { GpuTimerScope } from '../contract/timing.ts';
 import type { BindingSlot, KernelBuilder, WgslModule } from '../contract/wgsl.ts';
-import type { TextureStoreBinding } from '../textures/texture-store.ts';
+import type { TextureLayerStore } from '../textures/texture-store.ts';
 import { PlatformSky, type PlatformSkyOptions } from '../sky/platform-sky.ts';
 import { PlatformDeferredDirect } from './direct.ts';
 import { LIGHT_FALLOFF_MODULE } from './light-falloff.ts';
@@ -81,7 +82,6 @@ export class PlatformHitShading implements HitShading {
     private readonly skyRadianceBefore: GPUBuffer;
     private readonly radianceMapView: GPUTextureView;
     private readonly skySampler: GPUSampler;
-    private readonly textureSampler: GPUSampler;
     private uploadedSettings = '';
     private uploadedLightGrid = '';
     private readonly lightGridWords = new ArrayBuffer(LIGHT_GRID_LOOKUP_BYTES);
@@ -89,15 +89,15 @@ export class PlatformHitShading implements HitShading {
 
     /**
      * `textures` is the texture store hit shading samples at hits (the
-     * platform's, which the scene copy fills): its array is bound, and
-     * rebinding follows its `version`.
+     * platform's, which the scene copy fills): the module depends on its
+     * sampling module, the same object the walk's alpha test lists.
      */
     constructor(
         device: GPUDevice,
         kernels: KernelBuilder,
         sceneModule: WgslModule,
         raysModule: WgslModule,
-        textures: TextureStoreBinding,
+        textures: Pick<TextureLayerStore, 'samplingModule'>,
         options: PlatformHitShadingOptions = {},
     ) {
         const label = options.label ?? 'gi';
@@ -123,32 +123,20 @@ export class PlatformHitShading implements HitShading {
             addressModeU: 'repeat',
             addressModeV: 'clamp-to-edge',
         });
-        // Trilinear and repeating: the mip comes from each hit's ray cone, and clamp and mirror
-        // are worked out on the uv in the shader (giShadeWrap), so one sampler serves every mapping.
-        this.textureSampler = device.createSampler({
-            label: `${label} texture store`,
-            magFilter: 'linear',
-            minFilter: 'linear',
-            mipmapFilter: 'linear',
-            addressModeU: 'repeat',
-            addressModeV: 'repeat',
-        });
 
         this.lightGrid = new PlatformLightGrid(device, kernels, sceneModule, LIGHT_FALLOFF_MODULE, { label, reduction: options.lightGridReduction });
         const lightGrid = this.lightGrid;
         const fixedResources: readonly GPUBindingResource[] = [{ buffer: this.uniforms }, this.radianceMapView, this.skySampler];
-        const textureSampler = this.textureSampler;
         this.module = {
             name: 'gi-shade',
-            dependencies: [sceneModule, raysModule, LIGHT_FALLOFF_MODULE],
+            dependencies: [sceneModule, raysModule, textures.samplingModule(sceneModule), LIGHT_FALLOFF_MODULE],
             code: (slot: BindingSlot) => shadeModuleWgsl(slot),
             entries: SHADE_MODULE_ENTRIES,
-            resources: () => [...fixedResources, lightGrid.view, textures.view, textureSampler],
-            // Only the light grid's texture (when a scene first needs it, or its cells grow) and the
-            // texture store's array (when textures need more layers) are ever reallocated. Both
-            // versions only grow, so their sum changes whenever either does.
+            resources: () => [...fixedResources, lightGrid.view],
+            // Only the light grid's texture is ever reallocated here (when a scene first needs it,
+            // or its cells grow); the texture store's array is the sampling module's.
             get version() {
-                return lightGrid.version + textures.version;
+                return lightGrid.version;
             },
             storageBufferCount: 0,
         };
