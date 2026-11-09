@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { probeGrid } from './settings.ts';
 import { CameraWindow, enteringProbes, EXTENT_INSET_SPACINGS, slotOf, VALID_EXTENT_STEP_SPACINGS, WINDOW_MOVE_SPACINGS, windowProbeOf } from './scroll.ts';
 import { DDGI_SCROLL_WGSL, SCROLL_UNIFORM_BYTES, SCROLL_UNIFORM_WORD } from './wgsl/scroll.ts';
+import { DDGI_COMMON_WGSL } from './wgsl/common.ts';
+import { wgslNameProblems } from '../../../../bvh/src/wgsl-names.ts';
 
 // The fly-through's volume (m3-moving.md §4.2, Dennis 2026-11-05): 32 x 12 x 32 probes at 1.5 m.
 const SPACING = 1.5;
@@ -128,6 +130,13 @@ describe('the camera-following window (m3-moving.md §4.2)', () => {
 
     it('refuses fewer than 4 probes on an axis', () => {
         expect(() => new CameraWindow(probeGrid({ center: [0, 0, 0], size: [3, 3, 3], spacing: 1.5 }))).toThrow(/at least 4/);
+    });
+});
+
+describe("the camera-following volume's WGSL", () => {
+    it('declares no reserved word and no name twice (target broke the first GPU run)', () => {
+        expect(wgslNameProblems(DDGI_SCROLL_WGSL)).toEqual([]);
+        expect(wgslNameProblems(DDGI_COMMON_WGSL)).toEqual([]);
     });
 });
 

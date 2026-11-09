@@ -3,7 +3,7 @@
  * camera-following DDGI volume on Bistro exterior's fly-through, on a real
  * GPU.
  *
- * Two volumes in one technique: the camera-following one (CAMERA_VOLUME,
+ * Two volumes in one technique: the camera-following one (`cameraVolume`,
  * 32 x 12 x 32 probes at 1.5 m, priority 1, Dennis's pick of 2026-11-05) and
  * the manifest's fixed 4 m volume behind it, which covers the camera volume's
  * fade band as §4.2 plans ("a plane that enters next to a fixed volume is
@@ -11,7 +11,7 @@
  * (ddgi-shared/viewer-scene.ts) and every frame goes through the three
  * adapter, so the camera reaches the technique as a host gives it.
  *
- * The flight (FLIGHT): from the `street` bookmark along the street at
+ * The flight (`planFlight`): from the `street` bookmark along the street at
  * SPEED_M_S, then a turn, each leg as long as the street is free (measured by
  * a ray), so the window moves on both x and z. Before it: the technique's
  * warm-up and SETTLE_FRAMES frames at rest; after it, the rest test.
@@ -453,6 +453,8 @@ function frameChange(previous: Float32Array, current: Float32Array, pixels: read
 }
 
 const inBand = (edge: number): boolean => edge > 0 && edge < 1;
+/** A band pixel whose edge coverage changes by more than this between two frames is in the band that moved. */
+const MOVING_EDGE_STEP = 1e-4;
 
 /** Frame-to-frame change over a run of frames, in the band and over the whole view, averaged over the pairs. */
 class ChangeTally {
@@ -493,13 +495,34 @@ class ChangeTally {
                 let difference = 0;
                 for (let channel = 0; channel < 3; channel++) difference += Math.abs(current.image[pixel * 4 + channel] - previous.image[pixel * 4 + channel]);
                 map[pixel] += difference / 3;
+                // A pop would be the camera volume's share jumping by about 1 in one frame; a fade moves it a little.
+                this.largestShareStep = Math.max(this.largestShareStep, Math.abs(current.share[pixel] - previous.share[pixel]));
             }
         }
+        // The band that moved this frame (its edge coverage changed), apart from the band that stays put (the window's
+        // faces it isn't moving across, such as its top while the camera flies level): reported, not gated.
+        const moving = band.filter((pixel) => Math.abs(current.edge[pixel] - previous.edge[pixel]) > MOVING_EDGE_STEP);
+        if (moving.length >= MIN_BAND_PIXELS) {
+            const change = frameChange(previous.image, current.image, moving);
+            this.movingBand.mean += change.mean;
+            this.movingBand.p95 += change.p95;
+            this.movingBand.pairs++;
+            this.movingBand.pixels += moving.length;
+            let shareStep = 0;
+            for (const pixel of moving) shareStep += Math.abs(current.share[pixel] - previous.share[pixel]);
+            this.movingBand.shareStep += shareStep / moving.length;
+        }
     }
+
+    /** The band that moved: frame pairs, summed means, pixels, and the mean step in the camera volume's share. */
+    movingBand = { mean: 0, p95: 0, pairs: 0, pixels: 0, shareStep: 0 };
+    /** The largest step in the camera volume's share at a band pixel between two frames. */
+    largestShareStep = 0;
 
     summary(): Record<string, number> {
         const pairs = Math.max(1, this.band.pairs);
         const viewPairs = Math.max(1, this.view.pairs);
+        const movingPairs = Math.max(1, this.movingBand.pairs);
         return {
             bandMean: this.band.mean / pairs,
             bandP95: this.band.p95 / pairs,
@@ -507,6 +530,12 @@ class ChangeTally {
             bandPixelsPerPair: this.band.pixels / pairs,
             worstPairBandMean: this.worstBand.mean,
             worstPairBandP95: this.worstBand.p95,
+            movingBandMean: this.movingBand.mean / movingPairs,
+            movingBandP95: this.movingBand.p95 / movingPairs,
+            movingBandPairs: this.movingBand.pairs,
+            movingBandPixelsPerPair: this.movingBand.pixels / movingPairs,
+            movingBandShareStep: this.movingBand.shareStep / movingPairs,
+            largestShareStep: this.largestShareStep,
             viewMean: this.view.mean / viewPairs,
             viewP95: this.view.p95 / viewPairs,
         };
@@ -747,6 +776,11 @@ await runGpuTest(
                 `flying: band ${(100 * flightSummary.bandMean).toFixed(4)}% / p95 ${(100 * flightSummary.bandP95).toFixed(4)}% a frame over ${flightSummary.bandPairs} pairs ` +
                     `(${flightSummary.bandPixelsPerPair.toFixed(0)} band pixels a pair; worst pair ${(100 * flightSummary.worstPairBandMean).toFixed(4)}% / ${(100 * flightSummary.worstPairBandP95).toFixed(4)}%); ` +
                     `view ${(100 * flightSummary.viewMean).toFixed(4)}% / ${(100 * flightSummary.viewP95).toFixed(4)}%`,
+            );
+            log(
+                `flying, the band that moved: ${(100 * flightSummary.movingBandMean).toFixed(4)}% / p95 ${(100 * flightSummary.movingBandP95).toFixed(4)}% a frame over ${flightSummary.movingBandPairs} pairs ` +
+                    `(${flightSummary.movingBandPixelsPerPair.toFixed(0)} pixels a pair); the camera volume's share steps ${flightSummary.movingBandShareStep.toFixed(4)} a frame there on average, ` +
+                    `largest step at a band pixel ${flightSummary.largestShareStep.toFixed(4)} (a pop would be about 1)`,
             );
             log(
                 `warming: ${warming.enteringChecked} entering slots checked over ${warming.framesChecked} frames, ${warming.enteringNotReset} not reset; ` +
