@@ -21,6 +21,17 @@ Rules:
 
 ---
 
+## 2026-11-10 · T3.4 merged with `m3` again (T3.3) · implementer (opus)
+Did: merged `m3` (b22d75d) into `m3-t3.4` (201f0f8). Only conflict was the top of PROGRESS; T3.3's entries go first. No code change was needed: poses still log the instance's deform box, with `moved` and the instance.
+The pose-box union for the unfold miss isn't needed and would change nothing. A pose's region is the mesh's whole deform box: the declared `deformBounds`, or the rest box grown by every pose so far (it never shrinks). That box holds the previous and the new pose, for CPU and GPU poses alike.
+Verified, RTX 3060 Laptop (nvidia/ampere), bench lock, untimed, all pass:
+- `ddgi-deforming-marks`: the same numbers as before (125 near probes at r = 0.6, 530 that saw the sheet all marked).
+- `three-deforming-gi`: the exact-box morph still returns floor -6.1%, wall -13.0%, unchanged. The larger box returns within 0.5%, and so do the CPU- and GPU-skinned panels.
+- `ddgi-wake-air-probes`: the same numbers as before, two volumes included.
+- `platform-recompiles` (0) and `ddgi-mark-reduction`.
+- Typecheck and lint clean. Unit tests pass: 6 files failed under load and passed when re-run alone.
+Next: the exact-box morph needs a moving emitter's change marked as a light change (NOTES), for the lead.
+
 ## 2026-11-10 · T3.3 review fixes · implementer (opus)
 Did (ce8a51b and the next two), from the short Opus review:
 - The refit's stats are copied out at most once every 15 frames per posed mesh (`STATS_EVERY_FRAMES`, `trace/deforming-trees.ts`), was after every refit. Each sample is judged once, and a drift run starts at the frame its first drifted sample was taken, so "held 60 frames" still means about 60 frames (4-5 samples).
