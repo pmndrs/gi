@@ -27,6 +27,10 @@
         "./three": {
             "types": "./dist/three.d.ts",
             "import": "./dist/three.js"
+        },
+        "./radiance-cache": {
+            "types": "./dist/radiance-cache.d.ts",
+            "import": "./dist/radiance-cache.js"
         }
     },
     "main": "./dist/index.js",

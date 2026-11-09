@@ -24,7 +24,7 @@
 import { GINotReadyError } from './contract/errors.ts';
 import type { InstanceHandle, LightHandle, MaterialHandle, MeshHandle, TextureHandle } from './contract/handles.ts';
 import type { Aabb, Mat4 } from './contract/math.ts';
-import type { FrameInput, FrameScreen } from './contract/frame.ts';
+import type { FrameCamera, FrameInput, FrameScreen } from './contract/frame.ts';
 import type { GIPlatform, GIPlatformOptions } from './contract/platform.ts';
 import type { QueryKind, SceneQueries } from './contract/queries.ts';
 import type {
@@ -123,6 +123,12 @@ export class GIPlatformImpl implements GIPlatform {
     private lost = false;
     private disposed = false;
     private frame = 0;
+    /**
+     * The camera and time step of the latest `encode`: the screen stage of the same frame
+     * reconstructs positions from the host's depth with it (`encodeScreen`, RC2.1).
+     */
+    private frameCamera: FrameCamera = IDENTITY_CAMERA;
+    private frameDeltaTime = 0;
     private lastEncodeCpuMs = 0;
     /** Set after `encode` resolved timestamps, so the next `encode` starts their readback (the host has submitted by then). */
     private timerAwaitingReadback = false;
@@ -299,6 +305,8 @@ export class GIPlatformImpl implements GIPlatform {
         if (!this.prepared) throw new GINotReadyError('preparing');
         const start = performance.now();
         this.frame++;
+        this.frameCamera = frame.camera;
+        this.frameDeltaTime = frame.deltaTime;
 
         if (this.timer) {
             // The previous frame's encoder has been submitted by now, so its timestamps can be read back.
@@ -378,8 +386,8 @@ export class GIPlatformImpl implements GIPlatform {
             if (!technique.encodeScreen) continue;
             technique.encodeScreen(encoder, {
                 frame: this.frame,
-                deltaTime: 0,
-                camera: IDENTITY_CAMERA,
+                deltaTime: this.frameDeltaTime,
+                camera: this.frameCamera,
                 changes: NO_CHANGES,
                 units: 0,
                 screen,
@@ -599,7 +607,7 @@ function escapeRegExp(text: string): string {
 /** Timestamps off: every pass goes untimed, which `beginComputePass({ timestampWrites })` accepts. */
 const NO_TIMER: GpuTimerScope = { computePass: () => undefined };
 
-/** `encodeScreen` has no camera of its own; screen stages take what they need from `screen`. */
+/** The camera `encodeScreen` hands on before the first `encode` (a host calls `encode` first in every frame). */
 const IDENTITY_CAMERA = {
     position: [0, 0, 0],
     view: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1],

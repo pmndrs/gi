@@ -6,7 +6,7 @@ import { resolve } from 'node:path';
 
 const packageRoot = resolve(import.meta.dirname, '..');
 const dist = resolve(packageRoot, 'dist');
-const publicEntries = ['index', 'core', 'three'];
+const publicEntries = ['index', 'core', 'three', 'radiance-cache'];
 const privatePackagePrefix = '@pmndrs/ddgi-';
 
 const problems = [];

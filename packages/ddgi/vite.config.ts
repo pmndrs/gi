@@ -12,6 +12,7 @@ export default defineConfig({
                 index: resolve(__dirname, 'src/index.ts'),
                 core: resolve(__dirname, 'src/core.ts'),
                 three: resolve(__dirname, 'src/three.ts'),
+                'radiance-cache': resolve(__dirname, 'src/radiance-cache.ts'),
             },
             formats: ['es'],
         },

@@ -11,6 +11,7 @@
             "@pmndrs/ddgi": ["packages/ddgi/src/index.ts"],
             "@pmndrs/ddgi/core": ["packages/ddgi/src/core.ts"],
             "@pmndrs/ddgi/three": ["packages/ddgi/src/three.ts"],
+            "@pmndrs/ddgi/radiance-cache": ["packages/ddgi/src/radiance-cache.ts"],
             "@pmndrs/ddgi-core": ["packages/ddgi-core/src/index.ts"],
             "@pmndrs/ddgi-core/*": ["packages/ddgi-core/src/*"],
             "@pmndrs/ddgi-three": ["packages/ddgi-three/src/index.ts"],
