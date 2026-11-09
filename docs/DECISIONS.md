@@ -4,6 +4,12 @@ Settled choices, newest first. Each entry is short: the decision, why, and what 
 
 ## 2026-11-09
 
+- **radiance-cache: timing deferred, build on** (Dennis, 2026-11-09, through the starting session; his words: "can we skip the timing as theres a lot going on right now. lets build what we can before we hit our usage limit unless its a blocking decision on the whole project").
+  - No timed runs on the track until he asks. RC1.1's screen-input cost and RC1.3's 1 M / 10 M cost (with the bvh build-time re-measure after the shared scan changed) are **deferred**, not owed: those two rows close on correctness. RC1.5's table was already taken (3 VALID runs per scene at a pinned 1,200 MHz) and stands.
+  - GPU checks stay: correctness on the RTX 3060 and the Intel UHD through the bench lock with `--no-cool-wait`.
+  - Phases 2-4 (screen probes, the faithful world cache with GI-1.2's multi-bounce and the world-cache slot, temporal quality) go ahead in order without a sign-off between them. Faithful-port rule, the register and Opus implementers and reviewers stay. Only a decision that blocks the whole project stops the track; everything else goes in PROGRESS under "Next".
+  - Revisit: when Dennis asks for the deferred timings (phase 5's per-pass table needs them anyway).
+
 - **Subgroups first: what "fallback" means, made explicit** (lead, 2026-11-09, from RC1.3's review). The 2026-11-04 entry says "there is no second GPU code path" without subgroups. Since M1, the board's rule has been "subgroups first, with one declared fallback and a test of it", and DDGI's kernels (`ddgi/schedule-fill`, the fixed-ray reductions) and RC1.3's platform scan carry a workgroup-memory fallback. Dennis's radiance-cache brief asks for the same. So, read together:
   - a **compute kernel** (scan, reduction, compaction) uses subgroups first and may carry **one** declared fallback in workgroup memory that assumes nothing about subgroup lanes, with a GPU test on a device created without `subgroups` that compares both paths;
   - a **larger subsystem** that can't sensibly have a second GPU path (the GPU BVH builders) falls back off the GPU (tinybvh in the worker) or reports through `isSupported` or a typed error, as 2026-11-04 says;
