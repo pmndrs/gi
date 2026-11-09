@@ -21,6 +21,53 @@ Rules:
 
 ---
 
+## 2026-11-09 · RC1.5 timing · gpu-tester (sonnet)
+Did: the RC1.5 timing runs on `rc1-5` at d2bb801. RTX 3060 Laptop (nvidia, ampere), headless Chrome 157.0.8103.38, `full` profile. Each scene's 3 runs went in one `bench-lock run` hold (no `--no-cool-wait`), alone on the GPU (no `scene_viewer` running). The lock reported **Timing VALID** for all three holds (started at 67 / 65 / 65 C, 0% thermal throttling, power limit in 15.9% / 0% / 7.1% of loaded samples). Every row carries `note/sm_clock_mhz` = **1200**, the pinned clock (not changed by me; under load min 592 on Sponza, 1102 on Bistro exterior, 1200 on the rest, median 1200). All 3 runs per scene were in one hold, so each hold has one VALID verdict that covers all 3 (no re-runs were needed). 2,631 rows added to `bench/results/trace.csv` (`runN/rc/...` and `median/rc/...`).
+Flags: Sponza's probe and bounce sets have one slow run among three (probe 7.6 ms against 6.9 on the others, so Mrays/s min 30.3 against 33.3; frame total 13.78 against 12.35). The hold was VALID, so I kept it; the min–max shows it. Oracle: 0 mismatches and 0 ambiguous in every set of every run; `ours-tinybvh` and `platform` agree 100% (Sponza's probe set 99.9996%). Sponza's lamp has intensity 0, so only the sun counts there.
+
+Mrays/s is the loaded section (dispatch back to back for 1 s); predicted ms is rays / that rate. Median (min–max) over 3 VALID runs.
+
+**Sponza**
+| Set | Rays | Shadow rays per hit | platform Mrays/s | ours-tinybvh Mrays/s | platform ms | ours-tinybvh ms |
+| --- | --- | --- | --- | --- | --- | --- |
+| placement | 3,600 | | 8.6 (8.5–8.6) | 8.5 (8.5–8.5) | 0.421 | 0.425 |
+| probe | 230,400 | | 33.3 (30.3–33.3) | 35.0 (28.5–35.0) | 6.92 (6.92–7.61) | 6.59 (6.58–8.08) |
+| multi-bounce | 69,120 | | 25.3 (20.1–25.3) | 26.3 (24.0–26.3) | 2.73 (2.73–3.44) | 2.63 (2.62–2.88) |
+| shadow-of-probe | 103,662 | 0.461 | 56.1 (55.9–56.2) | 54.6 (54.5–54.6) | 1.85 | 1.90 |
+| shadow-of-bounce | 37,263 | 0.550 | 43.0 (42.8–43.1) | 42.7 (42.6–42.7) | 0.866 | 0.873 |
+| **Frame** (probe + bounce + both shadows) | | | | | **12.36** (12.35–13.78) | **11.98** (11.98–13.73) |
+
+**Bistro interior**
+| Set | Rays | Shadow rays per hit | platform Mrays/s | ours-tinybvh Mrays/s | platform ms | ours-tinybvh ms |
+| --- | --- | --- | --- | --- | --- | --- |
+| placement | 3,600 | | 9.0 (8.9–9.0) | 9.5 (9.5–9.5) | 0.400 | 0.380 |
+| probe | 228,608 | | 22.2 (22.1–22.2) | 23.0 (23.0–23.0) | 10.32 | 9.96 |
+| multi-bounce | 68,582 | | 15.8 (15.8–15.8) | 16.3 (16.2–16.3) | 4.34 | 4.22 |
+| shadow-of-probe | 203,322 | 0.922 | 38.3 (38.3–38.4) | 38.8 (38.7–38.8) | 5.30 | 5.25 |
+| shadow-of-bounce | 61,082 | 0.913 | 31.2 (31.2–31.3) | 31.3 (31.3–31.4) | 1.955 | 1.953 |
+| **Frame** | | | | | **21.91** (21.91–21.93) | **21.38** (21.35–21.38) |
+
+**Bistro exterior**
+| Set | Rays | Shadow rays per hit | platform Mrays/s | ours-tinybvh Mrays/s | platform ms | ours-tinybvh ms |
+| --- | --- | --- | --- | --- | --- | --- |
+| placement | 3,600 | | 3.2 (3.1–3.2) | 3.2 (3.2–3.2) | 1.142 | 1.122 |
+| probe | 223,552 | | 17.6 (17.5–17.6) | 17.6 (17.2–17.6) | 12.72 | 12.72 |
+| multi-bounce | 67,066 | | 13.8 (12.5–13.8) | 13.8 (13.7–13.8) | 4.88 | 4.87 |
+| shadow-of-probe | 101,407 | 0.564 | 23.6 (23.6–23.6) | 23.0 (23.0–23.0) | 4.30 | 4.42 |
+| shadow-of-bounce | 35,535 | 0.612 | 18.5 (18.3–18.5) | 18.1 (18.0–18.1) | 1.92 | 1.97 |
+| **Frame** | | | | | **23.82** (23.77–24.35) | **23.99** (23.97–24.30) |
+
+**Per-frame total against native Capsaicin's "probe tracing and cell population"** (placement is not in the frame total; it runs once per probe update):
+| Scene | Ours, platform (ms) | Ours, ours-tinybvh (ms) | Native Capsaicin (ms) | Ratio (platform) |
+| --- | --- | --- | --- | --- |
+| Sponza | 12.36 | 11.98 | 4.75 | 2.6x |
+| Bistro interior | 21.91 | 21.38 | 7.81 | 2.8x |
+| Bistro exterior | 23.82 | 23.99 | 7.56 | 3.2x |
+
+Intel UHD (gen-12lp), correctness only, one page per lock hold with `--no-cool-wait`, no timing claims: `trace-bench-rc-bistro-interior` PASS (40 s) and `trace-bench-rc-bistro-exterior` PASS (65 s). Bistro exterior **fits the Intel's memory** (the bench loads no textures); the page's own checks (reference sample, tracer agreement) passed. Sponza passed earlier.
+Not verified: native Capsaicin was not re-timed here (its numbers are the ones given in the task). The Intel rows were not appended to the CSV.
+Next: the lead's comparison; the 2.6–3.2x gap to native is the ray-cost side only (both traced at the same ray counts and clock 1,200 MHz vs native's own).
+
 ## 2026-11-09 · RC1.5 review fixes · implementer (opus)
 Did: answered the Opus review. (1) Each hit's shadow ray now goes to one of **every** manifest light, chosen in proportion to its unshadowed irradiance luminance at the hit (the platform's weight; three's falloff, range window, spot cone, cos at the side normal). A light behind the hit, out of range or of zero intensity is never chosen; a hit gets no ray only when no light reaches it (`lightContribution`, `makeLightShadowRays` in rc-rays.ts). New rows: `rc/<set>/rays_per_hit`, `hits_no_light`, `rays_to_light<i>`. (2) `to-csv.ts` refuses to write RTX `rc` rows without the clock note; under `bench-lock run` they get `note/sm_clock_mhz` (checked: 1200). (3–5) NOTES and config.ts corrected.
 Verified: lint, typecheck, trace-bench unit tests (3 new for the light choice). RTX, quick: Sponza and Bistro interior PASS (oracle 0 mismatches, tracers agree ≥ 99.9996%).
