@@ -41,6 +41,7 @@ import {
     Skeleton,
     SkinnedMesh,
     StorageBufferAttribute,
+    type Node,
     type StorageTexture,
     Uint16BufferAttribute,
     Float32BufferAttribute,
@@ -48,7 +49,7 @@ import {
     Vector3,
     type WebGPURenderer,
 } from 'three/webgpu';
-import { computeSkinning, Fn, If, instanceIndex, int, ivec2, positionLocal, storage, texture, textureStore, uvec2, vec4, vertexIndex } from 'three/tsl';
+import { computeSkinning, Fn, If, instanceIndex, int, ivec2, storage, texture, textureStore, uvec2, vec4, vertexIndex } from 'three/tsl';
 import { GpuMeshRefit } from '../../../../packages/bvh/src/gpu-mesh-refit.ts';
 import { checkGpuLayout } from '../../../../packages/bvh/src/layout-check.ts';
 import { createTinyBvhBuilder } from '../../../../packages/bvh/src/tinybvh.ts';
@@ -62,7 +63,7 @@ import { runThreePage } from '../three-shared/harness.ts';
  * node (Skinning.js). Its `toPosition` parameter doesn't help: the call's
  * result is then unused, TSL leaves the call out, and nothing is written.
  */
-const skinnedPosition = computeSkinning as unknown as (mesh: SkinnedMesh) => ReturnType<typeof positionLocal.toVar>;
+const skinnedPosition = computeSkinning as unknown as (mesh: SkinnedMesh) => Node<'vec3'>;
 
 /** Texels per row of the positions texture: rows of 256 rgba32float texels are 4,096 bytes, a multiple of copyTextureToBuffer's 256. */
 const POSITIONS_WIDTH = 256;
