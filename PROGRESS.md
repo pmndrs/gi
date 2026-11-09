@@ -40,6 +40,26 @@ Known miss (item 5, routed to T3.4 by the lead): `three-deforming-gi`'s morph wi
 Not verified: `three-wind-tree-gi` on the Intel; the viewer by hand.
 Next: T3.8: the wind tree can use `three-wind-tree-gi/sway.ts` (weight × reach), `userData.giDeforming` + `giDeformBounds` from `swayBounds()`; pass `renderer` to ThreeGI for GPU-skinned characters. The movement word wasn't built: GPU poses report the deform box's diagonal as `moved` (an upper bound; region shape unchanged). The stats readback runs per posed deforming mesh, every few frames.
 
+## 2026-11-10 · T3.6 the slower fade (coordinator's one attempt at check 1) · implementer (opus)
+Did: a camera-following volume fades over `CAMERA_FADE_SPACINGS` = 10 spacings (3 s to pass a point at 5 m/s, 1.5 m), narrower on a short axis (3.75 on the 12-probe vertical); fixed volumes keep 0.5. The table row gains a fade texel (8 texels); coverage is the lowest of the axes' fades; the valid extent keeps the fade's whole reach warm and inside the window (scroll.ts `coverageReach`, `extentInset`; the kernel's plane check generalized, the same as before at reach 1). DECISIONS: the fade (2026-11-10); the two GPU fixes marked accepted.
+Verified, RTX 3060 Laptop (nvidia/ampere), bench lock: `ddgi-camera-volume` **PASS**, all six checks. Check 1: band 0.074% / p95 0.27% (bar 0.1 / 0.5; was 0.59 / 2.6), the moving part 0.107% / 0.38%, share step 0.0045 a frame. Check 2: 23,808 entering slots, 0 active before 2 updates. Memory, the 10 s rest (0 planes) and recompiles (0) unchanged. Strip by eye: the camera volume covers the near street in every frame, shading gradually into the 4 m field with distance and height; nothing black. `ddgi-volumes` (0.0102% / 0.0405%), `ddgi-test-view` (0.0498954) and `ddgi-shading-consistency` pass, fixed volumes unchanged. Typecheck, lint, unit tests.
+Not verified: Intel UHD; the viewer.
+Numbers: largest share step at one band pixel 0.83 (at rest 0.22): a few pixels still jump, likely a probe finishing its warm-up late inside the fade.
+`requiredLimits`: the platform's `requiredLimits(adapter)` (`platform/device-requirements.ts`) asks for the adapter's largest storage binding and buffer. The three adapter's device helper (`ddgi-three/src/host.ts`) passes it, and the viewer asks for every limit the adapter has (`maximumLimits`, `apps/viewer/src/render/create-renderer.ts`), so both ask enough for Bistro (136 MB needed). Only test pages on `runGpuTest`'s default device hit 128 MB; `ddgi-camera-volume` asks for 512 MB.
+Next: T3.8: the camera volume answers alone within about 5 spacings (7 m) of the camera with this fade; if that shows, a larger window or a fade from the camera's speed.
+
+## 2026-11-10 · T3.6 camera-following volume · implementer (opus)
+Did (branch `m3-t3.6`): `follow: 'camera'` volumes. scroll.ts (window rule at 0.75 spacings, teleports, valid-extent targets, warming demand), wgsl/scroll.ts (`ddgi/scroll`: reset of entering slots to state 3 owing 2 updates; the valid extent, copied into the table). Kernels work on wrapping slots: positions and neighbours in window probes (sample.ts, common.ts), key probes by lattice parity, mark boxes in window probes. Table row 7 texels (window, valid min/max); the CPU no longer overwrites the GPU's extent. A point outside every volume reads the nearest one. A camera volume's floor adds its warming demand (DECISIONS, for the lead). New page `ddgi-camera-volume` (manual, Bistro). ddgi.md and m3-moving.md §4.2 as built.
+Verified, RTX 3060 Laptop (nvidia/ampere, headless Chrome, bench lock `--no-cool-wait`), `ddgi-camera-volume`, 66 m at 5 m/s, 1.5 m, 264 probes a frame:
+- 1 **known miss** (DECISIONS): edge band 0.59% / p95 2.6% a frame (bar 0.1 / 0.5); moving part 1.5% / 5.3%; at rest 0.013% / 0.07%. A fade (share step 0.084 a frame), times the 1.5 m and 4 m fields' ~18% difference. An earlier 26 m flight passed (0.077% / 0.40%) only because its band was mostly static.
+- 2 pass: 23,808 entering slots reset; 0 active before 2 updates (4,418 switched off by their first update).
+- 3 pass: DDGI 143,738,560 B and platform bytes the same before, after the flight and after the rest. 4 pass: 0 planes cleared over 600 frames on the boundary (1 on arrival); unit test too. 6: recompiles 0; typecheck, lint, 1,226 unit tests.
+- 5, by eye (screenshot): GI smooth along the street, no seams; camera volume covers the near street in every strip frame. Before the demand floor it covered nothing from 33 m on (fixed).
+- Fixed volumes unchanged: test-view 0.0498954 (= T2.10), ddgi-volumes band 0.0102 / 0.0405% (= T3.5); 13 DDGI pages pass.
+Numbers: `ddgi/scroll` 0.006 ms median (not gated).
+Not verified: Intel UHD; the viewer.
+Next: T3.8 needs a viewer setting for `follow: 'camera'` and the fly-through path (the page's legs from the street bookmark), `requiredLimits` for Bistro, and a ruling on the band. T3.4 rebases on mark.ts, blend.ts, ddgi-technique.ts.
+
 ## 2026-11-09 · T3.7 review fixes · implementer (opus)
 Did (fa33d04 and this one), from the short Opus review:
 - `deforming.ts`: `readKey` no longer makes a closure each update.
