@@ -4,7 +4,7 @@
  * with them.
  *
  *   node tools/gpu/pages/m4-textured-accuracy/run.ts [--scenes a,b,...] [--gpu nvidia|intel]
- *        [--references <dir>] [--out <dir>] [--compare-only] [--timeout-minutes 30]
+ *        [--references <dir>] [--out <dir>] [--compare-only] [--no-occlusion] [--timeout-minutes 30]
  *
  * For each scene, every camera folder under `<references>/<scene>/` with a
  * `cycles-textured-gi.exr` is a view: its json's stored shot gives the
@@ -17,7 +17,9 @@
  * Writes `<out>/<scene>/<camera>/ddgi-textured-gi.exr` (the GI term in the
  * reference's row order), comparison PNGs beside it, and
  * `<out>/m4-textured-accuracy-<gpu>.json` with every row. `--compare-only`
- * compares the EXRs already written (no GPU).
+ * compares the EXRs already written (no GPU). `--no-occlusion` is a
+ * diagnostic: the same without GTAO on the GI term (files and summary named
+ * `-no-ao`), to tell the occlusion's share of a difference from the field's.
  *
  * What is compared, as M1's HD accuracy (DECISIONS 2026-11-06; T1.14's
  * `three-composite-ao/run.ts --upscale performance --resolution-scale 0.5`,
@@ -43,6 +45,7 @@ import type { GpuChoice } from '../../contract.ts';
 import { SITE_ROOT } from '../../server.ts';
 import { BrowserSession } from '../../session.ts';
 import type { AccuracyView, TexturedAccuracyJob } from './main.ts';
+import { UPLOAD_PATH } from './upload-path.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '..', '..', '..', '..');
@@ -55,7 +58,6 @@ const TEXTURE_CAPS: Record<string, number> = { 'bistro-exterior': 1024, 'bistro-
 
 const REFERENCE_PREFIX = 'cycles-textured';
 const REFERENCE_IMAGE = `${REFERENCE_PREFIX}-gi.exr`;
-const TEST_IMAGE = 'ddgi-textured-gi.exr';
 
 /** SPEC's accuracy bar (mean error) and the FLIP bar (DECISIONS 2026-11-06). */
 const MEAN_TOLERANCE = 0.1;
@@ -91,8 +93,7 @@ interface Row {
     readonly withinFlip: boolean | null;
 }
 
-function decodeFloats(base64: string): Float32Array {
-    const bytes = Buffer.from(base64, 'base64');
+function floatsOf(bytes: Buffer): Float32Array {
     return new Float32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4).slice();
 }
 
@@ -139,8 +140,12 @@ async function viewReferences(referencesRoot: string, scene: string): Promise<Vi
     return views;
 }
 
-/** Runs the page once in its own vite server and Chrome, with the job injected; returns the page's report data. */
-async function runPage(job: Partial<TexturedAccuracyJob>, gpu: GpuChoice, timeoutMs: number, logDir: string): Promise<Record<string, unknown>> {
+/**
+ * Runs the page once in its own vite server and Chrome, with the job injected; returns the
+ * page's report data, and the views' images the page posted to UPLOAD_PATH.
+ */
+async function runPage(job: Partial<TexturedAccuracyJob>, gpu: GpuChoice, timeoutMs: number, logDir: string): Promise<{ data: Record<string, unknown>; images: Map<string, Buffer> }> {
+    const images = new Map<string, Buffer>();
     const pagePath = '/pages/m4-textured-accuracy/job.html';
     const server = await createServer({
         root: SITE_ROOT,
@@ -160,6 +165,16 @@ async function runPage(job: Partial<TexturedAccuracyJob>, gpu: GpuChoice, timeou
                                 `<script>window.m4TexturedAccuracyJob = ${JSON.stringify(job)};</script>` +
                                 `<script type="module" src="/pages/m4-textured-accuracy/main.ts"></script></body></html>`,
                         );
+                    });
+                    devServer.middlewares.use(UPLOAD_PATH, (request, response) => {
+                        const view = new URL(request.url ?? '', 'http://localhost').searchParams.get('view');
+                        const chunks: Buffer[] = [];
+                        request.on('data', (chunk: Buffer) => chunks.push(chunk));
+                        request.on('end', () => {
+                            if (view) images.set(view, Buffer.concat(chunks));
+                            response.statusCode = view ? 204 : 400;
+                            response.end();
+                        });
                     });
                     // Chrome asks for one; a 404 in the log fails the page.
                     devServer.middlewares.use('/favicon.ico', (_request, response) => {
@@ -183,7 +198,7 @@ async function runPage(job: Partial<TexturedAccuracyJob>, gpu: GpuChoice, timeou
         );
         if (result.report?.message) console.log(`  page: ${result.report.message}`);
         if (!result.verdict.acceptable || !result.report) throw new Error(`the page failed:\n  ${result.verdict.reasons.join('\n  ')}`);
-        return result.report.data as Record<string, unknown>;
+        return { data: result.report.data as Record<string, unknown>, images };
     } finally {
         await (session as BrowserSession | null)?.close();
         await server.close();
@@ -214,6 +229,7 @@ async function main(): Promise<void> {
             references: { type: 'string', default: join(repoRoot, 'bench', 'references') },
             out: { type: 'string', default: join(repoRoot, 'bench', 'references') },
             'compare-only': { type: 'boolean', default: false },
+            'no-occlusion': { type: 'boolean', default: false },
             'timeout-minutes': { type: 'string', default: '30' },
         },
     });
@@ -223,7 +239,9 @@ async function main(): Promise<void> {
     const outRoot = resolve(values.out);
     const scenes = values.scenes ? values.scenes.split(',').map((scene) => scene.trim()).filter(Boolean) : DEFAULT_SCENES;
     const timeoutMs = Number(values['timeout-minutes']) * 60_000;
-    const summaryPath = join(outRoot, `m4-textured-accuracy-${gpu}.json`);
+    const variant = values['no-occlusion'] ? '-no-ao' : '';
+    const testImage = `ddgi-textured-gi${variant}.exr`;
+    const summaryPath = join(outRoot, `m4-textured-accuracy-${gpu}${variant}.json`);
     const earlier = existsSync(summaryPath) ? (JSON.parse(await readFile(summaryPath, 'utf8')) as { rows: Row[]; scenes: Record<string, unknown> }) : { rows: [], scenes: {} };
     const rows: Row[] = earlier.rows.filter((row) => !scenes.includes(row.scene));
     const sceneRecords: Record<string, unknown> = { ...earlier.scenes };
@@ -246,17 +264,18 @@ async function main(): Promise<void> {
                 return { name: view.camera, position: camera.position, target: camera.target, fovYDeg: camera.fovYDeg };
             });
             const maxTextureSize = TEXTURE_CAPS[scene] ?? null;
-            const job: Partial<TexturedAccuracyJob> = { scene, views: accuracyViews, width, height, maxTextureSize };
+            const job: Partial<TexturedAccuracyJob> = { scene, views: accuracyViews, width, height, maxTextureSize, occlusion: !values['no-occlusion'] };
             console.log(`${scene}: ${views.map((view) => view.camera).join(', ')} on ${gpu}${maxTextureSize ? `, three's textures capped at ${maxTextureSize}` : ''}`);
-            const data = await withBenchLock(() => runPage(job, gpu, timeoutMs, join(outRoot, 'logs')), { what: `m4-textured-accuracy ${scene} on ${gpu}` });
-            const images = data.giTermBase64 as Record<string, string>;
+            const { data, images } = await withBenchLock(() => runPage(job, gpu, timeoutMs, join(outRoot, 'logs')), { what: `m4-textured-accuracy ${scene} on ${gpu}` });
             for (const view of views) {
-                let test = decodeFloats(images[view.camera]);
+                const posted = images.get(view.camera);
+                if (!posted || posted.byteLength !== width * height * 3 * 4) throw new Error(`${scene}/${view.camera}: the page posted ${posted?.byteLength ?? 'no'} bytes, expected ${width * height * 12}`);
+                let test = floatsOf(posted);
                 const reference = readExr(await readFile(join(view.directory, REFERENCE_IMAGE))).rgb;
                 // The read-back's row order: keep the one that agrees with the reference.
                 if (blockError(flipRows(test, width, height), reference, width, height) < blockError(test, reference, width, height)) test = flipRows(test, width, height);
                 await mkdir(outDirectory(view.camera), { recursive: true });
-                await writeFile(join(outDirectory(view.camera), TEST_IMAGE), writeExr({ width, height, rgb: test }));
+                await writeFile(join(outDirectory(view.camera), testImage), writeExr({ width, height, rgb: test }));
             }
             record = {
                 probeCount: data.probeCount as number,
@@ -272,7 +291,7 @@ async function main(): Promise<void> {
         }
 
         for (const view of views) {
-            const testPath = join(outDirectory(view.camera), TEST_IMAGE);
+            const testPath = join(outDirectory(view.camera), testImage);
             if (!existsSync(testPath)) throw new Error(`${testPath} is missing: run without --compare-only first`);
             const referencePath = join(view.directory, REFERENCE_IMAGE);
             const test = readExr(await readFile(testPath)).rgb;
@@ -283,7 +302,7 @@ async function main(): Promise<void> {
                 testSum += test[index];
                 referenceSum += reference[index];
             }
-            const compared = compareBlocks(referencePath, testPath, join(outDirectory(view.camera), `compare-${REFERENCE_PREFIX}-vs-ddgi`));
+            const compared = compareBlocks(referencePath, testPath, join(outDirectory(view.camera), `compare-${REFERENCE_PREFIX}-vs-ddgi${variant}`));
             const meanError = testSum / referenceSum - 1;
             const flip8 = compared.flip?.mean ?? null;
             rows.push({
@@ -306,7 +325,7 @@ async function main(): Promise<void> {
     }
 
     const percent = (value: number, digits = 2) => `${value >= 0 ? '+' : ''}${(value * 100).toFixed(digits)}%`;
-    console.log(`\nGI term against ${REFERENCE_IMAGE} on ${gpu} (mean error bar ±${MEAN_TOLERANCE * 100}%, FLIP 8x8 bar ${FLIP_LIMIT})`);
+    console.log(`\nGI term${variant ? ' without occlusion' : ''} against ${REFERENCE_IMAGE} on ${gpu} (mean error bar ±${MEAN_TOLERANCE * 100}%, FLIP 8x8 bar ${FLIP_LIMIT})`);
     console.log('scene              camera                         mean error  FLIP 8x8  block err  p95 block  ref noise (px / 8x8)  store MB  probes');
     for (const row of rows) {
         const noise = row.referenceNoise ? `${(row.referenceNoise.pixel * 100).toFixed(1)}% / ${(row.referenceNoise.block8 * 100).toFixed(2)}%` : 'not measured';

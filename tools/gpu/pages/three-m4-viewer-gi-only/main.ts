@@ -27,8 +27,9 @@ const env = import.meta.env as Record<string, unknown>;
 const SCENE = typeof env.VITE_DDGI_SCENES === 'string' && env.VITE_DDGI_SCENES.trim() !== '' ? env.VITE_DDGI_SCENES.trim() : 'sponza';
 const GI_MODE: 'only' | 'on' = env.VITE_DDGI_GI_MODE === 'on' ? 'on' : 'only';
 const MAX_TEXTURE_SIZE = typeof env.VITE_DDGI_MAX_TEXTURE_SIZE === 'string' && env.VITE_DDGI_MAX_TEXTURE_SIZE !== '' ? Number(env.VITE_DDGI_MAX_TEXTURE_SIZE) : undefined;
-const WIDTH = 1280;
-const HEIGHT = 720;
+// The page's own view (the runner's 1280 × 720 window less the browser's frame), so the screenshot shows the whole picture.
+const WIDTH = window.innerWidth > 0 ? window.innerWidth : 1280;
+const HEIGHT = window.innerHeight > 0 ? window.innerHeight : 720;
 /** Ordinary frames after DDGI's warm-up, before the picture is kept. */
 const SETTLE_FRAMES = 120;
 const WARM_UP_LIMIT_MS = 180_000;

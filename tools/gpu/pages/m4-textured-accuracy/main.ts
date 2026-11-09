@@ -26,6 +26,11 @@
  *    frames on a still camera (its jitter and history), read back in linear
  *    HDR, before tone mapping.
  *
+ * Each view's GI term (rgb floats, rows as read back) is posted to the
+ * runner's server (`UPLOAD_PATH`), not put in the report: three 1920 × 1080
+ * float images in base64 made the report too big to read back within
+ * DevTools' 30 s.
+ *
  * Also returned, for the record: the texture store's memory
  * (`stats.memory.textures`) and the probe count.
  *
@@ -40,10 +45,10 @@ import { ThreeGI } from '../../../../packages/ddgi-three/src/three-gi.ts';
 import { DEFAULT_GI_OCCLUSION_RADIUS } from '../../../../packages/ddgi-three/src/composite.ts';
 import { loadScene } from '../../../../apps/viewer/src/scene/load-scene.ts';
 import { platformSkyEnvironment } from '../../../../scenes/src/sky/sky-image.ts';
-import { floatsToBase64 } from '../ddgi-shared/harness.ts';
 import { runSteps, runThreePage, type ThreePageContext } from '../three-shared/harness.ts';
 import { advanceThreeFrame, findManifest, SHOT_FAR, SHOT_NEAR } from '../three-composite-shared/composite-check.ts';
 import { upscaledComposite, type UpscalePreset } from '../three-composite-shared/variants.ts';
+import { UPLOAD_PATH } from './upload-path.ts';
 
 /** A reference's stored camera (its json's `shot.camera`). */
 export interface AccuracyView {
@@ -66,7 +71,12 @@ export interface TexturedAccuracyJob {
     readonly passes: number;
     /** The upscaler preset; M1's default path is Performance. */
     readonly preset: UpscalePreset;
-    /** GTAO on the GI term: its resolution against the reduced pass, and its samples (M1's default path: 0.5, 16). */
+    /**
+     * GTAO on the GI term, as the default path has it (true), or none (false: a diagnostic, to tell
+     * the occlusion's share of a difference from the field's). Its resolution against the reduced
+     * pass, and its samples (M1's default path: 0.5, 16).
+     */
+    readonly occlusion: boolean;
     readonly occlusionScale: number;
     readonly occlusionSamples: number;
     /** Frames on a still camera through the upscaler before the read-back. */
@@ -82,6 +92,7 @@ const DEFAULT_JOB: TexturedAccuracyJob = {
     warmupPasses: 16,
     passes: 64,
     preset: 'performance',
+    occlusion: true,
     occlusionScale: 0.5,
     occlusionSamples: 16,
     upscaleFrames: 32,
@@ -99,7 +110,7 @@ const job: TexturedAccuracyJob = { ...DEFAULT_JOB, ...window.m4TexturedAccuracyJ
 const MAX_PROBES_PER_FRAME = 4096;
 
 /** rgb of an rgba read-back. */
-function rgbOf(rgba: Float32Array): Float32Array {
+function rgbOf(rgba: Float32Array): Float32Array<ArrayBuffer> {
     const rgb = new Float32Array((rgba.length / 4) * 3);
     for (let pixel = 0; pixel < rgba.length / 4; pixel++) for (let channel = 0; channel < 3; channel++) rgb[pixel * 3 + channel] = rgba[pixel * 4 + channel];
     return rgb;
@@ -168,8 +179,8 @@ async function measure(context: ThreePageContext): Promise<void> {
 
     renderer.setSize(job.width, job.height, false);
     const target = new RenderTarget(job.width, job.height, { type: FloatType, depthBuffer: false });
-    const occlusion = { resolutionScale: job.occlusionScale, radius: DEFAULT_GI_OCCLUSION_RADIUS, samples: job.occlusionSamples };
-    const images: Record<string, string> = {};
+    const occlusion = job.occlusion ? { resolutionScale: job.occlusionScale, radius: DEFAULT_GI_OCCLUSION_RADIUS, samples: job.occlusionSamples } : false;
+    const uploaded: string[] = [];
     for (const view of job.views) {
         placeCamera(view);
         // A fresh pipeline per view: the upscaler's history starts at this camera.
@@ -188,12 +199,14 @@ async function measure(context: ThreePageContext): Promise<void> {
         let nonFinite = 0;
         for (const value of pixels) if (!Number.isFinite(value)) nonFinite++;
         assert(nonFinite === 0, `${view.name}: ${nonFinite} non-finite values in the GI term`);
-        images[view.name] = floatsToBase64(rgbOf(pixels));
-        log(`${view.name}: GI term through the upscaler (${job.preset}, GTAO at ${job.occlusionScale}), ${job.upscaleFrames} frames`);
+        const response = await fetch(`${UPLOAD_PATH}?view=${encodeURIComponent(view.name)}`, { method: 'POST', body: rgbOf(pixels) });
+        assert(response.ok, `${view.name}: the upload failed (${response.status})`);
+        uploaded.push(view.name);
+        log(`${view.name}: GI term through the upscaler (${job.preset}, ${job.occlusion ? `GTAO at ${job.occlusionScale}` : 'no occlusion'}), ${job.upscaleFrames} frames`);
         pipeline.dispose();
     }
     target.dispose();
-    data.giTermBase64 = images;
+    data.uploadedViews = uploaded;
     data.recompilesAfter = platform.stats.recompiles;
 }
 
