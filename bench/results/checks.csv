@@ -299,3 +299,348 @@ date,commit,device,browser,scene,metric,value
 2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/platform_recompiles/controlCounted,1
 2026-11-09,1919130,Intel UHD,Chrome headless,all,note/correctness_run,1
 2026-11-09,1919130,Intel UHD,Chrome headless,all,note/t2.10_intel_batch,3
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/light_groups/frames,900
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/light_groups/linearity/0/composedBefore,0.748925
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/light_groups/linearity/0/composedAfter,0.387375
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/light_groups/linearity/0/reconverged,0.387393
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/light_groups/linearity/0/againstReconverged,-0.0000447711
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/light_groups/linearity/0/movedInItsFrame,-0.482758
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/light_groups/linearity/0/weightsOneAgainstGroupsOff,-0.00000439416
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/light_groups/linearity/1/composedBefore,0.812362
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/light_groups/linearity/1/composedAfter,0.425682
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/light_groups/linearity/1/reconverged,0.4257
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/light_groups/linearity/1/againstReconverged,-0.0000431451
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/light_groups/linearity/1/movedInItsFrame,-0.475995
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/light_groups/linearity/1/weightsOneAgainstGroupsOff,-0.0000180879
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/light_groups/linearity/2/composedBefore,0.52219
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/light_groups/linearity/2/composedAfter,0.46385
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/light_groups/linearity/2/reconverged,0.463819
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/light_groups/linearity/2/againstReconverged,0.0000669116
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/light_groups/linearity/2/movedInItsFrame,-0.111721
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/light_groups/linearity/2/weightsOneAgainstGroupsOff,-0.0000573929
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/light_groups/composeOnly/historyUnchanged,1
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/light_groups/composeOnly/layersUnchanged,1
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/light_groups/composeOnly/composedChanged,1
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/light_groups/composeOnly/changesMarkedInItsFrame,0
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/light_groups/composeOnly/framesWithChangesMarked,0
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/light_groups/composeOnly/fullComposes,1
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/light_groups/composeOnly/probesMarkedAfter,0
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/light_groups/reductions/defaultMean,0.886112
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/light_groups/reductions/fallbackMean,0.886112
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/light_groups/reductions/difference,0
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/light_groups/reductions/hasSubgroups,1
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/light_groups/regroup/curve/0/frame,0
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/light_groups/regroup/curve/0/error,0.366196
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/light_groups/regroup/curve/1/frame,1
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/light_groups/regroup/curve/1/error,0.238529
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/light_groups/regroup/curve/2/frame,2
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/light_groups/regroup/curve/2/error,0.158228
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/light_groups/regroup/curve/3/frame,4
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/light_groups/regroup/curve/3/error,0.0720713
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/light_groups/regroup/curve/4/frame,8
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/light_groups/regroup/curve/4/error,0.0199944
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/light_groups/regroup/curve/5/frame,15
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/light_groups/regroup/curve/5/error,0.0105724
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/light_groups/regroup/curve/6/frame,20
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/light_groups/regroup/curve/6/error,0.00935261
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/light_groups/regroup/curve/7/frame,25
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/light_groups/regroup/curve/7/error,0.0085898
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/light_groups/regroup/curve/8/frame,30
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/light_groups/regroup/curve/8/error,0.00803882
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/light_groups/regroup/withinFrame,8
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/light_groups/regroup/probesMarked,1928
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/light_groups/regroup/target/0,2.6662
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/light_groups/regroup/target/1,0
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/light_groups/regroup/target/2,0
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/light_groups/memory/groupsOffBytes,13022240
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/light_groups/memory/twoGroupsBytes,20801216
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/light_groups/memory/perExtraLayerBytes,3889488
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/light_groups/memory/probes,1071
+2026-11-09,1919130,Intel UHD,Chrome headless,all,note/correctness_run,1
+2026-11-09,1919130,Intel UHD,Chrome headless,all,note/t2.10_intel_batch,4
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/sun_layer/frames,600
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/sun_layer/off/atlasMean,0.230761
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/sun_layer/off/viewMeans/0,0.0492932
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/sun_layer/off/viewMeans/1,0.0504227
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/sun_layer/off/viewMeans/2,0.0465264
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/sun_layer/off/probes,4840
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/sun_layer/off/memoryBytes,30441304
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/sun_layer/colour/rows/0/before,0.0492912
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/sun_layer/colour/rows/0/after,0.0305298
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/sun_layer/colour/rows/0/reconverged,0.0305301
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/sun_layer/colour/rows/0/againstReconverged,-0.0000100285
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/sun_layer/colour/rows/0/movedInItsFrame,-0.380623
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/sun_layer/colour/rows/0/layersAgainstOff,-0.0000405405
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/sun_layer/colour/rows/1/before,0.0504237
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/sun_layer/colour/rows/1/after,0.0324301
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/sun_layer/colour/rows/1/reconverged,0.0324294
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/sun_layer/colour/rows/1/againstReconverged,0.000020448
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/sun_layer/colour/rows/1/movedInItsFrame,-0.356849
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/sun_layer/colour/rows/1/layersAgainstOff,0.0000205775
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/sun_layer/colour/rows/2/before,0.0465253
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/sun_layer/colour/rows/2/after,0.0266157
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/sun_layer/colour/rows/2/reconverged,0.0266145
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/sun_layer/colour/rows/2/againstReconverged,0.0000463293
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/sun_layer/colour/rows/2/movedInItsFrame,-0.427931
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/sun_layer/colour/rows/2/layersAgainstOff,-0.0000228064
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/sun_layer/colour/largestMove,0.427931
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/sun_layer/colour/composeOnly/historyUnchanged,1
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/sun_layer/colour/composeOnly/layersUnchanged,1
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/sun_layer/colour/composeOnly/composedChanged,1
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/sun_layer/colour/composeOnly/changesMarkedInItsFrame,0
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/sun_layer/colour/composeOnly/framesWithChangesMarked,0
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/sun_layer/colour/composeOnly/fullComposes,1
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/sun_layer/colour/composeOnly/probesMarkedAfter,0
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/sun_layer/colour/memory/sunLayerOffBytes,30441304
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/sun_layer/colour/memory/sunLayerBytes,47290552
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/sun_layer/colour/memory/extraBytes,16849248
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/sun_layer/colour/memory/probes,4840
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/sun_layer/cap/rows/0/sixLayers,0.0317652
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/sun_layer/cap/rows/0/reference,0.0317626
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/sun_layer/cap/rows/0/difference,0.0000817015
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/sun_layer/cap/rows/1/sixLayers,0.0337609
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/sun_layer/cap/rows/1/reference,0.0337637
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/sun_layer/cap/rows/1/difference,-0.0000811673
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/sun_layer/cap/rows/2/sixLayers,0.025649
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/sun_layer/cap/rows/2/reference,0.025652
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/sun_layer/cap/rows/2/difference,-0.000115973
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/sun_layer/cap/reductions/defaultMean,0.025889
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/sun_layer/cap/reductions/fallbackMean,0.025889
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/sun_layer/cap/reductions/difference,3.67863e-8
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/sun_layer/cap/reductions/hasSubgroups,1
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/sun_layer/cap/memoryBytes,104774840
+2026-11-09,1919130,Intel UHD,Chrome headless,all,note/correctness_run,1
+2026-11-09,1919130,Intel UHD,Chrome headless,all,note/t2.10_intel_batch,4
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/slots,4
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/subgroupMinSize,8
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/subgroupMaxSize,16
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/default/one triangle/triangles,1
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/default/one triangle/nodes,1
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/default/one triangle/referenceNodes,1
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/default/one triangle/depth,1
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/default/one triangle/sahCost,2
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/default/one triangle/sahCostVsReference,1
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/default/two triangles/triangles,2
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/default/two triangles/nodes,1
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/default/two triangles/referenceNodes,1
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/default/two triangles/depth,1
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/default/two triangles/sahCost,1.0133
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/default/two triangles/sahCostVsReference,1
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/default/three triangles/triangles,3
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/default/three triangles/nodes,2
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/default/three triangles/referenceNodes,2
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/default/three triangles/depth,2
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/default/three triangles/sahCost,1.2637
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/default/three triangles/sahCostVsReference,1
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/default/one sort tile/triangles,2048
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/default/one sort tile/nodes,2004
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/default/one sort tile/referenceNodes,2004
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/default/one sort tile/depth,15
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/default/one sort tile/sahCost,36.7517
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/default/one sort tile/sahCostVsReference,1
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/default/one past a tile/triangles,2049
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/default/one past a tile/nodes,1998
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/default/one past a tile/referenceNodes,1998
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/default/one past a tile/depth,15
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/default/one past a tile/sahCost,36.1279
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/default/one past a tile/sahCostVsReference,1
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/default/grid, 16-bit indices/triangles,45000
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/default/grid, 16-bit indices/nodes,23452
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/default/grid, 16-bit indices/referenceNodes,23452
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/default/grid, 16-bit indices/depth,21
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/default/grid, 16-bit indices/sahCost,50.1625
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/default/grid, 16-bit indices/sahCostVsReference,1
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/default/all triangles equal/triangles,3000
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/default/all triangles equal/nodes,374
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/default/all triangles equal/referenceNodes,374
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/default/all triangles equal/depth,9
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/default/all triangles equal/sahCost,3374
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/default/all triangles equal/sahCostVsReference,1
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/default/flat (no height)/triangles,4000
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/default/flat (no height)/nodes,2966
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/default/flat (no height)/referenceNodes,2966
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/default/flat (no height)/depth,17
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/default/flat (no height)/sahCost,20.7874
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/default/flat (no height)/sahCostVsReference,1
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/default/flags/triangles,500
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/default/flags/nodes,497
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/default/flags/referenceNodes,497
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/default/flags/depth,12
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/default/flags/sahCost,18.6691
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/default/flags/sahCostVsReference,1
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/default/random soup 300k/triangles,300000
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/default/random soup 300k/nodes,298881
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/default/random soup 300k/referenceNodes,298881
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/default/random soup 300k/depth,24
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/default/random soup 300k/sahCost,193.448
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/default/random soup 300k/sahCostVsReference,1
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/default/odd 16-bit index list/triangles,3
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/default/odd 16-bit index list/nodes,2
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/default/odd 16-bit index list/referenceNodes,2
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/default/odd 16-bit index list/depth,2
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/default/odd 16-bit index list/sahCost,1.0788
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/default/odd 16-bit index list/sahCostVsReference,1
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/default/GPU buffers, interleaved/triangles,28800
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/default/GPU buffers, interleaved/nodes,14984
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/default/GPU buffers, interleaved/referenceNodes,14984
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/default/GPU buffers, interleaved/depth,19
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/default/GPU buffers, interleaved/sahCost,45.6356
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/default/GPU buffers, interleaved/sahCostVsReference,1
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/default/GPU buffers, 16-bit indices at an odd offset/triangles,3200
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/default/GPU buffers, 16-bit indices at an odd offset/nodes,1678
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/default/GPU buffers, 16-bit indices at an odd offset/referenceNodes,1678
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/default/GPU buffers, 16-bit indices at an odd offset/depth,15
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/default/GPU buffers, 16-bit indices at an odd offset/sahCost,28.8614
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/default/GPU buffers, 16-bit indices at an odd offset/sahCostVsReference,1
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes and ties, leaves of 1/one triangle/triangles,1
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes and ties, leaves of 1/one triangle/nodes,1
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes and ties, leaves of 1/one triangle/referenceNodes,1
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes and ties, leaves of 1/one triangle/depth,1
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes and ties, leaves of 1/one triangle/sahCost,2
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes and ties, leaves of 1/one triangle/sahCostVsReference,1
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes and ties, leaves of 1/two triangles/triangles,2
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes and ties, leaves of 1/two triangles/nodes,1
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes and ties, leaves of 1/two triangles/referenceNodes,1
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes and ties, leaves of 1/two triangles/depth,1
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes and ties, leaves of 1/two triangles/sahCost,1.0133
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes and ties, leaves of 1/two triangles/sahCostVsReference,1
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes and ties, leaves of 1/three triangles/triangles,3
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes and ties, leaves of 1/three triangles/nodes,2
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes and ties, leaves of 1/three triangles/referenceNodes,2
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes and ties, leaves of 1/three triangles/depth,2
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes and ties, leaves of 1/three triangles/sahCost,1.2637
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes and ties, leaves of 1/three triangles/sahCostVsReference,1
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes and ties, leaves of 1/one sort tile/triangles,2048
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes and ties, leaves of 1/one sort tile/nodes,2047
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes and ties, leaves of 1/one sort tile/referenceNodes,2047
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes and ties, leaves of 1/one sort tile/depth,15
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes and ties, leaves of 1/one sort tile/sahCost,36.0807
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes and ties, leaves of 1/one sort tile/sahCostVsReference,1
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes and ties, leaves of 1/one past a tile/triangles,2049
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes and ties, leaves of 1/one past a tile/nodes,2048
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes and ties, leaves of 1/one past a tile/referenceNodes,2048
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes and ties, leaves of 1/one past a tile/depth,15
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes and ties, leaves of 1/one past a tile/sahCost,35.9218
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes and ties, leaves of 1/one past a tile/sahCostVsReference,1
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes and ties, leaves of 1/grid, 16-bit indices/triangles,45000
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes and ties, leaves of 1/grid, 16-bit indices/nodes,44999
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes and ties, leaves of 1/grid, 16-bit indices/referenceNodes,44999
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes and ties, leaves of 1/grid, 16-bit indices/depth,22
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes and ties, leaves of 1/grid, 16-bit indices/sahCost,58.7899
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes and ties, leaves of 1/grid, 16-bit indices/sahCostVsReference,1
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes and ties, leaves of 1/flat (no height)/triangles,4000
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes and ties, leaves of 1/flat (no height)/nodes,3999
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes and ties, leaves of 1/flat (no height)/referenceNodes,3999
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes and ties, leaves of 1/flat (no height)/depth,18
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes and ties, leaves of 1/flat (no height)/sahCost,19.8609
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes and ties, leaves of 1/flat (no height)/sahCostVsReference,1
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes and ties, leaves of 1/flags/triangles,500
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes and ties, leaves of 1/flags/nodes,499
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes and ties, leaves of 1/flags/referenceNodes,499
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes and ties, leaves of 1/flags/depth,12
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes and ties, leaves of 1/flags/sahCost,18.2421
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes and ties, leaves of 1/flags/sahCostVsReference,1
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes and ties, leaves of 1/random soup 300k/triangles,300000
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes and ties, leaves of 1/random soup 300k/nodes,299999
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes and ties, leaves of 1/random soup 300k/referenceNodes,299999
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes and ties, leaves of 1/random soup 300k/depth,25
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes and ties, leaves of 1/random soup 300k/sahCost,193.11
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes and ties, leaves of 1/random soup 300k/sahCostVsReference,0.99726
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes and ties, leaves of 1/odd 16-bit index list/triangles,3
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes and ties, leaves of 1/odd 16-bit index list/nodes,2
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes and ties, leaves of 1/odd 16-bit index list/referenceNodes,2
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes and ties, leaves of 1/odd 16-bit index list/depth,2
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes and ties, leaves of 1/odd 16-bit index list/sahCost,1.0788
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes and ties, leaves of 1/odd 16-bit index list/sahCostVsReference,1
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes and ties, leaves of 1/GPU buffers, interleaved/triangles,28800
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes and ties, leaves of 1/GPU buffers, interleaved/nodes,28799
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes and ties, leaves of 1/GPU buffers, interleaved/referenceNodes,28799
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes and ties, leaves of 1/GPU buffers, interleaved/depth,22
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes and ties, leaves of 1/GPU buffers, interleaved/sahCost,53.4506
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes and ties, leaves of 1/GPU buffers, interleaved/sahCostVsReference,1
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes and ties, leaves of 1/GPU buffers, 16-bit indices at an odd offset/triangles,3200
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes and ties, leaves of 1/GPU buffers, 16-bit indices at an odd offset/nodes,3199
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes and ties, leaves of 1/GPU buffers, 16-bit indices at an odd offset/referenceNodes,3199
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes and ties, leaves of 1/GPU buffers, 16-bit indices at an odd offset/depth,17
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes and ties, leaves of 1/GPU buffers, 16-bit indices at an odd offset/sahCost,29.8821
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes and ties, leaves of 1/GPU buffers, 16-bit indices at an odd offset/sahCostVsReference,1
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes/one triangle/triangles,1
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes/one triangle/nodes,1
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes/one triangle/referenceNodes,1
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes/one triangle/depth,1
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes/one triangle/sahCost,2
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes/one triangle/sahCostVsReference,1
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes/two triangles/triangles,2
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes/two triangles/nodes,1
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes/two triangles/referenceNodes,1
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes/two triangles/depth,1
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes/two triangles/sahCost,1.0133
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes/two triangles/sahCostVsReference,1
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes/three triangles/triangles,3
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes/three triangles/nodes,2
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes/three triangles/referenceNodes,2
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes/three triangles/depth,2
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes/three triangles/sahCost,1.2637
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes/three triangles/sahCostVsReference,1
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes/one sort tile/triangles,2048
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes/one sort tile/nodes,2001
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes/one sort tile/referenceNodes,2001
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes/one sort tile/depth,15
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes/one sort tile/sahCost,36.0713
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes/one sort tile/sahCostVsReference,1
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes/one past a tile/triangles,2049
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes/one past a tile/nodes,1998
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes/one past a tile/referenceNodes,1998
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes/one past a tile/depth,15
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes/one past a tile/sahCost,35.9138
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes/one past a tile/sahCostVsReference,1
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes/grid, 16-bit indices/triangles,45000
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes/grid, 16-bit indices/nodes,24766
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes/grid, 16-bit indices/referenceNodes,24766
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes/grid, 16-bit indices/depth,21
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes/grid, 16-bit indices/sahCost,54.7508
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes/grid, 16-bit indices/sahCostVsReference,1
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes/all triangles equal/triangles,3000
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes/all triangles equal/nodes,374
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes/all triangles equal/referenceNodes,374
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes/all triangles equal/depth,9
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes/all triangles equal/sahCost,3374
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes/all triangles equal/sahCostVsReference,1
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes/flat (no height)/triangles,4000
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes/flat (no height)/nodes,2978
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes/flat (no height)/referenceNodes,2978
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes/flat (no height)/depth,18
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes/flat (no height)/sahCost,19.6187
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes/flat (no height)/sahCostVsReference,1
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes/flags/triangles,500
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes/flags/nodes,497
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes/flags/referenceNodes,497
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes/flags/depth,12
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes/flags/sahCost,18.2413
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes/flags/sahCostVsReference,1
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes/random soup 300k/triangles,300000
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes/random soup 300k/nodes,298890
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes/random soup 300k/referenceNodes,298890
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes/random soup 300k/depth,25
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes/random soup 300k/sahCost,193.108
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes/random soup 300k/sahCostVsReference,0.99726
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes/odd 16-bit index list/triangles,3
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes/odd 16-bit index list/nodes,2
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes/odd 16-bit index list/referenceNodes,2
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes/odd 16-bit index list/depth,2
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes/odd 16-bit index list/sahCost,1.0788
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes/odd 16-bit index list/sahCostVsReference,1
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes/GPU buffers, interleaved/triangles,28800
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes/GPU buffers, interleaved/nodes,15715
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes/GPU buffers, interleaved/referenceNodes,15715
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes/GPU buffers, interleaved/depth,20
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes/GPU buffers, interleaved/sahCost,50.699
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes/GPU buffers, interleaved/sahCostVsReference,1
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes/GPU buffers, 16-bit indices at an odd offset/triangles,3200
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes/GPU buffers, 16-bit indices at an odd offset/nodes,1728
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes/GPU buffers, 16-bit indices at an odd offset/referenceNodes,1728
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes/GPU buffers, 16-bit indices at an odd offset/depth,16
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes/GPU buffers, 16-bit indices at an odd offset/sahCost,28.1818
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes/GPU buffers, 16-bit indices at an odd offset/sahCostVsReference,1
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,note/correctness_run,1
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,note/t2.10_intel_batch,5
