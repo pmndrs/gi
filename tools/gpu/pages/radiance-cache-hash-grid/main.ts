@@ -216,10 +216,11 @@ try {
             refusal = error;
         }
         await drainDevice(defaultDevice);
+        // Checked before destroy(), which resolves device.lost (watchDevice records that too).
+        assert(defaultErrors.length === 0, `the refused prepare left device errors: ${defaultErrors.join(' | ')}`);
         defaultDevice.destroy();
         assert(refusal instanceof GILimitError, `a default-limits device should get GILimitError, got ${String(refusal)}`);
         assert(refusal.limit === 'maxStorageBufferBindingSize', `the error should name maxStorageBufferBindingSize, named ${refusal.limit}`);
-        assert(defaultErrors.length === 0, `the refused prepare left device errors: ${defaultErrors.join(' | ')}`);
         data.defaultLimitsRefusal = refusal.message;
         log(`default limits: refused with ${refusal.limit} (needs ${refusal.needed}, has ${refusal.available})`);
     }
