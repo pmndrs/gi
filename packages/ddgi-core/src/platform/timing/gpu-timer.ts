@@ -84,7 +84,13 @@ export interface GpuTimerCounters {
 }
 
 const DEFAULT_SLOT_COUNT = 8;
-const DEFAULT_MAX_PASSES_PER_FRAME = 16;
+/**
+ * 32 since several DDGI volumes (M3, T3.5): each volume runs DDGI's passes
+ * (mark, schedule, trace with `gi/direct`, blend, write, propagate, census)
+ * in turn, about 8 a volume, and two volumes with the platform's own passes
+ * went past the 16 one volume needed. 2 × 32 × 8 = 512 timestamps a set.
+ */
+const DEFAULT_MAX_PASSES_PER_FRAME = 32;
 /** Samples nobody collects with `takeSamples` are dropped, oldest first, past this many. */
 const MAX_BUFFERED_SAMPLES = 256;
 const BYTES_PER_TIMESTAMP = 8;

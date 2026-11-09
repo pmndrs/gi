@@ -474,16 +474,16 @@ fn ddgiTexelDirection(texel: vec2u, texels: u32) -> vec3f {
     return ddgiOctDecode((vec2f(texel) + 0.5) / f32(texels) * 2.0 - 1.0);
 }
 
-// Atlas texel of interior texel 'texel' of a probe's tile (the layer is probe.y).
+// Atlas texel of interior texel 'texel' of a probe's tile (the array layer is ddgiProbeLayer(probe)).
 fn ddgiAtlasTexel(probe: vec3i, texel: vec2u, texels: u32) -> vec2i {
     let border = i32(DDGI_TILE_BORDER);
     return probe.xz * (i32(texels) + 2 * border) + border + vec2i(texel);
 }
 
-// The same in irradiance layer 'layer': its tiles are 'layer' probe grids to
-// the right in the layered atlas (light-groups.ts).
+// The same in irradiance layer 'layer': its tiles are 'layer' atlas widths of
+// tiles to the right in the layered atlas (light-groups.ts).
 fn ddgiIrradianceAtlasTexel(probe: vec3i, texel: vec2u, layer: u32) -> vec2i {
-    let shifted = probe + vec3i(i32(layer) * i32(ddgiProbeCount().x), 0, 0);
+    let shifted = probe + vec3i(i32(layer) * ddgiAtlasTilesAcross(), 0, 0);
     return ddgiAtlasTexel(shifted, texel, DDGI_IRRADIANCE_TEXELS);
 }
 
@@ -915,7 +915,7 @@ fn ddgiBlendDistanceTexel(slot: u32, probeIndex: u32, probe: vec3i, texelIndex: 
         moments += weight * vec2f(distance, distance * distance);
         weightSum += weight;
     }
-    let old = textureLoad(ddgiDistanceAtlas, ddgiAtlasTexel(probe, texel, DDGI_DISTANCE_TEXELS), probe.y, 0).xy;
+    let old = textureLoad(ddgiDistanceAtlas, ddgiAtlasTexel(probe, texel, DDGI_DISTANCE_TEXELS), ddgiProbeLayer(probe), 0).xy;
     // A texel no ray came near this update keeps its old value.
     let estimate = select(old, moments / weightSum, weightSum > 1.0e-6);
     let blendedValue = mix(estimate, old, hysteresis);
@@ -1011,7 +1011,7 @@ fn ddgiRequestFeedback(probeIndex: u32, probe: vec3i, urgency: f32) {
         if (any(neighbour < vec3i(0)) || any(neighbour >= counts)) {
             continue;
         }
-        if (ddgiReadProbeData(ddgiProbeData, neighbour).state != DDGI_STATE_ACTIVE) {
+        if (ddgiReadProbeData(ddgiProbeData, ddgiUniformVolume(), neighbour).state != DDGI_STATE_ACTIVE) {
             continue;
         }
         let neighbourIndex = u32(neighbour.x) + u32(counts.x) * (u32(neighbour.z) + u32(counts.z) * u32(neighbour.y));
@@ -1074,7 +1074,7 @@ fn ddgiBlend(
     }
     let probeIndex = ddgiUpdateList[slot];
     let probe = ddgiProbeCoordinates(probeIndex, ddgiProbeCount());
-    let probeData = ddgiReadProbeData(ddgiProbeData, probe);
+    let probeData = ddgiReadProbeData(ddgiProbeData, ddgiUniformVolume(), probe);
     let state = probeData.state;
     let tracedRays = ddgiTracedRays(state);
     let blendedRays = ddgi.raysPerProbe - DDGI_FIXED_RAYS;
@@ -1125,7 +1125,7 @@ ${layered ? '' : '        ddgiRayRadiance[rayIndex] = record;'}
         ddgiChangedNow = 0u;
         // The previous update's big-change verdict (layer 0's alpha), read once here:
         // phase C blends every layer's texels with it at once.
-        ddgiFastHysteresis = select(0u, 1u, textureLoad(ddgiIrradianceAtlas, ddgiIrradianceAtlasTexel(probe, vec2u(0u), 0u), probe.y, 0).a > 0.5);
+        ddgiFastHysteresis = select(0u, 1u, textureLoad(ddgiIrradianceAtlas, ddgiIrradianceAtlasTexel(probe, vec2u(0u), 0u), ddgiProbeLayer(probe), 0).a > 0.5);
         var newState = decision.state;
         if (blendThisUpdate) {
             // One workgroup per probe in the list, and a probe is listed at
@@ -1186,7 +1186,7 @@ ${layered ? '' : '        ddgiRayRadiance[rayIndex] = record;'}
             let texelIndex = item % DDGI_IRRADIANCE_TEXEL_COUNT;
             let texel = vec2u(texelIndex % DDGI_IRRADIANCE_TEXELS, texelIndex / DDGI_IRRADIANCE_TEXELS);
             ddgiTexelEstimate[item] = vec4f(ddgiEstimateIrradianceTexel(slot, layer, texelIndex, blendedRays), 0.0);
-            ddgiTexelOld[item] = textureLoad(ddgiIrradianceAtlas, ddgiIrradianceAtlasTexel(probe, texel, layer), probe.y, 0);
+            ddgiTexelOld[item] = textureLoad(ddgiIrradianceAtlas, ddgiIrradianceAtlasTexel(probe, texel, layer), ddgiProbeLayer(probe), 0);
         } else {
             ddgiBlendDistanceTexel(slot, probeIndex, probe, item - layerTexels, blendedRays, hysteresis);
         }

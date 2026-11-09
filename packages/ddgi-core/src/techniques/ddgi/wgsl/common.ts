@@ -83,6 +83,10 @@ struct DdgiUniforms {
     // one unit of its white-reference layer stands for. ddgi/blend weighs that
     // layer by it in the probe's mean, so the mean is the probe's real light.
     sunLight: vec4f,
+    // Several volumes (m3-moving.md §4.1, volumes.ts): each is updated with
+    // uniforms of its own, and its probes' points are listed from here on in
+    // the points debug view (the volumes' probes one after another).
+    probeBase: u32,
 }
 
 const DDGI_MAX_RAYS: u32 = ${MAX_RAYS_PER_PROBE}u;
@@ -99,6 +103,18 @@ fn ddgiUniformVolume() -> DdgiVolume {
 
 fn ddgiProbeCount() -> vec3u {
     return vec3u(ddgiUniformVolume().counts);
+}
+
+// The atlas layer of one of this volume's probes: every volume shares the
+// atlases, this one from its layer base on (volumes.ts).
+fn ddgiProbeLayer(probe: vec3i) -> i32 {
+    return ddgiAtlasLayer(ddgiUniformVolume(), probe);
+}
+
+// Tiles across one atlas layer, the same for every volume. Irradiance layer L
+// (light groups) has its tiles L times this many tiles to the right.
+fn ddgiAtlasTilesAcross() -> i32 {
+    return i32(ddgiUniformVolume().atlasTiles.x);
 }
 
 // Probe (x, y, z) of index p = x + nx * (z + nz * y).

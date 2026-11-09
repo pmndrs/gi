@@ -98,21 +98,22 @@ fn ddgiNearestHalf(value: f32) -> f32 {
 
 // One probe's composed tile, borders included: every tile texel is the
 // weighted sum of the same texel in each layer's tile (layer L's tiles are L
-// probe grids to the right, light-groups.ts). Borders copy interior texels in
-// every layer alike, so the sum's borders are right too.
+// atlas widths of tiles to the right, light-groups.ts). Borders copy interior
+// texels in every layer alike, so the sum's borders are right too.
 fn ddgiComposeTile(probe: vec3i, thread: u32) {
     let tile = DDGI_IRRADIANCE_TEXELS + 2u * u32(DDGI_TILE_BORDER);
-    let gridWidth = i32(ddgiProbeCount().x);
+    let tilesAcross = ddgiAtlasTilesAcross();
+    let atlasLayer = ddgiProbeLayer(probe);
     for (var index = thread; index < tile * tile; index += DDGI_COMPOSE_WORKGROUP_SIZE) {
         let inTile = vec2i(vec2u(index % tile, index / tile));
         var composed = vec3f(0.0);
         for (var layer = 0u; layer < DDGI_IRRADIANCE_LAYERS; layer++) {
-            let layerTile = vec2i(probe.x + i32(layer) * gridWidth, probe.z);
-            let texel = textureLoad(ddgiLayeredIrradiance, layerTile * i32(tile) + inTile, probe.y, 0).rgb;
+            let layerTile = vec2i(probe.x + i32(layer) * tilesAcross, probe.z);
+            let texel = textureLoad(ddgiLayeredIrradiance, layerTile * i32(tile) + inTile, atlasLayer, 0).rgb;
             composed += ddgiComposeWeights.layers[layer].rgb * texel;
         }
         let rounded = vec3f(ddgiNearestHalf(composed.r), ddgiNearestHalf(composed.g), ddgiNearestHalf(composed.b));
-        textureStore(ddgiComposedOut, probe.xz * i32(tile) + inTile, probe.y, vec4f(rounded, 0.0));
+        textureStore(ddgiComposedOut, probe.xz * i32(tile) + inTile, atlasLayer, vec4f(rounded, 0.0));
     }
 }
 

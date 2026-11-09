@@ -21,9 +21,19 @@ A box of probes on a regular grid. Each probe stores, in two texture atlases, th
 
 ## The volume
 
-- **One axis-aligned box per technique in M1.** Settings give `center`, `size` and `spacing` (metres, one number or per axis). Probe counts are `floor(size / spacing) + 1` per axis, and the grid is centred in the box. Camera-following volumes and several volumes are M3.
+- **One axis-aligned box per technique in M1.** Settings give `center`, `size` and `spacing` (metres, one number or per axis). Probe counts are `floor(size / spacing) + 1` per axis, and the grid is centred in the box. Camera-following volumes are M3 (T3.6); several volumes are in since T3.5 (next section).
 - **Probe index:** `p = x + nx * (z + nz * y)`.
 - **Limits** (default device, `maxTextureDimension2D` 8192, `maxTextureArrayLayers` 256): `nx * 16 ≤ 8192`, `nz * 16 ≤ 8192`, `ny ≤ 256`. `prepare` throws `GILimitError` with the numbers past that.
+
+### Several volumes (T3.5, m3-moving.md §4.1, as built)
+
+- **Settings:** `volumes: DDGIVolumeSettings[]` (at most 8), each with an optional `priority` (default 0; higher first, equal priorities in list order). Without `volumes`, `volume` is the one-element case; with it, `volume` reads as the first of them. New `prepare` when changed. Code: volumes.ts.
+- **One atlas set.** Volume v owns the array layers `[layerBase_v, layerBase_v + ny_v)`, in priority order; every layer is as large as the largest footprint (largest nx by largest nz tiles). Past `maxTextureArrayLayers` in total, `prepare` throws `GILimitError`. One volume lays out exactly as before (layer base 0, the atlas its own grid).
+- **The volume table:** an `rgba32float` texture, one row per volume in priority order, each row the volume's four sampling `vec4f`s: origin and normal bias, spacing and view bias, counts and **layer base** (`volumeCounts.w`), texel sizes and **the atlas's tiles across and down** (`volumeTexels.zw`). The kernels get the same four as their first uniforms. It is also a storage texture, for T3.6's `ddgi/scroll`. The CPU writes it after `prepare` and when a bias setting changes.
+- **Sampling** (`ddgiSampleVolumes`, wgsl/sample.ts): volumes in table order; each read volume adds its normalised irradiance with weight `coverage_v × (1 − W)` (coverage: its edge fade × `saturate(Σw / 0.02)`); stop at W ≥ 0.99 or after 2 volumes. A volume whose edge coverage is 0 at the point is skipped before any probe is read; the last volume is read anyway when none before it was, so a point outside every volume gets the nearest cell as before. The irradiance is `Σ w_v E_v / W` (the first volume's own value when only one was read), the coverage W. So **one volume gives exactly the M2 value**, through the same code. Renderers (`giIrradiance`, `giCoverage`) and the update's bounce light (`ddgi/trace`, the layered lookup too) read it, so light bounces between volumes.
+- **The shading module** is version 2: its four `vec4f` uniforms became the volume table texture (4 textures in all), and it has no uniforms now; `globalsCode` writes no uniform buffer then.
+- **The update:** each volume runs the same kernels with its own uniforms, update list, scratch, history, scheduler, census, propagation, mark table and ray scratch, one volume after another in a frame (`PreparedResources` per volume, the shared textures and kernels the same objects). The kernels see one volume (`ddgiUniformVolume()`) and add its layer base where they touch the atlases (`ddgiProbeLayer`, `ddgiAtlasLayer`). A frame's probes are shared in proportion to probe counts, so every volume sweeps at the same rate; Budget v2's floor is the technique's, shared the same way. The clock, the hot movers, the layer weights and the warm-up (done when every volume has made its passes) are the technique's. Counters add up over volumes ("volumes" says how many). The GPU timer takes 32 passes a frame (was 16) for the doubled passes.
+- **Not in T3.5:** a global probe numbering across volumes (each volume has its own scheduler, so priorities don't compete across volumes); the camera-following volume (T3.6).
 
 ## The textures
 
