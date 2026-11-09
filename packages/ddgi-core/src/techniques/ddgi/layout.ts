@@ -274,7 +274,13 @@ export const RAY_RECORD_BYTES = 8;
  *   update's mean estimate and the stored mean (a half float; T2.4b's
  *   feedback rule reads it). Written by every blend; `ddgi/mark` divides a
  *   light's change by the mean;
- * - `wakeUntil`: M3 (m3-moving.md 5.3, woken air probes);
+ * - `wakeUntil` (T3.4, m3-moving.md §5.3, woken air probes): the frame
+ *   until which the probe stays awake, compared modulo 2^32; 0 when it was
+ *   never woken or its wake has run out. `ddgi/mark` sets it to the frame
+ *   plus WAKE_FRAMES for probes near a receiver or a moved or posed object. While
+ *   it is awake, classification doesn't switch it off for "no surface
+ *   nearby", so a moving object in mid-air gets GI there. `ddgi/blend`
+ *   clears it at the first update after it ran out;
  * - `keysReceived`: for a fine probe awaiting a change (T2.4c, m2-lights.md
  *   §4.5), which of its up to 8 key neighbours have passed it their change
  *   since its own last update, in the low 8 bits (bit j: key neighbour j,
@@ -647,6 +653,13 @@ export const MARK_KIND = {
      * set by how much of their view it covers.
      */
     geometry: 4,
+    /**
+     * A receiver is here now (`SceneChanges.receivers`, T3.4; m3-moving.md
+     * §5.3): an object rays don't see, so nothing about the light changed,
+     * but it needs GI where it is. Probes near its box are woken (switched
+     * on even with no surface nearby); nothing is marked as changed.
+     */
+    receiver: 5,
 } as const;
 
 /**
