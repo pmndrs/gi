@@ -5,8 +5,8 @@
  *
  * A triangle is flagged when its material slot, in *any* instance of its
  * mesh, could let a ray pass (`giMaterialNeedsLookup`, material-test-wgsl.ts:
- * see-through or single-sided now, cutout and stochastic with T4.2's second
- * half). It is a per-mesh union, so it can only cost an extra lookup, never
+ * see-through, single-sided, a cutout or stochastic alpha that can open a
+ * hole). It is a per-mesh union, so it can only cost an extra lookup, never
  * give a wrong answer: the walk's `giMaterialPasses` reads the instance's own
  * material.
  *
@@ -51,7 +51,6 @@
 
 import type { ComputeKernel, KernelBuilder, WgslModule } from '../contract/wgsl.ts';
 import { SHADER_STAGE_COMPUTE } from '../kernel-builder.ts';
-import { HEADER_WORD, INSTANCE_WORD } from '../scene/layout.ts';
 import { TRIANGLE_WORD, TRIANGLE_WORDS } from './layout.ts';
 import { materialNeedsLookup, TRIANGLE_FLAG_CONSULT_MATERIAL, type WalkMaterial } from './material-test-wgsl.ts';
 
@@ -110,10 +109,6 @@ const MAX_MASK_WORKGROUPS = 256;
 const RANGE_BYTES = 16;
 const RANGE_WORDS = RANGE_BYTES / 4;
 
-/** Which vec4 of a record a word is in, and which component (as scene/wgsl.ts reads them). */
-const vec4Of = (word: number): number => Math.floor(word / 4);
-const componentOf = (word: number): string => ['x', 'y', 'z', 'w'][word % 4];
-
 /** Shared by both passes: the slot bits, as the CPU twins above. */
 const SLOT_BITS_WGSL = /* wgsl */ `
 // Slots 0-30 have a bit each; bit 31 stands for every slot from 31 up.
@@ -126,20 +121,6 @@ const MASKS_WGSL = /* wgsl */ `
 ${SLOT_BITS_WGSL}
 // One 32-bit slot mask per mesh slot, cleared before this pass.
 @group(1) @binding(0) var<storage, read_write> giFlagsMaskWords: array<atomic<u32>>;
-
-// (first word, entries) of an instance's material list, relative to the list section.
-fn giTriangleFlagsMaterialList(instance: u32) -> vec2u {
-    let base = giSceneInstanceBase(instance);
-    let start = giSceneTables[base + ${vec4Of(INSTANCE_WORD.materialListStart)}u].${componentOf(INSTANCE_WORD.materialListStart)};
-    let count = giSceneTables[base + ${vec4Of(INSTANCE_WORD.materialListCount)}u].${componentOf(INSTANCE_WORD.materialListCount)};
-    return vec2u(start, count);
-}
-
-// The material (an index for giMaterial) at 'position' of a list starting at 'listStart'.
-fn giTriangleFlagsListEntry(listStart: u32, position: u32) -> u32 {
-    let listsBase = giSceneTables[${vec4Of(HEADER_WORD.materialListsBase)}u].${componentOf(HEADER_WORD.materialListsBase)};
-    return giSceneTableWord(listsBase * 4u + listStart + position);
-}
 
 @compute @workgroup_size(${WORKGROUP_SIZE})
 fn giTriangleFlagsMasks(@builtin(global_invocation_id) id: vec3u, @builtin(num_workgroups) workgroupCount: vec3u) {
@@ -154,10 +135,11 @@ fn giTriangleFlagsMasks(@builtin(global_invocation_id) id: vec3u, @builtin(num_w
         if (mesh >= arrayLength(&giFlagsMaskWords)) {
             continue;   // no tree of this mesh is being rewritten
         }
-        let list = giTriangleFlagsMaterialList(instance);
+        // The same list read as giMaterialAt's (scene/wgsl.ts).
+        let list = giSceneInstanceMaterialList(instance);
         var mask = 0u;
         for (var position = 0u; position < list.y; position += 1u) {
-            if (giMaterialNeedsLookup(giMaterial(giTriangleFlagsListEntry(list.x, position)))) {
+            if (giMaterialNeedsLookup(giMaterial(giSceneMaterialListEntry(list.x, position)))) {
                 let bit = giTriangleFlagsSlotBit(position);
                 // The last entry also covers the slots past the list's end, which use it.
                 mask |= select(bit, ~(bit - 1u), position + 1u == list.y);
@@ -247,11 +229,31 @@ const WRITE_GROUP: GPUBindGroupLayoutDescriptor = {
     ],
 };
 
-/** Smallest buffer sizes, in their own units; both double when they fill. */
+/** The mask buffer's smallest size, in mesh slots; it doubles when a higher slot is rewritten. */
 const INITIAL_MASK_WORDS = 64;
-const INITIAL_RANGES = 64;
 
-/** The two passes of `gi/triangle-flags` and their small buffers. */
+/**
+ * Encodes a buffer used by one encode is kept for before it is destroyed:
+ * the platform asks hosts to submit each frame's encoder before the next
+ * frame's `encode`, and one encode more covers a host that records two
+ * encodes before one submit (destroying a buffer an unsubmitted encoder
+ * uses would make that submit fail).
+ */
+const ENCODES_BEFORE_DESTROY = 2;
+
+/**
+ * The two passes of `gi/triangle-flags` and their small buffers.
+ *
+ * **Each `encode` brings its own inputs, in its own encoder.** The masks are
+ * cleared with `encoder.clearBuffer` and the ranges go in a buffer made for
+ * that encode (mapped at creation), not with `queue.writeBuffer`: a queue
+ * write lands before *any* command buffer submitted after it, so two encodes
+ * recorded before one submit would both have read the second one's ranges
+ * (T4.2's review). A ranges buffer (16 bytes a mesh, made only in frames
+ * that rewrite flags) and a mask buffer that was outgrown are destroyed
+ * {@link ENCODES_BEFORE_DESTROY} encodes later, not at the next one, for the
+ * same host.
+ */
 export class TriangleFlagsKernels {
     private readonly device: GPUDevice;
     private readonly label: string;
@@ -259,20 +261,18 @@ export class TriangleFlagsKernels {
     private masksKernel: ComputeKernel | null = null;
     private writeKernel: ComputeKernel | null = null;
 
+    /** One 32-bit slot mask per mesh slot, cleared in each encode's own encoder before pass 1. */
     private masks: GPUBuffer;
-    /** Zeros the size of `masks`: written over it before pass 1 (a write lands before the frame's commands). */
-    private maskZeros: Uint32Array<ArrayBuffer>;
-    private ranges: GPUBuffer;
-    /** Buffers replaced when they grew, destroyed at the next encode (the frame that used them was submitted by then). */
-    private retired: GPUBuffer[] = [];
+    private maskCapacity = INITIAL_MASK_WORDS;
+    /** Encodes so far, and the buffers to destroy once `ENCODES_BEFORE_DESTROY` more have passed. */
+    private encodes = 0;
+    private retired: { readonly buffer: GPUBuffer; readonly encode: number }[] = [];
 
     constructor(device: GPUDevice, materialTestModule: WgslModule, label = 'gi') {
         this.device = device;
         this.label = label;
         this.materialTestModule = materialTestModule;
-        this.masks = this.createBuffer('masks', INITIAL_MASK_WORDS * 4);
-        this.maskZeros = new Uint32Array(INITIAL_MASK_WORDS);
-        this.ranges = this.createBuffer('ranges', INITIAL_RANGES * RANGE_BYTES);
+        this.masks = this.createMasks(INITIAL_MASK_WORDS);
     }
 
     /** Whether both passes are compiled. */
@@ -298,24 +298,34 @@ export class TriangleFlagsKernels {
      */
     encode(encoder: GPUCommandEncoder, triangles: GPUBuffer, meshes: readonly MeshTriangleRange[], instanceCount: number): void {
         if (!this.masksKernel || !this.writeKernel) throw new Error('@pmndrs/ddgi: gi/triangle-flags was used before prepare');
-        for (const buffer of this.retired) buffer.destroy();
-        this.retired = [];
+        this.encodes++;
+        this.retired = this.retired.filter((entry) => {
+            const done = this.encodes - entry.encode >= ENCODES_BEFORE_DESTROY;
+            if (done) entry.buffer.destroy();
+            return !done;
+        });
         const nonEmpty = meshes.filter((mesh) => mesh.triangleCount > 0);
         if (nonEmpty.length === 0) return;
 
         // Masks for every mesh slot up to the highest one rewritten; pass 1 skips other meshes.
-        const maskWords = Math.max(...nonEmpty.map((mesh) => mesh.meshSlot)) + 1;
-        this.ensureMaskWords(maskWords);
-        this.device.queue.writeBuffer(this.masks, 0, this.maskZeros);
+        this.ensureMaskWords(Math.max(...nonEmpty.map((mesh) => mesh.meshSlot)) + 1);
+        encoder.clearBuffer(this.masks);
 
-        const rangeWords = new Uint32Array(nonEmpty.length * RANGE_WORDS);
+        // This encode's ranges, in a buffer of its own (see the class comment).
+        const ranges = this.device.createBuffer({
+            label: `${this.label} gi/triangle-flags ranges`,
+            size: nonEmpty.length * RANGE_BYTES,
+            usage: GPUBufferUsage.STORAGE,
+            mappedAtCreation: true,
+        });
+        const rangeWords = new Uint32Array(ranges.getMappedRange());
         let threads = 0;
         nonEmpty.forEach((mesh, index) => {
             rangeWords.set([mesh.meshSlot, mesh.triangleOffset, mesh.triangleCount, threads], index * RANGE_WORDS);
             threads += mesh.triangleCount;
         });
-        this.ensureRanges(nonEmpty.length);
-        this.device.queue.writeBuffer(this.ranges, 0, rangeWords);
+        ranges.unmap();
+        this.retired.push({ buffer: ranges, encode: this.encodes });
 
         const masksGroup = this.device.createBindGroup({
             label: `${this.label} gi/triangle-flags masks`,
@@ -329,7 +339,7 @@ export class TriangleFlagsKernels {
                 { binding: 0, resource: { buffer: triangles } },
                 { binding: 1, resource: { buffer: this.masks } },
                 // Exactly this rewrite's ranges: the kernel takes their number from the binding's size.
-                { binding: 2, resource: { buffer: this.ranges, offset: 0, size: rangeWords.byteLength } },
+                { binding: 2, resource: { buffer: ranges } },
             ],
         });
 
@@ -348,33 +358,26 @@ export class TriangleFlagsKernels {
     }
 
     dispose(): void {
-        for (const buffer of this.retired) buffer.destroy();
+        for (const entry of this.retired) entry.buffer.destroy();
         this.retired = [];
         this.masks.destroy();
-        this.ranges.destroy();
     }
 
+    /** A bigger mask buffer when a higher mesh slot is rewritten; the old one is retired (see the class comment). */
     private ensureMaskWords(words: number): void {
-        if (words <= this.maskZeros.length) return;
-        let capacity = this.maskZeros.length;
+        if (words <= this.maskCapacity) return;
+        let capacity = this.maskCapacity;
         while (capacity < words) capacity *= 2;
-        this.retired.push(this.masks);
-        this.masks = this.createBuffer('masks', capacity * 4);
-        this.maskZeros = new Uint32Array(capacity);
+        this.retired.push({ buffer: this.masks, encode: this.encodes });
+        this.masks = this.createMasks(capacity);
+        this.maskCapacity = capacity;
     }
 
-    private ensureRanges(count: number): void {
-        let capacity = this.ranges.size / RANGE_BYTES;
-        if (count <= capacity) return;
-        while (capacity < count) capacity *= 2;
-        this.retired.push(this.ranges);
-        this.ranges = this.createBuffer('ranges', capacity * RANGE_BYTES);
-    }
-
-    private createBuffer(name: string, size: number): GPUBuffer {
+    private createMasks(words: number): GPUBuffer {
         return this.device.createBuffer({
-            label: `${this.label} gi/triangle-flags ${name}`,
-            size,
+            label: `${this.label} gi/triangle-flags masks`,
+            size: words * 4,
+            // COPY_DST for clearBuffer.
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
         });
     }

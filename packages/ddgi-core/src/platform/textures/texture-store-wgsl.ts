@@ -10,6 +10,12 @@
  *   linear light: the "encoded" version decodes sRGB before averaging.
  * - `giTextureStoreMip`: level k from level k - 1, a 2 × 2 average in linear light.
  *
+ * Every average weights colour by alpha (T4.2; Alpha-weighted averages
+ * below): a clear texel's colour doesn't bleed into the coarser texels it
+ * shares with opaque ones, so the coarse mips of cutout foliage keep the
+ * leaves' colour, not the colour painted under the holes. Alpha itself is
+ * the plain average. A fully opaque texture gives exactly the plain average.
+ *
  * Each level is written twice: in linear light as floats into a scratch
  * buffer (`giBuildLinear`), which the next level averages without the 8-bit
  * rounding of the stored texels, and as sRGB-encoded rgba8 texels into a
@@ -153,6 +159,42 @@ fn giBuildWrite(texel: vec2u, value: vec4f) {
     giBuildBytes[giBuildStep.byteWord + texel.y * giBuildStep.rowWords + texel.x] = pack4x8unorm(vec4f(giLinearToSrgb(linear.rgb), linear.a));
 }
 
+// ---- Alpha-weighted averages ----------------------------------------------------
+//
+// Colour averaged with each texel weighted by its alpha: sum(w a rgb) / sum(w a),
+// so texels a ray passes through (alpha 0) add nothing to the colour of a coarser
+// texel. Alpha is the plain average sum(w a), as coverage. Where every texel is
+// clear the plain colour average stands (nothing opaque to prefer).
+//
+// The weighted mean is scaled by sum(w) (1 for a full set of taps, as the plain
+// sum(w rgb) was). Where every tap is opaque, sum(w a) equals sum(w) exactly
+// (multiplying by 1.0 is exact), and the plain sum(w rgb) is used as it is, so
+// opaque textures make the same layer as before alpha weighting, to the bit.
+struct GiBuildAverage {
+    weightedColour: vec3f,  // sum of w a rgb
+    alphaWeight: f32,       // sum of w a
+    plainColour: vec3f,     // sum of w rgb
+    weight: f32,            // sum of w
+}
+
+fn giBuildAdd(sum: ptr<function, GiBuildAverage>, value: vec4f, weight: f32) {
+    let alpha = clamp(value.a, 0.0, 1.0);
+    (*sum).weightedColour += value.rgb * (weight * alpha);
+    (*sum).alphaWeight += weight * alpha;
+    (*sum).plainColour += value.rgb * weight;
+    (*sum).weight += weight;
+}
+
+fn giBuildAverageOf(sum: GiBuildAverage) -> vec4f {
+    if (sum.alphaWeight == sum.weight) {
+        return vec4f(sum.plainColour, sum.alphaWeight);
+    }
+    if (sum.alphaWeight > 0.0) {
+        return vec4f(sum.weightedColour * (sum.weight / sum.alphaWeight), sum.alphaWeight);
+    }
+    return vec4f(sum.plainColour, 0.0);
+}
+
 // The source texels one store texel reads along one axis, and each one's weight.
 //
 // Downsizing (the source at least as large as the layer on this axis): a box
@@ -196,7 +238,7 @@ fn giBuildFill(texel: vec2u, decodeSrgb: bool) {
     let lastTexel = vec2i(sourceSize) - 1;
     let tapsX = giBuildAxisTaps(texel.x, sourceSize.x);
     let tapsY = giBuildAxisTaps(texel.y, sourceSize.y);
-    var sum = vec4f(0.0);
+    var sum = GiBuildAverage(vec3f(0.0), 0.0, vec3f(0.0), 0.0);
     for (var y = 0; y < tapsY.count; y++) {
         let row = clamp(tapsY.first + y, 0, lastTexel.y);
         let rowWeight = giBuildTapWeight(tapsY, y);
@@ -207,10 +249,10 @@ fn giBuildFill(texel: vec2u, decodeSrgb: bool) {
             if (decodeSrgb) {
                 value = vec4f(giSrgbToLinear(clamp(value.rgb, vec3f(0.0), vec3f(1.0))), value.a);
             }
-            sum += value * (rowWeight * giBuildTapWeight(tapsX, x));
+            giBuildAdd(&sum, value, rowWeight * giBuildTapWeight(tapsX, x));
         }
     }
-    giBuildWrite(texel, sum);
+    giBuildWrite(texel, giBuildAverageOf(sum));
 }
 
 @compute @workgroup_size(${BUILD_WORKGROUP_SIZE}, ${BUILD_WORKGROUP_SIZE})
@@ -223,7 +265,7 @@ fn ${FILL_LINEAR_ENTRY_POINT}(@builtin(global_invocation_id) id: vec3u) {
     giBuildFill(id.xy, false);
 }
 
-// Level k from level k - 1 (twice the size): the average of the 2 x 2 texels it covers.
+// Level k from level k - 1 (twice the size): the alpha-weighted average of the 2 x 2 texels it covers.
 @compute @workgroup_size(${BUILD_WORKGROUP_SIZE}, ${BUILD_WORKGROUP_SIZE})
 fn ${MIP_ENTRY_POINT}(@builtin(global_invocation_id) id: vec3u) {
     let size = giBuildStep.size;
@@ -232,7 +274,11 @@ fn ${MIP_ENTRY_POINT}(@builtin(global_invocation_id) id: vec3u) {
     }
     let parentSize = size * 2u;
     let topLeft = giBuildStep.sourceTexel + (id.y * 2u) * parentSize + id.x * 2u;
-    let average = (giBuildLinear[topLeft] + giBuildLinear[topLeft + 1u] + giBuildLinear[topLeft + parentSize] + giBuildLinear[topLeft + parentSize + 1u]) * 0.25;
-    giBuildWrite(id.xy, average);
+    var sum = GiBuildAverage(vec3f(0.0), 0.0, vec3f(0.0), 0.0);
+    giBuildAdd(&sum, giBuildLinear[topLeft], 0.25);
+    giBuildAdd(&sum, giBuildLinear[topLeft + 1u], 0.25);
+    giBuildAdd(&sum, giBuildLinear[topLeft + parentSize], 0.25);
+    giBuildAdd(&sum, giBuildLinear[topLeft + parentSize + 1u], 0.25);
+    giBuildWrite(id.xy, giBuildAverageOf(sum));
 }
 `;

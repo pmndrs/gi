@@ -10,15 +10,18 @@
 import { describe, expect, it } from 'vitest';
 import type { TextureHandle } from '../contract/handles.ts';
 import type { CompressedPixelData, MaterialDescriptor } from '../contract/scene.ts';
+import type { WgslModule } from '../contract/wgsl.ts';
 import { ALPHA_MODE, MATERIAL_RECORD_VEC4S, MATERIAL_WORD, NONE, TEXTURE_CHANNEL, UV_PACK_SHIFT, UV_WRAP } from '../scene/layout.ts';
 import { PlatformScene } from '../scene/platform-scene.ts';
 import { createFakeGpu, type FakeBuffer } from '../scene/testing/fake-gpu.ts';
 import { sceneModuleWgsl } from '../scene/wgsl.ts';
 import { DEFAULT_CONE_SPREAD, shadeModuleWgsl } from '../shade/wgsl.ts';
 import { chooseCompressedLevel, compressedBlock, compressionFeature, decodesSrgb, readableAsFloat } from './texture-formats.ts';
+import { createTextureSamplingModule } from './texture-sampling-wgsl.ts';
 import { sourceKind, stageSource } from './texture-sources.ts';
 import type { TextureLayerRequest, TextureLayerResults, TextureLayerStore } from './texture-store.ts';
 import { LAYER_BYTES } from './texture-store.ts';
+import { buildStoreLayerOnCpu, sampleStoreLayer, wrapTextureCoordinate } from './texture-store-cpu.ts';
 import {
     BUILD_LAYERS_PER_PASS,
     BUILD_STEP_STRIDE,
@@ -186,6 +189,20 @@ describe('texture sources', () => {
         expect('reason' in short && short.reason).toMatch(/fewer than/);
         const integer = stageSource(device, { format: 'rgba8uint', usage: 0x4, dimension: '2d', createView: () => ({}) } as unknown as GPUTexture, false, STORE_LAYER_SIZE, 'test');
         expect('reason' in integer && integer.reason).toMatch(/rgba8uint/);
+        // An upload that throws (a closed image, a detached buffer) destroys the staging texture it made.
+        const staging: { destroyed: boolean }[] = [];
+        const throwing = {
+            ...device,
+            limits: device.limits,
+            createTexture: (descriptor: GPUTextureDescriptor) => {
+                const texture = { ...descriptor, destroyed: false, createView: () => ({}), destroy() { this.destroyed = true; } };
+                staging.push(texture);
+                return texture;
+            },
+            queue: { writeTexture: () => { throw new TypeError('detached'); } },
+        } as unknown as GPUDevice;
+        expect(() => stageSource(throwing, { data: new Uint8Array(64), width: 4, height: 4 }, true, STORE_LAYER_SIZE, 'test')).toThrow(/detached/);
+        expect(staging.map((texture) => texture.destroyed)).toEqual([true]);
         const unbindable = stageSource(device, { format: 'rgba8unorm', usage: 0x2, dimension: '2d', createView: () => ({}) } as unknown as GPUTexture, false, STORE_LAYER_SIZE, 'test');
         expect('reason' in unbindable && unbindable.reason).toMatch(/TEXTURE_BINDING/);
     });
@@ -203,7 +220,12 @@ class StubStore implements TextureLayerStore {
         return {
             built: requests.filter((request) => !this.failLayers.has(request.layer)).map((request) => request.layer),
             failed: requests.filter((request) => this.failLayers.has(request.layer)).map((request) => request.layer),
+            waiting: [],
         };
+    }
+
+    samplingModule(sceneModule: WgslModule): WgslModule {
+        return createTextureSamplingModule(sceneModule, { view: {} as GPUTextureView, sampler: {} as GPUSampler, version: 0 });
     }
 
     dispose(): void {}
@@ -353,5 +375,66 @@ describe('textures at hits (WGSL)', () => {
         expect(code).toContain('return giSurfaceAtCone(ray, hit, GI_SHADE_DEFAULT_CONE_SPREAD);');
         expect(DEFAULT_CONE_SPREAD).toBeCloseTo(0.2216, 4);
         expect(sceneModuleWgsl({ group: 0, firstBinding: 0 })).toContain('fn giInstanceTriangleUvs(instance: u32, triangle: u32, channel: u32) -> GiTriangleUvs');
+    });
+});
+
+describe('alpha-weighted mips (T4.2; the CPU twin of gi/texture-store)', () => {
+    /** Red opaque texels and blue clear ones in a 16 x 16 checkerboard, as cutout foliage has leaves and holes. */
+    const checker = (() => {
+        const data = new Uint8Array(16 * 16 * 4);
+        for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) data.set((x + y) % 2 === 0 ? [255, 0, 0, 255] : [0, 0, 255, 0], (y * 16 + x) * 4);
+        return { width: 16, height: 16, data };
+    })();
+
+    it('keeps the coarse mips of red opaque and blue clear texels red, with half the alpha', () => {
+        const layer = buildStoreLayerOnCpu(checker, true);
+        // From level 5 (8 x 8) on, each texel covers 2 x 2 source texels or more: half of them clear.
+        for (let level = 5; level < STORE_MIP_LEVELS; level++) {
+            const bytes = layer.levels[level];
+            for (let texel = 0; texel < bytes.length / 4; texel++) {
+                const [red, green, blue, alpha] = bytes.subarray(texel * 4, texel * 4 + 4);
+                // Pure red (sRGB 255) where the plain average would be purple (sRGB about 188, 0, 188).
+                expect(red, `level ${level} texel ${texel}`).toBeGreaterThanOrEqual(254);
+                expect(green).toBe(0);
+                expect(blue, `level ${level} texel ${texel}`).toBeLessThanOrEqual(1);
+                // About half covered: the stretched source clamps at the layer's edges, so edge texels are a little off.
+                expect(Math.abs(alpha - 128)).toBeLessThanOrEqual(3);
+            }
+        }
+        // The whole texture in one texel: red, half covered.
+        expect(Array.from(layer.levels[STORE_MIP_LEVELS - 1])).toEqual([255, 0, 0, 128]);
+    });
+
+    it('gives an opaque texture the plain linear-light average, and a fully clear one its plain colour', () => {
+        const opaque = { width: 2, height: 2, data: new Uint8Array([255, 0, 0, 255, 0, 0, 255, 255, 255, 0, 0, 255, 0, 0, 255, 255]) };
+        const top = buildStoreLayerOnCpu(opaque, true).levels[STORE_MIP_LEVELS - 1];
+        // Half red, half blue in linear light: sRGB-encoded 0.5 is 188.
+        expect(Array.from(top)).toEqual([188, 0, 188, 255]);
+        const clear = { width: 2, height: 2, data: new Uint8Array([255, 0, 0, 0, 0, 0, 255, 0, 255, 0, 0, 0, 0, 0, 255, 0]) };
+        expect(Array.from(buildStoreLayerOnCpu(clear, true).levels[STORE_MIP_LEVELS - 1])).toEqual([188, 0, 188, 0]);
+    });
+
+    it('is what the kernel does: colour weighted by alpha in the fill and the mips, the opaque path exact', () => {
+        expect(TEXTURE_STORE_WGSL).toContain('fn giBuildAverageOf(sum: GiBuildAverage) -> vec4f');
+        expect(TEXTURE_STORE_WGSL).toContain('if (sum.alphaWeight == sum.weight) {');
+        expect(TEXTURE_STORE_WGSL.match(/giBuildWrite\([^)]*giBuildAverageOf\(sum\)\)/g)).toHaveLength(2);
+    });
+
+    it('samples a level as the store sampler does, and mirrors and clamps on the uv', () => {
+        const layer = buildStoreLayerOnCpu(checker, true);
+        // At the centre of source texel (0, 0) (opaque red): red, and nearly opaque (the 16 x 16 source is
+        // stretched bilinearly, so its clear neighbours already reach in a little).
+        const centre = sampleStoreLayer(layer, 8 / 256, 8 / 256, 0);
+        expect(centre[0]).toBeCloseTo(1, 5);
+        expect(centre[2]).toBeCloseTo(0, 5);
+        expect(centre[3]).toBeGreaterThan(0.95);
+        // Between the two halves of a level-0 texel pair the sample is their average.
+        const level0 = layer.levels[0];
+        const between = sampleStoreLayer(layer, 8 / 256, 7.5 / 256, 0)[3];
+        expect(between).toBeCloseTo((level0[7 * 256 * 4 + 7 * 4 + 3] + level0[7 * 256 * 4 + 8 * 4 + 3]) / 2 / 255, 5);
+        expect(wrapTextureCoordinate(1.25, 'mirror', 0)).toBeCloseTo(0.75, 10);
+        expect(wrapTextureCoordinate(-0.25, 'mirror', 0)).toBeCloseTo(0.25, 10);
+        expect(wrapTextureCoordinate(1.25, 'clamp', 0.01)).toBe(0.99);
+        expect(wrapTextureCoordinate(1.25, 'repeat', 0.01)).toBe(1.25);
     });
 });

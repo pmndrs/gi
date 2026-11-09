@@ -297,7 +297,7 @@ This is the mirroring on its own, for hosts that call `gi.encode` themselves.
   A colour is a three `Color` or `[r, g, b]` (linear), or a hex number or CSS string (sRGB, as `new Color()` reads them). Set them on custom-shaded materials to say what GI should see; they also silence the warning.
 - **Alpha** (alpha = `opacity` × the albedo map's alpha):
   - `alphaTest` above 0 (glTF `MASK`) is a cutout: rays pass where alpha is below `alphaTest`. Foliage and fences.
-  - Alpha-blended materials (`transparent` with no `alphaTest`; glTF `BLEND`, so decals too) and `alphaHash` ones are stochastic: a ray passes with probability 1 − alpha, so many rays see the right average (DECISIONS 2026-11-09). A blended material **blocks light by its alpha** once the core's stochastic pass lands (T4.2, second half). Until then the core treats blended surfaces, and cutouts, as opaque. Before M4 they let all light through.
+  - Alpha-blended materials (`transparent` with no `alphaTest`; glTF `BLEND`, so decals too) and `alphaHash` ones are stochastic: a ray passes with probability 1 − alpha, so many rays see the right average (DECISIONS 2026-11-09). A blended material **blocks light by its alpha** (the core's stochastic pass, T4.2). Before M4 blended surfaces let all light through.
 - **Light passes straight through** (`blocksLight: false`):
   - glass (`transmission` above 0);
   - `ShadowMaterial` (a ground that only catches shadows);
@@ -324,7 +324,7 @@ This is the mirroring on its own, for hosts that call `gi.encode` themselves.
 
 **Per object.** Set `userData.giContributes = false` to keep an object out of GI's rays. It still receives GI. Skinned meshes are left out unless they set it to `true`.
 
-**See-through surfaces** are handled triangle by triangle, since M4. Every mesh goes into GI's rays whole, and each triangle follows its own material: a glass pane inside a wall mesh lets light through the pane only, and a decal such as Sponza's `dirt_decal` blocks light by its alpha once the core's stochastic pass lands (T4.2, second half). Until then the core treats it as opaque. The adapter no longer leaves any mesh out for its materials, and no longer warns about meshes that mix see-through and opaque materials.
+**See-through surfaces** are handled triangle by triangle, since M4. Every mesh goes into GI's rays whole, and each triangle follows its own material: a glass pane inside a wall mesh lets light through the pane only, and a decal such as Sponza's `dirt_decal` blocks light by its alpha (the core's stochastic pass, T4.2). The adapter no longer leaves any mesh out for its materials, and no longer warns about meshes that mix see-through and opaque materials.
 
 ## What isn't mirrored
 

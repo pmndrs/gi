@@ -127,6 +127,10 @@ export interface CompressedPixelData {
  * A same-device `GPUTexture` covers images the host only has on the GPU. It
  * needs `TEXTURE_BINDING` usage and a format that reads as float (not a
  * depth, `uint` or `sint` format); its first mip level and array layer are read.
+ * Keep it alive (don't `destroy()` it) until its layer is built: the platform
+ * first checks that it can be bound on its device, so that takes 1–2 frames
+ * after `createTexture`, not one (`textureCounts()` stops counting it as
+ * pending then). Another device's texture is refused with a warning.
  */
 export type TextureSource =
     | GPUTexture

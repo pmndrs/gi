@@ -8,9 +8,10 @@
  * It runs in doubles, so it matches the GPU's decisions but not its rounding.
  *
  * Materials (T4.2), as the WGSL walk: a triangle whose flag bit 0 is set has
- * its material consulted (`materialAt`), and a ray it lets through goes on
- * without narrowing. Without `materialAt` a flagged triangle blocks, as in a
- * tracer with no scene copy (`NO_MATERIALS_WGSL`).
+ * its material consulted (`materialAt`; cutout alpha through `uvAt` and the
+ * material's CPU store layer, the stochastic hash's CPU twin), and a ray it
+ * lets through goes on without narrowing. Without `materialAt` a flagged
+ * triangle blocks, as in a tracer with no scene copy (`NO_MATERIALS_WGSL`).
  */
 
 import {
@@ -29,7 +30,14 @@ import {
     referenceCount,
     referenceIndex,
 } from './layout.ts';
-import { materialLetsRayPass, TRIANGLE_FLAG_CONSULT_MATERIAL, type WalkMaterialLookup } from './material-test-wgsl.ts';
+import {
+    materialAlphaAt,
+    materialLetsRayPass,
+    stochasticHashValue,
+    TRIANGLE_FLAG_CONSULT_MATERIAL,
+    type WalkMaterialLookup,
+    type WalkUvLookup,
+} from './material-test-wgsl.ts';
 import type { TraceRay } from './trace-gpu.ts';
 import type { TraceSceneData } from './scene-assembly.ts';
 
@@ -106,10 +114,25 @@ interface TriangleHit {
 export interface CpuTracerOptions {
     /** Materials for flagged triangles (T4.2); without it they block. */
     readonly materialAt?: WalkMaterialLookup;
+    /** Corner uvs, for cutout alpha read from a texture; without it uvs are (0, 0). */
+    readonly uvAt?: WalkUvLookup;
 }
 
 export function createCpuTracer(scene: TraceSceneData, options: CpuTracerOptions = {}): CpuTracer {
     const materialAt = options.materialAt;
+    const uvAt = options.uvAt;
+    /** The WGSL leaf test's material call, giMaterialPasses, on the CPU. */
+    const materialPasses = (instance: number, triangle: number, hit: TriangleHit): boolean => {
+        if (!materialAt) return false;
+        const material = materialAt(instance, triangle);
+        const uvsOf = (channel: 0 | 1) => uvAt?.(instance, triangle, channel) ?? null;
+        return materialLetsRayPass(
+            material,
+            hit.frontFace,
+            () => materialAlphaAt(material, hit.u, hit.v, uvsOf),
+            () => stochasticHashValue(instance, triangle, hit.u, hit.v),
+        );
+    };
     const nodeFloats = new Float32Array(scene.nodes);
     const nodeWords = new Uint32Array(scene.nodes);
     const triangleFloats = new Float32Array(scene.triangles);
@@ -231,7 +254,7 @@ export function createCpuTracer(scene: TraceSceneData, options: CpuTracerOptions
                     // As the WGSL leaf test: a flagged triangle's material may let the ray through,
                     // and then nothing is recorded and closestT stays.
                     const consult = (triangleWords[base + TRIANGLE_WORD.flags] & TRIANGLE_FLAG_CONSULT_MATERIAL) !== 0;
-                    if (consult && materialAt && materialLetsRayPass(materialAt(instanceIndex, triangleIndex), hit.frontFace)) continue;
+                    if (consult && materialPasses(instanceIndex, triangleIndex, hit)) continue;
                     result = {
                         t: hit.t,
                         instanceIndex,

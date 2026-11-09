@@ -1,0 +1,4 @@
+{
+    "description": "T4.2 done-when 2 (second half): the thin-wall scene with a 3 x 2.2 m window in its partition mesh, filled by a black quad that is open (blocksLight: false), a 16 x 16 checker cutout, or stochastic at opacity 0.5; DDGI converged per variant; the dark-side floor's light with each 50% wall must be 50% +- 3% of the open wall's.",
+    "timeoutMs": 1200000
+}
