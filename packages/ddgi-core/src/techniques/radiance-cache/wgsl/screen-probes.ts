@@ -324,7 +324,7 @@ struct RcProbeRay {
 
 struct RcProbeRays {
     count: u32,              // this frame's rays: 64 x the probe count (SampleScreenProbes writes it)
-    reserved: vec3u,
+    reserved: array<u32, 3>, // scalars, so the rays start at byte 16 (a vec3u would align to 16 and push them to 32)
     rays: array<RcProbeRay>,
 }
 `;

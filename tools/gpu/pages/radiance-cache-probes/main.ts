@@ -177,8 +177,8 @@ async function readTexture(device: GPUDevice, texture: GPUTexture, bytesPerTexel
     return out;
 }
 
-function halves(bytes: Uint8Array): Float32Array {
-    const words = new Uint16Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 2);
+function halves(bytes: Uint8Array, byteOffset = 0): Float32Array {
+    const words = new Uint16Array(bytes.buffer, bytes.byteOffset + byteOffset, (bytes.byteLength - byteOffset) / 2);
     return Float32Array.from(words, (bits) => halfBitsToFloat(bits));
 }
 
@@ -246,11 +246,14 @@ async function checkScene(device: GPUDevice, run: SceneRun, skyCheck: boolean): 
         }
     }
 
-    // 3. Ray directions.
+    // 3. Ray directions. Each ray's cell as BlendScreenProbes finds it (from the half-precision direction), kept for check 4.
     const rayBytes = PROBE_RAYS_HEADER_BYTES + spawned.length * PROBE_CELLS * PROBE_RAY_BYTES;
     const rayWords = new Uint32Array(await readBuffer(device, probes.probeRays, Math.max(rayBytes, 16)));
     if (rayWords[0] !== probeCount * PROBE_CELLS) fail(`the GPU's ray count is ${rayWords[0]}, 64 x the probes is ${probeCount * PROBE_CELLS}`);
     const rayFloats = new Float32Array(rayWords.buffer);
+    const blendCell = new Int32Array(spawned.length * PROBE_CELLS);
+    /** Per probe: its ray nearest a cell edge, in cells (where the GPU's f32 and the CPU's f64 could disagree on the cell). */
+    const nearestEdge = new Float64Array(spawned.length).fill(Infinity);
     let wrongSide = 0;
     let wrongCell = 0;
     let movedByHalfPrecision = 0;
@@ -260,20 +263,23 @@ async function checkScene(device: GPUDevice, run: SceneRun, skyCheck: boolean): 
     spawned.forEach((tile, probe) => {
         const normal = normalAt(tile.seed[0], tile.seed[1]);
         for (let cell = 0; cell < PROBE_CELLS; cell++) {
-            const base = (PROBE_RAYS_HEADER_BYTES + (probe * PROBE_CELLS + cell) * PROBE_RAY_BYTES) / 4;
+            const ray = probe * PROBE_CELLS + cell;
+            const base = (PROBE_RAYS_HEADER_BYTES + ray * PROBE_RAY_BYTES) / 4;
             const direction = unpackHalf3([rayWords[base + 4], rayWords[base + 5]]);
             if ((rayWords[base + 3] & PROBE_RAY_BYPASS) === 0) withoutBypass++;
             if (rayFloats[base + 6] >= 0) hits++;
             const facing = direction[0] * normal[0] + direction[1] * normal[1] + direction[2] * normal[2];
             minNormalDot = Math.min(minNormalDot, facing);
+            const [u, v] = mapToHemiOctahedronInverse(toProbeFrame(direction, normal)).map((value) => value * PROBE_SIZE);
+            nearestEdge[probe] = Math.min(nearestEdge[probe], Math.abs(u - Math.round(u)), Math.abs(v - Math.round(v)));
+            blendCell[ray] = probeCellOf(direction, normal);
             if (!(facing > 0)) {
                 wrongSide++;
                 fail(`probe ${probe} cell ${cell}: direction (${direction.map((value) => value.toFixed(4)).join(', ')}) is not on the normal's side`);
                 continue;
             }
-            if (probeCellOf(direction, normal) === cell) continue;
+            if (blendCell[ray] === cell) continue;
             // How far past the cell's edges the ray lies, in cells.
-            const [u, v] = mapToHemiOctahedronInverse(toProbeFrame(direction, normal)).map((value) => value * PROBE_SIZE);
             const cellX = cell % PROBE_SIZE;
             const cellY = Math.floor(cell / PROBE_SIZE);
             const outside = Math.max(cellX - u, u - (cellX + 1), cellY - v, v - (cellY + 1), 0);
@@ -281,43 +287,118 @@ async function checkScene(device: GPUDevice, run: SceneRun, skyCheck: boolean): 
                 movedByHalfPrecision++;
             } else {
                 wrongCell++;
-                fail(`probe ${probe} cell ${cell}: the ray lies in cell ${probeCellOf(direction, normal)}, ${outside.toFixed(3)} cells outside its own`);
+                fail(`probe ${probe} cell ${cell}: the ray lies in cell ${blendCell[ray]}, ${outside.toFixed(3)} cells outside its own`);
             }
         }
     });
     if (withoutBypass > 0) fail(`${withoutBypass} rays lack the bypass flag (phase 2 lights every ray directly)`);
 
-    // 4. The sky.
-    const sky: Record<string, number> = {};
+    // 4. The sky: each ray's radiance, then each cell as BlendScreenProbes blends it.
+    const sky: Record<string, unknown> = {};
     if (skyCheck) {
         if (hits > 0) fail(`${hits} rays hit something; nothing is above the floor`);
-        const [atlasWidth, atlasHeight] = layout.atlasSize;
-        const atlas = halves(await readTexture(device, probes.probeAtlas, 8, atlasWidth, atlasHeight));
-        let cells = 0;
-        let worst = 0;
-        let minimum = Infinity;
-        let maximum = -Infinity;
-        for (const tile of spawned) {
-            const tileX = Math.floor(tile.seed[0] / PROBE_SIZE) * PROBE_SIZE;
-            const tileY = Math.floor(tile.seed[1] / PROBE_SIZE) * PROBE_SIZE;
-            for (let cell = 0; cell < PROBE_CELLS; cell++) {
-                const texel = ((tileY + Math.floor(cell / PROBE_SIZE)) * atlasWidth + tileX + (cell % PROBE_SIZE)) * 4;
-                for (let channel = 0; channel < 3; channel++) {
-                    const value = atlas[texel + channel];
-                    minimum = Math.min(minimum, value);
-                    maximum = Math.max(maximum, value);
-                    worst = Math.max(worst, Math.abs(value - SKY_RADIANCE) / SKY_RADIANCE);
-                }
-                cells++;
+        const results = probes.rayScratch.rayResults;
+        const resultsOffset = results.offset ?? 0;
+        const resultBytes = new Uint8Array(await readBuffer(device, results.buffer, resultsOffset + spawned.length * PROBE_CELLS * 8));
+        const rayRadiance = halves(resultBytes, resultsOffset);
+        let worstRay = 0;
+        let rayMinimum = Infinity;
+        let rayMaximum = -Infinity;
+        for (let ray = 0; ray < spawned.length * PROBE_CELLS; ray++) {
+            for (let channel = 0; channel < 3; channel++) {
+                const value = rayRadiance[ray * 4 + channel];
+                rayMinimum = Math.min(rayMinimum, value);
+                rayMaximum = Math.max(rayMaximum, value);
+                worstRay = Math.max(worstRay, Math.abs(value - SKY_RADIANCE) / SKY_RADIANCE);
             }
         }
-        if (!(worst <= SKY_TOLERANCE)) fail(`a probe cell reads the sky ${worst * 100}% off (min ${minimum}, max ${maximum}, sky ${SKY_RADIANCE})`);
-        Object.assign(sky, { cells, worstRelativeError: worst, minimum, maximum });
+        if (!(worstRay <= SKY_TOLERANCE)) fail(`a probe ray reads the sky ${(worstRay * 100).toFixed(2)}% off (rays from ${rayMinimum} to ${rayMaximum})`);
+
+        // A cell some ray reached holds its rays' mean: the sky. A cell no ray reached (its ray moved across
+        // an edge by half precision) holds Capsaicin's backup: the mean of the reached cells divided by the
+        // number of empty cells (gi1.comp:1226-1233, 1249-1256).
+        const [atlasWidth, atlasHeight] = layout.atlasSize;
+        const atlas = halves(await readTexture(device, probes.probeAtlas, 8, atlasWidth, atlasHeight));
+        let reachedCells = 0;
+        let emptyCells = 0;
+        let probesWithEmptyCells = 0;
+        let mostEmptyCells = 0;
+        let worstReached = 0;
+        let worstBackup = 0;
+        let undecidedProbes = 0;
+        let cellsReadingTheSky = 0;
+        spawned.forEach((tile, probe) => {
+            const samples = new Array<number>(PROBE_CELLS).fill(0);
+            for (let cell = 0; cell < PROBE_CELLS; cell++) samples[blendCell[probe * PROBE_CELLS + cell]]++;
+            const empty = samples.filter((count) => count === 0).length;
+            const tileX = Math.floor(tile.seed[0] / PROBE_SIZE) * PROBE_SIZE;
+            const tileY = Math.floor(tile.seed[1] / PROBE_SIZE) * PROBE_SIZE;
+            const reachedErrors: number[] = [];
+            const backupErrors: number[] = [];
+            for (let cell = 0; cell < PROBE_CELLS; cell++) {
+                const texel = ((tileY + Math.floor(cell / PROBE_SIZE)) * atlasWidth + tileX + (cell % PROBE_SIZE)) * 4;
+                const expectedValue = samples[cell] > 0 ? SKY_RADIANCE : SKY_RADIANCE / Math.max(empty, 1);
+                let cellError = 0;
+                let readsTheSky = true;
+                for (let channel = 0; channel < 3; channel++) {
+                    cellError = Math.max(cellError, Math.abs(atlas[texel + channel] - expectedValue) / expectedValue);
+                    readsTheSky &&= Math.abs(atlas[texel + channel] - SKY_RADIANCE) <= SKY_TOLERANCE * SKY_RADIANCE;
+                }
+                if (readsTheSky) cellsReadingTheSky++;
+                (samples[cell] > 0 ? reachedErrors : backupErrors).push(cellError);
+            }
+            // The GPU's f32 and the CPU's f64 can put a ray lying on an edge in different cells: such a probe is reported, not failed.
+            if (Math.max(...reachedErrors, ...backupErrors) > SKY_TOLERANCE && nearestEdge[probe] < 1e-3) {
+                undecidedProbes++;
+                return;
+            }
+            reachedCells += reachedErrors.length;
+            emptyCells += backupErrors.length;
+            if (empty > 0) probesWithEmptyCells++;
+            mostEmptyCells = Math.max(mostEmptyCells, empty);
+            worstReached = Math.max(worstReached, ...reachedErrors);
+            worstBackup = Math.max(worstBackup, 0, ...backupErrors);
+        });
+        if (!(worstReached <= SKY_TOLERANCE)) fail(`a probe cell some ray reached reads ${(worstReached * 100).toFixed(2)}% off the sky`);
+        if (!(worstBackup <= SKY_TOLERANCE)) fail(`a probe cell no ray reached is ${(worstBackup * 100).toFixed(2)}% off Capsaicin's backup value`);
+        Object.assign(sky, {
+            worstRayError: worstRay,
+            rayMinimum,
+            rayMaximum,
+            reachedCells,
+            worstReachedCellError: worstReached,
+            emptyCells,
+            probesWithEmptyCells,
+            mostEmptyCellsInAProbe: mostEmptyCells,
+            worstBackupCellError: worstBackup,
+            undecidedProbes,
+            cellsReadingTheSkyWithin1Percent: cellsReadingTheSky,
+            cells: spawned.length * PROBE_CELLS,
+        });
     }
+
+    // The mean radiance of every probe cell (rgb averaged), for a sanity read and the debug view's exposure.
+    const [atlasWidth, atlasHeight] = layout.atlasSize;
+    const atlas = halves(await readTexture(device, probes.probeAtlas, 8, atlasWidth, atlasHeight));
+    let radianceSum = 0;
+    let nonFinite = 0;
+    for (const tile of spawned) {
+        const tileX = Math.floor(tile.seed[0] / PROBE_SIZE) * PROBE_SIZE;
+        const tileY = Math.floor(tile.seed[1] / PROBE_SIZE) * PROBE_SIZE;
+        for (let cell = 0; cell < PROBE_CELLS; cell++) {
+            const texel = ((tileY + Math.floor(cell / PROBE_SIZE)) * atlasWidth + tileX + (cell % PROBE_SIZE)) * 4;
+            const rgb = [atlas[texel], atlas[texel + 1], atlas[texel + 2]];
+            if (!rgb.every((value) => Number.isFinite(value) && value >= 0)) nonFinite++;
+            else radianceSum += (rgb[0] + rgb[1] + rgb[2]) / 3;
+        }
+    }
+    if (nonFinite > 0) fail(`${nonFinite} probe cells hold a negative, infinite or NaN radiance`);
+    const meanRadiance = spawned.length > 0 ? radianceSum / (spawned.length * PROBE_CELLS) : 0;
 
     return {
         failures,
         summary: {
+            meanRadiance,
             frameIndex,
             spawnTiles: tileCount,
             skyTiles: tileCount - spawned.length,
@@ -338,25 +419,42 @@ async function checkScene(device: GPUDevice, run: SceneRun, skyCheck: boolean): 
     };
 }
 
-/** Draws a debug view into a canvas on the page, with a caption, for the runner's screenshot. */
-async function showDebugView(device: GPUDevice, run: SceneRun, view: RadianceCacheDebugViewId, caption: string, column: HTMLElement): Promise<void> {
+/** Width and height of the 1:1 crop from the image's centre, where each probe's 8 x 8 cells can be seen. */
+const CROP: readonly [number, number] = [400, 200];
+
+/**
+ * Draws a debug view into canvases on the page, for the runner's screenshot:
+ * the whole image scaled to 400 px, and with `crop` a 1:1 piece of its centre.
+ */
+async function showDebugView(device: GPUDevice, run: SceneRun, view: RadianceCacheDebugViewId, exposure: number, caption: string, column: HTMLElement, crop: boolean): Promise<void> {
     const target = device.createTexture({ size: [WIDTH, HEIGHT], format: 'rgba8unorm', usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.COPY_SRC });
     const encoder = device.createCommandEncoder();
-    run.technique.encodeDebugView(encoder, view, target);
+    run.technique.encodeDebugView(encoder, view, target, exposure);
     device.queue.submit([encoder.finish()]);
     const pixels = await readTexture(device, target, 4, WIDTH, HEIGHT);
     target.destroy();
-    const canvas = document.createElement('canvas');
-    canvas.width = WIDTH;
-    canvas.height = HEIGHT;
-    canvas.style.width = '400px';
-    canvas.style.height = '225px';
-    canvas.style.display = 'block';
-    canvas.getContext('2d')?.putImageData(new ImageData(Uint8ClampedArray.from(pixels), WIDTH, HEIGHT), 0, 0);
-    const label = document.createElement('div');
-    label.textContent = caption;
-    label.style.font = '12px sans-serif';
-    column.append(label, canvas);
+    const image = new ImageData(Uint8ClampedArray.from(pixels), WIDTH, HEIGHT);
+    const addCanvas = (text: string, width: number, height: number, displayWidth: number, draw: (context: CanvasRenderingContext2D) => void): void => {
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        canvas.style.width = `${displayWidth}px`;
+        canvas.style.display = 'block';
+        canvas.style.imageRendering = 'pixelated';
+        const context = canvas.getContext('2d');
+        if (context) draw(context);
+        const label = document.createElement('div');
+        label.textContent = text;
+        label.style.font = '11px sans-serif';
+        label.style.color = '#ddd';
+        column.append(label, canvas);
+    };
+    addCanvas(caption, WIDTH, HEIGHT, 400, (context) => context.putImageData(image, 0, 0));
+    if (crop) {
+        const left = Math.floor((WIDTH - CROP[0]) / 2);
+        const top = Math.floor((HEIGHT - CROP[1]) / 2);
+        addCanvas(`${caption}, centre at 1:1`, CROP[0], CROP[1], CROP[0], (context) => context.putImageData(image, -left, -top, left, top, CROP[0], CROP[1]));
+    }
 }
 
 const startTime = performance.now();
@@ -371,6 +469,8 @@ try {
     const gallery = document.createElement('div');
     gallery.style.display = 'flex';
     gallery.style.gap = '8px';
+    document.body.style.background = '#222';
+    document.body.style.margin = '0';
     document.body.append(gallery);
 
     const cornell = loadManifest('cornell-box');
@@ -398,8 +498,12 @@ try {
             failures.push(...checks.failures);
             const column = document.createElement('div');
             gallery.append(column);
-            await showDebugView(device, run, RADIANCE_CACHE_DEBUG_VIEW.probeAtlas, `${scene.name}: probe atlas`, column);
-            await showDebugView(device, run, RADIANCE_CACHE_DEBUG_VIEW.probeMask, `${scene.name}: probe mask`, column);
+            // Exposure puts the mean probe radiance at 1 before tone mapping.
+            const meanRadiance = Number(checks.summary.meanRadiance);
+            const exposure = meanRadiance > 0 ? 1 / meanRadiance : 1;
+            const atlasCaption = `${scene.name}: probe atlas (exposure ${exposure.toPrecision(3)})`;
+            await showDebugView(device, run, RADIANCE_CACHE_DEBUG_VIEW.probeAtlas, exposure, atlasCaption, column, true);
+            await showDebugView(device, run, RADIANCE_CACHE_DEBUG_VIEW.probeMask, 1, `${scene.name}: probe mask`, column, false);
         } finally {
             run.dispose();
             await device.queue.onSubmittedWorkDone();
