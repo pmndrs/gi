@@ -53,6 +53,15 @@ describe('url state', () => {
         expect(parseUrlState('?atlasev=-2.2').atlasEv).toBe(-2);
     });
 
+    it("reads the GI albedo view and the textures switch (T4.4), and round-trips them", () => {
+        const state = parseUrlState('?debug=gi-albedo&gitextures=0');
+        expect(state).toMatchObject({ debug: 'gi-albedo', giTextures: false });
+        expect(parseUrlState(serializeUrlState(state))).toEqual(state);
+        // Textures are on unless a link says 0, and on is not written.
+        expect(parseUrlState('?gitextures=1').giTextures).toBe(true);
+        expect(serializeUrlState({ ...DEFAULT_URL_STATE, giTextures: true })).toBe('');
+    });
+
     it('round-trips a state and keeps the default link empty', () => {
         expect(serializeUrlState(DEFAULT_URL_STATE)).toBe('');
         const state = parseUrlState('?scene=sponza&camera=1&wipe=lpg,vxgi&split=0.4');

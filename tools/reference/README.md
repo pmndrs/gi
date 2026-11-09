@@ -47,9 +47,9 @@ Every render writes, in its json (`cycles.json`, `cycles-untextured.json`, ...),
 | `camera` | `bookmark` name and number; `position`, `target`, `up` (+Y) in manifest space (three.js axes, metres); `fovYDeg` (vertical); `aspect`, `width`, `height`; `near` 0.01 and `far` 2000 (m) |
 | `display` | `exposureEv` (default the manifest's `exposureEv`) and `toneMapping` (default `aces`): what the viewer shows it with. The EXRs are linear and never tone-mapped |
 | `scene` | the manifest id, path and sha256 of its file; the sky file's sha256; the GI material table's sha256 (untextured renders) |
+| `render` | `git` (commit; `uncommittedChanges` is true only when files that affect a render had uncommitted edits: `uncommittedScope` = tools/reference, scenes, tools/sky, listed in `uncommittedFiles`; the GI material table is gitignored and hashed instead), Blender version, `device` (e.g. `OPTIX: NVIDIA GeForce RTX 3060 Laptop GPU`), samples, seed, pixel filter, render seconds, `denoised` (null, or the viewing copy's file, denoiser and its check), and `noise` (see "Noise of each reference") |
 
 Beside the shot, every render's json has `sources` (each loaded part's file with its path, size and sha256, and for a `.gltf` the sha256 of every buffer and image it points at; a procedural scene's part is its exported GLB) and `outputSha256` (the sha256 of every EXR the render wrote, added by `run.ts`), and `mode`: `textured`, `untextured` or `diffuse-textured`.
-| `render` | `git` (commit; `uncommittedChanges` is true only when files that affect a render had uncommitted edits: `uncommittedScope` = tools/reference, scenes, tools/sky, listed in `uncommittedFiles`; the GI material table is gitignored and hashed instead), Blender version, `device` (e.g. `OPTIX: NVIDIA GeForce RTX 3060 Laptop GPU`), samples, seed, pixel filter, render seconds, `denoised` (null, or the viewing copy's file, denoiser and its check), and `noise` (see "Noise of each reference") |
 
 Who reads it:
 
@@ -143,6 +143,8 @@ renders the glTF's own materials the way M4's GI reads them (docs/design/m4-mate
 | metallic (factor and texture) | folded into the base colour as base × (1 − metallic), then Metallic 0 | three's and glTF's diffuse colour of a metal; the platform's hits read the same |
 | `KHR_materials_transmission` > 0 | Alpha 0: rays pass straight through | GI takes glass as `blocksLight: false` (no shadow, no bounce, no tint) |
 | normal map | kept | as in the other textured references |
+
+**Known differences from GI:** the references keep normal maps and vertex colours, which the platform's GI doesn't read (its hits shade with interpolated vertex normals, and vertex colours are later; DECISIONS 2026-11-09, M4 answers), so surfaces that rely on either differ a little at hits.
 
 The json's `texturedMaterials` counts and names the materials each rule touched. Without `--textured` or `--materials-json` a render keeps the textures but takes metals at their full base colour and glass as an opaque surface: the references made before M4 (`cycles-*`), kept for regression.
 

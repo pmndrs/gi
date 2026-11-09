@@ -330,6 +330,7 @@ export class ViewerApp {
             atlasFill: this.url.atlasFill,
             atlasExposureEv: this.url.atlasEv,
             changeFullScalePercent: this.url.change,
+            giTextures: this.url.giTextures,
             lightGroups: this.url.lightGroups,
             // Time of day turns DDGI's sun layer on (DECISIONS 2026-11-08).
             sunLayer: this.url.timeOfDay !== null && (this.lighting?.timeOfDay.available ?? false),
@@ -369,6 +370,7 @@ export class ViewerApp {
                 atlasFill: this.url.atlasFill,
                 atlasEv: this.url.atlasEv,
                 change: this.url.change,
+                giTextures: this.url.giTextures,
             },
             probeBounces: this.probeSettings.bounces,
             maxProbes: this.probeSettings.maxProbes,
@@ -442,6 +444,7 @@ export class ViewerApp {
                     atlasFill: settings.atlasFill,
                     atlasEv: settings.atlasEv,
                     change: settings.change,
+                    giTextures: settings.giTextures,
                 }),
             onDdgiRestart: () => this.core.restartDdgi(),
             onCompareWithReference: () => {

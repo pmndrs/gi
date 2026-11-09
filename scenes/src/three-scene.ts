@@ -104,18 +104,29 @@ function textureToThree(texture: SceneTextureData, reference: SceneTextureRefere
 function materialToThree(material: SceneMaterialData, textures: readonly SceneTextureData[]): MeshStandardMaterial {
     const peak = Math.max(...material.emissive);
     const map = material.albedoMap ? textureToThree(textures[material.albedoMap.texture], material.albedoMap) : null;
+    if (material.metalnessMap && material.metalnessMap.channel !== 'b') {
+        throw new Error(`material ${material.name}: metalnessMap.channel '${material.metalnessMap.channel}': three reads metalness from the blue channel only`);
+    }
+    const metalnessMap = material.metalnessMap ? textureToThree(textures[material.metalnessMap.texture], material.metalnessMap) : null;
+    const alphaMode = material.alphaMode ?? (material.alphaCutoff !== undefined ? 'cutout' : 'opaque');
     const parameters = {
         name: material.name,
         color: linearColor(material.albedo),
         map,
-        // Fully rough and non-metallic: the platform only models diffuse albedo.
+        // Fully rough: the platform models diffuse albedo only. Metals keep their
+        // metalness, which is how three (and GI's albedo × (1 - metalness)) darken them.
         roughness: 1,
-        metalness: 0,
+        metalness: material.metalness ?? (metalnessMap ? 1 : 0),
+        metalnessMap,
+        opacity: material.opacity ?? 1,
+        // Blended (glTF BLEND), as GLTFLoader sets it up; GI reads it as stochastic.
+        transparent: alphaMode === 'stochastic',
+        depthWrite: alphaMode !== 'stochastic',
         // Emission above 1 is kept as colour times intensity, as three.js expects.
         emissive: peak > 0 ? new Color().setRGB(material.emissive[0] / peak, material.emissive[1] / peak, material.emissive[2] / peak) : new Color(0, 0, 0),
         emissiveIntensity: peak > 0 ? peak : 1,
         // A cutout: three discards fragments whose alpha is below alphaTest, as GLTFLoader sets up glTF's MASK mode.
-        alphaTest: material.alphaCutoff ?? 0,
+        alphaTest: alphaMode === 'cutout' ? (material.alphaCutoff ?? 0.5) : 0,
         side: material.doubleSided ? DoubleSide : FrontSide,
     };
     const transmission = material.transmission ?? 0;
