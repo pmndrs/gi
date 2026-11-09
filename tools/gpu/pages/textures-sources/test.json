@@ -1,0 +1,4 @@
+{
+    "description": "M4 T4.1: every texture source kind (PixelData, ImageData, ImageBitmap, GPUTexture unorm and sRGB, BC7 mips) makes the same store layer within 2/255; 500 more textures grow the array with 0 recompiles.",
+    "timeoutMs": 120000
+}

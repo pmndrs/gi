@@ -7,16 +7,21 @@
  * DOM for some paths and rewrites materials and transforms on the way.
  *
  * What the file contains:
- * - one glTF mesh per (source mesh, material) pair, sharing vertex data;
+ * - one glTF mesh per (source mesh, materials) pair, sharing vertex data; a
+ *   mesh with groups becomes one glTF mesh with a primitive per group;
  * - one node per instance, with its column-major matrix as-is;
  * - materials as metallic-roughness with the albedo as the base colour factor
  *   (metallic 0, roughness 1) and emission through `KHR_materials_emissive_strength`
  *   so values above 1 survive;
+ * - textures as embedded PNGs (png.ts), with their uv mapping as a sampler's
+ *   wrap modes, the texture's `texCoord` and `KHR_texture_transform`;
+ *   cutouts as alpha mode MASK, glass as `KHR_materials_transmission`;
  * - lights through `KHR_lights_punctual`, whose units (lux, candela) match
  *   three.js physical lights.
  */
 
-import type { ProceduralScene, SceneLightData, SceneMeshData, Vector3Tuple } from './scene-data';
+import { encodePng } from './png';
+import type { ProceduralScene, SceneLightData, SceneMeshData, SceneTextureReference, SceneUvWrap, Vector3Tuple } from './scene-data';
 
 const GLB_MAGIC = 0x46546c67; // "glTF"
 const GLB_VERSION = 2;
@@ -28,6 +33,15 @@ const COMPONENT_UNSIGNED_INT = 5125;
 const TARGET_ARRAY_BUFFER = 34962;
 const TARGET_ELEMENT_ARRAY_BUFFER = 34963;
 const MODE_TRIANGLES = 4;
+
+// Sampler constants (the WebGL enums glTF uses).
+const FILTER_LINEAR = 9729;
+const FILTER_LINEAR_MIPMAP_LINEAR = 9987;
+const GLTF_WRAP: Readonly<Record<SceneUvWrap, number>> = {
+    repeat: 10497,
+    clamp: 33071,
+    mirror: 33648,
+};
 
 export interface GlbOptions {
     /** Stored as the scene name. */
@@ -44,6 +58,9 @@ export interface GltfJson {
     nodes: Array<Record<string, unknown>>;
     meshes: Array<Record<string, unknown>>;
     materials: Array<Record<string, unknown>>;
+    textures?: Array<Record<string, unknown>>;
+    images?: Array<Record<string, unknown>>;
+    samplers?: Array<Record<string, unknown>>;
     accessors: Array<Record<string, unknown>>;
     bufferViews: Array<Record<string, unknown>>;
     buffers: Array<{ byteLength: number }>;
@@ -60,8 +77,13 @@ class BinaryBuilder {
         const offset = this.byteLength;
         const bytes = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
         this.chunks.push(bytes);
-        // Float32 and Uint32 data are already multiples of 4 bytes, so offsets stay aligned.
         this.byteLength += bytes.byteLength;
+        // Float32 and Uint32 data are already multiples of 4 bytes; images are padded so the next offset stays aligned.
+        const padding = (4 - (bytes.byteLength % 4)) % 4;
+        if (padding > 0) {
+            this.chunks.push(new Uint8Array(padding));
+            this.byteLength += padding;
+        }
         return offset;
     }
 
@@ -165,59 +187,120 @@ export function writeGlb(scene: ProceduralScene, options: GlbOptions): Uint8Arra
     };
 
     // Vertex data is written once per source mesh and shared by every material using it.
+    // A mesh with groups gets an index list per group, so each can be its own primitive.
     const meshAccessors = scene.meshes.map((mesh: SceneMeshData) => {
         const bounds = positionBounds(mesh.positions);
-        return {
-            position: addAccessor(mesh.positions, TARGET_ARRAY_BUFFER, COMPONENT_FLOAT, 'VEC3', bounds),
-            normal: addAccessor(mesh.normals, TARGET_ARRAY_BUFFER, COMPONENT_FLOAT, 'VEC3'),
-            uv: addAccessor(mesh.uvs, TARGET_ARRAY_BUFFER, COMPONENT_FLOAT, 'VEC2'),
-            indices: addAccessor(mesh.indices, TARGET_ELEMENT_ARRAY_BUFFER, COMPONENT_UNSIGNED_INT, 'SCALAR'),
+        const attributes: Record<string, number> = {
+            POSITION: addAccessor(mesh.positions, TARGET_ARRAY_BUFFER, COMPONENT_FLOAT, 'VEC3', bounds),
+            NORMAL: addAccessor(mesh.normals, TARGET_ARRAY_BUFFER, COMPONENT_FLOAT, 'VEC3'),
+            TEXCOORD_0: addAccessor(mesh.uvs, TARGET_ARRAY_BUFFER, COMPONENT_FLOAT, 'VEC2'),
         };
+        if (mesh.uvs1) attributes.TEXCOORD_1 = addAccessor(mesh.uvs1, TARGET_ARRAY_BUFFER, COMPONENT_FLOAT, 'VEC2');
+        const runs = mesh.groups ?? [{ start: 0, count: mesh.indices.length, materialSlot: 0 }];
+        const indexRuns = runs.map((run) => ({
+            materialSlot: run.materialSlot,
+            indices: addAccessor(mesh.indices.subarray(run.start, run.start + run.count), TARGET_ELEMENT_ARRAY_BUFFER, COMPONENT_UNSIGNED_INT, 'SCALAR'),
+        }));
+        return { attributes, indexRuns };
     });
 
+    // Textures: one embedded PNG per scene texture, one sampler per pair of wrap modes,
+    // and one glTF texture per (image, sampler) pair that a material uses.
+    const images: NonNullable<GltfJson['images']> = (scene.textures ?? []).map((texture) => {
+        const png = encodePng(texture.width, texture.height, texture.data);
+        const byteOffset = bin.add(png);
+        bufferViews.push({ buffer: 0, byteOffset, byteLength: png.byteLength });
+        return { name: texture.name, mimeType: 'image/png', bufferView: bufferViews.length - 1 };
+    });
+    const samplers: NonNullable<GltfJson['samplers']> = [];
+    const samplerIndexByWraps = new Map<string, number>();
+    const textures: NonNullable<GltfJson['textures']> = [];
+    const textureIndexByKey = new Map<string, number>();
+    let usesTextureTransform = false;
+    const textureInfo = (reference: SceneTextureReference): Record<string, unknown> => {
+        const uv = reference.uv ?? {};
+        const wrapU = uv.wrapU ?? 'repeat';
+        const wrapV = uv.wrapV ?? 'repeat';
+        const wrapsKey = `${wrapU}:${wrapV}`;
+        let sampler = samplerIndexByWraps.get(wrapsKey);
+        if (sampler === undefined) {
+            samplers.push({ magFilter: FILTER_LINEAR, minFilter: FILTER_LINEAR_MIPMAP_LINEAR, wrapS: GLTF_WRAP[wrapU], wrapT: GLTF_WRAP[wrapV] });
+            sampler = samplers.length - 1;
+            samplerIndexByWraps.set(wrapsKey, sampler);
+        }
+        const textureKey = `${reference.texture}:${sampler}`;
+        let texture = textureIndexByKey.get(textureKey);
+        if (texture === undefined) {
+            textures.push({ source: reference.texture, sampler });
+            texture = textures.length - 1;
+            textureIndexByKey.set(textureKey, texture);
+        }
+        const info: Record<string, unknown> = { index: texture };
+        if ((uv.channel ?? 0) !== 0) info.texCoord = uv.channel;
+        const hasTransform = uv.offset !== undefined || uv.repeat !== undefined || (uv.rotation ?? 0) !== 0;
+        if (hasTransform) {
+            // KHR_texture_transform: offset, rotation and scale mean three's offset, rotation and
+            // repeat (GLTFLoader copies them across unchanged). Its own texCoord is not needed:
+            // the textureInfo's texCoord already names the uv set.
+            usesTextureTransform = true;
+            info.extensions = {
+                KHR_texture_transform: { offset: [...(uv.offset ?? [0, 0])], rotation: uv.rotation ?? 0, scale: [...(uv.repeat ?? [1, 1])] },
+            };
+        }
+        return info;
+    };
+
     const usesEmission = scene.materials.some((m) => m.emissive.some((channel) => channel > 0));
+    const usesTransmission = scene.materials.some((m) => (m.transmission ?? 0) > 0);
     const materials = scene.materials.map((material) => {
         const peak = Math.max(...material.emissive);
+        const pbrMetallicRoughness: Record<string, unknown> = {
+            baseColorFactor: [material.albedo[0], material.albedo[1], material.albedo[2], 1],
+            metallicFactor: 0,
+            roughnessFactor: 1,
+        };
+        if (material.albedoMap) pbrMetallicRoughness.baseColorTexture = textureInfo(material.albedoMap);
         const gltfMaterial: Record<string, unknown> = {
             name: material.name,
-            pbrMetallicRoughness: {
-                baseColorFactor: [material.albedo[0], material.albedo[1], material.albedo[2], 1],
-                metallicFactor: 0,
-                roughnessFactor: 1,
-            },
+            pbrMetallicRoughness,
             doubleSided: material.doubleSided,
         };
         if (material.alphaCutoff !== undefined) {
             gltfMaterial.alphaMode = 'MASK';
             gltfMaterial.alphaCutoff = material.alphaCutoff;
         }
+        const extensions: Record<string, unknown> = {};
         if (peak > 0) {
             // emissiveFactor is limited to 0..1, so store the colour normalised and the scale separately.
             gltfMaterial.emissiveFactor = material.emissive.map((channel) => channel / peak);
-            gltfMaterial.extensions = { KHR_materials_emissive_strength: { emissiveStrength: peak } };
+            extensions.KHR_materials_emissive_strength = { emissiveStrength: peak };
         }
+        if ((material.transmission ?? 0) > 0) {
+            // Clear glass. Roughness 0 so a viewer shows a clear pane; GI only reads "lets light through".
+            pbrMetallicRoughness.roughnessFactor = 0;
+            extensions.KHR_materials_transmission = { transmissionFactor: material.transmission };
+        }
+        if (Object.keys(extensions).length > 0) gltfMaterial.extensions = extensions;
         return gltfMaterial;
     });
 
-    // One glTF mesh per (source mesh, material) pair.
+    // One glTF mesh per (source mesh, materials) pair; a primitive per material run.
     const meshes: GltfJson['meshes'] = [];
     const meshIndexByPair = new Map<string, number>();
     const nodes: GltfJson['nodes'] = [];
     for (const instance of scene.instances) {
-        const pairKey = `${instance.mesh}:${instance.material}`;
+        const slotMaterials = instance.materials ?? [instance.material];
+        const pairKey = `${instance.mesh}:${slotMaterials.join(',')}`;
         let gltfMeshIndex = meshIndexByPair.get(pairKey);
         if (gltfMeshIndex === undefined) {
             const accessorSet = meshAccessors[instance.mesh];
             meshes.push({
-                name: `${scene.meshes[instance.mesh].name}-${scene.materials[instance.material].name}`,
-                primitives: [
-                    {
-                        attributes: { POSITION: accessorSet.position, NORMAL: accessorSet.normal, TEXCOORD_0: accessorSet.uv },
-                        indices: accessorSet.indices,
-                        material: instance.material,
-                        mode: MODE_TRIANGLES,
-                    },
-                ],
+                name: `${scene.meshes[instance.mesh].name}-${slotMaterials.map((material) => scene.materials[material].name).join('-')}`,
+                primitives: accessorSet.indexRuns.map((run) => {
+                    const material = slotMaterials[run.materialSlot];
+                    if (material === undefined) throw new Error(`instance ${instance.name} has no material for slot ${run.materialSlot}`);
+                    return { attributes: { ...accessorSet.attributes }, indices: run.indices, material, mode: MODE_TRIANGLES };
+                }),
             });
             gltfMeshIndex = meshes.length - 1;
             meshIndexByPair.set(pairKey, gltfMeshIndex);
@@ -238,6 +321,8 @@ export function writeGlb(scene: ProceduralScene, options: GlbOptions): Uint8Arra
 
     const extensionsUsed: string[] = [];
     if (usesEmission) extensionsUsed.push('KHR_materials_emissive_strength');
+    if (usesTransmission) extensionsUsed.push('KHR_materials_transmission');
+    if (usesTextureTransform) extensionsUsed.push('KHR_texture_transform');
     if (lights.length > 0) extensionsUsed.push('KHR_lights_punctual');
 
     const json: GltfJson = {
@@ -248,6 +333,7 @@ export function writeGlb(scene: ProceduralScene, options: GlbOptions): Uint8Arra
         nodes,
         meshes,
         materials,
+        ...(images.length > 0 ? { textures, images, samplers } : {}),
         accessors,
         bufferViews,
         buffers: [{ byteLength: bin.length }],

@@ -67,11 +67,11 @@ describe('url state', () => {
         expect(parseUrlState(serializeUrlState(state))).toEqual(state);
     });
 
-    it('reads and writes the texture compression (T3.12): compressed by default, the other modes by name', () => {
-        expect(parseUrlState('?scene=bistro-exterior').textures).toBe('compressed');
+    it('reads and writes the texture compression (T3.12): all-compressed by default since M4, the other modes by name', () => {
+        expect(parseUrlState('?scene=bistro-exterior').textures).toBe('all-compressed');
         expect(parseUrlState('?textures=uncompressed').textures).toBe('uncompressed');
-        expect(parseUrlState('?textures=all-compressed').textures).toBe('all-compressed');
-        expect(parseUrlState('?textures=zip').textures).toBe('compressed');
+        expect(parseUrlState('?textures=compressed').textures).toBe('compressed');
+        expect(parseUrlState('?textures=zip').textures).toBe('all-compressed');
         expect(serializeUrlState({ ...DEFAULT_URL_STATE, scene: 'sponza' })).toBe('scene=sponza');
         expect(serializeUrlState({ ...DEFAULT_URL_STATE, textures: 'uncompressed' })).toBe('textures=uncompressed');
         // Not taken for a scene setting.

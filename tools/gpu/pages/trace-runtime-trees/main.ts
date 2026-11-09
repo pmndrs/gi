@@ -388,6 +388,9 @@ async function nearbyReferenceAnswers(oracleCase: OracleCase, region: readonly n
         instanceIndices: new Uint32Array(kept.length),
         triangleIndices: new Uint32Array(kept.length),
         mirrored: new Uint8Array(kept.length),
+        // M4's material walk: keep each kept triangle's material and corner uvs (6 numbers per uv set).
+        materials: kept.map((triangle) => full.materials[triangle]),
+        uvs: [subsetUvs(full.uvs[0], kept), subsetUvs(full.uvs[1], kept)],
     };
     kept.forEach((triangle, slot) => {
         scene.geometry.set(full.geometry.subarray(triangle * 9, triangle * 9 + 9), slot * 9);
@@ -891,3 +894,11 @@ await runGpuTest(
     },
     { optionalFeatures: ['subgroups', 'timestamp-query'] },
 );
+
+/** The corner uvs of the kept triangles (6 numbers each), or null when the set is absent. */
+function subsetUvs(uvs: Float64Array | null, kept: readonly number[]): Float64Array | null {
+    if (!uvs) return null;
+    const subset = new Float64Array(kept.length * 6);
+    kept.forEach((triangle, slot) => subset.set(uvs.subarray(triangle * 6, triangle * 6 + 6), slot * 6));
+    return subset;
+}

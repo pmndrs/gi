@@ -36,6 +36,7 @@ import { GILimitError, GINotReadyError } from '../contract/errors.ts';
 import type { InstanceHandle, LightHandle, MaterialHandle, MeshHandle, TextureHandle } from '../contract/handles.ts';
 import type { Aabb, ColorRGB, Mat4, Vec3 } from '../contract/math.ts';
 import type {
+    AlphaMode,
     DeformedPositions,
     EnvironmentDescriptor,
     InstanceDescriptor,
@@ -45,8 +46,10 @@ import type {
     MeshDescriptor,
     SceneApi,
     TextureDescriptor,
+    TextureSource,
     UvMapping,
 } from '../contract/scene.ts';
+import { PlatformTextureStore, type TextureLayerRequest, type TextureLayerResults, type TextureLayerStore } from '../textures/texture-store.ts';
 import type { SceneChanges, SceneCopy } from '../contract/scene-copy.ts';
 import type { GpuTimerScope } from '../contract/timing.ts';
 import type { BindingSlot, WgslModule } from '../contract/wgsl.ts';
@@ -55,6 +58,8 @@ import { ChangeLog, copyLight, toAabb, type LightLookup } from './change-log.ts'
 import { boxInside, checkedDeformBounds, copyCheckedPositions, DeformState, growBox, largestScale, scanPose } from './deformed-positions.ts';
 import { BOX_NUMBERS, InstanceTransforms, MATRIX_NUMBERS } from './instance-transforms.ts';
 import {
+    ALPHA_MODE,
+    DEFAULT_ALPHA_CUTOFF,
     ENVIRONMENT_TYPE,
     HEADER_VEC4S,
     HEADER_WORD,
@@ -65,10 +70,12 @@ import {
     LIGHT_TYPE,
     LIGHT_WORD,
     MATERIAL_FLAG,
+    MATERIAL_RECORD_VEC4S,
     MATERIAL_WORD,
     MESH_FLAG,
     MESH_WORD,
     NONE,
+    TEXTURE_CHANNEL,
     UV_PACK_SHIFT,
     UV_WRAP,
 } from './layout.ts';
@@ -110,7 +117,13 @@ export interface PlatformSceneOptions {
     /** Prefix for GPU buffer labels. */
     readonly label?: string;
     readonly initialCapacities?: Partial<SceneCapacities>;
-    /** Where one-time warnings go (deformed positions outside `deformBounds`). Defaults to `console.warn`. */
+    /**
+     * Where textures become layers (textures/texture-store.ts). The platform
+     * passes its own, which hit shading also binds; without one the scene
+     * makes a store of its own (unit tests pass a stand-in).
+     */
+    readonly textureStore?: TextureLayerStore;
+    /** Where one-time warnings go (a texture that can't be used; deformed positions outside `deformBounds`). Defaults to `console.warn`. */
     readonly warn?: (message: string) => void;
 }
 
@@ -234,10 +247,23 @@ interface MeshEntry {
     deform: DeformState | null;
 }
 
+/**
+ * Where a texture is on its way to the store: waiting for the next `encode`,
+ * made (its layer is its slot), or refused (the store warned why; its
+ * materials keep their flat colour).
+ */
+type TextureState = 'pending' | 'built' | 'failed';
+
 interface TextureEntry {
     readonly handle: TextureHandle;
+    /** Also its layer in the texture store. */
     readonly slot: number;
-    readonly descriptor: TextureDescriptor;
+    readonly srgb: boolean;
+    readonly label: string | undefined;
+    /** The host's source, dropped once the layer is made (the host may then free it). */
+    source: TextureSource | null;
+    state: TextureState;
+    /** Material texture references to it (a material using it twice counts twice). */
     users: number;
 }
 
@@ -247,6 +273,7 @@ interface MaterialEntry {
     descriptor: MaterialDescriptor;
     albedoTexture: TextureEntry | undefined;
     emissiveTexture: TextureEntry | undefined;
+    metalnessTexture: TextureEntry | undefined;
     readonly users: Set<InstanceEntry>;
 }
 
@@ -331,6 +358,10 @@ export class PlatformScene implements SceneApi, SceneCopy {
     private readonly materialSlots = new SlotAllocator();
     private readonly instanceSlots = new SlotAllocator();
 
+    /** Where textures become layers; `encode` hands it the textures created since the last one. */
+    readonly textureStore: TextureLayerStore;
+    private readonly pendingTextures = new Set<TextureEntry>();
+
     private readonly pendingMeshes = new Set<MeshEntry>();
     /** Deforming meshes with a new pose waiting for `encode`. */
     private readonly posesWaiting = new Set<MeshEntry>();
@@ -394,6 +425,7 @@ export class PlatformScene implements SceneApi, SceneCopy {
         this.tableBuffer = this.createStorageBuffer('scene tables', this.mirror.byteLength);
         this.uploadedLayoutVersion = -1;
         this.packer = new GpuMeshPacker(device, { label: this.label });
+        this.textureStore = options.textureStore ?? new PlatformTextureStore(device, { label: this.label, warn: options.warn });
 
         const currentVersion = () => this.bufferVersion;
         this.module = {
@@ -487,6 +519,25 @@ export class PlatformScene implements SceneApi, SceneCopy {
 
     materialSlot(material: MaterialHandle): number {
         return this.material(material).slot;
+    }
+
+    /**
+     * An instance's mesh slot, and the record of each material it uses in
+     * slot order, as the GPU will read them (views of the CPU mirror: read
+     * them at once). For the tracer's triangle-flag upkeep (T4.2,
+     * trace/ray-queries.ts), which rewrites a mesh's flags only when the
+     * words the walk's material rules read have changed. Null for a
+     * destroyed instance.
+     */
+    instanceMaterialRecords(instance: InstanceHandle): { readonly meshSlot: number; readonly records: readonly Uint32Array[] } | null {
+        const entry = this.instances.get(instance);
+        if (!entry) return null;
+        const recordWords = MATERIAL_RECORD_VEC4S * 4;
+        const records = entry.materials.map((material) => {
+            const base = this.mirror.recordWord('materials', material.slot);
+            return this.mirror.words.subarray(base, base + recordWords);
+        });
+        return { meshSlot: entry.mesh.slot, records };
     }
 
     /** Index of a light in the packed light table. Changes when other lights are added or removed. */
@@ -657,14 +708,19 @@ export class PlatformScene implements SceneApi, SceneCopy {
     // -----------------------------------------------------------------------
 
     /**
-     * Registers a texture. M1 keeps only the handle and the descriptor (a
-     * reference to the source, not a copy); the atlas copy arrives in M4.
+     * Registers a texture and queues it for the texture store: the next
+     * `encode` makes its layer (a reference to the source is kept until
+     * then). Until that layer exists its materials shade with their flat
+     * colour; when it lands, their records are rewritten and a material
+     * change is logged over the instances using them.
      */
     createTexture(descriptor: TextureDescriptor): TextureHandle {
         this.checkLive();
         if (!descriptor || !descriptor.source) throw new TypeError('@pmndrs/ddgi: a texture needs a source');
         const handle = this.nextHandle++ as TextureHandle;
-        this.textures.set(handle, { handle, slot: this.textureSlots.take(), descriptor, users: 0 });
+        const entry: TextureEntry = { handle, slot: this.textureSlots.take(), srgb: descriptor.srgb, label: descriptor.label, source: descriptor.source, state: 'pending', users: 0 };
+        this.textures.set(handle, entry);
+        this.pendingTextures.add(entry);
         return handle;
     }
 
@@ -672,8 +728,23 @@ export class PlatformScene implements SceneApi, SceneCopy {
         this.checkLive();
         const entry = this.texture(texture);
         if (entry.users > 0) throw new Error(`@pmndrs/ddgi: texture ${texture} is still used by ${entry.users} material(s).`);
+        // Its layer is free for the next texture; nothing reads it until that one's layer is made.
+        this.pendingTextures.delete(entry);
         this.textureSlots.release(entry.slot);
         this.textures.delete(texture);
+    }
+
+    /** Textures whose layer is made, waiting, or refused (for tests and tools). */
+    textureCounts(): { readonly built: number; readonly pending: number; readonly failed: number } {
+        const counts = { built: 0, pending: 0, failed: 0 };
+        for (const entry of this.textures.values()) counts[entry.state]++;
+        return counts;
+    }
+
+    /** A texture's layer in the store once it is made; null while it waits or when it was refused. */
+    textureLayer(texture: TextureHandle): number | null {
+        const entry = this.texture(texture);
+        return entry.state === 'built' ? entry.slot : null;
     }
 
     createMaterial(descriptor: MaterialDescriptor): MaterialHandle {
@@ -682,7 +753,15 @@ export class PlatformScene implements SceneApi, SceneCopy {
         const handle = this.nextHandle++ as MaterialHandle;
         const slot = this.materialSlots.take();
         this.mirror.ensureRecord('materials', slot);
-        const entry: MaterialEntry = { handle, slot, descriptor: { ...descriptor }, albedoTexture: undefined, emissiveTexture: undefined, users: new Set() };
+        const entry: MaterialEntry = {
+            handle,
+            slot,
+            descriptor: { ...descriptor },
+            albedoTexture: undefined,
+            emissiveTexture: undefined,
+            metalnessTexture: undefined,
+            users: new Set(),
+        };
         this.attachTextures(entry);
         this.materials.set(handle, entry);
         this.writeMaterialRecord(entry);
@@ -1068,6 +1147,8 @@ export class PlatformScene implements SceneApi, SceneCopy {
         bytesWritten += poses.bytesWritten;
         const meshes = this.uploadMeshes(encoder, timer);
         bytesWritten += meshes.bytesWritten;
+        // Before the tables: the records of materials whose textures land now are rewritten.
+        this.buildTextures(encoder, timer);
         bytesWritten += this.uploadTables();
 
         const upload: SceneUpload = {
@@ -1094,6 +1175,71 @@ export class PlatformScene implements SceneApi, SceneCopy {
         this.vertexBuffer.destroy();
         this.tableBuffer.destroy();
         this.packer.dispose();
+        this.textureStore.dispose();
+    }
+
+    // -----------------------------------------------------------------------
+    // Textures
+    // -----------------------------------------------------------------------
+
+    /**
+     * Hands the store every texture created since the last encode, once its
+     * kernel is compiled (before that they wait). Textures whose layer was
+     * made get their materials' records rewritten, and a material change is
+     * logged over the traceable instances using those materials, so
+     * techniques refresh what they saw of them (DDGI's probes).
+     */
+    private buildTextures(encoder: GPUCommandEncoder, timer: GpuTimerScope | undefined): void {
+        if (!this.textureStore.ready) return;
+        const byLayer = new Map<number, TextureEntry>();
+        const requests: TextureLayerRequest[] = [];
+        for (const entry of this.pendingTextures) {
+            if (!entry.source) continue;
+            byLayer.set(entry.slot, entry);
+            requests.push({ layer: entry.slot, source: entry.source, srgb: entry.srgb, label: entry.label });
+        }
+        this.pendingTextures.clear();
+        // A source that throws is refused alone inside the store (texture-store.ts, stageCatching).
+        // If the store's encode fails as a whole, this frame's textures fail with it rather than
+        // staying pending for good (they were taken off the pending set above).
+        let results: TextureLayerResults;
+        try {
+            results = this.textureStore.encode(encoder, requests, timer);
+        } catch (error) {
+            for (const entry of byLayer.values()) {
+                entry.state = 'failed';
+                entry.source = null;
+            }
+            throw error;
+        }
+        for (const layer of results.failed) {
+            const entry = byLayer.get(layer);
+            if (!entry) continue;
+            entry.state = 'failed';
+            entry.source = null;
+        }
+        // Sources the store is still checking (a host's GPUTexture) are asked for again next time.
+        for (const layer of results.waiting) {
+            const entry = byLayer.get(layer);
+            if (entry) this.pendingTextures.add(entry);
+        }
+        const landed = new Set<TextureEntry>();
+        for (const layer of results.built) {
+            const entry = byLayer.get(layer);
+            if (!entry) continue;
+            entry.state = 'built';
+            entry.source = null;
+            landed.add(entry);
+        }
+        if (landed.size === 0) return;
+        for (const material of this.materials.values()) {
+            const uses = [material.albedoTexture, material.emissiveTexture, material.metalnessTexture].some((texture) => texture !== undefined && landed.has(texture));
+            if (!uses) continue;
+            this.writeMaterialRecord(material);
+            for (const instance of material.users) {
+                if (this.isTraceable(instance)) this.changeLog.addRegion(this.transforms.box(instance.slot), 'material', instance.handle);
+            }
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -1515,7 +1661,9 @@ export class PlatformScene implements SceneApi, SceneCopy {
         const albedo = descriptor.albedo ?? [1, 1, 1];
         const emissive = descriptor.emissive ?? [0, 0, 0];
         const emissiveIntensity = descriptor.emissiveIntensity ?? 1;
-        const alphaCutoff = descriptor.alphaCutoff ?? 0;
+        const alphaMode = resolvedAlphaMode(descriptor);
+        // The record's cutoff is 0 unless the mode is cutout, as before alpha modes (0 = no holes).
+        const alphaCutoff = alphaMode === 'cutout' ? (descriptor.alphaCutoff ?? DEFAULT_ALPHA_CUTOFF) : 0;
         for (let channel = 0; channel < 3; channel++) {
             floats[base + MATERIAL_WORD.albedo + channel] = albedo[channel];
             floats[base + MATERIAL_WORD.emission + channel] = emissive[channel] * emissiveIntensity;
@@ -1527,11 +1675,19 @@ export class PlatformScene implements SceneApi, SceneCopy {
             (descriptor.doubleSided !== false ? MATERIAL_FLAG.doubleSided : 0) |
             (alphaCutoff > 0 && material.albedoTexture ? MATERIAL_FLAG.alphaTest : 0);
         this.writeUvMapping(base + MATERIAL_WORD.albedoUvMatrix, base + MATERIAL_WORD.albedoUvTranslation, descriptor.albedoUv);
-        words[base + MATERIAL_WORD.albedoTexture] = material.albedoTexture ? material.albedoTexture.slot : NONE;
+        words[base + MATERIAL_WORD.albedoTexture] = textureLayer(material.albedoTexture);
         words[base + MATERIAL_WORD.albedoUvPacked] = packUvMapping(descriptor.albedoUv);
         this.writeUvMapping(base + MATERIAL_WORD.emissiveUvMatrix, base + MATERIAL_WORD.emissiveUvTranslation, descriptor.emissiveUv);
-        words[base + MATERIAL_WORD.emissiveTexture] = material.emissiveTexture ? material.emissiveTexture.slot : NONE;
+        words[base + MATERIAL_WORD.emissiveTexture] = textureLayer(material.emissiveTexture);
         words[base + MATERIAL_WORD.emissiveUvPacked] = packUvMapping(descriptor.emissiveUv);
+        floats[base + MATERIAL_WORD.metalness] = descriptor.metalness ?? 0;
+        floats[base + MATERIAL_WORD.opacity] = descriptor.opacity ?? 1;
+        words[base + MATERIAL_WORD.alphaMode] = ALPHA_MODE[alphaMode];
+        words[base + MATERIAL_WORD.reserved] = 0;
+        const metalnessMap = descriptor.metalnessTexture;
+        this.writeUvMapping(base + MATERIAL_WORD.metalnessUvMatrix, base + MATERIAL_WORD.metalnessUvTranslation, metalnessMap?.uv);
+        words[base + MATERIAL_WORD.metalnessTexture] = textureLayer(material.metalnessTexture);
+        words[base + MATERIAL_WORD.metalnessUvPacked] = packUvMapping(metalnessMap?.uv) | (TEXTURE_CHANNEL[metalnessMap?.channel ?? 'b'] << UV_PACK_SHIFT.textureChannel);
         this.mirror.markRecord('materials', material.slot);
     }
 
@@ -1645,9 +1801,18 @@ export class PlatformScene implements SceneApi, SceneCopy {
         checkColor(descriptor.albedo, 'albedo');
         checkColor(descriptor.emissive, 'emissive');
         checkNonNegative(descriptor.emissiveIntensity, 'emissiveIntensity');
-        const cutoff = descriptor.alphaCutoff;
-        if (cutoff !== undefined && !(cutoff >= 0 && cutoff <= 1)) throw new RangeError(`alphaCutoff must be in [0, 1], got ${cutoff}`);
-        for (const [name, mapping] of [['albedoUv', descriptor.albedoUv], ['emissiveUv', descriptor.emissiveUv]] as const) {
+        checkUnitInterval(descriptor.alphaCutoff, 'alphaCutoff');
+        checkUnitInterval(descriptor.metalness, 'metalness');
+        checkUnitInterval(descriptor.opacity, 'opacity');
+        if (descriptor.alphaMode !== undefined && !(descriptor.alphaMode in ALPHA_MODE)) throw new RangeError(`alphaMode must be opaque, cutout or stochastic, got ${descriptor.alphaMode}`);
+        const metalnessMap = descriptor.metalnessTexture;
+        if (metalnessMap !== undefined && !(metalnessMap.channel in TEXTURE_CHANNEL)) throw new RangeError(`metalnessTexture.channel must be r, g, b or a, got ${metalnessMap.channel}`);
+        const mappings = [
+            ['albedoUv', descriptor.albedoUv],
+            ['emissiveUv', descriptor.emissiveUv],
+            ['metalnessTexture.uv', metalnessMap?.uv],
+        ] as const;
+        for (const [name, mapping] of mappings) {
             if (!mapping) continue;
             if (mapping.matrix !== undefined && !isFiniteVector(mapping.matrix, 6)) throw new RangeError(`${name}.matrix must be six finite numbers`);
             if (mapping.channel !== undefined && mapping.channel !== 0 && mapping.channel !== 1) throw new RangeError(`${name}.channel must be 0 or 1`);
@@ -1657,21 +1822,22 @@ export class PlatformScene implements SceneApi, SceneCopy {
         }
         if (descriptor.albedoTexture !== undefined) this.texture(descriptor.albedoTexture);
         if (descriptor.emissiveTexture !== undefined) this.texture(descriptor.emissiveTexture);
+        if (metalnessMap !== undefined) this.texture(metalnessMap.texture);
     }
 
     private attachTextures(material: MaterialEntry): void {
-        const { albedoTexture, emissiveTexture } = material.descriptor;
+        const { albedoTexture, emissiveTexture, metalnessTexture } = material.descriptor;
         material.albedoTexture = albedoTexture !== undefined ? this.texture(albedoTexture) : undefined;
         material.emissiveTexture = emissiveTexture !== undefined ? this.texture(emissiveTexture) : undefined;
-        if (material.albedoTexture) material.albedoTexture.users++;
-        if (material.emissiveTexture) material.emissiveTexture.users++;
+        material.metalnessTexture = metalnessTexture !== undefined ? this.texture(metalnessTexture.texture) : undefined;
+        for (const texture of [material.albedoTexture, material.emissiveTexture, material.metalnessTexture]) if (texture) texture.users++;
     }
 
     private detachTextures(material: MaterialEntry): void {
-        if (material.albedoTexture) material.albedoTexture.users--;
-        if (material.emissiveTexture) material.emissiveTexture.users--;
+        for (const texture of [material.albedoTexture, material.emissiveTexture, material.metalnessTexture]) if (texture) texture.users--;
         material.albedoTexture = undefined;
         material.emissiveTexture = undefined;
+        material.metalnessTexture = undefined;
     }
 
     /** A checked copy of a light descriptor. Throws on anything the shaders couldn't use. */
@@ -1706,6 +1872,21 @@ export class PlatformScene implements SceneApi, SceneCopy {
         // Its own arrays: the change log compares states, and a host editing a vector in place would change the stored one too.
         return copyLight(descriptor);
     }
+}
+
+/** A material texture word: the texture's store layer once it is made, else NONE (the material shades as if it were white). */
+function textureLayer(texture: TextureEntry | undefined): number {
+    return texture !== undefined && texture.state === 'built' ? texture.slot : NONE;
+}
+
+/** The alpha mode a material has: its own, else cutout when it names a cutoff above 0 (as before alpha modes), else opaque. */
+function resolvedAlphaMode(descriptor: MaterialDescriptor): AlphaMode {
+    if (descriptor.alphaMode !== undefined) return descriptor.alphaMode;
+    return (descriptor.alphaCutoff ?? 0) > 0 ? 'cutout' : 'opaque';
+}
+
+function checkUnitInterval(value: number | undefined, what: string): void {
+    if (value !== undefined && !(value >= 0 && value <= 1)) throw new RangeError(`${what} must be in [0, 1], got ${value}`);
 }
 
 function packUvMapping(mapping: UvMapping | undefined): number {

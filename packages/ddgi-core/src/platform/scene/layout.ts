@@ -195,19 +195,28 @@ export const MESH_FLAG = {
 } as const;
 
 /**
- * Material record, 6 vec4s (96 bytes):
+ * Material record, 9 vec4s (144 bytes):
  *
- *     albedo.rgb, alphaCutoff (0 = opaque)
+ *     albedo.rgb, alphaCutoff (0 unless the alpha mode is cutout)
  *     emission.rgb (emissive × emissiveIntensity), flags
  *     albedoUv matrix m0..m3
- *     albedoUv m4, m5, albedoTexture (texture slot or NONE), albedoUv packed (channel, wrapU, wrapV)
+ *     albedoUv m4, m5, albedoTexture (store layer or NONE), albedoUv packed (channel, wrapU, wrapV)
  *     emissiveUv matrix m0..m3
  *     emissiveUv m4, m5, emissiveTexture, emissiveUv packed
+ *     metalness, opacity, alphaMode, reserved (0)
+ *     metalnessUv matrix m0..m3
+ *     metalnessUv m4, m5, metalnessTexture, metalnessUv packed (and the texture channel metalness is read from)
  *
  * The uv matrix is the contract's 3×2 column-major transform:
  * `uv' = (m0·u + m2·v + m4, m1·u + m3·v + m5)`.
+ *
+ * A texture word holds the texture's layer in the texture store
+ * (textures/texture-store.ts), or NONE when the material has no such texture
+ * or its layer hasn't been made yet: the material then shades as if the
+ * texture were white, and the platform rewrites the record when the layer
+ * lands (M4, T4.1).
  */
-export const MATERIAL_RECORD_VEC4S = 6;
+export const MATERIAL_RECORD_VEC4S = 9;
 export const MATERIAL_WORD = {
     albedo: 0,
     alphaCutoff: 3,
@@ -221,6 +230,15 @@ export const MATERIAL_WORD = {
     emissiveUvTranslation: 20,
     emissiveTexture: 22,
     emissiveUvPacked: 23,
+    metalness: 24,
+    opacity: 25,
+    alphaMode: 26,
+    /** Nothing uses it yet; kept 0. */
+    reserved: 27,
+    metalnessUvMatrix: 28,
+    metalnessUvTranslation: 32,
+    metalnessTexture: 34,
+    metalnessUvPacked: 35,
 } as const;
 
 /** Material `flags` bits. */
@@ -228,13 +246,24 @@ export const MATERIAL_FLAG = {
     live: 1,
     blocksLight: 2,
     doubleSided: 4,
-    /** `alphaCutoff` is set and there is an albedo texture to read alpha from (M4). */
+    /** The alpha mode is cutout and there is an albedo texture to read alpha from (M4). */
     alphaTest: 8,
 } as const;
 
-/** Packed uv mapping: bits 0-3 the uv channel, 4-7 wrapU, 8-11 wrapV. */
-export const UV_PACK_SHIFT = { channel: 0, wrapU: 4, wrapV: 8 } as const;
+/** `alphaMode` values (contract: `MaterialDescriptor.alphaMode`). */
+export const ALPHA_MODE = { opaque: 0, cutout: 1, stochastic: 2 } as const;
+
+/** The cutoff a cutout material gets when it names none (glTF's `alphaCutoff` default). */
+export const DEFAULT_ALPHA_CUTOFF = 0.5;
+
+/**
+ * Packed uv mapping: bits 0-3 the uv channel, 4-7 wrapU, 8-11 wrapV, and
+ * 12-15 which texture channel holds the value (`TEXTURE_CHANNEL`; only the
+ * metalness map uses it, the other maps read rgb or rgba).
+ */
+export const UV_PACK_SHIFT = { channel: 0, wrapU: 4, wrapV: 8, textureChannel: 12 } as const;
 export const UV_WRAP = { repeat: 0, clamp: 1, mirror: 2 } as const;
+export const TEXTURE_CHANNEL = { r: 0, g: 1, b: 2, a: 3 } as const;
 
 /**
  * Light record, 4 vec4s (64 bytes):

@@ -38,13 +38,12 @@ import type { TextureCompression } from './texture-compression-mode';
 export type { TextureCompression } from './texture-compression-mode';
 
 /**
- * Material slots whose textures the three adapter averages on the CPU for GI
- * (texture-average.ts: `map` and `metalnessMap` for the albedo, `emissiveMap`
- * for the emission). It skips a `CompressedTexture`, so in `'compressed'` mode
- * these stay uncompressed. Empty this list once M4's adapter reads compressed
- * mips (T4.3).
+ * Material slots kept uncompressed in `'compressed'` mode because GI couldn't
+ * read their compressed form. Empty since M4's T4.3: the three adapter hands
+ * GI a `CompressedTexture`'s mips, so `'compressed'` and `'all-compressed'`
+ * now do the same.
  */
-export const GI_AVERAGED_SLOTS: readonly string[] = ['map', 'emissiveMap', 'metalnessMap'];
+export const GI_AVERAGED_SLOTS: readonly string[] = [];
 
 /**
  * Material slots holding tangent-space normal maps: BC5 keeps their two channels, and three rebuilds z (`NormalRGPacking`).

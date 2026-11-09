@@ -6,7 +6,8 @@
  * techniques. Each frame, `encode` records, in this order and into the host's
  * encoder:
  *
- * 1. the scene copy's uploads (`PlatformScene.encode`);
+ * 1. the scene copy's uploads (`PlatformScene.encode`), and the texture
+ *    store's new layers (`gi/texture-store`, textures/texture-store.ts);
  * 2. the tracer acting on them: removed meshes, new mesh trees (the GPU's
  *    first trees at load, then tinybvh's from the worker), and the top
  *    level's refit or rebuild;
@@ -50,6 +51,7 @@ import { mergeSceneChanges } from './scene/change-log.ts';
 import { PlatformScene } from './scene/platform-scene.ts';
 import { checkComputeLimits } from './device-requirements.ts';
 import { PlatformHitShading } from './shade/hit-shading.ts';
+import { PlatformTextureStore } from './textures/texture-store.ts';
 import { GpuTimer } from './timing/gpu-timer.ts';
 import { PlatformRayQueries, type MeshTreeOptions } from './trace/ray-queries.ts';
 import { UnitCostMeter, WorkBudget, type BudgetReport, type Calibration, type CalibrationMemory, type UnitCostModel } from './work-budget.ts';
@@ -114,6 +116,8 @@ export class GIPlatformImpl implements GIPlatform {
     private readonly queries: SceneQueries;
     /** Hit shading and the sky (T1.4): `giSurfaceAt`, `giDirectIrradiance`, `giSkyRadiance`, `giSkyIrradiance`. */
     readonly shade: PlatformHitShading;
+    /** The texture store (M4): the scene copy makes its layers, hit shading samples them. */
+    readonly textures: PlatformTextureStore;
     private readonly attached: AttachedTechnique[] = [];
     private output: GITechnique | undefined;
     private prepared = false;
@@ -161,7 +165,8 @@ export class GIPlatformImpl implements GIPlatform {
         this.compiles = countComputePipelines(device, () => this.isReady);
         // The platform's own GPU work goes through the counting view; the host keeps its device as it is.
         const ownDevice = this.compiles.device;
-        this.sceneCopy = new PlatformScene(ownDevice, { label: this.label, warn: (message) => this.warnOnce(message) });
+        this.textures = new PlatformTextureStore(ownDevice, { label: this.label, warn: (message) => this.warnOnce(message) });
+        this.sceneCopy = new PlatformScene(ownDevice, { label: this.label, textureStore: this.textures, warn: (message) => this.warnOnce(message) });
         this.scene = new GuardedScene(this.sceneCopy, () => this.checkUsable());
         this.rays = new PlatformRayQueries(ownDevice, this.sceneCopy, {
             label: this.label,
@@ -179,7 +184,7 @@ export class GIPlatformImpl implements GIPlatform {
             rays,
             has: (kind: QueryKind) => kind === 'rays',
         };
-        this.shade = new PlatformHitShading(ownDevice, this.kernels, this.sceneCopy.module, this.rays.module, {
+        this.shade = new PlatformHitShading(ownDevice, this.kernels, this.sceneCopy.module, this.rays.module, this.textures, {
             label: this.label,
             warn: (message) => this.warnOnce(message),
         });
@@ -291,7 +296,7 @@ export class GIPlatformImpl implements GIPlatform {
         // copying its scene in now uploads it while the rest compiles.
         const packingReady = this.sceneCopy.prepareGpuPacking();
         const rayBatches = this.rayBatchesForTools || this.attached.some(({ technique }) => technique.requirements.rayBatches === true);
-        const platformReady = Promise.all([packingReady, this.shade.prepare(), this.rays.prepare(this.kernels, { batches: rayBatches })]);
+        const platformReady = Promise.all([packingReady, this.textures.prepare(), this.shade.prepare(), this.rays.prepare(this.kernels, { batches: rayBatches })]);
         const techniquesReady = (async () => {
             for (const technique of this.encodeOrder()) await technique.prepare();
         })();
@@ -418,11 +423,13 @@ export class GIPlatformImpl implements GIPlatform {
         // `MemoryReport` has no bucket of its own for them, and the total must cover them.
         const sceneCopy = this.sceneCopy.memoryBytes + this.shade.memoryBytes;
         const acceleration = this.rays.memoryBytes;
+        const textures = this.textures.memoryBytes;
         const memory: MemoryReport = {
             sceneCopy,
             acceleration,
+            textures,
             techniques,
-            total: sceneCopy + acceleration + Object.values(techniques).reduce((sum, bytes) => sum + bytes, 0),
+            total: sceneCopy + acceleration + textures + Object.values(techniques).reduce((sum, bytes) => sum + bytes, 0),
         };
         return { frame: this.frame, passes: this.latestPasses, memory, counters, encodeCpuMs: this.lastEncodeCpuMs, recompiles: this.compiles.counted };
     }

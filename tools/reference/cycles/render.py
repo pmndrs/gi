@@ -33,6 +33,16 @@ The table also says which model parts were loaded (`parts`; only those are
 imported) and which materials' meshes the three adapter left out of GI
 because all their materials let light through (`leftOutMeshes`; their faces
 are removed, see remove_left_out_faces).
+
+--textured renders the glTF's own materials as M4's GI sees them (T4.4):
+base colour textures, alpha cutouts (MASK) and blending (BLEND), emission,
+metals as base x (1 - metallic), glass (transmission) see-through. The files
+are named cycles-textured-*. See blender_scene.apply_textured_material_model.
+Without either option a render keeps the textures but treats metals as their
+full base colour and glass as an opaque surface (the references before M4).
+
+Every render records what it was made from (`sources`: each part's file and
+sha256) and run.ts adds the sha256 of every image it wrote (`outputSha256`).
 """
 
 import argparse
@@ -86,11 +96,18 @@ def parse_arguments():
     parser.add_argument('--out-dir', default=None, help='default bench/references/<scene>/<camera name>')
     parser.add_argument('--name-suffix', default='', help='added to file names, e.g. -seed1')
     parser.add_argument('--threads', type=int, default=0, help='CPU threads; 0 means all')
-    parser.add_argument(
+    materials = parser.add_mutually_exclusive_group()
+    materials.add_argument(
         '--materials-json',
         default=None,
         help='GI material table: give every material its constant GI albedo and emission (no textures); '
         'files are named cycles-untextured-*',
+    )
+    materials.add_argument(
+        '--textured',
+        action='store_true',
+        help="the glTF's own materials as M4's GI sees them (textures, cutouts, blending, emission, "
+        'metals as base x (1 - metallic), glass see-through); files are named cycles-textured-*',
     )
     return parser.parse_args(argv)
 
@@ -123,8 +140,12 @@ def camera_from_shot(path):
 
 
 def file_sha256(path):
+    # In 16 MB pieces: model files run to gigabytes (Bistro) inside an already busy Blender.
+    digest = hashlib.sha256()
     with open(path, 'rb') as handle:
-        return hashlib.sha256(handle.read()).hexdigest()
+        for piece in iter(lambda: handle.read(16 * 1024 * 1024), b''):
+            digest.update(piece)
+    return digest.hexdigest()
 
 
 # The repo paths whose uncommitted edits can change a reference: the render tools, the
@@ -187,6 +208,55 @@ def load_geometry(manifest, model_parts=None):
             imported = bs.import_gltf(path, part['transform'])
             imported_by_part[part['asset']] = [obj for obj in imported if obj.type == 'MESH']
     return imported_by_part
+
+
+def gltf_dependencies(path):
+    """
+    The files a .gltf points at (buffers and images by `uri`), relative to its
+    folder. A .glb holds everything itself, so it has none. Data URIs are
+    inside the file and are skipped.
+    """
+    if not path.lower().endswith('.gltf'):
+        return []
+    with open(path, 'r', encoding='utf-8') as handle:
+        gltf = json.load(handle)
+    uris = [entry.get('uri') for entry in gltf.get('buffers', []) + gltf.get('images', [])]
+    return sorted({uri for uri in uris if uri and not uri.startswith('data:')})
+
+
+def part_sources(manifest, model_parts=None):
+    """
+    What the render was made from, file by file: for each loaded part its
+    file's path and sha256, and for a .gltf the sha256 of every buffer and
+    image it points at (so a changed texture changes the record). Procedural
+    parts are the exported GLB (pnpm scenes:export). The same parts
+    load_geometry loads.
+    """
+    from urllib.parse import unquote
+
+    sources = []
+    procedural_done = False
+    for part in manifest['parts']:
+        if model_parts is not None and part['kind'] == 'model' and part['asset'] not in model_parts:
+            continue
+        if part['kind'] == 'procedural':
+            if procedural_done:
+                continue
+            procedural_done = True
+            path = os.path.join(REPO_ROOT, 'assets', 'generated', f"{manifest['id']}.glb")
+            entry = {'part': 'procedural', 'builders': [p['builder'] for p in manifest['parts'] if p['kind'] == 'procedural']}
+        else:
+            path = os.path.join(REPO_ROOT, 'assets', 'downloads', part['asset'], part['path'])
+            entry = {'part': part['asset']}
+        entry['path'] = os.path.relpath(path, REPO_ROOT).replace(os.sep, '/')
+        entry['sha256'] = file_sha256(path)
+        entry['bytes'] = os.path.getsize(path)
+        dependencies = gltf_dependencies(path)
+        if dependencies:
+            folder = os.path.dirname(path)
+            entry['dependencies'] = [{'uri': uri, 'sha256': file_sha256(os.path.join(folder, unquote(uri)))} for uri in dependencies]
+        sources.append(entry)
+    return sources
 
 
 # Blender adds ".001", ".002", ... when a material name is already taken (two
@@ -589,7 +659,12 @@ def main():
             'sha256': hashlib.sha256(table_bytes).hexdigest(),
             'materials': len(gi_table['materials']),
         }
-    prefix = 'cycles-untextured' if gi_table else 'cycles'
+    if gi_table:
+        mode, prefix = 'untextured', 'cycles-untextured'
+    elif args.textured:
+        mode, prefix = 'textured', 'cycles-textured'
+    else:
+        mode, prefix = 'diffuse-textured', 'cycles'
 
     scene = bs.reset_scene()
     device_description = bs.configure_cycles(
@@ -605,6 +680,8 @@ def main():
     load_started = time.time()
     model_parts = gi_table.get('parts') if gi_table else None
     imported_by_part = load_geometry(manifest, model_parts)
+    # Before make_materials_diffuse_only, which unlinks the Metallic and Transmission it reads.
+    textured_materials = bs.apply_textured_material_model() if args.textured else None
     materials_changed, texture_links_removed = bs.make_materials_diffuse_only()
     gi_materials_set = 0
     left_out_faces = None
@@ -619,6 +696,7 @@ def main():
     load_seconds = time.time() - load_started
 
     triangles = sum(len(obj.data.polygons) for obj in bpy.data.objects if obj.type == 'MESH')
+    sources = part_sources(manifest, model_parts)
     # Record what the image was rendered from, so a reference made before a
     # scene changed (an added part, a new sky) can't be mistaken for a new one.
     sky_path = bs.sky_file_path(manifest['id'])
@@ -697,7 +775,12 @@ def main():
         'lightSamplingThreshold': 0,
         'pixelFilter': f'{bs.PIXEL_FILTERS[args.pixel_filter]} {args.filter_width:g}',
         'materials': f'diffuse only ({materials_changed} Principled BSDFs reset, {texture_links_removed} texture links removed, checked)'
-        + (f'; untextured: {gi_materials_set} materials set to the GI table constants, alpha 1, no normal maps (checked)' if gi_table else ''),
+        + (f'; untextured: {gi_materials_set} materials set to the GI table constants, alpha 1, no normal maps (checked)' if gi_table else '')
+        + ('; textured: the glTF materials as M4 GI sees them (metals folded into the base colour, glass see-through)' if args.textured else ''),
+        # 'textured' (--textured), 'untextured' (--materials-json) or 'diffuse-textured' (neither).
+        'mode': mode,
+        'texturedMaterials': textured_materials,
+        'sources': sources,
         'giMaterials': gi_table_info,
         'indirectDefinition': 'Diffuse Indirect x Diffuse Colour (light that bounced at least once before the visible surface)',
         'loadSeconds': round(load_seconds, 2),

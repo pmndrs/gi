@@ -201,7 +201,7 @@ export interface GiMaterialEntry {
     readonly meshes: number;
     /**
      * Of those, the meshes the adapter left out of GI because all their
-     * materials let light through (`SceneSync.sentSeeThrough`). render.py
+     * materials let light through (M1 to T4.2; always 0 since T4.3). render.py
      * removes this material's faces when it equals `meshes`, and stops when
      * it is between 0 and `meshes` (it can't tell those meshes apart).
      */
@@ -218,7 +218,9 @@ export interface GiMaterialTable {
 
 function tableEntry(part: string, name: string, descriptor: MaterialDescriptor): Omit<GiMaterialEntry, 'meshes' | 'leftOutMeshes'> {
     // The same defaults the platform's scene copy applies (platform-scene.ts, writeMaterialRecord).
-    const albedo = descriptor.albedo ?? [1, 1, 1];
+    // Since T4.3 the adapter sends metalness apart and the platform samples the textures: the constant is colour × (1 − metalness).
+    const diffuse = 1 - (descriptor.metalness ?? 0);
+    const albedo = (descriptor.albedo ?? [1, 1, 1]).map((channel) => channel * diffuse);
     const emissive = descriptor.emissive ?? [0, 0, 0];
     const intensity = descriptor.emissiveIntensity ?? 1;
     return {
@@ -255,9 +257,8 @@ function giMaterialTable(threeGI: ThreeGI, content: Object3D, holders: ReadonlyM
         const part = partOf(mesh, holders);
         assert(part, `mesh '${mesh.name}' is in no model part`);
         const materials: Material[] = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-        const seeThrough = threeGI.sync.sentSeeThrough(mesh);
-        assert(seeThrough !== undefined, `mesh '${mesh.name}' was never sent to the platform`);
-        const leftOut = seeThrough ? 1 : 0;
+        // Since T4.3 the adapter leaves no mesh out: the platform lets light through see-through materials triangle by triangle.
+        const leftOut = 0;
         for (const material of materials) {
             const descriptor = threeGI.sync.sentMaterial(material);
             assert(descriptor, `material '${material.name}' of mesh '${mesh.name}' was never sent to the platform`);
@@ -528,8 +529,8 @@ await runThreePage(async ({ device, data, log }) => {
                 scene: manifest.id,
                 parts: [...holders.values()],
                 note:
-                    'GI materials as the three adapter sent them to the platform (SceneSync.sentMaterial). M1 traces every surface as opaque: ' +
-                    'blocksLight and alphaCutoff are not honoured per triangle; the adapter leaves out of GI the meshes whose materials all block no light (leftOutMeshes).',
+                    'GI materials as the three adapter sent them to the platform (SceneSync.sentMaterial), albedo = colour × (1 − metalness). ' +
+                    'Since T4.3 GI also samples the textures and honours blocksLight and alpha per triangle, which this constant table does not hold.',
                 materials: table,
             };
             data.giMaterials = exported;

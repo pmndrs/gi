@@ -16,6 +16,7 @@ Output goes to `bench/references/<scene>/<camera name>/` (gitignored):
 | `cycles-full.exr`, `cycles-indirect.exr` | Blender Cycles, 32-bit linear float, no denoising |
 | `cycles-direct.exr`, `cycles-lights-direct.exr`, `cycles-gi.exr` | the GI composite and its parts: what DDGI is compared with (see "The GI composite") |
 | `cycles-untextured-*` | the same from an untextured render (see "Untextured references") |
+| `cycles-textured-*` | the same with the glTF's own materials as M4's GI sees them (see "Textured references") |
 | `pathtracer-full.exr`, `pathtracer-indirect.exr` | three-gpu-pathtracer (WebGPU), same |
 | `cycles-full-denoised.exr` | with `--denoise`: a denoised copy of the full image, for viewing only (see "HD references") |
 | `*.json` | every setting, sample count, adapter and time, and the stored shot (see "Stored camera") |
@@ -46,6 +47,8 @@ Every render writes, in its json (`cycles.json`, `cycles-untextured.json`, ...),
 | `camera` | `bookmark` name and number; `position`, `target`, `up` (+Y) in manifest space (three.js axes, metres); `fovYDeg` (vertical); `aspect`, `width`, `height`; `near` 0.01 and `far` 2000 (m) |
 | `display` | `exposureEv` (default the manifest's `exposureEv`) and `toneMapping` (default `aces`): what the viewer shows it with. The EXRs are linear and never tone-mapped |
 | `scene` | the manifest id, path and sha256 of its file; the sky file's sha256; the GI material table's sha256 (untextured renders) |
+
+Beside the shot, every render's json has `sources` (each loaded part's file with its path, size and sha256, and for a `.gltf` the sha256 of every buffer and image it points at; a procedural scene's part is its exported GLB) and `outputSha256` (the sha256 of every EXR the render wrote, added by `run.ts`), and `mode`: `textured`, `untextured` or `diffuse-textured`.
 | `render` | `git` (commit; `uncommittedChanges` is true only when files that affect a render had uncommitted edits: `uncommittedScope` = tools/reference, scenes, tools/sky, listed in `uncommittedFiles`; the GI material table is gitignored and hashed instead), Blender version, `device` (e.g. `OPTIX: NVIDIA GeForce RTX 3060 Laptop GPU`), samples, seed, pixel filter, render seconds, `denoised` (null, or the viewing copy's file, denoiser and its check), and `noise` (see "Noise of each reference") |
 
 Who reads it:
@@ -121,6 +124,29 @@ Metallic, Roughness, Transmission, Specular and the other lobes are forced to th
 **Left-out faces.** The three adapter leaves a mesh out of GI when all its materials let light through (alpha-blended glTF materials such as Sponza's `dirt_decal`, `blocksLight: false`), because the M1 tracer can't honour that per triangle. The table counts those meshes per material (`leftOutMeshes`), and `remove_left_out_faces` deletes the faces of every such material (Sponza: `dirt_decal`, 8,140 faces; recorded as `leftOutOfGiFaces` in the json). three makes one mesh per glTF primitive, with one material each, so a material's faces are exactly those meshes; a material with only some of its meshes left out stops the run.
 
 **The table hash.** `cycles-untextured.json` records the table's path and sha256 (`giMaterials`). `ddgi-sponza-accuracy/run.ts` hashes the table it has just written and says whether the reference was rendered from it, or warns that the reference must be rendered again (a changed adapter can send different colours).
+
+## Textured references (`--textured`, M4)
+
+```
+node tools/reference/cycles/run.ts --scene uv-board --camera 1 --samples 1024 --textured --denoise
+node tools/reference/cycles/run.ts --scene sponza --from-shot bench/references/sponza/upper-gallery/cycles.json --samples 1024 --textured
+```
+
+renders the glTF's own materials the way M4's GI reads them (docs/design/m4-materials.md), and names the files `cycles-textured-*` (`full`, `indirect`, `direct`, `lights-direct`, `gi`, and `cycles-textured.json`). The log's tool column says `cycles-textured`. `blender_scene.apply_textured_material_model` runs on every Principled BSDF before the diffuse-only reset:
+
+| glTF | in the render | why |
+| --- | --- | --- |
+| base colour texture and factor | kept, as the importer wires them | GI samples the albedo texture at each hit |
+| `alphaMode` MASK | kept: the importer's `1 - (alpha < cutoff)` nodes, a hard cutout | cutouts are holes for rays |
+| `alphaMode` BLEND | kept: Cycles lets a ray through with chance 1 - alpha | stochastic transparency (DECISIONS 2026-11-09, M4 answers) |
+| emission (factor, texture, `KHR_materials_emissive_strength`) | kept | emission at hits |
+| metallic (factor and texture) | folded into the base colour as base × (1 − metallic), then Metallic 0 | three's and glTF's diffuse colour of a metal; the platform's hits read the same |
+| `KHR_materials_transmission` > 0 | Alpha 0: rays pass straight through | GI takes glass as `blocksLight: false` (no shadow, no bounce, no tint) |
+| normal map | kept | as in the other textured references |
+
+The json's `texturedMaterials` counts and names the materials each rule touched. Without `--textured` or `--materials-json` a render keeps the textures but takes metals at their full base colour and glass as an opaque surface: the references made before M4 (`cycles-*`), kept for regression.
+
+Procedural scenes are read from `assets/generated/<scene>.glb` (`pnpm scenes:export`); a scene with both procedural and model parts (`courtyard-tree`) gets a file of its procedural parts, loaded beside the models.
 
 ## Settings, and why
 

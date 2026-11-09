@@ -1,0 +1,4 @@
+{
+    "description": "M4 T4.3 review: a flipY = true DataTexture with an asymmetric image gives the same albedo at ray hits (giSurfaceAtCone) as the same image pre-flipped with flipY = false, within 0.01, and is drawn the right way up.",
+    "timeoutMs": 120000
+}

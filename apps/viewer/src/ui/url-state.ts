@@ -25,9 +25,9 @@
  * - `tod`        time of day on, at `hour,day` (sun time 0 to 24, day of the year 1 to 365); it also
  *                turns DDGI's sun layer on
  * - `motion`     a light motion of the scene (`light-sweep`, `light-step`) playing
- * - `textures`   how model textures are kept on the GPU: `uncompressed`, or `all-compressed`; absent is
- *                `compressed` (BC7/BC5 except the maps GI reads colours from until M4;
- *                scene/compress-textures.ts). Read when the scene loads
+ * - `textures`   how model textures are kept on the GPU: `uncompressed`, or `compressed`; absent is
+ *                `all-compressed` (BC7/BC5 for every texture; GI reads the compressed mips since M4's
+ *                T4.3; scene/compress-textures.ts). Read when the scene loads
  * - `reach`      metres of reach for many shadowless lights with no range (`sponza-candles`' candles),
  *                so three can cull them; `0` keeps them unranged (exact and very slow). Read when the
  *                scene loads (render/scene-lighting.ts)
@@ -132,7 +132,7 @@ export const DEFAULT_URL_STATE: ViewerUrlState = {
     timeOfDay: null,
     motion: null,
     lightReach: null,
-    textures: 'compressed',
+    textures: 'all-compressed',
     sceneSettings: {},
 };
 

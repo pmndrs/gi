@@ -30,15 +30,13 @@ describe('texture compression plan (T3.12)', () => {
         expect([...slots.get(first.map!)!]).toEqual(['map']);
     });
 
-    it('keeps the maps GI averages in compressed mode, and compresses them in all-compressed mode', () => {
+    it('compresses the maps GI reads in both compressed modes since M4 (GI reads the compressed mips, T4.3)', () => {
         const texture = imageTexture(512, 512);
         for (const slot of ['map', 'emissiveMap', 'metalnessMap']) {
-            expect(planTexture(texture, new Set([slot]), 'compressed')).toEqual({ action: 'keep', reason: 'read-by-gi' });
+            expect(planTexture(texture, new Set([slot]), 'compressed')).toEqual({ action: 'compress', kind: 'colour' });
             expect(planTexture(texture, new Set([slot]), 'all-compressed')).toEqual({ action: 'compress', kind: 'colour' });
         }
-        // glTF's metallic-roughness texture is both the roughness and the metalness map: GI reads it.
-        expect(planTexture(texture, new Set(['roughnessMap', 'metalnessMap']), 'compressed').action).toBe('keep');
-        expect(planTexture(texture, new Set(['roughnessMap']), 'compressed')).toEqual({ action: 'compress', kind: 'colour' });
+        expect(planTexture(texture, new Set(['roughnessMap', 'metalnessMap']), 'compressed')).toEqual({ action: 'compress', kind: 'colour' });
     });
 
     it('makes a normal map BC5 only when every use is a normal map', () => {

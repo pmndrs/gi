@@ -35,6 +35,14 @@
  *   (DECISIONS 2026-11-04): it is rebuilt on the CPU, on this thread, when an
  *   instance, a transform or a tree changed. `topLevelPath` says which.
  *
+ * - **Materials in the walk** (T4.2). The walk consults a triangle's material
+ *   only where the triangle's flag bit 0 says so (material-test-wgsl.ts), and
+ *   `gi/triangle-flags` (triangle-flags.ts) keeps that bit right: it runs on
+ *   every mesh whose tree is placed (`requestTriangleFlags`, the install hook
+ *   every path that writes tree triangles calls), and on the meshes of
+ *   instances whose materials changed. So the `rays` module depends on the
+ *   scene module, whose material tables the walk reads.
+ *
  * `GiHit.instance` is the scene copy's instance slot, so a hit reads its
  * surface straight through the scene module (`giInstanceTriangle(hit.instance,
  * hit.triangle)`), and `GiHit.triangle` is the triangle's index in the mesh as
@@ -46,19 +54,24 @@
 
 import { GpuBvhRefit } from '@pmndrs/bvh/gpu-refit';
 import { GILimitError, GINotReadyError } from '../contract/errors.ts';
+import type { InstanceHandle } from '../contract/handles.ts';
 import type { RayQueries } from '../contract/queries.ts';
+import type { SceneChanges } from '../contract/scene-copy.ts';
 import type { GpuTimerScope } from '../contract/timing.ts';
 import type { BindingSlot, ComputeKernel, KernelBuilder, WgslModule } from '../contract/wgsl.ts';
 import { SHADER_STAGE_COMPUTE } from '../kernel-builder.ts';
+import { MATERIAL_FLAG, MATERIAL_WORD, NONE } from '../scene/layout.ts';
 import type { PlatformScene, SceneUpload, UploadedMesh } from '../scene/platform-scene.ts';
 import { GpuMeshTrees, type FirstTreeBuilder, type GpuBuiltTree, type GpuTreeBatchResult, type GpuTreeOutputs, type GpuTreeRequest } from './gpu-mesh-trees.ts';
 import { GrowableStorage, type ResidentRange } from './growable-storage.ts';
 import { BVH_NODE_BYTES, TOP_LEVEL_HEADER_BYTES, TRACE_STACK_SIZE, TRIANGLE_BYTES } from './layout.ts';
 import type { MeshBvh } from './mesh-bvh.ts';
 import { createMeshBvhBuilder, type MeshBvhBuilder } from './mesh-bvh-async.ts';
+import { createMaterialTestModule, MATERIAL_TEST_UNIFORM_BYTES } from './material-test-wgsl.ts';
 import { buildTopLevel, type TraceInstance } from './top-level.ts';
 import { GpuTopLevel } from './top-level-gpu.ts';
 import { RAY_BYTES } from './trace-gpu.ts';
+import { TriangleFlagsKernels, type MeshTriangleRange } from './triangle-flags.ts';
 import { BATCH_WORKGROUP_SIZE, batchEntryWgsl, HIT_RECORD_BYTES, TRACE_MODULE_ENTRIES, traceModuleWgsl } from './wgsl.ts';
 
 export interface PlatformRayQueriesOptions {
@@ -204,7 +217,7 @@ const BATCH_GROUP = 1;
 
 export class PlatformRayQueries implements RayQueries {
     readonly kind = 'rays';
-    readonly capabilities = { alphaCutouts: false, backFaceHits: true } as const;
+    readonly capabilities = { alphaCutouts: true, perTriangleMaterials: true, backFaceHits: true } as const;
     readonly module: WgslModule;
 
     private readonly device: GPUDevice;
@@ -255,6 +268,21 @@ export class PlatformRayQueries implements RayQueries {
     private swaps = 0;
     private lastGpuBuildMs = 0;
 
+    /** `gi/triangle-flags`: keeps triangle flag bit 0 ("consult the material") right (T4.2). */
+    private readonly triangleFlags: TriangleFlagsKernels;
+    /** Mesh slots whose triangle flags the next `update` rewrites (`requestTriangleFlags`). */
+    private readonly flagRequests = new Set<number>();
+    private flagRewrites = 0;
+    /**
+     * Per instance handle, what the flags last saw of it: its mesh slot and the
+     * record words the walk's rules read (`walkKey`). A material change that
+     * leaves these alone (a colour, an emissive, a uv transform) rewrites nothing.
+     */
+    private readonly walkKeys = new Map<number, string>();
+    /** The walk's frame number for the stochastic hash (material-test-wgsl.ts), one more each `update`. */
+    private readonly walkFrameUniform: GPUBuffer;
+    private walkFrame = 0;
+
     private closestKernel: ComputeKernel | null = null;
     private anyKernel: ComputeKernel | null = null;
     /** A `prepare` has finished, so missing batch kernels mean nobody asked for them. */
@@ -296,11 +324,22 @@ export class PlatformRayQueries implements RayQueries {
         else if (meshTrees.firstTreeBuilder) this.firstTrees = meshTrees.firstTreeBuilder;
         else this.firstTrees = GpuMeshTrees.isSupported(device) ? new GpuMeshTrees(device, { label: this.label }) : null;
 
+        // The walk reads materials from the scene copy (T4.2), through the binding-free material test
+        // module, and cutout alpha from the texture store through its sampling module: the same
+        // object hit shading lists, so a kernel with both binds the store once.
+        this.walkFrameUniform = device.createBuffer({
+            label: `${this.label} trace walk frame`,
+            size: MATERIAL_TEST_UNIFORM_BYTES,
+            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+        });
+        const materialTest = createMaterialTestModule(scene.module, scene.textureStore.samplingModule(scene.module), this.walkFrameUniform);
+        this.triangleFlags = new TriangleFlagsKernels(device, materialTest, this.label);
+
         // The GPU top level replaces its buffer when it grows, so its version counts too.
         const currentVersion = (): number => this.bufferVersion + (this.gpuTopLevel?.version ?? 0);
         this.module = {
             name: 'gi-trace',
-            dependencies: [],
+            dependencies: [materialTest],
             code: (slot: BindingSlot) => traceModuleWgsl(slot),
             entries: TRACE_MODULE_ENTRIES,
             resources: () => [{ buffer: this.nodes.buffer }, { buffer: this.triangles.buffer }, { buffer: this.currentTopLevelBuffer }],
@@ -446,15 +485,38 @@ export class PlatformRayQueries implements RayQueries {
         this.refinementHold = which ? (slot) => held(slot) && !which(slot) : null;
     }
 
+    /** Meshes whose triangle flags `gi/triangle-flags` has rewritten, since the platform was made (a mesh rewritten twice counts twice). */
+    get triangleFlagRewrites(): number {
+        return this.flagRewrites;
+    }
+
+    /**
+     * **The install hook** (T4.2; triangle-flags.ts says why). Every path that
+     * writes a mesh's tree triangles into the shared triangle buffer calls
+     * this with the mesh's slot: the next `update` (this frame's, when called
+     * before it or from inside it) then rewrites the mesh's triangle flags
+     * from the scene copy's materials, after every placement, in the frame's
+     * encoder. A slot with no placed tree by then is skipped: its placement
+     * asks again.
+     */
+    requestTriangleFlags(meshSlot: number): void {
+        this.flagRequests.add(meshSlot);
+    }
+
     /**
      * Compiles the first-tree builder's kernels (asked for first: the scene's
-     * first trees wait on them), the GPU top level's, and the batch kernels
+     * first trees wait on them), `gi/triangle-flags`, the GPU top level's, and the batch kernels
      * when `batches` is true (a technique asked for `encodeBatch`, or a tool
      * that calls it itself). Called by the platform's `prepare`. Everything is
      * asked for at once, so no kernel waits for another to finish compiling.
      */
     async prepare(kernels: KernelBuilder, options: { readonly batches: boolean }): Promise<void> {
-        await Promise.all([this.prepareFirstTrees(), this.gpuTopLevel?.prepare(kernels), options.batches ? this.prepareBatches(kernels) : undefined]);
+        await Promise.all([
+            this.prepareFirstTrees(),
+            this.triangleFlags.prepare(kernels),
+            this.gpuTopLevel?.prepare(kernels),
+            options.batches ? this.prepareBatches(kernels) : undefined,
+        ]);
         this.preparedOnce = true;
     }
 
@@ -515,6 +577,10 @@ export class PlatformRayQueries implements RayQueries {
         for (const outputs of this.outputsToRelease) this.releaseOutputs(outputs);
         this.outputsToRelease = [];
 
+        // A new frame number for the stochastic hash: rays that repeat exactly get new answers each frame.
+        this.walkFrame = (this.walkFrame + 1) >>> 0;
+        this.device.queue.writeBuffer(this.walkFrameUniform, 0, new Uint32Array([this.walkFrame, 0, 0, 0]));
+
         if (upload.instancesChanged) this.topLevelStale = true;
         // Removals first: a slot may be removed and reused by a new mesh in the same frame.
         let meshesChanged = upload.meshesRemoved.length > 0;
@@ -547,6 +613,10 @@ export class PlatformRayQueries implements RayQueries {
             this.topLevelStale = true;
             meshesChanged = true;
         }
+        // Material changes can flip a mesh's slots between "consult" and not; placed trees
+        // asked already (placeTrees). Then one rewrite for all of them, after every write.
+        this.requestTriangleFlagsForChanges(upload.changes);
+        this.encodeTriangleFlags(encoder);
         if (this.gpuTopLevel) {
             // Refit (and swap in a new shape) on the GPU: moves never rebuild on the CPU here.
             try {
@@ -628,6 +698,8 @@ export class PlatformRayQueries implements RayQueries {
         this.disposed = true;
         this.builder.dispose();
         this.gpuTopLevel?.dispose();
+        this.triangleFlags.dispose();
+        this.walkFrameUniform.destroy();
         this.nodes.destroy();
         this.triangles.destroy();
         for (const buffer of this.retiredTopLevel) buffer.destroy();
@@ -922,6 +994,8 @@ export class PlatformRayQueries implements RayQueries {
             };
             this.placed.set(tree.slot, placed);
             this.gpuTopLevel?.setMeshTree(tree.slot, placed);
+            // Builders leave flag bit 0 clear: the material lookup flags come from the scene copy.
+            this.requestTriangleFlags(tree.slot);
         });
     }
 
@@ -954,6 +1028,63 @@ export class PlatformRayQueries implements RayQueries {
             offsets.push(offset);
         }
         return offsets;
+    }
+
+    // -----------------------------------------------------------------------
+    // Triangle flags (T4.2)
+    // -----------------------------------------------------------------------
+
+    /**
+     * Asks for the flags of the meshes whose instances' materials may have
+     * changed in a way the walk sees this frame: a material edited or an
+     * instance given other materials (`material` regions, also when a
+     * texture's layer lands), and an instance created, shown or given another
+     * mesh (`geometry` regions that are not moves; the masks count hidden
+     * instances, but one created hidden made no region then). For each such
+     * instance, its mesh is rewritten only when the words the rules read
+     * changed since the flags last saw it (`walkKey`), so an edit of a colour
+     * or an emissive rewrites nothing (T4.2's review). Moves change no
+     * material, so they never ask. Destroying or hiding an instance can only
+     * leave a flag that is no longer needed, which costs an extra lookup until
+     * the mesh's next rewrite. Regions merged in a busy frame name no
+     * instance: then every placed mesh is rewritten.
+     */
+    private requestTriangleFlagsForChanges(changes: SceneChanges): void {
+        for (const region of changes.regions) {
+            const mayFlipSlots = region.reason === 'material' || (region.reason === 'geometry' && region.moved === undefined);
+            if (!mayFlipSlots) continue;
+            if (region.source === undefined) {
+                for (const slot of this.placed.keys()) this.requestTriangleFlags(slot);
+                this.walkKeys.clear();
+                return;
+            }
+            const handle = region.source as number;
+            const state = this.scene.instanceMaterialRecords(region.source as InstanceHandle);
+            if (!state) {
+                // Destroyed: nothing to ask (see above); forget it.
+                this.walkKeys.delete(handle);
+                continue;
+            }
+            const key = walkKey(state.meshSlot, state.records);
+            if (this.walkKeys.get(handle) === key) continue;
+            this.walkKeys.set(handle, key);
+            this.requestTriangleFlags(state.meshSlot);
+        }
+    }
+
+    /** Records `gi/triangle-flags` over the asked-for meshes that have a placed tree. */
+    private encodeTriangleFlags(encoder: GPUCommandEncoder): void {
+        // Before prepare the kernels don't exist and the requests wait (the platform never encodes before prepare).
+        if (this.flagRequests.size === 0 || !this.triangleFlags.ready) return;
+        const ranges: MeshTriangleRange[] = [];
+        for (const slot of this.flagRequests) {
+            const tree = this.placed.get(slot);
+            if (tree) ranges.push({ meshSlot: slot, triangleOffset: tree.triangleOffset, triangleCount: tree.triangleCount });
+        }
+        this.flagRequests.clear();
+        if (ranges.length === 0) return;
+        this.triangleFlags.encode(encoder, this.triangles.buffer, ranges, this.scene.counts.instances);
+        this.flagRewrites += ranges.length;
     }
 
     // -----------------------------------------------------------------------
@@ -1025,6 +1156,28 @@ export class PlatformRayQueries implements RayQueries {
     private checkLive(): void {
         if (this.disposed) throw new Error('@pmndrs/ddgi: the ray queries were disposed');
     }
+}
+
+/**
+ * What the walk's rules read of an instance, as a string to compare: its mesh
+ * slot, and per material slot the record words `giMaterialNeedsLookup` and
+ * `giMaterialPasses` decide on (the blocks-light and double-sided flags, the
+ * cutoff, the opacity, the alpha mode, and whether there is an albedo
+ * texture). Coarser than "the mask changed" (a new opacity of a stochastic
+ * material asks again), never finer: whatever can flip a slot changes it.
+ */
+function walkKey(meshSlot: number, records: readonly Uint32Array[]): string {
+    const parts: number[] = [meshSlot];
+    for (const record of records) {
+        parts.push(
+            record[MATERIAL_WORD.flags] & (MATERIAL_FLAG.blocksLight | MATERIAL_FLAG.doubleSided),
+            record[MATERIAL_WORD.alphaCutoff],
+            record[MATERIAL_WORD.opacity],
+            record[MATERIAL_WORD.alphaMode],
+            record[MATERIAL_WORD.albedoTexture] === NONE ? 0 : 1,
+        );
+    }
+    return parts.join(',');
 }
 
 function describe(error: unknown): string {

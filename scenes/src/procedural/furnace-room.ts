@@ -50,7 +50,12 @@ export function buildFurnaceRoom(): ProceduralScene {
         albedo: [FURNACE_ALBEDO, FURNACE_ALBEDO, FURNACE_ALBEDO],
         emissive: [FURNACE_EMISSION, FURNACE_EMISSION, FURNACE_EMISSION],
     });
+    addFurnaceGeometry(builder, everything);
+    return builder.build();
+}
 
+/** The furnace room's shell and blocks, all in one material. Shared with the textured furnace. */
+export function addFurnaceGeometry(builder: SceneBuilder, everything: number): void {
     const [sizeX, sizeY, sizeZ] = FURNACE_SIZE_M;
     addRoomShell(builder, 'furnace', [0, 0, 0], [sizeX, sizeY, sizeZ], 0.1, {
         wall: everything,
@@ -63,6 +68,4 @@ export function buildFurnaceRoom(): ProceduralScene {
     builder.addBox('block-low', everything, [0.6, 0, 0.6], [1.8, 0.8, 1.6]);
     builder.addBoxCentered('block-rotated', everything, [3.6, 0.6, 2.6], [1, 1.2, 1], 30);
     builder.addBox('pillar', everything, [2.3, 0, 3.2], [2.6, sizeY, 3.5]);
-
-    return builder.build();
 }
