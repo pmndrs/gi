@@ -41,19 +41,28 @@ import {
     Skeleton,
     SkinnedMesh,
     StorageBufferAttribute,
+    type StorageTexture,
     Uint16BufferAttribute,
     Float32BufferAttribute,
     UnsignedByteType,
     Vector3,
     type WebGPURenderer,
 } from 'three/webgpu';
-import { computeSkinning, Fn, If, instanceIndex, ivec2, storage, texture, textureStore, uvec2, vec4, vertexIndex, int } from 'three/tsl';
+import { computeSkinning, Fn, If, instanceIndex, int, ivec2, positionLocal, storage, texture, textureStore, uvec2, vec4, vertexIndex } from 'three/tsl';
 import { GpuMeshRefit } from '../../../../packages/bvh/src/gpu-mesh-refit.ts';
 import { checkGpuLayout } from '../../../../packages/bvh/src/layout-check.ts';
 import { createTinyBvhBuilder } from '../../../../packages/bvh/src/tinybvh.ts';
 import type { GpuLayoutMeshBvh } from '../../../../packages/bvh/src/gpu-layout.ts';
 import { assert } from '../../client.ts';
 import { runThreePage } from '../three-shared/harness.ts';
+
+/**
+ * three's `computeSkinning(mesh)`: the skinned position of vertex `instanceIndex`.
+ * @types/three 0.187 types it as returning void, but r187 returns the position
+ * node (Skinning.js). Its `toPosition` parameter doesn't help: the call's
+ * result is then unused, TSL leaves the call out, and nothing is written.
+ */
+const skinnedPosition = computeSkinning as unknown as (mesh: SkinnedMesh) => ReturnType<typeof positionLocal.toVar>;
 
 /** Texels per row of the positions texture: rows of 256 rgba32float texels are 4,096 bytes, a multiple of copyTextureToBuffer's 256. */
 const POSITIONS_WIDTH = 256;
@@ -187,8 +196,11 @@ await runThreePage(async ({ device, renderer, log, data }) => {
     // 2. three's GPU skinning, stored into our texture.
     const skinIntoTexture = Fn(() => {
         If(instanceIndex.lessThan(vertexCount), () => {
-            const skinned = computeSkinning(mesh);
-            textureStore(external, uvec2(instanceIndex.mod(POSITIONS_WIDTH), instanceIndex.div(POSITIONS_WIDTH)), vec4(skinned, 1));
+            const skinned = skinnedPosition(mesh);
+            // @types/three only lists StorageTexture here; at runtime three takes any texture whose format/type
+            // name a storage format, and an ExternalTexture is exactly what this spike asks about.
+            const target = external as unknown as StorageTexture;
+            textureStore(target, uvec2(instanceIndex.mod(POSITIONS_WIDTH), instanceIndex.div(POSITIONS_WIDTH)), vec4(skinned, 1));
         });
     })().compute(vertexCount);
 
@@ -274,7 +286,8 @@ await runThreePage(async ({ device, renderer, log, data }) => {
     const attribute = new StorageBufferAttribute(new Float32Array(vertexCount * 4), 4);
     const skinIntoBuffer = Fn(() => {
         If(instanceIndex.lessThan(vertexCount), () => {
-            storage(attribute, 'vec4', vertexCount).element(instanceIndex).assign(vec4(computeSkinning(mesh), 1));
+            const skinned = skinnedPosition(mesh);
+            storage(attribute, 'vec4', vertexCount).element(instanceIndex).assign(vec4(skinned, 1));
         });
     })().compute(vertexCount);
     await renderer.computeAsync(skinIntoBuffer);
