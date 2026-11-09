@@ -35,10 +35,10 @@
  * frame starts with the probe mask cleared, as reprojection leaves a tile with
  * no previous probe (gi1.comp:457); the override-tile list and
  * `PatchScreenProbes` (phase 4); ray guiding and the previous-probe taps in
- * `SampleScreenProbes` (phase 4); the world cache, so every probe-ray hit is
- * lit on Capsaicin's cache-bypass path (phase 3 sends the rest to the cache);
- * temporal blending and the off-screen probe cache in `BlendScreenProbes`
- * (phase 4).
+ * `SampleScreenProbes` (phase 4); temporal blending and the off-screen probe
+ * cache in `BlendScreenProbes` (phase 4). Since RC3.2 the probe rays' hits are
+ * lit by the world cache between `PopulateScreenProbes` and `BlendScreenProbes`
+ * (phase 2's staging, which lit every hit directly, is retired).
  */
 
 import { CAPSAICIN_WGSL } from './capsaicin.ts';
@@ -295,7 +295,7 @@ export const PROBE_SPAWN_SEEDS_OFFSET = 4;
 export const PROBE_RAYS_HEADER_BYTES = 16;
 /** Bytes of one `RcProbeRay`. */
 export const PROBE_RAY_BYTES = 48;
-/** `RcProbeRay.flags`: the ray is lit already, so the world cache adds nothing to it. */
+/** `RcProbeRay.flags`: the ray is lit already, so the world cache adds nothing to it (no ray sets it since RC3.2). */
 export const PROBE_RAY_BYPASS = 1;
 
 /**
@@ -306,7 +306,9 @@ export const PROBE_RAY_BYPASS = 1;
  * gi/direct adds into and `BlendScreenProbes` reads.
  */
 const PROBE_RAYS_STRUCT_WGSL = /* wgsl */ `
-// RcProbeRay.flags: already lit (Capsaicin's bypass flag, gi1.comp:2561-2583); the world cache leaves it alone.
+// RcProbeRay.flags: already lit by the screen cache, so the world cache leaves it alone. Since
+// RC3.2 no ray sets it: Capsaicin's bypass cases (gi1.comp:2439-2452, 2533-2583) are decided
+// and lit inside the world cache.
 const RC_PROBE_RAY_BYPASS: u32 = ${PROBE_RAY_BYPASS}u;
 
 struct RcProbeRay {
@@ -434,9 +436,6 @@ export const POPULATE_GROUP: GPUBindGroupLayoutDescriptor = {
     entries: [UNIFORM_ENTRY, texture(1), texture(2), storage(3, 'read-only-storage'), storage(4, 'storage'), storage(5, 'storage')],
 };
 
-/** The light groups whose lights reach the probes' hits: every group. */
-export const ALL_LIGHT_GROUPS = 0xf;
-
 /** `PopulateScreenProbesMain`, around the platform's side of the ray scratch (`HitShading.direct.traceWgsl('rcRayScratch', ...)`). */
 export function populateWgsl(directScratchWgsl: string): string {
     return /* wgsl */ `
@@ -451,8 +450,7 @@ ${WORKGROUP_INDEX_WGSL}
 // The probe rays: this kernel reads the directions and writes the origins, hits and flags.
 @group(1) @binding(4) var<storage, read_write> rcProbeRays: RcProbeRays;
 // g_ScreenProbes_ProbeSpawnRadianceBuffer, inside the platform's ray scratch: each ray's
-// radiance and hit distance as four halves (packHalf4), which gi/direct adds the
-// direct light into.
+// radiance and hit distance as four halves (packHalf4), which the world cache adds into.
 @group(1) @binding(5) var<storage, read_write> rcRayScratch: GiRayScratch;
 
 ${directScratchWgsl}
@@ -479,17 +477,13 @@ fn rcRayOrigin(seed: vec2u, normal: vec3f) -> vec3f {
 // PopulateScreenProbesMain (gi1.comp:1159-1164) running PopulateScreenProbes
 // (gi1.comp:1107-1157): one closest-hit ray per probe cell.
 //
-// Phase 2 has no world cache, so every hit is lit as Capsaicin lights a hit that bypasses
-// it (the staging in docs/design/radiance-cache.md, "Phase 2"):
-//  - a miss reads the sky (PopulateScreenProbesHandleMiss, gi1.comp:1078-1084);
-//  - an emissive front face gives its emission and nothing more (GenerateReservoirs,
-//    gi1.comp:2439-2452: "do not continue past an emissive surface");
-//  - any other hit gives the light it reflects towards the probe: albedo / pi x the
-//    direct irradiance from one light sample with its shadow ray (GenerateReservoirs,
-//    gi1.comp:2500-2598, then PopulateCells, gi1.comp:2040-2106, which adds it straight
-//    to the probe ray when the bypass flag is set). Here the platform's gi/direct does
-//    that pass over the hits listed with giDeferDirect, and adds albedo / pi x direct
-//    into the ray's result.
+// A miss reads the sky (PopulateScreenProbesHandleMiss, gi1.comp:1078-1084). A hit starts
+// at no radiance (payload.sky_sample stays 0, gi1.comp:1153) and is the world cache's:
+// PopulateScreenProbesHandleHit's insert (gi1.comp:985-1076) and the passes after it run in
+// the world cache's encodeFrame over the probe rays recorded here (world-cache/
+// hash-grid-population-wgsl.ts). They add the hit's light into the ray's result: its emission
+// for an emissive front face, its direct light for a ray shorter than its cell (the bypass),
+// the cell's filtered radiance for the rest.
 // The ray result's fourth half is the hit distance (gi1.comp:1156).
 @compute @workgroup_size(32)
 fn ${ENTRY_POINT.populate}(
@@ -500,10 +494,6 @@ fn ${ENTRY_POINT.populate}(
     let did = rcWorkgroupIndex(workgroup, workgroups) * 32u + localIndex;
     let probeIndex = rcGetCellAndProbeIndex(did).y;
 
-    // No early return: every thread reaches giDeferDirect, whose work list is filled
-    // with subgroup operations.
-    var deferred = false;
-    var record = GiSurfaceRecord();
     if (probeIndex < rcProbeSpawn.count) {
         let seed = rcUnpackSeed(rcProbeSpawn.seeds[probeIndex]);
         // Sky pixels never reach the compacted list; Capsaicin checks again (gi1.comp:1127-1130).
@@ -518,36 +508,22 @@ fn ${ENTRY_POINT.populate}(
             rcProbeRays.rays[did].hitTriangle = hit.triangle;
             rcProbeRays.rays[did].hitFrontFace = select(0u, 1u, hit.frontFace);
             rcProbeRays.rays[did].hitBarycentrics = hit.barycentrics;
-            // Phase 2 lights every ray here (the staging above), so every ray bypasses the
-            // world cache. Phase 3 keeps the flag for emissive hits and rays shorter than a
-            // cell (gi1.comp:2558-2561) and leaves the rest to the cache.
-            rcProbeRays.rays[did].flags = RC_PROBE_RAY_BYPASS;
+            // No ray is lit here, so none carries the bypass flag: the world cache takes every
+            // hit (and leaves the misses alone).
+            rcProbeRays.rays[did].flags = 0u;
 
             var radiance = vec3f(0.0);
-            var hitDistance: f32;
+            var hitDistance = RC_LARGEST_HALF;
             if (hit.t < 0.0) {
-                hitDistance = RC_LARGEST_HALF;
                 if (rcFrame.useDirectLighting != 0u) {
                     radiance = giSkyRadiance(direction);
                 }
             } else {
                 hitDistance = min(hit.t, RC_LARGEST_HALF);
-                let surface = giSurfaceAt(ray, hit);
-                let emissive = dot(surface.emission, surface.emission) > 0.0;
-                if (rcFrame.useDirectLighting != 0u && surface.frontFace && emissive) {
-                    radiance = surface.emission;
-                } else {
-                    // gi/direct adds albedo / pi x direct (one light sample, its shadow ray).
-                    deferred = giNeedsDirect(surface);
-                    if (deferred) {
-                        record = giSurfaceRecord(surface);
-                    }
-                }
             }
             giStoreRayResult(did, radiance, hitDistance);
         }
     }
-    giDeferDirect(deferred, record, did);
 }
 `;
 }

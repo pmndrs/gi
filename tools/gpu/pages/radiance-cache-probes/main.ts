@@ -25,8 +25,8 @@
  *    hemi-octahedral cell (a ray that half precision moved across a cell
  *    edge, within 0.02 of a cell, or just below the tangent plane, within a
  *    cosine of 0.001, is counted and reported, as Capsaicin's
- *    `BlendScreenProbes` would put it in the neighbour too); every ray carries
- *    the bypass flag (phase 2 lights every ray directly).
+ *    `BlendScreenProbes` would put it in the neighbour too); no ray carries
+ *    the bypass flag (since RC3.2 the world cache lights every hit).
  *
  * And on `sky-plane`:
  * 4. **Sky:** every ray of every probe misses, and every cell of every probe
@@ -261,7 +261,7 @@ async function checkScene(device: GPUDevice, run: SceneRun, skyCheck: boolean): 
     let grazingByHalfPrecision = 0;
     let wrongCell = 0;
     let movedByHalfPrecision = 0;
-    let withoutBypass = 0;
+    let withBypass = 0;
     let hits = 0;
     let minNormalDot = Infinity;
     spawned.forEach((tile, probe) => {
@@ -270,7 +270,7 @@ async function checkScene(device: GPUDevice, run: SceneRun, skyCheck: boolean): 
             const ray = probe * PROBE_CELLS + cell;
             const base = (PROBE_RAYS_HEADER_BYTES + ray * PROBE_RAY_BYTES) / 4;
             const direction = unpackHalf3([rayWords[base + 4], rayWords[base + 5]]);
-            if ((rayWords[base + 3] & PROBE_RAY_BYPASS) === 0) withoutBypass++;
+            if ((rayWords[base + 3] & PROBE_RAY_BYPASS) !== 0) withBypass++;
             if (rayFloats[base + 6] >= 0) hits++;
             const facing = direction[0] * normal[0] + direction[1] * normal[1] + direction[2] * normal[2];
             minNormalDot = Math.min(minNormalDot, facing);
@@ -301,7 +301,7 @@ async function checkScene(device: GPUDevice, run: SceneRun, skyCheck: boolean): 
             }
         }
     });
-    if (withoutBypass > 0) fail(`${withoutBypass} rays lack the bypass flag (phase 2 lights every ray directly)`);
+    if (withBypass > 0) fail(`${withBypass} rays carry the bypass flag (since RC3.2 the world cache lights every hit, so the screen cache sets it on none)`);
 
     // 4. The sky: each ray's radiance, then each cell as BlendScreenProbes blends it.
     const sky: Record<string, unknown> = {};

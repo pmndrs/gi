@@ -42,9 +42,9 @@
 import { GILimitError } from '../../../../packages/ddgi-core/src/platform/contract/errors.ts';
 import type { FrameCamera } from '../../../../packages/ddgi-core/src/platform/contract/frame.ts';
 import type { Vec3 } from '../../../../packages/ddgi-core/src/platform/contract/math.ts';
-import { PlatformGpuCompute } from '../../../../packages/ddgi-core/src/platform/compute/gpu-compute.ts';
 import { optionalFeatures, requiredLimits } from '../../../../packages/ddgi-core/src/platform/device-requirements.ts';
-import { PlatformKernelBuilder } from '../../../../packages/ddgi-core/src/platform/kernel-builder.ts';
+import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
+import type { GpuTimerScope } from '../../../../packages/ddgi-core/src/platform/contract/timing.ts';
 import { DEFAULT_HASH_GRID_CACHE_OPTIONS, hashGridCacheCapacity, type HashGridCacheOptions } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/capacity.ts';
 import { HashGridCache } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/hash-grid-cache.ts';
 import {
@@ -72,6 +72,9 @@ import { releaseDeviceOnPageHide } from '../ddgi-shared/harness.ts';
 import { COUNTER, createProbeRayReader, createTestIo, createTestKernels, HIT_WORDS, PROBE_RAY_READ_WORDS, RESULT_WORDS, TEST_WORKGROUP_SIZE, type TestIo, type TestKernel, type TestKernelName } from './test-kernels.ts';
 
 const f32 = Math.fround;
+
+/** The cache's passes untimed: this page times nothing. */
+const NO_TIMER: GpuTimerScope = { computePass: () => undefined };
 
 const RENDER_WIDTH = 1280;
 const RENDER_HEIGHT = 720;
@@ -223,7 +226,8 @@ try {
         const defaultErrors = watchDevice(defaultDevice);
         let refusal: unknown = null;
         try {
-            const context: WorldCacheContext = { device: defaultDevice, kernels: new PlatformKernelBuilder(defaultDevice, 'hash-grid default limits'), compute: new PlatformGpuCompute(defaultDevice) };
+            const defaultPlatform = new GIPlatformImpl(defaultDevice, { label: 'hash-grid default limits' });
+            const context: WorldCacheContext = { device: defaultDevice, kernels: defaultPlatform.kernels, compute: defaultPlatform.compute, shade: defaultPlatform.shade, timer: NO_TIMER };
             await new HashGridCache().prepare(context);
         } catch (error) {
             refusal = error;
@@ -248,9 +252,18 @@ try {
     data.limits = { maxStorageBufferBindingSize: device.limits.maxStorageBufferBindingSize, maxBufferSize: device.limits.maxBufferSize };
 
     const options: HashGridCacheOptions = { ...DEFAULT_HASH_GRID_CACHE_OPTIONS };
-    const kernels = new PlatformKernelBuilder(device, 'hash-grid');
+    // An empty platform: the cache's population kernels light hits through its hit shading
+    // (none here: this page's probe rays are empty, so they run on no rays).
+    const platform = new GIPlatformImpl(device, { label: 'hash-grid' });
+    await platform.prepare();
+    {
+        const encoder = device.createCommandEncoder({ label: 'hash-grid platform frame' });
+        platform.encode(encoder, { deltaTime: 1 / 60, budget: { units: 0 }, camera: CAMERA });
+        device.queue.submit([encoder.finish()]);
+    }
+    const kernels = platform.kernels;
     const cache = new HashGridCache(options);
-    await cache.prepare({ device, kernels, compute: new PlatformGpuCompute(device, { label: 'hash-grid' }) });
+    await cache.prepare({ device, kernels, compute: platform.compute, shade: platform.shade, timer: NO_TIMER });
 
     const capacity = cache.capacity;
     const expected = hashGridCacheCapacity(DEFAULT_HASH_GRID_CACHE_OPTIONS);
@@ -343,7 +356,8 @@ try {
         log(`probe-ray layout: ray ${rayIndex} written at byte ${WORLD_CACHE_PROBE_RAYS_HEADER_BYTES + rayIndex * WORLD_CACHE_PROBE_RAY_BYTES} reads back through WorldCacheProbeRays field by field`);
     }
 
-    const rayBuffer = device.createBuffer({ label: 'no probe rays', size: 64, usage: GPUBufferUsage.STORAGE });
+    // Copy source too: the cache copies the ray count where its first pass's indirect arguments read it.
+    const rayBuffer = device.createBuffer({ label: 'no probe rays', size: 64, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
     const radianceBuffer = device.createBuffer({ label: 'no radiance', size: 16, usage: GPUBufferUsage.STORAGE });
     const noRays: WorldCacheProbeRays = { buffer: rayBuffer, count: { buffer: rayBuffer, offset: 0 }, capacity: 1, radiance: { buffer: radianceBuffer } };
 

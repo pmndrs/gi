@@ -24,7 +24,8 @@
  *   `UpdateCellValueIndirectBuffer`, four words per cell each.
  *
  * The per-ray lists Capsaicin sizes from the screen (visibility, query and
- * resolve lists, `gi1.cpp:640-695`) come with population in RC3.2.
+ * resolve lists, `gi1.cpp:637-695`) are in a fourth buffer, made for the
+ * screen's probe-ray count (`hash-grid-population-wgsl.ts`).
  */
 
 import { GILimitError } from '../../../platform/contract/errors.ts';
@@ -54,6 +55,12 @@ export interface HashGridCacheOptions {
     hashGridCacheDiscardMultibounceRayProbability: number;
     /** `gi1_hash_grid_cache_max_multibounce_sample_count` (gi1.h:65, default 16): the same cap for the indirect values. */
     hashGridCacheMaxMultibounceSampleCount: number;
+    /**
+     * `gi1_use_direct_lighting` (gi1.h:53, default true), GI-1's own option,
+     * which `GenerateReservoirs` reads: with it, a hit on an emissive front
+     * face gives the probe ray its emission and bypasses the cache.
+     */
+    useDirectLighting: boolean;
 }
 
 /** Capsaicin's defaults (gi1.h:58-65). */
@@ -66,6 +73,7 @@ export const DEFAULT_HASH_GRID_CACHE_OPTIONS: Readonly<HashGridCacheOptions> = O
     hashGridCacheMaxSampleCount: 16,
     hashGridCacheDiscardMultibounceRayProbability: 0.7,
     hashGridCacheMaxMultibounceSampleCount: 16,
+    useDirectLighting: true,
 });
 
 /** Mip levels in a tile: Capsaicin's constants have four, and it asserts the chain ends there (gi1.cpp:448). */
@@ -161,6 +169,12 @@ export const HASH_GRID_COUNTER = {
      * on, cleared with the others each frame (register D23).
      */
     bucketOverflowCount: 7,
+    /**
+     * The frame's probe-ray count, copied from the screen cache's buffer at
+     * the start of the cache's work, where the indirect arguments of the
+     * insert pass (made once, at `prepare`) can read it.
+     */
+    probeRayCount: 8,
 } as const;
 
 /** Where each array lives: word (or element) offsets inside its packed buffer, and the buffers' sizes. */
