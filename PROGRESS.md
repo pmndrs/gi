@@ -21,6 +21,12 @@ Rules:
 
 ---
 
+## 2026-11-09 · RC1.2 lint rule · lead (opus)
+Did: `eslint.config.mjs`: production files under `ddgi-core/src/techniques/<name>/` may import only `platform/contract` and their own folder (a regex pattern, since gitignore groups can't re-allow `contract` inside an excluded `platform/`); not platform internals, `@pmndrs/bvh`, `@pmndrs/ddgi-core` or another technique (one block per technique folder, read from disk). Platform files may not import a technique. Dynamic `import()` is caught the same way. Tests are exempt (DDGI's `trace.test.ts` uses `platform/shade/direct.ts` as a fixture). The engine patterns moved into constants because a later block replaces a rule's options. SPEC's "lint rule and a CI check" sentence rewritten to say what is enforced (no CI check exists).
+Verified: 12 forbidden imports added on purpose (platform/trace, platform, platform/index.ts, @pmndrs/bvh, another technique both ways, three, dynamic platform/shade and three, platform→technique static and dynamic) each fail `pnpm lint` with the rule's message; contract imports, own-folder imports and a test importing platform internals pass; probes removed. `pnpm lint` and `pnpm typecheck` pass; `pnpm test` 1,146 of 1,147, the one failure `bench-lock.test.ts` clock sampling (CPU busy with four agents), which passes alone (37/37).
+Not verified: nothing GPU-side (lint only).
+Next: none.
+
 ## 2026-11-09 · T2.10 review fixes: the up-to-date M2 table · lead (opus)
 Did: answered the Opus review of T2.10 (fail, 3 blocking points) by putting one up-to-date table here, on M2's final code (`m2-t2.10`, with T2.17 and T2.18), and recording the known misses in DECISIONS (on `m2`, 2026-11-09). This replaces the earlier T2.10 tables where they differ. RTX 3060 Laptop, headless Chrome 157, about 780–830 MHz (the Bistro rows: a fixed 1,200 MHz).
 | Target | Final number | Verdict |

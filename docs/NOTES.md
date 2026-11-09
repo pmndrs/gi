@@ -177,6 +177,7 @@ One bullet per fact, each with its source. Add a bullet when something cost you 
 - **On two-room, judge a lamp-out step against a long-held settled level on our side too:** against the end of its own 3 s hold, ours is within 5% by frames 37–44. Against the 3,600-frame level it stays about 4.5% above until frame 145 or later. Source: T2.10.
 - **Native harness keys:** F2 dumps DDGI textures, F4 runs a 1024-frame benchmark to CSV, J toggles the performance overlay, R reloads shaders and config, M switches between DDGI and the path tracer.
 - **Installed tools:** RenderDoc 1.47.0, PIX 2603.25, Blender, NVIDIA FLIP (`python -m flip_evaluator`), Vulkan SDK 1.3.283, Nsight Systems 2022.4, Nsight Compute 2022.3. Nsight Graphics needs a manual install.
+- **ESLint `no-restricted-imports` groups can't re-allow a file inside a folder they exclude:** they use gitignore syntax, so `['**/platform/*', '!**/platform/contract/*']` still blocks `../../platform/contract/scene.ts` (a parent folder excluded can't be re-included). Use a `regex` pattern for "everything but X" (`(^|/)platform(/(?!contract(/|$)).*)?$`). Also: a later flat-config block that sets `no-restricted-imports` for the same files replaces the earlier block's options, it doesn't add to them, so each block repeats the engine patterns (`eslint.config.mjs` keeps them in constants). Source: RC1.2.
 
 ## Test assets
 
