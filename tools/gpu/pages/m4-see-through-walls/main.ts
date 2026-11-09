@@ -1,5 +1,5 @@
 /**
- * M4, T4.4: the alpha checker and the glass wall through the GPU test
+ * M4, T4.4 and T4.5: the alpha checker and the glass wall through the GPU test
  * harness, with the materials their scene data gives them
  * (`describeScene` → scenes/src/platform-scene.ts: the checker texture, its uv
  * mapping and cutoff; the wall mesh's two groups and the pane's
@@ -15,17 +15,21 @@
  * wall `blocksLight: false`), `closed` (the wall `alphaMode: 'opaque'`).
  * glass-wall: `glass` (as built), `pane-opaque` (the pane `blocksLight: true`).
  *
- * **Gated, only what is physical:** room B gets more light through the open
- * wall than through the checker, and more through the checker than through
- * the closed wall; more through the glass than through the opaque pane.
+ * **Gated:**
+ * - the order physics gives: room B gets more light through the open wall
+ *   than through the checker, and more through the checker than through the
+ *   closed wall; more through the glass than through the opaque pane;
+ * - the leak behind the closed walls (the checker wall opaque, the pane
+ *   opaque): room B against room A, M1's leak measure (DECISIONS
+ *   2026-11-04), at most SPEC's 1% (T4.5).
  *
- * **Reported, not gated** (as `ddgi-leak` reports the thin wall): the
- * checker's share of the open wall's light, and the leak behind the closed
- * walls, as room B against the open case and against room A (M1's leak
- * measure, DECISIONS 2026-11-04; SPEC's bar is 1% of room A, T4.5 carries
- * it). For finding the leak's cause, the closed variants also run with the
- * probe volume moved 0.25 m along x (`shifted`), so the probe layers sit
- * elsewhere relative to the shared wall.
+ * The leak needs the manifests' probe volume centred at x 4.25 (T4.5): at
+ * x 4.0 a layer of probes sat inside the shared wall, and room B read 1.56%
+ * (checker) and 1.47% (pane) of room A; moved half a spacing, 0.56% and
+ * 0.10% (T4.4's measurement).
+ *
+ * **Reported, not gated:** the checker's and the glass's share of the open
+ * wall's light, and the closed walls' share of it.
  *
  * `VITE_DDGI_FRAMES` replaces FRAMES.
  */
@@ -37,8 +41,8 @@ import { createDdgiScene, FieldProbe, loadManifest, releaseDeviceOnPageHide, run
 
 const env = import.meta.env as Record<string, unknown>;
 const FRAMES = Number(env.VITE_DDGI_FRAMES) > 0 ? Math.round(Number(env.VITE_DDGI_FRAMES)) : 900;
-/** The probe volume's move along x for the `shifted` variants: half a spacing. */
-const VOLUME_SHIFT_M = 0.25;
+/** SPEC's leak bar: the dark room's light behind a solid wall, as a share of the lit room's. */
+const LEAK_LIMIT = 0.01;
 /** Points stay this far from each room's crate (room A: x 1.2, z 3.0; room B: x 6.2, z 2.4). */
 const CRATE_CENTRES: readonly (readonly [number, number])[] = [
     [1.2, 3.0],
@@ -89,19 +93,17 @@ function meanEOverPi(irradiance: readonly (readonly number[])[]): number {
     return sum / irradiance.length;
 }
 
-/** One variant: the scene, a change to one material (by name) or none, the volume moved along x or not; then both rooms' mean E/π. */
+/** One variant: the scene, a change to one material (by name) or none; then both rooms' mean E/π. */
 async function runVariant(
     device: GPUDevice,
     sceneId: string,
     label: string,
     materialName: string | null,
     change: Partial<MaterialDescriptor>,
-    volumeShiftM: number,
     log: (line: string) => void,
 ): Promise<RoomMeans> {
     const manifest = loadManifest(sceneId);
-    const centre = manifest.volume.center;
-    const volume = { center: [centre[0] + volumeShiftM, centre[1], centre[2]] as [number, number, number], size: manifest.volume.size, spacing: manifest.volume.probeSpacing };
+    const volume = { center: manifest.volume.center, size: manifest.volume.size, spacing: manifest.volume.probeSpacing };
     const scene = await createDdgiScene(device, sceneId, { volume });
     const field = scene.ddgi.field;
     assert(field, 'DDGI has no field after prepare');
@@ -125,37 +127,33 @@ await runGpuTest(
         releaseDeviceOnPageHide(device);
         const wall = 'alpha-checker-wall';
         const opaque: Partial<MaterialDescriptor> = { alphaMode: 'opaque' };
-        const checker = await runVariant(device, 'alpha-checker', 'checker', null, {}, 0, log);
-        const open = await runVariant(device, 'alpha-checker', 'open', wall, { blocksLight: false }, 0, log);
-        const closed = await runVariant(device, 'alpha-checker', 'closed', wall, opaque, 0, log);
-        const closedShifted = await runVariant(device, 'alpha-checker', 'closed, volume shifted', wall, opaque, VOLUME_SHIFT_M, log);
-        const glass = await runVariant(device, 'glass-wall', 'glass', null, {}, 0, log);
-        const paneOpaque = await runVariant(device, 'glass-wall', 'pane-opaque', 'glass-pane', { blocksLight: true }, 0, log);
-        const paneOpaqueShifted = await runVariant(device, 'glass-wall', 'pane-opaque, volume shifted', 'glass-pane', { blocksLight: true }, VOLUME_SHIFT_M, log);
+        const checker = await runVariant(device, 'alpha-checker', 'checker', null, {}, log);
+        const open = await runVariant(device, 'alpha-checker', 'open', wall, { blocksLight: false }, log);
+        const closed = await runVariant(device, 'alpha-checker', 'closed', wall, opaque, log);
+        const glass = await runVariant(device, 'glass-wall', 'glass', null, {}, log);
+        const paneOpaque = await runVariant(device, 'glass-wall', 'pane-opaque', 'glass-pane', { blocksLight: true }, log);
 
-        // Reported, not gated (see the file comment).
         const report = {
             checkerShareOfOpen: checker.roomB / open.roomB,
             glassShareOfOpenChecker: glass.roomB / open.roomB,
-            // M1's leak measure: the dark room against the lit room, with the shared wall solid.
+            // M1's leak measure: the dark room against the lit room, with the shared wall solid (gated below).
             closedLeakOfRoomA: closed.roomB / closed.roomA,
-            closedShiftedLeakOfRoomA: closedShifted.roomB / closedShifted.roomA,
             paneOpaqueLeakOfRoomA: paneOpaque.roomB / paneOpaque.roomA,
-            paneOpaqueShiftedLeakOfRoomA: paneOpaqueShifted.roomB / paneOpaqueShifted.roomA,
             closedShareOfOpen: closed.roomB / open.roomB,
             paneOpaqueShareOfGlass: paneOpaque.roomB / glass.roomB,
         };
         const percent = (value: number) => `${(value * 100).toFixed(2)}%`;
         log(
             `checker ${percent(report.checkerShareOfOpen)} of open; glass ${percent(report.glassShareOfOpenChecker)} of the open checker wall; ` +
-                `leak (room B / room A) closed checker ${percent(report.closedLeakOfRoomA)} (volume shifted ${percent(report.closedShiftedLeakOfRoomA)}), ` +
-                `opaque pane ${percent(report.paneOpaqueLeakOfRoomA)} (volume shifted ${percent(report.paneOpaqueShiftedLeakOfRoomA)})`,
+                `leak (room B / room A, limit ${percent(LEAK_LIMIT)}): closed checker ${percent(report.closedLeakOfRoomA)}, opaque pane ${percent(report.paneOpaqueLeakOfRoomA)}`,
         );
 
         // Gated: the order physics gives.
         assert(open.roomB > checker.roomB && checker.roomB > closed.roomB, `room B should get open > checker > closed; got ${open.roomB.toExponential(3)}, ${checker.roomB.toExponential(3)}, ${closed.roomB.toExponential(3)}`);
         assert(glass.roomB > paneOpaque.roomB, `room B should get more light through the glass (${glass.roomB.toExponential(3)}) than through the opaque pane (${paneOpaque.roomB.toExponential(3)})`);
-        return { frames: FRAMES, checker, open, closed, closedShifted, glass, paneOpaque, paneOpaqueShifted, report };
+        assert(report.closedLeakOfRoomA <= LEAK_LIMIT, `leak behind the closed checker wall: room B is ${percent(report.closedLeakOfRoomA)} of room A, over ${percent(LEAK_LIMIT)}`);
+        assert(report.paneOpaqueLeakOfRoomA <= LEAK_LIMIT, `leak behind the opaque pane: room B is ${percent(report.paneOpaqueLeakOfRoomA)} of room A, over ${percent(LEAK_LIMIT)}`);
+        return { frames: FRAMES, checker, open, closed, glass, paneOpaque, report };
     },
     { optionalFeatures: ['texture-formats-tier1', 'subgroups'] },
 );
