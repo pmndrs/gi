@@ -69,7 +69,7 @@ Every way our port differs from Capsaicin's default behaviour. **Kind:** P platf
 | D2 | Bindless material textures sampled at every hit | Texture-average albedo through `giSurfaceAt` (as DDGI) | P, Q | WebGPU has no bindless textures; the platform's hit record is per material | Texture arrays or an atlas with real UVs at hits; compressed textures (GPUTex, T3.12) to afford it; the WebGPU bindless proposal |
 | D3 | Mesh-shader visibility buffer (instance, primitive, barycentrics) | Host-provided screen buffers through `FrameScreen` (depth, normal, velocity, albedo, instance id); three fills them from its MRT scene pass | P | WebGPU has no mesh shaders; three already renders these | three's own VisibilityBuffer pipeline; a platform raster pass over the scene copy for hosts that can't provide them |
 | D4 | `LightSamplerGridStream` (64 streamed reservoirs per cell, wave intrinsics in the build) | The platform light grid (16 picks per cell weighed at the hit, N shadow rays per hit) | P, Q | The platform rule "hit shading is shared"; no second light system | Port the stream sampler as a platform option (subgroups in the build) if the light grid's image differs measurably from Capsaicin's |
-| D5 | Read-write `RGBA16F` textures | `texture-formats-tier2` read-write storage textures | P | Core WebGPU allows read-write storage only on 32-bit one-channel formats | Declared fallback: ping-pong (a sampled read plus a write-only storage texture). RC1.4 checks the feature on both GPUs |
+| D5 | Read-write `RGBA16F` textures | `texture-formats-tier2` read-write storage textures | P | Core WebGPU allows read-write storage only on 32-bit one-channel formats | Declared fallback: ping-pong (a sampled read plus a write-only storage texture). RC1.4: the feature works on both GPUs, on our device and three's, and the fallback was run and works too |
 | D6 | Unbounded buffer arrays (about 30 hash-cache buffers) | A few large packed storage buffers at fixed offsets | P | Per-stage storage-binding count limit | None needed; same data |
 | D7 | Shipped blue-noise and Sobol tables | Regenerated tables (or the platform's blue noise) | L | The tables have no license header | Ask AMD for terms if the regenerated noise behaves differently |
 | D8 | GGX BRDF at hits from a packed material; glossy reflections on by default | Lambert at hits; no reflections until the platform has roughness and metalness | P, Q | Platform materials are diffuse-only (`contract/scene.ts`) | Roughness and metalness in the material descriptor (also needed by planned RT reflections) |
@@ -77,6 +77,7 @@ Every way our port differs from Capsaicin's default behaviour. **Kind:** P platf
 | D10 | D3D12 per-pass timestamps | WebGPU `timestamp-query` per pass | P | Measurement only | The platform's `GpuTimer` already does this |
 | D11 | Half-precision packing via `f32tof16` | `pack2x16float` / `unpack2x16float`; `shader-f16` where it helps | P | WGSL equivalents | None needed |
 | D12 | One queue (id Tech 8 uses async compute) | One WebGPU queue | P | WebGPU has no async compute | WebGPU multi-queue proposals; order passes to keep the GPU busy |
+| D14 | A D3D12 device with the hardware's limits: about 1 GiB of hash cache in about 30 buffers | When three r187 makes its own device (`new WebGPURenderer()` with no `device`), it has WebGPU's default limits: a 128 MiB storage binding, a 256 MiB buffer and 8 storage buffers per stage, on the RTX 3060 and the Intel UHD (Chrome 157, RC1.4). Our device (`requestGIDevice`) gets 2 GiB bindings and 16 storage buffers per stage on both | P | three requests every feature it knows that the adapter has (all five RC1.4 features work on its device), but no limits: `requiredLimits` defaults to `{}` (`three/src/renderers/webgpu/WebGPUBackend.js:97, 245-248`) | Declared fallback: none at the default limits. The technique throws `GILimitError` naming `maxStorageBufferBindingSize` ("World-cache memory"). The host passes our device (`createGIRenderer`, or `requestGIDevice` then `new WebGPURenderer({ device })`) or passes the adapter's limits as `new WebGPURenderer({ requiredLimits })` (three's own parameter, `WebGPUBackend.js:71`). Upstream: a three change that asks for the adapter's storage limits when it makes its own device. A smaller hash-cache capacity would fit 128 MiB, but isn't Capsaicin's default |
 
 Speed levers (kind S) get a row only when one is adopted. Phase 1 adds rows for any gap RC1.1 or RC1.4 finds (a three backend step, a missing feature), numbered from D13.
 
@@ -118,15 +119,16 @@ One phase active at a time, each with checkable done-whens. Implementers and rev
 
 The rows and their done-whens are on the board (TASKS.md, "radiance-cache track"). In short: screen inputs from three's MRT pass with albedo; the lint rule; scan, compaction and indirect arguments; feature checks on both GPUs; the ray cost table.
 
-**Feature fallbacks, declared up front** (RC1.4 confirms which are needed):
+**Feature fallbacks, declared up front.** RC1.4 checked each by use and readback (`tools/gpu/pages/platform-features`) on the RTX 3060 and the Intel UHD in Chrome 157.0.8103.38, on our device and on the device three r187 makes for itself: every feature works on both GPUs and both devices, so no fallback is needed there. The one gap is the limits row (D14).
 
-| Feature | Used for | Fallback |
-| --- | --- | --- |
-| Indirect compute dispatch | Work sized on the GPU (spawned probes, cells to update) | Core WebGPU; no fallback planned. If it were missing: a fixed-size dispatch with an early return on the GPU count |
-| `texture-formats-tier2` | Read-write `rgba16float` storage textures (D5) | Ping-pong: a sampled read plus a write-only storage texture |
-| `subgroups` | Scans, reductions, compaction (subgroups-first rule, DECISIONS 2026-11-04) | Workgroup-memory versions, tested |
-| `shader-f16` | Half-precision math in denoise and filter kernels (id Tech 8 lever 4) | f32 math with `pack2x16float` storage (D11) |
-| `timestamp-query` | Per-pass times (D10) | No per-pass times; the budget uses `units` (as DDGI) |
+| Feature | Used for | Fallback | RC1.4 result |
+| --- | --- | --- | --- |
+| Indirect compute dispatch | Work sized on the GPU (spawned probes, cells to update) | Core WebGPU; no fallback planned. If it were missing: a fixed-size dispatch with an early return on the GPU count | Works, y > 1 included. A dimension over `maxComputeWorkgroupsPerDimension` (65,535 on both) runs nothing, silently, so GPU-written arguments must split (RC1.3) |
+| `texture-formats-tier2` | Read-write `rgba16float` storage textures (D5) | Ping-pong: a sampled read plus a write-only storage texture | Works. Without it, a read-write `rgba16float` binding is refused with a validation error at `createBindGroupLayout` (captured, no crash), and the ping-pong fallback was run and works |
+| `subgroups` | Scans, reductions, compaction (subgroups-first rule, DECISIONS 2026-11-04) | Workgroup-memory versions, tested | Works. Sizes: RTX 32; Intel reports 8–16 and ran 16 |
+| `shader-f16` | Half-precision math in denoise and filter kernels (id Tech 8 lever 4) | f32 math with `pack2x16float` storage (D11) | Works, f16 arithmetic and `array<f16>` storage |
+| `timestamp-query` | Per-pass times (D10) | No per-pass times; the budget uses `units` (as DDGI) | Works, ordered and non-zero |
+| Adapter-maximum storage limits | The hash cache (about 1 GiB) and the packed buffers (D6) | None at WebGPU's default limits: `GILimitError` naming the limit | Our device has them (2 GiB bindings, 16 storage buffers per stage, both GPUs); three's own device doesn't (D14) |
 
 ### Phase 2: screen probes, first image
 

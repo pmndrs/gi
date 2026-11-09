@@ -1126,3 +1126,339 @@ date,commit,device,browser,scene,metric,value
 2026-11-09,1db6dc0,RTX 3060 Laptop,Chrome headless,all,note/start_temp_c,65
 2026-11-09,1db6dc0,RTX 3060 Laptop,Chrome headless,all,note/thermal_share,0
 2026-11-09,1db6dc0,RTX 3060 Laptop,Chrome headless,all,note/timing_valid,1
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/coreFeaturesAndLimits,1
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/platformOptionalFeaturesAdvise/indirect-dispatch,1
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/platformOptionalFeaturesAdvise/texture-formats-tier2,0
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/platformOptionalFeaturesAdvise/subgroups,1
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/platformOptionalFeaturesAdvise/shader-f16,0
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/platformOptionalFeaturesAdvise/timestamp-query,1
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/indirect-dispatch/offered,1
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/indirect-dispatch/enabled,1
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/indirect-dispatch/ran,1
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/indirect-dispatch/pass,1
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/indirect-dispatch/measured/none/x,0
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/indirect-dispatch/measured/none/y,1
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/indirect-dispatch/measured/none/workgroups,0
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/indirect-dispatch/measured/none/expected_workgroups,0
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/indirect-dispatch/measured/one/x,1
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/indirect-dispatch/measured/one/y,1
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/indirect-dispatch/measured/one/workgroups,1
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/indirect-dispatch/measured/one/expected_workgroups,1
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/indirect-dispatch/measured/x37/x,37
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/indirect-dispatch/measured/x37/y,1
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/indirect-dispatch/measured/x37/workgroups,37
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/indirect-dispatch/measured/x37/expected_workgroups,37
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/indirect-dispatch/measured/split_small/x,2
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/indirect-dispatch/measured/split_small/y,3
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/indirect-dispatch/measured/split_small/workgroups,6
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/indirect-dispatch/measured/split_small/expected_workgroups,6
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/indirect-dispatch/measured/split_at_limit/x,65535
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/indirect-dispatch/measured/split_at_limit/y,3
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/indirect-dispatch/measured/split_at_limit/workgroups,196605
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/indirect-dispatch/measured/split_at_limit/expected_workgroups,196605
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/indirect-dispatch/measured/over_limit/x,65536
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/indirect-dispatch/measured/over_limit/y,1
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/indirect-dispatch/measured/over_limit/workgroups,0
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/indirect-dispatch/measured/over_limit/expected_workgroups,0
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/texture-formats-tier2/offered,1
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/texture-formats-tier2/enabled,1
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/texture-formats-tier2/ran,1
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/texture-formats-tier2/pass,1
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/texture-formats-tier2/measured/texels,256
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/texture-formats-tier2/measured/steps,4
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/texture-formats-tier2/measured/wrong_texels,0
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/subgroups/offered,1
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/subgroups/enabled,1
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/subgroups/ran,1
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/subgroups/pass,1
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/subgroups/measured/threads,8192
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/subgroups/measured/wrong_sums,0
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/subgroups/measured/subgroups,256
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/subgroups/measured/observed_size_min,32
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/subgroups/measured/observed_size_max,32
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/subgroups/measured/reported_size_min,32
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/subgroups/measured/reported_size_max,32
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/subgroups/measured/lanes_consecutive,1
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/shader-f16/offered,1
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/shader-f16/enabled,1
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/shader-f16/ran,1
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/shader-f16/pass,1
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/shader-f16/measured/product,3.375
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/shader-f16/measured/onePlusTiny,1
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/shader-f16/measured/squareRoot,2.5
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/shader-f16/measured/largestFinite,65504
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/shader-f16/measured/dot,4
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/shader-f16/measured/quotient,-3.5
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/timestamp-query/offered,1
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/timestamp-query/enabled,1
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/timestamp-query/ran,1
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/timestamp-query/pass,1
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/timestamp-query/measured/zero_stamps,0
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/readWriteRgba16FloatLayoutAccepted,1
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/limits/maxStorageBufferBindingSize,2147483644
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/limits/maxBufferSize,2147483648
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/limits/maxStorageBuffersPerShaderStage,16
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/limits/maxStorageTexturesPerShaderStage,4
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/limits/maxComputeWorkgroupsPerDimension,65535
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/limits/maxComputeInvocationsPerWorkgroup,256
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/limits/maxComputeWorkgroupStorageSize,16384
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/adapterLimits/maxStorageBufferBindingSize,2147483644
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/adapterLimits/maxBufferSize,2147483648
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/adapterLimits/maxStorageBuffersPerShaderStage,16
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/adapterLimits/maxStorageTexturesPerShaderStage,8
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/adapterLimits/maxComputeWorkgroupsPerDimension,65535
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/adapterLimits/maxComputeInvocationsPerWorkgroup,1024
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/adapterLimits/maxComputeWorkgroupStorageSize,32768
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/withoutTier2/tier1Enabled,1
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/withoutTier2/rg16floatWriteOnlyPass,1
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/withoutTier2/rgba16floatReadWriteRefused,1
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/withoutTier2/r32floatReadWriteAccepted,1
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/withoutTier2/pingPongFallbackPass,1
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/withoutTier2/tier2Enabled,0
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/coreFeaturesAndLimits,1
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/requestsFeature/indirect-dispatch,1
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/requestsFeature/texture-formats-tier2,1
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/requestsFeature/subgroups,1
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/requestsFeature/shader-f16,1
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/requestsFeature/timestamp-query,1
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/requestsLimits,0
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/indirect-dispatch/offered,1
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/indirect-dispatch/enabled,1
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/indirect-dispatch/ran,1
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/indirect-dispatch/pass,1
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/indirect-dispatch/measured/none/x,0
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/indirect-dispatch/measured/none/y,1
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/indirect-dispatch/measured/none/workgroups,0
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/indirect-dispatch/measured/none/expected_workgroups,0
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/indirect-dispatch/measured/one/x,1
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/indirect-dispatch/measured/one/y,1
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/indirect-dispatch/measured/one/workgroups,1
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/indirect-dispatch/measured/one/expected_workgroups,1
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/indirect-dispatch/measured/x37/x,37
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/indirect-dispatch/measured/x37/y,1
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/indirect-dispatch/measured/x37/workgroups,37
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/indirect-dispatch/measured/x37/expected_workgroups,37
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/indirect-dispatch/measured/split_small/x,2
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/indirect-dispatch/measured/split_small/y,3
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/indirect-dispatch/measured/split_small/workgroups,6
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/indirect-dispatch/measured/split_small/expected_workgroups,6
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/indirect-dispatch/measured/split_at_limit/x,65535
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/indirect-dispatch/measured/split_at_limit/y,3
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/indirect-dispatch/measured/split_at_limit/workgroups,196605
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/indirect-dispatch/measured/split_at_limit/expected_workgroups,196605
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/indirect-dispatch/measured/over_limit/x,65536
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/indirect-dispatch/measured/over_limit/y,1
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/indirect-dispatch/measured/over_limit/workgroups,0
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/indirect-dispatch/measured/over_limit/expected_workgroups,0
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/texture-formats-tier2/offered,1
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/texture-formats-tier2/enabled,1
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/texture-formats-tier2/ran,1
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/texture-formats-tier2/pass,1
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/texture-formats-tier2/measured/texels,256
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/texture-formats-tier2/measured/steps,4
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/texture-formats-tier2/measured/wrong_texels,0
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/subgroups/offered,1
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/subgroups/enabled,1
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/subgroups/ran,1
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/subgroups/pass,1
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/subgroups/measured/threads,8192
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/subgroups/measured/wrong_sums,0
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/subgroups/measured/subgroups,256
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/subgroups/measured/observed_size_min,32
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/subgroups/measured/observed_size_max,32
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/subgroups/measured/reported_size_min,32
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/subgroups/measured/reported_size_max,32
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/subgroups/measured/lanes_consecutive,1
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/shader-f16/offered,1
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/shader-f16/enabled,1
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/shader-f16/ran,1
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/shader-f16/pass,1
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/shader-f16/measured/product,3.375
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/shader-f16/measured/onePlusTiny,1
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/shader-f16/measured/squareRoot,2.5
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/shader-f16/measured/largestFinite,65504
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/shader-f16/measured/dot,4
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/shader-f16/measured/quotient,-3.5
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/timestamp-query/offered,1
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/timestamp-query/enabled,1
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/timestamp-query/ran,1
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/timestamp-query/pass,1
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/timestamp-query/measured/zero_stamps,0
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/readWriteRgba16FloatLayoutAccepted,1
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/limits/maxStorageBufferBindingSize,134217728
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/limits/maxBufferSize,268435456
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/limits/maxStorageBuffersPerShaderStage,8
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/limits/maxStorageTexturesPerShaderStage,4
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/limits/maxComputeWorkgroupsPerDimension,65535
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/limits/maxComputeInvocationsPerWorkgroup,256
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/limits/maxComputeWorkgroupStorageSize,16384
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/limitsBelowOurs,3
+2026-11-09,3b4f754,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/gapCount,3
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/coreFeaturesAndLimits,1
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/platformOptionalFeaturesAdvise/indirect-dispatch,1
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/platformOptionalFeaturesAdvise/texture-formats-tier2,0
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/platformOptionalFeaturesAdvise/subgroups,1
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/platformOptionalFeaturesAdvise/shader-f16,0
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/platformOptionalFeaturesAdvise/timestamp-query,1
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/indirect-dispatch/offered,1
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/indirect-dispatch/enabled,1
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/indirect-dispatch/ran,1
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/indirect-dispatch/pass,1
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/indirect-dispatch/measured/none/x,0
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/indirect-dispatch/measured/none/y,1
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/indirect-dispatch/measured/none/workgroups,0
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/indirect-dispatch/measured/none/expected_workgroups,0
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/indirect-dispatch/measured/one/x,1
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/indirect-dispatch/measured/one/y,1
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/indirect-dispatch/measured/one/workgroups,1
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/indirect-dispatch/measured/one/expected_workgroups,1
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/indirect-dispatch/measured/x37/x,37
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/indirect-dispatch/measured/x37/y,1
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/indirect-dispatch/measured/x37/workgroups,37
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/indirect-dispatch/measured/x37/expected_workgroups,37
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/indirect-dispatch/measured/split_small/x,2
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/indirect-dispatch/measured/split_small/y,3
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/indirect-dispatch/measured/split_small/workgroups,6
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/indirect-dispatch/measured/split_small/expected_workgroups,6
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/indirect-dispatch/measured/split_at_limit/x,65535
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/indirect-dispatch/measured/split_at_limit/y,3
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/indirect-dispatch/measured/split_at_limit/workgroups,196605
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/indirect-dispatch/measured/split_at_limit/expected_workgroups,196605
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/indirect-dispatch/measured/over_limit/x,65536
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/indirect-dispatch/measured/over_limit/y,1
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/indirect-dispatch/measured/over_limit/workgroups,0
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/indirect-dispatch/measured/over_limit/expected_workgroups,0
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/texture-formats-tier2/offered,1
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/texture-formats-tier2/enabled,1
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/texture-formats-tier2/ran,1
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/texture-formats-tier2/pass,1
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/texture-formats-tier2/measured/texels,256
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/texture-formats-tier2/measured/steps,4
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/texture-formats-tier2/measured/wrong_texels,0
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/subgroups/offered,1
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/subgroups/enabled,1
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/subgroups/ran,1
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/subgroups/pass,1
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/subgroups/measured/threads,8192
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/subgroups/measured/wrong_sums,0
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/subgroups/measured/subgroups,512
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/subgroups/measured/observed_size_min,16
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/subgroups/measured/observed_size_max,16
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/subgroups/measured/reported_size_min,8
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/subgroups/measured/reported_size_max,16
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/subgroups/measured/lanes_consecutive,1
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/shader-f16/offered,1
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/shader-f16/enabled,1
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/shader-f16/ran,1
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/shader-f16/pass,1
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/shader-f16/measured/product,3.375
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/shader-f16/measured/onePlusTiny,1
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/shader-f16/measured/squareRoot,2.5
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/shader-f16/measured/largestFinite,65504
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/shader-f16/measured/dot,4
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/shader-f16/measured/quotient,-3.5
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/timestamp-query/offered,1
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/timestamp-query/enabled,1
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/timestamp-query/ran,1
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/timestamp-query/pass,1
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/features/timestamp-query/measured/zero_stamps,0
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/readWriteRgba16FloatLayoutAccepted,1
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/limits/maxStorageBufferBindingSize,2147483644
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/limits/maxBufferSize,2147483648
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/limits/maxStorageBuffersPerShaderStage,16
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/limits/maxStorageTexturesPerShaderStage,4
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/limits/maxComputeWorkgroupsPerDimension,65535
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/limits/maxComputeInvocationsPerWorkgroup,256
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/limits/maxComputeWorkgroupStorageSize,16384
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/adapterLimits/maxStorageBufferBindingSize,2147483644
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/adapterLimits/maxBufferSize,2147483648
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/adapterLimits/maxStorageBuffersPerShaderStage,16
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/adapterLimits/maxStorageTexturesPerShaderStage,8
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/adapterLimits/maxComputeWorkgroupsPerDimension,65535
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/adapterLimits/maxComputeInvocationsPerWorkgroup,1024
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/ours/adapterLimits/maxComputeWorkgroupStorageSize,32768
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/withoutTier2/tier1Enabled,1
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/withoutTier2/rg16floatWriteOnlyPass,1
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/withoutTier2/rgba16floatReadWriteRefused,1
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/withoutTier2/r32floatReadWriteAccepted,1
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/withoutTier2/pingPongFallbackPass,1
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/withoutTier2/tier2Enabled,0
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/coreFeaturesAndLimits,1
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/requestsFeature/indirect-dispatch,1
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/requestsFeature/texture-formats-tier2,1
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/requestsFeature/subgroups,1
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/requestsFeature/shader-f16,1
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/requestsFeature/timestamp-query,1
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/requestsLimits,0
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/indirect-dispatch/offered,1
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/indirect-dispatch/enabled,1
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/indirect-dispatch/ran,1
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/indirect-dispatch/pass,1
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/indirect-dispatch/measured/none/x,0
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/indirect-dispatch/measured/none/y,1
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/indirect-dispatch/measured/none/workgroups,0
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/indirect-dispatch/measured/none/expected_workgroups,0
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/indirect-dispatch/measured/one/x,1
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/indirect-dispatch/measured/one/y,1
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/indirect-dispatch/measured/one/workgroups,1
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/indirect-dispatch/measured/one/expected_workgroups,1
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/indirect-dispatch/measured/x37/x,37
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/indirect-dispatch/measured/x37/y,1
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/indirect-dispatch/measured/x37/workgroups,37
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/indirect-dispatch/measured/x37/expected_workgroups,37
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/indirect-dispatch/measured/split_small/x,2
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/indirect-dispatch/measured/split_small/y,3
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/indirect-dispatch/measured/split_small/workgroups,6
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/indirect-dispatch/measured/split_small/expected_workgroups,6
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/indirect-dispatch/measured/split_at_limit/x,65535
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/indirect-dispatch/measured/split_at_limit/y,3
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/indirect-dispatch/measured/split_at_limit/workgroups,196605
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/indirect-dispatch/measured/split_at_limit/expected_workgroups,196605
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/indirect-dispatch/measured/over_limit/x,65536
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/indirect-dispatch/measured/over_limit/y,1
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/indirect-dispatch/measured/over_limit/workgroups,0
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/indirect-dispatch/measured/over_limit/expected_workgroups,0
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/texture-formats-tier2/offered,1
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/texture-formats-tier2/enabled,1
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/texture-formats-tier2/ran,1
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/texture-formats-tier2/pass,1
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/texture-formats-tier2/measured/texels,256
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/texture-formats-tier2/measured/steps,4
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/texture-formats-tier2/measured/wrong_texels,0
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/subgroups/offered,1
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/subgroups/enabled,1
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/subgroups/ran,1
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/subgroups/pass,1
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/subgroups/measured/threads,8192
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/subgroups/measured/wrong_sums,0
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/subgroups/measured/subgroups,512
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/subgroups/measured/observed_size_min,16
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/subgroups/measured/observed_size_max,16
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/subgroups/measured/reported_size_min,8
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/subgroups/measured/reported_size_max,16
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/subgroups/measured/lanes_consecutive,1
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/shader-f16/offered,1
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/shader-f16/enabled,1
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/shader-f16/ran,1
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/shader-f16/pass,1
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/shader-f16/measured/product,3.375
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/shader-f16/measured/onePlusTiny,1
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/shader-f16/measured/squareRoot,2.5
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/shader-f16/measured/largestFinite,65504
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/shader-f16/measured/dot,4
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/shader-f16/measured/quotient,-3.5
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/timestamp-query/offered,1
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/timestamp-query/enabled,1
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/timestamp-query/ran,1
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/timestamp-query/pass,1
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/features/timestamp-query/measured/zero_stamps,0
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/readWriteRgba16FloatLayoutAccepted,1
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/limits/maxStorageBufferBindingSize,134217728
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/limits/maxBufferSize,268435456
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/limits/maxStorageBuffersPerShaderStage,8
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/limits/maxStorageTexturesPerShaderStage,4
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/limits/maxComputeWorkgroupsPerDimension,65535
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/limits/maxComputeInvocationsPerWorkgroup,256
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/limits/maxComputeWorkgroupStorageSize,16384
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/three/limitsBelowOurs,3
+2026-11-09,3b4f754,Intel UHD,Chrome 157.0.8103.38 headless,all,rc1.4/platform_features/gapCount,3

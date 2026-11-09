@@ -4,7 +4,7 @@ One bullet per fact, each with its source. Add a bullet when something cost you 
 
 ## three.js (r187)
 
-- **Shared device:** `new WebGPURenderer({ device })` is supported. When three creates the device itself, it uses a compatibility adapter with default limits: a 128 MB storage-buffer binding and 8 storage buffers per stage. Source: `WebGPUBackend.js:72, 213-254`.
+- **Shared device:** `new WebGPURenderer({ device })` is supported. When three creates the device itself, it uses a compatibility adapter with default limits: a 128 MB storage-buffer binding and 8 storage buffers per stage. Source: `WebGPUBackend.js:72, 213-254`. *RC1.4 (Chrome 157, both GPUs):* that device does get every feature three's `GPUFeatureName` list names and the adapter has (`WebGPUBackend.js:231-243`, `WebGPUConstants.js:328-349`), `core-features-and-limits`, `subgroups`, `shader-f16`, `timestamp-query` and `texture-formats-tier2` included, all working; only the limits stay at the defaults (128 MiB binding, 256 MiB buffer, 8 storage buffers; register D14).
 - **Device errors:** three assigns `device.onuncapturederror`. Use `addEventListener('uncapturederror')` and never assign it. Source: `WebGPUBackend.js:281`.
 - **three caches node shaders by material properties plus light ids** (`RenderObject.getMaterialCacheKey`, `LightsNode.customCacheKey`), not by `material.version`. `needsUpdate` with an unchanged key reuses the old shader, so to change a light node's code, replace the light (new id). Source: `NodeManager.getForRender`, T1.7.
 - **Two `wgslFn`s that include the same WGSL through separate `wgsl()` nodes emit it twice,** and WGSL refuses the redeclaration. Share one function node per module. TSL `.toVar(name)` names share the WGSL namespace with included code (a var named `giCoverage` clashed with the module's function). Source: T1.7.
@@ -109,6 +109,17 @@ One bullet per fact, each with its source. Add a bullet when something cost you 
 - **Compile times measured inside a start-up include waiting for Chrome's compile workers:** about 25 pipelines compile at once, and each one's time from `createComputePipelineAsync` to its promise is 1.5–2× its time alone, and moves by ±30% between runs. The sky bake's kernels start first since T2.6a. Source: T2.6a, `ddgi-batch-cost` startup.
 - **Chrome sends WebGPU calls to its GPU process only when the JavaScript task ends,** so a `createComputePipelineAsync` followed by long synchronous work in the same task starts compiling only after that work. Measured (Chrome 157, RTX 3060): 4 kernels that compile in 91 ms alone, then a 1 s busy loop: 1,080 ms in the same task, 1,001 ms with a `setTimeout(0)` between them. To compile while copying a scene in, call `prepare()`, let the task end, then copy (`GIVolume.start` does since T2.14). Source: T2.14 (a temporary page, not kept).
 - **One compute pass can hold a dispatch that writes indirect arguments and the indirect dispatch that reads them,** because each dispatch is its own usage scope. But a buffer can't be both writable storage and the indirect buffer of the *same* dispatch, so `gi/direct`'s arguments live in their own buffer, not in the ray scratch it binds. Source: T2.2.
+- **The radiance cache's features all work in Chrome 157.0.8103.38 on both laptop GPUs** (RTX 3060 Laptop, Intel UHD gen-12lp, D3D12), each used and read back on our device (`requestGIDevice`) and on the device three r187 makes for itself (`tools/gpu/pages/platform-features`):
+  - indirect compute dispatch from GPU-written arguments, y > 1 included;
+  - read-write `rgba16float` storage textures (`texture-formats-tier2`);
+  - `subgroupAdd` (RTX size 32; Intel reports 8–16 and ran 16 in a 128-thread workgroup; on both, lanes held consecutive threads in that kernel, which WebGPU doesn't promise);
+  - `shader-f16` arithmetic and `array<f16>` storage;
+  - `timestamp-query`, ordered and non-zero.
+  - Both adapters also list `chromium-experimental-sampling-resource-table`, `subgroup-size-control` and `primitive-index`.
+  - Source: RC1.4.
+- **An indirect dispatch with a dimension over `maxComputeWorkgroupsPerDimension` (65,535 here) runs nothing, with no error,** on both GPUs, so GPU-written arguments must split counts over x and y. Source: RC1.4.
+- **Without `texture-formats-tier2`, a read-write `rgba16float` storage binding is refused at `createBindGroupLayout`** with a validation error ("does not support storage texture access ReadWrite"), which an error scope captures; nothing crashes. tier1 alone gives write-only `rg16float` (checked), and the ping-pong of a sampled `rgba16float` read and a write-only store works. Source: RC1.4.
+- **The platform's own advice requests less than the GPUs offer:** `optionalFeatures()` (ddgi-core) leaves out `shader-f16` and `texture-formats-tier2`, and `requiredLimits()` leaves storage textures per stage at 4 (adapter 8), invocations per workgroup at 256 (1,024) and workgroup memory at 16 KiB (32 KiB) on both GPUs. `requestGIDevice` (ddgi-three) requests every adapter feature, so three hosts get them. Source: RC1.4.
 - **Hidden tabs** do no GPU work, so benchmarks must run in a visible or headless-active page. Source: the HomeFig branch, and this project's audit (the built-in browser pane throttles when hidden).
 
 ## Tooling and environment

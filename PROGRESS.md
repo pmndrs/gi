@@ -21,6 +21,22 @@ Rules:
 
 ---
 
+## 2026-11-09 · RC1.4 · implementer (opus)
+Did: GPU page `tools/gpu/pages/platform-features/` (`checks.ts` the five functional checks, `expected.ts` + `expected.test.ts` the CPU references, `main.ts` the three devices). Each feature is used and read back on our device (`requestGIDevice`: every adapter feature, the platform's limits) and on the device `new WebGPURenderer()` + `init()` makes for itself. A third device without tier2 (otherwise the same request) shows tier1's write-only `rg16float`, a captured refusal of read-write `rgba16float`, and D5's ping-pong fallback working. Register D14, the "Feature fallbacks" table (an RC1.4 column and a limits row), NOTES (WebGPU; three.js first bullet), 336 rows in `bench/results/checks.csv` (`rc1.4/platform_features/*`, commit 3b4f754).
+Verified: `pnpm test:gpu --filter platform-features` PASS on `--gpu nvidia` (nvidia/ampere, RTX 3060 Laptop) and `--gpu intel` (intel/gen-12lp, Intel UHD), headless Chrome 157.0.8103.38, twice each (the second at 3b4f754). `pnpm lint && pnpm typecheck && pnpm test` pass.
+| Feature | RTX ours | RTX three's | Intel ours | Intel three's |
+| --- | --- | --- | --- | --- |
+| Indirect dispatch (GPU-written args; 0, 1, 37, [2,3,1], [65535,3,1]; [65536,1,1] runs nothing) | offered, requested, pass | pass | pass | pass |
+| `texture-formats-tier2` (read-write `rgba16float`, 4 accumulate steps, exact) | pass | pass | pass | pass |
+| `subgroups` (`subgroupAdd` per subgroup; sizes) | pass, 32 | pass, 32 | pass, reports 8–16, ran 16 | pass, same |
+| `shader-f16` (6 exact f16 results, 1 + 0.0001 = 1) | pass | pass | pass | pass |
+| `timestamp-query` (2 passes, ordered, non-zero) | pass | pass | pass | pass |
+Every feature is offered by both adapters and requested by both our code and three (three: every `GPUFeatureName` the adapter has, `WebGPUBackend.js:231-243`, `WebGPUConstants.js:328-349`; compatibility adapter :215-219; no limits, `requiredLimits` defaults to `{}` at :97 and goes to `requestDevice` at :245-248).
+Limits (same on both GPUs), ours / three's / adapter: `maxStorageBufferBindingSize` 2,147,483,644 / 134,217,728 / 2,147,483,644; `maxBufferSize` 2,147,483,648 / 268,435,456 / 2,147,483,648; `maxStorageBuffersPerShaderStage` 16 / 8 / 16; `maxStorageTexturesPerShaderStage` 4 / 4 / 8; `maxComputeWorkgroupsPerDimension` 65,535 all; `maxComputeInvocationsPerWorkgroup` 256 / 256 / 1,024; `maxComputeWorkgroupStorageSize` 16,384 / 16,384 / 32,768.
+Gaps: one, D14 (three's own device has default limits, so the 1 GiB hash cache needs the host to pass our device or `requiredLimits`). No feature gap on either GPU.
+Not verified: other browsers and machines; a WGSL-level refusal without tier2 (the check is at `createBindGroupLayout`, since a shader compile error is logged to the console and fails the runner); timestamp milliseconds are not timing (no valid clock verdict) and stay out of the CSV.
+Next: (lead) `optionalFeatures()` doesn't advise `shader-f16` or `texture-formats-tier2`, and `requiredLimits()` leaves storage textures per stage at 4 (adapter 8), invocations at 256 (1,024) and workgroup memory at 16 KiB (32 KiB); a core-only host following them gets less than the GPUs offer. Worth raising before phase 2's kernels. Both adapters list `chromium-experimental-sampling-resource-table` (possibly relevant to D2's way back, unexamined).
+
 ## 2026-11-09 · T2.10 review fixes: the up-to-date M2 table · lead (opus)
 Did: answered the Opus review of T2.10 (fail, 3 blocking points) by putting one up-to-date table here, on M2's final code (`m2-t2.10`, with T2.17 and T2.18), and recording the known misses in DECISIONS (on `m2`, 2026-11-09). This replaces the earlier T2.10 tables where they differ. RTX 3060 Laptop, headless Chrome 157, about 780–830 MHz (the Bistro rows: a fixed 1,200 MHz).
 | Target | Final number | Verdict |
