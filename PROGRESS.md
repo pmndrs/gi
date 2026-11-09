@@ -21,6 +21,21 @@ Rules:
 
 ---
 
+## 2026-11-09 · T3.2 runtime mesh trees · implementer (opus)
+Did (branch `m3-t3.2`, faf19c4, f9f736a): `trace/ray-queries.ts` drops T2.12's "scene as first loaded" limit. Every frame's uploaded meshes (`createMesh`, `updateMesh`, T3.1's poses) get one H-PLOC batch with its own submit and stats readback, then tinybvh's swap, all through the existing `placeTrees` install. Also one tinybvh build per mesh at a time (a newer upload waits, replacing any older waiting one), and `rays.memory.trianglesInUse`. Unit tests in `mesh-tree-swap.test.ts`: runtime add, replace, coalescing, removal, no subgroups at runtime. New page `trace-runtime-trees`. Docs: DECISIONS (runtime builds and their submit, for the lead to confirm), SPEC and platform.md's exception widened, m3-moving §2.2 as-built, NOTES.
+Verified, RTX 3060 Laptop (nvidia/ampere), Chrome headless, bench lock, 60 Hz pace, cabinet row and furnished room, natural and with tinybvh held:
+- Item 1: a cabinet replaced with `updateMesh` passes the oracle from frame 2, on its GPU tree when tinybvh is held.
+- Item 2: a new cabinet (new mesh and instance) passes from frame 2 (21-33 ms).
+- Item 3: after the swap, the GPU tree's node and triangle ranges are freed in the swap frame (0 frames after) and match tinybvh-only's; the oracle passes after the swap.
+- Item 4: unit test, runtime meshes without subgroups get tinybvh trees; `ddgi-trees-no-subgroups` passes.
+- Recompiles 0. Also pass: scene-deformed-positions (20 trees in 40 posed frames, against T3.1's 15-16), trace-oracle, tlas-oracle, platform-recompiles, ddgi-tree-swap (two-room), scene-copy, ddgi-change-still. typecheck and lint clean. 1,174 of 1,176 unit tests pass; the 2 failures were fetch.test.ts and sky.test.ts timing out under load, and both pass alone (T3.19).
+Numbers (not gated; the GPU was shared, 1,200 MHz): 100k-triangle sheet, aimed rays, closest / any ms. Cabinet row: GPU tree 2.99 / 0.41, after swap 2.76 / 0.41, tinybvh-only 2.76 / 0.41 (1.08× and 1.00×). Furnished room: 8.59 / 8.09, 8.67 / 8.09, 8.44 / 7.71 (1.02-1.05×). The sheet with tinybvh only is first seen at frame 4-11; on the GPU path at frame 2.
+Not verified: the Intel UHD (not in the done-when); the viewer by hand.
+Next:
+- T3.3: when the refit replaces pose rebuilds, they stop submitting GPU builds. Runtime builds could then move into the host's encoder (see the DECISIONS revisit note).
+- M4 (T4.2): no new install path; `requestTriangleFlags` at today's call sites covers runtime trees.
+- Page threshold: 3% ambiguous allowed (rays aimed at 18 mm boards; the comment in the page says why).
+
 ## 2026-11-09 · T3.11 · wrangler (sonnet) · wind tree generated (lead chose option a)
 Did: `tools/assets/convert/wind-tree.ts` (seeded TS generator, writes its own GLB): 50,474 triangles, about 9 m tall, meshes `trunk` / `branches` / `leaves` (opaque 2-triangle cards, double-sided), wind weight in COLOR_0 alpha (0 at foot, <= 0.6 tubes, 0.7-1 leaves; RGB 1). `sources.json` + `fetch.ts`: new `generated` entry form (script, seed, args; MIT; no download; output sha256 still checked); entry `wind-tree` (seed 20261109, sha256 78408cf5...ede7af). New scene `courtyard-wind-tree` (manifest, sky exr/json from `tools/sky/generate.ts`). Tests: generated-asset cases in `tools/assets/fetch.test.ts`, `scenes/src/wind-tree.test.ts`. NOTES line added. Output lands in `assets/downloads/wind-tree/` (where the fetch tool and model loader look), not `assets/generated/`; no THIRD_PARTY row (ours).
 Verified: `npx vitest run tools/assets scenes/src` 322 pass; `tsc --noEmit` and eslint clean; `fetch --only wind-tree` regenerates the same sha twice. Contact sheet on RTX 3060 Laptop (headless Chrome, via bench-lock): 3 cameras, 0 errors, 50,594 tris with the walls. Screenshot `bench/screenshots/contact-sheet/courtyard-wind-tree-2.png`: a single leaning trunk with a rounded dense crown well above the 2.6 m walls, about 3.5x wall height, next to the 1 m reference cube (about the trunk's girth times two). The check page has one sun and no ambient, so the shaded side is black and only sunlit cards show green; the shape reads as a tree, the look is not judged.
