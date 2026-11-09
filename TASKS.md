@@ -497,7 +497,7 @@ Status: **started 2026-11-09** on branch `m3` (from `m2` at 5de856b; PR #4, `m2`
 | T3.8 | Viewer scenarios and their manifest motions (furniture, door, cabinets, wind tree, fly-through) | implementer | M | T3.3, T3.4, T3.6, T3.7, T3.11, T3.12 | todo |
 | T3.9 | M3 checks: correctness on the RTX and the Intel UHD (oracle, accuracy, leak, response in frames, stability, recompiles at 0), the door and cabinet against Cycles renders of their end states; rough costs recorded | gpu-tester | M | T3.0-T3.8 | todo |
 | T3.10 | M3 note and the next breakdown | main session | S | T3.9 | todo |
-| T3.11 | The wind tree's asset: find or generate, convert, record licence | wrangler | S | none | active (2026-11-09; wrangler; worktree `webgpu-ddgi-m3-t311`) |
+| T3.11 | The wind tree's asset: find or generate, convert, record licence | wrangler | S | none | done (2026-11-09; no downloadable tree in range, so generated: `tools/assets/convert/wind-tree.ts`, seed 20261109, 50,474 triangles, about 9 m, MIT; wind weight in `COLOR_0` alpha; scene `courtyard-wind-tree`; lead review by eye: reads as a tree, a clump of low leaf cards sits around the trunk's foot) |
 | T3.12 | Bistro exterior runs in the viewer on a 6 GB card (the fly-through needs it): compressed textures through GPUTex (upstream gputex 0.14.0 first; HomeFig's method only after asking Dennis; KTX2 the fallback). If that isn't quick, the viewer applies T2.17's texture cap as a setting and GPUTex moves to Later | implementer | S | none | active (2026-11-09; worktree `webgpu-ddgi-m3-t312`) |
 
 ## Carried to M2 (collected during M1)
