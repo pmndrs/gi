@@ -25,6 +25,9 @@
  * - `tod`        time of day on, at `hour,day` (sun time 0 to 24, day of the year 1 to 365); it also
  *                turns DDGI's sun layer on
  * - `motion`     a light motion of the scene (`light-sweep`, `light-step`) playing
+ * - `textures`   how model textures are kept on the GPU: `uncompressed`, or `all-compressed`; absent is
+ *                `compressed` (BC7/BC5 except the maps GI reads colours from until M4;
+ *                scene/compress-textures.ts). Read when the scene loads
  * - `reach`      metres of reach for many shadowless lights with no range (`sponza-candles`' candles),
  *                so three can cull them; `0` keeps them unranged (exact and very slow). Read when the
  *                scene loads (render/scene-lighting.ts)
@@ -36,6 +39,7 @@
 
 import { MAX_DEFAULT_EXPOSURE_EV } from '../../../../scenes/src/manifest';
 import type { GiTechniqueId, TechniqueId, UpscaleQuality } from '../techniques/types';
+import { TEXTURE_COMPRESSIONS, type TextureCompression } from '../scene/texture-compression-mode';
 
 /** Exposure range in stops, for links and the slider: the same range a manifest's default may use. */
 export const MAX_EXPOSURE_EV = MAX_DEFAULT_EXPOSURE_EV;
@@ -98,6 +102,8 @@ export interface ViewerUrlState {
     motion: string | null;
     /** Reach in metres for many unranged shadowless lights (render/scene-lighting.ts); null is the viewer's default. */
     lightReach: number | null;
+    /** How model textures are kept on the GPU (scene/compress-textures.ts). */
+    textures: TextureCompression;
     /** Scene settings by name (`candles=4096`), as written; the scene's manifest says which it reads. */
     sceneSettings: Record<string, string>;
 }
@@ -126,11 +132,12 @@ export const DEFAULT_URL_STATE: ViewerUrlState = {
     timeOfDay: null,
     motion: null,
     lightReach: null,
+    textures: 'compressed',
     sceneSettings: {},
 };
 
 /** The link's own names; any other name is a scene setting. */
-const URL_KEYS = new Set(['scene', 'camera', 'cam', 'technique', 'gi', 'wipe', 'split', 'ev', 'tone', 'nav', 'upscale', 'budget', 'probes', 'debug', 'probecolor', 'atlas', 'atlasfill', 'atlasev', 'change', 'groups', 'tod', 'motion', 'reach']);
+const URL_KEYS = new Set(['scene', 'camera', 'cam', 'technique', 'gi', 'wipe', 'split', 'ev', 'tone', 'nav', 'upscale', 'budget', 'probes', 'debug', 'probecolor', 'atlas', 'atlasfill', 'atlasev', 'change', 'groups', 'tod', 'motion', 'reach', 'textures']);
 
 const TECHNIQUES: readonly TechniqueId[] = ['none', 'ddgi', 'lpg', 'vxgi', 'cycles'];
 const GI_TECHNIQUES: readonly GiTechniqueId[] = ['ddgi', 'lpg', 'vxgi'];
@@ -203,6 +210,7 @@ export function parseUrlState(search: string): ViewerUrlState {
     if (motion && /^[a-z0-9-]+$/.test(motion)) state.motion = motion;
     const reach = finiteNumber(params.get('reach'));
     if (reach !== null && reach >= 0) state.lightReach = reach;
+    state.textures = TEXTURE_COMPRESSIONS.find((mode) => mode === params.get('textures')) ?? state.textures;
     return state;
 }
 
@@ -234,6 +242,7 @@ export function serializeUrlState(state: ViewerUrlState): string {
     if (state.timeOfDay) params.set('tod', `${state.timeOfDay.hour.toFixed(2)},${state.timeOfDay.dayOfYear}`);
     if (state.motion) params.set('motion', state.motion);
     if (state.lightReach !== null) params.set('reach', String(state.lightReach));
+    if (state.textures !== DEFAULT_URL_STATE.textures) params.set('textures', state.textures);
     for (const [name, value] of Object.entries(state.sceneSettings)) if (!URL_KEYS.has(name)) params.set(name, value);
     return params.toString();
 }

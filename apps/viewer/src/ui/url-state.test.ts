@@ -67,6 +67,17 @@ describe('url state', () => {
         expect(parseUrlState(serializeUrlState(state))).toEqual(state);
     });
 
+    it('reads and writes the texture compression (T3.12): compressed by default, the other modes by name', () => {
+        expect(parseUrlState('?scene=bistro-exterior').textures).toBe('compressed');
+        expect(parseUrlState('?textures=uncompressed').textures).toBe('uncompressed');
+        expect(parseUrlState('?textures=all-compressed').textures).toBe('all-compressed');
+        expect(parseUrlState('?textures=zip').textures).toBe('compressed');
+        expect(serializeUrlState({ ...DEFAULT_URL_STATE, scene: 'sponza' })).toBe('scene=sponza');
+        expect(serializeUrlState({ ...DEFAULT_URL_STATE, textures: 'uncompressed' })).toBe('textures=uncompressed');
+        // Not taken for a scene setting.
+        expect(parseUrlState('?textures=uncompressed').sceneSettings).toEqual({});
+    });
+
     it('reads the light settings (T2.8): light groups, time of day, a motion, the reach of many candles', () => {
         const state = parseUrlState('?scene=sponza&groups=4&tod=14.50,172&motion=light-sweep&reach=6');
         expect(state).toMatchObject({ lightGroups: 4, timeOfDay: { hour: 14.5, dayOfYear: 172 }, motion: 'light-sweep', lightReach: 6 });

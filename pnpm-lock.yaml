@@ -62,6 +62,9 @@ importers:
       '@pmndrs/upscaler':
         specifier: 0.5.0
         version: 0.5.0(three@0.187.0)
+      gputex:
+        specifier: 0.14.0
+        version: 0.14.0(three@0.187.0)
       three:
         specifier: 0.187.0
         version: 0.187.0
@@ -1035,6 +1038,14 @@ packages:
   globals@15.15.0:
     resolution: {integrity: sha512-7ACyT3wmyp3I61S4fG682L0VA2RGD9otkqGJIwNUMF1SWUombIIk+af1unuDYgMm082aHYwD+mzJvv9Iu8dsgg==}
     engines: {node: '>=18'}
+
+  gputex@0.14.0:
+    resolution: {integrity: sha512-Sa4/CMdxY6pbWAA2EzvEC4e4u+72lwkiwstcmkkPqDeWlRHCE7ynQPSEQPRyctFCmMKaqqFnGEe5xR4FYmjyOg==}
+    peerDependencies:
+      three: '>=0.170'
+    peerDependenciesMeta:
+      three:
+        optional: true
 
   has-flag@4.0.0:
     resolution: {integrity: sha512-EykJT/Q1KjTWctppgIAgfSO0tKVuZUjhgMr17kqTumMl6Afv3EISleU7qZUzoXDFTAHTDC4NOoG/ZxU3EvlMPQ==}
@@ -2151,6 +2162,10 @@ snapshots:
   globals@14.0.0: {}
 
   globals@15.15.0: {}
+
+  gputex@0.14.0(three@0.187.0):
+    optionalDependencies:
+      three: 0.187.0
 
   has-flag@4.0.0: {}
 
