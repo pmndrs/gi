@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { ProceduralScene, SceneInstanceData } from '../scene-data';
+import type { ProceduralScene, SceneInstanceData, SceneMeshData } from '../scene-data';
 import { buildCabinetRow, PANEL_THICKNESS_M } from './cabinet-row';
 import { buildCornellBox, CORNELL_DEPTH_M, CORNELL_HEIGHT_M, CORNELL_WIDTH_M } from './cornell-box';
 import {
@@ -222,9 +222,11 @@ describe('cabinet-row', () => {
 
 describe('triangle counts (recorded in PROGRESS)', () => {
     it('matches 12 triangles per box and 2 per quad', () => {
+        // Meshes of their own (the glass wall's boxes, the quad with a second uv set) count their own triangles.
+        const trianglesOf = (mesh: SceneMeshData) => (mesh.name === 'unit-quad' ? 2 : mesh.name === 'unit-box' ? 12 : mesh.indices.length / 3);
         for (const name of Object.keys(proceduralBuilders)) {
             const scene = buildProcedural(name);
-            const expected = scene.instances.reduce((total, instance) => total + (scene.meshes[instance.mesh].name === 'unit-quad' ? 2 : 12), 0);
+            const expected = scene.instances.reduce((total, instance) => total + trianglesOf(scene.meshes[instance.mesh]), 0);
             expect(triangleCount(scene)).toBe(expected);
         }
     });

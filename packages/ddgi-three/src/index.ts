@@ -23,5 +23,5 @@ export {
 } from './composite.ts';
 export { SceneSync, DEFAULT_EDIT_CHECKS_PER_FRAME, DEFAULT_OBJECTS_PER_FRAME, HOT_FRAMES, type SceneSyncOptions, type SyncFrameReport } from './scene-sync.ts';
 export { createGIRenderer, requestGIDevice, type GIDevice, type GIDeviceOptions, type GIRenderer, type GIRendererOptions } from './host.ts';
-export { GI_USER_DATA } from './user-data.ts';
+export { GI_MATERIAL_USER_DATA, GI_USER_DATA } from './user-data.ts';
 export type { PmndrsSkyLike } from './environment.ts';

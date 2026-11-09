@@ -8,20 +8,18 @@
  *   shared), with positions, indices (made up for non-indexed geometry),
  *   vertex normals, uv, uv1 (only when a material samples channel 1) and
  *   groups.
- * - **Materials:** one platform material per three material; textures as
- *   handles, one per three texture.
+ * - **Materials:** one platform material per three material (convert.ts,
+ *   `materialDescriptor`); one platform texture per three texture and
+ *   version, from its image, 8-bit data or compressed mips (`textureSource`).
+ *   The platform samples them at ray hits.
  * - **Instances:** one per `Mesh`, and one per instance of an
  *   `InstancedMesh` (its world matrix times the instance matrix; instances
  *   past `count` are hidden). Visibility includes the parents', as three
  *   draws it. `userData.giContributes` says whether an object takes part in GI
  *   rays (user-data.ts).
- * - **See-through meshes:** the core's tracer treats every surface as opaque
- *   until M4 (it doesn't read `blocksLight` per triangle yet), so a mesh whose
- *   materials *all* let light through (alpha-blended, glass, hidden; convert.ts)
- *   is sent with `contributesToGI: false`. Otherwise a decal with no diffuse
- *   colour would be a black sheet in GI. A mesh that mixes blocking and
- *   see-through materials stays in GI, all of it opaque, with a one-time
- *   warning naming it.
+ * - **See-through materials** (glass, alpha cutouts, blended decals) are
+ *   the platform's business: its rays honour `blocksLight`, `alphaMode` and
+ *   single-sidedness triangle by triangle (M4), so every mesh is sent whole.
  * - **Lights:** directional, point and spot, with `userData.giLightGroup`.
  *   Hidden lights are sent with intensity 0.
  * - **Environment:** environment.ts, fed with the `SkyMesh` and the sun found.
@@ -84,10 +82,9 @@
  */
 
 import { Matrix4, type Layers, type BufferAttribute, type BufferGeometry, type DirectionalLight, type InstancedMesh, type InterleavedBufferAttribute, type Light, type Material, type Mesh, type Object3D, type PointLight, type Scene, type Texture } from 'three';
-import type { ColorRGB, EnvironmentDescriptor, InstanceHandle, LightChanges, LightDescriptor, LightHandle, MaterialDescriptor, MaterialHandle, MeshHandle, SceneApi, TextureHandle } from '@pmndrs/ddgi-core';
-import { LIGHT_NUMBER_COUNT, MaterialSnapshot, type TextureAverages, PHYSICAL_DECAY, readLightNumbers, isSrgbTexture, lightDescriptor, luminance, materialDescriptor, materialSlotCount, meshDescriptor, textureSource, usesUvChannel1 } from './convert.ts';
+import type { EnvironmentDescriptor, InstanceHandle, LightChanges, LightDescriptor, LightHandle, MaterialDescriptor, MaterialHandle, MeshHandle, SceneApi, TextureHandle } from '@pmndrs/ddgi-core';
+import { LIGHT_NUMBER_COUNT, MaterialSnapshot, PHYSICAL_DECAY, readLightNumbers, lightDescriptor, luminance, materialDescriptor, materialSlotCount, meshDescriptor, textureDescriptor, unreadableTextureReason, usesUvChannel1 } from './convert.ts';
 import { EnvironmentSync, type EnvironmentSources, type PmndrsSkyLike, type SkyMeshLike, type Warn } from './environment.ts';
-import { diffuseAverage, textureAverage, type DiffuseAverageMethod } from './texture-average.ts';
 import { contributesFlag, contributesToGI } from './user-data.ts';
 
 /** Floats in a 4x4 matrix. */
@@ -187,13 +184,6 @@ interface ObjectRecord {
     readonly visible: boolean[];
     /** The object's GI flag (`userData.giContributes`, user-data.ts) when it was created. */
     readonly contributes: boolean;
-    /**
-     * Every material let light through (`blocksLight: false`) when it was
-     * created, so its instances are sent with `contributesToGI: false` (see
-     * the file header). Compared with the materials' sent descriptors to
-     * notice a change ({@link seeThroughChanged}).
-     */
-    readonly seeThrough: boolean;
     /** Fixed facts about the object, read once. */
     readonly instanced: boolean;
     readonly skinned: boolean;
@@ -357,28 +347,6 @@ export class SceneSync {
     private readonly materials = new Map<Material, MaterialRecord>();
     private readonly textures = new Map<Texture, TextureRecord>();
     private readonly textureHandleUsers = new Map<TextureHandle, number>();
-    /** Texture averages for GI (texture-average.ts), each made once per texture version and kept. */
-    private readonly colorAverages = new WeakMap<Texture, { readonly version: number; readonly average: ColorRGB | undefined }>();
-    private readonly diffuseAverages = new Map<string, ColorRGB | undefined>();
-    /** How many materials' diffuse factors were made each way (texture-average.ts says what each means). */
-    readonly diffuseAverageMethods: Record<DiffuseAverageMethod, number> = { 'per-texel': 0, 'separate-averages': 0, 'albedo-map': 0, 'metalness-map': 0 };
-    private readonly textureAverages: TextureAverages = {
-        color: (texture) => {
-            const cached = this.colorAverages.get(texture);
-            if (cached && cached.version === texture.version) return cached.average;
-            const average = textureAverage(texture);
-            this.colorAverages.set(texture, { version: texture.version, average });
-            return average;
-        },
-        diffuse: (map, metalnessMap, metalness, sameUv) => {
-            const key = `${map?.uuid}:${map?.version}:${metalnessMap?.uuid}:${metalnessMap?.version}:${metalness}:${sameUv}`;
-            if (this.diffuseAverages.has(key)) return this.diffuseAverages.get(key);
-            const result = diffuseAverage(map, metalnessMap, metalness, sameUv);
-            if (result) this.diffuseAverageMethods[result.method]++;
-            this.diffuseAverages.set(key, result?.factor);
-            return result?.factor;
-        },
-    };
     private readonly objects = new Map<Object3D, ObjectRecord>();
     private readonly lights = new Map<Light, LightRecord>();
     /** Arrays beside the maps, walked by index each frame: a Map or Set iterator is an allocation. */
@@ -459,22 +427,26 @@ export class SceneSync {
 
     /**
      * The GI material last sent to the platform for a three material, or
-     * undefined if no mirrored mesh uses it. It shows what GI actually sees
-     * (texture averages and the metalness fold applied), for checks that must
-     * give another renderer the same constants (the Sponza accuracy page).
+     * undefined if no mirrored mesh uses it: what GI actually sees, for
+     * checks that must give another renderer the same values.
      */
     sentMaterial(material: Material): MaterialDescriptor | undefined {
         return this.materials.get(material)?.sent;
     }
 
     /**
-     * Whether a mirrored mesh was left out of GI's rays because all its
-     * materials let light through (see the file header), or undefined if the
-     * mesh isn't mirrored. For checks that must give another renderer the
-     * same scene (the Sponza accuracy page).
+     * Whether a mirrored mesh's instances were sent into GI's rays
+     * (`contributesToGI`), or undefined if the mesh isn't mirrored. Since M4
+     * that is `userData.giContributes` alone: no mesh is left out for its
+     * materials.
      */
-    sentSeeThrough(mesh: Mesh): boolean | undefined {
-        return this.objects.get(mesh)?.seeThrough;
+    sentContributes(mesh: Mesh): boolean | undefined {
+        return this.objects.get(mesh)?.contributes;
+    }
+
+    /** The platform texture last made for a three texture, or undefined if none is (not used, or not readable). */
+    sentTexture(texture: Texture): TextureHandle | undefined {
+        return this.textures.get(texture)?.handle;
     }
 
     /** How many times the environment was sent, and how many textures uploaded for it. */
@@ -685,8 +657,6 @@ export class SceneSync {
             // Edits too, now rather than when the round robin gets to them.
             this.checkGeometry(record.geometry);
             for (const material of record.materials) this.checkMaterial(material);
-            // An edit that made the mesh see-through, or no longer see-through, changes its instances' GI flag.
-            if (seeThroughChanged(record)) this.restartObject(record, visible);
         }
         for (const child of object.children) this.visitMarked(child, visible && child.visible);
     }
@@ -739,8 +709,8 @@ export class SceneSync {
             // A new geometry: the contract has no setter for an instance's mesh, so start over.
             this.destroyObject(record);
             record = undefined;
-        } else if (record && source !== 'walk' && (record.contributes !== contributesFlag(mesh, record.skinned) || seeThroughChanged(record))) {
-            // A changed GI flag, or materials that changed whether the mesh blocks any light: new instances.
+        } else if (record && source !== 'walk' && record.contributes !== contributesFlag(mesh, record.skinned)) {
+            // A changed GI flag: new instances.
             record = this.restartObject(record, visible);
             if (!record) return;
         }
@@ -749,12 +719,8 @@ export class SceneSync {
             if (!record) return;
             if (source !== 'walk') this.makeHot(record);
         } else {
-            const materialsChanged = (mesh.material !== record.materialKey || Array.isArray(mesh.material)) && this.checkMaterials(record);
-            if (materialsChanged && seeThroughChanged(record)) {
-                // New materials that change whether the mesh blocks any light: its instances' GI flag changes, so start over.
-                record = this.restartObject(record, visible);
-                if (!record) return;
-            } else if (this.checkInstances(record, visible) || source === 'marked') {
+            if (mesh.material !== record.materialKey || Array.isArray(mesh.material)) this.checkMaterials(record);
+            if (this.checkInstances(record, visible) || source === 'marked') {
                 this.makeHot(record);
             }
         }
@@ -782,13 +748,6 @@ export class SceneSync {
             materials.push(this.acquireMaterial(material));
         }
         const instanced = (mesh as InstancedMesh).isInstancedMesh ? (mesh as InstancedMesh) : null;
-        const seeThrough = seeThroughOnly(materials);
-        if (contributes && !seeThrough && materials.some((material) => material.sent.blocksLight === false)) {
-            this.warnOnce(
-                `mesh "${mesh.name || geometryRecord.geometry.name || mesh.uuid}" mixes materials that block light with see-through ones (alpha-blended, glass or hidden); ` +
-                    'GI treats all of it as opaque until see-through surfaces are traced (M4).',
-            );
-        }
         const record: ObjectRecord = {
             object: mesh,
             geometry: geometryRecord,
@@ -800,7 +759,6 @@ export class SceneSync {
             matrixSlot: -1,
             visible: [],
             contributes,
-            seeThrough,
             instanced: instanced !== null,
             skinned: (mesh as Mesh & { isSkinnedMesh?: boolean }).isSkinnedMesh === true,
             parentMatrix: new Float64Array(MATRIX_FLOATS),
@@ -830,7 +788,7 @@ export class SceneSync {
             mesh: record.geometry.handle,
             materials: record.materials.map((material) => material.handle),
             transform,
-            contributesToGI: record.contributes && !record.seeThrough,
+            contributesToGI: record.contributes,
             visible,
             label: record.object.name || undefined,
         });
@@ -1070,9 +1028,8 @@ export class SceneSync {
         for (let check = 0; check < Math.min(this.editChecksPerFrame, objects.length); check++) {
             this.objectCursor = (this.objectCursor + 1) % objects.length;
             const record = objects[this.objectCursor];
-            // A changed flag, or edited materials that changed whether it blocks any light: start the object over, through the
-            // marked path, next update. (After the material checks, so an edit they found this frame is acted on next update.)
-            if (record.contributes !== contributesFlag(record.object, record.skinned) || seeThroughChanged(record)) this.marked.add(record.object);
+            // A changed flag: start the object over, through the marked path, next update.
+            if (record.contributes !== contributesFlag(record.object, record.skinned)) this.marked.add(record.object);
         }
     }
 
@@ -1089,7 +1046,7 @@ export class SceneSync {
         const snapshot = new MaterialSnapshot();
         snapshot.read(material);
         const textureHandles: TextureHandle[] = [];
-        const descriptor = materialDescriptor(material, (texture) => this.textureHandleFor(texture, textureHandles), this.textureAverages);
+        const descriptor = materialDescriptor(material, (texture) => this.textureHandleFor(texture, textureHandles), { warn: this.warnOnce });
         this.useTextureHandles(textureHandles);
         const record: MaterialRecord = {
             material,
@@ -1114,7 +1071,7 @@ export class SceneSync {
         this.materialsWithEnvMap += (record.scratch.envMap ? 1 : 0) - (record.snapshot.envMap ? 1 : 0);
         [record.snapshot, record.scratch] = [record.scratch, record.snapshot];
         const textureHandles: TextureHandle[] = [];
-        const descriptor = materialDescriptor(record.material, (texture) => this.textureHandleFor(texture, textureHandles), this.textureAverages);
+        const descriptor = materialDescriptor(record.material, (texture) => this.textureHandleFor(texture, textureHandles), { warn: this.warnOnce });
         this.useTextureHandles(textureHandles);
         // Every field, so a removed texture or cutoff is cleared too.
         this.api.updateMaterial(record.handle, descriptor);
@@ -1136,8 +1093,10 @@ export class SceneSync {
 
     /**
      * The platform texture for a three texture, made when first needed and
-     * again when the texture's version changes (new pixels). Undefined while
-     * it has no readable pixels (still loading, compressed, a render target).
+     * again when the texture's version changes (new pixels: three bumps it on
+     * `needsUpdate`, and the material snapshot holds it, so the edit checks
+     * find it). Undefined while it has no readable pixels: still loading, or
+     * a kind GI doesn't read (a render target, say), with a warning.
      */
     private textureHandleFor(texture: Texture, collect: TextureHandle[]): TextureHandle | undefined {
         const existing = this.textures.get(texture);
@@ -1145,13 +1104,13 @@ export class SceneSync {
             collect.push(existing.handle);
             return existing.handle;
         }
-        const source = textureSource(texture);
-        if (!source) {
-            const flags = texture as Texture & { isCompressedTexture?: boolean };
-            if (flags.isCompressedTexture) this.warnOnce('compressed textures are not read for GI yet (M4); those materials use their colour only.');
+        const descriptor = textureDescriptor(texture);
+        if (!descriptor) {
+            const reason = unreadableTextureReason(texture);
+            if (reason) this.warnOnce(reason);
             return undefined;
         }
-        const handle = this.api.createTexture({ source, srgb: isSrgbTexture(texture), label: texture.name || undefined });
+        const handle = this.api.createTexture(descriptor);
         this.textures.set(texture, { texture, handle, version: texture.version });
         // A handle no material uses yet would never be destroyed: count it as used until the caller takes it.
         this.textureHandleUsers.set(handle, 0);
@@ -1342,23 +1301,6 @@ function removeFromList<Entry extends { listIndex: number }>(list: Entry[], entr
 }
 
 /**
- * World matrices in one growing Float64Array, 16 numbers per slot. Plain
- * meshes keep their last-sent matrix here rather than in an array each, so
- * comparisons read memory in order (meshes take slots in the order the walk
- * first meets them) instead of a scattered array per mesh.
- */
-/** Whether every material lets light through (`blocksLight: false`), as last sent. */
-function seeThroughOnly(materials: readonly MaterialRecord[]): boolean {
-    for (const material of materials) if (material.sent.blocksLight !== false) return false;
-    return true;
-}
-
-/** Whether the object's materials, as last sent, no longer match the see-through state its instances were made with. */
-function seeThroughChanged(record: ObjectRecord): boolean {
-    return record.seeThrough !== seeThroughOnly(record.materials);
-}
-
-/**
  * Transforms collected during one `update`, sent with one `setTransforms`
  * call: handles and matrices in typed arrays that grow as needed and are
  * reused frame after frame, so a frame with movers allocates nothing once
@@ -1399,8 +1341,13 @@ class TransformBatch {
     }
 }
 
+/**
+ * World matrices in one growing Float64Array, 16 numbers per slot. Plain
+ * meshes keep their last-sent matrix here rather than in an array each, so
+ * comparisons read memory in order (meshes take slots in the order the walk
+ * first meets them) instead of a scattered array per mesh.
+ */
 class MatrixPool {
-
     values = new Float64Array(64 * MATRIX_FLOATS);
     private readonly free: number[] = [];
     private used = 0;
