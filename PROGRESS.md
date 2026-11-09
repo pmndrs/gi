@@ -21,6 +21,18 @@ Rules:
 
 ---
 
+## 2026-11-09 · T3.11 · wrangler (sonnet) · BLOCKED, needs a ruling
+Did: nothing committed. Searched for a permissive 20,000–100,000 triangle tree. Poly Haven (CC0, the only source with a plain download URL) has no tree in range: every tree is 154k–17 M triangles (api.polyhaven.com/assets?t=models&c=trees). The existing courtyard-tree asset (tree_small_02) is trunk 28k + twigs 95k + leaves 1.94 M triangles, so cutting it down to 100k would mean deleting most of the foliage. Sketchfab needs a login to download, GitHub and OpenGameArt blocked from here. Blender 4.2/4.5/5.x have no Sapling Tree Gen installed (it is an online extension, GPL); fetching it is a tool download, not the asset.
+Verified: triangle counts read from the glTF accessors and the Poly Haven API. Nothing GPU-related run.
+Not verified: no courtyard load, no screenshot (no asset).
+Next: Dennis or lead to pick: (a) a generator of our own (TS, deterministic, MIT, trunk and leaf cards as separate materials, wind weight in COLOR_0), but sources.json requires a download URL for every asset, so it needs a small schema allowance for generated assets; (b) allow downloading Sapling Tree Gen from extensions.blender.org and run it headless (GPL add-on, output ours); (c) a Sketchfab CC0 or CC BY model fetched by hand with a login; (d) decimate tree_small_02 (CC0) down to about 80k, keeping trunk, branches and a sample of the leaves.
+
+## 2026-11-09 · T3.11 · wrangler (sonnet) · BLOCKED, needs a ruling
+Did: nothing committed. Searched for a permissive 20,000–100,000 triangle tree. Poly Haven (CC0, the only source with a plain download URL) has no tree in range: every tree is 154k–17 M triangles (api.polyhaven.com/assets?t=models&c=trees). The existing courtyard-tree asset (tree_small_02) is trunk 28k + twigs 95k + leaves 1.94 M triangles, so cutting it to 100k would remove most of the foliage. Sketchfab needs a login to download; GitHub code search and OpenGameArt were blocked from here. Blender 4.2/4.5/5.x have no Sapling Tree Gen installed (it is an online GPL extension); fetching it is a tool download, not the asset.
+Verified: triangle counts read from the glTF accessors and the Poly Haven API. No GPU run.
+Not verified: no courtyard load, no screenshot (no asset).
+Next: Dennis or lead to pick: (a) a generator of our own (TS, deterministic, MIT, trunk and leaf cards as separate materials, wind weight in COLOR_0); sources.json requires a download URL for every asset, so it needs a small schema allowance for generated assets; (b) allow fetching Sapling Tree Gen from extensions.blender.org and run it headless (GPL add-on, output ours); (c) a Sketchfab CC0 or CC BY model fetched by hand with a login; (d) decimate tree_small_02 (CC0) to about 80k, keeping trunk, branches and a sample of the leaves.
+
 ## 2026-11-09 · T2.10 review fixes: the up-to-date M2 table · lead (opus)
 Did: answered the Opus review of T2.10 (fail, 3 blocking points) by putting one up-to-date table here, on M2's final code (`m2-t2.10`, with T2.17 and T2.18), and recording the known misses in DECISIONS (on `m2`, 2026-11-09). This replaces the earlier T2.10 tables where they differ. RTX 3060 Laptop, headless Chrome 157, about 780–830 MHz (the Bistro rows: a fixed 1,200 MHz).
 | Target | Final number | Verdict |
