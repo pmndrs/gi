@@ -4,6 +4,12 @@ Settled choices, newest first. Each entry is short: the decision, why, and what 
 
 ## 2026-11-09
 
+- **M4 answers** (Dennis, 2026-11-09, through the orchestrator's form; his choices quoted). The design is [docs/design/m4-materials.md](design/m4-materials.md), at prototype level: done-whens are correctness and the look; costs are noted, not gated.
+  - *Who builds it:* "M4 session leads now (Recommended)". M4 runs beside M3 on branch `m4` (from `m2` at 5de856b), with the file split agreed with the M3 lead (TASKS on `m3`, acd2163: M4 changes only material-record words in `scene/layout.ts`, and one call in `trace/wgsl.ts`'s leaf test).
+  - *Blended materials:* "Stochastic (Recommended)". A GI ray passes a blended surface (three's `transparent` without `alphaTest`, glTF `BLEND`) with probability 1 − alpha, alpha = opacity × texture alpha. Glass (`transmission` > 0) still lets all light through. *Why:* the right average over many rays, the same cost as a cutout, and DDGI's blending smooths the noise. *Revisit if* the stability threshold fails on Sponza's cypresses: then blended materials with an alpha texture become a cutout at 0.5.
+  - *Vertex colours:* "Later (Recommended)". They need a mesh-layout word, which M3's T3.3 also changes, and no test scene is known to need them.
+  - *Also settled by the design (lead):* texture arrays of 256² layers instead of an atlas (no gutters, clean mips per layer, no recompiles on growth); upstream gputex is enough for three's own textures (T3.12), the HomeFig fork isn't needed.
+
 - **M2 sign-off answers** (Dennis, 2026-11-09, through the orchestrator's form; his choices quoted).
   - *The fork push:* "Lead pushes (Recommended)". The lead pushed branch `m2-t2.7` (665ef06, 3d6cd8e, 350f9de) to DennisSmolek/ddgi-rtxgi, and `m2-t2.10` was merged into `m2`.
   - *The Chrome 157 clock:* "Accept as floor (Recommended)". M2's numbers are a low-clock floor, with the clock recorded beside each (about 780–830 MHz for our pages; the Bistro re-runs at a fixed 1,200 MHz). M3's measurements (T3.9) re-time the clock-sensitive gates if the clock comes back.

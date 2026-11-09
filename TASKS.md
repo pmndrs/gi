@@ -479,6 +479,18 @@ Status: **draft, from T2.11 (2026-11-09).** Starts when Dennis signs off M2 (PR 
 | T3.18 | `userData.giRange` in the three adapter, so a host can cull a light in three without shortening its GI range (T2.8's candle reach). Host-facing API: the main session designs it first | main session, then implementer | S | none | todo |
 | T3.19 | Test flakes: `tools/assets/fetch.test.ts` and two other unit tests time out at 5 s when the CPU is busy (carried from M1 and seen again in M2); the Intel UHD hangs on the 4th page of 4-page GPU batches (run batches of 3 or fewer) | implementer | S | none | todo |
 
+## M4: real materials and scenes (prototype)
+
+Status: **started 2026-11-09** on branch `m4` (from `m2` at 5de856b), beside M3. The design is [docs/design/m4-materials.md](docs/design/m4-materials.md); its "Tasks" section has the done-whens, and its "Files and M3" table lists what each task touches. Prototype level (Dennis, 2026-11-09): done-whens are correctness and the look, costs are noted and never gated, no VALID runs. One fix attempt for a missed check, then a known miss in DECISIONS. Opus review before a task is merged into `m4`. Answers: DECISIONS 2026-11-09, "M4 answers".
+
+| ID | Task | Agent | Size | Depends on | Status |
+| --- | --- | --- | --- | --- | --- |
+| T4.1 | Texture store and textured hits: store (texture array, 256² layers), four sources incl. compressed mips, `gi/texture-store`, uv mapping and ray-cone mip in `giSurfaceAt`, albedo/emissive/metalness at hits, the contract additions | implementer | M | none | in progress (worktree `webgpu-ddgi-m4-t41`, branch `m4-t4.1`) |
+| T4.2 | Materials in the walk: consult and instance flags, `giMaterialPasses`, `gi/triangle-flags`; see-through and single-sided first, then cutout and stochastic; CPU reference | implementer | M | T4.1 for cutouts and stochastic | in progress, see-through half (worktree `webgpu-ddgi-m4-t42`, branch `m4-t4.2`) |
+| T4.3 | three adapter materials v2 (design section 4): real textures incl. `CompressedTexture`, fold and mesh exclusion removed | implementer | M | T4.1, T4.2 | todo |
+| T4.4 | Textured scenes: four procedural ones, every real scene textured, textured Cycles HD references, debug views | wrangler + implementer | M | none (pages need T4.1) | in progress (worktree `webgpu-ddgi-m4-t44`, branch `m4-t4.4`) |
+| T4.5 | M4 check and note, with Dennis's look | main session + gpu-tester | S | all; T3.12 for Bistro | todo |
+
 ## Carried to M2 (collected during M1)
 
 - `sponza-candles`: an opt-in scene with a stated subset of Intel's 10,000 candle lights, for the many-lights stress test (DECISIONS 2026-11-05).
