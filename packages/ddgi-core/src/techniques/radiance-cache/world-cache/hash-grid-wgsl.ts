@@ -40,7 +40,7 @@ THE SOFTWARE.
  * - `InterlockedCompareExchange` is strong; WGSL has only
  *   `atomicCompareExchangeWeak`, which may fail with the slot still empty, so
  *   the insert retries that slot until the exchange happens or the slot holds
- *   a tile (register D21; same result).
+ *   a tile (register D22; same result).
  * - The filtered readbacks drop their debug-view argument (Capsaicin's debug
  *   views are not part of the baseline).
  * - `g_Eye` and `g_FrameIndex` (GI1's own constants) ride in the hash grid's
@@ -205,7 +205,7 @@ const HASHGRIDCACHE_VISIBILITYCOUNTBUFFER0: u32 = ${HASH_GRID_COUNTER.visibility
 const HASHGRIDCACHE_VISIBILITYCOUNTBUFFER1: u32 = ${HASH_GRID_COUNTER.visibilityCount1}u;
 const HASHGRIDCACHE_VISIBILITYRAYCOUNTBUFFER: u32 = ${HASH_GRID_COUNTER.visibilityRayCount}u;
 const HASHGRIDCACHE_RESOLVECOUNTBUFFER: u32 = ${HASH_GRID_COUNTER.resolveCount}u;
-const HASHGRIDCACHE_BUCKETOVERFLOWCOUNT: u32 = ${HASH_GRID_COUNTER.bucketOverflowCount}u;  // ours (register D22)
+const HASHGRIDCACHE_BUCKETOVERFLOWCOUNT: u32 = ${HASH_GRID_COUNTER.bucketOverflowCount}u;  // ours (register D23)
 const HASHGRIDCACHE_HASHBUFFER: u32 = ${words.hashBuffer}u;
 const HASHGRIDCACHE_DECAYTILEBUFFER: u32 = ${words.decayTileBuffer}u;
 const HASHGRIDCACHE_PACKEDTILEINDEXBUFFER0: u32 = ${words.packedTileIndexBuffer0}u;
@@ -385,7 +385,7 @@ struct HashGridCache_InsertResult {
 
 // InterlockedCompareExchange(g_HashGridCache_HashBuffer[tile_index], 0, tile_hash, previous_hash):
 // the slot's value before the call. WGSL's exchange is weak (it may fail although the slot held
-// 0), so a failure that still saw 0 tries again (register D21).
+// 0), so a failure that still saw 0 tries again (register D22).
 fn HashGridCache_CompareExchangeEmptySlot(tile_index: u32, tile_hash: u32) -> u32 {
     loop {
         let exchange = atomicCompareExchangeWeak(&g_HashGridCache_TileWords[HASHGRIDCACHE_HASHBUFFER + tile_index], 0u, tile_hash);
@@ -397,7 +397,7 @@ fn HashGridCache_CompareExchangeEmptySlot(tile_index: u32, tile_hash: u32) -> u3
 
 // Inserts a new radiance cell inside the current frame hash-grid cache (:248-278): the first
 // slot of the bucket that is empty (claimed) or already holds this tile (found). A bucket full of
-// other tiles refuses the cell, and the refusal is counted (register D22).
+// other tiles refuses the cell, and the refusal is counted (register D23).
 fn HashGridCache_InsertCell(data: HashGridCache_Data) -> HashGridCache_InsertResult {
     var bucket_offset: u32;
     var is_new_tile = false;
@@ -567,14 +567,14 @@ fn HashGridCache_FilteredRadianceDirect(cell_index_mip0: u32) -> vec4f {
 
 // ---- The world-cache lookup (world-cache.ts, WorldCacheLookup) ----
 
-// A ray length no tile reaches: the key's short-ray flag is 0 for it (register D23).
+// A ray length no tile reaches: the key's short-ray flag is 0 for it (register D24).
 const HASHGRIDCACHE_LOOKUP_HIT_DISTANCE: f32 = 3.0e38;
 
 // As Capsaicin's reflections read the cache (gi1.comp:2866-2899): find the cell, touch its tile,
 // and take the filtered direct value plus, with multibounce, the filtered indirect value, each
 // divided by its sample count. Unlike there, the position is not jittered across the cell (the
 // caller has the random numbers for that), and the ray is taken as longer than a tile, since the
-// lookup isn't given its length (register D23). The normal is for a cache that needs it; the hash
+// lookup isn't given its length (register D24). The normal is for a cache that needs it; the hash
 // grid's key has none. Weight 1 where the cell is in the cache (even with no samples yet, as
 // Capsaicin uses it), 0 where it isn't.
 fn worldCacheLookup(position: vec3f, normal: vec3f, direction: vec3f) -> vec4f {
@@ -610,7 +610,7 @@ export const HASH_GRID_KERNEL_GROUP = 1;
  * `ClearCounters` (gi1.comp:162-185), the hash grid's half: this frame's
  * packed tile count and the per-frame counters. Capsaicin's kernel clears the
  * screen probes' and reflections' counters in the same thread; the screen
- * cache has its own. The overflow counter is ours (register D22).
+ * cache has its own. The overflow counter is ours (register D23).
  */
 export function clearCountersWgsl(layout: HashGridCacheBufferLayout): string {
     return /* wgsl */ `

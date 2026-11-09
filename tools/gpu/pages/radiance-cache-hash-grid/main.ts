@@ -16,6 +16,12 @@
  * 3. **Insert then find:** 256 random hits inserted and found again, each in
  *    its own bucket's slots, with the CPU's cell index, the packed tile list
  *    and decay stamps right.
+ * 1b. **Probe-ray layout:** a ray written at byte 16 + 48 × index reads back
+ *    field by field through `WorldCacheProbeRays` (the world cache's struct).
+ * 3b. **Near-boundary hits** (the ones section 2 leaves out): insert and find
+ *    land on the same cell for every one; how many the GPU keys differently
+ *    from the CPU is reported as information. Then `reset()` empties the
+ *    cache: every find misses, the packed list is empty, an insert is new.
  * 4. **Collision:** two tiles that share a bucket (found by the CPU) both
  *    inserted and both found, in slots 0 and 1.
  * 5. **Full bucket:** 16 tiles fill a bucket; the 17th is refused, counted
@@ -53,10 +59,17 @@ import {
     type HashGridCacheDesc,
     type HashGridCacheDescConstants,
 } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/hash-grid-cpu.ts';
-import type { WorldCacheContext, WorldCacheFrame, WorldCacheProbeRays } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/world-cache.ts';
+import {
+    WORLD_CACHE_PROBE_RAY_BYPASS,
+    WORLD_CACHE_PROBE_RAY_BYTES,
+    WORLD_CACHE_PROBE_RAYS_HEADER_BYTES,
+    type WorldCacheContext,
+    type WorldCacheFrame,
+    type WorldCacheProbeRays,
+} from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/world-cache.ts';
 import { assert, drainDevice, reportGpuTest, summarizeAdapterInfo, watchDevice } from '../../client.ts';
 import { releaseDeviceOnPageHide } from '../ddgi-shared/harness.ts';
-import { COUNTER, createTestIo, createTestKernels, HIT_WORDS, RESULT_WORDS, TEST_WORKGROUP_SIZE, type TestIo, type TestKernel, type TestKernelName } from './test-kernels.ts';
+import { COUNTER, createProbeRayReader, createTestIo, createTestKernels, HIT_WORDS, PROBE_RAY_READ_WORDS, RESULT_WORDS, TEST_WORKGROUP_SIZE, type TestIo, type TestKernel, type TestKernelName } from './test-kernels.ts';
 
 const f32 = Math.fround;
 
@@ -252,6 +265,84 @@ try {
     const io: TestIo = createTestIo(device, MAX_INPUT_WORDS, MAX_RESULT_WORDS);
     const testKernels = await createTestKernels(device, kernels, cache, io);
 
+    // ---- 1b. The probe-ray layout: a ray written at its byte offset reads back through WorldCacheProbeRays ----
+    {
+        const rayCount = 7;
+        const rayIndex = 5;
+        const bytes = new ArrayBuffer(WORLD_CACHE_PROBE_RAYS_HEADER_BYTES + rayCount * WORLD_CACHE_PROBE_RAY_BYTES);
+        const view = new DataView(bytes);
+        view.setUint32(0, rayCount, true);
+        for (let word = 1; word < WORLD_CACHE_PROBE_RAYS_HEADER_BYTES / 4; word++) view.setUint32(word * 4, 0xdeadbeef, true);
+        // Every ray distinct, so a ray read at the wrong offset shows.
+        const half = { half: 0x3800, minusHalf: 0xb800, z: 0x39a8 } as const; // 0.5, -0.5, 0.70703125 (exact in halves)
+        for (let ray = 0; ray < rayCount; ray++) {
+            const base = WORLD_CACHE_PROBE_RAYS_HEADER_BYTES + ray * WORLD_CACHE_PROBE_RAY_BYTES;
+            view.setFloat32(base + 0, 10 + ray, true);
+            view.setFloat32(base + 4, 20 + ray, true);
+            view.setFloat32(base + 8, 30 + ray, true);
+            view.setUint32(base + 12, ray === rayIndex ? WORLD_CACHE_PROBE_RAY_BYPASS : 0, true);
+            view.setUint32(base + 16, half.half | (half.minusHalf << 16), true);
+            view.setUint32(base + 20, ray === rayIndex ? half.z : 0, true);
+            view.setFloat32(base + 24, 1.5 + ray, true);
+            view.setUint32(base + 28, 100 + ray, true);
+            view.setUint32(base + 32, 200 + ray, true);
+            view.setUint32(base + 36, ray % 2, true);
+            view.setFloat32(base + 40, 0.25, true);
+            view.setFloat32(base + 44, 0.125 * ray, true);
+        }
+        const rays = device.createBuffer({ label: 'probe-ray layout rays', size: bytes.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+        const index = device.createBuffer({ label: 'probe-ray layout index', size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+        const words = device.createBuffer({ label: 'probe-ray layout words', size: PROBE_RAY_READ_WORDS * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
+        device.queue.writeBuffer(rays, 0, bytes);
+        device.queue.writeBuffer(index, 0, new Uint32Array([rayIndex, 0, 0, 0]));
+        const reader = await createProbeRayReader(kernels);
+        const encoder = device.createCommandEncoder({ label: 'probe-ray layout' });
+        const pass = encoder.beginComputePass({ label: 'probe-ray layout' });
+        reader.bind(pass);
+        pass.setBindGroup(1, device.createBindGroup({
+            label: 'probe-ray layout',
+            layout: reader.ownLayouts[0],
+            entries: [
+                { binding: 0, resource: { buffer: index } },
+                { binding: 1, resource: { buffer: rays } },
+                { binding: 2, resource: { buffer: words } },
+            ],
+        }));
+        pass.dispatchWorkgroups(1);
+        pass.end();
+        device.queue.submit([encoder.finish()]);
+        const read = await readWords(device, words, 0, PROBE_RAY_READ_WORDS);
+        const asFloat = (word: number): number => new Float32Array(new Uint32Array([word]).buffer)[0];
+        const got = {
+            count: read[0],
+            origin: [asFloat(read[1]), asFloat(read[2]), asFloat(read[3])],
+            flags: read[4],
+            direction: [asFloat(read[5]), asFloat(read[6]), asFloat(read[7])],
+            hitT: asFloat(read[8]),
+            hitInstance: read[9],
+            hitTriangle: read[10],
+            hitFrontFace: read[11],
+            hitBarycentrics: [asFloat(read[12]), asFloat(read[13])],
+        };
+        const expected = {
+            count: rayCount,
+            origin: [10 + rayIndex, 20 + rayIndex, 30 + rayIndex],
+            flags: WORLD_CACHE_PROBE_RAY_BYPASS,
+            direction: [0.5, -0.5, 0.70703125],
+            hitT: 1.5 + rayIndex,
+            hitInstance: 100 + rayIndex,
+            hitTriangle: 200 + rayIndex,
+            hitFrontFace: rayIndex % 2,
+            hitBarycentrics: [0.25, 0.125 * rayIndex],
+        };
+        assert(JSON.stringify(got) === JSON.stringify(expected), `ray ${rayIndex} read through WorldCacheProbeRays as ${JSON.stringify(got)}, written as ${JSON.stringify(expected)}`);
+        rays.destroy();
+        index.destroy();
+        words.destroy();
+        data.probeRayLayout = { headerBytes: WORLD_CACHE_PROBE_RAYS_HEADER_BYTES, rayBytes: WORLD_CACHE_PROBE_RAY_BYTES, rayIndex, readBack: 'equal' };
+        log(`probe-ray layout: ray ${rayIndex} written at byte ${WORLD_CACHE_PROBE_RAYS_HEADER_BYTES + rayIndex * WORLD_CACHE_PROBE_RAY_BYTES} reads back through WorldCacheProbeRays field by field`);
+    }
+
     const rayBuffer = device.createBuffer({ label: 'no probe rays', size: 64, usage: GPUBufferUsage.STORAGE });
     const radianceBuffer = device.createBuffer({ label: 'no radiance', size: 16, usage: GPUBufferUsage.STORAGE });
     const noRays: WorldCacheProbeRays = { buffer: rayBuffer, count: { buffer: rayBuffer, offset: 0 }, capacity: 1, radiance: { buffer: radianceBuffer } };
@@ -302,6 +393,9 @@ try {
     const descOf = (hit: TestHit): HashGridCacheDesc =>
         hashGridCacheGetDesc({ eyePosition: EYE, hitPosition: hit.position, direction: hit.direction, hitDistance: hit.hitDistance }, descConstants());
 
+    /** The random hits section 2 leaves out near a rounding boundary; section 3b inserts them. */
+    let nearBoundaryHits: TestHit[] = [];
+
     // ---- 2. Hashes and descriptors against the CPU port ----
     {
         const random = seeded(31);
@@ -332,6 +426,7 @@ try {
             candidates.push(toF32Hit(position, [random() - 0.5, random() - 0.5, random() - 0.5], random() * 8));
         }
         const hits = candidates.filter((hit) => clearOfBoundaries(hit, constants));
+        nearBoundaryHits = candidates.filter((hit) => !hits.includes(hit));
         for (const hit of fixed) assert(hits.includes(hit), `fixed hit ${JSON.stringify(hit.position)} is near a boundary; move it`);
         runKernel('descriptors', encodeHits(hits), hits.length);
         const descriptors = await results(hits.length * RESULT_WORDS.descriptors);
@@ -400,6 +495,49 @@ try {
         log(`insert then find: ${hits.length} hits in ${tileOfKey.size} tiles, all found where inserted, packed list and stamps right`);
     }
 
+    // ---- 3b. Hits near a rounding boundary: insert and find agree; then a reset empties the cache ----
+    {
+        clearCache();
+        encodeFrame(1500);
+        const hits = nearBoundaryHits;
+        assert(hits.length > 0, 'section 2 left no hits out near a boundary');
+        const input = encodeHits(hits);
+        runKernel('insert', input, hits.length);
+        const inserted = await results(hits.length * RESULT_WORDS.insert);
+        runKernel('find', input, hits.length);
+        const found = await results(hits.length * RESULT_WORDS.find);
+        // Insert and find run the same descriptor code on the same GPU, so they must land on the same cell
+        // whichever way a floor near its boundary rounds.
+        for (let index = 0; index < hits.length; index++) {
+            assert(inserted[index * 3] !== INVALID_ID, `near-boundary hit ${index} was refused`);
+            assert(found[index * 2] === inserted[index * 3] && found[index * 2 + 1] === inserted[index * 3 + 1], `near-boundary hit ${index}: inserted at cell ${inserted[index * 3]}, found at ${found[index * 2]}`);
+        }
+        // As information: how many of them the GPU keys differently from the CPU port.
+        runKernel('descriptors', input, hits.length);
+        const descriptors = await results(hits.length * RESULT_WORDS.descriptors);
+        let differFromCpu = 0;
+        hits.forEach((hit, index) => {
+            const desc = descOf(hit);
+            const gpu = descriptors.subarray(index * 4, index * 4 + 4);
+            if (gpu[0] !== desc.bucketIndex || gpu[1] !== desc.tileHash || gpu[2] !== desc.cellOffset[0] || gpu[3] !== desc.cellOffset[1]) differFromCpu++;
+        });
+
+        // reset(): every hit misses afterwards, the packed list is empty, and an insert claims a new tile.
+        const encoder = device.createCommandEncoder({ label: 'hash-grid reset' });
+        cache.reset(encoder);
+        device.queue.submit([encoder.finish()]);
+        runKernel('find', input, hits.length);
+        const afterReset = await results(hits.length * RESULT_WORDS.find);
+        for (let index = 0; index < hits.length; index++) assert(afterReset[index * 2] === INVALID_ID, `near-boundary hit ${index} was found after reset()`);
+        const packedCount = cache.packedTiles.count;
+        assert((await readWords(device, packedCount.buffer, packedCount.offset, 1))[0] === 0, 'the packed list survived reset()');
+        encodeFrame(1501);
+        runKernel('insert', encodeHits([hits[0]]), 1);
+        assert((await results(3))[2] === 1, 'after reset() an insert didn\'t claim a new tile');
+        data.nearBoundaryHits = { hits: hits.length, insertAndFindAgree: hits.length, differFromCpu, missAfterReset: hits.length };
+        log(`near-boundary hits: ${hits.length} inserted and found at the same cell (${differFromCpu} keyed differently from the CPU port, information); after reset() all miss`);
+    }
+
     // The rest work at the minimum cell (a cell-size option of 0), so tiles can be placed by hand.
     options.hashGridCacheCellSize = 0;
     const minimumCell = descConstants();
@@ -460,6 +598,8 @@ try {
     }
 
     // ---- 6. Many threads inserting one tile get one slot ----
+    // This can't tell the weak exchange's retry (register D22) from no retry: on D3D12 the weak
+    // exchange is likely a strong one underneath, so a spurious failure may never happen here.
     {
         clearCache();
         encodeFrame(4000);

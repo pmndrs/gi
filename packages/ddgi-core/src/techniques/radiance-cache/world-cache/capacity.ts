@@ -158,7 +158,7 @@ export const HASH_GRID_COUNTER = {
      * Inserts refused this frame because every slot of their bucket held
      * another tile (`hash_grid_cache.hlsl:268-275`). Capsaicin counts them per
      * bucket, and only with `DEBUG_HASH_STATS`; ours is one counter, always
-     * on, cleared with the others each frame (register D22).
+     * on, cleared with the others each frame (register D23).
      */
     bucketOverflowCount: 7,
 } as const;

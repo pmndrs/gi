@@ -99,7 +99,7 @@ export class HashGridCache implements WorldCache {
         return this.require().buffers;
     }
 
-    /** Inserts refused this frame because their bucket was full (register D22): a word of the tile words, cleared by `ClearCounters`. */
+    /** Inserts refused this frame because their bucket was full (register D23): a word of the tile words, cleared by `ClearCounters`. */
     get bucketOverflowCount(): GpuWord {
         return { buffer: this.require().buffers.tileWords, offset: HASH_GRID_COUNTER.bucketOverflowCount * WORD_BYTES };
     }
@@ -229,6 +229,19 @@ export class HashGridCache implements WorldCache {
         };
         this.bufferPingPong = 0;
         this.lastFramePingPong = null;
+    }
+
+    /**
+     * Empties the cache: the tile words (every hash slot, decay stamp, both
+     * packed lists and the counters) back to zero, as `prepare` leaves them
+     * (Capsaicin clears the hash buffer when it makes it, gi1.cpp:478). The
+     * cell values and scratch stay: a tile's finest cells are cleared when it
+     * is inserted again (`HashGridCache_AddNewTile`), its coarser levels are
+     * rewritten before they are read (RC3.2's `UpdateTiles`), and the scratch
+     * is zero between frames (`UpdateTiles` clears what it reads, gi1.comp:2213-2224).
+     */
+    reset(encoder: GPUCommandEncoder): void {
+        encoder.clearBuffer(this.require().buffers.tileWords);
     }
 
     /**

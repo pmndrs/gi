@@ -237,8 +237,9 @@ export function hashGridCacheTileAge(frameIndex: number, tileDecay: number): num
 /**
  * `cell_size` for `HashGridCacheConstants` (gi1.cpp:1856-1859): tan of the
  * angle `cellSizeOption` pixels span, from the vertical field of view and the
- * render size. `max(1/h, h/w²)` is the smaller of a pixel's vertical and
- * horizontal angle on a wide screen (Capsaicin's own expression).
+ * render size. `max(1/h, h/w²)` is the larger of two per-pixel factors:
+ * `1/h` (a pixel's share of the screen's height) and `h/w²` (which wins only
+ * on a screen taller than it is wide); Capsaicin's own expression.
  */
 export function hashGridCacheCellSizeConstant(fovY: number, width: number, height: number, cellSizeOption: number): number {
     return Math.tan(fovY * cellSizeOption * Math.max(1 / height, height / (width * width)));

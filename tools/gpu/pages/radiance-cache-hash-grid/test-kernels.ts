@@ -8,6 +8,7 @@
 import { HASH_GRID_CACHE_GROUP_ENTRIES } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/hash-grid-wgsl.ts';
 import type { HashGridCache } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/hash-grid-cache.ts';
 import type { ComputeKernel, KernelBuilder } from '../../../../packages/ddgi-core/src/platform/contract/wgsl.ts';
+import { WORLD_CACHE_PROBE_RAYS_WGSL } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/world-cache.ts';
 
 export const TEST_WORKGROUP_SIZE = 64;
 
@@ -126,6 +127,67 @@ fn ${TEST_ENTRY_POINT.touch}(@builtin(global_invocation_id) id: vec3u) {
     }
 }
 `;
+
+/** Words the probe-ray reader writes for one ray. */
+export const PROBE_RAY_READ_WORDS = 14;
+
+/**
+ * Reads ray `test_ray.index` and the count through `WorldCacheProbeRays` (the
+ * world cache's struct), as words: count, origin xyz, flags, direction xyz
+ * (decoded), hitT, instance, triangle, front face, barycentrics xy.
+ */
+const PROBE_RAY_READER_WGSL = /* wgsl */ `
+${WORLD_CACHE_PROBE_RAYS_WGSL}
+struct TestRay {
+    index: u32,
+    unused0: u32,
+    unused1: u32,
+    unused2: u32,
+}
+@group(1) @binding(0) var<uniform> test_ray: TestRay;
+@group(1) @binding(1) var<storage, read> test_probe_rays: WorldCacheProbeRays;
+@group(1) @binding(2) var<storage, read_write> test_ray_words: array<u32>;
+
+@compute @workgroup_size(1)
+fn testReadProbeRay() {
+    let ray = test_probe_rays.rays[test_ray.index];
+    let direction = worldCacheProbeRayDirection(ray);
+    test_ray_words[0] = test_probe_rays.count;
+    test_ray_words[1] = bitcast<u32>(ray.origin.x);
+    test_ray_words[2] = bitcast<u32>(ray.origin.y);
+    test_ray_words[3] = bitcast<u32>(ray.origin.z);
+    test_ray_words[4] = ray.flags;
+    test_ray_words[5] = bitcast<u32>(direction.x);
+    test_ray_words[6] = bitcast<u32>(direction.y);
+    test_ray_words[7] = bitcast<u32>(direction.z);
+    test_ray_words[8] = bitcast<u32>(ray.hitT);
+    test_ray_words[9] = ray.hitInstance;
+    test_ray_words[10] = ray.hitTriangle;
+    test_ray_words[11] = ray.hitFrontFace;
+    test_ray_words[12] = bitcast<u32>(ray.hitBarycentrics.x);
+    test_ray_words[13] = bitcast<u32>(ray.hitBarycentrics.y);
+}
+`;
+
+/** The reader kernel: bind a uniform with the ray index, the probe-ray buffer and a result buffer. */
+export async function createProbeRayReader(kernels: KernelBuilder): Promise<ComputeKernel> {
+    return kernels.computeKernel({
+        label: 'radiance-cache-hash-grid probe-ray reader',
+        modules: [],
+        code: PROBE_RAY_READER_WGSL,
+        entryPoint: 'testReadProbeRay',
+        ownGroups: [
+            {
+                label: 'probe-ray reader',
+                entries: [
+                    { binding: 0, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'uniform' } },
+                    { binding: 1, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'read-only-storage' } },
+                    { binding: 2, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'storage' } },
+                ],
+            },
+        ],
+    });
+}
 
 /** The page's IO buffers, shared by every test kernel. */
 export interface TestIo {

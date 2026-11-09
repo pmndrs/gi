@@ -50,7 +50,7 @@ export const WORLD_CACHE_RADIANCE_SLOT_BYTES = 8;
  * }
  * struct WorldCacheProbeRays {
  *     count: u32,                    // this frame's rays
- *     reserved: vec3u,
+ *     reserved: array<u32, 3>,       // scalars: a vec3u would align to 16 and push the rays to byte 32
  *     rays: array<WorldCacheProbeRay>,
  * }
  * ```
@@ -78,7 +78,7 @@ struct WorldCacheProbeRay {
 
 struct WorldCacheProbeRays {
     count: u32,
-    reserved: vec3u,
+    reserved: array<u32, 3>,    // scalars, so the rays start at byte 16 (a vec3u would align to 16 and push them to 32)
     rays: array<WorldCacheProbeRay>,
 }
 
@@ -151,6 +151,12 @@ export interface WorldCache {
      * `queue.writeBuffer`).
      */
     encodeFrame(encoder: GPUCommandEncoder, frame: WorldCacheFrame, rays: WorldCacheProbeRays): void;
+    /**
+     * Records emptying the cache into the encoder: everything it has learned
+     * is forgotten, as at `prepare` (a technique's `resetHistory`: a camera
+     * cut or a scene swap). Allocates nothing.
+     */
+    reset(encoder: GPUCommandEncoder): void;
     /** GPU bytes the cache allocated. */
     readonly memoryBytes: number;
     /** Plain-language figures: capacity and memory. */
