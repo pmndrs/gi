@@ -106,7 +106,7 @@ const DDGI_TWO_PI: f32 = 6.28318530717959;
 fn ddgiUniformVolume() -> DdgiVolume {
     let volume = ddgiVolume(ddgi.volumeOrigin, ddgi.volumeSpacing, ddgi.volumeCounts, ddgi.volumeTexels);
     let window = vec3i(round(ddgi.volumeWindow.xyz));
-    return ddgiVolumeInWindow(volume, window, vec3f(window), vec3f(window + volume.counts - 1));
+    return ddgiVolumeInWindow(volume, window, vec3f(window), vec3f(window + volume.counts - 1), volume.fade);
 }
 
 fn ddgiProbeCount() -> vec3u {

@@ -95,16 +95,19 @@ export const MAX_BLENDED_VOLUMES = 2;
  * - `window`: xyz the lattice coordinates of the window's first probe
  *   (whole numbers; 0 for a fixed volume), w unused. Slots and key probes
  *   follow from it;
+ * - `fade`: xyz how wide the fade band is on each axis, in spacings
+ *   (COVERAGE_FADE_SPACINGS for a fixed volume, scroll.ts's
+ *   `cameraFadeSpacings` for a camera-following one), w unused;
  * - `validMin`, `validMax`: xyz the valid extent's low and high sides in
  *   lattice units, where coverage fades (scroll.ts), w unused. For a fixed
  *   volume its first and last probes. **Written by the GPU** for a
  *   camera-following volume (`ddgi/scroll` copies them in every frame), so
  *   the CPU writes them only when the table is new.
  */
-export const VOLUME_TABLE_TEXEL = { sampling: 0, window: 4, validMin: 5, validMax: 6 } as const;
+export const VOLUME_TABLE_TEXEL = { sampling: 0, window: 4, fade: 5, validMin: 6, validMax: 7 } as const;
 /** Texels in one row of the volume table. */
-export const VOLUME_TABLE_TEXELS = 7;
-/** The texels at the start of a row that the CPU keeps up to date every frame: the sampling `vec4f`s and the window. The rest are the valid extent's. */
+export const VOLUME_TABLE_TEXELS = 8;
+/** The texels at the start of a row that the CPU keeps up to date every frame: the sampling `vec4f`s, the window and the fade. The rest are the valid extent's. */
 export const VOLUME_TABLE_CPU_TEXELS = VOLUME_TABLE_TEXEL.validMin;
 export const VOLUME_TABLE_FORMAT: GPUTextureFormat = 'rgba32float';
 export const VOLUME_TABLE_TEXEL_BYTES = 16;
@@ -185,23 +188,33 @@ export interface ValidExtent {
     readonly max: readonly [number, number, number];
 }
 
+/** A fixed volume's fade on every axis, in spacings. */
+export const FIXED_VOLUME_FADE: readonly [number, number, number] = [COVERAGE_FADE_SPACINGS, COVERAGE_FADE_SPACINGS, COVERAGE_FADE_SPACINGS];
+
 /**
  * A volume's edge coverage at a point (the CPU twin of
  * `ddgiVolumeEdgeCoverage`, wgsl/sample.ts): 1 out to
  * {@link COVERAGE_FULL_MARGIN_SPACINGS} past its valid extent, falling to 0
- * over the next {@link COVERAGE_FADE_SPACINGS}. Between 0 and 1 is the
- * volume's fade band, where the next volume in priority order fills in. The
- * valid extent is in lattice units from `grid.origin` (lattice 0); without
- * one, it is the grid's own probes, as for a fixed volume.
+ * over the next `fade` spacings on each axis (half a spacing for a fixed
+ * volume), the lowest over the axes. Between 0 and 1 is the volume's fade
+ * band, where the next volume in priority order fills in. The valid extent
+ * is in lattice units from `grid.origin` (lattice 0); without one, it is the
+ * grid's own probes, as for a fixed volume.
  */
-export function volumeEdgeCoverage(grid: ProbeGrid, position: readonly [number, number, number], extent: ValidExtent = wholeGridExtent(grid)): number {
-    let farthest = 0;
+export function volumeEdgeCoverage(
+    grid: ProbeGrid,
+    position: readonly [number, number, number],
+    extent: ValidExtent = wholeGridExtent(grid),
+    fade: readonly [number, number, number] = FIXED_VOLUME_FADE,
+): number {
+    let coverage = 1;
     for (let axis = 0; axis < 3; axis++) {
         const first = grid.origin[axis] + extent.min[axis] * grid.spacing[axis];
         const last = grid.origin[axis] + extent.max[axis] * grid.spacing[axis];
-        farthest = Math.max(farthest, Math.max(first - position[axis], position[axis] - last, 0) / grid.spacing[axis]);
+        const outside = Math.max(first - position[axis], position[axis] - last, 0) / grid.spacing[axis];
+        coverage = Math.min(coverage, Math.min(1, Math.max(0, 1 - (outside - COVERAGE_FULL_MARGIN_SPACINGS) / fade[axis])));
     }
-    return Math.min(1, Math.max(0, 1 - (farthest - COVERAGE_FULL_MARGIN_SPACINGS) / COVERAGE_FADE_SPACINGS));
+    return coverage;
 }
 
 /** A volume's priority: its setting, or 0. Not a number counts as 0. */
@@ -236,12 +249,20 @@ export function writeVolumeParameters(
 
 /**
  * The rest of a volume-table row after the sampling `vec4f`s, into `target`
- * from `offset` (the row's start): the window's first probe in lattice units
- * and the valid extent (VOLUME_TABLE_TEXEL). A fixed volume: window 0, the
- * extent its first and last probes.
+ * from `offset` (the row's start): the window's first probe in lattice units,
+ * the fade's width per axis, and the valid extent (VOLUME_TABLE_TEXEL). A
+ * fixed volume: window 0, fade FIXED_VOLUME_FADE, the extent its first and
+ * last probes.
  */
-export function writeVolumeWindow(target: Float32Array, offset: number, window: readonly [number, number, number], extent: ValidExtent): void {
+export function writeVolumeWindow(
+    target: Float32Array,
+    offset: number,
+    window: readonly [number, number, number],
+    fade: readonly [number, number, number],
+    extent: ValidExtent,
+): void {
     target.set([...window, 0], offset + VOLUME_TABLE_TEXEL.window * 4);
+    target.set([...fade, 0], offset + VOLUME_TABLE_TEXEL.fade * 4);
     target.set([...extent.min, 0], offset + VOLUME_TABLE_TEXEL.validMin * 4);
     target.set([...extent.max, 0], offset + VOLUME_TABLE_TEXEL.validMax * 4);
 }

@@ -116,8 +116,9 @@ fn ddgiOctDecode(coordinates: vec2f) -> vec3f {
 // is where that probe is on the lattice, and slotShift the slot it lives in
 // (window mod counts), so window probe w's data is in slot (w + slotShift)
 // mod counts. validMin and validMax are where its coverage fades, in lattice
-// units. A fixed volume has window 0, slotShift 0 and the valid extent of
-// all its probes.
+// units, and fade how wide its fade band is on each axis, in spacings. A
+// fixed volume has window 0, slotShift 0, the valid extent of all its probes
+// and a fade of half a spacing.
 struct DdgiVolume {
     origin: vec3f,           // world position of window probe (0, 0, 0)
     normalBias: f32,         // metres along the surface normal
@@ -132,6 +133,7 @@ struct DdgiVolume {
     slotShift: vec3i,        // the slot window probe (0, 0, 0) lives in: window mod counts, per axis
     validMin: vec3f,         // the valid extent's low sides, lattice units
     validMax: vec3f,         // its high sides
+    fade: vec3f,             // the fade band's width per axis, spacings
 }
 
 // value mod divisor in 0..divisor - 1, also for negative values (WGSL's % keeps the dividend's sign).
@@ -139,7 +141,7 @@ fn ddgiPositiveModulo(value: vec3i, divisor: vec3i) -> vec3i {
     return ((value % divisor) + divisor) % divisor;
 }
 
-// A fixed volume from its four vec4f parameters: window 0, every probe valid.
+// A fixed volume from its four vec4f parameters: window 0, every probe valid, the usual fade.
 fn ddgiVolume(volumeOrigin: vec4f, volumeSpacing: vec4f, volumeCounts: vec4f, volumeTexels: vec4f) -> DdgiVolume {
     let counts = vec3i(volumeCounts.xyz);
     return DdgiVolume(
@@ -147,17 +149,18 @@ fn ddgiVolume(volumeOrigin: vec4f, volumeSpacing: vec4f, volumeCounts: vec4f, vo
         volumeSpacing.xyz, volumeSpacing.w,
         counts, i32(volumeCounts.w),
         volumeTexels.x, volumeTexels.y, volumeTexels.zw,
-        vec3i(0), vec3i(0), vec3f(0.0), vec3f(counts - 1),
+        vec3i(0), vec3i(0), vec3f(0.0), vec3f(counts - 1), vec3f(DDGI_COVERAGE_FADE),
     );
 }
 
-// The same volume with its window at lattice 'window' and the given valid extent.
-fn ddgiVolumeInWindow(volume: DdgiVolume, window: vec3i, validMin: vec3f, validMax: vec3f) -> DdgiVolume {
+// The same volume with its window at lattice 'window', the given valid extent and fade.
+fn ddgiVolumeInWindow(volume: DdgiVolume, window: vec3i, validMin: vec3f, validMax: vec3f, fade: vec3f) -> DdgiVolume {
     var placed = volume;
     placed.window = window;
     placed.slotShift = ddgiPositiveModulo(window, volume.counts);
     placed.validMin = validMin;
     placed.validMax = validMax;
+    placed.fade = fade;
     return placed;
 }
 
@@ -466,12 +469,13 @@ fn ddgiVolumeOutside(volume: DdgiVolume, position: vec3f) -> vec3f {
 }
 
 // 1 within half a spacing of a volume's valid extent, falling to 0 over the
-// next half spacing. Cheap, so the blend tests it before reading probes.
+// next 'fade' spacings on each axis (half a spacing for a fixed volume), the
+// lowest over the axes. Cheap, so the blend tests it before reading probes.
 fn ddgiVolumeEdgeCoverage(volume: DdgiVolume, position: vec3f) -> f32 {
     // Distance outside per axis, in spacings.
     let outside = ddgiVolumeOutside(volume, position) / volume.spacing;
-    let farthest = max(max(outside.x, outside.y), outside.z);
-    return saturate(1.0 - (farthest - DDGI_COVERAGE_FULL_MARGIN) / DDGI_COVERAGE_FADE);
+    let perAxis = saturate(1.0 - (outside - DDGI_COVERAGE_FULL_MARGIN) / volume.fade);
+    return min(min(perAxis.x, perAxis.y), perAxis.z);
 }
 
 // How far a point is from a volume's valid extent, in metres (the largest
@@ -488,6 +492,7 @@ fn ddgiVolumeCount(volumeTable: texture_2d<f32>) -> u32 {
 
 // The texels of a table row (VOLUME_TABLE_TEXEL in volumes.ts).
 const DDGI_TABLE_WINDOW_TEXEL: i32 = ${VOLUME_TABLE_TEXEL.window};
+const DDGI_TABLE_FADE_TEXEL: i32 = ${VOLUME_TABLE_TEXEL.fade};
 const DDGI_TABLE_VALID_MIN_TEXEL: i32 = ${VOLUME_TABLE_TEXEL.validMin};
 const DDGI_TABLE_VALID_MAX_TEXEL: i32 = ${VOLUME_TABLE_TEXEL.validMax};
 
@@ -505,7 +510,8 @@ fn ddgiTableVolume(volumeTable: texture_2d<f32>, index: u32) -> DdgiVolume {
     let window = vec3i(round(textureLoad(volumeTable, vec2i(DDGI_TABLE_WINDOW_TEXEL, row), 0).xyz));
     let validMin = textureLoad(volumeTable, vec2i(DDGI_TABLE_VALID_MIN_TEXEL, row), 0).xyz;
     let validMax = textureLoad(volumeTable, vec2i(DDGI_TABLE_VALID_MAX_TEXEL, row), 0).xyz;
-    return ddgiVolumeInWindow(volume, window, validMin, validMax);
+    let fade = textureLoad(volumeTable, vec2i(DDGI_TABLE_FADE_TEXEL, row), 0).xyz;
+    return ddgiVolumeInWindow(volume, window, validMin, validMax, fade);
 }
 
 // Whether the blend reads a volume: one whose edge coverage is 0 adds

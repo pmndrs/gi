@@ -22,13 +22,15 @@
  *    write the rgba32float table in one dispatch), which the technique then
  *    copies into the volume table's row.
  *
- * Why the extent's side must stay a plane inside the warm planes: coverage
- * reaches a spacing past it (full for half, then fading), and the cell a
- * covered point falls in must have warm probes at both ends, or a probe
- * finishing its warm-up would make the point's answer jump. For the low side
- * at v, the farthest cell reached has its lower plane at floor(v) − 1; for
- * the high side, its upper plane at ceil(v) + 1. A step of under one plane
- * reaches at most one plane further, so each side checks that one plane.
+ * Why the extent's side must stay the coverage's reach R inside the warm
+ * planes: coverage reaches R spacings past it (full for half a spacing, then
+ * fading; R = 1 for a fixed volume's fade, 10.5 for the camera volume's on a
+ * long axis), and the cell a covered point falls in must have warm probes at
+ * both ends, or a probe finishing its warm-up would make the point's answer
+ * jump. For the low side at v, the farthest cell reached has its lower plane
+ * at floor(v − R); for the high side, its upper plane at ceil(v + R). A step
+ * of under one plane reaches at most one plane further, so each side checks
+ * that one plane.
  */
 
 import { PROBE_HISTORY_FLAGS_MASK, PROBE_HISTORY_UPDATES, PROBE_HISTORY_WORD, PROBE_HISTORY_WORDS, PROBE_STATE } from '../layout.ts';
@@ -54,12 +56,13 @@ export const SCROLL_UNIFORM_WORD = {
     moved: 16,
     targetMin: 20,
     targetMax: 24,
-    layerBase: 28,
-    probeBase: 29,
-    everySlotEnters: 30,
-    extentToTarget: 31,
+    coverageReach: 28,
+    layerBase: 32,
+    probeBase: 33,
+    everySlotEnters: 34,
+    extentToTarget: 35,
 } as const;
-export const SCROLL_UNIFORM_WORDS = 32;
+export const SCROLL_UNIFORM_WORDS = 36;
 export const SCROLL_UNIFORM_BYTES = SCROLL_UNIFORM_WORDS * 4;
 
 /** The valid extent's buffer: min xyz, a spare word, max xyz, a spare word; laid out as the table's two texels. */
@@ -77,6 +80,7 @@ struct DdgiScroll {
     moved: vec4i,             // xyz: planes the window moved this frame per axis (the sign is the direction)
     targetMin: vec4f,         // xyz: where the valid extent's low sides head (lattice units)
     targetMax: vec4f,         // xyz: where its high sides head
+    coverageReach: vec4f,     // xyz: how far coverage reaches past the extent per axis, in spacings (scroll.ts, coverageReach)
     layerBase: i32,           // the volume's first layer in the shared atlases
     probeBase: u32,           // its first point in the points debug view
     everySlotEnters: u32,     // 1: a teleport or a reset, every slot starts again
@@ -193,10 +197,12 @@ fn ${SCROLL_ENTRY_POINTS.extent}(
     let entry = select(axis, 4u + axis, high);
     let counts = ddgiScroll.counts.xyz;
     let current = ddgiValidExtent[entry];
+    let reach = ddgiScroll.coverageReach[axis];
+    // The farthest plane coverage reaches now (the file comment), in lattice units.
+    let reachedNow = select(floor(current - reach), ceil(current + reach), high);
 
-    // The one plane a step outward can bring into reach (the file comment),
-    // in lattice units, and whether it is inside the window.
-    let plane = select(i32(floor(current)) - 2, i32(ceil(current)) + 2, high);
+    // The one plane a step outward can bring into reach, and whether it is inside the window.
+    let plane = i32(reachedNow) + select(-1, 1, high);
     let planeInWindow = plane >= ddgiScroll.window[axis] && plane < ddgiScroll.window[axis] + counts[axis];
     let windowPlane = plane - ddgiScroll.window[axis];
     // Count its probes still warming: every thread walks part of the plane
@@ -229,14 +235,14 @@ fn ${SCROLL_ENTRY_POINTS.extent}(
         if (!high && goal < current) {
             // The low side moves out (down) by a step, past the next whole plane only when it is warm.
             next = max(current - DDGI_EXTENT_STEP, goal);
-            if (floor(next) < floor(current) && !planeWarm) {
-                next = floor(current);
+            if (floor(next - reach) < reachedNow && !planeWarm) {
+                next = reachedNow + reach;
             }
         } else if (high && goal > current) {
             // The high side moves out (up) likewise.
             next = min(current + DDGI_EXTENT_STEP, goal);
-            if (ceil(next) > ceil(current) && !planeWarm) {
-                next = ceil(current);
+            if (ceil(next + reach) > reachedNow && !planeWarm) {
+                next = reachedNow - reach;
             }
         }
         // Otherwise the goal is inward (behind the camera): the side follows it at once.

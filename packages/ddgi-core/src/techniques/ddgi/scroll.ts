@@ -34,22 +34,24 @@
  * quarter spacing past where it started before the window moves back.
  *
  * **Fading.** Coverage is full out to half a spacing past the valid extent
- * and fades to 0 over the next half spacing (volumes.ts), and the cell a
- * covered point falls in must have warm probes at both ends, or the probes
- * that are still warming would make the answer jump when they join. So the
- * valid extent keeps one plane inside the warm planes on each side:
+ * and fades to 0 over the next `fade` spacings (volumes.ts): half a spacing
+ * for a fixed volume, CAMERA_FADE_SPACINGS for a camera-following one (it
+ * says why). The cell a covered point falls in must have warm probes at both
+ * ends, or the probes that are still warming would make the answer jump when
+ * they join. So the valid extent keeps the whole reach of its fade (`reach`,
+ * the margin plus the fade) inside the warm planes on each side:
  * - **ahead** (planes entering), the GPU moves it out by
  *   VALID_EXTENT_STEP_SPACINGS a frame, and only over planes whose probes
- *   have finished warming (no probe still in state 3), so a new plane fades
- *   in over about a quarter of a second once warm;
+ *   have finished warming;
  * - **behind** (planes about to leave), it follows the camera continuously,
- *   `EXTENT_INSET_SPACINGS` inside the window's half-width, so the planes
- *   about to be reused have faded out before the window moves. It never
- *   jumps, so the trailing edge never pops either.
+ *   `extentInset` inside the window's half-width, so the planes about to be
+ *   reused have faded out before the window moves. It never jumps, so the
+ *   trailing edge never pops either.
  */
 
 import type { Vec3 } from '../../platform/contract/math.ts';
 import type { ProbeGrid } from './settings.ts';
+import { COVERAGE_FADE_SPACINGS, COVERAGE_FULL_MARGIN_SPACINGS } from './volumes.ts';
 
 /** The window moves when the camera is more than this many spacings from its centre on an axis. */
 export const WINDOW_MOVE_SPACINGS = 0.75;
@@ -63,16 +65,55 @@ export const WINDOW_MOVE_SPACINGS = 0.75;
 export const VALID_EXTENT_STEP_SPACINGS = 1 / 15;
 
 /**
+ * How wide a camera-following volume's fade band is, in spacings (a fixed
+ * volume's is COVERAGE_FADE_SPACINGS, half a spacing).
+ *
+ * Why so wide: the band sweeps over the scene at the camera's speed, so a
+ * point it crosses fades between the camera volume and whatever lies behind
+ * (a coarser fixed volume, or the host's environment) in the time the band
+ * takes to pass it. With half a spacing that was 0.15 s at 5 m/s and 1.5 m,
+ * and the camera volume's share stepped about 0.084 a frame. Bistro's 1.5 m
+ * and 4 m fields differ by about 18% there, so a point moved 1.5% a frame,
+ * against the stability bar's 0.1% (T3.6, DECISIONS 2026-11-09). Ten
+ * spacings take 3 s to pass at that speed: a step of about 0.0056 a frame,
+ * 0.1% against an 18% difference. The cost is coverage: with a 32-probe
+ * window the camera volume answers alone only within about 5 spacings of the
+ * camera on that axis (`fadeSpacings` keeps at least MIN_FULL_REACH_SPACINGS
+ * on a short axis, with a narrower fade).
+ */
+export const CAMERA_FADE_SPACINGS = 10;
+
+/** A camera-following volume keeps at least this much full coverage on each side of the camera, in spacings, narrowing its fade on a short axis. */
+export const MIN_FULL_REACH_SPACINGS = 1;
+
+/** How wide a camera-following volume's fade is on an axis of `count` probes: CAMERA_FADE_SPACINGS, less where the window is too short for it. */
+export function cameraFadeSpacings(count: number): number {
+    const halfWidth = (count - 1) / 2;
+    // The half-window holds the full reach, the margin, the fade and the plane the window moves by (extentInset).
+    const room = halfWidth - MIN_FULL_REACH_SPACINGS - COVERAGE_FULL_MARGIN_SPACINGS - (1 - WINDOW_MOVE_SPACINGS);
+    return Math.max(COVERAGE_FADE_SPACINGS, Math.min(CAMERA_FADE_SPACINGS, room));
+}
+
+/**
+ * How far coverage reaches past the valid extent, in spacings: full for the
+ * margin, then fading over `fade`. Every plane up to there must be warm.
+ */
+export function coverageReach(fade: number): number {
+    return COVERAGE_FULL_MARGIN_SPACINGS + fade;
+}
+
+/**
  * How far inside the camera's half-window the valid extent's trailing side
  * follows the camera, in spacings. The window moves one plane when the camera
- * is WINDOW_MOVE_SPACINGS past its centre; at that moment the extent must be
- * a whole plane inside the new window (so the cell its fade reaches has two
- * warm planes), and the new window starts one plane further on: 2 planes
- * from the old window's first plane, which is the camera's half-window less
- * 2 − 0.75 = 1.25. With the camera centred that leaves the extent 1.25
- * planes inside the window on each side, and coverage 0.75 inside it.
+ * is WINDOW_MOVE_SPACINGS past its centre; at that moment the farthest cell
+ * the fade reaches (`coverageReach` past the extent) must lie inside the new
+ * window, which starts one plane further on: so the extent sits the reach
+ * plus 1 − 0.75 inside the camera's half-window. With a fixed volume's fade
+ * (reach 1) that is 1.25.
  */
-export const EXTENT_INSET_SPACINGS = 2 - WINDOW_MOVE_SPACINGS;
+export function extentInset(fade: number): number {
+    return coverageReach(fade) + 1 - WINDOW_MOVE_SPACINGS;
+}
 
 /** Fewer probes than this on an axis leave no room for the trailing fade (prepare refuses them). */
 export const MIN_CAMERA_VOLUME_PROBES = 4;
@@ -148,6 +189,9 @@ export class CameraWindow {
      */
     warmingDemand = 0;
 
+    /** The fade band's width on each axis, in spacings (`cameraFadeSpacings`): what the volume table's fade texel holds. */
+    readonly fadeSpacings: Vec3;
+
     constructor(grid: ProbeGrid) {
         for (const count of grid.counts) {
             if (count < MIN_CAMERA_VOLUME_PROBES) {
@@ -155,6 +199,13 @@ export class CameraWindow {
             }
         }
         this.grid = grid;
+        this.fadeSpacings = [cameraFadeSpacings(grid.counts[0]), cameraFadeSpacings(grid.counts[1]), cameraFadeSpacings(grid.counts[2])];
+    }
+
+    /** How far coverage reaches past the valid extent on each axis (`coverageReach`): what `ddgi/scroll` keeps warm. */
+    get coverageReach(): Vec3 {
+        const fade = this.fadeSpacings;
+        return [coverageReach(fade[0]), coverageReach(fade[1]), coverageReach(fade[2])];
     }
 
     /** Lattice coordinates of the window's first probe. */
@@ -206,9 +257,9 @@ export class CameraWindow {
     }
 
     /**
-     * Where the valid extent's sides head this frame (lattice units): one
-     * plane inside the window, and on each side no further from the camera
-     * than its half-window less EXTENT_INSET_SPACINGS. Behind the camera that
+     * Where the valid extent's sides head this frame (lattice units): the
+     * fade's reach inside the window, and on each side no further from the
+     * camera than its half-window less `extentInset`. Behind the camera that
      * is where the extent goes at once (it shrinks with the camera, never
      * jumping); ahead it is how far the GPU may move it out over warm planes.
      */
@@ -220,22 +271,28 @@ export class CameraWindow {
         for (let axis = 0; axis < 3; axis++) {
             const first = this.firstProbe[axis];
             const last = first + counts[axis] - 1;
-            const reach = (counts[axis] - 1) / 2 - EXTENT_INSET_SPACINGS;
+            const fade = this.fadeSpacings[axis];
+            const inside = coverageReach(fade);
+            const fromCamera = (counts[axis] - 1) / 2 - extentInset(fade);
             const position = Number.isFinite(lattice[axis]) ? lattice[axis] : first + (counts[axis] - 1) / 2;
-            min[axis] = Math.min(last - 1, Math.max(first + 1, position - reach));
-            max[axis] = Math.max(min[axis], Math.min(last - 1, position + reach));
+            min[axis] = Math.min(last - inside, Math.max(first + inside, position - fromCamera));
+            max[axis] = Math.max(min[axis], Math.min(last - inside, position + fromCamera));
         }
         return { min, max };
     }
 
-    /** The extent before any camera: the window less a plane on each side (every plane warm, as after a warm-up). */
+    /** The extent before any camera: the window less the fade's reach on each side (every plane warm, as after a warm-up). */
     initialExtent(): ExtentTargets {
         const counts = this.grid.counts;
         const first = this.firstProbe;
-        return {
-            min: [first[0] + 1, first[1] + 1, first[2] + 1],
-            max: [first[0] + counts[0] - 2, first[1] + counts[1] - 2, first[2] + counts[2] - 2],
-        };
+        const reach = this.coverageReach;
+        const min: [number, number, number] = [0, 0, 0];
+        const max: [number, number, number] = [0, 0, 0];
+        for (let axis = 0; axis < 3; axis++) {
+            min[axis] = first[axis] + reach[axis];
+            max[axis] = Math.max(min[axis], first[axis] + counts[axis] - 1 - reach[axis]);
+        }
+        return { min, max };
     }
 }
 

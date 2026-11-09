@@ -1,6 +1,19 @@
 import { describe, expect, it } from 'vitest';
 import { probeGrid } from './settings.ts';
-import { CameraWindow, enteringProbes, EXTENT_INSET_SPACINGS, slotOf, VALID_EXTENT_STEP_SPACINGS, WINDOW_MOVE_SPACINGS, windowProbeOf } from './scroll.ts';
+import {
+    CAMERA_FADE_SPACINGS,
+    CameraWindow,
+    cameraFadeSpacings,
+    coverageReach,
+    enteringProbes,
+    extentInset,
+    MIN_FULL_REACH_SPACINGS,
+    slotOf,
+    VALID_EXTENT_STEP_SPACINGS,
+    WINDOW_MOVE_SPACINGS,
+    windowProbeOf,
+} from './scroll.ts';
+import { volumeEdgeCoverage } from './volumes.ts';
 import { DDGI_SCROLL_WGSL, SCROLL_UNIFORM_BYTES, SCROLL_UNIFORM_WORD } from './wgsl/scroll.ts';
 import { DDGI_COMMON_WGSL } from './wgsl/common.ts';
 import { wgslNameProblems } from '../../../../bvh/src/wgsl-names.ts';
@@ -104,25 +117,48 @@ describe('the camera-following window (m3-moving.md §4.2)', () => {
         expect(window.moves).toBe(0);
     });
 
-    it('keeps the valid extent a plane inside the window, following the camera behind it without a jump when the window moves', () => {
+    it('fades over 10 spacings on the long axes and less on the short one, keeping full coverage around the camera', () => {
+        const window = flyThroughWindow();
+        expect(window.fadeSpacings[0]).toBe(CAMERA_FADE_SPACINGS);
+        expect(window.fadeSpacings[2]).toBe(CAMERA_FADE_SPACINGS);
+        // 12 probes up: half-width 5.5 holds 1 of full reach, the 0.5 margin, the 0.25 the window moves by, and a 3.75 fade.
+        expect(window.fadeSpacings[1]).toBeCloseTo(3.75, 10);
+        expect(cameraFadeSpacings(4)).toBe(0.5);
+        // About 3 s for the band to pass a point at 5 m/s and 1.5 m: a share step of about 0.0056 a frame.
+        expect((CAMERA_FADE_SPACINGS * SPACING) / 5).toBeCloseTo(3, 6);
+        // A fixed volume's fade (0.5) keeps T3.5's inset of 1.25.
+        expect(extentInset(0.5)).toBeCloseTo(1.25, 10);
+        // Centred on the camera, the camera volume answers alone within MIN_FULL_REACH (1.5 with the margin) or more of it.
+        const centre = windowCentre(window);
+        const targets = window.extentTargets(centre);
+        const cameraLattice = window.cameraLattice(centre);
+        for (let axis = 0; axis < 3; axis++) expect(cameraLattice[axis] - targets.min[axis]).toBeGreaterThanOrEqual(MIN_FULL_REACH_SPACINGS - 1e-9);
+        // Full coverage at the camera, and none at the window's ends on the long axes.
+        expect(volumeEdgeCoverage(window.grid, centre, targets, window.fadeSpacings)).toBe(1);
+        const atEnd: [number, number, number] = [window.windowOrigin[0], centre[1], centre[2]];
+        expect(volumeEdgeCoverage(window.grid, atEnd, targets, window.fadeSpacings)).toBeLessThan(0.05);
+    });
+
+    it("keeps the fade's reach inside the window, following the camera behind it without a jump when the window moves", () => {
         const window = flyThroughWindow();
         const centre = windowCentre(window);
-        // Centred: 1.25 planes inside on each side.
+        const reach = coverageReach(window.fadeSpacings[0]);
+        // Centred: the inset inside the camera's half-window on each side.
         const centred = window.extentTargets(centre);
-        expect(centred.min[0]).toBeCloseTo(EXTENT_INSET_SPACINGS, 10);
-        expect(centred.max[0]).toBeCloseTo(31 - EXTENT_INSET_SPACINGS, 10);
-        // Just before and just after the move, the trailing side's target is continuous, and a whole plane inside the new window.
+        expect(centred.min[0]).toBeCloseTo(15.5 - (15.5 - extentInset(window.fadeSpacings[0])), 10);
+        expect(centred.max[0]).toBeCloseTo(31 - extentInset(window.fadeSpacings[0]), 10);
+        // Just before and just after the move, the trailing side's target is continuous, and the fade's whole reach inside the new window.
         const before = window.extentTargets([centre[0] + 0.7499 * SPACING, centre[1], centre[2]]);
         window.follow([centre[0] + 0.7501 * SPACING, centre[1], centre[2]]);
         expect(window.window[0]).toBe(1);
         const after = window.extentTargets([centre[0] + 0.7501 * SPACING, centre[1], centre[2]]);
         expect(after.min[0] - before.min[0]).toBeCloseTo(0.0002, 6);
-        expect(after.min[0]).toBeGreaterThanOrEqual(window.window[0] + 1);
-        // The leading side can't reach the plane that just entered (or the one before it, its cell's other end).
-        expect(after.max[0]).toBeLessThanOrEqual(window.window[0] + 32 - 2);
+        expect(after.min[0] - reach).toBeGreaterThanOrEqual(window.window[0] - 1e-9);
+        // The leading side's fade can't reach past the window's last plane.
+        expect(after.max[0] + reach).toBeLessThanOrEqual(window.window[0] + 31 + 1e-9);
     });
 
-    it('fades a new plane in over about a quarter of a second, and keeps up with 5 m/s at 1.5 m', () => {
+    it('moves the extent out over a plane in about a quarter of a second, and keeps up with 5 m/s at 1.5 m', () => {
         expect(1 / VALID_EXTENT_STEP_SPACINGS / 60).toBeCloseTo(0.25, 6);
         expect(VALID_EXTENT_STEP_SPACINGS).toBeGreaterThan(5 / 60 / SPACING);
     });

@@ -166,6 +166,7 @@ import {
     VOLUME_TABLE_TEXEL,
     VOLUME_TABLE_TEXEL_BYTES,
     VOLUME_TABLE_TEXELS,
+    FIXED_VOLUME_FADE,
     wholeGridExtent,
     writeVolumeParameters,
     writeVolumeWindow,
@@ -1377,6 +1378,7 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         words.set(move.moved, SCROLL_UNIFORM_WORD.moved);
         data.set(targets.min, SCROLL_UNIFORM_WORD.targetMin);
         data.set(targets.max, SCROLL_UNIFORM_WORD.targetMax);
+        data.set(window.coverageReach, SCROLL_UNIFORM_WORD.coverageReach);
         words[SCROLL_UNIFORM_WORD.layerBase] = resources.volume.layerBase;
         words[SCROLL_UNIFORM_WORD.probeBase] = resources.volume.probeBase;
         words[SCROLL_UNIFORM_WORD.everySlotEnters] = everySlot ? 1 : 0;
@@ -2326,7 +2328,7 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
             const offset = row * VOLUME_TABLE_ROW_FLOATS;
             rows.set(this.volumeParameters(volume), offset);
             const window = volume.scroll?.window;
-            writeVolumeWindow(rows, offset, window?.window ?? [0, 0, 0], window ? window.initialExtent() : wholeGridExtent(volume.grid));
+            writeVolumeWindow(rows, offset, window?.window ?? [0, 0, 0], window?.fadeSpacings ?? FIXED_VOLUME_FADE, window ? window.initialExtent() : wholeGridExtent(volume.grid));
         });
         // Compare the CPU texels only: the extents in `rows` are the starting ones, not what the GPU holds.
         const cpuFloats = VOLUME_TABLE_CPU_TEXELS * 4;
