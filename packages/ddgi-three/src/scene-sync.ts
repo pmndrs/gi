@@ -121,6 +121,8 @@ import { EnvironmentSync, type EnvironmentSources, type PmndrsSkyLike, type SkyM
 import { diffuseAverage, textureAverage, type DiffuseAverageMethod } from './texture-average.ts';
 import { hookMatrixWorld, matrixHookInPlace, StructureWatch, unhookMatrixWorld, type MatrixHook } from './change-watch.ts';
 import { deformBoundsFor, deformKind, poseSourceFor, type DeformKind, type PoseSource } from './deforming.ts';
+import type { GpuPoseContext } from './gpu-skinning.ts';
+import type { WebGPURenderer } from 'three/webgpu';
 import { contributesFlag, contributesToGI } from './user-data.ts';
 
 /** Floats in a 4x4 matrix. */
@@ -305,6 +307,12 @@ export interface SyncFrameReport {
 export interface SceneSyncOptions {
     /** Who made the device: needed to upload environment textures. */
     readonly device: GPUDevice;
+    /**
+     * The renderer that draws the scene, on `device`. Given, skinned meshes
+     * that contribute to GI are posed on the GPU by three's own skinning
+     * (gpu-skinning.ts); without it they are posed on the CPU.
+     */
+    readonly renderer?: WebGPURenderer;
     /** Where warnings go (each distinct message once). Default `console.warn`. */
     readonly warn?: (message: string) => void;
     /** Objects the walk looks at per frame ({@link DEFAULT_OBJECTS_PER_FRAME}). */
@@ -453,6 +461,8 @@ export class SceneSync {
     private readonly marked = new Set<Object3D>();
     /** three's `childadded` and `childremoved` on the walked scene, marking the child (change-watch.ts). */
     private readonly structure = new StructureWatch((child) => this.marked.add(child));
+    /** The renderer and device for skinned meshes' GPU poses, or null to pose them on the CPU. */
+    private readonly gpuPoses: GpuPoseContext | null;
     /** Objects whose meshes deform (deforming.ts): their poses are checked every update. */
     private readonly deformingList: ObjectRecord[] = [];
     /** InstancedMeshes: their instance matrices' version is compared every update (checkInstancedMeshes). */
@@ -507,6 +517,7 @@ export class SceneSync {
             warn(message);
         };
         this.environmentSync = new EnvironmentSync(api, options.device, this.warnOnce);
+        this.gpuPoses = options.renderer ? { device: options.device, renderer: options.renderer } : null;
         this.objectsPerFrame = positiveInteger(options.objectsPerFrame, DEFAULT_OBJECTS_PER_FRAME, 'objectsPerFrame');
         this.editChecksPerFrame = positiveInteger(options.editChecksPerFrame, DEFAULT_EDIT_CHECKS_PER_FRAME, 'editChecksPerFrame');
         this.lightsPerFrame = positiveInteger(options.lightsPerFrame, DEFAULT_LIGHTS_PER_FRAME, 'lightsPerFrame');
@@ -1167,7 +1178,7 @@ export class SceneSync {
             this.warnOnce(`a mesh without positions ("${mesh.name || geometry.uuid}") is left out of GI.`);
             return undefined;
         }
-        const shape = deform ? deformingShape(mesh, deform) : null;
+        const shape = deform ? deformingShape(mesh, deform, this.gpuPoses) : null;
         const descriptor = shape ? { ...plain, deforming: true, deformBounds: shape.bounds } : plain;
         const attributes = this.geometryAttributes(geometry, uv1);
         const record: GeometryRecord = {
@@ -1226,6 +1237,7 @@ export class SceneSync {
         record.users--;
         if (record.users > 0) return;
         this.api.destroyMesh(record.handle);
+        record.deform?.pose.dispose?.();
         // A deforming record isn't in the map (it isn't shared); a shared one for the same geometry may be.
         if (this.geometries.get(record.geometry) === record) this.geometries.delete(record.geometry);
         removeFromList(this.geometryList, record);
@@ -1630,9 +1642,9 @@ function differs(source: ArrayLike<number>, target: Float64Array, offset: number
 }
 
 /** How a deforming mesh deforms, its pose box and its pose source (deforming.ts). */
-function deformingShape(mesh: Mesh, kind: DeformKind): DeformingShape {
+function deformingShape(mesh: Mesh, kind: DeformKind, gpu: GpuPoseContext | null): DeformingShape {
     const bounds = deformBoundsFor(mesh, kind);
-    return { kind, bounds, pose: poseSourceFor(mesh, kind, bounds) };
+    return { kind, bounds, pose: poseSourceFor(mesh, kind, bounds, gpu) };
 }
 
 function sameNumbers(a: Float64Array, b: Float64Array): boolean {

@@ -14,20 +14,27 @@
  * only when they opt in (`giContributes`, user-data.ts), so a character
  * costs nothing by default.
  *
- * **Where a pose comes from.** {@link PoseSource} is the seam. Today every
- * kind uses {@link CpuPose}: when the pose's inputs change (bone matrices,
- * morph influences, the position attribute's version), it works the
- * positions out on the CPU, the way three's own `getVertexPosition` does,
- * and hands them to `setDeformedPositions` as a `Float32Array`. M3's T3.3
- * adds a GPU source for skinned meshes: three's `computeSkinning` writes the
- * positions into a storage `ExternalTexture` we own (T3.0 showed it works),
- * and the source hands the platform a `DeformedPositions` GPU buffer instead.
- * Only {@link poseSourceFor} needs to choose between them.
+ * **Where a pose comes from.** {@link PoseSource} is the seam, and
+ * {@link poseSourceFor} chooses:
+ * - **GPU** (`GpuSkinningPose`, gpu-skinning.ts; T3.3): a skinned mesh,
+ *   without position morphs, when the host gave the renderer
+ *   (`ThreeGIOptions.renderer`). three's own `computeSkinning` writes the
+ *   positions into a storage `ExternalTexture` we own, and the platform gets
+ *   that texture: no position reaches the CPU.
+ * - **CPU** ({@link CpuPose}) for the rest: when the pose's inputs change
+ *   (bone matrices, morph influences, the position attribute's version), it
+ *   works the positions out on the CPU, the way three's own
+ *   `getVertexPosition` does, and hands them to `setDeformedPositions` as a
+ *   `Float32Array`.
+ *
+ * Either way the platform refits the mesh's tree from the pose in the next
+ * frame (T3.3), so a pose costs no tree build.
  */
 
 import { Matrix4, type BufferAttribute, type BufferGeometry, type InterleavedBufferAttribute, type Mesh, type SkinnedMesh } from 'three';
 import type { Aabb, DeformedPositions } from '@pmndrs/ddgi-core';
 import { readFloatAttribute } from './convert.ts';
+import { GpuSkinningPose, type GpuPoseContext } from './gpu-skinning.ts';
 import { deformBoundsFlag, deformingFlag } from './user-data.ts';
 
 type Attribute = BufferAttribute | InterleavedBufferAttribute;
@@ -147,10 +154,17 @@ export interface PoseSource {
     nextPose(): Float32Array | DeformedPositions | null;
     /** The mesh's shape was replaced (`updateMesh`): the platform's pose is the new rest pose again. */
     reset(): void;
+    /** The mesh left GI: free what the source holds on the GPU. */
+    dispose?(): void;
 }
 
-/** The pose source for a deforming mesh. CPU for every kind until T3.3's GPU source (the file comment). */
-export function poseSourceFor(mesh: Mesh, kind: DeformKind, bounds: Aabb): PoseSource {
+/**
+ * The pose source for a deforming mesh (the file comment): three's GPU
+ * skinning for a skinned mesh without position morphs when `gpu` (the
+ * renderer and its device) is given; the CPU otherwise.
+ */
+export function poseSourceFor(mesh: Mesh, kind: DeformKind, bounds: Aabb, gpu: GpuPoseContext | null = null): PoseSource {
+    if (kind === 'skinned' && gpu && !hasPositionMorphs(mesh.geometry)) return new GpuSkinningPose(mesh as SkinnedMesh, gpu);
     return new CpuPose(mesh, kind, bounds);
 }
 
@@ -158,8 +172,8 @@ export function poseSourceFor(mesh: Mesh, kind: DeformKind, bounds: Aabb): PoseS
  * Poses that differ from the last one sent by no more than this share of the
  * pose box's diagonal, on every coordinate, aren't sent. Why: a skinned rig
  * moved as a whole changes every bone matrix, but its mesh-space pose only
- * by float rounding, and each pose sent costs the platform a tree build until
- * T3.3's refit. Compared against the last pose *sent*, so a slow drift still
+ * by float rounding, and each pose sent is a copy and a refit for the
+ * platform. Compared against the last pose *sent*, so a slow drift still
  * goes out once it adds up.
  */
 const POSE_TOLERANCE = 1e-6;

@@ -15,6 +15,7 @@ import { createCpuTracer } from './cpu-traversal.ts';
 import { GpuTreeOutputs, type FirstTreeBuilder, type GpuTreeBatchResult, type GpuTreeBuilds, type GpuTreeRequest } from './gpu-mesh-trees.ts';
 import { TOP_HEADER_WORD } from './layout.ts';
 import { buildMeshBvhAsync } from './mesh-bvh-build.ts';
+import type { MeshGeometry } from './mesh-bvh.ts';
 import { PlatformRayQueries, type MeshTreeOptions } from './ray-queries.ts';
 import type { TraceSceneData } from './scene-assembly.ts';
 import type { TopLevelBvh } from './top-level.ts';
@@ -55,12 +56,11 @@ class StandInGpuBuilder implements FirstTreeBuilder {
     build(requests: readonly GpuTreeRequest[]): GpuTreeBuilds {
         this.requests.push([...requests]);
         // The geometry is read when the build starts, as the real builder writes it to its buffers.
-        const members = requests.map(({ slot, generation, geometry }) => ({
-            slot,
-            generation,
-            positions: geometry.positions.slice(),
-            indices: Uint32Array.from(geometry.indices ?? []),
-        }));
+        const members = requests.map(({ slot, generation, geometry }) => {
+            // This stand-in builds from CPU arrays only (the tracer's drift rebuilds read the GPU; GPU pages test them).
+            const cpu = geometry as MeshGeometry;
+            return { slot, generation, positions: cpu.positions.slice(), indices: Uint32Array.from(cpu.indices ?? []) };
+        });
         const batch = new Promise<GpuTreeBatchResult>((resolve) => this.pending.push({ members, resolve }));
         return { notBuilt: [], batches: [batch] };
     }
@@ -94,7 +94,7 @@ class StandInGpuBuilder implements FirstTreeBuilder {
         const outputs = new GpuTreeOutputs({ nodes, triangles, parents, meshes, destroy: () => [nodes, triangles, parents].forEach((buffer) => buffer.destroy()) }, usable);
         this.outputs.push(outputs);
         batch.resolve({
-            built: meshes.flatMap((tree, index) => (tree.problem ? [] : [{ slot: batch.members[index].slot, generation: batch.members[index].generation, outputs, tree }])),
+            built: meshes.flatMap((tree, index) => (tree.problem ? [] : [{ slot: batch.members[index].slot, generation: batch.members[index].generation, outputs, tree, layout: trees[index] }])),
             refused: meshes.flatMap((tree, index) => (tree.problem ? [{ slot: batch.members[index].slot, generation: batch.members[index].generation, reason: tree.problem }] : [])),
             buildMs: 1,
             failure: null,

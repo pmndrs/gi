@@ -1,0 +1,5 @@
+{
+    "description": "T3.3 item 3: the wind tree in courtyard-wind-tree, swayed on the CPU by its wind weight (COLOR_0 alpha) through the three adapter, refit on the GPU. Held at its two extreme poses, GI in a ground rectangle beside the trunk differs by at least 2%; while it sways (4 s period, 3 periods), the rectangle's mean follows the pose within 0.5 s (lag at the best cross-correlation, correlation at least 0.5). Recompiles 0. Needs the wind tree (pnpm assets:fetch --only wind-tree).",
+    "timeoutMs": 900000,
+    "manual": true
+}
