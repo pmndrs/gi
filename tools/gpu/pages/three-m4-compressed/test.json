@@ -1,0 +1,4 @@
+{
+    "description": "M4 T4.3: a three CompressedTexture (BC7 mips made in the test, sRGB and linear) as a material's map gives the same store layer (GI albedo) as the same image as a DataTexture, within 2/255.",
+    "timeoutMs": 120000
+}

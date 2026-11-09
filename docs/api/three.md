@@ -276,24 +276,35 @@ This is the mirroring on its own, for hosts that call `gi.encode` themselves.
 - One per `Mesh`, and one per instance of an `InstancedMesh`.
 - GI follows `visible`, including the parents', as three draws it.
 
-**Materials.**
-- Albedo is colour × (1 − metalness): metals bounce no diffuse light.
-- Emission is emissive × emissiveIntensity.
-- `alphaTest` becomes the alpha cutoff.
-- These materials let light through (`blocksLight: false`):
+**Materials.** GI's rays see each material's real colours and textures: the platform samples the textures where rays hit (M4). Nothing is averaged or folded in by the adapter.
+
+| three material | GI albedo | GI emission |
+| --- | --- | --- |
+| Standard, Physical | `color` × `map` × (1 − `metalness` × `metalnessMap`'s blue channel), as three and glTF apply metalness. Metals bounce no diffuse light. | `emissive` × `emissiveIntensity` × `emissiveMap` |
+| Lambert, Phong, Toon | `color` × `map` | as above |
+| Basic | `color` × `map` | none |
+| Node versions of these (`MeshStandardNodeMaterial`...) with plain properties | as their plain versions | as their plain versions |
+| A node material with a `colorNode` or `emissiveNode`, a `ShaderMaterial` or `RawShaderMaterial` | `color` and `map` if they're set (a node material's `color` counts when it isn't white), otherwise grey 0.5. A one-time warning names the material. | `emissive` if it has one |
+
+- Each texture keeps its own uv mapping: offset, repeat, rotation, wrap, and uv channel 0 or 1. A texture on channel 2 or 3 is sampled with channel 0 (a warning).
+- `flipY` textures (three's default for images it loads itself) are sampled the right way up: the adapter turns v upside down for them. glTF textures don't flip.
+- **Your own values, on the material's `userData`:**
+  - `giAlbedo`: the albedo colour GI uses instead of `color`;
+  - `giAlbedoMap`: a three texture GI uses instead of `map`;
+  - `giEmissive`: the emissive colour GI uses instead of `emissive`.
+
+  A colour is a three `Color` or `[r, g, b]` (linear), or a hex number or CSS string (sRGB, as `new Color()` reads them). Set them on custom-shaded materials to say what GI should see; they also silence the warning.
+- **Alpha** (alpha = `opacity` × the albedo map's alpha):
+  - `alphaTest` above 0 (glTF `MASK`) is a cutout: rays pass where alpha is below `alphaTest`. Foliage and fences.
+  - Alpha-blended materials (`transparent` with no `alphaTest`; glTF `BLEND`, so decals too) and `alphaHash` ones are stochastic: a ray passes with probability 1 − alpha, so many rays see the right average (DECISIONS 2026-11-09). A blended material **blocks light by its alpha**; until M4 it let all light through.
+- **Light passes straight through** (`blocksLight: false`):
   - glass (`transmission` above 0);
-  - alpha-blended materials: `transparent` with no `alphaTest`, at any `opacity`. glTF's `alphaMode: BLEND` loads this way, so decals do too;
-  - alpha-tested `transparent` materials with `opacity` below 0.5;
+  - `ShadowMaterial` (a ground that only catches shadows);
   - hidden materials (`visible = false`).
-- To keep a see-through material blocking and bouncing light like an opaque one, set `material.userData.giBlocksLight = true`. A blended one with a texture then gets an alpha cutoff of 0.5. This doesn't bring back a hidden material.
-- glTF `alphaMode: MASK` (`alphaTest`) is a cutout, and it blocks light.
+- To make a see-through material block and bounce light like an opaque one, set `material.userData.giBlocksLight = true`: glass then blocks, and a blended material is opaque for GI instead of stochastic. Cutouts keep their holes. It doesn't bring back a hidden material.
 - Every material is double-sided for GI, whatever three's `side`. Back-face hits are how GI finds probes inside walls, and most glTF materials are `FrontSide`. To opt one out, set `material.userData.giSingleSided = true`.
-- Textures go to the platform as handles. The core doesn't sample textures yet (that comes in M4), so until then the adapter multiplies by texture averages, worked out once per texture:
-  - The GI albedo is the colour × the average of map texel × (1 − metalness × metalnessMap texel). three reads metalness from the map's blue channel, as glTF's metallicRoughness stores it.
-  - When the two maps share a uv mapping, the product is taken texel by texel. Otherwise the two averages are multiplied.
-  - The emission is multiplied by the `emissiveMap`'s average.
-  - Averages are taken in linear light and weighted by alpha, so cut-out texels don't count as black.
-  - Images over 256 px a side are first drawn at 256 px by the browser.
+- **Textures GI reads:** images (`ImageBitmap` from GLTFLoader, image elements, canvases, `ImageData`), 8-bit RGBA `DataTexture`s, and `CompressedTexture`s (KTX2Loader, gputex) in BC1–BC5, BC7, ETC2, EAC or ASTC, sRGB or linear as the texture's `colorSpace` says. The platform keeps its own 256 × 256 copy of each, with mips, so the textures can be any size.
+- A texture's pixels are sent again when its `version` changes (`texture.needsUpdate = true`); the material edit checks find it (see "How changes are found").
 
 **Lights.**
 - Directional, point and spot lights, in three's physical units.
@@ -312,9 +323,7 @@ This is the mirroring on its own, for hosts that call `gi.encode` themselves.
 
 **Per object.** Set `userData.giContributes = false` to keep an object out of GI's rays. It still receives GI. Skinned meshes are left out unless they set it to `true`.
 
-**See-through meshes.** Until M4, GI's rays treat every surface as opaque: they don't yet skip see-through materials triangle by triangle. So the adapter leaves out of GI's rays any mesh whose materials **all** let light through. Such a mesh still receives GI. Without this, a decal with no diffuse colour, such as Sponza's `dirt_decal`, would be a black sheet that darkens the room.
-- A mesh that mixes blocking and see-through materials stays in GI, and all of it is treated as opaque. You get a one-time warning naming it.
-- A material edit or swap that changes this is picked up like any other edit (see below).
+**See-through surfaces** are handled triangle by triangle, since M4. Every mesh goes into GI's rays whole, and each triangle follows its own material: a glass pane inside a wall mesh lets light through the pane only, and a decal such as Sponza's `dirt_decal` blocks light by its alpha. The adapter no longer leaves any mesh out for its materials, and no longer warns about meshes that mix see-through and opaque materials.
 
 ## What isn't mirrored
 
@@ -322,14 +331,17 @@ You get a one-time warning for:
 - `BatchedMesh`;
 - ambient, hemisphere and `LightProbe` lights. They also add diffuse light on top of GI in three.
 - `RectAreaLight`. Give the surface an emissive material instead.
-- point or spot lights whose `decay` isn't 2.
+- point or spot lights whose `decay` isn't 2;
+- materials shaded by a `colorNode` or `emissiveNode` graph, or a `ShaderMaterial` (GI guesses; see "Materials" above);
+- `alphaMap`, which GI doesn't read yet: the alpha it uses is `opacity` × the albedo map's alpha;
+- textures it can't read: render targets, video, compressed array and cube textures, compressed formats outside the list above (BC6H, the signed ones), and data textures that aren't 8-bit RGBA. Materials using one shade with their colour alone.
 
 Not mirrored, with no warning:
 - **Camera layers.** GI follows `visible` only. An object on a layer the camera doesn't show still blocks and bounces light: hide it, or set `giContributes = false`.
 - Morph targets and skinning. GI uses the bind pose.
 - The x and z parts of an environment rotation.
-- Render-target and compressed textures. Their pixels can't be read.
-- See-through parts of a mesh that also has opaque materials. They are treated as opaque (a warning names the mesh; see "See-through meshes").
+- Vertex colours (`vertexColors`, glTF `COLOR_0`). Later (DECISIONS 2026-11-09).
+- The colour of tinted glass: glass lets all light through, untinted.
 
 ## How changes are found, and how late
 
@@ -341,7 +353,7 @@ The adapter does a fixed amount of work per frame instead:
 - **The hot list.** Once an object is seen moving, it is checked every frame until it has been still for 60 frames. Continuous motion is therefore sent every frame.
 - **`markChanged(object)`.** Tells the adapter something changed (added, moved, edited or removed). The object and everything under it are picked up in the next `update`. Use it when you move things and want no delay.
 - **Moves go out in one batch.** Every transform an `update` finds changed is sent with one `setTransforms` call at its end. For an `InstancedMesh` whose instance matrices changed, the instances named by `instanceMatrix.addUpdateRange(...)` are the only ones looked at, when the mesh was also checked in the previous update (three clears the ranges at `render`, after `ThreeGI.update` in the documented order); otherwise every instance is compared and only changed ones are sent.
-- **Edits.** Each frame, `editChecksPerFrame` geometries, materials and objects are checked for edits: geometry, material values, the `giContributes` flag, and whether a mesh's materials still all let light through.
+- **Edits.** Each frame, `editChecksPerFrame` geometries, materials and objects are checked for edits: geometry, material values (including each texture's `version`, uv mapping and `flipY`, and the `userData` overrides), and the `giContributes` flag.
 - **Lights** (T2.1). The first 64 lights and every directional light are checked every frame, so a scene with a few lamps sees each light change in the frame it happens. Past 64, lights follow the objects' rules: `lightsPerFrame` (default 64) of them a frame, round robin, and a light found changed stays checked every frame until it has been still for 60 frames. So 1,024 candles cost 128 light checks on a still frame, not 1,024; an unmarked candle change, hide or removal reaches GI within `ceil((lights − 64) / 64)` frames (15 for 1,024 candles), and a flickering candle every frame once seen. `markChanged(light)` sends it the next update.
 
 The first pass over a new scene is done in full, so GI has the whole scene from the first frame.

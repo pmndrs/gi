@@ -2,6 +2,7 @@ import {
     BoxGeometry,
     BufferAttribute,
     BufferGeometry,
+    CompressedTexture,
     DataTexture,
     Color,
     DirectionalLight,
@@ -12,7 +13,11 @@ import {
     MeshPhysicalMaterial,
     MeshStandardMaterial,
     PointLight,
+    RGBA_BPTC_Format,
+    RenderTarget,
+    SRGBColorSpace,
     Scene,
+    ShaderMaterial,
     SkinnedMesh,
     Skeleton,
     Texture,
@@ -20,6 +25,7 @@ import {
 import { beforeEach, describe, expect, it } from 'vitest';
 import type {
     Aabb,
+    CompressedPixelData,
     EnvironmentDescriptor,
     InstanceDescriptor,
     InstanceHandle,
@@ -28,6 +34,7 @@ import type {
     LightHandle,
     Mat4,
     MaterialDescriptor,
+    PixelData,
     MaterialHandle,
     MeshDescriptor,
     MeshHandle,
@@ -229,12 +236,13 @@ describe('changes', () => {
         expect(frame(scene)).toEqual(['setTransforms']);
     });
 
-    it('sends a colour edit (three bumps no version for it), with metalness folded in', () => {
+    it('sends a colour edit (three bumps no version for it), with metalness apart', () => {
         material.color.setRGB(1, 0, 0);
         material.metalness = 0.5;
         expect(frame(scene)).toEqual(['updateMaterial']);
         const descriptor = [...api.materials.values()][0];
-        expect(descriptor.albedo).toEqual([0.5, 0, 0]);
+        expect(descriptor.albedo).toEqual([1, 0, 0]);
+        expect(descriptor.metalness).toBe(0.5);
     });
 
     it('reports the GI material it last sent for a three material', () => {
@@ -448,24 +456,68 @@ describe('the walk', () => {
         expect(sync.materialsWithEnvMap).toBe(0);
     });
 
-    it('folds a texture\'s average colour into the GI albedo, once per texture version', () => {
+    it('sends a texture\'s pixels as they are (no average folded in), and again when its version changes', () => {
         const scene = new Scene();
-        // Half red, half blue, stored linear.
         const pixels = new Uint8Array([255, 0, 0, 255, 0, 0, 255, 255]);
         const map = new DataTexture(pixels, 2, 1);
         map.needsUpdate = true;
         const material = new MeshStandardMaterial({ color: new Color().setRGB(1, 1, 0.5), map });
-        scene.add(new Mesh(new BoxGeometry(), material));
+        // A second material on the same texture: one platform texture for both.
+        const other = new MeshStandardMaterial({ map });
+        scene.add(new Mesh(new BoxGeometry(), material), new Mesh(new BoxGeometry(), other));
         frame(scene);
-        const albedo = [...api.materials.values()][0].albedo!;
-        expect(albedo[0]).toBeCloseTo(0.5);
-        expect(albedo[1]).toBeCloseTo(0);
-        expect(albedo[2]).toBeCloseTo(0.25);
-        // New pixels (a new version): the average is made again.
+        expect(api.textures.size).toBe(1);
+        const [first] = [...api.textures.keys()];
+        expect((api.textures.get(first)!.source as PixelData).data).toBe(pixels);
+        const sent = sync.sentMaterial(material)!;
+        expect(sent.albedo).toEqual([1, 1, 0.5]);
+        expect(sent.albedoTexture).toBe(first);
+        expect(sync.sentTexture(map)).toBe(first);
+        // New pixels (a new version): found by the edit checks, sent as a new texture; the old one goes when no material uses it.
         pixels.set([0, 255, 0, 255, 0, 255, 0, 255]);
         map.needsUpdate = true;
+        const calls = frame(scene);
+        expect(calls.filter((call) => call === 'createTexture')).toHaveLength(1);
+        expect(calls.filter((call) => call === 'updateMaterial')).toHaveLength(2);
+        expect(calls).toContain('destroyTexture');
+        const [second] = [...api.textures.keys()];
+        expect(api.textures.size).toBe(1);
+        expect(second).not.toBe(first);
+        expect(sync.sentMaterial(material)!.albedoTexture).toBe(second);
+        expect(sync.sentMaterial(other)!.albedoTexture).toBe(second);
+        // A still frame after: nothing.
+        expect(frame(scene)).toEqual([]);
+    });
+
+    it('sends a CompressedTexture map as its compressed mips', () => {
+        const scene = new Scene();
+        const mipmaps = [256, 128].map((size) => ({ data: new Uint8Array((size / 4) * (size / 4) * 16), width: size, height: size }));
+        const map = new CompressedTexture(mipmaps, 256, 256, RGBA_BPTC_Format);
+        map.colorSpace = SRGBColorSpace;
+        map.needsUpdate = true;
+        scene.add(new Mesh(new BoxGeometry(), new MeshStandardMaterial({ map })));
         frame(scene);
-        expect([...api.materials.values()][0].albedo![1]).toBeCloseTo(1);
+        const [texture] = [...api.textures.values()];
+        expect((texture.source as CompressedPixelData).format).toBe('bc7-rgba-unorm-srgb');
+        expect((texture.source as CompressedPixelData).levels[0].data).toBe(mipmaps[0].data);
+        expect(warnings).toEqual([]);
+    });
+
+    it('warns once about textures GI can\'t read, and once per custom-shaded material', () => {
+        const scene = new Scene();
+        const target = new RenderTarget(4, 4);
+        const shader = new ShaderMaterial({ name: 'water' });
+        scene.add(
+            new Mesh(new BoxGeometry(), new MeshStandardMaterial({ map: target.texture })),
+            new Mesh(new BoxGeometry(), new MeshStandardMaterial({ map: target.texture, color: 0xff0000 })),
+            new Mesh(new BoxGeometry(), shader),
+            new Mesh(new BoxGeometry(), shader),
+        );
+        frame(scene);
+        frame(scene);
+        expect(api.textures.size).toBe(0);
+        expect(warnings.filter((warning) => warning.includes('render-target'))).toHaveLength(1);
+        expect(warnings.filter((warning) => warning.includes('"water"'))).toHaveLength(1);
     });
 
     it('picks up a changed GI flag through the edit rotation, and at once when marked', () => {
@@ -489,7 +541,7 @@ describe('the walk', () => {
     });
 });
 
-describe('see-through meshes', () => {
+describe('see-through materials (per triangle since M4)', () => {
     /** contributesToGI of each instance, by label (the mesh's name). */
     function contributions(): Record<string, boolean | undefined> {
         const result: Record<string, boolean | undefined> = {};
@@ -502,66 +554,38 @@ describe('see-through meshes', () => {
         return new MeshStandardMaterial({ transparent: true, metalness: 1, name: 'dirt_decal' });
     }
 
-    it('leaves out a mesh whose materials all let light through, and keeps opaque ones', () => {
+    it('sends every mesh into GI\'s rays: decals, glass and meshes that mix them with opaque materials, with no warning', () => {
         const scene = new Scene();
         const decalMaterial = blendedDecal();
         const glass = new MeshPhysicalMaterial({ transmission: 1 });
-        const decal = Object.assign(new Mesh(new BoxGeometry(), decalMaterial), { name: 'decal' });
-        const wall = Object.assign(new Mesh(new BoxGeometry(), new MeshStandardMaterial()), { name: 'wall' });
-        scene.add(decal, Object.assign(new Mesh(new BoxGeometry(), glass), { name: 'pane' }), wall);
+        // BoxGeometry has six groups; with two materials, face 1 is glass and the rest are opaque.
+        const facade = new Mesh(new BoxGeometry(), [new MeshStandardMaterial(), glass]);
+        scene.add(
+            Object.assign(new Mesh(new BoxGeometry(), decalMaterial), { name: 'decal' }),
+            Object.assign(new Mesh(new BoxGeometry(), glass), { name: 'pane' }),
+            Object.assign(facade, { name: 'facade' }),
+        );
         frame(scene);
-        expect(contributions()).toEqual({ decal: false, pane: false, wall: true });
-        expect([sync.sentSeeThrough(decal), sync.sentSeeThrough(wall), sync.sentSeeThrough(new Mesh())]).toEqual([true, false, undefined]);
-        expect(sync.sentMaterial(decalMaterial)?.blocksLight).toBe(false);
+        expect(contributions()).toEqual({ decal: true, pane: true, facade: true });
+        expect([sync.sentContributes(facade), sync.sentContributes(new Mesh())]).toEqual([true, undefined]);
+        // The decal blocks light by its alpha; the glass lets it through, triangle by triangle in the platform.
+        expect(sync.sentMaterial(decalMaterial)).toMatchObject({ alphaMode: 'stochastic', blocksLight: true });
+        expect(sync.sentMaterial(glass)?.blocksLight).toBe(false);
         expect(warnings).toEqual([]);
     });
 
-    it('keeps a mesh that mixes blocking and see-through materials, with one warning naming it', () => {
-        const scene = new Scene();
-        // BoxGeometry has six groups; with two materials, face 1 is the decal and the rest are opaque.
-        const mixed = new Mesh(new BoxGeometry(), [new MeshStandardMaterial(), blendedDecal()]);
-        mixed.name = 'facade';
-        scene.add(mixed);
-        frame(scene);
-        expect(contributions()).toEqual({ facade: true });
-        expect(warnings).toHaveLength(1);
-        expect(warnings[0]).toContain('"facade"');
-        frame(scene);
-        expect(warnings).toHaveLength(1);
-    });
-
-    it('keeps a blended material in GI when it opts in', () => {
-        const scene = new Scene();
-        const decalMaterial = blendedDecal();
-        decalMaterial.userData.giBlocksLight = true;
-        scene.add(Object.assign(new Mesh(new BoxGeometry(), decalMaterial), { name: 'decal' }));
-        frame(scene);
-        expect(contributions()).toEqual({ decal: true });
-        expect(sync.sentMaterial(decalMaterial)?.blocksLight).toBe(true);
-    });
-
-    it('follows a material edit or swap that makes a mesh see-through or opaque', () => {
+    it('sends a material edit or swap that makes a mesh see-through as a material change only, with the same instances', () => {
         const scene = new Scene();
         const material = new MeshStandardMaterial();
         const mesh = Object.assign(new Mesh(new BoxGeometry(), material), { name: 'pane' });
         scene.add(mesh);
         frame(scene);
-        expect(contributions()).toEqual({ pane: true });
-        // An unmarked edit: the material check, then the object rotation, pick it up.
         material.transparent = true;
-        frame(scene);
-        frame(scene);
-        expect(contributions()).toEqual({ pane: false });
-        // Marked: at once.
-        material.userData.giBlocksLight = true;
-        sync.markChanged(mesh);
-        // New instances only: the mesh (and its tree) and the material are kept.
-        expect(frame(scene)).toEqual(['updateMaterial', 'destroyInstance', 'createInstance']);
+        expect(frame(scene)).toEqual(['updateMaterial']);
+        expect(sync.sentMaterial(material)?.alphaMode).toBe('stochastic');
+        mesh.material = new MeshPhysicalMaterial({ transmission: 1 });
+        expect(frame(scene)).toEqual(['createMaterial', 'setMaterials', 'destroyMaterial']);
         expect(contributions()).toEqual({ pane: true });
-        // A swapped material, found by the walk.
-        mesh.material = blendedDecal();
-        frame(scene);
-        expect(contributions()).toEqual({ pane: false });
         expect(api.instances.size).toBe(1);
     });
 });

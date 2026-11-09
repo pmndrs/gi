@@ -1,0 +1,4 @@
+{
+    "description": "M4 T4.3: thin-wall's partition as one three mesh with a wall material and a glass (transmission) pane, through the adapter: light reaches the dark side through the glass only (opaque pane < glass pane < all-glass partition).",
+    "timeoutMs": 900000
+}
