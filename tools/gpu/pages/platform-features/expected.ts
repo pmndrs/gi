@@ -44,12 +44,21 @@ export function halfToFloat(bits: number): number {
 }
 
 /**
- * The f16 kernel's cases: each is computed in f16 on the GPU from f32
- * inputs, and every input and expected result is exactly representable in
- * f16, so the readback must match bit for bit. `onePlusTiny` is the case that
- * tells real f16 arithmetic from f32 promoted: 1 + 0.0001 is 1.0001 in f32,
- * but f16's step at 1.0 is 2^-10 (0.000977), so in f16 it is exactly 1.0
- * whichever way the implementation rounds.
+ * The f16 kernel's cases, computed on the GPU from f32 inputs read at run
+ * time. Every input and expected result is exactly representable in f16, so
+ * the readback must match bit for bit.
+ *
+ * The first six are single, correctly rounded operations on f16-exact
+ * inputs: they show the f16 path computes right, but f32 math stored as f16
+ * would give the same bits. The last two tell real f16 arithmetic from f32
+ * arithmetic stored as f16, because their intermediate isn't representable
+ * in f16:
+ * - `cancellation`: (1 + 0.0001) - 1. f16's step at 1.0 is 2^-10 (0.000977),
+ *   so 1 + 0.0001 is exactly 1.0 in f16 and the difference is 0; in f32 it
+ *   is about 1e-4, which stores as a non-zero f16.
+ * - `overflow`: 300 * 300 / 1000. 90,000 is past f16's largest finite value
+ *   (65,504), so in f16 the product is infinity and so is the quotient; in
+ *   f32 the result is 90.
  */
 export const F16_INPUTS = {
     one: 1,
@@ -60,16 +69,20 @@ export const F16_INPUTS = {
     largestFinite: 65504,
     dividend: -7,
     divisor: 2,
+    threeHundred: 300,
+    thousand: 1000,
 } as const;
 
 /** Results the kernel stores to `array<f16>`, in this order. */
 export const F16_EXPECTED = [
     { name: 'product', value: 3.375 }, // 1.5 * 2.25
-    { name: 'onePlusTiny', value: 1 }, // see F16_INPUTS
+    { name: 'onePlusTiny', value: 1 }, // 1.0001 rounds to 1.0 when stored, so f32 math gives this too
     { name: 'squareRoot', value: 2.5 }, // sqrt(6.25)
     { name: 'largestFinite', value: 65504 }, // f16's largest finite value survives the conversion
     { name: 'dot', value: 4 }, // dot((0.5, 1.5, -2, 4), (2, 2, 0.25, 0.125)) = 1 + 3 - 0.5 + 0.5
     { name: 'quotient', value: -3.5 }, // -7 / 2
+    { name: 'cancellation', value: 0 }, // (1 + 0.0001) - 1: 0 in f16, about 1e-4 in f32
+    { name: 'overflow', value: Infinity }, // 300 * 300 / 1000: infinity in f16, 90 in f32
 ] as const;
 
 /** The value one invocation of the subgroup check adds: small, so 8,192 of them sum well inside u32. */

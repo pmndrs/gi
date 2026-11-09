@@ -45,15 +45,12 @@ import {
  *   `texture-formats-tier2` (and `core-features-and-limits`);
  * - :245-248 `requiredLimits: parameters.requiredLimits`, which defaults to `{}` (:97): no raised
  *   limits unless the host passes them to `new WebGPURenderer({ requiredLimits })`.
+ *
+ * Read from source, not measured, so it goes in the data as text only (no checks.csv row); the
+ * measured `three/features/<feature>/enabled` and `three/limits/*` rows show the same thing.
  */
-const THREE_REQUESTS_FEATURE: Readonly<Record<CheckedFeature, boolean>> = {
-    'indirect-dispatch': true, // core WebGPU, nothing to request
-    'texture-formats-tier2': true,
-    subgroups: true,
-    'shader-f16': true,
-    'timestamp-query': true,
-};
-const THREE_REQUESTS_LIMITS = false;
+const THREE_SOURCE_NOTE =
+    'three r187 WebGPUBackend.js: compatibility adapter (:215-219); every GPUFeatureName the adapter has (:231-243, WebGPUConstants.js:328-349); requiredLimits defaults to {} (:97, :245-248)';
 
 /** Our feature results as plain data (numbers and booleans go to checks.csv; `problems` strings don't). */
 function featureData(results: Record<CheckedFeature, FeatureResult>): Record<string, unknown> {
@@ -150,8 +147,7 @@ try {
     data.three = {
         adapter: `${threeAdapter.vendor}/${threeAdapter.architecture}`,
         coreFeaturesAndLimits: threeDevice.features.has('core-features-and-limits'),
-        requestsFeature: THREE_REQUESTS_FEATURE,
-        requestsLimits: THREE_REQUESTS_LIMITS,
+        source: THREE_SOURCE_NOTE,
         features: featureData(three),
         readWriteRgba16FloatLayoutAccepted: await acceptsReadWriteRgba16Float(threeDevice),
         limits: threeLimits,

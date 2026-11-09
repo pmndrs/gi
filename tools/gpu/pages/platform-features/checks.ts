@@ -477,7 +477,8 @@ async function checkSubgroups(device: GPUDevice, result: FeatureResult): Promise
 /**
  * Computes F16_EXPECTED's cases in f16 from f32 inputs read at run time (so
  * nothing folds at compile time) and stores them to an `array<f16>` in a
- * storage buffer, which `shader-f16` also allows.
+ * storage buffer, which `shader-f16` also allows. The last two cases fail
+ * if the compiler does the math in f32 and only stores f16.
  */
 const F16_SHADER = /* wgsl */ `
 enable f16;
@@ -491,6 +492,8 @@ struct Inputs {
     largestFinite: f32,
     dividend: f32,
     divisor: f32,
+    threeHundred: f32,
+    thousand: f32,
 }
 
 @group(0) @binding(0) var<storage, read> inputs: Inputs;
@@ -505,6 +508,11 @@ fn computeHalves() {
     let oneHalf = f16(inputs.one) / 2.0h;
     results[4] = dot(vec4h(oneHalf, 1.5h, -2.0h, 4.0h), vec4h(2.0h, 2.0h, 0.25h, 0.125h) * f16(inputs.one));
     results[5] = f16(inputs.dividend) / f16(inputs.divisor);
+    // The two cases whose f16 answer differs from f32 math stored as f16 (F16_INPUTS).
+    let onePlusTiny = f16(inputs.one) + f16(inputs.tiny);
+    results[6] = onePlusTiny - f16(inputs.one);
+    let squared = f16(inputs.threeHundred) * f16(inputs.threeHundred);
+    results[7] = squared / f16(inputs.thousand);
 }`;
 
 async function checkShaderF16(device: GPUDevice, result: FeatureResult): Promise<void> {
@@ -530,7 +538,10 @@ async function checkShaderF16(device: GPUDevice, result: FeatureResult): Promise
     const halves = new Uint16Array(await readBuffer(device, resultBuffer, resultBytes));
     F16_EXPECTED.forEach(({ name, value }, index) => {
         const got = halfToFloat(halves[index]);
-        result.measured[name] = got;
+        // Infinity isn't a CSV number, so each case also records whether it matched.
+        if (Number.isFinite(got)) result.measured[name] = got;
+        else result.measured[`${name}_infinite`] = got === Infinity ? 1 : got === -Infinity ? -1 : 0;
+        result.measured[`${name}_matches`] = got === value;
         if (got !== value) result.problems.push(`${name}: read ${got}, expected ${value}`);
     });
     for (const buffer of [inputBuffer, resultBuffer]) buffer.destroy();
