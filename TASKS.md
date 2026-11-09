@@ -473,19 +473,19 @@ Status: **started 2026-11-09** on branch `m3` (from `m2` at 5de856b; PR #4, `m2`
 
 | ID | Task | Agent | Size | Depends on | Status |
 | --- | --- | --- | --- | --- | --- |
-| T3.0 | Spike: deformed positions from three (storage `ExternalTexture`); the `updateMatrixWorld` override on Bistro interior (safe with three's and our tests; rough ns per object); refit decay on a swaying tree. A yes or no for each, with rough numbers | implementer | S | T3.11 (the tree) for the third question | todo |
-| T3.1 | Change feed, the parts T2.M1 left: `receivers`, `deformBounds`, `setDeformedPositions` (done-when items 2-4) | implementer | S | none | todo |
+| T3.0 | Spike: deformed positions from three (storage `ExternalTexture`); the `updateMatrixWorld` override on Bistro interior (safe with three's and our tests; rough ns per object); refit decay on a swaying tree. A yes or no for each, with rough numbers | implementer | S | T3.11 (the tree) for the third question | active (2026-11-09; worktree `webgpu-ddgi-m3-t30`) |
+| T3.1 | Change feed, the parts T2.M1 left: `receivers`, `deformBounds`, `setDeformedPositions` (done-when items 2-4) | implementer | S | none | active (2026-11-09; worktree `webgpu-ddgi-m3-t31`) |
 | T3.2 | Runtime mesh trees: GPU builds for added and updated meshes, tinybvh refinement | implementer | M | T3.0 | todo |
 | T3.3 | Deforming meshes: `GpuMeshRefit` wired, scene-copy positions, geometric normals, movement word; H-PLOC rebuild when the refit drifts | implementer | M | T3.1, T3.2 | todo |
 | T3.4 | Probes near moved geometry, the parts T2.M1 left: woken air probes (M1's "probes in empty space"), deforming movers, the far-set guess scaled to the mover's size (T2.M1 item 8) | implementer | M | T3.1 | todo |
-| T3.5 | Several volumes: shared atlas, volume table, priority blending | implementer | M | none | todo |
+| T3.5 | Several volumes: shared atlas, volume table, priority blending | implementer | M | none | active (2026-11-09; worktree `webgpu-ddgi-m3-t35`) |
 | T3.6 | Camera-following volume: wrapping slots, `ddgi/scroll`, window rule, fade-in | implementer | M | T3.5 | todo |
 | T3.7 | three adapter change tracking v2 (added and removed objects without `markChanged`, deforming meshes, the `updateMatrixWorld` override if T3.0 says yes) | implementer | M | T3.0, T3.1 | todo |
 | T3.8 | Viewer scenarios and their manifest motions (furniture, door, cabinets, wind tree, fly-through) | implementer | M | T3.3, T3.4, T3.6, T3.7, T3.11, T3.12 | todo |
 | T3.9 | M3 checks: correctness on the RTX and the Intel UHD (oracle, accuracy, leak, response in frames, stability, recompiles at 0), the door and cabinet against Cycles renders of their end states; rough costs recorded | gpu-tester | M | T3.0-T3.8 | todo |
 | T3.10 | M3 note and the next breakdown | main session | S | T3.9 | todo |
-| T3.11 | The wind tree's asset: find or generate, convert, record licence | wrangler | S | none | todo |
-| T3.12 | Bistro exterior runs in the viewer on a 6 GB card (the fly-through needs it): compressed textures through GPUTex (upstream gputex 0.14.0 first; HomeFig's method only after asking Dennis; KTX2 the fallback). If that isn't quick, the viewer applies T2.17's texture cap as a setting and GPUTex moves to Later | implementer | S | none | todo |
+| T3.11 | The wind tree's asset: find or generate, convert, record licence | wrangler | S | none | active (2026-11-09; wrangler; worktree `webgpu-ddgi-m3-t311`) |
+| T3.12 | Bistro exterior runs in the viewer on a 6 GB card (the fly-through needs it): compressed textures through GPUTex (upstream gputex 0.14.0 first; HomeFig's method only after asking Dennis; KTX2 the fallback). If that isn't quick, the viewer applies T2.17's texture cap as a setting and GPUTex moves to Later | implementer | S | none | active (2026-11-09; worktree `webgpu-ddgi-m3-t312`) |
 
 ## Carried to M2 (collected during M1)
 
