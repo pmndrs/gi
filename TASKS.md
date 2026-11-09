@@ -562,7 +562,7 @@ Same rules as phase 2 (no timing; correctness gates; faithful port with Capsaici
 
 | ID | Task | Agent | Size | Depends on | Status |
 | --- | --- | --- | --- | --- | --- |
-| RC3.1 | The hash grid: one shared WGSL function for the cell descriptor and both hashes; CAS insert into 16-slot buckets, find, decay stamps and `PurgeTiles`; buffers packed at Capsaicin's default capacity; the `WorldCache` interface with the hash grid behind it | implementer | M | RC2.1 | todo |
+| RC3.1 | The hash grid: one shared WGSL function for the cell descriptor and both hashes; CAS insert into 16-slot buckets, find, decay stamps and `PurgeTiles`; buffers packed at Capsaicin's default capacity; the `WorldCache` interface with the hash grid behind it | implementer | M | RC2.1 | active (implementer, 2026-11-09; in parallel with RC2.1, wired in after it merges) |
 | RC3.2 | Population and resolve: probe-ray hits insert cells (`PopulateScreenProbes`' cache half), `GenerateReservoirs` (a light per hit through the platform light grid, D4, with the bypass rules), `PopulateCells` (shadow ray, quantised accumulation), `UpdateTiles` (temporal accumulation and the tile mips), `ResolveCells` (filtered lookup into the probe rays); phase 2's staging retired | implementer | M | RC3.1, RC2.2 | todo |
 | RC3.3 | GI-1.2 multi-bounce: `PopulateMultibounceCells`, `GenerateMultibounceReservoirs`, `UpdateMultibounceCells` and the indirect value array | implementer | M | RC3.2 | todo |
 
