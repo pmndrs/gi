@@ -31,7 +31,7 @@
  *    sRGB, normals as n / 2 + 1/2), and laid out as a contact sheet that the
  *    runner's screenshot captures.
  * 8. **The opaque surface under the depth sample:** a transparent plane
- *    (no depth write) over the centre, under normal, premultiplied normal,
+ *    (no depth write) over a known opaque surface (an unlit white panel), under normal, premultiplied normal,
  *    additive and multiply blending, changes the picture but no channel.
  * Every frame also checks that exactly one screen stage ran.
  *
@@ -314,8 +314,22 @@ async function checkTransparency(context: ThreePageContext, rig: Rig): Promise<R
         const picture = await readPassTarget(context.renderer, rig.scenePass, 'output');
         return [picture.at(x, y, 0), picture.at(x, y, 1), picture.at(x, y, 2)];
     };
+    // The known opaque surface: an unlit white panel 2 m ahead (the centre of Sponza's view is
+    // dark, and a multiplied black stays black, so the planes must cover something bright).
+    const forward = camera.getWorldDirection(new Vector3());
+    const backdropMaterial = new MeshBasicMaterial({ color: 0xffffff });
+    const backdrop = new Mesh(new BoxGeometry(1, 1, 0.05), backdropMaterial);
+    backdrop.name = 'screen-inputs opaque backdrop';
+    backdrop.position.copy(camera.position).addScaledVector(forward, 2);
+    backdrop.lookAt(camera.position);
+    backdrop.updateMatrixWorld(true);
+    scene.add(backdrop);
+    threeGI.markChanged(backdrop);
     const opaque = (await sampleFrame(context, rig, centre))[0];
     const opaqueColour = await colourAt();
+    const backdropHandles = [...threeGI.sync.mirroredInstances()].find(([object]) => object === backdrop)?.[1];
+    assert(backdropHandles && opaque.instance === threeGI.gi.scene.instanceIndex(backdropHandles[0]) + 1, 'the centre pixel does not show the opaque backdrop');
+    assert(opaque.albedo.every((value) => Math.abs(value - 1) <= BYTE_TOLERANCE), `the white backdrop's albedo reads ${opaque.albedo.join(', ')}`);
     const blendings = [
         { name: 'normal', blending: NormalBlending, premultipliedAlpha: false },
         { name: 'normal premultiplied', blending: NormalBlending, premultipliedAlpha: true },
@@ -328,14 +342,14 @@ async function checkTransparency(context: ThreePageContext, rig: Rig): Promise<R
         const material = new MeshBasicMaterial({ color: 0x20c040, transparent: true, opacity: 0.5, depthWrite: false, blending, premultipliedAlpha });
         const plane = new Mesh(new PlaneGeometry(0.4, 0.4), material);
         plane.name = `screen-inputs transparent plane (${name})`;
-        plane.position.copy(camera.position).addScaledVector(camera.getWorldDirection(new Vector3()), 1.2);
+        plane.position.copy(camera.position).addScaledVector(forward, 1.2);
         plane.lookAt(camera.position);
         plane.updateMatrixWorld(true);
         scene.add(plane);
         threeGI.markChanged(plane);
         const covered = (await sampleFrame(context, rig, centre))[0];
         const coveredColour = await colourAt();
-        // Relative: multiply blending darkens a dark pixel by a small absolute amount.
+        // Relative to the backdrop's colour (white, before tone mapping).
         const pictureChange = Math.max(...coveredColour.map((value, channel) => Math.abs(value - opaqueColour[channel]) / Math.max(Math.abs(opaqueColour[channel]), 1e-3)));
         const channelChange = Math.max(
             Math.abs(covered.depth - opaque.depth),
@@ -353,6 +367,10 @@ async function checkTransparency(context: ThreePageContext, rig: Rig): Promise<R
         plane.geometry.dispose();
         material.dispose();
     }
+    scene.remove(backdrop);
+    threeGI.markChanged(backdrop);
+    backdrop.geometry.dispose();
+    backdropMaterial.dispose();
     return results;
 }
 
