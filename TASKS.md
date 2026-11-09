@@ -464,7 +464,20 @@ Status: **started 2026-11-09** on branch `m3` (from `m2` at 5de856b; PR #4, `m2`
 - **Done-whens:** m3-moving.md's "Draft done-whens", with the timing items recorded instead of gated: T3.1's item 1 (already met by T2.M1), T3.2's item 3, T3.3's item 2, T3.4's cost in item 4, T3.5's item 2, and T3.7's item 2. T3.9 is the correctness checks only.
 
 **Lanes** (tasks in one lane run in order; separate lanes run in parallel):
-- **A, trees and refit** (`trace/`, the BVH builders): T3.0 → T3.2 → T3.3. The tracer's material side (UVs, alpha) belongs to M4: the two sessions agree file ownership before either starts.
+- **A, trees and refit** (`trace/`, the BVH builders): T3.0 → T3.2 → T3.3.
+
+**File ownership with M4** (agreed with the M4 design session, 2026-11-09). Paths are under `packages/ddgi-core/src/platform/`.
+- **M3 owns:**
+  - tree building and refit: `trace/mesh-bvh*`, `gpu-mesh-trees.ts`, `top-level*`, `sah-builder.ts`, the tree swap, and `packages/bvh`;
+  - the mesh and vertex packing: `scene/mesh-packing.ts`, `gpu-mesh-packing.ts`, `pack-mesh-wgsl.ts`, `trace/triangle-packing.ts`;
+  - the change feed: `scene/change-log.ts`, `scene/instance-transforms.ts` and the contract's change-feed types.
+- **M4 owns:**
+  - `textures/`, `shade/hit-shading.ts`, `shade/direct.ts` and `shade/wgsl.ts`;
+  - the leaf test in `trace/wgsl.ts`, plus the new `trace/material-test-wgsl.ts` and `trace/triangle-flags.ts`;
+  - the material-record words in `scene/layout.ts`.
+- **Shared, one change at a time:**
+  - `scene/layout.ts`: a layout-only commit first, and tell the other session.
+  - The tree-install call site in `ray-queries.ts`: every install path (tinybvh, H-PLOC, and T3.2/T3.3's new ones) runs M4's `gi/triangle-flags`. Whichever lands second wires it in.
 - **B, the change feed and the adapter:** T3.1 → T3.7.
 - **C, probes near moved geometry:** T3.4, after T3.1.
 - **D, volumes:** T3.5 → T3.6. Like C, it changes `ddgi-technique.ts`, so D merges first and C rebases on it.
@@ -516,7 +529,7 @@ Polish and follow-ups, picked up when a working feature needs them. Earlier IDs 
 - DDGI memory: trim buffers grown by doubling once a scene settles (about 237 MB unused on Bistro, T2.17) (T3.13).
 - Bistro's calibration: Budget v2 lands at 14-116 probes, and `ddgi/trace` has a 1-1.5 ms fixed cost at 16 probes; the budget page's check breaks when the frame rate is learned (T3.14).
 - The change cost model counts `gi/direct`'s lit hits, to win back the frame-15 margin on Sponza's sun turn, with the sun layer on and off, on both GPUs (T2.18, T2.8, the Intel miss) (T3.15).
-- Scene-copy follow-ups from T2.13's review: texture averages from three's smallest mip, H-PLOC reading the packing's staging buffers, GPU tests of the packing fallbacks, the main-thread bar (T3.16).
+- Scene-copy follow-ups from T2.13's review: H-PLOC reading the packing's staging buffers, GPU tests of the packing fallbacks, the main-thread bar (T3.16). The texture-average items are dropped: M4's textured hits remove the averages (m4-materials.md).
 - Native parity: native's Sponza GI about 8× Cycles' (the sun's units first), native's 1 m falloff clamp, a native sweep on our grid for Sponza (T3.17).
 - `userData.giRange` in the three adapter (a host-facing API; designed by the main session first) (T3.18).
 - Test flakes: unit tests timing out at 5 s under CPU load; the Intel hanging on the 4th page of a batch (T3.19).
