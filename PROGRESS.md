@@ -21,6 +21,22 @@ Rules:
 
 ---
 
+## 2026-11-09 · T3.12 Bistro exterior on a 6 GB card: compressed textures · implementer (opus)
+Did: the GPUTex path, upstream gputex 0.14.0 only (npm, MIT; THIRD_PARTY). `apps/viewer/src/scene/compress-textures.ts` encodes model textures at load on three's own device (BC7, BC5 for normal maps, full mip chains, one readback each) into three `CompressedTexture`s; `texture.mipmaps` bytes are kept for M4. Viewer setting `textures=` in the link, default `compressed` for every scene. **`compressed` leaves `map`, `emissiveMap` and `metalnessMap` uncompressed**: the three adapter averages them on the CPU for GI and skips compressed textures, so compressing them made Bistro's GI white (all 132 materials have a white base colour; seen in `all-compressed`). `all-compressed` and `uncompressed` stay available. Also: `LoadSceneOptions.textureCompression`/`device`, `viewer-baselines` `VITE_DDGI_TEXTURES`, a new manual page `viewer-textures`, unit tests. Commit 0fb1148 (+ this entry and CSV rows).
+Verified (RTX 3060 Laptop, nvidia/ampere, headless Chrome 157, 1,200 MHz throughout per nvidia-smi; bench lock, `--no-cool-wait`): typecheck, lint, 1,152 unit tests. `viewer-baselines` PASS on Bistro in all three modes; `viewer-textures` PASS on all 15 scenes in `compressed` mode (Sponza and Bistro exterior also in the others).
+- Pictures (`viewer-textures`, Bistro `street`, 1280×720, GI on): compressed against uncompressed differ by 0.79 of 255 levels on average, 0.56% of pixels by more than 8; the difference sits on normal-map detail (cobble joints, railings, the sign). At 3× zoom I couldn't tell them apart: no block artefacts, same bump shading. `all-compressed`: textures look right, GI far too bright (white albedo), as expected.
+Numbers (`viewer-baselines`, Bistro exterior, 2560×1440, none and ddgi; `baselines.csv` `note/t3.12_bistro_textures`):
+
+| textures | GI-on wall p50 / p95 | GI-on GPU | GI-off wall | VRAM peak | three's textures |
+| --- | --- | --- | --- | --- | --- |
+| uncompressed | 590.8 / 917.9 ms | 13.9 ms | 58.7 ms | 5.79 GB (ceiling) | 5.08 GB |
+| compressed (default) | 44.3 / 52.8 ms | 13.3 ms | 36.6 ms | 4.86 GB | 2.66 GB + 0.63 GB BC5 |
+| all-compressed | 56.6 / 71.0 ms | 13.3 ms | 56.4 ms | 3.14 GB | 1.25 GB BC7/BC5 |
+
+Wall minus GPU is three's CPU recording (T2.17). The `all-compressed` wall times are noisy: another app held 2.3 GB of the GPU when it started. Compression adds 2.4-3.0 s to Bistro's load (4.5-7.2 s for all-compressed); DDGI started in 21.8 s compressed against 45.7 s uncompressed.
+Not verified: the Intel UHD; the viewer app itself in a browser by hand (the pages run its `ViewerCore` and loader). `ddgi-batch-cost` and `ddgi-session-recompiles` still only have T2.17's cap.
+Next: when M4's adapter reads compressed mips (T4.3), empty `GI_AVERAGED_SLOTS` and `compressed` becomes all-compressed (1.25 GB on Bistro). `sponza-full` peaks at 5.63 GB in `compressed` mode (its textures are mostly GI-read maps), and Bistro interior reads 152 ms a frame at 720p: neither checked further. gputex filters mips in gamma space for sRGB maps (three filters in linear); not visible here.
+
 ## 2026-11-09 · T2.10 review fixes: the up-to-date M2 table · lead (opus)
 Did: answered the Opus review of T2.10 (fail, 3 blocking points) by putting one up-to-date table here, on M2's final code (`m2-t2.10`, with T2.17 and T2.18), and recording the known misses in DECISIONS (on `m2`, 2026-11-09). This replaces the earlier T2.10 tables where they differ. RTX 3060 Laptop, headless Chrome 157, about 780–830 MHz (the Bistro rows: a fixed 1,200 MHz).
 | Target | Final number | Verdict |
