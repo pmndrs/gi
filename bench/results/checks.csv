@@ -1113,3 +1113,16 @@ date,commit,device,browser,scene,metric,value
 2026-11-09,443e5c3,Intel UHD,Chrome headless,all,note/correctness_run,1
 2026-11-09,443e5c3,Intel UHD,Chrome headless,all,note/t2.10_intel_batch,16
 2026-11-09,443e5c3,Intel UHD,Chrome headless,all,note/rerun_after_hang,1
+2026-11-09,1db6dc0,RTX 3060 Laptop,Chrome headless,bistro-exterior/groups on,t2.10/session_recompiles/recompiles,0
+2026-11-09,1db6dc0,RTX 3060 Laptop,Chrome headless,bistro-exterior/groups on,t2.10/session_recompiles/control,1
+2026-11-09,1db6dc0,RTX 3060 Laptop,Chrome headless,bistro-exterior/groups on,t2.10/session_recompiles/frames,750
+2026-11-09,1db6dc0,RTX 3060 Laptop,Chrome headless,all,t2.10/session_recompiles/maxTextureSize,1024
+2026-11-09,1db6dc0,RTX 3060 Laptop,Chrome headless,all,note/t2.10_bistro_capped,1
+2026-11-09,1db6dc0,RTX 3060 Laptop,Chrome headless,all,note/sm_clock_locked_mhz,1200
+2026-11-09,1db6dc0,RTX 3060 Laptop,Chrome headless,all,note/sm_clock_mhz,1200
+2026-11-09,1db6dc0,RTX 3060 Laptop,Chrome headless,all,note/sm_clock_min_mhz,1200
+2026-11-09,1db6dc0,RTX 3060 Laptop,Chrome headless,all,note/sm_clock_max_mhz,1200
+2026-11-09,1db6dc0,RTX 3060 Laptop,Chrome headless,all,note/mem_clock_mhz,7151
+2026-11-09,1db6dc0,RTX 3060 Laptop,Chrome headless,all,note/start_temp_c,65
+2026-11-09,1db6dc0,RTX 3060 Laptop,Chrome headless,all,note/thermal_share,0
+2026-11-09,1db6dc0,RTX 3060 Laptop,Chrome headless,all,note/timing_valid,1

@@ -21,6 +21,28 @@ Rules:
 
 ---
 
+## 2026-11-09 · T2.10 review: Bistro exterior re-measured with the texture cap · gpu-tester (opus)
+Did: re-ran T2.10's Bistro exterior numbers with `VITE_DDGI_MAX_TEXTURE_SIZE=1024`, on `m2-t2.10` at 366dc0c (with T2.17 and T2.18). The RTX 3060 Laptop was nvidia/ampere, on headless Chrome 157.0.8103.38. Each run went under `bench-lock run`, one run per item, and all were VALID. `ddgi-session-recompiles` gained the same opt-in cap (1db6dc0, test page only). Rows are marked `note/t2.10_bistro_capped` in `timing.csv`, `baselines.csv` and `checks.csv` (066b495 and this commit). README now marks T2.10's uncapped Bistro rows as not to be used. Nothing in `packages/` changed.
+
+**Flags:**
+- **The clock was 1200 MHz in every sample, idle included** (P0 at idle; NOTES has the 2026-11-05 lock). It wasn't Chrome's usual 780 MHz, so these numbers compare with neither T2.10 nor T2.17.
+- **Another repo's `run-headless.mjs` denoiser timing captures were running, without our lock.** I saw them at 16:45, after my last run. The checks before each run read 0%, so overlap is possible but unproven. The whole frame's GPU-time spread between rounds was small (cv 0.003).
+
+| Item (capped, 1200 MHz, VALID) | Now | T2.10 uncapped (780 MHz) |
+| --- | --- | --- |
+| Start-up calibration | 52 probes (fixed 1.31 ms, spread 1.88). Other runs: 59 and 73 | 14-20 |
+| Budget section | **page FAIL**, "only 276 timed frames at the batch of 104" (as T2.17) | broken |
+| Its diagnosis run, at 59 / 118 probes | 1.95 / 2.18 ms median | |
+| 8 s ramp: recalibrated batch | 60; the budget ran the floor of 120 | 1 |
+| 8 s ramp: update ms | 2.19 median (p05 1.84, p95 2.55, +9.5%); PASS | |
+| Whole frame 1440p, GPU p50 / p95 | GI on 13.31 / 13.59; GI off 5.33 / 5.35; GI 8.00 [7.94, 8.05] | 19.2 / 20.3; 11.2 / 12.0 |
+| Whole frame 1440p, wall p50 / p95 | GI on 41.1 / 46.7; GI off 35.8 / 42.5 (both noisy, cv 0.2-0.6) | 545 / 683; 40 / 48 |
+| Session recompiles, groups on | 0 (control 1), 750 frames, page 62.7 s | 0, 35 s |
+
+**Diagnosis of the failure:** the batch doesn't hold steady for 300 timed frames. The budget section starts before the platform knows the frame rate, so the floor assumes 60 Hz. That gives 28,952 / 240 = 121 probes, capped at 2× the batch (118). After 1 s it learns about 312 Hz, the floor drops to 24, and the batch goes back to 59. Split 276 / 324, neither half reaches 300. The page check meets the floor's start; cost isn't the problem. Calibration scatter at small sizes (4 probes 0.29-2.0 ms) explains why the count moves (NOTES).
+Not verified: the Intel UHD; tree swap and adapter on Bistro, capped (README lists them as uncapped); a run at 780 MHz.
+Next (lead): whether the budget check should skip the first 1 s window, or let the floor learn the rate in start-up (a page or library choice, not made here). Find out who pinned the clock at 1200 MHz.
+
 ## 2026-11-09 · T2.10 Intel UHD correctness run · gpu-tester (opus)
 Did: ran M1's still-scene checks plus M2's, T2.12's and T2.13's correctness pages on the Intel UHD (intel/gen-12lp, headless Chrome 157.0.8103.38). This is M2's final code (`m2-t2.10` at 1919130; later commits change only CSVs and docs). There were 18 runs of 1–4 pages, each under `bench-lock run --no-cool-wait`. Timings are not gated. Rows: `checks.csv` (`t2.10/...`, device `Intel UHD`, `note/t2.10_intel_batch`, `note/device_hung` on hung pages), `flicker.csv`, `trace.csv` (H-PLOC quick bench). No library code was changed.
 
