@@ -311,7 +311,8 @@ fn ${POPULATION_ENTRY_POINT.populateScreenProbes}(
         // scratch storage that'll be used for atomically updating the radiance.
         // The accumulation will be resolved in the 'UpdateTiles()' kernel to
         // avoid integer overflow.
-        if (is_new_tile || previous_tile_decay != g_HashGridCacheConstants.frame_index) {
+        // (Capsaicin's condition, with a once-per-frame check so a new tile is listed once: register D32.)
+        if ((is_new_tile || previous_tile_decay != g_HashGridCacheConstants.frame_index) && HashGridCache_ListTileForUpdate(tile_index)) {
             let update_tile_index = atomicAdd(&g_HashGridCache_TileWords[HASHGRIDCACHE_UPDATETILECOUNTBUFFER], 1u);
             HashGridCache_SetRayListWord(g_HashGridCache_RayLists.update_tile_buffer, update_tile_index, tile_index);
         }

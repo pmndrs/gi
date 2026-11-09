@@ -17,8 +17,9 @@
  * fixed offsets, one per element type and use:
  *
  * - **tile words** (`u32`, atomics): the cache's counters, then per tile the
- *   hash (checksum) slot, the decay stamp and the two ping-pong packed tile
- *   lists. A few MiB.
+ *   hash (checksum) slot, the decay stamp, the two ping-pong packed tile
+ *   lists and the frame it was last put on the update list (register D32).
+ *   A few MiB.
  * - **cell values** (`vec2u`): `ValueBuffer` then `ValueIndirectBuffer`.
  * - **update scratch** (`u32`, atomics): `UpdateCellValueBuffer` then
  *   `UpdateCellValueIndirectBuffer`, four words per cell each.
@@ -185,6 +186,8 @@ export interface HashGridCacheBufferLayout {
         readonly decayTileBuffer: number;
         readonly packedTileIndexBuffer0: number;
         readonly packedTileIndexBuffer1: number;
+        /** Ours (register D32): per tile, the frame (plus one) it was last put on the update list. */
+        readonly updateListedTileBuffer: number;
         readonly bytes: number;
     };
     /** Cell values, in `vec2u` elements: `ValueBuffer` at 0, `ValueIndirectBuffer` at `numCells`. */
@@ -214,12 +217,13 @@ export function hashGridCacheBufferLayout(capacity: HashGridCacheCapacity): Hash
     const decayTileBuffer = hashBuffer + numTiles;
     const packedTileIndexBuffer0 = decayTileBuffer + numTiles;
     const packedTileIndexBuffer1 = packedTileIndexBuffer0 + numTiles;
-    const tileWordsBytes = (packedTileIndexBuffer1 + numTiles) * WORD_BYTES;
+    const updateListedTileBuffer = packedTileIndexBuffer1 + numTiles;
+    const tileWordsBytes = (updateListedTileBuffer + numTiles) * WORD_BYTES;
     const cellValuesBytes = 2 * numCells * CELL_VALUE_BYTES;
     const scratchWordsPerArray = UPDATE_SCRATCH_WORDS_PER_CELL * numCells;
     const updateScratchBytes = 2 * scratchWordsPerArray * WORD_BYTES;
     return {
-        tileWords: { hashBuffer, decayTileBuffer, packedTileIndexBuffer0, packedTileIndexBuffer1, bytes: tileWordsBytes },
+        tileWords: { hashBuffer, decayTileBuffer, packedTileIndexBuffer0, packedTileIndexBuffer1, updateListedTileBuffer, bytes: tileWordsBytes },
         cellValues: { valueBuffer: 0, valueIndirectBuffer: numCells, bytes: cellValuesBytes },
         updateScratch: { updateCellValueBuffer: 0, updateCellValueIndirectBuffer: scratchWordsPerArray, bytes: updateScratchBytes },
         totalBytes: tileWordsBytes + cellValuesBytes + updateScratchBytes,

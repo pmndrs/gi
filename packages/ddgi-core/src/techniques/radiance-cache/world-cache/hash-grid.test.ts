@@ -7,14 +7,17 @@ import {
     hashGridCacheCellIndex,
     hashGridCacheCellOffsetMip0,
     hashGridCacheCellSizeConstant,
+    hashGridCacheFilteredRadiance,
     hashGridCacheGetCellSize,
     hashGridCacheGetDesc,
     hashGridCacheTileAge,
     pcgHash,
+    updateTilesAccumulate,
     verticalFieldOfView,
     xxHash,
     type HashGridCacheDescConstants,
 } from './hash-grid-cpu.ts';
+import { hashGridCacheRayListLayout, RESERVOIR_WORDS, updateTilesPerWorkgroup } from './hash-grid-population-wgsl.ts';
 import { HASH_GRID_CONSTANTS_BYTES, HASH_GRID_CONSTANTS_WORD, hashGridCacheWgsl } from './hash-grid-wgsl.ts';
 import type { WorldCacheContext } from './world-cache.ts';
 
@@ -198,11 +201,11 @@ describe('the packed buffers (register D6) and the device limits (D14)', () => {
         // gi1.cpp:487-547: uint2 per cell twice, num_cells << 2 uints twice.
         expect(layout.cellValues.bytes).toBe(2 * 22282240 * 8);
         expect(layout.updateScratch.bytes).toBe(2 * 22282240 * 4 * 4);
-        // Counters (64 words), then hash, decay and the two packed lists, one word per tile each.
-        expect(layout.tileWords.bytes).toBe((64 + 4 * 262144) * 4);
-        expect(layout.totalBytes).toBe(356515840 + 713031680 + 4194560);
+        // Counters (64 words), then hash, decay, the two packed lists and the update-listed word (D32), one word per tile each.
+        expect(layout.tileWords.bytes).toBe((64 + 5 * 262144) * 4);
+        expect(layout.totalBytes).toBe(356515840 + 713031680 + 5243136);
         // Offsets on the 256-byte storage-binding alignment.
-        for (const offsetWords of [layout.tileWords.hashBuffer, layout.tileWords.decayTileBuffer, layout.tileWords.packedTileIndexBuffer0, layout.tileWords.packedTileIndexBuffer1]) {
+        for (const offsetWords of [layout.tileWords.hashBuffer, layout.tileWords.decayTileBuffer, layout.tileWords.packedTileIndexBuffer0, layout.tileWords.packedTileIndexBuffer1, layout.tileWords.updateListedTileBuffer]) {
             expect((offsetWords * 4) % 256).toBe(0);
         }
         expect((layout.cellValues.valueIndirectBuffer * 8) % 256).toBe(0);
@@ -290,5 +293,80 @@ describe('the constants and the shared WGSL', () => {
         }
         expect(code).toContain(`const HASHGRIDCACHE_DECAYTILEBUFFER: u32 = ${layout.tileWords.decayTileBuffer}u;`);
         expect(code).toContain('@group(1) @binding(1) var<storage, read_write> g_HashGridCache_TileWords: array<atomic<u32>>;');
+    });
+});
+
+describe('UpdateTiles accumulation (gi1.comp:2162-2177)', () => {
+    it('takes the first samples as they are, stored times their count up to the cap', () => {
+        expect(updateTilesAccumulate([0, 0, 0, 0], [6, 3, 0, 3], 16)).toEqual([6, 3, 0, 3]);
+        // 20 samples of radiance 0.5: the mean, stored times the capped count.
+        expect(updateTilesAccumulate([0, 0, 0, 0], [10, 10, 10, 20], 16)).toEqual([8, 8, 8, 16]);
+    });
+
+    it('caps the sample count at max_sample_count and blends by 1 / count', () => {
+        // History: 16 samples of 1. New: 4 samples of 2. Blend 1 + (2 - 1) / 16, times 16.
+        const result = updateTilesAccumulate([16, 16, 16, 16], [8, 8, 8, 4], 16);
+        expect(result[3]).toBe(16);
+        expect(result[0]).toBeCloseTo(17, 5);
+        // Below the cap the count grows by the new samples.
+        const growing = updateTilesAccumulate([5, 5, 5, 5], [3, 3, 3, 3], 16);
+        expect(growing[3]).toBe(8);
+        expect(growing[0] / growing[3]).toBeCloseTo(1, 6);
+    });
+
+    it("keeps the mean but loses a sample when a cell of an updated tile gets none (Capsaicin's behaviour)", () => {
+        const result = updateTilesAccumulate([32, 32, 32, 16], [0, 0, 0, 0], 16);
+        expect(result[3]).toBeCloseTo(15, 5);
+        expect(result[0] / result[3]).toBeCloseTo(2, 5);
+    });
+});
+
+describe('the filtered readback (hash_grid_cache.hlsl:434-494)', () => {
+    const mip0: [number, number, number, number] = [3, 3, 3, 3];
+    const mip1: [number, number, number, number] = [20, 20, 20, 10];
+    const mip2: [number, number, number, number] = [60, 60, 60, 30];
+    const mip3: [number, number, number, number] = [100, 100, 100, 50];
+
+    it('reads the finest cell once it has max_sample_count samples', () => {
+        expect(hashGridCacheFilteredRadiance([[16, 16, 16, 16], mip1, mip2, mip3], 16).level).toBe(0);
+    });
+
+    it('climbs to a coarser level while the value in hand has fewer samples', () => {
+        // 3 < 16 takes mip 1; its 10 < 16 takes mip 2, whose 30 stops the climb.
+        expect(hashGridCacheFilteredRadiance([mip0, mip1, mip2, mip3], 16)).toEqual({ level: 2, value: mip2 });
+        expect(hashGridCacheFilteredRadiance([mip0, mip1, [1, 1, 1, 1], mip3], 16)).toEqual({ level: 3, value: mip3 });
+    });
+
+    it('stops where a level has no cells', () => {
+        expect(hashGridCacheFilteredRadiance([mip0, mip1, null, null], 16)).toEqual({ level: 1, value: mip1 });
+    });
+});
+
+describe('the per-ray lists (gi1.cpp:637-695)', () => {
+    it("sizes them as Capsaicin does with multibounce on, one after another", () => {
+        // 1280 x 720: 80 x 45 spawn tiles of 64 rays.
+        const maxRayCount = 80 * 45 * 64;
+        const layout = hashGridCacheRayListLayout(maxRayCount, 22282240);
+        expect(layout.maxCombinedRayCount).toBe(2 * maxRayCount);
+        expect(layout.updateTileBuffer).toBe(0);
+        expect(layout.visibilityCellBuffer).toBe(2 * maxRayCount);
+        expect(layout.visibilityQueryBuffer).toBe(4 * maxRayCount);
+        expect(layout.visibilityRayBuffer).toBe(6 * maxRayCount);
+        expect(layout.resolveBuffer).toBe(8 * maxRayCount);
+        expect(layout.reservoirBuffer).toBe(9 * maxRayCount);
+        expect(layout.bytes).toBe((9 * maxRayCount + RESERVOIR_WORDS * 2 * maxRayCount) * 4);
+    });
+
+    it('holds at most one update entry per cell', () => {
+        expect(hashGridCacheRayListLayout(1000, 100).visibilityCellBuffer).toBe(100);
+    });
+});
+
+describe('UpdateTiles workgroups (gi1.comp:2116-2140)', () => {
+    it('covers whole tiles in its 8 x 8 group', () => {
+        expect(updateTilesPerWorkgroup(8)).toBe(1);
+        expect(updateTilesPerWorkgroup(4)).toBe(4);
+        expect(updateTilesPerWorkgroup(1)).toBe(64);
+        expect(() => updateTilesPerWorkgroup(3)).toThrow(RangeError);
     });
 });

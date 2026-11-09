@@ -249,3 +249,47 @@ export function hashGridCacheCellSizeConstant(fovY: number, width: number, heigh
 export function verticalFieldOfView(projection: ArrayLike<number>): number {
     return 2 * Math.atan(1 / projection[5]);
 }
+
+// ---- UpdateTiles and the filtered readback -------------------------------------------------------
+
+/** Four floats: rgb radiance (times the sample count, for a stored cell value) and a sample count. */
+export type CellValue = readonly [number, number, number, number];
+
+/**
+ * `UpdateTiles`' temporal accumulation of one cell (gi1.comp:2162-2177): the
+ * stored value (radiance times its count, and the count) and this frame's
+ * samples (their sum and count), each turned into a mean, blended with weight
+ * 1 / count, the count capped at `maxCount`, and stored times the count. In
+ * f32 steps, as the GPU computes it (before the value is packed as halves).
+ */
+export function updateTilesAccumulate(stored: CellValue, newSamples: CellValue, maxCount: number): [number, number, number, number] {
+    const sampleCount = f32(Math.min(f32(stored[3] + newSamples[3]), f32(maxCount)));
+    const storedScale = f32(Math.max(stored[3], 1));
+    const newScale = f32(Math.max(newSamples[3], 1));
+    const radiance = stored.map((value) => f32(value / storedScale));
+    const newRadiance = newSamples.map((value) => f32(value / newScale));
+    const blended = radiance[3] <= 0 ? newRadiance : radiance.map((value, channel) => f32(value + f32(f32(newRadiance[channel] - value) * f32(1 / sampleCount))));
+    return [f32(blended[0] * sampleCount), f32(blended[1] * sampleCount), f32(blended[2] * sampleCount), f32(blended[3] * sampleCount)];
+}
+
+/**
+ * Which level `HashGridCache_FilteredRadianceDirect` (and `...Indirect`)
+ * reads (hash_grid_cache.hlsl:434-494): the finest cell's value, replaced by
+ * the next coarser level's while the value in hand has fewer than `maxCount`
+ * samples and that level exists. `levels[0]` is the finest cell's value,
+ * then its three coarser cells' (`null` where a level has no cells). Returns
+ * the level read and its value; the resolve divides rgb by `max(count, 1)`.
+ */
+export function hashGridCacheFilteredRadiance(levels: readonly (CellValue | null)[], maxCount: number): { readonly level: number; readonly value: CellValue } {
+    let level = 0;
+    let value = levels[0];
+    if (!value) throw new RangeError("@pmndrs/ddgi: the finest level's value is needed");
+    for (let next = 1; next < levels.length; next++) {
+        const coarser = levels[next];
+        if (value[3] < maxCount && coarser) {
+            level = next;
+            value = coarser;
+        }
+    }
+    return { level, value };
+}

@@ -212,6 +212,7 @@ const HASHGRIDCACHE_HASHBUFFER: u32 = ${words.hashBuffer}u;
 const HASHGRIDCACHE_DECAYTILEBUFFER: u32 = ${words.decayTileBuffer}u;
 const HASHGRIDCACHE_PACKEDTILEINDEXBUFFER0: u32 = ${words.packedTileIndexBuffer0}u;
 const HASHGRIDCACHE_PACKEDTILEINDEXBUFFER1: u32 = ${words.packedTileIndexBuffer1}u;
+const HASHGRIDCACHE_UPDATELISTEDTILEBUFFER: u32 = ${words.updateListedTileBuffer}u;      // ours (register D32)
 // In the cell values (vec2u elements) and the update scratch (words).
 const HASHGRIDCACHE_VALUEBUFFER: u32 = ${layout.cellValues.valueBuffer}u;
 const HASHGRIDCACHE_VALUEINDIRECTBUFFER: u32 = ${layout.cellValues.valueIndirectBuffer}u;
@@ -474,6 +475,18 @@ fn HashGridCache_AddNewTile(tile_index: u32) {
         g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEBUFFER + cell_index] = vec2u(0u, 0u);
         g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEINDIRECTBUFFER + cell_index] = vec2u(0u, 0u);
     }
+}
+
+// Whether this call puts the tile on this frame's update list (g_HashGridCache_UpdateTileBuffer),
+// asked only by a thread Capsaicin's rule would have append it (gi1.comp:1043-1048, 1819-1824:
+// the tile is new, or this thread touched it first this frame). That rule can pick two threads
+// for a new tile: the one that claimed its slot, and one that found the tile and touched it before
+// the claimer did. Two UpdateTiles workgroups then update the tile at once and race on its scratch
+// (register D32). The tile's own word, set to the frame plus one, lets exactly one of them append
+// it: plus one, so the zeroed words of a new or reset cache never read as frame 0.
+fn HashGridCache_ListTileForUpdate(tile_index: u32) -> bool {
+    let listed = g_HashGridCacheConstants.frame_index + 1u;
+    return atomicExchange(&g_HashGridCache_TileWords[HASHGRIDCACHE_UPDATELISTEDTILEBUFFER + tile_index], listed) != listed;
 }
 
 // Quantizes the radiance value so it can be blended atomically (:300-306). WGSL's round, like
