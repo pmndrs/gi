@@ -10,6 +10,8 @@
  * fn giDirectReaches(surface: GiSurface, groupMask: u32) -> bool   // any light in the groups lights this side (no shadow rays)
  * fn giDirectReachesSplit(surface: GiSurface, groupMask: u32, sunApart: bool) -> bool  // the same, the sun in white when apart
  * fn giDirectRandom(ray: u32, frame: u32) -> vec2f                  // gi/direct's random numbers for a ray
+ * fn giDirectChooseLight(surface: GiSurface, groupMask: u32, random: f32) -> GiDirectLightChoice  // one light drawn by weight, and its weight
+ * fn giDirectLightRay(surface: GiSurface, light: u32, random: vec2f) -> GiDirectLightRay           // its unshadowed irradiance and shadow ray
  * fn giSkyRadiance(direction: vec3f) -> vec3f
  * fn giSkyIrradiance(surface: GiSurface) -> vec3f
  * fn giSkyIrradianceAt(normal: vec3f) -> vec3f        // the same, for any unit normal
@@ -290,6 +292,14 @@ fn giShadeVisibility(light: GiLight, lightIndex: u32, lightSample: GiShadeLightS
     if (!light.castsShadows) {
         return 1.0;
     }
+    let blocked = giTraceAny(giShadeShadowRay(light, lightIndex, lightSample, origin, random));
+    return select(1.0, 0.0, blocked);
+}
+
+// The shadow ray giShadeVisibility traces: from the origin towards a random
+// point of the light (its cone for a directional light, its disc for a point
+// or spot light), so many samples average to a soft shadow.
+fn giShadeShadowRay(light: GiLight, lightIndex: u32, lightSample: GiShadeLightSample, origin: vec3f, random: vec2f) -> GiRay {
     let jitter = giShadeLightRandom(random, lightIndex);
     let tangents = giShadeTangents(lightSample.direction);
     let angle = GI_SHADE_TWO_PI * jitter.y;
@@ -309,8 +319,7 @@ fn giShadeVisibility(light: GiLight, lightIndex: u32, lightSample: GiShadeLightS
         rayLength = length(toAimPoint);
         direction = toAimPoint / max(rayLength, 1.0e-20);
     }
-    let blocked = giTraceAny(GiRay(origin, 0.0, direction, rayLength));
-    return select(1.0, 0.0, blocked);
+    return GiRay(origin, 0.0, direction, rayLength);
 }
 
 ${lightGridLookupWgsl('giLightGridPicks')}
@@ -555,6 +564,113 @@ fn giDirectReachesSplit(surface: GiSurface, groupMask: u32, sunApart: bool) -> b
         }
     }
     return false;
+}
+
+// ---- One light per hit, its shadow ray traced by the caller ------------------------------
+//
+// For a technique that draws one light for a hit in one pass and traces its
+// shadow ray in a later one, as Capsaicin's GI-1 does (a light reservoir per
+// hit in GenerateReservoirs, its shadow ray in PopulateCells; the radiance
+// cache, RC3.2). The candidates are those giDirectIrradiance weighs (the
+// directional lights; then every point and spot light, or with the light grid
+// the R picks of the hit's cell), each weighed the same way: the luminance of
+// its unshadowed irradiance at the surface times its share. One candidate is
+// drawn with probability q = its weight / the total, and its 'weight' is
+// share / q, so irradiance x weight is a one-sample estimate of the sum
+// giDirectIrradiance's lights converge to (unbiased; noisier, since one light
+// stands for all of them, directional lights included).
+
+// What giDirectChooseLight returns when no light of the groups reaches the surface.
+const GI_DIRECT_NO_LIGHT: u32 = 0xffffffffu;
+
+struct GiDirectLightChoice {
+    light: u32,     // index into the light table, or GI_DIRECT_NO_LIGHT
+    weight: f32,    // multiplies the light's unshadowed irradiance: its share over the probability it was drawn with
+}
+
+// Candidate 'candidate' of giDirectChooseLight: the directional lights first
+// (each counting once), then giDirectIrradiance's local candidates.
+fn giShadeChoiceCandidate(candidate: u32, directionalCount: u32, useGrid: bool, cell: u32) -> GiShadeCandidate {
+    if (candidate < directionalCount) {
+        return GiShadeCandidate(candidate, 1.0);
+    }
+    return giShadeLocalCandidate(candidate - directionalCount, directionalCount, useGrid, cell);
+}
+
+// One light for the surface from the lights whose group bit is set in
+// groupMask, drawn with 'random' (uniform in [0, 1)) in proportion to its
+// weight (see above). No shadow ray: trace giDirectLightRay's.
+fn giDirectChooseLight(surface: GiSurface, groupMask: u32, random: f32) -> GiDirectLightChoice {
+    let raySide = giShadeRaySide(surface);
+    let lightCount = giLightCount();
+    let directionalCount = min(giDirectionalLightCount(), lightCount);
+    let useGrid = giShadeUsesLightGrid();
+    let cell = select(0u, giLightGridCellAt(surface.position), useGrid);
+    let candidates = directionalCount + select(lightCount - directionalCount, GI_LIGHT_GRID_PICKS, useGrid);
+
+    // First pass: the total weight.
+    var weightSum = 0.0;
+    for (var candidateNumber = 0u; candidateNumber < candidates; candidateNumber++) {
+        let candidate = giShadeChoiceCandidate(candidateNumber, directionalCount, useGrid, cell);
+        if (!(candidate.share > 0.0)) {
+            continue;
+        }
+        let light = giLight(candidate.light);
+        if (!giShadeInGroup(light, groupMask)) {
+            continue;
+        }
+        weightSum += giShadeLuminance(giShadeLightSample(light, surface, raySide).irradiance) * candidate.share;
+    }
+    if (!(weightSum > 0.0)) {
+        return GiDirectLightChoice(GI_DIRECT_NO_LIGHT, 0.0);
+    }
+
+    // Second pass: the candidate whose stretch of the running total holds random x total.
+    // Each weighted candidate is kept as it passes, so if rounding leaves the running
+    // total a hair short of the first pass's, the last one is drawn.
+    let drawn = random * weightSum;
+    var cumulative = 0.0;
+    var chosen = GiDirectLightChoice(GI_DIRECT_NO_LIGHT, 0.0);
+    for (var candidateNumber = 0u; candidateNumber < candidates; candidateNumber++) {
+        let candidate = giShadeChoiceCandidate(candidateNumber, directionalCount, useGrid, cell);
+        if (!(candidate.share > 0.0)) {
+            continue;
+        }
+        let light = giLight(candidate.light);
+        if (!giShadeInGroup(light, groupMask)) {
+            continue;
+        }
+        let luminance = giShadeLuminance(giShadeLightSample(light, surface, raySide).irradiance);
+        let weight = luminance * candidate.share;
+        if (!(weight > 0.0)) {
+            continue;
+        }
+        cumulative += weight;
+        // share / q with q = weight / weightSum.
+        chosen = GiDirectLightChoice(candidate.light, weightSum / luminance);
+        if (drawn < cumulative) {
+            break;
+        }
+    }
+    return chosen;
+}
+
+// A light's unshadowed irradiance at the surface and the shadow ray that
+// decides whether it arrives: from just off the surface (the side the ray
+// came from) towards a random point of the light, as giDirectIrradiance
+// aims its own. A light that casts no shadows needs no ray.
+struct GiDirectLightRay {
+    irradiance: vec3f,   // unshadowed, cosine included; 0 when the light can't reach this side
+    castsShadows: bool,  // false: nothing to trace, the light always arrives
+    shadowRay: GiRay,
+}
+
+fn giDirectLightRay(surface: GiSurface, light: u32, random: vec2f) -> GiDirectLightRay {
+    let raySide = giShadeRaySide(surface);
+    let origin = giShadeOffsetRayOrigin(surface.position, raySide);
+    let lightData = giLight(light);
+    let lightSample = giShadeLightSample(lightData, surface, raySide);
+    return GiDirectLightRay(lightSample.irradiance, lightData.castsShadows, giShadeShadowRay(lightData, light, lightSample, origin, random));
 }
 
 // The two numbers in [0, 1) gi/direct hands giDirectIrradiance for the hit of
