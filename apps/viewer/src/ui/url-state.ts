@@ -15,7 +15,8 @@
  * - `upscale`    an upscaler quality preset; absent means off
  * - `budget`     DDGI's GPU milliseconds per frame for probe updates (default 2)
  * - `probes`     `1` draws DDGI's probes as spheres coloured by state
- * - `debug`      one of DDGI's screen debug views: `gi-only`, `coverage`, `probe-states`
+ * - `debug`      one of DDGI's screen debug views: `gi-only`, `coverage`, `probe-states`, or a screen input
+ *                (RC1.1): `screen-depth`, `screen-normal`, `screen-velocity`, `screen-albedo`, `screen-instance`
  * - `probecolor` `history` colours DDGI's probe spheres by how settled they are (default: by state)
  * - `atlas`      `irradiance` or `distance`: that probe atlas drawn over the picture
  * - `atlasfill`  `1`: the atlas fills the view instead of the bottom-right corner
@@ -43,8 +44,8 @@ export const MAX_EXPOSURE_EV = MAX_DEFAULT_EXPOSURE_EV;
 export type GiChoice = 'off' | 'on' | 'only';
 
 /** DDGI's screen debug views by their link names (ids in `techniques/ddgi-technique.ts`). */
-export type DdgiScreenViewName = 'gi-only' | 'coverage' | 'probe-states';
-export const DDGI_SCREEN_VIEW_NAMES: readonly DdgiScreenViewName[] = ['gi-only', 'coverage', 'probe-states'];
+export type DdgiScreenViewName = 'gi-only' | 'coverage' | 'probe-states' | 'screen-depth' | 'screen-normal' | 'screen-velocity' | 'screen-albedo' | 'screen-instance';
+export const DDGI_SCREEN_VIEW_NAMES: readonly DdgiScreenViewName[] = ['gi-only', 'coverage', 'probe-states', 'screen-depth', 'screen-normal', 'screen-velocity', 'screen-albedo', 'screen-instance'];
 
 export type ProbeColorName = 'state' | 'history';
 export type AtlasName = 'irradiance' | 'distance';

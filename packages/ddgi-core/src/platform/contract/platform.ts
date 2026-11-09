@@ -35,6 +35,15 @@ import type { ShadingModule } from './shading-module';
 import type { GIStats } from './stats';
 import type { GITechnique } from './technique';
 
+/** The screen channels the attached techniques read (`GIPlatform.screenNeeds`). */
+export interface ScreenNeeds {
+    /** Some technique has a screen stage: call `encodeScreen` with depth and normals every frame. */
+    readonly screen: boolean;
+    readonly velocity: boolean;
+    readonly albedo: boolean;
+    readonly instance: boolean;
+}
+
 export interface GIPlatformOptions {
     /**
      * Fill `stats.passes` with per-pass GPU times when the device has
@@ -94,6 +103,12 @@ export interface GIPlatform {
      * projection must be the one `screen.depth` was drawn with.
      */
     encodeScreen(encoder: GPUCommandEncoder, screen: FrameScreen): void;
+    /**
+     * What the attached techniques read from `encodeScreen`, so a host
+     * renders only those channels. Changes when techniques are added or
+     * removed. `encodeScreen` throws if a channel asked for is missing.
+     */
+    readonly screenNeeds: ScreenNeeds;
 
     /** The output technique's shading module. Re-read `version` each frame. */
     readonly shading: ShadingModule;

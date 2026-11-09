@@ -25,7 +25,7 @@ import { GINotReadyError } from './contract/errors.ts';
 import type { InstanceHandle, LightHandle, MaterialHandle, MeshHandle, TextureHandle } from './contract/handles.ts';
 import type { Aabb, Mat4 } from './contract/math.ts';
 import type { FrameCamera, FrameInput, FrameScreen } from './contract/frame.ts';
-import type { GIPlatform, GIPlatformOptions } from './contract/platform.ts';
+import type { GIPlatform, GIPlatformOptions, ScreenNeeds } from './contract/platform.ts';
 import type { QueryKind, SceneQueries } from './contract/queries.ts';
 import type {
     DeformedPositions,
@@ -49,6 +49,7 @@ import { PlatformGpuCompute } from './compute/gpu-compute.ts';
 import { PlatformKernelBuilder } from './kernel-builder.ts';
 import { mergeSceneChanges } from './scene/change-log.ts';
 import { PlatformScene } from './scene/platform-scene.ts';
+import { mergeScreenNeeds, missingScreenChannels, screenNeedsOf } from './screen/screen-needs.ts';
 import { checkComputeLimits } from './device-requirements.ts';
 import { PlatformHitShading } from './shade/hit-shading.ts';
 import { GpuTimer } from './timing/gpu-timer.ts';
@@ -379,11 +380,20 @@ export class GIPlatformImpl implements GIPlatform {
         this.lastEncodeCpuMs = performance.now() - start;
     }
 
+    get screenNeeds(): ScreenNeeds {
+        return mergeScreenNeeds(this.attached.map(({ technique }) => technique.requirements));
+    }
+
     encodeScreen(encoder: GPUCommandEncoder, screen: FrameScreen): void {
         this.checkUsable();
         if (!this.prepared) throw new GINotReadyError('preparing');
         for (const technique of this.encodeOrder()) {
             if (!technique.encodeScreen) continue;
+            // A technique that asked for a channel would otherwise bind nothing and fail inside WebGPU.
+            const missing = missingScreenChannels(screenNeedsOf(technique.requirements), screen);
+            if (missing.length > 0) {
+                throw new Error(`@pmndrs/ddgi: technique '${technique.id}' reads the screen's ${missing.join(', ')}, which the host's FrameScreen doesn't have (see GIPlatform.screenNeeds)`);
+            }
             technique.encodeScreen(encoder, {
                 frame: this.frame,
                 deltaTime: this.frameDeltaTime,
@@ -688,6 +698,10 @@ class GuardedScene implements SceneApi {
     destroyInstance(instance: InstanceHandle): void {
         this.check();
         this.target.destroyInstance(instance);
+    }
+    instanceIndex(instance: InstanceHandle): number {
+        this.check();
+        return this.target.instanceIndex(instance);
     }
     createLight(descriptor: LightDescriptor): LightHandle {
         this.check();

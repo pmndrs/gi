@@ -99,6 +99,15 @@ $rows | Where-Object { $_.browser -eq 'native' -and "$($_.date),$($_.commit),$($
 
 From T2.10 (2026-11-08): correctness checks with numbers (recompile counts, leaks, light groups, the still-scene checks, accuracy against the Cycles references), one block per run, metrics `t2.10/<page>/...`. The accuracy rows (`t2.10/accuracy/...`) were copied from `ddgi-test-view/render.ts` and `ddgi-sponza-accuracy/run.ts` output, which have no CSV route; `note/correctness_run,1` marks rows whose clock doesn't matter.
 
+## screen-inputs.csv
+
+RC1.1's cost of filling the platform's `FrameScreen` from three's scene pass (`tools/gpu/pages/three-screen-inputs-cost`, written by its `run.ts --csv`). This file uses the gpu-tester's 11 columns, not the 7 above: `date, commit, device, browser, adapter, scene, camera, setting, metric, value, unit`.
+
+- `adapter`: the runner's `vendor/architecture` (`nvidia/ampere`, `intel/gen-12lp`); `camera`: the scene's bookmark (`bookmark1`); `setting`: the timed section's size (`1280x720`, `2560x1440`), or `all` for the lock's notes; `unit`: `ms`, `count`, `percent`, `MHz`, `flag` or `note`.
+- `gpu_ms/<difference>/median|p10|p90`: per-cycle differences between neighbouring frames (interleaved timing, `composite-check.ts`); `fill_all_minus_composite_mrt` is filling every channel over the T1.14 composite's own MRT pass. `gpu_ms_per_frame/<variant>` and `cpu_ms_to_record/<variant>` per variant.
+- `note/gpu_use_median`, `note/sm_clock_mhz`, `note/gpu_bound` per section (nvidia-smi samples inside it); the clock rule's notes (`note/timing_valid` and the rest, above) for the run. Only VALID, GPU-bound sections count.
+- No rows yet: the measurement is deferred (Dennis, 2026-11-09). A 2 s trial showed the 1280 × 720 section isn't GPU-bound (57% use); it needs a lever before its rows can count. The instance ids' resolve pass isn't in three's timestamps, so `fill-all` doesn't count it.
+
 ## memory.csv
 
 `gi.stats.memory` per scene at the manifest's volume, from the `ddgi-memory` page (`tools/gpu/pages/ddgi-memory`, T1.9). Bytes unless the name ends in `_mb` (1 MB = 1,000,000 bytes, as the viewer shows them). Byte counts of what the core created, so they don't depend on the GPU.

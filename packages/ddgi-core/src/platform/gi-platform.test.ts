@@ -231,7 +231,8 @@ describe('device requirements', () => {
         ({ limits, features: new Set(features) }) as unknown as GPUAdapter;
 
     it("requiredLimits asks for the adapter's own maximums, never more", () => {
-        const storage = { maxStorageBufferBindingSize: 2147483644, maxBufferSize: 2147483648, maxStorageBuffersPerShaderStage: 10 };
+        // The colour-attachment bytes too: a scene pass writing the screen inputs needs more than WebGPU's default 32 (RC1.1).
+        const storage = { maxStorageBufferBindingSize: 2147483644, maxBufferSize: 2147483648, maxStorageBuffersPerShaderStage: 10, maxColorAttachmentBytesPerSample: 128 };
         const compute = { maxComputeInvocationsPerWorkgroup: 1024, maxComputeWorkgroupSizeX: 1024 };
         // Compute limits: what the kernels need, not the adapter's maximum.
         expect(requiredLimits(adapter({ ...storage, ...compute }, []))).toEqual({ ...storage, ...KERNEL_COMPUTE_LIMITS });
@@ -454,6 +455,36 @@ describe('the platform object', () => {
         const tool = new GIPlatformImpl(createPlatformGpu().device, { rayBatches: true });
         await tool.prepare();
         expect(tool.rays.batchesReady).toBe(true);
+    });
+
+    it('tells the host which screen channels its techniques read, and refuses a screen without them (RC1.1)', async () => {
+        const gpu = createPlatformGpu();
+        const platform = new GIPlatformImpl(gpu.device);
+        // DDGI-like techniques ask for no screen: hosts need not render one.
+        platform.addTechnique(new RecordingTechnique('world space', []));
+        expect(platform.screenNeeds).toEqual({ screen: false, velocity: false, albedo: false, instance: false });
+
+        const screenStages: string[] = [];
+        const surfels = new RecordingTechnique('surfels', []);
+        (surfels as { requirements: GITechnique['requirements'] }).requirements = { queries: ['rays'], screen: { instance: true } };
+        (surfels as GITechnique).encodeScreen = (_encoder, frame) => screenStages.push(`surfels ${frame.screen.width}`);
+        const spatial = new RecordingTechnique('screen space', []);
+        (spatial as { requirements: GITechnique['requirements'] }).requirements = { queries: ['rays'], screen: { albedo: true, velocity: true } };
+        platform.addTechnique(surfels);
+        platform.addTechnique(spatial);
+        expect(platform.screenNeeds).toEqual({ screen: true, velocity: true, albedo: true, instance: true });
+        await platform.prepare();
+
+        const texture = fakeTexture({ size: { width: 4, height: 2 }, format: 'rgba16float', usage: 0 }) as GPUTexture;
+        const screen = { width: 4, height: 2, depth: texture, normal: texture, normalEncoding: 'snorm-float' as const };
+        // The instance channel is missing: the technique that asked for it is named, with the channel.
+        expect(() => platform.encodeScreen(gpu.createEncoder(), screen)).toThrow(/'surfels' reads the screen's instance/);
+        // A technique with no screen stage isn't checked: only stages that run read the screen.
+        platform.encodeScreen(gpu.createEncoder(), { ...screen, instance: texture });
+        expect(screenStages).toEqual(['surfels 4']);
+
+        platform.removeTechnique(surfels);
+        expect(platform.screenNeeds).toEqual({ screen: true, velocity: true, albedo: true, instance: false });
     });
 
     it('disposes once: buffers destroyed, techniques disposed, later calls refused', async () => {

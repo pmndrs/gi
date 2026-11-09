@@ -402,6 +402,13 @@ export interface SceneApi {
     setVisible(instance: InstanceHandle, visible: boolean): void;
     setMaterials(instance: InstanceHandle, materials: readonly MaterialHandle[]): void;
     destroyInstance(instance: InstanceHandle): void;
+    /**
+     * The instance's index on the GPU: what rays report as `GiHit.instance`,
+     * and what `FrameScreen.instance` holds (plus 1) for the pixels it
+     * covers. Fixed from `createInstance` to `destroyInstance`; a destroyed
+     * instance's index may be given to a new one.
+     */
+    instanceIndex(instance: InstanceHandle): number;
 
     createLight(descriptor: LightDescriptor): LightHandle;
     /** Partial updates. Changing `type` is not allowed: destroy and recreate. */
