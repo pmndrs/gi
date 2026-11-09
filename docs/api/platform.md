@@ -128,6 +128,7 @@ Something like EA's GIBS: spawn surfels on visible surfaces, trace rays from the
 Gaps:
 
 3. **Getting screen buffers out of three.** The three adapter would need a depth/normal (and maybe instance-ID) pre-pass, and must run `encodeScreen` between that pass and lighting. That's adapter work, not a contract problem. It only matters when we build a screen-space technique, after v1.
+   - *Closed by RC1.1 (2026-11-09):* `screenInputs(scenePass, threeGI)` adds the outputs to the host's own MRT scene pass and runs `encodeScreen` after that pass and before the node that reads the result (docs/api/three.md, "Screen inputs"). No pre-pass: the host's pass writes them. three's targets are handed over without a copy through one version-pinned backend read (DECISIONS 2026-11-09, register row D13).
 
 ## Other open gaps
 
@@ -160,6 +161,16 @@ Gaps:
 The answers go in PROGRESS. Any change to the contract is made in both the TypeScript and this page, and listed in a "Revisions" section here.
 
 ## Revisions
+
+### Radiance-cache phase 1, 2026-11-09 (RC1.1)
+
+- **Host- and technique-facing: `FrameScreen.albedo`** (optional): the diffuse albedo, linear rgb, base colour × (1 − metalness), the fold the adapters already apply to GI albedo for rays, so a pixel and a ray hit on the same surface agree. Any float or unorm format. It is not three's composite weight `giAlbedo`, which also carries the specular lobe's share and AO. `FrameScreen.depth` now says what formats it takes: a depth format (read as `texture_depth_2d`) or a one-channel float colour format.
+- **Technique-facing: `TechniqueRequirements.screen` is `boolean | ScreenChannelRequest`**: `true` is depth and normals; `{ velocity, albedo, instance }` asks for those channels too. `encodeScreen` throws, naming the technique and channel, if a screen stage would run without a channel its technique asked for.
+- **Host-facing: `requiredLimits(adapter)` also asks for the adapter's `maxColorAttachmentBytesPerSample`**: a host scene pass that writes the screen inputs beside its own outputs needs 48-56 bytes per pixel, past WebGPU's default 32 (RC1.1 review).
+- **Stated in the contract: every `FrameScreen` channel describes the opaque surface under the depth sample**; a blended surface that writes no depth leaves the channels as the surface behind it (RC1.1 review).
+- **Host-facing: `GIPlatform.screenNeeds`** (read-only): the union of the attached techniques' screen requirements (`{ screen, velocity, albedo, instance }`), so a host renders only what is read. DDGI asks for none, so nothing changes for it.
+- **Host-facing: `SceneApi.instanceIndex(instance)`**: an instance's index on the GPU, what rays report as `GiHit.instance` and `FrameScreen.instance` holds plus 1. Fixed for the instance's life.
+- **Engine-free debug view: `ScreenInputsView`** (`platform/screen/`): one channel of a `FrameScreen` drawn into an `rgba8unorm` texture of display values, for a host to show.
 
 ### During M2, 2026-11-08
 

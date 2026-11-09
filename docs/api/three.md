@@ -149,6 +149,28 @@ The composite node for three's pipeline (see "Dense scenes" above). Built like t
 - The targets should stay half float: 8-bit `giAlbedo` and normal miss the match by about 10× on Sponza.
 - If the platform's shading module changes shape (another technique, say), set `pipeline.needsUpdate = true`.
 
+### Screen inputs: `screenInputs(scenePass, threeGI, options?)`
+
+For screen-space techniques (RC1.1): fills the platform's `FrameScreen` from your own MRT scene pass every frame, through resizes, with no copy.
+
+```ts
+const scenePass = pass(scene, camera);
+const screen = screenInputs(scenePass, threeGI);
+scenePass.setMRT(mrt({ output, giAlbedo, normal: packNormalToRGB(normalView), ...screen.outputs }));
+pipeline.outputNode = screen.encodeBefore(ddgi(scenePass, threeGI));
+```
+
+- **`screen.outputs`** are the MRT outputs to spread into the pass: `giNormal` (world-space normal, half float) always; `velocity` (the name `@pmndrs/upscaler` reads, so one target feeds both), `giDiffuseAlbedo` (base colour × (1 − metalness), 8-bit) and `giInstance` (the platform instance index + 1, 0 for objects GI doesn't mirror, written as three bytes in an 8-bit target and turned into the `r32uint` texture `FrameScreen` promises by a small pass each frame) when a technique asks for them (`gi.screenNeeds`, read when `screenInputs` is called) or you do (`{ channels: { instance: true } }`). Depth is the pass's own.
+- **The opaque surface under the depth sample.** Every channel describes it: a blended (transparent) material leaves the channels as they were, because each output takes the material's own blending with a coverage of 0 in alpha (three gives MRT outputs no blending otherwise, so glass or a decal would overwrite them while depth keeps the surface behind). Normal and additive blending are covered, premultiplied or not; subtractive and multiply only with `premultipliedAlpha: true` (without it three r187 logs an error and gives them no blend state, so they overwrite the channels); custom blending isn't covered and is warned about once. A transparent material that writes depth (three's default for `transparent: true`; glTF's BLEND materials don't) puts its own depth over the opaque surface's channels: set its `depthWrite` to false. Alpha-tested materials write depth and the channels.
+- **Colour bytes per pixel.** The pass's targets must fit the device's `maxColorAttachmentBytesPerSample`. With the composite's outputs and every channel it is 56; WebGPU's default is 32. The platform's `requiredLimits(adapter)` asks for the adapter's maximum (128 on the RTX 3060), and `createGIRenderer` / `requestGIDevice` pass it on. three's own device (`new WebGPURenderer()` without `device`) keeps the default 32 (register row D14), so make the device yourself. A device without enough throws `GILimitError` naming the limit and the bytes needed at the first stage.
+- **`screen.encodeBefore(node)`** runs the screen stage once per frame before `node` draws: the pass draws (if it hasn't this frame), three's targets are taken as `GPUTexture`s and `gi.encodeScreen` runs. Put whatever reads a screen technique's results inside `node`.
+- **`screen.view(channel)`** is a node showing one channel (`'depth' | 'normal' | 'velocity' | 'albedo' | 'instance'`) through the core's `ScreenInputsView`, in display values: show it without tone mapping. The viewer's "Screen inputs: …" debug views use it.
+- **`screen.screen`** is the latest `FrameScreen`.
+- The pass must be single-sampled. `pass()` copies `renderer.samples` (`PassNode.js:821`), which is 4 with `antialias: true`, so create the renderer with `antialias: false` or set the pass's samples to 1; a multisampled pass is refused with a warning.
+- Let the screen stage run before the pass first draws. three r187's pipeline cache key leaves out MRT blend modes (`WebGPUBackend.js:2491-2507`) and the stage sets them on its first run, so a pass drawn earlier (for example by another node's update-before) keeps pipelines with no blending, and transparent objects then overwrite the channels.
+- If a technique that reads a channel the pass doesn't render is added later, the stage warns once and skips screen techniques: make the screen inputs again and rebuild the pipeline.
+- **How the textures are reached:** three r187 has no public accessor, so one function reads its WebGPU backend, and it refuses any other three revision (DECISIONS 2026-11-09).
+
 ### `createGIRenderer()` and `requestGIDevice()`
 
 These make the GPU device and hand it to three (`new WebGPURenderer({ device })`). The host owns the device; the platform never makes one.

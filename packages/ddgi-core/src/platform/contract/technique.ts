@@ -8,7 +8,7 @@
  */
 
 import type { GpuComputeUtilities } from './compute';
-import type { FrameCamera, FrameScreen } from './frame';
+import type { FrameCamera, FrameScreen, OptionalScreenChannel } from './frame';
 import type { ColorRGB } from './math';
 import type { QueryKind, SceneQueries } from './queries';
 import type { SceneChanges, SceneCopy } from './scene-copy';
@@ -17,6 +17,12 @@ import type { ShadingModule } from './shading-module';
 import type { DebugView } from './stats';
 import type { GpuTimerScope } from './timing';
 import type { KernelBuilder } from './wgsl';
+
+/**
+ * The screen channels a technique reads beyond depth and normals. Each costs
+ * the host an extra render target, so a technique asks only for what it uses.
+ */
+export type ScreenChannelRequest = { readonly [Channel in OptionalScreenChannel]?: boolean };
 
 /** What a technique needs from the platform, checked before `prepare`. */
 export interface TechniqueRequirements {
@@ -30,8 +36,13 @@ export interface TechniqueRequirements {
      * compiles on first use.
      */
     readonly rayBatches?: boolean;
-    /** Needs {@link FrameScreen} every frame (screen-space techniques). */
-    readonly screen?: boolean;
+    /**
+     * Needs {@link FrameScreen} every frame (screen-space techniques): `true`
+     * for depth and normals, or the optional channels it reads as well. The
+     * host learns the union from `GIPlatform.screenNeeds`, and
+     * `encodeScreen` refuses a screen without a channel a technique asked for.
+     */
+    readonly screen?: boolean | ScreenChannelRequest;
     /** Needs another technique as a bounce source or fallback. */
     readonly fallback?: boolean;
 }
