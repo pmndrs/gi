@@ -22,7 +22,19 @@
  * into exclusive prefixes (a short serial walk: at most 64 slots); after a
  * second barrier every thread adds its slot's prefix. Several words are scanned
  * at once, which the radix sort uses for its digit counts packed two to a word.
+ *
+ * **The declared fallback without subgroups** (DECISIONS 2026-11-04: subgroups
+ * first, one fallback): the same three names, `ScanOrder`, `scanTakeOrder` and
+ * `scanExclusive`, built on workgroup memory alone. The order is then simply
+ * `local_invocation_index` (no lanes are involved, so nothing about them is
+ * assumed), and each word is scanned by a Hillis-Steele scan over the
+ * workgroup's threads. A kernel written against these names runs on either
+ * path unchanged; the platform's GPU utilities use it on devices without
+ * `subgroups` (packages/ddgi-core/src/platform/compute).
  */
+
+/** How a workgroup combines its threads' values: subgroup operations first, or the declared fallback in workgroup memory. */
+export type ScanReduction = 'subgroups' | 'workgroup';
 
 /** Threads per workgroup of every kernel that uses this scan. The default device's largest workgroup. */
 export const SCAN_WORKGROUP_SIZE = 256;
@@ -34,14 +46,19 @@ const MIN_SUBGROUP_SIZE = 4;
 export const MAX_SUBGROUPS_PER_WORKGROUP = SCAN_WORKGROUP_SIZE / MIN_SUBGROUP_SIZE;
 
 /**
- * WGSL declaring `ScanOrder`, `scanTakeOrder()` and
- * `scanExclusive(values, order, localIndex)` for `words` words per thread.
- * The including module must `enable subgroups;`. Both functions contain
- * subgroup operations or barriers, so call them from uniform control flow, and
- * call `scanTakeOrder` once per workgroup, before anything else uses the order.
+ * WGSL declaring `ScanOrder`, `scanTakeOrder(localIndex)` and
+ * `scanExclusive(values, order, localIndex)` for `words` words per thread,
+ * on the given path. With `subgroups` (the default) the including module must
+ * `enable subgroups;`. Both functions contain subgroup operations or
+ * barriers, so call them from uniform control flow, and call `scanTakeOrder`
+ * once per workgroup, before anything else uses the order.
  */
-export function workgroupScanWgsl(words: number): string {
+export function workgroupScanWgsl(words: number, reduction: ScanReduction = 'subgroups'): string {
     if (!Number.isInteger(words) || words < 1) throw new RangeError(`a workgroup scan needs at least one word, got ${words}`);
+    return reduction === 'subgroups' ? subgroupScanWgsl(words) : workgroupMemoryScanWgsl(words);
+}
+
+function subgroupScanWgsl(words: number): string {
     return /* wgsl */ `
 // ---- Workgroup scan in subgroup order (gpu-workgroup-scan.ts) ----------------
 
@@ -60,7 +77,8 @@ var<workgroup> scanSlotTotals: array<u32, ${MAX_SUBGROUPS_PER_WORKGROUP * words}
 // After scanExclusive: each word's sum over the whole workgroup.
 var<workgroup> scanTotals: array<u32, ${words}>;
 
-fn scanTakeOrder() -> ScanOrder {
+// 'localIndex' is unused here: the order comes from the subgroups (the fallback uses it).
+fn scanTakeOrder(localIndex: u32) -> ScanOrder {
     let lanes = subgroupAdd(1u);
     let rank = subgroupExclusiveAdd(1u);
     let elected = subgroupElect();
@@ -100,6 +118,62 @@ fn scanExclusive(values: array<u32, SCAN_WORDS>, order: ScanOrder, localIndex: u
     workgroupBarrier();
     for (var word = 0u; word < SCAN_WORDS; word += 1u) {
         prefix[word] += scanSlotTotals[order.slot * SCAN_WORDS + word];
+    }
+    return prefix;
+}
+`;
+}
+
+function workgroupMemoryScanWgsl(words: number): string {
+    return /* wgsl */ `
+// ---- Workgroup scan in workgroup memory, the fallback without subgroups (gpu-workgroup-scan.ts) ----
+
+const SCAN_WORDS: u32 = ${words}u;
+const SCAN_THREADS: u32 = ${SCAN_WORKGROUP_SIZE}u;
+
+struct ScanOrder {
+    thread: u32,     // this thread's place in the workgroup's order: its local index
+    slot: u32,       // always 0: there are no subgroups to number
+    elected: bool,   // thread 0 only
+}
+
+// One word per thread while a word is scanned; the words take turns.
+var<workgroup> scanPartials: array<u32, ${SCAN_WORKGROUP_SIZE}>;
+// After scanExclusive: each word's sum over the whole workgroup.
+var<workgroup> scanTotals: array<u32, ${words}>;
+
+fn scanTakeOrder(localIndex: u32) -> ScanOrder {
+    return ScanOrder(localIndex, 0u, localIndex == 0u);
+}
+
+// Exclusive prefix sums of 'values' over the workgroup, word by word, in
+// ScanOrder.thread order; each word's workgroup total is left in scanTotals.
+// Hillis-Steele: after the round at 'distance', each entry holds the sum of
+// the 2 * distance entries ending at it, so log2(threads) rounds give the
+// inclusive prefix. Each round reads before a barrier and writes after it,
+// so no thread reads an entry another is changing. A caller that scans again
+// in a loop must put a barrier between the rounds (as with subgroups).
+fn scanExclusive(values: array<u32, SCAN_WORDS>, order: ScanOrder, localIndex: u32) -> array<u32, SCAN_WORDS> {
+    var prefix: array<u32, SCAN_WORDS>;
+    for (var word = 0u; word < SCAN_WORDS; word += 1u) {
+        scanPartials[order.thread] = values[word];
+        workgroupBarrier();
+        for (var distance = 1u; distance < SCAN_THREADS; distance *= 2u) {
+            var before = 0u;
+            if (order.thread >= distance) {
+                before = scanPartials[order.thread - distance];
+            }
+            workgroupBarrier();
+            scanPartials[order.thread] += before;
+            workgroupBarrier();
+        }
+        let inclusive = scanPartials[order.thread];
+        prefix[word] = inclusive - values[word];
+        if (order.thread == SCAN_THREADS - 1u) {
+            scanTotals[word] = inclusive;
+        }
+        // The next word overwrites scanPartials; the total must be visible on return.
+        workgroupBarrier();
     }
     return prefix;
 }

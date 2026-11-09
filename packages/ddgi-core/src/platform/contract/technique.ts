@@ -7,6 +7,7 @@
  * comes through {@link TechniqueContext}.
  */
 
+import type { GpuComputeUtilities } from './compute';
 import type { FrameCamera, FrameScreen } from './frame';
 import type { ColorRGB } from './math';
 import type { QueryKind, SceneQueries } from './queries';
@@ -42,6 +43,8 @@ export interface TechniqueContext {
     readonly queries: SceneQueries;
     readonly shade: HitShading;
     readonly kernels: KernelBuilder;
+    /** GPU utilities: prefix scan, stream compaction, indirect dispatch arguments (RC1.3). */
+    readonly compute: GpuComputeUtilities;
     /** Another technique's output, when the host stacked one under this one. */
     readonly fallback: BounceSource | undefined;
     /** Timestamps for this technique's passes; does nothing without `timestamp-query`. */
