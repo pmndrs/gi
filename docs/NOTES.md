@@ -120,6 +120,7 @@ One bullet per fact, each with its source. Add a bullet when something cost you 
   - `--disable-gpu` makes `requestAdapter()` return null.
   - Intel reports architecture `gen-12lp`.
   - Source: T0.2, `tools/gpu/chrome.ts`.
+- **`pnpm test:gpu --filter` takes exact page names, comma-separated, not a prefix:** `--filter trace-bench-rc-bistro` matches nothing. The trace-bench pages read `VITE_DDGI_TRACE_QUERY` (URL-query syntax, for example `profile=quick&loadedMs=0`) to override their folder's settings, since the runner can't add URL parameters. Source: RC1.5.
 - **WGSL errors arrive late:** shader-module errors surface only after the queue drains. `runGpuTest` waits about 50 ms after the drain; anything later can be missed. Source: T0.2.
 - **Node runs `.ts` directly** (Node 24 type stripping), but rejects enums, namespaces and constructor parameter properties. The root tsconfig has `allowImportingTsExtensions` for `.ts` import paths. Source: T0.2.
 - **GPU timestamps on this laptop:** both GPUs support `timestamp-query` in Chrome 156, and headless Chrome returned unrounded values. Timing costs less than CPU-side frame timing can resolve (`performance.now()` steps 0.1 ms; the NVIDIA per-round scatter is about ±0.5 ms). Source: T0.3.
@@ -280,6 +281,8 @@ One bullet per fact, each with its source. Add a bullet when something cost you 
 
 ## Tracing (measured)
 
+- **Rays that leave surfaces trace much slower than the probe-grid bench's rays from open space.** Sponza, the `platform` tracer, one session at a fixed 1,200 MHz, quick profile, one run each (information only, not VALID timing): Capsaicin-shaped screen-probe rays (64 cosine rays per probe from the first bookmark's visible surfaces, 230k in a dispatch) ran at about 33 Mrays/s closest-hit and their sun shadow rays at about 55; the probe-grid bench's rays (138k in a dispatch) ran at 87 and 109. So the bench's probe-grid rates overstate what a screen-space technique will get. The 3,600 placement rays (one per 16x16 tile) take about 0.43 ms on Sponza whatever their count: one partly filled wave waits for its slowest ray. Source: RC1.5, `trace-bench-rc-sponza`.
+- **Probes placed from bookmark 1 at 1280x720, one per 16x16 tile (RC1.5):** Sponza 3,600 of 3,600 (the colonnade view sees no sky), Bistro interior 3,572, Bistro exterior 3,493. The same on the RTX 3060 and the Intel UHD. Source: RC1.5.
 - **Any-hit should visit the farther child first.** A shadow ray starts on a surface, so the nearer child is mostly that surface, and the blockers lie ahead. On the RTX 3060 that was 1.2–2.8× faster than nearer-first; closest-hit is unaffected. Source: T1.3.
 - **Leaf size is not why three-mesh-bvh won at any-hit.** It is faster at leaf 4 than at its default 10. Source: T1.3.
 - **Reading triangle corners through the scene copy's index buffer costs 10–30% of trace speed,** so self-contained 48-byte records stay. Source: T1.3.
