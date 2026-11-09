@@ -1,0 +1,42 @@
+{
+    "scene": "courtyard-wind-tree",
+    "file": "courtyard-wind-tree.exr",
+    "generator": "tools/sky/generate.ts",
+    "skyModel": "Preetham, Shirley and Smits 1999 (no sun disc; black below the horizon)",
+    "width": 512,
+    "height": 256,
+    "layout": "equirectangular, +Y up; row 0 is the zenith; u = atan2(z, x) / (2 pi) + 0.5, v (down from the top) = acos(y) / pi; the same as three.js equirectUV",
+    "sunDirection": [
+        0.423999,
+        0.847998,
+        0.317999
+    ],
+    "sunElevationDeg": 57.995,
+    "turbidity": 3,
+    "sunIlluminance": 2.86023,
+    "sunSource": "lights[0] \"sun\": intensity 3 x luminance of its colour",
+    "calibration": {
+        "model": "Ineichen and Perez 2002 clear sky (sea level), diffuse-to-direct horizontal ratio",
+        "skyToSunHorizontalRatio": 0.131666,
+        "diffuseFraction": 0.116347,
+        "airMass": 1.17847,
+        "intensity": 1,
+        "sunHorizontalIlluminance": 2.42547,
+        "targetSkyHorizontalIlluminance": 0.319353
+    },
+    "measured": {
+        "skyHorizontalIrradianceRgb": [
+            0.225035,
+            0.324316,
+            0.547917
+        ],
+        "skyHorizontalIlluminance": 0.319353,
+        "calibrationError": -7.47e-7
+    },
+    "flatEquivalentRadianceRgb": [
+        0.071631,
+        0.103233,
+        0.174407
+    ],
+    "pixelSha256": "eceb97c0bb1d97e369265a7964bf5d451115bea1e8143b61ac0c81c3cb931ea1"
+}

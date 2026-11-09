@@ -21,7 +21,13 @@ Rules:
 
 ---
 
-## 2026-11-09 · T3.11 · wrangler (sonnet) · BLOCKED, needs a ruling
+## 2026-11-09 · T3.11 · wrangler (sonnet) · wind tree generated (lead chose option a)
+Did: `tools/assets/convert/wind-tree.ts` (seeded TS generator, writes its own GLB): 50,474 triangles, about 9 m tall, meshes `trunk` / `branches` / `leaves` (opaque 2-triangle cards, double-sided), wind weight in COLOR_0 alpha (0 at foot, <= 0.6 tubes, 0.7-1 leaves; RGB 1). `sources.json` + `fetch.ts`: new `generated` entry form (script, seed, args; MIT; no download; output sha256 still checked); entry `wind-tree` (seed 20261109, sha256 78408cf5...ede7af). New scene `courtyard-wind-tree` (manifest, sky exr/json from `tools/sky/generate.ts`). Tests: generated-asset cases in `tools/assets/fetch.test.ts`, `scenes/src/wind-tree.test.ts`. NOTES line added. Output lands in `assets/downloads/wind-tree/` (where the fetch tool and model loader look), not `assets/generated/`; no THIRD_PARTY row (ours).
+Verified: `npx vitest run tools/assets scenes/src` 322 pass; `tsc --noEmit` and eslint clean; `fetch --only wind-tree` regenerates the same sha twice. Contact sheet on RTX 3060 Laptop (headless Chrome, via bench-lock): 3 cameras, 0 errors, 50,594 tris with the walls. Screenshot `bench/screenshots/contact-sheet/courtyard-wind-tree-2.png`: a single leaning trunk with a rounded dense crown well above the 2.6 m walls, about 3.5x wall height, next to the 1 m reference cube (about the trunk's girth times two). The check page has one sun and no ambient, so the shaded side is black and only sunlit cards show green; the shape reads as a tree, the look is not judged.
+Not verified: sway itself (T3.3/T3.8); the full test suite beyond tools/assets and scenes/src; viewer path (only the check page).
+Next: T3.8 should read COLOR_0 alpha as the weight; three's GLTFLoader will apply COLOR_0 as vertex colour (harmless with RGB 1).
+
+## 2026-11-09 · T3.11 · wrangler (sonnet) · earlier: blocked, needs a ruling (superseded by the entry above)
 Did: nothing committed. Searched for a permissive 20,000–100,000 triangle tree. Poly Haven (CC0, the only source with a plain download URL) has no tree in range: every tree is 154k–17 M triangles (api.polyhaven.com/assets?t=models&c=trees). The existing courtyard-tree asset (tree_small_02) is trunk 28k + twigs 95k + leaves 1.94 M triangles, so cutting it down to 100k would mean deleting most of the foliage. Sketchfab needs a login to download, GitHub and OpenGameArt blocked from here. Blender 4.2/4.5/5.x have no Sapling Tree Gen installed (it is an online extension, GPL); fetching it is a tool download, not the asset.
 Verified: triangle counts read from the glTF accessors and the Poly Haven API. Nothing GPU-related run.
 Not verified: no courtyard load, no screenshot (no asset).

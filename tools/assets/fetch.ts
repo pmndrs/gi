@@ -45,6 +45,12 @@
  *      the same way twice, their structure: see `AssetOutput.reproducible`),
  *      and that a .glb marked `dielectric` has no metal material.
  *
+ * An asset with `"generated": { script, seed, args }` instead of `download` is
+ * made by one of our own scripts (the wind tree): step 4 runs the script as a
+ * Node conversion with `--seed <seed>` and the args, and step 5 checks the
+ * recorded sha256, so a generator change that changes the file shows up.
+ * Its license is "MIT" (ours), `convert` and `extract` are null.
+ *
  * An asset with `"skip": true` and a `skipReason` is reported and left alone.
  *
  * sources.json is checked strictly before anything is downloaded: every
@@ -169,6 +175,16 @@ export interface LicenseApproval {
     title: string;
 }
 
+/** How an asset made by our own script is produced. See `AssetEntry.generated`. */
+export interface GeneratedAsset {
+    /** Repo-relative path to a TypeScript script, run with Node's type stripping. */
+    script: string;
+    /** The generator's only source of randomness. Recorded so the output can be reproduced. */
+    seed: number;
+    /** Extra arguments after `--seed <seed>`; `{dir}`, `{id}` and `{repo}` are replaced as in convert arguments. */
+    args: string[];
+}
+
 export interface AssetEntry {
     id: string;
     title: string;
@@ -181,8 +197,23 @@ export interface AssetEntry {
     licenseApproval?: LicenseApproval;
     attribution: string;
     redistributable: boolean;
-    /** One file, or several (a glTF with its .bin and textures). `extract` needs exactly one. */
-    download: AssetDownload | AssetDownload[];
+    /**
+     * One file, or several (a glTF with its .bin and textures). `extract` needs exactly one.
+     * Left out (and `generated` given instead) for an asset made by one of our own scripts.
+     */
+    download?: AssetDownload | AssetDownload[];
+    /**
+     * An asset made by one of our own scripts, with no download. The tool runs
+     * `script` (a repo-relative .ts file) with Node as
+     * `node <script> --seed <seed> <args...>`, from the repository root, and
+     * checks the outputs' sha256 like any other asset, so a change to the
+     * generator that changes the file shows up as a hash mismatch. The script
+     * must be deterministic (the seed is its only randomness) and write new
+     * files only. Such an asset needs `download` absent, `convert` null and
+     * `extract` null; it is ours, so its license is "MIT" and `sourceUrl` is
+     * the script's path.
+     */
+    generated?: GeneratedAsset;
     extract: 'zip' | null;
     convert: AssetConvert | null;
     outputs: AssetOutput[];
@@ -229,6 +260,23 @@ const GLTF_ATTRIBUTE = /^_?[A-Z][A-Z0-9_]*$/;
  */
 export function isAllowedLicense(license: string): boolean {
     return license === 'CC0-1.0' || /^CC-BY-\d\.\d$/.test(license);
+}
+
+/** The node conversion that runs a generated asset's script, in the form `runConvert` takes. */
+export function generatedConvert(generated: GeneratedAsset): NodeConvert {
+    return { tool: 'node', script: generated.script, args: ['--seed', String(generated.seed), ...generated.args] };
+}
+
+/** Problems with a `generated` value's shape. */
+function generatedProblems(value: unknown): string[] {
+    if (!isRecord(value)) return ['must be an object with script, seed and args'];
+    const problems: string[] = [];
+    if (!(isNonEmptyString(value.script) && isSafeRelativePath(value.script) && value.script.endsWith('.ts'))) {
+        problems.push('script must be a repo-relative .ts path');
+    }
+    if (!(typeof value.seed === 'number' && Number.isInteger(value.seed))) problems.push('seed must be a whole number');
+    if (!(Array.isArray(value.args) && value.args.every((arg: unknown) => typeof arg === 'string'))) problems.push('args must be a list of strings');
+    return problems;
 }
 
 /** Problems with a `licenseApproval` value's shape (not whether DECISIONS.md has it: see `checkLicenseApprovals`). */
@@ -284,6 +332,7 @@ export function isSafeRelativePath(path: string): boolean {
 
 /** The asset's downloads as a list, whichever form sources.json used. */
 export function downloadsOf(asset: Pick<AssetEntry, 'download'>): AssetDownload[] {
+    if (asset.download === undefined) return [];
     return Array.isArray(asset.download) ? asset.download : [asset.download];
 }
 
@@ -314,7 +363,9 @@ export function validateSources(value: unknown): string[] {
             if (!isNonEmptyString(entry[field])) errors.push(`${where}.${field}: must be a non-empty string`);
         }
         if (typeof entry.redistributable !== 'boolean') errors.push(`${where}.redistributable: must be present and true or false`);
-        if (isNonEmptyString(entry.license) && !isAllowedLicense(entry.license)) {
+        const isGenerated = entry.generated !== undefined;
+        if (isGenerated && entry.license !== 'MIT') errors.push(`${where}.license: a generated asset is ours, so its license is "MIT"`);
+        if (isNonEmptyString(entry.license) && !isAllowedLicense(entry.license) && !(isGenerated && entry.license === 'MIT')) {
             if (entry.licenseApproval === undefined) {
                 errors.push(
                     `${where}.license: "${entry.license}" is not on the allow list (CC0-1.0, CC-BY-<version>), so it needs a licenseApproval ` +
@@ -325,7 +376,15 @@ export function validateSources(value: unknown): string[] {
             }
         }
 
-        const downloads = Array.isArray(entry.download) ? entry.download : [entry.download];
+        if (isGenerated) {
+            for (const problem of generatedProblems(entry.generated)) errors.push(`${where}.generated: ${problem}`);
+            if (entry.download !== undefined) errors.push(`${where}.download: a generated asset has no download`);
+            if (entry.convert !== null) errors.push(`${where}.convert: a generated asset has no separate convert step (set it to null)`);
+            if (entry.extract !== null) errors.push(`${where}.extract: a generated asset has nothing to extract (set it to null)`);
+        } else if (entry.download === undefined) {
+            errors.push(`${where}.download: required (or "generated", for an asset made by one of our scripts)`);
+        }
+        const downloads = entry.download === undefined ? [] : Array.isArray(entry.download) ? entry.download : [entry.download];
         if (Array.isArray(entry.download) && entry.download.length === 0) {
             errors.push(`${where}.download: must not be an empty array`);
         }
@@ -1829,9 +1888,11 @@ export async function fetchAsset(
         const keep = new Set([...inputs, ...asset.outputs.map((output) => output.path)]);
         inputs.push(...(await extractWithCache(downloads[0], join(assetDirectory, downloads[0].file), assetDirectory, cacheDirectory, keep, log)));
     }
-    await runConvert(asset, assetDirectory, inputs);
+    // A generated asset is its script run with its seed: the same conversion step, with no inputs.
+    const generating = asset.generated ? { ...asset, convert: generatedConvert(asset.generated) } : asset;
+    await runConvert(generating, assetDirectory, inputs);
 
-    const problems = await checkOutputs(assetDirectory, asset.outputs, log, asset.convert);
+    const problems = await checkOutputs(assetDirectory, asset.outputs, log, generating.convert);
     if (problems.length > 0) {
         throw new Error(`outputs are not right after fetching:\n    ${problems.join('\n    ')}`);
     }
