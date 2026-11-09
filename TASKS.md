@@ -570,8 +570,9 @@ Same rules as phase 2 (no timing; correctness gates; faithful port with Capsaici
   - The descriptor, the bucket hash (pcg chain) and the checksum (xxHash chain, never 0) live in one WGSL function that every pass calls, ported from `hash_grid_cache.hlsl:96-192` with `src/math/hash.hlsl`. A CPU port of the same function gives the same bits on a fixed set of hits (unit test), and the GPU agrees with it (GPU test).
   - The capacity is Capsaicin's default (2^14 buckets × 16 tiles × 85 cells; value, indirect value and update-scratch arrays), allocated in a few large packed buffers under the adapter-maximum limits (D6). Its memory is in the technique's stats. A device whose limits can't hold it gets `GILimitError` naming the limit (D14: three's own device does).
   - GPU tests, on the RTX and the Intel UHD: insert then find; two different tiles colliding in a bucket both found; a full bucket refusing the 17th tile, counted as an overflow; a tile untouched for 50 frames purged by `PurgeTiles`, including across the frame counter's wrap; concurrent inserts of the same tile from many threads giving one slot.
-  - `WorldCache` as in the design doc, the hash grid its implementation, wired into the technique with no change yet to the image (RC3.2 switches it on).
+  - `WorldCache` as in the design doc (plus `reset`), the hash grid its implementation. Wiring it into the technique and its memory into the technique's stats move to RC3.2 (lead, 2026-11-09: RC3.1 was built beside RC2.1, before the technique existed on `radiance-cache`).
 - **RC3.2 done-when.**
+  - The hash grid wired into the technique behind `WorldCache`, its memory in the technique's stats (moved from RC3.1).
   - The passes listed in the row, ported with their source lines cited. Hits are lit by one sampled light and one shadow ray each, through the platform light grid (D4) and `giAnyHit`. Emissive hits and rays shorter than their cell take the bypass path exactly as `gi1.comp:2439-2456` and `:2538-2561` say.
   - The design doc's phase-2 staging note is marked retired.
   - GPU tests:
