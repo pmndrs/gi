@@ -349,9 +349,9 @@ fn ddgiMarkIrradianceVectors(light: DdgiMarkLight, point: vec3f) -> mat3x3f {
 // and the test asks only that much.
 fn ddgiMarkVisibility(probe: vec3i, direction: vec3f, distance: f32) -> f32 {
     let volume = ddgiUniformVolume();
-    let scale = ddgiAtlasScale(volume.distanceTexels, volume.counts);
+    let scale = ddgiAtlasScale(volume, volume.distanceTexels);
     let uv = ddgiTileUv(ddgiTileTexel(direction, volume.distanceTexels), probe, scale);
-    let moments = textureSampleLevel(ddgiDistanceAtlas, ddgiAtlasSampler, uv, probe.y, 0.0).xy;
+    let moments = textureSampleLevel(ddgiDistanceAtlas, ddgiAtlasSampler, uv, ddgiAtlasLayer(volume, probe), 0.0).xy;
     let tested = min(distance, ddgi.distanceClamp);
     if (tested <= moments.x) {
         return 1.0;
@@ -597,9 +597,9 @@ fn ddgiRayBoxEntry(origin: vec3f, direction: vec3f, boxMin: vec3f, boxMax: vec3f
 // nearer than the clamp" is the most the moments can say, and that counts.
 fn ddgiMarkSeesRegion(probe: vec3i, direction: vec3f, entryDistance: f32, smallestSpacing: f32) -> bool {
     let volume = ddgiUniformVolume();
-    let scale = ddgiAtlasScale(volume.distanceTexels, volume.counts);
+    let scale = ddgiAtlasScale(volume, volume.distanceTexels);
     let uv = ddgiTileUv(ddgiTileTexel(direction, volume.distanceTexels), probe, scale);
-    let meanDistance = textureSampleLevel(ddgiDistanceAtlas, ddgiAtlasSampler, uv, probe.y, 0.0).x;
+    let meanDistance = textureSampleLevel(ddgiDistanceAtlas, ddgiAtlasSampler, uv, ddgiAtlasLayer(volume, probe), 0.0).x;
     return meanDistance >= min(entryDistance, ddgi.distanceClamp) - DDGI_FAR_SET_DISTANCE_SLACK_SPACINGS * smallestSpacing;
 }
 
@@ -723,7 +723,7 @@ fn ddgiRegionBrightness(geometry: DdgiMarkGeometry) -> f32 {
         for (var z = first.z; z <= last.z; z++) {
             for (var x = first.x; x <= last.x; x++) {
                 let neighbour = vec3i(x, y, z);
-                if (ddgiReadProbeData(ddgiProbeData, neighbour).state != DDGI_STATE_ACTIVE) {
+                if (ddgiReadProbeData(ddgiProbeData, volume, neighbour).state != DDGI_STATE_ACTIVE) {
                     continue;
                 }
                 let neighbourIndex = u32(x) + u32(counts.x) * (u32(z) + u32(counts.z) * u32(y));
@@ -754,7 +754,7 @@ fn ddgiMarkThread(thread: u32) -> f32 {
     let probe = vec3i(entry.boxMin + inBox);
     let counts = ddgiProbeCount();
     let probeIndex = u32(probe.x) + counts.x * (u32(probe.z) + counts.z * u32(probe.y));
-    let data = ddgiReadProbeData(ddgiProbeData, probe);
+    let data = ddgiReadProbeData(ddgiProbeData, ddgiUniformVolume(), probe);
     if (entry.kind == DDGI_MARK_GEOMETRY) {
         return ddgiMarkGeometry(entry, probe, probeIndex, data);
     }

@@ -6,7 +6,6 @@
  */
 
 import { GILimitError } from '../../platform/contract/errors.ts';
-import type { ProbeGrid } from './settings.ts';
 
 /** One texel of border on every side of a tile, so bilinear filtering never reads a neighbour's tile. */
 export const TILE_BORDER = 1;
@@ -54,10 +53,19 @@ export interface AtlasSize {
     readonly tile: number;
 }
 
+/**
+ * Probe tiles in an atlas, ordered as `ProbeGrid.counts`: across a layer,
+ * layers, down a layer. One volume's grid is its own atlas; several volumes
+ * share one (`VolumePlan.atlasCounts`, volumes.ts).
+ */
+export interface AtlasTiles {
+    readonly counts: readonly [number, number, number];
+}
+
 /** A layer per probe row `y`; inside a layer, probe `(x, z)` owns tile `(x, z)`. */
-export function atlasSize(grid: ProbeGrid, interiorTexels: number): AtlasSize {
+export function atlasSize(tiles: AtlasTiles, interiorTexels: number): AtlasSize {
     const tile = interiorTexels + 2 * TILE_BORDER;
-    return { width: grid.counts[0] * tile, height: grid.counts[2] * tile, layers: grid.counts[1], tile };
+    return { width: tiles.counts[0] * tile, height: tiles.counts[2] * tile, layers: tiles.counts[1], tile };
 }
 
 export interface FieldLayout {
@@ -77,13 +85,13 @@ export interface FieldLayout {
     readonly layeredIrradiance: AtlasSize;
 }
 
-export function fieldLayout(grid: ProbeGrid, irradianceTexels: number, distanceTexels: number, distanceFormat: DistanceFormat, irradianceLayers = 1): FieldLayout {
-    const irradiance = atlasSize(grid, irradianceTexels);
+export function fieldLayout(tiles: AtlasTiles, irradianceTexels: number, distanceTexels: number, distanceFormat: DistanceFormat, irradianceLayers = 1): FieldLayout {
+    const irradiance = atlasSize(tiles, irradianceTexels);
     return {
         irradiance,
-        distance: atlasSize(grid, distanceTexels),
+        distance: atlasSize(tiles, distanceTexels),
         // One texel per probe, no border.
-        probeData: { width: grid.counts[0], height: grid.counts[2], layers: grid.counts[1], tile: 1 },
+        probeData: { width: tiles.counts[0], height: tiles.counts[2], layers: tiles.counts[1], tile: 1 },
         distanceFormat,
         irradianceLayers,
         layeredIrradiance: { ...irradiance, width: irradiance.width * irradianceLayers },
@@ -218,9 +226,10 @@ export const UNIFORM_WORD = {
     propagation: 90,
     holdFineProbes: 91,
     sunLight: 92,
+    probeBase: 96,
 } as const;
-/** 96 words, a whole number of the struct's 16-byte alignment. */
-export const UNIFORM_WORDS = 96;
+/** 100 words: 97 used, rounded up to a whole number of the struct's 16-byte alignment. */
+export const UNIFORM_WORDS = 100;
 /** The six frustum planes in UNIFORM_WORD, in the order `frustumPlanes` (camera.ts) returns them. */
 export const FRUSTUM_PLANE_WORDS = [
     UNIFORM_WORD.frustumLeft,

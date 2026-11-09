@@ -83,7 +83,9 @@
 import { isHeavyScene, type SceneManifest } from '../../../../scenes/src/manifest';
 import { ViewerCore } from '../core/viewer-core';
 import { resolveGpuTotals, timestampPoolsFillingUp } from '../render/gpu-time';
+import type { TextureCompressionReport } from '../scene/compress-textures';
 import type { GiMode } from '../scene/layers';
+import type { TextureCompression } from '../scene/texture-compression-mode';
 import { loadAllManifests } from '../scene/manifests';
 import { DdgiTechnique } from '../techniques/ddgi-technique';
 import type { GiTechnique, TechniqueId } from '../techniques/types';
@@ -106,6 +108,8 @@ export interface BaselineOptions {
     height: number;
     /** Scale model textures down to this side at load (`LoadSceneOptions.maxTextureSize`); null keeps them as the files have them. */
     maxTextureSize: number | null;
+    /** How model textures are kept on the GPU (`LoadSceneOptions.textureCompression`). */
+    textureCompression: TextureCompression;
     log(message: string): void;
 }
 
@@ -118,6 +122,7 @@ export const DEFAULT_BASELINE_OPTIONS: Omit<BaselineOptions, 'log'> = {
     width: 1280,
     height: 720,
     maxTextureSize: null,
+    textureCompression: 'uncompressed',
 };
 
 export interface BaselineRow {
@@ -462,9 +467,15 @@ export async function runBaselines(canvas: HTMLCanvasElement, options: BaselineO
         // DDGI's start-up times count from its creation, so it must be created when measured.
         core.layout = { left: 'none', right: null, giMode: 'on', split: 0.5 };
         let triangles = 0;
+        let compression: Record<string, number> = {};
         try {
-            const loaded = await core.loadScene(manifest, () => {}, options.maxTextureSize === null ? {} : { maxTextureSize: options.maxTextureSize });
+            const loaded = await core.loadScene(manifest, () => {}, {
+                ...(options.maxTextureSize === null ? {} : { maxTextureSize: options.maxTextureSize }),
+                textureCompression: options.textureCompression,
+            });
             triangles = loaded.stats.triangles;
+            compression = compressionDetails(loaded.textureCompression);
+            if (loaded.textureCompression.some((part) => part.unavailable)) options.log(`scene ${manifest.id}: textures not compressed: ${loaded.textureCompression[0].unavailable}`);
             useFirstBookmark(core, manifest);
         } catch (error) {
             // A missing download (not fetched yet) fails every technique of the scene, and says why.
@@ -485,7 +496,9 @@ export async function runBaselines(canvas: HTMLCanvasElement, options: BaselineO
                 // Late validation errors show up a moment after the queue drains.
                 await new Promise((resolve) => setTimeout(resolve, 100));
                 const newErrors = core.gpuErrors.slice(errorsBefore);
-                row = { scene: manifest.id, technique, triangles, ...measured, error: newErrors.length > 0 ? `GPU error: ${newErrors[0]}` : null };
+                // three counts a compressed texture as 1 byte, so its figure is the uncompressed textures only; compression's own figures say the rest.
+                const details = { ...measured.details, ...compression, three_textures_mb: core.renderer.info.memory.texturesSize / 1e6 };
+                row = { scene: manifest.id, technique, triangles, ...measured, details, error: newErrors.length > 0 ? `GPU error: ${newErrors[0]}` : null };
             } catch (error) {
                 row = { scene: manifest.id, technique, triangles, measurements: [], details: {}, error: errorMessage(error) };
             }
@@ -509,12 +522,28 @@ export async function runBaselines(canvas: HTMLCanvasElement, options: BaselineO
             width: options.width,
             height: options.height,
             maxTextureSize: options.maxTextureSize,
+            textureCompression: options.textureCompression,
         },
         noisyCvThreshold: NOISY_CV_THRESHOLD,
         userAgent: navigator.userAgent,
     };
     core.unloadScene();
     return result;
+}
+
+/** A scene's texture compression summed over its model parts, as row details (megabytes and counts). */
+function compressionDetails(parts: readonly TextureCompressionReport[]): Record<string, number> {
+    if (parts.length === 0) return {};
+    const sum = (read: (part: TextureCompressionReport) => number) => parts.reduce((total, part) => total + read(part), 0);
+    return {
+        compressed_textures: sum((part) => part.compressed),
+        compressed_normal_maps: sum((part) => part.normalMaps),
+        textures_kept_for_gi: sum((part) => part.keptForGi),
+        textures_kept_other: sum((part) => part.keptOther),
+        compressed_textures_rgba8_mb: sum((part) => part.uncompressedBytes) / 1e6,
+        compressed_textures_mb: sum((part) => part.compressedBytes) / 1e6,
+        compression_ms: sum((part) => part.milliseconds),
+    };
 }
 
 /** Every failed measurement of a run, as `scene/technique/metric: reason` lines. */

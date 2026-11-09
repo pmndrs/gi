@@ -150,7 +150,8 @@ export class ViewerCore {
     /** Throws away the old scene and its techniques, loads `manifest`, and shows its first technique. */
     async loadScene(manifest: SceneManifest, report: (progress: LoadProgress) => void, options: LoadSceneOptions & ViewerLightingOptions = {}): Promise<LoadedScene> {
         this.unloadScene();
-        const loaded = await loadScene(manifest, report, options);
+        // Texture compression encodes on three's device, the viewer's.
+        const loaded = await loadScene(manifest, report, { ...options, device: this.device });
         this.loaded = loaded;
         // Many shadowless lights with no range (sponza-candles) get a reach, so three can cull them per cluster (scene-lighting.ts).
         limitClusteredLightReach(loaded.directLights, options.clusteredLightReachMetres ?? DEFAULT_CLUSTERED_LIGHT_REACH_M);

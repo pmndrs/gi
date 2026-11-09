@@ -180,10 +180,17 @@ export const FIELD_GROUP: GPUBindGroupLayoutDescriptor = {
         { binding: 2, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: 'float', viewDimension: '2d-array' } },
         { binding: 3, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: 'float', viewDimension: '2d-array' } },
         { binding: 4, visibility: GPUShaderStage.COMPUTE, sampler: { type: 'filtering' } },
+        // The volume table (rgba32float, read with textureLoad).
+        { binding: 5, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: 'unfilterable-float', viewDimension: '2d' } },
     ],
 };
 
-/** Declarations matching FIELD_GROUP, and a call of the one sampling function with them. */
+/**
+ * Declarations matching FIELD_GROUP, and a call of the sampling function
+ * renderers use (`ddgiSampleVolumes`: every volume, blended by priority; one
+ * volume's answer is exactly `ddgiSampleIrradiance`'s). `testField` holds the
+ * first volume's four parameters, for the diagnostics that read one volume.
+ */
 const FIELD_WGSL = /* wgsl */ `
 ${DDGI_SAMPLE_WGSL}
 
@@ -198,13 +205,17 @@ struct TestFieldParameters {
 @group(1) @binding(2) var testDistance: texture_2d_array<f32>;
 @group(1) @binding(3) var testProbeData: texture_2d_array<f32>;
 @group(1) @binding(4) var testSampler: sampler;
+@group(1) @binding(5) var testVolumeTable: texture_2d<f32>;
+
+fn testFieldSample(position: vec3f, normal: vec3f, viewDirection: vec3f) -> DdgiVolumesSample {
+    return ddgiSampleVolumes(
+        position, normal, viewDirection,
+        testIrradiance, testSampler, testDistance, testSampler, testProbeData, testVolumeTable,
+    );
+}
 
 fn testFieldIrradiance(position: vec3f, normal: vec3f, viewDirection: vec3f) -> vec3f {
-    return ddgiSampleIrradiance(
-        position, normal, viewDirection,
-        testIrradiance, testSampler, testDistance, testSampler, testProbeData,
-        testField.volumeOrigin, testField.volumeSpacing, testField.volumeCounts, testField.volumeTexels,
-    );
+    return testFieldSample(position, normal, viewDirection).irradiance;
 }
 `;
 
@@ -219,6 +230,7 @@ export function fieldBindGroup(device: GPUDevice, layout: GPUBindGroupLayout, fi
             { binding: 2, resource: view(field.distance) },
             { binding: 3, resource: view(field.probeData) },
             { binding: 4, resource: device.createSampler({ magFilter: 'linear', minFilter: 'linear' }) },
+            { binding: 5, resource: field.volumeTable.createView() },
         ],
     });
 }
@@ -345,14 +357,14 @@ fn testFieldIrradianceTracedVisibility(position: vec3f, normal: vec3f, viewDirec
     let volume = ddgiVolume(testField.volumeOrigin, testField.volumeSpacing, testField.volumeCounts, testField.volumeTexels);
     let samplePoint = ddgiBiasedPoint(volume, position, normal, viewDirection);
     let cage = ddgiCage(volume, samplePoint);
-    let irradianceScale = ddgiAtlasScale(volume.irradianceTexels, volume.counts);
+    let irradianceScale = ddgiAtlasScale(volume, volume.irradianceTexels);
     let normalInTile = ddgiTileTexel(normal, volume.irradianceTexels);
     var irradianceSum = vec3f(0.0);
     var weightSum = 0.0;
     for (var corner = 0u; corner < 8u; corner++) {
         let step = ddgiCageStep(corner);
         let probe = min(cage.baseProbe + step, volume.counts - 1);
-        let data = ddgiReadProbeData(testProbeData, probe);
+        let data = ddgiReadProbeData(testProbeData, volume, probe);
         if (data.state != DDGI_STATE_ACTIVE) {
             continue;
         }
@@ -364,7 +376,7 @@ fn testFieldIrradianceTracedVisibility(position: vec3f, normal: vec3f, viewDirec
         }
         let facing = (dot(normalize(probePosition - position), normal) + 1.0) * 0.5;
         let weight = (facing * facing + DDGI_DIRECTION_WEIGHT_FLOOR) * ddgiTrilinearWeight(cage, step);
-        irradianceSum += weight * textureSampleLevel(testIrradiance, testSampler, ddgiTileUv(normalInTile, probe, irradianceScale), probe.y, 0.0).rgb;
+        irradianceSum += weight * textureSampleLevel(testIrradiance, testSampler, ddgiTileUv(normalInTile, probe, irradianceScale), ddgiAtlasLayer(volume, probe), 0.0).rgb;
         weightSum += weight;
     }
     return irradianceSum / max(weightSum, DDGI_MIN_WEIGHT_SUM);

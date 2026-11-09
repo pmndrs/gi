@@ -1,0 +1,4 @@
+{
+    "description": "T3.7 check 4: morphed and skinned emissive panels in a lightless room fold their top half through three only (no markChanged); the adapter sends the pose within 2 updates, rays find the folded shape, the floor in front brightens by at least 15%, and with a pose box that reaches the walls GI comes back within 5% when unfolded (the morph with its exact box is a known miss of the mark, reported: see main.ts); recompiles 0. The screenshot shows three after each phase.",
+    "timeoutMs": 600000
+}

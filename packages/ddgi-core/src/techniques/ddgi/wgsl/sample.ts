@@ -20,8 +20,13 @@
  *   `wgslFn` and a plain WebGPU renderer can each declare them their own way;
  * - it uses `textureSampleLevel(…, 0)` and `textureLoad` only, which work in
  *   compute and fragment stages alike (`textureSample` is fragment-only);
- * - the volume arrives as four `vec4f`s, the first four of the update
- *   kernel's uniforms (layout.ts, `UNIFORM_VEC4`).
+ * - one volume arrives as four `vec4f`s, the first four of the update
+ *   kernel's uniforms (layout.ts, `UNIFORM_WORD`);
+ * - several volumes (m3-moving.md §4.1) arrive as the volume table, a small
+ *   `rgba32float` texture whose row v holds volume v's four `vec4f`s, rows in
+ *   priority order (volumes.ts). `ddgiSampleVolumes` blends them. It is what
+ *   renderers (`giIrradiance`) and the update's bounce light read, so one
+ *   volume goes through the same code as several.
  *
  * ```wgsl
  * fn ddgiSampleIrradiance(
@@ -39,6 +44,7 @@
  */
 
 import { PROBE_STATE, TILE_BORDER } from '../layout.ts';
+import { BLEND_COMPLETE_WEIGHT, COVERAGE_FADE_SPACINGS, COVERAGE_FULL_MARGIN_SPACINGS, COVERAGE_FULL_WEIGHT, MAX_BLENDED_VOLUMES } from '../volumes.ts';
 
 export const DDGI_SAMPLE_WGSL = /* wgsl */ `
 // ---- DDGI field sampling (techniques/ddgi) ---------------------------------------------
@@ -87,20 +93,38 @@ fn ddgiOctDecode(coordinates: vec2f) -> vec3f {
     return normalize(vec3f(xy, z));
 }
 
-// The volume, unpacked from the four vec4f parameters a renderer passes
-// (engines bind small uniforms as vec4s; the fields get names here).
+// One volume, unpacked from its four vec4f parameters (engines bind small
+// uniforms as vec4s; the fields get names here).
+//
+// Every volume shares one set of atlases (m3-moving.md §4.1): volume v owns
+// the array layers [layerBase, layerBase + ny), probe (x, z) owning tile
+// (x, z) in them. A layer is as large as the largest volume's footprint,
+// atlasTiles tiles across and down, so a smaller volume leaves part of its
+// layers unused. With one volume, layerBase is 0 and atlasTiles is (nx, nz).
 struct DdgiVolume {
     origin: vec3f,           // world position of probe (0, 0, 0)
     normalBias: f32,         // metres along the surface normal
     spacing: vec3f,          // metres between probes, per axis
     viewBias: f32,           // metres back towards the viewer
     counts: vec3i,           // probes per axis
+    layerBase: i32,          // the atlas layer of the volume's probe row y = 0
     irradianceTexels: f32,   // interior texels per side of an irradiance tile
     distanceTexels: f32,     // interior texels per side of a distance tile
+    atlasTiles: vec2f,       // tiles across (x) and down (z) one atlas layer, the same for every volume
 }
 
 fn ddgiVolume(volumeOrigin: vec4f, volumeSpacing: vec4f, volumeCounts: vec4f, volumeTexels: vec4f) -> DdgiVolume {
-    return DdgiVolume(volumeOrigin.xyz, volumeOrigin.w, volumeSpacing.xyz, volumeSpacing.w, vec3i(volumeCounts.xyz), volumeTexels.x, volumeTexels.y);
+    return DdgiVolume(
+        volumeOrigin.xyz, volumeOrigin.w,
+        volumeSpacing.xyz, volumeSpacing.w,
+        vec3i(volumeCounts.xyz), i32(volumeCounts.w),
+        volumeTexels.x, volumeTexels.y, volumeTexels.zw,
+    );
+}
+
+// The atlas layer that holds a volume's probe row probe.y.
+fn ddgiAtlasLayer(volume: DdgiVolume, probe: vec3i) -> i32 {
+    return volume.layerBase + probe.y;
 }
 
 // One probe's texel of the probe-data atlas: rgb the relocation offset in
@@ -110,15 +134,15 @@ struct DdgiProbeData {
     state: u32,
 }
 
-fn ddgiReadProbeData(probeData: texture_2d_array<f32>, probe: vec3i) -> DdgiProbeData {
-    let texel = textureLoad(probeData, probe.xz, probe.y, 0);
+fn ddgiReadProbeData(probeData: texture_2d_array<f32>, volume: DdgiVolume, probe: vec3i) -> DdgiProbeData {
+    let texel = textureLoad(probeData, probe.xz, ddgiAtlasLayer(volume, probe), 0);
     return DdgiProbeData(texel.rgb, u32(round(texel.a)));
 }
 
 // Atlas coordinates. Tiles are interiorTexels + 2 border texels wide; probe
-// (x, z) owns tile (x, z) of layer y. Interior texel centres map to the
-// octahedral square's texel centres, so a bilinear lookup near an edge blends
-// into the border, which holds the octahedral neighbour.
+// (x, z) owns tile (x, z) of its row's layer (ddgiAtlasLayer). Interior texel
+// centres map to the octahedral square's texel centres, so a bilinear lookup
+// near an edge blends into the border, which holds the octahedral neighbour.
 //
 // The tile size and the atlas's reciprocal size are the same for every probe,
 // so they are worked out once per sample (ddgiAtlasScale), not once per probe.
@@ -127,9 +151,9 @@ struct DdgiAtlasScale {
     inverseSize: vec2f,        // 1 / (atlas width, height) in texels
 }
 
-fn ddgiAtlasScale(interiorTexels: f32, counts: vec3i) -> DdgiAtlasScale {
+fn ddgiAtlasScale(volume: DdgiVolume, interiorTexels: f32) -> DdgiAtlasScale {
     let tile = interiorTexels + 2.0 * DDGI_TILE_BORDER;
-    return DdgiAtlasScale(tile, 1.0 / (vec2f(counts.xz) * tile));
+    return DdgiAtlasScale(tile, 1.0 / (volume.atlasTiles * tile));
 }
 
 // Where a direction lands inside any probe's tile, in texels from the tile's corner.
@@ -206,7 +230,7 @@ fn ddgiCornerWeight(
 ) -> DdgiCornerWeight {
     let step = ddgiCageStep(corner);
     let probe = min(cage.baseProbe + step, volume.counts - 1);
-    let data = ddgiReadProbeData(probeData, probe);
+    let data = ddgiReadProbeData(probeData, volume, probe);
     if (data.state != DDGI_STATE_ACTIVE) {
         return DdgiCornerWeight(probe, 0.0, false);
     }
@@ -236,7 +260,7 @@ fn ddgiCornerWeight(
     // mean means probably occluded; Chebyshev's inequality bounds how
     // likely the point is visible anyway (variance shadow maps).
     let distanceUv = ddgiTileUv(ddgiTileTexel(-directionToProbe, volume.distanceTexels), probe, distanceScale);
-    let moments = textureSampleLevel(distanceAtlas, distanceSampler, distanceUv, probe.y, 0.0).xy;
+    let moments = textureSampleLevel(distanceAtlas, distanceSampler, distanceUv, ddgiAtlasLayer(volume, probe), 0.0).xy;
     if (probeDistance > moments.x) {
         let variance = abs(moments.y - moments.x * moments.x);
         let excess = probeDistance - moments.x;
@@ -252,8 +276,48 @@ fn ddgiCornerWeight(
     return DdgiCornerWeight(probe, weight, true);
 }
 
-// The 8 probes around the point, each weighted by ddgiCornerWeight. Only
-// active probes count.
+// The 8 probes of one volume around the point, each weighted by
+// ddgiCornerWeight. Only active probes count.
+fn ddgiAccumulateVolume(
+    volume: DdgiVolume,
+    position: vec3f,
+    normal: vec3f,
+    viewDirection: vec3f,
+    irradianceAtlas: texture_2d_array<f32>,
+    irradianceSampler: sampler,
+    distanceAtlas: texture_2d_array<f32>,
+    distanceSampler: sampler,
+    probeData: texture_2d_array<f32>,
+) -> DdgiFieldSum {
+    let samplePoint = ddgiBiasedPoint(volume, position, normal, viewDirection);
+    let cage = ddgiCage(volume, samplePoint);
+
+    // Worked out once, not per probe. Why this matters: sampling is
+    // arithmetic-heavy as well as fetch-heavy, and T1.6 measured these
+    // hoists plus inverseSqrt (ddgiCornerWeight) at 16% of a renderer's GI
+    // cost at 1440p.
+    let irradianceScale = ddgiAtlasScale(volume, volume.irradianceTexels);
+    let distanceScale = ddgiAtlasScale(volume, volume.distanceTexels);
+    // Irradiance is read in the normal's direction from every probe, so its
+    // place inside a tile is the same for all 8.
+    let normalInTile = ddgiTileTexel(normal, volume.irradianceTexels);
+
+    var irradianceSum = vec3f(0.0);
+    var weightSum = 0.0;
+    for (var corner = 0u; corner < 8u; corner++) {
+        let weighted = ddgiCornerWeight(corner, volume, cage, samplePoint, position, normal, distanceAtlas, distanceSampler, probeData, distanceScale);
+        if (!weighted.counts) {
+            continue;
+        }
+        let uv = ddgiTileUv(normalInTile, weighted.probe, irradianceScale);
+        let irradiance = textureSampleLevel(irradianceAtlas, irradianceSampler, uv, ddgiAtlasLayer(volume, weighted.probe), 0.0).rgb;
+        irradianceSum += weighted.weight * irradiance;
+        weightSum += weighted.weight;
+    }
+    return DdgiFieldSum(irradianceSum, weightSum);
+}
+
+// ddgiAccumulateVolume with the volume as its four vec4f parameters.
 fn ddgiAccumulateField(
     position: vec3f,
     normal: vec3f,
@@ -269,36 +333,17 @@ fn ddgiAccumulateField(
     volumeCounts: vec4f,
     volumeTexels: vec4f,
 ) -> DdgiFieldSum {
-    let volume = ddgiVolume(volumeOrigin, volumeSpacing, volumeCounts, volumeTexels);
-    let samplePoint = ddgiBiasedPoint(volume, position, normal, viewDirection);
-    let cage = ddgiCage(volume, samplePoint);
-
-    // Worked out once, not per probe. Why this matters: sampling is
-    // arithmetic-heavy as well as fetch-heavy, and T1.6 measured these
-    // hoists plus inverseSqrt (ddgiCornerWeight) at 16% of a renderer's GI
-    // cost at 1440p.
-    let irradianceScale = ddgiAtlasScale(volume.irradianceTexels, volume.counts);
-    let distanceScale = ddgiAtlasScale(volume.distanceTexels, volume.counts);
-    // Irradiance is read in the normal's direction from every probe, so its
-    // place inside a tile is the same for all 8.
-    let normalInTile = ddgiTileTexel(normal, volume.irradianceTexels);
-
-    var irradianceSum = vec3f(0.0);
-    var weightSum = 0.0;
-    for (var corner = 0u; corner < 8u; corner++) {
-        let weighted = ddgiCornerWeight(corner, volume, cage, samplePoint, position, normal, distanceAtlas, distanceSampler, probeData, distanceScale);
-        if (!weighted.counts) {
-            continue;
-        }
-        let irradiance = textureSampleLevel(irradianceAtlas, irradianceSampler, ddgiTileUv(normalInTile, weighted.probe, irradianceScale), weighted.probe.y, 0.0).rgb;
-        irradianceSum += weighted.weight * irradiance;
-        weightSum += weighted.weight;
-    }
-    return DdgiFieldSum(irradianceSum, weightSum);
+    return ddgiAccumulateVolume(
+        ddgiVolume(volumeOrigin, volumeSpacing, volumeCounts, volumeTexels),
+        position, normal, viewDirection,
+        irradianceAtlas, irradianceSampler, distanceAtlas, distanceSampler, probeData,
+    );
 }
 
-// Irradiance E arriving at a surface point from the field: the weighted
-// mean of ddgiAccumulateField, or 0 where no probe has any weight.
+// Irradiance E arriving at a surface point from one volume's field: the
+// weighted mean of ddgiAccumulateField, or 0 where no probe has any weight.
+// Renderers and the update read the field through ddgiSampleVolumes, which
+// blends this over the volumes; test tools that look at one volume call it.
 fn ddgiSampleIrradiance(
     position: vec3f,
     normal: vec3f,
@@ -320,5 +365,155 @@ fn ddgiSampleIrradiance(
         volumeOrigin, volumeSpacing, volumeCounts, volumeTexels,
     );
     return field.weightedIrradiance / max(field.weight, DDGI_MIN_WEIGHT_SUM);
+}
+
+// ---- Several volumes (m3-moving.md §4.1) ----
+//
+// Volume v's coverage at a point is its edge fade (1 out to half a spacing
+// past its outermost probes, 0 a further half spacing out) times
+// saturate(sum of its probe weights / DDGI_COVERAGE_FULL_WEIGHT), so a point
+// none of its probes can see counts as not covered (DECISIONS 2026-11-05).
+// Volumes are visited in priority order (the volume table's rows; the CPU
+// sorts them, volumes.ts). Each adds its own normalised irradiance E_v with
+// weight
+//     w_v = coverage_v * (1 - W),
+// W being the weight gathered so far, and the visit stops once W reaches
+// DDGI_BLEND_COMPLETE or DDGI_MAX_BLENDED_VOLUMES volumes have added weight
+// (a volume that covers the point but whose probes all have weight 0 there
+// adds nothing and doesn't count, so with three nested volumes the third
+// still fills in behind it). Inside a
+// higher-priority volume that is one volume's sampling, as before; only in
+// its fade band are two read. The blend's irradiance is (sum of w_v E_v) / W
+// and its coverage W, so a renderer's mix(environment, irradiance, coverage)
+// gives sum of w_v E_v + (1 - W) environment: RTXGI's priority blend.
+
+// A volume whose probes' weights sum to this counts as fully seeing a point,
+// and coverage stays full this many spacings past the outermost probes, then
+// fades over the next DDGI_COVERAGE_FADE (volumes.ts says why each).
+const DDGI_COVERAGE_FULL_WEIGHT: f32 = ${COVERAGE_FULL_WEIGHT};
+const DDGI_COVERAGE_FULL_MARGIN: f32 = ${COVERAGE_FULL_MARGIN_SPACINGS};
+const DDGI_COVERAGE_FADE: f32 = ${COVERAGE_FADE_SPACINGS};
+// The visit stops once the gathered weight reaches this...
+const DDGI_BLEND_COMPLETE: f32 = ${BLEND_COMPLETE_WEIGHT};
+// ...or once this many volumes have added weight: in a fade band two volumes' sampling, not more.
+const DDGI_MAX_BLENDED_VOLUMES: u32 = ${MAX_BLENDED_VOLUMES}u;
+
+// 1 within half a spacing of a volume's outermost probes, falling to 0 over
+// the next half spacing. Cheap, so the blend tests it before reading probes.
+fn ddgiVolumeEdgeCoverage(volume: DdgiVolume, position: vec3f) -> f32 {
+    let firstProbe = volume.origin;
+    let lastProbe = volume.origin + vec3f(volume.counts - 1) * volume.spacing;
+    // Distance outside the probe box per axis, in spacings (0 inside).
+    let outside = max(max(firstProbe - position, position - lastProbe), vec3f(0.0)) / volume.spacing;
+    let farthest = max(max(outside.x, outside.y), outside.z);
+    return saturate(1.0 - (farthest - DDGI_COVERAGE_FULL_MARGIN) / DDGI_COVERAGE_FADE);
+}
+
+// How many volumes the table holds (one row each).
+fn ddgiVolumeCount(volumeTable: texture_2d<f32>) -> u32 {
+    return textureDimensions(volumeTable).y;
+}
+
+// Volume 'index' of the table: its row holds the four vec4f parameters in
+// order (VOLUME_TABLE_TEXELS in volumes.ts).
+fn ddgiTableVolume(volumeTable: texture_2d<f32>, index: u32) -> DdgiVolume {
+    let row = i32(index);
+    return ddgiVolume(
+        textureLoad(volumeTable, vec2i(0, row), 0),
+        textureLoad(volumeTable, vec2i(1, row), 0),
+        textureLoad(volumeTable, vec2i(2, row), 0),
+        textureLoad(volumeTable, vec2i(3, row), 0),
+    );
+}
+
+// Whether the blend reads a volume. One whose edge coverage is 0 adds
+// nothing and is skipped before any probe is read. The last (lowest
+// priority) volume is read anyway when none before it was: a point outside
+// every volume then gets that volume's nearest cell, as a single volume
+// always gave it. So bounce light from hits outside the volumes keeps M2's
+// value, and renderers fade such points out by their coverage of 0.
+fn ddgiBlendReads(edgeCoverage: f32, index: u32, count: u32, volumesRead: u32) -> bool {
+    return edgeCoverage > 0.0 || (index + 1u == count && volumesRead == 0u);
+}
+
+// A volume's share of the blend: its coverage, times what the volumes before it left.
+fn ddgiBlendShare(edgeCoverage: f32, fieldWeight: f32, gatheredWeight: f32) -> f32 {
+    return edgeCoverage * saturate(fieldWeight / DDGI_COVERAGE_FULL_WEIGHT) * (1.0 - gatheredWeight);
+}
+
+// Whether the blend has gathered enough: the weight, or the volumes that added some.
+fn ddgiBlendDone(gatheredWeight: f32, contributingVolumes: u32) -> bool {
+    return gatheredWeight >= DDGI_BLEND_COMPLETE || contributingVolumes >= DDGI_MAX_BLENDED_VOLUMES;
+}
+
+// The blend's irradiance: the volumes' weighted mean when two or more added
+// weight; the one volume's own value when only one did; the first volume
+// read's value when none did. The middle case keeps a single volume's answer
+// exactly as ddgiSampleIrradiance gives it (no w * E / w rounding), so a
+// one-volume field reads as it did before volumes.
+fn ddgiBlendIrradiance(blended: vec3f, gatheredWeight: f32, firstRead: vec3f, firstContributing: vec3f, contributingVolumes: u32) -> vec3f {
+    if (contributingVolumes == 0u) {
+        return firstRead;
+    }
+    if (contributingVolumes == 1u) {
+        return firstContributing;
+    }
+    return blended / gatheredWeight;
+}
+
+// The blend of every volume at a point: irradiance E (not E / pi) and coverage, 0..1.
+struct DdgiVolumesSample {
+    irradiance: vec3f,
+    coverage: f32,
+}
+
+// Every volume's field at a surface point, blended by priority (the rule
+// above). What renderers read (giIrradiance, giCoverage), and what the
+// update's bounce light reads, so light bounces between volumes.
+fn ddgiSampleVolumes(
+    position: vec3f,
+    normal: vec3f,
+    viewDirection: vec3f,
+    irradianceAtlas: texture_2d_array<f32>,
+    irradianceSampler: sampler,
+    distanceAtlas: texture_2d_array<f32>,
+    distanceSampler: sampler,
+    probeData: texture_2d_array<f32>,
+    volumeTable: texture_2d<f32>,
+) -> DdgiVolumesSample {
+    let count = ddgiVolumeCount(volumeTable);
+    var blended = vec3f(0.0);
+    var gatheredWeight = 0.0;
+    var firstRead = vec3f(0.0);
+    var firstContributing = vec3f(0.0);
+    var volumesRead = 0u;
+    var contributingVolumes = 0u;
+    for (var index = 0u; index < count; index++) {
+        let volume = ddgiTableVolume(volumeTable, index);
+        let edgeCoverage = ddgiVolumeEdgeCoverage(volume, position);
+        if (!ddgiBlendReads(edgeCoverage, index, count, volumesRead)) {
+            continue;
+        }
+        let field = ddgiAccumulateVolume(volume, position, normal, viewDirection, irradianceAtlas, irradianceSampler, distanceAtlas, distanceSampler, probeData);
+        let irradiance = field.weightedIrradiance / max(field.weight, DDGI_MIN_WEIGHT_SUM);
+        if (volumesRead == 0u) {
+            firstRead = irradiance;
+        }
+        volumesRead++;
+        let share = ddgiBlendShare(edgeCoverage, field.weight, gatheredWeight);
+        if (share > 0.0) {
+            if (contributingVolumes == 0u) {
+                firstContributing = irradiance;
+            }
+            contributingVolumes++;
+            blended += share * irradiance;
+            gatheredWeight += share;
+        }
+        if (ddgiBlendDone(gatheredWeight, contributingVolumes)) {
+            break;
+        }
+    }
+    let irradiance = ddgiBlendIrradiance(blended, gatheredWeight, firstRead, firstContributing, contributingVolumes);
+    return DdgiVolumesSample(irradiance, gatheredWeight);
 }
 `;

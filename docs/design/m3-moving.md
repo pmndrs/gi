@@ -93,6 +93,7 @@ The platform's habit is **"prefer GPU-resident; read back when it clearly pays"*
 - **When B2 lands** and its trees trace at ≥ 0.95× tinybvh's, the swap can become optional (`meshTreeRefinement: 'tinybvh' | 'none'`), which saves the worker's copy and time.
 - **Without subgroups:** tinybvh only, as in M1 (the declared fallback). First GI waits for the worker on those devices.
 - **The top level** stays as B1a decided. If "add a cabinet" shows the worker's delay, the GPU LBVH could build the top level in the same frame from the instance boxes. It's the same code, but not planned.
+- *As built (T3.2):* the builder is H-PLOC (B2), not the LBVH, at load and at runtime alike: T2.12's path, with the "scene as first loaded" limit removed. Each frame's uploaded meshes go in one batch with its own submit and stats readback (DECISIONS 2026-11-09). The GPU tree's node and triangle ranges are released in the frame that places tinybvh's tree, and the batch's own buffers one update after the copy. tinybvh builds one version of a mesh at a time; a mesh replaced again meanwhile keeps only its newest version waiting. Page: `trace-runtime-trees`.
 
 ### 2.3 First GI from GPU trees (scheduled in M2)
 
@@ -271,6 +272,8 @@ What three r187 offers, and what M3 uses:
 - **Deforming meshes:** a mesh with `userData.giDeforming = true` is created `deforming`. When its position attribute's `version` changes, the adapter sends the CPU array (section 7). A `SkinnedMesh` skins on the GPU, so its position attribute never changes; skinned meshes stay in their bind pose (a stretch goal after v1, Dennis 2026-11-05).
 - **Moves still reach GI one frame late** by default (DECISIONS 2026-11-05: the adapter reads the matrices three's last render made).
 - **For interactive tools,** `markChanged` stays the recommended path; the viewer's drag gizmo calls it.
+
+*As built (T3.7, prototype):* `childadded` and `childremoved` are heard on every object of the scene (`change-watch.ts`), so added and removed objects reach GI in the next update. The `updateMatrixWorld` hook is on each mirrored mesh only (three calls it on every child, so groups need none), compares against the matrix last sent and puts a moved mesh in the hot set; it is removed by assignment. The walk keeps running but skips the transforms of hooked meshes while `scene.matrixWorldAutoUpdate` is on. Each `InstancedMesh`'s `instanceMatrix.version` is compared every update, because a hook sees an edit made after the render only at the next render, which also clears the update ranges. Deforming meshes: skinned (when they contribute to GI), morphed and `userData.giDeforming` meshes are created `deforming`, one platform mesh per three mesh, with a `deformBounds` (`userData.giDeformBounds`, or an estimate: exact for morphs), and send CPU poses through `setDeformedPositions` when their inputs change (`deforming.ts`). Skinned meshes are posed on the CPU with three's formulas, not left in the bind pose as the table above planned; `PoseSource` is the seam for T3.3's `ExternalTexture` form. Bistro interior: an unmarked first move is sent 2 frames after it happens (update, render, update), against up to 41 before.
 
 ## 7. Getting deformed positions out of three
 

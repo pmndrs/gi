@@ -37,13 +37,16 @@
  * path, seen from the front camera: the field as the ball passed (woken
  * probes), the reference (every probe on), and the field before the ball
  * came (air probes asleep: what M2 gave).
+ *
+ * **Several volumes** (T3.5): the same path through Cornell split into two
+ * overlapping volumes; the ball must wake probes in both (wakesInEveryVolume).
  */
 
 import { assert, runGpuTest } from '../../client.ts';
 import type { InstanceHandle } from '../../../../packages/ddgi-core/src/platform/contract/handles.ts';
-import { PROBE_STATE } from '../../../../packages/ddgi-core/src/techniques/ddgi/layout.ts';
+import { PROBE_HISTORY_WORD, PROBE_HISTORY_WORDS, PROBE_STATE } from '../../../../packages/ddgi-core/src/techniques/ddgi/layout.ts';
 import { WAKE_FRAMES } from '../../../../packages/ddgi-core/src/techniques/ddgi/mark-table.ts';
-import { createDdgiScene, FieldProbe, releaseDeviceOnPageHide, type DdgiScene, type SurfacePoint } from '../ddgi-shared/harness.ts';
+import { createDdgiScene, FieldProbe, readBuffer, releaseDeviceOnPageHide, type DdgiScene, type SurfacePoint } from '../ddgi-shared/harness.ts';
 import { probeSnapshot, type ProbeSnapshot } from '../ddgi-shared/moving.ts';
 import { bookmarkCamera, runCameraFrame, runCameraFrames } from '../ddgi-shared/response.ts';
 
@@ -232,6 +235,70 @@ function drawRows(rows: readonly { label: string; discs: (Vec3 | null)[][] }[], 
     document.body.prepend(canvas);
 }
 
+/**
+ * Several volumes (T3.5): Cornell split into two volumes that overlap by
+ * about 1 m in the middle, the same ball moved along the same path, which
+ * crosses from one into the other. Each volume builds its own mark table, so
+ * the ball must wake probes in both, and in the overlap in both at once:
+ * every probe whose grid point lies within one spacing of the ball's path
+ * (its box swept along it) has a wake set, in each volume.
+ */
+async function wakesInEveryVolume(device: GPUDevice, log: (line: string) => void): Promise<Record<string, unknown>> {
+    const halves = [
+        { center: [1.5, 2.74, 2.8] as Vec3, size: [3.6, 5.6, 5.8] as Vec3, spacing: 0.5 },
+        { center: [4.1, 2.74, 2.8] as Vec3, size: [3.6, 5.6, 5.8] as Vec3, spacing: 0.5 },
+    ];
+    const scene = await createDdgiScene(device, SCENE, { volumes: halves });
+    const field = scene.ddgi.field;
+    assert(field && field.volumes.length === 2, 'the two-volume scene has no field or not two volumes');
+    const frontCamera = scene.manifest.cameras.find((camera) => camera.name === 'front')!;
+    const camera = bookmarkCamera(frontCamera, 16 / 9);
+    const allProbes = field.volumes.reduce((sum, volume) => sum + volume.grid.probeCount, 0);
+    await runCameraFrames(device, scene.platform, CONVERGE_FRAMES / 4, allProbes, camera);
+
+    const sceneApi = scene.platform.scene;
+    const sphere = unitSphere();
+    const mesh = sceneApi.createMesh({ positions: sphere.positions, indices: sphere.indices, label: 'ball' });
+    const ball = sceneApi.createInstance({ mesh, materials: [scene.materials[0]], transform: ballTransform(pathPoint(0)), contributesToGI: false, label: 'ball' });
+    for (let frame = 1; frame <= PATH_FRAMES; frame++) {
+        sceneApi.setTransforms(Uint32Array.of(ball), new Float32Array(ballTransform(pathPoint(frame))));
+        runCameraFrame(device, scene.platform, 2 * UNITS, camera);
+        if (frame % 8 === 0) await device.queue.onSubmittedWorkDone();
+    }
+    await device.queue.onSubmittedWorkDone();
+
+    // The ball's box swept along its path, grown by one spacing: every probe there must have been woken (WAKE_SPACINGS is 2).
+    const swept = { min: [0, 1, 2].map((axis) => Math.min(PATH_START[axis], PATH_END[axis]) - BALL_RADIUS), max: [0, 1, 2].map((axis) => Math.max(PATH_START[axis], PATH_END[axis]) + BALL_RADIUS) };
+    const perVolume: { near: number; woken: number; missed: number }[] = [];
+    for (const volume of field.volumes) {
+        const grid = volume.grid;
+        const words = new Uint32Array(await readBuffer(device, volume.probeHistory, grid.probeCount * PROBE_HISTORY_WORDS * 4));
+        const result = { near: 0, woken: 0, missed: 0 };
+        for (let y = 0; y < grid.counts[1]; y++) {
+            for (let z = 0; z < grid.counts[2]; z++) {
+                for (let x = 0; x < grid.counts[0]; x++) {
+                    const probe = x + grid.counts[0] * (z + grid.counts[2] * y);
+                    const awake = words[probe * PROBE_HISTORY_WORDS + PROBE_HISTORY_WORD.wakeUntil] !== 0;
+                    if (awake) result.woken++;
+                    const point = [x, y, z].map((index, axis) => grid.origin[axis] + index * grid.spacing[axis]);
+                    const near = point.every((value, axis) => value >= swept.min[axis] - grid.spacing[axis] && value <= swept.max[axis] + grid.spacing[axis]);
+                    if (!near) continue;
+                    result.near++;
+                    if (!awake) result.missed++;
+                }
+            }
+        }
+        perVolume.push(result);
+    }
+    scene.platform.dispose();
+    log(`two volumes: ${perVolume.map((result, index) => `volume ${index}: ${result.near} probes within a spacing of the ball's path, ${result.missed} not woken (${result.woken} woken in all)`).join('; ')}`);
+    perVolume.forEach((result, index) => {
+        assert(result.near > 0, `volume ${index} has no probe near the ball's path; the check needs it to cross both`);
+        assert(result.missed === 0, `volume ${index}: ${result.missed} of ${result.near} probes near the ball's path weren't woken`);
+    });
+    return { volumes: perVolume };
+}
+
 await runGpuTest(
     async ({ device, log: logLine }) => {
         releaseDeviceOnPageHide(device);
@@ -374,7 +441,9 @@ await runGpuTest(
         assert(meanDifference <= BALL_GI_TOLERANCE, `the ball's GI differs from the reference by ${(meanDifference * 100).toFixed(1)}% on average (limit ${BALL_GI_TOLERANCE * 100}%)`);
         assert(lowest.ratio >= BALL_GI_FLOOR, `the ball's GI fell to ${(lowest.ratio * 100).toFixed(1)}% of the reference at frame ${lowest.frame}`);
         assert(colourCorrelation >= COLOUR_CORRELATION, `the ball's colour follows the reference's with correlation ${colourCorrelation.toFixed(3)} only`);
+        const twoVolumes = await wakesInEveryVolume(device, log);
         return {
+            twoVolumes,
             probes: probeCount,
             units: UNITS,
             asleepAtStart: asleepAtStart.length,
