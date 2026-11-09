@@ -644,3 +644,260 @@ date,commit,device,browser,scene,metric,value
 2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/bvh_hploc/tinybvh codes/GPU buffers, 16-bit indices at an odd offset/sahCostVsReference,1
 2026-11-09,4b73f20,Intel UHD,Chrome headless,all,note/correctness_run,1
 2026-11-09,4b73f20,Intel UHD,Chrome headless,all,note/t2.10_intel_batch,5
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/trees_no_subgroups/meshes,2
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/trees_no_subgroups/trees/onGpuTrees,0
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/trees_no_subgroups/trees/onTinybvhTrees,2
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/trees_no_subgroups/trees/waitingForFirstTree,0
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/trees_no_subgroups/trees/tinybvhBuilding,0
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/trees_no_subgroups/trees/gpuTreesBuilt,0
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/trees_no_subgroups/trees/gpuTreesRefused,0
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/trees_no_subgroups/trees/swaps,0
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/trees_no_subgroups/trees/lastGpuBuildMs,0
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/trees_no_subgroups/atlasMean,0.335185
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/trees_no_subgroups/m1AtlasMean,0.335077
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/trees_no_subgroups/change,0.000319734
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/trees_no_subgroups/viewMean,0.033246
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/trees_no_subgroups/recompiles,0
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,note/correctness_run,1
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,note/t2.10_intel_batch,6
+2026-11-09,4b73f20,Intel UHD,Chrome headless,cabinet-row,t2.10/scene_gpu_packing/meshes,1
+2026-11-09,4b73f20,Intel UHD,Chrome headless,cabinet-row,t2.10/scene_gpu_packing/vertexMB,0
+2026-11-09,4b73f20,Intel UHD,Chrome headless,cabinet-row,t2.10/scene_gpu_packing/wrongWords,0
+2026-11-09,4b73f20,Intel UHD,Chrome headless,cabinet-row,t2.10/scene_gpu_packing/normals,24
+2026-11-09,4b73f20,Intel UHD,Chrome headless,cabinet-row,t2.10/scene_gpu_packing/normalsOneStep,0
+2026-11-09,4b73f20,Intel UHD,Chrome headless,cabinet-row,t2.10/scene_gpu_packing/worstNormalSteps,0
+2026-11-09,4b73f20,Intel UHD,Chrome headless,cabinet-row,t2.10/scene_gpu_packing/createMeshMs,1.2
+2026-11-09,4b73f20,Intel UHD,Chrome headless,cabinet-row,t2.10/scene_gpu_packing/packGpuMs,0.217
+2026-11-09,4b73f20,Intel UHD,Chrome headless,closed-door,t2.10/scene_gpu_packing/meshes,1
+2026-11-09,4b73f20,Intel UHD,Chrome headless,closed-door,t2.10/scene_gpu_packing/vertexMB,0
+2026-11-09,4b73f20,Intel UHD,Chrome headless,closed-door,t2.10/scene_gpu_packing/wrongWords,0
+2026-11-09,4b73f20,Intel UHD,Chrome headless,closed-door,t2.10/scene_gpu_packing/normals,24
+2026-11-09,4b73f20,Intel UHD,Chrome headless,closed-door,t2.10/scene_gpu_packing/normalsOneStep,0
+2026-11-09,4b73f20,Intel UHD,Chrome headless,closed-door,t2.10/scene_gpu_packing/worstNormalSteps,0
+2026-11-09,4b73f20,Intel UHD,Chrome headless,closed-door,t2.10/scene_gpu_packing/createMeshMs,0.1
+2026-11-09,4b73f20,Intel UHD,Chrome headless,closed-door,t2.10/scene_gpu_packing/packGpuMs,0.289
+2026-11-09,4b73f20,Intel UHD,Chrome headless,cornell-box,t2.10/scene_gpu_packing/meshes,2
+2026-11-09,4b73f20,Intel UHD,Chrome headless,cornell-box,t2.10/scene_gpu_packing/vertexMB,0
+2026-11-09,4b73f20,Intel UHD,Chrome headless,cornell-box,t2.10/scene_gpu_packing/wrongWords,0
+2026-11-09,4b73f20,Intel UHD,Chrome headless,cornell-box,t2.10/scene_gpu_packing/normals,28
+2026-11-09,4b73f20,Intel UHD,Chrome headless,cornell-box,t2.10/scene_gpu_packing/normalsOneStep,0
+2026-11-09,4b73f20,Intel UHD,Chrome headless,cornell-box,t2.10/scene_gpu_packing/worstNormalSteps,0
+2026-11-09,4b73f20,Intel UHD,Chrome headless,cornell-box,t2.10/scene_gpu_packing/createMeshMs,0.2
+2026-11-09,4b73f20,Intel UHD,Chrome headless,cornell-box,t2.10/scene_gpu_packing/packGpuMs,0.356
+2026-11-09,4b73f20,Intel UHD,Chrome headless,cornell-box-point,t2.10/scene_gpu_packing/meshes,1
+2026-11-09,4b73f20,Intel UHD,Chrome headless,cornell-box-point,t2.10/scene_gpu_packing/vertexMB,0
+2026-11-09,4b73f20,Intel UHD,Chrome headless,cornell-box-point,t2.10/scene_gpu_packing/wrongWords,0
+2026-11-09,4b73f20,Intel UHD,Chrome headless,cornell-box-point,t2.10/scene_gpu_packing/normals,24
+2026-11-09,4b73f20,Intel UHD,Chrome headless,cornell-box-point,t2.10/scene_gpu_packing/normalsOneStep,0
+2026-11-09,4b73f20,Intel UHD,Chrome headless,cornell-box-point,t2.10/scene_gpu_packing/worstNormalSteps,0
+2026-11-09,4b73f20,Intel UHD,Chrome headless,cornell-box-point,t2.10/scene_gpu_packing/createMeshMs,0.2
+2026-11-09,4b73f20,Intel UHD,Chrome headless,cornell-box-point,t2.10/scene_gpu_packing/packGpuMs,0.226
+2026-11-09,4b73f20,Intel UHD,Chrome headless,furnace-room,t2.10/scene_gpu_packing/meshes,1
+2026-11-09,4b73f20,Intel UHD,Chrome headless,furnace-room,t2.10/scene_gpu_packing/vertexMB,0
+2026-11-09,4b73f20,Intel UHD,Chrome headless,furnace-room,t2.10/scene_gpu_packing/wrongWords,0
+2026-11-09,4b73f20,Intel UHD,Chrome headless,furnace-room,t2.10/scene_gpu_packing/normals,24
+2026-11-09,4b73f20,Intel UHD,Chrome headless,furnace-room,t2.10/scene_gpu_packing/normalsOneStep,0
+2026-11-09,4b73f20,Intel UHD,Chrome headless,furnace-room,t2.10/scene_gpu_packing/worstNormalSteps,0
+2026-11-09,4b73f20,Intel UHD,Chrome headless,furnace-room,t2.10/scene_gpu_packing/createMeshMs,0.2
+2026-11-09,4b73f20,Intel UHD,Chrome headless,furnace-room,t2.10/scene_gpu_packing/packGpuMs,0.207
+2026-11-09,4b73f20,Intel UHD,Chrome headless,open-ground,t2.10/scene_gpu_packing/meshes,1
+2026-11-09,4b73f20,Intel UHD,Chrome headless,open-ground,t2.10/scene_gpu_packing/vertexMB,0
+2026-11-09,4b73f20,Intel UHD,Chrome headless,open-ground,t2.10/scene_gpu_packing/wrongWords,0
+2026-11-09,4b73f20,Intel UHD,Chrome headless,open-ground,t2.10/scene_gpu_packing/normals,24
+2026-11-09,4b73f20,Intel UHD,Chrome headless,open-ground,t2.10/scene_gpu_packing/normalsOneStep,0
+2026-11-09,4b73f20,Intel UHD,Chrome headless,open-ground,t2.10/scene_gpu_packing/worstNormalSteps,0
+2026-11-09,4b73f20,Intel UHD,Chrome headless,open-ground,t2.10/scene_gpu_packing/createMeshMs,5.4
+2026-11-09,4b73f20,Intel UHD,Chrome headless,open-ground,t2.10/scene_gpu_packing/packGpuMs,0.297
+2026-11-09,4b73f20,Intel UHD,Chrome headless,thin-wall,t2.10/scene_gpu_packing/meshes,1
+2026-11-09,4b73f20,Intel UHD,Chrome headless,thin-wall,t2.10/scene_gpu_packing/vertexMB,0
+2026-11-09,4b73f20,Intel UHD,Chrome headless,thin-wall,t2.10/scene_gpu_packing/wrongWords,0
+2026-11-09,4b73f20,Intel UHD,Chrome headless,thin-wall,t2.10/scene_gpu_packing/normals,24
+2026-11-09,4b73f20,Intel UHD,Chrome headless,thin-wall,t2.10/scene_gpu_packing/normalsOneStep,0
+2026-11-09,4b73f20,Intel UHD,Chrome headless,thin-wall,t2.10/scene_gpu_packing/worstNormalSteps,0
+2026-11-09,4b73f20,Intel UHD,Chrome headless,thin-wall,t2.10/scene_gpu_packing/createMeshMs,0.1
+2026-11-09,4b73f20,Intel UHD,Chrome headless,thin-wall,t2.10/scene_gpu_packing/packGpuMs,0.316
+2026-11-09,4b73f20,Intel UHD,Chrome headless,two-room,t2.10/scene_gpu_packing/meshes,1
+2026-11-09,4b73f20,Intel UHD,Chrome headless,two-room,t2.10/scene_gpu_packing/vertexMB,0
+2026-11-09,4b73f20,Intel UHD,Chrome headless,two-room,t2.10/scene_gpu_packing/wrongWords,0
+2026-11-09,4b73f20,Intel UHD,Chrome headless,two-room,t2.10/scene_gpu_packing/normals,24
+2026-11-09,4b73f20,Intel UHD,Chrome headless,two-room,t2.10/scene_gpu_packing/normalsOneStep,0
+2026-11-09,4b73f20,Intel UHD,Chrome headless,two-room,t2.10/scene_gpu_packing/worstNormalSteps,0
+2026-11-09,4b73f20,Intel UHD,Chrome headless,two-room,t2.10/scene_gpu_packing/createMeshMs,0.1
+2026-11-09,4b73f20,Intel UHD,Chrome headless,two-room,t2.10/scene_gpu_packing/packGpuMs,0.293
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,note/correctness_run,1
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,note/t2.10_intel_batch,6
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/tlas_oracle/scripted/frames,32
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/tlas_oracle/scripted/gpuRefit/rays,192000
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/tlas_oracle/scripted/gpuRefit/mismatches,0
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/tlas_oracle/scripted/gpuRefit/ambiguous,0
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/tlas_oracle/scripted/gpuRefit/slotsChecked,2530
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/tlas_oracle/scripted/gpuRefit/counters/refit passes,36
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/tlas_oracle/scripted/gpuRefit/counters/shapes built,13
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/tlas_oracle/scripted/gpuRefit/counters/quality checks,28
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/tlas_oracle/scripted/gpuRefit/counters/quality rebuilds,9
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/tlas_oracle/scripted/gpuRefit/counters/last shape build ms (worker),0.7
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/tlas_oracle/scripted/gpuRefit/counters/last snapshot ms (main thread),0
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/tlas_oracle/scripted/gpuRefit/counters/refit reads that gave up (diagnostics),0
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/tlas_oracle/scripted/gpuRefit/counters/refit repairs (diagnostics),0
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/tlas_oracle/scripted/cpuFallback/rays,192000
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/tlas_oracle/scripted/cpuFallback/mismatches,0
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/tlas_oracle/scripted/cpuFallback/ambiguous,0
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/tlas_oracle/scripted/cpuFallback/slotsChecked,2512
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/tlas_oracle/scripted/agreement/compared,96000
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/tlas_oracle/scripted/agreement/disagreements,0
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/tlas_oracle/many/instances,2000
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/tlas_oracle/many/frames,8
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/tlas_oracle/many/rays,32000
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/tlas_oracle/many/mismatches,0
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/tlas_oracle/many/ambiguous,0
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/tlas_oracle/many/slotsChecked,31984
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/tlas_oracle/many/counters/refit passes,10
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/tlas_oracle/many/counters/shapes built,5
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/tlas_oracle/many/counters/quality checks,7
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/tlas_oracle/many/counters/quality rebuilds,4
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/tlas_oracle/many/counters/last shape build ms (worker),21.5
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/tlas_oracle/many/counters/last snapshot ms (main thread),0.6
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/tlas_oracle/many/counters/refit reads that gave up (diagnostics),0
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/tlas_oracle/many/counters/refit repairs (diagnostics),0
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/tlas_oracle/repair/gaveUp,10
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,t2.10/tlas_oracle/repair/repairs,1
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,note/correctness_run,1
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,note/t2.10_intel_batch,6
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,note/correctness_run,1
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,note/t2.10_intel_batch,6
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,note/device_hung,1
+2026-11-09,4b73f20,Intel UHD,Chrome headless,all,note/page_failed,1
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/ddgi_change_still/frames,600
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/ddgi_change_still/cornell-box/units,1574
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/ddgi_change_still/cornell-box/atlasMean,0.335184
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/ddgi_change_still/cornell-box/viewMean,0.0332526
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/ddgi_change_still/cornell-box/m1/atlas,0.335077
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/ddgi_change_still/cornell-box/m1/view,0.033257
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/ddgi_change_still/cornell-box/atlasChange,0.00031961
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/ddgi_change_still/cornell-box/viewChange,-0.00013308
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/ddgi_change_still/cornell-box/probesMarkedTotal,0
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/ddgi_change_still/two-room/units,707
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/ddgi_change_still/two-room/atlasMean,1.69087
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/ddgi_change_still/two-room/viewMean,0.709924
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/ddgi_change_still/two-room/m1/atlas,1.68823
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/ddgi_change_still/two-room/m1/view,0.709081
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/ddgi_change_still/two-room/atlasChange,0.00156221
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/ddgi_change_still/two-room/viewChange,0.00118816
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/ddgi_change_still/two-room/probesMarkedTotal,0
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/ddgi_change_still/two-room fixed 0.97/units,707
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/ddgi_change_still/two-room fixed 0.97/atlasMean,1.67874
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/ddgi_change_still/two-room fixed 0.97/viewMean,0.705194
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/ddgi_change_still/two-room fixed 0.97/m1/atlas,1.68035
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/ddgi_change_still/two-room fixed 0.97/m1/view,0.706122
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/ddgi_change_still/two-room fixed 0.97/atlasChange,-0.000956312
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/ddgi_change_still/two-room fixed 0.97/viewChange,-0.00131368
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/ddgi_change_still/two-room fixed 0.97/probesMarkedTotal,0
+2026-11-09,167734f,Intel UHD,Chrome headless,all,note/correctness_run,1
+2026-11-09,167734f,Intel UHD,Chrome headless,all,note/t2.10_intel_batch,7
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/many_lights_grid/lightGridMaxCells,2048
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/many_lights_grid/scans/samePicks,0.999964
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/many_lights_grid/scans/picks,27664
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/many_lights_grid/points/tested,1000
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/many_lights_grid/points/lit,1000
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/many_lights_grid/accuracy/K1/meanDifference,-0.000943467
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/many_lights_grid/accuracy/K1/withinTolerance,0.993
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/many_lights_grid/accuracy/K1/p99Error,0.0459806
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/many_lights_grid/accuracy/K1/worstError,0.0644597
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/many_lights_grid/accuracy/K1/noiseMedian,0.41189
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/many_lights_grid/accuracy/K1/noiseMean,0.465793
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/many_lights_grid/accuracy/K1/noiseP95,0.874765
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/many_lights_grid/accuracy/K1/points,1000
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/many_lights_grid/accuracy/K2/meanDifference,0.000133406
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/many_lights_grid/accuracy/K2/withinTolerance,0.995
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/many_lights_grid/accuracy/K2/p99Error,0.0454508
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/many_lights_grid/accuracy/K2/worstError,0.0926952
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/many_lights_grid/accuracy/K2/noiseMedian,0.358305
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/many_lights_grid/accuracy/K2/noiseMean,0.415151
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/many_lights_grid/accuracy/K2/noiseP95,0.82506
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/many_lights_grid/accuracy/K2/points,1000
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/many_lights_grid/accuracy/K4/meanDifference,-0.000460664
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/many_lights_grid/accuracy/K4/withinTolerance,0.997
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/many_lights_grid/accuracy/K4/p99Error,0.0449092
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/many_lights_grid/accuracy/K4/worstError,0.0651999
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/many_lights_grid/accuracy/K4/noiseMedian,0.337205
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/many_lights_grid/accuracy/K4/noiseMean,0.389104
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/many_lights_grid/accuracy/K4/noiseP95,0.801826
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/many_lights_grid/accuracy/K4/points,1000
+2026-11-09,167734f,Intel UHD,Chrome headless,all,note/correctness_run,1
+2026-11-09,167734f,Intel UHD,Chrome headless,all,note/t2.10_intel_batch,7
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/trace_inline/storageBuffers/tracer,3
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/trace_inline/storageBuffers/sceneCopy,2
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/trace_inline/storageBuffers/technique,3
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/trace_inline/storageBuffers/limit,8
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/trace_inline/cases/analytic/rays,10
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/trace_inline/cases/analytic/closest/mismatches,0
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/trace_inline/cases/analytic/closest/ambiguous,0
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/trace_inline/cases/analytic/any/mismatches,0
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/trace_inline/cases/analytic/any/ambiguous,0
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/trace_inline/cases/analytic/escapes,0
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/trace_inline/cases/analytic/facingDisagreements,0
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/trace_inline/cases/instancing/rays,9
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/trace_inline/cases/instancing/closest/mismatches,0
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/trace_inline/cases/instancing/closest/ambiguous,0
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/trace_inline/cases/instancing/any/mismatches,0
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/trace_inline/cases/instancing/any/ambiguous,0
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/trace_inline/cases/instancing/escapes,0
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/trace_inline/cases/instancing/facingDisagreements,0
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/trace_inline/cases/mirrored-box/rays,48
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/trace_inline/cases/mirrored-box/closest/mismatches,0
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/trace_inline/cases/mirrored-box/closest/ambiguous,0
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/trace_inline/cases/mirrored-box/any/mismatches,0
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/trace_inline/cases/mirrored-box/any/ambiguous,0
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/trace_inline/cases/mirrored-box/escapes,0
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/trace_inline/cases/mirrored-box/facingDisagreements,0
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/trace_inline/cases/thin-wall/rays,11
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/trace_inline/cases/thin-wall/closest/mismatches,0
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/trace_inline/cases/thin-wall/closest/ambiguous,0
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/trace_inline/cases/thin-wall/any/mismatches,0
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/trace_inline/cases/thin-wall/any/ambiguous,0
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/trace_inline/cases/thin-wall/escapes,0
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/trace_inline/cases/thin-wall/facingDisagreements,0
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/trace_inline/cases/thin-box/rays,24000
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/trace_inline/cases/thin-box/closest/mismatches,0
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/trace_inline/cases/thin-box/closest/ambiguous,3197
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/trace_inline/cases/thin-box/any/mismatches,0
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/trace_inline/cases/thin-box/any/ambiguous,0
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/trace_inline/cases/thin-box/escapes,0
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/trace_inline/cases/thin-box/facingDisagreements,0
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/trace_inline/cases/random-soup/rays,20000
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/trace_inline/cases/random-soup/closest/mismatches,0
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/trace_inline/cases/random-soup/closest/ambiguous,0
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/trace_inline/cases/random-soup/any/mismatches,0
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/trace_inline/cases/random-soup/any/ambiguous,0
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/trace_inline/cases/random-soup/escapes,0
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/trace_inline/cases/random-soup/facingDisagreements,0
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/trace_inline/cases/random-instanced/rays,20000
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/trace_inline/cases/random-instanced/closest/mismatches,0
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/trace_inline/cases/random-instanced/closest/ambiguous,0
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/trace_inline/cases/random-instanced/any/mismatches,0
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/trace_inline/cases/random-instanced/any/ambiguous,0
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/trace_inline/cases/random-instanced/escapes,0
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/trace_inline/cases/random-instanced/facingDisagreements,0
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/trace_inline/cases/many-instances/rays,20000
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/trace_inline/cases/many-instances/closest/mismatches,0
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/trace_inline/cases/many-instances/closest/ambiguous,0
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/trace_inline/cases/many-instances/any/mismatches,0
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/trace_inline/cases/many-instances/any/ambiguous,0
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/trace_inline/cases/many-instances/escapes,0
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/trace_inline/cases/many-instances/facingDisagreements,0
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/trace_inline/cases/deep-mesh/rays,3000
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/trace_inline/cases/deep-mesh/closest/mismatches,0
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/trace_inline/cases/deep-mesh/closest/ambiguous,0
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/trace_inline/cases/deep-mesh/any/mismatches,0
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/trace_inline/cases/deep-mesh/any/ambiguous,0
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/trace_inline/cases/deep-mesh/escapes,0
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/trace_inline/cases/deep-mesh/facingDisagreements,0
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/trace_inline/sharedEdges/shared-edges/rays,200000
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/trace_inline/sharedEdges/shared-edges/slipped,0
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/trace_inline/sharedEdges/shared-edges/slippedAny,0
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/trace_inline/sharedEdges/shared-edges-transformed/rays,200000
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/trace_inline/sharedEdges/shared-edges-transformed/slipped,0
+2026-11-09,167734f,Intel UHD,Chrome headless,all,t2.10/trace_inline/sharedEdges/shared-edges-transformed/slippedAny,0
+2026-11-09,167734f,Intel UHD,Chrome headless,all,note/correctness_run,1
+2026-11-09,167734f,Intel UHD,Chrome headless,all,note/t2.10_intel_batch,8
+2026-11-09,167734f,Intel UHD,Chrome headless,all,note/rerun_after_hang,1
