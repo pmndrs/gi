@@ -46,6 +46,7 @@ import type { ShadingModule, ShadingParameter } from '../../../../packages/ddgi-
 import type { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
 import type { DDGIField } from '../../../../packages/ddgi-core/src/techniques/ddgi/ddgi-technique.ts';
 import { PROBE_STATE } from '../../../../packages/ddgi-core/src/techniques/ddgi/layout.ts';
+import { VOLUME_TABLE_ROW_FLOATS, VOLUME_TABLE_TEXEL } from '../../../../packages/ddgi-core/src/techniques/ddgi/volumes.ts';
 import { COVERAGE_FADE_SPACINGS, COVERAGE_FULL_MARGIN_SPACINGS, COVERAGE_FULL_WEIGHT, DDGI_DEBUG_COLORS, DDGI_DEBUG_VIEW } from '../../../../packages/ddgi-core/src/techniques/ddgi/wgsl/shading.ts';
 import { ForwardRenderer, type RenderView } from '../../../../examples/webgpu/hello/src/renderer.ts';
 import type { CameraBookmark } from '../../../../scenes/src/manifest.ts';
@@ -495,8 +496,14 @@ await runGpuTest(
             assert(tableTexture?.kind === 'texture', 'the module has no volume table');
             const tableRow = new Float32Array((await readTextureBytes(device, tableTexture.texture(), 16)).buffer);
             const fieldParameters = ddgi.field!.sampleParameters;
-            assert(tableRow.length === fieldParameters.length, `the volume table holds ${tableRow.length} floats, one volume's parameters are ${fieldParameters.length}`);
-            assert(tableRow.every((value, index) => value === fieldParameters[index]), `the volume table ${[...tableRow]} differs from the field's ${[...fieldParameters]}`);
+            // A row: the four sampling vec4s, then the window (0 for a fixed volume) and the valid extent (its first and last probes); T3.6.
+            assert(tableRow.length === VOLUME_TABLE_ROW_FLOATS, `the volume table holds ${tableRow.length} floats, a row is ${VOLUME_TABLE_ROW_FLOATS}`);
+            const sampling = tableRow.subarray(0, fieldParameters.length);
+            assert(sampling.every((value, index) => value === fieldParameters[index]), `the volume table ${[...sampling]} differs from the field's ${[...fieldParameters]}`);
+            const counts = field.grid.counts;
+            const windowAndExtent = [...tableRow.subarray(VOLUME_TABLE_TEXEL.window * 4)];
+            const expectedWindowAndExtent = [0, 0, 0, 0, 0, 0, 0, 0, counts[0] - 1, counts[1] - 1, counts[2] - 1, 0];
+            assert(windowAndExtent.every((value, index) => value === expectedWindowAndExtent[index]), `a fixed volume's window and extent read ${windowAndExtent}, not ${expectedWindowAndExtent}`);
             for (const parameter of shading.parameters) {
                 if (parameter.kind === 'vec4f') assert(parameter.value() === parameter.value(), `${parameter.name}.value() should return the same array each time`);
             }
