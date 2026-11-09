@@ -63,6 +63,11 @@ export interface FrameCamera {
  * screen-space GI). World-space techniques like DDGI ignore them. Same
  * fields as `@pmndrs/upscaler`'s temporal guides where they overlap, so one
  * set of buffers feeds GI, the upscaler and the denoiser.
+ *
+ * Every channel describes **the opaque surface under the depth sample**: a
+ * blended (transparent) surface that doesn't write depth leaves normal,
+ * velocity, albedo and instance as the surface behind it. Alpha-tested
+ * surfaces write depth, so they are the surface.
  */
 export interface FrameScreen {
     readonly width: number;

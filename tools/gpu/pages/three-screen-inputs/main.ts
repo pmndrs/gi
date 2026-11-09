@@ -30,21 +30,25 @@
  *    read back, checked at the samples (instance colours by hash, albedo as
  *    sRGB, normals as n / 2 + 1/2), and laid out as a contact sheet that the
  *    runner's screenshot captures.
+ * 8. **The opaque surface under the depth sample:** a transparent plane
+ *    (no depth write) over the centre, under normal, premultiplied normal,
+ *    additive and multiply blending, changes the picture but no channel.
+ * Every frame also checks that exactly one screen stage ran.
  *
  * Manual (it needs the downloaded Sponza):
  *   pnpm test:gpu --gpu nvidia --filter three-screen-inputs
  */
 
-import { BoxGeometry, Matrix3, Mesh, MeshStandardMaterial, Raycaster, RenderPipeline, Vector2, Vector3, type Material, type Node, type Object3D } from 'three/webgpu';
+import { AdditiveBlending, BlendMode, BoxGeometry, MaterialBlending, Matrix3, Mesh, MeshStandardMaterial, MultiplyBlending, NormalBlending, PlaneGeometry, Raycaster, RenderPipeline, Vector2, Vector3, type Material, type Node, type Object3D } from 'three/webgpu';
 import { mrt, normalView, output, packNormalToRGB, pass } from 'three/tsl';
 import { assert } from '../../client.ts';
 import { instanceDebugColor, SCREEN_CHANNELS, type ScreenChannel } from '../../../../packages/ddgi-core/src/platform/screen/screen-inputs-view.ts';
 import type { FrameScreen } from '../../../../packages/ddgi-core/src/platform/contract/frame.ts';
-import { GI_SCREEN_ALBEDO_OUTPUT, GI_SCREEN_INSTANCE_OUTPUT, GI_SCREEN_NORMAL_OUTPUT, GI_SCREEN_VELOCITY_OUTPUT, screenInputs } from '../../../../packages/ddgi-three/src/screen-inputs.ts';
+import { GI_SCREEN_ALBEDO_OUTPUT, GI_SCREEN_INSTANCE_OUTPUT, GI_SCREEN_NORMAL_OUTPUT, GI_SCREEN_VELOCITY_OUTPUT, GIScreenChannelNode, screenInputs } from '../../../../packages/ddgi-three/src/screen-inputs.ts';
 import { GI_NORMAL_OUTPUT } from '../../../../packages/ddgi-three/src/composite.ts';
 import { runThreePage, type ThreePageContext } from '../three-shared/harness.ts';
 import { advanceThreeFrame, loadCompositeScene, type CompositeScene } from '../three-composite-shared/composite-check.ts';
-import { readPassTarget, readRgba8, type TargetImage } from './readback.ts';
+import { readInstanceIds, readPassTarget, readRgba8, type TargetImage } from './readback.ts';
 import { ScreenProbeTechnique, type ScreenSample } from './screen-probe.ts';
 
 const SIZE = { width: 1280, height: 720 } as const;
@@ -91,7 +95,13 @@ interface Rig {
 function drawFrame(context: ThreePageContext, rig: Rig, pipeline: RenderPipeline = rig.pipeline): void {
     rig.scene.threeGI.update(rig.scene.camera, 1 / 60);
     advanceThreeFrame(context.renderer);
+    const stagesBefore = rig.screen.stages;
+    const probeStagesBefore = rig.probe.stages;
     pipeline.render();
+    // Exactly one screen stage per frame, and the technique's screen stage ran in it.
+    const ran = rig.screen.stages - stagesBefore;
+    const probeRan = rig.probe.stages - probeStagesBefore;
+    assert(ran === 1 && probeRan === 1, `a frame ran ${ran} screen stages (the technique saw ${probeRan}); expected exactly 1`);
 }
 
 async function sampleFrame(context: ThreePageContext, rig: Rig, pixels: Array<readonly [number, number]>): Promise<ScreenSample[]> {
@@ -106,7 +116,7 @@ async function checkHandover(context: ThreePageContext, rig: Rig, samples: reado
     const normal = await readPassTarget(renderer, rig.scenePass, GI_SCREEN_NORMAL_OUTPUT);
     const albedo = await readPassTarget(renderer, rig.scenePass, GI_SCREEN_ALBEDO_OUTPUT);
     const velocity = await readPassTarget(renderer, rig.scenePass, GI_SCREEN_VELOCITY_OUTPUT);
-    const instance = await readPassTarget(renderer, rig.scenePass, GI_SCREEN_INSTANCE_OUTPUT);
+    const instance = await readInstanceIds(renderer, rig.scenePass, GI_SCREEN_INSTANCE_OUTPUT);
     let normalError = 0;
     let albedoError = 0;
     let velocityError = 0;
@@ -175,7 +185,7 @@ function alphaCut(material: Material | Material[] | undefined, group: number | u
 /** Check 3: instance ids against three's raycaster and the adapter's map. */
 async function checkInstances(context: ThreePageContext, rig: Rig, samples: readonly ScreenSample[]): Promise<Record<string, number>> {
     const { scene, camera, threeGI } = rig.scene;
-    const ids = await readPassTarget(context.renderer, rig.scenePass, GI_SCREEN_INSTANCE_OUTPUT);
+    const ids = await readInstanceIds(context.renderer, rig.scenePass, GI_SCREEN_INSTANCE_OUTPUT);
     const instancesOf = new Map<Object3D, readonly number[]>();
     for (const [object, handles] of threeGI.sync.mirroredInstances()) instancesOf.set(object, handles.map((handle) => threeGI.gi.scene.instanceIndex(handle) + 1));
     const raycaster = new Raycaster();
@@ -290,6 +300,61 @@ async function checkEveryFrame(context: ThreePageContext, rig: Rig): Promise<Rec
     return { boxId, facing, albedoError };
 }
 
+/**
+ * Check 8 (RC1.1 review): a transparent surface over a known opaque one
+ * leaves every channel as the opaque surface's (it writes no depth, as
+ * glTF's BLEND materials don't), under each of three's blendings, while it
+ * does change the picture.
+ */
+async function checkTransparency(context: ThreePageContext, rig: Rig): Promise<Record<string, number>> {
+    const { scene, camera, threeGI } = rig.scene;
+    const centre: Array<readonly [number, number]> = [[Math.floor(SIZE.width / 2), Math.floor(SIZE.height / 2)]];
+    const [x, y] = centre[0];
+    const colourAt = async () => {
+        const picture = await readPassTarget(context.renderer, rig.scenePass, 'output');
+        return [picture.at(x, y, 0), picture.at(x, y, 1), picture.at(x, y, 2)];
+    };
+    const opaque = (await sampleFrame(context, rig, centre))[0];
+    const opaqueColour = await colourAt();
+    const blendings = [
+        { name: 'normal', blending: NormalBlending, premultipliedAlpha: false },
+        { name: 'normal premultiplied', blending: NormalBlending, premultipliedAlpha: true },
+        { name: 'additive', blending: AdditiveBlending, premultipliedAlpha: false },
+        { name: 'multiply', blending: MultiplyBlending, premultipliedAlpha: true },
+    ];
+    const results: Record<string, number> = {};
+    for (const { name, blending, premultipliedAlpha } of blendings) {
+        const material = new MeshStandardMaterial({ color: 0x20c040, transparent: true, opacity: 0.5, depthWrite: false, blending, premultipliedAlpha });
+        const plane = new Mesh(new PlaneGeometry(0.4, 0.4), material);
+        plane.name = `screen-inputs transparent plane (${name})`;
+        plane.position.copy(camera.position).addScaledVector(camera.getWorldDirection(new Vector3()), 1.2);
+        plane.lookAt(camera.position);
+        plane.updateMatrixWorld(true);
+        scene.add(plane);
+        threeGI.markChanged(plane);
+        const covered = (await sampleFrame(context, rig, centre))[0];
+        const coveredColour = await colourAt();
+        // Relative: multiply blending darkens a dark pixel by a small absolute amount.
+        const pictureChange = Math.max(...coveredColour.map((value, channel) => Math.abs(value - opaqueColour[channel]) / Math.max(Math.abs(opaqueColour[channel]), 1e-3)));
+        const channelChange = Math.max(
+            Math.abs(covered.depth - opaque.depth),
+            ...covered.normal.map((value, channel) => Math.abs(value - opaque.normal[channel])),
+            ...covered.velocity.map((value, channel) => Math.abs(value - opaque.velocity[channel])),
+            ...covered.albedo.map((value, channel) => Math.abs(value - opaque.albedo[channel])),
+        );
+        context.log(`transparent plane, ${name} blending: picture changed by ${(pictureChange * 100).toFixed(1)}%; channels changed by ${channelChange}; id ${covered.instance} (opaque ${opaque.instance})`);
+        assert(pictureChange > 0.05, `the ${name} transparent plane doesn't cover the centre pixel (the check would prove nothing)`);
+        assert(channelChange === 0, `a transparent plane (${name} blending) changed the screen channels by ${channelChange}`);
+        assert(covered.instance === opaque.instance, `a transparent plane (${name} blending) changed the instance id to ${covered.instance}`);
+        results[name] = channelChange;
+        scene.remove(plane);
+        threeGI.markChanged(plane);
+        plane.geometry.dispose();
+        material.dispose();
+    }
+    return results;
+}
+
 function setSize(context: ThreePageContext, rig: Rig, size: { width: number; height: number }): void {
     context.renderer.setSize(size.width, size.height, false);
     rig.scene.camera.aspect = size.width / size.height;
@@ -402,7 +467,12 @@ await runThreePage(
         const screen = screenInputs(scenePass, scene.threeGI);
         log(`screen needs: ${JSON.stringify(scene.platform.screenNeeds)}; channels rendered: ${JSON.stringify(screen.channels)}; outputs ${Object.keys(screen.outputs).join(', ')}`);
         assert(screen.channels.velocity && screen.channels.albedo && screen.channels.instance, "the pass doesn't render every channel the probe asked for");
-        scenePass.setMRT(mrt({ output, [GI_NORMAL_OUTPUT]: packNormalToRGB(normalView), ...screen.outputs }));
+        // Check 2's reference, the view-space normal, describes the opaque surface under the depth sample
+        // too (written like the screen channels), or a decal's normal would differ from the screen's.
+        const viewNormal = new GIScreenChannelNode(() => packNormalToRGB(normalView) as never);
+        const outputs = mrt({ output, [GI_NORMAL_OUTPUT]: viewNormal, ...screen.outputs });
+        outputs.setBlendMode(GI_NORMAL_OUTPUT, new BlendMode(MaterialBlending));
+        scenePass.setMRT(outputs);
         // The view-space normal (check 2's reference): an MRT output is drawn only once its texture exists (NOTES).
         scenePass.getTexture(GI_NORMAL_OUTPUT);
         const pipeline = new RenderPipeline(renderer, screen.encodeBefore(scenePass.getTextureNode('output') as unknown as Node));
@@ -421,6 +491,7 @@ await runThreePage(
         data.instances = await checkInstances(context, rig, samples);
         data.velocity = await checkVelocity(context, rig, pixels);
         data.everyFrame = await checkEveryFrame(context, rig);
+        data.transparency = await checkTransparency(context, rig);
         data.resize = await checkResize(context, rig);
         const freshSamples = await sampleFrame(context, rig, pixels);
         data.views = await checkViews(context, rig, freshSamples);

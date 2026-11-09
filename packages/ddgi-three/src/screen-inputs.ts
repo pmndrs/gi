@@ -15,45 +15,73 @@
  * `screenInputs` is called) plus any the host asks for (`channels`):
  * - always: `giNormal`, the world-space shading normal (three's
  *   `normalWorld`, normal maps included), signed, half float;
- * - `velocity`: three's `velocity` (NDC current − previous), half float,
- *   under the name `@pmndrs/upscaler` reads, so one target feeds both;
+ * - `velocity`: three's `velocity` (NDC current − previous) in rg, half
+ *   float, under the name `@pmndrs/upscaler` reads, so one target feeds both;
  * - `albedo`: `giDiffuseAlbedo`, the diffuse albedo (three's
  *   `diffuseContribution`, base colour × (1 − metalness), for Standard and
  *   Physical materials; `diffuseColor` for the rest), linear, 8-bit;
- * - `instance`: `giInstance`, `r32uint`, the platform instance index + 1
- *   (0 for objects GI doesn't mirror), from {@link InstanceIdTable}.
- * Depth is the pass's own depth buffer. Each output is the last surface
- * drawn at the pixel, like depth (the outputs don't blend).
+ * - `instance`: `giInstance`, the platform instance index + 1 (0 for
+ *   objects GI doesn't mirror, {@link InstanceIdTable}), written as three
+ *   bytes and turned into `r32uint` by a small pass (instance-id-resolve.ts).
+ * Depth is the pass's own depth buffer.
+ *
+ * **The opaque surface under the depth sample** (RC1.1 review). three gives
+ * every MRT output but `output` no blending, so a transparent surface would
+ * overwrite the channels while the depth buffer keeps the surface behind it
+ * (glTF's BLEND materials don't write depth). So each output carries a
+ * coverage in alpha, 1 for an opaque surface and 0 for a blended one, and
+ * takes the material's own blending (`MaterialBlending`, as the composite's
+ * `giAlbedo` does): an opaque material doesn't blend, so it writes; a
+ * blended one is drawn with a source its blend equation leaves the target
+ * unchanged under (0 for normal, additive and subtractive blending,
+ * premultiplied or not; 1 for multiply). Custom blending isn't covered.
+ * Alpha-tested materials write depth and the channels. A blended material
+ * that writes depth (three's default for `transparent`) puts its own depth
+ * over the opaque surface's channels: turn its `depthWrite` off.
  *
  * **When it runs.** `encodeBefore(node)` returns `node` with the screen
  * stage attached: once per three frame, before `node` is drawn, it makes
  * sure the pass has drawn this frame (it asks three to run the pass's own
  * once-per-frame update, which does nothing if the pass already drew), takes
- * three's targets as `GPUTexture`s, and records `gi.encodeScreen` (and the
- * debug view, if one is shown) into an encoder it submits at once. three
- * submits a pass's commands when the pass finishes drawing, and the node
- * graph's own draw is submitted after every update-before, so the order on
- * the GPU queue is: the scene pass, the screen stage, then `node`. Put
- * anything that reads a screen technique's results inside `node`.
+ * three's targets as `GPUTexture`s, resolves the instance ids, and records
+ * `gi.encodeScreen` (and the debug view, if one is shown) into an encoder
+ * it submits at once. three submits a pass's commands when the pass
+ * finishes drawing, and the node graph's own draw is submitted after every
+ * update-before, so the order on the GPU queue is: the scene pass, the
+ * screen stage, then `node`. Put anything that reads a screen technique's
+ * results inside `node`.
  *
- * **No copy.** The textures are three's own render targets, read through
- * the version-pinned backend step in three-gpu-texture.ts (D13). They are
- * fetched again every frame, because three replaces them when the pass is
- * resized. Only single-sampled passes (three's `pass()` default) are
- * supported: with MSAA the targets are resolved per sample, not per pixel.
+ * **No copy** of depth, normal, velocity and albedo: they are three's own
+ * render targets, read through the version-pinned backend step in
+ * three-gpu-texture.ts (D13), fetched again every frame because three
+ * replaces them when the pass is resized. Only single-sampled passes
+ * (three's `pass()` default) are supported.
+ *
+ * **Colour bytes.** The pass's targets must fit the device's
+ * `maxColorAttachmentBytesPerSample` (WebGPU's default is 32; with the
+ * composite's outputs and every channel it is 56). The platform's
+ * `requiredLimits` asks for the adapter's maximum; a device without enough
+ * throws `GILimitError` at the first stage. three's own device (a
+ * `WebGPURenderer` made without `device`) keeps the default 32 (D14).
  */
 
 import {
+    BlendMode,
     DataTexture,
     FloatType,
     HalfFloatType,
+    MaterialBlending,
+    MultiplyBlending,
+    NoBlending,
     Node,
     NodeUpdateType,
+    NormalBlending,
     RedFormat,
     RedIntegerFormat,
     RGFormat,
     UnsignedByteType,
     UnsignedIntType,
+    type Material,
     type NodeBuilder,
     type NodeFrame,
     type Object3D,
@@ -62,9 +90,10 @@ import {
     type TextureNode,
     type WebGPURenderer,
 } from 'three/webgpu';
-import { diffuseColor, diffuseContribution, instanceIndex, normalWorld, texture, textureLoad, uint, uniform, uv, uvec2, velocity, vec4 } from 'three/tsl';
-import { ScreenInputsView, type FrameScreen, type GIPlatform, type ScreenChannel, type ScreenChannels, type ScreenNeeds } from '@pmndrs/ddgi-core';
+import { diffuseColor, diffuseContribution, instanceIndex, normalWorld, texture, textureLoad, uint, uniform, uv, uvec2, velocity, type vec2, vec3, vec4 } from 'three/tsl';
+import { GILimitError, ScreenInputsView, type FrameScreen, type GIPlatform, type ScreenChannel, type ScreenChannelRequest, type ScreenNeeds } from '@pmndrs/ddgi-core';
 import { wrapGpuTexture } from './external-texture.ts';
+import { InstanceIdResolve, MAX_ENCODED_INSTANCE_ID } from './instance-id-resolve.ts';
 import type { SceneSync } from './scene-sync.ts';
 import { threeGpuTexture } from './three-gpu-texture.ts';
 
@@ -74,7 +103,7 @@ export const GI_SCREEN_ALBEDO_OUTPUT = 'giDiffuseAlbedo';
 export const GI_SCREEN_VELOCITY_OUTPUT = 'velocity';
 export const GI_SCREEN_INSTANCE_OUTPUT = 'giInstance';
 
-type TslNode = ReturnType<typeof vec4>;
+type Vec3Node = ReturnType<typeof vec3>;
 type UintNode = ReturnType<typeof uint>;
 
 /** Where the screen stage finds the platform and the scene sync's instance map: a `ThreeGI` fits. */
@@ -89,34 +118,59 @@ export interface ScreenInputsOptions {
      * a check). The channels the platform's techniques ask for are always
      * rendered.
      */
-    readonly channels?: ScreenChannels;
+    readonly channels?: ScreenChannelRequest;
+}
+
+/**
+ * Whether three draws this material with blending: the same test three
+ * r187 makes for a pipeline's material blending (WebGPUPipelineUtils).
+ */
+export function drawsBlended(material: Pick<Material, 'blending' | 'transparent'> | null): boolean {
+    if (!material) return false;
+    return material.blending !== NoBlending && (material.blending !== NormalBlending || material.transparent);
+}
+
+/**
+ * One screen channel's MRT output (the file comment): `value` with coverage
+ * 1 on an opaque surface; on a blended one, the source its material's
+ * blend equation leaves the target unchanged under.
+ */
+export class GIScreenChannelNode extends Node {
+    static get type(): string {
+        return 'GIScreenChannelNode';
+    }
+
+    // '_': three would otherwise treat a node-valued own property as a child (Node._getChildren).
+    private readonly _value: (builder: NodeBuilder) => Vec3Node;
+
+    constructor(value: (builder: NodeBuilder) => Vec3Node) {
+        super('vec4');
+        this._value = value;
+    }
+
+    setup(builder: NodeBuilder): Node {
+        const material = builder.material as Material | null;
+        if (material && drawsBlended(material)) {
+            // Multiply keeps destination × source: 1 leaves it. Normal, additive and subtractive
+            // (premultiplied or not) keep the destination when the source colour and alpha are 0.
+            const unchanged = material.blending === MultiplyBlending ? 1 : 0;
+            return vec4(unchanged, unchanged, unchanged, unchanged) as unknown as Node;
+        }
+        return vec4(this._value(builder), 1) as unknown as Node;
+    }
 }
 
 /**
  * The diffuse albedo per pixel (the file comment): what `FrameScreen.albedo`
- * holds. Use one instance, {@link giDiffuseAlbedo}.
+ * holds. Standard and Physical materials fold metalness in
+ * (MeshStandardNodeMaterial assigns diffuseContribution = diffuseColor × (1 −
+ * metalness)); others have no metalness. Node materials copy the classic
+ * flags (NOTES), so the flag covers both kinds.
  */
-export class GIDiffuseAlbedoNode extends Node {
-    static get type(): string {
-        return 'GIDiffuseAlbedoNode';
-    }
-
-    constructor() {
-        super('vec4');
-    }
-
-    setup(builder: NodeBuilder): Node {
-        // Standard and Physical materials fold metalness in (MeshStandardNodeMaterial assigns
-        // diffuseContribution = diffuseColor × (1 − metalness)); others have no metalness.
-        // Node materials copy the classic flags (NOTES), so the flag covers both kinds.
-        const standard = (builder.material as { isMeshStandardMaterial?: boolean } | null)?.isMeshStandardMaterial === true;
-        const albedo = standard ? diffuseContribution : diffuseColor.rgb;
-        return vec4(albedo, 1) as unknown as Node;
-    }
-}
-
-/** The diffuse albedo, for `mrt({ ..., giDiffuseAlbedo })`; `screen.outputs` includes it when asked for. */
-export const giDiffuseAlbedo = new GIDiffuseAlbedoNode();
+export const giDiffuseAlbedo = new GIScreenChannelNode((builder) => {
+    const standard = (builder.material as { isMeshStandardMaterial?: boolean } | null)?.isMeshStandardMaterial === true;
+    return (standard ? diffuseContribution : diffuseColor.rgb) as unknown as Vec3Node;
+});
 
 /** Marks a run of the instance table that belongs to no mirrored object: the pixel writes 0. */
 const NO_RUN = 0xffffffff;
@@ -138,8 +192,8 @@ const TABLE_WIDTH = 1024;
  * grows, by one entry per instance ever created.
  */
 export class InstanceIdTable {
-    /** The node a pass's MRT output uses: `giInstance`. */
-    readonly node: TslNode;
+    /** The id per pixel (uint), before it is encoded for the target. */
+    readonly id: UintNode;
     private table: DataTexture;
     private readonly tableNode: TextureNode;
     private readonly runs = new Map<Object3D, { start: number; count: number }>();
@@ -159,7 +213,7 @@ export class InstanceIdTable {
         const entry = start.add(instanceIndex as unknown as UintNode);
         const texel = uvec2(entry.mod(uint(TABLE_WIDTH)), entry.div(uint(TABLE_WIDTH)));
         const id = (textureLoad(this.tableNode, texel as unknown as Node) as unknown as { x: UintNode }).x;
-        this.node = start.equal(uint(NO_RUN)).select(uint(0), id) as unknown as TslNode;
+        this.id = start.equal(uint(NO_RUN)).select(uint(0), id) as unknown as UintNode;
     }
 
     /** Brings the table up to date with the sync's instances (cheap when nothing was created or destroyed). */
@@ -176,7 +230,11 @@ export class InstanceIdTable {
                 this.used += instances.length;
                 this.runs.set(object, run);
             }
-            writes.push({ start: run.start, ids: instances.map((instance) => gi.scene.instanceIndex(instance) + 1) });
+            const ids = instances.map((instance) => gi.scene.instanceIndex(instance) + 1);
+            for (const id of ids) {
+                if (id > MAX_ENCODED_INSTANCE_ID) throw new Error(`@pmndrs/ddgi/three: the screen inputs encode instance ids in 24 bits; instance index ${id - 1} is past it`);
+            }
+            writes.push({ start: run.start, ids });
         }
         for (const object of [...this.runs.keys()]) if (!live.has(object)) this.runs.delete(object);
         const rows = Math.max(1, Math.ceil(this.used / TABLE_WIDTH));
@@ -203,6 +261,12 @@ function makeTable(rows: number): DataTexture {
     return table;
 }
 
+/** The id's three low bytes as unorm values, red the lowest (instance-id-resolve.ts reads them back). */
+function idBytes(id: UintNode): Vec3Node {
+    const byte = (shift: number) => (id.shiftRight(uint(shift)).bitAnd(uint(0xff)) as unknown as UintNode).toFloat().div(255);
+    return vec3(byte(0), byte(8), byte(16)) as unknown as Vec3Node;
+}
+
 /**
  * WebGPU's "render target pixel byte cost" of a pass's colour targets, the
  * sum `maxColorAttachmentBytesPerSample` limits (default 32): each target's
@@ -221,7 +285,7 @@ export function colorBytesPerSample(textures: readonly Texture[]): number {
 }
 
 /** The channels a pass renders: the platform's techniques' needs plus the host's. */
-function channelsFor(needs: ScreenNeeds, extra: ScreenChannels | undefined): Required<ScreenChannels> {
+function channelsFor(needs: ScreenNeeds, extra: ScreenChannelRequest | undefined): Required<ScreenChannelRequest> {
     return {
         velocity: needs.velocity || extra?.velocity === true,
         albedo: needs.albedo || extra?.albedo === true,
@@ -241,7 +305,7 @@ export class ScreenInputsNode extends Node {
 
     readonly source: ScreenInputsSource;
     /** The optional channels this pass renders (fixed when the outputs are made). */
-    readonly channels: Required<ScreenChannels>;
+    readonly channels: Required<ScreenChannelRequest>;
     // Node-valued fields start with '_': three treats an own property holding a node as a
     // child to build in the graph the stage joins (Node._getChildren skips '_' names), and
     // the pass and the MRT outputs belong to the scene pass's graph, not the quad's.
@@ -249,10 +313,13 @@ export class ScreenInputsNode extends Node {
     private readonly _outputs: Readonly<Record<string, Node>>;
     /** Screen stages run (one per three frame the stage was part of). */
     stages = 0;
+    /** three's frame id at the latest stage, for checks that it runs once per frame. */
+    lastStageFrame = -1;
 
     private readonly instanceIds: InstanceIdTable | null;
+    private instanceResolve: InstanceIdResolve | null = null;
     private latest: FrameScreen | null = null;
-    /** The MRT node whose clear colours were set (configureTargets). */
+    /** The MRT node whose blending and clear colours were set (configureTargets). */
     private configuredMrt: ReturnType<PassNode['getMRT']> = null;
     private debugView: ScreenInputsView | null = null;
     private debugChannel: ScreenChannel | null = null;
@@ -268,24 +335,22 @@ export class ScreenInputsNode extends Node {
         // Once per three frame (NodeFrame.updateBeforeNode keys FRAME updates by frame id).
         this.updateBeforeType = NodeUpdateType.FRAME;
 
-        const outputs: Record<string, Node> = { [GI_SCREEN_NORMAL_OUTPUT]: vec4(normalWorld, 1) as unknown as Node };
-        if (this.channels.velocity) outputs[GI_SCREEN_VELOCITY_OUTPUT] = velocity as unknown as Node;
+        const outputs: Record<string, Node> = { [GI_SCREEN_NORMAL_OUTPUT]: new GIScreenChannelNode(() => normalWorld as unknown as Vec3Node) };
+        if (this.channels.velocity) outputs[GI_SCREEN_VELOCITY_OUTPUT] = new GIScreenChannelNode(() => vec3(velocity as unknown as ReturnType<typeof vec2>, 0) as unknown as Vec3Node);
         if (this.channels.albedo) outputs[GI_SCREEN_ALBEDO_OUTPUT] = giDiffuseAlbedo;
-        this.instanceIds = this.channels.instance ? new InstanceIdTable() : null;
-        if (this.instanceIds) outputs[GI_SCREEN_INSTANCE_OUTPUT] = this.instanceIds.node as unknown as Node;
+        const ids = this.channels.instance ? new InstanceIdTable() : null;
+        this.instanceIds = ids;
+        if (ids) outputs[GI_SCREEN_INSTANCE_OUTPUT] = new GIScreenChannelNode(() => idBytes(ids.id));
         this._outputs = outputs;
 
-        // The targets now, with their formats; the pass's default is half float rgba.
+        // The targets now (three draws an MRT output only once its texture exists), with their
+        // formats; the pass's default is rgba16float, and every output needs alpha for its coverage.
         scenePass.getTexture(GI_SCREEN_NORMAL_OUTPUT);
-        // Motion has two components: rg16float, 4 bytes per pixel instead of rgba16float's 8.
-        if (this.channels.velocity) scenePass.getTexture(GI_SCREEN_VELOCITY_OUTPUT).format = RGFormat;
+        if (this.channels.velocity) scenePass.getTexture(GI_SCREEN_VELOCITY_OUTPUT);
         // Albedo is 0..1: 8 bits, as Capsaicin's G-buffer stores it, halving its bandwidth.
         if (this.channels.albedo) scenePass.getTexture(GI_SCREEN_ALBEDO_OUTPUT).type = UnsignedByteType;
-        if (this.channels.instance) {
-            const ids = scenePass.getTexture(GI_SCREEN_INSTANCE_OUTPUT);
-            ids.type = UnsignedIntType;
-            ids.format = RedIntegerFormat;
-        }
+        // Ids as three bytes plus coverage (instance-id-resolve.ts says why not r32uint).
+        if (this.channels.instance) scenePass.getTexture(GI_SCREEN_INSTANCE_OUTPUT).type = UnsignedByteType;
     }
 
     get scenePass(): PassNode {
@@ -359,19 +424,26 @@ export class ScreenInputsNode extends Node {
         if (this.instanceIds && gi.isReady) this.instanceIds.refresh(this.source.sync, gi);
         // Draws the scene pass now if it hasn't drawn this frame; otherwise nothing.
         frame.updateBeforeNode(this.scenePass as unknown as Node);
-        const screen = this.resolve(renderer);
-        if (!screen) return undefined;
+        const targets = this.resolveTargets(renderer);
+        if (!targets) return undefined;
+
+        const device = gi.device;
+        const encoder = device.createCommandEncoder({ label: 'ddgi-three screen stage' });
+        let instance: GPUTexture | undefined;
+        if (targets.encodedInstance) {
+            this.instanceResolve ??= new InstanceIdResolve(device);
+            instance = this.instanceResolve.encode(encoder, targets.encodedInstance);
+        }
+        const screen: FrameScreen = { ...targets.screen, instance };
         this.latest = screen;
         this.stages++;
+        this.lastStageFrame = frame.frameId;
 
         const needs = gi.isReady ? gi.screenNeeds : null;
         const runTechniques = needs !== null && needs.screen && this.covers(needs);
         const showChannel = this.debugChannel;
         // A shown view says so again each frame (DebugViewNode.update), so one taken off screen stops costing.
         this.debugChannel = null;
-        if (!runTechniques && showChannel === null) return undefined;
-        const device = gi.device;
-        const encoder = device.createCommandEncoder({ label: 'ddgi-three screen stage' });
         if (runTechniques) gi.encodeScreen(encoder, screen);
         if (showChannel !== null) {
             this.debugView ??= new ScreenInputsView(device);
@@ -390,16 +462,19 @@ export class ScreenInputsNode extends Node {
 
     dispose(): void {
         this.instanceIds?.dispose();
+        this.instanceResolve?.dispose();
         this.debugView?.dispose();
         this.debugPlaceholder?.destroy();
         super.dispose();
     }
 
     /**
-     * Checks that the host spread `outputs` into the pass's MRT, and clears
-     * our targets to 0 where nothing is drawn: three clears every MRT target
-     * to the scene background otherwise (NOTES), which would read as a
-     * normal, an albedo or an instance there. Once per MRT node.
+     * Checks that the host spread `outputs` into the pass's MRT and that the
+     * pass fits the device's colour bytes (throws `GILimitError` if not),
+     * then gives our outputs the material's blending (the file comment) and
+     * clears them to 0 where nothing is drawn: three clears every MRT target
+     * to the scene background otherwise (NOTES). Once per MRT node, before
+     * the pass first draws with it.
      */
     private configureTargets(): boolean {
         const outputs = this._scenePass.getMRT();
@@ -408,15 +483,13 @@ export class ScreenInputsNode extends Node {
             return false;
         }
         if (this.configuredMrt === outputs) return true;
-        this.configuredMrt = outputs;
-        for (const name of Object.keys(this._outputs)) outputs.setClearColor(name, 0x000000, 0);
         const bytes = colorBytesPerSample(this._scenePass.renderTarget.textures);
         const limit = this.source.gi.device.limits.maxColorAttachmentBytesPerSample;
-        if (bytes > limit) {
-            this.warnOnce(
-                `the scene pass writes about ${bytes} bytes per pixel, past this device's maxColorAttachmentBytesPerSample of ${limit}, so three can't draw it. ` +
-                    "Make the device with requestGIDevice/createGIRenderer (they ask for the adapter's maximum), or ask for maxColorAttachmentBytesPerSample yourself.",
-            );
+        if (bytes > limit) throw new GILimitError('maxColorAttachmentBytesPerSample', bytes, limit);
+        this.configuredMrt = outputs;
+        for (const name of Object.keys(this._outputs)) {
+            outputs.setBlendMode(name, new BlendMode(MaterialBlending));
+            outputs.setClearColor(name, 0x000000, 0);
         }
         return true;
     }
@@ -431,29 +504,34 @@ export class ScreenInputsNode extends Node {
         return false;
     }
 
-    /** three's targets for this frame as the platform's `FrameScreen`, or null if three hasn't made them yet. */
-    private resolve(renderer: WebGPURenderer): FrameScreen | null {
+    /**
+     * three's targets for this frame: the `FrameScreen` but its instance ids,
+     * and the encoded id target to resolve. Null if three hasn't made them yet.
+     */
+    private resolveTargets(renderer: WebGPURenderer): { screen: Omit<FrameScreen, 'instance'>; encodedInstance: GPUTexture | null } | null {
         const scenePass = this.scenePass;
         const gpu = (target: Texture) => threeGpuTexture(renderer, target);
-        const depthTexture = (scenePass as unknown as { renderTarget: { depthTexture: Texture | null; samples: number } }).renderTarget;
-        if (depthTexture.samples > 1) {
+        const renderTarget = (scenePass as unknown as { renderTarget: { depthTexture: Texture | null; samples: number } }).renderTarget;
+        if (renderTarget.samples > 1) {
             this.warnOnce('the screen inputs need a single-sampled scene pass (no MSAA): with MSAA the targets hold per-sample data. Screen techniques are skipped.');
             return null;
         }
-        const depth = depthTexture.depthTexture ? gpu(depthTexture.depthTexture) : null;
+        const depth = renderTarget.depthTexture ? gpu(renderTarget.depthTexture) : null;
         const normal = gpu(scenePass.getTexture(GI_SCREEN_NORMAL_OUTPUT));
         if (!depth || !normal) return null;
         const optional = (enabled: boolean, name: string) => (enabled ? (gpu(scenePass.getTexture(name)) ?? undefined) : undefined);
         return {
-            width: normal.width,
-            height: normal.height,
-            depth,
-            normal,
-            normalEncoding: 'snorm-float',
-            velocity: optional(this.channels.velocity, GI_SCREEN_VELOCITY_OUTPUT),
-            albedo: optional(this.channels.albedo, GI_SCREEN_ALBEDO_OUTPUT),
-            instance: optional(this.channels.instance, GI_SCREEN_INSTANCE_OUTPUT),
-            reversedDepth: (renderer as { reversedDepthBuffer?: boolean }).reversedDepthBuffer === true,
+            screen: {
+                width: normal.width,
+                height: normal.height,
+                depth,
+                normal,
+                normalEncoding: 'snorm-float',
+                velocity: optional(this.channels.velocity, GI_SCREEN_VELOCITY_OUTPUT),
+                albedo: optional(this.channels.albedo, GI_SCREEN_ALBEDO_OUTPUT),
+                reversedDepth: (renderer as { reversedDepthBuffer?: boolean }).reversedDepthBuffer === true,
+            },
+            encodedInstance: optional(this.channels.instance, GI_SCREEN_INSTANCE_OUTPUT) ?? null,
         };
     }
 

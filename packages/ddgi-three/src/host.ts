@@ -8,10 +8,8 @@
  * runs in compatibility mode (NOTES), so this does the same; that also covers
  * the platform's optional features (subgroups, timestamp-query, ...). Limits
  * are the platform's `requiredLimits`: the adapter's largest storage bindings
- * and buffers, which large scenes need. Plus the adapter's
- * `maxColorAttachmentBytesPerSample` (RC1.1): a scene pass with the
- * composite's outputs and the screen inputs' writes about 40-50 bytes per
- * pixel, past WebGPU's default of 32 (the RTX 3060 offers 128).
+ * and buffers, which large scenes need, and its colour-attachment bytes
+ * per pixel, which a scene pass with the screen inputs needs (RC1.1).
  */
 
 import { WebGPURenderer } from 'three/webgpu';
@@ -38,8 +36,7 @@ export interface GIDevice {
 export function deviceLimits(adapter: GPUAdapter, extra: RequiredLimits = {}): Record<string, number> {
     const limits: Record<string, number> = {};
     const available = adapter.limits as unknown as Record<string, number>;
-    const renderTargets: RequiredLimits = { maxColorAttachmentBytesPerSample: adapter.limits.maxColorAttachmentBytesPerSample };
-    for (const [name, value] of Object.entries({ ...requiredLimits(adapter), ...renderTargets, ...extra })) {
+    for (const [name, value] of Object.entries({ ...requiredLimits(adapter), ...extra })) {
         if (typeof value !== 'number' || typeof available[name] !== 'number') continue;
         limits[name] = Math.min(value, available[name]);
     }

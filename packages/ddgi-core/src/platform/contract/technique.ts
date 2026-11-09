@@ -21,7 +21,7 @@ import type { KernelBuilder } from './wgsl';
  * The screen channels a technique reads beyond depth and normals. Each costs
  * the host an extra render target, so a technique asks only for what it uses.
  */
-export type ScreenChannels = { readonly [Channel in OptionalScreenChannel]?: boolean };
+export type ScreenChannelRequest = { readonly [Channel in OptionalScreenChannel]?: boolean };
 
 /** What a technique needs from the platform, checked before `prepare`. */
 export interface TechniqueRequirements {
@@ -41,7 +41,7 @@ export interface TechniqueRequirements {
      * host learns the union from `GIPlatform.screenNeeds`, and
      * `encodeScreen` refuses a screen without a channel a technique asked for.
      */
-    readonly screen?: boolean | ScreenChannels;
+    readonly screen?: boolean | ScreenChannelRequest;
     /** Needs another technique as a bounce source or fallback. */
     readonly fallback?: boolean;
 }

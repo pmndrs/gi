@@ -12,8 +12,11 @@
  * - `fill-no-instance`: plus `velocity` and `giDiffuseAlbedo`;
  * - `fill-all`: plus `giInstance`, every channel.
  * No screen technique is attached, so the stage hands the textures over and
- * records nothing: the differences are the extra MRT outputs and whatever
- * the handover adds (CPU only; it submits nothing when no technique asks).
+ * records only the instance ids' resolve (`fill-all`): the differences are
+ * the extra MRT outputs. The resolve is a small compute pass in the stage's
+ * own encoder, outside three's timestamps, so it isn't counted.
+ * (Timing deferred by Dennis, 2026-11-09: at 1280 × 720 this page is not
+ * GPU-bound yet, see PROGRESS.)
  *
  * Two sections: 1280 × 720 and 2560 × 1440. Timing goes through run.ts under
  * the bench lock, which adds the GPU clock and the lock's verdict and can
@@ -33,7 +36,7 @@ import { mrt, normalView, output, packNormalToRGB, pass } from 'three/tsl';
 import { markCompositePass, type MarkablePass } from '../../../../packages/ddgi-three/src/composite-mark.ts';
 import { giAlbedo, GI_ALBEDO_OUTPUT, GI_NORMAL_OUTPUT } from '../../../../packages/ddgi-three/src/composite.ts';
 import { screenInputs } from '../../../../packages/ddgi-three/src/screen-inputs.ts';
-import type { ScreenChannels } from '../../../../packages/ddgi-core/src/platform/contract/technique.ts';
+import type { ScreenChannelRequest } from '../../../../packages/ddgi-core/src/platform/contract/technique.ts';
 import { runThreePage, type ThreePageContext } from '../three-shared/harness.ts';
 import { fullBrowserVersion } from '../trace-bench/run.ts';
 import { PassClock, advanceThreeFrame, loadCompositeScene, shadowCameras, timeInterleaved, type CompositeScene, type DeltaDefinition, type FrameVariant, type InterleavedTiming } from '../three-composite-shared/composite-check.ts';
@@ -48,7 +51,7 @@ const CYCLES_PER_BATCH = 4;
 const COMPILE_FRAMES = 6;
 
 /** Variant ids, and the channels each fill asks for beyond depth and normals. */
-const FILLS: ReadonlyArray<{ readonly id: string; readonly channels: ScreenChannels }> = [
+const FILLS: ReadonlyArray<{ readonly id: string; readonly channels: ScreenChannelRequest }> = [
     { id: 'fill-normal', channels: {} },
     { id: 'fill-no-instance', channels: { velocity: true, albedo: true } },
     { id: 'fill-all', channels: { velocity: true, albedo: true, instance: true } },

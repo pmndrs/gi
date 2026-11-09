@@ -231,7 +231,8 @@ describe('device requirements', () => {
         ({ limits, features: new Set(features) }) as unknown as GPUAdapter;
 
     it("requiredLimits asks for the adapter's own maximums, never more", () => {
-        const storage = { maxStorageBufferBindingSize: 2147483644, maxBufferSize: 2147483648, maxStorageBuffersPerShaderStage: 10 };
+        // The colour-attachment bytes too: a scene pass writing the screen inputs needs more than WebGPU's default 32 (RC1.1).
+        const storage = { maxStorageBufferBindingSize: 2147483644, maxBufferSize: 2147483648, maxStorageBuffersPerShaderStage: 10, maxColorAttachmentBytesPerSample: 128 };
         const compute = { maxComputeInvocationsPerWorkgroup: 1024, maxComputeWorkgroupSizeX: 1024 };
         // Compute limits: what the kernels need, not the adapter's maximum.
         expect(requiredLimits(adapter({ ...storage, ...compute }, []))).toEqual({ ...storage, ...KERNEL_COMPUTE_LIMITS });

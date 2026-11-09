@@ -52,16 +52,20 @@ export function checkComputeLimits(limits: Pick<GPUSupportedLimits, ComputeLimit
 
 /**
  * Limits to request from this adapter: the largest storage binding and
- * buffer, every storage buffer per stage it offers, and the compute limits
- * the kernels need (KERNEL_COMPUTE_LIMITS). Never more than the adapter has,
- * so `requestDevice` can't fail because of them; an adapter below a kernel's
- * need fails in `prepare` with a `GILimitError` instead.
+ * buffer, every storage buffer per stage it offers, the compute limits the
+ * kernels need (KERNEL_COMPUTE_LIMITS), and the adapter's
+ * `maxColorAttachmentBytesPerSample`: a host's scene pass that writes the
+ * screen inputs (`FrameScreen`) beside its own outputs needs about 48-56
+ * bytes per pixel, past WebGPU's default of 32 (RC1.1). Never more than the
+ * adapter has, so `requestDevice` can't fail because of them; an adapter
+ * below a kernel's need fails in `prepare` with a `GILimitError` instead.
  */
 export function requiredLimits(adapter: GPUAdapter): RequiredLimits {
     const limits: RequiredLimits = {
         maxStorageBufferBindingSize: adapter.limits.maxStorageBufferBindingSize,
         maxBufferSize: adapter.limits.maxBufferSize,
         maxStorageBuffersPerShaderStage: adapter.limits.maxStorageBuffersPerShaderStage,
+        maxColorAttachmentBytesPerSample: adapter.limits.maxColorAttachmentBytesPerSample,
     };
     for (const name of COMPUTE_LIMIT_NAMES) limits[name] = Math.min(KERNEL_COMPUTE_LIMITS[name], adapter.limits[name]);
     return limits;

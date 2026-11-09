@@ -52,6 +52,21 @@ export async function readPassTarget(renderer: WebGPURenderer, scenePass: PassNo
     return image(width, height, channels, values);
 }
 
+/**
+ * The pass's instance-id target read back by three and decoded the way the
+ * adapter encodes it (three bytes, red the lowest; instance-id-resolve.ts),
+ * one id per pixel.
+ */
+export async function readInstanceIds(renderer: WebGPURenderer, scenePass: PassNode, name: string): Promise<TargetImage> {
+    const encoded = await readPassTarget(renderer, scenePass, name);
+    const ids = new Uint32Array(encoded.width * encoded.height);
+    for (let pixel = 0; pixel < ids.length; pixel++) {
+        const byte = (channel: number) => Math.round(encoded.values[pixel * encoded.channels + channel] * 255);
+        ids[pixel] = byte(0) | (byte(1) << 8) | (byte(2) << 16);
+    }
+    return image(encoded.width, encoded.height, 1, ids);
+}
+
 /** An `rgba8unorm` texture (the debug view) read back as bytes, rows unpadded. */
 export async function readRgba8(device: GPUDevice, texture: GPUTexture): Promise<Uint8ClampedArray<ArrayBuffer>> {
     const { width, height } = texture;
