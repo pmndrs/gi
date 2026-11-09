@@ -199,6 +199,14 @@ The volume is a fixed-size window of probes over a lattice fixed in world space 
 - **Teleports** (the camera jumps more than half the window): every slot resets, and the viewer's warm-up mode (DECISIONS 2026-11-05) runs, as after a scene load.
 - **Memory:** 32 × 12 × 32 = 12,288 probes at about 1.5 KB each (irradiance 512 B, distance 1 KB, probe data, history) is **19 MB**, covering 48 × 18 × 48 m at 1.5 m spacing. M2's instant sky, on by default, adds 41 MB (m2-lights.md 6.3), so **60 MB** in all.
 
+*As built (T3.6; ddgi.md, "The camera-following volume"):* as above, with these differences.
+- **Entering probes owe 2 updates, not K:** they start from nothing, and the first update replaces the history outright, so the two warming updates are what they need before they are shown; K for each would cost 4× the budget this section's arithmetic gives.
+- **The valid extent's trailing side follows the camera** continuously (1.25 planes inside its half-window), not only the window: otherwise the planes about to be reused would leave the coverage at once, a pop at the trailing edge. And the extent keeps a whole plane between it and any cold plane, because coverage reaches a spacing past it.
+- **The table has 7 texels a row,** not 4: the four sampling `vec4f`s (T3.5), the window, and the extent's low and high sides. The fade width and flags stayed constants.
+- **Key probes go by the lattice's parity,** so a move changes the role of the planes at the window's ends only.
+- **A point outside every volume reads the nearest one** (T3.5 read the lowest-priority one, wrong for volumes side by side).
+- **Teleports** restart the technique's own warm-up (T2.4b moved it into the technique).
+
 ## 5. Probes near moved geometry
 
 ### 5.1 How a moved object becomes a set of probes

@@ -637,9 +637,9 @@ fn ddgiMarkThread(thread: u32) -> f32 {
     let entry = ddgiMarkTable.entries[ddgiMarkEntryOf(thread)];
     let local = thread - entry.firstThread;
     let inBox = vec3u(local % entry.boxSize.x, local / (entry.boxSize.x * entry.boxSize.z), (local / entry.boxSize.x) % entry.boxSize.z);
-    let probe = vec3i(entry.boxMin + inBox);
-    let counts = ddgiProbeCount();
-    let probeIndex = u32(probe.x) + counts.x * (u32(probe.z) + counts.z * u32(probe.y));
+    // The table's boxes are in window probes (mark-table.ts); a camera-following volume keeps each in a wrapping slot.
+    let probe = ddgiProbeSlot(ddgiUniformVolume(), vec3i(entry.boxMin + inBox));
+    let probeIndex = ddgiProbeIndex(probe);
     let data = ddgiReadProbeData(ddgiProbeData, ddgiUniformVolume(), probe);
     if (entry.kind == DDGI_MARK_GEOMETRY) {
         return ddgiMarkGeometry(entry, probe, probeIndex, data);

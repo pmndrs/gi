@@ -87,6 +87,10 @@ struct DdgiUniforms {
     // uniforms of its own, and its probes' points are listed from here on in
     // the points debug view (the volumes' probes one after another).
     probeBase: u32,
+    // The camera-following volume (m3-moving.md §4.2, scroll.ts): xyz the
+    // lattice coordinates of its window's first probe, whose world position
+    // is volumeOrigin (whole numbers; 0 for a fixed volume); w unused.
+    volumeWindow: vec4f,
 }
 
 const DDGI_MAX_RAYS: u32 = ${MAX_RAYS_PER_PROBE}u;
@@ -97,18 +101,44 @@ const DDGI_FIXED_RAYS: u32 = ${FIXED_RAYS}u;
 const DDGI_GOLDEN_FRACTION: f32 = 0.618033988749895;
 const DDGI_TWO_PI: f32 = 6.28318530717959;
 
+// This volume. The kernels never read its valid extent (only sampling's
+// coverage does, through the volume table), so the whole window stands in.
 fn ddgiUniformVolume() -> DdgiVolume {
-    return ddgiVolume(ddgi.volumeOrigin, ddgi.volumeSpacing, ddgi.volumeCounts, ddgi.volumeTexels);
+    let volume = ddgiVolume(ddgi.volumeOrigin, ddgi.volumeSpacing, ddgi.volumeCounts, ddgi.volumeTexels);
+    let window = vec3i(round(ddgi.volumeWindow.xyz));
+    return ddgiVolumeInWindow(volume, window, vec3f(window), vec3f(window + volume.counts - 1));
 }
 
 fn ddgiProbeCount() -> vec3u {
     return vec3u(ddgiUniformVolume().counts);
 }
 
-// The atlas layer of one of this volume's probes: every volume shares the
+// ---- Probes, slots and window probes ----
+// A kernel's probe is its slot: where its data lives (probe index, history
+// record, atlas tiles, probe-data texel). Positions and neighbours are
+// worked out in window probes (wgsl/sample.ts, ddgiWindowProbe), where a
+// camera-following volume's probes sit in order; a fixed volume's slot is
+// its window probe.
+
+// The probe index of a slot: x + nx * (z + nz * y), as the update list holds it.
+fn ddgiProbeIndex(slot: vec3i) -> u32 {
+    let counts = ddgiProbeCount();
+    return u32(slot.x) + counts.x * (u32(slot.z) + counts.z * u32(slot.y));
+}
+
+// The slot of the window probe 'offset' steps from the one in 'slot' (each
+// step -1, 0 or 1): neighbours wrap around the slots as the window does. The
+// caller makes sure the neighbour is inside the window.
+fn ddgiNeighbourSlot(slot: vec3i, offset: vec3i) -> vec3i {
+    let counts = ddgiUniformVolume().counts;
+    let neighbour = slot + offset;
+    return select(select(neighbour, neighbour - counts, neighbour >= counts), neighbour + counts, neighbour < vec3i(0));
+}
+
+// The atlas layer of one of this volume's slots: every volume shares the
 // atlases, this one from its layer base on (volumes.ts).
-fn ddgiProbeLayer(probe: vec3i) -> i32 {
-    return ddgiAtlasLayer(ddgiUniformVolume(), probe);
+fn ddgiProbeLayer(slot: vec3i) -> i32 {
+    return ddgiAtlasLayer(ddgiUniformVolume(), slot);
 }
 
 // Tiles across one atlas layer, the same for every volume. Irradiance layer L
@@ -117,7 +147,7 @@ fn ddgiAtlasTilesAcross() -> i32 {
     return i32(ddgiUniformVolume().atlasTiles.x);
 }
 
-// Probe (x, y, z) of index p = x + nx * (z + nz * y).
+// Slot (x, y, z) of probe index p = x + nx * (z + nz * y).
 fn ddgiProbeCoordinates(index: u32, counts: vec3u) -> vec3i {
     let x = index % counts.x;
     let z = (index / counts.x) % counts.z;
@@ -125,10 +155,11 @@ fn ddgiProbeCoordinates(index: u32, counts: vec3u) -> vec3i {
     return vec3i(vec3u(x, y, z));
 }
 
-// A probe's world position: its grid point plus its relocation offset (stored in spacings).
-fn ddgiProbePosition(probe: vec3i, offset: vec3f) -> vec3f {
+// The world position of the probe in 'slot': its grid point in the window
+// plus its relocation offset (stored in spacings).
+fn ddgiProbePosition(slot: vec3i, offset: vec3f) -> vec3f {
     let volume = ddgiUniformVolume();
-    return volume.origin + (vec3f(probe) + offset) * volume.spacing;
+    return volume.origin + (vec3f(ddgiWindowProbe(volume, slot)) + offset) * volume.spacing;
 }
 
 // Off probes trace only their fixed rays, so they can come back on when the scene changes.
@@ -162,52 +193,65 @@ fn ddgiInView(position: vec3f) -> bool {
 // 1 / (1 + (d / (4 spacings))^2), times DDGI_OUT_OF_VIEW_WEIGHT outside the
 // view. Taken at the probe's grid point: relocation moves it less than half a
 // spacing, which the falloff hardly notices.
-fn ddgiCameraWeight(probe: vec3i) -> f32 {
-    let position = ddgiProbePosition(probe, vec3f(0.0));
+fn ddgiCameraWeight(slot: vec3i) -> f32 {
+    let position = ddgiProbePosition(slot, vec3f(0.0));
     let scaled = length(position - ddgi.cameraPosition.xyz) / ddgi.cameraFalloffDistance;
     let weight = 1.0 / (1.0 + scaled * scaled);
     return select(weight * DDGI_OUT_OF_VIEW_WEIGHT, weight, ddgiInView(position));
 }
 
 // ---- Key probes (T2.4c, docs/design/m2-lights.md §4.5) ----
-// A key probe's grid index is even or the last one on every axis: about one
-// probe in 8, the coarse level of a virtual two-level grid at twice the
-// spacing. (isKeyProbe in layout.ts is the CPU twin.)
+// A key probe's lattice index is even, or it is the window's first or last
+// on every axis: about one probe in 8, the coarse level of a virtual
+// two-level grid at twice the spacing. For a fixed volume the lattice index
+// is the grid index (isKeyProbe in layout.ts is the CPU twin). Why the
+// lattice's parity, not the window's: when a camera-following volume's
+// window moves one plane, only the planes at its ends change role; by the
+// window's parity every probe would, in the middle of taking in a change.
 
-fn ddgiIsKeyAxis(index: i32, count: i32) -> bool {
-    return index % 2 == 0 || index == count - 1;
+fn ddgiIsKeyAxis(windowIndex: i32, latticeIndex: i32, count: i32) -> bool {
+    // & 1 rather than % 2: lattice indices can be negative, and & reads their parity right.
+    return (latticeIndex & 1) == 0 || windowIndex == 0 || windowIndex == count - 1;
 }
 
-fn ddgiIsKeyProbe(probe: vec3i) -> bool {
-    let counts = vec3i(ddgiProbeCount());
-    return ddgiIsKeyAxis(probe.x, counts.x) && ddgiIsKeyAxis(probe.y, counts.y) && ddgiIsKeyAxis(probe.z, counts.z);
+fn ddgiIsKeyProbe(slot: vec3i) -> bool {
+    let volume = ddgiUniformVolume();
+    let windowProbe = ddgiWindowProbe(volume, slot);
+    let lattice = volume.window + windowProbe;
+    return ddgiIsKeyAxis(windowProbe.x, lattice.x, volume.counts.x)
+        && ddgiIsKeyAxis(windowProbe.y, lattice.y, volume.counts.y)
+        && ddgiIsKeyAxis(windowProbe.z, lattice.z, volume.counts.z);
 }
 
-// Key neighbour j (0..7) of a fine probe as an offset in grid steps, and
-// whether j is one of its neighbours (keyNeighbourOffset in layout.ts): on an
-// axis where the probe's index is a key index the offset is 0 and that
-// axis's bit of j must be 0; otherwise the bit chooses the key one step
-// below (0) or above (1). Every key neighbour has the same trilinear weight:
-// on the key lattice a fine probe sits halfway between its keys on each axis
-// where it isn't a key.
+// Key neighbour j (0..7) of a fine probe as an offset in grid steps, the
+// slot it is in, and whether j is one of its neighbours (keyNeighbourOffset
+// in layout.ts): on an axis where the probe is a key the offset is 0 and
+// that axis's bit of j must be 0; otherwise the bit chooses the key one step
+// below (0) or above (1). A fine index is never the window's first or last,
+// so both are inside the window. Every key neighbour has the same trilinear
+// weight: on the key lattice a fine probe sits halfway between its keys on
+// each axis where it isn't a key.
 struct DdgiKeyNeighbour {
     offset: vec3i,
+    slot: vec3i,
     exists: bool,
 }
 
-fn ddgiKeyNeighbourOffset(neighbour: u32, probe: vec3i) -> DdgiKeyNeighbour {
-    let counts = vec3i(ddgiProbeCount());
+fn ddgiKeyNeighbourOffset(neighbour: u32, slot: vec3i) -> DdgiKeyNeighbour {
+    let volume = ddgiUniformVolume();
+    let windowProbe = ddgiWindowProbe(volume, slot);
+    let lattice = volume.window + windowProbe;
     var offset = vec3i(0);
     var exists = true;
     for (var axis = 0u; axis < 3u; axis++) {
         let above = ((neighbour >> axis) & 1u) != 0u;
-        if (ddgiIsKeyAxis(probe[axis], counts[axis])) {
+        if (ddgiIsKeyAxis(windowProbe[axis], lattice[axis], volume.counts[axis])) {
             exists = exists && !above;
         } else {
             offset[axis] = select(-1, 1, above);
         }
     }
-    return DdgiKeyNeighbour(offset, exists);
+    return DdgiKeyNeighbour(offset, ddgiNeighbourSlot(slot, offset), exists);
 }
 
 // Point i of n spherical Fibonacci points (Keinert et al. 2015): equal-area

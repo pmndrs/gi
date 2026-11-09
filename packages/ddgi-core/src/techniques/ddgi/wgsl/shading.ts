@@ -101,24 +101,26 @@ fn ddgiProbeStatesColor(volume: DdgiVolume, samplePoint: vec3f, probeData: textu
     var color = vec3f(0.0);
     for (var corner = 0u; corner < 8u; corner++) {
         let step = ddgiCageStep(corner);
-        let probe = min(cage.baseProbe + step, volume.counts - 1);
-        color += ddgiTrilinearWeight(cage, step) * ddgiStateColor(ddgiReadProbeData(probeData, volume, probe).state);
+        let slot = ddgiProbeSlot(volume, min(cage.baseProbe + step, volume.counts - 1));
+        color += ddgiTrilinearWeight(cage, step) * ddgiStateColor(ddgiReadProbeData(probeData, volume, slot).state);
     }
     return color;
 }
 
 // The volume whose probes the probe-states view shows at a point: the first
-// in priority order that covers it at all, else the last (the one a point
-// outside every volume reads, ddgiBlendReads).
+// in priority order that covers it at all, else the nearest (the one a point
+// outside every volume reads, ddgiNearerVolume).
 fn ddgiShownVolume(volumeTable: texture_2d<f32>, position: vec3f) -> DdgiVolume {
     let count = ddgiVolumeCount(volumeTable);
-    for (var index = 0u; index + 1u < count; index++) {
+    var nearest = DdgiNearestVolume(0u, DDGI_FARTHEST_DISTANCE);
+    for (var index = 0u; index < count; index++) {
         let volume = ddgiTableVolume(volumeTable, index);
         if (ddgiVolumeEdgeCoverage(volume, position) > 0.0) {
             return volume;
         }
+        nearest = ddgiNearerVolume(nearest, index, volume, position);
     }
-    return ddgiTableVolume(volumeTable, count - 1u);
+    return ddgiTableVolume(volumeTable, nearest.index);
 }
 
 // Irradiance E at a surface point (the renderer applies albedo / pi), every

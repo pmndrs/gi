@@ -316,8 +316,7 @@ fn ddgiStillWaitsForKeys(probeIndex: u32) -> bool {
         if (!key.exists) {
             continue;
         }
-        let keyProbe = vec3u(probe + key.offset);
-        let keyIndex = keyProbe.x + counts.x * (keyProbe.z + counts.z * keyProbe.y);
+        let keyIndex = ddgiProbeIndex(key.slot);
         if ((ddgiHistoryWords[keyIndex * DDGI_HISTORY_WORDS + DDGI_HISTORY_SCHEDULE_AND_FLAGS] & DDGI_FLAG_TAKING_CHANGE) != 0u) {
             return true;
         }
