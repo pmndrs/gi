@@ -180,6 +180,9 @@ export class CpuPose implements PoseSource {
     private readonly kind: DeformKind;
     /** The pose's inputs when last read: position version, morph influences, then (skinned) bind matrices and bone world matrices. */
     private key = new Float64Array(0);
+    /** readKey's place in `key`, and whether a value it read differed (fields, so no closure is made each update). */
+    private keyAt = 0;
+    private keyChanged = false;
     /** The last pose returned (the rest pose at first: what the platform was created with). */
     private sent: Float32Array;
     /** Where the next pose is worked out; swapped with `sent` when it goes out. */
@@ -222,29 +225,30 @@ export class CpuPose implements PoseSource {
         const influences = this.kind === 'animated' ? null : mesh.morphTargetInfluences;
         const skeleton = this.kind === 'skinned' ? (mesh as SkinnedMesh).skeleton : null;
         const length = 1 + (influences?.length ?? 0) + (skeleton ? 32 + 16 * skeleton.bones.length : 0);
-        let changed = false;
+        this.keyChanged = false;
+        this.keyAt = 0;
         if (this.key.length !== length) {
             this.key = new Float64Array(length);
-            changed = true;
+            this.keyChanged = true;
         }
-        const key = this.key;
-        let at = 0;
-        const write = (value: number): void => {
-            if (key[at] !== value) {
-                key[at] = value;
-                changed = true;
-            }
-            at++;
-        };
-        write(attributeVersion(position));
-        if (influences) for (const influence of influences) write(influence);
+        this.writeKey(attributeVersion(position));
+        if (influences) for (const influence of influences) this.writeKey(influence);
         if (skeleton) {
             const skinned = mesh as SkinnedMesh;
-            for (const value of skinned.bindMatrix.elements) write(value);
-            for (const value of skinned.bindMatrixInverse.elements) write(value);
-            for (const bone of skeleton.bones) for (const value of bone.matrixWorld.elements) write(value);
+            for (const value of skinned.bindMatrix.elements) this.writeKey(value);
+            for (const value of skinned.bindMatrixInverse.elements) this.writeKey(value);
+            for (const bone of skeleton.bones) for (const value of bone.matrixWorld.elements) this.writeKey(value);
         }
-        return changed;
+        return this.keyChanged;
+    }
+
+    /** The key's next value: stored, and noted when it differs from the one read last time. */
+    private writeKey(value: number): void {
+        if (this.key[this.keyAt] !== value) {
+            this.key[this.keyAt] = value;
+            this.keyChanged = true;
+        }
+        this.keyAt++;
     }
 
     private computePose(out: Float32Array): void {

@@ -41,6 +41,13 @@
  *   unmarked move reaches GI in the next `update`, and the walk no longer
  *   compares transforms of hooked meshes while three updates the scene's
  *   matrices itself (`scene.matrixWorldAutoUpdate`, three's default).
+ *   That assumes three renders this scene (or something calls its
+ *   `updateMatrixWorld`) every frame. Two moves are then missed until the
+ *   mesh is visited for another reason: a host that leaves auto-update on
+ *   but never renders the scene with three, and a mesh under an ancestor
+ *   whose own `updateMatrixWorld` doesn't call its children's. Such hosts
+ *   call `markChanged`, or turn `scene.matrixWorldAutoUpdate` off, which
+ *   brings the walk's transform compares back.
  * - **Instance matrices:** each `InstancedMesh`'s `instanceMatrix.version`
  *   is compared every update (an integer each), so edited instances reach GI
  *   in the next update, with three's update ranges (below).
@@ -553,6 +560,7 @@ export class SceneSync {
         resetReport(this.report);
         // A new scene is walked whole at once; afterwards, a share each frame.
         const fresh = scene !== this.walkScene;
+        // An assumption, not a test: three must also render this scene (file header, "Moves").
         this.hooksSeeEveryMove = scene.matrixWorldAutoUpdate;
         if (fresh) this.startOver(scene);
 
@@ -802,8 +810,9 @@ export class SceneSync {
             // A new geometry: the contract has no setter for an instance's mesh, so start over.
             this.destroyObject(record);
             record = undefined;
-        } else if (record && source !== 'walk' && (record.contributes !== contributesFlag(mesh, record.skinned) || seeThroughChanged(record))) {
-            // A changed GI flag, or materials that changed whether the mesh blocks any light: new instances.
+        } else if (record && source !== 'walk' && (record.contributes !== contributesFlag(mesh, record.skinned) || seeThroughChanged(record) || deformingChanged(record))) {
+            // A changed GI flag, materials that changed whether the mesh blocks any light, or a mesh that
+            // starts or stops deforming (`giDeforming`): new instances, and a deforming one its own mesh.
             record = this.restartObject(record, visible);
             if (!record) return;
         }
@@ -1240,7 +1249,7 @@ export class SceneSync {
             const record = objects[this.objectCursor];
             // A changed flag, or edited materials that changed whether it blocks any light: start the object over, through the
             // marked path, next update. (After the material checks, so an edit they found this frame is acted on next update.)
-            if (record.contributes !== contributesFlag(record.object, record.skinned) || seeThroughChanged(record)) this.marked.add(record.object);
+            if (record.contributes !== contributesFlag(record.object, record.skinned) || seeThroughChanged(record) || deformingChanged(record)) this.marked.add(record.object);
         }
     }
 
@@ -1601,6 +1610,17 @@ function copyIfChanged(source: ArrayLike<number>, target: Float64Array, offset: 
         }
     }
     return changed;
+}
+
+/**
+ * Whether the mesh would now be created deforming or not, unlike when it
+ * was: `userData.giDeforming` set or cleared, or morph targets or a skeleton
+ * added. Read where the GI flag is (hot and marked visits, the edit
+ * rotation), and handled the same way: the object starts over.
+ */
+function deformingChanged(record: ObjectRecord): boolean {
+    const deformsNow = record.contributes && deformKind(record.object) !== null;
+    return deformsNow !== (record.geometry.deform !== null);
 }
 
 /** Whether `source` (16 numbers) differs from `target` at `offset`; reads only, so a hook can compare without changing what was sent. */

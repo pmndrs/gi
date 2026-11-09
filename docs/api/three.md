@@ -320,7 +320,7 @@ This is the mirroring on its own, for hosts that call `gi.encode` themselves.
 How it works and what to know:
 - Each such mesh gets its own platform mesh (a shared geometry is copied per mesh), made `deforming`.
 - When the pose's inputs change (the bones' world matrices, the morph influences, the position attribute's version), the adapter works the positions out on the CPU, the way three's own `getVertexPosition` does, and sends them with `setDeformedPositions`. A still pose costs a few compares an update. A skinned rig that only moves as a whole sends no pose.
-- `userData.giDeforming = false` keeps a skinned or morphed mesh in its bind pose.
+- `userData.giDeforming = false` keeps a skinned or morphed mesh in its bind pose. Changing `giDeforming` later (or adding morph targets) is picked up like a `giContributes` change: through the edit checks, or at once with `markChanged`. The object then starts over in GI.
 - `userData.giDeformBounds` (a `Box3`, or `{ min: [x, y, z], max: [x, y, z] }`) is a box in the mesh's own space that every pose stays in. Without it the adapter estimates one: exact for morph targets with influences from 0 to 1; for skinned meshes, the bind pose's box grown by half its largest side on every side; for CPU-animated ones, by a quarter. A pose that leaves the box is still traced correctly; the platform grows the box and warns once.
 - A pose reaches GI's rays once the platform has rebuilt that mesh's tree (until M3's T3.3 replaces the rebuild with a GPU refit), and three's GPU skinning isn't read yet (T3.3 adds that): the CPU work is per vertex, so keep deforming meshes small for now.
 
@@ -357,6 +357,7 @@ What three tells the adapter (nothing to call):
 What the adapter still looks for, a fixed amount per frame:
 
 - **The walk.** Each frame checks `objectsPerFrame` objects for new, moved, hidden or removed ones, then carries on where it stopped. A whole pass takes `ceil(objects / objectsPerFrame)` frames. It no longer compares the transforms of meshes whose `updateMatrixWorld` reports their moves, while three updates the scene's matrices itself (`scene.matrixWorldAutoUpdate`, three's default). It is the safety net for the rest: a hidden parent, a world matrix written by hand on a scene that doesn't update its own matrices.
+  - **This assumes three renders the scene,** or something calls its `updateMatrixWorld`, every frame. Two kinds of move are then not caught: in a host that leaves `matrixWorldAutoUpdate` on but doesn't render this scene with three, and under an ancestor whose own `updateMatrixWorld` doesn't call its children's. Such hosts should call `markChanged(object)` after a move, or set `scene.matrixWorldAutoUpdate = false`, which makes the walk compare transforms again.
 - **The hot list.** Once an object is seen moving, hidden or shown, it is checked every frame until it has been still for 60 frames. Continuous motion is therefore sent every frame.
 - **`markChanged(object)`.** Tells the adapter something changed (added, moved, edited or removed). The object and everything under it are picked up in the next `update`. It is still the way to have an edit (a material or geometry) or a `visible` change seen at once.
 - **Moves go out in one batch.** Every transform an `update` finds changed is sent with one `setTransforms` call at its end.

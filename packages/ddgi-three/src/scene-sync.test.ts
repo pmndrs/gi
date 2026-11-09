@@ -851,6 +851,19 @@ describe('the light walk (T2.1)', () => {
     });
 });
 
+/**
+ * The adapter's `childadded` and `childremoved` listeners left on a tree. three keeps listeners in an
+ * EventDispatcher's `_listeners` (EventDispatcher.js), and gives no public way to count them.
+ */
+function structureListeners(tree: Object3D): number {
+    let count = 0;
+    tree.traverse((object) => {
+        const listeners = (object as unknown as { _listeners?: Record<string, unknown[]> })._listeners;
+        count += (listeners?.childadded?.length ?? 0) + (listeners?.childremoved?.length ?? 0);
+    });
+    return count;
+}
+
 describe('three reports changes itself (T3.7)', () => {
     /** A scene of `count` meshes under one group, walked whole once, with a walk of one object a frame: the walk alone would take a pass of count + 2 frames. */
     function slowWalkScene(count: number): { sync: SceneSync; scene: Scene; group: Group; meshes: Mesh[] } {
@@ -976,9 +989,51 @@ describe('three reports changes itself (T3.7)', () => {
         expect(meshes[0].updateMatrixWorld).toBe(Object3D.prototype.updateMatrixWorld);
         slow.dispose();
         expect(meshes.every((mesh) => mesh.updateMatrixWorld === Object3D.prototype.updateMatrixWorld)).toBe(true);
-        // Disposed: the scene's events no longer reach the sync.
-        scene.add(new Mesh(new BoxGeometry(), new MeshStandardMaterial()));
-        expect(api.take().filter((call) => call.startsWith('create'))).toEqual([]);
+        // Disposed: no listener is left on the scene's objects. (An update can't show it: dispose forgets the
+        // scene, so the next update would walk it whole again, and marks outside the walked scene do nothing.)
+        expect(structureListeners(scene)).toBe(0);
+    });
+
+    it('stops listening to a scene it no longer walks, and hears the new one', () => {
+        const { sync: slow, scene: first } = slowWalkScene(3);
+        const second = new Scene();
+        slow.update(second);
+        api.take();
+        expect(structureListeners(first)).toBe(0);
+        // The first scene's changes reach nothing; the second's are created in the next update.
+        first.add(new Mesh(new BoxGeometry(), new MeshStandardMaterial()));
+        second.add(new Mesh(new BoxGeometry(), new MeshStandardMaterial()));
+        expect(renderThenUpdate(slow, second)).toEqual(['createMesh', 'createMaterial', 'createInstance']);
+        expect(api.instances.size).toBe(1);
+    });
+
+    it('keeps an object removed and added again before the next update, and sends its move', () => {
+        const { sync: slow, scene, group, meshes } = slowWalkScene(10);
+        const created = api.instances.size;
+        meshes[4].removeFromParent();
+        meshes[4].position.y = 7;
+        group.add(meshes[4]);
+        expect(renderThenUpdate(slow, scene)).toEqual(['setTransforms']);
+        expect(api.instances.size).toBe(created);
+        // Still heard after the round trip: listeners and hook were put back on it.
+        meshes[4].add(new Mesh(new BoxGeometry(), new MeshStandardMaterial()));
+        meshes[4].position.y = 8;
+        expect(renderThenUpdate(slow, scene)).toEqual(['createMesh', 'createMaterial', 'createInstance', 'setTransforms']);
+    });
+
+    it("wraps a SkinnedMesh's own updateMatrixWorld, so three's skinning bookkeeping still runs", () => {
+        const scene = new Scene();
+        const skinned = new SkinnedMesh(new BoxGeometry(), new MeshStandardMaterial());
+        skinned.bind(new Skeleton([]));
+        scene.add(skinned);
+        frame(scene);
+        expect(skinned.updateMatrixWorld).not.toBe(SkinnedMesh.prototype.updateMatrixWorld);
+        // SkinnedMesh.updateMatrixWorld keeps bindMatrixInverse at the inverse of matrixWorld (attached mode).
+        skinned.position.set(1, 2, 3);
+        expect(frame(scene)).toEqual(['setTransforms']);
+        expect(skinned.bindMatrixInverse.equals(skinned.matrixWorld.clone().invert())).toBe(true);
+        sync.dispose();
+        expect(skinned.updateMatrixWorld).toBe(SkinnedMesh.prototype.updateMatrixWorld);
     });
 
     it('trusts update ranges on the first edit of an InstancedMesh the walk is far from', () => {
@@ -1132,6 +1187,24 @@ describe('deforming meshes (T3.7)', () => {
         }
         expect(calls).toEqual(['setDeformedPositions', 'setDeformedPositions']);
         expect(new Set(api.poses.map((pose) => pose.mesh)).size).toBe(2);
+    });
+
+    it('starts an object over when giDeforming changes, as for giContributes', () => {
+        const scene = new Scene();
+        const sheet = morphedSheet(2);
+        scene.add(sheet);
+        frame(scene);
+        expect([...api.meshes.values()].map((mesh) => mesh.deforming === true)).toEqual([true]);
+        sheet.userData.giDeforming = false;
+        // Found by the edit rotation (this small scene is covered every frame), restarted the update after.
+        frame(scene);
+        frame(scene);
+        expect([...api.meshes.values()].map((mesh) => mesh.deforming === true)).toEqual([false]);
+        sheet.userData.giDeforming = true;
+        sync.markChanged(sheet);
+        frame(scene);
+        expect([...api.meshes.values()].map((mesh) => mesh.deforming === true)).toEqual([true]);
+        expect(api.instances.size).toBe(1);
     });
 
     it('keeps a mesh with giDeforming false in its bind pose, and sends no poses while hidden', () => {
