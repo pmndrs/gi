@@ -1,0 +1,4 @@
+{
+    "description": "T3.1 item 2: setDeformedPositions passes the oracle on a deforming test mesh (a waving sheet, placed plainly, mirrored and as a receiver, among rigid meshes): 8 poses each traced against the CPU reference once its tree is in (and against the flat sheet, which must disagree), then a new pose every frame for 40 frames, during which trees must keep arriving, and the last pose traced.",
+    "timeoutMs": 300000
+}
