@@ -130,7 +130,10 @@ export interface SceneMaterialData {
     readonly alphaMode?: 'opaque' | 'cutout' | 'stochastic';
     /** 0 to 1, multiplied with the albedo map's alpha. Defaults to 1. */
     readonly opacity?: number;
-    /** 0 to 1: a metal has no diffuse colour, so GI's albedo is scaled by (1 − metalness). Defaults to 0. */
+    /**
+     * 0 to 1: a metal has no diffuse colour, so GI's albedo is scaled by (1 − metalness).
+     * Defaults to 0, or to 1 with a `metalnessMap` (glTF's `metallicFactor` default).
+     */
     readonly metalness?: number;
     /**
      * A metalness map, multiplied with `metalness`. glTF and three read the

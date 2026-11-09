@@ -203,21 +203,26 @@ fn giSurfaceAtCone(ray: GiRay, hit: GiHit, spread: f32) -> GiSurface {
     let material = giMaterial(materialIndex);
 
     // The material's colours times its textures (a texture word is GI_NO_TEXTURE
-    // until the texture's layer is made: the colour alone, as if it were white).
+    // until the texture's layer is made: the colour alone, as if it were white;
+    // a pending metalness map's record carries metalness 0 meanwhile, so a
+    // metal-mapped material doesn't go black while it loads).
+    // With sampleTextures off, each texture is read at its last mip, one texel:
+    // its mean, the same at every point (the flat colour M1's adapter folded in).
     var albedo = material.albedo;
     var emission = material.emission;
     var metalness = material.metalness;
+    var footprint = GiShadeFootprint(0.0, 0.0);
     if (giShade.sampleTextures != 0u) {
-        let footprint = giShadeTextureFootprint(ray, hit, corners, geometricNormal, spread);
-        if (material.albedoTexture != GI_NO_TEXTURE) {
-            albedo *= giShadeSampleTexture(material.albedoTexture, material.albedoUv, hit, weights, footprint).rgb;
-        }
-        if (material.emissiveTexture != GI_NO_TEXTURE) {
-            emission *= giShadeSampleTexture(material.emissiveTexture, material.emissiveUv, hit, weights, footprint).rgb;
-        }
-        if (material.metalnessTexture != GI_NO_TEXTURE) {
-            metalness *= giShadeChannel(giShadeSampleTexture(material.metalnessTexture, material.metalnessUv, hit, weights, footprint), material.metalnessChannel);
-        }
+        footprint = giShadeTextureFootprint(ray, hit, corners, geometricNormal, spread);
+    }
+    if (material.albedoTexture != GI_NO_TEXTURE) {
+        albedo *= giShadeTextureAtHit(material.albedoTexture, material.albedoUv, hit, weights, footprint).rgb;
+    }
+    if (material.emissiveTexture != GI_NO_TEXTURE) {
+        emission *= giShadeTextureAtHit(material.emissiveTexture, material.emissiveUv, hit, weights, footprint).rgb;
+    }
+    if (material.metalnessTexture != GI_NO_TEXTURE) {
+        metalness *= giShadeChannel(giShadeTextureAtHit(material.metalnessTexture, material.metalnessUv, hit, weights, footprint), material.metalnessChannel);
     }
     // A metal reflects no diffuse light (three and glTF: diffuse = colour x (1 - metalness)).
     albedo *= 1.0 - metalness;
@@ -270,6 +275,16 @@ fn giShadeTextureLod(footprint: GiShadeFootprint, uvs: GiTriangleUvs, mapping: G
 // barycentric 'weights', as the surface point), its 3x2 transform, its wrap
 // (giTextureSampleMapped, the store's sampling module, which the walk's alpha
 // test shares), at the footprint's mip. Linear light (the store is sRGB-encoded).
+// A material texture at a hit: at the ray cone's mip (giShadeSampleTexture),
+// or with sampleTextures off at the last mip, which is the texture's mean
+// wherever it is read ('footprint' is unused then).
+fn giShadeTextureAtHit(layer: u32, mapping: GiUvMapping, hit: GiHit, weights: vec3f, footprint: GiShadeFootprint) -> vec4f {
+    if (giShade.sampleTextures == 0u) {
+        return textureSampleLevel(giTextureStore, giTextureSampler, vec2f(0.5), layer, GI_TEXTURE_LAST_LOD);
+    }
+    return giShadeSampleTexture(layer, mapping, hit, weights, footprint);
+}
+
 fn giShadeSampleTexture(layer: u32, mapping: GiUvMapping, hit: GiHit, weights: vec3f, footprint: GiShadeFootprint) -> vec4f {
     let uvs = giInstanceTriangleUvs(hit.instance, hit.triangle, mapping.channel);
     return giTextureSampleMapped(layer, mapping, uvs, weights, giShadeTextureLod(footprint, uvs, mapping));

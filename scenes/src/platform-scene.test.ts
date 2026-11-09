@@ -97,6 +97,17 @@ describe('describeProceduralScene', () => {
         expect(material.metalnessTexture?.uv?.matrix).toEqual([2, -0, 0, 2, 0, 0]);
     });
 
+    it('takes a metalness map with no metalness as metalness 1, as glTF, the GLB and three do', () => {
+        const base = buildTexturedFurnace();
+        const scene: ProceduralScene = { ...base, materials: [{ ...base.materials[0], metalnessMap: { texture: 0, channel: 'b' } }] };
+        const { api, recorded } = recordingSceneApi();
+        describeProceduralScene(api, scene);
+        expect(recorded.materials[0].metalness).toBe(1);
+        const plain = recordingSceneApi();
+        describeProceduralScene(plain.api, base);
+        expect(plain.recorded.materials[0].metalness).toBeUndefined();
+    });
+
     it('throws, naming the field, on data it would otherwise drop', () => {
         const base = buildTexturedFurnace();
         const withUnknown = { ...base, materials: [{ ...base.materials[0], clearcoat: 1 } as never] };

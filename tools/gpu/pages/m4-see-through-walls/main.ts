@@ -7,53 +7,43 @@
  *
  * Both scenes are a lit room A and a dark room B sharing a wall
  * (scenes/src/procedural/see-through-walls.ts). Room B gets light only
- * through the shared wall, so its field says what the wall lets through. Each
- * variant runs on a platform of its own, DDGI updating every probe every
- * frame, and reads E/π from the field at points on room B's floor and ceiling:
+ * through the shared wall. Each variant runs on a platform of its own, DDGI
+ * updating every probe every frame, and reads E/π from the field at points
+ * on each room's floor and ceiling, 1 m or more from the shared wall:
  *
- * alpha-checker
- * - `checker`: as built, the cut-out checker (half the opening open);
- * - `open`: the wall material set to `blocksLight: false`, a fully open wall;
- * - `closed`: the wall material set to `alphaMode: 'opaque'`, a solid wall.
- *   Checks: checker / open is about 0.5 (0.40 to 0.60; the checker's light
- *   squares also send light back into room A, which then gets through the
- *   holes, so a little over half is right here, where T4.2's black window
- *   read 48.9%), and closed / open under 10% (the field's thin-wall leak).
+ * alpha-checker: `checker` (as built, half the opening open), `open` (the
+ * wall `blocksLight: false`), `closed` (the wall `alphaMode: 'opaque'`).
+ * glass-wall: `glass` (as built), `pane-opaque` (the pane `blocksLight: true`).
  *
- * glass-wall
- * - `glass`: as built, the pane in slot 1 lets light through;
- * - `pane-opaque`: the pane material set to `blocksLight: true`.
- *   Checks: room B is lit through the glass (above 25% of the checker's open
- *   wall level), and with the pane opaque it gets under 15% of that: the
- *   light comes through the glass, not the wall around it (what is left is
- *   the field's thin-wall leak, as for the closed checker wall).
+ * **Gated, only what is physical:** room B gets more light through the open
+ * wall than through the checker, and more through the checker than through
+ * the closed wall; more through the glass than through the opaque pane.
  *
- * `VITE_DDGI_FRAMES` replaces FRAMES; `VITE_REPORT_ONLY=1` returns the numbers without checking them.
+ * **Reported, not gated** (as `ddgi-leak` reports the thin wall): the
+ * checker's share of the open wall's light, and the leak behind the closed
+ * walls, as room B against the open case and against room A (M1's leak
+ * measure, DECISIONS 2026-11-04; SPEC's bar is 1% of room A, T4.5 carries
+ * it). For finding the leak's cause, the closed variants also run with the
+ * probe volume moved 0.25 m along x (`shifted`), so the probe layers sit
+ * elsewhere relative to the shared wall.
+ *
+ * `VITE_DDGI_FRAMES` replaces FRAMES.
  */
 
 import { assert, runGpuTest } from '../../client.ts';
 import type { MaterialDescriptor } from '../../../../packages/ddgi-core/src/platform/contract/scene.ts';
 import { SEE_THROUGH_ROOM_HEIGHT_M, SEE_THROUGH_ROOM_SIZE_M } from '../../../../scenes/src/procedural/see-through-walls.ts';
-import { createDdgiScene, FieldProbe, releaseDeviceOnPageHide, runFrames, type SurfacePoint } from '../ddgi-shared/harness.ts';
+import { createDdgiScene, FieldProbe, loadManifest, releaseDeviceOnPageHide, runFrames, type SurfacePoint } from '../ddgi-shared/harness.ts';
 
 const env = import.meta.env as Record<string, unknown>;
 const FRAMES = Number(env.VITE_DDGI_FRAMES) > 0 ? Math.round(Number(env.VITE_DDGI_FRAMES)) : 900;
-/** `VITE_REPORT_ONLY=1`: return every number and skip the checks, to see a failing run's values. */
-const REPORT_ONLY = env.VITE_REPORT_ONLY === '1';
-const CHECKER_SHARE_RANGE: readonly [number, number] = [0.4, 0.6];
-/**
- * Room B's light with the shared wall made opaque, against the open (or glass) case. Not 0:
- * DDGI's field leaks a little through these thin walls (a 0 m quad, a 0.1 m slab, probes 0.5 m
- * apart); measured 5.5% and 9.8% on the RTX 3060 (T4.4). The bars only say the opaque wall is
- * an order of magnitude darker than the open one, i.e. the light comes through the holes and
- * the glass, not through the wall.
- */
-const CLOSED_LIMIT = 0.1;
-const PANE_OPAQUE_LIMIT = 0.15;
-/** Room B behind the glass, against the open checker wall (a 2.4 x 1.6 m window in a 4 x 2.8 m wall): measured 58%. */
-const GLASS_LIT_SHARE = 0.25;
-/** Room B's floor and ceiling points stay this far from its crate (centre x 6.2, z 2.4, 0.8 m wide, turned). */
-const CRATE_CENTRE: readonly [number, number] = [6.2, 2.4];
+/** The probe volume's move along x for the `shifted` variants: half a spacing. */
+const VOLUME_SHIFT_M = 0.25;
+/** Points stay this far from each room's crate (room A: x 1.2, z 3.0; room B: x 6.2, z 2.4). */
+const CRATE_CENTRES: readonly (readonly [number, number])[] = [
+    [1.2, 3.0],
+    [6.2, 2.4],
+];
 const CRATE_CLEARANCE_M = 0.75;
 const POINT_STEP_M = 0.4;
 /**
@@ -65,13 +55,18 @@ const WALL_CLEARANCE_M = 1.0;
 
 type Vec3 = [number, number, number];
 
-/** A grid of points on room B's floor (facing up) and ceiling (facing down), away from the shared wall's plane and the crate. */
-function roomBPoints(): SurfacePoint[] {
+/**
+ * A grid of points on one room's floor (facing up) and ceiling (facing down),
+ * at least WALL_CLEARANCE_M from the shared wall and away from the crates.
+ * Room A is x 0..4, room B x 4..8.
+ */
+function roomPoints(room: 'A' | 'B'): SurfacePoint[] {
     const points: SurfacePoint[] = [];
     const size = SEE_THROUGH_ROOM_SIZE_M;
-    for (let x = size + WALL_CLEARANCE_M; x < 2 * size; x += POINT_STEP_M) {
+    const [xStart, xEnd] = room === 'B' ? [size + WALL_CLEARANCE_M, 2 * size] : [POINT_STEP_M / 2, size - WALL_CLEARANCE_M + 1e-6];
+    for (let x = xStart; x < xEnd; x += POINT_STEP_M) {
         for (let z = POINT_STEP_M / 2; z < size; z += POINT_STEP_M) {
-            if (Math.hypot(x - CRATE_CENTRE[0], z - CRATE_CENTRE[1]) < CRATE_CLEARANCE_M) continue;
+            if (CRATE_CENTRES.some(([cx, cz]) => Math.hypot(x - cx, z - cz) < CRATE_CLEARANCE_M)) continue;
             for (const [y, normalY] of [[0, 1], [SEE_THROUGH_ROOM_HEIGHT_M, -1]] as const) {
                 const normal: Vec3 = [0, normalY, 0];
                 points.push({ position: [x, y, z], normal, viewDirection: [0, -normalY, 0] });
@@ -81,12 +76,33 @@ function roomBPoints(): SurfacePoint[] {
     return points;
 }
 
-/** One variant: the scene, a change to one material (by name) or none, then the room B mean E/π. */
-/** Each variant's texture state after its frames (built, waiting, refused), returned with the numbers. */
-const textureStates: Record<string, string> = {};
+interface RoomMeans {
+    /** Mean E/π over room A's points. */
+    readonly roomA: number;
+    /** Mean E/π over room B's points. */
+    readonly roomB: number;
+}
 
-async function runVariant(device: GPUDevice, sceneId: string, label: string, materialName: string | null, change: Partial<MaterialDescriptor>, log: (line: string) => void): Promise<number> {
-    const scene = await createDdgiScene(device, sceneId);
+function meanEOverPi(irradiance: readonly (readonly number[])[]): number {
+    let sum = 0;
+    for (const rgb of irradiance) sum += (rgb[0] + rgb[1] + rgb[2]) / (3 * Math.PI);
+    return sum / irradiance.length;
+}
+
+/** One variant: the scene, a change to one material (by name) or none, the volume moved along x or not; then both rooms' mean E/π. */
+async function runVariant(
+    device: GPUDevice,
+    sceneId: string,
+    label: string,
+    materialName: string | null,
+    change: Partial<MaterialDescriptor>,
+    volumeShiftM: number,
+    log: (line: string) => void,
+): Promise<RoomMeans> {
+    const manifest = loadManifest(sceneId);
+    const centre = manifest.volume.center;
+    const volume = { center: [centre[0] + volumeShiftM, centre[1], centre[2]] as [number, number, number], size: manifest.volume.size, spacing: manifest.volume.probeSpacing };
+    const scene = await createDdgiScene(device, sceneId, { volume });
     const field = scene.ddgi.field;
     assert(field, 'DDGI has no field after prepare');
     if (materialName !== null) {
@@ -96,43 +112,50 @@ async function runVariant(device: GPUDevice, sceneId: string, label: string, mat
     }
     const start = performance.now();
     await runFrames(device, scene.platform, FRAMES, field.grid.probeCount);
-    const points = roomBPoints();
-    const irradiance = await (await FieldProbe.create(device, scene.platform)).sample(field, points);
-    let sum = 0;
-    for (const rgb of irradiance) sum += (rgb[0] + rgb[1] + rgb[2]) / (3 * Math.PI);
-    const mean = sum / irradiance.length;
-    const textures = scene.platform.sceneCopy.textureCounts();
-    textureStates[`${sceneId} ${label}`] = `${textures.built} built, ${textures.pending} waiting, ${textures.failed} refused`;
-    log(
-        `${sceneId} ${label}: room B mean E/pi ${mean.toExponential(4)} over ${points.length} points, ${FRAMES} frames in ${((performance.now() - start) / 1000).toFixed(1)} s` +
-            ` (textures built ${textures.built}, waiting ${textures.pending}, refused ${textures.failed})`,
-    );
+    const probe = await FieldProbe.create(device, scene.platform);
+    const roomA = meanEOverPi(await probe.sample(field, roomPoints('A')));
+    const roomB = meanEOverPi(await probe.sample(field, roomPoints('B')));
+    log(`${sceneId} ${label}: mean E/pi room A ${roomA.toExponential(4)}, room B ${roomB.toExponential(4)}, ${FRAMES} frames in ${((performance.now() - start) / 1000).toFixed(1)} s`);
     scene.platform.dispose();
-    return mean;
+    return { roomA, roomB };
 }
 
 await runGpuTest(
     async ({ device, log }) => {
         releaseDeviceOnPageHide(device);
         const wall = 'alpha-checker-wall';
-        const checker = await runVariant(device, 'alpha-checker', 'checker', null, {}, log);
-        const open = await runVariant(device, 'alpha-checker', 'open', wall, { blocksLight: false }, log);
-        const closed = await runVariant(device, 'alpha-checker', 'closed', wall, { alphaMode: 'opaque' }, log);
-        const glass = await runVariant(device, 'glass-wall', 'glass', null, {}, log);
-        const paneOpaque = await runVariant(device, 'glass-wall', 'pane-opaque', 'glass-pane', { blocksLight: true }, log);
+        const opaque: Partial<MaterialDescriptor> = { alphaMode: 'opaque' };
+        const checker = await runVariant(device, 'alpha-checker', 'checker', null, {}, 0, log);
+        const open = await runVariant(device, 'alpha-checker', 'open', wall, { blocksLight: false }, 0, log);
+        const closed = await runVariant(device, 'alpha-checker', 'closed', wall, opaque, 0, log);
+        const closedShifted = await runVariant(device, 'alpha-checker', 'closed, volume shifted', wall, opaque, VOLUME_SHIFT_M, log);
+        const glass = await runVariant(device, 'glass-wall', 'glass', null, {}, 0, log);
+        const paneOpaque = await runVariant(device, 'glass-wall', 'pane-opaque', 'glass-pane', { blocksLight: true }, 0, log);
+        const paneOpaqueShifted = await runVariant(device, 'glass-wall', 'pane-opaque, volume shifted', 'glass-pane', { blocksLight: true }, VOLUME_SHIFT_M, log);
 
-        const checkerShare = checker / open;
-        const closedShare = closed / open;
-        const glassShare = glass / open;
-        const paneOpaqueShare = paneOpaque / glass;
-        log(`checker / open ${(checkerShare * 100).toFixed(1)}%, closed / open ${(closedShare * 100).toFixed(3)}%, glass / open checker wall ${(glassShare * 100).toFixed(1)}%, pane opaque / glass ${(paneOpaqueShare * 100).toFixed(3)}%`);
-        const result = { frames: FRAMES, textureStates, checker, open, closed, glass, paneOpaque, checkerShare, closedShare, glassShare, paneOpaqueShare };
-        if (REPORT_ONLY) return result;
-        assert(checkerShare >= CHECKER_SHARE_RANGE[0] && checkerShare <= CHECKER_SHARE_RANGE[1], `the checker lets through ${(checkerShare * 100).toFixed(1)}% of the open wall's light (expected ${CHECKER_SHARE_RANGE[0] * 100}-${CHECKER_SHARE_RANGE[1] * 100}%)`);
-        assert(closedShare < CLOSED_LIMIT, `the opaque checker wall lets through ${(closedShare * 100).toFixed(2)}% of the open wall's light (limit ${CLOSED_LIMIT * 100}%)`);
-        assert(glassShare > GLASS_LIT_SHARE, `room B behind the glass gets only ${(glassShare * 100).toFixed(2)}% of the open checker wall's light`);
-        assert(paneOpaqueShare < PANE_OPAQUE_LIMIT, `with the pane opaque, room B still gets ${(paneOpaqueShare * 100).toFixed(2)}% of the glass case's light (limit ${PANE_OPAQUE_LIMIT * 100}%)`);
-        return result;
+        // Reported, not gated (see the file comment).
+        const report = {
+            checkerShareOfOpen: checker.roomB / open.roomB,
+            glassShareOfOpenChecker: glass.roomB / open.roomB,
+            // M1's leak measure: the dark room against the lit room, with the shared wall solid.
+            closedLeakOfRoomA: closed.roomB / closed.roomA,
+            closedShiftedLeakOfRoomA: closedShifted.roomB / closedShifted.roomA,
+            paneOpaqueLeakOfRoomA: paneOpaque.roomB / paneOpaque.roomA,
+            paneOpaqueShiftedLeakOfRoomA: paneOpaqueShifted.roomB / paneOpaqueShifted.roomA,
+            closedShareOfOpen: closed.roomB / open.roomB,
+            paneOpaqueShareOfGlass: paneOpaque.roomB / glass.roomB,
+        };
+        const percent = (value: number) => `${(value * 100).toFixed(2)}%`;
+        log(
+            `checker ${percent(report.checkerShareOfOpen)} of open; glass ${percent(report.glassShareOfOpenChecker)} of the open checker wall; ` +
+                `leak (room B / room A) closed checker ${percent(report.closedLeakOfRoomA)} (volume shifted ${percent(report.closedShiftedLeakOfRoomA)}), ` +
+                `opaque pane ${percent(report.paneOpaqueLeakOfRoomA)} (volume shifted ${percent(report.paneOpaqueShiftedLeakOfRoomA)})`,
+        );
+
+        // Gated: the order physics gives.
+        assert(open.roomB > checker.roomB && checker.roomB > closed.roomB, `room B should get open > checker > closed; got ${open.roomB.toExponential(3)}, ${checker.roomB.toExponential(3)}, ${closed.roomB.toExponential(3)}`);
+        assert(glass.roomB > paneOpaque.roomB, `room B should get more light through the glass (${glass.roomB.toExponential(3)}) than through the opaque pane (${paneOpaque.roomB.toExponential(3)})`);
+        return { frames: FRAMES, checker, open, closed, closedShifted, glass, paneOpaque, paneOpaqueShifted, report };
     },
     { optionalFeatures: ['texture-formats-tier1', 'subgroups'] },
 );

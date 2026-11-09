@@ -1528,7 +1528,11 @@ export class PlatformScene implements SceneApi, SceneCopy {
         this.writeUvMapping(base + MATERIAL_WORD.emissiveUvMatrix, base + MATERIAL_WORD.emissiveUvTranslation, descriptor.emissiveUv);
         words[base + MATERIAL_WORD.emissiveTexture] = textureLayer(material.emissiveTexture);
         words[base + MATERIAL_WORD.emissiveUvPacked] = packUvMapping(descriptor.emissiveUv);
-        floats[base + MATERIAL_WORD.metalness] = descriptor.metalness ?? 0;
+        // While a metalness map's layer is still being made, the material is not metal at all: glTF
+        // materials put metalness 1 in the factor and the real values in the map, so the factor alone
+        // would make every such material black (albedo x (1 - 1)) until its map lands.
+        const metalnessMapPending = material.metalnessTexture !== undefined && material.metalnessTexture.state !== 'built';
+        floats[base + MATERIAL_WORD.metalness] = metalnessMapPending ? 0 : (descriptor.metalness ?? 0);
         floats[base + MATERIAL_WORD.opacity] = descriptor.opacity ?? 1;
         words[base + MATERIAL_WORD.alphaMode] = ALPHA_MODE[alphaMode];
         words[base + MATERIAL_WORD.reserved] = 0;

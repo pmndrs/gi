@@ -111,7 +111,9 @@ export function describeProceduralScene(scene: SceneApi, data: ProceduralScene):
             ...(material.alphaCutoff !== undefined ? { alphaCutoff: material.alphaCutoff } : {}),
             ...(material.alphaMode !== undefined ? { alphaMode: material.alphaMode } : {}),
             ...(material.opacity !== undefined ? { opacity: material.opacity } : {}),
-            ...(material.metalness !== undefined ? { metalness: material.metalness } : {}),
+            // Scene data follows glTF: a metalness map with no factor means factor 1 (glTF's
+            // metallicFactor default), as glb.ts and three-scene.ts also take it.
+            ...(material.metalness !== undefined || material.metalnessMap ? { metalness: material.metalness ?? 1 } : {}),
             ...(material.metalnessMap
                 ? {
                       metalnessTexture: {

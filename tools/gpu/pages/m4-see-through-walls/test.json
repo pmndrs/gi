@@ -1,4 +1,4 @@
 {
-    "description": "M4 T4.4: alpha-checker and glass-wall through the GPU test harness with their materials. The dark room gets about half the open wall's light through the cut-out checker (40-60%), light through the glass pane, and an order of magnitude less with either wall made opaque (the field's thin-wall leak).",
+    "description": "M4 T4.4: alpha-checker and glass-wall through the GPU test harness with their materials. Gated: room B gets open > checker > closed, and more through the glass pane than through it made opaque. Reported: the checker's share of the open wall, and the leak behind the solid walls (room B against room A), also with the probe volume moved 0.25 m.",
     "timeoutMs": 900000
 }

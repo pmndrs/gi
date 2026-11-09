@@ -124,11 +124,11 @@ export interface DdgiViewerSettings {
     /** The change-per-frame view, full colour at this change in percent; null shows the picture itself. */
     changeFullScalePercent: number | null;
     /**
-     * GI's rays read material textures (the platform's hit-shading setting
-     * `sampleTextures`). Off, each material shades with its flat colour, as
-     * before M4: for comparing what the textures change. Turning it over
-     * rebuilds the hit shading's kernels, and the field takes a few seconds to
-     * follow.
+     * GI's rays read material textures where they hit (the platform's
+     * hit-shading setting `sampleTextures`). Off, each texture counts as its
+     * mean colour, as the adapter's averages did before M4: for comparing what
+     * the textures change. Turning it over is one uniform write (nothing is
+     * compiled); the field takes a few seconds to follow.
      */
     giTextures: boolean;
 }

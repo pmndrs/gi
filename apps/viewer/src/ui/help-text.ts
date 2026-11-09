@@ -32,7 +32,7 @@ export const HELP = {
     ddgiProbeColor:
         "What the probe balls' colour shows. State: active, switched off, or not updated yet. How settled: how many updates each probe's light is averaged over, red for a few (a new or rarely updated probe, noisy), yellow for about 13, green for the most DDGI keeps (200, as quiet as it gets). Probes that are not active are grey. A probe updated every frame turns green within a few seconds; in a big scene each probe is updated less often, and DDGI lets older updates fade after a few seconds so light changes still come through, so those probes stay orange or yellow on purpose.",
     ddgiGiTextures:
-        "Whether GI's rays read the materials' textures where they hit (on by default). Off, every material bounces its plain colour, as before textures reached GI: compare the two to see what the textures change. Turning it over takes a few seconds for the light to follow.",
+        "Whether GI's rays read the materials' textures where they hit (on by default). Off, every texture counts as its average colour, as before textures reached GI: compare the two to see what the textures change. Turning it over takes a few seconds for the light to follow.",
     ddgiScreenView:
         "Replaces the picture with one of DDGI's check views. GI only: just the bounced light, as it would fall on plain white surfaces. Coverage: green where DDGI answers fully, red where it gives way (outside the probe box, or where no probe can see). Probes near this point: the colours of the 8 probes each point reads from. GI albedo at hits: the colour GI's rays find where they hit each surface (its texture, cutouts and metals as GI reads them; glass GI sees through shows what is behind it; black where a ray hits nothing), with no light. Turns off while the upscaler is on.",
     ddgiAtlas:
@@ -83,7 +83,7 @@ export const HELP = {
         "CPU time the three.js adapter spends per frame looking for changes in the scene and sending them to the GI library (target: 0.2 ms for a still scene), and then recording the GI work.",
     statsStates: 'How many probes are in each state, counted on the GPU a few frames ago.',
     statsRecompiles:
-        'GPU programs the GI library had to compile while you used the viewer. It should stay at 0: moving, dimming, recolouring, switching lights and changing the time of day only change data. Starting DDGI over with light groups or the sun layer builds a new DDGI, which counts from 0 again.',
+        'GPU programs the GI library had to compile while you used the viewer. It should stay at 0: moving, dimming, recolouring, switching lights and changing the time of day only change data. Starting DDGI over with light groups or the sun layer builds a new DDGI, which counts from 0 again. One exception: the "GI albedo at hits" debug view builds its own GPU program the first time it is shown, through the GI library, so the count reads 1 from then on; that one is expected.',
 
     // Lights, motions, time of day, light groups and the response meter (T2.8).
     lightSelect:

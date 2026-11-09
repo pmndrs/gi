@@ -21,6 +21,23 @@ Rules:
 
 ---
 
+## 2026-11-09 · T4.4 second part, review fixes · implementer (opus)
+Did (branch `m4-t4.4b`):
+- `m4-see-through-walls` gates only the physical order (open > checker > closed; glass > opaque pane) and reports the rest. It also measures room B against room A (M1's leak definition) and reruns the closed cases with the volume moved 0.25 m in x.
+- Viewer link key `textures` renamed to `gitextures` (T3.12 owns `textures`).
+- Metalness: a map with no factor is 1 in `platform-scene.ts` too, as in `glb.ts` and `three-scene.ts`. New test.
+- Core: with `sampleTextures` off, hits read every texture (albedo, emissive, metalness) at its last mip, its mean colour (`shade/wgsl.ts`). While a metalness map's layer is pending, the material record carries metalness 0 (`platform-scene.ts`). Updated `platform.md`, the contract comment and `ddgi-textured-furnace`, whose off case now checks the furnace's closed form for the stored mean.
+- Small fixes:
+  - the recompiles tooltip says why the albedo view makes it read 1;
+  - Compare labels only textured and untextured renders, and with GI's textures off it prefers `cycles-untextured-*` where there is one;
+  - the toggle's comment now says it is a uniform write;
+  - removed the orphan doc comment.
+Leak, one attempt (RTX 3060, 900 frames, points 1 m or more from the wall). Behind the solid walls room B is 1.56% (checker quad) and 1.47% (glass-wall slab) of room A on the manifests' volume, and 0.56% and 0.10% with the volume moved 0.25 m. Cause: the manifests' volume (centre x 4.0, size 8.4, spacing 0.5) puts a probe layer at x = 4.0, in the shared wall. Moved half a spacing, both are under SPEC's 1%. This explains the equal leak in both scenes. Suggested fix for T4.5: move both manifests' volume centre to x 4.25. I didn't do it here, because it changes the manifest hash under the new references. Checker 55.5% of the open wall, glass 58%.
+Verified (RTX 3060, headless Chrome):
+- `m4-see-through-walls`, `textures-uv-board` and `ddgi-leak` (two-room 0.84%, thin wall 0.59%, closed door 0.06%) pass. `ddgi-textured-furnace` passes after one fix: textures off read 0.50294 against the closed form's 0.50291 for the stored mean 0.50289. Its first version compared against the flat run, which itself sits 0.15% low (0.49925), so it missed by 0.16%.
+- `pnpm lint` and `pnpm typecheck` pass. All 1,362 unit tests pass with a 60 s test timeout; the CPU is busy with the Bistro renders.
+Not verified: the Intel UHD; the viewer screenshots weren't retaken for the label and link changes (unit tests cover the link key).
+
 ## 2026-11-09 · T4.4 second part: sponza-full queued, describeScene, textured Compare, debug views, noise · implementer (opus)
 Did (branch `m4-t4.4b`, worktree `webgpu-ddgi-m4-t44b`, merged with `m4` at f9cb53b for T4.2's cutouts):
 - **`describeScene`** (`tools/gpu/pages/ddgi-shared/harness.ts`) now goes through **`scenes/src/platform-scene.ts`**: textures as `PixelData` from the scene's own pixels, uv mappings (`uvMappingMatrix`), uv set 1, groups, a material per slot, `alphaCutoff`/`alphaMode`/`opacity`, metalness and its map, transmission as `blocksLight: false`. A field it can't pass throws, naming it. Scene data gained `alphaMode`, `opacity`, `metalness`, `metalnessMap` (three and the GLB carry them; a non-blue metalness channel throws there). New page **`m4-see-through-walls`**.

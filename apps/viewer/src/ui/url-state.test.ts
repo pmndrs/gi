@@ -54,11 +54,11 @@ describe('url state', () => {
     });
 
     it("reads the GI albedo view and the textures switch (T4.4), and round-trips them", () => {
-        const state = parseUrlState('?debug=gi-albedo&textures=0');
+        const state = parseUrlState('?debug=gi-albedo&gitextures=0');
         expect(state).toMatchObject({ debug: 'gi-albedo', giTextures: false });
         expect(parseUrlState(serializeUrlState(state))).toEqual(state);
         // Textures are on unless a link says 0, and on is not written.
-        expect(parseUrlState('?textures=1').giTextures).toBe(true);
+        expect(parseUrlState('?gitextures=1').giTextures).toBe(true);
         expect(serializeUrlState({ ...DEFAULT_URL_STATE, giTextures: true })).toBe('');
     });
 
