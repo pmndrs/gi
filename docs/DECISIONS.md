@@ -4,6 +4,12 @@ Settled choices, newest first. Each entry is short: the decision, why, and what 
 
 ## 2026-11-09
 
+- **Subgroups first: what "fallback" means, made explicit** (lead, 2026-11-09, from RC1.3's review). The 2026-11-04 entry says "there is no second GPU code path" without subgroups. Since M1, the board's rule has been "subgroups first, with one declared fallback and a test of it", and DDGI's kernels (`ddgi/schedule-fill`, the fixed-ray reductions) and RC1.3's platform scan carry a workgroup-memory fallback. Dennis's radiance-cache brief asks for the same. So, read together:
+  - a **compute kernel** (scan, reduction, compaction) uses subgroups first and may carry **one** declared fallback in workgroup memory that assumes nothing about subgroup lanes, with a GPU test on a device created without `subgroups` that compares both paths;
+  - a **larger subsystem** that can't sensibly have a second GPU path (the GPU BVH builders) falls back off the GPU (tinybvh in the worker) or reports through `isSupported` or a typed error, as 2026-11-04 says;
+  - never two subgroup variants, and never a fallback without its test.
+  - Revisit if a fallback starts to diverge in behaviour from its subgroup path, or once every target device has `subgroups`.
+
 - **radiance-cache: a second technique, AMD's two-level radiance cache** (Dennis, 2026-11-09, from the research plan in the `ddgi` repo, `research/gi-1.0/PLAN.md`; the track's design is [docs/design/radiance-cache.md](design/radiance-cache.md)).
   - *Home and name:* in this repo, beside DDGI, at `packages/ddgi-core/src/techniques/radiance-cache/`, import path `@pmndrs/ddgi/radiance-cache`, branch `radiance-cache` off `m2`. Docs say "based on AMD GI-1.0/1.2". Other names considered: `screen-cache`, `cached-gi`, `two-level`, `screen-probes`; `radiance-cache` is the paper's own term and covers any world-cache backend.
   - *Faithful port first:* build Capsaicin v1.3's default configuration (GI-1.2) as AMD built it: algorithms, ray counts, rates, cache sizes, per-hit cache population. Performance ideas are measured levers beside the faithful path, never up-front rewrites. Why: a slow faithful path tells us what to fix (our BVH, a missing WebGPU feature); a rewrite up front hides it.
