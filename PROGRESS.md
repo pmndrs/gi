@@ -21,6 +21,242 @@ Rules:
 
 ---
 
+## 2026-11-09 · T2.10 review fixes: the up-to-date M2 table · lead (opus)
+Did: answered the Opus review of T2.10 (fail, 3 blocking points) by putting one up-to-date table here, on M2's final code (`m2-t2.10`, with T2.17 and T2.18), and recording the known misses in DECISIONS (on `m2`, 2026-11-09). This replaces the earlier T2.10 tables where they differ. RTX 3060 Laptop, headless Chrome 157, about 780–830 MHz (the Bistro rows: a fixed 1,200 MHz).
+| Target | Final number | Verdict |
+| --- | --- | --- |
+| Change shows next frame | two-room and Cornell 13–47% of the step in frame 1; Sponza's lamp 34–45% at 316 probes, 0.1% moving out at the calibrated 85 | met, except Sponza's lamp at 85 |
+| Within 5% in ≤ 30 frames | two-room halved 9, switched on 18; Cornell 5 / 8; Sponza's sun turn **15** (field 60; was 13 / 36 before T2.18); furnished room's sun step 11 / 17; Sponza's lamp 13 / 31 at 316, 50 / 42 at 85; **two-room's lamp leaving the lit room 145–166 frames or never** against its long-held level (37–44 against its 3 s hold) | met, except Sponza's lamp and two-room's lamp leaving (known misses, DECISIONS 2026-11-09) |
+| Update ≤ 2.0 ms | Cornell 1.94, two-room 1.94, Sponza 2.03 (inside the page's +10% calibration margin); the 60 frames after Sponza's turn 0.99× still (p95 1.05×, T2.18); Bistro with the texture cap: 2.19 ms at the floor of 120 probes (calibrated 52–73; the floor wins) | met; Bistro over by 9.5% because the floor wins |
+| Sampling ≤ 1.0 ms | 0.714 ms on the default path (at 1,380 MHz) | met |
+| ≥ 32 lights, no recompiles | 4,096 lights: 0; sessions on four scenes including Bistro capped: 0 | met |
+| Adapter ≤ 0.2 / 0.5 ms | Sponza 0.052 / 0.059, Bistro 0.091 / 0.103 (CPU only, unaffected by the overflow) | met |
+| Whole frame, 1440p, viewer path, GPU p50 / p95 GI on | Cornell 4.92 / 5.06, two-room 7.64 / 8.01, Sponza 21.07 / 21.28, Bistro capped 13.31 / 13.59 (GI off 5.33; at 1,200 MHz) | recorded |
+| Light grid at 2,048 cells ≤ 0.1 ms | 0.232 (0.198 after a ramp) | **missed** (known miss) |
+| Intel `ddgi-key-probes-sponza` | 16 and 18 against 15 at a fixed 316 probes (T2.18 used the margin) | **missed** (known miss; T3.15) |
+- **Superseded:** the uncapped Bistro rows of 2026-11-08 (GPU memory overflowing, T2.17) and the "Bistro broken" verdict; the Sponza turn's 13 / 36 and "over the budget" (before T2.18).
+- **The cold start** (1.439 s on this branch, 1.326 s before T2.14) is one run each, with the driver's shader cache not cleared, so the small difference is not a finding.
+- **H-PLOC against tinybvh on Bistro:** GPU trees alone trace at 0.981× tinybvh's time, and 1.016× after the swap. GPU trees are as good on Bistro too, so making the tinybvh swap optional is worth deciding in T3.2.
+- **Bistro's budget check** fails on the page's own rule: the batch changes when the platform learns the frame rate after about 1 s, so neither size gets 300 timed frames. That's a page issue, not cost; it goes to T3.14.
+Not verified: the M5 Pro (not set up); a Bistro response; the library's default composite with the update in the same frame.
+Next: Dennis agrees the known misses and answers the clock question (DECISIONS 2026-11-09). The fixed 1,200 MHz clock seen on 2026-11-09 was not set by us, and we left it alone.
+
+## 2026-11-09 · T2.10 review: Bistro exterior re-measured with the texture cap · gpu-tester (opus)
+Did: re-ran T2.10's Bistro exterior numbers with `VITE_DDGI_MAX_TEXTURE_SIZE=1024`, on `m2-t2.10` at 366dc0c (with T2.17 and T2.18). The RTX 3060 Laptop was nvidia/ampere, on headless Chrome 157.0.8103.38. Each run went under `bench-lock run`, one run per item, and all were VALID. `ddgi-session-recompiles` gained the same opt-in cap (1db6dc0, test page only). Rows are marked `note/t2.10_bistro_capped` in `timing.csv`, `baselines.csv` and `checks.csv` (066b495 and this commit). README now marks T2.10's uncapped Bistro rows as not to be used. Nothing in `packages/` changed.
+
+**Flags:**
+- **The clock was 1200 MHz in every sample, idle included** (P0 at idle; NOTES has the 2026-11-05 lock). It wasn't Chrome's usual 780 MHz, so these numbers compare with neither T2.10 nor T2.17.
+- **Another repo's `run-headless.mjs` denoiser timing captures were running, without our lock.** I saw them at 16:45, after my last run. The checks before each run read 0%, so overlap is possible but unproven. The whole frame's GPU-time spread between rounds was small (cv 0.003).
+
+| Item (capped, 1200 MHz, VALID) | Now | T2.10 uncapped (780 MHz) |
+| --- | --- | --- |
+| Start-up calibration | 52 probes (fixed 1.31 ms, spread 1.88). Other runs: 59 and 73 | 14-20 |
+| Budget section | **page FAIL**, "only 276 timed frames at the batch of 104" (as T2.17) | broken |
+| Its diagnosis run, at 59 / 118 probes | 1.95 / 2.18 ms median | |
+| 8 s ramp: recalibrated batch | 60; the budget ran the floor of 120 | 1 |
+| 8 s ramp: update ms | 2.19 median (p05 1.84, p95 2.55, +9.5%); PASS | |
+| Whole frame 1440p, GPU p50 / p95 | GI on 13.31 / 13.59; GI off 5.33 / 5.35; GI 8.00 [7.94, 8.05] | 19.2 / 20.3; 11.2 / 12.0 |
+| Whole frame 1440p, wall p50 / p95 | GI on 41.1 / 46.7; GI off 35.8 / 42.5 (both noisy, cv 0.2-0.6) | 545 / 683; 40 / 48 |
+| Session recompiles, groups on | 0 (control 1), 750 frames, page 62.7 s | 0, 35 s |
+
+**Diagnosis of the failure:** the batch doesn't hold steady for 300 timed frames. The budget section starts before the platform knows the frame rate, so the floor assumes 60 Hz. That gives 28,952 / 240 = 121 probes, capped at 2× the batch (118). After 1 s it learns about 312 Hz, the floor drops to 24, and the batch goes back to 59. Split 276 / 324, neither half reaches 300. The page check meets the floor's start; cost isn't the problem. Calibration scatter at small sizes (4 probes 0.29-2.0 ms) explains why the count moves (NOTES).
+Not verified: the Intel UHD; tree swap and adapter on Bistro, capped (README lists them as uncapped); a run at 780 MHz.
+Next (lead): whether the budget check should skip the first 1 s window, or let the floor learn the rate in start-up (a page or library choice, not made here). Find out who pinned the clock at 1200 MHz.
+
+## 2026-11-09 · T2.10 Intel UHD correctness run · gpu-tester (opus)
+Did: ran M1's still-scene checks plus M2's, T2.12's and T2.13's correctness pages on the Intel UHD (intel/gen-12lp, headless Chrome 157.0.8103.38). This is M2's final code (`m2-t2.10` at 1919130; later commits change only CSVs and docs). There were 18 runs of 1–4 pages, each under `bench-lock run --no-cool-wait`. Timings are not gated. Rows: `checks.csv` (`t2.10/...`, device `Intel UHD`, `note/t2.10_intel_batch`, `note/device_hung` on hung pages), `flicker.csv`, `trace.csv` (H-PLOC quick bench). No library code was changed.
+
+| Page | Result | Key number |
+| --- | --- | --- |
+| smoke, device, ddgi-furnace | pass | furnace E/π 0.4986 (worst point 3.8%) |
+| trace-oracle | pass | 0 rays slipped in all 8 variants (platform, GPU trees, mid-swap, refused) |
+| ddgi-leak | pass | two-room 0.83% (thin wall 0.59%, closed door 0.06%) |
+| accuracy, test view vs Cycles | pass | Cornell point +5.60%, two-room +4.95% (bar ±10%); Sponza raw +23.10% (RTX +23.14%, M1 +23.07%) |
+| ddgi-change-still | pass | atlas within 0.16% of M1, 0 probes marked |
+| ddgi-flicker | pass | Cornell 0.092% / p95 0.50% (2 ms budget, 150 probes); two-room 0.010% / 0.055% (98 probes) |
+| ddgi-session-recompiles, platform-recompiles | pass | 0 recompiles (control 1): Cornell and two-room, groups off and on; 4,096 lights 0 |
+| ddgi-light-groups | pass | vs re-converged within 0.007%; regroup within 1% by frame 8 |
+| ddgi-sun-layer | pass | vs re-converged within 0.005%; 6-layer cap within 0.012% |
+| hit-shading-many-lights (light grid) | pass | mean within 0.1%; 99.3–99.7% of points in tolerance (K = 1, 2, 4) |
+| ddgi-key-probes-sponza | **fail ×2** | view within 5% from frame **16**, re-run **18** (bar 15; RTX 15); field 54 (bar 120); hold removed 65% (sun) / 91% (sky) |
+| ddgi-key-probes-leak, mark-, propagate-reduction | pass | worst probe leak 0.75%; subgroup and fallback paths agree |
+| ddgi-warm-two-updates | **hung**, then pass alone | 0 probes active after 1 update, 642 after 2 |
+| tlas-oracle, trace-inline | pass; trace-inline **hung** once, then passed alone | 0 mismatches |
+| bvh-hploc, trace-bench-hploc-quick | pass | SAH vs reference within 0.27% (38 cases); trees agree 100% with tinybvh's |
+| ddgi-tree-swap (Sponza) | pass | atlas −0.002% across the swap, 0 recompiles; GPU build 4.48 s |
+| ddgi-trees-no-subgroups | pass | atlas +0.032% vs M1, all meshes on tinybvh |
+| scene-gpu-packing | pass | 0 wrong words on 8 scenes |
+
+Device hangs: **2 in 18 runs** (`DXGI_ERROR_DEVICE_HUNG`), both on the 4th page of a 4-page batch, and both passed alone (NOTES).
+Flags: another project's headless Chrome (`rt-headless-*`, not ours) held the RTX at 89 C and 100% use for the whole session. The laptop's GPUs share one cooler, so the Intel may have run warm. Sponza's key-probe miss is consistent across both runs (16, 18), not noise.
+Not run: `ddgi-change-step`, `ddgi-schedule-*`, `ddgi-direct`, `ddgi-feedback`, `ddgi-warmup`, `hit-shading-deferred` (not in the brief); Sponza flicker; Bistro scenes; anything timed.
+Next: lead decides whether the key-probe view bar (15 frames at 316 probes) applies to the Intel. Its frames come from the same fixed batch, so the miss is in the result, not in speed.
+
+## 2026-11-08 · T2.10 response follow-up: Sponza's lamp lit on native, exposure, brightness diagnosis · native-runner (opus)
+Did: the coordinator's follow-up to my "T2.10 response times" entry below.
+- **Correction to that entry:** native's Sponza arcade lamp lit nothing in those runs. The manifest's `range: 0` (three: no cut-off) became `radius=0`, which the harness reads as a hard cut-off, including in the probe trace. The 0.0–0.8% steps were the unlit lamp, not the view. Those rows are superseded (a `superseded` row per run).
+- **The fix (320ff31):** in `tools/native/native-lib.ps1`, a range of 0 becomes 10× the probe volume's diagonal (Sponza 480.44 m). The harness applies three's window `(1 − (d/r)⁴)²`, and at that radius it stays above 0.9998 anywhere in the scene. Cornell, two-room and closed-door inis come out the same as before; only Sponza's radius line changes.
+- **Exposure (0233355):** the `viewer-recording` page applies the scene's own exposure through `ViewerCore.setExposureEv`, as `viewer-app.ts` does, and records `exposureEv`. Two-room has none (0 EV), so its earlier pictures were right. The measured mean is read before exposure, so no number changed.
+- **`response.ts --set <name>`** puts the set name in the row path. The re-recorded set is `lamp_lit`.
+- **How I ran it:** I copied the fixed `native-lib.ps1` into t27 for the native runs, then restored t27's file. t27 is unchanged and the fork is unchanged.
+
+Verified (RTX 3060 Laptop):
+- Native: Vulkan, fork 350f9de, our grid (19,425 probes), texture sky. The new run's ini has `radius=480.4425`, and the lamp is 0.0000 cm from the manifest path on every frame.
+- Ours: Chrome 157 headless at 0233355; the pictures show the GI at +2 EV, with the lamp's light visible.
+- 3 runs each side plus 2 settle holds each side. Every run went through the bench lock.
+
+Numbers (`response.csv` `.../lamp_lit/run1-3`; first frame within 5% of the 3,600-frame settled level; median in brackets):
+
+| Sponza jump | native | ours |
+| --- | --- | --- |
+| 1, lamp x −2 → 4 (step +9.6–9.9% / +8.7–9.2%) | 62, 59, 61 (61) | 19, 11, 33 (19) |
+| 2, lamp 4 → −2 (step −4.9 to −5.1% / −7.5 to −8.8%) | 4, 2, 5 (4) | 1, 1, 9 (1) |
+| 3, lamp −2 → 4 (step +8.8–9.0% / +8.7–8.9%) | 50, 45, 44 (45) | 10, 21, 20 (20) |
+
+The steps are only about 9% of the whole view, so jump 2 sits near the 5% band and its frames mean little. Our overshoot is 8–43% of the step: our noise is a large share of a step this small.
+
+**Native's brightness diagnosis (one run, no fix):**
+- Set-up: Sponza at bookmark 1, still, our grid, 600 frames, `-CaptureFrames -CaptureField`. The arcade lamp was off, as in Cycles.
+- GI-only mean of red, green and blue (`ddgi.output`, `albedo / π × irradiance`):
+  - native, flat sky: 0.01172;
+  - native, texture sky: 0.01231;
+  - Cycles `cycles-gi.exr` at the same bookmark: 0.001525. That file is everything diffuse except the manifest lights' direct light.
+- So native is 7.7× Cycles with the flat sky and 8.1× with the texture sky. **The texture sky does not explain it:** the two skies differ by 5%.
+- One more number: native's direct diffuse (its G-buffer's `albedo / π × sun`) is 0.0410 against Cycles' direct 0.0140, 2.9× (close to π). So the sun may already arrive brighter on native, and the bounces would compound that.
+- Not settled. Recorded as found.
+
+Not verified: the cause of native's Sponza brightness. Whether a π in native's sun (lux as power) is the cause. The Intel UHD. Two-room's level gap: I measured it at 1.6× (ours 0.666, native 0.413, mean of red, green and blue, lamp in the room), not the 2.5× in the brief. NOTES records native's `1/max(d,1)²` falloff as a possible part, unmeasured.
+Next: the native sun-scale question (π or units in `EvaluateDirectionalLight` against three's and Cycles' sun), for the lead to assign. The fork is unchanged by this follow-up, so the push list doesn't grow.
+
+## 2026-11-08 · T2.17 Bistro exterior's slow GI-on frame · implementer (opus)
+Did: found the cause, which needs a design choice, so I'm reporting options instead of a fix. Branch `m2-t2.17`. Added an opt-in texture cap at load: `LoadSceneOptions.maxTextureSize` and `limitTextureSize` in `apps/viewer/src/scene/load-scene.ts`, used by `viewer-baselines` and `ddgi-batch-cost` through `VITE_DDGI_MAX_TEXTURE_SIZE`. Nothing changes unless it's set. Nothing in `packages/`.
+
+**Cause: the GPU runs out of memory.** three keeps Bistro's 224 textures of 2048² uncompressed, which is 5.11 GB (`renderer.info.memory`). The platform adds 621 MB, so the 6 GB card is full: dedicated memory sits at 5.8 GB, and system memory used by the GPU grows from 119 to 500 MB. Windows then moves memory in and out on every frame that runs the GI update. Evidence from the diagnosis runs (CPU spans, an `nvidia-smi` memory log and the Windows `GPU Adapter Memory` counters):
+- **The time is a wait, not CPU work:** three's CPU recording takes 23-30 ms, the GI update's CPU 0.4 ms, and the wait in `onSubmittedWorkDone` 430-660 ms. The timestamps add up to only 19-22 ms.
+- **Only frames with the GI update pay:** GI shading without the update takes 46-60 ms, the same as GI off.
+- **The texture cap removes it:** at 1024, three's textures take 1.44 GB and VRAM 2.87 GB.
+- **It's not one merge:** M2's platform memory grew from 360 to 621 MB (NOTES), and the frame grew with it. Bisected in a throwaway worktree, since removed: M1's end (49832d9) 103 ms wall, T2.3's merge (e2e8dcd) 286 ms, the branch tip 480-625 ms. Each of those VALID runs was 2 rounds × 10 frames.
+
+Numbers (`viewer-baselines`, 1440p, DDGI only, 5 × 20 frames, VALID, 780-787 MHz; `baselines.csv` `note/t2.17_bistro_frame`):
+
+| | GI-on wall p50 / p95 | GI-on GPU | GI-off wall |
+| --- | --- | --- | --- |
+| before (textures as loaded) | 517 / 690 ms | 21.8 ms | 52.2 ms |
+| after (textures capped at 1024) | 46.9 / 53.4 ms | 19.5 ms | 45.9 ms |
+
+The 27 ms left between wall and GPU time is three's CPU recording of 1,592 meshes. The page records, then waits, so the two add up, and GI off has the same gap.
+
+Calibrated probes (`ddgi-batch-cost` start-up and budget, VALID, 780-810 MHz; `timing.csv` `note/t2.17_bistro_calibration`): 116 as loaded (fixed 1.54 ms; the budget check then failed at 3.13 ms) and 35 capped (fixed 1.03 ms, fit spread 0.91; the page failed its own "only 280 timed frames" check). Memory doesn't explain T2.10's 14-20 probes. Bistro's calibration moves a lot between runs at 780 MHz with a fixed cost of 1-1.5 ms. That's still open.
+
+Verified: RTX 3060 Laptop, headless Chrome 157.0.8103.38. Typecheck and lint clean, 1,136 unit tests pass. `viewer-baselines` and `ddgi-batch-cost` PASS with their default scenes (correctness, `--no-cool-wait`), and `viewer-baselines` on Bistro passes capped and uncapped.
+Not verified: the viewer app with the cap (it isn't wired into the UI). How the capped Bistro looks. The Intel UHD. T2.12 and T2.13 as separate bisect points. Whether removing the doubling slack alone would be enough; probably not, since M1's 360 MB still took 103 ms.
+Next (lead):
+- **Pick a fix.** (a) A per-scene texture cap in the manifest, so Bistro loads at 1024 everywhere, the M5 Pro included. (b) Compressed textures (KTX2/BC7) in `fbx-to-glb.py`, about 1.3 GB at full size. (c) Leave it, record Bistro on 6 GB cards as a known miss, and time Bistro on the M5 Pro.
+- **Platform slack, about 237 MB on Bistro:** the scene vertex buffer is 176 MB for 88 MB used, tracer triangles 272 MB for about 136 MB, nodes 97 MB for 84 MB. Trim to fit once the scene settles. A library change, not done here.
+- **Re-measure every Bistro exterior GPU number with the cap,** including T2.10's 19.2 / 11.2 ms, its fixed cost and its probe counts.
+- **Bistro's calibration:** its spread and its 1-1.5 ms fixed cost at 780 MHz (relevant to T2.18).
+
+## 2026-11-08 · T2.18 review fixes · implementer (opus)
+Did (27a63e3):
+- The batch never goes under Budget v2's floor. It uses the rate the platform last asked about; under a units budget it uses the observed frame rate.
+- The intake ends `CHANGE_INTAKE_MAX_FRAMES` (120) after the latest mark, census or not.
+- Unit tests for the floor, the cap (with a census and with none) and `changeServing`.
+- `ddgi-key-probes-cost` judges the post-step median against the same run's still median (≤ 1.05×) and reports the p95 against the still p95.
+- DECISIONS lead-ruling entry; ddgi.md; CSV rows for 27a63e3.
+Verified (RTX 3060 Laptop, nvidia/ampere, Chrome 157, bench lock, all VALID, about 780 MHz): typecheck, lint, 1,147 unit tests.
+- `ddgi-key-probes-cost` passes: post-step median 2.083 against still 2.112 (0.986×); p95 2.50 against 2.37 (1.05×, reported). Calibrated 152; the first frames list 85-99, above the floor of 81; the day 2.16 / 2.44.
+- `ddgi-key-probes-sponza` turn: view frame 15, field 60.
+- `ddgi-sky-sun-step`: furnished room 11 / 17 (T2.4d's 11 / 17; 11 / 13 earlier today; bar 30).
+- `ddgi-session-recompiles` (Cornell and two-room, groups off and on): 0, control 1. `platform-recompiles`: 0.
+Not verified: the turn with the sun layer on. On this branch `ddgi-key-probes-sponza` has no option for it: `VITE_DDGI_SETTINGS` is applied after the field converges, and `sunLayer` only takes effect at `prepare`. T2.8's `VITE_DDGI_SUN_LAYER` isn't on this branch. Skipped as briefed, with no hook added.
+Next: M3 breakdown: count `gi/direct`'s lit hits in the second count's cost (the first ~12 frames after a turn; NOTES). After the merge onto `m2`, re-run the sun-layer turn with T2.8's `VITE_DDGI_SUN_LAYER=on`.
+
+## 2026-11-08 · T2.18 the second count after a single step · implementer (opus)
+Did: on `m2-t2.18` (from `m2-t2.10`), §4.5's smaller batch now also applies while a single change is taken in: from its mark until a census after its latest mark shows nothing owed. It applies only on volumes where a change outlasts `FAR_RULE_FRAMES` (Sponza, Bistro). Files: `packages/ddgi-core/src/techniques/ddgi/change-intake-batch.ts` (was `continuing-change.ts`) and its test, `ddgi-technique.ts` (`changeServing`, a census frame stamp, the "taking in a change" counter), `settings.ts` (`PROPAGATED_PROBE_RAYS`, `CHANGE_BATCH_MIN_SHARE`). The `ddgi-key-probes-cost` page now judges the 60 frames after the step and reports their first 20 frames pass by pass. Docs: ddgi.md, m2-lights.md, DECISIONS, NOTES. Commits 21f2462 (design), 3c93a29 (adjustment).
+Verified (RTX 3060 Laptop, nvidia/ampere, Chrome 157 headless, all under `bench-lock run`): lint, typecheck, unit tests (one asset-unpack test timed out in the full run under GPU load and passes alone). On 3c93a29: `ddgi-key-probes-cost` VALID with the p95 **failing** (below); `ddgi-key-probes-sponza` turn, `ddgi-sky-sun-step`, `ddgi-schedule-step` steps, `ddgi-session-recompiles` (Cornell and two-room, groups off and on: 0, control 1) and `platform-recompiles` (0) all pass.
+Numbers (rows `t2.18/key_probes_cost/...` in timing.csv, `response/t2.18/...` in response.csv; about 780 MHz):
+- Sponza, the 60 frames after a 30° sun turn: median **1.99 ms** (met), p95 **2.38** (bar 2.2, **missed**). Before (T2.10): 2.44 / 3.12. Still 2.02 at the calibrated 134; the step's batch median 81. Other runs of the same Sponza behaviour: 2.05 / 2.42 (VALID, still 2.05), 1.91 / 2.27 (VALID, still 1.98), 2.05 / 2.45 (NO VERDICT). Day 2.07 / 2.35.
+- Response at 316 a frame: the view within 5% from frame **15** (bar 15; was 13; 14 in the first build's run), the field from **60** (was 36; bar 120), every fine probe traced by 90 (was 60). Furnished room 11 / 13 (base, same day: 11 / 13), two-room 9 / 18, Cornell 5 / 8: unchanged.
+- The first build cut steps everywhere: the furnished room settled at 162 / 124 (bar 30). Hence the adjustment (DECISIONS, NOTES).
+Not verified: Intel UHD; Bistro (no response or step-cost page); a host without `gpuTiming` (no census, so the batch is the hand-out; unit-tested only); the platform's saturation guard seeing fewer, costlier units during a change (not looked at).
+Next:
+- **Lead:** the p95 miss. The first ~12 frames cost more than their rays (`gi/direct` lit hits +30-50%, trace per ray higher; NOTES). A further cut there costs the view's frame-15 bar, so I stopped per the brief. Options are in DECISIONS.
+- **Lead:** the step page's own 2.0 ms median bar sits at the still frames' level (still 1.98-2.05 across runs), so it passes or fails on the calibration's own spread.
+
+## 2026-11-08 · T2.10 M2 measurements on the RTX 3060 Laptop · gpu-tester (opus)
+Did: one run per gate under `bench-lock run`, on `m2-t2.10` (M2's final code). RTX 3060 Laptop (nvidia/ampere), headless Chrome 157.0.8103.38. Test-page additions only, nothing in `packages/`:
+- `ddgi-batch-cost` gained the staging peak and `VITE_DDGI_RAMP_SECONDS`;
+- `ddgi-key-probes-cost` gained `stepFirst60`;
+- `three-adapter-timing` gained `VITE_DDGI_ADAPTER_CHECK=set-transforms`;
+- `ddgi-sponza-lamp-step` gained `VITE_DDGI_UNITS`, and `ddgi-light-grid-cost` a ramp;
+- `tools/gpu/flatten-to-csv.ts` writes rows for pages without a to-csv.
+Rows: `timing.csv`, `response.csv`, `baselines.csv`, `shading.csv`, `three-composite.csv`, `flicker.csv`, `bvh.csv`, and the new `checks.csv`. Prefixes are `t2.10/...` and `batch_cost/...`, with a `note/t2.10_*` row.
+
+**Flag: the clock.** WebGPU runs held the RTX at 780-830 MHz under load. Only the saturated composite page reached 1,370 MHz, and native reached 1,650 MHz at the same hour. Chrome 156 runs on 11-06 read 1,800-1,900 MHz. Details are in NOTES. Everything below is VALID by the clock rule, but at about 0.45× the clock of M1's numbers. Budget v2 calibrates to that clock: Sponza gets 154 probes a frame, against T2.2's 640.
+
+| Target / owed item | Number | Verdict |
+| --- | --- | --- |
+| Change shows next frame | How far frame 1 moves the view, as a share of the brighter level (the full step in brackets). two-room halved 13% (50%), switched on 33% (100%). Cornell 23% (50%), 47% (100%). Sponza lamp at 316 probes: out 34% (52%), back 45% (52%). At the calibrated 85: out 0.1%, back 32%. Sponza sun turn: frame 1 is already within 5.4% of settled (step 41%) | met; **missed** for the Sponza lamp moving out at 85 |
+| Within 5% in ≤ 30 frames | two-room 9 / 18; Cornell 5 / 8; Sponza sun turn 13 (field 36), sun halved 1. Sponza lamp 13 / **31** at 316, **50 / 42** at 85 | met, except the Sponza lamp |
+| Update ≤ 2.0 ms | At load: Cornell 1.94 ms (826 probes), two-room 1.94 (477), Sponza 2.03 (154). After a ramp: Sponza 2.51 ms at 260 probes (the clock fell back). Bistro calibrates to **14-20 probes**, 1 after a ramp; its fixed cost is about 2 ms | met at load; **Bistro broken** |
+| Sampling ≤ 1.0 ms (1440p) | Default path 0.714 ms (1,380 MHz). T1.6's hello-forward Cornell case 1.65 ms at 780 MHz (0.86 ms scaled to 1,500 MHz; was 0.905) | met on the default path |
+| ≥ 32 lights, no recompiles | 4,096 lights: 0. Session on Cornell, two-room, Sponza (groups off and on) and Bistro (groups on): 0, control 1 | met |
+| Adapter ≤ 0.2 / 0.5 ms | Sponza 0.052 / 0.059 ms mean; Bistro 0.091 / 0.103 ms | met |
+| Whole frame, 1440p, viewer path (GPU ms, p50 / p95, GI on vs off) | Cornell 4.92 / 5.06 vs 1.02 / 1.02. two-room 7.64 / 8.01 vs 2.82 / 2.83. Sponza 21.07 / 21.28 vs 8.92 / 8.94 (GI per fragment adds 10.1 ms). Bistro 19.2 / 20.3 vs 11.2 / 12.0; **Bistro wall time 545 / 683 ms with GI, 40 / 48 off** | recorded |
+| M1 still checks | Leak 0.84% (thin wall 0.59%, closed door 0.06%). Furnace 0.4992. Accuracy: Cornell +5.66%, two-room +5.25%, Sponza raw +23.14% (M1 +23.07%). Fields within 0.17% of M1, 0 marks. Flicker: Cornell 0.074 / 0.33%, two-room 0.010 / 0.035%, Sponza 0.025 / 0.11% | pass |
+| Light grid, 2,048 cells ≤ 0.1 ms | 0.232 ms; 0.198 ms with a ramp (still about 800 MHz) | **missed** |
+| `sponza-candles` set-up ≤ 2× `sponza` | 11.85 s vs 7.41 s = 1.60× | met |
+| `setTransforms` × 10,000 in three frames | 1.40 ms median, p95 2.2 | met |
+| Update in the 60 frames after Sponza's turn | Median 2.44 ms, p95 3.12, at 136 probes. 51 of 52 timed frames are over 2 ms; still over at frame 59 | **over the budget** |
+| T2.14 check 1, cold Cornell ≤ 1.5 s | Branch 1.439 s; pre-T2.14 `m2` (4468ddf) 1.326 s | met |
+| Bistro groups on, leak, light groups (cool GPU) | Pass in 35 s, 42 s and 27 s; no page blocked | pass |
+| H-PLOC vs tinybvh, Bistro exterior | GPU trees alone 0.981×; after the swap 1.016× | recorded |
+| Bistro `scene_copy_cpu_ms` × 3 | 2,723 / 1,862 / 1,636 ms, median 1,862 | recorded |
+| Staging-buffer peak | Sponza 197.1 MB, Bistro 130.0 MB | recorded |
+
+Not verified:
+- Bistro response: no page measures it.
+- Any timing with the clock up, except the composite page.
+- The cold start ran with a fresh browser profile, but the driver's shader cache was not cleared, and other processes (java) used about 18% of the CPU.
+- Intel UHD: skipped, as briefed.
+- The sweep's look: left to Dennis.
+
+Next:
+- **Lead:** the clock flag, since it decides every GPU-bound verdict.
+- **Lead:** Bistro's fixed update cost (`ddgi/trace` takes 1.2-1.5 ms at 16 probes). Bistro's GI-on wall time of 545 ms is CPU-side and not the adapter; its cause is not found.
+- **Lead:** the 60 frames after a step are over budget, which per TASKS means §4.5's second count is built for single steps.
+- **Missing:** a page that times the default composite path with the update running in the same frame. The viewer shades GI per fragment with MSAA (NOTES).
+- **Missing:** a Bistro response page.
+
+## 2026-11-08 · T2.10 response times, ours and native · native-runner (opus)
+Did: recorded the same manifest motions on both sides, 3 runs each, and measured them with one script. These are records, not gates (Dennis 2026-11-05).
+- `tools/native/response.ts` now also reads our viewer recordings (rows `response/ours/...`). It measures sweeps too and takes `--against`, `--commit` and `--device`. `response.test.ts` covers the two new measures.
+- `viewer-recording` page: `VITE_DDGI_SETTLE_KEY` (hold the lamp at a key for 3,600 frames, then record 61, no pictures; the same as native's `-SettleKey`), `VITE_DDGI_TAG`, and the browser in `recording.json`.
+- **"Settled" means the same on both sides:** the lamp held at the new place for 3,600 frames, then the mean of the next 61 frames.
+- **The sweep measure:** the lamp goes out and back along one path, so at time t and at the end minus t it is in the same place. A view running d frames late reads on the way back what it read on the way out 2d frames later. The lag is half the shift that best lines the two halves up. Against the other side, each curve is taken as a share of its own start.
+
+Verified: RTX 3060 Laptop. Native on Vulkan, fork 350f9de, our 1,071-probe grid (Sponza 19,425), run in the t27 worktree. Two-room used the flat sky, as T2.7 did; Sponza used `-Sky texture`, the sky file itself. Ours in headless Chrome 157 at c7af54c, at the viewer's 2 ms budget (two-room 455–482 probes a frame, Sponza 78–137), with frames 16.67–16.71 ms apart on average. Every run went through the bench lock. Native's lamp is 0.0000 cm from the manifest on every frame. Re-measured, native's T2.7 step rows come out the same (116/116/117). Measuring native by the mean of red, green and blue (our meter's weighting) instead of luminance gives the same frames. Tests, typecheck and lint pass.
+
+Numbers (`response.csv`, label `t2.10`; frames at 60 a second; native / ours, the 3 runs, median in brackets):
+
+| motion | measure | native | ours |
+| --- | --- | --- | --- |
+| two-room step, lamp back into the room | first frame within 5% of settled | 116, 116, 117 (116) | 14, 15, 15 (15) |
+| two-room step, lamp out (jump 1) | first frame within 5% | never in 180; +135% at frame 180 | 145, 161, 166 (161); +4.5–4.8% at 180 |
+| two-room step, lamp out (jump 3) | first frame within 5% | never; +134% at 180 | 156, never, never; +4.7–5.5% at 180 |
+| two-room sweep | lag behind its own path, frames | 58.40, 58.40, 58.45 (58.4, 0.97 s) | 29.40, 30.10, 28.45 (29.4, 0.49 s) |
+| two-room sweep | way out against way back, share of mean | 41.1%, 41.1%, 41.1% | 25.5%, 26.1%, 25.5% (25.5%) |
+| two-room sweep | ours against native: mean / largest gap, points of start; shift | | 10.0 / 22.1, 10.1 / 21.8, 10.8 / 22.3; ours 27.0, 26.3, 27.8 frames ahead |
+| Sponza step (arcade lamp) | size of the step in the view | 0.0–0.8% | 8.0–9.6% |
+| Sponza step, jump 1 | first frame within 5% | 1, 1, 1 (the step is inside the band) | 18, 13, 13 (13) |
+
+Found, not fixed:
+- **Our lamp-out tail.** Measured against the end of its own 3 s hold, our lamp-out jump is within 5% by frames 37–44. Against the long-hold level it stays about 4.5% above settled until frame 145 or later. The last few percent close slowly.
+- **Sponza is not like for like.** Our GI-only view mean is about 9× below native's (0.0016 against 0.0148), and our GI-only pictures are nearly black, while native's view is lit by the sun's bounce. So the lamp is about 10% of our view and under 1% of native's, and native's 5% measures say nothing here. The diagnosis stopped at the pictures (one look); no cause was found.
+
+Not verified: the Intel UHD. A watched (non-headless) Chrome. Native D3D12. Whether our Sponza GI level is right (above). Dennis judging the sweep side by side. Recordings stay git-ignored: ours in t210's `bench/recordings/viewer`, native's in t27's `native/build/recordings`.
+Next: the cause of our dark Sponza GI-only view against native (lead to assign). A Sponza step measured over a region near the lamp (the meter supports regions; response.ts doesn't yet). The fork push is still held for Dennis.
+
 ## 2026-11-08 · T2.16 review and merge · lead (opus)
 Did: reviewed T2.16 and merged it into `m2`.
 - Updated the tables in `tools/reference/README.md` for the six re-rendered views: samples, parts, minutes and noise. Removed the stale dark-room row.
@@ -66,6 +302,32 @@ Verified:
 
 Not verified: the Intel UHD after the merge; "62 of 62" hover help (no test counts it; the reviewer spot-checked 21); Dennis driving the viewer by eye.
 
+## 2026-11-08 · T2.8 part 2 review fixes · implementer (opus)
+Did: the Opus review's notes on the compare page.
+- **Real frame time** (`tools/gpu/pages/viewer-recording`): the JPEG encode ran inside the paced loop (each picture frame about 31 ms, the next 5 ms). Picture frames now only snapshot the canvas (`createImageBitmap`); the JPEGs are encoded after the run. Frames are paced on a fixed 60 Hz schedule, so a late frame doesn't push the rest back. `recording.json` records `frameIntervalMs` (median, mean, largest, after picture frames, others, how many over 25 ms). No ThreeGI frame-time option was used: the viewer gives none, and none was added.
+- **Correction to the entry below:** only the motion's clock is fixed (frame k = k / 60 s on both sides). Our DDGI ages its histories by the real time between frames; native's blend works per frame. The comments now say so (`recording.ts`, `compare-page.ts`, the recorder page, the viewer README).
+- `compare-shot.ts`: the sync check reads the frame each side's picture file is named after, and fails if the two differ by more than one picture step (4 frames). It also fails if a side's picture isn't the latest at or before its frame.
+- `compare-page.ts`:
+  - a picture that fails to load says "missing" in its side's readout and shows nothing;
+  - the frame readout uses `frameAt` with the recording's own frame rate;
+  - the empty `append()` is removed and the misplaced comment fixed;
+  - the note no longer writes "2 ms" (each caption gives the recording's own budget);
+  - when the grids differ, the captions say so (`gridNote` in `recording.ts`, tested).
+- `device` falls back to vendor, architecture and device when the description is empty.
+- **The sweep pair uses different probe grids:** native's sweep used its own `cells` grid (918 probes), ours DDGI's (1,071). Only the step has a native run on our grid (`-ddgi-run1`). A native sweep on our grid is T2.10's.
+Verified (RTX 3060, headless Chrome, under the lock): re-recorded both.
+- Sweep (434 probes a frame): frame interval median 17.3 ms, mean 16.67, largest 44.5; 10 of 624 over 25 ms. After picture frames the mean is 16.69 ms, others 16.66.
+- Step (434 a frame): median 17.8 ms, mean 16.68, largest 41.9; 15 of 720 over 25 ms. After picture frames 17.33 ms, others 16.46.
+- `compare-shot` passes on both. The sweep shows frame 180 with pictures from frame 180 on both sides, and the grid note in its captions. The step shows frame 217 with pictures from frame 216 on both sides, and no grid note. I looked at both screenshots.
+- lint, typecheck and tests pass. `bench-lock.test.ts` failed once in the full run (its GPU clock sampling, while another lane's Cycles render held the RTX) and passed alone.
+Not verified: the median sits above 16.7 ms because the browser's animation frame comes a few ms after the timer; the schedule keeps the mean at 1/60 s. The few long frames (up to 45 ms) were not traced to a cause.
+
+## 2026-11-08 · T2.8 part 2: the native compare page (check 3) · implementer (opus)
+Did: merged `m2-t2.7` into `m2-t2.8` (PROGRESS kept both sides, 120 = 118 + 119 − 117; the `native/rtxgi-ddgi` submodule left as the merge set it, not updated). New `apps/viewer/compare.html` (`src/compare/compare-page.ts`): our recording and native's of the same motion played together on the motion clock (frame k = k / 60 s), side by side, both GI-only brightness curves on one plot (relative to each start, or as measured), scrub bar, play/pause, speed, click-to-seek on the plot, hover help, and the note that native traces with hardware ray tracing and matching it is not a requirement. The dev server lists recordings at `/__recordings` (vite.config.ts: `native/build/recordings` and `bench/recordings/viewer`, or `DDGI_NATIVE_RECORDINGS` / `DDGI_VIEWER_RECORDINGS`). Ours come from `tools/gpu/pages/viewer-recording` (the viewer's own code: GI only, the meter's reading over the whole view each frame, native's fixed clock and 600-frame start, a JPEG every 4th frame) and `tools/native/save-viewer-recording.ts`. `apps/viewer/scripts/compare-shot.ts` checks the page headless. Pure parts (`recording.ts`, `pairs.ts`) unit-tested. `/bench/recordings/` git-ignored.
+Verified (RTX 3060, headless Chrome, under the lock): recorded two-room `light-sweep` (625 frames, 157 pictures, 400 probes a frame) and `light-step` (721 frames, 181 pictures, 466 a frame). The page loaded each with native's (`two-room-light-sweep`, `two-room-light-step-ddgi-run1`, copied from the t27 worktree into this one's git-ignored `native/build/recordings`), played 3 s and 3.6 s, and both sides stood at the same frame (180, 216) with pictures from the same frame; I looked at both screenshots: the lamps sit at the same place, the sweep's curves nearly overlap (88.1% and 88.4% of their starts at 3 s), and on the step ours falls within about 0.2 s while native, updating every probe at a fixed hysteresis, is still at 71% at 3.6 s. lint, typecheck, tests (1,132) pass.
+Not verified: by Dennis's eye; the Intel UHD; the page in a production build (it needs the dev server's recordings list). Native's pictures are the full picture (its recordings are `view: full`), ours GI only; the captions say so, the curves are GI-only on both.
+Next: native's GI-only pictures (`-View indirect`) if Dennis wants the pictures like for like; more scenes (Sponza's day) once both sides have them.
+
 ## 2026-11-08 · T2.8 viewer controls for M2 (checks 1, 2, 4; check 3 waits for T2.7) · implementer (opus)
 Did (branch `m2-t2.8`, worktree `webgpu-ddgi-m2-t28`):
 - Viewer panel sections (`apps/viewer/src/ui/lighting-controls.ts`, `src/lighting/`): Lights (choose from a list or click a marker; three's `TransformControls` to move, and turn spots; on/off, brightness, colour, reach, cone, soft edge, shadows, GI group, put back), Light motions (play/stop the manifest's `light-sweep`/`light-step`), Time of day (hour, day, a 10-second day; turns DDGI's sun layer on, DDGI restarts once; `solar-position.ts`), Light groups (off/2/4, colour and dimmer per group and for the sky), Response meter (pick a region, measure a jump of a motion in GI only, plot, CSV). Every control has hover help (`help-text.ts`). Stats show `recompiles`. Links: `motion=`, `tod=hour,day`, `groups=`, `reach=`.
@@ -77,6 +339,33 @@ Verified (RTX 3060, Chrome headless, correctness runs): `viewer-lighting`: the s
 Not verified: Dennis driving it by eye (check 4's second half); the gizmo by mouse (headless runs pick by the list); VXGI and the upscaler don't draw the markers; Sponza's sun turn with the layer on misses (below).
 Numbers: Sponza key-probe sun turn, sun layer on (`ddgi-key-probes-sponza`, `VITE_DDGI_SUN_LAYER=on`, 3 runs): view within 5% for good from frames 16, 16, 13 (bar 15), field 36; layer off the same day 12, 11, 12. One diagnosis (the per-layer firefly clamp: clamp off still 15), no cause found, so no fix attempt (DECISIONS, for the lead).
 Next: the sun-layer excess near the view (a task of its own, DECISIONS); T2.8 check 3 (the native compare page) after T2.7; a `userData.giRange` if the lead wants GI's candles unranged; `sponza-candles`' calibration read 1-9 probes a frame in the viewer (fixed part 1.9-2.2 ms measured while three drew), for T2.10 to look at.
+
+## 2026-11-08 · T2.7 review fixes · native-runner (opus)
+Did: the fork's clock is now frame / `app.motionFrameRate` in double, not a float step (3d6cd8e). `motion.ts check` checks fixed-clock runs at frame / 60, worked out in TS (test added). New `play.ps1` options: `-Log` (a visible window on the wall clock, its own `-log` folder) and `-GridRule ddgi`. NOTES and README give native's blend rule, and warn that `lamp_halved` is a dimming, not the same event. **Found and fixed a texture-sky bug** (350f9de): each harness pass has its own descriptor set, so only the G-buffer had the sky images and probe misses read 0. The reviewer's lights-buffer cause was checked: not it, reverted.
+Verified (RTX 3060 Laptop, Vulkan, bench lock):
+- the watched `-Log` sweep: 0.0000 cm over 2,401 frames (14.5 s, frames 6 ms apart);
+- the fixed sweep: 0.0000 cm at frame / 60, logged clock within 0.033 µs;
+- the Sponza day re-recorded: sun 0.00000° off; dawn GI 6e-4, where before the fix it was 2e-8;
+- open-ground's probe GI with the texture sky is within 0.14% of its flat equivalent (it was 0 before);
+- `sky-check` still ok;
+- two-room default against c7d0162: 0.16–0.19%, the same as c7d0162 against itself;
+- tests, typecheck and lint pass.
+Numbers: `response.csv` `response/native/light-step/grid_ddgi/run1-3/*` (1,071 probes, settled from 3,600-frame holds). Lamp back: within 5% at frames 116–117. Lamp out: 135% above settled at frame 180. The old cells-grid rows got `grid_rule,cells` rows.
+Correction: the T2.7 entry below said open-ground had no GI with either sky; that was the descriptor bug plus a misread capture. Its Sponza day had no sky light in the probes; it is re-recorded (350f9de).
+Next: the fork push waits for Dennis. Recordings stay git-ignored.
+
+## 2026-11-08 · T2.7 native harness: motions, texture sky, animated sun · native-runner (opus)
+Did: fork branch `m2-t2.7` (`Motion.h/.cpp`; `GetSkyRadiance` in `Descriptors.hlsl` for probe, G-buffer and path-tracer misses; `LightingConsts`' padding carries the sky image; recording in `main.cpp`); `tools/native/motion.ts`, `response.ts`, `sky-check.ts`, `motion.test.ts`; `play.ps1 -Motion -Record -Sky -SettleKey -CaptureField`. All opt-in. Time: a fixed 1/60 s a frame when recording, the wall clock in a watched window (NOTES).
+Verified (RTX 3060 Laptop, Vulkan; built with VS 2022 17.10 / MSVC 19.40.33811, Windows SDK 10.0.22621.0, Vulkan SDK 1.3.283.0, CMake 3.24.0):
+- check 1: `play.ps1 -Scene two-room -Motion light-sweep -Record` puts the lamp 0.0000 cm from `motionState` over all 625 frames (`motion.ts check`); the step also 0.0000 cm over 721 frames, 3 runs.
+- check 2: `sky-check.ts` on open-ground: the G-buffer sky matches the file sampled in the same direction (mean 0.37/255, all pixels within 1.5); a mirrored map would be 38.8 off; below the horizon is black (the flat sky wasn't).
+- check 3: Sponza `-Motion time-of-day` (T2.4d's day): the sun is 0.00000° from the path on all 601 frames; 41 sky images blended; the GI-only mean rises from 2e-8 at 5° to 0.0125 at noon and falls again.
+- check 4: default config against c7d0162, `play.ps1 -Clean -CaptureFrames 600`: two-room 0.13–0.20% mean relative error (c7d0162 against itself 0.18–0.20%), open-ground 0.16% (0.29%); looked the same by eye. `pnpm typecheck` and the motion tests pass.
+Numbers: `bench/results/response.csv`, `response/native/light-step/run1-3/*` (558 rows). Lamp back into the room: within 5% from frame 131–132, every run. Lamp out: still 60% above settled at frame 180 (11x in its own frame). Settled levels come from 3,600-frame holds. The runs agree to 0.1%.
+Not verified: D3D12 (it builds; texture sky and recording are Vulkan only); the sky's effect on native probe GI (open-ground gives 0 GI with either sky, a pre-existing problem, NOTES); a watched wall-clock window (only recorded runs).
+Recordings (git-ignored, `native/build/recordings/`): `two-room-light-sweep`, `two-room-light-step-run1..3`, `sponza-time-of-day`. Each folder has `recording.json`, `frames.csv`, PNGs every 4th frame and a 15 fps `video.mp4`. The format is in `tools/native/README.md`, "Motions and recordings".
+Next: T2.8's compare page reads those folders; the lead decides whether to commit them (71 to 244 MB each) or the mp4 and CSV alone. The open-ground zero-GI cause goes to T2.10 or a native follow-up. Push the fork branch `m2-t2.7`.
+
 ## 2026-11-08 · T2.13 review and merge · lead (opus)
 Did: The Opus review passed packing (done-when 2) and found the main-thread bar (done-when 1) missed. Under the timebox (one diagnosis, one fix attempt) I merged T2.13 as a known miss, since it is a clear gain. I fixed the review's doc notes on the branch (b2b6720):
 - `m3-moving.md`'s upload budget gets an as-built note;

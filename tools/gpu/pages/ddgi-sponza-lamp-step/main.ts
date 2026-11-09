@@ -22,6 +22,12 @@
  * frames at 4,096 probes, then the fixed 0.97 until the view stops moving,
  * as T2.4b/c's Sponza pages converge).
  *
+ * `VITE_DDGI_UNITS=316` (T2.10) runs the step at that fixed batch instead of the
+ * calibrated one (still calibrated and reported): the calibration follows the
+ * GPU's clock, and on the RTX laptop a run that isn't GPU-bound calibrates at
+ * about 780 MHz (85 probes against T2.4d's 548). 316 is T2.4b's VALID
+ * calibration, the batch `ddgi-key-probes-sponza` uses.
+ *
  * Manual (needs the Sponza download):
  *   node tools/reference/bench-lock.ts run --no-cool-wait --what "T2.1 Sponza lamp step" -- pnpm test:gpu --gpu nvidia --filter ddgi-sponza-lamp-step
  */
@@ -37,6 +43,8 @@ import { yieldToCallbacks } from '../ddgi-shared/viewer-scene.ts';
 import { runThreePage } from '../three-shared/harness.ts';
 
 const BUDGET_MS = 2;
+/** `VITE_DDGI_UNITS`: a fixed batch for the step (see the file comment); unset: the calibrated batch. */
+const FIXED_UNITS = Number((import.meta.env as Record<string, unknown>).VITE_DDGI_UNITS) || null;
 const WARM_UP_PASSES = 4;
 const CALIBRATION_MAX_FRAMES = 600;
 const TOLERANCE = 0.05;
@@ -123,7 +131,9 @@ await runThreePage(async ({ device, data, log: logLine }) => {
 
     // The step itself, at the calibrated batch.
     const { test, place } = await start(device, 'sponza lamp step', 0);
-    const units = await calibrate(test);
+    const calibratedUnits = await calibrate(test);
+    const units = FIXED_UNITS ?? calibratedUnits;
+    results.calibratedUnits = calibratedUnits;
     const probes = test.scene.probeCount;
     const fullUpdates = test.scene.ddgi.settings.changeUpdates;
     const framesForEveryProbe = (probes * fullUpdates) / units;

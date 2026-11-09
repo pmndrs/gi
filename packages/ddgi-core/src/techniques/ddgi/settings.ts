@@ -367,8 +367,8 @@ export const KEY_WAIT_FRAMES = 30;
 /**
  * Changes continue (§4.5's second count, T2.4d) once `ddgi/mark` has run in
  * this many frames in a row: a sun moving through a day, a lamp swinging, a
- * door swinging. A single step is not a continuing change: its response is
- * judged at the calibrated count.
+ * door swinging. A single step counts only on a volume that takes a change
+ * in over more than FAR_RULE_FRAMES anyway (T2.18, change-intake-batch.ts).
  */
 export const CONTINUING_CHANGE_FRAMES = 30;
 
@@ -384,11 +384,34 @@ export const CONTINUING_CHANGE_FRAMES = 30;
 export const CONTINUING_CHANGE_GAP_FRAMES = 4;
 
 /**
- * While changes continue, the batch is at least this share of the hand-out,
- * whatever the rays say: a guard against a census that reads oddly, not a
- * tuned number (the day on Sponza needs about 0.63).
+ * The longest a single change counts as being taken in, in frames after its
+ * latest mark (change-intake-batch.ts, T2.18): 120, the frames T2.4c gives
+ * the field to come within 5% (2 s at 60 Hz). Normally the census ends the
+ * intake much sooner, once nothing is owed; the cap is for a frame without
+ * a census (no GPU timings) and for owed work that never quite runs out.
  */
-export const CONTINUING_CHANGE_MIN_SHARE = 0.5;
+export const CHANGE_INTAKE_MAX_FRAMES = 120;
+
+/**
+ * While a change is taken in (§4.5's second count; change-intake-batch.ts),
+ * the batch is at least this share of the hand-out, whatever the census
+ * says: a guard against a census that reads oddly, not a tuned number (the
+ * day on Sponza needs about 0.63, a sun turn's first frames about 0.56).
+ */
+export const CHANGE_BATCH_MIN_SHARE = 0.5;
+
+/**
+ * What one fine probe `ddgi/propagate` passes a key's change to costs, in
+ * traced rays, for the batch while a change is taken in. Propagation reads
+ * up to 8 key tiles per layer and traces nothing, but it runs in every frame
+ * in which keys take a change in, on top of the list. Measured on Sponza
+ * after a 30° sun turn (RTX 3060, about 800 MHz, T2.10's VALID run): the
+ * pass rose 0.053 ms over a still frame for a median 926 probes propagated,
+ * 5.7e-5 ms each, while each extra ray traced cost `ddgi/trace` 2.3e-5 ms
+ * (0.22 ms for 9,408 more rays at the same batch): about 2.5 rays a probe.
+ * Both scale with the GPU's clock, so the ratio holds as it moves.
+ */
+export const PROPAGATED_PROBE_RAYS = 2.5;
 
 /**
  * The camera weight's distance falloff, in probe spacings (m2-lights.md
@@ -491,6 +514,12 @@ export const AUTO_MIN_FRONT_FACE_SHARE = 0.02;
  * needs 81 a frame, Cornell 8.
  */
 export const FLOOR_SWEEP_SECONDS = 4;
+
+/**
+ * The frame rate the floor assumes before frames carry a `deltaTime`, as the
+ * platform's Budget v2 does (work-budget.ts).
+ */
+export const FLOOR_ASSUMED_FRAMES_PER_SECOND = 60;
 
 /**
  * ...but `auto` never asks for more than this many times the calibrated batch

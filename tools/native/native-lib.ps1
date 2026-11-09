@@ -268,6 +268,10 @@ function ConvertTo-Vec([object[]]$Values, [int]$Digits = 4) {
 #                 ddgi.volume.0.probeVariability.skipConverged=0).
 #   ProbeSpacing: > 0 replaces the manifest probe spacing (timing sweeps over the probe count)
 #   GridRule    : 'cells' (default) or 'ddgi' (our DDGI's floor(size / spacing) + 1 grid), see Get-VolumeGrid
+#   SkyTexture  : (fork, T2.7) the shared sky file (scenes/sky/<id>.exr) for every missed ray, instead of
+#                 its flat equivalent. Empty (default): the flat sky, as before. Vulkan only.
+#   KeepLights  : labels of lights to keep even at intensity 0 (a motion's target: Sponza's arcade lamp)
+#   AppLines    : extra app.* ini lines (fork options: the motion and recording keys, see Motion.h in the fork)
 function New-HarnessIni {
     param(
         $Manifest,
@@ -285,7 +289,10 @@ function New-HarnessIni {
         [int]$WarmupFrames = 300,
         [switch]$UpdateEveryFrame,
         [double]$ProbeSpacing = 0,
-        [ValidateSet('cells', 'ddgi')][string]$GridRule = 'cells'
+        [ValidateSet('cells', 'ddgi')][string]$GridRule = 'cells',
+        [string]$SkyTexture = '',
+        [string[]]$KeepLights = @(),
+        [string[]]$AppLines = @()
     )
     $root = Get-RepoRoot
     $harness = "$root/native/rtxgi-ddgi/samples/test-harness"
@@ -344,6 +351,7 @@ function New-HarnessIni {
         $ini.Add('app.autoBenchmark=1')
         $ini.Add("app.benchmarkWarmupFrames=$WarmupFrames")
     }
+    foreach ($line in $AppLines) { $ini.Add($line) }
     $ini.Add('')
     $ini.Add('# shader compilation')
     $ini.Add('shaders.warningsAsErrors=1')
@@ -361,12 +369,22 @@ function New-HarnessIni {
     $ini.Add("scene.activeCamera=$($Camera - 1)")
     $ini.Add("scene.skyColor=$skyColor")
     $ini.Add("scene.skyIntensity=$(Format-Number $skyIntensity 6)")
+    # Fork option (T2.7): the sky file itself for every missed ray. skyColor stays as the fallback (D3D12).
+    if ($SkyTexture) { $ini.Add("scene.skyTexture=$SkyTexture") }
     $ini.Add('')
     $ini.Add('# scene lights (directional: lux as power; point and spot: candela as power, range as radius)')
 
     # A light at intensity 0 is off until a manifest motion plays it (Sponza's arcade lamp, T2.1):
     # left out, as the viewer leaves it out, so an off lamp costs the harness's shading nothing.
-    $lights = @($Manifest.lights | Where-Object { $_.intensity -gt 0 })
+    # A motion's target is kept (KeepLights), since the motion turns it on.
+    $lights = @($Manifest.lights | Where-Object { $_.intensity -gt 0 -or ($_.PSObject.Properties['label'] -and $KeepLights -contains $_.label) })
+    # A range of 0 means "no cut-off" in three (the manifest's convention, Sponza's arcade lamp). The harness
+    # reads the radius as a hard cut-off: Lighting.hlsl returns 0 beyond it, so a radius of 0 lit nothing,
+    # in the probe trace too (T2.10). It also applies the same window as three's ranged lights,
+    # (1 - (d / radius)^4)^2. Ten times the probe volume's diagonal keeps that window above 0.9998
+    # anywhere in the scene, which is as close to "no cut-off" as a finite radius gets.
+    $volumeDiagonal = [math]::Sqrt((@($Manifest.volume.size) | ForEach-Object { [double]$_ * [double]$_ } | Measure-Object -Sum).Sum)
+    $unlimitedRadius = 10 * $volumeDiagonal
     for ($i = 0; $i -lt $lights.Count; $i++) {
         $light = $lights[$i]
         $label = if ($light.PSObject.Properties['label']) { $light.label } else { "$($light.type)-$i" }
@@ -382,14 +400,14 @@ function New-HarnessIni {
                 $ini.Add("scene.lights.$i.type=1")
                 $ini.Add("scene.lights.$i.position=$(ConvertTo-Vec $light.position)")
                 $ini.Add("scene.lights.$i.direction=$(ConvertTo-Vec $light.direction)")
-                $ini.Add("scene.lights.$i.radius=$(Format-Number $light.range)")
+                $ini.Add("scene.lights.$i.radius=$(Format-Number $(if ([double]$light.range -gt 0) { $light.range } else { $unlimitedRadius }))")
                 $ini.Add("scene.lights.$i.umbraAngle=$(Format-Number ($light.outerConeDeg * [math]::PI / 180) 6)")
                 $ini.Add("scene.lights.$i.penumbraAngle=$(Format-Number ($light.innerConeDeg * [math]::PI / 180) 6)")
             }
             'point' {
                 $ini.Add("scene.lights.$i.type=2")
                 $ini.Add("scene.lights.$i.position=$(ConvertTo-Vec $light.position)")
-                $ini.Add("scene.lights.$i.radius=$(Format-Number $light.range)")
+                $ini.Add("scene.lights.$i.radius=$(Format-Number $(if ([double]$light.range -gt 0) { $light.range } else { $unlimitedRadius }))")
             }
         }
     }

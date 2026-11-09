@@ -16,3 +16,4 @@ Thumbs.db
 /bench/references/
 __pycache__/
 /tools/emsdk/
+/bench/recordings/

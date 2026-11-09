@@ -42,6 +42,9 @@
  * Also measured: how many frames until a static object's first move reaches
  * GI without `markChanged` (the walk's detection latency), and with it.
  *
+ * `VITE_DDGI_ADAPTER_CHECK=set-transforms` (T2.10) times `setTransforms` with
+ * 10,000 transforms inside these real frames instead (set-transforms.ts).
+ *
  * A timing run takes the bench lock:
  *   node tools/reference/bench-lock.ts run --what "T1.7 adapter timing" -- pnpm test:gpu --gpu nvidia --filter three-adapter-timing
  */
@@ -58,9 +61,14 @@ import { sceneLighting } from '../../../../apps/viewer/src/render/scene-lighting
 import { platformSkyEnvironment } from '../../../../scenes/src/sky/sky-image.ts';
 import type { EnvironmentDescriptor } from '../../../../packages/ddgi-core/src/platform/contract/scene.ts';
 import { runThreePage } from '../three-shared/harness.ts';
+import { addMovingInstances, SET_TRANSFORMS_INSTANCES, SET_TRANSFORMS_TARGET_MS, timeSetTransforms } from './set-transforms.ts';
 
 /** `VITE_DDGI_ADAPTER_CHECK=still`: the still frames only (the file comment). */
 const STILL_ONLY = (import.meta.env as Record<string, unknown>).VITE_DDGI_ADAPTER_CHECK === 'still';
+/** `VITE_DDGI_ADAPTER_CHECK=set-transforms`: 10,000 moving instances, `setTransforms` timed in real frames (T2.10). */
+const SET_TRANSFORMS = (import.meta.env as Record<string, unknown>).VITE_DDGI_ADAPTER_CHECK === 'set-transforms';
+/** Frames timed in the set-transforms check (after the warm-up frames). */
+const SET_TRANSFORMS_FRAMES = 200;
 const FRAMES = STILL_ONLY ? 300 : 600;
 const WARMUP_FRAMES = 30;
 const BATCH = 200;
@@ -117,6 +125,8 @@ await runThreePage(async ({ device, renderer, data, log }) => {
     camera.position.set(...bookmark.position);
     camera.lookAt(...bookmark.target);
 
+    const instances = SET_TRANSFORMS ? addMovingInstances(scene, manifest.volume.center, manifest.volume.size) : null;
+
     const platform = new GIPlatformImpl(device, { label: `three timing ${sceneId}` });
     const ddgi = platform.addTechnique(new DDGITechnique({ volume: { center: manifest.volume.center, size: manifest.volume.size, spacing: manifest.volume.probeSpacing }, warmUpPasses: 0 }));
     platform.setOutput(ddgi);
@@ -145,8 +155,49 @@ await runThreePage(async ({ device, renderer, data, log }) => {
         renderer.render(scene, camera);
     };
     for (let index = 0; index < WARMUP_FRAMES; index++) {
+        instances?.move(index);
         frame();
         if (index % 8 === 7) await device.queue.onSubmittedWorkDone();
+    }
+
+    if (instances) {
+        // T2.10: every instance slides every frame; each frame's setTransforms call timed (set-transforms.ts).
+        const timed = timeSetTransforms(platform);
+        const sync: number[] = [];
+        const encode: number[] = [];
+        const callsPerFrame: number[] = [];
+        for (let index = 0; index < SET_TRANSFORMS_FRAMES; index++) {
+            instances.move(WARMUP_FRAMES + index);
+            const callsBefore = timed.calls.length;
+            frame();
+            callsPerFrame.push(timed.calls.length - callsBefore);
+            sync.push(threeGI.timings.syncMs);
+            encode.push(threeGI.timings.encodeMs);
+            if (index % 8 === 7) await device.queue.onSubmittedWorkDone();
+        }
+        const bigCalls = timed.calls.filter((call) => call.transforms >= SET_TRANSFORMS_INSTANCES);
+        const callMs = bigCalls.map((call) => call.ms);
+        data.setTransforms = {
+            instances: SET_TRANSFORMS_INSTANCES,
+            frames: SET_TRANSFORMS_FRAMES,
+            callsWithAllInstances: bigCalls.length,
+            callsPerFrame: summary(callsPerFrame),
+            transformsPerCall: summary(timed.calls.map((call) => call.transforms)),
+            callMs: summary(callMs),
+            syncMs: summary(sync),
+            encodeMs: summary(encode),
+            targetMs: SET_TRANSFORMS_TARGET_MS,
+        };
+        data.warnings = warnings;
+        log(
+            `setTransforms with ${SET_TRANSFORMS_INSTANCES} transforms in real frames (three renders every frame, DDGI at 2 ms): ${bigCalls.length} calls, median ${median(callMs).toFixed(3)} ms, p95 ${percentile(callMs, 0.95).toFixed(3)}, mean ${summary(callMs).mean.toFixed(3)} (bar ${SET_TRANSFORMS_TARGET_MS}); ` +
+                `the adapter's whole sync median ${median(sync).toFixed(3)} ms, encode ${median(encode).toFixed(3)} ms`,
+        );
+        threeGI.dispose();
+        platform.dispose();
+        assert(bigCalls.length >= SET_TRANSFORMS_FRAMES * 0.9, `only ${bigCalls.length} of ${SET_TRANSFORMS_FRAMES} frames sent all ${SET_TRANSFORMS_INSTANCES} transforms in one call`);
+        assert(median(callMs) <= SET_TRANSFORMS_TARGET_MS, `setTransforms median ${median(callMs).toFixed(3)} ms in real frames, over ${SET_TRANSFORMS_TARGET_MS} ms`);
+        return;
     }
 
     const measureFrames = async (beforeFrame: (index: number) => void) => {

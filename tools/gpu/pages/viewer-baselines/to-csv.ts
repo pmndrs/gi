@@ -65,7 +65,7 @@ interface PageData {
     hasTimestamps: boolean;
     userAgent: string;
     noisyCvThreshold: number;
-    options: { sampleFrames: number; frameRounds: number; bakeRuns: number; width: number; height: number };
+    options: { sampleFrames: number; frameRounds: number; bakeRuns: number; width: number; height: number; maxTextureSize?: number | null };
 }
 
 interface RunJson {
@@ -142,6 +142,8 @@ function metricRows(data: PageData): { rows: MetricRow[]; problems: Array<{ scen
     // The view size goes into the file, so a 1440p run can be told from a 720p one.
     add('all', 'view/width_px', data.options.width);
     add('all', 'view/height_px', data.options.height);
+    // Model textures scaled down at load (T2.17); absent when they were kept as the files have them.
+    if (typeof data.options.maxTextureSize === 'number') add('all', 'view/max_texture_px', data.options.maxTextureSize);
     for (const row of data.rows) {
         const name = row.technique;
         // A failed measurement is recorded with its reason, never as a blank or a made-up number.

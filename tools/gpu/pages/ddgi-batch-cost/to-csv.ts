@@ -27,6 +27,8 @@
  *   information only);
  * - `batch_cost/startup/...`: milliseconds to each start-up stage, and the
  *   slowest pipeline compiles;
+ * - `batch_cost/ramp/...`: T2.10's opt-in ramp (VITE_DDGI_RAMP_SECONDS) and the
+ *   re-calibration after it, which the budget section then runs at;
  * - `batch_cost/breakdown/batch<n>/<variant>_ms`: `ddgi/trace` with parts of
  *   its shading taken out (main.ts, TRACE_VARIANTS);
  * - `batch_cost/steady/batch<n>/<raf|waited>/...`: a fixed batch at 60 Hz or
@@ -65,6 +67,8 @@ interface SceneResult {
     directLight?: 'inline' | 'deferred';
     probes: number;
     startup?: Record<string, number>;
+    /** T2.10's opt-in ramp and re-calibration before the other sections. */
+    ramp?: Record<string, number>;
     /** T1.9a's millisecond controller (old runs). */
     budget?: Record<string, number | string>;
     /** Budget v2, GPU-bound. */
@@ -101,6 +105,7 @@ export function batchCostRows(data: PageData): MetricRow[] {
             const startup = Object.fromEntries(Object.entries(result.startup).map(([name, value]) => [name.replace(`compile_ms/batch cost ${scene} `, 'compile_ms/'), value]));
             rows.push(...numericRows(scene, `${metricPrefix}/startup`, startup));
         }
+        if (result.ramp) rows.push(...numericRows(scene, `${metricPrefix}/ramp`, result.ramp));
         if (result.budget) {
             const budgetMs = result.budget.budget_ms;
             rows.push(...numericRows(scene, `${metricPrefix}/budget${budgetMs}ms`, result.budget));

@@ -931,3 +931,211 @@ date,commit,device,browser,scene,metric,value
 2026-11-06,839d002,RTX 3060 Laptop,Chrome 156.0.8078.80 headless,sponza/colonnade-from-the-floor,flicker/default/units268/probes_marked_total,0
 2026-11-06,839d002,RTX 3060 Laptop,Chrome 156.0.8078.80 headless,sponza/colonnade-from-the-floor,flicker/default/units268/frames_with_changes_marked,1
 2026-11-06,839d002,RTX 3060 Laptop,Chrome 156.0.8078.80 headless,all,note/note/t2.4b_still_check,1
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,cornell-box/front,flicker/width_px,640
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,cornell-box/front,flicker/height_px,360
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,cornell-box/front,flicker/probes_in_volume,1728
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,cornell-box/front,flicker/converge_passes,208
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,cornell-box/front,flicker/converged_image_mean,0.033281
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,cornell-box/front,flicker/gpuMs2/settle_frames,1200
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,cornell-box/front,flicker/gpuMs2/frames,120
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,cornell-box/front,flicker/gpuMs2/rel_change_mean,0.00073512
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,cornell-box/front,flicker/gpuMs2/rel_change_p95,0.0032989
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,cornell-box/front,flicker/gpuMs2/rel_change_mean_sd,0.000044173
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,cornell-box/front,flicker/gpuMs2/rel_change_p95_sd,0.00026193
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,cornell-box/front,flicker/gpuMs2/rel_change_p95_max,0.0040662
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,cornell-box/front,flicker/gpuMs2/image_mean_change,0.000068377
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,cornell-box/front,flicker/gpuMs2/image_mean_drift,-0.00029696
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,cornell-box/front,flicker/gpuMs2/surface_share,0.55905
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,cornell-box/front,flicker/gpuMs2/surface_mean_gi,0.059601
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,cornell-box/front,flicker/gpuMs2/probes_per_frame_mean,825
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,cornell-box/front,flicker/gpuMs2/probes_per_frame_median,825
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,cornell-box/front,flicker/gpuMs2/probes_share_per_frame,0.47743
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,cornell-box/front,flicker/gpuMs2/probes_marked_total,0
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,cornell-box/front,flicker/gpuMs2/frames_with_changes_marked,1
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,cornell-box/front,flicker/units256/settle_frames,1200
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,cornell-box/front,flicker/units256/frames,120
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,cornell-box/front,flicker/units256/rel_change_mean,0.00085822
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,cornell-box/front,flicker/units256/rel_change_p95,0.0045361
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,cornell-box/front,flicker/units256/rel_change_mean_sd,0.0001012
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,cornell-box/front,flicker/units256/rel_change_p95_sd,0.00056001
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,cornell-box/front,flicker/units256/rel_change_p95_max,0.0061068
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,cornell-box/front,flicker/units256/image_mean_change,0.00012994
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,cornell-box/front,flicker/units256/image_mean_drift,-0.0019459
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,cornell-box/front,flicker/units256/surface_share,0.55905
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,cornell-box/front,flicker/units256/surface_mean_gi,0.059728
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,cornell-box/front,flicker/units256/probes_per_frame_mean,256
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,cornell-box/front,flicker/units256/probes_per_frame_median,256
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,cornell-box/front,flicker/units256/probes_share_per_frame,0.14815
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,cornell-box/front,flicker/units256/probes_marked_total,0
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,cornell-box/front,flicker/units256/frames_with_changes_marked,1
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,note/sm_clock_mhz,780
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,note/sm_clock_min_mhz,210
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,note/sm_clock_max_mhz,780
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,note/mem_clock_mhz,7151
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,note/start_temp_c,60
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,note/thermal_share,0
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,note/timing_valid,1
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,two-room/lit-room,flicker/width_px,640
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,two-room/lit-room,flicker/height_px,360
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,two-room/lit-room,flicker/probes_in_volume,1071
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,two-room/lit-room,flicker/converge_passes,144
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,two-room/lit-room,flicker/converged_image_mean,0.70617
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,two-room/lit-room,flicker/gpuMs2/settle_frames,1200
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,two-room/lit-room,flicker/gpuMs2/frames,120
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,two-room/lit-room,flicker/gpuMs2/rel_change_mean,0.000096741
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,two-room/lit-room,flicker/gpuMs2/rel_change_p95,0.00034873
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,two-room/lit-room,flicker/gpuMs2/rel_change_mean_sd,0.000015241
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,two-room/lit-room,flicker/gpuMs2/rel_change_p95_sd,0.000075708
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,two-room/lit-room,flicker/gpuMs2/rel_change_p95_max,0.00083334
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,two-room/lit-room,flicker/gpuMs2/image_mean_change,0.00001956
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,two-room/lit-room,flicker/gpuMs2/image_mean_drift,0.0006153
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,two-room/lit-room,flicker/gpuMs2/surface_share,1
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,two-room/lit-room,flicker/gpuMs2/surface_mean_gi,0.71239
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,two-room/lit-room,flicker/gpuMs2/probes_per_frame_mean,493
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,two-room/lit-room,flicker/gpuMs2/probes_per_frame_median,493
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,two-room/lit-room,flicker/gpuMs2/probes_share_per_frame,0.46032
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,two-room/lit-room,flicker/gpuMs2/probes_marked_total,0
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,two-room/lit-room,flicker/gpuMs2/frames_with_changes_marked,1
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,two-room/lit-room,flicker/units256/settle_frames,1200
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,two-room/lit-room,flicker/units256/frames,120
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,two-room/lit-room,flicker/units256/rel_change_mean,0.000099219
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,two-room/lit-room,flicker/units256/rel_change_p95,0.00041488
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,two-room/lit-room,flicker/units256/rel_change_mean_sd,0.000020296
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,two-room/lit-room,flicker/units256/rel_change_p95_sd,0.000095711
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,two-room/lit-room,flicker/units256/rel_change_p95_max,0.00081445
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,two-room/lit-room,flicker/units256/image_mean_change,0.000023781
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,two-room/lit-room,flicker/units256/image_mean_drift,-0.00021586
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,two-room/lit-room,flicker/units256/surface_share,1
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,two-room/lit-room,flicker/units256/surface_mean_gi,0.71391
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,two-room/lit-room,flicker/units256/probes_per_frame_mean,256
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,two-room/lit-room,flicker/units256/probes_per_frame_median,256
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,two-room/lit-room,flicker/units256/probes_share_per_frame,0.23903
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,two-room/lit-room,flicker/units256/probes_marked_total,0
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,two-room/lit-room,flicker/units256/frames_with_changes_marked,1
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,note/sm_clock_mhz,780
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,note/sm_clock_min_mhz,292
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,note/sm_clock_max_mhz,780
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,note/mem_clock_mhz,7151
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,note/start_temp_c,60
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,note/thermal_share,0
+2026-11-08,2bc4626,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,note/timing_valid,1
+2026-11-08,320ff31,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,sponza/colonnade-from-the-floor,flicker/width_px,640
+2026-11-08,320ff31,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,sponza/colonnade-from-the-floor,flicker/height_px,360
+2026-11-08,320ff31,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,sponza/colonnade-from-the-floor,flicker/probes_in_volume,19425
+2026-11-08,320ff31,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,sponza/colonnade-from-the-floor,flicker/converge_passes,80.0255
+2026-11-08,320ff31,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,sponza/colonnade-from-the-floor,flicker/converged_image_mean,0.0016056
+2026-11-08,320ff31,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,sponza/colonnade-from-the-floor,flicker/gpuMs2/settle_frames,1200
+2026-11-08,320ff31,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,sponza/colonnade-from-the-floor,flicker/gpuMs2/frames,120
+2026-11-08,320ff31,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,sponza/colonnade-from-the-floor,flicker/gpuMs2/rel_change_mean,0.0002529
+2026-11-08,320ff31,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,sponza/colonnade-from-the-floor,flicker/gpuMs2/rel_change_p95,0.0010893
+2026-11-08,320ff31,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,sponza/colonnade-from-the-floor,flicker/gpuMs2/rel_change_mean_sd,0.0001588
+2026-11-08,320ff31,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,sponza/colonnade-from-the-floor,flicker/gpuMs2/rel_change_p95_sd,0.0012112
+2026-11-08,320ff31,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,sponza/colonnade-from-the-floor,flicker/gpuMs2/rel_change_p95_max,0.0061793
+2026-11-08,320ff31,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,sponza/colonnade-from-the-floor,flicker/gpuMs2/image_mean_change,0.00011323
+2026-11-08,320ff31,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,sponza/colonnade-from-the-floor,flicker/gpuMs2/image_mean_drift,0.0010675
+2026-11-08,320ff31,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,sponza/colonnade-from-the-floor,flicker/gpuMs2/surface_share,0.99929
+2026-11-08,320ff31,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,sponza/colonnade-from-the-floor,flicker/gpuMs2/surface_mean_gi,0.0016112
+2026-11-08,320ff31,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,sponza/colonnade-from-the-floor,flicker/gpuMs2/probes_per_frame_mean,348
+2026-11-08,320ff31,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,sponza/colonnade-from-the-floor,flicker/gpuMs2/probes_per_frame_median,348
+2026-11-08,320ff31,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,sponza/colonnade-from-the-floor,flicker/gpuMs2/probes_share_per_frame,0.017915
+2026-11-08,320ff31,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,sponza/colonnade-from-the-floor,flicker/gpuMs2/probes_marked_total,0
+2026-11-08,320ff31,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,sponza/colonnade-from-the-floor,flicker/gpuMs2/frames_with_changes_marked,1
+2026-11-08,320ff31,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,sponza/colonnade-from-the-floor,flicker/units256/settle_frames,1200
+2026-11-08,320ff31,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,sponza/colonnade-from-the-floor,flicker/units256/frames,120
+2026-11-08,320ff31,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,sponza/colonnade-from-the-floor,flicker/units256/rel_change_mean,0.00026983
+2026-11-08,320ff31,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,sponza/colonnade-from-the-floor,flicker/units256/rel_change_p95,0.00088011
+2026-11-08,320ff31,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,sponza/colonnade-from-the-floor,flicker/units256/rel_change_mean_sd,0.00019653
+2026-11-08,320ff31,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,sponza/colonnade-from-the-floor,flicker/units256/rel_change_p95_sd,0.0013937
+2026-11-08,320ff31,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,sponza/colonnade-from-the-floor,flicker/units256/rel_change_p95_max,0.005944
+2026-11-08,320ff31,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,sponza/colonnade-from-the-floor,flicker/units256/image_mean_change,0.00011076
+2026-11-08,320ff31,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,sponza/colonnade-from-the-floor,flicker/units256/image_mean_drift,-0.0030843
+2026-11-08,320ff31,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,sponza/colonnade-from-the-floor,flicker/units256/surface_share,0.99929
+2026-11-08,320ff31,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,sponza/colonnade-from-the-floor,flicker/units256/surface_mean_gi,0.0016054
+2026-11-08,320ff31,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,sponza/colonnade-from-the-floor,flicker/units256/probes_per_frame_mean,256
+2026-11-08,320ff31,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,sponza/colonnade-from-the-floor,flicker/units256/probes_per_frame_median,256
+2026-11-08,320ff31,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,sponza/colonnade-from-the-floor,flicker/units256/probes_share_per_frame,0.013179
+2026-11-08,320ff31,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,sponza/colonnade-from-the-floor,flicker/units256/probes_marked_total,0
+2026-11-08,320ff31,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,sponza/colonnade-from-the-floor,flicker/units256/frames_with_changes_marked,1
+2026-11-08,320ff31,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,note/sm_clock_mhz,780
+2026-11-08,320ff31,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,note/sm_clock_min_mhz,285
+2026-11-08,320ff31,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,note/sm_clock_max_mhz,1380
+2026-11-08,320ff31,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,note/mem_clock_mhz,7151
+2026-11-08,320ff31,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,note/start_temp_c,57
+2026-11-08,320ff31,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,note/thermal_share,0
+2026-11-08,320ff31,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,note/timing_valid,1
+2026-11-09,43aac91,Intel UHD,Chrome 157.0.8103.38 headless,cornell-box/front,flicker/width_px,640
+2026-11-09,43aac91,Intel UHD,Chrome 157.0.8103.38 headless,cornell-box/front,flicker/height_px,360
+2026-11-09,43aac91,Intel UHD,Chrome 157.0.8103.38 headless,cornell-box/front,flicker/probes_in_volume,1728
+2026-11-09,43aac91,Intel UHD,Chrome 157.0.8103.38 headless,cornell-box/front,flicker/converge_passes,208
+2026-11-09,43aac91,Intel UHD,Chrome 157.0.8103.38 headless,cornell-box/front,flicker/converged_image_mean,0.033253
+2026-11-09,43aac91,Intel UHD,Chrome 157.0.8103.38 headless,cornell-box/front,flicker/gpuMs2/settle_frames,1200
+2026-11-09,43aac91,Intel UHD,Chrome 157.0.8103.38 headless,cornell-box/front,flicker/gpuMs2/frames,120
+2026-11-09,43aac91,Intel UHD,Chrome 157.0.8103.38 headless,cornell-box/front,flicker/gpuMs2/rel_change_mean,0.00091527
+2026-11-09,43aac91,Intel UHD,Chrome 157.0.8103.38 headless,cornell-box/front,flicker/gpuMs2/rel_change_p95,0.0049661
+2026-11-09,43aac91,Intel UHD,Chrome 157.0.8103.38 headless,cornell-box/front,flicker/gpuMs2/rel_change_mean_sd,0.00013435
+2026-11-09,43aac91,Intel UHD,Chrome 157.0.8103.38 headless,cornell-box/front,flicker/gpuMs2/rel_change_p95_sd,0.00077573
+2026-11-09,43aac91,Intel UHD,Chrome 157.0.8103.38 headless,cornell-box/front,flicker/gpuMs2/rel_change_p95_max,0.0064947
+2026-11-09,43aac91,Intel UHD,Chrome 157.0.8103.38 headless,cornell-box/front,flicker/gpuMs2/image_mean_change,0.00016668
+2026-11-09,43aac91,Intel UHD,Chrome 157.0.8103.38 headless,cornell-box/front,flicker/gpuMs2/image_mean_drift,0.0022531
+2026-11-09,43aac91,Intel UHD,Chrome 157.0.8103.38 headless,cornell-box/front,flicker/gpuMs2/surface_share,0.55905
+2026-11-09,43aac91,Intel UHD,Chrome 157.0.8103.38 headless,cornell-box/front,flicker/gpuMs2/surface_mean_gi,0.059469
+2026-11-09,43aac91,Intel UHD,Chrome 157.0.8103.38 headless,cornell-box/front,flicker/gpuMs2/probes_per_frame_mean,150
+2026-11-09,43aac91,Intel UHD,Chrome 157.0.8103.38 headless,cornell-box/front,flicker/gpuMs2/probes_per_frame_median,150
+2026-11-09,43aac91,Intel UHD,Chrome 157.0.8103.38 headless,cornell-box/front,flicker/gpuMs2/probes_share_per_frame,0.086806
+2026-11-09,43aac91,Intel UHD,Chrome 157.0.8103.38 headless,cornell-box/front,flicker/gpuMs2/probes_marked_total,0
+2026-11-09,43aac91,Intel UHD,Chrome 157.0.8103.38 headless,cornell-box/front,flicker/gpuMs2/frames_with_changes_marked,1
+2026-11-09,43aac91,Intel UHD,Chrome 157.0.8103.38 headless,cornell-box/front,flicker/units256/settle_frames,1200
+2026-11-09,43aac91,Intel UHD,Chrome 157.0.8103.38 headless,cornell-box/front,flicker/units256/frames,120
+2026-11-09,43aac91,Intel UHD,Chrome 157.0.8103.38 headless,cornell-box/front,flicker/units256/rel_change_mean,0.00089191
+2026-11-09,43aac91,Intel UHD,Chrome 157.0.8103.38 headless,cornell-box/front,flicker/units256/rel_change_p95,0.0046885
+2026-11-09,43aac91,Intel UHD,Chrome 157.0.8103.38 headless,cornell-box/front,flicker/units256/rel_change_mean_sd,0.00010947
+2026-11-09,43aac91,Intel UHD,Chrome 157.0.8103.38 headless,cornell-box/front,flicker/units256/rel_change_p95_sd,0.00060549
+2026-11-09,43aac91,Intel UHD,Chrome 157.0.8103.38 headless,cornell-box/front,flicker/units256/rel_change_p95_max,0.0062892
+2026-11-09,43aac91,Intel UHD,Chrome 157.0.8103.38 headless,cornell-box/front,flicker/units256/image_mean_change,0.00012292
+2026-11-09,43aac91,Intel UHD,Chrome 157.0.8103.38 headless,cornell-box/front,flicker/units256/image_mean_drift,-0.0023901
+2026-11-09,43aac91,Intel UHD,Chrome 157.0.8103.38 headless,cornell-box/front,flicker/units256/surface_share,0.55905
+2026-11-09,43aac91,Intel UHD,Chrome 157.0.8103.38 headless,cornell-box/front,flicker/units256/surface_mean_gi,0.059696
+2026-11-09,43aac91,Intel UHD,Chrome 157.0.8103.38 headless,cornell-box/front,flicker/units256/probes_per_frame_mean,256
+2026-11-09,43aac91,Intel UHD,Chrome 157.0.8103.38 headless,cornell-box/front,flicker/units256/probes_per_frame_median,256
+2026-11-09,43aac91,Intel UHD,Chrome 157.0.8103.38 headless,cornell-box/front,flicker/units256/probes_share_per_frame,0.14815
+2026-11-09,43aac91,Intel UHD,Chrome 157.0.8103.38 headless,cornell-box/front,flicker/units256/probes_marked_total,0
+2026-11-09,43aac91,Intel UHD,Chrome 157.0.8103.38 headless,cornell-box/front,flicker/units256/frames_with_changes_marked,1
+2026-11-09,43aac91,Intel UHD,Chrome 157.0.8103.38 headless,all,note/t2.10_intel_batch,10
+2026-11-09,3a4a045,Intel UHD,Chrome 157.0.8103.38 headless,two-room/lit-room,flicker/width_px,640
+2026-11-09,3a4a045,Intel UHD,Chrome 157.0.8103.38 headless,two-room/lit-room,flicker/height_px,360
+2026-11-09,3a4a045,Intel UHD,Chrome 157.0.8103.38 headless,two-room/lit-room,flicker/probes_in_volume,1071
+2026-11-09,3a4a045,Intel UHD,Chrome 157.0.8103.38 headless,two-room/lit-room,flicker/converge_passes,144
+2026-11-09,3a4a045,Intel UHD,Chrome 157.0.8103.38 headless,two-room/lit-room,flicker/converged_image_mean,0.70381
+2026-11-09,3a4a045,Intel UHD,Chrome 157.0.8103.38 headless,two-room/lit-room,flicker/gpuMs2/settle_frames,1200
+2026-11-09,3a4a045,Intel UHD,Chrome 157.0.8103.38 headless,two-room/lit-room,flicker/gpuMs2/frames,120
+2026-11-09,3a4a045,Intel UHD,Chrome 157.0.8103.38 headless,two-room/lit-room,flicker/gpuMs2/rel_change_mean,0.00010148
+2026-11-09,3a4a045,Intel UHD,Chrome 157.0.8103.38 headless,two-room/lit-room,flicker/gpuMs2/rel_change_p95,0.00055015
+2026-11-09,3a4a045,Intel UHD,Chrome 157.0.8103.38 headless,two-room/lit-room,flicker/gpuMs2/rel_change_mean_sd,0.000032479
+2026-11-09,3a4a045,Intel UHD,Chrome 157.0.8103.38 headless,two-room/lit-room,flicker/gpuMs2/rel_change_p95_sd,0.00015172
+2026-11-09,3a4a045,Intel UHD,Chrome 157.0.8103.38 headless,two-room/lit-room,flicker/gpuMs2/rel_change_p95_max,0.001245
+2026-11-09,3a4a045,Intel UHD,Chrome 157.0.8103.38 headless,two-room/lit-room,flicker/gpuMs2/image_mean_change,0.000031806
+2026-11-09,3a4a045,Intel UHD,Chrome 157.0.8103.38 headless,two-room/lit-room,flicker/gpuMs2/image_mean_drift,0.00045266
+2026-11-09,3a4a045,Intel UHD,Chrome 157.0.8103.38 headless,two-room/lit-room,flicker/gpuMs2/surface_share,1
+2026-11-09,3a4a045,Intel UHD,Chrome 157.0.8103.38 headless,two-room/lit-room,flicker/gpuMs2/surface_mean_gi,0.70938
+2026-11-09,3a4a045,Intel UHD,Chrome 157.0.8103.38 headless,two-room/lit-room,flicker/gpuMs2/probes_per_frame_mean,98
+2026-11-09,3a4a045,Intel UHD,Chrome 157.0.8103.38 headless,two-room/lit-room,flicker/gpuMs2/probes_per_frame_median,98
+2026-11-09,3a4a045,Intel UHD,Chrome 157.0.8103.38 headless,two-room/lit-room,flicker/gpuMs2/probes_share_per_frame,0.091503
+2026-11-09,3a4a045,Intel UHD,Chrome 157.0.8103.38 headless,two-room/lit-room,flicker/gpuMs2/probes_marked_total,0
+2026-11-09,3a4a045,Intel UHD,Chrome 157.0.8103.38 headless,two-room/lit-room,flicker/gpuMs2/frames_with_changes_marked,1
+2026-11-09,3a4a045,Intel UHD,Chrome 157.0.8103.38 headless,two-room/lit-room,flicker/units256/settle_frames,1200
+2026-11-09,3a4a045,Intel UHD,Chrome 157.0.8103.38 headless,two-room/lit-room,flicker/units256/frames,120
+2026-11-09,3a4a045,Intel UHD,Chrome 157.0.8103.38 headless,two-room/lit-room,flicker/units256/rel_change_mean,0.000106
+2026-11-09,3a4a045,Intel UHD,Chrome 157.0.8103.38 headless,two-room/lit-room,flicker/units256/rel_change_p95,0.00042864
+2026-11-09,3a4a045,Intel UHD,Chrome 157.0.8103.38 headless,two-room/lit-room,flicker/units256/rel_change_mean_sd,0.000025249
+2026-11-09,3a4a045,Intel UHD,Chrome 157.0.8103.38 headless,two-room/lit-room,flicker/units256/rel_change_p95_sd,0.0001033
+2026-11-09,3a4a045,Intel UHD,Chrome 157.0.8103.38 headless,two-room/lit-room,flicker/units256/rel_change_p95_max,0.00080019
+2026-11-09,3a4a045,Intel UHD,Chrome 157.0.8103.38 headless,two-room/lit-room,flicker/units256/image_mean_change,0.000024547
+2026-11-09,3a4a045,Intel UHD,Chrome 157.0.8103.38 headless,two-room/lit-room,flicker/units256/image_mean_drift,-0.000023001
+2026-11-09,3a4a045,Intel UHD,Chrome 157.0.8103.38 headless,two-room/lit-room,flicker/units256/surface_share,1
+2026-11-09,3a4a045,Intel UHD,Chrome 157.0.8103.38 headless,two-room/lit-room,flicker/units256/surface_mean_gi,0.71156
+2026-11-09,3a4a045,Intel UHD,Chrome 157.0.8103.38 headless,two-room/lit-room,flicker/units256/probes_per_frame_mean,256
+2026-11-09,3a4a045,Intel UHD,Chrome 157.0.8103.38 headless,two-room/lit-room,flicker/units256/probes_per_frame_median,256
+2026-11-09,3a4a045,Intel UHD,Chrome 157.0.8103.38 headless,two-room/lit-room,flicker/units256/probes_share_per_frame,0.23903
+2026-11-09,3a4a045,Intel UHD,Chrome 157.0.8103.38 headless,two-room/lit-room,flicker/units256/probes_marked_total,0
+2026-11-09,3a4a045,Intel UHD,Chrome 157.0.8103.38 headless,two-room/lit-room,flicker/units256/frames_with_changes_marked,1
+2026-11-09,3a4a045,Intel UHD,Chrome 157.0.8103.38 headless,all,note/t2.10_intel_batch,17

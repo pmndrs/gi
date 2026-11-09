@@ -422,3 +422,23 @@ date,commit,device,browser,scene,metric,value
 2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/front@1920x1080,median/runs,3
 2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,cornell-box-point/inside-from-red-wall@1920x1080,median/runs,3
 2026-11-05,c4642fc,Intel UHD,Chrome 156.0.8078.74 headless,all,note/t1.9-intel,1
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,cornell-box-point/front,shading/width_px,2560
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,cornell-box-point/front,shading/height_px,1440
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,cornell-box-point/front,shading/forward_gpu_ms_with_gi_median,1.08339
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,cornell-box-point/front,shading/forward_gpu_ms_constant_median,0.126976
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,cornell-box-point/front,shading/gi_sampling_gpu_ms,0.956416
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,cornell-box-point/front,shading/passes_timed,200
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,cornell-box-point/inside-from-red-wall,shading/width_px,2560
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,cornell-box-point/inside-from-red-wall,shading/height_px,1440
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,cornell-box-point/inside-from-red-wall,shading/forward_gpu_ms_with_gi_median,1.87904
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,cornell-box-point/inside-from-red-wall,shading/forward_gpu_ms_constant_median,0.228352
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,cornell-box-point/inside-from-red-wall,shading/gi_sampling_gpu_ms,1.65069
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,cornell-box-point/inside-from-red-wall,shading/passes_timed,200
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,note/t2.10,1
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,note/sm_clock_mhz,780
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,note/sm_clock_min_mhz,780
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,note/sm_clock_max_mhz,780
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,note/mem_clock_mhz,7151
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,note/start_temp_c,58
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,note/thermal_share,0
+2026-11-08,ce20ae6,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,all,note/timing_valid,1

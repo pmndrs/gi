@@ -40,6 +40,8 @@
  *   VITE_DDGI_SCENES=cornell-box,two-room,sponza   (default cornell-box,two-room; `all` = every manifest)
  *   VITE_DDGI_GROUPS=off,on                          (default both)
  *   VITE_DDGI_RENDER_EVERY=0                         (three draws every n-th frame, 0 never; default 1)
+ *   VITE_DDGI_MAX_TEXTURE_SIZE=1024                  (scale model textures down to this side at load; default: as the files
+ *                                                     have them. Bistro exterior's take 5.1 GB, more than a 6 GB GPU holds with DDGI, T2.17)
  * `sponza-candles` runs with 0: drawing its 1,024 point lights in three held
  * the page past DevTools' 30 s (`Runtime.evaluate timed out`, T2.14 review
  * re-check). Its candle lighting in three is T2.8's. The counter is about the
@@ -69,6 +71,8 @@ function listFromEnv(value: unknown, fallback: readonly string[]): string[] {
 const SCENES = listFromEnv(env.VITE_DDGI_SCENES, ['cornell-box', 'two-room']);
 /** three draws every this many frames (the GI frames run every frame). */
 const RENDER_EVERY = typeof env.VITE_DDGI_RENDER_EVERY === 'string' && env.VITE_DDGI_RENDER_EVERY !== '' ? Math.max(0, Number(env.VITE_DDGI_RENDER_EVERY)) : 1;
+/** T2.17: scale model textures down to this side at load (`LoadSceneOptions.maxTextureSize`); undefined keeps them. */
+const MAX_TEXTURE_SIZE = typeof env.VITE_DDGI_MAX_TEXTURE_SIZE === 'string' && env.VITE_DDGI_MAX_TEXTURE_SIZE !== '' ? Number(env.VITE_DDGI_MAX_TEXTURE_SIZE) : undefined;
 const GROUP_SETTINGS = listFromEnv(env.VITE_DDGI_GROUPS, ['off', 'on']).map((setting) => {
     if (setting !== 'off' && setting !== 'on') throw new Error(`VITE_DDGI_GROUPS: '${setting}' is neither off nor on`);
     return setting;
@@ -136,6 +140,7 @@ await runThreePage(
         const sceneIds = SCENES.length === 1 && SCENES[0] === 'all' ? manifests.map((manifest) => manifest.id) : SCENES;
         const results: Record<string, unknown> = {};
         data.scenes = results;
+        if (MAX_TEXTURE_SIZE !== undefined) data.maxTextureSize = MAX_TEXTURE_SIZE;
         const failures: string[] = [];
 
         for (const sceneId of sceneIds) {
@@ -212,7 +217,7 @@ await runThreePage(
 
 /** Loads the scene and starts GI as the viewer does (apps/viewer/src/techniques/ddgi-technique.ts). */
 async function startSession(device: GPUDevice, renderer: Parameters<GIVolume['start']>[0], manifest: SceneManifest, groupsOn: boolean): Promise<Session> {
-    const loaded = await loadScene(manifest, () => {});
+    const loaded = await loadScene(manifest, () => {}, MAX_TEXTURE_SIZE === undefined ? {} : { maxTextureSize: MAX_TEXTURE_SIZE });
     if (groupsOn) {
         // Lights alternate between the groups (the sync reads the group when it first sees a light).
         loaded.directLights.forEach((light, index) => (light.userData.giLightGroup = index % GROUP_COUNT));

@@ -78,6 +78,9 @@
  *   VITE_DDGI_STEADY_UNITS=16,512                                    (default: the budget's median batch)
  *   VITE_DDGI_MESH_TREES=tinybvh                                     (default gpu: first trees from the GPU, T2.12)
  *   VITE_DDGI_THREE_COMPILE=when-light-joins                         (default after-first-step; see THREE_COMPILE)
+ *   VITE_DDGI_RAMP_SECONDS=8                                         (default 0: off; see rampAndRecalibrate)
+ *   VITE_DDGI_MAX_TEXTURE_SIZE=1024                                  (default: textures as the files have them; T2.17,
+ *                                                                     Bistro exterior's take 5.1 GB, more than a 6 GB GPU holds with DDGI)
  *
  * Manual (Sponza and Bistro need the downloads). Run it under the bench lock:
  *   node tools/reference/bench-lock.ts run --what "batch cost" -- pnpm test:gpu --filter ddgi-batch-cost --json <file>
@@ -118,6 +121,12 @@ const DIRECT_PATHS: DirectLightPath[] = listFromEnv(env.VITE_DDGI_DIRECT, ['defe
 const STEADY_UNITS = listFromEnv(env.VITE_DDGI_STEADY_UNITS, []).map(Number).filter((units) => units > 0);
 /** T2.12: `gpu` (default) builds the first mesh trees on the GPU; `tinybvh` is M1's path, for a comparison. */
 const MESH_TREES = env.VITE_DDGI_MESH_TREES === 'tinybvh' ? 'tinybvh' : 'gpu';
+/** T2.10: seconds of GPU-bound frames after the start-up, then a re-calibration, before the other sections (0: off). */
+const RAMP_SECONDS = typeof env.VITE_DDGI_RAMP_SECONDS === 'string' ? Number(env.VITE_DDGI_RAMP_SECONDS) : 0;
+/** The fixed batch of the ramp's frames: a heavy, steady load. */
+const RAMP_UNITS = 1024;
+/** T2.17: scale model textures down to this side at load (`LoadSceneOptions.maxTextureSize`); undefined keeps them. */
+const MAX_TEXTURE_SIZE = typeof env.VITE_DDGI_MAX_TEXTURE_SIZE === 'string' ? Number(env.VITE_DDGI_MAX_TEXTURE_SIZE) : undefined;
 /**
  * When three compiles its materials for the GI light. `after-first-step`
  * (default): after the first warm-up step, in series, as T2.12's check 1 is
@@ -368,7 +377,7 @@ async function startScene(
 ): Promise<{ scene: SceneUnderTest; startup: Record<string, number> }> {
     pipelineCompileMs.clear();
     const loadStartedAt = performance.now();
-    const loaded = await loadScene(manifest, () => {});
+    const loaded = await loadScene(manifest, () => {}, MAX_TEXTURE_SIZE === undefined ? {} : { maxTextureSize: MAX_TEXTURE_SIZE });
     const filesLoadedAt = performance.now();
     const bookmark = manifest.cameras[0];
     const camera = new PerspectiveCamera(bookmark.fovYDeg, 1, 0.05, loaded.diagonal * 2);
@@ -401,12 +410,17 @@ async function startScene(
     threeGI.update(camera, 0);
     const copiedWhileCompilingAt = performance.now();
     const copyWhileCompilingMs = copiedWhileCompilingAt - copyStartedAt;
+    // T2.10: the scene copy's staging buffers (T2.13), meshes waiting for the GPU to pack them. They
+    // peak once the copy has staged every mesh and before the first encode packs them.
+    const stagingAfterCopyBytes = platform.sceneCopy.memory.stagingBuffers;
     await preparing;
     const preparedAt = performance.now();
+    const stagingBeforeFirstEncodeBytes = platform.sceneCopy.memory.stagingBuffers;
 
     // The first GI frame: the scene's uploads, and the tree builds start (the GPU's first, T2.12).
     threeGI.update(camera, 0);
     const copiedAt = performance.now();
+    const stagingAfterFirstEncodeBytes = platform.sceneCopy.memory.stagingBuffers;
     // Asked for once the builds have started (before, nothing is pending and it resolves at once).
     let refinedAt = NaN;
     void platform.rays.whenRefined().then(() => (refinedAt = performance.now()));
@@ -496,6 +510,10 @@ async function startScene(
         compile_wait_ms: round(preparedAt - copiedWhileCompilingAt, 1),
         scene_copy_while_compiling_ms: round(copyWhileCompilingMs, 1),
         scene_copy_cpu_ms: round(copyWhileCompilingMs + (copiedAt - preparedAt), 1),
+        // T2.10: SceneMemory.stagingBuffers (MB, 1e6 bytes) after the copy, before and after the first encode.
+        staging_after_copy_mb: round(stagingAfterCopyBytes / 1e6, 1),
+        staging_before_first_encode_mb: round(stagingBeforeFirstEncodeBytes / 1e6, 1),
+        staging_after_first_encode_mb: round(stagingAfterFirstEncodeBytes / 1e6, 1),
         // T2.12's stages from `prepare` to the first frame drawn with GI. The first GI frame (the
         // uploads, the GPU's tree build submitted, tinybvh's copies sent to the worker); then the wait
         // for every mesh's first tree; then the frame that places them; then the first warm-up step
@@ -663,6 +681,33 @@ async function measureBudget(device: GPUDevice, scene: SceneUnderTest, log: (lin
             (Number.isFinite(directMedianMs) ? `; gi/direct ${result.gi_direct_ms_median} ms, ${result.gi_direct_hits_per_probe} hits a probe, ${result.gi_direct_mhits_per_s} M hits/s` : ''),
     );
     return result;
+}
+
+/**
+ * Opt-in ramp (T2.10, `VITE_DDGI_RAMP_SECONDS`): GPU-bound frames of RAMP_UNITS
+ * probes for that many seconds, then `recalibrate()` with its burst run as at
+ * start-up, so the sections after it run at a batch calibrated with the clocks
+ * up. *Why:* on the RTX laptop under Chrome 157 the start-up's bursty load
+ * leaves the GPU in a low-power state (about 780 MHz under load, nvidia-smi),
+ * and the start-up's calibration then reads it slow (Sponza 154 probes at
+ * 2 ms against 640 at 1,800-1,900 MHz in T2.2). Budget v2 calibrates with the
+ * clocks up (DECISIONS 2026-11-05), and SPEC's timings are GPU-bound. The
+ * start-up's own calibration is still reported in `startup`.
+ */
+async function rampAndRecalibrate(device: GPUDevice, scene: SceneUnderTest, firstUnits: number, log: (line: string) => void): Promise<Record<string, number>> {
+    const pacing = new GpuBoundPacing(device);
+    const startedAt = performance.now();
+    let rampFrames = 0;
+    while (performance.now() - startedAt < RAMP_SECONDS * 1000) {
+        frame(scene, { units: RAMP_UNITS }, 0);
+        rampFrames++;
+        await pacing.after();
+    }
+    await pacing.drain();
+    const rampMs = performance.now() - startedAt;
+    const recheck = await recheckCalibration(device, scene, firstUnits, log);
+    log(`${scene.manifest.id} ramp: ${rampFrames} frames of ${RAMP_UNITS} probes in ${round(rampMs / 1000, 1)} s, then re-calibrated: ${recheck.recalibrated_probes} probes (start-up's ${firstUnits})`);
+    return { ramp_seconds: round(rampMs / 1000, 2), ramp_frames: rampFrames, ramp_units: RAMP_UNITS, ...recheck };
 }
 
 /**
@@ -1323,6 +1368,8 @@ await runThreePage(async ({ device, renderer, data, log }) => {
     const judgeCost = device.adapterInfo.vendor !== 'intel';
     data.costJudged = judgeCost;
     data.directPaths = DIRECT_PATHS.join(',');
+    // Textures scaled down at load change the GPU memory the scene takes (T2.17), so the run says so.
+    if (MAX_TEXTURE_SIZE !== undefined) data.maxTextureSize = MAX_TEXTURE_SIZE;
     const runs = SCENES.flatMap((sceneId) => DIRECT_PATHS.map((direct) => ({ sceneId, direct })));
     for (const { sceneId, direct } of runs) {
         const id = sceneId;
@@ -1332,6 +1379,7 @@ await runThreePage(async ({ device, renderer, data, log }) => {
         const sceneResult: Record<string, unknown> = { scene: id, directLight: direct, probes: scene.probeCount, raysPerProbe: scene.ddgi.settings.raysPerProbe };
         results[DIRECT_PATHS.length > 1 ? `${id}/${direct}` : id] = sceneResult;
         if (SECTIONS.has('startup')) sceneResult.startup = startup;
+        if (RAMP_SECONDS > 0) sceneResult.ramp = await rampAndRecalibrate(device, scene, startup.calibrated_probes, log);
         // Rates first, in rising order: the platform remembers the fastest on-time rate it saw for
         // 10 s, so a slower rate straight after the GPU-bound frames would read as late frames.
         if (SECTIONS.has('rates')) {
