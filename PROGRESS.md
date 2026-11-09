@@ -21,6 +21,17 @@ Rules:
 
 ---
 
+## 2026-11-09 · T3.4 merged with `m3` (T3.5, T3.2, T3.7) · implementer (opus)
+Did: merged `m3` (1482354) into `m3-t3.4` (1f9f96b). Only conflicts were the PROGRESS and DECISIONS tops (both kept). One fix: the far set's contrast loop reads probe data per volume (T3.5's three-argument `ddgiReadProbeData`). Each volume builds its own mark table against its own grid, so a wake or mark lands in every volume a box reaches; `ddgi-wake-air-probes` now also runs Cornell as two overlapping volumes and checks it.
+Verified, RTX 3060 Laptop (nvidia/ampere), bench lock, untimed:
+- `ddgi-wake-air-probes`: the same numbers as before; with two volumes, 84 probes near the path in each, all woken.
+- Cabinet: within 5% from frame 16 at a calibrated 187; 647 marked, recall 97.3%, precision 40%. Door swing: 0.157% at 1 s; recall 91.5%.
+- `ddgi-change-still`: the same means as before, 0 marks, 347 / 102 probes asleep.
+- Recompiles 0 on `platform-recompiles` and `ddgi-session-recompiles`.
+- Also pass: `ddgi-deforming-marks`, `ddgi-volumes`, `ddgi-warm-two-updates`, `ddgi-mark-reduction`, `three-deforming-gi`.
+- Typecheck and lint clean. Unit tests pass (`fetch.test.ts` and `sky.test.ts` failed under load and passed alone).
+Not fixed: the morph with its exact `giDeformBounds` still returns 5.9% (floor) / 13.1% (wall) under rest. The pose region is already the whole deform box, with the old and new pose inside, so the union of pose boxes changes nothing. More likely a moving emitter's far-set r is too small (NOTES). For the lead / T3.3.
+
 ## 2026-11-09 · T3.4 probes near moved geometry · implementer (opus)
 Did (branch `m3-t3.4`): woken air probes: `ddgi/mark` gets `receiver` entries (`SceneChanges.receivers`); receivers, moves and poses wake probes within 2 spacings for 300 frames (history word 8); an air probe off for "no surface nearby" is owed 2 updates at the freed share; `ddgi/blend` keeps awake probes on and clears an expired wake. Created/destroyed/shown/hidden objects don't wake (DECISIONS). Far set: `min(1, Ω/2π × contrast) × move share`, Ω from the box's projected area, contrast = brightest stored mean near the box's centre over the probe's own (DECISIONS; NOTES has why no size-only rule works). Deforming movers needed no new code: checked. Pages: `ddgi-wake-air-probes` (items 3, 5, screenshot), `ddgi-deforming-marks`; `ddgi-door-swing` gets `VITE_DDGI_SWING_FRAMES`. Docs: ddgi.md, m3-moving.md as built.
 Verified, RTX 3060 Laptop (nvidia/ampere), Chrome headless, bench lock, untimed, baseline = 36668bc in a scratch checkout:
