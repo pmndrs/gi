@@ -29,11 +29,34 @@
  * **How changes are found.** three keeps no version for world matrices or
  * visibility, so finding a moved object means looking at it. Looking at every
  * object every frame costs in proportion to the scene (1.2 ms a frame on
- * Bistro interior's 2,062 meshes, T1.7), so the work is bounded instead:
+ * Bistro interior's 2,062 meshes, T1.7), so the work is bounded instead.
+ * Since T3.7 three tells the sync about the two commonest changes itself
+ * (change-watch.ts):
+ * - **Added and removed objects:** three's `childadded` and `childremoved`
+ *   events, heard on every object of the scene, mark the child, so it is
+ *   created or destroyed in the next `update`, as with `markChanged`.
+ * - **Moves:** each mirrored mesh's `updateMatrixWorld` is hooked. Right
+ *   after three computes the matrix (in its render), the hook compares it with
+ *   the one last sent and, if it differs, puts the mesh in the hot set. So an
+ *   unmarked move reaches GI in the next `update`, and the walk no longer
+ *   compares transforms of hooked meshes while three updates the scene's
+ *   matrices itself (`scene.matrixWorldAutoUpdate`, three's default).
+ * - **Instance matrices:** each `InstancedMesh`'s `instanceMatrix.version`
+ *   is compared every update (an integer each), so edited instances reach GI
+ *   in the next update, with three's update ranges (below).
+ * - **Deforming meshes** (deforming.ts): skinned, morphed and
+ *   `userData.giDeforming` meshes that contribute to GI are created
+ *   `deforming`, each with its own platform mesh, and every update sends a
+ *   new pose through `setDeformedPositions` when the pose's inputs changed.
+ *
+ * What three doesn't announce is still found by bounded work:
  * - **The walk:** a depth-first walk over the scene that resumes where it
  *   stopped, `objectsPerFrame` objects a frame. It finds new objects, checks
- *   each object's transform, visibility, materials and GI flag, and at the end
- *   of each full pass removes what it didn't meet. So a static object's first
+ *   each object's transform (unless its hook reports moves), visibility,
+ *   materials and GI flag, and at the end of each full pass removes what it
+ *   didn't meet. Since T3.7 it is the safety net for what three's events and
+ *   hooks miss: a parent's `visible`, a matrix written by hand on a scene
+ *   that doesn't update its own, material swaps. So a static object's first
  *   move, a new object and a removal are seen within one pass:
  *   ceil(objects in the scene / objectsPerFrame) frames (with the default
  *   64: Sponza with the curtains, 596 objects, 10 frames; Bistro interior,
@@ -74,7 +97,8 @@
  * Not mirrored, with a one-time warning: `BatchedMesh`, ambient, hemisphere,
  * light-probe and rect-area lights (the last three also add diffuse light on
  * top of GI in three), point and spot lights whose `decay` isn't 2.
- * Morph targets and skinning use the bind pose (deforming meshes are M3).
+ * Morph targets and skinning of meshes that don't contribute to GI use the
+ * bind pose (deforming.ts).
  * Camera layers aren't mirrored either: GI follows `visible` only, so an
  * object on a layer the camera doesn't see still blocks and bounces light
  * (hide it, or set `userData.giContributes = false`).
@@ -84,10 +108,12 @@
  */
 
 import { Matrix4, type Layers, type BufferAttribute, type BufferGeometry, type DirectionalLight, type InstancedMesh, type InterleavedBufferAttribute, type Light, type Material, type Mesh, type Object3D, type PointLight, type Scene, type Texture } from 'three';
-import type { ColorRGB, EnvironmentDescriptor, InstanceHandle, LightChanges, LightDescriptor, LightHandle, MaterialDescriptor, MaterialHandle, MeshHandle, SceneApi, TextureHandle } from '@pmndrs/ddgi-core';
+import type { Aabb, ColorRGB, EnvironmentDescriptor, InstanceHandle, LightChanges, LightDescriptor, LightHandle, MaterialDescriptor, MaterialHandle, MeshHandle, SceneApi, TextureHandle } from '@pmndrs/ddgi-core';
 import { LIGHT_NUMBER_COUNT, MaterialSnapshot, type TextureAverages, PHYSICAL_DECAY, readLightNumbers, isSrgbTexture, lightDescriptor, luminance, materialDescriptor, materialSlotCount, meshDescriptor, textureSource, usesUvChannel1 } from './convert.ts';
 import { EnvironmentSync, type EnvironmentSources, type PmndrsSkyLike, type SkyMeshLike, type Warn } from './environment.ts';
 import { diffuseAverage, textureAverage, type DiffuseAverageMethod } from './texture-average.ts';
+import { hookMatrixWorld, matrixHookInPlace, StructureWatch, unhookMatrixWorld, type MatrixHook } from './change-watch.ts';
+import { deformBoundsFor, deformKind, poseSourceFor, type DeformKind, type PoseSource } from './deforming.ts';
 import { contributesFlag, contributesToGI } from './user-data.ts';
 
 /** Floats in a 4x4 matrix. */
@@ -148,6 +174,18 @@ interface GeometryRecord {
     readonly versions: number[];
     /** Where it sits in the edit-check list. */
     listIndex: number;
+    /**
+     * A deforming mesh's shape (deforming.ts), or null. A deforming record
+     * belongs to one three mesh, never shared: each mesh has its own pose.
+     */
+    readonly deform: DeformingShape | null;
+}
+
+/** What a deforming geometry record keeps: how it deforms, its pose box, and where its poses come from. */
+interface DeformingShape {
+    readonly kind: DeformKind;
+    readonly bounds: Aabb;
+    readonly pose: PoseSource;
 }
 
 interface MaterialRecord {
@@ -213,6 +251,8 @@ interface ObjectRecord {
     /** Where it sits in the object list the GI-flag rotation walks. */
     listIndex: number;
     destroyed: boolean;
+    /** The `updateMatrixWorld` hook that reports its moves (change-watch.ts). */
+    matrixHook: MatrixHook | null;
 }
 
 interface LightRecord {
@@ -251,6 +291,8 @@ export interface SyncFrameReport {
     walked: number;
     /** Objects checked because they were in the hot set or marked changed. */
     hot: number;
+    /** Deformed poses sent (`setDeformedPositions`). */
+    poses: number;
 }
 
 export interface SceneSyncOptions {
@@ -278,10 +320,11 @@ function resetReport(report: SyncFrameReport): void {
     report.lightsChecked = 0;
     report.walked = 0;
     report.hot = 0;
+    report.poses = 0;
 }
 
 function emptyReport(): SyncFrameReport {
-    return { created: 0, destroyed: 0, transforms: 0, visibility: 0, materials: 0, meshes: 0, lights: 0, lightsChecked: 0, walked: 0, hot: 0 };
+    return { created: 0, destroyed: 0, transforms: 0, visibility: 0, materials: 0, meshes: 0, lights: 0, lightsChecked: 0, walked: 0, hot: 0, poses: 0 };
 }
 
 function positiveInteger(value: number | undefined, fallback: number, name: string): number {
@@ -401,6 +444,18 @@ export class SceneSync {
 
     private readonly hotList: ObjectRecord[] = [];
     private readonly marked = new Set<Object3D>();
+    /** three's `childadded` and `childremoved` on the walked scene, marking the child (change-watch.ts). */
+    private readonly structure = new StructureWatch((child) => this.marked.add(child));
+    /** Objects whose meshes deform (deforming.ts): their poses are checked every update. */
+    private readonly deformingList: ObjectRecord[] = [];
+    /** InstancedMeshes: their instance matrices' version is compared every update (checkInstancedMeshes). */
+    private readonly instancedList: ObjectRecord[] = [];
+    /**
+     * three's render updates the walked scene's world matrices itself
+     * (`scene.matrixWorldAutoUpdate`), so every hooked mesh's move reaches its
+     * hook, and the walk can skip comparing their transforms. Read each update.
+     */
+    private hooksSeeEveryMove = false;
 
     /** The resumable walk: its scene, a stack of objects still to visit with their parents' visibility, and the pass number. */
     private walkScene: Scene | null = null;
@@ -498,11 +553,14 @@ export class SceneSync {
         resetReport(this.report);
         // A new scene is walked whole at once; afterwards, a share each frame.
         const fresh = scene !== this.walkScene;
+        this.hooksSeeEveryMove = scene.matrixWorldAutoUpdate;
         if (fresh) this.startOver(scene);
 
         if (this.marked.size > 0) this.checkMarked(scene);
         this.checkHot(scene);
+        this.checkInstancedMeshes(scene);
         if (!fresh) this.walk();
+        this.sendPoses();
         this.checkLights(scene);
         this.checkEdits();
         this.flushTransforms();
@@ -535,6 +593,9 @@ export class SceneSync {
         this.walkStack.length = 0;
         this.walkParentVisible.length = 0;
         this.walkScene = null;
+        this.structure.detach();
+        this.deformingList.length = 0;
+        this.instancedList.length = 0;
         this.environmentSync.dispose();
     }
 
@@ -545,6 +606,8 @@ export class SceneSync {
     /** A new scene: walk all of it now, so it is complete from the first frame. */
     private startOver(scene: Scene): void {
         this.walkScene = scene;
+        // Listening starts before the walk, so nothing added from here on is missed.
+        this.structure.attach(scene);
         this.walkStack.length = 0;
         this.walkParentVisible.length = 0;
         this.beginPass();
@@ -745,6 +808,9 @@ export class SceneSync {
             if (!record) return;
         }
         if (!record) {
+            // The walk's stack can hold an object removed since it was pushed (its removal was already
+            // handled through three's event); creating it would put it back in GI until the pass ends.
+            if (source === 'walk' && !this.placement(mesh, this.walkScene!)) return;
             record = this.createObject(mesh, visible, contributesToGI(mesh));
             if (!record) return;
             if (source !== 'walk') this.makeHot(record);
@@ -754,7 +820,7 @@ export class SceneSync {
                 // New materials that change whether the mesh blocks any light: its instances' GI flag changes, so start over.
                 record = this.restartObject(record, visible);
                 if (!record) return;
-            } else if (this.checkInstances(record, visible) || source === 'marked') {
+            } else if (this.checkInstances(record, visible, source !== 'walk' || !this.hookReportsMoves(record)) || source === 'marked') {
                 this.makeHot(record);
             }
         }
@@ -769,7 +835,8 @@ export class SceneSync {
     }
 
     private createObject(mesh: Mesh, visible: boolean, contributes: boolean): ObjectRecord | undefined {
-        const geometryRecord = this.acquireGeometry(mesh);
+        // Only a mesh that contributes deforms in GI: a receiver's shape isn't traced (deforming.ts).
+        const geometryRecord = this.acquireGeometry(mesh, contributes ? deformKind(mesh) : null);
         if (!geometryRecord) return undefined;
         const materials: MaterialRecord[] = [];
         for (let slot = 0; slot < geometryRecord.slotCount; slot++) {
@@ -812,17 +879,89 @@ export class SceneSync {
             shown: visible,
             listIndex: this.objectList.length,
             destroyed: false,
+            matrixHook: null,
         };
         this.objects.set(mesh, record);
         this.objectList.push(record);
         if (instanced) {
-            this.syncInstancedMesh(record, instanced, visible);
+            this.syncInstancedMesh(record, instanced, visible, true);
         } else {
             record.matrixSlot = this.matrixPool.take();
             this.matrixPool.values.set(mesh.matrixWorld.elements, record.matrixSlot * MATRIX_FLOATS);
             this.createInstance(record, mesh.matrixWorld.elements, visible);
         }
+        record.matrixHook = hookMatrixWorld(mesh, () => this.matrixWorldUpdated(record));
+        if (geometryRecord.deform) this.deformingList.push(record);
+        if (instanced) this.instancedList.push(record);
         return record;
+    }
+
+    // -----------------------------------------------------------------------
+    // Moves reported by three (change-watch.ts)
+    // -----------------------------------------------------------------------
+
+    /**
+     * Runs inside three's `updateMatrixWorld`, right after it wrote this
+     * mesh's world matrix (usually in its render). Compares and queues only:
+     * a mesh whose matrix differs from the one last sent joins the hot set,
+     * and the next `update` sends it. A hot mesh is skipped: `update`
+     * compares it anyway. (An InstancedMesh's own instance matrices aren't
+     * part of its world matrix: checkInstancedMeshes looks at those.)
+     */
+    private matrixWorldUpdated(record: ObjectRecord): void {
+        if (record.hot || record.destroyed) return;
+        const sent = record.instanced ? record.parentMatrix : this.matrixPool.values;
+        const offset = record.instanced ? 0 : record.matrixSlot * MATRIX_FLOATS;
+        if (differs(record.object.matrixWorld.elements, sent, offset)) this.makeHot(record);
+    }
+
+    /**
+     * Every InstancedMesh not already checked this update (the hot ones
+     * were): a new `instanceMatrix.version` means edited instances, sent now
+     * and the mesh made hot. Instance matrices need no world-matrix update to
+     * be read, so an edit reaches GI in the next update, and with three's
+     * update ranges from the first edit: a mesh whose version hasn't changed
+     * is marked checked this frame, and in the documented order (update, then
+     * render) every edit until three's next upload is then in its ranges
+     * (syncInstancedMesh). One integer compare per InstancedMesh per update.
+     */
+    private checkInstancedMeshes(scene: Scene): void {
+        const list = this.instancedList;
+        for (let index = 0; index < list.length; index++) {
+            const record = list[index];
+            if (record.instancesCheckedFrame === this.frame) continue;
+            const mesh = record.object as InstancedMesh;
+            if (mesh.instanceMatrix.version === record.instanceMatrixVersion) {
+                record.instancesCheckedFrame = this.frame;
+                continue;
+            }
+            // Gone from the scene: the event or the walk removes it.
+            if (!this.placement(mesh, scene)) continue;
+            this.syncInstancedMesh(record, mesh, this.placementVisible, true);
+            this.makeHot(record);
+        }
+    }
+
+    /** Whether the record's hook sees every move, so the walk needn't compare its transform. */
+    private hookReportsMoves(record: ObjectRecord): boolean {
+        return this.hooksSeeEveryMove && record.matrixHook !== null && matrixHookInPlace(record.matrixHook);
+    }
+
+    // -----------------------------------------------------------------------
+    // Deforming meshes (deforming.ts)
+    // -----------------------------------------------------------------------
+
+    /** Every shown deforming mesh: its pose source says whether there is a new pose, and it goes out. */
+    private sendPoses(): void {
+        const list = this.deformingList;
+        for (let index = 0; index < list.length; index++) {
+            const record = list[index];
+            if (!record.shown) continue;
+            const pose = record.geometry.deform!.pose.nextPose();
+            if (!pose) continue;
+            this.api.setDeformedPositions(record.geometry.handle, pose);
+            this.report.poses++;
+        }
     }
 
     private createInstance(record: ObjectRecord, transform: ArrayLike<number>, visible: boolean): void {
@@ -863,6 +1002,10 @@ export class SceneSync {
         // Moves collected for its instances go out first, while their handles are still live.
         this.flushTransforms();
         record.destroyed = true;
+        if (record.matrixHook) unhookMatrixWorld(record.matrixHook);
+        record.matrixHook = null;
+        if (record.geometry.deform) this.deformingList.splice(this.deformingList.indexOf(record), 1);
+        if (record.instanced) this.instancedList.splice(this.instancedList.indexOf(record), 1);
         removeFromList(this.objectList, record);
         if (record.matrixSlot >= 0) this.matrixPool.release(record.matrixSlot);
         record.matrixSlot = -1;
@@ -898,10 +1041,13 @@ export class SceneSync {
         return true;
     }
 
-    /** Transform and visibility; returns whether anything was sent. */
-    private checkInstances(record: ObjectRecord, visible: boolean): boolean {
+    /**
+     * Visibility, and the transform when `compareTransforms` (the walk skips
+     * it for meshes whose hook reports moves); returns whether anything was sent.
+     */
+    private checkInstances(record: ObjectRecord, visible: boolean, compareTransforms: boolean): boolean {
         const mesh = record.object;
-        if (record.instanced) return this.syncInstancedMesh(record, mesh as InstancedMesh, visible);
+        if (record.instanced) return this.syncInstancedMesh(record, mesh as InstancedMesh, visible, compareTransforms);
         let changed = false;
         if (record.shown !== visible) {
             this.api.setVisible(record.instances[0], visible);
@@ -909,7 +1055,7 @@ export class SceneSync {
             this.report.visibility++;
             changed = true;
         }
-        if (copyIfChanged(mesh.matrixWorld.elements, this.matrixPool.values, record.matrixSlot * MATRIX_FLOATS)) {
+        if (compareTransforms && copyIfChanged(mesh.matrixWorld.elements, this.matrixPool.values, record.matrixSlot * MATRIX_FLOATS)) {
             this.transforms.add(record.instances[0], mesh.matrixWorld.elements);
             this.report.transforms++;
             changed = true;
@@ -924,14 +1070,15 @@ export class SceneSync {
      * sent. When only the instance matrices changed and three's update ranges
      * name the instances that did (see the file header), only those are
      * looked at. Instances past `count` are hidden, not destroyed, so a count
-     * that goes down and up again costs nothing. Returns whether anything was
-     * sent.
+     * that goes down and up again costs nothing. Without `compareTransforms`
+     * (the walk, when the hook reports moves) only the count and visibility
+     * are looked at. Returns whether anything was sent.
      */
-    private syncInstancedMesh(record: ObjectRecord, mesh: InstancedMesh, visible: boolean): boolean {
+    private syncInstancedMesh(record: ObjectRecord, mesh: InstancedMesh, visible: boolean, compareTransforms: boolean): boolean {
         const before = this.report.transforms + this.report.visibility;
         const count = mesh.count;
-        const parentMoved = copyIfChanged(mesh.matrixWorld.elements, record.parentMatrix, 0);
-        const instancesChanged = mesh.instanceMatrix.version !== record.instanceMatrixVersion;
+        const parentMoved = compareTransforms && copyIfChanged(mesh.matrixWorld.elements, record.parentMatrix, 0);
+        const instancesChanged = compareTransforms && mesh.instanceMatrix.version !== record.instanceMatrixVersion;
         const grew = count > record.instances.length;
         if (grew) {
             const matrices = new Float64Array(count * MATRIX_FLOATS);
@@ -941,7 +1088,7 @@ export class SceneSync {
         // The ranges cover every change since the last render only if this mesh was also checked in the previous update.
         const ranges = mesh.instanceMatrix.updateRanges;
         const useRanges = instancesChanged && !parentMoved && !grew && ranges.length > 0 && record.instancesCheckedFrame === this.frame - 1;
-        record.instancesCheckedFrame = this.frame;
+        if (compareTransforms) record.instancesCheckedFrame = this.frame;
         if (useRanges) {
             record.instanceMatrixVersion = mesh.instanceMatrix.version;
             for (const range of ranges) {
@@ -987,9 +1134,15 @@ export class SceneSync {
         return [attributes.position ?? null, geometry.index, attributes.normal ?? null, attributes.uv ?? null, uv1 ? (attributes.uv1 ?? null) : null];
     }
 
-    private acquireGeometry(mesh: Mesh): GeometryRecord | undefined {
+    /**
+     * The platform mesh for a three mesh's geometry: shared by every mesh
+     * with that geometry, except a deforming one (`deform` given), which gets
+     * its own, created `deforming` with its pose box, since each mesh has its
+     * own pose.
+     */
+    private acquireGeometry(mesh: Mesh, deform: DeformKind | null): GeometryRecord | undefined {
         const geometry = mesh.geometry;
-        const existing = this.geometries.get(geometry);
+        const existing = deform ? undefined : this.geometries.get(geometry);
         if (existing) {
             existing.users++;
             return existing;
@@ -1000,11 +1153,13 @@ export class SceneSync {
             const material = this.materialForSlot(mesh, slot);
             if (material && usesUvChannel1(material)) uv1 = true;
         }
-        const descriptor = meshDescriptor(geometry, { includeUv1: uv1, label: geometry.name || mesh.name || undefined });
-        if (!descriptor) {
+        const plain = meshDescriptor(geometry, { includeUv1: uv1, label: geometry.name || mesh.name || undefined });
+        if (!plain) {
             this.warnOnce(`a mesh without positions ("${mesh.name || geometry.uuid}") is left out of GI.`);
             return undefined;
         }
+        const shape = deform ? deformingShape(mesh, deform) : null;
+        const descriptor = shape ? { ...plain, deforming: true, deformBounds: shape.bounds } : plain;
         const attributes = this.geometryAttributes(geometry, uv1);
         const record: GeometryRecord = {
             geometry,
@@ -1015,29 +1170,41 @@ export class SceneSync {
             attributes,
             versions: attributes.map(attributeVersion),
             listIndex: this.geometryList.length,
+            deform: shape,
         };
-        this.geometries.set(geometry, record);
+        if (!shape) this.geometries.set(geometry, record);
         this.geometryList.push(record);
         return record;
     }
 
-    /** A replaced or edited attribute means `updateMesh` (which rebuilds its BVH). Doesn't allocate unless something changed. */
+    /**
+     * A replaced or edited attribute means `updateMesh` (which rebuilds its
+     * BVH). Doesn't allocate unless something changed. For a deforming mesh,
+     * an edit of the positions alone is a new pose, which its pose source
+     * sends (sendPoses); only a replaced position attribute is a new shape.
+     */
     private checkGeometry(record: GeometryRecord): void {
         const geometry = record.geometry;
         const attributes = geometry.attributes;
+        const positionChanged = record.deform
+            ? (attributes.position ?? null) !== record.attributes[GEOMETRY_ATTRIBUTE.position]
+            : attributeChanged(attributes.position, record, GEOMETRY_ATTRIBUTE.position);
         const changed =
-            attributeChanged(attributes.position, record, GEOMETRY_ATTRIBUTE.position) ||
+            positionChanged ||
             attributeChanged(geometry.index, record, GEOMETRY_ATTRIBUTE.index) ||
             attributeChanged(attributes.normal, record, GEOMETRY_ATTRIBUTE.normal) ||
             attributeChanged(attributes.uv, record, GEOMETRY_ATTRIBUTE.uv) ||
             (record.uv1 && attributeChanged(attributes.uv1, record, GEOMETRY_ATTRIBUTE.uv1));
         if (!changed) return;
-        const descriptor = meshDescriptor(geometry, { includeUv1: record.uv1, label: geometry.name || undefined });
-        if (!descriptor) {
+        const plain = meshDescriptor(geometry, { includeUv1: record.uv1, label: geometry.name || undefined });
+        if (!plain) {
             this.warnOnce(`geometry "${geometry.name || geometry.uuid}" lost its positions; GI keeps its previous shape.`);
             return;
         }
+        const descriptor = record.deform ? { ...plain, deforming: true, deformBounds: record.deform.bounds } : plain;
         this.api.updateMesh(record.handle, descriptor);
+        // The platform now holds the new rest pose; the next pose is worked out from it.
+        record.deform?.pose.reset();
         const current = this.geometryAttributes(geometry, record.uv1);
         for (let index = 0; index < current.length; index++) {
             record.attributes[index] = current[index];
@@ -1050,7 +1217,8 @@ export class SceneSync {
         record.users--;
         if (record.users > 0) return;
         this.api.destroyMesh(record.handle);
-        this.geometries.delete(record.geometry);
+        // A deforming record isn't in the map (it isn't shared); a shared one for the same geometry may be.
+        if (this.geometries.get(record.geometry) === record) this.geometries.delete(record.geometry);
         removeFromList(this.geometryList, record);
     }
 
@@ -1213,6 +1381,8 @@ export class SceneSync {
             if (source === 'marked') this.makeLightHot(existing);
             return;
         }
+        // As for meshes (visitMesh): the walk's stack can hold a light removed since it was pushed.
+        if (source === 'walk' && !this.placement(light, this.walkScene!)) return;
         const descriptor = lightDescriptor(light, visible ? 1 : 0);
         if (!descriptor) return;
         const numbers = new Float64Array(LIGHT_NUMBER_COUNT);
@@ -1431,6 +1601,18 @@ function copyIfChanged(source: ArrayLike<number>, target: Float64Array, offset: 
         }
     }
     return changed;
+}
+
+/** Whether `source` (16 numbers) differs from `target` at `offset`; reads only, so a hook can compare without changing what was sent. */
+function differs(source: ArrayLike<number>, target: Float64Array, offset: number): boolean {
+    for (let index = 0; index < MATRIX_FLOATS; index++) if (target[offset + index] !== source[index]) return true;
+    return false;
+}
+
+/** How a deforming mesh deforms, its pose box and its pose source (deforming.ts). */
+function deformingShape(mesh: Mesh, kind: DeformKind): DeformingShape {
+    const bounds = deformBoundsFor(mesh, kind);
+    return { kind, bounds, pose: poseSourceFor(mesh, kind, bounds) };
 }
 
 function sameNumbers(a: Float64Array, b: Float64Array): boolean {

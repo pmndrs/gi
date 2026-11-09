@@ -312,6 +312,18 @@ This is the mirroring on its own, for hosts that call `gi.encode` themselves.
 
 **Per object.** Set `userData.giContributes = false` to keep an object out of GI's rays. It still receives GI. Skinned meshes are left out unless they set it to `true`.
 
+**Deforming meshes** (T3.7). GI follows the changing shape of a mesh that takes part in GI's rays and is:
+- a `SkinnedMesh` (it must also set `userData.giContributes = true`, see above);
+- a mesh with position morph targets;
+- a plain mesh with `userData.giDeforming = true`, whose position attribute you animate on the CPU (set `needsUpdate` as usual). Each edit is then sent as a new pose, not as a new shape.
+
+How it works and what to know:
+- Each such mesh gets its own platform mesh (a shared geometry is copied per mesh), made `deforming`.
+- When the pose's inputs change (the bones' world matrices, the morph influences, the position attribute's version), the adapter works the positions out on the CPU, the way three's own `getVertexPosition` does, and sends them with `setDeformedPositions`. A still pose costs a few compares an update. A skinned rig that only moves as a whole sends no pose.
+- `userData.giDeforming = false` keeps a skinned or morphed mesh in its bind pose.
+- `userData.giDeformBounds` (a `Box3`, or `{ min: [x, y, z], max: [x, y, z] }`) is a box in the mesh's own space that every pose stays in. Without it the adapter estimates one: exact for morph targets with influences from 0 to 1; for skinned meshes, the bind pose's box grown by half its largest side on every side; for CPU-animated ones, by a quarter. A pose that leaves the box is still traced correctly; the platform grows the box and warns once.
+- A pose reaches GI's rays once the platform has rebuilt that mesh's tree (until M3's T3.3 replaces the rebuild with a GPU refit), and three's GPU skinning isn't read yet (T3.3 adds that): the CPU work is per vertex, so keep deforming meshes small for now.
+
 **See-through meshes.** Until M4, GI's rays treat every surface as opaque: they don't yet skip see-through materials triangle by triangle. So the adapter leaves out of GI's rays any mesh whose materials **all** let light through. Such a mesh still receives GI. Without this, a decal with no diffuse colour, such as Sponza's `dirt_decal`, would be a black sheet that darkens the room.
 - A mesh that mixes blocking and see-through materials stays in GI, and all of it is treated as opaque. You get a one-time warning naming it.
 - A material edit or swap that changes this is picked up like any other edit (see below).
@@ -326,21 +338,28 @@ You get a one-time warning for:
 
 Not mirrored, with no warning:
 - **Camera layers.** GI follows `visible` only. An object on a layer the camera doesn't show still blocks and bounces light: hide it, or set `giContributes = false`.
-- Morph targets and skinning. GI uses the bind pose.
+- Morph targets and skinning of meshes that don't take part in GI's rays (characters, by default). GI uses their bind pose, which only matters for where their nearby probes wake.
 - The x and z parts of an environment rotation.
 - Render-target and compressed textures. Their pixels can't be read.
 - See-through parts of a mesh that also has opaque materials. They are treated as opaque (a warning names the mesh; see "See-through meshes").
 
 ## How changes are found, and how late
 
-three doesn't record when a world matrix changes. So finding a moved object means looking at it, and looking at every object every frame would cost more the bigger the scene.
+three doesn't record when a world matrix changes, and looking at every object every frame would cost more the bigger the scene. Since T3.7 three tells the adapter about the commonest changes itself, and a fixed amount of work per frame finds the rest.
 
-The adapter does a fixed amount of work per frame instead:
+What three tells the adapter (nothing to call):
 
-- **The walk.** Each frame checks `objectsPerFrame` objects for new, moved, hidden or removed ones, then carries on where it stopped. A whole pass takes `ceil(objects / objectsPerFrame)` frames. Removals can take up to two passes.
-- **The hot list.** Once an object is seen moving, it is checked every frame until it has been still for 60 frames. Continuous motion is therefore sent every frame.
-- **`markChanged(object)`.** Tells the adapter something changed (added, moved, edited or removed). The object and everything under it are picked up in the next `update`. Use it when you move things and want no delay.
-- **Moves go out in one batch.** Every transform an `update` finds changed is sent with one `setTransforms` call at its end. For an `InstancedMesh` whose instance matrices changed, the instances named by `instanceMatrix.addUpdateRange(...)` are the only ones looked at, when the mesh was also checked in the previous update (three clears the ranges at `render`, after `ThreeGI.update` in the documented order); otherwise every instance is compared and only changed ones are sent.
+- **Added and removed objects.** three fires `childadded` and `childremoved` on the parent whenever `add`, `remove`, `attach`, `clear` or `removeFromParent` changes its children. The adapter listens on every object of the scene, so an added or removed object, with everything under it, reaches GI in the next `update`.
+- **Moves.** The adapter replaces `updateMatrixWorld` on each mesh it mirrors with one that calls three's and then compares the new world matrix with the one last sent. three's render runs it on every object, so a moved mesh, or the meshes under a moved group, are found by the render after the move and sent by the next `update`. It costs about 50 ns a mesh inside three's render (T3.0). The method is put back by assignment when the mesh leaves GI or on `dispose`. The adapter never `delete`s it: on Bistro interior that left three's own matrix update 3× slower.
+- **Instance matrices.** Each `InstancedMesh`'s `instanceMatrix.version` is compared every `update` (an integer each), so edited instances reach GI in the next `update`. When its update ranges (`instanceMatrix.addUpdateRange(...)`) name the instances that changed, only those are looked at; three clears the ranges at `render`, after `ThreeGI.update` in the documented order, so they are complete. Otherwise every instance is compared and only changed ones are sent.
+- **Deforming meshes:** their poses are checked every `update` (see "Deforming meshes" above).
+
+What the adapter still looks for, a fixed amount per frame:
+
+- **The walk.** Each frame checks `objectsPerFrame` objects for new, moved, hidden or removed ones, then carries on where it stopped. A whole pass takes `ceil(objects / objectsPerFrame)` frames. It no longer compares the transforms of meshes whose `updateMatrixWorld` reports their moves, while three updates the scene's matrices itself (`scene.matrixWorldAutoUpdate`, three's default). It is the safety net for the rest: a hidden parent, a world matrix written by hand on a scene that doesn't update its own matrices.
+- **The hot list.** Once an object is seen moving, hidden or shown, it is checked every frame until it has been still for 60 frames. Continuous motion is therefore sent every frame.
+- **`markChanged(object)`.** Tells the adapter something changed (added, moved, edited or removed). The object and everything under it are picked up in the next `update`. It is still the way to have an edit (a material or geometry) or a `visible` change seen at once.
+- **Moves go out in one batch.** Every transform an `update` finds changed is sent with one `setTransforms` call at its end.
 - **Edits.** Each frame, `editChecksPerFrame` geometries, materials and objects are checked for edits: geometry, material values, the `giContributes` flag, and whether a mesh's materials still all let light through.
 - **Lights** (T2.1). The first 64 lights and every directional light are checked every frame, so a scene with a few lamps sees each light change in the frame it happens. Past 64, lights follow the objects' rules: `lightsPerFrame` (default 64) of them a frame, round robin, and a light found changed stays checked every frame until it has been still for 60 frames. So 1,024 candles cost 128 light checks on a still frame, not 1,024; an unmarked candle change, hide or removal reaches GI within `ceil((lights − 64) / 64)` frames (15 for 1,024 candles), and a flickering candle every frame once seen. `markChanged(light)` sends it the next update.
 

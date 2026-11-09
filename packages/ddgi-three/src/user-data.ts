@@ -25,10 +25,21 @@
  *   such materials let light through (convert.ts, `materialDescriptor`), and
  *   a mesh made only of them is left out of GI's rays (scene-sync.ts). Only
  *   `true` is read.
+ * - `userData.giDeforming` (boolean, on a mesh): whether GI follows the
+ *   mesh's changing shape (deforming.ts). A `SkinnedMesh` or a mesh with
+ *   morph targets deforms by default once it contributes to GI; `false` keeps
+ *   it in its bind pose. `true` on a plain mesh says its position attribute
+ *   is animated on the CPU, so each edit is sent as a pose instead of a new
+ *   shape.
+ * - `userData.giDeformBounds` (a three `Box3`, or `{ min: [x, y, z], max:
+ *   [x, y, z] }`, on a deforming mesh): a box in the mesh's own space that
+ *   every pose stays inside. Without it the adapter estimates one
+ *   (deforming.ts).
  *
  * The flag is read from the object itself, not inherited from its parents.
  */
 
+import type { Aabb } from '@pmndrs/ddgi-core';
 import type { Object3D } from 'three';
 
 export const GI_USER_DATA = {
@@ -37,6 +48,8 @@ export const GI_USER_DATA = {
     castsShadows: 'giCastsShadows',
     singleSided: 'giSingleSided',
     blocksLight: 'giBlocksLight',
+    deforming: 'giDeforming',
+    deformBounds: 'giDeformBounds',
 } as const;
 
 /** Light groups the platform has (scene contract: 0..3). */
@@ -72,4 +85,36 @@ export function castsShadowsForGI(light: Object3D): boolean {
 export function lightGroup(object: Object3D): number {
     const value = object.userData[GI_USER_DATA.lightGroup];
     return Number.isInteger(value) && value >= 0 && value < LIGHT_GROUP_COUNT ? (value as number) : 0;
+}
+
+/** `userData.giDeforming` when it is a boolean, otherwise undefined (the mesh's kind decides). */
+export function deformingFlag(object: Object3D): boolean | undefined {
+    const value = object.userData[GI_USER_DATA.deforming];
+    return typeof value === 'boolean' ? value : undefined;
+}
+
+/**
+ * `userData.giDeformBounds` as the platform's box, or undefined when absent
+ * or not a box of finite numbers. Accepts a three `Box3` (`min` and `max` as
+ * `Vector3`) or plain `[x, y, z]` triples.
+ */
+export function deformBoundsFlag(object: Object3D): Aabb | undefined {
+    const value = object.userData[GI_USER_DATA.deformBounds] as { min?: unknown; max?: unknown } | undefined;
+    if (!value || typeof value !== 'object') return undefined;
+    const min = triple(value.min);
+    const max = triple(value.max);
+    return min && max ? { min, max } : undefined;
+}
+
+function triple(value: unknown): [number, number, number] | undefined {
+    if (Array.isArray(value)) {
+        const numbers = value as unknown[];
+        if (numbers.length === 3 && numbers.every((number) => typeof number === 'number' && Number.isFinite(number))) return [numbers[0] as number, numbers[1] as number, numbers[2] as number];
+        return undefined;
+    }
+    const vector = value as { x?: unknown; y?: unknown; z?: unknown } | null;
+    if (vector && typeof vector === 'object' && [vector.x, vector.y, vector.z].every((number) => typeof number === 'number' && Number.isFinite(number))) {
+        return [vector.x as number, vector.y as number, vector.z as number];
+    }
+    return undefined;
 }
