@@ -1,0 +1,4 @@
+{
+    "description": "T4.2: see-through and single-sided materials in the walk through the platform (glass pane in a wall mesh, single-sided quad from both sides, per-instance see-through), against the CPU reference (>= 99.9% agree), on tinybvh and GPU first trees; run-time material edits rewrite the flags with 0 recompiles; any-hit cost of flagged rays noted.",
+    "timeoutMs": 600000
+}

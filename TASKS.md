@@ -486,7 +486,7 @@ Status: **started 2026-11-09** on branch `m4` (from `m2` at 5de856b), beside M3.
 | ID | Task | Agent | Size | Depends on | Status |
 | --- | --- | --- | --- | --- | --- |
 | T4.1 | Texture store and textured hits: store (texture array, 256² layers), four sources incl. compressed mips, `gi/texture-store`, uv mapping and ray-cone mip in `giSurfaceAt`, albedo/emissive/metalness at hits, the contract additions | implementer | M | none | in progress (worktree `webgpu-ddgi-m4-t41`, branch `m4-t4.1`) |
-| T4.2 | Materials in the walk: consult and instance flags, `giMaterialPasses`, `gi/triangle-flags`; see-through and single-sided first, then cutout and stochastic; CPU reference | implementer | M | T4.1 for cutouts and stochastic | in progress, see-through half (worktree `webgpu-ddgi-m4-t42`, branch `m4-t4.2`) |
+| T4.2 | Materials in the walk: consult and instance flags, `giMaterialPasses`, `gi/triangle-flags`; see-through and single-sided first, then cutout and stochastic; CPU reference | implementer | M | T4.1 for cutouts and stochastic | review: see-through and single-sided half (branch `m4-t4.2`); cutout and stochastic half todo, after T4.1 |
 | T4.3 | three adapter materials v2 (design section 4): real textures incl. `CompressedTexture`, fold and mesh exclusion removed | implementer | M | T4.1, T4.2 | todo |
 | T4.4 | Textured scenes: four procedural ones, every real scene textured, textured Cycles HD references, debug views | wrangler + implementer | M | none (pages need T4.1) | in progress (worktree `webgpu-ddgi-m4-t44`, branch `m4-t4.4`) |
 | T4.5 | M4 check and note, with Dennis's look | main session + gpu-tester | S | all; T3.12 for Bistro | todo |
