@@ -45,6 +45,7 @@ import type { GIStats, MemoryReport, PassTiming } from './contract/stats.ts';
 import type { GITechnique, TechniqueContext, TechniqueFrame } from './contract/technique.ts';
 import type { GpuTimerScope } from './contract/timing.ts';
 import { countComputePipelines, type CompileCounter } from './compile-counter.ts';
+import { PlatformGpuCompute } from './compute/gpu-compute.ts';
 import { PlatformKernelBuilder } from './kernel-builder.ts';
 import { mergeSceneChanges } from './scene/change-log.ts';
 import { PlatformScene } from './scene/platform-scene.ts';
@@ -104,6 +105,8 @@ export class GIPlatformImpl implements GIPlatform {
     readonly sceneCopy: PlatformScene;
     readonly rays: PlatformRayQueries;
     readonly kernels: PlatformKernelBuilder;
+    /** Scan, compaction and indirect arguments for techniques (RC1.3); kernels compile on first use, in a technique's `prepare`. */
+    readonly compute: PlatformGpuCompute;
 
     private readonly label: string;
     /** The `rayBatches` option: compile the batch kernels whatever the techniques ask. */
@@ -163,6 +166,7 @@ export class GIPlatformImpl implements GIPlatform {
             meshTrees: options.meshTrees,
         });
         this.kernels = new PlatformKernelBuilder(ownDevice, this.label);
+        this.compute = new PlatformGpuCompute(ownDevice, { label: this.label });
         this.timer = options.gpuTiming ? new GpuTimer(ownDevice, { warn: (message) => this.warnOnce(message) }) : null;
         const rays = this.rays;
         this.queries = {
@@ -466,6 +470,7 @@ export class GIPlatformImpl implements GIPlatform {
             queries: this.queries,
             shade: this.shade,
             kernels: this.kernels,
+            compute: this.compute,
             // A getter: setFallback may be called after the technique was attached.
             get fallback(): BounceSource | undefined {
                 const fallback = entry.fallback;

@@ -4,6 +4,7 @@
  */
 
 export * from './errors';
+export type * from './compute';
 export type * from './frame';
 export type * from './handles';
 export type * from './math';
