@@ -16,6 +16,7 @@ import { createFakeGpu, type FakeBuffer, type FakeEncoder } from '../scene/testi
 import { createCpuTracer } from './cpu-traversal.ts';
 import {
     createMaterialTestModule,
+    MATERIAL_TEST_UNIFORM_BYTES,
     materialAlphaAt,
     materialLetsRayPass,
     materialNeedsLookup,
@@ -144,6 +145,13 @@ describe('the alpha rules (CPU twins)', () => {
         expect(stochasticHashValue(0, 0, 0, 0)).toBeGreaterThanOrEqual(0);
         expect(stochasticHashValue(0, 0, 0, 0)).toBeLessThan(1);
         expect(stochasticHashValue(1, 2, 0.25, 0.5)).not.toBe(stochasticHashValue(1, 2, 0.5, 0.25));
+        // The frame number changes the answer for a hit that repeats exactly (a still shadow ray), and over frames
+        // such a hit passes about 1 - alpha of the time instead of always or never.
+        expect(stochasticHashValue(1, 2, 0.25, 0.5, 7)).not.toBe(stochasticHashValue(1, 2, 0.25, 0.5, 8));
+        let passedOverFrames = 0;
+        for (let frame = 0; frame < 4000; frame++) if (stochasticHashValue(1, 2, 0.25, 0.5, frame) >= 0.25) passedOverFrames++;
+        expect(passedOverFrames / 4000).toBeGreaterThan(0.72);
+        expect(passedOverFrames / 4000).toBeLessThan(0.78);
     });
 });
 
@@ -187,6 +195,38 @@ const RECORDING_KERNELS: KernelBuilder = {
         }) satisfies ComputeKernel,
 };
 
+describe('the material test module', () => {
+    it('binds one uniform, the frame number, and no storage buffer; the rays backend writes a new frame each update', async () => {
+        const gpu = createFakeGpu();
+        Object.assign(gpu.device as unknown as Record<string, unknown>, {
+            features: new Set<string>(),
+            createBindGroupLayout: (descriptor: GPUBindGroupLayoutDescriptor) => ({ descriptor }),
+            createPipelineLayout: (descriptor: GPUPipelineLayoutDescriptor) => ({ descriptor }),
+        });
+        const scene = new PlatformScene(gpu.device);
+        const frame = gpu.device.createBuffer({ size: MATERIAL_TEST_UNIFORM_BYTES, usage: GPUBufferUsage.UNIFORM });
+        const module = createMaterialTestModule(scene.module, scene.module, frame);
+        expect(module.entries).toHaveLength(1);
+        expect(module.entries[0].buffer?.type).toBe('uniform');
+        expect(module.storageBufferCount).toBe(0);
+        expect(module.resources()).toEqual([{ buffer: frame }]);
+        expect(module.code({ group: 0, firstBinding: 9 })).toContain('@group(0) @binding(9) var<uniform> giMaterialTestFrame');
+
+        const rays = new PlatformRayQueries(gpu.device, scene, { buildIn: 'main', meshTrees: { gpuFirst: false } });
+        const walkFrame = gpu.buffers.find((buffer) => buffer.label.endsWith('trace walk frame'));
+        expect(walkFrame).toBeDefined();
+        const frames: number[] = [];
+        for (let index = 0; index < 3; index++) {
+            const encoder = gpu.createEncoder();
+            rays.update(encoder, scene.encode(encoder));
+            gpu.submit(encoder);
+            frames.push(walkFrame!.words[0]);
+        }
+        expect(frames).toEqual([1, 2, 3]);
+        rays.dispose();
+    });
+});
+
 describe('gi/triangle-flags uploads (T4.2 review)', () => {
     it("gives each encode its own ranges and clears the masks in that encode's encoder, with no queue writes", async () => {
         const gpu = createFakeGpu();
@@ -198,7 +238,7 @@ describe('gi/triangle-flags uploads (T4.2 review)', () => {
             write(...args);
         };
         const sceneModule = new PlatformScene(gpu.device).module;
-        const flags = new TriangleFlagsKernels(gpu.device, createMaterialTestModule(sceneModule, sceneModule), 'test');
+        const flags = new TriangleFlagsKernels(gpu.device, createMaterialTestModule(sceneModule, sceneModule, gpu.device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM })), 'test');
         await flags.prepare(RECORDING_KERNELS);
         const triangles = gpu.device.createBuffer({ size: 4096, usage: GPUBufferUsage.STORAGE });
         const groups: GPUBindGroupEntry[][] = [];

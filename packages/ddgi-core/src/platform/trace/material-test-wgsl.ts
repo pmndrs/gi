@@ -29,13 +29,18 @@
  * made) the alpha is the opacity alone. The rules read the texture whatever
  * hit shading's `sampleTextures` setting says: holes are geometry, not shading.
  *
- * **The stochastic hash** mixes the instance, the triangle and the bits of
- * the hit's barycentrics (PCG, Jarzynski and Olano 2020). The barycentrics
- * carry the ray: two rays meeting the same triangle at the same point to the
- * last bit are rare, and DDGI turns its probe rays every frame, so the
- * pattern differs from frame to frame without a frame number (which would
- * need a uniform in the walk). A fixed ray traced every frame sees the same
- * answer each time; many rays see 1 − alpha of them pass.
+ * **The stochastic hash** mixes the frame number, the instance, the
+ * triangle and the bits of the hit's barycentrics (PCG, Jarzynski and Olano
+ * 2020). The barycentrics carry the ray: two rays meeting the same triangle
+ * at the same point to the last bit are rare. The frame number is what keeps
+ * a ray that repeats exactly from frame to frame from getting the same answer
+ * every time: `gi/direct`'s shadow rays from a still camera's hits to a light
+ * of radius 0, or DDGI's fixed (unrotated) rays. Without it, a stochastic
+ * surface's shadow would be the same noise every frame, frozen; with it, the
+ * answers change each frame and DDGI's blend averages them to 1 − alpha. The
+ * frame is a uniform the `rays` backend writes once per `update`
+ * ({@link MATERIAL_TEST_UNIFORM_BYTES}); a tracer that traces the same frame
+ * twice gets the same answers, as before.
  *
  * **Only flagged triangles pay.** The tracer's triangle flag bit 0
  * ({@link TRIANGLE_FLAG_CONSULT_MATERIAL}) says "consult the material". The
@@ -80,6 +85,12 @@ export const ALPHA_TEST_LOD = 1;
 /** Mixed into the stochastic hash first, so it doesn't start from the same state as other hashes of the same numbers. */
 const STOCHASTIC_SALT = 0x5f3759df;
 
+/** The material test's one uniform: the frame number (a u32), padded to WebGPU's 16-byte minimum binding size. */
+export const MATERIAL_TEST_UNIFORM_BYTES = 16;
+
+/** `GPUShaderStage.COMPUTE`. The global does not exist in Node, where the tests import this file. */
+const SHADER_STAGE_COMPUTE = 0x4;
+
 /** An albedo texture as the CPU rules read it: its store layer made on the CPU, and its uv mapping. */
 export interface WalkAlphaTexture {
     readonly layer: CpuStoreLayer;
@@ -118,7 +129,7 @@ export function walkMaterialOf(descriptor: MaterialDescriptor, albedoTexture?: W
 }
 
 /** The cutoff the record holds: the material's (0.5 by default) for a cutout, 0 otherwise. */
-function cutoffOf(material: WalkMaterial): number {
+export function alphaCutoffOf(material: WalkMaterial): number {
     return material.alphaMode === 'cutout' ? (material.alphaCutoff ?? DEFAULT_ALPHA_CUTOFF) : 0;
 }
 
@@ -141,7 +152,7 @@ function materialMayOpenHoles(material: WalkMaterial): boolean {
     const opacity = material.opacity ?? 1;
     const textured = material.albedoTexture !== undefined;
     if (material.alphaMode === 'cutout') {
-        const cutoff = cutoffOf(material);
+        const cutoff = alphaCutoffOf(material);
         return cutoff > 0 && (textured || opacity < cutoff);
     }
     if (material.alphaMode === 'stochastic') return textured || opacity < 1;
@@ -187,11 +198,13 @@ function bitsOfFloat32(value: number): number {
 
 /**
  * The stochastic rule's hash of a hit, in [0, 1) (CPU twin of
- * `giMaterialStochasticValue`): the instance, the triangle, and the f32 bits
- * of the barycentrics `u`, `v` (weights of corners 1 and 2).
+ * `giMaterialStochasticValue`): the frame number, the instance, the
+ * triangle, and the f32 bits of the barycentrics `u`, `v` (weights of
+ * corners 1 and 2).
  */
-export function stochasticHashValue(instanceIndex: number, triangleIndex: number, u: number, v: number): number {
-    let hash = pcgHash((instanceIndex ^ STOCHASTIC_SALT) >>> 0);
+export function stochasticHashValue(instanceIndex: number, triangleIndex: number, u: number, v: number, frame = 0): number {
+    let hash = pcgHash((frame ^ STOCHASTIC_SALT) >>> 0);
+    hash = pcgHash((hash ^ instanceIndex) >>> 0);
     hash = pcgHash((hash ^ triangleIndex) >>> 0);
     hash = pcgHash((hash ^ bitsOfFloat32(u)) >>> 0);
     hash = pcgHash((hash ^ bitsOfFloat32(v)) >>> 0);
@@ -207,14 +220,21 @@ export function stochasticHashValue(instanceIndex: number, triangleIndex: number
 export function materialLetsRayPass(material: WalkMaterial, frontFace: boolean, alphaAt: () => number = () => 1, stochasticValue: () => number = () => 0): boolean {
     if (!material.blocksLight) return true;
     if (!material.doubleSided && !frontFace) return true;
-    if (material.alphaMode === 'cutout') return alphaAt() < cutoffOf(material);
+    if (material.alphaMode === 'cutout') return alphaAt() < alphaCutoffOf(material);
     if (material.alphaMode === 'stochastic') return stochasticValue() >= alphaAt();
     return false;
 }
 
 /** The rules over the scene copy: needs the scene module's `giMaterialAt`, `giMaterial` and `giInstanceTriangleUvs`, and the sampling module's `giTextureSampleMapped`. */
-const MATERIAL_TEST_WGSL = /* wgsl */ `
+function materialTestWgsl(slot: BindingSlot): string {
+    return /* wgsl */ `
 // ---- Materials in the walk (trace/material-test-wgsl.ts) ------------------------------
+
+// The frame number, for the stochastic hash (written by the rays backend each update).
+struct GiMaterialTestFrame {
+    frame: u32,
+}
+@group(${slot.group}) @binding(${slot.firstBinding}) var<uniform> giMaterialTestFrame: GiMaterialTestFrame;
 
 // The store mip the alpha rules read: fixed, as a hole is geometry (ALPHA_TEST_LOD).
 const GI_MATERIAL_ALPHA_TEST_LOD: f32 = ${ALPHA_TEST_LOD}.0;
@@ -263,10 +283,13 @@ fn giMaterialPcgHash(value: u32) -> u32 {
 }
 
 // The stochastic rule's random number for a hit, in [0, 1): a hash of the
-// instance, the triangle and the barycentrics' bits, which carry the ray
-// (the file comment says why no frame number is needed).
+// frame, the instance, the triangle and the barycentrics' bits, which carry
+// the ray. The frame changes the answer for rays that repeat exactly from
+// frame to frame (the file comment says which), so their shadows average out
+// instead of freezing into one noise pattern.
 fn giMaterialStochasticValue(instance: u32, triangle: u32, barycentrics: vec2f) -> f32 {
-    var hash = giMaterialPcgHash(instance ^ GI_MATERIAL_STOCHASTIC_SALT);
+    var hash = giMaterialPcgHash(giMaterialTestFrame.frame ^ GI_MATERIAL_STOCHASTIC_SALT);
+    hash = giMaterialPcgHash(hash ^ instance);
     hash = giMaterialPcgHash(hash ^ triangle);
     hash = giMaterialPcgHash(hash ^ bitcast<u32>(barycentrics.x));
     hash = giMaterialPcgHash(hash ^ bitcast<u32>(barycentrics.y));
@@ -311,19 +334,21 @@ fn giMaterialPasses(instance: u32, triangle: u32, barycentrics: vec2f, frontFace
     return false;
 }
 `;
+}
 
 /**
- * The material test as a platform module: no bindings of its own, the scene
- * module and the texture store's sampling module before it. The `rays`
- * module and `gi/triangle-flags` list it.
+ * The material test as a platform module: one uniform of its own,
+ * `frameUniform` (the frame number, {@link MATERIAL_TEST_UNIFORM_BYTES}), the
+ * scene module and the texture store's sampling module before it. No storage
+ * buffer. The `rays` module and `gi/triangle-flags` list it.
  */
-export function createMaterialTestModule(sceneModule: WgslModule, textureModule: WgslModule): WgslModule {
+export function createMaterialTestModule(sceneModule: WgslModule, textureModule: WgslModule, frameUniform: GPUBuffer): WgslModule {
     return {
         name: 'gi-material-test',
         dependencies: [sceneModule, textureModule],
-        code: (_slot: BindingSlot) => MATERIAL_TEST_WGSL,
-        entries: [],
-        resources: () => [],
+        code: (slot: BindingSlot) => materialTestWgsl(slot),
+        entries: [{ visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'uniform' } }],
+        resources: () => [{ buffer: frameUniform }],
         version: 0,
         storageBufferCount: 0,
     };

@@ -31,6 +31,7 @@ import { STORE_LAYER_SIZE } from '../textures/texture-store-wgsl.ts';
 import { mappedTextureUv, sampleStoreLayer, wrapTextureCoordinate } from '../textures/texture-store-cpu.ts';
 import {
     ALPHA_TEST_LOD,
+    alphaCutoffOf,
     materialAlphaAt,
     materialLetsRayPass,
     stochasticHashValue,
@@ -226,7 +227,7 @@ function nearAlphaEdge(material: WalkMaterial, passes: boolean, cornerUvs: Array
     const texture = material.albedoTexture;
     if (!texture) return false;
     const opacity = material.opacity ?? 1;
-    const cutoff = material.alphaCutoff ?? 0;
+    const cutoff = alphaCutoffOf(material);
     const clamp = (weight: number): number => Math.min(Math.max(weight, 0), 1);
     const [centreU, centreV] = mappedTextureUv(texture.uv, cornerUvs, [clamp(1 - u - v), clamp(u), clamp(v)]);
     const halfTexel = (0.5 * Math.pow(2, Math.ceil(ALPHA_TEST_LOD))) / STORE_LAYER_SIZE;

@@ -60,7 +60,7 @@ import { GrowableStorage, type ResidentRange } from './growable-storage.ts';
 import { BVH_NODE_BYTES, TOP_LEVEL_HEADER_BYTES, TRACE_STACK_SIZE, TRIANGLE_BYTES } from './layout.ts';
 import type { MeshBvh } from './mesh-bvh.ts';
 import { createMeshBvhBuilder, type MeshBvhBuilder } from './mesh-bvh-async.ts';
-import { createMaterialTestModule } from './material-test-wgsl.ts';
+import { createMaterialTestModule, MATERIAL_TEST_UNIFORM_BYTES } from './material-test-wgsl.ts';
 import { buildTopLevel, type TraceInstance } from './top-level.ts';
 import { GpuTopLevel } from './top-level-gpu.ts';
 import { RAY_BYTES } from './trace-gpu.ts';
@@ -265,6 +265,9 @@ export class PlatformRayQueries implements RayQueries {
      * leaves these alone (a colour, an emissive, a uv transform) rewrites nothing.
      */
     private readonly walkKeys = new Map<number, string>();
+    /** The walk's frame number for the stochastic hash (material-test-wgsl.ts), one more each `update`. */
+    private readonly walkFrameUniform: GPUBuffer;
+    private walkFrame = 0;
 
     private closestKernel: ComputeKernel | null = null;
     private anyKernel: ComputeKernel | null = null;
@@ -311,7 +314,12 @@ export class PlatformRayQueries implements RayQueries {
         // The walk reads materials from the scene copy (T4.2), through the binding-free material test
         // module, and cutout alpha from the texture store through its sampling module: the same
         // object hit shading lists, so a kernel with both binds the store once.
-        const materialTest = createMaterialTestModule(scene.module, scene.textureStore.samplingModule(scene.module));
+        this.walkFrameUniform = device.createBuffer({
+            label: `${this.label} trace walk frame`,
+            size: MATERIAL_TEST_UNIFORM_BYTES,
+            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+        });
+        const materialTest = createMaterialTestModule(scene.module, scene.textureStore.samplingModule(scene.module), this.walkFrameUniform);
         this.triangleFlags = new TriangleFlagsKernels(device, materialTest, this.label);
 
         // The GPU top level replaces its buffer when it grows, so its version counts too.
@@ -549,6 +557,10 @@ export class PlatformRayQueries implements RayQueries {
         for (const outputs of this.outputsToRelease) this.releaseOutputs(outputs);
         this.outputsToRelease = [];
 
+        // A new frame number for the stochastic hash: rays that repeat exactly get new answers each frame.
+        this.walkFrame = (this.walkFrame + 1) >>> 0;
+        this.device.queue.writeBuffer(this.walkFrameUniform, 0, new Uint32Array([this.walkFrame, 0, 0, 0]));
+
         if (upload.instancesChanged) this.topLevelStale = true;
         // Removals first: a slot may be removed and reused by a new mesh in the same frame.
         let meshesChanged = upload.meshesRemoved.length > 0;
@@ -669,6 +681,7 @@ export class PlatformRayQueries implements RayQueries {
         this.builder.dispose();
         this.gpuTopLevel?.dispose();
         this.triangleFlags.dispose();
+        this.walkFrameUniform.destroy();
         this.nodes.destroy();
         this.triangles.destroy();
         for (const buffer of this.retiredTopLevel) buffer.destroy();

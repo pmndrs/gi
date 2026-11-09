@@ -189,6 +189,20 @@ describe('texture sources', () => {
         expect('reason' in short && short.reason).toMatch(/fewer than/);
         const integer = stageSource(device, { format: 'rgba8uint', usage: 0x4, dimension: '2d', createView: () => ({}) } as unknown as GPUTexture, false, STORE_LAYER_SIZE, 'test');
         expect('reason' in integer && integer.reason).toMatch(/rgba8uint/);
+        // An upload that throws (a closed image, a detached buffer) destroys the staging texture it made.
+        const staging: { destroyed: boolean }[] = [];
+        const throwing = {
+            ...device,
+            limits: device.limits,
+            createTexture: (descriptor: GPUTextureDescriptor) => {
+                const texture = { ...descriptor, destroyed: false, createView: () => ({}), destroy() { this.destroyed = true; } };
+                staging.push(texture);
+                return texture;
+            },
+            queue: { writeTexture: () => { throw new TypeError('detached'); } },
+        } as unknown as GPUDevice;
+        expect(() => stageSource(throwing, { data: new Uint8Array(64), width: 4, height: 4 }, true, STORE_LAYER_SIZE, 'test')).toThrow(/detached/);
+        expect(staging.map((texture) => texture.destroyed)).toEqual([true]);
         const unbindable = stageSource(device, { format: 'rgba8unorm', usage: 0x2, dimension: '2d', createView: () => ({}) } as unknown as GPUTexture, false, STORE_LAYER_SIZE, 'test');
         expect('reason' in unbindable && unbindable.reason).toMatch(/TEXTURE_BINDING/);
     });

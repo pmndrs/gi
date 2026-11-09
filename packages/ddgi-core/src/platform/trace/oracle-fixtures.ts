@@ -482,6 +482,16 @@ export function stochasticMaterial(opacity: number): WalkMaterial {
     return { blocksLight: true, doubleSided: true, alphaMode: 'stochastic', alphaCutoff: 0, opacity };
 }
 
+/** A uniform 16 × 16 texture whose alpha is the byte `alphaByte` everywhere (colour grey). */
+export function uniformAlphaImage(alphaByte: number): CpuPixelSource {
+    const data = new Uint8Array(16 * 16 * 4);
+    for (let texel = 0; texel < 16 * 16; texel++) data.set([128, 128, 128, alphaByte], texel * 4);
+    return { width: 16, height: 16, data };
+}
+
+/** The byte the stochastic case's texture holds in alpha: about a half, so texture and opacity both matter. */
+const STOCHASTIC_TEXTURE_ALPHA = 128;
+
 /** The uv transform of the mirrored-cutout case: turned 30°, scaled, offset, so mirror wrap folds it several times. */
 export const TURNED_UV: UvMapping = (() => {
     const angle = Math.PI / 6;
@@ -503,6 +513,10 @@ export const TURNED_UV: UvMapping = (() => {
  *   transform with mirror wrap on both axes; a second, mirrored instance.
  * - `stochastic-quad`: a quad of constant alpha `stochasticAlpha`, stochastic:
  *   a share 1 − alpha of the rays that meet it pass. Judged on that share.
+ *   The alpha is opacity × a texture's alpha (a uniform texture of alpha
+ *   128/255, and the opacity that makes the product `stochasticAlpha`), so the
+ *   GPU's stochastic rule reads the texture too: one that ignored the texture
+ *   would let about half the rays through instead.
  */
 export function buildAlphaCases(raysPerCase: number, stochasticRays = raysPerCase, stochasticAlpha = 0.25, seed = 0xa1fa): MaterialCase[] {
     const random = createRandom(seed);
@@ -582,17 +596,24 @@ export function buildAlphaCases(raysPerCase: number, stochasticRays = raysPerCas
         ]),
     };
 
+    const halfAlpha = caseTexture('half alpha', uniformAlphaImage(STOCHASTIC_TEXTURE_ALPHA));
+    const textureAlpha = STOCHASTIC_TEXTURE_ALPHA / 255;
+    const stochasticTextured: WalkMaterial = {
+        ...stochasticMaterial(Math.min(1, stochasticAlpha / textureAlpha)),
+        albedoTexture: { layer: halfAlpha.layer },
+    };
     const stochastic: MaterialCase = {
         name: 'stochastic-quad',
-        description: `a quad of constant alpha ${stochasticAlpha}, stochastic, opaque walls in front and behind`,
+        description: `a quad of constant alpha ${stochasticAlpha} (opacity x a uniform texture alpha), stochastic, opaque walls in front and behind`,
         meshes: [quadMesh.mesh, backdrop.mesh],
         triangleSlots: [quadMesh.slots, backdrop.slots],
         uvs: [
             [quadMesh.uvs, null],
             [null, null],
         ],
+        textures: [halfAlpha],
         instances: [{ meshIndex: 0, instanceIndex: 0, objectToWorld: placement([0, 1.5, 0], [1.5, 1.5, 1]) }, ...backdropInstances(1)],
-        materials: [[stochasticMaterial(stochasticAlpha)], [OPAQUE], [OPAQUE]],
+        materials: [[stochasticTextured], [OPAQUE], [OPAQUE]],
         rays: aimedRays(random, stochasticRays, [inFront, behind], [
             [
                 [-1.4, 0.1, 0],
