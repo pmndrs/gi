@@ -215,8 +215,7 @@ ${reserveWgsl(reduction)}
 var<workgroup> ddgiAnyKeyPassed: u32;
 
 fn ddgiProbeIndexOf(probe: vec3i) -> u32 {
-    let counts = ddgiProbeCount();
-    return u32(probe.x) + counts.x * (u32(probe.z) + counts.z * u32(probe.y));
+    return ddgiProbeIndex(probe);
 }
 
 // The frame as a probe's scheduled stamp stores it (24 bits).
@@ -255,7 +254,7 @@ fn ${PROPAGATE_ENTRY_POINTS.find}(
         if ((flags & DDGI_FLAG_AWAITING_CHANGE) != 0u && !ddgiIsKeyProbe(probe) && ddgiReadProbeData(ddgiProbeData, ddgiUniformVolume(), probe).state == DDGI_STATE_ACTIVE) {
             for (var neighbour = 0u; neighbour < DDGI_KEY_NEIGHBOURS; neighbour++) {
                 let key = ddgiKeyNeighbourOffset(neighbour, probe);
-                if (key.exists && ddgiKeyPassedThisFrame(ddgiProbeIndexOf(probe + key.offset))) {
+                if (key.exists && ddgiKeyPassedThisFrame(ddgiProbeIndexOf(key.slot))) {
                     take = true;
                     break;
                 }
@@ -351,7 +350,7 @@ fn ddgiWeighKey(fine: vec3i, fineIndex: u32, neighbour: u32) {
     if (!key.exists) {
         return;
     }
-    let keyProbe = fine + key.offset;
+    let keyProbe = key.slot;
     let keyData = ddgiReadProbeData(ddgiProbeData, ddgiUniformVolume(), keyProbe);
     if (keyData.state != DDGI_STATE_ACTIVE) {
         return;

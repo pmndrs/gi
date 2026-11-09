@@ -722,11 +722,13 @@ fn ddgiRegionBrightness(geometry: DdgiMarkGeometry) -> f32 {
     for (var y = first.y; y <= last.y; y++) {
         for (var z = first.z; z <= last.z; z++) {
             for (var x = first.x; x <= last.x; x++) {
-                let neighbour = vec3i(x, y, z);
+                // The loop runs over window probes (positions); a camera-following volume keeps each in a wrapping slot,
+                // which is where its probe data and history are.
+                let neighbour = ddgiProbeSlot(volume, vec3i(x, y, z));
                 if (ddgiReadProbeData(ddgiProbeData, volume, neighbour).state != DDGI_STATE_ACTIVE) {
                     continue;
                 }
-                let neighbourIndex = u32(x) + u32(counts.x) * (u32(z) + u32(counts.z) * u32(y));
+                let neighbourIndex = u32(neighbour.x) + u32(counts.x) * (u32(neighbour.z) + u32(counts.z) * u32(neighbour.y));
                 brightest = max(brightest, ddgiBrightness(ddgiMarkStoredMean(neighbourIndex)));
             }
         }
@@ -751,9 +753,9 @@ fn ddgiMarkThread(thread: u32) -> f32 {
     let entry = ddgiMarkTable.entries[ddgiMarkEntryOf(thread)];
     let local = thread - entry.firstThread;
     let inBox = vec3u(local % entry.boxSize.x, local / (entry.boxSize.x * entry.boxSize.z), (local / entry.boxSize.x) % entry.boxSize.z);
-    let probe = vec3i(entry.boxMin + inBox);
-    let counts = ddgiProbeCount();
-    let probeIndex = u32(probe.x) + counts.x * (u32(probe.z) + counts.z * u32(probe.y));
+    // The table's boxes are in window probes (mark-table.ts); a camera-following volume keeps each in a wrapping slot.
+    let probe = ddgiProbeSlot(ddgiUniformVolume(), vec3i(entry.boxMin + inBox));
+    let probeIndex = ddgiProbeIndex(probe);
     let data = ddgiReadProbeData(ddgiProbeData, ddgiUniformVolume(), probe);
     if (entry.kind == DDGI_MARK_GEOMETRY) {
         return ddgiMarkGeometry(entry, probe, probeIndex, data);

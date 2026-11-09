@@ -15,8 +15,11 @@
  *   volume in priority order: the volume's four sampling `vec4f`s (origin
  *   and normal bias, spacing and view bias, counts and layer base, texel
  *   sizes and the atlas's tiles), exactly what the update kernels get as
- *   their first four uniforms. Renderers and the update's bounce light read
- *   every volume through it (`ddgiSampleVolumes`, wgsl/sample.ts).
+ *   their first four uniforms; then where its window is on the lattice, and
+ *   its valid extent (the camera-following volume, scroll.ts; a fixed
+ *   volume's window is 0 and its extent every probe). Renderers and the
+ *   update's bounce light read every volume through it
+ *   (`ddgiSampleVolumes`, wgsl/sample.ts).
  * - **Priority:** higher first; volumes of equal priority keep the order the
  *   settings list them in. A dense volume inside a coarse one sets a higher
  *   priority, so inside it only it is read, and in its fade band the coarse
@@ -37,11 +40,12 @@ export const MAX_VOLUMES = 8;
 
 /**
  * Timed passes one volume adds to a frame with one `gi/direct` round (up to
- * 1,024 probes): mark, schedule, trace, `gi/direct`, blend, write, propagate,
- * compose, census. The platform's GPU timer must have room for MAX_VOLUMES
- * of these (gpu-timer.ts, DEFAULT_MAX_PASSES_PER_FRAME; volumes.test.ts).
+ * 1,024 probes): scroll (a camera-following volume only), mark, schedule,
+ * trace, `gi/direct`, blend, write, propagate, compose, census. The
+ * platform's GPU timer must have room for MAX_VOLUMES of these
+ * (gpu-timer.ts, DEFAULT_MAX_PASSES_PER_FRAME; volumes.test.ts).
  */
-export const TIMED_PASSES_PER_VOLUME = 9;
+export const TIMED_PASSES_PER_VOLUME = 10;
 
 /**
  * Coverage: how far past the outermost probes the field still counts as
@@ -82,19 +86,45 @@ export const BLEND_COMPLETE_WEIGHT = 0.99;
 /** ...or after this many volumes, so no point costs more than two volumes' sampling (m3-moving.md §4.1). */
 export const MAX_BLENDED_VOLUMES = 2;
 
-/** Texels in one row of the volume table: the four sampling `vec4f`s (`DdgiVolume` in wgsl/sample.ts). */
-export const VOLUME_TABLE_TEXELS = 4;
+/**
+ * The texels of one volume-table row (`ddgiTableVolume` in wgsl/sample.ts):
+ * - `sampling` (4 texels): the four sampling `vec4f`s, the update kernels'
+ *   first four uniforms. For a camera-following volume the origin is its
+ *   window's first probe, so everything that works in window probes is as
+ *   for a fixed volume;
+ * - `window`: xyz the lattice coordinates of the window's first probe
+ *   (whole numbers; 0 for a fixed volume), w unused. Slots and key probes
+ *   follow from it;
+ * - `fade`: xyz how wide the fade band is on each axis, in spacings
+ *   (COVERAGE_FADE_SPACINGS for a fixed volume, scroll.ts's
+ *   `cameraFadeSpacings` for a camera-following one), w unused;
+ * - `validMin`, `validMax`: xyz the valid extent's low and high sides in
+ *   lattice units, where coverage fades (scroll.ts), w unused. For a fixed
+ *   volume its first and last probes. **Written by the GPU** for a
+ *   camera-following volume (`ddgi/scroll` copies them in every frame), so
+ *   the CPU writes them only when the table is new.
+ */
+export const VOLUME_TABLE_TEXEL = { sampling: 0, window: 4, fade: 5, validMin: 6, validMax: 7 } as const;
+/** Texels in one row of the volume table. */
+export const VOLUME_TABLE_TEXELS = 8;
+/** The texels at the start of a row that the CPU keeps up to date every frame: the sampling `vec4f`s, the window and the fade. The rest are the valid extent's. */
+export const VOLUME_TABLE_CPU_TEXELS = VOLUME_TABLE_TEXEL.validMin;
 export const VOLUME_TABLE_FORMAT: GPUTextureFormat = 'rgba32float';
 export const VOLUME_TABLE_TEXEL_BYTES = 16;
-/** Floats in one row of the volume table, the same as the update kernels' first four uniforms. */
+/** Floats in one row of the volume table. */
 export const VOLUME_TABLE_ROW_FLOATS = VOLUME_TABLE_TEXELS * 4;
+/** Floats of the sampling `vec4f`s at the start of a row, the same as the update kernels' first four uniforms. */
+export const VOLUME_SAMPLING_FLOATS = 16;
 
 /** One volume of a technique, placed in the shared atlases. */
 export interface PlacedVolume {
     /** Its place in the settings' list. */
     readonly settingsIndex: number;
+    /** Its probes as the settings place them; for a camera-following volume, its window's first place, whose first probe is lattice 0 (scroll.ts). */
     readonly grid: ProbeGrid;
     readonly priority: number;
+    /** It follows the camera (`follow: 'camera'`, scroll.ts). */
+    readonly followsCamera: boolean;
     /** The atlas layer of its probe row y = 0. */
     readonly layerBase: number;
     /**
@@ -135,7 +165,7 @@ export function planVolumes(settings: readonly DDGIVolumeSettings[], maxTextureA
     if (settings.length === 0) throw new Error('@pmndrs/ddgi: a DDGI technique needs at least one volume');
     if (settings.length > MAX_VOLUMES) throw new Error(`@pmndrs/ddgi: a DDGI technique takes at most ${MAX_VOLUMES} volumes, got ${settings.length}`);
     const ordered = settings
-        .map((volume, settingsIndex) => ({ settingsIndex, grid: probeGrid(volume), priority: volumePriority(volume) }))
+        .map((volume, settingsIndex) => ({ settingsIndex, grid: probeGrid(volume), priority: volumePriority(volume), followsCamera: volume.follow === 'camera' }))
         .sort((a, b) => b.priority - a.priority || a.settingsIndex - b.settingsIndex);
     let layerBase = 0;
     let probeBase = 0;
@@ -152,21 +182,39 @@ export function planVolumes(settings: readonly DDGIVolumeSettings[], maxTextureA
     return { volumes, atlasCounts: [tilesX, layerBase, tilesZ], probeCount: probeBase };
 }
 
+/** A valid extent in lattice units (scroll.ts): its low and high sides per axis. */
+export interface ValidExtent {
+    readonly min: readonly [number, number, number];
+    readonly max: readonly [number, number, number];
+}
+
+/** A fixed volume's fade on every axis, in spacings. */
+export const FIXED_VOLUME_FADE: readonly [number, number, number] = [COVERAGE_FADE_SPACINGS, COVERAGE_FADE_SPACINGS, COVERAGE_FADE_SPACINGS];
+
 /**
  * A volume's edge coverage at a point (the CPU twin of
  * `ddgiVolumeEdgeCoverage`, wgsl/sample.ts): 1 out to
- * {@link COVERAGE_FULL_MARGIN_SPACINGS} past the outermost probes, falling
- * to 0 over the next {@link COVERAGE_FADE_SPACINGS}. Between 0 and 1 is the
- * volume's fade band, where the next volume in priority order fills in.
+ * {@link COVERAGE_FULL_MARGIN_SPACINGS} past its valid extent, falling to 0
+ * over the next `fade` spacings on each axis (half a spacing for a fixed
+ * volume), the lowest over the axes. Between 0 and 1 is the volume's fade
+ * band, where the next volume in priority order fills in. The valid extent
+ * is in lattice units from `grid.origin` (lattice 0); without one, it is the
+ * grid's own probes, as for a fixed volume.
  */
-export function volumeEdgeCoverage(grid: ProbeGrid, position: readonly [number, number, number]): number {
-    let farthest = 0;
+export function volumeEdgeCoverage(
+    grid: ProbeGrid,
+    position: readonly [number, number, number],
+    extent: ValidExtent = wholeGridExtent(grid),
+    fade: readonly [number, number, number] = FIXED_VOLUME_FADE,
+): number {
+    let coverage = 1;
     for (let axis = 0; axis < 3; axis++) {
-        const first = grid.origin[axis];
-        const last = grid.origin[axis] + (grid.counts[axis] - 1) * grid.spacing[axis];
-        farthest = Math.max(farthest, Math.max(first - position[axis], position[axis] - last, 0) / grid.spacing[axis]);
+        const first = grid.origin[axis] + extent.min[axis] * grid.spacing[axis];
+        const last = grid.origin[axis] + extent.max[axis] * grid.spacing[axis];
+        const outside = Math.max(first - position[axis], position[axis] - last, 0) / grid.spacing[axis];
+        coverage = Math.min(coverage, Math.min(1, Math.max(0, 1 - (outside - COVERAGE_FULL_MARGIN_SPACINGS) / fade[axis])));
     }
-    return Math.min(1, Math.max(0, 1 - (farthest - COVERAGE_FULL_MARGIN_SPACINGS) / COVERAGE_FADE_SPACINGS));
+    return coverage;
 }
 
 /** A volume's priority: its setting, or 0. Not a number counts as 0. */
@@ -178,7 +226,10 @@ export function volumePriority(volume: DDGIVolumeSettings): number {
  * One volume's four sampling `vec4f`s (`DdgiVolume` in wgsl/sample.ts), into
  * `target` from `offset`: origin and normal bias, spacing and view bias,
  * counts and layer base, texel sizes and the atlas's tiles across and down a
- * layer. The update kernels' first four uniforms and a volume-table row.
+ * layer. The update kernels' first four uniforms and the start of a
+ * volume-table row. `origin` is the world position of the first probe (of
+ * the window's first, for a camera-following volume); the grid's own by
+ * default.
  */
 export function writeVolumeParameters(
     target: Float32Array,
@@ -187,12 +238,38 @@ export function writeVolumeParameters(
     plan: VolumePlan,
     texels: { readonly irradiance: number; readonly distance: number },
     bias: { readonly normal: number; readonly view: number },
+    origin: readonly [number, number, number] = volume.grid.origin,
 ): void {
     const { grid, layerBase } = volume;
-    target.set([...grid.origin, bias.normal], offset);
+    target.set([...origin, bias.normal], offset);
     target.set([...grid.spacing, bias.view], offset + 4);
     target.set([...grid.counts, layerBase], offset + 8);
     target.set([texels.irradiance, texels.distance, plan.atlasCounts[0], plan.atlasCounts[2]], offset + 12);
+}
+
+/**
+ * The rest of a volume-table row after the sampling `vec4f`s, into `target`
+ * from `offset` (the row's start): the window's first probe in lattice units,
+ * the fade's width per axis, and the valid extent (VOLUME_TABLE_TEXEL). A
+ * fixed volume: window 0, fade FIXED_VOLUME_FADE, the extent its first and
+ * last probes.
+ */
+export function writeVolumeWindow(
+    target: Float32Array,
+    offset: number,
+    window: readonly [number, number, number],
+    fade: readonly [number, number, number],
+    extent: ValidExtent,
+): void {
+    target.set([...window, 0], offset + VOLUME_TABLE_TEXEL.window * 4);
+    target.set([...fade, 0], offset + VOLUME_TABLE_TEXEL.fade * 4);
+    target.set([...extent.min, 0], offset + VOLUME_TABLE_TEXEL.validMin * 4);
+    target.set([...extent.max, 0], offset + VOLUME_TABLE_TEXEL.validMax * 4);
+}
+
+/** A fixed volume's valid extent: its first and last probes, in lattice units. */
+export function wholeGridExtent(grid: ProbeGrid): ValidExtent {
+    return { min: [0, 0, 0], max: [grid.counts[0] - 1, grid.counts[1] - 1, grid.counts[2] - 1] };
 }
 
 /**

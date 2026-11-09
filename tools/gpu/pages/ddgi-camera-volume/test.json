@@ -1,0 +1,5 @@
+{
+    "description": "T3.6: the camera-following DDGI volume on Bistro exterior's fly-through (5 m/s, 32 x 12 x 32 probes at 1.5 m, in front of the manifest's fixed 4 m volume). Checks the frame-to-frame change in the camera volume's edge band from fixed observers within the stability threshold (mean ≤ 0.1%, p95 ≤ 0.5%), that entering probes are reset and never active before 2 blended updates, that memory stays fixed, that resting on a plane boundary for 10 s clears 0 planes, and 0 recompiles. Draws a frame strip of the flight. Needs the Bistro download; manual.",
+    "timeoutMs": 1500000,
+    "manual": true
+}

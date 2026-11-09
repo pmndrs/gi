@@ -40,12 +40,16 @@
  *
  * **Several volumes** (T3.5): the same path through Cornell split into two
  * overlapping volumes; the ball must wake probes in both (wakesInEveryVolume).
+ * And a camera-following volume (T3.6) whose window scrolls with the ball:
+ * the wakes must land in the probes' wrapping slots (wakesInCameraVolume).
  */
 
 import { assert, runGpuTest } from '../../client.ts';
 import type { InstanceHandle } from '../../../../packages/ddgi-core/src/platform/contract/handles.ts';
 import { PROBE_HISTORY_WORD, PROBE_HISTORY_WORDS, PROBE_STATE } from '../../../../packages/ddgi-core/src/techniques/ddgi/layout.ts';
 import { WAKE_FRAMES } from '../../../../packages/ddgi-core/src/techniques/ddgi/mark-table.ts';
+import { slotOf } from '../../../../packages/ddgi-core/src/techniques/ddgi/scroll.ts';
+import { probeGrid } from '../../../../packages/ddgi-core/src/techniques/ddgi/settings.ts';
 import { createDdgiScene, FieldProbe, readBuffer, releaseDeviceOnPageHide, type DdgiScene, type SurfacePoint } from '../ddgi-shared/harness.ts';
 import { probeSnapshot, type ProbeSnapshot } from '../ddgi-shared/moving.ts';
 import { bookmarkCamera, runCameraFrame, runCameraFrames } from '../ddgi-shared/response.ts';
@@ -299,6 +303,65 @@ async function wakesInEveryVolume(device: GPUDevice, log: (line: string) => void
     return { volumes: perVolume };
 }
 
+/**
+ * A camera-following volume (T3.6): a window 3 m wide on x over Cornell,
+ * with the camera riding along with the ball, so the window scrolls and its
+ * probes live in wrapping slots. `ddgi/mark` must turn the table's window
+ * probes into slots (T3.6's conversion): after the path, every window probe
+ * within one spacing of the ball's last box, looked up in its slot
+ * (scroll.ts `slotOf`), has a wake set. A wake landing on the wrong slot
+ * would leave some of them unwoken.
+ */
+async function wakesInCameraVolume(device: GPUDevice, log: (line: string) => void): Promise<Record<string, unknown>> {
+    const settings = { center: [PATH_START[0], 2.74, 2.8] as Vec3, size: [3.0, 5.6, 5.8] as Vec3, spacing: 0.5, follow: 'camera' as const };
+    const scene = await createDdgiScene(device, SCENE, { volumes: [settings] });
+    const cameraAt = (x: number) => bookmarkCamera({ name: 'riding with the ball', position: [x, 2.74, 2.8], target: [x, 2.74, 0], fovYDeg: 60 }, 16 / 9);
+    const units = scene.ddgi.field!.grid.probeCount;
+    await runCameraFrames(device, scene.platform, CONVERGE_FRAMES / 4, units, cameraAt(PATH_START[0]));
+
+    const sceneApi = scene.platform.scene;
+    const sphere = unitSphere();
+    const mesh = sceneApi.createMesh({ positions: sphere.positions, indices: sphere.indices, label: 'ball' });
+    const ball = sceneApi.createInstance({ mesh, materials: [scene.materials[0]], transform: ballTransform(pathPoint(0)), contributesToGI: false, label: 'ball' });
+    for (let frame = 1; frame <= PATH_FRAMES; frame++) {
+        const centre = pathPoint(frame);
+        sceneApi.setTransforms(Uint32Array.of(ball), new Float32Array(ballTransform(centre)));
+        runCameraFrame(device, scene.platform, UNITS, cameraAt(centre[0]));
+        if (frame % 8 === 0) await device.queue.onSubmittedWorkDone();
+    }
+    await device.queue.onSubmittedWorkDone();
+
+    const volume = scene.ddgi.field!.volumes[0];
+    assert(volume.followsCamera, 'the volume does not follow the camera');
+    const window = volume.window;
+    assert(window[0] !== 0, 'the window never moved; the check needs the slots to wrap');
+    const counts = volume.grid.counts;
+    const spacing = volume.grid.spacing;
+    // Lattice probe L sits at the anchor (the settings' first probe) + L × spacing; window probe w is lattice window + w.
+    const anchor = probeGrid(settings).origin;
+    const words = new Uint32Array(await readBuffer(device, volume.probeHistory, volume.grid.probeCount * PROBE_HISTORY_WORDS * 4));
+    const last = pathPoint(PATH_FRAMES);
+    let near = 0;
+    let missed = 0;
+    for (let y = 0; y < counts[1]; y++) {
+        for (let z = 0; z < counts[2]; z++) {
+            for (let x = 0; x < counts[0]; x++) {
+                const windowProbe = [x, y, z];
+                const point = windowProbe.map((w, axis) => anchor[axis] + (window[axis] + w) * spacing[axis]);
+                if (!point.every((value, axis) => Math.abs(value - last[axis]) <= BALL_RADIUS + spacing[axis])) continue;
+                near++;
+                const slot = windowProbe.map((w, axis) => slotOf(w, window[axis], counts[axis]));
+                if (words[(slot[0] + counts[0] * (slot[2] + counts[2] * slot[1])) * PROBE_HISTORY_WORDS + PROBE_HISTORY_WORD.wakeUntil] === 0) missed++;
+            }
+        }
+    }
+    scene.platform.dispose();
+    log(`camera volume: the window moved to lattice x ${window[0]}; ${near} probes within a spacing of the ball's last box, ${missed} not woken in their slots`);
+    assert(near > 0, "no window probe lies near the ball's last box");
+    assert(missed === 0, `${missed} of ${near} probes near the ball's last box weren't woken in their slots`);
+    return { windowX: window[0], near, missed };
+}
+
 await runGpuTest(
     async ({ device, log: logLine }) => {
         releaseDeviceOnPageHide(device);
@@ -442,8 +505,10 @@ await runGpuTest(
         assert(lowest.ratio >= BALL_GI_FLOOR, `the ball's GI fell to ${(lowest.ratio * 100).toFixed(1)}% of the reference at frame ${lowest.frame}`);
         assert(colourCorrelation >= COLOUR_CORRELATION, `the ball's colour follows the reference's with correlation ${colourCorrelation.toFixed(3)} only`);
         const twoVolumes = await wakesInEveryVolume(device, log);
+        const cameraVolume = await wakesInCameraVolume(device, log);
         return {
             twoVolumes,
+            cameraVolume,
             probes: probeCount,
             units: UNITS,
             asleepAtStart: asleepAtStart.length,
