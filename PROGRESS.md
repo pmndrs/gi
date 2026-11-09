@@ -85,6 +85,33 @@ Next (lead):
 - **Re-measure every Bistro exterior GPU number with the cap,** including T2.10's 19.2 / 11.2 ms, its fixed cost and its probe counts.
 - **Bistro's calibration:** its spread and its 1-1.5 ms fixed cost at 780 MHz (relevant to T2.18).
 
+## 2026-11-08 · T2.18 review fixes · implementer (opus)
+Did (27a63e3):
+- The batch never goes under Budget v2's floor. It uses the rate the platform last asked about; under a units budget it uses the observed frame rate.
+- The intake ends `CHANGE_INTAKE_MAX_FRAMES` (120) after the latest mark, census or not.
+- Unit tests for the floor, the cap (with a census and with none) and `changeServing`.
+- `ddgi-key-probes-cost` judges the post-step median against the same run's still median (≤ 1.05×) and reports the p95 against the still p95.
+- DECISIONS lead-ruling entry; ddgi.md; CSV rows for 27a63e3.
+Verified (RTX 3060 Laptop, nvidia/ampere, Chrome 157, bench lock, all VALID, about 780 MHz): typecheck, lint, 1,147 unit tests.
+- `ddgi-key-probes-cost` passes: post-step median 2.083 against still 2.112 (0.986×); p95 2.50 against 2.37 (1.05×, reported). Calibrated 152; the first frames list 85-99, above the floor of 81; the day 2.16 / 2.44.
+- `ddgi-key-probes-sponza` turn: view frame 15, field 60.
+- `ddgi-sky-sun-step`: furnished room 11 / 17 (T2.4d's 11 / 17; 11 / 13 earlier today; bar 30).
+- `ddgi-session-recompiles` (Cornell and two-room, groups off and on): 0, control 1. `platform-recompiles`: 0.
+Not verified: the turn with the sun layer on. On this branch `ddgi-key-probes-sponza` has no option for it: `VITE_DDGI_SETTINGS` is applied after the field converges, and `sunLayer` only takes effect at `prepare`. T2.8's `VITE_DDGI_SUN_LAYER` isn't on this branch. Skipped as briefed, with no hook added.
+Next: M3 breakdown: count `gi/direct`'s lit hits in the second count's cost (the first ~12 frames after a turn; NOTES). After the merge onto `m2`, re-run the sun-layer turn with T2.8's `VITE_DDGI_SUN_LAYER=on`.
+
+## 2026-11-08 · T2.18 the second count after a single step · implementer (opus)
+Did: on `m2-t2.18` (from `m2-t2.10`), §4.5's smaller batch now also applies while a single change is taken in: from its mark until a census after its latest mark shows nothing owed. It applies only on volumes where a change outlasts `FAR_RULE_FRAMES` (Sponza, Bistro). Files: `packages/ddgi-core/src/techniques/ddgi/change-intake-batch.ts` (was `continuing-change.ts`) and its test, `ddgi-technique.ts` (`changeServing`, a census frame stamp, the "taking in a change" counter), `settings.ts` (`PROPAGATED_PROBE_RAYS`, `CHANGE_BATCH_MIN_SHARE`). The `ddgi-key-probes-cost` page now judges the 60 frames after the step and reports their first 20 frames pass by pass. Docs: ddgi.md, m2-lights.md, DECISIONS, NOTES. Commits 21f2462 (design), 3c93a29 (adjustment).
+Verified (RTX 3060 Laptop, nvidia/ampere, Chrome 157 headless, all under `bench-lock run`): lint, typecheck, unit tests (one asset-unpack test timed out in the full run under GPU load and passes alone). On 3c93a29: `ddgi-key-probes-cost` VALID with the p95 **failing** (below); `ddgi-key-probes-sponza` turn, `ddgi-sky-sun-step`, `ddgi-schedule-step` steps, `ddgi-session-recompiles` (Cornell and two-room, groups off and on: 0, control 1) and `platform-recompiles` (0) all pass.
+Numbers (rows `t2.18/key_probes_cost/...` in timing.csv, `response/t2.18/...` in response.csv; about 780 MHz):
+- Sponza, the 60 frames after a 30° sun turn: median **1.99 ms** (met), p95 **2.38** (bar 2.2, **missed**). Before (T2.10): 2.44 / 3.12. Still 2.02 at the calibrated 134; the step's batch median 81. Other runs of the same Sponza behaviour: 2.05 / 2.42 (VALID, still 2.05), 1.91 / 2.27 (VALID, still 1.98), 2.05 / 2.45 (NO VERDICT). Day 2.07 / 2.35.
+- Response at 316 a frame: the view within 5% from frame **15** (bar 15; was 13; 14 in the first build's run), the field from **60** (was 36; bar 120), every fine probe traced by 90 (was 60). Furnished room 11 / 13 (base, same day: 11 / 13), two-room 9 / 18, Cornell 5 / 8: unchanged.
+- The first build cut steps everywhere: the furnished room settled at 162 / 124 (bar 30). Hence the adjustment (DECISIONS, NOTES).
+Not verified: Intel UHD; Bistro (no response or step-cost page); a host without `gpuTiming` (no census, so the batch is the hand-out; unit-tested only); the platform's saturation guard seeing fewer, costlier units during a change (not looked at).
+Next:
+- **Lead:** the p95 miss. The first ~12 frames cost more than their rays (`gi/direct` lit hits +30-50%, trace per ray higher; NOTES). A further cut there costs the view's frame-15 bar, so I stopped per the brief. Options are in DECISIONS.
+- **Lead:** the step page's own 2.0 ms median bar sits at the still frames' level (still 1.98-2.05 across runs), so it passes or fails on the calibration's own spread.
+
 ## 2026-11-08 · T2.10 M2 measurements on the RTX 3060 Laptop · gpu-tester (opus)
 Did: one run per gate under `bench-lock run`, on `m2-t2.10` (M2's final code). RTX 3060 Laptop (nvidia/ampere), headless Chrome 157.0.8103.38. Test-page additions only, nothing in `packages/`:
 - `ddgi-batch-cost` gained the staging peak and `VITE_DDGI_RAMP_SECONDS`;

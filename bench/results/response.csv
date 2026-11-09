@@ -8061,3 +8061,119 @@ date,commit,device,browser,scene,metric,value
 2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump3_x-2_to_x4/error_frame168,-0.0047602
 2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump3_x-2_to_x4/error_frame174,-0.0046974
 2026-11-08,0233355,RTX 3060 Laptop,Chrome 157.0.0.0 headless,sponza,response/ours/light-step/lamp_lit/run3/jump3_x-2_to_x4/error_frame180,-0.0046283
+2026-11-08,3c93a29,RTX 3060 Laptop,Chrome headless,all,response/t2.18/key_probes_sponza/units,316
+2026-11-08,3c93a29,RTX 3060 Laptop,Chrome headless,all,response/t2.18/key_probes_sponza/priorityShare,237
+2026-11-08,3c93a29,RTX 3060 Laptop,Chrome headless,all,response/t2.18/key_probes_sponza/keyProbes,2717
+2026-11-08,3c93a29,RTX 3060 Laptop,Chrome headless,all,response/t2.18/key_probes_sponza/probes,19425
+2026-11-08,3c93a29,RTX 3060 Laptop,Chrome headless,all,response/t2.18/key_probes_sponza/turn/degrees,30
+2026-11-08,3c93a29,RTX 3060 Laptop,Chrome headless,all,response/t2.18/key_probes_sponza/turn/before,0.00160462
+2026-11-08,3c93a29,RTX 3060 Laptop,Chrome headless,all,response/t2.18/key_probes_sponza/turn/settled,0.000950781
+2026-11-08,3c93a29,RTX 3060 Laptop,Chrome headless,all,response/t2.18/key_probes_sponza/turn/viewSettledFrame,15
+2026-11-08,3c93a29,RTX 3060 Laptop,Chrome headless,all,response/t2.18/key_probes_sponza/turn/viewOvershootShareOfStep,0.0433128
+2026-11-08,3c93a29,RTX 3060 Laptop,Chrome headless,all,response/t2.18/key_probes_sponza/turn/atVolumeBound/frame,120
+2026-11-08,3c93a29,RTX 3060 Laptop,Chrome headless,all,response/t2.18/key_probes_sponza/turn/atVolumeBound/weighted,0.0204857
+2026-11-08,3c93a29,RTX 3060 Laptop,Chrome headless,all,response/t2.18/key_probes_sponza/turn/atVolumeBound/weightedFine,0.0209043
+2026-11-08,3c93a29,RTX 3060 Laptop,Chrome headless,all,response/t2.18/key_probes_sponza/turn/atVolumeBound/weightedKeys,0.0183252
+2026-11-08,3c93a29,RTX 3060 Laptop,Chrome headless,all,response/t2.18/key_probes_sponza/turn/atVolumeBound/mean,0.203224
+2026-11-08,3c93a29,RTX 3060 Laptop,Chrome headless,all,response/t2.18/key_probes_sponza/turn/atVolumeBound/p95,0.902792
+2026-11-08,3c93a29,RTX 3060 Laptop,Chrome headless,all,response/t2.18/key_probes_sponza/turn/atVolumeBound/awaiting,0
+2026-11-08,3c93a29,RTX 3060 Laptop,Chrome headless,all,response/t2.18/key_probes_sponza/turn/lastFineProbeWaitingFrame,90
+2026-11-08,3c93a29,RTX 3060 Laptop,Chrome headless,all,response/t2.18/key_probes_sponza/turn/noise/lightWeighted,0.00180764
+2026-11-08,3c93a29,RTX 3060 Laptop,Chrome headless,all,response/t2.18/key_probes_sponza/turn/noise/meanRelative,0.0155225
+2026-11-08,3c93a29,RTX 3060 Laptop,Chrome headless,all,response/t2.18/key_probes_sponza/turn/noise/probes,8145
+2026-11-08,3c93a29,RTX 3060 Laptop,Chrome headless,furnished-room,response/t2.18/sky_sun_step/units,571
+2026-11-08,3c93a29,RTX 3060 Laptop,Chrome headless,furnished-room,response/t2.18/sky_sun_step/sunStepDegrees,30
+2026-11-08,3c93a29,RTX 3060 Laptop,Chrome headless,furnished-room,response/t2.18/sky_sun_step/sunElevationDegrees/before,43.4915
+2026-11-08,3c93a29,RTX 3060 Laptop,Chrome headless,furnished-room,response/t2.18/sky_sun_step/sunElevationDegrees/after,13.4915
+2026-11-08,3c93a29,RTX 3060 Laptop,Chrome headless,furnished-room,response/t2.18/sky_sun_step/probes,4998
+2026-11-08,3c93a29,RTX 3060 Laptop,Chrome headless,furnished-room,response/t2.18/sky_sun_step/views/bookmark 1/before,0.0493349
+2026-11-08,3c93a29,RTX 3060 Laptop,Chrome headless,furnished-room,response/t2.18/sky_sun_step/views/bookmark 1/settled,0.0915079
+2026-11-08,3c93a29,RTX 3060 Laptop,Chrome headless,furnished-room,response/t2.18/sky_sun_step/views/bookmark 1/stepShare,0.85483
+2026-11-08,3c93a29,RTX 3060 Laptop,Chrome headless,furnished-room,response/t2.18/sky_sun_step/views/bookmark 1/stepPerPixel,0.522723
+2026-11-08,3c93a29,RTX 3060 Laptop,Chrome headless,furnished-room,response/t2.18/sky_sun_step/views/bookmark 1/judged,1
+2026-11-08,3c93a29,RTX 3060 Laptop,Chrome headless,furnished-room,response/t2.18/sky_sun_step/views/bookmark 1/viewSettledFrame,11
+2026-11-08,3c93a29,RTX 3060 Laptop,Chrome headless,furnished-room,response/t2.18/sky_sun_step/views/bookmark 1/viewEnteredFrame,9
+2026-11-08,3c93a29,RTX 3060 Laptop,Chrome headless,furnished-room,response/t2.18/sky_sun_step/views/bookmark 1/overshootShareOfStep,0
+2026-11-08,3c93a29,RTX 3060 Laptop,Chrome headless,furnished-room,response/t2.18/sky_sun_step/views/bookmark 1/perPixelSettledFrame,14
+2026-11-08,3c93a29,RTX 3060 Laptop,Chrome headless,furnished-room,response/t2.18/sky_sun_step/views/bookmark 1/perPixelAtViewBound,0.0291088
+2026-11-08,3c93a29,RTX 3060 Laptop,Chrome headless,furnished-room,response/t2.18/sky_sun_step/views/bookmark 1/perPixelAt3s,0.0135589
+2026-11-08,3c93a29,RTX 3060 Laptop,Chrome headless,furnished-room,response/t2.18/sky_sun_step/views/bookmark 1/viewAt3s,-0.0109407
+2026-11-08,3c93a29,RTX 3060 Laptop,Chrome headless,furnished-room,response/t2.18/sky_sun_step/views/bookmark 1/probesPropagatedTotal,29082
+2026-11-08,3c93a29,RTX 3060 Laptop,Chrome headless,furnished-room,response/t2.18/sky_sun_step/views/bookmark 1/skyBakes/inTheStepFrame,1
+2026-11-08,3c93a29,RTX 3060 Laptop,Chrome headless,furnished-room,response/t2.18/sky_sun_step/views/bookmark 1/skyBakes/inAll,1
+2026-11-08,3c93a29,RTX 3060 Laptop,Chrome headless,furnished-room,response/t2.18/sky_sun_step/views/bookmark 1/probesMarkedTotal,5882
+2026-11-08,3c93a29,RTX 3060 Laptop,Chrome headless,furnished-room,response/t2.18/sky_sun_step/views/bookmark 2/before,0.052878
+2026-11-08,3c93a29,RTX 3060 Laptop,Chrome headless,furnished-room,response/t2.18/sky_sun_step/views/bookmark 2/settled,0.0893751
+2026-11-08,3c93a29,RTX 3060 Laptop,Chrome headless,furnished-room,response/t2.18/sky_sun_step/views/bookmark 2/stepShare,0.690215
+2026-11-08,3c93a29,RTX 3060 Laptop,Chrome headless,furnished-room,response/t2.18/sky_sun_step/views/bookmark 2/stepPerPixel,0.472912
+2026-11-08,3c93a29,RTX 3060 Laptop,Chrome headless,furnished-room,response/t2.18/sky_sun_step/views/bookmark 2/judged,1
+2026-11-08,3c93a29,RTX 3060 Laptop,Chrome headless,furnished-room,response/t2.18/sky_sun_step/views/bookmark 2/viewSettledFrame,13
+2026-11-08,3c93a29,RTX 3060 Laptop,Chrome headless,furnished-room,response/t2.18/sky_sun_step/views/bookmark 2/viewEnteredFrame,13
+2026-11-08,3c93a29,RTX 3060 Laptop,Chrome headless,furnished-room,response/t2.18/sky_sun_step/views/bookmark 2/overshootShareOfStep,0
+2026-11-08,3c93a29,RTX 3060 Laptop,Chrome headless,furnished-room,response/t2.18/sky_sun_step/views/bookmark 2/perPixelSettledFrame,21
+2026-11-08,3c93a29,RTX 3060 Laptop,Chrome headless,furnished-room,response/t2.18/sky_sun_step/views/bookmark 2/perPixelAtViewBound,0.0382574
+2026-11-08,3c93a29,RTX 3060 Laptop,Chrome headless,furnished-room,response/t2.18/sky_sun_step/views/bookmark 2/perPixelAt3s,0.0191468
+2026-11-08,3c93a29,RTX 3060 Laptop,Chrome headless,furnished-room,response/t2.18/sky_sun_step/views/bookmark 2/viewAt3s,-0.0171142
+2026-11-08,3c93a29,RTX 3060 Laptop,Chrome headless,furnished-room,response/t2.18/sky_sun_step/views/bookmark 2/probesPropagatedTotal,29599
+2026-11-08,3c93a29,RTX 3060 Laptop,Chrome headless,furnished-room,response/t2.18/sky_sun_step/views/bookmark 2/skyBakes/inTheStepFrame,1
+2026-11-08,3c93a29,RTX 3060 Laptop,Chrome headless,furnished-room,response/t2.18/sky_sun_step/views/bookmark 2/skyBakes/inAll,1
+2026-11-08,3c93a29,RTX 3060 Laptop,Chrome headless,furnished-room,response/t2.18/sky_sun_step/views/bookmark 2/probesMarkedTotal,5882
+2026-11-08,3c93a29,RTX 3060 Laptop,Chrome headless,all,response/t2.18/key_probes_sponza/turn/volumeWithinFrame,60
+2026-11-08,27a63e3,RTX 3060 Laptop,Chrome headless,all,response/t2.18/key_probes_sponza/units,316
+2026-11-08,27a63e3,RTX 3060 Laptop,Chrome headless,all,response/t2.18/key_probes_sponza/priorityShare,237
+2026-11-08,27a63e3,RTX 3060 Laptop,Chrome headless,all,response/t2.18/key_probes_sponza/keyProbes,2717
+2026-11-08,27a63e3,RTX 3060 Laptop,Chrome headless,all,response/t2.18/key_probes_sponza/probes,19425
+2026-11-08,27a63e3,RTX 3060 Laptop,Chrome headless,all,response/t2.18/key_probes_sponza/turn/degrees,30
+2026-11-08,27a63e3,RTX 3060 Laptop,Chrome headless,all,response/t2.18/key_probes_sponza/turn/before,0.00160462
+2026-11-08,27a63e3,RTX 3060 Laptop,Chrome headless,all,response/t2.18/key_probes_sponza/turn/settled,0.000950781
+2026-11-08,27a63e3,RTX 3060 Laptop,Chrome headless,all,response/t2.18/key_probes_sponza/turn/viewSettledFrame,15
+2026-11-08,27a63e3,RTX 3060 Laptop,Chrome headless,all,response/t2.18/key_probes_sponza/turn/viewOvershootShareOfStep,0.0407818
+2026-11-08,27a63e3,RTX 3060 Laptop,Chrome headless,all,response/t2.18/key_probes_sponza/turn/volumeWithinFrame,60
+2026-11-08,27a63e3,RTX 3060 Laptop,Chrome headless,all,response/t2.18/key_probes_sponza/turn/atVolumeBound/frame,120
+2026-11-08,27a63e3,RTX 3060 Laptop,Chrome headless,all,response/t2.18/key_probes_sponza/turn/atVolumeBound/weighted,0.0206951
+2026-11-08,27a63e3,RTX 3060 Laptop,Chrome headless,all,response/t2.18/key_probes_sponza/turn/atVolumeBound/weightedFine,0.0211762
+2026-11-08,27a63e3,RTX 3060 Laptop,Chrome headless,all,response/t2.18/key_probes_sponza/turn/atVolumeBound/weightedKeys,0.0182119
+2026-11-08,27a63e3,RTX 3060 Laptop,Chrome headless,all,response/t2.18/key_probes_sponza/turn/atVolumeBound/mean,0.19378
+2026-11-08,27a63e3,RTX 3060 Laptop,Chrome headless,all,response/t2.18/key_probes_sponza/turn/atVolumeBound/p95,0.859296
+2026-11-08,27a63e3,RTX 3060 Laptop,Chrome headless,all,response/t2.18/key_probes_sponza/turn/atVolumeBound/awaiting,0
+2026-11-08,27a63e3,RTX 3060 Laptop,Chrome headless,all,response/t2.18/key_probes_sponza/turn/lastFineProbeWaitingFrame,90
+2026-11-08,27a63e3,RTX 3060 Laptop,Chrome headless,all,response/t2.18/key_probes_sponza/turn/noise/lightWeighted,0.00172735
+2026-11-08,27a63e3,RTX 3060 Laptop,Chrome headless,all,response/t2.18/key_probes_sponza/turn/noise/meanRelative,0.0139825
+2026-11-08,27a63e3,RTX 3060 Laptop,Chrome headless,all,response/t2.18/key_probes_sponza/turn/noise/probes,8143
+2026-11-08,27a63e3,RTX 3060 Laptop,Chrome headless,furnished-room,response/t2.18/sky_sun_step/units,571
+2026-11-08,27a63e3,RTX 3060 Laptop,Chrome headless,furnished-room,response/t2.18/sky_sun_step/sunStepDegrees,30
+2026-11-08,27a63e3,RTX 3060 Laptop,Chrome headless,furnished-room,response/t2.18/sky_sun_step/sunElevationDegrees/before,43.4915
+2026-11-08,27a63e3,RTX 3060 Laptop,Chrome headless,furnished-room,response/t2.18/sky_sun_step/sunElevationDegrees/after,13.4915
+2026-11-08,27a63e3,RTX 3060 Laptop,Chrome headless,furnished-room,response/t2.18/sky_sun_step/probes,4998
+2026-11-08,27a63e3,RTX 3060 Laptop,Chrome headless,furnished-room,response/t2.18/sky_sun_step/views/bookmark 1/before,0.0493349
+2026-11-08,27a63e3,RTX 3060 Laptop,Chrome headless,furnished-room,response/t2.18/sky_sun_step/views/bookmark 1/settled,0.0915079
+2026-11-08,27a63e3,RTX 3060 Laptop,Chrome headless,furnished-room,response/t2.18/sky_sun_step/views/bookmark 1/stepShare,0.85483
+2026-11-08,27a63e3,RTX 3060 Laptop,Chrome headless,furnished-room,response/t2.18/sky_sun_step/views/bookmark 1/stepPerPixel,0.522723
+2026-11-08,27a63e3,RTX 3060 Laptop,Chrome headless,furnished-room,response/t2.18/sky_sun_step/views/bookmark 1/judged,1
+2026-11-08,27a63e3,RTX 3060 Laptop,Chrome headless,furnished-room,response/t2.18/sky_sun_step/views/bookmark 1/viewSettledFrame,11
+2026-11-08,27a63e3,RTX 3060 Laptop,Chrome headless,furnished-room,response/t2.18/sky_sun_step/views/bookmark 1/viewEnteredFrame,9
+2026-11-08,27a63e3,RTX 3060 Laptop,Chrome headless,furnished-room,response/t2.18/sky_sun_step/views/bookmark 1/overshootShareOfStep,0
+2026-11-08,27a63e3,RTX 3060 Laptop,Chrome headless,furnished-room,response/t2.18/sky_sun_step/views/bookmark 1/perPixelSettledFrame,14
+2026-11-08,27a63e3,RTX 3060 Laptop,Chrome headless,furnished-room,response/t2.18/sky_sun_step/views/bookmark 1/perPixelAtViewBound,0.0290218
+2026-11-08,27a63e3,RTX 3060 Laptop,Chrome headless,furnished-room,response/t2.18/sky_sun_step/views/bookmark 1/perPixelAt3s,0.0133658
+2026-11-08,27a63e3,RTX 3060 Laptop,Chrome headless,furnished-room,response/t2.18/sky_sun_step/views/bookmark 1/viewAt3s,-0.0107478
+2026-11-08,27a63e3,RTX 3060 Laptop,Chrome headless,furnished-room,response/t2.18/sky_sun_step/views/bookmark 1/probesPropagatedTotal,29307
+2026-11-08,27a63e3,RTX 3060 Laptop,Chrome headless,furnished-room,response/t2.18/sky_sun_step/views/bookmark 1/skyBakes/inTheStepFrame,1
+2026-11-08,27a63e3,RTX 3060 Laptop,Chrome headless,furnished-room,response/t2.18/sky_sun_step/views/bookmark 1/skyBakes/inAll,1
+2026-11-08,27a63e3,RTX 3060 Laptop,Chrome headless,furnished-room,response/t2.18/sky_sun_step/views/bookmark 1/probesMarkedTotal,5882
+2026-11-08,27a63e3,RTX 3060 Laptop,Chrome headless,furnished-room,response/t2.18/sky_sun_step/views/bookmark 2/before,0.052878
+2026-11-08,27a63e3,RTX 3060 Laptop,Chrome headless,furnished-room,response/t2.18/sky_sun_step/views/bookmark 2/settled,0.0893751
+2026-11-08,27a63e3,RTX 3060 Laptop,Chrome headless,furnished-room,response/t2.18/sky_sun_step/views/bookmark 2/stepShare,0.690215
+2026-11-08,27a63e3,RTX 3060 Laptop,Chrome headless,furnished-room,response/t2.18/sky_sun_step/views/bookmark 2/stepPerPixel,0.472912
+2026-11-08,27a63e3,RTX 3060 Laptop,Chrome headless,furnished-room,response/t2.18/sky_sun_step/views/bookmark 2/judged,1
+2026-11-08,27a63e3,RTX 3060 Laptop,Chrome headless,furnished-room,response/t2.18/sky_sun_step/views/bookmark 2/viewSettledFrame,17
+2026-11-08,27a63e3,RTX 3060 Laptop,Chrome headless,furnished-room,response/t2.18/sky_sun_step/views/bookmark 2/viewEnteredFrame,13
+2026-11-08,27a63e3,RTX 3060 Laptop,Chrome headless,furnished-room,response/t2.18/sky_sun_step/views/bookmark 2/overshootShareOfStep,0
+2026-11-08,27a63e3,RTX 3060 Laptop,Chrome headless,furnished-room,response/t2.18/sky_sun_step/views/bookmark 2/perPixelSettledFrame,22
+2026-11-08,27a63e3,RTX 3060 Laptop,Chrome headless,furnished-room,response/t2.18/sky_sun_step/views/bookmark 2/perPixelAtViewBound,0.0397113
+2026-11-08,27a63e3,RTX 3060 Laptop,Chrome headless,furnished-room,response/t2.18/sky_sun_step/views/bookmark 2/perPixelAt3s,0.0189473
+2026-11-08,27a63e3,RTX 3060 Laptop,Chrome headless,furnished-room,response/t2.18/sky_sun_step/views/bookmark 2/viewAt3s,-0.0168988
+2026-11-08,27a63e3,RTX 3060 Laptop,Chrome headless,furnished-room,response/t2.18/sky_sun_step/views/bookmark 2/probesPropagatedTotal,29595
+2026-11-08,27a63e3,RTX 3060 Laptop,Chrome headless,furnished-room,response/t2.18/sky_sun_step/views/bookmark 2/skyBakes/inTheStepFrame,1
+2026-11-08,27a63e3,RTX 3060 Laptop,Chrome headless,furnished-room,response/t2.18/sky_sun_step/views/bookmark 2/skyBakes/inAll,1
+2026-11-08,27a63e3,RTX 3060 Laptop,Chrome headless,furnished-room,response/t2.18/sky_sun_step/views/bookmark 2/probesMarkedTotal,5882

@@ -29,7 +29,15 @@
  * Each section also reports every pass's median and what the update list
  * held (rays traced, hits lit by gi/direct, probes at priority and owed,
  * from the census), so a miss can be traced to a pass (T2.4d). Since T2.4d
- * the day runs with the batch while changes continue (continuing-change.ts).
+ * the day, and since T2.18 the step too, run with the batch while a change
+ * is taken in (change-intake-batch.ts): the 60 frames after the step
+ * (`stepFirst60`) must have the update's median within STEP_MEDIAN_SHARE
+ * (5%) of the same run's still median, so after a change a frame costs what
+ * a still frame costs. A fixed 2.0 ms bar passed or failed on the
+ * calibration's own spread (still medians 1.98-2.13 ms across runs; lead
+ * ruling, DECISIONS 2026-11-08, T2.18). Their p95 is reported beside the
+ * still frames' p95, not judged (the first ~12 frames cost more than their
+ * rays say; NOTES), and so is the batch they listed.
  *
  * Manual (needs the Sponza download), under the bench lock:
  *   node tools/reference/bench-lock.ts run --what "T2.4c cost" -- pnpm test:gpu --filter ddgi-key-probes-cost --gpu nvidia --json <file>
@@ -43,6 +51,11 @@ import { runThreePage } from '../three-shared/harness.ts';
 const BUDGET_MS = 2;
 /** Budget v2's margin (docs/design/ddgi.md, "Defined measurements": ≤ gpuMs +10%). */
 const BUDGET_MARGIN = 0.1;
+/**
+ * T2.18 (lead ruling, DECISIONS 2026-11-08): the 60 frames after the step
+ * may have a median at most this much above the same run's still median.
+ */
+const STEP_MEDIAN_SHARE = 0.05;
 /** Check 5's bound on `ddgi/propagate` in a frame with a global change. */
 const PROPAGATE_MS = 0.1;
 const WARM_UP_PASSES = 4;
@@ -56,6 +69,8 @@ const DAY_LOW_DEGREES = 5;
 const DAY_HIGH_DEGREES = 75;
 const DAY_AZIMUTH_DEGREES = 160;
 const FRAMES_IN_FLIGHT = 2;
+/** The first frames after the step reported pass by pass. */
+const STEP_DETAIL_FRAMES = 20;
 const PROPAGATE_PASS = 'ddgi/propagate';
 const MARK_PASS = 'ddgi/mark';
 const CALIBRATED_PASSES = ['ddgi/trace', 'ddgi/blend', 'ddgi/write'];
@@ -190,6 +205,7 @@ await runThreePage(async ({ device, data, log: logLine }) => {
     results.still = {
         frames: still.length,
         updateMedian: round(quantile(still.map((entry) => entry.total), 0.5)),
+        updateP95: round(quantile(still.map((entry) => entry.total), 0.95)),
         calibratedMedian: round(quantile(still.map((entry) => entry.calibrated), 0.5)),
         propagateMedian: round(quantile(stillPropagate, 0.5)),
         probesPropagatedTotal: stillCounters['probes propagated (total)'],
@@ -226,13 +242,16 @@ await runThreePage(async ({ device, data, log: logLine }) => {
             `ddgi/mark in the step's frame ${markMs[0] ?? 'not timed'} ms; update median ${round(quantile(busy.map((entry) => entry.total), 0.5))} ms; ${stepCounters['key changes passed (total)']} key changes passed, ${stepCounters['probes propagated (total)']} probes propagated`,
     );
     if (!(quantile(propagateBusy, 0.5) <= PROPAGATE_MS)) failures.push(`step: ddgi/propagate median ${round(quantile(propagateBusy, 0.5))} ms (bar ${PROPAGATE_MS})`);
-    // T2.10 (TASKS, T2.4c's review): the update's GPU time over the 60 frames after the step, at the
-    // calibrated count. Recorded, not judged here: over the 2 ms budget on the targets would mean
-    // m2-lights.md §4.5's second count is built for single steps too. Only frames whose timings
-    // reached the page are in it (NOTES: about half are overtaken with two frames in flight).
+    // The update's GPU time over the 60 frames after the step (T2.10 recorded it at the calibrated
+    // count; T2.18 lists fewer while the change is taken in). Only frames whose timings reached the
+    // page are in it (NOTES: about half are overtaken with two frames in flight).
     const afterStep = timings.frames(step.first, step.last).filter((entry) => entry.frame - step.first < 60);
     const afterStepTotals = afterStep.map((entry) => entry.total);
     const overBudgetOffsets = afterStep.filter((entry) => entry.total > BUDGET_MS).map((entry) => entry.frame - step.first);
+    // The batch each of those frames listed (counted on the CPU, so every frame has one), and the
+    // last frame at which the technique still counted the change as being taken in.
+    const stepBatches = step.counters.slice(0, 60).map((counters) => counters['probes updated'] ?? Number.NaN);
+    const takingInOffsets = step.counters.map((counters, offset) => ((counters['taking in a change'] ?? 0) > 0 ? offset : -1)).filter((offset) => offset >= 0);
     results.stepFirst60 = {
         framesTimed: afterStep.length,
         updateMedian: round(quantile(afterStepTotals, 0.5)),
@@ -243,13 +262,44 @@ await runThreePage(async ({ device, data, log: logLine }) => {
         framesOverBudget: overBudgetOffsets.length,
         framesOverBudgetMargin: afterStep.filter((entry) => entry.total > BUDGET_MS * (1 + BUDGET_MARGIN)).length,
         lastFrameOverBudget: overBudgetOffsets.length > 0 ? Math.max(...overBudgetOffsets) : -1,
+        batchMedian: quantile(stepBatches, 0.5),
+        batchSmallest: Math.min(...stepBatches),
+        batchFirst5: stepBatches.slice(0, 5),
+        lastFrameTakingIn: takingInOffsets.length > 0 ? Math.max(...takingInOffsets) : -1,
         // Frame offset after the step (0 = the step's own frame) to the update's ms.
         byFrame: Object.fromEntries(afterStep.map((entry) => [entry.frame - step.first, round(entry.total)])),
+        // The first STEP_DETAIL_FRAMES frames pass by pass, and what the census said in each (it arrives a few
+        // frames late, so a frame's census row describes a list a few frames earlier): where the step's first
+        // frames spend their time.
+        firstFramesPasses: Object.fromEntries(
+            afterStep.filter((entry) => entry.frame - step.first < STEP_DETAIL_FRAMES).map((entry) => [entry.frame - step.first, Object.fromEntries([...entry.passes].map(([name, ms]) => [name, round(ms)]))]),
+        ),
+        firstFramesCensus: step.counters.slice(0, STEP_DETAIL_FRAMES).map((counters) => Object.fromEntries(['probes updated', ...LIST_COUNTERS].map((name) => [name, counters[name] ?? null]))),
     };
     log(
         `the 60 frames after the step, ${afterStep.length} timed: update median ${round(quantile(afterStepTotals, 0.5))} ms, p95 ${round(quantile(afterStepTotals, 0.95))}, largest ${round(Math.max(...afterStepTotals))}; ` +
-            `${overBudgetOffsets.length} frames over ${BUDGET_MS} ms (the last at frame ${overBudgetOffsets.length > 0 ? Math.max(...overBudgetOffsets) : 'none'})`,
+            `${overBudgetOffsets.length} frames over ${BUDGET_MS} ms (the last at frame ${overBudgetOffsets.length > 0 ? Math.max(...overBudgetOffsets) : 'none'}); ` +
+            `batch median ${quantile(stepBatches, 0.5)} of ${units} (first five ${stepBatches.slice(0, 5).join(', ')}), taking the change in until frame ${takingInOffsets.length > 0 ? Math.max(...takingInOffsets) : 'none'}`,
     );
+    // Judged against the same run's still frames (lead ruling, DECISIONS 2026-11-08, T2.18): the median, not the p95.
+    const stillTotals = still.map((entry) => entry.total);
+    const stepMedianBar = quantile(stillTotals, 0.5) * (1 + STEP_MEDIAN_SHARE);
+    const stepVersusStill = {
+        stillMedian: round(quantile(stillTotals, 0.5)),
+        stillP95: round(quantile(stillTotals, 0.95)),
+        medianBar: round(stepMedianBar),
+        medianOverStill: round(quantile(afterStepTotals, 0.5) / quantile(stillTotals, 0.5)),
+        p95OverStill: round(quantile(afterStepTotals, 0.95) / quantile(stillTotals, 0.95)),
+        p95Judged: false,
+    };
+    (results.stepFirst60 as Record<string, unknown>).versusStill = stepVersusStill;
+    log(
+        `the 60 frames after the step against still frames: median ${round(quantile(afterStepTotals, 0.5))} against ${stepVersusStill.stillMedian} (bar ${stepVersusStill.medianBar}, ${Math.round(STEP_MEDIAN_SHARE * 100)}% over), ` +
+            `p95 ${round(quantile(afterStepTotals, 0.95))} against ${stepVersusStill.stillP95} (reported, not judged)`,
+    );
+    if (!(quantile(afterStepTotals, 0.5) <= stepMedianBar)) {
+        failures.push(`step: the 60 frames after it have the update's median at ${round(quantile(afterStepTotals, 0.5))} ms, over the still median ${stepVersusStill.stillMedian} by more than ${Math.round(STEP_MEDIAN_SHARE * 100)}%`);
+    }
 
     // 4. A 10-second day.
     const startAzimuth = sunAngles(startDirection).azimuth;

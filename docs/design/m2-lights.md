@@ -383,6 +383,8 @@ Dennis (2026-11-06) asked about "subdividing probe grids and giving priority to 
 
 *As built (T2.4d, DECISIONS 2026-11-06; ddgi.md "Revised in T2.4d"):* the key path applies from N × K / U > 30 frames (the furnished room takes it); every key owes its full count where all the keys' full counts fit in those 30 frames, else 4 away from the view; every fine probe, near the view too, waits for its keys and is not traced, at priority or by the round robin, while a key neighbour is still taking the change in (at most 30 frames). The furnished room's sun step is then within 5% from frame 11 / 17. The second count while changes continue ("Its cost" above) is built from the census's rays a listed probe: Sponza's real day at 1.98 ms against the 2.2 ms margin.
 
+*As built (T2.18, DECISIONS 2026-11-08; ddgi.md "Revised in T2.18"):* the second count also covers a single change while it is taken in, from its mark until the census shows nothing owed, on volumes where a change outlasts the 30 frames anyway (Sponza, Bistro). Propagation counts as 2.5 rays a fine probe. Until the census sees the change, the list is taken to be all active probes. Not where every key owes its full count (the furnished room): a smaller batch there broke the keys' round a frame (frames 162 / 124 instead of 11 / 13). Sponza after a 30° turn: median 1.99 ms, p95 2.38 against 2.2 (was 2.44 / 3.12); the view within 5% from frame 15 (was 13), the field from 60 (was 36).
+
 ### 4.6 Feedback: revisit probes that changed more than their noise
 
 Not every change is reported: an emissive texture a host animates without telling us, a material edit, or what's left after propagation and the instant sky. So the blend checks each probe's own update.
