@@ -21,6 +21,17 @@ Rules:
 
 ---
 
+## 2026-11-09 · T3.7 review fixes · implementer (opus)
+Did (fa33d04 and this one), from the short Opus review:
+- `deforming.ts`: `readKey` no longer makes a closure each update.
+- `scene-sync.ts` and three.md now say that skipping transform compares assumes three renders the scene. A host that leaves auto-update on but doesn't render with three, or an ancestor whose `updateMatrixWorld` doesn't call its children, should use `markChanged` or turn `scene.matrixWorldAutoUpdate` off.
+- A change to `giDeforming` (or new morph targets) now restarts the object, as `giContributes` does.
+- Tests: the dispose test checks that no `childadded`/`childremoved` listener is left. An update can't show it: dispose forgets the scene, and marks outside the walked scene do nothing. A scene switch test does use updates.
+- New tests: `SkinnedMesh`'s own `updateMatrixWorld` is the one wrapped; a remove and re-add in one frame keeps the instance and sends its move; `giDeforming` toggled.
+Verified on the RTX 3060 Laptop (nvidia/ampere), bench lock `--no-cool-wait`, which was free about 5 minutes after queueing: `three-change-tracking` (Bistro interior) and `three-deforming-gi` pass, with the same correctness numbers as before; screenshot looked at. Lint and typecheck clean; adapter tests 162 pass. Full unit suite 1,190 of 1,191: `scenes/src/sky/sky.test.ts` failed under load and passes alone (26/26).
+Numbers: the hooks' cost read 2.24 ms against 0.54 ms (825 ns a mesh) this run, against 0.42 and 0.25 ms before. Other lanes were loading the machine (first sync 1,039 ms against 659 ms), so it's noise, not judged.
+Next: T3.3: `poseSourceFor(mesh, kind, bounds)` will need a device or renderer parameter for the GPU source (three's `computeSkinning` into our storage `ExternalTexture`). The sync would pass it from `SceneSyncOptions` (it already has `device`).
+
 ## 2026-11-09 · T3.7 three adapter change tracking v2 · implementer (opus)
 Did (branch `m3-t3.7`, 6bdac58, 237b039, 0767eb6 and this one): `packages/ddgi-three/src/change-watch.ts`: three's `childadded`/`childremoved` heard on every object of the scene; the `updateMatrixWorld` hook on each mirrored mesh (put back by assignment). `deforming.ts`: skinned (when contributing), morphed and `userData.giDeforming` meshes are created `deforming`, one platform mesh each, with a `deformBounds` (`userData.giDeformBounds` or an estimate); CPU poses with three's formulas go through `setDeformedPositions`. `PoseSource` is the seam for T3.3's GPU form. `scene-sync.ts`, contained to change tracking: events mark the child; the hook puts a moved mesh in the hot set; the walk skips transform compares for hooked meshes while `scene.matrixWorldAutoUpdate` is on; `InstancedMesh` versions are compared every update (ranges hold from the first edit); the walk no longer re-creates objects removed while they were on its stack. `user-data.ts`: `giDeforming`, `giDeformBounds`. +15 unit tests. Pages: `three-change-tracking` (manual, Bistro interior) and `three-deforming-gi` (suite). three.md, m3-moving.md §6 as built, NOTES.
 Verified on the RTX 3060 Laptop (nvidia/ampere, headless Chrome, bench lock `--no-cool-wait`, nothing gated on time):
