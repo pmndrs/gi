@@ -487,9 +487,9 @@ Status: **started 2026-11-09** on branch `m3` (from `m2` at 5de856b; PR #4, `m2`
 | ID | Task | Agent | Size | Depends on | Status |
 | --- | --- | --- | --- | --- | --- |
 | T3.0 | Spike: deformed positions from three (storage `ExternalTexture`); the `updateMatrixWorld` override on Bistro interior (safe with three's and our tests; rough ns per object); refit decay on a swaying tree. A yes or no for each, with rough numbers | implementer | S | T3.11 (the tree) for the third question | active (2026-11-09; worktree `webgpu-ddgi-m3-t30`) |
-| T3.1 | Change feed, the parts T2.M1 left: `receivers`, `deformBounds`, `setDeformedPositions` (done-when items 2-4) | implementer | S | none | active (2026-11-09; worktree `webgpu-ddgi-m3-t31`) |
+| T3.1 | Change feed, the parts T2.M1 left: `receivers`, `deformBounds`, `setDeformedPositions` (done-when items 2-4) | implementer | S | none | done (2026-11-09; Opus review passed with notes; the deforming sheet passes the oracle in 8 poses, recompiles 0 over 1,000 instances, 100 meshes and 1,222 poses; until T3.3 a pose rebuilds the mesh's tree, held while any tree is building) |
 | T3.2 | Runtime mesh trees: GPU builds for added and updated meshes, tinybvh refinement | implementer | M | T3.0 | todo |
-| T3.3 | Deforming meshes: `GpuMeshRefit` wired, scene-copy positions, geometric normals, movement word; H-PLOC rebuild when the refit drifts | implementer | M | T3.1, T3.2 | todo |
+| T3.3 | Deforming meshes: `GpuMeshRefit` wired, scene-copy positions, geometric normals, movement word; H-PLOC rebuild when the refit drifts. Also from T3.1's review: replace `applyPoses`' rebuild with the refit and remove the hold on every tree build (`gi-platform.ts`), and check what rays hit between a pose reaching the scene copy and its tree or refit (item 1 covers it) | implementer | M | T3.1, T3.2 | todo |
 | T3.4 | Probes near moved geometry, the parts T2.M1 left: woken air probes (M1's "probes in empty space"), deforming movers, the far-set guess scaled to the mover's size (T2.M1 item 8) | implementer | M | T3.1 | todo |
 | T3.5 | Several volumes: shared atlas, volume table, priority blending | implementer | M | none | active (2026-11-09; worktree `webgpu-ddgi-m3-t35`) |
 | T3.6 | Camera-following volume: wrapping slots, `ddgi/scroll`, window rule, fade-in | implementer | M | T3.5 | todo |
