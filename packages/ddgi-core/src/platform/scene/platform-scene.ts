@@ -1171,8 +1171,12 @@ export class PlatformScene implements SceneApi, SceneCopy {
      *
      * A mesh whose words haven't reached the GPU yet (created or replaced
      * this frame) keeps its pose waiting for the next encode: its data is
-     * written by this encode's upload, after these writes. So do GPU poses
-     * while the pose copy's kernel is still compiling.
+     * written by this encode's upload, after these writes. A GPU pose that
+     * can't be copied in this encode (its mesh isn't on the GPU yet, or the
+     * copy kernel is still compiling) is dropped instead: the host only
+     * promises its buffer or texture until it submits this frame, and may
+     * destroy it after (the contract), so keeping a reference for later
+     * could read a destroyed buffer. The host's next pose takes its place.
      */
     private applyPoses(encoder: GPUCommandEncoder): { readonly posed: PosedMesh[]; readonly bytesWritten: number } {
         const posed: PosedMesh[] = [];
@@ -1184,8 +1188,14 @@ export class PlatformScene implements SceneApi, SceneCopy {
                 this.posesWaiting.delete(mesh);
                 continue;
             }
-            if (mesh.pending !== null || mesh.vertexOffset < 0) continue;
-            if (deform.waitingOnGpu && !this.poseCopier.ready) continue;
+            const onGpu = mesh.pending === null && mesh.vertexOffset >= 0;
+            if (deform.waitingOnGpu && !(onGpu && this.poseCopier.ready)) {
+                deform.waitingOnGpu = null;
+                deform.hasWaiting = false;
+                this.posesWaiting.delete(mesh);
+                continue;
+            }
+            if (!onGpu) continue;
             this.posesWaiting.delete(mesh);
 
             const positionsWord = mesh.vertexOffset + mesh.layout.offsets.positions;

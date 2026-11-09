@@ -33,9 +33,12 @@
  * marks boxes "unwritten" so the reader can tell, and it re-reads (a bounded
  * spin: the box store was issued before the counter's, so it only has to
  * land). A spin that runs out is counted in the stats and triggers the repair
- * pass. The stats can be read back for diagnostics (`diagnostics: true`,
- * off by default: the platform promises hosts no readbacks frame after frame), which is how a
- * give-up reaches the platform's warnings and counters.
+ * pass. The stats can be read back (`diagnostics: true`, off by default): each
+ * `copyStats` the caller records is one small readback, so the caller
+ * decides how often. ddgi-core's top level reads them only in stats mode,
+ * which is how a give-up reaches its warnings and counters; its deforming
+ * meshes copy them at most once every 15 frames each, for the drift signal
+ * (DECISIONS 2026-11-10).
  *
  * **Subgroups** (DECISIONS 2026-11-04: written for subgroups first, with one
  * declared fallback). Builders store primitives in tree order, so two leaf
@@ -527,10 +530,12 @@ export interface BvhRefitStats {
 export interface GpuBvhRefitOptions {
     readonly label?: string;
     /**
-     * Read the stats back (a frame or two late) into `latestStats`. Off by
-     * default: the platform promises hosts no readbacks frame after frame, so only its stats or
-     * debug mode turns this on. Correctness never depends on it: a refit that
-     * gives up is repaired on the GPU in the same frame either way.
+     * Read the stats back (a frame or two late) into `latestStats`, one small
+     * readback per `copyStats` the caller records. Off by default. ddgi-core
+     * promises hosts no readbacks frame after frame: its top level turns this
+     * on only in stats mode, and its deforming meshes copy at most once every
+     * 15 frames each (DECISIONS 2026-11-10). Correctness never depends on it:
+     * a refit that gives up is repaired on the GPU in the same frame either way.
      */
     readonly diagnostics?: boolean;
     /**

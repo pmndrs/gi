@@ -600,7 +600,7 @@ export class PlatformRayQueries implements RayQueries {
             meshesChanged = true;
         }
         // The frame's poses and the trees placed above, refit from the scene copy's positions before anything traces.
-        this.deforming?.encode(encoder, { vertices: this.scene.vertexStorage, nodes: this.nodes.buffer, triangles: this.triangles.buffer }, timer);
+        this.deforming?.encode(encoder, { vertices: this.scene.vertexStorage, nodes: this.nodes.buffer, triangles: this.triangles.buffer }, this.updates, timer);
         this.startDriftRebuild(upload);
         if (this.gpuTopLevel) {
             // Refit (and swap in a new shape) on the GPU: moves never rebuild on the CPU here.

@@ -24,10 +24,13 @@
  * **Held drift** (DECISIONS 2026-11-09, changing §3.1's plain 1.1× rule). A
  * refit tree's quality depends only on how far the pose is from the one it
  * was built in (T3.0: a refit keeps no history). The refit's stats (its
- * relative SAH cost) are read back a few frames late, a few words a mesh
- * (the readback §3.1's DECISIONS entry allows); when the cost has stayed
- * above {@link DRIFT_THRESHOLD} times the built tree's own for
- * {@link DRIFT_HOLD_FRAMES} frames, the tracer rebuilds the mesh with H-PLOC
+ * relative SAH cost) are copied out at most once every
+ * {@link STATS_EVERY_FRAMES} frames per mesh while it is posed, and read back
+ * a few frames later: a few words, never every frame (SPEC's exception, and
+ * DECISIONS 2026-11-10). When every sample since the first drifted one has
+ * stayed above {@link DRIFT_THRESHOLD} times the built tree's own cost, and
+ * that first sample is {@link DRIFT_HOLD_FRAMES} frames old, the tracer
+ * rebuilds the mesh with H-PLOC
  * from the scene copy's current positions, through the same runtime path as
  * an uploaded mesh (T3.2), and this refit takes the new tree's shape. A sway
  * passes through drifted poses and back, so it rarely holds long enough; a
@@ -58,6 +61,14 @@ export const DRIFT_THRESHOLD = 1.1;
 
 /** Frames the drift must hold, about a second at 60 Hz, before a rebuild (DECISIONS 2026-11-09). */
 export const DRIFT_HOLD_FRAMES = 60;
+
+/**
+ * A posed mesh's refit stats are copied out for reading back at most once in
+ * this many frames (lead ruling, 2026-11-10): four or five samples inside
+ * {@link DRIFT_HOLD_FRAMES}, enough to tell a held drift from a passing one,
+ * without a readback frame after frame.
+ */
+export const STATS_EVERY_FRAMES = 15;
 
 const NODE_WORDS = BVH_NODE_BYTES / 4;
 const TRIANGLE_WORDS = TRIANGLE_BYTES / 4;
@@ -92,8 +103,14 @@ interface DeformingMesh {
     shapeGeneration: number;
     /** The tree must be refit this frame: a new pose, or a tree just placed. */
     refitDue: boolean;
-    /** The first frame of the current run of drifted stats, or -1. */
+    /** The frame the first sample of the current run of drifted stats was taken in, or -1. */
     driftSince: number;
+    /** The first frame a stats copy may be made in again. */
+    nextStatsFrame: number;
+    /** The frame of the stats copy in flight: the frame the next stats read back were sampled in. */
+    sampleFrame: number;
+    /** The latest stats already judged (each sample is judged once). */
+    judgedStats: object | null;
     /** A rebuild of this mesh is running. */
     rebuilding: boolean;
 }
@@ -162,6 +179,7 @@ export class DeformingTrees {
             existing.placement = null;
             existing.refitDue = false;
             existing.driftSince = -1;
+            existing.nextStatsFrame = 0;
             return;
         }
         this.meshes.set(slot, {
@@ -174,6 +192,9 @@ export class DeformingTrees {
             shapeGeneration: 0,
             refitDue: false,
             driftSince: -1,
+            nextStatsFrame: 0,
+            sampleFrame: 0,
+            judgedStats: null,
             rebuilding: false,
         });
     }
@@ -206,6 +227,8 @@ export class DeformingTrees {
         if (!mesh) return;
         mesh.rebuilding = false;
         mesh.driftSince = -1;
+        // The new tree's first refit is sampled at once, so its drift is judged from its start.
+        mesh.nextStatsFrame = 0;
         if (!layout) {
             mesh.placement = null;
             return;
@@ -236,10 +259,12 @@ export class DeformingTrees {
 
     /**
      * Records every due refit into one compute pass in `encoder`, then the
-     * stats copies. Called after the frame's tree placements (and any growth
-     * of the tracer's buffers), before anything traces.
+     * stats copies of the meshes whose turn it is ({@link STATS_EVERY_FRAMES}).
+     * Called after the frame's tree placements (and any growth of the
+     * tracer's buffers), before anything traces. `frame` counts the tracer's
+     * updates.
      */
-    encode(encoder: GPUCommandEncoder, buffers: { readonly vertices: GPUBuffer; readonly nodes: GPUBuffer; readonly triangles: GPUBuffer }, timer?: GpuTimerScope): void {
+    encode(encoder: GPUCommandEncoder, buffers: { readonly vertices: GPUBuffer; readonly nodes: GPUBuffer; readonly triangles: GPUBuffer }, frame: number, timer?: GpuTimerScope): void {
         if (!this.kernels.ready) return;
         const due: DeformingMesh[] = [];
         for (const mesh of this.meshes.values()) if (mesh.refitDue && mesh.placement) due.push(mesh);
@@ -252,7 +277,12 @@ export class DeformingTrees {
             this.refits++;
         }
         pass.end();
-        for (const mesh of due) mesh.refit.copyStats(encoder);
+        for (const mesh of due) {
+            if (frame < mesh.nextStatsFrame) continue;
+            mesh.refit.copyStats(encoder);
+            mesh.sampleFrame = frame;
+            mesh.nextStatsFrame = frame + STATS_EVERY_FRAMES;
+        }
     }
 
     /**
@@ -263,7 +293,7 @@ export class DeformingTrees {
     rebuildDue(frame: number): number | null {
         let chosen: DeformingMesh | null = null;
         for (const mesh of this.meshes.values()) {
-            this.readDrift(mesh, frame);
+            this.readDrift(mesh);
             if (mesh.rebuilding || !mesh.placement || mesh.driftSince < 0) continue;
             if (frame - mesh.driftSince < DRIFT_HOLD_FRAMES) continue;
             if (!chosen || mesh.driftSince < chosen.driftSince) chosen = mesh;
@@ -299,13 +329,20 @@ export class DeformingTrees {
         this.meshes.clear();
     }
 
-    /** Updates the mesh's drift run from its latest stats of the current tree. */
-    private readDrift(mesh: DeformingMesh, frame: number): void {
+    /**
+     * Judges the mesh's newest stats sample of the current tree, once: an
+     * undrifted sample ends the run, the first drifted one starts it at the
+     * frame it was sampled in. A pose held still makes no new samples, so its
+     * last one stands until the rebuild.
+     */
+    private readDrift(mesh: DeformingMesh): void {
         const stats = mesh.refit.latestStats;
-        if (!stats || stats.generation !== mesh.shapeGeneration || !(mesh.builtCost > 0)) return;
+        if (!stats || stats === mesh.judgedStats) return;
+        mesh.judgedStats = stats;
+        if (stats.generation !== mesh.shapeGeneration || !(mesh.builtCost > 0)) return;
         const drifted = stats.relativeCost > DRIFT_THRESHOLD * mesh.builtCost;
         if (!drifted) mesh.driftSince = -1;
-        else if (mesh.driftSince < 0) mesh.driftSince = frame;
+        else if (mesh.driftSince < 0) mesh.driftSince = mesh.sampleFrame;
     }
 }
 

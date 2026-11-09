@@ -91,7 +91,9 @@ export interface MeshDescriptor {
  * device. The platform copies it into its scene copy inside the next
  * {@link GIPlatform.encode} (one GPU copy, recorded into the host's encoder),
  * so it must hold the pose when the host submits that frame. The platform
- * never writes or destroys it.
+ * never writes or destroys it, and keeps no reference past that encode: a
+ * pose it can't copy then (a mesh created in the same frame, not on the GPU
+ * yet) is dropped, and the host's next pose takes its place.
  */
 export type DeformedPositions = DeformedPositionsBuffer | DeformedPositionsTexture;
 

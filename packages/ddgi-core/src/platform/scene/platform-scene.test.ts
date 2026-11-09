@@ -525,6 +525,21 @@ describe('deforming meshes and receivers (T3.1)', () => {
         }
     });
 
+    it('drops a GPU pose it can\'t copy in the next encode, keeping no reference to the host\'s buffer', async () => {
+        const { gpu, scene, mesh } = setupDeforming({ min: [-1, -1, -1], max: [1, 1, 1] });
+        const source = gpu.device.createBuffer({ size: 96, usage: GPUBufferUsage.STORAGE });
+        // Given before the mesh is on the GPU: that encode uploads the mesh, and the pose is dropped.
+        scene.setDeformedPositions(mesh, { buffer: source });
+        expect(encodeAndSubmit(gpu, scene).meshesPosed).toEqual([]);
+        // Given while the copy kernel isn't compiled: dropped too, not applied once it is.
+        scene.setDeformedPositions(mesh, { buffer: source });
+        expect(encodeAndSubmit(gpu, scene).meshesPosed).toEqual([]);
+        await scene.prepareGpuPoses();
+        expect(encodeAndSubmit(gpu, scene).meshesPosed).toEqual([]);
+        scene.setDeformedPositions(mesh, { buffer: source });
+        expect(encodeAndSubmit(gpu, scene).meshesPosed).toHaveLength(1);
+    });
+
     it('checks GPU poses at the call: deformBounds required, usage, size and texture shape', () => {
         const unbounded = setupDeforming();
         const storage = (size: number) => unbounded.gpu.device.createBuffer({ size, usage: GPUBufferUsage.STORAGE });
