@@ -1,18 +1,22 @@
 /**
- * First mesh trees from the GPU (T2.12; docs/design/m3-moving.md §2.2-2.3,
- * "fast first GI"): when a scene is loaded, every mesh's tree is built on the
- * GPU with H-PLOC (`@pmndrs/bvh`, B2, the default GPU builder), so rays can
- * see the scene a few frames after it is handed over instead of after
- * tinybvh's seconds in the worker. tinybvh still builds every mesh, and the
- * tracer swaps its tree in when it arrives (ray-queries.ts).
+ * First mesh trees from the GPU (T2.12 at load, T3.2 at runtime;
+ * docs/design/m3-moving.md §2.2-2.3, "fast first GI"): every mesh the scene
+ * uploads, when it is loaded and when meshes are added or replaced while it
+ * runs, has its tree built on the GPU with H-PLOC (`@pmndrs/bvh`, B2, the
+ * default GPU builder), so rays can see it a few frames later instead of
+ * after tinybvh's time in the worker (seconds for a whole scene). tinybvh
+ * still builds every mesh, and the tracer swaps its tree in when it arrives
+ * (ray-queries.ts).
  *
- * **One batch for all meshes.** H-PLOC builds every mesh of a batch with the
- * same dispatches; building meshes one by one is dispatch-bound (NOTES, LBVH:
- * 97 ms against 32-42 ms for Sponza). The scene is split into more batches
- * only when one doesn't fit the device's buffers (`planGpuHplocBatches`).
+ * **One batch for all of a frame's meshes.** H-PLOC builds every mesh of a
+ * batch with the same dispatches; building meshes one by one is
+ * dispatch-bound (NOTES, LBVH: 97 ms against 32-42 ms for Sponza). The
+ * meshes are split into more batches only when one doesn't fit the device's
+ * buffers (`planGpuHplocBatches`).
  *
- * **Its own submit, and one small readback.** A batch is recorded into an
- * encoder of its own and submitted at once, then its stats (node count,
+ * **Its own submit, and one small readback,** in each frame that uploads
+ * meshes (DECISIONS 2026-11-08 for load, 2026-11-09 for runtime). A batch
+ * is recorded into an encoder of its own and submitted at once, then its stats (node count,
  * depth, refused or not: a few words per mesh) are read back with `mapAsync`;
  * never the trees. Why not the host's encoder: the readback must come after
  * the build on the queue, and the platform can't know when the host submits
