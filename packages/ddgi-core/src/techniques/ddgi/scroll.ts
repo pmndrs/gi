@@ -74,7 +74,7 @@ export const VALID_EXTENT_STEP_SPACINGS = 1 / 15;
  * takes to pass it. With half a spacing that was 0.15 s at 5 m/s and 1.5 m,
  * and the camera volume's share stepped about 0.084 a frame. Bistro's 1.5 m
  * and 4 m fields differ by about 18% there, so a point moved 1.5% a frame,
- * against the stability bar's 0.1% (T3.6, DECISIONS 2026-11-09). Ten
+ * against the stability bar's 0.1% (T3.6, DECISIONS 2026-11-10). Ten
  * spacings take 3 s to pass at that speed: a step of about 0.0056 a frame,
  * 0.1% against an 18% difference. The cost is coverage: with a 32-probe
  * window the camera volume answers alone only within about 5 spacings of the
