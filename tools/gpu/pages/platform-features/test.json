@@ -1,0 +1,4 @@
+{
+    "description": "RC1.4: indirect compute dispatch, read-write rgba16float (texture-formats-tier2), subgroupAdd, shader-f16 and timestamp-query each used for real and read back, on our device (requestGIDevice) and on the device three r187's WebGPURenderer makes for itself; plus what a device without tier2 gives (tier1, a clean refusal, the ping-pong fallback) and both devices' limits.",
+    "timeoutMs": 60000
+}
