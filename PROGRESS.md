@@ -21,6 +21,22 @@ Rules:
 
 ---
 
+## 2026-11-09 · radiance-cache phase 1 closed · lead (opus)
+Did: phase 1 (platform groundwork) of the radiance-cache track, RC1.1-RC1.5, each on its own branch (`rc1-1` … `rc1-5`) merged into `radiance-cache` after an Opus review; design doc `docs/design/radiance-cache.md` (register D1-D15), DECISIONS 2026-11-09 (the track, timing deferred, subgroups-first fallback made explicit).
+- **RC1.1 screen inputs:** `FrameScreen.albedo` (diffuse, metalness folded), channel requests, `ddgi-three`'s `screenInputs()` filling it from the host's MRT pass every frame; every channel is the opaque surface under the depth sample; D13 (three r187's backend field, pinned). Cost deferred.
+- **RC1.2 lint:** a local rule resolves each import; techniques import only `platform/contract` and their own folder.
+- **RC1.3 compute:** scan, compaction and indirect arguments for techniques (`TechniqueContext.compute`), one scan shared with `packages/bvh`, a tested workgroup-memory fallback. Cost and the bvh build re-measure deferred.
+- **RC1.4 features:** indirect dispatch, tier2 read-write `rgba16float`, subgroups, `shader-f16`, timestamps all work on both GPUs on our device and three's; D14 (three's own device keeps default limits), D15 (f16 overflow differs: RTX infinity, Intel 90).
+- **RC1.5 ray cost** (RTX 3060 Laptop, Chrome 157, pinned 1,200 MHz, 3 VALID runs per scene, alone under the bench lock): tracing alone per frame, `platform` tracer, median: Sponza 12.36 ms (native's tracing-and-population group 4.75), Bistro interior 21.91 (7.81), Bistro exterior 23.82 (7.56): 2.6-3.2×, a floor (native's group also shades cells; native's clock unknown). Surface-placed probe rays trace at 17-35 Mrays/s against about 87 for grid rays: the first thing to chase after the baseline.
+Verified: each row's checks re-run by its reviewer on the RTX 3060 (nvidia/ampere) and the Intel UHD (gen-12lp), headless Chrome 157; on the merged branch `pnpm lint`, `pnpm typecheck` and the package tests (596) pass.
+Not verified: no timing beyond RC1.5 (Dennis, DECISIONS 2026-11-09); Apple devices; native Capsaicin's clock during its runs.
+Next:
+- Dennis: the RTX is pinned at 1,200 MHz (`nvidia-smi -lgc`, set outside the repo). Fine for comparable runs, but native Capsaicin's per-pass times may have been taken at another clock; phase 5's comparison needs both at one clock.
+- `bench-lock.ts run` once exited 0 after an ENOENT on `owner.json.<pid>.tmp` without running its command (RC1.1 review). A silent no-run; worth a fix and a test (T3.19-style).
+- The platform's `optionalFeatures()` doesn't ask for `shader-f16` or `texture-formats-tier2`, and `requiredLimits()` asks below the adapters on storage textures, workgroup size and workgroup memory (RC1.4; hosts using `requestGIDevice` are unaffected).
+- An upstream three issue asking for a public render-target `GPUTexture` accessor (D13's way back).
+- `gi/direct-args` duplicates RC1.3's indirect-args writer; DDGI's `schedule-fill` scan could use the shared one once the workgroup scan is reachable through the contract.
+
 ## 2026-11-09 · RC1.3 review fixes · implementer (opus)
 Did: (1) no more "one count per submit": each count gets its own uniform slot (dynamic offset), written once and never changed, kept per count in pages of 16 × 256 B, at most 4 pages per object (the oldest dropped from the table, not destroyed); bvh's `encodeScan` takes optional dynamic offsets; contract docs say what holds. (2) The args writer clamps y to the limit and evens x over the rows (10 M at 64: [52084, 3, 1], 78k-wide rows not 65,535 + mostly idle); past limit² workgroups the kernel loops (documented). (3) Page cases: size 1 kept, exactly one kept, only item 2048 kept, a full-range scan whose sum wraps past 2^32, two counts of one scan in one submit, and counts 65,535² + 1 and 2^32 − 1 at one item per workgroup giving [65535, 65535, 1].
 Verified (correctness only, through the lock, `--no-cool-wait`): `platform-compute` PASS on the RTX 3060 Laptop (nvidia/ampere) and the Intel UHD (gen-12lp), headless Chrome 157, both paths identical. The new cases match the CPU, 10 M gives [39044, 2, 1], and the two-counts and writer-limit checks pass. `bvh-lbvh`, `bvh-lbvh-fallback` and `bvh-hploc` PASS on the RTX. `pnpm lint` and `pnpm typecheck` are clean. In the full `pnpm test`, 1,145 passed and 4 failed while the GPU runs loaded the CPU: `fetch.test.ts`, two in `bench-lock.test.ts` and one in `light-grid.test.ts`, all timeouts or clock sampling (T3.19). Those 3 files pass alone (149/149).
