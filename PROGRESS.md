@@ -21,6 +21,12 @@ Rules:
 
 ---
 
+## 2026-11-09 · RC1.2 review fixes · lead (opus)
+Did: the Opus review passed with notes; its findings 1-5 (path patterns beaten by `contract/../trace`, deep `../`, the core entry point `../../index.ts` re-exporting the platform, `packages/bvh` by relative path, sibling dynamic imports, files directly in `techniques/`) are fixed by replacing the patterns with a local rule `local/core-layers` in `eslint.config.mjs` that resolves each relative import against the importing file and judges the file it lands on. Static imports, `export ... from` and `import()` are all checked. The engine rule is unchanged.
+Verified: 19 forbidden cases fail and every allowed case passes (own folder through a long path, a subfolder named like another technique, contract by file or folder, test files using internals); probes removed. `pnpm lint` and `pnpm typecheck` pass.
+Not verified: GPU (lint only).
+Next: none.
+
 ## 2026-11-09 · RC1.2 lint rule · lead (opus)
 Did: `eslint.config.mjs`: production files under `ddgi-core/src/techniques/<name>/` may import only `platform/contract` and their own folder (a regex pattern, since gitignore groups can't re-allow `contract` inside an excluded `platform/`); not platform internals, `@pmndrs/bvh`, `@pmndrs/ddgi-core` or another technique (one block per technique folder, read from disk). Platform files may not import a technique. Dynamic `import()` is caught the same way. Tests are exempt (DDGI's `trace.test.ts` uses `platform/shade/direct.ts` as a fixture). The engine patterns moved into constants because a later block replaces a rule's options. SPEC's "lint rule and a CI check" sentence rewritten to say what is enforced (no CI check exists).
 Verified: 12 forbidden imports added on purpose (platform/trace, platform, platform/index.ts, @pmndrs/bvh, another technique both ways, three, dynamic platform/shade and three, platform→technique static and dynamic) each fail `pnpm lint` with the rule's message; contract imports, own-folder imports and a test importing platform internals pass; probes removed. `pnpm lint` and `pnpm typecheck` pass; `pnpm test` 1,146 of 1,147, the one failure `bench-lock.test.ts` clock sampling (CPU busy with four agents), which passes alone (37/37).
