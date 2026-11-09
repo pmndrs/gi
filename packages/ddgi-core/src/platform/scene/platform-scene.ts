@@ -49,7 +49,7 @@ import type {
     TextureSource,
     UvMapping,
 } from '../contract/scene.ts';
-import { PlatformTextureStore, type TextureLayerRequest, type TextureLayerStore } from '../textures/texture-store.ts';
+import { PlatformTextureStore, type TextureLayerRequest, type TextureLayerResults, type TextureLayerStore } from '../textures/texture-store.ts';
 import type { SceneChanges, SceneCopy } from '../contract/scene-copy.ts';
 import type { GpuTimerScope } from '../contract/timing.ts';
 import type { BindingSlot, WgslModule } from '../contract/wgsl.ts';
@@ -69,6 +69,7 @@ import {
     LIGHT_TYPE,
     LIGHT_WORD,
     MATERIAL_FLAG,
+    MATERIAL_RECORD_VEC4S,
     MATERIAL_WORD,
     MESH_FLAG,
     MESH_WORD,
@@ -495,6 +496,25 @@ export class PlatformScene implements SceneApi, SceneCopy {
 
     materialSlot(material: MaterialHandle): number {
         return this.material(material).slot;
+    }
+
+    /**
+     * An instance's mesh slot, and the record of each material it uses in
+     * slot order, as the GPU will read them (views of the CPU mirror: read
+     * them at once). For the tracer's triangle-flag upkeep (T4.2,
+     * trace/ray-queries.ts), which rewrites a mesh's flags only when the
+     * words the walk's material rules read have changed. Null for a
+     * destroyed instance.
+     */
+    instanceMaterialRecords(instance: InstanceHandle): { readonly meshSlot: number; readonly records: readonly Uint32Array[] } | null {
+        const entry = this.instances.get(instance);
+        if (!entry) return null;
+        const recordWords = MATERIAL_RECORD_VEC4S * 4;
+        const records = entry.materials.map((material) => {
+            const base = this.mirror.recordWord('materials', material.slot);
+            return this.mirror.words.subarray(base, base + recordWords);
+        });
+        return { meshSlot: entry.mesh.slot, records };
     }
 
     /** Index of a light in the packed light table. Changes when other lights are added or removed. */
@@ -1116,12 +1136,29 @@ export class PlatformScene implements SceneApi, SceneCopy {
             requests.push({ layer: entry.slot, source: entry.source, srgb: entry.srgb, label: entry.label });
         }
         this.pendingTextures.clear();
-        const results = this.textureStore.encode(encoder, requests, timer);
+        // A source that throws is refused alone inside the store (texture-store.ts, stageCatching).
+        // If the store's encode fails as a whole, this frame's textures fail with it rather than
+        // staying pending for good (they were taken off the pending set above).
+        let results: TextureLayerResults;
+        try {
+            results = this.textureStore.encode(encoder, requests, timer);
+        } catch (error) {
+            for (const entry of byLayer.values()) {
+                entry.state = 'failed';
+                entry.source = null;
+            }
+            throw error;
+        }
         for (const layer of results.failed) {
             const entry = byLayer.get(layer);
             if (!entry) continue;
             entry.state = 'failed';
             entry.source = null;
+        }
+        // Sources the store is still checking (a host's GPUTexture) are asked for again next time.
+        for (const layer of results.waiting) {
+            const entry = byLayer.get(layer);
+            if (entry) this.pendingTextures.add(entry);
         }
         const landed = new Set<TextureEntry>();
         for (const layer of results.built) {

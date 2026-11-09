@@ -28,7 +28,9 @@
 
 import type { TextureSource } from '../contract/scene.ts';
 import type { GpuTimerScope } from '../contract/timing.ts';
-import { stageSource, type StagedSource } from './texture-sources.ts';
+import type { WgslModule } from '../contract/wgsl.ts';
+import { createTextureSamplingModule, TEXTURE_STORE_SAMPLER, type TextureStoreBinding } from './texture-sampling-wgsl.ts';
+import { stageSource, type StagedSource, type UnusableSource } from './texture-sources.ts';
 import {
     BUILD_LAYERS_PER_PASS,
     BUILD_STEP_BYTES,
@@ -77,31 +79,41 @@ export interface TextureLayerRequest {
     readonly label?: string;
 }
 
-/** What one `encode` did with its requests: layers made, and layers that can't be (the store warned why). */
+/**
+ * What one `encode` did with its requests: layers made, layers that can't be
+ * (the store warned why), and layers whose source is still being checked
+ * (a host's `GPUTexture`, see `PlatformTextureStore.checkHostTexture`): ask
+ * for those again in a later encode.
+ */
 export interface TextureLayerResults {
     readonly built: readonly number[];
     readonly failed: readonly number[];
+    readonly waiting: readonly number[];
 }
 
 /**
- * What the scene needs from a store: make layers in `encode`. The platform's
- * store is {@link PlatformTextureStore}; unit tests in Node hand the scene a
- * stand-in (no GPU textures there).
+ * What the scene needs from a store: make layers in `encode`, and the WGSL
+ * module that samples them. The platform's store is
+ * {@link PlatformTextureStore}; unit tests in Node hand the scene a stand-in
+ * (no GPU textures there).
  */
 export interface TextureLayerStore {
     /** Its kernel is compiled: `encode` makes layers. Until then requests wait (the scene keeps them). */
     readonly ready: boolean;
     encode(encoder: GPUCommandEncoder, requests: readonly TextureLayerRequest[], timer?: GpuTimerScope): TextureLayerResults;
+    /**
+     * The `gi-texture-store` module over this store (texture-sampling-wgsl.ts),
+     * made on the first call and the same object after, so hit shading and
+     * the walk share it. `sceneModule` is the scene copy's, which it needs
+     * for the uv mapping's types.
+     */
+    samplingModule(sceneModule: WgslModule): WgslModule;
     /** GPU bytes: the array, and while textures are being made, the build buffers and staging textures. */
     readonly memoryBytes: number;
     dispose(): void;
 }
 
-/** What hit shading binds: the array as a sampled `2d-array` view, and when it was last replaced. */
-export interface TextureStoreBinding {
-    readonly view: GPUTextureView;
-    readonly version: number;
-}
+export type { TextureStoreBinding } from './texture-sampling-wgsl.ts';
 
 export interface PlatformTextureStoreOptions {
     readonly label?: string;
@@ -139,6 +151,10 @@ export class PlatformTextureStore implements TextureLayerStore, TextureStoreBind
     private retired: GPUTexture[] = [];
     private retiredBuffers: GPUBuffer[] = [];
     private disposed = false;
+    private storeSampler: GPUSampler | null = null;
+    private module: WgslModule | null = null;
+    /** Hosts' `GPUTexture` sources: being checked, usable here, or why not (checkHostTexture). */
+    private readonly hostTextureChecks = new WeakMap<GPUTexture, HostTextureCheck>();
 
     constructor(device: GPUDevice, options: PlatformTextureStoreOptions = {}) {
         this.device = device;
@@ -192,6 +208,18 @@ export class PlatformTextureStore implements TextureLayerStore, TextureStoreBind
         return this.arrayVersion;
     }
 
+    /** The sampler kernels read the store with ({@link TEXTURE_STORE_SAMPLER}), made on first use. */
+    get sampler(): GPUSampler {
+        this.storeSampler ??= this.device.createSampler({ label: `${this.label} texture store`, ...TEXTURE_STORE_SAMPLER });
+        return this.storeSampler;
+    }
+
+    samplingModule(sceneModule: WgslModule): WgslModule {
+        if (this.module && this.module.dependencies[0] !== sceneModule) throw new Error('@pmndrs/ddgi: one texture store samples for one scene copy');
+        this.module ??= createTextureSamplingModule(sceneModule, this);
+        return this.module;
+    }
+
     /** Layers the array holds now. */
     get layerCapacity(): number {
         return this.capacity;
@@ -213,9 +241,10 @@ export class PlatformTextureStore implements TextureLayerStore, TextureStoreBind
      * Makes each request's layer, into the host's encoder: the sources go
      * onto the GPU (texture-sources.ts), the array grows if a layer is past
      * its end, and `gi/texture-store` makes each layer and its mips. Requests
-     * whose source can't be used are warned about and come back in `failed`.
-     * Also destroys what the previous call retired (the host has submitted
-     * by now).
+     * whose source can't be used are warned about and come back in `failed`;
+     * a host's `GPUTexture` seen for the first time comes back in `waiting`
+     * while it is checked. Also destroys what the previous call retired (the
+     * host has submitted by now).
      */
     encode(encoder: GPUCommandEncoder, requests: readonly TextureLayerRequest[], timer?: GpuTimerScope): TextureLayerResults {
         if (this.disposed) throw new Error('@pmndrs/ddgi: the texture store was disposed');
@@ -226,13 +255,14 @@ export class PlatformTextureStore implements TextureLayerStore, TextureStoreBind
         if (requests.length === 0) {
             // A frame with nothing to make: the build buffers go (a load is over).
             this.releaseBuildBuffers();
-            return { built: [], failed: [] };
+            return { built: [], failed: [], waiting: [] };
         }
         const pipelines = this.pipelines;
         if (!pipelines) throw new Error('@pmndrs/ddgi: the texture store kernel is not compiled yet; await prepare() first');
 
         const layerLimit = this.device.limits.maxTextureArrayLayers;
         const failed: number[] = [];
+        const waiting: number[] = [];
         const staged: { readonly layer: number; readonly source: StagedSource }[] = [];
         for (const request of requests) {
             if (request.layer >= layerLimit) {
@@ -241,16 +271,29 @@ export class PlatformTextureStore implements TextureLayerStore, TextureStoreBind
                 continue;
             }
             const label = `${this.label} texture${request.label ? ` "${request.label}"` : ''}`;
-            const source = stageSource(this.device, request.source, request.srgb, STORE_LAYER_SIZE, label);
+            const source = stageCatching(this.device, request, label);
             if ('reason' in source) {
                 this.warn(source.reason);
                 failed.push(request.layer);
                 continue;
             }
             if (source.staging) this.retired.push(source.staging);
+            else {
+                // A host's GPUTexture: used only once it is known to work on this device.
+                const check = this.checkHostTexture(request.source as GPUTexture, source.view, pipelines.sourceLayout);
+                if (check === 'checking') {
+                    waiting.push(request.layer);
+                    continue;
+                }
+                if (check !== 'usable') {
+                    this.warn(check.reason);
+                    failed.push(request.layer);
+                    continue;
+                }
+            }
             staged.push({ layer: request.layer, source });
         }
-        if (staged.length === 0) return { built: [], failed };
+        if (staged.length === 0) return { built: [], failed, waiting };
 
         this.ensureArray(Math.max(...staged.map((entry) => entry.layer)) + 1, encoder);
         const buffers = this.buildBuffers(pipelines);
@@ -260,7 +303,37 @@ export class PlatformTextureStore implements TextureLayerStore, TextureStoreBind
             // timer's passes per frame are better spent on the techniques.
             this.encodeBatch(encoder, pipelines, buffers, batch, first === 0 ? timer : undefined);
         }
-        return { built: staged.map((entry) => entry.layer), failed };
+        return { built: staged.map((entry) => entry.layer), failed, waiting };
+    }
+
+    /**
+     * Whether a host's `GPUTexture` can be bound on this device, found out
+     * once per texture. Another device's texture (or one this device refuses
+     * for another reason) raises no exception: binding it is a validation
+     * error, and the pass that used the binding would make the host's whole
+     * command buffer invalid, its own rendering included. So the first time
+     * a texture is seen, its binding is made inside an error scope and not
+     * used; the texture waits (`waiting`) until the scope says whether that
+     * worked, a frame or so, and is then used or refused alone (T4.1's
+     * review). A device without error scopes (the unit tests' stand-ins)
+     * takes it as it is.
+     */
+    private checkHostTexture(texture: GPUTexture, view: GPUTextureView, layout: GPUBindGroupLayout): HostTextureCheck {
+        const known = this.hostTextureChecks.get(texture);
+        if (known) return known;
+        if (typeof this.device.pushErrorScope !== 'function') return 'usable';
+        this.device.pushErrorScope('validation');
+        this.device.createBindGroup({ label: `${this.label} texture source check`, layout, entries: [{ binding: 0, resource: view }] });
+        this.device.popErrorScope().then(
+            (error) => {
+                const reason = `@pmndrs/ddgi: a GPUTexture texture source can't be used on the device the platform was made with (${error?.message ?? ''}); is it another device's? The materials using it keep their flat colour.`;
+                this.hostTextureChecks.set(texture, error ? { reason } : 'usable');
+            },
+            // The device was lost meanwhile: nothing will be built anyway.
+            () => this.hostTextureChecks.set(texture, { reason: '@pmndrs/ddgi: the device was lost while a GPUTexture texture source was checked.' }),
+        );
+        this.hostTextureChecks.set(texture, 'checking');
+        return 'checking';
     }
 
     dispose(): void {
@@ -378,6 +451,26 @@ export class PlatformTextureStore implements TextureLayerStore, TextureStoreBind
         // Retired, not destroyed: the frame that used them may not have been submitted yet.
         this.retiredBuffers.push(this.buffers.linear, this.buffers.bytes, this.buffers.steps);
         this.buffers = null;
+    }
+}
+
+/** Where a host's GPUTexture source stands on this device. */
+type HostTextureCheck = 'checking' | 'usable' | { readonly reason: string };
+
+/**
+ * Stages one source, turning a throw into a refusal of that source alone: a
+ * closed `ImageBitmap` (`copyExternalImageToTexture` throws), `PixelData`
+ * whose buffer was transferred away (its view is detached), or any other
+ * source the browser rejects outright. Without the catch one bad source
+ * threw out of the whole `encode`, and every texture asked for in that frame
+ * stayed pending for good (T4.1's review).
+ */
+function stageCatching(device: GPUDevice, request: TextureLayerRequest, label: string): StagedSource | UnusableSource {
+    try {
+        return stageSource(device, request.source, request.srgb, STORE_LAYER_SIZE, label);
+    } catch (error) {
+        const why = error instanceof Error ? error.message : String(error);
+        return { reason: `@pmndrs/ddgi: a texture source${request.label ? ` ("${request.label}")` : ''} could not be read (${why}); the materials using it keep their flat colour.` };
     }
 }
 

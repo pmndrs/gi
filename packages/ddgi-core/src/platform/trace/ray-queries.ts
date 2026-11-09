@@ -47,11 +47,13 @@
 
 import { GpuBvhRefit } from '@pmndrs/bvh/gpu-refit';
 import { GILimitError, GINotReadyError } from '../contract/errors.ts';
+import type { InstanceHandle } from '../contract/handles.ts';
 import type { RayQueries } from '../contract/queries.ts';
 import type { SceneChanges } from '../contract/scene-copy.ts';
 import type { GpuTimerScope } from '../contract/timing.ts';
 import type { BindingSlot, ComputeKernel, KernelBuilder, WgslModule } from '../contract/wgsl.ts';
 import { SHADER_STAGE_COMPUTE } from '../kernel-builder.ts';
+import { MATERIAL_FLAG, MATERIAL_WORD, NONE } from '../scene/layout.ts';
 import type { PlatformScene, SceneUpload, UploadedMesh } from '../scene/platform-scene.ts';
 import { GpuMeshTrees, type FirstTreeBuilder, type GpuBuiltTree, type GpuTreeBatchResult, type GpuTreeOutputs, type GpuTreeRequest } from './gpu-mesh-trees.ts';
 import { GrowableStorage, type ResidentRange } from './growable-storage.ts';
@@ -202,7 +204,7 @@ const BATCH_GROUP = 1;
 
 export class PlatformRayQueries implements RayQueries {
     readonly kind = 'rays';
-    readonly capabilities = { alphaCutouts: false, perTriangleMaterials: true, backFaceHits: true } as const;
+    readonly capabilities = { alphaCutouts: true, perTriangleMaterials: true, backFaceHits: true } as const;
     readonly module: WgslModule;
 
     private readonly device: GPUDevice;
@@ -257,6 +259,12 @@ export class PlatformRayQueries implements RayQueries {
     /** Mesh slots whose triangle flags the next `update` rewrites (`requestTriangleFlags`). */
     private readonly flagRequests = new Set<number>();
     private flagRewrites = 0;
+    /**
+     * Per instance handle, what the flags last saw of it: its mesh slot and the
+     * record words the walk's rules read (`walkKey`). A material change that
+     * leaves these alone (a colour, an emissive, a uv transform) rewrites nothing.
+     */
+    private readonly walkKeys = new Map<number, string>();
 
     private closestKernel: ComputeKernel | null = null;
     private anyKernel: ComputeKernel | null = null;
@@ -300,8 +308,10 @@ export class PlatformRayQueries implements RayQueries {
         else this.firstTrees = GpuMeshTrees.isSupported(device) ? new GpuMeshTrees(device, { label: this.label }) : null;
         this.gpuBuildsOpen = this.firstTrees !== null;
 
-        // The walk reads materials from the scene copy (T4.2), through the binding-free material test module.
-        const materialTest = createMaterialTestModule(scene.module);
+        // The walk reads materials from the scene copy (T4.2), through the binding-free material test
+        // module, and cutout alpha from the texture store through its sampling module: the same
+        // object hit shading lists, so a kernel with both binds the store once.
+        const materialTest = createMaterialTestModule(scene.module, scene.textureStore.samplingModule(scene.module));
         this.triangleFlags = new TriangleFlagsKernels(device, materialTest, this.label);
 
         // The GPU top level replaces its buffer when it grows, so its version counts too.
@@ -966,30 +976,39 @@ export class PlatformRayQueries implements RayQueries {
 
     /**
      * Asks for the flags of the meshes whose instances' materials may have
-     * changed this frame: a material edited or an instance given other
-     * materials (`material` regions), and an instance created, shown or
-     * given another mesh (`geometry` regions that are not moves; the masks
-     * count hidden instances, but one created hidden made no region then).
-     * Moves change no material, so they never ask. Destroying or hiding an
-     * instance can only leave a flag that is no longer needed, which costs
-     * an extra lookup until the mesh's next rewrite. Regions merged in a
-     * busy frame name no instance: then every placed mesh is rewritten.
+     * changed in a way the walk sees this frame: a material edited or an
+     * instance given other materials (`material` regions, also when a
+     * texture's layer lands), and an instance created, shown or given another
+     * mesh (`geometry` regions that are not moves; the masks count hidden
+     * instances, but one created hidden made no region then). For each such
+     * instance, its mesh is rewritten only when the words the rules read
+     * changed since the flags last saw it (`walkKey`), so an edit of a colour
+     * or an emissive rewrites nothing (T4.2's review). Moves change no
+     * material, so they never ask. Destroying or hiding an instance can only
+     * leave a flag that is no longer needed, which costs an extra lookup until
+     * the mesh's next rewrite. Regions merged in a busy frame name no
+     * instance: then every placed mesh is rewritten.
      */
     private requestTriangleFlagsForChanges(changes: SceneChanges): void {
-        const instances = new Set<number>();
         for (const region of changes.regions) {
             const mayFlipSlots = region.reason === 'material' || (region.reason === 'geometry' && region.moved === undefined);
             if (!mayFlipSlots) continue;
             if (region.source === undefined) {
                 for (const slot of this.placed.keys()) this.requestTriangleFlags(slot);
+                this.walkKeys.clear();
                 return;
             }
-            instances.add(region.source);
-        }
-        if (instances.size === 0) return;
-        // Handles to mesh slots, only on frames with such a change. A destroyed instance isn't in the snapshot.
-        for (const instance of this.scene.instanceSnapshot()) {
-            if (instances.has(instance.handle)) this.requestTriangleFlags(instance.meshSlot);
+            const handle = region.source as number;
+            const state = this.scene.instanceMaterialRecords(region.source as InstanceHandle);
+            if (!state) {
+                // Destroyed: nothing to ask (see above); forget it.
+                this.walkKeys.delete(handle);
+                continue;
+            }
+            const key = walkKey(state.meshSlot, state.records);
+            if (this.walkKeys.get(handle) === key) continue;
+            this.walkKeys.set(handle, key);
+            this.requestTriangleFlags(state.meshSlot);
         }
     }
 
@@ -1077,6 +1096,28 @@ export class PlatformRayQueries implements RayQueries {
     private checkLive(): void {
         if (this.disposed) throw new Error('@pmndrs/ddgi: the ray queries were disposed');
     }
+}
+
+/**
+ * What the walk's rules read of an instance, as a string to compare: its mesh
+ * slot, and per material slot the record words `giMaterialNeedsLookup` and
+ * `giMaterialPasses` decide on (the blocks-light and double-sided flags, the
+ * cutoff, the opacity, the alpha mode, and whether there is an albedo
+ * texture). Coarser than "the mask changed" (a new opacity of a stochastic
+ * material asks again), never finer: whatever can flip a slot changes it.
+ */
+function walkKey(meshSlot: number, records: readonly Uint32Array[]): string {
+    const parts: number[] = [meshSlot];
+    for (const record of records) {
+        parts.push(
+            record[MATERIAL_WORD.flags] & (MATERIAL_FLAG.blocksLight | MATERIAL_FLAG.doubleSided),
+            record[MATERIAL_WORD.alphaCutoff],
+            record[MATERIAL_WORD.opacity],
+            record[MATERIAL_WORD.alphaMode],
+            record[MATERIAL_WORD.albedoTexture] === NONE ? 0 : 1,
+        );
+    }
+    return parts.join(',');
 }
 
 function describe(error: unknown): string {

@@ -16,14 +16,15 @@
  * fn giSkyIrradianceAt(normal: vec3f) -> vec3f        // the same, for any unit normal
  * ```
  *
- * It depends on the scene copy (lights, materials, triangles) and the `rays`
- * module (`giTraceAny` for shadow rays), and binds no storage buffer of its
- * own: one uniform buffer (settings, the light grid's place and the sky's
- * irradiance SH), the sky's radiance map, a sampler, the light grid's
- * picks (a texture, light-grid.ts), and the texture store (a texture array,
- * textures/texture-store.ts) with its sampler. So the scene copy and hit
- * shading together stay at the scene copy's 2 storage buffers
- * (docs/api/platform.md, binding budget).
+ * It depends on the scene copy (lights, materials, triangles), the `rays`
+ * module (`giTraceAny` for shadow rays) and the texture store's sampling
+ * module (`giTextureSampleMapped`, textures/texture-sampling-wgsl.ts, which
+ * binds the store's array and its sampler and which the walk's alpha rules
+ * share), and binds no storage buffer of its own: one uniform buffer
+ * (settings, the light grid's place and the sky's irradiance SH), the sky's
+ * radiance map, a sampler, and the light grid's picks (a texture,
+ * light-grid.ts). So the scene copy and hit shading together stay at the
+ * scene copy's 2 storage buffers (docs/api/platform.md, binding budget).
  *
  * Light units are the platform's (contract/scene.ts), which are three.js's
  * physically based ones; point and spot falloff and spot cones follow three.js
@@ -31,7 +32,6 @@
  */
 
 import type { BindingSlot, ModuleBindingEntry } from '../contract/wgsl.ts';
-import { STORE_LAYER_SIZE, STORE_MIP_LEVELS } from '../textures/texture-store-wgsl.ts';
 import { lightGridLookupWgsl } from './light-grid.ts';
 import { RADIANCE_SH_COUNT, SKY_HARMONICS_LAYOUT } from '../sky/projection-wgsl.ts';
 import { SH_BASIS_WGSL, SH_COEFFICIENT_COUNT } from '../sky/spherical-harmonics.ts';
@@ -41,16 +41,14 @@ const SHADER_STAGE_COMPUTE = 0x4;
 
 /**
  * The module's bindings, in order: uniforms (settings and sky SH), the sky's
- * radiance map, its sampler, the light grid's picks, the texture store and
- * its sampler. No storage buffers.
+ * radiance map, its sampler, the light grid's picks. No storage buffers. The
+ * texture store and its sampler are the sampling module's.
  */
 export const SHADE_MODULE_ENTRIES: readonly ModuleBindingEntry[] = [
     { visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'uniform' } },
     { visibility: SHADER_STAGE_COMPUTE, texture: { sampleType: 'float', viewDimension: '2d' } },
     { visibility: SHADER_STAGE_COMPUTE, sampler: { type: 'filtering' } },
     { visibility: SHADER_STAGE_COMPUTE, texture: { sampleType: 'uint', viewDimension: '2d' } },
-    { visibility: SHADER_STAGE_COMPUTE, texture: { sampleType: 'float', viewDimension: '2d-array' } },
-    { visibility: SHADER_STAGE_COMPUTE, sampler: { type: 'filtering' } },
 ];
 
 /**
@@ -95,8 +93,6 @@ export function shadeModuleWgsl(slot: BindingSlot): string {
     const radianceMapBinding = slot.firstBinding + 1;
     const samplerBinding = slot.firstBinding + 2;
     const lightGridBinding = slot.firstBinding + 3;
-    const textureStoreBinding = slot.firstBinding + 4;
-    const textureSamplerBinding = slot.firstBinding + 5;
     const skyIrradianceTerms = Array.from({ length: SH_COEFFICIENT_COUNT }, (_, index) => `        giShade.skyIrradiance[${index}].xyz * basis[${index}]`).join(' +\n');
 
     return /* wgsl */ `
@@ -146,11 +142,6 @@ struct GiShadeUniforms {
 @group(${group}) @binding(${samplerBinding}) var giSkySampler: sampler;
 // The light grid's picks, R per cell: (light index, its share at a hit as f32 bits).
 @group(${group}) @binding(${lightGridBinding}) var giLightGridPicks: texture_2d<u32>;
-// The texture store: one ${STORE_LAYER_SIZE}² layer with mips per texture (a material's texture
-// words name its layer). rgba8unorm-srgb, so samples are linear light.
-@group(${group}) @binding(${textureStoreBinding}) var giTextureStore: texture_2d_array<f32>;
-// Linear in and between mips, repeating: clamp and mirror are worked out on the uv (giShadeWrap).
-@group(${group}) @binding(${textureSamplerBinding}) var giTextureSampler: sampler;
 
 const GI_SHADE_INV_PI: f32 = 0.318309886183791;
 const GI_SHADE_INV_TWO_PI: f32 = 0.159154943091895;
@@ -167,9 +158,6 @@ const GI_SHADE_IN_SURFACE_STEPS: f32 = 64.0;
 const GI_SHADE_NORMAL_STEPS: f32 = 256.0;
 // giSurfaceAt's ray cone spread, radians (DEFAULT_CONE_SPREAD in wgsl.ts).
 const GI_SHADE_DEFAULT_CONE_SPREAD: f32 = ${DEFAULT_CONE_SPREAD};
-// The texture store's layers: texels on a side, and the last mip.
-const GI_SHADE_TEXTURE_SIZE: f32 = ${STORE_LAYER_SIZE}.0;
-const GI_SHADE_TEXTURE_LAST_LOD: f32 = ${STORE_MIP_LEVELS - 1}.0;
 // The smallest |cos| between ray and surface the footprint counts (MIN_FOOTPRINT_COSINE in wgsl.ts).
 const GI_SHADE_MIN_FOOTPRINT_COSINE: f32 = ${MIN_FOOTPRINT_COSINE};
 
@@ -273,40 +261,18 @@ fn giShadeTextureLod(footprint: GiShadeFootprint, uvs: GiTriangleUvs, mapping: G
     let uvEdge2 = uvs.uv2 - uvs.uv0;
     let doubleUvArea = abs(uvEdge1.x * uvEdge2.y - uvEdge1.y * uvEdge2.x);
     let transformArea = abs(determinant(mat2x2f(mapping.transform[0], mapping.transform[1])));
-    let texelsSquaredPerSquareMetre = doubleUvArea * transformArea * GI_SHADE_TEXTURE_SIZE * GI_SHADE_TEXTURE_SIZE / max(footprint.doubleWorldArea, 1.0e-30);
+    let texelsSquaredPerSquareMetre = doubleUvArea * transformArea * GI_TEXTURE_SIZE * GI_TEXTURE_SIZE / max(footprint.doubleWorldArea, 1.0e-30);
     let footprintTexels = footprint.width * sqrt(texelsSquaredPerSquareMetre);
-    return clamp(log2(max(footprintTexels, 1.0e-30)), 0.0, GI_SHADE_TEXTURE_LAST_LOD);
-}
-
-// One axis of a mapped uv, wrapped as the mapping says. 'repeat' is left to
-// the sampler (it repeats). 'clamp' keeps the coordinate half a texel inside
-// the edges, and 'mirror' folds it (1 - |(u mod 2) - 1|: forwards on even
-// tiles, backwards on odd ones) and keeps it inside the same way, so the
-// repeating sampler's filter never reaches across to the opposite edge.
-// The half texel is that of the coarser of the two mips the sample blends.
-fn giShadeWrap(coordinate: f32, wrap: u32, halfTexel: f32) -> f32 {
-    if (wrap == GI_UV_WRAP_CLAMP) {
-        return clamp(coordinate, halfTexel, 1.0 - halfTexel);
-    }
-    if (wrap == GI_UV_WRAP_MIRROR) {
-        // fract is floored, so negative coordinates fold the same way.
-        let folded = 1.0 - abs(2.0 * fract(coordinate * 0.5) - 1.0);
-        return clamp(folded, halfTexel, 1.0 - halfTexel);
-    }
-    return coordinate;
+    return clamp(log2(max(footprintTexels, 1.0e-30)), 0.0, GI_TEXTURE_LAST_LOD);
 }
 
 // A material texture at the hit: its uv set at the hit point (clamped
-// barycentric 'weights', as the surface point), its 3x2 transform, its wrap,
-// at the footprint's mip. Linear light (the store is sRGB-encoded).
+// barycentric 'weights', as the surface point), its 3x2 transform, its wrap
+// (giTextureSampleMapped, the store's sampling module, which the walk's alpha
+// test shares), at the footprint's mip. Linear light (the store is sRGB-encoded).
 fn giShadeSampleTexture(layer: u32, mapping: GiUvMapping, hit: GiHit, weights: vec3f, footprint: GiShadeFootprint) -> vec4f {
     let uvs = giInstanceTriangleUvs(hit.instance, hit.triangle, mapping.channel);
-    let uv = uvs.uv0 * weights.x + uvs.uv1 * weights.y + uvs.uv2 * weights.z;
-    let mapped = mapping.transform * vec3f(uv, 1.0);
-    let lod = giShadeTextureLod(footprint, uvs, mapping);
-    let halfTexel = 0.5 * exp2(ceil(lod)) / GI_SHADE_TEXTURE_SIZE;
-    let wrapped = vec2f(giShadeWrap(mapped.x, mapping.wrapU, halfTexel), giShadeWrap(mapped.y, mapping.wrapV, halfTexel));
-    return textureSampleLevel(giTextureStore, giTextureSampler, wrapped, layer, lod);
+    return giTextureSampleMapped(layer, mapping, uvs, weights, giShadeTextureLod(footprint, uvs, mapping));
 }
 
 // Channel 0-3 (r, g, b, a) of a sample. Selects rather than indexing the
