@@ -494,7 +494,7 @@ Rules for every row:
 | --- | --- | --- | --- | --- | --- |
 | RC1.1 | Screen inputs: `FrameScreen` gets albedo; `ddgi-three` fills it from the host's MRT scene pass every frame; a debug view of every channel on Sponza; its cost measured | implementer, then gpu-tester (cost) | M | none | active (implementer, 2026-11-09) |
 | RC1.2 | Lint rule: technique code imports only `platform/contract` (SPEC claims this is enforced; only the engine boundary is) | main session | S | none | done (2026-11-09; Opus review passed with notes, all fixed: a local rule resolves each import to its file) |
-| RC1.3 | Platform GPU utilities: prefix scan, stream compaction, indirect-dispatch arguments, shared with `packages/bvh`'s scans; subgroups first with one fallback | implementer | M | none | active (implementer, 2026-11-09) |
+| RC1.3 | Platform GPU utilities: prefix scan, stream compaction, indirect-dispatch arguments, shared with `packages/bvh`'s scans; subgroups first with one fallback | implementer | M | none | done (2026-11-09; Opus review passed with notes, all fixed; correct on both GPUs at 0 to 10 M and with counts up to 2^32-1, subgroup path and fallback identical; cost run and bvh build re-measure deferred, DECISIONS) |
 | RC1.4 | Feature checks in three r187 and Chrome on the RTX 3060 and Intel UHD: indirect compute dispatch, `texture-formats-tier2` read-write `rgba16float`, subgroups, `shader-f16`, `timestamp-query` | implementer | S | none | done (2026-11-09; Opus review passed with notes, all fixed; all five features work on both GPUs on our device and three's; D14 three's own device keeps default limits, D15 f16 overflow differs) |
 | RC1.5 | Ray cost table: closest-hit and any-hit Mrays/s for Capsaicin-shaped ray sets on Sponza with curtains and Bistro | implementer (ray sets), then gpu-tester (timing) | M | none | done (2026-11-09; Opus review failed on shadow rays per hit, fixed; 3 VALID runs per scene at a pinned 1,200 MHz: tracing alone 12.4 / 21.9 / 23.8 ms on Sponza / Bistro interior / exterior, 2.6-3.2x native's tracing-and-population group) |
 
@@ -531,7 +531,7 @@ The port reads AMD's source directly: Capsaicin v1.3 at `C:/Users/denni/Document
 
 | ID | Task | Agent | Size | Depends on | Status |
 | --- | --- | --- | --- | --- | --- |
-| RC2.1 | Technique skeleton and screen probes: spawn (16×16 tiles, Halton jitter), compact, sample (64 rays, one per hemi-octahedral cell), trace, light hits directly, blend into the probe atlas; debug views of the atlas and the mask | implementer | M | RC1.1, RC1.3 | todo |
+| RC2.1 | Technique skeleton and screen probes: spawn (16×16 tiles, Halton jitter), compact, sample (64 rays, one per hemi-octahedral cell), trace, light hits directly, blend into the probe atlas; debug views of the atlas and the mask | implementer | M | RC1.1, RC1.3 | active (implementer, 2026-11-09) |
 | RC2.2 | First image: the probe mask mips, SH projection, interpolation per pixel, the shading module by `screenUV`, the three composite and the viewer's technique entry; the Lambert check | implementer | M | RC2.1 | todo |
 
 - **RC2.1 done-when.**
