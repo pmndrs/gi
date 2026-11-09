@@ -478,7 +478,7 @@ fn HashGridCache_AddNewTile(tile_index: u32) {
 }
 
 // Whether this call puts the tile on this frame's update list (g_HashGridCache_UpdateTileBuffer),
-// asked only by a thread Capsaicin's rule would have append it (gi1.comp:1043-1048, 1819-1824:
+// asked only by a thread whose append Capsaicin's rule asks for (gi1.comp:1043-1048, 1819-1824:
 // the tile is new, or this thread touched it first this frame). That rule can pick two threads
 // for a new tile: the one that claimed its slot, and one that found the tile and touched it before
 // the claimer did. Two UpdateTiles workgroups then update the tile at once and race on its scratch

@@ -377,7 +377,8 @@ fn ${POPULATION_ENTRY_POINT.generateReservoirs}(
     // off by default (gi1.h:54): not part of the baseline.
 
     // Sample new lights. Capsaicin forces a diffuse material on this bounce (gi1.comp:2506-2510);
-    // the platform's materials are diffuse already (register D8).
+    // the platform's materials are diffuse already (register D8). Capsaicin's light list also
+    // holds the environment map; the platform's doesn't (register D33).
     var random = rcMakeRandom(did, g_HashGridCacheConstants.frame_index);
     let reservoir = giDirectChooseLight(surface, HASHGRIDCACHE_LIGHT_GROUPS, rcRand(&random));
     let sample_params = rcRand2(&random);
