@@ -39,7 +39,7 @@
  *   pnpm test:gpu --gpu nvidia --filter three-screen-inputs
  */
 
-import { AdditiveBlending, BlendMode, BoxGeometry, MaterialBlending, Matrix3, Mesh, MeshStandardMaterial, MultiplyBlending, NormalBlending, PlaneGeometry, Raycaster, RenderPipeline, Vector2, Vector3, type Material, type Node, type Object3D } from 'three/webgpu';
+import { AdditiveBlending, BlendMode, BoxGeometry, MaterialBlending, Matrix3, Mesh, MeshBasicMaterial, MeshStandardMaterial, MultiplyBlending, NormalBlending, PlaneGeometry, Raycaster, RenderPipeline, Vector2, Vector3, type Material, type Node, type Object3D } from 'three/webgpu';
 import { mrt, normalView, output, packNormalToRGB, pass } from 'three/tsl';
 import { assert } from '../../client.ts';
 import { instanceDebugColor, SCREEN_CHANNELS, type ScreenChannel } from '../../../../packages/ddgi-core/src/platform/screen/screen-inputs-view.ts';
@@ -324,7 +324,8 @@ async function checkTransparency(context: ThreePageContext, rig: Rig): Promise<R
     ];
     const results: Record<string, number> = {};
     for (const { name, blending, premultipliedAlpha } of blendings) {
-        const material = new MeshStandardMaterial({ color: 0x20c040, transparent: true, opacity: 0.5, depthWrite: false, blending, premultipliedAlpha });
+        // Unlit, so the picture changes by a known factor whatever the light (multiply: about half in red).
+        const material = new MeshBasicMaterial({ color: 0x20c040, transparent: true, opacity: 0.5, depthWrite: false, blending, premultipliedAlpha });
         const plane = new Mesh(new PlaneGeometry(0.4, 0.4), material);
         plane.name = `screen-inputs transparent plane (${name})`;
         plane.position.copy(camera.position).addScaledVector(camera.getWorldDirection(new Vector3()), 1.2);
@@ -343,7 +344,7 @@ async function checkTransparency(context: ThreePageContext, rig: Rig): Promise<R
             ...covered.albedo.map((value, channel) => Math.abs(value - opaque.albedo[channel])),
         );
         context.log(`transparent plane, ${name} blending: picture changed by ${(pictureChange * 100).toFixed(1)}%; channels changed by ${channelChange}; id ${covered.instance} (opaque ${opaque.instance})`);
-        assert(pictureChange > 0.05, `the ${name} transparent plane doesn't cover the centre pixel (the check would prove nothing)`);
+        assert(pictureChange > 0.05, `the ${name} transparent plane doesn't change the centre pixel (the check would prove nothing): ${opaqueColour.map((value) => value.toFixed(4)).join(",")} -> ${coveredColour.map((value) => value.toFixed(4)).join(",")}`);
         assert(channelChange === 0, `a transparent plane (${name} blending) changed the screen channels by ${channelChange}`);
         assert(covered.instance === opaque.instance, `a transparent plane (${name} blending) changed the instance id to ${covered.instance}`);
         results[name] = channelChange;
