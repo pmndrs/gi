@@ -50,15 +50,12 @@ export function halfToFloat(bits: number): number {
  *
  * The first six are single, correctly rounded operations on f16-exact
  * inputs: they show the f16 path computes right, but f32 math stored as f16
- * would give the same bits. The last two tell real f16 arithmetic from f32
- * arithmetic stored as f16, because their intermediate isn't representable
- * in f16:
- * - `cancellation`: (1 + 0.0001) - 1. f16's step at 1.0 is 2^-10 (0.000977),
- *   so 1 + 0.0001 is exactly 1.0 in f16 and the difference is 0; in f32 it
- *   is about 1e-4, which stores as a non-zero f16.
- * - `overflow`: 300 * 300 / 1000. 90,000 is past f16's largest finite value
- *   (65,504), so in f16 the product is infinity and so is the quotient; in
- *   f32 the result is 90.
+ * would give the same bits. `cancellation` tells real f16 arithmetic from
+ * f32 arithmetic stored as f16: (1 + 0.0001) - 1. f16's step at 1.0 is
+ * 2^-10 (0.000977), so 1 + 0.0001 is exactly 1.0 in f16 and the difference
+ * is 0; in f32 it is about 1e-4, which stores as a non-zero f16.
+ *
+ * The kernel also computes F16_OVERFLOW_CASE, which is reported, not checked.
  */
 export const F16_INPUTS = {
     one: 1,
@@ -82,8 +79,19 @@ export const F16_EXPECTED = [
     { name: 'dot', value: 4 }, // dot((0.5, 1.5, -2, 4), (2, 2, 0.25, 0.125)) = 1 + 3 - 0.5 + 0.5
     { name: 'quotient', value: -3.5 }, // -7 / 2
     { name: 'cancellation', value: 0 }, // (1 + 0.0001) - 1: 0 in f16, about 1e-4 in f32
-    { name: 'overflow', value: Infinity }, // 300 * 300 / 1000: infinity in f16, 90 in f32
 ] as const;
+
+/**
+ * 300 * 300 / 1000 in f16, stored after F16_EXPECTED's results. The
+ * 90,000 product is past f16's largest finite value (65,504). The page
+ * reports what the GPU gives and doesn't check it, because WGSL allows any
+ * value here (WGSL §15.7.3, "Floating Point Rounding and Overflow"): "If X'
+ * is an infinity or NaN, then by the Finite Math Assumption: ... Otherwise
+ * the expression is a runtime expression and X'' is an indeterminate value."
+ * Measured: infinity on the RTX 3060, 90 on the Intel UHD, which keeps a
+ * wider intermediate (D15).
+ */
+export const F16_OVERFLOW_CASE = { name: 'overflow', index: F16_EXPECTED.length } as const;
 
 /** The value one invocation of the subgroup check adds: small, so 8,192 of them sum well inside u32. */
 export function subgroupInput(index: number): number {
