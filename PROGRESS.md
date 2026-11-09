@@ -21,6 +21,26 @@ Rules:
 
 ---
 
+## 2026-11-09 · T2.10 review fixes: the up-to-date M2 table · lead (opus)
+Did: answered the Opus review of T2.10 (fail, 3 blocking points) by putting one up-to-date table here, on M2's final code (`m2-t2.10`, with T2.17 and T2.18), and recording the known misses in DECISIONS (on `m2`, 2026-11-09). This replaces the earlier T2.10 tables where they differ. RTX 3060 Laptop, headless Chrome 157, about 780–830 MHz (the Bistro rows: a fixed 1,200 MHz).
+| Target | Final number | Verdict |
+| --- | --- | --- |
+| Change shows next frame | two-room and Cornell 13–47% of the step in frame 1; Sponza's lamp 34–45% at 316 probes, 0.1% moving out at the calibrated 85 | met, except Sponza's lamp at 85 |
+| Within 5% in ≤ 30 frames | two-room halved 9, switched on 18; Cornell 5 / 8; Sponza's sun turn **15** (field 60; was 13 / 36 before T2.18); furnished room's sun step 11 / 17; Sponza's lamp 13 / 31 at 316, 50 / 42 at 85; **two-room's lamp leaving the lit room 145–166 frames or never** against its long-held level (37–44 against its 3 s hold) | met, except Sponza's lamp and two-room's lamp leaving (known misses, DECISIONS 2026-11-09) |
+| Update ≤ 2.0 ms | Cornell 1.94, two-room 1.94, Sponza 2.03 (inside the page's +10% calibration margin); the 60 frames after Sponza's turn 0.99× still (p95 1.05×, T2.18); Bistro with the texture cap: 2.19 ms at the floor of 120 probes (calibrated 52–73; the floor wins) | met; Bistro over by 9.5% because the floor wins |
+| Sampling ≤ 1.0 ms | 0.714 ms on the default path (at 1,380 MHz) | met |
+| ≥ 32 lights, no recompiles | 4,096 lights: 0; sessions on four scenes including Bistro capped: 0 | met |
+| Adapter ≤ 0.2 / 0.5 ms | Sponza 0.052 / 0.059, Bistro 0.091 / 0.103 (CPU only, unaffected by the overflow) | met |
+| Whole frame, 1440p, viewer path, GPU p50 / p95 GI on | Cornell 4.92 / 5.06, two-room 7.64 / 8.01, Sponza 21.07 / 21.28, Bistro capped 13.31 / 13.59 (GI off 5.33; at 1,200 MHz) | recorded |
+| Light grid at 2,048 cells ≤ 0.1 ms | 0.232 (0.198 after a ramp) | **missed** (known miss) |
+| Intel `ddgi-key-probes-sponza` | 16 and 18 against 15 at a fixed 316 probes (T2.18 used the margin) | **missed** (known miss; T3.15) |
+- **Superseded:** the uncapped Bistro rows of 2026-11-08 (GPU memory overflowing, T2.17) and the "Bistro broken" verdict; the Sponza turn's 13 / 36 and "over the budget" (before T2.18).
+- **The cold start** (1.439 s on this branch, 1.326 s before T2.14) is one run each, with the driver's shader cache not cleared, so the small difference is not a finding.
+- **H-PLOC against tinybvh on Bistro:** GPU trees alone trace at 0.981× tinybvh's time, and 1.016× after the swap. GPU trees are as good on Bistro too, so making the tinybvh swap optional is worth deciding in T3.2.
+- **Bistro's budget check** fails on the page's own rule: the batch changes when the platform learns the frame rate after about 1 s, so neither size gets 300 timed frames. That's a page issue, not cost; it goes to T3.14.
+Not verified: the M5 Pro (not set up); a Bistro response; the library's default composite with the update in the same frame.
+Next: Dennis agrees the known misses and answers the clock question (DECISIONS 2026-11-09). The fixed 1,200 MHz clock seen on 2026-11-09 was not set by us, and we left it alone.
+
 ## 2026-11-09 · T2.10 review: Bistro exterior re-measured with the texture cap · gpu-tester (opus)
 Did: re-ran T2.10's Bistro exterior numbers with `VITE_DDGI_MAX_TEXTURE_SIZE=1024`, on `m2-t2.10` at 366dc0c (with T2.17 and T2.18). The RTX 3060 Laptop was nvidia/ampere, on headless Chrome 157.0.8103.38. Each run went under `bench-lock run`, one run per item, and all were VALID. `ddgi-session-recompiles` gained the same opt-in cap (1db6dc0, test page only). Rows are marked `note/t2.10_bistro_capped` in `timing.csv`, `baselines.csv` and `checks.csv` (066b495 and this commit). README now marks T2.10's uncapped Bistro rows as not to be used. Nothing in `packages/` changed.
 
