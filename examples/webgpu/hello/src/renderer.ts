@@ -103,7 +103,11 @@ interface Draw {
     readonly uniformOffset: number;
 }
 
-/** The module's bindings at group 1, as `globalsCode` numbers them: textures and samplers from 0, then one uniform buffer. */
+/**
+ * The module's bindings at group 1, as `globalsCode` numbers them: textures
+ * and samplers from 0, then one uniform buffer when the module has `vec4f`
+ * parameters (DDGI's has none since its version 2).
+ */
 function giBindGroupLayoutEntries(parameters: readonly ShadingParameter[]): GPUBindGroupLayoutEntry[] {
     const entries: GPUBindGroupLayoutEntry[] = [];
     for (const parameter of parameters) {
@@ -113,7 +117,7 @@ function giBindGroupLayoutEntries(parameters: readonly ShadingParameter[]): GPUB
             entries.push({ binding: entries.length, visibility: GPUShaderStage.FRAGMENT, sampler: { type: parameter.filtering === 'linear' ? 'filtering' : 'non-filtering' } });
         }
     }
-    entries.push({ binding: entries.length, visibility: GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } });
+    if (uniformFloatCount(parameters) > 0) entries.push({ binding: entries.length, visibility: GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } });
     return entries;
 }
 
@@ -170,7 +174,7 @@ class GiBindings {
                 entries.push({ binding: entries.length, resource: this.samplers.get(parameter.name)! });
             }
         }
-        entries.push({ binding: entries.length, resource: { buffer: this.uniformBuffer } });
+        if (uniformFloatCount(this.shading.parameters) > 0) entries.push({ binding: entries.length, resource: { buffer: this.uniformBuffer } });
         this.group = this.device.createBindGroup({ label: 'hello gi', layout: this.layout, entries });
         this.boundTextures = textures;
         return this.group;
