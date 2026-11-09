@@ -46,8 +46,12 @@ export type { TextureCompression } from './texture-compression-mode';
  */
 export const GI_AVERAGED_SLOTS: readonly string[] = ['map', 'emissiveMap', 'metalnessMap'];
 
-/** Material slots holding tangent-space normal maps: BC5 keeps their two channels, and three rebuilds z (`NormalRGPacking`). */
-const NORMAL_MAP_SLOTS: readonly string[] = ['normalMap', 'clearcoatNormalMap'];
+/**
+ * Material slots holding tangent-space normal maps: BC5 keeps their two channels, and three rebuilds z (`NormalRGPacking`).
+ * Only `normalMap`: three r187's clearcoat-normal path doesn't switch to two-channel unpacking for BC5, so a
+ * `clearcoatNormalMap` in BC5 would read z as 0. Those stay linear BC7 (T3.12's review).
+ */
+const NORMAL_MAP_SLOTS: readonly string[] = ['normalMap'];
 
 /** What to do with one texture, decided from every material slot that uses it. */
 export type TexturePlan =
