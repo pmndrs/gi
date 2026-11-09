@@ -912,3 +912,8 @@ date,commit,device,browser,scene,metric,value
 2026-11-09,1919130,Intel UHD,Chrome 157.0.8103.38 headless,two-room/lit-room,t2.10/accuracy/indirect_bias,0.049512
 2026-11-09,1919130,Intel UHD,Chrome 157.0.8103.38 headless,two-room/lit-room,t2.10/accuracy/indirect_flip_8x8,0.067853
 2026-11-09,1919130,Intel UHD,Chrome 157.0.8103.38 headless,two-room/lit-room,note/correctness_run,1
+2026-11-09,1919130,Intel UHD,Chrome 157.0.8103.38 headless,sponza/colonnade-from-the-floor,t2.10/accuracy/raw_field_gi_mean,0.0016025
+2026-11-09,1919130,Intel UHD,Chrome 157.0.8103.38 headless,sponza/colonnade-from-the-floor,t2.10/accuracy/cycles_untextured_gi_mean,0.0013018
+2026-11-09,1919130,Intel UHD,Chrome 157.0.8103.38 headless,sponza/colonnade-from-the-floor,t2.10/accuracy/raw_field_gi_bias,0.230976
+2026-11-09,1919130,Intel UHD,Chrome 157.0.8103.38 headless,sponza/colonnade-from-the-floor,t2.10/accuracy/raw_field_gi_flip_8x8,0.323166
+2026-11-09,1919130,Intel UHD,Chrome 157.0.8103.38 headless,sponza/colonnade-from-the-floor,note/correctness_run,1
