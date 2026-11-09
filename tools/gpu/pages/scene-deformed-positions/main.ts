@@ -24,9 +24,10 @@
  *   tree was built for can hold its drift long enough for one).
  * - **gpu forms:** a pose in a GPU buffer (vec4 stride, an offset) and in an
  *   rgba32float texture, each traced the frame after.
- * - **held bend:** a strong fold held for 150 frames: its refit drifts, so
- *   one drift rebuild (H-PLOC) must run, and only one; the fold is traced
- *   once the rebuilt tree is in.
+ * - **held bend** (first, from the flat rest tree with no drift running): a
+ *   strong fold held for 150 frames: its refit drifts, so one drift rebuild
+ *   (H-PLOC) must run, not before the drift has held 60 frames, and only one;
+ *   the fold is traced once the rebuilt tree is in.
  * - **cost** (recorded, not judged; TASKS M3): the `platform/mesh refit`
  *   pass for a 100,000-triangle sheet posed every frame.
  * - **no subgroups:** on a device without subgroups, poses are ignored with
@@ -477,6 +478,26 @@ await runGpuTest(
             };
             const treeCounts = () => platform.rays.meshTreeCounts;
 
+            // held bend, first: the tree is still the flat rest pose's and no drift has started, so the
+            // rebuild's timing is the bend's alone (later phases wave far from whatever tree they have).
+            const rebuildsBefore = platform.rays.deformingTreeCounts?.driftRebuilds ?? 0;
+            const gpuTreesBefore = treeCounts().gpuTreesBuilt;
+            const bend = bendPose(restPositions);
+            let rebuiltAtFrame = -1;
+            for (let index = 0; index < BEND_FRAMES; index++) {
+                // The same bend, given again every frame, as a host's animation holding a pose would.
+                platform.scene.setDeformedPositions(meshHandles[SHEET], bend);
+                frame();
+                await device.queue.onSubmittedWorkDone();
+                if (rebuiltAtFrame < 0 && treeCounts().gpuTreesBuilt > gpuTreesBefore) rebuiltAtFrame = index;
+            }
+            const driftRebuilds = (platform.rays.deformingTreeCounts?.driftRebuilds ?? 0) - rebuildsBefore;
+            if (driftRebuilds !== 1) failures.push(`the held bend started ${driftRebuilds} drift rebuilds in ${BEND_FRAMES} frames (expected exactly 1)`);
+            if (rebuiltAtFrame < 0) failures.push('the drift rebuild never arrived');
+            else if (rebuiltAtFrame < DRIFT_HOLD_FRAMES) failures.push(`the drift rebuild arrived at frame ${rebuiltAtFrame}, before the drift had held ${DRIFT_HOLD_FRAMES} frames`);
+            const bendResult = await check('held bend after its rebuild', bend, RAYS);
+            log(`held bend: ${driftRebuilds} drift rebuild, its tree in at frame ${rebuiltAtFrame} of ${BEND_FRAMES}; then ${bendResult.mismatches} mismatches`);
+
             // poses: each traced in the frame right after it is set.
             const poseResults = [];
             for (let index = 0; index < POSES; index++) {
@@ -526,25 +547,6 @@ await runGpuTest(
             const textureResult = await check('gpu texture pose', texturePose, RAYS);
             texture.destroy();
             log(`gpu forms: buffer ${bufferResult.mismatches} mismatches (${bufferResult.sheetHits} sheet hits), texture ${textureResult.mismatches} mismatches (${textureResult.sheetHits} sheet hits)`);
-
-            // held bend: drifts, one rebuild, and only one.
-            const rebuildsBefore = platform.rays.deformingTreeCounts?.driftRebuilds ?? 0;
-            const gpuTreesBefore = treeCounts().gpuTreesBuilt;
-            const bend = bendPose(restPositions);
-            let rebuiltAtFrame = -1;
-            for (let index = 0; index < BEND_FRAMES; index++) {
-                // The same bend, given again every frame, as a host's animation holding a pose would.
-                platform.scene.setDeformedPositions(meshHandles[SHEET], bend);
-                frame();
-                await device.queue.onSubmittedWorkDone();
-                if (rebuiltAtFrame < 0 && treeCounts().gpuTreesBuilt > gpuTreesBefore) rebuiltAtFrame = index;
-            }
-            const driftRebuilds = (platform.rays.deformingTreeCounts?.driftRebuilds ?? 0) - rebuildsBefore;
-            if (driftRebuilds !== 1) failures.push(`the held bend started ${driftRebuilds} drift rebuilds in ${BEND_FRAMES} frames (expected exactly 1)`);
-            if (rebuiltAtFrame < 0) failures.push('the drift rebuild never arrived');
-            else if (rebuiltAtFrame < DRIFT_HOLD_FRAMES) failures.push(`the drift rebuild arrived at frame ${rebuiltAtFrame}, before the drift had held ${DRIFT_HOLD_FRAMES} frames`);
-            const bendResult = await check('held bend after its rebuild', bend, RAYS);
-            log(`held bend: ${driftRebuilds} drift rebuild, its tree in at frame ${rebuiltAtFrame} of ${BEND_FRAMES}; then ${bendResult.mismatches} mismatches`);
 
             const recompiles = platform.stats.recompiles;
             if (recompiles !== 0) failures.push(`${recompiles} recompiles`);
