@@ -917,3 +917,114 @@ date,commit,device,browser,scene,metric,value
 2026-11-09,1919130,Intel UHD,Chrome 157.0.8103.38 headless,sponza/colonnade-from-the-floor,t2.10/accuracy/raw_field_gi_bias,0.230976
 2026-11-09,1919130,Intel UHD,Chrome 157.0.8103.38 headless,sponza/colonnade-from-the-floor,t2.10/accuracy/raw_field_gi_flip_8x8,0.323166
 2026-11-09,1919130,Intel UHD,Chrome 157.0.8103.38 headless,sponza/colonnade-from-the-floor,note/correctness_run,1
+2026-11-09,e3be20f,Intel UHD,Chrome headless,sponza,t2.10/key_probes_sponza/units,316
+2026-11-09,e3be20f,Intel UHD,Chrome headless,sponza,t2.10/key_probes_sponza/priorityShare,237
+2026-11-09,e3be20f,Intel UHD,Chrome headless,sponza,t2.10/key_probes_sponza/keyProbes,2717
+2026-11-09,e3be20f,Intel UHD,Chrome headless,sponza,t2.10/key_probes_sponza/probes,19425
+2026-11-09,e3be20f,Intel UHD,Chrome headless,sponza,t2.10/key_probes_sponza/turn/degrees,30
+2026-11-09,e3be20f,Intel UHD,Chrome headless,sponza,t2.10/key_probes_sponza/turn/before,0.00160437
+2026-11-09,e3be20f,Intel UHD,Chrome headless,sponza,t2.10/key_probes_sponza/turn/settled,0.00094982
+2026-11-09,e3be20f,Intel UHD,Chrome headless,sponza,t2.10/key_probes_sponza/turn/viewSettledFrame,16
+2026-11-09,e3be20f,Intel UHD,Chrome headless,sponza,t2.10/key_probes_sponza/turn/viewOvershootShareOfStep,0.0171243
+2026-11-09,e3be20f,Intel UHD,Chrome headless,sponza,t2.10/key_probes_sponza/turn/volumeWithinFrame,54
+2026-11-09,e3be20f,Intel UHD,Chrome headless,sponza,t2.10/key_probes_sponza/turn/atVolumeBound/frame,120
+2026-11-09,e3be20f,Intel UHD,Chrome headless,sponza,t2.10/key_probes_sponza/turn/atVolumeBound/weighted,0.0203783
+2026-11-09,e3be20f,Intel UHD,Chrome headless,sponza,t2.10/key_probes_sponza/turn/atVolumeBound/weightedFine,0.0208117
+2026-11-09,e3be20f,Intel UHD,Chrome headless,sponza,t2.10/key_probes_sponza/turn/atVolumeBound/weightedKeys,0.0181417
+2026-11-09,e3be20f,Intel UHD,Chrome headless,sponza,t2.10/key_probes_sponza/turn/atVolumeBound/mean,0.196405
+2026-11-09,e3be20f,Intel UHD,Chrome headless,sponza,t2.10/key_probes_sponza/turn/atVolumeBound/p95,0.825601
+2026-11-09,e3be20f,Intel UHD,Chrome headless,sponza,t2.10/key_probes_sponza/turn/atVolumeBound/awaiting,0
+2026-11-09,e3be20f,Intel UHD,Chrome headless,sponza,t2.10/key_probes_sponza/turn/lastFineProbeWaitingFrame,90
+2026-11-09,e3be20f,Intel UHD,Chrome headless,sponza,t2.10/key_probes_sponza/turn/noise/lightWeighted,0.00174005
+2026-11-09,e3be20f,Intel UHD,Chrome headless,sponza,t2.10/key_probes_sponza/turn/noise/meanRelative,0.0143445
+2026-11-09,e3be20f,Intel UHD,Chrome headless,sponza,t2.10/key_probes_sponza/turn/noise/probes,8147
+2026-11-09,e3be20f,Intel UHD,Chrome headless,sponza,t2.10/key_probes_sponza/halved/before,0.00160437
+2026-11-09,e3be20f,Intel UHD,Chrome headless,sponza,t2.10/key_probes_sponza/halved/settled,0.0011128
+2026-11-09,e3be20f,Intel UHD,Chrome headless,sponza,t2.10/key_probes_sponza/halved/settledFrame,15
+2026-11-09,e3be20f,Intel UHD,Chrome headless,sponza,t2.10/key_probes_sponza/halved/overshootShareOfStep,0.00574636
+2026-11-09,e3be20f,Intel UHD,Chrome headless,sponza,t2.10/key_probes_sponza/hold/sun turned/removed,0.647235
+2026-11-09,e3be20f,Intel UHD,Chrome headless,sponza,t2.10/key_probes_sponza/hold/sun turned/along,0.502504
+2026-11-09,e3be20f,Intel UHD,Chrome headless,sponza,t2.10/key_probes_sponza/hold/sun turned/change,0.194888
+2026-11-09,e3be20f,Intel UHD,Chrome headless,sponza,t2.10/key_probes_sponza/hold/sun turned/probes,8289
+2026-11-09,e3be20f,Intel UHD,Chrome headless,sponza,t2.10/key_probes_sponza/hold/sun turned/held,8289
+2026-11-09,e3be20f,Intel UHD,Chrome headless,sponza,t2.10/key_probes_sponza/hold/sun turned/stillHeld,8289
+2026-11-09,e3be20f,Intel UHD,Chrome headless,sponza,t2.10/key_probes_sponza/hold/sky dimmed/removed,0.910204
+2026-11-09,e3be20f,Intel UHD,Chrome headless,sponza,t2.10/key_probes_sponza/hold/sky dimmed/along,0.948588
+2026-11-09,e3be20f,Intel UHD,Chrome headless,sponza,t2.10/key_probes_sponza/hold/sky dimmed/change,0.933773
+2026-11-09,e3be20f,Intel UHD,Chrome headless,sponza,t2.10/key_probes_sponza/hold/sky dimmed/probes,8289
+2026-11-09,e3be20f,Intel UHD,Chrome headless,sponza,t2.10/key_probes_sponza/hold/sky dimmed/held,8289
+2026-11-09,e3be20f,Intel UHD,Chrome headless,sponza,t2.10/key_probes_sponza/hold/sky dimmed/stillHeld,8289
+2026-11-09,e3be20f,Intel UHD,Chrome headless,sponza,t2.10/key_probes_sponza/fallback/viewSettledFrame,41
+2026-11-09,e3be20f,Intel UHD,Chrome headless,sponza,t2.10/key_probes_sponza/fallback/volumeWithinFrame,108
+2026-11-09,e3be20f,Intel UHD,Chrome headless,sponza,t2.10/key_probes_sponza/fallback/atVolumeBound/frame,120
+2026-11-09,e3be20f,Intel UHD,Chrome headless,sponza,t2.10/key_probes_sponza/fallback/atVolumeBound/weighted,0.0233739
+2026-11-09,e3be20f,Intel UHD,Chrome headless,sponza,t2.10/key_probes_sponza/fallback/atVolumeBound/weightedFine,0.0237278
+2026-11-09,e3be20f,Intel UHD,Chrome headless,sponza,t2.10/key_probes_sponza/fallback/atVolumeBound/weightedKeys,0.0215474
+2026-11-09,e3be20f,Intel UHD,Chrome headless,sponza,t2.10/key_probes_sponza/fallback/atVolumeBound/mean,0.204536
+2026-11-09,e3be20f,Intel UHD,Chrome headless,sponza,t2.10/key_probes_sponza/fallback/atVolumeBound/p95,0.956861
+2026-11-09,e3be20f,Intel UHD,Chrome headless,sponza,t2.10/key_probes_sponza/fallback/atVolumeBound/awaiting,0
+2026-11-09,e3be20f,Intel UHD,Chrome headless,sponza,t2.10/key_probes_sponza/fallback/noise/lightWeighted,0.00197198
+2026-11-09,e3be20f,Intel UHD,Chrome headless,sponza,t2.10/key_probes_sponza/fallback/noise/meanRelative,0.0236626
+2026-11-09,e3be20f,Intel UHD,Chrome headless,sponza,t2.10/key_probes_sponza/fallback/noise/probes,8149
+2026-11-09,e3be20f,Intel UHD,Chrome headless,all,note/correctness_run,1
+2026-11-09,e3be20f,Intel UHD,Chrome headless,all,note/t2.10_intel_batch,12
+2026-11-09,e3be20f,Intel UHD,Chrome headless,all,note/page_failed,1
+2026-11-09,e3be20f,Intel UHD,Chrome headless,all,t2.10/tree_swap/units,512
+2026-11-09,e3be20f,Intel UHD,Chrome headless,all,t2.10/tree_swap/rounds,6
+2026-11-09,e3be20f,Intel UHD,Chrome headless,all,t2.10/tree_swap/blockFrames,120
+2026-11-09,e3be20f,Intel UHD,Chrome headless,all,t2.10/tree_swap/sponza/meshes,449
+2026-11-09,e3be20f,Intel UHD,Chrome headless,all,t2.10/tree_swap/sponza/firstTrees/onGpuTrees,449
+2026-11-09,e3be20f,Intel UHD,Chrome headless,all,t2.10/tree_swap/sponza/firstTrees/onTinybvhTrees,0
+2026-11-09,e3be20f,Intel UHD,Chrome headless,all,t2.10/tree_swap/sponza/firstTrees/waitingForFirstTree,0
+2026-11-09,e3be20f,Intel UHD,Chrome headless,all,t2.10/tree_swap/sponza/firstTrees/tinybvhBuilding,0
+2026-11-09,e3be20f,Intel UHD,Chrome headless,all,t2.10/tree_swap/sponza/firstTrees/gpuTreesBuilt,449
+2026-11-09,e3be20f,Intel UHD,Chrome headless,all,t2.10/tree_swap/sponza/firstTrees/gpuTreesRefused,0
+2026-11-09,e3be20f,Intel UHD,Chrome headless,all,t2.10/tree_swap/sponza/firstTrees/swaps,0
+2026-11-09,e3be20f,Intel UHD,Chrome headless,all,t2.10/tree_swap/sponza/firstTrees/lastGpuBuildMs,4479.5
+2026-11-09,e3be20f,Intel UHD,Chrome headless,all,t2.10/tree_swap/sponza/treePassMs/beforeSwap/gpu-first,10.7012
+2026-11-09,e3be20f,Intel UHD,Chrome headless,all,t2.10/tree_swap/sponza/treePassMs/beforeSwap/tinybvh-only,10.4598
+2026-11-09,e3be20f,Intel UHD,Chrome headless,all,t2.10/tree_swap/sponza/treePassMs/afterSwap/gpu-first,10.5502
+2026-11-09,e3be20f,Intel UHD,Chrome headless,all,t2.10/tree_swap/sponza/treePassMs/afterSwap/tinybvh-only,10.4326
+2026-11-09,e3be20f,Intel UHD,Chrome headless,all,t2.10/tree_swap/sponza/speedJudged,0
+2026-11-09,e3be20f,Intel UHD,Chrome headless,all,t2.10/tree_swap/sponza/gpuTreesRatio,1.0231
+2026-11-09,e3be20f,Intel UHD,Chrome headless,all,t2.10/tree_swap/sponza/afterSwapRatio,1.0113
+2026-11-09,e3be20f,Intel UHD,Chrome headless,all,t2.10/tree_swap/sponza/swap/atlasMeanBefore,0.0427366
+2026-11-09,e3be20f,Intel UHD,Chrome headless,all,t2.10/tree_swap/sponza/swap/atlasMeanAfter,0.0427356
+2026-11-09,e3be20f,Intel UHD,Chrome headless,all,t2.10/tree_swap/sponza/swap/change,-0.0000233216
+2026-11-09,e3be20f,Intel UHD,Chrome headless,all,t2.10/tree_swap/sponza/swap/normalChanges/0,0.00000538344
+2026-11-09,e3be20f,Intel UHD,Chrome headless,all,t2.10/tree_swap/sponza/swap/normalChanges/1,0.00000572059
+2026-11-09,e3be20f,Intel UHD,Chrome headless,all,t2.10/tree_swap/sponza/swap/normalChanges/2,0.0000321017
+2026-11-09,e3be20f,Intel UHD,Chrome headless,all,t2.10/tree_swap/sponza/swap/atlasMeanLater,0.0427253
+2026-11-09,e3be20f,Intel UHD,Chrome headless,all,t2.10/tree_swap/sponza/swap/swaps,449
+2026-11-09,e3be20f,Intel UHD,Chrome headless,all,t2.10/tree_swap/sponza/swap/recompiles,0
+2026-11-09,e3be20f,Intel UHD,Chrome headless,all,t2.10/tree_swap/sponza/memoryAtFirstTrees/nodes,216863808
+2026-11-09,e3be20f,Intel UHD,Chrome headless,all,t2.10/tree_swap/sponza/memoryAtFirstTrees/nodesInUse,192767808
+2026-11-09,e3be20f,Intel UHD,Chrome headless,all,t2.10/tree_swap/sponza/memoryAtFirstTrees/triangles,275731008
+2026-11-09,e3be20f,Intel UHD,Chrome headless,all,t2.10/tree_swap/sponza/memoryAtFirstTrees/topLevel,126752
+2026-11-09,e3be20f,Intel UHD,Chrome headless,all,t2.10/tree_swap/sponza/memoryAtFirstTrees/gpuBuildOutputs,666319404
+2026-11-09,e3be20f,Intel UHD,Chrome headless,all,t2.10/tree_swap/sponza/memoryAtFirstTrees/total,1159040972
+2026-11-09,e3be20f,Intel UHD,Chrome headless,all,t2.10/tree_swap/sponza/memoryAfterSwap/nodes,216863808
+2026-11-09,e3be20f,Intel UHD,Chrome headless,all,t2.10/tree_swap/sponza/memoryAfterSwap/nodesInUse,194005696
+2026-11-09,e3be20f,Intel UHD,Chrome headless,all,t2.10/tree_swap/sponza/memoryAfterSwap/triangles,275731008
+2026-11-09,e3be20f,Intel UHD,Chrome headless,all,t2.10/tree_swap/sponza/memoryAfterSwap/topLevel,126752
+2026-11-09,e3be20f,Intel UHD,Chrome headless,all,t2.10/tree_swap/sponza/memoryAfterSwap/gpuBuildOutputs,0
+2026-11-09,e3be20f,Intel UHD,Chrome headless,all,t2.10/tree_swap/sponza/memoryAfterSwap/total,492721568
+2026-11-09,e3be20f,Intel UHD,Chrome headless,all,t2.10/tree_swap/sponza/memoryTinybvhOnly/nodes,194005696
+2026-11-09,e3be20f,Intel UHD,Chrome headless,all,t2.10/tree_swap/sponza/memoryTinybvhOnly/nodesInUse,194005696
+2026-11-09,e3be20f,Intel UHD,Chrome headless,all,t2.10/tree_swap/sponza/memoryTinybvhOnly/triangles,275731008
+2026-11-09,e3be20f,Intel UHD,Chrome headless,all,t2.10/tree_swap/sponza/memoryTinybvhOnly/topLevel,126752
+2026-11-09,e3be20f,Intel UHD,Chrome headless,all,t2.10/tree_swap/sponza/memoryTinybvhOnly/gpuBuildOutputs,0
+2026-11-09,e3be20f,Intel UHD,Chrome headless,all,t2.10/tree_swap/sponza/memoryTinybvhOnly/total,469863456
+2026-11-09,e3be20f,Intel UHD,Chrome headless,all,t2.10/tree_swap/sponza/naturalSwap/swaps,0
+2026-11-09,e3be20f,Intel UHD,Chrome headless,all,t2.10/tree_swap/sponza/naturalSwap/framesWithSwaps,0
+2026-11-09,e3be20f,Intel UHD,Chrome headless,all,t2.10/tree_swap/sponza/naturalSwap/frames,2
+2026-11-09,e3be20f,Intel UHD,Chrome headless,all,t2.10/tree_swap/sponza/naturalSwap/gpuTreesAtStart,0
+2026-11-09,e3be20f,Intel UHD,Chrome headless,all,t2.10/tree_swap/sponza/naturalSwap/memory/nodes,194005696
+2026-11-09,e3be20f,Intel UHD,Chrome headless,all,t2.10/tree_swap/sponza/naturalSwap/memory/nodesInUse,194005696
+2026-11-09,e3be20f,Intel UHD,Chrome headless,all,t2.10/tree_swap/sponza/naturalSwap/memory/triangles,275731008
+2026-11-09,e3be20f,Intel UHD,Chrome headless,all,t2.10/tree_swap/sponza/naturalSwap/memory/topLevel,126752
+2026-11-09,e3be20f,Intel UHD,Chrome headless,all,t2.10/tree_swap/sponza/naturalSwap/memory/gpuBuildOutputs,0
+2026-11-09,e3be20f,Intel UHD,Chrome headless,all,t2.10/tree_swap/sponza/naturalSwap/memory/total,469863456
+2026-11-09,e3be20f,Intel UHD,Chrome headless,all,t2.10/tree_swap/sponza/naturalSwap/tinybvhOnlyNodes,194005696
+2026-11-09,e3be20f,Intel UHD,Chrome headless,all,note/correctness_run,1
+2026-11-09,e3be20f,Intel UHD,Chrome headless,all,note/t2.10_intel_batch,13
