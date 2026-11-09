@@ -98,7 +98,9 @@ export interface GIPlatform {
     /**
      * Screen-space work for techniques that need it, after the host has
      * written depth and normals and before it shades. A no-op when no attached
-     * technique has a screen stage, so hosts may always call it.
+     * technique has a screen stage, so hosts may always call it. Call it after
+     * the frame's `encode`: screen stages use that frame's camera, whose
+     * projection must be the one `screen.depth` was drawn with.
      */
     encodeScreen(encoder: GPUCommandEncoder, screen: FrameScreen): void;
     /**

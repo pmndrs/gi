@@ -162,6 +162,10 @@ The answers go in PROGRESS. Any change to the contract is made in both the TypeS
 
 ## Revisions
 
+### Radiance-cache phase 2, 2026-11-09 (RC2.1)
+
+- **Technique-facing: `TechniqueScreenFrame.camera` (and `frame`, `deltaTime`) are now those of the frame's `encode`.** Before, `encodeScreen` handed screen stages an identity camera, so a technique couldn't turn the host's depth back into world positions. A screen technique reconstructs positions with `camera.projection × camera.view`, so `projection` must be the one `FrameScreen.depth` was drawn with (WebGPU's 0..1 depth); hosts call `encodeScreen` after the frame's `encode`, as before. Implementation: `GIPlatformImpl` keeps the latest `encode`'s camera. Hosts that jitter their projection for an upscaler hand GI the unjittered one (`FrameCamera`), which is half a pixel off the depth; RC2.2 decides whether `FrameScreen` needs its own projection.
+
 ### Radiance-cache phase 1, 2026-11-09 (RC1.1)
 
 - **Host- and technique-facing: `FrameScreen.albedo`** (optional): the diffuse albedo, linear rgb, base colour × (1 − metalness), the fold the adapters already apply to GI albedo for rays, so a pixel and a ray hit on the same surface agree. Any float or unorm format. It is not three's composite weight `giAlbedo`, which also carries the specular lobe's share and AO. `FrameScreen.depth` now says what formats it takes: a depth format (read as `texture_depth_2d`) or a one-channel float colour format.

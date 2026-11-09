@@ -21,7 +21,8 @@
         "paths": {
             "@pmndrs/ddgi": ["packages/ddgi/src/index.ts"],
             "@pmndrs/ddgi/core": ["packages/ddgi/src/core.ts"],
-            "@pmndrs/ddgi/three": ["packages/ddgi/src/three.ts"]
+            "@pmndrs/ddgi/three": ["packages/ddgi/src/three.ts"],
+            "@pmndrs/ddgi/radiance-cache": ["packages/ddgi/src/radiance-cache.ts"]
         }
     },
     "include": ["packages/*/src", "packages/*/test", "apps/*/src", "examples/webgpu/*/src", "examples/three/src", "scenes/src", "scenes/check", "tools"],

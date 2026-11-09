@@ -85,7 +85,14 @@ export interface WorkFloorRate {
     readonly calibratedUnits: number;
 }
 
-/** Per-frame inputs for the optional screen stage. */
+/**
+ * Per-frame inputs for the optional screen stage. `frame`, `deltaTime` and
+ * `camera` are those of the frame's `encode`, which the host calls before
+ * `encodeScreen` (RC2.1): a screen technique reconstructs world positions
+ * from `screen.depth` with `camera.projection × camera.view`, so `projection`
+ * must be the one the depth was drawn with (WebGPU's 0..1 depth range).
+ * `changes` is empty and `units` 0: the budget belongs to `encode`.
+ */
 export interface TechniqueScreenFrame extends TechniqueFrame {
     readonly screen: FrameScreen;
 }

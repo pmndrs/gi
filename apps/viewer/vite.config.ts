@@ -63,7 +63,7 @@ export default defineConfig({
     resolve: {
         alias: [
             { find: /^@pmndrs\/ddgi$/, replacement: resolve(__dirname, '../../packages/ddgi/src/index.ts') },
-            { find: /^@pmndrs\/ddgi\/(core|three)$/, replacement: resolve(__dirname, '../../packages/ddgi/src/$1.ts') },
+            { find: /^@pmndrs\/ddgi\/(core|three|radiance-cache)$/, replacement: resolve(__dirname, '../../packages/ddgi/src/$1.ts') },
         ],
     },
     define: {
