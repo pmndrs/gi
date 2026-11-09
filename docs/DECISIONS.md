@@ -2,6 +2,10 @@
 
 Settled choices, newest first. Each entry is short: the decision, why, and what would make us revisit it. Changing a threshold or target counts as a decision and goes here.
 
+## 2026-11-10
+
+- **Deforming meshes' readbacks: the refit's stats at most once every 15 frames per posed mesh, and a drift rebuild's own build; provisional, for Dennis to confirm** (lead ruling from T3.3's review; widens the T3.2 entry below, 2026-11-09). While a deforming mesh is being posed, its refit's stats (a few words: the relative SAH cost the held-drift rule reads) are copied out at most once every 15 frames and read back a few frames later; a pose held still makes none. A drift rebuild (at most one a frame, rare by design) submits its own H-PLOC build and reads back that one tree's stats and layout (the refit needs its shape). SPEC's exception and platform.md say so. *Why:* the held-drift rule (2026-11-09) needs the refit's cost, which only the GPU has for GPU poses; one sample every 15 frames still gives four or five inside the 60 frames a drift must hold, where copying after every refit read back every 2-3 frames. *Revisit if* a host can't allow it: the CPU form could compute the cost itself (`refitOnCpu`), and the GPU form would then rebuild on a timer or not at all.
+
 ## 2026-11-09
 
 - **T3.4: the far-set guess is sized by the box's projected area and weighed by contrast; Ω_ref is a hemisphere** (T3.4 implementer; for the lead's review; replaces T2.M1's Ω / 0.5 sr with the bounding sphere). A far probe's change is `r = min(1, Ω / 2π × contrast) × min(1, moved / spacing)`. Ω is the area of the box's faces facing the probe over the distance to its centre squared. Contrast is the brightest stored mean among the active probes within 1.5 spacings of the box's centre over the probe's own, at least 1.

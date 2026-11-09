@@ -19,7 +19,11 @@
  *   the upper half on a bone at 0.8 m), that bone turned 0 → 90° → 0. It
  *   sets `userData.giContributes = true`; skinned meshes are characters
  *   (receivers only) by default. Its estimated box is the bind pose's grown
- *   by 0.8 m on every side.
+ *   by 0.8 m on every side. Posed on the CPU (no renderer given to ThreeGI).
+ * - `skinned, GPU skinning` (T3.3): the same skinned panel with the
+ *   renderer given to ThreeGI, so three's own `computeSkinning` writes the
+ *   pose into a texture the platform copies and refits from; every pose
+ *   must go out in that GPU form, never as a CPU array.
  *
  * **A known miss, not gated (T3.4's):** with `morphed`'s exact box, GI
  * doesn't come all the way back when the panel unfolds (floor 6% and wall
@@ -104,6 +108,8 @@ interface Case {
     readonly deformBounds?: { readonly min: [number, number, number]; readonly max: [number, number, number] };
     /** Whether `rest again` must match `rest` (the file comment's known miss). */
     readonly gateReturn: boolean;
+    /** Give ThreeGI the renderer, so a skinned panel is posed by three's GPU skinning (T3.3). */
+    readonly gpuSkinning?: boolean;
 }
 
 /** 0.8 m around the panel and its folded half: the size of the skinned panel's estimated box. */
@@ -113,6 +119,7 @@ const CASES: readonly Case[] = [
     { name: 'morphed', kind: 'morphed', gateReturn: false },
     { name: 'morphed, giDeformBounds', kind: 'morphed', deformBounds: LARGER_BOX, gateReturn: true },
     { name: 'skinned', kind: 'skinned', gateReturn: true },
+    { name: 'skinned, GPU skinning', kind: 'skinned', gateReturn: true, gpuSkinning: true },
 ];
 
 /** The panel's geometry: a vertical sheet in the xy plane, foot at y = 0, facing +z (towards the camera). */
@@ -241,8 +248,8 @@ function snapshot(renderer: WebGPURenderer, label: string, grid: HTMLElement): v
     const copy = document.createElement('canvas');
     copy.width = WIDTH;
     copy.height = HEIGHT;
-    // Three rows of three, with their captions, fit the runner's 1280 x 720 screenshot at 0.65 of full size.
-    copy.style.width = `${WIDTH * 0.65}px`;
+    // Four rows of three, with their captions, fit the runner's screenshot (about 566 px tall) at 0.45 of full size.
+    copy.style.width = `${WIDTH * 0.45}px`;
     copy.getContext('2d')!.drawImage(renderer.domElement, 0, 0, WIDTH, HEIGHT);
     const caption = document.createElement('figcaption');
     caption.textContent = label;
@@ -277,7 +284,19 @@ await runThreePage(
             platform.setOutput(ddgi);
             await platform.prepare();
             const warnings: string[] = [];
-            const threeGI = new ThreeGI(platform, scene, { budget: BUDGET, environment: { type: 'none' }, warn: (message) => warnings.push(message) });
+            const threeGI = new ThreeGI(platform, scene, {
+                budget: BUDGET,
+                environment: { type: 'none' },
+                warn: (message) => warnings.push(message),
+                renderer: testCase.gpuSkinning ? renderer : undefined,
+            });
+            // Which form each pose reaches the platform in: a CPU array, or a GPU texture or buffer.
+            const poseForms: string[] = [];
+            const sendPose = platform.scene.setDeformedPositions.bind(platform.scene);
+            platform.scene.setDeformedPositions = (mesh, positions) => {
+                poseForms.push(positions instanceof Float32Array ? 'cpu' : 'gpu');
+                sendPose(mesh, positions);
+            };
             const view = await TestView.create(device, platform);
             const recompilesAtStart = platform.stats.recompiles;
             const frame = (): void => {
@@ -328,7 +347,8 @@ await runThreePage(
             const wallChange = bent.wall / rest.wall - 1;
             const floorReturn = Math.abs(restAgain.floor / rest.floor - 1);
             const wallReturn = Math.abs(restAgain.wall / rest.wall - 1);
-            data[which] = { rest, bent, restAgain, floorGain, wallChange, floorReturn, wallReturn, updatesUntilPose: { fold: foldSent, unfold: unfoldSent }, recompiles, warnings };
+            const gpuPoses = poseForms.filter((form) => form === 'gpu').length;
+            data[which] = { rest, bent, restAgain, floorGain, wallChange, floorReturn, wallReturn, updatesUntilPose: { fold: foldSent, unfold: unfoldSent }, recompiles, warnings, poses: poseForms.length, gpuPoses };
             log(`${which}: floor ${(floorGain * 100).toFixed(1)}% when folded, back ${(floorReturn * 100).toFixed(2)}% off; wall ${(wallChange * 100).toFixed(1)}%, back ${(wallReturn * 100).toFixed(2)}% off; pose sent after ${foldSent} / ${unfoldSent} update(s); recompiles ${recompiles}`);
 
             if (!(foldSent <= POSE_UPDATES && unfoldSent <= POSE_UPDATES)) problems.push(`${which}: the pose was sent after ${foldSent} / ${unfoldSent} updates (at most ${POSE_UPDATES})`);
@@ -337,6 +357,8 @@ await runThreePage(
             if (!(floorGain >= FLOOR_GAIN)) problems.push(`${which}: the floor's GI changed by ${(floorGain * 100).toFixed(1)}% when the panel folded (at least +${FLOOR_GAIN * 100}%)`);
             if (testCase.gateReturn && !(floorReturn <= RETURN_TOLERANCE && wallReturn <= RETURN_TOLERANCE)) problems.push(`${which}: unfolded, GI came back to ${(floorReturn * 100).toFixed(2)}% (floor) and ${(wallReturn * 100).toFixed(2)}% (wall) of rest`);
             if (recompiles !== 0) problems.push(`${which}: ${recompiles} recompile(s)`);
+            const expectedForm = testCase.gpuSkinning ? 'gpu' : 'cpu';
+            if (poseForms.length === 0 || poseForms.some((form) => form !== expectedForm)) problems.push(`${which}: poses went out as [${[...new Set(poseForms)].join(', ')}], expected ${expectedForm} only`);
         }
         // The live canvas has done its work; the grid of snapshots is the screenshot.
         renderer.domElement.style.display = 'none';

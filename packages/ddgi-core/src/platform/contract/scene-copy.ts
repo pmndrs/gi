@@ -75,7 +75,10 @@ export interface DirtyRegion {
      * Both regions of a move (where it was and where it is) carry it.
      * A deforming mesh's region (new positions from `setDeformedPositions`)
      * carries the largest distance any vertex travelled since the positions
-     * before, in world metres (its instance's largest scale applied).
+     * before, in world metres (its instance's largest scale applied). For
+     * positions given on the GPU, which the platform can't read, it is the
+     * diagonal of the mesh's `deformBounds` box instead: the most any vertex
+     * inside the box can travel.
      * Undefined for everything else: an instance created, destroyed, shown,
      * hidden or given a new mesh is a whole change there.
      *
