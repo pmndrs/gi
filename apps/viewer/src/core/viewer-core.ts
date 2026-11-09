@@ -204,6 +204,7 @@ export class ViewerCore {
             case 'cycles': {
                 const reference = new ReferenceImageTechnique(context);
                 reference.setBookmark(this.referenceBookmark);
+                reference.setGiTextures(this.ddgiSettings.giTextures);
                 return reference;
             }
             case 'none':
@@ -250,6 +251,8 @@ export class ViewerCore {
      */
     configureDdgi(settings: DdgiViewerSettings): void {
         this.ddgiSettings = { ...settings };
+        // The reference follows GI's textures switch (textured or untextured render).
+        this.reference?.setGiTextures(settings.giTextures);
         const ddgi = this.ddgi;
         if (ddgi && ddgi.layerKey !== layerKey(settings)) {
             const environment = ddgi.environment;

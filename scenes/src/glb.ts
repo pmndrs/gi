@@ -255,19 +255,27 @@ export function writeGlb(scene: ProceduralScene, options: GlbOptions): Uint8Arra
     const materials = scene.materials.map((material) => {
         const peak = Math.max(...material.emissive);
         const pbrMetallicRoughness: Record<string, unknown> = {
-            baseColorFactor: [material.albedo[0], material.albedo[1], material.albedo[2], 1],
-            metallicFactor: 0,
+            baseColorFactor: [material.albedo[0], material.albedo[1], material.albedo[2], material.opacity ?? 1],
+            metallicFactor: material.metalness ?? (material.metalnessMap ? 1 : 0),
             roughnessFactor: 1,
         };
         if (material.albedoMap) pbrMetallicRoughness.baseColorTexture = textureInfo(material.albedoMap);
+        if (material.metalnessMap) {
+            // glTF reads metalness from the blue channel of the metallic-roughness texture (roughness from green).
+            if (material.metalnessMap.channel !== 'b') throw new Error(`material ${material.name}: metalnessMap.channel '${material.metalnessMap.channel}': glTF reads metalness from the blue channel only`);
+            pbrMetallicRoughness.metallicRoughnessTexture = textureInfo(material.metalnessMap);
+        }
+        const alphaMode = material.alphaMode ?? (material.alphaCutoff !== undefined ? 'cutout' : 'opaque');
         const gltfMaterial: Record<string, unknown> = {
             name: material.name,
             pbrMetallicRoughness,
             doubleSided: material.doubleSided,
         };
-        if (material.alphaCutoff !== undefined) {
+        if (alphaMode === 'cutout') {
             gltfMaterial.alphaMode = 'MASK';
-            gltfMaterial.alphaCutoff = material.alphaCutoff;
+            gltfMaterial.alphaCutoff = material.alphaCutoff ?? 0.5;
+        } else if (alphaMode === 'stochastic') {
+            gltfMaterial.alphaMode = 'BLEND';
         }
         const extensions: Record<string, unknown> = {};
         if (peak > 0) {

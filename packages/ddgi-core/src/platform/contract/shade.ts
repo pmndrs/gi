@@ -292,10 +292,11 @@ export interface HitShadingSettings {
      */
     lightGridShadowedLightsPerHit: number;
     /**
-     * Whether ray hits read their materials' textures (albedo, emissive and
-     * metalness maps, M4). Off, every material shades with its flat colours,
-     * as before M4: for comparisons, and for hosts that fold textures into
-     * their colours themselves. Changing it doesn't log a scene change; call
+     * Whether ray hits read their materials' textures where they hit (albedo,
+     * emissive and metalness maps, M4). Off, each texture is read at its last
+     * mip, its mean, the same over the whole surface: the flat colours of
+     * before M4 (the adapter's folded averages), for comparisons. Changing it
+     * doesn't log a scene change; call
      * `resetHistory` to see the difference at once. Defaults to true.
      */
     sampleTextures: boolean;

@@ -10,11 +10,16 @@
  *   average 0.5 in linear light (squares about half a metre on the walls), so
  *   probe rays see a mean albedo of 0.5 through the texture store, the ray-cone
  *   mip and the uv mapping. Done-when 1: its field mean is within 1% of flat's;
- * - **textures off**: albedo colour 0.5 with the same checker on it, and
- *   `sampleTextures` off, which is what the platform did before M4 (it
- *   ignored textures). Done-when 5 here: its field mean is within 0.1% of
- *   flat's. (The other half of done-when 5, flat against `m4` before T4.1,
- *   is the plain `ddgi-furnace` page run on both commits.)
+ * - **textures off**: albedo colour 1 × the same checker, and
+ *   `sampleTextures` off (T4.4: off reads every texture at its last mip, its
+ *   mean, as the adapter's averages did before M4), so every hit sees the
+ *   checker's stored mean `m`. The stored 1 × 1 mip is 8-bit sRGB, so `m`
+ *   is 0.5 only to about 0.6% (NOTES), and the furnace answers
+ *   E/π = 0.25 / (1 − m). Done-when 5 here: the field mean is within 0.1% of
+ *   that closed form. (Against flat's field it would carry flat's own error:
+ *   flat read 0.49925 on the RTX, 0.15% under its 0.5.) (The other half
+ *   of done-when 5, flat against `m4` before T4.1, is the plain `ddgi-furnace`
+ *   page run on both commits.)
  *
  * Field mean: `ddgiSampleIrradiance` at a grid of wall, floor and ceiling
  * points, as `ddgi-furnace` reads it, over every point and channel.
@@ -135,7 +140,7 @@ async function runVariant(device: GPUDevice, variant: Variant, log: (line: strin
         assert(scene.materials.length === 1, `the furnace has ${scene.materials.length} materials`);
         const texture = scene.platform.scene.createTexture({ source: checker(), srgb: true, label: 'furnace checker' });
         scene.platform.scene.updateMaterial(scene.materials[0], {
-            albedo: variant === 'textured' ? [1, 1, 1] : [0.5, 0.5, 0.5],
+            albedo: [1, 1, 1],
             albedoTexture: texture,
             albedoUv: { matrix: [CHECKER_TILING, 0, 0, CHECKER_TILING, 0, 0] },
         });
@@ -174,10 +179,16 @@ await runGpuTest(
         const textured = await runVariant(device, 'textured', log);
         const texturesOff = await runVariant(device, 'texturesOff', log);
         const texturedDifference = textured.meanEOverPi / flat.meanEOverPi - 1;
-        const texturesOffDifference = texturesOff.meanEOverPi / flat.meanEOverPi - 1;
-        log(`textured against flat ${(texturedDifference * 100).toFixed(3)}%, textures off against flat ${(texturesOffDifference * 100).toFixed(4)}%`);
+        // With textures off every hit reads the stored mean m, so the furnace's closed-form answer is Le / (1 - m), Le = 0.25.
+        assert(texturesOff.textureMean !== undefined, 'the textures-off variant has no stored mean');
+        const predictedOff = 0.25 / (1 - texturesOff.textureMean);
+        const texturesOffDifference = texturesOff.meanEOverPi / predictedOff - 1;
+        log(
+            `textured against flat ${(texturedDifference * 100).toFixed(3)}%; textures off ${texturesOff.meanEOverPi.toFixed(5)} against the closed form ${predictedOff.toFixed(5)} ` +
+                `for the stored mean ${texturesOff.textureMean.toFixed(5)}: ${(texturesOffDifference * 100).toFixed(4)}%`,
+        );
         assert(Math.abs(texturedDifference) <= TEXTURED_TOLERANCE, `the textured furnace's mean is ${(texturedDifference * 100).toFixed(3)}% from the flat one's (limit ${TEXTURED_TOLERANCE * 100}%)`);
-        assert(Math.abs(texturesOffDifference) <= TEXTURES_OFF_TOLERANCE, `with sampleTextures off the mean is ${(texturesOffDifference * 100).toFixed(4)}% from the flat one's (limit ${TEXTURES_OFF_TOLERANCE * 100}%)`);
+        assert(Math.abs(texturesOffDifference) <= TEXTURES_OFF_TOLERANCE, `with sampleTextures off the mean is ${(texturesOffDifference * 100).toFixed(4)}% from the closed form for the stored texture mean (limit ${TEXTURES_OFF_TOLERANCE * 100}%): flat ${flat.meanEOverPi.toFixed(5)}, off ${texturesOff.meanEOverPi.toFixed(5)}, stored mean ${texturesOff.textureMean.toFixed(5)}, textured ${textured.meanEOverPi.toFixed(5)}`);
         return { frames: FRAMES, flat, textured, texturesOff, texturedDifference, texturesOffDifference };
     },
     { optionalFeatures: ['texture-formats-tier1', 'subgroups'] },
