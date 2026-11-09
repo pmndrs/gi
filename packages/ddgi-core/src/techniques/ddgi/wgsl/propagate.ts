@@ -252,7 +252,7 @@ fn ${PROPAGATE_ENTRY_POINTS.find}(
     if (probeIndex < counts.x * counts.y * counts.z) {
         let probe = ddgiProbeCoordinates(probeIndex, counts);
         let flags = ddgiHistoryWords[probeIndex * DDGI_HISTORY_WORDS + DDGI_HISTORY_SCHEDULE_AND_FLAGS];
-        if ((flags & DDGI_FLAG_AWAITING_CHANGE) != 0u && !ddgiIsKeyProbe(probe) && ddgiReadProbeData(ddgiProbeData, probe).state == DDGI_STATE_ACTIVE) {
+        if ((flags & DDGI_FLAG_AWAITING_CHANGE) != 0u && !ddgiIsKeyProbe(probe) && ddgiReadProbeData(ddgiProbeData, ddgiUniformVolume(), probe).state == DDGI_STATE_ACTIVE) {
             for (var neighbour = 0u; neighbour < DDGI_KEY_NEIGHBOURS; neighbour++) {
                 let key = ddgiKeyNeighbourOffset(neighbour, probe);
                 if (key.exists && ddgiKeyPassedThisFrame(ddgiProbeIndexOf(probe + key.offset))) {
@@ -291,9 +291,9 @@ fn ddgiEndVisibility(probe: vec3i, origin: vec3f, seen: vec3f) -> f32 {
     if (distance <= 0.0) {
         return 1.0;
     }
-    let scale = ddgiAtlasScale(volume.distanceTexels, volume.counts);
+    let scale = ddgiAtlasScale(volume, volume.distanceTexels);
     let uv = ddgiTileUv(ddgiTileTexel(segment / distance, volume.distanceTexels), probe, scale);
-    let moments = textureSampleLevel(ddgiDistanceAtlas, ddgiAtlasSampler, uv, probe.y, 0.0).xy;
+    let moments = textureSampleLevel(ddgiDistanceAtlas, ddgiAtlasSampler, uv, ddgiAtlasLayer(volume, probe), 0.0).xy;
     let tested = min(distance, ddgi.distanceClamp);
     if (tested <= moments.x) {
         return 1.0;
@@ -352,11 +352,11 @@ fn ddgiWeighKey(fine: vec3i, fineIndex: u32, neighbour: u32) {
         return;
     }
     let keyProbe = fine + key.offset;
-    let keyData = ddgiReadProbeData(ddgiProbeData, keyProbe);
+    let keyData = ddgiReadProbeData(ddgiProbeData, ddgiUniformVolume(), keyProbe);
     if (keyData.state != DDGI_STATE_ACTIVE) {
         return;
     }
-    let finePosition = ddgiProbePosition(fine, ddgiReadProbeData(ddgiProbeData, fine).offset);
+    let finePosition = ddgiProbePosition(fine, ddgiReadProbeData(ddgiProbeData, ddgiUniformVolume(), fine).offset);
     let visibility = ddgiPairVisibility(fine, finePosition, keyProbe, ddgiProbePosition(keyProbe, keyData.offset));
     if (visibility < DDGI_VISIBLE_SHARE) {
         return;
@@ -415,12 +415,12 @@ fn ddgiNormaliseKeys(fineIndex: u32) {
 }
 
 // The atlas texel of interior texel 'texelIndex' of a probe's tile in
-// irradiance layer 'layer' (the array layer is probe.y; layer L's tiles are L
-// probe grids to the right, light-groups.ts).
+// irradiance layer 'layer' (the array layer is ddgiProbeLayer(probe); layer
+// L's tiles are L atlas widths of tiles to the right, light-groups.ts).
 fn ddgiIrradianceAtlasTexel(probe: vec3i, layer: u32, texelIndex: u32) -> vec2i {
     let border = i32(DDGI_TILE_BORDER);
     let texel = vec2i(vec2u(texelIndex % DDGI_IRRADIANCE_TEXELS, texelIndex / DDGI_IRRADIANCE_TEXELS));
-    let tile = vec2i(probe.x + i32(layer * ddgiProbeCount().x), probe.z);
+    let tile = vec2i(probe.x + i32(layer) * ddgiAtlasTilesAcross(), probe.z);
     return tile * (i32(DDGI_IRRADIANCE_TEXELS) + 2 * border) + border + texel;
 }
 
@@ -457,7 +457,7 @@ fn ddgiPropagateEntry(entry: u32, thread: u32) {
                     change += share * ddgiKeyDeltaTexel(ddgiKeySlot[neighbour], layer, texelIndex);
                 }
             }
-            let old = textureLoad(ddgiIrradianceAtlas, ddgiIrradianceAtlasTexel(fine, layer, texelIndex), fine.y, 0);
+            let old = textureLoad(ddgiIrradianceAtlas, ddgiIrradianceAtlasTexel(fine, layer, texelIndex), ddgiProbeLayer(fine), 0);
             let value = max(old.rgb + change, vec3f(0.0));${addToMean}
             // Layer 0 keeps the seeds it had before there were layers.
             let seed = (fineIndex * DDGI_IRRADIANCE_TEXEL_COUNT + texelIndex) ^ 0x2c1b3c6du ^ (layer * 0x9e3779b9u);
