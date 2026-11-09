@@ -8,8 +8,10 @@
  * Phase 2 (RC2.1) reads `useDirectLighting` only; the rest are listed now so
  * the defaults are in one place, with the phase that reads each. Glossy
  * reflections' options are left out until the platform has roughness and
- * metalness (register D8); the debug and DXR 1.0 options are left out for
- * good (docs/design/radiance-cache.md, "The baseline is Capsaicin's default
+ * metalness (register D8); `gi1_disable_specular_materials` and
+ * `gi1_disable_albedo_textures` are left out because the platform has neither
+ * specular materials (D8, D16) nor textures at hits (D2); the debug and DXR 1.0
+ * options are left out for good (docs/design/radiance-cache.md, "The baseline is Capsaicin's default
  * configuration").
  */
 

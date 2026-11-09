@@ -531,8 +531,8 @@ The port reads AMD's source directly: Capsaicin v1.3 at `C:/Users/denni/Document
 
 | ID | Task | Agent | Size | Depends on | Status |
 | --- | --- | --- | --- | --- | --- |
-| RC2.1 | Technique skeleton and screen probes: spawn (16×16 tiles, Halton jitter), compact, sample (64 rays, one per hemi-octahedral cell), trace, light hits directly, blend into the probe atlas; debug views of the atlas and the mask | implementer | M | RC1.1, RC1.3 | active (implementer, 2026-11-09) |
-| RC2.2 | First image: the probe mask mips, SH projection, interpolation per pixel, the shading module by `screenUV`, the three composite and the viewer's technique entry; the Lambert check | implementer | M | RC2.1 | todo |
+| RC2.1 | Technique skeleton and screen probes: spawn (16×16 tiles, Halton jitter), compact, sample (64 rays, one per hemi-octahedral cell), trace, light hits directly, blend into the probe atlas; debug views of the atlas and the mask | implementer | M | RC1.1, RC1.3 | done (2026-11-10; Opus review passed with notes; both GPUs; the sky check amended to Capsaicin backup rule; viewer entry moved to RC2.2; D16-D21) |
+| RC2.2 | First image: the probe mask mips, SH projection, interpolation per pixel, the shading module by `screenUV`, the three composite and the viewer's technique entry; the Lambert check | implementer | M | RC2.1 | active (implementer, 2026-11-10) |
 
 - **RC2.1 done-when.**
   - `packages/ddgi-core/src/techniques/radiance-cache/` exists, importing only `platform/contract` (the RC1.2 rule), declaring the screen channels it needs, with its settings as Capsaicin's defaults (`gi1.h` `RenderOptions`, `probe_size` 8, `QuarterSpp`), each named and cited.
@@ -542,8 +542,8 @@ The port reads AMD's source directly: Capsaicin v1.3 at `C:/Users/denni/Document
     - spawn count and positions match a CPU port of the spawn rule on a fixed frame;
     - compaction keeps exactly the non-sky tiles;
     - every ray direction lies in its cell and on the normal's side;
-    - a probe under a constant white sky with nothing above it reads the sky's radiance in every cell within 1%.
-  - Debug views (probe atlas, probe mask) in the core, engine-free, and in the viewer's debug menu.
+    - a probe under a constant white sky with nothing above it reads the sky's radiance in every cell within 1%. *Amended (lead, 2026-11-09, RC2.1 review):* directions stored as halves (Capsaicin's `packHalf3`) move about 0.1% of rays into a neighbouring cell, so a reached cell is checked against the sky within 1% and an empty cell against Capsaicin's backup rule (`gi1.comp:1212-1256`, confirmed by the review); rays within 0.02 of a cell edge or grazing within 1e-3 are counted rather than failed, and a probe whose cell assignment is undecided at an edge is skipped and counted (RTX: 1 probe).
+  - Debug views (probe atlas, probe mask) in the core, engine-free. *Amended:* the viewer's menu entry moves to RC2.2, which adds a screen position to the contract's debug colour (`giDebugColor`).
 - **RC2.2 done-when.**
   - Ported passes, each with its source lines cited:
     - `FilterProbeMask` (the mask mip chain);
@@ -554,7 +554,9 @@ The port reads AMD's source directly: Capsaicin v1.3 at `C:/Users/denni/Document
   - The technique's shading module returns E by `screenUV` from the interpolated screen texture. The three composite (T1.14) and the viewer's technique switcher take it like DDGI, with GI off/on/only and the split wipe against DDGI.
   - **Lambert check (GPU test):** an open plane under a constant sky of radiance L reads E = πL within 1% per pixel (mean and p95) at the interpolated output.
   - A single-bounce image on Cornell, two-room and Sponza in the viewer, with no errors and no NaN or negative pixels (checked by readback). A contact sheet in PROGRESS beside DDGI's image of the same view.
-  - Debug views of the SH (irradiance from the probe's SH along the normal) join the atlas and mask views.
+  - Debug views of the SH (irradiance from the probe's SH along the normal) join the atlas and mask views, and all three reach the viewer's debug menu (moved from RC2.1): `giDebugColor` gets the pixel's `screenUV` as `giIrradiance` has it.
+  - From RC2.1's review: a direction-varying sky (or an occluder) in a GPU test, so an atlas transposed in its tile or a hemi-octahedral map mirrored the same way on the CPU and GPU fails; fixed Capsaicin reference values in the CPU map tests; spawn checked at several frames; the uniform block packed by named offsets, not bare word indices (`radiance-cache-technique.ts:487-493`); a unit test that `encodeScreen` gets the frame's camera.
+  - `FrameCamera` gets an optional jitter (NDC offset of this frame's projection) so a host that jitters for the upscaler gets positions rebuilt at the depth's own jitter (RC2.1: half a pixel off otherwise). The three adapter calls `encodeScreen` after `encode`.
 
 ### radiance-cache phase 3: the world cache, faithful
 
@@ -603,6 +605,7 @@ Same rules (no timing; correctness gates; faithful port with sources cited; regi
     - a camera pan marks the disoccluded tiles empty, and `PatchScreenProbes` moves probes into them;
     - a probe that leaves the screen and comes back is found in the LRU cache;
     - with history, `SampleScreenProbes` sends rays in proportion to its CDF (a chi-square check on a probe with one bright cell).
+  - From RC2.1's review: a miss stores 65,504 (D19), which the blend's ×1e4 quantised sum overflows at 7 rays in one cell. Ray guiding can pile rays into sky cells, so check the cell sum can't wrap (what Capsaicin does with `FLT_MAX` there, and clamp or count as it does), with a GPU test of a probe whose CDF sends every ray to one sky cell.
   - Flicker on Cornell and Sponza with a still camera: T1.12's measure (per-pixel frame-to-frame change of the GI term), reported against DDGI's thresholds (mean ≤ 0.1%, p95 ≤ 0.5%), as information.
 - **RC4.2 done-when.**
   - `FilterScreenProbes` (radius 3, plane, hemisphere and hit-angle tests, depth weight) and the SSGI technique ported, the latter as a platform or technique module that reads `FrameScreen`.

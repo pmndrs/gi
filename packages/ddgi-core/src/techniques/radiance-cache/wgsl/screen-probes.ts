@@ -460,8 +460,10 @@ ${directScratchWgsl}
 // The pixel's position on the screen's depth, pushed off the surface for a ray's origin.
 // Capsaicin starts its rays at the visibility buffer's exact point on the triangle,
 // moved off it by offsetPosition (gi1.comp:1135-1150, geometry.hlsl:35-47). The host's
-// depth only gives the point to the depth's precision, so the push also covers what one
-// step of the stored depth moves the point (register D17).
+// depth only gives the point to the depth's precision, so the push also covers what four
+// steps of the stored depth move the point (register D17): one step for the depth's own
+// rounding, and margin for the reconstruction's float error and the depth's interpolation
+// across the triangle, which can each be about a step (chosen, not measured).
 const RC_DEPTH_STEP: f32 = 1.0 / 16777216.0;  // 2^-24: one step of a 24-bit depth, and of a 32-bit float just below 1
 
 fn rcRayOrigin(seed: vec2u, normal: vec3f) -> vec3f {
