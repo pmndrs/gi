@@ -203,3 +203,99 @@ date,commit,device,browser,scene,metric,value
 2026-11-08,3fbb161,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,sponza/colonnade-from-the-floor,t2.10/accuracy/raw_field_gi_bias,0.231397
 2026-11-08,3fbb161,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,sponza/colonnade-from-the-floor,t2.10/accuracy/raw_field_gi_flip_8x8,0.323398
 2026-11-08,3fbb161,RTX 3060 Laptop,Chrome 157.0.8103.38 headless,sponza/colonnade-from-the-floor,note/correctness_run,1
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/ddgi_furnace/frames,1800
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/ddgi_furnace/probesPerFrame,693
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/ddgi_furnace/probes/0,11
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/ddgi_furnace/probes/1,7
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/ddgi_furnace/probes/2,9
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/ddgi_furnace/points,1367
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/ddgi_furnace/meanEOverPi,0.498625
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/ddgi_furnace/meanRelativeError,0.00275099
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/ddgi_furnace/meanBias,-0.00275099
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/ddgi_furnace/worstRelativeError,0.0380252
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/ddgi_furnace/worstEOverPi,0.480987
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/ddgi_furnace/worstPosition/0,4.875
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/ddgi_furnace/worstPosition/1,2.8
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/ddgi_furnace/worstPosition/2,3.875
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/ddgi_furnace/pointsByWorstChannelError/under1,1328
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/ddgi_furnace/pointsByWorstChannelError/under2,29
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/ddgi_furnace/pointsByWorstChannelError/under5,10
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/ddgi_furnace/pointsByWorstChannelError/over5,0
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/ddgi_furnace/counters/probes updated,693
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/ddgi_furnace/counters/frames with changes marked,1
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/ddgi_furnace/counters/changes marked this frame,0
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/ddgi_furnace/counters/warming up,0
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/ddgi_furnace/counters/warm-up passes,0
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/ddgi_furnace/counters/key probes,120
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/ddgi_furnace/counters/irradiance layers,1
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/ddgi_furnace/counters/sun layer,0
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/ddgi_furnace/counters/frames composed in full,0
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/ddgi_furnace/counters/taking in a change,0
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/ddgi_furnace/counters/seconds per full sweep,0.0166667
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/ddgi_furnace/runMs,21767
+2026-11-09,1919130,Intel UHD,Chrome headless,all,note/correctness_run,1
+2026-11-09,1919130,Intel UHD,Chrome headless,all,note/t2.10_intel_batch,1
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/leak/frames,3000
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/leak/two-room/litMean,0.713203
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/leak/two-room/darkMean,0.0657998
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/leak/two-room/cyclesLitMean,0.676064
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/leak/two-room/cyclesDarkMean,0.060163
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/leak/two-room/leak,0.00833765
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/leak/two-room/litBias,0.0549343
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/leak/two-room/darkBias,0.0936919
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/leak/thin-wall/litMean,0.856956
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/leak/thin-wall/darkMean,0.00502142
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/leak/thin-wall/leak,0.0058596
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/leak/closed-door/litMean,0.74109
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/leak/closed-door/darkMean,0.000451161
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/leak/closed-door/leak,0.00060878
+2026-11-09,1919130,Intel UHD,Chrome headless,all,note/correctness_run,1
+2026-11-09,1919130,Intel UHD,Chrome headless,all,note/t2.10_intel_batch,2
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/trace_oracle/sharedEdgeRaysPerTest,2000000
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/trace_oracle/slippedTotals/platform,0
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/trace_oracle/slippedTotals/platform-gpu-trees,0
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/trace_oracle/slippedTotals/platform-mid-swap,0
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/trace_oracle/slippedTotals/platform-refused,0
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/trace_oracle/slippedTotals/watertight-tinybvh,0
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/trace_oracle/slippedTotals/watertight-tmbuild,0
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/trace_oracle/slippedTotals/watertight-lbvh,0
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/trace_oracle/slippedTotals/watertight-hploc,0
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/trace_oracle/traceStorageBuffers,3
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/trace_oracle/batchKernelStorageBuffers,5
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/trace_oracle/maxStorageBuffersPerShaderStage,8
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/trace_oracle/maxStorageBufferBindingSize,134217728
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/trace_oracle/deepestStackUsedByCpuPort,12
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/trace_oracle/deepestStackRequired,22
+2026-11-09,1919130,Intel UHD,Chrome headless,all,note/correctness_run,1
+2026-11-09,1919130,Intel UHD,Chrome headless,all,note/t2.10_intel_batch,2
+2026-11-09,1919130,Intel UHD,Chrome headless,cornell-box/groups off,t2.10/session_recompiles/recompiles,0
+2026-11-09,1919130,Intel UHD,Chrome headless,cornell-box/groups off,t2.10/session_recompiles/control,1
+2026-11-09,1919130,Intel UHD,Chrome headless,cornell-box/groups off,t2.10/session_recompiles/frames,550
+2026-11-09,1919130,Intel UHD,Chrome headless,cornell-box/groups on,t2.10/session_recompiles/recompiles,0
+2026-11-09,1919130,Intel UHD,Chrome headless,cornell-box/groups on,t2.10/session_recompiles/control,1
+2026-11-09,1919130,Intel UHD,Chrome headless,cornell-box/groups on,t2.10/session_recompiles/frames,630
+2026-11-09,1919130,Intel UHD,Chrome headless,two-room/groups off,t2.10/session_recompiles/recompiles,0
+2026-11-09,1919130,Intel UHD,Chrome headless,two-room/groups off,t2.10/session_recompiles/control,1
+2026-11-09,1919130,Intel UHD,Chrome headless,two-room/groups off,t2.10/session_recompiles/frames,600
+2026-11-09,1919130,Intel UHD,Chrome headless,two-room/groups on,t2.10/session_recompiles/recompiles,0
+2026-11-09,1919130,Intel UHD,Chrome headless,two-room/groups on,t2.10/session_recompiles/control,1
+2026-11-09,1919130,Intel UHD,Chrome headless,two-room/groups on,t2.10/session_recompiles/frames,680
+2026-11-09,1919130,Intel UHD,Chrome headless,all,note/correctness_run,1
+2026-11-09,1919130,Intel UHD,Chrome headless,all,note/t2.10_intel_batch,3
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/platform_recompiles/created,1000
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/platform_recompiles/destroyed,1000
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/platform_recompiles/livePeak,784
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/platform_recompiles/moved,9494
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/platform_recompiles/newMeshes,20
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/platform_recompiles/recompilesBefore,0
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/platform_recompiles/recompilesAfter,0
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/platform_recompiles/lights/created,4096
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/platform_recompiles/lights/destroyed,4096
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/platform_recompiles/lights/edited,440
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/platform_recompiles/lights/kinds/directional,64
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/platform_recompiles/lights/kinds/point,2688
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/platform_recompiles/lights/kinds/spot,1344
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/platform_recompiles/lights/recompilesAfter,0
+2026-11-09,1919130,Intel UHD,Chrome headless,all,t2.10/platform_recompiles/controlCounted,1
+2026-11-09,1919130,Intel UHD,Chrome headless,all,note/correctness_run,1
+2026-11-09,1919130,Intel UHD,Chrome headless,all,note/t2.10_intel_batch,3
