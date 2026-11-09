@@ -21,6 +21,11 @@ Rules:
 
 ---
 
+## 2026-11-09 · RC1.4 review fixes · implementer (opus)
+Did (c160197, then the docs commit): the f16 check gets two cases that f32 math stored as f16 can't pass, from run-time inputs: `(1 + 0.0001) - 1` (0 in f16) and `300h * 300h / 1000h` (infinity in f16, 90 in f32). three's source facts are now a text field, not CSV rows; the 12 `three/requests*` rows are removed from checks.csv. D13 is noted as held for RC1.1. New register row D15; the f16 rows of the fallbacks table and NOTES now say what is proven.
+Verified: `platform-features` at c160197, headless Chrome 157.0.8103.38. **RTX 3060 (nvidia/ampere): PASS**, both new cases right on our device and three's. **Intel UHD (gen-12lp): FAIL, a finding, not loosened:** cancellation gives 0 (f16 rounding is real), but the overflow case reads 90 on our device and three's, so the Intel keeps a wider intermediate. Rows: 365 more in checks.csv at c160197 (Intel's with `note/page_failed,1`). `pnpm lint`, `pnpm typecheck` and the page's unit tests pass.
+Next: (lead) decide whether the overflow case stays a hard check, which keeps the page red on the Intel, or becomes a reported fact. D15's rule (keep f16 math in range) holds either way.
+
 ## 2026-11-09 · RC1.4 · implementer (opus)
 Did: GPU page `tools/gpu/pages/platform-features/` (`checks.ts` the five functional checks, `expected.ts` + `expected.test.ts` the CPU references, `main.ts` the three devices). Each feature is used and read back on our device (`requestGIDevice`: every adapter feature, the platform's limits) and on the device `new WebGPURenderer()` + `init()` makes for itself. A third device without tier2 (otherwise the same request) shows tier1's write-only `rg16float`, a captured refusal of read-write `rgba16float`, and D5's ping-pong fallback working. Register D14, the "Feature fallbacks" table (an RC1.4 column and a limits row), NOTES (WebGPU; three.js first bullet), 336 rows in `bench/results/checks.csv` (`rc1.4/platform_features/*`, commit 3b4f754).
 Verified: `pnpm test:gpu --filter platform-features` PASS on `--gpu nvidia` (nvidia/ampere, RTX 3060 Laptop) and `--gpu intel` (intel/gen-12lp, Intel UHD), headless Chrome 157.0.8103.38, twice each (the second at 3b4f754). `pnpm lint && pnpm typecheck && pnpm test` pass.
@@ -29,11 +34,11 @@ Verified: `pnpm test:gpu --filter platform-features` PASS on `--gpu nvidia` (nvi
 | Indirect dispatch (GPU-written args; 0, 1, 37, [2,3,1], [65535,3,1]; [65536,1,1] runs nothing) | offered, requested, pass | pass | pass | pass |
 | `texture-formats-tier2` (read-write `rgba16float`, 4 accumulate steps, exact) | pass | pass | pass | pass |
 | `subgroups` (`subgroupAdd` per subgroup; sizes) | pass, 32 | pass, 32 | pass, reports 8–16, ran 16 | pass, same |
-| `shader-f16` (6 exact f16 results, 1 + 0.0001 = 1) | pass | pass | pass | pass |
+| `shader-f16` (6 exact f16 results, 1 + 0.0001 = 1; these don't separate f16 from f32 math, see the review-fixes entry above) | pass | pass | pass | pass |
 | `timestamp-query` (2 passes, ordered, non-zero) | pass | pass | pass | pass |
 Every feature is offered by both adapters and requested by both our code and three (three: every `GPUFeatureName` the adapter has, `WebGPUBackend.js:231-243`, `WebGPUConstants.js:328-349`; compatibility adapter :215-219; no limits, `requiredLimits` defaults to `{}` at :97 and goes to `requestDevice` at :245-248).
 Limits (same on both GPUs), ours / three's / adapter: `maxStorageBufferBindingSize` 2,147,483,644 / 134,217,728 / 2,147,483,644; `maxBufferSize` 2,147,483,648 / 268,435,456 / 2,147,483,648; `maxStorageBuffersPerShaderStage` 16 / 8 / 16; `maxStorageTexturesPerShaderStage` 4 / 4 / 8; `maxComputeWorkgroupsPerDimension` 65,535 all; `maxComputeInvocationsPerWorkgroup` 256 / 256 / 1,024; `maxComputeWorkgroupStorageSize` 16,384 / 16,384 / 32,768.
-Gaps: one, D14 (three's own device has default limits, so the 1 GiB hash cache needs the host to pass our device or `requiredLimits`). No feature gap on either GPU.
+Gaps: one, D14 (three's own device has default limits, so the 1 GiB hash cache needs the host to pass our device or `requiredLimits`). The page's `gapCount: 3` is those limits counted one each (`maxStorageBufferBindingSize`, `maxBufferSize`, `maxStorageBuffersPerShaderStage`), all behind D14. No feature gap on either GPU.
 Not verified: other browsers and machines; a WGSL-level refusal without tier2 (the check is at `createBindGroupLayout`, since a shader compile error is logged to the console and fails the runner); timestamp milliseconds are not timing (no valid clock verdict) and stay out of the CSV.
 Next: (lead) `optionalFeatures()` doesn't advise `shader-f16` or `texture-formats-tier2`, and `requiredLimits()` leaves storage textures per stage at 4 (adapter 8), invocations at 256 (1,024) and workgroup memory at 16 KiB (32 KiB); a core-only host following them gets less than the GPUs offer. Worth raising before phase 2's kernels. Both adapters list `chromium-experimental-sampling-resource-table` (possibly relevant to D2's way back, unexamined).
 
