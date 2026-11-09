@@ -35,6 +35,7 @@ export interface DdgiPanelSettings {
     atlasFill: boolean;
     atlasEv: number;
     change: ChangeFullScalePercent | null;
+    giTextures: boolean;
 }
 
 export interface PanelHandlers {
@@ -108,6 +109,7 @@ const SCREEN_VIEW_LABELS: Record<DdgiScreenViewName | 'none', string> = {
     'gi-only': 'GI only, on white surfaces',
     coverage: 'Coverage (where DDGI answers)',
     'probe-states': 'Probes near this point',
+    'gi-albedo': 'GI albedo at hits (what rays see)',
 };
 
 const PROBE_COLOR_LABELS: Record<ProbeColorName, string> = {
@@ -195,6 +197,7 @@ export class Panel {
     private readonly atlas = h('select');
     private readonly atlasOptions = h('div', { className: 'indented' });
     private readonly atlasFill = h('input', { type: 'checkbox' });
+    private readonly giTextures = h('input', { type: 'checkbox' });
     private readonly atlasEv = h('input', { type: 'range', min: -MAX_ATLAS_EV, max: MAX_ATLAS_EV, step: ATLAS_EV_STEP });
     private readonly atlasEvValue = h('span', { className: 'value' });
     private readonly atlasEvRow = h('div');
@@ -357,6 +360,7 @@ export class Panel {
             this.probeLegend,
             withHelp(h('div', { className: 'label', text: 'Debug view' }), 'ddgiScreenView'),
             this.screenView,
+            withHelp(h('label', { className: 'inline' }, this.giTextures, ' GI reads textures'), 'ddgiGiTextures'),
             withHelp(h('div', { className: 'label', text: 'Probe atlas over the picture' }), 'ddgiAtlas'),
             this.atlas,
             this.atlasOptions,
@@ -458,6 +462,7 @@ export class Panel {
             debug: view === 'none' ? null : (view as DdgiScreenViewName),
             atlas: atlas === 'none' ? null : (atlas as AtlasName),
             atlasFill: this.atlasFill.checked,
+            giTextures: this.giTextures.checked,
             atlasEv: Number(this.atlasEv.value),
             change: change === 'none' ? null : (Number(change) as ChangeFullScalePercent),
         };
@@ -484,7 +489,7 @@ export class Panel {
         });
         this.showProbes.addEventListener('change', () => handlers.onDdgiSettings(this.ddgiPanelSettings()));
         this.screenView.addEventListener('change', () => handlers.onDdgiSettings(this.ddgiPanelSettings()));
-        for (const control of [this.probeColor, this.atlas, this.atlasFill, this.change]) {
+        for (const control of [this.probeColor, this.atlas, this.atlasFill, this.change, this.giTextures]) {
             control.addEventListener('change', () => handlers.onDdgiSettings(this.ddgiPanelSettings()));
         }
         this.atlasEv.addEventListener('input', () => {
@@ -601,6 +606,7 @@ export class Panel {
         this.probeColor.value = state.ddgi.probeColor;
         this.atlas.value = state.ddgi.atlas ?? 'none';
         this.atlasFill.checked = state.ddgi.atlasFill;
+        this.giTextures.checked = state.ddgi.giTextures;
         this.atlasEv.value = String(state.ddgi.atlasEv);
         this.showAtlasEv(state.ddgi.atlasEv);
         this.change.value = state.ddgi.change === null ? 'none' : String(state.ddgi.change);

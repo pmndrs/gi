@@ -57,6 +57,7 @@ import {
     type ThreeGI,
 } from '../ddgi/library';
 import { ProbeHistoryTexture } from '../ddgi/probe-history';
+import { AlbedoAtHitsView, albedoViewPlatform } from '../ddgi/albedo-at-hits';
 import { ProbeSpheres, type ProbeColorBy } from '../ddgi/probe-spheres';
 import type { DdgiBudgetStats, DdgiFrameStats } from '../stats/ddgi-stats';
 import { LAYER_DDGI, LAYER_DDGI_PROBES } from '../scene/layers';
@@ -70,7 +71,16 @@ export const DDGI_SCREEN_VIEWS = {
     'probe-states': DDGI_DEBUG_VIEW.probeStates,
 } as const;
 
-export type DdgiScreenView = keyof typeof DDGI_SCREEN_VIEWS;
+/**
+ * A screen debug view: one of DDGI's own (`DDGI_SCREEN_VIEWS`, drawn through
+ * `giDebugColor`), or the viewer's `gi-albedo` (the albedo GI's rays read
+ * where they hit, traced by the platform: ddgi/albedo-at-hits.ts).
+ */
+export type DdgiScreenView = keyof typeof DDGI_SCREEN_VIEWS | 'gi-albedo';
+
+function isCoreScreenView(view: DdgiScreenView | null): view is keyof typeof DDGI_SCREEN_VIEWS {
+    return view !== null && view in DDGI_SCREEN_VIEWS;
+}
 
 /** A light group's weight in GI (T2.5): a linear RGB colour times an intensity. */
 export interface GroupWeight {
@@ -113,6 +123,14 @@ export interface DdgiViewerSettings {
     atlasExposureEv: number;
     /** The change-per-frame view, full colour at this change in percent; null shows the picture itself. */
     changeFullScalePercent: number | null;
+    /**
+     * GI's rays read material textures (the platform's hit-shading setting
+     * `sampleTextures`). Off, each material shades with its flat colour, as
+     * before M4: for comparing what the textures change. Turning it over
+     * rebuilds the hit shading's kernels, and the field takes a few seconds to
+     * follow.
+     */
+    giTextures: boolean;
 }
 
 export const WHITE_WEIGHT: GroupWeight = { color: [1, 1, 1], intensity: 1 };
@@ -130,6 +148,7 @@ export const DEFAULT_DDGI_VIEWER_SETTINGS: DdgiViewerSettings = {
     atlasFill: false,
     atlasExposureEv: 0,
     changeFullScalePercent: null,
+    giTextures: true,
 };
 
 /** The settings that shape DDGI's layers, which only a new start can change (`ViewerCore.configureDdgi`). */
@@ -200,6 +219,8 @@ export class DdgiTechnique extends ScenePassTechnique {
     private probeHistory: ProbeHistoryTexture | null = null;
     private debugMaterial: DdgiDebugMaterial | null = null;
     private atlasOverlay: AtlasOverlay | null = null;
+    /** The `gi-albedo` screen view, made when the platform can trace it (ddgi/albedo-at-hits.ts). */
+    private albedoView: AlbedoAtHitsView | null = null;
     private readonly frameChange = new FrameChangeView();
     /** The share of the view's height at the top that the stats box covers; the atlas stays below it. */
     private overlayTopInsetShare = 0;
@@ -297,6 +318,8 @@ export class DdgiTechnique extends ScenePassTechnique {
         }
         this.debugMaterial = new DdgiDebugMaterial(started.platform.shading);
         this.atlasOverlay = new AtlasOverlay(started.platform.shading);
+        const internals = albedoViewPlatform(started.platform);
+        this.albedoView = internals ? new AlbedoAtHitsView(this.context.device, internals) : null;
         this.applyDisplaySettings();
         this.applyGroupWeights();
         // An environment set after `start` was called (time of day, on a new DDGI) reaches GI here.
@@ -536,7 +559,10 @@ export class DdgiTechnique extends ScenePassTechnique {
 
     /** Settings that are uniforms: no shader is rebuilt. (The atlas choice and the change view change `overlayKey`.) */
     private applyDisplaySettings(): void {
-        if (this.debugMaterial && this.settings.screenView) this.debugMaterial.view = DDGI_SCREEN_VIEWS[this.settings.screenView];
+        if (this.debugMaterial && isCoreScreenView(this.settings.screenView)) this.debugMaterial.view = DDGI_SCREEN_VIEWS[this.settings.screenView];
+        // GI's textures on or off: the platform's hit-shading setting (its implementation has it; see albedo-at-hits.ts).
+        const internals = albedoViewPlatform(this.platform);
+        if (internals && internals.shade.settings.sampleTextures !== this.settings.giTextures) internals.shade.settings.sampleTextures = this.settings.giTextures;
         if (this.spheres) this.spheres.colorBy = this.settings.probeColor;
         if (this.settings.changeFullScalePercent !== null) this.frameChange.fullScalePercent = this.settings.changeFullScalePercent;
     }
@@ -566,9 +592,15 @@ export class DdgiTechnique extends ScenePassTechnique {
         return settings.atlas;
     }
 
+    /** Whether the `gi-albedo` view replaces the picture. */
+    private get showsAlbedo(): boolean {
+        const settings = this.settings as DdgiViewerSettings | undefined;
+        return settings?.screenView === 'gi-albedo' && this.albedoView !== null && this.phase !== 'failed';
+    }
+
     /** What `overlay` draws; the viewer rebuilds its pipeline when this changes. */
     get overlayKey(): string {
-        return `${this.shownAtlas ?? 'no atlas'}|${this.showsChange ? 'change' : 'picture'}`;
+        return `${this.showsAlbedo ? 'albedo' : 'shaded'}|${this.shownAtlas ?? 'no atlas'}|${this.showsChange ? 'change' : 'picture'}`;
     }
 
     /**
@@ -577,6 +609,7 @@ export class DdgiTechnique extends ScenePassTechnique {
      */
     overlay(display: Node): Node {
         let node = display;
+        if (this.showsAlbedo && this.albedoView) node = this.albedoView.overlay(node);
         if (this.showsChange) node = this.frameChange.overlay(node, this.sceneTarget);
         const atlas = this.shownAtlas;
         if (atlas && this.atlasOverlay) node = this.atlasOverlay.overlay(node, atlas);
@@ -627,8 +660,9 @@ export class DdgiTechnique extends ScenePassTechnique {
             threeGI.update(this.camera);
         }
         this.refreshDebugViews();
+        if (this.showsAlbedo) this.albedoView?.render(this.context.renderer, this.camera);
         const scene = this.context.loaded.scene;
-        const override = this.settings.screenView && this.debugMaterial && this.giMode !== 'off' && this.phase !== 'failed' ? this.debugMaterial : null;
+        const override = isCoreScreenView(this.settings.screenView) && this.debugMaterial && this.giMode !== 'off' && this.phase !== 'failed' ? this.debugMaterial : null;
         override?.refresh();
         const renderer = this.context.renderer;
         const previousOverride = scene.overrideMaterial;
@@ -763,6 +797,7 @@ export class DdgiTechnique extends ScenePassTechnique {
         this.spheres?.dispose();
         this.probeHistory?.dispose();
         this.debugMaterial?.dispose();
+        this.albedoView?.dispose();
         this.frameChange.dispose();
         // The GI light, ThreeGI and the platform `start` made. While `start` still runs the volume
         // doesn't hold them yet: free them here, and the start's next frame fails and stops it.

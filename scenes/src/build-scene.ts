@@ -22,7 +22,11 @@ export function mergeScenes(scenes: readonly ProceduralScene[]): ProceduralScene
         meshes.push(...scene.meshes);
         textures.push(...(scene.textures ?? []));
         for (const material of scene.materials) {
-            materials.push(material.albedoMap ? { ...material, albedoMap: { ...material.albedoMap, texture: material.albedoMap.texture + textureOffset } } : material);
+            materials.push({
+                ...material,
+                ...(material.albedoMap ? { albedoMap: { ...material.albedoMap, texture: material.albedoMap.texture + textureOffset } } : {}),
+                ...(material.metalnessMap ? { metalnessMap: { ...material.metalnessMap, texture: material.metalnessMap.texture + textureOffset } } : {}),
+            });
         }
         for (const instance of scene.instances) {
             instances.push({

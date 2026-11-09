@@ -122,6 +122,22 @@ export interface SceneMaterialData {
     /** Alpha below this is a hole for rays; needs an albedo texture's alpha. Omit for opaque. */
     readonly alphaCutoff?: number;
     /**
+     * How alpha (`opacity` × the albedo map's alpha) affects rays, as the
+     * contract's `AlphaMode`: `cutout` is glTF MASK (three's `alphaTest`),
+     * `stochastic` is glTF BLEND (three's `transparent`). Defaults to `cutout`
+     * with an `alphaCutoff`, else `opaque`.
+     */
+    readonly alphaMode?: 'opaque' | 'cutout' | 'stochastic';
+    /** 0 to 1, multiplied with the albedo map's alpha. Defaults to 1. */
+    readonly opacity?: number;
+    /** 0 to 1: a metal has no diffuse colour, so GI's albedo is scaled by (1 − metalness). Defaults to 0. */
+    readonly metalness?: number;
+    /**
+     * A metalness map, multiplied with `metalness`. glTF and three read the
+     * blue channel of the metallic-roughness texture, so only `b` exports.
+     */
+    readonly metalnessMap?: SceneTextureReference & { readonly channel: 'r' | 'g' | 'b' | 'a' };
+    /**
      * Glass: 1 lets light through as a clear pane (glTF
      * `KHR_materials_transmission`, three's `transmission`). Omit or 0 for
      * an opaque surface. Set `blocksLight: false` with it, which is what the

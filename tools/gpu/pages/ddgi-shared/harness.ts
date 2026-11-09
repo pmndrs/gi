@@ -22,6 +22,7 @@ import type { DDGISettingsInput } from '../../../../packages/ddgi-core/src/techn
 import { DDGI_SAMPLE_WGSL } from '../../../../packages/ddgi-core/src/techniques/ddgi/wgsl/sample.ts';
 import { buildProceduralParts, mergeScenes } from '../../../../scenes/src/build-scene.ts';
 import type { CameraBookmark, ManifestLight, SceneManifest } from '../../../../scenes/src/manifest.ts';
+import { describeProceduralScene } from '../../../../scenes/src/platform-scene.ts';
 import type { ProceduralScene } from '../../../../scenes/src/scene-data.ts';
 import { platformSkyEnvironment } from '../../../../scenes/src/sky/sky-image.ts';
 
@@ -75,7 +76,8 @@ function toPlatformEnvironment(manifest: SceneManifest): EnvironmentDescriptor {
 }
 
 /**
- * Describes a procedural manifest scene through the scene API. Lights come
+ * Describes a procedural manifest scene through the scene API, with its
+ * textures, groups and slot materials (scenes/src/platform-scene.ts). Lights come
  * from the manifest, as every renderer takes them; their handles are pushed
  * to `lightHandles` (in manifest order) when given, for pages that change them.
  */
@@ -89,14 +91,11 @@ export function describeScene(
 ): ProceduralScene {
     const data = mergeScenes(buildProceduralParts(manifest));
     const scene = platform.scene;
-    const meshes = data.meshes.map((mesh) => scene.createMesh({ positions: mesh.positions, indices: mesh.indices, normals: mesh.normals, uvs: mesh.uvs, label: mesh.name }));
-    const materials = data.materials.map((material) =>
-        scene.createMaterial({ albedo: material.albedo, emissive: material.emissive, doubleSided: material.doubleSided, label: material.name }),
-    );
-    materialHandles.push(...materials);
-    for (const instance of data.instances) {
-        instanceHandles.set(instance.name, scene.createInstance({ mesh: meshes[instance.mesh], materials: [materials[instance.material]], transform: instance.transform, label: instance.name }));
-    }
+    // Everything the scene data says (textures, uv sets, groups, slot materials, alpha,
+    // metalness, glass); a field the conversion can't pass throws, naming it.
+    const handles = describeProceduralScene(scene, data);
+    materialHandles.push(...handles.materials);
+    for (const [name, instance] of handles.instances) instanceHandles.set(name, instance);
     for (const light of manifest.lights) lightHandles.push(scene.createLight(toPlatformLight(light, options)));
     scene.setEnvironment(toPlatformEnvironment(manifest));
     return data;

@@ -241,10 +241,11 @@ export class ReferenceImageTechnique implements GiTechnique {
             case 'failed':
                 return `The Cycles reference for ${view} could not be read: ${state.message}`;
             case 'loaded': {
-                const { info, denoised } = state.found;
+                const { info, denoised, textured } = state.found;
+                const materials = textured ? ', textured as GI reads materials (cutouts, blending, metals, glass)' : ', older render (metals at full colour, glass opaque)';
                 const details = info
-                    ? `, ${info.width} x ${info.height}, ${info.samplesPerPixel.toLocaleString('en')} samples per pixel${denoised ? ', denoised for viewing' : ''}, rendered ${info.finishedAt.slice(0, 10)}`
-                    : '';
+                    ? `${materials}, ${info.width} x ${info.height}, ${info.samplesPerPixel.toLocaleString('en')} samples per pixel${denoised ? ', denoised for viewing' : ''}, rendered ${info.finishedAt.slice(0, 10)}`
+                    : materials;
                 const provenance = state.provenance
                     ? state.provenance.lines
                     : ['It was rendered before cameras were stored with references (low resolution, no stored camera): render it again.'];

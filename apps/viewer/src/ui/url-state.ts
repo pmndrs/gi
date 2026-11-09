@@ -42,9 +42,9 @@ export const MAX_EXPOSURE_EV = MAX_DEFAULT_EXPOSURE_EV;
 
 export type GiChoice = 'off' | 'on' | 'only';
 
-/** DDGI's screen debug views by their link names (ids in `techniques/ddgi-technique.ts`). */
-export type DdgiScreenViewName = 'gi-only' | 'coverage' | 'probe-states';
-export const DDGI_SCREEN_VIEW_NAMES: readonly DdgiScreenViewName[] = ['gi-only', 'coverage', 'probe-states'];
+/** DDGI's screen debug views by their link names (`techniques/ddgi-technique.ts`; `gi-albedo` is the viewer's own). */
+export type DdgiScreenViewName = 'gi-only' | 'coverage' | 'probe-states' | 'gi-albedo';
+export const DDGI_SCREEN_VIEW_NAMES: readonly DdgiScreenViewName[] = ['gi-only', 'coverage', 'probe-states', 'gi-albedo'];
 
 export type ProbeColorName = 'state' | 'history';
 export type AtlasName = 'irradiance' | 'distance';
@@ -90,6 +90,8 @@ export interface ViewerUrlState {
     atlasEv: number;
     /** The change-per-frame view's full-colour change, in percent; null is off. */
     change: ChangeFullScalePercent | null;
+    /** GI's rays read material textures (`textures=0` in a link turns them off). */
+    giTextures: boolean;
     /** DDGI's light groups: 0 (off), 2 or 4. */
     lightGroups: 0 | 2 | 4;
     /** Time of day, when on: the hour (sun time) and the day of the year. */
@@ -122,6 +124,7 @@ export const DEFAULT_URL_STATE: ViewerUrlState = {
     atlasFill: false,
     atlasEv: 0,
     change: null,
+    giTextures: true,
     lightGroups: 0,
     timeOfDay: null,
     motion: null,
@@ -130,7 +133,7 @@ export const DEFAULT_URL_STATE: ViewerUrlState = {
 };
 
 /** The link's own names; any other name is a scene setting. */
-const URL_KEYS = new Set(['scene', 'camera', 'cam', 'technique', 'gi', 'wipe', 'split', 'ev', 'tone', 'nav', 'upscale', 'budget', 'probes', 'debug', 'probecolor', 'atlas', 'atlasfill', 'atlasev', 'change', 'groups', 'tod', 'motion', 'reach']);
+const URL_KEYS = new Set(['scene', 'camera', 'cam', 'technique', 'gi', 'wipe', 'split', 'ev', 'tone', 'nav', 'upscale', 'budget', 'probes', 'debug', 'probecolor', 'atlas', 'atlasfill', 'atlasev', 'change', 'textures', 'groups', 'tod', 'motion', 'reach']);
 
 const TECHNIQUES: readonly TechniqueId[] = ['none', 'ddgi', 'lpg', 'vxgi', 'cycles'];
 const GI_TECHNIQUES: readonly GiTechniqueId[] = ['ddgi', 'lpg', 'vxgi'];
@@ -193,6 +196,7 @@ export function parseUrlState(search: string): ViewerUrlState {
     if (atlasEv !== null) state.atlasEv = Math.min(MAX_ATLAS_EV, Math.max(-MAX_ATLAS_EV, Math.round(atlasEv / ATLAS_EV_STEP) * ATLAS_EV_STEP));
     const change = finiteNumber(params.get('change'));
     state.change = CHANGE_FULL_SCALE_PERCENTS.find((percent) => percent === change) ?? null;
+    state.giTextures = params.get('textures') !== '0';
     const groups = finiteNumber(params.get('groups'));
     if (groups === 2 || groups === 4) state.lightGroups = groups;
     const timeOfDay = params.get('tod')?.split(',').map(Number);
@@ -230,6 +234,7 @@ export function serializeUrlState(state: ViewerUrlState): string {
     if (state.atlasFill) params.set('atlasfill', '1');
     if (state.atlasEv !== DEFAULT_URL_STATE.atlasEv) params.set('atlasev', String(state.atlasEv));
     if (state.change !== null) params.set('change', String(state.change));
+    if (!state.giTextures) params.set('textures', '0');
     if (state.lightGroups !== 0) params.set('groups', String(state.lightGroups));
     if (state.timeOfDay) params.set('tod', `${state.timeOfDay.hour.toFixed(2)},${state.timeOfDay.dayOfYear}`);
     if (state.motion) params.set('motion', state.motion);
