@@ -21,7 +21,19 @@ export {
     type GIOcclusionSettings,
     type GIOcclusionSource,
 } from './composite.ts';
-export { SceneSync, DEFAULT_EDIT_CHECKS_PER_FRAME, DEFAULT_OBJECTS_PER_FRAME, HOT_FRAMES, type SceneSyncOptions, type SyncFrameReport } from './scene-sync.ts';
+export {
+    screenInputs,
+    giDiffuseAlbedo,
+    GI_SCREEN_ALBEDO_OUTPUT,
+    GI_SCREEN_INSTANCE_OUTPUT,
+    GI_SCREEN_NORMAL_OUTPUT,
+    GI_SCREEN_VELOCITY_OUTPUT,
+    type GIDiffuseAlbedoNode,
+    type ScreenInputsNode,
+    type ScreenInputsOptions,
+    type ScreenInputsSource,
+} from './screen-inputs.ts';
+export { SceneSync,DEFAULT_EDIT_CHECKS_PER_FRAME, DEFAULT_OBJECTS_PER_FRAME, HOT_FRAMES, type SceneSyncOptions, type SyncFrameReport } from './scene-sync.ts';
 export { createGIRenderer, requestGIDevice, type GIDevice, type GIDeviceOptions, type GIRenderer, type GIRendererOptions } from './host.ts';
 export { GI_USER_DATA } from './user-data.ts';
 export type { PmndrsSkyLike } from './environment.ts';

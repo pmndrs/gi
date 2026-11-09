@@ -456,6 +456,36 @@ describe('the platform object', () => {
         expect(tool.rays.batchesReady).toBe(true);
     });
 
+    it('tells the host which screen channels its techniques read, and refuses a screen without them (RC1.1)', async () => {
+        const gpu = createPlatformGpu();
+        const platform = new GIPlatformImpl(gpu.device);
+        // DDGI-like techniques ask for no screen: hosts need not render one.
+        platform.addTechnique(new RecordingTechnique('world space', []));
+        expect(platform.screenNeeds).toEqual({ screen: false, velocity: false, albedo: false, instance: false });
+
+        const screenStages: string[] = [];
+        const surfels = new RecordingTechnique('surfels', []);
+        (surfels as { requirements: GITechnique['requirements'] }).requirements = { queries: ['rays'], screen: { instance: true } };
+        (surfels as GITechnique).encodeScreen = (_encoder, frame) => screenStages.push(`surfels ${frame.screen.width}`);
+        const spatial = new RecordingTechnique('screen space', []);
+        (spatial as { requirements: GITechnique['requirements'] }).requirements = { queries: ['rays'], screen: { albedo: true, velocity: true } };
+        platform.addTechnique(surfels);
+        platform.addTechnique(spatial);
+        expect(platform.screenNeeds).toEqual({ screen: true, velocity: true, albedo: true, instance: true });
+        await platform.prepare();
+
+        const texture = fakeTexture({ size: { width: 4, height: 2 }, format: 'rgba16float', usage: 0 }) as GPUTexture;
+        const screen = { width: 4, height: 2, depth: texture, normal: texture, normalEncoding: 'snorm-float' as const };
+        // The instance channel is missing: the technique that asked for it is named, with the channel.
+        expect(() => platform.encodeScreen(gpu.createEncoder(), screen)).toThrow(/'surfels' reads the screen's instance/);
+        // A technique with no screen stage isn't checked: only stages that run read the screen.
+        platform.encodeScreen(gpu.createEncoder(), { ...screen, instance: texture });
+        expect(screenStages).toEqual(['surfels 4']);
+
+        platform.removeTechnique(surfels);
+        expect(platform.screenNeeds).toEqual({ screen: true, velocity: true, albedo: true, instance: false });
+    });
+
     it('disposes once: buffers destroyed, techniques disposed, later calls refused', async () => {
         const gpu = createPlatformGpu();
         const platform = new GIPlatformImpl(gpu.device, { buildIn: 'main' });

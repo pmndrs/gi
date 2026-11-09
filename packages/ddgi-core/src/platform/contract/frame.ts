@@ -67,16 +67,35 @@ export interface FrameCamera {
 export interface FrameScreen {
     readonly width: number;
     readonly height: number;
-    /** Depth, any float format. */
+    /**
+     * Depth: a depth format (`depth24plus`, `depth32float`; read it as
+     * `texture_depth_2d`) or a one-channel float colour format. Hardware
+     * depth, 0 = near unless `reversedDepth`.
+     */
     readonly depth: GPUTexture;
     /** World-space normals in rgb, 0..1 encoded or signed float. */
     readonly normal: GPUTexture;
     readonly normalEncoding: 'unorm' | 'snorm-float';
-    /** Screen-space motion (NDC delta, current − previous). */
+    /** Screen-space motion in rg (NDC delta, current − previous). Only when a technique asks for it (`TechniqueRequirements.screen`). */
     readonly velocity?: GPUTexture;
     /**
-     * Which platform instance covers each pixel: `r32uint`, instance index + 1,
-     * 0 for none. Lets surfel-style techniques attach what they spawn to the
+     * Diffuse albedo in rgb, linear: base colour × (1 − metalness), the
+     * colour a surface's diffuse layer reflects, with any texture applied per
+     * pixel. Metalness is folded in exactly as the adapter folds it into GI
+     * albedo for rays (docs/api/platform.md: metals bounce no diffuse light),
+     * so a pixel and a ray hit on the same surface agree. Any float or unorm
+     * colour format; values 0..1. Only when a technique asks for it.
+     *
+     * Not three's composite weight (`giAlbedo`, T1.14): that one also carries
+     * the specular lobe's share, `(1 − F_ss − F_ms)`, the view-dependent part
+     * of three's indirect diffuse, and the material's AO. This is the plain
+     * surface colour a technique needs to light a pixel itself.
+     */
+    readonly albedo?: GPUTexture;
+    /**
+     * Which platform instance covers each pixel: `r32uint`, instance index + 1
+     * (`SceneApi.instanceIndex`, the index rays report in `GiHit.instance`), 0
+     * for none. Lets surfel-style techniques attach what they spawn to the
      * object under the pixel so it moves with it. Rendering this is extra
      * adapter work, so only techniques that need it ask for it.
      */
@@ -84,6 +103,9 @@ export interface FrameScreen {
     /** The depth is reversed-Z (1 = near). */
     readonly reversedDepth?: boolean;
 }
+
+/** The optional screen channels, by their `FrameScreen` field names. */
+export type OptionalScreenChannel = 'velocity' | 'albedo' | 'instance';
 
 export interface FrameInput {
     /** Seconds since the previous frame. */
