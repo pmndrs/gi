@@ -290,7 +290,7 @@ function browserLabel(recording: Recording): string {
 
 const USAGE =
     'usage: node tools/native/response.ts <recording folder> [...] [--settled <settle recording> ...] ' +
-    "[--against <the other side's recording> ...] [--commit <ours: this repo's commit>] [--device <ours: the GPU>] [--append] [--label text]";
+    "[--against <the other side's recording> ...] [--commit <ours: this repo's commit>] [--device <ours: the GPU>] [--set <name of a re-recorded set>] [--append] [--label text]";
 
 function main(): void {
     const { values, positionals } = parseArgs({
