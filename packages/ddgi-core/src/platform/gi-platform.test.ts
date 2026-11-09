@@ -231,7 +231,8 @@ describe('device requirements', () => {
         ({ limits, features: new Set(features) }) as unknown as GPUAdapter;
 
     it("requiredLimits asks for the adapter's own maximums, never more", () => {
-        const storage = { maxStorageBufferBindingSize: 2147483644, maxBufferSize: 2147483648, maxStorageBuffersPerShaderStage: 10 };
+        // The texture store wants every layer the adapter allows (M4): one per texture.
+        const storage = { maxStorageBufferBindingSize: 2147483644, maxBufferSize: 2147483648, maxStorageBuffersPerShaderStage: 10, maxTextureArrayLayers: 2048 };
         const compute = { maxComputeInvocationsPerWorkgroup: 1024, maxComputeWorkgroupSizeX: 1024 };
         // Compute limits: what the kernels need, not the adapter's maximum.
         expect(requiredLimits(adapter({ ...storage, ...compute }, []))).toEqual({ ...storage, ...KERNEL_COMPUTE_LIMITS });
@@ -273,6 +274,8 @@ describe('device requirements', () => {
 
     it('optionalFeatures requests only what the adapter has', () => {
         expect(optionalFeatures(adapter({}, ['timestamp-query', 'subgroups', 'shader-f16']))).toEqual(['subgroups', 'timestamp-query']);
+        // The compression families the texture store reads (CompressedPixelData), where present.
+        expect(optionalFeatures(adapter({}, ['texture-compression-bc', 'texture-compression-astc']))).toEqual(['texture-compression-bc', 'texture-compression-astc']);
         expect(optionalFeatures(adapter({}, []))).toEqual([]);
     });
 

@@ -4,6 +4,7 @@
  *
  * ```wgsl
  * fn giSurfaceAt(ray: GiRay, hit: GiHit) -> GiSurface
+ * fn giSurfaceAtCone(ray: GiRay, hit: GiHit, spread: f32) -> GiSurface   // textures at a ray cone's footprint
  * fn giDirectIrradiance(surface: GiSurface, groupMask: u32, random: vec2f) -> vec3f
  * fn giDirectGroupIrradiance(surface: GiSurface, groupMask: u32, random: vec2f) -> GiDirectGroups  // the same, split by light group 0-3
  * fn giDirectSplitIrradiance(surface: GiSurface, groupMask: u32, sunApart: bool, random: vec2f) -> GiDirectGroups  // and the sun apart, in white
@@ -18,10 +19,11 @@
  * It depends on the scene copy (lights, materials, triangles) and the `rays`
  * module (`giTraceAny` for shadow rays), and binds no storage buffer of its
  * own: one uniform buffer (settings, the light grid's place and the sky's
- * irradiance SH), the sky's radiance map, a sampler and the light grid's
- * picks (a texture, light-grid.ts). So the scene copy and hit shading
- * together stay at the scene copy's 2 storage buffers (docs/api/platform.md,
- * binding budget).
+ * irradiance SH), the sky's radiance map, a sampler, the light grid's
+ * picks (a texture, light-grid.ts), and the texture store (a texture array,
+ * textures/texture-store.ts) with its sampler. So the scene copy and hit
+ * shading together stay at the scene copy's 2 storage buffers
+ * (docs/api/platform.md, binding budget).
  *
  * Light units are the platform's (contract/scene.ts), which are three.js's
  * physically based ones; point and spot falloff and spot cones follow three.js
@@ -29,6 +31,7 @@
  */
 
 import type { BindingSlot, ModuleBindingEntry } from '../contract/wgsl.ts';
+import { STORE_LAYER_SIZE, STORE_MIP_LEVELS } from '../textures/texture-store-wgsl.ts';
 import { lightGridLookupWgsl } from './light-grid.ts';
 import { RADIANCE_SH_COUNT, SKY_HARMONICS_LAYOUT } from '../sky/projection-wgsl.ts';
 import { SH_BASIS_WGSL, SH_COEFFICIENT_COUNT } from '../sky/spherical-harmonics.ts';
@@ -36,13 +39,33 @@ import { SH_BASIS_WGSL, SH_COEFFICIENT_COUNT } from '../sky/spherical-harmonics.
 /** `GPUShaderStage.COMPUTE`. The global does not exist in Node, where the tests import this file. */
 const SHADER_STAGE_COMPUTE = 0x4;
 
-/** The module's bindings, in order: uniforms (settings and sky SH), the sky's radiance map, its sampler, the light grid's picks. No storage buffers. */
+/**
+ * The module's bindings, in order: uniforms (settings and sky SH), the sky's
+ * radiance map, its sampler, the light grid's picks, the texture store and
+ * its sampler. No storage buffers.
+ */
 export const SHADE_MODULE_ENTRIES: readonly ModuleBindingEntry[] = [
     { visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'uniform' } },
     { visibility: SHADER_STAGE_COMPUTE, texture: { sampleType: 'float', viewDimension: '2d' } },
     { visibility: SHADER_STAGE_COMPUTE, sampler: { type: 'filtering' } },
     { visibility: SHADER_STAGE_COMPUTE, texture: { sampleType: 'uint', viewDimension: '2d' } },
+    { visibility: SHADER_STAGE_COMPUTE, texture: { sampleType: 'float', viewDimension: '2d-array' } },
+    { visibility: SHADER_STAGE_COMPUTE, sampler: { type: 'filtering' } },
 ];
+
+/**
+ * The ray cone spread `giSurfaceAt` uses: a probe ray of DDGI's default 256
+ * rays a probe stands for 1/256 of the sphere, a cone sqrt(4π / 256) = 0.22
+ * radians wide. Techniques with their own rays pass theirs to `giSurfaceAtCone`.
+ */
+export const DEFAULT_CONE_SPREAD = Math.sqrt((4 * Math.PI) / 256);
+
+/**
+ * Below this |cos θ| between the ray and the surface, the footprint stops
+ * growing: an edge-on hit's footprint would be endless, and the mip it asks
+ * for would average the whole texture. 0.1 caps the stretch at 10×.
+ */
+const MIN_FOOTPRINT_COSINE = 0.1;
 
 /**
  * Byte layout of `GiShadeUniforms`: the sky's harmonics first (radiance SH
@@ -59,8 +82,10 @@ export const SHADE_UNIFORM_LAYOUT = {
     bounceAlbedoCap: SKY_HARMONICS_LAYOUT.byteLength + 4,
     /** The light grid's lookup (light-grid.ts), 40 bytes from here: active, shadowed lights per hit with the grid, origin and 1 / cell size, cells and the outside cell. */
     lightGrid: SKY_HARMONICS_LAYOUT.byteLength + 8,
+    /** The `sampleTextures` setting, 1 or 0. */
+    sampleTextures: SKY_HARMONICS_LAYOUT.byteLength + 48,
     /** Rounded up to the struct's 16-byte alignment. */
-    byteLength: SKY_HARMONICS_LAYOUT.byteLength + 48,
+    byteLength: SKY_HARMONICS_LAYOUT.byteLength + 64,
 } as const;
 
 /** The module's source, with its bindings at `slot`. */
@@ -70,6 +95,8 @@ export function shadeModuleWgsl(slot: BindingSlot): string {
     const radianceMapBinding = slot.firstBinding + 1;
     const samplerBinding = slot.firstBinding + 2;
     const lightGridBinding = slot.firstBinding + 3;
+    const textureStoreBinding = slot.firstBinding + 4;
+    const textureSamplerBinding = slot.firstBinding + 5;
     const skyIrradianceTerms = Array.from({ length: SH_COEFFICIENT_COUNT }, (_, index) => `        giShade.skyIrradiance[${index}].xyz * basis[${index}]`).join(' +\n');
 
     return /* wgsl */ `
@@ -80,8 +107,8 @@ struct GiSurface {
     normal: vec3f,          // shading normal: the interpolated vertex normal if the mesh has normals, facing the ray's side
     geometricNormal: vec3f, // the triangle's own unit normal, out of the authored front side (for front/back decisions)
     uv: vec2f,              // uv set 0, interpolated; (0, 0) without uvs
-    albedo: vec3f,          // diffuse albedo, capped per channel at bounceAlbedoCap
-    emission: vec3f,        // emitted radiance
+    albedo: vec3f,          // diffuse albedo: colour x albedo texture x (1 - metalness x metalness texture), capped per channel at bounceAlbedoCap
+    emission: vec3f,        // emitted radiance: emissive x intensity x emissive texture
     material: u32,
     instance: u32,
     frontFace: bool,        // the ray hit the authored front side (also on mirrored instances)
@@ -108,6 +135,8 @@ struct GiShadeUniforms {
     lightGridInverseCellSize: f32,
     lightGridCells: vec3u,
     lightGridOutsideCell: u32,
+    // 1: hits read their materials' textures (the sampleTextures setting); 0: flat colours, as before M4.
+    sampleTextures: u32,
 }
 
 @group(${group}) @binding(${uniformsBinding}) var<uniform> giShade: GiShadeUniforms;
@@ -117,6 +146,11 @@ struct GiShadeUniforms {
 @group(${group}) @binding(${samplerBinding}) var giSkySampler: sampler;
 // The light grid's picks, R per cell: (light index, its share at a hit as f32 bits).
 @group(${group}) @binding(${lightGridBinding}) var giLightGridPicks: texture_2d<u32>;
+// The texture store: one ${STORE_LAYER_SIZE}² layer with mips per texture (a material's texture
+// words name its layer). rgba8unorm-srgb, so samples are linear light.
+@group(${group}) @binding(${textureStoreBinding}) var giTextureStore: texture_2d_array<f32>;
+// Linear in and between mips, repeating: clamp and mirror are worked out on the uv (giShadeWrap).
+@group(${group}) @binding(${textureSamplerBinding}) var giTextureSampler: sampler;
 
 const GI_SHADE_INV_PI: f32 = 0.318309886183791;
 const GI_SHADE_INV_TWO_PI: f32 = 0.159154943091895;
@@ -131,10 +165,29 @@ const GI_SHADE_ULP: f32 = 1.1920929e-7;
 // the point; the in-surface nudge smaller, as it moves where shading happens.
 const GI_SHADE_IN_SURFACE_STEPS: f32 = 64.0;
 const GI_SHADE_NORMAL_STEPS: f32 = 256.0;
+// giSurfaceAt's ray cone spread, radians (DEFAULT_CONE_SPREAD in wgsl.ts).
+const GI_SHADE_DEFAULT_CONE_SPREAD: f32 = ${DEFAULT_CONE_SPREAD};
+// The texture store's layers: texels on a side, and the last mip.
+const GI_SHADE_TEXTURE_SIZE: f32 = ${STORE_LAYER_SIZE}.0;
+const GI_SHADE_TEXTURE_LAST_LOD: f32 = ${STORE_MIP_LEVELS - 1}.0;
+// The smallest |cos| between ray and surface the footprint counts (MIN_FOOTPRINT_COSINE in wgsl.ts).
+const GI_SHADE_MIN_FOOTPRINT_COSINE: f32 = ${MIN_FOOTPRINT_COSINE};
 
 // ---- The surface at a hit ---------------------------------------------------------------
 
+// The surface at a hit, its textures read at the footprint of a ray cone of
+// the platform's default spread (a probe ray of 256 per sphere).
 fn giSurfaceAt(ray: GiRay, hit: GiHit) -> GiSurface {
+    return giSurfaceAtCone(ray, hit, GI_SHADE_DEFAULT_CONE_SPREAD);
+}
+
+// The surface at a hit of a ray standing for a cone 'spread' radians wide (a
+// technique's rays: sqrt(4 pi / rays per sphere)). The cone picks the mip of
+// each texture, so a ray reads the average of what it stands for, which is
+// right and less noisy than one texel (ray cones; Akenine-Moller et al.,
+// "Improved Shader and Texture Level of Detail Using Ray Cones", JCGT 2021,
+// and Ray Tracing Gems ch. 20). spread 0 reads the finest mip.
+fn giSurfaceAtCone(ray: GiRay, hit: GiHit, spread: f32) -> GiSurface {
     // The point from the barycentrics on the world-space triangle rather than
     // ray.origin + t * ray.direction: its error depends on the triangle's own
     // coordinates, not on how far the ray travelled.
@@ -160,17 +213,106 @@ fn giSurfaceAt(ray: GiRay, hit: GiHit) -> GiSurface {
 
     let materialIndex = giMaterialAt(hit.instance, hit.triangle);
     let material = giMaterial(materialIndex);
+
+    // The material's colours times its textures (a texture word is GI_NO_TEXTURE
+    // until the texture's layer is made: the colour alone, as if it were white).
+    var albedo = material.albedo;
+    var emission = material.emission;
+    var metalness = material.metalness;
+    if (giShade.sampleTextures != 0u) {
+        let footprint = giShadeTextureFootprint(ray, hit, corners, geometricNormal, spread);
+        if (material.albedoTexture != GI_NO_TEXTURE) {
+            albedo *= giShadeSampleTexture(material.albedoTexture, material.albedoUv, hit, weights, footprint).rgb;
+        }
+        if (material.emissiveTexture != GI_NO_TEXTURE) {
+            emission *= giShadeSampleTexture(material.emissiveTexture, material.emissiveUv, hit, weights, footprint).rgb;
+        }
+        if (material.metalnessTexture != GI_NO_TEXTURE) {
+            metalness *= giShadeChannel(giShadeSampleTexture(material.metalnessTexture, material.metalnessUv, hit, weights, footprint), material.metalnessChannel);
+        }
+    }
+    // A metal reflects no diffuse light (three and glTF: diffuse = colour x (1 - metalness)).
+    albedo *= 1.0 - metalness;
+
     return GiSurface(
         position,
         normal,
         geometricNormal,
         giInstanceUvAt(hit.instance, hit.triangle, hit.barycentrics, 0u),
-        min(material.albedo, vec3f(giShade.bounceAlbedoCap)),
-        material.emission,
+        min(albedo, vec3f(giShade.bounceAlbedoCap)),
+        emission,
         materialIndex,
         hit.instance,
         hit.frontFace,
     );
+}
+
+// ---- Textures at a hit --------------------------------------------------------------------
+
+// What a ray cone covers where it meets the surface, for the mip a texture is read at.
+struct GiShadeFootprint {
+    // The cone's width there, along the surface: spread x distance, stretched by
+    // 1 / |cos| as a slanted surface spreads the cone over more of itself.
+    width: f32,
+    // Twice the hit triangle's world-space area (its uv area is compared with it).
+    doubleWorldArea: f32,
+}
+
+fn giShadeTextureFootprint(ray: GiRay, hit: GiHit, corners: GiTriangle, geometricNormal: vec3f, spread: f32) -> GiShadeFootprint {
+    let cosine = max(abs(dot(ray.direction, geometricNormal)), GI_SHADE_MIN_FOOTPRINT_COSINE);
+    let doubleWorldArea = length(cross(corners.vertex1 - corners.vertex0, corners.vertex2 - corners.vertex0));
+    return GiShadeFootprint(spread * hit.t / cosine, doubleWorldArea);
+}
+
+// The mip a texture is read at: log2 of the footprint's width in texels.
+// Texels per metre come from the triangle's area in texels (its uv area,
+// scaled by the uv transform's determinant, times the layer's texels)
+// against its area in metres. A triangle with no uv area (no uvs) reads mip 0.
+fn giShadeTextureLod(footprint: GiShadeFootprint, uvs: GiTriangleUvs, mapping: GiUvMapping) -> f32 {
+    let uvEdge1 = uvs.uv1 - uvs.uv0;
+    let uvEdge2 = uvs.uv2 - uvs.uv0;
+    let doubleUvArea = abs(uvEdge1.x * uvEdge2.y - uvEdge1.y * uvEdge2.x);
+    let transformArea = abs(determinant(mat2x2f(mapping.transform[0], mapping.transform[1])));
+    let texelsSquaredPerSquareMetre = doubleUvArea * transformArea * GI_SHADE_TEXTURE_SIZE * GI_SHADE_TEXTURE_SIZE / max(footprint.doubleWorldArea, 1.0e-30);
+    let footprintTexels = footprint.width * sqrt(texelsSquaredPerSquareMetre);
+    return clamp(log2(max(footprintTexels, 1.0e-30)), 0.0, GI_SHADE_TEXTURE_LAST_LOD);
+}
+
+// One axis of a mapped uv, wrapped as the mapping says. 'repeat' is left to
+// the sampler (it repeats). 'clamp' keeps the coordinate half a texel inside
+// the edges, and 'mirror' folds it (1 - |(u mod 2) - 1|: forwards on even
+// tiles, backwards on odd ones) and keeps it inside the same way, so the
+// repeating sampler's filter never reaches across to the opposite edge.
+// The half texel is that of the coarser of the two mips the sample blends.
+fn giShadeWrap(coordinate: f32, wrap: u32, halfTexel: f32) -> f32 {
+    if (wrap == GI_UV_WRAP_CLAMP) {
+        return clamp(coordinate, halfTexel, 1.0 - halfTexel);
+    }
+    if (wrap == GI_UV_WRAP_MIRROR) {
+        // fract is floored, so negative coordinates fold the same way.
+        let folded = 1.0 - abs(2.0 * fract(coordinate * 0.5) - 1.0);
+        return clamp(folded, halfTexel, 1.0 - halfTexel);
+    }
+    return coordinate;
+}
+
+// A material texture at the hit: its uv set at the hit point (clamped
+// barycentric 'weights', as the surface point), its 3x2 transform, its wrap,
+// at the footprint's mip. Linear light (the store is sRGB-encoded).
+fn giShadeSampleTexture(layer: u32, mapping: GiUvMapping, hit: GiHit, weights: vec3f, footprint: GiShadeFootprint) -> vec4f {
+    let uvs = giInstanceTriangleUvs(hit.instance, hit.triangle, mapping.channel);
+    let uv = uvs.uv0 * weights.x + uvs.uv1 * weights.y + uvs.uv2 * weights.z;
+    let mapped = mapping.transform * vec3f(uv, 1.0);
+    let lod = giShadeTextureLod(footprint, uvs, mapping);
+    let halfTexel = 0.5 * exp2(ceil(lod)) / GI_SHADE_TEXTURE_SIZE;
+    let wrapped = vec2f(giShadeWrap(mapped.x, mapping.wrapU, halfTexel), giShadeWrap(mapped.y, mapping.wrapV, halfTexel));
+    return textureSampleLevel(giTextureStore, giTextureSampler, wrapped, layer, lod);
+}
+
+// Channel 0-3 (r, g, b, a) of a sample. Selects rather than indexing the
+// vector at run time, which can put it in slow per-thread memory (NOTES, "Tracing").
+fn giShadeChannel(value: vec4f, channel: u32) -> f32 {
+    return select(select(value.x, value.y, channel == 1u), select(value.z, value.w, channel == 3u), channel >= 2u);
 }
 
 // The geometric normal turned to the side of the surface the ray arrived on.
