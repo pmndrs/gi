@@ -29,7 +29,7 @@
  *   node tools/reference/bench-lock.ts run --no-cool-wait --what "T3.3 wind tree" -- pnpm test:gpu --gpu nvidia --filter three-wind-tree-gi
  */
 
-import { PerspectiveCamera, type Mesh, type Object3D, type WebGPURenderer } from 'three/webgpu';
+import { PerspectiveCamera, type Mesh, type Object3D, type Scene, type WebGPURenderer } from 'three/webgpu';
 import { assert } from '../../client.ts';
 import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
 import { DDGITechnique } from '../../../../packages/ddgi-core/src/techniques/ddgi/ddgi-technique.ts';
@@ -108,8 +108,9 @@ function correlationAtLag(a: readonly number[], b: readonly number[], lag: numbe
     return varianceA > 0 && varianceB > 0 ? covariance / Math.sqrt(varianceA * varianceB) : 0;
 }
 
-/** A copy of what the WebGPU canvas shows now, labelled. */
-function snapshot(renderer: WebGPURenderer, label: string, grid: HTMLElement): void {
+/** Renders three's frame and copies it in the same task (a WebGPU canvas reads blank after an await), labelled. */
+function snapshot(renderer: WebGPURenderer, scene: Scene, camera: PerspectiveCamera, label: string, grid: HTMLElement): void {
+    renderer.render(scene, camera);
     const figure = document.createElement('figure');
     figure.style.cssText = 'margin: 0; display: inline-block; font: 12px sans-serif; color: #ddd;';
     const copy = document.createElement('canvas');
@@ -193,11 +194,11 @@ await runThreePage(
         // 1. The extremes.
         pose(1);
         await settle();
-        snapshot(renderer, 'sway +1 (held)', grid);
+        snapshot(renderer, scene, camera, 'sway +1 (held)', grid);
         const plus = await readNow();
         pose(-1);
         await settle();
-        snapshot(renderer, 'sway -1 (held)', grid);
+        snapshot(renderer, scene, camera, 'sway -1 (held)', grid);
         const minus = await readNow();
         const extremeDifference = Math.abs(plus.mean - minus.mean) / ((plus.mean + minus.mean) / 2);
         log(`extremes: rectangle GI ${plus.mean.toFixed(5)} at +1, ${minus.mean.toFixed(5)} at -1 (${plus.pixels} px): ${(extremeDifference * 100).toFixed(2)}% apart`);
@@ -218,7 +219,7 @@ await runThreePage(
                 poses.push(sign * s);
                 means.push((await readNow()).mean);
             }
-            if (index === Math.round(framesPerPeriod * 1.25)) snapshot(renderer, 'mid-sway (s = 0, moving)', grid);
+            if (index === Math.round(framesPerPeriod * 1.25)) snapshot(renderer, scene, camera, 'mid-sway (s = 0, moving)', grid);
         }
         let bestLag = 0;
         let bestCorrelation = -Infinity;

@@ -248,8 +248,8 @@ function snapshot(renderer: WebGPURenderer, label: string, grid: HTMLElement): v
     const copy = document.createElement('canvas');
     copy.width = WIDTH;
     copy.height = HEIGHT;
-    // Four rows of three, with their captions, fit the runner's 1280 x 720 screenshot at 0.6 of full size.
-    copy.style.width = `${WIDTH * 0.6}px`;
+    // Four rows of three, with their captions, fit the runner's screenshot (about 566 px tall) at 0.45 of full size.
+    copy.style.width = `${WIDTH * 0.45}px`;
     copy.getContext('2d')!.drawImage(renderer.domElement, 0, 0, WIDTH, HEIGHT);
     const caption = document.createElement('figcaption');
     caption.textContent = label;
