@@ -71,11 +71,17 @@ export interface BenchProfile {
     targetRays: number;
     warmupDispatches: number;
     timedDispatches: number;
+    /**
+     * Ray-set mode `rc` only: after the timed dispatches, each ray set is
+     * submitted back to back for about this long per tracer (the loaded
+     * section, as the GPU builds have; see {@link RC_LOADED_DISPATCHES}).
+     */
+    rcLoadedMs: number;
 }
 
 export const BENCH_PROFILES = {
-    full: { raysPerProbe: 256, targetRays: 2_097_152, warmupDispatches: 5, timedDispatches: 20 },
-    quick: { raysPerProbe: 64, targetRays: 131_072, warmupDispatches: 2, timedDispatches: 5 },
+    full: { raysPerProbe: 256, targetRays: 2_097_152, warmupDispatches: 5, timedDispatches: 20, rcLoadedMs: 1_000 },
+    quick: { raysPerProbe: 64, targetRays: 131_072, warmupDispatches: 2, timedDispatches: 5, rcLoadedMs: 150 },
 } as const satisfies Record<string, BenchProfile>;
 export type BenchProfileName = keyof typeof BENCH_PROFILES;
 
@@ -132,6 +138,55 @@ export const CALIBRATION_SAMPLE_RAYS = 16_384;
 /** Top-level rebuilds timed per scene (median and worst are reported). */
 export const TOP_LEVEL_REBUILD_RUNS = 20;
 
+/**
+ * Which rays the bench traces.
+ *
+ * - `probe-grid` (the default, T0.10 on): DDGI-shaped. A grid of probes
+ *   fills the scene's volume, every probe fires the same sphere of
+ *   directions, and the hits facing the sun send one shadow ray each.
+ * - `rc` (RC1.5): shaped like Capsaicin GI-1.2's defaults (the radiance-cache
+ *   track's baseline) from the scene's first camera bookmark: screen probes
+ *   placed by primary rays, 64 cosine rays per probe, multi-bounce rays, and
+ *   one shadow ray per hit toward one sampled light. See rc-rays.ts.
+ */
+export const RAY_SET_MODES = ['probe-grid', 'rc'] as const;
+export type RaySetMode = (typeof RAY_SET_MODES)[number];
+
+/**
+ * Ray-set mode `rc`: Capsaicin GI-1.2's defaults (`gi1.h`, AMD): the view is
+ * 1280x720, one screen probe per 16x16-pixel tile (80 x 45 = 3,600 tiles),
+ * 64 rays per probe (Capsaicin's 8x8 hemi-octahedral cells), and multi-bounce
+ * rays about 0.3x the probe rays. These match the design doc's native
+ * yardstick (docs/design/radiance-cache.md), measured at 1280x720.
+ */
+export const RC_VIEW = { width: 1280, height: 720 } as const;
+export const RC_TILE_SIZE = 16;
+export const RC_RAYS_PER_PROBE = 64;
+export const RC_MULTI_BOUNCE_RATIO = 0.3;
+/** Fixed seed for the `rc` sets' random choices (per-probe rotation and jitter, bounce subset, light picks). */
+export const RC_SEED = 0x0c4b_5a1c;
+/**
+ * Probe placement jitters each tile's primary ray by the Halton (2, 3)
+ * point of index `tile + RC_HALTON_FIRST_INDEX` (index 0 is the corner
+ * (0, 0), so it is skipped). Capsaicin jitters with Halton per frame; here
+ * one frame's worth is spread over the tiles, so neighbouring tiles don't all
+ * pick the same pixel.
+ */
+export const RC_HALTON_FIRST_INDEX = 1;
+/**
+ * The loaded section's dispatch count is `rcLoadedMs` over one dispatch's
+ * median time, within these bounds. The upper bound keeps a very short
+ * dispatch from submitting tens of thousands (the placement set, 3,600 rays,
+ * takes about 0.42 ms on Sponza on the RTX 3060, so it stays well under it).
+ */
+export const RC_LOADED_DISPATCHES = { min: 10, max: 4_000 } as const;
+/**
+ * Rays per set checked against the brute-force reference tracer (every
+ * triangle, in doubles). Small, because each closest-hit ray tests all of
+ * Sponza's 5.7 M triangles on the CPU.
+ */
+export const RC_ORACLE_SAMPLE_RAYS = 16;
+
 export interface BenchConfig {
     scenes: string[];
     tracers: TracerId[];
@@ -147,6 +202,10 @@ export interface BenchConfig {
     maxDispatchMs: number;
     /** Fill the manifest's probe volume (default) or the geometry's own bounds. */
     volume: 'manifest' | 'scene';
+    /** See {@link RAY_SET_MODES}. */
+    raySet: RaySetMode;
+    /** See {@link BenchProfile.rcLoadedMs}. 0 skips the loaded section. */
+    rcLoadedMs: number;
 }
 
 export class BenchConfigError extends Error {}
@@ -189,6 +248,8 @@ function readList(params: URLSearchParams, name: string): string[] | null {
  *   &tmbuildLeaf=4                  three-mesh-bvh target leaf size for the ours-tmbuild trees
  *   &maxDispatchMs=400              thin the probe grid if a batch would take longer (0 = never)
  *   &volume=manifest|scene          which box the probe grid fills
+ *   &raySet=probe-grid|rc           which rays to trace (RAY_SET_MODES)
+ *   &loadedMs=1000                  rc only: back-to-back section per ray set and tracer (0 = none)
  */
 export function parseBenchConfig(
     search: string,
@@ -216,6 +277,11 @@ export function parseBenchConfig(
     const volume = params.get('volume') ?? 'manifest';
     if (volume !== 'manifest' && volume !== 'scene') throw new BenchConfigError(`?volume= must be manifest or scene, got "${volume}"`);
 
+    const raySet = params.get('raySet') ?? 'probe-grid';
+    if (!(RAY_SET_MODES as readonly string[]).includes(raySet)) {
+        throw new BenchConfigError(`?raySet= must be ${RAY_SET_MODES.join(' or ')}, got "${raySet}"`);
+    }
+
     return {
         scenes,
         tracers,
@@ -228,5 +294,7 @@ export function parseBenchConfig(
         tmbuildLeafSize: readPositiveInteger(params, 'tmbuildLeaf', TMBUILD_DEFAULT_LEAF_SIZE),
         maxDispatchMs: readNonNegativeInteger(params, 'maxDispatchMs', DEFAULT_MAX_DISPATCH_MS),
         volume,
+        raySet: raySet as RaySetMode,
+        rcLoadedMs: readNonNegativeInteger(params, 'loadedMs', profile.rcLoadedMs),
     };
 }
