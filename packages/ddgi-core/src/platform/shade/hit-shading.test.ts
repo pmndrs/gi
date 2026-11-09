@@ -21,6 +21,9 @@ function fakeDevice(features: string[] = []): GPUDevice {
     } as unknown as GPUDevice;
 }
 
+/** The texture store as hit shading binds it: a view and a version (textures/texture-store.ts). */
+const TEXTURES = { view: { label: 'texture store' } as unknown as GPUTextureView, version: 0 };
+
 /** A kernel builder these tests never call: hit shading only compiles gi/direct when a technique prepares it. */
 const NO_KERNELS: KernelBuilder = {
     computeKernel: () => Promise.reject(new Error('no kernels in these tests')),
@@ -40,7 +43,7 @@ describe('hit shading', () => {
     const rays = stubModule('gi-rays', [], 3);
 
     it('keeps the scene copy and hit shading at 2 storage buffers together (the binding budget)', () => {
-        const shade = new PlatformHitShading(fakeDevice(), NO_KERNELS, scene, rays);
+        const shade = new PlatformHitShading(fakeDevice(), NO_KERNELS, scene, rays, TEXTURES);
         expect(shade.module.storageBufferCount).toBe(0);
         expect(declaredStorageBuffers(shade.module)).toBe(0);
         expect(declaredStorageBuffers(scene)).toBe(2);
@@ -73,16 +76,45 @@ describe('hit shading', () => {
         }
     });
 
-    it('places its four entries after the modules it depends on, the light grid picks last', () => {
-        const shade = new PlatformHitShading(fakeDevice(), NO_KERNELS, scene, rays);
+    it('places its six entries after the modules it depends on: the light grid picks, then the texture store and its sampler', () => {
+        const shade = new PlatformHitShading(fakeDevice(), NO_KERNELS, scene, rays, TEXTURES);
         const placed = placeModules(orderModules([shade.module]));
         expect(placed[2].slot.firstBinding).toBe(SCENE_MODULE_ENTRIES.length);
         expect(shade.module.entries).toBe(SHADE_MODULE_ENTRIES);
-        expect(shade.module.resources()).toHaveLength(4);
+        expect(shade.module.resources()).toHaveLength(6);
+        expect(shade.module.resources()[4]).toBe(TEXTURES.view);
         expect(SHADE_MODULE_ENTRIES[3].texture?.sampleType).toBe('uint');
-        expect(shadeModuleWgsl({ group: 0, firstBinding: 7 })).toContain('@group(0) @binding(10) var giLightGridPicks: texture_2d<u32>');
+        expect(SHADE_MODULE_ENTRIES[4].texture?.viewDimension).toBe('2d-array');
+        expect(SHADE_MODULE_ENTRIES[5].sampler?.type).toBe('filtering');
+        const code = shadeModuleWgsl({ group: 0, firstBinding: 7 });
+        expect(code).toContain('@group(0) @binding(10) var giLightGridPicks: texture_2d<u32>');
+        expect(code).toContain('@group(0) @binding(11) var giTextureStore: texture_2d_array<f32>');
+        expect(code).toContain('@group(0) @binding(12) var giTextureSampler: sampler');
         // No grid until a scene has many lights: the module's resources are those it was made with.
         expect(shade.module.version).toBe(0);
+    });
+
+    it("follows the texture store's version, so kernels rebind when its array grows", () => {
+        const textures = { view: TEXTURES.view, version: 0 };
+        const shade = new PlatformHitShading(fakeDevice(), NO_KERNELS, scene, rays, textures);
+        const before = shade.module.version;
+        textures.version = 1;
+        expect(shade.module.version).not.toBe(before);
+    });
+
+    it('writes the sampleTextures setting when it changes, on by default', () => {
+        const writes: { offset: number; data: unknown }[] = [];
+        const device = fakeDevice();
+        (device.queue as unknown as { writeBuffer: unknown }).writeBuffer = (_buffer: unknown, offset: number, data: unknown) => writes.push({ offset, data });
+        const shade = new PlatformHitShading(device, NO_KERNELS, scene, rays, TEXTURES);
+        expect(shade.settings.sampleTextures).toBe(true);
+        const sampleTexturesWord = () => writes.filter((write) => write.offset === SHADE_UNIFORM_LAYOUT.sampleTextures).map((write) => (write.data as Uint32Array)[0]);
+        // Only the settings upload is looked at (a private step of encode, which also bakes the sky).
+        (shade as unknown as { uploadSettings(): void }).uploadSettings();
+        shade.settings.sampleTextures = false;
+        (shade as unknown as { uploadSettings(): void }).uploadSettings();
+        (shade as unknown as { uploadSettings(): void }).uploadSettings();
+        expect(sampleTexturesWord()).toEqual([1, 0]);
     });
 
     it("lays the light grid's lookup out where the WGSL struct has it", () => {
@@ -109,11 +141,12 @@ describe('hit shading', () => {
         expect(offsets.get('lightGridInverseCellSize')).toBe(SHADE_UNIFORM_LAYOUT.lightGrid + 20);
         expect(offsets.get('lightGridCells')).toBe(SHADE_UNIFORM_LAYOUT.lightGrid + 24);
         expect(offsets.get('lightGridOutsideCell')).toBe(SHADE_UNIFORM_LAYOUT.lightGrid + 36);
+        expect(offsets.get('sampleTextures')).toBe(SHADE_UNIFORM_LAYOUT.sampleTextures);
         expect(Math.ceil(offset / 16) * 16).toBe(SHADE_UNIFORM_LAYOUT.byteLength);
     });
 
     it("starts from the contract defaults and lays its uniforms out after the sky's harmonics", () => {
-        const shade = new PlatformHitShading(fakeDevice(), NO_KERNELS, scene, rays);
+        const shade = new PlatformHitShading(fakeDevice(), NO_KERNELS, scene, rays, TEXTURES);
         expect(shade.settings).toEqual(DEFAULT_HIT_SHADING_SETTINGS);
         // Radiance SH bands 0-2 at 0 (so a uniform binding of it alone needs no offset), then the 18 irradiance coefficients.
         expect(SHADE_UNIFORM_LAYOUT.skyRadiance).toBe(0);
@@ -127,7 +160,7 @@ describe('hit shading', () => {
     });
 
     it("hands techniques the sky's change as a module of two uniforms and no storage buffers", () => {
-        const shade = new PlatformHitShading(fakeDevice(), NO_KERNELS, scene, rays);
+        const shade = new PlatformHitShading(fakeDevice(), NO_KERNELS, scene, rays, TEXTURES);
         expect(shade.skyChange.entries).toBe(SKY_CHANGE_MODULE_ENTRIES);
         expect(shade.skyChange.storageBufferCount).toBe(0);
         expect(declaredStorageBuffers(shade.skyChange)).toBe(0);
@@ -147,7 +180,7 @@ describe('hit shading', () => {
     });
 
     it('records the sky as seen by copying the radiance SH into "before"', () => {
-        const shade = new PlatformHitShading(fakeDevice(), NO_KERNELS, scene, rays);
+        const shade = new PlatformHitShading(fakeDevice(), NO_KERNELS, scene, rays, TEXTURES);
         const copies: unknown[][] = [];
         const encoder = { copyBufferToBuffer: (...args: unknown[]) => copies.push(args) } as unknown as GPUCommandEncoder;
         shade.recordSkySeen(encoder);
@@ -156,9 +189,9 @@ describe('hit shading', () => {
     });
 
     it('builds the subgroup reduction only on devices that have subgroups', () => {
-        expect(new PlatformHitShading(fakeDevice(['subgroups']), NO_KERNELS, scene, rays).sky.reduction).toBe('subgroups');
-        expect(new PlatformHitShading(fakeDevice(), NO_KERNELS, scene, rays).sky.reduction).toBe('workgroup');
-        expect(() => new PlatformHitShading(fakeDevice(), NO_KERNELS, scene, rays, { skyReduction: 'subgroups' })).toThrow(/subgroups/);
+        expect(new PlatformHitShading(fakeDevice(['subgroups']), NO_KERNELS, scene, rays, TEXTURES).sky.reduction).toBe('subgroups');
+        expect(new PlatformHitShading(fakeDevice(), NO_KERNELS, scene, rays, TEXTURES).sky.reduction).toBe('workgroup');
+        expect(() => new PlatformHitShading(fakeDevice(), NO_KERNELS, scene, rays, TEXTURES, { skyReduction: 'subgroups' })).toThrow(/subgroups/);
         expect(projectionWgsl('subgroups')).toMatch(/^enable subgroups;/);
         expect(projectionWgsl('subgroups')).toContain('subgroupAdd(');
         expect(projectionWgsl('workgroup')).not.toContain('subgroup_invocation_id');

@@ -25,6 +25,7 @@
  * fn giInstanceGeometricNormal(instance: u32, triangle: u32) -> vec3f    // world, unit
  * fn giInstanceNormalAt(instance: u32, triangle: u32, barycentrics: vec2f) -> vec3f
  * fn giInstanceUvAt(instance: u32, triangle: u32, barycentrics: vec2f, channel: u32) -> vec2f
+ * fn giInstanceTriangleUvs(instance: u32, triangle: u32, channel: u32) -> GiTriangleUvs  // the corners' uvs
  *
  * // Meshes (object space)
  * fn giMeshTriangleVertices(mesh: u32, triangle: u32) -> vec3u
@@ -46,6 +47,7 @@
 
 import type { BindingSlot, ModuleBindingEntry } from '../contract/wgsl.ts';
 import {
+    ALPHA_MODE,
     ENVIRONMENT_TYPE,
     HEADER_WORD,
     INSTANCE_FLAG,
@@ -129,16 +131,32 @@ struct GiUvMapping {
     wrapV: u32,
 }
 
+// The uvs of one uv set at a triangle's three corners.
+struct GiTriangleUvs {
+    uv0: vec2f,
+    uv1: vec2f,
+    uv2: vec2f,
+}
+
+// Texture words hold a layer of the texture store (hit shading's
+// giTextureStore), or GI_NO_TEXTURE when the material has no such texture or
+// its layer isn't made yet: the material then shades as if it were white.
 struct GiMaterial {
     albedo: vec3f,          // diffuse albedo (multiplies the albedo texture when there is one)
-    alphaCutoff: f32,       // alpha below this is a hole; 0 = opaque
-    emission: vec3f,        // emitted radiance, emissive x emissiveIntensity
+    alphaCutoff: f32,       // alpha below this is a hole when alphaMode is GI_ALPHA_CUTOUT; else 0
+    emission: vec3f,        // emitted radiance, emissive x emissiveIntensity (multiplies the emissive texture)
     blocksLight: bool,
     doubleSided: bool,
-    albedoTexture: u32,     // GI_NO_TEXTURE when none; sampling arrives with the atlas (M4)
+    albedoTexture: u32,     // store layer or GI_NO_TEXTURE; its alpha is the surface's alpha
     albedoUv: GiUvMapping,
     emissiveTexture: u32,
     emissiveUv: GiUvMapping,
+    metalness: f32,         // 0..1; the albedo is scaled by 1 - metalness x the metalness texture's channel
+    metalnessTexture: u32,
+    metalnessChannel: u32,  // which channel of the metalness texture holds it: 0 r, 1 g, 2 b, 3 a
+    metalnessUv: GiUvMapping,
+    opacity: f32,           // multiplies the albedo texture's alpha
+    alphaMode: u32,         // GI_ALPHA_OPAQUE, GI_ALPHA_CUTOUT or GI_ALPHA_STOCHASTIC
 }
 
 struct GiLight {
@@ -177,6 +195,10 @@ const GI_ENVIRONMENT_PROCEDURAL: u32 = ${ENVIRONMENT_TYPE.procedural}u;
 const GI_UV_WRAP_REPEAT: u32 = ${UV_WRAP.repeat}u;
 const GI_UV_WRAP_CLAMP: u32 = ${UV_WRAP.clamp}u;
 const GI_UV_WRAP_MIRROR: u32 = ${UV_WRAP.mirror}u;
+
+const GI_ALPHA_OPAQUE: u32 = ${ALPHA_MODE.opaque}u;
+const GI_ALPHA_CUTOUT: u32 = ${ALPHA_MODE.cutout}u;
+const GI_ALPHA_STOCHASTIC: u32 = ${ALPHA_MODE.stochastic}u;
 
 // ---- Bindings and layout ---------------------------------------------------------------
 
@@ -375,6 +397,20 @@ fn giInstanceUvAt(instance: u32, triangle: u32, barycentrics: vec2f, channel: u3
         giSceneUv(uvs, vertices.z) * barycentrics.y;
 }
 
+// The uvs of set 'channel' (0 or 1) at the triangle's three corners, for
+// work that needs the triangle's extent in uv space (hit shading's texture
+// footprint), not just one point. All (0, 0) when the mesh has no such set.
+fn giInstanceTriangleUvs(instance: u32, triangle: u32, channel: u32) -> GiTriangleUvs {
+    let mesh = giInstanceMesh(instance);
+    let uvSets = giSceneMeshRecord(mesh, ${vec4Of(MESH_WORD.uvs0)}u);
+    let uvs = select(uvSets.${componentOf(MESH_WORD.uvs0)}, uvSets.${componentOf(MESH_WORD.uvs1)}, channel == 1u);
+    if (uvs == GI_SCENE_NONE) {
+        return GiTriangleUvs(vec2f(0.0), vec2f(0.0), vec2f(0.0));
+    }
+    let vertices = giMeshTriangleVertices(mesh, triangle);
+    return GiTriangleUvs(giSceneUv(uvs, vertices.x), giSceneUv(uvs, vertices.y), giSceneUv(uvs, vertices.z));
+}
+
 // ---- Meshes ----------------------------------------------------------------------------
 
 fn giSceneMeshRecord(mesh: u32, vec4Index: u32) -> vec4u {
@@ -475,6 +511,9 @@ fn giMaterial(material: u32) -> GiMaterial {
     let flags = emission.${componentOf(MATERIAL_WORD.flags)};
     let albedoTranslation = giSceneTables[base + ${vec4Of(MATERIAL_WORD.albedoUvTranslation)}u];
     let emissiveTranslation = giSceneTables[base + ${vec4Of(MATERIAL_WORD.emissiveUvTranslation)}u];
+    let surface = giSceneTables[base + ${vec4Of(MATERIAL_WORD.metalness)}u];
+    let metalnessTranslation = giSceneTables[base + ${vec4Of(MATERIAL_WORD.metalnessUvTranslation)}u];
+    let metalnessPacked = metalnessTranslation.${componentOf(MATERIAL_WORD.metalnessUvPacked)};
     return GiMaterial(
         albedo.xyz,
         albedo.${componentOf(MATERIAL_WORD.alphaCutoff)},
@@ -485,6 +524,12 @@ fn giMaterial(material: u32) -> GiMaterial {
         giSceneUvMapping(giSceneTables[base + ${checkVec3('albedo uv', MATERIAL_WORD.albedoUvMatrix)}u], albedoTranslation),
         emissiveTranslation.${componentOf(MATERIAL_WORD.emissiveTexture)},
         giSceneUvMapping(giSceneTables[base + ${checkVec3('emissive uv', MATERIAL_WORD.emissiveUvMatrix)}u], emissiveTranslation),
+        bitcast<f32>(surface.${componentOf(MATERIAL_WORD.metalness)}),
+        metalnessTranslation.${componentOf(MATERIAL_WORD.metalnessTexture)},
+        (metalnessPacked >> ${UV_PACK_SHIFT.textureChannel}u) & 0xfu,
+        giSceneUvMapping(giSceneTables[base + ${checkVec3('metalness uv', MATERIAL_WORD.metalnessUvMatrix)}u], metalnessTranslation),
+        bitcast<f32>(surface.${componentOf(MATERIAL_WORD.opacity)}),
+        surface.${componentOf(MATERIAL_WORD.alphaMode)},
     );
 }
 

@@ -83,6 +83,14 @@ const DDGI_BACK_FACE_DISTANCE_SHARE: f32 = 0.2;
 // and still a finite half float (the largest is 65,504). The blend clamps
 // distances anyway; phase B takes a miss as the most open direction.
 const DDGI_MISS_DISTANCE: f32 = 60000.0;
+
+// The cone one probe ray stands for, for the mip textures are read at
+// (giSurfaceAtCone): a probe's rays split the sphere's 4 pi steradians
+// evenly, so each covers a cone about sqrt(4 pi / raysPerProbe) radians
+// wide, 0.22 at the default 256 rays.
+fn ddgiRayConeSpread() -> f32 {
+    return sqrt(4.0 * DDGI_PI / f32(ddgi.raysPerProbe));
+}
 `;
 
 export const DDGI_TRACE_WGSL = /* wgsl */ `
@@ -110,7 +118,7 @@ ${TRACE_CONSTANTS_WGSL}
 // running sum and albedo / pi alive there. Measured (T1.9a, RTX 3060, the same
 // probes): 512 probes on Sponza 17-30% faster, two-room 11%, Cornell 20%.
 fn ddgiShadeRay(ray: GiRay, hit: GiHit, random: vec2f) -> vec3f {
-    let surface = giSurfaceAt(ray, hit);
+    let surface = giSurfaceAtCone(ray, hit, ddgiRayConeSpread());
     // Bounce light from the current field: the field already holds every
     // earlier bounce, so this gives unlimited bounces over updates.
     let bounce = ddgiSampleIrradiance(
@@ -187,7 +195,7 @@ const ONE_LAYER_RESULTS_WGSL = /* wgsl */ `
         } else {
             signedDistance = hit.t;
             if (!isFixed) {
-                let surface = giSurfaceAt(ray, hit);
+                let surface = giSurfaceAtCone(ray, hit, ddgiRayConeSpread());
                 radiance = ddgiEmittedAndBounced(ray, surface);
                 // Only hits a light can reach go on the list (half of Sponza's face away from the sun).
                 deferred = giNeedsDirect(surface);
@@ -292,7 +300,7 @@ function layeredResultsWgsl(plan: LayerPlan): string {
         } else {
             signedDistance = hit.t;
             if (!isFixed) {
-                let surface = giSurfaceAt(ray, hit);
+                let surface = giSurfaceAtCone(ray, hit, ddgiRayConeSpread());
                 radiance = ddgiEmittedAndBouncedLayers(ray, surface);
                 // Only hits a light can reach go on the list (half of Sponza's face away from the sun).
                 deferred = giNeedsDirect(surface);

@@ -624,15 +624,27 @@ function expectedUv(mapping: UvMapping | undefined): UvMappingResult {
     };
 }
 
-function checkMaterial(failures: string[], descriptor: MaterialDescriptor, actual: MaterialResult, label: string): void {
+/**
+ * A material's texture word as the scene should have written it: the
+ * texture's store layer once it is made, NONE before that (M4: the material
+ * then shades with its flat colour) and without a texture.
+ */
+function expectedTextureWord(model: SceneModel, texture: TextureHandle | undefined): number {
+    if (texture === undefined) return NONE;
+    return model.scene.textureLayer(texture) ?? NONE;
+}
+
+function checkMaterial(failures: string[], model: SceneModel, descriptor: MaterialDescriptor, actual: MaterialResult, label: string): void {
     compareArrays(failures, `${label} albedo`, actual.albedo, [...(descriptor.albedo ?? [1, 1, 1])], 1e-6);
     const intensity = descriptor.emissiveIntensity ?? 1;
     compareArrays(failures, `${label} emission`, actual.emission, (descriptor.emissive ?? [0, 0, 0]).map((value) => value * intensity), 1e-6);
     if (!close(actual.alphaCutoff, descriptor.alphaCutoff ?? 0, 1e-6)) failures.push(`${label}: alphaCutoff ${actual.alphaCutoff}`);
     if (actual.blocksLight !== (descriptor.blocksLight !== false)) failures.push(`${label}: blocksLight ${actual.blocksLight}`);
     if (actual.doubleSided !== (descriptor.doubleSided !== false)) failures.push(`${label}: doubleSided ${actual.doubleSided}`);
-    if ((actual.albedoTexture !== NONE) !== (descriptor.albedoTexture !== undefined)) failures.push(`${label}: albedoTexture ${actual.albedoTexture}`);
-    if ((actual.emissiveTexture !== NONE) !== (descriptor.emissiveTexture !== undefined)) failures.push(`${label}: emissiveTexture ${actual.emissiveTexture}`);
+    const albedoTexture = expectedTextureWord(model, descriptor.albedoTexture);
+    if (actual.albedoTexture !== albedoTexture) failures.push(`${label}: albedoTexture ${actual.albedoTexture}, expected ${albedoTexture}`);
+    const emissiveTexture = expectedTextureWord(model, descriptor.emissiveTexture);
+    if (actual.emissiveTexture !== emissiveTexture) failures.push(`${label}: emissiveTexture ${actual.emissiveTexture}, expected ${emissiveTexture}`);
     for (const [name, mapping, result] of [['albedoUv', descriptor.albedoUv, actual.albedoUv], ['emissiveUv', descriptor.emissiveUv, actual.emissiveUv]] as const) {
         const expected = expectedUv(mapping);
         compareArrays(failures, `${label} ${name}`, result.transform, expected.transform, 1e-6);
@@ -697,7 +709,7 @@ export function checkReadback(model: SceneModel, queries: readonly InstanceQuery
     if (readback.instanceCount !== slotCount) failures.push(`instanceCount ${readback.instanceCount}, expected ${slotCount}`);
     queries.forEach((query, index) => checkQuery(failures, model, query, readback.queries[index]));
     const materialBySlot = new Map([...model.materials].map(([handle, descriptor]) => [model.scene.materialSlot(handle), descriptor]));
-    materials.forEach((slot, index) => checkMaterial(failures, materialBySlot.get(slot)!, readback.materials[index], `material ${slot}`));
+    materials.forEach((slot, index) => checkMaterial(failures, model, materialBySlot.get(slot)!, readback.materials[index], `material ${slot}`));
     checkLights(failures, model, readback);
     checkEnvironment(failures, model.environment, readback);
     return failures;

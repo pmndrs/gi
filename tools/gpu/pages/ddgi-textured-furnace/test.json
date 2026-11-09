@@ -1,0 +1,4 @@
+{
+    "description": "M4 T4.1: the furnace room with a checker texture of mean albedo 0.5 converges to the flat 0.5-albedo furnace's field mean within 1%; with sampleTextures off it matches the flat furnace within 0.1%.",
+    "timeoutMs": 900000
+}

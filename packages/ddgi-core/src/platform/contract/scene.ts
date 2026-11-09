@@ -4,7 +4,7 @@
  * The host owns its scene and builds it however it likes (code, procedural,
  * loaded files, a live editor). The adapter mirrors it into the platform with
  * these calls and then sends only what changed. The platform keeps its own,
- * deliberately simplified GPU copy: geometry, instances, a four-field material
+ * deliberately simplified GPU copy: geometry, instances, a small material
  * model, lights and the environment.
  *
  * Nothing here recompiles shaders. Lights, meshes, materials and instances live
@@ -91,12 +91,42 @@ export interface PixelData {
     readonly height: number;
 }
 
+/** One mip level of a {@link CompressedPixelData}: the level's blocks, as a KTX2 file or three's `CompressedTexture.mipmaps` hold them. */
+export interface CompressedPixelLevel {
+    readonly data: Uint8Array;
+    readonly width: number;
+    readonly height: number;
+}
+
+/**
+ * A GPU-compressed image (BC, ETC2 or ASTC) with its mip levels, largest
+ * first: what three's `CompressedTexture.mipmaps` holds after KTX2Loader or
+ * gputex. The platform uploads only one level, the smallest that is still at
+ * least 256 × 256 (the largest when none is), and lets the GPU decode it when
+ * the platform reads it. The device needs the format's feature
+ * (`texture-compression-bc`, `-etc2` or `-astc`; `optionalFeatures` asks for
+ * them); without it the platform warns once and the materials using the
+ * texture keep their flat colour.
+ */
+export interface CompressedPixelData {
+    readonly format: GPUTextureFormat;
+    readonly levels: readonly CompressedPixelLevel[];
+}
+
 /**
  * Anything the platform can read an image from. It always makes its own
- * downsized copy in its atlas, so the host can free the source afterwards.
+ * downsized copy (a 256 × 256 layer of its texture store, with mips), so the
+ * host can free the source once the copy is made: in the first
+ * {@link GIPlatform.encode} after `createTexture`.
  *
- * A same-device `GPUTexture` covers images the host only has on the GPU (for
- * example compressed KTX2 textures after upload).
+ * Texture coordinate (0, 0) is the first texel of the source as given (the
+ * top-left of an image), and v grows down its rows, as in WebGPU. An engine
+ * that flips images on upload (three's `flipY`) accounts for it in its uv
+ * mapping.
+ *
+ * A same-device `GPUTexture` covers images the host only has on the GPU. It
+ * needs `TEXTURE_BINDING` usage and a format that reads as float (not a
+ * depth, `uint` or `sint` format); its first mip level and array layer are read.
  */
 export type TextureSource =
     | GPUTexture
@@ -105,11 +135,16 @@ export type TextureSource =
     | HTMLCanvasElement
     | OffscreenCanvas
     | ImageData
-    | PixelData;
+    | PixelData
+    | CompressedPixelData;
 
 export interface TextureDescriptor {
     readonly source: TextureSource;
-    /** The stored values are sRGB-encoded (true for typical albedo images). */
+    /**
+     * The stored values are sRGB-encoded (true for typical albedo images).
+     * Ignored for a source whose format already says so (`rgba8unorm-srgb`,
+     * `bc7-rgba-unorm-srgb`): the GPU decodes those itself.
+     */
     readonly srgb: boolean;
     readonly label?: string;
 }
@@ -139,9 +174,43 @@ export interface UvMapping {
     readonly wrapV?: UvWrap;
 }
 
+/** A texture channel: which of a texture's r, g, b, a holds a value. */
+export type TextureChannel = 'r' | 'g' | 'b' | 'a';
+
+/**
+ * A metalness map: one channel of a texture, sampled with its own mapping.
+ * glTF and three keep metalness in the blue channel of the
+ * metallic-roughness texture.
+ */
+export interface MetalnessTexture {
+    readonly texture: TextureHandle;
+    readonly channel: TextureChannel;
+    /** Where it is sampled; omitted means channel 0, no transform, repeat. */
+    readonly uv?: UvMapping;
+}
+
+/**
+ * How a surface's alpha (`opacity` × the albedo texture's alpha) affects rays:
+ *
+ * - `opaque`: it doesn't; every hit stands.
+ * - `cutout`: alpha below `alphaCutoff` is a hole (foliage, fences).
+ * - `stochastic`: a ray passes with probability 1 − alpha, so many rays see
+ *   the right average of a blended surface (decals, glTF `BLEND`).
+ */
+export type AlphaMode = 'opaque' | 'cutout' | 'stochastic';
+
 /**
  * The platform's material model. Each adapter maps its engine's materials onto
- * these four ideas; nothing else about a material affects GI.
+ * these ideas; nothing else about a material affects GI.
+ *
+ * At a ray hit (with the hit-shading setting `sampleTextures` on, the default):
+ *
+ *     albedo   = albedo × albedoTexture.rgb × (1 − metalness × metalnessTexture[channel])
+ *     emission = emissive × emissiveIntensity × emissiveTexture.rgb
+ *
+ * Each texture is sampled at the mip a probe ray's footprint covers. Until a
+ * texture's copy is made (the first `encode` after `createTexture`), its
+ * materials shade as if it were white.
  */
 export interface MaterialDescriptor {
     /** Diffuse albedo, multiplied with `albedoTexture` when both are set. */
@@ -149,6 +218,20 @@ export interface MaterialDescriptor {
     readonly albedoTexture?: TextureHandle;
     /** Where `albedoTexture` is sampled. Its alpha (for `alphaCutoff`) uses the same mapping. */
     readonly albedoUv?: UvMapping;
+    /**
+     * How metallic the surface is, 0 to 1: a metal reflects no diffuse light,
+     * so the albedo is scaled by (1 − metalness), as three and glTF do.
+     * Multiplied with `metalnessTexture` when both are set. Defaults to 0.
+     */
+    readonly metalness?: number;
+    readonly metalnessTexture?: MetalnessTexture;
+    /** The surface's opacity, 0 to 1, multiplied with the albedo texture's alpha (see `alphaMode`). Defaults to 1. */
+    readonly opacity?: number;
+    /**
+     * See {@link AlphaMode}. Defaults to `cutout` when `alphaCutoff` is above 0,
+     * else `opaque`. Rays use it from M4's T4.2 on.
+     */
+    readonly alphaMode?: AlphaMode;
     /**
      * Emitted radiance, multiplied with `emissiveTexture` and
      * `emissiveIntensity`. In the platform's light units (see {@link LightDescriptor}).
@@ -160,7 +243,8 @@ export interface MaterialDescriptor {
     readonly emissiveIntensity?: number;
     /**
      * Alpha below this value is a hole for rays. The alpha comes from
-     * `albedoTexture`'s alpha channel. Omit for opaque.
+     * `albedoTexture`'s alpha channel, times `opacity`. Omit for opaque. With
+     * `alphaMode: 'cutout'` and no cutoff, 0.5 (glTF's default).
      */
     readonly alphaCutoff?: number;
     /**
