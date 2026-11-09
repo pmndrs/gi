@@ -1,0 +1,5 @@
+{
+    "description": "T3.7 checks 1, 2 and 5 on Bistro interior (VITE_DDGI_SCENES picks another): with three rendering every frame and no markChanged, an added box is created in the next update and rays hit it, a removed one is destroyed in the next update, an unmarked first move is sent within 10 frames (the updateMatrixWorld hook); still and one-mover sync costs and the hooks cost inside three are recorded, not judged; recompiles stay 0. Needs the downloaded scene.",
+    "timeoutMs": 900000,
+    "manual": true
+}
