@@ -21,6 +21,35 @@ Rules:
 
 ---
 
+## 2026-11-09 · T2.10 Intel UHD correctness run · gpu-tester (opus)
+Did: ran M1's still-scene checks plus M2's, T2.12's and T2.13's correctness pages on the Intel UHD (intel/gen-12lp, headless Chrome 157.0.8103.38). This is M2's final code (`m2-t2.10` at 1919130; later commits change only CSVs and docs). There were 18 runs of 1–4 pages, each under `bench-lock run --no-cool-wait`. Timings are not gated. Rows: `checks.csv` (`t2.10/...`, device `Intel UHD`, `note/t2.10_intel_batch`, `note/device_hung` on hung pages), `flicker.csv`, `trace.csv` (H-PLOC quick bench). No library code was changed.
+
+| Page | Result | Key number |
+| --- | --- | --- |
+| smoke, device, ddgi-furnace | pass | furnace E/π 0.4986 (worst point 3.8%) |
+| trace-oracle | pass | 0 rays slipped in all 8 variants (platform, GPU trees, mid-swap, refused) |
+| ddgi-leak | pass | two-room 0.83% (thin wall 0.59%, closed door 0.06%) |
+| accuracy, test view vs Cycles | pass | Cornell point +5.60%, two-room +4.95% (bar ±10%); Sponza raw +23.10% (RTX +23.14%, M1 +23.07%) |
+| ddgi-change-still | pass | atlas within 0.16% of M1, 0 probes marked |
+| ddgi-flicker | pass | Cornell 0.092% / p95 0.50% (2 ms budget, 150 probes); two-room 0.010% / 0.055% (98 probes) |
+| ddgi-session-recompiles, platform-recompiles | pass | 0 recompiles (control 1): Cornell and two-room, groups off and on; 4,096 lights 0 |
+| ddgi-light-groups | pass | vs re-converged within 0.007%; regroup within 1% by frame 8 |
+| ddgi-sun-layer | pass | vs re-converged within 0.005%; 6-layer cap within 0.012% |
+| hit-shading-many-lights (light grid) | pass | mean within 0.1%; 99.3–99.7% of points in tolerance (K = 1, 2, 4) |
+| ddgi-key-probes-sponza | **fail ×2** | view within 5% from frame **16**, re-run **18** (bar 15; RTX 15); field 54 (bar 120); hold removed 65% (sun) / 91% (sky) |
+| ddgi-key-probes-leak, mark-, propagate-reduction | pass | worst probe leak 0.75%; subgroup and fallback paths agree |
+| ddgi-warm-two-updates | **hung**, then pass alone | 0 probes active after 1 update, 642 after 2 |
+| tlas-oracle, trace-inline | pass; trace-inline **hung** once, then passed alone | 0 mismatches |
+| bvh-hploc, trace-bench-hploc-quick | pass | SAH vs reference within 0.27% (38 cases); trees agree 100% with tinybvh's |
+| ddgi-tree-swap (Sponza) | pass | atlas −0.002% across the swap, 0 recompiles; GPU build 4.48 s |
+| ddgi-trees-no-subgroups | pass | atlas +0.032% vs M1, all meshes on tinybvh |
+| scene-gpu-packing | pass | 0 wrong words on 8 scenes |
+
+Device hangs: **2 in 18 runs** (`DXGI_ERROR_DEVICE_HUNG`), both on the 4th page of a 4-page batch, and both passed alone (NOTES).
+Flags: another project's headless Chrome (`rt-headless-*`, not ours) held the RTX at 89 C and 100% use for the whole session. The laptop's GPUs share one cooler, so the Intel may have run warm. Sponza's key-probe miss is consistent across both runs (16, 18), not noise.
+Not run: `ddgi-change-step`, `ddgi-schedule-*`, `ddgi-direct`, `ddgi-feedback`, `ddgi-warmup`, `hit-shading-deferred` (not in the brief); Sponza flicker; Bistro scenes; anything timed.
+Next: lead decides whether the key-probe view bar (15 frames at 316 probes) applies to the Intel. Its frames come from the same fixed batch, so the miss is in the result, not in speed.
+
 ## 2026-11-08 · T2.10 response follow-up: Sponza's lamp lit on native, exposure, brightness diagnosis · native-runner (opus)
 Did: the coordinator's follow-up to my "T2.10 response times" entry below.
 - **Correction to that entry:** native's Sponza arcade lamp lit nothing in those runs. The manifest's `range: 0` (three: no cut-off) became `radius=0`, which the harness reads as a hard cut-off, including in the probe trace. The 0.0–0.8% steps were the unlit lamp, not the view. Those rows are superseded (a `superseded` row per run).
