@@ -15,10 +15,12 @@
  * (DECISIONS 2026-11-04). Both give the same results; the scan is the one
  * `@pmndrs/bvh` builds its trees with (packages/bvh/src/gpu-scan.ts).
  *
- * **Counts reach the GPU with the next submit.** `encode(pass, count)` writes
- * the count with `queue.writeBuffer`, which lands before the next submitted
- * command buffer runs. So one utility object handles one count per submit;
- * to scan two different counts in one submit, make two objects.
+ * **Every encode runs with its own count,** also several encodes of one
+ * object, with different counts, in one submit: each count has a uniform
+ * slot of its own that is written once and never changed (gpu-compute.ts,
+ * `ScanRun`). Encodes of one object share its scratch and its total or count
+ * word, so they must run one after another (they do within a pass, and in
+ * submit order), and the word holds the latest one's.
  */
 
 import type { WgslModule } from './wgsl';
@@ -50,9 +52,14 @@ export interface GpuPrefixScan {
     readonly capacity: number;
     /** The sum of all the items of the latest encode, written by its pass (0 for an empty scan). */
     readonly total: GpuWord;
-    /** GPU bytes this scan allocated (scratch and its uniform block, not the caller's buffers). */
+    /** GPU bytes this scan holds now (scratch and its parameter slots, a few KB; not the caller's buffers). */
     readonly memoryBytes: number;
-    /** Records the scan of the first `count` items (at most `capacity`) into `pass`. */
+    /**
+     * Records the scan of the first `count` items (at most `capacity`) into
+     * `pass`, with this count whatever other encodes of this scan the same
+     * submit holds. `total` then holds this scan's sum, until the next encode
+     * of this scan runs.
+     */
     encode(pass: GPUComputePassEncoder, count: number): void;
     dispose(): void;
 }
@@ -77,16 +84,21 @@ export interface GpuCompaction {
     readonly indices: GPUBuffer;
     /** How many items the latest encode kept. */
     readonly count: GpuWord;
-    /** GPU bytes this compaction allocated (scratch, and `indices` when it made them). */
+    /** GPU bytes this compaction holds now (scratch, its parameter slots, and `indices` when it made them). */
     readonly memoryBytes: number;
-    /** Records the compaction of the first `count` flags (at most `capacity`) into `pass`. */
+    /**
+     * Records the compaction of the first `count` flags (at most `capacity`)
+     * into `pass`, with this count whatever other encodes of this compaction
+     * the same submit holds. `indices` and `count` then hold this one's
+     * result, until the next encode of this compaction runs.
+     */
     encode(pass: GPUComputePassEncoder, count: number): void;
     dispose(): void;
 }
 
 export interface IndirectArgsOptions {
     readonly label: string;
-    /** The count to size the dispatch for, written by an earlier pass (a compaction's `count`, a scan's `total`). */
+    /** The count to size the dispatch for, written by an earlier pass (a compaction's `count`, a scan's `total`): any `u32`. */
     readonly count: GpuWord;
     /** Items one workgroup of the consuming kernel covers: its workgroup size, times items per thread if it loops. */
     readonly itemsPerWorkgroup: number;
@@ -94,10 +106,18 @@ export interface IndirectArgsOptions {
 
 /**
  * Indirect dispatch arguments from a GPU count: `ceil(count / itemsPerWorkgroup)`
- * workgroups, laid out as `[x, y, 1]` with x at most the device's
- * `maxComputeWorkgroupsPerDimension` and the rest in rows along y. The last
- * row can run past the count, so the consuming kernel checks each item's
- * index against the count, which the buffer also holds.
+ * workgroups, laid out as `[x, y, 1]` in as few rows along y as hold them,
+ * x as even as the rows allow. Neither x nor y passes the device's
+ * `maxComputeWorkgroupsPerDimension` (an indirect dispatch past it runs
+ * nothing and raises no error). So:
+ *
+ * - the dispatch can run a little past the count (the last row is filled up
+ *   to x): the consuming kernel checks each item's index against the count,
+ *   which the buffer also holds;
+ * - past limit² workgroups (only counts near 2^32 with one item per
+ *   workgroup get there) the dispatch runs limit² workgroups, and a kernel
+ *   that must cover such counts loops over items in steps of
+ *   `x * y * workgroupSize`.
  *
  * The buffer is a `GiIndirectArgs` ({@link GpuComputeUtilities.indirectModule}):
  * the workgroups, then the count. Pass it to

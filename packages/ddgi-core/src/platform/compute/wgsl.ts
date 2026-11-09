@@ -172,13 +172,20 @@ fn giDivideRoundingUp(value: u32, divisor: u32) -> u32 {
 fn ${INDIRECT_WRITER_ENTRY_POINT}() {
     let count = giIndirectCountSource[giIndirectWriter.countWord];
     let workgroups = giDivideRoundingUp(count, giIndirectWriter.itemsPerWorkgroup);
-    // As many as fit along x, the rest in rows along y. y stays under the
-    // limit too: items fit one storage binding (under 2^32 bytes, so under
-    // 2^30 words), and 2^30 / 65535 (the smallest limit) is about 16,400 rows.
-    let x = min(workgroups, giIndirectWriter.maxWorkgroupsPerDimension);
+    let limit = giIndirectWriter.maxWorkgroupsPerDimension;
+    // An indirect dispatch past the per-dimension limit runs nothing and
+    // raises no error (RC1.4, Chrome 157), so neither x nor y may pass it.
+    // Rows along y: as few as hold the workgroups, at most the limit (a count
+    // can be any u32, a scan's total say, and 2^32 workgroups need 65,537
+    // rows of 65,535). Then x as even as the rows allow, so 78,125
+    // workgroups run as 2 rows of 39,063, not 65,535 + 65,535 mostly idle.
+    // Past limit^2 workgroups the dispatch runs limit^2 of them, and the
+    // consuming kernel loops over the rest (GiIndirectArgs.count says how many).
+    var x = 0u;
     var y = 0u;
-    if (x > 0u) {
-        y = giDivideRoundingUp(workgroups, x);
+    if (workgroups > 0u) {
+        y = min(giDivideRoundingUp(workgroups, limit), limit);
+        x = min(giDivideRoundingUp(workgroups, y), limit);
     }
     giIndirectArgs.workgroups = vec3u(x, y, 1u);
     giIndirectArgs.count = count;

@@ -82,15 +82,16 @@ export interface PlatformGpuComputeOptions {
 }
 
 /** One layout entry of a compute-only buffer binding. */
-function bufferEntry(binding: number, type: GPUBufferBindingType): GPUBindGroupLayoutEntry {
-    return { binding, visibility: SHADER_STAGE_COMPUTE, buffer: { type } };
+function bufferEntry(binding: number, type: GPUBufferBindingType, hasDynamicOffset = false): GPUBindGroupLayoutEntry {
+    return { binding, visibility: SHADER_STAGE_COMPUTE, buffer: { type, hasDynamicOffset } };
 }
 
 /** Group 0 of each scan variant (the table in ./wgsl.ts). One layout for all three kernels, so one bind group serves them. */
 function scanLayoutEntries(variant: ScanVariant): GPUBindGroupLayoutEntry[] {
     const entries = [
         bufferEntry(SCAN_BINDING.tileSums, 'storage'),
-        bufferEntry(SCAN_BINDING.params, 'uniform'),
+        // Each encode picks its own parameter slot (ScanRun).
+        bufferEntry(SCAN_BINDING.params, 'uniform', true),
         bufferEntry(COMPUTE_IO_BINDING.source, variant === 'in-place' ? 'storage' : 'read-only-storage'),
         bufferEntry(COMPUTE_IO_BINDING.result, 'storage'),
     ];
@@ -137,7 +138,9 @@ export class PlatformGpuCompute implements GpuComputeUtilities {
         return {
             capacity: options.capacity,
             total: run.result,
-            memoryBytes: run.memoryBytes,
+            get memoryBytes() {
+                return run.memoryBytes;
+            },
             encode: (pass, count) => run.encode(pass, count),
             dispose: () => run.dispose(),
         };
@@ -158,7 +161,9 @@ export class PlatformGpuCompute implements GpuComputeUtilities {
             capacity: options.capacity,
             indices,
             count: run.result,
-            memoryBytes: run.memoryBytes + (ownsIndices ? indices.size : 0),
+            get memoryBytes() {
+                return run.memoryBytes + (ownsIndices ? indices.size : 0);
+            },
             encode: (pass, count) => run.encode(pass, count),
             dispose: () => {
                 run.dispose();
@@ -225,21 +230,54 @@ export class PlatformGpuCompute implements GpuComputeUtilities {
     }
 }
 
-/** One scan or compaction: its scratch, its bind group, and the count its parameters hold. */
+/** Parameter slots in one page (each `minUniformBufferOffsetAlignment` bytes, 256 on every device we know). */
+const PARAM_SLOTS_PER_PAGE = 16;
+/** Pages one scan keeps at most; when a new one is needed the oldest is dropped. */
+const MAX_PARAM_PAGES = 4;
+
+/** A uniform buffer of parameter slots, and the scan's bind group over it. */
+interface ParamPage {
+    readonly buffer: GPUBuffer;
+    readonly bindGroup: GPUBindGroup;
+    used: number;
+}
+
+/** Where one count's `ScanParams` live. */
+interface ParamSlot {
+    readonly page: ParamPage;
+    readonly offset: number;
+}
+
+/**
+ * One scan or compaction: its scratch, and its parameters.
+ *
+ * **Every encode has its own count.** The count reaches the GPU in a uniform
+ * block written with `queue.writeBuffer`, which lands before the next submit
+ * runs. One block rewritten per encode would make two encodes in one submit
+ * both see the last count. So each count gets a slot of its own, chosen per
+ * encode with a dynamic offset, and a slot is written once and never changed:
+ * whenever a submit runs, every slot it uses holds the count it was encoded
+ * with. Slots are kept per count (a count seen again reuses its slot), in
+ * pages of {@link PARAM_SLOTS_PER_PAGE}; past {@link MAX_PARAM_PAGES} pages the
+ * oldest page is dropped from the table, but not destroyed, since a command
+ * buffer not yet submitted may still use it: it is freed once nothing refers
+ * to it.
+ */
 class ScanRun {
     readonly result: GpuWord;
-    readonly memoryBytes: number;
 
     private readonly device: GPUDevice;
     private readonly kernels: ScanKernels;
+    private readonly label: string;
     private readonly tileSums: GPUBuffer;
-    private readonly params: GPUBuffer;
     private readonly resultBuffer: GPUBuffer;
-    private readonly bindGroup: GPUBindGroup;
+    /** The bind group entries except the parameters, which each page adds. */
+    private readonly entries: readonly GPUBindGroupEntry[];
     private readonly capacity: number;
     private readonly maxPerDimension: number;
-    /** The count the parameters were last written with; -1 before the first encode. */
-    private writtenCount = -1;
+    private readonly slotBytes: number;
+    private readonly pages: ParamPage[] = [];
+    private readonly slots = new Map<number, ParamSlot>();
 
     constructor(
         device: GPUDevice,
@@ -248,49 +286,88 @@ class ScanRun {
     ) {
         this.device = device;
         this.kernels = kernels;
+        this.label = options.label;
         this.capacity = options.capacity;
         this.maxPerDimension = device.limits.maxComputeWorkgroupsPerDimension;
+        this.slotBytes = Math.max(SCAN_PARAMS_BYTES, device.limits.minUniformBufferOffsetAlignment);
         const { label } = options;
         this.tileSums = device.createBuffer({ label: `${label} scan tile sums`, size: scanTileSumWords(options.capacity) * WORD_BYTES, usage: BUFFER_USAGE.storage });
-        this.params = device.createBuffer({ label: `${label} scan params`, size: SCAN_PARAMS_BYTES, usage: BUFFER_USAGE.uniform | BUFFER_USAGE.copyDst });
         this.resultBuffer = device.createBuffer({ label: `${label} scan total`, size: RESULT_BYTES, usage: BUFFER_USAGE.storage | BUFFER_USAGE.copySrc | BUFFER_USAGE.copyDst });
         this.result = { buffer: this.resultBuffer, offset: 0 };
-        this.memoryBytes = this.tileSums.size + this.params.size + this.resultBuffer.size;
         const itemBytes = options.capacity * WORD_BYTES;
         const entries: GPUBindGroupEntry[] = [
             { binding: SCAN_BINDING.tileSums, resource: { buffer: this.tileSums } },
-            { binding: SCAN_BINDING.params, resource: { buffer: this.params } },
             { binding: COMPUTE_IO_BINDING.source, resource: { buffer: options.source, size: itemBytes } },
             { binding: COMPUTE_IO_BINDING.result, resource: { buffer: this.resultBuffer } },
         ];
         if (options.destination) entries.push({ binding: COMPUTE_IO_BINDING.destination, resource: { buffer: options.destination, size: itemBytes } });
-        this.bindGroup = device.createBindGroup({ label: `${label} scan`, layout: kernels.layout, entries });
+        this.entries = entries;
+        // The first page now, so memoryBytes means something before the first encode.
+        this.addPage();
+    }
+
+    /** Scratch, the total and the parameter pages held now (at most {@link MAX_PARAM_PAGES}). */
+    get memoryBytes(): number {
+        return this.tileSums.size + this.resultBuffer.size + this.pages.reduce((bytes, page) => bytes + page.buffer.size, 0);
     }
 
     encode(pass: GPUComputePassEncoder, count: number): void {
         if (!Number.isInteger(count) || count < 0 || count > this.capacity) throw new RangeError(`@pmndrs/ddgi: a scan of capacity ${this.capacity} was asked for ${count} items`);
-        if (count !== this.writtenCount) {
-            this.device.queue.writeBuffer(this.params, 0, scanParams(count));
-            this.writtenCount = count;
-        }
+        const slot = this.slotFor(count);
         const { pipelines } = this.kernels;
         if (count === 0) {
             // Nothing to scan, but the total still has to say 0 for the passes that read it:
             // the across-tiles kernel with no tiles writes exactly that.
             pass.setPipeline(pipelines.tileSums);
-            pass.setBindGroup(0, this.bindGroup);
+            pass.setBindGroup(0, slot.page.bindGroup, [slot.offset]);
             pass.dispatchWorkgroups(1);
             return;
         }
         // One layout for all three kernels, so the same group serves each.
-        const groups = { reduce: this.bindGroup, tileSums: this.bindGroup, downsweep: this.bindGroup, count };
-        encodeScan(pass, pipelines, groups, this.maxPerDimension);
+        const group = slot.page.bindGroup;
+        encodeScan(pass, pipelines, { reduce: group, tileSums: group, downsweep: group, count }, this.maxPerDimension, [slot.offset]);
     }
 
     dispose(): void {
         this.tileSums.destroy();
-        this.params.destroy();
         this.resultBuffer.destroy();
+        for (const page of this.pages) page.buffer.destroy();
+        this.pages.length = 0;
+        this.slots.clear();
+    }
+
+    /** The slot holding `count`'s parameters, written now if the count is new. */
+    private slotFor(count: number): ParamSlot {
+        const known = this.slots.get(count);
+        if (known) return known;
+        let page = this.pages[this.pages.length - 1];
+        if (page.used === PARAM_SLOTS_PER_PAGE) page = this.addPage();
+        const slot: ParamSlot = { page, offset: page.used * this.slotBytes };
+        page.used += 1;
+        this.device.queue.writeBuffer(page.buffer, slot.offset, scanParams(count));
+        this.slots.set(count, slot);
+        return slot;
+    }
+
+    private addPage(): ParamPage {
+        if (this.pages.length === MAX_PARAM_PAGES) {
+            // Not destroyed: an encoded command buffer may still use it (see the class comment).
+            const oldest = this.pages.shift();
+            for (const [count, slot] of this.slots) if (slot.page === oldest) this.slots.delete(count);
+        }
+        const buffer = this.device.createBuffer({
+            label: `${this.label} scan params`,
+            size: PARAM_SLOTS_PER_PAGE * this.slotBytes,
+            usage: BUFFER_USAGE.uniform | BUFFER_USAGE.copyDst,
+        });
+        const bindGroup = this.device.createBindGroup({
+            label: `${this.label} scan`,
+            layout: this.kernels.layout,
+            entries: [...this.entries, { binding: SCAN_BINDING.params, resource: { buffer, size: SCAN_PARAMS_BYTES } }],
+        });
+        const page: ParamPage = { buffer, bindGroup, used: 0 };
+        this.pages.push(page);
+        return page;
     }
 }
 

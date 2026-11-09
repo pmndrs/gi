@@ -12,10 +12,22 @@
  *   CPU's;
  * - the indirect arguments sized from the compaction's GPU count for a
  *   64-thread kernel equal the CPU's (at 10 M: 78,000 workgroups, split over
- *   two rows), and a real `dispatchWorkgroupsIndirect` of a kernel built by
- *   the platform's kernel builder with the args module counts its
+ *   two rows of 39,044), and a real `dispatchWorkgroupsIndirect` of a kernel
+ *   built by the platform's kernel builder with the args module counts its
  *   invocations: exactly `count` within the count, every kept index read
  *   once, in increasing order, each with a non-zero flag.
+ *
+ * Cases the random input could miss, run the same way: the item at size 1
+ * kept; exactly one item kept; only the first item of the second tile (2048)
+ * kept; a scan of full-range values whose sum wraps past 2^32 (the GPU's u32
+ * sum against the CPU's wrapping one).
+ *
+ * Two more checks per path:
+ * - two encodes of one scan with different counts in one submit each keep
+ *   their count (each count has its own parameter slot);
+ * - the arguments writer never passes the per-dimension limit: counts of
+ *   65,535^2 + 1 and 2^32 - 1 with one item per workgroup (a scan's total of
+ *   one item, not real items, and never dispatched) give [65535, 65535, 1].
  *
  * Paths: the declared fallback (workgroup memory) on a second device made
  * from a new adapter without `subgroups` (NOTES: one adapter makes one
@@ -79,7 +91,35 @@ function makeInput(capacity: number): { values: Uint32Array<ArrayBuffer>; flags:
         const draw = random();
         flags[index] = draw < 0.25 ? 1 : draw < 0.5 ? 3 : 0;
     }
+    // Kept for sure: the only item at size 1, and the first item of the second tile.
+    flags[0] = 1;
+    flags[SCAN_TILE_ITEMS] = 1;
     return { values, flags };
+}
+
+/** One run's input: `count` items. */
+interface TestCase {
+    readonly name: string;
+    readonly values: Uint32Array<ArrayBuffer>;
+    readonly flags: Uint32Array<ArrayBuffer>;
+}
+
+/** The sizes over the shared input, then the cases it could miss. */
+function testCases(input: ReturnType<typeof makeInput>): TestCase[] {
+    const sized = testSizes().map((count) => ({ name: `${count} items`, values: input.values.subarray(0, count), flags: input.flags.subarray(0, count) }));
+    const onlyKept = (count: number, kept: number): Uint32Array<ArrayBuffer> => {
+        const flags = new Uint32Array(count);
+        flags[kept] = 1;
+        return flags;
+    };
+    const random = seeded(99);
+    const fullRange = Uint32Array.from({ length: 10_000 }, () => Math.floor(random() * 2 ** 32));
+    return [
+        ...sized,
+        { name: 'exactly one kept (item 3001 of 5000)', values: input.values.subarray(0, 5000), flags: onlyKept(5000, 3001) },
+        { name: 'only the second tile\'s first item kept', values: input.values.subarray(0, 2 * SCAN_TILE_ITEMS), flags: onlyKept(2 * SCAN_TILE_ITEMS, SCAN_TILE_ITEMS) },
+        { name: 'full-range values, the sum wraps past 2^32', values: fullRange, flags: input.flags.subarray(0, fullRange.length) },
+    ];
 }
 
 /** FNV-1a over words, so two paths' outputs can be compared without keeping both. */
@@ -158,6 +198,8 @@ interface Rig {
     readonly scanInPlace: GpuPrefixScan;
     readonly compaction: GpuCompaction;
     readonly args: GpuIndirectArgs;
+    /** Arguments from the scan's total, one item per workgroup: only read back, never dispatched. */
+    readonly limitArgs: GpuIndirectArgs;
     readonly consumer: ComputeKernel;
     readonly consumerGroup: GPUBindGroup;
     readonly buffers: readonly GPUBuffer[];
@@ -179,6 +221,7 @@ async function makeRig(device: GPUDevice, reduction: ComputeReduction, capacity:
         compute.createCompaction({ label: 'platform-compute compaction', flags, capacity }),
     ]);
     const args = await compute.createIndirectArgs({ label: 'platform-compute args', count: compaction.count, itemsPerWorkgroup: CONSUMER_WORKGROUP });
+    const limitArgs = await compute.createIndirectArgs({ label: 'platform-compute limit args', count: scan.total, itemsPerWorkgroup: 1 });
     const consumer = await kernels.computeKernel({
         label: 'platform-compute consumer',
         modules: [compute.indirectModule],
@@ -191,7 +234,7 @@ async function makeRig(device: GPUDevice, reduction: ComputeReduction, capacity:
         layout: consumer.ownLayouts[0],
         entries: [args.buffer, compaction.indices, flags, tally].map((resource, binding) => ({ binding, resource: { buffer: resource } })),
     });
-    return { device, compute, values, scanned, inPlace, flags, tally, scan, scanInPlace, compaction, args, consumer, consumerGroup, buffers: [values, scanned, inPlace, flags, tally] };
+    return { device, compute, values, scanned, inPlace, flags, tally, scan, scanInPlace, compaction, args, limitArgs, consumer, consumerGroup, buffers: [values, scanned, inPlace, flags, tally] };
 }
 
 function disposeRig(rig: Rig): void {
@@ -199,10 +242,12 @@ function disposeRig(rig: Rig): void {
     rig.scanInPlace.dispose();
     rig.compaction.dispose();
     rig.args.dispose();
+    rig.limitArgs.dispose();
     for (const buffer of rig.buffers) buffer.destroy();
 }
 
 interface SizeResult {
+    readonly name: string;
     readonly count: number;
     readonly scanTotal: number;
     readonly kept: number;
@@ -213,10 +258,10 @@ interface SizeResult {
 }
 
 /** Runs every utility at one size and checks it against the CPU; failures go to `failures`. */
-async function runSize(rig: Rig, count: number, input: ReturnType<typeof makeInput>, failures: string[], path: string): Promise<SizeResult> {
+async function runCase(rig: Rig, testCase: TestCase, failures: string[], path: string): Promise<SizeResult> {
     const { device } = rig;
-    const values = input.values.subarray(0, count);
-    const flags = input.flags.subarray(0, count);
+    const { values, flags } = testCase;
+    const count = values.length;
     if (count > 0) {
         device.queue.writeBuffer(rig.values, 0, values);
         device.queue.writeBuffer(rig.inPlace, 0, values);
@@ -248,7 +293,7 @@ async function runSize(rig: Rig, count: number, input: ReturnType<typeof makeInp
     const inPlace = await read(rig.inPlace, count);
     const indices = await read(rig.compaction.indices, kept);
 
-    const label = `${path}, ${count} items`;
+    const label = `${path}, ${testCase.name}`;
     const cpuScan = exclusiveScanOnCpu(values);
     const cpuKept = compactOnCpu(flags);
     if (scanTotal !== cpuScan.total) failures.push(`${label}: scan total ${scanTotal}, CPU ${cpuScan.total}`);
@@ -277,6 +322,7 @@ async function runSize(rig: Rig, count: number, input: ReturnType<typeof makeInp
     if (tally[3] !== 0) failures.push(`${label}: the indirect kernel found ${tally[3]} kept indices out of order or with a zero flag`);
 
     return {
+        name: testCase.name,
         count,
         scanTotal,
         kept,
@@ -287,13 +333,62 @@ async function runSize(rig: Rig, count: number, input: ReturnType<typeof makeInp
 }
 
 async function runPath(rig: Rig, input: ReturnType<typeof makeInput>, failures: string[], log: (line: string) => void): Promise<SizeResult[]> {
+    const path = rig.compute.reduction;
     const results: SizeResult[] = [];
-    for (const count of testSizes()) {
-        const result = await runSize(rig, count, input, failures, rig.compute.reduction);
+    for (const testCase of testCases(input)) {
+        const result = await runCase(rig, testCase, failures, path);
         results.push(result);
-        log(`${rig.compute.reduction}: ${count} items: total ${result.scanTotal}, kept ${result.kept}, args [${result.args}], ${result.invocations} invocations`);
+        log(`${path}: ${testCase.name}: total ${result.scanTotal}, kept ${result.kept}, args [${result.args}], ${result.invocations} invocations`);
     }
+    await checkTwoCountsInOneSubmit(rig, input, failures, path);
+    await checkWriterLimit(rig, failures, path, log);
     return results;
+}
+
+/** Two encodes of one scan with different counts, in one submit: each total is its own count's. */
+async function checkTwoCountsInOneSubmit(rig: Rig, input: ReturnType<typeof makeInput>, failures: string[], path: string): Promise<void> {
+    const { device } = rig;
+    const counts = [3000, 5000];
+    device.queue.writeBuffer(rig.values, 0, input.values.subarray(0, Math.max(...counts)));
+    const totals = device.createBuffer({ label: 'platform-compute two totals', size: 4 * counts.length, usage: GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST });
+    const encoder = device.createCommandEncoder({ label: 'platform-compute two counts' });
+    counts.forEach((count, index) => {
+        const pass = encoder.beginComputePass();
+        rig.scan.encode(pass, count);
+        pass.end();
+        encoder.copyBufferToBuffer(rig.scan.total.buffer, rig.scan.total.offset, totals, 4 * index, 4);
+    });
+    device.queue.submit([encoder.finish()]);
+    const gpu = [...new Uint32Array(await readBuffer(device, totals, 4 * counts.length))];
+    const cpu = counts.map((count) => exclusiveScanOnCpu(input.values.subarray(0, count)).total);
+    if (gpu.join(',') !== cpu.join(',')) failures.push(`${path}: two encodes in one submit gave totals [${gpu}], CPU [${cpu}]`);
+    totals.destroy();
+}
+
+/**
+ * Counts past 65,535^2 workgroups with one item per workgroup: the arguments
+ * must stay within the limit in both dimensions. The count is a scan's total
+ * of one item, so no real items are needed, and the arguments are only read.
+ */
+async function checkWriterLimit(rig: Rig, failures: string[], path: string, log: (line: string) => void): Promise<void> {
+    const { device } = rig;
+    const limit = device.limits.maxComputeWorkgroupsPerDimension;
+    for (const count of [limit * limit + 1, 0xffffffff]) {
+        device.queue.writeBuffer(rig.values, 0, new Uint32Array([count]));
+        const encoder = device.createCommandEncoder({ label: 'platform-compute writer limit' });
+        const pass = encoder.beginComputePass();
+        rig.scan.encode(pass, 1);
+        rig.limitArgs.encode(pass);
+        pass.end();
+        device.queue.submit([encoder.finish()]);
+        const words = new Uint32Array(await readBuffer(device, rig.limitArgs.buffer, 16));
+        const cpu = indirectArgsOnCpu(count, 1, limit);
+        const args = [...words.subarray(0, 3)];
+        log(`${path}: count ${count}, one item per workgroup: args [${args}]`);
+        if (args.join(',') !== cpu.join(',')) failures.push(`${path}: count ${count}: indirect args [${args}], CPU [${cpu}]`);
+        if (args[0] > limit || args[1] > limit) failures.push(`${path}: count ${count}: indirect args [${args}] pass the limit ${limit}`);
+        if (words[INDIRECT_ARGS_COUNT_WORD] !== count) failures.push(`${path}: count ${count}: the args' count is ${words[INDIRECT_ARGS_COUNT_WORD]}`);
+    }
 }
 
 interface TimingStats {
@@ -395,14 +490,14 @@ await runGpuTest(
         subgroups.forEach((result, index) => {
             const other = fallback[index];
             for (const [name, value] of Object.entries(result.digests)) {
-                if (other.digests[name] !== value) failures.push(`${result.count} items: ${name} differs between subgroups and the fallback`);
+                if (other.digests[name] !== value) failures.push(`${result.name}: ${name} differs between subgroups and the fallback`);
             }
         });
 
         const data: Record<string, unknown> = {
             subgroupSizes: [device.adapterInfo.subgroupMinSize, device.adapterInfo.subgroupMaxSize],
             maxComputeWorkgroupsPerDimension: device.limits.maxComputeWorkgroupsPerDimension,
-            sizes: subgroups.map((result) => result.count),
+            cases: subgroups.map((result) => result.name),
             kept: subgroups.map((result) => result.kept),
             args: subgroups.map((result) => result.args),
             memoryBytes: { scan: rig.scan.memoryBytes, compaction: rig.compaction.memoryBytes, args: rig.args.memoryBytes },

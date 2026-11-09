@@ -28,13 +28,15 @@ export function compactOnCpu(flags: Uint32Array): Uint32Array {
 
 /**
  * The workgroups `[x, y, z]` the indirect-arguments writer gives for `count`
- * items: `ceil(count / itemsPerWorkgroup)` workgroups, at most
- * `maxWorkgroupsPerDimension` along x, the rest in rows along y. No items:
- * `[0, 0, 1]`, which runs nothing.
+ * items: `ceil(count / itemsPerWorkgroup)` workgroups in as few rows along y
+ * as hold them, x as even as those rows allow, neither past
+ * `maxWorkgroupsPerDimension` (beyond limit² workgroups the dispatch is
+ * limit² and the kernel loops). No items: `[0, 0, 1]`, which runs nothing.
  */
 export function indirectArgsOnCpu(count: number, itemsPerWorkgroup: number, maxWorkgroupsPerDimension: number): [number, number, number] {
     const workgroups = Math.ceil(count / itemsPerWorkgroup);
-    const x = Math.min(workgroups, maxWorkgroupsPerDimension);
-    const y = x > 0 ? Math.ceil(workgroups / x) : 0;
+    if (workgroups === 0) return [0, 0, 1];
+    const y = Math.min(Math.ceil(workgroups / maxWorkgroupsPerDimension), maxWorkgroupsPerDimension);
+    const x = Math.min(Math.ceil(workgroups / y), maxWorkgroupsPerDimension);
     return [x, y, 1];
 }

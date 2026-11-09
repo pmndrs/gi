@@ -298,17 +298,22 @@ export function createScanBindGroups(device: GPUDevice, pipelines: ScanPipelines
     };
 }
 
-/** Records the three dispatches of one scan into `pass`. A scan of nothing records nothing. */
-export function encodeScan(pass: GPUComputePassEncoder, pipelines: ScanPipelines, groups: ScanBindGroups, maxPerDimension: number): void {
+/**
+ * Records the three dispatches of one scan into `pass`. A scan of nothing
+ * records nothing. `dynamicOffsets` go with every bind group, for layouts with
+ * dynamic offsets (the platform's utilities pick each encode's parameter slot
+ * that way).
+ */
+export function encodeScan(pass: GPUComputePassEncoder, pipelines: ScanPipelines, groups: ScanBindGroups, maxPerDimension: number, dynamicOffsets: readonly number[] = []): void {
     if (groups.count === 0) return;
     const tiles = Math.ceil(groups.count / SCAN_TILE_ITEMS);
     pass.setPipeline(pipelines.reduce);
-    pass.setBindGroup(0, groups.reduce);
+    pass.setBindGroup(0, groups.reduce, dynamicOffsets);
     dispatchWorkgroups2d(pass, tiles, maxPerDimension);
     pass.setPipeline(pipelines.tileSums);
-    pass.setBindGroup(0, groups.tileSums);
+    pass.setBindGroup(0, groups.tileSums, dynamicOffsets);
     pass.dispatchWorkgroups(1);
     pass.setPipeline(pipelines.downsweep);
-    pass.setBindGroup(0, groups.downsweep);
+    pass.setBindGroup(0, groups.downsweep, dynamicOffsets);
     dispatchWorkgroups2d(pass, tiles, maxPerDimension);
 }

@@ -27,12 +27,24 @@ describe('the CPU references', () => {
         expect(indirectArgsOnCpu(1, 64, 65535)).toEqual([1, 1, 1]);
         expect(indirectArgsOnCpu(64, 64, 65535)).toEqual([1, 1, 1]);
         expect(indirectArgsOnCpu(65, 64, 65535)).toEqual([2, 1, 1]);
-        // 10 M items in workgroups of 64: 156,250 workgroups, three rows.
-        expect(indirectArgsOnCpu(10_000_000, 64, 65535)).toEqual([65535, 3, 1]);
-        // Every workgroup the split runs covers at least the count, and no full row is wasted.
+        expect(indirectArgsOnCpu(65535 * 64, 64, 65535)).toEqual([65535, 1, 1]);
+        // 10 M items in workgroups of 64: 156,250 workgroups in three even rows, about 156k launched, not 196k.
+        expect(indirectArgsOnCpu(10_000_000, 64, 65535)).toEqual([52084, 3, 1]);
         const [x, y] = indirectArgsOnCpu(10_000_000, 64, 65535);
         expect(x * y * 64).toBeGreaterThanOrEqual(10_000_000);
-        expect(x * (y - 1) * 64).toBeLessThan(10_000_000);
+        expect(x * y * 64 - 10_000_000).toBeLessThan(y * 64);
+    });
+
+    it('never pass the per-dimension limit, whatever the u32 count', () => {
+        // 2^32 - 1 items, one per workgroup: 65,537 rows would be needed; both dimensions stop at the limit.
+        expect(indirectArgsOnCpu(0xffffffff, 1, 65535)).toEqual([65535, 65535, 1]);
+        for (const count of [65535 ** 2, 65535 ** 2 + 1, 0xffffffff]) {
+            for (const perWorkgroup of [1, 32, 64, 256]) {
+                const [x, y] = indirectArgsOnCpu(count, perWorkgroup, 65535);
+                expect(x).toBeLessThanOrEqual(65535);
+                expect(y).toBeLessThanOrEqual(65535);
+            }
+        }
     });
 });
 
@@ -60,8 +72,9 @@ describe('the GPU utilities WGSL', () => {
 
 /** Just enough of a device to make the utilities, recording what they were asked to do. */
 function fakeDevice(options: { features?: string[]; maxStorageBufferBindingSize?: number } = {}) {
-    const writes: Array<{ buffer: string; words: number[] }> = [];
-    const dispatches: Array<{ pipeline: string; workgroups: number[] }> = [];
+    const writes: Array<{ buffer: string; offset: number; words: number[] }> = [];
+    const dispatches: Array<{ pipeline: string; workgroups: number[]; offsets?: number[] }> = [];
+    let offsets: number[] = [];
     let pipeline = '';
     const buffer = (descriptor: GPUBufferDescriptor) => {
         const mapped = new ArrayBuffer(descriptor.size);
@@ -69,7 +82,7 @@ function fakeDevice(options: { features?: string[]; maxStorageBufferBindingSize?
     };
     const device = {
         features: new Set(options.features ?? []),
-        limits: { maxStorageBufferBindingSize: options.maxStorageBufferBindingSize ?? 1 << 27, maxComputeWorkgroupsPerDimension: 65535 },
+        limits: { maxStorageBufferBindingSize: options.maxStorageBufferBindingSize ?? 1 << 27, maxComputeWorkgroupsPerDimension: 65535, minUniformBufferOffsetAlignment: 256 },
         createBuffer: buffer,
         createBindGroup: (descriptor: GPUBindGroupDescriptor) => ({ ...descriptor }),
         createBindGroupLayout: (descriptor: GPUBindGroupLayoutDescriptor) => ({ ...descriptor }),
@@ -77,13 +90,13 @@ function fakeDevice(options: { features?: string[]; maxStorageBufferBindingSize?
         createShaderModule: (descriptor: GPUShaderModuleDescriptor) => ({ ...descriptor }),
         createComputePipelineAsync: async (descriptor: GPUComputePipelineDescriptor) => ({ label: descriptor.compute.entryPoint }),
         queue: {
-            writeBuffer: (target: GPUBuffer, _offset: number, data: Uint32Array) => writes.push({ buffer: target.label, words: [...data] }),
+            writeBuffer: (target: GPUBuffer, offset: number, data: Uint32Array) => writes.push({ buffer: target.label, offset, words: [...data] }),
         },
     } as unknown as GPUDevice;
     const pass = {
         setPipeline: (chosen: GPUComputePipeline) => (pipeline = chosen.label),
-        setBindGroup() {},
-        dispatchWorkgroups: (...workgroups: number[]) => dispatches.push({ pipeline, workgroups }),
+        setBindGroup: (_index: number, _group: GPUBindGroup, dynamicOffsets: number[] = []) => (offsets = [...dynamicOffsets]),
+        dispatchWorkgroups: (...workgroups: number[]) => dispatches.push({ pipeline, workgroups, ...(offsets.length > 0 ? { offsets } : {}) }),
     } as unknown as GPUComputePassEncoder;
     const storage = (size: number) => buffer({ label: 'caller buffer', size, usage: 0x80 }) as unknown as GPUBuffer;
     return { device, pass, writes, dispatches, storage };
@@ -112,21 +125,41 @@ describe('PlatformGpuCompute', () => {
         scan.encode(gpu.pass, 10_000);
         const tiles = Math.ceil(10_000 / SCAN_TILE_ITEMS);
         expect(gpu.dispatches).toEqual([
-            { pipeline: 'scanReduce', workgroups: [tiles, 1] },
-            { pipeline: 'scanAcrossTiles', workgroups: [1] },
-            { pipeline: 'scanDownsweep', workgroups: [tiles, 1] },
+            { pipeline: 'scanReduce', workgroups: [tiles, 1], offsets: [0] },
+            { pipeline: 'scanAcrossTiles', workgroups: [1], offsets: [0] },
+            { pipeline: 'scanDownsweep', workgroups: [tiles, 1], offsets: [0] },
         ]);
-        expect(gpu.writes).toEqual([{ buffer: 'test scan params', words: [10_000, tiles, 0, 0] }]);
-        // The same count again writes nothing; zero items run only the kernel that writes the total.
+        expect(gpu.writes).toEqual([{ buffer: 'test scan params', offset: 0, words: [10_000, tiles, 0, 0] }]);
+        // The same count again reuses its slot; zero items get a slot of their own and run only the kernel that writes the total.
         gpu.dispatches.length = 0;
         scan.encode(gpu.pass, 10_000);
         expect(gpu.writes).toHaveLength(1);
         gpu.dispatches.length = 0;
         scan.encode(gpu.pass, 0);
-        expect(gpu.dispatches).toEqual([{ pipeline: 'scanAcrossTiles', workgroups: [1] }]);
-        expect(gpu.writes[1].words).toEqual([0, 0, 0, 0]);
+        expect(gpu.dispatches).toEqual([{ pipeline: 'scanAcrossTiles', workgroups: [1], offsets: [256] }]);
+        expect(gpu.writes[1]).toEqual({ buffer: 'test scan params', offset: 256, words: [0, 0, 0, 0] });
         expect(() => scan.encode(gpu.pass, 10_001)).toThrow(RangeError);
         expect(scan.total.offset).toBe(0);
+    });
+
+    it('gives every count its own slot, written once, so encodes in one submit keep their counts', async () => {
+        const gpu = fakeDevice();
+        const compute = new PlatformGpuCompute(gpu.device);
+        const scan = await compute.createPrefixScan({ label: 'test', input: gpu.storage(4 * 1000), capacity: 1000 });
+        // 70 different counts (more than the 64 slots of 4 pages), then the first ones again.
+        for (let count = 1; count <= 70; count++) scan.encode(gpu.pass, count);
+        const firstPageWrites = gpu.writes.filter((write) => write.words[0] <= 16);
+        expect(firstPageWrites.map((write) => write.offset)).toEqual(Array.from({ length: 16 }, (_, slot) => slot * 256));
+        // One write per count: a slot, once written, is never written again.
+        expect(gpu.writes).toHaveLength(70);
+        expect(new Set(gpu.writes.map((write) => write.words[0])).size).toBe(70);
+        // At most 4 pages are kept: count 1's page was dropped, so it gets a new slot.
+        scan.encode(gpu.pass, 1);
+        expect(gpu.writes).toHaveLength(71);
+        // Count 70 is still kept, and reuses its slot.
+        scan.encode(gpu.pass, 70);
+        expect(gpu.writes).toHaveLength(71);
+        expect(scan.memoryBytes).toBe((Math.ceil(1000 / SCAN_TILE_ITEMS) + 1) * 4 + 4 + 4 * 16 * 256);
     });
 
     it('reports the memory it allocated, the kept indices included when it made them', async () => {
@@ -134,7 +167,8 @@ describe('PlatformGpuCompute', () => {
         const compute = new PlatformGpuCompute(gpu.device);
         const own = await compute.createCompaction({ label: 'test', flags: gpu.storage(4 * 5000), capacity: 5000 });
         const given = await compute.createCompaction({ label: 'test', flags: gpu.storage(4 * 5000), output: gpu.storage(4 * 5000), capacity: 5000 });
-        const scratch = (Math.ceil(5000 / SCAN_TILE_ITEMS) + 1) * 4 + 16 + 4;
+        // Tile sums, the count word, and one page of 16 parameter slots of 256 bytes.
+        const scratch = (Math.ceil(5000 / SCAN_TILE_ITEMS) + 1) * 4 + 4 + 16 * 256;
         expect(given.memoryBytes).toBe(scratch);
         expect(own.memoryBytes).toBe(scratch + 5000 * 4);
     });
