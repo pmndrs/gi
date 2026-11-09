@@ -20,10 +20,10 @@ import { GpuHplocBuilder } from '../../../../packages/bvh/src/gpu-hploc.ts';
 import { GpuLbvhBuilder, type GpuLbvhGeometry } from '../../../../packages/bvh/src/gpu-lbvh.ts';
 import { treeSahCost } from '../../../../packages/bvh/src/layout-check.ts';
 import { createTinyBvhBuilder, type TinyBvhBuilder } from '../../../../packages/bvh/src/tinybvh.ts';
-import { GPU_BUILD_LOADED_MS, GPU_BUILD_LOADED_RUNS, GPU_BUILD_TIMED_RUNS, TOP_LEVEL_REBUILD_RUNS, type TracerId } from './config.ts';
+import { GPU_BUILD_LOADED_MS, GPU_BUILD_LOADED_RUNS, GPU_BUILD_TIMED_RUNS, RC_LOADED_DISPATCHES, TOP_LEVEL_REBUILD_RUNS, type TracerId } from './config.ts';
 import { measureDispatches, type DispatchTimer } from './dispatch-timer.ts';
 import type { BenchInstance, BenchMeshGeometry } from './gltf-geometry.ts';
-import type { GpuBuildResult, ModeResult, OursBuildResult, TmbuildBuildResult, TraceMode } from './results.ts';
+import type { GpuBuildResult, LoadedTiming, ModeResult, OursBuildResult, TmbuildBuildResult, TraceMode } from './results.ts';
 import { buildMeshBvhWithTmbvh } from './tmbvh-convert.ts';
 import { maximum, median, megaRaysPerSecond, sum } from './statistics.ts';
 
@@ -140,7 +140,7 @@ export async function buildGpuScene(
         }
         const loadedRuns = Math.min(GPU_BUILD_LOADED_RUNS.max, Math.max(GPU_BUILD_LOADED_RUNS.min, Math.round(GPU_BUILD_LOADED_MS / Math.max(1, median(gpuMs)))));
         const loadedStart = performance.now();
-        loadedMs = await timeBuildsBackToBack(device, (encoder, timestampWrites) => batch.encode(encoder, timestampWrites), loadedRuns);
+        loadedMs = await timePassesBackToBack(device, (encoder, timestampWrites) => batch.encode(encoder, timestampWrites), loadedRuns);
         loadedSeconds = (performance.now() - loadedStart) / 1000;
         const statsStart = performance.now();
         builds = await batch.finish();
@@ -196,13 +196,14 @@ export async function buildGpuScene(
 }
 
 /**
- * Times `count` builds submitted back to back, without waiting between
- * them, so the GPU stays loaded: each build is its own compute pass with
- * timestamps, and the builds go in submits of a few (a single submit of
- * seconds of work could trip Windows' GPU timeout). Returns each build's ms;
- * without timestamp queries, one value, the wall time over the count.
+ * Times `count` passes (GPU builds, trace dispatches) submitted back to back,
+ * without waiting between them, so the GPU stays loaded: each pass is its own
+ * compute pass with timestamps, and the passes go in submits of a few (a
+ * single submit of seconds of work could trip Windows' GPU timeout). Returns
+ * each pass's ms; without timestamp queries, one value, the wall time over
+ * the count.
  */
-async function timeBuildsBackToBack(
+export async function timePassesBackToBack(
     device: GPUDevice,
     encode: (encoder: GPUCommandEncoder, timestampWrites?: GPUComputePassTimestampWrites) => void,
     count: number,
@@ -392,10 +393,12 @@ export interface OursTracerRun {
 export interface TimingPlan {
     warmups: number;
     timed: number;
-}
-
-function summarizeMode(tracer: TracerId, mode: TraceMode, rays: number, timer: DispatchTimer, timing: Awaited<ReturnType<typeof measureDispatches>>): ModeResult {
-    return { tracer, mode, rays, timing, timingSource: timer.source, mraysPerSecond: megaRaysPerSecond(rays, timing.medianMs) };
+    /**
+     * After the timed dispatches, submit the same dispatch back to back for
+     * about this long and time each (`ModeResult.loaded`). 0 or absent: no
+     * loaded section (the probe-grid bench's behaviour).
+     */
+    loadedMs?: number;
 }
 
 /** Pulls `t` out of an array of `GiHitRecord`s. */
@@ -419,56 +422,162 @@ export async function runOursTracer(
     rays: OursRayBuffers,
     plan: TimingPlan,
 ): Promise<OursTracerRun> {
+    return probeGridRun(await runOursTracerOnSets(device, timer, tracer, data, probeGridSets(rays), plan));
+}
+
+/**
+ * Uploads `data`, times our batch kernels on each set (see
+ * {@link timeRaySets}), and frees everything it made on the GPU.
+ */
+export async function runOursTracerOnSets(
+    device: GPUDevice,
+    timer: DispatchTimer,
+    tracer: 'ours-tinybvh' | 'ours-tmbuild' | 'ours-lbvh' | 'ours-hploc',
+    data: TraceSceneData,
+    sets: readonly RaySetBuffer[],
+    plan: TimingPlan,
+): Promise<RaySetRun[]> {
     const resources = new Resources();
     try {
         const kernel = await TraceBatchKernel.create(device, tracer);
         const scene = resources.add(uploadTraceScene(device, data, tracer));
-
-        const hits = resources.add(
-            device.createBuffer({
-                label: `${tracer} hits`,
-                size: rays.closestCount * HIT_RECORD_BYTES,
-                usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
-            }),
+        return await timeRaySets(device, timer, tracer, sets, plan, (encoder, set, results, timestampWrites) =>
+            kernel.encode(encoder, scene, { mode: set.mode, rays: set.rays, results, count: set.count, timestampWrites }),
         );
-        const modes: ModeResult[] = [];
-
-        const closestTiming = await measureDispatches(
-            () =>
-                timer.time((encoder, timestampWrites) =>
-                    kernel.encode(encoder, scene, { mode: 'closest', rays: rays.closestRays, results: hits, count: rays.closestCount, timestampWrites }),
-                ),
-            plan.warmups,
-            plan.timed,
-        );
-        modes.push(summarizeMode(tracer, 'closest', rays.closestCount, timer, closestTiming));
-        const hitRecords = await readBuffer(device, hits, rays.closestCount * HIT_RECORD_BYTES);
-
-        let blocked: Uint32Array | null = null;
-        if (rays.shadowRays && rays.shadowCount > 0) {
-            const shadowRays = rays.shadowRays;
-            const occlusion = resources.add(
-                device.createBuffer({
-                    label: `${tracer} occlusion`,
-                    size: rays.shadowCount * 4,
-                    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
-                }),
-            );
-            const anyTiming = await measureDispatches(
-                () =>
-                    timer.time((encoder, timestampWrites) =>
-                        kernel.encode(encoder, scene, { mode: 'any', rays: shadowRays, results: occlusion, count: rays.shadowCount, timestampWrites }),
-                    ),
-                plan.warmups,
-                plan.timed,
-            );
-            modes.push(summarizeMode(tracer, 'any', rays.shadowCount, timer, anyTiming));
-            blocked = new Uint32Array(await readBuffer(device, occlusion, rays.shadowCount * 4));
-        }
-        return { modes, hitRecords, closestT: extractHitDistances(hitRecords), blocked };
     } finally {
         resources.destroyAll();
     }
+}
+
+/** One batch of rays to time: closest-hit or any-hit. */
+export interface RaySetBuffer {
+    /** The set's name in the results (`ModeResult.raySet`); absent for the probe-grid bench's two sets. */
+    raySet?: string;
+    mode: TraceMode;
+    rays: GPUBuffer;
+    count: number;
+}
+
+/**
+ * Records one batch dispatch of `set` writing into `results` (hit records for
+ * closest, one word per ray for any), passing `timestampWrites` to its pass.
+ */
+export type EncodeRaySet = (
+    encoder: GPUCommandEncoder,
+    set: RaySetBuffer,
+    results: GPUBuffer,
+    timestampWrites: GPUComputePassTimestampWrites | undefined,
+) => void;
+
+/** What one tracer gave for one set: its timing, and the answers of its last dispatch. */
+export interface RaySetRun {
+    mode: ModeResult;
+    /** `GiHitRecord`s for closest, one word per ray (1 = blocked) for any. */
+    results: ArrayBuffer;
+}
+
+/** The probe-grid bench's two sets: closest, then any when there are shadow rays. */
+export function probeGridSets(rays: OursRayBuffers): RaySetBuffer[] {
+    const sets: RaySetBuffer[] = [{ mode: 'closest', rays: rays.closestRays, count: rays.closestCount }];
+    if (rays.shadowRays && rays.shadowCount > 0) sets.push({ mode: 'any', rays: rays.shadowRays, count: rays.shadowCount });
+    return sets;
+}
+
+/** The probe-grid bench's two set runs as the record its agreement check reads. */
+export function probeGridRun(runs: readonly RaySetRun[]): OursTracerRun {
+    const closest = runs.find((run) => run.mode.mode === 'closest');
+    if (!closest) throw new Error('no closest-hit set was timed');
+    const any = runs.find((run) => run.mode.mode === 'any');
+    return {
+        modes: runs.map((run) => run.mode),
+        hitRecords: closest.results,
+        closestT: extractHitDistances(closest.results),
+        blocked: any ? new Uint32Array(any.results) : null,
+    };
+}
+
+/**
+ * The loaded section: the set's dispatch submitted back to back for about
+ * `loadedMs`, each timed on its own, so the GPU runs at its loaded clock
+ * (DECISIONS 2026-11-05: pass/fail timing is taken GPU-bound).
+ */
+async function timeLoaded(
+    device: GPUDevice,
+    encode: (encoder: GPUCommandEncoder, timestampWrites?: GPUComputePassTimestampWrites) => void,
+    rays: number,
+    singleMedianMs: number,
+    loadedMs: number,
+): Promise<LoadedTiming> {
+    const dispatches = Math.min(
+        RC_LOADED_DISPATCHES.max,
+        Math.max(RC_LOADED_DISPATCHES.min, Math.round(loadedMs / Math.max(singleMedianMs, 1e-3))),
+    );
+    const start = performance.now();
+    const samplesMs = await timePassesBackToBack(device, encode, dispatches);
+    const medianMs = median(samplesMs);
+    return {
+        medianMs,
+        minMs: Math.min(...samplesMs),
+        maxMs: Math.max(...samplesMs),
+        dispatches,
+        seconds: (performance.now() - start) / 1000,
+        mraysPerSecond: megaRaysPerSecond(rays, medianMs),
+    };
+}
+
+/**
+ * Times each set with one tracer, in order: warm-ups, then the timed
+ * dispatches (each submitted and waited for alone, as the bench always has),
+ * then the loaded section when the plan asks for one, then one read of the
+ * answers. Each set's result buffer is freed before the next set starts.
+ */
+export async function timeRaySets(
+    device: GPUDevice,
+    timer: DispatchTimer,
+    tracer: TracerId,
+    sets: readonly RaySetBuffer[],
+    plan: TimingPlan,
+    encode: EncodeRaySet,
+): Promise<RaySetRun[]> {
+    const runs: RaySetRun[] = [];
+    for (const set of sets) {
+        const resultBytes = set.count * (set.mode === 'closest' ? HIT_RECORD_BYTES : 4);
+        const results = device.createBuffer({
+            label: `${tracer} ${set.raySet ?? set.mode} results`,
+            size: resultBytes,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+        });
+        try {
+            const timing = await measureDispatches(
+                () => timer.time((encoder, timestampWrites) => encode(encoder, set, results, timestampWrites)),
+                plan.warmups,
+                plan.timed,
+            );
+            const mode: ModeResult = {
+                tracer,
+                mode: set.mode,
+                rays: set.count,
+                timing,
+                timingSource: timer.source,
+                mraysPerSecond: megaRaysPerSecond(set.count, timing.medianMs),
+            };
+            if (set.raySet !== undefined) mode.raySet = set.raySet;
+            const loadedMs = plan.loadedMs ?? 0;
+            if (loadedMs > 0) {
+                mode.loaded = await timeLoaded(
+                    device,
+                    (encoder, timestampWrites) => encode(encoder, set, results, timestampWrites),
+                    set.count,
+                    timing.medianMs,
+                    loadedMs,
+                );
+            }
+            runs.push({ mode, results: await readBuffer(device, results, resultBytes) });
+        } finally {
+            results.destroy();
+        }
+    }
+    return runs;
 }
 
 /** Creates a storage buffer from packed rays. The caller owns (and destroys) it. */
@@ -504,6 +613,43 @@ export async function estimateNsPerRay(device: GPUDevice, timer: DispatchTimer, 
         return (timing.medianMs * 1e6) / count;
     } finally {
         resources.destroyAll();
+    }
+}
+
+/** Our scene on the GPU for untimed dispatches whose answers make the next rays. */
+export interface OursPrepareTracer {
+    /** One untimed dispatch; returns hit records (closest) or one word per ray, 1 = blocked (any). */
+    trace(mode: TraceMode, rays: GPUBuffer, count: number): Promise<ArrayBuffer>;
+    dispose(): void;
+}
+
+/**
+ * Uploads `data` once for several untimed dispatches (the `rc` sets, where
+ * each set is aimed from the hits of the one before). The caller disposes it.
+ */
+export async function openOursPrepareTracer(device: GPUDevice, data: TraceSceneData): Promise<OursPrepareTracer> {
+    const resources = new Resources();
+    try {
+        const kernel = await TraceBatchKernel.create(device, 'ours prepare');
+        const scene = resources.add(uploadTraceScene(device, data, 'ours prepare'));
+        return {
+            async trace(mode, rays, count) {
+                const bytes = count * (mode === 'closest' ? HIT_RECORD_BYTES : 4);
+                const results = device.createBuffer({ label: `prepare ${mode}`, size: bytes, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
+                try {
+                    const encoder = device.createCommandEncoder({ label: `prepare ${mode}` });
+                    kernel.encode(encoder, scene, { mode, rays, results, count });
+                    device.queue.submit([encoder.finish()]);
+                    return await readBuffer(device, results, bytes);
+                } finally {
+                    results.destroy();
+                }
+            },
+            dispose: () => resources.destroyAll(),
+        };
+    } catch (error) {
+        resources.destroyAll();
+        throw error;
     }
 }
 

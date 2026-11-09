@@ -5,10 +5,13 @@
  *
  * Metric names are `<group>/<what>_<unit>`, with the tracer and mode in the
  * group, for example `ours-tinybvh/closest/mrays_per_s` or `tmbvh/build_ms_total`.
+ * Ray-set mode `rc` (RC1.5) puts `rc/<set>/` in front, for example
+ * `rc/probe/platform/closest/mrays_per_s`, adds `rc/<set>/rays` and the like,
+ * the per-frame `rc/total/<tracer>/predicted_ms`, and `note/ray_set_rc,1`.
  */
 
-import type { AgreementResult, ModeResult, SceneResult, SyntheticResult, TraceBenchData } from './results.ts';
-import { median } from './statistics.ts';
+import { RC_FRAME_SETS, type AgreementResult, type ModeResult, type RcSetName, type SceneResult, type SyntheticResult, type TraceBenchData } from './results.ts';
+import { median, sum } from './statistics.ts';
 
 export interface MetricRow {
     scene: string;
@@ -16,8 +19,9 @@ export interface MetricRow {
     value: number;
 }
 
-function modeRows(scene: string, mode: ModeResult): MetricRow[] {
-    const prefix = `${mode.tracer}/${mode.mode}`;
+/** `group` goes before the tracer: empty for the probe-grid bench, `rc/<set>/` for ray-set mode `rc`. */
+function modeRows(scene: string, mode: ModeResult, group = ''): MetricRow[] {
+    const prefix = `${group}${mode.tracer}/${mode.mode}`;
     return [
         { scene, metric: `${prefix}/mrays_per_s`, value: mode.mraysPerSecond },
         { scene, metric: `${prefix}/gpu_ms_median`, value: mode.timing.medianMs },
@@ -50,13 +54,10 @@ function isThinned(result: SceneResult): boolean | null {
     return typeof result.thinned === 'boolean' ? result.thinned : null;
 }
 
-function sceneRows(result: SceneResult): MetricRow[] {
+/** The probe-grid bench's ray counts. Ray-set mode `rc` has its own (`rcRows`). */
+function probeGridRows(result: SceneResult): MetricRow[] {
     const scene = result.scene;
     const rows: MetricRow[] = [
-        { scene, metric: 'scene/meshes', value: result.meshCount },
-        { scene, metric: 'scene/instances', value: result.instanceCount },
-        { scene, metric: 'scene/triangles_unique', value: result.uniqueTriangles },
-        { scene, metric: 'scene/triangles_instanced', value: result.instancedTriangles },
         { scene, metric: 'rays/probes', value: result.probeCount },
         { scene, metric: 'rays/per_probe', value: result.raysPerProbe },
         { scene, metric: 'rays/closest', value: result.closestRays },
@@ -71,6 +72,131 @@ function sceneRows(result: SceneResult): MetricRow[] {
     const thinned = isThinned(result);
     if (thinned !== null) rows.push({ scene, metric: 'probes/thinned', value: thinned ? 1 : 0 });
     if (result.estimatedNsPerRay !== null) rows.push({ scene, metric: 'rays/estimated_ns_per_ray', value: result.estimatedNsPerRay });
+    return rows;
+}
+
+/** One set's predicted time: its rays over the tracer's rate on that set. */
+export interface RcSetPrediction {
+    set: RcSetName;
+    rays: number;
+    mraysPerSecond: number;
+    ms: number;
+}
+
+export interface RcPrediction {
+    tracer: string;
+    /** `loaded` when every set had a loaded section (the GPU-bound number), else `single` dispatches. */
+    source: 'loaded' | 'single';
+    /** The per-frame sets (RC_FRAME_SETS), each traced. */
+    sets: RcSetPrediction[];
+    /** Their sum: the predicted tracing time of one frame. */
+    totalMs: number;
+}
+
+/**
+ * Per tracer, the predicted tracing time of one frame of the radiance-cache
+ * baseline: for each per-frame set (probe, bounce and their shadow rays;
+ * placement isn't one, as Capsaicin places probes from its visibility
+ * buffer), rays / rate, and their sum. The rate is the loaded section's when
+ * there is one. Each set was traced as one dispatch of exactly its rays, so a
+ * set's prediction is that dispatch's median time; the sum is the new number.
+ * A tracer missing a per-frame set that has rays gets no prediction.
+ */
+export function rcPredictions(result: SceneResult): RcPrediction[] {
+    if (!result.rc) return [];
+    const tracers = [...new Set(result.modes.filter((mode) => mode.raySet !== undefined).map((mode) => mode.tracer))];
+    const predictions: RcPrediction[] = [];
+    for (const tracer of tracers) {
+        const sets: RcSetPrediction[] = [];
+        let allLoaded = true;
+        let complete = true;
+        for (const name of RC_FRAME_SETS) {
+            const rays = result.rc.sets.find((entry) => entry.set === name)?.rays ?? 0;
+            if (rays === 0) continue;
+            const mode = result.modes.find((entry) => entry.tracer === tracer && entry.raySet === name);
+            if (!mode) {
+                complete = false;
+                break;
+            }
+            if (!mode.loaded) allLoaded = false;
+            const mraysPerSecond = mode.loaded?.mraysPerSecond ?? mode.mraysPerSecond;
+            sets.push({ set: name, rays, mraysPerSecond, ms: rays / (mraysPerSecond * 1000) });
+        }
+        if (!complete) continue;
+        predictions.push({ tracer, source: allLoaded ? 'loaded' : 'single', sets, totalMs: sum(sets.map((entry) => entry.ms)) });
+    }
+    return predictions;
+}
+
+/** Ray-set mode `rc` (RC1.5): what was placed, each set's rays, hits and checks, each tracer's rates and the predictions. */
+function rcRows(result: SceneResult): MetricRow[] {
+    const rc = result.rc;
+    if (!rc) return [];
+    const scene = result.scene;
+    const rows: MetricRow[] = [
+        // Which rays these are: Capsaicin GI-1.2-shaped sets from the first bookmark, not the probe grid.
+        { scene, metric: 'note/ray_set_rc', value: 1 },
+        { scene, metric: 'rc/view_width', value: rc.width },
+        { scene, metric: 'rc/view_height', value: rc.height },
+        { scene, metric: 'rc/view_fov_y_deg', value: rc.camera.fovYDeg },
+        { scene, metric: 'rc/tiles', value: rc.tiles },
+        { scene, metric: 'rc/probes_placed', value: rc.probesPlaced },
+        { scene, metric: 'rc/tiles_missed', value: rc.tilesMissed },
+        { scene, metric: 'rc/rays_per_probe', value: rc.raysPerProbe },
+        { scene, metric: 'rc/multi_bounce_ratio', value: rc.multiBounceRatio },
+        { scene, metric: 'rc/light_is_sun', value: rc.lightKind === 'sun' ? 1 : 0 },
+        { scene, metric: 'rc/light_count', value: rc.lightCount },
+    ];
+    for (const entry of rc.sets) {
+        const prefix = `rc/${entry.set}`;
+        rows.push(
+            { scene, metric: `${prefix}/rays`, value: entry.rays },
+            { scene, metric: `${prefix}/hit_fraction`, value: entry.hitFraction },
+            { scene, metric: `${prefix}/oracle_rays`, value: entry.oracleRays },
+            { scene, metric: `${prefix}/oracle_mismatches`, value: entry.oracleMismatches },
+            { scene, metric: `${prefix}/oracle_ambiguous`, value: entry.oracleAmbiguous },
+        );
+        if (entry.facingAway !== undefined) rows.push({ scene, metric: `${prefix}/facing_away`, value: entry.facingAway });
+        if (entry.agreementRate !== null) rows.push({ scene, metric: `${prefix}/agreement_ours-tinybvh_vs_platform`, value: entry.agreementRate });
+    }
+    for (const mode of result.modes) {
+        if (mode.raySet === undefined) continue;
+        const prefix = `rc/${mode.raySet}/${mode.tracer}/${mode.mode}`;
+        rows.push(...modeRows(scene, mode, `rc/${mode.raySet}/`));
+        if (mode.loaded) {
+            rows.push(
+                { scene, metric: `${prefix}/loaded_mrays_per_s`, value: mode.loaded.mraysPerSecond },
+                { scene, metric: `${prefix}/loaded_gpu_ms_median`, value: mode.loaded.medianMs },
+                { scene, metric: `${prefix}/loaded_gpu_ms_min`, value: mode.loaded.minMs },
+                { scene, metric: `${prefix}/loaded_gpu_ms_max`, value: mode.loaded.maxMs },
+                { scene, metric: `${prefix}/loaded_dispatches`, value: mode.loaded.dispatches },
+                { scene, metric: `${prefix}/loaded_seconds`, value: mode.loaded.seconds },
+            );
+        }
+        const mraysPerSecond = mode.loaded?.mraysPerSecond ?? mode.mraysPerSecond;
+        rows.push({ scene, metric: `${prefix}/predicted_ms`, value: mode.rays / (mraysPerSecond * 1000) });
+    }
+    for (const prediction of rcPredictions(result)) {
+        rows.push(
+            { scene, metric: `rc/total/${prediction.tracer}/predicted_ms`, value: prediction.totalMs },
+            // 1 when every set's rate came from its loaded section, 0 when from single dispatches.
+            { scene, metric: `rc/total/${prediction.tracer}/predicted_from_loaded`, value: prediction.source === 'loaded' ? 1 : 0 },
+        );
+    }
+    const frameRays = sum(rc.sets.filter((entry) => RC_FRAME_SETS.includes(entry.set)).map((entry) => entry.rays));
+    rows.push({ scene, metric: 'rc/total/rays', value: frameRays });
+    return rows;
+}
+
+function sceneRows(result: SceneResult): MetricRow[] {
+    const scene = result.scene;
+    const rows: MetricRow[] = [
+        { scene, metric: 'scene/meshes', value: result.meshCount },
+        { scene, metric: 'scene/instances', value: result.instanceCount },
+        { scene, metric: 'scene/triangles_unique', value: result.uniqueTriangles },
+        { scene, metric: 'scene/triangles_instanced', value: result.instancedTriangles },
+        ...(result.rc ? rcRows(result) : probeGridRows(result)),
+    ];
     const ours = result.ours;
     if (ours) {
         rows.push(
@@ -177,7 +303,8 @@ function sceneRows(result: SceneResult): MetricRow[] {
             { scene, metric: 'tmbvh/memory_bytes', value: tmbvh.bytesTotal },
         );
     }
-    for (const mode of result.modes) rows.push(...modeRows(scene, mode));
+    // Ray-set mode `rc`'s timings are in rcRows, under their set.
+    for (const mode of result.modes) if (mode.raySet === undefined) rows.push(...modeRows(scene, mode));
     for (const agreement of result.agreement) rows.push(...agreementRows(scene, agreement));
     return rows;
 }

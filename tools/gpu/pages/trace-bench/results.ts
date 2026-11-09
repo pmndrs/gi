@@ -18,6 +18,23 @@ export interface TimingSummary {
     samplesMs: number[];
 }
 
+/**
+ * A loaded section: the same dispatch submitted back to back, each timed on
+ * its own (ray-set mode `rc`). Without timestamp queries, one wall-clock
+ * value over the count.
+ */
+export interface LoadedTiming {
+    medianMs: number;
+    minMs: number;
+    maxMs: number;
+    /** Dispatches submitted. */
+    dispatches: number;
+    /** The section's wall time. */
+    seconds: number;
+    /** Million rays per second at the median time. */
+    mraysPerSecond: number;
+}
+
 export interface ModeResult {
     tracer: TracerId;
     mode: TraceMode;
@@ -27,6 +44,54 @@ export interface ModeResult {
     timingSource: TimingSource;
     /** Million rays per second at the median time. */
     mraysPerSecond: number;
+    /** Ray-set mode `rc`: which set (`RcSetName`). Absent for the probe-grid bench. */
+    raySet?: string;
+    /** Ray-set mode `rc`: the loaded section, when the plan asked for one. */
+    loaded?: LoadedTiming;
+}
+
+/** The `rc` sets (rc-rays.ts), in the order they are made and timed. */
+export const RC_SET_NAMES = ['placement', 'probe', 'bounce', 'shadow-probe', 'shadow-bounce'] as const;
+export type RcSetName = (typeof RC_SET_NAMES)[number];
+/** The sets in the per-frame sum. Placement isn't: Capsaicin reads the probe's pixel from its visibility buffer. */
+export const RC_FRAME_SETS: readonly RcSetName[] = ['probe', 'bounce', 'shadow-probe', 'shadow-bounce'];
+
+export interface RcSetResult {
+    set: RcSetName;
+    mode: TraceMode;
+    rays: number;
+    /** Closest: rays that hit geometry. Any: rays that were blocked. From the platform tracer's answers. */
+    hits: number;
+    /** `hits / rays`, or 0 for an empty set. */
+    hitFraction: number;
+    /** Shadow sets: hits of the source set that got no shadow ray because they face away from their light. */
+    facingAway?: number;
+    /** Rays checked against the brute-force reference, and how they came out. */
+    oracleRays: number;
+    oracleMismatches: number;
+    oracleAmbiguous: number;
+    /** `ours-tinybvh` against `platform` over every ray: closest-hit agreement or blocked agreement. Null if one didn't run. */
+    agreementRate: number | null;
+}
+
+/** Ray-set mode `rc` (RC1.5): what was placed and traced, per scene. */
+export interface RcSceneResult {
+    camera: { name: string; position: number[]; target: number[]; fovYDeg: number };
+    width: number;
+    height: number;
+    tileSize: number;
+    tiles: number;
+    /** Tiles whose placement ray hit something (one probe each). */
+    probesPlaced: number;
+    /** Tiles that saw sky or nothing. */
+    tilesMissed: number;
+    raysPerProbe: number;
+    multiBounceRatio: number;
+    seed: number;
+    /** `sun`: every shadow ray goes to the manifest's directional light; `local`: a uniformly chosen point or spot light. */
+    lightKind: 'sun' | 'local';
+    lightCount: number;
+    sets: RcSetResult[];
 }
 
 export interface OursBuildResult {
@@ -186,6 +251,8 @@ export interface SceneResult {
     /** The same scene through the platform API. Missing before T1.3. */
     platform?: PlatformBuildResult | null;
     tmbvh: TmbvhBuildResult | null;
+    /** Ray-set mode `rc` only; the probe-grid fields above are then empty. */
+    rc?: RcSceneResult;
     modes: ModeResult[];
     agreement: AgreementResult[];
     /** Things that could not run, for example a buffer over the device's limit. */
@@ -217,6 +284,8 @@ export interface DeviceRecord {
 export interface TraceBenchData {
     benchmark: 'trace-bench';
     profile: string;
+    /** Which rays were traced (`RaySetMode`). Absent in results from before RC1.5: `probe-grid`. */
+    raySet?: string;
     raysPerProbe: number;
     targetRays: number;
     warmupDispatches: number;
