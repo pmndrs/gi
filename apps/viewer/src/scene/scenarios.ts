@@ -61,7 +61,7 @@ export const SCENARIOS: readonly Scenario[] = [
         id: 'cabinets',
         title: 'Cabinets: a door opens; add and copy cabinets',
         description:
-            "A kitchen run of hollow cabinets. The door of the second cabinet from the left swings open, so light gets into the cabinet, then closes again: inside should go dark. Below, \"Add a box\" puts a new small cabinet on the floor to the right (a new shape for GI), \"Copy a box\" adds one more of the same shape (cheaper for GI: it only places it again), up to 100.",
+            "A kitchen run of hollow cabinets. The door of the second cabinet from the left swings open, so light gets into the cabinet, then closes again: inside should go dark. Below, \"Add a box\" puts a new small cabinet on the floor in front of the run (a new shape for GI), \"Copy a box\" adds one more of the same shape (cheaper for GI: it only places it again), up to 100.",
         scene: 'cabinet-row',
         camera: 'from-the-right',
         motion: 'cabinet-door-swing',
@@ -85,7 +85,7 @@ export const SCENARIOS: readonly Scenario[] = [
         id: 'fly-through',
         title: 'Fly-through: down the Bistro street',
         description:
-            "The camera flies 66 m down the Bistro street at 5 m/s (a brisk run), turning twice, then starts again. DDGI adds a finer set of probes (1.5 m apart) that follows the camera, in front of the scene's own (4 m apart): watch for the bounced light staying steady as new probes come in ahead, with no popping or dark patches. Bistro takes a while to load the first time.",
+            "The camera flies 66 m down the Bistro street at 5 m/s (a brisk run), turning twice, turns round and flies back the same way. DDGI adds a finer set of probes (1.5 m apart) that follows the camera, in front of the scene's own (4 m apart): watch for the bounced light staying steady as new probes come in ahead, with no popping or dark patches. Bistro takes a while to load the first time.",
         scene: 'bistro-exterior',
         camera: 'street',
         motion: 'fly-through',

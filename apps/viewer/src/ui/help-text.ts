@@ -132,7 +132,7 @@ export const HELP = {
         'Pick a scenario to watch GI follow something that moves: a cabinet sliding along a wall, a door shutting between two rooms, a cabinet door opening (and cabinets you add), a tree in the wind, or a flight down a street. It opens the scene at the right camera view and starts the movement; the text below says what to watch for. The stats box (top left) shows the recompile counter, which should stay 0.',
     scenarioPlay: "Plays the scenario's movement again from the start, or stops it (whatever moved goes back where it was).",
     scenarioMeasure:
-        "Measures how fast GI follows this scenario's step version (the door jumping shut, the cabinet jumping 1 m, the tree jumping to a full lean) with the response meter below: it switches to GI only, settles the light, makes the jump, and plots the picture's brightness frame by frame. Keep the camera still. About 15 to 40 seconds.",
+        "Measures how fast GI follows this scenario's step version (the door jumping shut, the cabinet jumping 1 m, the tree jumping to a full lean) with the response meter below: it switches to GI only, settles the light, makes the jump, and plots the picture's brightness frame by frame. Keep the camera still. About 15 to 40 seconds. When the step turns the picture black (the door shutting, seen from the dark room), \"within 5% of settled\" never comes, since 5% of nothing is nothing: read the curve, which should drop to the floor within the first second.",
     windStrength:
         "How strong the wind is: at 100% the strongest gusts move the top of the tree about 1.5 m, at 0% it stands still. Only the tree's shape changes: GI refits its ray-tracing tree each frame on the GPU, nothing is rebuilt and nothing recompiles.",
     cabinetAdd:

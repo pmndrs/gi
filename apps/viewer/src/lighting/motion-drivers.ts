@@ -31,6 +31,7 @@
 
 import { BoxGeometry, Euler, Matrix4, Mesh, MeshStandardMaterial, type Light, type Object3D, type Quaternion, type Vector3 } from 'three';
 import type { ManifestMotion, ManifestProp, MotionKeyframe, Vec3 } from '../../../../scenes/src/manifest';
+import { LAYER_VIEW_GEOMETRY } from '../scene/layers';
 import type { LoadedScene } from '../scene/load-scene';
 import { WindSway } from '../scene/wind-sway';
 
@@ -137,6 +138,9 @@ export class LightDriver implements MotionDriver {
 // -- objects -----------------------------------------------------------------
 
 interface SavedObject {
+    /** The local matrix, which is the transform for objects with `matrixAutoUpdate` off (procedural parts)... */
+    matrix: Matrix4;
+    /** ...and position, turn and scale, which are the transform for the rest. */
     position: Vector3;
     quaternion: Quaternion;
     scale: Vector3;
@@ -144,7 +148,11 @@ interface SavedObject {
     inScene: boolean;
 }
 
-/** A plain box for a manifest prop: rough, not metal, casting and taking three's shadows. */
+/**
+ * A plain box for a manifest prop: rough, not metal, casting and taking
+ * three's shadows. On layer 0 (GI, bakes) and the viewing cameras' layer, as
+ * the loaded scene's own meshes are (`load-scene.ts`, layers.ts).
+ */
 export function makeProp(prop: ManifestProp): Mesh {
     const material = new MeshStandardMaterial({ name: `prop ${prop.name}`, roughness: 1, metalness: 0 });
     // Manifest colours are linear, three's working colour space.
@@ -156,6 +164,7 @@ export function makeProp(prop: ManifestProp): Mesh {
     mesh.rotation.set(...(degrees.map((value) => (value * Math.PI) / 180) as [number, number, number]), 'XYZ');
     mesh.castShadow = true;
     mesh.receiveShadow = true;
+    mesh.layers.enable(LAYER_VIEW_GEOMETRY);
     mesh.updateMatrix();
     return mesh;
 }
@@ -211,17 +220,27 @@ export class ObjectDriver implements MotionDriver {
 
     save(): SavedObject {
         const object = this.object;
-        return { position: object.position.clone(), quaternion: object.quaternion.clone(), scale: object.scale.clone(), sway: this.swayNow, inScene: object.parent !== null };
+        return {
+            matrix: object.matrix.clone(),
+            position: object.position.clone(),
+            quaternion: object.quaternion.clone(),
+            scale: object.scale.clone(),
+            sway: this.swayNow,
+            inScene: object.parent !== null,
+        };
     }
 
     restore(saved: unknown): void {
-        const { position, quaternion, scale, sway, inScene } = saved as SavedObject;
-        this.object.position.copy(position);
-        this.object.quaternion.copy(quaternion);
-        this.object.scale.copy(scale);
-        this.object.updateMatrixWorld(true);
+        const { matrix, position, quaternion, scale, sway, inScene } = saved as SavedObject;
+        const object = this.object;
+        object.matrix.copy(matrix);
+        object.position.copy(position);
+        object.quaternion.copy(quaternion);
+        object.scale.copy(scale);
+        object.matrixWorldNeedsUpdate = true;
+        object.updateMatrixWorld(true);
         if (this.sways.length > 0) this.setSway(sway);
-        if (!inScene) this.object.removeFromParent();
+        if (!inScene) object.removeFromParent();
     }
 
     apply(state: MotionState, motion: ManifestMotion): void {
@@ -230,7 +249,13 @@ export class ObjectDriver implements MotionDriver {
         if (state.sway !== undefined) this.setSway(state.sway);
     }
 
-    /** World transform = offset × pivot × turn × pivot⁻¹ × rest; then back into the parent's space. */
+    /**
+     * World transform = offset × pivot × turn × pivot⁻¹ × rest; then back into
+     * the parent's space. Written to the local matrix and to position, turn
+     * and scale both: procedural parts keep `matrixAutoUpdate` off with the
+     * transform in `matrix` (scenes/src/three-scene.ts), models and props keep
+     * it on and rebuild `matrix` from the other three.
+     */
     private place(offset: Vec3, rotationDeg: Vec3, pivot: Vec3 | undefined): void {
         const { world, turn, step, euler } = this.scratch;
         const object = this.object;
@@ -242,13 +267,13 @@ export class ObjectDriver implements MotionDriver {
         world.multiply(turn);
         world.multiply(step.makeTranslation(-centre[0], -centre[1], -centre[2]));
         world.multiply(this.restWorld);
-        // Back into the parent's space: local = parent⁻¹ × world.
+        // Back into the parent's space: local = parent⁻¹ × world. The parent's world matrix is
+        // current (the scene's groups don't move), and updating it would walk every sibling.
         const parent = object.parent;
-        if (parent) {
-            parent.updateMatrixWorld();
-            world.premultiply(step.copy(parent.matrixWorld).invert());
-        }
+        if (parent) world.premultiply(step.copy(parent.matrixWorld).invert());
+        object.matrix.copy(world);
         world.decompose(object.position, object.quaternion, object.scale);
+        object.matrixWorldNeedsUpdate = true;
         object.updateMatrixWorld(true);
     }
 

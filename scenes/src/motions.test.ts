@@ -312,14 +312,11 @@ describe("the M3 scenarios' motions (T3.8, m3-moving.md §8)", async () => {
     const byId = (id: string) => manifests.find((manifest) => manifest.id === id)!;
     const motion = (scene: string, id: string) => byId(scene).motions!.find((candidate) => candidate.id === id)!;
 
-    it('every object motion loops and ends where it began; the flight loops', () => {
+    it('every object and camera motion loops and ends where it began, so looping never jumps', () => {
         for (const manifest of manifests) {
             for (const candidate of manifest.motions ?? []) {
-                const kind = motionTarget(candidate)?.kind;
-                if (kind === 'light') continue;
+                if (motionTarget(candidate)?.kind === 'light') continue;
                 expect(candidate.loop, `${manifest.id} ${candidate.id}`).toBe(true);
-                // The flight starts again from the street (a jump back); objects end where they began.
-                if (kind === 'camera') continue;
                 const frames = candidate.keyframes;
                 expect({ ...frames[frames.length - 1], t: 0 }, `${manifest.id} ${candidate.id}`).toEqual({ ...frames[0], t: 0 });
             }
@@ -352,14 +349,22 @@ describe("the M3 scenarios' motions (T3.8, m3-moving.md §8)", async () => {
         expect(swing.keyframes[0].rotationDeg).toEqual([0, -90, 0]);
     });
 
-    it('the fly-through runs at 5 m/s from the street bookmark, with a 1 s hold at each end', () => {
+    it('the fly-through runs at 5 m/s from the street bookmark and back, stopping only to turn round', () => {
         const frames = motion('bistro-exterior', 'fly-through').keyframes;
+        let flown = 0;
         for (let index = 1; index < frames.length; index++) {
             const metres = pathLength([frames[index - 1].position!, frames[index].position!]);
-            const holds = index === 1 || index === frames.length - 1;
-            expect(metres / (frames[index].t - frames[index - 1].t), `leg ${index}`).toBeCloseTo(holds ? 0 : 5, 2);
+            flown += metres;
+            // Every step either flies at 5 m/s or stands still (the hold at the start, the turns round at each end).
+            if (metres > 0) expect(metres / (frames[index].t - frames[index - 1].t), `step ${index}`).toBeCloseTo(5, 2);
         }
+        expect(flown).toBeCloseTo(2 * 66.3, 0);
         expect(frames[0].position).toEqual(byId('bistro-exterior').cameras[0].position);
+        // The look target never comes within 5 m of the camera, so the view never flips while turning round.
+        for (let time = 0; time <= frames[frames.length - 1].t; time += 0.05) {
+            const state = motionState(motion('bistro-exterior', 'fly-through'), time);
+            expect(pathLength([state.position!, state.target!]), `${time.toFixed(2)} s`).toBeGreaterThan(5);
+        }
     });
 
     it.skipIf(!modelsPresent(byId('bistro-exterior')))(`the fly-through keeps the camera ${CLEARANCE_M} m clear of every surface`, { timeout: 300_000 }, () => {

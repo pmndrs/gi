@@ -1260,7 +1260,8 @@ export class ViewerApp {
         controls.setScenario(scenario, here);
         const playing = here && player.playing?.id === scenario.motion;
         let status = '';
-        if (scenario && !here) status = this.loadingScene ? 'Opening the scene...' : `Opens ${scenario.scene}.`;
+        const sceneTitle = this.manifests.find((manifest) => manifest.id === scenario?.scene)?.title ?? scenario?.scene;
+        if (scenario && !here) status = this.loadingScene ? 'Opening the scene...' : `Choose it again to open ${sceneTitle}.`;
         else if (playing) status = `Playing: ${player.playing!.label}, ${player.seconds(now).toFixed(1)} s.`;
         else if (scenario) status = 'Stopped. Press Play to watch it again.';
         controls.setPlaying(playing, status);

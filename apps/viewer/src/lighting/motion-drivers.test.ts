@@ -58,6 +58,27 @@ describe('object motions (T3.8)', () => {
         expect(door.scale.toArray()).toEqual([0.04, 2, 0.9]);
     });
 
+    it('moves a procedural part, whose transform lives in its matrix (matrixAutoUpdate off)', () => {
+        const content = new Group();
+        const door = doorPanel();
+        // As scenes/src/three-scene.ts builds procedural parts: the matrix is the transform, position and the rest unused.
+        door.updateMatrix();
+        const placed = door.matrix.clone();
+        door.position.set(0, 0, 0);
+        door.scale.set(1, 1, 1);
+        door.matrixAutoUpdate = false;
+        door.matrix.copy(placed);
+        content.add(door);
+        new Scene().add(content);
+        content.updateMatrixWorld(true);
+        const driver = new ObjectDriver(door, null, () => 1);
+        const saved = driver.save();
+        driver.apply({ rotationDeg: [0, -90, 0] }, swing);
+        expect(new Vector3().setFromMatrixPosition(door.matrixWorld).x).toBeCloseTo(4.08 - 0.45, 6);
+        driver.restore(saved);
+        expect(door.matrixWorld.equals(placed)).toBe(true);
+    });
+
     it('slides an object by an offset, inside a parent that is itself moved', () => {
         const content = new Group();
         content.position.set(10, 0, 0);

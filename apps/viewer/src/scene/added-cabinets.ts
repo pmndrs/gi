@@ -1,7 +1,7 @@
 /**
  * The cabinet scenario's "add" and "copy" (T3.8, docs/design/m3-moving.md §8,
  * "Add and duplicate cabinets"): small white cabinets put on the cabinet
- * row's floor, right of the run, in rows, up to 100.
+ * row's floor in front of the run, in rows, up to 100.
  *
  * - **Add** makes a new mesh each time (its own `BoxGeometry`): GI copies a
  *   new shape and builds a ray-tracing tree for it on the GPU (T3.2).
@@ -14,18 +14,19 @@
  */
 
 import { BoxGeometry, Mesh, MeshStandardMaterial, type BufferGeometry, type Object3D } from 'three';
+import { LAYER_VIEW_GEOMETRY } from './layers';
 
 /** The most the viewer adds (m3-moving.md §8: "up to 100"). */
 export const MAX_ADDED_CABINETS = 100;
 /** Metres: a small cabinet, 18 mm short of each grid step so neighbours never touch. */
 const CABINET_SIZE: readonly [number, number, number] = [0.22, 0.25, 0.22];
 /**
- * Where they go: a grid on the floor to the right of the run, in front of the
- * empty end wall (the cabinet row is x 0 to 3 along the back wall at z 0; the
- * room is 4.8 by 3.2 m). 10 across, 5 deep, then a second layer on top: low
- * enough that the `from-the-right` camera still sees the opening door over them.
+ * Where they go: a grid on the floor in front of the run, 1 m out from it (the
+ * cabinet row is x 0 to 3 along the back wall at z 0, 0.58 m deep; the room is
+ * 4.8 by 3.2 m). 10 across, 5 deep, then a second layer on top: 0.5 m high at
+ * most, so the `from-the-right` camera still sees the opening door over them.
  */
-const GRID = { first: [2.3, 0, 1.4] as const, step: [0.25, 0.25, 0.25] as const, across: 10, deep: 5 };
+const GRID = { first: [0.3, 0, 1.6] as const, step: [0.25, 0.25, 0.25] as const, across: 10, deep: 5 };
 /** The cabinets' white, as the row's own (`cabinet-white`, linear). */
 const CABINET_COLOR: readonly [number, number, number] = [0.78, 0.78, 0.75];
 
@@ -97,6 +98,8 @@ export class AddedCabinets {
         );
         mesh.castShadow = true;
         mesh.receiveShadow = true;
+        // Layer 0 for GI, and the viewing cameras' layer, as the scene's own meshes (layers.ts).
+        mesh.layers.enable(LAYER_VIEW_GEOMETRY);
         this.parent.add(mesh);
         // World matrix now, so GI's update this frame sees it where it stands.
         mesh.updateMatrixWorld(true);

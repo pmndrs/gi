@@ -385,6 +385,14 @@ Plus: the export from `Three.WebGPU.js`; a WebGL backend check that throws; a un
 - **Alpha cutouts are M4.** Until they land, the tree's leaf cards block light as solid quads and over-darken. M3 checks that the occlusion *moves*; the look is judged after M4 (Dennis: fine, 2026-11-05).
 - **Native:** the harness has no moving geometry. The side-by-side for M3 covers the door and cabinet scenes only if T2.7's motion support can be extended to instance transforms; otherwise M3 compares against Cycles renders of the end states only.
 
+**As built (T3.8).** Manifest motions now take three kinds of target (`scenes/src/manifest.ts`): `light:<label>` as in M2; `object:<name>` (keyframes `position`, an offset from where the object stands, `rotationDeg` about the motion's `pivot`, and `sway` for meshes with a wind weight); and `camera` (`position` and `target`). A `smooth` interpolation eases in and out (light motions keep `linear` and `step`, which the native harness plays). `props` are boxes a viewer adds while a motion moves them. The viewer's panel opens with "Moving things": five scenarios, each a scene, a camera view and a motion, with a step version for the response meter (`apps/viewer/src/scene/scenarios.ts`):
+- *furniture:* the furnished room's red cabinet (a prop, 0.45 × 0.85 × 0.9 m against the west wall) slides 1 m and back (`cabinet-slide`, `cabinet-step`);
+- *door:* `closed-door`'s panel swings shut on the lit side in 1 s about the hinge `ddgi-door-swing` uses, seen from `dark-room-leak-view` (`door-swing`, `door-step`);
+- *cabinets:* the cabinet row's `base-unit-1-door` opens 100° and closes (`cabinet-door-swing`, `cabinet-door-step`); "Add a box" adds a small cabinet with its own mesh, "Copy a box" another instance of the last one's, up to 100 (`scene/added-cabinets.ts`);
+- *wind tree:* `wind-gusts` keyframes the sway (smooth, 20 s), `wind-lean` holds a full lean for the meter; a slider scales the reach up to 1.5 m at the crown;
+- *fly-through:* Bistro's `fly-through`, T3.6's three legs from the `street` view (66 m) at 5 m/s and back the same way (a round trip: a loop that jumped back to the start would reset the camera volume's whole window each time), keyframed, with the camera-following volume (`follow=camera`, 32 × 12 × 32 at 1.5 m) on.
+No character: the repo has no skinned asset (the task said not to download one). `apps/viewer/scripts/scenario-shots.ts` plays each headless and takes the screenshots.
+
 ### 8.1 The wind tree's asset
 
 Dennis (2026-11-05): `sponza-full`'s 2 M-triangle trees are too heavy. Plan for a **game-ready tree**:
