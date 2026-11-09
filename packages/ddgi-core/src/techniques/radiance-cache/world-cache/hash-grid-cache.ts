@@ -81,7 +81,8 @@ export class HashGridCache implements WorldCache {
     /** The value the last `encodeFrame` used, or null before the first. */
     private lastFramePingPong: number | null = null;
 
-    constructor(options: HashGridCacheOptions = DEFAULT_HASH_GRID_CACHE_OPTIONS) {
+    /** `options` is kept and read live (the technique passes its settings); without it, a copy of Capsaicin's defaults. */
+    constructor(options: HashGridCacheOptions = { ...DEFAULT_HASH_GRID_CACHE_OPTIONS }) {
         this.options = options;
     }
 
@@ -98,7 +99,7 @@ export class HashGridCache implements WorldCache {
         return this.require().buffers;
     }
 
-    /** Inserts refused this frame because their bucket was full (register D21): a word of the tile words, cleared by `ClearCounters`. */
+    /** Inserts refused this frame because their bucket was full (register D22): a word of the tile words, cleared by `ClearCounters`. */
     get bucketOverflowCount(): GpuWord {
         return { buffer: this.require().buffers.tileWords, offset: HASH_GRID_COUNTER.bucketOverflowCount * WORD_BYTES };
     }

@@ -39,21 +39,21 @@ import { GILimitError } from '../../../platform/contract/errors.ts';
  */
 export interface HashGridCacheOptions {
     /** `gi1_hash_grid_cache_cell_size` (gi1.h:58, default 32): a cell's size, in pixels of projected size at its distance. */
-    readonly hashGridCacheCellSize: number;
+    hashGridCacheCellSize: number;
     /** `gi1_hash_grid_cache_min_cell_size` (gi1.h:59, default 0.1): the smallest cell, in scene units (metres). */
-    readonly hashGridCacheMinCellSize: number;
+    hashGridCacheMinCellSize: number;
     /** `gi1_hash_grid_cache_tile_cell_ratio` (gi1.h:60, default 8): cells across a tile's finest level (8 × 8). */
-    readonly hashGridCacheTileCellRatio: number;
+    hashGridCacheTileCellRatio: number;
     /** `gi1_hash_grid_cache_num_buckets` (gi1.h:61, default 14): log2 of the bucket count (16,384). */
-    readonly hashGridCacheNumBuckets: number;
+    hashGridCacheNumBuckets: number;
     /** `gi1_hash_grid_cache_num_tiles_per_bucket` (gi1.h:62, default 4): log2 of the tile slots per bucket (16). */
-    readonly hashGridCacheNumTilesPerBucket: number;
+    hashGridCacheNumTilesPerBucket: number;
     /** `gi1_hash_grid_cache_max_sample_count` (gi1.h:63, default 16): a cell's temporal sample cap; below it the resolve reads a coarser level. */
-    readonly hashGridCacheMaxSampleCount: number;
+    hashGridCacheMaxSampleCount: number;
     /** `gi1_hash_grid_cache_discard_multibounce_ray_probability` (gi1.h:64, default 0.7). Read by RC3.3. */
-    readonly hashGridCacheDiscardMultibounceRayProbability: number;
+    hashGridCacheDiscardMultibounceRayProbability: number;
     /** `gi1_hash_grid_cache_max_multibounce_sample_count` (gi1.h:65, default 16): the same cap for the indirect values. */
-    readonly hashGridCacheMaxMultibounceSampleCount: number;
+    hashGridCacheMaxMultibounceSampleCount: number;
 }
 
 /** Capsaicin's defaults (gi1.h:58-65). */
@@ -158,7 +158,7 @@ export const HASH_GRID_COUNTER = {
      * Inserts refused this frame because every slot of their bucket held
      * another tile (`hash_grid_cache.hlsl:268-275`). Capsaicin counts them per
      * bucket, and only with `DEBUG_HASH_STATS`; ours is one counter, always
-     * on, cleared with the others each frame (register D21).
+     * on, cleared with the others each frame (register D22).
      */
     bucketOverflowCount: 7,
 } as const;

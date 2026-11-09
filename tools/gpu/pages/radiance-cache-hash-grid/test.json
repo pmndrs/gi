@@ -1,0 +1,4 @@
+{
+    "description": "RC3.1: the radiance cache's hash grid at Capsaicin's default capacity (about 1 GiB): GILimitError on a default-limits device; GPU hashes and descriptors equal the CPU port; insert then find; two tiles colliding in a bucket; a full bucket refusing the 17th (counted); 65,536 threads inserting one tile get one slot; PurgeTiles after 50 idle frames, also across the frame counter's wrap; find stopping at the first empty slot.",
+    "timeoutMs": 180000
+}
