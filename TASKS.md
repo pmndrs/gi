@@ -458,25 +458,26 @@ Status: **draft, from T2.11 (2026-11-09).** Starts when Dennis signs off M2 (PR 
 
 | ID | Task | Agent | Size | Depends on | Status |
 | --- | --- | --- | --- | --- | --- |
-| T3.0 | Spike: deformed positions from three (storage `ExternalTexture`); the `updateMatrixWorld` override's cost and safety on Bistro interior; refit decay on a swaying tree | implementer | S | M2 done | todo |
-| T3.1 | Change feed, the parts T2.M1 left: `receivers`, `deformBounds`, `setDeformedPositions` | implementer | S | none | todo |
+| T3.0 | Spike: deformed positions from three (storage `ExternalTexture`); the `updateMatrixWorld` override's cost and safety on Bistro interior; refit decay on a swaying tree | implementer | S | M2 done, T3.11 (the tree) | todo |
+| T3.1 | Change feed, the parts T2.M1 left: `receivers`, `deformBounds`, `setDeformedPositions` (done-when: m3-moving.md's, less the items T2.M1's done-when already met: `setTransforms` cost, `moved`, the recompile counter) | implementer | S | none | todo |
 | T3.2 | Runtime mesh trees: GPU builds for added and updated meshes, tinybvh refinement | implementer | M | T2.12 | todo |
 | T3.3 | Deforming meshes: `GpuMeshRefit` wired, scene-copy positions, geometric normals, movement word; H-PLOC rebuild when the refit drifts | implementer | M | T3.1, T3.2 | todo |
-| T3.4 | Probes near moved geometry, the parts T2.M1 left: woken air probes (M1's "probes in empty space" carry-over), deforming movers; the far-set guess scaled to the mover's size (DECISIONS, T2.M1 item 8) | implementer | M | T3.1 | todo |
-| T3.5 | Several volumes: shared atlas, volume table, priority blending; nested finer volumes around thin cloth (carried from M1) | implementer | M | none | todo |
+| T3.4 | Probes near moved geometry, the parts T2.M1 left: woken air probes (M1's "probes in empty space" carry-over), deforming movers; the far-set guess scaled to the mover's size (DECISIONS, T2.M1 item 8). Done-when: m3-moving.md's, less T2.M1's items 3-5 and 8 (the cabinet, the door, the 2-update warm-up, the far-set record), which are met for rigid movers | implementer | M | T3.1 | todo |
+| T3.5 | Several volumes: shared atlas, volume table, priority blending; nested finer volumes around thin cloth (carried from M1; their done-when, Sponza's curtain pixels against HD Cycles, is set when the main session designs them) | implementer | M | none | todo |
 | T3.6 | Camera-following volume: wrapping slots, `ddgi/scroll`, window rule, fade-in | implementer | M | T3.5 | todo |
 | T3.7 | three adapter change tracking v2 (deforming meshes, the `updateMatrixWorld` override) | implementer | M | T3.0, T3.1 | todo |
-| T3.8 | Viewer scenarios and their manifest motions (furniture, door, cabinets, wind tree, fly-through) | implementer | M | T3.3, T3.4, T3.6, T3.7 | todo |
-| T3.9 | M3 measurements; also from M2: a Bistro response page, the whole frame on the library's default composite with the update in the same frame, the Apple M5 Pro if set up, and the clock-sensitive M2 gates if Dennis has fixed the clock | gpu-tester | M | all above | todo |
+| T3.8 | Viewer scenarios and their manifest motions (furniture, door, cabinets, wind tree, fly-through) | implementer | M | T3.3, T3.4, T3.6, T3.7, T3.11 | todo |
+| T3.9 | M3 measurements; also from M2: a Bistro response page, the whole frame on the library's default composite with the update in the same frame, the Apple M5 Pro if set up, and the clock-sensitive M2 gates if Dennis has fixed the clock (the light grid, with its run-boundary check; Sponza's lamp step; the cost after a change) | gpu-tester | M | T3.0-T3.8, T3.12-T3.18 | todo |
 | T3.10 | M3 note and M4/M5 breakdown | main session | S | T3.9 | todo |
 | T3.11 | The wind tree's asset: find or generate, convert, record licence | wrangler | S | none | todo |
 | T3.12 | Compressed textures through GPUTex in the viewer's and test pages' loader (upstream gputex 0.14.0 first; HomeFig's method only after asking Dennis; KTX2 the fallback). Done when Bistro exterior fits the 6 GB RTX without T2.17's cap and looks the same by eye (DECISIONS 2026-11-09) | implementer | M | none | todo |
 | T3.13 | DDGI memory: trim buffers grown by doubling once a scene settles (about 237 MB unused on Bistro, T2.17) | implementer | S | none | todo |
 | T3.14 | Bistro's calibration: why Budget v2 lands at 14-116 probes and why `ddgi/trace` has a 1-1.5 ms fixed cost at 16 probes (T2.10, T2.17) | implementer | S | T3.12 | todo |
-| T3.15 | The change cost model counts `gi/direct`'s lit hits (T2.18's first frames, p95 1.05× still); judged with Sponza's sun turn with the sun layer on (frame 16 against 15, T2.8), starting with a run with `keyProbes` off | implementer | S | none | todo |
+| T3.15 | The change cost model counts `gi/direct`'s lit hits (T2.18's first frames, p95 1.05× still); judged against T2.4c's frame-15 bar on Sponza's sun turn with the sun layer on and off, on the RTX and the Intel UHD (T2.18 used the margin: 13 → 15 on the RTX, 16 and 18 on the Intel; T2.8's layer-on turn at 16), starting with a run with `keyProbes` off | implementer | S | none | todo |
 | T3.16 | Scene-copy follow-ups from T2.13's review: texture averages from three's smallest mip read back asynchronously (a ruling: a load-time readback and a placeholder albedo), H-PLOC reading from the packing's staging buffers, GPU tests of the packing fallbacks; the main-thread bar (Sponza 816 ms against 150) | implementer | M | none | todo |
 | T3.17 | Native parity: why native's Sponza GI is about 8× Cycles' (its direct light is 2.9×; the sun's units in our harness settings first), native's 1 m falloff clamp, and a native sweep on our probe grid for Sponza | native-runner | S | none | todo |
 | T3.18 | `userData.giRange` in the three adapter, so a host can cull a light in three without shortening its GI range (T2.8's candle reach). Host-facing API: the main session designs it first | main session, then implementer | S | none | todo |
+| T3.19 | Test flakes: `tools/assets/fetch.test.ts` and two other unit tests time out at 5 s when the CPU is busy (carried from M1 and seen again in M2); the Intel UHD hangs on the 4th page of 4-page GPU batches (run batches of 3 or fewer) | implementer | S | none | todo |
 
 ## Carried to M2 (collected during M1)
 
