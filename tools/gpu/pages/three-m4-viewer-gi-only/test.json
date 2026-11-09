@@ -1,0 +1,5 @@
+{
+    "description": "M4 T4.3: the viewer's own core opens Sponza (curtains) with GI only at its first bookmark, warms DDGI up and leaves the picture for the runner's screenshot (Dennis's look). Reports the picture's mean. VITE_DDGI_SCENES=<id> for another scene. Needs the Sponza download.",
+    "timeoutMs": 600000,
+    "manual": true
+}

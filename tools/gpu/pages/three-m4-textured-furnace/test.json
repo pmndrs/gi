@@ -1,0 +1,4 @@
+{
+    "description": "M4 T4.3: the furnace room built in three, mirrored by the adapter's SceneSync, with a checker map of mean 0.5 (colour 1) converges to the flat 0.5 furnace's field mean within 1%: textures are applied once.",
+    "timeoutMs": 900000
+}
