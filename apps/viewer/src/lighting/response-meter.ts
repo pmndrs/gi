@@ -1,23 +1,27 @@
 /**
  * The response meter (docs/design/m2-lights.md §7): how fast DDGI's picture
- * follows a light's step, read from the picture itself, in GI-only mode (so
- * three's own direct light, which changes at once, doesn't count).
+ * follows a step, read from the picture itself, in GI-only mode (so three's
+ * own direct light, which changes at once, doesn't count). The step is a
+ * light's (M2) or an object's (M3, T3.8: a door shutting, a cabinet jumping
+ * along a wall, a tree leaning); camera motions can't be measured, since the
+ * meter needs a still camera.
  *
  * A measurement, frame by frame, with the camera still:
  *
  * The step is one jump of a motion: from keyframe `jump` to keyframe
  * `jump + 1` (a step motion's lamp jumping, `light-step`; its first jump
- * takes two-room's lamp out of the lit room, its second brings it back).
+ * takes two-room's lamp out of the lit room, its second brings it back;
+ * `door-step`'s first jump shuts the door).
  *
- * 1. **settle before** (a test mode): the motion's light at the jump's first
+ * 1. **settle before** (a test mode): the motion's target at the jump's first
  *    keyframe, DDGI's budget raised to SETTLE_BUDGET_MS for SETTLE_SECONDS,
  *    so the field has converged there;
  * 2. **steady before:** the user's budget again for STEADY_SECONDS, so every
  *    probe's history is back at its everyday length when the step comes, as
  *    the T2.4b page's 1,200 frames at the batch do; `before` is the mean of
  *    the last AVERAGED_FRAMES frames;
- * 3. **record:** the light jumps to the next keyframe (frame 1 is the
- *    jump's own frame: the light moves before GI's update in that frame) and
+ * 3. **record:** the target jumps to the next keyframe (frame 1 is the
+ *    jump's own frame: it moves before GI's update in that frame) and
  *    RECORD_FRAMES frames are read at the user's budget;
  * 4. **settle after** (the test mode again): at SETTLE_BUDGET_MS for at
  *    least SETTLE_SECONDS and until the region's mean over the last second
@@ -35,14 +39,14 @@
  * the T2.4b page's definitions.
  *
  * A camera move cancels it (the picture would change for another reason).
- * When it ends, done or not, the step's light is put back as it was.
+ * When it ends, done or not, the step's target is put back as it was.
  */
 
-import type { Light } from 'three';
+import type { Object3D } from 'three';
 import type { ManifestMotion } from '../../../../scenes/src/manifest';
 import { responseCsv, stepMarks, type ResponseSample, type StepMarks } from '../stats/response-curve';
 import type { DdgiTechnique } from '../techniques/ddgi-technique';
-import { restoreLight, saveLight, type MotionPlayer, type SavedLight } from './motion-player';
+import type { MotionPlayer } from './motion-player';
 
 /** The test mode's budget, GPU ms a frame (m2-lights.md §7: "the budget raised to 16 ms"). */
 export const SETTLE_BUDGET_MS = 16;
@@ -83,8 +87,8 @@ export interface MeterContext {
     readonly player: MotionPlayer;
     /** The whole drawing buffer, for a meter with no region picked. */
     drawingBufferSize(): { width: number; height: number };
-    /** Tells GI at once that a light changed (the adapter would otherwise find a light past its first 64 a few frames late). */
-    markChanged(light: Light): void;
+    /** Tells GI at once that a light or object changed (the adapter would otherwise find a light past its first 64 a few frames late). */
+    markChanged(object: Object3D): void;
     /** What the CSV says about the run. */
     describe(): { scene: string; camera: string; adapter: string };
 }
@@ -97,9 +101,8 @@ export class ResponseMeter {
     private motion: ManifestMotion | null = null;
     /** The jump measured: from keyframe `jump` to `jump + 1`. */
     private jump = 0;
-    private light: Light | null = null;
-    /** The step's light as it was before the measurement, to put back. */
-    private savedLight: SavedLight | null = null;
+    /** The step's target as it was before the measurement, to put back (null: nothing to put back). */
+    private savedTarget: unknown = null;
     /** Frames counted in the current phase. */
     private phaseFrames = 0;
     private stepStartedAt = 0;
@@ -179,24 +182,23 @@ export class ResponseMeter {
         this.userBudgetMs = ddgi.currentSettings.budgetMs;
         const size = this.context.drawingBufferSize();
         this.usedRegion = this.region ?? { x: 0, y: 0, width: size.width, height: size.height };
-        const light = this.context.player.lightFor(motion);
-        this.savedLight = light ? saveLight(light) : null;
-        this.light = this.context.player.pose(motion, motion.keyframes[this.jump].t);
-        if (this.light) this.context.markChanged(this.light);
+        this.savedTarget = this.context.player.save(motion);
+        const moved = this.context.player.pose(motion, motion.keyframes[this.jump].t);
+        if (moved) this.context.markChanged(moved);
         this.enter('settle-before', now);
         ddgi.setBudgetOverride(SETTLE_BUDGET_MS);
     }
 
-    /** Stops a measurement and gives the user's budget back. The light stays where it is. */
+    /** Stops a measurement and gives the user's budget back, and puts the step's target back. */
     cancel(reason?: string): void {
         if (!this.running) return;
         this.context.ddgi()?.setBudgetOverride(null);
-        this.putLightBack();
+        this.putTargetBack();
         if (reason) this.fail(reason);
         else this.enter('idle', 0);
     }
 
-    /** Call once a frame before GI's update and the render: moves the light at the step, changes phases. */
+    /** Call once a frame before GI's update and the render: moves the target at the step, changes phases. */
     beforeFrame(now: number): void {
         if (!this.running) return;
         const ddgi = this.context.ddgi();
@@ -214,10 +216,10 @@ export class ResponseMeter {
                 break;
             case 'steady-before':
                 if (seconds >= STEADY_SECONDS && this.beforeReadings.length >= AVERAGED_FRAMES) {
-                    // The step: the light jumps to the motion's second keyframe before this frame's GI update.
+                    // The step: the target jumps to the jump's second keyframe before this frame's GI update.
                     const motion = this.motion!;
-                    const light = this.context.player.pose(motion, motion.keyframes[this.jump + 1].t);
-                    if (light) this.context.markChanged(light);
+                    const moved = this.context.player.pose(motion, motion.keyframes[this.jump + 1].t);
+                    if (moved) this.context.markChanged(moved);
                     this.stepStartedAt = now;
                     this.enter('record', now);
                 }
@@ -235,7 +237,7 @@ export class ResponseMeter {
                     this.settleSeconds = seconds;
                     this.settledInTime = stable;
                     ddgi.setBudgetOverride(null);
-                    this.putLightBack();
+                    this.putTargetBack();
                     this.enter('reading', now);
                     void this.finish();
                 }
@@ -334,14 +336,15 @@ export class ResponseMeter {
         }
     }
 
-    /** The step's light back as it was before the measurement. */
-    private putLightBack(): void {
-        const light = this.light;
-        const saved = this.savedLight;
-        this.savedLight = null;
-        if (!light || !saved) return;
-        restoreLight(light, saved);
-        this.context.markChanged(light);
+    /** The step's target back as it was before the measurement. */
+    private putTargetBack(): void {
+        const motion = this.motion;
+        const saved = this.savedTarget;
+        this.savedTarget = null;
+        if (!motion || saved === null) return;
+        this.context.player.restore(motion, saved);
+        const moved = this.context.player.changedBy(motion);
+        if (moved) this.context.markChanged(moved);
     }
 
     /** The step's name in the CSV: the motion and its jump. */

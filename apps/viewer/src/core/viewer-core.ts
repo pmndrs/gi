@@ -243,10 +243,20 @@ export class ViewerCore {
     }
 
     /**
+     * The settings the next scene's DDGI starts with (`loadScene` makes it), so a
+     * scene opened with the camera-following volume (a link, a scenario) starts
+     * with it instead of starting a second DDGI once it is up. The running DDGI,
+     * about to be unloaded with its scene, is left alone.
+     */
+    setDdgiSettingsForNextScene(settings: DdgiViewerSettings): void {
+        this.ddgiSettings = { ...settings };
+    }
+
+    /**
      * Applies to DDGI now if it exists, and to the one created later. Display settings and
-     * weights recompile nothing. Light groups and the sun layer shape DDGI's layers, which
-     * are made when it starts: changing them starts a new DDGI (a new warm-up), the same as
-     * reloading the scene with them.
+     * weights recompile nothing. Light groups, the sun layer and the camera-following
+     * volume shape DDGI's layers and volumes, which are made when it starts: changing them
+     * starts a new DDGI (a new warm-up), the same as reloading the scene with them.
      */
     configureDdgi(settings: DdgiViewerSettings): void {
         this.ddgiSettings = { ...settings };
