@@ -265,6 +265,102 @@ def make_materials_diffuse_only():
     return changed, unlinked
 
 
+def apply_textured_material_model():
+    """
+    Makes every imported material what the platform's GI sees in M4
+    (docs/design/m4-materials.md, sections 2 and 3) while keeping the glTF's
+    own textures. Run BEFORE make_materials_diffuse_only, which unlinks
+    Metallic and Transmission and would lose what they said.
+
+    On every Principled BSDF:
+      Transmission    > 0 or linked: the surface lets light through (glass). GI
+                      takes glass as `blocksLight: false`: no shadow, no bounce,
+                      no tint. Alpha 0 makes Cycles pass straight through it too.
+      Metallic        > 0 or linked: folded into the base colour as
+                      base x (1 - metallic), which is three's and glTF's diffuse
+                      colour of a metal and what the platform's hits read
+                      ("albedo x (1 - metalness)"). make_materials_diffuse_only
+                      then sets Metallic to 0, so no conductor lobe is left.
+    Left as the importer made them:
+      Base Color      the base colour texture times the factor (and vertex colours)
+      Alpha           MASK: the importer's 1 - (alpha < cutoff) nodes, a hard
+                      cutout. BLEND: the alpha itself, which Cycles treats as
+                      the chance a ray passes (stochastic transparency)
+      Emission        colour, texture and strength (KHR_materials_emissive_strength)
+      Normal          normal maps stay, as in the other textured references
+
+    Returns a summary for the reference's json: how many materials each rule
+    changed or found, with their names (at most 40 listed per rule).
+    """
+    see_through = []
+    metallic_folded = []
+    cutout_or_blended = []
+    emission_textured = []
+    for material in bpy.data.materials:
+        if not material.use_nodes:
+            continue
+        tree = material.node_tree
+        for node in [candidate for candidate in tree.nodes if candidate.type == 'BSDF_PRINCIPLED']:
+            if input_is_on(node.inputs['Transmission Weight']):
+                force_input(tree, node, 'Alpha', 0.0)
+                see_through.append(material.name)
+                continue
+            if input_is_on(node.inputs['Metallic']):
+                fold_metallic_into_base_color(tree, node)
+                metallic_folded.append(material.name)
+            alpha = node.inputs['Alpha']
+            if alpha.is_linked or alpha.default_value < 1.0:
+                cutout_or_blended.append(material.name)
+            if node.inputs['Emission Color'].is_linked:
+                emission_textured.append(material.name)
+
+    def listing(names):
+        return {'count': len(names), 'listed': sorted(names)[:40]}
+
+    return {
+        'seeThroughFromTransmission': listing(see_through),
+        'metallicFoldedIntoBaseColor': listing(metallic_folded),
+        'alphaCutoutOrBlended': listing(cutout_or_blended),
+        'emissionTextured': listing(emission_textured),
+    }
+
+
+def input_is_on(socket):
+    """A float input that is linked, or set above 0."""
+    return socket.is_linked or socket.default_value > 0.0
+
+
+def fold_metallic_into_base_color(tree, node):
+    """
+    Base Color <- Base Color x (1 - Metallic), built from whatever feeds each
+    input now (a texture chain or a constant). Vector Math SCALE multiplies the
+    colour's three channels by one factor; the colour's alpha is separate in
+    Blender (the Alpha input), so cutouts are untouched.
+    """
+    base = node.inputs['Base Color']
+    metallic = node.inputs['Metallic']
+
+    one_minus_metallic = tree.nodes.new('ShaderNodeMath')
+    one_minus_metallic.label = 'GI: 1 - metallic'
+    one_minus_metallic.operation = 'SUBTRACT'
+    one_minus_metallic.use_clamp = True
+    one_minus_metallic.inputs[0].default_value = 1.0
+    if metallic.is_linked:
+        tree.links.new(metallic.links[0].from_socket, one_minus_metallic.inputs[1])
+    else:
+        one_minus_metallic.inputs[1].default_value = metallic.default_value
+
+    diffuse_colour = tree.nodes.new('ShaderNodeVectorMath')
+    diffuse_colour.label = 'GI: base x (1 - metallic)'
+    diffuse_colour.operation = 'SCALE'
+    if base.is_linked:
+        tree.links.new(base.links[0].from_socket, diffuse_colour.inputs['Vector'])
+    else:
+        diffuse_colour.inputs['Vector'].default_value = tuple(base.default_value[:3])
+    tree.links.new(one_minus_metallic.outputs['Value'], diffuse_colour.inputs['Scale'])
+    tree.links.new(diffuse_colour.outputs['Vector'], base)
+
+
 def force_input(tree, node, name, value):
     """Removes every link into input `name`, then sets its value. Returns the number of links removed."""
     socket = node.inputs.get(name)
