@@ -14,7 +14,7 @@
  */
 
 import { DoubleSide, NodeMaterial, type Node } from 'three/webgpu';
-import { normalWorld, positionWorld, uniform, vec4, wgsl, wgslFn } from 'three/tsl';
+import { normalWorld, positionWorld, screenUV, uniform, vec4, wgsl, wgslFn } from 'three/tsl';
 import { wgslParameterType, type ShadingModule } from './library';
 import { ShadingNodes } from './shading-nodes';
 
@@ -33,10 +33,11 @@ function entryWgsl(shading: ShadingModule): string {
     position: vec3f,
     normal: vec3f,
     view: f32,
+    screenUV: vec2f,
 ${declarations}
 ) -> vec3f {
     // Debug view ids are small whole numbers; + 0.5 so the conversion can't round down past one.
-    return giDebugColor(position, normal, u32(view + 0.5), ${resources});
+    return giDebugColor(position, normal, u32(view + 0.5), screenUV, ${resources});
 }`;
 }
 
@@ -48,7 +49,8 @@ export class DdgiDebugMaterial {
     constructor(shading: ShadingModule) {
         this.nodes = new ShadingNodes(shading);
         const entry = wgslFn(entryWgsl(shading), [wgsl(shading.code)]);
-        const color = entry({ position: positionWorld, normal: normalWorld, view: this.viewUniform, ...this.nodes.byName }) as unknown as Node<'vec3'>;
+        // screenUV: screen-space techniques draw their views by the pixel's place (the radiance cache).
+        const color = entry({ position: positionWorld, normal: normalWorld, view: this.viewUniform, screenUV, ...this.nodes.byName }) as unknown as Node<'vec3'>;
         const material = new NodeMaterial();
         material.name = 'ddgi debug view';
         material.lights = false;

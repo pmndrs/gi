@@ -84,7 +84,7 @@ describe('the DDGI shading module', () => {
         expect(globals).toMatch(/@group\(2\) @binding\(5\) var<uniform> giShadingUniforms: GiShadingUniforms;/);
         expect(globals).toMatch(/fn giIrradianceAt\(position: vec3f, normal: vec3f, viewDirection: vec3f, screenUV: vec2f\) -> vec3f/);
         expect(globals).toMatch(/fn giCoverageAt\(position: vec3f, normal: vec3f\) -> f32/);
-        expect(globals).toMatch(/fn giDebugColorAt\(position: vec3f, normal: vec3f, view: u32\) -> vec3f/);
+        expect(globals).toMatch(/fn giDebugColorAt\(position: vec3f, normal: vec3f, view: u32, screenUV: vec2f\) -> vec3f/);
         expect(globals).not.toContain('var<storage');
     });
 
