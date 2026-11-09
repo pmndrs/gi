@@ -148,7 +148,8 @@ import {
 import { cameraFalloffDistance, frustumPlanes, inViewMargin } from './camera.ts';
 import {
     planVolumes,
-    shareUnits,
+    UnitSharer,
+    volumeFloorUnits,
     volumeSettingsList,
     VOLUME_TABLE_FORMAT,
     VOLUME_TABLE_ROW_FLOATS,
@@ -630,6 +631,8 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
     private volumeTableRows = new Float32Array(0);
     /** The rate the platform last asked Budget v2's floor for (`minUnitsPerFrame`); null under a units budget. */
     private platformFloorRate: WorkFloorRate | null = null;
+    /** Shares each frame's probes between the volumes, carrying fractions over frames (volumes.ts); new at `prepare`. */
+    private unitSharer = new UnitSharer([]);
     /** Frames since `prepare` whose changes ran `ddgi/mark`, and the entries in the latest one (CPU-side counters). */
     private markFrames = 0;
     private latestMarkEntries = 0;
@@ -946,6 +949,7 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         );
         // The table is written from the settings at the first frame (refreshVolumeTable), and here so it is whole before any.
         this.volumeTableRows = new Float32Array(0);
+        this.unitSharer = new UnitSharer(this.volumes.map((volume) => volume.grid.probeCount));
         this.refreshVolumeTable(context);
         this.markFrames = 0;
         this.latestMarkEntries = 0;
@@ -1239,12 +1243,13 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         // tile is composed this frame. A change of the sun's colour or intensity is one, with a sun layer.
         const composeAll = this.updateLayerWeights(context, first, sun?.descriptor ?? null);
 
-        // Each volume its share of the probes, so each is swept at the same rate (volumes.ts).
-        const shares = shareUnits(frame.units, volumes.map((volume) => volume.grid.probeCount));
+        // Each volume its floor and its share of the rest, so each is swept at the same rate (frameShares).
+        const shares = this.frameShares(frame.units);
         const marks = { frames: 0, entries: 0 };
         let used = 0;
         volumes.forEach((volume, index) => {
-            used += this.encodeVolume(encoder, context, volume, frame, { units: shares[index], sunMarks, sun: sun?.descriptor ?? null, composeAll, marks });
+            const { units, floor } = shares[index];
+            used += this.encodeVolume(encoder, context, volume, frame, { units, floor, sunMarks, sun: sun?.descriptor ?? null, composeAll, marks });
         });
         this.latestMarkEntries = marks.entries;
         if (marks.frames > 0) this.markFrames++;
@@ -1266,6 +1271,8 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         frame: TechniqueFrame,
         shared: {
             readonly units: number;
+            /** Budget v2's floor for this volume: the batch while a change is taken in never goes under it. */
+            readonly floor: number;
             readonly sunMarks: SunLayerMarks | null;
             readonly sun: DirectionalLightDescriptor | null;
             readonly composeAll: boolean;
@@ -1296,7 +1303,7 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
                         offered,
                         { full: raysPerProbe, fixed: FIXED_RAYS },
                         changeServing(resources.grid, offered, this.settings).changeOutlastsWindow,
-                        this.floorUnits(offered, resources),
+                        shared.floor,
                     );
         const count = Math.max(0, Math.min(Number.isNaN(handOut) ? 0 : Math.floor(handOut), resources.maxProbesPerFrame, probeCount));
         state.probesUpdated = count;
@@ -1637,8 +1644,10 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
      * without them those counters are absent, not guessed.
      *
      * With several volumes, counts are summed over them ("volumes" says how
-     * many), "taking in a change" is 1 while any volume is, and the change
-     * clock is the first volume's.
+     * many), "taking in a change" is 1 while any volume is, and each volume's
+     * change clock is reported as well ("change clock (volume i)", in
+     * priority order) beside their sum ("change clock", modulo 2^32 as the
+     * clocks wrap).
      */
     get counters(): Readonly<Record<string, number>> {
         const volumes = this.volumes;
@@ -1676,8 +1685,9 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
             'key changes passed (total)': census[CENSUS_KEY_CHANGES_PASSED_TOTAL],
             'probes propagated': census[CENSUS_PROBES_PROPAGATED],
             'probes propagated (total)': census[CENSUS_PROBES_PROPAGATED_TOTAL],
-            // A clock, not a count: the first volume's.
-            'change clock': first.state.latestCensus[CENSUS_CHANGE_CLOCK],
+            // Each volume has a clock of its own: their sum (one volume's own with one), and each beside it with several.
+            'change clock': census[CENSUS_CHANGE_CLOCK],
+            ...(volumes.length > 1 ? Object.fromEntries(volumes.map((volume, index) => [`change clock (volume ${index})`, volume.state.latestCensus?.[CENSUS_CHANGE_CLOCK] ?? 0])) : {}),
             'rays traced': census[CENSUS_RAYS_TRACED],
             ...(first.directWorkList
                 ? { 'hits lit by gi/direct': census[CENSUS_DIRECT_HITS], 'hits that did not fit gi/direct\'s list': census[CENSUS_DIRECT_DROPPED] }
@@ -1699,27 +1709,57 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         this.platformFloorRate = rate;
         const volumes = this.volumes;
         if (volumes.length === 0) return 0;
-        return minProbesPerFrame(this.settings.minProbesPerFrame, totalProbes(volumes), totalMaxProbesPerFrame(volumes), rate);
+        // With several volumes, each has its own floor (volumes.ts, volumeFloorUnits), and the technique's is their sum.
+        return this.volumeFloors(rate).reduce((sum, floor) => sum + floor, 0);
     }
 
     /**
-     * Budget v2's floor for this frame's batch in one volume: the
-     * technique's floor, shared between the volumes as the batch is
-     * (volumes.ts). The technique's floor is at the frame rate and
-     * calibration the platform last asked about, or, when the host hands out
-     * units itself (no millisecond budget, so the platform never asks), at
-     * the observed frame rate (60 until known) with the hand-out standing in
-     * for the calibrated batch.
+     * Budget v2's floor for each volume at `rate`. One volume: the
+     * technique's floor, as before volumes. Several: each its own
+     * (`volumeFloorUnits`), so a small volume beside a big one is still swept
+     * within FLOOR_SWEEP_SECONDS and never gets 0 probes a frame.
      */
-    private floorUnits(handOut: number, resources: PreparedResources): number {
+    private volumeFloors(rate: { readonly framesPerSecond: number; readonly calibratedUnits: number }): number[] {
         const volumes = this.volumes;
+        const setting = this.settings.minProbesPerFrame;
+        if (volumes.length === 1) return [minProbesPerFrame(setting, volumes[0].grid.probeCount, volumes[0].maxProbesPerFrame, rate)];
+        const total = totalProbes(volumes);
+        return volumes.map((volume) => volumeFloorUnits(setting, { probeCount: volume.grid.probeCount, maxProbesPerFrame: volume.maxProbesPerFrame }, total, rate));
+    }
+
+    /**
+     * The rate Budget v2's floor is worked out at this frame: the one the
+     * platform last asked about, or, when the host hands out units itself
+     * (no millisecond budget, so the platform never asks), the observed frame
+     * rate (60 until known) with the hand-out standing in for the calibrated
+     * batch.
+     */
+    private floorRate(handOut: number): { readonly framesPerSecond: number; readonly calibratedUnits: number } {
+        return this.platformFloorRate ?? { framesPerSecond: this.observedFramesPerSecond() ?? FLOOR_ASSUMED_FRAMES_PER_SECOND, calibratedUnits: handOut };
+    }
+
+    /**
+     * This frame's probes for each volume, and each volume's floor (for the
+     * batch while a change is taken in). One volume takes the hand-out as it
+     * comes, as before volumes. Several: each gets its floor first, and the
+     * rest of the hand-out is shared by probe count with the fractions
+     * carried over frames (`UnitSharer`), so no volume is starved however
+     * small its share; when the floors add up to more than the hand-out,
+     * the floors win, as Budget v2's floor wins over the millisecond ceiling.
+     */
+    private frameShares(units: number): { readonly units: number; readonly floor: number }[] {
+        const volumes = this.volumes;
+        const maxTotal = totalMaxProbesPerFrame(volumes);
         const probeCount = totalProbes(volumes);
-        const maxProbesPerFrame = totalMaxProbesPerFrame(volumes);
-        // The technique's hand-out, from this volume's share of it.
-        const techniqueHandOut = Math.min(handOut * (probeCount / resources.grid.probeCount), maxProbesPerFrame, probeCount);
-        const rate = this.platformFloorRate ?? { framesPerSecond: this.observedFramesPerSecond() ?? FLOOR_ASSUMED_FRAMES_PER_SECOND, calibratedUnits: techniqueHandOut };
-        const floor = minProbesPerFrame(this.settings.minProbesPerFrame, probeCount, maxProbesPerFrame, rate);
-        return shareUnits(floor, volumes.map((volume) => volume.grid.probeCount))[volumes.indexOf(resources)];
+        if (volumes.length === 1) {
+            const offered = Math.min(units, volumes[0].maxProbesPerFrame, probeCount);
+            return [{ units, floor: this.volumeFloors(this.floorRate(offered))[0] }];
+        }
+        const floors = this.volumeFloors(this.floorRate(Math.min(units, maxTotal, probeCount)));
+        if (units === Number.POSITIVE_INFINITY) return floors.map((floor) => ({ units, floor }));
+        const rest = Math.max(0, (Number.isFinite(units) ? units : 0) - floors.reduce((sum, floor) => sum + floor, 0));
+        const shares = this.unitSharer.share(rest);
+        return floors.map((floor, index) => ({ units: floor + shares[index], floor }));
     }
 
     /** The frame rate from the recent frames' median `deltaTime`; undefined before any. */
@@ -2151,9 +2191,9 @@ function warmUpPassesMade(volumes: readonly PreparedResources[]): number {
 
 /**
  * The volumes' latest censuses added word by word, for the counters: counts
- * add up over volumes (the change clock, a clock, is read from the first
- * volume's instead). The first volume's own census with one volume; null
- * until every volume has one.
+ * add up over volumes (the change clocks too, modulo 2^32; the counters list
+ * each volume's beside the sum). The first volume's own census with one
+ * volume; null until every volume has one.
  */
 function summedCensus(volumes: readonly PreparedResources[]): Uint32Array | null {
     if (volumes.length === 0 || volumes.some((volume) => !volume.state.latestCensus)) return null;

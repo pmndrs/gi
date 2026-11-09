@@ -25,15 +25,23 @@
  *   update list, history and scheduler: the kernels see one volume at a time
  *   (`ddgiUniformVolume()`), so nothing in them changes but where a probe's
  *   tiles are. A frame's probe updates are shared in proportion to the
- *   volumes' probe counts (`shareUnits`), so every volume is swept at the
+ *   volumes' probe counts (`UnitSharer`), so every volume is swept at the
  *   same rate.
  */
 
 import { GILimitError } from '../../platform/contract/errors.ts';
-import { probeGrid, type DDGIVolumeSettings, type ProbeGrid } from './settings.ts';
+import { minProbesPerFrame, probeGrid, type DDGIVolumeSettings, type ProbeGrid } from './settings.ts';
 
 /** At most this many volumes in one technique (m3-moving.md §4.1). */
 export const MAX_VOLUMES = 8;
+
+/**
+ * Timed passes one volume adds to a frame with one `gi/direct` round (up to
+ * 1,024 probes): mark, schedule, trace, `gi/direct`, blend, write, propagate,
+ * compose, census. The platform's GPU timer must have room for MAX_VOLUMES
+ * of these (gpu-timer.ts, DEFAULT_MAX_PASSES_PER_FRAME; volumes.test.ts).
+ */
+export const TIMED_PASSES_PER_VOLUME = 9;
 
 /**
  * Coverage: how far past the outermost probes the field still counts as
@@ -188,22 +196,73 @@ export function writeVolumeParameters(
 }
 
 /**
- * A frame's probe updates shared between the volumes in proportion to their
- * probe counts, so each is swept at the same rate: floor shares, and the
- * probes left over one each to the largest volumes first. One volume gets
- * the hand-out exactly as it came (fractions and Infinity included), as the
- * technique always took it.
+ * Shares a frame's probe updates between the volumes in proportion to their
+ * probe counts, so each is swept at the same rate. A volume's exact share is
+ * rarely whole (Sponza-sized coarse volume of 20,000 probes and a dense one
+ * of 125 at 154 probes a frame: 0.96 a frame for the small one), so each
+ * volume carries the fraction it didn't get to the next frame; over frames
+ * every volume gets exactly its share, however small. Each frame the whole
+ * probes handed out add up to the hand-out (rounded down), the leftovers
+ * going to the volumes owed the most (largest remainder).
+ *
+ * One volume gets the hand-out exactly as it came (fractions and Infinity
+ * included), as the technique always took it. Infinity gives every volume
+ * as many as it can take.
  */
-export function shareUnits(units: number, probeCounts: readonly number[]): number[] {
-    if (probeCounts.length === 1) return [units];
-    // "As many as you like": each volume takes as many as it can.
-    if (units === Number.POSITIVE_INFINITY) return probeCounts.map(() => Number.POSITIVE_INFINITY);
-    const total = probeCounts.reduce((sum, count) => sum + count, 0);
-    const whole = Number.isFinite(units) && units > 0 ? Math.floor(units) : 0;
-    if (total <= 0 || whole === 0) return probeCounts.map(() => 0);
-    const shares = probeCounts.map((count) => Math.floor((whole * count) / total));
-    let left = whole - shares.reduce((sum, share) => sum + share, 0);
-    const largestFirst = probeCounts.map((count, index) => ({ count, index })).sort((a, b) => b.count - a.count || a.index - b.index);
-    for (let next = 0; left > 0; next = (next + 1) % largestFirst.length, left--) shares[largestFirst[next].index]++;
-    return shares;
+export class UnitSharer {
+    private readonly probeCounts: readonly number[];
+    private readonly totalProbes: number;
+    /** What each volume was owed but didn't get, in probes; carried to the next frame (each within ±1). */
+    private readonly carried: number[];
+
+    constructor(probeCounts: readonly number[]) {
+        this.probeCounts = probeCounts;
+        this.totalProbes = probeCounts.reduce((sum, count) => sum + count, 0);
+        this.carried = probeCounts.map(() => 0);
+    }
+
+    share(units: number): number[] {
+        const counts = this.probeCounts;
+        if (counts.length === 1) return [units];
+        if (units === Number.POSITIVE_INFINITY) return counts.map(() => Number.POSITIVE_INFINITY);
+        if (!(units > 0) || !Number.isFinite(units) || this.totalProbes <= 0) return counts.map(() => 0);
+        // What each volume is owed this frame: its exact share plus what it was owed before.
+        const owed = counts.map((count, index) => (units * count) / this.totalProbes + this.carried[index]);
+        const given = owed.map((amount) => Math.max(0, Math.floor(amount)));
+        // The probes left over, one each to the volumes owed the largest fraction (ties: list order).
+        let left = Math.floor(units) - given.reduce((sum, share) => sum + share, 0);
+        const byRemainder = owed.map((amount, index) => ({ remainder: amount - given[index], index })).sort((a, b) => b.remainder - a.remainder || a.index - b.index);
+        for (let next = 0; left > 0; next = (next + 1) % byRemainder.length, left--) given[byRemainder[next].index]++;
+        // Rounding the owed amounts can give out one more than the hand-out; take it back from the least owed.
+        for (let next = byRemainder.length - 1; left < 0; next = (next - 1 + byRemainder.length) % byRemainder.length) {
+            const index = byRemainder[next].index;
+            if (given[index] > 0) {
+                given[index]--;
+                left++;
+            }
+        }
+        // Clamped, so a volume that can't take its share (none here; shares never exceed it) can't bank a debt for ever.
+        owed.forEach((amount, index) => (this.carried[index] = Math.min(1, Math.max(-1, amount - given[index]))));
+        return given;
+    }
+}
+
+/**
+ * Budget v2's floor for one volume of several (settings.ts,
+ * `minProbesPerFrame`): every volume gets its own, so each is swept within
+ * FLOOR_SWEEP_SECONDS whatever its size, and never 0 probes a frame unless
+ * the floor is switched off (`minProbesPerFrame: 0`). An explicit number is
+ * shared by probe count, rounded up. The device limit (twice the calibrated
+ * batch) is the technique's, as with one volume.
+ */
+export function volumeFloorUnits(
+    setting: number | 'auto',
+    volume: { readonly probeCount: number; readonly maxProbesPerFrame: number },
+    totalProbes: number,
+    rate: { readonly framesPerSecond: number; readonly calibratedUnits: number },
+): number {
+    if (setting !== 'auto' && !(Number.isFinite(setting) && setting > 0)) return 0;
+    const volumeSetting = setting === 'auto' ? 'auto' : Math.ceil((setting * volume.probeCount) / Math.max(1, totalProbes));
+    const floor = minProbesPerFrame(volumeSetting, volume.probeCount, volume.maxProbesPerFrame, rate);
+    return Math.min(volume.maxProbesPerFrame, Math.max(1, floor));
 }

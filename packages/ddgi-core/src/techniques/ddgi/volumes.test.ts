@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { GILimitError } from '../../platform/contract/errors.ts';
 import { withDefaults } from './settings.ts';
-import { MAX_VOLUMES, planVolumes, shareUnits, VOLUME_TABLE_ROW_FLOATS, volumeEdgeCoverage, volumeSettingsList, writeVolumeParameters } from './volumes.ts';
+import { DEFAULT_MAX_PASSES_PER_FRAME } from '../../platform/timing/gpu-timer.ts';
+import { MAX_VOLUMES, planVolumes, TIMED_PASSES_PER_VOLUME, UnitSharer, VOLUME_TABLE_ROW_FLOATS, volumeEdgeCoverage, volumeFloorUnits, volumeSettingsList, writeVolumeParameters } from './volumes.ts';
 
 // Two-room's volume (17 x 7 x 9 probes at 0.5 m) and a dense one inside it (13 x 12 x 13 at 0.25 m).
 const COARSE = { center: [4.1, 1.4, 2.0], size: [8.4, 3.0, 4.2], spacing: 0.5 } as const;
@@ -61,13 +62,65 @@ describe('several DDGI volumes (m3-moving.md §4.1)', () => {
         expect([...row.subarray(12, 16)]).toEqual([6, 14, 17, 13]);
     });
 
-    it('shares a frame’s probe updates in proportion to the volumes’ probes, summing to the hand-out', () => {
-        expect(shareUnits(100, [3000, 1000])).toEqual([75, 25]);
-        const shares = shareUnits(101, [2028, 1071]);
+    it('shares a frame’s probe updates in proportion to the volumes’ probes, each frame adding up to the hand-out', () => {
+        expect(new UnitSharer([3000, 1000]).share(100)).toEqual([75, 25]);
+        const shares = new UnitSharer([2028, 1071]).share(101);
         expect(shares.reduce((sum, share) => sum + share, 0)).toBe(101);
         expect(shares[0]).toBeGreaterThan(shares[1]);
-        expect(shareUnits(0, [10, 10])).toEqual([0, 0]);
-        expect(shareUnits(Number.POSITIVE_INFINITY, [10, 10])).toEqual([Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY]);
+        expect(new UnitSharer([10, 10]).share(0)).toEqual([0, 0]);
+        expect(new UnitSharer([10, 10]).share(Number.POSITIVE_INFINITY)).toEqual([Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY]);
+    });
+
+    it('never starves a small volume beside a big one: its fraction carries over frames (the T3.5 review cases)', () => {
+        for (const [units, counts] of [
+            [154, [20000, 125]],
+            [30, [4840, 125]],
+        ] as const) {
+            const sharer = new UnitSharer(counts);
+            const frames = 1000;
+            const given = [0, 0];
+            for (let frame = 0; frame < frames; frame++) {
+                const shares = sharer.share(units);
+                expect(shares[0] + shares[1]).toBe(units);
+                given[0] += shares[0];
+                given[1] += shares[1];
+            }
+            // Over the frames each volume gets its exact share, within one probe.
+            const exactSmall = (frames * units * counts[1]) / (counts[0] + counts[1]);
+            expect(given[1]).toBeGreaterThan(0);
+            expect(Math.abs(given[1] - exactSmall)).toBeLessThanOrEqual(1);
+            expect(given[0] + given[1]).toBe(frames * units);
+        }
+    });
+
+    it('adds up to the hand-out over a long run with changing hand-outs and three volumes', () => {
+        const counts = [19425, 2700, 64];
+        const sharer = new UnitSharer(counts);
+        const total = counts.reduce((sum, count) => sum + count, 0);
+        const given = [0, 0, 0];
+        let handedOut = 0;
+        for (let frame = 0; frame < 5000; frame++) {
+            const units = 40 + ((frame * 37) % 300);
+            const shares = sharer.share(units);
+            expect(shares.reduce((sum, share) => sum + share, 0)).toBe(units);
+            shares.forEach((share, index) => (given[index] += share));
+            handedOut += units;
+        }
+        expect(given.reduce((sum, share) => sum + share, 0)).toBe(handedOut);
+        counts.forEach((count, index) => expect(Math.abs(given[index] - (handedOut * count) / total)).toBeLessThanOrEqual(1));
+    });
+
+    it('gives every volume its own floor: a sweep within 4 s and never 0 probes a frame', () => {
+        const rate = { framesPerSecond: 60, calibratedUnits: 154 };
+        const small = volumeFloorUnits('auto', { probeCount: 125, maxProbesPerFrame: 125 }, 20125, rate);
+        expect(small).toBeGreaterThanOrEqual(1);
+        // 125 probes at 1 a frame: swept in 125 frames, about 2 s at 60 Hz.
+        expect(Math.ceil(125 / small) / 60).toBeLessThanOrEqual(4);
+        const big = volumeFloorUnits('auto', { probeCount: 20000, maxProbesPerFrame: 4096 }, 20125, rate);
+        expect(Math.ceil(20000 / big) / 60).toBeLessThanOrEqual(4);
+        // An explicit floor is shared by probe count (rounded up, never 0); 0 switches it off.
+        expect(volumeFloorUnits(30, { probeCount: 125, maxProbesPerFrame: 125 }, 4965, rate)).toBe(1);
+        expect(volumeFloorUnits(0, { probeCount: 125, maxProbesPerFrame: 125 }, 4965, rate)).toBe(0);
     });
 
     it('fades a volume out over the half spacing past its margin', () => {
@@ -82,8 +135,15 @@ describe('several DDGI volumes (m3-moving.md §4.1)', () => {
         expect(at(lastX + 1)).toBe(0);
     });
 
+    it('fits every volume’s passes in the GPU timer’s frame, with room for the platform’s and extra direct rounds', () => {
+        // The platform's own timed passes in a frame: top-level refit, light grid, sky bake, mesh packing; 8 is generous.
+        const platformPasses = 8;
+        expect(MAX_VOLUMES * TIMED_PASSES_PER_VOLUME + platformPasses).toBeLessThanOrEqual(DEFAULT_MAX_PASSES_PER_FRAME);
+    });
+
     it('hands one volume the hand-out exactly as it came', () => {
-        expect(shareUnits(100.7, [1071])).toEqual([100.7]);
-        expect(shareUnits(Number.POSITIVE_INFINITY, [1071])).toEqual([Number.POSITIVE_INFINITY]);
+        const sharer = new UnitSharer([1071]);
+        expect(sharer.share(100.7)).toEqual([100.7]);
+        expect(sharer.share(Number.POSITIVE_INFINITY)).toEqual([Number.POSITIVE_INFINITY]);
     });
 });

@@ -295,8 +295,10 @@ fn ddgiLayeredIrradiance(position: vec3f, normal: vec3f, viewDirection: vec3f) -
     let count = ddgiVolumeCount(ddgiVolumeTable);
     var blended = DdgiLayerRadiance();
     var gatheredWeight = 0.0;
-    var firstIrradiance = DdgiLayerRadiance();
+    var firstRead = DdgiLayerRadiance();
+    var firstContributing = DdgiLayerRadiance();
     var volumesRead = 0u;
+    var contributingVolumes = 0u;
     for (var index = 0u; index < count; index++) {
         let volume = ddgiTableVolume(ddgiVolumeTable, index);
         let edgeCoverage = ddgiVolumeEdgeCoverage(volume, position);
@@ -306,19 +308,28 @@ fn ddgiLayeredIrradiance(position: vec3f, normal: vec3f, viewDirection: vec3f) -
         let field = ddgiLayeredVolume(volume, position, normal, viewDirection);
         let irradiance = ddgiDivideLayers(field.sums, max(field.weight, DDGI_MIN_WEIGHT_SUM));
         if (volumesRead == 0u) {
-            firstIrradiance = irradiance;
+            firstRead = irradiance;
         }
-        let share = ddgiBlendShare(edgeCoverage, field.weight, gatheredWeight);
-        blended = ddgiAddLayers(blended, ddgiScaleLayers(irradiance, share));
-        gatheredWeight += share;
         volumesRead++;
-        if (ddgiBlendDone(gatheredWeight, volumesRead)) {
+        let share = ddgiBlendShare(edgeCoverage, field.weight, gatheredWeight);
+        if (share > 0.0) {
+            if (contributingVolumes == 0u) {
+                firstContributing = irradiance;
+            }
+            contributingVolumes++;
+            blended = ddgiAddLayers(blended, ddgiScaleLayers(irradiance, share));
+            gatheredWeight += share;
+        }
+        if (ddgiBlendDone(gatheredWeight, contributingVolumes)) {
             break;
         }
     }
-    // As ddgiBlendIrradiance: one volume's own value when only one was read or nothing has weight.
-    if (volumesRead <= 1u || gatheredWeight <= 0.0) {
-        return firstIrradiance;
+    // As ddgiBlendIrradiance: the first volume read when none added weight, the one volume's own value when one did.
+    if (contributingVolumes == 0u) {
+        return firstRead;
+    }
+    if (contributingVolumes == 1u) {
+        return firstContributing;
     }
     return ddgiDivideLayers(blended, gatheredWeight);
 }

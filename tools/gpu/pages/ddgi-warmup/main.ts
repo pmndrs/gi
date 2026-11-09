@@ -33,7 +33,10 @@ const HEIGHT = 180;
 
 async function platformFor(device: GPUDevice, sceneId: string, warmUpPasses: number | undefined) {
     const manifest = loadManifest(sceneId);
-    const platform = new GIPlatformImpl(device, { label: `warm-up ${sceneId}`, gpuTiming: true });
+    // Both runs keep their first (GPU) trees through the warm-up: tinybvh's trees replace them whenever its worker
+    // finishes, which is a different frame in each run, so without the hold the two fields were traced on different
+    // trees for some frames and the comparison failed now and then (T3.5's review: 1 run in 3 on m3).
+    const platform = new GIPlatformImpl(device, { label: `warm-up ${sceneId}`, gpuTiming: true, meshTrees: { holdRefinements: true } });
     describeScene(platform, manifest);
     const volume = { center: manifest.volume.center, size: manifest.volume.size, spacing: manifest.volume.probeSpacing };
     const ddgi = platform.addTechnique(new DDGITechnique(warmUpPasses === undefined ? { volume } : { volume, warmUpPasses }));

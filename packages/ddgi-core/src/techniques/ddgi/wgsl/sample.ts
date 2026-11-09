@@ -378,7 +378,10 @@ fn ddgiSampleIrradiance(
 // weight
 //     w_v = coverage_v * (1 - W),
 // W being the weight gathered so far, and the visit stops once W reaches
-// DDGI_BLEND_COMPLETE or DDGI_MAX_BLENDED_VOLUMES volumes were read. Inside a
+// DDGI_BLEND_COMPLETE or DDGI_MAX_BLENDED_VOLUMES volumes have added weight
+// (a volume that covers the point but whose probes all have weight 0 there
+// adds nothing and doesn't count, so with three nested volumes the third
+// still fills in behind it). Inside a
 // higher-priority volume that is one volume's sampling, as before; only in
 // its fade band are two read. The blend's irradiance is (sum of w_v E_v) / W
 // and its coverage W, so a renderer's mix(environment, irradiance, coverage)
@@ -392,7 +395,7 @@ const DDGI_COVERAGE_FULL_MARGIN: f32 = ${COVERAGE_FULL_MARGIN_SPACINGS};
 const DDGI_COVERAGE_FADE: f32 = ${COVERAGE_FADE_SPACINGS};
 // The visit stops once the gathered weight reaches this...
 const DDGI_BLEND_COMPLETE: f32 = ${BLEND_COMPLETE_WEIGHT};
-// ...or after this many volumes, so no point costs more than two volumes' sampling.
+// ...or once this many volumes have added weight: in a fade band two volumes' sampling, not more.
 const DDGI_MAX_BLENDED_VOLUMES: u32 = ${MAX_BLENDED_VOLUMES}u;
 
 // 1 within half a spacing of a volume's outermost probes, falling to 0 over
@@ -438,18 +441,22 @@ fn ddgiBlendShare(edgeCoverage: f32, fieldWeight: f32, gatheredWeight: f32) -> f
     return edgeCoverage * saturate(fieldWeight / DDGI_COVERAGE_FULL_WEIGHT) * (1.0 - gatheredWeight);
 }
 
-// Whether the blend has read enough volumes.
-fn ddgiBlendDone(gatheredWeight: f32, volumesRead: u32) -> bool {
-    return gatheredWeight >= DDGI_BLEND_COMPLETE || volumesRead >= DDGI_MAX_BLENDED_VOLUMES;
+// Whether the blend has gathered enough: the weight, or the volumes that added some.
+fn ddgiBlendDone(gatheredWeight: f32, contributingVolumes: u32) -> bool {
+    return gatheredWeight >= DDGI_BLEND_COMPLETE || contributingVolumes >= DDGI_MAX_BLENDED_VOLUMES;
 }
 
-// The blend's irradiance: the volumes' weighted mean; the first volume read's
-// own value when only one was read or nothing has weight. The first case keeps
-// a single volume's answer exactly as ddgiSampleIrradiance gives it (no
-// w * E / w rounding), so a one-volume field reads as it did before volumes.
-fn ddgiBlendIrradiance(blended: vec3f, gatheredWeight: f32, firstIrradiance: vec3f, volumesRead: u32) -> vec3f {
-    if (volumesRead <= 1u || gatheredWeight <= 0.0) {
-        return firstIrradiance;
+// The blend's irradiance: the volumes' weighted mean when two or more added
+// weight; the one volume's own value when only one did; the first volume
+// read's value when none did. The middle case keeps a single volume's answer
+// exactly as ddgiSampleIrradiance gives it (no w * E / w rounding), so a
+// one-volume field reads as it did before volumes.
+fn ddgiBlendIrradiance(blended: vec3f, gatheredWeight: f32, firstRead: vec3f, firstContributing: vec3f, contributingVolumes: u32) -> vec3f {
+    if (contributingVolumes == 0u) {
+        return firstRead;
+    }
+    if (contributingVolumes == 1u) {
+        return firstContributing;
     }
     return blended / gatheredWeight;
 }
@@ -477,8 +484,10 @@ fn ddgiSampleVolumes(
     let count = ddgiVolumeCount(volumeTable);
     var blended = vec3f(0.0);
     var gatheredWeight = 0.0;
-    var firstIrradiance = vec3f(0.0);
+    var firstRead = vec3f(0.0);
+    var firstContributing = vec3f(0.0);
     var volumesRead = 0u;
+    var contributingVolumes = 0u;
     for (var index = 0u; index < count; index++) {
         let volume = ddgiTableVolume(volumeTable, index);
         let edgeCoverage = ddgiVolumeEdgeCoverage(volume, position);
@@ -488,16 +497,23 @@ fn ddgiSampleVolumes(
         let field = ddgiAccumulateVolume(volume, position, normal, viewDirection, irradianceAtlas, irradianceSampler, distanceAtlas, distanceSampler, probeData);
         let irradiance = field.weightedIrradiance / max(field.weight, DDGI_MIN_WEIGHT_SUM);
         if (volumesRead == 0u) {
-            firstIrradiance = irradiance;
+            firstRead = irradiance;
         }
-        let share = ddgiBlendShare(edgeCoverage, field.weight, gatheredWeight);
-        blended += share * irradiance;
-        gatheredWeight += share;
         volumesRead++;
-        if (ddgiBlendDone(gatheredWeight, volumesRead)) {
+        let share = ddgiBlendShare(edgeCoverage, field.weight, gatheredWeight);
+        if (share > 0.0) {
+            if (contributingVolumes == 0u) {
+                firstContributing = irradiance;
+            }
+            contributingVolumes++;
+            blended += share * irradiance;
+            gatheredWeight += share;
+        }
+        if (ddgiBlendDone(gatheredWeight, contributingVolumes)) {
             break;
         }
     }
-    return DdgiVolumesSample(ddgiBlendIrradiance(blended, gatheredWeight, firstIrradiance, volumesRead), gatheredWeight);
+    let irradiance = ddgiBlendIrradiance(blended, gatheredWeight, firstRead, firstContributing, contributingVolumes);
+    return DdgiVolumesSample(irradiance, gatheredWeight);
 }
 `;

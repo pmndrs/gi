@@ -85,12 +85,16 @@ export interface GpuTimerCounters {
 
 const DEFAULT_SLOT_COUNT = 8;
 /**
- * 32 since several DDGI volumes (M3, T3.5): each volume runs DDGI's passes
- * (mark, schedule, trace with `gi/direct`, blend, write, propagate, census)
- * in turn, about 8 a volume, and two volumes with the platform's own passes
- * went past the 16 one volume needed. 2 × 32 × 8 = 512 timestamps a set.
+ * Room for several DDGI volumes (M3, T3.5): each volume runs DDGI's passes in
+ * turn (mark, schedule, trace with `gi/direct`, blend, write, propagate,
+ * compose, census: 9 with one `gi/direct` round, that is up to 1,024 probes
+ * a volume), and DDGI takes up to 8 volumes: 72, plus the platform's own few
+ * (top-level refit, light grid, sky), with room for extra direct rounds.
+ * Untimed passes would make the budget's calibration undercount, so this
+ * must cover a whole frame (checked in volumes.test.ts). Was 16 for one
+ * volume. 2 × 160 = 320 timestamps in a slot's query set.
  */
-const DEFAULT_MAX_PASSES_PER_FRAME = 32;
+export const DEFAULT_MAX_PASSES_PER_FRAME = 160;
 /** Samples nobody collects with `takeSamples` are dropped, oldest first, past this many. */
 const MAX_BUFFERED_SAMPLES = 256;
 const BYTES_PER_TIMESTAMP = 8;
