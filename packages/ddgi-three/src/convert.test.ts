@@ -267,17 +267,21 @@ describe.each(MATERIAL_TYPES)('$name', (type) => {
             expect(warnings).toHaveLength(1);
             expect(warnings[0]).toContain('"swirl"');
             expect(warnings[0]).toContain('grey 0.5');
-            // A map or a colour that isn't the default white is used instead.
-            const map = dataTexture();
-            material.map = map;
+            // Its map is left out: three ignores it under a colorNode.
+            material.map = dataTexture();
             const withMap = convert(material);
-            expectClose(withMap.descriptor.albedo, [1, 1, 1]);
-            expect(withMap.descriptor.albedoTexture).toBe(withMap.handleOf.get(map));
+            expectClose(withMap.descriptor.albedo, CUSTOM_SHADING_ALBEDO);
+            expect(withMap.descriptor.albedoTexture).toBeUndefined();
+            expect(withMap.handleOf.size).toBe(0);
+            // A colour that isn't the default white is used instead of grey.
             material.color.setRGB(0.2, 0.4, 0.6);
             expectClose(convert(material).descriptor.albedo, [0.2, 0.4, 0.6]);
-            // The overrides say what to use: no warning.
-            material.userData.giAlbedoMap = dataTexture();
-            expect(convert(material).warnings).toEqual([]);
+            // giAlbedoMap says what to use: its texture, and no warning.
+            const override = dataTexture();
+            material.userData.giAlbedoMap = override;
+            const told = convert(material);
+            expect(told.descriptor.albedoTexture).toBe(told.handleOf.get(override));
+            expect(told.warnings).toEqual([]);
         });
     }
 });
@@ -297,12 +301,15 @@ describe('custom shading', () => {
         }
     });
 
-    it('reads a node material with an emissiveNode the same way', () => {
-        const material = new MeshStandardNodeMaterial({ name: 'glow' });
+    it('reads a node material with only an emissiveNode as plain: its color and map, no warning', () => {
+        const map = dataTexture();
+        const material = new MeshStandardNodeMaterial({ name: 'glow', map });
         material.emissiveNode = colorNode(5, 5, 5);
-        const { descriptor, warnings } = convert(material);
-        expectClose(descriptor.albedo, CUSTOM_SHADING_ALBEDO);
-        expect(warnings[0]).toContain('"glow"');
+        const { descriptor, warnings, handleOf } = convert(material);
+        // White colour × map, as three draws it; not the grey guess.
+        expectClose(descriptor.albedo, [1, 1, 1]);
+        expect(descriptor.albedoTexture).toBe(handleOf.get(map));
+        expect(warnings).toEqual([]);
     });
 
     it('treats node materials with plain properties like their plain counterparts', () => {

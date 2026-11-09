@@ -30,8 +30,7 @@
  * The flag is read from the object itself, not inherited from its parents.
  */
 
-import type { Object3D } from 'three';
-import type { Color, Texture } from 'three';
+import type { Color, Object3D, Texture } from 'three';
 
 export const GI_USER_DATA = {
     contributes: 'giContributes',

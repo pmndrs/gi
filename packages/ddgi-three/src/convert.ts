@@ -449,24 +449,25 @@ export function metalnessOf(material: Material): number {
 /**
  * How a material's colour is made, as far as GI can tell:
  * - `plain`: from its properties (`color`, `map`, `emissive`...), which GI
- *   reads. Every built-in material, and node materials without a colour or
- *   emissive graph;
- * - `node graph`: a node material with a `colorNode` or `emissiveNode`,
- *   which replace `color` × `map` (or the emission) in three's shader;
+ *   reads. Every built-in material, and node materials without a
+ *   `colorNode` (an `emissiveNode` alone leaves the albedo plain: GI reads
+ *   `color` and `map`, and the emission from `emissive`);
+ * - `node graph`: a node material with a `colorNode`, which replaces
+ *   `color` × `map` entirely in three's shader (NOTES);
  * - `shader`: a `ShaderMaterial` or `RawShaderMaterial`.
  * GI can't run a graph or a shader on its rays, so for the last two it
- * guesses ({@link materialDescriptor}).
+ * guesses the albedo ({@link materialDescriptor}).
  */
 export type MaterialShading = 'plain' | 'node graph' | 'shader';
 
 export function materialShading(material: Material): MaterialShading {
     const flags = fields(material);
     if (flags.isShaderMaterial) return 'shader';
-    if (flags.isNodeMaterial && (flags.colorNode != null || flags.emissiveNode != null)) return 'node graph';
+    if (flags.isNodeMaterial && flags.colorNode != null) return 'node graph';
     return 'plain';
 }
 
-/** The grey GI gives a material whose colour comes from a graph or shader and that has no `color` or `map` to go by. */
+/** The grey GI gives a material whose colour comes from a graph or shader and that has no `color` to go by. */
 export const CUSTOM_SHADING_ALBEDO: ColorRGB = [0.5, 0.5, 0.5];
 
 /**
@@ -536,12 +537,13 @@ function materialName(material: Material): string {
  *   and Basic have no metalness.
  * - **emission:** `emissive` × `emissiveIntensity` × `emissiveMap`. Basic
  *   materials have none.
- * - **custom shading** ({@link materialShading}): a `colorNode` or
- *   `emissiveNode` graph, or a `ShaderMaterial`, can't be read. GI uses
- *   `color` and `map` if they're set, otherwise grey
- *   {@link CUSTOM_SHADING_ALBEDO}, and `emissive` if it's there, with a
+ * - **custom shading** ({@link materialShading}): a `colorNode` graph, or a
+ *   `ShaderMaterial`, can't be read. GI uses `color` if it's set, otherwise
+ *   grey {@link CUSTOM_SHADING_ALBEDO}, and `emissive` if it's there, with a
  *   warning naming the material (unless `userData.giAlbedo` or `giAlbedoMap`
- *   says what to use).
+ *   says what to use). `map` is left out: three ignores it under a
+ *   `colorNode`, so it says nothing about what is drawn; `giAlbedoMap`
+ *   brings a texture back.
  * - **overrides** (user-data.ts): `userData.giAlbedo` replaces `color`,
  *   `giAlbedoMap` replaces `map`, `giEmissive` replaces `emissive`.
  * - **alpha** ({@link alphaModeOf}): `alphaMode`, `alphaCutoff` and
@@ -569,19 +571,20 @@ export function materialDescriptor(
     // Albedo: the colour and the map, each replaceable from userData.
     const albedoOverride = giAlbedoOverride(userData, scratchColor);
     const mapOverride = giAlbedoMapOverride(userData);
-    const albedoMap = mapOverride ?? map ?? null;
+    // Under custom shading three ignores `map` (a colorNode replaces color × map), so only the override counts there.
+    const albedoMap = mapOverride ?? (shading === 'plain' ? (map ?? null) : null);
     let albedo: ColorRGB | undefined;
     if (albedoOverride) {
         albedo = [albedoOverride.r, albedoOverride.g, albedoOverride.b];
     } else if (shading === 'plain') {
         albedo = color ? [color.r, color.g, color.b] : undefined;
     } else {
-        // A graph or shader makes the colour: go by color and map if they're set, otherwise grey.
+        // A graph or shader makes the colour: go by color if it's set, otherwise grey (white × giAlbedoMap with an override map).
         const useColor = colorIsSet(material, color);
-        albedo = useColor ? [color!.r, color!.g, color!.b] : albedoMap ? [1, 1, 1] : [...CUSTOM_SHADING_ALBEDO];
+        albedo = useColor ? [color!.r, color!.g, color!.b] : mapOverride ? [1, 1, 1] : [...CUSTOM_SHADING_ALBEDO];
         if (!mapOverride) {
-            const used = useColor && albedoMap ? 'its color and map' : useColor ? 'its color' : albedoMap ? 'its map' : `grey ${CUSTOM_SHADING_ALBEDO[0]}`;
-            const by = shading === 'shader' ? `a ${material.type}` : 'a node graph (colorNode or emissiveNode)';
+            const used = useColor ? 'its color' : `grey ${CUSTOM_SHADING_ALBEDO[0]}`;
+            const by = shading === 'shader' ? `a ${material.type}` : 'a node graph (colorNode)';
             warn(`material ${materialName(material)} is shaded by ${by}, which GI can't read; GI uses ${used}. Set material.userData.giAlbedo (or giAlbedoMap, giEmissive) to say what GI should see.`);
         }
     }

@@ -284,7 +284,8 @@ This is the mirroring on its own, for hosts that call `gi.encode` themselves.
 | Lambert, Phong, Toon | `color` × `map` | as above |
 | Basic | `color` × `map` | none |
 | Node versions of these (`MeshStandardNodeMaterial`...) with plain properties | as their plain versions | as their plain versions |
-| A node material with a `colorNode` or `emissiveNode`, a `ShaderMaterial` or `RawShaderMaterial` | `color` and `map` if they're set (a node material's `color` counts when it isn't white), otherwise grey 0.5. A one-time warning names the material. | `emissive` if it has one |
+| A node material with a `colorNode`, a `ShaderMaterial` or `RawShaderMaterial` | `color` if it's set (a node material's `color` counts when it isn't white), otherwise grey 0.5. `map` is left out, since three ignores it there. A one-time warning names the material. | `emissive` if it has one |
+| A node material with only an `emissiveNode` | as its plain version | `emissive` (the graph isn't read) |
 
 - Each texture keeps its own uv mapping: offset, repeat, rotation, wrap, and uv channel 0 or 1. A texture on channel 2 or 3 is sampled with channel 0 (a warning).
 - `flipY` textures (three's default for images it loads itself) are sampled the right way up: the adapter turns v upside down for them. glTF textures don't flip.
@@ -296,7 +297,7 @@ This is the mirroring on its own, for hosts that call `gi.encode` themselves.
   A colour is a three `Color` or `[r, g, b]` (linear), or a hex number or CSS string (sRGB, as `new Color()` reads them). Set them on custom-shaded materials to say what GI should see; they also silence the warning.
 - **Alpha** (alpha = `opacity` × the albedo map's alpha):
   - `alphaTest` above 0 (glTF `MASK`) is a cutout: rays pass where alpha is below `alphaTest`. Foliage and fences.
-  - Alpha-blended materials (`transparent` with no `alphaTest`; glTF `BLEND`, so decals too) and `alphaHash` ones are stochastic: a ray passes with probability 1 − alpha, so many rays see the right average (DECISIONS 2026-11-09). A blended material **blocks light by its alpha**; until M4 it let all light through.
+  - Alpha-blended materials (`transparent` with no `alphaTest`; glTF `BLEND`, so decals too) and `alphaHash` ones are stochastic: a ray passes with probability 1 − alpha, so many rays see the right average (DECISIONS 2026-11-09). A blended material **blocks light by its alpha** once the core's stochastic pass lands (T4.2, second half). Until then the core treats blended surfaces, and cutouts, as opaque. Before M4 they let all light through.
 - **Light passes straight through** (`blocksLight: false`):
   - glass (`transmission` above 0);
   - `ShadowMaterial` (a ground that only catches shadows);
@@ -323,7 +324,7 @@ This is the mirroring on its own, for hosts that call `gi.encode` themselves.
 
 **Per object.** Set `userData.giContributes = false` to keep an object out of GI's rays. It still receives GI. Skinned meshes are left out unless they set it to `true`.
 
-**See-through surfaces** are handled triangle by triangle, since M4. Every mesh goes into GI's rays whole, and each triangle follows its own material: a glass pane inside a wall mesh lets light through the pane only, and a decal such as Sponza's `dirt_decal` blocks light by its alpha. The adapter no longer leaves any mesh out for its materials, and no longer warns about meshes that mix see-through and opaque materials.
+**See-through surfaces** are handled triangle by triangle, since M4. Every mesh goes into GI's rays whole, and each triangle follows its own material: a glass pane inside a wall mesh lets light through the pane only, and a decal such as Sponza's `dirt_decal` blocks light by its alpha once the core's stochastic pass lands (T4.2, second half). Until then the core treats it as opaque. The adapter no longer leaves any mesh out for its materials, and no longer warns about meshes that mix see-through and opaque materials.
 
 ## What isn't mirrored
 
@@ -332,7 +333,7 @@ You get a one-time warning for:
 - ambient, hemisphere and `LightProbe` lights. They also add diffuse light on top of GI in three.
 - `RectAreaLight`. Give the surface an emissive material instead.
 - point or spot lights whose `decay` isn't 2;
-- materials shaded by a `colorNode` or `emissiveNode` graph, or a `ShaderMaterial` (GI guesses; see "Materials" above);
+- materials shaded by a `colorNode` graph, or a `ShaderMaterial` (GI guesses; see "Materials" above);
 - `alphaMap`, which GI doesn't read yet: the alpha it uses is `opacity` × the albedo map's alpha;
 - textures it can't read: render targets, video, compressed array and cube textures, compressed formats outside the list above (BC6H, the signed ones), and data textures that aren't 8-bit RGBA. Materials using one shade with their colour alone.
 
