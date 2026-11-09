@@ -901,3 +901,14 @@ date,commit,device,browser,scene,metric,value
 2026-11-09,167734f,Intel UHD,Chrome headless,all,note/correctness_run,1
 2026-11-09,167734f,Intel UHD,Chrome headless,all,note/t2.10_intel_batch,8
 2026-11-09,167734f,Intel UHD,Chrome headless,all,note/rerun_after_hang,1
+2026-11-09,1919130,Intel UHD,Chrome 157.0.8103.38 headless,cornell-box-point/front,t2.10/accuracy/indirect_mean,0.049869
+2026-11-09,1919130,Intel UHD,Chrome 157.0.8103.38 headless,cornell-box-point/front,t2.10/accuracy/cycles_indirect_mean,0.047225
+2026-11-09,1919130,Intel UHD,Chrome 157.0.8103.38 headless,cornell-box-point/front,t2.10/accuracy/indirect_bias,0.056002
+2026-11-09,1919130,Intel UHD,Chrome 157.0.8103.38 headless,cornell-box-point/front,t2.10/accuracy/indirect_flip_8x8,0.101182
+2026-11-09,1919130,Intel UHD,Chrome 157.0.8103.38 headless,cornell-box-point/front,t2.10/accuracy/full_bias,0.025227
+2026-11-09,1919130,Intel UHD,Chrome 157.0.8103.38 headless,cornell-box-point/front,note/correctness_run,1
+2026-11-09,1919130,Intel UHD,Chrome 157.0.8103.38 headless,two-room/lit-room,t2.10/accuracy/indirect_mean,0.71038
+2026-11-09,1919130,Intel UHD,Chrome 157.0.8103.38 headless,two-room/lit-room,t2.10/accuracy/cycles_indirect_mean,0.67687
+2026-11-09,1919130,Intel UHD,Chrome 157.0.8103.38 headless,two-room/lit-room,t2.10/accuracy/indirect_bias,0.049512
+2026-11-09,1919130,Intel UHD,Chrome 157.0.8103.38 headless,two-room/lit-room,t2.10/accuracy/indirect_flip_8x8,0.067853
+2026-11-09,1919130,Intel UHD,Chrome 157.0.8103.38 headless,two-room/lit-room,note/correctness_run,1
