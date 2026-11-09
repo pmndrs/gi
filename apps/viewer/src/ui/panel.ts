@@ -108,6 +108,11 @@ const SCREEN_VIEW_LABELS: Record<DdgiScreenViewName | 'none', string> = {
     'gi-only': 'GI only, on white surfaces',
     coverage: 'Coverage (where DDGI answers)',
     'probe-states': 'Probes near this point',
+    'screen-depth': 'Screen inputs: depth',
+    'screen-normal': 'Screen inputs: normal',
+    'screen-velocity': 'Screen inputs: motion',
+    'screen-albedo': 'Screen inputs: albedo',
+    'screen-instance': 'Screen inputs: object id',
 };
 
 const PROBE_COLOR_LABELS: Record<ProbeColorName, string> = {

@@ -344,7 +344,7 @@ async function checkViews(context: ThreePageContext, rig: Rig, samples: readonly
         const texture = rig.screen.viewTexture;
         assert(texture, `the ${channel} view drew nothing`);
         const pixels = await readRgba8(device, texture);
-        errors[channel] = viewError(channel, pixels, texture.width, samples);
+        errors[channel] = viewError(channel, pixels, texture.width, samples, rig.scene.camera);
         context.log(`view '${channel}': max error at the samples ${(errors[channel] * 255).toFixed(2)} / 255`);
         assert(errors[channel] <= 2.5 / 255, `the ${channel} view differs from what the channel holds by ${(errors[channel] * 255).toFixed(2)} / 255`);
         const tile = await createImageBitmap(new ImageData(pixels, texture.width, texture.height));
@@ -362,12 +362,14 @@ async function checkViews(context: ThreePageContext, rig: Rig, samples: readonly
     // The runner screenshots the page: show the sheet instead of the WebGPU canvas.
     renderer.domElement.style.display = 'none';
     sheet.style.display = 'block';
+    sheet.style.width = '100%';
+    document.body.style.margin = '0';
     document.body.prepend(sheet);
     return errors;
 }
 
 /** The largest difference at the samples between a view and what its channel should look like there. */
-function viewError(channel: ScreenChannel, pixels: Uint8ClampedArray, width: number, samples: readonly ScreenSample[]): number {
+function viewError(channel: ScreenChannel, pixels: Uint8ClampedArray, width: number, samples: readonly ScreenSample[], camera: { near: number; far: number }): number {
     let worst = 0;
     for (const sample of samples) {
         const [x, y] = sample.pixel;
@@ -379,6 +381,10 @@ function viewError(channel: ScreenChannel, pixels: Uint8ClampedArray, width: num
         else if (channel === 'normal' && isSurface(sample)) {
             const length = Math.hypot(...sample.normal);
             expected = sample.normal.map((value) => (value / length) * 0.5 + 0.5);
+        } else if (channel === 'depth' && isSurface(sample)) {
+            // The view's distance shade (ScreenInputsView, default mid grey at 10 m), from the pass camera's planes.
+            const distance = (camera.near * camera.far) / (camera.near + (1 - sample.depth) * (camera.far - camera.near));
+            expected = [1, 1, 1].map(() => 1 / (1 + distance / 10));
         } else if (channel === 'velocity') expected = [...sample.velocity.map((value) => Math.min(1, Math.max(-1, value * 20)) * 0.5 + 0.5), 0.5];
         if (!expected) continue;
         for (let component = 0; component < 3; component++) worst = Math.max(worst, Math.abs(shown[component] - expected[component]));
@@ -397,6 +403,8 @@ await runThreePage(
         log(`screen needs: ${JSON.stringify(scene.platform.screenNeeds)}; channels rendered: ${JSON.stringify(screen.channels)}; outputs ${Object.keys(screen.outputs).join(', ')}`);
         assert(screen.channels.velocity && screen.channels.albedo && screen.channels.instance, "the pass doesn't render every channel the probe asked for");
         scenePass.setMRT(mrt({ output, [GI_NORMAL_OUTPUT]: packNormalToRGB(normalView), ...screen.outputs }));
+        // The view-space normal (check 2's reference): an MRT output is drawn only once its texture exists (NOTES).
+        scenePass.getTexture(GI_NORMAL_OUTPUT);
         const pipeline = new RenderPipeline(renderer, screen.encodeBefore(scenePass.getTextureNode('output') as unknown as Node));
         const rig: Rig = { scene, probe, screen, scenePass, pipeline };
 

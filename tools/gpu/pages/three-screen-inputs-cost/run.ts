@@ -19,6 +19,7 @@
  *   --out <file>            the combined JSON (default: the OS temp folder)
  *   --env KEY=VALUE         passed to the page (repeatable), e.g. --env VITE_DDGI_SECONDS_720=2
  *   --csv                   append the rows to bench/results/screen-inputs.csv
+ *   --csv-to <file>         append them to this file instead (a trial run's rows stay out of bench/results)
  */
 
 import { existsSync } from 'node:fs';
@@ -84,6 +85,7 @@ async function main(): Promise<void> {
             out: { type: 'string' },
             env: { type: 'string', multiple: true },
             csv: { type: 'boolean', default: false },
+            'csv-to': { type: 'string' },
         },
     });
     const gpu = values.gpu ?? 'nvidia';
@@ -103,7 +105,7 @@ async function main(): Promise<void> {
 
     const result = JSON.parse(await readFile(pageJson, 'utf8')) as RunSummary & { commit?: string };
     const page = result.pages[0];
-    const data = (page?.data ?? {}) as { timing?: { sections: InterleavedTiming[] }; userAgent?: string };
+    const data = (page?.data ?? {}) as { timing?: { sections: InterleavedTiming[] }; userAgent?: string; browserVersion?: string | null };
     const sections = (data.timing?.sections ?? []).map((section) => sectionReport(section, sampler?.samples ?? []));
     for (const section of sections) printSection(section);
     const clockFile = process.env[CLOCK_FILE_ENV];
@@ -115,19 +117,20 @@ async function main(): Promise<void> {
         if (headline) console.log(`Filling FrameScreen at ${section.size}: ${headline.median.toFixed(3)} ms over the composite's own MRT (counts only if the lock says VALID and the section was GPU-bound).`);
     }
 
-    if (values.csv) {
+    const csvFile = values['csv-to'] ?? (values.csv ? CSV_FILE : null);
+    if (csvFile) {
         if (page?.outcome !== 'pass') throw new Error(`${PAGE} did not pass (${page?.outcome}); no rows written`);
         const device = deviceNameFromAdapter(result.adapter);
-        const browser = data.userAgent ? browserFromUserAgent(data.userAgent) : 'Chrome headless';
+        const browser = data.userAgent ? browserFromUserAgent(data.userAgent, data.browserVersion ?? null) : 'Chrome headless';
         const adapter = result.adapter ? `${result.adapter.vendor}/${result.adapter.architecture}` : 'unknown';
         const prefix = [result.startedAt.slice(0, 10), result.commit ?? gitCommit(), device, browser, adapter, SCENE, CAMERA];
         const rows: Row[] = sections.flatMap(sectionRows);
         // The clock rule's notes for the whole run (one lock run), NVIDIA only.
         if (lockSummary && isNvidiaDeviceName(device)) for (const note of clockNoteRows(lockSummary)) rows.push({ setting: 'all', metric: note.metric, value: note.value, unit: 'note' });
         const lines = rows.filter((row) => Number.isFinite(row.value)).map((row) => [...prefix, row.setting, row.metric, formatValue(row.value), row.unit].map(csvField).join(','));
-        if (!existsSync(CSV_FILE)) await writeFile(CSV_FILE, `${CSV_HEADER}\n`);
-        await appendFile(CSV_FILE, `${lines.join('\n')}\n`);
-        console.log(`appended ${lines.length} rows to ${CSV_FILE}`);
+        if (!existsSync(csvFile)) await writeFile(csvFile, `${CSV_HEADER}\n`);
+        await appendFile(csvFile, `${lines.join('\n')}\n`);
+        console.log(`appended ${lines.length} rows to ${csvFile}`);
     }
     await writeFile(out, `${JSON.stringify({ gpu, commit: result.commit, adapter: result.adapter, env, pageOutcome: page?.outcome, benchLock: { verdict: lockVerdict, summary: lockSummary }, sections, clockSamples: sampler?.samples.length ?? 0 }, null, 2)}\n`);
     console.log(`wrote ${out}`);

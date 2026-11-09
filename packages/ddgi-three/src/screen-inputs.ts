@@ -45,9 +45,13 @@
 
 import {
     DataTexture,
+    FloatType,
+    HalfFloatType,
     Node,
     NodeUpdateType,
+    RedFormat,
     RedIntegerFormat,
+    RGFormat,
     UnsignedByteType,
     UnsignedIntType,
     type NodeBuilder,
@@ -199,6 +203,23 @@ function makeTable(rows: number): DataTexture {
     return table;
 }
 
+/**
+ * WebGPU's "render target pixel byte cost" of a pass's colour targets, the
+ * sum `maxColorAttachmentBytesPerSample` limits (default 32): each target's
+ * cost, after rounding the running total up to its component size. Note
+ * that `rgba8unorm` costs 8, like `rgba16float` (the spec's table).
+ */
+export function colorBytesPerSample(textures: readonly Texture[]): number {
+    let bytes = 0;
+    for (const texture of textures) {
+        const channels = texture.format === RedIntegerFormat || texture.format === RedFormat ? 1 : texture.format === RGFormat ? 2 : 4;
+        const componentBytes = texture.type === FloatType || texture.type === UnsignedIntType ? 4 : texture.type === HalfFloatType ? 2 : 1;
+        const cost = channels === 4 && componentBytes === 1 ? 8 : channels * componentBytes;
+        bytes = Math.ceil(bytes / componentBytes) * componentBytes + cost;
+    }
+    return bytes;
+}
+
 /** The channels a pass renders: the platform's techniques' needs plus the host's. */
 function channelsFor(needs: ScreenNeeds, extra: ScreenChannels | undefined): Required<ScreenChannels> {
     return {
@@ -256,7 +277,8 @@ export class ScreenInputsNode extends Node {
 
         // The targets now, with their formats; the pass's default is half float rgba.
         scenePass.getTexture(GI_SCREEN_NORMAL_OUTPUT);
-        if (this.channels.velocity) scenePass.getTexture(GI_SCREEN_VELOCITY_OUTPUT);
+        // Motion has two components: rg16float, 4 bytes per pixel instead of rgba16float's 8.
+        if (this.channels.velocity) scenePass.getTexture(GI_SCREEN_VELOCITY_OUTPUT).format = RGFormat;
         // Albedo is 0..1: 8 bits, as Capsaicin's G-buffer stores it, halving its bandwidth.
         if (this.channels.albedo) scenePass.getTexture(GI_SCREEN_ALBEDO_OUTPUT).type = UnsignedByteType;
         if (this.channels.instance) {
@@ -353,6 +375,9 @@ export class ScreenInputsNode extends Node {
         if (runTechniques) gi.encodeScreen(encoder, screen);
         if (showChannel !== null) {
             this.debugView ??= new ScreenInputsView(device);
+            // The pass's camera planes let the depth view show distance (ScreenInputsView); only a perspective camera's.
+            const camera = this._scenePass.camera as unknown as { isPerspectiveCamera?: boolean; near: number; far: number };
+            this.debugView.settings.depthPlanes = camera.isPerspectiveCamera === true ? { near: camera.near, far: camera.far } : null;
             const shown = this.debugView.encode(encoder, screen, showChannel);
             const node = this.debugNodes.get(showChannel);
             const wrapped = node?.value as unknown as { sourceTexture?: GPUTexture } | undefined;
@@ -385,6 +410,14 @@ export class ScreenInputsNode extends Node {
         if (this.configuredMrt === outputs) return true;
         this.configuredMrt = outputs;
         for (const name of Object.keys(this._outputs)) outputs.setClearColor(name, 0x000000, 0);
+        const bytes = colorBytesPerSample(this._scenePass.renderTarget.textures);
+        const limit = this.source.gi.device.limits.maxColorAttachmentBytesPerSample;
+        if (bytes > limit) {
+            this.warnOnce(
+                `the scene pass writes about ${bytes} bytes per pixel, past this device's maxColorAttachmentBytesPerSample of ${limit}, so three can't draw it. ` +
+                    "Make the device with requestGIDevice/createGIRenderer (they ask for the adapter's maximum), or ask for maxColorAttachmentBytesPerSample yourself.",
+            );
+        }
         return true;
     }
 

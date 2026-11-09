@@ -37,8 +37,8 @@ function image(width: number, height: number, channels: number, values: Float64A
  */
 export async function readPassTarget(renderer: WebGPURenderer, scenePass: PassNode, name: string): Promise<TargetImage> {
     const target = scenePass.renderTarget;
-    const texture = scenePass.getTexture(name);
-    const index = target.textures.indexOf(texture);
+    // By name, not `getTexture`, which would make a target that was never drawn.
+    const index = target.textures.findIndex((texture) => texture.name === name);
     if (index < 0) throw new Error(`the pass has no '${name}' target`);
     const { width, height } = target;
     const pixels = (await renderer.readRenderTargetPixelsAsync(target, 0, 0, width, height, index)) as ArrayLike<number> & { BYTES_PER_ELEMENT: number };

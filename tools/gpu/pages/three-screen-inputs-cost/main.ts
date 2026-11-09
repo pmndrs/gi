@@ -35,6 +35,7 @@ import { giAlbedo, GI_ALBEDO_OUTPUT, GI_NORMAL_OUTPUT } from '../../../../packag
 import { screenInputs } from '../../../../packages/ddgi-three/src/screen-inputs.ts';
 import type { ScreenChannels } from '../../../../packages/ddgi-core/src/platform/contract/technique.ts';
 import { runThreePage, type ThreePageContext } from '../three-shared/harness.ts';
+import { fullBrowserVersion } from '../trace-bench/run.ts';
 import { PassClock, advanceThreeFrame, loadCompositeScene, shadowCameras, timeInterleaved, type CompositeScene, type DeltaDefinition, type FrameVariant, type InterleavedTiming } from '../three-composite-shared/composite-check.ts';
 
 const SECTIONS = [
@@ -160,6 +161,7 @@ await runThreePage(
         const { renderer, device, data, log } = context;
         renderer.shadowMap.enabled = true;
         data.userAgent = navigator.userAgent;
+        data.browserVersion = await fullBrowserVersion();
         const giFrames = numberFromEnv(env.VITE_DDGI_GI_FRAMES, 8);
         const scene = await loadCompositeScene(device, 'sponza', { width: SECTIONS[0].width, height: SECTIONS[0].height, giFrames, probesPerFrame: PROBES_PER_FRAME, log });
         data.timing = { sections: await timing(context, scene) };

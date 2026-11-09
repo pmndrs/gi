@@ -149,6 +149,25 @@ The composite node for three's pipeline (see "Dense scenes" above). Built like t
 - The targets should stay half float: 8-bit `giAlbedo` and normal miss the match by about 10× on Sponza.
 - If the platform's shading module changes shape (another technique, say), set `pipeline.needsUpdate = true`.
 
+### Screen inputs: `screenInputs(scenePass, threeGI, options?)`
+
+For screen-space techniques (RC1.1): fills the platform's `FrameScreen` from your own MRT scene pass every frame, through resizes, with no copy.
+
+```ts
+const scenePass = pass(scene, camera);
+const screen = screenInputs(scenePass, threeGI);
+scenePass.setMRT(mrt({ output, giAlbedo, normal: packNormalToRGB(normalView), ...screen.outputs }));
+pipeline.outputNode = screen.encodeBefore(ddgi(scenePass, threeGI));
+```
+
+- **`screen.outputs`** are the MRT outputs to spread into the pass: `giNormal` (world-space normal, half float) always; `velocity` (the name `@pmndrs/upscaler` reads, so one target feeds both), `giDiffuseAlbedo` (base colour × (1 − metalness), 8-bit) and `giInstance` (`r32uint`, the platform instance index + 1, 0 for objects GI doesn't mirror) when a technique asks for them (`gi.screenNeeds`, read when `screenInputs` is called) or you do (`{ channels: { instance: true } }`). Depth is the pass's own. Each holds the last surface drawn at the pixel, like depth.
+- **`screen.encodeBefore(node)`** runs the screen stage once per frame before `node` draws: the pass draws (if it hasn't this frame), three's targets are taken as `GPUTexture`s and `gi.encodeScreen` runs. Put whatever reads a screen technique's results inside `node`.
+- **`screen.view(channel)`** is a node showing one channel (`'depth' | 'normal' | 'velocity' | 'albedo' | 'instance'`) through the core's `ScreenInputsView`, in display values: show it without tone mapping. The viewer's "Screen inputs: …" debug views use it.
+- **`screen.screen`** is the latest `FrameScreen`.
+- The pass must be single-sampled (`pass()`'s default).
+- If a technique that reads a channel the pass doesn't render is added later, the stage warns once and skips screen techniques: make the screen inputs again and rebuild the pipeline.
+- **How the textures are reached:** three r187 has no public accessor, so one function reads its WebGPU backend, and it refuses any other three revision (DECISIONS 2026-11-09).
+
 ### `createGIRenderer()` and `requestGIDevice()`
 
 These make the GPU device and hand it to three (`new WebGPURenderer({ device })`). The host owns the device; the platform never makes one.

@@ -12,10 +12,12 @@
  *
  * The texture is `rgba8unorm` holding **display values**: show it as it is,
  * with no tone mapping or colour conversion on top. Per channel:
- * - `depth`: grey, white near and black far, on a log scale over
- *   `depthDecades` decades of `1 − depth` (about near ÷ distance for
- *   hardware perspective depth), so near and far detail both show; black
- *   where nothing was drawn;
+ * - `depth`: grey, white near and black far; black where nothing was drawn.
+ *   With the camera's planes (`depthPlanes`) it shows the distance along the
+ *   view axis, `1 / (1 + distance / depthMidDistance)`: mid grey at
+ *   `depthMidDistance`. Without them, a log scale over `depthDecades`
+ *   decades of `1 − depth` (about near ÷ distance for perspective depth,
+ *   which crowds a scene's range into a few greys);
  * - `normal`: the world-space normal as `n × 0.5 + 0.5` (the usual
  *   normal-map look: +x red, +y green, +z blue); black where nothing was drawn;
  * - `velocity`: NDC motion as `0.5 + 0.5 × clamp(v × velocityScale)` in red
@@ -40,18 +42,26 @@ export const SCREEN_CHANNELS: readonly ScreenChannel[] = ['depth', 'normal', 've
 export interface ScreenInputsViewSettings {
     /** NDC motion that reaches full colour is `1 / velocityScale`. Default 20 (a tenth of the screen's half-width). */
     velocityScale: number;
-    /** Decades of `1 − depth` the depth view spans, near to far. Default 5. */
+    /** Without `depthPlanes`: decades of `1 − depth` the depth view spans, near to far. Default 5. */
     depthDecades: number;
+    /**
+     * The camera's near and far planes (a perspective camera, 0..1 depth as
+     * WebGPU and three use), so the depth view shows distance. Null: the log
+     * fallback.
+     */
+    depthPlanes: { readonly near: number; readonly far: number } | null;
+    /** With `depthPlanes`: the distance shown as mid grey, in the scene's units. Default 10. */
+    depthMidDistance: number;
 }
 
-export const DEFAULT_SCREEN_INPUTS_VIEW_SETTINGS: Readonly<ScreenInputsViewSettings> = { velocityScale: 20, depthDecades: 5 };
+export const DEFAULT_SCREEN_INPUTS_VIEW_SETTINGS: Readonly<ScreenInputsViewSettings> = { velocityScale: 20, depthDecades: 5, depthPlanes: null, depthMidDistance: 10 };
 
 /** The view's format: display values, 8 bits are plenty, and core WebGPU allows it as a write-only storage texture. */
 export const SCREEN_INPUTS_VIEW_FORMAT: GPUTextureFormat = 'rgba8unorm';
 
 const WORKGROUP_SIZE = 8;
-/** The settings uniform: velocityScale, depthDecades, normalSigned, reversedDepth (4 × 4 bytes). */
-const SETTINGS_BYTES = 16;
+/** The settings uniform (GiScreenViewSettings): eight four-byte words. */
+const SETTINGS_BYTES = 32;
 
 /**
  * A 32-bit hash (PCG, Jarzynski and Olano 2020) of an instance id, the same
@@ -106,6 +116,14 @@ function channelBody(channel: ScreenChannel, source: SourceKind): string {
     if (towardNear <= 0.0) {
         return vec3f(0.0);
     }
+    let near = giScreenViewSettings.near;
+    let far = giScreenViewSettings.far;
+    if (near > 0.0) {
+        // Perspective depth d = far / (far - near) × (1 - near / z), so with towardNear = 1 - d:
+        // z = near × far / (near + towardNear × (far - near)).
+        let distance = near * far / (near + towardNear * (far - near));
+        return vec3f(1.0 / (1.0 + distance / giScreenViewSettings.depthMidDistance));
+    }
     // log10(towardNear) / decades + 1: 1 at the near plane, 0 at decades decades further.
     let shade = clamp(1.0 + log2(towardNear) / (giScreenViewSettings.depthDecades * log2(10.0)), 0.0, 1.0);
     return vec3f(shade);`;
@@ -148,6 +166,11 @@ struct GiScreenViewSettings {
     depthDecades: f32,
     normalSigned: u32,
     reversedDepth: u32,
+    // The camera's planes; near 0 means unknown (the log fallback).
+    near: f32,
+    far: f32,
+    depthMidDistance: f32,
+    unused: f32,
 }
 
 @group(0) @binding(0) var giScreenSource: ${source.wgslType};
@@ -217,12 +240,18 @@ export class ScreenInputsView {
         const kernel = this.kernelFor(channel, kind);
         const target = this.targetFor(screen.width, screen.height);
 
-        const floats = new Float32Array(this.settingsData, 0, 2);
-        const words = new Uint32Array(this.settingsData, 8, 2);
+        // GiScreenViewSettings, word by word.
+        const floats = new Float32Array(this.settingsData);
+        const words = new Uint32Array(this.settingsData);
+        const planes = this.settings.depthPlanes;
         floats[0] = this.settings.velocityScale;
         floats[1] = this.settings.depthDecades;
-        words[0] = screen.normalEncoding === 'snorm-float' ? 1 : 0;
-        words[1] = screen.reversedDepth === true ? 1 : 0;
+        words[2] = screen.normalEncoding === 'snorm-float' ? 1 : 0;
+        words[3] = screen.reversedDepth === true ? 1 : 0;
+        floats[4] = planes?.near ?? 0;
+        floats[5] = planes?.far ?? 0;
+        floats[6] = this.settings.depthMidDistance;
+        floats[7] = 0;
         this.device.queue.writeBuffer(kernel.settings, 0, this.settingsData);
 
         // Depth formats with stencil need the depth aspect named for a sampled view.
