@@ -55,6 +55,8 @@ import {
     FRAME_UNIFORM_BYTES,
     POPULATE_GROUP,
     populateWgsl,
+    PROBE_RAY_BYTES,
+    PROBE_RAYS_HEADER_BYTES,
     PROBE_SPAWN_SEEDS_OFFSET,
     SAMPLE_GROUP,
     SAMPLE_WGSL,
@@ -66,8 +68,6 @@ import {
 const BUFFER_USAGE = { storage: 0x80, copySrc: 0x04, copyDst: 0x08, uniform: 0x40 } as const;
 const TEXTURE_USAGE = { copySrc: 0x01, textureBinding: 0x04, storageBinding: 0x08 } as const;
 const WORD_BYTES = 4;
-/** Bytes of one packed sample direction (`uint2`, three halves). */
-const SAMPLE_BYTES = 8;
 
 /** The technique's id: its passes are timed as `radiance-cache/<pass>`. */
 const TECHNIQUE_ID = 'radiance-cache';
@@ -87,8 +87,12 @@ export interface RadianceCacheProbes {
     readonly spawnSeeds: GPUBuffer;
     /** The compacted probes: word 0 the count, then one packed seed each from byte `PROBE_SPAWN_SEEDS_OFFSET`. */
     readonly probeSpawn: GPUBuffer;
-    /** One `vec2u` per ray: its direction as three halves (`g_ScreenProbes_ProbeSpawnSampleBuffer`). */
-    readonly samples: GPUBuffer;
+    /**
+     * The probe rays (`RcProbeRays`, wgsl/screen-probes.ts): the ray count in word 0, then from byte
+     * `PROBE_RAYS_HEADER_BYTES` one `PROBE_RAY_BYTES` record per ray: origin, flags, direction as three
+     * halves (`g_ScreenProbes_ProbeSpawnSampleBuffer`) and the hit record. Shaped for phase 3's world cache.
+     */
+    readonly probeRays: GPUBuffer;
     /** The ray results (radiance and hit distance as four halves): `rayScratch.rayResults`. */
     readonly rayScratch: RayScratch;
 }
@@ -129,7 +133,7 @@ interface ScreenResources {
     readonly probeAtlas: GPUTexture;
     readonly probeMask: GPUTexture;
     readonly probeMaskLevel0: GPUTextureView;
-    readonly samples: GPUBuffer;
+    readonly probeRays: GPUBuffer;
     readonly rayScratch: RayScratch;
     readonly clearProbeMaskGroup: GPUBindGroup;
     readonly bytes: number;
@@ -359,7 +363,7 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
             spawnFlags: prepared.spawnFlags,
             spawnSeeds: prepared.spawnSeeds,
             probeSpawn: prepared.probeSpawn,
-            samples: resources.samples,
+            probeRays: resources.probeRays,
             rayScratch: resources.rayScratch,
         };
     }
@@ -408,9 +412,9 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
             usage: TEXTURE_USAGE.storageBinding | TEXTURE_USAGE.textureBinding | TEXTURE_USAGE.copySrc,
         });
         const probeMaskLevel0 = probeMask.createView({ label: `${TECHNIQUE_ID} probe mask level 0`, baseMipLevel: 0, mipLevelCount: 1 });
-        const samples = device.createBuffer({
-            label: `${TECHNIQUE_ID} probe ray directions`,
-            size: layout.maxRayCount * SAMPLE_BYTES,
+        const probeRays = device.createBuffer({
+            label: `${TECHNIQUE_ID} probe rays`,
+            size: PROBE_RAYS_HEADER_BYTES + layout.maxRayCount * PROBE_RAY_BYTES,
             usage: BUFFER_USAGE.storage | BUFFER_USAGE.copySrc,
         });
         // Every ray may hit a surface that needs direct light, so the work list has room for all of them.
@@ -421,7 +425,7 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
             probeAtlas,
             probeMask,
             probeMaskLevel0,
-            samples,
+            probeRays,
             rayScratch,
             clearProbeMaskGroup: device.createBindGroup({
                 label: `${TECHNIQUE_ID}/ClearProbeMask`,
@@ -431,7 +435,7 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
                     { binding: 1, resource: probeMaskLevel0 },
                 ],
             }),
-            bytes: layout.atlasSize[0] * layout.atlasSize[1] * 8 + maskBytes + samples.size + rayScratch.bytes,
+            bytes: layout.atlasSize[0] * layout.atlasSize[1] * 8 + maskBytes + probeRays.size + rayScratch.bytes,
         };
         this.screenResources = resources;
         return resources;
@@ -453,20 +457,20 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
             normal: screen.normal,
             resources,
             spawn: group('SpawnScreenProbes', kernels.spawn, [uniforms, depth, normal, { buffer: prepared.spawnSeeds }, { buffer: prepared.spawnFlags }]),
-            sample: group('SampleScreenProbes', kernels.sample, [uniforms, normal, { buffer: prepared.probeSpawn }, { buffer: resources.samples }]),
+            sample: group('SampleScreenProbes', kernels.sample, [uniforms, normal, { buffer: prepared.probeSpawn }, { buffer: resources.probeRays }]),
             populate: group('PopulateScreenProbes', kernels.populate, [
                 uniforms,
                 depth,
                 normal,
                 { buffer: prepared.probeSpawn },
-                { buffer: resources.samples },
+                { buffer: resources.probeRays },
                 { buffer: resources.rayScratch.buffer },
             ]),
             blend: group('BlendScreenProbes', kernels.blend, [
                 uniforms,
                 normal,
                 { buffer: prepared.probeSpawn },
-                { buffer: resources.samples },
+                { buffer: resources.probeRays },
                 resources.rayScratch.rayResults,
                 resources.probeAtlas.createView(),
                 resources.probeMaskLevel0,
@@ -495,7 +499,7 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         if (!resources) return;
         resources.probeAtlas.destroy();
         resources.probeMask.destroy();
-        resources.samples.destroy();
+        resources.probeRays.destroy();
         resources.rayScratch.destroy();
         this.screenResources = null;
         this.inputGroups = null;

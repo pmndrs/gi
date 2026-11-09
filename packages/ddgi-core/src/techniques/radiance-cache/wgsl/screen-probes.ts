@@ -291,6 +291,44 @@ struct RcProbeSpawn {
 /** Byte offset of `RcProbeSpawn.seeds`. */
 export const PROBE_SPAWN_SEEDS_OFFSET = 4;
 
+/** Bytes before the first `RcProbeRay` (the count and its padding). */
+export const PROBE_RAYS_HEADER_BYTES = 16;
+/** Bytes of one `RcProbeRay`. */
+export const PROBE_RAY_BYTES = 48;
+/** `RcProbeRay.flags`: the ray is lit already, so the world cache adds nothing to it. */
+export const PROBE_RAY_BYPASS = 1;
+
+/**
+ * The frame's probe rays, shaped for phase 3's world-cache interface
+ * (docs/design/radiance-cache.md, "The world-cache interface"): per ray its
+ * origin, direction, hit record and bypass flag, with the ray count on the
+ * GPU. The radiance slot is the ray scratch's result for the same ray, which
+ * gi/direct adds into and `BlendScreenProbes` reads.
+ */
+const PROBE_RAYS_STRUCT_WGSL = /* wgsl */ `
+// RcProbeRay.flags: already lit (Capsaicin's bypass flag, gi1.comp:2561-2583); the world cache leaves it alone.
+const RC_PROBE_RAY_BYPASS: u32 = ${PROBE_RAY_BYPASS}u;
+
+struct RcProbeRay {
+    origin: vec3f,           // where the ray starts, pushed off the surface
+    flags: u32,              // RC_PROBE_RAY_BYPASS
+    direction: vec2u,        // g_ScreenProbes_ProbeSpawnSampleBuffer: three halves (packHalf3)
+    // The hit, in the platform's GiHitRecord order: distance (negative for a miss),
+    // instance, triangle, front face (1) or back (0), barycentrics of vertices 1 and 2.
+    hitT: f32,
+    hitInstance: u32,
+    hitTriangle: u32,
+    hitFrontFace: u32,
+    hitBarycentrics: vec2f,
+}
+
+struct RcProbeRays {
+    count: u32,              // this frame's rays: 64 x the probe count (SampleScreenProbes writes it)
+    reserved: vec3u,
+    rays: array<RcProbeRay>,
+}
+`;
+
 /** Built with the platform's `compute.indirectModule` (`GiIndirectArgs`, `giIndirectItemIndex`). */
 export const COMPACT_WGSL = /* wgsl */ `
 ${CAPSAICIN_WGSL}
@@ -337,10 +375,11 @@ ${CAPSAICIN_WGSL}
 ${FRAME_WGSL}
 ${screenNormalWgsl(1)}
 ${PROBE_SPAWN_STRUCT_WGSL}
+${PROBE_RAYS_STRUCT_WGSL}
 ${WORKGROUP_INDEX_WGSL}
 @group(1) @binding(2) var<storage, read> rcProbeSpawn: RcProbeSpawn;
-// g_ScreenProbes_ProbeSpawnSampleBuffer: each ray's direction, as three halves.
-@group(1) @binding(3) var<storage, read_write> rcProbeSpawnSamples: array<vec2u>;
+// The probe rays: this kernel writes their count and directions.
+@group(1) @binding(3) var<storage, read_write> rcProbeRays: RcProbeRays;
 
 // SampleScreenProbes (gi1.comp:646-983), as Capsaicin runs it for a probe with no history.
 //
@@ -364,6 +403,10 @@ fn ${ENTRY_POINT.sample}(
     let cellAndProbeIndex = rcGetCellAndProbeIndex(did);
     let cellIndex = cellAndProbeIndex.x;
     let probeIndex = cellAndProbeIndex.y;
+    // The ray count for the passes after this one (and phase 3's world cache), on the GPU.
+    if (did == 0u) {
+        rcProbeRays.count = rcProbeSpawn.count * RC_PROBE_CELLS;
+    }
     if (probeIndex >= rcProbeSpawn.count) {
         return; // out of bounds
     }
@@ -380,7 +423,7 @@ fn ${ENTRY_POINT.sample}(
     let sampledCell = cell;
     let direction = rcFromProbeFrame(rcMapToHemiOctahedron((vec2f(sampledCell) + rcRand2(&random)) / f32(RC_PROBE_SIZE)), normal);
 
-    rcProbeSpawnSamples[did] = rcPackSample(direction);
+    rcProbeRays.rays[did].direction = rcPackSample(direction);
 }
 `;
 
@@ -388,7 +431,7 @@ fn ${ENTRY_POINT.sample}(
 
 export const POPULATE_GROUP: GPUBindGroupLayoutDescriptor = {
     label: 'radiance-cache/PopulateScreenProbes group 1',
-    entries: [UNIFORM_ENTRY, texture(1), texture(2), storage(3, 'read-only-storage'), storage(4, 'read-only-storage'), storage(5, 'storage')],
+    entries: [UNIFORM_ENTRY, texture(1), texture(2), storage(3, 'read-only-storage'), storage(4, 'storage'), storage(5, 'storage')],
 };
 
 /** The light groups whose lights reach the probes' hits: every group. */
@@ -402,9 +445,11 @@ ${FRAME_WGSL}
 ${screenDepthWgsl(1)}
 ${screenNormalWgsl(2)}
 ${PROBE_SPAWN_STRUCT_WGSL}
+${PROBE_RAYS_STRUCT_WGSL}
 ${WORKGROUP_INDEX_WGSL}
 @group(1) @binding(3) var<storage, read> rcProbeSpawn: RcProbeSpawn;
-@group(1) @binding(4) var<storage, read> rcProbeSpawnSamples: array<vec2u>;
+// The probe rays: this kernel reads the directions and writes the origins, hits and flags.
+@group(1) @binding(4) var<storage, read_write> rcProbeRays: RcProbeRays;
 // g_ScreenProbes_ProbeSpawnRadianceBuffer, inside the platform's ray scratch: each ray's
 // radiance and hit distance as four halves (packHalf4), which gi/direct adds the
 // direct light into.
@@ -461,10 +506,20 @@ fn ${ENTRY_POINT.populate}(
         let seed = rcUnpackSeed(rcProbeSpawn.seeds[probeIndex]);
         // Sky pixels never reach the compacted list; Capsaicin checks again (gi1.comp:1127-1130).
         if (!rcIsSkyPixel(seed)) {
-            let direction = rcUnpackSample(rcProbeSpawnSamples[did]);
+            let direction = rcUnpackSample(rcProbeRays.rays[did].direction);
             let normal = rcLoadNormal(seed);
             let ray = GiRay(rcRayOrigin(seed, normal), 0.0, direction, RC_MAX_HIT_DISTANCE);
             let hit = giTraceClosest(ray);
+            rcProbeRays.rays[did].origin = ray.origin;
+            rcProbeRays.rays[did].hitT = hit.t;
+            rcProbeRays.rays[did].hitInstance = hit.instance;
+            rcProbeRays.rays[did].hitTriangle = hit.triangle;
+            rcProbeRays.rays[did].hitFrontFace = select(0u, 1u, hit.frontFace);
+            rcProbeRays.rays[did].hitBarycentrics = hit.barycentrics;
+            // Phase 2 lights every ray here (the staging above), so every ray bypasses the
+            // world cache. Phase 3 keeps the flag for emissive hits and rays shorter than a
+            // cell (gi1.comp:2558-2561) and leaves the rest to the cache.
+            rcProbeRays.rays[did].flags = RC_PROBE_RAY_BYPASS;
 
             var radiance = vec3f(0.0);
             var hitDistance: f32;
@@ -515,9 +570,10 @@ ${CAPSAICIN_WGSL}
 ${FRAME_WGSL}
 ${screenNormalWgsl(1)}
 ${PROBE_SPAWN_STRUCT_WGSL}
+${PROBE_RAYS_STRUCT_WGSL}
 ${WORKGROUP_INDEX_WGSL}
 @group(1) @binding(2) var<storage, read> rcProbeSpawn: RcProbeSpawn;
-@group(1) @binding(3) var<storage, read> rcProbeSpawnSamples: array<vec2u>;
+@group(1) @binding(3) var<storage, read> rcProbeRays: RcProbeRays;
 // The ray scratch's results alone (RayScratch.rayResults): g_ScreenProbes_ProbeSpawnRadianceBuffer.
 @group(1) @binding(4) var<storage, read> rcProbeSpawnRadiance: array<vec2u>;
 // g_ScreenProbes_ProbeBuffer: the probe atlas, 8 x 8 cells per probe tile; rgb radiance, a hit distance.
@@ -567,7 +623,7 @@ fn ${ENTRY_POINT.blend}(
     // across an edge.
     if (probeIndex < probeCount) {
         let normal = rcLoadNormal(seed);
-        let direction = rcUnpackSample(rcProbeSpawnSamples[did]);
+        let direction = rcUnpackSample(rcProbeRays.rays[did].direction);
         let radiance = rcUnpackRadiance(rcProbeSpawnRadiance[did]);
 
         let quantizedRadiance = rcQuantizeRadiance(radiance);
