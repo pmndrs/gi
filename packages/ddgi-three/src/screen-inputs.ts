@@ -33,8 +33,13 @@
  * takes the material's own blending (`MaterialBlending`, as the composite's
  * `giAlbedo` does): an opaque material doesn't blend, so it writes; a
  * blended one is drawn with a source its blend equation leaves the target
- * unchanged under (0 for normal, additive and subtractive blending,
- * premultiplied or not; 1 for multiply). Custom blending isn't covered.
+ * unchanged under (0 for normal and additive blending, premultiplied or
+ * not, and for premultiplied subtractive; 1 for premultiplied multiply).
+ * Not covered: subtractive and multiply without `premultipliedAlpha` (three
+ * r187 logs an error and gives them no blend state, so they overwrite the
+ * channels), and custom blending (warned once). three's pipeline cache key
+ * leaves out MRT blend modes and the stage sets them on its first run, so
+ * the pass must not draw before the first screen stage (see docs/api/three.md).
  * Alpha-tested materials write depth and the channels. A blended material
  * that writes depth (three's default for `transparent`) puts its own depth
  * over the opaque surface's channels: turn its `depthWrite` off.
@@ -67,6 +72,7 @@
 
 import {
     BlendMode,
+    CustomBlending,
     DataTexture,
     FloatType,
     HalfFloatType,
@@ -151,6 +157,7 @@ export class GIScreenChannelNode extends Node {
     setup(builder: NodeBuilder): Node {
         const material = builder.material as Material | null;
         if (material && drawsBlended(material)) {
+            if (material.blending === CustomBlending) warnCustomBlendingOnce(material);
             // Multiply keeps destination × source: 1 leaves it. Normal, additive and subtractive
             // (premultiplied or not) keep the destination when the source colour and alpha are 0.
             const unchanged = material.blending === MultiplyBlending ? 1 : 0;
@@ -158,6 +165,19 @@ export class GIScreenChannelNode extends Node {
         }
         return vec4(this._value(builder), 1) as unknown as Node;
     }
+}
+
+let customBlendingWarned = false;
+
+/**
+ * A custom blend equation may not leave the target unchanged under the
+ * "no change" source, so its material may overwrite the screen channels. Said
+ * once, so a host sees why a custom-blended object shows in them.
+ */
+function warnCustomBlendingOnce(material: Material): void {
+    if (customBlendingWarned) return;
+    customBlendingWarned = true;
+    console.warn(`@pmndrs/ddgi/three: material "${material.name || material.type}" uses CustomBlending; the screen inputs can't promise it leaves their channels unchanged, so it may overwrite the opaque surface's normal, albedo, velocity and instance id.`);
 }
 
 /**
