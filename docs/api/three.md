@@ -365,17 +365,18 @@ What the adapter still looks for, a fixed amount per frame:
 
 The first pass over a new scene is done in full, so GI has the whole scene from the first frame.
 
-The defaults are `objectsPerFrame` 64 and `editChecksPerFrame` 8. The table shows how late changes arrive with them (RTX 3060 laptop, T1.7):
+The defaults are `objectsPerFrame` 64 and `editChecksPerFrame` 8. How late changes arrive on Bistro interior (2,621 objects, 2,062 meshes), with three rendering every frame in the documented order (`update`, then `render`) and no `markChanged` (RTX 3060 laptop, T3.7, `three-change-tracking`):
 
-| | Objects | A still object's first move reaches GI within | Measured |
-| --- | --- | --- | --- |
-| Sponza with curtains | 596 | 10 frames | 3 frames |
-| Bistro interior | 2,622 | 41 frames (about 0.7 s at 60 fps) | 23 frames |
+| Change | Sent by the adapter | Before T3.7 (the walk alone) |
+| --- | --- | --- |
+| An object added with `scene.add` | the next `update`; rays hit it 2 frames later, once its mesh tree is built | up to 41 frames |
+| An object removed with `removeFromParent` | the next `update`; rays pass it the frame after | up to 82 frames (two passes) |
+| A still object's first move | 2 frames: the render after the move finds it, the next `update` sends it | up to 41 frames (23 measured, T1.7) |
 
-- With `markChanged`, a move reaches GI in the next update.
+- With `markChanged`, a change reaches GI in the next update.
 - An unmarked edit on Bistro interior takes up to about 260 frames for a geometry, or 9 for a material.
-- The adapter's CPU time on a still frame is about 0.06–0.10 ms on Sponza and 0.11–0.15 ms on Bistro interior.
-- Bigger budgets find changes sooner and cost more per frame.
+- The adapter's CPU time on a still frame of Bistro interior read 0.2 ms as a median of 300 frames, and 0.2 ms with one object moving every frame (the browser's timer steps in 0.1 ms). The hooks add about 0.17 ms to three's own `scene.updateMatrixWorld()` there (0.42 ms against 0.25 ms warm, about 80 ns a mesh), paid inside three's render. Not judged: M3 has no timing gates (DECISIONS 2026-11-09).
+- Bigger budgets find what the walk looks for sooner and cost more per frame.
 
 By default `update` doesn't recompute world matrices: it reads the ones three's last render made. A move therefore reaches GI one frame late, which DDGI's blending over many frames hides. Recomputing them would make three do it twice per frame (1 ms on Bistro interior). `updateMatrixWorld: true` turns it on. A host that moves an object or light outside three's render (a gizmo, an animation step) and wants GI to see it in the same frame can call that object's `updateMatrixWorld()` right after the move, as the viewer's motion player does.
 
