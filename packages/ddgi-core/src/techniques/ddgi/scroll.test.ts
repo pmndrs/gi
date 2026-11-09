@@ -85,6 +85,19 @@ describe('the camera-following window (m3-moving.md §4.2)', () => {
         expect(window.window[0]).toBe(20);
     });
 
+    it('averages the warming updates entering planes owe into a demand a frame, which a teleport leaves alone', () => {
+        const window = flyThroughWindow();
+        const centre = windowCentre(window);
+        // One plane of 384 probes every 18 frames: 5 m/s at 1.5 m along x. The demand settles near 2 x 384 / 18.
+        for (let frame = 0; frame < 600; frame++) window.follow([centre[0] + (frame * 5) / 60, centre[1], centre[2]]);
+        expect(window.warmingDemand).toBeGreaterThan(20);
+        expect(window.warmingDemand).toBeLessThan(80);
+        const before = window.warmingDemand;
+        window.follow([centre[0] + 1000, centre[1], centre[2]]);
+        expect(window.teleports).toBe(1);
+        expect(window.warmingDemand).toBeLessThan(before);
+    });
+
     it('leaves the window where it is for a camera that is not a point', () => {
         const window = flyThroughWindow();
         expect(window.follow([Number.NaN, 0, 0]).moved).toEqual([0, 0, 0]);

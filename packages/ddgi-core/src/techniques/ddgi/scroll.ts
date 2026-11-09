@@ -88,6 +88,28 @@ export const ENTERING_WARMING_UPDATES = 2;
 /** An entering probe's urgency for the scheduler: a whole change, as a probe nearest a moved object gets (wgsl/mark.ts). */
 export const ENTERING_URGENCY = 1;
 
+/**
+ * A plane counts as warm for the valid extent when at most this share of its
+ * probes is still in state 3. Not none: a single probe that keeps coming
+ * back to state 3 (an off probe freed again, or one the scheduler reaches
+ * late) would hold the extent back for good, and the trailing side, which
+ * follows the camera, would then overtake it and the volume would cover
+ * nothing (seen on Bistro's fly-through). A probe still warming has no
+ * weight in sampling, so a few of them in a covered plane only leave a
+ * local gap until they are done.
+ */
+export const WARM_PLANE_COLD_SHARE = 1 / 32;
+
+/**
+ * Over how many frames a camera-following volume's warming demand is
+ * averaged: the updates its entering planes owe (ENTERING_WARMING_UPDATES
+ * each), which the technique adds to the volume's floor, so they are served
+ * from the whole frame's probes, not only the volume's share of them (about
+ * a third of the frame on Bistro beside the fixed 4 m volume). Half a second
+ * spreads the burst of one plane over the frames until the next.
+ */
+export const WARMING_DEMAND_FRAMES = 30;
+
 /** One frame's window move on the CPU, for `ddgi/scroll`. */
 export interface WindowMove {
     /** Planes the window moved on each axis this frame (the sign is the direction); 0 when it stayed. */
@@ -118,6 +140,13 @@ export class CameraWindow {
     planesCleared = 0;
     probesCleared = 0;
     teleports = 0;
+    /**
+     * Warming updates a frame the entering planes have asked for lately
+     * (an average over WARMING_DEMAND_FRAMES): what the volume's floor adds,
+     * so entering probes are served from the whole frame's probes. A
+     * teleport adds nothing: the warm-up serves it.
+     */
+    warmingDemand = 0;
 
     constructor(grid: ProbeGrid) {
         for (const count of grid.counts) {
@@ -165,6 +194,8 @@ export class CameraWindow {
         const teleport = moved.some((planes, axis) => Math.abs(planes) > counts[axis] / 2);
         for (let axis = 0; axis < 3; axis++) this.firstProbe[axis] += moved[axis];
         const probesEntering = teleport ? this.grid.probeCount : enteringProbes(counts, moved);
+        const warmingUpdates = teleport ? 0 : ENTERING_WARMING_UPDATES * probesEntering;
+        this.warmingDemand += (warmingUpdates - this.warmingDemand) / WARMING_DEMAND_FRAMES;
         if (probesEntering > 0) {
             this.moves++;
             this.planesCleared += moved.reduce((sum, planes) => sum + Math.abs(planes), 0);

@@ -16,7 +16,8 @@
  *    valid extent (low x, y, z, then high x, y, z). Each moves its side
  *    toward the CPU's target: at once when the target is inward (behind the
  *    camera), by at most VALID_EXTENT_STEP_SPACINGS when outward, and only
- *    over planes whose probes have all finished warming (none in state 3).
+ *    over planes whose probes have finished warming (at most
+ *    WARM_PLANE_COLD_SHARE of them still in state 3).
  *    The extent is kept in a small storage buffer (the GPU can't read and
  *    write the rgba32float table in one dispatch), which the technique then
  *    copies into the volume table's row.
@@ -31,7 +32,7 @@
  */
 
 import { PROBE_HISTORY_FLAGS_MASK, PROBE_HISTORY_UPDATES, PROBE_HISTORY_WORD, PROBE_HISTORY_WORDS, PROBE_STATE } from '../layout.ts';
-import { ENTERING_URGENCY, ENTERING_WARMING_UPDATES, VALID_EXTENT_STEP_SPACINGS } from '../scroll.ts';
+import { ENTERING_URGENCY, ENTERING_WARMING_UPDATES, VALID_EXTENT_STEP_SPACINGS, WARM_PLANE_COLD_SHARE } from '../scroll.ts';
 
 export const SCROLL_ENTRY_POINTS = { reset: 'ddgiScrollReset', extent: 'ddgiScrollExtent' } as const;
 
@@ -95,6 +96,8 @@ const DDGI_ENTERING_WARMING_UPDATES: u32 = ${ENTERING_WARMING_UPDATES}u;
 const DDGI_ENTERING_URGENCY: f32 = ${ENTERING_URGENCY.toFixed(1)};
 // How far the valid extent moves out a frame, in spacings.
 const DDGI_EXTENT_STEP: f32 = ${VALID_EXTENT_STEP_SPACINGS};
+// A plane is warm with at most this share of its probes still in state 3 (WARM_PLANE_COLD_SHARE says why).
+const DDGI_WARM_PLANE_COLD_SHARE: f32 = ${WARM_PLANE_COLD_SHARE};
 
 @group(1) @binding(0) var<uniform> ddgiScroll: DdgiScroll;
 // The reset: the volume's history records, feedback requests, probe data and points.
@@ -219,7 +222,7 @@ fn ${SCROLL_ENTRY_POINTS.extent}(
     if (thread != 0u) {
         return;
     }
-    let planeWarm = planeInWindow && atomicLoad(&ddgiColdProbes) == 0u;
+    let planeWarm = planeInWindow && f32(atomicLoad(&ddgiColdProbes)) <= DDGI_WARM_PLANE_COLD_SHARE * f32(planeProbes);
     let goal = select(ddgiScroll.targetMin[axis], ddgiScroll.targetMax[axis], high);
     var next = goal;
     if (ddgiScroll.extentToTarget == 0u) {

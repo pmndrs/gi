@@ -12,7 +12,7 @@
  * adapter, so the camera reaches the technique as a host gives it.
  *
  * The flight (`planFlight`): from the `street` bookmark along the street at
- * SPEED_M_S, then a turn, each leg as long as the street is free (measured by
+ * SPEED_M_S, then right-angle turns to the freer side (up to MAX_LEGS legs or FLIGHT_MAX_M), each leg as long as the street is free (measured by
  * a ray), so the window moves on both x and z. Before it: the technique's
  * warm-up and SETTLE_FRAMES frames at rest; after it, the rest test.
  *
@@ -80,6 +80,10 @@ const FRAMES_PER_SECOND = 60;
 /** The legs' longest length, and how far short of the first wall a leg stops. */
 const LEG_MAX_M = 40;
 const WALL_CLEARANCE_M = 4;
+/** The flight turns into a new leg until it has this many legs or is this long; a leg shorter than MIN_LEG_M ends it. */
+const MAX_LEGS = 4;
+const FLIGHT_MAX_M = 60;
+const MIN_LEG_M = 5;
 /** Camera height above the bookmark's ground, metres (the bookmark is at 2 m). */
 const EYE_HEIGHT_M = 2;
 /**
@@ -418,11 +422,17 @@ async function planFlight(shader: Shader, bookmark: CameraBookmark, log: (line: 
         return Math.min(LEG_MAX_M, (Number.isNaN(hit) ? Number.POSITIVE_INFINITY : hit) - WALL_CLEARANCE_M);
     };
     const first: Leg = { from: start, direction: toTarget, length: await freeLength(start, toTarget) };
-    const turnFrom = add(start, scale(toTarget, first.length));
-    const firstDegrees = (Math.atan2(toTarget[2], toTarget[0]) * 180) / Math.PI;
-    const sides = await Promise.all([firstDegrees + 90, firstDegrees - 90].map(async (degrees) => ({ direction: heading(degrees), length: await freeLength(turnFrom, heading(degrees)) })));
-    const turn = sides[0].length >= sides[1].length ? sides[0] : sides[1];
-    const legs = [first, { from: turnFrom, direction: turn.direction, length: turn.length }].filter((leg) => leg.length > 1);
+    const legs: Leg[] = [first];
+    // Each next leg turns a right angle to whichever side is freer, until MAX_LEGS or FLIGHT_MAX_M.
+    while (legs.length < MAX_LEGS && legs.reduce((sum, leg) => sum + leg.length, 0) < FLIGHT_MAX_M) {
+        const last = legs[legs.length - 1];
+        const turnFrom = add(last.from, scale(last.direction, last.length));
+        const lastDegrees = (Math.atan2(last.direction[2], last.direction[0]) * 180) / Math.PI;
+        const sides = await Promise.all([lastDegrees + 90, lastDegrees - 90].map(async (degrees) => ({ direction: heading(degrees), length: await freeLength(turnFrom, heading(degrees)) })));
+        const turn = sides[0].length >= sides[1].length ? sides[0] : sides[1];
+        if (turn.length < MIN_LEG_M) break;
+        legs.push({ from: turnFrom, direction: turn.direction, length: turn.length });
+    }
     for (const leg of legs) log(`leg from ${leg.from.map((value) => value.toFixed(1)).join(', ')} heading ${leg.direction.map((value) => value.toFixed(2)).join(', ')}, ${leg.length.toFixed(1)} m`);
     assert(legs.length > 0 && legs[0].length >= 10, `the street isn't free ahead of the bookmark (${first.length.toFixed(1)} m)`);
     return legs;
@@ -453,6 +463,23 @@ function frameChange(previous: Float32Array, current: Float32Array, pixels: read
 }
 
 const inBand = (edge: number): boolean => edge > 0 && edge < 1;
+
+/** The mean GI over an image's surface pixels (edge coverage −1 marks sky), cached per image. */
+const imageMeans = new WeakMap<Float32Array, number>();
+function imageMean(image: Float32Array, edge: Float32Array): number {
+    const cached = imageMeans.get(image);
+    if (cached !== undefined) return cached;
+    let sum = 0;
+    let count = 0;
+    for (let pixel = 0; pixel < edge.length; pixel++) {
+        if (edge[pixel] < 0) continue;
+        sum += image[pixel * 4] + image[pixel * 4 + 1] + image[pixel * 4 + 2];
+        count++;
+    }
+    const mean = Math.max(1e-9, sum / (3 * Math.max(1, count)));
+    imageMeans.set(image, mean);
+    return mean;
+}
 /** A band pixel whose edge coverage changes by more than this between two frames is in the band that moved. */
 const MOVING_EDGE_STEP = 1e-4;
 
@@ -461,7 +488,7 @@ class ChangeTally {
     band = { mean: 0, p95: 0, pairs: 0, pixels: 0 };
     view = { mean: 0, p95: 0, pairs: 0 };
     worstBand = { mean: 0, p95: 0 };
-    /** Per observer pixel, the summed change over the band pairs (for the change map). */
+    /** Per observer pixel, its largest change a frame while in the band, over the image's mean GI (the change map). */
     readonly changeMaps: Float32Array[];
 
     constructor(observers: readonly View[]) {
@@ -494,7 +521,7 @@ class ChangeTally {
             for (const pixel of band) {
                 let difference = 0;
                 for (let channel = 0; channel < 3; channel++) difference += Math.abs(current.image[pixel * 4 + channel] - previous.image[pixel * 4 + channel]);
-                map[pixel] += difference / 3;
+                map[pixel] = Math.max(map[pixel], difference / 3 / imageMean(current.image, current.edge));
                 // A pop would be the camera volume's share jumping by about 1 in one frame; a fade moves it a little.
                 this.largestShareStep = Math.max(this.largestShareStep, Math.abs(current.share[pixel] - previous.share[pixel]));
             }
@@ -604,6 +631,8 @@ function enteredSlots(counts: Vec3, before: Vec3, after: Vec3): number[] {
 class WarmingTally {
     enteringChecked = 0;
     enteringNotReset = 0;
+    /** Entering slots whose first update this frame switched them off (inside geometry, or no surface nearby). */
+    enteringSwitchedOff = 0;
     activeTooEarly = 0;
     framesChecked = 0;
     firstProblem = '';
@@ -612,8 +641,13 @@ class WarmingTally {
         this.framesChecked++;
         for (const slot of entered) {
             this.enteringChecked++;
-            // Reset this frame, and updated at most once since (state 3 ends only after the second update).
-            const fresh = records.state[slot] === PROBE_STATE.notUpdatedYet && records.updates[slot] <= 1 && (records.updates[slot] === 0 || records.warmedOnce[slot] === 1);
+            // Reset this frame and updated at most once since: still warming (state 3 ends only after the second
+            // update), or switched off by that first update's classification (off probes are never sampled either).
+            const state = records.state[slot];
+            const warmingStill = state === PROBE_STATE.notUpdatedYet && records.updates[slot] <= 1 && (records.updates[slot] === 0 || records.warmedOnce[slot] === 1);
+            const switchedOff = state === PROBE_STATE.offInsideGeometry || state === PROBE_STATE.offNoSurfaceNearby;
+            const fresh = warmingStill || switchedOff;
+            if (switchedOff) this.enteringSwitchedOff++;
             if (!fresh) {
                 this.enteringNotReset++;
                 this.firstProblem ||= `frame ${frame}: entering slot ${slot} is in state ${records.state[slot]} with k ${records.updates[slot]}`;
@@ -784,7 +818,7 @@ await runGpuTest(
             );
             log(
                 `warming: ${warming.enteringChecked} entering slots checked over ${warming.framesChecked} frames, ${warming.enteringNotReset} not reset; ` +
-                    `${warming.activeTooEarly} slot-frames active before 2 updates${warming.firstProblem ? ` (first: ${warming.firstProblem})` : ''}`,
+                    `${warming.enteringSwitchedOff} of them switched off by their first update; ${warming.activeTooEarly} slot-frames active before 2 updates${warming.firstProblem ? ` (first: ${warming.firstProblem})` : ''}`,
             );
             log(
                 `memory: DDGI ${memoryBefore.ddgi} / ${memoryAfterFlight.ddgi} / ${memoryAfterRest.ddgi} bytes, platform ${memoryBefore.platform} / ${memoryAfterFlight.platform} / ${memoryAfterRest.platform} (before, after the flight, after the rest)`,
@@ -808,7 +842,7 @@ await runGpuTest(
                 warmUp: warm,
                 still: stillSummary,
                 flight: flightSummary,
-                warming: { enteringChecked: warming.enteringChecked, enteringNotReset: warming.enteringNotReset, activeTooEarly: warming.activeTooEarly, framesChecked: warming.framesChecked },
+                warming: { enteringChecked: warming.enteringChecked, enteringNotReset: warming.enteringNotReset, enteringSwitchedOff: warming.enteringSwitchedOff, activeTooEarly: warming.activeTooEarly, framesChecked: warming.framesChecked },
                 memory: { before: memoryBefore, afterFlight: memoryAfterFlight, afterRest: memoryAfterRest },
                 rest: { boundary, arrivalPlanes: planesOnArrival - planesAfterFlight, planesWhileResting, frames: REST_FRAMES },
                 recompiles,
@@ -829,7 +863,19 @@ await runGpuTest(
             if (recompiles !== 0) failures.push(`${recompiles} kernels compiled during the flight`);
             if (failures.length > 0) {
                 log(`report: ${JSON.stringify(report)}`);
-                throw new Error(failures.join('; '));
+                // The runner prints only the message of a failed page, so it carries every check's numbers too.
+                const outcome = {
+                    flight: flightSummary,
+                    still: { bandMean: stillSummary.bandMean, bandP95: stillSummary.bandP95 },
+                    warming: report.warming,
+                    memoryFixed: failures.every((failure) => !failure.includes('memory')),
+                    rest: report.rest,
+                    recompiles,
+                    scrollMsMedian: scrollMedian,
+                    movedFrames,
+                    flightFrames,
+                };
+                throw new Error(`${failures.join('; ')}. Every check: ${JSON.stringify(outcome)}`);
             }
             return report;
         } finally {
@@ -837,7 +883,11 @@ await runGpuTest(
             await device.queue.onSubmittedWorkDone();
         }
     },
-    { optionalFeatures: ['texture-formats-tier1', 'subgroups', 'timestamp-query'] },
+    {
+        optionalFeatures: ['texture-formats-tier1', 'subgroups', 'timestamp-query'],
+        // Two volumes on Bistro need a little over the default 128 MB storage binding (136 MB on the first run).
+        requiredLimits: { maxStorageBufferBindingSize: 512 * 1024 * 1024, maxBufferSize: 512 * 1024 * 1024 },
+    },
 );
 
 /** Display value for a linear GI value: `scale` maps the mean to 0.25, then sRGB. */
@@ -901,17 +951,17 @@ function drawPanels(strip: readonly { frame: number; image: Float32Array; share:
     });
     observers.forEach((view, column) => {
         const map = flight.changeMaps[column];
-        const pairs = Math.max(1, flight.band.pairs);
         put(
             (index) => {
-                const grey = Math.round(255 * Math.min(1, ((map[index] / pairs) * 50) / 0.05));
+                // White at 2% of the image's mean GI in one frame.
+                const grey = Math.round(255 * Math.min(1, map[index] / 0.02));
                 return [grey, grey, grey];
             },
             view.width,
             view.height,
             column,
             2,
-            `${view.camera.name}: band change a frame, 50x`,
+            `${view.camera.name}: largest band change a frame (white 2%)`,
         );
     });
     document.body.prepend(canvas);

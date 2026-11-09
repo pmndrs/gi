@@ -1945,14 +1945,24 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
      * Budget v2's floor for each volume at `rate`. One volume: the
      * technique's floor, as before volumes. Several: each its own
      * (`volumeFloorUnits`), so a small volume beside a big one is still swept
-     * within FLOOR_SWEEP_SECONDS and never gets 0 probes a frame.
+     * within FLOOR_SWEEP_SECONDS and never gets 0 probes a frame. A
+     * camera-following volume adds the warming updates its entering planes
+     * have owed lately (scroll.ts, `warmingDemand`).
      */
     private volumeFloors(rate: { readonly framesPerSecond: number; readonly calibratedUnits: number }): number[] {
         const volumes = this.volumes;
         const setting = this.settings.minProbesPerFrame;
-        if (volumes.length === 1) return [minProbesPerFrame(setting, volumes[0].grid.probeCount, volumes[0].maxProbesPerFrame, rate)];
         const total = totalProbes(volumes);
-        return volumes.map((volume) => volumeFloorUnits(setting, { probeCount: volume.grid.probeCount, maxProbesPerFrame: volume.maxProbesPerFrame }, total, rate));
+        return volumes.map((volume) => {
+            const floor =
+                volumes.length === 1
+                    ? minProbesPerFrame(setting, volume.grid.probeCount, volume.maxProbesPerFrame, rate)
+                    : volumeFloorUnits(setting, { probeCount: volume.grid.probeCount, maxProbesPerFrame: volume.maxProbesPerFrame }, total, rate);
+            // A camera-following volume's entering planes owe their warming updates on top (scroll.ts,
+            // WARMING_DEMAND_FRAMES): served from the whole frame's probes, as the floor is.
+            const warming = volume.scroll ? Math.ceil(volume.scroll.window.warmingDemand) : 0;
+            return Math.min(volume.maxProbesPerFrame, floor + warming);
+        });
     }
 
     /**
@@ -1981,7 +1991,9 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         const probeCount = totalProbes(volumes);
         if (volumes.length === 1) {
             const offered = Math.min(units, volumes[0].maxProbesPerFrame, probeCount);
-            return [{ units, floor: this.volumeFloors(this.floorRate(offered))[0] }];
+            const floor = this.volumeFloors(this.floorRate(offered))[0];
+            // A camera-following volume's warming is owed whatever the host hands out (as several volumes' floors are).
+            return [{ units: volumes[0].scroll ? Math.max(units, floor) : units, floor }];
         }
         const floors = this.volumeFloors(this.floorRate(Math.min(units, maxTotal, probeCount)));
         if (units === Number.POSITIVE_INFINITY) return floors.map((floor) => ({ units, floor }));
