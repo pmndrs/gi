@@ -388,8 +388,8 @@ Status: **started 2026-11-06** on branch `m2` (from main at 3d682dc; M1 merged a
 | T2.6a | Sky re-bake for time of day: GPU procedural source, two-level SH with radiance SH, the compile fix | implementer | M | T2.4b | done (merged into `m2` 2026-11-06 after Opus review; checks 1–3 pass; check 4, the furnished room's sun step, not met and moved to T2.4d) |
 | T2.6b | The sun layer in white with T2.5's groups (its own route for directional lights in `gi/direct`). The instant sky (first-order transfer, nudge) was dropped by its decision check: 52.8% / 35.6% against 70% (DECISIONS 2026-11-07; code kept on branch `m2-t2.6b`, d26cb01, not merged) | implementer | S | T2.3, T2.5 | done (2026-11-08; checks 1-3 met, cost 1.055× VALID; `sunLayer` off by default; Sponza's turn with the layer on is at the edge of T2.4c's bar, to T2.8) |
 | T2.3 | Many-light sampling: the light grid | implementer | M | T2.1, T2.2 | done (merged into `m2` 2026-11-07 after Opus review; check 2 a known miss at 2.2–2.5×; checks 3 and 4 owe a VALID run, DECISIONS) |
-| T2.7 | Native harness: manifest motions, texture sky, animated sun | native-runner | M | T2.1 | active (native-runner, 2026-11-08; worktree `webgpu-ddgi-m2-t27` with its own native build, branch `m2-t2.7`, submodule branch `m2-t2.7`) |
-| T2.8 | Viewer: gizmos, sliders, groups, time of day, motions, a response meter, the native compare page | implementer | M | T2.4b, T2.5, T2.6b, T2.7 | active: part 1 merged 2026-11-08 (checks 1, 2 and 4's code side; Opus review passed); the native compare page (check 3) follows T2.7's merge, and Dennis's check of the viewer by eye (check 4) |
+| T2.7 | Native harness: manifest motions, texture sky, animated sun | native-runner | M | T2.1 | review (2026-11-08; Opus review passed, fixes in and verified by the lead; branch `m2-t2.7` in `m2-t2.10`; merges into `m2` after the fork push of 665ef06, 3d6cd8e, 350f9de, which waits on Dennis) |
+| T2.8 | Viewer: gizmos, sliders, groups, time of day, motions, a response meter, the native compare page | implementer | M | T2.4b, T2.5, T2.6b, T2.7 | review (2026-11-08; checks 1-3 met, Opus reviews passed; the native compare page plays both recordings in sync; check 4 is Dennis's look at the viewer; merges with T2.7) |
 | T2.12 | Fast first GI: GPU H-PLOC/LBVH trees at load, tinybvh swapped in per mesh (lower priority) | implementer | M | B1, B2 | done (2026-11-08; check 1 1.90 s median VALID against 2.0; swap −0.0019%; trace 0.98× after the swap; SPEC's no-submit wording amended for load, for Dennis) |
 | T2.13 | Scene copy off the main thread (lower priority) | implementer | M | none | done (2026-11-08; GPU packing matches on both GPUs; main-thread bar missed, Sponza 816 ms median VALID vs 150: a known miss for Dennis, guards proposed in DECISIONS) |
 | T2.14 | Compile only what's configured (`encodeBatch` on first use, the sky kernel's compile) (lower priority) | implementer | S | T2.6a | done (2026-11-08; check 2 met on 14 scenes; check 1, the cold Cornell start, owed to T2.10) |
@@ -397,7 +397,7 @@ Status: **started 2026-11-06** on branch `m2` (from main at 3d682dc; M1 merged a
 | T2.17 | Bistro exterior's GI frame: 545 ms wall time with GI on against 19 ms of GPU time, and Budget v2 calibrating to 14-20 probes (T2.10) | implementer | S | T2.10 | done (2026-11-08; diagnosed, not fixed: GPU memory overflow on the 6 GB RTX 3060 Laptop, 5.1 GB of uncompressed textures in three plus DDGI's 0.6 GB; with textures capped at 1024 a GI frame takes 47 ms instead of 517. Opt-in cap `VITE_DDGI_MAX_TEXTURE_SIZE` for the pages, merged into m2-t2.10. The fix (manifest cap, or KTX2) is Dennis's choice) |
 | T2.18 | Keep the update within budget in the frames after a big change (T2.10: Sponza's sun turn, 2.44 ms median over the next 60 frames); the second calibrated count (m2-lights §4.5) while a change is still being taken in | implementer | S | T2.10 | done (2026-11-08; Opus review, fixes in; the median of the 60 frames after Sponza's sun turn is 0.99× the same run's still frames (lead ruling, DECISIONS 2026-11-08), p95 1.05× reported; view within 5% at frame 15 (bar 15); merges into m2-t2.10 after the Intel runs) |
 | T2.10 | M2 measurements against targets (one VALID run per gate, DECISIONS 2026-11-06), with the measured whole-frame p50/p95 | gpu-tester, native-runner | M | all above | active (2026-11-08; worktree `webgpu-ddgi-m2-t210`, branch m2-t2.10 = m2 + T2.7 + T2.8; gpu-tester on the RTX targets and owed lines, native-runner on response times; the Intel UHD runs follow) |
-| T2.11 | M2 note and M3 breakdown | main session | S | T2.10 | todo |
+| T2.11 | M2 note and M3 breakdown | main session | S | T2.10 | review (2026-11-09; M2 note in [docs/milestones/M2.md](docs/milestones/M2.md); the M3 draft breakdown below, for Dennis) |
 
 M3 keeps deforming meshes and the BVH work: runtime mesh trees, `GpuMeshRefit` wired, and the H-PLOC rebuild when a refit drifts, several volumes, the camera-following volume, nested finer volumes around thin cloth (carried from M1), and the scenarios (`docs/design/m3-moving.md`, T3.0–T3.11).
 
@@ -451,6 +451,32 @@ These add to the design docs' draft done-whens. M1's open follow-ups (the M1 not
 - **T2.8** checks Sponza's key-probe sun turn with the sun layer on against T2.4c's bar (view within 5% by frame 15). T2.6b's runs settled it at frames 13, 16 and 13; with the layer off it settles at 12 (T2.6b's review, DECISIONS 2026-11-08).
 - **T2.8** makes three's lighting of `sponza-candles` usable: with three drawing every frame the page stops answering for 30 s (T2.14's re-check; the session page runs it with `VITE_DDGI_RENDER_EVERY=0`).
 - **T2.10** adds the measured whole-frame p50/p95 with GI updating and shading in the same frame (M1 follow-up), and runs the Intel UHD suites in short batches with a device-hang count (M1 follow-up: two `DXGI_ERROR_DEVICE_HUNG` in long back-to-back suites).
+
+## M3: moving geometry (draft breakdown, for Dennis)
+
+Status: **draft, from T2.11 (2026-11-09).** Starts when Dennis signs off M2 (PR `m2` → `main`). The design is [docs/design/m3-moving.md](docs/design/m3-moving.md): its T3.0–T3.11 are kept as written, less the rigid parts T2.M1 already built (the transform feed, geometry marks and the mover mask for rigid objects, the adapter's transform tracking). T3.12–T3.18 are M2's follow-ups (the T2.11 lines under "M2 done-when changes", and the [M2 note](docs/milestones/M2.md)). The way of working stays M2's: features over timing, one VALID run per gate, an Opus review before done.
+
+| ID | Task | Agent | Size | Depends on | Status |
+| --- | --- | --- | --- | --- | --- |
+| T3.0 | Spike: deformed positions from three (storage `ExternalTexture`); the `updateMatrixWorld` override's cost and safety on Bistro interior; refit decay on a swaying tree | implementer | S | M2 done | todo |
+| T3.1 | Change feed, the parts T2.M1 left: `receivers`, `deformBounds`, `setDeformedPositions` | implementer | S | none | todo |
+| T3.2 | Runtime mesh trees: GPU builds for added and updated meshes, tinybvh refinement | implementer | M | T2.12 | todo |
+| T3.3 | Deforming meshes: `GpuMeshRefit` wired, scene-copy positions, geometric normals, movement word; H-PLOC rebuild when the refit drifts | implementer | M | T3.1, T3.2 | todo |
+| T3.4 | Probes near moved geometry, the parts T2.M1 left: woken air probes (M1's "probes in empty space" carry-over), deforming movers; the far-set guess scaled to the mover's size (DECISIONS, T2.M1 item 8) | implementer | M | T3.1 | todo |
+| T3.5 | Several volumes: shared atlas, volume table, priority blending; nested finer volumes around thin cloth (carried from M1) | implementer | M | none | todo |
+| T3.6 | Camera-following volume: wrapping slots, `ddgi/scroll`, window rule, fade-in | implementer | M | T3.5 | todo |
+| T3.7 | three adapter change tracking v2 (deforming meshes, the `updateMatrixWorld` override) | implementer | M | T3.0, T3.1 | todo |
+| T3.8 | Viewer scenarios and their manifest motions (furniture, door, cabinets, wind tree, fly-through) | implementer | M | T3.3, T3.4, T3.6, T3.7 | todo |
+| T3.9 | M3 measurements; also from M2: a Bistro response page, the whole frame on the library's default composite with the update in the same frame, the Apple M5 Pro if set up, and the clock-sensitive M2 gates if Dennis has fixed the clock | gpu-tester | M | all above | todo |
+| T3.10 | M3 note and M4/M5 breakdown | main session | S | T3.9 | todo |
+| T3.11 | The wind tree's asset: find or generate, convert, record licence | wrangler | S | none | todo |
+| T3.12 | Compressed textures through GPUTex in the viewer's and test pages' loader (upstream gputex 0.14.0 first; HomeFig's method only after asking Dennis; KTX2 the fallback). Done when Bistro exterior fits the 6 GB RTX without T2.17's cap and looks the same by eye (DECISIONS 2026-11-09) | implementer | M | none | todo |
+| T3.13 | DDGI memory: trim buffers grown by doubling once a scene settles (about 237 MB unused on Bistro, T2.17) | implementer | S | none | todo |
+| T3.14 | Bistro's calibration: why Budget v2 lands at 14-116 probes and why `ddgi/trace` has a 1-1.5 ms fixed cost at 16 probes (T2.10, T2.17) | implementer | S | T3.12 | todo |
+| T3.15 | The change cost model counts `gi/direct`'s lit hits (T2.18's first frames, p95 1.05× still); judged with Sponza's sun turn with the sun layer on (frame 16 against 15, T2.8), starting with a run with `keyProbes` off | implementer | S | none | todo |
+| T3.16 | Scene-copy follow-ups from T2.13's review: texture averages from three's smallest mip read back asynchronously (a ruling: a load-time readback and a placeholder albedo), H-PLOC reading from the packing's staging buffers, GPU tests of the packing fallbacks; the main-thread bar (Sponza 816 ms against 150) | implementer | M | none | todo |
+| T3.17 | Native parity: why native's Sponza GI is about 8× Cycles' (its direct light is 2.9×; the sun's units in our harness settings first), native's 1 m falloff clamp, and a native sweep on our probe grid for Sponza | native-runner | S | none | todo |
+| T3.18 | `userData.giRange` in the three adapter, so a host can cull a light in three without shortening its GI range (T2.8's candle reach). Host-facing API: the main session designs it first | main session, then implementer | S | none | todo |
 
 ## Carried to M2 (collected during M1)
 
