@@ -492,11 +492,11 @@ Rules for every row:
 
 | ID | Task | Agent | Size | Depends on | Status |
 | --- | --- | --- | --- | --- | --- |
-| RC1.1 | Screen inputs: `FrameScreen` gets albedo; `ddgi-three` fills it from the host's MRT scene pass every frame; a debug view of every channel on Sponza; its cost measured | implementer, then gpu-tester (cost) | M | none | todo |
-| RC1.2 | Lint rule: technique code imports only `platform/contract` (SPEC claims this is enforced; only the engine boundary is) | main session | S | none | todo |
-| RC1.3 | Platform GPU utilities: prefix scan, stream compaction, indirect-dispatch arguments, shared with `packages/bvh`'s scans; subgroups first with one fallback | implementer | M | none | todo |
-| RC1.4 | Feature checks in three r187 and Chrome on the RTX 3060 and Intel UHD: indirect compute dispatch, `texture-formats-tier2` read-write `rgba16float`, subgroups, `shader-f16`, `timestamp-query` | implementer | S | none | todo |
-| RC1.5 | Ray cost table: closest-hit and any-hit Mrays/s for Capsaicin-shaped ray sets on Sponza with curtains and Bistro | implementer (ray sets), then gpu-tester (timing) | M | none | todo |
+| RC1.1 | Screen inputs: `FrameScreen` gets albedo; `ddgi-three` fills it from the host's MRT scene pass every frame; a debug view of every channel on Sponza; its cost measured | implementer, then gpu-tester (cost) | M | none | active (implementer, 2026-11-09) |
+| RC1.2 | Lint rule: technique code imports only `platform/contract` (SPEC claims this is enforced; only the engine boundary is) | main session | S | none | active (main session, 2026-11-09) |
+| RC1.3 | Platform GPU utilities: prefix scan, stream compaction, indirect-dispatch arguments, shared with `packages/bvh`'s scans; subgroups first with one fallback | implementer | M | none | active (implementer, 2026-11-09) |
+| RC1.4 | Feature checks in three r187 and Chrome on the RTX 3060 and Intel UHD: indirect compute dispatch, `texture-formats-tier2` read-write `rgba16float`, subgroups, `shader-f16`, `timestamp-query` | implementer | S | none | active (implementer, 2026-11-09) |
+| RC1.5 | Ray cost table: closest-hit and any-hit Mrays/s for Capsaicin-shaped ray sets on Sponza with curtains and Bistro | implementer (ray sets), then gpu-tester (timing) | M | none | active (implementer, 2026-11-09) |
 
 ### RC1 done-whens
 
