@@ -52,6 +52,7 @@ import type { GpuTimerScope } from '../contract/timing.ts';
 import type { BindingSlot, WgslModule } from '../contract/wgsl.ts';
 import { invertAffineInto } from '../trace/top-level.ts';
 import { ChangeLog, copyLight, toAabb, type LightLookup } from './change-log.ts';
+import { boxInside, checkedDeformBounds, copyCheckedPositions, DeformState, growBox, largestScale, scanPose } from './deformed-positions.ts';
 import { BOX_NUMBERS, InstanceTransforms, MATRIX_NUMBERS } from './instance-transforms.ts';
 import {
     ENVIRONMENT_TYPE,
@@ -109,6 +110,19 @@ export interface PlatformSceneOptions {
     /** Prefix for GPU buffer labels. */
     readonly label?: string;
     readonly initialCapacities?: Partial<SceneCapacities>;
+    /** Where one-time warnings go (deformed positions outside `deformBounds`). Defaults to `console.warn`. */
+    readonly warn?: (message: string) => void;
+}
+
+/** Options for one {@link PlatformScene.encode}. */
+export interface SceneEncodeOptions {
+    /**
+     * Keep deformed positions waiting this frame (the newest is kept). The
+     * platform sets it while the tracer is still building mesh trees: each
+     * new pose starts a tree build that replaces the one before, so a mesh
+     * deformed every frame would otherwise never get a tree.
+     */
+    readonly holdDeformedPositions?: boolean;
 }
 
 /**
@@ -164,7 +178,10 @@ export interface PackedGiInstances {
 /** What one {@link PlatformScene.encode} did. */
 export interface SceneUpload {
     readonly changes: SceneChanges;
-    /** Meshes created or reshaped since the last encode. A slot may also be in `meshesRemoved` (reused). */
+    /**
+     * Meshes created, reshaped or given a new pose (`setDeformedPositions`) since the last encode.
+     * A slot may also be in `meshesRemoved` (reused).
+     */
     readonly meshesUploaded: readonly UploadedMesh[];
     /** Mesh slots freed since the last encode. Handle these before `meshesUploaded`. */
     readonly meshesRemoved: readonly number[];
@@ -213,6 +230,8 @@ interface MeshEntry {
     /** Word offset in the vertex buffer, or -1 until uploaded. */
     vertexOffset: number;
     readonly instances: Set<InstanceEntry>;
+    /** For a mesh created `deforming`: its poses (deformed-positions.ts); null for the others. */
+    deform: DeformState | null;
 }
 
 interface TextureEntry {
@@ -313,6 +332,11 @@ export class PlatformScene implements SceneApi, SceneCopy {
     private readonly instanceSlots = new SlotAllocator();
 
     private readonly pendingMeshes = new Set<MeshEntry>();
+    /** Deforming meshes with a new pose waiting for `encode`. */
+    private readonly posesWaiting = new Set<MeshEntry>();
+    /** A pose's box, worked out in `applyPoses` (scratch). */
+    private readonly poseBounds = new Float32Array(BOX_NUMBERS);
+    private readonly warn: (message: string) => void;
     /** Packs meshes on the GPU once {@link prepareGpuPacking} was called (T2.13). */
     private readonly packer: GpuMeshPacker;
     private gpuPacking = false;
@@ -356,6 +380,7 @@ export class PlatformScene implements SceneApi, SceneCopy {
     constructor(device: GPUDevice, options: PlatformSceneOptions = {}) {
         this.device = device;
         this.label = options.label ?? 'gi';
+        this.warn = options.warn ?? ((message) => console.warn(message));
         const capacities = { ...DEFAULT_SCENE_CAPACITIES, ...options.initialCapacities };
         this.mirror = new TableMirror({
             instanceCapacity: capacities.instances,
@@ -530,8 +555,12 @@ export class PlatformScene implements SceneApi, SceneCopy {
 
     createMesh(descriptor: MeshDescriptor): MeshHandle {
         this.checkLive();
-        const { layout, pending } = this.prepareMeshData(descriptor);
+        // Checked before the mesh is staged, so a bad box leaves nothing behind.
+        const declared = this.declaredDeformBounds(descriptor, this.name('mesh', this.nextHandle, descriptor.label));
+        const prepared = this.prepareMeshData(descriptor);
+        const pending = prepared.pending;
         const handle = this.nextHandle++ as MeshHandle;
+        const { layout, deform } = this.deformingLayout(prepared.layout, descriptor, declared);
         const slot = this.meshSlots.take();
         this.mirror.ensureRecord('meshes', slot);
         const entry: MeshEntry = {
@@ -542,6 +571,7 @@ export class PlatformScene implements SceneApi, SceneCopy {
             pending,
             vertexOffset: -1,
             instances: new Set(),
+            deform,
         };
         this.meshes.set(handle, entry);
         this.pendingMeshes.add(entry);
@@ -553,12 +583,18 @@ export class PlatformScene implements SceneApi, SceneCopy {
     updateMesh(mesh: MeshHandle, descriptor: MeshDescriptor): void {
         this.checkLive();
         const entry = this.mesh(mesh);
-        const { layout, pending } = this.prepareMeshData(descriptor);
+        const declared = this.declaredDeformBounds(descriptor, this.name('mesh', entry.handle, descriptor.label ?? entry.label));
+        const prepared = this.prepareMeshData(descriptor);
+        const pending = prepared.pending;
+        const { layout, deform } = this.deformingLayout(prepared.layout, descriptor, declared);
         this.releaseVertexRange(entry);
         this.forgetPending(entry);
         this.triangleTotal += layout.triangleCount - entry.layout.triangleCount;
         entry.layout = layout;
         entry.pending = pending;
+        // A new shape replaces any pose still waiting: it may not even have the same vertex count.
+        entry.deform = deform;
+        this.posesWaiting.delete(entry);
         entry.label = descriptor.label ?? entry.label;
         this.pendingMeshes.add(entry);
         for (const instance of entry.instances) {
@@ -574,10 +610,28 @@ export class PlatformScene implements SceneApi, SceneCopy {
         this.cachedBounds = null;
     }
 
-    setDeformedPositions(mesh: MeshHandle, _positions: DeformedPositions): void {
+    /**
+     * Keeps a copy of the pose for the next `encode` (applyPoses), replacing
+     * any pose still waiting. Everything is checked here, so a bad call
+     * throws at the call and changes nothing.
+     */
+    setDeformedPositions(mesh: MeshHandle, positions: Float32Array | DeformedPositions): void {
         this.checkLive();
-        this.mesh(mesh);
-        throw new Error('@pmndrs/ddgi: setDeformedPositions is not supported yet (deforming meshes arrive in M3).');
+        const entry = this.mesh(mesh);
+        const what = this.name('mesh', entry.handle, entry.label);
+        const deform = entry.deform;
+        if (!deform) throw new Error(`@pmndrs/ddgi: setDeformedPositions: ${what} was not created with deforming: true.`);
+        if (!(positions instanceof Float32Array)) {
+            throw new Error(
+                `@pmndrs/ddgi: setDeformedPositions: positions in a GPU buffer are not supported yet (they arrive with the GPU refit, M3); pass a Float32Array for ${what}.`,
+            );
+        }
+        if (positions.length !== deform.current.length) {
+            throw new RangeError(`@pmndrs/ddgi: setDeformedPositions: ${what} has ${deform.current.length / 3} vertices, but ${positions.length} numbers were given (3 per vertex).`);
+        }
+        copyCheckedPositions(positions, deform.waiting, `setDeformedPositions for ${what}`);
+        deform.hasWaiting = true;
+        this.posesWaiting.add(entry);
     }
 
     destroyMesh(mesh: MeshHandle): void {
@@ -589,6 +643,7 @@ export class PlatformScene implements SceneApi, SceneCopy {
         this.releaseVertexRange(entry);
         this.forgetPending(entry);
         this.pendingMeshes.delete(entry);
+        this.posesWaiting.delete(entry);
         this.mirror.clearRecord('meshes', entry.slot);
         this.meshSlots.release(entry.slot);
         this.removedMeshSlots.push(entry.slot);
@@ -696,6 +751,8 @@ export class PlatformScene implements SceneApi, SceneCopy {
         if (this.isTraceable(entry)) {
             this.changeLog.addRegion(this.transforms.box(slot), 'geometry', handle, undefined, slot);
             this.topLevelDirty = true;
+        } else if (this.isReceiver(entry)) {
+            this.changeLog.addReceiver(this.transforms.bounds, slot * BOX_NUMBERS);
         }
         if (entry.contributesToGi) this.instanceSetDirty = true;
         this.cachedBounds = null;
@@ -773,7 +830,8 @@ export class PlatformScene implements SceneApi, SceneCopy {
     /**
      * Moves an instance to the transform at `matrices[offset ... offset + 16)`
      * and logs it: where it was and where it is, both with how far it moved
-     * (`DirtyRegion.moved`), or a moved receiver. Its record is written but
+     * (`DirtyRegion.moved`), or, for a visible receiver, where it is now
+     * (`SceneChanges.receivers`). Its record is written but
      * not marked for upload; the caller marks it, alone or in a span.
      */
     private moveInstance(entry: InstanceEntry, matrices: ArrayLike<number>, offset: number): void {
@@ -782,7 +840,7 @@ export class PlatformScene implements SceneApi, SceneCopy {
         const linearChanged = transforms.setMatrix(slot, matrices, offset);
         if (!this.isTraceable(entry)) {
             this.writeInstanceWords(entry, linearChanged);
-            this.changeLog.addMovedReceiver();
+            if (this.isReceiver(entry)) this.changeLog.addReceiver(transforms.bounds, slot * BOX_NUMBERS);
             return;
         }
         // Where it was, kept before the record is rewritten (copied number by number:
@@ -853,6 +911,9 @@ export class PlatformScene implements SceneApi, SceneCopy {
             this.changeLog.addRegion(this.transforms.box(entry.slot), 'geometry', instance, undefined, entry.slot);
             this.topLevelDirty = true;
             this.cachedBounds = null;
+        } else if (visible) {
+            // A receiver that appears needs GI where it is, as one that moved there does.
+            this.changeLog.addReceiver(this.transforms.bounds, entry.slot * BOX_NUMBERS);
         }
     }
 
@@ -988,7 +1049,7 @@ export class PlatformScene implements SceneApi, SceneCopy {
      * per frame, and submit the encoder before the next call: buffers replaced
      * here are destroyed at the next call.
      */
-    encode(encoder: GPUCommandEncoder, timer?: GpuTimerScope): SceneUpload {
+    encode(encoder: GPUCommandEncoder, timer?: GpuTimerScope, options: SceneEncodeOptions = {}): SceneUpload {
         this.checkLive();
         if (!this.packer.ready) {
             // Checked before anything changes, so staged meshes stay queued for the encode after prepare.
@@ -1001,13 +1062,17 @@ export class PlatformScene implements SceneApi, SceneCopy {
         // Staged meshes' bytes were written when they were staged.
         let bytesWritten = this.stagedBytes;
         this.stagedBytes = 0;
+        // Poses first: they write into meshes already in the vertex buffer, which a growth
+        // below copies into the new buffer (its copies run after these writes).
+        const poses = options.holdDeformedPositions ? { uploaded: [], bytesWritten: 0 } : this.applyPoses();
+        bytesWritten += poses.bytesWritten;
         const meshes = this.uploadMeshes(encoder, timer);
         bytesWritten += meshes.bytesWritten;
         bytesWritten += this.uploadTables();
 
         const upload: SceneUpload = {
             changes: this.changeLog.take(this.lightLookup),
-            meshesUploaded: meshes.uploaded,
+            meshesUploaded: poses.uploaded.length > 0 ? [...poses.uploaded, ...meshes.uploaded] : meshes.uploaded,
             meshesRemoved: this.removedMeshSlots,
             instancesChanged: this.topLevelDirty,
             instanceSetChanged: this.instanceSetDirty,
@@ -1034,6 +1099,95 @@ export class PlatformScene implements SceneApi, SceneCopy {
     // -----------------------------------------------------------------------
     // Uploads
     // -----------------------------------------------------------------------
+
+    /**
+     * Applies the waiting poses of deforming meshes (`setDeformedPositions`):
+     * writes each into its mesh's positions in the vertex buffer, reports the
+     * mesh as uploaded so the tracer builds a tree of the new pose
+     * (deformed-positions.ts says why a rebuild, for now), and logs it: per
+     * instance, the mesh's deform box in world space, with how far the
+     * vertices travelled (`DirtyRegion.moved`), or a receiver box. When the
+     * pose leaves the box, the box grows: the instances' boxes change, so the
+     * box before is logged too.
+     *
+     * A mesh whose words haven't reached the GPU yet (created or replaced
+     * this frame) keeps its pose waiting for the next encode: its data is
+     * written by this encode's upload, after these writes.
+     */
+    private applyPoses(): { readonly uploaded: UploadedMesh[]; readonly bytesWritten: number } {
+        const uploaded: UploadedMesh[] = [];
+        let bytesWritten = 0;
+        for (const mesh of this.posesWaiting) {
+            const deform = mesh.deform;
+            if (!deform || !deform.hasWaiting) {
+                this.posesWaiting.delete(mesh);
+                continue;
+            }
+            if (mesh.pending !== null || mesh.vertexOffset < 0) continue;
+            this.posesWaiting.delete(mesh);
+
+            const travelled = scanPose(deform.waiting, deform.current, this.poseBounds);
+            deform.swap();
+            const positionsWord = mesh.vertexOffset + mesh.layout.offsets.positions;
+            this.device.queue.writeBuffer(this.vertexBuffer, positionsWord * 4, deform.current);
+            bytesWritten += deform.current.byteLength;
+
+            if (deform.declaredBounds && !deform.warnedOutside && !boxInside(this.poseBounds, deform.declaredBounds)) {
+                deform.warnedOutside = true;
+                this.warn(`@pmndrs/ddgi: ${this.name('mesh', mesh.handle, mesh.label)}: deformed positions left its deformBounds; the box grows to hold them (this warning is shown once).`);
+            }
+            const grownBounds = Float32Array.from(mesh.layout.bounds);
+            const grew = growBox(grownBounds, this.poseBounds);
+            if (grew) {
+                mesh.layout = { ...mesh.layout, bounds: grownBounds };
+                this.writeMeshRecord(mesh);
+                this.cachedBounds = null;
+            }
+            for (const instance of mesh.instances) {
+                const traceable = this.isTraceable(instance);
+                const slot = instance.slot;
+                if (grew) {
+                    if (traceable) this.changeLog.addRegion(this.transforms.box(slot), 'geometry', instance.handle, undefined, slot);
+                    this.transforms.setMeshBounds(slot, mesh.layout.bounds);
+                    this.writeInstanceRecord(instance);
+                    if (traceable) this.topLevelDirty = true;
+                }
+                if (traceable) {
+                    const moved = travelled * largestScale(this.transforms.matrices, slot);
+                    this.changeLog.addRegion(this.transforms.box(slot), 'geometry', instance.handle, moved, slot);
+                } else if (this.isReceiver(instance)) {
+                    this.changeLog.addReceiver(this.transforms.bounds, slot * BOX_NUMBERS);
+                }
+            }
+            uploaded.push({
+                slot: mesh.slot,
+                handle: mesh.handle,
+                layout: mesh.layout,
+                vertexOffset: mesh.vertexOffset,
+                // The tree builder's worker takes the arrays it is given: copies.
+                geometry: { positions: deform.current.slice(), indices: deform.indices.slice() },
+            });
+        }
+        return { uploaded, bytesWritten };
+    }
+
+    /** A deforming descriptor's `deformBounds`, checked; null when it gives none or isn't deforming. */
+    private declaredDeformBounds(descriptor: MeshDescriptor, what: string): Float32Array | null {
+        return descriptor.deforming === true && descriptor.deformBounds ? checkedDeformBounds(descriptor.deformBounds, what) : null;
+    }
+
+    /**
+     * For a `deforming` descriptor: its layout with the box every pose stays
+     * in (the rest pose's, grown to `declared`, its checked `deformBounds`),
+     * so its instances' boxes don't change from pose to pose; and the state
+     * its poses need. Other meshes keep their layout and get no state.
+     */
+    private deformingLayout(layout: MeshLayout, descriptor: MeshDescriptor, declared: Float32Array | null): { layout: MeshLayout; deform: DeformState | null } {
+        if (descriptor.deforming !== true) return { layout, deform: null };
+        const bounds = Float32Array.from(layout.bounds);
+        if (declared) growBox(bounds, declared);
+        return { layout: { ...layout, bounds }, deform: new DeformState(descriptor.positions, descriptor.indices, declared) };
+    }
 
     /**
      * Places the queued meshes in the vertex buffer and uploads them: the CPU
@@ -1457,6 +1611,11 @@ export class PlatformScene implements SceneApi, SceneCopy {
 
     private isTraceable(instance: InstanceEntry): boolean {
         return instance.contributesToGi && instance.visible;
+    }
+
+    /** Shown, but left out of rays: it only receives GI (`SceneChanges.receivers`). */
+    private isReceiver(instance: InstanceEntry): boolean {
+        return !instance.contributesToGi && instance.visible;
     }
 
     private materialList(handles: readonly MaterialHandle[], mesh: MeshEntry): MaterialEntry[] {

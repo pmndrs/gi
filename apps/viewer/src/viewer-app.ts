@@ -231,7 +231,10 @@ export class ViewerApp {
             const loaded = await this.core.loadScene(manifest, (progress) => this.showLoading(`Loading ${manifest.title}`, progress), {
                 settings: this.url.sceneSettings,
                 clusteredLightReachMetres: this.url.lightReach ?? undefined,
+                textureCompression: this.url.textures,
             });
+            const notCompressed = loaded.textureCompression.find((part) => part.unavailable);
+            if (notCompressed) console.warn(`Textures were loaded uncompressed: ${notCompressed.unavailable}`);
             this.manifest = manifest;
             this.url.scene = manifest.id;
             this.rig.setSceneScale(loaded.diagonal);

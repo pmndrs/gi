@@ -464,7 +464,20 @@ Status: **started 2026-11-09** on branch `m3` (from `m2` at 5de856b; PR #4, `m2`
 - **Done-whens:** m3-moving.md's "Draft done-whens", with the timing items recorded instead of gated: T3.1's item 1 (already met by T2.M1), T3.2's item 3, T3.3's item 2, T3.4's cost in item 4, T3.5's item 2, and T3.7's item 2. T3.9 is the correctness checks only.
 
 **Lanes** (tasks in one lane run in order; separate lanes run in parallel):
-- **A, trees and refit** (`trace/`, the BVH builders): T3.0 → T3.2 → T3.3. The tracer's material side (UVs, alpha) belongs to M4: the two sessions agree file ownership before either starts.
+- **A, trees and refit** (`trace/`, the BVH builders): T3.0 → T3.2 → T3.3.
+
+**File ownership with M4** (agreed with the M4 design session, 2026-11-09). Paths are under `packages/ddgi-core/src/platform/`.
+- **M3 owns:**
+  - tree building and refit: `trace/mesh-bvh*`, `gpu-mesh-trees.ts`, `top-level*`, `sah-builder.ts`, the tree swap, and `packages/bvh`;
+  - the mesh and vertex packing: `scene/mesh-packing.ts`, `gpu-mesh-packing.ts`, `pack-mesh-wgsl.ts`, `trace/triangle-packing.ts`;
+  - the change feed: `scene/change-log.ts`, `scene/instance-transforms.ts` and the contract's change-feed types.
+- **M4 owns:**
+  - `textures/`, `shade/hit-shading.ts`, `shade/direct.ts` and `shade/wgsl.ts`;
+  - the leaf test in `trace/wgsl.ts`, plus the new `trace/material-test-wgsl.ts` and `trace/triangle-flags.ts`;
+  - the material-record words in `scene/layout.ts`.
+- **Shared, one change at a time:**
+  - `scene/layout.ts`: a layout-only commit first, and tell the other session.
+  - The tree-install call site in `ray-queries.ts`: every install path (tinybvh, H-PLOC, and T3.2/T3.3's new ones) runs M4's `gi/triangle-flags`. Whichever lands second wires it in.
 - **B, the change feed and the adapter:** T3.1 → T3.7.
 - **C, probes near moved geometry:** T3.4, after T3.1.
 - **D, volumes:** T3.5 → T3.6. Like C, it changes `ddgi-technique.ts`, so D merges first and C rebases on it.
@@ -473,19 +486,19 @@ Status: **started 2026-11-09** on branch `m3` (from `m2` at 5de856b; PR #4, `m2`
 
 | ID | Task | Agent | Size | Depends on | Status |
 | --- | --- | --- | --- | --- | --- |
-| T3.0 | Spike: deformed positions from three (storage `ExternalTexture`); the `updateMatrixWorld` override on Bistro interior (safe with three's and our tests; rough ns per object); refit decay on a swaying tree. A yes or no for each, with rough numbers | implementer | S | T3.11 (the tree) for the third question | todo |
-| T3.1 | Change feed, the parts T2.M1 left: `receivers`, `deformBounds`, `setDeformedPositions` (done-when items 2-4) | implementer | S | none | todo |
-| T3.2 | Runtime mesh trees: GPU builds for added and updated meshes, tinybvh refinement | implementer | M | T3.0 | todo |
-| T3.3 | Deforming meshes: `GpuMeshRefit` wired, scene-copy positions, geometric normals, movement word; H-PLOC rebuild when the refit drifts | implementer | M | T3.1, T3.2 | todo |
-| T3.4 | Probes near moved geometry, the parts T2.M1 left: woken air probes (M1's "probes in empty space"), deforming movers, the far-set guess scaled to the mover's size (T2.M1 item 8) | implementer | M | T3.1 | todo |
-| T3.5 | Several volumes: shared atlas, volume table, priority blending | implementer | M | none | todo |
+| T3.0 | Spike: deformed positions from three (storage `ExternalTexture`); the `updateMatrixWorld` override on Bistro interior (safe with three's and our tests; rough ns per object); refit decay on a swaying tree. A yes or no for each, with rough numbers | implementer | S | T3.11 (the tree) for the third question | done (2026-11-09; lead review: all three yes. three's GPU skinning reaches the refit through a storage `ExternalTexture` with one GPU copy, on both GPUs; the `updateMatrixWorld` override is safe at about 50 ns an object; refit decay follows the pose, so a rebuild waits for held drift (DECISIONS 2026-11-09)) |
+| T3.1 | Change feed, the parts T2.M1 left: `receivers`, `deformBounds`, `setDeformedPositions` (done-when items 2-4) | implementer | S | none | done (2026-11-09; Opus review passed with notes; the deforming sheet passes the oracle in 8 poses, recompiles 0 over 1,000 instances, 100 meshes and 1,222 poses; until T3.3 a pose rebuilds the mesh's tree, held while any tree is building) |
+| T3.2 | Runtime mesh trees: GPU builds for added and updated meshes, tinybvh refinement | implementer | M | T3.0 | active (2026-11-09; worktree `webgpu-ddgi-m3-t32`) |
+| T3.3 | Deforming meshes: `GpuMeshRefit` wired, scene-copy positions, geometric normals, movement word; H-PLOC rebuild when the refit drifts. Also from T3.1's review: replace `applyPoses`' rebuild with the refit and remove the hold on every tree build (`gi-platform.ts`), and check what rays hit between a pose reaching the scene copy and its tree or refit (item 1 covers it). From M4: `GpuMeshRefit` rewrites whole triangle records, so it keeps word 7 (the triangle flags) or calls `PlatformRayQueries.requestTriangleFlags(meshSlot)` after a refit, or a deforming mesh with glass or cutouts loses its flags (T4.2) | implementer | M | T3.1, T3.2 | todo |
+| T3.4 | Probes near moved geometry, the parts T2.M1 left: woken air probes (M1's "probes in empty space"), deforming movers, the far-set guess scaled to the mover's size (T2.M1 item 8) | implementer | M | T3.1 | review (2026-11-09; all 7 checks pass on the RTX: cabinet within 5% at frame 15, door leak 0.157% at 1 s, cabinet far set 645 probes (was 993) at recall 97.4%, a mid-air ball's GI within 1.2% of every-probe-on; rebases on T3.5, then a short review) |
+| T3.5 | Several volumes: shared atlas, volume table, priority blending | implementer | M | none | active (2026-11-09; worktree `webgpu-ddgi-m3-t35`) |
 | T3.6 | Camera-following volume: wrapping slots, `ddgi/scroll`, window rule, fade-in | implementer | M | T3.5 | todo |
-| T3.7 | three adapter change tracking v2 (added and removed objects without `markChanged`, deforming meshes, the `updateMatrixWorld` override if T3.0 says yes) | implementer | M | T3.0, T3.1 | todo |
+| T3.7 | three adapter change tracking v2 (added and removed objects without `markChanged`, deforming meshes, the `updateMatrixWorld` override if T3.0 says yes) | implementer | M | T3.0, T3.1 | active (2026-11-09; worktree `webgpu-ddgi-m3-t37`) |
 | T3.8 | Viewer scenarios and their manifest motions (furniture, door, cabinets, wind tree, fly-through) | implementer | M | T3.3, T3.4, T3.6, T3.7, T3.11, T3.12 | todo |
 | T3.9 | M3 checks: correctness on the RTX and the Intel UHD (oracle, accuracy, leak, response in frames, stability, recompiles at 0), the door and cabinet against Cycles renders of their end states; rough costs recorded | gpu-tester | M | T3.0-T3.8 | todo |
 | T3.10 | M3 note and the next breakdown | main session | S | T3.9 | todo |
-| T3.11 | The wind tree's asset: find or generate, convert, record licence | wrangler | S | none | todo |
-| T3.12 | Bistro exterior runs in the viewer on a 6 GB card (the fly-through needs it): compressed textures through GPUTex (upstream gputex 0.14.0 first; HomeFig's method only after asking Dennis; KTX2 the fallback). If that isn't quick, the viewer applies T2.17's texture cap as a setting and GPUTex moves to Later | implementer | S | none | todo |
+| T3.11 | The wind tree's asset: find or generate, convert, record licence | wrangler | S | none | done (2026-11-09; no downloadable tree in range, so generated: `tools/assets/convert/wind-tree.ts`, seed 20261109, 50,474 triangles, about 9 m, MIT; wind weight in `COLOR_0` alpha; scene `courtyard-wind-tree`; lead review by eye: reads as a tree, a clump of low leaf cards sits around the trunk's foot) |
+| T3.12 | Bistro exterior runs in the viewer on a 6 GB card (the fly-through needs it): compressed textures through GPUTex (upstream gputex 0.14.0 first; HomeFig's method only after asking Dennis; KTX2 the fallback). If that isn't quick, the viewer applies T2.17's texture cap as a setting and GPUTex moves to Later | implementer | S | none | done (2026-11-09; upstream gputex 0.14.0, BC7 and BC5 normal maps, mips kept for M4; Bistro 44 ms a GI frame instead of 591, 4.86 GB peak; the GI-averaged maps stay uncompressed until M4's T4.3 flips `textures` to `all-compressed` in `ui/url-state.ts`; short Opus review passed, clearcoat-normal fix in) |
 
 ## Carried to M2 (collected during M1)
 
@@ -516,7 +529,7 @@ Polish and follow-ups, picked up when a working feature needs them. Earlier IDs 
 - DDGI memory: trim buffers grown by doubling once a scene settles (about 237 MB unused on Bistro, T2.17) (T3.13).
 - Bistro's calibration: Budget v2 lands at 14-116 probes, and `ddgi/trace` has a 1-1.5 ms fixed cost at 16 probes; the budget page's check breaks when the frame rate is learned (T3.14).
 - The change cost model counts `gi/direct`'s lit hits, to win back the frame-15 margin on Sponza's sun turn, with the sun layer on and off, on both GPUs (T2.18, T2.8, the Intel miss) (T3.15).
-- Scene-copy follow-ups from T2.13's review: texture averages from three's smallest mip, H-PLOC reading the packing's staging buffers, GPU tests of the packing fallbacks, the main-thread bar (T3.16).
+- Scene-copy follow-ups from T2.13's review: H-PLOC reading the packing's staging buffers, GPU tests of the packing fallbacks, the main-thread bar (T3.16). The texture-average items are dropped: M4's textured hits remove the averages (m4-materials.md).
 - Native parity: native's Sponza GI about 8× Cycles' (the sun's units first), native's 1 m falloff clamp, a native sweep on our grid for Sponza (T3.17).
 - `userData.giRange` in the three adapter (a host-facing API; designed by the main session first) (T3.18).
 - Test flakes: unit tests timing out at 5 s under CPU load; the Intel hanging on the 4th page of a batch (T3.19).

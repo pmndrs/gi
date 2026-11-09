@@ -1,0 +1,140 @@
+{
+    "id": "courtyard-wind-tree",
+    "title": "Courtyard with the wind tree",
+    "description": "The small walled courtyard with a generated 10 m tree (about 50,000 triangles; trunk, branch and leaf-card meshes with a wind weight in the vertex colour alpha) for the M3 wind scenario. Leaf cards are opaque until M4.",
+    "tags": [
+        "exterior",
+        "foliage",
+        "moving-geometry"
+    ],
+    "units": "meters",
+    "upAxis": "y",
+    "parts": [
+        {
+            "kind": "procedural",
+            "builder": "courtyard"
+        },
+        {
+            "kind": "model",
+            "asset": "wind-tree",
+            "path": "wind-tree.glb",
+            "transform": {
+                "position": [
+                    0,
+                    0,
+                    0
+                ],
+                "rotationDeg": [
+                    0,
+                    0,
+                    0
+                ],
+                "scale": 1
+            }
+        }
+    ],
+    "cameras": [
+        {
+            "name": "from-the-gateway",
+            "position": [
+                -3.5,
+                1.7,
+                4.6
+            ],
+            "target": [
+                0.3,
+                4.5,
+                0
+            ],
+            "fovYDeg": 70
+        },
+        {
+            "name": "from-the-south-east",
+            "position": [
+                4.4,
+                1.6,
+                4.4
+            ],
+            "target": [
+                -0.5,
+                4,
+                -1
+            ],
+            "fovYDeg": 70
+        },
+        {
+            "name": "under-the-tree",
+            "position": [
+                2.4,
+                1.5,
+                2.6
+            ],
+            "target": [
+                0,
+                5,
+                0
+            ],
+            "fovYDeg": 75
+        }
+    ],
+    "lights": [
+        {
+            "type": "directional",
+            "label": "sun",
+            "color": [
+                1,
+                0.95,
+                0.85
+            ],
+            "intensity": 3,
+            "direction": [
+                -0.4,
+                -0.8,
+                -0.3
+            ]
+        }
+    ],
+    "environment": {
+        "type": "procedural",
+        "sunDirection": [
+            0.4,
+            0.8,
+            0.3
+        ],
+        "turbidity": 3,
+        "intensity": 1
+    },
+    "volume": {
+        "center": [
+            0,
+            5,
+            0
+        ],
+        "size": [
+            10.6,
+            10.6,
+            10.6
+        ],
+        "probeSpacing": 0.5
+    },
+    "nativeCapable": true,
+    "referenceCube": {
+        "position": [
+            2.6,
+            0.5,
+            -2
+        ]
+    },
+    "credits": [
+        {
+            "asset": null,
+            "license": "MIT",
+            "attribution": "Courtyard walls and ground: MIT, this repo."
+        },
+        {
+            "asset": "wind-tree",
+            "license": "MIT",
+            "attribution": "Generated, MIT, tools/assets/convert/wind-tree.ts."
+        }
+    ]
+}

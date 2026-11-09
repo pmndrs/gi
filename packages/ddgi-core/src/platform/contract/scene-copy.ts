@@ -73,6 +73,9 @@ export interface DirtyRegion {
      * how far the instance moved, in metres, as the largest distance any
      * corner of its mesh's box travelled (so a turn in place counts too).
      * Both regions of a move (where it was and where it is) carry it.
+     * A deforming mesh's region (new positions from `setDeformedPositions`)
+     * carries the largest distance any vertex travelled since the positions
+     * before, in world metres (its instance's largest scale applied).
      * Undefined for everything else: an instance created, destroyed, shown,
      * hidden or given a new mesh is a whole change there.
      *
@@ -139,8 +142,19 @@ export interface SceneChanges {
      * lights changed than are listed one by one (`lightsOverflowed`).
      */
     readonly global: readonly ('sun' | 'environment' | 'lights')[];
-    /** Instances whose transform changed but which don't contribute to GI. Receivers only; usually ignorable. */
-    readonly movedReceivers: number;
+    /**
+     * Where receivers are now: the world box of each visible instance that
+     * doesn't contribute to GI (`contributesToGI: false`: characters, small
+     * props) and was moved, created, shown or deformed. Rays never see these
+     * objects, so nothing about the lighting changed; but they need GI where
+     * they are, and a technique may have to wake probes there (DDGI's probes
+     * in empty space, docs/design/m3-moving.md §5.3). Only the new place is
+     * listed: where a receiver left needs nothing.
+     *
+     * Up to `MAX_RECEIVER_BOXES` (platform/scene/change-log.ts) a frame are
+     * listed one by one; past that they are merged into one box.
+     */
+    readonly receivers: readonly Aabb[];
     /**
      * Every light that was created, changed or destroyed, with its old and new
      * state, up to 1,024 a frame (`MAX_LISTED_LIGHT_CHANGES` in

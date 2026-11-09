@@ -1,0 +1,5 @@
+{
+    "description": "T3.0 spike, question 3: a procedural ~100,000-triangle tree sways for 600 frames with GPU refits only; at checkpoints the refit tree is traced against a fresh tinybvh build of the same pose (and H-PLOC at frame 600). Reports SAH and rough trace-time ratios; no timing gate. Run by hand under the bench lock.",
+    "timeoutMs": 600000,
+    "manual": true
+}

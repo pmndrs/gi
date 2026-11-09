@@ -131,7 +131,7 @@ Gaps:
 
 ## Other open gaps
 
-4. **Deformed vertices from three.js.** `setDeformedPositions` wants a GPU buffer. three's skinned and morphed positions aren't exposed as one. The adapter may have to run its own skinning compute. To decide in M3.
+4. **Deformed vertices from three.js.** three's skinned and morphed positions aren't exposed as a GPU buffer. Decided in M3 (m3-moving.md §7): the CPU form of `setDeformedPositions` first (T3.1), a storage `ExternalTexture` or an upstream `ExternalBufferAttribute` for the GPU form later.
 5. **Compressed textures** (KTX2). `TextureSource` accepts a `GPUTexture`, but getting three's `GPUTexture` means reaching into the renderer's backend, which we've ruled out. Alternatives: decode the KTX2 ourselves, or have the adapter keep the original image. To decide in M4.
 6. **Splitting the budget between stacked techniques.** For now the platform splits the millisecond budget evenly between techniques and turns each share into units with that technique's measured `msPerUnit` (T1.5b). This needs a real policy once there are two techniques.
 7. **Storage-buffer budget for tracing kernels.** The scene copy (about 3), the BVH (about 2) and lights (1) leave about 2 of the default 8 for the technique. T0.10 must count the real numbers. If it's too tight, `requiredLimits` asks for more where the adapter has it (most desktop adapters allow 10 or more), and we pack tables into fewer buffers.
@@ -160,6 +160,11 @@ Gaps:
 The answers go in PROGRESS. Any change to the contract is made in both the TypeScript and this page, and listed in a "Revisions" section here.
 
 ## Revisions
+
+### During M3, 2026-11-09
+
+- **Host-facing (T3.1): `MeshDescriptor.deformBounds` and `setDeformedPositions` with a `Float32Array`.** A `deforming` mesh may give `deformBounds`, a box in its own space that every pose stays inside; its instances keep that box in the top level, and each new pose is logged as that box (in world space, per instance). `setDeformedPositions(mesh, positions)` takes the CPU form (Dennis, 2026-11-05: yes): xyz per vertex, copied at the call, the newest of a frame kept. The GPU-buffer form (`DeformedPositions`) throws until T3.3 wires the GPU refit. *As built for the prototype:* the pose is written into the mesh's positions in the scene copy (plain xyz floats, so no layout change) and the mesh is reported as uploaded again, so the tracer rebuilds its tree as for `updateMesh`; new poses wait while trees are being built, so a mesh posed every frame still gets trees (about one in three frames on the RTX for 1,152 triangles). A pose outside `deformBounds` grows the box, with one warning.
+- **Technique-facing (T3.1): `SceneChanges.receivers: readonly Aabb[]`** replaces the `movedReceivers` count: the world box, where it is now, of each visible instance that doesn't contribute to GI and was created, shown, moved or deformed, up to 256 a frame (then one merged box). For waking probes in empty space (m3-moving.md §5.3). **`DirtyRegion.moved`** is also set for a deforming mesh's region: the largest vertex travel since the pose before, times the instance's largest axis scale.
 
 ### During M2, 2026-11-08
 

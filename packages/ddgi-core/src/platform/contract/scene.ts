@@ -56,17 +56,33 @@ export interface MeshDescriptor {
     readonly groups?: readonly MeshGroup[];
     /**
      * The vertex positions will change every frame (foliage, cloth, a fan)
-     * while the triangle list stays the same. The platform then keeps the BVH
-     * shape and refits its boxes on the GPU from positions supplied through
-     * {@link SceneApi.setDeformedPositions}.
+     * while the triangle list stays the same. The host then supplies each
+     * frame's positions through {@link SceneApi.setDeformedPositions}.
      */
     readonly deforming?: boolean;
+    /**
+     * For a `deforming` mesh: a box, in the mesh's own space, that every pose
+     * stays inside (the rest pose plus how far the wind or the animation can
+     * push it). Ignored for other meshes.
+     *
+     * Why: the platform logs this box (moved to world space by each instance)
+     * as the mesh's changed region whenever new positions arrive, and its
+     * instances keep this box in the top-level tree, so a pose change never
+     * changes the tree's shape. Positions outside it are still traced
+     * correctly: the box grows to hold them, with a one-time console warning.
+     * Omitted, the box starts as the rest pose's and grows the same way. It
+     * will be required for positions given as a GPU buffer, which the
+     * platform can't read on the CPU.
+     */
+    readonly deformBounds?: Aabb;
     /** Shown in debug output and errors. */
     readonly label?: string;
 }
 
 /**
  * Deformed positions supplied by the host each frame, already on the GPU.
+ * Not supported yet: {@link SceneApi.setDeformedPositions} takes a
+ * `Float32Array` until the GPU refit lands (M3, T3.3).
  *
  * The buffer belongs to the host and must come from the same device, with
  * `STORAGE` usage. The platform reads it inside {@link GIPlatform.encode} and
@@ -377,8 +393,25 @@ export interface SceneApi {
     createMesh(descriptor: MeshDescriptor): MeshHandle;
     /** Replace the shape. Rebuilds that mesh's BVH in a worker; the old one is used until it's ready. */
     updateMesh(mesh: MeshHandle, descriptor: MeshDescriptor): void;
-    /** Supply this frame's positions for a mesh created with `deforming: true`. */
-    setDeformedPositions(mesh: MeshHandle, positions: DeformedPositions): void;
+    /**
+     * Supply new positions for a mesh created with `deforming: true`: xyz per
+     * vertex in the mesh's own space, the same vertex count and order as its
+     * descriptor. The triangle list, normals and uvs stay as they were.
+     *
+     * - **A `Float32Array`** (the CPU form; works today): copied at the call,
+     *   so the host may reuse its array. Calls between two frames are merged:
+     *   only the last one counts.
+     * - **A {@link DeformedPositions} GPU buffer**: not supported yet (it
+     *   arrives with the GPU refit, M3's T3.3); throws.
+     *
+     * Rays see the new pose once its mesh tree is ready, usually within a few
+     * frames; until then they see the previous pose. While any mesh tree is
+     * being built, new positions wait (the latest one is kept), so a mesh
+     * deformed every frame still gets trees. The change is logged as the
+     * mesh's `deformBounds` region with how far its vertices moved
+     * (`DirtyRegion.moved`).
+     */
+    setDeformedPositions(mesh: MeshHandle, positions: Float32Array | DeformedPositions): void;
     destroyMesh(mesh: MeshHandle): void;
 
     createTexture(descriptor: TextureDescriptor): TextureHandle;

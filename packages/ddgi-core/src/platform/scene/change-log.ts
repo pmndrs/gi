@@ -240,10 +240,81 @@ class RegionColumns {
     }
 }
 
+/**
+ * Past this many receiver boxes in one frame, they are merged into one box
+ * (`SceneChanges.receivers`). A crowd of characters moving every frame would
+ * otherwise list thousands, while a technique only needs to know roughly
+ * where receivers are.
+ */
+export const MAX_RECEIVER_BOXES = 256;
+
+/**
+ * A frame's receiver boxes in one flat typed array, so logging one allocates
+ * nothing: `setTransforms` can move thousands of receivers a frame. Past
+ * MAX_RECEIVER_BOXES the boxes are folded into one running box.
+ */
+class ReceiverBoxes {
+    private count = 0;
+    private readonly boxes = new Float32Array(MAX_RECEIVER_BOXES * 6);
+    private merging = false;
+    /** Past MAX_RECEIVER_BOXES: the running box, min then max. */
+    private readonly mergedBox = new Float64Array(6);
+
+    /** A box: the 6 numbers from `boxAt` in `box`, min then max. */
+    add(box: ArrayLike<number>, boxAt: number): void {
+        if (!this.merging && this.count === MAX_RECEIVER_BOXES) this.startMerging();
+        if (this.merging) {
+            this.fold(box, boxAt);
+            return;
+        }
+        const at = this.count++ * 6;
+        for (let value = 0; value < 6; value++) this.boxes[at + value] = box[boxAt + value];
+    }
+
+    take(): Aabb[] {
+        const boxes: Aabb[] = [];
+        if (this.merging) {
+            boxes.push(toAabb(this.mergedBox));
+        } else {
+            for (let index = 0; index < this.count; index++) boxes.push(toAabb(this.boxes.subarray(index * 6, index * 6 + 6)));
+        }
+        this.count = 0;
+        this.merging = false;
+        return boxes;
+    }
+
+    private startMerging(): void {
+        this.merging = true;
+        this.mergedBox.fill(Infinity, 0, 3);
+        this.mergedBox.fill(-Infinity, 3, 6);
+        for (let index = 0; index < this.count; index++) this.fold(this.boxes, index * 6);
+        this.count = 0;
+    }
+
+    private fold(box: ArrayLike<number>, at: number): void {
+        for (let axis = 0; axis < 3; axis++) {
+            if (box[at + axis] < this.mergedBox[axis]) this.mergedBox[axis] = box[at + axis];
+            if (box[at + 3 + axis] > this.mergedBox[3 + axis]) this.mergedBox[3 + axis] = box[at + 3 + axis];
+        }
+    }
+}
+
+/** Receiver boxes merged into one, as a frame's are past MAX_RECEIVER_BOXES. */
+function mergeReceivers(boxes: readonly Aabb[]): Aabb[] {
+    const merged = [Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity];
+    for (const box of boxes) {
+        for (let axis = 0; axis < 3; axis++) {
+            merged[axis] = Math.min(merged[axis], box.min[axis]);
+            merged[axis + 3] = Math.max(merged[axis + 3], box.max[axis]);
+        }
+    }
+    return [toAabb(merged)];
+}
+
 export class ChangeLog {
     private readonly regions = new RegionColumns();
     private readonly global = new Set<GlobalChange>();
-    private movedReceivers = 0;
+    private readonly receivers = new ReceiverBoxes();
     /** Each light touched this frame, with its state before the frame's first change (null: created this frame). In first-touched order. */
     private readonly lightsBefore = new Map<LightHandle, LightDescriptor | null>();
 
@@ -256,8 +327,9 @@ export class ChangeLog {
         this.global.add(change);
     }
 
-    addMovedReceiver(): void {
-        this.movedReceivers++;
+    /** A receiver's world box where it is now (`SceneChanges.receivers`): the 6 numbers from `boxAt` in `box`. */
+    addReceiver(box: ArrayLike<number>, boxAt = 0): void {
+        this.receivers.add(box, boxAt);
     }
 
     /**
@@ -279,12 +351,11 @@ export class ChangeLog {
         const changes: SceneChanges = {
             regions: this.regions.take(),
             global: [...this.global],
-            movedReceivers: this.movedReceivers,
+            receivers: this.receivers.take(),
             lights: lightsOverflowed ? [] : lightChanges,
             lightsOverflowed,
         };
         this.global.clear();
-        this.movedReceivers = 0;
         this.lightsBefore.clear();
         return changes;
     }
@@ -365,10 +436,12 @@ export function mergeSceneChanges(earlier: SceneChanges, later: SceneChanges): S
     if (lightsOverflowed) global.add('lights');
     let regions = [...earlier.regions, ...later.regions];
     if (regions.length > MAX_DIRTY_REGIONS) regions = mergeByReason(regions);
+    let receivers = [...earlier.receivers, ...later.receivers];
+    if (receivers.length > MAX_RECEIVER_BOXES) receivers = mergeReceivers(receivers);
     return {
         regions,
         global: [...global],
-        movedReceivers: earlier.movedReceivers + later.movedReceivers,
+        receivers,
         lights: lightsOverflowed ? [] : [...lights.values()],
         lightsOverflowed,
     };
