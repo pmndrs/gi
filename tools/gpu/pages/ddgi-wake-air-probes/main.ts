@@ -304,7 +304,7 @@ async function wakesInEveryVolume(device: GPUDevice, log: (line: string) => void
 }
 
 /**
- * A camera-following volume (T3.6): a window 3 m wide on x over Cornell,
+ * A camera-following volume (T3.6): a window 3.5 m (8 probes) wide on x over Cornell,
  * with the camera riding along with the ball, so the window scrolls and its
  * probes live in wrapping slots. `ddgi/mark` must turn the table's window
  * probes into slots (T3.6's conversion): after the path, every window probe
@@ -313,7 +313,7 @@ async function wakesInEveryVolume(device: GPUDevice, log: (line: string) => void
  * would leave some of them unwoken.
  */
 async function wakesInCameraVolume(device: GPUDevice, log: (line: string) => void): Promise<Record<string, unknown>> {
-    const settings = { center: [PATH_START[0], 2.74, 2.8] as Vec3, size: [3.0, 5.6, 5.8] as Vec3, spacing: 0.5, follow: 'camera' as const };
+    const settings = { center: [PATH_START[0], 2.74, 2.8] as Vec3, size: [3.5, 5.6, 5.8] as Vec3, spacing: 0.5, follow: 'camera' as const };
     const scene = await createDdgiScene(device, SCENE, { volumes: [settings] });
     const cameraAt = (x: number) => bookmarkCamera({ name: 'riding with the ball', position: [x, 2.74, 2.8], target: [x, 2.74, 0], fovYDeg: 60 }, 16 / 9);
     const units = scene.ddgi.field!.grid.probeCount;
@@ -334,8 +334,9 @@ async function wakesInCameraVolume(device: GPUDevice, log: (line: string) => voi
     const volume = scene.ddgi.field!.volumes[0];
     assert(volume.followsCamera, 'the volume does not follow the camera');
     const window = volume.window;
-    assert(window[0] !== 0, 'the window never moved; the check needs the slots to wrap');
     const counts = volume.grid.counts;
+    // A shift of a whole number of windows puts every probe back in the slot of its own index, which a missing conversion would pass.
+    assert(window[0] % counts[0] !== 0, `the window moved ${window[0]} planes on ${counts[0]}: the slots don't wrap, so the check can't tell`);
     const spacing = volume.grid.spacing;
     // Lattice probe L sits at the anchor (the settings' first probe) + L × spacing; window probe w is lattice window + w.
     const anchor = probeGrid(settings).origin;

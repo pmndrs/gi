@@ -21,6 +21,17 @@ Rules:
 
 ---
 
+## 2026-11-10 · T3.4 merged with `m3` (T3.6) · implementer (opus)
+Did: merged `m3` (a1abecd) into `m3-t3.4`. Conflicts were only in the PROGRESS and DECISIONS tops; both sides kept. The marks, wakes and receiver entries already go through T3.6's conversion: the table holds window probes, and `ddgiMarkThread` turns each into its slot. One fix: the far set's contrast walks the probes around a box's centre in window coordinates, and it now reads each one through its slot (`ddgiProbeSlot`). `ddgi-wake-air-probes` adds a camera-following volume (8 probes wide on x) that scrolls with the ball; the probes near the ball's last box must be woken in their slots.
+Verified, RTX 3060 Laptop (nvidia/ampere), bench lock, untimed; all pass:
+- `ddgi-wake-air-probes`: the window moved 7 planes on 8, so the slots wrap; 36 of 36 probes near the ball were woken. Two volumes: 84 / 84 woken. The one-volume numbers are the same as before.
+- `ddgi-camera-volume`, `ddgi-volumes`.
+- Cabinet: within 5% from frame 15 at 210; 651 marked, recall 97.7%, precision 39.5%. Door swing: 0.157% at 1 s, recall 91.5%.
+- `ddgi-change-still`: means as before, 0 marks, 347 / 102 probes asleep.
+- `ddgi-deforming-marks` (unchanged). `three-deforming-gi`: the exact-box morph is still -6.0% / -13.1%.
+- `platform-recompiles` and `ddgi-session-recompiles` (0), `ddgi-warm-two-updates`, `ddgi-mark-reduction`.
+- Typecheck and lint clean. Unit tests pass: 6 files failed under load and passed when re-run alone.
+
 ## 2026-11-10 · T3.4 merged with `m3` again (T3.3) · implementer (opus)
 Did: merged `m3` (b22d75d) into `m3-t3.4` (201f0f8). Only conflict was the top of PROGRESS; T3.3's entries go first. No code change was needed: poses still log the instance's deform box, with `moved` and the instance.
 The pose-box union for the unfold miss isn't needed and would change nothing. A pose's region is the mesh's whole deform box: the declared `deformBounds`, or the rest box grown by every pose so far (it never shrinks). That box holds the previous and the new pose, for CPU and GPU poses alike.
