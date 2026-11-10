@@ -3,7 +3,7 @@ import { frameConstants, reprojectionCellSize } from './camera.ts';
 import { MAX_BLUR_MASK } from './constants.ts';
 import { GI1Denoiser } from './gi1-denoiser.ts';
 import { blurRadius, filterGI, linearDepths, removeNaNs, reprojectGI, type ReprojectInputs } from './reference.ts';
-import { ENTRY_POINT, KERNELS } from './wgsl.ts';
+import { CAPSAICIN_FORMATS, CORE_FORMATS, denoiserKernels, ENTRY_POINT, formatsFor } from './wgsl.ts';
 
 /** WebGPU's default (and guaranteed) limits per shader stage: what any host's device allows. */
 const DEFAULT_STORAGE_BUFFERS_PER_STAGE = 8;
@@ -14,24 +14,36 @@ describe("the denoiser's binding budget", () => {
     const count = (layout: GPUBindGroupLayoutDescriptor, kind: 'buffer' | 'storageTexture' | 'texture'): number =>
         [...layout.entries].filter((entry) => (kind === 'buffer' ? entry.buffer?.type === 'storage' || entry.buffer?.type === 'read-only-storage' : entry[kind] !== undefined)).length;
 
-    it("fits WebGPU's default limits per stage: no storage buffers, at most 3 storage textures", () => {
-        const storageTextures = Object.fromEntries(KERNELS.map((kernel) => [kernel.entryPoint, count(kernel.layout, 'storageTexture')]));
-        expect(storageTextures).toEqual({ [ENTRY_POINT.reproject]: 3, [ENTRY_POINT.filter]: 2, [ENTRY_POINT.keepGuides]: 2 });
-        for (const kernel of KERNELS) {
-            expect(count(kernel.layout, 'buffer'), kernel.entryPoint).toBe(0);
-            expect(count(kernel.layout, 'buffer')).toBeLessThanOrEqual(DEFAULT_STORAGE_BUFFERS_PER_STAGE);
-            expect(count(kernel.layout, 'storageTexture')).toBeLessThanOrEqual(DEFAULT_STORAGE_TEXTURES_PER_STAGE);
-            expect(count(kernel.layout, 'texture')).toBeLessThanOrEqual(DEFAULT_SAMPLED_TEXTURES_PER_STAGE);
-        }
-    });
+    for (const [name, formats] of [['Capsaicin\'s', CAPSAICIN_FORMATS], ['the fallback', CORE_FORMATS]] as const) {
+        const kernels = denoiserKernels(formats);
 
-    it('declares in WGSL exactly the bindings its layout has', () => {
-        for (const kernel of KERNELS) {
-            const declared = [...kernel.code.matchAll(/@group\(0\) @binding\((\d+)\)/g)].map((match) => Number(match[1])).sort((a, b) => a - b);
-            expect(declared, kernel.entryPoint).toEqual([...kernel.layout.entries].map((entry) => entry.binding));
-            expect(kernel.code).toContain(`fn ${kernel.entryPoint}(`);
-            expect(kernel.code).not.toContain('${');
-        }
+        it(`fits WebGPU's default limits per stage with ${name} formats: no storage buffers, at most 3 storage textures`, () => {
+            const storageTextures = Object.fromEntries(kernels.map((kernel) => [kernel.entryPoint, count(kernel.layout, 'storageTexture')]));
+            expect(storageTextures).toEqual({ [ENTRY_POINT.reproject]: 3, [ENTRY_POINT.filter]: 2, [ENTRY_POINT.keepGuides]: 2 });
+            for (const kernel of kernels) {
+                expect(count(kernel.layout, 'buffer'), kernel.entryPoint).toBe(0);
+                expect(count(kernel.layout, 'buffer')).toBeLessThanOrEqual(DEFAULT_STORAGE_BUFFERS_PER_STAGE);
+                expect(count(kernel.layout, 'storageTexture')).toBeLessThanOrEqual(DEFAULT_STORAGE_TEXTURES_PER_STAGE);
+                expect(count(kernel.layout, 'texture')).toBeLessThanOrEqual(DEFAULT_SAMPLED_TEXTURES_PER_STAGE);
+            }
+        });
+
+        it(`declares in WGSL exactly the bindings its layout has, with ${name} formats`, () => {
+            for (const kernel of kernels) {
+                const declared = [...kernel.code.matchAll(/@group\(0\) @binding\((\d+)\)/g)].map((match) => Number(match[1])).sort((a, b) => a - b);
+                expect(declared, kernel.entryPoint).toEqual([...kernel.layout.entries].map((entry) => entry.binding));
+                expect(kernel.code).toContain(`fn ${kernel.entryPoint}(`);
+                expect(kernel.code).not.toContain('${');
+            }
+            const reproject = kernels.find((kernel) => kernel.entryPoint === ENTRY_POINT.reproject);
+            expect(reproject?.code).toContain(`texture_storage_2d<${formats.blurMask}, write>`);
+            expect(reproject?.code).toContain(`texture_storage_2d<${formats.colorDelta}, write>`);
+        });
+    }
+
+    it("takes Capsaicin's formats only where the device has texture-formats-tier1 (register D65)", () => {
+        expect(formatsFor(new Set(['texture-formats-tier1']))).toEqual({ blurMask: 'r8snorm', colorDelta: 'r16float' });
+        expect(formatsFor(new Set())).toEqual({ blurMask: 'rgba8snorm', colorDelta: 'r32float' });
     });
 });
 
@@ -164,6 +176,7 @@ describe('the GI1Denoiser object', () => {
                 return Promise.resolve({});
             },
             queue: { writeBuffer() {} },
+            features: new Set<string>(),
         } as unknown as GPUDevice;
         const denoiser = await GI1Denoiser.create(device);
         expect(created.sort()).toEqual([ENTRY_POINT.filter, ENTRY_POINT.keepGuides, ENTRY_POINT.reproject].sort());

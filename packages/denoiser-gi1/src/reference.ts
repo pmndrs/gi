@@ -153,7 +153,9 @@ export function reprojectGI(inputs: ReprojectInputs, frame: FrameConstants, marg
                     }
                     if (weight > 0) {
                         reprojected[pixel] = 1;
-                        delta = removeNaNs(Math.abs(delta) / weight) * Math.sign(delta);
+                        // The sign by comparisons: 0 for NaN, as HLSL's int sign (register D75).
+                        const deltaSign = delta > 0 ? 1 : delta < 0 ? -1 : 0;
+                        delta = removeNaNs(Math.abs(delta) / weight) * deltaSign;
                         for (let channel = 0; channel < 4; channel++) lighting[channel] = removeNaNs(lighting[channel] / weight);
                     }
                     if (input[3] > 0) {

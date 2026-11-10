@@ -47,10 +47,10 @@
  * The constants are Capsaicin's (constants.ts, with their lines). Where this
  * differs from Capsaicin, the reason is in the radiance cache's divergence
  * register (webgpu-ddgi `docs/design/radiance-cache.md`, D65 onwards):
- * texture formats (D65), the input in its own texture (D66), sky by depth
+ * texture formats (Capsaicin's with `texture-formats-tier1`, else a fallback: D65), the input in its own texture (D66), sky by depth
  * (D67), the guides kept here (D68), points relative to the eye (D69),
  * linear depth from the rebuilt point (D70), NaN removal by the bits (D71),
- * a point sampler's texel by hand (D72).
+ * a point sampler's texel by hand (D72), the delta's sign by comparisons (D75).
  */
 
 import {
@@ -83,20 +83,37 @@ export const ENTRY_POINT = {
 
 /**
  * Texture formats. Capsaicin's history colour and output are
- * `R16G16B16A16_FLOAT` (gi1.cpp:1210-1212, 1707), as here. Its blur mask is
- * `R8_SNORM` and its colour delta `R16_FLOAT` (gi1.cpp:1200, 1222); core
- * WebGPU has neither as a storage format without `texture-formats-tier1`,
- * so the mask is `rgba8snorm` (the same snorm values, register D65) and the
- * delta `r32float`.
+ * `R16G16B16A16_FLOAT` (gi1.cpp:1210-1212, 1707), as here.
  */
 export const FORMAT = {
     color: 'rgba16float',
-    colorDelta: 'r32float',
-    blurMask: 'rgba8snorm',
     irradiance: 'rgba16float',
     previousDepth: 'r32float',
     previousNormal: 'rgba16float',
 } as const satisfies Record<string, GPUTextureFormat>;
+
+/** The blur mask's and the colour deltas' formats: Capsaicin's where the device allows them, else the fallback. */
+export interface GI1DenoiserFormats {
+    readonly blurMask: 'r8snorm' | 'rgba8snorm';
+    readonly colorDelta: 'r16float' | 'r32float';
+}
+
+/** The feature that makes `r8snorm` and `r16float` storage formats. */
+export const TEXTURE_FORMATS_TIER1: GPUFeatureName = 'texture-formats-tier1';
+
+/** Capsaicin's: `R8_SNORM` and `R16_FLOAT` (gi1.cpp:1200, 1222). Storage formats only with `texture-formats-tier1`. */
+export const CAPSAICIN_FORMATS: GI1DenoiserFormats = { blurMask: 'r8snorm', colorDelta: 'r16float' };
+
+/**
+ * The one declared fallback, in core WebGPU (register D65): the mask in an
+ * `rgba8snorm` texel's r (the same snorm steps), the delta in f32.
+ */
+export const CORE_FORMATS: GI1DenoiserFormats = { blurMask: 'rgba8snorm', colorDelta: 'r32float' };
+
+/** Capsaicin's formats when the device has `texture-formats-tier1`, otherwise the fallback. */
+export function formatsFor(features: { has(feature: string): boolean }): GI1DenoiserFormats {
+    return features.has(TEXTURE_FORMATS_TIER1) ? CAPSAICIN_FORMATS : CORE_FORMATS;
+}
 
 /** Bytes of `GIDenoiserConstants`, and its fields' byte offsets (written by name in gi1-denoiser.ts). */
 export const CONSTANTS_BYTES = 160;
@@ -200,25 +217,28 @@ fn giRemoveNaNs4(color: vec4f) -> vec4f {
 
 // ---- ReprojectGI --------------------------------------------------------------------------------
 
-export const REPROJECT_LAYOUT: GPUBindGroupLayoutDescriptor = {
-    label: 'gi1-denoiser/ReprojectGI',
-    entries: [
-        UNIFORM(0),
-        TEXTURE(1),
-        TEXTURE(2),
-        TEXTURE(3),
-        TEXTURE(4),
-        TEXTURE(5),
-        TEXTURE(6),
-        TEXTURE(7),
-        TEXTURE(8),
-        STORAGE_TEXTURE(9, FORMAT.blurMask),
-        STORAGE_TEXTURE(10, FORMAT.color),
-        STORAGE_TEXTURE(11, FORMAT.colorDelta),
-    ],
-};
+export function reprojectLayout(formats: GI1DenoiserFormats): GPUBindGroupLayoutDescriptor {
+    return {
+        label: 'gi1-denoiser/ReprojectGI',
+        entries: [
+            UNIFORM(0),
+            TEXTURE(1),
+            TEXTURE(2),
+            TEXTURE(3),
+            TEXTURE(4),
+            TEXTURE(5),
+            TEXTURE(6),
+            TEXTURE(7),
+            TEXTURE(8),
+            STORAGE_TEXTURE(9, formats.blurMask),
+            STORAGE_TEXTURE(10, FORMAT.color),
+            STORAGE_TEXTURE(11, formats.colorDelta),
+        ],
+    };
+}
 
-export const REPROJECT_WGSL = /* wgsl */ `
+export function reprojectWgsl(formats: GI1DenoiserFormats): string {
+    return /* wgsl */ `
 ${CONSTANTS_WGSL}
 // This frame's noisy irradiance and Capsaicin's denoiser hint in alpha: what
 // InterpolateScreenProbes left in g_GIDenoiser_ColorBuffer (gi1.comp:1638), in a texture of its
@@ -236,9 +256,10 @@ ${CONSTANTS_WGSL}
 @group(0) @binding(7) var giPreviousDepth: texture_2d<f32>;
 @group(0) @binding(8) var giPreviousNormal: texture_2d<f32>;
 // g_GIDenoiser_BlurMask, g_GIDenoiser_ColorBuffer, g_GIDenoiser_ColorDeltaBuffer.
-@group(0) @binding(9) var giBlurMask: texture_storage_2d<${FORMAT.blurMask}, write>;
+// (r8snorm and r16float with texture-formats-tier1, else rgba8snorm and r32float: register D65.)
+@group(0) @binding(9) var giBlurMask: texture_storage_2d<${formats.blurMask}, write>;
 @group(0) @binding(10) var giColor: texture_storage_2d<${FORMAT.color}, write>;
-@group(0) @binding(11) var giColorDelta: texture_storage_2d<${FORMAT.colorDelta}, write>;
+@group(0) @binding(11) var giColorDelta: texture_storage_2d<${formats.colorDelta}, write>;
 
 ${SCREEN_WGSL}
 ${REMOVE_NANS_WGSL}
@@ -317,7 +338,9 @@ fn ${ENTRY_POINT.reproject}(@builtin(global_invocation_id) id: vec3u) {
             }
 
             if (weight > 0.0) {
-                let deltaSign = sign(colorDelta);
+                // HLSL's sign returns an int: 0 for NaN, whose delta RemoveNaNs then zeroes. WGSL's
+                // float sign(NaN) has no defined value, so the comparisons say it (register D75).
+                let deltaSign = select(select(0.0, -1.0, colorDelta < 0.0), 1.0, colorDelta > 0.0);
                 colorDelta = giRemoveNaNs(abs(colorDelta) / weight);
                 colorDelta *= deltaSign; // restore delta
 
@@ -358,6 +381,7 @@ fn ${ENTRY_POINT.reproject}(@builtin(global_invocation_id) id: vec3u) {
     textureStore(giColorDelta, did, vec4f(colorDelta, 0.0, 0.0, 0.0));
 }
 `;
+}
 
 // ---- FilterGI -----------------------------------------------------------------------------------
 
@@ -496,9 +520,11 @@ fn ${ENTRY_POINT.keepGuides}(@builtin(global_invocation_id) id: vec3u) {
 }
 `;
 
-/** Every kernel: label, WGSL, entry point and its one bind group's layout (the budget test reads these). */
-export const KERNELS = [
-    { entryPoint: ENTRY_POINT.reproject, code: REPROJECT_WGSL, layout: REPROJECT_LAYOUT },
-    { entryPoint: ENTRY_POINT.filter, code: FILTER_WGSL, layout: FILTER_LAYOUT },
-    { entryPoint: ENTRY_POINT.keepGuides, code: KEEP_GUIDES_WGSL, layout: KEEP_GUIDES_LAYOUT },
-] as const;
+/** Every kernel for these formats: entry point, WGSL and its one bind group's layout (the budget tests read these). */
+export function denoiserKernels(formats: GI1DenoiserFormats): readonly { readonly entryPoint: string; readonly code: string; readonly layout: GPUBindGroupLayoutDescriptor }[] {
+    return [
+        { entryPoint: ENTRY_POINT.reproject, code: reprojectWgsl(formats), layout: reprojectLayout(formats) },
+        { entryPoint: ENTRY_POINT.filter, code: FILTER_WGSL, layout: FILTER_LAYOUT },
+        { entryPoint: ENTRY_POINT.keepGuides, code: KEEP_GUIDES_WGSL, layout: KEEP_GUIDES_LAYOUT },
+    ];
+}

@@ -13,7 +13,7 @@ import { cameraRelativeInverseViewProjection, invertMat4, multiplyMat4 } from '.
 import { DEFAULT_RADIANCE_CACHE_SETTINGS, PROBE_CELLS, PROBE_SIZE, PROBE_SPAWN_TILE_SIZE, screenProbeLayout } from './settings.ts';
 import { RadianceCacheTechnique } from './radiance-cache-technique.ts';
 import { COUNTER_NAMES, COUNTERS_BYTES } from './wgsl/screen-probes.ts';
-import { GI1_DENOISER_KERNELS, reprojectionCellSize } from '@pmndrs/denoiser-gi1';
+import { CAPSAICIN_FORMATS, CORE_FORMATS, denoiserKernels, reprojectionCellSize } from '@pmndrs/denoiser-gi1';
 import { denoiserCamera, GI_DENOISER_LABEL } from './gi-denoiser.ts';
 import { screenProbeCellSize } from './screen-irradiance.ts';
 
@@ -119,6 +119,7 @@ function budgetDevice(maxStorageBuffersPerShaderStage: number): GPUDevice {
         createComputePipelineAsync: (descriptor: GPUComputePipelineDescriptor) => Promise.resolve({ label: descriptor.label }),
         createBindGroup: (descriptor: GPUBindGroupDescriptor) => descriptor,
         queue: { writeBuffer() {}, writeTexture() {} },
+        features: new Set<string>(),
     } as unknown as GPUDevice;
 }
 
@@ -239,7 +240,7 @@ describe('the GI denoiser in the technique (RC4.3)', () => {
         [...layout.entries].filter((entry) => (kind === 'buffer' ? entry.buffer?.type === 'storage' || entry.buffer?.type === 'read-only-storage' : entry.storageTexture !== undefined)).length;
 
     it("fits the platform's 8 storage buffers and WebGPU's 4 storage textures per stage, and prepare compiles it", async () => {
-        for (const kernel of GI1_DENOISER_KERNELS) {
+        for (const kernel of [...denoiserKernels(CAPSAICIN_FORMATS), ...denoiserKernels(CORE_FORMATS)]) {
             expect(storage(kernel.layout, 'buffer'), kernel.entryPoint).toBeLessThanOrEqual(MIN_STORAGE_BUFFERS_PER_STAGE);
             expect(storage(kernel.layout, 'storageTexture'), kernel.entryPoint).toBeLessThanOrEqual(MIN_STORAGE_TEXTURES_PER_STAGE);
         }
@@ -256,7 +257,7 @@ describe('the GI denoiser in the technique (RC4.3)', () => {
         await technique.prepare();
         expect(technique.settings.useGIDenoiser).toBe(true);
         expect(technique.denoiser).not.toBeNull();
-        expect(compiled.sort()).toEqual(GI1_DENOISER_KERNELS.map((kernel) => kernel.entryPoint).sort());
+        expect(compiled.sort()).toEqual(denoiserKernels(CORE_FORMATS).map((kernel) => kernel.entryPoint).sort());
     });
 
     it("sizes its reprojection cell as the screen probes' (Capsaicin's one cell_size, gi1.cpp:1839-1843)", () => {

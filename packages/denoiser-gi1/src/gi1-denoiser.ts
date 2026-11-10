@@ -36,11 +36,14 @@ import {
     FILTER_LAYOUT,
     FILTER_PASS_BYTES,
     FILTER_WGSL,
+    CORE_FORMATS,
     FORMAT,
+    formatsFor,
+    type GI1DenoiserFormats,
     KEEP_GUIDES_LAYOUT,
     KEEP_GUIDES_WGSL,
-    REPROJECT_LAYOUT,
-    REPROJECT_WGSL,
+    reprojectLayout,
+    reprojectWgsl,
 } from './wgsl.ts';
 
 // WebGPU's flag values, so the module also loads where the GPU* globals don't exist (unit tests in Node).
@@ -49,10 +52,12 @@ const TEXTURE_USAGE = { copySrc: 0x01, textureBinding: 0x04, storageBinding: 0x0
 const WORD_BYTES = 4;
 
 /** Bytes per pixel of each texture the denoiser owns (for `memoryBytes`). */
-const TEXEL_BYTES: Record<(typeof FORMAT)[keyof typeof FORMAT], number> = {
+const TEXEL_BYTES: Record<(typeof FORMAT)[keyof typeof FORMAT] | GI1DenoiserFormats['blurMask'] | GI1DenoiserFormats['colorDelta'], number> = {
     rgba16float: 8,
     r32float: 4,
     rgba8snorm: 4,
+    r8snorm: 1,
+    r16float: 2,
 };
 
 export interface GI1DenoiserOptions {
@@ -66,15 +71,22 @@ export interface GI1DenoiserOptions {
     readonly label?: string;
     /** Timestamp writes for its compute pass, from the host's timer (optional). */
     readonly timer?: PassTimer;
+    /**
+     * The blur mask's and colour deltas' formats. `'auto'` (default):
+     * Capsaicin's `r8snorm` and `r16float` when the device has
+     * `texture-formats-tier1`, else the declared fallback; `'core'`: the
+     * fallback (`rgba8snorm`, `r32float`) on any device (register D65).
+     */
+    readonly textureFormats?: 'auto' | 'core';
 }
 
 /** The textures of the latest frame, for tests and debug views. */
 export interface GI1DenoiserHistory {
     /** `g_GIDenoiser_ColorBuffer` ×2 (`rgba16float`): irradiance × samples, sample count. */
     readonly color: readonly [GPUTexture, GPUTexture];
-    /** `g_GIDenoiser_ColorDeltaBuffer` ×2 (`r32float`): the smoothed luminance change. */
+    /** `g_GIDenoiser_ColorDeltaBuffer` ×2 (`formats.colorDelta`): the smoothed luminance change. */
     readonly colorDelta: readonly [GPUTexture, GPUTexture];
-    /** `g_GIDenoiser_BlurMask` (`rgba8snorm`, r): the blur radius over 8, −1/8 on sky pixels. */
+    /** `g_GIDenoiser_BlurMask` (`formats.blurMask`, r): the blur radius over 8, −1/8 on sky pixels. */
     readonly blurMask: GPUTexture;
     /** Last frame's depth (`r32float`) and normals (`rgba16float`, decoded, 0 on sky). */
     readonly previousDepth: GPUTexture;
@@ -128,6 +140,8 @@ interface GroupCache {
 export class GI1Denoiser {
     readonly name = 'gi1-denoiser';
     readonly device: GPUDevice;
+    /** The blur mask's and colour deltas' formats this denoiser uses (`GI1DenoiserOptions.textureFormats`). */
+    readonly formats: GI1DenoiserFormats;
     private readonly label: string;
     private readonly cellPixels: number;
     private readonly timer: PassTimer | undefined;
@@ -145,8 +159,9 @@ export class GI1Denoiser {
     /** Last frame's jitter in pixels: the previous depth was drawn with it. */
     private previousJitter: readonly [number, number] = [0, 0];
 
-    private constructor(device: GPUDevice, options: GI1DenoiserOptions, pipelines: Pipelines) {
+    private constructor(device: GPUDevice, options: GI1DenoiserOptions, formats: GI1DenoiserFormats, pipelines: Pipelines) {
         this.device = device;
+        this.formats = formats;
         this.label = options.label ?? 'gi1-denoiser';
         this.cellPixels = options.cellPixels ?? DEFAULT_CELL_PIXELS;
         this.timer = options.timer;
@@ -163,6 +178,7 @@ export class GI1Denoiser {
     /** Compiles the three kernels. The host owns `device`; the denoiser never destroys it. */
     static async create(device: GPUDevice, options: GI1DenoiserOptions = {}): Promise<GI1Denoiser> {
         const label = options.label ?? 'gi1-denoiser';
+        const formats = options.textureFormats === 'core' ? CORE_FORMATS : formatsFor(device.features);
         const pipeline = async (name: string, code: string, entryPoint: string, layoutDescriptor: GPUBindGroupLayoutDescriptor) => {
             const layout = device.createBindGroupLayout({ ...layoutDescriptor, label: `${label}/${name}` });
             const compute = await device.createComputePipelineAsync({
@@ -173,11 +189,11 @@ export class GI1Denoiser {
             return { compute, layout };
         };
         const [reproject, filter, keepGuides] = await Promise.all([
-            pipeline(ENTRY_POINT.reproject, REPROJECT_WGSL, ENTRY_POINT.reproject, REPROJECT_LAYOUT),
+            pipeline(ENTRY_POINT.reproject, reprojectWgsl(formats), ENTRY_POINT.reproject, reprojectLayout(formats)),
             pipeline(ENTRY_POINT.filter, FILTER_WGSL, ENTRY_POINT.filter, FILTER_LAYOUT),
             pipeline(ENTRY_POINT.keepGuides, KEEP_GUIDES_WGSL, ENTRY_POINT.keepGuides, KEEP_GUIDES_LAYOUT),
         ]);
-        return new GI1Denoiser(device, options, {
+        return new GI1Denoiser(device, options, formats, {
             reproject: reproject.compute,
             filter: filter.compute,
             keepGuides: keepGuides.compute,
@@ -201,16 +217,16 @@ export class GI1Denoiser {
         // The history is cleared by a render pass on reset, so it can be a render attachment.
         const color: [GPUTexture, GPUTexture] = [texture('colour 0', FORMAT.color, TEXTURE_USAGE.renderAttachment), texture('colour 1', FORMAT.color, TEXTURE_USAGE.renderAttachment)];
         const colorDelta: [GPUTexture, GPUTexture] = [
-            texture('colour delta 0', FORMAT.colorDelta, TEXTURE_USAGE.renderAttachment),
-            texture('colour delta 1', FORMAT.colorDelta, TEXTURE_USAGE.renderAttachment),
+            texture('colour delta 0', this.formats.colorDelta, TEXTURE_USAGE.renderAttachment),
+            texture('colour delta 1', this.formats.colorDelta, TEXTURE_USAGE.renderAttachment),
         ];
-        const formats = [FORMAT.color, FORMAT.color, FORMAT.colorDelta, FORMAT.colorDelta, FORMAT.blurMask, FORMAT.irradiance, FORMAT.previousDepth, FORMAT.previousNormal];
+        const formats = [FORMAT.color, FORMAT.color, this.formats.colorDelta, this.formats.colorDelta, this.formats.blurMask, FORMAT.irradiance, FORMAT.previousDepth, FORMAT.previousNormal];
         this.targets = {
             width,
             height,
             color,
             colorDelta,
-            blurMask: texture('blur mask', FORMAT.blurMask),
+            blurMask: texture('blur mask', this.formats.blurMask),
             irradiance: texture('irradiance', FORMAT.irradiance),
             previousDepth: texture('previous depth', FORMAT.previousDepth),
             previousNormal: texture('previous normal', FORMAT.previousNormal),

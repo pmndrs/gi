@@ -111,7 +111,7 @@ const coreLayersRule = {
 // Relative imports are resolved against the importing file and must land in
 // the package's own folder.
 const SELF_CONTAINED_PACKAGES = [fileURLToPath(new URL('./packages/denoiser-gi1/', import.meta.url))];
-const SELF_CONTAINED_MESSAGE = 'packages/denoiser-gi1 is self-contained (it moves into pmndrs/denoiser): import only files in its own folder. Plain WebGPU types come from @webgpu/types; anything from ddgi-core is a sign the interface is wrong.';
+const SELF_CONTAINED_MESSAGE = 'packages/denoiser-gi1 is self-contained (it moves into pmndrs/denoiser): import only files in its own folder. WebGPU types are ambient (the tsconfig `types` list), so they need no import; needing anything from ddgi-core is a sign the interface is wrong.';
 const SELF_CONTAINED_TEST_IMPORTS = ['vitest'];
 
 function selfContainedViolation(importer, specifier) {

@@ -8,4 +8,4 @@
 export { GI1Denoiser, type GI1DenoiserHistory, type GI1DenoiserOptions } from './gi1-denoiser.ts';
 export type { DiffuseInputs, FrameCamera, FrameGuides, Mat4, PassTimer, TemporalConfig } from './types.ts';
 export { frameConstants, reprojectionCellSize, type FrameConstants } from './camera.ts';
-export { FORMAT as GI1_DENOISER_FORMATS, KERNELS as GI1_DENOISER_KERNELS } from './wgsl.ts';
+export { CAPSAICIN_FORMATS, CORE_FORMATS, denoiserKernels, formatsFor, type GI1DenoiserFormats } from './wgsl.ts';

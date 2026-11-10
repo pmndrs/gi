@@ -17,10 +17,11 @@
  *    GPU's own previous state, with its rounding of half stores); it settles
  *    (over the last 10 frames no pixel moves by more than two half steps a
  *    frame and the mean doesn't drift by 1e-4);
- *    and the reference run alone in f64 for 40 frames gives E back within
- *    1e-6. The GPU's distance from E is reported (information: each half
- *    store's rounding is fed back through up to 64 samples), and so is the
- *    reference's with round-to-nearest halves.
+ *    the reference run alone in f64 for 40 frames gives E back within 1e-6,
+ *    with round-to-nearest halves within 1%; and the GPU's settled mean is
+ *    within 0.5% of the reference's run free from an empty history with the
+ *    GPU's rounding for the same 160 frames, each worst under 2% (they can't
+ *    agree pixel for pixel: see PROGRESS, RC4.3).
  * 2. **The filter's weights against the CPU reference on captured frames:** a
  *    noisy checker (10% noise, 3% of pixels with hint 0), still camera, at
  *    frames 1 (no history: everything blurred at radius 8), 3 and 12; the
@@ -35,7 +36,7 @@
  *    the exact motion), and with the input's hint set to 0 at B (so the
  *    output is the reprojected history alone), on a 2 m checker, every pixel
  *    whose neighbourhood (±16 pixels) at A lies in one square reads that
- *    square's value within 1.5% (a wrong motion would land on the wrong one;
+ *    square's value within 1% (a wrong motion would land on the wrong one;
  *    the margin is A's own spread history: the radius-8 blur of the first
  *    frames, and the still camera's tent). The pixels B
  *    sees that A didn't (the CPU reference finds no history) have the full
@@ -61,7 +62,7 @@
  * `node tools/reference/bench-lock.ts run --no-cool-wait -- pnpm test:gpu --filter radiance-cache-denoiser`.
  */
 
-import { GI1Denoiser, frameConstants, type FrameConstants } from '../../../../packages/denoiser-gi1/src/index.ts';
+import { GI1Denoiser, frameConstants, type FrameConstants, type GI1DenoiserFormats } from '../../../../packages/denoiser-gi1/src/index.ts';
 import { blurRadius, filterGI, linearDepths, reprojectGI, type ReprojectResult } from '../../../../packages/denoiser-gi1/src/reference.ts';
 import type { FrameInput } from '../../../../packages/ddgi-core/src/platform/contract/frame.ts';
 import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
@@ -89,6 +90,10 @@ const SETTLED_FRAMES = 10;
 const SETTLED_HALF_STEPS = 2;
 const CONSTANT_TWIN_FRAMES = [1, 2, 8, 40, 100, 160];
 const CONSTANT_REFERENCE_FRAMES = 40;
+/** Check 1's bounds on the references: round-to-nearest halves within 1% of E; the settled GPU and free-running reference within 0.5% in mean, each worst under 2%. */
+const NEAREST_HALVES_TOLERANCE = 0.01;
+const SETTLED_MEAN_TOLERANCE = 0.005;
+const SETTLED_WORST_LIMIT = 0.02;
 const CONSTANT_E: [number, number, number] = [0.3, 0.6, 0.9];
 /** Check 2: the frames compared (frame 1 is the first after a reset). */
 const TWIN_FRAMES = [1, 3, 12];
@@ -97,22 +102,26 @@ const WEAK_HINT_SHARE = 0.03;
 /**
  * Check 3: frames at A before the move; the landing check's checker (2 m squares), the margin
  * round each pixel's reprojected position that must lie in one square, and the tolerance (the
- * half stores' rounding, fed back, is under 1%; a wrong landing mixes 1 and 0.25). The margin
+ * half stores' rounding, fed back, is under 1% here; a wrong landing mixes 1 and 0.25). The margin
  * covers the history's own spread at A: the first 8 frames after a reset are blurred over up to
  * 8 pixels each way (FilterGI's radius 8 - count), and those samples stay in the history.
  */
 const MOVE_WARM_FRAMES = 24;
 const LANDING_CHECKER_METRES = 2;
 const LANDING_MARGIN = 16;
-const LANDING_TOLERANCE = 0.015;
+const LANDING_TOLERANCE = 0.01;
 /** How near a threshold a CPU test may be and still be counted rather than failed. */
 const THRESHOLD_MARGIN = 1e-3;
 /** Check 4: frames from the one with a NaN and an infinity in the input, and by when they must be gone. */
 const NON_FINITE_FRAMES = 6;
 const NON_FINITE_RECOVERY_FRAMES = 3;
-/** Check 5: warm-up and measured frames (as RC4.1's check 7). */
+/**
+ * Check 5: RC4.1's window (from frame 32 after a reset, 32 frames), and a second on converged
+ * history (from frame 300: the denoiser's mean reaches the input's after about 192 frames).
+ */
 const CONVERGE_WARM_FRAMES = 32;
 const CONVERGE_MEASURE_FRAMES = 32;
+const CONVERGED_FROM_FRAME = 300;
 
 type Vector = [number, number, number];
 type RoundingMode = 'nearest' | 'truncate';
@@ -201,11 +210,18 @@ async function readHalf4(device: GPUDevice, texture: GPUTexture, width = WIDTH, 
     return halves(await readTexture(device, texture, 8, width, height));
 }
 
-/** The blur mask (`rgba8snorm`, r) as the kernels read it: max(byte / 127, −1). */
-async function readMask(device: GPUDevice, texture: GPUTexture): Promise<Float32Array> {
-    const bytes = await readTexture(device, texture, 4, WIDTH, HEIGHT);
+/** The blur mask (`r8snorm`, or the fallback's `rgba8snorm` r) as the kernels read it: max(byte / 127, −1). */
+async function readMask(device: GPUDevice, texture: GPUTexture, format: GI1DenoiserFormats['blurMask']): Promise<Float32Array> {
+    const texelBytes = format === 'r8snorm' ? 1 : 4;
+    const bytes = await readTexture(device, texture, texelBytes, WIDTH, HEIGHT);
     const signed = new Int8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-    return Float32Array.from({ length: PIXELS }, (_, pixel) => Math.max(signed[pixel * 4] / 127, -1));
+    return Float32Array.from({ length: PIXELS }, (_, pixel) => Math.max(signed[pixel * texelBytes] / 127, -1));
+}
+
+/** The colour delta (`r16float`, or the fallback's `r32float`). */
+async function readDelta(device: GPUDevice, texture: GPUTexture, format: GI1DenoiserFormats['colorDelta']): Promise<Float32Array> {
+    if (format === 'r32float') return readF32(device, texture);
+    return halves(await readTexture(device, texture, 2, WIDTH, HEIGHT));
 }
 
 /** The denoiser's state after a frame, read back. */
@@ -225,8 +241,8 @@ async function readState(device: GPUDevice, denoiser: GI1Denoiser): Promise<Stat
     if (!history || !output) throw new Error('the denoiser is not configured');
     return {
         color: [await readHalf4(device, history.color[0]), await readHalf4(device, history.color[1])],
-        colorDelta: [await readF32(device, history.colorDelta[0]), await readF32(device, history.colorDelta[1])],
-        mask: await readMask(device, history.blurMask),
+        colorDelta: [await readDelta(device, history.colorDelta[0], denoiser.formats.colorDelta), await readDelta(device, history.colorDelta[1], denoiser.formats.colorDelta)],
+        mask: await readMask(device, history.blurMask, denoiser.formats.blurMask),
         previousDepth: await readF32(device, history.previousDepth),
         previousNormal: await readHalf4(device, history.previousNormal),
         irradiance: await readHalf4(device, output),
@@ -381,7 +397,7 @@ interface FrameComparison {
     readonly reference: ReprojectResult;
 }
 
-function compareFrame(label: string, before: State, after: State, data: FrameData, frame: FrameConstants, mode: RoundingMode): FrameComparison {
+function compareFrame(label: string, before: State, after: State, data: FrameData, frame: FrameConstants, mode: RoundingMode, formats: GI1DenoiserFormats): FrameComparison {
     const failures: string[] = [];
     const read = before.latest;
     const written = after.latest;
@@ -434,7 +450,11 @@ function compareFrame(label: string, before: State, after: State, data: FrameDat
         // The delta is a difference of luminances (gi1.comp:4077): its f32 error scales with them
         // (the tent's weights are f32 on the GPU), not with the difference.
         const inputLuminance = 0.2126 * data.radiance[pixel * 4] + 0.7152 * data.radiance[pixel * 4 + 1] + 0.0722 * data.radiance[pixel * 4 + 2];
-        if (Math.abs(gpuDelta - delta) > 1e-6 + 1e-3 * Math.abs(delta) + 1e-5 * inputLuminance) {
+        // Capsaicin's r16float delta is a half store, rounded as the GPU rounds them.
+        const halfDelta = formats.colorDelta === 'r16float';
+        const expectedDelta = halfDelta ? halfToFloat(halfBits(delta, mode)) : delta;
+        const deltaAgrees = Math.abs(gpuDelta - expectedDelta) <= 1e-6 + 1e-3 * Math.abs(delta) + 1e-5 * inputLuminance || (halfDelta && withinHalfSteps(gpuDelta, expectedDelta, 2));
+        if (!deltaAgrees) {
             deltaOff++;
             if (examples.length < 4) examples.push({ kind: 'delta', x: pixel % WIDTH, y: Math.floor(pixel / WIDTH), gpu: gpuDelta, reference: delta, input: Array.from(data.radiance.subarray(pixel * 4, pixel * 4 + 4)) });
         }
@@ -544,7 +564,7 @@ async function checkStillConstant(device: GPUDevice, denoiser: GI1Denoiser, mode
         const output = await readHalf4(device, denoiser.output as GPUTexture);
         if (before) {
             const after = await readState(device, denoiser);
-            const comparison = compareFrame(`still constant frame ${index}`, before, after, data, frame, mode);
+            const comparison = compareFrame(`still constant frame ${index}`, before, after, data, frame, mode, denoiser.formats);
             twinFailures += comparison.failures.length;
             failures.push(...comparison.failures.slice(0, 2));
         }
@@ -582,14 +602,18 @@ async function checkStillConstant(device: GPUDevice, denoiser: GI1Denoiser, mode
     const drift = Math.abs(lastMeans[lastMeans.length - 1] - lastMeans[0]);
     if (drift > 1e-4) failures.push(`still constant: the mean over E drifts by ${drift.toExponential(3)} over the last ${SETTLED_FRAMES} frames`);
 
-    // The reference alone: in f64 throughout (the port's arithmetic on a constant must give the
-    // constant back), and with round-to-nearest halves where the GPU stores them (information).
-    const runReference = (rounding: RoundingMode | null): number => {
+    // The reference alone, free-running from an empty history: in f64 throughout (the port's
+    // arithmetic on a constant must give the constant back); with round-to-nearest halves; and with
+    // this GPU's rounding of half stores for all 160 frames, to set its settled state beside the GPU's.
+    // Returns the worst over every frame and the last frame's worst and mean.
+    const runReference = (rounding: RoundingMode | null, frames: number): { worst: number; lastWorst: number; mean: number } => {
         let state: { color: Float32Array; delta: Float32Array } = { color: new Float32Array(PIXELS * 4), delta: new Float32Array(PIXELS) };
         const linear = linearDepths(guides.depth, WIDTH, HEIGHT, frame);
         const store = (values: Float32Array): Float32Array => (rounding ? quantize(values, rounding) : values);
-        let worst = 0;
-        for (let index = 0; index < CONSTANT_REFERENCE_FRAMES; index++) {
+        // The delta is a half store only in Capsaicin's r16float.
+        const storeDelta = (values: Float32Array): Float32Array => (rounding && denoiser.formats.colorDelta === 'r16float' ? quantize(values, rounding) : values);
+        let result = { worst: 0, lastWorst: 0, mean: 0 };
+        for (let index = 0; index < frames; index++) {
             const reprojected = reprojectGI(
                 { width: WIDTH, height: HEIGHT, radiance: data.radiance, depth: guides.depth, normal: guides.normal, motion: guides.motion, previousColor: state.color, previousColorDelta: state.delta, previousDepth: guides.depth, previousNormal: guides.normal },
                 frame,
@@ -597,16 +621,27 @@ async function checkStillConstant(device: GPUDevice, denoiser: GI1Denoiser, mode
             const radius = Int32Array.from(reprojected.blurMask, (mask) => blurRadius(rounding ? Math.max(Math.round(mask * 127) / 127, -1) : mask));
             const first = filterGI(store(reprojected.color), radius, linear, guides.normal, WIDTH, HEIGHT, [1, 0]);
             const second = filterGI(store(first.color), radius, linear, guides.normal, WIDTH, HEIGHT, [0, 1]);
-            state = { color: store(second.color), delta: reprojected.colorDelta };
+            state = { color: store(second.color), delta: storeDelta(reprojected.colorDelta) };
             if (!second.irradiance) throw new Error('the second pass writes the irradiance');
-            worst = Math.max(worst, overE(second.irradiance).worst);
+            const now = overE(store(second.irradiance));
+            result = { worst: Math.max(result.worst, now.worst), lastWorst: now.worst, mean: now.mean };
         }
-        return worst;
+        return result;
     };
-    const referenceExactWorst = runReference(null);
-    const referenceNearestWorst = runReference('nearest');
+    const referenceExact = runReference(null, CONSTANT_REFERENCE_FRAMES);
+    const referenceNearest = runReference('nearest', CONSTANT_REFERENCE_FRAMES);
     // Float32Array storage of the reference's images is the only rounding left: E within 1e-6.
-    if (referenceExactWorst > 1e-6) failures.push(`still constant: the CPU reference moves a constant by ${referenceExactWorst.toExponential(3)}`);
+    if (referenceExact.worst > 1e-6) failures.push(`still constant: the CPU reference moves a constant by ${referenceExact.worst.toExponential(3)}`);
+    // Round-to-nearest halves get stuck too, either side of E (DECISIONS 2026-11-10): within 1%.
+    if (referenceNearest.worst > NEAREST_HALVES_TOLERANCE) failures.push(`still constant: with round-to-nearest halves the reference moves E by ${(referenceNearest.worst * 100).toFixed(3)}%`);
+    // The settled state against the free-running reference with this GPU's rounding. They can't
+    // agree pixel for pixel: a history in halves settles anywhere in a band where one more sample no
+    // longer moves the stored sum, and which value it sticks at depends on the last bit of f32 work
+    // (PROGRESS, RC4.3). Stated before the run: the means within 0.5%, each worst under 2%.
+    const freeRunning = runReference(mode, CONSTANT_FRAMES);
+    const meanGap = Math.abs(last.mean - freeRunning.mean);
+    if (meanGap > SETTLED_MEAN_TOLERANCE) failures.push(`still constant: the settled mean ${last.mean.toFixed(5)} E is ${(meanGap * 100).toFixed(3)}% from the free-running reference's ${freeRunning.mean.toFixed(5)}`);
+    if (last.worst > SETTLED_WORST_LIMIT || freeRunning.lastWorst > SETTLED_WORST_LIMIT) failures.push(`still constant: a settled pixel is ${(Math.max(last.worst, freeRunning.lastWorst) * 100).toFixed(3)}% from E (GPU ${(last.worst * 100).toFixed(3)}%, reference ${(freeRunning.lastWorst * 100).toFixed(3)}%)`);
     return {
         failures,
         summary: {
@@ -621,9 +656,12 @@ async function checkStillConstant(device: GPUDevice, denoiser: GI1Denoiser, mode
             movingExamples: moving.slice(0, 6),
             twinFrames: CONSTANT_TWIN_FRAMES,
             twinFailures,
-            referenceExactWorstOverE: referenceExactWorst,
-            referenceNearestHalvesWorstOverE: referenceNearestWorst,
+            referenceExactWorstOverE: referenceExact.worst,
+            referenceNearestHalvesWorstOverE: referenceNearest.worst,
             referenceFrames: CONSTANT_REFERENCE_FRAMES,
+            freeRunningReference: { rounding: mode, frames: CONSTANT_FRAMES, settledMeanOverE: freeRunning.mean, settledWorstOverE: freeRunning.lastWorst },
+            gpuSettledMeanOverE: last.mean,
+            settledMeanGap: meanGap,
         },
     };
 }
@@ -645,7 +683,7 @@ async function checkTwinStill(device: GPUDevice, denoiser: GI1Denoiser, mode: Ro
         await harness.frame(data);
         if (TWIN_FRAMES.includes(index)) {
             const after = await readState(device, denoiser);
-            const comparison = compareFrame(`still noise frame ${index}`, before, after, data, frame, mode);
+            const comparison = compareFrame(`still noise frame ${index}`, before, after, data, frame, mode, denoiser.formats);
             failures.push(...comparison.failures);
             if (index === lastFrame && comparison.summary.reprojectChecked === 0) failures.push(`still noise frame ${index}: no converged pixel (radius 0) to check the reprojection on`);
             const masks = { full: 0, none: 0, partial: 0 };
@@ -689,7 +727,7 @@ async function checkCameraMove(device: GPUDevice, denoiser: GI1Denoiser, mode: R
     const dataB: FrameData = { guides: guidesB, radiance: noisyChecker(guidesB, MOVE_WARM_FRAMES + 1, true), camera: cameraB };
     await harness.frame(dataB);
     const afterB = await readState(device, denoiser);
-    const comparison = compareFrame('camera move', beforeB, afterB, dataB, frameB, mode);
+    const comparison = compareFrame('camera move', beforeB, afterB, dataB, frameB, mode, denoiser.formats);
     failures.push(...comparison.failures);
 
     // Disoccluded (no history found) and converged pixels: their masks, and the blur.
@@ -818,8 +856,11 @@ async function checkNonFinite(device: GPUDevice, denoiser: GI1Denoiser): Promise
         const latest = history?.latest;
         if (!history || latest === undefined) throw new Error('no history');
         const color = await readHalf4(device, history.color[latest]);
+        // The colour delta too: a NaN there would spread through the 3 × 3 taps (register D75).
+        const delta = await readDelta(device, history.colorDelta[latest], denoiser.formats.colorDelta);
         let nonFinite = 0;
         for (let value = 0; value < output.length; value++) if (!Number.isFinite(output[value]) || !Number.isFinite(color[value])) nonFinite++;
+        for (const value of delta) if (!Number.isFinite(value)) nonFinite++;
         nonFiniteByFrame.push(nonFinite);
     }
     harness.dispose();
@@ -917,38 +958,48 @@ async function checkFlicker(device: GPUDevice, name: string, run: Run): Promise<
         if (!probes || !output) throw new Error('no images');
         return { interpolated: await readHalf4(device, probes.irradiance, TECHNIQUE_WIDTH, TECHNIQUE_HEIGHT), denoised: await readHalf4(device, output, TECHNIQUE_WIDTH, TECHNIQUE_HEIGHT) };
     };
-    let previous = await read();
-    const interpolated: { mean: number; p95: number }[] = [];
-    const denoised: { mean: number; p95: number }[] = [];
+    const imageMean = (image: Float32Array) => surface.reduce((sum, pixel) => sum + (image[pixel * 4] + image[pixel * 4 + 1] + image[pixel * 4 + 2]) / 3, 0) / surface.length;
+    const average = (values: number[]) => values.reduce((sum, value) => sum + value, 0) / Math.max(values.length, 1);
     let bad = 0;
-    let means = { interpolated: 0, denoised: 0 };
-    for (let frame = 1; frame < CONVERGE_WARM_FRAMES + CONVERGE_MEASURE_FRAMES; frame++) {
-        await run.frame();
-        const current = await read();
-        bad += badValues(current.interpolated, surface) + badValues(current.denoised, surface);
-        if (frame >= CONVERGE_WARM_FRAMES) {
+    let frame = 1;
+    // One window of measured frames from `start` (frames since the reset): flicker of both images and their means.
+    const measureWindow = async (start: number): Promise<Record<string, number>> => {
+        while (frame < start) {
+            await run.frame();
+            frame++;
+        }
+        let previous = await read();
+        const interpolated: { mean: number; p95: number }[] = [];
+        const denoised: { mean: number; p95: number }[] = [];
+        const means = { interpolated: [] as number[], denoised: [] as number[] };
+        for (let index = 0; index < CONVERGE_MEASURE_FRAMES; index++) {
+            await run.frame();
+            frame++;
+            const current = await read();
+            bad += badValues(current.interpolated, surface) + badValues(current.denoised, surface);
             interpolated.push(frameChange(previous.interpolated, current.interpolated, surface));
             denoised.push(frameChange(previous.denoised, current.denoised, surface));
-            const mean = (image: Float32Array) => surface.reduce((sum, pixel) => sum + (image[pixel * 4] + image[pixel * 4 + 1] + image[pixel * 4 + 2]) / 3, 0) / surface.length;
-            means = { interpolated: mean(current.interpolated), denoised: mean(current.denoised) };
+            means.interpolated.push(imageMean(current.interpolated));
+            means.denoised.push(imageMean(current.denoised));
+            previous = current;
         }
-        previous = current;
-    }
-    if (bad > 0) failures.push(`${name}: ${bad} NaN, infinite or negative values in the interpolated or denoised irradiance`);
-    const average = (values: number[]) => values.reduce((sum, value) => sum + value, 0) / Math.max(values.length, 1);
-    return {
-        failures,
-        summary: {
+        return {
+            fromFrame: start,
             interpolatedFlickerMean: average(interpolated.map((change) => change.mean)),
             interpolatedFlickerP95: average(interpolated.map((change) => change.p95)),
             denoisedFlickerMean: average(denoised.map((change) => change.mean)),
             denoisedFlickerP95: average(denoised.map((change) => change.p95)),
-            lastFrameMeanInterpolated: means.interpolated,
-            lastFrameMeanDenoised: means.denoised,
-            surfacePixels: surface.length,
-            ddgiThresholds: { mean: 0.001, p95: 0.005 },
-        },
+            meanInterpolated: average(means.interpolated),
+            meanDenoised: average(means.denoised),
+            denoisedOverInterpolated: average(means.denoised) / average(means.interpolated),
+        };
     };
+    // RC4.1's window (the denoiser's history still warming: it keeps its cold-start frames for
+    // about 3 × 64 frames), then one on converged history.
+    const warming = await measureWindow(CONVERGE_WARM_FRAMES);
+    const converged = await measureWindow(CONVERGED_FROM_FRAME);
+    if (bad > 0) failures.push(`${name}: ${bad} NaN, infinite or negative values in the interpolated or denoised irradiance`);
+    return { failures, summary: { warming, converged, surfacePixels: surface.length, ddgiThresholds: { mean: 0.001, p95: 0.005 } } };
 }
 
 // ---- The page -----------------------------------------------------------------------------------
@@ -968,24 +1019,30 @@ try {
     const refusedWithoutTier1 = await storageFormatRefused(['r8snorm', 'r16float', 'rgba8snorm', 'r32float', 'rgba16float']);
     results.facts = { rgba16floatStoreRounding: rounding, refusedAsStorageWithoutTier1: refusedWithoutTier1, adapterHasTier1: adapter.features.has('texture-formats-tier1') };
 
-    const denoiser = await GI1Denoiser.create(device, { label: 'radiance-cache-denoiser page' });
-    try {
-        const still = await checkStillConstant(device, denoiser, rounding.mode);
-        failures.push(...still.failures);
-        results.stillConstant = still.summary;
-        const twin = await checkTwinStill(device, denoiser, rounding.mode);
-        failures.push(...twin.failures);
-        results.capturedFrames = twin.summary;
-        const move = await checkCameraMove(device, denoiser, rounding.mode);
-        failures.push(...move.failures);
-        results.cameraMove = move.summary;
-        const nonFinite = await checkNonFinite(device, denoiser);
-        failures.push(...nonFinite.failures);
-        results.nonFinite = nonFinite.summary;
-    } finally {
-        denoiser.dispose();
-        await device.queue.onSubmittedWorkDone();
+    // Checks 1-4 on Capsaicin's formats where the device has texture-formats-tier1, and on the
+    // declared fallback (register D65).
+    const formatRuns: ('auto' | 'core')[] = device.features.has('texture-formats-tier1') ? ['auto', 'core'] : ['core'];
+    const module: Record<string, unknown> = {};
+    for (const textureFormats of formatRuns) {
+        const denoiser = await GI1Denoiser.create(device, { label: `radiance-cache-denoiser page (${textureFormats})`, textureFormats });
+        const key = `${denoiser.formats.blurMask} + ${denoiser.formats.colorDelta}`;
+        const tag = (list: string[]) => list.map((failure) => `[${key}] ${failure}`);
+        try {
+            const still = await checkStillConstant(device, denoiser, rounding.mode);
+            failures.push(...tag(still.failures));
+            const twin = await checkTwinStill(device, denoiser, rounding.mode);
+            failures.push(...tag(twin.failures));
+            const move = await checkCameraMove(device, denoiser, rounding.mode);
+            failures.push(...tag(move.failures));
+            const nonFinite = await checkNonFinite(device, denoiser);
+            failures.push(...tag(nonFinite.failures));
+            module[key] = { stillConstant: still.summary, capturedFrames: twin.summary, cameraMove: move.summary, nonFinite: nonFinite.summary };
+        } finally {
+            denoiser.dispose();
+            await device.queue.onSubmittedWorkDone();
+        }
     }
+    results.module = module;
 
     const cornell = loadManifest('cornell-box');
     const sponza = loadManifest('sponza');
