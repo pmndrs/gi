@@ -468,7 +468,7 @@ export type EnvironmentDescriptor =
      */
     | {
           readonly type: 'procedural';
-          /** Direction toward the sun, world space. Below 5 degrees of elevation the sky is made for a sun at 5 degrees (time of day is M2). */
+          /** Direction toward the sun, world space. Below 5 degrees of elevation the sky is made for a sun at 5 degrees. Call `setEnvironment` again with a new direction to animate the time of day; nothing recompiles. */
           readonly sunDirection: Vec3;
           /** Atmospheric haze, roughly 2 (clear) to 10 (hazy); clamped to the model's 1.7 to 20. Defaults to 2. */
           readonly turbidity?: number;
@@ -500,7 +500,12 @@ export type EnvironmentDescriptor =
  */
 export interface SceneApi {
     createMesh(descriptor: MeshDescriptor): MeshHandle;
-    /** Replace the shape. Rebuilds that mesh's BVH in a worker; the old one is used until it's ready. */
+    /**
+     * Replace the shape. The mesh gets a tree built on the GPU in the next
+     * frame, so rays see the new shape at once; a better tree from the worker
+     * replaces it when that finishes (without subgroups, only the worker's, and
+     * the old shape is traced until it's ready).
+     */
     updateMesh(mesh: MeshHandle, descriptor: MeshDescriptor): void;
     /**
      * Supply new positions for a mesh created with `deforming: true`: xyz per

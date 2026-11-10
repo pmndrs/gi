@@ -9,8 +9,20 @@
         "url": "git+https://github.com/pmndrs/ddgi.git",
         "directory": "packages/ddgi"
     },
+    "homepage": "https://github.com/pmndrs/ddgi#readme",
+    "bugs": {
+        "url": "https://github.com/pmndrs/ddgi/issues"
+    },
     "sideEffects": false,
-    "keywords": ["webgpu", "wgsl", "three", "threejs", "global-illumination", "ddgi", "light-probes"],
+    "keywords": [
+        "webgpu",
+        "wgsl",
+        "three",
+        "threejs",
+        "global-illumination",
+        "ddgi",
+        "light-probes"
+    ],
     "type": "module",
     "publishConfig": {
         "access": "public"
@@ -32,10 +44,15 @@
     "main": "./dist/index.js",
     "types": "./dist/index.d.ts",
     "files": [
-        "dist"
+        "dist",
+        "README.md",
+        "LICENSE",
+        "THIRD_PARTY.md",
+        "licenses"
     ],
     "scripts": {
-        "build": "vite build && rollup -c rollup.dts.config.mjs && node scripts/verify-artifacts.mjs"
+        "build": "vite build && rollup -c rollup.dts.config.mjs && node ../../tools/release/package-files.ts && node scripts/verify-artifacts.mjs",
+        "prepublishOnly": "pnpm -w run lint && pnpm -w run typecheck && pnpm -w run test && pnpm run build && pnpm -w run verify:packed --skip-build"
     },
     "peerDependencies": {
         "three": "~0.187.0"

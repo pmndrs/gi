@@ -18,6 +18,13 @@ for (const entry of publicEntries) {
     }
 }
 
+// The files npm ships beside dist: README and LICENSE are copied from the
+// repository root by tools/release/package-files.ts; THIRD_PARTY.md is the
+// package's own; licenses/ holds the bundled code's licence texts it points to.
+for (const file of ['README.md', 'LICENSE', 'THIRD_PARTY.md', 'licenses/tinybvh.txt', 'licenses/emscripten-runtime.txt', 'licenses/hiprt.txt']) {
+    if (!existsSync(resolve(packageRoot, file))) problems.push(`missing ${file} in packages/ddgi`);
+}
+
 // Every path in package.json `exports` must exist too.
 const manifest = JSON.parse(readFileSync(resolve(packageRoot, 'package.json'), 'utf8'));
 for (const [subpath, conditions] of Object.entries(manifest.exports)) {
@@ -55,4 +62,4 @@ if (problems.length) {
     console.error(problems.join('\n'));
     process.exit(1);
 }
-console.log(`Verified dist: entries ${publicEntries.join(', ')} with types, no private package names.`);
+console.log(`Verified dist: entries ${publicEntries.join(', ')} with types, no private package names; README, LICENSE, THIRD_PARTY.md and licenses/ present.`);
