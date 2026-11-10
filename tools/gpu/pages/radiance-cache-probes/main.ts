@@ -25,8 +25,10 @@
  *    hemi-octahedral cell (a ray that half precision moved across a cell
  *    edge, within 0.02 of a cell, or just below the tangent plane, within a
  *    cosine of 0.001, is counted and reported, as Capsaicin's
- *    `BlendScreenProbes` would put it in the neighbour too); no ray carries
- *    the bypass flag (since RC3.2 the world cache lights every hit).
+ *    `BlendScreenProbes` would put it in the neighbour too; a ray near the
+ *    normal whose halves are a little longer than 1, so that it lies past the
+ *    pole, is counted too: the blend maps it to the pole, register D34); no
+ *    ray carries the bypass flag (since RC3.2 the world cache lights every hit).
  *
  * And on `sky-plane`:
  * 4. **Sky:** every ray of every probe misses, and every cell of every probe
@@ -261,6 +263,8 @@ async function checkScene(device: GPUDevice, run: SceneRun, skyCheck: boolean): 
     let grazingByHalfPrecision = 0;
     let wrongCell = 0;
     let movedByHalfPrecision = 0;
+    /** Rays whose half-precision direction lies past the pole (probe-frame z above 1), which the blend clamps to the pole (D34). */
+    let pastThePole = 0;
     let withBypass = 0;
     let hits = 0;
     let minNormalDot = Infinity;
@@ -274,7 +278,9 @@ async function checkScene(device: GPUDevice, run: SceneRun, skyCheck: boolean): 
             if (rayFloats[base + 6] >= 0) hits++;
             const facing = direction[0] * normal[0] + direction[1] * normal[1] + direction[2] * normal[2];
             minNormalDot = Math.min(minNormalDot, facing);
-            const [u, v] = mapToHemiOctahedronInverse(toProbeFrame(direction, normal)).map((value) => value * PROBE_SIZE);
+            const probeFrameDirection = toProbeFrame(direction, normal);
+            if (probeFrameDirection[2] > 1) pastThePole++;
+            const [u, v] = mapToHemiOctahedronInverse(probeFrameDirection).map((value) => value * PROBE_SIZE);
             nearestEdge[probe] = Math.min(nearestEdge[probe], Math.abs(u - Math.round(u)), Math.abs(v - Math.round(v)));
             blendCell[ray] = probeCellOf(direction, normal);
             if (!(facing > 0) && facing > -GRAZING_BY_HALF_PRECISION) {
@@ -425,6 +431,7 @@ async function checkScene(device: GPUDevice, run: SceneRun, skyCheck: boolean): 
             grazingByHalfPrecision,
             wrongCell,
             movedByHalfPrecision,
+            pastThePole,
             minNormalDot,
             ...(skyCheck ? { sky } : {}),
             memoryMB: Number((run.technique.memoryBytes / 1e6).toFixed(2)),

@@ -6,7 +6,7 @@ dist/
 Thumbs.db
 .env
 .env.*
-/assets/downloads/
+/assets/downloads
 /native/build/
 .playwright-mcp/
 /bench/screenshots/

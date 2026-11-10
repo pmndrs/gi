@@ -150,7 +150,14 @@ fn rcMapToHemiOctahedron(samples: vec2f) -> vec3f {
 fn rcMapToHemiOctahedronInverse(direction: vec3f) -> vec2f {
     // Modified version of "Fast Equal-Area Mapping of the (Hemi)Sphere using SIMD" (Clarberg).
     let absDirection = abs(direction);
-    let radius = sqrt(1.0 - absDirection.z);
+    // Register D34: the one change from Capsaicin's sqrt(1 - |z|). BlendScreenProbes passes a
+    // direction read back from halves (gi1.comp:1197-1201), which can be up to about 3e-4 longer
+    // than 1 where pack2x16float rounds up (the Apple M5 rounds to nearest), so a ray near the
+    // normal has z past 1. WGSL gives sqrt of a negative and u32() of the NaN that follows no
+    // defined value (sqrt's domain is [0, +inf], WGSL 17.5.58; 15.7.2, 15.7.6), and on the M5
+    // such rays all landed in cell 0, a grazing corner. Clamped, they map to the pole (the centre
+    // of the square), next to the cell they were sampled in. A unit direction is unchanged.
+    let radius = sqrt(max(1.0 - absDirection.z, 0.0));
     let a = max(absDirection.x, absDirection.y);
     var b = min(absDirection.x, absDirection.y);
     b = select(b / a, 0.0, a == 0.0);
