@@ -1,4 +1,14 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { HashGridCache } from './world-cache/hash-grid-cache.ts';
+import { GILimitError } from '../../platform/contract/errors.ts';
+import type { KernelBuilder, ModuleBindingEntry, WgslModule } from '../../platform/contract/wgsl.ts';
+import { INDIRECT_ARGS_MODULE } from '../../platform/compute/wgsl.ts';
+import { MIN_STORAGE_BUFFERS_PER_STAGE } from '../../platform/device-requirements.ts';
+import { countGroupStorageBuffers, countStorageBuffers, orderModules, PlatformKernelBuilder } from '../../platform/kernel-builder.ts';
+import { SCENE_MODULE_ENTRIES } from '../../platform/scene/wgsl.ts';
+import { SHADE_MODULE_ENTRIES } from '../../platform/shade/wgsl.ts';
+import { TRACE_MODULE_ENTRIES } from '../../platform/trace/wgsl.ts';
+import type { TechniqueContext } from '../../platform/contract/technique.ts';
 import { cameraRelativeInverseViewProjection, invertMat4, multiplyMat4 } from './camera.ts';
 import { DEFAULT_RADIANCE_CACHE_SETTINGS, PROBE_CELLS, PROBE_SIZE, PROBE_SPAWN_TILE_SIZE, screenProbeLayout } from './settings.ts';
 import { RadianceCacheTechnique } from './radiance-cache-technique.ts';
@@ -24,7 +34,8 @@ describe('settings (gi1.h)', () => {
         const technique = new RadianceCacheTechnique({ useDirectLighting: false });
         expect(technique.settings.useDirectLighting).toBe(false);
         expect(technique.settings.useMultibounce).toBe(true);
-        expect(technique.requirements).toEqual({ queries: ['rays'], screen: true });
+        // Reprojection reads the host's velocity, as Capsaicin's does (gi1.comp:326).
+        expect(technique.requirements).toEqual({ queries: ['rays'], screen: { velocity: true } });
     });
 
     it('size the probes as Capsaicin does (gi1.cpp:113-129)', () => {
@@ -73,5 +84,118 @@ describe('the camera-relative inverse view-projection', () => {
         const inverse = cameraRelativeInverseViewProjection(camera);
         const h = [0, 1, 2, 3].map((row) => inverse[row] * ndc[0] + inverse[4 + row] * ndc[1] + inverse[8 + row] * ndc[2] + inverse[12 + row] * ndc[3]);
         [0, 1, 2].forEach((axis) => expect(eye[axis] + h[axis] / h[3]).toBeCloseTo(point[axis], 6));
+    });
+});
+
+// ---- The binding budget: every kernel of the technique through the platform's kernel builder ----
+
+function stubModule(name: string, entries: readonly ModuleBindingEntry[], dependencies: readonly WgslModule[] = []): WgslModule {
+    const storageBufferCount = entries.filter((entry) => entry.buffer?.type === 'storage' || entry.buffer?.type === 'read-only-storage').length;
+    return { name, dependencies, code: () => '', entries, resources: () => [], version: 0, storageBufferCount };
+}
+
+/** Just enough of a GPUDevice for `RadianceCacheTechnique.prepare` through the real kernel builder (no GPU, no bytes). */
+function budgetDevice(maxStorageBuffersPerShaderStage: number): GPUDevice {
+    const texture = (descriptor: GPUTextureDescriptor) => ({ label: descriptor.label, createView: () => ({}), destroy() {} });
+    return {
+        limits: {
+            maxStorageBuffersPerShaderStage,
+            maxBindGroups: 4,
+            maxStorageBufferBindingSize: 2 ** 31,
+            maxBufferSize: 2 ** 31,
+            maxTextureDimension2D: 8192,
+            maxComputeWorkgroupsPerDimension: 65535,
+        },
+        createBuffer: (descriptor: GPUBufferDescriptor) => ({ size: descriptor.size, label: descriptor.label, destroy() {} }),
+        createTexture: texture,
+        pushErrorScope() {},
+        popErrorScope: () => Promise.resolve(null),
+        createBindGroupLayout: (descriptor: GPUBindGroupLayoutDescriptor) => descriptor,
+        createPipelineLayout: (descriptor: GPUPipelineLayoutDescriptor) => descriptor,
+        createShaderModule: (descriptor: GPUShaderModuleDescriptor) => descriptor,
+        createComputePipelineAsync: (descriptor: GPUComputePipelineDescriptor) => Promise.resolve({ label: descriptor.label }),
+        createBindGroup: (descriptor: GPUBindGroupDescriptor) => descriptor,
+        queue: { writeBuffer() {}, writeTexture() {} },
+    } as unknown as GPUDevice;
+}
+
+/** The technique's context with the real kernel builder; records each kernel's storage buffers and whether the builder refused it. */
+function budgetContext(device: GPUDevice): { context: TechniqueContext; storageBuffers: Map<string, number>; refused: Map<string, Promise<boolean>> } {
+    const scene = stubModule('gi-scene', SCENE_MODULE_ENTRIES);
+    const rays = stubModule('gi-rays', TRACE_MODULE_ENTRIES);
+    const shade = stubModule('gi-shade', SHADE_MODULE_ENTRIES, [scene, rays]);
+    const builder = new PlatformKernelBuilder(device, 'test');
+    const storageBuffers = new Map<string, number>();
+    const refused = new Map<string, Promise<boolean>>();
+    const kernels: KernelBuilder = {
+        computeKernel: (options) => {
+            storageBuffers.set(options.label, countStorageBuffers(orderModules(options.modules)) + countGroupStorageBuffers(options.ownGroups ?? []));
+            const kernel = builder.computeKernel(options);
+            refused.set(
+                options.label,
+                kernel.then(
+                    () => false,
+                    (error: unknown) => error instanceof GILimitError,
+                ),
+            );
+            return kernel;
+        },
+    };
+    const word = { buffer: {}, offset: 0 };
+    const utility = { buffer: {}, indices: {}, count: word, total: word, memoryBytes: 16, capacity: 1, encode() {}, dispose() {} };
+    const compute = {
+        indirectModule: INDIRECT_ARGS_MODULE,
+        createIndirectArgs: () => Promise.resolve(utility),
+        createCompaction: () => Promise.resolve(utility),
+        createPrefixScan: () => Promise.resolve(utility),
+    };
+    const direct = { prepare: () => Promise.resolve(), defaultWorkList: 'ray-order', traceWgsl: () => '' };
+    const context = { device, kernels, compute, shade: { module: shade, direct }, timer: { computePass: () => undefined } } as unknown as TechniqueContext;
+    return { context, storageBuffers, refused };
+}
+
+describe("the technique's binding budget (register D6): the platform's 8 storage buffers per stage", () => {
+    /** The screen probes' kernels and their storage buffers (the world cache's are in hash-grid.test.ts). */
+    const SCREEN_KERNELS: Record<string, number> = {
+        'radiance-cache/ClearCounters': 1,
+        'radiance-cache/ClearProbeMask': 0,
+        'radiance-cache/InitCachedTileLRU': 1,
+        'radiance-cache/ReprojectScreenProbes': 2,
+        'radiance-cache/CountScreenProbes': 4,
+        'radiance-cache/ScatterScreenProbes': 3,
+        'radiance-cache/SpawnScreenProbes': 2,
+        'radiance-cache/CompactScreenProbes': 6,
+        'radiance-cache/PatchScreenProbes': 4,
+        'radiance-cache/SampleScreenProbes': 7,
+        'radiance-cache/PopulateScreenProbes (ray-order)': 8,
+        'radiance-cache/BlendScreenProbes': 6,
+        'radiance-cache/ReorderScreenProbes': 3,
+        'radiance-cache/CopyPreviousScreen': 0,
+    };
+
+    it('holds for every kernel of the technique at 8, the history kernels (RC4.1) included', async () => {
+        const { context, storageBuffers } = budgetContext(budgetDevice(MIN_STORAGE_BUFFERS_PER_STAGE));
+        const technique = new RadianceCacheTechnique();
+        technique.attach(context);
+        await technique.prepare();
+        for (const [label, count] of Object.entries(SCREEN_KERNELS)) expect(storageBuffers.get(label), label).toBe(count);
+        for (const [label, count] of storageBuffers) expect(count, label).toBeLessThanOrEqual(MIN_STORAGE_BUFFERS_PER_STAGE);
+    });
+
+    it('is what the kernel builder checks: at 7, prepare throws GILimitError and refuses exactly the kernels that bind 8', async () => {
+        const { context, storageBuffers, refused } = budgetContext(budgetDevice(MIN_STORAGE_BUFFERS_PER_STAGE - 1));
+        // The world cache prepares first and would refuse its own kernels at 7 (hash-grid.test.ts covers
+        // those); held aside here so the screen probes' kernels are built too.
+        const worldCache = vi.spyOn(HashGridCache.prototype, 'prepare').mockResolvedValue(undefined);
+        const technique = new RadianceCacheTechnique();
+        technique.attach(context);
+        await expect(technique.prepare()).rejects.toThrow(GILimitError);
+        worldCache.mockRestore();
+        const answers = await Promise.all([...refused].map(async ([label, answer]) => [label, await answer] as const));
+        const refusedLabels = answers.filter(([, wasRefused]) => wasRefused).map(([label]) => label);
+        const atEight = [...storageBuffers].filter(([, count]) => count === MIN_STORAGE_BUFFERS_PER_STAGE).map(([label]) => label);
+        expect(refusedLabels.sort()).toEqual(atEight.sort());
+        expect(refusedLabels).toContain('radiance-cache/PopulateScreenProbes (ray-order)');
+        for (const label of Object.keys(SCREEN_KERNELS)) expect(storageBuffers.has(label), label).toBe(true);
     });
 });

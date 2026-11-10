@@ -71,6 +71,13 @@ interface SizedResources {
     readonly layout: ScreenProbeLayout;
     /** `g_ScreenProbes_ProbeSHBuffer` as an `rg32uint` texture: each probe tile's nine coefficients in a 3 × 3 block (register D26). */
     readonly probeSH: GPUTexture;
+    /**
+     * `g_ScreenProbes_PreviousProbeSHBuffer`: last frame's, which `ReprojectScreenProbes` copies
+     * from. Capsaicin swaps the two buffers each frame (gi1.cpp:2097-2100, 3097); we copy the
+     * current into this one at the end of the frame, so the texture the shading module reads
+     * keeps its identity (register D45).
+     */
+    readonly previousProbeSH: GPUTexture;
     /** `g_GIDenoiser_ColorBuffer`: `rgba16float`, irradiance in rgb and the denoiser hint in alpha. */
     readonly irradiance: GPUTexture;
     readonly bytes: number;
@@ -135,6 +142,22 @@ export class ScreenIrradiance {
     /** The latest frame's SH texture, or null before the first {@link encode}. */
     get probeSH(): GPUTexture | null {
         return this.sized?.probeSH ?? null;
+    }
+
+    /**
+     * The SH textures for `layout`, made (or remade after a resize) now:
+     * `ReprojectScreenProbes` writes this frame's from last frame's before
+     * {@link encode} runs.
+     */
+    shTextures(layout: ScreenProbeLayout): { readonly probeSH: GPUTexture; readonly previousProbeSH: GPUTexture } {
+        return this.sizedFor(layout);
+    }
+
+    /** Records the copy of this frame's SH into last frame's texture, for the next frame (register D45). */
+    encodeHistoryCopy(encoder: GPUCommandEncoder): void {
+        const sized = this.sized;
+        if (!sized) return;
+        encoder.copyTextureToTexture({ texture: sized.probeSH }, { texture: sized.previousProbeSH }, [sized.probeSH.width, sized.probeSH.height]);
     }
 
     get memoryBytes(): number {
@@ -209,6 +232,12 @@ export class ScreenIrradiance {
             format: 'rg32uint',
             usage: TEXTURE_USAGE.storageBinding | TEXTURE_USAGE.textureBinding | TEXTURE_USAGE.copySrc,
         });
+        const previousProbeSH = device.createTexture({
+            label: `${TECHNIQUE_ID} previous probe SH`,
+            size: shSize,
+            format: 'rg32uint',
+            usage: TEXTURE_USAGE.textureBinding | TEXTURE_USAGE.copyDst | TEXTURE_USAGE.copySrc,
+        });
         const irradiance = device.createTexture({
             label: `${TECHNIQUE_ID} irradiance`,
             size: [layout.width, layout.height],
@@ -218,8 +247,9 @@ export class ScreenIrradiance {
         const sized: SizedResources = {
             layout,
             probeSH,
+            previousProbeSH,
             irradiance,
-            bytes: shSize[0] * shSize[1] * SH_TEXEL_BYTES + layout.width * layout.height * IRRADIANCE_TEXEL_BYTES,
+            bytes: 2 * shSize[0] * shSize[1] * SH_TEXEL_BYTES + layout.width * layout.height * IRRADIANCE_TEXEL_BYTES,
         };
         this.sized = sized;
         return sized;
@@ -272,6 +302,7 @@ export class ScreenIrradiance {
         const sized = this.sized;
         if (!sized) return;
         sized.probeSH.destroy();
+        sized.previousProbeSH.destroy();
         sized.irradiance.destroy();
         this.sized = null;
         this.groups = null;

@@ -109,12 +109,12 @@ export function listCachedTiles(
     probeCount: readonly [number, number],
     edge = 1e-5,
 ): CachedTileLists {
-    const slots = probeCount[0] * probeCount[1];
-    const counts = new Uint32Array(slots);
+    // One slot per probe tile on the GPU; the test may pass fewer.
+    const counts = new Uint32Array(probeCount[0] * probeCount[1]);
     const byTile = new Map<number, number[]>();
     const undecided: number[] = [];
     let elementCount = 0;
-    for (let slot = 0; slot < slots; slot++) {
+    for (let slot = 0; slot < lru.length; slot++) {
         const entry = lru[slot];
         if ((entry & CACHED_TILE_UNALLOCATED) !== 0) continue;
         const [x, y, z] = project(cachedPosition(entry));

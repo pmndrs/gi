@@ -113,9 +113,12 @@ async function startScene(device: GPUDevice, name: string, camera: PageCamera, d
         platform.encodeScreen(encoder, screen.screen);
         device.queue.submit([encoder.finish()]);
     };
-    // A frame places the scene; then the mesh trees, and a frame with them.
+    // A frame places the scene; then the mesh trees, and a frame with them. Checks 1-4 are about
+    // a frame with no history (RC2.1), so the screen probes forget the first frame's (since RC4.1
+    // the technique reprojects them).
     frame();
     await platform.rays.whenBuilt();
+    technique.resetHistory();
     frame();
     await device.queue.onSubmittedWorkDone();
     if (platform.rays.building) throw new Error(`${name}: the platform still reports trees building`);
