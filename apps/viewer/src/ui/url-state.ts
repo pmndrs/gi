@@ -49,8 +49,8 @@ export type DdgiScreenViewName = 'gi-only' | 'coverage' | 'probe-states' | 'scre
 export const DDGI_SCREEN_VIEW_NAMES: readonly DdgiScreenViewName[] = ['gi-only', 'coverage', 'probe-states', 'screen-depth', 'screen-normal', 'screen-velocity', 'screen-albedo', 'screen-instance'];
 
 /** The radiance cache's debug views by their link names (ids in `techniques/radiance-cache-technique.ts`). */
-export type RadianceCacheScreenViewName = 'probe-atlas' | 'probe-mask' | 'probe-sh';
-export const RADIANCE_CACHE_SCREEN_VIEW_NAMES: readonly RadianceCacheScreenViewName[] = ['probe-atlas', 'probe-mask', 'probe-sh'];
+export type RadianceCacheScreenViewName = 'probe-atlas' | 'probe-mask' | 'probe-sh' | 'ssgi-occlusion' | 'ssgi-bent-normal';
+export const RADIANCE_CACHE_SCREEN_VIEW_NAMES: readonly RadianceCacheScreenViewName[] = ['probe-atlas', 'probe-mask', 'probe-sh', 'ssgi-occlusion', 'ssgi-bent-normal'];
 
 export type ProbeColorName = 'state' | 'history';
 export type AtlasName = 'irradiance' | 'distance';

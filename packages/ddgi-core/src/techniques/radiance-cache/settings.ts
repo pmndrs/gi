@@ -12,7 +12,8 @@
  * `gi1_disable_albedo_textures` are left out because the platform has neither
  * specular materials (D8, D16) nor textures at hits (D2); the debug and DXR 1.0
  * options are left out for good (docs/design/radiance-cache.md, "The baseline is Capsaicin's default
- * configuration").
+ * configuration"). Capsaicin's SSGI technique's options are here too (RC4.2, `ssgi*`), but for
+ * `ssgi_unroll_kernel_` (default off), a variant with the counts fixed at 1 and 2 (register D57).
  */
 
 /** One probe is `PROBE_SIZE` × `PROBE_SIZE` cells and covers a tile of that many pixels (`probe_size_`, gi1.h:191). */

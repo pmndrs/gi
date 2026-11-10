@@ -5,7 +5,7 @@
  *
  * - it starts (the platform prepares, the scene is copied) and draws GI on,
  *   GI only and GI off;
- * - each of its debug views (probe atlas, probe mask, probe SH) draws;
+ * - each of its debug views (probe atlas, probe mask, probe SH; since RC4.2 SSGI occlusion and bent normal) draws;
  * - the split wipe against DDGI draws, DDGI warmed up the viewer's way;
  * - no device error, nothing logged as an error, the technique never fails,
  *   and its platform compiles nothing after `prepare` (`stats.recompiles`).
