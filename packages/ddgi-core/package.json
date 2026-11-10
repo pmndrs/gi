@@ -11,6 +11,7 @@
         "./*": "./src/*.ts"
     },
     "dependencies": {
-        "@pmndrs/bvh": "workspace:*"
+        "@pmndrs/bvh": "workspace:*",
+        "@pmndrs/denoiser-gi1": "workspace:*"
     }
 }
