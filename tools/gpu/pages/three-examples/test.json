@@ -1,4 +1,0 @@
-{
-    "description": "T1.14: examples/three (simple.html, composite.html) load and render as a user runs them: GI starts with volume.start, updates itself on render (no per-frame call), and shows in the canvas.",
-    "timeoutMs": 180000
-}

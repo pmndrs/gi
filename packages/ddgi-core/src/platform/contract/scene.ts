@@ -4,7 +4,7 @@
  * The host owns its scene and builds it however it likes (code, procedural,
  * loaded files, a live editor). The adapter mirrors it into the platform with
  * these calls and then sends only what changed. The platform keeps its own,
- * deliberately simplified GPU copy: geometry, instances, a four-field material
+ * deliberately simplified GPU copy: geometry, instances, a small material
  * model, lights and the environment.
  *
  * Nothing here recompiles shaders. Lights, meshes, materials and instances live
@@ -56,28 +56,65 @@ export interface MeshDescriptor {
     readonly groups?: readonly MeshGroup[];
     /**
      * The vertex positions will change every frame (foliage, cloth, a fan)
-     * while the triangle list stays the same. The platform then keeps the BVH
-     * shape and refits its boxes on the GPU from positions supplied through
-     * {@link SceneApi.setDeformedPositions}.
+     * while the triangle list stays the same. The host then supplies each
+     * frame's positions through {@link SceneApi.setDeformedPositions}.
      */
     readonly deforming?: boolean;
+    /**
+     * For a `deforming` mesh: a box, in the mesh's own space, that every pose
+     * stays inside (the rest pose plus how far the wind or the animation can
+     * push it). Ignored for other meshes.
+     *
+     * Why: the platform logs this box (moved to world space by each instance)
+     * as the mesh's changed region whenever new positions arrive, and its
+     * instances keep this box in the top-level tree, so a pose change never
+     * changes the tree's shape. Positions given as a `Float32Array` outside
+     * it are still traced correctly: the box grows to hold them, with a
+     * one-time console warning. Omitted, the box starts as the rest pose's and
+     * grows the same way.
+     *
+     * Required for positions given on the GPU ({@link DeformedPositions}),
+     * which the platform can't read on the CPU: there the box can't grow, and
+     * parts of a pose outside it may be missed by rays.
+     */
+    readonly deformBounds?: Aabb;
     /** Shown in debug output and errors. */
     readonly label?: string;
 }
 
 /**
- * Deformed positions supplied by the host each frame, already on the GPU.
+ * Deformed positions supplied by the host each frame, already on the GPU:
+ * a buffer ({@link DeformedPositionsBuffer}) or a texture
+ * ({@link DeformedPositionsTexture}).
  *
- * The buffer belongs to the host and must come from the same device, with
- * `STORAGE` usage. The platform reads it inside {@link GIPlatform.encode} and
- * never writes or destroys it.
+ * The buffer or texture belongs to the host and must come from the same
+ * device. The platform copies it into its scene copy inside the next
+ * {@link GIPlatform.encode} (one GPU copy, recorded into the host's encoder),
+ * so it must hold the pose when the host submits that frame. The platform
+ * never writes or destroys it, and keeps no reference past that encode: a
+ * pose it can't copy then (a mesh created in the same frame, not on the GPU
+ * yet) is dropped, and the host's next pose takes its place.
  */
-export interface DeformedPositions {
+export type DeformedPositions = DeformedPositionsBuffer | DeformedPositionsTexture;
+
+/** Positions in a GPU buffer with `STORAGE` usage, x, y and z as f32 at the start of each vertex. */
+export interface DeformedPositionsBuffer {
     readonly buffer: GPUBuffer;
     /** Byte offset of the first vertex. Must be a multiple of 4. */
     readonly offset?: number;
-    /** Bytes between consecutive vertices. Defaults to 12 (tightly packed xyz). */
+    /** Bytes between consecutive vertices: at least 12, a multiple of 4. Defaults to 12 (tightly packed xyz). */
     readonly stride?: number;
+}
+
+/**
+ * Positions in an `rgba32float` texture with `COPY_SRC` usage: vertex `i` in
+ * texel `(i mod width, floor(i / width))`, xyz in rgb (alpha is ignored).
+ * The width must be a multiple of 16 (whole 256-byte rows for the copy).
+ * This is the form a three.js TSL compute can write (a storage
+ * `ExternalTexture`, the three adapter's GPU skinning).
+ */
+export interface DeformedPositionsTexture {
+    readonly texture: GPUTexture;
 }
 
 // ---------------------------------------------------------------------------
@@ -91,12 +128,46 @@ export interface PixelData {
     readonly height: number;
 }
 
+/** One mip level of a {@link CompressedPixelData}: the level's blocks, as a KTX2 file or three's `CompressedTexture.mipmaps` hold them. */
+export interface CompressedPixelLevel {
+    readonly data: Uint8Array;
+    readonly width: number;
+    readonly height: number;
+}
+
+/**
+ * A GPU-compressed image (BC, ETC2 or ASTC) with its mip levels, largest
+ * first: what three's `CompressedTexture.mipmaps` holds after KTX2Loader or
+ * gputex. The platform uploads only one level, the smallest that is still at
+ * least 256 × 256 (the largest when none is), and lets the GPU decode it when
+ * the platform reads it. The device needs the format's feature
+ * (`texture-compression-bc`, `-etc2` or `-astc`; `optionalFeatures` asks for
+ * them); without it the platform warns once and the materials using the
+ * texture keep their flat colour.
+ */
+export interface CompressedPixelData {
+    readonly format: GPUTextureFormat;
+    readonly levels: readonly CompressedPixelLevel[];
+}
+
 /**
  * Anything the platform can read an image from. It always makes its own
- * downsized copy in its atlas, so the host can free the source afterwards.
+ * downsized copy (a 256 × 256 layer of its texture store, with mips), so the
+ * host can free the source once the copy is made: in the first
+ * {@link GIPlatform.encode} after `createTexture`.
  *
- * A same-device `GPUTexture` covers images the host only has on the GPU (for
- * example compressed KTX2 textures after upload).
+ * Texture coordinate (0, 0) is the first texel of the source as given (the
+ * top-left of an image), and v grows down its rows, as in WebGPU. An engine
+ * that flips images on upload (three's `flipY`) accounts for it in its uv
+ * mapping.
+ *
+ * A same-device `GPUTexture` covers images the host only has on the GPU. It
+ * needs `TEXTURE_BINDING` usage and a format that reads as float (not a
+ * depth, `uint` or `sint` format); its first mip level and array layer are read.
+ * Keep it alive (don't `destroy()` it) until its layer is built: the platform
+ * first checks that it can be bound on its device, so that takes 1–2 frames
+ * after `createTexture`, not one (`textureCounts()` stops counting it as
+ * pending then). Another device's texture is refused with a warning.
  */
 export type TextureSource =
     | GPUTexture
@@ -105,11 +176,16 @@ export type TextureSource =
     | HTMLCanvasElement
     | OffscreenCanvas
     | ImageData
-    | PixelData;
+    | PixelData
+    | CompressedPixelData;
 
 export interface TextureDescriptor {
     readonly source: TextureSource;
-    /** The stored values are sRGB-encoded (true for typical albedo images). */
+    /**
+     * The stored values are sRGB-encoded (true for typical albedo images).
+     * Ignored for a source whose format already says so (`rgba8unorm-srgb`,
+     * `bc7-rgba-unorm-srgb`): the GPU decodes those itself.
+     */
     readonly srgb: boolean;
     readonly label?: string;
 }
@@ -139,9 +215,43 @@ export interface UvMapping {
     readonly wrapV?: UvWrap;
 }
 
+/** A texture channel: which of a texture's r, g, b, a holds a value. */
+export type TextureChannel = 'r' | 'g' | 'b' | 'a';
+
+/**
+ * A metalness map: one channel of a texture, sampled with its own mapping.
+ * glTF and three keep metalness in the blue channel of the
+ * metallic-roughness texture.
+ */
+export interface MetalnessTexture {
+    readonly texture: TextureHandle;
+    readonly channel: TextureChannel;
+    /** Where it is sampled; omitted means channel 0, no transform, repeat. */
+    readonly uv?: UvMapping;
+}
+
+/**
+ * How a surface's alpha (`opacity` × the albedo texture's alpha) affects rays:
+ *
+ * - `opaque`: it doesn't; every hit stands.
+ * - `cutout`: alpha below `alphaCutoff` is a hole (foliage, fences).
+ * - `stochastic`: a ray passes with probability 1 − alpha, so many rays see
+ *   the right average of a blended surface (decals, glTF `BLEND`).
+ */
+export type AlphaMode = 'opaque' | 'cutout' | 'stochastic';
+
 /**
  * The platform's material model. Each adapter maps its engine's materials onto
- * these four ideas; nothing else about a material affects GI.
+ * these ideas; nothing else about a material affects GI.
+ *
+ * At a ray hit (with the hit-shading setting `sampleTextures` on, the default):
+ *
+ *     albedo   = albedo × albedoTexture.rgb × (1 − metalness × metalnessTexture[channel])
+ *     emission = emissive × emissiveIntensity × emissiveTexture.rgb
+ *
+ * Each texture is sampled at the mip a probe ray's footprint covers. Until a
+ * texture's copy is made (the first `encode` after `createTexture`), its
+ * materials shade as if it were white.
  */
 export interface MaterialDescriptor {
     /** Diffuse albedo, multiplied with `albedoTexture` when both are set. */
@@ -149,6 +259,20 @@ export interface MaterialDescriptor {
     readonly albedoTexture?: TextureHandle;
     /** Where `albedoTexture` is sampled. Its alpha (for `alphaCutoff`) uses the same mapping. */
     readonly albedoUv?: UvMapping;
+    /**
+     * How metallic the surface is, 0 to 1: a metal reflects no diffuse light,
+     * so the albedo is scaled by (1 − metalness), as three and glTF do.
+     * Multiplied with `metalnessTexture` when both are set. Defaults to 0.
+     */
+    readonly metalness?: number;
+    readonly metalnessTexture?: MetalnessTexture;
+    /** The surface's opacity, 0 to 1, multiplied with the albedo texture's alpha (see `alphaMode`). Defaults to 1. */
+    readonly opacity?: number;
+    /**
+     * See {@link AlphaMode}. Defaults to `cutout` when `alphaCutoff` is above 0,
+     * else `opaque`. Rays use it from M4's T4.2 on.
+     */
+    readonly alphaMode?: AlphaMode;
     /**
      * Emitted radiance, multiplied with `emissiveTexture` and
      * `emissiveIntensity`. In the platform's light units (see {@link LightDescriptor}).
@@ -160,7 +284,8 @@ export interface MaterialDescriptor {
     readonly emissiveIntensity?: number;
     /**
      * Alpha below this value is a hole for rays. The alpha comes from
-     * `albedoTexture`'s alpha channel. Omit for opaque.
+     * `albedoTexture`'s alpha channel, times `opacity`. Omit for opaque. With
+     * `alphaMode: 'cutout'` and no cutoff, 0.5 (glTF's default).
      */
     readonly alphaCutoff?: number;
     /**
@@ -343,7 +468,7 @@ export type EnvironmentDescriptor =
      */
     | {
           readonly type: 'procedural';
-          /** Direction toward the sun, world space. Below 5 degrees of elevation the sky is made for a sun at 5 degrees (time of day is M2). */
+          /** Direction toward the sun, world space. Below 5 degrees of elevation the sky is made for a sun at 5 degrees. Call `setEnvironment` again with a new direction to animate the time of day; nothing recompiles. */
           readonly sunDirection: Vec3;
           /** Atmospheric haze, roughly 2 (clear) to 10 (hazy); clamped to the model's 1.7 to 20. Defaults to 2. */
           readonly turbidity?: number;
@@ -375,10 +500,39 @@ export type EnvironmentDescriptor =
  */
 export interface SceneApi {
     createMesh(descriptor: MeshDescriptor): MeshHandle;
-    /** Replace the shape. Rebuilds that mesh's BVH in a worker; the old one is used until it's ready. */
+    /**
+     * Replace the shape. The mesh gets a tree built on the GPU in the next
+     * frame, so rays see the new shape at once; a better tree from the worker
+     * replaces it when that finishes (without subgroups, only the worker's, and
+     * the old shape is traced until it's ready).
+     */
     updateMesh(mesh: MeshHandle, descriptor: MeshDescriptor): void;
-    /** Supply this frame's positions for a mesh created with `deforming: true`. */
-    setDeformedPositions(mesh: MeshHandle, positions: DeformedPositions): void;
+    /**
+     * Supply new positions for a mesh created with `deforming: true`: xyz per
+     * vertex in the mesh's own space, the same vertex count and order as its
+     * descriptor. The triangle list and uvs stay as they were. A deforming
+     * mesh's normals are ignored: GI shades it with each triangle's own
+     * normal, worked out from the current positions (at probe resolution the
+     * difference doesn't show).
+     *
+     * - **A `Float32Array`** (the CPU form): copied at the call, so the host
+     *   may reuse its array.
+     * - **{@link DeformedPositions} on the GPU** (a buffer or a texture):
+     *   copied on the GPU in the next frame. The mesh needs `deformBounds`.
+     *
+     * Calls between two frames are merged: only the last one counts. Rays see
+     * the pose in the next frame the platform encodes: the scene copy takes
+     * the positions and the mesh's tree is refit on the GPU from them, in the
+     * same commands (the mesh's first tree, from a builder, comes a few frames
+     * after `createMesh`; until then rays miss the mesh). The change is logged
+     * as the mesh's `deformBounds` region with how far its vertices moved
+     * (`DirtyRegion.moved`; for positions on the GPU, which the platform
+     * can't read, the box's diagonal: the most any vertex inside it can move).
+     *
+     * On a device without the `subgroups` feature the refit can't run: the
+     * mesh stays in its rest pose, and the first call warns once.
+     */
+    setDeformedPositions(mesh: MeshHandle, positions: Float32Array | DeformedPositions): void;
     destroyMesh(mesh: MeshHandle): void;
 
     createTexture(descriptor: TextureDescriptor): TextureHandle;

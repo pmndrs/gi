@@ -1,7 +1,7 @@
 import { BoxGeometry, Color, Mesh, MeshStandardMaterial, PerspectiveCamera, PointLight, Scene, Texture } from 'three';
 import { describe, expect, it } from 'vitest';
 import type { FrameInput, GIPlatform, SceneApi, ShadingModule } from '@pmndrs/ddgi-core';
-import { GIVolume } from './gi-volume.ts';
+import { DDGIVolume } from './ddgi-volume.ts';
 import { ThreeGI } from './three-gi.ts';
 
 /** A shading module whose shape can be changed, like a technique switching its code. */
@@ -163,10 +163,10 @@ describe('ThreeGI', () => {
         expect(scene.children.filter((child) => (child as { isGILight?: boolean }).isGILight)).toHaveLength(1);
     });
 
-    it('has the GI light follow the intensity and priority of a GIVolume', () => {
+    it('has the GI light follow the intensity and priority of a DDGIVolume', () => {
         const platform = fakePlatform(fakeShading());
         const scene = new Scene();
-        const volume = new GIVolume(4, 4, 4);
+        const volume = new DDGIVolume(4, 4, 4);
         scene.add(volume);
         const threeGI = new ThreeGI(platform.gi, scene, { volume });
         volume.intensity = 0.5;

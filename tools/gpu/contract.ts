@@ -102,3 +102,13 @@ export const REPORT_PROPERTY = '__gpuTestReport';
 /** Query parameters the runner adds to a page URL. */
 export const QUERY_TOKEN = 'token';
 export const QUERY_GPU = 'gpu';
+
+/**
+ * The built examples site (`PAGES_BASE=/gi/ pnpm examples:build`,
+ * into examples/dist) as the test server serves it: under this subdirectory,
+ * as GitHub Pages serves a project site, so a link or asset that ignores the
+ * base fails to load. The `examples-site` page checks it.
+ */
+export const EXAMPLES_SITE_BASE = '/gi/';
+/** The test server's list of the built site's files, `[{ path, bytes }]` (paths under the base). Not part of the site. */
+export const EXAMPLES_SITE_FILES = '/__examples-site-files';

@@ -47,10 +47,27 @@
  * out of the budget's calibration. A host's loading screen runs them, so
  * the first frame a user sees has converged GI.
  *
+ * **Several volumes** (M3, docs/design/m3-moving.md §4.1, volumes.ts): the
+ * volumes share the atlases, the kernels and the volume table, and each has
+ * its own uniforms, buffers and bind groups (`PreparedResources`, one per
+ * volume, with the shared parts the same objects in each). Each frame every
+ * volume runs steps 0-4 above in turn, on its share of the frame's probes;
+ * the clock, the hot movers, the layer weights and the warm-up are the
+ * technique's, once a frame. One volume is the one-element case.
+ *
+ * **The camera-following volume** (M3, m3-moving.md §4.2, scroll.ts): a
+ * volume with `follow: 'camera'` is a window of probes over a lattice fixed
+ * in world space. Before any volume's passes, each such window follows the
+ * frame's camera (`CameraWindow`, on the CPU), and `ddgi/scroll`
+ * (wgsl/scroll.ts) resets the slots of the planes that entered and moves the
+ * valid extent, which it copies into the volume table. The kernels then work
+ * in slots, as for a fixed volume, whose window never moves.
+ *
  * It sees only its `TechniqueContext`: the scene copy, the `rays` backend,
  * hit shading, the kernel builder and the timer. Never the host or an engine.
  * Renderers read the field through its shading module (`shading`,
- * shading.ts), which wraps the same `ddgiSampleIrradiance` the update uses.
+ * shading.ts), which wraps the same `ddgiSampleVolumes` the update's bounce
+ * light uses.
  */
 
 import type { DebugView } from '../../platform/contract/stats.ts';
@@ -59,9 +76,11 @@ import type { DirectWorkList, RayScratch } from '../../platform/contract/shade.t
 import type { ColorRGB } from '../../platform/contract/math.ts';
 import type { LightHandle } from '../../platform/contract/handles.ts';
 import type { DirectionalLightDescriptor } from '../../platform/contract/scene.ts';
+import type { SceneChanges } from '../../platform/contract/scene-copy.ts';
 import type { ComputeKernel } from '../../platform/contract/wgsl.ts';
 import { GILimitError } from '../../platform/contract/errors.ts';
 import {
+    BYTES_PER_TEXEL,
     CENSUS_CHANGE_CLOCK,
     CENSUS_DIRECT_DROPPED,
     CENSUS_DIRECT_HITS,
@@ -96,7 +115,6 @@ import {
     PROPAGATION_STATE_WORDS,
     propagationListCapacity,
     propagationScratchStrideWords,
-    SAMPLE_PARAMETER_VEC4_COUNT,
     SCHEDULE_STATE_REPORTED_WORDS,
     SCHEDULE_STATE_WORD,
     SCHEDULE_STATE_WORDS,
@@ -108,6 +126,7 @@ import {
     UNIFORM_BYTES,
     UNIFORM_WORD,
     UNIFORM_WORDS,
+    type AtlasSize,
     type DistanceFormat,
     type FieldLayout,
     type ScratchLayout,
@@ -130,7 +149,6 @@ import {
     MAX_OWED_UPDATES,
     minProbesPerFrame,
     owedUpdates,
-    probeGrid,
     resolveBias,
     warmUpSettings,
     withDefaults,
@@ -139,7 +157,37 @@ import {
     type ProbeGrid,
 } from './settings.ts';
 import { cameraFalloffDistance, frustumPlanes, inViewMargin } from './camera.ts';
-import { buildMarkTable, type MarkTable } from './mark-table.ts';
+import {
+    planVolumes,
+    UnitSharer,
+    volumeFloorUnits,
+    volumeSettingsList,
+    VOLUME_SAMPLING_FLOATS,
+    VOLUME_TABLE_CPU_TEXELS,
+    VOLUME_TABLE_FORMAT,
+    VOLUME_TABLE_ROW_FLOATS,
+    VOLUME_TABLE_TEXEL,
+    VOLUME_TABLE_TEXEL_BYTES,
+    VOLUME_TABLE_TEXELS,
+    FIXED_VOLUME_FADE,
+    wholeGridExtent,
+    writeVolumeParameters,
+    writeVolumeWindow,
+    type PlacedVolume,
+    type VolumePlan,
+} from './volumes.ts';
+import { CameraWindow, windowProbeOf, type WindowMove } from './scroll.ts';
+import {
+    DDGI_SCROLL_WGSL,
+    SCROLL_ENTRY_POINTS,
+    SCROLL_EXTENT_BYTES,
+    SCROLL_EXTENT_SIDES,
+    SCROLL_UNIFORM_BYTES,
+    SCROLL_UNIFORM_WORD,
+    SCROLL_UNIFORM_WORDS,
+    SCROLL_WORKGROUP_SIZE,
+} from './wgsl/scroll.ts';
+import { buildMarkTable, type MarkTable, type SunLayerMarks } from './mark-table.ts';
 import { layerPlan, MAX_IRRADIANCE_LAYERS, MAX_LIGHT_GROUPS, sunLayerWeight, sunLightOf, writeLayerWeights, type LayerPlan } from './light-groups.ts';
 import { COMPOSE_ENTRY_POINTS, COMPOSE_WEIGHTS_BYTES, composeKernelWgsl } from './wgsl/compose.ts';
 import { MoverTable } from './mover-table.ts';
@@ -154,6 +202,28 @@ import { PROPAGATE_ENTRY_POINTS, PROPAGATE_FIND_WORKGROUP_SIZE, propagateKernelW
 import { SCHEDULE_ENTRY_POINTS, SCHEDULE_WORKGROUP_SIZE, scheduleKernelWgsl } from './wgsl/schedule.ts';
 import { DDGI_DEBUG_VIEW } from './wgsl/shading.ts';
 import { WRITE_ENTRY_POINTS, writeKernelWgsl } from './wgsl/write.ts';
+import { fingerprintDifferences } from '../../platform/scene/scene-fingerprint.ts';
+import {
+    alignUp,
+    convertDistanceTexels,
+    decodeSavedField,
+    encodeSavedField,
+    fileBytes,
+    layoutMismatch,
+    readProbeDataTexel,
+    SAVED_FIELD_WRITER,
+    SavedFieldError,
+    SECTION,
+    settleProbeHistory,
+    unpadRows,
+    type FileBytes,
+    type SavedCameraWindow,
+    type SavedFieldLayout,
+    type SectionData,
+} from './saved-field.ts';
+
+/** A frame's changes when there are none to mark (the frame after `loadField`). */
+const NO_CHANGES: SceneChanges = { regions: [], global: [], receivers: [], lights: [], lightsOverflowed: false };
 
 /** WebGPU usage bits; the globals don't exist in Node, where tests import this file. */
 const BUFFER_USAGE = { mapRead: 0x1, copySrc: 0x4, copyDst: 0x8, uniform: 0x40, storage: 0x80 } as const;
@@ -207,13 +277,69 @@ export interface DDGITechniqueOptions {
 /** Where DDGI computes direct light (DDGITechniqueOptions.directLight). */
 export type DirectLightPath = 'deferred' | 'inline';
 
+/** Options for {@link DDGITechnique.loadField}. */
+export interface LoadFieldOptions {
+    /**
+     * What to do with a field saved for a scene that changed since
+     * (its scene fingerprint differs): `load stale` (the default) loads it
+     * anyway as a starting point and marks every probe changed, so the field
+     * updates from the loaded values instead of from black; `refuse` throws
+     * a `SavedFieldError` that names what changed.
+     */
+    readonly ifSceneChanged?: 'load stale' | 'refuse';
+}
+
+/** What {@link DDGITechnique.loadField} loaded. */
+export interface LoadedField {
+    /** The scene changed since the field was saved: it loaded as a starting point and every probe is updating from it. */
+    readonly stale: boolean;
+    /** Which parts of the scene fingerprint differ (`geometry`, `materials`, `textures`, `lights`, `sky`); empty when not stale. */
+    readonly changedParts: readonly string[];
+    /** When it was saved (ISO 8601), and what saved it. */
+    readonly savedAt: string;
+    readonly library: string;
+}
+
+/** One volume of the field, for test tools (DDGIField.volumes). */
+export interface DDGIFieldVolume {
+    readonly grid: ProbeGrid;
+    /** Its priority (volumes.ts); the volumes are listed highest first, as the volume table's rows. */
+    readonly priority: number;
+    /** The atlas layer of its probe row y = 0. */
+    readonly layerBase: number;
+    /** Its first probe in the `points` debug view. */
+    readonly probeBase: number;
+    /**
+     * Its four `vec4f` parameters of `ddgiSampleIrradiance` (the start of its
+     * volume-table row): 16 floats, refreshed on every read of `field`. For a
+     * camera-following volume the origin is its window's first probe, and its
+     * data is in wrapping slots: read it through the volume table.
+     */
+    readonly sampleParameters: Float32Array;
+    /** Its probes' hysteresis histories, as `DDGIField.probeHistory` (in slot order). */
+    readonly probeHistory: GPUBuffer;
+    /** It follows the camera (`follow: 'camera'`, scroll.ts). */
+    readonly followsCamera: boolean;
+    /** Lattice coordinates of its window's first probe (scroll.ts); [0, 0, 0] for a fixed volume. Read when `field` is read. */
+    readonly window: readonly [number, number, number];
+    /** A camera-following volume's valid extent, as `ddgi/scroll` keeps it (8 floats: min xyz, spare, max xyz, spare; lattice units); null for a fixed one. */
+    readonly validExtent: GPUBuffer | null;
+}
+
 /**
- * What test tools read (renderers use `shading`): the three textures and the
- * four `vec4f` parameters of `ddgiSampleIrradiance`, in order. Textures are
- * replaced only by `prepare`.
+ * What test tools read (renderers use `shading`): the textures, the volume
+ * table, and the first volume's four `vec4f` parameters of
+ * `ddgiSampleIrradiance`, in order. With several volumes, `grid`,
+ * `sampleParameters` and `probeHistory` are the first (highest-priority)
+ * volume's, and `volumes` lists every one. Textures are replaced only by
+ * `prepare`.
  */
 export interface DDGIField {
     readonly grid: ProbeGrid;
+    /** Every volume, highest priority first (one with a single volume). */
+    readonly volumes: readonly DDGIFieldVolume[];
+    /** The volume table renderers read (`ddgiSampleVolumes`): a row per volume, in the order of `volumes`. */
+    readonly volumeTable: GPUTexture;
     readonly layout: FieldLayout;
     /**
      * The irradiance renderers sample: the composed atlas with light groups
@@ -251,36 +377,38 @@ interface CensusStaging {
     frame: number;
 }
 
-interface PreparedResources {
-    readonly grid: ProbeGrid;
+/**
+ * What every volume shares (volumes.ts): the atlases, the volume table, the
+ * kernels and the field's shape. The same objects in every volume's
+ * `PreparedResources`.
+ */
+interface SharedResources {
     readonly layout: FieldLayout;
     readonly scratch: ScratchLayout;
     readonly irradianceTexels: number;
     readonly distanceTexels: number;
-    readonly maxProbesPerFrame: number;
     readonly reduction: PhaseBReduction;
     /** Where direct light is computed, and how the deferred work list is filled (null when inline). */
     readonly directLight: DirectLightPath;
     readonly directWorkList: DirectWorkList | null;
     /** Which irradiance layer holds what (light groups, light-groups.ts). */
     readonly plan: LayerPlan;
+    /** The volumes in priority order, where each sits in the atlases, and the atlas's size. */
+    readonly volumePlan: VolumePlan;
     /** The layered irradiance atlas the update reads and writes (one block per layer). */
     readonly irradiance: GPUTexture;
-    /** With light groups on: the composed atlas renderers sample, and its kernels (null with one layer). */
-    readonly compose: ComposeResources | null;
+    /** With light groups on: the composed atlas renderers sample (null with one layer). */
+    readonly composed: GPUTexture | null;
+    /** With light groups on: the layers' weights (null with one layer). */
+    readonly composeWeights: GPUBuffer | null;
     readonly distance: GPUTexture;
     readonly probeData: GPUTexture;
+    /** Every volume's sampling parameters, a row each in priority order (volumes.ts): what renderers and bounce light read. */
+    readonly volumeTable: GPUTexture;
     readonly points: GPUTexture;
     readonly sampler: GPUSampler;
-    readonly uniforms: GPUBuffer;
-    readonly updateList: GPUBuffer;
-    readonly scratchBuffer: GPUBuffer;
-    readonly census: GPUBuffer;
     /** The hot movers' boxes and mask bits for `ddgi/blend` (a uniform buffer; mover-table.ts). */
     readonly movers: GPUBuffer;
-    /** Per probe: the updates its history counts as, the clock at its last update and its blended updates so far (adaptive hysteresis). */
-    readonly probeHistory: GPUBuffer;
-    readonly censusStaging: CensusStaging[];
     readonly traceKernel: ComputeKernel;
     readonly blendKernel: ComputeKernel;
     readonly writeKernel: ComputeKernel;
@@ -288,10 +416,53 @@ interface PreparedResources {
     readonly markKernel: ComputeKernel;
     /** The change clock's one-thread dispatch after the mark (same bind group). */
     readonly markClockKernel: ComputeKernel;
-    /** Propagation (T2.4c, wgsl/propagate.ts): find, args, propagate, and the irradiance-tile write. */
-    readonly propagation: PropagationResources;
     /** The scheduler's four kernels (wgsl/schedule.ts), one bind group for all. */
     readonly scheduleKernels: Readonly<Record<keyof typeof SCHEDULE_ENTRY_POINTS, ComputeKernel>>;
+    /** `ddgi/scroll`'s two kernels (wgsl/scroll.ts); null when no volume follows the camera (they are not compiled then). */
+    readonly scrollKernels: Readonly<Record<keyof typeof SCROLL_ENTRY_POINTS, ComputeKernel>> | null;
+    /** Deferred only: the byte distance between two rounds' `DdgiTraceRound`s (dynamic offsets). */
+    readonly traceRoundStride: number;
+    /** Bytes of the shared textures and buffers. */
+    readonly sharedBytes: number;
+}
+
+/** What the frame loop keeps for one volume between frames. */
+interface VolumeFrameState {
+    /** The latest census read back: probes per state, then rays traced. Null until the first arrives. */
+    latestCensus: Uint32Array | null;
+    /** The batch while a change is taken in (§4.5's second count; T2.4d, T2.18), from the census's rays a listed probe. */
+    readonly changeIntake: ChangeIntakeBatch;
+    /** Probes listed in the latest frame. */
+    probesUpdated: number;
+    /** The last frame's update count above 0: the batch "far probes owe 2" judges a frame with no updates by. */
+    lastUpdateCount: number;
+    /** Probe updates the current warm-up has made in this volume. */
+    warmUpProbeUpdates: number;
+    /** Its four sampling parameters (its volume-table row), refreshed in place from the live settings. */
+    readonly sampleParameters: Float32Array;
+}
+
+/**
+ * One volume's resources: its own buffers and bind groups, and the shared
+ * ones. Most of the technique's methods take one of these, so they work on
+ * one volume at a time, as the kernels do.
+ */
+interface PreparedResources extends SharedResources {
+    /** This volume: its grid, priority, layer base and first probe (volumes.ts). */
+    readonly volume: PlacedVolume;
+    readonly grid: ProbeGrid;
+    readonly maxProbesPerFrame: number;
+    /** With light groups on: the compose kernels' bind groups for this volume (null with one layer). */
+    readonly compose: ComposeResources | null;
+    readonly uniforms: GPUBuffer;
+    readonly updateList: GPUBuffer;
+    readonly scratchBuffer: GPUBuffer;
+    readonly census: GPUBuffer;
+    /** Per probe: the updates its history counts as, the clock at its last update and its blended updates so far (adaptive hysteresis). */
+    readonly probeHistory: GPUBuffer;
+    readonly censusStaging: CensusStaging[];
+    /** Propagation (T2.4c, wgsl/propagate.ts): find, args, propagate, and the irradiance-tile write. */
+    readonly propagation: PropagationResources;
     readonly scheduleGroup: GPUBindGroup;
     /** The scheduler's state (SCHEDULE_STATE_WORD): the round robin's cursor and this frame's histogram and counts. */
     readonly scheduleState: GPUBuffer;
@@ -303,12 +474,31 @@ interface PreparedResources {
     rays: RayBuffers;
     /** Deferred only: one `DdgiTraceRound` per round, `traceRoundStride` bytes apart (dynamic offsets). */
     readonly traceRounds: GPUBuffer | null;
-    readonly traceRoundStride: number;
     /** `ddgi/mark`'s table and the group that binds it; replaced when a frame's table outgrows it. */
     mark: { buffer: GPUBuffer; group: GPUBindGroup };
     /** The round robin's stride: order[i] = (i × stride) mod probe count (schedule.ts). */
     readonly stride: number;
-    readonly fixedBytes: number;
+    /** Bytes of this volume's own buffers (the ray scratch apart: it grows). */
+    readonly ownBytes: number;
+    readonly state: VolumeFrameState;
+    /** A camera-following volume's window and `ddgi/scroll`'s buffers; null for a fixed volume. */
+    readonly scroll: ScrollResources | null;
+}
+
+/** One camera-following volume's window and `ddgi/scroll`'s buffers and bind groups (scroll.ts, wgsl/scroll.ts). */
+interface ScrollResources {
+    readonly window: CameraWindow;
+    /** Its row of the volume table. */
+    readonly row: number;
+    readonly uniforms: GPUBuffer;
+    /** The valid extent (SCROLL_EXTENT_WORDS floats), copied into the table's row every frame. */
+    readonly extent: GPUBuffer;
+    readonly resetGroup: GPUBindGroup;
+    readonly extentGroup: GPUBindGroup;
+    /** The next scroll resets every slot (a teleport). */
+    resetEverySlot: boolean;
+    /** The next scroll sets the valid extent to its targets outright (after prepare, resetHistory or a teleport). */
+    extentToTarget: boolean;
 }
 
 /** The ray scratch and the groups that bind it (`createRayBuffer`). */
@@ -320,18 +510,21 @@ interface RayBuffers {
     readonly blendGroup: GPUBindGroup;
 }
 
-/** `ddgi/compose`'s kernels, its texture, weights and bind groups (T2.5, wgsl/compose.ts). */
+/** `ddgi/compose`'s kernels and one volume's bind groups (T2.5, wgsl/compose.ts); the texture and weights are `SharedResources`'. */
 interface ComposeResources {
     readonly updatedKernel: ComputeKernel;
     readonly listedKernel: ComputeKernel;
     readonly allKernel: ComputeKernel;
-    /** What renderers sample: Σ weight × layer, one block. */
-    readonly composed: GPUTexture;
-    /** The layers' weights (COMPOSE_WEIGHTS_BYTES), written when they change. */
-    readonly weights: GPUBuffer;
     /** Binds the update list; the listed kernel's binds propagation's list and state. */
     readonly updatedGroup: GPUBindGroup;
     readonly listedGroup: GPUBindGroup;
+}
+
+/** The kernels each volume's propagation and compose groups are made for (`createVolumeResources`). */
+interface VolumeKernels {
+    readonly propagation: { readonly find: ComputeKernel; readonly args: ComputeKernel; readonly propagate: ComputeKernel; readonly write: ComputeKernel };
+    /** With light groups on; null with one layer. */
+    readonly compose: { readonly updated: ComputeKernel; readonly listed: ComputeKernel; readonly all: ComputeKernel } | null;
 }
 
 /** Propagation's kernels, buffers and bind groups (T2.4c, wgsl/propagate.ts). */
@@ -353,8 +546,12 @@ interface PropagationResources {
     readonly writeGroup: GPUBindGroup;
 }
 
-/** Where the warm-up is (see the file comment). */
-type WarmUpPhase = 'waiting for trees' | 'warming' | 'done';
+/**
+ * Where the warm-up is (see the file comment). `loaded, waiting for trees`:
+ * a saved field was loaded (`loadField`); no probe work until the trees
+ * are built, as in the warm-up, and then no warm-up passes.
+ */
+type WarmUpPhase = 'waiting for trees' | 'warming' | 'loaded, waiting for trees' | 'done';
 
 const COMPUTE = SHADER_STAGE_COMPUTE;
 const SAMPLED_ARRAY = { sampleType: 'float', viewDimension: '2d-array' } as const;
@@ -370,6 +567,8 @@ const TRACE_GROUP: GPUBindGroupLayoutDescriptor = {
         { binding: 4, visibility: COMPUTE, texture: SAMPLED_ARRAY },
         { binding: 5, visibility: COMPUTE, texture: SAMPLED_ARRAY },
         { binding: 6, visibility: COMPUTE, sampler: { type: 'filtering' } },
+        // The volume table, for bounce light from every volume (rgba32float, read with textureLoad).
+        { binding: 8, visibility: COMPUTE, texture: { sampleType: 'unfilterable-float', viewDimension: '2d' } },
     ],
 };
 
@@ -507,6 +706,28 @@ const COMPOSE_GROUP: GPUBindGroupLayoutDescriptor = {
     ],
 };
 
+/** `ddgi/scroll`'s reset (wgsl/scroll.ts): history, feedback requests, probe data and points, written. */
+const SCROLL_RESET_GROUP: GPUBindGroupLayoutDescriptor = {
+    label: 'ddgi/scroll-reset group 1',
+    entries: [
+        { binding: 0, visibility: COMPUTE, buffer: { type: 'uniform' } },
+        { binding: 1, visibility: COMPUTE, buffer: { type: 'storage' } },
+        { binding: 2, visibility: COMPUTE, buffer: { type: 'storage' } },
+        { binding: 3, visibility: COMPUTE, storageTexture: { access: 'write-only', format: PROBE_DATA_FORMAT, viewDimension: '2d-array' } },
+        { binding: 4, visibility: COMPUTE, storageTexture: { access: 'write-only', format: 'rgba32float', viewDimension: '2d' } },
+    ],
+};
+
+/** `ddgi/scroll`'s valid extent (wgsl/scroll.ts): the probe data, read, and the extent. */
+const SCROLL_EXTENT_GROUP: GPUBindGroupLayoutDescriptor = {
+    label: 'ddgi/scroll-extent group 1',
+    entries: [
+        { binding: 0, visibility: COMPUTE, buffer: { type: 'uniform' } },
+        { binding: 5, visibility: COMPUTE, texture: SAMPLED_ARRAY },
+        { binding: 6, visibility: COMPUTE, buffer: { type: 'storage' } },
+    ],
+};
+
 /** `ddgi/census` group 1 (wgsl/census.ts). */
 const CENSUS_GROUP: GPUBindGroupLayoutDescriptor = {
     label: 'ddgi/census group 1',
@@ -532,17 +753,19 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
 
     private readonly options: DDGITechniqueOptions;
     private context: TechniqueContext | null = null;
-    private resources: PreparedResources | null = null;
+    /** Each volume's resources after `prepare`, highest priority first (volumes.ts); empty before. */
+    private volumes: readonly PreparedResources[] = [];
     private readonly uniformData = new Float32Array(UNIFORM_WORDS);
     private readonly uniformWords = new Uint32Array(this.uniformData.buffer);
-    private readonly parameterView = new Float32Array(SAMPLE_PARAMETER_VEC4_COUNT * 4);
-    /** The latest census read back: probes per state, then rays traced. Null until the first arrives. */
-    private latestCensus: Uint32Array | null = null;
-    /** The batch while a change is taken in (§4.5's second count; T2.4d, T2.18), from the census's rays a listed probe. */
-    private readonly changeIntake = new ChangeIntakeBatch();
+    /** `ddgi/scroll`'s uniforms (`DdgiScroll`), filled per camera-following volume. */
+    private readonly scrollData = new Float32Array(SCROLL_UNIFORM_WORDS);
+    private readonly scrollWords = new Int32Array(this.scrollData.buffer);
+    /** The volume table as last written to the GPU (a row per volume), so it is written only when a bias changes. */
+    private volumeTableRows = new Float32Array(0);
     /** The rate the platform last asked Budget v2's floor for (`minUnitsPerFrame`); null under a units budget. */
     private platformFloorRate: WorkFloorRate | null = null;
-    private probesUpdated = 0;
+    /** Shares each frame's probes between the volumes, carrying fractions over frames (volumes.ts); new at `prepare`. */
+    private unitSharer = new UnitSharer([]);
     /** Frames since `prepare` whose changes ran `ddgi/mark`, and the entries in the latest one (CPU-side counters). */
     private markFrames = 0;
     private latestMarkEntries = 0;
@@ -556,10 +779,8 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
     private clockSeconds = 0;
     /** Recent `deltaTime`s above 0, for the sweep counter. */
     private readonly frameTimes: number[] = [];
-    /** The warm-up (see the file comment): its phase, its probe updates and when it started warming (wall clock, ms). */
-    private warmUp: { phase: WarmUpPhase; probeUpdates: number; startedAt: number | null } = { phase: 'done', probeUpdates: 0, startedAt: null };
-    /** The last frame's update count above 0: the batch "far probes owe 2" judges a frame with no updates by. */
-    private lastUpdateCount = 0;
+    /** The warm-up (see the file comment): its phase and when it started warming (wall clock, ms); each volume counts its own probe updates. */
+    private warmUp: { phase: WarmUpPhase; startedAt: number | null } = { phase: 'done', startedAt: null };
     /** `resetHistory` asked for the history and the feedback requests to be cleared, in the next encode. */
     private historyClearPending = false;
     /** The objects that moved lately, for the mover mask (mover-table.ts). */
@@ -576,6 +797,25 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
      * becoming another light (mark-table.ts, `SunLayerMarks`).
      */
     private sunInLayer: LightHandle | null = null;
+    /**
+     * A stale saved field was loaded (`loadField`): the first frame that
+     * updates probes marks every probe as a whole change. Not before: a frame
+     * with no probe updates (the trees still building) would judge the
+     * change by a batch of 0, as if the volume were too big for every probe's
+     * updates, and send it down the key-probe path (`changeServing`).
+     */
+    private staleMarkPending = false;
+    /**
+     * The next frame doesn't mark the scene changes it brings: a saved field
+     * was just loaded, and the scene it was checked against (its
+     * fingerprint, at the load) already holds them. On a fresh platform they
+     * are the scene's own creation, every object and light added, which
+     * would otherwise cut every loaded history as a change.
+     */
+    private loadedChangesPending = false;
+    /** Saved fields loaded since `prepare`, and whether the latest was stale (counters). */
+    private fieldsLoaded = 0;
+    private latestLoadStale = false;
     private disposed = false;
 
     constructor(settings: DDGISettingsInput, options: DDGITechniqueOptions = {}) {
@@ -588,10 +828,12 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
                 label: 'Probes',
                 description: 'Each probe as a dot where it really sits (after relocation), coloured by its state.',
                 texture: () => {
-                    if (!this.resources) throw new Error('@pmndrs/ddgi: the probes debug view exists after prepare');
-                    return this.resources.points;
+                    const first = this.firstVolume;
+                    if (!first) throw new Error('@pmndrs/gi: the probes debug view exists after prepare');
+                    return first.points;
                 },
-                count: () => this.resources?.grid.probeCount ?? 0,
+                // Every volume's probes, one volume after another (volumes.ts, probeBase).
+                count: () => this.firstVolume?.volumePlan.probeCount ?? 0,
                 states: PROBE_STATE_LABELS,
             },
             // Drawn through the shading module's giDebugColor (wgsl/shading.ts).
@@ -616,66 +858,77 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         ];
         this.shading = new DDGIShadingModule({
             fieldTextures: () => {
-                const resources = this.resources;
-                if (!resources) throw new Error('@pmndrs/ddgi: the DDGI shading module has textures after prepare (await gi.prepare())');
+                const first = this.firstVolume;
+                if (!first) throw new Error('@pmndrs/gi: the DDGI shading module has textures after prepare (await gi.prepare())');
                 // With light groups, renderers read the composed atlas: one block, as without them.
-                return { irradiance: resources.compose?.composed ?? resources.irradiance, distance: resources.distance, probeData: resources.probeData };
-            },
-            sampleParameters: () => {
-                const resources = this.resources;
-                if (!resources) throw new Error('@pmndrs/ddgi: the DDGI shading module has its volume after prepare (await gi.prepare())');
-                return this.refreshSampleParameters(resources);
+                return { irradiance: first.composed ?? first.irradiance, distance: first.distance, probeData: first.probeData, volumeTable: first.volumeTable };
             },
         });
     }
 
     attach(context: TechniqueContext): void {
-        if (this.context) throw new Error('@pmndrs/ddgi: a DDGI technique can be attached to one platform only');
+        if (this.context) throw new Error('@pmndrs/gi: a DDGI technique can be attached to one platform only');
         this.context = context;
+    }
+
+    /**
+     * The highest-priority volume's resources, null before `prepare`. The
+     * shared textures, kernels and settings derived at `prepare` are read
+     * from it (they are the same objects in every volume's).
+     */
+    private get firstVolume(): PreparedResources | null {
+        return this.volumes[0] ?? null;
+    }
+
+    /** The device of the platform it is attached to (null before `attach`), for one-off jobs on the field such as `exportIrradianceSH`. */
+    get device(): GPUDevice | null {
+        return this.context?.device ?? null;
     }
 
     /** Which phase-B reduction the kernels use (after `prepare`). */
     get reduction(): PhaseBReduction | undefined {
-        return this.resources?.reduction;
+        return this.firstVolume?.reduction;
     }
 
     /** Where direct light is computed (after `prepare`): `deferred` to the platform's `gi/direct`, or `inline`. */
     get directLight(): DirectLightPath | undefined {
-        return this.resources?.directLight;
+        return this.firstVolume?.directLight;
     }
 
     /** With direct light deferred, how `ddgi/trace` fills the work list (after `prepare`; null when inline). */
     get directWorkList(): DirectWorkList | null | undefined {
-        return this.resources?.directWorkList;
+        return this.firstVolume?.directWorkList;
     }
 
     async prepare(): Promise<void> {
         const context = this.context;
-        if (!context) throw new Error('@pmndrs/ddgi: attach the DDGI technique (gi.addTechnique) before prepare');
-        if (this.disposed) throw new Error('@pmndrs/ddgi: this DDGI technique was disposed');
+        if (!context) throw new Error('@pmndrs/gi: attach the DDGI technique (gi.addTechnique) before prepare');
+        if (this.disposed) throw new Error('@pmndrs/gi: this DDGI technique was disposed');
         const device = context.device;
 
-        const grid = probeGrid(this.settings.volume);
+        // The volumes in priority order, each with its layers in the shared atlases (volumes.ts).
+        const volumePlan = planVolumes(volumeSettingsList(this.settings), device.limits.maxTextureArrayLayers);
         const irradianceTexels = positiveInteger(this.settings.irradianceTexels, 'irradianceTexels');
         const distanceTexels = positiveInteger(this.settings.distanceTexels, 'distanceTexels');
         // Light groups (T2.5): one irradiance layer per group and one for the environment, or one layer with groups off;
         // and the sun's own layer last (T2.6b).
         const plan = layerPlan(this.settings.lightGroups, this.settings.sunLayer === true);
         const layerCount = plan.layers.length;
-        const layout = fieldLayout(grid, irradianceTexels, distanceTexels, distanceFormatFor(device.features as ReadonlySet<string>), layerCount);
+        const layout = fieldLayout({ counts: volumePlan.atlasCounts }, irradianceTexels, distanceTexels, distanceFormatFor(device.features as ReadonlySet<string>), layerCount);
         checkFieldLimits(layout, device.limits);
-        const points = pointsSize(grid.probeCount, device.limits.maxTextureDimension2D);
+        const points = pointsSize(volumePlan.probeCount, device.limits.maxTextureDimension2D);
         if (points.height > device.limits.maxTextureDimension2D) throw new GILimitError('maxTextureDimension2D', points.height, device.limits.maxTextureDimension2D);
         const scratch = scratchLayout(irradianceTexels, distanceTexels, layerCount);
-        // No probe updates twice in a frame, so more slots than probes would never be used.
-        const maxProbesPerFrame = Math.min(positiveInteger(this.settings.maxProbesPerFrame, 'maxProbesPerFrame'), grid.probeCount);
+        // No probe updates twice in a frame, so more slots than a volume has probes would never be used.
+        const maxProbesSetting = positiveInteger(this.settings.maxProbesPerFrame, 'maxProbesPerFrame');
+        const maxProbesPerFrame = (grid: ProbeGrid): number => Math.min(maxProbesSetting, grid.probeCount);
         const hasSubgroups = device.features.has('subgroups');
         const reduction = this.options.reduction ?? (hasSubgroups ? 'subgroups' : 'workgroup');
-        if (reduction === 'subgroups' && !hasSubgroups) throw new Error("@pmndrs/ddgi: the 'subgroups' reduction needs a device with the 'subgroups' feature");
+        if (reduction === 'subgroups' && !hasSubgroups) throw new Error("@pmndrs/gi: the 'subgroups' reduction needs a device with the 'subgroups' feature");
         const directLight = this.options.directLight ?? 'deferred';
         const directWorkList = directLight === 'deferred' ? (this.options.directWorkList ?? context.shade.direct.defaultWorkList) : null;
         // The inline trace (kept for comparison) adds every light's direct light into one result.
-        if (!directWorkList && layerCount > 1) throw new Error("@pmndrs/ddgi: light groups and the sun layer need direct light deferred to gi/direct (directLight: 'deferred', the default)");
+        if (!directWorkList && layerCount > 1) throw new Error("@pmndrs/gi: light groups and the sun layer need direct light deferred to gi/direct (directLight: 'deferred', the default)");
         // Throws for a 'subgroups' work list on a device without them.
         const traceCode = directWorkList ? deferredTraceKernelWgsl(context.shade.direct.traceWgsl('ddgiRayScratch', directWorkList), plan) : DDGI_TRACE_WGSL;
 
@@ -683,7 +936,8 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         const scheduleCode = scheduleKernelWgsl(reduction);
         const markCode = markKernelWgsl(reduction);
         const writeCode = writeKernelWgsl({ irradianceTexels, distanceTexels, scratch, distanceFormat: layout.distanceFormat });
-        const propagationCapacity = propagationListCapacity(grid.counts, maxProbesPerFrame);
+        // The kernels take one list size: the largest volume's, which every volume's list is made to hold.
+        const propagationCapacity = Math.max(...volumePlan.volumes.map((volume) => propagationListCapacity(volume.grid.counts, maxProbesPerFrame(volume.grid))));
         const propagateCode = propagateKernelWgsl({ irradianceTexels, irradianceLayers: layerCount, reduction, listCapacity: propagationCapacity, sunLayer: plan.sunLayer });
         const composeCode = plan.composed ? composeKernelWgsl({ irradianceTexels, irradianceLayers: layerCount }) : null;
         const composeKernel = (entryPoint: string, name: string): Promise<ComputeKernel | null> =>
@@ -692,6 +946,13 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
             context.kernels.computeKernel({ label: `ddgi/${name} (${reduction})`, modules: [], code: propagateCode, entryPoint, ownGroups: [group] });
         const scheduleKernel = (entryPoint: string, name: string): Promise<ComputeKernel> =>
             context.kernels.computeKernel({ label: `ddgi/schedule-${name} (${reduction})`, modules: [], code: scheduleCode, entryPoint, ownGroups: [SCHEDULE_GROUP] });
+        // ddgi/scroll only when a volume follows the camera, so fixed volumes compile what they did before.
+        const scrollKernelsReady = volumePlan.volumes.some((volume) => volume.followsCamera)
+            ? Promise.all([
+                  context.kernels.computeKernel({ label: 'ddgi/scroll-reset', modules: [], code: DDGI_SCROLL_WGSL, entryPoint: SCROLL_ENTRY_POINTS.reset, ownGroups: [SCROLL_RESET_GROUP] }),
+                  context.kernels.computeKernel({ label: 'ddgi/scroll-extent', modules: [], code: DDGI_SCROLL_WGSL, entryPoint: SCROLL_ENTRY_POINTS.extent, ownGroups: [SCROLL_EXTENT_GROUP] }),
+              ]).then(([reset, extent]) => ({ reset, extent }))
+            : Promise.resolve(null);
         const [
             traceKernel,
             blendKernel,
@@ -775,6 +1036,7 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
             // gi/direct (also for the inline path: its ray scratch comes from the same place). Last, so it sits past the named kernels.
             context.shade.direct.prepare(),
         ]);
+        const scrollKernels = await scrollKernelsReady;
         if (this.disposed) return;
 
         this.releaseResources();
@@ -790,55 +1052,154 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
                 // 2d. Every DDGI binding reads these as texture_2d_array.
                 textureBindingViewDimension: '2d-array',
             });
-        // The layers side by side (one block with groups off), and the composed atlas renderers sample when there are several.
-        const irradiance = arrayTexture(layerCount > 1 ? 'irradiance layers' : 'irradiance', layout.layeredIrradiance, IRRADIANCE_FORMAT);
-        const composedIrradiance = plan.composed ? arrayTexture('composed irradiance', layout.irradiance, IRRADIANCE_FORMAT) : null;
-        const distance = arrayTexture('distance', layout.distance, layout.distanceFormat);
+        // Shared by every volume (volumes.ts). The layers side by side (one block with groups off), and the composed atlas
+        // renderers sample when there are several.
+        // COPY_DST on the atlases a saved field is written into (loadField, saved-field.ts).
+        const irradiance = arrayTexture(layerCount > 1 ? 'irradiance layers' : 'irradiance', layout.layeredIrradiance, IRRADIANCE_FORMAT, TEXTURE_USAGE.copyDst);
+        const composed = plan.composed ? arrayTexture('composed irradiance', layout.irradiance, IRRADIANCE_FORMAT) : null;
+        const distance = arrayTexture('distance', layout.distance, layout.distanceFormat, TEXTURE_USAGE.copyDst);
         const probeData = arrayTexture('probe data', layout.probeData, PROBE_DATA_FORMAT, TEXTURE_USAGE.copyDst);
         const pointsTexture = device.createTexture({ label: 'ddgi points', size: points, format: 'rgba32float', usage: atlasUsage | TEXTURE_USAGE.copyDst });
-        const uniforms = device.createBuffer({ label: 'ddgi uniforms', size: UNIFORM_BYTES, usage: BUFFER_USAGE.uniform | BUFFER_USAGE.copyDst });
-        // Written by the GPU scheduler.
-        const updateList = device.createBuffer({ label: 'ddgi update list', size: maxProbesPerFrame * 4, usage: BUFFER_USAGE.storage });
-        const scratchBuffer = device.createBuffer({ label: 'ddgi scratch', size: maxProbesPerFrame * scratch.strideWords * 4, usage: BUFFER_USAGE.storage });
-        const census = device.createBuffer({ label: 'ddgi census', size: CENSUS_WORDS * 4, usage: BUFFER_USAGE.storage | BUFFER_USAGE.copySrc | BUFFER_USAGE.copyDst });
         const movers = device.createBuffer({ label: 'ddgi movers', size: MOVER_TABLE_WORDS * 4, usage: BUFFER_USAGE.uniform | BUFFER_USAGE.copyDst });
+        // A row per volume, in priority order. The CPU writes the sampling parameters and the window (when a bias changes
+        // or a window moves); a camera-following volume's valid extent is copied in by ddgi/scroll (m3-moving.md §4.2).
+        const volumeTable = device.createTexture({
+            label: 'ddgi volume table',
+            size: { width: VOLUME_TABLE_TEXELS, height: volumePlan.volumes.length },
+            format: VOLUME_TABLE_FORMAT,
+            usage: TEXTURE_USAGE.textureBinding | TEXTURE_USAGE.storageBinding | TEXTURE_USAGE.copyDst | TEXTURE_USAGE.copySrc,
+        });
+        const composeWeights = composed ? device.createBuffer({ label: 'ddgi compose weights', size: COMPOSE_WEIGHTS_BYTES, usage: BUFFER_USAGE.uniform | BUFFER_USAGE.copyDst }) : null;
+        const sampler = device.createSampler({ label: 'ddgi atlases', magFilter: 'linear', minFilter: 'linear', addressModeU: 'clamp-to-edge', addressModeV: 'clamp-to-edge' });
+        const shared: SharedResources = {
+            layout,
+            scratch,
+            irradianceTexels,
+            distanceTexels,
+            reduction,
+            directLight,
+            directWorkList,
+            plan,
+            volumePlan,
+            irradiance,
+            composed,
+            composeWeights,
+            distance,
+            probeData,
+            volumeTable,
+            points: pointsTexture,
+            sampler,
+            movers,
+            traceKernel,
+            blendKernel,
+            writeKernel,
+            censusKernel,
+            markKernel,
+            markClockKernel,
+            scheduleKernels: { count: scheduleCount, select: scheduleSelect, write: scheduleWrite, fill: scheduleFill },
+            scrollKernels,
+            // Deferred: a DdgiTraceRound per round, each at a uniform-offset boundary for its dynamic offset.
+            traceRoundStride: Math.max(TRACE_ROUND_BYTES, device.limits.minUniformBufferOffsetAlignment),
+            sharedBytes:
+                fieldBytes(layout) +
+                (composeWeights?.size ?? 0) +
+                points.width * points.height * POINT_TEXEL_BYTES +
+                movers.size +
+                volumePlan.volumes.length * VOLUME_TABLE_TEXELS * VOLUME_TABLE_TEXEL_BYTES,
+        };
+        const kernels: VolumeKernels = {
+            propagation: { find: propagateFind, args: propagateArgs, propagate: propagatePropagate, write: propagateWrite },
+            compose: composeUpdated && composeListed && composeAll ? { updated: composeUpdated, listed: composeListed, all: composeAll } : null,
+        };
+        this.volumes = volumePlan.volumes.map((volume, index) =>
+            this.createVolumeResources(context, shared, kernels, volume, index, { maxProbesPerFrame: maxProbesPerFrame(volume.grid), propagationCapacity }),
+        );
+        // The table is written from the settings at the first frame (refreshVolumeTable), and here, whole, so it is
+        // complete before any: every row's valid extent too, which only ddgi/scroll changes after this.
+        this.volumeTableRows = new Float32Array(0);
+        this.unitSharer = new UnitSharer(this.volumes.map((volume) => volume.grid.probeCount));
+        this.refreshVolumeTable(context, true);
+        this.markFrames = 0;
+        this.latestMarkEntries = 0;
+        this.clockSeconds = 0;
+        this.historyClearPending = false;
+        this.movers.clear();
+        // The composed atlas starts empty: the first frame composes every tile, with the weights as they are then.
+        this.layerWeights.fill(Number.NaN);
+        this.composeAllPending = composed !== null;
+        this.fullComposeFrames = 0;
+        // The field is new, so the sun layer holds nothing yet to be wrong about.
+        this.sunInLayer = context.scene.firstDirectionalLight?.light ?? null;
+        this.staleMarkPending = false;
+        this.loadedChangesPending = false;
+        this.fieldsLoaded = 0;
+        this.latestLoadStale = false;
+        this.startWarmUp();
+        this.markAllNotUpdated();
+    }
+
+    /**
+     * One volume's own buffers and bind groups (volumes.ts): its uniforms,
+     * update list, scratch, history, scheduler, census, propagation, ray
+     * scratch and mark table, bound with the shared atlases and kernels.
+     * Volume 0's labels are the single volume's; the others' say which.
+     */
+    private createVolumeResources(
+        context: TechniqueContext,
+        shared: SharedResources,
+        kernels: VolumeKernels,
+        volume: PlacedVolume,
+        index: number,
+        sizes: { readonly maxProbesPerFrame: number; readonly propagationCapacity: number },
+    ): PreparedResources {
+        const device = context.device;
+        const { grid } = volume;
+        const { maxProbesPerFrame, propagationCapacity } = sizes;
+        const { irradianceTexels, scratch, irradiance, distance, probeData, sampler } = shared;
+        const layerCount = shared.plan.layers.length;
+        const label = (what: string): string => (index === 0 ? `ddgi ${what}` : `ddgi ${what} (volume ${index})`);
+
+        const uniforms = device.createBuffer({ label: label('uniforms'), size: UNIFORM_BYTES, usage: BUFFER_USAGE.uniform | BUFFER_USAGE.copyDst });
+        // Written by the GPU scheduler.
+        const updateList = device.createBuffer({ label: label('update list'), size: maxProbesPerFrame * 4, usage: BUFFER_USAGE.storage });
+        const scratchBuffer = device.createBuffer({ label: label('scratch'), size: maxProbesPerFrame * scratch.strideWords * 4, usage: BUFFER_USAGE.storage });
+        const census = device.createBuffer({ label: label('census'), size: CENSUS_WORDS * 4, usage: BUFFER_USAGE.storage | BUFFER_USAGE.copySrc | BUFFER_USAGE.copyDst });
         // Starts at zero (WebGPU clears new buffers): no probe remembers anything yet.
         // COPY_SRC so debug tools and tests can copy it out (DDGIField.probeHistory).
-        const probeHistory = device.createBuffer({ label: 'ddgi probe history', size: grid.probeCount * PROBE_HISTORY_BYTES, usage: BUFFER_USAGE.storage | BUFFER_USAGE.copySrc | BUFFER_USAGE.copyDst });
+        const probeHistory = device.createBuffer({ label: label('probe history'), size: grid.probeCount * PROBE_HISTORY_BYTES, usage: BUFFER_USAGE.storage | BUFFER_USAGE.copySrc | BUFFER_USAGE.copyDst });
         // The scheduler's cursor starts at the order's first entry (probe 0) and every count at 0: new buffers are zero.
-        const scheduleState = device.createBuffer({ label: 'ddgi schedule state', size: SCHEDULE_STATE_WORDS * 4, usage: BUFFER_USAGE.storage | BUFFER_USAGE.copySrc | BUFFER_USAGE.copyDst });
-        const feedbackRequests = device.createBuffer({ label: 'ddgi feedback requests', size: grid.probeCount * 4, usage: BUFFER_USAGE.storage | BUFFER_USAGE.copyDst });
+        const scheduleState = device.createBuffer({ label: label('schedule state'), size: SCHEDULE_STATE_WORDS * 4, usage: BUFFER_USAGE.storage | BUFFER_USAGE.copySrc | BUFFER_USAGE.copyDst });
+        const feedbackRequests = device.createBuffer({ label: label('feedback requests'), size: grid.probeCount * 4, usage: BUFFER_USAGE.storage | BUFFER_USAGE.copyDst });
         // Propagation (T2.4c): a key-delta entry per update-list slot, the list of fine probes, its scratch and its length.
-        const keyDeltas = device.createBuffer({ label: 'ddgi key deltas', size: maxProbesPerFrame * keyDeltaStrideWords(irradianceTexels, layerCount) * 4, usage: BUFFER_USAGE.storage });
-        const propagationList = device.createBuffer({ label: 'ddgi propagation list', size: propagationCapacity * 4, usage: BUFFER_USAGE.storage });
+        const keyDeltas = device.createBuffer({ label: label('key deltas'), size: maxProbesPerFrame * keyDeltaStrideWords(irradianceTexels, layerCount) * 4, usage: BUFFER_USAGE.storage });
+        const propagationList = device.createBuffer({ label: label('propagation list'), size: propagationCapacity * 4, usage: BUFFER_USAGE.storage });
         const propagationScratch = device.createBuffer({
-            label: 'ddgi propagation scratch',
+            label: label('propagation scratch'),
             size: propagationCapacity * propagationScratchStrideWords(irradianceTexels, layerCount) * 4,
             usage: BUFFER_USAGE.storage,
         });
         const propagationState = device.createBuffer({
-            label: 'ddgi propagation state',
+            label: label('propagation state'),
             size: PROPAGATION_STATE_WORDS * 4,
             usage: BUFFER_USAGE.storage | BUFFER_USAGE.copyDst | BUFFER_USAGE.copySrc,
         });
-        const censusStaging = Array.from({ length: CENSUS_STAGING_BUFFERS }, (_, index) => ({
-            buffer: device.createBuffer({ label: `ddgi census readback ${index}`, size: CENSUS_WORDS * 4, usage: BUFFER_USAGE.mapRead | BUFFER_USAGE.copyDst }),
+        const censusStaging = Array.from({ length: CENSUS_STAGING_BUFFERS }, (_, stagingIndex) => ({
+            buffer: device.createBuffer({ label: label(`census readback ${stagingIndex}`), size: CENSUS_WORDS * 4, usage: BUFFER_USAGE.mapRead | BUFFER_USAGE.copyDst }),
             state: 'free' as CensusStaging['state'],
             listedProbes: 0,
             frame: 0,
         }));
-        // Deferred: a DdgiTraceRound per round, each at a uniform-offset boundary for its dynamic offset.
-        const traceRoundStride = Math.max(TRACE_ROUND_BYTES, device.limits.minUniformBufferOffsetAlignment);
-        const traceRounds = directWorkList
-            ? device.createBuffer({ label: 'ddgi trace rounds', size: Math.ceil(maxProbesPerFrame / DIRECT_ROUND_PROBES) * traceRoundStride, usage: BUFFER_USAGE.uniform | BUFFER_USAGE.copyDst })
+        // Deferred: a DdgiTraceRound per round. Each volume has its own, because the rounds are written with
+        // queue.writeBuffer, which lands before the frame's commands run: a shared buffer would hold the last volume's.
+        const traceRounds = shared.directWorkList
+            ? device.createBuffer({ label: label('trace rounds'), size: Math.ceil(maxProbesPerFrame / DIRECT_ROUND_PROBES) * shared.traceRoundStride, usage: BUFFER_USAGE.uniform | BUFFER_USAGE.copyDst })
             : null;
-        const sampler = device.createSampler({ label: 'ddgi atlases', magFilter: 'linear', minFilter: 'linear', addressModeU: 'clamp-to-edge', addressModeV: 'clamp-to-edge' });
 
         // Array views explicitly: a one-layer texture's default view would be 2d, not 2d-array.
         const arrayView = (target: GPUTexture): GPUTextureView => target.createView({ dimension: '2d-array' });
         const writeGroup = device.createBindGroup({
             label: 'ddgi/write group 1',
-            layout: writeKernel.ownLayouts[0],
+            layout: shared.writeKernel.ownLayouts[0],
             entries: [
                 { binding: 0, resource: { buffer: uniforms } },
                 { binding: 1, resource: { buffer: updateList } },
@@ -846,12 +1207,12 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
                 { binding: 3, resource: arrayView(irradiance) },
                 { binding: 4, resource: arrayView(distance) },
                 { binding: 5, resource: arrayView(probeData) },
-                { binding: 6, resource: pointsTexture.createView() },
+                { binding: 6, resource: shared.points.createView() },
             ],
         });
         const censusGroup = device.createBindGroup({
             label: 'ddgi/census group 1',
-            layout: censusKernel.ownLayouts[0],
+            layout: shared.censusKernel.ownLayouts[0],
             entries: [
                 { binding: 0, resource: { buffer: uniforms } },
                 { binding: 1, resource: { buffer: census } },
@@ -861,7 +1222,7 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         // The four kernels' layouts are made from one descriptor, so one bind group fits them all.
         const scheduleGroup = device.createBindGroup({
             label: 'ddgi/schedule group 1',
-            layout: scheduleCount.ownLayouts[0],
+            layout: shared.scheduleKernels.count.ownLayouts[0],
             entries: [
                 { binding: 0, resource: { buffer: uniforms } },
                 { binding: 1, resource: { buffer: probeHistory } },
@@ -871,18 +1232,19 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
             ],
         });
 
+        const propagationKernels = kernels.propagation;
         const propagation: PropagationResources = {
-            findKernel: propagateFind,
-            argsKernel: propagateArgs,
-            propagateKernel: propagatePropagate,
-            writeKernel: propagateWrite,
+            findKernel: propagationKernels.find,
+            argsKernel: propagationKernels.args,
+            propagateKernel: propagationKernels.propagate,
+            writeKernel: propagationKernels.write,
             keyDeltas,
             list: propagationList,
             scratch: propagationScratch,
             state: propagationState,
             findGroup: device.createBindGroup({
                 label: 'ddgi/propagate-find group 1',
-                layout: propagateFind.ownLayouts[0],
+                layout: propagationKernels.find.ownLayouts[0],
                 entries: [
                     { binding: 0, resource: { buffer: uniforms } },
                     { binding: 1, resource: { buffer: probeHistory } },
@@ -894,12 +1256,12 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
             }),
             argsGroup: device.createBindGroup({
                 label: 'ddgi/propagate-args group 1',
-                layout: propagateArgs.ownLayouts[0],
+                layout: propagationKernels.args.ownLayouts[0],
                 entries: [{ binding: 3, resource: { buffer: propagationState } }],
             }),
             propagateGroup: device.createBindGroup({
                 label: 'ddgi/propagate group 1',
-                layout: propagatePropagate.ownLayouts[0],
+                layout: propagationKernels.propagate.ownLayouts[0],
                 entries: [
                     { binding: 0, resource: { buffer: uniforms } },
                     { binding: 1, resource: { buffer: probeHistory } },
@@ -916,7 +1278,7 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
             }),
             writeGroup: device.createBindGroup({
                 label: 'ddgi/propagate-write group 1',
-                layout: propagateWrite.ownLayouts[0],
+                layout: propagationKernels.write.ownLayouts[0],
                 entries: [
                     { binding: 0, resource: { buffer: uniforms } },
                     { binding: 1, resource: { buffer: propagationList } },
@@ -928,41 +1290,38 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         };
 
         let compose: ComposeResources | null = null;
-        if (composedIrradiance && composeUpdated && composeListed && composeAll) {
-            const weights = device.createBuffer({ label: 'ddgi compose weights', size: COMPOSE_WEIGHTS_BYTES, usage: BUFFER_USAGE.uniform | BUFFER_USAGE.copyDst });
-            const composeGroup = (label: string, list: GPUBuffer, listState: GPUBuffer): GPUBindGroup =>
+        const composeKernels = kernels.compose;
+        if (shared.composed && shared.composeWeights && composeKernels) {
+            const { composed, composeWeights } = shared;
+            const composeGroup = (groupLabel: string, list: GPUBuffer, listState: GPUBuffer): GPUBindGroup =>
                 device.createBindGroup({
-                    label,
-                    layout: composeUpdated.ownLayouts[0],
+                    label: groupLabel,
+                    layout: composeKernels.updated.ownLayouts[0],
                     entries: [
                         { binding: 0, resource: { buffer: uniforms } },
                         { binding: 1, resource: { buffer: list } },
                         { binding: 2, resource: { buffer: listState } },
                         { binding: 3, resource: arrayView(irradiance) },
-                        { binding: 4, resource: arrayView(composedIrradiance) },
-                        { binding: 5, resource: { buffer: weights } },
+                        { binding: 4, resource: arrayView(composed) },
+                        { binding: 5, resource: { buffer: composeWeights } },
                     ],
                 });
             compose = {
-                updatedKernel: composeUpdated,
-                listedKernel: composeListed,
-                allKernel: composeAll,
-                composed: composedIrradiance,
-                weights,
+                updatedKernel: composeKernels.updated,
+                listedKernel: composeKernels.listed,
+                allKernel: composeKernels.all,
                 // The update list's length is ddgi.updateCount; its state binding is unused (propagation's is bound to fill it).
                 updatedGroup: composeGroup('ddgi/compose group 1 (update list)', updateList, propagationState),
                 listedGroup: composeGroup('ddgi/compose group 1 (propagation list)', propagationList, propagationState),
             };
         }
 
-        const fixedBytes =
-            fieldBytes(layout) +
-            (compose?.weights.size ?? 0) +
-            points.width * points.height * POINT_TEXEL_BYTES +
+        const scroll = volume.followsCamera ? this.createScrollResources(device, shared, volume, index, { probeHistory, feedbackRequests }) : null;
+        const ownBytes =
+            (scroll ? scroll.uniforms.size + scroll.extent.size : 0) +
             UNIFORM_BYTES +
             updateList.size +
             scratchBuffer.size +
-            movers.size +
             probeHistory.size +
             scheduleState.size +
             feedbackRequests.size +
@@ -973,155 +1332,315 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
             propagationState.size +
             census.size * (1 + CENSUS_STAGING_BUFFERS);
         const partial = {
+            ...shared,
+            volume,
             grid,
-            layout,
-            scratch,
-            irradianceTexels,
-            distanceTexels,
             maxProbesPerFrame,
-            reduction,
-            directLight,
-            directWorkList,
-            plan,
-            irradiance,
             compose,
-            distance,
-            probeData,
-            points: pointsTexture,
-            sampler,
             uniforms,
             updateList,
             scratchBuffer,
             census,
-            movers,
             probeHistory,
             censusStaging,
-            traceKernel,
-            blendKernel,
-            writeKernel,
-            censusKernel,
-            markKernel,
-            markClockKernel,
             propagation,
-            scheduleKernels: { count: scheduleCount, select: scheduleSelect, write: scheduleWrite, fill: scheduleFill },
             scheduleGroup,
             scheduleState,
             feedbackRequests,
             writeGroup,
             censusGroup,
-            stride: scrambleStride(grid.probeCount),
             traceRounds,
-            traceRoundStride,
-            fixedBytes,
+            stride: scrambleStride(grid.probeCount),
+            ownBytes,
+            scroll,
+            state: {
+                latestCensus: null,
+                changeIntake: new ChangeIntakeBatch(),
+                probesUpdated: 0,
+                lastUpdateCount: 0,
+                warmUpProbeUpdates: 0,
+                sampleParameters: new Float32Array(VOLUME_SAMPLING_FLOATS),
+            },
         };
-        this.resources = {
+        return {
             ...partial,
             rays: this.createRayBuffer(context, partial, Math.min(INITIAL_RAY_CAPACITY, maxProbesPerFrame * 256), effectiveRaysPerProbe(this.settings.raysPerProbe)),
             mark: this.createMarkTable(device, partial, INITIAL_MARK_TABLE_BYTES),
         };
-        this.latestCensus = null;
-        this.changeIntake.reset();
-        this.probesUpdated = 0;
-        this.markFrames = 0;
-        this.latestMarkEntries = 0;
-        this.clockSeconds = 0;
-        this.lastUpdateCount = 0;
-        this.historyClearPending = false;
-        this.movers.clear();
-        // The composed atlas starts empty: the first frame composes every tile, with the weights as they are then.
-        this.layerWeights.fill(Number.NaN);
-        this.composeAllPending = compose !== null;
-        this.fullComposeFrames = 0;
-        // The field is new, so the sun layer holds nothing yet to be wrong about.
-        this.sunInLayer = context.scene.firstDirectionalLight?.light ?? null;
-        this.startWarmUp();
-        this.markAllNotUpdated();
+    }
+
+    /**
+     * A camera-following volume's `ddgi/scroll` buffers and bind groups
+     * (wgsl/scroll.ts). The valid extent starts as the window less a plane on
+     * each side, and the first frame sets it from the camera.
+     */
+    private createScrollResources(
+        device: GPUDevice,
+        shared: SharedResources,
+        volume: PlacedVolume,
+        row: number,
+        buffers: { readonly probeHistory: GPUBuffer; readonly feedbackRequests: GPUBuffer },
+    ): ScrollResources {
+        const kernels = shared.scrollKernels;
+        if (!kernels) throw new Error('@pmndrs/gi: a camera-following volume needs the ddgi/scroll kernels');
+        const window = new CameraWindow(volume.grid);
+        const label = `ddgi scroll (volume ${row})`;
+        const uniforms = device.createBuffer({ label: `${label} uniforms`, size: SCROLL_UNIFORM_BYTES, usage: BUFFER_USAGE.uniform | BUFFER_USAGE.copyDst });
+        const extent = device.createBuffer({ label: `${label} valid extent`, size: SCROLL_EXTENT_BYTES, usage: BUFFER_USAGE.storage | BUFFER_USAGE.copySrc | BUFFER_USAGE.copyDst });
+        const initial = window.initialExtent();
+        device.queue.writeBuffer(extent, 0, new Float32Array([...initial.min, 0, ...initial.max, 0]));
+        const arrayView = (target: GPUTexture): GPUTextureView => target.createView({ dimension: '2d-array' });
+        const resetGroup = device.createBindGroup({
+            label: 'ddgi/scroll-reset group 1',
+            layout: kernels.reset.ownLayouts[0],
+            entries: [
+                { binding: 0, resource: { buffer: uniforms } },
+                { binding: 1, resource: { buffer: buffers.probeHistory } },
+                { binding: 2, resource: { buffer: buffers.feedbackRequests } },
+                { binding: 3, resource: arrayView(shared.probeData) },
+                { binding: 4, resource: shared.points.createView() },
+            ],
+        });
+        const extentGroup = device.createBindGroup({
+            label: 'ddgi/scroll-extent group 1',
+            layout: kernels.extent.ownLayouts[0],
+            entries: [
+                { binding: 0, resource: { buffer: uniforms } },
+                { binding: 5, resource: arrayView(shared.probeData) },
+                { binding: 6, resource: { buffer: extent } },
+            ],
+        });
+        return { window, row, uniforms, extent, resetGroup, extentGroup, resetEverySlot: false, extentToTarget: true };
+    }
+
+    /**
+     * Each camera-following volume's window follows this frame's camera
+     * (scroll.ts): a move enters planes, which `ddgi/scroll` resets this
+     * frame. A teleport resets every slot and runs the warm-up again
+     * (m3-moving.md §4.2), as after a scene load.
+     */
+    private followCamera(frame: TechniqueFrame): Map<PreparedResources, WindowMove> {
+        const moves = new Map<PreparedResources, WindowMove>();
+        for (const volume of this.volumes) {
+            const scroll = volume.scroll;
+            if (!scroll) continue;
+            const move = scroll.window.follow(frame.camera.position);
+            if (move.teleport) {
+                scroll.resetEverySlot = true;
+                scroll.extentToTarget = true;
+                this.startWarmUp();
+            }
+            moves.set(volume, move);
+        }
+        return moves;
+    }
+
+    /**
+     * `ddgi/scroll` for one camera-following volume (wgsl/scroll.ts), one
+     * timed pass: the reset of the slots that entered (only in a frame where
+     * some did), then the valid extent; then the extent is copied into the
+     * volume's row of the table.
+     */
+    private encodeScroll(encoder: GPUCommandEncoder, context: TechniqueContext, resources: PreparedResources, move: WindowMove, frame: TechniqueFrame): void {
+        const scroll = resources.scroll;
+        const kernels = resources.scrollKernels;
+        if (!scroll || !kernels) return;
+        const { window } = scroll;
+        const grid = window.grid;
+        const targets = window.extentTargets(frame.camera.position);
+        const everySlot = scroll.resetEverySlot;
+        const data = this.scrollData;
+        const words = this.scrollWords;
+        data.fill(0);
+        data.set(window.windowOrigin, SCROLL_UNIFORM_WORD.origin);
+        data.set(grid.spacing, SCROLL_UNIFORM_WORD.spacing);
+        words.set(grid.counts, SCROLL_UNIFORM_WORD.counts);
+        words.set(window.window, SCROLL_UNIFORM_WORD.window);
+        words.set(move.moved, SCROLL_UNIFORM_WORD.moved);
+        data.set(targets.min, SCROLL_UNIFORM_WORD.targetMin);
+        data.set(targets.max, SCROLL_UNIFORM_WORD.targetMax);
+        data.set(window.coverageReach, SCROLL_UNIFORM_WORD.coverageReach);
+        words[SCROLL_UNIFORM_WORD.layerBase] = resources.volume.layerBase;
+        words[SCROLL_UNIFORM_WORD.probeBase] = resources.volume.probeBase;
+        words[SCROLL_UNIFORM_WORD.everySlotEnters] = everySlot ? 1 : 0;
+        words[SCROLL_UNIFORM_WORD.extentToTarget] = scroll.extentToTarget ? 1 : 0;
+        context.device.queue.writeBuffer(scroll.uniforms, 0, data);
+        scroll.resetEverySlot = false;
+        scroll.extentToTarget = false;
+
+        const pass = encoder.beginComputePass({ label: 'ddgi/scroll', timestampWrites: context.timer.computePass('ddgi/scroll') });
+        if (everySlot || move.probesEntering > 0) {
+            const groups = Math.ceil(grid.probeCount / SCROLL_WORKGROUP_SIZE);
+            const groupsX = Math.min(groups, context.device.limits.maxComputeWorkgroupsPerDimension);
+            kernels.reset.bind(pass);
+            pass.setBindGroup(1, scroll.resetGroup);
+            pass.dispatchWorkgroups(groupsX, Math.ceil(groups / groupsX));
+        }
+        kernels.extent.bind(pass);
+        pass.setBindGroup(1, scroll.extentGroup);
+        pass.dispatchWorkgroups(SCROLL_EXTENT_SIDES);
+        pass.end();
+        // The two extent texels of the volume's row. One row, so bytesPerRow only has to be a valid pitch.
+        encoder.copyBufferToTexture(
+            { buffer: scroll.extent, bytesPerRow: 256 },
+            { texture: resources.volumeTable, origin: { x: VOLUME_TABLE_TEXEL.validMin, y: scroll.row } },
+            { width: VOLUME_TABLE_TEXELS - VOLUME_TABLE_TEXEL.validMin, height: 1 },
+        );
     }
 
     /**
      * True from `prepare` (and `resetHistory`) until the warm-up is done: the
      * technique is waiting for the ray-tracing trees or making its warm-up
-     * passes, and ignores the frame's budget. The platform leaves these
+     * passes, and ignores the frame's budget. After `loadField`, true while
+     * it waits for the trees (no passes follow). The platform leaves these
      * frames out of the budget's calibration. Always false with
      * `warmUpPasses` 0.
      */
     get warmingUp(): boolean {
-        return this.resources !== null && this.warmUp.phase !== 'done';
+        if (this.firstVolume === null || this.warmUp.phase === 'done') return false;
+        // A loaded field is warm: it only waits for the trees, so the platform hands out probes in the frame they arrive.
+        if (this.warmUp.phase === 'loaded, waiting for trees') return this.context?.queries.rays.building ?? true;
+        return true;
     }
 
-    /** Records this frame's updates; returns the probes it updated (the units it used). */
+    /**
+     * Records this frame's updates; returns the probes it updated (the units
+     * it used). What is the technique's comes first, once a frame: the
+     * census read-backs, the warm-up, the clock, the hot movers, the sun
+     * layer, the volume table and the layer weights. Then each volume, in
+     * priority order, runs its own passes on its share of the frame's probes
+     * (`encodeVolume`).
+     */
     encode(encoder: GPUCommandEncoder, frame: TechniqueFrame): number {
-        const resources = this.resources;
+        const volumes = this.volumes;
+        const first = this.firstVolume;
         const context = this.context;
-        if (!resources || !context || this.disposed) return 0;
-        this.collectCensus(resources);
+        if (!first || !context || this.disposed) return 0;
+        for (const volume of volumes) this.collectCensus(volume);
 
-        const warming = this.advanceWarmUp(context, resources.grid.probeCount);
+        const warming = this.advanceWarmUp(context, first.volumePlan.probeCount);
         // Time passes whether or not this frame updates any probe; the warm-up's passes have no time between them.
         if (!warming) this.clockSeconds = (this.clockSeconds + clockStep(frame.deltaTime)) % CLOCK_WRAP_SECONDS;
-        const probeCount = resources.grid.probeCount;
         if (frame.deltaTime > 0 && Number.isFinite(frame.deltaTime)) {
             this.frameTimes.push(frame.deltaTime);
             if (this.frameTimes.length > SWEEP_FRAME_TIMES) this.frameTimes.shift();
         }
+        // After a load, this frame's changes are the loaded scene's own (loadedChangesPending): nothing to mark.
+        const changes = this.loadedChangesPending ? NO_CHANGES : frame.changes;
+        this.loadedChangesPending = false;
         // The hot movers follow this frame's moves first, so a mover's mask bit is known in the frame it moves.
-        this.movers.update(frame.changes, frame.frame);
+        this.movers.update(changes, frame.frame);
         if (this.movers.dirty) {
-            context.device.queue.writeBuffer(resources.movers, 0, this.movers.words);
+            context.device.queue.writeBuffer(first.movers, 0, this.movers.words);
             this.movers.dirty = false;
         }
         // The sun layer (T2.6b): the light it holds now, and the one it held last frame.
         const sun = context.scene.firstDirectionalLight;
-        const sunMarks = resources.plan.sunLayer >= 0 ? { sun: sun?.light ?? null, previousSun: this.sunInLayer } : null;
+        const sunMarks = first.plan.sunLayer >= 0 ? { sun: sun?.light ?? null, previousSun: this.sunInLayer } : null;
         this.sunInLayer = sun?.light ?? null;
+        // Camera-following volumes move their windows with this frame's camera (scroll.ts): before the table is written,
+        // and before any volume's passes, so this frame's kernels and renderers all see the moved windows.
+        const windowMoves = this.followCamera(frame);
+        // The biases are live settings, and renderers read them from the table; so are the windows.
+        this.refreshVolumeTable(context);
+        for (const [volume, move] of windowMoves) this.encodeScroll(encoder, context, volume, move, frame);
+        // Light groups and the sun layer: a weight changed since the last frame (or the composed atlas is new), so every
+        // tile is composed this frame. A change of the sun's colour or intensity is one, with a sun layer.
+        const composeAll = this.updateLayerWeights(context, first, sun?.descriptor ?? null);
+
+        // Each volume its floor and its share of the rest, so each is swept at the same rate (frameShares).
+        const shares = this.frameShares(frame.units);
+        const markStale = this.staleMarkPending && this.warmUp.phase === 'done' && shares.every((share) => share.units > 0);
+        const marks = { frames: 0, entries: 0 };
+        let used = 0;
+        volumes.forEach((volume, index) => {
+            const { units, floor } = shares[index];
+            used += this.encodeVolume(encoder, context, volume, frame, { changes, markStale, units, floor, sunMarks, sun: sun?.descriptor ?? null, composeAll, marks });
+        });
+        this.latestMarkEntries = marks.entries;
+        if (marks.frames > 0) this.markFrames++;
+        // Every volume has cleared its history by now, and marked a stale load's change if this frame was the one.
+        this.historyClearPending = false;
+        if (markStale) this.staleMarkPending = false;
+        if (this.warmUp.phase === 'warming') this.finishWarmUpPass(volumes);
+        return used;
+    }
+
+    /**
+     * One volume's frame: marks, the scheduler, then trace, blend, write,
+     * propagation, compose and census, on `units` probes of this volume (its
+     * share of the frame's). Returns the probes it updated.
+     */
+    private encodeVolume(
+        encoder: GPUCommandEncoder,
+        context: TechniqueContext,
+        resources: PreparedResources,
+        frame: TechniqueFrame,
+        shared: {
+            /** This frame's changes to mark (none in the frame after a load). */
+            readonly changes: SceneChanges;
+            /** Mark every probe as a whole change: the first updating frame after a stale load. */
+            readonly markStale: boolean;
+            readonly units: number;
+            /** Budget v2's floor for this volume: the batch while a change is taken in never goes under it. */
+            readonly floor: number;
+            readonly sunMarks: SunLayerMarks | null;
+            readonly sun: DirectionalLightDescriptor | null;
+            readonly composeAll: boolean;
+            /** Counted over the volumes for the counters: volumes that marked this frame, and their table entries. */
+            readonly marks: { frames: number; entries: number };
+        },
+    ): number {
+        const { state } = resources;
+        const { composeAll } = shared;
+        const probeCount = resources.grid.probeCount;
         // Marks land even in a frame that updates no probe: they wait in the
         // history for each probe's next update.
+        // In window probes: the kernel finds each one's slot (wgsl/mark.ts).
         const markTable =
-            this.settings.changeDrivenHistory !== false ? buildMarkTable(frame.changes, resources.grid, this.movers, resources.plan.groupLayers, sunMarks) : null;
-        this.latestMarkEntries = markTable?.entryCount ?? 0;
-        this.changeIntake.noteFrame(frame.frame, markTable !== null);
+            this.settings.changeDrivenHistory !== false
+                ? buildMarkTable(shared.changes, windowGrid(resources), this.movers, resources.plan.groupLayers, shared.sunMarks, shared.markStale)
+                : null;
+        shared.marks.entries += markTable?.entryCount ?? 0;
+        state.changeIntake.noteFrame(frame.frame, markTable !== null);
         const raysPerProbe = effectiveRaysPerProbe(this.settings.raysPerProbe);
         // No probe updates twice in a frame. While warming: a full batch, or none while the trees are built.
         // While a change is taken in, fewer than the hand-out, so the list costs what the calibrated batch does (change-intake-batch.ts).
         // Whether a single change counts is the volume's rule at the hand-out, not at the smaller batch.
-        const offered = Math.min(frame.units, resources.maxProbesPerFrame, probeCount);
+        const offered = Math.min(shared.units, resources.maxProbesPerFrame, probeCount);
         const handOut =
             this.warmUp.phase === 'warming'
                 ? resources.maxProbesPerFrame
-                : this.warmUp.phase === 'waiting for trees'
+                : this.warmUp.phase === 'waiting for trees' || this.warmUp.phase === 'loaded, waiting for trees'
                   ? 0
-                  : this.changeIntake.batchFor(
+                  : state.changeIntake.batchFor(
                         offered,
                         { full: raysPerProbe, fixed: FIXED_RAYS },
                         changeServing(resources.grid, offered, this.settings).changeOutlastsWindow,
-                        this.floorUnits(offered, probeCount, resources.maxProbesPerFrame),
+                        shared.floor,
                     );
         const count = Math.max(0, Math.min(Number.isNaN(handOut) ? 0 : Math.floor(handOut), resources.maxProbesPerFrame, probeCount));
-        this.probesUpdated = count;
-        if (count > 0) this.lastUpdateCount = count;
-        // Light groups and the sun layer: a weight changed since the last frame (or the composed atlas is new), so every
-        // tile is composed this frame. A change of the sun's colour or intensity is one, with a sun layer.
-        const composeAll = this.updateLayerWeights(context, resources, sun?.descriptor ?? null);
+        state.probesUpdated = count;
+        if (count > 0) state.lastUpdateCount = count;
         if (count === 0 && !markTable && !this.historyClearPending && !composeAll) return 0;
         const device = context.device;
         const maxPerDimension = device.limits.maxComputeWorkgroupsPerDimension;
 
-        this.writeUniforms(resources, frame, count, raysPerProbe, sun?.descriptor ?? null);
+        this.writeUniforms(resources, frame, count, raysPerProbe, shared.sun);
         device.queue.writeBuffer(resources.uniforms, 0, this.uniformData);
         if (this.historyClearPending) {
             // resetHistory: every probe starts again with nothing owed, cut or asked for.
             encoder.clearBuffer(resources.probeHistory);
             encoder.clearBuffer(resources.feedbackRequests);
-            this.historyClearPending = false;
         }
         // The census buffer gathers this frame's marks (ddgi/mark), rays traced and feedback (ddgi/blend); the running totals stay.
         encoder.clearBuffer(resources.census, 0, CENSUS_PER_FRAME_WORDS * 4);
         if (markTable) {
             this.encodeMark(encoder, context, resources, markTable, maxPerDimension);
-            this.markFrames++;
+            shared.marks.frames++;
         }
         if (count > 0) this.encodeSchedule(encoder, context, resources, maxPerDimension);
-        if (this.warmUp.phase === 'warming') this.finishWarmUpPass(resources, count);
+        if (this.warmUp.phase === 'warming') state.warmUpProbeUpdates += count;
         if (count === 0) {
             if (composeAll) this.encodeCompose(encoder, context, resources, 0, false, true, maxPerDimension);
             return 0;
@@ -1179,11 +1698,11 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
      * layer's weight is the sun's colour × intensity now (light-groups.ts).
      */
     private updateLayerWeights(context: TechniqueContext, resources: PreparedResources, sun: DirectionalLightDescriptor | null): boolean {
-        const compose = resources.compose;
-        if (!compose) return false;
+        const weights = resources.composeWeights;
+        if (!weights) return false;
         const sunWeight = sunLayerWeight(resources.plan, this.settings.lightGroups, sun);
         const changed = writeLayerWeights(resources.plan, this.settings.lightGroups, this.layerWeights, sunWeight);
-        if (changed) context.device.queue.writeBuffer(compose.weights, 0, this.layerWeights);
+        if (changed) context.device.queue.writeBuffer(weights, 0, this.layerWeights);
         const composeAll = changed || this.composeAllPending;
         this.composeAllPending = false;
         if (composeAll) this.fullComposeFrames++;
@@ -1240,8 +1759,8 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
      */
     setGroupWeight(group: number, weight: ColorRGB): void {
         const lightGroups = this.settings.lightGroups;
-        if (!lightGroups) throw new Error('@pmndrs/ddgi: light groups are off; set settings.lightGroups (and prepare) before setting a group weight');
-        if (!Number.isInteger(group) || group < 0 || group >= MAX_LIGHT_GROUPS) throw new RangeError(`@pmndrs/ddgi: light groups are 0 to ${MAX_LIGHT_GROUPS - 1}, got ${group}`);
+        if (!lightGroups) throw new Error('@pmndrs/gi: light groups are off; set settings.lightGroups (and prepare) before setting a group weight');
+        if (!Number.isInteger(group) || group < 0 || group >= MAX_LIGHT_GROUPS) throw new RangeError(`@pmndrs/gi: light groups are 0 to ${MAX_LIGHT_GROUPS - 1}, got ${group}`);
         while (lightGroups.weights.length <= group) lightGroups.weights.push([1, 1, 1]);
         lightGroups.weights[group] = [weight[0], weight[1], weight[2]];
     }
@@ -1249,7 +1768,7 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
     /** Sets the environment layer's weight (the sky and emissive surfaces), as {@link setGroupWeight}. */
     setEnvironmentWeight(weight: ColorRGB): void {
         const lightGroups = this.settings.lightGroups;
-        if (!lightGroups) throw new Error('@pmndrs/ddgi: light groups are off; set settings.lightGroups (and prepare) before setting the environment weight');
+        if (!lightGroups) throw new Error('@pmndrs/gi: light groups are off; set settings.lightGroups (and prepare) before setting the environment weight');
         lightGroups.environmentWeight = [weight[0], weight[1], weight[2]];
     }
 
@@ -1262,7 +1781,7 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
      */
     private encodeDeferredTrace(encoder: GPUCommandEncoder, context: TechniqueContext, resources: PreparedResources, count: number, raysPerProbe: number, frameNumber: number): void {
         const traceRounds = resources.traceRounds;
-        if (!traceRounds) throw new Error('@pmndrs/ddgi: the deferred trace has no rounds buffer');
+        if (!traceRounds) throw new Error('@pmndrs/gi: the deferred trace has no rounds buffer');
         const stride = resources.traceRoundStride;
         const rounds = Math.ceil(count / DIRECT_ROUND_PROBES);
         const words = new Uint32Array((rounds * stride) / 4);
@@ -1348,7 +1867,8 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
     /** A new warm-up (after `prepare` and `resetHistory`), or none with `warmUpPasses` 0. */
     private startWarmUp(): void {
         const passes = warmUpSettings(this.settings).passes;
-        this.warmUp = { phase: passes > 0 ? 'waiting for trees' : 'done', probeUpdates: 0, startedAt: null };
+        this.warmUp = { phase: passes > 0 ? 'waiting for trees' : 'done', startedAt: null };
+        for (const volume of this.volumes) volume.state.warmUpProbeUpdates = 0;
     }
 
     /**
@@ -1359,6 +1879,13 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
     private advanceWarmUp(context: TechniqueContext, probeCount: number): boolean {
         const warmUp = this.warmUp;
         if (warmUp.phase === 'done') return false;
+        // A loaded field waits for the trees whatever warmUpPasses says (rays through a half-built scene would
+        // spoil it), then carries on without warm-up passes.
+        if (warmUp.phase === 'loaded, waiting for trees') {
+            if (context.queries.rays.building) return true;
+            warmUp.phase = 'done';
+            return false;
+        }
         // Nothing to warm (no probes), or switched off meanwhile.
         if (warmUpSettings(this.settings).passes <= 0 || probeCount <= 0) {
             warmUp.phase = 'done';
@@ -1371,37 +1898,51 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         return true;
     }
 
-    /** Counts a warm-up frame's probes; ends the warm-up after its passes, or after its time once the fewest passes are made. */
-    private finishWarmUpPass(resources: PreparedResources, count: number): void {
+    /**
+     * After a warm-up frame (each volume has counted its probes): ends the
+     * warm-up once every volume has made its passes, or after its time once
+     * every volume has made the fewest.
+     */
+    private finishWarmUpPass(volumes: readonly PreparedResources[]): void {
         const warmUp = this.warmUp;
-        warmUp.probeUpdates += count;
         const settings = warmUpSettings(this.settings);
-        const passes = warmUp.probeUpdates / resources.grid.probeCount;
+        const passes = warmUpPassesMade(volumes);
         const elapsedSeconds = warmUp.startedAt === null ? 0 : (performance.now() - warmUp.startedAt) / 1000;
         if (passes >= settings.passes || (elapsedSeconds > settings.maxSeconds && passes >= settings.minPasses)) warmUp.phase = 'done';
     }
 
-    /** Full passes over every probe the warm-up has made (fractional while one is under way). */
+    /** Full passes over every probe the warm-up has made (fractional while one is under way): the fewest over the volumes. */
     private get warmUpPasses(): number {
-        const probeCount = this.resources?.grid.probeCount ?? 0;
-        return probeCount > 0 ? this.warmUp.probeUpdates / probeCount : 0;
+        return warmUpPassesMade(this.volumes);
     }
 
     /** The field's textures and sampling parameters; null before `prepare`. */
     get field(): DDGIField | null {
-        const resources = this.resources;
-        if (!resources) return null;
-        this.refreshSampleParameters(resources);
+        const first = this.firstVolume;
+        if (!first) return null;
+        const volumes = this.volumes.map((volume): DDGIFieldVolume => ({
+            grid: volume.grid,
+            priority: volume.volume.priority,
+            layerBase: volume.volume.layerBase,
+            probeBase: volume.volume.probeBase,
+            sampleParameters: this.volumeParameters(volume),
+            probeHistory: volume.probeHistory,
+            followsCamera: volume.scroll !== null,
+            window: volume.scroll?.window.window ?? [0, 0, 0],
+            validExtent: volume.scroll?.extent ?? null,
+        }));
         return {
-            grid: resources.grid,
-            layout: resources.layout,
-            irradiance: resources.compose?.composed ?? resources.irradiance,
-            layeredIrradiance: resources.irradiance,
-            layers: resources.plan,
-            distance: resources.distance,
-            probeData: resources.probeData,
-            sampleParameters: this.parameterView,
-            probeHistory: resources.probeHistory,
+            grid: first.grid,
+            volumes,
+            volumeTable: first.volumeTable,
+            layout: first.layout,
+            irradiance: first.composed ?? first.irradiance,
+            layeredIrradiance: first.irradiance,
+            layers: first.plan,
+            distance: first.distance,
+            probeData: first.probeData,
+            sampleParameters: volumes[0].sampleParameters,
+            probeHistory: first.probeHistory,
         };
     }
 
@@ -1425,27 +1966,48 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
      * volume's "change clock" need the GPU census, which runs only when the
      * platform times passes (`gpuTiming`), and arrive a few frames late;
      * without them those counters are absent, not guessed.
+     *
+     * With several volumes, counts are summed over them ("volumes" says how
+     * many), "taking in a change" is 1 while any volume is, and each volume's
+     * change clock is reported as well ("change clock (volume i)", in
+     * priority order) beside their sum ("change clock", modulo 2^32 as the
+     * clocks wrap).
      */
     get counters(): Readonly<Record<string, number>> {
-        const census = this.latestCensus;
+        const volumes = this.volumes;
+        const first = this.firstVolume;
+        const census = summedCensus(volumes);
         const sweep = this.sweepSeconds();
         const updates: Record<string, number> = {
-            'probes updated': this.probesUpdated,
+            'volumes': volumes.length,
+            'probes updated': volumes.reduce((sum, volume) => sum + volume.state.probesUpdated, 0),
             'frames with changes marked': this.markFrames,
             'changes marked this frame': this.latestMarkEntries,
             'warming up': this.warmingUp ? 1 : 0,
             'warm-up passes': this.warmUpPasses,
-            'key probes': this.resources ? keyProbeCount(this.resources.grid.counts) : 0,
+            'key probes': volumes.reduce((sum, volume) => sum + keyProbeCount(volume.grid.counts), 0),
             // Light groups (T2.5): the irradiance layers (1 with groups off), and the frames that composed every tile.
-            'irradiance layers': this.resources?.plan.layers.length ?? 0,
+            'irradiance layers': first?.plan.layers.length ?? 0,
             // The sun layer (T2.6b): 1 when the sun has a layer of its own.
-            'sun layer': (this.resources?.plan.sunLayer ?? -1) >= 0 ? 1 : 0,
+            'sun layer': (first?.plan.sunLayer ?? -1) >= 0 ? 1 : 0,
             'frames composed in full': this.fullComposeFrames,
+            // Saved bakes (T5.2, saved-field.ts): fields loaded since prepare, and 1 when the latest was stale.
+            'saved fields loaded': this.fieldsLoaded,
+            'saved field stale': this.latestLoadStale ? 1 : 0,
             // §4.5's second count (change-intake-batch.ts): 1 while a change is taken in, when the batch may be under the hand-out.
-            'taking in a change': this.changeIntake.takingInChange ? 1 : 0,
+            'taking in a change': volumes.some((volume) => volume.state.changeIntake.takingInChange) ? 1 : 0,
         };
         if (sweep !== undefined) updates['seconds per full sweep'] = sweep;
-        if (!census) return updates;
+        // Camera-following volumes (scroll.ts), summed over them: frames their windows moved in, planes and probes
+        // cleared, and teleports, since prepare.
+        const windows = volumes.flatMap((volume) => (volume.scroll ? [volume.scroll.window] : []));
+        if (windows.length > 0) {
+            updates['window moves'] = windows.reduce((sum, window) => sum + window.moves, 0);
+            updates['planes cleared (total)'] = windows.reduce((sum, window) => sum + window.planesCleared, 0);
+            updates['probes cleared (total)'] = windows.reduce((sum, window) => sum + window.probesCleared, 0);
+            updates['teleports'] = windows.reduce((sum, window) => sum + window.teleports, 0);
+        }
+        if (!census || !first?.state.latestCensus) return updates;
         return {
             ...updates,
             'probes marked': census[CENSUS_PROBES_MARKED],
@@ -1459,9 +2021,11 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
             'key changes passed (total)': census[CENSUS_KEY_CHANGES_PASSED_TOTAL],
             'probes propagated': census[CENSUS_PROBES_PROPAGATED],
             'probes propagated (total)': census[CENSUS_PROBES_PROPAGATED_TOTAL],
+            // Each volume has a clock of its own: their sum (one volume's own with one), and each beside it with several.
             'change clock': census[CENSUS_CHANGE_CLOCK],
+            ...(volumes.length > 1 ? Object.fromEntries(volumes.map((volume, index) => [`change clock (volume ${index})`, volume.state.latestCensus?.[CENSUS_CHANGE_CLOCK] ?? 0])) : {}),
             'rays traced': census[CENSUS_RAYS_TRACED],
-            ...(this.resources?.directWorkList
+            ...(first.directWorkList
                 ? { 'hits lit by gi/direct': census[CENSUS_DIRECT_HITS], 'hits that did not fit gi/direct\'s list': census[CENSUS_DIRECT_DROPPED] }
                 : {}),
             'probes active': census[PROBE_STATE.active],
@@ -1479,21 +2043,71 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
     minUnitsPerFrame(rate: WorkFloorRate): number {
         // Kept for the batch while a change is taken in, which must not go under this floor either.
         this.platformFloorRate = rate;
-        const resources = this.resources;
-        if (!resources) return 0;
-        return minProbesPerFrame(this.settings.minProbesPerFrame, resources.grid.probeCount, resources.maxProbesPerFrame, rate);
+        const volumes = this.volumes;
+        if (volumes.length === 0) return 0;
+        // With several volumes, each has its own floor (volumes.ts, volumeFloorUnits), and the technique's is their sum.
+        return this.volumeFloors(rate).reduce((sum, floor) => sum + floor, 0);
     }
 
     /**
-     * Budget v2's floor for this frame's batch: at the frame rate and
-     * calibration the platform last asked about, or, when the host hands out
-     * units itself (no millisecond budget, so the platform never asks), at
-     * the observed frame rate (60 until known) with the hand-out standing in
-     * for the calibrated batch.
+     * Budget v2's floor for each volume at `rate`. One volume: the
+     * technique's floor, as before volumes. Several: each its own
+     * (`volumeFloorUnits`), so a small volume beside a big one is still swept
+     * within FLOOR_SWEEP_SECONDS and never gets 0 probes a frame. A
+     * camera-following volume adds the warming updates its entering planes
+     * have owed lately (scroll.ts, `warmingDemand`).
      */
-    private floorUnits(handOut: number, probeCount: number, maxProbesPerFrame: number): number {
-        const rate = this.platformFloorRate ?? { framesPerSecond: this.observedFramesPerSecond() ?? FLOOR_ASSUMED_FRAMES_PER_SECOND, calibratedUnits: handOut };
-        return minProbesPerFrame(this.settings.minProbesPerFrame, probeCount, maxProbesPerFrame, rate);
+    private volumeFloors(rate: { readonly framesPerSecond: number; readonly calibratedUnits: number }): number[] {
+        const volumes = this.volumes;
+        const setting = this.settings.minProbesPerFrame;
+        const total = totalProbes(volumes);
+        return volumes.map((volume) => {
+            const floor =
+                volumes.length === 1
+                    ? minProbesPerFrame(setting, volume.grid.probeCount, volume.maxProbesPerFrame, rate)
+                    : volumeFloorUnits(setting, { probeCount: volume.grid.probeCount, maxProbesPerFrame: volume.maxProbesPerFrame }, total, rate);
+            // A camera-following volume's entering planes owe their warming updates on top (scroll.ts,
+            // WARMING_DEMAND_FRAMES): served from the whole frame's probes, as the floor is.
+            const warming = volume.scroll ? Math.ceil(volume.scroll.window.warmingDemand) : 0;
+            return Math.min(volume.maxProbesPerFrame, floor + warming);
+        });
+    }
+
+    /**
+     * The rate Budget v2's floor is worked out at this frame: the one the
+     * platform last asked about, or, when the host hands out units itself
+     * (no millisecond budget, so the platform never asks), the observed frame
+     * rate (60 until known) with the hand-out standing in for the calibrated
+     * batch.
+     */
+    private floorRate(handOut: number): { readonly framesPerSecond: number; readonly calibratedUnits: number } {
+        return this.platformFloorRate ?? { framesPerSecond: this.observedFramesPerSecond() ?? FLOOR_ASSUMED_FRAMES_PER_SECOND, calibratedUnits: handOut };
+    }
+
+    /**
+     * This frame's probes for each volume, and each volume's floor (for the
+     * batch while a change is taken in). One volume takes the hand-out as it
+     * comes, as before volumes. Several: each gets its floor first, and the
+     * rest of the hand-out is shared by probe count with the fractions
+     * carried over frames (`UnitSharer`), so no volume is starved however
+     * small its share; when the floors add up to more than the hand-out,
+     * the floors win, as Budget v2's floor wins over the millisecond ceiling.
+     */
+    private frameShares(units: number): { readonly units: number; readonly floor: number }[] {
+        const volumes = this.volumes;
+        const maxTotal = totalMaxProbesPerFrame(volumes);
+        const probeCount = totalProbes(volumes);
+        if (volumes.length === 1) {
+            const offered = Math.min(units, volumes[0].maxProbesPerFrame, probeCount);
+            const floor = this.volumeFloors(this.floorRate(offered))[0];
+            // A camera-following volume's warming is owed whatever the host hands out (as several volumes' floors are).
+            return [{ units: volumes[0].scroll ? Math.max(units, floor) : units, floor }];
+        }
+        const floors = this.volumeFloors(this.floorRate(Math.min(units, maxTotal, probeCount)));
+        if (units === Number.POSITIVE_INFINITY) return floors.map((floor) => ({ units, floor }));
+        const rest = Math.max(0, (Number.isFinite(units) ? units : 0) - floors.reduce((sum, floor) => sum + floor, 0));
+        const shares = this.unitSharer.share(rest);
+        return floors.map((floor, index) => ({ units: floor + shares[index], floor }));
     }
 
     /** The frame rate from the recent frames' median `deltaTime`; undefined before any. */
@@ -1510,16 +2124,23 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
      * with a time, or with no probes updated.
      */
     private sweepSeconds(): number | undefined {
-        const probeCount = this.resources?.grid.probeCount ?? 0;
-        if (this.probesUpdated <= 0 || probeCount <= 0 || this.frameTimes.length === 0) return undefined;
+        const volumes = this.volumes;
+        if (volumes.length === 0 || this.frameTimes.length === 0) return undefined;
+        // The slowest volume's sweep (the batch is shared so they sweep at about the same rate).
+        let frames = 0;
+        for (const volume of volumes) {
+            if (volume.state.probesUpdated <= 0 || volume.grid.probeCount <= 0) return undefined;
+            frames = Math.max(frames, Math.ceil(volume.grid.probeCount / volume.state.probesUpdated));
+        }
         const sorted = [...this.frameTimes].sort((a, b) => a - b);
         const frameSeconds = sorted[Math.floor(sorted.length / 2)];
-        return Math.ceil(probeCount / this.probesUpdated) * frameSeconds;
+        return frames * frameSeconds;
     }
 
     get memoryBytes(): number {
-        const resources = this.resources;
-        return resources ? resources.fixedBytes + resources.rays.scratch.bytes : 0;
+        const first = this.firstVolume;
+        if (!first) return 0;
+        return first.sharedBytes + this.volumes.reduce((sum, volume) => sum + volume.ownBytes + volume.rays.scratch.bytes, 0);
     }
 
     /**
@@ -1531,12 +2152,216 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
      * cursor carries on.
      */
     resetHistory(): void {
-        if (!this.resources) return;
+        if (!this.firstVolume) return;
         this.historyClearPending = true;
         this.movers.clear();
-        this.changeIntake.reset();
+        for (const volume of this.volumes) {
+            volume.state.changeIntake.reset();
+            // Every probe is cold again: the valid extent takes its targets at the next frame (the warm-up covers it).
+            if (volume.scroll) volume.scroll.extentToTarget = true;
+        }
         this.startWarmUp();
         this.markAllNotUpdated();
+    }
+
+    /**
+     * Saves the field as a `.ddgibake` file (saved-field.ts): the irradiance
+     * atlas with every layer, the distance atlas, the probe data and each
+     * volume's probe history, with a header that says what layout it needs
+     * and which scene it was baked for (`SceneCopy.fingerprint`). Copies the
+     * sections out and reads them back once, in a submit of its own: an
+     * explicit host call, never part of a frame. Save a converged field
+     * (after the warm-up); what a change still being taken in owes is left
+     * out (`settleProbeHistory`).
+     */
+    async saveField(): Promise<Uint8Array<ArrayBuffer>> {
+        const first = this.firstVolume;
+        const context = this.context;
+        if (!first || !context || this.disposed) throw new Error('@pmndrs/gi: save the field after prepare (await gi.prepare()), and before dispose');
+        const device = context.device;
+        const fingerprint = context.scene.fingerprint();
+        const staging: GPUBuffer[] = [];
+        const stagingBuffer = (label: string, size: number): GPUBuffer => {
+            const buffer = device.createBuffer({ label: `ddgi save field: ${label}`, size: alignUp(size, 4), usage: BUFFER_USAGE.mapRead | BUFFER_USAGE.copyDst });
+            staging.push(buffer);
+            return buffer;
+        };
+        const encoder = device.createCommandEncoder({ label: 'ddgi save field' });
+        // A texture's rows come back at a 256-byte pitch (NOTES, "Readback"); the file holds them packed.
+        const readAtlas = (label: string, texture: GPUTexture, size: AtlasSize, bytesPerTexel: number) => {
+            const rowBytes = size.width * bytesPerTexel;
+            const paddedRowBytes = alignUp(rowBytes, 256);
+            const buffer = stagingBuffer(label, paddedRowBytes * size.height * size.layers);
+            encoder.copyTextureToBuffer({ texture }, { buffer, bytesPerRow: paddedRowBytes, rowsPerImage: size.height }, { width: size.width, height: size.height, depthOrArrayLayers: size.layers });
+            return { buffer, rowBytes, paddedRowBytes, rows: size.height * size.layers, size };
+        };
+        const { layout } = first;
+        const atlases = {
+            irradiance: readAtlas('irradiance', first.irradiance, layout.layeredIrradiance, PROBE_DATA_TEXEL_BYTES),
+            distance: readAtlas('distance', first.distance, layout.distance, BYTES_PER_TEXEL[layout.distanceFormat]),
+            probeData: readAtlas('probe data', first.probeData, layout.probeData, PROBE_DATA_TEXEL_BYTES),
+        };
+        const histories = this.volumes.map((volume, index) => {
+            const buffer = stagingBuffer(`probe history ${index}`, volume.probeHistory.size);
+            encoder.copyBufferToBuffer(volume.probeHistory, 0, buffer, 0, volume.probeHistory.size);
+            return buffer;
+        });
+        const extents = this.volumes.map((volume, index) => {
+            if (!volume.scroll) return null;
+            const buffer = stagingBuffer(`valid extent ${index}`, SCROLL_EXTENT_BYTES);
+            encoder.copyBufferToBuffer(volume.scroll.extent, 0, buffer, 0, SCROLL_EXTENT_BYTES);
+            return buffer;
+        });
+        device.queue.submit([encoder.finish()]);
+        try {
+            await Promise.all(staging.map((buffer) => buffer.mapAsync(MAP_MODE_READ)));
+            const mapped = (buffer: GPUBuffer): FileBytes => new Uint8Array(buffer.getMappedRange().slice(0));
+            const atlasSection = (name: string, format: string, atlas: (typeof atlases)['irradiance']): SectionData => ({
+                name,
+                format,
+                width: atlas.size.width,
+                height: atlas.size.height,
+                layers: atlas.size.layers,
+                bytes: unpadRows(mapped(atlas.buffer), atlas.rowBytes, atlas.paddedRowBytes, atlas.rows),
+            });
+            const sections: SectionData[] = [
+                atlasSection(SECTION.irradiance, IRRADIANCE_FORMAT, atlases.irradiance),
+                atlasSection(SECTION.distance, layout.distanceFormat, atlases.distance),
+                atlasSection(SECTION.probeData, PROBE_DATA_FORMAT, atlases.probeData),
+                ...histories.map((buffer, index): SectionData => {
+                    const records = new Uint32Array(mapped(buffer).buffer);
+                    settleProbeHistory(records);
+                    return { name: SECTION.probeHistory(index), format: 'probeHistory', bytes: new Uint8Array(records.buffer) };
+                }),
+            ];
+            const cameraWindows = this.volumes.map((volume, index): SavedCameraWindow | null => {
+                const extent = extents[index];
+                if (!volume.scroll || !extent) return null;
+                const floats = new Float32Array(mapped(extent).buffer);
+                const window = volume.scroll.window.window;
+                return { window, validMin: [floats[0], floats[1], floats[2]], validMax: [floats[4], floats[5], floats[6]] };
+            });
+            return encodeSavedField(
+                { library: SAVED_FIELD_WRITER, createdAt: new Date().toISOString(), layout: this.savedLayout(), fingerprint, clockSeconds: this.clockSeconds, cameraWindows },
+                sections,
+            );
+        } finally {
+            for (const buffer of staging) buffer.destroy();
+        }
+    }
+
+    /**
+     * Loads a field saved by {@link saveField} into this one (after
+     * `prepare`): from the next frame renderers read the loaded field, and
+     * the update carries on blending from it with no warm-up passes (it only
+     * waits for the ray-tracing trees, as the warm-up does). Nothing is
+     * compiled or allocated; the sections are written with `queue.write*`,
+     * which land before the host's next submit.
+     *
+     * Throws `SavedFieldError` for a file that isn't a saved field, a format
+     * version this code doesn't read, or a layout that doesn't match this
+     * field's (the message names what differs: tile texels, light-group
+     * layers, a volume's counts, spacing, place, priority or `follow`).
+     * A field saved for a scene that changed since loads as stale (unless
+     * `ifSceneChanged: 'refuse'`): the first frame that updates probes marks
+     * every probe as a whole change, so each is updated at priority from the
+     * loaded values and the field settles as after any big change.
+     *
+     * The scene changes the next frame brings aren't marked: the fingerprint
+     * was checked against the scene with them (on a fresh platform they are
+     * its creation). So load after the scene is described and before the
+     * frame; a change made between the two goes unmarked.
+     *
+     * A camera-following volume's window goes back where it was saved, and
+     * moves on with the camera from there (far from it, that is a teleport
+     * and starts that volume over).
+     */
+    loadField(bytes: Uint8Array | ArrayBuffer, options: LoadFieldOptions = {}): LoadedField {
+        const first = this.firstVolume;
+        const context = this.context;
+        if (!first || !context || this.disposed) throw new Error('@pmndrs/gi: load a saved field after prepare (await gi.prepare()), and before dispose');
+        const { header, sections } = decodeSavedField(fileBytes(bytes));
+        const mismatch = layoutMismatch(header.layout, this.savedLayout());
+        if (mismatch) throw new SavedFieldError('layout', `this saved field doesn't fit this DDGI field: ${mismatch}. Load it into a DDGI with the settings it was saved with, or save it again.`);
+        const changedParts = fingerprintDifferences(header.fingerprint, context.scene.fingerprint());
+        const stale = changedParts.length > 0;
+        if (stale && options.ifSceneChanged === 'refuse') {
+            throw new SavedFieldError('scene changed', `this saved field was baked for another scene: its ${changedParts.join(', ')} differ from this one's. Load it with ifSceneChanged: 'load stale' to start from it anyway.`);
+        }
+        if (!Number.isFinite(header.clockSeconds)) throw new SavedFieldError('not a saved field', "this isn't a saved DDGI field (its header has no clock).");
+        const sectionBytes = (name: string, expectedBytes: number): FileBytes => {
+            const found = sections.get(name);
+            if (!found) throw new SavedFieldError('not a saved field', `this saved field has no "${name}" section.`);
+            if (found.bytes.byteLength !== expectedBytes) throw new SavedFieldError('layout', `this saved field's "${name}" section is ${found.bytes.byteLength} bytes; this field needs ${expectedBytes}.`);
+            return found.bytes;
+        };
+        const { layout } = first;
+        const queue = context.device.queue;
+        const atlasBytes = (size: AtlasSize, bytesPerTexel: number): number => size.width * size.height * size.layers * bytesPerTexel;
+        // Read every section before writing any, so a short file changes nothing.
+        const irradiance = sectionBytes(SECTION.irradiance, atlasBytes(layout.layeredIrradiance, PROBE_DATA_TEXEL_BYTES));
+        const savedDistance = sectionBytes(SECTION.distance, atlasBytes(layout.distance, BYTES_PER_TEXEL[header.layout.distanceFormat]));
+        const probeData = sectionBytes(SECTION.probeData, atlasBytes(layout.probeData, PROBE_DATA_TEXEL_BYTES));
+        const histories = this.volumes.map((volume, index) => sectionBytes(SECTION.probeHistory(index), volume.probeHistory.size));
+        const writeAtlas = (texture: GPUTexture, size: AtlasSize, bytesPerTexel: number, data: FileBytes): void =>
+            queue.writeTexture({ texture }, data, { bytesPerRow: size.width * bytesPerTexel, rowsPerImage: size.height }, { width: size.width, height: size.height, depthOrArrayLayers: size.layers });
+        writeAtlas(first.irradiance, layout.layeredIrradiance, PROBE_DATA_TEXEL_BYTES, irradiance);
+        writeAtlas(first.distance, layout.distance, BYTES_PER_TEXEL[layout.distanceFormat], convertDistanceTexels(savedDistance, header.layout.distanceFormat, layout.distanceFormat));
+        writeAtlas(first.probeData, layout.probeData, PROBE_DATA_TEXEL_BYTES, probeData);
+        this.volumes.forEach((volume, index) => {
+            queue.writeBuffer(volume.probeHistory, 0, histories[index]);
+            // Nothing owed or asked for: the history was settled when it was saved.
+            queue.writeBuffer(volume.feedbackRequests, 0, new Uint32Array(volume.grid.probeCount));
+            // The change clock (and the census totals) start again at 0, as the settled history's stamps do.
+            queue.writeBuffer(volume.census, 0, new Uint32Array(CENSUS_WORDS));
+            volume.state.latestCensus = null;
+            volume.state.changeIntake.reset();
+            volume.state.warmUpProbeUpdates = 0;
+            const scroll = volume.scroll;
+            const window = header.cameraWindows?.[index] ?? null;
+            if (scroll && window) {
+                scroll.window.restore(window.window);
+                queue.writeBuffer(scroll.extent, 0, new Float32Array([...window.validMin, 0, ...window.validMax, 0]));
+                scroll.resetEverySlot = false;
+                scroll.extentToTarget = false;
+            } else if (scroll) {
+                throw new SavedFieldError('layout', `this saved field has no window for camera-following volume ${index}; save it again.`);
+            }
+        });
+        this.writePoints(new Uint16Array(probeData.slice().buffer));
+        // The histories hold the time of each probe's last update on the clock they were saved with.
+        this.clockSeconds = header.clockSeconds;
+        this.historyClearPending = false;
+        this.movers.clear();
+        // The composed atlas is rebuilt from the loaded layers in the next frame; the windows may have moved.
+        this.composeAllPending = first.composed !== null;
+        this.volumeTableRows = new Float32Array(0);
+        this.refreshVolumeTable(context, true);
+        this.warmUp = { phase: 'loaded, waiting for trees', startedAt: null };
+        this.staleMarkPending = stale && this.settings.changeDrivenHistory !== false;
+        this.loadedChangesPending = true;
+        this.fieldsLoaded++;
+        this.latestLoadStale = stale;
+        return { stale, changedParts, savedAt: header.createdAt, library: header.library };
+    }
+
+    /** This field's layout as a saved field records it: what a load has to match (saved-field.ts). */
+    private savedLayout(): SavedFieldLayout {
+        const first = this.firstVolume;
+        if (!first) throw new Error('@pmndrs/gi: the field has a layout after prepare');
+        return {
+            irradianceTexels: first.irradianceTexels,
+            distanceTexels: first.distanceTexels,
+            irradianceLayers: first.plan.layers.map((layer) => (layer.kind === 'lightGroup' ? `lightGroup ${layer.group}` : layer.kind)),
+            distanceFormat: first.layout.distanceFormat,
+            volumes: this.volumes.map((volume) => ({
+                counts: volume.grid.counts,
+                spacing: volume.grid.spacing,
+                origin: volume.grid.origin,
+                priority: volume.volume.priority,
+                follow: volume.scroll ? 'camera' : 'fixed',
+            })),
+        };
     }
 
     dispose(): void {
@@ -1623,6 +2448,7 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
                 { binding: 5, resource: arrayView(resources.probeData) },
                 { binding: 6, resource: resources.sampler },
                 ...(deferred && resources.traceRounds ? [{ binding: 7, resource: { buffer: resources.traceRounds, size: TRACE_ROUND_BYTES } }] : []),
+                { binding: 8, resource: resources.volumeTable.createView() },
             ],
         });
         const blendGroup = device.createBindGroup({
@@ -1671,7 +2497,7 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         if (resources.directWorkList) encoder.copyBufferToBuffer(resources.rays.scratch.buffer, resources.rays.scratch.countsOffset, resources.census, CENSUS_DIRECT_HITS * 4, 8);
         encoder.copyBufferToBuffer(resources.census, 0, staging.buffer, 0, CENSUS_WORDS * 4);
         staging.state = 'copied';
-        staging.listedProbes = this.probesUpdated;
+        staging.listedProbes = resources.state.probesUpdated;
         staging.frame = frame;
     }
 
@@ -1686,10 +2512,10 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
             staging.state = 'mapping';
             staging.buffer.mapAsync(MAP_MODE_READ).then(
                 () => {
-                    if (this.resources !== resources) return;
+                    if (!this.volumes.includes(resources)) return;
                     const census = new Uint32Array(staging.buffer.getMappedRange().slice(0));
-                    this.latestCensus = census;
-                    this.changeIntake.noteCensus({
+                    resources.state.latestCensus = census;
+                    resources.state.changeIntake.noteCensus({
                         frame: staging.frame,
                         raysTraced: census[CENSUS_RAYS_TRACED],
                         listedProbes: staging.listedProbes,
@@ -1708,79 +2534,152 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
     }
 
     private releaseResources(): void {
-        const resources = this.resources;
-        if (!resources) return;
-        this.resources = null;
-        for (const texture of [resources.irradiance, resources.distance, resources.probeData, resources.points]) texture.destroy();
-        resources.compose?.composed.destroy();
-        resources.compose?.weights.destroy();
-        for (const buffer of [
-            resources.uniforms,
-            resources.updateList,
-            resources.scratchBuffer,
-            resources.census,
-            resources.movers,
-            resources.probeHistory,
-            resources.scheduleState,
-
-            resources.feedbackRequests,
-            resources.propagation.keyDeltas,
-            resources.propagation.list,
-            resources.propagation.scratch,
-            resources.propagation.state,
-            resources.mark.buffer,
-        ]) {
-            buffer.destroy();
+        const volumes = this.volumes;
+        const first = this.firstVolume;
+        if (!first) return;
+        this.volumes = [];
+        // The shared textures and buffers once.
+        for (const texture of [first.irradiance, first.distance, first.probeData, first.points, first.volumeTable]) texture.destroy();
+        first.composed?.destroy();
+        first.composeWeights?.destroy();
+        first.movers.destroy();
+        // Each volume's own.
+        for (const resources of volumes) {
+            for (const buffer of [
+                resources.uniforms,
+                resources.updateList,
+                resources.scratchBuffer,
+                resources.census,
+                resources.probeHistory,
+                resources.scheduleState,
+                resources.feedbackRequests,
+                resources.propagation.keyDeltas,
+                resources.propagation.list,
+                resources.propagation.scratch,
+                resources.propagation.state,
+                resources.mark.buffer,
+            ]) {
+                buffer.destroy();
+            }
+            resources.rays.scratch.destroy();
+            resources.traceRounds?.destroy();
+            resources.scroll?.uniforms.destroy();
+            resources.scroll?.extent.destroy();
+            for (const staging of resources.censusStaging) staging.buffer.destroy();
         }
-        resources.rays.scratch.destroy();
-        resources.traceRounds?.destroy();
-        for (const staging of resources.censusStaging) staging.buffer.destroy();
     }
 
     /** Writes state 3 with zero offsets into every probe-data texel and point. Lands before the host's next submit. */
     private markAllNotUpdated(): void {
-        const resources = this.resources;
+        const first = this.firstVolume;
         const context = this.context;
-        if (!resources || !context) return;
+        if (!first || !context) return;
         const queue = context.device.queue;
-        const { width, height, layers } = resources.layout.probeData;
+        // Every layer of the shared texture, so every volume's probes (and the unused tiles of smaller volumes' layers).
+        const { width, height, layers } = first.layout.probeData;
         const texels = new Uint16Array(width * height * layers * 4);
         for (let texel = 0; texel < width * height * layers; texel++) texels[texel * 4 + 3] = HALF_THREE;
-        queue.writeTexture({ texture: resources.probeData }, texels, { bytesPerRow: width * PROBE_DATA_TEXEL_BYTES, rowsPerImage: height }, { width, height, depthOrArrayLayers: layers });
+        queue.writeTexture({ texture: first.probeData }, texels, { bytesPerRow: width * PROBE_DATA_TEXEL_BYTES, rowsPerImage: height }, { width, height, depthOrArrayLayers: layers });
+        this.writePoints(null);
+    }
 
-        const { grid, points } = resources;
+    /**
+     * Writes the `points` debug view: each probe at its grid point, in state
+     * 3 (`probeData` null); or, after `loadField`, where the loaded probe
+     * data puts it (relocated) and in its loaded state. `probeData` is the
+     * probe-data texture's texels, packed (rgba16float halves).
+     */
+    private writePoints(probeData: Uint16Array | null): void {
+        const first = this.firstVolume;
+        const context = this.context;
+        if (!first || !context) return;
+        const points = first.points;
+        const { width, height } = first.layout.probeData;
         const pointData = new Float32Array(points.width * points.height * 4);
-        const [nx, , nz] = grid.counts;
-        for (let probe = 0; probe < grid.probeCount; probe++) {
-            const x = probe % nx;
-            const z = Math.floor(probe / nx) % nz;
-            const y = Math.floor(probe / (nx * nz));
-            pointData.set([grid.origin[0] + x * grid.spacing[0], grid.origin[1] + y * grid.spacing[1], grid.origin[2] + z * grid.spacing[2], PROBE_STATE.notUpdatedYet], probe * 4);
+        for (const resources of this.volumes) {
+            const { grid, volume } = resources;
+            const [nx, , nz] = grid.counts;
+            // A camera-following volume's slots hold its window's probes (scroll.ts); a fixed volume's window is at 0.
+            const window = resources.scroll?.window.window ?? [0, 0, 0];
+            const origin = windowGrid(resources).origin;
+            for (let probe = 0; probe < grid.probeCount; probe++) {
+                const slot = [probe % nx, Math.floor(probe / (nx * nz)), Math.floor(probe / nx) % nz];
+                // A probe's texel: (x, z) in the layer of its row (volumes.ts).
+                const texel = probeData ? readProbeDataTexel(probeData, ((volume.layerBase + slot[1]) * height + slot[2]) * width + slot[0]) : null;
+                const at = slot.map((index, axis) => origin[axis] + (windowProbeOf(index, window[axis], grid.counts[axis]) + (texel?.offset[axis] ?? 0)) * grid.spacing[axis]);
+                pointData.set([...at, texel?.state ?? PROBE_STATE.notUpdatedYet], (volume.probeBase + probe) * 4);
+            }
         }
-        queue.writeTexture({ texture: points }, pointData, { bytesPerRow: points.width * POINT_TEXEL_BYTES }, { width: points.width, height: points.height });
+        context.device.queue.writeTexture({ texture: points }, pointData, { bytesPerRow: points.width * POINT_TEXEL_BYTES }, { width: points.width, height: points.height });
     }
 
-    /** The four sampling parameters from the live settings, in `parameterView` (the same array every time). */
-    private refreshSampleParameters(resources: PreparedResources): Float32Array {
-        this.fillSampleParameters(resources.grid, resources.irradianceTexels, resources.distanceTexels);
-        this.parameterView.set(this.uniformData.subarray(0, SAMPLE_PARAMETER_VEC4_COUNT * 4));
-        return this.parameterView;
+    /**
+     * One volume's four sampling parameters from the live settings (its
+     * volume-table row; `DdgiVolume` in wgsl/sample.ts names them), in its
+     * own array, the same array every time.
+     */
+    private volumeParameters(resources: PreparedResources): Float32Array {
+        const { grid } = resources;
+        const bias = {
+            normal: resolveBias(this.settings.normalBias, grid, AUTO_NORMAL_BIAS_SHARE),
+            view: resolveBias(this.settings.viewBias, grid, AUTO_VIEW_BIAS_SHARE),
+        };
+        const texels = { irradiance: resources.irradianceTexels, distance: resources.distanceTexels };
+        // A camera-following volume's origin is its window's first probe, where the window is this frame (scroll.ts).
+        writeVolumeParameters(resources.state.sampleParameters, 0, resources.volume, resources.volumePlan, texels, bias, windowGrid(resources).origin);
+        return resources.state.sampleParameters;
     }
 
-    /** The first four vec4s of the uniforms: the volume, with the live biases (`DdgiVolume` in wgsl/sample.ts names them). */
-    private fillSampleParameters(grid: ProbeGrid, irradianceTexels: number, distanceTexels: number): void {
-        const data = this.uniformData;
-        data.set([...grid.origin, resolveBias(this.settings.normalBias, grid, AUTO_NORMAL_BIAS_SHARE)], UNIFORM_WORD.volumeOrigin);
-        data.set([...grid.spacing, resolveBias(this.settings.viewBias, grid, AUTO_VIEW_BIAS_SHARE)], UNIFORM_WORD.volumeSpacing);
-        data.set([...grid.counts, 0], UNIFORM_WORD.volumeCounts);
-        data.set([irradianceTexels, distanceTexels, 0, 0], UNIFORM_WORD.volumeTexels);
+    /**
+     * Writes the volume table's CPU part (a row per volume, priority order:
+     * the sampling parameters and the window, VOLUME_TABLE_CPU_TEXELS) when a
+     * row changed since it was last written: after `prepare`, when a bias
+     * setting changes, and when a camera-following volume's window moves.
+     * `whole` (after `prepare`) writes the valid extents too: a fixed
+     * volume's every probe, a camera-following volume's starting extent;
+     * after that only `ddgi/scroll` writes them. Lands before the host's next
+     * submit.
+     */
+    private refreshVolumeTable(context: TechniqueContext, whole = false): void {
+        const volumes = this.volumes;
+        const first = this.firstVolume;
+        if (!first) return;
+        const rows = new Float32Array(volumes.length * VOLUME_TABLE_ROW_FLOATS);
+        volumes.forEach((volume, row) => {
+            const offset = row * VOLUME_TABLE_ROW_FLOATS;
+            rows.set(this.volumeParameters(volume), offset);
+            const window = volume.scroll?.window;
+            writeVolumeWindow(rows, offset, window?.window ?? [0, 0, 0], window?.fadeSpacings ?? FIXED_VOLUME_FADE, window ? window.initialExtent() : wholeGridExtent(volume.grid));
+        });
+        // Compare the CPU texels only: the extents in `rows` are the starting ones, not what the GPU holds.
+        const cpuFloats = VOLUME_TABLE_CPU_TEXELS * 4;
+        const same =
+            !whole &&
+            rows.length === this.volumeTableRows.length &&
+            rows.every((value, index) => index % VOLUME_TABLE_ROW_FLOATS >= cpuFloats || Object.is(value, this.volumeTableRows[index]));
+        if (same) return;
+        const texels = whole ? VOLUME_TABLE_TEXELS : VOLUME_TABLE_CPU_TEXELS;
+        // The rows' first `texels` texels, packed.
+        const written = new Float32Array(volumes.length * texels * 4);
+        for (let row = 0; row < volumes.length; row++) written.set(rows.subarray(row * VOLUME_TABLE_ROW_FLOATS, row * VOLUME_TABLE_ROW_FLOATS + texels * 4), row * texels * 4);
+        context.device.queue.writeTexture(
+            { texture: first.volumeTable },
+            written,
+            { bytesPerRow: texels * VOLUME_TABLE_TEXEL_BYTES, rowsPerImage: volumes.length },
+            { width: texels, height: volumes.length },
+        );
+        this.volumeTableRows = rows;
     }
 
     private writeUniforms(resources: PreparedResources, frame: TechniqueFrame, count: number, raysPerProbe: number, sun: DirectionalLightDescriptor | null): void {
         const { grid } = resources;
-        this.fillSampleParameters(grid, resources.irradianceTexels, resources.distanceTexels);
         const data = this.uniformData;
         const words = this.uniformWords;
+        // The first four vec4s: the volume, as its volume-table row; and where its window is on the lattice (scroll.ts).
+        data.set(this.volumeParameters(resources), UNIFORM_WORD.volumeOrigin);
+        data.set([...(resources.scroll?.window.window ?? [0, 0, 0]), 0], UNIFORM_WORD.volumeWindow);
+        // Its probes' points from here on in the points debug view (volumes.ts).
+        words[UNIFORM_WORD.probeBase] = resources.volume.probeBase;
         const rotation = frameRayRotation(frame.frame);
         for (let column = 0; column < 3; column++) {
             data.set(rotation.slice(column * 3, column * 3 + 3), UNIFORM_WORD.rayRotation + column * MAT3_COLUMN_WORDS);
@@ -1819,7 +2718,7 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         // wouldn't fit in FAR_RULE_FRAMES frames at this batch (the last one, in a
         // frame that updates nothing).
         const fullUpdates = owedUpdates(blend.changeUpdates);
-        const batch = count > 0 ? count : this.lastUpdateCount;
+        const batch = count > 0 ? count : resources.state.lastUpdateCount;
         // On a big volume a big change takes the key-probe path (T2.4c,
         // m2-lights.md §4.5), or with key probes off, "far probes owe 2" (§6.4).
         const { bigVolume, keysFitWindow } = changeServing(grid, batch, this.settings);
@@ -1866,7 +2765,50 @@ export function changeServing(grid: ProbeGrid, batch: number, settings: DDGISett
     return { bigVolume, keysFitWindow, changeOutlastsWindow };
 }
 
+/**
+ * A volume's grid where its window is this frame: a camera-following
+ * volume's origin is its window's first probe (scroll.ts); a fixed volume's
+ * grid as it is. What `ddgi/mark`'s table is built on (in window probes).
+ */
+function windowGrid(resources: Pick<PreparedResources, 'grid' | 'scroll'>): ProbeGrid {
+    const window = resources.scroll?.window;
+    return window ? { ...resources.grid, origin: window.windowOrigin } : resources.grid;
+}
+
+/** Probes over every volume. */
+function totalProbes(volumes: readonly PreparedResources[]): number {
+    return volumes.reduce((sum, volume) => sum + volume.grid.probeCount, 0);
+}
+
+/** The most probes the technique updates in a frame: every volume's most. */
+function totalMaxProbesPerFrame(volumes: readonly PreparedResources[]): number {
+    return volumes.reduce((sum, volume) => sum + volume.maxProbesPerFrame, 0);
+}
+
+/** Full passes the current warm-up has made over every volume's probes: the fewest of any volume (0 with none). */
+function warmUpPassesMade(volumes: readonly PreparedResources[]): number {
+    if (volumes.length === 0) return 0;
+    return Math.min(...volumes.map((volume) => (volume.grid.probeCount > 0 ? volume.state.warmUpProbeUpdates / volume.grid.probeCount : 0)));
+}
+
+/**
+ * The volumes' latest censuses added word by word, for the counters: counts
+ * add up over volumes (the change clocks too, modulo 2^32; the counters list
+ * each volume's beside the sum). The first volume's own census with one
+ * volume; null until every volume has one.
+ */
+function summedCensus(volumes: readonly PreparedResources[]): Uint32Array | null {
+    if (volumes.length === 0 || volumes.some((volume) => !volume.state.latestCensus)) return null;
+    if (volumes.length === 1) return volumes[0].state.latestCensus;
+    const sum = new Uint32Array(CENSUS_WORDS);
+    for (const volume of volumes) {
+        const census = volume.state.latestCensus as Uint32Array;
+        for (let word = 0; word < CENSUS_WORDS; word++) sum[word] += census[word];
+    }
+    return sum;
+}
+
 function positiveInteger(value: number, name: string): number {
-    if (!Number.isInteger(value) || value < 1) throw new Error(`@pmndrs/ddgi: ${name} must be a positive whole number, got ${value}`);
+    if (!Number.isInteger(value) || value < 1) throw new Error(`@pmndrs/gi: ${name} must be a positive whole number, got ${value}`);
     return value;
 }

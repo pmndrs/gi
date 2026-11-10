@@ -4,8 +4,11 @@ import { buildCornellBox } from './cornell-box';
 import { buildCourtyard } from './courtyard';
 import { buildFurnaceRoom } from './furnace-room';
 import { buildOpenGround } from './open-ground';
+import { buildAlphaChecker, buildGlassWall } from './see-through-walls';
+import { buildTexturedFurnace } from './textured-furnace';
 import { buildThinWall } from './thin-wall';
 import { buildClosedDoor, buildTwoRoom } from './two-rooms';
+import { buildUvBoard } from './uv-board';
 
 /**
  * Builders by the name scene manifests use in `parts[].builder`. Names are
@@ -20,6 +23,11 @@ export const proceduralBuilders: Readonly<Record<string, ProceduralBuilder>> = {
     'closed-door': buildClosedDoor,
     'cabinet-row': buildCabinetRow,
     'open-ground': buildOpenGround,
+    // M4's textured scenes (T4.4).
+    'textured-furnace': buildTexturedFurnace,
+    'uv-board': buildUvBoard,
+    'alpha-checker': buildAlphaChecker,
+    'glass-wall': buildGlassWall,
 };
 
 export function buildProcedural(name: string, options?: BuilderOptions): ProceduralScene {
@@ -32,12 +40,16 @@ export function buildProcedural(name: string, options?: BuilderOptions): Procedu
 }
 
 export {
+    buildAlphaChecker,
     buildCabinetRow,
     buildClosedDoor,
     buildCornellBox,
     buildCourtyard,
     buildFurnaceRoom,
+    buildGlassWall,
     buildOpenGround,
+    buildTexturedFurnace,
     buildThinWall,
     buildTwoRoom,
+    buildUvBoard,
 };

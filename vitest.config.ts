@@ -8,7 +8,16 @@ export default defineConfig({
         passWithNoTests: true,
         // Agent worktrees under .claude/ are full checkouts; without this every
         // one of them runs its own copy of the suite.
-        exclude: [...configDefaults.exclude, '.claude/**', '**/dist/**', 'tools/emsdk/**'],
+        exclude: [
+            ...configDefaults.exclude,
+            '.claude/**',
+            '**/dist/**',
+            'tools/emsdk/**',
+            // Runs publish.yml's steps in throwaway git repositories: about 30 s of
+            // child processes, which starved other tests' timeouts when run beside
+            // them. It has its own script and CI step: `pnpm test:release`.
+            'tools/release/publish-workflow.test.ts',
+        ],
     },
     resolve: {
         // The umbrella imports itself by name. Node's self-reference resolves that
@@ -16,8 +25,8 @@ export default defineConfig({
         // build, so point it at the source. Exact-match per subpath: a plain string
         // key is a prefix alias.
         alias: [
-            { find: /^@pmndrs\/ddgi$/, replacement: resolve(__dirname, 'packages/ddgi/src/index.ts') },
-            { find: /^@pmndrs\/ddgi\/(core|three)$/, replacement: resolve(__dirname, 'packages/ddgi/src/$1.ts') },
+            { find: /^@pmndrs\/gi$/, replacement: resolve(__dirname, 'packages/ddgi/src/index.ts') },
+            { find: /^@pmndrs\/gi\/(core|ddgi|three)$/, replacement: resolve(__dirname, 'packages/ddgi/src/$1.ts') },
         ],
     },
 });

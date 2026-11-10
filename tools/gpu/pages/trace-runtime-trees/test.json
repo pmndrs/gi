@@ -1,0 +1,4 @@
+{
+    "description": "T3.2: runtime mesh trees. On the cabinet row (and the furnished room when downloaded), with GPU trees first (natural and with tinybvh held back) and tinybvh only: a new cabinet (a new mesh and instance) and then that cabinet replaced (updateMesh) must pass the oracle within 4 frames at a 60 Hz pace; after tinybvh's tree swaps in, the GPU tree's node and triangle ranges must be freed within 2 frames; recompiles stay 0. Also recorded, not judged: a 100k-triangle mesh added at runtime (frames until seen) and its trace speed on the GPU tree and after the swap against tinybvh only.",
+    "timeoutMs": 900000
+}

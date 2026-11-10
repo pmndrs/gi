@@ -34,6 +34,7 @@
  *
  *   VITE_DDGI_SECTIONS=swing,marks   (default both)
  *   VITE_DDGI_UNITS=880
+ *   VITE_DDGI_SWING_FRAMES=60        (1: the door shut in one step; the marks' swing too)
  */
 
 import { assert, runGpuTest } from '../../client.ts';
@@ -48,7 +49,8 @@ const SECTIONS = new Set(typeof env.VITE_DDGI_SECTIONS === 'string' && env.VITE_
 /** Two-room's calibrated batch at 2 ms on the RTX 3060 (T2.4b, VALID run); the closed door has the same 17 x 7 x 9 grid. */
 const DEFAULT_UNITS = 880;
 const UNITS = Number(env.VITE_DDGI_UNITS) > 0 ? Math.round(Number(env.VITE_DDGI_UNITS)) : DEFAULT_UNITS;
-const SWING_FRAMES = 60;
+/** The swing's length: 1 s, or VITE_DDGI_SWING_FRAMES (1: the door shut in one step, T3.4's check of the step's leak). */
+const SWING_FRAMES = Number(env.VITE_DDGI_SWING_FRAMES) > 0 ? Math.round(Number(env.VITE_DDGI_SWING_FRAMES)) : 60;
 /** The door must be ≤ LEAK_LIMIT from this many frames after it closed (1 s at 60 Hz)... */
 const CLOSE_DEADLINE_FRAMES = 60;
 /** ...and stay there for this long (10 s). */

@@ -433,7 +433,7 @@ export class GpuTopLevel {
      * by the tracer in the platform's `encode`, before any technique traces.
      */
     update(encoder: GPUCommandEncoder, frame: TopLevelFrame, timer?: GpuTimerScope): void {
-        if (this.disposed) throw new Error('@pmndrs/ddgi: the top level was disposed');
+        if (this.disposed) throw new Error('@pmndrs/gi: the top level was disposed');
         for (const buffer of this.retired) buffer.destroy();
         this.retired = [];
 
@@ -537,7 +537,7 @@ export class GpuTopLevel {
             (result) => this.finish(mode, generation, result),
             (error: unknown) => {
                 if (this.disposed) return;
-                this.buildFailure = new Error(`@pmndrs/ddgi: building the top level failed: ${error instanceof Error ? error.message : String(error)}`);
+                this.buildFailure = new Error(`@pmndrs/gi: building the top level failed: ${error instanceof Error ? error.message : String(error)}`);
                 this.finish(mode, generation, null);
             },
         );
@@ -568,7 +568,7 @@ export class GpuTopLevel {
         const requiredStack = topLevelDepth + 1 + deepestMesh;
         if (topLevelDepth > 0 && requiredStack > TRACE_STACK_SIZE) {
             throw new Error(
-                `@pmndrs/ddgi: the trace stack holds ${TRACE_STACK_SIZE} entries, but this scene can need ${requiredStack} ` +
+                `@pmndrs/gi: the trace stack holds ${TRACE_STACK_SIZE} entries, but this scene can need ${requiredStack} ` +
                     `(top level ${topLevelDepth} + 1 + deepest mesh tree ${deepestMesh}).`,
             );
         }
@@ -632,7 +632,7 @@ export class GpuTopLevel {
         if (this.warnedGaveUp) return;
         this.warnedGaveUp = true;
         this.warn(
-            '@pmndrs/ddgi: the top-level refit gave up waiting for a box on this GPU and refit the tree again in a slower pass ' +
+            '@pmndrs/gi: the top-level refit gave up waiting for a box on this GPU and refit the tree again in a slower pass ' +
                 '(the result is correct). Counted in stats.counters["platform top level"].',
         );
     }
@@ -643,7 +643,7 @@ export class GpuTopLevel {
 
     private encodeRefit(encoder: GPUCommandEncoder, timer?: GpuTimerScope): void {
         const gather = this.gatherKernel;
-        if (!gather || !this.refit.ready) throw new Error('@pmndrs/ddgi: the top level was not prepared');
+        if (!gather || !this.refit.ready) throw new Error('@pmndrs/gi: the top level was not prepared');
         const pass = encoder.beginComputePass({ label: `${this.label} top level refit`, timestampWrites: timer?.computePass('platform/top-level refit') });
         gather.bind(pass);
         pass.setBindGroup(1, this.gatherBindGroup(gather));

@@ -36,6 +36,7 @@ import { GILimitError, GINotReadyError } from '../contract/errors.ts';
 import type { InstanceHandle, LightHandle, MaterialHandle, MeshHandle, TextureHandle } from '../contract/handles.ts';
 import type { Aabb, ColorRGB, Mat4, Vec3 } from '../contract/math.ts';
 import type {
+    AlphaMode,
     DeformedPositions,
     EnvironmentDescriptor,
     InstanceDescriptor,
@@ -45,15 +46,21 @@ import type {
     MeshDescriptor,
     SceneApi,
     TextureDescriptor,
+    TextureSource,
     UvMapping,
 } from '../contract/scene.ts';
-import type { SceneChanges, SceneCopy } from '../contract/scene-copy.ts';
+import { PlatformTextureStore, type TextureLayerRequest, type TextureLayerResults, type TextureLayerStore } from '../textures/texture-store.ts';
+import type { SceneChanges, SceneCopy, SceneFingerprint } from '../contract/scene-copy.ts';
 import type { GpuTimerScope } from '../contract/timing.ts';
 import type { BindingSlot, WgslModule } from '../contract/wgsl.ts';
 import { invertAffineInto } from '../trace/top-level.ts';
 import { ChangeLog, copyLight, toAabb, type LightLookup } from './change-log.ts';
+import { boxDiagonal, boxInside, checkedDeformBounds, copyCheckedPositions, DeformState, growBox, largestScale, scanPose } from './deformed-positions.ts';
+import { checkedGpuPose, GpuPoseCopier, type PoseCopy } from './gpu-pose-copy.ts';
 import { BOX_NUMBERS, InstanceTransforms, MATRIX_NUMBERS } from './instance-transforms.ts';
 import {
+    ALPHA_MODE,
+    DEFAULT_ALPHA_CUTOFF,
     ENVIRONMENT_TYPE,
     HEADER_VEC4S,
     HEADER_WORD,
@@ -64,10 +71,12 @@ import {
     LIGHT_TYPE,
     LIGHT_WORD,
     MATERIAL_FLAG,
+    MATERIAL_RECORD_VEC4S,
     MATERIAL_WORD,
     MESH_FLAG,
     MESH_WORD,
     NONE,
+    TEXTURE_CHANNEL,
     UV_PACK_SHIFT,
     UV_WRAP,
 } from './layout.ts';
@@ -77,6 +86,16 @@ import { RangeAllocator } from './range-allocator.ts';
 import { SlotAllocator } from './slot-allocator.ts';
 import { TableMirror } from './table-mirror.ts';
 import { SCENE_MODULE_ENTRIES, sceneModuleWgsl } from './wgsl.ts';
+import {
+    ContentHasher,
+    environmentHash,
+    FINGERPRINT_VERSION,
+    lightHash,
+    materialHash,
+    meshContentHash,
+    textureContentHash,
+    unorderedDigest,
+} from './scene-fingerprint.ts';
 
 /** Starting sizes. Every table doubles when it fills; none of this is a hard limit. */
 export interface SceneCapacities {
@@ -109,6 +128,22 @@ export interface PlatformSceneOptions {
     /** Prefix for GPU buffer labels. */
     readonly label?: string;
     readonly initialCapacities?: Partial<SceneCapacities>;
+    /**
+     * Where textures become layers (textures/texture-store.ts). The platform
+     * passes its own, which hit shading also binds; without one the scene
+     * makes a store of its own (unit tests pass a stand-in).
+     */
+    readonly textureStore?: TextureLayerStore;
+    /** Where one-time warnings go (a texture that can't be used; deformed positions outside `deformBounds`). Defaults to `console.warn`. */
+    readonly warn?: (message: string) => void;
+    /**
+     * Whether the tracer can follow deformed positions (it refits mesh trees
+     * on the GPU, which needs subgroups). False: `setDeformedPositions` is
+     * checked and then ignored, with one warning, so the scene copy keeps the
+     * rest pose the tree was built for (rays and hit points agree). Default
+     * true.
+     */
+    readonly posesTraced?: boolean;
 }
 
 /**
@@ -142,6 +177,19 @@ export interface UploadedMesh {
     readonly geometry: MeshGeometryCopy;
 }
 
+/**
+ * A deforming mesh given new positions in this `encode`: the scene copy's
+ * vertex buffer holds them (written before, or recorded ahead of, anything
+ * the tracer records afterwards), so the tracer refits the mesh's tree from
+ * it. Positions at `vertexOffset + layout.offsets.positions`, 3 floats a
+ * vertex; indices at `layout.offsets.indices`.
+ */
+export interface PosedMesh {
+    readonly slot: number;
+    readonly layout: MeshLayout;
+    readonly vertexOffset: number;
+}
+
 /** One instance as the tracer's top level needs it. */
 export interface InstanceSnapshot {
     readonly slot: number;
@@ -166,6 +214,12 @@ export interface SceneUpload {
     readonly changes: SceneChanges;
     /** Meshes created or reshaped since the last encode. A slot may also be in `meshesRemoved` (reused). */
     readonly meshesUploaded: readonly UploadedMesh[];
+    /**
+     * Deforming meshes given a new pose (`setDeformedPositions`) applied in
+     * this encode. Their `layout.bounds` is the box every pose stays in; it
+     * only grows (a CPU pose that left it).
+     */
+    readonly meshesPosed: readonly PosedMesh[];
     /** Mesh slots freed since the last encode. Handle these before `meshesUploaded`. */
     readonly meshesRemoved: readonly number[];
     /** The traceable instances, one of their transforms, or one of their meshes changed: a top level is stale. */
@@ -213,13 +267,32 @@ interface MeshEntry {
     /** Word offset in the vertex buffer, or -1 until uploaded. */
     vertexOffset: number;
     readonly instances: Set<InstanceEntry>;
+    /** For a mesh created `deforming`: its poses (deformed-positions.ts); null for the others. */
+    deform: DeformState | null;
+    /** Its content hash for the scene fingerprint (scene-fingerprint.ts), made at create or update: no CPU copy of the geometry is kept. */
+    contentHash: string;
 }
+
+/**
+ * Where a texture is on its way to the store: waiting for the next `encode`,
+ * made (its layer is its slot), or refused (the store warned why; its
+ * materials keep their flat colour).
+ */
+type TextureState = 'pending' | 'built' | 'failed';
 
 interface TextureEntry {
     readonly handle: TextureHandle;
+    /** Also its layer in the texture store. */
     readonly slot: number;
-    readonly descriptor: TextureDescriptor;
+    readonly srgb: boolean;
+    readonly label: string | undefined;
+    /** The host's source, dropped once the layer is made (the host may then free it). */
+    source: TextureSource | null;
+    state: TextureState;
+    /** Material texture references to it (a material using it twice counts twice). */
     users: number;
+    /** Its content hash for the scene fingerprint (scene-fingerprint.ts), made at create: the source is dropped once its layer is made. */
+    readonly contentHash: string;
 }
 
 interface MaterialEntry {
@@ -228,6 +301,7 @@ interface MaterialEntry {
     descriptor: MaterialDescriptor;
     albedoTexture: TextureEntry | undefined;
     emissiveTexture: TextureEntry | undefined;
+    metalnessTexture: TextureEntry | undefined;
     readonly users: Set<InstanceEntry>;
 }
 
@@ -312,7 +386,21 @@ export class PlatformScene implements SceneApi, SceneCopy {
     private readonly materialSlots = new SlotAllocator();
     private readonly instanceSlots = new SlotAllocator();
 
+    /** Where textures become layers; `encode` hands it the textures created since the last one. */
+    readonly textureStore: TextureLayerStore;
+    private readonly pendingTextures = new Set<TextureEntry>();
+
     private readonly pendingMeshes = new Set<MeshEntry>();
+    /** Deforming meshes with a new pose waiting for `encode`. */
+    private readonly posesWaiting = new Set<MeshEntry>();
+    /** A pose's box, worked out in `applyPoses` (scratch). */
+    private readonly poseBounds = new Float32Array(BOX_NUMBERS);
+    /** Copies GPU poses into the vertex buffer (gpu-pose-copy.ts); compiled by {@link prepareGpuPoses}. */
+    private readonly poseCopier: GpuPoseCopier;
+    /** See {@link PlatformSceneOptions.posesTraced}. */
+    private readonly posesTraced: boolean;
+    private warnedRestPose = false;
+    private readonly warn: (message: string) => void;
     /** Packs meshes on the GPU once {@link prepareGpuPacking} was called (T2.13). */
     private readonly packer: GpuMeshPacker;
     private gpuPacking = false;
@@ -356,6 +444,7 @@ export class PlatformScene implements SceneApi, SceneCopy {
     constructor(device: GPUDevice, options: PlatformSceneOptions = {}) {
         this.device = device;
         this.label = options.label ?? 'gi';
+        this.warn = options.warn ?? ((message) => console.warn(message));
         const capacities = { ...DEFAULT_SCENE_CAPACITIES, ...options.initialCapacities };
         this.mirror = new TableMirror({
             instanceCapacity: capacities.instances,
@@ -369,6 +458,9 @@ export class PlatformScene implements SceneApi, SceneCopy {
         this.tableBuffer = this.createStorageBuffer('scene tables', this.mirror.byteLength);
         this.uploadedLayoutVersion = -1;
         this.packer = new GpuMeshPacker(device, { label: this.label });
+        this.textureStore = options.textureStore ?? new PlatformTextureStore(device, { label: this.label, warn: options.warn });
+        this.poseCopier = new GpuPoseCopier(device, this.label);
+        this.posesTraced = options.posesTraced ?? true;
 
         const currentVersion = () => this.bufferVersion;
         this.module = {
@@ -426,6 +518,48 @@ export class PlatformScene implements SceneApi, SceneCopy {
     }
 
     /**
+     * The scene's content fingerprint now (`SceneCopy.fingerprint`;
+     * scene-fingerprint.ts says what each part covers). Instances that don't
+     * contribute to GI are left out: rays never see them.
+     */
+    fingerprint(): SceneFingerprint {
+        const textureHash = (handle: number): string | null => this.textures.get(handle)?.contentHash ?? null;
+        const materialHashes = new Map<MaterialEntry, string>();
+        const hashOf = (material: MaterialEntry): string => {
+            let hash = materialHashes.get(material);
+            if (hash === undefined) {
+                hash = materialHash(material.descriptor, textureHash);
+                materialHashes.set(material, hash);
+            }
+            return hash;
+        };
+        const geometry: string[] = [];
+        const materials: string[] = [];
+        const textures = new Set<string>();
+        for (const instance of this.instances.values()) {
+            if (!instance.contributesToGi) continue;
+            const placed = new ContentHasher().string(instance.mesh.contentHash).word(instance.visible ? 1 : 0);
+            for (const value of this.transforms.matrix(instance.slot)) placed.number(value);
+            geometry.push(placed.digest());
+            // In slot order: the same materials on other slots shade other triangles.
+            const list = new ContentHasher().word(instance.materials.length);
+            for (const material of instance.materials) list.string(hashOf(material));
+            materials.push(list.digest());
+            for (const material of instance.materials) {
+                for (const texture of [material.albedoTexture, material.emissiveTexture, material.metalnessTexture]) if (texture) textures.add(texture.contentHash);
+            }
+        }
+        return {
+            version: FINGERPRINT_VERSION,
+            geometry: unorderedDigest(geometry),
+            materials: unorderedDigest(materials),
+            textures: unorderedDigest([...textures]),
+            lights: unorderedDigest(this.lights.map((light) => lightHash(light.descriptor))),
+            sky: environmentHash(this.environmentDescriptor),
+        };
+    }
+
+    /**
      * How many times `setEnvironment` has been called. Hit shading re-projects
      * the sky when this changes, so calling `setEnvironment` again with the
      * same object (after changing its texture's contents) re-projects it (T1.4).
@@ -462,6 +596,25 @@ export class PlatformScene implements SceneApi, SceneCopy {
 
     materialSlot(material: MaterialHandle): number {
         return this.material(material).slot;
+    }
+
+    /**
+     * An instance's mesh slot, and the record of each material it uses in
+     * slot order, as the GPU will read them (views of the CPU mirror: read
+     * them at once). For the tracer's triangle-flag upkeep (T4.2,
+     * trace/ray-queries.ts), which rewrites a mesh's flags only when the
+     * words the walk's material rules read have changed. Null for a
+     * destroyed instance.
+     */
+    instanceMaterialRecords(instance: InstanceHandle): { readonly meshSlot: number; readonly records: readonly Uint32Array[] } | null {
+        const entry = this.instances.get(instance);
+        if (!entry) return null;
+        const recordWords = MATERIAL_RECORD_VEC4S * 4;
+        const records = entry.materials.map((material) => {
+            const base = this.mirror.recordWord('materials', material.slot);
+            return this.mirror.words.subarray(base, base + recordWords);
+        });
+        return { meshSlot: entry.mesh.slot, records };
     }
 
     /** Index of a light in the packed light table. Changes when other lights are added or removed. */
@@ -528,10 +681,33 @@ export class PlatformScene implements SceneApi, SceneCopy {
         return this.packer.prepare();
     }
 
+    /**
+     * Compiles the kernel that copies deformed positions given on the GPU
+     * into the vertex buffer (gpu-pose-copy.ts). The platform calls it in
+     * `prepare`; until it resolves, GPU poses wait in the scene.
+     */
+    /**
+     * The vertex buffer now. It is replaced when it grows (`module.version`
+     * changes then), so read it each frame. For the tracer: it refits and
+     * rebuilds deforming meshes' trees from the positions in it.
+     */
+    get vertexStorage(): GPUBuffer {
+        return this.vertexBuffer;
+    }
+
+    prepareGpuPoses(): Promise<void> {
+        this.checkLive();
+        return this.poseCopier.prepare();
+    }
+
     createMesh(descriptor: MeshDescriptor): MeshHandle {
         this.checkLive();
-        const { layout, pending } = this.prepareMeshData(descriptor);
+        // Checked before the mesh is staged, so a bad box leaves nothing behind.
+        const declared = this.declaredDeformBounds(descriptor, this.name('mesh', this.nextHandle, descriptor.label));
+        const prepared = this.prepareMeshData(descriptor);
+        const pending = prepared.pending;
         const handle = this.nextHandle++ as MeshHandle;
+        const { layout, deform } = this.deformingLayout(prepared.layout, descriptor, declared);
         const slot = this.meshSlots.take();
         this.mirror.ensureRecord('meshes', slot);
         const entry: MeshEntry = {
@@ -542,6 +718,8 @@ export class PlatformScene implements SceneApi, SceneCopy {
             pending,
             vertexOffset: -1,
             instances: new Set(),
+            deform,
+            contentHash: meshContentHash(descriptor),
         };
         this.meshes.set(handle, entry);
         this.pendingMeshes.add(entry);
@@ -553,42 +731,81 @@ export class PlatformScene implements SceneApi, SceneCopy {
     updateMesh(mesh: MeshHandle, descriptor: MeshDescriptor): void {
         this.checkLive();
         const entry = this.mesh(mesh);
-        const { layout, pending } = this.prepareMeshData(descriptor);
+        const declared = this.declaredDeformBounds(descriptor, this.name('mesh', entry.handle, descriptor.label ?? entry.label));
+        const prepared = this.prepareMeshData(descriptor);
+        const pending = prepared.pending;
+        const { layout, deform } = this.deformingLayout(prepared.layout, descriptor, declared);
         this.releaseVertexRange(entry);
         this.forgetPending(entry);
         this.triangleTotal += layout.triangleCount - entry.layout.triangleCount;
         entry.layout = layout;
         entry.pending = pending;
+        entry.contentHash = meshContentHash(descriptor);
+        // A new shape replaces any pose still waiting: it may not even have the same vertex count.
+        entry.deform = deform;
+        this.posesWaiting.delete(entry);
         entry.label = descriptor.label ?? entry.label;
         this.pendingMeshes.add(entry);
         for (const instance of entry.instances) {
             const traceable = this.isTraceable(instance);
-            if (traceable) this.changeLog.addRegion(this.transforms.box(instance.slot), 'geometry', instance.handle, undefined, instance.slot);
+            if (traceable) this.changeLog.addRegion(this.transforms.box(instance.slot), 'geometry', instance.handle, undefined, instance.slot, 0, this.emits(instance));
             this.transforms.setMeshBounds(instance.slot, layout.bounds);
             this.writeInstanceRecord(instance);
             if (traceable) {
-                this.changeLog.addRegion(this.transforms.box(instance.slot), 'geometry', instance.handle, undefined, instance.slot);
+                this.changeLog.addRegion(this.transforms.box(instance.slot), 'geometry', instance.handle, undefined, instance.slot, 0, this.emits(instance));
                 this.topLevelDirty = true;
             }
         }
         this.cachedBounds = null;
     }
 
-    setDeformedPositions(mesh: MeshHandle, _positions: DeformedPositions): void {
+    /**
+     * Keeps a copy of the pose for the next `encode` (applyPoses), replacing
+     * any pose still waiting. Everything is checked here, so a bad call
+     * throws at the call and changes nothing.
+     */
+    setDeformedPositions(mesh: MeshHandle, positions: Float32Array | DeformedPositions): void {
         this.checkLive();
-        this.mesh(mesh);
-        throw new Error('@pmndrs/ddgi: setDeformedPositions is not supported yet (deforming meshes arrive in M3).');
+        const entry = this.mesh(mesh);
+        const what = this.name('mesh', entry.handle, entry.label);
+        const deform = entry.deform;
+        if (!deform) throw new Error(`@pmndrs/gi: setDeformedPositions: ${what} was not created with deforming: true.`);
+        if (positions instanceof Float32Array) {
+            if (positions.length !== deform.current.length) {
+                throw new RangeError(`@pmndrs/gi: setDeformedPositions: ${what} has ${deform.vertexCount} vertices, but ${positions.length} numbers were given (3 per vertex).`);
+            }
+            copyCheckedPositions(positions, deform.waiting, `setDeformedPositions for ${what}`);
+            deform.waitingOnGpu = null;
+        } else {
+            // The platform can't read GPU positions, so it can't grow the box to hold them: the host must give one.
+            if (!deform.declaredBounds) {
+                throw new Error(`@pmndrs/gi: setDeformedPositions: ${what} needs deformBounds (given at createMesh) for positions on the GPU, which the platform can't read to find their box.`);
+            }
+            deform.waitingOnGpu = checkedGpuPose(positions, deform.vertexCount, `setDeformedPositions for ${what}`);
+        }
+        if (!this.posesTraced) {
+            // Checked like any other call, then left out: the tree can't follow it (no subgroups for the refit),
+            // and hit points from moved positions on an unmoved tree would be wrong.
+            deform.waitingOnGpu = null;
+            if (this.warnedRestPose) return;
+            this.warnedRestPose = true;
+            this.warn('@pmndrs/gi: this device has no subgroups, so deforming meshes stay in their rest pose for GI (the mesh-tree refit needs subgroups).');
+            return;
+        }
+        deform.hasWaiting = true;
+        this.posesWaiting.add(entry);
     }
 
     destroyMesh(mesh: MeshHandle): void {
         this.checkLive();
         const entry = this.mesh(mesh);
         if (entry.instances.size > 0) {
-            throw new Error(`@pmndrs/ddgi: ${this.name('mesh', entry.handle, entry.label)} is still used by ${entry.instances.size} instance(s); destroy them first.`);
+            throw new Error(`@pmndrs/gi: ${this.name('mesh', entry.handle, entry.label)} is still used by ${entry.instances.size} instance(s); destroy them first.`);
         }
         this.releaseVertexRange(entry);
         this.forgetPending(entry);
         this.pendingMeshes.delete(entry);
+        this.posesWaiting.delete(entry);
         this.mirror.clearRecord('meshes', entry.slot);
         this.meshSlots.release(entry.slot);
         this.removedMeshSlots.push(entry.slot);
@@ -602,23 +819,52 @@ export class PlatformScene implements SceneApi, SceneCopy {
     // -----------------------------------------------------------------------
 
     /**
-     * Registers a texture. M1 keeps only the handle and the descriptor (a
-     * reference to the source, not a copy); the atlas copy arrives in M4.
+     * Registers a texture and queues it for the texture store: the next
+     * `encode` makes its layer (a reference to the source is kept until
+     * then). Until that layer exists its materials shade with their flat
+     * colour; when it lands, their records are rewritten and a material
+     * change is logged over the instances using them.
      */
     createTexture(descriptor: TextureDescriptor): TextureHandle {
         this.checkLive();
-        if (!descriptor || !descriptor.source) throw new TypeError('@pmndrs/ddgi: a texture needs a source');
+        if (!descriptor || !descriptor.source) throw new TypeError('@pmndrs/gi: a texture needs a source');
         const handle = this.nextHandle++ as TextureHandle;
-        this.textures.set(handle, { handle, slot: this.textureSlots.take(), descriptor, users: 0 });
+        const entry: TextureEntry = {
+            handle,
+            slot: this.textureSlots.take(),
+            srgb: descriptor.srgb,
+            label: descriptor.label,
+            source: descriptor.source,
+            state: 'pending',
+            users: 0,
+            contentHash: textureContentHash(descriptor.source, descriptor.srgb),
+        };
+        this.textures.set(handle, entry);
+        this.pendingTextures.add(entry);
         return handle;
     }
 
     destroyTexture(texture: TextureHandle): void {
         this.checkLive();
         const entry = this.texture(texture);
-        if (entry.users > 0) throw new Error(`@pmndrs/ddgi: texture ${texture} is still used by ${entry.users} material(s).`);
+        if (entry.users > 0) throw new Error(`@pmndrs/gi: texture ${texture} is still used by ${entry.users} material(s).`);
+        // Its layer is free for the next texture; nothing reads it until that one's layer is made.
+        this.pendingTextures.delete(entry);
         this.textureSlots.release(entry.slot);
         this.textures.delete(texture);
+    }
+
+    /** Textures whose layer is made, waiting, or refused (for tests and tools). */
+    textureCounts(): { readonly built: number; readonly pending: number; readonly failed: number } {
+        const counts = { built: 0, pending: 0, failed: 0 };
+        for (const entry of this.textures.values()) counts[entry.state]++;
+        return counts;
+    }
+
+    /** A texture's layer in the store once it is made; null while it waits or when it was refused. */
+    textureLayer(texture: TextureHandle): number | null {
+        const entry = this.texture(texture);
+        return entry.state === 'built' ? entry.slot : null;
     }
 
     createMaterial(descriptor: MaterialDescriptor): MaterialHandle {
@@ -627,7 +873,15 @@ export class PlatformScene implements SceneApi, SceneCopy {
         const handle = this.nextHandle++ as MaterialHandle;
         const slot = this.materialSlots.take();
         this.mirror.ensureRecord('materials', slot);
-        const entry: MaterialEntry = { handle, slot, descriptor: { ...descriptor }, albedoTexture: undefined, emissiveTexture: undefined, users: new Set() };
+        const entry: MaterialEntry = {
+            handle,
+            slot,
+            descriptor: { ...descriptor },
+            albedoTexture: undefined,
+            emissiveTexture: undefined,
+            metalnessTexture: undefined,
+            users: new Set(),
+        };
         this.attachTextures(entry);
         this.materials.set(handle, entry);
         this.writeMaterialRecord(entry);
@@ -653,7 +907,7 @@ export class PlatformScene implements SceneApi, SceneCopy {
         this.checkLive();
         const entry = this.material(material);
         if (entry.users.size > 0) {
-            throw new Error(`@pmndrs/ddgi: ${this.name('material', entry.handle, entry.descriptor.label)} is still used by ${entry.users.size} instance(s).`);
+            throw new Error(`@pmndrs/gi: ${this.name('material', entry.handle, entry.descriptor.label)} is still used by ${entry.users.size} instance(s).`);
         }
         this.detachTextures(entry);
         this.mirror.clearRecord('materials', entry.slot);
@@ -694,8 +948,10 @@ export class PlatformScene implements SceneApi, SceneCopy {
         this.mirror.writeList(entry.listOffset, materials.map((material) => material.slot));
         this.writeInstanceRecord(entry);
         if (this.isTraceable(entry)) {
-            this.changeLog.addRegion(this.transforms.box(slot), 'geometry', handle, undefined, slot);
+            this.changeLog.addRegion(this.transforms.box(slot), 'geometry', handle, undefined, slot, 0, this.emits(entry));
             this.topLevelDirty = true;
+        } else if (this.isReceiver(entry)) {
+            this.changeLog.addReceiver(this.transforms.bounds, slot * BOX_NUMBERS);
         }
         if (entry.contributesToGi) this.instanceSetDirty = true;
         this.cachedBounds = null;
@@ -722,7 +978,7 @@ export class PlatformScene implements SceneApi, SceneCopy {
         this.checkLive();
         const count = instances.length;
         if (matrices.length < count * 16) {
-            throw new RangeError(`@pmndrs/ddgi: setTransforms needs 16 numbers per instance: ${count} instances, ${matrices.length} numbers.`);
+            throw new RangeError(`@pmndrs/gi: setTransforms needs 16 numbers per instance: ${count} instances, ${matrices.length} numbers.`);
         }
         const entries = this.batchEntriesFor(instances);
         // Any non-finite number makes the sum of number × 0 NaN: one pass with no branch per number.
@@ -739,7 +995,7 @@ export class PlatformScene implements SceneApi, SceneCopy {
         }
         if (column0 + column1 + column2 + column3 !== 0) {
             const bad = matrices.subarray(0, count * 16).findIndex((value) => !Number.isFinite(value));
-            throw new RangeError(`@pmndrs/ddgi: a transform must be finite (setTransforms entry ${Math.floor(bad / 16)}).`);
+            throw new RangeError(`@pmndrs/gi: a transform must be finite (setTransforms entry ${Math.floor(bad / 16)}).`);
         }
         let firstSlot = Infinity;
         let lastSlot = -1;
@@ -773,7 +1029,8 @@ export class PlatformScene implements SceneApi, SceneCopy {
     /**
      * Moves an instance to the transform at `matrices[offset ... offset + 16)`
      * and logs it: where it was and where it is, both with how far it moved
-     * (`DirtyRegion.moved`), or a moved receiver. Its record is written but
+     * (`DirtyRegion.moved`), or, for a visible receiver, where it is now
+     * (`SceneChanges.receivers`). Its record is written but
      * not marked for upload; the caller marks it, alone or in a span.
      */
     private moveInstance(entry: InstanceEntry, matrices: ArrayLike<number>, offset: number): void {
@@ -782,7 +1039,7 @@ export class PlatformScene implements SceneApi, SceneCopy {
         const linearChanged = transforms.setMatrix(slot, matrices, offset);
         if (!this.isTraceable(entry)) {
             this.writeInstanceWords(entry, linearChanged);
-            this.changeLog.addMovedReceiver();
+            if (this.isReceiver(entry)) this.changeLog.addReceiver(transforms.bounds, slot * BOX_NUMBERS);
             return;
         }
         // Where it was, kept before the record is rewritten (copied number by number:
@@ -791,8 +1048,8 @@ export class PlatformScene implements SceneApi, SceneCopy {
         const at = slot * BOX_NUMBERS;
         for (let index = 0; index < BOX_NUMBERS; index++) boundsBefore[index] = transforms.bounds[at + index];
         const moved = this.writeInstanceWords(entry, linearChanged);
-        this.changeLog.addRegion(boundsBefore, 'geometry', entry.handle, moved, slot);
-        this.changeLog.addRegion(transforms.bounds, 'geometry', entry.handle, moved, slot, at);
+        this.changeLog.addRegion(boundsBefore, 'geometry', entry.handle, moved, slot, 0, this.emits(entry));
+        this.changeLog.addRegion(transforms.bounds, 'geometry', entry.handle, moved, slot, at, this.emits(entry));
         this.topLevelDirty = true;
         this.cachedBounds = null;
     }
@@ -836,8 +1093,8 @@ export class PlatformScene implements SceneApi, SceneCopy {
             floats[base + INSTANCE_WORD.boundsMin + axis] = bounds[at + axis];
             floats[base + INSTANCE_WORD.boundsMax + axis] = bounds[at + 3 + axis];
         }
-        this.changeLog.addRegion(boundsBefore, 'geometry', entry.handle, moved, slot);
-        this.changeLog.addRegion(bounds, 'geometry', entry.handle, moved, slot, at);
+        this.changeLog.addRegion(boundsBefore, 'geometry', entry.handle, moved, slot, 0, this.emits(entry));
+        this.changeLog.addRegion(bounds, 'geometry', entry.handle, moved, slot, at, this.emits(entry));
         this.topLevelDirty = true;
         this.cachedBounds = null;
         return true;
@@ -850,9 +1107,12 @@ export class PlatformScene implements SceneApi, SceneCopy {
         entry.visible = visible;
         this.writeInstanceRecord(entry);
         if (entry.contributesToGi) {
-            this.changeLog.addRegion(this.transforms.box(entry.slot), 'geometry', instance, undefined, entry.slot);
+            this.changeLog.addRegion(this.transforms.box(entry.slot), 'geometry', instance, undefined, entry.slot, 0, this.emits(entry));
             this.topLevelDirty = true;
             this.cachedBounds = null;
+        } else if (visible) {
+            // A receiver that appears needs GI where it is, as one that moved there does.
+            this.changeLog.addReceiver(this.transforms.bounds, entry.slot * BOX_NUMBERS);
         }
     }
 
@@ -876,7 +1136,7 @@ export class PlatformScene implements SceneApi, SceneCopy {
         this.checkLive();
         const entry = this.instance(instance);
         if (this.isTraceable(entry)) {
-            this.changeLog.addRegion(this.transforms.box(entry.slot), 'geometry', instance, undefined, entry.slot);
+            this.changeLog.addRegion(this.transforms.box(entry.slot), 'geometry', instance, undefined, entry.slot, 0, this.emits(entry));
             this.topLevelDirty = true;
         }
         if (entry.contributesToGi) this.instanceSetDirty = true;
@@ -922,7 +1182,7 @@ export class PlatformScene implements SceneApi, SceneCopy {
         this.checkLive();
         const entry = this.light(light);
         if ('type' in changes && (changes as { type?: unknown }).type !== entry.descriptor.type) {
-            throw new Error('@pmndrs/ddgi: a light cannot change type; destroy it and create a new one.');
+            throw new Error('@pmndrs/gi: a light cannot change type; destroy it and create a new one.');
         }
         const next = this.checkedLight({ ...entry.descriptor, ...changes } as LightDescriptor);
         // The log keeps the state the frame started with; it works out boxes and flags at encode.
@@ -967,10 +1227,10 @@ export class PlatformScene implements SceneApi, SceneCopy {
             checkNonNegative(environment.sunIlluminance, 'sunIlluminance');
             checkNonNegative(environment.intensity, 'environment intensity');
         } else if (environment.type === 'texture') {
-            if (!environment.texture) throw new TypeError('@pmndrs/ddgi: a texture environment needs a texture');
+            if (!environment.texture) throw new TypeError('@pmndrs/gi: a texture environment needs a texture');
             checkNonNegative(environment.intensity, 'environment intensity');
         } else if (environment.type !== 'none') {
-            throw new TypeError(`@pmndrs/ddgi: unknown environment type ${(environment as { type: string }).type}`);
+            throw new TypeError(`@pmndrs/gi: unknown environment type ${(environment as { type: string }).type}`);
         }
         this.environmentDescriptor = environment;
         this.environmentChanges++;
@@ -1001,13 +1261,21 @@ export class PlatformScene implements SceneApi, SceneCopy {
         // Staged meshes' bytes were written when they were staged.
         let bytesWritten = this.stagedBytes;
         this.stagedBytes = 0;
+        // Poses first: they write into meshes already in the vertex buffer (CPU poses with writeBuffer,
+        // GPU poses with commands recorded here), which a growth below copies into the new buffer (its
+        // copies are recorded after both).
+        const poses = this.applyPoses(encoder);
+        bytesWritten += poses.bytesWritten;
         const meshes = this.uploadMeshes(encoder, timer);
         bytesWritten += meshes.bytesWritten;
+        // Before the tables: the records of materials whose textures land now are rewritten.
+        this.buildTextures(encoder, timer);
         bytesWritten += this.uploadTables();
 
         const upload: SceneUpload = {
             changes: this.changeLog.take(this.lightLookup),
             meshesUploaded: meshes.uploaded,
+            meshesPosed: poses.posed,
             meshesRemoved: this.removedMeshSlots,
             instancesChanged: this.topLevelDirty,
             instanceSetChanged: this.instanceSetDirty,
@@ -1029,11 +1297,187 @@ export class PlatformScene implements SceneApi, SceneCopy {
         this.vertexBuffer.destroy();
         this.tableBuffer.destroy();
         this.packer.dispose();
+        this.poseCopier.dispose();
+        this.textureStore.dispose();
+    }
+
+    // -----------------------------------------------------------------------
+    // Textures
+    // -----------------------------------------------------------------------
+
+    /**
+     * Hands the store every texture created since the last encode, once its
+     * kernel is compiled (before that they wait). Textures whose layer was
+     * made get their materials' records rewritten, and a material change is
+     * logged over the traceable instances using those materials, so
+     * techniques refresh what they saw of them (DDGI's probes).
+     */
+    private buildTextures(encoder: GPUCommandEncoder, timer: GpuTimerScope | undefined): void {
+        if (!this.textureStore.ready) return;
+        const byLayer = new Map<number, TextureEntry>();
+        const requests: TextureLayerRequest[] = [];
+        for (const entry of this.pendingTextures) {
+            if (!entry.source) continue;
+            byLayer.set(entry.slot, entry);
+            requests.push({ layer: entry.slot, source: entry.source, srgb: entry.srgb, label: entry.label });
+        }
+        this.pendingTextures.clear();
+        // A source that throws is refused alone inside the store (texture-store.ts, stageCatching).
+        // If the store's encode fails as a whole, this frame's textures fail with it rather than
+        // staying pending for good (they were taken off the pending set above).
+        let results: TextureLayerResults;
+        try {
+            results = this.textureStore.encode(encoder, requests, timer);
+        } catch (error) {
+            for (const entry of byLayer.values()) {
+                entry.state = 'failed';
+                entry.source = null;
+            }
+            throw error;
+        }
+        for (const layer of results.failed) {
+            const entry = byLayer.get(layer);
+            if (!entry) continue;
+            entry.state = 'failed';
+            entry.source = null;
+        }
+        // Sources the store is still checking (a host's GPUTexture) are asked for again next time.
+        for (const layer of results.waiting) {
+            const entry = byLayer.get(layer);
+            if (entry) this.pendingTextures.add(entry);
+        }
+        const landed = new Set<TextureEntry>();
+        for (const layer of results.built) {
+            const entry = byLayer.get(layer);
+            if (!entry) continue;
+            entry.state = 'built';
+            entry.source = null;
+            landed.add(entry);
+        }
+        if (landed.size === 0) return;
+        for (const material of this.materials.values()) {
+            const uses = [material.albedoTexture, material.emissiveTexture, material.metalnessTexture].some((texture) => texture !== undefined && landed.has(texture));
+            if (!uses) continue;
+            this.writeMaterialRecord(material);
+            for (const instance of material.users) {
+                if (this.isTraceable(instance)) this.changeLog.addRegion(this.transforms.box(instance.slot), 'material', instance.handle);
+            }
+        }
     }
 
     // -----------------------------------------------------------------------
     // Uploads
     // -----------------------------------------------------------------------
+
+    /**
+     * Applies the waiting poses of deforming meshes (`setDeformedPositions`):
+     * writes each into its mesh's positions in the vertex buffer (a CPU pose
+     * with `writeBuffer`, a GPU pose with the pose copy recorded into
+     * `encoder`), reports the mesh in `meshesPosed` so the tracer refits its
+     * tree from those positions in the same frame, and logs it: per instance,
+     * the mesh's deform box in world space, with how far the vertices
+     * travelled (`DirtyRegion.moved`), or a receiver box. When a CPU pose
+     * leaves the box, the box grows: the instances' boxes change, so the box
+     * before is logged too. A GPU pose can't be read here, so its box stays
+     * the declared one and its `moved` is that box's diagonal (the most any
+     * vertex inside the box can travel).
+     *
+     * A mesh whose words haven't reached the GPU yet (created or replaced
+     * this frame) keeps its pose waiting for the next encode: its data is
+     * written by this encode's upload, after these writes. A GPU pose that
+     * can't be copied in this encode (its mesh isn't on the GPU yet, or the
+     * copy kernel is still compiling) is dropped instead: the host only
+     * promises its buffer or texture until it submits this frame, and may
+     * destroy it after (the contract), so keeping a reference for later
+     * could read a destroyed buffer. The host's next pose takes its place.
+     */
+    private applyPoses(encoder: GPUCommandEncoder): { readonly posed: PosedMesh[]; readonly bytesWritten: number } {
+        const posed: PosedMesh[] = [];
+        const copies: PoseCopy[] = [];
+        let bytesWritten = 0;
+        for (const mesh of this.posesWaiting) {
+            const deform = mesh.deform;
+            if (!deform || !deform.hasWaiting) {
+                this.posesWaiting.delete(mesh);
+                continue;
+            }
+            const onGpu = mesh.pending === null && mesh.vertexOffset >= 0;
+            if (deform.waitingOnGpu && !(onGpu && this.poseCopier.ready)) {
+                deform.waitingOnGpu = null;
+                deform.hasWaiting = false;
+                this.posesWaiting.delete(mesh);
+                continue;
+            }
+            if (!onGpu) continue;
+            this.posesWaiting.delete(mesh);
+
+            const positionsWord = mesh.vertexOffset + mesh.layout.offsets.positions;
+            let travelled: number;
+            let grew = false;
+            const gpuPose = deform.waitingOnGpu ? deform.takeGpuPose() : null;
+            if (gpuPose) {
+                copies.push({ pose: gpuPose, vertexCount: deform.vertexCount, destinationWord: positionsWord });
+                travelled = boxDiagonal(mesh.layout.bounds);
+            } else {
+                const known = deform.currentKnown;
+                travelled = scanPose(deform.waiting, deform.current, this.poseBounds);
+                deform.swap();
+                // After a GPU pose the CPU's copy of the positions is out of date: the box's diagonal bounds the travel.
+                if (!known) travelled = Math.max(travelled, boxDiagonal(mesh.layout.bounds));
+                this.device.queue.writeBuffer(this.vertexBuffer, positionsWord * 4, deform.current);
+                bytesWritten += deform.current.byteLength;
+
+                if (deform.declaredBounds && !deform.warnedOutside && !boxInside(this.poseBounds, deform.declaredBounds)) {
+                    deform.warnedOutside = true;
+                    this.warn(`@pmndrs/gi: ${this.name('mesh', mesh.handle, mesh.label)}: deformed positions left its deformBounds; the box grows to hold them (this warning is shown once).`);
+                }
+                const grownBounds = Float32Array.from(mesh.layout.bounds);
+                grew = growBox(grownBounds, this.poseBounds);
+                if (grew) {
+                    mesh.layout = { ...mesh.layout, bounds: grownBounds };
+                    this.writeMeshRecord(mesh);
+                    this.cachedBounds = null;
+                }
+            }
+            for (const instance of mesh.instances) {
+                const traceable = this.isTraceable(instance);
+                const slot = instance.slot;
+                if (grew) {
+                    if (traceable) this.changeLog.addRegion(this.transforms.box(slot), 'geometry', instance.handle, undefined, slot, 0, this.emits(instance));
+                    this.transforms.setMeshBounds(slot, mesh.layout.bounds);
+                    this.writeInstanceRecord(instance);
+                    if (traceable) this.topLevelDirty = true;
+                }
+                if (traceable) {
+                    const moved = travelled * largestScale(this.transforms.matrices, slot);
+                    this.changeLog.addRegion(this.transforms.box(slot), 'geometry', instance.handle, moved, slot, 0, this.emits(instance));
+                } else if (this.isReceiver(instance)) {
+                    this.changeLog.addReceiver(this.transforms.bounds, slot * BOX_NUMBERS);
+                }
+            }
+            posed.push({ slot: mesh.slot, layout: mesh.layout, vertexOffset: mesh.vertexOffset });
+        }
+        this.poseCopier.encode(encoder, this.vertexBuffer, copies);
+        return { posed, bytesWritten };
+    }
+
+    /** A deforming descriptor's `deformBounds`, checked; null when it gives none or isn't deforming. */
+    private declaredDeformBounds(descriptor: MeshDescriptor, what: string): Float32Array | null {
+        return descriptor.deforming === true && descriptor.deformBounds ? checkedDeformBounds(descriptor.deformBounds, what) : null;
+    }
+
+    /**
+     * For a `deforming` descriptor: its layout with the box every pose stays
+     * in (the rest pose's, grown to `declared`, its checked `deformBounds`),
+     * so its instances' boxes don't change from pose to pose; and the state
+     * its poses need. Other meshes keep their layout and get no state.
+     */
+    private deformingLayout(layout: MeshLayout, descriptor: MeshDescriptor, declared: Float32Array | null): { layout: MeshLayout; deform: DeformState | null } {
+        if (descriptor.deforming !== true) return { layout, deform: null };
+        const bounds = Float32Array.from(layout.bounds);
+        if (declared) growBox(bounds, declared);
+        return { layout: { ...layout, bounds }, deform: new DeformState(descriptor.positions, declared) };
+    }
 
     /**
      * Places the queued meshes in the vertex buffer and uploads them: the CPU
@@ -1186,7 +1630,11 @@ export class PlatformScene implements SceneApi, SceneCopy {
      * Checks and lays out a mesh, copies what the scene keeps of the host's
      * arrays, and stages them for the GPU or packs them on the CPU.
      */
-    private prepareMeshData(descriptor: MeshDescriptor): { layout: MeshLayout; pending: PendingMeshData } {
+    private prepareMeshData(given: MeshDescriptor): { layout: MeshLayout; pending: PendingMeshData } {
+        // A deforming mesh is stored without normals: they would be the rest pose's. Hit shading then
+        // uses each triangle's geometric normal (giInstanceNormalAt's fallback), worked out from the
+        // positions the scene copy holds now, so it follows every pose (docs/design/m3-moving.md §3).
+        const descriptor = given.deforming === true && given.normals ? { ...given, normals: undefined } : given;
         const plan = planMesh(descriptor);
         // Tree builders read positions and indices after this call has returned, when
         // the host may have changed its arrays: they get copies, made now.
@@ -1361,7 +1809,9 @@ export class PlatformScene implements SceneApi, SceneCopy {
         const albedo = descriptor.albedo ?? [1, 1, 1];
         const emissive = descriptor.emissive ?? [0, 0, 0];
         const emissiveIntensity = descriptor.emissiveIntensity ?? 1;
-        const alphaCutoff = descriptor.alphaCutoff ?? 0;
+        const alphaMode = resolvedAlphaMode(descriptor);
+        // The record's cutoff is 0 unless the mode is cutout, as before alpha modes (0 = no holes).
+        const alphaCutoff = alphaMode === 'cutout' ? (descriptor.alphaCutoff ?? DEFAULT_ALPHA_CUTOFF) : 0;
         for (let channel = 0; channel < 3; channel++) {
             floats[base + MATERIAL_WORD.albedo + channel] = albedo[channel];
             floats[base + MATERIAL_WORD.emission + channel] = emissive[channel] * emissiveIntensity;
@@ -1373,11 +1823,23 @@ export class PlatformScene implements SceneApi, SceneCopy {
             (descriptor.doubleSided !== false ? MATERIAL_FLAG.doubleSided : 0) |
             (alphaCutoff > 0 && material.albedoTexture ? MATERIAL_FLAG.alphaTest : 0);
         this.writeUvMapping(base + MATERIAL_WORD.albedoUvMatrix, base + MATERIAL_WORD.albedoUvTranslation, descriptor.albedoUv);
-        words[base + MATERIAL_WORD.albedoTexture] = material.albedoTexture ? material.albedoTexture.slot : NONE;
+        words[base + MATERIAL_WORD.albedoTexture] = textureLayer(material.albedoTexture);
         words[base + MATERIAL_WORD.albedoUvPacked] = packUvMapping(descriptor.albedoUv);
         this.writeUvMapping(base + MATERIAL_WORD.emissiveUvMatrix, base + MATERIAL_WORD.emissiveUvTranslation, descriptor.emissiveUv);
-        words[base + MATERIAL_WORD.emissiveTexture] = material.emissiveTexture ? material.emissiveTexture.slot : NONE;
+        words[base + MATERIAL_WORD.emissiveTexture] = textureLayer(material.emissiveTexture);
         words[base + MATERIAL_WORD.emissiveUvPacked] = packUvMapping(descriptor.emissiveUv);
+        // While a metalness map's layer is still being made, the material is not metal at all: glTF
+        // materials put metalness 1 in the factor and the real values in the map, so the factor alone
+        // would make every such material black (albedo x (1 - 1)) until its map lands.
+        const metalnessMapPending = material.metalnessTexture !== undefined && material.metalnessTexture.state !== 'built';
+        floats[base + MATERIAL_WORD.metalness] = metalnessMapPending ? 0 : (descriptor.metalness ?? 0);
+        floats[base + MATERIAL_WORD.opacity] = descriptor.opacity ?? 1;
+        words[base + MATERIAL_WORD.alphaMode] = ALPHA_MODE[alphaMode];
+        words[base + MATERIAL_WORD.reserved] = 0;
+        const metalnessMap = descriptor.metalnessTexture;
+        this.writeUvMapping(base + MATERIAL_WORD.metalnessUvMatrix, base + MATERIAL_WORD.metalnessUvTranslation, metalnessMap?.uv);
+        words[base + MATERIAL_WORD.metalnessTexture] = textureLayer(material.metalnessTexture);
+        words[base + MATERIAL_WORD.metalnessUvPacked] = packUvMapping(metalnessMap?.uv) | (TEXTURE_CHANNEL[metalnessMap?.channel ?? 'b'] << UV_PACK_SHIFT.textureChannel);
         this.mirror.markRecord('materials', material.slot);
     }
 
@@ -1422,7 +1884,7 @@ export class PlatformScene implements SceneApi, SceneCopy {
     // -----------------------------------------------------------------------
 
     private checkLive(): void {
-        if (this.disposed) throw new Error('@pmndrs/ddgi: this scene was disposed.');
+        if (this.disposed) throw new Error('@pmndrs/gi: this scene was disposed.');
     }
 
     private name(kind: string, handle: number, label: string | undefined): string {
@@ -1431,7 +1893,7 @@ export class PlatformScene implements SceneApi, SceneCopy {
 
     private lookup<Entry>(map: Map<number, Entry>, handle: number, kind: string): Entry {
         const entry = map.get(handle);
-        if (!entry) throw new Error(`@pmndrs/ddgi: unknown or destroyed ${kind} handle ${handle}.`);
+        if (!entry) throw new Error(`@pmndrs/gi: unknown or destroyed ${kind} handle ${handle}.`);
         return entry;
     }
 
@@ -1459,10 +1921,30 @@ export class PlatformScene implements SceneApi, SceneCopy {
         return instance.contributesToGi && instance.visible;
     }
 
+    /**
+     * Whether an instance gives off light (`DirtyRegion.emits`): one of its
+     * materials has a non-black emissive colour and a positive intensity
+     * (emission is emissive × intensity × texture, and emissive defaults to
+     * black). Read from the materials as they are now, so a material edited
+     * to glow counts from its next region on.
+     */
+    private emits(instance: InstanceEntry): boolean {
+        return instance.materials.some(({ descriptor }) => {
+            const emissive = descriptor.emissive;
+            const intensity = descriptor.emissiveIntensity ?? 1;
+            return emissive !== undefined && intensity > 0 && (emissive[0] > 0 || emissive[1] > 0 || emissive[2] > 0);
+        });
+    }
+
+    /** Shown, but left out of rays: it only receives GI (`SceneChanges.receivers`). */
+    private isReceiver(instance: InstanceEntry): boolean {
+        return !instance.contributesToGi && instance.visible;
+    }
+
     private materialList(handles: readonly MaterialHandle[], mesh: MeshEntry): MaterialEntry[] {
         if (handles.length < mesh.layout.materialSlotCount) {
             throw new RangeError(
-                `@pmndrs/ddgi: ${this.name('mesh', mesh.handle, mesh.label)} uses ${mesh.layout.materialSlotCount} material slot(s), but the instance gives ${handles.length} material(s).`,
+                `@pmndrs/gi: ${this.name('mesh', mesh.handle, mesh.label)} uses ${mesh.layout.materialSlotCount} material slot(s), but the instance gives ${handles.length} material(s).`,
             );
         }
         return handles.map((handle) => this.material(handle));
@@ -1473,10 +1955,10 @@ export class PlatformScene implements SceneApi, SceneCopy {
      * from at once (into InstanceTransforms), so a call allocates nothing.
      */
     private checkedTransform(transform: Mat4): Float64Array {
-        if (!transform || transform.length < 16) throw new RangeError('@pmndrs/ddgi: a transform needs 16 numbers (column-major 4x4).');
+        if (!transform || transform.length < 16) throw new RangeError('@pmndrs/gi: a transform needs 16 numbers (column-major 4x4).');
         const matrix = this.transformScratch;
         for (let index = 0; index < 16; index++) {
-            if (!Number.isFinite(transform[index])) throw new RangeError('@pmndrs/ddgi: a transform must be finite.');
+            if (!Number.isFinite(transform[index])) throw new RangeError('@pmndrs/gi: a transform must be finite.');
             matrix[index] = transform[index];
         }
         return matrix;
@@ -1486,9 +1968,18 @@ export class PlatformScene implements SceneApi, SceneCopy {
         checkColor(descriptor.albedo, 'albedo');
         checkColor(descriptor.emissive, 'emissive');
         checkNonNegative(descriptor.emissiveIntensity, 'emissiveIntensity');
-        const cutoff = descriptor.alphaCutoff;
-        if (cutoff !== undefined && !(cutoff >= 0 && cutoff <= 1)) throw new RangeError(`alphaCutoff must be in [0, 1], got ${cutoff}`);
-        for (const [name, mapping] of [['albedoUv', descriptor.albedoUv], ['emissiveUv', descriptor.emissiveUv]] as const) {
+        checkUnitInterval(descriptor.alphaCutoff, 'alphaCutoff');
+        checkUnitInterval(descriptor.metalness, 'metalness');
+        checkUnitInterval(descriptor.opacity, 'opacity');
+        if (descriptor.alphaMode !== undefined && !(descriptor.alphaMode in ALPHA_MODE)) throw new RangeError(`alphaMode must be opaque, cutout or stochastic, got ${descriptor.alphaMode}`);
+        const metalnessMap = descriptor.metalnessTexture;
+        if (metalnessMap !== undefined && !(metalnessMap.channel in TEXTURE_CHANNEL)) throw new RangeError(`metalnessTexture.channel must be r, g, b or a, got ${metalnessMap.channel}`);
+        const mappings = [
+            ['albedoUv', descriptor.albedoUv],
+            ['emissiveUv', descriptor.emissiveUv],
+            ['metalnessTexture.uv', metalnessMap?.uv],
+        ] as const;
+        for (const [name, mapping] of mappings) {
             if (!mapping) continue;
             if (mapping.matrix !== undefined && !isFiniteVector(mapping.matrix, 6)) throw new RangeError(`${name}.matrix must be six finite numbers`);
             if (mapping.channel !== undefined && mapping.channel !== 0 && mapping.channel !== 1) throw new RangeError(`${name}.channel must be 0 or 1`);
@@ -1498,21 +1989,22 @@ export class PlatformScene implements SceneApi, SceneCopy {
         }
         if (descriptor.albedoTexture !== undefined) this.texture(descriptor.albedoTexture);
         if (descriptor.emissiveTexture !== undefined) this.texture(descriptor.emissiveTexture);
+        if (metalnessMap !== undefined) this.texture(metalnessMap.texture);
     }
 
     private attachTextures(material: MaterialEntry): void {
-        const { albedoTexture, emissiveTexture } = material.descriptor;
+        const { albedoTexture, emissiveTexture, metalnessTexture } = material.descriptor;
         material.albedoTexture = albedoTexture !== undefined ? this.texture(albedoTexture) : undefined;
         material.emissiveTexture = emissiveTexture !== undefined ? this.texture(emissiveTexture) : undefined;
-        if (material.albedoTexture) material.albedoTexture.users++;
-        if (material.emissiveTexture) material.emissiveTexture.users++;
+        material.metalnessTexture = metalnessTexture !== undefined ? this.texture(metalnessTexture.texture) : undefined;
+        for (const texture of [material.albedoTexture, material.emissiveTexture, material.metalnessTexture]) if (texture) texture.users++;
     }
 
     private detachTextures(material: MaterialEntry): void {
-        if (material.albedoTexture) material.albedoTexture.users--;
-        if (material.emissiveTexture) material.emissiveTexture.users--;
+        for (const texture of [material.albedoTexture, material.emissiveTexture, material.metalnessTexture]) if (texture) texture.users--;
         material.albedoTexture = undefined;
         material.emissiveTexture = undefined;
+        material.metalnessTexture = undefined;
     }
 
     /** A checked copy of a light descriptor. Throws on anything the shaders couldn't use. */
@@ -1542,11 +2034,26 @@ export class PlatformScene implements SceneApi, SceneCopy {
                 }
             }
         } else {
-            throw new TypeError(`@pmndrs/ddgi: unknown light type ${(descriptor as { type: string }).type}`);
+            throw new TypeError(`@pmndrs/gi: unknown light type ${(descriptor as { type: string }).type}`);
         }
         // Its own arrays: the change log compares states, and a host editing a vector in place would change the stored one too.
         return copyLight(descriptor);
     }
+}
+
+/** A material texture word: the texture's store layer once it is made, else NONE (the material shades as if it were white). */
+function textureLayer(texture: TextureEntry | undefined): number {
+    return texture !== undefined && texture.state === 'built' ? texture.slot : NONE;
+}
+
+/** The alpha mode a material has: its own, else cutout when it names a cutoff above 0 (as before alpha modes), else opaque. */
+function resolvedAlphaMode(descriptor: MaterialDescriptor): AlphaMode {
+    if (descriptor.alphaMode !== undefined) return descriptor.alphaMode;
+    return (descriptor.alphaCutoff ?? 0) > 0 ? 'cutout' : 'opaque';
+}
+
+function checkUnitInterval(value: number | undefined, what: string): void {
+    if (value !== undefined && !(value >= 0 && value <= 1)) throw new RangeError(`${what} must be in [0, 1], got ${value}`);
 }
 
 function packUvMapping(mapping: UvMapping | undefined): number {

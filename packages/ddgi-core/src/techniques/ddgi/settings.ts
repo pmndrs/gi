@@ -3,8 +3,8 @@
  * volume they describe.
  *
  * Settings are a live object, as the technique contract asks: the host edits
- * fields and the next `encode` reads them. Six of them need new GPU
- * resources and only take effect at the next `prepare`: `volume`,
+ * fields and the next `encode` reads them. Seven of them need new GPU
+ * resources and only take effect at the next `prepare`: `volume`, `volumes`,
  * `irradianceTexels`, `distanceTexels`, `maxProbesPerFrame`,
  * `lightGroups.count` (its weights are live) and `sunLayer`.
  */
@@ -19,11 +19,40 @@ export interface DDGIVolumeSettings {
     readonly size: Vec3;
     /** Distance between neighbouring probes, metres: one number, or one per axis. */
     readonly spacing: number | Vec3;
+    /**
+     * With several volumes (`DDGISettings.volumes`): which one answers where
+     * they overlap. Higher first, default 0; equal priorities go in the
+     * list's order. A dense volume inside a coarse one gets the higher
+     * priority, and the coarse one fills in across its fade band
+     * (docs/design/m3-moving.md §4.1, volumes.ts).
+     */
+    readonly priority?: number;
+    /**
+     * `fixed` (the default): the probes stay where `center` and `size` put
+     * them. `camera`: the box is a window of probes that follows the camera
+     * (docs/design/m3-moving.md §4.2, scroll.ts). Its probes sit on a lattice
+     * fixed in world space, through the box's probes at `spacing` steps; the
+     * window starts where `center` and `size` put it, keeps its size, and
+     * moves by whole planes of probes to stay centred on the camera, reusing
+     * the planes it leaves behind for the planes entering ahead. Needs at
+     * least 4 probes on every axis.
+     */
+    readonly follow?: 'fixed' | 'camera';
 }
 
 export interface DDGISettings {
-    /** The box of probes. New `prepare` when changed. */
+    /**
+     * The box of probes. New `prepare` when changed. With `volumes` given,
+     * the first of them (the technique reads `volumes`).
+     */
     volume: DDGIVolumeSettings;
+    /**
+     * Several boxes of probes in one technique (M3; at most 8, volumes.ts):
+     * they share one set of atlases and blend by `priority` where they
+     * overlap. When given, these are the volumes and `volume` is the first of
+     * them; when not, `volume` is the one volume. New `prepare` when changed.
+     */
+    volumes?: readonly DDGIVolumeSettings[];
     /** Rays per probe and update: a multiple of 32, from 64 to 512. The first 32 are the fixed rays. */
     raysPerProbe: number;
     /** Interior texels per side of a probe's irradiance tile. New `prepare` when changed. */
@@ -442,10 +471,10 @@ const RAMP_UPDATES_ENDLESS = 1e9;
 /** The largest ramp the kernel takes: beyond it a probe would stay noisy for thousands of updates. */
 const MAX_UPDATES_PER_SAMPLE = 64;
 
-/** What a host must give; everything else has a default. */
-export type DDGISettingsInput = Partial<DDGISettings> & { readonly volume: DDGIVolumeSettings };
+/** What a host must give, a volume or a list of them; everything else has a default. */
+export type DDGISettingsInput = Partial<DDGISettings> & ({ readonly volume: DDGIVolumeSettings } | { readonly volumes: readonly DDGIVolumeSettings[] });
 
-export const DEFAULT_DDGI_SETTINGS: Readonly<Omit<DDGISettings, 'volume'>> = {
+export const DEFAULT_DDGI_SETTINGS: Readonly<Omit<DDGISettings, 'volume' | 'volumes'>> = {
     raysPerProbe: 256,
     irradianceTexels: 6,
     distanceTexels: 14,
@@ -556,7 +585,10 @@ export const DISTANCE_CLAMP_SHARE_OF_DIAGONAL = 1.5;
 export const CHANGE_RULE_OFF = -1;
 
 export function withDefaults(input: DDGISettingsInput): DDGISettings {
-    return { ...DEFAULT_DDGI_SETTINGS, ...input };
+    // With a list of volumes, `volume` is the first of them, for hosts that read one.
+    const volume = 'volume' in input && input.volume ? input.volume : input.volumes?.[0];
+    if (!volume) throw new Error('@pmndrs/gi: DDGI settings need a volume (or a non-empty list of volumes)');
+    return { ...DEFAULT_DDGI_SETTINGS, ...input, volume };
 }
 
 /** The probe grid a volume setting describes. */
@@ -578,8 +610,8 @@ export function probeGrid(volume: DDGIVolumeSettings): ProbeGrid {
     const spacing: [number, number, number] =
         typeof volume.spacing === 'number' ? [volume.spacing, volume.spacing, volume.spacing] : [volume.spacing[0], volume.spacing[1], volume.spacing[2]];
     for (let axis = 0; axis < 3; axis++) {
-        if (!(spacing[axis] > 0) || !Number.isFinite(spacing[axis])) throw new Error(`@pmndrs/ddgi: volume spacing must be a positive number, got ${spacing[axis]}`);
-        if (!(volume.size[axis] >= 0) || !Number.isFinite(volume.size[axis])) throw new Error(`@pmndrs/ddgi: volume size must be zero or more, got ${volume.size[axis]}`);
+        if (!(spacing[axis] > 0) || !Number.isFinite(spacing[axis])) throw new Error(`@pmndrs/gi: volume spacing must be a positive number, got ${spacing[axis]}`);
+        if (!(volume.size[axis] >= 0) || !Number.isFinite(volume.size[axis])) throw new Error(`@pmndrs/gi: volume size must be zero or more, got ${volume.size[axis]}`);
     }
     const counts = spacing.map((axisSpacing, axis) => Math.floor(volume.size[axis] / axisSpacing + 1e-6) + 1) as [number, number, number];
     const origin = spacing.map((axisSpacing, axis) => volume.center[axis] - ((counts[axis] - 1) * axisSpacing) / 2) as [number, number, number];

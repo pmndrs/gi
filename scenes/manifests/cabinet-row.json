@@ -67,6 +67,34 @@
                 { "t": 3, "position": [4.0, 2.2, 1.7] },
                 { "t": 6, "position": [0.8, 2.2, 1.7] }
             ]
+        },
+        {
+            "id": "cabinet-door-swing",
+            "label": "A cabinet door opens, stays open 4 s, and closes",
+            "target": "object:base-unit-1-door",
+            "interpolation": "smooth",
+            "loop": true,
+            "pivot": [1.2, 0, 0.58],
+            "keyframes": [
+                { "t": 0, "rotationDeg": [0, 0, 0] },
+                { "t": 3, "rotationDeg": [0, 0, 0] },
+                { "t": 4.5, "rotationDeg": [0, -100, 0] },
+                { "t": 8.5, "rotationDeg": [0, -100, 0] },
+                { "t": 10, "rotationDeg": [0, 0, 0] }
+            ]
+        },
+        {
+            "id": "cabinet-door-step",
+            "label": "The cabinet door jumps open, then shut, every 4 s",
+            "target": "object:base-unit-1-door",
+            "interpolation": "step",
+            "loop": true,
+            "pivot": [1.2, 0, 0.58],
+            "keyframes": [
+                { "t": 0, "rotationDeg": [0, 0, 0] },
+                { "t": 4, "rotationDeg": [0, -100, 0] },
+                { "t": 8, "rotationDeg": [0, 0, 0] }
+            ]
         }
     ],
     "environment": {

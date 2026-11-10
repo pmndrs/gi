@@ -38,6 +38,10 @@
  * (SPEC's HomeFig rule 1). The sky and emission go into the environment
  * layer, and `gi/direct` puts each light group's direct light into its own.
  *
+ * **Several volumes** (M3, volumes.ts): the kernel traces the probes of the
+ * volume in its uniforms, and its bounce lookup reads every volume through
+ * the volume table, blended by priority as renderers read them.
+ *
  * Uses the platform's group 0 (scene copy, rays, hit shading) and its own
  * group 1. Storage buffers: tracer 3 + scene copy 2 + update list + the ray
  * scratch (deferred) or its ray results (inline) = 7, with or without layers
@@ -83,6 +87,14 @@ const DDGI_BACK_FACE_DISTANCE_SHARE: f32 = 0.2;
 // and still a finite half float (the largest is 65,504). The blend clamps
 // distances anyway; phase B takes a miss as the most open direction.
 const DDGI_MISS_DISTANCE: f32 = 60000.0;
+
+// The cone one probe ray stands for, for the mip textures are read at
+// (giSurfaceAtCone): a probe's rays split the sphere's 4 pi steradians
+// evenly, so each covers a cone about sqrt(4 pi / raysPerProbe) radians
+// wide, 0.22 at the default 256 rays.
+fn ddgiRayConeSpread() -> f32 {
+    return sqrt(4.0 * DDGI_PI / f32(ddgi.raysPerProbe));
+}
 `;
 
 export const DDGI_TRACE_WGSL = /* wgsl */ `
@@ -99,6 +111,8 @@ ${TRACE_CONSTANTS_WGSL}
 @group(1) @binding(5) var ddgiProbeData: texture_2d_array<f32>;
 // Linear, clamp to edge: tiles have borders, so filtering never needs to wrap.
 @group(1) @binding(6) var ddgiAtlasSampler: sampler;
+// Every volume's sampling parameters, a row each in priority order, for the bounce light (volumes.ts).
+@group(1) @binding(8) var ddgiVolumeTable: texture_2d<f32>;
 
 // What radiance travels back along a blended ray that hit a front face:
 // emission + albedo / pi × (direct light + bounce light).
@@ -110,14 +124,14 @@ ${TRACE_CONSTANTS_WGSL}
 // running sum and albedo / pi alive there. Measured (T1.9a, RTX 3060, the same
 // probes): 512 probes on Sponza 17-30% faster, two-room 11%, Cornell 20%.
 fn ddgiShadeRay(ray: GiRay, hit: GiHit, random: vec2f) -> vec3f {
-    let surface = giSurfaceAt(ray, hit);
+    let surface = giSurfaceAtCone(ray, hit, ddgiRayConeSpread());
     // Bounce light from the current field: the field already holds every
     // earlier bounce, so this gives unlimited bounces over updates.
-    let bounce = ddgiSampleIrradiance(
+    // Every volume, blended by priority as renderers read them (wgsl/sample.ts), so light bounces between volumes.
+    let bounce = ddgiSampleVolumes(
         surface.position, surface.normal, ray.direction,
-        ddgiIrradianceAtlas, ddgiAtlasSampler, ddgiDistanceAtlas, ddgiAtlasSampler, ddgiProbeData,
-        ddgi.volumeOrigin, ddgi.volumeSpacing, ddgi.volumeCounts, ddgi.volumeTexels,
-    );
+        ddgiIrradianceAtlas, ddgiAtlasSampler, ddgiDistanceAtlas, ddgiAtlasSampler, ddgiProbeData, ddgiVolumeTable,
+    ).irradiance;
     let albedoOverPi = surface.albedo * (1.0 / DDGI_PI);
     let emittedAndBounced = surface.emission + albedoOverPi * (ddgi.bounceEnergy * bounce);
     let direct = giDirectIrradiance(surface, DDGI_ALL_LIGHT_GROUPS, random);
@@ -139,7 +153,7 @@ fn ddgiTrace(
     let rayIndex = group.x * DDGI_TRACE_WORKGROUP_SIZE + thread;
     let probeIndex = ddgiUpdateList[slot];
     let probe = ddgiProbeCoordinates(probeIndex, ddgiProbeCount());
-    let probeData = ddgiReadProbeData(ddgiProbeData, probe);
+    let probeData = ddgiReadProbeData(ddgiProbeData, ddgiUniformVolume(), probe);
     if (rayIndex >= ddgiTracedRays(probeData.state)) {
         return;
     }
@@ -187,7 +201,7 @@ const ONE_LAYER_RESULTS_WGSL = /* wgsl */ `
         } else {
             signedDistance = hit.t;
             if (!isFixed) {
-                let surface = giSurfaceAt(ray, hit);
+                let surface = giSurfaceAtCone(ray, hit, ddgiRayConeSpread());
                 radiance = ddgiEmittedAndBounced(ray, surface);
                 // Only hits a light can reach go on the list (half of Sponza's face away from the sun).
                 deferred = giNeedsDirect(surface);
@@ -198,18 +212,18 @@ const ONE_LAYER_RESULTS_WGSL = /* wgsl */ `
         }
         giStoreRayResult(rayRecord, radiance, signedDistance);`;
 
-/** Emission plus albedo / π × bounce, with one irradiance layer: M1's lookup through `ddgiSampleIrradiance`. */
+/** Emission plus albedo / π × bounce, with one irradiance layer: every volume's field through `ddgiSampleVolumes`. */
 const ONE_LAYER_SHADING_WGSL = /* wgsl */ `
 // Emission + albedo / pi × bounce light from the current field. The direct
 // part, albedo / pi × direct light, is added by gi/direct.
 fn ddgiEmittedAndBounced(ray: GiRay, surface: GiSurface) -> vec3f {
     // Bounce light from the current field: the field already holds every
     // earlier bounce, so this gives unlimited bounces over updates.
-    let bounce = ddgiSampleIrradiance(
+    // Every volume, blended by priority as renderers read them (wgsl/sample.ts), so light bounces between volumes.
+    let bounce = ddgiSampleVolumes(
         surface.position, surface.normal, ray.direction,
-        ddgiIrradianceAtlas, ddgiAtlasSampler, ddgiDistanceAtlas, ddgiAtlasSampler, ddgiProbeData,
-        ddgi.volumeOrigin, ddgi.volumeSpacing, ddgi.volumeCounts, ddgi.volumeTexels,
-    );
+        ddgiIrradianceAtlas, ddgiAtlasSampler, ddgiDistanceAtlas, ddgiAtlasSampler, ddgiProbeData, ddgiVolumeTable,
+    ).irradiance;
     return surface.emission + surface.albedo * (1.0 / DDGI_PI) * (ddgi.bounceEnergy * bounce);
 }
 `;
@@ -235,18 +249,23 @@ ${perLayer(plan, (layer) => `    layer${layer}: vec3f,`)}
 
 const DDGI_IRRADIANCE_LAYERS: f32 = ${layers}.0;
 
-// The field's irradiance in every layer at a surface point: the 8 probes'
-// weights once (ddgiCornerWeight, as ddgiAccumulateField has them), each
-// layer's tile read with them. Layer L's tile sits L blocks of the probe grid
-// to the right (light-groups.ts), so its coordinates are layer 0's plus L / layers.
-fn ddgiLayeredIrradiance(position: vec3f, normal: vec3f, viewDirection: vec3f) -> DdgiLayerRadiance {
-    let volume = ddgiUniformVolume();
+// One volume's field in every layer at a surface point, before normalising:
+// the 8 probes' weights once (ddgiCornerWeight, as ddgiAccumulateVolume has
+// them), each layer's tile read with them. Layer L's tile sits L blocks of
+// the atlas to the right (light-groups.ts), so its coordinates are layer 0's
+// plus L / layers.
+struct DdgiLayeredField {
+    sums: DdgiLayerRadiance,
+    weight: f32,
+}
+
+fn ddgiLayeredVolume(volume: DdgiVolume, position: vec3f, normal: vec3f, viewDirection: vec3f) -> DdgiLayeredField {
     let samplePoint = ddgiBiasedPoint(volume, position, normal, viewDirection);
     let cage = ddgiCage(volume, samplePoint);
-    let blockScale = ddgiAtlasScale(volume.irradianceTexels, volume.counts);
+    let blockScale = ddgiAtlasScale(volume, volume.irradianceTexels);
     // The layered atlas is 'layers' blocks wide.
     let irradianceScale = DdgiAtlasScale(blockScale.tile, blockScale.inverseSize * vec2f(1.0 / DDGI_IRRADIANCE_LAYERS, 1.0));
-    let distanceScale = ddgiAtlasScale(volume.distanceTexels, volume.counts);
+    let distanceScale = ddgiAtlasScale(volume, volume.distanceTexels);
     let normalInTile = ddgiTileTexel(normal, volume.irradianceTexels);
     var sums = DdgiLayerRadiance();
     var weightSum = 0.0;
@@ -255,12 +274,79 @@ fn ddgiLayeredIrradiance(position: vec3f, normal: vec3f, viewDirection: vec3f) -
         if (!weighted.counts) {
             continue;
         }
-        let uv = ddgiTileUv(normalInTile, weighted.probe, irradianceScale);
-${perLayer(plan, (layer) => `        sums.layer${layer} += weighted.weight * textureSampleLevel(ddgiIrradianceAtlas, ddgiAtlasSampler, uv + vec2f(${layer}.0 / DDGI_IRRADIANCE_LAYERS, 0.0), weighted.probe.y, 0.0).rgb;`)}
+        let uv = ddgiTileUv(normalInTile, weighted.slot, irradianceScale);
+        let atlasLayer = ddgiAtlasLayer(volume, weighted.slot);
+${perLayer(plan, (layer) => `        sums.layer${layer} += weighted.weight * textureSampleLevel(ddgiIrradianceAtlas, ddgiAtlasSampler, uv + vec2f(${layer}.0 / DDGI_IRRADIANCE_LAYERS, 0.0), atlasLayer, 0.0).rgb;`)}
         weightSum += weighted.weight;
     }
-    let weight = max(weightSum, DDGI_MIN_WEIGHT_SUM);
-    return DdgiLayerRadiance(${perLayer(plan, (layer) => `sums.layer${layer} / weight`, ', ')});
+    return DdgiLayeredField(sums, weightSum);
+}
+
+// Every layer of 'value' divided by 'divisor', or scaled by 'scale', or 'a' + 'b'.
+fn ddgiDivideLayers(value: DdgiLayerRadiance, divisor: f32) -> DdgiLayerRadiance {
+    return DdgiLayerRadiance(${perLayer(plan, (layer) => `value.layer${layer} / divisor`, ', ')});
+}
+
+fn ddgiScaleLayers(value: DdgiLayerRadiance, scale: f32) -> DdgiLayerRadiance {
+    return DdgiLayerRadiance(${perLayer(plan, (layer) => `value.layer${layer} * scale`, ', ')});
+}
+
+fn ddgiAddLayers(a: DdgiLayerRadiance, b: DdgiLayerRadiance) -> DdgiLayerRadiance {
+    return DdgiLayerRadiance(${perLayer(plan, (layer) => `a.layer${layer} + b.layer${layer}`, ', ')});
+}
+
+// Every volume's irradiance in every layer at a surface point, blended by
+// priority by the rule ddgiSampleVolumes follows for one layer
+// (wgsl/sample.ts: its ddgiBlend* helpers), so a layer's bounce comes from
+// that layer alone and from every volume.
+fn ddgiLayeredIrradiance(position: vec3f, normal: vec3f, viewDirection: vec3f) -> DdgiLayerRadiance {
+    let count = ddgiVolumeCount(ddgiVolumeTable);
+    var blended = DdgiLayerRadiance();
+    var gatheredWeight = 0.0;
+    var firstRead = DdgiLayerRadiance();
+    var firstContributing = DdgiLayerRadiance();
+    var volumesRead = 0u;
+    var contributingVolumes = 0u;
+    var nearest = DdgiNearestVolume(0u, DDGI_FARTHEST_DISTANCE);
+    for (var index = 0u; index < count; index++) {
+        let volume = ddgiTableVolume(ddgiVolumeTable, index);
+        let edgeCoverage = ddgiVolumeEdgeCoverage(volume, position);
+        if (!ddgiBlendReads(edgeCoverage)) {
+            nearest = ddgiNearerVolume(nearest, index, volume, position);
+            continue;
+        }
+        let field = ddgiLayeredVolume(volume, position, normal, viewDirection);
+        let irradiance = ddgiDivideLayers(field.sums, max(field.weight, DDGI_MIN_WEIGHT_SUM));
+        if (volumesRead == 0u) {
+            firstRead = irradiance;
+        }
+        volumesRead++;
+        let share = ddgiBlendShare(edgeCoverage, field.weight, gatheredWeight);
+        if (share > 0.0) {
+            if (contributingVolumes == 0u) {
+                firstContributing = irradiance;
+            }
+            contributingVolumes++;
+            blended = ddgiAddLayers(blended, ddgiScaleLayers(irradiance, share));
+            gatheredWeight += share;
+        }
+        if (ddgiBlendDone(gatheredWeight, contributingVolumes)) {
+            break;
+        }
+    }
+    if (volumesRead == 0u && count > 0u) {
+        // Outside every volume: the nearest one's nearest cell, with no weight (ddgiNearerVolume, wgsl/sample.ts).
+        let field = ddgiLayeredVolume(ddgiTableVolume(ddgiVolumeTable, nearest.index), position, normal, viewDirection);
+        firstRead = ddgiDivideLayers(field.sums, max(field.weight, DDGI_MIN_WEIGHT_SUM));
+    }
+    // As ddgiBlendIrradiance: the first volume read when none added weight, the one volume's own value when one did.
+    if (contributingVolumes == 0u) {
+        return firstRead;
+    }
+    if (contributingVolumes == 1u) {
+        return firstContributing;
+    }
+    return ddgiDivideLayers(blended, gatheredWeight);
 }
 
 // Per layer: albedo / pi × that layer's bounce (each layer bounces only its
@@ -292,7 +378,7 @@ function layeredResultsWgsl(plan: LayerPlan): string {
         } else {
             signedDistance = hit.t;
             if (!isFixed) {
-                let surface = giSurfaceAt(ray, hit);
+                let surface = giSurfaceAtCone(ray, hit, ddgiRayConeSpread());
                 radiance = ddgiEmittedAndBouncedLayers(ray, surface);
                 // Only hits a light can reach go on the list (half of Sponza's face away from the sun).
                 deferred = giNeedsDirect(surface);
@@ -346,6 +432,8 @@ struct DdgiTraceRound {
 @group(1) @binding(5) var ddgiProbeData: texture_2d_array<f32>;
 // Linear, clamp to edge: tiles have borders, so filtering never needs to wrap.
 @group(1) @binding(6) var ddgiAtlasSampler: sampler;
+// Every volume's sampling parameters, a row each in priority order, for the bounce light (volumes.ts).
+@group(1) @binding(8) var ddgiVolumeTable: texture_2d<f32>;
 // One 256-byte slot per round, chosen with a dynamic offset.
 @group(1) @binding(7) var<uniform> ddgiTraceRound: DdgiTraceRound;
 
@@ -368,7 +456,7 @@ fn ddgiTrace(
     let rayIndex = group.x * DDGI_TRACE_WORKGROUP_SIZE + thread;
     let probeIndex = ddgiUpdateList[slot];
     let probe = ddgiProbeCoordinates(probeIndex, ddgiProbeCount());
-    let probeData = ddgiReadProbeData(ddgiProbeData, probe);
+    let probeData = ddgiReadProbeData(ddgiProbeData, ddgiUniformVolume(), probe);
     let rayRecord = slot * ddgi.raysPerProbe + rayIndex;
 
     var deferred = false;

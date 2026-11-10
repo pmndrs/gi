@@ -1,6 +1,6 @@
-# webgpu-ddgi: start here
+# pmndrs/gi: start here
 
-A WebGPU-native GI platform with DDGI as its first technique, to be published as `pmndrs/ddgi`. The core is plain WebGPU and WGSL, and engines plug in through adapters; three.js r187 is first. Sibling libraries: `@pmndrs/upscaler`, `@pmndrs/denoiser`.
+A WebGPU-native GI platform with DDGI as its first technique (AMD GI-1.0's radiance cache is the second, on its own branch), published as `@pmndrs/gi` from the repo `pmndrs/gi` (DECISIONS 2026-11-10). The workspace folders and private package names still say `ddgi` until the radiance-cache branch merges. The core is plain WebGPU and WGSL, and engines plug in through adapters; three.js r187 is first. Sibling libraries: `@pmndrs/upscaler`, `@pmndrs/denoiser`.
 
 ## Read in this order
 

@@ -1,0 +1,5 @@
+{
+    "description": "T4.2 done-when 3: the irradiance atlas mean of two-room and Sponza (three adapter, tinybvh trees) after 600 frames, averaged over 8; compared between the commit before T4.2 and after (means within 0.1%). Mixed see-through/blocking meshes and flag rewrites reported. VITE_DDGI_SCENES=a,b. Needs the Sponza download.",
+    "timeoutMs": 1200000,
+    "manual": true
+}

@@ -38,6 +38,7 @@ import { buildProcedural } from '../../../../scenes/src/procedural';
 import { computeSceneStats, type SceneStats } from '../../../../scenes/src/stats';
 import { applyModelTransform, emissiveQuadLights, lightToThree, loadLightSet, proceduralSceneToThree, type LoadedLightSet } from '../../../../scenes/src/three-scene';
 import { LAYER_DIRECT_LIGHTS, LAYER_VIEW_GEOMETRY } from './layers';
+import { compressModelTextures, type TextureCompression, type TextureCompressionReport } from './compress-textures';
 import { findModelUrl } from './model-url';
 import { createSkyDome, loadSkyTexture } from './sky';
 
@@ -88,6 +89,8 @@ export interface LoadedScene {
     /** Length of the bounds' diagonal in metres; sets camera speed and clipping. */
     diagonal: number;
     stats: SceneStats;
+    /** What texture compression did, one report per model part (empty when nothing was asked for). */
+    textureCompression: TextureCompressionReport[];
 }
 
 /** Lets the browser paint between heavy steps, so progress text actually shows. */
@@ -204,6 +207,13 @@ export interface LoadSceneOptions {
      * at load (`limitTextureSize`). Unset keeps every image as the file has it.
      */
     readonly maxTextureSize?: number;
+    /**
+     * How model textures are kept on the GPU (scene/compress-textures.ts). Default `'uncompressed'`.
+     * Compression runs on `device`, which must be three's.
+     */
+    readonly textureCompression?: TextureCompression;
+    /** The device three draws with: needed when `textureCompression` compresses. */
+    readonly device?: GPUDevice;
 }
 
 /**
@@ -261,6 +271,14 @@ export async function loadScene(manifest: SceneManifest, report: (progress: Load
     const { sky, dome: skyDome } = await addSky(scene, manifest);
     const settings = sceneSettingValues(manifest, options.settings);
     const lightSets: LoadedLightSet[] = [];
+    const textureCompression: TextureCompressionReport[] = [];
+    const compression = options.textureCompression ?? 'uncompressed';
+    // Compression encodes on three's own device, so the compressed blocks never cross devices.
+    let compressionDevice: GPUDevice | null = null;
+    if (compression !== 'uncompressed') {
+        if (!options.device) throw new Error(`loadScene: textureCompression '${compression}' needs three's device (options.device)`);
+        compressionDevice = options.device;
+    }
 
     const content = new Group();
     content.name = manifest.id;
@@ -285,6 +303,10 @@ export async function loadScene(manifest: SceneManifest, report: (progress: Load
             const url = await findModelUrl(part.asset, part.path);
             const model = await loadGltf(url, label, report);
             if (options.maxTextureSize !== undefined) await limitTextureSize(model, options.maxTextureSize);
+            if (compressionDevice) {
+                const compressing = (done: number, total: number) => report({ stage: `Compressing ${label}'s textures (${done} of ${total})`, fraction: 0.8 + 0.1 * (done / Math.max(1, total)) });
+                textureCompression.push(await compressModelTextures(model, compressionDevice, compression, compressing));
+            }
             const holder = new Group();
             holder.name = `${part.asset}/${part.path}`;
             holder.add(model);
@@ -338,5 +360,5 @@ export async function loadScene(manifest: SceneManifest, report: (progress: Load
 
     const helpers = new Scene();
     helpers.name = `${manifest.id} viewer helpers`;
-    return { manifest, scene, content, directLights, offLights, manifestLights, helpers, skyDome, settings, lightSets, bounds, sky, diagonal, stats: computeSceneStats(content) };
+    return { manifest, scene, content, directLights, offLights, manifestLights, helpers, skyDome, settings, lightSets, bounds, sky, diagonal, stats: computeSceneStats(content), textureCompression };
 }

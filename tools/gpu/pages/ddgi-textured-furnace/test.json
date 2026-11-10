@@ -1,0 +1,4 @@
+{
+    "description": "M4 T4.1: the furnace room with a checker texture of mean albedo 0.5 converges to the flat 0.5-albedo furnace's field mean within 1%; with sampleTextures off (every texture read at its stored mean) it matches the closed form for that stored mean, 0.25 / (1 - mean), within 0.1%.",
+    "timeoutMs": 900000
+}

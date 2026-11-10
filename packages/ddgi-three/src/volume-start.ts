@@ -1,5 +1,5 @@
 /**
- * What `GIVolume.start(renderer, scene)` does (T1.14, `docs/design/three-composite.md`,
+ * What `DDGIVolume.start(renderer, scene)` does (T1.14, `docs/design/three-composite.md`,
  * "The simple path"): everything between "I have a volume" and "GI is on",
  * so the simple path takes as many lines as three's `LightProbeGrid`
  * (construct, place, add, bake):
@@ -30,26 +30,31 @@
  *   millisecond budget, GPU-bound with two in flight, until the platform
  *   reports it calibrated and confirmed, or {@link CALIBRATION_MAX_STEPS}.
  *   Without GPU timestamps the platform can't calibrate and says so at once.
- * `GIVolume.restart` runs the same frames again after forgetting the field
+ * `DDGIVolume.restart` runs the same frames again after forgetting the field
  * ("start the probes over").
  */
 
 import { PerspectiveCamera, type Camera, type Scene, type WebGPURenderer } from 'three/webgpu';
 import {
     createGI,
+    ddgiPreset,
     DDGITechnique,
     DEFAULT_WARM_UP_MAX_SECONDS,
     DEFAULT_WARM_UP_MIN_PASSES,
     DEFAULT_WARM_UP_PASSES,
     GILimitError,
+    type DDGIPreset,
+    type DDGIPresetName,
     type DDGISettingsInput,
     type EnvironmentDescriptor,
     type FrameBudget,
     type GIPlatform,
+    type LoadedField,
+    type LoadFieldOptions,
 } from '@pmndrs/ddgi-core';
 import type { PmndrsSkyLike } from './environment.ts';
 import type { GILightOptions } from './gi-light.ts';
-import type { GIVolume } from './gi-volume.ts';
+import type { DDGIVolume } from './ddgi-volume.ts';
 import { ThreeGI } from './three-gi.ts';
 
 /** The warm-up's settings, as `start` takes them; the first three become the technique's `warmUpPasses`, `warmUpMaxSeconds`, `warmUpMinPasses`. */
@@ -85,10 +90,19 @@ const WARM_UP_MAX_STEPS = 100_000;
 
 export const DEFAULT_GI_BUDGET: FrameBudget = { gpuMs: 2 };
 
-export interface GIVolumeStartOptions {
-    /** GPU work per frame for GI updates after the warm-up. Default `{ gpuMs: 2 }`. */
+export interface DDGIVolumeStartOptions {
+    /**
+     * A quality preset (`'low'`, `'medium'`, `'high'`, or a preset object from
+     * `ddgiPreset` with fields changed): its rays and tile sizes, its budget,
+     * its texture store size, and its probe spacing for a volume made without
+     * probe counts. `budget` and `ddgi` below win over it. Default: none, which
+     * is the same as `'high'`. `recommendPreset(adapter.info, adapter.limits)`
+     * suggests one.
+     */
+    readonly preset?: DDGIPresetName | DDGIPreset;
+    /** GPU work per frame for GI updates after the warm-up. Default the preset's, or `{ gpuMs: 2 }`. */
     readonly budget?: FrameBudget;
-    /** DDGI settings over the defaults (rays per probe, hysteresis, ...). The probe grid comes from the volume. */
+    /** DDGI settings over the preset's and the defaults (rays per probe, hysteresis, ...). The probe grid comes from the volume. */
     readonly ddgi?: Partial<Omit<DDGISettingsInput, 'volume'>>;
     /** An environment for GI rays instead of the scene's (environment.ts). */
     readonly environment?: EnvironmentDescriptor | null;
@@ -98,9 +112,33 @@ export interface GIVolumeStartOptions {
     readonly light?: GILightOptions;
     /** The warm-up before `start` resolves (file comment). `false` skips it: GI then fills in live. */
     readonly warmUp?: boolean | Partial<WarmUpSettings>;
+    /**
+     * The camera the start-up frames run with. The warm-up updates every probe
+     * whatever the view, so for one volume this only orders the work; but a
+     * camera-following volume's window follows it from the first frame, so a
+     * host with such a volume passes the camera it will render with (it may
+     * move meanwhile: it is read each frame). Otherwise the window warms up
+     * around the volume's centre and jumps to the host's camera on its first
+     * frame, which resets every slot and warms the whole field again
+     * (several seconds of full-rate updates; NOTES). Default: a camera at the
+     * volume's centre.
+     */
+    readonly camera?: Camera;
+    /**
+     * A saved bake (`DDGIVolume.saveBake`, a `.ddgibake` file) to start from:
+     * loaded right after `prepare`, so there are no warm-up passes (`start`
+     * still waits for the ray-tracing trees and runs the calibration). A
+     * bake whose layout doesn't fit this volume's DDGI throws
+     * `SavedFieldError`, naming what differs; one saved for a scene that
+     * changed since loads as stale unless `bakeIfSceneChanged` is `refuse`
+     * (`DDGIVolume.loadedBake` says which).
+     */
+    readonly bake?: Uint8Array | ArrayBuffer;
+    /** What a stale `bake` does: `load stale` (the default) or `refuse` (DDGITechnique.loadField). */
+    readonly bakeIfSceneChanged?: LoadFieldOptions['ifSceneChanged'];
     /** Where warnings go (each distinct message once). Default `console.warn`. */
     readonly warn?: (message: string) => void;
-    /** A label for the platform's GPU objects. Default the volume's name, or `GIVolume`. */
+    /** A label for the platform's GPU objects. Default the volume's name, or `DDGIVolume`. */
     readonly label?: string;
     /**
      * Called once the platform, the technique and `ThreeGI` exist, before the
@@ -116,6 +154,8 @@ export interface StartedGI {
     readonly platform: GIPlatform;
     readonly technique: DDGITechnique;
     readonly threeGI: ThreeGI;
+    /** What `start`'s `bake` loaded (stale or not), or null without one. */
+    readonly loadedBake: LoadedField | null;
 }
 
 /**
@@ -127,9 +167,9 @@ export class ThreeGILimitError extends GILimitError {
     constructor(source: GILimitError) {
         super(source.limit, source.needed, source.available);
         this.message =
-            `@pmndrs/ddgi/three: the scene needs ${source.limit} = ${source.needed}, but the renderer's device allows ${source.available}. ` +
+            `@pmndrs/gi/three: the scene needs ${source.limit} = ${source.needed}, but the renderer's device allows ${source.available}. ` +
             'Make the renderer with the platform\'s limits: `const { renderer } = await createGIRenderer()`, or ' +
-            '`new WebGPURenderer({ requiredLimits: requiredLimits(await navigator.gpu.requestAdapter()) })` with `requiredLimits` from `@pmndrs/ddgi/core`.';
+            '`new WebGPURenderer({ requiredLimits: requiredLimits(await navigator.gpu.requestAdapter()) })` with `requiredLimits` from `@pmndrs/gi/core`.';
     }
 }
 
@@ -138,8 +178,9 @@ interface TreesBuiltSignal {
     rays?: { whenBuilt?: () => Promise<void> };
 }
 
-function camerasAt(volume: GIVolume): Camera {
-    // The warm-up updates every probe, so its camera only orders the work; any view will do.
+function camerasAt(volume: DDGIVolume): Camera {
+    // The warm-up updates every probe, so its camera only orders the work; any view will do
+    // (a camera-following volume excepted: `DDGIVolumeStartOptions.camera`).
     const camera = new PerspectiveCamera(60, 1, 0.1, 1000);
     const { center } = volume.ddgiVolume();
     camera.position.set(center[0], center[1], center[2]);
@@ -148,7 +189,7 @@ function camerasAt(volume: GIVolume): Camera {
 }
 
 /** The warm-up options as the technique's settings. */
-function warmUpTechniqueSettings(warmUp: GIVolumeStartOptions['warmUp']): Pick<DDGISettingsInput, 'warmUpPasses' | 'warmUpMaxSeconds' | 'warmUpMinPasses'> {
+function warmUpTechniqueSettings(warmUp: DDGIVolumeStartOptions['warmUp']): Pick<DDGISettingsInput, 'warmUpPasses' | 'warmUpMaxSeconds' | 'warmUpMinPasses'> {
     if (warmUp === false) return { warmUpPasses: 0 };
     const settings = { ...DEFAULT_WARM_UP, ...(typeof warmUp === 'object' ? warmUp : {}) };
     return { warmUpPasses: settings.passes, warmUpMaxSeconds: settings.maxSeconds, warmUpMinPasses: settings.minPasses };
@@ -185,12 +226,12 @@ async function runStartUpFrames(started: StartedGI, camera: Camera, budget: Fram
 }
 
 /**
- * `GIVolume.restart` ("start the probes over"): forgets the field and the
+ * `DDGIVolume.restart` ("start the probes over"): forgets the field and the
  * calibration, then runs the start-up frames again (the warm-up, if the
  * technique's `warmUpPasses` isn't 0, and the calibration). The render-time
  * update is off meanwhile and comes back as it was.
  */
-export async function restartVolume(volume: GIVolume, started: StartedGI, options: Pick<GIVolumeStartOptions, 'budget' | 'warmUp'> = {}): Promise<void> {
+export async function restartVolume(volume: DDGIVolume, started: StartedGI, options: Pick<DDGIVolumeStartOptions, 'budget' | 'warmUp' | 'camera'> = {}): Promise<void> {
     const { platform, threeGI } = started;
     const updateOnRender = threeGI.updateOnRender;
     threeGI.updateOnRender = false;
@@ -198,25 +239,33 @@ export async function restartVolume(volume: GIVolume, started: StartedGI, option
         platform.resetHistory();
         platform.recalibrate();
         const calibrate = typeof options.warmUp === 'object' ? options.warmUp.calibrate !== false : true;
-        await runStartUpFrames(started, camerasAt(volume), options.budget ?? threeGI.budget, calibrate);
+        await runStartUpFrames(started, options.camera ?? camerasAt(volume), options.budget ?? threeGI.budget, calibrate);
     } finally {
         threeGI.updateOnRender = updateOnRender;
     }
 }
 
-/** `GIVolume.start` (file comment). Throws `ThreeGILimitError` when the scene outgrows the device's limits. */
-export async function startVolume(volume: GIVolume, renderer: WebGPURenderer, scene: Scene, options: GIVolumeStartOptions = {}): Promise<StartedGI> {
+/** `DDGIVolume.start` (file comment). Throws `ThreeGILimitError` when the scene outgrows the device's limits. */
+export async function startVolume(volume: DDGIVolume, renderer: WebGPURenderer, scene: Scene, options: DDGIVolumeStartOptions = {}): Promise<StartedGI> {
     const backend = renderer.backend as unknown as { device?: GPUDevice };
     if (!backend.device) await renderer.init();
     const device = backend.device;
-    if (!device) throw new Error('@pmndrs/ddgi/three: GIVolume.start needs a WebGPURenderer on WebGPU (it got no GPU device; is it the WebGL fallback?).');
+    if (!device) throw new Error('@pmndrs/gi/three: DDGIVolume.start needs a WebGPURenderer on WebGPU (it got no GPU device; is it the WebGL fallback?).');
     if (volume.parent === null) scene.add(volume);
     scene.updateMatrixWorld();
 
-    const platform = createGI(device, { gpuTiming: device.features.has('timestamp-query'), label: options.label ?? (volume.name || 'GIVolume') });
+    const preset = typeof options.preset === 'string' ? ddgiPreset(options.preset) : (options.preset ?? null);
+    if (preset) volume.useDefaultSpacing(preset.probeSpacing);
+    const platform = createGI(device, {
+        gpuTiming: device.features.has('timestamp-query'),
+        label: options.label ?? (volume.name || 'DDGIVolume'),
+        textureLayerSize: preset?.textureLayerSize,
+    });
     let threeGI: ThreeGI | null = null;
     try {
-        const technique = platform.addTechnique(new DDGITechnique({ ...options.ddgi, ...warmUpTechniqueSettings(options.warmUp), volume: volume.ddgiVolume() }));
+        // The preset first, so the host's own `ddgi` settings win over it.
+        const settings = { ...preset?.ddgi, ...options.ddgi, ...warmUpTechniqueSettings(options.warmUp), volume: volume.ddgiVolume() };
+        const technique = platform.addTechnique(new DDGITechnique(settings));
         platform.setOutput(technique);
         // The scene is copied in while the kernels compile (T2.14): `prepare` asks for every
         // compile at once, and the copy is CPU work on this thread, so the two overlap.
@@ -239,17 +288,20 @@ export async function startVolume(volume: GIVolume, renderer: WebGPURenderer, sc
             // Switched on after the warm-up: a render loop already running must not add GI frames to it.
             updateOnRender: false,
         });
-        const camera = camerasAt(volume);
+        const camera = options.camera ?? camerasAt(volume);
         // The scene copy, while the kernels compile (the platform isn't ready: no GI frame yet).
         threeGI.update(camera, 0);
         await preparing;
-        const started: StartedGI = { platform, technique, threeGI };
+        // The bake goes in before the first GI frame, so the technique skips its warm-up passes. The scene copy above
+        // made the scene the fingerprint is checked against.
+        const loadedBake = options.bake ? technique.loadField(options.bake, { ifSceneChanged: options.bakeIfSceneChanged }) : null;
+        const started: StartedGI = { platform, technique, threeGI, loadedBake };
         options.onCreated?.(started);
         // The first GI frame uploads the scene and starts the tree builds; the one after them sends the finished trees.
         threeGI.update(camera, 0);
         await (platform as unknown as TreesBuiltSignal).rays?.whenBuilt?.();
         threeGI.update(camera, 0);
-        const budget = options.budget ?? DEFAULT_GI_BUDGET;
+        const budget = options.budget ?? (preset ? { ...preset.budget } : DEFAULT_GI_BUDGET);
         if (options.warmUp === false) {
             threeGI.budget = budget;
         } else {

@@ -1,18 +1,22 @@
 /**
- * First mesh trees from the GPU (T2.12; docs/design/m3-moving.md §2.2-2.3,
- * "fast first GI"): when a scene is loaded, every mesh's tree is built on the
- * GPU with H-PLOC (`@pmndrs/bvh`, B2, the default GPU builder), so rays can
- * see the scene a few frames after it is handed over instead of after
- * tinybvh's seconds in the worker. tinybvh still builds every mesh, and the
- * tracer swaps its tree in when it arrives (ray-queries.ts).
+ * First mesh trees from the GPU (T2.12 at load, T3.2 at runtime;
+ * docs/design/m3-moving.md §2.2-2.3, "fast first GI"): every mesh the scene
+ * uploads, when it is loaded and when meshes are added or replaced while it
+ * runs, has its tree built on the GPU with H-PLOC (`@pmndrs/bvh`, B2, the
+ * default GPU builder), so rays can see it a few frames later instead of
+ * after tinybvh's time in the worker (seconds for a whole scene). tinybvh
+ * still builds every mesh, and the tracer swaps its tree in when it arrives
+ * (ray-queries.ts).
  *
- * **One batch for all meshes.** H-PLOC builds every mesh of a batch with the
- * same dispatches; building meshes one by one is dispatch-bound (NOTES, LBVH:
- * 97 ms against 32-42 ms for Sponza). The scene is split into more batches
- * only when one doesn't fit the device's buffers (`planGpuHplocBatches`).
+ * **One batch for all of a frame's meshes.** H-PLOC builds every mesh of a
+ * batch with the same dispatches; building meshes one by one is
+ * dispatch-bound (NOTES, LBVH: 97 ms against 32-42 ms for Sponza). The
+ * meshes are split into more batches only when one doesn't fit the device's
+ * buffers (`planGpuHplocBatches`).
  *
- * **Its own submit, and one small readback.** A batch is recorded into an
- * encoder of its own and submitted at once, then its stats (node count,
+ * **Its own submit, and one small readback,** in each frame that uploads
+ * meshes (DECISIONS 2026-11-08 for load, 2026-11-09 for runtime). A batch
+ * is recorded into an encoder of its own and submitted at once, then its stats (node count,
  * depth, refused or not: a few words per mesh) are read back with `mapAsync`;
  * never the trees. Why not the host's encoder: the readback must come after
  * the build on the queue, and the platform can't know when the host submits
@@ -21,19 +25,37 @@
  * `queue.writeBuffer`, which lands before this submit), so nothing in the
  * host's encoder has to run first.
  *
+ * **Deforming meshes (T3.3)** also need the tree's layout on the CPU, so the
+ * refit can take its shape (deforming-trees.ts): their builds ask for
+ * `readLayouts`, which reads their batch's trees back once, after the stats.
+ * The tracer puts them in a batch of their own, so the readback is only
+ * theirs. A drift rebuild builds from the scene copy's positions on the GPU
+ * (`GpuLbvhBufferGeometry`), which the batch copies in its own encoder.
+ *
  * Without subgroups there is no GPU builder: every mesh waits for tinybvh, as
  * in M1 (the declared fallback, DECISIONS 2026-11-04).
  */
 
 import { GpuHplocBuilder, planGpuHplocBatches } from '@pmndrs/bvh/gpu-hploc';
-import type { GpuLbvhMeshTree, GpuLbvhTrees } from '@pmndrs/bvh/gpu-lbvh';
+import type { GpuLayoutMeshBvh } from '@pmndrs/bvh/gpu-layout';
+import type { GpuLbvhBufferGeometry, GpuLbvhMeshTree, GpuLbvhTrees } from '@pmndrs/bvh/gpu-lbvh';
 import type { MeshGeometry } from './mesh-bvh.ts';
 
-/** A mesh to build: its slot and version in the scene copy, and its geometry (read once, when the build starts). */
+/**
+ * A mesh to build: its slot and version in the scene copy, and its geometry,
+ * read once when the build starts: CPU arrays, or a range of a GPU buffer
+ * (copied in the build's own commands, which are submitted at once).
+ */
 export interface GpuTreeRequest {
     readonly slot: number;
     readonly generation: number;
-    readonly geometry: MeshGeometry;
+    readonly geometry: MeshGeometry | GpuLbvhBufferGeometry;
+}
+
+/** Options of one {@link FirstTreeBuilder.build}. */
+export interface GpuTreeBuildOptions {
+    /** Read every usable tree's layout back too (deforming meshes' refit needs it), once, after the stats. Default false. */
+    readonly readLayouts?: boolean;
 }
 
 /**
@@ -91,6 +113,8 @@ export interface GpuBuiltTree {
     readonly outputs: GpuTreeOutputs;
     /** Where the tree sits in `outputs` (nodes and triangles), its counts, depth and box. */
     readonly tree: GpuLbvhMeshTree;
+    /** The tree's layout on the CPU, when the build asked for `readLayouts` and the readback worked; else null. */
+    readonly layout: GpuLayoutMeshBvh | null;
 }
 
 /** A mesh the GPU didn't give a usable tree: it waits for tinybvh's. */
@@ -123,7 +147,7 @@ export interface FirstTreeBuilder {
     /** Compiles the builder's kernels. */
     prepare(): Promise<void>;
     /** Starts building every request's tree; see {@link GpuTreeBuilds}. Needs `prepare` to have finished. */
-    build(requests: readonly GpuTreeRequest[]): GpuTreeBuilds;
+    build(requests: readonly GpuTreeRequest[], options?: GpuTreeBuildOptions): GpuTreeBuilds;
 }
 
 /** H-PLOC first trees ({@link FirstTreeBuilder}) on a device with subgroups. */
@@ -146,7 +170,7 @@ export class GpuMeshTrees implements FirstTreeBuilder {
         return this.hploc.prepare();
     }
 
-    build(requests: readonly GpuTreeRequest[]): GpuTreeBuilds {
+    build(requests: readonly GpuTreeRequest[], options: GpuTreeBuildOptions = {}): GpuTreeBuilds {
         const geometries = requests.map((request) => request.geometry);
         const plan = planGpuHplocBatches(this.device, geometries);
         const limitBytes = Math.min(this.device.limits.maxStorageBufferBindingSize, this.device.limits.maxBufferSize);
@@ -182,13 +206,16 @@ export class GpuMeshTrees implements FirstTreeBuilder {
                 return { built: [], refused: refuseAll(members, failure), buildMs: performance.now() - submittedAt, failure };
             }
             const buildMs = performance.now() - submittedAt;
+            // A failed layout readback leaves the trees usable for tracing; only the refit goes without.
+            let layouts: (GpuLayoutMeshBvh | null)[] = [];
+            if (options.readLayouts) layouts = await this.hploc.readLayouts(trees).catch(() => []);
             const usable = trees.meshes.filter((tree) => tree.problem === null).length;
             const outputs = new GpuTreeOutputs(trees, usable);
             const built: GpuBuiltTree[] = [];
             const refused: GpuRefusedTree[] = [];
             trees.meshes.forEach((tree, index) => {
                 const { slot, generation } = members[index];
-                if (tree.problem === null) built.push({ slot, generation, outputs, tree });
+                if (tree.problem === null) built.push({ slot, generation, outputs, tree, layout: layouts[index] ?? null });
                 else refused.push({ slot, generation, reason: tree.problem });
             });
             return { built, refused, buildMs, failure: null };

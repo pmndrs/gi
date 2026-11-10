@@ -1,8 +1,10 @@
-# Platform API (draft for T0.11)
+# Platform API (`@pmndrs/gi/core` and `@pmndrs/gi/ddgi`)
 
-Status: **signed off by Dennis, 2026-11-04, and revised after the spikes** (T0.8 three.js, T0.9 Babylon, T0.10 BVH). The changes are listed under "Revisions" at the end.
+Status: the contract was **signed off by Dennis on 2026-11-04**, revised after the spikes (T0.8 three.js, T0.9 Babylon, T0.10 BVH) and in each milestone since. The changes are listed under "Revisions" at the end. Brought up to date for M2 to M5 in T5.4 (2026-11-10).
 
-The TypeScript is in [`packages/ddgi-core/src/platform/contract/`](../../packages/ddgi-core/src/platform/contract/). It holds types only, plus two error classes. This page explains it in plain language and walks two future GI techniques (voxels and surfels) through it, to check it isn't shaped only for DDGI.
+This page covers the engine-free part of the library: `@pmndrs/gi/core`, the GI platform, and `@pmndrs/gi/ddgi`, DDGI on top of it, with the helpers around them. Neither needs three or any other engine, and `/core` holds no DDGI code: a technique of your own needs only `/core`. The contract's TypeScript is in [`packages/ddgi-core/src/platform/contract/`](../../packages/ddgi-core/src/platform/contract/) (types only, plus two error classes), and DDGI's is in [`packages/ddgi-core/src/techniques/ddgi/`](../../packages/ddgi-core/src/techniques/ddgi/). This page explains them in plain language, shows each feature with a short example, and lists every export of [`/core`](#every-export-of-pmndrsgicore) and of [`/ddgi`](#every-export-of-pmndrsgiddgi) at the end. It also walks two future GI techniques (voxels and surfels) through the contract, to check it isn't shaped only for DDGI.
+
+**Writing an adapter for an engine?** Start with [the adapter guide](../guides/adapter.md), which walks through the plain-WebGPU hello example step by step. For three.js, see [three.md](three.md).
 
 ## The picture
 
@@ -24,7 +26,7 @@ The host owns the device, the scene and the frame. The platform keeps its own si
 
 | File | What it defines |
 | --- | --- |
-| `platform.ts` | `GIPlatform`, the object a host talks to. Also `createGI`, `requiredLimits`, `optionalFeatures` and `isSupported`. |
+| `platform.ts` | `GIPlatform`, the object a host talks to, and its options. `GIPlatformModule` declares `createGI`, `requiredLimits`, `optionalFeatures` and `isSupported`, which `gi-platform.ts` and `device-requirements.ts` implement. |
 | `scene.ts` | `SceneApi`: create, update and destroy meshes, textures, materials, instances and lights, and set the environment. Light units. |
 | `handles.ts`, `math.ts` | Opaque handles; plain vectors, colors, matrices and boxes. |
 | `frame.ts` | The per-frame input: time, the budget, the camera and, optionally, the screen buffers. |
@@ -42,17 +44,458 @@ The host owns the device, the scene and the frame. The platform keeps its own si
 1. **Device.** The host asks the adapter for the device using `requiredLimits(adapter)` and `optionalFeatures(adapter)`, then calls `createGI(device)`. The platform never creates, configures or destroys a device. It watches `device.lost`, and after a loss `isReady` turns false and calls throw `GINotReadyError('device-lost')`. The host makes a new platform on the new device, the same rule as the upscaler.
 2. **Scene.** The adapter calls `gi.scene.createMesh(...)`, `createMaterial(...)`, `createInstance(...)`, `createLight(...)` and `setEnvironment(...)`, then sends only what changed (`setTransform`, `updateLight`, ...). The calls are cheap. Changes are queued and uploaded inside the next `encode`. Many moves at once go through `setTransforms(instances, matrices)`, one call with 16 numbers per instance (T2.M1, Chrome on the RTX laptop: 10,000 sliding in 1.4 ms of CPU, 3.5 ms turning).
 3. **Techniques.** `gi.addTechnique(new DDGITechnique(settings))`, `gi.setOutput(ddgi)`, then `await gi.prepare()`, which compiles everything asynchronously.
-4. **Every frame.** `gi.encode(encoder, { deltaTime, budget, camera })` comes before the host's own passes, in the same encoder. There are no extra submits and no readbacks frame after frame; at load, the GPU's build of the scene's first mesh trees is submitted once by the platform and reads back a few words of stats per mesh (T2.12, DECISIONS 2026-11-08). Hosts with screen-space techniques also call `gi.encodeScreen(encoder, screen)` after their depth/normal pass. It does nothing when no technique needs it.
+4. **Every frame.** `gi.encode(encoder, { deltaTime, budget, camera })` comes before the host's own passes, in the same encoder. There are no extra submits and no readbacks frame after frame. The exception is a frame that uploads meshes (the scene at load, and meshes added or replaced later): the GPU's build of those meshes' first trees is submitted by the platform and reads back a few words of stats per mesh (T2.12 and T3.2, DECISIONS 2026-11-08 and 2026-11-09). Deforming meshes add two (T3.3, DECISIONS 2026-11-10, provisional): while a mesh is being posed, its refit's stats are read back at most once every 15 frames; and a drift rebuild submits its own H-PLOC build and reads back that tree's stats and layout. Hosts with screen-space techniques also call `gi.encodeScreen(encoder, screen)` after their depth/normal pass. It does nothing when no technique needs it.
 5. **Shading.** The adapter injects `gi.shading` into its engine once, and rebuilds only when `shading.version` changes.
 
 The lifecycle names match the pmndrs siblings: `prepare()`, `isReady`, `encode()`, `resetHistory()`, `dispose()`, `gpuTiming`, and settings as live objects. Note one rename from SPEC: the per-frame call is `encode(encoder, frame)`, not `update(encoder, budget)`. The budget is a field of `frame`.
+
+## Quality presets
+
+A host can pick one word instead of thirty settings (T5.1; docs/design/m5-coverage.md §1). `ddgiPreset(name)` returns plain data, a new object each call, so a host can change single fields:
+
+```ts
+import { createGI } from '@pmndrs/gi/core';
+import { DDGITechnique, ddgiPreset, recommendPreset } from '@pmndrs/gi/ddgi';
+
+const adapter = await navigator.gpu.requestAdapter();
+if (!adapter) throw new Error('No WebGPU adapter');
+const preset = ddgiPreset(recommendPreset(adapter.info, adapter.limits));   // 'low', 'medium' or 'high'
+const gi = createGI(device, { textureLayerSize: preset.textureLayerSize });
+const ddgi = gi.addTechnique(new DDGITechnique({ ...preset.ddgi, volume }));
+// ... prepare, then every frame:
+gi.encode(encoder, { deltaTime, budget: preset.budget, camera });
+```
+
+A preset has four parts:
+
+- `ddgi`: the DDGI settings it changes (rays per probe and the two tile sizes). Every other setting keeps its default. Spread it before your own settings, so yours win.
+- `budget`: the per-frame budget to pass as `frame.budget`.
+- `textureLayerSize`: `createGI`'s option for the texture store, the platform's own copy of every material texture that rays read.
+- `probeSpacing`: metres between probes, for hosts that don't set a spacing themselves (three: a `DDGIVolume` made without probe counts). A host that sets one keeps it.
+
+| | `low` | `medium` | `high` (the defaults) | What going down costs in look |
+| --- | --- | --- | --- | --- |
+| Rays per probe (`raysPerProbe`) | 128 | 192 | 256 | Each update is noisier, so GI flickers a little more and takes a little longer to settle. The first 32 rays never blend, so 128 still leaves 96. |
+| Distance tile (`distanceTexels`) | 8² | 10² | 14² | What each probe can see is coarser: thin walls and small gaps blur a little and leak sooner. This tile is most of a probe's memory and blend work. |
+| Irradiance tile (`irradianceTexels`) | 6² | 6² | 6² | Not lowered: it is already small, and 4² would make the light's direction visibly blocky. |
+| Budget (`budget.gpuMs`) | 1 ms | 1.5 ms | 2 ms | Fewer probes updated a frame, so light follows changes more slowly. The platform's floor still sweeps every probe within a few seconds. |
+| Texture store (`textureLayerSize`) | 128² | 256² | 256² | Only rays hitting a texture up close see fewer texels: GI rays mostly read coarse mips. A quarter of the memory. |
+| Spacing when the host sets none (`probeSpacing`) | 2 m | 1.5 m | 1 m | Light that changes over less than the spacing (a doorway, a corner) blurs. 2 m has an eighth of 1 m's probes. |
+
+`high` is exactly the defaults: what M1 to M4 were checked with on the RTX 3060, and what the M5 Pro runs. A unit test holds it to that (`presets.test.ts`). `low` is for the correctness devices (the Intel UHD, the iPad, older iOS). Values are from the settings' own ranges, not tuned (DECISIONS 2026-11-10, "Feature coverage before tuning").
+
+**What they cost, measured** (`ddgi-presets`, M5 Pro, Chrome headless, the manifest's spacing; every probe updated every frame for 600 frames, then the update timed and the test view's indirect mean read at Cornell's `front` and two-room's `lit-room` views):
+
+| Scene | Preset | Probes | Rays a frame | DDGI memory | Update, GPU | Indirect mean against `high` |
+| --- | --- | --- | --- | --- | --- | --- |
+| Cornell | low | 1,728 | 221,184 | 8.9 MB | 0.65 ms | −0.50% |
+| Cornell | medium | 1,728 | 331,776 | 12.1 MB | 1.06 ms | +0.13% |
+| Cornell | high | 1,728 | 442,368 | 16.5 MB | 1.97 ms | 0 |
+| Two-room | low | 1,071 | 137,088 | 7.5 MB | 0.88 ms | −0.56% |
+| Two-room | medium | 1,071 | 205,632 | 9.9 MB | 1.22 ms | −0.14% |
+| Two-room | high | 1,071 | 274,176 | 13.0 MB | 1.65 ms | 0 |
+
+With the preset's own spacing instead, Cornell would have 27 / 64 / 216 probes and two-room 30 / 54 / 180.
+
+Every preset passes the correctness checks on the M5 Pro (`VITE_DDGI_PRESET=<name> pnpm test:gpu --filter ddgi-furnace`, and the same for the others; rows in `bench/results/checks.csv` under `t5.1/`):
+
+| Check | `low` | `medium` | `high` | Limit |
+| --- | --- | --- | --- | --- |
+| `ddgi-furnace`, mean error | 0.31% | 0.26% | 0.22% | 2% |
+| `ddgi-leak`, two-room against Cycles | 0.86% | 0.87% | 0.87% | 1% |
+| `ddgi-leak`, thin wall's dark side (reported) | 3.20% | 2.08% | 0.59% | none |
+| `ddgi-leak`, closed door's dark side (reported) | 0.10% | 0.08% | 0.06% | none |
+| `ddgi-textured-furnace`, textured against flat | +0.15% (128² store) | +0.10% | +0.06% | 1% |
+| `platform-recompiles` | 0 | 0 | 0 | 0 |
+
+The thin wall shows the coarser distance tiles' cost: its dark side gets 3.2% of the lit side's light at `low`, 0.6% at `high`.
+
+**Changing presets needs a new `prepare`.** Rays and tile sizes size DDGI's buffers and atlases, as they always have, so switching a running technique to another preset means new settings and `prepare` again (or a new technique). That's how the settings work, not a recompile bug. The texture store's size is fixed for the platform's life.
+
+**`recommendPreset(adapterInfo, limits, hints?)`** says which preset to start from: `low` for integrated and mobile GPUs, `high` otherwise. It is advice only: nothing applies it behind the host's back. Browsers say little about the GPU (Chrome gives a vendor and an architecture, and usually no chip name), so its rules are guesses from what they do say, in order:
+
+1. a software adapter, a phone or tablet (`hints.mobile`, or read from `navigator`), or a mobile GPU maker (Qualcomm, ARM, Imagination, Samsung, MediaTek): `low`;
+2. an adapter whose buffers are capped under 1 GiB: `low`;
+3. Intel: `low` unless the architecture is an Arc card's;
+4. Apple on a Mac: `high` (the Pro and Max chips are the target hardware). A description that names a base M chip gives `low`, but Chrome doesn't show the chip, so a base Mac usually gets `high`;
+5. AMD: `low` when the description names integrated Radeon graphics, otherwise `high`; NVIDIA and anything else: `high`.
+
+## Lights and light groups
+
+Lights are directional, point or spot, in three.js's physical units (see "The scene" below). `range` is required for point and spot lights; `range: 0` means no limit, so such a light reaches, and costs, every probe.
+
+```ts
+const lamp = gi.scene.createLight({ type: 'point', position: [0, 2.5, 0], color: [1, 0.85, 0.7], intensity: 25, range: 10, group: 1 });
+const spot = gi.scene.createLight({
+    type: 'spot',
+    position: [3, 4, 0],
+    direction: [0, -1, 0],
+    color: [1, 1, 1],
+    intensity: 60,
+    range: 0, // no limit
+    innerConeAngle: 0.3, // radians, where the falloff starts
+    outerConeAngle: 0.5, // where the light reaches zero
+    castsShadows: false, // cheaper, but its light leaks through walls into GI
+});
+gi.scene.updateLight(lamp, { intensity: 5 }); // any field but its type
+gi.scene.destroyLight(spot);
+```
+
+A light change re-traces only the probes the light reaches (its influence radius: where its light falls below 1/1,000 of the scene's brightest), nearest the camera first. Hundreds of lights are fine: past 8 point and spot lights, rays pick from a grid of nearby lights instead of testing every one (`HitShadingSettings`, below).
+
+**Light groups** let a host dim or recolour a whole group of lights in GI in the same frame, with no rays traced again and no noise (T2.5). A light's group (0 to 3) is scene data, on the light. The weights belong to DDGI, and are turned on in its settings:
+
+```ts
+import { DDGITechnique } from '@pmndrs/gi/ddgi';
+
+const ddgi = gi.addTechnique(
+    new DDGITechnique({
+        volume,
+        lightGroups: { count: 2, weights: [[1, 1, 1], [1, 1, 1]], environmentWeight: [1, 1, 1] },
+    }),
+);
+gi.setOutput(ddgi);
+await gi.prepare();
+
+ddgi.setGroupWeight(1, [0.25, 0.2, 0.15]); // group 1 at a quarter, a little warmer
+ddgi.setEnvironmentWeight([0.5, 0.5, 0.5]); // the sky and emissive surfaces at half
+```
+
+- A weight is a linear RGB multiplier on top of the lights' own colour and intensity, in GI only. Adapters reach it through `gi.outputTechnique` (three: `ThreeGI.setGroupWeight`).
+- Lights in a group at or past `count` share the last group's layer. `count` needs a new `prepare`; the weights are read every frame.
+- Each group costs a layer of the field: on Sponza about 25 MB and 5% of each probe update. Off by default.
+
+## Time of day: the sky and the sun layer
+
+A `procedural` sky (Preetham's clear sky, calibrated against open ground) is made on the GPU, so it can follow the sun every frame. It is made again when the sun has turned more than 0.05° since the last time, or when `turbidity`, `intensity` or `sunIlluminance` change. The sun itself is a directional light, and keeping the two in step is the host's job:
+
+```ts
+// Each frame: the sun from 6 am to 6 pm, and the sky with it.
+const angle = ((timeOfDay - 6) / 12) * Math.PI;
+const towardSun: [number, number, number] = [Math.cos(angle), Math.sin(angle), 0.3];
+gi.scene.updateLight(sun, { direction: [-towardSun[0], -towardSun[1], -towardSun[2]] }); // the way its light travels
+gi.scene.setEnvironment({ type: 'procedural', sunDirection: towardSun, turbidity: 2, sunIlluminance: 3 });
+```
+
+- A turning sun moves the sunlit patches, so the probes are traced again, nearest the camera first.
+- **The sun layer** makes a change of the sun's *colour or brightness* exact in the frame it happens, with nothing traced again (T2.6b). DDGI traces the sun in a layer of its own at a white reference and weighs that layer by the sun's colour × intensity:
+
+```ts
+import { DDGITechnique } from '@pmndrs/gi/ddgi';
+
+const ddgi = gi.addTechnique(new DDGITechnique({ volume, sunLayer: true }));
+gi.setOutput(ddgi);
+await gi.prepare();
+gi.scene.updateLight(sun, { color: [1, 0.55, 0.3], intensity: 1.5 }); // an evening sun: GI follows in the same frame
+```
+
+- The sun is the scene's first directional light. Dim it to 0 rather than destroying it: a destroyed sun makes another directional light the sun, and every probe is traced again.
+- Off by default. It costs a layer (Sponza: 58 MB of GI becomes 93 MB) and its share of every probe update. It works with light groups; 4 groups, the environment and the sun are the most one technique holds.
+
+## Moving, adding and removing objects
+
+Every change is a cheap call that is queued and uploaded in the next `encode`; calls between two frames are merged. Tables grow by reallocating buffers, never by changing shader code, so adding objects compiles nothing (`gi.stats.recompiles` stays 0).
+
+```ts
+const crate = gi.scene.createInstance({ mesh: meshes[0], materials: [materials[0]], transform: matrix });
+gi.scene.setTransform(crate, nextMatrix); // it moved
+gi.scene.setTransforms(movedInstances, movedMatrices); // many at once: handles in a Uint32Array, 16 numbers each
+gi.scene.setVisible(crate, false);
+gi.scene.destroyInstance(crate);
+
+// A character: it receives GI through the renderer, but GI's rays ignore it.
+gi.scene.createInstance({ mesh: meshes[1], materials: [materials[1]], transform: matrix, contributesToGI: false });
+```
+
+- `setTransforms` is for many moves a frame: 10,000 objects sliding cost 1.4 ms of CPU (Chrome, RTX laptop).
+- A mesh added or replaced (`createMesh`, `updateMesh`) gets its ray-tracing tree soon after it is uploaded: built on the GPU in that frame on a device with subgroups, and a better tree from a worker replaces it later. Rays miss a new mesh until its first tree arrives.
+- **What techniques see** of all this is the change feed, `SceneChanges`, handed to every technique each frame (`TechniqueFrame.changes`). Hosts never read it; it is what lets DDGI update "probes near a change first":
+
+```ts
+import type { SceneChanges } from '@pmndrs/gi/core';
+
+function describeChanges(changes: SceneChanges): void {
+    for (const region of changes.regions) {
+        // A world box whose lighting is out of date, and why: 'geometry', 'material' or 'light'.
+        // A move gives two regions, where the object was and where it is.
+        if (region.reason === 'geometry' && region.moved !== undefined) {
+            const glows = region.emits ? ', and it gives off light' : '';
+            console.log(`instance ${region.instance} moved ${region.moved.toFixed(2)} m${glows}`);
+        }
+    }
+    for (const box of changes.receivers) console.log('something that only receives GI is now in', box.min, box.max);
+    for (const light of changes.lights) console.log(`light ${light.index} reached ${light.influenceRadius.before} m, now ${light.influenceRadius.after} m`);
+    if (changes.global.length > 0) console.log('changed everywhere:', changes.global.join(', '));
+}
+```
+
+- `DirtyRegion.moved`: how far the object went, in metres (the farthest any corner of its box travelled), so a technique can size the change. `instance` is its slot, to follow it across frames.
+- `DirtyRegion.emits`: the object gives off light (an emissive material). An emitter that moves changes the light also where it can't be seen, through the surfaces it lights, so DDGI treats such a change more like a light's (T3.4).
+- `receivers`: boxes around objects that don't contribute to GI and were created, shown, moved or deformed (up to 256 a frame, then one merged box). DDGI wakes the probes in empty air around them, so a character walking through a room is lit.
+- `lights`: each changed light, before and after, with its influence radius on both sides. `global` lists changes with no useful box: the sun, the environment, or too many lights in one frame.
+
+## Deforming meshes
+
+A mesh made with `deforming: true` keeps its triangles and takes new vertex positions every frame (cloth, foliage in the wind, skinned meshes that block light):
+
+```ts
+const flag = gi.scene.createMesh({
+    positions: restPositions,
+    indices: flagIndices,
+    deforming: true,
+    deformBounds: { min: [-1, 0, -0.5], max: [1, 2, 0.5] }, // in the mesh's own space: every pose stays inside
+});
+
+gi.scene.setDeformedPositions(flag, posedPositions); // a Float32Array: copied at the call
+gi.scene.setDeformedPositions(flag, { buffer: skinnedVertices, offset: 0, stride: 32 }); // a GPU buffer: copied in the next encode
+gi.scene.setDeformedPositions(flag, { texture: posedPositionTexture }); // an rgba32float texture: vertex i at (i mod width, i / width)
+```
+
+- Rays see a pose in the next frame: the platform copies it into its scene copy and refits the mesh's tree on the GPU, in your encoder, with no wait. A tree that has drifted too far from a good shape is rebuilt now and then.
+- **`deformBounds`** is logged as the mesh's changed region each time a pose arrives, and kept in the top-level tree, so a pose never changes the tree's shape. It is required for positions on the GPU, which the platform can't read. A CPU pose outside it still traces correctly: the box grows, with one warning.
+- A GPU buffer needs `STORAGE` usage (xyz as floats at the start of each vertex; `stride` at least 12). A texture needs `COPY_SRC` usage and a width that is a multiple of 16: the form a three.js TSL compute writes.
+- A deforming mesh's normals are ignored: hits use each posed triangle's own normal.
+- Without the `subgroups` feature the refit can't run: the mesh stays in its rest pose, with one warning.
+
+## Several volumes and the camera-following volume
+
+One DDGI technique can hold up to 8 boxes of probes (`volumes`). They share one set of textures, and where they overlap the one with the higher `priority` answers, fading into the next across its edge. A volume with `follow: 'camera'` is a window of probes that moves with the camera (T3.6):
+
+```ts
+import { DDGITechnique } from '@pmndrs/gi/ddgi';
+
+const ddgi = gi.addTechnique(
+    new DDGITechnique({
+        volumes: [
+            // 32 × 12 × 32 probes 1.5 m apart around the camera: answers first wherever it covers.
+            { center: [0, 8, 0], size: [46.5, 16.5, 46.5], spacing: 1.5, follow: 'camera', priority: 1 },
+            // The whole street, coarser, for everything the window doesn't cover.
+            { center: [0, 10, 0], size: [240, 20, 120], spacing: 3 },
+        ],
+    }),
+);
+gi.setOutput(ddgi);
+await gi.prepare();
+```
+
+- **How the window moves.** Its probes sit on a lattice fixed in the world. When the camera is more than 0.75 of a spacing from the window's middle, the window moves by a whole plane of probes, and the plane it leaves behind is reused ahead. New planes are updated first. The covered area grows into them by a fifteenth of a spacing a frame, and only over planes that have finished warming up, and its edge fades out over 10 spacings, so nothing pops.
+- It needs at least 4 probes on every axis, and the camera every frame (`FrameInput.camera`). A jump of more than half the window (a teleport) starts the window's probes over.
+- Memory: the 32 × 12 × 32 window above is 12,288 probes, about 19 MB.
+- A point outside every volume reads the nearest one. Each volume takes one texture layer per probe row in y; past the device's `maxTextureArrayLayers`, `prepare` throws a `GILimitError`.
+- `ddgi.field.volumes` lists the volumes as built, highest priority first.
+
+## Materials and textures
+
+The material model, and how an engine's materials map onto it, are walked through in [the adapter guide, step 4](../guides/adapter.md#step-4-materials-and-textures). In short, a ray's hit sees `albedo` × the albedo texture × (1 − `metalness` × the metalness texture), the emission, and the alpha (`opacity` × the albedo texture's alpha) acting as the `alphaMode` says. M4 added textures at hits, `metalness`, `opacity`, `alphaMode` and compressed sources:
+
+```ts
+const baseColor = gi.scene.createTexture({ source: await createImageBitmap(imageBlob), srgb: true, label: 'leaves' });
+const metalRough = gi.scene.createTexture({ source: { format: 'bc7-rgba-unorm', levels: compressedLevels }, srgb: false });
+
+const leaves = gi.scene.createMaterial({
+    albedo: [1, 1, 1],
+    albedoTexture: baseColor,
+    albedoUv: { channel: 0, matrix: [4, 0, 0, 4, 0, 0], wrapU: 'repeat', wrapV: 'mirror' }, // four times across
+    alphaMode: 'cutout', // holes where alpha is below the cutoff
+    alphaCutoff: 0.5,
+});
+const paintedMetal = gi.scene.createMaterial({
+    albedo: [0.7, 0.7, 0.7],
+    metalness: 1,
+    metalnessTexture: { texture: metalRough, channel: 'b' }, // glTF keeps metalness in the blue channel
+});
+const tintedDecal = gi.scene.createMaterial({ albedo: [0.4, 0.3, 0.2], opacity: 0.5, alphaMode: 'stochastic' }); // blocks half the light
+```
+
+- **Sources:** `ImageBitmap`, image, canvas and `OffscreenCanvas` elements, `ImageData`, `PixelData` (8-bit RGBA bytes), a same-device `GPUTexture`, or `CompressedPixelData` (`{ format, levels }`, what three's `CompressedTexture.mipmaps` holds). The platform keeps its own copy of each: one layer of its texture store, 256 × 256 by default, with mips, made in the first `encode` after `createTexture`. The source may be freed after that.
+- **Compressed textures** need the format's device feature (`texture-compression-bc`, `-etc2` or `-astc`; `optionalFeatures` asks for them). Only one mip level is uploaded, the smallest that is still at least the store's layer size. Without the feature the platform warns once and the materials keep their flat colour.
+- **Where a texture is sampled** (`UvMapping`): the uv set, a 3 × 2 matrix, and `'repeat'`, `'clamp'` or `'mirror'` on each axis. Texture coordinate (0, 0) is the source's first texel, the top-left of an image.
+- Textures are read at the mip a ray's footprint covers, so GI's rays mostly read coarse mips. The texture store's memory is in `gi.stats.memory.textures` (about 0.35 MB a texture at 256²).
+
+## Exporting the field as spherical harmonics
+
+`exportIrradianceSH` projects each probe of one volume onto L2 spherical harmonics (9 coefficients per colour) on the GPU, with one readback (T5.3). The result is engine-free data: the grid's counts, origin and spacing, and the coefficients in three.js's convention. three's adapter turns it into a `LightProbeGrid` for a static fallback ([three.md, "Exporting a `LightProbeGrid`"](three.md#exporting-a-lightprobegrid)).
+
+```ts
+import { exportIrradianceSH, L2_SH_FLOATS_PER_PROBE } from '@pmndrs/gi/ddgi';
+
+const grid = await exportIrradianceSH(ddgi, { volume: 0 }); // the highest-priority volume
+console.log(grid.counts, grid.origin, grid.spacing);
+const firstProbe = grid.coefficients.subarray(0, L2_SH_FLOATS_PER_PROBE); // 9 coefficients, each as r, g, b
+```
+
+- Probes go x fastest, then y, then z. Within a probe come the 9 coefficients in three's order, each as r, g, b.
+- With light groups or the sun layer, the export is the field you see: every layer times its weight as of the last frame.
+- Probes live GI doesn't read (inside walls, in empty air, not updated yet) get the mean of their nearest active neighbours (`filledProbes` counts them), because a grid without visibility blends every probe. `fillInactiveProbes: false` keeps their raw values.
+- An explicit call, so its readback is allowed: the no-readback rule is about the frame loop.
+- The pieces it is made of are exported for checks and other formats: `shProjectionDirections` (directions spread evenly over the sphere), `l2ShBasis` (the 9 basis functions at a direction), `l2CosineLobe` (the factor between radiance and irradiance coefficients per band), `projectIrradianceToSH` (the projection on the CPU), and `fillInactiveProbes`.
+
+## Every export of `@pmndrs/gi/core`
+
+Every name `@pmndrs/gi/core` exports, in one place: the platform, with no technique in it. DDGI's names are in [the next section](#every-export-of-pmndrsgiddgi). A unit test (`tools/docs/docs-cover-exports.test.ts`) fails when the package exports a name this page doesn't mention, so these lists stay complete.
+
+### Making the platform
+
+| Name | What it is |
+| --- | --- |
+| `createGI(device, options?)` | Makes the platform on your device. |
+| `GIPlatform` | The platform: `scene`, `addTechnique`, `setOutput`, `prepare`, `encode`, `shading`, `stats`, `dispose`... |
+| `GIPlatformOptions` | `createGI`'s options: `gpuTiming`, `label`, `buildIn`, `textureLayerSize`. |
+| `GIPlatformModule` | The contract's declaration of `createGI` and the three helpers below. |
+| `requiredLimits(adapter)` | The device limits to ask for: the adapter's largest bindings and buffers, and what the kernels need. |
+| `RequiredLimits` | The type `requiredLimits` returns: limit names to numbers. |
+| `optionalFeatures(adapter)` | Features worth asking for, where the adapter has them. |
+| `isSupported(device)` | Whether a device can run the platform at all. |
+| `GINotReadyError` | Thrown by calls made before `prepare` finished (`reason: 'preparing'`) or after the device was lost (`'device-lost'`). |
+| `GILimitError` | Thrown when the scene or settings need more than the device allows; names the limit, what was needed and what the device has. |
+
+### Describing the scene
+
+| Name | What it is |
+| --- | --- |
+| `SceneApi` | `gi.scene`: create, update and destroy meshes, textures, materials, instances and lights; set the sky; `bounds`. |
+| `Handle` | A number tagged with what it refers to, so a mesh handle can't be passed as a material. |
+| `MeshHandle`, `MaterialHandle`, `TextureHandle`, `InstanceHandle`, `LightHandle` | The five kinds of handle. |
+| `Vec3`, `ColorRGB`, `Mat4`, `Aabb` | Plain data: `[x, y, z]`, linear `[r, g, b]`, a column-major 4 × 4 matrix, a box with `min` and `max`. |
+| `MeshDescriptor` | A mesh: positions, indices, optional normals, `uvs`, `uvs1`, `groups`, `deforming`, `deformBounds`. |
+| `MeshGroup` | A run of triangles using one material slot: `start`, `count`, `materialSlot`. |
+| `DeformedPositions` | Positions on the GPU for `setDeformedPositions`: a buffer or a texture. |
+| `DeformedPositionsBuffer` | Positions in a `STORAGE` buffer: `buffer`, `offset`, `stride`. |
+| `DeformedPositionsTexture` | Positions in an `rgba32float` texture: `texture`. |
+| `TextureDescriptor` | A texture: `source`, `srgb`, `label`. |
+| `TextureSource` | Anything a texture can be read from (images, canvases, pixels, a `GPUTexture`, compressed pixels). |
+| `PixelData` | 8-bit RGBA bytes with a width and height. |
+| `CompressedPixelData` | A compressed image: its `format` and its mip `levels`, largest first. |
+| `CompressedPixelLevel` | One compressed mip level: `data`, `width`, `height`. |
+| `UvMapping` | Where a texture is sampled: `channel`, `matrix`, `wrapU`, `wrapV`. |
+| `UvWrap` | `'repeat'`, `'clamp'` or `'mirror'`. |
+| `TextureChannel` | `'r'`, `'g'`, `'b'` or `'a'`. |
+| `MetalnessTexture` | A metalness map: a texture, the channel holding metalness, and its `uv`. |
+| `AlphaMode` | `'opaque'`, `'cutout'` or `'stochastic'`. |
+| `MaterialDescriptor` | The material model: albedo, metalness, opacity, alpha, emission, `blocksLight`, `doubleSided`, and their textures. |
+| `InstanceDescriptor` | A placement: `mesh`, `materials` (one per slot), `transform`, `contributesToGI`, `visible`. |
+| `LightDescriptor` | Any light: one of the three below. |
+| `DirectionalLightDescriptor`, `PointLightDescriptor`, `SpotLightDescriptor` | The three kinds of light, with their units. |
+| `LightChanges` | What `updateLight` takes: any fields of the light's own kind except `type`. |
+| `EnvironmentDescriptor` | The sky: `'none'`, `'color'`, `'texture'` (cube or equirect) or `'procedural'`. |
+
+### The frame
+
+| Name | What it is |
+| --- | --- |
+| `FrameInput` | What `encode` takes each frame: `deltaTime`, `budget`, `camera`, and `screen` for screen-space techniques. |
+| `FrameBudget` | How much GI work a frame may do: `gpuMs`, `units`, `targetFps`, `paused`. |
+| `FrameCamera` | The camera as plain data: position, view and projection matrices, near and far. |
+| `FrameScreen` | Screen buffers (depth, normals, motion) for screen-space techniques. DDGI ignores them. |
+
+### Reading GI while shading
+
+| Name | What it is |
+| --- | --- |
+| `ShadingModule` | `gi.shading`: the WGSL, its `parameters`, `globalsCode(group)`, `writeUniforms`, `version` ([the adapter guide, step 9](../guides/adapter.md#step-9-sampling-gi-in-your-shaders)). |
+| `ShadingParameter` | One resource the module's functions take: a texture, a sampler or a `vec4f`. |
+| `DebugView` | A debug view a technique offers: a screen view by id, or points (probes) in a texture. |
+
+### Stats and GPU timing
+
+| Name | What it is |
+| --- | --- |
+| `GIStats` | `gi.stats`: frame number, pass timings, memory, counters, CPU time of `encode`, and `recompiles`. |
+| `MemoryReport` | GPU memory by part: scene copy, acceleration structures, textures, each technique, total. |
+| `PassTiming` | One timed GPU pass in `stats.passes`: `name`, `gpuMs`, `frame`. |
+| `GpuTimer` | The timestamp-query timer the platform uses; also usable on its own. Results arrive a few frames late. |
+| `GpuTimerOptions`, `GpuTimerSample`, `GpuTimerStatus` | Its options, one frame's results, and its state (`'unsupported'`, `'pending'`, `'ready'`, `'failed'`). |
+| `GpuTimerScope` | The part of the timer a technique sees: `computePass(name)`. |
+| `TimestampRing`, `TimestampSlot`, `TimestampSlotState`, `PassQueryIndices` | The timer's ring of query slots, so frames don't overwrite results not yet read. |
+| `timestampsToPasses`, `totalByName`, `TimedPass` | Turning raw timestamps into pass times, and adding up passes with the same name. |
+
+### For writing a technique
+
+A technique gets the platform's services when attached, and never sees the host. These are described under "What techniques see" below and in the walk-throughs.
+
+| Name | What it is |
+| --- | --- |
+| `GITechnique` | What a technique implements: `attach`, `prepare`, `encode`, its `shading` module, `settings`, `debugViews`, `dispose`... |
+| `TechniqueRequirements` | What it needs: query kinds, ray batches, screen buffers, a fallback. |
+| `TechniqueContext` | What it gets when attached: the device, the scene copy, queries, hit shading, the kernel builder, the timer. |
+| `TechniqueFrame`, `TechniqueScreenFrame` | What its `encode` (and screen stage) gets each frame: the camera, the changes, its share of the budget. |
+| `WorkFloorRate` | What its fewest units per frame may depend on: the frame rate and the calibrated batch. |
+| `SceneCopy` | The scene as techniques read it: WGSL accessors, counts, memory, the first directional light. |
+| `SceneFingerprint` | `SceneCopy.fingerprint()`: content hashes of the scene by part (geometry, materials, textures, lights, sky), which saved bakes match against. |
+| `SceneChanges`, `DirtyRegion`, `ChangeReason`, `LightChange` | The change feed ("Moving, adding and removing objects" above). |
+| `SceneQueries`, `QueryKind`, `RayQueries` | Scene queries; v1 has one backend, `rays` (`giTraceClosest`, `giTraceAny`, batches). |
+| `HitShading`, `HitShadingSettings` | Shared hit shading: the surface at a hit, direct light with shadows, the sky; and its settings. |
+| `DirectLightFrame`, `DeferredDirectLight`, `DirectWorkList`, `RayScratch` | Direct light deferred to one platform pass (`gi/direct`), and its scratch buffer. |
+| `BounceSource` | Another technique's shading module used for bounce light. |
+| `WgslModule`, `BindingSlot`, `ModuleBindingEntry` | A piece of WGSL and the resources it binds. |
+| `KernelBuilder`, `ComputeKernel`, `ComputeKernelOptions` | How WGSL modules become compute pipelines, within the binding limits. |
+| `RAY_BYTES`, `HIT_RECORD_BYTES`, `HIT_RECORD_WORD` | Sizes and layout of the buffers `encodeBatch` reads and writes. |
+
+## Every export of `@pmndrs/gi/ddgi`
+
+Every name `@pmndrs/gi/ddgi` exports: DDGI, the first technique on the platform. It runs on a platform from `@pmndrs/gi/core` (`gi.addTechnique(new DDGITechnique(settings))`).
+
+### DDGI
+
+| Name | What it is |
+| --- | --- |
+| `DDGITechnique` | DDGI. `new DDGITechnique(settings)`; then `settings` (live), `field`, `counters`, `debugViews`, `shading`, `setGroupWeight`, `setEnvironmentWeight`, `resetHistory`. |
+| `DDGISettings` | Every DDGI setting. Most are read every frame; the volumes, tile sizes, `maxProbesPerFrame`, `lightGroups.count` and `sunLayer` need a new `prepare`. |
+| `DDGISettingsInput` | What the constructor takes: a `volume` or `volumes`, and any other settings. |
+| `DDGILightGroups` | The type of `DDGISettings.lightGroups`: how many groups get a layer of their own (a new `prepare` when it changes), and their live weights. |
+| `DDGIVolumeSettings` | One box of probes: `center`, `size`, `spacing`, `priority`, `follow`. |
+| `DEFAULT_DDGI_SETTINGS` | The defaults (the `high` preset). |
+| `DEFAULT_WARM_UP_PASSES`, `DEFAULT_WARM_UP_MAX_SECONDS`, `DEFAULT_WARM_UP_MIN_PASSES` | The warm-up's defaults: 16 passes over every probe, stopping after 8 s, but not before 2. |
+| `DDGIField` | What `ddgi.field` gives test tools: the textures, the volume table, and each volume's grid. |
+| `probeGrid(volume)`, `ProbeGrid` | The probe grid a volume setting describes: counts, origin, spacing. |
+| `PROBE_STATE`, `PROBE_STATE_LABELS` | Probe states (active, off inside geometry, off with no surface nearby, not updated yet) and their names. |
+| `PROBE_HISTORY_WORD`, `PROBE_HISTORY_WORDS` | The layout of each probe's history record, for tools that read it. |
+| `DistanceFormat` | The distance texture's format: `'rg16float'` with `texture-formats-tier1`, otherwise `'rgba16float'`. |
+
+### Reading DDGI while shading
+
+| Name | What it is |
+| --- | --- |
+| `DDGIShadingModule` | DDGI's shading module (`ddgi.shading`). |
+| `DDGI_SHADING_PARAMETER_NAMES` | The names of DDGI's shading parameters. |
+| `DDGI_SAMPLE_WGSL` | The one WGSL function that samples DDGI's field, for engine-free test views. |
+| `DDGI_DEBUG_VIEW` | DDGI's debug view ids: `points`, `giOnly`, `coverage`, `probeStates`. |
+| `DDGI_DEBUG_COLORS` | The colours its debug views use, for checks. |
+
+### Quality presets
+
+| Name | What it is |
+| --- | --- |
+| `ddgiPreset(name)` | A preset as plain data: `ddgi` settings, `budget`, `textureLayerSize`, `probeSpacing` ("Quality presets" above). |
+| `recommendPreset(adapterInfo, limits, hints?)` | Which preset to start from on this GPU. Advice only. |
+| `DDGI_PRESET_NAMES`, `isDDGIPresetName(value)` | The names, and a check that a string is one. |
+| `DDGIPreset`, `DDGIPresetName`, `DDGIPresetSettings` | A preset, its name, and the DDGI settings it sets. |
+| `PresetAdapterInfo`, `PresetAdapterLimits`, `RecommendPresetHints` | What `recommendPreset` reads: the adapter's info and limits, and optional hints (`mobile`). |
+
+### The spherical-harmonics export
+
+| Name | What it is |
+| --- | --- |
+| `exportIrradianceSH(technique, options?)` | One volume of the field as L2 spherical harmonics ("Exporting the field" above). |
+| `ExportIrradianceSHOptions`, `IrradianceSHGrid` | Its options (`volume`, `fillInactiveProbes`) and its result. |
+| `projectIrradianceToSH`, `fillInactiveProbes`, `l2ShBasis`, `l2CosineLobe`, `shProjectionDirections` | Its pieces, on the CPU. |
+| `EXPORT_SH_DIRECTIONS`, `L2_SH_COEFFICIENTS`, `L2_SH_FLOATS_PER_PROBE` | 1,024 directions per probe; 9 coefficients; 27 floats per probe. |
+
+### Saved bakes
+
+| Name | What it is |
+| --- | --- |
+| `LoadFieldOptions`, `LoadedField` | `DDGITechnique.loadField`'s options (`ifSceneChanged`: `load stale` or `refuse`) and what it returns (`stale`, `changedParts`, `savedAt`, `library`) ("Saved bakes" below). |
+| `SavedFieldError`, `SavedFieldProblem` | The error a refused file throws, and its `problem`: `not a saved field`, `format version`, `layout` or `scene changed`. |
+| `SAVED_FIELD_FORMAT_VERSION` | The `.ddgibake` format version this code writes and reads (1). |
+| `decodeSavedField`, `SavedFieldHeader`, `SavedFieldLayout` | Reads a file's header and sections without a GPU (to show what a bake holds), and the header's types: the layout that must match, the fingerprint, the camera windows. |
 
 ## Design choices, and why
 
 ### The scene
 
-- **Four material ideas.** These are albedo (color and/or texture), emission, alpha cutout, and whether the surface blocks light. `doubleSided` is there too, because back-face hits are how probes learn they sit inside a wall. Everything else about an engine material is ignored. That keeps adapters small.
-- **Textures** come in as any image source, or as a same-device `GPUTexture`. The platform always makes its own downsized atlas copy, so the host can free the source.
+- **Four material ideas.** These are albedo (color and/or texture), emission, alpha cutout, and whether the surface blocks light. M4 adds metalness (it scales the albedo), opacity and an alpha mode. `doubleSided` is there too, because back-face hits are how probes learn they sit inside a wall. Everything else about an engine material is ignored. That keeps adapters small.
+- **Textures** come in as any image source, a same-device `GPUTexture`, or compressed mips (`CompressedPixelData`, M4). The platform always makes its own downsized copy, a layer with mips in its texture store (256² by default, or 128² or 64² with `GIPlatformOptions.textureLayerSize`), so the host can free the source.
 - **`contributesToGI`** per instance. Characters and small props still *receive* GI through the shading module, but rays ignore them, which is what shipping engines do.
 - **Deforming meshes** keep their triangles. The host hands over a GPU buffer of positions each frame, and the BVH is refit on the GPU from it.
 - **Lights** use three.js's physical units: directional intensity is irradiance, point and spot intensity is radiant intensity, and emission and sky are radiance. So the three adapter passes values straight through. `range` is required for point and spot lights. `range: 0` means "no limit", as in three.js (`distance = 0`): such a light is never culled, so it costs every probe. Light **group** membership (0–3) is scene data, so it lives on the light. Group *weights* belong to the technique.
@@ -131,13 +574,16 @@ Gaps:
 
 ## Other open gaps
 
-4. **Deformed vertices from three.js.** `setDeformedPositions` wants a GPU buffer. three's skinned and morphed positions aren't exposed as one. The adapter may have to run its own skinning compute. To decide in M3.
+4. **Deformed vertices from three.js.** three's skinned and morphed positions aren't exposed as a GPU buffer. Decided in M3 (m3-moving.md §7): the CPU form of `setDeformedPositions` first (T3.1), a storage `ExternalTexture` or an upstream `ExternalBufferAttribute` for the GPU form later.
+   - *Answered in M3 (T3.3):* `setDeformedPositions` also takes positions on the GPU, as a buffer or an `rgba32float` texture (`DeformedPositionsTexture`). The three adapter poses skinned meshes with three's own `computeSkinning` into a storage `ExternalTexture` and hands that over. See "Deforming meshes" above.
 5. **Compressed textures** (KTX2). `TextureSource` accepts a `GPUTexture`, but getting three's `GPUTexture` means reaching into the renderer's backend, which we've ruled out. Alternatives: decode the KTX2 ourselves, or have the adapter keep the original image. To decide in M4.
+   - *Answered in M4 (T4.1):* `CompressedPixelData` (`{ format, levels }`, what three's `CompressedTexture.mipmaps` holds). The platform uploads the one level nearest above 256² and the GPU decodes it. See "During M4" below.
 6. **Splitting the budget between stacked techniques.** For now the platform splits the millisecond budget evenly between techniques and turns each share into units with that technique's measured `msPerUnit` (T1.5b). This needs a real policy once there are two techniques.
 7. **Storage-buffer budget for tracing kernels.** The scene copy (about 3), the BVH (about 2) and lights (1) leave about 2 of the default 8 for the technique. T0.10 must count the real numbers. If it's too tight, `requiredLimits` asks for more where the adapter has it (most desktop adapters allow 10 or more), and we pack tables into fewer buffers.
 8. **Texture tiling (UV transforms).** Engines tile, offset and rotate textures, and may read a second uv set. Without that information, the GI copy of a tiled floor samples the wrong texels.
    - The contract now has optional `albedoUv` and `emissiveUv` (`UvMapping`: uv channel, a 3×2 matrix, and wrap per axis) and a second uv set, `MeshDescriptor.uvs1`. From three.js the adapter passes `texture.matrix` and `texture.channel` straight through.
    - Still to decide in M4: how the texture atlas honours `repeat` and `mirror`. A tile in an atlas can't use the sampler's own wrapping, so it needs wrap in the shader plus padding, or a texture array instead of an atlas.
+   - *Answered in M4 (T4.1):* a texture array, one layer per texture. `repeat` is the sampler's, `clamp` and `mirror` are worked out on the uv in the shader. See "During M4" below.
    - Found by the parent session while answering Dennis, 2026-11-04.
 9. **Smooth normals at ray hits.** Hit shading used the triangle normal only, so low-poly curved surfaces lit in facets. `MeshDescriptor.normals` is now optional, and `GiSurface.normal` interpolates it when present. Front/back tests keep the triangle normal.
    - Still to decide in M1: whether to store normals compressed (octahedral, 4 bytes per vertex instead of 12) once the scene copy's memory is measured.
@@ -159,7 +605,76 @@ Gaps:
 
 The answers go in PROGRESS. Any change to the contract is made in both the TypeScript and this page, and listed in a "Revisions" section here.
 
+## Saved bakes (DDGI, T5.2)
+
+A DDGI field can be saved and loaded later, so a page starts with finished GI and keeps updating from there (docs/design/m5-coverage.md §2). It is DDGI's, not the platform's: `DDGITechnique.saveField()` and `loadField(bytes, options?)`.
+
+```ts
+const bytes = await ddgi.saveField();               // Uint8Array, a .ddgibake file
+// a fresh platform, the same scene and DDGI settings:
+await gi.prepare();
+const loaded = ddgi.loadField(bytes);               // before the first frame: no warm-up passes
+if (loaded.stale) console.log('the scene changed since:', loaded.changedParts);
+```
+
+- **Saving** copies the atlases and histories out and reads them back once, in a submit of its own. It is an explicit host call; nothing reads back in the frame loop.
+- **Loading** writes the sections with `queue.writeTexture` and `writeBuffer`, which land before the host's next submit. It compiles nothing and makes no new GPU objects (`stats.recompiles` doesn't move). The technique waits for the ray-tracing trees, as its warm-up does, and then carries on updating with no warm-up passes. The counters `saved fields loaded` and `saved field stale` say what happened.
+- **Refused** with `SavedFieldError` (its `problem`: `not a saved field`, `format version`, `layout`, `scene changed`) and a plain message: a file that isn't one, a format version this code doesn't read, or a layout that doesn't match (the message names the field: tile texels, the irradiance layers of light groups and the sun layer, a volume's counts, spacing, place, priority or `follow`). A field saved on a device with `rg16float` distances loads on one without (and back): the texels are converted.
+- **A changed scene** (its fingerprint differs) loads as stale unless `ifSceneChanged: 'refuse'`: the first frame that updates probes marks every probe as a whole change, so the field updates from the loaded values at priority instead of from black.
+- **The scene changes the next frame brings aren't marked:** the fingerprint was checked against the scene with them, and on a fresh platform they are its creation (every object and light added), which would cut every loaded history. So load after the scene is described and before the first frame; a change made between `loadField` and the next frame goes unmarked.
+- **A camera-following volume's window is saved** (where it was on the lattice, and its valid extent) and put back at load. It moves on with the camera from there; a camera far from it is a teleport, which starts that volume over as any teleport does.
+
+**The file (`.ddgibake`), little-endian:** `DDGB`, a `u32` format version (1), a `u32` header length, the header as UTF-8 JSON, then the sections, each starting on a 256-byte boundary (`techniques/ddgi/saved-field.ts`).
+
+- The header: `formatVersion`, `library` (`@pmndrs/gi 0.0.0`), `createdAt`, `layout` (what has to match: tile texels, irradiance layers, the distance format, each volume's counts, spacing, first probe, priority and `follow`), `sections` (name, format, byte offset and length, and a texture's width, height and layers), `fingerprint`, `clockSeconds` (the technique's clock, which the histories' last-update times are on), and `cameraWindows`.
+- The sections: `irradiance` (every irradiance layer side by side, `rgba16float`), `distance`, `probeData` (relocation offsets and states), and `probeHistory/<volume>` for each volume (64 bytes a probe). Texture rows are packed with no padding. The composed atlas isn't saved: the first frame after a load composes it.
+- The probe history is settled before it is written: it keeps each probe's sample count, update count, last-update time, mean and noise, and drops what only meant something in the frames it was saved in (owed updates, marks, wakes, frame stamps, the change clock).
+
+**The scene fingerprint** is `SceneCopy.fingerprint()` (technique-facing, platform/scene/scene-fingerprint.ts): a 64-bit hash per part.
+
+| Part | What is hashed |
+| --- | --- |
+| `geometry` | Each GI instance's mesh content (positions, indices, normals, uv sets, groups, triangle count, deform box), transform and visibility. A deforming mesh counts with its rest pose. |
+| `materials` | Each GI instance's material list: every number of each material, its textures by content hash. Labels are left out. |
+| `textures` | The content of every texture those materials use: the bytes of `PixelData`, `ImageData` and compressed levels (over 1 MB, an even 1 MB sample plus the length). `ImageBitmap`, canvases and `GPUTexture`s count by size, format and colour space only; image elements by URL and size. |
+| `lights` | Every light's numbers and shadow parameters (`castsShadows`), and its group. There are no shadow matrices to leave out. |
+| `sky` | The environment's settings; a texture environment by its texture's size and format, not its texels. |
+
+Each part is order-free, so two loads that create objects in another order agree. Bump `FINGERPRINT_VERSION` when what a part covers changes.
+
 ## Revisions
+
+### During M5, 2026-11-10
+
+- **Host-facing (the gi rename, DECISIONS 2026-11-10): the package is `@pmndrs/gi`, and `/core` is the platform alone.** DDGI's names (everything in "Every export of `@pmndrs/gi/ddgi`") moved from `/core` to `@pmndrs/gi/ddgi`; nothing in the platform or DDGI changed name or shape. The three adapter's `GIVolume` is now `DDGIVolume` (three.md).
+- **Host-facing (T5.1): quality presets.** `ddgiPreset(name)`, `recommendPreset(adapterInfo, limits, hints?)`, `DDGI_PRESET_NAMES`, `isDDGIPresetName` and their types, from `@pmndrs/gi/ddgi` (section "Quality presets" above). Plain data over the existing settings; nothing in the frame changed.
+- **Host-facing (T5.1): `GIPlatformOptions.textureLayerSize`** (`64 | 128 | 256`, default 256): the texture store's layer size, fixed for the platform's life. At 256 the store, its kernel and the sampling module's WGSL are what M4 checked, to the character. Smaller layers have one mip fewer per halving; the ray cone's mip and the wrap's half texel are worked out in the store's own texels. Implementation-only: `storeLayout(layerSize)` and `textureStoreWgsl(layerSize)` (textures/texture-store-wgsl.ts), and `PlatformTextureStore`'s `layerSize` option. The CPU mirrors and the repository's reference tracer stay at 256.
+- **Technique-facing (T5.2): `SceneCopy.fingerprint(): SceneFingerprint`**, content hashes of the scene by part, for saved bakes ("Saved bakes" above). Worked out on the CPU when called. Meshes and textures are hashed once when created or updated, since the scene keeps no CPU copy of them after upload: 1.9 ns a word on the M5 Pro (48 MB in 22 ms), on the host's thread.
+- **Host-facing through DDGI (T5.2): `DDGITechnique.saveField` / `loadField`**, the `.ddgibake` format, `SavedFieldError` ("Saved bakes" above). Implementation-only: the irradiance and distance atlases gain `COPY_DST` usage (the load writes them).
+
+### During M3, 2026-11-09
+
+- **Technique-facing meaning of `RayQueries.building`, and when the platform submits (T3.2): meshes added or replaced while the scene runs get GPU (H-PLOC) trees too**, built in the frame they are uploaded and placed after the stats readback, with tinybvh's tree swapped in later, as at load. So `building` is true while any mesh's current version has no tree yet, whether it came at load or later, and a frame that uploads meshes submits one GPU build of its own and reads back its stats (DECISIONS 2026-11-09). One tinybvh build per mesh runs at a time; a mesh replaced again meanwhile keeps only its newest version waiting. Implementation-only: `rays.memory` gains `trianglesInUse`.
+- **Host-facing (T3.1): `MeshDescriptor.deformBounds` and `setDeformedPositions` with a `Float32Array`.** A `deforming` mesh may give `deformBounds`, a box in its own space that every pose stays inside; its instances keep that box in the top level, and each new pose is logged as that box (in world space, per instance). `setDeformedPositions(mesh, positions)` takes the CPU form (Dennis, 2026-11-05: yes): xyz per vertex, copied at the call, the newest of a frame kept. The GPU forms came with T3.3 (next entry). *As built for the prototype (replaced by T3.3's refit):* the pose is written into the mesh's positions in the scene copy (plain xyz floats, so no layout change) and the mesh is reported as uploaded again, so the tracer rebuilds its tree as for `updateMesh`; new poses wait while trees are being built, so a mesh posed every frame still gets trees (about one in three frames on the RTX for 1,152 triangles). A pose outside `deformBounds` grows the box, with one warning.
+- **Host-facing (T3.3): `setDeformedPositions` takes positions on the GPU, and a pose reaches rays in the next frame.** `DeformedPositions` is now a buffer (`STORAGE` usage, any stride of 12 bytes or more, an offset) or an `rgba32float` texture (`COPY_SRC`, width a multiple of 16, vertex `i` at texel `(i mod width, i / width)`: the form a three.js TSL compute writes into a storage `ExternalTexture`). The mesh must have `deformBounds` for a GPU pose: the platform can't read it to grow the box, so its `DirtyRegion.moved` is the box's diagonal. Every pose (CPU or GPU) is copied into the scene copy and the mesh's tree is refit on the GPU (`GpuMeshRefit`) in the same frame's encoder: no submit, no tree build, no wait (T3.1's rebuild per pose and its hold are gone). A tree whose refit has drifted past 1.1× its built SAH cost for about 60 frames is rebuilt with H-PLOC from the scene copy's positions (DECISIONS 2026-11-09), through T3.2's runtime path, with one readback of its stats and its layout. The refit's stats (the drift signal) are read back at most once every 15 frames per posed mesh. A deforming mesh's normals are dropped: hit shading uses the posed triangle's own normal. Without subgroups (no refit) poses are ignored, with one warning, and the mesh stays in its rest pose. Implementation-only: `SceneUpload.meshesPosed`; `stats.counters['platform deforming meshes']`; the timed pass `platform/mesh refit`.
+- **Technique-facing (T3.1): `SceneChanges.receivers: readonly Aabb[]`** replaces the `movedReceivers` count: the world box, where it is now, of each visible instance that doesn't contribute to GI and was created, shown, moved or deformed, up to 256 a frame (then one merged box). For waking probes in empty space (m3-moving.md §5.3). **`DirtyRegion.moved`** is also set for a deforming mesh's region: the largest vertex travel since the pose before, times the instance's largest axis scale.
+- **Technique-facing (T3.4): `DirtyRegion.emits`** is true on a geometry region whose instance gives off light (a material with a non-black `emissive` and a positive `emissiveIntensity`, as its materials are when the region is logged; a merged region emits if any of its regions did). An emitter that moves or deforms changes the light also where it can't be seen, through the surfaces it lights, so DDGI marks such a change more like a light's (docs/design/ddgi.md).
+### During M4, 2026-11-09
+
+All optional and backward compatible (docs/design/m4-materials.md, "Contract additions"; T4.1).
+
+- **Host-facing: textures are sampled at ray hits.** The platform keeps a texture store: one `texture_2d_array` of 256 × 256 layers with full mips, `rgba8unorm-srgb`, a layer per texture. A texture's layer is made in the next `encode` after `createTexture` (`gi/texture-store`, linear-light downsampling and mips). Until then its materials shade with their flat colour; when it lands, the platform logs a `material` change over the instances using them. The array grows by copying layers and rebuilding bind groups, never by recompiling. Texture coordinate (0, 0) is the source's first texel (the top-left of an image), as in WebGPU.
+- **Host-facing: `CompressedPixelData`** (`{ format, levels: { data, width, height }[] }`) is a `TextureSource`. The level nearest above 256² is uploaded and the GPU decodes it. It needs the format's device feature; without it the platform warns once and those materials keep their flat colour. This answers gap 5.
+- **Host-facing: new `MaterialDescriptor` fields.** `metalness` (0–1) and `metalnessTexture: { texture, channel, uv? }`: the albedo at a hit is `albedo × albedoTexture × (1 − metalness × metalnessTexture[channel])`, as three and glTF do. `opacity` (0–1) and `alphaMode: 'opaque' | 'cutout' | 'stochastic'` (with `alphaCutoff` above 0 and no mode it is `'cutout'`, as before; `'cutout'` with no cutoff uses 0.5). Rays use `opacity` and `alphaMode` from T4.2 on.
+- **Implementation-facing for now: `HitShadingSettings.sampleTextures`** (live, default true). Off, every texture is read at its last mip, its mean colour, the same over the whole surface: the flat colours M1's adapter folded in (albedo, emissive and metalness alike, so a glTF metal-mapped material isn't treated as fully metal). While a metalness map's layer is still being made, the material counts as metalness 0, so it doesn't go black while it loads. Hosts can't reach it through the `GIPlatform` contract yet. The repository's tools and the viewer's textures toggle reach it through `GIPlatformImpl.shade.settings`. Exposing it to hosts is a decision for later, if a host needs it.
+- **Host-facing: `stats.memory.textures`**, the texture store's bytes (0.35 MB a layer, the array grown in doubles), counted in `total`.
+- **Host-facing: `requiredLimits` asks for `maxTextureArrayLayers`** (the default 256 would cap a scene at 256 textures; adapters give 2,048), and `optionalFeatures` for `texture-compression-bc`, `-etc2` and `-astc` where present.
+- **Technique-facing: `giSurfaceAtCone(ray, hit, spread)`.** Textures are read at the mip a ray cone's footprint covers: `log2(spread × t / max(|cos θ|, 0.1) × texels per metre)`, texels per metre from the hit triangle's uv area (scaled by the uv transform's determinant) against its world area. A technique passes its rays' spread, `sqrt(4π / rays per sphere)`; DDGI passes it from `raysPerProbe`. `giSurfaceAt` uses 0.22 (256 rays). The uv mapping (uv set, 3×2 transform, wrap per axis) is applied for each texture: `repeat` by the sampler, `clamp` and `mirror` on the uv. `GiMaterial` gains `metalness`, `metalnessTexture`, `metalnessChannel`, `metalnessUv`, `opacity` and `alphaMode`, and its texture words are store layers (`GI_NO_TEXTURE` until a layer is made). The scene module gains `giInstanceTriangleUvs`. The hit-shading module binds two more resources, the store's array and its sampler, and still no storage buffer.
+- Since T4.3 the three adapter passes real textures (images, data and compressed) and no longer folds texture averages.
+- **Technique-facing (T4.2, first half): materials in the walk.** `giTraceClosest` and `giTraceAny` now let rays through see-through materials (`blocksLight: false`) and the back faces of single-sided ones (`doubleSided: false`), triangle by triangle, in every instance (docs/design/m4-materials.md §3). `RayQueries.capabilities.perTriangleMaterials` is true; `alphaCutouts` stays false until the second half. No WGSL signature changed. **Binding cost:** the `rays` module now depends on the scene module (the walk reads its material tables), so a kernel that lists `rays` alone binds the scene copy's 2 storage buffers too: inline tracing 3 + 2, a batch kernel 7 of 8. Kernels that list hit shading had both already, so DDGI's count is unchanged. Implementation-only: `rays.requestTriangleFlags(meshSlot)` (the install hook every path that writes tree triangles calls; trace/triangle-flags.ts) and `rays.triangleFlagRewrites`. Hosts see nothing new. Since T4.3 the three adapter no longer leaves see-through meshes out of GI; the walk handles them per triangle.
+- **Technique-facing (T4.2, second half): alpha in the walk.** `RayQueries.capabilities.alphaCutouts` is true. Rays also pass a cutout where its alpha (`opacity` × the albedo texture's alpha, through the albedo texture's uv mapping) is below `alphaCutoff` (0.5 by default), and a stochastic material with probability 1 − alpha (a hash of the frame number, the instance, the triangle and the hit's barycentrics, so rays that repeat exactly from frame to frame, such as shadow rays from a still camera, average out instead of freezing into one pattern), for closest hit and any hit alike. The alpha is read from the texture store at a fixed mip, 1 (`ALPHA_TEST_LOD`), whatever `sampleTextures` says: a hole is geometry. No WGSL signature changed. **Bindings:** the material test binds one uniform (the frame number, written by the `rays` backend each update). The store's array and its sampler now come from one module of their own, `gi-texture-store` (`giTextureSampleMapped`, `giTextureMappedUv`, `giTextureWrap`; textures/texture-sampling-wgsl.ts), which hit shading and the walk both list, so a kernel with both binds them once. The `rays` module now binds them too: still no storage buffer, so a batch kernel stays at 7 of 8 and inline tracing at 3 + 2. Hit shading's own entries drop from six to four (the uniforms, the sky map, its sampler, the light grid's picks).
+- **Implementation-only (T4.2, second half): the alpha-test mip is a constant, not a setting** (`ALPHA_TEST_LOD` = 1, trace/material-test-wgsl.ts): holes are geometry, and no host or technique has needed another mip.
+- **Host-facing (T4.2, second half):** `MaterialDescriptor.alphaMode` and `opacity` now act on rays (above). The store's mips weight colour by alpha, so the coarse mips of cutout foliage keep the leaves' colour. A texture source that throws when read (a closed `ImageBitmap`, transferred `PixelData`) fails alone, with a warning; a `GPUTexture` source is checked for this device first (one or two frames), so another device's texture is refused with a warning instead of invalidating the host's frame.
 
 ### During M2, 2026-11-08
 
@@ -232,7 +747,7 @@ Both engines took the shading module as designed. A light node in three and a ma
   - Babylon's foreign-texture wrapper destroys our texture on dispose unless reset first.
   - **Metals bounce no diffuse light.** The adapter folds metalness into albedo:
     - GI albedo = base colour × (1 − metalness);
-    - with a metalness texture, the same product is baked into the albedo copy when the atlas is built (M4).
+    - with a metalness texture, the core samples it at the hit (`metalnessTexture`, M4) and applies the same product; nothing is baked.
     - Without this, a metal bounces light like paint. Every adapter needs this rule, and the M1 adapter task checks it.
     - Roughness stays out: DDGI bounces diffuse light only, the standard DDGI limitation. Revisit it for the RT-reflections technique.
   - Details are in NOTES.

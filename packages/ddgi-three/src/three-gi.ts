@@ -23,7 +23,7 @@
  * resolves the light joins the scene, so a host that only renders
  * (`updateOnRender`) gets GI too; if it rejects, the next `update` throws
  * its error. Without `preparing` the platform must already be ready, so a
- * host that forgot `prepare` hears so at once. `GIVolume.start` does it
+ * host that forgot `prepare` hears so at once. `DDGIVolume.start` does it
  * this way:
  *
  * ```ts
@@ -46,7 +46,7 @@
  * ordering). That is one extra submit per frame, the same kind three makes
  * for every render pass and compute call.
  *
- * With `updateOnRender` (what `GIVolume.start` uses), there is no per-frame
+ * With `updateOnRender` (what `DDGIVolume.start` uses), there is no per-frame
  * call: the GI light's node runs `update` from inside three's render, once
  * per frame, with that render's camera (gi-light.ts, "The render-time
  * update", lists what that means). Otherwise call `update` before
@@ -63,16 +63,17 @@ import { Color, type Camera, type ColorRepresentation, type Object3D, type Ortho
 import type { EnvironmentDescriptor, FrameBudget, GIPlatform, ShadingModule } from '@pmndrs/ddgi-core';
 import type { PmndrsSkyLike } from './environment.ts';
 import { GILight, type GILightOptions } from './gi-light.ts';
-import type { GIVolume } from './gi-volume.ts';
+import type { DDGIVolume } from './ddgi-volume.ts';
 import { SceneSync, type SyncFrameReport } from './scene-sync.ts';
+import type { WebGPURenderer } from 'three/webgpu';
 
 export interface ThreeGIOptions {
     /** GPU work allowed per frame for GI updates. Default `{ gpuMs: 2 }`. A live object: change it any time. */
     readonly budget?: FrameBudget;
     /** Settings for the GI light added to the scene. */
     readonly light?: GILightOptions;
-    /** A LightProbeGrid-shaped volume (gi-volume.ts) whose `intensity` and `priority` the GI light follows each frame. */
-    readonly volume?: GIVolume | null;
+    /** A LightProbeGrid-shaped volume (ddgi-volume.ts) whose `intensity` and `priority` the GI light follows each frame. */
+    readonly volume?: DDGIVolume | null;
     /** An environment for GI rays instead of the scene's (environment.ts). */
     readonly environment?: EnvironmentDescriptor | null;
     /** A pmndrs/sky `Sky` to take GI's sky from (environment.ts). */
@@ -95,6 +96,13 @@ export interface ThreeGIOptions {
      * (file comment, T2.14). Without it the platform must be ready.
      */
     readonly preparing?: Promise<void>;
+    /**
+     * The renderer that draws the scene (on the platform's device). Given,
+     * skinned meshes that contribute to GI (`userData.giContributes`) are
+     * posed on the GPU by three's own skinning, and no position reaches the
+     * CPU (gpu-skinning.ts). Without it they are posed on the CPU.
+     */
+    readonly renderer?: WebGPURenderer;
 }
 
 /** CPU time of the last `update`, milliseconds (`performance.now()`, so steps of up to 0.1 ms in some browsers). */
@@ -124,7 +132,7 @@ export class ThreeGI {
     readonly sync: SceneSync;
     budget: FrameBudget;
     /** The volume the GI light follows, if any (see the option). */
-    volume: GIVolume | null;
+    volume: DDGIVolume | null;
     readonly timings: ThreeGITimings = { matrixWorldMs: 0, syncMs: 0, encodeMs: 0 };
     /** What the last update sent. */
     get report(): SyncFrameReport {
@@ -155,7 +163,7 @@ export class ThreeGI {
      */
     constructor(gi: GIPlatform, scene: Scene, options: ThreeGIOptions = {}) {
         if (!gi.isReady && !options.preparing) {
-            throw new Error('@pmndrs/ddgi/three: prepare the platform first (await gi.prepare()), or pass its promise (`preparing: gi.prepare()`) to copy the scene in while it compiles.');
+            throw new Error('@pmndrs/gi/three: prepare the platform first (await gi.prepare()), or pass its promise (`preparing: gi.prepare()`) to copy the scene in while it compiles.');
         }
         this.gi = gi;
         this.scene = scene;
@@ -163,8 +171,8 @@ export class ThreeGI {
         this.volume = options.volume ?? null;
         this.alwaysUpdateMatrixWorld = options.updateMatrixWorld ?? false;
         this.renderTimeUpdate = options.updateOnRender ?? false;
-        this.warnOnce = options.warn ?? ((message) => console.warn(`@pmndrs/ddgi/three: ${message}`));
-        this.sync = new SceneSync(gi.scene, { device: gi.device, warn: options.warn, objectsPerFrame: options.objectsPerFrame, editChecksPerFrame: options.editChecksPerFrame, lightsPerFrame: options.lightsPerFrame });
+        this.warnOnce = options.warn ?? ((message) => console.warn(`@pmndrs/gi/three: ${message}`));
+        this.sync = new SceneSync(gi.scene, { device: gi.device, renderer: options.renderer, warn: options.warn, objectsPerFrame: options.objectsPerFrame, editChecksPerFrame: options.editChecksPerFrame, lightsPerFrame: options.lightsPerFrame });
         this.sync.environment = options.environment ?? null;
         this.sync.sky = options.sky ?? null;
         const shading = gi.shading;
@@ -292,14 +300,14 @@ export class ThreeGI {
      */
     setGroupWeight(group: number, color: Color | ColorRepresentation, intensity = 1): void {
         const technique = this.gi.outputTechnique;
-        if (!technique?.setGroupWeight) throw new Error(`@pmndrs/ddgi/three: the GI technique '${technique?.id ?? 'none'}' has no light group weights`);
+        if (!technique?.setGroupWeight) throw new Error(`@pmndrs/gi/three: the GI technique '${technique?.id ?? 'none'}' has no light group weights`);
         technique.setGroupWeight(group, linearWeight(color, intensity));
     }
 
     /** The same for the sky and emissive surfaces: GI's environment layer. */
     setEnvironmentWeight(color: Color | ColorRepresentation, intensity = 1): void {
         const technique = this.gi.outputTechnique;
-        if (!technique?.setEnvironmentWeight) throw new Error(`@pmndrs/ddgi/three: the GI technique '${technique?.id ?? 'none'}' has no light group weights`);
+        if (!technique?.setEnvironmentWeight) throw new Error(`@pmndrs/gi/three: the GI technique '${technique?.id ?? 'none'}' has no light group weights`);
         technique.setEnvironmentWeight(linearWeight(color, intensity));
     }
 

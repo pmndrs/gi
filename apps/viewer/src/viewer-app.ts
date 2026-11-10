@@ -8,14 +8,17 @@
  */
 
 import { BoxGeometry, Color, Mesh, MeshStandardMaterial, Vector2 } from 'three';
-import { defaultExposureEv, type CameraBookmark, type SceneManifest } from '../../../scenes/src/manifest';
+import { defaultExposureEv, motionTarget, type CameraBookmark, type SceneManifest } from '../../../scenes/src/manifest';
 import { CameraRig } from './controls/camera-rig';
 import { TONE_MAPPERS, ViewerCore, type ToneMappingName, type ViewLayout } from './core/viewer-core';
 import { LightEditor, type LightSettings } from './lighting/light-editor';
+import type { CameraControl } from './lighting/motion-drivers';
 import { MotionPlayer } from './lighting/motion-player';
 import { ResponseMeter } from './lighting/response-meter';
 import { TimeOfDay } from './lighting/time-of-day';
 import { shotBookmark } from './scene/reference-files';
+import { AddedCabinets } from './scene/added-cabinets';
+import { findScenario, sceneAddsCabinets, type Scenario } from './scene/scenarios';
 import { newestFrame, resolveGpuWindow } from './render/gpu-time';
 import { findBookmark, loadAllManifests } from './scene/manifests';
 import { LAYER_VIEW_GEOMETRY } from './scene/layers';
@@ -32,7 +35,8 @@ import { HELP } from './ui/help-text';
 import { LightingControls, type LightingHandlers } from './ui/lighting-controls';
 import { Panel, type DdgiPanelSettings, type PanelState, type ProbeLegendEntry } from './ui/panel';
 import { RegionPicker } from './ui/region-picker';
-import { DEFAULT_URL_STATE, parseUrlState, serializeUrlState, type GiChoice, type ViewerUrlState } from './ui/url-state';
+import { ScenarioControls, type ScenarioHandlers } from './ui/scenario-controls';
+import { DEFAULT_URL_STATE, parseUrlState, presetBudgetMs, serializeUrlState, type GiChoice, type ViewerUrlState } from './ui/url-state';
 
 export interface ViewerAutomationState {
     ready: boolean;
@@ -47,6 +51,25 @@ export interface ViewerAutomationState {
     adapter: string;
     /** DDGI's start-up, milliseconds from when it was created (null until reached, or when DDGI isn't used). */
     ddgiStartup: { preparedMs: number | null; firstGiMs: number | null; warmedMs: number | null } | null;
+    /** The moving-geometry scenario chosen in the panel, or null. */
+    scenario: string | null;
+    /** The motion playing and how far into it, or null. */
+    motion: { id: string; seconds: number } | null;
+    /** GPU programs the GI library compiled while ready (should stay 0), or null without DDGI. */
+    recompiles: number | null;
+    /**
+     * Saved bakes (the panel's "Save the probes to a file" and "Load probes
+     * from a file"): the last file saved (its name and size), the last one
+     * loaded (stale or not, and which parts of the scene changed), the bakes
+     * the running DDGI has loaded, and the last error. Null fields until then.
+     */
+    bake: {
+        /** `ms`: wall time of the save (the readback and the scene fingerprint) or of the load call. */
+        saved: { file: string; bytes: number; ms: number } | null;
+        loaded: { file: string; stale: boolean; changedParts: readonly string[]; ms: number } | null;
+        bakesLoaded: number;
+        error: string | null;
+    };
 }
 
 declare global {
@@ -112,12 +135,21 @@ export class ViewerApp {
         frames: 0,
         adapter: '',
         ddgiStartup: null,
+        scenario: null,
+        motion: null,
+        recompiles: null,
+        bake: { saved: null, loaded: null, bakesLoaded: 0, error: null },
     };
+    /** What the last bake save or load did, for the panel's status lines (plain words); null before any. */
+    private bakeMessage: string | null = null;
 
     private core!: ViewerCore;
     private rig!: CameraRig;
     private panel!: Panel;
     private lightingControls!: LightingControls;
+    private scenarioControls!: ScenarioControls;
+    /** The cabinet scenario's added cabinets, on the scene that offers them; null elsewhere. */
+    private cabinets: AddedCabinets | null = null;
     private regionPicker!: RegionPicker;
     /** Per scene: the light editor and gizmo, the motions, time of day and the response meter (made when a scene opens). */
     private lighting: { editor: LightEditor; player: MotionPlayer; timeOfDay: TimeOfDay; meter: ResponseMeter } | null = null;
@@ -198,7 +230,8 @@ export class ViewerApp {
             this.stats = new StatsOverlay(document.body, 'GPU per frame, averaged over recent frames:');
             this.stats.setExtraLines(() => this.ddgiStats.lines());
             this.lightingControls = new LightingControls(this.lightingHandlers());
-            this.panel = new Panel(document.body, this.manifests, this.panelHandlers(), this.lightingControls.sections);
+            this.scenarioControls = new ScenarioControls(this.scenarioHandlers());
+            this.panel = new Panel(document.body, this.manifests, this.panelHandlers(), this.lightingControls.sections, [this.scenarioControls.section]);
             this.regionPicker = new RegionPicker(this.canvas);
             this.buildWipeLabels();
             this.installPageEvents();
@@ -207,6 +240,10 @@ export class ViewerApp {
             return;
         }
 
+        // A link naming only a scenario opens its scene, camera view and motion.
+        const linked = findScenario(this.url.scenario);
+        if (!linked) this.url.scenario = null;
+        else if (this.url.scene === null) this.url = { ...this.url, ...this.scenarioLink(linked) };
         const manifest = this.manifests.find((candidate) => candidate.id === this.url.scene) ?? this.manifests.find((m) => m.id === 'cornell-box') ?? this.manifests[0];
         await this.openScene(manifest, this.url.camera);
         // three's animation loop, not a bare requestAnimationFrame: it advances the frame counter that
@@ -227,11 +264,16 @@ export class ViewerApp {
         this.showLoading(`Loading ${manifest.title}`, { stage: 'Starting', fraction: null });
         await nextFrame();
         this.disposeLighting();
+        // The new scene's DDGI starts with the link's volumes (the camera-following one), not the last scene's.
+        this.core.setDdgiSettingsForNextScene(this.ddgiSettings());
         try {
             const loaded = await this.core.loadScene(manifest, (progress) => this.showLoading(`Loading ${manifest.title}`, progress), {
                 settings: this.url.sceneSettings,
                 clusteredLightReachMetres: this.url.lightReach ?? undefined,
+                textureCompression: this.url.textures,
             });
+            const notCompressed = loaded.textureCompression.find((part) => part.unavailable);
+            if (notCompressed) console.warn(`Textures were loaded uncompressed: ${notCompressed.unavailable}`);
             this.manifest = manifest;
             this.url.scene = manifest.id;
             this.rig.setSceneScale(loaded.diagonal);
@@ -319,10 +361,76 @@ export class ViewerApp {
         this.scheduleUrlUpdate();
     }
 
+    /**
+     * "Save the probes to a file": DDGI's probes as a `.ddgibake` file, which
+     * the browser downloads, named after the scene.
+     */
+    private async saveBake(): Promise<void> {
+        const ddgi = this.core.ddgi;
+        if (!ddgi || !this.manifest) {
+            this.bakeMessage = 'Saving needs DDGI on screen.';
+            return;
+        }
+        try {
+            const startedAt = performance.now();
+            const bytes = await ddgi.saveBake();
+            const ms = performance.now() - startedAt;
+            const file = `${this.manifest.id}.ddgibake`;
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(new Blob([bytes], { type: 'application/octet-stream' }));
+            link.download = file;
+            link.click();
+            // The download has its own copy once it starts.
+            setTimeout(() => URL.revokeObjectURL(link.href), 60_000);
+            this.bakeMessage = `Saved the probes to ${file} (${(bytes.byteLength / 1e6).toFixed(1)} MB).`;
+            this.automation.bake.saved = { file, bytes: bytes.byteLength, ms };
+            this.automation.bake.error = null;
+        } catch (error) {
+            this.bakeFailed(`Couldn't save the probes: ${error instanceof Error ? error.message : String(error)}`);
+        }
+    }
+
+    /**
+     * "Load probes from a file" (or a dropped file): the probes from a
+     * `.ddgibake` file in place of DDGI's own, from the next frame. A file of
+     * a changed scene loads as a starting point; one that doesn't fit is
+     * refused, and the status says why.
+     */
+    private async loadBake(file: File): Promise<void> {
+        const ddgi = this.core.ddgi;
+        if (!ddgi) {
+            this.bakeFailed('Loading probes needs DDGI on screen.');
+            return;
+        }
+        try {
+            const contents = await file.arrayBuffer();
+            const startedAt = performance.now();
+            const loaded = ddgi.loadBake(contents);
+            const ms = performance.now() - startedAt;
+            const saved = new Date(loaded.savedAt).toLocaleString('en-GB');
+            this.bakeMessage = loaded.stale
+                ? `Loaded probes from ${file.name} (saved ${saved}). The scene changed since (${loaded.changedParts.join(', ')}), so they are updating from there.`
+                : `Loaded probes from ${file.name} (saved ${saved}).`;
+            this.automation.bake.loaded = { file: file.name, stale: loaded.stale, changedParts: loaded.changedParts, ms };
+            this.automation.bake.error = null;
+        } catch (error) {
+            this.bakeFailed(`Couldn't load ${file.name}: ${error instanceof Error ? error.message.replace(/^@pmndrs\/gi: /, '') : String(error)}`);
+        }
+    }
+
+    /** A save or load that failed: said in the status, and kept for automated runs (not a console error: it is the user's file). */
+    private bakeFailed(message: string): void {
+        this.bakeMessage = message;
+        this.automation.bake.error = message;
+        console.warn(message);
+    }
+
     /** DDGI's settings from the link and the lighting controls. */
     private ddgiSettings(): DdgiViewerSettings {
         return {
+            preset: this.url.preset,
             budgetMs: this.url.budgetMs,
+            warmUp: this.url.warmUp,
             showProbes: this.url.probes,
             probeColor: this.url.probeColor,
             screenView: this.url.debug,
@@ -330,9 +438,11 @@ export class ViewerApp {
             atlasFill: this.url.atlasFill,
             atlasExposureEv: this.url.atlasEv,
             changeFullScalePercent: this.url.change,
+            giTextures: this.url.giTextures,
             lightGroups: this.url.lightGroups,
             // Time of day turns DDGI's sun layer on (DECISIONS 2026-11-08).
             sunLayer: this.url.timeOfDay !== null && (this.lighting?.timeOfDay.available ?? false),
+            cameraVolume: this.url.followCamera,
             groupWeights: this.groupWeights,
             environmentWeight: this.environmentWeight,
         };
@@ -361,7 +471,9 @@ export class ViewerApp {
             gi: this.url.gi,
             technique: this.url.technique,
             ddgi: {
+                preset: this.url.preset,
                 budgetMs: this.url.budgetMs,
+                followCamera: this.url.followCamera,
                 probes: this.url.probes,
                 probeColor: this.url.probeColor,
                 debug: this.url.debug,
@@ -369,6 +481,7 @@ export class ViewerApp {
                 atlasFill: this.url.atlasFill,
                 atlasEv: this.url.atlasEv,
                 change: this.url.change,
+                giTextures: this.url.giTextures,
             },
             probeBounces: this.probeSettings.bounces,
             maxProbes: this.probeSettings.maxProbes,
@@ -392,8 +505,9 @@ export class ViewerApp {
             onScene: (id: string) => {
                 const manifest = this.manifests.find((candidate) => candidate.id === id);
                 if (!manifest) return;
-                // Each scene opens at its own exposure, with its own sun and no motion playing.
-                this.url = { ...this.url, camera: null, freeCamera: null, ev: null, timeOfDay: null, motion: null };
+                // Each scene opens at its own exposure, with its own sun, no motion playing and no scenario.
+                // The camera-following volume goes too: it was the scenario's, or chosen for the last scene.
+                this.url = { ...this.url, camera: null, freeCamera: null, ev: null, timeOfDay: null, motion: null, scenario: null, followCamera: false };
                 void this.openScene(manifest, null);
             },
             onBookmark: (index: number) => {
@@ -434,7 +548,10 @@ export class ViewerApp {
             onTechnique: (id: ViewerUrlState['technique']) => change({ technique: id }),
             onDdgiSettings: (settings: DdgiPanelSettings) =>
                 change({
-                    budgetMs: settings.budgetMs,
+                    preset: settings.preset,
+                    // A newly picked preset brings its own budget; otherwise the slider's.
+                    budgetMs: settings.preset !== this.url.preset ? presetBudgetMs(settings.preset) : settings.budgetMs,
+                    followCamera: settings.followCamera,
                     probes: settings.probes,
                     probeColor: settings.probeColor,
                     debug: settings.debug,
@@ -442,8 +559,11 @@ export class ViewerApp {
                     atlasFill: settings.atlasFill,
                     atlasEv: settings.atlasEv,
                     change: settings.change,
+                    giTextures: settings.giTextures,
                 }),
             onDdgiRestart: () => this.core.restartDdgi(),
+            onDdgiSaveBake: () => void this.saveBake(),
+            onDdgiLoadBake: (file: File) => void this.loadBake(file),
             onCompareWithReference: () => {
                 // Go to the reference's own shot: camera, aspect, exposure and tone mapping.
                 this.pendingShot = { display: true };
@@ -479,6 +599,8 @@ export class ViewerApp {
 
     private onCameraMoved(): void {
         if (!this.manifest || this.loadingScene) return;
+        // A camera motion (the fly-through) moves it every frame; the link keeps the motion instead.
+        if (this.cameraMotionPlaying()) return;
         // The meter reads a still picture; a camera move changes it for another reason.
         if (this.lighting?.meter.running) this.lighting.meter.cancel('the camera moved. Keep it still while measuring.');
         const pose = this.rig.pose();
@@ -645,6 +767,16 @@ export class ViewerApp {
         }).observe(this.canvas);
         // A letterboxed canvas has a fixed size, so the observer above wouldn't see the window change.
         window.addEventListener('resize', () => this.applyLetterbox());
+        // A .ddgibake file dropped onto the page loads as the panel's "Load probes from a file" does.
+        window.addEventListener('dragover', (event) => {
+            if (event.dataTransfer?.types.includes('Files')) event.preventDefault();
+        });
+        window.addEventListener('drop', (event) => {
+            const file = event.dataTransfer?.files[0];
+            if (!file || !file.name.endsWith('.ddgibake')) return;
+            event.preventDefault();
+            void this.loadBake(file);
+        });
         window.addEventListener('keydown', (event) => {
             const typing = event.target instanceof HTMLElement && ['INPUT', 'SELECT', 'TEXTAREA'].includes(event.target.tagName);
             if (event.code === 'KeyH' && !typing && !event.ctrlKey && !event.metaKey) this.setPanelHidden(!this.panel.hidden);
@@ -835,10 +967,16 @@ export class ViewerApp {
         if (now - this.lastStatusAt < 200 || !this.core.loaded) return;
         this.lastStatusAt = now;
         const lines = this.core.statusLines();
+        if (this.bakeMessage) lines.push(this.bakeMessage);
+        this.automation.bake.bakesLoaded = this.core.ddgi?.bakesLoaded ?? 0;
         const { stats } = this.core.loaded;
         lines.push(`${stats.triangles.toLocaleString('en')} triangles, ${stats.meshes} meshes`);
         this.panel.setStatus(lines);
         this.automation.ddgiStartup = this.core.ddgi ? { ...this.core.ddgi.startup } : null;
+        this.automation.recompiles = this.core.ddgi ? this.core.ddgi.recompiles : null;
+        const player = this.lighting?.player;
+        this.automation.motion = player?.playing ? { id: player.playing.id, seconds: player.seconds(now) } : null;
+        this.automation.scenario = this.url.scenario;
         this.core.ddgi?.setOverlayTopInset(this.statsBoxCoverShare());
         if (this.url.probes) this.panel.setProbeLegend(this.probeLegend());
         this.alignWithReference();
@@ -867,7 +1005,8 @@ export class ViewerApp {
             },
             onSelected: () => this.refreshLightingControls(),
         });
-        const player = new MotionPlayer(loaded);
+        const player = new MotionPlayer(loaded, { camera: this.cameraControl() });
+        player.windStrength = this.url.windStrength;
         const timeOfDay = new TimeOfDay(loaded);
         const meter = new ResponseMeter({
             ddgi: () => this.core.ddgi,
@@ -892,6 +1031,9 @@ export class ViewerApp {
         );
         this.regionPicker.clear();
         this.lightingControls.setMeterRegion('Watching the whole picture.');
+        this.cabinets = sceneAddsCabinets(loaded.manifest.id) ? new AddedCabinets(loaded.content) : null;
+        this.scenarioControls.setSceneControls({ wind: player.hasWind, cabinets: this.cabinets !== null });
+        this.scenarioControls.setWindStrength(player.windStrength);
     }
 
     /** What the link asks for once DDGI exists: time of day, and a motion playing. */
@@ -915,7 +1057,9 @@ export class ViewerApp {
         const lighting = this.lighting;
         if (!lighting) return;
         lighting.meter.cancel();
-        lighting.player.stop();
+        lighting.player.dispose();
+        this.cabinets?.dispose();
+        this.cabinets = null;
         lighting.editor.dispose();
         lighting.timeOfDay.dispose();
         this.lighting = null;
@@ -945,8 +1089,8 @@ export class ViewerApp {
         } else {
             lighting.player.play(motionId, performance.now());
             const motion = lighting.player.playing;
-            const light = motion ? lighting.player.lightFor(motion) : null;
-            if (light) this.core.ddgi?.markChanged(light);
+            const moved = motion ? lighting.player.changedBy(motion) : null;
+            if (moved) this.core.ddgi?.markChanged(moved);
         }
         this.url.motion = lighting.player.playing?.id ?? null;
         this.scheduleUrlUpdate();
@@ -1112,6 +1256,118 @@ export class ViewerApp {
         if (timeOfDay.playing) controls.setTime(timeOfDay.hour, timeOfDay.dayOfYear);
         controls.setMeterStatus(meter.describe(now), meter.running);
         controls.setMeterResult(meter.result, meter.live);
+        this.refreshScenarioControls(now);
+    }
+
+    // -- moving things: the scenarios (T3.8) ---------------------------------
+
+    /** What a scenario sets in the link: its scene, camera view, motion and volumes. */
+    private scenarioLink(scenario: Scenario): Partial<ViewerUrlState> {
+        return {
+            scenario: scenario.id,
+            scene: scenario.scene,
+            camera: scenario.camera,
+            freeCamera: null,
+            motion: scenario.motion,
+            followCamera: scenario.followCamera,
+        };
+    }
+
+    /** The viewer's camera for camera motions: the rig, so orbiting carries on from where the motion leaves it. */
+    private cameraControl(): CameraControl {
+        return {
+            pose: () => {
+                const pose = this.rig.pose();
+                return { position: pose.position, target: pose.target };
+            },
+            place: (position, target) => this.rig.goTo({ name: 'motion', position, target, fovYDeg: this.core.camera.fov }),
+        };
+    }
+
+    private cameraMotionPlaying(): boolean {
+        const playing = this.lighting?.player.playing;
+        return playing !== null && playing !== undefined && motionTarget(playing)?.kind === 'camera';
+    }
+
+    /**
+     * Opens a scenario: its scene (if another is open, or its probe volumes
+     * differ), its camera view and its motion, playing.
+     */
+    private chooseScenario(scenario: Scenario | null): void {
+        if (!scenario) {
+            this.url.scenario = null;
+            this.scheduleUrlUpdate();
+            this.refreshScenarioControls(performance.now());
+            return;
+        }
+        const manifest = this.manifests.find((candidate) => candidate.id === scenario.scene);
+        if (!manifest) return;
+        const sameScene = this.manifest?.id === scenario.scene && !this.loadingScene;
+        this.url = { ...this.url, ...this.scenarioLink(scenario) };
+        if (!sameScene) {
+            // A new scene opens at its own exposure and sun; the motion starts once it is up (`startLightingFromLink`).
+            this.url = { ...this.url, ev: null, timeOfDay: null };
+            void this.openScene(manifest, scenario.camera);
+            return;
+        }
+        const index = manifest.cameras.findIndex((camera) => camera.name === scenario.camera);
+        if (index >= 0) this.panelHandlers().onBookmark(index);
+        // The camera-following volume changes start a new DDGI (`configureDdgi`).
+        this.applyState();
+        this.playMotion(scenario.motion);
+    }
+
+    private scenarioHandlers(): ScenarioHandlers {
+        return {
+            onScenario: (id) => this.chooseScenario(findScenario(id)),
+            onPlayScenario: (play) => {
+                const scenario = findScenario(this.url.scenario);
+                if (!scenario) return;
+                this.playMotion(play ? scenario.motion : null);
+            },
+            onMeasureScenario: () => {
+                const scenario = findScenario(this.url.scenario);
+                if (!scenario?.stepMotion) return;
+                // The step's first jump: the door shutting, the cabinet moving out, the tree leaning.
+                this.lightingControls.setMeterStep(scenario.stepMotion, 0);
+                this.startMeasurement(scenario.stepMotion, 0);
+            },
+            onWindStrength: (strength) => {
+                if (this.lighting) this.lighting.player.windStrength = strength;
+                this.url.windStrength = strength;
+                this.scheduleUrlUpdate();
+            },
+            onAddCabinet: () => {
+                this.cabinets?.add();
+                this.refreshScenarioControls(performance.now());
+            },
+            onCopyCabinet: () => {
+                this.cabinets?.copy();
+                this.refreshScenarioControls(performance.now());
+            },
+            onClearCabinets: () => {
+                this.cabinets?.clear();
+                this.refreshScenarioControls(performance.now());
+            },
+        };
+    }
+
+    /** The scenario section as things are now: the chosen scenario, whether its motion plays, the added cabinets. */
+    private refreshScenarioControls(now: number): void {
+        const controls = this.scenarioControls;
+        const player = this.lighting?.player;
+        if (!controls) return;
+        const scenario = findScenario(this.url.scenario);
+        const here = scenario !== null && player !== undefined && this.manifest?.id === scenario.scene && player.motions.some((motion) => motion.id === scenario.motion);
+        controls.setScenario(scenario, here);
+        const playing = here && player.playing?.id === scenario.motion;
+        let status = '';
+        const sceneTitle = this.manifests.find((manifest) => manifest.id === scenario?.scene)?.title ?? scenario?.scene;
+        if (scenario && !here) status = this.loadingScene ? 'Opening the scene...' : `Choose it again to open ${sceneTitle}.`;
+        else if (playing) status = `Playing: ${player.playing!.label}, ${player.seconds(now).toFixed(1)} s.`;
+        else if (scenario) status = 'Stopped. Press Play to watch it again.';
+        controls.setPlaying(playing, status);
+        if (this.cabinets) controls.setCabinetCount(this.cabinets.count, this.cabinets.shapes);
     }
 
     /** A few times a second: the motion's time, a played day's sliders, the meter's progress and curve; and after a measurement, the GI choice back. */

@@ -22,7 +22,7 @@
  * file with the core loaded straight from source.
  */
 
-import type { ShadingModule, ShadingParameter } from '@pmndrs/ddgi/core';
+import type { ShadingModule, ShadingParameter } from '@pmndrs/gi/core';
 import { cameraMatrices, lookAt, multiply, normalMatrix, perspective, type CameraMatrices, type Vec3 } from './camera.ts';
 import type { DescribedScene } from './scene.ts';
 import { DEPTH_PREPASS_SHADER, DISPLAY_SHADER, FORWARD_BINDING, forwardShader, GI_GROUP, SHADOW_BINDING, SHADOW_FACES, SHADOW_SHADER, VIEW_MODE, type GiSource } from './shaders.ts';
@@ -95,15 +95,21 @@ interface GpuMesh {
     readonly positions: GPUBuffer;
     readonly normals: GPUBuffer;
     readonly indices: GPUBuffer;
-    readonly indexCount: number;
 }
 
+/** One run of a mesh's triangles with one material: the whole mesh, or one of its groups. */
 interface Draw {
     readonly mesh: GpuMesh;
+    readonly firstIndex: number;
+    readonly indexCount: number;
     readonly uniformOffset: number;
 }
 
-/** The module's bindings at group 1, as `globalsCode` numbers them: textures and samplers from 0, then one uniform buffer. */
+/**
+ * The module's bindings at group 1, as `globalsCode` numbers them: textures
+ * and samplers from 0, then one uniform buffer when the module has `vec4f`
+ * parameters (DDGI's has none since its version 2).
+ */
 function giBindGroupLayoutEntries(parameters: readonly ShadingParameter[]): GPUBindGroupLayoutEntry[] {
     const entries: GPUBindGroupLayoutEntry[] = [];
     for (const parameter of parameters) {
@@ -113,7 +119,7 @@ function giBindGroupLayoutEntries(parameters: readonly ShadingParameter[]): GPUB
             entries.push({ binding: entries.length, visibility: GPUShaderStage.FRAGMENT, sampler: { type: parameter.filtering === 'linear' ? 'filtering' : 'non-filtering' } });
         }
     }
-    entries.push({ binding: entries.length, visibility: GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } });
+    if (uniformFloatCount(parameters) > 0) entries.push({ binding: entries.length, visibility: GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } });
     return entries;
 }
 
@@ -170,7 +176,7 @@ class GiBindings {
                 entries.push({ binding: entries.length, resource: this.samplers.get(parameter.name)! });
             }
         }
-        entries.push({ binding: entries.length, resource: { buffer: this.uniformBuffer } });
+        if (uniformFloatCount(this.shading.parameters) > 0) entries.push({ binding: entries.length, resource: { buffer: this.uniformBuffer } });
         this.group = this.device.createBindGroup({ label: 'hello gi', layout: this.layout, entries });
         this.boundTextures = textures;
         return this.group;
@@ -227,23 +233,29 @@ export class ForwardRenderer {
             positions: buffer(`hello ${mesh.name} positions`, mesh.positions, GPUBufferUsage.VERTEX),
             normals: buffer(`hello ${mesh.name} normals`, mesh.normals, GPUBufferUsage.VERTEX),
             indices: buffer(`hello ${mesh.name} indices`, mesh.indices, GPUBufferUsage.INDEX),
-            indexCount: mesh.indices.length,
         }));
 
-        // One uniform slot per instance: transform, normal matrix and material. The scene is static, so written once.
-        const instances = scene.data.instances;
-        const drawData = new Float32Array((instances.length * UNIFORM_SLOT_BYTES) / 4);
+        // One draw per run of triangles with one material: the whole mesh, or
+        // each of its groups with the material of its slot (a wall and its
+        // glass pane). Each draw has a uniform slot: transform, normal matrix
+        // and material colour. The scene is static, so written once.
+        const runs = scene.data.instances.flatMap((instance) => {
+            const mesh = scene.data.meshes[instance.mesh];
+            const slots = instance.materials ?? [instance.material];
+            const groups = mesh.groups ?? [{ start: 0, count: mesh.indices.length, materialSlot: 0 }];
+            return groups.map((group) => ({ instance, group, material: scene.rendererMaterials[slots[group.materialSlot]] }));
+        });
+        const drawData = new Float32Array((runs.length * UNIFORM_SLOT_BYTES) / 4);
         const drawWords = new Uint32Array(drawData.buffer);
-        this.draws = instances.map((instance, index) => {
+        this.draws = runs.map(({ instance, group, material }, index) => {
             const base = (index * UNIFORM_SLOT_BYTES) / 4;
-            const material = scene.data.materials[instance.material];
             const normals = normalMatrix(instance.transform);
             drawData.set(instance.transform, base + DRAW_FLOAT.model);
             drawData.set(normals.columns, base + DRAW_FLOAT.normalMatrix);
             drawData.set(material.albedo, base + DRAW_FLOAT.albedo);
             drawWords[base + DRAW_FLOAT.mirrored] = normals.mirrored ? 1 : 0;
-            drawData.set(material.emissive, base + DRAW_FLOAT.emission);
-            return { mesh: this.meshes[instance.mesh], uniformOffset: index * UNIFORM_SLOT_BYTES };
+            drawData.set(material.emission, base + DRAW_FLOAT.emission);
+            return { mesh: this.meshes[instance.mesh], firstIndex: group.start, indexCount: group.count, uniformOffset: index * UNIFORM_SLOT_BYTES };
         });
         this.drawUniforms = buffer('hello draw uniforms', drawData, GPUBufferUsage.UNIFORM);
         this.frameUniforms = device.createBuffer({ label: 'hello frame uniforms', size: this.frameData.byteLength, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
@@ -410,7 +422,7 @@ export class ForwardRenderer {
             prepass.setBindGroup(0, this.forwardGroup, [draw.uniformOffset]);
             prepass.setVertexBuffer(0, draw.mesh.positions);
             prepass.setIndexBuffer(draw.mesh.indices, 'uint32');
-            prepass.drawIndexed(draw.mesh.indexCount);
+            prepass.drawIndexed(draw.indexCount, 1, draw.firstIndex);
         }
         prepass.end();
 
@@ -427,7 +439,7 @@ export class ForwardRenderer {
             pass.setVertexBuffer(0, draw.mesh.positions);
             pass.setVertexBuffer(1, draw.mesh.normals);
             pass.setIndexBuffer(draw.mesh.indices, 'uint32');
-            pass.drawIndexed(draw.mesh.indexCount);
+            pass.drawIndexed(draw.indexCount, 1, draw.firstIndex);
         }
         pass.end();
     }
@@ -496,7 +508,7 @@ export class ForwardRenderer {
                     pass.setBindGroup(0, this.shadowGroup, [face * UNIFORM_SLOT_BYTES, draw.uniformOffset]);
                     pass.setVertexBuffer(0, draw.mesh.positions);
                     pass.setIndexBuffer(draw.mesh.indices, 'uint32');
-                    pass.drawIndexed(draw.mesh.indexCount);
+                    pass.drawIndexed(draw.indexCount, 1, draw.firstIndex);
                 }
             }
             pass.end();

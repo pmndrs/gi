@@ -130,7 +130,7 @@ const MAX_TEXTURE_SIZE = typeof env.VITE_DDGI_MAX_TEXTURE_SIZE === 'string' ? Nu
 /**
  * When three compiles its materials for the GI light. `after-first-step`
  * (default): after the first warm-up step, in series, as T2.12's check 1 is
- * judged (lead ruling 2026-11-08: `GIVolume.start` can't compile for the
+ * judged (lead ruling 2026-11-08: `DDGIVolume.start` can't compile for the
  * host's own render passes, so hosts get it in series). `when-light-joins`:
  * as soon as the light joins the scene (`prepare` resolved), alongside the
  * tree builds, as a host that draws every frame and renders straight to the
@@ -1256,11 +1256,10 @@ const TRACE_VARIANTS: ReadonlyArray<{ readonly name: string; readonly replace: R
         name: 'no_bounce',
         replace: [
             [
-                `let bounce = ddgiSampleIrradiance(
+                `let bounce = ddgiSampleVolumes(
         surface.position, surface.normal, ray.direction,
-        ddgiIrradianceAtlas, ddgiAtlasSampler, ddgiDistanceAtlas, ddgiAtlasSampler, ddgiProbeData,
-        ddgi.volumeOrigin, ddgi.volumeSpacing, ddgi.volumeCounts, ddgi.volumeTexels,
-    );`,
+        ddgiIrradianceAtlas, ddgiAtlasSampler, ddgiDistanceAtlas, ddgiAtlasSampler, ddgiProbeData, ddgiVolumeTable,
+    ).irradiance;`,
                 'let bounce = vec3f(0.0);',
             ],
         ],
@@ -1280,12 +1279,13 @@ const TRACE_GROUP: GPUBindGroupLayoutDescriptor = {
         { binding: 4, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: 'float', viewDimension: '2d-array' } },
         { binding: 5, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: 'float', viewDimension: '2d-array' } },
         { binding: 6, visibility: GPUShaderStage.COMPUTE, sampler: { type: 'filtering' } },
+        { binding: 8, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: 'unfilterable-float', viewDimension: '2d' } },
     ],
 };
 
-/** The technique's private bind group for `ddgi/trace` (a test tool reaching in; nothing in the library does). */
+/** The technique's private bind group for `ddgi/trace`, its first volume's (a test tool reaching in; nothing in the library does). */
 function techniqueTraceGroup(ddgi: DDGITechnique): GPUBindGroup {
-    const resources = (ddgi as unknown as { resources: { rays: { traceGroup: GPUBindGroup } } | null }).resources;
+    const resources = (ddgi as unknown as { volumes: readonly { rays: { traceGroup: GPUBindGroup } }[] }).volumes[0];
     assert(resources, 'DDGI is not prepared');
     return resources.rays.traceGroup;
 }

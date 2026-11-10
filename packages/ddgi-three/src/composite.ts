@@ -5,7 +5,7 @@
  * triangles: +12 ms at 1440p). Built like three r187's SSGI example:
  *
  * ```ts
- * await volume.start(renderer, scene);                 // the simple path (gi-volume.ts)
+ * await volume.start(renderer, scene);                 // the simple path (ddgi-volume.ts)
  * const pipeline = new RenderPipeline(renderer);
  * const scenePass = pass(scene, camera);
  * scenePass.setMRT(mrt({ output, giAlbedo, normal: packNormalToRGB(normalView) }));
@@ -187,7 +187,7 @@ export class GIAlbedoNode extends Node {
 export const giAlbedo = new GIAlbedoNode();
 
 /**
- * Where the composite finds the GI light: a started `GIVolume`, or a
+ * Where the composite finds the GI light: a started `DDGIVolume`, or a
  * `ThreeGI` (its light changes when the shading module changes shape, so
  * it's read each render).
  */
@@ -309,7 +309,7 @@ export class DDGICompositeNode extends Node {
         this.markedContext = scenePass.contextNode;
         if (occlusion !== undefined && occlusion !== false && 'source' in occlusion && passAppliesAO(scenePass)) {
             console.warn(
-                '@pmndrs/ddgi/three: ddgi() got an occlusion source, and its pass already applies AO to its materials (builtinAOContext), which giAlbedo carries: GI gets AO twice. Use one of them.',
+                '@pmndrs/gi/three: ddgi() got an occlusion source, and its pass already applies AO to its materials (builtinAOContext), which giAlbedo carries: GI gets AO twice. Use one of them.',
             );
         }
         // Before the pass compiles, if its MRT is already set (the usual order); `setup` checks again.
@@ -356,7 +356,7 @@ export class DDGICompositeNode extends Node {
             markCompositePass(scenePass as unknown as MarkablePass);
             if (!this.warnedLostMark) {
                 this.warnedLostMark = true;
-                console.warn('@pmndrs/ddgi/three: the scene pass got a new contextNode after ddgi(); the GI composite merged its mark into it again. Set the pass context before calling ddgi().');
+                console.warn('@pmndrs/gi/three: the scene pass got a new contextNode after ddgi(); the GI composite merged its mark into it again. Set the pass context before calling ddgi().');
             }
         }
         this.markedContext = scenePass.contextNode;
@@ -373,7 +373,7 @@ export class DDGICompositeNode extends Node {
             nodes.refresh();
         } else if (!this.warnedStale) {
             this.warnedStale = true;
-            console.warn('@pmndrs/ddgi/three: the GI shading module changed shape; set pipeline.needsUpdate = true to rebuild the GI composite.');
+            console.warn('@pmndrs/gi/three: the GI shading module changed shape; set pipeline.needsUpdate = true to rebuild the GI composite.');
         }
         return undefined;
     }
@@ -385,7 +385,7 @@ export class DDGICompositeNode extends Node {
         const outputs = scenePass.getMRT();
         if (!outputs || !outputs.has(GI_ALBEDO_OUTPUT) || !outputs.has(GI_NORMAL_OUTPUT)) {
             throw new Error(
-                `@pmndrs/ddgi/three: the GI composite needs the scene pass to write '${GI_ALBEDO_OUTPUT}' and '${GI_NORMAL_OUTPUT}': ` +
+                `@pmndrs/gi/three: the GI composite needs the scene pass to write '${GI_ALBEDO_OUTPUT}' and '${GI_NORMAL_OUTPUT}': ` +
                     `scenePass.setMRT(mrt({ output, ${GI_ALBEDO_OUTPUT}: giAlbedo, ${GI_NORMAL_OUTPUT}: packNormalToRGB(normalView) })).`,
             );
         }
@@ -511,7 +511,7 @@ function makeOcclusion(scenePass: PassNode, settings: GIOcclusionSettings): GTAO
 /**
  * GI on a scene pass, as a node for `pipeline.outputNode`, like three's
  * `ssgi(...)` and `ao(...)`: the pass's colour plus `giAlbedo × E / π`
- * (file comment). `source` is the started `GIVolume` (or a `ThreeGI`): the
+ * (file comment). `source` is the started `DDGIVolume` (or a `ThreeGI`): the
  * composite reads its GI light. Options: `occlusion` (GTAO on the GI term,
  * 1 m by default).
  */

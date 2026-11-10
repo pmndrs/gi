@@ -24,7 +24,10 @@
  * 1 m/s, and back) and `light-step` (the same lamp jumping between two
  * places every 3 s, for measuring response). The native harness (T2.7) and
  * the viewer (T2.8) play them; `motionState` says what a motion's light is
- * at a time, so both play them the same way.
+ * at a time, so both play them the same way. Since M3 (T3.8, m3-moving.md
+ * §8) a motion can also move an object (a door swinging on its hinge, a
+ * cabinet sliding, a tree swaying in the wind) or fly the camera; only the
+ * viewer plays those. `props` are objects the viewer adds for such a motion.
  *
  * This file holds the types and the validator. It has no dependencies, so any
  * tool can import it.
@@ -105,35 +108,99 @@ export interface LightSetFile {
     packageIndices: number[];
 }
 
-/** One keyframe of a motion. Every keyframe of a motion sets the same fields. */
+/**
+ * One keyframe of a motion. Every keyframe of a motion sets the same fields,
+ * and which fields a motion may set depends on its target (`ManifestMotion`).
+ */
 export interface MotionKeyframe {
     /** Seconds from the motion's start; the first is 0, and they increase. */
     t: number;
-    /** Metres (point and spot lights). */
+    /**
+     * Metres. A point or spot light: where it is. An object: how far it has
+     * moved from where it stands in the scene (an offset, so `[0, 0, 0]` is its
+     * own place). The camera: where it is.
+     */
     position?: Vec3;
-    /** In the light's own units (candela for point and spot, lux for directional). */
+    /** Lights only: in the light's own units (candela for point and spot, lux for directional). */
     intensity?: number;
-    /** Linear RGB. */
+    /** Lights only: linear RGB. */
     color?: Vec3;
+    /** Objects only: a turn about the motion's `pivot`, Euler XYZ in degrees (`[0, -90, 0]` swings a door open by a quarter turn). */
+    rotationDeg?: Vec3;
+    /**
+     * Objects only: how far the object's meshes lean in the wind, from -1 to
+     * 1. Each vertex moves by its wind weight (the alpha of its vertex colour,
+     * 0 at a tree's foot, 1 at its leaf tips) times the sway, so the foot stays
+     * put and the crown moves most. A viewer sets the metres a sway of 1 means.
+     */
+    sway?: number;
+    /** The camera only: the point it looks at. */
+    target?: Vec3;
 }
 
-/** A scripted change of one light over time (docs/design/m2-lights.md §7). */
+/** What a motion moves, from its `target`. */
+export type MotionTargetKind = 'light' | 'object' | 'camera';
+
+/**
+ * A scripted change over time (docs/design/m2-lights.md §7 for lights,
+ * m3-moving.md §8 for objects and the camera).
+ */
 export interface ManifestMotion {
-    /** Kebab-case, unique in the scene: `light-sweep`, `light-step`. */
+    /** Kebab-case, unique in the scene: `light-sweep`, `light-step`, `door-swing`. */
     id: string;
     /** Plain words for a menu. */
     label: string;
-    /** `light:<label>`: the manifest light with that label. */
+    /**
+     * What it moves:
+     * - `light:<label>`: the manifest light with that label (keyframes: position, intensity, color);
+     * - `object:<name>`: the scene object with that name, as the scene builds it (a procedural
+     *   part's box, a model's node, the model's root by the glTF scene's name, or one of the
+     *   manifest's `props`), with everything under it (keyframes: position, rotationDeg, sway);
+     * - `camera`: the viewing camera (keyframes: position and target, both).
+     */
     target: string;
     /**
      * `linear` glides from keyframe to keyframe; `step` holds each keyframe
-     * until the next one's time, so the light jumps (a step response).
+     * until the next one's time, so the target jumps (a step response);
+     * `smooth` glides with an ease in and out at each keyframe (a door that
+     * slows as it closes, a tree that slows at the end of each sway). Light
+     * motions take `linear` or `step` only, as the native harness plays them.
      * Defaults to `linear`.
      */
-    interpolation?: 'linear' | 'step';
+    interpolation?: 'linear' | 'step' | 'smooth';
     /** Plays again from the start after the last keyframe. A looping motion ends where it began. */
     loop: boolean;
     keyframes: MotionKeyframe[];
+    /** Objects with `rotationDeg`: the point (world metres) the turn is about, like a door's hinge. Defaults to the object's own origin. */
+    pivot?: Vec3;
+}
+
+/** A motion's target split into its kind and name (`object:door-panel` is an object named `door-panel`), or null when malformed. */
+export function motionTarget(motion: Pick<ManifestMotion, 'target'>): { kind: MotionTargetKind; name: string } | null {
+    if (motion.target === 'camera') return { kind: 'camera', name: '' };
+    const match = /^(light|object):(.+)$/.exec(motion.target);
+    return match ? { kind: match[1] as MotionTargetKind, name: match[2] } : null;
+}
+
+/**
+ * An object a viewer adds to the scene for a motion to move (the furnished
+ * room's cabinet). It is in the scene only while a motion that names it plays
+ * (or the response meter measures one), so everything else sees the scene as
+ * its parts build it. The Cycles reference and the native harness don't have
+ * props.
+ */
+export interface ManifestProp {
+    /** Kebab-case, unique in the scene; a motion names it as `object:<name>`. */
+    name: string;
+    shape: 'box';
+    /** Metres along x, y and z before the turn. */
+    size: Vec3;
+    /** The box's centre, metres. */
+    position: Vec3;
+    /** Euler XYZ in degrees. Defaults to no turn. */
+    rotationDeg?: Vec3;
+    /** Linear RGB albedo of its plain, rough material. */
+    color: Vec3;
 }
 
 /** The motion ids every scene with a lamp has (m2-lights.md §7). */
@@ -253,8 +320,10 @@ export interface SceneManifest {
     cameras: CameraBookmark[];
     /** Direct lights. Emissive surfaces in the geometry are not listed here, nor a `light-set` part's lights. */
     lights: ManifestLight[];
-    /** Scripted light changes (the file comment). */
+    /** Scripted changes of lights, objects and the camera (the file comment). */
     motions?: ManifestMotion[];
+    /** Objects a viewer adds for its motions (`ManifestProp`). */
+    props?: ManifestProp[];
     /** Whole-number knobs a `light-set` part reads (`countSetting`), by name. */
     settings?: Record<string, SceneSetting>;
     environment: ManifestEnvironment;
@@ -301,6 +370,7 @@ const TOP_LEVEL_KEYS = new Set([
     'cameras',
     'lights',
     'motions',
+    'props',
     'settings',
     'environment',
     'volume',
@@ -485,19 +555,33 @@ function validateMotions(value: Record<string, Json>, c: ErrorCollector): void {
         else ids.add(motion.id);
         if (!isNonEmptyString(motion.label)) c.add(`${path}.label`, 'must be a non-empty string');
         if (typeof motion.loop !== 'boolean') c.add(`${path}.loop`, 'must be true or false');
-        if (motion.interpolation !== undefined && motion.interpolation !== 'linear' && motion.interpolation !== 'step') c.add(`${path}.interpolation`, 'must be "linear" or "step"');
-        const target = typeof motion.target === 'string' ? /^light:(.+)$/.exec(motion.target) : null;
-        // Labels are optional and need not be unique, so the target must name exactly one light.
-        const named = target ? lights.filter((candidate) => candidate.label === target[1]) : [];
-        const light = named.length === 1 ? named[0] : undefined;
-        if (!target) c.add(`${path}.target`, 'must be "light:<label>", naming one of the manifest\'s lights by its label');
-        else if (named.length === 0) c.add(`${path}.target`, `no light has the label "${target[1]}"`);
-        else if (named.length > 1) c.add(`${path}.target`, `${named.length} lights have the label "${target[1]}"; a motion must name exactly one`);
+        const target = typeof motion.target === 'string' ? motionTarget({ target: motion.target }) : null;
+        const kind = target?.kind ?? null;
+        const interpolations = kind === 'light' ? ['linear', 'step'] : ['linear', 'step', 'smooth'];
+        if (motion.interpolation !== undefined && !interpolations.includes(motion.interpolation as string)) {
+            c.add(`${path}.interpolation`, kind === 'light' ? 'must be "linear" or "step" for a light (the native harness plays no other)' : 'must be "linear", "step" or "smooth"');
+        }
+        let light: Record<string, Json> | undefined;
+        if (!target) {
+            c.add(`${path}.target`, 'must be "light:<label>" (one of the manifest\'s lights by its label), "object:<name>" (a scene object by its name) or "camera"');
+        } else if (kind === 'light') {
+            // Labels are optional and need not be unique, so the target must name exactly one light.
+            const named = lights.filter((candidate) => candidate.label === target.name);
+            light = named.length === 1 ? named[0] : undefined;
+            if (named.length === 0) c.add(`${path}.target`, `no light has the label "${target.name}"`);
+            else if (named.length > 1) c.add(`${path}.target`, `${named.length} lights have the label "${target.name}"; a motion must name exactly one`);
+        }
+        if (motion.pivot !== undefined) {
+            c.vec3(`${path}.pivot`, motion.pivot);
+            if (kind !== 'object') c.add(`${path}.pivot`, 'only an object motion turns about a pivot');
+        }
         if (!Array.isArray(motion.keyframes) || motion.keyframes.length < 2) {
             c.add(`${path}.keyframes`, 'must have at least two keyframes');
             return;
         }
-        const fields = (keyframe: Record<string, Json>) => ['position', 'intensity', 'color'].filter((key) => keyframe[key] !== undefined).join(',');
+        // Which keyframe fields each kind of target takes; the camera needs both of its own.
+        const allowed = kind === 'object' ? ['position', 'rotationDeg', 'sway'] : kind === 'camera' ? ['position', 'target'] : ['position', 'intensity', 'color'];
+        const fields = (keyframe: Record<string, Json>) => allowed.filter((key) => keyframe[key] !== undefined).join(',');
         let previousTime = -Infinity;
         let firstFields: string | null = null;
         motion.keyframes.forEach((keyframe: Json, frame: number) => {
@@ -510,18 +594,48 @@ function validateMotions(value: Record<string, Json>, c: ErrorCollector): void {
             else if (frame === 0 && keyframe.t !== 0) c.add(`${where}.t`, 'the first keyframe is at 0 s');
             else if (!(keyframe.t > previousTime)) c.add(`${where}.t`, 'must be later than the keyframe before');
             if (isFiniteNumber(keyframe.t)) previousTime = keyframe.t;
-            for (const key of Object.keys(keyframe)) if (!['t', 'position', 'intensity', 'color'].includes(key)) c.add(`${where}.${key}`, 'is not a keyframe field (t, position, intensity, color)');
+            for (const key of Object.keys(keyframe)) if (key !== 't' && !allowed.includes(key)) c.add(`${where}.${key}`, `is not a keyframe field for this target (t, ${allowed.join(', ')})`);
             if (keyframe.position !== undefined) {
                 c.vec3(`${where}.position`, keyframe.position);
                 if (light && light.type === 'directional') c.add(`${where}.position`, 'a directional light has no position');
             }
             if (keyframe.intensity !== undefined && !(isFiniteNumber(keyframe.intensity) && keyframe.intensity >= 0)) c.add(`${where}.intensity`, 'must be a number of 0 or more');
             if (keyframe.color !== undefined) c.color(`${where}.color`, keyframe.color);
+            if (keyframe.rotationDeg !== undefined) c.vec3(`${where}.rotationDeg`, keyframe.rotationDeg);
+            if (keyframe.sway !== undefined && !(isFiniteNumber(keyframe.sway) && Math.abs(keyframe.sway) <= 1)) c.add(`${where}.sway`, 'must be a number from -1 to 1');
+            if (keyframe.target !== undefined) c.vec3(`${where}.target`, keyframe.target);
             const these = fields(keyframe);
-            if (these === '') c.add(where, 'must set at least one of position, intensity and color');
+            if (these === '') c.add(where, `must set at least one of ${allowed.join(', ')}`);
+            else if (kind === 'camera' && these !== 'position,target') c.add(where, 'a camera keyframe sets both position and target');
             if (firstFields === null) firstFields = these;
             else if (these !== firstFields) c.add(where, `must set the same fields as the first keyframe (${firstFields})`);
         });
+    });
+}
+
+function validateProps(value: Record<string, Json>, c: ErrorCollector): void {
+    const props = value.props;
+    if (props === undefined) return;
+    if (!Array.isArray(props)) {
+        c.add('props', 'must be an array');
+        return;
+    }
+    const names = new Set<string>();
+    props.forEach((prop: Json, index: number) => {
+        const path = `props[${index}]`;
+        if (!isRecord(prop)) {
+            c.add(path, 'must be an object');
+            return;
+        }
+        for (const key of Object.keys(prop)) if (!['name', 'shape', 'size', 'position', 'rotationDeg', 'color'].includes(key)) c.add(`${path}.${key}`, 'is not a prop field (name, shape, size, position, rotationDeg, color)');
+        if (!isNonEmptyString(prop.name) || !KEBAB_CASE.test(prop.name)) c.add(`${path}.name`, 'must be kebab-case, like "cabinet"');
+        else if (names.has(prop.name)) c.add(`${path}.name`, `"${prop.name}" is used twice`);
+        else names.add(prop.name);
+        if (prop.shape !== 'box') c.add(`${path}.shape`, 'must be "box"');
+        if (c.vec3(`${path}.size`, prop.size) && prop.size.some((length) => length <= 0)) c.add(`${path}.size`, 'every length must be greater than 0');
+        c.vec3(`${path}.position`, prop.position);
+        if (prop.rotationDeg !== undefined) c.vec3(`${path}.rotationDeg`, prop.rotationDeg);
+        c.color(`${path}.color`, prop.color);
     });
 }
 
@@ -705,6 +819,7 @@ export function validateManifest(value: unknown, options: ValidateOptions = {}):
     }
 
     validateMotions(value, c);
+    validateProps(value, c);
     validateSettings(value, c);
     validateEnvironment(value.environment, c);
     validateVolume(value.volume, c);
@@ -780,7 +895,11 @@ export function sceneSettingValues(manifest: Pick<SceneManifest, 'settings'>, ov
     return values;
 }
 
-/** What a motion sets on its light at a time (seconds from its start): keyframes interpolated (or held, for `step`), looping if it loops. */
+/**
+ * What a motion sets on its target at a time (seconds from its start):
+ * keyframes interpolated (held, for `step`; eased in and out, for `smooth`),
+ * looping if it loops.
+ */
 export function motionState(motion: ManifestMotion, seconds: number): Omit<MotionKeyframe, 't'> {
     const frames = motion.keyframes;
     const duration = frames[frames.length - 1].t;
@@ -789,13 +908,18 @@ export function motionState(motion: ManifestMotion, seconds: number): Omit<Motio
     if (next === -1) next = frames.length - 1;
     const before = frames[Math.max(0, next - 1)];
     const after = frames[next];
-    const share = motion.interpolation === 'step' || after.t === before.t ? (time >= after.t ? 1 : 0) : Math.min(1, Math.max(0, (time - before.t) / (after.t - before.t)));
+    const linear = Math.min(1, Math.max(0, (time - before.t) / (after.t - before.t)));
+    // `smooth` is smoothstep: no speed at either keyframe, so a sway between two keyframed extremes reads as a sine.
+    const share = motion.interpolation === 'step' || after.t === before.t ? (time >= after.t ? 1 : 0) : motion.interpolation === 'smooth' ? linear * linear * (3 - 2 * linear) : linear;
     const mix = (a: number, b: number) => a + (b - a) * share;
     const mixVector = (a: Vec3, b: Vec3): Vec3 => [mix(a[0], b[0]), mix(a[1], b[1]), mix(a[2], b[2])];
     return {
         ...(before.position && after.position ? { position: mixVector(before.position, after.position) } : {}),
         ...(before.intensity !== undefined && after.intensity !== undefined ? { intensity: mix(before.intensity, after.intensity) } : {}),
         ...(before.color && after.color ? { color: mixVector(before.color, after.color) } : {}),
+        ...(before.rotationDeg && after.rotationDeg ? { rotationDeg: mixVector(before.rotationDeg, after.rotationDeg) } : {}),
+        ...(before.sway !== undefined && after.sway !== undefined ? { sway: mix(before.sway, after.sway) } : {}),
+        ...(before.target && after.target ? { target: mixVector(before.target, after.target) } : {}),
     };
 }
 

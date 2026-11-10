@@ -1,0 +1,4 @@
+{
+    "description": "M4 T4.1: albedo and emission at ray hits (giSurfaceAtCone) on a uv board (repeat, mirror, clamp, offset, rotation, uv set 1, shear, metalness and emissive maps; three cone spreads, head-on and at 50 degrees) against a CPU reference sampler.",
+    "timeoutMs": 90000
+}

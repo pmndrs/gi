@@ -1,25 +1,38 @@
 import {
+    Bone,
     BoxGeometry,
     BufferAttribute,
     BufferGeometry,
+    CompressedTexture,
     DataTexture,
     Color,
     DirectionalLight,
+    Float32BufferAttribute,
     Group,
     InstancedMesh,
     Matrix4,
     Mesh,
     MeshPhysicalMaterial,
     MeshStandardMaterial,
+    Object3D,
+    PlaneGeometry,
     PointLight,
+    RGBA_BPTC_Format,
+    RenderTarget,
+    SRGBColorSpace,
     Scene,
+    ShaderMaterial,
     SkinnedMesh,
     Skeleton,
     Texture,
+    Uint16BufferAttribute,
+    Vector3,
 } from 'three';
 import { beforeEach, describe, expect, it } from 'vitest';
 import type {
     Aabb,
+    CompressedPixelData,
+    DeformedPositions,
     EnvironmentDescriptor,
     InstanceDescriptor,
     InstanceHandle,
@@ -28,6 +41,7 @@ import type {
     LightHandle,
     Mat4,
     MaterialDescriptor,
+    PixelData,
     MaterialHandle,
     MeshDescriptor,
     MeshHandle,
@@ -66,8 +80,13 @@ class RecordingSceneApi implements SceneApi {
         this.log('updateMesh');
         this.meshes.set(mesh, descriptor);
     }
-    setDeformedPositions(): void {
-        throw new Error('not used');
+    /** Every pose sent, in order: the mesh and a copy of its positions (the platform copies at the call too). */
+    readonly poses: { mesh: number; positions: Float32Array }[] = [];
+    setDeformedPositions(mesh: MeshHandle, positions: Float32Array | DeformedPositions): void {
+        this.log('setDeformedPositions');
+        if (!(positions instanceof Float32Array)) throw new Error('the CPU form is the only one the adapter sends until T3.3');
+        if (!this.meshes.get(mesh)?.deforming) throw new Error('setDeformedPositions on a mesh not created deforming');
+        this.poses.push({ mesh, positions: positions.slice() });
     }
     destroyMesh(mesh: MeshHandle): void {
         this.log('destroyMesh');
@@ -229,12 +248,13 @@ describe('changes', () => {
         expect(frame(scene)).toEqual(['setTransforms']);
     });
 
-    it('sends a colour edit (three bumps no version for it), with metalness folded in', () => {
+    it('sends a colour edit (three bumps no version for it), with metalness apart', () => {
         material.color.setRGB(1, 0, 0);
         material.metalness = 0.5;
         expect(frame(scene)).toEqual(['updateMaterial']);
         const descriptor = [...api.materials.values()][0];
-        expect(descriptor.albedo).toEqual([0.5, 0, 0]);
+        expect(descriptor.albedo).toEqual([1, 0, 0]);
+        expect(descriptor.metalness).toBe(0.5);
     });
 
     it('reports the GI material it last sent for a three material', () => {
@@ -448,24 +468,68 @@ describe('the walk', () => {
         expect(sync.materialsWithEnvMap).toBe(0);
     });
 
-    it('folds a texture\'s average colour into the GI albedo, once per texture version', () => {
+    it('sends a texture\'s pixels as they are (no average folded in), and again when its version changes', () => {
         const scene = new Scene();
-        // Half red, half blue, stored linear.
         const pixels = new Uint8Array([255, 0, 0, 255, 0, 0, 255, 255]);
         const map = new DataTexture(pixels, 2, 1);
         map.needsUpdate = true;
         const material = new MeshStandardMaterial({ color: new Color().setRGB(1, 1, 0.5), map });
-        scene.add(new Mesh(new BoxGeometry(), material));
+        // A second material on the same texture: one platform texture for both.
+        const other = new MeshStandardMaterial({ map });
+        scene.add(new Mesh(new BoxGeometry(), material), new Mesh(new BoxGeometry(), other));
         frame(scene);
-        const albedo = [...api.materials.values()][0].albedo!;
-        expect(albedo[0]).toBeCloseTo(0.5);
-        expect(albedo[1]).toBeCloseTo(0);
-        expect(albedo[2]).toBeCloseTo(0.25);
-        // New pixels (a new version): the average is made again.
+        expect(api.textures.size).toBe(1);
+        const [first] = [...api.textures.keys()];
+        expect((api.textures.get(first)!.source as PixelData).data).toBe(pixels);
+        const sent = sync.sentMaterial(material)!;
+        expect(sent.albedo).toEqual([1, 1, 0.5]);
+        expect(sent.albedoTexture).toBe(first);
+        expect(sync.sentTexture(map)).toBe(first);
+        // New pixels (a new version): found by the edit checks, sent as a new texture; the old one goes when no material uses it.
         pixels.set([0, 255, 0, 255, 0, 255, 0, 255]);
         map.needsUpdate = true;
+        const calls = frame(scene);
+        expect(calls.filter((call) => call === 'createTexture')).toHaveLength(1);
+        expect(calls.filter((call) => call === 'updateMaterial')).toHaveLength(2);
+        expect(calls).toContain('destroyTexture');
+        const [second] = [...api.textures.keys()];
+        expect(api.textures.size).toBe(1);
+        expect(second).not.toBe(first);
+        expect(sync.sentMaterial(material)!.albedoTexture).toBe(second);
+        expect(sync.sentMaterial(other)!.albedoTexture).toBe(second);
+        // A still frame after: nothing.
+        expect(frame(scene)).toEqual([]);
+    });
+
+    it('sends a CompressedTexture map as its compressed mips', () => {
+        const scene = new Scene();
+        const mipmaps = [256, 128].map((size) => ({ data: new Uint8Array((size / 4) * (size / 4) * 16), width: size, height: size }));
+        const map = new CompressedTexture(mipmaps, 256, 256, RGBA_BPTC_Format);
+        map.colorSpace = SRGBColorSpace;
+        map.needsUpdate = true;
+        scene.add(new Mesh(new BoxGeometry(), new MeshStandardMaterial({ map })));
         frame(scene);
-        expect([...api.materials.values()][0].albedo![1]).toBeCloseTo(1);
+        const [texture] = [...api.textures.values()];
+        expect((texture.source as CompressedPixelData).format).toBe('bc7-rgba-unorm-srgb');
+        expect((texture.source as CompressedPixelData).levels[0].data).toBe(mipmaps[0].data);
+        expect(warnings).toEqual([]);
+    });
+
+    it('warns once about textures GI can\'t read, and once per custom-shaded material', () => {
+        const scene = new Scene();
+        const target = new RenderTarget(4, 4);
+        const shader = new ShaderMaterial({ name: 'water' });
+        scene.add(
+            new Mesh(new BoxGeometry(), new MeshStandardMaterial({ map: target.texture })),
+            new Mesh(new BoxGeometry(), new MeshStandardMaterial({ map: target.texture, color: 0xff0000 })),
+            new Mesh(new BoxGeometry(), shader),
+            new Mesh(new BoxGeometry(), shader),
+        );
+        frame(scene);
+        frame(scene);
+        expect(api.textures.size).toBe(0);
+        expect(warnings.filter((warning) => warning.includes('render-target'))).toHaveLength(1);
+        expect(warnings.filter((warning) => warning.includes('"water"'))).toHaveLength(1);
     });
 
     it('picks up a changed GI flag through the edit rotation, and at once when marked', () => {
@@ -489,7 +553,7 @@ describe('the walk', () => {
     });
 });
 
-describe('see-through meshes', () => {
+describe('see-through materials (per triangle since M4)', () => {
     /** contributesToGI of each instance, by label (the mesh's name). */
     function contributions(): Record<string, boolean | undefined> {
         const result: Record<string, boolean | undefined> = {};
@@ -502,66 +566,38 @@ describe('see-through meshes', () => {
         return new MeshStandardMaterial({ transparent: true, metalness: 1, name: 'dirt_decal' });
     }
 
-    it('leaves out a mesh whose materials all let light through, and keeps opaque ones', () => {
+    it('sends every mesh into GI\'s rays: decals, glass and meshes that mix them with opaque materials, with no warning', () => {
         const scene = new Scene();
         const decalMaterial = blendedDecal();
         const glass = new MeshPhysicalMaterial({ transmission: 1 });
-        const decal = Object.assign(new Mesh(new BoxGeometry(), decalMaterial), { name: 'decal' });
-        const wall = Object.assign(new Mesh(new BoxGeometry(), new MeshStandardMaterial()), { name: 'wall' });
-        scene.add(decal, Object.assign(new Mesh(new BoxGeometry(), glass), { name: 'pane' }), wall);
+        // BoxGeometry has six groups; with two materials, face 1 is glass and the rest are opaque.
+        const facade = new Mesh(new BoxGeometry(), [new MeshStandardMaterial(), glass]);
+        scene.add(
+            Object.assign(new Mesh(new BoxGeometry(), decalMaterial), { name: 'decal' }),
+            Object.assign(new Mesh(new BoxGeometry(), glass), { name: 'pane' }),
+            Object.assign(facade, { name: 'facade' }),
+        );
         frame(scene);
-        expect(contributions()).toEqual({ decal: false, pane: false, wall: true });
-        expect([sync.sentSeeThrough(decal), sync.sentSeeThrough(wall), sync.sentSeeThrough(new Mesh())]).toEqual([true, false, undefined]);
-        expect(sync.sentMaterial(decalMaterial)?.blocksLight).toBe(false);
+        expect(contributions()).toEqual({ decal: true, pane: true, facade: true });
+        expect([sync.sentContributes(facade), sync.sentContributes(new Mesh())]).toEqual([true, undefined]);
+        // The decal blocks light by its alpha; the glass lets it through, triangle by triangle in the platform.
+        expect(sync.sentMaterial(decalMaterial)).toMatchObject({ alphaMode: 'stochastic', blocksLight: true });
+        expect(sync.sentMaterial(glass)?.blocksLight).toBe(false);
         expect(warnings).toEqual([]);
     });
 
-    it('keeps a mesh that mixes blocking and see-through materials, with one warning naming it', () => {
-        const scene = new Scene();
-        // BoxGeometry has six groups; with two materials, face 1 is the decal and the rest are opaque.
-        const mixed = new Mesh(new BoxGeometry(), [new MeshStandardMaterial(), blendedDecal()]);
-        mixed.name = 'facade';
-        scene.add(mixed);
-        frame(scene);
-        expect(contributions()).toEqual({ facade: true });
-        expect(warnings).toHaveLength(1);
-        expect(warnings[0]).toContain('"facade"');
-        frame(scene);
-        expect(warnings).toHaveLength(1);
-    });
-
-    it('keeps a blended material in GI when it opts in', () => {
-        const scene = new Scene();
-        const decalMaterial = blendedDecal();
-        decalMaterial.userData.giBlocksLight = true;
-        scene.add(Object.assign(new Mesh(new BoxGeometry(), decalMaterial), { name: 'decal' }));
-        frame(scene);
-        expect(contributions()).toEqual({ decal: true });
-        expect(sync.sentMaterial(decalMaterial)?.blocksLight).toBe(true);
-    });
-
-    it('follows a material edit or swap that makes a mesh see-through or opaque', () => {
+    it('sends a material edit or swap that makes a mesh see-through as a material change only, with the same instances', () => {
         const scene = new Scene();
         const material = new MeshStandardMaterial();
         const mesh = Object.assign(new Mesh(new BoxGeometry(), material), { name: 'pane' });
         scene.add(mesh);
         frame(scene);
-        expect(contributions()).toEqual({ pane: true });
-        // An unmarked edit: the material check, then the object rotation, pick it up.
         material.transparent = true;
-        frame(scene);
-        frame(scene);
-        expect(contributions()).toEqual({ pane: false });
-        // Marked: at once.
-        material.userData.giBlocksLight = true;
-        sync.markChanged(mesh);
-        // New instances only: the mesh (and its tree) and the material are kept.
-        expect(frame(scene)).toEqual(['updateMaterial', 'destroyInstance', 'createInstance']);
+        expect(frame(scene)).toEqual(['updateMaterial']);
+        expect(sync.sentMaterial(material)?.alphaMode).toBe('stochastic');
+        mesh.material = new MeshPhysicalMaterial({ transmission: 1 });
+        expect(frame(scene)).toEqual(['createMaterial', 'setMaterials', 'destroyMaterial']);
         expect(contributions()).toEqual({ pane: true });
-        // A swapped material, found by the walk.
-        mesh.material = blendedDecal();
-        frame(scene);
-        expect(contributions()).toEqual({ pane: false });
         expect(api.instances.size).toBe(1);
     });
 });
@@ -836,5 +872,380 @@ describe('the light walk (T2.1)', () => {
         frame(scene);
         // No visible sun left: the sky takes none.
         expect(api.environment?.type === 'procedural' && api.environment.sunIlluminance).not.toBeCloseTo(3);
+    });
+});
+
+/**
+ * The adapter's `childadded` and `childremoved` listeners left on a tree. three keeps listeners in an
+ * EventDispatcher's `_listeners` (EventDispatcher.js), and gives no public way to count them.
+ */
+function structureListeners(tree: Object3D): number {
+    let count = 0;
+    tree.traverse((object) => {
+        const listeners = (object as unknown as { _listeners?: Record<string, unknown[]> })._listeners;
+        count += (listeners?.childadded?.length ?? 0) + (listeners?.childremoved?.length ?? 0);
+    });
+    return count;
+}
+
+describe('three reports changes itself (T3.7)', () => {
+    /** A scene of `count` meshes under one group, walked whole once, with a walk of one object a frame: the walk alone would take a pass of count + 2 frames. */
+    function slowWalkScene(count: number): { sync: SceneSync; scene: Scene; group: Group; meshes: Mesh[] } {
+        const slow = new SceneSync(api, { device: NO_DEVICE, objectsPerFrame: 1, editChecksPerFrame: 1 });
+        const scene = new Scene();
+        const group = new Group();
+        scene.add(group);
+        const geometry = new BoxGeometry();
+        const material = new MeshStandardMaterial();
+        const meshes: Mesh[] = [];
+        for (let index = 0; index < count; index++) {
+            const mesh = new Mesh(geometry, material);
+            mesh.position.x = index;
+            group.add(mesh);
+            meshes.push(mesh);
+        }
+        scene.updateMatrixWorld();
+        slow.update(scene);
+        api.take();
+        return { sync: slow, scene, group, meshes };
+    }
+
+    /** One frame in the documented order: three's render (it updates world matrices) has run since the last update. */
+    function renderThenUpdate(slow: SceneSync, scene: Scene): string[] {
+        scene.updateMatrixWorld();
+        slow.update(scene);
+        return api.take();
+    }
+
+    it('creates an added object in the next update, wherever it is, without markChanged', () => {
+        const { sync: slow, scene, meshes } = slowWalkScene(200);
+        const added = new Mesh(new BoxGeometry(), new MeshStandardMaterial());
+        // Deep in the tree: under one of the meshes, which the walk wouldn't reach for about 200 frames.
+        meshes[150].add(added);
+        expect(renderThenUpdate(slow, scene)).toEqual(['createMesh', 'createMaterial', 'createInstance']);
+        // A whole subtree added at once.
+        const subtree = new Group();
+        subtree.add(new Mesh(new BoxGeometry(), new MeshStandardMaterial()), new Mesh(new BoxGeometry(), new MeshStandardMaterial()));
+        scene.add(subtree);
+        expect(renderThenUpdate(slow, scene).filter((call) => call === 'createInstance')).toHaveLength(2);
+        // Children added to that subtree later are heard too: the listeners followed it in.
+        subtree.children[0].add(new Mesh(new BoxGeometry(), new MeshStandardMaterial()));
+        expect(renderThenUpdate(slow, scene).filter((call) => call === 'createInstance')).toHaveLength(1);
+        expect(api.instances.size).toBe(200 + 1 + 3);
+    });
+
+    it('destroys a removed object in the next update, and keeps one moved between parents', () => {
+        const { sync: slow, scene, group, meshes } = slowWalkScene(200);
+        meshes[120].removeFromParent();
+        expect(renderThenUpdate(slow, scene)).toEqual(['destroyInstance']);
+        // attach() removes and adds in one call: the object stays in GI, at its new place.
+        const holder = new Group();
+        holder.position.y = 10;
+        scene.add(holder);
+        renderThenUpdate(slow, scene);
+        holder.attach(meshes[30]);
+        expect(renderThenUpdate(slow, scene)).not.toContain('destroyInstance');
+        // A cleared group takes its meshes with it.
+        group.clear();
+        const calls = renderThenUpdate(slow, scene);
+        expect(calls.filter((call) => call === 'destroyInstance')).toHaveLength(198);
+        expect(api.instances.size).toBe(1);
+    });
+
+    it('does not bring back a removed object the walk had already queued', () => {
+        const slow = new SceneSync(api, { device: NO_DEVICE, objectsPerFrame: 2 });
+        const scene = new Scene();
+        const geometry = new BoxGeometry();
+        const material = new MeshStandardMaterial();
+        const meshes = Array.from({ length: 10 }, () => new Mesh(geometry, material));
+        scene.add(...meshes);
+        scene.updateMatrixWorld();
+        slow.update(scene);
+        // Two frames: the walk's stack now holds the scene's remaining children, including meshes[9].
+        slow.update(scene);
+        slow.update(scene);
+        api.take();
+        meshes[9].removeFromParent();
+        const calls: string[] = [];
+        for (let frame = 0; frame < 12; frame++) calls.push(...renderThenUpdate(slow, scene));
+        expect(calls).toEqual(['destroyInstance']);
+        expect(api.instances.size).toBe(9);
+    });
+
+    it('sends a still object\'s first unmarked move in the next update, through its hook', () => {
+        const { sync: slow, scene, group, meshes } = slowWalkScene(200);
+        meshes[170].position.y = 2;
+        expect(renderThenUpdate(slow, scene)).toEqual(['setTransforms']);
+        expect(slow.report.transforms).toBe(1);
+        // A moved parent: each of its meshes reports its own move.
+        group.position.z = 1;
+        renderThenUpdate(slow, scene);
+        expect(slow.report.transforms).toBe(200);
+        // A matrix written outside updateMatrixWorld (getWorldPosition calls updateWorldMatrix) still differs
+        // from the matrix last sent, so the render's update after it reports it.
+        meshes[60].position.y = 3;
+        meshes[60].getWorldPosition(new Vector3());
+        expect(renderThenUpdate(slow, scene)).toEqual(['setTransforms']);
+    });
+
+    it('falls back to the walk for transforms when the scene leaves its matrices to the host', () => {
+        const { sync: slow, scene, meshes } = slowWalkScene(20);
+        scene.matrixWorldAutoUpdate = false;
+        // A matrix set by hand, with no updateMatrixWorld call: no hook can see it, the walk must.
+        meshes[10].matrixWorld.setPosition(0, 5, 0);
+        const calls: string[] = [];
+        for (let frame = 0; frame < 2 * 22; frame++) {
+            slow.update(scene);
+            calls.push(...api.take());
+        }
+        expect(calls).toContain('setTransforms');
+    });
+
+    it('puts the original updateMatrixWorld back by assignment, never by delete', () => {
+        const { sync: slow, scene, meshes } = slowWalkScene(3);
+        const own = (object: Object3D) => Object.prototype.hasOwnProperty.call(object, 'updateMatrixWorld');
+        expect(own(meshes[0])).toBe(true);
+        expect(meshes[0].updateMatrixWorld).not.toBe(Object3D.prototype.updateMatrixWorld);
+        meshes[0].removeFromParent();
+        renderThenUpdate(slow, scene);
+        // Still an own property (deleting it made three 3x slower, T3.0), but three's method again.
+        expect(own(meshes[0])).toBe(true);
+        expect(meshes[0].updateMatrixWorld).toBe(Object3D.prototype.updateMatrixWorld);
+        slow.dispose();
+        expect(meshes.every((mesh) => mesh.updateMatrixWorld === Object3D.prototype.updateMatrixWorld)).toBe(true);
+        // Disposed: no listener is left on the scene's objects. (An update can't show it: dispose forgets the
+        // scene, so the next update would walk it whole again, and marks outside the walked scene do nothing.)
+        expect(structureListeners(scene)).toBe(0);
+    });
+
+    it('stops listening to a scene it no longer walks, and hears the new one', () => {
+        const { sync: slow, scene: first } = slowWalkScene(3);
+        const second = new Scene();
+        slow.update(second);
+        api.take();
+        expect(structureListeners(first)).toBe(0);
+        // The first scene's changes reach nothing; the second's are created in the next update.
+        first.add(new Mesh(new BoxGeometry(), new MeshStandardMaterial()));
+        second.add(new Mesh(new BoxGeometry(), new MeshStandardMaterial()));
+        expect(renderThenUpdate(slow, second)).toEqual(['createMesh', 'createMaterial', 'createInstance']);
+        expect(api.instances.size).toBe(1);
+    });
+
+    it('keeps an object removed and added again before the next update, and sends its move', () => {
+        const { sync: slow, scene, group, meshes } = slowWalkScene(10);
+        const created = api.instances.size;
+        meshes[4].removeFromParent();
+        meshes[4].position.y = 7;
+        group.add(meshes[4]);
+        expect(renderThenUpdate(slow, scene)).toEqual(['setTransforms']);
+        expect(api.instances.size).toBe(created);
+        // Still heard after the round trip: listeners and hook were put back on it.
+        meshes[4].add(new Mesh(new BoxGeometry(), new MeshStandardMaterial()));
+        meshes[4].position.y = 8;
+        expect(renderThenUpdate(slow, scene)).toEqual(['createMesh', 'createMaterial', 'createInstance', 'setTransforms']);
+    });
+
+    it("wraps a SkinnedMesh's own updateMatrixWorld, so three's skinning bookkeeping still runs", () => {
+        const scene = new Scene();
+        const skinned = new SkinnedMesh(new BoxGeometry(), new MeshStandardMaterial());
+        skinned.bind(new Skeleton([]));
+        scene.add(skinned);
+        frame(scene);
+        expect(skinned.updateMatrixWorld).not.toBe(SkinnedMesh.prototype.updateMatrixWorld);
+        // SkinnedMesh.updateMatrixWorld keeps bindMatrixInverse at the inverse of matrixWorld (attached mode).
+        skinned.position.set(1, 2, 3);
+        expect(frame(scene)).toEqual(['setTransforms']);
+        expect(skinned.bindMatrixInverse.equals(skinned.matrixWorld.clone().invert())).toBe(true);
+        sync.dispose();
+        expect(skinned.updateMatrixWorld).toBe(SkinnedMesh.prototype.updateMatrixWorld);
+    });
+
+    it('trusts update ranges on the first edit of an InstancedMesh the walk is far from', () => {
+        const { sync: slow, scene } = slowWalkScene(200);
+        const count = 50;
+        const instanced = new InstancedMesh(new BoxGeometry(), new MeshStandardMaterial(), count);
+        for (let index = 0; index < count; index++) instanced.setMatrixAt(index, new Matrix4().makeTranslation(index, 0, 0));
+        scene.add(instanced);
+        renderThenUpdate(slow, scene);
+        const handles = [...api.instances.keys()].slice(-count);
+        // Let it go cold: the hot set drops it after HOT_FRAMES still frames.
+        for (let frame = 0; frame < HOT_FRAMES + 2; frame++) renderThenUpdate(slow, scene);
+        // Documented order: update, then render; the host edits after the render, naming instances 7 and 8.
+        // Instance 30 changes outside the ranges: the ranges say it didn't, so it isn't even looked at.
+        for (const index of [7, 8, 30]) instanced.setMatrixAt(index, new Matrix4().makeTranslation(index, 4, 0));
+        instanced.instanceMatrix.addUpdateRange(7 * 16, 2 * 16);
+        instanced.instanceMatrix.needsUpdate = true;
+        slow.update(scene);
+        expect(api.take()).toEqual(['setTransforms']);
+        expect(api.transformBatches.at(-1)).toEqual([handles[7], handles[8]]);
+    });
+});
+
+describe('deforming meshes (T3.7)', () => {
+    /** A 1 x 1 sheet in the xy plane, `cells` squares a side, with a morph target that bends its top half forward (z). */
+    function morphedSheet(cells: number): Mesh {
+        const geometry = new PlaneGeometry(1, 1, cells, cells);
+        const position = geometry.getAttribute('position');
+        const offsets = new Float32Array(position.count * 3);
+        for (let vertex = 0; vertex < position.count; vertex++) offsets[vertex * 3 + 2] = Math.max(0, position.getY(vertex)) * 2;
+        geometry.morphAttributes.position = [new Float32BufferAttribute(offsets, 3)];
+        geometry.morphTargetsRelative = true;
+        const mesh = new Mesh(geometry, new MeshStandardMaterial());
+        mesh.updateMorphTargets();
+        return mesh;
+    }
+
+    /** A 0.2 x 2 x 0.2 column of 8 segments, skinned to two bones: the lower half to the root, the upper half to a bone at mid-height. */
+    function skinnedColumn(): { mesh: SkinnedMesh; root: Bone; upper: Bone } {
+        const geometry = new BoxGeometry(0.2, 2, 0.2, 1, 8, 1);
+        const position = geometry.getAttribute('position');
+        const skinIndex: number[] = [];
+        const skinWeight: number[] = [];
+        for (let vertex = 0; vertex < position.count; vertex++) {
+            // A soft joint: the weights blend across the middle segments.
+            const upperWeight = Math.min(1, Math.max(0, (position.getY(vertex) + 0.25) / 0.5));
+            skinIndex.push(0, 1, 0, 0);
+            skinWeight.push(1 - upperWeight, upperWeight, 0, 0);
+        }
+        geometry.setAttribute('skinIndex', new Uint16BufferAttribute(skinIndex, 4));
+        geometry.setAttribute('skinWeight', new Float32BufferAttribute(skinWeight, 4));
+        const root = new Bone();
+        root.position.y = -1;
+        const upper = new Bone();
+        upper.position.y = 1;
+        root.add(upper);
+        const mesh = new SkinnedMesh(geometry, new MeshStandardMaterial());
+        mesh.add(root);
+        mesh.bind(new Skeleton([root, upper]));
+        return { mesh, root, upper };
+    }
+
+    /** three's own CPU pose for every vertex (Mesh.getVertexPosition, with skinning for a SkinnedMesh). */
+    function threePose(mesh: Mesh): Float32Array {
+        const position = mesh.geometry.getAttribute('position');
+        const out = new Float32Array(position.count * 3);
+        const vertex = new Vector3();
+        for (let index = 0; index < position.count; index++) mesh.getVertexPosition(index, vertex).toArray(out, index * 3);
+        return out;
+    }
+
+    function largestDifference(a: ArrayLike<number>, b: ArrayLike<number>): number {
+        let largest = 0;
+        for (let index = 0; index < a.length; index++) largest = Math.max(largest, Math.abs(a[index] - b[index]));
+        return largest;
+    }
+
+    it('creates a morphed mesh deforming, with a box that holds every pose, and sends its poses', () => {
+        const scene = new Scene();
+        const sheet = morphedSheet(4);
+        scene.add(sheet);
+        expect(frame(scene)).not.toContain('setDeformedPositions');
+        const descriptor = [...api.meshes.values()][0];
+        expect(descriptor.deforming).toBe(true);
+        // Exact for influences in 0..1: the rest box, plus the top edge's reach forward (2 x 0.5 m).
+        expect(descriptor.deformBounds).toEqual({ min: [-0.5, -0.5, 0], max: [0.5, 0.5, 1] });
+        sheet.morphTargetInfluences![0] = 0.5;
+        expect(frame(scene)).toEqual(['setDeformedPositions']);
+        expect(largestDifference(api.poses.at(-1)!.positions, threePose(sheet))).toBeLessThan(1e-6);
+        // A still pose sends nothing.
+        expect(frame(scene)).toEqual([]);
+        expect(sync.report.poses).toBe(0);
+    });
+
+    it('sends a skinned mesh that contributes to GI as three poses it, and leaves a character in its bind pose', () => {
+        const scene = new Scene();
+        const tree = skinnedColumn();
+        tree.mesh.userData.giContributes = true;
+        const character = skinnedColumn();
+        scene.add(tree.mesh, character.mesh);
+        frame(scene);
+        const deforming = [...api.meshes.values()].filter((mesh) => mesh.deforming);
+        expect(deforming).toHaveLength(1);
+        // The default box: the bind pose's, grown by half its largest side (2 m) on every side.
+        expect(deforming[0].deformBounds!.min[1]).toBeCloseTo(-2);
+        expect(deforming[0].deformBounds!.max[2]).toBeCloseTo(1.1);
+        tree.upper.rotation.x = Math.PI / 2;
+        character.upper.rotation.x = Math.PI / 2;
+        expect(frame(scene)).toEqual(['setDeformedPositions']);
+        expect(largestDifference(api.poses.at(-1)!.positions, threePose(tree.mesh))).toBeLessThan(1e-5);
+        // The bent top really moved: by about a metre.
+        expect(largestDifference(api.poses.at(-1)!.positions, tree.mesh.geometry.getAttribute('position').array)).toBeGreaterThan(0.9);
+    });
+
+    it('does not send a pose when a skinned rig only moves as a whole', () => {
+        const scene = new Scene();
+        const rig = new Group();
+        const tree = skinnedColumn();
+        tree.mesh.userData.giContributes = true;
+        rig.add(tree.mesh);
+        scene.add(rig);
+        frame(scene);
+        tree.upper.rotation.x = 0.3;
+        expect(frame(scene)).toContain('setDeformedPositions');
+        rig.position.set(3, 0, 1);
+        rig.rotation.y = 0.7;
+        // The bones' world matrices all changed, but the mesh-space pose didn't: only the transform goes out.
+        expect(frame(scene)).toEqual(['setTransforms']);
+    });
+
+    it('sends a CPU-animated mesh (giDeforming) as poses, not new shapes, and a pose for each mesh sharing a geometry', () => {
+        const scene = new Scene();
+        const geometry = new PlaneGeometry(1, 1, 2, 2);
+        const left = new Mesh(geometry, new MeshStandardMaterial());
+        const right = new Mesh(geometry, new MeshStandardMaterial());
+        left.userData.giDeforming = true;
+        right.userData.giDeforming = true;
+        right.userData.giDeformBounds = { min: [-1, -1, -1], max: [1, 1, 1] };
+        scene.add(left, right);
+        frame(scene);
+        expect([...api.meshes.values()].map((mesh) => mesh.deforming)).toEqual([true, true]);
+        expect([...api.meshes.values()][1].deformBounds).toEqual({ min: [-1, -1, -1], max: [1, 1, 1] });
+        const position = geometry.getAttribute('position') as BufferAttribute;
+        position.setZ(4, 0.3);
+        position.needsUpdate = true;
+        // Each mesh gets the new pose; the geometry edit isn't also sent as a new shape.
+        const calls: string[] = [];
+        for (let frame = 0; frame < 5; frame++) {
+            sync.update(scene);
+            calls.push(...api.take());
+        }
+        expect(calls).toEqual(['setDeformedPositions', 'setDeformedPositions']);
+        expect(new Set(api.poses.map((pose) => pose.mesh)).size).toBe(2);
+    });
+
+    it('starts an object over when giDeforming changes, as for giContributes', () => {
+        const scene = new Scene();
+        const sheet = morphedSheet(2);
+        scene.add(sheet);
+        frame(scene);
+        expect([...api.meshes.values()].map((mesh) => mesh.deforming === true)).toEqual([true]);
+        sheet.userData.giDeforming = false;
+        // Found by the edit rotation (this small scene is covered every frame), restarted the update after.
+        frame(scene);
+        frame(scene);
+        expect([...api.meshes.values()].map((mesh) => mesh.deforming === true)).toEqual([false]);
+        sheet.userData.giDeforming = true;
+        sync.markChanged(sheet);
+        frame(scene);
+        expect([...api.meshes.values()].map((mesh) => mesh.deforming === true)).toEqual([true]);
+        expect(api.instances.size).toBe(1);
+    });
+
+    it('keeps a mesh with giDeforming false in its bind pose, and sends no poses while hidden', () => {
+        const scene = new Scene();
+        const still = morphedSheet(2);
+        still.userData.giDeforming = false;
+        const hidden = morphedSheet(2);
+        scene.add(still, hidden);
+        frame(scene);
+        expect([...api.meshes.values()].map((mesh) => mesh.deforming === true)).toEqual([false, true]);
+        hidden.visible = false;
+        frame(scene);
+        hidden.morphTargetInfluences![0] = 1;
+        still.morphTargetInfluences![0] = 1;
+        expect(frame(scene)).toEqual([]);
+        // Shown again: the pose it missed goes out.
+        hidden.visible = true;
+        expect(frame(scene)).toEqual(['setVisible', 'setDeformedPositions']);
     });
 });

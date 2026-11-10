@@ -1,5 +1,5 @@
 /**
- * Our DDGI, through the three.js adapter (`@pmndrs/ddgi/three`).
+ * Our DDGI, through the three.js adapter (`@pmndrs/gi/three`).
  *
  * The scene is drawn like the probe grid's: a plain `renderer.render` into a
  * multisampled target. GI reaches three's materials through the adapter's
@@ -8,7 +8,7 @@
  * render, `ThreeGI.update` mirrors scene changes and submits the GI update
  * within the frame budget (2 ms by default).
  *
- * Start-up goes through the library's own `GIVolume.start` (T2.4b), the
+ * Start-up goes through the library's own `DDGIVolume.start` (T2.4b), the
  * simple path any three user takes, so the viewer shows what they get. In
  * the order the viewer shows it:
  *  1. **Preparing:** the platform compiles its kernels (`gi.prepare()`).
@@ -22,7 +22,7 @@
  *     millisecond budget, GPU-bound (two in flight, so the GPU never waits)
  *     and not paced by the display. `start` runs those frames and resolves
  *     when the platform reports it calibrated and confirmed. "Start the
- *     probes over" runs them again (`GIVolume.restart`).
+ *     probes over" runs them again (`DDGIVolume.restart`).
  *  4. **Ready:** the calibrated number of probes every frame, and the field
  *     keeps converging live. The viewer then runs the GI frames itself
  *     (`updateOnRender` off), so "GI off" means no GI work at all.
@@ -40,15 +40,19 @@
 
 import { Color, type Object3D } from 'three';
 import type { Node } from 'three/webgpu';
+import type { SceneManifest } from '../../../../scenes/src/manifest';
 import { platformSkyEnvironment } from '../../../../scenes/src/sky/sky-image';
 import { AtlasOverlay, type AtlasChoice } from '../ddgi/atlas-overlay';
 import { DdgiDebugMaterial } from '../ddgi/debug-material';
 import { FrameChangeView } from '../ddgi/frame-change';
 import {
     DDGI_DEBUG_VIEW,
-    GIVolume,
+    DDGIVolume,
     PROBE_STATE_LABELS,
+    type DDGIPresetName,
     type DDGITechnique,
+    type DDGIVolumeSettings,
+    type LoadedField,
     type DebugView,
     type EnvironmentDescriptor,
     type FrameBudget,
@@ -57,6 +61,7 @@ import {
     type ThreeGI,
 } from '../ddgi/library';
 import { ProbeHistoryTexture } from '../ddgi/probe-history';
+import { AlbedoAtHitsView, albedoViewPlatform } from '../ddgi/albedo-at-hits';
 import { ProbeSpheres, type ProbeColorBy } from '../ddgi/probe-spheres';
 import type { DdgiBudgetStats, DdgiFrameStats } from '../stats/ddgi-stats';
 import { LAYER_DDGI, LAYER_DDGI_PROBES } from '../scene/layers';
@@ -70,7 +75,16 @@ export const DDGI_SCREEN_VIEWS = {
     'probe-states': DDGI_DEBUG_VIEW.probeStates,
 } as const;
 
-export type DdgiScreenView = keyof typeof DDGI_SCREEN_VIEWS;
+/**
+ * A screen debug view: one of DDGI's own (`DDGI_SCREEN_VIEWS`, drawn through
+ * `giDebugColor`), or the viewer's `gi-albedo` (the albedo GI's rays read
+ * where they hit, traced by the platform: ddgi/albedo-at-hits.ts).
+ */
+export type DdgiScreenView = keyof typeof DDGI_SCREEN_VIEWS | 'gi-albedo';
+
+function isCoreScreenView(view: DdgiScreenView | null): view is keyof typeof DDGI_SCREEN_VIEWS {
+    return view !== null && view in DDGI_SCREEN_VIEWS;
+}
 
 /** A light group's weight in GI (T2.5): a linear RGB colour times an intensity. */
 export interface GroupWeight {
@@ -82,8 +96,18 @@ export interface GroupWeight {
 export type LightGroupCount = 0 | 2 | 4;
 
 export interface DdgiViewerSettings {
+    /**
+     * The quality preset (T5.1, `ddgiPreset`): its rays per probe, tile
+     * sizes and texture store. The scene's manifest sets the probe spacing,
+     * and `budgetMs` the budget (the panel moves it to the preset's when a
+     * preset is picked). Changing it starts DDGI over: rays and tile sizes
+     * size DDGI's resources when it starts (`layerKey`).
+     */
+    preset: DDGIPresetName;
     /** GPU milliseconds per frame for probe updates. */
     budgetMs: number;
+    /** The technique's warm-up before GI shows (off: the probes fill in live from black). Read when DDGI starts. */
+    warmUp: boolean;
     /**
      * Light groups with a layer of their own, 0 (off) to 4 (T2.5). Changing it
      * starts DDGI over: the layers are made when it starts (`layerKey`).
@@ -95,6 +119,13 @@ export interface DdgiViewerSettings {
      * 2026-11-08). Changing it starts DDGI over, as `lightGroups` does.
      */
     sunLayer: boolean;
+    /**
+     * A second, finer volume of probes that follows the camera (T3.6,
+     * `CAMERA_VOLUME`), in front of the manifest's fixed one, which fills in
+     * beyond it. For big scenes, where the fixed volume's probes are metres
+     * apart (Bistro exterior: 4 m). Changing it starts DDGI over.
+     */
+    cameraVolume: boolean;
     /** Each group's weight (index = group), live; missing ones are white at 1. */
     groupWeights: GroupWeight[];
     /** The environment layer's weight (the sky and glowing surfaces), live. */
@@ -113,14 +144,25 @@ export interface DdgiViewerSettings {
     atlasExposureEv: number;
     /** The change-per-frame view, full colour at this change in percent; null shows the picture itself. */
     changeFullScalePercent: number | null;
+    /**
+     * GI's rays read material textures where they hit (the platform's
+     * hit-shading setting `sampleTextures`). Off, each texture counts as its
+     * mean colour, as the adapter's averages did before M4: for comparing what
+     * the textures change. Turning it over is one uniform write (nothing is
+     * compiled); the field takes a few seconds to follow.
+     */
+    giTextures: boolean;
 }
 
 export const WHITE_WEIGHT: GroupWeight = { color: [1, 1, 1], intensity: 1 };
 
 export const DEFAULT_DDGI_VIEWER_SETTINGS: DdgiViewerSettings = {
+    preset: 'high',
     budgetMs: 2,
+    warmUp: true,
     lightGroups: 0,
     sunLayer: false,
+    cameraVolume: false,
     groupWeights: [],
     environmentWeight: WHITE_WEIGHT,
     showProbes: false,
@@ -130,11 +172,37 @@ export const DEFAULT_DDGI_VIEWER_SETTINGS: DdgiViewerSettings = {
     atlasFill: false,
     atlasExposureEv: 0,
     changeFullScalePercent: null,
+    giTextures: true,
 };
 
-/** The settings that shape DDGI's layers, which only a new start can change (`ViewerCore.configureDdgi`). */
-export function layerKey(settings: Pick<DdgiViewerSettings, 'lightGroups' | 'sunLayer'>): string {
-    return `groups ${settings.lightGroups}, sun layer ${settings.sunLayer ? 'on' : 'off'}`;
+/** The settings that shape DDGI's layers, volumes and tiles, which only a new start can change (`ViewerCore.configureDdgi`). */
+export function layerKey(settings: Pick<DdgiViewerSettings, 'preset' | 'lightGroups' | 'sunLayer' | 'cameraVolume'>): string {
+    return `preset ${settings.preset}, groups ${settings.lightGroups}, sun layer ${settings.sunLayer ? 'on' : 'off'}, camera volume ${settings.cameraVolume ? 'on' : 'off'}`;
+}
+
+/**
+ * The camera-following volume (T3.6, m3-moving.md §4.2): 32 × 12 × 32 probes
+ * 1.5 m apart (a window 46.5 m wide and 16.5 m high), Dennis's pick of
+ * 2026-11-05, as `ddgi-camera-volume` checks it on Bistro's fly-through.
+ * Priority 1, so it answers before the manifest's volume wherever it covers
+ * the point, and fades into it over its last 10 spacings (DECISIONS
+ * 2026-11-10).
+ */
+export const CAMERA_VOLUME = { probes: [32, 12, 32] as const, spacing: 1.5, priority: 1 };
+
+/**
+ * The volumes DDGI starts with: the manifest's, and with `cameraVolume` the
+ * camera-following one first, its window starting around `start` (the
+ * scene's first camera view; it moves to wherever the camera is from the
+ * first warm-up frame on, since the warm-up runs with the viewer's camera).
+ */
+export function ddgiVolumes(manifest: Pick<SceneManifest, 'volume'>, cameraVolume: boolean, start: readonly [number, number, number]): DDGIVolumeSettings[] {
+    const fixed: DDGIVolumeSettings = { center: manifest.volume.center, size: manifest.volume.size, spacing: manifest.volume.probeSpacing };
+    if (!cameraVolume) return [fixed];
+    const { probes, spacing, priority } = CAMERA_VOLUME;
+    // n probes span n - 1 spacings.
+    const size: [number, number, number] = [(probes[0] - 1) * spacing, (probes[1] - 1) * spacing, (probes[2] - 1) * spacing];
+    return [{ center: [start[0], start[1], start[2]], size, spacing, follow: 'camera', priority }, fixed];
 }
 
 /** Set-up steps the viewer records per batch (`pumpPrepare`); `start` runs the real frames itself, so a step only looks at its progress. */
@@ -188,7 +256,7 @@ export class DdgiTechnique extends ScenePassTechnique {
     readonly startup: DdgiStartupTimes = { preparedMs: null, firstGiMs: null, warmedMs: null };
 
     /** The library's volume on the manifest's probe grid; `start` makes the platform, DDGI and ThreeGI on it. */
-    private readonly volume: GIVolume;
+    private readonly volume: DDGIVolume;
     /** What `volume.start` made, from the moment it exists (before the warm-up). */
     private gi: StartedGI | null = null;
     private readonly createdAt = performance.now();
@@ -200,6 +268,8 @@ export class DdgiTechnique extends ScenePassTechnique {
     private probeHistory: ProbeHistoryTexture | null = null;
     private debugMaterial: DdgiDebugMaterial | null = null;
     private atlasOverlay: AtlasOverlay | null = null;
+    /** The `gi-albedo` screen view, made when the platform can trace it (ddgi/albedo-at-hits.ts). */
+    private albedoView: AlbedoAtHitsView | null = null;
     private readonly frameChange = new FrameChangeView();
     /** The share of the view's height at the top that the stats box covers; the atlas stays below it. */
     private overlayTopInsetShare = 0;
@@ -242,7 +312,7 @@ export class DdgiTechnique extends ScenePassTechnique {
         // The base class chose layers before the settings existed; choose again with them.
         this.applyLayers();
         const { manifest } = context.loaded;
-        this.volume = GIVolume.fromDDGIVolume({ center: manifest.volume.center, size: manifest.volume.size, spacing: manifest.volume.probeSpacing });
+        this.volume = DDGIVolume.fromSettings({ center: manifest.volume.center, size: manifest.volume.size, spacing: manifest.volume.probeSpacing });
         // Only DDGI's camera sees the volume (a light in three's terms), as its GI light.
         this.volume.layers.set(LAYER_DDGI);
         let created: () => void = () => {};
@@ -255,13 +325,22 @@ export class DdgiTechnique extends ScenePassTechnique {
     private async start(created: () => void): Promise<void> {
         const { loaded, renderer } = this.context;
         await this.volume.start(renderer, loaded.scene, {
+            // Rays, tile sizes and the texture store; the manifest's spacing and the panel's budget stay.
+            preset: this.settings.preset,
             budget: this.budget,
+            ...(this.settings.warmUp ? {} : { warmUp: false }),
             ddgi: {
                 // The weights are set once the technique exists (`applyGroupWeights`); they are live.
                 lightGroups: this.settings.lightGroups > 0 ? { count: this.settings.lightGroups, weights: [], environmentWeight: [1, 1, 1] } : null,
                 sunLayer: this.settings.sunLayer,
+                // Several volumes only with the camera's; one volume stays exactly M2's path (the DDGIVolume's own).
+                ...(this.settings.cameraVolume ? { volumes: ddgiVolumes(loaded.manifest, true, loaded.manifest.cameras[0].position) } : {}),
             },
             environment: this.environmentOverride ?? environmentFor(loaded.manifest),
+            // The warm-up runs with the viewer's camera (synced each frame, `syncCamera`), so the camera-following
+            // volume warms up where the camera is: with the default (a camera at the volume's centre) its window
+            // jumped to the viewer's camera on the first frame after the warm-up, and warmed up again (NOTES, T3.8).
+            camera: this.camera,
             warn: (message) => this.warn(message),
             label: `viewer ${loaded.manifest.id}`,
             onCreated: (started) => {
@@ -297,6 +376,8 @@ export class DdgiTechnique extends ScenePassTechnique {
         }
         this.debugMaterial = new DdgiDebugMaterial(started.platform.shading);
         this.atlasOverlay = new AtlasOverlay(started.platform.shading);
+        const internals = albedoViewPlatform(started.platform);
+        this.albedoView = internals ? new AlbedoAtHitsView(this.context.device, internals) : null;
         this.applyDisplaySettings();
         this.applyGroupWeights();
         // An environment set after `start` was called (time of day, on a new DDGI) reaches GI here.
@@ -493,14 +574,41 @@ export class DdgiTechnique extends ScenePassTechnique {
         return this.ready;
     }
 
-    /** "Start the probes over": forget the field and the calibration, and warm up again (`GIVolume.restart`). */
+    /**
+     * Saves the probes as a `.ddgibake` file's bytes (`DDGIVolume.saveBake`):
+     * one GPU readback. Only once DDGI is running (warm), so the file holds
+     * converged probes.
+     */
+    saveBake(): Promise<Uint8Array<ArrayBuffer>> {
+        if (this.phase !== 'ready') return Promise.reject(new Error('DDGI is still starting; save the probes once they are warm.'));
+        return this.volume.saveBake();
+    }
+
+    /**
+     * Loads a `.ddgibake` file into the running probes (`DDGIVolume.loadBake`):
+     * from the next frame the picture shows the loaded probes, which keep
+     * updating. Throws (with a message that says why) for a file that isn't
+     * a bake or doesn't fit this scene's probes; a bake of a changed scene
+     * loads as stale.
+     */
+    loadBake(bytes: ArrayBuffer): LoadedField {
+        if (this.phase !== 'ready') throw new Error('DDGI is still starting; load the probes once it is running.');
+        return this.volume.loadBake(bytes);
+    }
+
+    /** Saved bakes loaded into this DDGI (its technique's counter), for automated runs. */
+    get bakesLoaded(): number {
+        return this.ddgi?.counters['saved fields loaded'] ?? 0;
+    }
+
+    /** "Start the probes over": forget the field and the calibration, and warm up again (`DDGIVolume.restart`). */
     restartPrepare(): void {
         this.generation++;
         this.finishedWallMs = null;
         if (this.phase !== 'ready') return;
         this.warmupEndFrame = Number.POSITIVE_INFINITY;
         this.starting = this.volume
-            .restart({ budget: this.budget })
+            .restart({ budget: this.budget, camera: this.camera })
             .then(() => {
                 if (!this.disposed) this.finishStartUp();
             })
@@ -536,7 +644,10 @@ export class DdgiTechnique extends ScenePassTechnique {
 
     /** Settings that are uniforms: no shader is rebuilt. (The atlas choice and the change view change `overlayKey`.) */
     private applyDisplaySettings(): void {
-        if (this.debugMaterial && this.settings.screenView) this.debugMaterial.view = DDGI_SCREEN_VIEWS[this.settings.screenView];
+        if (this.debugMaterial && isCoreScreenView(this.settings.screenView)) this.debugMaterial.view = DDGI_SCREEN_VIEWS[this.settings.screenView];
+        // GI's textures on or off: the platform's hit-shading setting (its implementation has it; see albedo-at-hits.ts).
+        const internals = albedoViewPlatform(this.platform);
+        if (internals && internals.shade.settings.sampleTextures !== this.settings.giTextures) internals.shade.settings.sampleTextures = this.settings.giTextures;
         if (this.spheres) this.spheres.colorBy = this.settings.probeColor;
         if (this.settings.changeFullScalePercent !== null) this.frameChange.fullScalePercent = this.settings.changeFullScalePercent;
     }
@@ -566,9 +677,15 @@ export class DdgiTechnique extends ScenePassTechnique {
         return settings.atlas;
     }
 
+    /** Whether the `gi-albedo` view replaces the picture. */
+    private get showsAlbedo(): boolean {
+        const settings = this.settings as DdgiViewerSettings | undefined;
+        return settings?.screenView === 'gi-albedo' && this.albedoView !== null && this.phase !== 'failed';
+    }
+
     /** What `overlay` draws; the viewer rebuilds its pipeline when this changes. */
     get overlayKey(): string {
-        return `${this.shownAtlas ?? 'no atlas'}|${this.showsChange ? 'change' : 'picture'}`;
+        return `${this.showsAlbedo ? 'albedo' : 'shaded'}|${this.shownAtlas ?? 'no atlas'}|${this.showsChange ? 'change' : 'picture'}`;
     }
 
     /**
@@ -577,6 +694,7 @@ export class DdgiTechnique extends ScenePassTechnique {
      */
     overlay(display: Node): Node {
         let node = display;
+        if (this.showsAlbedo && this.albedoView) node = this.albedoView.overlay(node);
         if (this.showsChange) node = this.frameChange.overlay(node, this.sceneTarget);
         const atlas = this.shownAtlas;
         if (atlas && this.atlasOverlay) node = this.atlasOverlay.overlay(node, atlas);
@@ -627,8 +745,9 @@ export class DdgiTechnique extends ScenePassTechnique {
             threeGI.update(this.camera);
         }
         this.refreshDebugViews();
+        if (this.showsAlbedo) this.albedoView?.render(this.context.renderer, this.camera);
         const scene = this.context.loaded.scene;
-        const override = this.settings.screenView && this.debugMaterial && this.giMode !== 'off' && this.phase !== 'failed' ? this.debugMaterial : null;
+        const override = isCoreScreenView(this.settings.screenView) && this.debugMaterial && this.giMode !== 'off' && this.phase !== 'failed' ? this.debugMaterial : null;
         override?.refresh();
         const renderer = this.context.renderer;
         const previousOverride = scene.overrideMaterial;
@@ -664,7 +783,8 @@ export class DdgiTechnique extends ScenePassTechnique {
             case 'ready': {
                 const updated = this.ddgi?.counters[PROBES_UPDATED_COUNTER] ?? 0;
                 const warm = this.finishedWallMs === null ? '' : `; warmed up in ${(this.finishedWallMs / 1000).toFixed(1)} s`;
-                return `${grid}; ${updated.toLocaleString('en')} updated per frame (budget ${this.settings.budgetMs} ms)${warm}`;
+                const rays = this.ddgi?.settings.raysPerProbe ?? 0;
+                return `${grid}; ${this.settings.preset} preset, ${rays} rays each; ${updated.toLocaleString('en')} updated per frame (budget ${this.settings.budgetMs} ms)${warm}`;
             }
         }
     }
@@ -676,7 +796,9 @@ export class DdgiTechnique extends ScenePassTechnique {
             probes: field?.grid.probeCount ?? 0,
             probe_grid: field ? field.grid.counts.join('x') : '',
             probe_spacing_m: this.context.loaded.manifest.volume.probeSpacing,
+            preset: this.settings.preset,
             rays_per_probe: ddgi?.settings.raysPerProbe ?? 0,
+            distance_texels: ddgi?.settings.distanceTexels ?? 0,
             budget_ms: this.settings.budgetMs,
             warmup_passes: ddgi?.settings.warmUpPasses ?? 0,
         };
@@ -763,6 +885,7 @@ export class DdgiTechnique extends ScenePassTechnique {
         this.spheres?.dispose();
         this.probeHistory?.dispose();
         this.debugMaterial?.dispose();
+        this.albedoView?.dispose();
         this.frameChange.dispose();
         // The GI light, ThreeGI and the platform `start` made. While `start` still runs the volume
         // doesn't hold them yet: free them here, and the start's next frame fails and stops it.

@@ -10,6 +10,7 @@ import { bookmarkLabel } from '../scene/manifests';
 import { TONE_MAPPERS, type ToneMappingName } from '../core/viewer-core';
 import type { NavigationMode } from '../controls/camera-rig';
 import { TECHNIQUE_LABELS, type GiTechniqueId, type TechniqueId, type UpscaleQuality } from '../techniques/types';
+import type { DDGIPresetName } from '../../../../packages/ddgi-core/src/techniques/ddgi/presets';
 import { h } from './dom';
 import { DEFAULT_HELP, HELP, type HelpKey } from './help-text';
 import {
@@ -27,7 +28,11 @@ import {
 } from './url-state';
 
 export interface DdgiPanelSettings {
+    /** The quality preset (starts DDGI over when changed). */
+    preset: DDGIPresetName;
     budgetMs: number;
+    /** The camera-following volume (starts DDGI over when changed). */
+    followCamera: boolean;
     probes: boolean;
     probeColor: ProbeColorName;
     debug: DdgiScreenViewName | null;
@@ -35,6 +40,7 @@ export interface DdgiPanelSettings {
     atlasFill: boolean;
     atlasEv: number;
     change: ChangeFullScalePercent | null;
+    giTextures: boolean;
 }
 
 export interface PanelHandlers {
@@ -52,6 +58,10 @@ export interface PanelHandlers {
     onTechnique(id: GiTechniqueId): void;
     onDdgiSettings(settings: DdgiPanelSettings): void;
     onDdgiRestart(): void;
+    /** Save the probes to a file (a download). */
+    onDdgiSaveBake(): void;
+    /** Load probes from a file the user picked. */
+    onDdgiLoadBake(file: File): void;
     onProbeSettings(settings: { bounces: number; maxProbes: number }): void;
     onRebake(): void;
     onVxgiSettings(settings: { bounces: number }): void;
@@ -108,6 +118,14 @@ const SCREEN_VIEW_LABELS: Record<DdgiScreenViewName | 'none', string> = {
     'gi-only': 'GI only, on white surfaces',
     coverage: 'Coverage (where DDGI answers)',
     'probe-states': 'Probes near this point',
+    'gi-albedo': 'GI albedo at hits (what rays see)',
+};
+
+/** The quality presets, cheapest first, as the picker names them. */
+const PRESET_LABELS: Record<DDGIPresetName, string> = {
+    low: 'Low (tablets, phones, basic laptops)',
+    medium: 'Medium',
+    high: 'High (the default)',
 };
 
 const PROBE_COLOR_LABELS: Record<ProbeColorName, string> = {
@@ -185,9 +203,11 @@ export class Panel {
     private readonly giButtons = new Map<GiChoice, HTMLInputElement>();
     private readonly techniqueSelect = h('select');
     private readonly ddgiSettings = h('div', { className: 'group' });
+    private readonly preset = h('select');
     private readonly budget = h('input', { type: 'range', min: MIN_BUDGET_MS, max: MAX_BUDGET_MS, step: BUDGET_STEP_MS });
     private readonly budgetValue = h('span', { className: 'value' });
     private readonly showProbes = h('input', { type: 'checkbox' });
+    private readonly followCamera = h('input', { type: 'checkbox' });
     private readonly probeColor = h('select');
     private readonly probeColorRow = h('div', { className: 'indented' });
     private readonly probeLegend = h('div', { className: 'legend' });
@@ -195,6 +215,7 @@ export class Panel {
     private readonly atlas = h('select');
     private readonly atlasOptions = h('div', { className: 'indented' });
     private readonly atlasFill = h('input', { type: 'checkbox' });
+    private readonly giTextures = h('input', { type: 'checkbox' });
     private readonly atlasEv = h('input', { type: 'range', min: -MAX_ATLAS_EV, max: MAX_ATLAS_EV, step: ATLAS_EV_STEP });
     private readonly atlasEvValue = h('span', { className: 'value' });
     private readonly atlasEvRow = h('div');
@@ -205,6 +226,8 @@ export class Panel {
     private readonly vxgiSettings = h('div', { className: 'group' });
     private readonly vxgiBounces = h('select');
     private readonly status = h('div', { className: 'status' });
+    /** The file picker behind "Load probes from a file" (hidden; the button opens it). */
+    private readonly bakeFile = h('input', { type: 'file', accept: '.ddgibake' });
 
     private readonly wipeToggle = h('input', { type: 'checkbox' });
     private readonly wipeLeft = h('select');
@@ -220,12 +243,14 @@ export class Panel {
 
     /**
      * @param extraSections more sections (the lighting controls), placed after global illumination
+     * @param leadingSections sections placed first, above the scene (the moving-geometry scenarios)
      */
     constructor(
         parent: HTMLElement,
         manifests: readonly SceneManifest[],
         private readonly handlers: PanelHandlers,
         extraSections: readonly HTMLElement[] = [],
+        leadingSections: readonly HTMLElement[] = [],
     ) {
         this.element = h('aside', { className: 'panel' });
         parent.append(this.element);
@@ -242,6 +267,7 @@ export class Panel {
             for (const id of WIPE_CHOICES) side.append(h('option', { value: id, text: TECHNIQUE_LABELS[id] }));
         }
         for (const [view, label] of Object.entries(SCREEN_VIEW_LABELS)) this.screenView.append(h('option', { value: view, text: label }));
+        for (const [name, label] of Object.entries(PRESET_LABELS)) this.preset.append(h('option', { value: name, text: label }));
         for (const [choice, label] of Object.entries(PROBE_COLOR_LABELS)) this.probeColor.append(h('option', { value: choice, text: label }));
         for (const [choice, label] of Object.entries(ATLAS_LABELS)) this.atlas.append(h('option', { value: choice, text: label }));
         for (const percent of ['none', ...CHANGE_FULL_SCALE_PERCENTS] as const) this.change.append(h('option', { value: String(percent), text: changeLabel(percent) }));
@@ -249,6 +275,7 @@ export class Panel {
 
         this.element.append(
             h('h1', { text: 'DDGI viewer' }),
+            ...leadingSections,
             this.sceneSection(),
             this.moveSection(),
             this.lightSection(),
@@ -331,6 +358,7 @@ export class Panel {
             return withHelp(h('label', { className: 'inline' }, input, ` ${label}`), help);
         };
         withHelp(this.techniqueSelect, 'technique');
+        withHelp(this.preset, 'ddgiPreset');
         withHelp(this.budget, 'ddgiBudget');
         withHelp(this.probeLegend, 'ddgiProbes');
         withHelp(this.screenView, 'ddgiScreenView');
@@ -345,24 +373,42 @@ export class Panel {
         rebake.addEventListener('click', () => this.handlers.onRebake());
         const restart = withHelp(h('button', { text: 'Start the probes over' }), 'ddgiRestart');
         restart.addEventListener('click', () => this.handlers.onDdgiRestart());
+        const saveBake = withHelp(h('button', { text: 'Save the probes to a file' }), 'ddgiSaveBake');
+        saveBake.addEventListener('click', () => this.handlers.onDdgiSaveBake());
+        const loadBake = withHelp(h('button', { text: 'Load probes from a file' }), 'ddgiLoadBake');
+        this.bakeFile.style.display = 'none';
+        loadBake.addEventListener('click', () => this.bakeFile.click());
+        this.bakeFile.addEventListener('change', () => {
+            const file = this.bakeFile.files?.[0];
+            // Cleared, so picking the same file again loads it again.
+            this.bakeFile.value = '';
+            if (file) this.handlers.onDdgiLoadBake(file);
+        });
 
         this.probeColorRow.append(withHelp(h('div', { className: 'label', text: 'Colour the probes by' }), 'ddgiProbeColor'), this.probeColor);
         this.atlasEvRow.append(withHelp(h('div', { className: 'label' }, 'Atlas exposure ', this.atlasEvValue), 'ddgiAtlasExposure'), this.atlasEv);
         this.atlasOptions.append(withHelp(h('label', { className: 'inline' }, this.atlasFill, ' Fill the picture'), 'ddgiAtlasFill'), this.atlasEvRow);
         this.ddgiSettings.append(
+            withHelp(h('div', { className: 'label', text: 'Quality preset' }), 'ddgiPreset'),
+            this.preset,
             withHelp(h('div', { className: 'label' }, 'Update budget per frame ', this.budgetValue), 'ddgiBudget'),
             this.budget,
+            withHelp(h('label', { className: 'inline' }, this.followCamera, ' Add probes that follow the camera (big scenes)'), 'ddgiFollowCamera'),
             withHelp(h('label', { className: 'inline' }, this.showProbes, ' Show the probes'), 'ddgiProbes'),
             this.probeColorRow,
             this.probeLegend,
             withHelp(h('div', { className: 'label', text: 'Debug view' }), 'ddgiScreenView'),
             this.screenView,
+            withHelp(h('label', { className: 'inline' }, this.giTextures, ' GI reads textures'), 'ddgiGiTextures'),
             withHelp(h('div', { className: 'label', text: 'Probe atlas over the picture' }), 'ddgiAtlas'),
             this.atlas,
             this.atlasOptions,
             withHelp(h('div', { className: 'label', text: 'Change per frame (flicker check)' }), 'ddgiChange'),
             this.change,
             restart,
+            saveBake,
+            loadBake,
+            this.bakeFile,
         );
         this.probeSettings.append(
             h('div', { className: 'label', text: 'Bounces' }),
@@ -452,12 +498,15 @@ export class Panel {
         const atlas = this.atlas.value;
         const change = this.change.value;
         return {
+            preset: this.preset.value as DDGIPresetName,
             budgetMs: Number(this.budget.value),
+            followCamera: this.followCamera.checked,
             probes: this.showProbes.checked,
             probeColor: this.probeColor.value as ProbeColorName,
             debug: view === 'none' ? null : (view as DdgiScreenViewName),
             atlas: atlas === 'none' ? null : (atlas as AtlasName),
             atlasFill: this.atlasFill.checked,
+            giTextures: this.giTextures.checked,
             atlasEv: Number(this.atlasEv.value),
             change: change === 'none' ? null : (Number(change) as ChangeFullScalePercent),
         };
@@ -482,9 +531,11 @@ export class Panel {
             this.showBudget(Number(this.budget.value));
             handlers.onDdgiSettings(this.ddgiPanelSettings());
         });
+        this.preset.addEventListener('change', () => handlers.onDdgiSettings(this.ddgiPanelSettings()));
         this.showProbes.addEventListener('change', () => handlers.onDdgiSettings(this.ddgiPanelSettings()));
+        this.followCamera.addEventListener('change', () => handlers.onDdgiSettings(this.ddgiPanelSettings()));
         this.screenView.addEventListener('change', () => handlers.onDdgiSettings(this.ddgiPanelSettings()));
-        for (const control of [this.probeColor, this.atlas, this.atlasFill, this.change]) {
+        for (const control of [this.probeColor, this.atlas, this.atlasFill, this.change, this.giTextures]) {
             control.addEventListener('change', () => handlers.onDdgiSettings(this.ddgiPanelSettings()));
         }
         this.atlasEv.addEventListener('input', () => {
@@ -594,13 +645,16 @@ export class Panel {
         this.referenceCube.checked = state.referenceCube;
         this.giButtons.get(state.gi)!.checked = true;
         this.techniqueSelect.value = state.technique;
+        this.preset.value = state.ddgi.preset;
         this.budget.value = String(state.ddgi.budgetMs);
         this.showBudget(state.ddgi.budgetMs);
         this.showProbes.checked = state.ddgi.probes;
+        this.followCamera.checked = state.ddgi.followCamera;
         this.screenView.value = state.ddgi.debug ?? 'none';
         this.probeColor.value = state.ddgi.probeColor;
         this.atlas.value = state.ddgi.atlas ?? 'none';
         this.atlasFill.checked = state.ddgi.atlasFill;
+        this.giTextures.checked = state.ddgi.giTextures;
         this.atlasEv.value = String(state.ddgi.atlasEv);
         this.showAtlasEv(state.ddgi.atlasEv);
         this.change.value = state.ddgi.change === null ? 'none' : String(state.ddgi.change);

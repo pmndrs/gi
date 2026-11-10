@@ -3,7 +3,7 @@ import type { DirtyRegion, SceneChanges } from '../../platform/contract/scene-co
 import { MOVER_BOX_WORD, MOVER_BOX_WORDS, MOVER_TABLE_CAPACITY, MOVER_TABLE_HEADER_WORDS } from './layout.ts';
 import { MOVER_HOT_FRAMES, MoverTable } from './mover-table.ts';
 
-const NONE: SceneChanges = { regions: [], global: [], movedReceivers: 0, lights: [], lightsOverflowed: false };
+const NONE: SceneChanges = { regions: [], global: [], receivers: [], lights: [], lightsOverflowed: false };
 
 function move(instance: number, x: number, moved = 0.1): DirtyRegion[] {
     // A move logs where it was, then where it is.

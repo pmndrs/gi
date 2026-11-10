@@ -64,6 +64,8 @@ M3 adds:
 
 *As built (T2.M1, rigid parts):* `setTransforms`, `DirtyRegion.moved` (the farthest corner's travel, from a per-instance world frame) and `.instance` (the slot), and `GIStats.recompiles` (counted at a view of the host's device that the platform's own code and its techniques use, while `isReady`). `receivers`, `deformBounds` and `setDeformedPositions` stay M3. ddgi.md "Moving geometry" has the details and numbers.
 
+*As built (T3.1, prototype):* `SceneChanges.receivers` (boxes where receivers are now: created, shown, moved or deformed; 256 a frame, then one merged box), `MeshDescriptor.deformBounds`, and `setDeformedPositions` with a `Float32Array` (`platform/scene/deformed-positions.ts`). Until T3.3, a pose reaches rays by a tree rebuild, as `updateMesh` does: the positions go into the mesh's scene-copy range in place (no layout change), the mesh is reported uploaded, and new poses wait until the trees being built are placed (`GIPlatformImpl.treesWaitingAfterUpdate`), so a mesh posed every frame isn't starved of trees. Its region carries `moved` (the largest vertex travel × the instance's largest scale) and `instance`. The GPU-buffer form throws until T3.3.
+
 ## 2. Per-mesh trees: GPU first, tinybvh as the refinement
 
 ### 2.1 What exists
@@ -91,6 +93,7 @@ The platform's habit is **"prefer GPU-resident; read back when it clearly pays"*
 - **When B2 lands** and its trees trace at ≥ 0.95× tinybvh's, the swap can become optional (`meshTreeRefinement: 'tinybvh' | 'none'`), which saves the worker's copy and time.
 - **Without subgroups:** tinybvh only, as in M1 (the declared fallback). First GI waits for the worker on those devices.
 - **The top level** stays as B1a decided. If "add a cabinet" shows the worker's delay, the GPU LBVH could build the top level in the same frame from the instance boxes. It's the same code, but not planned.
+- *As built (T3.2):* the builder is H-PLOC (B2), not the LBVH, at load and at runtime alike: T2.12's path, with the "scene as first loaded" limit removed. Each frame's uploaded meshes go in one batch with its own submit and stats readback (DECISIONS 2026-11-09). The GPU tree's node and triangle ranges are released in the frame that places tinybvh's tree, and the batch's own buffers one update after the copy. tinybvh builds one version of a mesh at a time; a mesh replaced again meanwhile keeps only its newest version waiting. Page: `trace-runtime-trees`.
 
 ### 2.3 First GI from GPU trees (scheduled in M2)
 
@@ -141,6 +144,8 @@ SPEC's tracing decision: deforming meshes "keep their BVH shape", refit every fr
 - **Quality:** refits drift from the shape the tree was built for. A sway stays near its rest pose; a bend held for a minute doesn't. Section 3.1 proposes rebuilding with H-PLOC when the refit's cost passes 1.25× (a DECISIONS entry, because it departs from SPEC's "keep the shape"). T3.0 measures trace-speed decay on the wind tree.
 - **Without subgroups:** B1a's refit uses subgroups for its pairing step. On such devices `isSupported` reports deforming meshes as unsupported, and they're traced in their rest pose with a one-time warning (the declared fallback; no slower second path).
 - **Cost estimate:** B1a's top-level refit is 0.086 ms for 10,000 instances. A mesh refit also rewrites triangles and positions, so a 100,000-triangle tree should be about 0.1–0.2 ms on the RTX (not yet timed). Planning number: ≤ 0.3 ms a frame for the wind tree.
+
+*As built (T3.3, prototype):* each deforming mesh has a `GpuMeshRefit` (shared kernels, `GpuMeshRefitKernels`; its own parameters and topology), in `trace/deforming-trees.ts`. A pose (CPU `writeBuffer`, or one GPU copy by `gi/pose-copy` for a buffer or texture) lands in the scene copy's positions, and the refit reads the scene copy (positions and indices) in the same encoder, before anything traces; a tree placed (GPU first tree, tinybvh's swap, or a drift rebuild) is refit at once. The refit writes only the corners' xyz words, so the flags word (7) survives. The top level keeps the mesh's deform box. The deforming meshes' GPU first trees are built in a batch of their own and read back (their layout; the refit needs the shape). Normals: a deforming mesh is stored without normals, so `giInstanceNormalAt` falls back to the posed triangle's geometric normal. The movement word was not built: GPU poses report the deform box's diagonal as `moved` (an upper bound), CPU poses the CPU's exact travel; a GPU word read by `ddgi/mark` is left for when a GPU pose's change size matters. Held drift: the refit's stats (relative SAH) are copied at most once every 15 frames per posed mesh and read back a few frames late (DECISIONS 2026-11-10); above 1.1× the built tree's for 60 frames, H-PLOC rebuilds from the scene copy (its own submit, then its stats and layout read back), at most one a frame, never while the mesh's first trees are still coming.
 
 ### 3.1 The BVH under motion: what's built, and the gaps
 
@@ -196,6 +201,15 @@ The volume is a fixed-size window of probes over a lattice fixed in world space 
 - **Teleports** (the camera jumps more than half the window): every slot resets, and the viewer's warm-up mode (DECISIONS 2026-11-05) runs, as after a scene load.
 - **Memory:** 32 × 12 × 32 = 12,288 probes at about 1.5 KB each (irradiance 512 B, distance 1 KB, probe data, history) is **19 MB**, covering 48 × 18 × 48 m at 1.5 m spacing. M2's instant sky, on by default, adds 41 MB (m2-lights.md 6.3), so **60 MB** in all.
 
+*As built (T3.6; ddgi.md, "The camera-following volume"):* as above, with these differences.
+- **Entering probes owe 2 updates, not K:** they start from nothing, and the first update replaces the history outright, so the two warming updates are what they need before they are shown; K for each would cost 4× the budget this section's arithmetic gives.
+- **The valid extent's trailing side follows the camera** continuously (1.25 planes inside its half-window), not only the window: otherwise the planes about to be reused would leave the coverage at once, a pop at the trailing edge. And the extent keeps a whole plane between it and any cold plane, because coverage reaches a spacing past it.
+- **The table has 8 texels a row,** not 4: the four sampling `vec4f`s (T3.5), the window, the fade's width per axis, and the extent's low and high sides. No flags.
+- **The fade is 10 spacings wide, not half a spacing** (DECISIONS 2026-11-10): the band sweeps at the camera's speed, and half a spacing made the edge change 0.59% a frame on Bistro at 5 m/s; 10 spacings (3 s to pass a point) 0.074%. The camera volume then answers alone within about 5 spacings of the camera.
+- **Key probes go by the lattice's parity,** so a move changes the role of the planes at the window's ends only.
+- **A point outside every volume reads the nearest one** (T3.5 read the lowest-priority one, wrong for volumes side by side).
+- **Teleports** restart the technique's own warm-up (T2.4b moved it into the technique).
+
 ## 5. Probes near moved geometry
 
 ### 5.1 How a moved object becomes a set of probes
@@ -221,6 +235,8 @@ M2's `ddgi/mark` (m2-lights.md 4.2) gets geometry entries. For each geometry reg
 
 **With M2's instant sky on** (m2-lights.md 6.3), marked probes' first-order sky transfers are reset with their history. They re-accumulate from the updates the probes are owed anyway, and count as built again after 8, under a second on two-room for the door's few hundred probes. Until then, sky changes reach them by re-tracing. The sky layer itself keeps updating, so nothing jumps.
 
+*As built (T3.4, risk 4):* the far set's change is `r = min(1, Ω / 2π × contrast) × min(1, moved / spacing)`. Ω is the box's projected area seen from the probe over the distance squared, not the bounding sphere's. Contrast is the brightest stored mean among the active probes within 1.5 spacings of the box's centre over the probe's own, at least 1. *Why contrast:* no rule on Ω alone tells the cabinet (few far probes really change) from the door (nearly all do, because the dark room's light comes through the doorway), and the stored distances stop at the clamp, so they can't tell an opening from a wall (DECISIONS 2026-11-09). On the RTX: the cabinet's slide marks 645 probes instead of 993 at recall 97.4%; the door swing keeps 91.5% recall and its leak; a one-step close's recall drops from 91% to 72%. Deforming meshes go through the same entries: each pose's region is the `deformBounds` box with its vertices' travel (T3.1). An object that gives off light (`DirtyRegion.emits`) has every active probe in reach in its far set, not only those that see the box, since its light reaches the rest through bounces (`three-deforming-gi`'s exact-box morph came back 6% / 15% under rest without it, within 0.5% with it, on the Apple M5 Pro).
+
 **The distance atlas** uses the same per-probe history. For geometry that matters most: until a probe near the door learns the door's distance, light can leak through it. The short history and the priority keep that to the first few updates (risk 3).
 
 ### 5.2 Probes that were off come back warmed
@@ -240,6 +256,8 @@ TASKS carries this from M1: classification turns off probes in empty space (347 
 - **Woken air probes:** a probe that is off for "no surface nearby" and lies within 2 spacings of a receiver region (`SceneChanges.receivers`) or a geometry region is **woken** for 300 frames (5 s) after the last touch. While awake it traces all rays, blends, and is used in shading once warmed. Then it goes back to sleep.
 - *Why not keep every air probe awake at a slow rate:* that would change M1's still-scene cost and results. Waking keeps a still scene exactly as M1 has it.
 - Data: a `wakeUntil` frame, in word 8 of the history record (m2-lights.md 4.1).
+
+*As built (T3.4, prototype):* `ddgi/mark` gets one `receiver` entry per box in `SceneChanges.receivers`, and geometry entries of a move or a pose wake too (not those of an object created, destroyed, shown or hidden: a scene's first frame creates everything, and a room's box would wake every probe in it through the warm-up and calibration). Probes within `WAKE_SPACINGS` (2) of the box get `wakeUntil = frame + WAKE_FRAMES` (300). One that is off for "no surface nearby" is also owed `WAKE_OWED_UPDATES` (2) at `FREED_PROBE_URGENCY_SHARE`. Its fixed-ray update switches it back on (state 3), and its two warming updates follow, so it is in shading three frames after it is woken. In `ddgi/blend`, an awake probe isn't switched off for "no surface nearby". The first update after the wake runs out clears `wakeUntil`, and classification works as before. Wakes aren't counted as marks and don't move the change clock. A still scene has no receivers and no regions, so its air probes stay asleep. *Limit:* a receiver that stops in mid-air isn't reported again, so its probes go back to sleep 5 s later and it loses its GI (the change feed lists receivers that moved, not those that stand still).
 
 ## 6. Change tracking in the three adapter
 
@@ -265,6 +283,8 @@ What three r187 offers, and what M3 uses:
 - **Deforming meshes:** a mesh with `userData.giDeforming = true` is created `deforming`. When its position attribute's `version` changes, the adapter sends the CPU array (section 7). A `SkinnedMesh` skins on the GPU, so its position attribute never changes; skinned meshes stay in their bind pose (a stretch goal after v1, Dennis 2026-11-05).
 - **Moves still reach GI one frame late** by default (DECISIONS 2026-11-05: the adapter reads the matrices three's last render made).
 - **For interactive tools,** `markChanged` stays the recommended path; the viewer's drag gizmo calls it.
+
+*As built (T3.7, prototype):* `childadded` and `childremoved` are heard on every object of the scene (`change-watch.ts`), so added and removed objects reach GI in the next update. The `updateMatrixWorld` hook is on each mirrored mesh only (three calls it on every child, so groups need none), compares against the matrix last sent and puts a moved mesh in the hot set; it is removed by assignment. The walk keeps running but skips the transforms of hooked meshes while `scene.matrixWorldAutoUpdate` is on. Each `InstancedMesh`'s `instanceMatrix.version` is compared every update, because a hook sees an edit made after the render only at the next render, which also clears the update ranges. Deforming meshes: skinned (when they contribute to GI), morphed and `userData.giDeforming` meshes are created `deforming`, one platform mesh per three mesh, with a `deformBounds` (`userData.giDeformBounds`, or an estimate: exact for morphs), and send CPU poses through `setDeformedPositions` when their inputs change (`deforming.ts`). Skinned meshes are posed on the CPU with three's formulas, not left in the bind pose as the table above planned; `PoseSource` is the seam for T3.3's `ExternalTexture` form. Bistro interior: an unmarked first move is sent 2 frames after it happens (update, render, update), against up to 41 before.
 
 ## 7. Getting deformed positions out of three
 
@@ -368,6 +388,14 @@ Plus: the export from `Three.WebGPU.js`; a WebGL backend check that throws; a un
 - The response meter and the recompile counter are on screen during each.
 - **Alpha cutouts are M4.** Until they land, the tree's leaf cards block light as solid quads and over-darken. M3 checks that the occlusion *moves*; the look is judged after M4 (Dennis: fine, 2026-11-05).
 - **Native:** the harness has no moving geometry. The side-by-side for M3 covers the door and cabinet scenes only if T2.7's motion support can be extended to instance transforms; otherwise M3 compares against Cycles renders of the end states only.
+
+**As built (T3.8).** Manifest motions now take three kinds of target (`scenes/src/manifest.ts`): `light:<label>` as in M2; `object:<name>` (keyframes `position`, an offset from where the object stands, `rotationDeg` about the motion's `pivot`, and `sway` for meshes with a wind weight); and `camera` (`position` and `target`). A `smooth` interpolation eases in and out (light motions keep `linear` and `step`, which the native harness plays). `props` are boxes a viewer adds while a motion moves them. The viewer's panel opens with "Moving things": five scenarios, each a scene, a camera view and a motion, with a step version for the response meter (`apps/viewer/src/scene/scenarios.ts`):
+- *furniture:* the furnished room's red cabinet (a prop, 0.45 × 0.85 × 0.9 m against the west wall) slides 1 m and back (`cabinet-slide`, `cabinet-step`);
+- *door:* `closed-door`'s panel swings shut on the lit side in 1 s about the hinge `ddgi-door-swing` uses, seen from `dark-room-leak-view` (`door-swing`, `door-step`);
+- *cabinets:* the cabinet row's `base-unit-1-door` opens 100° and closes (`cabinet-door-swing`, `cabinet-door-step`); "Add a box" adds a small cabinet with its own mesh, "Copy a box" another instance of the last one's, up to 100 (`scene/added-cabinets.ts`);
+- *wind tree:* `wind-gusts` keyframes the sway (smooth, 20 s), `wind-lean` holds a full lean for the meter; a slider scales the reach up to 1.5 m at the crown;
+- *fly-through:* Bistro's `fly-through`, T3.6's three legs from the `street` view (66 m) at 5 m/s and back the same way (a round trip: a loop that jumped back to the start would reset the camera volume's whole window each time), keyframed, with the camera-following volume (`follow=camera`, 32 × 12 × 32 at 1.5 m) on. DDGI's warm-up runs with the viewer's camera (`GIVolume.start`'s `camera`), so the window warms up where the camera is; a later jump of more than half the window (choosing the scenario again mid-flight) still warms up every volume at full rate for seconds (DECISIONS 2026-11-10, known miss).
+No character: the repo has no skinned asset (the task said not to download one). `apps/viewer/scripts/scenario-shots.ts` plays each headless and takes the screenshots.
 
 ### 8.1 The wind tree's asset
 

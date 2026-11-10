@@ -1,9 +1,11 @@
 /**
- * T1.7: how much GI Sponza gets through the three adapter, as a check on the
- * texture folds (texture-average.ts). Most of Sponza's materials are glTF
- * metallic-roughness with metalness factor 1 and the real metalness in the
- * metalnessMap; folding only the factor makes their GI albedo 0 and the GI
- * near black.
+ * T1.7: how much GI Sponza gets through the three adapter. Most of Sponza's
+ * materials are glTF metallic-roughness with metalness factor 1 and the real
+ * metalness in the metalnessMap; reading only the factor makes their GI
+ * albedo 0 and the GI near black. Since T4.3 the platform samples the maps
+ * itself (the adapter's texture averages are gone), so the albedo reported
+ * is the colour factor without textures: colour × (1 − metalness) for
+ * materials without a metalnessMap, the colour alone for those with one.
  *
  * Runs DDGI on the manifest's volume for `FRAMES` frames, then renders the
  * GI alone: direct lights hidden, every surface a white Lambert material
@@ -23,7 +25,6 @@ import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-p
 import { DDGITechnique } from '../../../../packages/ddgi-core/src/techniques/ddgi/ddgi-technique.ts';
 import { ThreeGI } from '../../../../packages/ddgi-three/src/three-gi.ts';
 import { materialDescriptor } from '../../../../packages/ddgi-three/src/convert.ts';
-import { diffuseAverage, textureAverage } from '../../../../packages/ddgi-three/src/texture-average.ts';
 import { loadAllManifests } from '../../../../apps/viewer/src/scene/manifests.ts';
 import { loadScene } from '../../../../apps/viewer/src/scene/load-scene.ts';
 import { platformSkyEnvironment } from '../../../../scenes/src/sky/sky-image.ts';
@@ -62,11 +63,12 @@ await runThreePage(async ({ device, renderer, data, log }) => {
         if (material) for (const each of Array.isArray(material) ? material : [material]) materials.add(each);
     });
     if (withoutMetalnessMaps) for (const material of materials) (material as Material & { metalnessMap: unknown }).metalnessMap = null;
-    const averages = { color: textureAverage, diffuse: (map: never, metal: never, metalness: number, sameUv: boolean) => diffuseAverage(map, metal, metalness, sameUv)?.factor };
     let albedoSum = 0;
     let withMetalnessMap = 0;
     for (const material of materials) {
-        albedoSum += luminance(materialDescriptor(material, () => undefined, averages).albedo ?? [0, 0, 0]);
+        const descriptor = materialDescriptor(material, () => undefined);
+        const hasMetalnessMap = Boolean((material as Material & { metalnessMap?: unknown }).metalnessMap);
+        albedoSum += luminance(descriptor.albedo ?? [0, 0, 0]) * (hasMetalnessMap ? 1 : 1 - (descriptor.metalness ?? 0));
         if ((material as Material & { metalnessMap?: unknown }).metalnessMap) withMetalnessMap++;
     }
     data.metalnessMaps = withoutMetalnessMaps ? 'dropped (before the fold)' : 'kept';
@@ -89,7 +91,6 @@ await runThreePage(async ({ device, renderer, data, log }) => {
     threeGI.update(camera);
     threeGI.budget = { units: PROBES_PER_FRAME };
     await runSteps(device, FRAMES, () => threeGI.update(camera));
-    data.diffuseAverageMethods = threeGI.sync.diffuseAverageMethods;
 
     // GI alone on white Lambert: each pixel is E / pi.
     for (const light of loaded.directLights) light.visible = false;

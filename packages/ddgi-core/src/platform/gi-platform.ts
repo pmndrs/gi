@@ -6,7 +6,8 @@
  * techniques. Each frame, `encode` records, in this order and into the host's
  * encoder:
  *
- * 1. the scene copy's uploads (`PlatformScene.encode`);
+ * 1. the scene copy's uploads (`PlatformScene.encode`), and the texture
+ *    store's new layers (`gi/texture-store`, textures/texture-store.ts);
  * 2. the tracer acting on them: removed meshes, new mesh trees (the GPU's
  *    first trees at load, then tinybvh's from the worker), and the top
  *    level's refit or rebuild;
@@ -50,7 +51,9 @@ import { mergeSceneChanges } from './scene/change-log.ts';
 import { PlatformScene } from './scene/platform-scene.ts';
 import { checkComputeLimits } from './device-requirements.ts';
 import { PlatformHitShading } from './shade/hit-shading.ts';
+import { PlatformTextureStore } from './textures/texture-store.ts';
 import { GpuTimer } from './timing/gpu-timer.ts';
+import { DeformingTrees } from './trace/deforming-trees.ts';
 import { PlatformRayQueries, type MeshTreeOptions } from './trace/ray-queries.ts';
 import { UnitCostMeter, WorkBudget, type BudgetReport, type Calibration, type CalibrationMemory, type UnitCostModel } from './work-budget.ts';
 
@@ -59,7 +62,7 @@ import { UnitCostMeter, WorkBudget, type BudgetReport, type Calibration, type Ca
 export { DEFAULT_UNITS_PER_FRAME, type UnitCostModel } from './work-budget.ts';
 
 /** No scene changes: the screen stage runs after `encode`, which already reported them. */
-const NO_CHANGES: SceneChanges = { regions: [], global: [], movedReceivers: 0, lights: [], lightsOverflowed: false };
+const NO_CHANGES: SceneChanges = { regions: [], global: [], receivers: [], lights: [], lightsOverflowed: false };
 
 /**
  * The last calibration accepted per device, technique and scene, for the
@@ -114,6 +117,8 @@ export class GIPlatformImpl implements GIPlatform {
     private readonly queries: SceneQueries;
     /** Hit shading and the sky (T1.4): `giSurfaceAt`, `giDirectIrradiance`, `giSkyRadiance`, `giSkyIrradiance`. */
     readonly shade: PlatformHitShading;
+    /** The texture store (M4): the scene copy makes its layers, hit shading samples them. */
+    readonly textures: PlatformTextureStore;
     private readonly attached: AttachedTechnique[] = [];
     private output: GITechnique | undefined;
     private prepared = false;
@@ -151,7 +156,14 @@ export class GIPlatformImpl implements GIPlatform {
         this.compiles = countComputePipelines(device, () => this.isReady);
         // The platform's own GPU work goes through the counting view; the host keeps its device as it is.
         const ownDevice = this.compiles.device;
-        this.sceneCopy = new PlatformScene(ownDevice, { label: this.label });
+        this.textures = new PlatformTextureStore(ownDevice, { label: this.label, warn: (message) => this.warnOnce(message), layerSize: options.textureLayerSize });
+        this.sceneCopy = new PlatformScene(ownDevice, {
+            label: this.label,
+            textureStore: this.textures,
+            warn: (message) => this.warnOnce(message),
+            // Deforming meshes' trees are refit on the GPU, which needs subgroups; without them they stay in their rest pose.
+            posesTraced: DeformingTrees.isSupported(device),
+        });
         this.scene = new GuardedScene(this.sceneCopy, () => this.checkUsable());
         this.rays = new PlatformRayQueries(ownDevice, this.sceneCopy, {
             label: this.label,
@@ -169,7 +181,7 @@ export class GIPlatformImpl implements GIPlatform {
             rays,
             has: (kind: QueryKind) => kind === 'rays',
         };
-        this.shade = new PlatformHitShading(ownDevice, this.kernels, this.sceneCopy.module, this.rays.module, {
+        this.shade = new PlatformHitShading(ownDevice, this.kernels, this.sceneCopy.module, this.rays.module, this.textures, {
             label: this.label,
             warn: (message) => this.warnOnce(message),
         });
@@ -188,7 +200,7 @@ export class GIPlatformImpl implements GIPlatform {
         this.onUncapturedError = (event: Event) => {
             const message = (event as GPUUncapturedErrorEvent).error?.message ?? '';
             const ours = ownObject.test(message) || this.attached.some(({ technique }) => message.includes(`"${technique.id}/`));
-            if (ours) this.warnOnce(`@pmndrs/ddgi: GPU error in the platform's work: ${message}`);
+            if (ours) this.warnOnce(`@pmndrs/gi: GPU error in the platform's work: ${message}`);
         };
         device.addEventListener('uncapturederror', this.onUncapturedError);
     }
@@ -204,9 +216,9 @@ export class GIPlatformImpl implements GIPlatform {
     addTechnique<T extends GITechnique>(technique: T): T {
         this.checkUsable();
         this.forgetBudgets();
-        if (this.find(technique)) throw new Error(`@pmndrs/ddgi: technique '${technique.id}' is already attached`);
+        if (this.find(technique)) throw new Error(`@pmndrs/gi: technique '${technique.id}' is already attached`);
         for (const kind of technique.requirements.queries) {
-            if (!this.queries.has(kind)) throw new Error(`@pmndrs/ddgi: technique '${technique.id}' needs the '${kind}' query backend, which this platform doesn't have`);
+            if (!this.queries.has(kind)) throw new Error(`@pmndrs/gi: technique '${technique.id}' needs the '${kind}' query backend, which this platform doesn't have`);
         }
         const entry: AttachedTechnique = { technique, fallback: undefined };
         this.attached.push(entry);
@@ -222,7 +234,7 @@ export class GIPlatformImpl implements GIPlatform {
         const entry = this.find(technique);
         if (!entry) return;
         if (this.attached.some((other) => other.fallback === technique)) {
-            throw new Error(`@pmndrs/ddgi: technique '${technique.id}' is another technique's fallback; call setFallback(…, undefined) first`);
+            throw new Error(`@pmndrs/gi: technique '${technique.id}' is another technique's fallback; call setFallback(…, undefined) first`);
         }
         this.attached.splice(this.attached.indexOf(entry), 1);
         if (this.output === technique) this.output = undefined;
@@ -230,7 +242,7 @@ export class GIPlatformImpl implements GIPlatform {
     }
 
     setOutput(technique: GITechnique): void {
-        if (!this.find(technique)) throw new Error(`@pmndrs/ddgi: technique '${technique.id}' is not attached; call addTechnique first`);
+        if (!this.find(technique)) throw new Error(`@pmndrs/gi: technique '${technique.id}' is not attached; call addTechnique first`);
         this.output = technique;
     }
 
@@ -240,12 +252,12 @@ export class GIPlatformImpl implements GIPlatform {
 
     setFallback(technique: GITechnique, fallback: GITechnique | undefined): void {
         const entry = this.find(technique);
-        if (!entry) throw new Error(`@pmndrs/ddgi: technique '${technique.id}' is not attached`);
+        if (!entry) throw new Error(`@pmndrs/gi: technique '${technique.id}' is not attached`);
         if (fallback !== undefined) {
-            if (!this.find(fallback)) throw new Error(`@pmndrs/ddgi: fallback '${fallback.id}' is not attached`);
+            if (!this.find(fallback)) throw new Error(`@pmndrs/gi: fallback '${fallback.id}' is not attached`);
             // Walk the chain below the new fallback: reaching `technique` again would be a loop.
             for (let below: GITechnique | undefined = fallback; below; below = this.find(below)?.fallback) {
-                if (below === technique) throw new Error(`@pmndrs/ddgi: making '${fallback.id}' the fallback of '${technique.id}' would make a loop`);
+                if (below === technique) throw new Error(`@pmndrs/gi: making '${fallback.id}' the fallback of '${technique.id}' would make a loop`);
             }
         }
         entry.fallback = fallback;
@@ -279,9 +291,9 @@ export class GIPlatformImpl implements GIPlatform {
         // The mesh packing kernel is asked for first (T2.13): it is small, so it is ready
         // early, and from this call on the scene stages meshes' raw arrays for it, so a host
         // copying its scene in now uploads it while the rest compiles.
-        const packingReady = this.sceneCopy.prepareGpuPacking();
+        const packingReady = Promise.all([this.sceneCopy.prepareGpuPacking(), this.sceneCopy.prepareGpuPoses()]);
         const rayBatches = this.rayBatchesForTools || this.attached.some(({ technique }) => technique.requirements.rayBatches === true);
-        const platformReady = Promise.all([packingReady, this.shade.prepare(), this.rays.prepare(this.kernels, { batches: rayBatches })]);
+        const platformReady = Promise.all([packingReady, this.textures.prepare(), this.shade.prepare(), this.rays.prepare(this.kernels, { batches: rayBatches })]);
         const techniquesReady = (async () => {
             for (const technique of this.encodeOrder()) await technique.prepare();
         })();
@@ -306,6 +318,9 @@ export class GIPlatformImpl implements GIPlatform {
             this.timer.beginFrame(this.frame);
         }
 
+        // A deforming mesh's pose goes into the scene copy here, and the tracer refits its tree from it in
+        // the same encoder (trace/deforming-trees.ts): rays see each pose in the frame it is applied, and a
+        // pose never waits for a tree build.
         const upload = this.sceneCopy.encode(encoder, this.timer ?? undefined);
         this.rays.update(encoder, upload, this.timer ?? undefined);
         // Settings, the sky's bake when the environment changed, and the light grid when there are many
@@ -384,7 +399,7 @@ export class GIPlatformImpl implements GIPlatform {
     }
 
     get shading(): ShadingModule {
-        if (!this.output) throw new Error('@pmndrs/ddgi: no output technique; call setOutput(technique) first');
+        if (!this.output) throw new Error('@pmndrs/gi: no output technique; call setOutput(technique) first');
         return this.output.shading;
     }
 
@@ -398,17 +413,21 @@ export class GIPlatformImpl implements GIPlatform {
         const topLevel = this.rays.topLevelCounters;
         if (topLevel) counters['platform top level'] = topLevel;
         counters['platform mesh trees'] = this.rays.meshTreeCounters;
+        const deforming = this.rays.deformingTreeCounters;
+        if (deforming) counters['platform deforming meshes'] = deforming;
         for (const [technique, budget] of this.budgets) counters[`${technique.id} budget`] = budgetCounters(budget.report);
         // The sky the rays see (radiance map, procedural source texture) and the hit-shading
         // uniforms are part of the scene as the platform holds it, so they count as scene copy;
         // `MemoryReport` has no bucket of its own for them, and the total must cover them.
         const sceneCopy = this.sceneCopy.memoryBytes + this.shade.memoryBytes;
         const acceleration = this.rays.memoryBytes;
+        const textures = this.textures.memoryBytes;
         const memory: MemoryReport = {
             sceneCopy,
             acceleration,
+            textures,
             techniques,
-            total: sceneCopy + acceleration + Object.values(techniques).reduce((sum, bytes) => sum + bytes, 0),
+            total: sceneCopy + acceleration + textures + Object.values(techniques).reduce((sum, bytes) => sum + bytes, 0),
         };
         return { frame: this.frame, passes: this.latestPasses, memory, counters, encodeCpuMs: this.lastEncodeCpuMs, recompiles: this.compiles.counted };
     }
@@ -437,7 +456,7 @@ export class GIPlatformImpl implements GIPlatform {
 
     private checkUsable(): void {
         if (this.lost) throw new GINotReadyError('device-lost');
-        if (this.disposed) throw new Error('@pmndrs/ddgi: this platform was disposed');
+        if (this.disposed) throw new Error('@pmndrs/gi: this platform was disposed');
     }
 
     private find(technique: GITechnique): AttachedTechnique | undefined {
@@ -624,7 +643,7 @@ class GuardedScene implements SceneApi {
         this.check();
         this.target.updateMesh(mesh, descriptor);
     }
-    setDeformedPositions(mesh: MeshHandle, positions: DeformedPositions): void {
+    setDeformedPositions(mesh: MeshHandle, positions: Float32Array | DeformedPositions): void {
         this.check();
         this.target.setDeformedPositions(mesh, positions);
     }

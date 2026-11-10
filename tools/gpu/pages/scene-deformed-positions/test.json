@@ -1,0 +1,4 @@
+{
+    "description": "T3.3 items 1, 2 and 4 (T3.1 item 2 before it): a deforming sheet (placed plainly, mirrored and as a receiver, among rigid meshes) is refit on the GPU from each pose. Passes the oracle in the frame after each pose (8 waves; then a new pose every frame for 60 frames, with no tree builds; a GPU buffer pose and a texture pose), with hit points and normals from the scene copy; a held bend makes exactly one drift rebuild; recompiles 0. Records the refit's cost for a 100,000-triangle sheet (not judged). Without subgroups: rest pose and one warning.",
+    "timeoutMs": 600000
+}
