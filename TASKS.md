@@ -551,6 +551,7 @@ M1–M5 tasks are added at the end of the previous milestone. See [PLAN.md](PLAN
 
 - **The door and cabinet against Cycles renders of their end states** (from T3.9): CPU or Metal Cycles through `tools/reference/cycles/run.ts`, in parts under 15 minutes. Needs the references copied from the NAS.
 - **M3's checks on the Intel UHD** (from T3.9) and the M4 accuracy runs left in T4.5 (Bistro exterior and interior, courtyard-tree, alpha-checker, sponza-full, FLIP): back on Windows, or once the references are on the Mac.
+- **Re-run `trace-oracle`, `trace-materials` and `trace-bench-quick` on the RTX and the Intel** after the Metal shared-edge fix (2026-11-10, `giEdgeFunction` in `platform/trace/wgsl.ts`: corners ordered so FMA fusing in Dawn's relaxed Metal math can't open shared edges; 2,696 and 1,809 slips to 0 on the M5 Pro). It should give the same bits where nothing fuses; the cost is a few compares and selects per edge, not measured clean.
 - **Asset hashes are Windows-only:** on the Mac every Blender conversion and the generated wind tree come out with other hashes. The `.gltf` files differ by exactly their line count (CRLF on Windows), and Bistro's `.glb`, the courtyard tree's normals and the wind tree by small binary amounts (not yet looked at). `pnpm assets:fetch` reports them failed, though they load. Normalise line endings in the convert step and record per-platform hashes, or check the GLB's views as `--record-glb-views` already does.
 
 ### From M2, moved here when M3 became a prototype (2026-11-09)
