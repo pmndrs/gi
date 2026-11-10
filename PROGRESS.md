@@ -21,6 +21,13 @@ Rules:
 
 ---
 
+## 2026-11-10 · radiance-cache divergence causes · lead (opus, Mac)
+Did: added "Why each difference exists (the challenge list)" to `docs/design/radiance-cache.md`. It gives every register row (D1-D24, plus D30-D33 from `rc3-2`) a cause (forced, rule, shortcut, same, fix, license), its evidence (measured, cited, assumed) and how much it changes the image. It also has a short summary and the rules that keep the list honest. Also: a "How we work" pointer in the same doc, a standing rule in `docs/HANDOFF-radiance-cache.md`, DECISIONS 2026-11-10, and a check in `.claude/agents/reviewer.md` and `implementer.md`.
+Verified: docs only. Each cause was classified from the register text; no Capsaicin or WebGPU claim was re-checked in this session.
+Not verified: D2, D4, D9, D17, D18, D20 and D30's evidence is "assumed" (or only argued), and it should be checked before anyone relies on it. D5, D6 and D31 have not been checked on the M5 yet.
+Numbers: none.
+Next: when `rc3-2` merges, drop the "on `rc3-2`" tags on D30-D33. RC2.2's rows (D25-D29, if it adds any) need lines too. Finding so far: every high- or medium-impact difference comes from our own platform rules (shared hit shading, diffuse-only materials, punctual lights only, no visibility channel), not from WebGPU.
+
 ## 2026-11-10 · radiance-cache handoff · lead (opus)
 Did: handoff to a new lead on the Mac (usage ran out on the Windows laptop). Wrote `docs/HANDOFF-radiance-cache.md`: branch map, how the track runs, Dennis's standing rules (they were only in local agent memory) and first steps on the Mac. Saved RC2.2's uncommitted work as `d5ec2d1` on `rc2-2`. Pushed `radiance-cache`, `rc2-2` and `rc3-2` to origin.
 Verified: nothing new run; branch state read from git.
