@@ -105,6 +105,32 @@ struct RcScreenProbesConstants {
 @group(1) @binding(1) var<uniform> rcScreenProbes: RcScreenProbesConstants;
 `;
 
+/**
+ * `ScreenProbes_FindClosestProbe(pos)` (screen_probes.hlsl:110-131) over a
+ * probe mask given as a parameter, its sizes and mip count from the texture
+ * itself: the probe of `position`'s tile, else the first probe found going up
+ * the mip chain. For the debug views, which have no `RcScreenProbesConstants`
+ * (the interpolation's own copy below reads them).
+ */
+export function findClosestProbeWgsl(functionName: string, maskParameter: string): string {
+    return /* wgsl */ `
+fn ${functionName}(position: vec2u, ${maskParameter}: texture_2d<u32>) -> u32 {
+    var dims = textureDimensions(${maskParameter}, 0);
+    var pos = min(position / RC_PROBE_SIZE, dims - 1u);
+    let levels = textureNumLevels(${maskParameter});
+    for (var i = 0u; i < levels; i++) {
+        let probe = textureLoad(${maskParameter}, pos, i32(i)).x;
+        if (probe != RC_INVALID_ID) {
+            return probe;
+        }
+        dims = max(dims >> vec2u(1u), vec2u(1u));
+        pos = min(pos >> vec2u(1u), dims - 1u);
+    }
+    return RC_INVALID_ID;
+}
+`;
+}
+
 const CONSTANTS_ENTRY: GPUBindGroupLayoutEntry = { binding: 1, visibility: COMPUTE, buffer: { type: 'uniform', minBindingSize: SCREEN_PROBES_CONSTANTS_BYTES } };
 
 // ---- FilterProbeMask ----------------------------------------------------------------------------

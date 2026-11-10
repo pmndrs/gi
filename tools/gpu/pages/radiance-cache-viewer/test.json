@@ -1,0 +1,4 @@
+{
+    "description": "RC2.2: the radiance cache in the viewer (ViewerCore, technique rc) on cornell-box, two-room and sponza: GI on, only and off, its probe atlas, mask and SH debug views, the split wipe against DDGI; no device or logged errors. Ends on the Sponza wipe for the screenshot. Correctness only.",
+    "timeoutMs": 900000
+}

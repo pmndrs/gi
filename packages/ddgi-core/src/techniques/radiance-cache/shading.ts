@@ -13,8 +13,9 @@
  * - **`giCoverage`** is 1: the cache answers for every pixel on screen.
  * - **`giDebugColor`** draws the debug views by `screenUV`
  *   ({@link RADIANCE_CACHE_DEBUG_VIEW}): the probe atlas, the probe mask, and
- *   the SH (the irradiance of the pixel's own probe tile's SH along the
- *   pixel's normal, divided by π: what a white diffuse surface would reflect).
+ *   the SH (the irradiance from the SH of the probe nearest the pixel,
+ *   Capsaicin's `FindClosestProbe`, along the pixel's normal, divided by π:
+ *   what a white diffuse surface would reflect; wgsl/debug.ts).
  *
  * Resources: four textures, all read with `textureLoad` (no samplers):
  * the irradiance image, the probe atlas, the probe mask (`r32uint`) and the
@@ -27,6 +28,7 @@
 import type { ShadingModule, ShadingParameter } from '../../platform/contract/shading-module.ts';
 import { CAPSAICIN_WGSL } from './wgsl/capsaicin.ts';
 import { RADIANCE_CACHE_DEBUG_VIEW } from './wgsl/debug.ts';
+import { findClosestProbeWgsl } from './wgsl/screen-irradiance.ts';
 import { shIrradianceWgsl, SPHERICAL_HARMONICS_WGSL } from './wgsl/spherical-harmonics.ts';
 
 /** The textures the module reads, current as of the latest screen stage (placeholders before it). */
@@ -53,6 +55,7 @@ const SHADING_WGSL = /* wgsl */ `
 ${CAPSAICIN_WGSL}
 ${SPHERICAL_HARMONICS_WGSL}
 ${shIrradianceWgsl('rcShadingSHIrradiance', 'probeSH')}
+${findClosestProbeWgsl('rcShadingFindClosestProbe', 'probeMask')}
 
 const RC_DEBUG_VIEW_PROBE_ATLAS: u32 = ${RADIANCE_CACHE_DEBUG_VIEW.probeAtlas}u;
 const RC_DEBUG_VIEW_PROBE_MASK: u32 = ${RADIANCE_CACHE_DEBUG_VIEW.probeMask}u;
@@ -83,9 +86,13 @@ fn giDebugColor(position: vec3f, normal: vec3f, view: u32, screenUV: vec2f, ${RE
     let pixel = rcShadingPixel(screenUV, textureDimensions(${NAMES.irradiance}));
     let maskSize = textureDimensions(${NAMES.probeMask}, 0);
     let tile = min(pixel / RC_PROBE_SIZE, maskSize - 1u);
-    let packedSeed = textureLoad(${NAMES.probeMask}, tile, 0).x;
+    // The tile's own probe (atlas, mask), or for the SH view the nearest one.
+    var packedSeed = textureLoad(${NAMES.probeMask}, tile, 0).x;
+    if (view == RC_DEBUG_VIEW_SH) {
+        packedSeed = rcShadingFindClosestProbe(pixel, ${NAMES.probeMask});
+    }
     if (packedSeed == RC_INVALID_ID) {
-        // No probe in this tile this frame: a dark checkerboard by tile.
+        // No probe: a dark checkerboard by tile.
         return select(vec3f(0.02), vec3f(0.06), ((tile.x + tile.y) & 1u) == 0u);
     }
     if (view == RC_DEBUG_VIEW_PROBE_ATLAS) {
@@ -93,7 +100,8 @@ fn giDebugColor(position: vec3f, normal: vec3f, view: u32, screenUV: vec2f, ${RE
         return textureLoad(${NAMES.probeAtlas}, pixel, 0).rgb;
     }
     if (view == RC_DEBUG_VIEW_SH) {
-        return rcShadingSHIrradiance(normalize(normal), 1.0, tile, ${NAMES.probeSH}) * RC_SHADING_INV_PI;
+        let probe = rcUnpackSeed(packedSeed) / RC_PROBE_SIZE;
+        return rcShadingSHIrradiance(normalize(normal), 1.0, probe, ${NAMES.probeSH}) * RC_SHADING_INV_PI;
     }
     // The probe mask: the tile's colour, its seed pixel white.
     return select(rcShadingSeedColour(packedSeed), vec3f(1.0), all(rcUnpackSeed(packedSeed) == pixel));

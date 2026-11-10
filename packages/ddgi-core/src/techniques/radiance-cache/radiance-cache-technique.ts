@@ -408,7 +408,8 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
             entries: [
                 { binding: 0, resource: { buffer: prepared.debugUniforms } },
                 { binding: 1, resource: resources.probeAtlas.createView() },
-                { binding: 2, resource: resources.probeMask.createView({ baseMipLevel: 0, mipLevelCount: 1 }) },
+                // The whole mip chain: the SH view finds the nearest probe up it (FindClosestProbe).
+                { binding: 2, resource: resources.probeMask.createView({ baseMipLevel: 0, mipLevelCount: resources.layout.probeMaskMipCount }) },
                 { binding: 3, resource: target.createView({ baseMipLevel: 0, mipLevelCount: 1 }) },
                 { binding: 4, resource: probeSH.createView() },
                 { binding: 5, resource: screenTextureView(inputs.normal) },

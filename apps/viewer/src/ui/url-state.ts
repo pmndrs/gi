@@ -5,9 +5,9 @@
  *
  * - `scene`      manifest id
  * - `camera`     bookmark number (1-based) or name; `cam=px,py,pz,tx,ty,tz,fov` is a free camera that overrides it
- * - `technique`  `ddgi` (default), `lpg` or `vxgi` (the GI technique shown when there is no wipe)
+ * - `technique`  `ddgi` (default), `rc` (the radiance cache), `lpg` or `vxgi` (the GI technique shown when there is no wipe)
  * - `gi`         `off` (direct light only), `on` (default), or `only` (the indirect light alone)
- * - `wipe`       two techniques, `left,right`, each `none`, `ddgi`, `lpg`, `vxgi` or `cycles` (the
+ * - `wipe`       two techniques, `left,right`, each `none`, `ddgi`, `rc`, `lpg`, `vxgi` or `cycles` (the
  *                reference image); turns the split screen on
  * - `split`      where the wipe line starts, 0 to 1
  * - `ev`, `tone` exposure in stops and the tone mapper; without `ev` the scene's own default (manifest `exposureEv`)
@@ -17,6 +17,7 @@
  * - `probes`     `1` draws DDGI's probes as spheres coloured by state
  * - `debug`      one of DDGI's screen debug views: `gi-only`, `coverage`, `probe-states`, or a screen input
  *                (RC1.1): `screen-depth`, `screen-normal`, `screen-velocity`, `screen-albedo`, `screen-instance`
+ * - `rcdebug`    one of the radiance cache's debug views (RC2.2): `probe-atlas`, `probe-mask`, `probe-sh`
  * - `probecolor` `history` colours DDGI's probe spheres by how settled they are (default: by state)
  * - `atlas`      `irradiance` or `distance`: that probe atlas drawn over the picture
  * - `atlasfill`  `1`: the atlas fills the view instead of the bottom-right corner
@@ -46,6 +47,10 @@ export type GiChoice = 'off' | 'on' | 'only';
 /** DDGI's screen debug views by their link names (ids in `techniques/ddgi-technique.ts`). */
 export type DdgiScreenViewName = 'gi-only' | 'coverage' | 'probe-states' | 'screen-depth' | 'screen-normal' | 'screen-velocity' | 'screen-albedo' | 'screen-instance';
 export const DDGI_SCREEN_VIEW_NAMES: readonly DdgiScreenViewName[] = ['gi-only', 'coverage', 'probe-states', 'screen-depth', 'screen-normal', 'screen-velocity', 'screen-albedo', 'screen-instance'];
+
+/** The radiance cache's debug views by their link names (ids in `techniques/radiance-cache-technique.ts`). */
+export type RadianceCacheScreenViewName = 'probe-atlas' | 'probe-mask' | 'probe-sh';
+export const RADIANCE_CACHE_SCREEN_VIEW_NAMES: readonly RadianceCacheScreenViewName[] = ['probe-atlas', 'probe-mask', 'probe-sh'];
 
 export type ProbeColorName = 'state' | 'history';
 export type AtlasName = 'irradiance' | 'distance';
@@ -86,6 +91,8 @@ export interface ViewerUrlState {
     probes: boolean;
     probeColor: ProbeColorName;
     debug: DdgiScreenViewName | null;
+    /** The radiance cache's debug view, or null for its normal picture. */
+    rcDebug: RadianceCacheScreenViewName | null;
     atlas: AtlasName | null;
     atlasFill: boolean;
     atlasEv: number;
@@ -119,6 +126,7 @@ export const DEFAULT_URL_STATE: ViewerUrlState = {
     probes: false,
     probeColor: 'state',
     debug: null,
+    rcDebug: null,
     atlas: null,
     atlasFill: false,
     atlasEv: 0,
@@ -131,10 +139,10 @@ export const DEFAULT_URL_STATE: ViewerUrlState = {
 };
 
 /** The link's own names; any other name is a scene setting. */
-const URL_KEYS = new Set(['scene', 'camera', 'cam', 'technique', 'gi', 'wipe', 'split', 'ev', 'tone', 'nav', 'upscale', 'budget', 'probes', 'debug', 'probecolor', 'atlas', 'atlasfill', 'atlasev', 'change', 'groups', 'tod', 'motion', 'reach']);
+const URL_KEYS = new Set(['scene', 'camera', 'cam', 'technique', 'gi', 'wipe', 'split', 'ev', 'tone', 'nav', 'upscale', 'budget', 'probes', 'debug', 'rcdebug', 'probecolor', 'atlas', 'atlasfill', 'atlasev', 'change', 'groups', 'tod', 'motion', 'reach']);
 
-const TECHNIQUES: readonly TechniqueId[] = ['none', 'ddgi', 'lpg', 'vxgi', 'cycles'];
-const GI_TECHNIQUES: readonly GiTechniqueId[] = ['ddgi', 'lpg', 'vxgi'];
+const TECHNIQUES: readonly TechniqueId[] = ['none', 'ddgi', 'rc', 'lpg', 'vxgi', 'cycles'];
+const GI_TECHNIQUES: readonly GiTechniqueId[] = ['ddgi', 'rc', 'lpg', 'vxgi'];
 const UPSCALE_QUALITIES: readonly UpscaleQuality[] = ['native-aa', 'quality', 'balanced', 'performance', 'ultra-performance'];
 
 function asTechnique(value: string | undefined): TechniqueId | null {
@@ -186,6 +194,7 @@ export function parseUrlState(search: string): ViewerUrlState {
     if (budget !== null) state.budgetMs = Math.min(MAX_BUDGET_MS, Math.max(MIN_BUDGET_MS, budget));
     state.probes = params.get('probes') === '1';
     state.debug = DDGI_SCREEN_VIEW_NAMES.find((name) => name === params.get('debug')) ?? null;
+    state.rcDebug = RADIANCE_CACHE_SCREEN_VIEW_NAMES.find((name) => name === params.get('rcdebug')) ?? null;
     if (params.get('probecolor') === 'history') state.probeColor = 'history';
     state.atlas = ATLAS_NAMES.find((name) => name === params.get('atlas')) ?? null;
     state.atlasFill = params.get('atlasfill') === '1';
@@ -226,6 +235,7 @@ export function serializeUrlState(state: ViewerUrlState): string {
     if (state.budgetMs !== DEFAULT_BUDGET_MS) params.set('budget', String(state.budgetMs));
     if (state.probes) params.set('probes', '1');
     if (state.debug) params.set('debug', state.debug);
+    if (state.rcDebug) params.set('rcdebug', state.rcDebug);
     if (state.probeColor !== DEFAULT_URL_STATE.probeColor) params.set('probecolor', state.probeColor);
     if (state.atlas) params.set('atlas', state.atlas);
     if (state.atlasFill) params.set('atlasfill', '1');

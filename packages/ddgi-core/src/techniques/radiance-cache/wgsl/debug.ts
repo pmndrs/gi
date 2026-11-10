@@ -14,12 +14,15 @@
  *   Tiles with no probe this frame are a dark checkerboard.
  * - **Probe mask:** a tile with a probe gets a colour of its own (from its
  *   seed) and its seed pixel is white; a tile without one is black.
- * - **SH:** the irradiance of the pixel's probe tile's SH along the pixel's
- *   normal, divided by π (what a white diffuse surface would reflect),
- *   tone-mapped like the atlas.
+ * - **SH:** the irradiance from the SH of the probe nearest the pixel
+ *   (Capsaicin's `FindClosestProbe` over the mask's mips: the tile's own
+ *   probe, else one up the chain) along the pixel's normal, divided by π
+ *   (what a white diffuse surface would reflect), tone-mapped like the atlas.
+ *   No interpolation: each probe's SH shows as it is, so a wrong SH stands out.
  */
 
 import { CAPSAICIN_WGSL } from './capsaicin.ts';
+import { findClosestProbeWgsl } from './screen-irradiance.ts';
 import { shIrradianceWgsl, SPHERICAL_HARMONICS_WGSL } from './spherical-harmonics.ts';
 
 /** The views `RadianceCacheTechnique.encodeDebugView` draws. */
@@ -77,6 +80,7 @@ const RC_DEBUG_SH: u32 = ${RADIANCE_CACHE_DEBUG_VIEW.sphericalHarmonics}u;
 const RC_DEBUG_INV_PI: f32 = 0.318309886183791;
 
 ${shIrradianceWgsl('rcDebugSHIrradiance', 'probeSH')}
+${findClosestProbeWgsl('rcDebugFindClosestProbe', 'probeMask')}
 
 // A display colour: Reinhard tone mapping, then an approximate sRGB curve.
 fn rcDebugDisplay(radiance: vec3f) -> vec3f {
@@ -96,17 +100,26 @@ fn ${DEBUG_ENTRY_POINT}(@builtin(global_invocation_id) id: vec3u) {
         return;
     }
     let tile = id.xy / RC_PROBE_SIZE;
-    let packedSeed = textureLoad(rcProbeMask, tile, 0).x;
+    // The tile's own probe (atlas, mask), or for the SH view the nearest one.
+    var packedSeed = textureLoad(rcProbeMask, tile, 0).x;
+    let stored = textureLoad(rcNormal, id.xy, 0).xyz;
+    let decoded = select(stored, 2.0 * stored - 1.0, rcDebug.normalUnorm != 0u);
+    if (rcDebug.view == RC_DEBUG_SH) {
+        packedSeed = rcDebugFindClosestProbe(id.xy, rcProbeMask);
+        // A pixel with no surface (the screen's normal is zero there) gets the checkerboard.
+        if (dot(decoded, decoded) == 0.0) {
+            packedSeed = RC_INVALID_ID;
+        }
+    }
     var colour: vec3f;
     if (packedSeed == RC_INVALID_ID) {
-        // No probe in this tile this frame: a dark checkerboard by tile.
+        // No probe: a dark checkerboard by tile.
         colour = select(vec3f(0.02), vec3f(0.06), ((tile.x + tile.y) & 1u) == 0u);
     } else if (rcDebug.view == RC_DEBUG_PROBE_ATLAS) {
         colour = rcDebugDisplay(textureLoad(rcProbeBuffer, id.xy, 0).rgb);
     } else if (rcDebug.view == RC_DEBUG_SH) {
-        let stored = textureLoad(rcNormal, id.xy, 0).xyz;
-        let normal = normalize(select(stored, 2.0 * stored - 1.0, rcDebug.normalUnorm != 0u));
-        colour = rcDebugDisplay(rcDebugSHIrradiance(normal, 1.0, tile, rcProbeSH) * RC_DEBUG_INV_PI);
+        let probe = rcUnpackSeed(packedSeed) / RC_PROBE_SIZE;
+        colour = rcDebugDisplay(rcDebugSHIrradiance(normalize(decoded), 1.0, probe, rcProbeSH) * RC_DEBUG_INV_PI);
     } else {
         colour = select(rcDebugSeedColour(packedSeed), vec3f(1.0), all(rcUnpackSeed(packedSeed) == id.xy));
     }
