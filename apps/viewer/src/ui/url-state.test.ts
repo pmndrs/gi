@@ -54,6 +54,14 @@ describe('url state', () => {
         expect(serializeUrlState({ ...DEFAULT_URL_STATE, ev: 0 })).toBe('ev=0');
     });
 
+    it('reads warmup=0 (DDGI starts without its warm-up) and round-trips it', () => {
+        expect(parseUrlState('').warmUp).toBe(true);
+        const state = parseUrlState('?scene=sponza&warmup=0');
+        expect(state.warmUp).toBe(false);
+        expect(serializeUrlState(state)).toBe('scene=sponza&warmup=0');
+        expect(parseUrlState(serializeUrlState(state))).toEqual(state);
+    });
+
     it("reads DDGI's debug views and round-trips them", () => {
         const state = parseUrlState('?probes=1&probecolor=history&atlas=irradiance&atlasfill=1&atlasev=2.5&change=0.25&gi=only');
         expect(state).toMatchObject({ probes: true, probeColor: 'history', atlas: 'irradiance', atlasFill: true, atlasEv: 2.5, change: 0.25, gi: 'only' });

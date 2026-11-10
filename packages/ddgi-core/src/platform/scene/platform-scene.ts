@@ -50,7 +50,7 @@ import type {
     UvMapping,
 } from '../contract/scene.ts';
 import { PlatformTextureStore, type TextureLayerRequest, type TextureLayerResults, type TextureLayerStore } from '../textures/texture-store.ts';
-import type { SceneChanges, SceneCopy } from '../contract/scene-copy.ts';
+import type { SceneChanges, SceneCopy, SceneFingerprint } from '../contract/scene-copy.ts';
 import type { GpuTimerScope } from '../contract/timing.ts';
 import type { BindingSlot, WgslModule } from '../contract/wgsl.ts';
 import { invertAffineInto } from '../trace/top-level.ts';
@@ -86,6 +86,16 @@ import { RangeAllocator } from './range-allocator.ts';
 import { SlotAllocator } from './slot-allocator.ts';
 import { TableMirror } from './table-mirror.ts';
 import { SCENE_MODULE_ENTRIES, sceneModuleWgsl } from './wgsl.ts';
+import {
+    ContentHasher,
+    environmentHash,
+    FINGERPRINT_VERSION,
+    lightHash,
+    materialHash,
+    meshContentHash,
+    textureContentHash,
+    unorderedDigest,
+} from './scene-fingerprint.ts';
 
 /** Starting sizes. Every table doubles when it fills; none of this is a hard limit. */
 export interface SceneCapacities {
@@ -259,6 +269,8 @@ interface MeshEntry {
     readonly instances: Set<InstanceEntry>;
     /** For a mesh created `deforming`: its poses (deformed-positions.ts); null for the others. */
     deform: DeformState | null;
+    /** Its content hash for the scene fingerprint (scene-fingerprint.ts), made at create or update: no CPU copy of the geometry is kept. */
+    contentHash: string;
 }
 
 /**
@@ -279,6 +291,8 @@ interface TextureEntry {
     state: TextureState;
     /** Material texture references to it (a material using it twice counts twice). */
     users: number;
+    /** Its content hash for the scene fingerprint (scene-fingerprint.ts), made at create: the source is dropped once its layer is made. */
+    readonly contentHash: string;
 }
 
 interface MaterialEntry {
@@ -504,6 +518,48 @@ export class PlatformScene implements SceneApi, SceneCopy {
     }
 
     /**
+     * The scene's content fingerprint now (`SceneCopy.fingerprint`;
+     * scene-fingerprint.ts says what each part covers). Instances that don't
+     * contribute to GI are left out: rays never see them.
+     */
+    fingerprint(): SceneFingerprint {
+        const textureHash = (handle: number): string | null => this.textures.get(handle)?.contentHash ?? null;
+        const materialHashes = new Map<MaterialEntry, string>();
+        const hashOf = (material: MaterialEntry): string => {
+            let hash = materialHashes.get(material);
+            if (hash === undefined) {
+                hash = materialHash(material.descriptor, textureHash);
+                materialHashes.set(material, hash);
+            }
+            return hash;
+        };
+        const geometry: string[] = [];
+        const materials: string[] = [];
+        const textures = new Set<string>();
+        for (const instance of this.instances.values()) {
+            if (!instance.contributesToGi) continue;
+            const placed = new ContentHasher().string(instance.mesh.contentHash).word(instance.visible ? 1 : 0);
+            for (const value of this.transforms.matrix(instance.slot)) placed.number(value);
+            geometry.push(placed.digest());
+            // In slot order: the same materials on other slots shade other triangles.
+            const list = new ContentHasher().word(instance.materials.length);
+            for (const material of instance.materials) list.string(hashOf(material));
+            materials.push(list.digest());
+            for (const material of instance.materials) {
+                for (const texture of [material.albedoTexture, material.emissiveTexture, material.metalnessTexture]) if (texture) textures.add(texture.contentHash);
+            }
+        }
+        return {
+            version: FINGERPRINT_VERSION,
+            geometry: unorderedDigest(geometry),
+            materials: unorderedDigest(materials),
+            textures: unorderedDigest([...textures]),
+            lights: unorderedDigest(this.lights.map((light) => lightHash(light.descriptor))),
+            sky: environmentHash(this.environmentDescriptor),
+        };
+    }
+
+    /**
      * How many times `setEnvironment` has been called. Hit shading re-projects
      * the sky when this changes, so calling `setEnvironment` again with the
      * same object (after changing its texture's contents) re-projects it (T1.4).
@@ -663,6 +719,7 @@ export class PlatformScene implements SceneApi, SceneCopy {
             vertexOffset: -1,
             instances: new Set(),
             deform,
+            contentHash: meshContentHash(descriptor),
         };
         this.meshes.set(handle, entry);
         this.pendingMeshes.add(entry);
@@ -683,6 +740,7 @@ export class PlatformScene implements SceneApi, SceneCopy {
         this.triangleTotal += layout.triangleCount - entry.layout.triangleCount;
         entry.layout = layout;
         entry.pending = pending;
+        entry.contentHash = meshContentHash(descriptor);
         // A new shape replaces any pose still waiting: it may not even have the same vertex count.
         entry.deform = deform;
         this.posesWaiting.delete(entry);
@@ -771,7 +829,16 @@ export class PlatformScene implements SceneApi, SceneCopy {
         this.checkLive();
         if (!descriptor || !descriptor.source) throw new TypeError('@pmndrs/ddgi: a texture needs a source');
         const handle = this.nextHandle++ as TextureHandle;
-        const entry: TextureEntry = { handle, slot: this.textureSlots.take(), srgb: descriptor.srgb, label: descriptor.label, source: descriptor.source, state: 'pending', users: 0 };
+        const entry: TextureEntry = {
+            handle,
+            slot: this.textureSlots.take(),
+            srgb: descriptor.srgb,
+            label: descriptor.label,
+            source: descriptor.source,
+            state: 'pending',
+            users: 0,
+            contentHash: textureContentHash(descriptor.source, descriptor.srgb),
+        };
         this.textures.set(handle, entry);
         this.pendingTextures.add(entry);
         return handle;

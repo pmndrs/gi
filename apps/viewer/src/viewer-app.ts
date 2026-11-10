@@ -57,6 +57,19 @@ export interface ViewerAutomationState {
     motion: { id: string; seconds: number } | null;
     /** GPU programs the GI library compiled while ready (should stay 0), or null without DDGI. */
     recompiles: number | null;
+    /**
+     * Saved bakes (the panel's "Save the probes to a file" and "Load probes
+     * from a file"): the last file saved (its name and size), the last one
+     * loaded (stale or not, and which parts of the scene changed), the bakes
+     * the running DDGI has loaded, and the last error. Null fields until then.
+     */
+    bake: {
+        /** `ms`: wall time of the save (the readback and the scene fingerprint) or of the load call. */
+        saved: { file: string; bytes: number; ms: number } | null;
+        loaded: { file: string; stale: boolean; changedParts: readonly string[]; ms: number } | null;
+        bakesLoaded: number;
+        error: string | null;
+    };
 }
 
 declare global {
@@ -125,7 +138,10 @@ export class ViewerApp {
         scenario: null,
         motion: null,
         recompiles: null,
+        bake: { saved: null, loaded: null, bakesLoaded: 0, error: null },
     };
+    /** What the last bake save or load did, for the panel's status lines (plain words); null before any. */
+    private bakeMessage: string | null = null;
 
     private core!: ViewerCore;
     private rig!: CameraRig;
@@ -345,11 +361,76 @@ export class ViewerApp {
         this.scheduleUrlUpdate();
     }
 
+    /**
+     * "Save the probes to a file": DDGI's probes as a `.ddgibake` file, which
+     * the browser downloads, named after the scene.
+     */
+    private async saveBake(): Promise<void> {
+        const ddgi = this.core.ddgi;
+        if (!ddgi || !this.manifest) {
+            this.bakeMessage = 'Saving needs DDGI on screen.';
+            return;
+        }
+        try {
+            const startedAt = performance.now();
+            const bytes = await ddgi.saveBake();
+            const ms = performance.now() - startedAt;
+            const file = `${this.manifest.id}.ddgibake`;
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(new Blob([bytes], { type: 'application/octet-stream' }));
+            link.download = file;
+            link.click();
+            // The download has its own copy once it starts.
+            setTimeout(() => URL.revokeObjectURL(link.href), 60_000);
+            this.bakeMessage = `Saved the probes to ${file} (${(bytes.byteLength / 1e6).toFixed(1)} MB).`;
+            this.automation.bake.saved = { file, bytes: bytes.byteLength, ms };
+            this.automation.bake.error = null;
+        } catch (error) {
+            this.bakeFailed(`Couldn't save the probes: ${error instanceof Error ? error.message : String(error)}`);
+        }
+    }
+
+    /**
+     * "Load probes from a file" (or a dropped file): the probes from a
+     * `.ddgibake` file in place of DDGI's own, from the next frame. A file of
+     * a changed scene loads as a starting point; one that doesn't fit is
+     * refused, and the status says why.
+     */
+    private async loadBake(file: File): Promise<void> {
+        const ddgi = this.core.ddgi;
+        if (!ddgi) {
+            this.bakeFailed('Loading probes needs DDGI on screen.');
+            return;
+        }
+        try {
+            const contents = await file.arrayBuffer();
+            const startedAt = performance.now();
+            const loaded = ddgi.loadBake(contents);
+            const ms = performance.now() - startedAt;
+            const saved = new Date(loaded.savedAt).toLocaleString('en-GB');
+            this.bakeMessage = loaded.stale
+                ? `Loaded probes from ${file.name} (saved ${saved}). The scene changed since (${loaded.changedParts.join(', ')}), so they are updating from there.`
+                : `Loaded probes from ${file.name} (saved ${saved}).`;
+            this.automation.bake.loaded = { file: file.name, stale: loaded.stale, changedParts: loaded.changedParts, ms };
+            this.automation.bake.error = null;
+        } catch (error) {
+            this.bakeFailed(`Couldn't load ${file.name}: ${error instanceof Error ? error.message.replace(/^@pmndrs\/ddgi: /, '') : String(error)}`);
+        }
+    }
+
+    /** A save or load that failed: said in the status, and kept for automated runs (not a console error: it is the user's file). */
+    private bakeFailed(message: string): void {
+        this.bakeMessage = message;
+        this.automation.bake.error = message;
+        console.warn(message);
+    }
+
     /** DDGI's settings from the link and the lighting controls. */
     private ddgiSettings(): DdgiViewerSettings {
         return {
             preset: this.url.preset,
             budgetMs: this.url.budgetMs,
+            warmUp: this.url.warmUp,
             showProbes: this.url.probes,
             probeColor: this.url.probeColor,
             screenView: this.url.debug,
@@ -481,6 +562,8 @@ export class ViewerApp {
                     giTextures: settings.giTextures,
                 }),
             onDdgiRestart: () => this.core.restartDdgi(),
+            onDdgiSaveBake: () => void this.saveBake(),
+            onDdgiLoadBake: (file: File) => void this.loadBake(file),
             onCompareWithReference: () => {
                 // Go to the reference's own shot: camera, aspect, exposure and tone mapping.
                 this.pendingShot = { display: true };
@@ -684,6 +767,16 @@ export class ViewerApp {
         }).observe(this.canvas);
         // A letterboxed canvas has a fixed size, so the observer above wouldn't see the window change.
         window.addEventListener('resize', () => this.applyLetterbox());
+        // A .ddgibake file dropped onto the page loads as the panel's "Load probes from a file" does.
+        window.addEventListener('dragover', (event) => {
+            if (event.dataTransfer?.types.includes('Files')) event.preventDefault();
+        });
+        window.addEventListener('drop', (event) => {
+            const file = event.dataTransfer?.files[0];
+            if (!file || !file.name.endsWith('.ddgibake')) return;
+            event.preventDefault();
+            void this.loadBake(file);
+        });
         window.addEventListener('keydown', (event) => {
             const typing = event.target instanceof HTMLElement && ['INPUT', 'SELECT', 'TEXTAREA'].includes(event.target.tagName);
             if (event.code === 'KeyH' && !typing && !event.ctrlKey && !event.metaKey) this.setPanelHidden(!this.panel.hidden);
@@ -874,6 +967,8 @@ export class ViewerApp {
         if (now - this.lastStatusAt < 200 || !this.core.loaded) return;
         this.lastStatusAt = now;
         const lines = this.core.statusLines();
+        if (this.bakeMessage) lines.push(this.bakeMessage);
+        this.automation.bake.bakesLoaded = this.core.ddgi?.bakesLoaded ?? 0;
         const { stats } = this.core.loaded;
         lines.push(`${stats.triangles.toLocaleString('en')} triangles, ${stats.meshes} meshes`);
         this.panel.setStatus(lines);

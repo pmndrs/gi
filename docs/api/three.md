@@ -102,6 +102,8 @@ renderer.setAnimationLoop(() => pipeline.render());
 | `light` | Settings for the GI light. |
 | `warmUp` | `false` to skip it (GI then fills in live), or `{ passes, maxSeconds, minPasses, calibrate }`. |
 | `camera` | The camera the warm-up runs with, read each frame; default one at the volume's centre. Pass the camera you render with when `ddgi.volumes` has a camera-following volume, so its window warms up where the camera is (otherwise it jumps there afterwards and warms up again). `restart` takes it too. |
+| `bake` | A saved bake (below) to start from instead of warming up. |
+| `bakeIfSceneChanged` | `'load stale'` (default) or `'refuse'`, for a bake saved before the scene changed. |
 | `warn` | Where warnings go. |
 
 **Quality presets** (T5.1; the table and what each costs is in [platform.md, "Quality presets"](platform.md#quality-presets)). One word sets the rays per probe, the probe tiles, the budget and the size of GI's copy of the textures. A volume made without probe counts also takes the preset's spacing (2 m for `low`); counts you give are kept. `budget` and `ddgi` still win over the preset:
@@ -129,6 +131,22 @@ Other members:
 - `volume.light` is the GI light (`ddgi()` reads it).
 - `await volume.exportLightProbeGrid()` gives a snapshot of the GI as three's `LightProbeGrid` ("Exporting a `LightProbeGrid`" below).
 - `volume.dispose()` removes the GI light and frees the platform.
+
+**Saved bakes** (T5.2). Save what the probes have learned and start from it later, so a page opens with finished GI and keeps updating from there:
+
+```ts
+const bytes = await volume.saveBake();          // a .ddgibake file's bytes (one GPU readback, here only)
+// ...later, on a fresh page with the same scene and settings:
+await volume.start(renderer, scene, { bake: bytes });   // no warm-up passes
+// or into GI that is already running:
+const loaded = volume.loadBake(bytes);          // { stale, changedParts, savedAt, library }
+```
+
+- The file is engine-neutral (ddgi-core's `DDGITechnique.saveField` / `loadField`, platform.md "Saved bakes"), so it doesn't depend on three.
+- It loads only into a volume with the same layout: the same probe grid and place, tile sizes, light groups and sun layer, and camera-following volumes. Anything else throws `SavedFieldError` (from `@pmndrs/ddgi/core`) with a message naming what differs.
+- The file records a fingerprint of the scene it was baked for. If the scene changed since (an object, a material, a texture, a light, the sky), it loads anyway as a starting point: `loaded.stale` is true, `loaded.changedParts` says which parts changed, and every probe updates from the loaded light. `{ ifSceneChanged: 'refuse' }` (`bakeIfSceneChanged` for `start`) throws instead.
+- With `start(..., { bake })`, `volume.loadedBake` says what was loaded. `start` still waits for the ray-tracing trees and calibrates the budget; it only skips the warm-up passes.
+- Images the CPU can't read cheaply (`ImageBitmap`, which `GLTFLoader` gives) count in the fingerprint by their size and colour space, not their pixels, so a repainted image of the same size isn't noticed.
 
 `volume.ddgiVolume()` gives the matching DDGI settings, for building a platform by hand:
 

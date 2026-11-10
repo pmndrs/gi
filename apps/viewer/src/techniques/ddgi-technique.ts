@@ -52,6 +52,7 @@ import {
     type DDGIPresetName,
     type DDGITechnique,
     type DDGIVolumeSettings,
+    type LoadedField,
     type DebugView,
     type EnvironmentDescriptor,
     type FrameBudget,
@@ -105,6 +106,8 @@ export interface DdgiViewerSettings {
     preset: DDGIPresetName;
     /** GPU milliseconds per frame for probe updates. */
     budgetMs: number;
+    /** The technique's warm-up before GI shows (off: the probes fill in live from black). Read when DDGI starts. */
+    warmUp: boolean;
     /**
      * Light groups with a layer of their own, 0 (off) to 4 (T2.5). Changing it
      * starts DDGI over: the layers are made when it starts (`layerKey`).
@@ -156,6 +159,7 @@ export const WHITE_WEIGHT: GroupWeight = { color: [1, 1, 1], intensity: 1 };
 export const DEFAULT_DDGI_VIEWER_SETTINGS: DdgiViewerSettings = {
     preset: 'high',
     budgetMs: 2,
+    warmUp: true,
     lightGroups: 0,
     sunLayer: false,
     cameraVolume: false,
@@ -324,6 +328,7 @@ export class DdgiTechnique extends ScenePassTechnique {
             // Rays, tile sizes and the texture store; the manifest's spacing and the panel's budget stay.
             preset: this.settings.preset,
             budget: this.budget,
+            ...(this.settings.warmUp ? {} : { warmUp: false }),
             ddgi: {
                 // The weights are set once the technique exists (`applyGroupWeights`); they are live.
                 lightGroups: this.settings.lightGroups > 0 ? { count: this.settings.lightGroups, weights: [], environmentWeight: [1, 1, 1] } : null,
@@ -567,6 +572,33 @@ export class DdgiTechnique extends ScenePassTechnique {
     encodePrepareStep(): boolean {
         if (this.startup.firstGiMs === null && this.warmupPasses > 0) this.startup.firstGiMs = performance.now() - this.createdAt;
         return this.ready;
+    }
+
+    /**
+     * Saves the probes as a `.ddgibake` file's bytes (`GIVolume.saveBake`):
+     * one GPU readback. Only once DDGI is running (warm), so the file holds
+     * converged probes.
+     */
+    saveBake(): Promise<Uint8Array<ArrayBuffer>> {
+        if (this.phase !== 'ready') return Promise.reject(new Error('DDGI is still starting; save the probes once they are warm.'));
+        return this.volume.saveBake();
+    }
+
+    /**
+     * Loads a `.ddgibake` file into the running probes (`GIVolume.loadBake`):
+     * from the next frame the picture shows the loaded probes, which keep
+     * updating. Throws (with a message that says why) for a file that isn't
+     * a bake or doesn't fit this scene's probes; a bake of a changed scene
+     * loads as stale.
+     */
+    loadBake(bytes: ArrayBuffer): LoadedField {
+        if (this.phase !== 'ready') throw new Error('DDGI is still starting; load the probes once it is running.');
+        return this.volume.loadBake(bytes);
+    }
+
+    /** Saved bakes loaded into this DDGI (its technique's counter), for automated runs. */
+    get bakesLoaded(): number {
+        return this.ddgi?.counters['saved fields loaded'] ?? 0;
     }
 
     /** "Start the probes over": forget the field and the calibration, and warm up again (`GIVolume.restart`). */

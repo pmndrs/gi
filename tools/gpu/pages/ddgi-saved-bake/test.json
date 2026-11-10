@@ -1,0 +1,4 @@
+{
+    "description": "T5.2: saved bakes. Cornell and two-room (and two-room with a camera-following volume): a converged field saved, loaded into a fresh platform (first-frame view mean within 1%, no warm-up pass, recompiles 0), a layout mismatch refused by name, and a changed scene loaded as stale that settles within the usual response.",
+    "timeoutMs": 900000
+}

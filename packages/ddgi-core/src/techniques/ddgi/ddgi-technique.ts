@@ -76,9 +76,11 @@ import type { DirectWorkList, RayScratch } from '../../platform/contract/shade.t
 import type { ColorRGB } from '../../platform/contract/math.ts';
 import type { LightHandle } from '../../platform/contract/handles.ts';
 import type { DirectionalLightDescriptor } from '../../platform/contract/scene.ts';
+import type { SceneChanges } from '../../platform/contract/scene-copy.ts';
 import type { ComputeKernel } from '../../platform/contract/wgsl.ts';
 import { GILimitError } from '../../platform/contract/errors.ts';
 import {
+    BYTES_PER_TEXEL,
     CENSUS_CHANGE_CLOCK,
     CENSUS_DIRECT_DROPPED,
     CENSUS_DIRECT_HITS,
@@ -124,6 +126,7 @@ import {
     UNIFORM_BYTES,
     UNIFORM_WORD,
     UNIFORM_WORDS,
+    type AtlasSize,
     type DistanceFormat,
     type FieldLayout,
     type ScratchLayout,
@@ -199,6 +202,28 @@ import { PROPAGATE_ENTRY_POINTS, PROPAGATE_FIND_WORKGROUP_SIZE, propagateKernelW
 import { SCHEDULE_ENTRY_POINTS, SCHEDULE_WORKGROUP_SIZE, scheduleKernelWgsl } from './wgsl/schedule.ts';
 import { DDGI_DEBUG_VIEW } from './wgsl/shading.ts';
 import { WRITE_ENTRY_POINTS, writeKernelWgsl } from './wgsl/write.ts';
+import { fingerprintDifferences } from '../../platform/scene/scene-fingerprint.ts';
+import {
+    alignUp,
+    convertDistanceTexels,
+    decodeSavedField,
+    encodeSavedField,
+    fileBytes,
+    layoutMismatch,
+    readProbeDataTexel,
+    SAVED_FIELD_WRITER,
+    SavedFieldError,
+    SECTION,
+    settleProbeHistory,
+    unpadRows,
+    type FileBytes,
+    type SavedCameraWindow,
+    type SavedFieldLayout,
+    type SectionData,
+} from './saved-field.ts';
+
+/** A frame's changes when there are none to mark (the frame after `loadField`). */
+const NO_CHANGES: SceneChanges = { regions: [], global: [], receivers: [], lights: [], lightsOverflowed: false };
 
 /** WebGPU usage bits; the globals don't exist in Node, where tests import this file. */
 const BUFFER_USAGE = { mapRead: 0x1, copySrc: 0x4, copyDst: 0x8, uniform: 0x40, storage: 0x80 } as const;
@@ -251,6 +276,29 @@ export interface DDGITechniqueOptions {
 
 /** Where DDGI computes direct light (DDGITechniqueOptions.directLight). */
 export type DirectLightPath = 'deferred' | 'inline';
+
+/** Options for {@link DDGITechnique.loadField}. */
+export interface LoadFieldOptions {
+    /**
+     * What to do with a field saved for a scene that changed since
+     * (its scene fingerprint differs): `load stale` (the default) loads it
+     * anyway as a starting point and marks every probe changed, so the field
+     * updates from the loaded values instead of from black; `refuse` throws
+     * a `SavedFieldError` that names what changed.
+     */
+    readonly ifSceneChanged?: 'load stale' | 'refuse';
+}
+
+/** What {@link DDGITechnique.loadField} loaded. */
+export interface LoadedField {
+    /** The scene changed since the field was saved: it loaded as a starting point and every probe is updating from it. */
+    readonly stale: boolean;
+    /** Which parts of the scene fingerprint differ (`geometry`, `materials`, `textures`, `lights`, `sky`); empty when not stale. */
+    readonly changedParts: readonly string[];
+    /** When it was saved (ISO 8601), and what saved it. */
+    readonly savedAt: string;
+    readonly library: string;
+}
 
 /** One volume of the field, for test tools (DDGIField.volumes). */
 export interface DDGIFieldVolume {
@@ -498,8 +546,12 @@ interface PropagationResources {
     readonly writeGroup: GPUBindGroup;
 }
 
-/** Where the warm-up is (see the file comment). */
-type WarmUpPhase = 'waiting for trees' | 'warming' | 'done';
+/**
+ * Where the warm-up is (see the file comment). `loaded, waiting for trees`:
+ * a saved field was loaded (`loadField`); no probe work until the trees
+ * are built, as in the warm-up, and then no warm-up passes.
+ */
+type WarmUpPhase = 'waiting for trees' | 'warming' | 'loaded, waiting for trees' | 'done';
 
 const COMPUTE = SHADER_STAGE_COMPUTE;
 const SAMPLED_ARRAY = { sampleType: 'float', viewDimension: '2d-array' } as const;
@@ -745,6 +797,25 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
      * becoming another light (mark-table.ts, `SunLayerMarks`).
      */
     private sunInLayer: LightHandle | null = null;
+    /**
+     * A stale saved field was loaded (`loadField`): the first frame that
+     * updates probes marks every probe as a whole change. Not before: a frame
+     * with no probe updates (the trees still building) would judge the
+     * change by a batch of 0, as if the volume were too big for every probe's
+     * updates, and send it down the key-probe path (`changeServing`).
+     */
+    private staleMarkPending = false;
+    /**
+     * The next frame doesn't mark the scene changes it brings: a saved field
+     * was just loaded, and the scene it was checked against (its
+     * fingerprint, at the load) already holds them. On a fresh platform they
+     * are the scene's own creation, every object and light added, which
+     * would otherwise cut every loaded history as a change.
+     */
+    private loadedChangesPending = false;
+    /** Saved fields loaded since `prepare`, and whether the latest was stale (counters). */
+    private fieldsLoaded = 0;
+    private latestLoadStale = false;
     private disposed = false;
 
     constructor(settings: DDGISettingsInput, options: DDGITechniqueOptions = {}) {
@@ -983,9 +1054,10 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
             });
         // Shared by every volume (volumes.ts). The layers side by side (one block with groups off), and the composed atlas
         // renderers sample when there are several.
-        const irradiance = arrayTexture(layerCount > 1 ? 'irradiance layers' : 'irradiance', layout.layeredIrradiance, IRRADIANCE_FORMAT);
+        // COPY_DST on the atlases a saved field is written into (loadField, saved-field.ts).
+        const irradiance = arrayTexture(layerCount > 1 ? 'irradiance layers' : 'irradiance', layout.layeredIrradiance, IRRADIANCE_FORMAT, TEXTURE_USAGE.copyDst);
         const composed = plan.composed ? arrayTexture('composed irradiance', layout.irradiance, IRRADIANCE_FORMAT) : null;
-        const distance = arrayTexture('distance', layout.distance, layout.distanceFormat);
+        const distance = arrayTexture('distance', layout.distance, layout.distanceFormat, TEXTURE_USAGE.copyDst);
         const probeData = arrayTexture('probe data', layout.probeData, PROBE_DATA_FORMAT, TEXTURE_USAGE.copyDst);
         const pointsTexture = device.createTexture({ label: 'ddgi points', size: points, format: 'rgba32float', usage: atlasUsage | TEXTURE_USAGE.copyDst });
         const movers = device.createBuffer({ label: 'ddgi movers', size: MOVER_TABLE_WORDS * 4, usage: BUFFER_USAGE.uniform | BUFFER_USAGE.copyDst });
@@ -1058,6 +1130,10 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         this.fullComposeFrames = 0;
         // The field is new, so the sun layer holds nothing yet to be wrong about.
         this.sunInLayer = context.scene.firstDirectionalLight?.light ?? null;
+        this.staleMarkPending = false;
+        this.loadedChangesPending = false;
+        this.fieldsLoaded = 0;
+        this.latestLoadStale = false;
         this.startWarmUp();
         this.markAllNotUpdated();
     }
@@ -1415,12 +1491,16 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
     /**
      * True from `prepare` (and `resetHistory`) until the warm-up is done: the
      * technique is waiting for the ray-tracing trees or making its warm-up
-     * passes, and ignores the frame's budget. The platform leaves these
+     * passes, and ignores the frame's budget. After `loadField`, true while
+     * it waits for the trees (no passes follow). The platform leaves these
      * frames out of the budget's calibration. Always false with
      * `warmUpPasses` 0.
      */
     get warmingUp(): boolean {
-        return this.firstVolume !== null && this.warmUp.phase !== 'done';
+        if (this.firstVolume === null || this.warmUp.phase === 'done') return false;
+        // A loaded field is warm: it only waits for the trees, so the platform hands out probes in the frame they arrive.
+        if (this.warmUp.phase === 'loaded, waiting for trees') return this.context?.queries.rays.building ?? true;
+        return true;
     }
 
     /**
@@ -1445,8 +1525,11 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
             this.frameTimes.push(frame.deltaTime);
             if (this.frameTimes.length > SWEEP_FRAME_TIMES) this.frameTimes.shift();
         }
+        // After a load, this frame's changes are the loaded scene's own (loadedChangesPending): nothing to mark.
+        const changes = this.loadedChangesPending ? NO_CHANGES : frame.changes;
+        this.loadedChangesPending = false;
         // The hot movers follow this frame's moves first, so a mover's mask bit is known in the frame it moves.
-        this.movers.update(frame.changes, frame.frame);
+        this.movers.update(changes, frame.frame);
         if (this.movers.dirty) {
             context.device.queue.writeBuffer(first.movers, 0, this.movers.words);
             this.movers.dirty = false;
@@ -1467,16 +1550,18 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
 
         // Each volume its floor and its share of the rest, so each is swept at the same rate (frameShares).
         const shares = this.frameShares(frame.units);
+        const markStale = this.staleMarkPending && this.warmUp.phase === 'done' && shares.every((share) => share.units > 0);
         const marks = { frames: 0, entries: 0 };
         let used = 0;
         volumes.forEach((volume, index) => {
             const { units, floor } = shares[index];
-            used += this.encodeVolume(encoder, context, volume, frame, { units, floor, sunMarks, sun: sun?.descriptor ?? null, composeAll, marks });
+            used += this.encodeVolume(encoder, context, volume, frame, { changes, markStale, units, floor, sunMarks, sun: sun?.descriptor ?? null, composeAll, marks });
         });
         this.latestMarkEntries = marks.entries;
         if (marks.frames > 0) this.markFrames++;
-        // Every volume has cleared its history by now.
+        // Every volume has cleared its history by now, and marked a stale load's change if this frame was the one.
         this.historyClearPending = false;
+        if (markStale) this.staleMarkPending = false;
         if (this.warmUp.phase === 'warming') this.finishWarmUpPass(volumes);
         return used;
     }
@@ -1492,6 +1577,10 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         resources: PreparedResources,
         frame: TechniqueFrame,
         shared: {
+            /** This frame's changes to mark (none in the frame after a load). */
+            readonly changes: SceneChanges;
+            /** Mark every probe as a whole change: the first updating frame after a stale load. */
+            readonly markStale: boolean;
             readonly units: number;
             /** Budget v2's floor for this volume: the batch while a change is taken in never goes under it. */
             readonly floor: number;
@@ -1509,7 +1598,9 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         // history for each probe's next update.
         // In window probes: the kernel finds each one's slot (wgsl/mark.ts).
         const markTable =
-            this.settings.changeDrivenHistory !== false ? buildMarkTable(frame.changes, windowGrid(resources), this.movers, resources.plan.groupLayers, shared.sunMarks) : null;
+            this.settings.changeDrivenHistory !== false
+                ? buildMarkTable(shared.changes, windowGrid(resources), this.movers, resources.plan.groupLayers, shared.sunMarks, shared.markStale)
+                : null;
         shared.marks.entries += markTable?.entryCount ?? 0;
         state.changeIntake.noteFrame(frame.frame, markTable !== null);
         const raysPerProbe = effectiveRaysPerProbe(this.settings.raysPerProbe);
@@ -1520,7 +1611,7 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         const handOut =
             this.warmUp.phase === 'warming'
                 ? resources.maxProbesPerFrame
-                : this.warmUp.phase === 'waiting for trees'
+                : this.warmUp.phase === 'waiting for trees' || this.warmUp.phase === 'loaded, waiting for trees'
                   ? 0
                   : state.changeIntake.batchFor(
                         offered,
@@ -1788,6 +1879,13 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
     private advanceWarmUp(context: TechniqueContext, probeCount: number): boolean {
         const warmUp = this.warmUp;
         if (warmUp.phase === 'done') return false;
+        // A loaded field waits for the trees whatever warmUpPasses says (rays through a half-built scene would
+        // spoil it), then carries on without warm-up passes.
+        if (warmUp.phase === 'loaded, waiting for trees') {
+            if (context.queries.rays.building) return true;
+            warmUp.phase = 'done';
+            return false;
+        }
         // Nothing to warm (no probes), or switched off meanwhile.
         if (warmUpSettings(this.settings).passes <= 0 || probeCount <= 0) {
             warmUp.phase = 'done';
@@ -1893,6 +1991,9 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
             // The sun layer (T2.6b): 1 when the sun has a layer of its own.
             'sun layer': (first?.plan.sunLayer ?? -1) >= 0 ? 1 : 0,
             'frames composed in full': this.fullComposeFrames,
+            // Saved bakes (T5.2, saved-field.ts): fields loaded since prepare, and 1 when the latest was stale.
+            'saved fields loaded': this.fieldsLoaded,
+            'saved field stale': this.latestLoadStale ? 1 : 0,
             // §4.5's second count (change-intake-batch.ts): 1 while a change is taken in, when the batch may be under the hand-out.
             'taking in a change': volumes.some((volume) => volume.state.changeIntake.takingInChange) ? 1 : 0,
         };
@@ -2061,6 +2162,206 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         }
         this.startWarmUp();
         this.markAllNotUpdated();
+    }
+
+    /**
+     * Saves the field as a `.ddgibake` file (saved-field.ts): the irradiance
+     * atlas with every layer, the distance atlas, the probe data and each
+     * volume's probe history, with a header that says what layout it needs
+     * and which scene it was baked for (`SceneCopy.fingerprint`). Copies the
+     * sections out and reads them back once, in a submit of its own: an
+     * explicit host call, never part of a frame. Save a converged field
+     * (after the warm-up); what a change still being taken in owes is left
+     * out (`settleProbeHistory`).
+     */
+    async saveField(): Promise<Uint8Array<ArrayBuffer>> {
+        const first = this.firstVolume;
+        const context = this.context;
+        if (!first || !context || this.disposed) throw new Error('@pmndrs/ddgi: save the field after prepare (await gi.prepare()), and before dispose');
+        const device = context.device;
+        const fingerprint = context.scene.fingerprint();
+        const staging: GPUBuffer[] = [];
+        const stagingBuffer = (label: string, size: number): GPUBuffer => {
+            const buffer = device.createBuffer({ label: `ddgi save field: ${label}`, size: alignUp(size, 4), usage: BUFFER_USAGE.mapRead | BUFFER_USAGE.copyDst });
+            staging.push(buffer);
+            return buffer;
+        };
+        const encoder = device.createCommandEncoder({ label: 'ddgi save field' });
+        // A texture's rows come back at a 256-byte pitch (NOTES, "Readback"); the file holds them packed.
+        const readAtlas = (label: string, texture: GPUTexture, size: AtlasSize, bytesPerTexel: number) => {
+            const rowBytes = size.width * bytesPerTexel;
+            const paddedRowBytes = alignUp(rowBytes, 256);
+            const buffer = stagingBuffer(label, paddedRowBytes * size.height * size.layers);
+            encoder.copyTextureToBuffer({ texture }, { buffer, bytesPerRow: paddedRowBytes, rowsPerImage: size.height }, { width: size.width, height: size.height, depthOrArrayLayers: size.layers });
+            return { buffer, rowBytes, paddedRowBytes, rows: size.height * size.layers, size };
+        };
+        const { layout } = first;
+        const atlases = {
+            irradiance: readAtlas('irradiance', first.irradiance, layout.layeredIrradiance, PROBE_DATA_TEXEL_BYTES),
+            distance: readAtlas('distance', first.distance, layout.distance, BYTES_PER_TEXEL[layout.distanceFormat]),
+            probeData: readAtlas('probe data', first.probeData, layout.probeData, PROBE_DATA_TEXEL_BYTES),
+        };
+        const histories = this.volumes.map((volume, index) => {
+            const buffer = stagingBuffer(`probe history ${index}`, volume.probeHistory.size);
+            encoder.copyBufferToBuffer(volume.probeHistory, 0, buffer, 0, volume.probeHistory.size);
+            return buffer;
+        });
+        const extents = this.volumes.map((volume, index) => {
+            if (!volume.scroll) return null;
+            const buffer = stagingBuffer(`valid extent ${index}`, SCROLL_EXTENT_BYTES);
+            encoder.copyBufferToBuffer(volume.scroll.extent, 0, buffer, 0, SCROLL_EXTENT_BYTES);
+            return buffer;
+        });
+        device.queue.submit([encoder.finish()]);
+        try {
+            await Promise.all(staging.map((buffer) => buffer.mapAsync(MAP_MODE_READ)));
+            const mapped = (buffer: GPUBuffer): FileBytes => new Uint8Array(buffer.getMappedRange().slice(0));
+            const atlasSection = (name: string, format: string, atlas: (typeof atlases)['irradiance']): SectionData => ({
+                name,
+                format,
+                width: atlas.size.width,
+                height: atlas.size.height,
+                layers: atlas.size.layers,
+                bytes: unpadRows(mapped(atlas.buffer), atlas.rowBytes, atlas.paddedRowBytes, atlas.rows),
+            });
+            const sections: SectionData[] = [
+                atlasSection(SECTION.irradiance, IRRADIANCE_FORMAT, atlases.irradiance),
+                atlasSection(SECTION.distance, layout.distanceFormat, atlases.distance),
+                atlasSection(SECTION.probeData, PROBE_DATA_FORMAT, atlases.probeData),
+                ...histories.map((buffer, index): SectionData => {
+                    const records = new Uint32Array(mapped(buffer).buffer);
+                    settleProbeHistory(records);
+                    return { name: SECTION.probeHistory(index), format: 'probeHistory', bytes: new Uint8Array(records.buffer) };
+                }),
+            ];
+            const cameraWindows = this.volumes.map((volume, index): SavedCameraWindow | null => {
+                const extent = extents[index];
+                if (!volume.scroll || !extent) return null;
+                const floats = new Float32Array(mapped(extent).buffer);
+                const window = volume.scroll.window.window;
+                return { window, validMin: [floats[0], floats[1], floats[2]], validMax: [floats[4], floats[5], floats[6]] };
+            });
+            return encodeSavedField(
+                { library: SAVED_FIELD_WRITER, createdAt: new Date().toISOString(), layout: this.savedLayout(), fingerprint, clockSeconds: this.clockSeconds, cameraWindows },
+                sections,
+            );
+        } finally {
+            for (const buffer of staging) buffer.destroy();
+        }
+    }
+
+    /**
+     * Loads a field saved by {@link saveField} into this one (after
+     * `prepare`): from the next frame renderers read the loaded field, and
+     * the update carries on blending from it with no warm-up passes (it only
+     * waits for the ray-tracing trees, as the warm-up does). Nothing is
+     * compiled or allocated; the sections are written with `queue.write*`,
+     * which land before the host's next submit.
+     *
+     * Throws `SavedFieldError` for a file that isn't a saved field, a format
+     * version this code doesn't read, or a layout that doesn't match this
+     * field's (the message names what differs: tile texels, light-group
+     * layers, a volume's counts, spacing, place, priority or `follow`).
+     * A field saved for a scene that changed since loads as stale (unless
+     * `ifSceneChanged: 'refuse'`): the first frame that updates probes marks
+     * every probe as a whole change, so each is updated at priority from the
+     * loaded values and the field settles as after any big change.
+     *
+     * The scene changes the next frame brings aren't marked: the fingerprint
+     * was checked against the scene with them (on a fresh platform they are
+     * its creation). So load after the scene is described and before the
+     * frame; a change made between the two goes unmarked.
+     *
+     * A camera-following volume's window goes back where it was saved, and
+     * moves on with the camera from there (far from it, that is a teleport
+     * and starts that volume over).
+     */
+    loadField(bytes: Uint8Array | ArrayBuffer, options: LoadFieldOptions = {}): LoadedField {
+        const first = this.firstVolume;
+        const context = this.context;
+        if (!first || !context || this.disposed) throw new Error('@pmndrs/ddgi: load a saved field after prepare (await gi.prepare()), and before dispose');
+        const { header, sections } = decodeSavedField(fileBytes(bytes));
+        const mismatch = layoutMismatch(header.layout, this.savedLayout());
+        if (mismatch) throw new SavedFieldError('layout', `this saved field doesn't fit this DDGI field: ${mismatch}. Load it into a DDGI with the settings it was saved with, or save it again.`);
+        const changedParts = fingerprintDifferences(header.fingerprint, context.scene.fingerprint());
+        const stale = changedParts.length > 0;
+        if (stale && options.ifSceneChanged === 'refuse') {
+            throw new SavedFieldError('scene changed', `this saved field was baked for another scene: its ${changedParts.join(', ')} differ from this one's. Load it with ifSceneChanged: 'load stale' to start from it anyway.`);
+        }
+        if (!Number.isFinite(header.clockSeconds)) throw new SavedFieldError('not a saved field', "this isn't a saved DDGI field (its header has no clock).");
+        const sectionBytes = (name: string, expectedBytes: number): FileBytes => {
+            const found = sections.get(name);
+            if (!found) throw new SavedFieldError('not a saved field', `this saved field has no "${name}" section.`);
+            if (found.bytes.byteLength !== expectedBytes) throw new SavedFieldError('layout', `this saved field's "${name}" section is ${found.bytes.byteLength} bytes; this field needs ${expectedBytes}.`);
+            return found.bytes;
+        };
+        const { layout } = first;
+        const queue = context.device.queue;
+        const atlasBytes = (size: AtlasSize, bytesPerTexel: number): number => size.width * size.height * size.layers * bytesPerTexel;
+        // Read every section before writing any, so a short file changes nothing.
+        const irradiance = sectionBytes(SECTION.irradiance, atlasBytes(layout.layeredIrradiance, PROBE_DATA_TEXEL_BYTES));
+        const savedDistance = sectionBytes(SECTION.distance, atlasBytes(layout.distance, BYTES_PER_TEXEL[header.layout.distanceFormat]));
+        const probeData = sectionBytes(SECTION.probeData, atlasBytes(layout.probeData, PROBE_DATA_TEXEL_BYTES));
+        const histories = this.volumes.map((volume, index) => sectionBytes(SECTION.probeHistory(index), volume.probeHistory.size));
+        const writeAtlas = (texture: GPUTexture, size: AtlasSize, bytesPerTexel: number, data: FileBytes): void =>
+            queue.writeTexture({ texture }, data, { bytesPerRow: size.width * bytesPerTexel, rowsPerImage: size.height }, { width: size.width, height: size.height, depthOrArrayLayers: size.layers });
+        writeAtlas(first.irradiance, layout.layeredIrradiance, PROBE_DATA_TEXEL_BYTES, irradiance);
+        writeAtlas(first.distance, layout.distance, BYTES_PER_TEXEL[layout.distanceFormat], convertDistanceTexels(savedDistance, header.layout.distanceFormat, layout.distanceFormat));
+        writeAtlas(first.probeData, layout.probeData, PROBE_DATA_TEXEL_BYTES, probeData);
+        this.volumes.forEach((volume, index) => {
+            queue.writeBuffer(volume.probeHistory, 0, histories[index]);
+            // Nothing owed or asked for: the history was settled when it was saved.
+            queue.writeBuffer(volume.feedbackRequests, 0, new Uint32Array(volume.grid.probeCount));
+            // The change clock (and the census totals) start again at 0, as the settled history's stamps do.
+            queue.writeBuffer(volume.census, 0, new Uint32Array(CENSUS_WORDS));
+            volume.state.latestCensus = null;
+            volume.state.changeIntake.reset();
+            volume.state.warmUpProbeUpdates = 0;
+            const scroll = volume.scroll;
+            const window = header.cameraWindows?.[index] ?? null;
+            if (scroll && window) {
+                scroll.window.restore(window.window);
+                queue.writeBuffer(scroll.extent, 0, new Float32Array([...window.validMin, 0, ...window.validMax, 0]));
+                scroll.resetEverySlot = false;
+                scroll.extentToTarget = false;
+            } else if (scroll) {
+                throw new SavedFieldError('layout', `this saved field has no window for camera-following volume ${index}; save it again.`);
+            }
+        });
+        this.writePoints(new Uint16Array(probeData.slice().buffer));
+        // The histories hold the time of each probe's last update on the clock they were saved with.
+        this.clockSeconds = header.clockSeconds;
+        this.historyClearPending = false;
+        this.movers.clear();
+        // The composed atlas is rebuilt from the loaded layers in the next frame; the windows may have moved.
+        this.composeAllPending = first.composed !== null;
+        this.volumeTableRows = new Float32Array(0);
+        this.refreshVolumeTable(context, true);
+        this.warmUp = { phase: 'loaded, waiting for trees', startedAt: null };
+        this.staleMarkPending = stale && this.settings.changeDrivenHistory !== false;
+        this.loadedChangesPending = true;
+        this.fieldsLoaded++;
+        this.latestLoadStale = stale;
+        return { stale, changedParts, savedAt: header.createdAt, library: header.library };
+    }
+
+    /** This field's layout as a saved field records it: what a load has to match (saved-field.ts). */
+    private savedLayout(): SavedFieldLayout {
+        const first = this.firstVolume;
+        if (!first) throw new Error('@pmndrs/ddgi: the field has a layout after prepare');
+        return {
+            irradianceTexels: first.irradianceTexels,
+            distanceTexels: first.distanceTexels,
+            irradianceLayers: first.plan.layers.map((layer) => (layer.kind === 'lightGroup' ? `lightGroup ${layer.group}` : layer.kind)),
+            distanceFormat: first.layout.distanceFormat,
+            volumes: this.volumes.map((volume) => ({
+                counts: volume.grid.counts,
+                spacing: volume.grid.spacing,
+                origin: volume.grid.origin,
+                priority: volume.volume.priority,
+                follow: volume.scroll ? 'camera' : 'fixed',
+            })),
+        };
     }
 
     dispose(): void {
@@ -2279,8 +2580,21 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         const texels = new Uint16Array(width * height * layers * 4);
         for (let texel = 0; texel < width * height * layers; texel++) texels[texel * 4 + 3] = HALF_THREE;
         queue.writeTexture({ texture: first.probeData }, texels, { bytesPerRow: width * PROBE_DATA_TEXEL_BYTES, rowsPerImage: height }, { width, height, depthOrArrayLayers: layers });
+        this.writePoints(null);
+    }
 
+    /**
+     * Writes the `points` debug view: each probe at its grid point, in state
+     * 3 (`probeData` null); or, after `loadField`, where the loaded probe
+     * data puts it (relocated) and in its loaded state. `probeData` is the
+     * probe-data texture's texels, packed (rgba16float halves).
+     */
+    private writePoints(probeData: Uint16Array | null): void {
+        const first = this.firstVolume;
+        const context = this.context;
+        if (!first || !context) return;
         const points = first.points;
+        const { width, height } = first.layout.probeData;
         const pointData = new Float32Array(points.width * points.height * 4);
         for (const resources of this.volumes) {
             const { grid, volume } = resources;
@@ -2290,11 +2604,13 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
             const origin = windowGrid(resources).origin;
             for (let probe = 0; probe < grid.probeCount; probe++) {
                 const slot = [probe % nx, Math.floor(probe / (nx * nz)), Math.floor(probe / nx) % nz];
-                const at = slot.map((index, axis) => origin[axis] + windowProbeOf(index, window[axis], grid.counts[axis]) * grid.spacing[axis]);
-                pointData.set([...at, PROBE_STATE.notUpdatedYet], (volume.probeBase + probe) * 4);
+                // A probe's texel: (x, z) in the layer of its row (volumes.ts).
+                const texel = probeData ? readProbeDataTexel(probeData, ((volume.layerBase + slot[1]) * height + slot[2]) * width + slot[0]) : null;
+                const at = slot.map((index, axis) => origin[axis] + (windowProbeOf(index, window[axis], grid.counts[axis]) + (texel?.offset[axis] ?? 0)) * grid.spacing[axis]);
+                pointData.set([...at, texel?.state ?? PROBE_STATE.notUpdatedYet], (volume.probeBase + probe) * 4);
             }
         }
-        queue.writeTexture({ texture: points }, pointData, { bytesPerRow: points.width * POINT_TEXEL_BYTES }, { width: points.width, height: points.height });
+        context.device.queue.writeTexture({ texture: points }, pointData, { bytesPerRow: points.width * POINT_TEXEL_BYTES }, { width: points.width, height: points.height });
     }
 
     /**

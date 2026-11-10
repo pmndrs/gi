@@ -219,6 +219,20 @@ export class CameraWindow {
         return [origin[0] + this.firstProbe[0] * spacing[0], origin[1] + this.firstProbe[1] * spacing[1], origin[2] + this.firstProbe[2] * spacing[2]];
     }
 
+    /**
+     * Puts the window back where a saved field had it (saved-field.ts): its
+     * first probe at these lattice coordinates. Slots follow from the
+     * lattice (`slotOf`), so the saved slots' data is where this window
+     * looks for it. The next `follow` moves it on from here as usual; a
+     * camera far from it is a teleport, which starts that volume over.
+     */
+    restore(window: readonly [number, number, number]): void {
+        for (let axis = 0; axis < 3; axis++) {
+            if (!Number.isInteger(window[axis])) throw new RangeError(`@pmndrs/ddgi: a window's lattice coordinates are whole numbers, got ${window.join(', ')}`);
+            this.firstProbe[axis] = window[axis];
+        }
+    }
+
     /** The camera in lattice units (fractional). */
     cameraLattice(camera: Vec3): Vec3 {
         const { origin, spacing } = this.grid;

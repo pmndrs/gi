@@ -1,5 +1,14 @@
 // DDGI, the first GI technique built on the platform (docs/design/ddgi.md).
-export { DDGITechnique, type DDGIField } from './ddgi-technique.ts';
+export { DDGITechnique, type DDGIField, type LoadedField, type LoadFieldOptions } from './ddgi-technique.ts';
+// Saved bakes (T5.2): the .ddgibake format, for hosts that read a file's header or catch its errors.
+export {
+    decodeSavedField,
+    SAVED_FIELD_FORMAT_VERSION,
+    SavedFieldError,
+    type SavedFieldHeader,
+    type SavedFieldLayout,
+    type SavedFieldProblem,
+} from './saved-field.ts';
 export {
     DEFAULT_DDGI_SETTINGS,
     DEFAULT_WARM_UP_MAX_SECONDS,

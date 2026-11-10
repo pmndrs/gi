@@ -17,6 +17,8 @@
  *                rays per probe, the tile sizes and the texture store, and the budget when the link
  *                has no `budget`. Changing it starts DDGI over
  * - `budget`     DDGI's GPU milliseconds per frame for probe updates (default: the preset's, 2 for `high`)
+ * - `warmup`     `0`: DDGI starts without its warm-up, so the probes fill in live from black (for
+ *                watching a saved bake load: the panel's "Load probes from a file")
  * - `probes`     `1` draws DDGI's probes as spheres coloured by state
  * - `debug`      one of DDGI's screen debug views: `gi-only`, `coverage`, `probe-states`
  * - `probecolor` `history` colours DDGI's probe spheres by how settled they are (default: by state)
@@ -105,6 +107,8 @@ export interface ViewerUrlState {
     /** DDGI's quality preset (`ddgiPreset`); `high` is the defaults. */
     preset: DDGIPresetName;
     budgetMs: number;
+    /** DDGI warms its probes up before showing them (`warmup=0` in a link turns it off). */
+    warmUp: boolean;
     probes: boolean;
     probeColor: ProbeColorName;
     debug: DdgiScreenViewName | null;
@@ -149,6 +153,7 @@ export const DEFAULT_URL_STATE: ViewerUrlState = {
     upscale: null,
     preset: 'high',
     budgetMs: DEFAULT_BUDGET_MS,
+    warmUp: true,
     probes: false,
     probeColor: 'state',
     debug: null,
@@ -183,6 +188,7 @@ const URL_KEYS = new Set([
     'upscale',
     'preset',
     'budget',
+    'warmup',
     'probes',
     'debug',
     'probecolor',
@@ -261,6 +267,7 @@ export function parseUrlState(search: string): ViewerUrlState {
     state.budgetMs = presetBudgetMs(state.preset);
     const budget = finiteNumber(params.get('budget'));
     if (budget !== null) state.budgetMs = Math.min(MAX_BUDGET_MS, Math.max(MIN_BUDGET_MS, budget));
+    state.warmUp = params.get('warmup') !== '0';
     state.probes = params.get('probes') === '1';
     state.debug = DDGI_SCREEN_VIEW_NAMES.find((name) => name === params.get('debug')) ?? null;
     if (params.get('probecolor') === 'history') state.probeColor = 'history';
@@ -309,6 +316,7 @@ export function serializeUrlState(state: ViewerUrlState): string {
     if (state.upscale) params.set('upscale', state.upscale);
     if (state.preset !== DEFAULT_URL_STATE.preset) params.set('preset', state.preset);
     if (state.budgetMs !== presetBudgetMs(state.preset)) params.set('budget', String(state.budgetMs));
+    if (!state.warmUp) params.set('warmup', '0');
     if (state.probes) params.set('probes', '1');
     if (state.debug) params.set('debug', state.debug);
     if (state.probeColor !== DEFAULT_URL_STATE.probeColor) params.set('probecolor', state.probeColor);

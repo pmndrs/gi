@@ -49,6 +49,8 @@ import {
     type EnvironmentDescriptor,
     type FrameBudget,
     type GIPlatform,
+    type LoadedField,
+    type LoadFieldOptions,
 } from '@pmndrs/ddgi-core';
 import type { PmndrsSkyLike } from './environment.ts';
 import type { GILightOptions } from './gi-light.ts';
@@ -122,6 +124,18 @@ export interface GIVolumeStartOptions {
      * volume's centre.
      */
     readonly camera?: Camera;
+    /**
+     * A saved bake (`GIVolume.saveBake`, a `.ddgibake` file) to start from:
+     * loaded right after `prepare`, so there are no warm-up passes (`start`
+     * still waits for the ray-tracing trees and runs the calibration). A
+     * bake whose layout doesn't fit this volume's DDGI throws
+     * `SavedFieldError`, naming what differs; one saved for a scene that
+     * changed since loads as stale unless `bakeIfSceneChanged` is `refuse`
+     * (`GIVolume.loadedBake` says which).
+     */
+    readonly bake?: Uint8Array | ArrayBuffer;
+    /** What a stale `bake` does: `load stale` (the default) or `refuse` (DDGITechnique.loadField). */
+    readonly bakeIfSceneChanged?: LoadFieldOptions['ifSceneChanged'];
     /** Where warnings go (each distinct message once). Default `console.warn`. */
     readonly warn?: (message: string) => void;
     /** A label for the platform's GPU objects. Default the volume's name, or `GIVolume`. */
@@ -140,6 +154,8 @@ export interface StartedGI {
     readonly platform: GIPlatform;
     readonly technique: DDGITechnique;
     readonly threeGI: ThreeGI;
+    /** What `start`'s `bake` loaded (stale or not), or null without one. */
+    readonly loadedBake: LoadedField | null;
 }
 
 /**
@@ -276,7 +292,10 @@ export async function startVolume(volume: GIVolume, renderer: WebGPURenderer, sc
         // The scene copy, while the kernels compile (the platform isn't ready: no GI frame yet).
         threeGI.update(camera, 0);
         await preparing;
-        const started: StartedGI = { platform, technique, threeGI };
+        // The bake goes in before the first GI frame, so the technique skips its warm-up passes. The scene copy above
+        // made the scene the fingerprint is checked against.
+        const loadedBake = options.bake ? technique.loadField(options.bake, { ifSceneChanged: options.bakeIfSceneChanged }) : null;
+        const started: StartedGI = { platform, technique, threeGI, loadedBake };
         options.onCreated?.(started);
         // The first GI frame uploads the scene and starts the tree builds; the one after them sends the finished trees.
         threeGI.update(camera, 0);
