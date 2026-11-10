@@ -97,6 +97,24 @@ describe('the hemi-octahedral map (sampling.hlsl)', () => {
         }
     });
 
+    it('maps a direction just longer than 1 near the pole to the pole, not NaN (register D34)', () => {
+        // Two probe rays read back on the Apple M5 (radiance-cache-probes, 2026-11-10), whose
+        // pack2x16float rounds to nearest: the halves are about 1e-4 longer than 1, so the
+        // probe-frame z is past 1. Capsaicin's sqrt(1 - |z|) is NaN there.
+        const normalize = (a: Direction): Direction => [a[0] / length(a), a[1] / length(a), a[2] / length(a)];
+        const sponza = { words: [3002382593, 47615] as const, normal: normalize([-0.63134765625, -0.22412109375, -0.74169921875]) };
+        const cornell = { words: [2618307801, 15264] as const, normal: normalize([0.292236328125, 0, 0.9560546875]) };
+        for (const ray of [sponza, cornell]) {
+            const direction = unpackHalf3(ray.words);
+            expect(length(direction)).toBeGreaterThan(1.0001);
+            expect(toProbeFrame(direction, ray.normal)[2]).toBeGreaterThan(1);
+            expect(mapToHemiOctahedronInverse(toProbeFrame(direction, ray.normal))).toEqual([0.5, 0.5]);
+            // Sampled in cells 36 and 28; the pole is the corner cells 27, 28, 35 and 36 share, and cell 36 holds it.
+            expect(probeCellOf(direction, ray.normal)).toBe(36);
+        }
+        expect(mapToHemiOctahedronInverse([0, 0, 1.0002])).toEqual([0.5, 0.5]);
+    });
+
     it('gives every cell the same solid angle (equal area): uniform points have mean cos 1/2', () => {
         // Uniform over the hemisphere's solid angle: the mean of z is 1/2, of z^2 is 1/3.
         const steps = 400;
