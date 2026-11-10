@@ -606,7 +606,7 @@ async function checkStillConstant(device: GPUDevice, denoiser: GI1Denoiser, mode
     // arithmetic on a constant must give the constant back); with round-to-nearest halves; and with
     // this GPU's rounding of half stores for all 160 frames, to set its settled state beside the GPU's.
     // Returns the worst over every frame and the last frame's worst and mean.
-    const runReference = (rounding: RoundingMode | null, frames: number): { worst: number; lastWorst: number; mean: number } => {
+    const runReference = async (rounding: RoundingMode | null, frames: number): Promise<{ worst: number; lastWorst: number; mean: number }> => {
         let state: { color: Float32Array; delta: Float32Array } = { color: new Float32Array(PIXELS * 4), delta: new Float32Array(PIXELS) };
         const linear = linearDepths(guides.depth, WIDTH, HEIGHT, frame);
         const store = (values: Float32Array): Float32Array => (rounding ? quantize(values, rounding) : values);
@@ -614,6 +614,8 @@ async function checkStillConstant(device: GPUDevice, denoiser: GI1Denoiser, mode
         const storeDelta = (values: Float32Array): Float32Array => (rounding && denoiser.formats.colorDelta === 'r16float' ? quantize(values, rounding) : values);
         let result = { worst: 0, lastWorst: 0, mean: 0 };
         for (let index = 0; index < frames; index++) {
+            // Hand the page back between frames: the runner reads it while the reference runs.
+            await new Promise((resolve) => setTimeout(resolve, 0));
             const reprojected = reprojectGI(
                 { width: WIDTH, height: HEIGHT, radiance: data.radiance, depth: guides.depth, normal: guides.normal, motion: guides.motion, previousColor: state.color, previousColorDelta: state.delta, previousDepth: guides.depth, previousNormal: guides.normal },
                 frame,
@@ -628,8 +630,8 @@ async function checkStillConstant(device: GPUDevice, denoiser: GI1Denoiser, mode
         }
         return result;
     };
-    const referenceExact = runReference(null, CONSTANT_REFERENCE_FRAMES);
-    const referenceNearest = runReference('nearest', CONSTANT_REFERENCE_FRAMES);
+    const referenceExact = await runReference(null, CONSTANT_REFERENCE_FRAMES);
+    const referenceNearest = await runReference('nearest', CONSTANT_REFERENCE_FRAMES);
     // Float32Array storage of the reference's images is the only rounding left: E within 1e-6.
     if (referenceExact.worst > 1e-6) failures.push(`still constant: the CPU reference moves a constant by ${referenceExact.worst.toExponential(3)}`);
     // Round-to-nearest halves get stuck too, either side of E (DECISIONS 2026-11-10): within 1%.
@@ -638,7 +640,7 @@ async function checkStillConstant(device: GPUDevice, denoiser: GI1Denoiser, mode
     // agree pixel for pixel: a history in halves settles anywhere in a band where one more sample no
     // longer moves the stored sum, and which value it sticks at depends on the last bit of f32 work
     // (PROGRESS, RC4.3). Stated before the run: the means within 0.5%, each worst under 2%.
-    const freeRunning = runReference(mode, CONSTANT_FRAMES);
+    const freeRunning = await runReference(mode, CONSTANT_FRAMES);
     const meanGap = Math.abs(last.mean - freeRunning.mean);
     if (meanGap > SETTLED_MEAN_TOLERANCE) failures.push(`still constant: the settled mean ${last.mean.toFixed(5)} E is ${(meanGap * 100).toFixed(3)}% from the free-running reference's ${freeRunning.mean.toFixed(5)}`);
     if (last.worst > SETTLED_WORST_LIMIT || freeRunning.lastWorst > SETTLED_WORST_LIMIT) failures.push(`still constant: a settled pixel is ${(Math.max(last.worst, freeRunning.lastWorst) * 100).toFixed(3)}% from E (GPU ${(last.worst * 100).toFixed(3)}%, reference ${(freeRunning.lastWorst * 100).toFixed(3)}%)`);
