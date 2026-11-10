@@ -6,16 +6,24 @@ Written on the Windows laptop for the next lead, a new agent on Dennis's Mac (M5
 
 The `radiance-cache` technique ports AMD's two-level radiance cache: GI-1.0, as shipped as GI-1.2 in Capsaicin v1.3, MIT licensed. It has screen-space probes plus a world-space hash-grid cache, and it is the second technique on the platform next to DDGI. The code lives in `packages/ddgi-core/src/techniques/radiance-cache/`. Research and the full plan are in the `ddgi` repo (`DennisSmolek/ddgi`), branch `claude/amd-gi-cache-research-e46e2e`, folder `research/gi-1.0/`. Start with `PLAN.md`, then `source-map.md`, `native-capsaicin.md` and `idtech8-performance.md`.
 
-## Branches (all pushed to origin)
+## Branches
+
+Updated 2026-11-10 on the Mac (M5 Pro). Nothing from the Mac has been pushed yet.
 
 | Branch | State |
 |---|---|
-| `radiance-cache` | The track's main line, cut from `m2`. Merged: RC1.1 to RC1.5 (phase 1), RC2.1 (screen probes), RC3.1 (hash grid and the `WorldCache` interface). Lint and typecheck passed at the last merge. |
-| `rc2-2` | RC2.2 "first image", **in progress, not reviewed.** Two commits, then `d5ec2d1`: uncommitted work saved as-is at handoff (viewer technique entry, three/viewer GPU pages, shading and debug changes). Not verified. Run lint, typecheck and its GPU pages before trusting it. |
-| `rc3-2` | RC3.2 "population and resolve", **built, not reviewed.** Five commits ahead of `radiance-cache`; register D30 to D33. Needs an Opus review, then a merge. |
-| `rc1-*`, `rc2-1`, `rc3-1` | Already merged; kept for history. |
+| `radiance-cache` | The track's main line. Merged: phase 1 (RC1.1-RC1.5), phase 2 (RC2.1, RC2.2), phase 3 (RC3.1-RC3.3) and phase 4 (RC4.1-RC4.3), plus `rc2-1-m5` (the M5 fix D34) and the asset-tool fix. That's the whole faithful baseline, every pass of Capsaicin's default GI-1.2 except GI-1.1 reflections (D8). Lint, typecheck and test pass. The twelve RC GPU pages pass on the M5. |
+| `rc*` branches | Merged; kept for history. |
 
-Next rows in order: finish, review and merge RC2.2 and RC3.2; then RC3.3 (GI-1.2 multi-bounce); then RC4.1 to RC4.3 (temporal probes and the LRU cache, the probe filter and SSGI, and the image denoiser built ready to move into `pmndrs/denoiser`). Phase 5 is the comparison against native Capsaicin. Phase 6 covers levers and dynamic scenes.
+**Where it stands.** The faithful port is built. Phase 5 (the per-pass comparison with native Capsaicin) needs two things the Mac can't give: timing, which Dennis deferred on 2026-11-09, and native Capsaicin, which is D3D12 on Windows only. Phase 5 has no TASKS rows yet; the lead writes them. **Nothing has been re-run on the RTX 3060 or the Intel UHD since the handoff.** The binding packing, the 718 MB cache binding and every phase 3-4 kernel are checked on the M5 only.
+
+**Open items** (details in PROGRESS "Next" and NOTES):
+- The M5's `rgba16float` stores round toward zero (D59): probe hit distances settle about 30 m low at 40 m. A D31-style correction is the follow-up.
+- "One-bounce DDGI reads high" (NOTES) needs three fairer checks before it goes to the DDGI track.
+- Flicker after the denoiser, converged: Cornell 0.74% / 3.16%, Sponza 0.90% / 2.91%. That's mostly SSGI's single slice (lever 16). DDGI is about 0.1% / 0.5%.
+- Asset checksums differ between Mac and Windows. The Intel Sponza `.gltf` files differ only in line endings; Bistro and the courtyard tree differ in vertex data. Dennis decides the check's policy.
+- The package name `@pmndrs/denoiser-gi1` (private) is Dennis's call.
+- The design doc's "worth telling AMD" list has the Capsaicin bugs and questions found so far.
 
 ## How the work was run
 
@@ -39,10 +47,16 @@ These were held in the old machine's local agent memory, so they're written out 
 - **Brixelizer** is being ported in another workstream and plugs in through the `WorldCache` slot. **id Tech 8** (Sousa, SIGGRAPH 2025) is the main source of performance levers. **GPUTex** handles compressed textures if needed.
 - **Commit as you go**, so nothing is lost if usage runs out mid-row.
 
-## First steps on the Mac
+## The Mac setup (done 2026-11-10)
 
-1. `git fetch`, then check out `radiance-cache`; run `pnpm install`, `pnpm lint` and `pnpm typecheck`.
-2. Check that the GPU test runner (`pnpm test:gpu`, headless Chrome) finds Chrome and the Apple GPU. It was only run on Windows (RTX 3060 and Intel UHD). Record the adapter name in PROGRESS. The M5 Pro is a real target device, not correctness-only.
-3. Fetch the scene assets (`pnpm assets:fetch`); `assets/downloads` isn't in git.
-4. Native Capsaicin is D3D12 on Windows only, so it can't run on the Mac. Native comparisons and timings stay on the Windows laptop. Reading the Capsaicin source works anywhere.
-5. Pick up `rc3-2`'s review and `rc2-2`'s verification, as in "Next rows" above.
+- Capsaicin v1.3 is at `/Users/dex/Developer/capsaicin`; the research notes are at `/Users/dex/Developer/ddgi-research/research/gi-1.0/`.
+- Blender 4.5.0 is at `/Users/dex/Applications/Blender-4.5.0.app` (the converter needs exactly 4.5.0). Run the fetch as `BLENDER=/Users/dex/Applications/Blender-4.5.0.app/Contents/MacOS/Blender pnpm assets:fetch`. It reports 7 output mismatches, but the files load (see "Open items").
+- The extra worktrees share the assets through a symlink, `assets/downloads`, pointing at the main worktree's.
+- **GPU runs on the Mac:** `node tools/reference/bench-lock.ts run --no-cool-wait -- pnpm test:gpu --filter <page>`, with no `--gpu` (it accepts only nvidia/intel).
+- **The adapter:** apple/metal-3. It has shader-f16, subgroups, timestamp-query and texture-formats-tier1/2; 4 GiB storage bindings; **10 storage buffers per stage**, so the platform's 8 matters here.
+- **Apple facts:** `pack2x16float` rounds to nearest, while storage-texture half stores round toward zero (NOTES).
+- **The working pattern:**
+  - Opus implementers on `rcX-Y` worktrees, and Opus reviewers checking against Capsaicin line by line, plus each row's cause in the challenge list.
+  - The lead fixes the review notes or sends them back, then merges.
+  - Sonnet does setup and test sweeps.
+  - A reviewer's second hand-back can be refused, so ask reviewers to also write the report to the scratchpad.
