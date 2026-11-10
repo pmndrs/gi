@@ -4,7 +4,8 @@
     <meta charset="utf-8" />
     <title>three-m4-viewer-gi-only</title>
     <style>
-      body { margin: 0; background: #0b0d10; }
+      /* No scrollbars: the report summary below the canvas would shrink the screenshot's view. */
+      html, body { margin: 0; background: #0b0d10; overflow: hidden; }
       #view { position: fixed; left: 0; top: 0; }
     </style>
   </head>
