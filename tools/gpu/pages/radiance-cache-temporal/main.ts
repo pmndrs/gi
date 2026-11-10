@@ -17,10 +17,12 @@
  * 3. **A whole probe of sky rays in one cell doesn't wrap the sum
  *    (register D48):** a history that is black but for one cell sends every
  *    ray there; they all miss, and that cell's hit distance must read the
- *    capped 6,710.9 m (wrapped, 64 misses would read 5,106 m). Since RC4.2
- *    the history's bright cell is the sky's 1 at the capped distance (it was
- *    1000 at 5,000 m), because the filtered atlas mixes in the reprojected
- *    neighbours' copy of it.
+ *    capped 6,710.9 m (wrapped, 64 misses would read 5,106 m), and its
+ *    radiance the sky's 1 (the blend took the new rays, not the history's
+ *    1000). Since RC4.2 the atlas is filtered: the history's bright cell is
+ *    1000 at 1 cm, so the filter leaves the reprojected neighbours (the
+ *    history, copied) out by its reprojection angle and mixes in only probes
+ *    the blend refreshed.
  *
  * `pillar` (the floor and a 2.5 m box, the camera panning past it):
  * 4. **A pan marks the disoccluded tiles empty, and the patch moves probes
@@ -54,10 +56,11 @@
 
 import type { FrameCamera, FrameInput } from '../../../../packages/ddgi-core/src/platform/contract/frame.ts';
 import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
-import { invertMat4, multiplyMat4 } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/camera.ts';
+import { cameraRelativeInverseViewProjection, invertMat4, multiplyMat4 } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/camera.ts';
 import {
     calculateHaltonSequence,
     floatToHalfBits,
+    halfBitsToFloat,
     INVALID_ID,
     mapToHemiOctahedron,
     probeCellOf,
@@ -68,7 +71,8 @@ import {
 } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/capsaicin-math.ts';
 import { CACHED_TILE_UNALLOCATED, listCachedTiles, reorderCachedTiles } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/probe-cache.ts';
 import { RadianceCacheTechnique } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/radiance-cache-technique.ts';
-import { screenProbeCellSize } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/screen-irradiance.ts';
+import { screenProbeCellSize, viewForward } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/screen-irradiance.ts';
+import { filterScreenProbes } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/probe-filter.ts';
 import { PROBE_CELLS, PROBE_SIZE, PROBE_SPAWN_TILE_SIZE } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/settings.ts';
 import { COUNTER_INDEX, PROBE_RAY_BYTES, PROBE_RAYS_HEADER_BYTES, PROBE_SPAWN_SEEDS_OFFSET } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/wgsl/screen-probes.ts';
 import { LARGEST_QUANTIZED_HIT_DISTANCE } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/wgsl/capsaicin.ts';
@@ -76,7 +80,7 @@ import { drainDevice, reportGpuTest, summarizeAdapterInfo, watchDevice } from '.
 import { describeScene, loadManifest, readBuffer } from '../ddgi-shared/harness.ts';
 import { requestBudgetDevice } from '../radiance-cache-probes/budget-device.ts';
 import { halves, readTexture } from '../radiance-cache-probes/readback.ts';
-import { bookmarkCamera, describePillar, describeSkyPlane, describeSponza, SKY_RADIANCE } from '../radiance-cache-probes/scenes.ts';
+import { bookmarkCamera, describePillar, describeSkyPlane, describeSponza } from '../radiance-cache-probes/scenes.ts';
 import { frameCamera, PageScreen, type PageCamera } from '../radiance-cache-probes/screen.ts';
 
 const WIDTH = 1280;
@@ -173,8 +177,8 @@ async function readWords(device: GPUDevice, buffer: GPUBuffer, words: number): P
     return new Uint32Array(await readBuffer(device, buffer, Math.max(words, 1) * 4));
 }
 
-async function readU32Texture(device: GPUDevice, texture: GPUTexture, width: number, height: number, channels = 1): Promise<Uint32Array> {
-    const bytes = await readTexture(device, texture, 4 * channels, width, height);
+async function readU32Texture(device: GPUDevice, texture: GPUTexture, width: number, height: number, channels = 1, mipLevel = 0): Promise<Uint32Array> {
+    const bytes = await readTexture(device, texture, 4 * channels, width, height, mipLevel);
     return new Uint32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4);
 }
 
@@ -441,19 +445,24 @@ async function checkGuiding(device: GPUDevice, run: Run): Promise<StillResult> {
     const expectedBrightShare = weights[BRIGHT_CELL] / total;
 
     // 3. All of a probe's rays into one sky cell: the capped hit distance (register D48). Since RC4.2
-    // the atlas read is FilterScreenProbes' output, which mixes each probe's cell with its neighbours'
-    // same cell, the reprojected probes' (this history, copied) among them: so the history's bright
-    // cell is the sky's 1 at the capped distance, what the blend should give, and the filter keeps it
-    // (a wrapped 5,106 m in the centre would still pull the mix far off). The CDF is the same: every
-    // other cell is 0.
-    writeSyntheticHistory(device, run, (cell) => (cell === BRIGHT_CELL ? SKY_RADIANCE : 0), CAPPED_HIT_DISTANCE);
+    // the atlas read is FilterScreenProbes' output, which mixes each probe's cell with the same cell of
+    // its neighbours, the reprojected ones (this history, copied) among them. So the history's bright
+    // cell is far from the answer (1000), and the check is against the filter's twin run on what the
+    // blend should leave: the sky's 1 at the capped distance in every probe it refreshed, the
+    // history's 1000 at 5,000 m in every reprojected one. Had the blend kept the history, or wrapped
+    // the distance sum (5,106 m), the twin's mix would be far off.
+    writeSyntheticHistory(device, run, (cell) => (cell === BRIGHT_CELL ? 1000 : 0));
     await run.frame();
     const skyScreen = await readScreen(device, run);
     const sky = await rayCells(device, run, skyScreen);
     const probes = run.technique.probes;
     if (!probes) throw new Error('no probes');
     const atlas = await readHalf4Texture(device, probes.probeAtlas, probes.layout.atlasSize[0], probes.layout.atlasSize[1]);
+    const expected = await expectedSkyCellAtlas(device, run, skyScreen, sky.list);
     let fullProbes = 0;
+    let undecidedProbes = 0;
+    /** The twin's bright-cell radiance over the checked probes: above 1 where it mixed in history. */
+    const expectedRange = [Infinity, -Infinity];
     let checkedProbes = 0;
     let worstDistance = 0;
     let worstRadiance = 0;
@@ -465,19 +474,73 @@ async function checkGuiding(device: GPUDevice, run: Run): Promise<StillResult> {
         checkedProbes++;
         const [x, y] = unpackSeed(sky.list[1 + probe]);
         const texel = ((Math.floor(y / PROBE_SIZE) * PROBE_SIZE + Math.floor(BRIGHT_CELL / PROBE_SIZE)) * TILES_X * PROBE_SIZE + Math.floor(x / PROBE_SIZE) * PROBE_SIZE + (BRIGHT_CELL % PROBE_SIZE)) * 4;
-        worstDistance = Math.max(worstDistance, Math.abs(atlas[texel + 3] - CAPPED_HIT_DISTANCE));
-        worstRadiance = Math.max(worstRadiance, Math.abs(atlas[texel] - 1));
+        if (expected.undecided[texel / 4] === 1) {
+            undecidedProbes++;
+            continue;
+        }
+        worstDistance = Math.max(worstDistance, Math.abs(atlas[texel + 3] - expected.texels[texel + 3]));
+        worstRadiance = Math.max(worstRadiance, Math.abs(atlas[texel] - expected.texels[texel]) / expected.texels[texel]);
+        expectedRange[0] = Math.min(expectedRange[0], expected.texels[texel]);
+        expectedRange[1] = Math.max(expectedRange[1], expected.texels[texel]);
     }
     if (checkedProbes === 0) failures.push('sky cell: no probe sent its rays into one cell');
-    if (!(worstDistance <= FILTERED_CAPPED_HIT_DISTANCE_TOLERANCE)) failures.push(`sky cell: a hit distance is ${worstDistance.toFixed(2)} m off the capped ${CAPPED_HIT_DISTANCE.toFixed(3)} m (a wrapped sum reads 5,106 m)`);
-    if (!(worstRadiance <= 0.01)) failures.push(`sky cell: radiance ${worstRadiance.toFixed(4)} off the sky's 1`);
+    if (!(worstDistance <= FILTERED_CAPPED_HIT_DISTANCE_TOLERANCE)) failures.push(`sky cell: a hit distance is ${worstDistance.toFixed(2)} m off the filter twin's (from the capped ${CAPPED_HIT_DISTANCE.toFixed(3)} m; a wrapped sum reads 5,106 m)`);
+    if (!(worstRadiance <= 0.01)) failures.push(`sky cell: radiance ${(worstRadiance * 100).toFixed(2)}% off the filter twin's mix of the blend's 1 and the history's 1000`);
     return {
         failures,
         summary: {
             guiding: { rays, chiSquare, limit: CHI_SQUARE_LIMIT, brightShare, expectedBrightShare, observedOutsideBright: rays - observed[BRIGHT_CELL] },
-            skyCell: { probes: sky.list[0], probesWithAll64InOneCell: fullProbes, checkedProbes, worstHitDistanceError: worstDistance, worstRadianceError: worstRadiance, cappedHitDistance: CAPPED_HIT_DISTANCE },
+            skyCell: { probes: sky.list[0], probesWithAll64InOneCell: fullProbes, checkedProbes, undecidedProbes, expectedRadianceRange: expectedRange, worstHitDistanceError: worstDistance, worstRadianceError: worstRadiance, cappedHitDistance: CAPPED_HIT_DISTANCE },
         },
     };
+}
+
+/**
+ * Check 3's expectation: the filter's twin (probe-filter.ts) on the atlas the blend should leave, the
+ * sky's 1 at the capped distance (as the M5 stores it) in the bright cell of every probe the frame
+ * listed, the history (1000 at the synthetic distance, copied by the reprojection) in every other
+ * probe tile of the mask. Only the bright cell matters: on a floor every probe has the same frame, so
+ * the filter mixes a cell only with the same cell of its neighbours.
+ */
+async function expectedSkyCellAtlas(device: GPUDevice, run: Run, screen: ScreenRead, list: Uint32Array): Promise<{ texels: Float32Array; undecided: Uint8Array }> {
+    const probes = run.technique.probes;
+    if (!probes) throw new Error('no probes');
+    const { layout } = probes;
+    const [width, height] = layout.atlasSize;
+    const maskLevels: { width: number; height: number; texels: Uint32Array }[] = [];
+    for (let level = 0; level < layout.probeMaskMipCount; level++) {
+        const levelWidth = Math.max(1, layout.probeCount[0] >> level);
+        const levelHeight = Math.max(1, layout.probeCount[1] >> level);
+        maskLevels.push({ width: levelWidth, height: levelHeight, texels: await readU32Texture(device, probes.probeMask, levelWidth, levelHeight, 1, level) });
+    }
+    const seeds = Array.from(list.subarray(1, 1 + list[0]));
+    const listedTiles = new Set(seeds.map((seed) => Math.floor(unpackSeed(seed)[1] / PROBE_SIZE) * TILES_X + Math.floor(unpackSeed(seed)[0] / PROBE_SIZE)));
+    const texels = new Float32Array(width * height * 4);
+    // The M5 stores halves toward zero (register D59): the half at or below the cap.
+    const nearest = floatToHalfBits(CAPPED_HIT_DISTANCE);
+    const capped = halfBitsToFloat(halfBitsToFloat(nearest) > CAPPED_HIT_DISTANCE ? nearest - 1 : nearest);
+    for (let tile = 0; tile < TILES_X * TILES_Y; tile++) {
+        if (maskLevels[0].texels[tile] === INVALID_ID) continue;
+        const texel = ((Math.floor(tile / TILES_X) * PROBE_SIZE + Math.floor(BRIGHT_CELL / PROBE_SIZE)) * width + (tile % TILES_X) * PROBE_SIZE + (BRIGHT_CELL % PROBE_SIZE)) * 4;
+        texels.set(listedTiles.has(tile) ? [1, 1, 1, capped] : [1000, 1000, 1000, SYNTHETIC_HIT_DISTANCE], texel);
+    }
+    const camera = frameCamera(run.camera, WIDTH, HEIGHT);
+    const result = filterScreenProbes(
+        {
+            width: WIDTH,
+            height: HEIGHT,
+            depth: screen.depth,
+            normal: screen.normal,
+            maskLevels,
+            seeds,
+            inverseViewProjection: cameraRelativeInverseViewProjection(camera),
+            eye: camera.position,
+            viewForward: viewForward(camera),
+            cellSize: screenProbeCellSize(camera, WIDTH, HEIGHT),
+        },
+        { width, height, texels },
+    );
+    return { texels: result.atlas.texels, undecided: result.undecided };
 }
 
 // ---- Checks 4-6: the pillar ------------------------------------------------------------------

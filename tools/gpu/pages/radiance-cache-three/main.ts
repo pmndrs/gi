@@ -29,15 +29,17 @@
  * stage's `encodeScreen`).
  *
  * Checks, by readback: the radiance cache's picture and its irradiance image
- * hold no negative (below −1e-5), infinite or NaN value; its irradiance is
- * not black on
- * surfaces (some light arrives); the screen stage ran once per picture; no
- * device error (the harness). The −1e-5: since RC4.2 SSGI's near-field light
- * is added to E, and its arc integrals of a horizon that didn't move
- * (IntegrateHalfArc(h) − IntegrateHalfArc(h), ssgi.comp:224-226) can come out
- * a few f32 steps below 0 (radiance-cache-ssgi: −3e-7 at worst, where its
- * twin in f64 gives 0), which a shadowed pixel with no probe light shows.
- * The lowest values are reported.
+ * hold no negative (beyond SSGI's rounding, below), infinite or NaN value;
+ * its irradiance is not black on surfaces (some light arrives); the screen
+ * stage ran once per picture; no device error (the harness). SSGI's rounding:
+ * since RC4.2 its near-field light is added to E, a sum over its samples (2
+ * sides × 2 steps × 1 slice) of a sample's lit colour times a difference of
+ * two arc integrals, which for a horizon that didn't move is 0 in exact
+ * maths and a few f32 steps of values up to 1 either side of it on the GPU
+ * (radiance-cache-ssgi: −3e-7 at worst, where its f64 twin gives 0). So a
+ * value counts as negative below −(samples × 4 f32 steps × the brightest lit
+ * colour in the picture), which scales with the scene's light (RC4.2
+ * review). The lowest values are reported.
  *
  * Reported, not checked: the mean luminance of the GI term alone (the
  * composite's picture minus its pass's own colour, which holds no GI on
@@ -73,8 +75,21 @@ import { HdrReader, loadCompositeScene, luminanceAt, type CompositeScene } from 
 
 const SIZE = { width: 1280, height: 720 } as const;
 const SCENES = ['cornell-box', 'two-room', 'sponza'] as const;
-/** Below this a value counts as negative: f32 steps under 0 are SSGI's rounding (the file comment). */
-const NEGATIVE_LIMIT = -1e-5;
+/**
+ * SSGI's rounding (the file comment): its samples per pixel (2 sides × `ssgiStepCount` ×
+ * `ssgiSliceCount`) and the f32 steps an arc integrals' difference can round below 0. A value is
+ * negative below −(samples × steps × 2^-23 × the brightest lit colour).
+ */
+const SSGI_SAMPLES = 2 * DEFAULT_RADIANCE_CACHE_SETTINGS.ssgiStepCount * DEFAULT_RADIANCE_CACHE_SETTINGS.ssgiSliceCount;
+const ARC_ROUNDING_STEPS = 4;
+/**
+ * previousLighting's lag (RC4.2 review): the frame the lights go off SSGI still reads the lit picture,
+ * so its mean near-field light stays within this share of before (frame-to-frame noise of one slice);
+ * the frame after, it reads the dark one, at most this share of before.
+ */
+const NEAR_FIELD_SAME_FRAME = 0.1;
+const NEAR_FIELD_DARK_FRAME = 0.8;
+const F32_STEP = 2 ** -23;
 /** DDGI's warm-up, as the composite pages (three-composite, three-composite-sponza). */
 const GI_FRAMES = 120;
 const PROBES_PER_FRAME = 4096;
@@ -115,7 +130,10 @@ interface SceneResult {
     readonly irradianceNonFinite: number;
     readonly irradianceNegative: number;
     readonly backupHints: number;
-    /** The lowest picture and irradiance values (negative ones above NEGATIVE_LIMIT are rounding). */
+    /** The lowest picture and irradiance values (negative ones above `negativeLimit` are SSGI's rounding), and that limit. */
+    readonly negativeLimit: number;
+    /** SSGI's mean near-field light lit, the frame the lights go off, the frame after (previousLighting's one-frame lag). */
+    readonly previousLighting: Record<string, number>;
     readonly lowestPicture: number;
     readonly lowestIrradiance: number;
     readonly screenStages: number;
@@ -264,6 +282,10 @@ async function renderScene(context: ThreePageContext, sceneId: string, sheet: HT
         // Surfaces, from the radiance cache's pass as it last drew (no new frame).
         const surfaces = await reader.read(surfaceNode, false);
 
+        // The brightest lit colour SSGI could have read (the file comment): the picture's largest value.
+        let brightest = 0;
+        for (let index = 0; index < picture.length; index++) if (index % 4 !== 3 && Number.isFinite(picture[index])) brightest = Math.max(brightest, picture[index]);
+        const negativeLimit = -SSGI_SAMPLES * ARC_ROUNDING_STEPS * F32_STEP * brightest;
         let pictureNonFinite = 0;
         let pictureNegative = 0;
         let irradianceNonFinite = 0;
@@ -283,13 +305,13 @@ async function renderScene(context: ThreePageContext, sceneId: string, sheet: HT
                 if (!Number.isFinite(value)) pictureNonFinite++;
                 else if (channel < 3 && value < 0) {
                     lowestPicture = Math.min(lowestPicture, value);
-                    if (value < NEGATIVE_LIMIT) pictureNegative++;
+                    if (value < negativeLimit) pictureNegative++;
                 }
                 const e = irradiance[pixel * 4 + channel];
                 if (!Number.isFinite(e)) irradianceNonFinite++;
                 else if (channel < 3 && e < 0) {
                     lowestIrradiance = Math.min(lowestIrradiance, e);
-                    if (e < NEGATIVE_LIMIT) irradianceNegative++;
+                    if (e < negativeLimit) irradianceNegative++;
                 }
             }
             // Both images start at the top row (toDisplay). A sky pixel gets no irradiance (the stage reads the same depth).
@@ -306,8 +328,8 @@ async function renderScene(context: ThreePageContext, sceneId: string, sheet: HT
             if (irradiance[pixel * 4 + 3] === 0) backupHints++;
         }
         const ddgiMeanLuminance = ddgiLuminance / Math.max(surfacePixels, 1);
-        assert(pictureNonFinite === 0 && pictureNegative === 0, `${sceneId}: the radiance cache's picture has ${pictureNonFinite} values not finite and ${pictureNegative} negative (lowest ${lowestPicture})`);
-        assert(irradianceNonFinite === 0 && irradianceNegative === 0, `${sceneId}: the irradiance image has ${irradianceNonFinite} values not finite and ${irradianceNegative} negative (lowest ${lowestIrradiance})`);
+        assert(pictureNonFinite === 0 && pictureNegative === 0, `${sceneId}: the radiance cache's picture has ${pictureNonFinite} values not finite and ${pictureNegative} negative (lowest ${lowestPicture}, limit ${negativeLimit})`);
+        assert(irradianceNonFinite === 0 && irradianceNegative === 0, `${sceneId}: the irradiance image has ${irradianceNonFinite} values not finite and ${irradianceNegative} negative (lowest ${lowestIrradiance}, limit ${negativeLimit})`);
         assert(irradianceSum > 0, `${sceneId}: no irradiance on any surface`);
         // Also says both readbacks start at the same row: flipped, Sponza's sky would sit over lit floor.
         assert(litBackgroundPixels === 0, `${sceneId}: ${litBackgroundPixels} background pixels have irradiance`);
@@ -357,6 +379,39 @@ async function renderScene(context: ThreePageContext, sceneId: string, sheet: HT
                 `probe rays over the one-bounce reference ${multibounce.raysOverReference.toFixed(3)}`,
         );
 
+        // SSGI reads last frame's picture (previousLighting, RC4.2 review): its near-field light, now;
+        // the frame after every three light is switched off (still last frame's lit picture); and the
+        // frame after that (the dark picture).
+        const meanNearField = async (): Promise<number> => {
+            const near = halves(await readTexture(device, probes.nearField, 8, SIZE.width, SIZE.height));
+            let sum = 0;
+            let count = 0;
+            for (let pixel = 0; pixel < SIZE.width * SIZE.height; pixel++) {
+                if (surfaces[pixel * 4] < 0.5) continue;
+                sum += (near[pixel * 4] + near[pixel * 4 + 1] + near[pixel * 4 + 2]) / 3;
+                count++;
+            }
+            return sum / Math.max(count, 1);
+        };
+        await frame(rcComposite);
+        const nearBefore = await meanNearField();
+        const lights: { light: { intensity: number }; intensity: number }[] = [];
+        scene.scene.traverse((object) => {
+            const light = object as unknown as { isLight?: boolean; intensity: number };
+            if (light.isLight) lights.push({ light, intensity: light.intensity });
+        });
+        for (const entry of lights) entry.light.intensity = 0;
+        await frame(rcComposite);
+        const nearFirstDark = await meanNearField();
+        await frame(rcComposite);
+        const nearSecondDark = await meanNearField();
+        for (const entry of lights) entry.light.intensity = entry.intensity;
+        const previousLighting = { lights: lights.length, nearBefore, nearFirstDark, nearSecondDark, firstOverBefore: nearFirstDark / nearBefore, secondOverBefore: nearSecondDark / nearBefore };
+        log(`${sceneId}: SSGI near-field light, mean over surfaces: ${nearBefore.toPrecision(4)} lit, ${nearFirstDark.toPrecision(4)} the frame the lights go off, ${nearSecondDark.toPrecision(4)} the frame after`);
+        assert(nearBefore > 0, `${sceneId}: SSGI's near-field light is 0 through three (previousLighting)`);
+        assert(Math.abs(previousLighting.firstOverBefore - 1) <= NEAR_FIELD_SAME_FRAME, `${sceneId}: the frame the lights go off, SSGI's near-field light moved ×${previousLighting.firstOverBefore.toFixed(3)}: it should still read last frame's lit picture`);
+        assert(previousLighting.secondOverBefore <= NEAR_FIELD_DARK_FRAME, `${sceneId}: the frame after the lights go off, SSGI's near-field light is ×${previousLighting.secondOverBefore.toFixed(3)} of before: it should read the dark picture`);
+
         // The contact sheet's row: one exposure for the scene, from one-bounce DDGI's picture.
         const exposure = SHEET_KEY / Math.max(ddgiMeanLuminance, 1e-6);
         const row = document.createElement('div');
@@ -401,6 +456,8 @@ async function renderScene(context: ThreePageContext, sceneId: string, sheet: HT
             backupHints,
             lowestPicture,
             lowestIrradiance,
+            negativeLimit,
+            previousLighting,
             screenStages,
             probes: probeCount,
         };
