@@ -3,7 +3,7 @@ import { HashGridCache } from './world-cache/hash-grid-cache.ts';
 import { GILimitError } from '../../platform/contract/errors.ts';
 import type { KernelBuilder, ModuleBindingEntry, WgslModule } from '../../platform/contract/wgsl.ts';
 import { INDIRECT_ARGS_MODULE } from '../../platform/compute/wgsl.ts';
-import { MIN_STORAGE_BUFFERS_PER_STAGE } from '../../platform/device-requirements.ts';
+import { MIN_STORAGE_BUFFERS_PER_STAGE, MIN_STORAGE_TEXTURES_PER_STAGE } from '../../platform/device-requirements.ts';
 import { countGroupStorageBuffers, countStorageBuffers, orderModules, PlatformKernelBuilder } from '../../platform/kernel-builder.ts';
 import { SCENE_MODULE_ENTRIES } from '../../platform/scene/wgsl.ts';
 import { SHADE_MODULE_ENTRIES } from '../../platform/shade/wgsl.ts';
@@ -120,16 +120,33 @@ function budgetDevice(maxStorageBuffersPerShaderStage: number): GPUDevice {
 }
 
 /** The technique's context with the real kernel builder; records each kernel's storage buffers and whether the builder refused it. */
-function budgetContext(device: GPUDevice): { context: TechniqueContext; storageBuffers: Map<string, number>; refused: Map<string, Promise<boolean>> } {
+/** Storage textures a kernel binds in the compute stage: its own groups' and its modules'. */
+function countStorageTextures(modules: readonly WgslModule[], groups: readonly GPUBindGroupLayoutDescriptor[]): number {
+    const COMPUTE = 0x4;
+    const own = groups.flatMap((group) => [...group.entries]).filter((entry) => entry.storageTexture !== undefined && (entry.visibility & COMPUTE) !== 0).length;
+    const fromModules = orderModules(modules)
+        .flatMap((module) => [...module.entries])
+        .filter((entry) => entry.storageTexture !== undefined).length;
+    return own + fromModules;
+}
+
+function budgetContext(device: GPUDevice): {
+    context: TechniqueContext;
+    storageBuffers: Map<string, number>;
+    storageTextures: Map<string, number>;
+    refused: Map<string, Promise<boolean>>;
+} {
     const scene = stubModule('gi-scene', SCENE_MODULE_ENTRIES);
     const rays = stubModule('gi-rays', TRACE_MODULE_ENTRIES);
     const shade = stubModule('gi-shade', SHADE_MODULE_ENTRIES, [scene, rays]);
     const builder = new PlatformKernelBuilder(device, 'test');
     const storageBuffers = new Map<string, number>();
+    const storageTextures = new Map<string, number>();
     const refused = new Map<string, Promise<boolean>>();
     const kernels: KernelBuilder = {
         computeKernel: (options) => {
             storageBuffers.set(options.label, countStorageBuffers(orderModules(options.modules)) + countGroupStorageBuffers(options.ownGroups ?? []));
+            storageTextures.set(options.label, countStorageTextures(options.modules, options.ownGroups ?? []));
             const kernel = builder.computeKernel(options);
             refused.set(
                 options.label,
@@ -151,7 +168,7 @@ function budgetContext(device: GPUDevice): { context: TechniqueContext; storageB
     };
     const direct = { prepare: () => Promise.resolve(), defaultWorkList: 'ray-order', traceWgsl: () => '' };
     const context = { device, kernels, compute, shade: { module: shade, direct }, timer: { computePass: () => undefined } } as unknown as TechniqueContext;
-    return { context, storageBuffers, refused };
+    return { context, storageBuffers, storageTextures, refused };
 }
 
 describe("the technique's binding budget (register D6): the platform's 8 storage buffers per stage", () => {
@@ -180,6 +197,18 @@ describe("the technique's binding budget (register D6): the platform's 8 storage
         await technique.prepare();
         for (const [label, count] of Object.entries(SCREEN_KERNELS)) expect(storageBuffers.get(label), label).toBe(count);
         for (const [label, count] of storageBuffers) expect(count, label).toBeLessThanOrEqual(MIN_STORAGE_BUFFERS_PER_STAGE);
+    });
+
+    it("holds WebGPU's default 4 storage textures per stage for every kernel; BlendScreenProbes uses all 4", async () => {
+        expect(MIN_STORAGE_TEXTURES_PER_STAGE).toBe(4);
+        const { context, storageTextures } = budgetContext(budgetDevice(MIN_STORAGE_BUFFERS_PER_STAGE));
+        const technique = new RadianceCacheTechnique();
+        technique.attach(context);
+        await technique.prepare();
+        expect(storageTextures.get('radiance-cache/BlendScreenProbes')).toBe(4);
+        expect(storageTextures.get('radiance-cache/ReprojectScreenProbes')).toBe(3);
+        expect(storageTextures.get('radiance-cache/SampleScreenProbes')).toBe(2);
+        for (const [label, count] of storageTextures) expect(count, label).toBeLessThanOrEqual(MIN_STORAGE_TEXTURES_PER_STAGE);
     });
 
     it('is what the kernel builder checks: at 7, prepare throws GILimitError and refuses exactly the kernels that bind 8', async () => {

@@ -943,8 +943,10 @@ fn ${ENTRY_POINT.sample}(
         return; // out of bounds
     }
 
-    // Capsaicin's draws, in its order: rand2() for the GGX sample (gi1.comp:950), the CDF draw of
-    // ray guiding (gi1.comp:971), then the point inside the cell (gi1.comp:973).
+    // The draws in the order of Capsaicin's DISABLE_SPECULAR_MATERIALS build (register D16; the
+    // default build draws one more rand(), the BRDF choice at gi1.comp:960): rand2() for the GGX
+    // sample (gi1.comp:950), the CDF draw of ray guiding (gi1.comp:971), then the point inside the
+    // cell (gi1.comp:973).
     var random = rcMakeRandom(did, rcFrame.frameIndex);
     _ = rcRand2(&random);
     let sampledCellIndex = rcFindCellIndex(localId, rcRand(&random));
