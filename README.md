@@ -1,10 +1,29 @@
-# webgpu-ddgi
+# @pmndrs/ddgi
 
-Real-time dynamic diffuse global illumination (DDGI) for WebGPU.
+[![npm](https://img.shields.io/npm/v/@pmndrs/ddgi?color=cb3837&label=npm)](https://www.npmjs.com/package/@pmndrs/ddgi) [![examples](https://img.shields.io/badge/examples-live-7dd3fc)](https://pmndrs.github.io/ddgi/) [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-The core is plain WebGPU and WGSL with no engine dependency. Renderers plug in through small adapters: three.js first, then Babylon, Pixi, react-three-fiber or your own.
+**Real-time global illumination for WebGPU.** Light bounces around your scene and keeps up as lights, objects and the sun move. It uses Dynamic Diffuse Global Illumination (DDGI): a grid of probes that trace rays every frame. Plain WebGPU and WGSL underneath, with a three.js adapter on top.
 
-**Status:** a working prototype, not published yet; it will be published as `@pmndrs/ddgi`. Light bounces in real time through a grid of probes, and follows moving lights, objects and the sun, textured materials, several probe volumes and one that follows the camera. M1 and M2 are signed off, M3 (moving objects) and M4 (materials) are built and in their last checks, and M5 (quality presets, saved bakes, a `LightProbeGrid` export, these docs) is under way.
+**▶ [Examples](https://pmndrs.github.io/ddgi/)**: small pages, each showing one feature. (The site goes live once the repository has moved to `pmndrs/ddgi`; until then the examples run from a checkout, see [Working on this repository](#working-on-this-repository).)
+
+![Cornell box lit by DDGI: the red and green walls bleed colour onto the floor, ceiling and boxes](docs/images/cornell-gi.jpg)
+
+**Status:** a working prototype, not published yet. Light bounces in real time through a grid of probes, and follows moving lights, objects and the sun, textured materials, several probe volumes and one that follows the camera. Quality presets for slower GPUs, saved bakes and an export to three's `LightProbeGrid` are in. What's in the first release, and what isn't checked yet, is in [CHANGELOG.md](CHANGELOG.md).
+
+## Install
+
+```bash
+npm install @pmndrs/ddgi three
+```
+
+One package, three import paths:
+
+| Import | For | Needs |
+| --- | --- | --- |
+| `@pmndrs/ddgi/three` (or `@pmndrs/ddgi`) | three.js `WebGPURenderer` | `three` r187 (`~0.187.0`) |
+| `@pmndrs/ddgi/core` | Plain WebGPU on your own `GPUDevice`, or an adapter for another engine | nothing: three isn't needed |
+
+`three` is an optional peer dependency, so a project that only imports `/core` doesn't install it. With TypeScript, add `@webgpu/types` for the WebGPU types.
 
 ## Getting started with three.js
 
@@ -45,11 +64,60 @@ Where to go next:
 
 The examples run from this repository: `pnpm install`, then `pnpm --filter @pmndrs/ddgi-example-three dev` or `pnpm --filter @pmndrs/ddgi-example-hello dev`. The viewer (`pnpm dev`) shows every test scene with GI, its debug views and its settings.
 
-## The project
+## Browser support
+
+GI runs on WebGPU only; there is no WebGL fallback.
+
+- **Browsers with WebGPU:** Chrome and Edge 113 and later; Safari 26 and later (macOS, iOS and iPadOS).
+- **Checked on:** the target devices, an RTX 3060 Laptop GPU (Windows, Chrome) and an Apple M5 Pro (macOS, Chrome), and the correctness device, an Intel UHD integrated GPU (Windows, Chrome). Safari, an iPad and an older iOS device haven't been run yet.
+- **Slower GPUs:** pick a lower preset (`{ preset: 'low' }`), or let `recommendPreset` pick one from the adapter.
+- **Large scenes** need more GPU memory per buffer than WebGPU's defaults. `createGIRenderer` asks for the adapter's full limits; if you make the device yourself, pass it `requiredLimits(adapter)` from `@pmndrs/ddgi/core`.
+
+## Documentation
+
+- [Getting started with three.js](#getting-started-with-threejs), above.
+- [The three.js adapter](docs/api/three.md): every option, and what it does with your scene.
+- [The platform API](docs/api/platform.md): `@pmndrs/ddgi/core` on a bare `GPUDevice`.
+- [Writing an adapter](docs/guides/adapter.md): GI from plain WebGPU, or for another engine, step by step.
+- [Examples](https://pmndrs.github.io/ddgi/).
+- [CHANGELOG.md](CHANGELOG.md): what each release contains.
+- [THIRD_PARTY.md](THIRD_PARTY.md): code from others and the test scenes, with their licences.
+
+## Credits
+
+Built by [Dennis Smolek](https://github.com/DennisSmolek), to be maintained under the [Poimandres](https://github.com/pmndrs) collective.
+
+- **DDGI** is implemented from the published papers: Majercik, Guertin, Nowrouzezahrai and McGuire, ["Dynamic Diffuse Global Illumination with Ray-Traced Irradiance Fields"](https://jcgt.org/published/0008/02/01/) (JCGT, 2019), and Majercik, Marrs, Spjut and McGuire, ["Scaling Probe-Based Real-Time Dynamic Global Illumination for Production"](https://jcgt.org/published/0010/02/01/) (JCGT, 2021). NVIDIA's RTXGI-DDGI was the comparison it was checked against; none of its code is used.
+- **Ray tracing** builds its trees with [tinybvh](https://github.com/jbikker/tinybvh) by Jacco Bikker (compiled to WebAssembly, and its H-PLOC builder ported to the GPU) and a GPU LBVH ported from AMD's [HIPRT](https://github.com/GPUOpen-LibrariesAndSDKs/HIPRT). Both MIT; their licence texts ship in the package.
+- **[three.js](https://threejs.org)**: the adapter is shaped like its `LightProbeGrid`, and GI renders through its `WebGPURenderer` and TSL.
+- **[@pmndrs/upscaler](https://github.com/pmndrs/upscaler)**: the sibling package this one's tooling and examples follow.
+
+## License
+
+MIT, see [LICENSE](LICENSE). The bundled tinybvh, Emscripten runtime and HIPRT code keep their own licences; the package's `THIRD_PARTY.md` lists them, with their texts in `licenses/`.
+
+<!-- The npm package README ends here. Below: working on this repository. -->
+
+## Working on this repository
+
+```bash
+pnpm install
+pnpm dev             # the viewer: every test scene with GI, its debug views and settings
+pnpm lint && pnpm typecheck && pnpm test
+pnpm build           # the package, into packages/ddgi/dist
+pnpm verify:packed   # packs it and checks it as a user would get it
+pnpm test:release    # runs the publish workflow's steps against throwaway repositories
+pnpm test:gpu        # the GPU checks, in headless Chrome on a real GPU
+```
+
+The published package is `packages/ddgi`; it bundles the private workspace packages `ddgi-core` (the engine-free platform and DDGI), `ddgi-three` (the three.js adapter) and `bvh`. [docs/releasing.md](docs/releasing.md) says how a release is cut, and what CI checks and doesn't.
+
+How the work is run:
 
 - [SPEC.md](SPEC.md): what v1 is, how it's built, how we judge it, and the milestones.
 - [PLAN.md](PLAN.md): build order, how agents work, and what "done" means for a task.
 - [TASKS.md](TASKS.md) and [PROGRESS.md](PROGRESS.md): the live task board and the running log.
+- [docs/milestones/](docs/milestones/): one note per milestone, with what works, its checks and its known misses.
 - [CLAUDE.md](CLAUDE.md): orientation for agents; [docs/NOTES.md](docs/NOTES.md) and [docs/DECISIONS.md](docs/DECISIONS.md): learned facts and settled choices.
 - [docs/AUDIT-2026-10-30.md](docs/AUDIT-2026-10-30.md): why this is a fresh start. It reviews the earlier experiment in [DennisSmolek/ddgi](https://github.com/DennisSmolek/ddgi).
 - [research/](research/): background notes carried over from that experiment.

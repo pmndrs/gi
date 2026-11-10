@@ -8,7 +8,16 @@ export default defineConfig({
         passWithNoTests: true,
         // Agent worktrees under .claude/ are full checkouts; without this every
         // one of them runs its own copy of the suite.
-        exclude: [...configDefaults.exclude, '.claude/**', '**/dist/**', 'tools/emsdk/**'],
+        exclude: [
+            ...configDefaults.exclude,
+            '.claude/**',
+            '**/dist/**',
+            'tools/emsdk/**',
+            // Runs publish.yml's steps in throwaway git repositories: about 30 s of
+            // child processes, which starved other tests' timeouts when run beside
+            // them. It has its own script and CI step: `pnpm test:release`.
+            'tools/release/publish-workflow.test.ts',
+        ],
     },
     resolve: {
         // The umbrella imports itself by name. Node's self-reference resolves that
