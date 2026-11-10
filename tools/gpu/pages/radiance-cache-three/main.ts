@@ -91,6 +91,8 @@ interface SceneResult {
     readonly radianceCacheGiLuminance: number;
     /** Radiance cache over one-bounce DDGI, GI term only. */
     readonly giLuminanceRatio: number;
+    /** Information only (RC4.1): the same on the frame before, with the screen probes' history. */
+    readonly withHistoryGiLuminanceRatio: number;
     /** Information only (RC3.3): the same with the multibounce on. */
     readonly multibounce: { readonly giLuminanceRatio: number; readonly raysOverReference: number; readonly pixelOverReference: number };
     readonly ddgiAllBouncesGiLuminance: number;
@@ -230,7 +232,14 @@ async function renderScene(context: ThreePageContext, sceneId: string, sheet: HT
         const ddgi = await frame(ddgiGraph.composite);
         const ddgiPassColour = await reader.read(ddgiGraph.passColour, false);
         const stagesBefore = stage.stages;
-        for (let warm = 0; warm < WARM_FRAMES; warm++) await frame(rcComposite);
+        for (let warm = 1; warm < WARM_FRAMES; warm++) await frame(rcComposite);
+        // Since RC4.1 the screen probes keep history: their rays are guided by last frame's radiance, so
+        // they are no longer one per cell and their mean is no estimate of E. The comparisons below are
+        // RC2.2's, on a frame without screen-probe history (the world cache warm); the GI term with
+        // history is reported beside them, as information.
+        const historyPicture = await frame(rcComposite);
+        const historyPassColour = await reader.read(rcPass.getTextureNode('output') as unknown as Node, false);
+        radianceCache.resetScreenProbes();
         const picture = await frame(rcComposite);
         const rcPassColour = await reader.read(rcPass.getTextureNode('output') as unknown as Node, false);
         const screenStages = stage.stages - stagesBefore;
@@ -306,10 +315,15 @@ async function renderScene(context: ThreePageContext, sceneId: string, sheet: HT
                 `(ratio ${(radianceCacheGiLuminance / ddgiOneBounceGiLuminance).toFixed(3)}), DDGI all bounces ${ddgiAllBouncesGiLuminance.toPrecision(4)}`,
         );
 
+        const withHistoryGiLuminanceRatio = meanGiLuminance({ picture: historyPicture, passColour: historyPassColour }, surfaces) / ddgiOneBounceGiLuminance;
+        log(`${sceneId}: with screen-probe history (information): GI term over one-bounce DDGI ${withHistoryGiLuminanceRatio.toFixed(3)}`);
+
         // Information only: the multibounce on (the cache empties when the option changes), twice the
-        // warm frames so the indirect values (a frame behind the direct ones) settle.
+        // warm frames so the indirect values (a frame behind the direct ones) settle; the last frame
+        // without screen-probe history, as above.
         radianceCache.settings.useMultibounce = true;
         for (let warm = 0; warm < 2 * WARM_FRAMES; warm++) await frame(rcComposite);
+        radianceCache.resetScreenProbes();
         const multibouncePicture = await frame(rcComposite);
         const multibouncePassColour = await reader.read(rcPass.getTextureNode('output') as unknown as Node, false);
         const multibounceIrradiance = halves(await readTexture(device, probes.irradiance, 8, SIZE.width, SIZE.height));
@@ -353,6 +367,7 @@ async function renderScene(context: ThreePageContext, sceneId: string, sheet: HT
             ddgiOneBounceGiLuminance,
             radianceCacheGiLuminance,
             giLuminanceRatio: radianceCacheGiLuminance / ddgiOneBounceGiLuminance,
+            withHistoryGiLuminanceRatio,
             multibounce,
             ddgiAllBouncesGiLuminance,
             atProbes,

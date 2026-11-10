@@ -118,6 +118,10 @@ async function runFloor(device: GPUDevice, name: string, environment: Parameters
     frame();
     await platform.rays.whenBuilt();
     frame();
+    // The checks are RC2.2's, on a frame with no screen-probe history: since RC4.1 the probes are
+    // reprojected and their rays guided by last frame's radiance, which moves E by design (the
+    // temporal page, radiance-cache-temporal, reports E with history). The world cache stays warm.
+    technique.resetScreenProbes();
     frame();
     await device.queue.onSubmittedWorkDone();
     return {

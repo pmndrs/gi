@@ -100,3 +100,16 @@ export function cameraRelativeInverseViewProjection(camera: Pick<FrameCamera, 'p
     if (!inverse) throw new Error('@pmndrs/ddgi: the radiance cache needs a camera whose projection × view can be inverted');
     return inverse;
 }
+
+/**
+ * `projection × view × translate(eye)`, column-major: the frame's
+ * view-projection (Capsaicin's `g_ViewProjection`, gi1.cpp:1817) for points
+ * given relative to the eye, with the frame's jitter, so a world point
+ * projects where the host drew it. The screen-probe kernels project the off-
+ * screen probe cache's positions with it (`CountScreenProbes`).
+ */
+export function cameraRelativeViewProjection(camera: Pick<FrameCamera, 'position' | 'view' | 'projection' | 'jitter'>): number[] {
+    const [x, y, z] = camera.position;
+    const translateToEye = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, x, y, z, 1];
+    return multiplyMat4(multiplyMat4(jitteredProjection(camera), camera.view), translateToEye);
+}

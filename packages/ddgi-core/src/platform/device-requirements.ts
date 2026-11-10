@@ -17,6 +17,14 @@ import type { RequiredLimits } from './contract/platform.ts';
  */
 export const MIN_STORAGE_BUFFERS_PER_STAGE = 8;
 
+/**
+ * Storage textures per shader stage the platform's kernels may bind: WebGPU's
+ * default `maxStorageTexturesPerShaderStage`, which the platform never raises
+ * (`requiredLimits` asks for none), so three's own device and ours agree. The
+ * radiance cache's `BlendScreenProbes` uses all 4.
+ */
+export const MIN_STORAGE_TEXTURES_PER_STAGE = 4;
+
 /** Platform modules share group 0; techniques use groups 1-3. */
 export const MIN_BIND_GROUPS = 4;
 

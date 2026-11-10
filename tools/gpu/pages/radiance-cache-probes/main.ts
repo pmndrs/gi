@@ -61,13 +61,10 @@ import { RadianceCacheTechnique } from '../../../../packages/ddgi-core/src/techn
 import { PROBE_CELLS, PROBE_SIZE } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/settings.ts';
 import { RADIANCE_CACHE_DEBUG_VIEW, type RadianceCacheDebugViewId } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/wgsl/debug.ts';
 import { PROBE_RAY_BYPASS, PROBE_RAY_BYTES, PROBE_RAYS_HEADER_BYTES, PROBE_SPAWN_SEEDS_OFFSET } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/wgsl/screen-probes.ts';
-import { SceneSync } from '../../../../packages/ddgi-three/src/scene-sync.ts';
-import { loadScene } from '../../../../apps/viewer/src/scene/load-scene.ts';
-import type { SceneManifest } from '../../../../scenes/src/manifest.ts';
-import { platformSkyEnvironment } from '../../../../scenes/src/sky/sky-image.ts';
 import { drainDevice, reportGpuTest, summarizeAdapterInfo, watchDevice } from '../../client.ts';
 import { describeScene, loadManifest, readBuffer } from '../ddgi-shared/harness.ts';
 import { halves, readTexture } from './readback.ts';
+import { bookmarkCamera, describeSkyPlane, describeSponza, SKY_RADIANCE } from './scenes.ts';
 import { PageScreen, frameCamera, type PageCamera } from './screen.ts';
 
 const WIDTH = 1280;
@@ -78,8 +75,6 @@ const HALF_PRECISION_EDGE = 0.02;
 const GRAZING_BY_HALF_PRECISION = 1e-3;
 /** The sky check's tolerance (RC2.1 done-when). */
 const SKY_TOLERANCE = 0.01;
-/** The sky-plane scene's sky radiance. */
-const SKY_RADIANCE = 1;
 /** Frames whose spawn is checked against the CPU's rule, each at its own Halton jitter. */
 const SPAWN_FRAMES = 4;
 
@@ -113,9 +108,12 @@ async function startScene(device: GPUDevice, name: string, camera: PageCamera, d
         platform.encodeScreen(encoder, screen.screen);
         device.queue.submit([encoder.finish()]);
     };
-    // A frame places the scene; then the mesh trees, and a frame with them.
+    // A frame places the scene; then the mesh trees, and a frame with them. Checks 1-4 are about
+    // a frame with no history (RC2.1), so the screen probes forget the first frame's (since RC4.1
+    // the technique reprojects them).
     frame();
     await platform.rays.whenBuilt();
+    technique.resetHistory();
     frame();
     await device.queue.onSubmittedWorkDone();
     if (platform.rays.building) throw new Error(`${name}: the platform still reports trees building`);
@@ -130,43 +128,6 @@ async function startScene(device: GPUDevice, name: string, camera: PageCamera, d
             screen.dispose();
             platform.dispose();
         },
-    };
-}
-
-/** A 400 m floor at y = 0 under a constant white sky, no lights. */
-async function describeSkyPlane(platform: GIPlatformImpl): Promise<void> {
-    const half = 200;
-    const scene = platform.scene;
-    const mesh = scene.createMesh({
-        positions: new Float32Array([-half, 0, -half, half, 0, -half, half, 0, half, -half, 0, half]),
-        normals: new Float32Array([0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0]),
-        indices: new Uint32Array([0, 2, 1, 0, 3, 2]),
-        label: 'floor',
-    });
-    const material = scene.createMaterial({ albedo: [0.5, 0.5, 0.5], label: 'floor' });
-    scene.createInstance({ mesh, materials: [material], transform: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1], label: 'floor' });
-    scene.setEnvironment({ type: 'color', color: [SKY_RADIANCE, SKY_RADIANCE, SKY_RADIANCE], intensity: 1 });
-}
-
-function bookmarkCamera(manifest: SceneManifest, far: number): PageCamera {
-    const bookmark = manifest.cameras[0];
-    return { position: [...bookmark.position], target: [...bookmark.target], fovYDeg: bookmark.fovYDeg, near: 0.05, far };
-}
-
-/** Sponza through the viewer's loader, copied into the platform by the three adapter's scene sync (a loader here, nothing more). */
-async function describeSponza(platform: GIPlatformImpl, device: GPUDevice, manifest: SceneManifest): Promise<() => void> {
-    const loaded = await loadScene(manifest, () => {});
-    // Only the model is GI geometry; the sky dome is the viewer's background (GI gets the sky as its environment).
-    const content = new Set<object>();
-    loaded.content.traverse((object) => content.add(object));
-    loaded.scene.traverse((object) => {
-        if ((object as { isMesh?: boolean }).isMesh && !content.has(object)) object.userData.giContributes = false;
-    });
-    loaded.scene.updateMatrixWorld();
-    const sync = new SceneSync(platform.scene, { device, warn: () => {} });
-    sync.environment = platformSkyEnvironment(manifest);
-    return () => {
-        sync.update(loaded.scene);
     };
 }
 
