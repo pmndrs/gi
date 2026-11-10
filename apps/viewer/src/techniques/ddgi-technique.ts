@@ -49,6 +49,7 @@ import {
     DDGI_DEBUG_VIEW,
     GIVolume,
     PROBE_STATE_LABELS,
+    type DDGIPresetName,
     type DDGITechnique,
     type DDGIVolumeSettings,
     type DebugView,
@@ -94,6 +95,14 @@ export interface GroupWeight {
 export type LightGroupCount = 0 | 2 | 4;
 
 export interface DdgiViewerSettings {
+    /**
+     * The quality preset (T5.1, `ddgiPreset`): its rays per probe, tile
+     * sizes and texture store. The scene's manifest sets the probe spacing,
+     * and `budgetMs` the budget (the panel moves it to the preset's when a
+     * preset is picked). Changing it starts DDGI over: rays and tile sizes
+     * size DDGI's resources when it starts (`layerKey`).
+     */
+    preset: DDGIPresetName;
     /** GPU milliseconds per frame for probe updates. */
     budgetMs: number;
     /**
@@ -145,6 +154,7 @@ export interface DdgiViewerSettings {
 export const WHITE_WEIGHT: GroupWeight = { color: [1, 1, 1], intensity: 1 };
 
 export const DEFAULT_DDGI_VIEWER_SETTINGS: DdgiViewerSettings = {
+    preset: 'high',
     budgetMs: 2,
     lightGroups: 0,
     sunLayer: false,
@@ -161,9 +171,9 @@ export const DEFAULT_DDGI_VIEWER_SETTINGS: DdgiViewerSettings = {
     giTextures: true,
 };
 
-/** The settings that shape DDGI's layers and volumes, which only a new start can change (`ViewerCore.configureDdgi`). */
-export function layerKey(settings: Pick<DdgiViewerSettings, 'lightGroups' | 'sunLayer' | 'cameraVolume'>): string {
-    return `groups ${settings.lightGroups}, sun layer ${settings.sunLayer ? 'on' : 'off'}, camera volume ${settings.cameraVolume ? 'on' : 'off'}`;
+/** The settings that shape DDGI's layers, volumes and tiles, which only a new start can change (`ViewerCore.configureDdgi`). */
+export function layerKey(settings: Pick<DdgiViewerSettings, 'preset' | 'lightGroups' | 'sunLayer' | 'cameraVolume'>): string {
+    return `preset ${settings.preset}, groups ${settings.lightGroups}, sun layer ${settings.sunLayer ? 'on' : 'off'}, camera volume ${settings.cameraVolume ? 'on' : 'off'}`;
 }
 
 /**
@@ -311,6 +321,8 @@ export class DdgiTechnique extends ScenePassTechnique {
     private async start(created: () => void): Promise<void> {
         const { loaded, renderer } = this.context;
         await this.volume.start(renderer, loaded.scene, {
+            // Rays, tile sizes and the texture store; the manifest's spacing and the panel's budget stay.
+            preset: this.settings.preset,
             budget: this.budget,
             ddgi: {
                 // The weights are set once the technique exists (`applyGroupWeights`); they are live.
@@ -735,7 +747,8 @@ export class DdgiTechnique extends ScenePassTechnique {
             case 'ready': {
                 const updated = this.ddgi?.counters[PROBES_UPDATED_COUNTER] ?? 0;
                 const warm = this.finishedWallMs === null ? '' : `; warmed up in ${(this.finishedWallMs / 1000).toFixed(1)} s`;
-                return `${grid}; ${updated.toLocaleString('en')} updated per frame (budget ${this.settings.budgetMs} ms)${warm}`;
+                const rays = this.ddgi?.settings.raysPerProbe ?? 0;
+                return `${grid}; ${this.settings.preset} preset, ${rays} rays each; ${updated.toLocaleString('en')} updated per frame (budget ${this.settings.budgetMs} ms)${warm}`;
             }
         }
     }
@@ -747,7 +760,9 @@ export class DdgiTechnique extends ScenePassTechnique {
             probes: field?.grid.probeCount ?? 0,
             probe_grid: field ? field.grid.counts.join('x') : '',
             probe_spacing_m: this.context.loaded.manifest.volume.probeSpacing,
+            preset: this.settings.preset,
             rays_per_probe: ddgi?.settings.raysPerProbe ?? 0,
+            distance_texels: ddgi?.settings.distanceTexels ?? 0,
             budget_ms: this.settings.budgetMs,
             warmup_passes: ddgi?.settings.warmUpPasses ?? 0,
         };

@@ -15,6 +15,7 @@
 
 import type { FrameBudget, FrameInput } from '../../../../packages/ddgi-core/src/platform/contract/frame.ts';
 import type { InstanceHandle, LightHandle, MaterialHandle } from '../../../../packages/ddgi-core/src/platform/contract/handles.ts';
+import type { GIPlatformOptions } from '../../../../packages/ddgi-core/src/platform/contract/platform.ts';
 import type { EnvironmentDescriptor, LightDescriptor } from '../../../../packages/ddgi-core/src/platform/contract/scene.ts';
 import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
 import { DDGITechnique, type DDGIField, type DDGITechniqueOptions } from '../../../../packages/ddgi-core/src/techniques/ddgi/ddgi-technique.ts';
@@ -123,10 +124,10 @@ export async function createDdgiScene(
     device: GPUDevice,
     manifestId: string,
     settings: Partial<DDGISettingsInput> = {},
-    options: SceneOptions & { readonly gpuTiming?: boolean; readonly technique?: DDGITechniqueOptions } = {},
+    options: SceneOptions & { readonly gpuTiming?: boolean; readonly technique?: DDGITechniqueOptions; readonly textureLayerSize?: GIPlatformOptions['textureLayerSize'] } = {},
 ): Promise<DdgiScene> {
     const manifest = loadManifest(manifestId);
-    const platform = new GIPlatformImpl(device, { label: `ddgi ${manifestId}`, gpuTiming: options.gpuTiming });
+    const platform = new GIPlatformImpl(device, { label: `ddgi ${manifestId}`, gpuTiming: options.gpuTiming, textureLayerSize: options.textureLayerSize });
     const lights: LightHandle[] = [];
     const materials: MaterialHandle[] = [];
     const instances = new Map<string, InstanceHandle>();
