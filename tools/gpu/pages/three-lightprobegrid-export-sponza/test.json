@@ -1,0 +1,5 @@
+{
+    "description": "T5.3: Sponza lit by the exported LightProbeGrid against live GI: the test view's mean within 15%, an exact JSON round trip; screenshot side by side. Needs the downloaded Sponza.",
+    "timeoutMs": 900000,
+    "manual": true
+}
