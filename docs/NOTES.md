@@ -136,6 +136,10 @@ One bullet per fact, each with its source. Add a bullet when something cost you 
 
 ## Tooling and environment
 
+- **`VITE_DDGI_PRESET=low|medium|high`** runs `ddgi-furnace`, `ddgi-leak`, `platform-recompiles` and `ddgi-textured-furnace` with a quality preset's rays, tiles and texture store (`ddgi-shared/page-preset.ts`); an unknown name fails the page. They keep their own budget (every probe every frame) and the manifest's spacing. Source: T5.1.
+- **Chrome on the M5 Pro reports the adapter as `vendor: 'apple', architecture: 'metal-3'` with empty `device` and `description`,** so nothing tells a base M chip from a Pro or Max; `recommendPreset` gives such a Mac `high`. Source: T5.1 (runner's adapter report).
+- **The engine-free `TestView` (and any page kernel built through `platform.kernels`) counts in `stats.recompiles`:** read the counter before making it. Source: T5.1 (`ddgi-presets`).
+
 - **The GPU runner prints a failed page's message only, not its `log` lines** (those are in the page and its screenshot, which cuts off long logs). Put a failing page's numbers in its error message. Source: T3.6 (`ddgi-camera-volume`).
 - **Bistro exterior with two DDGI volumes needed a 136 MB storage binding** (135,803,424 bytes, over the default 128 MB; the platform's limit error said so), so `ddgi-camera-volume` asks `runGpuTest` for `requiredLimits` of 512 MB. Source: T3.6.
 - **Choosing the GPU in headless Chrome:**
@@ -333,6 +337,7 @@ One bullet per fact, each with its source. Add a bullet when something cost you 
 - **A closed `ImageBitmap` reads as 0 × 0 and a transferred `PixelData` buffer as 0 bytes,** so they are refused by the size checks, not by an exception (both GPUs). A source that throws when read is refused alone too (the store catches per source). **Another device's `GPUTexture` throws nothing:** binding it is a validation error ("is associated with [Device], and cannot be used with [Device]") that would invalidate the host's whole command buffer, so the store binds each new `GPUTexture` source once inside an error scope and uses it only after the scope comes back clean: 2 frames on the RTX 3060. Source: T4.2, `textures-sources`.
 - **Texture sampling at hits matches a CPU sampler to the filter hardware's precision:** on the uv board, the worst channel is 0.0073 off on the RTX (an emission of 1.9) and 0.0029 on the Intel UHD, mean 0.0003 and 0.00015, over 6,912 hits with mip 0 and ray-cone mips, head-on and at 50°. Source: T4.1, `textures-uv-board`.
 - **Sponza (curtains) through the three adapter (T4.3):** 55 textures, 50 materials, 55 store layers (19.2 MB). Its `dirt_decal` is glTF `BLEND` with opacity 0.35 and no metallicFactor (metalness 1, no metalness map), so it is stochastic and passes at least 65% of rays once the core honours `stochastic` (T4.2b); until then it traces as an opaque black sheet (albedo × (1 − 1) = 0). The curtain fabrics have metalness 1 with a metalness map, as most of Sponza.
+- **The store's layer size is a platform option** (`createGI(device, { textureLayerSize: 64 | 128 | 256 })`, T5.1; the presets set it). At 256 the kernel's and the sampling module's WGSL and the build steps are the same as M4's, to the character (checked against the old source). The CPU twin (`texture-store-cpu.ts`), the reference tracer and the uv-board page stay at 256, so a CPU-against-GPU texture check only means something on a 256 store. At 128 the textured furnace reads +0.15% against flat on the M5 Pro (256: +0.06%). Source: T5.1.
 
 ## Tracing (measured)
 

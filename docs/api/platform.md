@@ -47,6 +47,75 @@ The host owns the device, the scene and the frame. The platform keeps its own si
 
 The lifecycle names match the pmndrs siblings: `prepare()`, `isReady`, `encode()`, `resetHistory()`, `dispose()`, `gpuTiming`, and settings as live objects. Note one rename from SPEC: the per-frame call is `encode(encoder, frame)`, not `update(encoder, budget)`. The budget is a field of `frame`.
 
+## Quality presets
+
+A host can pick one word instead of thirty settings (T5.1; docs/design/m5-coverage.md §1). `ddgiPreset(name)` returns plain data, a new object each call, so a host can change single fields:
+
+```ts
+import { createGI, DDGITechnique, ddgiPreset, recommendPreset } from '@pmndrs/ddgi/core';
+
+const adapter = await navigator.gpu.requestAdapter();
+const preset = ddgiPreset(recommendPreset(adapter.info, adapter.limits));   // 'low', 'medium' or 'high'
+const gi = createGI(device, { textureLayerSize: preset.textureLayerSize });
+const ddgi = gi.addTechnique(new DDGITechnique({ ...preset.ddgi, volume }));
+// ... prepare, then every frame:
+gi.encode(encoder, { deltaTime, budget: preset.budget, camera });
+```
+
+A preset has four parts:
+
+- `ddgi`: the DDGI settings it changes (rays per probe and the two tile sizes). Every other setting keeps its default. Spread it before your own settings, so yours win.
+- `budget`: the per-frame budget to pass as `frame.budget`.
+- `textureLayerSize`: `createGI`'s option for the texture store, the platform's own copy of every material texture that rays read.
+- `probeSpacing`: metres between probes, for hosts that don't set a spacing themselves (three: a `GIVolume` made without probe counts). A host that sets one keeps it.
+
+| | `low` | `medium` | `high` (the defaults) | What going down costs in look |
+| --- | --- | --- | --- | --- |
+| Rays per probe (`raysPerProbe`) | 128 | 192 | 256 | Each update is noisier, so GI flickers a little more and takes a little longer to settle. The first 32 rays never blend, so 128 still leaves 96. |
+| Distance tile (`distanceTexels`) | 8² | 10² | 14² | What each probe can see is coarser: thin walls and small gaps blur a little and leak sooner. This tile is most of a probe's memory and blend work. |
+| Irradiance tile (`irradianceTexels`) | 6² | 6² | 6² | Not lowered: it is already small, and 4² would make the light's direction visibly blocky. |
+| Budget (`budget.gpuMs`) | 1 ms | 1.5 ms | 2 ms | Fewer probes updated a frame, so light follows changes more slowly. The platform's floor still sweeps every probe within a few seconds. |
+| Texture store (`textureLayerSize`) | 128² | 256² | 256² | Only rays hitting a texture up close see fewer texels: GI rays mostly read coarse mips. A quarter of the memory. |
+| Spacing when the host sets none (`probeSpacing`) | 2 m | 1.5 m | 1 m | Light that changes over less than the spacing (a doorway, a corner) blurs. 2 m has an eighth of 1 m's probes. |
+
+`high` is exactly the defaults: what M1 to M4 were checked with on the RTX 3060, and what the M5 Pro runs. A unit test holds it to that (`presets.test.ts`). `low` is for the correctness devices (the Intel UHD, the iPad, older iOS). Values are from the settings' own ranges, not tuned (DECISIONS 2026-11-10, "Feature coverage before tuning").
+
+**What they cost, measured** (`ddgi-presets`, M5 Pro, Chrome headless, the manifest's spacing; every probe updated every frame for 600 frames, then the update timed and the test view's indirect mean read at Cornell's `front` and two-room's `lit-room` views):
+
+| Scene | Preset | Probes | Rays a frame | DDGI memory | Update, GPU | Indirect mean against `high` |
+| --- | --- | --- | --- | --- | --- | --- |
+| Cornell | low | 1,728 | 221,184 | 8.9 MB | 0.65 ms | −0.50% |
+| Cornell | medium | 1,728 | 331,776 | 12.1 MB | 1.06 ms | +0.13% |
+| Cornell | high | 1,728 | 442,368 | 16.5 MB | 1.97 ms | 0 |
+| Two-room | low | 1,071 | 137,088 | 7.5 MB | 0.88 ms | −0.56% |
+| Two-room | medium | 1,071 | 205,632 | 9.9 MB | 1.22 ms | −0.14% |
+| Two-room | high | 1,071 | 274,176 | 13.0 MB | 1.65 ms | 0 |
+
+With the preset's own spacing instead, Cornell would have 27 / 64 / 216 probes and two-room 30 / 54 / 180.
+
+Every preset passes the correctness checks on the M5 Pro (`VITE_DDGI_PRESET=<name> pnpm test:gpu --filter ddgi-furnace`, and the same for the others; rows in `bench/results/checks.csv` under `t5.1/`):
+
+| Check | `low` | `medium` | `high` | Limit |
+| --- | --- | --- | --- | --- |
+| `ddgi-furnace`, mean error | 0.31% | 0.26% | 0.22% | 2% |
+| `ddgi-leak`, two-room against Cycles | 0.86% | 0.87% | 0.87% | 1% |
+| `ddgi-leak`, thin wall's dark side (reported) | 3.20% | 2.08% | 0.59% | none |
+| `ddgi-leak`, closed door's dark side (reported) | 0.10% | 0.08% | 0.06% | none |
+| `ddgi-textured-furnace`, textured against flat | +0.15% (128² store) | +0.10% | +0.06% | 1% |
+| `platform-recompiles` | 0 | 0 | 0 | 0 |
+
+The thin wall shows the coarser distance tiles' cost: its dark side gets 3.2% of the lit side's light at `low`, 0.6% at `high`.
+
+**Changing presets needs a new `prepare`.** Rays and tile sizes size DDGI's buffers and atlases, as they always have, so switching a running technique to another preset means new settings and `prepare` again (or a new technique). That's how the settings work, not a recompile bug. The texture store's size is fixed for the platform's life.
+
+**`recommendPreset(adapterInfo, limits, hints?)`** says which preset to start from: `low` for integrated and mobile GPUs, `high` otherwise. It is advice only: nothing applies it behind the host's back. Browsers say little about the GPU (Chrome gives a vendor and an architecture, and usually no chip name), so its rules are guesses from what they do say, in order:
+
+1. a software adapter, a phone or tablet (`hints.mobile`, or read from `navigator`), or a mobile GPU maker (Qualcomm, ARM, Imagination, Samsung, MediaTek): `low`;
+2. an adapter whose buffers are capped under 1 GiB: `low`;
+3. Intel: `low` unless the architecture is an Arc card's;
+4. Apple on a Mac: `high` (the Pro and Max chips are the target hardware). A description that names a base M chip gives `low`, but Chrome doesn't show the chip, so a base Mac usually gets `high`;
+5. AMD: `low` when the description names integrated Radeon graphics, otherwise `high`; NVIDIA and anything else: `high`.
+
 ## Design choices, and why
 
 ### The scene
@@ -162,6 +231,11 @@ Gaps:
 The answers go in PROGRESS. Any change to the contract is made in both the TypeScript and this page, and listed in a "Revisions" section here.
 
 ## Revisions
+
+### During M5, 2026-11-10
+
+- **Host-facing (T5.1): quality presets.** `ddgiPreset(name)`, `recommendPreset(adapterInfo, limits, hints?)`, `DDGI_PRESET_NAMES`, `isDDGIPresetName` and their types, from `@pmndrs/ddgi/core` (section "Quality presets" above). Plain data over the existing settings; nothing in the frame changed.
+- **Host-facing (T5.1): `GIPlatformOptions.textureLayerSize`** (`64 | 128 | 256`, default 256): the texture store's layer size, fixed for the platform's life. At 256 the store, its kernel and the sampling module's WGSL are what M4 checked, to the character. Smaller layers have one mip fewer per halving; the ray cone's mip and the wrap's half texel are worked out in the store's own texels. Implementation-only: `storeLayout(layerSize)` and `textureStoreWgsl(layerSize)` (textures/texture-store-wgsl.ts), and `PlatformTextureStore`'s `layerSize` option. The CPU mirrors and the repository's reference tracer stay at 256.
 
 ### During M3, 2026-11-09
 
