@@ -33,6 +33,15 @@ Not verified: NVIDIA and Intel (not on this Mac). The arithmetic is unchanged wh
 Numbers: added work is about 3 compares and 4 selects per edge, three edges per triangle test. `trace-bench-quick` once each way (unclocked, shared GPU) was too noisy to show a cost: the unchanged three-mesh-bvh rows moved 20%.
 Next: none for the BVH track (`packages/bvh` wasn't involved). The lead can add a task row if wanted; there was none for this work.
 
+## 2026-11-10 · T3.3/T3.7 Mac GPU skinning one pose behind · implementer (opus)
+Did (branch `m34-mac-skinning`): `GpuSkinningPose.nextPose` calls `mesh.skeleton.update()` before `renderer.compute` (`packages/ddgi-three/src/gpu-skinning.ts`); NOTES entry. Cause: three refreshes `skeleton.boneMatrices` at most once per `nodeFrame.frameId`, and the frame id moves only in three's requestAnimationFrame loop. The render before the bone change had already marked the skeleton updated in that frame id, so the compute uploaded the old bone matrices. Evidence, from a temporary wrap of `renderer.compute` in the page (removed): the hinge matrix the compute used differed from the bone's current one by 1.0 at the fold and unfold computes, 0 at rest. The pose key then matched, so no later compute fixed it. Not an ExternalTexture, usage or limit issue: the copy and refit worked, they just got the previous pose.
+Verified, Apple M5 Pro (apple/metal-3), headless Chrome, bench lock, untimed:
+- `three-deforming-gi` passes. GPU skinning before: folded upright 2830 px / folded 0, floor +0.03%, back 29.0% / 22.2% off ("rest again" showed the fold, 688 px). After: folded 0 / 688 px, floor +28.5%, back 0.34% / 0.25%; 3 GPU poses, recompiles 0. CPU skinned and both morphs unchanged (exact-box morph still 6.4% / 14.6%, ungated known miss).
+- `three-change-tracking`, `three-wind-tree-gi`, `scene-deformed-positions`, `platform-recompiles` pass.
+- typecheck, lint clean; unit tests 1,466 of 1,466.
+Not verified: RTX 3060 and Intel UHD after the change (the change only flattens current bone matrices, so it shouldn't differ there); the viewer.
+Next: a host rendering skinned motion vectors may see one frame of zero skin velocity on a pose frame (`previousBoneMatrices` copies our refreshed matrices); not looked into.
+
 ## 2026-11-10 · T3.4 merged with `m3` (T3.6) · implementer (opus)
 Did: merged `m3` (a1abecd) into `m3-t3.4`. Conflicts were only in the PROGRESS and DECISIONS tops; both sides kept. The marks, wakes and receiver entries already go through T3.6's conversion: the table holds window probes, and `ddgiMarkThread` turns each into its slot. One fix: the far set's contrast walks the probes around a box's centre in window coordinates, and it now reads each one through its slot (`ddgiProbeSlot`). `ddgi-wake-air-probes` adds a camera-following volume (8 probes wide on x) that scrolls with the ball; the probes near the ball's last box must be woken in their slots.
 Verified, RTX 3060 Laptop (nvidia/ampere), bench lock, untimed; all pass:

@@ -16,6 +16,9 @@
  * when they changed, it runs the compute with `renderer.compute`, which three
  * submits at once. The platform's copy comes later on the same queue (the
  * host's frame is submitted after the GI update), so it reads this pose.
+ * Before the compute it calls `skeleton.update()` itself: three's skinning
+ * refreshes the bone matrices once per animation frame, which can leave them
+ * a pose behind (NOTES: "`computeSkinning` can skin the previous pose").
  *
  * Skinned meshes with position morph targets stay on the CPU pose:
  * `computeSkinning` skins the rest positions only.
@@ -70,6 +73,12 @@ export class GpuSkinningPose implements PoseSource {
     nextPose(): DeformedPositions | null {
         if (!this.readKey()) return null;
         if (!this.compute) this.build();
+        // `computeSkinning` refreshes `skeleton.boneMatrices` (each bone's world matrix times its inverse bind
+        // matrix) only once per three frame id, and the frame id advances only in three's own
+        // requestAnimationFrame loop, not per render or compute. A render in the same frame id as this compute has
+        // already marked the skeleton updated, with the bones as they were then, so the compute would skin the
+        // previous pose. The bones' world matrices are the ones the key just read: flatten them now.
+        this.mesh.skeleton.update();
         this.context.renderer.compute(this.compute!);
         return this.positions;
     }
