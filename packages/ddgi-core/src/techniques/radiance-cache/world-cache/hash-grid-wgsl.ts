@@ -379,12 +379,16 @@ fn HashGridCache_PreviousPackedTileCountWord() -> u32 {
     return HASHGRIDCACHE_PACKEDTILECOUNTBUFFER1 - g_HashGridCacheConstants.buffer_ping_pong;
 }
 
+// Each list is indexed from its own start: capacity.ts starts every per-tile array on a 64-word
+// boundary, so list 1 is num_tiles words after list 0 only when num_tiles is a multiple of 64.
 fn HashGridCache_PackedTileIndexWord(packed_tile_index: u32) -> u32 {
-    return HASHGRIDCACHE_PACKEDTILEINDEXBUFFER0 + g_HashGridCacheConstants.buffer_ping_pong * g_HashGridCacheConstants.num_tiles + packed_tile_index;
+    let list_start = select(HASHGRIDCACHE_PACKEDTILEINDEXBUFFER0, HASHGRIDCACHE_PACKEDTILEINDEXBUFFER1, g_HashGridCacheConstants.buffer_ping_pong != 0u);
+    return list_start + packed_tile_index;
 }
 
 fn HashGridCache_PreviousPackedTileIndexWord(packed_tile_index: u32) -> u32 {
-    return HASHGRIDCACHE_PACKEDTILEINDEXBUFFER1 - g_HashGridCacheConstants.buffer_ping_pong * g_HashGridCacheConstants.num_tiles + packed_tile_index;
+    let list_start = select(HASHGRIDCACHE_PACKEDTILEINDEXBUFFER1, HASHGRIDCACHE_PACKEDTILEINDEXBUFFER0, g_HashGridCacheConstants.buffer_ping_pong != 0u);
+    return list_start + packed_tile_index;
 }
 
 // ---- Hash-grid radiance caching common functions (hash_grid_cache.hlsl:88-246) ----

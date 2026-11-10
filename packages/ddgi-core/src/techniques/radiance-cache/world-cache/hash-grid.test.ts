@@ -506,3 +506,52 @@ describe("the binding budget (register D6): the platform's 8 storage buffers per
         await expect(new HashGridCache().prepare(context)).rejects.toThrow(/maxStorageBuffersPerShaderStage = 8, but the device allows 7/);
     });
 });
+
+// ---- The ping-pong packed tile lists' word indices, read from the WGSL itself ----
+
+/**
+ * One of the shared module's `fn name(packed_tile_index: u32) -> u32`
+ * functions as a JavaScript function of (buffer_ping_pong, index), with the
+ * module's `HASHGRIDCACHE_*` constants and the constant block's `num_tiles`
+ * substituted. The functions are a few
+ * `let`s and a `return` over `select` and u32 arithmetic, which read the same
+ * in JavaScript once the `u` suffixes go.
+ */
+function wgslIndexFunction(code: string, name: string, numTiles: number): (pingPong: number, index: number) => number {
+    const body = new RegExp(`fn ${name}\\(packed_tile_index: u32\\) -> u32 \\{([^}]*)\\}`).exec(code)?.[1];
+    if (body === undefined) throw new Error(`no ${name} in the shared WGSL`);
+    const constants = new Map<string, string>();
+    for (const match of code.matchAll(/^const (HASHGRIDCACHE_\w+): u32 = (\d+)u;/gm)) constants.set(match[1], match[2]);
+    const javascript = body
+        .replace(/\bHASHGRIDCACHE_\w+\b/g, (constant) => constants.get(constant) ?? constant)
+        .replace(/g_HashGridCacheConstants\.buffer_ping_pong/g, 'pingPong')
+        .replace(/g_HashGridCacheConstants\.num_tiles\b/g, String(numTiles))
+        .replace(/\blet\b/g, 'const')
+        .replace(/\b(\d+)u\b/g, '$1');
+    const select = (onFalse: number, onTrue: number, condition: boolean): number => (condition ? onTrue : onFalse);
+    const run = new Function('select', 'pingPong', 'packed_tile_index', javascript) as (s: typeof select, pingPong: number, index: number) => number;
+    return (pingPong, index) => run(select, pingPong, index);
+}
+
+describe('the packed tile lists (hash_grid_cache.hlsl:75-78)', () => {
+    for (const [label, options] of [
+        ['a small cache: 4 tiles, so the 64-word alignment pads between the lists', { hashGridCacheNumBuckets: 0, hashGridCacheNumTilesPerBucket: 2, hashGridCacheTileCellRatio: 8 }],
+        ["Capsaicin's default capacity", DEFAULT_HASH_GRID_CACHE_OPTIONS],
+    ] as const) {
+        it(`indexes this frame's and last frame's list from their own starts: ${label}`, () => {
+            const capacity = hashGridCacheCapacity(options);
+            const layout = hashGridCacheBufferLayout(capacity);
+            const code = hashGridCacheWgsl(1, layout, HASH_GRID_CACHE_WORDS_ONLY);
+            const current = wgslIndexFunction(code, 'HashGridCache_PackedTileIndexWord', capacity.numTiles);
+            const previous = wgslIndexFunction(code, 'HashGridCache_PreviousPackedTileIndexWord', capacity.numTiles);
+            const starts = [layout.words.packedTileIndexBuffer0, layout.words.packedTileIndexBuffer1];
+            if (capacity.numTiles < 64) expect(starts[1]).toBeGreaterThan(starts[0] + capacity.numTiles);
+            for (const pingPong of [0, 1]) {
+                for (const index of [0, 1, capacity.numTiles - 1]) {
+                    expect(current(pingPong, index)).toBe(starts[pingPong] + index);
+                    expect(previous(pingPong, index)).toBe(starts[1 - pingPong] + index);
+                }
+            }
+        });
+    }
+});
