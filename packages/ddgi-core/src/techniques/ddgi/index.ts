@@ -33,6 +33,8 @@ export {
     type PresetAdapterLimits,
     type RecommendPresetHints,
 } from './presets.ts';
+// The type of DDGISettings.lightGroups, for hosts that build it.
+export type { DDGILightGroups } from './light-groups.ts';
 export { PROBE_HISTORY_WORD, PROBE_HISTORY_WORDS, PROBE_STATE, PROBE_STATE_LABELS, type DistanceFormat } from './layout.ts';
 // The shading module renderers read (technique.shading), and its debug view ids.
 export { DDGIShadingModule, DDGI_SHADING_PARAMETER_NAMES } from './shading.ts';

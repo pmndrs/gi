@@ -420,6 +420,7 @@ Every name `@pmndrs/ddgi/core` exports, in one place. A unit test (`tools/docs/d
 | `DDGITechnique` | DDGI. `new DDGITechnique(settings)`; then `settings` (live), `field`, `counters`, `debugViews`, `shading`, `setGroupWeight`, `setEnvironmentWeight`, `resetHistory`. |
 | `DDGISettings` | Every DDGI setting. Most are read every frame; the volumes, tile sizes, `maxProbesPerFrame`, `lightGroups.count` and `sunLayer` need a new `prepare`. |
 | `DDGISettingsInput` | What the constructor takes: a `volume` or `volumes`, and any other settings. |
+| `DDGILightGroups` | The type of `DDGISettings.lightGroups`: how many groups get a layer of their own (a new `prepare` when it changes), and their live weights. |
 | `DDGIVolumeSettings` | One box of probes: `center`, `size`, `spacing`, `priority`, `follow`. |
 | `DEFAULT_DDGI_SETTINGS` | The defaults (the `high` preset). |
 | `DEFAULT_WARM_UP_PASSES`, `DEFAULT_WARM_UP_MAX_SECONDS`, `DEFAULT_WARM_UP_MIN_PASSES` | The warm-up's defaults: 16 passes over every probe, stopping after 8 s, but not before 2. |
