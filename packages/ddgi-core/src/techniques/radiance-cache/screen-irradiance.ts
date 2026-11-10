@@ -1,11 +1,16 @@
 /**
- * Phase 2's second half (RC2.2): the passes from the blended probe atlas to
- * irradiance per pixel, as Capsaicin runs them after `BlendScreenProbes`
- * (`GI1::render`, gi1.cpp:2561-2636):
+ * The passes from the blended probe atlas to irradiance per pixel, as
+ * Capsaicin runs them after `BlendScreenProbes` (`GI1::render`,
+ * gi1.cpp:2561-2636):
  *
- * 1. `FilterProbeMask`, once per mip level of the probe mask (gi1.cpp:2561-2585);
- * 2. `ProjectScreenProbes`, over every possible ray (gi1.cpp:2618-2625);
- * 3. `InterpolateScreenProbes`, a thread per pixel (gi1.cpp:2629-2636).
+ * 1. `FilterProbeMask`, once per mip level of the probe mask (gi1.cpp:2561-2585; RC2.2);
+ * 2. `FilterScreenProbes` twice, over every possible ray (gi1.cpp:2588-2614; RC4.2):
+ *    the atlas into last frame's across the screen, then back down it, so the
+ *    atlas holds the filtered probes, which the technique keeps as the next
+ *    frame's history (Capsaicin's flip, gi1.cpp:3097);
+ * 3. `ProjectScreenProbes`, over every possible ray (gi1.cpp:2618-2625);
+ * 4. `InterpolateScreenProbes`, a thread per pixel (gi1.cpp:2629-2636), with
+ *    SSGI's outputs (ssgi.ts; RC4.2).
  *
  * The kernels are in `wgsl/screen-irradiance.ts`. This file makes their
  * resources (the SH texture and the irradiance image, per screen size, as
@@ -19,8 +24,12 @@ import type { TechniqueContext } from '../../platform/contract/technique.ts';
 import type { ComputeKernel } from '../../platform/contract/wgsl.ts';
 import { PROBE_SIZE, type ScreenProbeLayout } from './settings.ts';
 import {
+    BLUR_DIRECTION_BYTES,
+    BLUR_DIRECTIONS,
     FILTER_PROBE_MASK_GROUP,
     FILTER_PROBE_MASK_WGSL,
+    FILTER_PROBES_GROUP,
+    FILTER_PROBES_WGSL,
     INTERPOLATE_GROUP,
     INTERPOLATE_WGSL,
     PROJECT_GROUP,
@@ -51,17 +60,27 @@ export interface ScreenIrradianceInputs {
     readonly frameUniforms: GPUBuffer;
     /** The compacted probes (`RcProbeSpawn`: the count, then the seeds). */
     readonly probeSpawn: GPUBuffer;
-    /** The blended probe atlas (`rgba16float`). */
+    /** The blended probe atlas (`rgba16float`): `g_ScreenProbes_ProbeBuffer`, the filtered probes once the filter has run. */
     readonly probeAtlas: GPUTexture;
+    /**
+     * The other atlas (`g_ScreenProbes_PreviousProbeBuffer`), holding a copy of
+     * the blended atlas (gi1.cpp:2540-2541): the filter's first pass writes it,
+     * the second reads it.
+     */
+    readonly previousProbeAtlas: GPUTexture;
     /** The probe mask (`r32uint`), level 0 written by `BlendScreenProbes`, with room for its mip chain. */
     readonly probeMask: GPUTexture;
     /** The host's depth and normals (`FrameScreen`). */
     readonly depth: GPUTexture;
     readonly normal: GPUTexture;
+    /** SSGI's outputs this frame (ssgi.ts): the occlusion with the bent normal, and the near-field light. */
+    readonly occlusionAndBentNormal: GPUTexture;
+    readonly nearField: GPUTexture;
 }
 
 interface Kernels {
     readonly filterProbeMask: ComputeKernel;
+    readonly filterProbes: ComputeKernel;
     readonly project: ComputeKernel;
     readonly interpolate: ComputeKernel;
 }
@@ -89,6 +108,8 @@ interface InputGroups {
     readonly inputs: ScreenIrradianceInputs;
     /** One group per mip level from 1: level − 1 read, level written. */
     readonly filterLevels: readonly GPUBindGroup[];
+    /** FilterScreenProbes' two passes: the atlas into the previous atlas, then back. */
+    readonly filterProbes: readonly [GPUBindGroup, GPUBindGroup];
     readonly project: GPUBindGroup;
     readonly interpolate: GPUBindGroup;
 }
@@ -112,26 +133,36 @@ export class ScreenIrradiance {
         private readonly context: TechniqueContext,
         private readonly kernels: Kernels,
         private readonly constants: GPUBuffer,
+        /** `g_BlurDirection` of each filter pass, written once. */
+        private readonly blurDirections: readonly [GPUBuffer, GPUBuffer],
     ) {
         this.placeholders = makePlaceholders(context.device);
     }
 
-    /** Compiles the three kernels. */
+    /** Compiles the four kernels. */
     static async create(context: TechniqueContext): Promise<ScreenIrradiance> {
         const kernel = (label: string, code: string, entryPoint: string, group: GPUBindGroupLayoutDescriptor) =>
             context.kernels.computeKernel({ label: `${TECHNIQUE_ID}/${label}`, modules: [], code, entryPoint, ownGroups: [group] });
         const entry = SCREEN_IRRADIANCE_ENTRY_POINT;
-        const [filterProbeMask, project, interpolate] = await Promise.all([
+        const [filterProbeMask, filterProbes, project, interpolate] = await Promise.all([
             kernel(entry.filterProbeMask, FILTER_PROBE_MASK_WGSL, entry.filterProbeMask, FILTER_PROBE_MASK_GROUP),
+            kernel(entry.filterProbes, FILTER_PROBES_WGSL, entry.filterProbes, FILTER_PROBES_GROUP),
             kernel(entry.project, PROJECT_WGSL, entry.project, PROJECT_GROUP),
             kernel(entry.interpolate, INTERPOLATE_WGSL, entry.interpolate, INTERPOLATE_GROUP),
         ]);
-        const constants = context.device.createBuffer({
+        const device = context.device;
+        const constants = device.createBuffer({
             label: `${TECHNIQUE_ID} screen probes constants`,
             size: SCREEN_PROBES_CONSTANTS_BYTES,
             usage: BUFFER_USAGE.uniform | BUFFER_USAGE.copyDst,
         });
-        return new ScreenIrradiance(context, { filterProbeMask, project, interpolate }, constants);
+        const blurDirection = (direction: readonly [number, number], label: string): GPUBuffer => {
+            const buffer = device.createBuffer({ label: `${TECHNIQUE_ID} FilterScreenProbes ${label}`, size: BLUR_DIRECTION_BYTES, usage: BUFFER_USAGE.uniform | BUFFER_USAGE.copyDst });
+            device.queue.writeBuffer(buffer, 0, new Int32Array([direction[0], direction[1], 0, 0]));
+            return buffer;
+        };
+        const blurDirections = [blurDirection(BLUR_DIRECTIONS[0], 'across'), blurDirection(BLUR_DIRECTIONS[1], 'down')] as const;
+        return new ScreenIrradiance(context, { filterProbeMask, filterProbes, project, interpolate }, constants, blurDirections);
     }
 
     /** The latest frame's irradiance image (screen-sized), or null before the first {@link encode}. */
@@ -161,14 +192,15 @@ export class ScreenIrradiance {
     }
 
     get memoryBytes(): number {
-        return SCREEN_PROBES_CONSTANTS_BYTES + (this.sized?.bytes ?? 0);
+        return SCREEN_PROBES_CONSTANTS_BYTES + 2 * BLUR_DIRECTION_BYTES + (this.sized?.bytes ?? 0);
     }
 
     /**
-     * Records the three passes, after `BlendScreenProbes` in the same
-     * encoder. `camera` is the frame's (`TechniqueScreenFrame.camera`): its
-     * projection sizes the interpolation's cells, its view gives the axis
-     * linear depth is measured along.
+     * Records the passes, after `BlendScreenProbes` and the atlas's copy into
+     * the previous atlas, in the same encoder. `camera` is the frame's
+     * (`TechniqueScreenFrame.camera`): its projection sizes the filter's and
+     * the interpolation's cells, its view gives the axis linear depth is
+     * measured along.
      */
     encode(encoder: GPUCommandEncoder, inputs: ScreenIrradianceInputs, camera: FrameCamera): void {
         const { layout } = inputs;
@@ -188,6 +220,7 @@ export class ScreenIrradiance {
             pass.setBindGroup(1, group);
             pass.dispatchWorkgroups(Math.ceil(Math.max(layout.probeCount[0] >> level, 1) / tile), Math.ceil(Math.max(layout.probeCount[1] >> level, 1) / tile));
         });
+        this.recordProbeFilter(pass, groups, layout);
         // ProjectScreenProbes over every possible ray: one probe per workgroup (gi1.cpp:2618-2625).
         kernels.project.bind(pass);
         pass.setBindGroup(1, groups.project);
@@ -199,9 +232,39 @@ export class ScreenIrradiance {
         pass.end();
     }
 
+    /**
+     * `FilterScreenProbes` alone again, on the latest frame's inputs, after
+     * the caller has copied the atlas into the previous atlas (as the frame
+     * does after the blend): what a test runs on an atlas of its own. Does
+     * nothing before the first {@link encode}.
+     */
+    encodeProbeFilter(encoder: GPUCommandEncoder): void {
+        const groups = this.groups;
+        if (!groups) return;
+        const pass = encoder.beginComputePass({ label: `${TECHNIQUE_ID}/FilterScreenProbes` });
+        this.recordProbeFilter(pass, groups, groups.inputs.layout);
+        pass.end();
+    }
+
+    /**
+     * FilterScreenProbes' two passes over every possible ray (gi1.cpp:2588-2614):
+     * across the screen from the atlas into the previous atlas, then down it
+     * from there back into the atlas. Each dispatch is its own usage scope, so
+     * the second reads what the first wrote.
+     */
+    private recordProbeFilter(pass: GPUComputePassEncoder, groups: InputGroups, layout: ScreenProbeLayout): void {
+        const maxPerDimension = this.context.device.limits.maxComputeWorkgroupsPerDimension;
+        this.kernels.filterProbes.bind(pass);
+        for (const group of groups.filterProbes) {
+            pass.setBindGroup(1, group);
+            dispatchSplit(pass, layout.maxRayCount / SCREEN_IRRADIANCE_WORKGROUP.probe, maxPerDimension);
+        }
+    }
+
     dispose(): void {
         this.releaseSized();
         this.constants.destroy();
+        for (const buffer of this.blurDirections) buffer.destroy();
         for (const texture of Object.values(this.placeholders)) texture.destroy();
     }
 
@@ -263,9 +326,12 @@ export class ScreenIrradiance {
             current.inputs.frameUniforms === inputs.frameUniforms &&
             current.inputs.probeSpawn === inputs.probeSpawn &&
             current.inputs.probeAtlas === inputs.probeAtlas &&
+            current.inputs.previousProbeAtlas === inputs.previousProbeAtlas &&
             current.inputs.probeMask === inputs.probeMask &&
             current.inputs.depth === inputs.depth &&
-            current.inputs.normal === inputs.normal;
+            current.inputs.normal === inputs.normal &&
+            current.inputs.occlusionAndBentNormal === inputs.occlusionAndBentNormal &&
+            current.inputs.nearField === inputs.nearField;
         if (same) return current;
         const device = this.context.device;
         const { kernels } = this;
@@ -278,10 +344,26 @@ export class ScreenIrradiance {
         }
         const uniforms = { buffer: inputs.frameUniforms };
         const normal = screenTextureView(inputs.normal);
+        const wholeMask = (): GPUTextureView => inputs.probeMask.createView({ baseMipLevel: 0, mipLevelCount: inputs.layout.probeMaskMipCount });
+        // g_ScreenProbes_PreviousProbeBuffer and g_ScreenProbes_ProbeBuffer of each pass (gi1.cpp:2605-2610).
+        const filterPass = (pass: 0 | 1, read: GPUTexture, write: GPUTexture): GPUBindGroup =>
+            group(`${SCREEN_IRRADIANCE_ENTRY_POINT.filterProbes} pass ${pass + 1}`, kernels.filterProbes, [
+                uniforms,
+                { buffer: this.constants },
+                screenTextureView(inputs.depth),
+                normal,
+                // The whole mip chain: FindClosestProbe walks up it.
+                wholeMask(),
+                { buffer: inputs.probeSpawn },
+                read.createView(),
+                write.createView(),
+                { buffer: this.blurDirections[pass] },
+            ]);
         const groups: InputGroups = {
             sized,
             inputs,
             filterLevels,
+            filterProbes: [filterPass(0, inputs.probeAtlas, inputs.previousProbeAtlas), filterPass(1, inputs.previousProbeAtlas, inputs.probeAtlas)],
             project: group(SCREEN_IRRADIANCE_ENTRY_POINT.project, kernels.project, [uniforms, normal, { buffer: inputs.probeSpawn }, inputs.probeAtlas.createView(), sized.probeSH.createView()]),
             interpolate: group(SCREEN_IRRADIANCE_ENTRY_POINT.interpolate, kernels.interpolate, [
                 uniforms,
@@ -289,9 +371,11 @@ export class ScreenIrradiance {
                 screenTextureView(inputs.depth),
                 normal,
                 // The whole mip chain: FindClosestProbe walks up it.
-                inputs.probeMask.createView({ baseMipLevel: 0, mipLevelCount: inputs.layout.probeMaskMipCount }),
+                wholeMask(),
                 sized.probeSH.createView(),
                 sized.irradiance.createView(),
+                inputs.occlusionAndBentNormal.createView(),
+                inputs.nearField.createView(),
             ]),
         };
         this.groups = groups;

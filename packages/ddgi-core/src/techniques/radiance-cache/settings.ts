@@ -67,9 +67,25 @@ export interface RadianceCacheSettings {
     hashGridCacheMaxMultibounceSampleCount: number;
     /** `gi1_reservoir_cache_cell_size` (gi1.h:71, default 16): world-space ReSTIR's cell, with `useResampling`. */
     reservoirCacheCellSize: number;
+    /**
+     * Capsaicin's SSGI technique (`SSGI::RenderOptions`, ssgi.h:46-53), which
+     * the GI-1.2 renderer runs before GI-1 (gi1_renderer.cpp:60-61) and whose
+     * occlusion, bent normal and near-field light `InterpolateScreenProbes`
+     * reads (`HAS_OCCLUSION`, gi1.comp:1621-1626). RC4.2.
+     *
+     * `ssgi_slice_count_` (default 1): directions around the pixel, each a
+     * slice with a horizon on both sides.
+     */
+    ssgiSliceCount: number;
+    /** `ssgi_step_count_` (default 2): depth samples per side of a slice. */
+    ssgiStepCount: number;
+    /** `ssgi_view_radius_` (default 0.2): how far the samples reach, in scene units. */
+    ssgiViewRadius: number;
+    /** `ssgi_falloff_range_` (default 0.05): the outer share of the radius over which a sample's weight falls to 0. */
+    ssgiFalloffRange: number;
 }
 
-/** Capsaicin's defaults (gi1.h:48-71). */
+/** Capsaicin's defaults (gi1.h:48-71; SSGI's, ssgi.h:48-51). */
 export const DEFAULT_RADIANCE_CACHE_SETTINGS: Readonly<RadianceCacheSettings> = Object.freeze({
     useDirectLighting: true,
     useTemporalFeedback: false,
@@ -85,6 +101,10 @@ export const DEFAULT_RADIANCE_CACHE_SETTINGS: Readonly<RadianceCacheSettings> = 
     hashGridCacheDiscardMultibounceRayProbability: 0.7,
     hashGridCacheMaxMultibounceSampleCount: 16,
     reservoirCacheCellSize: 16,
+    ssgiSliceCount: 1,
+    ssgiStepCount: 2,
+    ssgiViewRadius: 0.2,
+    ssgiFalloffRange: 0.05,
 });
 
 /** The sizes Capsaicin derives from the render size (`GI1::ScreenProbes::ensureMemoryIsAllocated`, gi1.cpp:113-129). */

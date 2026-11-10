@@ -117,12 +117,24 @@ export interface FrameScreen {
      * adapter work, so only techniques that need it ask for it.
      */
     readonly instance?: GPUTexture;
+    /**
+     * The previous frame's lit colour: linear HDR radiance per pixel, before
+     * tone mapping, as the host drew it last frame (direct light, GI and
+     * emission; Capsaicin's `PrevCombinedIllumination`). It is last frame's
+     * picture, not reprojected: a technique reads it at this frame's screen
+     * position, as Capsaicin's SSGI does. Read by screen uv, so its size may
+     * differ from `width` × `height`. Any float colour format the compute
+     * stage can read (`rgba16float` is what three and Capsaicin use). Before
+     * the host has drawn a frame, any texture of zeros. Only when a technique
+     * asks for it.
+     */
+    readonly previousLighting?: GPUTexture;
     /** The depth is reversed-Z (1 = near). */
     readonly reversedDepth?: boolean;
 }
 
 /** The optional screen channels, by their `FrameScreen` field names. */
-export type OptionalScreenChannel = 'velocity' | 'albedo' | 'instance';
+export type OptionalScreenChannel = 'velocity' | 'albedo' | 'instance' | 'previousLighting';
 
 export interface FrameInput {
     /** Seconds since the previous frame. */

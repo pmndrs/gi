@@ -8,9 +8,13 @@
  * debug views.
  *
  * Per frame, in `encodeScreen` (after the host's `encode` and its depth and
- * normal pass), the passes Capsaicin runs for the screen probes
- * (`GI1::render`, gi1.cpp:2250-2636), in its order, as far as we have them:
+ * normal pass), Capsaicin's SSGI technique, then the passes it runs for the
+ * screen probes (`GI1::render`, gi1.cpp:2250-2636), in its order:
  *
+ * 0. `SSGI` (ssgi.comp:132; ssgi.ts): occlusion, bent normal and near-field
+ *    light from the host's depth, normals and last frame's lit colour
+ *    (Capsaicin's renderer runs the SSGI technique before GI-1,
+ *    gi1_renderer.cpp:60-61; RC4.2);
  * 1. `ClearCounters` (gi1.comp:163);
  * 2. `ReprojectScreenProbes` (gi1.comp:292), then the probe cache's lookup:
  *    `CountScreenProbes` (gi1.comp:501), the platform's scan and
@@ -30,12 +34,15 @@
  *    the probe cache, and the atlas copied into last frame's (gi1.cpp:2533-2542);
  * 7. the platform's scan of the LRU flags and `ReorderScreenProbes`
  *    (gi1.comp:1334, gi1.cpp:2544-2556);
- * 8. `FilterProbeMask` (gi1.comp:249), `ProjectScreenProbes` (gi1.comp:1446)
- *    and `InterpolateScreenProbes` (gi1.comp:1515): screen-irradiance.ts
- *    (gi1.cpp:2561-2636; `FilterScreenProbes` between them is RC4.2);
- * 9. the history kept for the next frame: the mask, the SH, the host's depth
- *    and normals, and the camera (Capsaicin swaps its buffers and its
- *    framework copies the depth and normals; registers D45, D49).
+ * 8. `FilterProbeMask` (gi1.comp:249), `FilterScreenProbes` twice
+ *    (gi1.comp:1357; RC4.2), `ProjectScreenProbes` (gi1.comp:1446) and
+ *    `InterpolateScreenProbes` (gi1.comp:1515), the last with SSGI's outputs:
+ *    screen-irradiance.ts (gi1.cpp:2561-2636);
+ * 9. the history kept for the next frame: the filtered atlas (which
+ *    Capsaicin's flip makes the next frame's previous one, gi1.cpp:2606-2610,
+ *    3097), the mask, the SH, the host's depth and normals, and the camera
+ *    (Capsaicin swaps its buffers and its framework copies the depth and
+ *    normals; registers D45, D49).
  *
  * Capsaicin dispatches the per-ray passes over every possible ray
  * (`max_ray_count`, gi1.cpp:2323-2542) with an early return past the probe
@@ -61,6 +68,7 @@ import { largestProbeTileCount, probeCacheLayout, type ProbeCacheLayout } from '
 import { ScreenIrradiance, screenProbeCellSize } from './screen-irradiance.ts';
 import { DEFAULT_RADIANCE_CACHE_SETTINGS, PROBE_SPAWN_TILE_SIZE, screenProbeLayout, type RadianceCacheSettings, type ScreenProbeLayout } from './settings.ts';
 import { RadianceCacheShadingModule } from './shading.ts';
+import { ScreenSpaceGI } from './ssgi.ts';
 import { HashGridCache } from './world-cache/hash-grid-cache.ts';
 import type { WorldCache, WorldCacheProbeRays } from './world-cache/world-cache.ts';
 import { DEBUG_ENTRY_POINT, DEBUG_GROUP, DEBUG_UNIFORM_BYTES, DEBUG_UNIFORM_OFFSETS, DEBUG_WGSL, RADIANCE_CACHE_DEBUG_VIEW, type RadianceCacheDebugViewId } from './wgsl/debug.ts';
@@ -129,6 +137,9 @@ export interface RadianceCacheProbes {
     readonly probeSH: GPUTexture;
     /** The interpolated irradiance, screen-sized `rgba16float`: rgb E, alpha Capsaicin's denoiser hint. */
     readonly irradiance: GPUTexture;
+    /** SSGI's outputs (ssgi.ts), screen-sized `rgba16float`: rgb the bent normal as 0.5 n + 0.5 and a the occlusion; rgb the near-field light. */
+    readonly occlusionAndBentNormal: GPUTexture;
+    readonly nearField: GPUTexture;
 }
 
 /** The screen probes' history and the off-screen probe cache (RC4.1): what tests read. */
@@ -136,8 +147,8 @@ export interface RadianceCacheProbeHistory {
     /** `RcCounters` (`COUNTER_NAMES`): this frame's empty, override, LRU, MRU and list-element counts. */
     readonly counters: GPUBuffer;
     /**
-     * `g_ScreenProbes_PreviousProbeBuffer`: after a frame, the copy of the atlas the next frame
-     * reprojects from (`COPY_DST`: a test may write a history of its own into it).
+     * `g_ScreenProbes_PreviousProbeBuffer`: after a frame, the copy of the filtered atlas the next
+     * frame reprojects from (`COPY_DST`: a test may write a history of its own into it).
      */
     readonly previousProbeAtlas: GPUTexture;
     /** Level 0 of last frame's probe mask, as the next frame reads it. */
@@ -259,10 +270,12 @@ interface ScreenInputGroups {
 export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings> {
     readonly id = TECHNIQUE_ID;
     /**
-     * Rays through the platform's tracer; the host's depth, normals and velocity every frame
-     * (`encodeScreen`): reprojection reads the velocity, as Capsaicin's does (gi1.comp:326).
+     * Rays through the platform's tracer; the host's depth, normals, velocity and last frame's lit
+     * colour every frame (`encodeScreen`): reprojection reads the velocity, as Capsaicin's does
+     * (gi1.comp:326), and SSGI the lit colour, as Capsaicin's reads `PrevCombinedIllumination`
+     * (ssgi.cpp:90; register D56).
      */
-    readonly requirements: TechniqueRequirements = { queries: ['rays'], screen: { velocity: true } };
+    readonly requirements: TechniqueRequirements = { queries: ['rays'], screen: { velocity: true, previousLighting: true } };
     readonly settings: RadianceCacheSettings;
     /** Reads the interpolated irradiance by screen position (shading.ts). */
     readonly shading = new RadianceCacheShadingModule({ shadingTextures: () => this.shadingTextures() });
@@ -284,6 +297,9 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
             label: 'Probe SH',
             description: "The light of each tile's probe as its nine SH coefficients hold it, along the pixel's normal, as a white surface would reflect it.",
         },
+        // Capsaicin's SSGI views (ssgi_debug.comp, ssgi.cpp:94-100).
+        { kind: 'screen', id: RADIANCE_CACHE_DEBUG_VIEW.occlusion, label: 'SSGI occlusion', description: 'How open each pixel is to the sky of its own hemisphere, from nearby depth: white open, black closed in.' },
+        { kind: 'screen', id: RADIANCE_CACHE_DEBUG_VIEW.bentNormal, label: 'SSGI bent normal', description: 'The mean open direction at each pixel, as a colour (x red, y green, z blue, 0.5 for 0).' },
     ];
     readonly msPerUnit: number | undefined = undefined;
 
@@ -297,8 +313,10 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
     private screenHistoryResetPending = true;
     private screenResources: ScreenResources | null = null;
     private inputGroups: ScreenInputGroups | null = null;
-    /** SH projection and per-pixel interpolation (RC2.2): made in `prepare`. */
+    /** The probe filter, SH projection and per-pixel interpolation (RC2.2, RC4.2): made in `prepare`. */
     private irradiance: ScreenIrradiance | null = null;
+    /** Capsaicin's SSGI technique (RC4.2): made in `prepare`. */
+    private ssgi: ScreenSpaceGI | null = null;
     private latestFrameIndex = 0;
     /** The LRU half this frame reads (Capsaicin's `probe_buffer_index_` for the LRU buffers, gi1.cpp:2119, 2141). */
     private lruHalf: 0 | 1 = 0;
@@ -364,7 +382,7 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
             copyPreviousScreen: history[HISTORY_ENTRY_POINT.copyPreviousScreen],
             debug,
         };
-        const irradiance = await ScreenIrradiance.create(context);
+        const [irradiance, ssgi] = await Promise.all([ScreenIrradiance.create(context), ScreenSpaceGI.create(context)]);
 
         // The spawn and probe tiles of the largest screen the device can draw: the platform's scans
         // and compaction take their buffers when they are made (asynchronously), so a resize never
@@ -408,6 +426,7 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         this.releasePrepared();
         this.cache = cache;
         this.irradiance = irradiance;
+        this.ssgi = ssgi;
         this.screenHistoryResetPending = true;
         this.prepared = {
             kernels,
@@ -476,6 +495,9 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         const maxPerDimension = context.device.limits.maxComputeWorkgroupsPerDimension;
         const slots = resources.probeCache.slots;
 
+        // 0: Capsaicin's SSGI technique, before GI-1 (gi1_renderer.cpp:60-61).
+        this.encodeSSGI(encoder, frame, prepared);
+
         if (historyReset) {
             this.encodeHistoryReset(encoder, prepared, resources);
             this.screenHistoryResetPending = false;
@@ -533,7 +555,8 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         this.encodeWorldCache(encoder, frame, resources);
 
         // 6: the rays into the probe atlas, the mask and the probe cache; then the atlas into last
-        // frame's (gfxCommandCopyTexture, gi1.cpp:2540-2541), which RC4.2's FilterScreenProbes reads.
+        // frame's (gfxCommandCopyTexture, gi1.cpp:2540-2541): FilterScreenProbes' second pass reads
+        // the reprojected probes' tiles there, which its first pass doesn't write.
         const blendPass = encoder.beginComputePass({ label: `${TECHNIQUE_ID}/blend`, timestampWrites: timer.computePass(`${TECHNIQUE_ID}/blend`) });
         kernels.blend.bind(blendPass);
         blendPass.setBindGroup(1, groups.blend);
@@ -549,8 +572,8 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         reorderPass.dispatchWorkgroups(Math.ceil(slots / HISTORY_WORKGROUP_SIZE.list));
         reorderPass.end();
 
-        // 8: the mask's mips, the SH and the irradiance per pixel (RC2.2), after the blend as in
-        // Capsaicin (gi1.cpp:2561-2636).
+        // 8: the mask's mips, the probe filter, the SH and the irradiance per pixel (RC2.2, RC4.2),
+        // after the blend as in Capsaicin (gi1.cpp:2561-2636).
         this.encodeIrradiance(encoder, frame, prepared, resources);
 
         // 9: what the next frame reprojects from.
@@ -580,13 +603,17 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
     }
 
     /**
-     * Keeps this frame's probe mask (level 0), SH, depth and normals as the
-     * next frame's "previous" ones. Capsaicin swaps its two probe masks and SH
-     * buffers each frame instead (gi1.cpp:3097) and its framework copies the
+     * Keeps this frame's filtered atlas, probe mask (level 0), SH, depth and
+     * normals as the next frame's "previous" ones. Capsaicin swaps its two
+     * atlases, probe masks and SH buffers each frame instead (gi1.cpp:3097):
+     * the filter's second pass writes `probe_buffers_[probe_buffer_index_]`
+     * (gi1.cpp:2606-2607), which the flip makes the next frame's previous
+     * atlas, so its history is the filtered one; its framework copies the
      * depth and normals (register D45, D49).
      */
     private encodeHistoryKeep(encoder: GPUCommandEncoder, prepared: Prepared, resources: ScreenResources, groups: ScreenInputGroups): void {
         const { width, height } = resources.layout;
+        copyWholeTexture(encoder, resources.probeAtlas, resources.previousProbeAtlas);
         encoder.copyTextureToTexture({ texture: resources.probeMask, mipLevel: 0 }, { texture: resources.previousProbeMask }, [resources.layout.probeCount[0], resources.layout.probeCount[1]]);
         this.irradiance?.encodeHistoryCopy(encoder);
         const pass = encoder.beginComputePass({ label: `${TECHNIQUE_ID}/keep-history` });
@@ -596,10 +623,28 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         pass.end();
     }
 
-    /** The passes after the blend (screen-irradiance.ts), on this frame's probes and screen. */
+    /** Capsaicin's SSGI technique (ssgi.ts) on this frame's screen, with the frame's uniforms. */
+    private encodeSSGI(encoder: GPUCommandEncoder, frame: TechniqueScreenFrame, prepared: Prepared): void {
+        const ssgi = this.ssgi;
+        if (!ssgi) throw new Error('@pmndrs/ddgi: prepare the radiance cache before encodeScreen');
+        const screen = frame.screen;
+        const previousLighting = screen.previousLighting;
+        if (!previousLighting) throw new Error("@pmndrs/ddgi: the radiance cache's SSGI reads FrameScreen.previousLighting, which this screen has not");
+        checkScreenTexture(previousLighting, 'previousLighting');
+        ssgi.encode(
+            encoder,
+            { width: screen.width, height: screen.height, frameUniforms: prepared.frameUniforms, depth: screen.depth, normal: screen.normal, previousLighting },
+            frame.camera,
+            this.settings,
+        );
+    }
+
+    /** The passes after the blend (screen-irradiance.ts), on this frame's probes, screen and SSGI. */
     private encodeIrradiance(encoder: GPUCommandEncoder, frame: TechniqueScreenFrame, prepared: Prepared, resources: ScreenResources): void {
         const irradiance = this.irradiance;
-        if (!irradiance) throw new Error('@pmndrs/ddgi: prepare the radiance cache before encodeScreen');
+        const ssgi = this.ssgi;
+        if (!irradiance || !ssgi) throw new Error('@pmndrs/ddgi: prepare the radiance cache before encodeScreen');
+        const ssgiOutputs = ssgi.outputsFor(frame.screen.width, frame.screen.height);
         irradiance.encode(
             encoder,
             {
@@ -607,16 +652,35 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
                 frameUniforms: prepared.frameUniforms,
                 probeSpawn: prepared.probeSpawn,
                 probeAtlas: resources.probeAtlas,
+                previousProbeAtlas: resources.previousProbeAtlas,
                 probeMask: resources.probeMask,
                 depth: frame.screen.depth,
                 normal: frame.screen.normal,
+                occlusionAndBentNormal: ssgiOutputs.occlusionAndBentNormal,
+                nearField: ssgiOutputs.nearField,
             },
             frame.camera,
         );
     }
 
+    /**
+     * Runs `FilterScreenProbes` again on the latest frame's atlas, with that
+     * frame's probes, mask and screen, as the frame runs it: Capsaicin's copy
+     * of the atlas into the previous atlas, then both passes, leaving the
+     * filtered probes in the atlas. For tests that write an atlas of their
+     * own into `probes.probeAtlas` first; the next frame's history is then
+     * this atlas's previous copy, not the frame's. Nothing before the first
+     * `encodeScreen`.
+     */
+    encodeProbeFilter(encoder: GPUCommandEncoder): void {
+        const resources = this.screenResources;
+        if (!resources || !this.irradiance) return;
+        copyWholeTexture(encoder, resources.probeAtlas, resources.previousProbeAtlas);
+        this.irradiance.encodeProbeFilter(encoder);
+    }
+
     /** What the shading module binds: the latest frame's textures, or 1 × 1 placeholders before the first. */
-    private shadingTextures(): { irradiance: GPUTexture; probeAtlas: GPUTexture; probeMask: GPUTexture; probeSH: GPUTexture } {
+    private shadingTextures(): { irradiance: GPUTexture; probeAtlas: GPUTexture; probeMask: GPUTexture; probeSH: GPUTexture; occlusionAndBentNormal: GPUTexture } {
         const irradiance = this.irradiance;
         if (!irradiance) throw new Error('@pmndrs/ddgi: the radiance cache has no shading textures before prepare');
         const placeholders = irradiance.placeholders;
@@ -625,6 +689,8 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
             probeAtlas: this.screenResources?.probeAtlas ?? placeholders.probeAtlas,
             probeMask: this.screenResources?.probeMask ?? placeholders.probeMask,
             probeSH: irradiance.probeSH ?? placeholders.probeSH,
+            // rgba16float like the irradiance: its placeholder (zeros) serves both.
+            occlusionAndBentNormal: this.ssgi?.occlusionAndBentNormal ?? placeholders.irradiance,
         };
     }
 
@@ -640,7 +706,8 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         const resources = this.screenResources;
         const inputs = this.inputGroups;
         const probeSH = this.irradiance?.probeSH;
-        if (!context || !prepared || !resources || !inputs || !probeSH) throw new Error('@pmndrs/ddgi: the radiance cache has no probes to show before its first encodeScreen');
+        const occlusionAndBentNormal = this.ssgi?.occlusionAndBentNormal;
+        if (!context || !prepared || !resources || !inputs || !probeSH || !occlusionAndBentNormal) throw new Error('@pmndrs/ddgi: the radiance cache has no probes to show before its first encodeScreen');
         const { width, height } = resources.layout;
         if (target.width < width || target.height < height) throw new RangeError(`@pmndrs/ddgi: the debug view needs a target of at least ${width} × ${height}`);
         const words = new ArrayBuffer(DEBUG_UNIFORM_BYTES);
@@ -664,6 +731,7 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
                 { binding: 4, resource: probeSH.createView() },
                 { binding: 5, resource: screenTextureView(inputs.normal) },
                 { binding: 6, resource: screenTextureView(inputs.depth) },
+                { binding: 7, resource: occlusionAndBentNormal.createView() },
             ],
         });
         const pass = encoder.beginComputePass({ label: `${TECHNIQUE_ID}/debug-view` });
@@ -678,7 +746,8 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         const prepared = this.prepared;
         const resources = this.screenResources;
         const irradiance = this.irradiance;
-        if (!prepared || !resources || !irradiance?.probeSH || !irradiance.irradiance) return null;
+        const ssgi = this.ssgi;
+        if (!prepared || !resources || !irradiance?.probeSH || !irradiance.irradiance || !ssgi?.occlusionAndBentNormal || !ssgi.nearField) return null;
         return {
             layout: resources.layout,
             frameIndex: this.latestFrameIndex,
@@ -691,6 +760,8 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
             rayScratch: resources.rayScratch,
             probeSH: irradiance.probeSH,
             irradiance: irradiance.irradiance,
+            occlusionAndBentNormal: ssgi.occlusionAndBentNormal,
+            nearField: ssgi.nearField,
         };
     }
 
@@ -730,12 +801,12 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         return { ...screen, ...worldCacheCounters(this.cache) };
     }
 
-    /** GPU bytes: the screen probes' buffers, the SH and irradiance (RC2.2) and the world cache's (about 1 GiB at Capsaicin's default capacity). */
+    /** GPU bytes: the screen probes' buffers, the SH and irradiance (RC2.2), SSGI's outputs (RC4.2) and the world cache's (about 1 GiB at Capsaicin's default capacity). */
     get memoryBytes(): number {
         const prepared = this.prepared;
         if (!prepared) return 0;
         const screenProbes = prepared.bytes + prepared.compaction.memoryBytes + prepared.compactArgs.memoryBytes + (this.screenResources?.bytes ?? 0);
-        return screenProbes + (this.irradiance?.memoryBytes ?? 0) + (this.cache?.memoryBytes ?? 0);
+        return screenProbes + (this.irradiance?.memoryBytes ?? 0) + (this.ssgi?.memoryBytes ?? 0) + (this.cache?.memoryBytes ?? 0);
     }
 
     /**
@@ -810,9 +881,10 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         this.releaseScreen();
         const atlas = (label: string, usage: number): GPUTexture =>
             device.createTexture({ label: `${TECHNIQUE_ID} ${label}`, size: [layout.atlasSize[0], layout.atlasSize[1]], format: 'rgba16float', usage });
-        // g_ScreenProbes_ProbeBuffer (gi1.cpp:131-144): read by RC2.2's projection and the debug view,
-        // copied into last frame's after the blend and by tests.
-        const probeAtlas = atlas('probe atlas', TEXTURE_USAGE.storageBinding | TEXTURE_USAGE.textureBinding | TEXTURE_USAGE.copySrc);
+        // g_ScreenProbes_ProbeBuffer (gi1.cpp:131-144): read by the filter, the projection and the
+        // debug view, copied into last frame's after the blend and the filter. COPY_DST lets a test
+        // write an atlas of its own for the filter (encodeProbeFilter).
+        const probeAtlas = atlas('probe atlas', TEXTURE_USAGE.storageBinding | TEXTURE_USAGE.textureBinding | TEXTURE_USAGE.copySrc | TEXTURE_USAGE.copyDst);
         // The other of Capsaicin's two (register D45): last frame's atlas, then SampleScreenProbes'
         // history for the blend. COPY_DST also lets a test write a history of its own.
         const previousProbeAtlas = atlas('previous probe atlas', TEXTURE_USAGE.storageBinding | TEXTURE_USAGE.textureBinding | TEXTURE_USAGE.copySrc | TEXTURE_USAGE.copyDst);
@@ -1094,6 +1166,8 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         for (const utility of [prepared.compaction, prepared.compactArgs, prepared.lruScan, prepared.listScan, prepared.scatterArgs, prepared.patchArgs]) utility.dispose();
         this.irradiance?.dispose();
         this.irradiance = null;
+        this.ssgi?.dispose();
+        this.ssgi = null;
         this.prepared = null;
     }
 }

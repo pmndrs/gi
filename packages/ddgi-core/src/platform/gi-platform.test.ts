@@ -462,7 +462,7 @@ describe('the platform object', () => {
         const platform = new GIPlatformImpl(gpu.device);
         // DDGI-like techniques ask for no screen: hosts need not render one.
         platform.addTechnique(new RecordingTechnique('world space', []));
-        expect(platform.screenNeeds).toEqual({ screen: false, velocity: false, albedo: false, instance: false });
+        expect(platform.screenNeeds).toEqual({ screen: false, velocity: false, albedo: false, instance: false, previousLighting: false });
 
         const screenStages: string[] = [];
         const surfels = new RecordingTechnique('surfels', []);
@@ -472,7 +472,7 @@ describe('the platform object', () => {
         (spatial as { requirements: GITechnique['requirements'] }).requirements = { queries: ['rays'], screen: { albedo: true, velocity: true } };
         platform.addTechnique(surfels);
         platform.addTechnique(spatial);
-        expect(platform.screenNeeds).toEqual({ screen: true, velocity: true, albedo: true, instance: true });
+        expect(platform.screenNeeds).toEqual({ screen: true, velocity: true, albedo: true, instance: true, previousLighting: false });
         await platform.prepare();
 
         const texture = fakeTexture({ size: { width: 4, height: 2 }, format: 'rgba16float', usage: 0 }) as GPUTexture;
@@ -484,7 +484,7 @@ describe('the platform object', () => {
         expect(screenStages).toEqual(['surfels 4']);
 
         platform.removeTechnique(surfels);
-        expect(platform.screenNeeds).toEqual({ screen: true, velocity: true, albedo: true, instance: false });
+        expect(platform.screenNeeds).toEqual({ screen: true, velocity: true, albedo: true, instance: false, previousLighting: false });
     });
 
     it("hands a screen stage the camera, frame and time step of the frame's encode, jitter included (RC2.1, RC2.2)", async () => {

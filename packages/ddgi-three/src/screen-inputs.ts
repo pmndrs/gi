@@ -25,6 +25,17 @@
  *   bytes and turned into `r32uint` by a small pass (instance-id-resolve.ts).
  * Depth is the pass's own depth buffer.
  *
+ * **`previousLighting`** (last frame's lit colour, RC4.2) is no MRT output:
+ * it is the picture `encodeBefore(node)` is given, `node` being the host's
+ * HDR result before tone mapping (the composite). With the channel on,
+ * `encodeBefore` draws `node` into a half-float target of its own (three's
+ * `rtt`, the drawing buffer's size) and shows that, and the next frame's
+ * stage hands the target to the platform before it is drawn again: so the
+ * techniques read the previous frame's picture with GI in it, as Capsaicin's
+ * SSGI reads `PrevCombinedIllumination`. It costs one full-screen pass and
+ * 8 bytes a pixel. Until the target has been drawn the stage hands over a
+ * 1 × 1 black texture.
+ *
  * **The opaque surface under the depth sample** (RC1.1 review). three gives
  * every MRT output but `output` no blending, so a transparent surface would
  * overwrite the channels while the depth buffer keeps the surface behind it
@@ -103,7 +114,7 @@ import {
     type TextureNode,
     type WebGPURenderer,
 } from 'three/webgpu';
-import { diffuseColor, diffuseContribution, instanceIndex, normalWorld, texture, textureLoad, uint, uniform, uv, uvec2, velocity, type vec2, vec3, vec4 } from 'three/tsl';
+import { diffuseColor, diffuseContribution, instanceIndex, normalWorld, rtt, texture, textureLoad, uint, uniform, uv, uvec2, velocity, type vec2, vec3, vec4 } from 'three/tsl';
 import { GILimitError, ScreenInputsView, type FrameScreen, type GIPlatform, type ScreenChannel, type ScreenChannelRequest, type ScreenNeeds } from '@pmndrs/ddgi-core';
 import { wrapGpuTexture } from './external-texture.ts';
 import { InstanceIdResolve, MAX_ENCODED_INSTANCE_ID } from './instance-id-resolve.ts';
@@ -319,6 +330,7 @@ function channelsFor(needs: ScreenNeeds, extra: ScreenChannelRequest | undefined
         velocity: needs.velocity || extra?.velocity === true,
         albedo: needs.albedo || extra?.albedo === true,
         instance: needs.instance || extra?.instance === true,
+        previousLighting: needs.previousLighting || extra?.previousLighting === true,
     };
 }
 
@@ -354,6 +366,10 @@ export class ScreenInputsNode extends Node {
     private debugChannel: ScreenChannel | null = null;
     private readonly debugNodes = new Map<ScreenChannel, TextureNode>();
     private debugPlaceholder: GPUTexture | null = null;
+    /** The picture `encodeBefore` draws into a target of its own when the `previousLighting` channel is on. */
+    private lightingCapture: { readonly target: Texture } | null = null;
+    /** The 1 × 1 black `previousLighting` handed over until the capture's target exists. */
+    private lightingPlaceholder: GPUTexture | null = null;
     /** `source.encodedFrames` at the previous stage that ran the techniques. */
     private encodedAtLastStage = -1;
     private readonly warned = new Set<string>();
@@ -413,7 +429,13 @@ export class ScreenInputsNode extends Node {
      * produce, usually the pipeline's output node.
      */
     encodeBefore(node: Node): Node {
-        return new ScreenStageNode(this, node) as unknown as Node;
+        if (!this.channels.previousLighting) return new ScreenStageNode(this, node) as unknown as Node;
+        // The picture drawn into a target of its own, shown from there; the next frame's stage
+        // reads it as last frame's lighting before it is drawn again (the file comment).
+        const capture = rtt(node);
+        capture.name = 'ddgi-three previous lighting';
+        this.lightingCapture = { target: capture.value as Texture };
+        return new ScreenStageNode(this, capture as unknown as Node) as unknown as Node;
     }
 
     /**
@@ -433,7 +455,8 @@ export class ScreenInputsNode extends Node {
             this.debugNodes.set(channel, textureNode);
         }
         const shown = new DebugViewNode(this, channel, textureNode.sample(uv()) as unknown as Node);
-        return this.encodeBefore(shown as unknown as Node);
+        // A debug picture is not the scene's lighting: never captured as previousLighting.
+        return new ScreenStageNode(this, shown as unknown as Node) as unknown as Node;
     }
 
     /** The texture the debug view last drew (`view`), or null; the platform's, replaced on resize. */
@@ -499,6 +522,7 @@ export class ScreenInputsNode extends Node {
         this.instanceResolve?.dispose();
         this.debugView?.dispose();
         this.debugPlaceholder?.destroy();
+        this.lightingPlaceholder?.destroy();
         super.dispose();
     }
 
@@ -546,7 +570,7 @@ export class ScreenInputsNode extends Node {
 
     /** The platform's techniques read only channels this pass renders; warns once if not. */
     private covers(needs: ScreenNeeds): boolean {
-        const missing = (['velocity', 'albedo', 'instance'] as const).filter((channel) => needs[channel] && !this.channels[channel]);
+        const missing = (['velocity', 'albedo', 'instance', 'previousLighting'] as const).filter((channel) => needs[channel] && !this.channels[channel]);
         if (missing.length === 0) return true;
         this.warnOnce(
             `a GI technique reads the screen's ${missing.join(', ')}, which this pass doesn't render (screenInputs was made before that technique was added): make the screen inputs again and rebuild the pipeline. Screen techniques are skipped until then.`,
@@ -579,10 +603,34 @@ export class ScreenInputsNode extends Node {
                 normalEncoding: 'snorm-float',
                 velocity: optional(this.channels.velocity, GI_SCREEN_VELOCITY_OUTPUT),
                 albedo: optional(this.channels.albedo, GI_SCREEN_ALBEDO_OUTPUT),
+                previousLighting: this.channels.previousLighting ? this.previousLighting(renderer) : undefined,
                 reversedDepth: (renderer as { reversedDepthBuffer?: boolean }).reversedDepthBuffer === true,
             },
             encodedInstance: optional(this.channels.instance, GI_SCREEN_INSTANCE_OUTPUT) ?? null,
         };
+    }
+
+    /**
+     * Last frame's picture (`encodeBefore`'s capture, not yet drawn this
+     * frame), or a 1 × 1 black texture before it has been drawn, or when the
+     * host never attached a picture with `encodeBefore` (warned once).
+     */
+    private previousLighting(renderer: WebGPURenderer): GPUTexture {
+        const capture = this.lightingCapture;
+        if (!capture) {
+            this.warnOnce(
+                "a GI technique reads last frame's lighting (previousLighting), which this stage captures from the node given to encodeBefore: attach the pipeline's HDR picture with screen.encodeBefore(node). Black until then.",
+            );
+        }
+        const drawn = capture ? threeGpuTexture(renderer, capture.target) : null;
+        if (drawn) return drawn;
+        this.lightingPlaceholder ??= this.source.gi.device.createTexture({
+            label: 'ddgi-three previous lighting placeholder',
+            size: { width: 1, height: 1 },
+            format: 'rgba16float',
+            usage: GPUTextureUsage.TEXTURE_BINDING,
+        });
+        return this.lightingPlaceholder;
     }
 
     /** A 1 × 1 texture the debug view nodes show until the first stage draws (three needs a texture at build time). */

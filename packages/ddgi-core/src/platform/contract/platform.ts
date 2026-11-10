@@ -42,6 +42,8 @@ export interface ScreenNeeds {
     readonly velocity: boolean;
     readonly albedo: boolean;
     readonly instance: boolean;
+    /** Last frame's lit colour (`FrameScreen.previousLighting`). */
+    readonly previousLighting: boolean;
 }
 
 export interface GIPlatformOptions {
