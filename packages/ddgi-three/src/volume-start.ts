@@ -98,6 +98,18 @@ export interface GIVolumeStartOptions {
     readonly light?: GILightOptions;
     /** The warm-up before `start` resolves (file comment). `false` skips it: GI then fills in live. */
     readonly warmUp?: boolean | Partial<WarmUpSettings>;
+    /**
+     * The camera the start-up frames run with. The warm-up updates every probe
+     * whatever the view, so for one volume this only orders the work; but a
+     * camera-following volume's window follows it from the first frame, so a
+     * host with such a volume passes the camera it will render with (it may
+     * move meanwhile: it is read each frame). Otherwise the window warms up
+     * around the volume's centre and jumps to the host's camera on its first
+     * frame, which resets every slot and warms the whole field again
+     * (several seconds of full-rate updates; NOTES). Default: a camera at the
+     * volume's centre.
+     */
+    readonly camera?: Camera;
     /** Where warnings go (each distinct message once). Default `console.warn`. */
     readonly warn?: (message: string) => void;
     /** A label for the platform's GPU objects. Default the volume's name, or `GIVolume`. */
@@ -139,7 +151,8 @@ interface TreesBuiltSignal {
 }
 
 function camerasAt(volume: GIVolume): Camera {
-    // The warm-up updates every probe, so its camera only orders the work; any view will do.
+    // The warm-up updates every probe, so its camera only orders the work; any view will do
+    // (a camera-following volume excepted: `GIVolumeStartOptions.camera`).
     const camera = new PerspectiveCamera(60, 1, 0.1, 1000);
     const { center } = volume.ddgiVolume();
     camera.position.set(center[0], center[1], center[2]);
@@ -190,7 +203,7 @@ async function runStartUpFrames(started: StartedGI, camera: Camera, budget: Fram
  * technique's `warmUpPasses` isn't 0, and the calibration). The render-time
  * update is off meanwhile and comes back as it was.
  */
-export async function restartVolume(volume: GIVolume, started: StartedGI, options: Pick<GIVolumeStartOptions, 'budget' | 'warmUp'> = {}): Promise<void> {
+export async function restartVolume(volume: GIVolume, started: StartedGI, options: Pick<GIVolumeStartOptions, 'budget' | 'warmUp' | 'camera'> = {}): Promise<void> {
     const { platform, threeGI } = started;
     const updateOnRender = threeGI.updateOnRender;
     threeGI.updateOnRender = false;
@@ -198,7 +211,7 @@ export async function restartVolume(volume: GIVolume, started: StartedGI, option
         platform.resetHistory();
         platform.recalibrate();
         const calibrate = typeof options.warmUp === 'object' ? options.warmUp.calibrate !== false : true;
-        await runStartUpFrames(started, camerasAt(volume), options.budget ?? threeGI.budget, calibrate);
+        await runStartUpFrames(started, options.camera ?? camerasAt(volume), options.budget ?? threeGI.budget, calibrate);
     } finally {
         threeGI.updateOnRender = updateOnRender;
     }
@@ -239,7 +252,7 @@ export async function startVolume(volume: GIVolume, renderer: WebGPURenderer, sc
             // Switched on after the warm-up: a render loop already running must not add GI frames to it.
             updateOnRender: false,
         });
-        const camera = camerasAt(volume);
+        const camera = options.camera ?? camerasAt(volume);
         // The scene copy, while the kernels compile (the platform isn't ready: no GI frame yet).
         threeGI.update(camera, 0);
         await preparing;

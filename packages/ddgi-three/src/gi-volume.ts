@@ -145,7 +145,7 @@ export class GIVolume extends Light {
      * the calibration, volume-start.ts), for after the scene changed a lot.
      * Resolves when the probes are warm again.
      */
-    restart(options: Pick<GIVolumeStartOptions, 'budget' | 'warmUp'> = {}): Promise<void> {
+    restart(options: Pick<GIVolumeStartOptions, 'budget' | 'warmUp' | 'camera'> = {}): Promise<void> {
         if (!this.started) throw new Error('@pmndrs/ddgi/three: the GIVolume has no GI yet; await volume.start(renderer, scene) before restarting it.');
         return restartVolume(this, this.started, options);
     }
