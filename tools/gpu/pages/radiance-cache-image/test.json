@@ -1,4 +1,4 @@
 {
-    "description": "RC2.2: the radiance cache image passes on a floor under a constant sky (the Lambert check: E = pi L within 2.5%, mean and p95 per pixel, the cell-centre basis error plus a margin) and a direction-varying sky (each probe SH against the CPU projection, E against the CPU), the probe mask mips; the varying sky atlas, mask and SH views drawn for the screenshot. Correctness only.",
+    "description": "RC2.2: the radiance cache image passes on a floor under a constant sky (the Lambert check, with SSGI: E against the CPU's E from the constant sky's SH about SSGI's bent normal and cone, 1.021 pi L along the normal, within 2.5%, mean and p95 per pixel) and a direction-varying sky (each probe SH against the CPU projection, E against the CPU's E about SSGI's bent normal and cone), the probe mask mips; the varying sky atlas, mask and SH views drawn for the screenshot. Correctness only.",
     "timeoutMs": 240000
 }
