@@ -17,3 +17,17 @@ export { DDGIShadingModule, DDGI_SHADING_PARAMETER_NAMES } from './shading.ts';
 export { DDGI_DEBUG_COLORS, DDGI_DEBUG_VIEW } from './wgsl/shading.ts';
 // The one sampling function, for the shading module and engine-free test views.
 export { DDGI_SAMPLE_WGSL } from './wgsl/sample.ts';
+// The field as L2 SH per probe, three's convention (T5.3): the LightProbeGrid export's source.
+export {
+    exportIrradianceSH,
+    fillInactiveProbes,
+    l2CosineLobe,
+    l2ShBasis,
+    projectIrradianceToSH,
+    shProjectionDirections,
+    EXPORT_SH_DIRECTIONS,
+    L2_SH_COEFFICIENTS,
+    L2_SH_FLOATS_PER_PROBE,
+    type ExportIrradianceSHOptions,
+    type IrradianceSHGrid,
+} from './irradiance-sh.ts';

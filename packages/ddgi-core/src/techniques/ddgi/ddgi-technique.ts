@@ -809,6 +809,11 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         return this.volumes[0] ?? null;
     }
 
+    /** The device of the platform it is attached to (null before `attach`), for one-off jobs on the field such as `exportIrradianceSH`. */
+    get device(): GPUDevice | null {
+        return this.context?.device ?? null;
+    }
+
     /** Which phase-B reduction the kernels use (after `prepare`). */
     get reduction(): PhaseBReduction | undefined {
         return this.firstVolume?.reduction;

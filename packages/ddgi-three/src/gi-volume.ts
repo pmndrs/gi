@@ -37,9 +37,10 @@
  */
 
 import { AnalyticLightNode, Box3, Light, Vector3, type Node, type Scene, type WebGPURenderer } from 'three/webgpu';
-import { probeGrid, type DDGIVolumeSettings, type GIPlatform, type Vec3 } from '@pmndrs/ddgi-core';
+import { exportIrradianceSH, probeGrid, type DDGIVolumeSettings, type GIPlatform, type Vec3 } from '@pmndrs/ddgi-core';
 import { GI_LIGHT_PRIORITY, type GILight } from './gi-light.ts';
 import type { ThreeGI } from './three-gi.ts';
+import { toLightProbeGrid, type ExportedLightProbeGrid, type ToLightProbeGridOptions } from './light-probe-grid.ts';
 import { restartVolume, startVolume, type GIVolumeStartOptions, type StartedGI } from './volume-start.ts';
 
 /** `LightProbeGrid`'s default probe count for an axis: one per unit of length, at least one. */
@@ -178,6 +179,19 @@ export class GIVolume extends Light {
      */
     recalibrate(): void {
         this.started?.platform.recalibrate();
+    }
+
+    /**
+     * A snapshot of the field as three's `LightProbeGrid` (light-probe-grid.ts),
+     * for a static or WebGL fallback: the field renderers see, so with light
+     * groups on, the layers composed with their weights as of the last frame.
+     * One GPU projection and one readback; not for every frame. Add the grid
+     * to a scene and set this volume's `intensity` to 0 (or remove it) to
+     * light with the grid alone.
+     */
+    async exportLightProbeGrid(options: ToLightProbeGridOptions = {}): Promise<ExportedLightProbeGrid> {
+        if (!this.started) throw new Error('@pmndrs/ddgi/three: the GIVolume has no GI yet; await volume.start(renderer, scene) before exporting it.');
+        return toLightProbeGrid(await exportIrradianceSH(this.started.technique), options);
     }
 
     /** Removes the GI light and frees the platform `start` made. The volume can be started again afterwards. */
