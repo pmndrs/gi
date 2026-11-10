@@ -27,8 +27,8 @@
  *    cosine of 0.001, is counted and reported, as Capsaicin's
  *    `BlendScreenProbes` would put it in the neighbour too; a ray near the
  *    normal whose halves are a little longer than 1, so that it lies past the
- *    pole, is counted too: the blend maps it to the pole, register D34); every ray carries
- *    the bypass flag (phase 2 lights every ray directly).
+ *    pole, is counted too: the blend maps it to the pole, register D34); no
+ *    ray carries the bypass flag (since RC3.2 the world cache lights every hit).
  *
  * And on `sky-plane`:
  * 4. **Sky:** every ray of every probe misses, and every cell of every probe
@@ -42,7 +42,7 @@
  */
 
 import type { FrameInput } from '../../../../packages/ddgi-core/src/platform/contract/frame.ts';
-import { optionalFeatures, requiredLimits } from '../../../../packages/ddgi-core/src/platform/device-requirements.ts';
+import { requestBudgetDevice } from './budget-device.ts';
 import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
 import {
     halfBitsToFloat,
@@ -265,7 +265,7 @@ async function checkScene(device: GPUDevice, run: SceneRun, skyCheck: boolean): 
     let movedByHalfPrecision = 0;
     /** Rays whose half-precision direction lies past the pole (probe-frame z above 1), which the blend clamps to the pole (D34). */
     let pastThePole = 0;
-    let withoutBypass = 0;
+    let withBypass = 0;
     let hits = 0;
     let minNormalDot = Infinity;
     spawned.forEach((tile, probe) => {
@@ -274,7 +274,7 @@ async function checkScene(device: GPUDevice, run: SceneRun, skyCheck: boolean): 
             const ray = probe * PROBE_CELLS + cell;
             const base = (PROBE_RAYS_HEADER_BYTES + ray * PROBE_RAY_BYTES) / 4;
             const direction = unpackHalf3([rayWords[base + 4], rayWords[base + 5]]);
-            if ((rayWords[base + 3] & PROBE_RAY_BYPASS) === 0) withoutBypass++;
+            if ((rayWords[base + 3] & PROBE_RAY_BYPASS) !== 0) withBypass++;
             if (rayFloats[base + 6] >= 0) hits++;
             const facing = direction[0] * normal[0] + direction[1] * normal[1] + direction[2] * normal[2];
             minNormalDot = Math.min(minNormalDot, facing);
@@ -307,7 +307,7 @@ async function checkScene(device: GPUDevice, run: SceneRun, skyCheck: boolean): 
             }
         }
     });
-    if (withoutBypass > 0) fail(`${withoutBypass} rays lack the bypass flag (phase 2 lights every ray directly)`);
+    if (withBypass > 0) fail(`${withBypass} rays carry the bypass flag (since RC3.2 the world cache lights every hit, so the screen cache sets it on none)`);
 
     // 4. The sky: each ray's radiance, then each cell as BlendScreenProbes blends it.
     const sky: Record<string, unknown> = {};
@@ -483,8 +483,9 @@ let deviceErrors: string[] = [];
 try {
     const adapter = await navigator.gpu?.requestAdapter();
     if (!adapter) throw new Error('WebGPU is not available, or requestAdapter() returned null');
-    // As a host would ask (requestGIDevice): the adapter's storage limits, and subgroups and timestamps when it has them.
-    const device = await adapter.requestDevice({ requiredLimits: requiredLimits(adapter), requiredFeatures: optionalFeatures(adapter) });
+    // As a host would ask (requestGIDevice): the adapter's storage limits, and subgroups and timestamps when it has them;
+    // but the platform's 8 storage buffers per stage, whatever the adapter allows (budget-device.ts).
+    const { device, adapterStorageBuffersPerStage } = await requestBudgetDevice(adapter);
     window.addEventListener('pagehide', () => device.destroy(), { once: true });
     deviceErrors = watchDevice(device);
     const gallery = document.createElement('div');
@@ -535,7 +536,7 @@ try {
     reportGpuTest({
         status: failures.length === 0 ? 'pass' : 'fail',
         message: failures.length === 0 ? undefined : failures.join(' | '),
-        data: { width: WIDTH, height: HEIGHT, scenes: results },
+        data: { width: WIDTH, height: HEIGHT, adapterStorageBuffersPerStage, scenes: results },
         adapter: summary,
         deviceErrors,
         startTime,
