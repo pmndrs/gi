@@ -114,7 +114,12 @@ export class MotionPlayer {
         this.stop();
         const motion = this.motions.find((candidate) => candidate.id === motionId);
         if (!motion) return;
-        const driver = this.driverFor(motion)!;
+        const driver = this.driverFor(motion);
+        // The validator can't know a scene's object names, so a motion may name an object this scene doesn't have.
+        if (!driver) {
+            console.warn(`Motion "${motion.id}": nothing in this scene is "${motion.target}"; it does not play.`);
+            return;
+        }
         this.current = { motion, driver, saved: driver.save(), startedAt: now };
         this.pausedAt = null;
         this.update(now);
