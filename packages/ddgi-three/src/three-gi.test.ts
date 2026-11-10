@@ -2,7 +2,7 @@ import { BoxGeometry, Color, Mesh, MeshStandardMaterial, PerspectiveCamera, Poin
 import { describe, expect, it } from 'vitest';
 import type { FrameInput, GIPlatform, SceneApi, ShadingModule } from '@pmndrs/ddgi-core';
 import { GIVolume } from './gi-volume.ts';
-import { ThreeGI } from './three-gi.ts';
+import { jitterPixelsToNdc, ThreeGI } from './three-gi.ts';
 
 /** A shading module whose shape can be changed, like a technique switching its code. */
 function fakeShading(): ShadingModule & { version: number } {
@@ -235,6 +235,32 @@ describe('ThreeGI', () => {
         // A technique without light groups is refused with a message that says so.
         Object.assign(platform.gi, { outputTechnique: { id: 'voxel' } });
         expect(() => threeGI.setGroupWeight(0, 'white')).toThrow(/voxel.*light group weights/);
+    });
+
+    it("hands the platform the host's projection jitter with the frame's camera (FrameCamera.jitter, RC2.2)", () => {
+        const platform = fakePlatform(fakeShading());
+        const threeGI = new ThreeGI(platform.gi, new Scene());
+        const camera = new PerspectiveCamera(60, 16 / 9, 0.1, 100);
+        camera.position.set(1, 2, 3);
+        camera.updateMatrixWorld();
+        threeGI.update(camera, 0);
+        // No jitter source: no jitter, and the camera's own (unjittered) matrices.
+        expect(platform.frames[0].camera.jitter).toBeUndefined();
+        expect(Array.from(platform.frames[0].camera.projection)).toEqual(camera.projectionMatrix.elements);
+        expect(threeGI.encodedFrames).toBe(1);
+
+        // @pmndrs/upscaler's convention: render pixels, y down; NDC is y up.
+        const upscalerJitter = { x: 0.25, y: -0.125 };
+        threeGI.jitter = () => jitterPixelsToNdc(upscalerJitter, 1280, 720);
+        threeGI.update(camera, 0);
+        expect(platform.frames[1].camera.jitter).toEqual([0.5 / 1280, 0.25 / 720]);
+        expect(platform.frames[1].camera.position).toEqual([1, 2, 3]);
+        expect(threeGI.encodedFrames).toBe(2);
+
+        // A source that answers null (the upscaler off this frame) gives none.
+        threeGI.jitter = () => null;
+        threeGI.update(camera, 0);
+        expect(platform.frames[2].camera.jitter).toBeUndefined();
     });
 
     it('removes everything it added on dispose', () => {

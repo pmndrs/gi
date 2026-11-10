@@ -106,7 +106,7 @@ export const COUNTERS_BYTES = 64;
  * depth, g_ViewProjectionInverse)`, without the f32 cancellation of a camera
  * far from the origin.
  */
-const FRAME_WGSL = /* wgsl */ `
+export const FRAME_WGSL = /* wgsl */ `
 struct RcFrame {
     inverseViewProjection: mat4x4f,  // inverse(projection x view), with the view's translation taken out
     eye: vec3f,                      // g_Eye
@@ -121,8 +121,26 @@ struct RcFrame {
 @group(1) @binding(0) var<uniform> rcFrame: RcFrame;
 `;
 
+/**
+ * Byte offsets of `RcFrame`'s fields, by WGSL's layout rules (a `mat4x4f` is
+ * 64 bytes; a `vec3f` aligns to 16 and the `u32` after it packs into its last
+ * 4 bytes). `writeFrameUniforms` writes each field by name; a unit test checks
+ * these against the struct above.
+ */
+export const FRAME_UNIFORM_OFFSETS = {
+    inverseViewProjection: 0,
+    eye: 64,
+    frameIndex: 76,
+    bufferDimensions: 80,
+    probeCount: 88,
+    maxProbeSpawnCount: 96,
+    normalUnorm: 100,
+    reversedDepth: 104,
+    useDirectLighting: 108,
+} as const;
+
 /** The host's depth (`FrameScreen.depth`) and the reads Capsaicin makes of its own depth buffer. */
-function screenDepthWgsl(binding: number): string {
+export function screenDepthWgsl(binding: number): string {
     return /* wgsl */ `
 @group(1) @binding(${binding}) var rcDepth: texture_2d<f32>;
 
@@ -148,7 +166,7 @@ fn rcTransformPointProjection(uv: vec2f, depth: f32) -> vec3f {
 }
 
 /** The host's normals (`FrameScreen.normal`), as Capsaicin reads its geometry normals. */
-function screenNormalWgsl(binding: number): string {
+export function screenNormalWgsl(binding: number): string {
     return /* wgsl */ `
 @group(1) @binding(${binding}) var rcNormal: texture_2d<f32>;
 
@@ -162,13 +180,13 @@ fn rcLoadNormal(pixel: vec2u) -> vec3f {
 }
 
 /** The workgroup a 2D-split dispatch is on, counted in rows (the platform's indirect arguments split the same way). */
-const WORKGROUP_INDEX_WGSL = /* wgsl */ `
+export const WORKGROUP_INDEX_WGSL = /* wgsl */ `
 fn rcWorkgroupIndex(workgroup: vec3u, workgroups: vec3u) -> u32 {
     return workgroup.y * workgroups.x + workgroup.x;
 }
 `;
 
-const UNIFORM_ENTRY: GPUBindGroupLayoutEntry = { binding: 0, visibility: COMPUTE, buffer: { type: 'uniform', minBindingSize: FRAME_UNIFORM_BYTES } };
+export const UNIFORM_ENTRY: GPUBindGroupLayoutEntry = { binding: 0, visibility: COMPUTE, buffer: { type: 'uniform', minBindingSize: FRAME_UNIFORM_BYTES } };
 const SCREEN_TEXTURE: GPUTextureBindingLayout = { sampleType: 'unfilterable-float', viewDimension: '2d' };
 
 function storage(binding: number, type: GPUBufferBindingType): GPUBindGroupLayoutEntry {
@@ -279,7 +297,7 @@ export const COMPACT_GROUP: GPUBindGroupLayoutDescriptor = {
 };
 
 /** The compacted probe list: the count in word 0 (copied from the compaction), then one packed seed per probe. */
-const PROBE_SPAWN_STRUCT_WGSL = /* wgsl */ `
+export const PROBE_SPAWN_STRUCT_WGSL = /* wgsl */ `
 // g_ScreenProbes_ProbeSpawnBuffer, with the probe count Capsaicin reads from the end of
 // its scan (scan[last] + index[last], gi1.comp:651-652) kept in front of it.
 struct RcProbeSpawn {

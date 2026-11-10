@@ -89,9 +89,9 @@ The functions are:
 - `giIrradiance(position, normal, viewDirection, screenUV, ...)` returns irradiance E. The renderer applies albedo/π.
 - `giCoverage(position, normal, ...)` returns 0..1. Renderers fade to their environment light where this is low.
 - `giRadiance(position, direction, roughness, ...)` is optional. DDGI gives a rough-only fallback.
-- `giDebugColor(position, normal, view, ...)` drives the debug views.
+- `giDebugColor(position, normal, view, screenUV, ...)` drives the debug views.
 
-`screenUV` is there for screen-space techniques (see the surfel walk-through). DDGI ignores it.
+`screenUV` is there for screen-space techniques (see the surfel walk-through). DDGI ignores it. `giDebugColor` got it in RC2.2 (revision below), so the radiance cache can draw its probe atlas, probe mask and SH views by the pixel's place.
 
 ## Walk-through 1: a voxel GI technique
 
@@ -161,6 +161,11 @@ Gaps:
 The answers go in PROGRESS. Any change to the contract is made in both the TypeScript and this page, and listed in a "Revisions" section here.
 
 ## Revisions
+
+### Radiance-cache phase 2, 2026-11-10 (RC2.2)
+
+- **Host- and technique-facing: `giDebugColor(position, normal, view, screenUV, ...)`.** The debug colour takes the pixel's screen position (0..1, top left 0), as `giIrradiance` has it, so a screen-space technique can draw its views by the pixel's place (the radiance cache's probe atlas, probe mask and SH). `globalsCode` writes `giDebugColorAt(position, normal, view, screenUV)`. DDGI's module takes the argument and ignores it; the viewer's debug material passes three's `screenUV`.
+- **Host-facing: `FrameCamera.jitter`** (optional): this frame's sub-pixel jitter as an NDC offset (x right, y up), when the host draws its screen buffers with a jittered projection; the jittered projection is `translate(jitter, 0) × projection`. Screen techniques rebuild positions from `FrameScreen.depth` with it, so they land where the depth was drawn (RC2.1 found half a pixel's error without it). `projection` stays the unjittered one. World-space techniques ignore it. The three adapter fills it from `ThreeGI.jitter`, a function the host sets when it jitters (for `@pmndrs/upscaler`, from `Upscaler.jitter` after `beginFrame`: `(2x / width, −2y / height)`).
 
 ### Radiance-cache phase 2, 2026-11-09 (RC2.1)
 

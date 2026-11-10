@@ -60,7 +60,7 @@
  */
 
 import { Color, type Camera, type ColorRepresentation, type Object3D, type OrthographicCamera, type PerspectiveCamera, type Scene } from 'three';
-import type { EnvironmentDescriptor, FrameBudget, GIPlatform, ShadingModule } from '@pmndrs/ddgi-core';
+import type { EnvironmentDescriptor, FrameBudget, FrameCamera, GIPlatform, ShadingModule } from '@pmndrs/ddgi-core';
 import type { PmndrsSkyLike } from './environment.ts';
 import { GILight, type GILightOptions } from './gi-light.ts';
 import type { GIVolume } from './gi-volume.ts';
@@ -95,6 +95,23 @@ export interface ThreeGIOptions {
      * (file comment, T2.14). Without it the platform must be ready.
      */
     readonly preparing?: Promise<void>;
+    /** This frame's projection jitter, for screen-space techniques (see {@link ThreeGI.jitter}). */
+    readonly jitter?: ThreeGIJitter | null;
+}
+
+/**
+ * This frame's sub-pixel jitter as an NDC offset (x right, y up), or null
+ * for none: what the host's projection adds to every projected point when it
+ * draws its screen buffers jittered (`FrameCamera.jitter`).
+ */
+export type ThreeGIJitter = () => readonly [number, number] | null;
+
+/**
+ * An NDC jitter from one in render pixels with y down, the convention of
+ * `@pmndrs/upscaler`'s `Upscaler.jitter`: `(2x / width, −2y / height)`.
+ */
+export function jitterPixelsToNdc(jitter: { readonly x: number; readonly y: number }, width: number, height: number): [number, number] {
+    return [(2 * jitter.x) / width, (-2 * jitter.y) / height];
 }
 
 /** CPU time of the last `update`, milliseconds (`performance.now()`, so steps of up to 0.1 ms in some browsers). */
@@ -125,6 +142,21 @@ export class ThreeGI {
     budget: FrameBudget;
     /** The volume the GI light follows, if any (see the option). */
     volume: GIVolume | null;
+    /**
+     * This frame's projection jitter, read in each `update` and handed to
+     * the platform as `FrameCamera.jitter`, so screen-space techniques (the
+     * radiance cache) rebuild positions where the jittered depth was drawn.
+     * Set it when the scene pass draws with a jittered camera (a temporal
+     * upscaler or TAA), and call `update` after the jitter for the frame is
+     * chosen: with `@pmndrs/upscaler`'s `Upscaler`, after `beginFrame`,
+     * `() => jitterPixelsToNdc(upscaler.jitter, renderWidth, renderHeight)`.
+     * Null (the default): no jitter. World-space techniques (DDGI) ignore it.
+     */
+    jitter: ThreeGIJitter | null;
+    /** GI frames encoded so far (`update` calls that ran `gi.encode`): the screen stage checks one ran before it (screen-inputs.ts). */
+    get encodedFrames(): number {
+        return this.encodes;
+    }
     readonly timings: ThreeGITimings = { matrixWorldMs: 0, syncMs: 0, encodeMs: 0 };
     /** What the last update sent. */
     get report(): SyncFrameReport {
@@ -138,6 +170,7 @@ export class ThreeGI {
     private renderTimeUpdate: boolean;
     private readonly warnOnce: (message: string) => void;
     private updates = 0;
+    private encodes = 0;
     private disposed = false;
     /**
      * The GI light is in the scene. False while the platform is still preparing:
@@ -161,6 +194,7 @@ export class ThreeGI {
         this.scene = scene;
         this.budget = options.budget ?? DEFAULT_BUDGET;
         this.volume = options.volume ?? null;
+        this.jitter = options.jitter ?? null;
         this.alwaysUpdateMatrixWorld = options.updateMatrixWorld ?? false;
         this.renderTimeUpdate = options.updateOnRender ?? false;
         this.warnOnce = options.warn ?? ((message) => console.warn(`@pmndrs/ddgi/three: ${message}`));
@@ -259,8 +293,9 @@ export class ThreeGI {
         this.previousTime = start;
         const device = this.gi.device;
         const encoder = device.createCommandEncoder({ label: 'ddgi-three frame' });
-        this.gi.encode(encoder, { deltaTime: seconds, budget: this.budget, camera: frameCamera(camera) });
+        this.gi.encode(encoder, { deltaTime: seconds, budget: this.budget, camera: frameCamera(camera, this.jitter?.() ?? null) });
         device.queue.submit([encoder.finish()]);
+        this.encodes++;
         const end = performance.now();
 
         this.timings.matrixWorldMs = afterMatrices - start;
@@ -366,8 +401,8 @@ function linearWeight(color: Color | ColorRepresentation, intensity: number): [n
     return [weightColor.r * intensity, weightColor.g * intensity, weightColor.b * intensity];
 }
 
-/** The platform's plain camera from a three camera (matrices current). */
-function frameCamera(camera: Camera): { position: [number, number, number]; view: ArrayLike<number>; projection: ArrayLike<number>; near: number; far: number } {
+/** The platform's plain camera from a three camera (matrices current), with this frame's jitter if the host has one. */
+export function frameCamera(camera: Camera, jitter: readonly [number, number] | null = null): FrameCamera {
     const e = camera.matrixWorld.elements;
     const withPlanes = camera as PerspectiveCamera | OrthographicCamera;
     return {
@@ -376,5 +411,6 @@ function frameCamera(camera: Camera): { position: [number, number, number]; view
         projection: camera.projectionMatrix.elements,
         near: typeof withPlanes.near === 'number' ? withPlanes.near : 0.1,
         far: typeof withPlanes.far === 'number' ? withPlanes.far : 1000,
+        ...(jitter ? { jitter: [jitter[0], jitter[1]] as const } : {}),
     };
 }
