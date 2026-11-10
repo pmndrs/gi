@@ -57,12 +57,12 @@ What's different from `LightProbeGrid`:
 
 Where to go next:
 
-- [examples/three/](examples/three/): the code above on three's own probe-grid scene (`simple.html`), and GI added once per pixel on three's post-processing pipeline (`composite.html`).
+- [The examples](https://pmndrs.github.io/ddgi/) ([source](examples/)): the code above on three's own probe-grid scene (`01-hello`), GI added once per pixel on three's post-processing pipeline (`02-composite`), and one small page for each feature.
 - [docs/api/three.md](docs/api/three.md): the three.js adapter, every option, and what it does with your scene.
 - [docs/guides/adapter.md](docs/guides/adapter.md): GI from plain WebGPU, or an adapter for another engine, step by step through [examples/webgpu/hello/](examples/webgpu/hello/).
 - [docs/api/platform.md](docs/api/platform.md): the engine-free API, `@pmndrs/ddgi/core`.
 
-The examples run from this repository: `pnpm install`, then `pnpm --filter @pmndrs/ddgi-example-three dev` or `pnpm --filter @pmndrs/ddgi-example-hello dev`. The viewer (`pnpm dev`) shows every test scene with GI, its debug views and its settings.
+The examples run from this repository: `pnpm install`, then `pnpm examples`. The viewer (`pnpm dev`) shows every test scene with GI, its debug views and its settings.
 
 ## Browser support
 
@@ -103,6 +103,7 @@ MIT, see [LICENSE](LICENSE). The bundled tinybvh, Emscripten runtime and HIPRT c
 ```bash
 pnpm install
 pnpm dev             # the viewer: every test scene with GI, its debug views and settings
+pnpm examples        # the examples site, at http://localhost:5203
 pnpm lint && pnpm typecheck && pnpm test
 pnpm build           # the package, into packages/ddgi/dist
 pnpm verify:packed   # packs it and checks it as a user would get it

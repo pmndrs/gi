@@ -1,0 +1,4 @@
+{
+    "description": "T5.6: the built examples site (PAGES_BASE=/webgpu-ddgi/ pnpm examples:build), served under /webgpu-ddgi/: under 50 MB, every link and asset resolves inside the base, and every example shows GI with no errors.",
+    "timeoutMs": 900000
+}

@@ -11,6 +11,8 @@
         "build": "pnpm --filter @pmndrs/ddgi build",
         "verify:packed": "node tools/release/verify-packed.ts",
         "build:apps": "pnpm --filter @pmndrs/ddgi-viewer --filter @pmndrs/ddgi-example-hello build",
+        "examples": "vite --config examples/vite.config.ts",
+        "examples:build": "vite build --config examples/vite.config.ts",
         "lint": "eslint .",
         "typecheck": "tsc --noEmit",
         "test": "vitest run",

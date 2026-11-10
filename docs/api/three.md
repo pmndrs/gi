@@ -6,7 +6,7 @@ The adapter puts the GI platform's global illumination into a three.js r187 `Web
 - it runs one GI frame per rendered frame;
 - it lights every lit material through one GI light, or, on three's post-processing pipeline, adds GI once per pixel (`ddgi()`).
 
-The code is in [`packages/ddgi-three/src/`](../../packages/ddgi-three/src/). The platform underneath is described in [platform.md](platform.md). Working examples: [`examples/three/`](../../examples/three/). [Every export](#every-export-of-pmndrsddgithree) of `@pmndrs/ddgi/three` is listed at the end. (`@pmndrs/ddgi` itself exports the same names.)
+The code is in [`packages/ddgi-three/src/`](../../packages/ddgi-three/src/). The platform underneath is described in [platform.md](platform.md). Working examples: [`examples/`](../../examples/) (`01-hello` and `02-composite` are the code below). [Every export](#every-export-of-pmndrsddgithree) of `@pmndrs/ddgi/three` is listed at the end. (`@pmndrs/ddgi` itself exports the same names.)
 
 ## Getting started
 
