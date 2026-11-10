@@ -1,6 +1,7 @@
 // The radiance cache, the platform's second technique: a faithful port of AMD's
-// GI-1.0/1.2 (Capsaicin v1.3; docs/design/radiance-cache.md). Phase 2's first half (RC2.1).
-export { RadianceCacheTechnique, type RadianceCacheProbes } from './radiance-cache-technique.ts';
+// GI-1.0/1.2 (Capsaicin v1.3; docs/design/radiance-cache.md): screen probes with history (RC2, RC4.1)
+// and the world cache (RC3).
+export { RadianceCacheTechnique, type RadianceCacheProbeHistory, type RadianceCacheProbes } from './radiance-cache-technique.ts';
 export {
     DEFAULT_RADIANCE_CACHE_SETTINGS,
     PROBE_CELLS,
