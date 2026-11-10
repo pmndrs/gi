@@ -3,7 +3,8 @@ import tseslint from 'typescript-eslint';
 import globals from 'globals';
 
 export default tseslint.config(
-    { ignores: ['**/dist/', 'node_modules/', '.claude/', 'native/', 'research/', 'assets/downloads/', 'tools/emsdk/'] },
+    // tools/docs/snippets/ holds the docs' examples, generated and only typechecked (tools/docs/doc-snippets.ts).
+    { ignores: ['**/dist/', 'node_modules/', '.claude/', 'native/', 'research/', 'assets/downloads/', 'tools/emsdk/', 'tools/docs/snippets/'] },
     js.configs.recommended,
     ...tseslint.configs.recommended,
     {

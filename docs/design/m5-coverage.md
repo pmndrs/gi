@@ -47,7 +47,7 @@ SPEC's M5 lines: quality presets (with scaled-down settings for the correctness 
 - `docs/guides/adapter.md`, a guide to writing an engine adapter, walking through `examples/webgpu/hello` (the plain-WebGPU example) step by step: device and limits, the scene copy, materials and textures, lights, changes, the frame, sampling GI in your shading. First, fix the hello example's known gap: it passes only material slot 0 and no textures.
 - A getting-started section in the root README (three in a dozen lines, as `LightProbeGrid` does).
 
-**Done when:** a script lists the public exports of `@gi/*` and `@pmndrs/ddgi-three` and checks that each is named in the API docs (a product check: the docs cover what ships). The guide's code blocks are pulled into a typechecked file. `three-neutrality` still passes with the fixed hello example. Dennis reads the getting-started.
+**Done when:** a script lists the public exports of `@pmndrs/ddgi/core` and `@pmndrs/ddgi/three` and checks that each is named in the API docs (a product check: the docs cover what ships). The guide's code blocks are pulled into a typechecked file. `three-neutrality` still passes with the fixed hello example. Dennis reads the getting-started.
 
 ## 5. The coverage note (T5.5)
 
