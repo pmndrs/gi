@@ -64,8 +64,9 @@ export interface ViewerAutomationState {
      * the running DDGI has loaded, and the last error. Null fields until then.
      */
     bake: {
-        saved: { file: string; bytes: number } | null;
-        loaded: { file: string; stale: boolean; changedParts: readonly string[] } | null;
+        /** `ms`: wall time of the save (the readback and the scene fingerprint) or of the load call. */
+        saved: { file: string; bytes: number; ms: number } | null;
+        loaded: { file: string; stale: boolean; changedParts: readonly string[]; ms: number } | null;
         bakesLoaded: number;
         error: string | null;
     };
@@ -371,7 +372,9 @@ export class ViewerApp {
             return;
         }
         try {
+            const startedAt = performance.now();
             const bytes = await ddgi.saveBake();
+            const ms = performance.now() - startedAt;
             const file = `${this.manifest.id}.ddgibake`;
             const link = document.createElement('a');
             link.href = URL.createObjectURL(new Blob([bytes], { type: 'application/octet-stream' }));
@@ -380,7 +383,7 @@ export class ViewerApp {
             // The download has its own copy once it starts.
             setTimeout(() => URL.revokeObjectURL(link.href), 60_000);
             this.bakeMessage = `Saved the probes to ${file} (${(bytes.byteLength / 1e6).toFixed(1)} MB).`;
-            this.automation.bake.saved = { file, bytes: bytes.byteLength };
+            this.automation.bake.saved = { file, bytes: bytes.byteLength, ms };
             this.automation.bake.error = null;
         } catch (error) {
             this.bakeFailed(`Couldn't save the probes: ${error instanceof Error ? error.message : String(error)}`);
@@ -400,12 +403,15 @@ export class ViewerApp {
             return;
         }
         try {
-            const loaded = ddgi.loadBake(await file.arrayBuffer());
+            const contents = await file.arrayBuffer();
+            const startedAt = performance.now();
+            const loaded = ddgi.loadBake(contents);
+            const ms = performance.now() - startedAt;
             const saved = new Date(loaded.savedAt).toLocaleString('en-GB');
             this.bakeMessage = loaded.stale
                 ? `Loaded probes from ${file.name} (saved ${saved}). The scene changed since (${loaded.changedParts.join(', ')}), so they are updating from there.`
                 : `Loaded probes from ${file.name} (saved ${saved}).`;
-            this.automation.bake.loaded = { file: file.name, stale: loaded.stale, changedParts: loaded.changedParts };
+            this.automation.bake.loaded = { file: file.name, stale: loaded.stale, changedParts: loaded.changedParts, ms };
             this.automation.bake.error = null;
         } catch (error) {
             this.bakeFailed(`Couldn't load ${file.name}: ${error instanceof Error ? error.message.replace(/^@pmndrs\/ddgi: /, '') : String(error)}`);

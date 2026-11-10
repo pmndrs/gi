@@ -78,8 +78,8 @@ interface ViewerState {
     frames: number;
     recompiles: number | null;
     bake: {
-        saved: { file: string; bytes: number } | null;
-        loaded: { file: string; stale: boolean; changedParts: string[] } | null;
+        saved: { file: string; bytes: number; ms: number } | null;
+        loaded: { file: string; stale: boolean; changedParts: string[]; ms: number } | null;
         bakesLoaded: number;
         error: string | null;
     };
@@ -227,7 +227,7 @@ async function main(): Promise<number> {
         while (!existsSync(bakeFile) && Date.now() < downloadDeadline) await sleep(250);
         if (!existsSync(bakeFile)) throw new Error(`the download didn't reach ${bakeFile}`);
         const fileBytes = (await readFile(bakeFile)).byteLength;
-        console.log(`saved: ${afterSave.bake.saved?.file}, ${fileBytes} bytes on disk (the page said ${afterSave.bake.saved?.bytes}); picture mean ${savedMean.toFixed(2)}`);
+        console.log(`saved: ${afterSave.bake.saved?.file}, ${fileBytes} bytes on disk (the page said ${afterSave.bake.saved?.bytes}) in ${afterSave.bake.saved?.ms.toFixed(1)} ms; picture mean ${savedMean.toFixed(2)}`);
         if (fileBytes !== afterSave.bake.saved?.bytes) problems.push(`the downloaded file is ${fileBytes} bytes, the page saved ${afterSave.bake.saved?.bytes}`);
         noteErrors('save', afterSave);
 
@@ -241,7 +241,7 @@ async function main(): Promise<number> {
         const loadedMean = await screenshot('3-after-load.png');
         const loaded = await state();
         console.log(
-            `loaded: stale ${afterLoad.bake.loaded?.stale} (${afterLoad.bake.loaded?.changedParts.join(', ') || 'nothing changed'}), bakes loaded ${loaded?.bake.bakesLoaded}; ` +
+            `loaded in ${afterLoad.bake.loaded?.ms.toFixed(1)} ms: stale ${afterLoad.bake.loaded?.stale} (${afterLoad.bake.loaded?.changedParts.join(', ') || 'nothing changed'}), bakes loaded ${loaded?.bake.bakesLoaded}; ` +
                 `picture mean before the load ${beforeMean.toFixed(2)}, after ${loadedMean.toFixed(2)} (saved page ${savedMean.toFixed(2)}); recompiles ${loaded?.recompiles}`,
         );
         if (afterLoad.bake.loaded?.stale) problems.push(`the same scene loaded as stale (${afterLoad.bake.loaded.changedParts.join(', ')})`);
@@ -261,7 +261,7 @@ async function main(): Promise<number> {
 
         await writeFile(
             join(options.out, 'summary.json'),
-            `${JSON.stringify({ adapter, scene: options.scene, fileBytes, savedMean, beforeMean, loadedMean, refusal: refused.bake.error, problems }, null, 2)}\n`,
+            `${JSON.stringify({ adapter, scene: options.scene, fileBytes, saveMs: afterSave.bake.saved?.ms, loadMs: afterLoad.bake.loaded?.ms, savedMean, beforeMean, loadedMean, refusal: refused.bake.error, problems }, null, 2)}\n`,
         );
         console.log(`\nScreenshots, the bake and summary.json in ${options.out}`);
     } catch (error) {

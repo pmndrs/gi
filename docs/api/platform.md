@@ -192,7 +192,7 @@ if (loaded.stale) console.log('the scene changed since:', loaded.changedParts);
 | --- | --- |
 | `geometry` | Each GI instance's mesh content (positions, indices, normals, uv sets, groups, triangle count, deform box), transform and visibility. A deforming mesh counts with its rest pose. |
 | `materials` | Each GI instance's material list: every number of each material, its textures by content hash. Labels are left out. |
-| `textures` | The content of every texture those materials use: the bytes of `PixelData`, `ImageData` and compressed levels (over 4 MB, an even sample of 4 MB plus the length). `ImageBitmap`, canvases and `GPUTexture`s count by size, format and colour space only; image elements by URL and size. |
+| `textures` | The content of every texture those materials use: the bytes of `PixelData`, `ImageData` and compressed levels (over 1 MB, an even 1 MB sample plus the length). `ImageBitmap`, canvases and `GPUTexture`s count by size, format and colour space only; image elements by URL and size. |
 | `lights` | Every light's numbers and shadow parameters (`castsShadows`), and its group. There are no shadow matrices to leave out. |
 | `sky` | The environment's settings; a texture environment by its texture's size and format, not its texels. |
 
@@ -202,7 +202,7 @@ Each part is order-free, so two loads that create objects in another order agree
 
 ### During M5, 2026-11-10
 
-- **Technique-facing (T5.2): `SceneCopy.fingerprint(): SceneFingerprint`**, content hashes of the scene by part, for saved bakes ("Saved bakes" above). Worked out on the CPU when called. Meshes and textures are hashed once when created or updated, since the scene keeps no CPU copy of them after upload: a few ns a word.
+- **Technique-facing (T5.2): `SceneCopy.fingerprint(): SceneFingerprint`**, content hashes of the scene by part, for saved bakes ("Saved bakes" above). Worked out on the CPU when called. Meshes and textures are hashed once when created or updated, since the scene keeps no CPU copy of them after upload: 1.9 ns a word on the M5 Pro (48 MB in 22 ms), on the host's thread.
 - **Host-facing through DDGI (T5.2): `DDGITechnique.saveField` / `loadField`**, the `.ddgibake` format, `SavedFieldError` ("Saved bakes" above). Implementation-only: the irradiance and distance atlases gain `COPY_DST` usage (the load writes them).
 
 ### During M3, 2026-11-09

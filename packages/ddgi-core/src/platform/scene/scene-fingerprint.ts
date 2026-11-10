@@ -43,18 +43,21 @@ import type { CompressedPixelData, EnvironmentDescriptor, LightDescriptor, Mater
 export const FINGERPRINT_VERSION = 1;
 
 /**
- * A texture's bytes are hashed in full up to this many 32-bit words (4 MB,
- * a 2048 x 2048 BC7 image), and past it from an even sample of this many.
- * Why a cap: Bistro's textures are hundreds of MB, and a texture edited
- * anywhere almost always changes many sampled words.
+ * A texture's bytes are hashed in full up to this many 32-bit words (1 MB,
+ * a 1024 x 1024 BC7 level), and past it from an even sample of this many.
+ * Why a cap: hashing runs on the host's thread when the texture is created,
+ * at about 2 ns a word (M5 Pro), and Bistro's 277 textures are hundreds of
+ * MB; this keeps them under about 0.15 s, and a texture edited anywhere
+ * almost always changes many sampled words.
  */
-export const FULL_HASH_WORDS = 1 << 20;
+export const FULL_HASH_WORDS = 1 << 18;
 
 /**
  * A 64-bit hash in two independent 32-bit lanes (multiply-xorshift mixing,
  * as murmur3's finaliser), written as 16 hex digits. Not cryptographic: it
- * only has to tell a changed scene from the same one, quickly. A few ns a
- * word, so a 50 MB scene's geometry hashes in tens of milliseconds.
+ * only has to tell a changed scene from the same one, quickly. Arrays go
+ * through one inlined loop ({@link words}): about 2 ns a word on the M5 Pro,
+ * so Bistro's ~50 MB of geometry hashes in a few tens of milliseconds.
  */
 export class ContentHasher {
     private lane1 = 0x9e3779b9;
@@ -72,11 +75,30 @@ export class ContentHasher {
         return this;
     }
 
-    /** Adds every word of `words` (or an even sample of `limit` of them, plus the length). */
+    /**
+     * Adds every word of `words` (or an even sample of `limit` of them, plus
+     * the length). The same mixing as {@link word}, in one loop on locals:
+     * a call a word was 5x slower (10 ns a word).
+     */
     words(words: Uint32Array, limit = Number.POSITIVE_INFINITY): this {
         this.word(words.length);
         const step = words.length > limit ? Math.ceil(words.length / limit) : 1;
-        for (let index = 0; index < words.length; index += step) this.word(words[index]);
+        let lane1 = this.lane1;
+        let lane2 = this.lane2;
+        let count = 0;
+        for (let index = 0; index < words.length; index += step) {
+            const value = words[index];
+            let mixed1 = lane1 ^ value;
+            let mixed2 = lane2 ^ value;
+            mixed1 = (mixed1 << 13) | (mixed1 >>> 19);
+            mixed2 = (mixed2 << 17) | (mixed2 >>> 15);
+            lane2 = Math.imul(mixed2, 0x1b873593) >>> 0;
+            lane1 = (Math.imul(mixed1, 0xcc9e2d51) + lane2) >>> 0;
+            count++;
+        }
+        this.lane1 = lane1;
+        this.lane2 = lane2;
+        this.count += count;
         return this;
     }
 
