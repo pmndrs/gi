@@ -27,6 +27,7 @@ import { disposeScene, loadScene, type LoadedScene, type LoadProgress, type Load
 import { DdgiTechnique, DEFAULT_DDGI_VIEWER_SETTINGS, layerKey, type DdgiViewerSettings } from '../techniques/ddgi-technique';
 import { DEFAULT_LPG_SETTINGS, LightProbeGridTechnique, type LightProbeGridSettings } from '../techniques/light-probe-grid-technique';
 import { NoGiTechnique } from '../techniques/no-gi-technique';
+import { DEFAULT_RADIANCE_CACHE_VIEWER_SETTINGS, RadianceCacheViewerTechnique, type RadianceCacheViewerSettings } from '../techniques/radiance-cache-technique';
 import { ReferenceImageTechnique } from '../techniques/reference-technique';
 import { TECHNIQUE_LABELS, type GiTechnique, type TechniqueContext, type TechniqueId, type UpscaleSettings } from '../techniques/types';
 import { DEFAULT_VXGI_SETTINGS, VxgiTechnique, type VxgiSettings } from '../techniques/vxgi-technique';
@@ -91,6 +92,7 @@ export class ViewerCore {
     private probeSettings: LightProbeGridSettings = DEFAULT_LPG_SETTINGS;
     private vxgiSettings: VxgiSettings = DEFAULT_VXGI_SETTINGS;
     private ddgiSettings: DdgiViewerSettings = DEFAULT_DDGI_VIEWER_SETTINGS;
+    private radianceCacheSettings: RadianceCacheViewerSettings = DEFAULT_RADIANCE_CACHE_VIEWER_SETTINGS;
     /** The camera bookmark the reference image belongs to (the last one chosen). */
     private referenceBookmark = 0;
     private readonly frameWaiters: Array<(startedAt: number) => void> = [];
@@ -196,6 +198,8 @@ export class ViewerCore {
         switch (id) {
             case 'ddgi':
                 return new DdgiTechnique(context, this.ddgiSettings);
+            case 'rc':
+                return new RadianceCacheViewerTechnique(context, this.radianceCacheSettings);
             case 'lpg':
                 return new LightProbeGridTechnique(context, this.probeSettings);
             case 'vxgi':
@@ -265,6 +269,12 @@ export class ViewerCore {
             return;
         }
         ddgi?.configure(settings);
+    }
+
+    /** Applies to the radiance cache now if it exists, and to the one created later (its debug view: a uniform and an override material). */
+    configureRadianceCache(settings: RadianceCacheViewerSettings): void {
+        this.radianceCacheSettings = { ...settings };
+        (this.techniques.get('rc') as RadianceCacheViewerTechnique | undefined)?.configure(settings);
     }
 
     /** Bakes the probe grid again with its current settings. */

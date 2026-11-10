@@ -307,6 +307,7 @@ export class ViewerApp {
         this.core.configureProbeGrid({ ...DEFAULT_LPG_SETTINGS, ...this.probeSettings });
         this.core.configureVxgi({ ...DEFAULT_VXGI_SETTINGS, ...this.vxgiSettings });
         this.core.configureDdgi(this.ddgiSettings());
+        this.core.configureRadianceCache({ screenView: this.url.rcDebug });
         this.core.setToneMapping(this.url.tone as ToneMappingName);
         this.core.setExposureEv(this.exposureEv());
         this.core.setUpscale(this.url.upscale ? { quality: this.url.upscale } : null);
@@ -370,6 +371,7 @@ export class ViewerApp {
                 atlasEv: this.url.atlasEv,
                 change: this.url.change,
             },
+            radianceCacheDebug: this.url.rcDebug,
             probeBounces: this.probeSettings.bounces,
             maxProbes: this.probeSettings.maxProbes,
             vxgiBounces: this.vxgiSettings.bounces,
@@ -444,6 +446,7 @@ export class ViewerApp {
                     change: settings.change,
                 }),
             onDdgiRestart: () => this.core.restartDdgi(),
+            onRadianceCacheDebug: (view: ViewerUrlState['rcDebug']) => change({ rcDebug: view }),
             onCompareWithReference: () => {
                 // Go to the reference's own shot: camera, aspect, exposure and tone mapping.
                 this.pendingShot = { display: true };

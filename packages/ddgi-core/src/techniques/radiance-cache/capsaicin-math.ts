@@ -243,3 +243,150 @@ function roundHalfToEven(value: number): number {
     if (fraction < 0.5) return floor;
     return floor % 2 === 0 ? floor : floor + 1;
 }
+
+/** `SH_GetCoefficients` (spherical_harmonics.hlsl:28-48): the nine real SH basis values at a unit direction, Capsaicin's order and signs. */
+export function shGetCoefficients(direction: Direction): number[] {
+    const [x, y, z] = direction;
+    // fC1 = x·x − y·y and fS1 = x·y + y·x, as the HLSL builds them.
+    return [
+        0.2820947917738781,
+        -0.48860251190292 * y,
+        0.4886025119029199 * z,
+        -0.48860251190292 * x,
+        0.5462742152960395 * (x * y + y * x),
+        -1.092548430592079 * z * y,
+        0.9461746957575601 * z * z - 0.3153915652525201,
+        -1.092548430592079 * z * x,
+        0.5462742152960395 * (x * x - y * y),
+    ];
+}
+
+/**
+ * `SH_GetCoefficients_ClampedCosine_Cone` (spherical_harmonics.hlsl:78-104):
+ * the clamped cosine lobe about `direction`, cut to a cone of half-angle
+ * `coneThetaMax`, as convolved SH (its sum with a radiance's coefficients is
+ * the irradiance).
+ */
+export function shGetCoefficientsClampedCosineCone(direction: Direction, coneThetaMax: number): number[] {
+    const [x, y, z] = direction;
+    const sinThetaMax = Math.sin(coneThetaMax);
+    const cosThetaMax = Math.cos(coneThetaMax);
+    const band1 = 1.023326707946489 * (1 - cosThetaMax ** 3);
+    const band2 = (4 - 3 * sinThetaMax ** 3) * sinThetaMax ** 2;
+    return [
+        0.886226925452758 * sinThetaMax ** 2,
+        -band1 * y,
+        band1 * z,
+        -band1 * x,
+        0.8580855308097834 * band2 * x * y,
+        -0.8580855308097834 * band2 * y * z,
+        0.2477079561003757 * band2 * (3 * z * z - 1),
+        -0.8580855308097834 * band2 * x * z,
+        0.4290427654048917 * band2 * (x * x - y * y),
+    ];
+}
+
+/** The solid angle of one probe cell: 2π over 64 equal-area cells (`ProjectScreenProbes`' weight here, register D25). */
+export const SH_CELL_SOLID_ANGLE = (2 * Math.PI) / (PROBE_SIZE * PROBE_SIZE);
+/** Capsaicin's weight per cell in `ProjectScreenProbes`: `1 / probe_size` (gi1.comp:1466), 4/π times the solid angle. */
+export const CAPSAICIN_SH_CELL_WEIGHT = 1 / PROBE_SIZE;
+
+/** The world direction of a probe cell's centre about `normal` (`ProjectScreenProbes`, gi1.comp:1466-1474). */
+export function probeCellDirection(cell: number, normal: Direction): Direction {
+    const { b1, b2 } = getOrthoVectors(normal);
+    const [x, y, z] = mapToHemiOctahedron(((cell % PROBE_SIZE) + 0.5) / PROBE_SIZE, (Math.floor(cell / PROBE_SIZE) + 0.5) / PROBE_SIZE);
+    return [x * b1[0] + y * b2[0] + z * normal[0], x * b1[1] + y * b2[1] + z * normal[1], x * b1[2] + y * b2[2] + z * normal[2]];
+}
+
+/**
+ * A probe cell's SH basis about `normal`. With `subsamples` 1 (what
+ * `ProjectScreenProbes` runs) it is the basis at the cell centre, as
+ * Capsaicin takes it (gi1.comp:1466-1474). Above 1 it is the basis averaged
+ * over `subsamples²` points spread evenly over the cell in the
+ * hemi-octahedral square (equal-area, so evenly over its solid angle too):
+ * the cell-mean lever in the design doc, kept here to measure it.
+ */
+export function probeCellSH(cell: number, normal: Direction, subsamples = 1): number[] {
+    const { b1, b2 } = getOrthoVectors(normal);
+    const sum = new Array<number>(9).fill(0);
+    for (let row = 0; row < subsamples; row++) {
+        for (let column = 0; column < subsamples; column++) {
+            const u = ((cell % PROBE_SIZE) + (column + 0.5) / subsamples) / PROBE_SIZE;
+            const v = (Math.floor(cell / PROBE_SIZE) + (row + 0.5) / subsamples) / PROBE_SIZE;
+            const [x, y, z] = mapToHemiOctahedron(u, v);
+            const direction: Direction = [x * b1[0] + y * b2[0] + z * normal[0], x * b1[1] + y * b2[1] + z * normal[1], x * b1[2] + y * b2[2] + z * normal[2]];
+            shGetCoefficients(direction).forEach((value, index) => (sum[index] += value));
+        }
+    }
+    return sum.map((value) => value / (subsamples * subsamples));
+}
+
+/**
+ * `ProjectScreenProbes` (gi1.comp:1462-1511) on the CPU, as the WGSL runs it:
+ * each cell's radiance times `weight` and the cell's SH basis
+ * ({@link probeCellSH}: at the centre with `subsamples` 1), summed over the
+ * 64 cells (cells `x + y × 8`). `cellRadiance` gets the cell centre's
+ * direction. Capsaicin's own projection is `weight`
+ * {@link CAPSAICIN_SH_CELL_WEIGHT}.
+ */
+export function projectProbe(
+    cellRadiance: (cell: number, direction: Direction) => number,
+    normal: Direction,
+    weight = SH_CELL_SOLID_ANGLE,
+    subsamples = 1,
+): number[] {
+    const sum = new Array<number>(9).fill(0);
+    for (let cell = 0; cell < PROBE_SIZE * PROBE_SIZE; cell++) {
+        const radiance = cellRadiance(cell, probeCellDirection(cell, normal)) * weight;
+        probeCellSH(cell, normal, subsamples).forEach((value, index) => (sum[index] += value * radiance));
+    }
+    return sum;
+}
+
+/** `ScreenProbes_CalculateSHIrradiance_BentCone` (screen_probes.hlsl:200-216) on the CPU: irradiance along `normal` from nine coefficients, never negative. */
+export function shIrradiance(coefficients: readonly number[], normal: Direction, ao = 1): number {
+    const lobe = shGetCoefficientsClampedCosineCone(normal, Math.acos(Math.sqrt(Math.min(Math.max(1 - ao, 0), 1))));
+    let irradiance = 0;
+    lobe.forEach((value, index) => (irradiance += value * coefficients[index]));
+    return Math.max(irradiance, 0);
+}
+
+/**
+ * A probe cell's mean radiance about `normal`, from `samples²` points spread
+ * evenly over the cell: what a cell holds on average when its one ray per
+ * frame lands anywhere in it (the GPU's cell is one such ray).
+ */
+export function probeCellMeanRadiance(radiance: (direction: Direction) => number, cell: number, normal: Direction, samples = 8): number {
+    const { b1, b2 } = getOrthoVectors(normal);
+    let sum = 0;
+    for (let row = 0; row < samples; row++) {
+        for (let column = 0; column < samples; column++) {
+            const u = ((cell % PROBE_SIZE) + (column + 0.5) / samples) / PROBE_SIZE;
+            const v = (Math.floor(cell / PROBE_SIZE) + (row + 0.5) / samples) / PROBE_SIZE;
+            const [x, y, z] = mapToHemiOctahedron(u, v);
+            sum += radiance([x * b1[0] + y * b2[0] + z * normal[0], x * b1[1] + y * b2[1] + z * normal[1], x * b1[2] + y * b2[2] + z * normal[2]]);
+        }
+    }
+    return sum / (samples * samples);
+}
+
+/**
+ * The SH projection of a radiance over the hemisphere about `normal`
+ * (zero below), integrated finely: `steps²` equal-area points (the
+ * hemi-octahedral map is equal-area, so each weighs 2π / steps²). The
+ * reference the GPU's 64-cell projection is compared against.
+ */
+export function integrateHemisphereSH(radiance: (direction: Direction) => number, normal: Direction, steps = 256): number[] {
+    const { b1, b2 } = getOrthoVectors(normal);
+    const sum = new Array<number>(9).fill(0);
+    const weight = (2 * Math.PI) / (steps * steps);
+    for (let i = 0; i < steps; i++) {
+        for (let j = 0; j < steps; j++) {
+            const [x, y, z] = mapToHemiOctahedron((i + 0.5) / steps, (j + 0.5) / steps);
+            const direction: Direction = [x * b1[0] + y * b2[0] + z * normal[0], x * b1[1] + y * b2[1] + z * normal[1], x * b1[2] + y * b2[2] + z * normal[2]];
+            const value = radiance(direction) * weight;
+            shGetCoefficients(direction).forEach((basis, index) => (sum[index] += basis * value));
+        }
+    }
+    return sum;
+}

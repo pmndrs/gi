@@ -13,17 +13,19 @@ import type { LoadedScene } from '../scene/load-scene';
 /**
  * - `none`: direct light only;
  * - `ddgi`: our DDGI, through the three.js adapter;
+ * - `rc`: our radiance cache (AMD GI-1.0/1.2 port), through the three.js adapter's screen inputs and composite;
  * - `lpg`, `vxgi`: three.js's own baselines;
  * - `cycles`: the path-traced Cycles reference image of the current camera view (not a live technique).
  */
-export type TechniqueId = 'none' | 'ddgi' | 'lpg' | 'vxgi' | 'cycles';
+export type TechniqueId = 'none' | 'ddgi' | 'rc' | 'lpg' | 'vxgi' | 'cycles';
 
 /** Techniques that light the live scene (everything but "none" and the reference image). */
-export type GiTechniqueId = 'ddgi' | 'lpg' | 'vxgi';
+export type GiTechniqueId = 'ddgi' | 'rc' | 'lpg' | 'vxgi';
 
 export const TECHNIQUE_LABELS: Record<TechniqueId, string> = {
     none: 'No GI (direct light only)',
     ddgi: 'DDGI (ours)',
+    rc: 'Radiance cache (ours, AMD GI-1.0 port)',
     lpg: 'Light probe grid (three.js)',
     vxgi: 'VXGI (three.js)',
     cycles: 'Cycles reference (path traced)',
