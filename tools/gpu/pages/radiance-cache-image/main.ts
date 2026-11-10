@@ -31,11 +31,12 @@
  * normal, through a cone its occlusion narrows, and adds its near-field light
  * (Capsaicin's `HAS_OCCLUSION`, gi1.comp:1621-1626). The page screen's last
  * frame lighting is black here, so the near-field light is 0, but the
- * occlusion is not 1 on this open floor: Capsaicin rebuilds each SSGI sample
- * at its own uv with its texel's depth (ssgi.comp:194-196), so a sample
- * within a pixel or two of the centre on a floor seen at a grazing angle
- * sits off the plane and raises a horizon (radiance-cache-ssgi's "open
- * floor"; the twin gives the same on the CPU). So both checks' expected E
+ * occlusion and bent normal are not the open hemisphere's on this open
+ * floor: mostly because Capsaicin's SSGI takes one slice per pixel
+ * (ssgi.h:47), whose occlusion and bent normal the cone SH doesn't average
+ * back to open; a little because it rebuilds each sample at its own uv with
+ * its texel's depth (ssgi.comp:194-196). The f64 twin gives the same.
+ * So both checks' expected E
  * take each pixel's SSGI output from the GPU: the CPU's E from the reference
  * SH (the constant sky's, or the varying sky's, projected as the kernel
  * does) about the bent normal through the same cone (`shIrradiance`), plus

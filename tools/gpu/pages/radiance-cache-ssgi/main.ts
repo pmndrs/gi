@@ -39,9 +39,10 @@
  *    the wall's lit colour: 1 if it is the wall's radiance times the share of
  *    the cosine-weighted hemisphere it covers, i.e. irradiance / π.
  * 4. **An open floor (information):** occlusion on floor pixels far from the
- *    wall, whose samples all lie on the floor: below 1 where samples fall
- *    within a pixel or two (Capsaicin rebuilds a sample at its own uv with
- *    its texel's depth, ssgi.comp:194-196), worst at a grazing view.
+ *    wall, whose samples all lie on the floor: one slice's occlusion spreads
+ *    widely either side of 1 (it averages about 1), and a little of it is a
+ *    sample within a pixel or two rebuilt at its own uv with its texel's
+ *    depth (ssgi.comp:194-196).
  *
  * Also: no NaN or infinite value in either output. Correctness only, no
  * timing (DECISIONS 2026-11-09). Through the lock:
