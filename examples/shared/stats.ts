@@ -9,8 +9,9 @@
  * few seconds, never every frame.
  */
 
-import { DDGITechnique, exportIrradianceSH, PROBE_STATE, type GIPlatform } from '@pmndrs/ddgi/core';
-import type { GIVolume } from '@pmndrs/ddgi/three';
+import { type GIPlatform } from '@pmndrs/gi/core';
+import { DDGITechnique, exportIrradianceSH, PROBE_STATE } from '@pmndrs/gi/ddgi';
+import type { DDGIVolume } from '@pmndrs/gi/three';
 import { status } from './status.ts';
 
 const TEXT_INTERVAL_MS = 500;
@@ -61,7 +62,7 @@ export interface StatsOptions {
  * instead when the example swaps volumes (the presets example): the line
  * follows whichever volume it returns.
  */
-export function showStats(volume: GIVolume | (() => GIVolume), options: StatsOptions = {}): void {
+export function showStats(volume: DDGIVolume | (() => DDGIVolume), options: StatsOptions = {}): void {
     const currentVolume = typeof volume === 'function' ? volume : () => volume;
     const line = document.createElement('div');
     line.id = 'stats';

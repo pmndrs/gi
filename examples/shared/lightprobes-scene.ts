@@ -2,7 +2,7 @@
  * The scene of three r187's `webgpu_lightprobes.html`, copied as it is: a
  * 6 × 5 × 6 m Cornell box with two boxes, a sphere and a point light. The
  * first two examples use it unchanged, so the only difference from three's example
- * is the GI: `GIVolume` instead of `LightProbeGrid`.
+ * is the GI: `DDGIVolume` instead of `LightProbeGrid`.
  */
 
 import * as THREE from 'three/webgpu';

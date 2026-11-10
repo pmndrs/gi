@@ -15,8 +15,8 @@
 
 import * as THREE from 'three/webgpu';
 import GUI from 'three/addons/libs/lil-gui.module.min.js';
-import { DDGI_DEBUG_VIEW, DDGITechnique } from '@pmndrs/ddgi/core';
-import { GIVolume } from '@pmndrs/ddgi/three';
+import { DDGI_DEBUG_VIEW, DDGITechnique } from '@pmndrs/gi/ddgi';
+import { DDGIVolume } from '@pmndrs/gi/three';
 import { createRenderer } from '../shared/renderer.ts';
 import { loadScene } from '../shared/scene.ts';
 import { showStats } from '../shared/stats.ts';
@@ -25,7 +25,7 @@ import { IrradianceAtlas, ProbeDots, ScreenDebugMaterial, ShadingResources } fro
 const renderer = await createRenderer();
 const { scene, camera, probes } = loadScene('two-room', renderer, { cameraBookmark: 0, exposureEv: -1 });
 
-const volume = GIVolume.fromDDGIVolume(probes);
+const volume = DDGIVolume.fromDDGIVolume(probes);
 scene.add(volume);
 await volume.start(renderer, scene);
 

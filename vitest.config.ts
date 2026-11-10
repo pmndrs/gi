@@ -25,8 +25,8 @@ export default defineConfig({
         // build, so point it at the source. Exact-match per subpath: a plain string
         // key is a prefix alias.
         alias: [
-            { find: /^@pmndrs\/ddgi$/, replacement: resolve(__dirname, 'packages/ddgi/src/index.ts') },
-            { find: /^@pmndrs\/ddgi\/(core|three)$/, replacement: resolve(__dirname, 'packages/ddgi/src/$1.ts') },
+            { find: /^@pmndrs\/gi$/, replacement: resolve(__dirname, 'packages/ddgi/src/index.ts') },
+            { find: /^@pmndrs\/gi\/(core|ddgi|three)$/, replacement: resolve(__dirname, 'packages/ddgi/src/$1.ts') },
         ],
     },
 });

@@ -1,7 +1,8 @@
 /**
- * Lists the public exports of the published package's two entry points,
- * `@pmndrs/ddgi/core` (the engine-free core) and `@pmndrs/ddgi/three` (the
- * three.js adapter; `@pmndrs/ddgi` itself is the same list).
+ * Lists the public exports of the published package's entry points:
+ * `@pmndrs/gi/core` (the engine-free platform), `@pmndrs/gi/ddgi` (the DDGI
+ * technique, engine-free) and `@pmndrs/gi/three` (the three.js adapter;
+ * `@pmndrs/gi` itself is the same list).
  *
  * It reads the index files with TypeScript's parser and follows their
  * `export * from` and `export { ... } from` lines through the source, so it
@@ -21,8 +22,9 @@ const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 
 /** The published entry points and the private package each one re-exports. */
 export const PUBLIC_ENTRY_POINTS = [
-    { name: '@pmndrs/ddgi/core', index: 'packages/ddgi-core/src/index.ts', doc: 'docs/api/platform.md' },
-    { name: '@pmndrs/ddgi/three', index: 'packages/ddgi-three/src/index.ts', doc: 'docs/api/three.md' },
+    { name: '@pmndrs/gi/core', index: 'packages/ddgi-core/src/platform/index.ts', doc: 'docs/api/platform.md' },
+    { name: '@pmndrs/gi/ddgi', index: 'packages/ddgi-core/src/techniques/ddgi/index.ts', doc: 'docs/api/platform.md' },
+    { name: '@pmndrs/gi/three', index: 'packages/ddgi-three/src/index.ts', doc: 'docs/api/three.md' },
 ] as const;
 
 export type PublicEntryPoint = (typeof PUBLIC_ENTRY_POINTS)[number];

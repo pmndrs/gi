@@ -48,7 +48,7 @@ export interface DDGIPreset {
     textureLayerSize: NonNullable<GIPlatformOptions['textureLayerSize']>;
     /**
      * Metres between probes where the host doesn't set a spacing (three: a
-     * `GIVolume` made without probe counts). A host that sets one keeps it.
+     * `DDGIVolume` made without probe counts). A host that sets one keeps it.
      */
     probeSpacing: number;
 }
@@ -90,7 +90,7 @@ export function isDDGIPresetName(value: unknown): value is DDGIPresetName {
 /** A preset's settings, as a new object each call (change any field you like). */
 export function ddgiPreset(name: DDGIPresetName): DDGIPreset {
     const preset = PRESETS[name];
-    if (!preset) throw new RangeError(`@pmndrs/ddgi: no quality preset "${String(name)}"; the presets are ${DDGI_PRESET_NAMES.join(', ')}`);
+    if (!preset) throw new RangeError(`@pmndrs/gi: no quality preset "${String(name)}"; the presets are ${DDGI_PRESET_NAMES.join(', ')}`);
     return { ...preset, ddgi: { ...preset.ddgi }, budget: { ...preset.budget } };
 }
 

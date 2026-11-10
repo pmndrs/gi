@@ -4,8 +4,7 @@ name: Deploy examples to Pages
 # to GitHub Pages. The library is read straight from source through the
 # examples' vite aliases, so no separate library build is needed. PAGES_BASE
 # makes links and assets resolve under the project site's subdirectory:
-# /webgpu-ddgi/ today (https://dennissmolek.github.io/webgpu-ddgi/), /ddgi/
-# after the move to pmndrs/ddgi.
+# /gi/, for https://pmndrs.github.io/gi/.
 #
 # Nothing deploys until Pages is enabled for the repository, with
 # "GitHub Actions" as its source (Settings > Pages). The GPU checks of the
@@ -42,7 +41,7 @@ jobs:
       - name: Build the examples site
         run: pnpm examples:build
         env:
-          PAGES_BASE: /webgpu-ddgi/
+          PAGES_BASE: /gi/
       - uses: actions/upload-pages-artifact@v3
         with:
           path: examples/dist

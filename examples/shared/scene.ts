@@ -11,7 +11,7 @@
 import * as THREE from 'three/webgpu';
 import { SkyMesh } from 'three/addons/objects/SkyMesh.js';
 import type { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import type { DDGIVolumeSettings } from '@pmndrs/ddgi/core';
+import type { DDGIVolumeSettings } from '@pmndrs/gi/ddgi';
 import { buildProceduralParts, mergeScenes } from '../../scenes/src/build-scene.ts';
 import { manifestLightToSceneLight, type SceneManifest } from '../../scenes/src/manifest.ts';
 import { lightToThree, proceduralSceneToThree } from '../../scenes/src/three-scene.ts';
@@ -37,7 +37,7 @@ export interface ExampleScene {
     readonly lights: THREE.Light[];
     /** three's `SkyMesh` for a scene under the sky, or null indoors. */
     readonly sky: SkyMesh | null;
-    /** The probe box the scene suggests: pass it to `GIVolume.fromDDGIVolume`. */
+    /** The probe box the scene suggests: pass it to `DDGIVolume.fromDDGIVolume`. */
     readonly probes: DDGIVolumeSettings;
     readonly title: string;
 }

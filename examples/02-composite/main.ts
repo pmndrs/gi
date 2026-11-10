@@ -18,7 +18,7 @@
 import * as THREE from 'three/webgpu';
 import { mrt, normalView, output, packNormalToRGB, pass, rtt, velocity } from 'three/tsl';
 import { QualityMode, getQualityModeRatio, upscale } from '@pmndrs/upscaler';
-import { GIVolume, ddgi, giAlbedo } from '@pmndrs/ddgi/three';
+import { DDGIVolume, ddgi, giAlbedo } from '@pmndrs/gi/three';
 import { createRenderer, orbitCamera } from '../shared/renderer.ts';
 import { createLightProbesScene } from '../shared/lightprobes-scene.ts';
 import { showStats } from '../shared/stats.ts';
@@ -28,7 +28,7 @@ const renderer = await createRenderer({ antialias: false });
 const { scene, camera } = createLightProbesScene(window.innerWidth / window.innerHeight);
 orbitCamera(renderer, camera, new THREE.Vector3(0, 2.5, 0));
 
-const volume = new GIVolume(6, 5, 6, 6, 6, 6);
+const volume = new DDGIVolume(6, 5, 6, 6, 6, 6);
 volume.position.set(0, 2.5, 0);
 scene.add(volume);
 await volume.start(renderer, scene);

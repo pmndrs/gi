@@ -1335,7 +1335,7 @@ async function downloadWithFetch(download: AssetDownload, destination: string, t
         const response = await fetch(download.url, {
             redirect: 'follow',
             signal: controller.signal,
-            headers: { 'user-agent': 'webgpu-ddgi-asset-fetch (+https://github.com/pmndrs/ddgi)' },
+            headers: { 'user-agent': 'webgpu-ddgi-asset-fetch (+https://github.com/pmndrs/gi)' },
         });
         if (!response.ok || !response.body) {
             throw new Error(`download failed: ${download.url} answered ${response.status} ${response.statusText}`);

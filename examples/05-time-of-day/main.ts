@@ -15,7 +15,7 @@
 
 import * as THREE from 'three/webgpu';
 import GUI from 'three/addons/libs/lil-gui.module.min.js';
-import { GIVolume } from '@pmndrs/ddgi/three';
+import { DDGIVolume } from '@pmndrs/gi/three';
 import { createRenderer } from '../shared/renderer.ts';
 import { loadScene } from '../shared/scene.ts';
 import { showStats } from '../shared/stats.ts';
@@ -41,7 +41,7 @@ for (const [geometry, material, position] of pieces) {
     scene.add(mesh);
 }
 
-const volume = GIVolume.fromDDGIVolume(probes);
+const volume = DDGIVolume.fromDDGIVolume(probes);
 scene.add(volume);
 await volume.start(renderer, scene, { ddgi: { sunLayer: true } });
 

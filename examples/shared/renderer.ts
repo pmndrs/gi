@@ -6,7 +6,7 @@
 
 import * as THREE from 'three/webgpu';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { createGIRenderer } from '@pmndrs/ddgi/three';
+import { createGIRenderer } from '@pmndrs/gi/three';
 import { reportError } from './status.ts';
 
 export interface RendererOptions {

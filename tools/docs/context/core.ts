@@ -7,8 +7,6 @@
 
 import type {
     CompressedPixelLevel,
-    DDGITechnique,
-    DDGIVolumeSettings,
     FrameCamera,
     GIPlatform,
     InstanceHandle,
@@ -18,7 +16,8 @@ import type {
     MeshHandle,
     TextureHandle,
     Vec3,
-} from '@pmndrs/ddgi/core';
+} from '@pmndrs/gi/core';
+import type { DDGITechnique, DDGIVolumeSettings } from '@pmndrs/gi/ddgi';
 import type { ProceduralScene } from '../../../scenes/src/scene-data.ts';
 
 // The device and the platform (the guide's steps 1, 2 and 7).

@@ -1,7 +1,9 @@
 /**
  * The docs-cover-exports check (docs/design/m5-coverage.md §4): every public
- * export of `@pmndrs/ddgi/core` must be named in docs/api/platform.md, and
- * every export of `@pmndrs/ddgi/three` in docs/api/three.md.
+ * export of `@pmndrs/gi/core` and of `@pmndrs/gi/ddgi` must be named in
+ * docs/api/platform.md, and every export of `@pmndrs/gi/three` in
+ * docs/api/three.md, each in its own "Every export of `<subpath>`" section,
+ * so the lists say which subpath a name comes from.
  *
  * "Named" means the name appears as a whole word inside code: an inline
  * `code span` or a fenced code block. Plain prose doesn't count, so a type
@@ -36,6 +38,20 @@ export function namesMissingFrom(code: string, names: readonly string[]): string
     return names.filter((name) => !words.has(name));
 }
 
+/**
+ * The part of a doc that lists one subpath's exports: from its heading
+ * "## Every export of `<name>`" to the next "## " heading. Throws when the
+ * doc has no such section.
+ */
+export function exportSection(markdown: string, entryName: string): string {
+    const heading = `## Every export of \`${entryName}\``;
+    const start = markdown.split('\n').findIndex((line) => line.trim() === heading);
+    if (start < 0) throw new Error(`no "${heading}" section`);
+    const lines = markdown.split('\n').slice(start + 1);
+    const end = lines.findIndex((line) => line.startsWith('## '));
+    return lines.slice(0, end < 0 ? undefined : end).join('\n');
+}
+
 export interface CoverageReport {
     readonly entry: PublicEntryPoint;
     readonly exported: number;
@@ -45,7 +61,7 @@ export interface CoverageReport {
 export function checkDocsCoverExports(): CoverageReport[] {
     return PUBLIC_ENTRY_POINTS.map((entry) => {
         const names = publicExports(entry);
-        const code = markdownCode(readFileSync(repositoryPath(entry.doc), 'utf8'));
+        const code = markdownCode(exportSection(readFileSync(repositoryPath(entry.doc), 'utf8'), entry.name));
         return { entry, exported: names.length, missing: namesMissingFrom(code, names) };
     });
 }
@@ -54,7 +70,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     let failed = false;
     for (const report of checkDocsCoverExports()) {
         const covered = report.exported - report.missing.length;
-        console.log(`${report.entry.name}: ${covered} of ${report.exported} exports named in ${report.entry.doc}`);
+        console.log(`${report.entry.name}: ${covered} of ${report.exported} exports named in ${report.entry.doc}'s "Every export of" section`);
         for (const name of report.missing) console.log(`  missing: ${name}`);
         if (report.missing.length > 0) failed = true;
     }

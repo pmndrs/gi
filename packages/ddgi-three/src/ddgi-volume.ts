@@ -4,7 +4,7 @@
  * numbers and as many lines:
  *
  * ```ts
- * const volume = new GIVolume(6, 5, 6, 6, 6, 6);   // like new LightProbeGrid(...)
+ * const volume = new DDGIVolume(6, 5, 6, 6, 6, 6);   // like new LightProbeGrid(...)
  * volume.position.set(0, 2.5, 0);
  * scene.add(volume);
  * await volume.start(renderer, scene);              // like probes.bake(renderer, scene)
@@ -28,7 +28,7 @@
  * DDGI places probes on a grid from a box and a spacing, `floor(size /
  * spacing) + 1` per axis, centred in the box. Cell centres are that grid with
  * spacing = width / nx and a box of width − width / nx (the outermost probes
- * sit half a cell inside the volume), which {@link GIVolume.ddgiVolume} gives.
+ * sit half a cell inside the volume), which {@link DDGIVolume.ddgiVolume} gives.
  * Changing the volume after `prepare` needs a new `DDGITechnique` settings
  * and another `prepare`, as for any DDGI volume.
  *
@@ -41,7 +41,7 @@ import { exportIrradianceSH, probeGrid, type DDGIVolumeSettings, type GIPlatform
 import { GI_LIGHT_PRIORITY, type GILight } from './gi-light.ts';
 import type { ThreeGI } from './three-gi.ts';
 import { toLightProbeGrid, type ExportedLightProbeGrid, type ToLightProbeGridOptions } from './light-probe-grid.ts';
-import { restartVolume, startVolume, type GIVolumeStartOptions, type StartedGI } from './volume-start.ts';
+import { restartVolume, startVolume, type DDGIVolumeStartOptions, type StartedGI } from './volume-start.ts';
 
 /**
  * `LightProbeGrid`'s default probe count for an axis: one per unit of length,
@@ -52,8 +52,8 @@ function defaultProbes(length: number, spacing = 1): number {
     return Math.max(1, Math.round(length / spacing));
 }
 
-export class GIVolume extends Light {
-    readonly isGIVolume = true;
+export class DDGIVolume extends Light {
+    readonly isDDGIVolume = true;
     /** Full size of the volume along each axis. */
     width: number;
     height: number;
@@ -77,7 +77,7 @@ export class GIVolume extends Light {
 
     constructor(width = 1, height = 1, depth = 1, widthProbes?: number, heightProbes?: number, depthProbes?: number) {
         super(0xffffff, 1);
-        (this as { type: string }).type = 'GIVolume';
+        (this as { type: string }).type = 'DDGIVolume';
         this.width = width;
         this.height = height;
         this.depth = depth;
@@ -107,11 +107,11 @@ export class GIVolume extends Light {
      * apart, centred on `center`. For hosts that describe DDGI volumes that
      * way (the viewer's scene manifests). Its position is `center`.
      */
-    static fromDDGIVolume(settings: DDGIVolumeSettings): GIVolume {
+    static fromDDGIVolume(settings: DDGIVolumeSettings): DDGIVolume {
         const grid = probeGrid(settings);
         const [nx, ny, nz] = grid.counts;
         const [sx, sy, sz] = grid.spacing;
-        const volume = new GIVolume(nx * sx, ny * sy, nz * sz, nx, ny, nz);
+        const volume = new DDGIVolume(nx * sx, ny * sy, nz * sz, nx, ny, nz);
         volume.position.set(settings.center[0], settings.center[1], settings.center[2]);
         volume.updateMatrixWorld();
         return volume;
@@ -153,8 +153,8 @@ export class GIVolume extends Light {
      * warm; GI then updates itself on every render. Throws `GILimitError`
      * (naming the limit, with the fix) when the scene outgrows the device.
      */
-    start(renderer: WebGPURenderer, scene: Scene, options: GIVolumeStartOptions = {}): Promise<void> {
-        if (this.started || this.starting) throw new Error('@pmndrs/ddgi/three: this GIVolume has already been started; dispose() it first.');
+    start(renderer: WebGPURenderer, scene: Scene, options: DDGIVolumeStartOptions = {}): Promise<void> {
+        if (this.started || this.starting) throw new Error('@pmndrs/gi/three: this DDGIVolume has already been started; dispose() it first.');
         this.starting = startVolume(this, renderer, scene, options).then(
             (started) => {
                 this.started = started;
@@ -174,8 +174,8 @@ export class GIVolume extends Light {
      * the calibration, volume-start.ts), for after the scene changed a lot.
      * Resolves when the probes are warm again.
      */
-    restart(options: Pick<GIVolumeStartOptions, 'budget' | 'warmUp' | 'camera'> = {}): Promise<void> {
-        if (!this.started) throw new Error('@pmndrs/ddgi/three: the GIVolume has no GI yet; await volume.start(renderer, scene) before restarting it.');
+    restart(options: Pick<DDGIVolumeStartOptions, 'budget' | 'warmUp' | 'camera'> = {}): Promise<void> {
+        if (!this.started) throw new Error('@pmndrs/gi/three: the DDGIVolume has no GI yet; await volume.start(renderer, scene) before restarting it.');
         return restartVolume(this, this.started, options);
     }
 
@@ -196,7 +196,7 @@ export class GIVolume extends Light {
 
     /** The GI light `start` added, which the composite reads (`ddgi(scenePass, volume)`). */
     get light(): GILight {
-        if (!this.started) throw new Error('@pmndrs/ddgi/three: the GIVolume has no GI yet; await volume.start(renderer, scene) before rendering with it.');
+        if (!this.started) throw new Error('@pmndrs/gi/three: the DDGIVolume has no GI yet; await volume.start(renderer, scene) before rendering with it.');
         return this.started.threeGI.light;
     }
 
@@ -218,7 +218,7 @@ export class GIVolume extends Light {
      * light with the grid alone.
      */
     async exportLightProbeGrid(options: ToLightProbeGridOptions = {}): Promise<ExportedLightProbeGrid> {
-        if (!this.started) throw new Error('@pmndrs/ddgi/three: the GIVolume has no GI yet; await volume.start(renderer, scene) before exporting it.');
+        if (!this.started) throw new Error('@pmndrs/gi/three: the DDGIVolume has no GI yet; await volume.start(renderer, scene) before exporting it.');
         return toLightProbeGrid(await exportIrradianceSH(this.started.technique), options);
     }
 
@@ -231,7 +231,7 @@ export class GIVolume extends Light {
      * resolved (warm probes).
      */
     saveBake(): Promise<Uint8Array<ArrayBuffer>> {
-        if (!this.started) throw new Error('@pmndrs/ddgi/three: the GIVolume has no GI yet; await volume.start(renderer, scene) before saving a bake.');
+        if (!this.started) throw new Error('@pmndrs/gi/three: the DDGIVolume has no GI yet; await volume.start(renderer, scene) before saving a bake.');
         return this.started.technique.saveField();
     }
 
@@ -247,7 +247,7 @@ export class GIVolume extends Light {
      * from a bake without warming up first, pass it to `start` instead.
      */
     loadBake(bytes: Uint8Array | ArrayBuffer, options: LoadFieldOptions = {}): LoadedField {
-        if (!this.started) throw new Error('@pmndrs/ddgi/three: the GIVolume has no GI yet; pass the bake to volume.start(renderer, scene, { bake }) instead.');
+        if (!this.started) throw new Error('@pmndrs/gi/three: the DDGIVolume has no GI yet; pass the bake to volume.start(renderer, scene, { bake }) instead.');
         return this.started.technique.loadField(bytes, options);
     }
 
@@ -269,9 +269,9 @@ export class GIVolume extends Light {
 }
 
 /** The volume describes; the GI light lights. LightsNode still needs a node for every light. */
-class GIVolumeNode extends AnalyticLightNode<GIVolume> {
+class DDGIVolumeNode extends AnalyticLightNode<DDGIVolume> {
     static get type(): string {
-        return 'GIVolumeNode';
+        return 'DDGIVolumeNode';
     }
 
     setup(): Node | undefined {
@@ -279,4 +279,4 @@ class GIVolumeNode extends AnalyticLightNode<GIVolume> {
     }
 }
 
-GIVolume.registerNode(GIVolumeNode);
+DDGIVolume.registerNode(DDGIVolumeNode);

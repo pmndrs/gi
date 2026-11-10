@@ -3,7 +3,7 @@
 import * as THREE from 'three/webgpu';
 import { mrt, normalView, output, packNormalToRGB, pass, rtt, velocity } from 'three/tsl';
 import { QualityMode, getQualityModeRatio, upscale } from '@pmndrs/upscaler';
-import { ddgi, giAlbedo } from '@pmndrs/ddgi/three';
+import { ddgi, giAlbedo } from '@pmndrs/gi/three';
 import { scene, camera, volume } from '../context/three.ts';
 
 export async function snippet(): Promise<void> {

@@ -37,17 +37,17 @@ function exampleNav(): Plugin {
 export default defineConfig({
     root,
     // GitHub Pages serves a project site under /<repo>/, so the Pages build sets
-    // PAGES_BASE (/webgpu-ddgi/ today, /ddgi/ after the move to pmndrs). Local
+    // PAGES_BASE (/gi/, for https://pmndrs.github.io/gi/). Local
     // dev and builds default to '/'. Links between pages are relative, so they
     // work under either.
     base: process.env.PAGES_BASE ?? '/',
     plugins: [exampleNav()],
     resolve: {
-        // Exact-match entries per public subpath: a plain '@pmndrs/ddgi' key is a
-        // prefix alias and would send '@pmndrs/ddgi/core' to 'index.ts/core'.
+        // Exact-match entries per public subpath: a plain '@pmndrs/gi' key is a
+        // prefix alias and would send '@pmndrs/gi/core' to 'index.ts/core'.
         alias: [
-            { find: /^@pmndrs\/ddgi$/, replacement: resolve(repoRoot, 'packages/ddgi/src/index.ts') },
-            { find: /^@pmndrs\/ddgi\/(core|three)$/, replacement: resolve(repoRoot, 'packages/ddgi/src/$1.ts') },
+            { find: /^@pmndrs\/gi$/, replacement: resolve(repoRoot, 'packages/ddgi/src/index.ts') },
+            { find: /^@pmndrs\/gi\/(core|ddgi|three)$/, replacement: resolve(repoRoot, 'packages/ddgi/src/$1.ts') },
         ],
     },
     // Our own dependency cache, so this server and the viewer's don't fight over node_modules/.vite.

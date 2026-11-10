@@ -178,7 +178,7 @@ export class DDGIShadingModule implements ShadingModule {
         let offset = 0;
         for (const parameter of this.parameters) {
             if (parameter.kind !== 'vec4f') continue;
-            if (target.length < offset + VEC4_FLOATS) throw new RangeError(`@pmndrs/ddgi: writeUniforms needs room for ${offset + VEC4_FLOATS} floats, got ${target.length}`);
+            if (target.length < offset + VEC4_FLOATS) throw new RangeError(`@pmndrs/gi: writeUniforms needs room for ${offset + VEC4_FLOATS} floats, got ${target.length}`);
             target.set(parameter.value(), offset);
             offset += VEC4_FLOATS;
         }

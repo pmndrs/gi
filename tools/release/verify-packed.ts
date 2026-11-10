@@ -7,12 +7,14 @@
 //      licence texts and every `exports` target, and its manifest asks
 //      consumers for nothing from this workspace;
 //   3. each entry's import graph (JS and .d.ts) reaches only what it may:
-//      `/core` no package at all, `.` and `/three` only three;
+//      `/core` and `/ddgi` no package at all, `.` and `/three` only three; and
+//      only its own layers' chunks (packages/ddgi/layer-chunks.ts): `/core` no
+//      DDGI or three code, `/ddgi` no three code;
 //   4. a fresh project with the tarball, three and @webgpu/types installed by
-//      npm imports `.`, `/core` and `/three` under Node and typechecks a file
-//      using each, under both `bundler` and `nodenext` module resolution;
+//      npm imports `.`, `/core`, `/ddgi` and `/three` under Node and typechecks
+//      a file using each, under both `bundler` and `nodenext` module resolution;
 //   5. a fresh project with the tarball and @webgpu/types only (no three)
-//      imports and typechecks `/core`.
+//      imports and typechecks `/core` and `/ddgi`, and finds no name in both.
 //
 // Steps 4 and 5 install from the npm registry, so they need the network.
 import { spawnSync, type SpawnSyncOptions } from 'node:child_process';
@@ -22,15 +24,16 @@ import { basename, dirname, join, resolve } from 'node:path';
 
 import ts from 'typescript';
 
+import { ENTRY_LAYERS, LAYER_CHUNKS, type Layer } from '../../packages/ddgi/layer-chunks.ts';
 import { isDirectRun } from './release-version.ts';
 
 const REPOSITORY_ROOT = resolve(import.meta.dirname, '../..');
 const PACKAGE_DIRECTORY = join(REPOSITORY_ROOT, 'packages/ddgi');
 const TSC = join(REPOSITORY_ROOT, 'node_modules/typescript/bin/tsc');
-const PACKAGE_NAME = '@pmndrs/ddgi';
+const PACKAGE_NAME = '@pmndrs/gi';
 
 export const USAGE = `Usage: node tools/release/verify-packed.ts [options]
-Builds and packs @pmndrs/ddgi, then checks the tarball as a user would get it
+Builds and packs @pmndrs/gi, then checks the tarball as a user would get it
 (no GPU needed; installs three and @webgpu/types from the npm registry).
   --skip-build   pack the existing packages/ddgi/dist instead of building it
   --keep-temp    keep the temporary projects for a look
@@ -48,15 +51,20 @@ export const REQUIRED_FILES = [
 ];
 
 /**
- * The bare specifiers each entry's import graph may reach. `/core` is the
- * engine-free platform, so it may reach none: it must work with three absent.
+ * The bare specifiers each entry's import graph may reach. `/core` (the
+ * platform) and `/ddgi` (the DDGI technique) are engine-free, so they may reach
+ * none: they must work with three absent.
  */
 const THREE_SPECIFIERS = [/^three$/, /^three\/(webgpu|tsl)$/, /^three\/addons\//];
 export const ENTRY_IMPORTS: Record<string, RegExp[]> = {
     index: THREE_SPECIFIERS,
     three: THREE_SPECIFIERS,
     core: [],
+    ddgi: [],
 };
+
+/** Entries that must work with no engine installed. */
+const ENGINE_FREE_ENTRIES = ['core', 'ddgi'];
 
 interface Consumer {
     /** Packages installed next to the tarball (versions are the repository's own). */
@@ -65,23 +73,26 @@ interface Consumer {
     imports: string[];
     /** A source file using the subpaths, typechecked against the packed types. */
     source: string;
+    /** An ES module run under Node after the imports; it throws when the subpaths are wrong. */
+    nodeCheck?: string;
 }
 
 export const CONSUMERS: Record<string, Consumer> = {
     three: {
         packages: ['three', '@types/three', '@webgpu/types'],
-        imports: [PACKAGE_NAME, `${PACKAGE_NAME}/core`, `${PACKAGE_NAME}/three`],
+        imports: [PACKAGE_NAME, `${PACKAGE_NAME}/core`, `${PACKAGE_NAME}/ddgi`, `${PACKAGE_NAME}/three`],
         // The README's getting started, plus one name from each other entry.
         source: `import * as THREE from 'three/webgpu';
-import { GIVolume as RootGIVolume } from '@pmndrs/ddgi';
-import { ddgiPreset, requiredLimits, type DDGIPresetName } from '@pmndrs/ddgi/core';
-import { createGIRenderer, GIVolume } from '@pmndrs/ddgi/three';
+import { DDGIVolume as RootDDGIVolume } from '@pmndrs/gi';
+import { requiredLimits } from '@pmndrs/gi/core';
+import { ddgiPreset, type DDGIPresetName } from '@pmndrs/gi/ddgi';
+import { createGIRenderer, DDGIVolume } from '@pmndrs/gi/three';
 
 export async function start(preset: DDGIPresetName = 'low'): Promise<void> {
     const { renderer } = await createGIRenderer();
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 100);
-    const volume = new GIVolume(6, 5, 6, 6, 6, 6);
+    const volume = new DDGIVolume(6, 5, 6, 6, 6, 6);
     volume.position.set(0, 2.5, 0);
     scene.add(volume);
     await volume.start(renderer, scene, { preset });
@@ -93,14 +104,25 @@ export function limitsFor(adapter: GPUAdapter) {
 }
 export const lowRays: number | undefined = ddgiPreset('low').ddgi.raysPerProbe;
 // '.' and '/three' share one chunk, so they export the same class.
-export const sameClass: typeof GIVolume = RootGIVolume;
+export const sameClass: typeof DDGIVolume = RootDDGIVolume;
+`,
+        // Every module is in one chunk, so a class is the same object from every subpath.
+        nodeCheck: `const root = await import('${PACKAGE_NAME}');
+const three = await import('${PACKAGE_NAME}/three');
+const ddgi = await import('${PACKAGE_NAME}/ddgi');
+if (root.DDGIVolume !== three.DDGIVolume) throw new Error("'.' and '/three' export different DDGIVolume classes");
+const volume = new three.DDGIVolume(6, 5, 6, 6, 6, 6);
+const settings = volume.ddgiVolume();
+const technique = new ddgi.DDGITechnique({ volume: settings });
+if (!(technique instanceof ddgi.DDGITechnique)) throw new Error('DDGITechnique failed instanceof');
 `,
     },
     core: {
         packages: ['@webgpu/types'],
-        imports: [`${PACKAGE_NAME}/core`],
-        // The platform on a bare device, as in docs/api/platform.md.
-        source: `import { createGI, DDGITechnique, ddgiPreset, recommendPreset, requiredLimits } from '@pmndrs/ddgi/core';
+        imports: [`${PACKAGE_NAME}/core`, `${PACKAGE_NAME}/ddgi`],
+        // The platform and DDGI on a bare device, as in docs/api/platform.md.
+        source: `import { createGI, requiredLimits } from '@pmndrs/gi/core';
+import { DDGITechnique, ddgiPreset, recommendPreset } from '@pmndrs/gi/ddgi';
 
 export async function start(adapter: GPUAdapter) {
     const device = await adapter.requestDevice({ requiredLimits: requiredLimits(adapter) });
@@ -111,6 +133,14 @@ export async function start(adapter: GPUAdapter) {
     await gi.prepare();
     return gi;
 }
+`,
+        // The platform holds no DDGI: no name is in both subpaths.
+        nodeCheck: `const core = await import('${PACKAGE_NAME}/core');
+const ddgi = await import('${PACKAGE_NAME}/ddgi');
+const both = Object.keys(core).filter((name) => name in ddgi);
+if (both.length) throw new Error('/core and /ddgi both export ' + both.join(', '));
+for (const name of ['DDGITechnique', 'ddgiPreset']) if (name in core) throw new Error('/core exports ' + name);
+for (const name of ['createGI', 'DDGITechnique', 'ddgiPreset']) if (!(name in core) && !(name in ddgi)) throw new Error(name + ' is missing');
 `,
     },
 };
@@ -205,31 +235,61 @@ export function resolveRelative(importer: string, specifier: string): string {
     return importer.endsWith('.d.ts') && path.endsWith('.js') ? `${path.slice(0, -'.js'.length)}.d.ts` : path;
 }
 
-/** Follows an entry's relative imports through the package and collects every bare specifier reached. */
-export function bareImports(entry: string, read: (path: string) => string = (path) => readFileSync(path, 'utf8')): Set<string> {
+/** Follows an entry's relative imports through the package: every file reached (the entry too) and every bare specifier. */
+export function importGraph(entry: string, read: (path: string) => string = (path) => readFileSync(path, 'utf8')): { files: Set<string>; bare: Set<string> } {
     const bare = new Set<string>();
-    const seen = new Set<string>();
+    const files = new Set<string>();
     const queue = [entry];
     while (queue.length) {
         const file = queue.pop() as string;
-        if (seen.has(file)) continue;
-        seen.add(file);
+        if (files.has(file)) continue;
+        files.add(file);
         for (const specifier of importSpecifiers(read(file))) {
             if (specifier.startsWith('.')) queue.push(resolveRelative(file, specifier));
             else bare.add(specifier);
         }
     }
-    return bare;
+    return { files, bare };
 }
 
-/** Every entry's JS and declaration graph against its allowed specifiers; returns the failures. */
+/** Every bare specifier an entry's graph reaches. */
+export function bareImports(entry: string, read?: (path: string) => string): Set<string> {
+    return importGraph(entry, read).bare;
+}
+
+/**
+ * The layer a file in dist holds (packages/ddgi/layer-chunks.ts): a chunk's
+ * from its name (`chunks/ddgi-<hash>.js`), an entry's from the entry it is.
+ */
+export function layerOf(packageDirectory: string, file: string): Layer | undefined {
+    const dist = join(packageDirectory, 'dist');
+    const name = basename(file).replace(/\.d\.ts$|\.js$/, '');
+    if (dirname(file) === join(dist, 'chunks')) return LAYER_CHUNKS.find((layer) => name.startsWith(`${layer}-`));
+    if (dirname(file) === dist) return ENTRY_LAYERS[name]?.at(-1);
+    return undefined;
+}
+
+/**
+ * Every entry's JS and declaration graph against its allowed specifiers and
+ * layers; returns the failures. A layer outside an entry's list means code of a
+ * higher layer leaked into it: DDGI in `/core`, or three in `/ddgi`.
+ */
 export function checkImportGraph(packageDirectory: string, read?: (path: string) => string): string[] {
     const failures: string[] = [];
     for (const [entry, allowed] of Object.entries(ENTRY_IMPORTS)) {
+        const layers = ENTRY_LAYERS[entry];
         for (const extension of ['.js', '.d.ts']) {
-            for (const specifier of bareImports(join(packageDirectory, 'dist', entry + extension), read)) {
+            const graph = importGraph(join(packageDirectory, 'dist', entry + extension), read);
+            for (const specifier of graph.bare) {
                 if (!allowed.some((pattern) => pattern.test(specifier))) {
-                    failures.push(`dist/${entry}${extension} reaches '${specifier}', which ${entry === 'core' ? '/core must not need' : 'is not three'}`);
+                    const why = ENGINE_FREE_ENTRIES.includes(entry) ? `/${entry} must not need` : 'is not three';
+                    failures.push(`dist/${entry}${extension} reaches '${specifier}', which ${why}`);
+                }
+            }
+            for (const file of graph.files) {
+                const layer = layerOf(packageDirectory, file);
+                if (layer && !layers.includes(layer)) {
+                    failures.push(`dist/${entry}${extension} reaches ${basename(file)}, which holds ${layer} code; /${entry} may load only ${layers.join(', ')}`);
                 }
             }
         }
@@ -284,12 +344,13 @@ function createConsumer(directory: string, archive: string, consumer: Consumer):
     });
 }
 
-/** Imports each subpath in a fresh Node process, as `import('@pmndrs/ddgi/core')` in user code would. */
-function importUnderNode(directory: string, specifiers: string[]): void {
+/** Imports each subpath in a fresh Node process, as `import('@pmndrs/gi/core')` in user code would, then runs the consumer's own check. */
+function importUnderNode(directory: string, specifiers: string[], nodeCheck = ''): void {
     const script = `for (const specifier of ${JSON.stringify(specifiers)}) {
     const module = await import(specifier);
     if (Object.keys(module).length === 0) throw new Error(specifier + ' has no exports');
-}`;
+}
+${nodeCheck}`;
     run(process.execPath, ['--input-type=module', '-e', script], { cwd: directory });
 }
 
@@ -339,7 +400,7 @@ function main(): void {
             ...checkImportGraph(unpacked),
         ];
         if (failures.length) throw new Error(`The tarball:\n${failures.join('\n')}`);
-        console.log(`Contents and import graphs clean: ${REQUIRED_FILES.join(', ')} present; /core reaches no package, '.' and /three only three.`);
+        console.log(`Contents and import graphs clean: ${REQUIRED_FILES.join(', ')} present; /core and /ddgi reach no package, '.' and /three only three; /core loads only platform code, /ddgi no three code.`);
 
         for (const [name, consumer] of Object.entries(CONSUMERS)) {
             const directory = join(temporaryRoot, `consumer-${name}`);
@@ -348,7 +409,7 @@ function main(): void {
             if (!consumer.packages.includes('three') && existsSync(join(directory, 'node_modules/three'))) {
                 throw new Error(`Consumer '${name}' got three installed, though it didn't ask for it.`);
             }
-            importUnderNode(directory, consumer.imports);
+            importUnderNode(directory, consumer.imports, consumer.nodeCheck);
             for (const resolution of Object.keys(RESOLUTIONS) as Array<keyof typeof RESOLUTIONS>) {
                 const tsconfig = join(directory, `tsconfig.${resolution}.json`);
                 writeFileSync(tsconfig, `${JSON.stringify(consumerTsconfig(resolution), null, 4)}\n`);

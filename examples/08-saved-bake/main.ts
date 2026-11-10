@@ -16,8 +16,8 @@
  */
 
 import GUI from 'three/addons/libs/lil-gui.module.min.js';
-import { SavedFieldError } from '@pmndrs/ddgi/core';
-import { GIVolume } from '@pmndrs/ddgi/three';
+import { SavedFieldError } from '@pmndrs/gi/ddgi';
+import { DDGIVolume } from '@pmndrs/gi/three';
 import { createRenderer } from '../shared/renderer.ts';
 import { loadScene } from '../shared/scene.ts';
 import { showStats } from '../shared/stats.ts';
@@ -67,7 +67,7 @@ const stateLine = document.getElementById('bake-state') as HTMLElement;
 const renderer = await createRenderer();
 const { scene, camera, probes } = loadScene('two-room', renderer, { cameraBookmark: 1, exposureEv: -1 });
 
-let volume = GIVolume.fromDDGIVolume(probes);
+let volume = DDGIVolume.fromDDGIVolume(probes);
 scene.add(volume);
 const saved = await readBake();
 const startedAt = performance.now();
@@ -79,7 +79,7 @@ try {
     await forgetBake();
     volume.dispose();
     scene.remove(volume);
-    volume = GIVolume.fromDDGIVolume(probes);
+    volume = DDGIVolume.fromDDGIVolume(probes);
     scene.add(volume);
     await volume.start(renderer, scene);
 }

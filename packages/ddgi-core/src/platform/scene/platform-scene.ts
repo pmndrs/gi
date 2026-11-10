@@ -769,17 +769,17 @@ export class PlatformScene implements SceneApi, SceneCopy {
         const entry = this.mesh(mesh);
         const what = this.name('mesh', entry.handle, entry.label);
         const deform = entry.deform;
-        if (!deform) throw new Error(`@pmndrs/ddgi: setDeformedPositions: ${what} was not created with deforming: true.`);
+        if (!deform) throw new Error(`@pmndrs/gi: setDeformedPositions: ${what} was not created with deforming: true.`);
         if (positions instanceof Float32Array) {
             if (positions.length !== deform.current.length) {
-                throw new RangeError(`@pmndrs/ddgi: setDeformedPositions: ${what} has ${deform.vertexCount} vertices, but ${positions.length} numbers were given (3 per vertex).`);
+                throw new RangeError(`@pmndrs/gi: setDeformedPositions: ${what} has ${deform.vertexCount} vertices, but ${positions.length} numbers were given (3 per vertex).`);
             }
             copyCheckedPositions(positions, deform.waiting, `setDeformedPositions for ${what}`);
             deform.waitingOnGpu = null;
         } else {
             // The platform can't read GPU positions, so it can't grow the box to hold them: the host must give one.
             if (!deform.declaredBounds) {
-                throw new Error(`@pmndrs/ddgi: setDeformedPositions: ${what} needs deformBounds (given at createMesh) for positions on the GPU, which the platform can't read to find their box.`);
+                throw new Error(`@pmndrs/gi: setDeformedPositions: ${what} needs deformBounds (given at createMesh) for positions on the GPU, which the platform can't read to find their box.`);
             }
             deform.waitingOnGpu = checkedGpuPose(positions, deform.vertexCount, `setDeformedPositions for ${what}`);
         }
@@ -789,7 +789,7 @@ export class PlatformScene implements SceneApi, SceneCopy {
             deform.waitingOnGpu = null;
             if (this.warnedRestPose) return;
             this.warnedRestPose = true;
-            this.warn('@pmndrs/ddgi: this device has no subgroups, so deforming meshes stay in their rest pose for GI (the mesh-tree refit needs subgroups).');
+            this.warn('@pmndrs/gi: this device has no subgroups, so deforming meshes stay in their rest pose for GI (the mesh-tree refit needs subgroups).');
             return;
         }
         deform.hasWaiting = true;
@@ -800,7 +800,7 @@ export class PlatformScene implements SceneApi, SceneCopy {
         this.checkLive();
         const entry = this.mesh(mesh);
         if (entry.instances.size > 0) {
-            throw new Error(`@pmndrs/ddgi: ${this.name('mesh', entry.handle, entry.label)} is still used by ${entry.instances.size} instance(s); destroy them first.`);
+            throw new Error(`@pmndrs/gi: ${this.name('mesh', entry.handle, entry.label)} is still used by ${entry.instances.size} instance(s); destroy them first.`);
         }
         this.releaseVertexRange(entry);
         this.forgetPending(entry);
@@ -827,7 +827,7 @@ export class PlatformScene implements SceneApi, SceneCopy {
      */
     createTexture(descriptor: TextureDescriptor): TextureHandle {
         this.checkLive();
-        if (!descriptor || !descriptor.source) throw new TypeError('@pmndrs/ddgi: a texture needs a source');
+        if (!descriptor || !descriptor.source) throw new TypeError('@pmndrs/gi: a texture needs a source');
         const handle = this.nextHandle++ as TextureHandle;
         const entry: TextureEntry = {
             handle,
@@ -847,7 +847,7 @@ export class PlatformScene implements SceneApi, SceneCopy {
     destroyTexture(texture: TextureHandle): void {
         this.checkLive();
         const entry = this.texture(texture);
-        if (entry.users > 0) throw new Error(`@pmndrs/ddgi: texture ${texture} is still used by ${entry.users} material(s).`);
+        if (entry.users > 0) throw new Error(`@pmndrs/gi: texture ${texture} is still used by ${entry.users} material(s).`);
         // Its layer is free for the next texture; nothing reads it until that one's layer is made.
         this.pendingTextures.delete(entry);
         this.textureSlots.release(entry.slot);
@@ -907,7 +907,7 @@ export class PlatformScene implements SceneApi, SceneCopy {
         this.checkLive();
         const entry = this.material(material);
         if (entry.users.size > 0) {
-            throw new Error(`@pmndrs/ddgi: ${this.name('material', entry.handle, entry.descriptor.label)} is still used by ${entry.users.size} instance(s).`);
+            throw new Error(`@pmndrs/gi: ${this.name('material', entry.handle, entry.descriptor.label)} is still used by ${entry.users.size} instance(s).`);
         }
         this.detachTextures(entry);
         this.mirror.clearRecord('materials', entry.slot);
@@ -978,7 +978,7 @@ export class PlatformScene implements SceneApi, SceneCopy {
         this.checkLive();
         const count = instances.length;
         if (matrices.length < count * 16) {
-            throw new RangeError(`@pmndrs/ddgi: setTransforms needs 16 numbers per instance: ${count} instances, ${matrices.length} numbers.`);
+            throw new RangeError(`@pmndrs/gi: setTransforms needs 16 numbers per instance: ${count} instances, ${matrices.length} numbers.`);
         }
         const entries = this.batchEntriesFor(instances);
         // Any non-finite number makes the sum of number × 0 NaN: one pass with no branch per number.
@@ -995,7 +995,7 @@ export class PlatformScene implements SceneApi, SceneCopy {
         }
         if (column0 + column1 + column2 + column3 !== 0) {
             const bad = matrices.subarray(0, count * 16).findIndex((value) => !Number.isFinite(value));
-            throw new RangeError(`@pmndrs/ddgi: a transform must be finite (setTransforms entry ${Math.floor(bad / 16)}).`);
+            throw new RangeError(`@pmndrs/gi: a transform must be finite (setTransforms entry ${Math.floor(bad / 16)}).`);
         }
         let firstSlot = Infinity;
         let lastSlot = -1;
@@ -1182,7 +1182,7 @@ export class PlatformScene implements SceneApi, SceneCopy {
         this.checkLive();
         const entry = this.light(light);
         if ('type' in changes && (changes as { type?: unknown }).type !== entry.descriptor.type) {
-            throw new Error('@pmndrs/ddgi: a light cannot change type; destroy it and create a new one.');
+            throw new Error('@pmndrs/gi: a light cannot change type; destroy it and create a new one.');
         }
         const next = this.checkedLight({ ...entry.descriptor, ...changes } as LightDescriptor);
         // The log keeps the state the frame started with; it works out boxes and flags at encode.
@@ -1227,10 +1227,10 @@ export class PlatformScene implements SceneApi, SceneCopy {
             checkNonNegative(environment.sunIlluminance, 'sunIlluminance');
             checkNonNegative(environment.intensity, 'environment intensity');
         } else if (environment.type === 'texture') {
-            if (!environment.texture) throw new TypeError('@pmndrs/ddgi: a texture environment needs a texture');
+            if (!environment.texture) throw new TypeError('@pmndrs/gi: a texture environment needs a texture');
             checkNonNegative(environment.intensity, 'environment intensity');
         } else if (environment.type !== 'none') {
-            throw new TypeError(`@pmndrs/ddgi: unknown environment type ${(environment as { type: string }).type}`);
+            throw new TypeError(`@pmndrs/gi: unknown environment type ${(environment as { type: string }).type}`);
         }
         this.environmentDescriptor = environment;
         this.environmentChanges++;
@@ -1429,7 +1429,7 @@ export class PlatformScene implements SceneApi, SceneCopy {
 
                 if (deform.declaredBounds && !deform.warnedOutside && !boxInside(this.poseBounds, deform.declaredBounds)) {
                     deform.warnedOutside = true;
-                    this.warn(`@pmndrs/ddgi: ${this.name('mesh', mesh.handle, mesh.label)}: deformed positions left its deformBounds; the box grows to hold them (this warning is shown once).`);
+                    this.warn(`@pmndrs/gi: ${this.name('mesh', mesh.handle, mesh.label)}: deformed positions left its deformBounds; the box grows to hold them (this warning is shown once).`);
                 }
                 const grownBounds = Float32Array.from(mesh.layout.bounds);
                 grew = growBox(grownBounds, this.poseBounds);
@@ -1884,7 +1884,7 @@ export class PlatformScene implements SceneApi, SceneCopy {
     // -----------------------------------------------------------------------
 
     private checkLive(): void {
-        if (this.disposed) throw new Error('@pmndrs/ddgi: this scene was disposed.');
+        if (this.disposed) throw new Error('@pmndrs/gi: this scene was disposed.');
     }
 
     private name(kind: string, handle: number, label: string | undefined): string {
@@ -1893,7 +1893,7 @@ export class PlatformScene implements SceneApi, SceneCopy {
 
     private lookup<Entry>(map: Map<number, Entry>, handle: number, kind: string): Entry {
         const entry = map.get(handle);
-        if (!entry) throw new Error(`@pmndrs/ddgi: unknown or destroyed ${kind} handle ${handle}.`);
+        if (!entry) throw new Error(`@pmndrs/gi: unknown or destroyed ${kind} handle ${handle}.`);
         return entry;
     }
 
@@ -1944,7 +1944,7 @@ export class PlatformScene implements SceneApi, SceneCopy {
     private materialList(handles: readonly MaterialHandle[], mesh: MeshEntry): MaterialEntry[] {
         if (handles.length < mesh.layout.materialSlotCount) {
             throw new RangeError(
-                `@pmndrs/ddgi: ${this.name('mesh', mesh.handle, mesh.label)} uses ${mesh.layout.materialSlotCount} material slot(s), but the instance gives ${handles.length} material(s).`,
+                `@pmndrs/gi: ${this.name('mesh', mesh.handle, mesh.label)} uses ${mesh.layout.materialSlotCount} material slot(s), but the instance gives ${handles.length} material(s).`,
             );
         }
         return handles.map((handle) => this.material(handle));
@@ -1955,10 +1955,10 @@ export class PlatformScene implements SceneApi, SceneCopy {
      * from at once (into InstanceTransforms), so a call allocates nothing.
      */
     private checkedTransform(transform: Mat4): Float64Array {
-        if (!transform || transform.length < 16) throw new RangeError('@pmndrs/ddgi: a transform needs 16 numbers (column-major 4x4).');
+        if (!transform || transform.length < 16) throw new RangeError('@pmndrs/gi: a transform needs 16 numbers (column-major 4x4).');
         const matrix = this.transformScratch;
         for (let index = 0; index < 16; index++) {
-            if (!Number.isFinite(transform[index])) throw new RangeError('@pmndrs/ddgi: a transform must be finite.');
+            if (!Number.isFinite(transform[index])) throw new RangeError('@pmndrs/gi: a transform must be finite.');
             matrix[index] = transform[index];
         }
         return matrix;
@@ -2034,7 +2034,7 @@ export class PlatformScene implements SceneApi, SceneCopy {
                 }
             }
         } else {
-            throw new TypeError(`@pmndrs/ddgi: unknown light type ${(descriptor as { type: string }).type}`);
+            throw new TypeError(`@pmndrs/gi: unknown light type ${(descriptor as { type: string }).type}`);
         }
         // Its own arrays: the change log compares states, and a host editing a vector in place would change the stored one too.
         return copyLight(descriptor);

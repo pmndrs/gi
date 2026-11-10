@@ -1,6 +1,6 @@
-# Third-party code in @pmndrs/ddgi
+# Third-party code in @pmndrs/gi
 
-@pmndrs/ddgi is MIT licensed (`LICENSE`). It bundles the code below, which comes under its own licences. Each licence's full text is in `licenses/`, and the same texts are kept inside the bundle in `/*! */` comments, which bundlers preserve, so they travel with the code into your build.
+@pmndrs/gi is MIT licensed (`LICENSE`). It bundles the code below, which comes under its own licences. Each licence's full text is in `licenses/`, and the same texts are kept inside the bundle in `/*! */` comments, which bundlers preserve, so they travel with the code into your build.
 
 | What | Where in this package | Licence | Full text |
 | --- | --- | --- | --- |
@@ -11,4 +11,4 @@
 
 three.js is not bundled: it is a peer dependency, installed by you, under its own MIT licence.
 
-The repository's [THIRD_PARTY.md](https://github.com/pmndrs/ddgi/blob/main/THIRD_PARTY.md) also lists the test scenes and tools used to build and check this package. None of those ship in it.
+The repository's [THIRD_PARTY.md](https://github.com/pmndrs/gi/blob/main/THIRD_PARTY.md) also lists the test scenes and tools used to build and check this package. None of those ship in it.

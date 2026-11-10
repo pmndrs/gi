@@ -8,14 +8,14 @@
  * The preset sizes GI's buffers when it starts, so changing it means
  * `dispose()` and a new start. Here each change makes a new volume.
  *
- * `recommendPreset(adapter.info, adapter.limits)` from `@pmndrs/ddgi/core`
+ * `recommendPreset(adapter.info, adapter.limits)` from `@pmndrs/gi/ddgi`
  * suggests one for the GPU (`low` on integrated and mobile GPUs); this page
  * opens on its advice.
  */
 
 import GUI from 'three/addons/libs/lil-gui.module.min.js';
-import { DDGI_PRESET_NAMES, recommendPreset, type DDGIPresetName } from '@pmndrs/ddgi/core';
-import { GIVolume } from '@pmndrs/ddgi/three';
+import { DDGI_PRESET_NAMES, recommendPreset, type DDGIPresetName } from '@pmndrs/gi/ddgi';
+import { DDGIVolume } from '@pmndrs/gi/three';
 import { createRenderer } from '../shared/renderer.ts';
 import { loadScene } from '../shared/scene.ts';
 import { showStats } from '../shared/stats.ts';
@@ -24,8 +24,8 @@ const renderer = await createRenderer();
 const { scene, camera, probes } = loadScene('cornell-box-point', renderer);
 
 /** A volume over the scene's probe box, made without probe counts so the preset's spacing applies. */
-function makeVolume(): GIVolume {
-    const volume = new GIVolume(probes.size[0], probes.size[1], probes.size[2]);
+function makeVolume(): DDGIVolume {
+    const volume = new DDGIVolume(probes.size[0], probes.size[1], probes.size[2]);
     volume.position.set(...probes.center);
     scene.add(volume);
     return volume;

@@ -1,8 +1,8 @@
-# Platform API (`@pmndrs/ddgi/core`)
+# Platform API (`@pmndrs/gi/core` and `@pmndrs/gi/ddgi`)
 
 Status: the contract was **signed off by Dennis on 2026-11-04**, revised after the spikes (T0.8 three.js, T0.9 Babylon, T0.10 BVH) and in each milestone since. The changes are listed under "Revisions" at the end. Brought up to date for M2 to M5 in T5.4 (2026-11-10).
 
-This page covers `@pmndrs/ddgi/core`, the engine-free part of the library: the GI platform, DDGI on top of it, and the helpers around them. The contract's TypeScript is in [`packages/ddgi-core/src/platform/contract/`](../../packages/ddgi-core/src/platform/contract/) (types only, plus two error classes), and DDGI's is in [`packages/ddgi-core/src/techniques/ddgi/`](../../packages/ddgi-core/src/techniques/ddgi/). This page explains them in plain language, shows each feature with a short example, and lists [every export](#every-export-of-pmndrsddgicore) at the end. It also walks two future GI techniques (voxels and surfels) through the contract, to check it isn't shaped only for DDGI.
+This page covers the engine-free part of the library: `@pmndrs/gi/core`, the GI platform, and `@pmndrs/gi/ddgi`, DDGI on top of it, with the helpers around them. Neither needs three or any other engine, and `/core` holds no DDGI code: a technique of your own needs only `/core`. The contract's TypeScript is in [`packages/ddgi-core/src/platform/contract/`](../../packages/ddgi-core/src/platform/contract/) (types only, plus two error classes), and DDGI's is in [`packages/ddgi-core/src/techniques/ddgi/`](../../packages/ddgi-core/src/techniques/ddgi/). This page explains them in plain language, shows each feature with a short example, and lists every export of [`/core`](#every-export-of-pmndrsgicore) and of [`/ddgi`](#every-export-of-pmndrsgiddgi) at the end. It also walks two future GI techniques (voxels and surfels) through the contract, to check it isn't shaped only for DDGI.
 
 **Writing an adapter for an engine?** Start with [the adapter guide](../guides/adapter.md), which walks through the plain-WebGPU hello example step by step. For three.js, see [three.md](three.md).
 
@@ -54,7 +54,8 @@ The lifecycle names match the pmndrs siblings: `prepare()`, `isReady`, `encode()
 A host can pick one word instead of thirty settings (T5.1; docs/design/m5-coverage.md §1). `ddgiPreset(name)` returns plain data, a new object each call, so a host can change single fields:
 
 ```ts
-import { createGI, DDGITechnique, ddgiPreset, recommendPreset } from '@pmndrs/ddgi/core';
+import { createGI } from '@pmndrs/gi/core';
+import { DDGITechnique, ddgiPreset, recommendPreset } from '@pmndrs/gi/ddgi';
 
 const adapter = await navigator.gpu.requestAdapter();
 if (!adapter) throw new Error('No WebGPU adapter');
@@ -70,7 +71,7 @@ A preset has four parts:
 - `ddgi`: the DDGI settings it changes (rays per probe and the two tile sizes). Every other setting keeps its default. Spread it before your own settings, so yours win.
 - `budget`: the per-frame budget to pass as `frame.budget`.
 - `textureLayerSize`: `createGI`'s option for the texture store, the platform's own copy of every material texture that rays read.
-- `probeSpacing`: metres between probes, for hosts that don't set a spacing themselves (three: a `GIVolume` made without probe counts). A host that sets one keeps it.
+- `probeSpacing`: metres between probes, for hosts that don't set a spacing themselves (three: a `DDGIVolume` made without probe counts). A host that sets one keeps it.
 
 | | `low` | `medium` | `high` (the defaults) | What going down costs in look |
 | --- | --- | --- | --- | --- |
@@ -145,7 +146,7 @@ A light change re-traces only the probes the light reaches (its influence radius
 **Light groups** let a host dim or recolour a whole group of lights in GI in the same frame, with no rays traced again and no noise (T2.5). A light's group (0 to 3) is scene data, on the light. The weights belong to DDGI, and are turned on in its settings:
 
 ```ts
-import { DDGITechnique } from '@pmndrs/ddgi/core';
+import { DDGITechnique } from '@pmndrs/gi/ddgi';
 
 const ddgi = gi.addTechnique(
     new DDGITechnique({
@@ -180,7 +181,7 @@ gi.scene.setEnvironment({ type: 'procedural', sunDirection: towardSun, turbidity
 - **The sun layer** makes a change of the sun's *colour or brightness* exact in the frame it happens, with nothing traced again (T2.6b). DDGI traces the sun in a layer of its own at a white reference and weighs that layer by the sun's colour × intensity:
 
 ```ts
-import { DDGITechnique } from '@pmndrs/ddgi/core';
+import { DDGITechnique } from '@pmndrs/gi/ddgi';
 
 const ddgi = gi.addTechnique(new DDGITechnique({ volume, sunLayer: true }));
 gi.setOutput(ddgi);
@@ -211,7 +212,7 @@ gi.scene.createInstance({ mesh: meshes[1], materials: [materials[1]], transform:
 - **What techniques see** of all this is the change feed, `SceneChanges`, handed to every technique each frame (`TechniqueFrame.changes`). Hosts never read it; it is what lets DDGI update "probes near a change first":
 
 ```ts
-import type { SceneChanges } from '@pmndrs/ddgi/core';
+import type { SceneChanges } from '@pmndrs/gi/core';
 
 function describeChanges(changes: SceneChanges): void {
     for (const region of changes.regions) {
@@ -261,7 +262,7 @@ gi.scene.setDeformedPositions(flag, { texture: posedPositionTexture }); // an rg
 One DDGI technique can hold up to 8 boxes of probes (`volumes`). They share one set of textures, and where they overlap the one with the higher `priority` answers, fading into the next across its edge. A volume with `follow: 'camera'` is a window of probes that moves with the camera (T3.6):
 
 ```ts
-import { DDGITechnique } from '@pmndrs/ddgi/core';
+import { DDGITechnique } from '@pmndrs/gi/ddgi';
 
 const ddgi = gi.addTechnique(
     new DDGITechnique({
@@ -316,7 +317,7 @@ const tintedDecal = gi.scene.createMaterial({ albedo: [0.4, 0.3, 0.2], opacity: 
 `exportIrradianceSH` projects each probe of one volume onto L2 spherical harmonics (9 coefficients per colour) on the GPU, with one readback (T5.3). The result is engine-free data: the grid's counts, origin and spacing, and the coefficients in three.js's convention. three's adapter turns it into a `LightProbeGrid` for a static fallback ([three.md, "Exporting a `LightProbeGrid`"](three.md#exporting-a-lightprobegrid)).
 
 ```ts
-import { exportIrradianceSH, L2_SH_FLOATS_PER_PROBE } from '@pmndrs/ddgi/core';
+import { exportIrradianceSH, L2_SH_FLOATS_PER_PROBE } from '@pmndrs/gi/ddgi';
 
 const grid = await exportIrradianceSH(ddgi, { volume: 0 }); // the highest-priority volume
 console.log(grid.counts, grid.origin, grid.spacing);
@@ -329,9 +330,9 @@ const firstProbe = grid.coefficients.subarray(0, L2_SH_FLOATS_PER_PROBE); // 9 c
 - An explicit call, so its readback is allowed: the no-readback rule is about the frame loop.
 - The pieces it is made of are exported for checks and other formats: `shProjectionDirections` (directions spread evenly over the sphere), `l2ShBasis` (the 9 basis functions at a direction), `l2CosineLobe` (the factor between radiance and irradiance coefficients per band), `projectIrradianceToSH` (the projection on the CPU), and `fillInactiveProbes`.
 
-## Every export of `@pmndrs/ddgi/core`
+## Every export of `@pmndrs/gi/core`
 
-Every name `@pmndrs/ddgi/core` exports, in one place. A unit test (`tools/docs/docs-cover-exports.test.ts`) fails when the package exports a name this page doesn't mention, so this list stays complete.
+Every name `@pmndrs/gi/core` exports, in one place: the platform, with no technique in it. DDGI's names are in [the next section](#every-export-of-pmndrsgiddgi). A unit test (`tools/docs/docs-cover-exports.test.ts`) fails when the package exports a name this page doesn't mention, so these lists stay complete.
 
 ### Making the platform
 
@@ -393,11 +394,6 @@ Every name `@pmndrs/ddgi/core` exports, in one place. A unit test (`tools/docs/d
 | --- | --- |
 | `ShadingModule` | `gi.shading`: the WGSL, its `parameters`, `globalsCode(group)`, `writeUniforms`, `version` ([the adapter guide, step 9](../guides/adapter.md#step-9-sampling-gi-in-your-shaders)). |
 | `ShadingParameter` | One resource the module's functions take: a texture, a sampler or a `vec4f`. |
-| `DDGIShadingModule` | DDGI's shading module (`ddgi.shading`). |
-| `DDGI_SHADING_PARAMETER_NAMES` | The names of DDGI's shading parameters. |
-| `DDGI_SAMPLE_WGSL` | The one WGSL function that samples DDGI's field, for engine-free test views. |
-| `DDGI_DEBUG_VIEW` | DDGI's debug view ids: `points`, `giOnly`, `coverage`, `probeStates`. |
-| `DDGI_DEBUG_COLORS` | The colours its debug views use, for checks. |
 | `DebugView` | A debug view a technique offers: a screen view by id, or points (probes) in a texture. |
 
 ### Stats and GPU timing
@@ -412,6 +408,32 @@ Every name `@pmndrs/ddgi/core` exports, in one place. A unit test (`tools/docs/d
 | `GpuTimerScope` | The part of the timer a technique sees: `computePass(name)`. |
 | `TimestampRing`, `TimestampSlot`, `TimestampSlotState`, `PassQueryIndices` | The timer's ring of query slots, so frames don't overwrite results not yet read. |
 | `timestampsToPasses`, `totalByName`, `TimedPass` | Turning raw timestamps into pass times, and adding up passes with the same name. |
+
+### For writing a technique
+
+A technique gets the platform's services when attached, and never sees the host. These are described under "What techniques see" below and in the walk-throughs.
+
+| Name | What it is |
+| --- | --- |
+| `GITechnique` | What a technique implements: `attach`, `prepare`, `encode`, its `shading` module, `settings`, `debugViews`, `dispose`... |
+| `TechniqueRequirements` | What it needs: query kinds, ray batches, screen buffers, a fallback. |
+| `TechniqueContext` | What it gets when attached: the device, the scene copy, queries, hit shading, the kernel builder, the timer. |
+| `TechniqueFrame`, `TechniqueScreenFrame` | What its `encode` (and screen stage) gets each frame: the camera, the changes, its share of the budget. |
+| `WorkFloorRate` | What its fewest units per frame may depend on: the frame rate and the calibrated batch. |
+| `SceneCopy` | The scene as techniques read it: WGSL accessors, counts, memory, the first directional light. |
+| `SceneFingerprint` | `SceneCopy.fingerprint()`: content hashes of the scene by part (geometry, materials, textures, lights, sky), which saved bakes match against. |
+| `SceneChanges`, `DirtyRegion`, `ChangeReason`, `LightChange` | The change feed ("Moving, adding and removing objects" above). |
+| `SceneQueries`, `QueryKind`, `RayQueries` | Scene queries; v1 has one backend, `rays` (`giTraceClosest`, `giTraceAny`, batches). |
+| `HitShading`, `HitShadingSettings` | Shared hit shading: the surface at a hit, direct light with shadows, the sky; and its settings. |
+| `DirectLightFrame`, `DeferredDirectLight`, `DirectWorkList`, `RayScratch` | Direct light deferred to one platform pass (`gi/direct`), and its scratch buffer. |
+| `BounceSource` | Another technique's shading module used for bounce light. |
+| `WgslModule`, `BindingSlot`, `ModuleBindingEntry` | A piece of WGSL and the resources it binds. |
+| `KernelBuilder`, `ComputeKernel`, `ComputeKernelOptions` | How WGSL modules become compute pipelines, within the binding limits. |
+| `RAY_BYTES`, `HIT_RECORD_BYTES`, `HIT_RECORD_WORD` | Sizes and layout of the buffers `encodeBatch` reads and writes. |
+
+## Every export of `@pmndrs/gi/ddgi`
+
+Every name `@pmndrs/gi/ddgi` exports: DDGI, the first technique on the platform. It runs on a platform from `@pmndrs/gi/core` (`gi.addTechnique(new DDGITechnique(settings))`).
 
 ### DDGI
 
@@ -429,6 +451,16 @@ Every name `@pmndrs/ddgi/core` exports, in one place. A unit test (`tools/docs/d
 | `PROBE_STATE`, `PROBE_STATE_LABELS` | Probe states (active, off inside geometry, off with no surface nearby, not updated yet) and their names. |
 | `PROBE_HISTORY_WORD`, `PROBE_HISTORY_WORDS` | The layout of each probe's history record, for tools that read it. |
 | `DistanceFormat` | The distance texture's format: `'rg16float'` with `texture-formats-tier1`, otherwise `'rgba16float'`. |
+
+### Reading DDGI while shading
+
+| Name | What it is |
+| --- | --- |
+| `DDGIShadingModule` | DDGI's shading module (`ddgi.shading`). |
+| `DDGI_SHADING_PARAMETER_NAMES` | The names of DDGI's shading parameters. |
+| `DDGI_SAMPLE_WGSL` | The one WGSL function that samples DDGI's field, for engine-free test views. |
+| `DDGI_DEBUG_VIEW` | DDGI's debug view ids: `points`, `giOnly`, `coverage`, `probeStates`. |
+| `DDGI_DEBUG_COLORS` | The colours its debug views use, for checks. |
 
 ### Quality presets
 
@@ -457,27 +489,6 @@ Every name `@pmndrs/ddgi/core` exports, in one place. A unit test (`tools/docs/d
 | `SavedFieldError`, `SavedFieldProblem` | The error a refused file throws, and its `problem`: `not a saved field`, `format version`, `layout` or `scene changed`. |
 | `SAVED_FIELD_FORMAT_VERSION` | The `.ddgibake` format version this code writes and reads (1). |
 | `decodeSavedField`, `SavedFieldHeader`, `SavedFieldLayout` | Reads a file's header and sections without a GPU (to show what a bake holds), and the header's types: the layout that must match, the fingerprint, the camera windows. |
-
-### For writing a technique
-
-A technique gets the platform's services when attached, and never sees the host. These are described under "What techniques see" below and in the walk-throughs.
-
-| Name | What it is |
-| --- | --- |
-| `GITechnique` | What a technique implements: `attach`, `prepare`, `encode`, its `shading` module, `settings`, `debugViews`, `dispose`... |
-| `TechniqueRequirements` | What it needs: query kinds, ray batches, screen buffers, a fallback. |
-| `TechniqueContext` | What it gets when attached: the device, the scene copy, queries, hit shading, the kernel builder, the timer. |
-| `TechniqueFrame`, `TechniqueScreenFrame` | What its `encode` (and screen stage) gets each frame: the camera, the changes, its share of the budget. |
-| `WorkFloorRate` | What its fewest units per frame may depend on: the frame rate and the calibrated batch. |
-| `SceneCopy` | The scene as techniques read it: WGSL accessors, counts, memory, the first directional light. |
-| `SceneChanges`, `DirtyRegion`, `ChangeReason`, `LightChange` | The change feed ("Moving, adding and removing objects" above). |
-| `SceneQueries`, `QueryKind`, `RayQueries` | Scene queries; v1 has one backend, `rays` (`giTraceClosest`, `giTraceAny`, batches). |
-| `HitShading`, `HitShadingSettings` | Shared hit shading: the surface at a hit, direct light with shadows, the sky; and its settings. |
-| `DirectLightFrame`, `DeferredDirectLight`, `DirectWorkList`, `RayScratch` | Direct light deferred to one platform pass (`gi/direct`), and its scratch buffer. |
-| `BounceSource` | Another technique's shading module used for bounce light. |
-| `WgslModule`, `BindingSlot`, `ModuleBindingEntry` | A piece of WGSL and the resources it binds. |
-| `KernelBuilder`, `ComputeKernel`, `ComputeKernelOptions` | How WGSL modules become compute pipelines, within the binding limits. |
-| `RAY_BYTES`, `HIT_RECORD_BYTES`, `HIT_RECORD_WORD` | Sizes and layout of the buffers `encodeBatch` reads and writes. |
 
 ## Design choices, and why
 
@@ -615,7 +626,7 @@ if (loaded.stale) console.log('the scene changed since:', loaded.changedParts);
 
 **The file (`.ddgibake`), little-endian:** `DDGB`, a `u32` format version (1), a `u32` header length, the header as UTF-8 JSON, then the sections, each starting on a 256-byte boundary (`techniques/ddgi/saved-field.ts`).
 
-- The header: `formatVersion`, `library` (`@pmndrs/ddgi 0.0.0`), `createdAt`, `layout` (what has to match: tile texels, irradiance layers, the distance format, each volume's counts, spacing, first probe, priority and `follow`), `sections` (name, format, byte offset and length, and a texture's width, height and layers), `fingerprint`, `clockSeconds` (the technique's clock, which the histories' last-update times are on), and `cameraWindows`.
+- The header: `formatVersion`, `library` (`@pmndrs/gi 0.0.0`), `createdAt`, `layout` (what has to match: tile texels, irradiance layers, the distance format, each volume's counts, spacing, first probe, priority and `follow`), `sections` (name, format, byte offset and length, and a texture's width, height and layers), `fingerprint`, `clockSeconds` (the technique's clock, which the histories' last-update times are on), and `cameraWindows`.
 - The sections: `irradiance` (every irradiance layer side by side, `rgba16float`), `distance`, `probeData` (relocation offsets and states), and `probeHistory/<volume>` for each volume (64 bytes a probe). Texture rows are packed with no padding. The composed atlas isn't saved: the first frame after a load composes it.
 - The probe history is settled before it is written: it keeps each probe's sample count, update count, last-update time, mean and noise, and drops what only meant something in the frames it was saved in (owed updates, marks, wakes, frame stamps, the change clock).
 
@@ -635,7 +646,8 @@ Each part is order-free, so two loads that create objects in another order agree
 
 ### During M5, 2026-11-10
 
-- **Host-facing (T5.1): quality presets.** `ddgiPreset(name)`, `recommendPreset(adapterInfo, limits, hints?)`, `DDGI_PRESET_NAMES`, `isDDGIPresetName` and their types, from `@pmndrs/ddgi/core` (section "Quality presets" above). Plain data over the existing settings; nothing in the frame changed.
+- **Host-facing (the gi rename, DECISIONS 2026-11-10): the package is `@pmndrs/gi`, and `/core` is the platform alone.** DDGI's names (everything in "Every export of `@pmndrs/gi/ddgi`") moved from `/core` to `@pmndrs/gi/ddgi`; nothing in the platform or DDGI changed name or shape. The three adapter's `GIVolume` is now `DDGIVolume` (three.md).
+- **Host-facing (T5.1): quality presets.** `ddgiPreset(name)`, `recommendPreset(adapterInfo, limits, hints?)`, `DDGI_PRESET_NAMES`, `isDDGIPresetName` and their types, from `@pmndrs/gi/ddgi` (section "Quality presets" above). Plain data over the existing settings; nothing in the frame changed.
 - **Host-facing (T5.1): `GIPlatformOptions.textureLayerSize`** (`64 | 128 | 256`, default 256): the texture store's layer size, fixed for the platform's life. At 256 the store, its kernel and the sampling module's WGSL are what M4 checked, to the character. Smaller layers have one mip fewer per halving; the ray cone's mip and the wrap's half texel are worked out in the store's own texels. Implementation-only: `storeLayout(layerSize)` and `textureStoreWgsl(layerSize)` (textures/texture-store-wgsl.ts), and `PlatformTextureStore`'s `layerSize` option. The CPU mirrors and the repository's reference tracer stay at 256.
 - **Technique-facing (T5.2): `SceneCopy.fingerprint(): SceneFingerprint`**, content hashes of the scene by part, for saved bakes ("Saved bakes" above). Worked out on the CPU when called. Meshes and textures are hashed once when created or updated, since the scene keeps no CPU copy of them after upload: 1.9 ns a word on the M5 Pro (48 MB in 22 ms), on the host's thread.
 - **Host-facing through DDGI (T5.2): `DDGITechnique.saveField` / `loadField`**, the `.ddgibake` format, `SavedFieldError` ("Saved bakes" above). Implementation-only: the irradiance and distance atlases gain `COPY_DST` usage (the load writes them).

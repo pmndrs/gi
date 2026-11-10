@@ -7,7 +7,7 @@
  *
  * Per scene, and per light-group setting (off, as the viewer runs today, and
  * on with 2 groups, so T2.5's layers and compose run), GI starts exactly as
- * the viewer starts it (`GIVolume.start`, since T2.14 with the scene copied
+ * the viewer starts it (`DDGIVolume.start`, since T2.14 with the scene copied
  * in while the kernels compile), then the page runs the GI frames itself as
  * the viewer does after start-up (`threeGI.update`, then three's render with
  * the GI light) through the steps of a session:
@@ -26,7 +26,7 @@
  * - with groups on, each group's weight and the environment's weight changed;
  * - what the viewer can turn on: the budget (1 ms, 4 ms, GI off, a fixed
  *   count), `recalibrate`, the probe debug view's texture, "start the probes
- *   over" (`GIVolume.restart`: the warm-up and the calibration again), and
+ *   over" (`DDGIVolume.restart`: the warm-up and the calibration again), and
  *   `resetHistory`.
  *
  * The page fails if the counter reads anything but 0 after any step, naming
@@ -53,7 +53,7 @@ import { Color, Mesh, PerspectiveCamera, PointLight, RectAreaLight, SpotLight, V
 import type { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
 import type { EnvironmentDescriptor } from '../../../../packages/ddgi-core/src/platform/contract/scene.ts';
 import type { DDGITechnique } from '../../../../packages/ddgi-core/src/techniques/ddgi/ddgi-technique.ts';
-import { GIVolume } from '../../../../packages/ddgi-three/src/gi-volume.ts';
+import { DDGIVolume } from '../../../../packages/ddgi-three/src/ddgi-volume.ts';
 import type { StartedGI } from '../../../../packages/ddgi-three/src/volume-start.ts';
 import { loadAllManifests } from '../../../../apps/viewer/src/scene/manifests.ts';
 import { disposeScene, loadScene, type LoadedScene } from '../../../../apps/viewer/src/scene/load-scene.ts';
@@ -115,7 +115,7 @@ function nextTask(): Promise<void> {
 
 interface Session {
     readonly loaded: LoadedScene;
-    readonly volume: GIVolume;
+    readonly volume: DDGIVolume;
     readonly started: StartedGI;
     readonly platform: GIPlatformImpl;
     readonly technique: DDGITechnique;
@@ -189,7 +189,7 @@ await runThreePage(
                     if (record.recompiles !== 0) failures.push(`${key}: the counter read ${record.recompiles} after '${name}'`);
                 };
 
-                await step('started (GIVolume.start: warm-up and calibration)', async () => {});
+                await step('started (DDGIVolume.start: warm-up and calibration)', async () => {});
                 await step('still', () => frames(FRAMES_AFTER_CHANGE));
                 await runLightSteps(session, step, frames);
                 await runObjectSteps(session, step, frames);
@@ -216,7 +216,7 @@ await runThreePage(
 );
 
 /** Loads the scene and starts GI as the viewer does (apps/viewer/src/techniques/ddgi-technique.ts). */
-async function startSession(device: GPUDevice, renderer: Parameters<GIVolume['start']>[0], manifest: SceneManifest, groupsOn: boolean): Promise<Session> {
+async function startSession(device: GPUDevice, renderer: Parameters<DDGIVolume['start']>[0], manifest: SceneManifest, groupsOn: boolean): Promise<Session> {
     const loaded = await loadScene(manifest, () => {}, MAX_TEXTURE_SIZE === undefined ? {} : { maxTextureSize: MAX_TEXTURE_SIZE });
     if (groupsOn) {
         // Lights alternate between the groups (the sync reads the group when it first sees a light).
@@ -227,7 +227,7 @@ async function startSession(device: GPUDevice, renderer: Parameters<GIVolume['st
     camera.position.set(...bookmark.position);
     camera.lookAt(...bookmark.target);
     camera.updateMatrixWorld();
-    const volume = GIVolume.fromDDGIVolume({ center: manifest.volume.center, size: manifest.volume.size, spacing: manifest.volume.probeSpacing });
+    const volume = DDGIVolume.fromDDGIVolume({ center: manifest.volume.center, size: manifest.volume.size, spacing: manifest.volume.probeSpacing });
     let started: StartedGI | null = null;
     await volume.start(renderer, loaded.scene, {
         budget: { gpuMs: BUDGET_MS },
@@ -237,7 +237,7 @@ async function startSession(device: GPUDevice, renderer: Parameters<GIVolume['st
         warn: () => {},
         onCreated: (created) => (started = created),
     });
-    assert(started, 'GIVolume.start made no platform');
+    assert(started, 'DDGIVolume.start made no platform');
     const gi = started as StartedGI;
     // The viewer runs the GI frames itself after start-up.
     gi.threeGI.updateOnRender = false;
@@ -469,7 +469,7 @@ async function runViewerSteps(session: Session, step: StepRunner, frames: FrameR
         }
         await frames(FRAMES_AFTER_CHANGE);
     });
-    await step('start the probes over (GIVolume.restart)', async () => {
+    await step('start the probes over (DDGIVolume.restart)', async () => {
         await session.volume.restart({ budget: { gpuMs: BUDGET_MS } });
         session.started.threeGI.updateOnRender = false;
         await frames(FRAMES_AFTER_CHANGE);

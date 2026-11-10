@@ -6,13 +6,13 @@
  */
 
 import type { DirectionalLight, Mesh, Object3D, PerspectiveCamera, Scene, WebGPURenderer } from 'three/webgpu';
-import type { GIPlatform } from '@pmndrs/ddgi/core';
-import type { GIVolume, ThreeGI } from '@pmndrs/ddgi/three';
+import type { GIPlatform } from '@pmndrs/gi/core';
+import type { DDGIVolume, ThreeGI } from '@pmndrs/gi/three';
 
 export declare const renderer: WebGPURenderer;
 export declare const scene: Scene;
 export declare const camera: PerspectiveCamera;
-export declare const volume: GIVolume;
+export declare const volume: DDGIVolume;
 export declare const sun: DirectionalLight;
 export declare const gi: GIPlatform;
 export declare const threeGI: ThreeGI;

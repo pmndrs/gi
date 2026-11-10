@@ -572,7 +572,7 @@ export class PlatformRayQueries implements RayQueries {
             this.firstTreesReady = true;
         } catch (error) {
             this.firstTrees = null;
-            this.warn(`@pmndrs/ddgi: the GPU mesh tree builder could not be compiled, so mesh trees come from tinybvh only: ${describe(error)}`);
+            this.warn(`@pmndrs/gi: the GPU mesh tree builder could not be compiled, so mesh trees come from tinybvh only: ${describe(error)}`);
         }
     }
 
@@ -716,7 +716,7 @@ export class PlatformRayQueries implements RayQueries {
         if (!kernel) {
             if (!this.preparedOnce) throw new GINotReadyError('preparing');
             throw new Error(
-                '@pmndrs/ddgi: rays.encodeBatch needs its kernels compiled in prepare: give the technique that calls it `requirements.rayBatches: true` (tools: the platform option `rayBatches`), then prepare',
+                '@pmndrs/gi: rays.encodeBatch needs its kernels compiled in prepare: give the technique that calls it `requirements.rayBatches: true` (tools: the platform option `rayBatches`), then prepare',
             );
         }
         if (batch.count <= 0) return;
@@ -851,7 +851,7 @@ export class PlatformRayQueries implements RayQueries {
             builds = builder.build(requests, { readLayouts: kind.readLayouts });
         } catch (error) {
             const what = kind.rebuild ? 'the mesh keeps its refit tree' : 'the meshes wait for tinybvh';
-            this.warn(`@pmndrs/ddgi: the GPU mesh tree build failed, so ${what}: ${describe(error)}`);
+            this.warn(`@pmndrs/gi: the GPU mesh tree build failed, so ${what}: ${describe(error)}`);
             for (const { slot, generation } of requests) refuse(slot, generation);
             return false;
         }
@@ -917,7 +917,7 @@ export class PlatformRayQueries implements RayQueries {
             else this.gpuRefused(slot, generation);
         };
         for (const { slot, generation } of result.refused) refuse(slot, generation);
-        if (result.failure) this.warn(`@pmndrs/ddgi: ${result.failure}, so ${rebuild ? 'the mesh keeps its refit tree' : 'the meshes wait for tinybvh'}`);
+        if (result.failure) this.warn(`@pmndrs/gi: ${result.failure}, so ${rebuild ? 'the mesh keeps its refit tree' : 'the meshes wait for tinybvh'}`);
         for (const built of result.built) {
             const state = this.currentState(built.slot, built.generation);
             if (!state || built.tree.maxDepth > this.gpuMaxDepth) {
@@ -984,7 +984,7 @@ export class PlatformRayQueries implements RayQueries {
             this.notifyWaiters();
         };
         this.builder.build(geometry).then(finished, (error: unknown) => {
-            if (!this.disposed) this.buildFailure = new Error(`@pmndrs/ddgi: building a mesh tree failed: ${describe(error)}`);
+            if (!this.disposed) this.buildFailure = new Error(`@pmndrs/gi: building a mesh tree failed: ${describe(error)}`);
             finished(null);
         });
     }
@@ -1248,7 +1248,7 @@ export class PlatformRayQueries implements RayQueries {
         const requiredStack = topLevel.maxDepth + 1 + deepestMesh;
         if (requiredStack > TRACE_STACK_SIZE) {
             throw new Error(
-                `@pmndrs/ddgi: the trace stack holds ${TRACE_STACK_SIZE} entries, but this scene can need ${requiredStack} ` +
+                `@pmndrs/gi: the trace stack holds ${TRACE_STACK_SIZE} entries, but this scene can need ${requiredStack} ` +
                     `(top level ${topLevel.maxDepth} + 1 + deepest mesh tree ${deepestMesh}).`,
             );
         }
@@ -1283,7 +1283,7 @@ export class PlatformRayQueries implements RayQueries {
     }
 
     private checkLive(): void {
-        if (this.disposed) throw new Error('@pmndrs/ddgi: the ray queries were disposed');
+        if (this.disposed) throw new Error('@pmndrs/gi: the ray queries were disposed');
     }
 }
 

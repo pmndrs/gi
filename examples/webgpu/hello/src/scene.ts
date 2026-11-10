@@ -23,7 +23,7 @@ import type {
     SceneApi,
     TextureHandle,
     UvMapping,
-} from '@pmndrs/ddgi/core';
+} from '@pmndrs/gi/core';
 import { buildProceduralParts, mergeScenes } from '../../../../scenes/src/build-scene.ts';
 import { isProceduralOnly, type CameraBookmark, type ManifestLight, type SceneManifest } from '../../../../scenes/src/manifest.ts';
 import { textureMeanLinear, uvMappingMatrix } from '../../../../scenes/src/procedural/textures.ts';

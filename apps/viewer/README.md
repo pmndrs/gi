@@ -1,6 +1,6 @@
 # DDGI viewer
 
-The tool for looking at, and comparing, global illumination on our test scenes. It runs our DDGI (through the three.js adapter, `@pmndrs/ddgi/three`), two baselines from three.js r187 (`LightProbeGrid` and VXGI), and shows the path-traced Cycles reference next to any of them.
+The tool for looking at, and comparing, global illumination on our test scenes. It runs our DDGI (through the three.js adapter, `@pmndrs/gi/three`), two baselines from three.js r187 (`LightProbeGrid` and VXGI), and shows the path-traced Cycles reference next to any of them.
 
 ## Start it
 

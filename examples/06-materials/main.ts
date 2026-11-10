@@ -18,7 +18,7 @@
  */
 
 import GUI from 'three/addons/libs/lil-gui.module.min.js';
-import { GIVolume } from '@pmndrs/ddgi/three';
+import { DDGIVolume } from '@pmndrs/gi/three';
 import { createRenderer } from '../shared/renderer.ts';
 import { loadScene, type ExampleSceneId } from '../shared/scene.ts';
 import { showStats } from '../shared/stats.ts';
@@ -37,7 +37,7 @@ const choice = SCENES[sceneName];
 const renderer = await createRenderer();
 const { scene, camera, probes, title } = loadScene(choice.id, renderer, { cameraBookmark: choice.cameraBookmark });
 
-const volume = GIVolume.fromDDGIVolume(probes);
+const volume = DDGIVolume.fromDDGIVolume(probes);
 scene.add(volume);
 await volume.start(renderer, scene);
 

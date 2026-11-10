@@ -15,7 +15,7 @@ import { readFileSync } from 'node:fs';
 
 import { isDirectRun, parseSemVer } from './release-version.ts';
 
-const REPOSITORY_URL = 'https://github.com/pmndrs/ddgi';
+const REPOSITORY_URL = 'https://github.com/pmndrs/gi';
 
 /** A section heading: `## 0.1.0`, `## [0.1.0]` or `## v0.1.0`, then anything (a date, "(unreleased)"). */
 function headingVersion(line: string): string | null {

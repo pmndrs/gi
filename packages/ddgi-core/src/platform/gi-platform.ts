@@ -200,7 +200,7 @@ export class GIPlatformImpl implements GIPlatform {
         this.onUncapturedError = (event: Event) => {
             const message = (event as GPUUncapturedErrorEvent).error?.message ?? '';
             const ours = ownObject.test(message) || this.attached.some(({ technique }) => message.includes(`"${technique.id}/`));
-            if (ours) this.warnOnce(`@pmndrs/ddgi: GPU error in the platform's work: ${message}`);
+            if (ours) this.warnOnce(`@pmndrs/gi: GPU error in the platform's work: ${message}`);
         };
         device.addEventListener('uncapturederror', this.onUncapturedError);
     }
@@ -216,9 +216,9 @@ export class GIPlatformImpl implements GIPlatform {
     addTechnique<T extends GITechnique>(technique: T): T {
         this.checkUsable();
         this.forgetBudgets();
-        if (this.find(technique)) throw new Error(`@pmndrs/ddgi: technique '${technique.id}' is already attached`);
+        if (this.find(technique)) throw new Error(`@pmndrs/gi: technique '${technique.id}' is already attached`);
         for (const kind of technique.requirements.queries) {
-            if (!this.queries.has(kind)) throw new Error(`@pmndrs/ddgi: technique '${technique.id}' needs the '${kind}' query backend, which this platform doesn't have`);
+            if (!this.queries.has(kind)) throw new Error(`@pmndrs/gi: technique '${technique.id}' needs the '${kind}' query backend, which this platform doesn't have`);
         }
         const entry: AttachedTechnique = { technique, fallback: undefined };
         this.attached.push(entry);
@@ -234,7 +234,7 @@ export class GIPlatformImpl implements GIPlatform {
         const entry = this.find(technique);
         if (!entry) return;
         if (this.attached.some((other) => other.fallback === technique)) {
-            throw new Error(`@pmndrs/ddgi: technique '${technique.id}' is another technique's fallback; call setFallback(…, undefined) first`);
+            throw new Error(`@pmndrs/gi: technique '${technique.id}' is another technique's fallback; call setFallback(…, undefined) first`);
         }
         this.attached.splice(this.attached.indexOf(entry), 1);
         if (this.output === technique) this.output = undefined;
@@ -242,7 +242,7 @@ export class GIPlatformImpl implements GIPlatform {
     }
 
     setOutput(technique: GITechnique): void {
-        if (!this.find(technique)) throw new Error(`@pmndrs/ddgi: technique '${technique.id}' is not attached; call addTechnique first`);
+        if (!this.find(technique)) throw new Error(`@pmndrs/gi: technique '${technique.id}' is not attached; call addTechnique first`);
         this.output = technique;
     }
 
@@ -252,12 +252,12 @@ export class GIPlatformImpl implements GIPlatform {
 
     setFallback(technique: GITechnique, fallback: GITechnique | undefined): void {
         const entry = this.find(technique);
-        if (!entry) throw new Error(`@pmndrs/ddgi: technique '${technique.id}' is not attached`);
+        if (!entry) throw new Error(`@pmndrs/gi: technique '${technique.id}' is not attached`);
         if (fallback !== undefined) {
-            if (!this.find(fallback)) throw new Error(`@pmndrs/ddgi: fallback '${fallback.id}' is not attached`);
+            if (!this.find(fallback)) throw new Error(`@pmndrs/gi: fallback '${fallback.id}' is not attached`);
             // Walk the chain below the new fallback: reaching `technique` again would be a loop.
             for (let below: GITechnique | undefined = fallback; below; below = this.find(below)?.fallback) {
-                if (below === technique) throw new Error(`@pmndrs/ddgi: making '${fallback.id}' the fallback of '${technique.id}' would make a loop`);
+                if (below === technique) throw new Error(`@pmndrs/gi: making '${fallback.id}' the fallback of '${technique.id}' would make a loop`);
             }
         }
         entry.fallback = fallback;
@@ -399,7 +399,7 @@ export class GIPlatformImpl implements GIPlatform {
     }
 
     get shading(): ShadingModule {
-        if (!this.output) throw new Error('@pmndrs/ddgi: no output technique; call setOutput(technique) first');
+        if (!this.output) throw new Error('@pmndrs/gi: no output technique; call setOutput(technique) first');
         return this.output.shading;
     }
 
@@ -456,7 +456,7 @@ export class GIPlatformImpl implements GIPlatform {
 
     private checkUsable(): void {
         if (this.lost) throw new GINotReadyError('device-lost');
-        if (this.disposed) throw new Error('@pmndrs/ddgi: this platform was disposed');
+        if (this.disposed) throw new Error('@pmndrs/gi: this platform was disposed');
     }
 
     private find(technique: GITechnique): AttachedTechnique | undefined {

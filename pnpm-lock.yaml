@@ -56,7 +56,7 @@ importers:
 
   apps/viewer:
     dependencies:
-      '@pmndrs/ddgi':
+      '@pmndrs/gi':
         specifier: workspace:*
         version: link:../../packages/ddgi
       '@pmndrs/upscaler':
@@ -75,7 +75,7 @@ importers:
 
   examples/webgpu/hello:
     dependencies:
-      '@pmndrs/ddgi':
+      '@pmndrs/gi':
         specifier: workspace:*
         version: link:../../../packages/ddgi
     devDependencies:

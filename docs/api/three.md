@@ -1,4 +1,4 @@
-# The three.js adapter (`@pmndrs/ddgi/three`)
+# The three.js adapter (`@pmndrs/gi/three`)
 
 The adapter puts the GI platform's global illumination into a three.js r187 `WebGPURenderer` scene. It does three jobs:
 
@@ -6,16 +6,16 @@ The adapter puts the GI platform's global illumination into a three.js r187 `Web
 - it runs one GI frame per rendered frame;
 - it lights every lit material through one GI light, or, on three's post-processing pipeline, adds GI once per pixel (`ddgi()`).
 
-The code is in [`packages/ddgi-three/src/`](../../packages/ddgi-three/src/). The platform underneath is described in [platform.md](platform.md). Working examples: [`examples/`](../../examples/) (`01-hello` and `02-composite` are the code below). [Every export](#every-export-of-pmndrsddgithree) of `@pmndrs/ddgi/three` is listed at the end. (`@pmndrs/ddgi` itself exports the same names.)
+The code is in [`packages/ddgi-three/src/`](../../packages/ddgi-three/src/). The platform underneath is described in [platform.md](platform.md). Working examples: [`examples/`](../../examples/) (`01-hello` and `02-composite` are the code below). [Every export](#every-export-of-pmndrsgithree) of `@pmndrs/gi/three` is listed at the end. (`@pmndrs/gi` itself exports the same names.) The engine-free names it works with come from the other subpaths: the platform's (`createGI`, `requiredLimits`, the scene types) from `@pmndrs/gi/core`, and DDGI's (`DDGITechnique`, the presets, `SavedFieldError`, the spherical-harmonics export) from `@pmndrs/gi/ddgi`.
 
 ## Getting started
 
 The same shape as three's `LightProbeGrid`, in as many lines:
 
 ```ts
-import { GIVolume } from '@pmndrs/ddgi/three';
+import { DDGIVolume } from '@pmndrs/gi/three';
 
-const volume = new GIVolume(6, 5, 6, 6, 6, 6);   // like new LightProbeGrid(6, 5, 6, 6, 6, 6)
+const volume = new DDGIVolume(6, 5, 6, 6, 6, 6);   // like new LightProbeGrid(6, 5, 6, 6, 6, 6)
 volume.position.set(0, 2.5, 0);
 scene.add(volume);
 await volume.start(renderer, scene);              // like probes.bake(renderer, scene)
@@ -35,7 +35,7 @@ Lit materials normally take GI per fragment. In scenes with many tiny triangles 
 import * as THREE from 'three/webgpu';
 import { mrt, normalView, output, packNormalToRGB, pass, rtt, velocity } from 'three/tsl';
 import { QualityMode, getQualityModeRatio, upscale } from '@pmndrs/upscaler';
-import { ddgi, giAlbedo } from '@pmndrs/ddgi/three';
+import { ddgi, giAlbedo } from '@pmndrs/gi/three';
 
 const renderer = new THREE.WebGPURenderer({ antialias: false });   // the upscaler anti-aliases
 // ... the scene, and await volume.start(renderer, scene) as above ...
@@ -77,11 +77,11 @@ renderer.setAnimationLoop(() => pipeline.render());
 
 ## The pieces
 
-### `GIVolume`
+### `DDGIVolume`
 
-`GIVolume` has the same shape as three's `LightProbeGrid`, so moving a scene from one to the other is a small change:
+`DDGIVolume` has the same shape as three's `LightProbeGrid`, so moving a scene from one to the other is a small change:
 
-- `new GIVolume(width, height, depth, nx, ny, nz)`;
+- `new DDGIVolume(width, height, depth, nx, ny, nz)`;
 - the box is centred on the object's position and aligned with the world axes;
 - there is one probe at the centre of each cell;
 - `boundingBox`, `priority` and `intensity` work as they do on `LightProbeGrid`. `intensity = 0` turns GI off.
@@ -110,7 +110,7 @@ renderer.setAnimationLoop(() => pipeline.render());
 **Quality presets** (T5.1; the table and what each costs is in [platform.md, "Quality presets"](platform.md#quality-presets)). One word sets the rays per probe, the probe tiles, the budget and the size of GI's copy of the textures. A volume made without probe counts also takes the preset's spacing (2 m for `low`); counts you give are kept. `budget` and `ddgi` still win over the preset:
 
 ```ts
-import { ddgiPreset, recommendPreset } from '@pmndrs/ddgi/core';
+import { ddgiPreset, recommendPreset } from '@pmndrs/gi/ddgi';
 
 const adapter = await navigator.gpu.requestAdapter();
 if (!adapter) throw new Error('No WebGPU adapter');
@@ -124,7 +124,7 @@ await volume.start(renderer, scene, { preset });
 
 `recommendPreset` is advice only: it gives `low` for integrated and mobile GPUs and `high` otherwise, and nothing applies it unless you pass it. Changing presets later means `dispose()` and `start` again: rays and tile sizes size DDGI's buffers when it starts.
 
-If the scene needs more than the renderer's device allows, `start` throws a `GILimitError` (`ThreeGILimitError`) naming the limit. three makes its device with default limits (a 128 MiB storage binding), which large scenes such as Sponza with its curtains outgrow. The fix is to make the renderer with the platform's limits: `const { renderer } = await createGIRenderer()`, or `new WebGPURenderer({ requiredLimits: requiredLimits(adapter) })` with `requiredLimits` from `@pmndrs/ddgi/core`.
+If the scene needs more than the renderer's device allows, `start` throws a `GILimitError` (`ThreeGILimitError`) naming the limit. three makes its device with default limits (a 128 MiB storage binding), which large scenes such as Sponza with its curtains outgrow. The fix is to make the renderer with the platform's limits: `const { renderer } = await createGIRenderer()`, or `new WebGPURenderer({ requiredLimits: requiredLimits(adapter) })` with `requiredLimits` from `@pmndrs/gi/core`.
 
 Other members:
 
@@ -146,12 +146,12 @@ const loaded = volume.loadBake(bytes);          // { stale, changedParts, savedA
 ```
 
 - The file is engine-neutral (ddgi-core's `DDGITechnique.saveField` / `loadField`, platform.md "Saved bakes"), so it doesn't depend on three.
-- It loads only into a volume with the same layout: the same probe grid and place, tile sizes, light groups and sun layer, and camera-following volumes. Anything else throws `SavedFieldError` (from `@pmndrs/ddgi/core`) with a message naming what differs.
+- It loads only into a volume with the same layout: the same probe grid and place, tile sizes, light groups and sun layer, and camera-following volumes. Anything else throws `SavedFieldError` (from `@pmndrs/gi/ddgi`) with a message naming what differs.
 - The file records a fingerprint of the scene it was baked for. If the scene changed since (an object, a material, a texture, a light, the sky), it loads anyway as a starting point: `loaded.stale` is true, `loaded.changedParts` says which parts changed, and every probe updates from the loaded light. `{ ifSceneChanged: 'refuse' }` (`bakeIfSceneChanged` for `start`) throws instead.
 - With `start(..., { bake })`, `volume.loadedBake` says what was loaded. `start` still waits for the ray-tracing trees and calibrates the budget; it only skips the warm-up passes.
 - Images the CPU can't read cheaply (`ImageBitmap`, which `GLTFLoader` gives) count in the fingerprint by their size and colour space, not their pixels, so a repainted image of the same size isn't noticed.
 
-`GIVolume.fromDDGIVolume(settings)` makes a volume whose probes are exactly a DDGI box and spacing (as the viewer's scene files describe volumes). `volume.updateBoundingBox()` sets `boundingBox` from its position and size, and `volume.useDefaultSpacing(metres)` is what a preset's spacing does to a volume made without probe counts.
+`DDGIVolume.fromDDGIVolume(settings)` makes a volume whose probes are exactly a DDGI box and spacing (as the viewer's scene files describe volumes). `volume.updateBoundingBox()` sets `boundingBox` from its position and size, and `volume.useDefaultSpacing(metres)` is what a preset's spacing does to a volume made without probe counts.
 
 `volume.ddgiVolume()` gives the matching DDGI settings, for building a platform by hand:
 
@@ -204,10 +204,11 @@ These make the GPU device and hand it to three (`new WebGPURenderer({ device })`
 For hosts that want control (several techniques, a shared platform), `ThreeGI` is the scene's link to a platform you built yourself:
 
 ```ts
-import { createGI, DDGITechnique } from '@pmndrs/ddgi/core';
-import { createGIRenderer, GIVolume, ThreeGI } from '@pmndrs/ddgi/three';
+import { createGI } from '@pmndrs/gi/core';
+import { DDGITechnique } from '@pmndrs/gi/ddgi';
+import { createGIRenderer, DDGIVolume, ThreeGI } from '@pmndrs/gi/three';
 
-const volume = new GIVolume(6, 5, 6, 6, 6, 6);
+const volume = new DDGIVolume(6, 5, 6, 6, 6, 6);
 volume.position.set(0, 2.5, 0);
 volume.updateMatrixWorld();
 const { renderer, device } = await createGIRenderer();
@@ -224,10 +225,10 @@ renderer.setAnimationLoop(() => {
 
 `new ThreeGI(gi, scene, options)` needs the platform's output technique and a prepared platform, or one still preparing with `prepare`'s promise passed as `preparing`; otherwise it throws. It adds the GI light to the scene once the platform is prepared.
 
-With `preparing` it may be made while the platform still prepares (T2.14), so the scene is copied in while the kernels compile. Until `prepare` resolves, `update` only copies the scene (the scene sync's CPU work) and the light stays out of the scene, so a render meanwhile draws without GI. When it resolves the light joins the scene, so a host that only renders (`updateOnRender`) gets GI without calling `update`; if it rejects, the next `update` throws the error. Chrome sends WebGPU calls to its GPU process when the JavaScript task ends, so let the task end between `prepare()` and a long copy, or the compiles wait for the copy. `GIVolume.start` does this:
+With `preparing` it may be made while the platform still prepares (T2.14), so the scene is copied in while the kernels compile. Until `prepare` resolves, `update` only copies the scene (the scene sync's CPU work) and the light stays out of the scene, so a render meanwhile draws without GI. When it resolves the light joins the scene, so a host that only renders (`updateOnRender`) gets GI without calling `update`; if it rejects, the next `update` throws the error. Chrome sends WebGPU calls to its GPU process when the JavaScript task ends, so let the task end between `prepare()` and a long copy, or the compiles wait for the copy. `DDGIVolume.start` does this:
 
 ```ts
-import { ThreeGI } from '@pmndrs/ddgi/three';
+import { ThreeGI } from '@pmndrs/gi/three';
 
 const preparing = gi.prepare();
 await new Promise((resolve) => setTimeout(resolve, 0)); // the compile requests go out
@@ -247,7 +248,7 @@ The extra submit is needed because three r187 records into its own command encod
 | Option | What it does |
 | --- | --- |
 | `budget` | GPU time per frame for GI updates, default `{ gpuMs: 2 }`. You can change it at any time. |
-| `volume` | A `GIVolume`. The GI light follows its `intensity` and `priority`. |
+| `volume` | A `DDGIVolume`. The GI light follows its `intensity` and `priority`. |
 | `light` | Settings for the GI light: `intensity`, `priority`, `replaceEnvironmentDiffuse`. |
 | `environment` | A platform environment to use instead of the scene's (the viewer's sky files, say). |
 | `sky` | A pmndrs/sky `Sky`, used as GI's sky. Its `exposure` becomes `sunIlluminance`. |
@@ -330,14 +331,14 @@ await volume.start(renderer, scene, {
     ddgi: {
         volumes: [
             { center: [0, 8, 0], size: [46.5, 16.5, 46.5], spacing: 1.5, follow: 'camera', priority: 1 },
-            volume.ddgiVolume(), // the GIVolume's own box, behind the window
+            volume.ddgiVolume(), // the DDGIVolume's own box, behind the window
         ],
     },
 });
 ```
 
 - Pass `camera`, or the window warms up around the volume's centre and then jumps to the camera on the first frame, warming up again.
-- The GI light still follows the `GIVolume`'s `intensity` and `priority`.
+- The GI light still follows the `DDGIVolume`'s `intensity` and `priority`.
 - `exportLightProbeGrid` exports one volume, the highest-priority one; with a camera window first, that is the window as it was at the export. Exporting a second volume or the camera window hasn't been checked yet.
 
 ### Moving, adding and removing objects
@@ -362,7 +363,7 @@ volume.threeGI?.markChanged(door); // optional: an edit, a hide or a move outsid
 A snapshot of the GI as three's own `LightProbeGrid` (r187), for a static fallback where DDGI can't run (T5.3; docs/design/m5-coverage.md §3). It needs no `bake`: the grid is filled straight from our probes.
 
 ```ts
-import { lightProbeGridFromJSON, lightProbeGridToJSON } from '@pmndrs/ddgi/three';
+import { lightProbeGridFromJSON, lightProbeGridToJSON } from '@pmndrs/gi/three';
 
 const grid = await volume.exportLightProbeGrid();   // one GPU projection, one readback
 const text = JSON.stringify(lightProbeGridToJSON(grid));
@@ -373,7 +374,7 @@ scene.add(probes);
 ```
 
 - The probes sit exactly where ours do. `LightProbeGrid` puts its probes at cell centres, so the grid is `counts × spacing` wide and centred on our grid's centre.
-- Each probe holds 9 L2 spherical-harmonic coefficients per colour in three's own convention (the radiance SH `LightProbe` stores), so three's `getShIrradianceAt` gives back our irradiance. The core does the projection: `exportIrradianceSH(technique, { volume })` in `@pmndrs/ddgi/core` returns engine-free data (counts, origin, spacing, coefficients, probe states), and `toLightProbeGrid(data, { intensity, priority })` builds the grid from it. `volume.exportLightProbeGrid()` does both.
+- Each probe holds 9 L2 spherical-harmonic coefficients per colour in three's own convention (the radiance SH `LightProbe` stores), so three's `getShIrradianceAt` gives back our irradiance. The core does the projection: `exportIrradianceSH(technique, { volume })` in `@pmndrs/gi/ddgi` returns engine-free data (counts, origin, spacing, coefficients, probe states), and `toLightProbeGrid(data, { intensity, priority })` builds the grid from it. `volume.exportLightProbeGrid()` does both.
 - **Light groups:** the export is the field you see, so with light groups or the sun layer on it is every layer times its weight as of the last rendered frame. A weight set since then shows after the next frame.
 - Probes that live GI doesn't read (inside walls, in empty air, not updated yet) get the mean of their nearest active neighbours, because a grid with no visibility blends every probe. `exportIrradianceSH(..., { fillInactiveProbes: false })` keeps their raw values.
 - To light with the grid instead of live GI, add it and set the GI's `intensity` to 0 (GI's priority, 1, beats the grid's 0 otherwise). Don't call `bake` on an exported grid: it would bake into a different texture than the one the grid shows.
@@ -384,7 +385,7 @@ scene.add(probes);
 
 ```json
 {
-  "formatVersion": 1, "type": "LightProbeGrid", "generator": "@pmndrs/ddgi",
+  "formatVersion": 1, "type": "LightProbeGrid", "generator": "@pmndrs/gi",
   "width": 6, "height": 6, "depth": 6, "resolution": [12, 12, 12], "position": [2.78, 2.74, 2.8],
   "intensity": 1, "priority": 0,
   "coefficients": [ 27 numbers per probe ]
@@ -552,16 +553,16 @@ r187 adds the environment's diffuse light (from `scene.environment`, or a materi
 - Lambert and Phong materials get no diffuse light from the environment at all, so they need no fix.
 - r188 may add a switch for this (PR #35017). The adapter will use it once it lands.
 
-## Every export of `@pmndrs/ddgi/three`
+## Every export of `@pmndrs/gi/three`
 
-Every name `@pmndrs/ddgi/three` exports, in one place. A unit test (`tools/docs/docs-cover-exports.test.ts`) fails when the package exports a name this page doesn't mention.
+Every name `@pmndrs/gi/three` exports, in one place. A unit test (`tools/docs/docs-cover-exports.test.ts`) fails when the package exports a name this page doesn't mention.
 
 ### The simple path
 
 | Name | What it is |
 | --- | --- |
-| `GIVolume` | GI shaped like `LightProbeGrid`: `new GIVolume(width, height, depth, nx, ny, nz)`, then `start` ("`GIVolume`" above). |
-| `GIVolumeStartOptions` | `start`'s options: `preset`, `budget`, `ddgi`, `environment`, `sky`, `light`, `warmUp`, `camera`, `warn`, `label`, `onCreated`. |
+| `DDGIVolume` | GI shaped like `LightProbeGrid`: `new DDGIVolume(width, height, depth, nx, ny, nz)`, then `start` ("`DDGIVolume`" above). |
+| `DDGIVolumeStartOptions` | `start`'s options: `preset`, `budget`, `ddgi`, `environment`, `sky`, `light`, `warmUp`, `camera`, `warn`, `label`, `onCreated`. |
 | `StartedGI` | What `start` made: the `platform`, the DDGI `technique` and the `threeGI` (also passed to `onCreated`). |
 | `WarmUpSettings`, `DEFAULT_WARM_UP` | The warm-up's settings (`passes`, `maxSeconds`, `minPasses`, `calibrate`) and their defaults (16, 8 s, 2, true). |
 | `DEFAULT_GI_BUDGET` | The budget after the warm-up when no preset sets one: `{ gpuMs: 2 }`. |
@@ -603,7 +604,7 @@ Every name `@pmndrs/ddgi/three` exports, in one place. A unit test (`tools/docs/
 | `ddgi(scenePass, source, options?)` | The composite node for three's post-processing pipeline ("`ddgi(scenePass, volume, options?)`" above). |
 | `DDGICompositeNode` | The node `ddgi()` returns; `occlusionNode` is its own GTAO node. |
 | `DDGICompositeOptions` | Its one option, `occlusion`: GTAO settings, `false`, or `{ source }`. |
-| `CompositeGISource` | What `ddgi()` reads GI from: anything with the GI light as `light`, so a started `GIVolume` or a `ThreeGI`. |
+| `CompositeGISource` | What `ddgi()` reads GI from: anything with the GI light as `light`, so a started `DDGIVolume` or a `ThreeGI`. |
 | `GIOcclusionSettings` | GTAO on the GI term: `radius`, `resolutionScale`, `samples`. |
 | `GIOcclusionSource` | An AO node your pipeline already makes from the same pass (three's GTAO node fits), passed as `occlusion: { source }`. |
 | `DEFAULT_GI_OCCLUSION_RADIUS` | 1 m. |
