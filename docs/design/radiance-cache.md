@@ -17,7 +17,7 @@ Why: it is what DDGI is not. DDGI is a fixed probe grid, stable but blurry and s
 ## How we work: the faithful port first
 
 1. **Build it as AMD built it.** Capsaicin's default configuration, pass by pass: its algorithms, ray counts, rates, cache sizes and per-hit cache population. That is the **baseline**. If it is slow on our tracer, that is information, not a reason to change it up front.
-2. **Every difference from Capsaicin goes in the divergence register** below: what we do instead, its kind, why, and the way back, including workarounds others use (browser vendors, other WebGPU projects, engines).
+2. **Every difference from Capsaicin goes in the divergence register** below: what we do instead, its kind, why, and the way back, including workarounds others use (browser vendors, other WebGPU projects, engines). Each row also gets a line in "Why each difference exists" with its **cause** (forced, our rule, shortcut, ...) and its **evidence** (measured, cited, assumed), so that later work can challenge the differences that weren't forced.
 3. **Performance ideas are levers, not rewrites.** Each lever is a switch beside the faithful path, measured against the baseline on the same scene and camera, and adopted only with a written reason. A slow faithful path is kept and marked for attention.
 4. **Priority versions are extra options.** A cheaper or prioritised variant of a pass can be built behind a switch. It doesn't replace the baseline.
 
@@ -91,6 +91,64 @@ Every way our port differs from Capsaicin's default behaviour. **Kind:** P platf
 | D24 | Reflections read the cache with the hit's real ray length (the key's short-ray flag) and a position jittered by a random within one cell (`gi1.comp:2866-2899`) | `worldCacheLookup(position, normal, direction)` takes no ray length, so it looks up as a ray longer than a tile (flag 0), and no jitter (it has no random numbers) | Q | The slot's lookup signature (design doc, "The world-cache interface") carries no length or random state | Add the ray length (and a random pair, or let the caller jitter `position`) to the lookup when the first reader (GI-1.1's reflections) is ported |
 
 Speed levers (kind S) get a row only when one is adopted. Phase 1 adds rows for any gap RC1.1 or RC1.4 finds (a three backend step, a missing feature), numbered from D13. D13 is held for RC1.1's three backend step, if one is needed; RC1.4's rows are D14 and D15.
+
+## Why each difference exists (the challenge list)
+
+Added 2026-11-10 at Dennis's request. The register's "kind" says what a difference touches. This list asks a different question: **did anything make us do it?** Agents often pick the easier path, or repeat "WebGPU can't do X" from memory when it can. Once the port reaches parity, or only these differences are left, this list is where the focused work on challenging those assumptions starts.
+
+**Cause:**
+
+- **Forced:** WebGPU, WGSL, the browser or three r187 can't do what Capsaicin does. It goes away only when the platform changes, or through a heavier workaround.
+- **Rule:** one of our own rules causes it, such as shared hit shading, diffuse-only platform materials, the `FrameScreen` contract or the world-cache interface. WebGPU could do it Capsaicin's way. The rule is the assumption to challenge.
+- **Shortcut:** it was easier to build. Neither the platform nor a rule requires it.
+- **Same:** the code is different but the result is the same, or the difference only affects measuring.
+- **Fix:** we fixed something that goes wrong in Capsaicin on our GPUs.
+- **License:** the license won't let us copy it.
+
+**Evidence** for the cause: **measured** (a GPU check on our devices; the GPU is named), **cited** (a spec section, a three source line or a Capsaicin line), or **assumed** (nobody has checked). A "Forced" that is only assumed doesn't count as forced: it stays on the list until someone checks it.
+
+**Challenge:** how much the difference changes the image (high, medium, low, none), and what removing it would take.
+
+| ID | Cause | Evidence | What is really behind it | Challenge |
+| --- | --- | --- | --- | --- |
+| D1 | Forced | Cited: WebGPU has no ray-tracing API | Hardware traversal is out of reach | None for the image. Speed is the open question: phase 5's per-pass table shows how far our compute BVH is from DXR |
+| D2 | Rule (missing bindless is forced; averaging is not) | Cited for bindless; assumed that the average is close enough | Texture-average albedo is how DDGI's `giSurfaceAt` works. Texture arrays or an atlas, with UVs at hits, work in WebGPU today | **High** on textured scenes (Sponza, Bistro). Real albedo at hits through an array or atlas |
+| D3 | Rule (missing mesh shaders is forced; the visibility buffer is not) | Cited | A visibility buffer doesn't need mesh shaders: three r187 has a VisibilityBuffer pipeline, and a raster pass over the scene copy would also do. We chose MRT outputs through `FrameScreen` | Medium, mostly through D17. A visibility channel in `FrameScreen` |
+| D4 | Rule (one light system, shared hit shading) | Assumed that the light grid's image is close | WebGPU has subgroups now, so the stream sampler's build can be ported | **High**: it is the light sampling behind every cache cell. Port `LightSamplerGridStream` as a platform option and compare the images |
+| D5 | Same | Measured (RTX 3060, Intel UHD; RC1.4) | The feature is there; the fallback also works | None. M5 not checked yet |
+| D6 | Forced (storage buffers per stage) | Measured on the RTX 3060 and Intel UHD: 16 per stage | Same data in fewer buffers | None. M5 limit not checked yet |
+| D7 | License | Cited: no license header on the tables | | Low. Ask AMD if the noise behaves differently |
+| D8 | Rule (diffuse-only platform materials, `contract/scene.ts`) | Cited | Nothing in WebGPU stops GGX at hits | **High**. It also blocks GI-1.1 reflections, which are on by default in Capsaicin. Roughness and metalness in the material descriptor |
+| D9 | Rule (siblings) | Assumed equivalent | Our own upscaler instead of FSR | Low. Check upscaler issue #7 (jitter against GI history) |
+| D10 | Same | Cited | Measuring only | None |
+| D11 | Same | Cited | WGSL names for the same packing | None (D31 covers rounding) |
+| D12 | Forced | Cited: one queue in WebGPU | Speed only | None for the image |
+| D13 | Forced (three r187 API) | Cited (three source) | A version-pinned read of three's backend; same data | None |
+| D14 | Forced (three's default device) | Measured (RTX 3060, Intel UHD) | Gone when the host passes our device or the adapter's limits | None |
+| D15 | Forced (WGSL §15.7.3) | Measured (both GPUs disagree, as the spec allows) | The baseline does f32 math like Capsaicin | None |
+| D16 | Rule (follows D8) | Cited | Capsaicin sends a few percent of rays down GGX even for Lambert materials; we drop that share | Medium. Comes back with D8 |
+| D17 | Rule (`FrameScreen` has no visibility buffer or geometric normal) | Assumed: RC2.2 is meant to check for self-shadowing | Origin rebuilt from depth; shading normal instead of geometric | Medium. Comes back with D3's visibility channel |
+| D18 | Shortcut | Argued, not measured: the table is random data anyway | Uploading a seed table would be easy | Low |
+| D19 | Forced (WGSL half range) | Cited | 65,504 reads as "far" everywhere | None |
+| D20 | Rule (shared sky bake, 256 × 128) | Assumed that the bake is detailed enough | WebGPU can sample a cube map | Low to medium. A bigger bake or the host's environment map |
+| D21 | Rule (platform lights are punctual only) | Measured: seen on `cornell-box` in RC2.1 | Hit shading has no area lights; WebGPU could gather emissive triangles as Capsaicin does | **High**: the Cornell box can't match without it. Emissive triangles as platform lights |
+| D22 | Forced (WGSL has only the weak exchange) | Cited | Retry gives the same result | None |
+| D23 | Same | Cited | A debug counter that is always on | None |
+| D24 | Rule (the world-cache lookup signature), partly a shortcut | Cited | The interface left out ray length and jitter | Low until GI-1.1's reflections read the cache. Add the fields then |
+| D30 *(on `rc3-2`, not merged)* | Rule (the world-cache interface) | Assumed "same results" until RC3.2's review | Insert as its own kernel; the surface is rebuilt with `giSurfaceAt`, which also leans on D8 | Low (a speed lever). The review should check that the results match |
+| D31 *(on `rc3-2`)* | Forced (`pack2x16float` truncates; WGSL range) | Measured on the RTX 3060 and Intel UHD | The correction restores Capsaicin's rounding | None. M5 not checked yet |
+| D32 *(on `rc3-2`)* | Fix | Measured: Intel UHD race, hidden on the RTX 3060 | Capsaicin's tile list can list a tile twice | None. Worth telling AMD |
+| D33 *(on `rc3-2`)* | Rule (the platform's light choice has no sky) | Cited | WebGPU could importance-sample the sky as Capsaicin's light builder does | **High** outdoors (Bistro exterior): second-bounce sky light is missing. Sky as a sampled platform light |
+
+**What the list shows so far (2026-11-10).** The differences that are truly forced (D1, D6, D12 to D15, D19, D22, D31) all give the same image, or only cost speed. Every difference marked high or medium for the image comes from **our own rules**: D2, D3, D4, D8, D16, D17, D21 and D33. Most of those rules are DDGI's shared hit shading and diffuse-only materials, which the platform carried over. The challenge work is therefore mainly platform work (materials, area and sky lights, real textures at hits, a visibility channel), not a fight with WebGPU.
+
+**Keeping it honest.**
+
+- Every new register row gets a line here in the same commit. The implementer fills it in, and the reviewer checks the cause against the Capsaicin source and the platform. A row that calls itself forced needs a citation or a measurement.
+- The reviewer also checks the diff for differences from Capsaicin that have no row at all. Those are the ones that matter most.
+- Staging differences, such as phase 2's cache-bypass path, aren't rows. They go in the phase notes and must be gone by the end of their phase.
+- When a row changes cause (for example, a WebGPU feature arrives, or someone shows a rule isn't needed), update the line and say so in PROGRESS.
+- Rows measured only on Windows say "M5 not checked yet" until someone runs them on the Mac.
 
 ## What the platform has, and what phase 1 adds
 

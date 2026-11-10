@@ -2,6 +2,10 @@
 
 Settled choices, newest first. Each entry is short: the decision, why, and what would make us revisit it. Changing a threshold or target counts as a decision and goes here.
 
+## 2026-11-10
+
+- **radiance-cache: every difference from Capsaicin records why it exists** (Dennis, 2026-11-10, Mac lead session). Agents sometimes take the easier path, or repeat "WebGPU can't" from memory, and the register's "kind" column didn't separate those cases from real platform limits. So each register row also gets a line in the design doc's challenge list ("Why each difference exists"), with its cause (forced, rule, shortcut, same, fix, license) and its evidence (measured, cited, assumed). Implementers fill it in and reviewers check it (`.claude/agents/`). The list is the starting point for focused work on challenging the unforced differences once the port reaches parity. Revisit: never as a rule; the categories can change if they stop sorting the rows usefully.
+
 ## 2026-11-09
 
 - **radiance-cache: timing deferred, build on** (Dennis, 2026-11-09, through the starting session; his words: "can we skip the timing as theres a lot going on right now. lets build what we can before we hit our usage limit unless its a blocking decision on the whole project").

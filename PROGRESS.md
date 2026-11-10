@@ -21,6 +21,20 @@ Rules:
 
 ---
 
+## 2026-11-10 · radiance-cache divergence causes · lead (opus, Mac)
+Did: added "Why each difference exists (the challenge list)" to `docs/design/radiance-cache.md`. It gives every register row (D1-D24, plus D30-D33 from `rc3-2`) a cause (forced, rule, shortcut, same, fix, license), its evidence (measured, cited, assumed) and how much it changes the image. It also has a short summary and the rules that keep the list honest. Also: a "How we work" pointer in the same doc, a standing rule in `docs/HANDOFF-radiance-cache.md`, DECISIONS 2026-11-10, and a check in `.claude/agents/reviewer.md` and `implementer.md`.
+Verified: docs only. Each cause was classified from the register text; no Capsaicin or WebGPU claim was re-checked in this session.
+Not verified: D2, D4, D9, D17, D18, D20 and D30's evidence is "assumed" (or only argued), and it should be checked before anyone relies on it. D5, D6 and D31 have not been checked on the M5 yet.
+Numbers: none.
+Next: when `rc3-2` merges, drop the "on `rc3-2`" tags on D30-D33. RC2.2's rows (D25-D29, if it adds any) need lines too. Finding so far: every high- or medium-impact difference comes from our own platform rules (shared hit shading, diffuse-only materials, punctual lights only, no visibility channel), not from WebGPU.
+
+## 2026-11-10 · radiance-cache handoff · lead (opus)
+Did: handoff to a new lead on the Mac (usage ran out on the Windows laptop). Wrote `docs/HANDOFF-radiance-cache.md`: branch map, how the track runs, Dennis's standing rules (they were only in local agent memory) and first steps on the Mac. Saved RC2.2's uncommitted work as `d5ec2d1` on `rc2-2`. Pushed `radiance-cache`, `rc2-2` and `rc3-2` to origin.
+Verified: nothing new run; branch state read from git.
+Not verified: `rc2-2`'s saved work (no lint, typecheck or GPU run); `rc3-2` is not reviewed.
+Numbers: none.
+Next: the new lead reads `docs/HANDOFF-radiance-cache.md`, reviews and merges RC3.2, finishes RC2.2, then RC3.3 and phase 4.
+
 ## 2026-11-09 · RC2.1 · implementer (opus)
 Did: branch `rc2-1` (from `radiance-cache`, `radiance-cache` merged in after RC1.1). `packages/ddgi-core/src/techniques/radiance-cache/`: `RadianceCacheTechnique` (prepare, `encode` does nothing until phase 3, `encodeScreen`, `encodeDebugView`, `probes`, counters, memory, dispose), settings as `gi1.h` `RenderOptions` plus `probe_size` 8 / `QuarterSpp`, `requirements.screen = true`; WGSL kernels named after Capsaicin's entry points with lines cited and AMD's MIT notice (`wgsl/capsaicin.ts`, `wgsl/screen-probes.ts`): `ClearCounters`, `ClearProbeMask` (each frame, standing in for reprojection), `SpawnScreenProbes`, RC1.3's compaction + indirect `CompactScreenProbes`, `SampleScreenProbes` (no-history path), `PopulateScreenProbesMain` (closest hit; misses read the sky, emissive front faces their emission, other hits `albedo/π × direct` through the platform's `gi/direct`), `BlendScreenProbes` (no history) into the `rgba16float` atlas and the `r32uint` mask. Probe rays are 48-byte records shaped for the world-cache interface (origin, flags with bypass set, packed direction, hit record) with the ray count on the GPU. CPU ports in `capsaicin-math.ts` with unit tests. Engine-free debug views (atlas, mask) in `wgsl/debug.ts`. Exported from the core and `@pmndrs/ddgi/radiance-cache`. Platform: `encodeScreen` now hands screen stages the frame's camera (was identity; docs/api/platform.md revision). Design doc: phase 2 staging notes, register D16-D21.
 Verified: `tools/gpu/pages/radiance-cache-probes` passes on the RTX 3060 (nvidia/ampere) and the Intel UHD (gen-12lp), headless Chrome 157, through the bench lock with `--no-cool-wait`: on sky-plane, cornell-box and sponza at 1280x720, spawn flags and seeds, the compacted list and the mask match the CPU spawn rule exactly (0 mismatches; 2,320 / 2,025 / 3,600 probes); no ray in a wrong cell or on the wrong side; under the white sky every ray reads 1 within 0.05% and every cell some ray reached within 0.1%. `pnpm lint`, `pnpm typecheck`, `pnpm test` (1,214) pass.
