@@ -14,9 +14,16 @@
  * FAR_SET_SPACINGS of it: the kernel sorts them into the near set (within
  * NEAR_SET_SPACINGS) and the far set (those that can see the box, or whose
  * mover mask has the object's bit).
+ *
+ * Receivers (T3.4, m3-moving.md §5.3): each box in `SceneChanges.receivers`
+ * gives one entry over the probes within WAKE_SPACINGS of it, which the
+ * kernel wakes (so do geometry entries of a move or a pose, within the same
+ * distance). A still scene has neither, so its air probes stay asleep as in
+ * M2.
  */
 
 import type { LightHandle } from '../../platform/contract/handles.ts';
+import type { Aabb } from '../../platform/contract/math.ts';
 import type { LightDescriptor } from '../../platform/contract/scene.ts';
 import type { DirtyRegion, LightChange, SceneChanges } from '../../platform/contract/scene-copy.ts';
 import { MARK_ENTRY_WORD, MARK_ENTRY_WORDS, MARK_GEOMETRY_WORD, MARK_HEADER_WORDS, MARK_KIND, MARK_LIGHT_KIND, MARK_LIGHT_WORD } from './layout.ts';
@@ -32,12 +39,38 @@ export const NEAR_SET_SPACINGS = 1.5;
 /** The far set's reach: probes within this many spacings of the box that can see it (m3-moving.md §5.1). */
 export const FAR_SET_SPACINGS = 8;
 /**
- * The solid angle (steradians) an object must cover in a far probe's view to
- * count as a whole change there (m3-moving.md §5.1): r = min(1, Ω / Ω_ref)
- * with Ω about π × radius² / distance². 0.5 sr is about 1/25 of the sphere.
- * The design's guess; T2.M1 records how it does (the far-set check).
+ * The far set's change (m3-moving.md §5.1, as T3.4 sized it to the mover):
+ * r = min(1, Ω / Ω_ref × contrast), with
+ * - Ω the object's box as the probe sees it: the area of the box's faces
+ *   facing it (each by how squarely), over the distance to its centre
+ *   squared. So a thin door seen edge-on or a small box counts for its real
+ *   size, where the design's π × radius² of the box's bounding sphere
+ *   counted a 0.9 m cabinet as about 2.3 times the area its face has;
+ * - contrast: how much brighter the light around the object is than the
+ *   probe's own, from the stored means (the brightest active probe within
+ *   1.5 spacings of the box's centre, over this probe's), at least 1;
+ * - Ω_ref this solid angle: 2π, a hemisphere.
+ *
+ * *Why:* a probe's light (the mean over its texels) changes by about
+ * Ω / 4π times how much the object's radiance differs from the average the
+ * probe sees. An object about as bright as the room changes far probes
+ * little; a doorway into a lit room seen from a dark one changes them a lot,
+ * because most of their light comes through it. With the design's 0.5 sr
+ * and the sphere, every far probe that saw the 0.9 m cabinet counted as a
+ * whole change: its 1 m slide marked 826 far probes, 13% of them really
+ * changed by more than 5% (T2.M1 item 8). Sized and weighed by contrast
+ * (T3.4, measured on the same dump), the cabinet's far set is 442 with the
+ * same far recall (106 of 112), and the door's swing keeps its recall
+ * (about 90%), because the dark room is far darker than the doorway.
  */
-export const FAR_SET_REFERENCE_SOLID_ANGLE = 0.5;
+export const FAR_SET_REFERENCE_SOLID_ANGLE = 2 * Math.PI;
+/**
+ * The far set's contrast looks for the light around the object in the
+ * probes within this many spacings of its box's centre (per axis): the
+ * 3 × 3 × 3 probes around it, so the centre's own probe may be inside the
+ * object (switched off) and its neighbours still answer.
+ */
+export const FAR_SET_CONTRAST_SPACINGS = 1.5;
 
 /**
  * How much more urgent an off probe in a geometry change's near set is than
@@ -49,6 +82,36 @@ export const FAR_SET_REFERENCE_SOLID_ANGLE = 0.5;
  * the urgency through its warming updates (they are owed with it).
  */
 export const FREED_PROBE_URGENCY_SHARE = 16;
+
+/**
+ * Woken air probes (T3.4, m3-moving.md §5.3). Classification switches off
+ * probes with no surface within reach ("no surface nearby": 347 of
+ * Cornell's 1,728), because no surface needs them. A moving object rays
+ * don't see (a receiver: a character, a ball) or a moved object in mid-air
+ * does need them, or it gets no GI there. So probes within this many
+ * spacings of a receiver's box, or of a moved or posed object's, are woken: kept on
+ * whatever classification says. 2: a point inside the box reads the 8
+ * probes of its cell, which lie within 1 spacing of it; one more covers the
+ * next frames' movement, so the probes ahead are awake before the object
+ * reaches them.
+ */
+export const WAKE_SPACINGS = 2;
+/**
+ * How long a probe stays awake after the last receiver or change near it, in
+ * frames: 300, 5 s at 60 Hz (m3-moving.md §5.3). Then classification may
+ * switch it off again at its next update, and a still scene ends up exactly
+ * as it was, with its air probes asleep and costing their 32 fixed rays.
+ */
+export const WAKE_FRAMES = 300;
+/**
+ * Updates a woken probe that was off is owed, at FREED_PROBE_URGENCY_SHARE,
+ * so they come at once: the blended two it needs before shading uses it
+ * (m3-moving.md §5.2). Its first update, with the 32 fixed rays it traces
+ * while off, switches it back on and doesn't count: only blends take an
+ * owed update off. So it is in shading three frames after it is woken, at
+ * any budget that has room for the woken probes.
+ */
+export const WAKE_OWED_UPDATES = 2;
 
 /** What `buildMarkTable` needs to know about the hot movers: an instance's mask bit, 0 when it isn't one. */
 export interface MoverBits {
@@ -426,6 +489,8 @@ function byLayer(changes: readonly LightChange[], groupLayers: readonly number[]
  *   (`skyResidualShare`) are T2.6b's.
  * - More light changes than are listed: one entry over every probe
  *   (OVERFLOW_CHANGE).
+ * - A receiver where it is now: one entry over the probes within
+ *   WAKE_SPACINGS of its box, which wakes them (receiverEntry).
  * - A light whose group changes so that it moves to another irradiance
  *   layer (light groups, T2.5; `groupLayers`) leaves its old layer and joins
  *   the new one: it is marked as two changes, switched off where it was and
@@ -487,6 +552,10 @@ export function buildMarkTable(
         const entry = geometryEntry(region, grid, movers);
         if (entry) entries.push(entry);
     }
+    for (const box of changes.receivers) {
+        const entry = receiverEntry(box, grid);
+        if (entry) entries.push(entry);
+    }
     if (changes.global.includes('environment')) {
         entries.push({ kind: MARK_KIND.environment, ...everywhere, globalChange: ENVIRONMENT_CHANGE, before: NO_LIGHT, after: NO_LIGHT });
     }
@@ -543,6 +612,28 @@ function geometryEntry(region: DirtyRegion, grid: ProbeGrid, movers: MoverBits):
             moved: region.moved ?? -1,
             moverBit: region.instance === undefined ? 0 : movers.bitFor(region.instance),
         },
+    };
+}
+
+/**
+ * A receiver's entry (T3.4, m3-moving.md §5.3): the probes within
+ * WAKE_SPACINGS of its box, which the kernel wakes. Its box goes in the
+ * geometry block; it marks no change (rays don't see a receiver), so it
+ * carries no move and no mover bit. Null when no probe is that near.
+ */
+function receiverEntry(box: Aabb, grid: ProbeGrid): Entry | null {
+    const { min, max } = box;
+    const reach = grid.spacing.map((spacing) => WAKE_SPACINGS * spacing);
+    const probes = probeBox(grid, [min[0] - reach[0], min[1] - reach[1], min[2] - reach[2]], [max[0] + reach[0], max[1] + reach[1], max[2] + reach[2]]);
+    if (!probes) return null;
+    return {
+        kind: MARK_KIND.receiver,
+        boxMin: probes.min,
+        boxSize: probes.size,
+        globalChange: 0,
+        before: NO_LIGHT,
+        after: NO_LIGHT,
+        geometry: { regionMin: [min[0], min[1], min[2]], regionMax: [max[0], max[1], max[2]], moved: 0, moverBit: 0 },
     };
 }
 

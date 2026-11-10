@@ -21,6 +21,28 @@ Rules:
 
 ---
 
+## 2026-11-10 · T3.4 merged with `m3` (T3.6) · implementer (opus)
+Did: merged `m3` (a1abecd) into `m3-t3.4`. Conflicts were only in the PROGRESS and DECISIONS tops; both sides kept. The marks, wakes and receiver entries already go through T3.6's conversion: the table holds window probes, and `ddgiMarkThread` turns each into its slot. One fix: the far set's contrast walks the probes around a box's centre in window coordinates, and it now reads each one through its slot (`ddgiProbeSlot`). `ddgi-wake-air-probes` adds a camera-following volume (8 probes wide on x) that scrolls with the ball; the probes near the ball's last box must be woken in their slots.
+Verified, RTX 3060 Laptop (nvidia/ampere), bench lock, untimed; all pass:
+- `ddgi-wake-air-probes`: the window moved 7 planes on 8, so the slots wrap; 36 of 36 probes near the ball were woken. Two volumes: 84 / 84 woken. The one-volume numbers are the same as before.
+- `ddgi-camera-volume`, `ddgi-volumes`.
+- Cabinet: within 5% from frame 15 at 210; 651 marked, recall 97.7%, precision 39.5%. Door swing: 0.157% at 1 s, recall 91.5%.
+- `ddgi-change-still`: means as before, 0 marks, 347 / 102 probes asleep.
+- `ddgi-deforming-marks` (unchanged). `three-deforming-gi`: the exact-box morph is still -6.0% / -13.1%.
+- `platform-recompiles` and `ddgi-session-recompiles` (0), `ddgi-warm-two-updates`, `ddgi-mark-reduction`.
+- Typecheck and lint clean. Unit tests pass: 6 files failed under load and passed when re-run alone.
+
+## 2026-11-10 · T3.4 merged with `m3` again (T3.3) · implementer (opus)
+Did: merged `m3` (b22d75d) into `m3-t3.4` (201f0f8). Only conflict was the top of PROGRESS; T3.3's entries go first. No code change was needed: poses still log the instance's deform box, with `moved` and the instance.
+The pose-box union for the unfold miss isn't needed and would change nothing. A pose's region is the mesh's whole deform box: the declared `deformBounds`, or the rest box grown by every pose so far (it never shrinks). That box holds the previous and the new pose, for CPU and GPU poses alike.
+Verified, RTX 3060 Laptop (nvidia/ampere), bench lock, untimed, all pass:
+- `ddgi-deforming-marks`: the same numbers as before (125 near probes at r = 0.6, 530 that saw the sheet all marked).
+- `three-deforming-gi`: the exact-box morph still returns floor -6.1%, wall -13.0%, unchanged. The larger box returns within 0.5%, and so do the CPU- and GPU-skinned panels.
+- `ddgi-wake-air-probes`: the same numbers as before, two volumes included.
+- `platform-recompiles` (0) and `ddgi-mark-reduction`.
+- Typecheck and lint clean. Unit tests pass: 6 files failed under load and passed when re-run alone.
+Next: the exact-box morph needs a moving emitter's change marked as a light change (NOTES), for the lead.
+
 ## 2026-11-10 · T3.3 review fixes · implementer (opus)
 Did (ce8a51b and the next two), from the short Opus review:
 - The refit's stats are copied out at most once every 15 frames per posed mesh (`STATS_EVERY_FRAMES`, `trace/deforming-trees.ts`), was after every refit. Each sample is judged once, and a drift run starts at the frame its first drifted sample was taken, so "held 60 frames" still means about 60 frames (4-5 samples).
@@ -59,6 +81,30 @@ Verified, RTX 3060 Laptop (nvidia/ampere, headless Chrome, bench lock `--no-cool
 Numbers: `ddgi/scroll` 0.006 ms median (not gated).
 Not verified: Intel UHD; the viewer.
 Next: T3.8 needs a viewer setting for `follow: 'camera'` and the fly-through path (the page's legs from the street bookmark), `requiredLimits` for Bistro, and a ruling on the band. T3.4 rebases on mark.ts, blend.ts, ddgi-technique.ts.
+
+## 2026-11-09 · T3.4 merged with `m3` (T3.5, T3.2, T3.7) · implementer (opus)
+Did: merged `m3` (1482354) into `m3-t3.4` (1f9f96b). Only conflicts were the PROGRESS and DECISIONS tops (both kept). One fix: the far set's contrast loop reads probe data per volume (T3.5's three-argument `ddgiReadProbeData`). Each volume builds its own mark table against its own grid, so a wake or mark lands in every volume a box reaches; `ddgi-wake-air-probes` now also runs Cornell as two overlapping volumes and checks it.
+Verified, RTX 3060 Laptop (nvidia/ampere), bench lock, untimed:
+- `ddgi-wake-air-probes`: the same numbers as before; with two volumes, 84 probes near the path in each, all woken.
+- Cabinet: within 5% from frame 16 at a calibrated 187; 647 marked, recall 97.3%, precision 40%. Door swing: 0.157% at 1 s; recall 91.5%.
+- `ddgi-change-still`: the same means as before, 0 marks, 347 / 102 probes asleep.
+- Recompiles 0 on `platform-recompiles` and `ddgi-session-recompiles`.
+- Also pass: `ddgi-deforming-marks`, `ddgi-volumes`, `ddgi-warm-two-updates`, `ddgi-mark-reduction`, `three-deforming-gi`.
+- Typecheck and lint clean. Unit tests pass (`fetch.test.ts` and `sky.test.ts` failed under load and passed alone).
+Not fixed: the morph with its exact `giDeformBounds` still returns 5.9% (floor) / 13.1% (wall) under rest. The pose region is already the whole deform box, with the old and new pose inside, so the union of pose boxes changes nothing. More likely a moving emitter's far-set r is too small (NOTES). For the lead / T3.3.
+
+## 2026-11-09 · T3.4 probes near moved geometry · implementer (opus)
+Did (branch `m3-t3.4`): woken air probes: `ddgi/mark` gets `receiver` entries (`SceneChanges.receivers`); receivers, moves and poses wake probes within 2 spacings for 300 frames (history word 8); an air probe off for "no surface nearby" is owed 2 updates at the freed share; `ddgi/blend` keeps awake probes on and clears an expired wake. Created/destroyed/shown/hidden objects don't wake (DECISIONS). Far set: `min(1, Ω/2π × contrast) × move share`, Ω from the box's projected area, contrast = brightest stored mean near the box's centre over the probe's own (DECISIONS; NOTES has why no size-only rule works). Deforming movers needed no new code: checked. Pages: `ddgi-wake-air-probes` (items 3, 5, screenshot), `ddgi-deforming-marks`; `ddgi-door-swing` gets `VITE_DDGI_SWING_FRAMES`. Docs: ddgi.md, m3-moving.md as built.
+Verified, RTX 3060 Laptop (nvidia/ampere), Chrome headless, bench lock, untimed, baseline = 36668bc in a scratch checkout:
+- 1: cabinet changed pixels within 5% from frame 15 at a calibrated 194 (deadline 60).
+- 2: door swing 0.157% at 1 s (T2.M1 0.17-0.18%), within 1% throughout; one-step close 0.325% at 1 s, same as baseline (0.315%).
+- 3: every active probe k ≥ 2 every frame, woken probes through state 3 with k = 2 (`ddgi-wake-air-probes`, `ddgi-warm-two-updates`).
+- 4: `ddgi-change-still` views identical to baseline, atlases within 1.3e-6%, 0 marks, the same 347 / 102 probes asleep. Cost not timed; a still frame runs no mark, the blend reads one word more.
+- 5: ball through Cornell: 120 air probes woke and warmed, its GI within 1.2% of an every-probe-on field (lowest 98%), colour correlation 0.9999; all asleep again after it left. Screenshot looked at: woken row matches reference, tint goes red to green, asleep row has black patches.
+- 6: cabinet marks 645 (993), recall 97.4%, precision 40% (26%). Door swing recall 91.5% / precision 97.7% (unchanged); step 72.3% / 99.3% (was 91.4%).
+- 7: lint, typecheck, 1,166 unit tests (3 load-timing failures passed alone); full suite 57 of 58: `ddgi-warmup` fails identically on the baseline (T3.5 found the same). Recompiles 0 (`platform-recompiles` with receivers and poses, `ddgi-session-recompiles`).
+Not verified: Intel UHD; the three adapter's receivers (T3.7); a receiver standing still in mid-air (loses GI 5 s later, DECISIONS).
+Next: T3.8: a ball/character scenario shows waking; still mid-air receivers need the feed to list them. T3.3: a pose is marked in its own frame, but T3.1's tree rebuild is asynchronous, so a big mesh's marks can come before rays see it (the 512-triangle sheet's tree was in by the next check); the refit removes the gap. Rebase on `m3` after T3.5 (touches mark.ts, blend.ts).
 
 ## 2026-11-09 · T3.7 review fixes · implementer (opus)
 Did (fa33d04 and this one), from the short Opus review:

@@ -72,7 +72,13 @@
  *   it active. The scratch's tiles-written word tells `ddgi/write` that both
  *   have tiles to copy;
  * - a probe that comes back on keeps the updates it was owed, so its two
- *   warming updates come at priority.
+ *   warming updates come at priority;
+ * - woken air probes (T3.4, §5.3): a probe `ddgi/mark` woke near a receiver
+ *   or a moved or posed object (its `wakeUntil` is still ahead) isn't switched off
+ *   for "no surface nearby"; one that was off comes back on through state 3
+ *   like any other, so it too is used only after 2 blended updates. The
+ *   first update after the wake ran out clears it, and classification works
+ *   as before.
  *
  * Light groups (T2.5, light-groups.ts; m2-lights.md §5): with several
  * irradiance layers, each ray has a result per layer, and phase C blends
@@ -547,8 +553,16 @@ struct DdgiProbeDecision {
     state: u32,
 }
 
-// Thread 0's verdict from the reductions (design: "Phase B").
-fn ddgiDecide(probe: vec3i, offset: vec3f, state: u32) -> DdgiProbeDecision {
+// Whether a probe is awake (T3.4, m3-moving.md §5.3): ddgi/mark woke it near
+// a receiver or a moved or posed object, and WAKE_FRAMES haven't passed since.
+// Frames compare modulo 2^32, as the frame counter wraps; 0 is "not awake".
+fn ddgiAwake(wakeUntil: u32) -> bool {
+    return wakeUntil != 0u && bitcast<i32>(wakeUntil - ddgi.frame) > 0;
+}
+
+// Thread 0's verdict from the reductions (design: "Phase B"). 'awake': the
+// probe was woken (ddgiAwake), so "no surface nearby" doesn't switch it off.
+fn ddgiDecide(probe: vec3i, offset: vec3f, state: u32, awake: bool) -> DdgiProbeDecision {
     let spacing = ddgiUniformVolume().spacing;
     let minFrontFace = ddgi.minFrontFaceDistance;
     let backFaces = atomicLoad(&ddgiBackFaceCount);
@@ -606,8 +620,10 @@ fn ddgiDecide(probe: vec3i, offset: vec3f, state: u32) -> DdgiProbeDecision {
         // Inside geometry, after relocation had its chance: if it moved, the
         // next update looks again from the new place.
         newState = DDGI_STATE_OFF_INSIDE_GEOMETRY;
-    } else if (ddgi.classification != 0u && atomicLoad(&ddgiFrontFacesInReach) == 0u) {
+    } else if (ddgi.classification != 0u && atomicLoad(&ddgiFrontFacesInReach) == 0u && !awake) {
         // No surface within reach: the probe helps no surface's interpolation.
+        // Unless it is awake: a receiver or a moved object in mid-air needs it
+        // (m3-moving.md §5.3). An awake probe that was off comes back on below.
         newState = DDGI_STATE_OFF_NO_SURFACE_NEARBY;
     } else if (ddgiIsOff(state)) {
         // Coming back on: it traced only its fixed rays this time, so it is
@@ -630,7 +646,7 @@ struct DdgiProbeHistory {
     scheduleAndFlags: u32,   // flags in the low 8 bits (DDGI_FLAG_*); the frame it was last scheduled above
     meanRedGreen: u32,       // its mean irradiance, r and g as half floats
     meanBlueNoise: u32,      // b, and its noise, as half floats
-    wakeUntil: u32,          // M3
+    wakeUntil: u32,          // woken air probes (T3.4): awake until this frame; 0 when not woken
     keysReceived: u32,       // a fine probe awaiting a change: the key neighbours that passed it theirs (low 8 bits), their weight (high half)
     changeClock: u32,        // the volume's change clock at its last blended update
     keyDeltaSlot: u32,       // a key whose latest update passed its change: the update-list slot of its key-delta entry
@@ -1031,9 +1047,11 @@ fn ddgiRequestFeedback(probeIndex: u32, probe: vec3i, urgency: f32) {
 // pile up and owe it again every frame. Coming back on (new state 3, after
 // a change freed it, m3-moving.md §5.2), it keeps what it was owed, so its
 // two warming updates come at once. Either way it starts warming again.
-fn ddgiForgetPromises(probeIndex: u32, newState: u32) {
+// A wake that has run out is cleared ('awake', ddgiAwake).
+fn ddgiForgetPromises(probeIndex: u32, newState: u32, awake: bool) {
     var history = ddgiProbeHistory[probeIndex];
     history.scheduleAndFlags = history.scheduleAndFlags & ~DDGI_FLAG_WARMED_ONCE;
+    history.wakeUntil = select(0u, history.wakeUntil, awake);
     if (newState != DDGI_STATE_NOT_UPDATED_YET) {
         history.updates = history.updates & ~(DDGI_OWED_MASK << DDGI_OWED_SHIFT);
         history.urgency = 0.0;
@@ -1121,7 +1139,9 @@ ${layered ? '' : '        ddgiRayRadiance[rayIndex] = record;'}
     }
     workgroupBarrier();
     if (thread == 0u) {
-        let decision = ddgiDecide(probe, probeData.offset, state);
+        // Woken near a receiver or a moved object (ddgi/mark, T3.4): kept on whatever its rays find around it.
+        let awake = ddgiAwake(ddgiProbeHistory[probeIndex].wakeUntil);
+        let decision = ddgiDecide(probe, probeData.offset, state, awake);
         // Phase C runs for probes that traced all their rays and stay active.
         // (The write kernel copies the tiles exactly when the new state is active.)
         let blendThisUpdate = decision.state == DDGI_STATE_ACTIVE && !ddgiIsOff(state);
@@ -1145,6 +1165,8 @@ ${layered ? '' : '        ddgiRayRadiance[rayIndex] = record;'}
             ddgiUpdateHysteresis = step.hysteresis;
             ddgiNextHistory = step.history;
             ddgiNextHistory.moverMask = atomicLoad(&ddgiMoverHits);
+            // A wake that has run out is cleared, so the stored frame never comes round again as the counter wraps.
+            ddgiNextHistory.wakeUntil = select(0u, history.wakeUntil, awake);
             ddgiUpdateKind = step.kind;
             if (step.kind == DDGI_UPDATE_HELD) {
                 // Its record without the owed updates; nothing else of it changes (ddgiWriteHistory is skipped).
@@ -1164,7 +1186,7 @@ ${layered ? '' : '        ddgiRayRadiance[rayIndex] = record;'}
                 atomicAdd(&ddgiCensus[DDGI_CENSUS_KEY_CHANGES_PASSED_TOTAL], 1u);
             }
         } else {
-            ddgiForgetPromises(probeIndex, decision.state);
+            ddgiForgetPromises(probeIndex, decision.state, awake);
         }
         // Offsets and states are small exact values in half floats; no rounding noise wanted.
         let base = slot * DDGI_SCRATCH_STRIDE + DDGI_SCRATCH_PROBE_DATA;

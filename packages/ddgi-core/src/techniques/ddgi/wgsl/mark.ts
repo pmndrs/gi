@@ -47,10 +47,26 @@
  *     direction enters the box, less half a spacing (a test against the
  *     centre itself would fail for the old box, since the object hid its own
  *     centre); or their mover mask has the object's bit (they saw it at their
- *     last update). `r = min(1, Ω / Ω_ref) × s`, Ω about
- *     π × radius² / distance², the share of the view the object covers.
+ *     last update). `r = min(1, Ω / Ω_ref × contrast) × s` (T3.4): Ω the
+ *     box's projected area over the distance squared, the share of the view
+ *     the object covers; contrast the brightest stored mean near the box's
+ *     centre over the probe's own, at least 1; Ω_ref a hemisphere
+ *     (FAR_SET_REFERENCE_SOLID_ANGLE says why).
  *     They are served like a local light's probes (keys and propagation on
  *     the key-probe path).
+ *   - for a move or a pose, probes within WAKE_SPACINGS of the box are also
+ *     **woken** (below; not for a whole change, ddgiMarkGeometry says why);
+ * - **a receiver** (T3.4, m3-moving.md §5.3; an object rays don't see, where
+ *   it is now): probes within WAKE_SPACINGS of its box are woken, and
+ *   nothing is marked as changed (its light didn't change).
+ *
+ * **Waking** a probe sets its `wakeUntil` to the frame plus WAKE_FRAMES:
+ * until then `ddgi/blend`'s classification keeps it on even with no surface
+ * within reach. A woken probe that is off for "no surface nearby" is also
+ * owed WAKE_OWED_UPDATES at FREED_PROBE_URGENCY_SHARE (a whole change's
+ * urgency), so its fixed-ray update switches it back on in the next frame
+ * and its two warming updates follow at once. Wakes aren't counted as marks
+ * and don't move the change clock: no light changed.
  *
  * Then the probe's record (PROBE_HISTORY_WORD in layout.ts):
  * `pendingChange += r`, `urgency = max(urgency, pendingChange)`, the marked
@@ -105,7 +121,17 @@ import {
     PROBE_HISTORY_WORD,
     PROBE_HISTORY_WORDS,
 } from '../layout.ts';
-import { FAR_SET_REFERENCE_SOLID_ANGLE, FAR_SET_SPACINGS, FREED_PROBE_URGENCY_SHARE, MAX_GLOBAL_CHANGE, NEAR_SET_SPACINGS } from '../mark-table.ts';
+import {
+    FAR_SET_CONTRAST_SPACINGS,
+    FAR_SET_REFERENCE_SOLID_ANGLE,
+    FAR_SET_SPACINGS,
+    FREED_PROBE_URGENCY_SHARE,
+    MAX_GLOBAL_CHANGE,
+    NEAR_SET_SPACINGS,
+    WAKE_FRAMES,
+    WAKE_OWED_UPDATES,
+    WAKE_SPACINGS,
+} from '../mark-table.ts';
 import { NEAR_CAMERA_WEIGHT } from '../settings.ts';
 import { DDGI_COMMON_WGSL } from './common.ts';
 import type { PhaseBReduction } from './blend.ts';
@@ -187,10 +213,17 @@ const DDGI_MARK_GEOMETRY: u32 = ${MARK_KIND.geometry}u;
 const DDGI_NEAR_SET_SPACINGS: f32 = ${NEAR_SET_SPACINGS};
 const DDGI_FAR_SET_SPACINGS: f32 = ${FAR_SET_SPACINGS};
 const DDGI_FAR_SET_REFERENCE_SOLID_ANGLE: f32 = ${FAR_SET_REFERENCE_SOLID_ANGLE};
+const DDGI_FAR_SET_CONTRAST_SPACINGS: f32 = ${FAR_SET_CONTRAST_SPACINGS};
 // A far probe sees the box when its mean distance toward it reaches the box's near face, less this share of a spacing.
 const DDGI_FAR_SET_DISTANCE_SLACK_SPACINGS: f32 = 0.5;
 // An off probe the change may free goes first (FREED_PROBE_URGENCY_SHARE in mark-table.ts).
 const DDGI_FREED_PROBE_URGENCY_SHARE: f32 = ${FREED_PROBE_URGENCY_SHARE};
+// Woken air probes (WAKE_* in mark-table.ts).
+const DDGI_MARK_RECEIVER: u32 = ${MARK_KIND.receiver}u;
+const DDGI_WAKE_SPACINGS: f32 = ${WAKE_SPACINGS};
+const DDGI_WAKE_FRAMES: u32 = ${WAKE_FRAMES}u;
+const DDGI_WAKE_OWED_UPDATES: u32 = ${WAKE_OWED_UPDATES}u;
+const DDGI_HISTORY_WAKE_UNTIL: u32 = ${PROBE_HISTORY_WORD.wakeUntil}u;
 const DDGI_HISTORY_MOVER_MASK: u32 = ${PROBE_HISTORY_WORD.moverMask}u;
 const DDGI_HISTORY_AWAITING_SINCE: u32 = ${PROBE_HISTORY_WORD.awaitingSinceFrame}u;
 const DDGI_MARK_VISIBILITY_FLOOR: f32 = ${MARK_VISIBILITY_FLOOR};
@@ -576,22 +609,63 @@ fn ddgiMarkSawMover(probeIndex: u32, moverBit: u32) -> bool {
     return (mask & moverBit) != 0u;
 }
 
+// Whether a point lies within 'spacings' probe spacings of an entry's region (per axis).
+fn ddgiNearRegion(position: vec3f, geometry: DdgiMarkGeometry, spacings: f32) -> bool {
+    let margin = spacings * ddgiUniformVolume().spacing;
+    return all(position >= geometry.regionMin - margin) && all(position <= geometry.regionMax + margin);
+}
+
+// Wakes a probe (the file comment): awake until WAKE_FRAMES from now, and,
+// when it is off for "no surface nearby", owed its way back into shading at
+// once. Probes off inside geometry aren't woken: no point inside a solid is
+// shaded. Every thread that wakes a probe in a frame stores the same frame,
+// later than any stored before, so a plain atomic store will do; 0 means
+// "not awake", so a wake that lands on frame 0 (the counter wrapping) takes 1.
+fn ddgiWakeProbe(probeIndex: u32, state: u32) {
+    let base = probeIndex * DDGI_HISTORY_WORDS;
+    let until = ddgi.frame + DDGI_WAKE_FRAMES;
+    atomicStore(&ddgiProbeHistoryWords[base + DDGI_HISTORY_WAKE_UNTIL], select(until, 1u, until == 0u));
+    if (state == DDGI_STATE_OFF_NO_SURFACE_NEARBY) {
+        ddgiOweUpdates(base, DDGI_WAKE_OWED_UPDATES);
+        // A whole change's urgency (r = 1) at the freed probes' share; non-negative floats order like their bits.
+        atomicMax(&ddgiProbeHistoryWords[base + DDGI_HISTORY_URGENCY], bitcast<u32>(DDGI_FREED_PROBE_URGENCY_SHARE));
+    }
+}
+
+// A receiver entry at one probe: wakes it when it is within WAKE_SPACINGS of
+// the receiver's box (the probe box covers that by grid index; this checks
+// where relocation put it). Marks no change, so it returns 0.
+fn ddgiMarkReceiver(entry: DdgiMarkEntry, probe: vec3i, probeIndex: u32, data: DdgiProbeData) -> f32 {
+    if (ddgiNearRegion(ddgiProbePosition(probe, data.offset), entry.geometry, DDGI_WAKE_SPACINGS)) {
+        ddgiWakeProbe(probeIndex, data.state);
+    }
+    return 0.0;
+}
+
 // A geometry entry's mark at one probe (the file comment): returns the change
 // it marked, 0 for none. Off probes count in the near set (the change may
 // free them); probes not updated yet never do (their first update starts
-// from nothing anyway).
+// from nothing anyway). For a move or a pose, probes within WAKE_SPACINGS are
+// woken first, in any state, so one that warms or comes back on stays on
+// while the object is near. Not for a whole change (an object created,
+// destroyed, shown or hidden): a scene's first frame creates everything, and
+// a room's box would wake every probe in it for WAKE_FRAMES, its warm-up and
+// calibration included; probes near the surfaces of a new object come on by
+// classification anyway.
 fn ddgiMarkGeometry(entry: DdgiMarkEntry, probe: vec3i, probeIndex: u32, data: DdgiProbeData) -> f32 {
     let geometry = entry.geometry;
     let spacing = ddgiUniformVolume().spacing;
     let smallestSpacing = min(spacing.x, min(spacing.y, spacing.z));
+    let position = ddgiProbePosition(probe, data.offset);
+    if (geometry.moved > 0.0 && ddgiNearRegion(position, geometry, DDGI_WAKE_SPACINGS)) {
+        ddgiWakeProbe(probeIndex, data.state);
+    }
     // How much of a whole change the move is: a drag that moves a little every frame marks a little every frame.
     let moveShare = select(min(1.0, geometry.moved / smallestSpacing), 1.0, geometry.moved < 0.0);
     if (!(moveShare > 0.0) || data.state == DDGI_STATE_NOT_UPDATED_YET) {
         return 0.0;
     }
-    let position = ddgiProbePosition(probe, data.offset);
-    let nearMargin = DDGI_NEAR_SET_SPACINGS * spacing;
-    if (all(position >= geometry.regionMin - nearMargin) && all(position <= geometry.regionMax + nearMargin)) {
+    if (ddgiNearRegion(position, geometry, DDGI_NEAR_SET_SPACINGS)) {
         let urgencyShare = select(1.0, DDGI_FREED_PROBE_URGENCY_SHARE, ddgiIsOff(data.state));
         ddgiMarkProbe(probeIndex, moveShare, DdgiServing(ddgiFullUpdates(moveShare), urgencyShare, false));
         return moveShare;
@@ -612,12 +686,54 @@ fn ddgiMarkGeometry(entry: DdgiMarkEntry, probe: vec3i, probeIndex: u32, data: D
     if (!seen) {
         return 0.0;
     }
-    // The share of the probe's view the object covers, as a share of Omega_ref (capped at a whole change).
-    let radius = 0.5 * length(geometry.regionMax - geometry.regionMin);
-    let solidAngle = DDGI_PI * radius * radius / (distance * distance);
-    let change = min(1.0, solidAngle / DDGI_FAR_SET_REFERENCE_SOLID_ANGLE) * moveShare;
+    // The share of the probe's view the object covers: the box's faces that
+    // face the probe, each by how squarely (a box's area seen from a
+    // direction), over the distance squared. Then times how much brighter the
+    // light around the object is than the probe's own, as a share of
+    // Omega_ref, capped at a whole change (FAR_SET_REFERENCE_SOLID_ANGLE in
+    // mark-table.ts says why).
+    let size = geometry.regionMax - geometry.regionMin;
+    let projectedArea = abs(direction.x) * size.y * size.z + abs(direction.y) * size.x * size.z + abs(direction.z) * size.x * size.y;
+    let solidAngle = projectedArea / (distance * distance);
+    let contrast = max(1.0, ddgiRegionBrightness(geometry) / max(ddgiBrightness(ddgiMarkStoredMean(probeIndex)), DDGI_MARK_DARK_IRRADIANCE));
+    let change = min(1.0, solidAngle / DDGI_FAR_SET_REFERENCE_SOLID_ANGLE * contrast) * moveShare;
     ddgiMarkProbe(probeIndex, change, ddgiServing(entry, probe, change));
     return change;
+}
+
+// A stored mean's brightness: its channels added up.
+fn ddgiBrightness(mean: vec3f) -> f32 {
+    return mean.r + mean.g + mean.b;
+}
+
+// How bright the light around a region is (the far set's contrast): the
+// brightest stored mean among the active probes within
+// FAR_SET_CONTRAST_SPACINGS of the region's centre. The brightest, because
+// the probe at the centre may be inside the object and those beside it may
+// be in its shadow; a doorway's probes are lit from the room beyond. 0 when
+// none is active (then the contrast is 1).
+fn ddgiRegionBrightness(geometry: DdgiMarkGeometry) -> f32 {
+    let volume = ddgiUniformVolume();
+    let counts = vec3i(ddgiProbeCount());
+    let centre = (0.5 * (geometry.regionMin + geometry.regionMax) - volume.origin) / volume.spacing;
+    let first = max(vec3i(ceil(centre - DDGI_FAR_SET_CONTRAST_SPACINGS)), vec3i(0));
+    let last = min(vec3i(floor(centre + DDGI_FAR_SET_CONTRAST_SPACINGS)), counts - 1);
+    var brightest = 0.0;
+    for (var y = first.y; y <= last.y; y++) {
+        for (var z = first.z; z <= last.z; z++) {
+            for (var x = first.x; x <= last.x; x++) {
+                // The loop runs over window probes (positions); a camera-following volume keeps each in a wrapping slot,
+                // which is where its probe data and history are.
+                let neighbour = ddgiProbeSlot(volume, vec3i(x, y, z));
+                if (ddgiReadProbeData(ddgiProbeData, volume, neighbour).state != DDGI_STATE_ACTIVE) {
+                    continue;
+                }
+                let neighbourIndex = u32(neighbour.x) + u32(counts.x) * (u32(neighbour.z) + u32(counts.z) * u32(neighbour.y));
+                brightest = max(brightest, ddgiBrightness(ddgiMarkStoredMean(neighbourIndex)));
+            }
+        }
+    }
+    return brightest;
 }
 
 // The probe's stored mean irradiance (written by ddgi/blend).
@@ -643,6 +759,9 @@ fn ddgiMarkThread(thread: u32) -> f32 {
     let data = ddgiReadProbeData(ddgiProbeData, ddgiUniformVolume(), probe);
     if (entry.kind == DDGI_MARK_GEOMETRY) {
         return ddgiMarkGeometry(entry, probe, probeIndex, data);
+    }
+    if (entry.kind == DDGI_MARK_RECEIVER) {
+        return ddgiMarkReceiver(entry, probe, probeIndex, data);
     }
     if (data.state != DDGI_STATE_ACTIVE) {
         return 0.0;
