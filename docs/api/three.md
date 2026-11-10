@@ -151,7 +151,7 @@ const loaded = volume.loadBake(bytes);          // { stale, changedParts, savedA
 - With `start(..., { bake })`, `volume.loadedBake` says what was loaded. `start` still waits for the ray-tracing trees and calibrates the budget; it only skips the warm-up passes.
 - Images the CPU can't read cheaply (`ImageBitmap`, which `GLTFLoader` gives) count in the fingerprint by their size and colour space, not their pixels, so a repainted image of the same size isn't noticed.
 
-`DDGIVolume.fromDDGIVolume(settings)` makes a volume whose probes are exactly a DDGI box and spacing (as the viewer's scene files describe volumes). `volume.updateBoundingBox()` sets `boundingBox` from its position and size, and `volume.useDefaultSpacing(metres)` is what a preset's spacing does to a volume made without probe counts.
+`DDGIVolume.fromSettings(settings)` makes a volume whose probes are exactly a DDGI box and spacing (as the viewer's scene files describe volumes). `volume.updateBoundingBox()` sets `boundingBox` from its position and size, and `volume.useDefaultSpacing(metres)` is what a preset's spacing does to a volume made without probe counts.
 
 `volume.ddgiVolume()` gives the matching DDGI settings, for building a platform by hand:
 

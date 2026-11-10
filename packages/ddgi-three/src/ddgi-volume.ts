@@ -107,7 +107,7 @@ export class DDGIVolume extends Light {
      * apart, centred on `center`. For hosts that describe DDGI volumes that
      * way (the viewer's scene manifests). Its position is `center`.
      */
-    static fromDDGIVolume(settings: DDGIVolumeSettings): DDGIVolume {
+    static fromSettings(settings: DDGIVolumeSettings): DDGIVolume {
         const grid = probeGrid(settings);
         const [nx, ny, nz] = grid.counts;
         const [sx, sy, sz] = grid.spacing;

@@ -37,7 +37,7 @@ const choice = SCENES[sceneName];
 const renderer = await createRenderer();
 const { scene, camera, probes, title } = loadScene(choice.id, renderer, { cameraBookmark: choice.cameraBookmark });
 
-const volume = DDGIVolume.fromDDGIVolume(probes);
+const volume = DDGIVolume.fromSettings(probes);
 scene.add(volume);
 await volume.start(renderer, scene);
 

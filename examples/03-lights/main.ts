@@ -22,7 +22,7 @@ const renderer = await createRenderer();
 const { scene, camera, lights, probes } = loadScene('cornell-box-point', renderer);
 const lamp = lights[0] as THREE.PointLight;
 
-const volume = DDGIVolume.fromDDGIVolume(probes); // the box the scene suggests: probes 0.5 m apart
+const volume = DDGIVolume.fromSettings(probes); // the box the scene suggests: probes 0.5 m apart
 scene.add(volume);
 await volume.start(renderer, scene);
 

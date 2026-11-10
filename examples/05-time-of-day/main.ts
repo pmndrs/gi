@@ -41,7 +41,7 @@ for (const [geometry, material, position] of pieces) {
     scene.add(mesh);
 }
 
-const volume = DDGIVolume.fromDDGIVolume(probes);
+const volume = DDGIVolume.fromSettings(probes);
 scene.add(volume);
 await volume.start(renderer, scene, { ddgi: { sunLayer: true } });
 

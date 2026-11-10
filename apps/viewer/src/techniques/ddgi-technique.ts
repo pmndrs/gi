@@ -312,7 +312,7 @@ export class DdgiTechnique extends ScenePassTechnique {
         // The base class chose layers before the settings existed; choose again with them.
         this.applyLayers();
         const { manifest } = context.loaded;
-        this.volume = DDGIVolume.fromDDGIVolume({ center: manifest.volume.center, size: manifest.volume.size, spacing: manifest.volume.probeSpacing });
+        this.volume = DDGIVolume.fromSettings({ center: manifest.volume.center, size: manifest.volume.size, spacing: manifest.volume.probeSpacing });
         // Only DDGI's camera sees the volume (a light in three's terms), as its GI light.
         this.volume.layers.set(LAYER_DDGI);
         let created: () => void = () => {};

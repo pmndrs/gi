@@ -24,7 +24,7 @@ import { showStats } from '../shared/stats.ts';
 const renderer = await createRenderer();
 const { scene, camera, probes } = loadScene('cornell-box-point', renderer);
 
-const volume = DDGIVolume.fromDDGIVolume(probes);
+const volume = DDGIVolume.fromSettings(probes);
 scene.add(volume);
 await volume.start(renderer, scene);
 

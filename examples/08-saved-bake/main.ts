@@ -67,7 +67,7 @@ const stateLine = document.getElementById('bake-state') as HTMLElement;
 const renderer = await createRenderer();
 const { scene, camera, probes } = loadScene('two-room', renderer, { cameraBookmark: 1, exposureEv: -1 });
 
-let volume = DDGIVolume.fromDDGIVolume(probes);
+let volume = DDGIVolume.fromSettings(probes);
 scene.add(volume);
 const saved = await readBake();
 const startedAt = performance.now();
@@ -79,7 +79,7 @@ try {
     await forgetBake();
     volume.dispose();
     scene.remove(volume);
-    volume = DDGIVolume.fromDDGIVolume(probes);
+    volume = DDGIVolume.fromSettings(probes);
     scene.add(volume);
     await volume.start(renderer, scene);
 }

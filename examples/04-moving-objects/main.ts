@@ -36,7 +36,7 @@ box.castShadow = true;
 box.receiveShadow = true;
 scene.add(box);
 
-const volume = DDGIVolume.fromDDGIVolume(probes);
+const volume = DDGIVolume.fromSettings(probes);
 scene.add(volume);
 await volume.start(renderer, scene);
 

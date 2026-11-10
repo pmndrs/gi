@@ -25,7 +25,7 @@ import { IrradianceAtlas, ProbeDots, ScreenDebugMaterial, ShadingResources } fro
 const renderer = await createRenderer();
 const { scene, camera, probes } = loadScene('two-room', renderer, { cameraBookmark: 0, exposureEv: -1 });
 
-const volume = DDGIVolume.fromDDGIVolume(probes);
+const volume = DDGIVolume.fromSettings(probes);
 scene.add(volume);
 await volume.start(renderer, scene);
 

@@ -37,7 +37,7 @@ export interface ExampleScene {
     readonly lights: THREE.Light[];
     /** three's `SkyMesh` for a scene under the sky, or null indoors. */
     readonly sky: SkyMesh | null;
-    /** The probe box the scene suggests: pass it to `DDGIVolume.fromDDGIVolume`. */
+    /** The probe box the scene suggests: pass it to `DDGIVolume.fromSettings`. */
     readonly probes: DDGIVolumeSettings;
     readonly title: string;
 }

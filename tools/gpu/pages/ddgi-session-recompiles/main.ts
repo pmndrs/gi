@@ -227,7 +227,7 @@ async function startSession(device: GPUDevice, renderer: Parameters<DDGIVolume['
     camera.position.set(...bookmark.position);
     camera.lookAt(...bookmark.target);
     camera.updateMatrixWorld();
-    const volume = DDGIVolume.fromDDGIVolume({ center: manifest.volume.center, size: manifest.volume.size, spacing: manifest.volume.probeSpacing });
+    const volume = DDGIVolume.fromSettings({ center: manifest.volume.center, size: manifest.volume.size, spacing: manifest.volume.probeSpacing });
     let started: StartedGI | null = null;
     await volume.start(renderer, loaded.scene, {
         budget: { gpuMs: BUDGET_MS },
