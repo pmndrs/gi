@@ -17,3 +17,8 @@ Thumbs.db
 __pycache__/
 /tools/emsdk/
 /bench/recordings/
+
+# Copied into the npm package at build (tools/release/package-files.ts); the root files are the ones to edit.
+/packages/ddgi/README.md
+/packages/ddgi/LICENSE
+/packages/ddgi/licenses/

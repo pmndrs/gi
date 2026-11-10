@@ -9,10 +9,12 @@
     "scripts": {
         "dev": "pnpm --filter @pmndrs/ddgi-viewer dev",
         "build": "pnpm --filter @pmndrs/ddgi build",
+        "verify:packed": "node tools/release/verify-packed.ts",
         "build:apps": "pnpm --filter @pmndrs/ddgi-viewer --filter @pmndrs/ddgi-example-hello build",
         "lint": "eslint .",
         "typecheck": "tsc --noEmit",
         "test": "vitest run",
+        "test:release": "vitest run --config tools/release/vitest.config.ts",
         "test:gpu": "node tools/gpu/run.ts",
         "device:serve": "node tools/gpu/serve-lan.ts",
         "assets:fetch": "node tools/assets/fetch.ts",
