@@ -68,11 +68,11 @@ export function castRay(origin: Vector, direction: Vector): Hit | null {
     return best;
 }
 
-/** The checker cell of a hit: its face and the 1 m squares of its two other coordinates. */
-export function checkerCell(hit: Hit): { id: string; value: number } {
+/** The checker cell of a hit: its face and the `size` m squares of its two other coordinates. */
+export function checkerCell(hit: Hit, size = 1): { id: string; value: number } {
     const axes = [0, 1, 2].filter((axis) => axis !== hit.face.axis);
-    const a = Math.floor(hit.point[axes[0]]);
-    const b = Math.floor(hit.point[axes[1]]);
+    const a = Math.floor(hit.point[axes[0]] / size);
+    const b = Math.floor(hit.point[axes[1]] / size);
     return { id: `${hit.face.id}:${a}:${b}`, value: (a + b) % 2 === 0 ? 1.0 : 0.25 };
 }
 

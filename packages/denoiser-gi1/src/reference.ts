@@ -56,8 +56,9 @@ export interface ReprojectResult {
     readonly reprojected: Uint8Array;
     /**
      * Pixels where a test sat within `margin` of its threshold (the bounds of
-     * the previous uv, the distance and normal tests, a tap's count against
-     * 1), so f32 on the GPU may decide it the other way.
+     * the previous uv, the distance and normal tests) or a tap within a tenth
+     * of `margin` pixels of a texel edge, so f32 on the GPU may decide it the
+     * other way.
      */
     readonly undecided: Uint8Array;
 }
@@ -68,8 +69,9 @@ const saturate = (x: number): number => Math.min(Math.max(x, 0), 1);
 const mix = (a: number, b: number, t: number): number => a + (b - a) * t;
 const luminance = (rgb: ArrayLike<number>): number => LUMINANCE_WEIGHTS[0] * rgb[0] + LUMINANCE_WEIGHTS[1] * rgb[1] + LUMINANCE_WEIGHTS[2] * rgb[2];
 
-/** `GIDenoiser_RemoveNaNs` (gi_denoiser.hlsl:64-92) on one value. */
+/** `GIDenoiser_RemoveNaNs` (gi_denoiser.hlsl:64-92) on one value, as D3D runs it: NaN and the infinities give 0 (register D71). */
 export function removeNaNs(value: number): number {
+    if (!Number.isFinite(value)) return 0;
     const compressed = saturate(value / (1 + value));
     return compressed / Math.max(1 - compressed, REMOVE_NANS_FLOOR);
 }
@@ -97,6 +99,7 @@ export function reprojectGI(inputs: ReprojectInputs, frame: FrameConstants, marg
     const undecided = new Uint8Array(pixels);
     const far = skyDepth(frame.reversedDepth);
     const near = (value: number, threshold: number): boolean => Math.abs(value - threshold) <= margin * Math.max(Math.abs(threshold), 1e-6);
+    const nearInteger = (value: number): boolean => Math.abs(value - Math.round(value)) <= margin * 0.1;
 
     for (let y = 0; y < height; y++) {
         for (let x = 0; x < width; x++) {
@@ -127,12 +130,13 @@ export function reprojectGI(inputs: ReprojectInputs, frame: FrameConstants, marg
                         for (let tx = -1; tx <= 1; tx++) {
                             const s = previousU + tx / width;
                             const t = previousV + ty / height;
+                            // A tap on a texel edge: f32 may floor it into the other texel.
+                            if (nearInteger(s * width) || nearInteger(t * height)) undecided[pixel] = 1;
                             const texelX = Math.min(Math.max(Math.floor(s * width), 0), width - 1);
                             const texelY = Math.min(Math.max(Math.floor(t * height), 0), height - 1);
                             const tap = texelY * width + texelX;
                             const c = inputs.previousColor.subarray(tap * 4, tap * 4 + 4);
                             const previousNormal = inputs.previousNormal.subarray(tap * 4, tap * 4 + 3);
-                            if (near(c[3], 1)) undecided[pixel] = 1;
                             if (c[3] < 1 || dot3(previousNormal, previousNormal) === 0) continue;
                             const previousWorld = transformPointProjection(s, t, inputs.previousDepth[tap], frame.previousInverseViewProjection);
                             const distance = Math.hypot(world[0] - previousWorld[0], world[1] - previousWorld[1], world[2] - previousWorld[2]);

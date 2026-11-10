@@ -41,6 +41,9 @@ describe('the CPU reference', () => {
         // Between -1 and 0 the saturate takes it to 0 (below -1 it would read 1e4; no input is negative).
         expect(removeNaNs(-0.5)).toBe(0);
         expect(removeNaNs(1e6)).toBeLessThan(1e4);
+        // As on D3D, whose saturate takes NaN to 0 (register D71).
+        expect(removeNaNs(Number.NaN)).toBe(0);
+        expect(removeNaNs(Number.POSITIVE_INFINITY)).toBe(0);
     });
 
     it('turns the mask into Capsaicin\'s radius: at least 1 above 0, rounded, 0 at or below 0', () => {

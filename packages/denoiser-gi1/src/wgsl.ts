@@ -49,7 +49,7 @@
  * register (webgpu-ddgi `docs/design/radiance-cache.md`, D65 onwards):
  * texture formats (D65), the input in its own texture (D66), sky by depth
  * (D67), the guides kept here (D68), points relative to the eye (D69),
- * linear depth from the rebuilt point (D70), NaN removal as written (D71),
+ * linear depth from the rebuilt point (D70), NaN removal by the bits (D71),
  * a point sampler's texel by hand (D72).
  */
 
@@ -175,17 +175,26 @@ fn giTransformPointProjection(uv: vec2f, depth: f32, inverseViewProjection: mat4
 `;
 
 const REMOVE_NANS_WGSL = /* wgsl */ `
+// D3D's saturate takes NaN to 0, so on D3D Capsaicin's formula turns NaN and both infinities into 0
+// (inf / (1 + inf) is NaN there too). WGSL's saturate doesn't promise that, and on the Apple M5 a NaN
+// came through (radiance-cache-denoiser check 4), so the non-finite case is told by its bits,
+// which no float assumption can fold away (register D71).
+fn giIsFinite(value: f32) -> bool {
+    return (bitcast<u32>(value) & 0x7f800000u) != 0x7f800000u;
+}
+
 // GIDenoiser_RemoveNaNs (gi_denoiser.hlsl:64-92): x / (1 + x), saturated, mapped back. The identity
-// on finite values up to about 1e4, which it caps; on D3D it also turns NaN into 0, which WGSL
-// doesn't promise (register D71).
+// on finite values up to about 1e4, which it caps; 0 for NaN and the infinities, as on D3D.
 fn giRemoveNaNs(color: f32) -> f32 {
+    if (!giIsFinite(color)) {
+        return 0.0;
+    }
     let compressed = saturate(color / (1.0 + color));
     return compressed / max(1.0 - compressed, ${REMOVE_NANS_FLOOR});
 }
 
 fn giRemoveNaNs4(color: vec4f) -> vec4f {
-    let compressed = saturate(color / (1.0 + color));
-    return compressed / max(1.0 - compressed, vec4f(${REMOVE_NANS_FLOOR}));
+    return vec4f(giRemoveNaNs(color.x), giRemoveNaNs(color.y), giRemoveNaNs(color.z), giRemoveNaNs(color.w));
 }
 `;
 

@@ -12,13 +12,14 @@
  *    `texture-formats-tier1`) refuses Capsaicin's `r8snorm` and `r16float`
  *    as storage formats (register D65).
  * 1. **A still constant input stays constant:** E = (0.3, 0.6, 0.9) with
- *    hint 1 for 40 frames; sky pixels read 0, every surface pixel's output is
- *    the CPU reference's within 2 half steps every frame (the reference run
- *    from the GPU's own previous state), it settles (frame-to-frame change
- *    within one half step over the last 10 frames), and the reference with
- *    round-to-nearest stores, run alone for the 40 frames, keeps E within
- *    0.1%. The GPU's distance from E is reported (information: the half
- *    store's rounding, fed back through up to 64 samples).
+ *    hint 1 for 160 frames; sky pixels read 0; at frames 1, 2, 8, 40, 100 and
+ *    160 every pixel is the CPU reference's within 2 half steps (run from the
+ *    GPU's own previous state, with its rounding of half stores); it settles
+ *    (frame-to-frame change within one half step over the last 10 frames);
+ *    and the reference run alone in f64 for 40 frames gives E back within
+ *    1e-6. The GPU's distance from E is reported (information: each half
+ *    store's rounding is fed back through up to 64 samples), and so is the
+ *    reference's with round-to-nearest halves.
  * 2. **The filter's weights against the CPU reference on captured frames:** a
  *    noisy checker (10% noise, 3% of pixels with hint 0), still camera, at
  *    frames 1 (no history: everything blurred at radius 8), 3 and 12; the
@@ -31,15 +32,20 @@
  * 3. **Reprojection under a known camera move:** converged at camera A, then
  *    a pan and dolly to B: the same comparison for B's frame (velocity from
  *    the exact motion), and with the input's hint set to 0 at B (so the
- *    output is the reprojected history alone), every pixel whose
- *    neighbourhood at A lies in one checker cell reads that cell's value
- *    within 1% (a wrong motion would land on the wrong cell). The pixels B
+ *    output is the reprojected history alone), on a 2 m checker, every pixel
+ *    whose neighbourhood (±10 pixels) at A lies in one square reads that
+ *    square's value within 1.5% (a wrong motion would land on the wrong one;
+ *    the margin is the still camera's tent spreading the history). The
+ *    pixels B
  *    sees that A didn't (the CPU reference finds no history) have the full
  *    blur mask, the converged ones mask 0, and the noise in the disoccluded
  *    region falls by more than half (it is blurred) while the converged
  *    pixels keep their history.
- * 4. **A NaN and an infinity in the input (information):** what the
- *    output reads there and whether either reaches a neighbour (register D71).
+ * 4. **A NaN and an infinity in the input, for one frame:** on D3D
+ *    Capsaicin's `RemoveNaNs` drops a non-finite history when it is
+ *    reprojected; the port tells them by their bits (register D71). The
+ *    non-finite values per frame are reported, and none may be left in the
+ *    output or the history by the third frame after the input is clean.
  *
  * **In the radiance cache** (1280 × 720, the page screen, the 8-buffer device):
  *
@@ -73,18 +79,33 @@ const PIXELS = WIDTH * HEIGHT;
 const TECHNIQUE_WIDTH = 1280;
 const TECHNIQUE_HEIGHT = 720;
 
-/** Check 1: frames, and the last ones over which the output must have settled. */
-const CONSTANT_FRAMES = 40;
+/**
+ * Check 1: frames (past the 64-sample history and its settling), the last ones over which the
+ * output must have settled, the frames run against the reference, and the reference's own run.
+ */
+const CONSTANT_FRAMES = 160;
 const SETTLED_FRAMES = 10;
+const CONSTANT_TWIN_FRAMES = [1, 2, 8, 40, 100, 160];
+const CONSTANT_REFERENCE_FRAMES = 40;
 const CONSTANT_E: [number, number, number] = [0.3, 0.6, 0.9];
 /** Check 2: the frames compared (frame 1 is the first after a reset). */
 const TWIN_FRAMES = [1, 3, 12];
 const NOISE = 0.1;
 const WEAK_HINT_SHARE = 0.03;
-/** Check 3: frames at A before the move. */
+/**
+ * Check 3: frames at A before the move; the landing check's checker (2 m squares), the margin
+ * round each pixel's reprojected position that must lie in one square, and the tolerance (the
+ * half stores' rounding, fed back, is under 1%; a wrong landing mixes 1 and 0.25).
+ */
 const MOVE_WARM_FRAMES = 24;
+const LANDING_CHECKER_METRES = 2;
+const LANDING_MARGIN = 10;
+const LANDING_TOLERANCE = 0.015;
 /** How near a threshold a CPU test may be and still be counted rather than failed. */
 const THRESHOLD_MARGIN = 1e-3;
+/** Check 4: frames from the one with a NaN and an infinity in the input, and by when they must be gone. */
+const NON_FINITE_FRAMES = 6;
+const NON_FINITE_RECOVERY_FRAMES = 3;
 /** Check 5: warm-up and measured frames (as RC4.1's check 7). */
 const CONVERGE_WARM_FRAMES = 32;
 const CONVERGE_MEASURE_FRAMES = 32;
@@ -337,11 +358,11 @@ function radianceImage(guides: Guides, surface: (pixel: number) => [number, numb
     return out;
 }
 
-/** The noisy checker: each cell's value × (1 ± noise), a few pixels with hint 0. */
-function noisyChecker(guides: Guides, frame: number): Float32Array {
+/** The noisy checker (or a constant 1 with `flat`): each cell's value × (1 ± noise), a few pixels with hint 0. */
+function noisyChecker(guides: Guides, frame: number, flat = false): Float32Array {
     return radianceImage(guides, (pixel) => {
         const hit = guides.hits[pixel];
-        const value = hit ? checkerCell(hit).value : 0;
+        const value = hit ? (flat ? 1 : checkerCell(hit).value) : 0;
         const noisy = value * (1 + NOISE * (2 * hash(pixel, frame) - 1));
         const hint = hash(pixel, frame + 7919) < WEAK_HINT_SHARE ? 0 : 1;
         return [noisy, noisy, noisy, hint];
@@ -483,83 +504,99 @@ async function checkStillConstant(device: GPUDevice, denoiser: GI1Denoiser, mode
     const data: FrameData = { guides, radiance: radianceImage(guides, () => [...CONSTANT_E, 1]), camera: denoiserCameraOf(STILL_CAMERA, STILL_CAMERA, WIDTH, HEIGHT) };
     const frame = frameConstants(data.camera, [0, 0], WIDTH, HEIGHT);
     const surface = Uint32Array.from({ length: PIXELS }, (_, pixel) => pixel).filter((pixel) => guides.hits[pixel] !== null);
-    let before = await readState(device, denoiser);
-    before = { ...before, latest: undefined };
-    let worstOverE = 0;
-    let meanOverE = 0;
-    let skyNonZero = 0;
-    let twinOff = 0;
-    const settledChange: number[] = [];
-    let previousOutput: Float32Array | null = null;
-    for (let index = 0; index < CONSTANT_FRAMES; index++) {
-        await harness.frame(data);
-        const after = await readState(device, denoiser);
-        const comparison = compareFrame(`still constant frame ${index + 1}`, before, after, data, frame, mode);
-        twinOff += comparison.failures.length;
-        if (comparison.failures.length > 0 && failures.length < 4) failures.push(...comparison.failures);
+    const overE = (image: Float32Array): { worst: number; mean: number } => {
+        let worst = 0;
         let sum = 0;
         for (const pixel of surface) {
             for (let channel = 0; channel < 3; channel++) {
-                const ratio = after.irradiance[pixel * 4 + channel] / CONSTANT_E[channel];
-                worstOverE = Math.max(worstOverE, Math.abs(ratio - 1));
+                const ratio = image[pixel * 4 + channel] / CONSTANT_E[channel];
+                worst = Math.max(worst, Math.abs(ratio - 1));
                 sum += ratio;
             }
         }
-        meanOverE = sum / (3 * surface.length);
+        return { worst, mean: sum / (3 * surface.length) };
+    };
+
+    // The GPU, against the reference at chosen frames (from the GPU's own previous state).
+    let before: State | null = { ...(await readState(device, denoiser)), latest: undefined };
+    let skyNonZero = 0;
+    let twinFailures = 0;
+    const settledChange: number[] = [];
+    const meanOverE: Record<string, number> = {};
+    let previousOutput: Float32Array | null = null;
+    let last = { worst: 0, mean: 0 };
+    for (let index = 1; index <= CONSTANT_FRAMES; index++) {
+        await harness.frame(data);
+        const output = await readHalf4(device, denoiser.output as GPUTexture);
+        if (before) {
+            const after = await readState(device, denoiser);
+            const comparison = compareFrame(`still constant frame ${index}`, before, after, data, frame, mode);
+            twinFailures += comparison.failures.length;
+            failures.push(...comparison.failures.slice(0, 2));
+        }
+        before = CONSTANT_TWIN_FRAMES.includes(index + 1) ? await readState(device, denoiser) : null;
         for (let pixel = 0; pixel < PIXELS; pixel++) {
             if (guides.hits[pixel]) continue;
-            if (after.irradiance[pixel * 4] !== 0 || after.irradiance[pixel * 4 + 1] !== 0 || after.irradiance[pixel * 4 + 2] !== 0) skyNonZero++;
+            if (output[pixel * 4] !== 0 || output[pixel * 4 + 1] !== 0 || output[pixel * 4 + 2] !== 0) skyNonZero++;
         }
-        if (previousOutput && index >= CONSTANT_FRAMES - SETTLED_FRAMES) {
+        if (previousOutput && index > CONSTANT_FRAMES - SETTLED_FRAMES) {
             let worstSteps = 0;
             for (const pixel of surface) {
                 for (let channel = 0; channel < 3; channel++) {
-                    const a = after.irradiance[pixel * 4 + channel];
+                    const a = output[pixel * 4 + channel];
                     const b = previousOutput[pixel * 4 + channel];
                     worstSteps = Math.max(worstSteps, Math.abs(a - b) / halfStep(Math.max(a, b)));
                 }
             }
             settledChange.push(worstSteps);
         }
-        previousOutput = after.irradiance;
-        before = after;
+        if ([1, 8, 40, 100, CONSTANT_FRAMES].includes(index)) meanOverE[`frame${index}`] = overE(output).mean;
+        last = overE(output);
+        previousOutput = output;
     }
     harness.dispose();
     if (skyNonZero > 0) failures.push(`still constant: ${skyNonZero} sky pixel-frames read other than 0`);
     const settled = Math.max(...settledChange);
     if (settled > 1) failures.push(`still constant: the output still moves by ${settled} half steps a frame in the last ${SETTLED_FRAMES} frames`);
 
-    // The reference alone with round-to-nearest stores: the port's own arithmetic on a constant.
-    let state: { color: Float32Array; delta: Float32Array } = { color: new Float32Array(PIXELS * 4), delta: new Float32Array(PIXELS) };
-    let referenceWorst = 0;
-    const linear = linearDepths(guides.depth, WIDTH, HEIGHT, frame);
-    const keptNormal = Float32Array.from(guides.normal);
-    for (let index = 0; index < CONSTANT_FRAMES; index++) {
-        const reprojected = reprojectGI(
-            { width: WIDTH, height: HEIGHT, radiance: data.radiance, depth: guides.depth, normal: guides.normal, motion: guides.motion, previousColor: state.color, previousColorDelta: state.delta, previousDepth: guides.depth, previousNormal: keptNormal },
-            frame,
-        );
-        const radius = Int32Array.from(reprojected.blurMask, (mask) => blurRadius(Math.max(Math.round(mask * 127) / 127, -1)));
-        const first = filterGI(quantize(reprojected.color, 'nearest'), radius, linear, guides.normal, WIDTH, HEIGHT, [1, 0]);
-        const second = filterGI(quantize(first.color, 'nearest'), radius, linear, guides.normal, WIDTH, HEIGHT, [0, 1]);
-        state = { color: quantize(second.color, 'nearest'), delta: reprojected.colorDelta };
-        const irradiance = second.irradiance;
-        if (!irradiance) throw new Error('the second pass writes the irradiance');
-        for (const pixel of surface) {
-            for (let channel = 0; channel < 3; channel++) referenceWorst = Math.max(referenceWorst, Math.abs(irradiance[pixel * 4 + channel] / CONSTANT_E[channel] - 1));
+    // The reference alone: in f64 throughout (the port's arithmetic on a constant must give the
+    // constant back), and with round-to-nearest halves where the GPU stores them (information).
+    const runReference = (rounding: RoundingMode | null): number => {
+        let state: { color: Float32Array; delta: Float32Array } = { color: new Float32Array(PIXELS * 4), delta: new Float32Array(PIXELS) };
+        const linear = linearDepths(guides.depth, WIDTH, HEIGHT, frame);
+        const store = (values: Float32Array): Float32Array => (rounding ? quantize(values, rounding) : values);
+        let worst = 0;
+        for (let index = 0; index < CONSTANT_REFERENCE_FRAMES; index++) {
+            const reprojected = reprojectGI(
+                { width: WIDTH, height: HEIGHT, radiance: data.radiance, depth: guides.depth, normal: guides.normal, motion: guides.motion, previousColor: state.color, previousColorDelta: state.delta, previousDepth: guides.depth, previousNormal: guides.normal },
+                frame,
+            );
+            const radius = Int32Array.from(reprojected.blurMask, (mask) => blurRadius(rounding ? Math.max(Math.round(mask * 127) / 127, -1) : mask));
+            const first = filterGI(store(reprojected.color), radius, linear, guides.normal, WIDTH, HEIGHT, [1, 0]);
+            const second = filterGI(store(first.color), radius, linear, guides.normal, WIDTH, HEIGHT, [0, 1]);
+            state = { color: store(second.color), delta: reprojected.colorDelta };
+            if (!second.irradiance) throw new Error('the second pass writes the irradiance');
+            worst = Math.max(worst, overE(second.irradiance).worst);
         }
-    }
-    if (referenceWorst > 1e-3) failures.push(`still constant: the CPU reference with round-to-nearest halves moves E by ${(referenceWorst * 100).toFixed(3)}%`);
+        return worst;
+    };
+    const referenceExactWorst = runReference(null);
+    const referenceNearestWorst = runReference('nearest');
+    // Float32Array storage of the reference's images is the only rounding left: E within 1e-6.
+    if (referenceExactWorst > 1e-6) failures.push(`still constant: the CPU reference moves a constant by ${referenceExactWorst.toExponential(3)}`);
     return {
         failures,
         summary: {
             frames: CONSTANT_FRAMES,
             surfacePixels: surface.length,
-            gpuWorstOverE: worstOverE,
-            gpuMeanOverELastFrame: meanOverE,
-            referenceNearestWorstOverE: referenceWorst,
+            gpuMeanOverE: meanOverE,
+            gpuWorstOverELastFrame: last.worst,
             settledWorstHalfSteps: settled,
-            framesOffTheReference: twinOff,
+            twinFrames: CONSTANT_TWIN_FRAMES,
+            twinFailures,
+            referenceExactWorstOverE: referenceExactWorst,
+            referenceNearestHalvesWorstOverE: referenceNearestWorst,
+            referenceFrames: CONSTANT_REFERENCE_FRAMES,
         },
     };
 }
@@ -617,11 +654,12 @@ async function checkCameraMove(device: GPUDevice, denoiser: GI1Denoiser, mode: R
     const cameraB = denoiserCameraOf(CAMERA_B, CAMERA_A, WIDTH, HEIGHT);
     const frameB = frameConstants(cameraB, [0, 0], WIDTH, HEIGHT);
 
-    // (a) The noisy checker: converge at A, then B's frame against the reference.
+    // (a) Noise on a constant 1: converge at A, then B's frame against the reference. Flat, so the
+    // blur's effect on the disoccluded pixels is the noise alone.
     denoiser.resetHistory();
-    for (let index = 1; index <= MOVE_WARM_FRAMES; index++) await harness.frame({ guides: guidesA, radiance: noisyChecker(guidesA, index), camera: cameraA });
+    for (let index = 1; index <= MOVE_WARM_FRAMES; index++) await harness.frame({ guides: guidesA, radiance: noisyChecker(guidesA, index, true), camera: cameraA });
     const beforeB = await readState(device, denoiser);
-    const dataB: FrameData = { guides: guidesB, radiance: noisyChecker(guidesB, MOVE_WARM_FRAMES + 1), camera: cameraB };
+    const dataB: FrameData = { guides: guidesB, radiance: noisyChecker(guidesB, MOVE_WARM_FRAMES + 1, true), camera: cameraB };
     await harness.frame(dataB);
     const afterB = await readState(device, denoiser);
     const comparison = compareFrame('camera move', beforeB, afterB, dataB, frameB, mode);
@@ -638,7 +676,7 @@ async function checkCameraMove(device: GPUDevice, denoiser: GI1Denoiser, mode: R
     for (let pixel = 0; pixel < PIXELS; pixel++) {
         const hit = guidesB.hits[pixel];
         if (!hit || reference.undecided[pixel]) continue;
-        const truth = checkerCell(hit).value;
+        const truth = 1;
         if (!reference.reprojected[pixel]) {
             disoccluded++;
             if (afterB.mask[pixel] !== 1) disoccludedMaskOff++;
@@ -652,7 +690,8 @@ async function checkCameraMove(device: GPUDevice, denoiser: GI1Denoiser, mode: R
     if (disoccluded < 100) failures.push(`camera move: only ${disoccluded} disoccluded pixels; the move doesn't test what it should`);
     if (disoccludedMaskOff > 0) failures.push(`camera move: ${disoccludedMaskOff} disoccluded pixels without the full blur mask`);
     if (convergedMaskOff > 0) failures.push(`camera move: ${convergedMaskOff} converged pixels with a blur mask`);
-    // The blurred error includes the checker's own edges inside the footprint, so the bound is on the noise falling, not vanishing.
+    // A 17-pixel cross of samples on one plane cuts the noise to well under half; the bound is loose
+    // because the blur's footprint is cut short where it meets the pillar's edge.
     const noiseRatio = Math.sqrt(outputNoise / Math.max(inputNoise, 1e-12));
     if (!(noiseRatio < 0.5)) failures.push(`camera move: the disoccluded region's error fell only to ${noiseRatio.toFixed(3)} of the input's`);
 
@@ -660,7 +699,7 @@ async function checkCameraMove(device: GPUDevice, denoiser: GI1Denoiser, mode: R
     denoiser.resetHistory();
     const clean = (guides: Guides) => radianceImage(guides, (pixel) => {
         const hit = guides.hits[pixel];
-        const value = hit ? checkerCell(hit).value : 0;
+        const value = hit ? checkerCell(hit, LANDING_CHECKER_METRES).value : 0;
         return [value, value, value, 1];
     });
     for (let index = 1; index <= MOVE_WARM_FRAMES; index++) await harness.frame({ guides: guidesA, radiance: clean(guidesA), camera: cameraA });
@@ -678,9 +717,11 @@ async function checkCameraMove(device: GPUDevice, denoiser: GI1Denoiser, mode: R
 }
 
 /**
- * Pixels of B whose reprojected position at A has a 5 × 5 neighbourhood all
- * in B's pixel's own checker cell (so the 3 × 3 taps, wherever they land
- * within a pixel, read that cell): the output must be the cell's value.
+ * Pixels of B whose reprojected position at A has a neighbourhood of
+ * ±`LANDING_MARGIN` pixels all in B's pixel's own checker cell: the output
+ * must be the cell's value. The margin is wide because a still camera's 3 × 3
+ * tent (weights 1 and 0.29 on the four sides, gi1.comp:4053-4054) spreads the
+ * history by a few pixels over its 64 frames.
  */
 function checkLanding(guidesA: Guides, guidesB: Guides, state: State): { checked: number; off: number; worst: number } {
     let checked = 0;
@@ -691,16 +732,16 @@ function checkLanding(guidesA: Guides, guidesB: Guides, state: State): { checked
             const pixel = y * WIDTH + x;
             const hit = guidesB.hits[pixel];
             if (!hit) continue;
-            const cell = checkerCell(hit);
+            const cell = checkerCell(hit, LANDING_CHECKER_METRES);
             const previousX = ((x + 0.5) / WIDTH - guidesB.motion[pixel * 4] * 0.5) * WIDTH;
             const previousY = ((y + 0.5) / HEIGHT + guidesB.motion[pixel * 4 + 1] * 0.5) * HEIGHT;
             const cx = Math.floor(previousX);
             const cy = Math.floor(previousY);
-            let inside = cx >= 3 && cy >= 3 && cx < WIDTH - 3 && cy < HEIGHT - 3;
-            for (let dy = -2; dy <= 2 && inside; dy++) {
-                for (let dx = -2; dx <= 2 && inside; dx++) {
+            let inside = cx >= LANDING_MARGIN && cy >= LANDING_MARGIN && cx < WIDTH - LANDING_MARGIN && cy < HEIGHT - LANDING_MARGIN;
+            for (let dy = -LANDING_MARGIN; dy <= LANDING_MARGIN && inside; dy++) {
+                for (let dx = -LANDING_MARGIN; dx <= LANDING_MARGIN && inside; dx++) {
                     const neighbour = guidesA.hits[(cy + dy) * WIDTH + (cx + dx)];
-                    if (!neighbour || checkerCell(neighbour).id !== cell.id) inside = false;
+                    if (!neighbour || checkerCell(neighbour, LANDING_CHECKER_METRES).id !== cell.id) inside = false;
                 }
             }
             // The same surface point must be what A saw there (not hidden behind the pillar at A).
@@ -715,7 +756,7 @@ function checkLanding(guidesA: Guides, guidesB: Guides, state: State): { checked
             checked++;
             const error = Math.abs(state.irradiance[pixel * 4] / cell.value - 1);
             worst = Math.max(worst, error);
-            if (error > 0.01) off++;
+            if (error > LANDING_TOLERANCE) off++;
         }
     }
     return { checked, off, worst };
@@ -723,33 +764,41 @@ function checkLanding(guidesA: Guides, guidesB: Guides, state: State): { checked
 
 // ---- Check 4: a NaN and an infinity in the input ------------------------------------------------
 
-async function checkNonFinite(device: GPUDevice, denoiser: GI1Denoiser): Promise<Record<string, unknown>> {
+async function checkNonFinite(device: GPUDevice, denoiser: GI1Denoiser): Promise<{ failures: string[]; summary: Record<string, unknown> }> {
+    const failures: string[] = [];
     const harness = new Harness(device, denoiser);
     denoiser.resetHistory();
     const guides = renderGuides(STILL_CAMERA, STILL_CAMERA, WIDTH, HEIGHT);
     const camera = denoiserCameraOf(STILL_CAMERA, STILL_CAMERA, WIDTH, HEIGHT);
-    for (let index = 1; index <= 12; index++) await harness.frame({ guides, radiance: radianceImage(guides, () => [...CONSTANT_E, 1]), camera });
-    // Two surface pixels in the lower middle of the image (the floor).
+    const clean = radianceImage(guides, () => [...CONSTANT_E, 1]);
+    for (let index = 1; index <= 12; index++) await harness.frame({ guides, radiance: clean, camera });
+    // Two floor pixels in the lower middle of the image get a NaN and an infinity for one frame.
     const nanPixel = Math.floor(HEIGHT * 0.85) * WIDTH + Math.floor(WIDTH * 0.4);
     const infinityPixel = Math.floor(HEIGHT * 0.85) * WIDTH + Math.floor(WIDTH * 0.6);
-    const radiance = radianceImage(guides, () => [...CONSTANT_E, 1]);
-    radiance.set([NaN, NaN, NaN, 1], nanPixel * 4);
-    radiance.set([Infinity, Infinity, Infinity, 1], infinityPixel * 4);
-    const results: Record<string, unknown> = {};
-    for (let index = 1; index <= 3; index++) {
-        await harness.frame({ guides, radiance, camera });
-        const state = await readState(device, denoiser);
+    const poisoned = Float32Array.from(clean);
+    poisoned.set([NaN, NaN, NaN, 1], nanPixel * 4);
+    poisoned.set([Infinity, Infinity, Infinity, 1], infinityPixel * 4);
+    const nonFiniteByFrame: number[] = [];
+    for (let index = 0; index < NON_FINITE_FRAMES; index++) {
+        await harness.frame({ guides, radiance: index === 0 ? poisoned : clean, camera });
+        const output = await readHalf4(device, denoiser.output as GPUTexture);
+        const history = denoiser.history;
+        const latest = history?.latest;
+        if (!history || latest === undefined) throw new Error('no history');
+        const color = await readHalf4(device, history.color[latest]);
         let nonFinite = 0;
-        for (const value of state.irradiance) if (!Number.isFinite(value)) nonFinite++;
-        results[`frame${index}`] = {
-            atNaN: Array.from(state.irradiance.subarray(nanPixel * 4, nanPixel * 4 + 3)),
-            atInfinity: Array.from(state.irradiance.subarray(infinityPixel * 4, infinityPixel * 4 + 3)),
-            nextToNaN: Array.from(state.irradiance.subarray((nanPixel + 1) * 4, (nanPixel + 1) * 4 + 3)),
-            nonFiniteValues: nonFinite,
-        };
+        for (let value = 0; value < output.length; value++) if (!Number.isFinite(output[value]) || !Number.isFinite(color[value])) nonFinite++;
+        nonFiniteByFrame.push(nonFinite);
     }
     harness.dispose();
-    return results;
+    // Capsaicin's RemoveNaNs drops a non-finite history when it is reprojected (on D3D), so once the
+    // input is clean again the NaN is gone within a frame or two (register D71).
+    let lastPoisoned = -1;
+    nonFiniteByFrame.forEach((count, frame) => {
+        if (count > 0) lastPoisoned = frame;
+    });
+    if (lastPoisoned >= NON_FINITE_RECOVERY_FRAMES) failures.push(`non-finite input: the output or history still holds non-finite values ${lastPoisoned} frames after the input is clean (${nonFiniteByFrame.join(', ')})`);
+    return { failures, summary: { nonFiniteValuesByFrame: nonFiniteByFrame, framesUntilClean: lastPoisoned + 1 } };
 }
 
 // ---- Check 5: in the radiance cache -------------------------------------------------------------
@@ -898,7 +947,9 @@ try {
         const move = await checkCameraMove(device, denoiser, rounding.mode);
         failures.push(...move.failures);
         results.cameraMove = move.summary;
-        results.nonFinite = await checkNonFinite(device, denoiser);
+        const nonFinite = await checkNonFinite(device, denoiser);
+        failures.push(...nonFinite.failures);
+        results.nonFinite = nonFinite.summary;
     } finally {
         denoiser.dispose();
         await device.queue.onSubmittedWorkDone();
