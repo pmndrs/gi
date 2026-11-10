@@ -1,9 +1,14 @@
 /**
  * RC2.2: the radiance cache's first image through the three adapter, beside
  * DDGI's, on `cornell-box`, `two-room` and `sponza` (with curtains) from each
- * scene's first bookmark at 1280 × 720, single bounce: the probe rays' hits
- * are lit through the world cache (RC3.2), which holds one bounce until
- * GI-1.2's multi-bounce cells (RC3.3).
+ * scene's first bookmark at 1280 × 720. The checks and the like-for-like
+ * comparisons run the radiance cache single bounce (`useMultibounce` off,
+ * Capsaicin's single-bounce path; lead's decision at RC3.3's review): the
+ * probe rays' hits are lit through the world cache with one bounce, as
+ * one-bounce DDGI and the one-bounce reference are. Then, as information
+ * only (no gate), the same scene with GI-1.2's multi-bounce cells on (RC3.3,
+ * Capsaicin's default): its GI term against one-bounce DDGI and its probe
+ * rays against the one-bounce reference.
  *
  * One platform per scene, the viewer's loader and `ThreeGI` (the shared
  * composite harness), with DDGI as the output technique (warmed for 120
@@ -37,9 +42,10 @@
  * check at grazing angles (one-bounce-reference.ts).
  *
  * The contact sheet the runner's screenshot captures: per scene, DDGI (all
- * bounces), DDGI (one bounce), the radiance cache, the radiance cache's
- * E / π (what a white surface would reflect) and its SH debug view, at the
- * same exposure (from one-bounce DDGI's mean).
+ * bounces), DDGI (one bounce), the radiance cache (one bounce), the radiance
+ * cache's E / π (what a white surface would reflect), its SH debug view and
+ * the radiance cache with the multibounce, at the same exposure (from
+ * one-bounce DDGI's mean).
  *
  * Correctness only (DECISIONS 2026-11-09). Through the lock:
  * `node tools/reference/bench-lock.ts run --no-cool-wait --what "rc2.2 three" -- pnpm test:gpu --filter radiance-cache-three --gpu nvidia --out bench/screenshots/rc2.2`.
@@ -85,6 +91,8 @@ interface SceneResult {
     readonly radianceCacheGiLuminance: number;
     /** Radiance cache over one-bounce DDGI, GI term only. */
     readonly giLuminanceRatio: number;
+    /** Information only (RC3.3): the same with the multibounce on. */
+    readonly multibounce: { readonly giLuminanceRatio: number; readonly raysOverReference: number; readonly pixelOverReference: number };
     readonly ddgiAllBouncesGiLuminance: number;
     /** At a sample of the probes, each estimate of E against a path-traced one-bounce reference (one-bounce-reference.ts). */
     readonly atProbes: ProbeComparison;
@@ -190,8 +198,8 @@ async function renderAllBouncesDdgi(context: ThreePageContext, sceneId: string):
 async function renderScene(context: ThreePageContext, sceneId: string, sheet: HTMLElement): Promise<SceneResult> {
     const { device, renderer, log } = context;
     const allBounces = await renderAllBouncesDdgi(context, sceneId);
-    const radianceCache = new RadianceCacheTechnique();
-    // One bounce in DDGI (file comment): like for like with the radiance cache before RC3.3.
+    // One bounce in both (file comment): the radiance cache without its multibounce, DDGI with bounceEnergy 0.
+    const radianceCache = new RadianceCacheTechnique({ useMultibounce: false });
     const scene = await loadCompositeScene(device, sceneId, {
         ...SIZE,
         giFrames: GI_FRAMES,
@@ -298,6 +306,24 @@ async function renderScene(context: ThreePageContext, sceneId: string, sheet: HT
                 `(ratio ${(radianceCacheGiLuminance / ddgiOneBounceGiLuminance).toFixed(3)}), DDGI all bounces ${ddgiAllBouncesGiLuminance.toPrecision(4)}`,
         );
 
+        // Information only: the multibounce on (the cache empties when the option changes), twice the
+        // warm frames so the indirect values (a frame behind the direct ones) settle.
+        radianceCache.settings.useMultibounce = true;
+        for (let warm = 0; warm < 2 * WARM_FRAMES; warm++) await frame(rcComposite);
+        const multibouncePicture = await frame(rcComposite);
+        const multibouncePassColour = await reader.read(rcPass.getTextureNode('output') as unknown as Node, false);
+        const multibounceIrradiance = halves(await readTexture(device, probes.irradiance, 8, SIZE.width, SIZE.height));
+        const multibounceAtProbes = await compareAtProbes(device, scene, probes, screen, multibounceIrradiance, SIZE);
+        const multibounce = {
+            giLuminanceRatio: meanGiLuminance({ picture: multibouncePicture, passColour: multibouncePassColour }, surfaces) / ddgiOneBounceGiLuminance,
+            raysOverReference: multibounceAtProbes.raysOverReference,
+            pixelOverReference: multibounceAtProbes.pixelOverReference,
+        };
+        log(
+            `${sceneId}: with the multibounce (information): GI term over one-bounce DDGI ${multibounce.giLuminanceRatio.toFixed(3)}, ` +
+                `probe rays over the one-bounce reference ${multibounce.raysOverReference.toFixed(3)}`,
+        );
+
         // The contact sheet's row: one exposure for the scene, from one-bounce DDGI's picture.
         const exposure = SHEET_KEY / Math.max(ddgiMeanLuminance, 1e-6);
         const row = document.createElement('div');
@@ -316,6 +342,7 @@ async function renderScene(context: ThreePageContext, sceneId: string, sheet: HT
         const debugPixels = await readTexture(device, debugTarget, 4, SIZE.width, SIZE.height);
         debugTarget.destroy();
         addThumbnail(row, `${sceneId}: probe SH view`, new ImageData(Uint8ClampedArray.from(debugPixels), SIZE.width, SIZE.height));
+        addThumbnail(row, `${sceneId}: radiance cache (multibounce)`, toDisplay(multibouncePicture, exposure));
 
         rcLight.dispose();
         stage.dispose();
@@ -326,6 +353,7 @@ async function renderScene(context: ThreePageContext, sceneId: string, sheet: HT
             ddgiOneBounceGiLuminance,
             radianceCacheGiLuminance,
             giLuminanceRatio: radianceCacheGiLuminance / ddgiOneBounceGiLuminance,
+            multibounce,
             ddgiAllBouncesGiLuminance,
             atProbes,
             meanIrradiance: irradianceSum / Math.max(surfacePixels, 1),
