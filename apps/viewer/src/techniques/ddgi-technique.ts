@@ -180,7 +180,7 @@ export const CAMERA_VOLUME = { probes: [32, 12, 32] as const, spacing: 1.5, prio
  * The volumes DDGI starts with: the manifest's, and with `cameraVolume` the
  * camera-following one first, its window starting around `start` (the
  * scene's first camera view; it moves to wherever the camera is from the
- * first frame on).
+ * first warm-up frame on, since the warm-up runs with the viewer's camera).
  */
 export function ddgiVolumes(manifest: Pick<SceneManifest, 'volume'>, cameraVolume: boolean, start: readonly [number, number, number]): DDGIVolumeSettings[] {
     const fixed: DDGIVolumeSettings = { center: manifest.volume.center, size: manifest.volume.size, spacing: manifest.volume.probeSpacing };
@@ -320,6 +320,10 @@ export class DdgiTechnique extends ScenePassTechnique {
                 ...(this.settings.cameraVolume ? { volumes: ddgiVolumes(loaded.manifest, true, loaded.manifest.cameras[0].position) } : {}),
             },
             environment: this.environmentOverride ?? environmentFor(loaded.manifest),
+            // The warm-up runs with the viewer's camera (synced each frame, `syncCamera`), so the camera-following
+            // volume warms up where the camera is: with the default (a camera at the volume's centre) its window
+            // jumped to the viewer's camera on the first frame after the warm-up, and warmed up again (NOTES, T3.8).
+            camera: this.camera,
             warn: (message) => this.warn(message),
             label: `viewer ${loaded.manifest.id}`,
             onCreated: (started) => {
@@ -560,7 +564,7 @@ export class DdgiTechnique extends ScenePassTechnique {
         if (this.phase !== 'ready') return;
         this.warmupEndFrame = Number.POSITIVE_INFINITY;
         this.starting = this.volume
-            .restart({ budget: this.budget })
+            .restart({ budget: this.budget, camera: this.camera })
             .then(() => {
                 if (!this.disposed) this.finishStartUp();
             })

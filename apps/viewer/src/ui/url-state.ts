@@ -21,6 +21,7 @@
  * - `atlasfill`  `1`: the atlas fills the view instead of the bottom-right corner
  * - `atlasev`    extra exposure for the irradiance atlas, in stops
  * - `change`     DDGI's change-per-frame view, full colour at this many percent (`0.25`, `1` or `4`)
+ * - `gitextures` `0`: GI's rays read every texture as its average colour (default on, M4's T4.4)
  * - `groups`     DDGI light groups with a layer each: `2` or `4` (absent: off)
  * - `tod`        time of day on, at `hour,day` (sun time 0 to 24, day of the year 1 to 365); it also
  *                turns DDGI's sun layer on

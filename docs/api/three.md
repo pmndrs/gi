@@ -100,6 +100,7 @@ renderer.setAnimationLoop(() => pipeline.render());
 | `environment`, `sky` | GI's sky, as for `ThreeGI` below. |
 | `light` | Settings for the GI light. |
 | `warmUp` | `false` to skip it (GI then fills in live), or `{ passes, maxSeconds, minPasses, calibrate }`. |
+| `camera` | The camera the warm-up runs with, read each frame; default one at the volume's centre. Pass the camera you render with when `ddgi.volumes` has a camera-following volume, so its window warms up where the camera is (otherwise it jumps there afterwards and warms up again). `restart` takes it too. |
 | `warn` | Where warnings go. |
 
 If the scene needs more than the renderer's device allows, `start` throws a `GILimitError` (`ThreeGILimitError`) naming the limit. three makes its device with default limits (a 128 MiB storage binding), which large scenes such as Sponza with its curtains outgrow. The fix is to make the renderer with the platform's limits: `const { renderer } = await createGIRenderer()`, or `new WebGPURenderer({ requiredLimits: requiredLimits(adapter) })` with `requiredLimits` from `@pmndrs/ddgi/core`.

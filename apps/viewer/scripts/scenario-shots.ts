@@ -13,11 +13,12 @@
  * judges nothing else: the pictures are for looking at.
  *
  *   node apps/viewer/scripts/scenario-shots.ts
- *     [--gpu nvidia|intel]   which GPU Chrome gets (default nvidia)
+ *     [--gpu nvidia|intel]   which GPU Chrome gets, checked (default: whichever Chrome picks, unchecked, as `pnpm test:gpu`;
+ *                            on a Mac, the only one)
  *     [--only door,furniture]
  *     [--measure]            also run the response meter on each scenario's step
- *     [--sample]             print the stats box's frame time, probes updated and DDGI's GPU time once a second
- *                            while the motion plays (recorded, not judged)
+ *     [--sample]             print the stats box's frame time, probes updated and DDGI's GPU time once a second,
+ *                            for 6 s after the link's start and while the motion plays again (recorded, not judged)
  *     [--out <dir>]          default bench/screenshots/scenarios (gitignored)
  *     [--timeout <seconds>]  per scenario to get ready, default 600 (Bistro loads slowly)
  *
@@ -54,8 +55,12 @@ const SHOT_SECONDS: Record<string, readonly number[]> = {
     'fly-through': [0.8, 2.5, 5, 9, 13.5, 20, 28],
 };
 
+/** With `--sample`: seconds of stats printed after the link's start, before the scenario is chosen again. */
+const SAMPLE_AFTER_READY_SECONDS = 6;
+
 interface Options {
-    gpu: 'nvidia' | 'intel';
+    /** Null: whichever adapter Chrome picks (a Mac has one GPU). */
+    gpu: 'nvidia' | 'intel' | null;
     only: string[];
     measure: boolean;
     sample: boolean;
@@ -64,7 +69,7 @@ interface Options {
 }
 
 function parseOptions(argv: string[]): Options {
-    const options: Options = { gpu: 'nvidia', only: [], measure: false, sample: false, out: join(repoRoot, 'bench', 'screenshots', 'scenarios'), timeoutSeconds: 600 };
+    const options: Options = { gpu: null, only: [], measure: false, sample: false, out: join(repoRoot, 'bench', 'screenshots', 'scenarios'), timeoutSeconds: 600 };
     for (let i = 0; i < argv.length; i++) {
         const flag = argv[i];
         const value = (): string => {
@@ -181,7 +186,8 @@ async function main(): Promise<number> {
             return info.vendor + ' ' + info.architecture + (info.description ? ' (' + info.description + ')' : '');
         })()`);
         console.log(`adapter: ${adapter}`);
-        if (!adapter.toLowerCase().includes(options.gpu)) throw new Error(`Asked for ${options.gpu}, but Chrome gave "${adapter}".`);
+        if (adapter === 'NO WEBGPU ADAPTER') throw new Error('Chrome gave no WebGPU adapter.');
+        if (options.gpu !== null && !adapter.toLowerCase().includes(options.gpu)) throw new Error(`Asked for ${options.gpu}, but Chrome gave "${adapter}".`);
 
         await mkdir(options.out, { recursive: true });
         const state = () => client.evaluate<ViewerState | null>('window.__viewer ?? null');
@@ -224,6 +230,16 @@ async function main(): Promise<number> {
                 if (!current?.ready) throw new Error(`not ready after ${((Date.now() - started) / 1000).toFixed(0)} s`);
                 console.log(`${scenario.id}: ready after ${((Date.now() - started) / 1000).toFixed(1)} s on ${current.scene} (${current.camera}); motion ${current.motion?.id ?? 'none'}`);
                 if (current.motion?.id !== scenario.motion) run.problems.push(`the link should have started ${scenario.motion}, but ${current.motion?.id ?? 'nothing'} plays`);
+
+                if (options.sample) {
+                    // The first seconds after the link's start, before choosing again: a camera-following
+                    // volume that warmed up somewhere else would jump to the camera here (NOTES, T3.8).
+                    for (let second = 0; second < SAMPLE_AFTER_READY_SECONDS; second++) {
+                        current = await state();
+                        console.log(`    after ready, ${(current?.motion?.seconds ?? 0).toFixed(1)} s into the motion: ${await statsLine()}`);
+                        await sleep(1000);
+                    }
+                }
 
                 // From the start: choose the scenario again in the panel's list.
                 await client.evaluate(`(() => {

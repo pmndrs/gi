@@ -114,4 +114,12 @@ describe('url state', () => {
         expect(serializeUrlState(DEFAULT_URL_STATE)).toBe('');
         expect(parseUrlState('?follow=yes&wind=500&scenario=Not%20One')).toMatchObject({ followCamera: false, windStrength: 1, scenario: null });
     });
+
+    it("keeps M3's scenario keys and M4's texture keys side by side (the m34 merge)", () => {
+        const state = parseUrlState('?scenario=fly-through&follow=camera&wind=30&gitextures=0&textures=uncompressed');
+        expect(state).toMatchObject({ scenario: 'fly-through', followCamera: true, windStrength: 0.3, giTextures: false, textures: 'uncompressed', sceneSettings: {} });
+        expect(parseUrlState(serializeUrlState(state))).toEqual(state);
+        // A scenario link alone keeps M4's defaults: GI reads textures, every texture compressed.
+        expect(parseUrlState('?scenario=wind-tree')).toMatchObject({ giTextures: true, textures: 'all-compressed' });
+    });
 });
