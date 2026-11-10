@@ -132,12 +132,16 @@ export function mapToHemiOctahedron(u: number, v: number): [number, number, numb
     return [sinTheta * Math.sign(stX) * Math.cos(phi), sinTheta * Math.sign(stY) * Math.sin(phi), Math.sign(distance) * (1 - radiusSquared)];
 }
 
-/** `mapToHemiOctahedronInverse` (sampling.hlsl:90-116): a +z-hemisphere direction back to the unit square. */
+/**
+ * `mapToHemiOctahedronInverse` (sampling.hlsl:90-116): a +z-hemisphere direction back to the unit square.
+ * A direction with |z| past 1 (read back from halves, slightly longer than 1) maps to the pole,
+ * as the WGSL twin clamps it (register D34), where Capsaicin's `sqrt(1 - |z|)` gives NaN.
+ */
 export function mapToHemiOctahedronInverse(direction: Direction): [number, number] {
     const absX = Math.abs(direction[0]);
     const absY = Math.abs(direction[1]);
     const absZ = Math.abs(direction[2]);
-    const radius = Math.sqrt(1 - absZ);
+    const radius = Math.sqrt(Math.max(1 - absZ, 0));
     const a = Math.max(absX, absY);
     const b = a === 0 ? 0 : Math.min(absX, absY) / a;
     let phi = Math.atan(b) * (2 / Math.PI);
