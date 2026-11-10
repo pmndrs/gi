@@ -432,8 +432,8 @@ export class ScreenInputsNode extends Node {
         if (!this.channels.previousLighting) return new ScreenStageNode(this, node) as unknown as Node;
         // The picture drawn into a target of its own, shown from there; the next frame's stage
         // reads it as last frame's lighting before it is drawn again (the file comment).
+        // No name: three r187 uses a texture node's name as its WGSL variable's.
         const capture = rtt(node);
-        capture.name = 'ddgi-three previous lighting';
         this.lightingCapture = { target: capture.value as Texture };
         return new ScreenStageNode(this, capture as unknown as Node) as unknown as Node;
     }

@@ -29,9 +29,15 @@
  * stage's `encodeScreen`).
  *
  * Checks, by readback: the radiance cache's picture and its irradiance image
- * hold no negative, infinite or NaN value; its irradiance is not black on
+ * hold no negative (below −1e-5), infinite or NaN value; its irradiance is
+ * not black on
  * surfaces (some light arrives); the screen stage ran once per picture; no
- * device error (the harness).
+ * device error (the harness). The −1e-5: since RC4.2 SSGI's near-field light
+ * is added to E, and its arc integrals of a horizon that didn't move
+ * (IntegrateHalfArc(h) − IntegrateHalfArc(h), ssgi.comp:224-226) can come out
+ * a few f32 steps below 0 (radiance-cache-ssgi: −3e-7 at worst, where its
+ * twin in f64 gives 0), which a shadowed pixel with no probe light shows.
+ * The lowest values are reported.
  *
  * Reported, not checked: the mean luminance of the GI term alone (the
  * composite's picture minus its pass's own colour, which holds no GI on
@@ -67,6 +73,8 @@ import { HdrReader, loadCompositeScene, luminanceAt, type CompositeScene } from 
 
 const SIZE = { width: 1280, height: 720 } as const;
 const SCENES = ['cornell-box', 'two-room', 'sponza'] as const;
+/** Below this a value counts as negative: f32 steps under 0 are SSGI's rounding (the file comment). */
+const NEGATIVE_LIMIT = -1e-5;
 /** DDGI's warm-up, as the composite pages (three-composite, three-composite-sponza). */
 const GI_FRAMES = 120;
 const PROBES_PER_FRAME = 4096;
@@ -107,6 +115,9 @@ interface SceneResult {
     readonly irradianceNonFinite: number;
     readonly irradianceNegative: number;
     readonly backupHints: number;
+    /** The lowest picture and irradiance values (negative ones above NEGATIVE_LIMIT are rounding). */
+    readonly lowestPicture: number;
+    readonly lowestIrradiance: number;
     readonly screenStages: number;
     readonly probes: number;
 }
@@ -257,6 +268,8 @@ async function renderScene(context: ThreePageContext, sceneId: string, sheet: HT
         let pictureNegative = 0;
         let irradianceNonFinite = 0;
         let irradianceNegative = 0;
+        let lowestIrradiance = 0;
+        let lowestPicture = 0;
         let surfacePixels = 0;
         let blackSurfacePixels = 0;
         let litBackgroundPixels = 0;
@@ -268,10 +281,16 @@ async function renderScene(context: ThreePageContext, sceneId: string, sheet: HT
             for (let channel = 0; channel < 4; channel++) {
                 const value = picture[pixel * 4 + channel];
                 if (!Number.isFinite(value)) pictureNonFinite++;
-                else if (channel < 3 && value < 0) pictureNegative++;
+                else if (channel < 3 && value < 0) {
+                    lowestPicture = Math.min(lowestPicture, value);
+                    if (value < NEGATIVE_LIMIT) pictureNegative++;
+                }
                 const e = irradiance[pixel * 4 + channel];
                 if (!Number.isFinite(e)) irradianceNonFinite++;
-                else if (channel < 3 && e < 0) irradianceNegative++;
+                else if (channel < 3 && e < 0) {
+                    lowestIrradiance = Math.min(lowestIrradiance, e);
+                    if (e < NEGATIVE_LIMIT) irradianceNegative++;
+                }
             }
             // Both images start at the top row (toDisplay). A sky pixel gets no irradiance (the stage reads the same depth).
             if (surfaces[pixel * 4] < 0.5) {
@@ -287,8 +306,8 @@ async function renderScene(context: ThreePageContext, sceneId: string, sheet: HT
             if (irradiance[pixel * 4 + 3] === 0) backupHints++;
         }
         const ddgiMeanLuminance = ddgiLuminance / Math.max(surfacePixels, 1);
-        assert(pictureNonFinite === 0 && pictureNegative === 0, `${sceneId}: the radiance cache's picture has ${pictureNonFinite} values not finite and ${pictureNegative} negative`);
-        assert(irradianceNonFinite === 0 && irradianceNegative === 0, `${sceneId}: the irradiance image has ${irradianceNonFinite} values not finite and ${irradianceNegative} negative`);
+        assert(pictureNonFinite === 0 && pictureNegative === 0, `${sceneId}: the radiance cache's picture has ${pictureNonFinite} values not finite and ${pictureNegative} negative (lowest ${lowestPicture})`);
+        assert(irradianceNonFinite === 0 && irradianceNegative === 0, `${sceneId}: the irradiance image has ${irradianceNonFinite} values not finite and ${irradianceNegative} negative (lowest ${lowestIrradiance})`);
         assert(irradianceSum > 0, `${sceneId}: no irradiance on any surface`);
         // Also says both readbacks start at the same row: flipped, Sponza's sky would sit over lit floor.
         assert(litBackgroundPixels === 0, `${sceneId}: ${litBackgroundPixels} background pixels have irradiance`);
@@ -380,6 +399,8 @@ async function renderScene(context: ThreePageContext, sceneId: string, sheet: HT
             irradianceNonFinite,
             irradianceNegative,
             backupHints,
+            lowestPicture,
+            lowestIrradiance,
             screenStages,
             probes: probeCount,
         };

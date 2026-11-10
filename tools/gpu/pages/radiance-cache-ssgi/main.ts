@@ -214,6 +214,8 @@ try {
     let zeroLengthSamples = 0;
     const worst = { occlusion: 0, bentNormal: 0, nearField: 0 };
     const examples: string[] = [];
+    /** Negative near-field light, which Capsaicin's arc integrals can give at a slice's edge (reported). */
+    const negativeNear = { gpu: 0, twin: 0, lowestGpu: 0, lowestTwin: 0 };
     const nearWall = { bentZ: [] as number[], occlusion: [] as number[], nearField: [] as number[], twinNearField: [] as number[], scale: [] as number[] };
     const farFloor = { occlusion: [] as number[], nearField: [] as number[] };
     for (let y = 0; y < HEIGHT; y++) {
@@ -235,6 +237,12 @@ try {
                 continue;
             }
             zeroLengthSamples += twin.zeroLengthSamples;
+            for (let axis = 0; axis < 3; axis++) {
+                if (gpuNear[axis] < 0) negativeNear.gpu++;
+                if (twin.nearField[axis] < 0) negativeNear.twin++;
+                negativeNear.lowestGpu = Math.min(negativeNear.lowestGpu, gpuNear[axis]);
+                negativeNear.lowestTwin = Math.min(negativeNear.lowestTwin, twin.nearField[axis]);
+            }
             const occlusionError = Math.abs(gpuOcclusion[3] - twin.ambientOcclusion);
             const bentError = Math.max(...[0, 1, 2].map((axis) => Math.abs(gpuOcclusion[axis] - (0.5 * twin.bentNormal[axis] + 0.5))));
             const nearError = Math.max(...[0, 1, 2].map((axis) => Math.abs(gpuNear[axis] - twin.nearField[axis]) / (NEAR_RELATIVE_TOLERANCE * Math.abs(twin.nearField[axis]) + NEAR_ABSOLUTE_TOLERANCE)));
@@ -348,6 +356,7 @@ try {
                 worstNearFieldErrorOverTolerance: worst.nearField,
                 means,
                 nearWallNearFieldMeans: nearWallMeans,
+                negativeNearField: negativeNear,
                 examples,
             },
             corner,
