@@ -34,6 +34,14 @@
  * 8. **Find stops at the first empty slot** (Capsaicin's behaviour, kept):
  *    with slot 0's tile purged, the tile in slot 1 isn't found, and
  *    inserting it again claims slot 0.
+ * 9. **Packing halves** (register D31): 4,096 values (halves, values halfway
+ *    between two, values between, log-uniform values; both signs) packed by
+ *    the GPU's `pack2x16float` and by the cache's `HashGridCache_PackHalf2`.
+ *    The page reports whether this GPU's `pack2x16float` rounds to nearest or
+ *    toward zero, and checks the correction gives the nearest half (the
+ *    CPU's round-to-nearest-even) for every value not halfway, moves no value
+ *    the GPU already packed to its nearest half, and keeps the GPU's half for
+ *    a value halfway.
  *
  * Correctness only, nothing timed (DECISIONS 2026-11-09).
  * `pnpm test:gpu --filter radiance-cache-hash-grid --gpu nvidia` (or intel).
@@ -46,6 +54,7 @@ import { requestBudgetDevice } from '../radiance-cache-probes/budget-device.ts';
 import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
 import type { GpuTimerScope } from '../../../../packages/ddgi-core/src/platform/contract/timing.ts';
 import { DEFAULT_HASH_GRID_CACHE_OPTIONS, hashGridCacheCapacity, type HashGridCacheOptions } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/capacity.ts';
+import { floatToHalfBits, halfBitsToFloat } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/capsaicin-math.ts';
 import { HashGridCache } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/hash-grid-cache.ts';
 import {
     hashGridCacheCellIndex,
@@ -695,6 +704,75 @@ try {
         assert(again[1] === firstSlot && again[2] === 1, `inserting it again took tile ${again[1]} (new ${again[2]}); Capsaicin's insert claims the empty slot 0`);
         data.findStopsAtEmptySlot = { purgedSlot: 0, keptSlot: 1, reinsertedSlot: again[1] - firstSlot };
         log('find stops at the first empty slot: slot 0 purged, slot 1\'s tile not found, re-inserted into slot 0 (Capsaicin\'s behaviour)');
+    }
+
+    // ---- 9. Packing halves (register D31): the GPU's pack2x16float, and the cache's correction ----
+    {
+        const random = seeded(77);
+        const inputs = new Float32Array(HASH_INPUTS);
+        const finiteHalf = (): number => {
+            // A random finite non-zero half below the largest, either sign (so the next one out is finite too).
+            const magnitude = 1 + Math.floor(random() * 0x7bfe);
+            return (random() < 0.5 ? 0 : 0x8000) | magnitude;
+        };
+        for (let index = 0; index < HASH_INPUTS; index++) {
+            const kind = index % 4;
+            const half = finiteHalf();
+            const value = halfBitsToFloat(half);
+            if (kind === 0) {
+                inputs[index] = value; // already a half: must pack to itself
+            } else if (kind === 1) {
+                // Halfway to the next half out: exact in f32, which has 13 more mantissa bits.
+                inputs[index] = (value + halfBitsToFloat(half + 1)) / 2;
+            } else if (kind === 2) {
+                // Somewhere between this half and the next out.
+                inputs[index] = value + (halfBitsToFloat(half + 1) - value) * random();
+            } else {
+                // Log-uniform over the half's normal range, either sign, below the largest half.
+                inputs[index] = (random() < 0.5 ? -1 : 1) * 2 ** (-14 + random() * 29.9);
+            }
+        }
+        runKernel('packHalves', new Uint32Array(inputs.buffer), HASH_INPUTS);
+        const packed = await results(HASH_INPUTS * RESULT_WORDS.packHalves);
+        let inexact = 0;
+        let rawNearest = 0;
+        let rawTowardZero = 0;
+        let rawOther = 0;
+        let correctedNotNearest = 0;
+        let movedFromNearest = 0;
+        let tiesMoved = 0;
+        let ties = 0;
+        for (let index = 0; index < HASH_INPUTS; index++) {
+            const value = inputs[index];
+            const nearest = floatToHalfBits(value);
+            // The half toward zero: the nearest one, or the one below it in magnitude when the nearest is further out.
+            const towardZero = Math.abs(halfBitsToFloat(nearest)) > Math.abs(value) ? nearest - 1 : nearest;
+            const raw = packed[index * 2];
+            const corrected = packed[index * 2 + 1];
+            if (nearest !== towardZero) {
+                inexact++;
+                if (raw === nearest) rawNearest++;
+                else if (raw === towardZero) rawTowardZero++;
+                else rawOther++;
+            }
+            // Exactly halfway between the half toward zero and the next one out (kind 1, or a random hit on it).
+            const isTie = Math.abs(value) === (Math.abs(halfBitsToFloat(towardZero)) + Math.abs(halfBitsToFloat(towardZero + 1))) / 2;
+            if (isTie) {
+                // Halfway: either neighbour is as near; the correction must keep the GPU's.
+                ties++;
+                if (corrected !== raw) tiesMoved++;
+                continue;
+            }
+            if (corrected !== nearest) correctedNotNearest++;
+            if (raw === nearest && corrected !== raw) movedFromNearest++;
+        }
+        assert(rawOther === 0, `pack2x16float gave neither the nearest half nor the one toward zero for ${rawOther} inputs`);
+        assert(correctedNotNearest === 0, `HashGridCache_PackHalf2 missed the nearest half for ${correctedNotNearest} of ${HASH_INPUTS} inputs`);
+        assert(movedFromNearest === 0, `HashGridCache_PackHalf2 moved ${movedFromNearest} values the GPU had already packed to the nearest half`);
+        assert(tiesMoved === 0, `HashGridCache_PackHalf2 moved ${tiesMoved} values lying halfway between two halves`);
+        const rounding = rawNearest === inexact ? 'nearest' : rawTowardZero === inexact ? 'toward zero' : 'mixed';
+        data.packHalves = { inputs: HASH_INPUTS, inexact, ties, rawNearest, rawTowardZero, pack2x16float: rounding, correctedNotNearest, movedFromNearest, tiesMoved };
+        log(`pack2x16float rounds ${rounding} here (${rawNearest} nearest, ${rawTowardZero} toward zero of ${inexact} inexact); HashGridCache_PackHalf2 gives the nearest half for all, and moves none already nearest`);
     }
 
     rayBuffer.destroy();
