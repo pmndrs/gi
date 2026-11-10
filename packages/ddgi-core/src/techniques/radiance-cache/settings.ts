@@ -67,6 +67,13 @@ export interface RadianceCacheSettings {
     hashGridCacheMaxMultibounceSampleCount: number;
     /** `gi1_reservoir_cache_cell_size` (gi1.h:71, default 16): world-space ReSTIR's cell, with `useResampling`. */
     reservoirCacheCellSize: number;
+    /**
+     * Ours, not Capsaicin's (default true): run GI-1's image-space denoiser
+     * (`ReprojectGI`, `FilterGI` ×2; RC4.3, gi-denoiser.ts), which Capsaicin
+     * always runs. Off, the shading module reads `InterpolateScreenProbes`'
+     * output directly, for comparisons. Read every frame.
+     */
+    useGIDenoiser: boolean;
 }
 
 /** Capsaicin's defaults (gi1.h:48-71). */
@@ -85,6 +92,7 @@ export const DEFAULT_RADIANCE_CACHE_SETTINGS: Readonly<RadianceCacheSettings> = 
     hashGridCacheDiscardMultibounceRayProbability: 0.7,
     hashGridCacheMaxMultibounceSampleCount: 16,
     reservoirCacheCellSize: 16,
+    useGIDenoiser: true,
 });
 
 /** The sizes Capsaicin derives from the render size (`GI1::ScreenProbes::ensureMemoryIsAllocated`, gi1.cpp:113-129). */

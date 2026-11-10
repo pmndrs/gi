@@ -1,0 +1,13 @@
+{
+    "name": "@pmndrs/denoiser-gi1",
+    "version": "0.0.0",
+    "private": true,
+    "description": "AMD GI-1's image-space GI denoiser (Capsaicin v1.3's ReprojectGI and FilterGI) in WGSL, on a bare GPUDevice. Self-contained: it imports nothing from @pmndrs/ddgi. Bundled into @pmndrs/ddgi for now; written to move into pmndrs/denoiser.",
+    "license": "MIT",
+    "type": "module",
+    "sideEffects": false,
+    "exports": {
+        ".": "./src/index.ts",
+        "./*": "./src/*.ts"
+    }
+}
