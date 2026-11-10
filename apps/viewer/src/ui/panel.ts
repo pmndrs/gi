@@ -119,7 +119,7 @@ const SCREEN_VIEW_LABELS: Record<DdgiScreenViewName | 'none', string> = {
 
 /** The quality presets, cheapest first, as the picker names them. */
 const PRESET_LABELS: Record<DDGIPresetName, string> = {
-    low: 'Low (laptops without a graphics card, tablets, phones)',
+    low: 'Low (tablets, phones, basic laptops)',
     medium: 'Medium',
     high: 'High (the default)',
 };

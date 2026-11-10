@@ -149,6 +149,12 @@ async function main(): Promise<number> {
                 return { status: document.querySelector('.status')?.textContent ?? '', preset: select?.value ?? '', budget: budget?.textContent ?? '', link: location.search };
             })()`);
         const screenshot = async (file: string) => {
+            // The panel scrolled to the picker, so each picture shows the preset chosen beside it.
+            await client.evaluate(`(() => {
+                const select = [...document.querySelectorAll('select')].find((candidate) => [...candidate.options].some((option) => option.value === 'medium'));
+                select?.scrollIntoView({ block: 'center' });
+            })()`);
+            await sleep(200);
             const { data } = await client.send<{ data: string }>('Page.captureScreenshot', { format: 'png' }, 60_000);
             await writeFile(join(options.out, file), Buffer.from(data, 'base64'));
         };
