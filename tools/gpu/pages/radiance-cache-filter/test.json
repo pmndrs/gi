@@ -1,0 +1,4 @@
+{
+    "description": "RC4.2: FilterScreenProbes at 1280x720 on the pillar (a floor and a box under a constant sky): a captured atlas filtered again against a CPU twin of both passes (cells at a threshold counted, not compared); a constant atlas stays constant; the floor's probes beside the box keep their value as the twin says (no blur across the depth edge); the previous atlas the next frame reprojects is the filtered atlas, and a still camera's reprojected probes keep it. Correctness only.",
+    "timeoutMs": 300000
+}
