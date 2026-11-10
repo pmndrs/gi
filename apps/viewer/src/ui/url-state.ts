@@ -14,6 +14,8 @@
  * - `nav`        `orbit` or `fly`
  * - `upscale`    an upscaler quality preset; absent means off
  * - `budget`     DDGI's GPU milliseconds per frame for probe updates (default 2)
+ * - `warmup`     `0`: DDGI starts without its warm-up, so the probes fill in live from black (for
+ *                watching a saved bake load: the panel's "Load probes from a file")
  * - `probes`     `1` draws DDGI's probes as spheres coloured by state
  * - `debug`      one of DDGI's screen debug views: `gi-only`, `coverage`, `probe-states`
  * - `probecolor` `history` colours DDGI's probe spheres by how settled they are (default: by state)
@@ -98,6 +100,8 @@ export interface ViewerUrlState {
     nav: 'orbit' | 'fly';
     upscale: UpscaleQuality | null;
     budgetMs: number;
+    /** DDGI warms its probes up before showing them (`warmup=0` in a link turns it off). */
+    warmUp: boolean;
     probes: boolean;
     probeColor: ProbeColorName;
     debug: DdgiScreenViewName | null;
@@ -141,6 +145,7 @@ export const DEFAULT_URL_STATE: ViewerUrlState = {
     nav: 'orbit',
     upscale: null,
     budgetMs: DEFAULT_BUDGET_MS,
+    warmUp: true,
     probes: false,
     probeColor: 'state',
     debug: null,
@@ -174,6 +179,7 @@ const URL_KEYS = new Set([
     'nav',
     'upscale',
     'budget',
+    'warmup',
     'probes',
     'debug',
     'probecolor',
@@ -243,6 +249,7 @@ export function parseUrlState(search: string): ViewerUrlState {
 
     const budget = finiteNumber(params.get('budget'));
     if (budget !== null) state.budgetMs = Math.min(MAX_BUDGET_MS, Math.max(MIN_BUDGET_MS, budget));
+    state.warmUp = params.get('warmup') !== '0';
     state.probes = params.get('probes') === '1';
     state.debug = DDGI_SCREEN_VIEW_NAMES.find((name) => name === params.get('debug')) ?? null;
     if (params.get('probecolor') === 'history') state.probeColor = 'history';
@@ -290,6 +297,7 @@ export function serializeUrlState(state: ViewerUrlState): string {
     if (state.nav !== 'orbit') params.set('nav', state.nav);
     if (state.upscale) params.set('upscale', state.upscale);
     if (state.budgetMs !== DEFAULT_BUDGET_MS) params.set('budget', String(state.budgetMs));
+    if (!state.warmUp) params.set('warmup', '0');
     if (state.probes) params.set('probes', '1');
     if (state.debug) params.set('debug', state.debug);
     if (state.probeColor !== DEFAULT_URL_STATE.probeColor) params.set('probecolor', state.probeColor);

@@ -143,10 +143,12 @@ export const OVERFLOW_CHANGE = 1;
 
 /**
  * A saved field loaded for a scene that changed since it was saved
- * (saved-field.ts): every probe, as a whole change. Not MAX_GLOBAL_CHANGE:
- * the loaded value is a better start than nothing, so each probe is owed
- * its K updates at priority and takes the new light in as after any other
- * whole change, instead of throwing its history away at once.
+ * (saved-field.ts): every probe, as a whole change (r = 1, as
+ * OVERFLOW_CHANGE: nothing says how much changed). Each probe is owed the
+ * updates a whole change needs (`ddgiNeededUpdates`: 14 at two-room's
+ * bounce share) and takes the new light in from the loaded value, its
+ * bounce read from the loaded neighbours rather than black. Not
+ * MAX_GLOBAL_CHANGE: that owes 34 updates a probe for the same result.
  */
 export const STALE_FIELD_CHANGE = 1;
 

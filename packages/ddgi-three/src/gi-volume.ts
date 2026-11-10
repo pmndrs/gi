@@ -37,7 +37,7 @@
  */
 
 import { AnalyticLightNode, Box3, Light, Vector3, type Node, type Scene, type WebGPURenderer } from 'three/webgpu';
-import { probeGrid, type DDGIVolumeSettings, type GIPlatform, type Vec3 } from '@pmndrs/ddgi-core';
+import { probeGrid, type DDGIVolumeSettings, type GIPlatform, type LoadedField, type LoadFieldOptions, type Vec3 } from '@pmndrs/ddgi-core';
 import { GI_LIGHT_PRIORITY, type GILight } from './gi-light.ts';
 import type { ThreeGI } from './three-gi.ts';
 import { restartVolume, startVolume, type GIVolumeStartOptions, type StartedGI } from './volume-start.ts';
@@ -178,6 +178,40 @@ export class GIVolume extends Light {
      */
     recalibrate(): void {
         this.started?.platform.recalibrate();
+    }
+
+    /**
+     * Saves the probes as a saved bake (a `.ddgibake` file, engine-neutral:
+     * ddgi-core's saved-field.ts): what they have learned, with the layout
+     * it needs and a fingerprint of the scene it was baked for. Pass it to
+     * `start(renderer, scene, { bake })` or {@link loadBake} later to begin
+     * with finished GI. One GPU readback, here only; save after `start` has
+     * resolved (warm probes).
+     */
+    saveBake(): Promise<Uint8Array<ArrayBuffer>> {
+        if (!this.started) throw new Error('@pmndrs/ddgi/three: the GIVolume has no GI yet; await volume.start(renderer, scene) before saving a bake.');
+        return this.started.technique.saveField();
+    }
+
+    /**
+     * Replaces the probes with a saved bake ({@link saveBake}): from the next
+     * render GI shows the loaded probes and keeps updating from them. Throws
+     * `SavedFieldError` for a file that isn't a bake, an unknown format
+     * version, or a layout that doesn't fit this volume (another probe grid,
+     * tile size or light-group setting; the message names it). A bake saved
+     * for a scene that changed since loads as stale (`stale: true` in the
+     * result, with the parts that changed), unless `ifSceneChanged` is
+     * `refuse`: every probe then updates from the loaded values. To start
+     * from a bake without warming up first, pass it to `start` instead.
+     */
+    loadBake(bytes: Uint8Array | ArrayBuffer, options: LoadFieldOptions = {}): LoadedField {
+        if (!this.started) throw new Error('@pmndrs/ddgi/three: the GIVolume has no GI yet; pass the bake to volume.start(renderer, scene, { bake }) instead.');
+        return this.started.technique.loadField(bytes, options);
+    }
+
+    /** What `start`'s `bake` option loaded (stale or not), or null without one. */
+    get loadedBake(): LoadedField | null {
+        return this.started?.loadedBake ?? null;
     }
 
     /** Removes the GI light and frees the platform `start` made. The volume can be started again afterwards. */

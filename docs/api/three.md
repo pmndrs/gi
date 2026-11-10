@@ -100,6 +100,8 @@ renderer.setAnimationLoop(() => pipeline.render());
 | `environment`, `sky` | GI's sky, as for `ThreeGI` below. |
 | `light` | Settings for the GI light. |
 | `warmUp` | `false` to skip it (GI then fills in live), or `{ passes, maxSeconds, minPasses, calibrate }`. |
+| `bake` | A saved bake (below) to start from instead of warming up. |
+| `bakeIfSceneChanged` | `'load stale'` (default) or `'refuse'`, for a bake saved before the scene changed. |
 | `warn` | Where warnings go. |
 
 If the scene needs more than the renderer's device allows, `start` throws a `GILimitError` (`ThreeGILimitError`) naming the limit. three makes its device with default limits (a 128 MiB storage binding), which large scenes such as Sponza with its curtains outgrow. The fix is to make the renderer with the platform's limits: `const { renderer } = await createGIRenderer()`, or `new WebGPURenderer({ requiredLimits: requiredLimits(adapter) })` with `requiredLimits` from `@pmndrs/ddgi/core`.
@@ -110,6 +112,22 @@ Other members:
 - `volume.threeGI` (budget, `markChanged`, timings) and `volume.platform` (stats, debug views) are there after `start`.
 - `volume.light` is the GI light (`ddgi()` reads it).
 - `volume.dispose()` removes the GI light and frees the platform.
+
+**Saved bakes** (T5.2). Save what the probes have learned and start from it later, so a page opens with finished GI and keeps updating from there:
+
+```ts
+const bytes = await volume.saveBake();          // a .ddgibake file's bytes (one GPU readback, here only)
+// ...later, on a fresh page with the same scene and settings:
+await volume.start(renderer, scene, { bake: bytes });   // no warm-up passes
+// or into GI that is already running:
+const loaded = volume.loadBake(bytes);          // { stale, changedParts, savedAt, library }
+```
+
+- The file is engine-neutral (ddgi-core's `DDGITechnique.saveField` / `loadField`, platform.md "Saved bakes"), so it doesn't depend on three.
+- It loads only into a volume with the same layout: the same probe grid and place, tile sizes, light groups and sun layer, and camera-following volumes. Anything else throws `SavedFieldError` (from `@pmndrs/ddgi/core`) with a message naming what differs.
+- The file records a fingerprint of the scene it was baked for. If the scene changed since (an object, a material, a texture, a light, the sky), it loads anyway as a starting point: `loaded.stale` is true, `loaded.changedParts` says which parts changed, and every probe updates from the loaded light. `{ ifSceneChanged: 'refuse' }` (`bakeIfSceneChanged` for `start`) throws instead.
+- With `start(..., { bake })`, `volume.loadedBake` says what was loaded. `start` still waits for the ray-tracing trees and calibrates the budget; it only skips the warm-up passes.
+- Images the CPU can't read cheaply (`ImageBitmap`, which `GLTFLoader` gives) count in the fingerprint by their size and colour space, not their pixels, so a repainted image of the same size isn't noticed.
 
 `volume.ddgiVolume()` gives the matching DDGI settings, for building a platform by hand:
 

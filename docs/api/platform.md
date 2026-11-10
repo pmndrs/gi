@@ -161,7 +161,49 @@ Gaps:
 
 The answers go in PROGRESS. Any change to the contract is made in both the TypeScript and this page, and listed in a "Revisions" section here.
 
+## Saved bakes (DDGI, T5.2)
+
+A DDGI field can be saved and loaded later, so a page starts with finished GI and keeps updating from there (docs/design/m5-coverage.md §2). It is DDGI's, not the platform's: `DDGITechnique.saveField()` and `loadField(bytes, options?)`.
+
+```ts
+const bytes = await ddgi.saveField();               // Uint8Array, a .ddgibake file
+// a fresh platform, the same scene and DDGI settings:
+await gi.prepare();
+const loaded = ddgi.loadField(bytes);               // before the first frame: no warm-up passes
+if (loaded.stale) console.log('the scene changed since:', loaded.changedParts);
+```
+
+- **Saving** copies the atlases and histories out and reads them back once, in a submit of its own. It is an explicit host call; nothing reads back in the frame loop.
+- **Loading** writes the sections with `queue.writeTexture` and `writeBuffer`, which land before the host's next submit. It compiles nothing and makes no new GPU objects (`stats.recompiles` doesn't move). The technique waits for the ray-tracing trees, as its warm-up does, and then carries on updating with no warm-up passes. The counters `saved fields loaded` and `saved field stale` say what happened.
+- **Refused** with `SavedFieldError` (its `problem`: `not a saved field`, `format version`, `layout`, `scene changed`) and a plain message: a file that isn't one, a format version this code doesn't read, or a layout that doesn't match (the message names the field: tile texels, the irradiance layers of light groups and the sun layer, a volume's counts, spacing, place, priority or `follow`). A field saved on a device with `rg16float` distances loads on one without (and back): the texels are converted.
+- **A changed scene** (its fingerprint differs) loads as stale unless `ifSceneChanged: 'refuse'`: the first frame that updates probes marks every probe as a whole change, so the field updates from the loaded values at priority instead of from black.
+- **The scene changes the next frame brings aren't marked:** the fingerprint was checked against the scene with them, and on a fresh platform they are its creation (every object and light added), which would cut every loaded history. So load after the scene is described and before the first frame; a change made between `loadField` and the next frame goes unmarked.
+- **A camera-following volume's window is saved** (where it was on the lattice, and its valid extent) and put back at load. It moves on with the camera from there; a camera far from it is a teleport, which starts that volume over as any teleport does.
+
+**The file (`.ddgibake`), little-endian:** `DDGB`, a `u32` format version (1), a `u32` header length, the header as UTF-8 JSON, then the sections, each starting on a 256-byte boundary (`techniques/ddgi/saved-field.ts`).
+
+- The header: `formatVersion`, `library` (`@pmndrs/ddgi 0.0.0`), `createdAt`, `layout` (what has to match: tile texels, irradiance layers, the distance format, each volume's counts, spacing, first probe, priority and `follow`), `sections` (name, format, byte offset and length, and a texture's width, height and layers), `fingerprint`, `clockSeconds` (the technique's clock, which the histories' last-update times are on), and `cameraWindows`.
+- The sections: `irradiance` (every irradiance layer side by side, `rgba16float`), `distance`, `probeData` (relocation offsets and states), and `probeHistory/<volume>` for each volume (64 bytes a probe). Texture rows are packed with no padding. The composed atlas isn't saved: the first frame after a load composes it.
+- The probe history is settled before it is written: it keeps each probe's sample count, update count, last-update time, mean and noise, and drops what only meant something in the frames it was saved in (owed updates, marks, wakes, frame stamps, the change clock).
+
+**The scene fingerprint** is `SceneCopy.fingerprint()` (technique-facing, platform/scene/scene-fingerprint.ts): a 64-bit hash per part.
+
+| Part | What is hashed |
+| --- | --- |
+| `geometry` | Each GI instance's mesh content (positions, indices, normals, uv sets, groups, triangle count, deform box), transform and visibility. A deforming mesh counts with its rest pose. |
+| `materials` | Each GI instance's material list: every number of each material, its textures by content hash. Labels are left out. |
+| `textures` | The content of every texture those materials use: the bytes of `PixelData`, `ImageData` and compressed levels (over 4 MB, an even sample of 4 MB plus the length). `ImageBitmap`, canvases and `GPUTexture`s count by size, format and colour space only; image elements by URL and size. |
+| `lights` | Every light's numbers and shadow parameters (`castsShadows`), and its group. There are no shadow matrices to leave out. |
+| `sky` | The environment's settings; a texture environment by its texture's size and format, not its texels. |
+
+Each part is order-free, so two loads that create objects in another order agree. Bump `FINGERPRINT_VERSION` when what a part covers changes.
+
 ## Revisions
+
+### During M5, 2026-11-10
+
+- **Technique-facing (T5.2): `SceneCopy.fingerprint(): SceneFingerprint`**, content hashes of the scene by part, for saved bakes ("Saved bakes" above). Worked out on the CPU when called. Meshes and textures are hashed once when created or updated, since the scene keeps no CPU copy of them after upload: a few ns a word.
+- **Host-facing through DDGI (T5.2): `DDGITechnique.saveField` / `loadField`**, the `.ddgibake` format, `SavedFieldError` ("Saved bakes" above). Implementation-only: the irradiance and distance atlases gain `COPY_DST` usage (the load writes them).
 
 ### During M3, 2026-11-09
 

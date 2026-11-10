@@ -76,6 +76,7 @@ import type { DirectWorkList, RayScratch } from '../../platform/contract/shade.t
 import type { ColorRGB } from '../../platform/contract/math.ts';
 import type { LightHandle } from '../../platform/contract/handles.ts';
 import type { DirectionalLightDescriptor } from '../../platform/contract/scene.ts';
+import type { SceneChanges } from '../../platform/contract/scene-copy.ts';
 import type { ComputeKernel } from '../../platform/contract/wgsl.ts';
 import { GILimitError } from '../../platform/contract/errors.ts';
 import {
@@ -220,6 +221,9 @@ import {
     type SavedFieldLayout,
     type SectionData,
 } from './saved-field.ts';
+
+/** A frame's changes when there are none to mark (the frame after `loadField`). */
+const NO_CHANGES: SceneChanges = { regions: [], global: [], receivers: [], lights: [], lightsOverflowed: false };
 
 /** WebGPU usage bits; the globals don't exist in Node, where tests import this file. */
 const BUFFER_USAGE = { mapRead: 0x1, copySrc: 0x4, copyDst: 0x8, uniform: 0x40, storage: 0x80 } as const;
@@ -793,8 +797,22 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
      * becoming another light (mark-table.ts, `SunLayerMarks`).
      */
     private sunInLayer: LightHandle | null = null;
-    /** The next frame marks every probe as a whole change: a stale saved field was just loaded (`loadField`). */
+    /**
+     * A stale saved field was loaded (`loadField`): the first frame that
+     * updates probes marks every probe as a whole change. Not before: a frame
+     * with no probe updates (the trees still building) would judge the
+     * change by a batch of 0, as if the volume were too big for every probe's
+     * updates, and send it down the key-probe path (`changeServing`).
+     */
     private staleMarkPending = false;
+    /**
+     * The next frame doesn't mark the scene changes it brings: a saved field
+     * was just loaded, and the scene it was checked against (its
+     * fingerprint, at the load) already holds them. On a fresh platform they
+     * are the scene's own creation, every object and light added, which
+     * would otherwise cut every loaded history as a change.
+     */
+    private loadedChangesPending = false;
     /** Saved fields loaded since `prepare`, and whether the latest was stale (counters). */
     private fieldsLoaded = 0;
     private latestLoadStale = false;
@@ -1031,9 +1049,10 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
             });
         // Shared by every volume (volumes.ts). The layers side by side (one block with groups off), and the composed atlas
         // renderers sample when there are several.
-        const irradiance = arrayTexture(layerCount > 1 ? 'irradiance layers' : 'irradiance', layout.layeredIrradiance, IRRADIANCE_FORMAT);
+        // COPY_DST on the atlases a saved field is written into (loadField, saved-field.ts).
+        const irradiance = arrayTexture(layerCount > 1 ? 'irradiance layers' : 'irradiance', layout.layeredIrradiance, IRRADIANCE_FORMAT, TEXTURE_USAGE.copyDst);
         const composed = plan.composed ? arrayTexture('composed irradiance', layout.irradiance, IRRADIANCE_FORMAT) : null;
-        const distance = arrayTexture('distance', layout.distance, layout.distanceFormat);
+        const distance = arrayTexture('distance', layout.distance, layout.distanceFormat, TEXTURE_USAGE.copyDst);
         const probeData = arrayTexture('probe data', layout.probeData, PROBE_DATA_FORMAT, TEXTURE_USAGE.copyDst);
         const pointsTexture = device.createTexture({ label: 'ddgi points', size: points, format: 'rgba32float', usage: atlasUsage | TEXTURE_USAGE.copyDst });
         const movers = device.createBuffer({ label: 'ddgi movers', size: MOVER_TABLE_WORDS * 4, usage: BUFFER_USAGE.uniform | BUFFER_USAGE.copyDst });
@@ -1107,6 +1126,7 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         // The field is new, so the sun layer holds nothing yet to be wrong about.
         this.sunInLayer = context.scene.firstDirectionalLight?.light ?? null;
         this.staleMarkPending = false;
+        this.loadedChangesPending = false;
         this.fieldsLoaded = 0;
         this.latestLoadStale = false;
         this.startWarmUp();
@@ -1472,7 +1492,10 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
      * `warmUpPasses` 0.
      */
     get warmingUp(): boolean {
-        return this.firstVolume !== null && this.warmUp.phase !== 'done';
+        if (this.firstVolume === null || this.warmUp.phase === 'done') return false;
+        // A loaded field is warm: it only waits for the trees, so the platform hands out probes in the frame they arrive.
+        if (this.warmUp.phase === 'loaded, waiting for trees') return this.context?.queries.rays.building ?? true;
+        return true;
     }
 
     /**
@@ -1497,8 +1520,11 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
             this.frameTimes.push(frame.deltaTime);
             if (this.frameTimes.length > SWEEP_FRAME_TIMES) this.frameTimes.shift();
         }
+        // After a load, this frame's changes are the loaded scene's own (loadedChangesPending): nothing to mark.
+        const changes = this.loadedChangesPending ? NO_CHANGES : frame.changes;
+        this.loadedChangesPending = false;
         // The hot movers follow this frame's moves first, so a mover's mask bit is known in the frame it moves.
-        this.movers.update(frame.changes, frame.frame);
+        this.movers.update(changes, frame.frame);
         if (this.movers.dirty) {
             context.device.queue.writeBuffer(first.movers, 0, this.movers.words);
             this.movers.dirty = false;
@@ -1519,17 +1545,18 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
 
         // Each volume its floor and its share of the rest, so each is swept at the same rate (frameShares).
         const shares = this.frameShares(frame.units);
+        const markStale = this.staleMarkPending && this.warmUp.phase === 'done' && shares.every((share) => share.units > 0);
         const marks = { frames: 0, entries: 0 };
         let used = 0;
         volumes.forEach((volume, index) => {
             const { units, floor } = shares[index];
-            used += this.encodeVolume(encoder, context, volume, frame, { units, floor, sunMarks, sun: sun?.descriptor ?? null, composeAll, marks });
+            used += this.encodeVolume(encoder, context, volume, frame, { changes, markStale, units, floor, sunMarks, sun: sun?.descriptor ?? null, composeAll, marks });
         });
         this.latestMarkEntries = marks.entries;
         if (marks.frames > 0) this.markFrames++;
-        // Every volume has cleared its history by now, and marked a stale load's change.
+        // Every volume has cleared its history by now, and marked a stale load's change if this frame was the one.
         this.historyClearPending = false;
-        this.staleMarkPending = false;
+        if (markStale) this.staleMarkPending = false;
         if (this.warmUp.phase === 'warming') this.finishWarmUpPass(volumes);
         return used;
     }
@@ -1545,6 +1572,10 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         resources: PreparedResources,
         frame: TechniqueFrame,
         shared: {
+            /** This frame's changes to mark (none in the frame after a load). */
+            readonly changes: SceneChanges;
+            /** Mark every probe as a whole change: the first updating frame after a stale load. */
+            readonly markStale: boolean;
             readonly units: number;
             /** Budget v2's floor for this volume: the batch while a change is taken in never goes under it. */
             readonly floor: number;
@@ -1563,7 +1594,7 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         // In window probes: the kernel finds each one's slot (wgsl/mark.ts).
         const markTable =
             this.settings.changeDrivenHistory !== false
-                ? buildMarkTable(frame.changes, windowGrid(resources), this.movers, resources.plan.groupLayers, shared.sunMarks, this.staleMarkPending)
+                ? buildMarkTable(shared.changes, windowGrid(resources), this.movers, resources.plan.groupLayers, shared.sunMarks, shared.markStale)
                 : null;
         shared.marks.entries += markTable?.entryCount ?? 0;
         state.changeIntake.noteFrame(frame.frame, markTable !== null);
@@ -2138,7 +2169,7 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
      * (after the warm-up); what a change still being taken in owes is left
      * out (`settleProbeHistory`).
      */
-    async saveField(): Promise<Uint8Array> {
+    async saveField(): Promise<Uint8Array<ArrayBuffer>> {
         const first = this.firstVolume;
         const context = this.context;
         if (!first || !context || this.disposed) throw new Error('@pmndrs/ddgi: save the field after prepare (await gi.prepare()), and before dispose');
@@ -2227,11 +2258,18 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
      * field's (the message names what differs: tile texels, light-group
      * layers, a volume's counts, spacing, place, priority or `follow`).
      * A field saved for a scene that changed since loads as stale (unless
-     * `ifSceneChanged: 'refuse'`): every probe is marked as a whole change
-     * and updated at priority from the loaded values, so it settles as after
-     * any big change. A camera-following volume's window goes back where it
-     * was saved, and moves on with the camera from there (far from it, that
-     * is a teleport and starts that volume over).
+     * `ifSceneChanged: 'refuse'`): the first frame that updates probes marks
+     * every probe as a whole change, so each is updated at priority from the
+     * loaded values and the field settles as after any big change.
+     *
+     * The scene changes the next frame brings aren't marked: the fingerprint
+     * was checked against the scene with them (on a fresh platform they are
+     * its creation). So load after the scene is described and before the
+     * frame; a change made between the two goes unmarked.
+     *
+     * A camera-following volume's window goes back where it was saved, and
+     * moves on with the camera from there (far from it, that is a teleport
+     * and starts that volume over).
      */
     loadField(bytes: Uint8Array | ArrayBuffer, options: LoadFieldOptions = {}): LoadedField {
         const first = this.firstVolume;
@@ -2296,6 +2334,7 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         this.refreshVolumeTable(context, true);
         this.warmUp = { phase: 'loaded, waiting for trees', startedAt: null };
         this.staleMarkPending = stale && this.settings.changeDrivenHistory !== false;
+        this.loadedChangesPending = true;
         this.fieldsLoaded++;
         this.latestLoadStale = stale;
         return { stale, changedParts, savedAt: header.createdAt, library: header.library };

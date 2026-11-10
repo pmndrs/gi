@@ -55,6 +55,10 @@ export interface PanelHandlers {
     onTechnique(id: GiTechniqueId): void;
     onDdgiSettings(settings: DdgiPanelSettings): void;
     onDdgiRestart(): void;
+    /** Save the probes to a file (a download). */
+    onDdgiSaveBake(): void;
+    /** Load probes from a file the user picked. */
+    onDdgiLoadBake(file: File): void;
     onProbeSettings(settings: { bounces: number; maxProbes: number }): void;
     onRebake(): void;
     onVxgiSettings(settings: { bounces: number }): void;
@@ -211,6 +215,8 @@ export class Panel {
     private readonly vxgiSettings = h('div', { className: 'group' });
     private readonly vxgiBounces = h('select');
     private readonly status = h('div', { className: 'status' });
+    /** The file picker behind "Load probes from a file" (hidden; the button opens it). */
+    private readonly bakeFile = h('input', { type: 'file', accept: '.ddgibake' });
 
     private readonly wipeToggle = h('input', { type: 'checkbox' });
     private readonly wipeLeft = h('select');
@@ -354,6 +360,17 @@ export class Panel {
         rebake.addEventListener('click', () => this.handlers.onRebake());
         const restart = withHelp(h('button', { text: 'Start the probes over' }), 'ddgiRestart');
         restart.addEventListener('click', () => this.handlers.onDdgiRestart());
+        const saveBake = withHelp(h('button', { text: 'Save the probes to a file' }), 'ddgiSaveBake');
+        saveBake.addEventListener('click', () => this.handlers.onDdgiSaveBake());
+        const loadBake = withHelp(h('button', { text: 'Load probes from a file' }), 'ddgiLoadBake');
+        this.bakeFile.style.display = 'none';
+        loadBake.addEventListener('click', () => this.bakeFile.click());
+        this.bakeFile.addEventListener('change', () => {
+            const file = this.bakeFile.files?.[0];
+            // Cleared, so picking the same file again loads it again.
+            this.bakeFile.value = '';
+            if (file) this.handlers.onDdgiLoadBake(file);
+        });
 
         this.probeColorRow.append(withHelp(h('div', { className: 'label', text: 'Colour the probes by' }), 'ddgiProbeColor'), this.probeColor);
         this.atlasEvRow.append(withHelp(h('div', { className: 'label' }, 'Atlas exposure ', this.atlasEvValue), 'ddgiAtlasExposure'), this.atlasEv);
@@ -374,6 +391,9 @@ export class Panel {
             withHelp(h('div', { className: 'label', text: 'Change per frame (flicker check)' }), 'ddgiChange'),
             this.change,
             restart,
+            saveBake,
+            loadBake,
+            this.bakeFile,
         );
         this.probeSettings.append(
             h('div', { className: 'label', text: 'Bounces' }),
