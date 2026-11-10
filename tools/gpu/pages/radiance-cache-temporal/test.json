@@ -1,0 +1,4 @@
+{
+    "description": "RC4.1: the radiance cache's temporal screen probes at 1280x720: a still camera reprojects every probe to itself; a pan's disoccluded tiles are listed empty (against a CPU twin of the reprojection) and patched; the off-screen probe cache's count, scatter and reorder against CPU twins, and an evicted probe taken off screen and back found again; ray guiding against the CDF (chi-square) and a whole probe of sky rays in one cell without the sum wrapping; convergence and flicker on Cornell and Sponza with a still camera. Correctness only.",
+    "timeoutMs": 600000
+}
