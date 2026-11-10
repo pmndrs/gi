@@ -566,7 +566,7 @@ Same rules as phase 2 (no timing; correctness gates; faithful port with Capsaici
 | --- | --- | --- | --- | --- | --- |
 | RC3.1 | The hash grid: one shared WGSL function for the cell descriptor and both hashes; CAS insert into 16-slot buckets, find, decay stamps and `PurgeTiles`; buffers packed at Capsaicin's default capacity; the `WorldCache` interface with the hash grid behind it | implementer | M | RC2.1 | done (2026-11-10; Opus review failed on the ray offset, fixed; both GPUs; 1,024 MiB at default capacity; wiring moved to RC3.2; D22-D24) |
 | RC3.2 | Population and resolve: probe-ray hits insert cells (`PopulateScreenProbes`' cache half), `GenerateReservoirs` (a light per hit through the platform light grid, D4, with the bypass rules), `PopulateCells` (shadow ray, quantised accumulation), `UpdateTiles` (temporal accumulation and the tile mips), `ResolveCells` (filtered lookup into the probe rays); phase 2's staging retired | implementer | M | RC3.1, RC2.2 | done (2026-11-10, Mac lead; Opus review failed on the binding budget, fixed, re-review passed with notes; the small-cache tile-list bug fixed with a test; M5 pages pass: hash-grid, world-cache, probes, overflow (0 refused on Sponza and Bistro exterior); RTX 3060 and Intel UHD not re-run since the packing; D30-D33, D35-D37) |
-| RC3.3 | GI-1.2 multi-bounce: `PopulateMultibounceCells`, `GenerateMultibounceReservoirs`, `UpdateMultibounceCells` and the indirect value array | implementer | M | RC3.2 | todo |
+| RC3.3 | GI-1.2 multi-bounce: `PopulateMultibounceCells`, `GenerateMultibounceReservoirs`, `UpdateMultibounceCells` and the indirect value array | implementer | M | RC3.2 | active (implementer, 2026-11-10; branch `rc3-3`) |
 
 - **RC3.1 done-when.**
   - The descriptor, the bucket hash (pcg chain) and the checksum (xxHash chain, never 0) live in one WGSL function that every pass calls, ported from `hash_grid_cache.hlsl:96-192` with `src/math/hash.hlsl`. A CPU port of the same function gives the same bits on a fixed set of hits (unit test), and the GPU agrees with it (GPU test).
@@ -582,11 +582,16 @@ Same rules as phase 2 (no timing; correctness gates; faithful port with Capsaici
     - `UpdateTiles`' sample count caps at 16 and its mips are 2×2 sums;
     - `ResolveCells` picks the coarser mip while a cell has fewer than 16 samples.
   - Cornell, two-room and Sponza render in the viewer with no errors, NaN or negative pixels. Bucket overflow is measured on Sponza and Bistro exterior by counting, not timing; the count goes in PROGRESS.
-- **RC3.3 done-when.**
-  - The multi-bounce passes are ported with their source lines cited, including the 0.7 discard, the forced-diffuse second vertex and the one-frame lag of the indirect accumulator.
-  - Two-room's closed room is visibly lit by the second bounce against RC3.2's image: its mean luminance rises, and the contact sheet is in PROGRESS.
-  - The furnace room (white, closed, constant emitter or sky) moves toward the multi-bounce value against single bounce; the expected direction and size are stated before the run.
-  - Cornell's indirect light against the Cycles reference is reported (single and multi-bounce), as information.
+- **RC3.3 done-when.** *Proposed by the implementer (2026-11-10), modelled on RC3.2's gates; the draft's furnace and image lines are amended below, with the reason.*
+  - The three passes ported with their source lines cited (`PopulateMultibounceCells` gi1.comp:1761-1946, `GenerateMultibounceReservoirs` :2601-2690, `UpdateMultibounceCells` :1948-1989), in Capsaicin's order (gi1.cpp:2363-2512), including the 0.7 discard and its 1 / (1 - 0.7) weight, the forced-diffuse second vertex (Lambert under D8) and the one-frame lag: `UpdateMultibounceCells` runs after `UpdateTiles`, so its samples are taken by the next frame's `UpdateTiles`. `gi1_use_multibounce` (default on) is honoured; off is Capsaicin's single-bounce path (the resolve list is the shadow-ray list).
+  - Every kernel binds at most the platform's 8 storage buffers; the unit test that builds every hash-grid kernel at 8 and expects `GILimitError` at 7 covers the three new ones.
+  - GPU tests on a sunlit corner (floor and wall, both at E = 8 cos 45°, so every surface a second-bounce ray can reach has the same direct radiance L = albedo / π × E):
+    - the discard and each second-bounce ray's direction match a CPU port of Capsaicin's random numbers and cosine sampling; brdf and pdf are Lambert's;
+    - `UpdateMultibounceCells`' indirect scratch equals the CPU's sum from the read-back cells, brdf and pdf; the next frame's indirect values are `UpdateTiles`' accumulation of it (the lag);
+    - converged, every cell's indirect value reads albedo × L / (1 - 0.7) and every resolved probe ray L × (1 + albedo / (1 - 0.7)) within 2%: Capsaicin's estimator, stated before the run beside the physical value (see PROGRESS);
+    - RC3.2's single-bounce checks still pass, run with `useMultibounce` off.
+  - Two-room's dark room (the "dark-room-leak-view" bookmark): the mean luminance of the probe atlas rises with multibounce against single bounce (the direction stated before the run), and the atlas views of both are on the page for the screenshot.
+  - *Amended:* the furnace room can't test this technique's bounce: its light is emission, and Capsaicin's `GenerateReservoirs` sends an emissive front face's light to the probe ray and never into the cache (gi1.comp:2439-2452; emissive surfaces are not lights here, D21), so it reads the same with multibounce on or off. The corner takes its place. The image contact sheet and Cornell against Cycles need RC2.2's per-pixel image, which isn't on `radiance-cache` yet: they move to the first row after RC2.2 merges.
 
 ### radiance-cache phase 4: temporal quality, faithful
 
