@@ -12,8 +12,10 @@
  * / 0.3 (Lambert: brdf / pdf = albedo), and a cell's indirect value is the
  * mean of its samples, so albedo × L / 0.3 = 1.667 L.
  *
- * 1. **The kernels, one frame** (frame 7 from an empty cache, against what the
- *    GPU held after frame 6):
+ * 1. **The kernels, one frame** (the seventh frame from an empty cache,
+ *    against what the GPU held after the sixth; the platform's frame index,
+ *    which seeds the random numbers and the page reports as `frame`, is 9
+ *    then, as the scenario's two set-up frames come first):
  *    - `PopulateMultibounceCells`: each first-bounce entry is kept exactly
  *      when the CPU's port of `rand()` (seed = its visibility index, the
  *      frame) is above 0.7; a kept entry has a second-bounce entry exactly
@@ -28,9 +30,9 @@
  *      on the CPU from the read-back cells (the filtered direct value), brdf
  *      and pdf (within one quantisation step per sample), and its count;
  *      cells with no sample hold 0.
- *    - The lag: each first-bounce cell's indirect value after frame 7 is
- *      `UpdateTiles`' accumulation of its value after frame 6 and the
- *      scratch frame 6 left (within half precision).
+ *    - The lag: each first-bounce cell's indirect value after the seventh
+ *      frame is `UpdateTiles`' accumulation of its value after the sixth and
+ *      the scratch the sixth left (within half precision).
  *    - Resolve: a probe ray that doesn't bypass the cache reads its cell's
  *      filtered direct plus filtered indirect value; one that bypasses reads
  *      its own light sample plus its own second-bounce sample, if it has one
@@ -224,7 +226,7 @@ async function checkKernels(device: GPUDevice, scenario: Scenario): Promise<Chec
     const { failures, fail } = checker('kernels');
     const capacity = scenario.cache.capacity;
 
-    // After frame 6: the first-bounce cells' indirect values and the scratch the frame left.
+    // After the sixth frame from an empty cache: the first-bounce cells' indirect values and the scratch the frame left.
     const before = await readFrameState(device, scenario);
     const beforeTiles = new Set(Array.from(before.visibilityCell, (cell) => tileOf(cell, capacity)));
     const beforeIndirect = await TileValues.read(device, scenario.cache, beforeTiles, 'indirect');
@@ -333,7 +335,7 @@ async function checkKernels(device: GPUDevice, scenario: Scenario): Promise<Chec
     }
     if (scratchMismatches > 0) fail(`${scratchMismatches} of ${baseCells.length} first-bounce cells' indirect scratch differ from the CPU's sum`);
 
-    // The lag: the indirect value now is UpdateTiles' accumulation of frame 6's value and scratch.
+    // The lag: the indirect value now is UpdateTiles' accumulation of the previous frame's value and scratch.
     const updated = new Set(state.updateTiles);
     let lagChecked = 0;
     let lagMismatches = 0;
