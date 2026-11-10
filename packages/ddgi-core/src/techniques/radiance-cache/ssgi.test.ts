@@ -129,7 +129,7 @@ describe("SSGI's pieces (ssgi.comp)", () => {
         expect(bent[2]).toBeCloseTo(2 / 3, 12);
     });
 
-    it("has Capsaicin's constants (ssgi.cpp:135-156) at its defaults (ssgi.h:48-51)", () => {
+    it("has Capsaicin's constants (ssgi.cpp:113-135) at its defaults (ssgi.h:48-51)", () => {
         expect(DEFAULT_RADIANCE_CACHE_SETTINGS).toMatchObject({ ssgiSliceCount: 1, ssgiStepCount: 2, ssgiViewRadius: 0.2, ssgiFalloffRange: 0.05 });
         const projection = perspective(Math.PI / 3, 16 / 9, 0.1, 100);
         const constants = ssgiConstants({ view: lookAt([1, 2, 3], [1, 2, 0]), projection }, DEFAULT_RADIANCE_CACHE_SETTINGS);

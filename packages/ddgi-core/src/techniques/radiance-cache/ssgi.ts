@@ -5,12 +5,12 @@
  * near-field light, which `InterpolateScreenProbes` reads.
  *
  * Capsaicin runs SSGI as a technique of its own that writes shared textures
- * (`OcclusionAndBentNormal`, `NearFieldGlobalIllumination`, ssgi.cpp:80-90),
+ * (`OcclusionAndBentNormal`, `NearFieldGlobalIllumination`, ssgi.cpp:74-81),
  * before GI-1 (gi1_renderer.cpp:60-61). Here the radiance cache owns it and
  * runs it first in its screen stage (register D57). It reads the host's
  * depth, shading normals and last frame's lit colour through `FrameScreen`
  * (`previousLighting`, D56), as Capsaicin's reads `VisibilityDepth`,
- * `ShadingNormal` and `PrevCombinedIllumination` (ssgi.cpp:88-90).
+ * `ShadingNormal` and `PrevCombinedIllumination` (ssgi.cpp:79-81, 145-149).
  *
  * The outputs are made per screen size, as Capsaicin's shared textures are.
  */
@@ -49,7 +49,7 @@ export interface SSGIConstants {
 
 /**
  * Capsaicin's constants from the camera and the options (`SSGI::render`,
- * ssgi.cpp:135-156): the radius in uv per unit of linear depth, and the
+ * ssgi.cpp:113-135): the radius in uv per unit of linear depth, and the
  * falloff over the last `falloff_range` of the radius.
  */
 export function ssgiConstants(camera: Pick<FrameCamera, 'view' | 'projection'>, settings: SSGISettings): SSGIConstants {
@@ -135,7 +135,7 @@ export class ScreenSpaceGI {
         return SSGI_CONSTANTS_BYTES + (outputs ? 2 * outputs.width * outputs.height * OUTPUT_TEXEL_BYTES : 0);
     }
 
-    /** Records the kernel (Capsaicin's "Main" section, ssgi.cpp:183-195): a thread per pixel. */
+    /** Records the kernel (Capsaicin's "Main" section, ssgi.cpp:157-168): a thread per pixel. */
     encode(encoder: GPUCommandEncoder, inputs: SSGIInputs, camera: FrameCamera, settings: SSGISettings): void {
         const outputs = this.sizedFor(inputs.width, inputs.height);
         const group = this.groupFor(outputs, inputs);

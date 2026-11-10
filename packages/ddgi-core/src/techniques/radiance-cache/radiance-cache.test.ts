@@ -35,7 +35,7 @@ describe('settings (gi1.h)', () => {
         expect(technique.settings.useDirectLighting).toBe(false);
         expect(technique.settings.useMultibounce).toBe(true);
         // Reprojection reads the host's velocity, as Capsaicin's does (gi1.comp:326), and SSGI last
-        // frame's lit colour, as Capsaicin's reads PrevCombinedIllumination (ssgi.cpp:90).
+        // frame's lit colour, as Capsaicin's reads PrevCombinedIllumination (ssgi.cpp:149).
         expect(technique.requirements).toEqual({ queries: ['rays'], screen: { velocity: true, previousLighting: true } });
     });
 

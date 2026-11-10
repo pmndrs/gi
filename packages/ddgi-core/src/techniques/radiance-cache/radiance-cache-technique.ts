@@ -273,7 +273,7 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
      * Rays through the platform's tracer; the host's depth, normals, velocity and last frame's lit
      * colour every frame (`encodeScreen`): reprojection reads the velocity, as Capsaicin's does
      * (gi1.comp:326), and SSGI the lit colour, as Capsaicin's reads `PrevCombinedIllumination`
-     * (ssgi.cpp:90; register D56).
+     * (ssgi.cpp:149; register D56).
      */
     readonly requirements: TechniqueRequirements = { queries: ['rays'], screen: { velocity: true, previousLighting: true } };
     readonly settings: RadianceCacheSettings;
@@ -297,7 +297,7 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
             label: 'Probe SH',
             description: "The light of each tile's probe as its nine SH coefficients hold it, along the pixel's normal, as a white surface would reflect it.",
         },
-        // Capsaicin's SSGI views (ssgi_debug.comp, ssgi.cpp:94-100).
+        // Capsaicin's SSGI views (ssgi_debug.comp, ssgi.cpp:85-90).
         { kind: 'screen', id: RADIANCE_CACHE_DEBUG_VIEW.occlusion, label: 'SSGI occlusion', description: 'How open each pixel is to the sky of its own hemisphere, from nearby depth: white open, black closed in.' },
         { kind: 'screen', id: RADIANCE_CACHE_DEBUG_VIEW.bentNormal, label: 'SSGI bent normal', description: 'The mean open direction at each pixel, as a colour (x red, y green, z blue, 0.5 for 0).' },
     ];

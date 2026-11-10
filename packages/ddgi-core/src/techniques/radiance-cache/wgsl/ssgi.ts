@@ -84,7 +84,7 @@ export const SSGI_CONSTANTS_OFFSETS = {
     stepCount: 92,
 } as const;
 
-/** The two outputs' format: Capsaicin's `DXGI_FORMAT_R16G16B16A16_FLOAT` (ssgi.cpp:83-86). */
+/** The two outputs' format: Capsaicin's `DXGI_FORMAT_R16G16B16A16_FLOAT` (ssgi.cpp:74-77). */
 export const SSGI_OUTPUT_FORMAT: GPUTextureFormat = 'rgba16float';
 
 export const SSGI_GROUP: GPUBindGroupLayoutDescriptor = {
@@ -111,8 +111,8 @@ ${screenNormalWgsl(3)}
 struct RcSSGIConstants {
     inverseView: mat4x4f,   // inv_view: view-space directions to world space
     forward: vec3f,         // forward: normalize(center - eye), the camera's view axis
-    uvRadius: f32,          // uv_radius: view_radius * 0.5 * max(proj[0][0], proj[1][1]) (ssgi.cpp:150-151)
-    falloffMul: f32,        // falloff_mul: -1 / (view_radius * falloff_range) (ssgi.cpp:154)
+    uvRadius: f32,          // uv_radius: view_radius * 0.5 * max(proj[0][0], proj[1][1]) (ssgi.cpp:128-129)
+    falloffMul: f32,        // falloff_mul: -1 / (view_radius * falloff_range) (ssgi.cpp:130-133)
     falloffAdd: f32,        // falloff_add: view_radius * (1 - falloff_range) / (view_radius * falloff_range) + 1
     sliceCount: u32,        // slice_count (ssgi_slice_count_)
     stepCount: u32,         // step_count (ssgi_step_count_)
@@ -130,7 +130,7 @@ const RC_SSGI_HALF_PI: f32 = 1.57079632679490;
 // normalize(2 * 0 - 1): what Capsaicin's decode makes of a sky pixel's cleared normal (D58).
 const RC_SSGI_SKY_NORMAL: vec3f = vec3f(-0.577350269189626);
 
-// g_PointSampler (MIN_MAG_MIP_POINT, clamped to the edge; ssgi.cpp:229-230): the texel under uv
+// g_PointSampler (MIN_MAG_MIP_POINT, clamped to the edge; ssgi.cpp:217-218): the texel under uv
 // of a texture of any size, as SampleLevel(g_PointSampler, uv, 0) picks it.
 fn rcSSGIPointTexel(uv: vec2f, size: vec2u) -> vec2u {
     let texel = vec2i(floor(uv * vec2f(size)));
