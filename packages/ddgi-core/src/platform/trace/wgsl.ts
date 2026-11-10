@@ -473,11 +473,40 @@ fn giNoTriangleHit() -> GiTriangleHit {
     return GiTriangleHit(false, 0.0, vec2f(0.0), true);
 }
 
+// One edge function of the watertight test: for the edge from 'start' to 'end'
+// (corners already sheared into the 2-D space where the ray is the origin), the
+// scaled barycentric weight of the corner opposite it, end.x * start.y - end.y * start.x.
+//
+// Two triangles that share an edge walk it in opposite directions, and their
+// values must be exact negatives of each other, or a ray can slip between
+// them. Written plainly, that holds only if both products are rounded on their
+// own. A shader compiler may fuse one product into the subtraction (an FMA),
+// and which product it fuses changes the rounding, so the two triangles can
+// round the same edge to the same sign. Dawn compiles for Metal in relaxed math
+// mode, which allows that fusing: about 0.1% of the oracle's shared-edge rays
+// slipped through on an Apple M5 Pro while NVIDIA and Intel let none through.
+//
+// So the two corners are put in a fixed order first (by x, then y). Both
+// triangles then run the same arithmetic on the same operands and get the same
+// bits, whatever the compiler fuses, and the one that walks the edge the other
+// way negates the result, which is exact. A shared corner has the same sheared
+// bits in every triangle (giMakeRaySetup), so both triangles agree on the order.
+fn giEdgeFunction(start: vec2f, end: vec2f) -> f32 {
+    let reversed = start.x > end.x || (start.x == end.x && start.y > end.y);
+    let first = select(start, end, reversed);
+    let second = select(end, start, reversed);
+    // An edge that shears to a single point runs along the ray; exactly, its
+    // value is 0. A fused x * y - y * x would give the rounding error instead,
+    // with the same sign in both triangles (neither negates, as neither is reversed).
+    let ordered = select(second.x * first.y - second.y * first.x, 0.0, all(first == second));
+    return select(ordered, -ordered, reversed);
+}
+
 // Woop, Benthin and Wald, "Watertight Ray/Triangle Intersection" (2013).
 // Triangles store three corners. The three edge functions are computed from
 // the same corner bits for both triangles that share an edge, with opposite
-// signs, so a ray cannot pass between them. A zero counts as inside for both,
-// so a ray exactly on an edge hits both neighbours rather than neither.
+// signs (giEdgeFunction), so a ray cannot pass between them. A zero counts as
+// inside for both, so a ray exactly on an edge hits both neighbours rather than neither.
 fn giIntersectWatertight(triangle: GiBvhTriangle, setup: GiRaySetup, tMin: f32, tMax: f32) -> GiTriangleHit {
     // Corners relative to the ray origin.
     let a = triangle.vertex0 - setup.origin;
@@ -493,10 +522,14 @@ fn giIntersectWatertight(triangle: GiBvhTriangle, setup: GiRaySetup, tMin: f32, 
     let cx = dot(c, setup.shearRowX);
     let cy = dot(c, setup.shearRowY);
 
-    // Edge functions: the (scaled) barycentric weights of corners 0, 1 and 2.
-    let weight0 = cx * by - cy * bx;
-    let weight1 = ax * cy - ay * cx;
-    let weight2 = bx * ay - by * ax;
+    // Edge functions: the (scaled) barycentric weights of corners 0, 1 and 2,
+    // from the edges opposite them (b to c, c to a, a to b).
+    let projectedA = vec2f(ax, ay);
+    let projectedB = vec2f(bx, by);
+    let projectedC = vec2f(cx, cy);
+    let weight0 = giEdgeFunction(projectedB, projectedC);
+    let weight1 = giEdgeFunction(projectedC, projectedA);
+    let weight2 = giEdgeFunction(projectedA, projectedB);
     if ((weight0 < 0.0 || weight1 < 0.0 || weight2 < 0.0) && (weight0 > 0.0 || weight1 > 0.0 || weight2 > 0.0)) {
         return giNoTriangleHit();   // the weights disagree in sign: outside the triangle
     }

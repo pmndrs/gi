@@ -21,6 +21,18 @@ Rules:
 
 ---
 
+## 2026-11-10 · Mac shared-edge slips (`m34-mac-edges`) · implementer (opus)
+Did: one diagnosis, one fix. The cause is FMA fusing in the watertight test's edge functions. Dawn compiles Metal shaders in relaxed math mode, which lets the compiler fuse one product of `x1*y1 - x2*y2`. Two triangles sharing an edge then aren't exact negatives, and rays slip between them. The fix is `giEdgeFunction` in `packages/ddgi-core/src/platform/trace/wgsl.ts`: it orders an edge's two corners (by x, then y), so both triangles run the same arithmetic and one negates. The algorithm stays Woop's, with one path for every backend. The CPU port (doubles, never fused) is unchanged.
+Evidence, from a temporary brute-force page (not committed), 1M `shared-edges` rays against all 128 triangles: the old test copied verbatim slipped 2,696 rays, the same as the oracle, so the trees aren't involved; the fixed test slipped 0. Over 64 slipped rays, all 24,576 GPU edge values matched `round(x1*y1 - round(x2*y2))` bit for bit; plain rounding matched only 54%. There were 6,185 shared edges with unequal values (for example `0.7500001` against `-0.7499999`) and 0 inconsistent corners, so the shear is fine. The ray transform runs once per ray, so it can't separate two triangles; the transformed case fails through the same test.
+Verified, Apple M5 Pro, headless Chrome, `apple / metal-3`, bench lock, untimed:
+- `trace-oracle` PASS. Shared-edge slips went from 2,696 to 0 (`shared-edges`) and from 1,809 to 0 (`-transformed`), closest-hit and any-hit, in every variant.
+- `textures-uv-board` ("ray 0 missed its board" before) and `three-m4-flip-y` ("grid point 30 missed a quad" before) PASS: the same cause, quad diagonals.
+- `trace-materials`, `trace-runtime-trees` (assets downloaded; 0 ambiguous), `ddgi-furnace`, `ddgi-leak` PASS.
+- Lint and typecheck clean; unit tests 101 files / 1,466 pass.
+Not verified: NVIDIA and Intel (not on this Mac). The arithmetic is unchanged where nothing fuses, but `trace-oracle` should be re-run there.
+Numbers: added work is about 3 compares and 4 selects per edge, three edges per triangle test. `trace-bench-quick` once each way (unclocked, shared GPU) was too noisy to show a cost: the unchanged three-mesh-bvh rows moved 20%.
+Next: none for the BVH track (`packages/bvh` wasn't involved). The lead can add a task row if wanted; there was none for this work.
+
 ## 2026-11-10 · T3.4 merged with `m3` (T3.6) · implementer (opus)
 Did: merged `m3` (a1abecd) into `m3-t3.4`. Conflicts were only in the PROGRESS and DECISIONS tops; both sides kept. The marks, wakes and receiver entries already go through T3.6's conversion: the table holds window probes, and `ddgiMarkThread` turns each into its slot. One fix: the far set's contrast walks the probes around a box's centre in window coordinates, and it now reads each one through its slot (`ddgiProbeSlot`). `ddgi-wake-air-probes` adds a camera-following volume (8 probes wide on x) that scrolls with the ball; the probes near the ball's last box must be woken in their slots.
 Verified, RTX 3060 Laptop (nvidia/ampere), bench lock, untimed; all pass:
