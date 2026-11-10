@@ -21,6 +21,13 @@ Rules:
 
 ---
 
+## 2026-11-10 · T5.6, T5.7, T5.8 (M5 second half) · lead (opus)
+Did: design `docs/design/m5-release.md` (examples site, release prep, small leftovers; modelled on @pmndrs/upscaler). T5.8 inline: `DDGILightGroups` exported and documented, `SceneApi.updateMesh` and procedural-sky comments fixed. Reviewed and merged T5.7 then T5.6 into `m34`; updated docs/milestones/M5.md (coverage rows, the Bistro finding, sign-off list).
+Verified (Mac M5 Pro, apple / metal-3, headless Chrome): on `m34` after both merges, lint, typecheck, 1,600 unit tests, `pnpm test:release` (28), `pnpm build`, `pnpm verify:packed` pass; `examples-site` PASS (66 s) on a `PAGES_BASE=/webgpu-ddgi/` build. Looked at the 12-example contact sheet.
+Not verified: any workflow on GitHub (none enabled); Safari, the RTX, the Intel.
+Numbers: tarball 581.7 kB, 17 files; examples site 2.4 MB, 35 files.
+Next: Dennis reads the README and docs/releasing.md, looks at the viewer and examples, signs off; then one PR `m34` → `main`. Dennis's one-time steps are in docs/releasing.md. T5.7 installed `actionlint` and `shellcheck` with Homebrew on the Mac (`brew uninstall` removes them).
+
 ## 2026-11-10 · T5.6 examples site · implementer (opus)
 Did (branch `m34-t5.6`, `m34` merged in): `examples/` as upscaler's gallery: `index.html` (landing), `01-hello` … `10-debug` (`NN-name/{index.html,main.ts}`; 01/02 are the old `examples/three` pages, now removed), `webgpu/hello` built into the same site, `shared/` (renderer, procedural scene loader over `scenes/`, stats line, `window.ddgiExample = { frames, giMean, error }`, injected nav), `vite.config.ts` (library aliased to source, `PAGES_BASE`, chunks split so hello skips three), `README.md` table. Root `examples` / `examples:build`; workspace, tsconfig updated. `.github/workflows/deploy-pages.yml` (not enabled; actionlint clean). GPU page `three-examples` became `examples-site` (test server serves `examples/dist` under `/webgpu-ddgi/`, `tools/gpu/server.ts`); `tools/examples/screenshots.ts`. README: the examples link and `pnpm examples`; three.md's examples link.
 Verified, Apple M5 Pro (apple / metal-3), headless Chrome, bench lock: `examples-site` PASS: size, 32 references inside the base, every example (GI frames, GI mean > 0, canvas not black, GI still running after start), 07 switched low/medium/high live (27/64/216 probes), 08 reloaded from its bake, 06's three scenes and 10's three screen views. It fails on a build without `PAGES_BASE` and on an injected iframe `console.error` (both tried). Looked at every screenshot. Lint, typecheck, 1,588 tests pass.
