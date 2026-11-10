@@ -99,8 +99,10 @@ export const HASH_GRID_CACHE_GROUP_ENTRIES: readonly GPUBindGroupLayoutEntry[] =
 /**
  * Word offsets of `HashGridCacheConstants`' fields (`gi1_shared.h:59-92`,
  * debug fields left out, `g_Eye` and `g_FrameIndex` added at the front and
- * `g_UseDirectLighting` in the first padding word), for
- * the TypeScript that writes the block. 32 words, 128 bytes.
+ * `g_UseDirectLighting` and `gi1_use_multibounce` in the first two padding
+ * words), for the TypeScript that writes the block. 32 words, 128 bytes.
+ * Capsaicin compiles multibounce in or out (`USE_MULTI_BOUNCE`); here it is
+ * a word the passes read, so the option needs no recompile.
  */
 export const HASH_GRID_CONSTANTS_WORD = {
     eyePosition: 0,
@@ -122,6 +124,7 @@ export const HASH_GRID_CONSTANTS_WORD = {
     discardMultibounceRayProbability: 27,
     maxMultibounceSampleCount: 28,
     useDirectLighting: 29,
+    useMultibounce: 30,
 } as const;
 
 /** Bytes of `HashGridCacheConstants`. */
@@ -165,7 +168,7 @@ struct HashGridCacheConstants {
     discard_multibounce_ray_probability: f32,
     max_multibounce_sample_count: f32,
     use_direct_lighting: u32,       // GI1's g_UseDirectLighting (gi1.comp:35; gi1_use_direct_lighting)
-    padding1: u32,
+    use_multibounce: u32,           // gi1_use_multibounce, which Capsaicin compiles in as USE_MULTI_BOUNCE (gi1.cpp:1428-1431)
     padding2: u32,
 }
 `;
