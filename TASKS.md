@@ -514,7 +514,7 @@ Status: **started 2026-11-09** on branch `m4` (from `m2` at 5de856b), beside M3.
 
 ## M5: coverage pass (prototype)
 
-Status: **started 2026-11-10** on the Mac, on branch `m34` (M3 and M4 land first). Design: [docs/design/m5-coverage.md](docs/design/m5-coverage.md), which has each task's done-when. Under DECISIONS 2026-11-10 "Feature coverage before tuning": each feature works end to end, passes one smoke check and gets Dennis's look; numbers are recorded, never gated, except the correctness bars the design names. One fix attempt for a miss, then a known miss. The examples site and release prep come after this pass.
+Status: **started 2026-11-10** on the Mac, on branch `m34` (M3 and M4 land first). Design: [docs/design/m5-coverage.md](docs/design/m5-coverage.md), which has each task's done-when. Under DECISIONS 2026-11-10 "Feature coverage before tuning": each feature works end to end, passes one smoke check and gets Dennis's look; numbers are recorded, never gated, except the correctness bars the design names. One fix attempt for a miss, then a known miss. The examples site and release prep come after this pass, as T5.6 and T5.7 ([docs/design/m5-release.md](docs/design/m5-release.md), 2026-11-10).
 
 | ID | Task | Agent | Size | Depends on | Status |
 | --- | --- | --- | --- | --- | --- |
@@ -523,6 +523,9 @@ Status: **started 2026-11-10** on the Mac, on branch `m34` (M3 and M4 land first
 | T5.3 | The `LightProbeGrid` export: L2 SH projection on the GPU (core), `toLightProbeGrid` and the JSON (three), check against live GI | implementer (scout first for PR #33658's format) | M | M3, M4 on `m34` | done (2026-11-10, Mac M5 Pro: merged into `m34` after the lead's review; exported grid against live GI: Cornell −0.3 to −1.0%, Sponza −8.1% / −4.0%; JSON round trip exact; our own `formatVersion: 1` since three's PR #33658 is still open and stores fixed point; `LightProbeGridWebGL` and exporting a second or camera volume not run) |
 | T5.4 | Docs: platform and three API docs brought up to date, the adapter guide on the hello example (hello passes every material slot and textures first), getting-started, the docs-cover-exports check | implementer | M | T5.1-T5.3 for their sections | review (2026-11-10, Mac M5 Pro: merged into `m34` after the lead's review; API docs up to date for M2-M5, `docs/guides/adapter.md`, getting-started in the README; hello passes every material slot and texture (`three-neutrality` 0 pixels off); `pnpm test` now fails on an export the docs don't name and `pnpm typecheck` checks the docs' code examples; waiting on Dennis reading the getting-started) |
 | T5.5 | Coverage note (`docs/milestones/M5.md`): every v1 feature, its check, its Mac result, its known misses, then the proposed tuning pass; Dennis's look | main session | S | all M5 | review (2026-11-10: docs/milestones/M5.md; every v1 feature has a passing check on the M5 Pro; the proposed tuning pass is in it; waiting on Dennis's sign-off) |
+| T5.6 | The examples site: a numbered gallery (01-hello to 10-debug, plus `webgpu/hello`), a landing page, `pnpm examples` and `examples:build` with `PAGES_BASE`, a Pages workflow (committed, not enabled), a GPU page that loads every built example. Design: [docs/design/m5-release.md](docs/design/m5-release.md) | implementer | M | T5.1-T5.4 | in progress |
+| T5.7 | Release prep: README, LICENSE and THIRD_PARTY in the tarball, a packed-consumer check, CI and publish workflows (written, not run against npm), `CHANGELOG.md`, `docs/releasing.md`, the README as a public home. Nothing is published | implementer | M | T5.4 | in progress |
+| T5.8 | Small leftovers: export `DDGILightGroups`, two stale comments | main session | XS | T5.4 | in progress |
 
 ## Carried to M2 (collected during M1)
 
