@@ -49,6 +49,15 @@ export interface GIPlatformOptions {
      * Defaults to `worker`.
      */
     readonly buildIn?: 'worker' | 'main';
+    /**
+     * Texels on a side of each layer of the texture store, the platform's
+     * own copy of every material texture that rays read: 256 (the default),
+     * 128 or 64. A smaller store takes a quarter (or a sixteenth) of the
+     * memory, and only rays hitting a texture up close see fewer texels: GI
+     * rays mostly read coarse mips. The quality presets set it
+     * (`ddgiPreset(name).textureLayerSize`). Fixed for the platform's life.
+     */
+    readonly textureLayerSize?: 64 | 128 | 256;
 }
 
 export interface GIPlatform {

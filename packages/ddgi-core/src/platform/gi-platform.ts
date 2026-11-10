@@ -156,7 +156,7 @@ export class GIPlatformImpl implements GIPlatform {
         this.compiles = countComputePipelines(device, () => this.isReady);
         // The platform's own GPU work goes through the counting view; the host keeps its device as it is.
         const ownDevice = this.compiles.device;
-        this.textures = new PlatformTextureStore(ownDevice, { label: this.label, warn: (message) => this.warnOnce(message) });
+        this.textures = new PlatformTextureStore(ownDevice, { label: this.label, warn: (message) => this.warnOnce(message), layerSize: options.textureLayerSize });
         this.sceneCopy = new PlatformScene(ownDevice, {
             label: this.label,
             textureStore: this.textures,

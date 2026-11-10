@@ -1,5 +1,5 @@
 /**
- * The `gi/texture-store` kernel: makes one 256 × 256 layer of the texture
+ * The `gi/texture-store` kernel: makes one 256 × 256 layer (or smaller, `storeLayout`) of the texture
  * store, with its full mip chain, from a source on the GPU
  * (texture-sources.ts). Three entry points:
  *
@@ -34,10 +34,25 @@
  * texture changes the kernel or its uniforms.
  */
 
-/** The store's layers are this many texels on a side. */
+/**
+ * The store's layers are this many texels on a side by default. A platform
+ * can be made with smaller layers (`GIPlatformOptions.textureLayerSize`, the
+ * quality presets' `textureLayerSize`); the layout below is worked out per
+ * size ({@link storeLayout}), and these exports are the default's.
+ */
 export const STORE_LAYER_SIZE = 256;
 
-/** Levels of a layer's mip chain: 256, 128, ..., 1. */
+/**
+ * The layer sizes a store may have. Powers of two, so every mip halves
+ * exactly down to 1 × 1; at most 256, the size M4 was built and checked at
+ * (GI rays read coarse mips, so larger layers would cost memory for texels
+ * no ray reads); at least 64, so the alpha test's fixed mip
+ * (`ALPHA_TEST_LOD`, 1) still has 32² texels to cut leaves out of.
+ */
+export const TEXTURE_LAYER_SIZES = [64, 128, 256] as const;
+export type TextureLayerSize = (typeof TEXTURE_LAYER_SIZES)[number];
+
+/** Levels of a layer's mip chain at the default size: 256, 128, ..., 1. */
 export const STORE_MIP_LEVELS = Math.log2(STORE_LAYER_SIZE) + 1;
 
 /** Layers one `gi/texture-store` pass makes before its byte buffer is copied out: the byte buffer holds this many layers. */
@@ -55,14 +70,40 @@ export const BUILD_STEP_BYTES = 32;
 /** Threads per workgroup side; dispatches cover a level in 8 × 8 tiles. */
 export const BUILD_WORKGROUP_SIZE = 8;
 
-/** Width (and height) of mip `level`. */
-export function levelSize(level: number): number {
-    return STORE_LAYER_SIZE >> level;
-}
-
-/** Bytes per row of mip `level` in the byte buffer: four per texel, padded for `copyBufferToTexture`. */
-export function levelRowBytes(level: number): number {
-    return Math.ceil((levelSize(level) * 4) / COPY_ROW_ALIGNMENT) * COPY_ROW_ALIGNMENT;
+/**
+ * Where everything sits for one layer size: the mip chain, the build
+ * buffers' layout and the uniform steps. The store, its kernel and the
+ * sampling module all read one of these, so a smaller store changes sizes
+ * and offsets only, never the kernel's logic.
+ */
+export interface StoreLayout {
+    /** Texels on a side of mip 0. */
+    readonly layerSize: TextureLayerSize;
+    /** Levels of the mip chain, down to 1 × 1. */
+    readonly mipLevels: number;
+    /** Width (and height) of mip `level`. */
+    levelSize(level: number): number;
+    /** Bytes per row of mip `level` in the byte buffer: four per texel, padded for `copyBufferToTexture`. */
+    levelRowBytes(level: number): number;
+    /** First texel of mip `level` in the linear scratch (levels one after another, rows unpadded). */
+    linearLevelTexel(level: number): number;
+    /** Byte offset of mip `level` inside one layer's part of the byte buffer. */
+    levelByteOffset(level: number): number;
+    /** Texels of the linear scratch: every level of one layer. */
+    readonly linearScratchTexels: number;
+    /** Bytes of one layer's part of the byte buffer (every level, rows padded). */
+    readonly layerBuildBytes: number;
+    /** Bytes of one layer with its mips in the array: 4 a texel, about 4/3 of mip 0. */
+    readonly layerBytes: number;
+    /** Bytes of the uniform buffer of every step. */
+    readonly buildStepUniformBytes: number;
+    /**
+     * The uniform buffer's contents: one `GiTextureBuildStep` per (place in
+     * the pass, level), `BUILD_STEP_STRIDE` bytes apart. Step `place × levels + level`.
+     */
+    buildStepWords(): Uint32Array<ArrayBuffer>;
+    /** The dynamic offset of step (place, level) in the uniform buffer. */
+    buildStepOffset(place: number, level: number): number;
 }
 
 function sumOverLevels(below: number, value: (level: number) => number): number {
@@ -71,55 +112,97 @@ function sumOverLevels(below: number, value: (level: number) => number): number 
     return sum;
 }
 
-/** First texel of mip `level` in the linear scratch (levels one after another, rows unpadded). */
-export function linearLevelTexel(level: number): number {
-    return sumOverLevels(level, (above) => levelSize(above) * levelSize(above));
-}
-
-/** Texels of the linear scratch: every level of one layer. */
-export const LINEAR_SCRATCH_TEXELS = linearLevelTexel(STORE_MIP_LEVELS);
-
-/** Byte offset of mip `level` inside one layer's part of the byte buffer. */
-export function levelByteOffset(level: number): number {
-    return sumOverLevels(level, (above) => levelRowBytes(above) * levelSize(above));
-}
-
-/** Bytes of one layer's part of the byte buffer (every level, rows padded). */
-export const LAYER_BUILD_BYTES = levelByteOffset(STORE_MIP_LEVELS);
-
-/**
- * The uniform buffer's contents: one `GiTextureBuildStep` per (place in the
- * pass, level), `BUILD_STEP_STRIDE` bytes apart. Step `place × levels + level`.
- */
-export function buildStepWords(): Uint32Array<ArrayBuffer> {
-    const strideWords = BUILD_STEP_STRIDE / 4;
-    const words = new Uint32Array(BUILD_LAYERS_PER_PASS * STORE_MIP_LEVELS * strideWords);
-    for (let place = 0; place < BUILD_LAYERS_PER_PASS; place++) {
-        for (let level = 0; level < STORE_MIP_LEVELS; level++) {
-            const base = (place * STORE_MIP_LEVELS + level) * strideWords;
-            words[base + 0] = levelSize(level);
-            words[base + 1] = level > 0 ? linearLevelTexel(level - 1) : 0;
-            words[base + 2] = linearLevelTexel(level);
-            words[base + 3] = (place * LAYER_BUILD_BYTES + levelByteOffset(level)) / 4;
-            words[base + 4] = levelRowBytes(level) / 4;
-        }
+/** The layout for one of {@link TEXTURE_LAYER_SIZES}; anything else throws. */
+export function storeLayout(layerSize: number = STORE_LAYER_SIZE): StoreLayout {
+    if (!(TEXTURE_LAYER_SIZES as readonly number[]).includes(layerSize)) {
+        throw new RangeError(`@pmndrs/ddgi: the texture store's layer size must be one of ${TEXTURE_LAYER_SIZES.join(', ')}, got ${layerSize}`);
     }
-    return words;
+    const mipLevels = Math.log2(layerSize) + 1;
+    const levelSize = (level: number): number => layerSize >> level;
+    const levelRowBytes = (level: number): number => Math.ceil((levelSize(level) * 4) / COPY_ROW_ALIGNMENT) * COPY_ROW_ALIGNMENT;
+    const linearLevelTexel = (level: number): number => sumOverLevels(level, (above) => levelSize(above) * levelSize(above));
+    const levelByteOffset = (level: number): number => sumOverLevels(level, (above) => levelRowBytes(above) * levelSize(above));
+    const layerBuildBytes = levelByteOffset(mipLevels);
+    const buildStepOffset = (place: number, level: number): number => (place * mipLevels + level) * BUILD_STEP_STRIDE;
+    return {
+        layerSize: layerSize as TextureLayerSize,
+        mipLevels,
+        levelSize,
+        levelRowBytes,
+        linearLevelTexel,
+        levelByteOffset,
+        linearScratchTexels: linearLevelTexel(mipLevels),
+        layerBuildBytes,
+        layerBytes: linearLevelTexel(mipLevels) * 4,
+        buildStepUniformBytes: BUILD_LAYERS_PER_PASS * mipLevels * BUILD_STEP_STRIDE,
+        buildStepWords(): Uint32Array<ArrayBuffer> {
+            const strideWords = BUILD_STEP_STRIDE / 4;
+            const words = new Uint32Array(BUILD_LAYERS_PER_PASS * mipLevels * strideWords);
+            for (let place = 0; place < BUILD_LAYERS_PER_PASS; place++) {
+                for (let level = 0; level < mipLevels; level++) {
+                    const base = buildStepOffset(place, level) / 4;
+                    words[base + 0] = levelSize(level);
+                    words[base + 1] = level > 0 ? linearLevelTexel(level - 1) : 0;
+                    words[base + 2] = linearLevelTexel(level);
+                    words[base + 3] = (place * layerBuildBytes + levelByteOffset(level)) / 4;
+                    words[base + 4] = levelRowBytes(level) / 4;
+                }
+            }
+            return words;
+        },
+        buildStepOffset,
+    };
 }
 
-/** The dynamic offset of step (place, level) in the uniform buffer. */
+/** The default layout (256² layers), which the CPU mirrors and the tests read. */
+const DEFAULT_LAYOUT = storeLayout(STORE_LAYER_SIZE);
+
+/** Width (and height) of mip `level` at the default size. */
+export function levelSize(level: number): number {
+    return DEFAULT_LAYOUT.levelSize(level);
+}
+
+/** Bytes per row of mip `level` in the byte buffer at the default size. */
+export function levelRowBytes(level: number): number {
+    return DEFAULT_LAYOUT.levelRowBytes(level);
+}
+
+/** First texel of mip `level` in the linear scratch at the default size. */
+export function linearLevelTexel(level: number): number {
+    return DEFAULT_LAYOUT.linearLevelTexel(level);
+}
+
+/** Texels of the linear scratch at the default size. */
+export const LINEAR_SCRATCH_TEXELS = DEFAULT_LAYOUT.linearScratchTexels;
+
+/** Byte offset of mip `level` inside one layer's part of the byte buffer, at the default size. */
+export function levelByteOffset(level: number): number {
+    return DEFAULT_LAYOUT.levelByteOffset(level);
+}
+
+/** Bytes of one layer's part of the byte buffer at the default size. */
+export const LAYER_BUILD_BYTES = DEFAULT_LAYOUT.layerBuildBytes;
+
+/** The uniform buffer's contents at the default size ({@link StoreLayout.buildStepWords}). */
+export function buildStepWords(): Uint32Array<ArrayBuffer> {
+    return DEFAULT_LAYOUT.buildStepWords();
+}
+
+/** The dynamic offset of step (place, level) at the default size. */
 export function buildStepOffset(place: number, level: number): number {
-    return (place * STORE_MIP_LEVELS + level) * BUILD_STEP_STRIDE;
+    return DEFAULT_LAYOUT.buildStepOffset(place, level);
 }
 
-/** Bytes of the uniform buffer of every step. */
-export const BUILD_STEP_UNIFORM_BYTES = BUILD_LAYERS_PER_PASS * STORE_MIP_LEVELS * BUILD_STEP_STRIDE;
+/** Bytes of the uniform buffer of every step at the default size. */
+export const BUILD_STEP_UNIFORM_BYTES = DEFAULT_LAYOUT.buildStepUniformBytes;
 
 export const FILL_ENCODED_ENTRY_POINT = 'giTextureStoreFillEncoded';
 export const FILL_LINEAR_ENTRY_POINT = 'giTextureStoreFillLinear';
 export const MIP_ENTRY_POINT = 'giTextureStoreMip';
 
-export const TEXTURE_STORE_WGSL = /* wgsl */ `
+/** The kernel's source for layers `layerSize` texels on a side. */
+export function textureStoreWgsl(layerSize: TextureLayerSize = STORE_LAYER_SIZE): string {
+    return /* wgsl */ `
 // ---- gi/texture-store (platform/textures) -----------------------------------------------
 
 // What one dispatch works on: one level of one layer of the pass.
@@ -139,7 +222,7 @@ struct GiTextureBuildStep {
 // The source (fill entry points only): one level of a 2D texture, read with textureLoad.
 @group(1) @binding(0) var giBuildSource: texture_2d<f32>;
 
-const GI_STORE_LAYER_SIZE: u32 = ${STORE_LAYER_SIZE}u;
+const GI_STORE_LAYER_SIZE: u32 = ${layerSize}u;
 
 // The sRGB transfer functions (IEC 61966-2-1), per channel.
 fn giSrgbToLinear(encoded: vec3f) -> vec3f {
@@ -282,3 +365,7 @@ fn ${MIP_ENTRY_POINT}(@builtin(global_invocation_id) id: vec3u) {
     giBuildWrite(id.xy, giBuildAverageOf(sum));
 }
 `;
+}
+
+/** The kernel at the default layer size. */
+export const TEXTURE_STORE_WGSL = textureStoreWgsl(STORE_LAYER_SIZE);
