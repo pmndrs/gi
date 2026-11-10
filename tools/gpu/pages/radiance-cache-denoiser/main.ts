@@ -15,7 +15,8 @@
  *    hint 1 for 160 frames; sky pixels read 0; at frames 1, 2, 8, 40, 100 and
  *    160 every pixel is the CPU reference's within 2 half steps (run from the
  *    GPU's own previous state, with its rounding of half stores); it settles
- *    (frame-to-frame change within one half step over the last 10 frames);
+ *    (over the last 10 frames no pixel moves by more than two half steps a
+ *    frame and the mean doesn't drift by 1e-4);
  *    and the reference run alone in f64 for 40 frames gives E back within
  *    1e-6. The GPU's distance from E is reported (information: each half
  *    store's rounding is fed back through up to 64 samples), and so is the
@@ -33,10 +34,10 @@
  *    a pan and dolly to B: the same comparison for B's frame (velocity from
  *    the exact motion), and with the input's hint set to 0 at B (so the
  *    output is the reprojected history alone), on a 2 m checker, every pixel
- *    whose neighbourhood (±10 pixels) at A lies in one square reads that
+ *    whose neighbourhood (±16 pixels) at A lies in one square reads that
  *    square's value within 1.5% (a wrong motion would land on the wrong one;
- *    the margin is the still camera's tent spreading the history). The
- *    pixels B
+ *    the margin is A's own spread history: the radius-8 blur of the first
+ *    frames, and the still camera's tent). The pixels B
  *    sees that A didn't (the CPU reference finds no history) have the full
  *    blur mask, the converged ones mask 0, and the noise in the disoccluded
  *    region falls by more than half (it is blurred) while the converged
@@ -85,6 +86,7 @@ const TECHNIQUE_HEIGHT = 720;
  */
 const CONSTANT_FRAMES = 160;
 const SETTLED_FRAMES = 10;
+const SETTLED_HALF_STEPS = 2;
 const CONSTANT_TWIN_FRAMES = [1, 2, 8, 40, 100, 160];
 const CONSTANT_REFERENCE_FRAMES = 40;
 const CONSTANT_E: [number, number, number] = [0.3, 0.6, 0.9];
@@ -95,11 +97,13 @@ const WEAK_HINT_SHARE = 0.03;
 /**
  * Check 3: frames at A before the move; the landing check's checker (2 m squares), the margin
  * round each pixel's reprojected position that must lie in one square, and the tolerance (the
- * half stores' rounding, fed back, is under 1%; a wrong landing mixes 1 and 0.25).
+ * half stores' rounding, fed back, is under 1%; a wrong landing mixes 1 and 0.25). The margin
+ * covers the history's own spread at A: the first 8 frames after a reset are blurred over up to
+ * 8 pixels each way (FilterGI's radius 8 - count), and those samples stay in the history.
  */
 const MOVE_WARM_FRAMES = 24;
 const LANDING_CHECKER_METRES = 2;
-const LANDING_MARGIN = 10;
+const LANDING_MARGIN = 16;
 const LANDING_TOLERANCE = 0.015;
 /** How near a threshold a CPU test may be and still be counted rather than failed. */
 const THRESHOLD_MARGIN = 1e-3;
@@ -407,6 +411,7 @@ function compareFrame(label: string, before: State, after: State, data: FrameDat
     const linear = linearDepths(data.guides.depth, WIDTH, HEIGHT, frame);
     const undecided = reference.undecided;
 
+    const examples: Record<string, unknown>[] = [];
     let maskOff = 0;
     let radiusOff = 0;
     let radiusSnormRounded = 0;
@@ -426,7 +431,13 @@ function compareFrame(label: string, before: State, after: State, data: FrameDat
         }
         const delta = reference.colorDelta[pixel];
         const gpuDelta = after.colorDelta[written][pixel];
-        if (Math.abs(gpuDelta - delta) > 1e-6 + 1e-3 * Math.abs(delta)) deltaOff++;
+        // The delta is a difference of luminances (gi1.comp:4077): its f32 error scales with them
+        // (the tent's weights are f32 on the GPU), not with the difference.
+        const inputLuminance = 0.2126 * data.radiance[pixel * 4] + 0.7152 * data.radiance[pixel * 4 + 1] + 0.0722 * data.radiance[pixel * 4 + 2];
+        if (Math.abs(gpuDelta - delta) > 1e-6 + 1e-3 * Math.abs(delta) + 1e-5 * inputLuminance) {
+            deltaOff++;
+            if (examples.length < 4) examples.push({ kind: 'delta', x: pixel % WIDTH, y: Math.floor(pixel / WIDTH), gpu: gpuDelta, reference: delta, input: Array.from(data.radiance.subarray(pixel * 4, pixel * 4 + 4)) });
+        }
         if (gpuRadius[pixel] === 0) {
             reprojectChecked++;
             for (let channel = 0; channel < 4; channel++) {
@@ -485,6 +496,7 @@ function compareFrame(label: string, before: State, after: State, data: FrameDat
     }
     let undecidedCount = 0;
     for (const flag of undecided) undecidedCount += flag;
+    if (examples.length > 0) console.info(`${label} examples`, JSON.stringify(examples));
     const summary = { undecided: undecidedCount, maskOff, radiusOff, radiusSnormRounded, deltaOff, reprojectChecked, reprojectOff, firstChecked, firstOff, secondOff, irradianceOff };
     for (const [name, count] of Object.entries({ maskOff, radiusOff, deltaOff, reprojectOff, firstOff, secondOff, irradianceOff })) {
         if (count > 0) failures.push(`${label}: ${count} pixels ${name}`);
@@ -522,6 +534,8 @@ async function checkStillConstant(device: GPUDevice, denoiser: GI1Denoiser, mode
     let skyNonZero = 0;
     let twinFailures = 0;
     const settledChange: number[] = [];
+    const moving: Record<string, number>[] = [];
+    const lastMeans: number[] = [];
     const meanOverE: Record<string, number> = {};
     let previousOutput: Float32Array | null = null;
     let last = { worst: 0, mean: 0 };
@@ -545,19 +559,28 @@ async function checkStillConstant(device: GPUDevice, denoiser: GI1Denoiser, mode
                 for (let channel = 0; channel < 3; channel++) {
                     const a = output[pixel * 4 + channel];
                     const b = previousOutput[pixel * 4 + channel];
-                    worstSteps = Math.max(worstSteps, Math.abs(a - b) / halfStep(Math.max(a, b)));
+                    const steps = Math.abs(a - b) / halfStep(Math.max(a, b));
+                    if (steps > 1) moving.push({ x: pixel % WIDTH, y: Math.floor(pixel / WIDTH), channel, from: b, to: a, steps });
+                    worstSteps = Math.max(worstSteps, steps);
                 }
             }
             settledChange.push(worstSteps);
         }
-        if ([1, 8, 40, 100, CONSTANT_FRAMES].includes(index)) meanOverE[`frame${index}`] = overE(output).mean;
         last = overE(output);
+        if ([1, 8, 40, 100, CONSTANT_FRAMES].includes(index)) meanOverE[`frame${index}`] = last.mean;
+        if (index > CONSTANT_FRAMES - SETTLED_FRAMES) lastMeans.push(last.mean);
         previousOutput = output;
     }
     harness.dispose();
     if (skyNonZero > 0) failures.push(`still constant: ${skyNonZero} sky pixel-frames read other than 0`);
     const settled = Math.max(...settledChange);
-    if (settled > 1) failures.push(`still constant: the output still moves by ${settled} half steps a frame in the last ${SETTLED_FRAMES} frames`);
+    // Settled: no pixel moves by more than two half steps a frame, and the image's mean doesn't
+    // drift. (Stated first as one half step; on the M5, which truncates half stores, pixels with a
+    // short history cycle between values two half steps apart, frame after frame, as the CPU
+    // reference with truncated halves does; see PROGRESS, RC4.3.)
+    if (settled > SETTLED_HALF_STEPS) failures.push(`still constant: the output still moves by ${settled} half steps a frame in the last ${SETTLED_FRAMES} frames`);
+    const drift = Math.abs(lastMeans[lastMeans.length - 1] - lastMeans[0]);
+    if (drift > 1e-4) failures.push(`still constant: the mean over E drifts by ${drift.toExponential(3)} over the last ${SETTLED_FRAMES} frames`);
 
     // The reference alone: in f64 throughout (the port's arithmetic on a constant must give the
     // constant back), and with round-to-nearest halves where the GPU stores them (information).
@@ -592,6 +615,10 @@ async function checkStillConstant(device: GPUDevice, denoiser: GI1Denoiser, mode
             gpuMeanOverE: meanOverE,
             gpuWorstOverELastFrame: last.worst,
             settledWorstHalfSteps: settled,
+            movingByMoreThanOneStep: moving.length,
+            movingWithin30PixelsOfTheEdge: moving.filter((entry) => Math.min(entry.x, entry.y, WIDTH - 1 - entry.x, HEIGHT - 1 - entry.y) < 30).length,
+            meanDriftLastFrames: Math.abs(lastMeans[lastMeans.length - 1] - lastMeans[0]),
+            movingExamples: moving.slice(0, 6),
             twinFrames: CONSTANT_TWIN_FRAMES,
             twinFailures,
             referenceExactWorstOverE: referenceExactWorst,
@@ -719,11 +746,13 @@ async function checkCameraMove(device: GPUDevice, denoiser: GI1Denoiser, mode: R
 /**
  * Pixels of B whose reprojected position at A has a neighbourhood of
  * ±`LANDING_MARGIN` pixels all in B's pixel's own checker cell: the output
- * must be the cell's value. The margin is wide because a still camera's 3 × 3
- * tent (weights 1 and 0.29 on the four sides, gi1.comp:4053-4054) spreads the
- * history by a few pixels over its 64 frames.
+ * must be the cell's value. The margin is wide because A's history is spread:
+ * its first frames were blurred over up to 8 pixels, and a still camera's
+ * 3 × 3 tent (weights 1 and 0.29 on the four sides, gi1.comp:4053-4054)
+ * spreads it a little more every frame.
  */
-function checkLanding(guidesA: Guides, guidesB: Guides, state: State): { checked: number; off: number; worst: number } {
+function checkLanding(guidesA: Guides, guidesB: Guides, state: State): { checked: number; off: number; worst: number; examples: Record<string, unknown>[] } {
+    const examples: Record<string, unknown>[] = [];
     let checked = 0;
     let off = 0;
     let worst = 0;
@@ -756,10 +785,13 @@ function checkLanding(guidesA: Guides, guidesB: Guides, state: State): { checked
             checked++;
             const error = Math.abs(state.irradiance[pixel * 4] / cell.value - 1);
             worst = Math.max(worst, error);
-            if (error > LANDING_TOLERANCE) off++;
+            if (error > LANDING_TOLERANCE) {
+                off++;
+                if (examples.length < 6) examples.push({ x, y, value: state.irradiance[pixel * 4], expected: cell.value, mask: state.mask[pixel] * 8, previousX, previousY });
+            }
         }
     }
-    return { checked, off, worst };
+    return { checked, off, worst, examples };
 }
 
 // ---- Check 4: a NaN and an infinity in the input ------------------------------------------------
