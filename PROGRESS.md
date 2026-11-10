@@ -21,6 +21,12 @@ Rules:
 
 ---
 
+## 2026-11-10 · T5.1-T5.5 (M5 coverage pass) · lead (opus)
+Did: reviewed and merged T5.1 (presets), T5.2 (saved bakes; nine conflicting files with T5.1 combined by hand), T5.3 (LightProbeGrid export) and T5.4 (docs, adapter guide, docs checks); added the seven saved-bake exports to platform.md's export table, which T5.4's new check caught. Wrote docs/milestones/M5.md: every SPEC v1 feature, its check, its Mac result, the known misses and a proposed tuning pass.
+Verified: Apple M5 Pro (apple / metal-3), headless Chrome, bench lock. On the final `m34`: 12 start-up and M5 pages after the T5.2 merge, and a sweep of 28 more feature pages that hadn't run on the Mac: all pass. Typecheck, lint, 1,535 unit tests pass.
+Not verified: the Intel, the RTX, the iPad and Safari; accuracy against Cycles (references on the NAS); Dennis's look.
+Next: Dennis's sign-off on M3, M4 and M5's coverage (M3-M4.md and M5.md questions), his reading of the README's getting-started; then one PR, `m34` → `main`, and the tuning pass he picks.
+
 ## 2026-11-10 · T3.9, T3.10, T4.5 (Mac move, M3 and M4 closed on `m34`) · lead (opus)
 Did: took over on the Mac from docs/handoff/. Merged `m3`, `m3-t3.4`, `m4-t4.5` and `m3-t3.8` into `m34` (help text and link keys combined by hand). Ran four one-attempt fixes and T5.1/T5.3 as agents, reviewed and merged each: the Metal shared-edge fix, GPU skinning one pose late, T3.4's morph unfold (moving emitters mark like lights), T3.8's fly-through start. DECISIONS: Dennis's "coverage before tuning" direction and the one PR from `m34`; textured furnace limit 0.5%; the glass-composite known miss. Board: M5 (T5.1-T5.5), docs/design/m5-coverage.md, T3.9 redefined, Later items. Wrote docs/milestones/M3-M4.md. Assets re-converted with Blender 4.5.0 from the shared download cache (NOTES).
 Verified: Apple M5 Pro (apple / metal-3), headless Chrome, bench lock. Smoke runs: 23 no-download pages (19 passed first, the 4 failures fixed since), 9 asset pages (all pass), and a re-run of 13 on the merged `m34` (all pass: trace-oracle, textures-uv-board, three-m4-flip-y, three-deforming-gi, ddgi-textured-furnace, ddgi-furnace, ddgi-leak, ddgi-door-swing, ddgi-camera-volume, platform-recompiles, three-change-tracking, ddgi-presets, three-lightprobegrid-export). Typecheck, lint, 1,488 unit tests pass.
