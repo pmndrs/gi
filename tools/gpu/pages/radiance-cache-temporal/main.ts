@@ -17,7 +17,10 @@
  * 3. **A whole probe of sky rays in one cell doesn't wrap the sum
  *    (register D48):** a history that is black but for one cell sends every
  *    ray there; they all miss, and that cell's hit distance must read the
- *    capped 6,710.9 m (wrapped, 64 misses would read 5,106 m).
+ *    capped 6,710.9 m (wrapped, 64 misses would read 5,106 m). Since RC4.2
+ *    the history's bright cell is the sky's 1 at the capped distance (it was
+ *    1000 at 5,000 m), because the filtered atlas mixes in the reprojected
+ *    neighbours' copy of it.
  *
  * `pillar` (the floor and a 2.5 m box, the camera panning past it):
  * 4. **A pan marks the disoccluded tiles empty, and the patch moves probes
@@ -73,7 +76,7 @@ import { drainDevice, reportGpuTest, summarizeAdapterInfo, watchDevice } from '.
 import { describeScene, loadManifest, readBuffer } from '../ddgi-shared/harness.ts';
 import { requestBudgetDevice } from '../radiance-cache-probes/budget-device.ts';
 import { halves, readTexture } from '../radiance-cache-probes/readback.ts';
-import { bookmarkCamera, describePillar, describeSkyPlane, describeSponza } from '../radiance-cache-probes/scenes.ts';
+import { bookmarkCamera, describePillar, describeSkyPlane, describeSponza, SKY_RADIANCE } from '../radiance-cache-probes/scenes.ts';
 import { frameCamera, PageScreen, type PageCamera } from '../radiance-cache-probes/screen.ts';
 
 const WIDTH = 1280;
@@ -95,6 +98,12 @@ const CHI_SQUARE_LIMIT = 63 + 6 * Math.sqrt(2 * 63);
 /** The capped hit distance (register D48), and how far a half may sit from it (the half step there is 4). */
 const CAPPED_HIT_DISTANCE = LARGEST_QUANTIZED_HIT_DISTANCE / 1e4;
 const CAPPED_HIT_DISTANCE_TOLERANCE = 4.01;
+/**
+ * Check 3 reads the filtered atlas (RC4.2): three half steps there, since the filter's min() keeps a
+ * neighbour's lower distance and the M5's textureStore rounds toward zero once per pass
+ * (radiance-cache-filter's check 2; first run: 10.9 m below). A wrapped sum is 1,600 m off.
+ */
+const FILTERED_CAPPED_HIT_DISTANCE_TOLERANCE = 12.01;
 /** The pillar scene: warm-up, pan, look-away and return frames. */
 const PILLAR_WARM_FRAMES = 10;
 const PAN_FRAMES = 24;
@@ -372,8 +381,8 @@ async function checkStill(device: GPUDevice, run: Run): Promise<StillResult> {
 
 // ---- Checks 2 and 3: ray guiding and the capped sum -----------------------------------------
 
-/** Writes a history into the previous atlas: every probe tile's cells as `radiance(cell)`, all at the synthetic hit distance. */
-function writeSyntheticHistory(device: GPUDevice, run: Run, radiance: (cell: number) => number): void {
+/** Writes a history into the previous atlas: every probe tile's cells as `radiance(cell)`, all at `hitDistance`. */
+function writeSyntheticHistory(device: GPUDevice, run: Run, radiance: (cell: number) => number, hitDistance = SYNTHETIC_HIT_DISTANCE): void {
     const history = run.technique.probeHistory;
     if (!history) throw new Error('no history');
     const width = TILES_X * PROBE_SIZE;
@@ -383,7 +392,7 @@ function writeSyntheticHistory(device: GPUDevice, run: Run, radiance: (cell: num
         for (let x = 0; x < width; x++) {
             const cell = (x % PROBE_SIZE) + (y % PROBE_SIZE) * PROBE_SIZE;
             const value = floatToHalfBits(radiance(cell));
-            texels.set([value, value, value, floatToHalfBits(SYNTHETIC_HIT_DISTANCE)], (y * width + x) * 4);
+            texels.set([value, value, value, floatToHalfBits(hitDistance)], (y * width + x) * 4);
         }
     }
     device.queue.writeTexture({ texture: history.previousProbeAtlas }, texels, { bytesPerRow: width * 8 }, [width, height]);
@@ -431,8 +440,13 @@ async function checkGuiding(device: GPUDevice, run: Run): Promise<StillResult> {
     const brightShare = observed[BRIGHT_CELL] / Math.max(rays, 1);
     const expectedBrightShare = weights[BRIGHT_CELL] / total;
 
-    // 3. All of a probe's rays into one sky cell: the capped hit distance (register D48).
-    writeSyntheticHistory(device, run, (cell) => (cell === BRIGHT_CELL ? 1000 : 0));
+    // 3. All of a probe's rays into one sky cell: the capped hit distance (register D48). Since RC4.2
+    // the atlas read is FilterScreenProbes' output, which mixes each probe's cell with its neighbours'
+    // same cell, the reprojected probes' (this history, copied) among them: so the history's bright
+    // cell is the sky's 1 at the capped distance, what the blend should give, and the filter keeps it
+    // (a wrapped 5,106 m in the centre would still pull the mix far off). The CDF is the same: every
+    // other cell is 0.
+    writeSyntheticHistory(device, run, (cell) => (cell === BRIGHT_CELL ? SKY_RADIANCE : 0), CAPPED_HIT_DISTANCE);
     await run.frame();
     const skyScreen = await readScreen(device, run);
     const sky = await rayCells(device, run, skyScreen);
@@ -455,7 +469,7 @@ async function checkGuiding(device: GPUDevice, run: Run): Promise<StillResult> {
         worstRadiance = Math.max(worstRadiance, Math.abs(atlas[texel] - 1));
     }
     if (checkedProbes === 0) failures.push('sky cell: no probe sent its rays into one cell');
-    if (!(worstDistance <= CAPPED_HIT_DISTANCE_TOLERANCE)) failures.push(`sky cell: a hit distance is ${worstDistance.toFixed(2)} m off the capped ${CAPPED_HIT_DISTANCE.toFixed(3)} m (a wrapped sum reads 5,106 m)`);
+    if (!(worstDistance <= FILTERED_CAPPED_HIT_DISTANCE_TOLERANCE)) failures.push(`sky cell: a hit distance is ${worstDistance.toFixed(2)} m off the capped ${CAPPED_HIT_DISTANCE.toFixed(3)} m (a wrapped sum reads 5,106 m)`);
     if (!(worstRadiance <= 0.01)) failures.push(`sky cell: radiance ${worstRadiance.toFixed(4)} off the sky's 1`);
     return {
         failures,
