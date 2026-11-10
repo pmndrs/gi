@@ -16,8 +16,9 @@
  *    why (`4-refused.png`).
  *
  * Prints each picture's mean brightness over the middle of the canvas (8-bit
- * sRGB after tone mapping, the GI-only view, so the GI alone): recorded, not
- * judged. Fails (exit code 1) on a console or GPU error, a save or load that
+ * sRGB after tone mapping, the GI-only view, so the GI alone), and how far
+ * the pictures before and after the load are from the saved one, pixel by
+ * pixel over the canvas below the stats box: recorded, not judged. Fails (exit code 1) on a console or GPU error, a save or load that
  * didn't happen, a load that wasn't refused in step 3, or a recompile
  * counter above 0.
  *
@@ -163,16 +164,20 @@ async function main(): Promise<number> {
             console.log(`?${query}: ready after ${((Date.now() - started) / 1000).toFixed(1)} s`);
             return current;
         };
+        /** Each screenshot, decoded, with the canvas's box and where the stats box ends (its bottom, in page pixels). */
+        const images = new Map<string, { image: ReturnType<typeof decodePng>; rect: { x: number; y: number; width: number; height: number; statsBottom: number } }>();
         /** Saves a screenshot and returns its mean over the middle of the canvas (0-255). */
         const screenshot = async (file: string): Promise<number> => {
             const { data } = await client.send<{ data: string }>('Page.captureScreenshot', { format: 'png' }, 60_000);
             const bytes = Buffer.from(data, 'base64');
             await writeFile(join(options.out, file), bytes);
-            const rect = await client.evaluate<{ x: number; y: number; width: number; height: number }>(`(() => {
+            const rect = await client.evaluate<{ x: number; y: number; width: number; height: number; statsBottom: number }>(`(() => {
                 const box = document.querySelector('canvas').getBoundingClientRect();
-                return { x: box.x, y: box.y, width: box.width, height: box.height };
+                const stats = document.querySelector('.stats-overlay')?.getBoundingClientRect();
+                return { x: box.x, y: box.y, width: box.width, height: box.height, statsBottom: stats ? stats.bottom : box.y };
             })()`);
             const image = decodePng(new Uint8Array(bytes));
+            images.set(file, { image, rect });
             // The middle half of the canvas: clear of the panel, the stats box and the status pill.
             const x0 = Math.floor(rect.x + rect.width * 0.25);
             const x1 = Math.floor(rect.x + rect.width * 0.75);
@@ -195,6 +200,31 @@ async function main(): Promise<number> {
                 button?.click();
                 return Boolean(button);
             })()`);
+        /**
+         * Two screenshots compared over the canvas below the stats box (its
+         * text differs from frame to frame): the mean absolute difference per
+         * channel (0-255) and the share of pixels off by more than 1 a channel.
+         */
+        const compare = (a: string, b: string): { meanDifference: number; pixelsOff: number } => {
+            const first = images.get(a);
+            const second = images.get(b);
+            if (!first || !second) throw new Error(`no screenshot ${first ? b : a}`);
+            const { rect } = first;
+            let sum = 0;
+            let pixels = 0;
+            let off = 0;
+            for (let y = Math.ceil(Math.max(rect.y, rect.statsBottom)); y < Math.floor(rect.y + rect.height); y++) {
+                for (let x = Math.floor(rect.x); x < Math.floor(rect.x + rect.width); x++) {
+                    const at = (y * first.image.width + x) * 3;
+                    let difference = 0;
+                    for (let channel = 0; channel < 3; channel++) difference += Math.abs(first.image.rgb8[at + channel] - second.image.rgb8[at + channel]);
+                    sum += difference;
+                    pixels++;
+                    if (difference > 3) off++;
+                }
+            }
+            return { meanDifference: sum / Math.max(1, pixels * 3), pixelsOff: off / Math.max(1, pixels) };
+        };
         /** Puts the bake file into the panel's file picker, as choosing it in the dialog would. */
         const chooseBakeFile = async (): Promise<void> => {
             const { root } = await client.send<{ root: { nodeId: number } }>('DOM.getDocument', { depth: 1 });
@@ -239,11 +269,16 @@ async function main(): Promise<number> {
         if (afterLoad.bake.error) throw new Error(afterLoad.bake.error);
         await sleep(1000);
         const loadedMean = await screenshot('3-after-load.png');
+        const beforeVsSaved = compare('1-saved.png', '2-before-load.png');
+        const afterVsSaved = compare('1-saved.png', '3-after-load.png');
         const loaded = await state();
         console.log(
             `loaded in ${afterLoad.bake.loaded?.ms.toFixed(1)} ms: stale ${afterLoad.bake.loaded?.stale} (${afterLoad.bake.loaded?.changedParts.join(', ') || 'nothing changed'}), bakes loaded ${loaded?.bake.bakesLoaded}; ` +
                 `picture mean before the load ${beforeMean.toFixed(2)}, after ${loadedMean.toFixed(2)} (saved page ${savedMean.toFixed(2)}); recompiles ${loaded?.recompiles}`,
         );
+        const describe = (comparison: { meanDifference: number; pixelsOff: number }) =>
+            `mean difference ${comparison.meanDifference.toFixed(3)} of 255, ${(comparison.pixelsOff * 100).toFixed(2)}% of pixels off by more than 1 a channel`;
+        console.log(`against the saved picture: before the load ${describe(beforeVsSaved)}; after it ${describe(afterVsSaved)}`);
         if (afterLoad.bake.loaded?.stale) problems.push(`the same scene loaded as stale (${afterLoad.bake.loaded.changedParts.join(', ')})`);
         if ((loaded?.bake.bakesLoaded ?? 0) !== 1) problems.push(`the technique counted ${loaded?.bake.bakesLoaded} bakes loaded, not 1`);
         noteErrors('load', loaded);
@@ -261,7 +296,7 @@ async function main(): Promise<number> {
 
         await writeFile(
             join(options.out, 'summary.json'),
-            `${JSON.stringify({ adapter, scene: options.scene, fileBytes, saveMs: afterSave.bake.saved?.ms, loadMs: afterLoad.bake.loaded?.ms, savedMean, beforeMean, loadedMean, refusal: refused.bake.error, problems }, null, 2)}\n`,
+            `${JSON.stringify({ adapter, scene: options.scene, fileBytes, saveMs: afterSave.bake.saved?.ms, loadMs: afterLoad.bake.loaded?.ms, savedMean, beforeMean, loadedMean, beforeVsSaved, afterVsSaved, refusal: refused.bake.error, problems }, null, 2)}\n`,
         );
         console.log(`\nScreenshots, the bake and summary.json in ${options.out}`);
     } catch (error) {
