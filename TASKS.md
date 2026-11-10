@@ -527,7 +527,7 @@ Rules for every row:
 
 Started 2026-11-09 on Dennis's word through the starting session ("lets build what we can before we hit our usage limit"): **no timing runs until he asks** (correctness gates only, GPU checks through the bench lock with `--no-cool-wait`; every skipped timing is written down as deferred). Phases 2-4 run in the plan's order without waiting for a sign-off; only a decision that blocks the whole project stops the track.
 
-The port reads AMD's source directly: Capsaicin v1.3 at (on the Windows laptop) `C:/Users/denni/Documents/dev/ddgi/.claude/worktrees/amd-gi-cache-research-e46e2e/native/references/capsaicin/src/core/src/render_techniques/gi1/` (`gi1.comp`, `gi1.h`, `gi1.cpp`, `screen_probes.hlsl`, `gi1.hlsl`) and the shared `src/core/src/math/` files, mapped pass by pass in the research folder's `source-map.md` §3 (rows 2-11, 23, 25, 27, 28 for this phase). Ported WGSL keeps AMD's MIT notice.
+The port reads AMD's source directly: Capsaicin v1.3 (`914b915`) at `src/core/src/render_techniques/gi1/` in a local clone (on the Mac: `/Users/dex/Developer/capsaicin`; on the Windows laptop: `C:/Users/denni/Documents/dev/ddgi/.claude/worktrees/amd-gi-cache-research-e46e2e/native/references/capsaicin/`; the research notes are on the Mac at `/Users/dex/Developer/ddgi-research/research/gi-1.0/`) (`gi1.comp`, `gi1.h`, `gi1.cpp`, `screen_probes.hlsl`, `gi1.hlsl`) and the shared `src/core/src/math/` files, mapped pass by pass in the research folder's `source-map.md` §3 (rows 2-11, 23, 25, 27, 28 for this phase). Ported WGSL keeps AMD's MIT notice.
 
 | ID | Task | Agent | Size | Depends on | Status |
 | --- | --- | --- | --- | --- | --- |
