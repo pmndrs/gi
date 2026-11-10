@@ -202,8 +202,6 @@ export const PROJECT_GROUP: GPUBindGroupLayoutDescriptor = {
 
 /** The solid angle of one probe cell: the hemisphere's 2 pi over 64 equal-area cells (register D25). */
 export const SH_CELL_SOLID_ANGLE = (2 * Math.PI) / 64;
-/** Points across a cell, each way, that the projection averages the SH basis over (register D25). */
-export const SH_CELL_SUBSAMPLES = 4;
 
 export const PROJECT_WGSL = /* wgsl */ `
 ${CAPSAICIN_WGSL}
@@ -219,34 +217,14 @@ ${WORKGROUP_INDEX_WGSL}
 @group(1) @binding(4) var rcProbeSHBuffer: texture_storage_2d<rg32uint, write>;
 
 // How a cell counts in the projection (register D25). The coefficients are meant to be the SH of
-// the radiance, c_i = the integral of L Y_i over the hemisphere, here a sum over 64 equal-area
-// cells of the cell's radiance times the integral of Y_i over the cell: its solid angle times
-// the basis averaged over the cell, from RC_SH_CELL_SUBSAMPLES^2 points spread evenly over it.
-// Capsaicin takes 1 / probe_size and the basis at the cell centre (gi1.comp:1468-1473): 4 / pi
-// times the solid angle, and a centre point that leans towards the normal, so a constant sky
-// of radiance L reads about 4.08 L where irradiance is pi L (1.30 x). The cell-mean basis reads
-// within 0.2% of pi L (screen-irradiance.test.ts).
+// the radiance, c_i = the integral of L Y_i over the hemisphere: here a sum over the 64
+// equal-area cells of the cell's radiance, its solid angle 2 pi / 64 and the basis at the cell's
+// centre, as Capsaicin takes it (gi1.comp:1468-1473). Capsaicin's weight is 1 / probe_size, which
+// is 4 / pi times the solid angle; nothing downstream divides that back out (the GI denoiser and
+// ResolveGI1 keep the scale), so a constant sky of radiance L reads 1.30 pi L there. With the solid
+// angle it reads 1.021 pi L: the 2.1% left is the centre point leaning towards the normal, which
+// Capsaicin has too (screen-irradiance.test.ts; the design doc's levers list a cell-mean basis).
 const RC_SH_CELL_SOLID_ANGLE: f32 = ${SH_CELL_SOLID_ANGLE};
-const RC_SH_CELL_SUBSAMPLES: u32 = ${SH_CELL_SUBSAMPLES}u;
-
-// The SH basis averaged over a cell of the probe about 'normal' (see above).
-fn rcProbeCellSH(cell: vec2u, normal: vec3f) -> array<f32, 9> {
-    var cellSH: array<f32, 9>;
-    for (var row = 0u; row < RC_SH_CELL_SUBSAMPLES; row++) {
-        for (var column = 0u; column < RC_SH_CELL_SUBSAMPLES; column++) {
-            let inCell = (vec2f(f32(column), f32(row)) + 0.5) / f32(RC_SH_CELL_SUBSAMPLES);
-            let direction = rcFromProbeFrame(rcMapToHemiOctahedron((vec2f(cell) + inCell) / f32(RC_PROBE_SIZE)), normal);
-            let basis = rcSHGetCoefficients(direction);
-            for (var j = 0u; j < RC_SH_COEFFICIENTS; j++) {
-                cellSH[j] += basis[j];
-            }
-        }
-    }
-    for (var j = 0u; j < RC_SH_COEFFICIENTS; j++) {
-        cellSH[j] /= f32(RC_SH_CELL_SUBSAMPLES * RC_SH_CELL_SUBSAMPLES);
-    }
-    return cellSH;
-}
 
 // lds_ScreenProbes_ProbeSHBuffer (screen_probes.hlsl:81): each cell's nine weighted terms.
 var<workgroup> rcProbeSHValues: array<vec4f, ${9 * 64}>;
@@ -274,13 +252,14 @@ fn ${SCREEN_IRRADIANCE_ENTRY_POINT.project}(
     let probe = seed / RC_PROBE_SIZE;
     let probePos = probe * RC_PROBE_SIZE + cell;
 
-    // Compute our SH probe (gi1.comp:1462-1481): the cell's radiance times the cell's SH basis,
-    // in world space through the probe's frame (the cell's mean basis, register D25).
+    // Compute our SH probe (gi1.comp:1462-1481): the cell's radiance times the SH basis at the
+    // cell's centre, in world space through the probe's frame (the weight is register D25).
     if (probeIndex < probeCount) {
         let normal = rcLoadNormal(seed);
         let radiance = textureLoad(rcProbeBuffer, probePos, 0).xyz * RC_SH_CELL_SOLID_ANGLE;
+        let direction = rcFromProbeFrame(rcMapToHemiOctahedron((vec2f(cell) + 0.5) / f32(RC_PROBE_SIZE)), normal);
 
-        let directionSH = rcProbeCellSH(cell, normal);
+        let directionSH = rcSHGetCoefficients(direction);
 
         for (var j = 0u; j < RC_SH_COEFFICIENTS; j++) {
             rcProbeSHValues[RC_SH_COEFFICIENTS * localId + j] = vec4f(directionSH[j] * radiance, 1.0);

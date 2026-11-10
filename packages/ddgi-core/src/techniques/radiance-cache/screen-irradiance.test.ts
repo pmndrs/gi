@@ -2,8 +2,9 @@
  * RC2.2 on the CPU: fixed reference values for Capsaicin's hemi-octahedral
  * map and SH (worked out by hand from the HLSL, so a map mirrored or
  * transposed the same way in the WGSL and the CPU port still fails), the
- * projection's units (a constant sky of radiance L reads E = πL; Capsaicin's
- * own weight reads 4L, register D25), the uniform blocks against their WGSL
+ * projection's units (a constant sky of radiance L reads E = 1.021 πL with
+ * the cell-centre basis; Capsaicin's own weight reads 4.08 L, register D25),
+ * the uniform blocks against their WGSL
  * structs, and the camera's jitter.
  */
 
@@ -11,14 +12,13 @@ import { describe, expect, it } from 'vitest';
 import { cameraRelativeInverseViewProjection, jitteredProjection, multiplyMat4 } from './camera.ts';
 import {
     CAPSAICIN_SH_CELL_WEIGHT,
-    getOrthoVectors,
     integrateHemisphereSH,
     mapToHemiOctahedron,
     mapToHemiOctahedronInverse,
     probeCellDirection,
+    probeCellMeanRadiance,
     projectProbe,
     SH_CELL_SOLID_ANGLE,
-    SH_CELL_SUBSAMPLES,
     shGetCoefficients,
     shGetCoefficientsClampedCosineCone,
     shIrradiance,
@@ -27,7 +27,7 @@ import {
 import { screenProbeCellSize, viewForward } from './screen-irradiance.ts';
 import { DEBUG_UNIFORM_BYTES, DEBUG_UNIFORM_OFFSETS, DEBUG_WGSL } from './wgsl/debug.ts';
 import { FRAME_UNIFORM_BYTES, FRAME_UNIFORM_OFFSETS, FRAME_WGSL } from './wgsl/screen-probes.ts';
-import { INTERPOLATE_WGSL, SCREEN_PROBES_CONSTANTS_BYTES, SCREEN_PROBES_CONSTANTS_OFFSETS, SH_CELL_SOLID_ANGLE as WGSL_SH_CELL_SOLID_ANGLE, SH_CELL_SUBSAMPLES as WGSL_SH_CELL_SUBSAMPLES } from './wgsl/screen-irradiance.ts';
+import { INTERPOLATE_WGSL, SCREEN_PROBES_CONSTANTS_BYTES, SCREEN_PROBES_CONSTANTS_OFFSETS, SH_CELL_SOLID_ANGLE as WGSL_SH_CELL_SOLID_ANGLE } from './wgsl/screen-irradiance.ts';
 
 const expectDirection = (actual: readonly number[], expected: readonly number[], digits = 9): void => {
     expected.forEach((value, axis) => expect(actual[axis]).toBeCloseTo(value, digits));
@@ -103,20 +103,20 @@ describe('the projection and its units (ProjectScreenProbes, InterpolateScreenPr
         [0.36, -0.48, 0.8],
     ];
 
-    it('reads a constant sky of radiance L as E = pi L along the normal; Capsaicin projection reads 1.30 pi L (register D25)', () => {
+    it('reads a constant sky of radiance L as E = 1.021 pi L along the normal; Capsaicin projection reads 1.30 pi L (register D25)', () => {
         expect(WGSL_SH_CELL_SOLID_ANGLE).toBeCloseTo(SH_CELL_SOLID_ANGLE, 12);
-        expect(WGSL_SH_CELL_SUBSAMPLES).toBe(SH_CELL_SUBSAMPLES);
         const radiance = 0.7;
         for (const normal of normals) {
-            // Ours: each cell's solid angle times its mean SH basis (4 x 4 points): within 0.2% of pi L.
+            // Ours: each cell's solid angle and the basis at its centre (as Capsaicin, gi1.comp:1468-1473). The centre
+            // leans towards the normal, so E is 2.1% high: Capsaicin's own discretisation (DECISIONS 2026-11-10).
             const ours = shIrradiance(projectProbe(() => radiance, normal), normal);
-            expect(Math.abs(ours / (Math.PI * radiance) - 1)).toBeLessThan(0.002);
-            // The basis at the cell centre alone leans towards the normal: 2.1% high even with the solid angle.
-            const centres = shIrradiance(projectProbe(() => radiance, normal, SH_CELL_SOLID_ANGLE, 1), normal);
-            expect(centres / (Math.PI * radiance)).toBeCloseTo(1.021, 3);
-            // Capsaicin: 1 / probe_size and the centre (gi1.comp:1468-1473): 4 / pi times that again, 4.08 L.
-            const capsaicin = shIrradiance(projectProbe(() => radiance, normal, CAPSAICIN_SH_CELL_WEIGHT, 1), normal);
-            expect(capsaicin / centres).toBeCloseTo(4 / Math.PI, 9);
+            expect(ours / (Math.PI * radiance)).toBeCloseTo(1.021, 3);
+            // The cell-mean lever (design doc, "Levers"): the basis averaged over 4 x 4 points per cell is within 0.2%.
+            const cellMean = shIrradiance(projectProbe(() => radiance, normal, SH_CELL_SOLID_ANGLE, 4), normal);
+            expect(Math.abs(cellMean / (Math.PI * radiance) - 1)).toBeLessThan(0.002);
+            // Capsaicin: 1 / probe_size and the centre (gi1.comp:1468-1473): 4 / pi times ours, 4.08 L.
+            const capsaicin = shIrradiance(projectProbe(() => radiance, normal, CAPSAICIN_SH_CELL_WEIGHT), normal);
+            expect(capsaicin / ours).toBeCloseTo(4 / Math.PI, 9);
             expect(capsaicin / radiance).toBeCloseTo(4.084, 2);
         }
         // ResolveGI1 applies evaluateLambert (albedo / pi, material_evaluation.hlsl:157-160) to this E, as three's
@@ -127,24 +127,15 @@ describe('the projection and its units (ProjectScreenProbes, InterpolateScreenPr
         // Brighter towards +x than -x, and towards -z than +z: no mirror symmetry across either tangent.
         const sky = (direction: Direction): number => 1 + 0.6 * direction[0] - 0.3 * direction[2];
         // A cell's value is its mean radiance (the GPU's is one random ray in the cell: the same on average).
-        const cellMean = (cell: number, normal: Direction): number => {
-            const { b1, b2 } = getOrthoVectors(normal);
-            let sum = 0;
-            for (let row = 0; row < 8; row++) {
-                for (let column = 0; column < 8; column++) {
-                    const [x, y, z] = mapToHemiOctahedron(((cell % 8) + (column + 0.5) / 8) / 8, (Math.floor(cell / 8) + (row + 0.5) / 8) / 8);
-                    sum += sky([x * b1[0] + y * b2[0] + z * normal[0], x * b1[1] + y * b2[1] + z * normal[1], x * b1[2] + y * b2[2] + z * normal[2]]);
-                }
-            }
-            return sum / 64;
-        };
+        const cellMean = (cell: number, normal: Direction): number => probeCellMeanRadiance(sky, cell, normal);
         for (const normal of normals) {
             const reference = integrateHemisphereSH(sky, normal, 192);
             const projected = projectProbe((cell) => cellMean(cell, normal), normal);
             const scale = Math.max(...reference.map(Math.abs));
-            // A cell holds one value, so the product of means differs a little from the mean of products (up to 1.7%
-            // of the largest coefficient where the sky changes along the normal): within 2.5%.
-            reference.forEach((value, index) => expect(Math.abs(projected[index] - value) / scale).toBeLessThan(0.025));
+            // A cell holds one value and its basis is taken at the centre (as Capsaicin), so the sum differs from the
+            // integral by the discretisation: up to 4.2% of the largest coefficient (normal -x; 2.7% facing up, the
+            // GPU page's floor). The cell-mean lever brings that to 1.7%. Within 4.5%.
+            reference.forEach((value, index) => expect(Math.abs(projected[index] - value) / scale).toBeLessThan(0.045));
             // Each cell read at its transpose (cell x, y from y, x) mirrors the sky across a tangent: it must show.
             const transposed = projectProbe((cell) => cellMean((cell % 8) * 8 + Math.floor(cell / 8), normal), normal);
             const worst = Math.max(...reference.map((value, index) => Math.abs(transposed[index] - value) / scale));

@@ -39,7 +39,7 @@ export type RadianceCacheDebugViewId = (typeof RADIANCE_CACHE_DEBUG_VIEW)[keyof 
 export const DEBUG_UNIFORM_BYTES = 32;
 
 /** Byte offsets of `RcDebug`'s fields (checked against the struct by a unit test). */
-export const DEBUG_UNIFORM_OFFSETS = { size: 0, view: 8, exposure: 12, normalUnorm: 16 } as const;
+export const DEBUG_UNIFORM_OFFSETS = { size: 0, view: 8, exposure: 12, normalUnorm: 16, reversedDepth: 20 } as const;
 
 export const DEBUG_ENTRY_POINT = 'radianceCacheDebugView';
 
@@ -54,6 +54,7 @@ export const DEBUG_GROUP: GPUBindGroupLayoutDescriptor = {
         { binding: 3, visibility: COMPUTE, storageTexture: { access: 'write-only', format: 'rgba8unorm', viewDimension: '2d' } },
         { binding: 4, visibility: COMPUTE, texture: { sampleType: 'uint', viewDimension: '2d' } },
         { binding: 5, visibility: COMPUTE, texture: { sampleType: 'unfilterable-float', viewDimension: '2d' } },
+        { binding: 6, visibility: COMPUTE, texture: { sampleType: 'unfilterable-float', viewDimension: '2d' } },
     ],
 };
 
@@ -66,14 +67,16 @@ struct RcDebug {
     view: u32,       // RADIANCE_CACHE_DEBUG_VIEW
     exposure: f32,   // multiplies radiance before tone mapping
     normalUnorm: u32, // 1: the screen's normals are 0..1 encoded (RcFrame.normalUnorm)
+    reversedDepth: u32, // 1: the far plane is depth 0 (RcFrame.reversedDepth)
 }
 @group(1) @binding(0) var<uniform> rcDebug: RcDebug;
 @group(1) @binding(1) var rcProbeBuffer: texture_2d<f32>;
 @group(1) @binding(2) var rcProbeMask: texture_2d<u32>;
 @group(1) @binding(3) var rcDebugImage: texture_storage_2d<rgba8unorm, write>;
-// The SH texture (register D26) and the screen's normals (FrameScreen.normal).
+// The SH texture (register D26), the screen's normals (FrameScreen.normal) and depth (FrameScreen.depth).
 @group(1) @binding(4) var rcProbeSH: texture_2d<u32>;
 @group(1) @binding(5) var rcNormal: texture_2d<f32>;
+@group(1) @binding(6) var rcDepth: texture_2d<f32>;
 
 const RC_DEBUG_PROBE_ATLAS: u32 = ${RADIANCE_CACHE_DEBUG_VIEW.probeAtlas}u;
 const RC_DEBUG_SH: u32 = ${RADIANCE_CACHE_DEBUG_VIEW.sphericalHarmonics}u;
@@ -106,8 +109,10 @@ fn ${DEBUG_ENTRY_POINT}(@builtin(global_invocation_id) id: vec3u) {
     let decoded = select(stored, 2.0 * stored - 1.0, rcDebug.normalUnorm != 0u);
     if (rcDebug.view == RC_DEBUG_SH) {
         packedSeed = rcDebugFindClosestProbe(id.xy, rcProbeMask);
-        // A pixel with no surface (the screen's normal is zero there) gets the checkerboard.
-        if (dot(decoded, decoded) == 0.0) {
+        // A pixel with no surface gets the checkerboard. As for the probes (register D17), a sky
+        // pixel is one at the far plane's depth (Capsaicin: a zero geometry normal).
+        let farDepth = select(1.0, 0.0, rcDebug.reversedDepth != 0u);
+        if (textureLoad(rcDepth, id.xy, 0).x == farDepth) {
             packedSeed = RC_INVALID_ID;
         }
     }

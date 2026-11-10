@@ -111,8 +111,11 @@ try {
         const newErrors = core.gpuErrors.slice(errorsBefore);
         if (newErrors.length > 0) failures.push(`${sceneId}: device errors: ${newErrors.slice(0, 3).join(' | ')}`);
         if (technique.failed) failures.push(`${sceneId}: the radiance cache failed: ${technique.failed}`);
+        // Every view above drew after prepare: none may have compiled a compute pipeline on first use.
+        const recompiles = technique.recompiles;
+        if (recompiles !== 0) failures.push(`${sceneId}: the radiance cache's platform compiled ${recompiles ?? 'unknown'} pipelines after prepare (stats.recompiles)`);
         const status = core.statusLines();
-        data[sceneId] = { views, status, gpuErrors: newErrors.length };
+        data[sceneId] = { views, status, gpuErrors: newErrors.length, recompiles };
         log(`${sceneId}: ${status.join(' / ')}`);
         // Leave Sponza's wipe on screen for the screenshot.
         if (sceneId !== SCENES[SCENES.length - 1]) core.unloadScene();

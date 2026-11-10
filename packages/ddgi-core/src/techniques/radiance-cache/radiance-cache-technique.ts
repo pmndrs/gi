@@ -154,6 +154,8 @@ interface ScreenInputGroups {
     readonly normal: GPUTexture;
     /** `FrameScreen.normalEncoding` was `unorm` (the SH debug view decodes the normals as the probes do). */
     readonly normalUnorm: boolean;
+    /** `FrameScreen.reversedDepth` (the SH debug view tells sky pixels by the far plane's depth, as the probes do). */
+    readonly reversedDepth: boolean;
     readonly resources: ScreenResources;
     readonly spawn: GPUBindGroup;
     readonly sample: GPUBindGroup;
@@ -401,6 +403,7 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         uints[offsets.view / WORD_BYTES] = view;
         new Float32Array(words)[offsets.exposure / WORD_BYTES] = exposure;
         uints[offsets.normalUnorm / WORD_BYTES] = inputs.normalUnorm ? 1 : 0;
+        uints[offsets.reversedDepth / WORD_BYTES] = inputs.reversedDepth ? 1 : 0;
         context.device.queue.writeBuffer(prepared.debugUniforms, 0, words);
         const group = context.device.createBindGroup({
             label: `${TECHNIQUE_ID}/debug-view`,
@@ -413,6 +416,7 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
                 { binding: 3, resource: target.createView({ baseMipLevel: 0, mipLevelCount: 1 }) },
                 { binding: 4, resource: probeSH.createView() },
                 { binding: 5, resource: screenTextureView(inputs.normal) },
+                { binding: 6, resource: screenTextureView(inputs.depth) },
             ],
         });
         const pass = encoder.beginComputePass({ label: `${TECHNIQUE_ID}/debug-view` });
@@ -519,7 +523,17 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
     private inputGroupsFor(device: GPUDevice, prepared: Prepared, resources: ScreenResources, screen: FrameScreen): ScreenInputGroups {
         const current = this.inputGroups;
         const normalUnorm = screen.normalEncoding === 'unorm';
-        if (current && current.resources === resources && current.depth === screen.depth && current.normal === screen.normal && current.normalUnorm === normalUnorm) return current;
+        const reversedDepth = screen.reversedDepth === true;
+        if (
+            current &&
+            current.resources === resources &&
+            current.depth === screen.depth &&
+            current.normal === screen.normal &&
+            current.normalUnorm === normalUnorm &&
+            current.reversedDepth === reversedDepth
+        ) {
+            return current;
+        }
         checkScreenTexture(screen.depth, 'depth');
         checkScreenTexture(screen.normal, 'normal');
         const depth = screenTextureView(screen.depth);
@@ -532,6 +546,7 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
             depth: screen.depth,
             normal: screen.normal,
             normalUnorm,
+            reversedDepth,
             resources,
             spawn: group('SpawnScreenProbes', kernels.spawn, [uniforms, depth, normal, { buffer: prepared.spawnSeeds }, { buffer: prepared.spawnFlags }]),
             sample: group('SampleScreenProbes', kernels.sample, [uniforms, normal, { buffer: prepared.probeSpawn }, { buffer: resources.probeRays }]),

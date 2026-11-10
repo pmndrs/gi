@@ -294,16 +294,15 @@ export function probeCellDirection(cell: number, normal: Direction): Direction {
     return [x * b1[0] + y * b2[0] + z * normal[0], x * b1[1] + y * b2[1] + z * normal[1], x * b1[2] + y * b2[2] + z * normal[2]];
 }
 
-/** Points across a cell, each way, that `ProjectScreenProbes` averages the SH basis over (register D25). */
-export const SH_CELL_SUBSAMPLES = 4;
-
 /**
- * A probe cell's mean SH basis about `normal`: the basis averaged over
- * `subsamples²` points spread evenly over the cell in the hemi-octahedral
- * square (equal-area, so evenly over its solid angle too). With 1 it is the
- * basis at the cell centre, as Capsaicin takes it (gi1.comp:1468-1473).
+ * A probe cell's SH basis about `normal`. With `subsamples` 1 (what
+ * `ProjectScreenProbes` runs) it is the basis at the cell centre, as
+ * Capsaicin takes it (gi1.comp:1468-1473). Above 1 it is the basis averaged
+ * over `subsamples²` points spread evenly over the cell in the
+ * hemi-octahedral square (equal-area, so evenly over its solid angle too):
+ * the cell-mean lever in the design doc, kept here to measure it.
  */
-export function probeCellSH(cell: number, normal: Direction, subsamples = SH_CELL_SUBSAMPLES): number[] {
+export function probeCellSH(cell: number, normal: Direction, subsamples = 1): number[] {
     const { b1, b2 } = getOrthoVectors(normal);
     const sum = new Array<number>(9).fill(0);
     for (let row = 0; row < subsamples; row++) {
@@ -320,16 +319,17 @@ export function probeCellSH(cell: number, normal: Direction, subsamples = SH_CEL
 
 /**
  * `ProjectScreenProbes` (gi1.comp:1462-1511) on the CPU, as the WGSL runs it:
- * each cell's radiance times `weight` and the cell's mean SH basis
- * ({@link probeCellSH}), summed over the 64 cells (cells `x + y × 8`).
- * `cellRadiance` gets the cell centre's direction. Capsaicin's own projection
- * is `weight` {@link CAPSAICIN_SH_CELL_WEIGHT} with `subsamples` 1.
+ * each cell's radiance times `weight` and the cell's SH basis
+ * ({@link probeCellSH}: at the centre with `subsamples` 1), summed over the
+ * 64 cells (cells `x + y × 8`). `cellRadiance` gets the cell centre's
+ * direction. Capsaicin's own projection is `weight`
+ * {@link CAPSAICIN_SH_CELL_WEIGHT}.
  */
 export function projectProbe(
     cellRadiance: (cell: number, direction: Direction) => number,
     normal: Direction,
     weight = SH_CELL_SOLID_ANGLE,
-    subsamples = SH_CELL_SUBSAMPLES,
+    subsamples = 1,
 ): number[] {
     const sum = new Array<number>(9).fill(0);
     for (let cell = 0; cell < PROBE_SIZE * PROBE_SIZE; cell++) {
@@ -345,6 +345,25 @@ export function shIrradiance(coefficients: readonly number[], normal: Direction,
     let irradiance = 0;
     lobe.forEach((value, index) => (irradiance += value * coefficients[index]));
     return Math.max(irradiance, 0);
+}
+
+/**
+ * A probe cell's mean radiance about `normal`, from `samples²` points spread
+ * evenly over the cell: what a cell holds on average when its one ray per
+ * frame lands anywhere in it (the GPU's cell is one such ray).
+ */
+export function probeCellMeanRadiance(radiance: (direction: Direction) => number, cell: number, normal: Direction, samples = 8): number {
+    const { b1, b2 } = getOrthoVectors(normal);
+    let sum = 0;
+    for (let row = 0; row < samples; row++) {
+        for (let column = 0; column < samples; column++) {
+            const u = ((cell % PROBE_SIZE) + (column + 0.5) / samples) / PROBE_SIZE;
+            const v = (Math.floor(cell / PROBE_SIZE) + (row + 0.5) / samples) / PROBE_SIZE;
+            const [x, y, z] = mapToHemiOctahedron(u, v);
+            sum += radiance([x * b1[0] + y * b2[0] + z * normal[0], x * b1[1] + y * b2[1] + z * normal[1], x * b1[2] + y * b2[2] + z * normal[2]]);
+        }
+    }
+    return sum / (samples * samples);
 }
 
 /**

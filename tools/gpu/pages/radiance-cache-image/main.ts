@@ -6,17 +6,23 @@
  * 400 m floor seen from 3 m up at 1280 × 720, so every probe's 64 rays see
  * only the sky.
  *
- * 1. **Lambert** (RC2.2 done-when): under a constant sky of radiance L, the
- *    interpolated irradiance of every floor pixel is E = πL within 1%, as the
- *    mean and the 95th percentile of the per-pixel error.
+ * 1. **Lambert** (RC2.2 done-when, threshold amended, DECISIONS
+ *    2026-11-10): under a constant sky of radiance L, the interpolated
+ *    irradiance of every floor pixel is E = πL within 2.5%, as the mean and
+ *    the 95th percentile of the per-pixel error. The projection takes the SH
+ *    basis at each cell's centre, as Capsaicin, which reads 2.1% high on the
+ *    CPU (screen-irradiance.test.ts); the M5 measured 2.04% (mean and p95).
  * 2. **A direction-varying sky**, L(d) = 1 + 0.6 d.x − 0.3 d.z (an
  *    equirectangular image the platform bakes): each probe's nine SH
- *    coefficients against the hemisphere's SH integrated finely on the CPU,
- *    and the interpolated E against the CPU's E from those coefficients. The
- *    sky changes along both tangents of the floor's probe frame, so an atlas
- *    written transposed in its tile, or read so by the projection, moves the
- *    z-band coefficients by about 30% of the largest (the CPU's own figure
- *    for a transposed probe is reported).
+ *    coefficients against the CPU's projection of the same sky (each cell's
+ *    mean radiance, the basis at the cell centre: `projectProbe`, the twin
+ *    of the kernel), and the interpolated E against the CPU's E from those
+ *    coefficients. The sky changes along both tangents of the floor's probe
+ *    frame, so an atlas written transposed in its tile, or read so by the
+ *    projection, moves the z-band coefficients by about 30% of the largest
+ *    (the CPU's own figure for a transposed probe is reported). How far the
+ *    CPU's projection is from the hemisphere's SH integrated finely (the
+ *    discretisation, 2.7% facing up) is reported too.
  * 3. On both: the mask's mip chain holds, at every level, a probe of its
  *    2 × 2 children when any has one (`FilterProbeMask`); the irradiance has
  *    no negative, infinite or NaN value.
@@ -32,7 +38,7 @@ import type { FrameInput } from '../../../../packages/ddgi-core/src/platform/con
 import { optionalFeatures, requiredLimits } from '../../../../packages/ddgi-core/src/platform/device-requirements.ts';
 import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
 import { equirectUvToDirection } from '../../../../packages/ddgi-core/src/platform/sky/equirect.ts';
-import { INVALID_ID, integrateHemisphereSH, projectProbe, probeCellDirection, shIrradiance, unpackSeed, type Direction } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/capsaicin-math.ts';
+import { INVALID_ID, integrateHemisphereSH, probeCellMeanRadiance, projectProbe, shIrradiance, unpackSeed, type Direction } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/capsaicin-math.ts';
 import { RadianceCacheTechnique } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/radiance-cache-technique.ts';
 import { PROBE_SIZE } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/settings.ts';
 import { RADIANCE_CACHE_DEBUG_VIEW, type RadianceCacheDebugViewId } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/wgsl/debug.ts';
@@ -45,22 +51,27 @@ import { PageScreen, frameCamera, type PageCamera } from '../radiance-cache-prob
 
 const WIDTH = 1280;
 const HEIGHT = 720;
-/** The Lambert check's tolerance on E / (π L), for the mean and the 95th percentile (RC2.2 done-when). */
-const LAMBERT_TOLERANCE = 0.01;
+/**
+ * The Lambert check's tolerance on E / (π L), for the mean and the 95th
+ * percentile: the cell-centre basis's own error (2.1% on the CPU; 2.04% mean
+ * and p95 measured on the Apple M5 Pro) plus a margin (DECISIONS 2026-11-10;
+ * the done-when's 1% assumed a cell-mean basis).
+ */
+const LAMBERT_TOLERANCE = 0.025;
 /** The constant sky's radiance: not 1, so a lost or doubled factor can't hide. */
 const CONSTANT_SKY = 1.5;
 /** The varying sky: L(d) = 1 + 0.6 d.x − 0.3 d.z, at least 0.33 everywhere. */
 const varyingSky = (direction: Direction): number => 1 + 0.6 * direction[0] - 0.3 * direction[2];
 /**
- * The varying sky's SH, against the fine integral, as a share of the largest
- * coefficient. Averaged over every probe: 2.5% (the CPU's 64-cell projection
- * of the same sky is within 1.7%; screen-irradiance.test.ts). Per probe the
- * one random ray per cell adds noise, so the 95th percentile of each probe's
- * worst coefficient gets 6%. A transposed probe is off by about 30%.
+ * The varying sky's SH, against the CPU's projection of the same sky, as a
+ * share of the largest coefficient. Averaged over every probe: 2.5%. Per
+ * probe the one random ray per cell adds noise, so the 95th percentile of
+ * each probe's worst coefficient gets 6%. A transposed probe is off by about
+ * 30%.
  */
 const SH_MEAN_TOLERANCE = 0.025;
 const SH_PROBE_P95_TOLERANCE = 0.06;
-/** The varying sky's interpolated E against the CPU's E from the reference SH: mean and 95th percentile. */
+/** The varying sky's interpolated E against the CPU's E from the CPU's projection: mean and 95th percentile. */
 const VARYING_E_TOLERANCE = 0.02;
 /** Equirect image of the varying sky the page hands the platform (it bakes its own 256 × 128 map from it). */
 const SKY_IMAGE = { width: 512, height: 256 } as const;
@@ -324,8 +335,12 @@ try {
     const varying = await runFloor(device, 'varying', { type: 'texture', texture: skyTexture, layout: 'equirect' });
     try {
         const readback = await readRun(device, varying);
-        const reference = integrateHemisphereSH(varyingSky, UP, 256);
+        // The kernel's CPU twin: each cell's mean radiance, the basis at the cell centre.
+        const reference = projectProbe((cell) => probeCellMeanRadiance(varyingSky, cell, UP), UP);
+        // The hemisphere's SH integrated finely: how far the 64-cell projection itself is from it (reported).
+        const integral = integrateHemisphereSH(varyingSky, UP, 256);
         const scale = Math.max(...reference.map(Math.abs));
+        const discretisationError = Math.max(...reference.map((value, index) => Math.abs(value - integral[index]) / scale));
         const sums = new Array<number>(SH_COEFFICIENTS).fill(0);
         const worstPerProbe: number[] = [];
         for (const seed of readback.seeds) {
@@ -337,10 +352,10 @@ try {
         const meanErrors = means.map((value, index) => Math.abs(value - reference[index]) / scale);
         const worstMean = Math.max(...meanErrors);
         const probeP95 = percentile(worstPerProbe, 0.95);
-        if (!(worstMean <= SH_MEAN_TOLERANCE)) fail(`varying sky: the probes' mean SH is ${(worstMean * 100).toFixed(2)}% off the integral (coefficient ${meanErrors.indexOf(worstMean)})`);
+        if (!(worstMean <= SH_MEAN_TOLERANCE)) fail(`varying sky: the probes' mean SH is ${(worstMean * 100).toFixed(2)}% off the CPU's projection (coefficient ${meanErrors.indexOf(worstMean)})`);
         if (!(probeP95 <= SH_PROBE_P95_TOLERANCE)) fail(`varying sky: the 95th percentile of a probe's worst SH coefficient is ${(probeP95 * 100).toFixed(2)}% off`);
         // What a probe transposed in its tile would read (each cell's value from its transposed cell), on the CPU.
-        const transposed = projectProbe((cell) => varyingSky(probeCellDirection((cell % PROBE_SIZE) * PROBE_SIZE + Math.floor(cell / PROBE_SIZE), UP)), UP);
+        const transposed = projectProbe((cell) => probeCellMeanRadiance(varyingSky, (cell % PROBE_SIZE) * PROBE_SIZE + Math.floor(cell / PROBE_SIZE), UP), UP);
         const transposedError = Math.max(...transposed.map((value, index) => Math.abs(value - reference[index]) / scale));
 
         const expectedE = shIrradiance(reference, UP);
@@ -356,6 +371,8 @@ try {
             sky: 'L(d) = 1 + 0.6 d.x - 0.3 d.z',
             probes: readback.seeds.length,
             referenceSH: reference,
+            integralSH: integral,
+            cpuProjectionErrorAgainstIntegral: discretisationError,
             meanSH: means,
             worstMeanCoefficientError: worstMean,
             probeWorstCoefficientP95: probeP95,

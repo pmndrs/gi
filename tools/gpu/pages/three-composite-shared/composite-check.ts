@@ -20,6 +20,7 @@ import type { MaterialDescriptor } from '../../../../packages/ddgi-core/src/plat
 import type { GITechnique } from '../../../../packages/ddgi-core/src/platform/contract/technique.ts';
 import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
 import { DDGITechnique } from '../../../../packages/ddgi-core/src/techniques/ddgi/ddgi-technique.ts';
+import type { DDGISettings } from '../../../../packages/ddgi-core/src/techniques/ddgi/settings.ts';
 import { ThreeGI } from '../../../../packages/ddgi-three/src/three-gi.ts';
 import { DDGICompositeNode, giAlbedo, GI_ALBEDO_OUTPUT, GI_NORMAL_OUTPUT, type DDGICompositeOptions } from '../../../../packages/ddgi-three/src/composite.ts';
 import { loadAllManifests } from '../../../../apps/viewer/src/scene/manifests.ts';
@@ -46,6 +47,8 @@ export interface CompositeSceneOptions {
     readonly log: (message: string) => void;
     /** More techniques to attach before the platform prepares (beside DDGI, the output). */
     readonly techniques?: readonly GITechnique[];
+    /** DDGI settings beyond the manifest's volume (for example `bounceEnergy: 0` for a single bounce). */
+    readonly ddgiSettings?: Partial<Omit<DDGISettings, 'volume'>>;
 }
 
 export interface CompositeScene {
@@ -54,6 +57,8 @@ export interface CompositeScene {
     readonly scene: Scene;
     readonly camera: PerspectiveCamera;
     readonly platform: GIPlatformImpl;
+    /** The output technique. */
+    readonly ddgi: DDGITechnique;
     readonly threeGI: ThreeGI;
 }
 
@@ -91,7 +96,8 @@ export async function loadCompositeScene(device: GPUDevice, sceneId: string, opt
     const camera = shotCamera(manifest, options.width, options.height);
     const platform = new GIPlatformImpl(device, { label: `three composite ${sceneId}` });
     const volume = manifest.volume;
-    platform.setOutput(platform.addTechnique(new DDGITechnique({ volume: { center: volume.center, size: volume.size, spacing: volume.probeSpacing }, warmUpPasses: 0 })));
+    const ddgi = platform.addTechnique(new DDGITechnique({ warmUpPasses: 0, ...options.ddgiSettings, volume: { center: volume.center, size: volume.size, spacing: volume.probeSpacing } }));
+    platform.setOutput(ddgi);
     for (const technique of options.techniques ?? []) platform.addTechnique(technique);
     await platform.prepare();
     const environment = manifest.environment.type === 'procedural' ? platformSkyEnvironment(manifest) : null;
@@ -103,7 +109,7 @@ export async function loadCompositeScene(device: GPUDevice, sceneId: string, opt
     await runSteps(device, options.giFrames, () => threeGI.update(camera, 1 / 60));
     threeGI.budget = { paused: true };
     options.log(`${sceneId}: ${loaded.stats.triangles} triangles; ${options.giFrames} GI frames of ${options.probesPerFrame} probes; coverage per pixel ${threeGI.light.computeCoverage}`);
-    return { manifest, loaded, scene, camera, platform, threeGI };
+    return { manifest, loaded, scene, camera, platform, ddgi, threeGI };
 }
 
 /**

@@ -177,6 +177,11 @@ export class RadianceCacheViewerTechnique implements GiTechnique {
         return this.failure;
     }
 
+    /** Compute pipelines its platform made after `prepare` (`stats.recompiles`; should stay 0), or null before it starts. */
+    get recompiles(): number | null {
+        return this.platform?.stats.recompiles ?? null;
+    }
+
     setGiMode(mode: GiMode): void {
         this.giMode = mode;
         this.applyLayers();
