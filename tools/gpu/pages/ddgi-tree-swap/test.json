@@ -1,0 +1,5 @@
+{
+    "description": "T2.12 check 2: the swap from the GPU's first mesh trees (H-PLOC) to tinybvh's. Two platforms on one scene (first trees from the GPU with tinybvh's held back, and tinybvh only): the irradiance atlas's mean across the swap frame (bar 0.5%), recompiles across it (0), and the GPU ms of the tree-walking passes on GPU trees, after the swap, and with tinybvh only, in turns (after the swap within 5% of tinybvh only, judged on Sponza on the RTX). VITE_DDGI_SCENES=a,b (default sponza; needs the downloads), VITE_DDGI_UNITS (default 512). For hand use under the bench lock.",
+    "timeoutMs": 1200000,
+    "manual": true
+}

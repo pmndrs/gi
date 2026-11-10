@@ -1,6 +1,6 @@
 # M2 design draft: dynamic lights
 
-Status: **draft for Dennis's review, 2026-11-05, revised after an Opus review the same day and again after Dennis's answers (time of day rebuilt so nothing takes minutes to build; memory sized for mid- to high-end GPUs; the Intel UHD for correctness only).** Nothing here is decided. It is the input for T1.11 ("M1 note and M2 breakdown"). Where it would change a default or a settled choice from M1, it says so; those become DECISIONS entries only once Dennis agrees.
+Status: **approved by Dennis 2026-11-06 and merged into main; M2's board is in [TASKS.md](../../TASKS.md).** Written 2026-11-05, revised after an Opus review the same day and again after Dennis's answers (time of day rebuilt so nothing takes minutes to build; memory sized for mid- to high-end GPUs; the Intel UHD for correctness only). Where it changes a default or a settled choice from M1, it says so; those are DECISIONS entries.
 
 It builds on [ddgi.md](ddgi.md) (the field and update loop), [platform.md](../api/platform.md) (the contract), [three.md](../api/three.md) (the adapter) and the M1 entries in [DECISIONS](../DECISIONS.md). The M3 draft, [m3-moving.md](m3-moving.md), reuses the change-driven scheduler designed here for moved geometry.
 
@@ -107,6 +107,14 @@ How other systems schedule probe updates under change (classification, cascades,
 - **Adapter:** lights are checked every frame today. That's fine for a few lights. With hundreds it could break the 0.2 ms still-scene target (an estimate: about 0.2 µs per light check; T1.7 only timed scenes with a few lights). Lights beyond the first 64 get the same budgeted walk and hot list as objects (three.md, "How changes are found"). `markChanged(light)` still sends a change the next frame.
 - **The manifest's `motions` format** (section 7) is defined here too, because the native harness (T2.7) and the viewer (T2.8) both read it.
 
+**As built (T2.1, 2026-11-06).** Where it differs from the sketch above:
+
+- **The light table starts at 64** and doubles; 4,096 lights made and destroyed in random order with DDGI running build 0 pipelines (`platform-recompiles`, RTX).
+- **The adapter's light walk:** the first 64 lights and every directional light every frame; the rest `lightsPerFrame` (64) a frame, round robin, with a hot list (60 still frames) and `markChanged` (three.md, "How changes are found"). `userData.giCastsShadows` lets GI shadow lights three draws without shadows (candles under three's `ClusteredLighting`).
+- **Many lights with no range changing at once** (`ddgi/mark`, mark-table.ts): up to 8 a frame are marked over every probe, as T2.4b's rule says; past 8 each is marked exactly within 2 probe spacings of where it was and is, and one entry over every probe carries a bound on what any of them changes farther away (the largest relative change of its own unshadowed irradiance there: its colour and intensity change, a move's bounded share, or a whole change when a light switches on or off, a spot turns, or a range is set). On `sponza-candles` with all 1,024 candles changing in one frame: 0.074 ms, against about 5.8 ms for the per-light rule (DECISIONS 2026-11-06).
+- **Motions** (section 7): `motions: [{ id, label, target: 'light:<label>', interpolation?: 'linear' | 'step', loop, keyframes: [{ t, position?, intensity?, color? }] }]` in `scenes/src/manifest.ts`, with `motionState(motion, seconds)` for players. `step` interpolation holds each keyframe, which the step motion needs. Every scene with a lamp has `light-sweep` and `light-step`; Sponza has an `arcade-lamp`, off (intensity 0) until a motion plays it, along the north arcade. Lights at intensity 0 are left out of the scene by the viewer's loader and the native harness, because an off lamp still cost GI's hit shading a light loop.
+- **`sponza-candles`** (section 3): night, lit only by the candles; a `light-set` part (one candle and Intel's 10,000 light positions, made by a Node convert step) and a `candles` scene setting (default 1,024, up to 10,000). The selection rule is in DECISIONS.
+
 ## 2. The deferred shadow-ray pass (platform hit shading)
 
 **Why:** T1.9a measured shadow rays at 53% of Sponza's `ddgi/trace` (at 2,048 probes) and at no more than 1/7 of the trace bench's any-hit rate. The likely cause, until T2.0 measures it, is that the shadow-ray walk runs inside a kernel that already holds the closest-hit walk, the bounce lookup and the shading, and only some threads in a subgroup have a front-face hit to light.
@@ -146,6 +154,16 @@ So the gain in probes per frame is unknown, somewhere between "little" and "abou
 
 Bindings: `gi/direct` = tracer 3 + scene copy and shading 2 + ray scratch 1 + light grid 1 = **7**.
 
+**As built (T2.2, 2026-11-06; `platform/shade/direct.ts`, contract in `contract/shade.ts`).** Where it differs from the sketch above:
+
+- **The work item is 32 bytes:** position (f32 × 3), the two octahedral normals, albedo as unorm16 per channel over a power-of-two scale (so a cap above 1 fits), and the ray's index. 10:10:10 albedo rounded by up to 0.75% of a dark channel (T2.0's fixed 0.03% offset); unorm16 rounds by at most 0.012% of it (DECISIONS 2026-11-06).
+- **Rounds cover the trace and `gi/direct` only.** Batches above 1,024 probes trace in rounds (one `ddgi/trace` and one `gi/direct` pass each, the round's slots in a uniform picked with a dynamic offset), so the work list holds one round (7.3 MB). Ray results stay sized for the whole batch, as in M1, and `ddgi/blend` and `ddgi/write` run once.
+- **The scratch's layout:** a 256-byte header (the count, this frame's number and light groups, the frame's counts of hits lit and dropped), the ray results, then the work list. `ddgi/blend` binds the results alone, as before. The indirect dispatch arguments live in a small platform buffer, since `gi/direct` binds the scratch as writable storage and a buffer can't be that and the indirect buffer of one dispatch.
+- **Only hits a light can reach are listed** (`giDirectReaches`, the unshadowed test, no rays): 39 of Sponza's 81 blended front-face hits a probe.
+- **`gi/direct` rounds its sum to halves stochastically.** The result goes through half floats twice on this path, and `pack2x16float` truncates on the RTX 3060 (−0.035% a store).
+- **Light selection is still `giDirectIrradiance`,** called by `gi/direct` on the rebuilt surface; `giDirectLightSamples` comes with T2.3's grid. The inline path draws its numbers with `giDirectRandom` as `gi/direct` does, so the two fields compare texel by texel.
+- Storage buffers: `ddgi/trace` 7 (unchanged), `gi/direct` 6 (7 with T2.3's grid).
+
 ## 3. Many lights: a world-space grid of light candidates (ReGIR-style)
 
 **Today:** `giDirectIrradiance` loops over every local light twice: first to find which lights reach the hit and how much, then to pick `maxShadowedLightsPerHit` (4) of them by systematic sampling. It decides *per hit* whether to sample, from how many lights reach that hit. The cost per hit grows with the light count. With 1,024 candles, 512 probes × 224 rays × 2 × 1,024 is 235 M light evaluations per frame, which doesn't fit.
@@ -167,6 +185,14 @@ Data: `cells × R × 8 bytes` (light index, weight): 2,400 × 8 × 8 = 154 KB on
 **Why not a light tree first:** constant cost per hit matters more for us than the tree's better quality on tight clusters of lights. The grid is rebuilt from scratch every frame, so it needs no refit or rebuild policy under motion, and it lines up with the probe grid we already have. The light tree (Moreau 2019) is the fallback if the grid fails its noise check on `sponza-candles`.
 
 **`sponza-candles`:** a stated subset of Intel's 10,000 candles (DECISIONS 2026-11-05). Dennis: "1024 is fine for now". The count is a scene setting (`candles`, default 1,024, up to 10,000), so it can be raised as a stress test. Only the chosen candles' geometry is loaded (the full candle mesh is 19.5 M triangles). The light-grid checks run at 1,024; higher counts are recorded, not gated.
+
+**As built (T2.3, 2026-11-07; `platform/shade/light-grid.ts`, the selection in `shade/wgsl.ts`).** Where it differs from the sketch above:
+
+- **Every light is weighed for every cell,** not C = 16 candidates per reservoir from a power CDF. With 1,024 candles of one power, 16 random candidates find the candle beside a hit 1.6% of the time, so points lit mostly by one candle would stay noisy. Weighing all of them costs cells × lights per frame. The cell's R picks are then drawn by systematic sampling (one random offset per cell and frame) from those weights, and each pick stores its *share*, m / (R p) for a light picked m times.
+- **R = 16 picks, and a second stage at the hit (ReGIR's):** a hit weighs all 16 picks with the real distance, cone and cosine (no rays), then traces `lightGridShadowedLightsPerHit` (K, default 1) shadow rays to them by the same systematic choice the exact path uses. With R = 8 and K of the 8 traced directly, 94.7% of the check-1 points were within 5% (bar 99%); the second stage gave 98.4%, R = 16 gave 99.8%. After the second stage K matters little for noise and a lot for cost, so the grid's K is its own setting with default 1; `maxShadowedLightsPerHit` (4) keeps the exact path as in M1.
+- **The grid covers the scene's bounds** (the platform knows them), so there is no `gridBounds` argument and no `giDirectLightSamples`: the selection stays inside `giDirectIrradiance` / `giDirectGroupIrradiance`, one shadow-ray call site. Cubic cells, at most `lightGridMaxCells` (default 2,048: about 2 m on Sponza, the sketch's two probe spacings), plus one outside cell weighed by brightness alone.
+- **The picks are a texture** (`rgba32uint`, light and share; compatibility mode refuses `rg32uint` as a storage texture), bound by the hit-shading module: `ddgi/trace` stays at 7 storage buffers and `gi/direct` at 6. The build (`gi/light-grid`, a platform pass, every unpaused frame with more than `exactLightLimit` point and spot lights) packs the lights into a buffer of its own, then weighs 16 cells a workgroup against tiles of 128 lights in workgroup memory: reading every light once per cell, it was bound by those reads.
+- **Each light's contribution goes to its own group's sum** (T2.5's `giDirectGroupIrradiance`), which keeps every group unbiased.
 
 ## 4. Change-driven updates: per-probe history and a GPU scheduler
 
@@ -205,6 +231,8 @@ So a probe updated every frame (Cornell) reaches the cap, `h` ≈ 0.995, a memor
 
 That's applied to T1.12's `n` before the blend's own rule, which then fades and grows it as usual.
 
+*As built (T2.4b, DECISIONS 2026-11-06):* the cut **holds** for the promised updates and is solved with a bounce share ρ (`changeBounceShare`, 0.8): `h = (c − ρ)/(1 − ρ)` with `c = (ε/r)^(1/K)`, and a change promises `max(K, ⌈ln(ε/e)/ln ρ⌉)` updates. The formula above takes each estimate as unbiased, but estimates bounce off a field that still holds the old light; with the count growing back by one an update, two-room's lamp halved was 45% of the step away after 30 frames. A darkening's r is measured against the light that's left. ddgi.md "Change-driven history" has the details.
+
 **The steady-change rule, for changes that keep going** (not to be confused with T1.12's warm-up ramp). A slow, steady change (a lamp gliding, a day passing) moves a probe only a little between two of its updates, so the step rule leaves its history alone, and T1.12's 5 s memory would trail the change by about 5 s of it: about 7° of sun at 1.5° a second. So when a probe was marked before its previous update too (a flag in word 5), the blend also applies
 
 > `n ← min(n, ε / r)`, with `r` the change since its last update,
@@ -237,6 +265,7 @@ It runs only in frames with changes. The CPU writes a small table of changed lig
 - At the probe, for the light before and after, take its unshadowed **irradiance vector** per colour channel: `E_c × direction to the light`. This uses three's falloff, range window and cone (the same WGSL as hit shading, `giShadeLightSample`, without a surface cosine).
 - `Δ = max over r, g, b of |E_after,c × d_after − E_before,c × d_before|`. *Why a vector, per channel:* a light that keeps its distance but moves to the other side of the probe changes the vector, not its length, and a colour change at equal brightness changes a channel, not the luminance. A luminance difference would miss both.
 - `r = lightChangeScale × Δ / (mean_c + ε)`, where `mean_c` is the probe's stored mean irradiance in the same channel (history words 6–7). `lightChangeScale` (default 0.25, tuned in T2.4a) accounts for the probe seeing the light only through the surfaces it lights.
+  - *As built (T2.4a, DECISIONS 2026-11-06):* the default is **0.5**, the measured median of true change over the unscaled mark on two-room's lamp step (quartiles 0.25–0.73). At 0.25 the right probes were cut (recall 99.8%) but too gently, and the old lamp's bounce light lingered: 0.73 s to within 5% instead of 2 frames. The environment's r is 1 until T2.6a brings the sky's SH to the CPU. ddgi.md "Change-driven history" has the details.
 - **Visibility filter:** one Chebyshev test from the probe's distance moments toward the light (as in sampling) scales `r` by `max(chebyshev, 0.25)`. A probe behind a wall gets a smaller share but never zero, because it may see lit surfaces through a door.
 
 **Global changes** (the sun's direction, the sky; more than 1,024 light changes in one frame) mark every probe. On big volumes, far probes are owed 2 updates instead of 8 (6.4). The exceptions:
@@ -266,6 +295,8 @@ The update list moves from the CPU (`UpdateCursor` plus `writeBuffer`) to the GP
 4. **`ddgi/schedule-fill`** (one workgroup): the rest of the list comes from the existing scrambled order, `order[i] = (i × stride) mod N`. A window of `units` consecutive entries holds at most `P` stamped probes, so it always has enough unstamped ones. A running sum over the window picks them, and the cursor (now one GPU word) moves past the entries used.
 
 Cost: four dispatches of a few µs each, plus one thread per probe. Estimate: under 0.05 ms on the RTX at 20,000 probes. They run every frame: the CPU can't see on the GPU whether probes are still owed, and skipping them would leave owed probes stranded (a Sponza-wide change keeps probes owed for hundreds of frames).
+
+*As built (T2.4b):* one pass `ddgi/schedule` of the four dispatches, 0.020–0.027 ms at 20,000 probes on the RTX (VALID); the fill's scan is subgroups first when the device lays subgroups out in order (checked in the kernel), else in workgroup memory. Every listed probe is stamped, the round robin's too. A probe's urgency stays while it is owed updates.
 
 **What the budget buys.** With `U` probes per frame (the rates section), a window of `W` frames and K owed updates, at most `P × W / K` changed probes get all their updates in time. With W = 30 and K = 8:
 
@@ -348,6 +379,12 @@ Dennis (2026-11-06) asked about "subdividing probe grids and giving priority to 
 - **Scrolling (M3):** entering planes are new probes with no distance data, so propagation can't help them. Of each pair of entering planes, the even one holds keys (a quarter of its probes) and is warmed first; the odd one has none.
 - **The fallback** is "far probes owe 2" (6.4). If T2.4c shows propagation removing too little, keys stay as a scheduling order and propagation is switched off.
 
+*As built (T2.4c, PROGRESS and DECISIONS 2026-11-06; ddgi.md "Key probes and propagation"):* the decision checks passed, so key probes and propagation are the main path (`keyProbes`, on by default) on volumes where K updates for every probe wouldn't fit in 120 frames (the same rule as 6.4), for local changes too; "far probes owe 2" stays behind the setting. A fine probe out of the view's core owes 1 update. The visibility test multiplies the two ends' Chebyshev values and a key counts when that is at least 0.5. Propagation's passes use no indirect dispatch (each cost 0.022 ms empty in Chrome). On Sponza at 316 a frame after a 30° sun turn: the view within 5% from frame 4, the field from frame 24 (fallback 48), every fine probe traced by frame 60; propagation alone removes 63.1% of the sun turn's change at the fine probes and 91.4% of a sky dimming's.
+
+*As built (T2.4d, DECISIONS 2026-11-06; ddgi.md "Revised in T2.4d"):* the key path applies from N × K / U > 30 frames (the furnished room takes it); every key owes its full count where all the keys' full counts fit in those 30 frames, else 4 away from the view; every fine probe, near the view too, waits for its keys and is not traced, at priority or by the round robin, while a key neighbour is still taking the change in (at most 30 frames). The furnished room's sun step is then within 5% from frame 11 / 17. The second count while changes continue ("Its cost" above) is built from the census's rays a listed probe: Sponza's real day at 1.98 ms against the 2.2 ms margin.
+
+*As built (T2.18, DECISIONS 2026-11-08; ddgi.md "Revised in T2.18"):* the second count also covers a single change while it is taken in, from its mark until the census shows nothing owed, on volumes where a change outlasts the 30 frames anyway (Sponza, Bistro). Propagation counts as 2.5 rays a fine probe. Until the census sees the change, the list is taken to be all active probes. Not where every key owes its full count (the furnished room): a smaller batch there broke the keys' round a frame (frames 162 / 124 instead of 11 / 13). Sponza after a 30° turn: median 1.99 ms, p95 2.38 against 2.2 (was 2.44 / 3.12); the view within 5% from frame 15 (was 13), the field from 60 (was 36).
+
 ### 4.6 Feedback: revisit probes that changed more than their noise
 
 Not every change is reported: an emissive texture a host animates without telling us, a material edit, or what's left after propagation and the instant sky. So the blend checks each probe's own update.
@@ -355,6 +392,8 @@ Not every change is reported: an emissive texture a host animates without tellin
 - The blend already computes the probe's mean irradiance. It looks at how far this update's estimate sits from the stored mean, `|Δmean| / (1 − h)` (the blend moves the mean by `1 − h` of that), and compares it with the probe's **noise** `σ`, the root of a running average of the same quantity squared over its quiet updates (history word 7). Dividing by `1 − h` keeps the test fair when `h` changes, after a cut for example.
 - **Marked probes are skipped:** their change is already known and scheduled, and after a global change every probe would otherwise ask for its neighbours too.
 - **If it's above 4σ and above 2% of the mean,** the probe asks for one more update at an urgency of `|Δmean| / mean`, and so do its 6 face neighbours, at half that. So a change nobody reported spreads to the probes around it within a few frames, nearest the camera first.
+
+  - *As built (T2.4b, DECISIONS 2026-11-06):* **6σ**, because DDGI's ray noise has heavy tails (4σ fired on 0.1–0.2% of still updates); the noise word is relative to the mean and averaged over 64 quiet updates; the test skips probes in their warm-up ramp and probes still taking in a reported change.
 - **No race.** The requests go to a separate buffer, one `u32` per probe, written with `atomicMax` on the urgency's bits. The blend never writes another probe's history record (T1.12's blend is race-free because each workgroup writes only its own probe). `ddgi/schedule-count` reads the requests and clears them. Blend goes from 5 storage buffers to 6.
 - **It never touches hysteresis.** Every rule that cut hysteresis from a probe's own noisy estimate biased the field (T1.5b), because bright outliers won. Scheduling an extra update doesn't change how any update is blended. Because the choice depends on the value, a small bias over time is still possible, so T2.4b checks the still-scene mean with feedback on and off.
 - **False triggers:** at 4σ, a Gaussian noise trips about once in 16,000 updates; bright outliers make it more. T2.4b counts it on a still scene; the bar is under 0.1%.
@@ -434,6 +473,16 @@ Distance (1 KB per probe) doesn't change. Four groups fit the furnished room's 6
 
 Shading cost doesn't change, because the renderer samples one composed atlas. *Why not sample every layer in the fragment shader:* irradiance fetches were about 0.21 ms of T1.6's sampling cost (a run at a locked 1200 MHz clock, NOTES), and five layers would push sampling past 1.0 ms.
 
+*As built (T2.5, 2026-11-06; `light-groups.ts`, `wgsl/compose.ts`; DECISIONS 2026-11-06).* Where it differs from the sketch above:
+
+- **The layer plan** (`layerPlan`): groups off is one layer holding everything; with `count` groups, a layer per group (lights of a group at or past `count` go into the last one), then the environment layer (sky and emission). The kernels loop over whatever the plan lists, so T2.6b's sun layer is one more entry: a kind, a place, a weight, and a route for directional lights in `gi/direct` (today it routes by group, `DirectLightFrame.groupLayers`).
+- **Ray results:** one per ray per layer in the one ray scratch (`createScratch({ layers })`), so `ddgi/trace` stays at 7 storage buffers and `gi/direct` at 6. `gi/direct` shares the light choice and shadow rays (`giDirectGroupIrradiance`) and adds each group into its layer.
+- **The trace's bounce:** the 8 probes' weights once (`ddgiCornerWeight`, which renderers' `ddgiAccumulateField` now calls too), each layer's tile read with them.
+- **The blend:** every layer's texels in one step beside the distance texels, one thread per (layer, texel), the radiance read from the ray buffer with several layers. The sketch's one layer at a time through one workgroup array left most of the workgroup idle in each extra layer: the blend cost 2.6× with 5 layers on two-room, 1.6× this way. Workgroup memory is 8 KB + 1,152 bytes a layer, so at most 6 layers (4 groups, the environment and T2.6b's sun).
+- **Compose** rounds to the nearest half before its store (`textureStore` truncates on the RTX, NOTES), and covers the update list, propagation's list, and every tile in a frame where a weight changed (and the first frame after `prepare`).
+- **The inline trace** (kept for comparison) doesn't take layers: light groups need direct light deferred.
+- **Measured** (RTX 3060, VALID runs): per updated probe at a 512-probe batch, 4 groups cost 1.10× groups off on Sponza and 1.23× on two-room (2 groups 1.05× / 1.04×); the linearity check matches a re-converged field within 0.004%. Memory per extra layer (atlas, ray results for a 4,096-probe warm-up batch, scratch, key deltas, propagation): two-room 3.6 MB, Cornell 5.8 MB, furnished room 14.5 MB, Sponza 25.5 MB, plus the composed atlas (one tile a probe: 0.55 / 0.88 / 2.6 / 9.9 MB). The design's table counted the atlas tiles alone.
+
 ## 6. Sun and sky with time of day
 
 Dennis (2026-11-05): time of day should be **"instant with a delayed fallback"**, and nothing may take minutes to build: "anything taking minutes to build is a fail and we should not go that direction." So each part below either needs no build, or builds from the field's own rays no slower than the field itself converges (on Sponza, about 1.2 s into the warm-up).
@@ -447,6 +496,16 @@ Dennis (2026-11-05): time of day should be **"instant with a delayed fallback"**
 | The sun's direction (the patch of sunlight moves, and its bounce with it) | **re-traced**, nearest the camera first (6.4) | nothing |
 
 The last row is the largest. On open ground the sky is only 11–14% of daylight (T1.1's sky-to-sun ratios: Sponza 11.0%, furnished room 13.2%, open ground 14.3%), and in a sunlit interior the sun's bounce is often most of the GI. So how time of day looks on Sponza depends mostly on how fast re-tracing is (6.4), with or without the instant sky. An instant sun direction needs a different idea; it's on the Later list.
+
+*As built (T2.6b, the sun layer; `settings.sunLayer`, `light-groups.ts`; DECISIONS 2026-11-07):*
+
+- **The sun is the scene's first directional light** (light 0 of the platform's light table, `SceneCopy.firstDirectionalLight`). `gi/direct` keeps it apart when the technique names a layer for it (`DirectLightFrame.sunLayer`): `giDirectSplitIrradiance` evaluates it at a white reference and returns it beside the four groups, and `giDirectReachesSplit` weighs it in white, so a sun at intensity 0 still lists the hits it faces and its layer keeps updating. The light choice and the shadow rays stay shared.
+- **The plan:** the sun's layer comes last. With groups off it is 2 layers (everything but the sun, then the sun), the "+8–10%" case of §5's estimate; with groups, the groups, the environment, then the sun, at most 6 (the blend's cap).
+- **The weight** is the sun's colour × intensity, times its group's weight with groups on, read from the scene each frame; a change is a full compose in its frame.
+- **The marks:** a change of the sun's colour, intensity or group alone marks nothing; a turn is judged with both sides at white (its angle alone, whatever its brightness did). When the sun becomes another light (destroyed, or a first directional light created), every probe is marked as a whole change.
+- **The probe's mean** (history words 6–7) weighs the sun layer by the sun's light (a new uniform, `DdgiUniforms.sunLight`), so `ddgi/mark` still divides a light's change by the probe's real light, whatever the sun's brightness.
+- **Off by default**, like light groups (lead ruling 2026-11-08, DECISIONS). T2.8's time-of-day slider turns it on in the viewer.
+- **Measured** (RTX 3060, `ddgi-sun-layer` on the courtyard, correctness runs): a sun colour and brightness change composed in its own frame matches a field re-converged at the new sun within 0.002% (it moved the views 36–43%), with the history and layers byte-identical and nothing marked; with the sun layer off the field is `m2`'s to the last digit; 6 layers (4 groups, the environment, the sun) within 0.011%. Sun turns still settle: the furnished room's view within 5% from frames 11 and 13. Sponza's view settled at frame 13 in the implementer's run and at 16 and 13 in the reviewer's two runs (T2.4c's bar is 15; 12 with the layer off), its field at 36 either way. So with the layer on, Sponza's turn is at the edge of the bar; T2.8 checks it. Memory: Sponza 58.0 MB off, 93.4 MB with the sun layer (+35.5 MB: the layer's 25.5 MB as in §5, plus the composed atlas), not the 20 MB of §6.5's table; the courtyard (4,840 probes) +16.8 MB. The cost: 1.055× per probe at 512 probes, against a 1.10 bar (one VALID run; PROGRESS, T2.6b).
 
 ### 6.2 Re-baking the sky (needed by every path)
 
@@ -582,6 +641,8 @@ A change of the sun's direction (or of the sky) marks every probe (section 4.2).
 
 This applies only to volumes where 8 updates for every probe wouldn't fit in 2 s at the current rate (`N × 8 / U > 120` frames): Sponza and Bistro's camera volume, not the rooms.
 
+*As built (T2.4b):* with the bounces counted (4.1), two updates leave far probes about ρ² of their error (64% at ρ = 0.8); on Sponza after a 30° sun turn the field's light-weighted error is within 5% in 0.8 s and 1.7% at 3 s, while each far probe stays about 4 points noisier than before the step for a while (12.6% against 8.4%, per-probe relative).
+
 - Two updates bring a far probe within 5% (that's what the history rule in 4.1 gives for K = 2), but it's noisier: it holds about 2 updates' rays instead of 8. Its history then grows by itself with the round robin.
 - When the camera turns toward it, its camera weight raises its priority as usual.
 
@@ -604,6 +665,8 @@ This applies only to volumes where 8 updates for every probe wouldn't fit in 2 s
 
 ### 6.5 Re-tracing alone, or with the instant sky: the comparison
 
+*As built (T2.6b, DECISIONS 2026-11-07):* **the instant sky was dropped** by its decision check (52.8% on the furnished room, 35.6% on Sponza, against 70%). On the furnished room 91% of the change is sky light bounced through the window, which no first-order transfer can follow. Re-tracing nearest the camera (T2.4b–d) with the sun layer is the path. The code stays on branch `m2-t2.6b` (d26cb01) as the record.
+
 On Sponza, on the RTX, at T1.9b's 268 probes a frame:
 
 | | Re-tracing near the camera, with the sun layer | The same, plus the first-order sky transfer |
@@ -613,7 +676,7 @@ On Sponza, on the RTX, at T1.9b's 268 probes a frame:
 | Sky change, in view | within 5% in ~0.13 s | most of it in the same frame (T2.6b measures how much); the rest ~0.13 s |
 | Sky change, whole volume | ~1 s at the key level, ~2 s every probe | most of it within 4 frames; the rest as on the left, at lower priority |
 | Build | none | from the field's rays: ~1.2 s into the warm-up; with the warm-up off, the view in ~0.13 s and the whole volume in ~10 s, as the field itself converges |
-| Extra memory | 20 MB (the sun layer and the composed atlas) | 65 MB |
+| Extra memory | 20 MB estimated, 35.5 MB measured on Sponza (the sun layer and the composed atlas; T2.6b) | 65 MB |
 | Extra GPU cost | the sun layer (about +8–10% per probe update) | also +2–3% per probe update, and ~0.1 ms in frames where the sky changed |
 | New code | the layers (shared with light groups) | also the blend's accumulation, `ddgi/sky-nudge` and `ddgi/write`'s sky mode |
 
@@ -674,7 +737,7 @@ The native harness's miss shader sees one flat colour (DECISIONS 2026-11-04). M2
 | `gi/direct` (platform) | none | new; takes over direct light for every technique that traces |
 | light grid build (platform) | none | new; only above `exactLightLimit` local lights |
 | `ddgi/blend` | one global hysteresis | per-probe `h` from the history record; loops layers; writes the probe's mean; accumulates the first-order sky transfer from its miss rays |
-| `ddgi/compose` | none | whenever there's more than one layer (the sun layer is on by default); over the update list and propagation's list |
+| `ddgi/compose` | none | whenever there's more than one layer (the sun layer or light groups, both off by default); over the update list and propagation's list |
 | `ddgi/propagate` | none | new; only in frames where key probes were updated because of a change (4.5); its tiles go through `ddgi/write` and `ddgi/compose` over its own list |
 | `ddgi/sky-nudge` | none | new; only in frames where the sky changed, with the instant sky on |
 | `ddgi/write` | one block per probe | loops the layer blocks (the transfer's 3 included); a second dispatch in sky mode writes nudged sky tiles |
@@ -865,9 +928,11 @@ The startup items DECISIONS moved to M2 ("fast first GI", the scene copy off the
 10. **Measurement:** benchmarks and estimates assume a loaded GPU with its clocks up ("Running at 60hz seems like a fail"). Budget v2 is accepted (work per frame, calibrated with the clocks up, a 4 s sweep floor); this doc's rates are its measured medians (T1.9b: Sponza 268 a frame).
 11. **Sun layer in white**, weighted by colour × intensity: kept, as an exception to SPEC's rule 3, after comparing what Unity APV, RTXGI and Godot SDFGI do ("go with what we need to get to the improvement passes but i would look at what other godot systems do"). The three conditions are in 6.3.
 
-## Still open
+## Decided by Dennis (2026-11-06)
 
-1. **Key probes and propagation as the main path for global changes** (4.5), with "far probes owe 2" as the fallback. On Sponza: the view in ~0.13 s, the whole volume visibly changed in ~1 s, every probe traced in ~1.8 s, against ~2.5 s with noisier far probes for the fallback. It's new (no shipped DDGI system propagates changes between levels this way, research note), so T2.4c's first check decides. Go ahead?
-2. **Moving objects sooner?** Rigid moving objects (M3's change feed and geometry marks) could run right after T2.4c, ahead of the instant sky, since they reuse the same scheduler. Deforming meshes and the BVH work stay in M3.
+1. **Key probes and propagation are the main path for global changes** (4.5), with "far probes owe 2" as the fallback. On Sponza: the view in ~0.13 s, the whole volume visibly changed in ~1 s, every probe traced in ~1.8 s, against ~2.5 s with noisier far probes for the fallback. It's new (no shipped DDGI system propagates changes between levels this way, research note), so T2.4c's first check decides.
+2. **Rigid moving objects come into M2,** right after T2.4c and ahead of the instant sky (board row T2.M1), since they reuse the same scheduler. Deforming meshes and the BVH work stay in M3.
+
+Nothing is left open in this doc.
 
 The times in sections 4.3–4.8, 6.3, 6.4 and 6.5 come from T1.9b's measured medians (the rates section).

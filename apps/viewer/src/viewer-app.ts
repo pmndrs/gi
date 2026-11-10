@@ -7,25 +7,32 @@
  * finished their set-up, and `errors` lists every problem seen.
  */
 
-import { BoxGeometry, Color, Mesh, MeshStandardMaterial } from 'three';
+import { BoxGeometry, Color, Mesh, MeshStandardMaterial, Vector2 } from 'three';
 import { defaultExposureEv, type CameraBookmark, type SceneManifest } from '../../../scenes/src/manifest';
 import { CameraRig } from './controls/camera-rig';
 import { TONE_MAPPERS, ViewerCore, type ToneMappingName, type ViewLayout } from './core/viewer-core';
+import { LightEditor, type LightSettings } from './lighting/light-editor';
+import { MotionPlayer } from './lighting/motion-player';
+import { ResponseMeter } from './lighting/response-meter';
+import { TimeOfDay } from './lighting/time-of-day';
 import { shotBookmark } from './scene/reference-files';
 import { newestFrame, resolveGpuWindow } from './render/gpu-time';
 import { findBookmark, loadAllManifests } from './scene/manifests';
 import { LAYER_VIEW_GEOMETRY } from './scene/layers';
-import { nextFrame, type LoadProgress } from './scene/load-scene';
+import { nextFrame, type LoadedScene, type LoadProgress } from './scene/load-scene';
 import { PROBE_STATE_LABELS } from './ddgi/library';
 import { halfwaySamples, historyColor, HISTORY_COLORS } from './ddgi/history-colors';
 import { PROBE_STATE_COLORS } from './ddgi/probe-spheres';
 import { DdgiStatsText, StatsOverlay } from './stats';
+import { WHITE_WEIGHT, type DdgiViewerSettings, type GroupWeight, type LightGroupCount } from './techniques/ddgi-technique';
 import { DEFAULT_LPG_SETTINGS } from './techniques/light-probe-grid-technique';
 import { DEFAULT_VXGI_SETTINGS } from './techniques/vxgi-technique';
 import { TECHNIQUE_LABELS, type TechniqueId } from './techniques/types';
 import { HELP } from './ui/help-text';
+import { LightingControls, type LightingHandlers } from './ui/lighting-controls';
 import { Panel, type DdgiPanelSettings, type PanelState, type ProbeLegendEntry } from './ui/panel';
-import { DEFAULT_URL_STATE, parseUrlState, serializeUrlState, type ViewerUrlState } from './ui/url-state';
+import { RegionPicker } from './ui/region-picker';
+import { DEFAULT_URL_STATE, parseUrlState, serializeUrlState, type GiChoice, type ViewerUrlState } from './ui/url-state';
 
 export interface ViewerAutomationState {
     ready: boolean;
@@ -68,6 +75,8 @@ const VIEW_SHARE_WHILE_PREPARING = 0.2;
 const VIEW_INTERVAL_WHILE_PREPARING_MAX_MS = 2000;
 /** Frames drawn after set-up finishes before an automated run is told the picture is ready. */
 const SETTLED_FRAMES = 4;
+/** How often the lighting controls (motion time, meter curve, a played day's sliders) are redrawn. */
+const LIGHTING_UI_INTERVAL_MS = 100;
 /** How close (in pixels) a press must be to the wipe line to grab it. */
 const WIPE_GRAB_PIXELS = 10;
 
@@ -108,6 +117,16 @@ export class ViewerApp {
     private core!: ViewerCore;
     private rig!: CameraRig;
     private panel!: Panel;
+    private lightingControls!: LightingControls;
+    private regionPicker!: RegionPicker;
+    /** Per scene: the light editor and gizmo, the motions, time of day and the response meter (made when a scene opens). */
+    private lighting: { editor: LightEditor; player: MotionPlayer; timeOfDay: TimeOfDay; meter: ResponseMeter } | null = null;
+    /** DDGI's light group weights (index = group) and the environment's, as the sliders set them. */
+    private groupWeights: GroupWeight[] = [];
+    private environmentWeight: GroupWeight = WHITE_WEIGHT;
+    /** The GI choice to go back to after a response measurement, which runs in GI only; null when none runs. */
+    private giBeforeMeter: GiChoice | null = null;
+    private lastLightingUiAt = 0;
     private stats!: StatsOverlay;
     private readonly ddgiStats = new DdgiStatsText();
 
@@ -178,7 +197,9 @@ export class ViewerApp {
             // Each GPU sample is one whole frame (see updateTimestamps); the overlay smooths them.
             this.stats = new StatsOverlay(document.body, 'GPU per frame, averaged over recent frames:');
             this.stats.setExtraLines(() => this.ddgiStats.lines());
-            this.panel = new Panel(document.body, this.manifests, this.panelHandlers());
+            this.lightingControls = new LightingControls(this.lightingHandlers());
+            this.panel = new Panel(document.body, this.manifests, this.panelHandlers(), this.lightingControls.sections);
+            this.regionPicker = new RegionPicker(this.canvas);
             this.buildWipeLabels();
             this.installPageEvents();
         } catch (error) {
@@ -205,8 +226,12 @@ export class ViewerApp {
         this.prepareStartedAt = null;
         this.showLoading(`Loading ${manifest.title}`, { stage: 'Starting', fraction: null });
         await nextFrame();
+        this.disposeLighting();
         try {
-            const loaded = await this.core.loadScene(manifest, (progress) => this.showLoading(`Loading ${manifest.title}`, progress));
+            const loaded = await this.core.loadScene(manifest, (progress) => this.showLoading(`Loading ${manifest.title}`, progress), {
+                settings: this.url.sceneSettings,
+                clusteredLightReachMetres: this.url.lightReach ?? undefined,
+            });
             this.manifest = manifest;
             this.url.scene = manifest.id;
             this.rig.setSceneScale(loaded.diagonal);
@@ -230,9 +255,11 @@ export class ViewerApp {
             this.rig.update(0);
             this.bookmarkPoseKey = JSON.stringify(this.rig.pose());
 
+            this.createLighting(loaded);
             this.showLoading(`Loading ${manifest.title}`, { stage: 'Compiling shaders', fraction: 0.9 });
             await nextFrame();
             this.applyState();
+            this.startLightingFromLink();
             await this.core.renderer.compileAsync(loaded.scene, this.core.getTechnique(this.core.layout.left).camera);
 
             this.automation.loadMs = performance.now() - startedAt;
@@ -279,16 +306,7 @@ export class ViewerApp {
     private applyState(): void {
         this.core.configureProbeGrid({ ...DEFAULT_LPG_SETTINGS, ...this.probeSettings });
         this.core.configureVxgi({ ...DEFAULT_VXGI_SETTINGS, ...this.vxgiSettings });
-        this.core.configureDdgi({
-            budgetMs: this.url.budgetMs,
-            showProbes: this.url.probes,
-            probeColor: this.url.probeColor,
-            screenView: this.url.debug,
-            atlas: this.url.atlas,
-            atlasFill: this.url.atlasFill,
-            atlasExposureEv: this.url.atlasEv,
-            changeFullScalePercent: this.url.change,
-        });
+        this.core.configureDdgi(this.ddgiSettings());
         this.core.setToneMapping(this.url.tone as ToneMappingName);
         this.core.setExposureEv(this.exposureEv());
         this.core.setUpscale(this.url.upscale ? { quality: this.url.upscale } : null);
@@ -299,6 +317,25 @@ export class ViewerApp {
         this.refreshPanel();
         this.updateWipeLabels();
         this.scheduleUrlUpdate();
+    }
+
+    /** DDGI's settings from the link and the lighting controls. */
+    private ddgiSettings(): DdgiViewerSettings {
+        return {
+            budgetMs: this.url.budgetMs,
+            showProbes: this.url.probes,
+            probeColor: this.url.probeColor,
+            screenView: this.url.debug,
+            atlas: this.url.atlas,
+            atlasFill: this.url.atlasFill,
+            atlasExposureEv: this.url.atlasEv,
+            changeFullScalePercent: this.url.change,
+            lightGroups: this.url.lightGroups,
+            // Time of day turns DDGI's sun layer on (DECISIONS 2026-11-08).
+            sunLayer: this.url.timeOfDay !== null && (this.lighting?.timeOfDay.available ?? false),
+            groupWeights: this.groupWeights,
+            environmentWeight: this.environmentWeight,
+        };
     }
 
     /** The scene's own exposure (manifest `exposureEv`), unless the user or the link chose one. */
@@ -343,6 +380,7 @@ export class ViewerApp {
         };
         if (this.manifest) this.panel.setScene(this.manifest);
         this.panel.setState(state);
+        this.refreshLightingControls();
     }
 
     private panelHandlers() {
@@ -354,8 +392,8 @@ export class ViewerApp {
             onScene: (id: string) => {
                 const manifest = this.manifests.find((candidate) => candidate.id === id);
                 if (!manifest) return;
-                // Each scene opens at its own exposure.
-                this.url = { ...this.url, camera: null, freeCamera: null, ev: null };
+                // Each scene opens at its own exposure, with its own sun and no motion playing.
+                this.url = { ...this.url, camera: null, freeCamera: null, ev: null, timeOfDay: null, motion: null };
                 void this.openScene(manifest, null);
             },
             onBookmark: (index: number) => {
@@ -441,6 +479,8 @@ export class ViewerApp {
 
     private onCameraMoved(): void {
         if (!this.manifest || this.loadingScene) return;
+        // The meter reads a still picture; a camera move changes it for another reason.
+        if (this.lighting?.meter.running) this.lighting.meter.cancel('the camera moved. Keep it still while measuring.');
         const pose = this.rig.pose();
         if (JSON.stringify(pose) !== this.bookmarkPoseKey) {
             this.bookmarkIndex = null;
@@ -647,6 +687,7 @@ export class ViewerApp {
         this.lastFrameAt = now;
         try {
             this.rig.update(deltaMs / 1000);
+            this.beforeLightingFrame(now);
             const preparing = this.core.preparing;
             // Set-up frames are drawn a few times a second on purpose; don't let them into the frame-time average.
             if (preparing !== this.wasPreparing) {
@@ -662,6 +703,7 @@ export class ViewerApp {
             if (!preparing || performance.now() - this.lastViewRenderAt >= viewInterval) {
                 const viewStartedAt = performance.now();
                 this.core.renderFrame();
+                this.lighting?.meter.afterFrame(now);
                 this.lastViewRenderAt = performance.now();
                 this.lastViewCostMs = this.lastViewRenderAt - viewStartedAt;
                 this.automation.frames++;
@@ -672,6 +714,7 @@ export class ViewerApp {
             }
             this.pumpPreparation(preparing, now);
             this.updateStatus(now);
+            this.updateLightingUi(now);
         } catch (error) {
             console.error(error);
             this.core.onTick = null;
@@ -803,7 +846,284 @@ export class ViewerApp {
         // The reference loads in the background; its label follows.
         this.updateWipeLabels();
         const baking = this.core.activeTechniques().find((technique) => !technique.ready);
-        this.statusPill.textContent = baking ? `${TECHNIQUE_LABELS[baking.id]}: ${baking.describe()}` : '';
+        const meter = this.lighting?.meter;
+        // The meter's test mode says so on the picture too, so it is never mistaken for the normal picture.
+        if (meter?.running) this.statusPill.textContent = `Response meter: ${meter.describe(now)}`;
+        else this.statusPill.textContent = baking ? `${TECHNIQUE_LABELS[baking.id]}: ${baking.describe()}` : '';
+    }
+
+    // -- lights, motions, time of day, light groups, the response meter -----
+
+    /** The scene's light editor, motion player, time of day and response meter. */
+    private createLighting(loaded: LoadedScene): void {
+        const editor = new LightEditor(loaded, this.core.camera, this.canvas, {
+            onEdited: () => {
+                const selected = editor.selected;
+                if (selected) this.core.ddgi?.markChanged(selected.light);
+                this.refreshLightingControls();
+            },
+            onDragging: (dragging) => {
+                this.rig.enabled = !dragging;
+            },
+            onSelected: () => this.refreshLightingControls(),
+        });
+        const player = new MotionPlayer(loaded);
+        const timeOfDay = new TimeOfDay(loaded);
+        const meter = new ResponseMeter({
+            ddgi: () => this.core.ddgi,
+            player,
+            drawingBufferSize: () => {
+                const size = this.core.renderer.getDrawingBufferSize(new Vector2());
+                return { width: size.x, height: size.y };
+            },
+            markChanged: (light) => this.core.ddgi?.markChanged(light),
+            describe: () => ({ scene: loaded.manifest.id, camera: this.automation.camera ?? 'free', adapter: this.automation.adapter }),
+        });
+        this.lighting = { editor, player, timeOfDay, meter };
+        this.groupWeights = [];
+        this.environmentWeight = WHITE_WEIGHT;
+        if (!timeOfDay.available) this.url.timeOfDay = null;
+        const fit = timeOfDay.fit;
+        this.lightingControls.setScene(
+            editor.lights.map((entry) => ({ label: entry.label, kind: entry.kind })),
+            player.motions,
+            { available: timeOfDay.available, hour: this.url.timeOfDay?.hour ?? fit?.hour ?? 12, dayOfYear: this.url.timeOfDay?.dayOfYear ?? fit?.dayOfYear ?? 172 },
+            loaded.diagonal,
+        );
+        this.regionPicker.clear();
+        this.lightingControls.setMeterRegion('Watching the whole picture.');
+    }
+
+    /** What the link asks for once DDGI exists: time of day, and a motion playing. */
+    private startLightingFromLink(): void {
+        const lighting = this.lighting;
+        if (!lighting) return;
+        const now = performance.now();
+        const link = this.url.timeOfDay;
+        if (link && lighting.timeOfDay.available) {
+            lighting.timeOfDay.hour = link.hour;
+            lighting.timeOfDay.dayOfYear = link.dayOfYear;
+            this.core.ddgi?.setEnvironment(lighting.timeOfDay.setEnabled(true, now));
+        }
+        const motion = this.url.motion;
+        if (motion && lighting.player.motions.some((candidate) => candidate.id === motion)) this.playMotion(motion);
+        else this.url.motion = null;
+        this.refreshLightingControls();
+    }
+
+    private disposeLighting(): void {
+        const lighting = this.lighting;
+        if (!lighting) return;
+        lighting.meter.cancel();
+        lighting.player.stop();
+        lighting.editor.dispose();
+        lighting.timeOfDay.dispose();
+        this.lighting = null;
+        this.restoreAfterMeter();
+    }
+
+    /** Before GI's update and the render: motions, a played day, the meter's step, the light markers. */
+    private beforeLightingFrame(now: number): void {
+        const lighting = this.lighting;
+        if (!lighting || this.loadingScene) return;
+        lighting.player.update(now);
+        const environment = lighting.timeOfDay.update(now);
+        if (environment !== undefined) {
+            this.core.ddgi?.setEnvironment(environment);
+            this.url.timeOfDay = { hour: lighting.timeOfDay.hour, dayOfYear: lighting.timeOfDay.dayOfYear };
+        }
+        lighting.meter.beforeFrame(now);
+        lighting.editor.update();
+    }
+
+    private playMotion(motionId: string | null): void {
+        const lighting = this.lighting;
+        if (!lighting) return;
+        if (lighting.meter.running) lighting.meter.cancel('a motion was started.');
+        if (motionId === null) {
+            lighting.player.stop();
+        } else {
+            lighting.player.play(motionId, performance.now());
+            const motion = lighting.player.playing;
+            const light = motion ? lighting.player.lightFor(motion) : null;
+            if (light) this.core.ddgi?.markChanged(light);
+        }
+        this.url.motion = lighting.player.playing?.id ?? null;
+        this.scheduleUrlUpdate();
+        this.refreshLightingControls();
+    }
+
+    /** Turns time of day on or off: the sun light, GI's sky and the sky picture follow; DDGI starts over with or without its sun layer. */
+    private setTimeOfDay(enabled: boolean): void {
+        const lighting = this.lighting;
+        if (!lighting || !lighting.timeOfDay.available) return;
+        const environment = lighting.timeOfDay.setEnabled(enabled, performance.now());
+        this.url.timeOfDay = enabled ? { hour: lighting.timeOfDay.hour, dayOfYear: lighting.timeOfDay.dayOfYear } : null;
+        // A new sun layer setting starts a new DDGI (ViewerCore.configureDdgi); the environment goes to whichever DDGI there is.
+        this.applyState();
+        this.core.ddgi?.setEnvironment(environment);
+    }
+
+    private lightingHandlers(): LightingHandlers {
+        const selected = () => this.lighting?.editor.selected ?? null;
+        return {
+            onSelectLight: (index) => {
+                this.lighting?.editor.select(index);
+                this.refreshLightingControls();
+            },
+            onLightSettings: (settings: LightSettings) => {
+                const entry = selected();
+                if (!entry || !this.lighting) return;
+                this.core.ddgi?.markChanged(this.lighting.editor.apply(entry, settings));
+            },
+            onPutBack: () => {
+                const entry = selected();
+                if (!entry || !this.lighting) return;
+                this.core.ddgi?.markChanged(this.lighting.editor.putBack(entry));
+                this.refreshLightingControls();
+            },
+            onGizmoMode: (mode) => {
+                this.lighting?.editor.setGizmoMode(mode);
+                this.refreshLightingControls();
+            },
+            onPlayMotion: (motionId) => this.playMotion(motionId),
+            onTimeOfDay: (enabled) => this.setTimeOfDay(enabled),
+            onTime: (hour, dayOfYear) => {
+                const timeOfDay = this.lighting?.timeOfDay;
+                if (!timeOfDay) return;
+                timeOfDay.stopPlaying();
+                const environment = timeOfDay.setTime(hour, dayOfYear, performance.now());
+                // Moving a slider turns time of day on (and DDGI's sun layer with it).
+                if (!timeOfDay.enabled) this.setTimeOfDay(true);
+                else this.core.ddgi?.setEnvironment(environment);
+                this.url.timeOfDay = { hour, dayOfYear };
+                this.scheduleUrlUpdate();
+            },
+            onPlayDay: () => {
+                const timeOfDay = this.lighting?.timeOfDay;
+                if (!timeOfDay) return;
+                if (timeOfDay.playing) {
+                    timeOfDay.stopPlaying();
+                } else {
+                    if (!timeOfDay.enabled) this.setTimeOfDay(true);
+                    timeOfDay.playDay(performance.now());
+                }
+                this.refreshLightingControls();
+            },
+            onLightGroups: (count: LightGroupCount) => {
+                this.url.lightGroups = count;
+                this.applyState();
+            },
+            onGroupWeight: (key, weight) => {
+                if (key === 'environment') this.environmentWeight = weight;
+                else this.groupWeights[key] = weight;
+                // Weights are live in DDGI: no new DDGI, nothing traced again.
+                this.core.configureDdgi(this.ddgiSettings());
+            },
+            onPickRegion: () => {
+                this.regionPicker.pick((region) => {
+                    this.lightingControls.setMeterRegion(region ? 'Watching the picked rectangle (dashed blue).' : 'Watching the whole picture.');
+                });
+            },
+            onWholePicture: () => {
+                this.regionPicker.clear();
+                this.lightingControls.setMeterRegion('Watching the whole picture.');
+            },
+            onMeasureStep: (motionId, jump) => this.startMeasurement(motionId, jump),
+            onCancelMeasure: () => {
+                this.lighting?.meter.cancel();
+                this.restoreAfterMeter();
+            },
+            onSaveCsv: () => {
+                const result = this.lighting?.meter.result;
+                if (!result || !this.manifest) return;
+                const link = document.createElement('a');
+                link.href = URL.createObjectURL(new Blob([result.csv], { type: 'text/csv' }));
+                link.download = `response-${this.manifest.id}-${result.motion}.csv`;
+                link.click();
+                URL.revokeObjectURL(link.href);
+            },
+        };
+    }
+
+    /** Starts the response meter on a step motion: in GI only, without the light markers, at the picked region. */
+    private startMeasurement(motionId: string, jump: number): void {
+        const lighting = this.lighting;
+        if (!lighting) return;
+        const motion = lighting.player.motions.find((candidate) => candidate.id === motionId);
+        if (!motion) return;
+        const ddgi = this.core.ddgi;
+        if (!ddgi || !this.core.activeTechniques().includes(ddgi)) {
+            this.lightingControls.setMeterStatus("The meter reads DDGI's picture: choose DDGI as the technique first.", false);
+            return;
+        }
+        if (this.url.upscale) {
+            this.lightingControls.setMeterStatus('Switch the upscaler off to measure (the meter reads the picture before it).', false);
+            return;
+        }
+        if (lighting.player.playing) this.playMotion(null);
+        if (lighting.timeOfDay.playing) lighting.timeOfDay.stopPlaying();
+        // GI only, so three's own direct light, which changes at once, doesn't count (m2-lights.md §7).
+        if (this.giBeforeMeter === null) this.giBeforeMeter = this.url.gi;
+        if (this.url.gi !== 'only') {
+            this.url.gi = 'only';
+            this.applyState();
+        }
+        lighting.editor.setHelpersVisible(false);
+        const size = this.core.renderer.getDrawingBufferSize(new Vector2());
+        lighting.meter.region = this.regionPicker.pixels(size.x, size.y);
+        lighting.meter.start(motion, performance.now(), jump);
+        this.refreshLightingControls();
+    }
+
+    /** The GI choice and the light markers as they were before a measurement. */
+    private restoreAfterMeter(): void {
+        this.lighting?.editor.setHelpersVisible(true);
+        const gi = this.giBeforeMeter;
+        this.giBeforeMeter = null;
+        if (gi !== null && gi !== this.url.gi) {
+            this.url.gi = gi;
+            this.applyState();
+        }
+    }
+
+    /**
+     * The lighting controls as things are now: with `everything`, the chosen light's sliders
+     * and the group weights too (after a choice, a gizmo move or a scene change). The
+     * periodic refresh leaves those alone, so a slider being dragged isn't written over.
+     */
+    private refreshLightingControls(everything = true): void {
+        const lighting = this.lighting;
+        const controls = this.lightingControls;
+        if (!lighting || !controls) return;
+        const { editor, player, timeOfDay, meter } = lighting;
+        if (everything) {
+            const entry = editor.selected;
+            const index = entry ? editor.lights.indexOf(entry) : null;
+            controls.setLight(index, entry ? { kind: entry.kind, settings: editor.settings(entry) } : null, entry ? (entry.original.intensity > 0 ? entry.original.intensity : entry.onIntensity) : 1);
+            controls.setGizmoMode(editor.gizmoMode);
+            const ddgiShown = this.url.gi !== 'off' && (this.url.wipe ? this.url.wipe.includes('ddgi') : this.url.technique === 'ddgi');
+            controls.setGroups(this.url.lightGroups, this.groupWeights, this.environmentWeight, ddgiShown);
+        }
+        const now = performance.now();
+        const playing = player.playing;
+        controls.setMotionPlaying(playing?.id ?? null, playing ? `Playing ${playing.label}: ${player.seconds(now).toFixed(1)} s` : '');
+        controls.setTimeOfDayEnabled(timeOfDay.enabled, timeOfDay.playing);
+        if (timeOfDay.playing) controls.setTime(timeOfDay.hour, timeOfDay.dayOfYear);
+        controls.setMeterStatus(meter.describe(now), meter.running);
+        controls.setMeterResult(meter.result, meter.live);
+    }
+
+    /** A few times a second: the motion's time, a played day's sliders, the meter's progress and curve; and after a measurement, the GI choice back. */
+    private updateLightingUi(now: number): void {
+        const lighting = this.lighting;
+        if (!lighting || now - this.lastLightingUiAt < LIGHTING_UI_INTERVAL_MS) return;
+        this.lastLightingUiAt = now;
+        if (!lighting.meter.running && this.giBeforeMeter !== null) this.restoreAfterMeter();
+        // A played day writes its time into the link when it stops.
+        if (lighting.timeOfDay.playing) this.scheduleUrlUpdate();
+        this.regionPicker.refresh();
+        this.refreshLightingControls(false);
     }
 
     // -- loading and failure -----------------------------------------------

@@ -14,6 +14,8 @@
  *   VITE_DDGI_FRAMES=20            frames timed per round and GI mode
  *   VITE_DDGI_BAKE_RUNS=3          repeats of each bake
  *   VITE_DDGI_WIDTH=2560 VITE_DDGI_HEIGHT=1440   the view size (default 1280x720)
+ *   VITE_DDGI_MAX_TEXTURE_SIZE=1024   scale model textures down to this side at load (default: as the files have them).
+ *                                  Bistro exterior's textures take 5.1 GB as loaded, more than a 6 GB GPU holds with DDGI (T2.17).
  *
  * DDGI's frame cost for T1.9 (GI on against off: GPU ms, frame p50 and p95):
  *   VITE_DDGI_SCENES=cornell-box,two-room,sponza VITE_DDGI_TECHNIQUES=none,ddgi pnpm test:gpu --filter viewer-baselines
@@ -108,6 +110,7 @@ async function baselines(): Promise<void> {
         bakeRuns: countFromEnv(env.VITE_DDGI_BAKE_RUNS, DEFAULT_BASELINE_OPTIONS.bakeRuns),
         width: countFromEnv(env.VITE_DDGI_WIDTH, DEFAULT_BASELINE_OPTIONS.width),
         height: countFromEnv(env.VITE_DDGI_HEIGHT, DEFAULT_BASELINE_OPTIONS.height),
+        maxTextureSize: env.VITE_DDGI_MAX_TEXTURE_SIZE === undefined ? null : countFromEnv(env.VITE_DDGI_MAX_TEXTURE_SIZE, 1024),
         log,
     });
     const failures = failedMeasurements(result);

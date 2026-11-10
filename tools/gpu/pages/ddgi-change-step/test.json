@@ -1,0 +1,5 @@
+{
+    "description": "T2.4a checks 2 and 4: two-room lamp moved 2 m, every probe every frame; the lit-room GI view within 5% of settled in <= 0.5 s (and the same step under M1's rule beside it), and the marked probes against the probes that really changed (lit-room recall >= 95%).",
+    "timeoutMs": 900000,
+    "manual": true
+}

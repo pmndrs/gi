@@ -7,8 +7,9 @@
  * encoder:
  *
  * 1. the scene copy's uploads (`PlatformScene.encode`);
- * 2. the tracer acting on them: removed meshes, new mesh trees from the
- *    worker, and the top-level rebuild (CPU for now; B1a moves it to the GPU);
+ * 2. the tracer acting on them: removed meshes, new mesh trees (the GPU's
+ *    first trees at load, then tinybvh's from the worker), and the top
+ *    level's refit or rebuild;
  * 2b. hit shading: its settings, and the sky's projection when the
  *    environment changed (`shade/hit-shading.ts`, T1.4);
  * 3. each technique's `encode`, fallbacks before the techniques stacked on them,
@@ -43,24 +44,53 @@ import type { ShadingModule } from './contract/shading-module.ts';
 import type { GIStats, MemoryReport, PassTiming } from './contract/stats.ts';
 import type { GITechnique, TechniqueContext, TechniqueFrame } from './contract/technique.ts';
 import type { GpuTimerScope } from './contract/timing.ts';
+import { countComputePipelines, type CompileCounter } from './compile-counter.ts';
 import { PlatformKernelBuilder } from './kernel-builder.ts';
+import { mergeSceneChanges } from './scene/change-log.ts';
 import { PlatformScene } from './scene/platform-scene.ts';
 import { checkComputeLimits } from './device-requirements.ts';
 import { PlatformHitShading } from './shade/hit-shading.ts';
 import { GpuTimer } from './timing/gpu-timer.ts';
-import { PlatformRayQueries } from './trace/ray-queries.ts';
-import { UnitCostMeter, WorkBudget, type BudgetReport, type UnitCostModel } from './work-budget.ts';
+import { PlatformRayQueries, type MeshTreeOptions } from './trace/ray-queries.ts';
+import { UnitCostMeter, WorkBudget, type BudgetReport, type Calibration, type CalibrationMemory, type UnitCostModel } from './work-budget.ts';
 
 
 // Budget v2 lives in work-budget.ts; these names were exported from here before it.
 export { DEFAULT_UNITS_PER_FRAME, type UnitCostModel } from './work-budget.ts';
 
 /** No scene changes: the screen stage runs after `encode`, which already reported them. */
-const NO_CHANGES: SceneChanges = { regions: [], global: [], movedReceivers: 0 };
+const NO_CHANGES: SceneChanges = { regions: [], global: [], movedReceivers: 0, lights: [], lightsOverflowed: false };
+
+/**
+ * The last calibration accepted per device, technique and scene, for the
+ * calibration guard (work-budget.ts, CALIBRATION `guardShare`). Per device
+ * and not per platform: a page or host that makes a new platform for the
+ * same scene on the same device (M1's flicker check did, and got one bad
+ * calibration) still has the previous one to compare with.
+ */
+const calibrationsByDevice = new WeakMap<GPUDevice, Map<string, Calibration>>();
 
 interface AttachedTechnique {
     readonly technique: GITechnique;
     fallback: GITechnique | undefined;
+}
+
+/** The implementation's options: the host's, plus what the repository's own tools need. */
+export interface GIPlatformImplOptions extends GIPlatformOptions {
+    /**
+     * Compile `rays.encodeBatch`'s kernels in `prepare` even when no attached
+     * technique asks for them (`requirements.rayBatches`). For tools that
+     * call `rays.encodeBatch` themselves (the trace oracle and benchmarks);
+     * hosts can't reach `rays`, so the host contract has no such option.
+     */
+    readonly rayBatches?: boolean;
+    /**
+     * How mesh trees are made (T2.12): by default the scene's first trees come
+     * from the GPU (H-PLOC) on a device with subgroups, and tinybvh's replace
+     * them as they arrive. Tools turn the GPU off (M1's path), hold the swap
+     * to check a scene mid-swap, or refuse deeper GPU trees.
+     */
+    readonly meshTrees?: MeshTreeOptions;
 }
 
 export function createGI(device: GPUDevice, options: GIPlatformOptions = {}): GIPlatform {
@@ -76,6 +106,10 @@ export class GIPlatformImpl implements GIPlatform {
     readonly kernels: PlatformKernelBuilder;
 
     private readonly label: string;
+    /** The `rayBatches` option: compile the batch kernels whatever the techniques ask. */
+    private readonly rayBatchesForTools: boolean;
+    /** Counts compute pipelines made while the platform is ready (`stats.recompiles`); its device view is what the platform's own code and techniques use. */
+    private readonly compiles: CompileCounter;
     private readonly timer: GpuTimer | null;
     private readonly queries: SceneQueries;
     /** Hit shading and the sky (T1.4): `giSurfaceAt`, `giDirectIrradiance`, `giSkyRadiance`, `giSkyIrradiance`. */
@@ -99,30 +133,43 @@ export class GIPlatformImpl implements GIPlatform {
      * so a budget made from now on (a technique added at runtime) runs its burst without filler.
      */
     private calibratedOnce = false;
+    /**
+     * Changes from frames the techniques didn't see (the budget was paused),
+     * handed to them with the next frame they do see. Why: a light changed
+     * while paused would otherwise never reach DDGI's change estimate, and
+     * its probes would keep their full history.
+     */
+    private unseenChanges: SceneChanges | null = null;
     private readonly warnedMessages = new Set<string>();
     /** The `uncapturederror` listener, kept so `dispose` can remove it. */
     private readonly onUncapturedError: (event: Event) => void;
 
-    constructor(device: GPUDevice, options: GIPlatformOptions = {}) {
+    constructor(device: GPUDevice, options: GIPlatformImplOptions = {}) {
         this.device = device;
         this.label = options.label ?? 'gi';
-        this.sceneCopy = new PlatformScene(device, { label: this.label });
+        this.rayBatchesForTools = options.rayBatches === true;
+        this.compiles = countComputePipelines(device, () => this.isReady);
+        // The platform's own GPU work goes through the counting view; the host keeps its device as it is.
+        const ownDevice = this.compiles.device;
+        this.sceneCopy = new PlatformScene(ownDevice, { label: this.label });
         this.scene = new GuardedScene(this.sceneCopy, () => this.checkUsable());
-        this.rays = new PlatformRayQueries(device, this.sceneCopy, {
+        this.rays = new PlatformRayQueries(ownDevice, this.sceneCopy, {
             label: this.label,
             buildIn: options.buildIn,
-            // The top level reads its refit stats back only in stats mode: hosts are promised no readbacks.
+            // The top level reads its refit stats back only in stats mode: hosts are promised no readbacks frame
+            // after frame (the only one is the first mesh trees' stats, once at load; DECISIONS 2026-11-08).
             diagnostics: options.gpuTiming === true,
             warn: (message) => this.warnOnce(message),
+            meshTrees: options.meshTrees,
         });
-        this.kernels = new PlatformKernelBuilder(device, this.label);
-        this.timer = options.gpuTiming ? new GpuTimer(device, { warn: (message) => this.warnOnce(message) }) : null;
+        this.kernels = new PlatformKernelBuilder(ownDevice, this.label);
+        this.timer = options.gpuTiming ? new GpuTimer(ownDevice, { warn: (message) => this.warnOnce(message) }) : null;
         const rays = this.rays;
         this.queries = {
             rays,
             has: (kind: QueryKind) => kind === 'rays',
         };
-        this.shade = new PlatformHitShading(device, this.sceneCopy.module, this.rays.module, {
+        this.shade = new PlatformHitShading(ownDevice, this.kernels, this.sceneCopy.module, this.rays.module, {
             label: this.label,
             warn: (message) => this.warnOnce(message),
         });
@@ -187,6 +234,10 @@ export class GIPlatformImpl implements GIPlatform {
         this.output = technique;
     }
 
+    get outputTechnique(): GITechnique | undefined {
+        return this.output;
+    }
+
     setFallback(technique: GITechnique, fallback: GITechnique | undefined): void {
         const entry = this.find(technique);
         if (!entry) throw new Error(`@pmndrs/ddgi: technique '${technique.id}' is not attached`);
@@ -214,7 +265,23 @@ export class GIPlatformImpl implements GIPlatform {
         // after the other, a cold start spent about 2.5 s compiling on the RTX 3060
         // (the tracer's kernels, then the sky projection's 0.7 s, then DDGI's trace
         // kernel's 1.1 s; T1.9a). Techniques still prepare in encode order among themselves.
-        const platformReady = Promise.all([this.rays.prepare(this.kernels), this.shade.prepare()]);
+        //
+        // Only what this configuration uses is compiled (T2.14), and all of it here, so
+        // nothing compiles on first use while ready (`stats.recompiles`). The batch kernels
+        // behind `rays.encodeBatch` are two more compiles of the whole tracer that DDGI
+        // never runs (it traces inline): only when a technique asks for them.
+        //
+        // Every compile is asked for before the first `await` below (the first technique's
+        // included), so a host may copy its scene in while they compile: call `prepare()`,
+        // let the task end (Chrome sends WebGPU calls to its GPU process when the
+        // JavaScript task ends; NOTES), then describe the scene, then await.
+        //
+        // The mesh packing kernel is asked for first (T2.13): it is small, so it is ready
+        // early, and from this call on the scene stages meshes' raw arrays for it, so a host
+        // copying its scene in now uploads it while the rest compiles.
+        const packingReady = this.sceneCopy.prepareGpuPacking();
+        const rayBatches = this.rayBatchesForTools || this.attached.some(({ technique }) => technique.requirements.rayBatches === true);
+        const platformReady = Promise.all([packingReady, this.shade.prepare(), this.rays.prepare(this.kernels, { batches: rayBatches })]);
         const techniquesReady = (async () => {
             for (const technique of this.encodeOrder()) await technique.prepare();
         })();
@@ -239,10 +306,12 @@ export class GIPlatformImpl implements GIPlatform {
             this.timer.beginFrame(this.frame);
         }
 
-        const upload = this.sceneCopy.encode(encoder);
+        const upload = this.sceneCopy.encode(encoder, this.timer ?? undefined);
         this.rays.update(encoder, upload, this.timer ?? undefined);
-        // Settings, and the sky's projection when the environment changed.
-        this.shade.encode(encoder, this.sceneCopy.environment, this.sceneCopy.environmentVersion);
+        // Settings, the sky's bake when the environment changed, and the light grid when there are many
+        // point and spot lights. No technique traces in a paused frame, so the grid is not built then.
+        const lights = frame.budget.paused ? undefined : { frame: this.frame, localLights: this.sceneCopy.localLightCount, bounds: this.sceneCopy.bounds };
+        this.shade.encode(encoder, this.sceneCopy.environment, this.sceneCopy.environmentVersion, this.timer ?? undefined, lights);
 
         const techniques = this.encodeOrder();
         // A calibration no longer describes the scene once the geometry rays see changed: a geometry
@@ -253,19 +322,29 @@ export class GIPlatformImpl implements GIPlatform {
             for (const technique of techniques) this.budgetFor(technique).geometryChanged();
         }
 
-        if (!frame.budget.paused) {
+        if (frame.budget.paused) {
+            this.unseenChanges = this.unseenChanges ? mergeSceneChanges(this.unseenChanges, upload.changes) : upload.changes;
+        } else {
+            const changes = this.unseenChanges ? mergeSceneChanges(this.unseenChanges, upload.changes) : upload.changes;
+            this.unseenChanges = null;
             const gpuMs = frame.budget.gpuMs;
             // The millisecond budget is shared evenly between techniques (docs/api/platform.md, gap 6).
             const shareMs = gpuMs === undefined ? undefined : gpuMs / Math.max(1, techniques.length);
             const timed = this.timer?.enabled === true;
             for (const technique of techniques) {
+                if (technique.warmingUp === true) {
+                    // Its own start-up work (GITechnique.warmingUp): no budget, and nothing for the
+                    // calibration to measure, which starts at the first frame after it.
+                    technique.encode(encoder, { frame: this.frame, deltaTime: frame.deltaTime, camera: frame.camera, changes, units: 0 });
+                    continue;
+                }
                 const budget = this.budgetFor(technique);
                 const units = budget.unitsFor({ frame: this.frame, deltaTime: frame.deltaTime, budget: frame.budget, shareMs, timed, sceneSettling });
                 const techniqueFrame: TechniqueFrame = {
                     frame: this.frame,
                     deltaTime: frame.deltaTime,
                     camera: frame.camera,
-                    changes: upload.changes,
+                    changes,
                     units,
                 };
                 const reported = technique.encode(encoder, techniqueFrame);
@@ -276,6 +355,9 @@ export class GIPlatformImpl implements GIPlatform {
                 budget.record(units, used);
                 if (budget.report.calibration?.measured) this.calibratedOnce = true;
             }
+            // The techniques have been told about the sky as it is now: the next sky change is measured from it
+            // (shade/sky-change.ts). Recorded after their kernels, which read the sky as it was before.
+            if (changes.global.includes('environment')) this.shade.recordSkySeen(encoder);
         }
 
         if (this.timer) {
@@ -315,6 +397,7 @@ export class GIPlatformImpl implements GIPlatform {
         }
         const topLevel = this.rays.topLevelCounters;
         if (topLevel) counters['platform top level'] = topLevel;
+        counters['platform mesh trees'] = this.rays.meshTreeCounters;
         for (const [technique, budget] of this.budgets) counters[`${technique.id} budget`] = budgetCounters(budget.report);
         // The sky the rays see (radiance map, procedural source texture) and the hit-shading
         // uniforms are part of the scene as the platform holds it, so they count as scene copy;
@@ -327,7 +410,7 @@ export class GIPlatformImpl implements GIPlatform {
             techniques,
             total: sceneCopy + acceleration + Object.values(techniques).reduce((sum, bytes) => sum + bytes, 0),
         };
-        return { frame: this.frame, passes: this.latestPasses, memory, counters, encodeCpuMs: this.lastEncodeCpuMs };
+        return { frame: this.frame, passes: this.latestPasses, memory, counters, encodeCpuMs: this.lastEncodeCpuMs, recompiles: this.compiles.counted };
     }
 
     resetHistory(): void {
@@ -378,7 +461,7 @@ export class GIPlatformImpl implements GIPlatform {
         const warn = (message: string): void => this.warnOnce(message);
         const timer: GpuTimerScope = this.timer ?? NO_TIMER;
         return {
-            device: this.device,
+            device: this.compiles.device,
             scene: this.sceneCopy,
             queries: this.queries,
             shade: this.shade,
@@ -414,10 +497,32 @@ export class GIPlatformImpl implements GIPlatform {
     private budgetFor(technique: GITechnique): WorkBudget {
         let budget = this.budgets.get(technique);
         if (!budget) {
-            budget = new WorkBudget(technique, { fillerAllowed: !this.calibratedOnce });
+            budget = new WorkBudget(technique, { fillerAllowed: !this.calibratedOnce, memory: this.calibrationMemory(technique), warn: (message) => this.warnOnce(message) });
             this.budgets.set(technique, budget);
         }
         return budget;
+    }
+
+    /**
+     * The previous calibration of this technique on this device and scene. The
+     * scene is known by its counts (meshes, instances, triangles) when the
+     * burst ends: a different scene is a different cost.
+     */
+    private calibrationMemory(technique: GITechnique): CalibrationMemory {
+        let byKey = calibrationsByDevice.get(this.device);
+        if (!byKey) {
+            byKey = new Map();
+            calibrationsByDevice.set(this.device, byKey);
+        }
+        const memory = byKey;
+        const key = (): string => {
+            const counts = this.sceneCopy.counts;
+            return `${technique.id}|${counts.meshes}|${counts.instances}|${counts.triangles}`;
+        };
+        return {
+            previous: () => memory.get(key()),
+            remember: (calibration) => memory.set(key(), calibration),
+        };
     }
 
     /** New resources, kernels or techniques: what was measured no longer applies. */
@@ -476,6 +581,8 @@ function budgetCounters(report: BudgetReport): Record<string, number> {
         counters['calibration filler frames'] = calibration.fillerFrames;
         counters['calibration filler ms'] = calibration.fillerMs;
         if (calibration.confirmFactor !== undefined) counters['calibration confirm factor'] = calibration.confirmFactor;
+        // The calibration guard measured again: the first burst's batch.
+        if (calibration.remeasuredFrom !== undefined) counters['calibration re-measured from'] = calibration.remeasuredFrom;
     }
     return counters;
 }
@@ -552,6 +659,10 @@ class GuardedScene implements SceneApi {
     setTransform(instance: InstanceHandle, transform: Mat4): void {
         this.check();
         this.target.setTransform(instance, transform);
+    }
+    setTransforms(instances: Uint32Array, matrices: Float32Array): void {
+        this.check();
+        this.target.setTransforms(instances, matrices);
     }
     setVisible(instance: InstanceHandle, visible: boolean): void {
         this.check();

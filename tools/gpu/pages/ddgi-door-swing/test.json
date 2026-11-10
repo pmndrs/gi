@@ -1,0 +1,5 @@
+{
+    "description": "T2.M1 items 4 and 8: closed-door scene, the door swung shut over 1 s at the calibrated batch (880 probes a frame); the dark room leak (dark-room-leak-view / lit-room GI means) must be <= 1% from 1 s after it closed, through 10 s. Also: the probes the door marks against those whose light changed > 5%, for a one-step close and the swing (reported).",
+    "timeoutMs": 900000,
+    "manual": true
+}

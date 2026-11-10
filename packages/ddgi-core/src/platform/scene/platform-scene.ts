@@ -2,10 +2,16 @@
  * The platform's scene: the host-facing `SceneApi` and the technique-facing
  * `SceneCopy`, over two GPU storage buffers (see layout.ts).
  *
- * Calls from the host only change CPU state: meshes are checked and packed,
+ * Calls from the host change CPU state: meshes are checked and laid out,
  * records are written into a CPU mirror of the table buffer, and what moved
- * is logged. Nothing touches the GPU until {@link PlatformScene.encode},
- * which the platform calls at the start of its own `encode`.
+ * is logged. The one exception is a mesh's raw arrays: once the platform has
+ * called {@link PlatformScene.prepareGpuPacking}, `createMesh` and
+ * `updateMesh` copy them straight into a staging buffer, and the next
+ * {@link PlatformScene.encode} packs them on the GPU (T2.13,
+ * gpu-mesh-packing.ts). Without that call, or for a mesh too large to stage,
+ * the CPU packs the mesh (mesh-packing.ts) and `encode` uploads its words.
+ * Everything else reaches the GPU in `encode`, which the platform calls at
+ * the start of its own.
  *
  * **How uploads reach the GPU, and why `queue.writeBuffer`.** Uploads use
  * `queue.writeBuffer`. It needs no extra submit and no mapping round trips,
@@ -26,7 +32,7 @@
  */
 
 import { DEFAULT_TURBIDITY } from '../sky/calibrated-sky.ts';
-import { GILimitError } from '../contract/errors.ts';
+import { GILimitError, GINotReadyError } from '../contract/errors.ts';
 import type { InstanceHandle, LightHandle, MaterialHandle, MeshHandle, TextureHandle } from '../contract/handles.ts';
 import type { Aabb, ColorRGB, Mat4, Vec3 } from '../contract/math.ts';
 import type {
@@ -42,9 +48,11 @@ import type {
     UvMapping,
 } from '../contract/scene.ts';
 import type { SceneChanges, SceneCopy } from '../contract/scene-copy.ts';
+import type { GpuTimerScope } from '../contract/timing.ts';
 import type { BindingSlot, WgslModule } from '../contract/wgsl.ts';
-import { invertAffine, transformBounds } from '../trace/top-level.ts';
-import { ChangeLog, toAabb } from './change-log.ts';
+import { invertAffineInto } from '../trace/top-level.ts';
+import { ChangeLog, copyLight, toAabb, type LightLookup } from './change-log.ts';
+import { BOX_NUMBERS, InstanceTransforms, MATRIX_NUMBERS } from './instance-transforms.ts';
 import {
     ENVIRONMENT_TYPE,
     HEADER_VEC4S,
@@ -63,7 +71,8 @@ import {
     UV_PACK_SHIFT,
     UV_WRAP,
 } from './layout.ts';
-import { packMesh, type PackedMesh } from './mesh-packing.ts';
+import { GpuMeshPacker, type MeshToPack, type StagedMesh } from './gpu-mesh-packing.ts';
+import { packMeshWords, planMesh, type MeshLayout } from './mesh-packing.ts';
 import { RangeAllocator } from './range-allocator.ts';
 import { SlotAllocator } from './slot-allocator.ts';
 import { TableMirror } from './table-mirror.ts';
@@ -74,7 +83,12 @@ export interface SceneCapacities {
     readonly instances: number;
     readonly meshes: number;
     readonly materials: number;
-    /** 32 is the light count hit shading is designed to keep flat cost up to. */
+    /**
+     * 64 records (4 KB) to start (m2-lights.md §1). Like every table it
+     * doubles when it fills, by reallocating the table buffer: records are
+     * read by index from the same binding, so no kernel is rebuilt (the
+     * `platform-recompiles` page churns 4,096 lights to check it).
+     */
     readonly lights: number;
     /** Words of instance material lists (one per material slot per instance). */
     readonly materialListWords: number;
@@ -86,7 +100,7 @@ export const DEFAULT_SCENE_CAPACITIES: SceneCapacities = {
     instances: 64,
     meshes: 64,
     materials: 64,
-    lights: 32,
+    lights: 64,
     materialListWords: 256,
     vertexWords: 256 * 1024,
 };
@@ -97,12 +111,35 @@ export interface PlatformSceneOptions {
     readonly initialCapacities?: Partial<SceneCapacities>;
 }
 
-/** A mesh whose geometry went to the GPU in this `encode`, for builders that need it (the tracer's BVH). */
+/**
+ * A mesh's positions and indices on the CPU, for tree builders: copies the
+ * scene made when the mesh was created (the host may reuse its arrays after
+ * the call). The indices keep the host's type, whatever width the vertex
+ * buffer stores them in.
+ */
+export interface MeshGeometryCopy {
+    readonly positions: Float32Array<ArrayBuffer>;
+    readonly indices: Uint16Array<ArrayBuffer> | Uint32Array<ArrayBuffer>;
+}
+
+/**
+ * A mesh whose geometry went to the GPU in this `encode`, for builders that
+ * need it (the tracer's BVH).
+ *
+ * Since T2.13 it carries no packed words, because the GPU usually packs the
+ * mesh. Read it on the CPU from `geometry`, or on the GPU from the vertex
+ * buffer at `vertexOffset` + `layout.offsets` (positions 3 floats per vertex;
+ * indices 16-bit two to a word when `layout.indices16`, else 32-bit) in
+ * commands recorded after this `encode`'s.
+ */
 export interface UploadedMesh {
     readonly slot: number;
     readonly handle: MeshHandle;
-    /** The packed mesh, words included. Read positions and indices with `packedPositions` / `packedIndices`. */
-    readonly packed: PackedMesh;
+    readonly layout: MeshLayout;
+    /** Word offset of the mesh's first word in the vertex buffer. */
+    readonly vertexOffset: number;
+    /** Handed over once: the receiver owns these arrays and may transfer them (to a worker). */
+    readonly geometry: MeshGeometryCopy;
 }
 
 /** One instance as the tracer's top level needs it. */
@@ -142,7 +179,7 @@ export interface SceneUpload {
     readonly instanceSetChanged: boolean;
     /** A scene buffer was reallocated; `module.version` has changed too. */
     readonly reallocated: boolean;
-    /** Bytes written with `queue.writeBuffer` this frame. */
+    /** Bytes written with `queue.writeBuffer` since the last encode (a mesh staged for the GPU counts when it was staged). */
     readonly bytesWritten: number;
 }
 
@@ -152,16 +189,27 @@ export interface SceneMemory {
     /** Of `vertexBuffer`, the bytes holding live meshes. */
     readonly vertexBytesUsed: number;
     readonly tableBuffer: number;
+    /** Staging buffers of meshes waiting for the GPU to pack them (T2.13); 0 once a load is packed. */
+    readonly stagingBuffers: number;
     readonly total: number;
+}
+
+/** A mesh's data on its way to the vertex buffer: packed on the CPU, or staged for the GPU. Dropped once uploaded. */
+interface PendingMeshData {
+    /** The CPU packer's words (the fallback), or null when `staged`. */
+    readonly words: Uint32Array<ArrayBuffer> | null;
+    /** The raw arrays in a staging buffer, or null when packed on the CPU. */
+    readonly staged: StagedMesh | null;
+    readonly geometry: MeshGeometryCopy;
 }
 
 interface MeshEntry {
     readonly handle: MeshHandle;
     readonly slot: number;
     label: string | undefined;
-    packed: PackedMesh;
-    /** Words the mesh occupies; kept apart from `packed.words`, which is dropped after upload. */
-    wordCount: number;
+    layout: MeshLayout;
+    /** What the next encode uploads; null once uploaded. */
+    pending: PendingMeshData | null;
     /** Word offset in the vertex buffer, or -1 until uploaded. */
     vertexOffset: number;
     readonly instances: Set<InstanceEntry>;
@@ -189,13 +237,11 @@ interface InstanceEntry {
     label: string | undefined;
     mesh: MeshEntry;
     materials: MaterialEntry[];
-    readonly objectToWorld: Float64Array;
     contributesToGi: boolean;
     visible: boolean;
     /** Word offset of the material list inside the list section. */
     listOffset: number;
-    /** World box `[min, max]`, padded like the tracer's. */
-    readonly worldBounds: Float32Array;
+    // Its transform, world box and frame are in the scene's InstanceTransforms, at its slot.
 }
 
 interface LightEntry {
@@ -207,7 +253,8 @@ interface LightEntry {
 
 const IDENTITY_UV: readonly number[] = [1, 0, 0, 1, 0, 0];
 
-const EMPTY_WORDS: Uint32Array<ArrayBuffer> = new Uint32Array(0);
+/** The rows `invertAffineInto` would give the identity: what a singular transform's normal matrix is written as. */
+const IDENTITY_ROWS: readonly number[] = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0];
 
 function isFiniteVector(value: ArrayLike<number> | undefined, length: number): boolean {
     if (value === undefined || value.length !== length) return false;
@@ -250,6 +297,8 @@ export class PlatformScene implements SceneApi, SceneCopy {
     private readonly textures = new Map<number, TextureEntry>();
     private readonly materials = new Map<number, MaterialEntry>();
     private readonly instances = new Map<number, InstanceEntry>();
+    /** Every instance's matrix, world box and frame, by slot (instance-transforms.ts says why flat). */
+    private readonly transforms = new InstanceTransforms();
     private readonly lightsByHandle = new Map<number, LightEntry>();
     /** Packed: directional lights first, then point and spot lights. */
     private readonly lights: LightEntry[] = [];
@@ -264,13 +313,45 @@ export class PlatformScene implements SceneApi, SceneCopy {
     private readonly instanceSlots = new SlotAllocator();
 
     private readonly pendingMeshes = new Set<MeshEntry>();
+    /** Packs meshes on the GPU once {@link prepareGpuPacking} was called (T2.13). */
+    private readonly packer: GpuMeshPacker;
+    private gpuPacking = false;
+    /** Bytes staged for the GPU since the last encode, reported in its `bytesWritten`. */
+    private stagedBytes = 0;
     private removedMeshSlots: number[] = [];
     private readonly changeLog = new ChangeLog();
+    /** How the change log sees the live lights when it builds a frame's light changes. */
+    private readonly lightLookup: LightLookup = {
+        current: (light) => {
+            const entry = this.lightsByHandle.get(light);
+            return entry ? { index: entry.index, descriptor: entry.descriptor } : undefined;
+        },
+        all: () => this.lights.map((entry) => entry.descriptor),
+    };
     private headerDirty = true;
     private topLevelDirty = false;
     private instanceSetDirty = false;
     private triangleTotal = 0;
     private cachedBounds: Aabb | null = null;
+    /** The inverse transform while an instance record is written (invertAffineInto), so writing one allocates nothing. */
+    private readonly inverseScratch = new Float64Array(12);
+    /** checkedTransform's copy of a host's transform. */
+    private readonly transformScratch = new Float64Array(16);
+    /** An instance's world box before a move, while it is written (moveInstance). */
+    private readonly boundsBefore = new Float32Array(6);
+    /**
+     * The last `setTransforms` call's instances, looked up before anything
+     * changed, and the handles they were for. A host that moves the same
+     * objects frame after frame (an animation, a crowd) sends the same list;
+     * while no instance was created or destroyed since (`instanceSetVersion`),
+     * the lookups are reused instead of made again, which was a sixth of the
+     * call's time at 10,000 instances.
+     */
+    private batchEntries: InstanceEntry[] = [];
+    private batchHandles = new Uint32Array(0);
+    private batchVersion = -1;
+    /** Bumped by every instance created or destroyed. */
+    private instanceSetVersion = 0;
 
     constructor(device: GPUDevice, options: PlatformSceneOptions = {}) {
         this.device = device;
@@ -287,6 +368,7 @@ export class PlatformScene implements SceneApi, SceneCopy {
         this.vertexBuffer = this.createStorageBuffer('scene vertices', capacities.vertexWords * 4);
         this.tableBuffer = this.createStorageBuffer('scene tables', this.mirror.byteLength);
         this.uploadedLayoutVersion = -1;
+        this.packer = new GpuMeshPacker(device, { label: this.label });
 
         const currentVersion = () => this.bufferVersion;
         this.module = {
@@ -316,6 +398,18 @@ export class PlatformScene implements SceneApi, SceneCopy {
         };
     }
 
+    get firstDirectionalLight(): SceneCopy['firstDirectionalLight'] {
+        // Directional lights are packed first, so light 0 is the first of them when there is one.
+        const first = this.directionalLightCount > 0 ? this.lights[0] : undefined;
+        if (!first || first.descriptor.type !== 'directional') return null;
+        return { light: first.handle, descriptor: first.descriptor };
+    }
+
+    /** Point and spot lights (every light that isn't directional): hit shading picks its light path from this (the light grid, T2.3). */
+    get localLightCount(): number {
+        return this.lights.length - this.directionalLightCount;
+    }
+
     get memoryBytes(): number {
         return this.memory.total;
     }
@@ -323,7 +417,8 @@ export class PlatformScene implements SceneApi, SceneCopy {
     get memory(): SceneMemory {
         const vertexBuffer = this.vertexBuffer.size;
         const tableBuffer = this.tableBuffer.size;
-        return { vertexBuffer, vertexBytesUsed: this.vertexAllocator.used * 4, tableBuffer, total: vertexBuffer + tableBuffer };
+        const stagingBuffers = this.packer.stagingBytes;
+        return { vertexBuffer, vertexBytesUsed: this.vertexAllocator.used * 4, tableBuffer, stagingBuffers, total: vertexBuffer + tableBuffer + stagingBuffers };
     }
 
     get environment(): EnvironmentDescriptor {
@@ -343,11 +438,13 @@ export class PlatformScene implements SceneApi, SceneCopy {
     get bounds(): Aabb {
         if (this.cachedBounds) return this.cachedBounds;
         const box = [Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity];
+        const worldBounds = this.transforms.bounds;
         for (const instance of this.instances.values()) {
             if (!instance.contributesToGi || !instance.visible) continue;
+            const at = instance.slot * BOX_NUMBERS;
             for (let axis = 0; axis < 3; axis++) {
-                box[axis] = Math.min(box[axis], instance.worldBounds[axis]);
-                box[axis + 3] = Math.max(box[axis + 3], instance.worldBounds[axis + 3]);
+                box[axis] = Math.min(box[axis], worldBounds[at + axis]);
+                box[axis + 3] = Math.max(box[axis + 3], worldBounds[at + 3 + axis]);
             }
         }
         this.cachedBounds = box[0] === Infinity ? { min: [0, 0, 0], max: [0, 0, 0] } : toAabb(box);
@@ -392,7 +489,7 @@ export class PlatformScene implements SceneApi, SceneCopy {
             packed.slots[index] = instance.slot;
             packed.meshSlots[index] = instance.mesh.slot;
             packed.visible[index] = instance.visible ? 1 : 0;
-            packed.objectToWorld.set(instance.objectToWorld, index * 16);
+            packed.objectToWorld.set(this.transforms.matrix(instance.slot), index * 16);
             index++;
         }
         return packed;
@@ -404,7 +501,8 @@ export class PlatformScene implements SceneApi, SceneCopy {
             slot: instance.slot,
             handle: instance.handle,
             meshSlot: instance.mesh.slot,
-            objectToWorld: instance.objectToWorld,
+            // A copy: the flat arrays are replaced when they grow.
+            objectToWorld: this.transforms.matrix(instance.slot).slice(),
             contributesToGi: instance.contributesToGi,
             visible: instance.visible,
         }));
@@ -414,9 +512,25 @@ export class PlatformScene implements SceneApi, SceneCopy {
     // Meshes
     // -----------------------------------------------------------------------
 
+    /**
+     * From now on meshes are packed on the GPU (T2.13): `createMesh` and
+     * `updateMesh` stage the host's raw arrays, and `encode` packs them. Asks
+     * for the packing kernel's compile and resolves when it is compiled;
+     * until then `encode` refuses staged meshes (`GINotReadyError`). The
+     * platform calls this first in `prepare`, so a host that copies its scene
+     * in while preparing stages it at once, alongside the compiles. Meshes
+     * created before the call stay with the CPU packer, as does a standalone
+     * scene that never calls it (tools and tests).
+     */
+    prepareGpuPacking(): Promise<void> {
+        this.checkLive();
+        this.gpuPacking = true;
+        return this.packer.prepare();
+    }
+
     createMesh(descriptor: MeshDescriptor): MeshHandle {
         this.checkLive();
-        const packed = packMesh(descriptor);
+        const { layout, pending } = this.prepareMeshData(descriptor);
         const handle = this.nextHandle++ as MeshHandle;
         const slot = this.meshSlots.take();
         this.mirror.ensureRecord('meshes', slot);
@@ -424,14 +538,14 @@ export class PlatformScene implements SceneApi, SceneCopy {
             handle,
             slot,
             label: descriptor.label,
-            packed,
-            wordCount: packed.words.length,
+            layout,
+            pending,
             vertexOffset: -1,
             instances: new Set(),
         };
         this.meshes.set(handle, entry);
         this.pendingMeshes.add(entry);
-        this.triangleTotal += packed.triangleCount;
+        this.triangleTotal += layout.triangleCount;
         this.headerDirty = true;
         return handle;
     }
@@ -439,19 +553,21 @@ export class PlatformScene implements SceneApi, SceneCopy {
     updateMesh(mesh: MeshHandle, descriptor: MeshDescriptor): void {
         this.checkLive();
         const entry = this.mesh(mesh);
-        const packed = packMesh(descriptor);
+        const { layout, pending } = this.prepareMeshData(descriptor);
         this.releaseVertexRange(entry);
-        this.triangleTotal += packed.triangleCount - entry.packed.triangleCount;
-        entry.packed = packed;
-        entry.wordCount = packed.words.length;
+        this.forgetPending(entry);
+        this.triangleTotal += layout.triangleCount - entry.layout.triangleCount;
+        entry.layout = layout;
+        entry.pending = pending;
         entry.label = descriptor.label ?? entry.label;
         this.pendingMeshes.add(entry);
         for (const instance of entry.instances) {
             const traceable = this.isTraceable(instance);
-            if (traceable) this.changeLog.addRegion(instance.worldBounds, 'geometry', instance.handle);
+            if (traceable) this.changeLog.addRegion(this.transforms.box(instance.slot), 'geometry', instance.handle, undefined, instance.slot);
+            this.transforms.setMeshBounds(instance.slot, layout.bounds);
             this.writeInstanceRecord(instance);
             if (traceable) {
-                this.changeLog.addRegion(instance.worldBounds, 'geometry', instance.handle);
+                this.changeLog.addRegion(this.transforms.box(instance.slot), 'geometry', instance.handle, undefined, instance.slot);
                 this.topLevelDirty = true;
             }
         }
@@ -471,11 +587,12 @@ export class PlatformScene implements SceneApi, SceneCopy {
             throw new Error(`@pmndrs/ddgi: ${this.name('mesh', entry.handle, entry.label)} is still used by ${entry.instances.size} instance(s); destroy them first.`);
         }
         this.releaseVertexRange(entry);
+        this.forgetPending(entry);
         this.pendingMeshes.delete(entry);
         this.mirror.clearRecord('meshes', entry.slot);
         this.meshSlots.release(entry.slot);
         this.removedMeshSlots.push(entry.slot);
-        this.triangleTotal -= entry.packed.triangleCount;
+        this.triangleTotal -= entry.layout.triangleCount;
         this.meshes.delete(mesh);
         this.headerDirty = true;
     }
@@ -528,7 +645,7 @@ export class PlatformScene implements SceneApi, SceneCopy {
         this.attachTextures(entry);
         this.writeMaterialRecord(entry);
         for (const instance of entry.users) {
-            if (this.isTraceable(instance)) this.changeLog.addRegion(instance.worldBounds, 'material', instance.handle);
+            if (this.isTraceable(instance)) this.changeLog.addRegion(this.transforms.box(instance.slot), 'material', instance.handle);
         }
     }
 
@@ -563,19 +680,21 @@ export class PlatformScene implements SceneApi, SceneCopy {
             label: descriptor.label,
             mesh,
             materials,
-            objectToWorld,
             contributesToGi: descriptor.contributesToGI !== false,
             visible: descriptor.visible !== false,
             listOffset: this.mirror.allocateList(materials.length),
-            worldBounds: new Float32Array(6),
         };
+        this.transforms.ensure(slot);
+        this.transforms.setMatrix(slot, objectToWorld, 0);
+        this.transforms.setMeshBounds(slot, mesh.layout.bounds);
         this.instances.set(handle, entry);
+        this.instanceSetVersion++;
         mesh.instances.add(entry);
         for (const material of materials) material.users.add(entry);
         this.mirror.writeList(entry.listOffset, materials.map((material) => material.slot));
         this.writeInstanceRecord(entry);
         if (this.isTraceable(entry)) {
-            this.changeLog.addRegion(entry.worldBounds, 'geometry', handle);
+            this.changeLog.addRegion(this.transforms.box(slot), 'geometry', handle, undefined, slot);
             this.topLevelDirty = true;
         }
         if (entry.contributesToGi) this.instanceSetDirty = true;
@@ -588,17 +707,140 @@ export class PlatformScene implements SceneApi, SceneCopy {
         this.checkLive();
         const entry = this.instance(instance);
         const objectToWorld = this.checkedTransform(transform);
-        const traceable = this.isTraceable(entry);
-        if (traceable) this.changeLog.addRegion(entry.worldBounds, 'geometry', instance);
-        entry.objectToWorld.set(objectToWorld);
-        this.writeInstanceRecord(entry);
-        if (traceable) {
-            this.changeLog.addRegion(entry.worldBounds, 'geometry', instance);
-            this.topLevelDirty = true;
-            this.cachedBounds = null;
-        } else {
-            this.changeLog.addMovedReceiver();
+        this.moveInstance(entry, objectToWorld, 0);
+        this.mirror.markRecord('instances', entry.slot);
+    }
+
+    /**
+     * Many transforms at once (SceneApi): every handle and number is checked
+     * first, so a bad entry changes nothing; then each instance is moved as
+     * `setTransform` moves it, writing straight into the table mirror, and
+     * the records are marked for upload as one span. Nothing is allocated
+     * per instance.
+     */
+    setTransforms(instances: Uint32Array, matrices: Float32Array): void {
+        this.checkLive();
+        const count = instances.length;
+        if (matrices.length < count * 16) {
+            throw new RangeError(`@pmndrs/ddgi: setTransforms needs 16 numbers per instance: ${count} instances, ${matrices.length} numbers.`);
         }
+        const entries = this.batchEntriesFor(instances);
+        // Any non-finite number makes the sum of number × 0 NaN: one pass with no branch per number.
+        // Four sums, one per matrix column, so the additions don't wait on each other.
+        let column0 = 0;
+        let column1 = 0;
+        let column2 = 0;
+        let column3 = 0;
+        for (let index = 0; index < count * 16; index += 4) {
+            column0 += matrices[index] * 0;
+            column1 += matrices[index + 1] * 0;
+            column2 += matrices[index + 2] * 0;
+            column3 += matrices[index + 3] * 0;
+        }
+        if (column0 + column1 + column2 + column3 !== 0) {
+            const bad = matrices.subarray(0, count * 16).findIndex((value) => !Number.isFinite(value));
+            throw new RangeError(`@pmndrs/ddgi: a transform must be finite (setTransforms entry ${Math.floor(bad / 16)}).`);
+        }
+        let firstSlot = Infinity;
+        let lastSlot = -1;
+        for (let index = 0; index < count; index++) {
+            const entry = entries[index];
+            // A slide in one pass when it is one (slideInstance), else the whole work.
+            if (!(this.isTraceable(entry) && this.slideInstance(entry, matrices, index * 16))) this.moveInstance(entry, matrices, index * 16);
+            if (entry.slot < firstSlot) firstSlot = entry.slot;
+            if (entry.slot > lastSlot) lastSlot = entry.slot;
+        }
+        if (lastSlot >= 0) this.mirror.markRecordSpan('instances', firstSlot, lastSlot);
+    }
+
+    /** The instances `setTransforms` names, looked up (throwing for an unknown one), or the last call's when they're the same (batchEntries). */
+    private batchEntriesFor(instances: Uint32Array): InstanceEntry[] {
+        const count = instances.length;
+        const previous = this.batchHandles;
+        if (this.batchVersion === this.instanceSetVersion && previous.length === count) {
+            let same = true;
+            for (let index = 0; index < count && same; index++) same = previous[index] === instances[index];
+            if (same) return this.batchEntries;
+        }
+        const entries: InstanceEntry[] = new Array(count);
+        for (let index = 0; index < count; index++) entries[index] = this.instance(instances[index] as InstanceHandle);
+        this.batchEntries = entries;
+        this.batchHandles = instances.slice();
+        this.batchVersion = this.instanceSetVersion;
+        return entries;
+    }
+
+    /**
+     * Moves an instance to the transform at `matrices[offset ... offset + 16)`
+     * and logs it: where it was and where it is, both with how far it moved
+     * (`DirtyRegion.moved`), or a moved receiver. Its record is written but
+     * not marked for upload; the caller marks it, alone or in a span.
+     */
+    private moveInstance(entry: InstanceEntry, matrices: ArrayLike<number>, offset: number): void {
+        const transforms = this.transforms;
+        const slot = entry.slot;
+        const linearChanged = transforms.setMatrix(slot, matrices, offset);
+        if (!this.isTraceable(entry)) {
+            this.writeInstanceWords(entry, linearChanged);
+            this.changeLog.addMovedReceiver();
+            return;
+        }
+        // Where it was, kept before the record is rewritten (copied number by number:
+        // TypedArray.set costs more than six on this path).
+        const boundsBefore = this.boundsBefore;
+        const at = slot * BOX_NUMBERS;
+        for (let index = 0; index < BOX_NUMBERS; index++) boundsBefore[index] = transforms.bounds[at + index];
+        const moved = this.writeInstanceWords(entry, linearChanged);
+        this.changeLog.addRegion(boundsBefore, 'geometry', entry.handle, moved, slot);
+        this.changeLog.addRegion(transforms.bounds, 'geometry', entry.handle, moved, slot, at);
+        this.topLevelDirty = true;
+        this.cachedBounds = null;
+    }
+
+    /**
+     * `moveInstance` for a traceable instance whose move only translates, in
+     * one pass: the matrix is read once, the frame slides (InstanceTransforms
+     * .slide), and only what a slide changes in the record is rewritten, the
+     * translation column and the world box (the normal matrix, the flags, the
+     * mesh and material words stay). Returns false, having changed nothing,
+     * when the linear part changed; `moveInstance` then does the whole work.
+     * *Why a path of its own:* most moves are slides (drags, B1a's bench), and
+     * at 10,000 a frame the general path's three reads of each matrix and its
+     * full record were most of `setTransforms`' time (T2.M1).
+     * Only `setTransforms` uses it, always with a Float32Array: fed
+     * `setTransform`'s Float64Array matrices as well, Chrome compiled its
+     * reads for both kinds and the call took 2.65 ms instead of 1.6.
+     */
+    private slideInstance(entry: InstanceEntry, matrices: Float32Array, offset: number): boolean {
+        const transforms = this.transforms;
+        const slot = entry.slot;
+        const stored = transforms.matrices;
+        const m = slot * MATRIX_NUMBERS;
+        for (let index = 0; index < 12; index++) if (matrices[offset + index] !== stored[m + index]) return false;
+        const bounds = transforms.bounds;
+        const at = slot * BOX_NUMBERS;
+        const boundsBefore = this.boundsBefore;
+        for (let index = 0; index < BOX_NUMBERS; index++) boundsBefore[index] = bounds[at + index];
+        stored[m + 12] = matrices[offset + 12];
+        stored[m + 13] = matrices[offset + 13];
+        stored[m + 14] = matrices[offset + 14];
+        stored[m + 15] = matrices[offset + 15];
+        const moved = transforms.slide(slot);
+        const floats = this.mirror.floats;
+        const base = this.mirror.recordWord('instances', slot);
+        // Column-major input: the translation is elements 12-14, each row's last number.
+        floats[base + INSTANCE_WORD.objectToWorldRow0 + 3] = stored[m + 12];
+        floats[base + INSTANCE_WORD.objectToWorldRow1 + 3] = stored[m + 13];
+        floats[base + INSTANCE_WORD.objectToWorldRow2 + 3] = stored[m + 14];
+        for (let axis = 0; axis < 3; axis++) {
+            floats[base + INSTANCE_WORD.boundsMin + axis] = bounds[at + axis];
+            floats[base + INSTANCE_WORD.boundsMax + axis] = bounds[at + 3 + axis];
+        }
+        this.changeLog.addRegion(boundsBefore, 'geometry', entry.handle, moved, slot);
+        this.changeLog.addRegion(bounds, 'geometry', entry.handle, moved, slot, at);
+        this.topLevelDirty = true;
+        this.cachedBounds = null;
+        return true;
     }
 
     setVisible(instance: InstanceHandle, visible: boolean): void {
@@ -608,7 +850,7 @@ export class PlatformScene implements SceneApi, SceneCopy {
         entry.visible = visible;
         this.writeInstanceRecord(entry);
         if (entry.contributesToGi) {
-            this.changeLog.addRegion(entry.worldBounds, 'geometry', instance);
+            this.changeLog.addRegion(this.transforms.box(entry.slot), 'geometry', instance, undefined, entry.slot);
             this.topLevelDirty = true;
             this.cachedBounds = null;
         }
@@ -627,14 +869,14 @@ export class PlatformScene implements SceneApi, SceneCopy {
         for (const material of next) material.users.add(entry);
         this.mirror.writeList(entry.listOffset, next.map((material) => material.slot));
         this.writeInstanceRecord(entry);
-        if (this.isTraceable(entry)) this.changeLog.addRegion(entry.worldBounds, 'material', instance);
+        if (this.isTraceable(entry)) this.changeLog.addRegion(this.transforms.box(entry.slot), 'material', instance);
     }
 
     destroyInstance(instance: InstanceHandle): void {
         this.checkLive();
         const entry = this.instance(instance);
         if (this.isTraceable(entry)) {
-            this.changeLog.addRegion(entry.worldBounds, 'geometry', instance);
+            this.changeLog.addRegion(this.transforms.box(entry.slot), 'geometry', instance, undefined, entry.slot);
             this.topLevelDirty = true;
         }
         if (entry.contributesToGi) this.instanceSetDirty = true;
@@ -644,6 +886,10 @@ export class PlatformScene implements SceneApi, SceneCopy {
         this.mirror.clearRecord('instances', entry.slot);
         this.instanceSlots.release(entry.slot);
         this.instances.delete(instance);
+        this.instanceSetVersion++;
+        // The last batch may name it: drop the reused lookups, and the instance with them.
+        this.batchEntries = [];
+        this.batchVersion = -1;
         this.cachedBounds = null;
         this.headerDirty = true;
     }
@@ -657,6 +903,7 @@ export class PlatformScene implements SceneApi, SceneCopy {
         const checked = this.checkedLight(descriptor);
         const handle = this.nextHandle++ as LightHandle;
         const entry: LightEntry = { handle, index: -1, descriptor: checked };
+        this.changeLog.noteLight(handle, null);
         // Directional lights stay at the front: the first point or spot light moves to the end to make room.
         if (checked.type === 'directional') {
             const displaced = this.lights[this.directionalLightCount];
@@ -667,7 +914,6 @@ export class PlatformScene implements SceneApi, SceneCopy {
             this.placeLight(entry, this.lights.length);
         }
         this.lightsByHandle.set(handle, entry);
-        this.logLight(entry);
         this.headerDirty = true;
         return handle;
     }
@@ -679,17 +925,16 @@ export class PlatformScene implements SceneApi, SceneCopy {
             throw new Error('@pmndrs/ddgi: a light cannot change type; destroy it and create a new one.');
         }
         const next = this.checkedLight({ ...entry.descriptor, ...changes } as LightDescriptor);
-        this.logLight(entry);
-        if ((next.group ?? 0) !== (entry.descriptor.group ?? 0)) this.changeLog.addGlobal('lights');
+        // The log keeps the state the frame started with; it works out boxes and flags at encode.
+        this.changeLog.noteLight(light, entry.descriptor);
         entry.descriptor = next;
         this.writeLightRecord(entry);
-        this.logLight(entry);
     }
 
     destroyLight(light: LightHandle): void {
         this.checkLive();
         const entry = this.light(light);
-        this.logLight(entry);
+        this.changeLog.noteLight(light, entry.descriptor);
         const last = this.lights.length - 1;
         if (entry.descriptor.type === 'directional') {
             // Fill the hole with the last directional light, and that light's place with the last light.
@@ -743,20 +988,26 @@ export class PlatformScene implements SceneApi, SceneCopy {
      * per frame, and submit the encoder before the next call: buffers replaced
      * here are destroyed at the next call.
      */
-    encode(encoder: GPUCommandEncoder): SceneUpload {
+    encode(encoder: GPUCommandEncoder, timer?: GpuTimerScope): SceneUpload {
         this.checkLive();
+        if (!this.packer.ready) {
+            // Checked before anything changes, so staged meshes stay queued for the encode after prepare.
+            for (const mesh of this.pendingMeshes) if (mesh.pending?.staged) throw new GINotReadyError('preparing');
+        }
         for (const buffer of this.retired) buffer.destroy();
         this.retired = [];
 
-        let bytesWritten = 0;
         const versionBefore = this.bufferVersion;
-        const uploaded = this.uploadMeshes(encoder);
-        for (const mesh of uploaded) bytesWritten += mesh.packed.words.byteLength;
+        // Staged meshes' bytes were written when they were staged.
+        let bytesWritten = this.stagedBytes;
+        this.stagedBytes = 0;
+        const meshes = this.uploadMeshes(encoder, timer);
+        bytesWritten += meshes.bytesWritten;
         bytesWritten += this.uploadTables();
 
         const upload: SceneUpload = {
-            changes: this.changeLog.take(),
-            meshesUploaded: uploaded,
+            changes: this.changeLog.take(this.lightLookup),
+            meshesUploaded: meshes.uploaded,
             meshesRemoved: this.removedMeshSlots,
             instancesChanged: this.topLevelDirty,
             instanceSetChanged: this.instanceSetDirty,
@@ -777,25 +1028,36 @@ export class PlatformScene implements SceneApi, SceneCopy {
         this.retired = [];
         this.vertexBuffer.destroy();
         this.tableBuffer.destroy();
+        this.packer.dispose();
     }
 
     // -----------------------------------------------------------------------
     // Uploads
     // -----------------------------------------------------------------------
 
-    private uploadMeshes(encoder: GPUCommandEncoder): UploadedMesh[] {
-        if (this.pendingMeshes.size === 0) return [];
+    /**
+     * Places the queued meshes in the vertex buffer and uploads them: the CPU
+     * packer's words with `writeBuffer`, staged meshes with the packing
+     * kernel, recorded after any growth copies so it writes into the new
+     * buffer. `bytesWritten` counts the CPU-packed meshes' writes.
+     */
+    private uploadMeshes(encoder: GPUCommandEncoder, timer: GpuTimerScope | undefined): { readonly uploaded: UploadedMesh[]; readonly bytesWritten: number } {
+        if (this.pendingMeshes.size === 0) {
+            // Still called: it destroys the staging buffers the last encode packed from.
+            this.packer.encode(encoder, this.vertexBuffer, [], timer);
+            return { uploaded: [], bytesWritten: 0 };
+        }
         const pending = [...this.pendingMeshes];
         this.pendingMeshes.clear();
 
         const unplaced: MeshEntry[] = [];
         for (const mesh of pending) {
-            const offset = this.vertexAllocator.allocate(mesh.wordCount);
+            const offset = this.vertexAllocator.allocate(mesh.layout.wordCount);
             if (offset === null) unplaced.push(mesh);
             else mesh.vertexOffset = offset;
         }
         if (unplaced.length > 0) {
-            const wordsNeeded = unplaced.reduce((sum, mesh) => sum + mesh.wordCount, 0);
+            const wordsNeeded = unplaced.reduce((sum, mesh) => sum + mesh.layout.wordCount, 0);
             try {
                 this.growVertexBuffer(encoder, this.vertexAllocator.capacityToFit(wordsNeeded), new Set(pending));
             } catch (error) {
@@ -807,23 +1069,32 @@ export class PlatformScene implements SceneApi, SceneCopy {
                 throw error;
             }
             for (const mesh of unplaced) {
-                const offset = this.vertexAllocator.allocate(mesh.wordCount);
+                const offset = this.vertexAllocator.allocate(mesh.layout.wordCount);
                 if (offset === null) throw new Error('vertex allocation failed after growing the buffer');
                 mesh.vertexOffset = offset;
             }
         }
 
         const uploaded: UploadedMesh[] = [];
+        const toPack: MeshToPack[] = [];
+        let bytesWritten = 0;
         for (const mesh of pending) {
-            this.device.queue.writeBuffer(this.vertexBuffer, mesh.vertexOffset * 4, mesh.packed.words);
+            const data = mesh.pending;
+            if (!data) throw new Error('a queued mesh has no data to upload');
+            if (data.staged) {
+                toPack.push({ staged: data.staged, vertexOffset: mesh.vertexOffset });
+            } else if (data.words) {
+                this.device.queue.writeBuffer(this.vertexBuffer, mesh.vertexOffset * 4, data.words);
+                bytesWritten += data.words.byteLength;
+            }
             this.writeMeshRecord(mesh);
-            uploaded.push({ slot: mesh.slot, handle: mesh.handle, packed: mesh.packed });
-            // The GPU has the words now; keep only the layout.
-            mesh.packed = { ...mesh.packed, words: EMPTY_WORDS };
+            uploaded.push({ slot: mesh.slot, handle: mesh.handle, layout: mesh.layout, vertexOffset: mesh.vertexOffset, geometry: data.geometry });
+            // The GPU has the words, or will once the kernel below runs; keep only the layout.
+            mesh.pending = null;
         }
-        return uploaded;
+        this.packer.encode(encoder, this.vertexBuffer, toPack, timer);
+        return { uploaded, bytesWritten };
     }
-
     /**
      * Replaces the vertex buffer with one of at least `minimumWords`, and
      * records copies of every mesh already on the GPU into it. Meshes in
@@ -852,11 +1123,11 @@ export class PlatformScene implements SceneApi, SceneCopy {
         };
         for (const mesh of resident) {
             if (mesh.vertexOffset === runEnd) {
-                runEnd += mesh.wordCount;
+                runEnd += mesh.layout.wordCount;
             } else {
                 flush();
                 runStart = mesh.vertexOffset;
-                runEnd = mesh.vertexOffset + mesh.wordCount;
+                runEnd = mesh.vertexOffset + mesh.layout.wordCount;
             }
         }
         flush();
@@ -907,8 +1178,31 @@ export class PlatformScene implements SceneApi, SceneCopy {
 
     private releaseVertexRange(mesh: MeshEntry): void {
         if (mesh.vertexOffset < 0) return;
-        this.vertexAllocator.release(mesh.vertexOffset, mesh.wordCount);
+        this.vertexAllocator.release(mesh.vertexOffset, mesh.layout.wordCount);
         mesh.vertexOffset = -1;
+    }
+
+    /**
+     * Checks and lays out a mesh, copies what the scene keeps of the host's
+     * arrays, and stages them for the GPU or packs them on the CPU.
+     */
+    private prepareMeshData(descriptor: MeshDescriptor): { layout: MeshLayout; pending: PendingMeshData } {
+        const plan = planMesh(descriptor);
+        // Tree builders read positions and indices after this call has returned, when
+        // the host may have changed its arrays: they get copies, made now.
+        const geometry: MeshGeometryCopy = { positions: descriptor.positions.slice(), indices: descriptor.indices.slice() };
+        if (this.gpuPacking && this.packer.fits(descriptor, plan.layout)) {
+            const staged = this.packer.stage(descriptor, plan.layout, plan.materialSlotWords);
+            this.stagedBytes += staged.bytes;
+            return { layout: plan.layout, pending: { words: null, staged, geometry } };
+        }
+        return { layout: plan.layout, pending: { words: packMeshWords(descriptor, plan), staged: null, geometry } };
+    }
+
+    /** Drops a mesh's data that was never uploaded (the mesh was replaced or destroyed first). */
+    private forgetPending(mesh: MeshEntry): void {
+        if (mesh.pending?.staged) this.packer.forget(mesh.pending.staged);
+        mesh.pending = null;
     }
 
     // -----------------------------------------------------------------------
@@ -955,7 +1249,7 @@ export class PlatformScene implements SceneApi, SceneCopy {
         const words = this.mirror.words;
         const floats = this.mirror.floats;
         const base = this.mirror.recordWord('meshes', mesh.slot);
-        const packed = mesh.packed;
+        const packed = mesh.layout;
         const absolute = (offset: number) => (offset === NONE ? NONE : mesh.vertexOffset + offset);
         words[base + MESH_WORD.indices] = absolute(packed.offsets.indices);
         words[base + MESH_WORD.positions] = absolute(packed.offsets.positions);
@@ -972,43 +1266,90 @@ export class PlatformScene implements SceneApi, SceneCopy {
         this.mirror.markRecord('meshes', mesh.slot);
     }
 
-    /** Rewrites an instance's record and updates its world bounds. */
+    /** Rewrites an instance's record, updates its world bounds and marks the record for upload. */
     private writeInstanceRecord(instance: InstanceEntry): void {
+        this.writeInstanceWords(instance);
+        this.mirror.markRecord('instances', instance.slot);
+    }
+
+    /**
+     * Rewrites an instance's record in the mirror and updates its world box
+     * and frame, without marking it; allocates nothing. Returns how far its
+     * corners moved since the record was last written (transformFrame).
+     * `linearChanged` false says only the translation changed since then, so
+     * the normal matrix and the mirrored and singular flags in the record are
+     * still right and aren't worked out again.
+     */
+    private writeInstanceWords(instance: InstanceEntry, linearChanged = true): number {
         const words = this.mirror.words;
         const floats = this.mirror.floats;
         const base = this.mirror.recordWord('instances', instance.slot);
-        const matrix = instance.objectToWorld;
-        const rowWords = [INSTANCE_WORD.objectToWorldRow0, INSTANCE_WORD.objectToWorldRow1, INSTANCE_WORD.objectToWorldRow2];
-        const normalWords = [INSTANCE_WORD.normalRow0, INSTANCE_WORD.normalRow1, INSTANCE_WORD.normalRow2];
-        const inverse = invertAffine(matrix);
-        for (let row = 0; row < 3; row++) {
-            // Column-major input: row r of the 3x4 matrix is elements r, 4 + r, 8 + r, 12 + r.
-            const at = base + rowWords[row];
-            floats[at] = matrix[row];
-            floats[at + 1] = matrix[4 + row];
-            floats[at + 2] = matrix[8 + row];
-            floats[at + 3] = matrix[12 + row];
-            // A singular transform has no normal matrix; identity keeps the accessors finite.
-            const normalAt = base + normalWords[row];
-            for (let column = 0; column < 3; column++) {
-                floats[normalAt + column] = inverse ? inverse.rows[row * 4 + column] : row === column ? 1 : 0;
-            }
-        }
+        const transforms = this.transforms;
+        const slot = instance.slot;
+        if (linearChanged) this.writeNormalMatrix(slot, base);
+        const matrix = transforms.matrices;
+        const m = slot * MATRIX_NUMBERS;
+        // Written out rather than looped: this runs for every instance `setTransforms` moves.
+        // Column-major input: row r of the 3x4 matrix is elements r, 4 + r, 8 + r, 12 + r.
+        const row0 = base + INSTANCE_WORD.objectToWorldRow0;
+        const row1 = base + INSTANCE_WORD.objectToWorldRow1;
+        const row2 = base + INSTANCE_WORD.objectToWorldRow2;
+        floats[row0] = matrix[m + 0];
+        floats[row0 + 1] = matrix[m + 4];
+        floats[row0 + 2] = matrix[m + 8];
+        floats[row0 + 3] = matrix[m + 12];
+        floats[row1] = matrix[m + 1];
+        floats[row1 + 1] = matrix[m + 5];
+        floats[row1 + 2] = matrix[m + 9];
+        floats[row1 + 3] = matrix[m + 13];
+        floats[row2] = matrix[m + 2];
+        floats[row2 + 1] = matrix[m + 6];
+        floats[row2 + 2] = matrix[m + 10];
+        floats[row2 + 3] = matrix[m + 14];
         words[base + INSTANCE_WORD.materialListStart] = instance.listOffset;
         words[base + INSTANCE_WORD.materialListCount] = instance.materials.length;
         words[base + INSTANCE_WORD.reserved] = 0;
 
-        transformBounds(instance.mesh.packed.bounds, matrix, instance.worldBounds, 0);
-        floats.set(instance.worldBounds.subarray(0, 3), base + INSTANCE_WORD.boundsMin);
+        // A slide keeps the frame's edges: only its corner moves (InstanceTransforms.slide).
+        const moved = linearChanged ? transforms.place(slot) : transforms.slide(slot);
+        const bounds = transforms.bounds;
+        const at = slot * BOX_NUMBERS;
+
+        for (let axis = 0; axis < 3; axis++) {
+            floats[base + INSTANCE_WORD.boundsMin + axis] = bounds[at + axis];
+            floats[base + INSTANCE_WORD.boundsMax + axis] = bounds[at + 3 + axis];
+        }
         words[base + INSTANCE_WORD.mesh] = instance.mesh.slot;
-        floats.set(instance.worldBounds.subarray(3, 6), base + INSTANCE_WORD.boundsMax);
         words[base + INSTANCE_WORD.flags] =
             INSTANCE_FLAG.live |
             (instance.contributesToGi ? INSTANCE_FLAG.contributesToGi : 0) |
             (instance.visible ? INSTANCE_FLAG.visible : 0) |
-            (inverse && inverse.determinant < 0 ? INSTANCE_FLAG.mirrored : 0) |
-            (inverse ? 0 : INSTANCE_FLAG.singular);
-        this.mirror.markRecord('instances', instance.slot);
+            transforms.flags[slot];
+        return moved;
+    }
+
+    /** The record's normal matrix (the inverse's linear part), and whether the transform mirrors or is singular. */
+    private writeNormalMatrix(slot: number, base: number): void {
+        const floats = this.mirror.floats;
+        // A singular transform has no normal matrix; identity keeps the accessors finite.
+        const inverse = this.inverseScratch;
+        const determinant = invertAffineInto(this.transforms.matrices, inverse, slot * MATRIX_NUMBERS);
+        const invertible = determinant !== 0;
+        if (!invertible) inverse.set(IDENTITY_ROWS);
+        // The normal matrix's rows: the inverse's linear part (its rows 0-2, columns 0-2).
+        const normal0 = base + INSTANCE_WORD.normalRow0;
+        const normal1 = base + INSTANCE_WORD.normalRow1;
+        const normal2 = base + INSTANCE_WORD.normalRow2;
+        floats[normal0] = inverse[0];
+        floats[normal0 + 1] = inverse[1];
+        floats[normal0 + 2] = inverse[2];
+        floats[normal1] = inverse[4];
+        floats[normal1 + 1] = inverse[5];
+        floats[normal1 + 2] = inverse[6];
+        floats[normal2] = inverse[8];
+        floats[normal2 + 1] = inverse[9];
+        floats[normal2 + 2] = inverse[10];
+        this.transforms.flags[slot] = (invertible && determinant < 0 ? INSTANCE_FLAG.mirrored : 0) | (invertible ? 0 : INSTANCE_FLAG.singular);
     }
 
     private writeMaterialRecord(material: MaterialEntry): void {
@@ -1119,17 +1460,21 @@ export class PlatformScene implements SceneApi, SceneCopy {
     }
 
     private materialList(handles: readonly MaterialHandle[], mesh: MeshEntry): MaterialEntry[] {
-        if (handles.length < mesh.packed.materialSlotCount) {
+        if (handles.length < mesh.layout.materialSlotCount) {
             throw new RangeError(
-                `@pmndrs/ddgi: ${this.name('mesh', mesh.handle, mesh.label)} uses ${mesh.packed.materialSlotCount} material slot(s), but the instance gives ${handles.length} material(s).`,
+                `@pmndrs/ddgi: ${this.name('mesh', mesh.handle, mesh.label)} uses ${mesh.layout.materialSlotCount} material slot(s), but the instance gives ${handles.length} material(s).`,
             );
         }
         return handles.map((handle) => this.material(handle));
     }
 
+    /**
+     * A checked copy of a host's transform, in a scratch the caller copies
+     * from at once (into InstanceTransforms), so a call allocates nothing.
+     */
     private checkedTransform(transform: Mat4): Float64Array {
         if (!transform || transform.length < 16) throw new RangeError('@pmndrs/ddgi: a transform needs 16 numbers (column-major 4x4).');
-        const matrix = new Float64Array(16);
+        const matrix = this.transformScratch;
         for (let index = 0; index < 16; index++) {
             if (!Number.isFinite(transform[index])) throw new RangeError('@pmndrs/ddgi: a transform must be finite.');
             matrix[index] = transform[index];
@@ -1199,21 +1544,8 @@ export class PlatformScene implements SceneApi, SceneCopy {
         } else {
             throw new TypeError(`@pmndrs/ddgi: unknown light type ${(descriptor as { type: string }).type}`);
         }
-        return { ...descriptor };
-    }
-
-    /** Logs where a light's influence is: a box for ranged lights, a global change otherwise. */
-    private logLight(light: LightEntry): void {
-        const descriptor = light.descriptor;
-        if (descriptor.type === 'directional') {
-            this.changeLog.addGlobal('sun');
-        } else if (descriptor.range === 0) {
-            this.changeLog.addGlobal('lights');
-        } else {
-            const [x, y, z] = descriptor.position;
-            const range = descriptor.range;
-            this.changeLog.addRegion([x - range, y - range, z - range, x + range, y + range, z + range], 'light', light.handle);
-        }
+        // Its own arrays: the change log compares states, and a host editing a vector in place would change the stored one too.
+        return copyLight(descriptor);
     }
 }
 

@@ -1,0 +1,5 @@
+{
+    "description": "T2.1 on sponza-candles (1,024 candle lights with no range, through the three adapter): the candle and triangle counts in three and GI (check 4), and ddgi/mark's GPU time with every candle changing at once under the folded rule against the per-light rule's (the bound for many unranged lights), still frames marking nothing; ddgi/gi-direct's cost at the calibrated batch reported. Needs the Sponza and candle downloads; time it under the bench lock.",
+    "timeoutMs": 1800000,
+    "manual": true
+}

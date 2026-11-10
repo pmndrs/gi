@@ -1,0 +1,4 @@
+{
+    "description": "T2.4c: propagation subgroups first against the declared fallback, on a two-room lamp switched off at 64 probes a frame (the key-probe path, round robin only): propagation runs, the same totals, and the same irradiance atlas and probe records bit for bit.",
+    "timeoutMs": 120000
+}

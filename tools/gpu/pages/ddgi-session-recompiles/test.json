@@ -1,0 +1,4 @@
+{
+    "description": "T2.14 check 2: gi.stats.recompiles stays 0 through a viewer session (GIVolume.start, then lights dimmed, recoloured, switched and moved, a light added and removed, 12 lights added and removed (the light grid), an object moved and hidden, the sun moving or the environment changed, group weights, budgets, GI off, recalibrate, restart, resetHistory), with light groups off and on; a control kernel counts 1. VITE_DDGI_SCENES=a,b (default cornell-box,two-room; all = every manifest), VITE_DDGI_GROUPS=off,on.",
+    "timeoutMs": 600000
+}

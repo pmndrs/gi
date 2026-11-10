@@ -6,7 +6,9 @@
  *   node tools/gpu/pages/ddgi-batch-cost/to-csv.ts <runner.json> [more.json ...] [--append] [--commit <hash>] [--browser <text>] [--clock-file <file>] [--set <n>] [--note <metric>=<n>] [--include-failed]
  *
  * Several files of the same GPU are repeated runs: `run1/`, `run2/`, ... plus
- * `median/` rows. Metric names start with `batch_cost/`:
+ * `median/` rows. Metric names start with `batch_cost/`, or with
+ * `batch_cost/<inline|deferred>/` for runs that name their direct-light path
+ * (T2.2 on; the rest of the name is the same):
  *
  * - `batch_cost/batch<n>/...`: fixed batches of n probes, each frame waited
  *   for (the GPU kept busy): median GPU ms of `ddgi/trace`, `ddgi/blend`,
@@ -25,6 +27,8 @@
  *   information only);
  * - `batch_cost/startup/...`: milliseconds to each start-up stage, and the
  *   slowest pipeline compiles;
+ * - `batch_cost/ramp/...`: T2.10's opt-in ramp (VITE_DDGI_RAMP_SECONDS) and the
+ *   re-calibration after it, which the budget section then runs at;
  * - `batch_cost/breakdown/batch<n>/<variant>_ms`: `ddgi/trace` with parts of
  *   its shading taken out (main.ts, TRACE_VARIANTS);
  * - `batch_cost/steady/batch<n>/<raf|waited>/...`: a fixed batch at 60 Hz or
@@ -54,12 +58,17 @@ import { browserFromUserAgent, deviceNameFromAdapter, formatValue, repeatedRunRo
 
 const CSV_HEADER = 'date,commit,device,browser,scene,metric,value';
 const DEFAULT_CSV = resolve(import.meta.dirname, '..', '..', '..', '..', 'bench', 'results', 'timing.csv');
-const PREFIX = 'batch_cost';
+const BATCH_COST = 'batch_cost';
 
 /** What the page reports per scene (main.ts); every section is optional. */
 interface SceneResult {
+    /** The scene's id and the direct-light path (T2.2 runs; older runs key results by scene alone). */
+    scene?: string;
+    directLight?: 'inline' | 'deferred';
     probes: number;
     startup?: Record<string, number>;
+    /** T2.10's opt-in ramp and re-calibration before the other sections. */
+    ramp?: Record<string, number>;
     /** T1.9a's millisecond controller (old runs). */
     budget?: Record<string, number | string>;
     /** Budget v2, GPU-bound. */
@@ -86,40 +95,44 @@ function numericRows(scene: string, prefix: string, record: Record<string, unkno
 
 export function batchCostRows(data: PageData): MetricRow[] {
     const rows: MetricRow[] = [];
-    for (const [scene, result] of Object.entries(data.scenes)) {
-        rows.push({ scene, metric: `${PREFIX}/probes_in_volume`, value: result.probes });
+    for (const [key, result] of Object.entries(data.scenes)) {
+        const scene = result.scene ?? key;
+        // A run that measured a direct-light path names it in every metric: batch_cost/<path>/...
+        const metricPrefix = result.directLight ? `${BATCH_COST}/${result.directLight}` : BATCH_COST;
+        rows.push({ scene, metric: `${metricPrefix}/probes_in_volume`, value: result.probes });
         if (result.startup) {
             // Pipeline labels carry the page's platform label ("batch cost <scene> ddgi/trace"); keep the kernel's own name.
             const startup = Object.fromEntries(Object.entries(result.startup).map(([name, value]) => [name.replace(`compile_ms/batch cost ${scene} `, 'compile_ms/'), value]));
-            rows.push(...numericRows(scene, `${PREFIX}/startup`, startup));
+            rows.push(...numericRows(scene, `${metricPrefix}/startup`, startup));
         }
+        if (result.ramp) rows.push(...numericRows(scene, `${metricPrefix}/ramp`, result.ramp));
         if (result.budget) {
             const budgetMs = result.budget.budget_ms;
-            rows.push(...numericRows(scene, `${PREFIX}/budget${budgetMs}ms`, result.budget));
+            rows.push(...numericRows(scene, `${metricPrefix}/budget${budgetMs}ms`, result.budget));
         }
         if (result.budgetV2) {
-            rows.push(...numericRows(scene, `${PREFIX}/v2_budget${result.budgetV2.budget_ms}ms`, result.budgetV2));
+            rows.push(...numericRows(scene, `${metricPrefix}/v2_budget${result.budgetV2.budget_ms}ms`, result.budgetV2));
         }
         if (result.rates) {
-            for (const [rate, values] of Object.entries(result.rates)) rows.push(...numericRows(scene, `${PREFIX}/v2_rate${rate}`, values));
+            for (const [rate, values] of Object.entries(result.rates)) rows.push(...numericRows(scene, `${metricPrefix}/v2_rate${rate}`, values));
         }
         if (result.curve) {
-            for (const [size, values] of Object.entries(result.curve.sizes)) rows.push(...numericRows(scene, `${PREFIX}/batch${size}`, values));
+            for (const [size, values] of Object.entries(result.curve.sizes)) rows.push(...numericRows(scene, `${metricPrefix}/batch${size}`, values));
             const fit = result.curve as Record<string, unknown>;
             rows.push(
-                ...numericRows(scene, `${PREFIX}/fit_all`, { fixed_ms: fit.fit_all_fixed_ms, us_per_probe: fit.fit_all_us_per_probe }),
-                ...numericRows(scene, `${PREFIX}/fit_upto512`, { fixed_ms: fit.fit_small_fixed_ms, us_per_probe: fit.fit_small_us_per_probe }),
+                ...numericRows(scene, `${metricPrefix}/fit_all`, { fixed_ms: fit.fit_all_fixed_ms, us_per_probe: fit.fit_all_us_per_probe }),
+                ...numericRows(scene, `${metricPrefix}/fit_upto512`, { fixed_ms: fit.fit_small_fixed_ms, us_per_probe: fit.fit_small_us_per_probe }),
             );
         }
         if (result.steady) {
             for (const [size, cadences] of Object.entries(result.steady)) {
                 for (const [cadence, values] of Object.entries(cadences)) {
-                    if (typeof values === 'object' && values !== null) rows.push(...numericRows(scene, `${PREFIX}/steady/batch${size}/${cadence}`, values as Record<string, unknown>));
+                    if (typeof values === 'object' && values !== null) rows.push(...numericRows(scene, `${metricPrefix}/steady/batch${size}/${cadence}`, values as Record<string, unknown>));
                 }
             }
         }
         if (result.breakdown) {
-            for (const [size, values] of Object.entries(result.breakdown)) rows.push(...numericRows(scene, `${PREFIX}/breakdown/batch${size}`, values));
+            for (const [size, values] of Object.entries(result.breakdown)) rows.push(...numericRows(scene, `${metricPrefix}/breakdown/batch${size}`, values));
         }
     }
     return rows;

@@ -7,12 +7,14 @@
  *
  * Per scene, in this order:
  *
- * 1. **startup**: load the scene's files, `gi.prepare()` (kernel compiles),
- *    the scene copy and the mesh trees (`rays.whenBuilt`), then the viewer's
- *    warm-up rule (DECISIONS 2026-11-05): steps of `maxProbesPerFrame`
- *    probes with a running-average hysteresis, at most 16 passes over every
- *    probe, stopping after 8 s once 2 passes are done, 4 steps then a wait for
- *    the GPU. Then, as the viewer ends its warm-up, frames with
+ * 1. **startup**: load the scene's files, `gi.prepare()` (kernel compiles)
+ *    with the scene copy's CPU part alongside it (T2.14, as `volume.start`),
+ *    the uploads and the mesh trees (`rays.whenBuilt`: every mesh's first
+ *    tree, the GPU's since T2.12), then the warm-up,
+ *    the technique's own since T2.4b (`warmUpPasses`; DECISIONS 2026-11-05):
+ *    steps of `maxProbesPerFrame` probes with no time between them, at most
+ *    16 passes over every probe, stopping after 8 s once 2 passes are done,
+ *    4 steps then a wait for the GPU, as `volume.start` runs it. Then frames with
  *    `budget.gpuMs`, GPU-bound (two in flight, not paced by the display),
  *    until the platform's calibration burst is done
  *    and confirmed (its batch timed over 300 more back-to-back frames). Reported: when each stage was reached, from the start of
@@ -59,26 +61,42 @@
  * - **breakdown**: test-only copies of `ddgi/trace` with parts of the
  *   shading taken out, timed on the same probes (TRACE_VARIANTS).
  *
+ * Each scene runs once per direct-light path in `VITE_DDGI_DIRECT` (T2.2):
+ * `deferred` (the default: `ddgi/trace` plus the platform's `gi/direct`,
+ * timed as `ddgi/gi-direct`, both counted in the update) and `inline` (M1's
+ * trace with the shadow rays inside). With both listed the paths run one
+ * after the other on fresh platforms, inline first, and results are keyed
+ * `<scene>/<path>`. With direct light deferred, the budget section also
+ * reports the hits `gi/direct` lit per probe and per second (one shadow ray
+ * each for a scene lit by one shadow-casting sun, as Sponza is).
+ *
  * Choose with environment variables (vite passes `VITE_*` to the page):
  *   VITE_DDGI_SCENES=cornell-box,two-room,sponza,bistro-exterior   (default cornell-box,two-room)
+ *   VITE_DDGI_DIRECT=inline,deferred                                (default deferred)
  *   VITE_DDGI_SECTIONS=startup,rates,budget,curve,saturation,recheck,steady,breakdown   (default startup,rates,budget,curve)
  *   VITE_DDGI_BUDGET_MS=2
  *   VITE_DDGI_STEADY_UNITS=16,512                                    (default: the budget's median batch)
+ *   VITE_DDGI_MESH_TREES=tinybvh                                     (default gpu: first trees from the GPU, T2.12)
+ *   VITE_DDGI_THREE_COMPILE=when-light-joins                         (default after-first-step; see THREE_COMPILE)
+ *   VITE_DDGI_RAMP_SECONDS=8                                         (default 0: off; see rampAndRecalibrate)
+ *   VITE_DDGI_MAX_TEXTURE_SIZE=1024                                  (default: textures as the files have them; T2.17,
+ *                                                                     Bistro exterior's take 5.1 GB, more than a 6 GB GPU holds with DDGI)
  *
  * Manual (Sponza and Bistro need the downloads). Run it under the bench lock:
  *   node tools/reference/bench-lock.ts run --what "batch cost" -- pnpm test:gpu --filter ddgi-batch-cost --json <file>
  * and turn the JSON into rows with `node tools/gpu/pages/ddgi-batch-cost/to-csv.ts`.
  */
 
-import { PerspectiveCamera, type Scene, type WebGPURenderer } from 'three/webgpu';
+import { PerspectiveCamera, type Lighting, type Scene, type WebGPURenderer } from 'three/webgpu';
 import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
 import type { EnvironmentDescriptor } from '../../../../packages/ddgi-core/src/platform/contract/scene.ts';
-import { DDGITechnique } from '../../../../packages/ddgi-core/src/techniques/ddgi/ddgi-technique.ts';
+import { DDGITechnique, type DirectLightPath } from '../../../../packages/ddgi-core/src/techniques/ddgi/ddgi-technique.ts';
 import { costOnCurve, SATURATION } from '../../../../packages/ddgi-core/src/platform/work-budget.ts';
 import { DDGI_TRACE_WGSL, TRACE_WORKGROUP_SIZE } from '../../../../packages/ddgi-core/src/techniques/ddgi/wgsl/trace.ts';
 import { ThreeGI } from '../../../../packages/ddgi-three/src/three-gi.ts';
 import { loadAllManifests } from '../../../../apps/viewer/src/scene/manifests.ts';
 import { loadScene } from '../../../../apps/viewer/src/scene/load-scene.ts';
+import { sceneLighting } from '../../../../apps/viewer/src/render/scene-lighting.ts';
 import type { SceneManifest } from '../../../../scenes/src/manifest.ts';
 import { platformSkyEnvironment } from '../../../../scenes/src/sky/sky-image.ts';
 import { assert } from '../../client.ts';
@@ -94,11 +112,34 @@ function listFromEnv(value: unknown, fallback: readonly string[]): string[] {
 const SCENES = listFromEnv(env.VITE_DDGI_SCENES, ['cornell-box', 'two-room']);
 const SECTIONS = new Set(listFromEnv(env.VITE_DDGI_SECTIONS, ['startup', 'rates', 'budget', 'curve']));
 const BUDGET_MS = typeof env.VITE_DDGI_BUDGET_MS === 'string' ? Number(env.VITE_DDGI_BUDGET_MS) : 2;
+/** The direct-light paths to measure, in this order (see the file comment). */
+const DIRECT_PATHS: DirectLightPath[] = listFromEnv(env.VITE_DDGI_DIRECT, ['deferred']).map((path) => {
+    if (path !== 'inline' && path !== 'deferred') throw new Error(`VITE_DDGI_DIRECT: '${path}' is neither inline nor deferred`);
+    return path;
+});
 /** Fixed batch sizes for the `steady` section; by default the budget's median batch. */
 const STEADY_UNITS = listFromEnv(env.VITE_DDGI_STEADY_UNITS, []).map(Number).filter((units) => units > 0);
+/** T2.12: `gpu` (default) builds the first mesh trees on the GPU; `tinybvh` is M1's path, for a comparison. */
+const MESH_TREES = env.VITE_DDGI_MESH_TREES === 'tinybvh' ? 'tinybvh' : 'gpu';
+/** T2.10: seconds of GPU-bound frames after the start-up, then a re-calibration, before the other sections (0: off). */
+const RAMP_SECONDS = typeof env.VITE_DDGI_RAMP_SECONDS === 'string' ? Number(env.VITE_DDGI_RAMP_SECONDS) : 0;
+/** The fixed batch of the ramp's frames: a heavy, steady load. */
+const RAMP_UNITS = 1024;
+/** T2.17: scale model textures down to this side at load (`LoadSceneOptions.maxTextureSize`); undefined keeps them. */
+const MAX_TEXTURE_SIZE = typeof env.VITE_DDGI_MAX_TEXTURE_SIZE === 'string' ? Number(env.VITE_DDGI_MAX_TEXTURE_SIZE) : undefined;
+/**
+ * When three compiles its materials for the GI light. `after-first-step`
+ * (default): after the first warm-up step, in series, as T2.12's check 1 is
+ * judged (lead ruling 2026-11-08: `GIVolume.start` can't compile for the
+ * host's own render passes, so hosts get it in series). `when-light-joins`:
+ * as soon as the light joins the scene (`prepare` resolved), alongside the
+ * tree builds, as a host that draws every frame and renders straight to the
+ * canvas would; reported for information.
+ */
+const THREE_COMPILE = env.VITE_DDGI_THREE_COMPILE === 'when-light-joins' ? 'when-light-joins' : 'after-first-step';
 
-/** The viewer's warm-up rule (apps/viewer/src/techniques/ddgi-technique.ts, DECISIONS 2026-11-05). */
-const WARMUP = { passes: 16, maxSeconds: 8, minPasses: 2, stepsPerBatch: 4 } as const;
+/** Warm-up frames recorded before waiting for the GPU, as `volume.start` does (the warm-up itself is the technique's). */
+const WARMUP = { stepsPerBatch: 4 } as const;
 
 /** Batch sizes for the cost curve, in probes per frame. */
 const BATCH_SIZES = [32, 64, 128, 256, 512, 1024, 2048, 4096] as const;
@@ -135,9 +176,18 @@ const RATE_SETTLE_SECONDS = 2.5;
 /** "Stable": every judged frame's probes within this share of the median. */
 const RATE_STABLE_SHARE = 0.05;
 
-/** The update's own passes; the census is a counter for the stats, reported apart. */
-const UPDATE_PASSES = ['ddgi/trace', 'ddgi/blend', 'ddgi/write'] as const;
+/**
+ * The update's own passes; the census is a counter for the stats, reported
+ * apart. With direct light deferred, the platform's `gi/direct` pass (timed
+ * as DDGI's `ddgi/gi-direct`) is part of the update.
+ */
+const DIRECT_PASS = 'ddgi/gi-direct';
+function updatePasses(direct: DirectLightPath | undefined): readonly string[] {
+    return direct === 'inline' ? ['ddgi/trace', 'ddgi/blend', 'ddgi/write'] : ['ddgi/trace', DIRECT_PASS, 'ddgi/blend', 'ddgi/write'];
+}
 const CENSUS_PASS = 'ddgi/census';
+/** DDGI's counter of the hits gi/direct lit in a frame (from the census, a few frames late). */
+const DIRECT_HITS = 'hits lit by gi/direct';
 const PROBES_UPDATED = 'probes updated';
 
 function median(values: readonly number[]): number {
@@ -228,27 +278,36 @@ function environmentFor(manifest: SceneManifest): EnvironmentDescriptor {
 class FrameTimings {
     readonly byFrame = new Map<number, Map<string, number>>();
     readonly unitsByFrame = new Map<number, number>();
+    private updatePassNames: readonly string[] = updatePasses(undefined);
 
-    /** After an update: the units it used, and whatever timings have arrived. */
+    /**
+     * After an update: the units it used, and whatever timings have arrived.
+     * Passes of one name in a frame add up (the deferred trace runs one
+     * `ddgi/trace` and one `ddgi/gi-direct` per round of 1,024 probes). The
+     * newest frame's list is complete each time, so its sums replace earlier ones.
+     */
     note(platform: GIPlatformImpl, ddgi: DDGITechnique): void {
         const stats = platform.stats;
+        this.updatePassNames = updatePasses(ddgi.directLight);
         this.unitsByFrame.set(stats.frame, ddgi.counters[PROBES_UPDATED] ?? 0);
+        const sums = new Map<number, Map<string, number>>();
         for (const pass of stats.passes) {
             if (pass.gpuMs === undefined || !(pass.gpuMs >= 0)) continue;
-            let passes = this.byFrame.get(pass.frame);
+            let passes = sums.get(pass.frame);
             if (!passes) {
                 passes = new Map();
-                this.byFrame.set(pass.frame, passes);
+                sums.set(pass.frame, passes);
             }
-            passes.set(pass.name, pass.gpuMs);
+            passes.set(pass.name, (passes.get(pass.name) ?? 0) + pass.gpuMs);
         }
+        for (const [platformFrame, passes] of sums) this.byFrame.set(platformFrame, passes);
     }
 
-    /** The update's GPU ms (trace + blend + write) of a frame, or undefined while not all three are in. */
+    /** The update's GPU ms (trace, gi/direct when deferred, blend, write) of a frame, or undefined while not all are in. */
     updateMs(frame: number): number | undefined {
         const passes = this.byFrame.get(frame);
-        if (!passes || !UPDATE_PASSES.every((name) => passes.has(name))) return undefined;
-        return UPDATE_PASSES.reduce((sum, name) => sum + (passes.get(name) ?? 0), 0);
+        if (!passes || !this.updatePassNames.every((name) => passes.has(name))) return undefined;
+        return this.updatePassNames.reduce((sum, name) => sum + (passes.get(name) ?? 0), 0);
     }
 
     pass(frame: number, name: string): number | undefined {
@@ -297,53 +356,90 @@ function timePipelineCompiles(device: GPUDevice): void {
     };
 }
 
-/** Draws one frame of the scene with three, its pipelines compiled first, and waits for the GPU. */
-async function drawFrame(device: GPUDevice, renderer: WebGPURenderer, scene: Scene, camera: PerspectiveCamera): Promise<void> {
+/** Draws one frame of the scene with three, its pipelines compiled first, and waits for the GPU. Returns when the compile ended. */
+async function drawFrame(device: GPUDevice, renderer: WebGPURenderer, scene: Scene, camera: PerspectiveCamera): Promise<number> {
     await renderer.compileAsync(scene, camera);
+    const compiledAt = performance.now();
     renderer.render(scene, camera);
     await device.queue.onSubmittedWorkDone();
+    return compiledAt;
 }
+
+/** three's own lighting, kept so a scene drawn with clustered lighting doesn't pass it on to the next scene. */
+let defaultLighting: Lighting | null = null;
 
 async function startScene(
     device: GPUDevice,
     renderer: WebGPURenderer,
     manifest: SceneManifest,
+    direct: DirectLightPath,
     log: (line: string) => void,
 ): Promise<{ scene: SceneUnderTest; startup: Record<string, number> }> {
     pipelineCompileMs.clear();
     const loadStartedAt = performance.now();
-    const loaded = await loadScene(manifest, () => {});
+    const loaded = await loadScene(manifest, () => {}, MAX_TEXTURE_SIZE === undefined ? {} : { maxTextureSize: MAX_TEXTURE_SIZE });
+    const filesLoadedAt = performance.now();
     const bookmark = manifest.cameras[0];
     const camera = new PerspectiveCamera(bookmark.fovYDeg, 1, 0.05, loaded.diagonal * 2);
     camera.position.set(...bookmark.position);
     camera.lookAt(...bookmark.target);
     camera.updateMatrixWorld();
+    // three draws the scene's lights as the viewer does: clustered for many shadowless lights
+    // (sponza-candles' 1,024 candles). With three's default lighting every material's shader holds
+    // every light, and compiling those for 1,024 lights took minutes (T2.3).
+    defaultLighting ??= renderer.lighting;
+    renderer.lighting = sceneLighting(loaded.directLights, defaultLighting);
     // The scene on screen without GI, as the viewer shows it while DDGI starts.
-    await drawFrame(device, renderer, loaded.scene, camera);
+    const threeCompiledAt = await drawFrame(device, renderer, loaded.scene, camera);
     const sceneShownAt = performance.now();
     const createdAt = performance.now();
 
-    const platform = new GIPlatformImpl(device, { label: `batch cost ${manifest.id}`, gpuTiming: true });
+    // T2.12: first trees from the GPU (the default), or tinybvh only (M1's path) for a comparison.
+    const meshTrees = MESH_TREES === 'tinybvh' ? { gpuFirst: false } : {};
+    const platform = new GIPlatformImpl(device, { label: `batch cost ${manifest.id}`, gpuTiming: true, meshTrees });
     const volume = manifest.volume;
-    const ddgi = platform.addTechnique(new DDGITechnique({ volume: { center: volume.center, size: volume.size, spacing: volume.probeSpacing } }));
+    const ddgi = platform.addTechnique(new DDGITechnique({ volume: { center: volume.center, size: volume.size, spacing: volume.probeSpacing } }, { directLight: direct }));
     platform.setOutput(ddgi);
-    await platform.prepare();
+    // As `volume.start` runs it since T2.14: the scene copied in (CPU) while the kernels
+    // compile, after a task boundary so Chrome has sent the compile requests (NOTES).
+    const preparing = platform.prepare();
+    preparing.catch(() => {});
+    await yieldToCallbacks();
+    const threeGI = new ThreeGI(platform, loaded.scene, { budget: { paused: true }, preparing, environment: environmentFor(manifest), warn: () => {} });
+    const copyStartedAt = performance.now();
+    threeGI.update(camera, 0);
+    const copiedWhileCompilingAt = performance.now();
+    const copyWhileCompilingMs = copiedWhileCompilingAt - copyStartedAt;
+    // T2.10: the scene copy's staging buffers (T2.13), meshes waiting for the GPU to pack them. They
+    // peak once the copy has staged every mesh and before the first encode packs them.
+    const stagingAfterCopyBytes = platform.sceneCopy.memory.stagingBuffers;
+    await preparing;
     const preparedAt = performance.now();
+    const stagingBeforeFirstEncodeBytes = platform.sceneCopy.memory.stagingBuffers;
 
-    const threeGI = new ThreeGI(platform, loaded.scene, { budget: { paused: true }, environment: environmentFor(manifest), warn: () => {} });
+    // The first GI frame: the scene's uploads, and the tree builds start (the GPU's first, T2.12).
     threeGI.update(camera, 0);
     const copiedAt = performance.now();
+    const stagingAfterFirstEncodeBytes = platform.sceneCopy.memory.stagingBuffers;
+    // Asked for once the builds have started (before, nothing is pending and it resolves at once).
+    let refinedAt = NaN;
+    void platform.rays.whenRefined().then(() => (refinedAt = performance.now()));
+    // The GI light joined the scene when `prepare` resolved (ThreeGI). With `when-light-joins`, three's
+    // materials for it start compiling now, alongside the tree builds (after the uploads, which start the
+    // GPU's build); by default they compile in series, after the first warm-up step (THREE_COMPILE).
+    let threeGiCompileStartedAt = performance.now();
+    let threeGiCompiled: Promise<number> | null = THREE_COMPILE === 'when-light-joins' ? renderer.compileAsync(loaded.scene, camera).then(() => performance.now()) : null;
     await platform.rays.whenBuilt();
+    const firstTreesAt = performance.now();
     threeGI.update(camera, 0);
     await device.queue.onSubmittedWorkDone();
     const treesAt = performance.now();
+    const treesAtFirstGi = platform.rays.meshTreeCounts;
 
     const probeCount = ddgi.field?.grid.probeCount ?? 0;
     const scene: SceneUnderTest = { manifest, platform, ddgi, threeGI, camera, probeCount };
 
-    // The viewer's warm-up (see the file comment).
-    const targetHysteresis = ddgi.settings.hysteresis;
-    const stepUnits = Math.min(probeCount, ddgi.settings.maxProbesPerFrame);
+    // The warm-up (see the file comment): the technique's own since T2.4b, run as volume.start runs it.
     let updates = 0;
     let steps = 0;
     let firstGiAt = NaN;
@@ -351,13 +447,10 @@ async function startScene(
     let firstPassAt = NaN;
     const warmupStartedAt = performance.now();
     for (;;) {
-        const passes = updates / probeCount;
-        const completed = Math.floor(passes);
-        ddgi.settings.hysteresis = Math.min(targetHysteresis, completed / (completed + 1));
-        frame(scene, { units: stepUnits });
+        frame(scene, { gpuMs: BUDGET_MS }, 0);
         updates += ddgi.counters[PROBES_UPDATED] ?? 0;
         steps++;
-        const done = updates / probeCount >= WARMUP.passes || (performance.now() - warmupStartedAt > WARMUP.maxSeconds * 1000 && updates / probeCount >= WARMUP.minPasses);
+        const done = !ddgi.warmingUp;
         // Wait where the viewer waits, and also after the first step and the first full pass to time them.
         const firstStep = steps === 1;
         const firstPass = Number.isNaN(firstPassAt) && updates >= probeCount;
@@ -365,7 +458,12 @@ async function startScene(
             await device.queue.onSubmittedWorkDone();
             if (firstStep) {
                 firstGiAt = performance.now();
-                // The first frame drawn with GI: three compiles the materials again for the GI light.
+                // The first frame drawn with GI: three's materials for the GI light (compiled now, or since the light joined).
+                if (!threeGiCompiled) {
+                    threeGiCompileStartedAt = performance.now();
+                    threeGiCompiled = renderer.compileAsync(loaded.scene, camera).then(() => performance.now());
+                }
+                await threeGiCompiled;
                 await drawFrame(device, renderer, loaded.scene, camera);
                 firstGiShownAt = performance.now();
             }
@@ -374,7 +472,6 @@ async function startScene(
         }
         if (done) break;
     }
-    ddgi.settings.hysteresis = targetHysteresis;
     const settledAt = performance.now();
 
     // The calibration (budget v2), as the viewer ends its warm-up: frames with the
@@ -393,16 +490,51 @@ async function startScene(
     const calibration = platform.budgetReport(ddgi)?.calibration;
     assert(calibration?.measured, `${manifest.id}: the platform did not calibrate within ${calibrationSteps} steps`);
 
+    const threeGiCompileEndedAt = threeGiCompiled ? await threeGiCompiled : NaN;
     const fromLoad = (at: number) => round(at - loadStartedAt, 1);
     const fromCreation = (at: number) => round(at - createdAt, 1);
     const startup = {
         probes: probeCount,
         // From the start of the load: files fetched and parsed, then the first frame drawn without GI.
+        // load_files_ms is the whole stage (as before T2.3); its three parts follow.
         load_files_ms: round(sceneShownAt - loadStartedAt, 1),
+        load_fetch_parse_ms: round(filesLoadedAt - loadStartedAt, 1),
+        load_three_compile_ms: round(threeCompiledAt - filesLoadedAt, 1),
+        load_three_first_draw_ms: round(sceneShownAt - threeCompiledAt, 1),
         scene_shown_from_load_ms: fromLoad(sceneShownAt),
+        // Since T2.14 the scene copy's CPU part overlaps the compiles: `prepare_ms` is from the
+        // platform's creation to `prepare` resolved, that copy included; `compile_wait_ms` is
+        // what was left to wait for after it; `scene_copy_cpu_ms` is the copy while compiling
+        // plus the first GI frame (the uploads) after `prepare`.
         prepare_ms: round(preparedAt - createdAt, 1),
-        scene_copy_cpu_ms: round(copiedAt - preparedAt, 1),
+        compile_wait_ms: round(preparedAt - copiedWhileCompilingAt, 1),
+        scene_copy_while_compiling_ms: round(copyWhileCompilingMs, 1),
+        scene_copy_cpu_ms: round(copyWhileCompilingMs + (copiedAt - preparedAt), 1),
+        // T2.10: SceneMemory.stagingBuffers (MB, 1e6 bytes) after the copy, before and after the first encode.
+        staging_after_copy_mb: round(stagingAfterCopyBytes / 1e6, 1),
+        staging_before_first_encode_mb: round(stagingBeforeFirstEncodeBytes / 1e6, 1),
+        staging_after_first_encode_mb: round(stagingAfterFirstEncodeBytes / 1e6, 1),
+        // T2.12's stages from `prepare` to the first frame drawn with GI. The first GI frame (the
+        // uploads, the GPU's tree build submitted, tinybvh's copies sent to the worker); then the wait
+        // for every mesh's first tree; then the frame that places them; then the first warm-up step
+        // on the GPU; then three's first frame with the GI light (`first_gi_draw_ms`), which includes
+        // its material compile (`three_gi_compile_ms`) in series by default, or only what the draw still
+        // waited for it (`three_gi_compile_wait_ms`) when it started as the light joined.
+        first_gi_frame_ms: round(copiedAt - preparedAt, 1),
         trees_ms: round(treesAt - copiedAt, 1),
+        first_trees_wait_ms: round(firstTreesAt - copiedAt, 1),
+        trees_placed_frame_ms: round(treesAt - firstTreesAt, 1),
+        first_gi_step_ms: round(firstGiAt - treesAt, 1),
+        first_gi_draw_ms: round(firstGiShownAt - firstGiAt, 1),
+        three_gi_compile_ms: round(threeGiCompileEndedAt - threeGiCompileStartedAt, 1),
+        three_gi_compile_wait_ms: round(Math.max(0, threeGiCompileEndedAt - firstGiAt), 1),
+        three_gi_compile_when_light_joins: THREE_COMPILE === 'when-light-joins' ? 1 : 0,
+        gpu_first_trees: platform.rays.gpuFirstTrees ? 1 : 0,
+        gpu_tree_build_ms: round(treesAtFirstGi.lastGpuBuildMs, 1),
+        meshes_on_gpu_trees_at_first_gi: treesAtFirstGi.onGpuTrees,
+        meshes_on_tinybvh_trees_at_first_gi: treesAtFirstGi.onTinybvhTrees,
+        gpu_trees_refused: treesAtFirstGi.gpuTreesRefused,
+        refined_from_creation_ms: fromCreation(refinedAt),
         first_gi_step_from_load_ms: fromLoad(firstGiAt),
         first_gi_shown_from_load_ms: fromLoad(firstGiShownAt),
         first_pass_from_load_ms: fromLoad(firstPassAt),
@@ -426,12 +558,17 @@ async function startScene(
         calibration_filler_frames: calibration.fillerFrames,
         calibration_confirm_factor: round(calibration.confirmFactor ?? NaN),
     };
-    // The slowest pipelines this scene's start-up compiled.
-    for (const [label, ms] of [...pipelineCompileMs].sort((a, b) => b[1] - a[1]).slice(0, 6)) {
+    // The slowest pipelines this scene's start-up compiled, and every sky bake kernel (T2.6a's check 3).
+    const sorted = [...pipelineCompileMs].sort((a, b) => b[1] - a[1]);
+    // How many compute pipelines the start-up made (T2.14: only what the configuration uses).
+    (startup as Record<string, number>).pipelines_compiled = sorted.filter(([label]) => label.startsWith(`batch cost ${manifest.id} `)).length;
+    for (const [label, ms] of [...sorted.slice(0, 6), ...sorted.slice(6).filter(([label]) => label.includes(' sky '))]) {
         (startup as Record<string, number>)[`compile_ms/${label}`] = round(ms, 1);
     }
     log(
-        `${manifest.id}: ${probeCount} probes; files ${startup.load_files_ms} ms, prepare ${startup.prepare_ms}, copy ${startup.scene_copy_cpu_ms}, trees ${startup.trees_ms}; ` +
+        `${manifest.id} (${direct} direct light): ${probeCount} probes; files ${startup.load_files_ms} ms (fetch and parse ${startup.load_fetch_parse_ms}, three compile ${startup.load_three_compile_ms}, first draw ${startup.load_three_first_draw_ms}), prepare ${startup.prepare_ms}, copy ${startup.scene_copy_cpu_ms}, trees ${startup.trees_ms}; ` +
+            `T2.12 stages: first GI frame ${startup.first_gi_frame_ms}, first trees ${startup.first_trees_wait_ms} (GPU build ${startup.gpu_tree_build_ms}; ${startup.meshes_on_gpu_trees_at_first_gi} on GPU trees, ${startup.meshes_on_tinybvh_trees_at_first_gi} on tinybvh's, ${startup.gpu_trees_refused} refused), ` +
+            `placed ${startup.trees_placed_frame_ms}, first step ${startup.first_gi_step_ms}, draw ${startup.first_gi_draw_ms} (three's GI compile ${startup.three_gi_compile_ms}, waited ${startup.three_gi_compile_wait_ms}); tinybvh all in at ${startup.refined_from_creation_ms} after creation; ` +
             `first GI drawn ${startup.first_gi_shown_from_load_ms} ms from load (${startup.first_gi_shown_from_creation_ms} after creation), first pass ${startup.first_pass_from_creation_ms}, ` +
             `settled ${startup.settled_from_creation_ms} (${startup.warmup_passes} passes in ${startup.warmup_ms} ms); ` +
             `calibrated in ${startup.calibration_ms} ms (${calibration.frames} frames, ${calibration.curve.length} sizes, spread ${startup.calibration_spread}): ${calibration.units} probes, ` +
@@ -493,6 +630,14 @@ async function measureBudget(device: GPUDevice, scene: SceneUnderTest, log: (lin
     }
     const steppedDown = units.filter((used) => used < ran).length;
     assert(atBatch.length >= BUDGET_FRAMES / 2, `${scene.manifest.id}: only ${atBatch.length} timed frames at the batch of ${ran}`);
+    // gi/direct at the batch, and the hits it lit (the census's latest frame, which ran the same batch).
+    const directMs: number[] = [];
+    for (let platformFrame = firstFrame; platformFrame < firstFrame + BUDGET_FRAMES; platformFrame++) {
+        const ms = timings.pass(platformFrame, DIRECT_PASS);
+        if (ms !== undefined && timings.unitsByFrame.get(platformFrame) === ran) directMs.push(ms);
+    }
+    const directHits = scene.ddgi.counters[DIRECT_HITS];
+    const directMedianMs = directMs.length > 0 ? median(directMs) : NaN;
     const atCalibrated = atBatch;
     const probesAt60 = probesAt(scene, 60, calibrated);
     // The most the technique can update in a frame: all its probes, or maxProbesPerFrame.
@@ -523,14 +668,46 @@ async function measureBudget(device: GPUDevice, scene: SceneUnderTest, log: (lin
         sweep_s_at_60hz: round(Math.ceil(scene.probeCount / probesAt60) / 60, 2),
         calibration_fixed_ms: round(report?.calibration?.model?.fixedMs ?? NaN),
         calibration_us_per_probe: round((report?.calibration?.model?.msPerUnit ?? NaN) * 1000, 3),
+        gi_direct_ms_median: round(directMedianMs),
+        gi_direct_hits_per_probe: directHits === undefined ? NaN : round(directHits / ran, 2),
+        // Hits lit per second inside gi/direct (one shadow ray each under a single shadow-casting sun).
+        gi_direct_mhits_per_s: directHits === undefined ? NaN : round(directHits / (directMedianMs * 1000), 2),
     };
     log(
         `${scene.manifest.id}, budget ${BUDGET_MS} ms, GPU-bound: calibrated ${calibrated} probes (ran ${ran}) cost ${result.update_ms_median} ms median ` +
             `(p05 ${result.update_ms_p05}, p95 ${result.update_ms_p95}; ${Math.round(result.update_over_budget_share * 1000) / 10}% against the budget); ` +
             `probes per frame ${result.probes_median} (p05 ${result.probes_p05}, p95 ${result.probes_p95}), ${steppedDown} frames stepped down; ` +
-            `at 60 Hz ${probesAt60} probes a frame (floor ${result.floor_probes_at_60hz}), a sweep every ${result.sweep_s_at_60hz} s`,
+            `at 60 Hz ${probesAt60} probes a frame (floor ${result.floor_probes_at_60hz}), a sweep every ${result.sweep_s_at_60hz} s` +
+            (Number.isFinite(directMedianMs) ? `; gi/direct ${result.gi_direct_ms_median} ms, ${result.gi_direct_hits_per_probe} hits a probe, ${result.gi_direct_mhits_per_s} M hits/s` : ''),
     );
     return result;
+}
+
+/**
+ * Opt-in ramp (T2.10, `VITE_DDGI_RAMP_SECONDS`): GPU-bound frames of RAMP_UNITS
+ * probes for that many seconds, then `recalibrate()` with its burst run as at
+ * start-up, so the sections after it run at a batch calibrated with the clocks
+ * up. *Why:* on the RTX laptop under Chrome 157 the start-up's bursty load
+ * leaves the GPU in a low-power state (about 780 MHz under load, nvidia-smi),
+ * and the start-up's calibration then reads it slow (Sponza 154 probes at
+ * 2 ms against 640 at 1,800-1,900 MHz in T2.2). Budget v2 calibrates with the
+ * clocks up (DECISIONS 2026-11-05), and SPEC's timings are GPU-bound. The
+ * start-up's own calibration is still reported in `startup`.
+ */
+async function rampAndRecalibrate(device: GPUDevice, scene: SceneUnderTest, firstUnits: number, log: (line: string) => void): Promise<Record<string, number>> {
+    const pacing = new GpuBoundPacing(device);
+    const startedAt = performance.now();
+    let rampFrames = 0;
+    while (performance.now() - startedAt < RAMP_SECONDS * 1000) {
+        frame(scene, { units: RAMP_UNITS }, 0);
+        rampFrames++;
+        await pacing.after();
+    }
+    await pacing.drain();
+    const rampMs = performance.now() - startedAt;
+    const recheck = await recheckCalibration(device, scene, firstUnits, log);
+    log(`${scene.manifest.id} ramp: ${rampFrames} frames of ${RAMP_UNITS} probes in ${round(rampMs / 1000, 1)} s, then re-calibrated: ${recheck.recalibrated_probes} probes (start-up's ${firstUnits})`);
+    return { ramp_seconds: round(rampMs / 1000, 2), ramp_frames: rampFrames, ramp_units: RAMP_UNITS, ...recheck };
 }
 
 /**
@@ -1021,18 +1198,20 @@ async function measureCurve(device: GPUDevice, scene: SceneUnderTest, log: (line
     const perSize: Record<string, unknown> = {};
     for (const size of sizes) {
         const list = framesBySize.get(size)!.flatMap((platformFrame) => {
+            const total = timings.updateMs(platformFrame);
             const trace = timings.pass(platformFrame, 'ddgi/trace');
             const blend = timings.pass(platformFrame, 'ddgi/blend');
             const write = timings.pass(platformFrame, 'ddgi/write');
-            if (trace === undefined || blend === undefined || write === undefined) return [];
-            return [{ trace, blend, write, census: timings.pass(platformFrame, CENSUS_PASS) ?? NaN }];
+            if (total === undefined || trace === undefined || blend === undefined || write === undefined) return [];
+            return [{ total, trace, direct: timings.pass(platformFrame, DIRECT_PASS) ?? NaN, blend, write, census: timings.pass(platformFrame, CENSUS_PASS) ?? NaN }];
         });
         assert(list.length >= CURVE_TIMED_FRAMES, `${scene.manifest.id}: only ${list.length} timed frames at ${size} probes`);
-        const totals = list.map((sample) => sample.trace + sample.blend + sample.write);
+        const totals = list.map((sample) => sample.total);
         const total = median(totals);
         points.push({ probes: size, ms: total });
         perSize[String(size)] = {
             trace_ms: round(median(list.map((sample) => sample.trace))),
+            gi_direct_ms: round(median(list.map((sample) => sample.direct).filter(Number.isFinite))),
             blend_ms: round(median(list.map((sample) => sample.blend))),
             write_ms: round(median(list.map((sample) => sample.write))),
             census_ms: round(median(list.map((sample) => sample.census).filter(Number.isFinite))),
@@ -1188,13 +1367,19 @@ await runThreePage(async ({ device, renderer, data, log }) => {
     // 2026-11-05): its numbers are reported, not judged.
     const judgeCost = device.adapterInfo.vendor !== 'intel';
     data.costJudged = judgeCost;
-    for (const id of SCENES) {
+    data.directPaths = DIRECT_PATHS.join(',');
+    // Textures scaled down at load change the GPU memory the scene takes (T2.17), so the run says so.
+    if (MAX_TEXTURE_SIZE !== undefined) data.maxTextureSize = MAX_TEXTURE_SIZE;
+    const runs = SCENES.flatMap((sceneId) => DIRECT_PATHS.map((direct) => ({ sceneId, direct })));
+    for (const { sceneId, direct } of runs) {
+        const id = sceneId;
         const manifest = manifests.find((candidate) => candidate.id === id);
         assert(manifest, `no manifest '${id}'`);
-        const { scene, startup } = await startScene(device, renderer, manifest, log);
-        const sceneResult: Record<string, unknown> = { probes: scene.probeCount, raysPerProbe: scene.ddgi.settings.raysPerProbe };
-        results[id] = sceneResult;
+        const { scene, startup } = await startScene(device, renderer, manifest, direct, log);
+        const sceneResult: Record<string, unknown> = { scene: id, directLight: direct, probes: scene.probeCount, raysPerProbe: scene.ddgi.settings.raysPerProbe };
+        results[DIRECT_PATHS.length > 1 ? `${id}/${direct}` : id] = sceneResult;
         if (SECTIONS.has('startup')) sceneResult.startup = startup;
+        if (RAMP_SECONDS > 0) sceneResult.ramp = await rampAndRecalibrate(device, scene, startup.calibrated_probes, log);
         // Rates first, in rising order: the platform remembers the fastest on-time rate it saw for
         // 10 s, so a slower rate straight after the GPU-bound frames would read as late frames.
         if (SECTIONS.has('rates')) {
@@ -1234,7 +1419,8 @@ await runThreePage(async ({ device, renderer, data, log }) => {
             sceneResult.steady = steady;
         }
         if (SECTIONS.has('curve')) sceneResult.curve = await measureCurve(device, scene, log);
-        if (SECTIONS.has('breakdown')) sceneResult.breakdown = await measureTraceBreakdown(device, scene, log);
+        // The breakdown's variants edit M1's inline trace source; they mean nothing for the deferred kernel.
+        if (SECTIONS.has('breakdown') && direct === 'inline') sceneResult.breakdown = await measureTraceBreakdown(device, scene, log);
         // Probes per state and rays traced, from the GPU census (a few frames old).
         sceneResult.counters = { ...scene.ddgi.counters };
         scene.threeGI.dispose();

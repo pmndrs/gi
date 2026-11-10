@@ -194,7 +194,47 @@
                 color: #c9d6e4;
             }
 
+            .panel section[hidden],
+            .panel div[hidden] {
+                display: none;
+            }
+            .panel input[type='color'] {
+                width: 48px;
+                height: 24px;
+                padding: 0;
+                border: 1px solid #36404d;
+                background: none;
+            }
+            .panel .row input[type='range'] {
+                flex: 1;
+            }
+            .panel .row button {
+                flex: 1;
+            }
+            .panel canvas.meter-plot {
+                display: block;
+                width: 100%;
+                margin-top: 6px;
+                border: 1px solid #2a323d;
+            }
+
             /* Overlays on the picture */
+            .region-layer {
+                position: fixed;
+                z-index: 15;
+                cursor: crosshair;
+                background: rgba(93, 176, 255, 0.06);
+            }
+            .region-layer[hidden],
+            .region-outline[hidden] {
+                display: none;
+            }
+            .region-outline {
+                position: fixed;
+                z-index: 14;
+                border: 1px dashed #5db0ff;
+                pointer-events: none;
+            }
             #show-panel {
                 position: fixed;
                 top: 8px;

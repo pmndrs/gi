@@ -36,6 +36,7 @@ import { RectAreaLightTexturesLib } from 'three/addons/lights/RectAreaLightTextu
 import { RectAreaLightNode, WebGPURenderer } from 'three/webgpu';
 import {
     manifestLightToSceneLight,
+    sceneSettingValues,
     validateManifest,
     type CameraBookmark,
     type ManifestEnvironment,
@@ -43,7 +44,7 @@ import {
 } from './manifest';
 import { buildProcedural, proceduralBuilders } from './procedural';
 import { computeSceneStats, type SceneStats } from './stats';
-import { applyModelTransform, emissiveQuadLights, lightToThree, proceduralSceneToThree } from './three-scene';
+import { applyModelTransform, emissiveQuadLights, lightToThree, loadLightSet, proceduralSceneToThree } from './three-scene';
 
 /** Absolute paths of the downloads folders, injected by `scenes/vite.config.ts`. */
 declare const __DOWNLOADS_DIRS__: string[];
@@ -137,6 +138,11 @@ async function loadParts(manifest: SceneManifest, loader: GLTFLoader): Promise<{
             const built = buildProcedural(part.builder, part.options);
             content.add(proceduralSceneToThree(built, part.builder));
             emitters.push(...emissiveQuadLights(built));
+        } else if (part.kind === 'light-set') {
+            // The candles, at the scene's default count; their lights go with them (shadowless in three, loadLightSet says why).
+            const set = await loadLightSet(part, sceneSettingValues(manifest)[part.countSetting], findModelUrl, loader);
+            set.group.add(...set.lights);
+            content.add(set.group);
         } else {
             const gltf = await loader.loadAsync(await findModelUrl(part.asset, part.path));
             // GLTFLoader leaves shadows off; without these the lights would shine through everything.
@@ -161,7 +167,7 @@ async function loadParts(manifest: SceneManifest, loader: GLTFLoader): Promise<{
 function describeLighting(manifest: SceneManifest, emissiveQuadCount: number): string {
     const parts: string[] = [];
     const countByType = new Map<string, number>();
-    for (const light of manifest.lights) countByType.set(light.type, (countByType.get(light.type) ?? 0) + 1);
+    for (const light of manifest.lights) if (light.intensity > 0) countByType.set(light.type, (countByType.get(light.type) ?? 0) + 1);
     for (const [type, count] of countByType) parts.push(`${count} ${type} light${count > 1 ? 's' : ''} (direct, with shadows)`);
     if (emissiveQuadCount > 0) parts.push(`${emissiveQuadCount} emissive quad${emissiveQuadCount > 1 ? 's' : ''} as area light${emissiveQuadCount > 1 ? 's' : ''} (direct, no shadows)`);
     if (parts.length === 0) return 'none: only surface emission shows (nothing is lit by anything)';
@@ -254,7 +260,8 @@ export async function runCheckPage(canvas: HTMLCanvasElement, status: HTMLElemen
         scene.add(content);
         state.stats = computeSceneStats(content);
 
-        const manifestLights = manifest.lights.map(manifestLightToSceneLight);
+        // A light at intensity 0 is off until a motion plays it (Sponza's arcade lamp): left out, as the viewer leaves it out.
+        const manifestLights = manifest.lights.filter((light) => light.intensity > 0).map(manifestLightToSceneLight);
         const fitting = boundingSphere(content);
         for (const light of manifestLights) {
             const threeLight = lightToThree(light, fitting);

@@ -1,0 +1,4 @@
+{
+    "description": "T2.3 check 1: 1,024 shadowed point lights over pillars and blocks; direct light through gi/direct with the light grid, averaged over 1,024 frames, matches the exhaustive evaluation (mean within 1%, 99% of 1,000 points within 5%) at K = 1, 2 and 4 (K = 1 the default); noise recorded; the subgroup and fallback scans hand out the same picks. Correctness only, nothing timed.",
+    "timeoutMs": 900000
+}

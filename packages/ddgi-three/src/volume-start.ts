@@ -6,41 +6,55 @@
  *
  * 1. the GPU device is three's own (`renderer.backend.device`), so GI and
  *    three share it (SPEC: the host owns the device);
- * 2. the platform and a DDGI technique on the volume's probe grid, prepared;
+ * 2. the platform and a DDGI technique on the volume's probe grid, prepared,
+ *    with the scene copied in while the kernels compile (T2.14);
  * 3. `ThreeGI` on the scene, with `updateOnRender`: the GI light's node runs
  *    each GI frame from inside three's render (gi-light.ts), so there is no
  *    per-frame call;
- * 4. the warm-up (below), so the first frame the user sees has converged GI
- *    instead of probes filling in from black;
+ * 4. the start-up frames (below), so the first frame the user sees has
+ *    converged GI instead of probes filling in from black;
  * 5. the device's limits: a scene that doesn't fit them throws
  *    `GILimitError` naming the limit, with the fix for three.
  *
- * **The warm-up** (moved from the viewer, `apps/viewer/src/techniques/ddgi-technique.ts`):
- * - no probe work until the ray-tracing trees exist (rays would see through
- *   every wall of a half-built scene to the sky);
- * - then up to {@link DEFAULT_WARM_UP}.passes passes over every probe, as
- *   many probes per step as the technique allows, with a running average:
- *   pass k keeps k/(k+1) of the old value, so after n passes the field is
- *   the plain mean of n estimates, the fastest way to average out ray noise.
- *   It stops early after `maxSeconds` (with at least `minPasses` passes), so
- *   a slow GPU isn't kept waiting. The normal hysteresis carries on from
- *   there. What a game does behind its loading screen: at 2 ms a frame,
- *   Sponza's 19,425 probes would take minutes to fill from black;
+ * **The start-up frames.** The warm-up itself is the DDGI technique's since
+ * T2.4b (`warmUpPasses`, `warmUpMaxSeconds`, `warmUpMinPasses`; ddgi-core's
+ * ddgi-technique.ts): it waits for the ray-tracing trees, then makes up to
+ * {@link DEFAULT_WARM_UP}.passes passes over every probe whatever the
+ * frame's budget, stopping early after `maxSeconds` once `minPasses` are
+ * made, so a slow GPU isn't kept waiting. What a game does behind its
+ * loading screen: at 2 ms a frame, Sponza's 19,425 probes would take a
+ * minute to fill from black. Here `start` only runs the frames, back to back:
+ * - frames until the technique says it is warm, a few at a time, then a
+ *   wait for the GPU;
  * - then the platform's budget calibration (budget v2): frames with the
  *   millisecond budget, GPU-bound with two in flight, until the platform
  *   reports it calibrated and confirmed, or {@link CALIBRATION_MAX_STEPS}.
  *   Without GPU timestamps the platform can't calibrate and says so at once.
+ * `GIVolume.restart` runs the same frames again after forgetting the field
+ * ("start the probes over").
  */
 
 import { PerspectiveCamera, type Camera, type Scene, type WebGPURenderer } from 'three/webgpu';
-import { createGI, DDGITechnique, GILimitError, type DDGISettingsInput, type EnvironmentDescriptor, type FrameBudget, type GIPlatform } from '@pmndrs/ddgi-core';
+import {
+    createGI,
+    DDGITechnique,
+    DEFAULT_WARM_UP_MAX_SECONDS,
+    DEFAULT_WARM_UP_MIN_PASSES,
+    DEFAULT_WARM_UP_PASSES,
+    GILimitError,
+    type DDGISettingsInput,
+    type EnvironmentDescriptor,
+    type FrameBudget,
+    type GIPlatform,
+} from '@pmndrs/ddgi-core';
 import type { PmndrsSkyLike } from './environment.ts';
 import type { GILightOptions } from './gi-light.ts';
 import type { GIVolume } from './gi-volume.ts';
 import { ThreeGI } from './three-gi.ts';
 
+/** The warm-up's settings, as `start` takes them; the first three become the technique's `warmUpPasses`, `warmUpMaxSeconds`, `warmUpMinPasses`. */
 export interface WarmUpSettings {
-    /** Full passes over every probe with a running average. Default 16. */
+    /** Full passes over every probe, with no time between them for the history. Default 16. */
     readonly passes: number;
     /** Stop after this long even if the passes aren't done... Default 8. */
     readonly maxSeconds: number;
@@ -50,7 +64,7 @@ export interface WarmUpSettings {
     readonly calibrate: boolean;
 }
 
-export const DEFAULT_WARM_UP: WarmUpSettings = { passes: 16, maxSeconds: 8, minPasses: 2, calibrate: true };
+export const DEFAULT_WARM_UP: WarmUpSettings = { passes: DEFAULT_WARM_UP_PASSES, maxSeconds: DEFAULT_WARM_UP_MAX_SECONDS, minPasses: DEFAULT_WARM_UP_MIN_PASSES, calibrate: true };
 
 /**
  * The calibration stops after this many frames even if the platform is
@@ -60,10 +74,14 @@ export const DEFAULT_WARM_UP: WarmUpSettings = { passes: 16, maxSeconds: 8, minP
 export const CALIBRATION_MAX_STEPS = 1000;
 /** Calibration frames queued at once, so the GPU never waits for the CPU between them. */
 const CALIBRATION_FRAMES_IN_FLIGHT = 2;
-/** Warm-up steps recorded before waiting for the GPU. Each can be a few thousand probes. */
+/** Warm-up frames recorded before waiting for the GPU. Each can be a few thousand probes. */
 const WARM_UP_STEPS_PER_BATCH = 4;
-/** The DDGI technique's counter of probes it updated in the last frame. */
-const PROBES_UPDATED_COUNTER = 'probes updated';
+/**
+ * The warm-up stops after this many frames even if the technique still says
+ * it is warming: a guard for a host whose trees never finish building.
+ * Sponza's 16 passes take 80 frames.
+ */
+const WARM_UP_MAX_STEPS = 100_000;
 
 export const DEFAULT_GI_BUDGET: FrameBudget = { gpuMs: 2 };
 
@@ -82,6 +100,15 @@ export interface GIVolumeStartOptions {
     readonly warmUp?: boolean | Partial<WarmUpSettings>;
     /** Where warnings go (each distinct message once). Default `console.warn`. */
     readonly warn?: (message: string) => void;
+    /** A label for the platform's GPU objects. Default the volume's name, or `GIVolume`. */
+    readonly label?: string;
+    /**
+     * Called once the platform, the technique and `ThreeGI` exist, before the
+     * start-up frames run: a host that shows progress (the technique's "warming
+     * up" and "warm-up passes" counters) or attaches debug views reads them
+     * from here. `start` still owns the frames until it resolves.
+     */
+    readonly onCreated?: (started: StartedGI) => void;
 }
 
 /** What `start` made; the volume keeps it. */
@@ -120,32 +147,28 @@ function camerasAt(volume: GIVolume): Camera {
     return camera;
 }
 
-async function runWarmUp(started: StartedGI, camera: Camera, budget: FrameBudget, settings: WarmUpSettings): Promise<void> {
-    const { platform, technique, threeGI } = started;
-    const probeCount = technique.field?.grid.probeCount ?? 0;
-    const targetHysteresis = technique.settings.hysteresis;
-    const startedAt = performance.now();
-    let probeUpdates = 0;
-    const passes = () => (probeCount > 0 ? probeUpdates / probeCount : settings.passes);
-    try {
-        while (passes() < settings.passes) {
-            for (let step = 0; step < WARM_UP_STEPS_PER_BATCH && passes() < settings.passes; step++) {
-                const completed = Math.floor(passes());
-                technique.settings.hysteresis = Math.min(targetHysteresis, completed / (completed + 1));
-                threeGI.budget = { units: Math.min(probeCount, technique.settings.maxProbesPerFrame) };
-                threeGI.update(camera, 0);
-                probeUpdates += technique.counters[PROBES_UPDATED_COUNTER] ?? 0;
-            }
-            await platform.device.queue.onSubmittedWorkDone();
-            const outOfTime = performance.now() - startedAt > settings.maxSeconds * 1000 && passes() >= settings.minPasses;
-            if (outOfTime) break;
-        }
-    } finally {
-        technique.settings.hysteresis = targetHysteresis;
-    }
+/** The warm-up options as the technique's settings. */
+function warmUpTechniqueSettings(warmUp: GIVolumeStartOptions['warmUp']): Pick<DDGISettingsInput, 'warmUpPasses' | 'warmUpMaxSeconds' | 'warmUpMinPasses'> {
+    if (warmUp === false) return { warmUpPasses: 0 };
+    const settings = { ...DEFAULT_WARM_UP, ...(typeof warmUp === 'object' ? warmUp : {}) };
+    return { warmUpPasses: settings.passes, warmUpMaxSeconds: settings.maxSeconds, warmUpMinPasses: settings.minPasses };
+}
 
+/** Resolves in a later JavaScript task, after the browser has sent this task's WebGPU calls. */
+function nextTask(): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+/** The start-up frames (file comment): the technique's warm-up, then the calibration. */
+async function runStartUpFrames(started: StartedGI, camera: Camera, budget: FrameBudget, calibrate: boolean): Promise<void> {
+    const { platform, technique, threeGI } = started;
     threeGI.budget = budget;
-    if (!settings.calibrate) return;
+    for (let step = 1; technique.warmingUp && step <= WARM_UP_MAX_STEPS; step++) {
+        threeGI.update(camera, 0);
+        if (step % WARM_UP_STEPS_PER_BATCH === 0) await platform.device.queue.onSubmittedWorkDone();
+    }
+    await platform.device.queue.onSubmittedWorkDone();
+    if (!calibrate) return;
     const budgetCounter = `${technique.id} budget`;
     const queued: Promise<void>[] = [];
     for (let step = 0; step < CALIBRATION_MAX_STEPS; step++) {
@@ -161,6 +184,26 @@ async function runWarmUp(started: StartedGI, camera: Camera, budget: FrameBudget
     await Promise.all(queued);
 }
 
+/**
+ * `GIVolume.restart` ("start the probes over"): forgets the field and the
+ * calibration, then runs the start-up frames again (the warm-up, if the
+ * technique's `warmUpPasses` isn't 0, and the calibration). The render-time
+ * update is off meanwhile and comes back as it was.
+ */
+export async function restartVolume(volume: GIVolume, started: StartedGI, options: Pick<GIVolumeStartOptions, 'budget' | 'warmUp'> = {}): Promise<void> {
+    const { platform, threeGI } = started;
+    const updateOnRender = threeGI.updateOnRender;
+    threeGI.updateOnRender = false;
+    try {
+        platform.resetHistory();
+        platform.recalibrate();
+        const calibrate = typeof options.warmUp === 'object' ? options.warmUp.calibrate !== false : true;
+        await runStartUpFrames(started, camerasAt(volume), options.budget ?? threeGI.budget, calibrate);
+    } finally {
+        threeGI.updateOnRender = updateOnRender;
+    }
+}
+
 /** `GIVolume.start` (file comment). Throws `ThreeGILimitError` when the scene outgrows the device's limits. */
 export async function startVolume(volume: GIVolume, renderer: WebGPURenderer, scene: Scene, options: GIVolumeStartOptions = {}): Promise<StartedGI> {
     const backend = renderer.backend as unknown as { device?: GPUDevice };
@@ -170,15 +213,24 @@ export async function startVolume(volume: GIVolume, renderer: WebGPURenderer, sc
     if (volume.parent === null) scene.add(volume);
     scene.updateMatrixWorld();
 
-    const platform = createGI(device, { gpuTiming: device.features.has('timestamp-query'), label: volume.name || 'GIVolume' });
+    const platform = createGI(device, { gpuTiming: device.features.has('timestamp-query'), label: options.label ?? (volume.name || 'GIVolume') });
     let threeGI: ThreeGI | null = null;
     try {
-        const technique = platform.addTechnique(new DDGITechnique({ ...options.ddgi, volume: volume.ddgiVolume() }));
+        const technique = platform.addTechnique(new DDGITechnique({ ...options.ddgi, ...warmUpTechniqueSettings(options.warmUp), volume: volume.ddgiVolume() }));
         platform.setOutput(technique);
-        await platform.prepare();
+        // The scene is copied in while the kernels compile (T2.14): `prepare` asks for every
+        // compile at once, and the copy is CPU work on this thread, so the two overlap.
+        const preparing = platform.prepare();
+        // Its failure is thrown by the `await preparing` below; until then it isn't unhandled.
+        preparing.catch(() => {});
+        // Chrome sends WebGPU calls to its GPU process when the JavaScript task ends, so a
+        // long copy in this task would hold the compile requests back until it's done (NOTES).
+        await nextTask();
         threeGI = new ThreeGI(platform, scene, {
             // No probe work until the trees exist (file comment); the warm-up sets the real budget.
             budget: { paused: true },
+            // Copy the scene in while the kernels compile (three-gi.ts, T2.14).
+            preparing,
             volume,
             environment: options.environment,
             sky: options.sky,
@@ -187,9 +239,13 @@ export async function startVolume(volume: GIVolume, renderer: WebGPURenderer, sc
             // Switched on after the warm-up: a render loop already running must not add GI frames to it.
             updateOnRender: false,
         });
-        const started: StartedGI = { platform, technique, threeGI };
         const camera = camerasAt(volume);
-        // The first update copies the scene in and starts the tree builds; the second sends the finished trees.
+        // The scene copy, while the kernels compile (the platform isn't ready: no GI frame yet).
+        threeGI.update(camera, 0);
+        await preparing;
+        const started: StartedGI = { platform, technique, threeGI };
+        options.onCreated?.(started);
+        // The first GI frame uploads the scene and starts the tree builds; the one after them sends the finished trees.
         threeGI.update(camera, 0);
         await (platform as unknown as TreesBuiltSignal).rays?.whenBuilt?.();
         threeGI.update(camera, 0);
@@ -197,7 +253,8 @@ export async function startVolume(volume: GIVolume, renderer: WebGPURenderer, sc
         if (options.warmUp === false) {
             threeGI.budget = budget;
         } else {
-            await runWarmUp(started, camera, budget, { ...DEFAULT_WARM_UP, ...(typeof options.warmUp === 'object' ? options.warmUp : {}) });
+            const calibrate = typeof options.warmUp === 'object' ? options.warmUp.calibrate !== false : DEFAULT_WARM_UP.calibrate;
+            await runStartUpFrames(started, camera, budget, calibrate);
         }
         threeGI.updateOnRender = true;
         return started;

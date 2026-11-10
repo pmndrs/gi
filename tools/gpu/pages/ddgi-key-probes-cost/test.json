@@ -1,0 +1,5 @@
+{
+    "description": "T2.4c check 5 cost on Sponza (GPU-bound, the calibrated batch at 2 ms): ddgi/propagate does nothing on still frames, costs at most 0.1 ms after a sun turn, and during a 10-second day the update stays within Budget v2's +10%. A timing page: run it alone under the bench lock. Needs the Sponza download.",
+    "timeoutMs": 900000,
+    "manual": true
+}

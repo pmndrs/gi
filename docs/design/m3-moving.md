@@ -1,6 +1,6 @@
 # M3 design draft: moving objects and the camera
 
-Status: **draft for Dennis's review, 2026-11-05, revised after an Opus review and again after Dennis's answers the same day** (listed at the end). Apart from those answers, nothing here is decided. It is the input for M3's breakdown (the last task of M2) and, for the startup items DECISIONS moved to M2, for T1.11.
+Status: **approved by Dennis 2026-11-06 and merged into main.** Written 2026-11-05, revised after an Opus review and again after Dennis's answers the same day (listed at the end). It is the input for M3's breakdown (the last task of M2). Rigid moving objects (T3.1 and T3.4, rigid parts) and the startup lane (T2.12–T2.14) run in M2; see [TASKS.md](../../TASKS.md). Dennis also approved the H-PLOC rebuild on drift (section 3.1; DECISIONS 2026-11-06).
 
 It builds on [ddgi.md](ddgi.md), [bvh-framework.md](bvh-framework.md), [platform.md](../api/platform.md), [three.md](../api/three.md), the B1 hand-over (branch `bvh-b1`: `packages/bvh/README.md` and its PROGRESS entry) and the M2 draft, [m2-lights.md](m2-lights.md). M3 reuses M2's per-probe history and GPU scheduler (m2-lights.md section 4) for moved geometry; if M2 changes them, this page follows.
 
@@ -62,6 +62,8 @@ M3 adds:
 - **`setDeformedPositions`** as the contract says: a same-device `GPUBuffer`. Also a CPU `Float32Array`, which the platform uploads into its own buffer (Dennis: yes, 2026-11-05). *Why the CPU form:* three r187 gives no supported way to get at a GPU buffer it owns (section 7). It's a host-facing addition beside SPEC's tracing decision, which describes positions arriving "as a GPU buffer, so there's no rebuild and no CPU work", so the M1 lead records it in DECISIONS.
 - **A recompile counter** in `gi.stats`: compute pipelines created after `isReady`. The viewer shows it next to three's own program count. With T2.14, every kernel a configuration needs is compiled in `prepare`, so nothing compiles on first use and the counter means what it says.
 
+*As built (T2.M1, rigid parts):* `setTransforms`, `DirtyRegion.moved` (the farthest corner's travel, from a per-instance world frame) and `.instance` (the slot), and `GIStats.recompiles` (counted at a view of the host's device that the platform's own code and its techniques use, while `isReady`). `receivers`, `deformBounds` and `setDeformedPositions` stay M3. ddgi.md "Moving geometry" has the details and numbers.
+
 ## 2. Per-mesh trees: GPU first, tinybvh as the refinement
 
 ### 2.1 What exists
@@ -114,10 +116,18 @@ So Sponza lands near the 2 s target, with no margin: the 0.9 s not yet broken do
 
 The 1.2 s (Sponza) and 4.1 s (Bistro exterior) are JS loops on the main thread, one mesh at a time: octahedral normals, 16-bit indices, interleaving. A worker would still need the arrays copied in and the results copied back, followed by a `writeBuffer` from the main thread (the device lives there; the host owns it). The GPU can do the packing instead:
 
-- **Upload the raw arrays** (positions, normals, uvs and indices, as the host gave them) with `writeBuffer` into a staging buffer. At load this happens in one go. For meshes added later it happens a few meshes per frame, at most `uploadMsPerFrame` (default 4 ms) of main-thread time.
+- **Upload the raw arrays** (positions, normals, uvs and indices, as the host gave them) with `writeBuffer` into a staging buffer. At load this happens in one go. For meshes added later it happens a few meshes per frame, at most `uploadMsPerFrame` (default 4 ms) of main-thread time. *As built (T2.13):* there is no per-frame budget; a mesh added later is staged in its `createMesh` call and packed by the next `encode`.
 - **`gi/pack-mesh`** (compute, one thread per vertex, then one per triangle) writes octahedral normals, narrows indices to 16 bits where they all fit, and lays them out as `mesh-packing.ts` does today.
 - **The CPU packer stays as the test oracle.** Positions and indices must match it byte for byte; normals within one octahedral step (the GPU encodes in f32, the CPU in f64).
 - **The floor** is the raw copy itself. NOTES: reading 300 MB in JS takes about 110 ms on this laptop, so Sponza's ~180 MB of raw arrays costs about 60–100 ms of main-thread copying however it's done. The tinybvh worker's own copy adds to that.
+
+**As built (T2.13).** `gi/pack-mesh` (`platform/scene/pack-mesh-wgsl.ts`, `gpu-mesh-packing.ts`):
+
+- *When the copy happens:* `createMesh` and `updateMesh` write the host's arrays into staging buffers straight away, once `prepare` has asked for the kernel (`PlatformScene.prepareGpuPacking`, the first compile `prepare` asks for). So the host may still reuse its arrays after the call, and a scene copied in while preparing uploads alongside the compiles (DECISIONS 2026-11-08's revisit note). The next `encode` packs.
+- *One dispatch per staging buffer, not per mesh:* the CPU writes a job table, one job per part (copy, normals, narrow or widen), one thread per output word, and a thread finds its job by binary search. Parts already in packed form (positions, uvs, slots, indices of the right width) are copy jobs.
+- *The CPU packer stays,* split into `planMesh` (checks, box, layout and slot words, always on the CPU) and `packMeshWords` (the reference, and the fallback for a scene that never prepares and for a mesh too large to stage). The vertex buffer's layout is unchanged.
+- *Tree builders* get the scene's own copies of positions and indices (`UploadedMesh.geometry`, in the host's index type), made at `createMesh`, instead of views of packed words.
+- *What the estimate missed:* packing was not most of the main thread's copy time. Most of it was the three adapter's texture averages (texture-average.ts), and what is left after packing moves to the GPU is close to the floor above plus the checks. PROGRESS (T2.13) has the breakdown.
 
 ## 3. Deforming meshes (mesh-tree refit)
 
@@ -142,7 +152,7 @@ SPEC's tracing decision: deforming meshes "keep their BVH shape", refit every fr
 
 **Gaps for moving objects:**
 
-1. **Rebuilding a deforming mesh's tree when its refit drifts.** SPEC says deforming meshes keep their tree's shape, and section 3 planned no rebuilds. A sway stays near its rest pose, but a character's arm raised for a minute, or a cloth falling, doesn't. Proposal (needs a DECISIONS entry, since it departs from SPEC):
+1. **Rebuilding a deforming mesh's tree when its refit drifts.** SPEC says deforming meshes keep their tree's shape, and section 3 planned no rebuilds. A sway stays near its rest pose, but a character's arm raised for a minute, or a cloth falling, doesn't. Approved by Dennis 2026-11-06 (DECISIONS, `dyn-blas-rebuild`, recorded as an exception to SPEC):
    - **The signal:** with the CPU form of `setDeformedPositions` the CPU has the positions and can compute the relative cost itself, like the top level. With the GPU-buffer form it needs the refit's stats: one small asynchronous readback a few frames late. Dennis called readbacks a preference, not a rule ("prefer GPU-resident; read back when it clearly pays"), but DECISIONS still says no GPU readbacks by default, so this readback goes in the same DECISIONS entry.
    - **The rebuild:** past **1.1×** the built cost (a mesh tree is most of a ray's walk, unlike the top level, so its cost tracks trace speed closely; 1.1× matches the done-when below), rebuild that mesh's tree with H-PLOC on the GPU from the current positions, and swap it in when it's done, as the top level does. Scaling Sponza's 46.6 ms by triangle count, a 100,000-triangle mesh is roughly 1–2 ms with H-PLOC's fixed passes. At most one such rebuild starts per frame.
    - The swap needs the new tree's layout on the CPU for the refit (`GpuMeshRefit.setTree`). `readLayouts` gives it, also a readback, once per rebuild.
@@ -220,6 +230,8 @@ Off probes (inside geometry, or no surface nearby) trace their 32 fixed rays whe
 M3 changes one thing: **state 3 ends after 2 blended updates, not 1,** so a probe is used in shading only once it has at least two estimates. One noisy estimate is the pop SPEC forbids. Both off states are in the near set of any change that can free them, so they're scheduled at once.
 
 On → off (a cabinet pushed over a probe) stays immediate, as now; neighbouring probes fill in through the normal sampling weights.
+
+*As built (T2.M1):* state 3 ends after the second blended update (the history flag `warmedOnce`); a probe coming back on keeps the updates its move promised it, and off probes in a move's near set go first (`FREED_PROBE_URGENCY_SHARE` 16), so on two-room a probe freed by a moved crate is active again 3 frames later.
 
 ### 5.3 Moving receivers in empty space
 

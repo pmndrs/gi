@@ -1,0 +1,5 @@
+{
+    "description": "T2.4c on Sponza at the calibrated batch (316): key probes and propagation after a 30 degree sun turn (check 1: the view within 5% in 15 frames, the field in 120), the sun halved beside it, propagation alone with fine probes held (check 2: at least 60% of the change, for the sun turn and a sky dimming), the out-of-view fine probes' noise against far probes owe 2 (check 4), and the side-by-side image. Needs the Sponza download.",
+    "timeoutMs": 3600000,
+    "manual": true
+}

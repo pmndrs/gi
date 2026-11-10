@@ -21,6 +21,1083 @@ Rules:
 
 ---
 
+## 2026-11-09 · T2.10 review fixes: the up-to-date M2 table · lead (opus)
+Did: answered the Opus review of T2.10 (fail, 3 blocking points) by putting one up-to-date table here, on M2's final code (`m2-t2.10`, with T2.17 and T2.18), and recording the known misses in DECISIONS (on `m2`, 2026-11-09). This replaces the earlier T2.10 tables where they differ. RTX 3060 Laptop, headless Chrome 157, about 780–830 MHz (the Bistro rows: a fixed 1,200 MHz).
+| Target | Final number | Verdict |
+| --- | --- | --- |
+| Change shows next frame | two-room and Cornell 13–47% of the step in frame 1; Sponza's lamp 34–45% at 316 probes, 0.1% moving out at the calibrated 85 | met, except Sponza's lamp at 85 |
+| Within 5% in ≤ 30 frames | two-room halved 9, switched on 18; Cornell 5 / 8; Sponza's sun turn **15** (field 60; was 13 / 36 before T2.18); furnished room's sun step 11 / 17; Sponza's lamp 13 / 31 at 316, 50 / 42 at 85; **two-room's lamp leaving the lit room 145–166 frames or never** against its long-held level (37–44 against its 3 s hold) | met, except Sponza's lamp and two-room's lamp leaving (known misses, DECISIONS 2026-11-09) |
+| Update ≤ 2.0 ms | Cornell 1.94, two-room 1.94, Sponza 2.03 (inside the page's +10% calibration margin); the 60 frames after Sponza's turn 0.99× still (p95 1.05×, T2.18); Bistro with the texture cap: 2.19 ms at the floor of 120 probes (calibrated 52–73; the floor wins) | met; Bistro over by 9.5% because the floor wins |
+| Sampling ≤ 1.0 ms | 0.714 ms on the default path (at 1,380 MHz) | met |
+| ≥ 32 lights, no recompiles | 4,096 lights: 0; sessions on four scenes including Bistro capped: 0 | met |
+| Adapter ≤ 0.2 / 0.5 ms | Sponza 0.052 / 0.059, Bistro 0.091 / 0.103 (CPU only, unaffected by the overflow) | met |
+| Whole frame, 1440p, viewer path, GPU p50 / p95 GI on | Cornell 4.92 / 5.06, two-room 7.64 / 8.01, Sponza 21.07 / 21.28, Bistro capped 13.31 / 13.59 (GI off 5.33; at 1,200 MHz) | recorded |
+| Light grid at 2,048 cells ≤ 0.1 ms | 0.232 (0.198 after a ramp) | **missed** (known miss) |
+| Intel `ddgi-key-probes-sponza` | 16 and 18 against 15 at a fixed 316 probes (T2.18 used the margin) | **missed** (known miss; T3.15) |
+- **Superseded:** the uncapped Bistro rows of 2026-11-08 (GPU memory overflowing, T2.17) and the "Bistro broken" verdict; the Sponza turn's 13 / 36 and "over the budget" (before T2.18).
+- **The cold start** (1.439 s on this branch, 1.326 s before T2.14) is one run each, with the driver's shader cache not cleared, so the small difference is not a finding.
+- **H-PLOC against tinybvh on Bistro:** GPU trees alone trace at 0.981× tinybvh's time, and 1.016× after the swap. GPU trees are as good on Bistro too, so making the tinybvh swap optional is worth deciding in T3.2.
+- **Bistro's budget check** fails on the page's own rule: the batch changes when the platform learns the frame rate after about 1 s, so neither size gets 300 timed frames. That's a page issue, not cost; it goes to T3.14.
+Not verified: the M5 Pro (not set up); a Bistro response; the library's default composite with the update in the same frame.
+Next: Dennis agrees the known misses and answers the clock question (DECISIONS 2026-11-09). The fixed 1,200 MHz clock seen on 2026-11-09 was not set by us, and we left it alone.
+
+## 2026-11-09 · T2.10 review: Bistro exterior re-measured with the texture cap · gpu-tester (opus)
+Did: re-ran T2.10's Bistro exterior numbers with `VITE_DDGI_MAX_TEXTURE_SIZE=1024`, on `m2-t2.10` at 366dc0c (with T2.17 and T2.18). The RTX 3060 Laptop was nvidia/ampere, on headless Chrome 157.0.8103.38. Each run went under `bench-lock run`, one run per item, and all were VALID. `ddgi-session-recompiles` gained the same opt-in cap (1db6dc0, test page only). Rows are marked `note/t2.10_bistro_capped` in `timing.csv`, `baselines.csv` and `checks.csv` (066b495 and this commit). README now marks T2.10's uncapped Bistro rows as not to be used. Nothing in `packages/` changed.
+
+**Flags:**
+- **The clock was 1200 MHz in every sample, idle included** (P0 at idle; NOTES has the 2026-11-05 lock). It wasn't Chrome's usual 780 MHz, so these numbers compare with neither T2.10 nor T2.17.
+- **Another repo's `run-headless.mjs` denoiser timing captures were running, without our lock.** I saw them at 16:45, after my last run. The checks before each run read 0%, so overlap is possible but unproven. The whole frame's GPU-time spread between rounds was small (cv 0.003).
+
+| Item (capped, 1200 MHz, VALID) | Now | T2.10 uncapped (780 MHz) |
+| --- | --- | --- |
+| Start-up calibration | 52 probes (fixed 1.31 ms, spread 1.88). Other runs: 59 and 73 | 14-20 |
+| Budget section | **page FAIL**, "only 276 timed frames at the batch of 104" (as T2.17) | broken |
+| Its diagnosis run, at 59 / 118 probes | 1.95 / 2.18 ms median | |
+| 8 s ramp: recalibrated batch | 60; the budget ran the floor of 120 | 1 |
+| 8 s ramp: update ms | 2.19 median (p05 1.84, p95 2.55, +9.5%); PASS | |
+| Whole frame 1440p, GPU p50 / p95 | GI on 13.31 / 13.59; GI off 5.33 / 5.35; GI 8.00 [7.94, 8.05] | 19.2 / 20.3; 11.2 / 12.0 |
+| Whole frame 1440p, wall p50 / p95 | GI on 41.1 / 46.7; GI off 35.8 / 42.5 (both noisy, cv 0.2-0.6) | 545 / 683; 40 / 48 |
+| Session recompiles, groups on | 0 (control 1), 750 frames, page 62.7 s | 0, 35 s |
+
+**Diagnosis of the failure:** the batch doesn't hold steady for 300 timed frames. The budget section starts before the platform knows the frame rate, so the floor assumes 60 Hz. That gives 28,952 / 240 = 121 probes, capped at 2× the batch (118). After 1 s it learns about 312 Hz, the floor drops to 24, and the batch goes back to 59. Split 276 / 324, neither half reaches 300. The page check meets the floor's start; cost isn't the problem. Calibration scatter at small sizes (4 probes 0.29-2.0 ms) explains why the count moves (NOTES).
+Not verified: the Intel UHD; tree swap and adapter on Bistro, capped (README lists them as uncapped); a run at 780 MHz.
+Next (lead): whether the budget check should skip the first 1 s window, or let the floor learn the rate in start-up (a page or library choice, not made here). Find out who pinned the clock at 1200 MHz.
+
+## 2026-11-09 · T2.10 Intel UHD correctness run · gpu-tester (opus)
+Did: ran M1's still-scene checks plus M2's, T2.12's and T2.13's correctness pages on the Intel UHD (intel/gen-12lp, headless Chrome 157.0.8103.38). This is M2's final code (`m2-t2.10` at 1919130; later commits change only CSVs and docs). There were 18 runs of 1–4 pages, each under `bench-lock run --no-cool-wait`. Timings are not gated. Rows: `checks.csv` (`t2.10/...`, device `Intel UHD`, `note/t2.10_intel_batch`, `note/device_hung` on hung pages), `flicker.csv`, `trace.csv` (H-PLOC quick bench). No library code was changed.
+
+| Page | Result | Key number |
+| --- | --- | --- |
+| smoke, device, ddgi-furnace | pass | furnace E/π 0.4986 (worst point 3.8%) |
+| trace-oracle | pass | 0 rays slipped in all 8 variants (platform, GPU trees, mid-swap, refused) |
+| ddgi-leak | pass | two-room 0.83% (thin wall 0.59%, closed door 0.06%) |
+| accuracy, test view vs Cycles | pass | Cornell point +5.60%, two-room +4.95% (bar ±10%); Sponza raw +23.10% (RTX +23.14%, M1 +23.07%) |
+| ddgi-change-still | pass | atlas within 0.16% of M1, 0 probes marked |
+| ddgi-flicker | pass | Cornell 0.092% / p95 0.50% (2 ms budget, 150 probes); two-room 0.010% / 0.055% (98 probes) |
+| ddgi-session-recompiles, platform-recompiles | pass | 0 recompiles (control 1): Cornell and two-room, groups off and on; 4,096 lights 0 |
+| ddgi-light-groups | pass | vs re-converged within 0.007%; regroup within 1% by frame 8 |
+| ddgi-sun-layer | pass | vs re-converged within 0.005%; 6-layer cap within 0.012% |
+| hit-shading-many-lights (light grid) | pass | mean within 0.1%; 99.3–99.7% of points in tolerance (K = 1, 2, 4) |
+| ddgi-key-probes-sponza | **fail ×2** | view within 5% from frame **16**, re-run **18** (bar 15; RTX 15); field 54 (bar 120); hold removed 65% (sun) / 91% (sky) |
+| ddgi-key-probes-leak, mark-, propagate-reduction | pass | worst probe leak 0.75%; subgroup and fallback paths agree |
+| ddgi-warm-two-updates | **hung**, then pass alone | 0 probes active after 1 update, 642 after 2 |
+| tlas-oracle, trace-inline | pass; trace-inline **hung** once, then passed alone | 0 mismatches |
+| bvh-hploc, trace-bench-hploc-quick | pass | SAH vs reference within 0.27% (38 cases); trees agree 100% with tinybvh's |
+| ddgi-tree-swap (Sponza) | pass | atlas −0.002% across the swap, 0 recompiles; GPU build 4.48 s |
+| ddgi-trees-no-subgroups | pass | atlas +0.032% vs M1, all meshes on tinybvh |
+| scene-gpu-packing | pass | 0 wrong words on 8 scenes |
+
+Device hangs: **2 in 18 runs** (`DXGI_ERROR_DEVICE_HUNG`), both on the 4th page of a 4-page batch, and both passed alone (NOTES).
+Flags: another project's headless Chrome (`rt-headless-*`, not ours) held the RTX at 89 C and 100% use for the whole session. The laptop's GPUs share one cooler, so the Intel may have run warm. Sponza's key-probe miss is consistent across both runs (16, 18), not noise.
+Not run: `ddgi-change-step`, `ddgi-schedule-*`, `ddgi-direct`, `ddgi-feedback`, `ddgi-warmup`, `hit-shading-deferred` (not in the brief); Sponza flicker; Bistro scenes; anything timed.
+Next: lead decides whether the key-probe view bar (15 frames at 316 probes) applies to the Intel. Its frames come from the same fixed batch, so the miss is in the result, not in speed.
+
+## 2026-11-08 · T2.10 response follow-up: Sponza's lamp lit on native, exposure, brightness diagnosis · native-runner (opus)
+Did: the coordinator's follow-up to my "T2.10 response times" entry below.
+- **Correction to that entry:** native's Sponza arcade lamp lit nothing in those runs. The manifest's `range: 0` (three: no cut-off) became `radius=0`, which the harness reads as a hard cut-off, including in the probe trace. The 0.0–0.8% steps were the unlit lamp, not the view. Those rows are superseded (a `superseded` row per run).
+- **The fix (320ff31):** in `tools/native/native-lib.ps1`, a range of 0 becomes 10× the probe volume's diagonal (Sponza 480.44 m). The harness applies three's window `(1 − (d/r)⁴)²`, and at that radius it stays above 0.9998 anywhere in the scene. Cornell, two-room and closed-door inis come out the same as before; only Sponza's radius line changes.
+- **Exposure (0233355):** the `viewer-recording` page applies the scene's own exposure through `ViewerCore.setExposureEv`, as `viewer-app.ts` does, and records `exposureEv`. Two-room has none (0 EV), so its earlier pictures were right. The measured mean is read before exposure, so no number changed.
+- **`response.ts --set <name>`** puts the set name in the row path. The re-recorded set is `lamp_lit`.
+- **How I ran it:** I copied the fixed `native-lib.ps1` into t27 for the native runs, then restored t27's file. t27 is unchanged and the fork is unchanged.
+
+Verified (RTX 3060 Laptop):
+- Native: Vulkan, fork 350f9de, our grid (19,425 probes), texture sky. The new run's ini has `radius=480.4425`, and the lamp is 0.0000 cm from the manifest path on every frame.
+- Ours: Chrome 157 headless at 0233355; the pictures show the GI at +2 EV, with the lamp's light visible.
+- 3 runs each side plus 2 settle holds each side. Every run went through the bench lock.
+
+Numbers (`response.csv` `.../lamp_lit/run1-3`; first frame within 5% of the 3,600-frame settled level; median in brackets):
+
+| Sponza jump | native | ours |
+| --- | --- | --- |
+| 1, lamp x −2 → 4 (step +9.6–9.9% / +8.7–9.2%) | 62, 59, 61 (61) | 19, 11, 33 (19) |
+| 2, lamp 4 → −2 (step −4.9 to −5.1% / −7.5 to −8.8%) | 4, 2, 5 (4) | 1, 1, 9 (1) |
+| 3, lamp −2 → 4 (step +8.8–9.0% / +8.7–8.9%) | 50, 45, 44 (45) | 10, 21, 20 (20) |
+
+The steps are only about 9% of the whole view, so jump 2 sits near the 5% band and its frames mean little. Our overshoot is 8–43% of the step: our noise is a large share of a step this small.
+
+**Native's brightness diagnosis (one run, no fix):**
+- Set-up: Sponza at bookmark 1, still, our grid, 600 frames, `-CaptureFrames -CaptureField`. The arcade lamp was off, as in Cycles.
+- GI-only mean of red, green and blue (`ddgi.output`, `albedo / π × irradiance`):
+  - native, flat sky: 0.01172;
+  - native, texture sky: 0.01231;
+  - Cycles `cycles-gi.exr` at the same bookmark: 0.001525. That file is everything diffuse except the manifest lights' direct light.
+- So native is 7.7× Cycles with the flat sky and 8.1× with the texture sky. **The texture sky does not explain it:** the two skies differ by 5%.
+- One more number: native's direct diffuse (its G-buffer's `albedo / π × sun`) is 0.0410 against Cycles' direct 0.0140, 2.9× (close to π). So the sun may already arrive brighter on native, and the bounces would compound that.
+- Not settled. Recorded as found.
+
+Not verified: the cause of native's Sponza brightness. Whether a π in native's sun (lux as power) is the cause. The Intel UHD. Two-room's level gap: I measured it at 1.6× (ours 0.666, native 0.413, mean of red, green and blue, lamp in the room), not the 2.5× in the brief. NOTES records native's `1/max(d,1)²` falloff as a possible part, unmeasured.
+Next: the native sun-scale question (π or units in `EvaluateDirectionalLight` against three's and Cycles' sun), for the lead to assign. The fork is unchanged by this follow-up, so the push list doesn't grow.
+
+## 2026-11-08 · T2.17 Bistro exterior's slow GI-on frame · implementer (opus)
+Did: found the cause, which needs a design choice, so I'm reporting options instead of a fix. Branch `m2-t2.17`. Added an opt-in texture cap at load: `LoadSceneOptions.maxTextureSize` and `limitTextureSize` in `apps/viewer/src/scene/load-scene.ts`, used by `viewer-baselines` and `ddgi-batch-cost` through `VITE_DDGI_MAX_TEXTURE_SIZE`. Nothing changes unless it's set. Nothing in `packages/`.
+
+**Cause: the GPU runs out of memory.** three keeps Bistro's 224 textures of 2048² uncompressed, which is 5.11 GB (`renderer.info.memory`). The platform adds 621 MB, so the 6 GB card is full: dedicated memory sits at 5.8 GB, and system memory used by the GPU grows from 119 to 500 MB. Windows then moves memory in and out on every frame that runs the GI update. Evidence from the diagnosis runs (CPU spans, an `nvidia-smi` memory log and the Windows `GPU Adapter Memory` counters):
+- **The time is a wait, not CPU work:** three's CPU recording takes 23-30 ms, the GI update's CPU 0.4 ms, and the wait in `onSubmittedWorkDone` 430-660 ms. The timestamps add up to only 19-22 ms.
+- **Only frames with the GI update pay:** GI shading without the update takes 46-60 ms, the same as GI off.
+- **The texture cap removes it:** at 1024, three's textures take 1.44 GB and VRAM 2.87 GB.
+- **It's not one merge:** M2's platform memory grew from 360 to 621 MB (NOTES), and the frame grew with it. Bisected in a throwaway worktree, since removed: M1's end (49832d9) 103 ms wall, T2.3's merge (e2e8dcd) 286 ms, the branch tip 480-625 ms. Each of those VALID runs was 2 rounds × 10 frames.
+
+Numbers (`viewer-baselines`, 1440p, DDGI only, 5 × 20 frames, VALID, 780-787 MHz; `baselines.csv` `note/t2.17_bistro_frame`):
+
+| | GI-on wall p50 / p95 | GI-on GPU | GI-off wall |
+| --- | --- | --- | --- |
+| before (textures as loaded) | 517 / 690 ms | 21.8 ms | 52.2 ms |
+| after (textures capped at 1024) | 46.9 / 53.4 ms | 19.5 ms | 45.9 ms |
+
+The 27 ms left between wall and GPU time is three's CPU recording of 1,592 meshes. The page records, then waits, so the two add up, and GI off has the same gap.
+
+Calibrated probes (`ddgi-batch-cost` start-up and budget, VALID, 780-810 MHz; `timing.csv` `note/t2.17_bistro_calibration`): 116 as loaded (fixed 1.54 ms; the budget check then failed at 3.13 ms) and 35 capped (fixed 1.03 ms, fit spread 0.91; the page failed its own "only 280 timed frames" check). Memory doesn't explain T2.10's 14-20 probes. Bistro's calibration moves a lot between runs at 780 MHz with a fixed cost of 1-1.5 ms. That's still open.
+
+Verified: RTX 3060 Laptop, headless Chrome 157.0.8103.38. Typecheck and lint clean, 1,136 unit tests pass. `viewer-baselines` and `ddgi-batch-cost` PASS with their default scenes (correctness, `--no-cool-wait`), and `viewer-baselines` on Bistro passes capped and uncapped.
+Not verified: the viewer app with the cap (it isn't wired into the UI). How the capped Bistro looks. The Intel UHD. T2.12 and T2.13 as separate bisect points. Whether removing the doubling slack alone would be enough; probably not, since M1's 360 MB still took 103 ms.
+Next (lead):
+- **Pick a fix.** (a) A per-scene texture cap in the manifest, so Bistro loads at 1024 everywhere, the M5 Pro included. (b) Compressed textures (KTX2/BC7) in `fbx-to-glb.py`, about 1.3 GB at full size. (c) Leave it, record Bistro on 6 GB cards as a known miss, and time Bistro on the M5 Pro.
+- **Platform slack, about 237 MB on Bistro:** the scene vertex buffer is 176 MB for 88 MB used, tracer triangles 272 MB for about 136 MB, nodes 97 MB for 84 MB. Trim to fit once the scene settles. A library change, not done here.
+- **Re-measure every Bistro exterior GPU number with the cap,** including T2.10's 19.2 / 11.2 ms, its fixed cost and its probe counts.
+- **Bistro's calibration:** its spread and its 1-1.5 ms fixed cost at 780 MHz (relevant to T2.18).
+
+## 2026-11-08 · T2.18 review fixes · implementer (opus)
+Did (27a63e3):
+- The batch never goes under Budget v2's floor. It uses the rate the platform last asked about; under a units budget it uses the observed frame rate.
+- The intake ends `CHANGE_INTAKE_MAX_FRAMES` (120) after the latest mark, census or not.
+- Unit tests for the floor, the cap (with a census and with none) and `changeServing`.
+- `ddgi-key-probes-cost` judges the post-step median against the same run's still median (≤ 1.05×) and reports the p95 against the still p95.
+- DECISIONS lead-ruling entry; ddgi.md; CSV rows for 27a63e3.
+Verified (RTX 3060 Laptop, nvidia/ampere, Chrome 157, bench lock, all VALID, about 780 MHz): typecheck, lint, 1,147 unit tests.
+- `ddgi-key-probes-cost` passes: post-step median 2.083 against still 2.112 (0.986×); p95 2.50 against 2.37 (1.05×, reported). Calibrated 152; the first frames list 85-99, above the floor of 81; the day 2.16 / 2.44.
+- `ddgi-key-probes-sponza` turn: view frame 15, field 60.
+- `ddgi-sky-sun-step`: furnished room 11 / 17 (T2.4d's 11 / 17; 11 / 13 earlier today; bar 30).
+- `ddgi-session-recompiles` (Cornell and two-room, groups off and on): 0, control 1. `platform-recompiles`: 0.
+Not verified: the turn with the sun layer on. On this branch `ddgi-key-probes-sponza` has no option for it: `VITE_DDGI_SETTINGS` is applied after the field converges, and `sunLayer` only takes effect at `prepare`. T2.8's `VITE_DDGI_SUN_LAYER` isn't on this branch. Skipped as briefed, with no hook added.
+Next: M3 breakdown: count `gi/direct`'s lit hits in the second count's cost (the first ~12 frames after a turn; NOTES). After the merge onto `m2`, re-run the sun-layer turn with T2.8's `VITE_DDGI_SUN_LAYER=on`.
+
+## 2026-11-08 · T2.18 the second count after a single step · implementer (opus)
+Did: on `m2-t2.18` (from `m2-t2.10`), §4.5's smaller batch now also applies while a single change is taken in: from its mark until a census after its latest mark shows nothing owed. It applies only on volumes where a change outlasts `FAR_RULE_FRAMES` (Sponza, Bistro). Files: `packages/ddgi-core/src/techniques/ddgi/change-intake-batch.ts` (was `continuing-change.ts`) and its test, `ddgi-technique.ts` (`changeServing`, a census frame stamp, the "taking in a change" counter), `settings.ts` (`PROPAGATED_PROBE_RAYS`, `CHANGE_BATCH_MIN_SHARE`). The `ddgi-key-probes-cost` page now judges the 60 frames after the step and reports their first 20 frames pass by pass. Docs: ddgi.md, m2-lights.md, DECISIONS, NOTES. Commits 21f2462 (design), 3c93a29 (adjustment).
+Verified (RTX 3060 Laptop, nvidia/ampere, Chrome 157 headless, all under `bench-lock run`): lint, typecheck, unit tests (one asset-unpack test timed out in the full run under GPU load and passes alone). On 3c93a29: `ddgi-key-probes-cost` VALID with the p95 **failing** (below); `ddgi-key-probes-sponza` turn, `ddgi-sky-sun-step`, `ddgi-schedule-step` steps, `ddgi-session-recompiles` (Cornell and two-room, groups off and on: 0, control 1) and `platform-recompiles` (0) all pass.
+Numbers (rows `t2.18/key_probes_cost/...` in timing.csv, `response/t2.18/...` in response.csv; about 780 MHz):
+- Sponza, the 60 frames after a 30° sun turn: median **1.99 ms** (met), p95 **2.38** (bar 2.2, **missed**). Before (T2.10): 2.44 / 3.12. Still 2.02 at the calibrated 134; the step's batch median 81. Other runs of the same Sponza behaviour: 2.05 / 2.42 (VALID, still 2.05), 1.91 / 2.27 (VALID, still 1.98), 2.05 / 2.45 (NO VERDICT). Day 2.07 / 2.35.
+- Response at 316 a frame: the view within 5% from frame **15** (bar 15; was 13; 14 in the first build's run), the field from **60** (was 36; bar 120), every fine probe traced by 90 (was 60). Furnished room 11 / 13 (base, same day: 11 / 13), two-room 9 / 18, Cornell 5 / 8: unchanged.
+- The first build cut steps everywhere: the furnished room settled at 162 / 124 (bar 30). Hence the adjustment (DECISIONS, NOTES).
+Not verified: Intel UHD; Bistro (no response or step-cost page); a host without `gpuTiming` (no census, so the batch is the hand-out; unit-tested only); the platform's saturation guard seeing fewer, costlier units during a change (not looked at).
+Next:
+- **Lead:** the p95 miss. The first ~12 frames cost more than their rays (`gi/direct` lit hits +30-50%, trace per ray higher; NOTES). A further cut there costs the view's frame-15 bar, so I stopped per the brief. Options are in DECISIONS.
+- **Lead:** the step page's own 2.0 ms median bar sits at the still frames' level (still 1.98-2.05 across runs), so it passes or fails on the calibration's own spread.
+
+## 2026-11-08 · T2.10 M2 measurements on the RTX 3060 Laptop · gpu-tester (opus)
+Did: one run per gate under `bench-lock run`, on `m2-t2.10` (M2's final code). RTX 3060 Laptop (nvidia/ampere), headless Chrome 157.0.8103.38. Test-page additions only, nothing in `packages/`:
+- `ddgi-batch-cost` gained the staging peak and `VITE_DDGI_RAMP_SECONDS`;
+- `ddgi-key-probes-cost` gained `stepFirst60`;
+- `three-adapter-timing` gained `VITE_DDGI_ADAPTER_CHECK=set-transforms`;
+- `ddgi-sponza-lamp-step` gained `VITE_DDGI_UNITS`, and `ddgi-light-grid-cost` a ramp;
+- `tools/gpu/flatten-to-csv.ts` writes rows for pages without a to-csv.
+Rows: `timing.csv`, `response.csv`, `baselines.csv`, `shading.csv`, `three-composite.csv`, `flicker.csv`, `bvh.csv`, and the new `checks.csv`. Prefixes are `t2.10/...` and `batch_cost/...`, with a `note/t2.10_*` row.
+
+**Flag: the clock.** WebGPU runs held the RTX at 780-830 MHz under load. Only the saturated composite page reached 1,370 MHz, and native reached 1,650 MHz at the same hour. Chrome 156 runs on 11-06 read 1,800-1,900 MHz. Details are in NOTES. Everything below is VALID by the clock rule, but at about 0.45× the clock of M1's numbers. Budget v2 calibrates to that clock: Sponza gets 154 probes a frame, against T2.2's 640.
+
+| Target / owed item | Number | Verdict |
+| --- | --- | --- |
+| Change shows next frame | How far frame 1 moves the view, as a share of the brighter level (the full step in brackets). two-room halved 13% (50%), switched on 33% (100%). Cornell 23% (50%), 47% (100%). Sponza lamp at 316 probes: out 34% (52%), back 45% (52%). At the calibrated 85: out 0.1%, back 32%. Sponza sun turn: frame 1 is already within 5.4% of settled (step 41%) | met; **missed** for the Sponza lamp moving out at 85 |
+| Within 5% in ≤ 30 frames | two-room 9 / 18; Cornell 5 / 8; Sponza sun turn 13 (field 36), sun halved 1. Sponza lamp 13 / **31** at 316, **50 / 42** at 85 | met, except the Sponza lamp |
+| Update ≤ 2.0 ms | At load: Cornell 1.94 ms (826 probes), two-room 1.94 (477), Sponza 2.03 (154). After a ramp: Sponza 2.51 ms at 260 probes (the clock fell back). Bistro calibrates to **14-20 probes**, 1 after a ramp; its fixed cost is about 2 ms | met at load; **Bistro broken** |
+| Sampling ≤ 1.0 ms (1440p) | Default path 0.714 ms (1,380 MHz). T1.6's hello-forward Cornell case 1.65 ms at 780 MHz (0.86 ms scaled to 1,500 MHz; was 0.905) | met on the default path |
+| ≥ 32 lights, no recompiles | 4,096 lights: 0. Session on Cornell, two-room, Sponza (groups off and on) and Bistro (groups on): 0, control 1 | met |
+| Adapter ≤ 0.2 / 0.5 ms | Sponza 0.052 / 0.059 ms mean; Bistro 0.091 / 0.103 ms | met |
+| Whole frame, 1440p, viewer path (GPU ms, p50 / p95, GI on vs off) | Cornell 4.92 / 5.06 vs 1.02 / 1.02. two-room 7.64 / 8.01 vs 2.82 / 2.83. Sponza 21.07 / 21.28 vs 8.92 / 8.94 (GI per fragment adds 10.1 ms). Bistro 19.2 / 20.3 vs 11.2 / 12.0; **Bistro wall time 545 / 683 ms with GI, 40 / 48 off** | recorded |
+| M1 still checks | Leak 0.84% (thin wall 0.59%, closed door 0.06%). Furnace 0.4992. Accuracy: Cornell +5.66%, two-room +5.25%, Sponza raw +23.14% (M1 +23.07%). Fields within 0.17% of M1, 0 marks. Flicker: Cornell 0.074 / 0.33%, two-room 0.010 / 0.035%, Sponza 0.025 / 0.11% | pass |
+| Light grid, 2,048 cells ≤ 0.1 ms | 0.232 ms; 0.198 ms with a ramp (still about 800 MHz) | **missed** |
+| `sponza-candles` set-up ≤ 2× `sponza` | 11.85 s vs 7.41 s = 1.60× | met |
+| `setTransforms` × 10,000 in three frames | 1.40 ms median, p95 2.2 | met |
+| Update in the 60 frames after Sponza's turn | Median 2.44 ms, p95 3.12, at 136 probes. 51 of 52 timed frames are over 2 ms; still over at frame 59 | **over the budget** |
+| T2.14 check 1, cold Cornell ≤ 1.5 s | Branch 1.439 s; pre-T2.14 `m2` (4468ddf) 1.326 s | met |
+| Bistro groups on, leak, light groups (cool GPU) | Pass in 35 s, 42 s and 27 s; no page blocked | pass |
+| H-PLOC vs tinybvh, Bistro exterior | GPU trees alone 0.981×; after the swap 1.016× | recorded |
+| Bistro `scene_copy_cpu_ms` × 3 | 2,723 / 1,862 / 1,636 ms, median 1,862 | recorded |
+| Staging-buffer peak | Sponza 197.1 MB, Bistro 130.0 MB | recorded |
+
+Not verified:
+- Bistro response: no page measures it.
+- Any timing with the clock up, except the composite page.
+- The cold start ran with a fresh browser profile, but the driver's shader cache was not cleared, and other processes (java) used about 18% of the CPU.
+- Intel UHD: skipped, as briefed.
+- The sweep's look: left to Dennis.
+
+Next:
+- **Lead:** the clock flag, since it decides every GPU-bound verdict.
+- **Lead:** Bistro's fixed update cost (`ddgi/trace` takes 1.2-1.5 ms at 16 probes). Bistro's GI-on wall time of 545 ms is CPU-side and not the adapter; its cause is not found.
+- **Lead:** the 60 frames after a step are over budget, which per TASKS means §4.5's second count is built for single steps.
+- **Missing:** a page that times the default composite path with the update running in the same frame. The viewer shades GI per fragment with MSAA (NOTES).
+- **Missing:** a Bistro response page.
+
+## 2026-11-08 · T2.10 response times, ours and native · native-runner (opus)
+Did: recorded the same manifest motions on both sides, 3 runs each, and measured them with one script. These are records, not gates (Dennis 2026-11-05).
+- `tools/native/response.ts` now also reads our viewer recordings (rows `response/ours/...`). It measures sweeps too and takes `--against`, `--commit` and `--device`. `response.test.ts` covers the two new measures.
+- `viewer-recording` page: `VITE_DDGI_SETTLE_KEY` (hold the lamp at a key for 3,600 frames, then record 61, no pictures; the same as native's `-SettleKey`), `VITE_DDGI_TAG`, and the browser in `recording.json`.
+- **"Settled" means the same on both sides:** the lamp held at the new place for 3,600 frames, then the mean of the next 61 frames.
+- **The sweep measure:** the lamp goes out and back along one path, so at time t and at the end minus t it is in the same place. A view running d frames late reads on the way back what it read on the way out 2d frames later. The lag is half the shift that best lines the two halves up. Against the other side, each curve is taken as a share of its own start.
+
+Verified: RTX 3060 Laptop. Native on Vulkan, fork 350f9de, our 1,071-probe grid (Sponza 19,425), run in the t27 worktree. Two-room used the flat sky, as T2.7 did; Sponza used `-Sky texture`, the sky file itself. Ours in headless Chrome 157 at c7af54c, at the viewer's 2 ms budget (two-room 455–482 probes a frame, Sponza 78–137), with frames 16.67–16.71 ms apart on average. Every run went through the bench lock. Native's lamp is 0.0000 cm from the manifest on every frame. Re-measured, native's T2.7 step rows come out the same (116/116/117). Measuring native by the mean of red, green and blue (our meter's weighting) instead of luminance gives the same frames. Tests, typecheck and lint pass.
+
+Numbers (`response.csv`, label `t2.10`; frames at 60 a second; native / ours, the 3 runs, median in brackets):
+
+| motion | measure | native | ours |
+| --- | --- | --- | --- |
+| two-room step, lamp back into the room | first frame within 5% of settled | 116, 116, 117 (116) | 14, 15, 15 (15) |
+| two-room step, lamp out (jump 1) | first frame within 5% | never in 180; +135% at frame 180 | 145, 161, 166 (161); +4.5–4.8% at 180 |
+| two-room step, lamp out (jump 3) | first frame within 5% | never; +134% at 180 | 156, never, never; +4.7–5.5% at 180 |
+| two-room sweep | lag behind its own path, frames | 58.40, 58.40, 58.45 (58.4, 0.97 s) | 29.40, 30.10, 28.45 (29.4, 0.49 s) |
+| two-room sweep | way out against way back, share of mean | 41.1%, 41.1%, 41.1% | 25.5%, 26.1%, 25.5% (25.5%) |
+| two-room sweep | ours against native: mean / largest gap, points of start; shift | | 10.0 / 22.1, 10.1 / 21.8, 10.8 / 22.3; ours 27.0, 26.3, 27.8 frames ahead |
+| Sponza step (arcade lamp) | size of the step in the view | 0.0–0.8% | 8.0–9.6% |
+| Sponza step, jump 1 | first frame within 5% | 1, 1, 1 (the step is inside the band) | 18, 13, 13 (13) |
+
+Found, not fixed:
+- **Our lamp-out tail.** Measured against the end of its own 3 s hold, our lamp-out jump is within 5% by frames 37–44. Against the long-hold level it stays about 4.5% above settled until frame 145 or later. The last few percent close slowly.
+- **Sponza is not like for like.** Our GI-only view mean is about 9× below native's (0.0016 against 0.0148), and our GI-only pictures are nearly black, while native's view is lit by the sun's bounce. So the lamp is about 10% of our view and under 1% of native's, and native's 5% measures say nothing here. The diagnosis stopped at the pictures (one look); no cause was found.
+
+Not verified: the Intel UHD. A watched (non-headless) Chrome. Native D3D12. Whether our Sponza GI level is right (above). Dennis judging the sweep side by side. Recordings stay git-ignored: ours in t210's `bench/recordings/viewer`, native's in t27's `native/build/recordings`.
+Next: the cause of our dark Sponza GI-only view against native (lead to assign). A Sponza step measured over a region near the lamp (the meter supports regions; response.ts doesn't yet). The fork push is still held for Dennis.
+
+## 2026-11-08 · T2.16 review and merge · lead (opus)
+Did: reviewed T2.16 and merged it into `m2`.
+- Updated the tables in `tools/reference/README.md` for the six re-rendered views: samples, parts, minutes and noise. Removed the stale dark-room row.
+- I'm accepting the three views at 3.05–3.22% GI per pixel without more renders. These are viewing references, judged by eye. Over 8 × 8 blocks every reference is now under 0.5%. Another 36 GPU minutes would move them about 0.1–0.2 points.
+Verified: I read the six `cycles.json` files the viewer loads. The samples, the OptiX device, the commit (c59a4a9, no uncommitted render changes) and the noise (GI and full image) match the gpu-tester's table.
+Not verified: I didn't open the viewer on these references, and I didn't measure the accuracy references, which T2.16 didn't touch.
+Next: none for T2.16.
+
+## 2026-11-08 · T2.16 · gpu-tester
+Did: re-rendered the six noisy viewing-only bookmarks with Cycles on the RTX 3060 Laptop (OptiX), 1920 x 1080, in parts with different seeds (one bench-lock hold per part, 3.5 to 9.5 minutes each), then `combine.ts` and `noise.ts`. Samples set from noise falling as 1/sqrt(samples). Old files are in `bench/references/<scene>/<camera>/old-t2.16/` (raw EXRs, jsons and the old denoised copies). The old `cycles-full-denoised.exr` was moved there, so the viewer now shows the raw (clean) full image. Accuracy references and Sponza's untextured set untouched. No library code changed.
+Verified: each `cycles.json` (the file the viewer reads for sample count and noise) holds the new values: samples, seeds, device OptiX RTX 3060 Laptop, noise from two of its parts. Did not take viewer screenshots; I read the JSON the viewer loads instead.
+Not verified / caveats: dark room is 3.1% (just over 3%) and the two Sponza views 3.05% and 3.22%, because I stopped near 45 GPU minutes. Many timing verdicts say INVALID (the card throttled to about 900 MHz); that affects minutes only, not the images. The dark room's old parts could not be reused (combine refuses parts from other commits), so it was re-rendered from scratch.
+Numbers (GI noise = mean relative error vs converged, per pixel; per 8 x 8 block in brackets; minutes = Cycles render seconds summed over parts):
+
+| view | old samples, noise | new samples, noise | minutes |
+| --- | --- | --- | --- |
+| point-light Cornell `inside-from-red-wall` | 1024, 9.80% (1.06%) | 3 x 4096 = 12288, 2.46% (0.30%) | 27.1 |
+| point-light Cornell `diagonal-to-the-red-wall` | 1024, 8.96% (0.87%) | 3 x 3584 = 10752, 2.24% (0.27%) | 23.7 |
+| two-room `dark-room-leak-view` | 4096, 6.20% (0.78%) | 8 x 2048 = 16384, 3.10% (0.39%) | 47.7 |
+| two-room `through-the-doorway` | 1024, 3.54% (0.41%) | 2 x 1024 = 2048, 2.34% (0.29%) | 7.3 |
+| textured Sponza `colonnade-from-the-floor` | 512, 14.42% (1.69%) | 9 x 1024 = 9216, 3.05% (0.40%) | 41.3 |
+| textured Sponza `upper-gallery` | 512, 14.03% (1.79%) | 9 x 1024 = 9216, 3.22% (0.42%) | 48.4 |
+
+Full-image noise per pixel is now 0.3 to 2.8% (dark room 2.77%, Cornell inside 1.63%). Seconds per sample over both renders: Cornell inside 0.13, doorway 0.21, dark room 0.17, Sponza 0.27 to 0.32.
+Next: for exactly 3% the dark room needs about one more 2048 part (about 6 min) and each Sponza view about three more 1024 parts (about 15 min). Otherwise 3.1 to 3.2% is within "about 3%". The README's noise table still lists the old values (the numbers now live in the jsons); update it when convenient.
+
+## 2026-11-08 · T2.8 part 1 review and merge · lead (opus)
+Did: An Opus review passed T2.8 with notes. I fixed the doc notes on the branch:
+- DECISIONS now says that any page loading through `ViewerCore` also gets the candle reach;
+- `giRange` goes to the M3 breakdown;
+- `three.md` tells hosts that move objects outside three's render to call `updateMatrixWorld()` after the move.
+I merged `m2` (T2.13) into the branch, then the branch into `m2`. T2.8 stays active for check 3 (the native compare page, after T2.7) and for Dennis to try the viewer by eye.
+
+Lead rulings:
+- Check 2 is judged on the RTX, on the jump back into the lit room. The Intel UHD is for correctness only, and on the jump out the room ends 10× darker, so neither method gets within 5% in 120 frames.
+- The meter's settled rule is accepted.
+- The candle reach is accepted as a viewer setting (`reach=0` gives exact lights).
+- Sponza's sun turn with the sun layer on is a known miss by one frame (16, 16, 13 against 15) and goes to the M3 breakdown.
+
+Verified:
+- Review (RTX 3060): `viewer-lighting` PASS (check 1 on two-room, Cornell and Sponza, 0 recompiles; controls 0 recompiles; check 2 15/15 against 15/15); `ddgi-session-recompiles` on two-room 0; 42 unit tests.
+- Me after merging `m2` into the branch: typecheck and lint clean, 1,123 unit tests pass; `viewer-lighting` PASS on the RTX (149 s, correctness run).
+
+Not verified: the Intel UHD after the merge; "62 of 62" hover help (no test counts it; the reviewer spot-checked 21); Dennis driving the viewer by eye.
+
+## 2026-11-08 · T2.8 part 2 review fixes · implementer (opus)
+Did: the Opus review's notes on the compare page.
+- **Real frame time** (`tools/gpu/pages/viewer-recording`): the JPEG encode ran inside the paced loop (each picture frame about 31 ms, the next 5 ms). Picture frames now only snapshot the canvas (`createImageBitmap`); the JPEGs are encoded after the run. Frames are paced on a fixed 60 Hz schedule, so a late frame doesn't push the rest back. `recording.json` records `frameIntervalMs` (median, mean, largest, after picture frames, others, how many over 25 ms). No ThreeGI frame-time option was used: the viewer gives none, and none was added.
+- **Correction to the entry below:** only the motion's clock is fixed (frame k = k / 60 s on both sides). Our DDGI ages its histories by the real time between frames; native's blend works per frame. The comments now say so (`recording.ts`, `compare-page.ts`, the recorder page, the viewer README).
+- `compare-shot.ts`: the sync check reads the frame each side's picture file is named after, and fails if the two differ by more than one picture step (4 frames). It also fails if a side's picture isn't the latest at or before its frame.
+- `compare-page.ts`:
+  - a picture that fails to load says "missing" in its side's readout and shows nothing;
+  - the frame readout uses `frameAt` with the recording's own frame rate;
+  - the empty `append()` is removed and the misplaced comment fixed;
+  - the note no longer writes "2 ms" (each caption gives the recording's own budget);
+  - when the grids differ, the captions say so (`gridNote` in `recording.ts`, tested).
+- `device` falls back to vendor, architecture and device when the description is empty.
+- **The sweep pair uses different probe grids:** native's sweep used its own `cells` grid (918 probes), ours DDGI's (1,071). Only the step has a native run on our grid (`-ddgi-run1`). A native sweep on our grid is T2.10's.
+Verified (RTX 3060, headless Chrome, under the lock): re-recorded both.
+- Sweep (434 probes a frame): frame interval median 17.3 ms, mean 16.67, largest 44.5; 10 of 624 over 25 ms. After picture frames the mean is 16.69 ms, others 16.66.
+- Step (434 a frame): median 17.8 ms, mean 16.68, largest 41.9; 15 of 720 over 25 ms. After picture frames 17.33 ms, others 16.46.
+- `compare-shot` passes on both. The sweep shows frame 180 with pictures from frame 180 on both sides, and the grid note in its captions. The step shows frame 217 with pictures from frame 216 on both sides, and no grid note. I looked at both screenshots.
+- lint, typecheck and tests pass. `bench-lock.test.ts` failed once in the full run (its GPU clock sampling, while another lane's Cycles render held the RTX) and passed alone.
+Not verified: the median sits above 16.7 ms because the browser's animation frame comes a few ms after the timer; the schedule keeps the mean at 1/60 s. The few long frames (up to 45 ms) were not traced to a cause.
+
+## 2026-11-08 · T2.8 part 2: the native compare page (check 3) · implementer (opus)
+Did: merged `m2-t2.7` into `m2-t2.8` (PROGRESS kept both sides, 120 = 118 + 119 − 117; the `native/rtxgi-ddgi` submodule left as the merge set it, not updated). New `apps/viewer/compare.html` (`src/compare/compare-page.ts`): our recording and native's of the same motion played together on the motion clock (frame k = k / 60 s), side by side, both GI-only brightness curves on one plot (relative to each start, or as measured), scrub bar, play/pause, speed, click-to-seek on the plot, hover help, and the note that native traces with hardware ray tracing and matching it is not a requirement. The dev server lists recordings at `/__recordings` (vite.config.ts: `native/build/recordings` and `bench/recordings/viewer`, or `DDGI_NATIVE_RECORDINGS` / `DDGI_VIEWER_RECORDINGS`). Ours come from `tools/gpu/pages/viewer-recording` (the viewer's own code: GI only, the meter's reading over the whole view each frame, native's fixed clock and 600-frame start, a JPEG every 4th frame) and `tools/native/save-viewer-recording.ts`. `apps/viewer/scripts/compare-shot.ts` checks the page headless. Pure parts (`recording.ts`, `pairs.ts`) unit-tested. `/bench/recordings/` git-ignored.
+Verified (RTX 3060, headless Chrome, under the lock): recorded two-room `light-sweep` (625 frames, 157 pictures, 400 probes a frame) and `light-step` (721 frames, 181 pictures, 466 a frame). The page loaded each with native's (`two-room-light-sweep`, `two-room-light-step-ddgi-run1`, copied from the t27 worktree into this one's git-ignored `native/build/recordings`), played 3 s and 3.6 s, and both sides stood at the same frame (180, 216) with pictures from the same frame; I looked at both screenshots: the lamps sit at the same place, the sweep's curves nearly overlap (88.1% and 88.4% of their starts at 3 s), and on the step ours falls within about 0.2 s while native, updating every probe at a fixed hysteresis, is still at 71% at 3.6 s. lint, typecheck, tests (1,132) pass.
+Not verified: by Dennis's eye; the Intel UHD; the page in a production build (it needs the dev server's recordings list). Native's pictures are the full picture (its recordings are `view: full`), ours GI only; the captions say so, the curves are GI-only on both.
+Next: native's GI-only pictures (`-View indirect`) if Dennis wants the pictures like for like; more scenes (Sponza's day) once both sides have them.
+
+## 2026-11-08 · T2.8 viewer controls for M2 (checks 1, 2, 4; check 3 waits for T2.7) · implementer (opus)
+Did (branch `m2-t2.8`, worktree `webgpu-ddgi-m2-t28`):
+- Viewer panel sections (`apps/viewer/src/ui/lighting-controls.ts`, `src/lighting/`): Lights (choose from a list or click a marker; three's `TransformControls` to move, and turn spots; on/off, brightness, colour, reach, cone, soft edge, shadows, GI group, put back), Light motions (play/stop the manifest's `light-sweep`/`light-step`), Time of day (hour, day, a 10-second day; turns DDGI's sun layer on, DDGI restarts once; `solar-position.ts`), Light groups (off/2/4, colour and dimmer per group and for the sky), Response meter (pick a region, measure a jump of a motion in GI only, plot, CSV). Every control has hover help (`help-text.ts`). Stats show `recompiles`. Links: `motion=`, `tod=hour,day`, `groups=`, `reach=`.
+- Markers and gizmo live in their own scene (`LoadedScene.helpers`), drawn after the main one: GI never sees them (NOTES). Lights the viewer moves update their world matrices at once (GI saw them a frame late; NOTES).
+- `sponza-candles`: three's `ClusteredLighting` with a 3 m reach per candle (`light.distance`, finer clusters; `scene-lighting.ts`); GI gets the same range (DECISIONS, for the lead).
+- Core: `continuing-change.ts` keeps a run through up to 4 unmarked frames (`CONTINUING_CHANGE_GAP_FRAMES`; 30 Hz host test). `manifest.ts` rejects a motion target naming no light or more than one (test).
+- New GPU page `tools/gpu/pages/viewer-lighting` (the viewer's own classes): motions, the controls' recompiles, and check 2.
+Verified (RTX 3060, Chrome headless, correctness runs): `viewer-lighting`: the sweep and step play on two-room, point-light Cornell and Sponza with the lamp on its script (0 m off) and GI following, recompiles 0 through every control (lamp edits, gizmo move, 2 groups and weights, Sponza time of day with the sun layer, a played day, the sun recoloured). Check 2: two-room `light-step` jump 2 (lamp back into the lit room), meter against the T2.4b procedure at the same probes a frame (within 5% from / for good from): 17/17 vs 17/17 (399 a frame), 8/8 vs 8/8 (611), 20/20 vs 21/21 (369, the final run on 4f3c0b3, which passed whole); jump 1 (out of the room) never within 5% in 120 frames on both (DECISIONS: why jump 2 is judged). Intel UHD (correctness): motions and controls pass on two-room and Cornell, recompiles 0; check 2 reads 13-15 against 17-19 at 80-93 probes a frame, curves within 1-2 points frame by frame (DECISIONS, for the lead). `sponza-candles` opens and runs (33 fps headless at 1280 x 720, ready in 17 s; was 2 fps and never ready). Unit tests for continuing change, motions, solar position, the response curve, the link.
+Not verified: Dennis driving it by eye (check 4's second half); the gizmo by mouse (headless runs pick by the list); VXGI and the upscaler don't draw the markers; Sponza's sun turn with the layer on misses (below).
+Numbers: Sponza key-probe sun turn, sun layer on (`ddgi-key-probes-sponza`, `VITE_DDGI_SUN_LAYER=on`, 3 runs): view within 5% for good from frames 16, 16, 13 (bar 15), field 36; layer off the same day 12, 11, 12. One diagnosis (the per-layer firefly clamp: clamp off still 15), no cause found, so no fix attempt (DECISIONS, for the lead).
+Next: the sun-layer excess near the view (a task of its own, DECISIONS); T2.8 check 3 (the native compare page) after T2.7; a `userData.giRange` if the lead wants GI's candles unranged; `sponza-candles`' calibration read 1-9 probes a frame in the viewer (fixed part 1.9-2.2 ms measured while three drew), for T2.10 to look at.
+
+## 2026-11-08 · T2.7 review fixes · native-runner (opus)
+Did: the fork's clock is now frame / `app.motionFrameRate` in double, not a float step (3d6cd8e). `motion.ts check` checks fixed-clock runs at frame / 60, worked out in TS (test added). New `play.ps1` options: `-Log` (a visible window on the wall clock, its own `-log` folder) and `-GridRule ddgi`. NOTES and README give native's blend rule, and warn that `lamp_halved` is a dimming, not the same event. **Found and fixed a texture-sky bug** (350f9de): each harness pass has its own descriptor set, so only the G-buffer had the sky images and probe misses read 0. The reviewer's lights-buffer cause was checked: not it, reverted.
+Verified (RTX 3060 Laptop, Vulkan, bench lock):
+- the watched `-Log` sweep: 0.0000 cm over 2,401 frames (14.5 s, frames 6 ms apart);
+- the fixed sweep: 0.0000 cm at frame / 60, logged clock within 0.033 µs;
+- the Sponza day re-recorded: sun 0.00000° off; dawn GI 6e-4, where before the fix it was 2e-8;
+- open-ground's probe GI with the texture sky is within 0.14% of its flat equivalent (it was 0 before);
+- `sky-check` still ok;
+- two-room default against c7d0162: 0.16–0.19%, the same as c7d0162 against itself;
+- tests, typecheck and lint pass.
+Numbers: `response.csv` `response/native/light-step/grid_ddgi/run1-3/*` (1,071 probes, settled from 3,600-frame holds). Lamp back: within 5% at frames 116–117. Lamp out: 135% above settled at frame 180. The old cells-grid rows got `grid_rule,cells` rows.
+Correction: the T2.7 entry below said open-ground had no GI with either sky; that was the descriptor bug plus a misread capture. Its Sponza day had no sky light in the probes; it is re-recorded (350f9de).
+Next: the fork push waits for Dennis. Recordings stay git-ignored.
+
+## 2026-11-08 · T2.7 native harness: motions, texture sky, animated sun · native-runner (opus)
+Did: fork branch `m2-t2.7` (`Motion.h/.cpp`; `GetSkyRadiance` in `Descriptors.hlsl` for probe, G-buffer and path-tracer misses; `LightingConsts`' padding carries the sky image; recording in `main.cpp`); `tools/native/motion.ts`, `response.ts`, `sky-check.ts`, `motion.test.ts`; `play.ps1 -Motion -Record -Sky -SettleKey -CaptureField`. All opt-in. Time: a fixed 1/60 s a frame when recording, the wall clock in a watched window (NOTES).
+Verified (RTX 3060 Laptop, Vulkan; built with VS 2022 17.10 / MSVC 19.40.33811, Windows SDK 10.0.22621.0, Vulkan SDK 1.3.283.0, CMake 3.24.0):
+- check 1: `play.ps1 -Scene two-room -Motion light-sweep -Record` puts the lamp 0.0000 cm from `motionState` over all 625 frames (`motion.ts check`); the step also 0.0000 cm over 721 frames, 3 runs.
+- check 2: `sky-check.ts` on open-ground: the G-buffer sky matches the file sampled in the same direction (mean 0.37/255, all pixels within 1.5); a mirrored map would be 38.8 off; below the horizon is black (the flat sky wasn't).
+- check 3: Sponza `-Motion time-of-day` (T2.4d's day): the sun is 0.00000° from the path on all 601 frames; 41 sky images blended; the GI-only mean rises from 2e-8 at 5° to 0.0125 at noon and falls again.
+- check 4: default config against c7d0162, `play.ps1 -Clean -CaptureFrames 600`: two-room 0.13–0.20% mean relative error (c7d0162 against itself 0.18–0.20%), open-ground 0.16% (0.29%); looked the same by eye. `pnpm typecheck` and the motion tests pass.
+Numbers: `bench/results/response.csv`, `response/native/light-step/run1-3/*` (558 rows). Lamp back into the room: within 5% from frame 131–132, every run. Lamp out: still 60% above settled at frame 180 (11x in its own frame). Settled levels come from 3,600-frame holds. The runs agree to 0.1%.
+Not verified: D3D12 (it builds; texture sky and recording are Vulkan only); the sky's effect on native probe GI (open-ground gives 0 GI with either sky, a pre-existing problem, NOTES); a watched wall-clock window (only recorded runs).
+Recordings (git-ignored, `native/build/recordings/`): `two-room-light-sweep`, `two-room-light-step-run1..3`, `sponza-time-of-day`. Each folder has `recording.json`, `frames.csv`, PNGs every 4th frame and a 15 fps `video.mp4`. The format is in `tools/native/README.md`, "Motions and recordings".
+Next: T2.8's compare page reads those folders; the lead decides whether to commit them (71 to 244 MB each) or the mp4 and CSV alone. The open-ground zero-GI cause goes to T2.10 or a native follow-up. Push the fork branch `m2-t2.7`.
+
+## 2026-11-08 · T2.13 review and merge · lead (opus)
+Did: The Opus review passed packing (done-when 2) and found the main-thread bar (done-when 1) missed. Under the timebox (one diagnosis, one fix attempt) I merged T2.13 as a known miss, since it is a clear gain. I fixed the review's doc notes on the branch (b2b6720):
+- `m3-moving.md`'s upload budget gets an as-built note;
+- DECISIONS' geometry-upload wording;
+- the proposed guard, now from a median of 3;
+- the NOTES normal counts.
+
+I kept the CPU-backed texture canvas (lead ruling). It also removed the stall that made the copy take 16–26 s while another process held the GPU. T2.13 is done.
+Verified:
+- Review: VALID post-merge set, RTX 3060, 61 °C start. `scene_copy_cpu_ms` 918 / 816 / 776 ms, median 816; before T2.13 it was 1,744 / 1,357 / 1,395.
+- T2.12's check 1 improved to 1.687 s median (it was 1.902).
+- Packing: 0 wrong words, normals at most 1 step off, on all procedural scenes, Sponza and Bistro exterior (RTX) and on the Intel UHD after the merge.
+- The T2.12 merge is safe by reading: the geometry uploads before tinybvh's transfer, and nothing reads a detached array. Its pages pass.
+- Recompiles 0 on Sponza and two-room.
+- Me on `m2` after the merge: typecheck clean, 1,111 unit tests pass.
+Not verified: the staging-buffer peak (estimated 188 MB, never measured); the packing fallbacks on a real GPU (fake GPU only); Bistro exterior's copy after the merge. These are in T2.10's and T2.11's lines.
+Known miss for Dennis: 816 ms against 150 on Sponza; Bistro exterior 2,478 ms against 200 (one run, before the merge). What's left is texture averages, the raw upload and the mesh checks that the contract keeps on the main thread. Recommendation: accept the miss, with guards from a median of 3 (about 1.0 s on Sponza; Bistro after 3 runs in T2.10). The options without a contract change (mip readback, H-PLOC from the staging buffers) go to the M3 breakdown.
+
+## 2026-11-08 · T2.13 `m2` merged (T2.12 in) · implementer (opus)
+Did: merged `m2` twice, 7c1e707 (merge 8d05d69) and cbf172d (merge 1cbfc04). PROGRESS, DECISIONS and `timing.csv` keep both sides: PROGRESS has 114 = 112 + 112 − 110 headings, then 115 = 114 + 113 − 112. In `ray-queries.ts`, T2.12's GPU first-tree requests and its tinybvh start now take `mesh.geometry`, and the top level takes `mesh.layout.bounds`; `packedGeometryView` is gone (d338682 drops its import). The order is kept and commented: the GPU build's `writeBuffer` copies `geometry` inside `build()`, before the tinybvh start transfers (detaches) the same arrays. `gi-platform.ts` merged cleanly.
+Verified (RTX 3060, Chrome 157, correctness, `--no-cool-wait`):
+- `ddgi-tree-swap`, `trace-oracle` and `scene-gpu-packing` pass on the procedural scenes. On Sponza: 449 meshes on GPU first trees, 0 refused, 0 wrong words, normals ≤ 1 step.
+- `ddgi-session-recompiles` on Sponza: 0 recompiles, control 1, groups off and on.
+- typecheck and lint clean; 1,111 unit tests pass.
+Not verified: the Intel UHD after the merge; `scene_copy_cpu_ms` after the merge (T2.12 changed the startup path; my VALID readings are from before it).
+Next: the lead's review and merge.
+
+## 2026-11-08 · T2.13 fix attempt on the missed bar, lead rulings applied · implementer (opus)
+Did: the one timeboxed attempt the lead asked for, on `m2-t2.13` (`m2` hadn't moved, so no merge). b7afa1d (CPU-backed texture canvas) is kept by lead ruling. Nothing from the attempt is in the code: both items proved impossible as asked.
+- (a) Asynchronous texture averages. Three temporary experiment pages, deleted, measured the main-thread time on three's own images (Sponza 55, Bistro 135):
+  - a resizing `createImageBitmap` resizes inside the call: 0.12-0.13 s and 0.80-0.84 s;
+  - cloning the bitmaps to a worker blocks the main thread: 0.4-0.54 s and 3.5-3.8 s in all;
+  - `copyExternalImageToTexture`: 0.38 s and 2.0 s in all.
+  The CPU canvas (0.16 s and 1.1 s) stays the cheapest, so the averages stay synchronous. The first GI frame uses the averages, as before.
+- (b) The tree builders' copies can't leave the main thread without a contract change: the host's arrays can't be transferred, and cloning copies. One copy, transferred to the worker, as built.
+Verified (RTX 3060, Chrome 157, correctness runs):
+- Albedo shift, CPU canvas against GPU canvas, linear averages: Sponza mean 0.07% (max 2.2%, one map), Bistro 0.04% (max 4.2%).
+- `ddgi-sponza-accuracy` indirect mean 0.00160352201 against 0.00160352200 with b7afa1d reverted in the working tree; full mean equal to 9 digits.
+- There is no Bistro accuracy page, so Bistro is judged by the albedo shift only.
+Not re-measured: `scene_copy_cpu_ms`. The code is unchanged since the VALID run at b7afa1d (Sponza 1,030 ms, Bistro exterior 2,478 ms; previous entry), and the rule is one VALID run per gate.
+Remaining stages (profile outside the compiles; the gate runs about 1.4-1.7× slower while compiling):
+- Sponza: raw upload 115-160 ms, checks 100-120, tree builders' copies 45-70, rest of the sync about 95, texture averages 160-300.
+- Bistro: texture averages about 1.1 s; raw upload, checks and copies about 175 ms; the rest of the sync not split out.
+Next: Dennis rules on the proposed bar in DECISIONS (≤ 1.1 s Sponza, ≤ 2.7 s Bistro exterior, as a regression guard). Going further needs host-facing changes (DECISIONS lists them).
+
+## 2026-11-08 · T2.13 scene copy: raw upload and GPU packing · implementer (opus)
+Did (branch `m2-t2.13` from 423fe75; 9f10ecc, b7afa1d, then docs):
+- `gi/pack-mesh` (`scene/pack-mesh-wgsl.ts`, `gpu-mesh-packing.ts`). After `prepare` asks for it (`PlatformScene.prepareGpuPacking`, first in `GIPlatformImpl.prepare`), `createMesh`/`updateMesh` stage the host's raw arrays with `writeBuffer` and `encode` packs them: one dispatch per staging buffer from a job table, timed as `gi/pack-mesh`.
+- `mesh-packing.ts` is split into `planMesh` (checks, box, layout; faster loops) and `packMeshWords` (reference and fallback). `UploadedMesh` carries `layout`, `vertexOffset` and `geometry`; `ray-queries.ts` uses `geometry`. The vertex buffer's layout is unchanged.
+- three adapter: texture averages through a CPU-backed canvas (b7afa1d, a separate commit for the lead's ruling).
+- Tests: `gpu-mesh-packing.test.ts`, where the fake device runs the kernel's CPU twin (`testing/pack-mesh-cpu.ts`). New GPU page `scene-gpu-packing`.
+Verified:
+- GPU packing matches the CPU packer, 0 wrong words and normals ≤ 1 step, on the RTX 3060 and the Intel UHD: all 8 procedural scenes and Sponza (5,632 of 3.1 M normals one step off). On the RTX also Bistro exterior, courtyard-tree and furnished-room.
+- Recompiles 0 (control 1): `ddgi-session-recompiles` on Cornell, two-room and Sponza with groups off and on, and `platform-recompiles` (RTX, Intel).
+- RTX: `scene-copy` passes. Intel: `scene-copy` and `ddgi-change-still` pass.
+- lint and typecheck clean; 1,102 unit tests pass.
+Numbers (VALID, `--cpu-timed`, RTX, `timing.csv` b7afa1d), `scene_copy_cpu_ms`: **Sponza 1,030 ms, Bistro exterior 2,478 ms, against ≤ 150 and ≤ 200: not met.** DECISIONS 2026-11-08 has why and a recommendation.
+- Profile (T2.13 temporary page, not during compiles): Sponza old path 1.37 s, new 0.73 s. The first GI frame's upload went from 154-247 ms to 9.5 ms.
+- What is left on Sponza: raw upload 115-160, checks 100-120, the tree builders' copies 45-70, the rest of the sync about 95, texture averages 290 ms.
+- Texture averages through the GPU canvas: Sponza 0.46-0.67 s, Bistro 4.25 s. Through the CPU canvas: 0.16 and 1.1 s.
+- `gi/pack-mesh` GPU time: Sponza 5.1 ms on the RTX (while another process used the GPU), 72 ms on the Intel.
+Not verified: accuracy pages after the texture change (`ddgi-sponza-accuracy`, the composite pages); the viewer by hand. Another project's renderer (`golden/driver.mjs`, outside our lock) kept the RTX near 100% for most of the session.
+Next: lead rulings (texture canvas; the missed bar). An async texture-average task (DECISIONS). T2.12 merge: `UploadedMesh` no longer has `packed`; use `mesh.geometry`, or read the vertex buffer at `vertexOffset`.
+
+## 2026-11-08 · T2.12 review and merge · lead (opus)
+Did: An Opus review passed T2.12 with notes. I sent the notes back to the implementer, who fixed them in b11de2a:
+- SPEC's "no extra submits and no readbacks" now applies frame after frame, with the one load-time build as the exception (DECISIONS, for Dennis to confirm).
+- The node-buffer headroom applies only when placing GPU trees.
+- Check 1 is judged in series.
+- The minor doc fixes.
+The implementer merged `m2` (T2.6b) into the branch and timed check 1. I read the SPEC change and the DECISIONS entries, then merged the branch into `m2`. T2.12 is done.
+Verified:
+- Check 1, RTX 3060, `--cpu-timed`, VALID (46 °C start): 2.437 / 1.866 / 1.902 s, median 1.902 s against 2.0. Of that, `prepare` takes 1.12 s, including the 1.10 s scene copy, which T2.13 is shrinking.
+- The review reproduced checks 2a, 3 and 4 and the recompile checks. It also found that the 16–23 s scene copies in the implementer's first runs were contention (GPU-backed texture averages waiting on another project's GPU job), not a regression: 1.39 s on the branch against 1.59 s on `m2`, quiet GPU.
+- Me on `m2` after the merge: typecheck and lint clean, 1,097 unit tests pass.
+Not verified: Intel UHD after the merges, and `ddgi-session-recompiles` beyond Sponza after the merge. Both are in T2.10's lines.
+Next: T2.13 merges after this and moves T2.12's `packedGeometryView` onto `mesh.geometry`. T2.10 measures H-PLOC alone on Bistro exterior, for the optional-swap proposal (lead: not yet).
+
+## 2026-11-08 · T2.12 review fixes, `m2` merged, check 1 timed · implementer (opus)
+Did (after the Opus review; b11de2a, 2de4893, merge 66f6653 of `m2` 423fe75):
+- **SPEC promise:** SPEC.md, platform.md and the code comments now say "no extra submits and no readbacks, frame after frame". At load, the first-tree build submits once and reads back a few words of stats per mesh. DECISIONS has this as a departure from SPEC, for Dennis to confirm, beside the accepted own-submit entry.
+- **Node headroom:** `GrowableStorage.grow` takes `headroom` per call, and only placing GPU trees asks for it (1/8, used when it is larger than doubling). The doc says exactly that. tinybvh-only growth is exact again: Sponza 194.0 MB, as M1. `AccelerationMemory.nodesInUse` added. Unit tests: storage growth; a GPU-tree jump gets headroom and tinybvh doesn't.
+- **Check 1:** judged in series, per the ruling. `GIVolume.start` can't compile three's materials for the host: hosts draw through their own passes and MRT targets, and `compileAsync` culls against its camera (NOTES). `ddgi-batch-cost` compiles in series by default; `VITE_DDGI_THREE_COMPILE=when-light-joins` gives the overlapped number. The DECISIONS entry is rewritten to the ruling.
+- **Decision (b)** is noted as accepted. The swap stays on (decision (d) ruling).
+- `ddgi-tree-swap` gains step 5, the natural swap: default options, frames until tinybvh is all in.
+- NOTES now gives −0.0019%, and `firstTreeBuilder` is in the platform.md revision.
+- Merge: PROGRESS, DECISIONS and platform.md kept both sides; `viewer-scene.ts` keeps `settings` and `meshTrees`. PROGRESS has 111 `## ` headings = 109 + 110 − 108, and no markers are left.
+
+Verified (RTX 3060, Chrome 157, bench lock; the machine quiet, CPU 17-34%, RTX idle at 46 C before each run):
+- **Check 1 met, VALID** (`--cpu-timed`, started at 46 C, 0% thermal in 71 loaded samples, 780 MHz). Sponza handoff to first GI drawn, cold, in series: 2.437 / 1.866 / 1.902 s, median **1.902 s** (bar 2.0).
+  - The median run's stages: `prepare` 1,122 ms (scene copy 1,099, compiles done 8 ms later), first GI frame 296, first trees 10 (GPU build 82 ms to its stats; 449 of 449 meshes on GPU trees), placing 42, first warm-up step 99, three's first GI frame 332 (its compile 316, in series).
+  - With the compile started when the light joins (one run, information only): **1.824 s**; the draw still waited 193 ms of the compile's 416.
+  - tinybvh's trees were all in 3.8-4.7 s after the handoff.
+  - Rows: `timing.csv` (2de4893, `note/timing_valid,1`). The earlier INVALID set (ac325fb) stays as the shared-GPU record.
+- **Post-merge `ddgi-tree-swap` on Sponza, VALID** (45 C, 0% thermal, 83 samples):
+  - swap frame −0.0019%, 0 recompiles;
+  - tree passes after the swap 0.980× tinybvh-only's, on GPU trees 1.018×;
+  - memory: tinybvh-only nodes 194.0 MB; held swap 216.9 MB (194.0 in use);
+  - **natural swap:** 410 trees swapped over 83 frames, 35 ms to 2.09 s after the first trees (39 small meshes took tinybvh's first). The node buffer stayed at **216.8 MB** (194.0 in use) and never doubled.
+- Post-merge `trace-oracle` passes (every variant, 0 rays slipped), and `ddgi-session-recompiles` on Sponza with groups off and on gives 0 recompiles, control 1.
+- lint, typecheck, 1,097 unit tests pass.
+
+Not verified: the Intel UHD after the merge (it passed before; the merge brought T2.6b's code); `ddgi-session-recompiles` on scenes other than Sponza after the merge.
+Next: none for T2.12 beyond the lead's review. T2.13 adapts `packedGeometryView` when it merges.
+
+## 2026-11-08 · T2.12 fast first GI: GPU H-PLOC trees at load, tinybvh swapped in · implementer (opus)
+Did (branch `m2-t2.12` from `m2` 536fe41; 4ca5355 … 3d0d909, then this entry):
+- `trace/gpu-mesh-trees.ts` (new): the scene's meshes, as first loaded, built with H-PLOC in one batch (split only if the device's buffers need it), in a command buffer the platform submits itself, then a stats readback (DECISIONS 2026-11-08). `trace/ray-queries.ts`: per-mesh tree states; usable GPU trees are copied into the shared buffers; tinybvh's tree replaces each as the worker finishes (one range and one mesh-table entry, no recompile). A mesh's first tree is whichever arrives first. Refused, too deep (> 47 levels) or too big: the mesh waits for tinybvh. Without subgroups, or if the H-PLOC kernels fail to compile: tinybvh only. `building` now means "first trees"; `refining`, `whenRefined()`, `meshTreeCounts`, `stats.counters['platform mesh trees']`. Tools: `GIPlatformImplOptions.meshTrees` (`gpuFirst`, `holdRefinements` with `releaseRefinements()`, `gpuMaxDepth`).
+- Start-up: the H-PLOC kernels are asked for in `prepare` with the rest, in one task (`GpuHplocBuilder.prepare` no longer waits for the scan's compile first); the top-level shape worker starts in `prepare`. The node buffer keeps an eighth free on a big jump: without it tinybvh's slightly larger trees doubled Sponza's to 386 MB.
+- Pages: `trace-oracle` gains `platform-gpu-trees`, `platform-mid-swap` and `platform-refused`; new `ddgi-tree-swap` (check 2) and `ddgi-trees-no-subgroups` (check 4); `ddgi-batch-cost` start-up reports T2.12's stages and starts three's GI material compile when the GI light joins, as a drawing host does (DECISIONS). Unit tests: `mesh-tree-swap.test.ts` (6), `growable-storage.test.ts` (2).
+
+Checks (RTX 3060 nvidia/ampere, Intel UHD gen-12lp; Chrome 157 headless; bench lock):
+| Check | Result | Clock |
+| --- | --- | --- |
+| 1. Sponza handoff to first GI drawn ≤ 2.0 s, cold, median of 3 | **NO VERDICT.** 35.96 / 37.69 / 17.16 s (tinybvh only 33.25 s): the scene copy alone took 16.3-22.8 s in every run, tinybvh-only too (T2.14: 1.89 s), because another project's capture held the RTX at 100% and 87-89 C outside our lock (NOTES) | INVALID, hot start 87 C |
+| 2a. Field mean across the swap frame ≤ 0.5% | **Met.** Sponza, 449 meshes swapped in one frame: −0.0019% (normal frames 0.0004-0.003%); 0 recompiles. Two-room −0.0007% on both GPUs | VALID (57 C start, 0% thermal, 86 loaded samples, 885 MHz) |
+| 2b. Trace speed after the swap within 5% of tinybvh-only (M1) | **Met.** Tree passes (`ddgi/trace` + `ddgi/gi-direct`, 512 probes) 1.024× tinybvh-only's, 6 rounds, order alternated | VALID (same run) |
+| 3. Oracle mid-swap and with refused trees, both GPUs | **Met.** On the final code (after 3d0d909), both GPUs: all four platform states (`platform` after the swap, `platform-gpu-trees`, `platform-mid-swap`, `platform-refused`) and the GPU-builder variants pass, 0 of 2 M shared-edge rays slipped (mid-swap 13 meshes on GPU trees and 3 on tinybvh's; refused 8 of 16) | correctness |
+| 4. No subgroups: tinybvh trees and GI | **Met.** `ddgi-trees-no-subgroups`: CPU top level, every mesh on tinybvh, Cornell atlas +0.032% from M1 on both GPUs, 0 recompiles; unit tests | correctness |
+
+Check 1, the stages after `prepare` (run 3, when the RTX was less contended; T1.9a's "0.9 s not broken down" is these plus three's compile): first GI frame (the scene's uploads, the GPU build's upload and submit, tinybvh's copies) 297 ms; until the first trees 153 ms (the GPU build took 222 ms from submit to stats; 439 meshes on GPU trees, 10 small ones from tinybvh); the frame that places them 123 ms; the first warm-up step 203 ms; three's GI material compile 499 ms, now alongside the trees (the draw waited 21 ms for it); the draw 47 ms. So 0.84 s from `prepare` resolved to the first frame drawn. `prepare` is the scene copy's CPU time (T2.14 VALID: 1.96 s, of which 0.04 s compile wait), so expect about 2.8 s at T2.14's copy and 1.9-2.1 s at T1.9's 0.85 s: check 1 needs T2.13 to have a margin. Rows: `timing.csv` (ac325fb, `run1`-`run4`, `note/timing_valid,0`).
+Final correctness run on both GPUs: `trace-oracle`, `tlas-oracle`, `trace-inline`, `ddgi-trees-no-subgroups`, `ddgi-change-still`, `platform-recompiles` and `ddgi-tree-swap` (two-room) pass. The RTX swap page first failed on two-room's speed bar (0.80× with the same trees: a 2 ms trace on a hot GPU), so the bar is now judged on Sponza only (the done-when's scene); two-room passes after that.
+Also: Sponza's GPU build 105-222 ms to its stats on a quiet GPU (8.4-9.8 s with the outside job). Acceleration memory with the GPU trees' outputs alive (one update): 1,159 MB (666 MB of them outputs; the build's scratch is freed at its readback); after the swap 493 MB, tinybvh-only 494 MB. `ddgi-session-recompiles` passes (0 recompiles, control 1) on Cornell, two-room and Sponza, groups off and on; `ddgi-change-still` within 0.16% of M1 on both GPUs; `platform-recompiles` passes. lint and typecheck pass; unit tests 1,086 pass, with `tools/assets/fetch.test.ts` timing out at 5 s under other agents' CPU load (43%) and passing alone (108).
+Not verified: check 1 (no VALID run; the lead's rule: no re-time on an INVALID shared-GPU reading); Bistro or any scene but Sponza for the trace ratio; the viewer by hand; the M5 Pro. Two earlier swap-timing runs were INVALID and the first had a bias (A always timed first read 0.93× with the same trees), fixed in 3d0d909 before the VALID run.
+Next:
+- Lead: one VALID cold Sponza start-up set on a quiet machine: `node tools/reference/bench-lock.ts run --cpu-timed --what "T2.12 check 1" -- pnpm test:gpu --gpu nvidia --filter ddgi-batch-cost` with `VITE_DDGI_SCENES=sponza VITE_DDGI_SECTIONS=startup`, three runs (fresh profile each).
+- Proposal for the lead: H-PLOC trees alone traced at 1.024× tinybvh-only's on Sponza (VALID), the same as after the swap (1.024×, same trees): the refinement buys nothing measurable there. Making it optional (`meshTreeRefinement: 'none'`) would save tinybvh's 2-5 s of worker CPU, its copies and the swap. Recommend checking one more scene (Bistro exterior) before changing the default.
+- T2.13: once the GPU packs the scene copy, the first-tree build could read the packed vertex buffer instead of its own upload (DECISIONS 2026-11-08). The scene copy (ThreeGI's sync before ready) took 10× longer while the GPU was saturated by another process, in tinybvh-only runs too; not investigated.
+- T2.14's "Revisit" (start the builds during `prepare`) wasn't done: the H-PLOC kernels are asked for in the same task as the rest, but the builds need the scene's upload, and on Sponza the copy, not the compile, is the long pole.
+- Shared files touched: `gi-platform.ts` (option, counters), `trace/ray-queries.ts`, `trace/growable-storage.ts`, `trace/top-level-gpu.ts` (worker in `prepare`), `contract/queries.ts` (a comment), `@pmndrs/bvh` `gpu-hploc.ts` and `gpu-radix-sort.ts` (compile order); pages `ddgi-batch-cost`, `ddgi-shared/viewer-scene.ts`, `trace-oracle`; not `platform-scene.ts` or `scene-copy.ts`.
+
+## 2026-11-08 · T2.6b review and merge · lead (opus)
+Did: An Opus review passed T2.6b with notes. I fixed the notes on the branch: `m2-lights.md` said "no run read VALID" (there is one VALID run, 1.055×), and its tables were stale (memory 20 MB, "on by default"); one WGSL spacing fix. I recorded the lead rulings in DECISIONS: `sunLayer` off by default, the first directional light is the sun, the memory over the estimate accepted. I merged `m2` (T2.14) into the branch; PROGRESS, DECISIONS and NOTES conflicts kept both sides, 109 headings = 108 + 106 − 105. Then I merged it into `m2`. T2.6b is done.
+Verified: review on the RTX 3060: checks 1 and 2 pass (check 2 re-run on bcb1af8 itself: identical atlas and views); the 6-layer cap passes; the full suite passes after the propagate fix a60cdca (51 pages). Me on the merged tree (RTX, correctness, `--no-cool-wait`): typecheck, lint and 1,088 unit tests pass; `ddgi-sun-layer` passes; `ddgi-session-recompiles` with the sun layer switched on (a temporary local edit, not committed) gives 0 recompiles and control 1 on Cornell, two-room and Sponza, light groups off and on.
+Not verified: check 3 not re-timed (the review's code reading agrees with 1.055×). Intel UHD not re-run after the merge.
+Correction to the implementer's entry below: Sponza's sun turn with the layer on is not "as with the sun layer off". The review's two runs settled the view at frames 16 and 13 (bar 15); with it off, 12. The field settles at 36 either way.
+Next: T2.8 checks Sponza's turn with the layer on (TASKS). T2.13 starts now; it was waiting for this merge because both touch the scene copy.
+
+## 2026-11-08 · T2.6b the sun layer · implementer (opus)
+Did (branch `m2-t2.6b-sun` from `m2` bcb1af8: a88f65f, a60cdca, docs):
+- Platform: `gi/direct` keeps the sun (the first directional light, light 0) apart at a white reference when a technique names a layer for it (`DirectLightFrame.sunLayer`, scratch header word 11). This goes through `giDirectSplitIrradiance` and `giDirectReachesSplit`, so a sun at intensity 0 still lists its hits. Also new: `SceneCopy.firstDirectionalLight`. The light choice and shadow rays stay shared, so T2.3's grid and T2.5's group split are unchanged.
+- DDGI: `settings.sunLayer`, off by default.
+  - The sun is the plan's last layer: 2 layers with groups off; the groups, the environment and the sun with groups (cap 6).
+  - Its weight is the sun's colour × intensity, times its group's weight.
+  - Marks: a change of the sun's colour, intensity or group marks nothing. A turn is judged at white. If the sun becomes another light, every probe is marked.
+  - The probe mean weighs the sun layer by the sun's light, in the blend and in propagation (`DdgiUniforms.sunLight`).
+- Pages:
+  - `ddgi-sun-layer` (suite): checks 1 and 2, the 6-layer cap, both reductions;
+  - `ddgi-light-groups-cost` takes `sun` and `4+sun`;
+  - `VITE_DDGI_SUN_LAYER=on` turns the sun layer on for every page built on `viewer-scene`.
+- Docs: DECISIONS (as built), NOTES (4), platform.md, three.md, m2-lights.md §6.1.
+
+Verified (RTX 3060 nvidia/ampere, Chrome headless, bench lock; correctness runs at 84–89 °C):
+1. **Check 1 met** (`ddgi-sun-layer`: the courtyard, 4,840 probes every frame, 600 frames).
+   - The sun goes to (1, 0.6, 0.35) × 1.5 in a frame with no updates. The views match a field re-converged at that sun within 0.002% (bar 1%), and moved 36–43% in that frame.
+   - History and layers byte-identical; 0 marks in that frame and in the 30 after; 1 full compose.
+2. **Check 2 met:** with the sun layer off, the field is `m2`'s to the last digit (atlas 0.230758261 and all 3 views; `m2` measured with the page's `off` section at bcb1af8).
+3. **Check 3 met, VALID retry:** 1.055× everything off per probe at 512 probes (bar 1.10), 1.094× at 256. The first try was INVALID (hot start; another project's golden-capture Chrome held the RTX at 100% outside the lock).
+
+Also verified:
+- A sun turn still re-traces, with the sun layer on:
+  - the furnished-room sun step passes, before and after a60cdca (view within 5% from frames 11 and 13, per pixel 2.9% / 3.8% at frame 15; T2.4d's review 11 and 14, 2.9% / 3.7%);
+  - Sponza's key-probe turn passes: view frame 13 (bar 15), field frame 36 (bar 120), as with the sun layer off (12 / 36). Before a60cdca it was 54: the propagate fix.
+- The 6-layer cap (4 groups, environment, sun) holds: after a sun change with group 0 halved, within 0.011% of a field converged that way. The fallback reductions and work list give the identical layered atlas.
+- Regressions:
+  - full RTX suite, 51 pages and both self-tests, before the propagate fix (leak 0.84%, still scenes 0 marks; `ddgi-light-groups` and `hit-shading-many-lights` included);
+  - Intel UHD: `ddgi-sun-layer` colour and cap at 200 frames (within 0.0034%), `ddgi-light-groups`, `hit-shading-many-lights`;
+  - lint, typecheck, unit tests 1,084 of 1,084 on the final tree. An earlier run had 1,083: `bench-lock.test.ts`'s nested run waits for a cool GPU and timed out on a hot one (NOTES).
+
+Not verified:
+- The full suite after a60cdca (re-run after it: `ddgi-sun-layer`, the furnished-room step, Sponza's turn). That fix changes only kernels with a sun layer; with it off the WGSL text is as before.
+- Check 2 on the Intel UHD (no `m2` baseline there).
+- The viewer by hand.
+
+Numbers:
+- Check 3 (VALID, SM 817 MHz median), Sponza at 512 probes: 4.951 → 5.222 ms. By pass: trace 2.600 → 2.722, gi-direct 1.923 → 2.004, blend 0.322 → 0.374, compose 0.023.
+- Memory:
+  - Sponza 58.0 → 93.4 MB (+35.5 MB, against §6.5's 20 MB, which counted the atlas tiles alone);
+  - courtyard 30.4 → 47.3 MB;
+  - 6 layers on the courtyard 104.8 MB.
+
+Next:
+- Lead and Dennis: the default for `sunLayer`. Recommend off until T2.8's time-of-day slider turns it on in the viewer; the design had it on.
+- The firefly clamp acts per layer, so a layer that starts dark is limited by its own old value. Nothing here showed it; watch it if a group or the sun settles slowly after a big step.
+- Tools: `bench-lock.test.ts`'s nested run should pass `--no-cool-wait`.
+- Shared files touched: `contract/{shade,scene-copy}.ts`, `scene/platform-scene.ts` (a getter), `shade/{wgsl,direct}.ts`, `ddgi-technique.ts`, `layout.ts` (uniform words 92–95), `settings.ts`, `light-groups.ts`, `mark-table.ts`, `wgsl/{blend,propagate,common}.ts`, `ddgi-shared/viewer-scene.ts`, `ddgi-light-groups-cost`.
+
+## 2026-11-08 · T2.14 review and merge · lead (opus)
+Did: An Opus review passed T2.14 with notes. The must-fix went back to the implementer, who fixed it in 741a713: a host that only uses `updateOnRender` got no GI light, and a forgotten `prepare` gave no error. The implementer also merged `m2` into `m2-t2.14`. I read the fix and merged it into `m2`. I also fixed `tools/reference/bench-lock.test.ts`: its nested-run test called `bench-lock run` without `--no-cool-wait`, so it waited for the real GPU to cool and timed out whenever the GPU was busy. T2.14 is done.
+Verified: on `m2` after the merge, typecheck and lint are clean and 1,081 unit tests pass (`bench-lock.test.ts` 37/37 after the fix). Review re-check on the RTX 3060: `ddgi-session-recompiles` counter 0 and control kernel 1 on 14 scenes, one scene per run, plus `sponza-candles` and the light grid on and off (implementer, after the merge). `platform-recompiles` passes.
+Not verified: check 1 (cold Cornell start) has no verdict: the CPU and GPU were busy, and the `m2` baseline of 1.00 s has no CSV row and an INVALID clock. It is owed to T2.10, as a cold run on a quiet machine with `VITE_DDGI_SECTIONS=startup,budget`. The reviewer saw `bistro-exterior` with light groups on block the page for 30 s twice under CPU load, and `ddgi-leak` and `ddgi-light-groups` time out on the hot, shared GPU; neither was reproduced or attributed. Intel UHD not re-run after the fixes.
+Next: T2.10 runs check 1 and re-runs the full suite on a cool GPU. Separately, `sponza-candles` with three drawing every frame blocks the page for 30 s; the page now runs it with `VITE_DDGI_RENDER_EVERY=0`. Three's lighting of 1,024 candles goes to T2.8.
+
+## 2026-11-08 · T2.14 review fixes and `m2` merge · implementer (opus)
+Did (branch `m2-t2.14`; 741a713, merge 13344d1 of `m2` bcb1af8, 784fa0e, fb4c0c4, then docs):
+- Must-fix: `ThreeGI` takes `prepare`'s promise as `preparing`. The GI light joins the scene when it resolves, so an `updateOnRender`-only host gets GI. A rejected `prepare` is thrown by the next `update`, with a warning. Without `preparing`, an unprepared platform is refused as before. `GIVolume.start` and `ddgi-batch-cost` pass it. Unit tests: refusal, copy-then-light, render-only host, rejection.
+- Should-fix: `encodeBatch` before any `prepare` throws `GINotReadyError('preparing')`; the `rayBatches` message stays for a prepared platform that wasn't asked (unit test).
+- Merged `m2`: PROGRESS and DECISIONS conflicts kept both blocks; 106 `## ` headings (102 base + 1 + 3), no markers left.
+- `ddgi-session-recompiles`: 12 point lights added and removed, so the light grid switches on and off mid-session; frames with `gi/light-grid` reported per step; `VITE_DDGI_RENDER_EVERY` (0 = no three draws).
+Verified (RTX 3060 nvidia/ampere, Chrome 157 headless, bench lock, correctness only):
+- `platform-recompiles` passes.
+- `ddgi-session-recompiles`, one scene per run, light groups off and on: counter 0 after every step and control kernel 1 on cornell-box, two-room, sponza and bistro-interior. The grid ran in the 12-light step on each (16-18 of 20 frames). Also on `sponza-candles` (grid in 23 of 24 steps), run without three's draws: with them the page stopped answering DevTools for 30 s (NOTES).
+- typecheck and lint pass. Unit tests: 1,080 pass. One fails: `bench-lock.test.ts`'s nested-run test, because the GPU was at 89 C and the test waits for it to cool. It fails the same way on the code before the change (NOTES).
+Not verified: check 1 (still owed to a cold Cornell run on a quiet machine); the Intel UHD after these fixes; the viewer by hand.
+Next: T2.8, `sponza-candles` drawn in three (the stall above).
+
+## 2026-11-07 · T2.14 compile only what's configured · implementer (opus)
+Did (branch `m2-t2.14` from `m2` 4468ddf; 5859876, 0dd91b6, 5e4e4c6, then this entry):
+- `rays.encodeBatch`'s two kernels compile in `prepare` only for a technique with `requirements.rayBatches` (contract `technique.ts`); tools that call it pass `GIPlatformImplOptions.rayBatches` (trace-oracle, tlas-oracle, platform-bench). Otherwise `encodeBatch` throws; it never compiles on first use. Top-level and batch kernels are asked for together (`ray-queries.ts`, `gi-platform.ts`).
+- Compile while uploading: `ThreeGI` may be made while the platform prepares (`update` copies the scene only; the light joins the scene once ready). `GIVolume.start` and `ddgi-batch-cost`'s startup call `prepare()`, let the task end (Chrome sends WebGPU calls then, NOTES), copy, then await.
+- New suite page `ddgi-session-recompiles`; unit tests (batch kernels on request only, ThreeGI before ready); three.md, platform.md, NOTES, DECISIONS (3 entries).
+Verified (RTX 3060 nvidia/ampere, Chrome 157 headless, bench lock):
+1. **Check 2 met.** `ddgi-session-recompiles`: counter 0 after every step, control kernel counts 1, light groups off and on, on 14 scenes (every manifest but `sponza-candles`: cornell-box, cornell-box-point, two-room, furnished-room, open-ground, closed-door, thin-wall, furnace-room, cabinet-row, sponza, sponza-full, courtyard-tree, bistro-interior, bistro-exterior). Intel UHD: cornell-box, two-room, open-ground, cornell-box-point and `platform-recompiles` pass.
+2. **Check 1 not judged: no VALID run.** Two runs of this code read NO VERDICT (3 and 1 loaded samples): first GI drawn 1.84 / 2.41 s from load, with the CPU 55-100% busy from other work (files 369 / 544 ms; `prepare` 980 / 1,280). The same page on `m2` 4468ddf at a quiet moment earlier: 1.00 s (files 183, `prepare` 565, trees 25, three's GI compile 187; INVALID clock). 24 pipelines compile now (no batch kernels).
+3. **Sponza, for the record** (VALID clock, CPU contended): handoff to first GI drawn 8.13 s against 2 s: `prepare` 1.96 s, which is the scene copy (1.89 s) with only 0.04 s of compiling left after it; uploads 0.35, trees 4.98, three's GI compile 0.69. Files 5.5 s. Rows: `timing.csv` (5859876).
+Regressions: full RTX suite 51 PASS plus self-tests (`spike-babylon` timed out once in it while the CPU was busy, passes alone); `ddgi-change-still` Cornell atlas 0.335474, 0 marks. lint, typecheck, 1,070 unit tests.
+Not verified: check 1 on a quiet CPU; the viewer by hand; `sponza-candles` (958 s set-up, T2.3's).
+Next: lead re-times check 1 on a quiet CPU (`VITE_DDGI_SECTIONS=startup,budget` gives the clock rule enough samples). T2.12/T2.13: ask for their kernels first and start the uploads and tree builds during `prepare` (trees still start after it). Hosts: three's GI material compile (0.19–0.69 s) could overlap the warm-up with `renderer.compileAsync` on the host's camera. Shared files: contract `technique.ts`, `queries.ts`; `gi-platform.ts`, `ray-queries.ts`, `three-gi.ts`, `volume-start.ts`; nothing in `shade/` or the light grid.
+
+## 2026-11-07 · T2.3 review and merge · M2 lead (opus)
+Did:
+- Opus review of T2.3 against its done-when: pass with notes. I fixed the review's two must-fixes on the branch (9c31731): `docs/api/platform.md` now names `lightGridShadowedLightsPerHit`, and the stale comments in `light-grid.ts` and `ddgi-light-grid-cost` are corrected.
+- Lead rulings in DECISIONS: check 2 is a known miss, sent to Dennis; checks 3 and 4 are merged with their VALID runs owed.
+- Merged `m2-t2.3` into `m2` with no conflicts and no stray markers.
+- TASKS: T2.3 done; T2.6b next; a T2.10 line for the owed runs.
+
+Verified (reviewer, RTX 3060 nvidia/ampere, bench lock, head 5bed4d3, correctness):
+- lint, typecheck, 1,077 unit tests (`fetch.test.ts` did not flake);
+- full suite: 52 pages pass, including `hit-shading-many-lights`, `ddgi-direct`, `ddgi-light-groups`, `hit-shading-deferred` and `ddgi-shading-compat`;
+- check 1 reproduced: mean −0.094 / +0.014 / −0.045% at K = 1 / 2 / 4, with 99.4 / 99.5 / 99.7% of points within 5%;
+- subgroup and fallback scans agree on 99.989% of picks (3 of 27,664).
+
+Lead, on the merged tree: lint, typecheck, 1,077 unit tests.
+
+Not verified:
+- No VALID timing. Every heavy run read INVALID: the thermal flag came up within seconds even from 45–48 °C (86% of samples in the reviewer's suite). The machine is on AC power with the Turbo plan; nothing was changed.
+- The Intel UHD was not re-run by the reviewer.
+- Sun-only Sponza's probe count was not re-checked.
+
+Numbers:
+- Check 2: 6.2 against 2.47 µs per probe, 2.2–2.5× (INVALID); Budget v2 calibrates 174 against 459 probes.
+- Check 3: 0.105–0.131 ms at 2,048 cells (INVALID); 1,024 cells 0.087 ms VALID, but check 1 fails there at 97.9%.
+- Check 4: 10.34 / 10.63 s against 8.18 s, 1.26–1.30× (INVALID). It was 958 s; the 420 s load was three's shader compile for 1,024 default lights on the test page.
+- The viewer's 2–3 fps on `sponza-candles` is three's clustered lighting: 431 ms with GI off.
+
+Next:
+- One VALID run each for checks 3 and 4, by a gpu-tester when the machine allows, or in T2.10.
+- `hit-shading-deferred`'s 12 lights now go through the grid, not the exact path.
+- The scan-agreement page should show that the disagreeing picks sit on a run boundary.
+
+## 2026-11-07 · T2.3 follow-up: check 2's diagnosis and one fix attempt, the timing runs, `m2` merged · implementer (opus)
+Did (`m2-t2.3` up to the PROGRESS commit; `m2` merged at 7e88933, PROGRESS and DECISIONS kept in full, the merge markers removed in bbd8226):
+- Check 2 diagnosis, temporary edits on `ddgi-light-grid-cost`: not a bug.
+  - Shadow rays stop at the light and at their first hit, and the candles are out of GI's rays.
+  - Ray length doesn't matter: tMax at 10% costs the same.
+  - Incoherent directions are about a third: one fixed direction took `gi/direct` from 1.9 to 1.27 ms.
+  - The rest is 1.4-1.9× as many hits needing a ray.
+- One fix attempt, a shadow-ray roulette against the ray's bounce light. Check 1 held, but it bought nothing on `sponza-candles` (6.15 against 5.65 µs), so it was taken out. DECISIONS 2026-11-07: a known miss at 2.2-2.5×.
+- `ddgi-light-grid-cost` now warms the field first. `hit-shading-many-lights` takes `VITE_DDGI_GRID_CELLS`.
+
+Verified (RTX, bench lock): check 1 at 1,024 cells fails (97.9% at K = 1), so the default stays 2,048. Lint and typecheck pass. Unit tests: 1,070 of 1,077 under another lane's CPU load (7 time-outs in tool tests). Run alone, 146 of 147 pass; the one left is `tools/assets/fetch.test.ts`, the known flaky test under load (TASKS, carried to M3), which this task doesn't touch.
+
+Not verified: VALID timings for checks 2 and 4, and check 3 at 2,048 cells. Every heavy run, including the retries after 13-15 minutes of cooling (45-48 °C starts), read INVALID: SW thermal slowdown in 60-100% of loaded samples (NOTES).
+
+Numbers:
+- Check 3 at 1,024 cells: build **0.087 ms**, the one VALID run.
+- Check 2 (INVALID): 6.19-6.28 against 2.47 µs per probe (warmed).
+- Check 4 (INVALID): 10.34 / 10.63 s against 8.18 s.
+
+Next: lead: one VALID run each for checks 3 and 4 at 2,048 cells when the RTX stops flagging thermal slowdown (gpu-tester).
+
+## 2026-11-07 · T2.3 many-light sampling: the light grid · implementer (opus)
+Did (branch `m2-t2.3`, cb35896..f5aaf53, `m2` with T2.5 merged in at e416a85):
+- The grid (`platform/shade/light-grid.ts`). `gi/light-grid` is a platform pass, run every unpaused frame with more than `exactLightLimit` (8) point and spot lights. It covers the scene's bounds with at most `lightGridMaxCells` (2,048) cubic cells. Every light is weighed per cell by an upper bound over the cell; each cell gets R = 16 systematic picks, stored as a `rgba32uint` texture in the hit-shading module (still no storage buffer).
+- At the hit (`shade/wgsl.ts`): ReGIR's second stage. The 16 picks are weighed with the real cosine and distance, then `lightGridShadowedLightsPerHit` (new, default 1) shadow rays go out by the exact path's systematic choice. Each light's contribution goes to its group (T2.5). `giDirectReaches` reads the picks too.
+- The build loads lights in tiles of 128 into workgroup memory for 16 cells. Its scan is subgroups first, with a serial fallback; a test runs both.
+- Settings `exactLightLimit`, `lightGridMaxCells`, `lightGridShadowedLightsPerHit` (contract, platform.md).
+- Pages: `hit-shading-many-lights` (check 1, in the suite) and `ddgi-light-grid-cost` (checks 2 and 3, manual). `ddgi-batch-cost` draws with the viewer's lighting and splits the load stage. `hit-shading-lights` keeps 12 lights on the exact path.
+- Docs: m2-lights.md as built, DECISIONS (6), NOTES (5).
+
+Verified (RTX 3060 nvidia/ampere, Chrome headless, bench lock for every run):
+- Check 1 met. 1,000 points, 1,024 frames against exhaustive. Mean −0.09 / +0.01 / −0.05% at K = 1 / 2 / 4; within 5%: 99.4 / 99.5 / 99.7% (bar 99%). The two scans agree on 99.989% of picks; no slot left unwritten. Intel UHD passes too.
+- Regressions: full RTX suite 51 pages, then `ddgi-shading-compat` after the texture fix; leak 0.84%, still scenes 0 marks. `ddgi-direct`, `hit-shading-deferred`, `ddgi-light-groups` and `ddgi-key-probes-sponza` pass on the merged code. Intel: `hit-shading-many-lights`, `hit-shading-deferred`, `hit-shading-lights` pass. Lint, typecheck, 1,077 unit tests.
+
+Not verified: no timing run was VALID. SW thermal slowdown stayed active even at 48-63 °C, and another lane was using the GPU. Two attempts read INVALID (73%, 100%), the rest INVALID or NO VERDICT. All timings below are information only.
+
+Numbers (information):
+- Check 2: per updated probe, `sponza-candles` K = 1: 4.18 µs; `sponza` 1.93 µs, so **2.2×** against a bar of 1.3×. K = 2: 7.9 µs; K = 4: 9.6 µs. Without its shadow rays `gi/direct` costs 0.13 ms at 512 probes (1.9 ms with them). Candle rays run at about 12 M/s against 60 M/s for the sun's.
+- Check 3: the build takes 0.105-0.131 ms at 2,048 cells (bar 0.1). At 1,024 cells 0.09 ms (dev); at 4,096 cells 0.19 ms.
+- Check 4: ready from load **10.35 s** against `sponza`'s 8.18 s, so 1.27× (bar 2×; T2.1: 958 s).
+  - The load stage is 2.58 s: fetch and parse 1.17, three compile 0.66, first draw 0.75.
+  - Then: trees 2.38 s, warm-up 3.04 s (16 passes), calibration 1.03 s to 174 probes a frame (`sponza` 459).
+  - T2.1's 420 s was this page compiling three's default lighting for 1,024 lights.
+- Viewer at 1280×720 (`viewer-baselines`): 431 ms a frame with GI off, 470 with GI. So the 2-3 fps is three's clustered lighting looping over 1,024 unranged candles in every pixel. DDGI is warmed 7.4 s after creation (was 399 s).
+
+Next:
+- Lead: check 2 is a real miss, not noise; it is shadow rays. Options are roulette on shadow rays, or accepting about 2×, which Budget v2 absorbs (174 against 459 probes).
+- Lead: checks 3 and 4 need one VALID run each on a cool machine (gpu-tester). If the build reads over 0.1 ms, 1,024 cells is the lever.
+- T2.8: three's candle lighting (a range for three's clustered lights only, or fewer candles drawn). DDGI's GI-on frame adds 33 ms there; not looked into.
+- Shared files touched: `contract/shade.ts`, `gi-platform.ts` (one call), `scene/platform-scene.ts` (a getter), `shade/wgsl.ts`, `shade/hit-shading.ts`, platform.md, m2-lights.md, `ddgi-batch-cost`, `hit-shading-lights`. Not touched: `direct.ts`, `ddgi-technique.ts`.
+
+## 2026-11-07 · T2.6b instant sky: the decision check fails, stopped as the rule says · implementer (opus)
+Did (branch `m2-t2.6b` from `m2` ccb2809; d26cb01, then docs):
+- Built only what check 1 needs, all off by default: the first-order sky transfer in `ddgi/blend` from the sky layer's own miss rays (3 transfer blocks after the layers, its own count in history bits 24-31; no extra rays, no workgroup memory), `ddgi/sky-nudge` (`wgsl/sky-nudge.ts`, before the trace in a sky-change frame) and `ddgi/write`'s sky mode, compose of every tile that frame, `ddgi/mark`'s residual share for nudged probes. Settings `instantSky`, `skyNudgeRescale`, `skyResidualShare`, and `sunLayer` (the layer plan only: no route in `gi/direct` yet). `instant-sky.ts` (constants, CPU twin), unit tests. Page `ddgi-instant-sky` (manual): sections `decision` and `ceiling`.
+- The sun route in `gi/direct` was not started (the rule stops the task first), so `platform/shade/*` is untouched.
+Verified (RTX 3060 nvidia/ampere, Chrome headless, bench lock, correctness runs; the sun 30° lower with `turnedSun`; the sun kept out of the image as one light group at weight 0, so the image is the sky layer alone):
+1. **Check 1 fails** (rule: ≥ 70% on both, bands 0-2). Removed in the step frame, per pixel of the GI-only view: furnished room `towards-the-window` **52.8%** with the bounce rescale, 9.7% direct part alone (the step moves the view 25.6%); Sponza bookmark 1 **35.6%** / 35.8% (45.6%); Sponza's whole field 51%, out of view 55%. DECISIONS 2026-11-07.
+2. Ceiling (the sky seen directly, every band, from fields traced with `bounceEnergy` 0): furnished room 9.0% of the change is seen directly, every band would remove 52.9% (the nudge as built 52.7%), so bands 0-4 can't reach 70% there; Sponza 94% seen directly, every band 89%, bands 0-2 36%.
+3. Gain (§6.5), view within 5%: furnished room frame 6 against 7 by re-tracing alone (field 24 / 24), Sponza 12 against 13 (field 1 / 12). Memory +12.1 MB furnished room, +37.2 MB Sponza (two-layer configuration).
+4. With everything off (the defaults): `ddgi-change-still` passes (Cornell atlas mean 0.335474, 0 marks) and `ddgi-light-groups` passes (RTX). `pnpm lint`, `pnpm typecheck`, `pnpm test` (1,079 tests) pass.
+Not verified: checks 2-6 and the Record items (stopped by the rule); bands 0-4 (no band count can pass on the furnished room); the full RTX suite and the other regressions the brief lists; the Intel UHD; timings (all runs were correctness runs; the clock rule read INVALID, nothing timed was judged). One combined two-scene run stopped with `DevTools call Runtime.evaluate timed out` after the furnished room (NOTES); the per-scene runs completed.
+Numbers: here and in DECISIONS 2026-11-07.
+Next:
+- Lead and Dennis: confirm dropping the instant sky (recommended: don't merge d26cb01; keep the branch as the record).
+- The sun layer is independent of it (Dennis 2026-11-05, decision 11): re-scope T2.6b to the sun layer, its route for directional lights in `gi/direct` (T2.3 is rewriting that loop: one sun light index, white reference, `giDirectReaches` must ignore the sun's intensity or a sun at 0 stops its layer updating) and the mark-table's sun exception. If it goes ahead from this branch, `light-groups.ts`'s plan (`sunLayer`, `lights` kind, `writeLayerWeights`'s sun weight) is already there.
+- Shared files touched: `ddgi-technique.ts`, `layout.ts` (uniform words 92-95, scratch and atlas blocks, nudge scratch), `settings.ts`, `light-groups.ts`, `wgsl/{blend,write,trace,mark,common}.ts`, `key-probes.test.ts`, `tools/gpu/pages/ddgi-shared/viewer-scene.ts` (a `settings` option). No `platform/` file.
+
+## 2026-11-07 · T2.5 review and merge · M2 lead (opus)
+Did:
+- Opus review of T2.5 against its done-when (m2-lights.md checks 1–4): pass with notes. One must-fix: a light changing group marked nothing. The implementer fixed it in c7223ac: the light is marked off in its old layer and on in its new one, with a unit test and a page check.
+- Lead ruling in DECISIONS (22bd0f3): check 2's cost is met by reading, not by the timing.
+- Merged `m2-t2.5` into `m2` with no conflicts. TASKS: T2.5 done, and a T2.6b line for the sun layer's route and the 6-layer cap.
+
+Verified:
+- Reviewer, RTX 3060 nvidia/ampere, Chrome 157, bench lock, correctness:
+  - lint, typecheck, 1,068 unit tests;
+  - full suite 51 PASS;
+  - check 1: within 0.002–0.003% of a field re-converged from scratch at three bookmarks, which moved 48% / 48% / 11% in their own frame; 0 marks; history and layers byte-identical;
+  - check 2: Cornell and the 0.97 run match `m2` exactly, and two-room's atlas differs in the 9th digit.
+- Implementer after the fix: a lamp moved from group 1 to 0 on two-room has every layer within 5% from frame 8 (0.8% at frame 30), on the RTX and the Intel UHD.
+- Lead, on the merged tree: lint, typecheck, 1,069 unit tests.
+
+Not verified: no re-timing. Check 3's single re-time on 03a972e stands: 1.23× two-room, 1.10× Sponza. The first build read 1.42× (two runs, 1.417 and 1.430) before the blend rewrite. Check 4 stands at 0.897 ms.
+
+Numbers:
+- Check 2 cost: +1.9% Sponza, +2.0% two-room. The two runs were at different clocks, and groups-off alone spreads about 5%, so the reading is "no measurable change at about ±5%".
+- Memory per extra layer: two-room 3.6 MB, Sponza 25.5 MB, plus one composed atlas. Sponza with 4 groups is +112 MB.
+
+Next:
+- T2.3 (running) must keep `giDirectGroupIrradiance`'s per-group split, and the ray-scratch header words 9–10 (`layers`, `groupLayers`). It merges `m2` before handing back.
+- T2.6b: the sun layer's route for directional lights in `gi/direct`; about 1.2 KB of workgroup headroom under the 6-layer cap.
+- T2.10: same-session A/B pairs for gates with bars under 5%.
+
+## 2026-11-07 · T2.5 light groups: layers, compose, weights, adapter API · implementer (opus)
+Did (branch `m2-t2.5`, 946c125..HEAD; `m2` cb35896 merged at 8152e48): `settings.lightGroups` (`light-groups.ts`: the layer plan, a layer per group plus the environment; weights live); layers side by side in the atlas (`layout.ts`); `ddgi/trace` reads every layer's bounce with one set of probe weights (`ddgiCornerWeight`, shared with renderers' `ddgiAccumulateField`); the ray scratch holds a result per layer and `gi/direct` adds each group's light into its layer (`giDirectGroupIrradiance`, `groupLayers`); blend, write and propagation per layer; new `ddgi/compose` (`wgsl/compose.ts`) into a composed atlas renderers sample; `setGroupWeight`/`setEnvironmentWeight` on the technique, `GIPlatform.outputTechnique`, `ThreeGI.setGroupWeight(group, color, intensity)`. Pages: `ddgi-light-groups` (suite), `ddgi-light-groups-cost` (manual). Docs: three.md, platform.md, m2-lights.md §5 as built, DECISIONS (3), NOTES.
+Verified (RTX 3060 nvidia/ampere, Chrome 157 headless; merged code):
+1. Check 1 (`ddgi-light-groups`, two-room, 2 groups, 900 frames): the weight change's own frame matches a field re-converged with the lamps dimmed/recoloured within 0.004% at all 3 bookmarks (bar 1%), and moved the image 48% / 48% / 11%. That frame: history and layers byte-identical, 0 marks, 1 full compose; 0 probes marked in the 30 frames after. Weights 1 against groups off: within 0.008%. Fallback reductions: identical field. Intel UHD (600 frames): the same, within 0.017%.
+2. Check 2: field with groups off equals `m2`'s (`ddgi-change-still`, same 8 digits on Cornell and two-room). Cost: no measurable change, at about ±5% resolution. One VALID run each on `m2` (cb35896; its JSON was labelled `8152e48-dirty` by the runner, corrected) and the branch, at different clocks (2,025 / 1,879 MHz), not normalised; groups-off runs alone spread about 5%. Read at 512 probes: Sponza +1.9%, two-room +2.0% (at 256: +0.3% / −13%). Not re-timed.
+3. Check 3 (VALID, 51 °C, 0% throttled), per probe at 512: 4 groups Sponza 1.10×, two-room 1.23×; 2 groups 1.05× / 1.04× (bar 1.4). The first VALID run, before the blend change, was 1.15× / 1.42×.
+4. Check 4 (`ddgi-shading-timing`, VALID): GI sampling 0.897 ms at 1440p (bar 1.0; T1.6 0.905).
+Regressions: full RTX suite 50 pages + self-tests pass (furnace E/π 0.4992, leak 0.84%, still scenes 0 marks); `ddgi-key-probes-sponza` view frame 12, field frame 36; door recall 91%; cabinet passes. Intel: change-still, furnace (0.4986). lint, typecheck, 1,068 unit tests.
+Numbers, memory per extra layer: two-room 3.6 MB, Cornell 5.8, furnished room 14.5, Sponza 25.5 (+ composed 0.55 / 0.88 / 2.6 / 9.9 MB); Sponza DDGI 58 MB off, 119 MB with 2 groups, 170 MB with 4. Compose 0.011-0.015 ms a frame.
+Not verified: the viewer by hand (T2.8 adds the sliders); Bistro and the furnished room's costs; `ThreeGI.setGroupWeight` on a GPU (unit-tested only). Cornell and furnished-room memory are computed from the measured per-layer parts, not allocated.
+Review fixes (after the lead's notes; correctness only, RTX and Intel): a light whose group change moves it to another layer is now marked as switched off in the old layer and on in the new one (`mark-table.ts` `byLayer`; unit test). `ddgi-light-groups` check 5 moves room B's lamp from group 1 to 0: every layer within 5% of a field converged that way from frame 8 (0.8% at frame 30; 1,928 probes marked), RTX and Intel. The blend refuses more than 6 layers with a clear error where it is set up (unit test); stale comments fixed (`blend.ts`, `settings.ts` now gives the measured +112 MB on Sponza with 4 groups); NOTES line for T2.6b. Re-run: `ddgi-light-groups`, `ddgi-change-still`, `ddgi-mark-reduction` pass (RTX); `ddgi-light-groups` (Intel); lint, typecheck, unit tests.
+Next: T2.6b adds the sun as a layer kind and a route for directional lights in `gi/direct` (`groupLayers` routes by group today); at most 6 layers fit the blend's workgroup memory (about 1.2 KB left). Most of a layer's memory is the ray results sized for the 4,096-probe warm-up batch. Shared files: `ddgi-technique.ts`, `layout.ts`, `settings.ts` (one field), `wgsl/blend.ts`, `wgsl/write.ts`, `wgsl/propagate.ts`, `wgsl/trace.ts`, `wgsl/sample.ts`, `platform/shade/direct.ts` and `wgsl.ts` (T2.3 works there), contract `shade.ts`/`technique.ts`/`platform.ts`, `gi-platform.ts`, `three-gi.ts`.
+
+## 2026-11-06 · T2.4d review and merge · M2 lead (opus)
+Did:
+- Opus review of T2.4d against its done-when (TASKS): pass with notes, no must-fix. It ran inside Dennis's timebox ("let's not spend forever on it"): one diagnosis, one fix per miss.
+- Merged `m2-t2.4d` into `m2` (1e791b5). PROGRESS and DECISIONS conflicted, text only; both sides kept (98 headings = 97 + 96 − 95). The T2.4d DECISIONS entries are marked accepted.
+- TASKS: T2.4d done; a T2.8 line for 30 Hz hosts.
+
+Verified (reviewer, RTX 3060 nvidia/ampere, Chrome 157, bench lock, one run at a time, not timed):
+- lint, typecheck, 1,016 unit tests;
+- the full suite: 48 pages plus 2 self-tests, two-room leak 0.84%, still scenes mark 0;
+- furnished-room sun step: frames 11 / 14; per pixel 2.9% / 3.7% at 0.5 s and 1.4% / 1.8% at 3 s;
+- Sponza: view frame 12, field frame 36, sun halved from frame 1;
+- step page: two-room 9/17, Cornell 5/8, the sweep passes;
+- cabinet settled at frame 2; door leak 0.01% once closed.
+
+Lead, on the merged tree: lint, typecheck, 1,056 unit tests.
+
+Not verified: flicker was not re-run by the reviewer (the implementer's Cornell 0.094% stands). The Intel UHD after the merge. A lamp step on the furnished room: no page can do it without a code change.
+
+Numbers: the real day, one VALID run: median 1.98 ms, p95 2.30 ms. The margin is judged on the median (DECISIONS, T2.4c check 5), so it passes with 0.22 ms to spare. The first 45 frames after Sponza's big step run at 2.51 ms median (T2.10). T2.1's lamp jump back is at frame 31 against a bar of 30, with no overshoot (before: about 38 frames and 7–12.6%).
+
+Next:
+- Waiting is bounded at 30 frames from the mark, but the key-neighbour test ignores visibility, so a probe can wait the full 30 frames on keys behind a wall.
+- The second count doesn't subtract propagate's and mark's cost as §4.5 asks, and assumes cost follows rays (shown on the RTX only).
+- `continuing-change.ts:98`: one frame without a mark turns it off, so a 30 Hz host never turns it on (TASKS, T2.8).
+- Data race: `wgsl/schedule.ts:688` writes every probe's flags word, including keys whose flags other threads read. Harmless in practice, but the comment near line 640 says no thread writes it. Write the flag only when it changes, next time the scheduler is touched.
+- Add waiting probes to `ddgi-schedule-reduction`. Nothing tests the "all keys' full counts fit" rule (`ddgi-technique.ts:256`).
+- T2.1's far change for many unranged lights is served as global, so on key-path volumes every fine probe waits and those frames count as continuing. Watch this in T2.3.
+
+## 2026-11-06 · T2.1 review and merge · M2 lead (opus)
+Did:
+- Opus review of T2.1 against its done-when: pass with notes. The one must-fix was a valid timing for item 3. A gpu-tester ran it after Dennis's PC restart: VALID, met.
+- Lead rulings in DECISIONS (b498b5c on the branch, plus two on `m2`):
+  - the candle selection rule is confirmed;
+  - motion targets are named by label;
+  - from 9 unranged changes in a frame, the change goes global;
+  - item 3 is met;
+  - a new bar: `sponza-candles` ready from load in ≤ 2× `sponza`'s time.
+- Merged `m2-t2.1` into `m2` with no conflicts. Lint, typecheck and 1,052 unit tests pass.
+- TASKS: T2.1 done; new done-when lines for T2.3 (the set-up time) and T2.7 (motion label checks).
+
+Verified (reviewer, RTX 3060 nvidia/ampere, Chrome 156 headless, correctness):
+- the full suite, 48 pages plus 2 self-tests;
+- `platform-recompiles`: 4,096 lights (64 directional, 2,688 point, 1,344 spot), 0 recompiles, control 1;
+- `assets:fetch --verify-only` passes, and the main checkout's shared folder still verifies;
+- `ddgi-sponza-candles`: counts as claimed, still frames mark 0;
+- `ddgi-schedule-sponza`: lamp recall 98.4% / 98.9%.
+
+Nothing from the candle package is committed.
+
+Numbers:
+- Item 3, gpu-tester: `three-adapter-timing` on `sponza-candles`, still mode, DDGI paused, CPU-timed, both locks held, VALID (48 °C, 0% of 51 samples throttled). Median **0.10 ms**, p95 0.20 ms.
+- Mark with all candles changing: 0.074 ms. That is the implementer's VALID run; the reviewer's own run, 0.074–0.086 ms, was INVALID.
+- Sponza lamp on the key path, view moved 52%: lamp in, within 5% from frame 8, overshoot 0.4%; lamp jumped 6 m back, frame 38, overshoot 7–12.6% across runs.
+- Set-up, gpu-tester, `ddgi-batch-cost` startup, VALID: ready from load 958 s against 7.8 s for `sponza`. That splits into load files 420.6 s, warm-up 530.8 s (2.1 passes) and calibration 2.6 s at 1 probe.
+- Triangles: three 7,745,280; GI 5,746,338. 1,024 candles.
+
+Next:
+- T2.3: the set-up time (≤ 2× `sponza`), the 3 fps, and `gi/direct` with 1,024 lights.
+- T2.4d: record the lamp jumped 6 m back (38 frames, against a bar of 30).
+- The loader's motion-label check (TASKS, T2.7).
+- The viewer took 399 s to set up `sponza-candles`; that is a different measure from the 958 s.
+
+## 2026-11-06 · T2.1 light buffer v2, motions, sponza-candles · implementer (opus)
+Did (branch `m2-t2.1`, 3f5b9fc..HEAD, `m2` merged in at f388d75):
+- Platform: the light table starts at 64 (doubles; no shader changes). `ddgi/mark`'s table (mark-table.ts only, no WGSL): more than 8 unranged light changes a frame are folded (each exact within 2 spacings, one `everywhere` entry with a bound for the rest; DECISIONS).
+- three adapter: the light walk (first 64 and directional lights every frame, 64 more round robin, hot list, `markChanged`), `lightsPerFrame`, `userData.giCastsShadows`.
+- Scenes: manifest `motions` (format, validator, `motionState`; `light-sweep` and `light-step` in the 8 scenes with a lamp, a geometric clearance test; Sponza's off `arcade-lamp`); `light-set` parts and `settings`; `sponza-candles` (night, 1,024 candles of a stratified order, DECISIONS). Fetch tool: `node` convert steps, `tools/assets/convert/sponza-candles.ts`. Viewer: `?candles=N`, clustered lighting for many shadowless lights, off lights kept out (`offLights`; also the check page and native harness).
+- Pages: `platform-recompiles` (+4,096 lights), `ddgi-sponza-candles`, `ddgi-sponza-lamp-step` (manual), `three-adapter-timing` still-only mode. Docs: three.md, platform.md, m2-lights.md as built; DECISIONS (4), NOTES.
+Verified (RTX 3060 nvidia/ampere, Chrome 156 headless; correctness with `--no-cool-wait`):
+1. 4,096 lights (64 directional, 2,688 point, 1,344 spot) made and destroyed in random order with DDGI running: recompiles 0, control 1. Intel UHD too.
+2. Unit test: every `LightChanges` field of each type, one at a time and all together, through `SceneChanges.lights`.
+3. Adapter still frame on sponza-candles: median of 300 frames **0.10 ms** (the timer's step; mean 0.09-0.115, batched 0.014-0.021 ms) in 3 runs, but **no VALID run**: the clock rule read INVALID each time (thermal throttling 91%, 45%, 62% of loaded samples, the last with DDGI paused). See Next.
+4. `pnpm assets:fetch --only sponza-intel-candles`: licence approval, zip size and sha256, the convert step (10,000 lights, every copy within 2 µm), 4 outputs verified. Scene: 1,024 candles and lights in three and GI; three 7,745,280 triangles (2,000,896 candles); GI 5,746,338 mesh triangles (one candle mesh), 444 of 3,520 instances in GI's rays (the 3,072 candle instances left out).
+5. `ddgi/mark` with every candle changing at once, one VALID run (48 °C, 0% throttled): median **0.074 ms** (flicker 0.074, drift 0.074, off and on 0.073); per-light rule 0.0113 ms for 1, 0.0512 for 8, so about 5.8 ms for 1,024. Still frames: 0 marked.
+6. Sponza lamp step on the key path (two correctness runs; calibrated 500 and 512 probes, key path on: 304-311 frames for every probe's K updates; keys passed the change on 6,639 times): the step moves the view 52%. Lamp in: within 5% for good from frame 8 / 6, overshoot 1.1% / 4.3% of the step. Lamp out: frame 39 / 41 (enters at 2-3, dips to −10%, wanders to +7-9%), overshoot 7.2% / 9.2%.
+- Show: `bench/screenshots/t2.1-sponza-candles/sponza-candles.png` (viewer, 0 errors).
+- Regressions (pre-merge tree d0e13c8): full RTX suite 49 pages + 2 self-tests pass (furnace E/π 0.4992, leak 0.84%, still Cornell 0 marks); `ddgi-key-probes-sponza` view frame 4, field 24, halved 6 (as T2.4c); door 0.17% from 1 s, recall 91%; cabinet frame 15, recall 98% (as T2.M1). Intel: recompiles, change-still, furnace (0.4986), mark-reduction pass. lint, typecheck, 1,052 unit tests (merged tree).
+After merging `m2` (T2.6a, f388d75; one DECISIONS conflict, both sides kept): full RTX suite 49 pages + self-tests pass; `ddgi-sponza-candles` counts and mark (0.074 ms all-candle median, still frames 0 marked, correctness only); lamp step at 521 probes, frames 9 / 37, overshoot 0 / 10.2% of the step; Intel recompiles, mark-reduction, change-still pass.
+Not verified: the Intel on the candles or lamp pages; the viewer by hand; the motions in a player (T2.7, T2.8 read them); Cycles with Sponza's off lamp (zero energy, no effect expected).
+Numbers: here. `gi/direct` on sponza-candles (information): 16 probes trace 3.46 + direct 3.82 ms, 256 probes 6.7 + 7.1 ms (Sponza: 0.36 + 0.16, 0.71 + 0.26); Budget v2 calibrates to 1 probe a frame; the viewer runs at 3 fps (376 ms a frame) and its set-up took 399 s.
+Next:
+- Lead: item 3 has no VALID run. Recommend taking it as met: it's CPU time, 0.10 ms against 0.2 in all three runs, and T2.M1's ruling says the clock rule gives CPU-only pages no verdict. The scene heats the RTX by itself until T2.3.
+- Lead: the commit message of 597f9ac says the off lamp cost 642 → 593 probes; the later run (583 with it out) showed that was run-to-run spread (DECISIONS corrected).
+- T2.3: the light grid (7 ms at 16 probes now); `ddgi/trace`'s reach test loops every light too. T2.8: play motions (`motionState`), add an off light to the scene to light it; a slider for `candles`; sponza-candles' exposure (0 looks over-bright).
+- Shared files touched: `mark-table.ts` (light entries only), `layout.ts` (a comment), `platform-scene.ts` (capacity), `scene-sync.ts`, `convert.ts`, `user-data.ts`, `three-gi.ts`, `fetch.ts`, `sources.json`, `manifest.ts`, `three-scene.ts`, `load-scene.ts`, `viewer-core.ts`, `url-state.ts`, `native-lib.ps1`, 9 manifests, `three-adapter-timing`, `platform-recompiles`.
+- `tools/reference/cycles/render.py` doesn't know `light-set` parts (sponza-candles has no reference; it would fail if asked).
+
+## 2026-11-06 · T2.4d a global change's response in rooms, and the cost while the sun moves · implementer (opus)
+Did (branch `m2-t2.4d`, fbfe467..HEAD; Dennis's timebox: one diagnosis, one fix per miss):
+- Diagnosis of the room (`ddgi-sky-sun-step`'s new `byClass`, `VITE_DDGI_SETTINGS`): fine probes, near ones and round-robin picks, were traced before the keys took the change in, and kept the stale light. Fix: key path from 30 frames (was 120); keys owe the full count where all keys' counts fit in 30 frames; every fine probe waits for its keys and isn't traced meanwhile (`waitingForKeys`, set in `ddgi/schedule-count` from the keys' `takingChange`; at most `KEY_WAIT_FRAMES` 30; the fill skips them, second pass if nothing else is left). Files: `wgsl/mark.ts` (`ddgiServing`, the awaiting frame), `wgsl/schedule.ts`, `wgsl/blend.ts`, `layout.ts` (flag bit 6, word 13), `settings.ts`, `schedule.ts` (CPU twin).
+- Diagnosis of the day (`ddgi-key-probes-cost`, per-pass and list breakdown, VALID 69 °C, calibrated 586): 2.04 ms still against 3.29 day; `ddgi/trace` +0.96, blend +0.12, `gi/direct` +0.09, propagate and mark +0.10; rays a frame 1.58×. Not the higher sun: the priority share lists only active probes. Fix: the design's fallback, §4.5's second count while changes continue (`continuing-change.ts`).
+- Docs: ddgi.md "Revised in T2.4d", m2-lights.md as built, DECISIONS (2), NOTES (2).
+Verified (RTX 3060 nvidia/ampere, Chrome 157 headless, bench lock):
+1. Furnished room, lamp off, sun 30° lower, 571 a frame: bookmarks within 5% from frame **11 / 17** (bar 30); per pixel 2.8% / 3.8% at 0.5 s, 1.3% / 1.9% at 3 s; field within 5% from frame 18 / 24. Was 25% / 23% at 0.5 s.
+2. Real day, one VALID run (51 °C, 0% throttled, calibrated 548): update median **1.98 ms**, p95 2.30 (bar 2.2); still 1.86; batch through the day about 344.
+3. Sponza true 30° turn at 316: view frame **12** (bar 15), field frame **36** (bar 120); sun halved from frame 1. Two-room 9/17, Cornell 5/8, sweep passes. Full suite 49/49 (leak 0.84%, furnace −0.15%, still scenes 0 marks). Flicker Cornell 0.094% / 0.38% (2 ms). Intel UHD: schedule and propagate reductions, change-still pass.
+Not verified: the waiting path isn't in the subgroup/fallback comparison (`ddgi-schedule-reduction` has no awaiting probes); Bistro; furnished-room lamp changes; Intel responses.
+Numbers: Sponza's first 45 frames after the step run at **2.51 ms** median (calibrated 548), for T2.10. T2.1's lamp step on this code (trial merge, not committed): forward frame 2, overshoot 3.4% of the step; back frame **31** (bar 30), no overshoot (T2.1 had about 38 frames, 7-12.6%).
+Next: T2.10: the step's busy frames. Add waiting probes to `ddgi-schedule-reduction`. Merge with T2.1 conflicts only in DECISIONS.
+
+## 2026-11-06 · T2.6a review and merge; new task T2.4d · M2 lead (opus)
+Did:
+- Opus review of T2.6a against its done-when: pass with notes; check 4 fails.
+- I sent the implementer back three times on check 4 (the key path forced on; why the 3 s tail; the bounce share and a held cut). The cause is the order of updates, not throughput.
+- Review must-fix: the 10-second day in `ddgi-key-probes-cost` was not a day. Fixed as an explicit path (5°→75°→5°, azimuth 160°) and re-timed once: it misses.
+- Merged `m2-t2.6a` into `m2`. The branch already had `m2` with T2.M1 (c780ff5).
+- TASKS: T2.6a done with check 4 moved; T2.4c's status notes its day; new row T2.4d with a done-when (check 4, the real day, no regressions). It is proposed to Dennis via the orchestrator.
+
+Verified:
+- Reviewer, RTX 3060 nvidia/ampere, Chrome 156 headless, correctness only: suite 48/48; check 1 reproduced (means 0.02%, worst texel 0.11%); check 4 reproduced (25% / 23% at 0.5 s, 10% at 3 s); Sponza turn −40.9%, view within 5% from frame 13, field from frame 36; the same sky set again marks 0.
+- Implementer after the merge: RTX suite 49/49; `ddgi-mark-reduction`, `scene-set-transforms`, door and cabinet pass.
+- Lead, on the merged tree: lint, typecheck, 1,012 unit tests.
+
+Not verified: the Intel UHD after the merge. Check 4's miss was not compared against `m2` with r = 1; the reviewer estimates the real r is not the cause.
+
+Numbers:
+- The real day: median 3.40 ms, p95 3.77, against the 2.2 ms margin. One VALID run: 62 °C start, 0% throttled, 629 probes. The still update is 2.02 ms.
+- T2.4c's earlier "2.17 ms during a day" and its Sponza turns before b4e1fad had the sun over the zenith or below the horizon (NOTES).
+
+Next:
+- T2.4d (proposed): the room's response order, and the cost while the sun moves. First find where the extra 1.4 ms goes. Propagate and mark were 0.06 ms, so a likely suspect is more lit hits for `gi/direct` with a higher sun than at calibration.
+- T2.10 still measures the frames after a big step.
+
+## 2026-11-06 · T2.6a sky re-bake for time of day · implementer (opus)
+Did (branch `m2-t2.6a`, b50057e..HEAD):
+- A `procedural` sky is baked on the GPU. `platform/sky/procedural-sky.ts` holds the per-sky Preetham and calibration numbers and the re-bake rule (the sun turned more than 0.05°, or any other change).
+- The bake (`projection-wgsl.ts`, `platform-sky.ts`) is three dispatches in one pass, timed as `platform/sky bake`:
+  - the resample, the only kernel that reads the source (a procedural map is written unscaled);
+  - partial sums over the 256 × 128 map, in 64 workgroups;
+  - a one-workgroup sum, which writes the radiance SH (bands 0-2, for T2.6b), the irradiance SH and the map's scale. `giSkyRadiance` applies the scale.
+- The reductions are subgroups first, with the workgroup tree as the declared fallback. Hit shading's uniforms now start with these harmonics.
+- New platform module `HitShading.skyChange`: the radiance SH now, and as it was when the techniques last saw a sky change (copied at the end of such frames).
+- `ddgi/mark` now takes a sky change's r from those SH, not r = 1. The sky's kernels compile first in `prepare`.
+- Pages: `hit-shading-sky` (check 1 and the re-bake rule, in the suite), `ddgi-mark-reduction` (the sky's r), `sky-rebake-cost` and `ddgi-sky-sun-step` (manual), and `ddgi-batch-cost` (now lists every sky kernel's compile). Docs: ddgi.md, platform.md.
+Why the old projection compiled slowly: it inlined 18 copies of the workgroup reduction, each with its barriers and its loop (640 ms alone; 60 ms with one reduction in a loop). Even 19 `subgroupAdd`s written out took 400 ms, so the reductions stay loops (NOTES).
+Verified (RTX 3060 nvidia/ampere, Chrome 156 headless, bench lock):
+1. Check 1 (correctness run). Six skies, a 5° to an 89° sun, turbidity 1.7 to 10.
+   - The GPU map against the CPU sky: channel means within 0.027%, worst texel 0.11% (bars 0.1% / 1%); black below the horizon.
+   - SH against the CPU projection of the map: within 3.5e-4 of the largest coefficient. Subgroups against the fallback: 1.7e-7.
+   - Open ground (bar ±0.5%): texture +0.278 / −0.136 / −0.284%; procedural +0.307 / −0.106 / −0.253%.
+2. Check 2 (one VALID run: 50 °C start, 0% throttled). A bake costs 0.039 ms of GPU (median; p90 0.041; bar 0.1) and 0.0043 ms of CPU (bar 0.05). An earlier try read NO VERDICT (69% use) and isn't counted.
+3. Check 3 (one VALID run: 56 °C, 0% throttled; furnished room, cold, one scene): the four sky kernels take 165-177 ms in start-up (bar 200; T1.9a 0.9-1.1 s).
+4. Check 4: **not met on a view the step really moves (DECISIONS, for the lead).** The sun is lowered 30° (43.5° to 13.5°).
+   - Lamp on: the bookmarks move only +8.9% / +7.7%, and no view of 24 moves more than 13.5%. The views are within 5% from frame 22, but only because the step is small.
+   - Pendant lamp off: the bookmarks move +85% / +69% (per pixel 52% / 47%). At 571 probes a frame they are 25% / 23% off at frame 30 and about 10% off at 3 s; the volume is 25% off at frame 30 and 10% at 3 s.
+   - With every probe updated every frame they settle at frame 10, and the marked r matches the true change (1.07 against 1.19). So the limit is updates per frame.
+- The sky's r (`ddgi-mark-reduction`): from black 25-100, the red halved 0.25-1, the same sky again 0.
+Regressions:
+- Full RTX suite 47/47: furnace −0.15%, leak 0.84%, Cornell test view +5.67%, still scenes 0 marks and within 0.03% of M1.
+- `ddgi-key-probes-sponza`: view from frame 1, field from frame 24, sun halved frame 11, propagation 62.5% / 91.6%, noise 0.147% against 0.188%.
+- Intel UHD, correctness only, in short batches: `hit-shading-sky` (means within 0.021%, worst texel 0.134%, subgroups = fallback within 2.1e-7), `ddgi-mark-reduction`, `ddgi-furnace` (−0.28%), `ddgi-change-still` (0 marks), `three-environment`: all pass.
+- `pnpm lint && pnpm typecheck && pnpm test` pass (1,001 tests).
+Not verified: the viewer's time-of-day by hand; T2.6b's use of the radiance SH; Intel timings (not asked).
+Numbers: timing.csv (check 3 and the furnished room's 571-probe calibration, f6175f6, VALID); the rest above.
+Next:
+- Lead: check 4 (DECISIONS). The sky re-bake isn't the limit: it baked once in the step's frame. The furnished room's response at 2 ms is.
+- `turnedSun` (`ddgi-shared/sponza-response.ts`) raises the sun. T2.4b/T2.4c's "30° lower" Sponza turn actually went from 70.6° over the zenith to 79.4° (NOTES), which may be why Sponza's view moved only 4%.
+- Check 3's margin is inside the run-to-run spread of start-up compiles. T2.14 can drop the unfilterable resample from start-up.
+- Shared files touched:
+  - `wgsl/mark.ts` (the environment branch) and the two mark kernels' module lists (`ddgi-technique.ts:643,650`);
+  - `mark-table.ts` (the comment on ENVIRONMENT_CHANGE);
+  - `gi-platform.ts` (the prepare order, and `recordSkySeen` after the techniques);
+  - the `HitShading` contract;
+  - `ddgi-mark-reduction` and `ddgi-batch-cost`.
+  
+  T2.M1 may see small merge conflicts in `mark.ts` and `ddgi-mark-reduction`.
+- A frame can now carry one more timed pass (`platform/sky bake`). The timer allows 16 passes per frame.
+
+Follow-up (coordinator's two questions; correctness runs, RTX 3060, bench lock):
+1. **Check 4 on the key-probe path** (furnished room, lamp off, sun 30° lower, 571 a frame). With the path forced on, and with the rule at 30 frames instead of 120 (same numbers):
+   - the views are 20% / 16% off at frame 6 (36% before);
+   - at 0.5 s they are still 13% / 12% off (per pixel 13% / 12%), and at 3 s 8% / 7%;
+   - no overshoot. Neither the view nor the field gets within 5% in 3 s.
+
+   At 30 frames the path would engage on the furnished room (70 frames) and Sponza (492), not on Cornell (9) or two-room (10). It doesn't meet 0.5 s, so the rule stays at 120 (no code change). DECISIONS updated.
+2. **`turnedSun` was wrong.** T2.4b/T2.4c's "30° lower" Sponza turn took the sun from 70.6° over the zenith to 79.4°, its azimuth flipped by 180°. That is a 30° change of direction, but it moved the view by only 4%.
+   - Fixed in `ddgi-shared/sponza-response.ts`: the helper now lowers the elevation. It affects `ddgi-key-probes-sponza`, `ddgi-key-probes-cost` and `ddgi-sky-sun-step`; `ddgi-schedule-sponza` keeps its own old copy (not changed).
+   - `ddgi-key-probes-sponza` (turn) with a true 30°-lower sun (70.6° to 40.6°) moves the view by −40.9%. The view is within 5% from frame 13 (bar 15), the field from frame 36 (bar 120), p95 82% at frame 120 (65–68% before), overshoot 0.1% of the step. It passes.
+
+Follow-up 2 (why check 4's view is still 10% off at 3 s; correctness runs, RTX 3060, bench lock; furnished room, lamp off, sun 30° lower, 571 a frame, window bookmark):
+1. **Tracked probes.** Two groups of 12 near and in view: the largest change (the sunlit floor), and the largest relative change of the rest.
+   - In the first 13 frames each group gets 12-13 updates at h = 0 (n = 0, 100% holding a cut). Their error only goes from 24% / 37% to 17-20% / 25-28%, because the rest of the room still holds the old light.
+   - At frame 13 the promises are spent with the error still large. Then n grows back (1 at frame 15, 2.8 at 60, 13.5 at 180), and they get only 2 updates between frames 15 and 60 while the priority share serves the rest of the field.
+   - So yes, the cuts run out while the error is large. The cause is the order of updates: their bounce light comes from probes that haven't changed yet.
+2. **Bounce share.** Measured as T2.4b did (every probe every frame at h = 0): ρ = 0.73 (per-frame ratios 0.69-0.77, noise floor 3.3%), under the 0.8 in use.
+   - At ρ = 0.73: view at 0.5 s −23.4% (per pixel 23.7%), at 3 s −10.2% (10.2%).
+   - Cut held until the probe's own estimate moves less than max(ε, 3× its noise), opt-in: −23.7% (24.0%) and −10.4% (10.4%). It never engages, because the estimate stops moving while it still reads stale light.
+   - Default, for comparison: −23.4% and −10.1%. None gets within 5% in 3 s; no overshoot.
+   - Neither variant helps, so both are removed: no core change. The page keeps the tracking, `rho` and `VITE_DDGI_BOUNCE_SHARE`.
+3. **Regressions** (the core is unchanged since the suite run): two-room 9/17 and Cornell 5/8 frames (`ddgi-schedule-step`); flicker at fixed counts, Cornell 0.0877% / 0.361%, two-room 0.0096% / 0.031%, Sponza 0.0255% / 0.096%. The suite (leak 0.84%, still scenes 0 marks) and the key-probe Sponza page stand from above.
+- DECISIONS and NOTES say what limits check 4: a global change's near probes need their updates spread over the time the rest of the field takes in the change, or the field updated more evenly first (the key path halves the error at 0.5 s). A fixed ρ per scene isn't the lever.
+
+Review fixes and merge (after the Opus review, which passed with notes):
+- Review (RTX 3060, correctness): suite 48/48; check 1 reproduced (means 0.02%, worst texel 0.11%); check 4 reproduced (25% / 23% at 0.5 s, 10% at 3 s); Sponza turn −40.9%, view within 5% from frame 13, field from frame 36; the same sky set again marks 0.
+- **Check 4 is not met** for a view the step really moves (lamp off: 25% / 23% off at 0.5 s, 10% at 3 s; bar 5% in 0.5 s). Diagnosis (above, DECISIONS): the view's probes spend their promised updates in the first 13 frames while their bounce light still comes from probes that haven't changed, then wait for the round robin. It's the order of updates, not the mark, ρ or throughput. The lead takes it forward as a new task.
+- **The 10-second day in `ddgi-key-probes-cost` (must-fix):** now an explicit path (`sunFromAngles` in `ddgi-shared/sponza-response.ts`): elevation 5° to 75° and back as a sine over 600 frames, azimuth through 160° steadily. Before, repeated `turnedSun` calls took the sun below the horizon after about 77 frames, so T2.4c's "2.17 ms during a day" wasn't measured over a day.
+  - One VALID run (c780ff5; 62 °C start, 0% throttled, 1,717 MHz, calibrated 629 probes): the day's update median is **3.40 ms**, p95 3.77 ms, against Budget v2's 2.2 ms margin: **a miss**, reported, not tuned. The calibrated passes alone (trace, blend, write) take 2.72 ms in the day, against 1.56 ms still: the priority share during a change lists only active probes (NOTES, T2.4c).
+  - Also: still 2.02 ms, propagate 0.011 ms still and 0.022 ms after the step (p90 0.083; bar 0.1). Rows in timing.csv (`key_probes_cost/day_elevation_path/...`, c780ff5).
+- **`ddgi-schedule-sponza`:** its 30° step now uses the shared `turnedSun` (a true 30° lower). Its census sun had reached the zenith after 13 s and stayed there; it now keeps its elevation and moves in azimuth at a true 1.5° a second. Correctness re-run: lamp recall 98.3% / 98.9%, sun halved within 5% from frame 6, the turn's view from frame 14 and field from frame 36 (p95 73% at 3 s, floor 37%), census longest wait 61 frames (bound 492), schedule 0.026 ms. Pass.
+- `procedural-sky.ts`: the comment says the sums run over the 256 × 128 map.
+- **Merged `m2` (17e3b7b, T2.M1)** as c780ff5. The conflicts in PROGRESS, DECISIONS, `wgsl/mark.ts`'s header (both bullets kept) and `ddgi-mark-reduction`'s imports (both taken) were resolved by hand. PROGRESS has 94 `## ` headings (91 shared + 1 + 2).
+  - After the merge: lint, typecheck, 1,012 unit tests; `ddgi-mark-reduction`, `scene-set-transforms`, `ddgi-door-swing`, `ddgi-move-cabinet` pass; the full RTX suite 49/49.
+
+## 2026-11-06 · T2.M1 review and merge · M2 lead (opus)
+Did:
+- Opus review of T2.M1 against its 8-item done-when (TASKS): pass with notes, no must-fix. The lead sent the first hand-back back for two blockers, fixed in ff5e210..502fba3:
+  - the Intel subgroup/fallback mismatch: the test's input differed, not the mark;
+  - `setTransforms` 3.7 ms: per-slot state moved to flat typed arrays.
+- Lead rulings in DECISIONS (f0f9b14): item 1 is met on the median timed alone; item 6 is judged on converged fields at 3,000 frames; the far set over-marks small movers.
+- Merged `m2-t2.m1` into `m2` with no conflicts (the branch already had `m2`). TASKS: T2.M1 done, plus a T2.10 line for `setTransforms` in a real frame.
+
+Verified (reviewer, RTX 3060 nvidia/ampere, Chrome 156 headless, bench lock, not timed):
+- lint, typecheck, 1,006 unit tests;
+- the full suite, 50 pages, including `ddgi-mark-reduction`, `ddgi-direct`, `ddgi-warm-two-updates` and `platform-recompiles`;
+- the door, cabinet and `scene-set-transforms` pages;
+- `ddgi-key-probes-sponza`: view frame 4, field 24, halved 6, as in T2.4c;
+- the Intel diagnosis: the priority share takes slots by atomics (`schedule.ts:19-21`), and T2.4b's check sorts that part before comparing, so a different order is by design. The page now checks that both fields are identical before the mark.
+
+Lead, on the merged tree: lint, typecheck, 1,006 unit tests.
+
+Not verified: the reviewer re-timed nothing (items 1, 6 and 7 keep the implementer's VALID runs) and ran nothing on the Intel (the implementer's Intel batches stand).
+
+Numbers:
+- Item 1: 1.4 ms median, p95 2.1 (alone, CPU-locked); un-locked 1.8 / 3.1.
+- Item 3: cabinet within 5% from frame 15 at 562 probes; per-pixel error 1.9% at frame 30, 0.9% at frame 60. The summed change over the moved pixels is only 5.4%, because brighter and darker pixels cancel.
+- Item 4: door 0.17–0.18% at 1 s, 0.08% at 10 s.
+- Item 6: within 0.017% at 3,000 frames; cost within 2%.
+- Item 7: adapter 0.062 / 0.065 ms.
+- Item 8: door recall 91%, precision 98%. Cabinet 993 marked, only 106 of 826 far-set marks real (13%); cost about 10 frames of the batch.
+
+Next:
+- T2.10: time `setTransforms` in an adapter frame with rendering.
+- M3's T3.4: scale the far-set angle Ω_ref to the mover's size.
+- `ddgi-mark-reduction` tests light entries only, not geometry entries.
+- The counting device view will fail M3's same-device check for `setDeformedPositions`.
+- Formatting leftovers: stray blank lines (`scene-sync.ts:1289`, `instance-transforms.ts:31`, `write.ts`, `mark.ts`) and indentation at `ddgi-mark-reduction/main.ts:157-158`.
+
+## 2026-11-06 · T2.M1 rigid moving objects · implementer (opus)
+Did (branch `m2-t2.m1`, a87133b..HEAD, `m2` with T2.2 merged in at 13f0569): `SceneApi.setTransforms`, `DirtyRegion.moved`/`.instance`, `GIStats.recompiles` (compile-counter.ts: a counting view of the host's device for the platform's own code); the change log in typed columns, folding past 256 regions; instance boxes and move distances from a per-instance world frame. DDGI: geometry entries in `ddgi/mark` (near set incl. off probes, `FREED_PROBE_URGENCY_SHARE` 16; far set by entry distance or mover mask, Ω/0.5 sr), the mover table (mover-table.ts) and the blend's hit-point mask (history 48 → 64 B), state 3 ends after 2 blended updates (`warmedOnce`, scratch tiles-written word). three: one `setTransforms` per update; `InstancedMesh` update ranges. Pages: `ddgi-warm-two-updates`, `platform-recompiles` (suite); `scene-set-transforms`, `ddgi-door-swing`, `ddgi-move-cabinet` (manual). Docs: platform.md, three.md, ddgi.md "Moving geometry", m3-moving.md as-built; DECISIONS (5), NOTES.
+Verified, RTX 3060 (nvidia/ampere), Chrome 156 headless, merged code unless said. 1: `setTransforms` ×10,000 **3.7 ms** median, sliding (bar 2 ms: **missed**; one call each 15 ms; CPU-locked run); `moved` per region: unit tests. 2: recompiles 0 through 1,000 instances and 20 meshes made/moved/destroyed, control kernel counts 1 (RTX, Intel). 3: cabinet 1 m slide, changed pixels within 5% for good from frame **15** at a calibrated 580 (pre-merge: frame 29 at 358). 4: door swung shut in 1 s at 880: dark room **0.20%** of the lit room the frame after closing, 0.18% at 1 s, 0.08% at 10 s, converged 0.012% (open 7.5%). 5: `ddgi-warm-two-updates`: no probe active after 1 update, view GI 0; freed probes active in frame 3 after exactly 2 blended updates; both reductions, RTX and Intel. 6: field against `m2` (b50057e), 3,000 frames: within **0.017%** (Cornell, two-room, fixed 0.97; at 600 frames two-room +0.14% atlas / +0.12% view, a settling transient, DECISIONS); cost, one VALID run each, Sponza curve: 256 probes 1.049 against 1.049 ms, 512 1.586 / 1.582, ≤512 fit 0.599 ms + 1.891 µs against 0.591 + 1.903 (within 2% everywhere). 7: adapter batch and ranges unit-tested; `three-adapter-timing` VALID: still **0.062** ms, one mover **0.065** ms. 8: door step recall 91.4% / precision 97.8% (near 130/130, far 723/803; misses 1.5-8 spacings out), swing 91.5% / 97.7%; cabinet recall 98.1%, precision **25.8%** (992 marked).
+Regressions: full RTX suite OK (50 pages; furnace E/π 0.4992, two-room leak 0.84%, closed door 0.06%); `ddgi-flicker` and `ddgi-key-probes-sponza` pass (view frame 4, field frame 24, as T2.4c); still scenes mark 0. lint, typecheck, 1,006 unit tests. Intel UHD: warm-two-updates, recompiles, change-still, furnace pass; **`ddgi-mark-reduction` fails**: 1 of 1,071 probes' mark differs by 0.14% between subgroups and fallback (passes on `m2`, on the RTX, and with the same reduction twice; passes with the two-update rule switched off).
+Second session (after the lead's notes, ff5e210..HEAD):
+- **The Intel mismatch was the test's input, not the mark.** Since T2.2, rays' random numbers are keyed by update-list slot (`giDirectRandom(rayRecord, frame)`). Feedback requests put probes in the priority share, which the two scheduler paths may fill in a different order. Shown on the Intel with feedback on: the two atlases already differed in 75 bytes before the mark. The page now runs with feedback off and checks that the fields are identical first; no tolerance (DECISIONS). The mark passes bit for bit: Intel twice, RTX once.
+- **Item 1:** the scene copy's per-slot transform state is in flat typed arrays (`scene/instance-transforms.ts`; transferable for T2.13). `setTransforms` gets a one-pass slide, reused lookups for the same list, and a branch-free finite check. No allocation per `setTransform` call. Contract unchanged.
+- **Gate run (79da8c6, CPU lock, each workload timed in a block, DECISIONS): 10,000 sliding 1.4 ms median (p95 2.1), bar 2 ms: met.** Turning 3.5 ms; 10,000 single calls 5.1 ms (3.2 ms in an earlier check). The earlier page that mixed the workloads frame by frame read 2.1 ms (fdbe641).
+- **Re-checked after the change:** full RTX suite OK (50 pages); door, cabinet and `three-adapter-timing` pass. Intel: `ddgi-mark-reduction` (twice), recompiles, warm-two-updates, `scene-copy`, `tlas-oracle`, change-still pass. Lint, typecheck, 1,006 unit tests.
+
+Not verified: the door and cabinet on the Intel; the cabinet as a drag (only a step); Bistro.
+Numbers: here (no CSV rows written).
+Next:
+- Item 1 is now met (above); the Intel mismatch is explained and fixed in the test (above).
+- The far set over-marks small objects (cabinet precision 26%): Ω_ref could depend on size; door recall misses probes 1.5-8 spacings out.
+- The shared files the merge touched: `gi-platform.ts` (hit shading's constructor), `ddgi-technique.ts`, `layout.ts`, `blend.ts`, `scene-copy` contract.
+
+## 2026-11-06 · T2.2 review and merge · M2 lead (opus)
+Did: Opus review of T2.2 against its done-when (m2-lights.md checks 1–4 and T2.0's review lessons in TASKS): pass with notes, no code must-fix. Lead ruling in DECISIONS (4172acf): check 3 is met on the gain corrected to 2.00 ms. Merged `m2-t2.2` into `m2`; no conflicts, because the implementer had already merged `m2` with T2.4c into the branch (35212bd). TASKS: T2.2 done.
+Verified (reviewer, RTX 3060 nvidia/ampere, Chrome 156 headless, bench lock, on 35212bd): lint, typecheck, 995 unit tests; the full suite 48/48; `ddgi-direct` on Sponza; `ddgi-key-probes-sponza` (turn); `ddgi-schedule-sponza` (sun). Check 1: oracle mean at worst 0.057%, p95 0.062%, sun on a plane 0.070%; per texel Cornell 0.036/0.078%, two-room 0.037/0.076%, Sponza 0.015/0.064%. Check 2: the work lists' fields differ by 2e-11 to 3.4e-9. Check 4: furnace −0.15%, leak 0.84%, Cornell +5.67%, still scenes 0 marks. Storage buffers per kernel 7 / 6 / 2. On the deferred default, Sponza's 30° turn: view from frame 1, field from frame 24; the halved sun frame 11. Lead, on the merged tree: lint, typecheck, 995 unit tests.
+Not verified: check 3 was not re-timed after the merge (the VALID pair stands). The reviewer ran nothing on the Intel UHD; the implementer's Intel results stand.
+Numbers: check 3 raw 640 / 323 = 1.981× (bar 1.984× against T2.0's 2.205×); corrected to 2.00 ms with each run's calibration 641 / 316 = 2.03×. T2.0's own inline run was at 1.87 ms, which inflated its gain; its fit gave 2.13×. `gi/direct` 60 M shadow rays/s.
+Next:
+- `pack2x16float` truncation (−0.035% a store, the exact mean of a truncation): no standing test pins it, and the Intel result is inferred. Add one when the surface record is next touched.
+- `direct.ts:505` keeps a failed compile, so it can't be retried.
+- **T2.4c's view check is weak on Sponza:** the 30° turn moves the bookmark view by only 4%, so "within 5%" can hardly fail. T2.6a's furnished-room sun step and T2.10 should use a view that the change really moves.
+- T2.M1 (running, from ff02e16) must merge `m2` before review; T2.2 touched `ddgi-technique.ts` and `layout.ts` (census words 24–25).
+
+## 2026-11-06 · T2.2 deferred direct light (`gi/direct`) in platform hit shading · implementer (opus)
+Did (branch `m2-t2.2`, fe1e245..): the platform's `gi/direct` (`platform/shade/direct.ts`; contract `HitShading.direct`, `RayScratch`, platform.md revision). One ray-scratch buffer holds a 256-byte header, the ray results and the work list, so `ddgi/trace` stays at 7 storage buffers and `gi/direct` uses 6. Work items are 32 bytes: exact position, octahedral normals, unorm16 albedo over a 2^e scale. The tracing-kernel side is `giStoreRayResult`, `giNeedsDirect`, `giSurfaceRecord` and `giDeferDirect` (subgroups first; one atomic per hit is the declared fallback). `gi/direct-args` and `gi/direct` run in one pass, timed as `ddgi/gi-direct`, so Budget v2 counts it. Hit shading gains `giDirectReaches` (only hits a light can reach are listed) and `giDirectRandom`. DDGI: `directLight: 'deferred'` is the default and `'inline'` is kept. The deferred trace runs in rounds of 1,024 probes (blend and write still run once). The inline kernel draws `giDirectRandom` too, so the fields compare texel by texel. The group mask has one definition. New counters: "hits lit by gi/direct" and "hits that did not fit". Found: `pack2x16float` truncates on the RTX (−0.035% a store), so `gi/direct` re-packs with stochastic rounding (DECISIONS). Pages: `hit-shading-deferred` and `ddgi-direct` (in the suite), and `ddgi-batch-cost` with `VITE_DDGI_DIRECT=inline,deferred`. None of the spike's shortcuts: no `.replace()`, no test-only usage or private cast, the mask written once.
+Verified (RTX 3060 nvidia/ampere, Intel UHD gen-12lp; Chrome 156 headless; correctness with `--no-cool-wait`):
+1. Check 1. Oracle points (9 cases × 4 light groups, one with soft shadows): every mean within ±0.06% of inline on both GPUs (it was −0.035% everywhere before the stochastic re-pack). Per point, the worst p95 is 0.062% and the worst mean 0.052% (bars 0.2% / 0.1%). The 12-light stochastic choice is within 0.015% (p95 0.006%). Sun on a plane is within 0.07% of E·cos θ (bar 0.5%). The field (`ddgi-direct`, 300 frames × 4,096 probes, several rounds a frame), deferred against inline: Cornell point +0.036%, two-room +0.038%, Sponza +0.012% (this is the inline path's own truncation). Per texel, mean 0.036 / 0.037 / 0.015% and p95 0.078 / 0.076 / 0.064%. Intel: +0.036 / +0.037%, per texel the same.
+2. Check 2. Subgroup against fallback field, atlas mean: two-room 0, Cornell point 9e-8, Sponza 2e-9 (RTX); Intel 0 / 0. At the hit level the two lists match bit for bit on both GPUs.
+3. Check 3 (one VALID run per path: 49 °C start, 0% thermal, SM median 1,905 / 1,800 MHz). Budget v2 calibrates Sponza to inline **323** and deferred **640** probes at 2 ms (batches cost 2.06 / 2.02 ms back to back), a ratio of **1.98×**. That is exactly 10% under T2.0's 2.2× (1.984× against the unrounded 2.205×). Deferred matches T2.0's 646 within 1%; inline moved instead (T2.0 293, T2.4b 316). `gi/direct`: 0.42 ms, 39.3 hits a probe (T2.0: 38.6 sun-facing), **60 M shadow rays/s** at 25k a dispatch (T2.0: 48).
+4. Check 4. Full RTX suite 46/46: furnace −0.15%, leak 0.84%, Cornell test view +5.67%, still scenes 0 marks and within 0.06% of M1, viewer and three examples on the deferred default. Intel furnace −0.28%. Memory: furnished room 45.9 MB in all (≤ 64 MB), DDGI on Cornell 9.4 MB (was 5.6), on Sponza 40.6 (was 36.1).
+`pnpm lint && pnpm typecheck && pnpm test` pass (985).
+Not verified: the trace bench's any-hit rate was not re-run here (T2.0's 214–245 Mrays/s, so `gi/direct` runs at about 1/4 of it); many lights (one sun or a few lamps; T2.3); Bistro and two-room costs; the viewer by hand; Intel timings (correctness only).
+Numbers: `timing.csv` rows `batch_cost/inline/...` and `batch_cost/deferred/...` (4861a2a, each run's notes tagged `t22_direct_light_*`).
+Next:
+- Lead: check 3 is at the bar (1.98×). Recommend taking it as met: the deferred count holds T2.0's 646, and against M1's own 293 the gain is 2.18×. The alternative is a second VALID pair.
+- Shared files touched: `ddgi-technique.ts` (options, ray scratch, trace and census), `layout.ts` (2 census words at the end), `wgsl/trace.ts`, the hit-shading pages, `ddgi-batch-cost`. Not touched: mark, schedule, blend, propagation, scene copy, TLAS.
+- T2.3: `giDirectLightSamples` and the grid binding (`gi/direct` 6 → 7). Later: DDGI's `ddgiStochasticHalf` and `gi/direct`'s copy could share one platform module. The trace's own half store still truncates (−0.035% on M1's ray results).
+
+## 2026-11-06 · T2.4c review and merge; T2.2 started · M2 lead (opus)
+Did: Opus review of T2.4c against its done-when (m2-lights.md checks 1–5, "Show", and the TASKS additions): pass with notes, no must-fix. Lead fixes on the branch (31d5582): a stale "indirect dispatch" comment (`ddgi-technique.ts:250`), find's storage-buffer count in ddgi.md (4, not 3), and the DECISIONS entry marked accepted. Merged `m2-t2.4c` into `m2` (385d85e; DECISIONS conflict resolved, keeping Dennis's confirmations of T2.4b's rulings). Dennis said go for T2.2 beside the spine and confirmed T2.4b's check 2 and check 5 rulings (57c0af8). T2.2 started (worktree `webgpu-ddgi-m2-t22`), and T2.M1 is next. TASKS: T2.4c done; new lines for T2.1 and T2.10.
+Verified (reviewer, RTX 3060 nvidia/ampere, Chrome 156 headless, bench lock, not timed): lint, typecheck, 982 unit tests; the full suite 46/46 (furnace −0.15%, leak 0.83%, subgroups and fallback match bit for bit); two-room 9/17 and Cornell 5/8 frames; sweep per pixel 3.9/4.4/4.1%. Check 1: view from frame 4, field from frame 24 (fallback 54), p95 65.0%. Sun halved: frame 6. Check 2: 62.1% for the sun turn (implementer 63.1%), 92.0% for a sky dimming; the 8,211 held probes stay held, and the value is flat from frame 60. Check 3: 0.13%. Check 4: 0.148% against the fallback's 0.193%. Lead, on the merged tree: lint, typecheck, 982 unit tests.
+Not verified: check 5's timing was not re-run (its one VALID run on c234c10 stands: 0.046 ms, day 2.17 ms against 2.2). The Intel UHD was not re-run by the reviewer.
+Next:
+- Check 2's margin is thin: about 1 point of run-to-run spread on 2 points above the rule.
+- About 45 frames at 2.82 ms after Sponza's sun turn, from trace and blend; no check covers them. Handed to T2.10 (TASKS).
+- A Sponza lamp on the key path: response not measured, only recall. Handed to T2.1 (TASKS).
+- Thin walls and Sponza's floors are untested with propagation.
+- `holdFineProbes` is a uniform-gated test mode in the production blend shader (`blend.ts:561`); build it only into a test variant when blend is next touched.
+- With `keyProbes` on, small volumes still write key deltas and run find, about 0.01 ms.
+
+## 2026-11-06 · T2.4c key probes and propagation · implementer (opus)
+Did (branch `m2-t2.4c`, 8620c25..HEAD): key probes (every even or last grid index; Sponza 2,717), the change clock (census word, u32 fixed point, advanced by a one-thread dispatch after `ddgi/mark`), keys' deltas written by `ddgi/blend` (7 storage buffers), `ddgi/propagate` (find, args, propagate, and write.ts's new irradiance-tile entry point; subgroups first with a declared fallback; no indirect dispatch), the residual cut, `keyProbes` (on; false = far probes owe 2), `keyProbeBoost` 4, `keyResidualShare` 0.3, `keyProbeUpdates` 4, the test mode `holdFineProbes`. The key path runs where far probes owe 2 did (N×K/U > 120 frames), local changes too. Pages: `ddgi-key-probes-sponza`, `-cost` (manual), `-leak`, `ddgi-propagate-reduction` (suite). The sweep now asserts per pixel; the still page asserts no propagation. Shared helpers in `ddgi-shared/sponza-response.ts`.
+Verified, RTX 3060 (nvidia/ampere), Chrome 156 headless, Sponza at 316, GI only. **Decision checks first:** checks 1 and 2 ran before the rest was built, and passed.
+1. 30° sun turn: view within 5% from frame **4** (bar 15); field (light-weighted) from frame **24** (bar 120; far probes owe 2: 48), 1.98% at 2 s, per-probe p95 65.2%; every fine probe traced by frame 60. Sun halved: frame **11** (T2.4b: 19-34).
+2. Held fine probes, propagation alone: **63.1%** of the sun turn's change removed, **91.4%** of a sky dimming's (rule 60%). The first run was 62.4% and still climbing, because held probes kept priority slots; the hold now gives up its owed updates (DECISIONS).
+3. Two-room, 64 a frame, held: the dark room never above its settled value; its fine probes at most 0.18-0.24% of the lit room's light past theirs (bar 1%; propagation off 0.07%).
+4. Out-of-view fine probes' noise at 3 s: 0.15% against 0.18% for far probes owe 2.
+5. Still: 0 propagated (still page and cost page). VALID cost run (c234c10, 53 °C, 0% throttled, calibrated 311): `ddgi/propagate` 0.010 ms still, median **0.046 ms** after the sun turn (p90 0.053); 10-second day (160° in 600 frames) update median **2.17 ms** (bar 2.2; p95 2.69). Two earlier VALID runs of the first build failed check 5 (0.109 / 0.113 ms busy, 0.06-0.07 ms still). A per-dispatch breakdown found the cause: 0.022 ms per empty indirect dispatch (NOTES).
+Show: `bench/screenshots/t2.4c-key-probes/side-by-side-*-frame4.png` (key probes | far probes owe 2 | difference ×8; colonnade and upper gallery).
+Regressions: full RTX suite 46/46 (furnace −0.15%, leak 0.83%, Cornell test view +5.63%, feedback 0.051% / 0.026%); still fields **identical** to T2.4b's code (e7c7ee7) on Cornell, two-room, two-room fixed; flicker identical digits to T2.4b on Cornell, two-room, Sponza; two-room 9/17, Cornell 5/8; sweep per pixel 3.9/4.4/4.1%; Sponza lamp recall 97.7/98.5%, census 61 frames. Intel UHD: still page, propagation subgroups = fallback bit for bit, leak page, furnace (−0.28%): pass. lint, typecheck, 982 unit tests.
+Not verified: the Intel's responses; furnished room, Bistro; a sun turn with the camera moving; nested volumes (M3).
+Numbers: `response.csv` (`response/t2.4c/...`, commits 695ca45 and f000d4e), `timing.csv` (`key_probes_cost/...`, 857d3d3 and c234c10).
+Next: the day's update has 1.4% to spare, and right after a 30° step it runs at 2.82 ms for about 45 frames (the priority list is all active probes; NOTES). Budget v2 may want a change-time count. The instant sky's nudge (T2.6b) can reuse the tile write and the key pairing. `ddgi-schedule-sponza` keeps its own copy of the Sponza helpers.
+
+## 2026-11-06 · T2.4b review and merge · M2 lead (opus)
+Did: Opus review of T2.4b against its done-when (m2-lights.md checks 1–7 plus the five TASKS additions): pass with notes. Lead rulings in DECISIONS (d3be634): check 2 is a borderline miss, kept, with T2.4c as the fix path; check 5's light-weighted measure confirmed; the cost of unranged lights handed to T2.1. Merged `m2-t2.4b` into `m2` (57e28c0, no conflicts). TASKS: T2.4b done, T2.4c active; new done-when lines for T2.4c and T2.1.
+Verified (reviewer, RTX 3060 nvidia/ampere, headless Chrome, `--no-cool-wait`): lint, typecheck, 972 unit tests; the full GPU suite passes; `ddgi-schedule-step` (steps and sweep) and `ddgi-schedule-sponza` (lamp and sun) re-run. Check 1: two-room 9/17 frames, Cornell 5/8, steps 100% and 50% of the view, overshoot 0–0.28% of the step. Check 4: the subgroup and fallback paths agree and match the CPU twin. Check 6: 0 values differ. Check 7: feedback fires on 0.051% and 0.026% of updates; 53 of 53 probes revisited. Still scene: 0 marks, atlas within 0.006% of M1. Storage buffers per kernel: 4 / 6 / 3. Lead, on the merged tree: lint, typecheck, 972 unit tests.
+Not verified: the census (check 3), timing (check 4's VALID run stands: 0.020–0.027 ms at 20k probes) and the Intel UHD were not re-run by the reviewer.
+Numbers: check 2, Sponza sun halved within 5%, over five runs: 19, 22, ≤ 30, 34 and 24 frames, against a 30-frame bound; `response.csv` holds the 19-frame curve only. Check 5: whole field within 5% at frame 48, 1.7% at 3 s (light-weighted); per-probe far error 12.5% against an 8.4% still floor; p95 54% against a 37% floor.
+Next:
+- T2.4c (implementer, started): key probes; report the sun-halved step too; the sweep asserts per-pixel ≤ 5% (now 3.9–4.4%).
+- T2.1: bound the mark for 1,024 unranged candles (about 20M threads if all change at once).
+- Open: ρ = 0.8 is measured on two-room only, and the noise from a switched-off light's roughly 35 updates at h = 0 is not measured. Feedback fires on 0.089% of updates in frames 600–1,800, close to the 0.1% bar.
+- The calibration guard only remembers within a page session, so it can't catch a bad first calibration after a load.
+- `updateList` has an unused COPY_SRC "for tests" (`ddgi-technique.ts:497`): remove it in a later task that touches the file.
+
+## 2026-11-06 · T2.4b GPU scheduler, feedback, far probes owe 2, warm-up in the technique · implementer (opus)
+Did (branch `m2-t2.4b`, 21a51ee..236612a): the GPU scheduler (`wgsl/schedule.ts`, one `ddgi/schedule` pass of count/select/write/fill; subgroups first for the histogram and both compactions, the fill's subgroup scan checks subgroup order in the kernel; `UpdateCursor` removed, CPU twin in `schedule.ts`), camera weight (`camera.ts`), owed updates and "far probes owe 2" in `ddgi/mark`, the feedback rule in `ddgi/blend` (own requests buffer, census counters), the warm-up in the technique (`warmUpPasses` etc., `GITechnique.warmingUp`, the platform leaves those frames out of the budget), the calibration guard (`work-budget.ts`: samples logged, a result under half of the previous on the same device and scene re-measured once; unit tests with a forced low sample). `volume.start` drives the technique's warm-up; `GIVolume.restart`, `GIVolume.fromDDGIVolume`, `onCreated`. The viewer starts DDGI through `volume.start`; its own warm-up copy is gone. Pages: `ddgi-schedule-reduction`, `ddgi-feedback`, `ddgi-warmup` (suite); `ddgi-schedule-step`, `ddgi-schedule-sponza` (manual).
+**The larger step exposed the overshoot's cause, fixed in the history rule** (DECISIONS): estimates bounce off a field still holding the old light, so a count growing back by one an update averages stale estimates in (two-room's lamp halved: 45% of the step left at 30 frames). The cut now holds for the promised updates and is solved with a bounce share `changeBounceShare` 0.8 (two-room's, measured); a change promises the updates its bounces need; darkenings are measured against the light that's left; reported changes skip the firefly clamp. No hysteresis floor. Also: feedback at 6σ on a relative noise; unranged lights mark every probe.
+Verified on the RTX 3060 (nvidia/ampere, Chrome 156 headless) at the calibrated batches from one VALID run (49 °C, 0% throttled): Cornell point 1,463, two-room 880, Sponza 316. Counted in frames (30 = 0.5 s).
+1. Two-room lamp on / halved: frame 1 moves 33% / 13%, within 5% for good from frame **9 / 17**; Cornell **5 / 8** (frame 1: 47% / 24%). Steps 100% / 50% of the view; overshoot 0–0.3% of the step, never left the band. T2.4a's 2 m move now peaks at +0.8% (was +3.9%).
+2. Sponza sun halved at bookmark 1 (31% of the view): frame 1 12.4%; within 5% from frame **19, 22, ≤30, 34** in four runs: borderline (it hovers at 5% from about frame 24).
+3. Census (60 s): two-room swinging lamp longest wait 1 frame (bound 10); Sponza sun turning 1.5°/s **61 frames** (bound 492).
+4. Scheduler **0.020–0.027 ms** at 20,000 probes (VALID, 2,070 MHz); subgroup and fallback histograms, counts and lists agree exactly on the RTX **and the Intel UHD**, and match the CPU twin.
+5. Sponza sun 30° lower: view within 5% from frame **6**; the field's light-weighted error within 5% from frame **48**, 1.7% at 3 s (floor 1.1%). Per-probe relative error at 3 s: mean 12.5%, p95 53%, near 5.5%, far 12.6% against 7.5% / 8.4% before the step (far probes' extra noise about +4 points).
+6. Warm-up: a host that only runs frames gets the old viewer warm-up's field value for value (0 values differ) after the same 16 frames, then the calibration starts; RTX and Intel.
+7. Feedback: fires on 0.051% (Cornell) / 0.026% (two-room) of updates in 600 frames after the warm-up (0.089% / 0.067% in frames 600–1,800); view mean on vs off +0.03% / −0.02%; an unreported glowing crate (64 a frame) had all 53 probes within a spacing revisited within 30 frames (median frame 6, against 24 without).
+Also: sweep within 5% at 0.8 / 1.6 / 2.4 s (−0.9 / +0.5 / +3.5%; per pixel 3.9–4.4% against M1's 9–28%, whose view mean is within 5% too); Sponza lamp recall **97.7%** (0.3) / **98.5%** (3) (59% before unranged lights marked every probe). Full RTX suite 43/43 (furnace −0.15%, leak 0.83%, Cornell test view +5.63%, still scenes within 0.006% of M1, `viewer-baselines` and `three-examples` through `volume.start`); Intel: still within 0.006%, furnace −0.28%, mark and schedule reductions, warm-up. Flicker (T1.12's counts): Cornell 0.0877% / 0.361% (same digits), two-room 0.0097% / 0.032%, Sponza 0.0252% / 0.095%. `pnpm lint && pnpm typecheck && pnpm test` pass (972).
+Not verified: responses, feedback and recall on the Intel (not asked); the viewer by hand in a headed browser (only through `viewer-baselines`); the noise right after deep cuts by eye (risk 2); unranged-light mark cost with many lights (`sponza-candles`); furnished room, Bistro.
+Numbers: `timing.csv` (schedule, calibration), `flicker.csv`, new `response.csv` (curves).
+Next: for the lead: (a) check 5 is judged on the light-weighted field error, because per-probe relative error has an 8% floor at 316 a frame (DECISIONS); (b) the sun halving is borderline, and the sun layer (T2.5/T2.6b) makes a sun dimming mark nothing; treating all in-view probes as near made it worse (42 frames). T2.4c: key boost and `keyResidualShare` go in `ddgiPromisedUpdates`/`ddgiMarkProbe` (mark.ts); the awaiting flag (bit 2) is kept clear by the blend; `takingChange` is bit 3.
+
+## 2026-11-06 · T2.4a review and merge · M2 lead (opus), reviewer (opus)
+Did: Opus review of `m2-t2.4a`: **PASS WITH NOTES.** Merged into `m2` (cf0369d) with the review's doc fixes (ddgi.md, NOTES, the change-index wording in `contract/scene-copy.ts`, the `range: 0` risk in DECISIONS). T2.4a marked done.
+Verified (reviewer, RTX 3060 nvidia/ampere): `ddgi-change-still` differs from M1 by exactly 0 on Cornell, two-room and two-room fixed 0.97, 0 marks; `ddgi-mark-reduction` subgroups = fallback (964 marks); `ddgi-change-step` frame 1 −6.9%, frame 2 +0.4%, peak +3.9% at frame 7, +2.0% at 2 s, M1's rule 1.417 s, recall 472/472, precision 97.5%. Lead: lint, typecheck, `pnpm test` (960) on the merged tree. No GPU run on the merged tree (the merge conflicted only in PROGRESS).
+Notes carried to T2.4b (TASKS "M2 done-when changes"): the step was small (6.9% of the view), so its +3.9% overshoot is 56% of the step; a ≥ 25% step and an overshoot report; a test of the steady-change rule; a lamp inside sunlit Sponza, because the influence radius is set against the sun.
+The four DECISIONS entries stand (`lightChangeScale` 0.5, the ramp not rewound, environment r = 1 until T2.6a, `range: 0` lights local).
+
+## 2026-11-06 · T2.4a change-driven history and `ddgi/mark` · implementer (opus)
+Did (branch `m2-t2.4a`, 8add5c0..b07d0bd): `SceneChanges.lights` (old and new light, index, influence radius; 1,024 a frame, then `lightsOverflowed` + global; `range: 0` lights are local now) in `platform/scene/change-log.ts`; changes made while the budget is paused now reach the next frame (they were dropped; the three adapter's first sync runs paused). Light falloff as a binding-free module (`HitShading.lightFalloff`); the kernel builder hoists `enable` directives. DDGI: 48-byte history (§4.1 words laid out; owed/schedule/keys/clock/wakeUntil left 0 for T2.4b/c/M3), the cut and steady-change rule in `ddgi/blend` before T1.12's fade, mean irradiance and noise written by every blend, `ddgi/mark` (wgsl/mark.ts, mark-table.ts) with subgroup-first mark counting, counters "probes marked", "probes marked (total)", "frames with changes marked". Pages: `ddgi-change-still`, `ddgi-change-step` (manual), `ddgi-mark-reduction`; `ddgi-flicker` reports marks.
+Verified (RTX 3060 = nvidia, Intel UHD = intel, Chrome 156 headless, `--no-cool-wait`):
+1. Still field vs M1 (db431f6), 600 frames: Cornell, two-room, two-room under the fixed 0.97 rule all **identical to the last digit** on nvidia and intel. Flicker (`ddgi-flicker`, T1.12's fixed counts 1574/707/268) on nvidia: Cornell 0.0877% / 0.361%, two-room 0.0096% / 0.031%, Sponza 0.0242% / 0.081%, field means 0.059648 / 0.71265 / 0.0016112: **the same digits as T1.12's rows** (flicker.csv, commit b07d0bd).
+2. Two-room lamp moved 2 m, every probe every frame (1,071), lit-room GI view: frame 1 (the mark) −6.9%, **within 5% from frame 2 (0.033 s)**, at most +3.9%, +2.0% after 2 s; M1's rule alone 1.42 s. nvidia only.
+3. Marks on still scenes: 0 over 600 frames (still page, both GPUs) and 0 over each flicker run incl. Sponza through the adapter (nvidia).
+4. Marked (r > ε) against probes really changed > 5% (two converged fields): lit room 472 of 472 (**recall 100%**, precision 97.5%), volume 949 of 949 (precision 98.4%). **`lightChangeScale` 0.5** (DECISIONS): true change / unscaled mark median 0.48 (quartiles 0.25–0.73); at 0.25 recall was 99.8% but cuts too shallow, response 0.73 s. Recall at 0.1 / 0.15 / 0.25: 65 / 90 / 99.8%.
+Also: subgroups = fallback marks bit for bit (both GPUs); environment marks every active probe at 0.25–1.0, a new sun 25–100 (nvidia); furnace −0.15% (nvidia) / −0.28% (intel), Cornell test view +5.63%, two-room leak 0.83%, full nvidia suite 40/40 (before the last fix; the DDGI, hit-shading, scene-copy and three pages re-run after it: pass). `pnpm lint && pnpm typecheck && pnpm test`: pass (960 tests).
+Found and fixed: the fixed hysteresis rule read h = 0 when nothing was cut (`x/(x+1)` at 3e38 flushes to 0 on the GPU); `ddgi-flicker` on Sponza caught it (−0.79%), the still page now covers it. Measured and dropped: rewinding the warm-up ramp on a cut (larger overshoot: 0.30 s instead of 0.03 s).
+Not verified: the response and recall on Intel (not asked); any scene other than two-room for checks 2 and 4 (one light, small rooms where nearly every probe changes, so precision says little); sun and sky marks against a re-converged field (T2.4b/T2.6); noise right after a change.
+Next: T2.4b reads `urgency`/noise and fills `owed` (mark doesn't set it yet). The environment's r is 1 until T2.6a brings the sky's SH to the CPU. The sun-layer exception goes in mark-table.ts (comment there). Check `lightChangeScale` on a larger scene (Sponza lamp, or T2.4b's Cornell point step). The step's transient overshoot (+3.9%) is old bounce light in probes cut gently; worth watching on Sponza.
+
+## 2026-11-06 · T2.0 review · M2 lead (opus), reviewer (opus)
+Did: Opus review of `m2-t2.0`: **PASS WITH NOTES; the go for T2.2 holds.** Brought the findings commit (1cc1922) into `m2`; the spike code stays on branch `m2-t2.0` (06d5a18). T2.0 marked done.
+Verified (reviewer): the fits and ratios re-derived from `timing.csv` (inline 0.7636 ms + 4.065 µs/probe, deferred 0.5283 ms + 2.276 µs/probe; 2.20× by Budget v2, 2.13× by fit, 1.97× by curve); both runs VALID at 06d5a18 (47 / 49 °C start, 0 thermal samples). Sky, back faces, emission, fixed rays and bounce are handled alike in both kernels, and the deferred total includes `ddgi/direct` and its args pass. `ddgi-direct-spike` re-run on the RTX (nvidia, ampere): the same field numbers as the implementer's.
+Corrections to the entry below: the deferred "curve 618" is extrapolated past 512 probes (the measured curve tops out at 1.72 ms); the two runs' `note/*` rows in `timing.csv` share their keys, so only row order tells which verdict is which path; the 0.03% field offset is a fixed bias from the surface record's rounding, not noise. NOTES: an untraceable "187–201 Mrays/s" removed.
+Next: T2.2 takes the review's lessons (TASKS "M2 done-when changes" → T2.2).
+
+## 2026-11-06 · T2.0 spike: deferred shadow-ray pass on Sponza · implementer (opus)
+Did (spike code 06d5a18 on throwaway branch `m2-t2.0`, worktree `webgpu-ddgi-m2-t20`): `DDGITechniqueOptions.directLight: 'inline' | 'deferred'` switches the paths in one build (default inline, M1's kernel untouched). Deferred: `wgsl/trace-deferred.ts` writes a 24-byte surface record (position, octahedral shading and ray-side normals, 10:10:10 albedo) plus the ray index (28 B per item) into a compacted work list, one `atomicAdd` per subgroup with `subgroupExclusiveAdd` offsets, or per hit (`workList: 'atomics'`); a 1-thread kernel writes the indirect args; `gi/direct` (`platform/shade/direct.ts`) rebuilds the surface, calls the same `giDirectIrradiance` and adds albedo/π × direct into the ray's radiance. The kernel builder now hoists a kernel's leading `enable` lines above the modules. Pages: `ddgi-batch-cost` gets `VITE_DDGI_DIRECT`, `VITE_DDGI_WORK_LIST` and a `bound` section (GPU-bound curve, 16–512 probes, two frames in flight, per pass, with fit and a page-only shadow-ray count); new `ddgi-direct-spike` (field match) and `trace-bench-sponza-anyhit` (our tracers only).
+Verified, timing (RTX 3060 Laptop, headless Chrome 156, Sponza, one VALID run per path under the clock rule: inline started 47 C, deferred 49 C, both 0% thermal samples; SM median 1,852 / 1,755 MHz, power-limited). Update GPU ms (all `ddgi/` passes but the census), GPU-bound:
+
+| Probes | 16 | 32 | 64 | 128 | 256 | 512 | Fit (16–512) | At 2 ms: fit / curve / Budget v2 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Inline (M1) | 0.674 | 0.883 | 1.141 | 1.389 | 1.762 | 2.831 | 0.764 ms + 4.07 µs/probe | 304 / 313 / **293** (1.87 ms) |
+| Deferred | 0.548 | 0.651 | 0.694 | 0.793 | 1.055 | 1.723 | 0.528 ms + 2.28 µs/probe | 647 / 618 / **646** (2.02 ms) |
+
+- **Ratio: 2.20× (Budget v2), 2.13× (fit), 1.97× (curve). Decision rule (≥ 1.25×): go ahead with T2.2.** Far from the threshold, so no second run.
+- Both parts dropped: fixed −31%, per probe 0.56× (the design guessed 0.6×). Deferred at 512: trace 1.17, `gi/direct` 0.41, args 0.002, blend 0.14, write 0.008 ms. Inline trace at 512: 2.68 ms; its breakdown: full 2.52, without direct 1.10.
+- **Shadow-ray rate:** Sponza gives 81 work items and 38.6 shadow rays per probe (half of the front-face hits face away from the sun). `gi/direct`: 48 Mrays/s at 512 probes (19.8k rays in 0.41 ms), 22 at 128. Inline, from its breakdown (full − without direct): 14 Mrays/s at 512, 6.6 at 128. The trace bench's any-hit rate in the same worktree: 245 Mrays/s (ours-tinybvh), 214 (platform), at 878k rays a dispatch. So deferred runs at about 1/4.4 of the bench rate (inline 1/15); a 20k-ray dispatch can't fill the GPU.
+
+Verified, correctness (`ddgi-direct-spike`, `--no-cool-wait`, 300 frames of 4,096 probes or every probe; test-view GI image mean per bookmark and the irradiance atlas mean against inline): **pass on both GPUs.** RTX: Cornell (emissive, no lights) 0 exactly; Cornell point light −0.023% to −0.033%; Sponza −0.003% to +0.011%. Intel UHD: Cornell 0; Cornell point −0.026% to −0.036%; Sponza −0.002% to +0.012%. The subgroup and atomic work lists give identical fields (gi/direct's random numbers follow the ray index, not the list order). Also: `pnpm lint`, `typecheck`, `test` (947) pass; on the RTX `ddgi-*`, `hit-shading-*` and `trace-inline` (12 pages) pass with the spike in the build.
+Not verified: the Intel's timing (correctness only); Sponza with many lights (one sun here, so no light choice and no soft-shadow noise); two-room and Bistro costs; a second run per path (the rule didn't need one).
+Numbers: `timing.csv` `batch_cost/inline/...` and `batch_cost/deferred/...` (commit 06d5a18: `bound_batch<n>`, `bound_fit`, `shadow_rays`, `v2_budget2ms`, `startup`, inline `breakdown`; `note/timing_valid,1`); `trace.csv` 06d5a18 `ours-tinybvh/any` and `platform/any`.
+Next (T2.2): append only hits with at least one light reaching their side (halves Sponza's list; cheap sun test in the trace); fold rays and work list into one ray scratch (the deferred trace binds 8 storage buffers, the default limit); size the list per blended ray and in 1,024-probe rounds (the spike's is 28 B per ray: 29 MB at a 4,096-probe batch); albedo above 1 (the spike clamps); `giDirectLightSamples`; pass attribution for a platform `gi/direct` (the spike times it as `ddgi/direct`).
+
 ## 2026-11-06 · T1.12 flicker against Dennis's threshold · implementer (opus)
 Verified (RTX 3060, Chrome 156, `ddgi-flicker`, `--no-cool-wait`, default rule τ 5 s with the ramp, 1200 frames settled, one run each; threshold mean ≤ 0.1%, p95 ≤ 0.5%, DECISIONS e7a6e88): **all pass.** At `gpuMs:2` (mean / p95 per-pixel change a frame): Cornell 0.082% / 0.34%, two-room 0.0099% / 0.032%, Sponza 0.027% / 0.096%. At the calibrated batch as a fixed count (1574 / 707 / 268 probes): 0.088% / 0.36%, 0.0096% / 0.031%, 0.024% / 0.081%. Cornell has the least margin (12–18% under the mean bar). Rows: `bench/results/flicker.csv`, `note/flicker_threshold_check`. No code changed.
 

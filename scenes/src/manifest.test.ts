@@ -14,6 +14,7 @@ import {
     manifestLightToSceneLight,
     NO_RANGE_WINDOW,
     parseManifest,
+    sceneSettingValues,
     type ModelTransform,
     validateManifest,
     type SceneManifest,
@@ -185,6 +186,33 @@ describe('validateManifest', () => {
         ]);
     });
 
+    it('checks light-set parts and the settings they read (T2.1)', () => {
+        const candles = { kind: 'light-set', asset: 'sponza-intel-candles', path: 'candles/sponza-candles.json', countSetting: 'candles' };
+        const setting = { label: 'Candles', description: 'How many candles.', default: 1024, min: 1, max: 10000 };
+        const withSet = (change: (manifest: Record<string, unknown>) => void) =>
+            errorsFor((m) => {
+                (m.parts as unknown[]).push({ ...candles });
+                (m.credits as unknown[]).push({ asset: 'sponza-intel-candles', license: 'CC-BY-4.0+intel-preface', attribution: 'Intel' });
+                m.settings = { candles: setting };
+                change(m);
+            });
+        expect(withSet(() => {})).toEqual([]);
+        expect(withSet((m) => delete m.settings)).toEqual([expect.stringContaining('"candles" is not one of the scene settings')]);
+        expect(withSet((m) => (m.settings = { candles: { ...setting, default: 20000 } }))).toEqual([expect.stringContaining('min <= default <= max')]);
+        expect(withSet((m) => (m.settings = { candles: { ...setting, max: 1.5 } }))).toEqual([expect.stringContaining('whole numbers')]);
+        expect(withSet((m) => ((m.parts as Record<string, unknown>[])[1].path = '../x.json'))).toEqual([expect.stringContaining('relative path')]);
+        expect(withSet((m) => (m.credits as unknown[]).pop())).toEqual([expect.stringContaining('no credit for asset "sponza-intel-candles" used by a light-set part')]);
+    });
+
+    it('reads settings from a link, clamped to their range, the default otherwise', () => {
+        const manifest = { settings: { candles: { label: 'Candles', description: 'x', default: 1024, min: 1, max: 10000 } } };
+        expect(sceneSettingValues(manifest)).toEqual({ candles: 1024 });
+        expect(sceneSettingValues(manifest, { candles: '4096' })).toEqual({ candles: 4096 });
+        expect(sceneSettingValues(manifest, { candles: 99999 })).toEqual({ candles: 10000 });
+        expect(sceneSettingValues(manifest, { candles: 'many', other: 3 })).toEqual({ candles: 1024 });
+        expect(sceneSettingValues({})).toEqual({});
+    });
+
     it('parseManifest reports bad JSON and lists every problem', () => {
         expect(() => parseManifest('{', 'broken.json')).toThrow('broken.json: not valid JSON');
         expect(() => parseManifest('{"id": 1}', 'bad.json')).toThrow(/not a valid scene manifest[\s\S]*id:[\s\S]*title:/);
@@ -254,6 +282,7 @@ describe('the manifests in scenes/manifests', async () => {
             'furnished-room',
             'open-ground',
             'sponza',
+            'sponza-candles',
             'sponza-full',
             'thin-wall',
             'two-room',
@@ -261,8 +290,8 @@ describe('the manifests in scenes/manifests', async () => {
         expect(manifests.map((m) => m.id).sort()).toEqual(expected);
     });
 
-    it('marks only sponza-full heavy, so tools that go through every scene leave it out unless named', () => {
-        expect(manifests.filter(isHeavyScene).map((manifest) => manifest.id)).toEqual(['sponza-full']);
+    it('marks only sponza-full and sponza-candles heavy, so tools that go through every scene leave them out unless named', () => {
+        expect(manifests.filter(isHeavyScene).map((manifest) => manifest.id)).toEqual(['sponza-candles', 'sponza-full']);
     });
 
     it('has no placeholder scenes left: every scene has its assets confirmed', () => {
@@ -299,7 +328,7 @@ describe('the manifests in scenes/manifests', async () => {
             };
             for (const part of manifest.parts) {
                 if (part.kind === 'procedural') include(sceneBounds(buildProcedural(part.builder, part.options)));
-                else include(gltfWorldBounds(await readModelJson(join(downloadsDirectory, part.asset, part.path)), modelTransformMatrix(part.transform)));
+                else if (part.kind === 'model') include(gltfWorldBounds(await readModelJson(join(downloadsDirectory, part.asset, part.path)), modelTransformMatrix(part.transform)));
             }
             for (let axis = 0; axis < 3; axis++) {
                 const volumeMin = manifest.volume.center[axis] - manifest.volume.size[axis] / 2;

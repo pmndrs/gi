@@ -70,6 +70,30 @@ export function placeModules(modules: readonly WgslModule[]): PlacedModule[] {
     });
 }
 
+/**
+ * A WGSL global directive on a line of its own: `enable subgroups;`,
+ * `requires ...;` or `diagnostic(off, ...);`. WGSL wants every directive
+ * before the first declaration.
+ */
+const DIRECTIVE_LINE = /^[ \t]*(?:enable|requires|diagnostic)\b[^;\n]*;[ \t]*$/gm;
+
+/**
+ * The kernel's source with every global directive moved to the top, once
+ * each, in the order first seen. Why: the builder puts the platform modules
+ * before the technique's code, so a technique that writes `enable subgroups;`
+ * at the start of its own code would otherwise have it after the modules'
+ * declarations, which WGSL refuses.
+ */
+export function hoistDirectives(code: string): string {
+    const directives: string[] = [];
+    const body = code.replace(DIRECTIVE_LINE, (line) => {
+        const directive = line.trim();
+        if (!directives.includes(directive)) directives.push(directive);
+        return '';
+    });
+    return directives.length === 0 ? code : `${directives.join('\n')}\n${body}`;
+}
+
 /** Storage buffers the modules bind together. */
 export function countStorageBuffers(modules: readonly WgslModule[]): number {
     return modules.reduce((sum, module) => sum + module.storageBufferCount, 0);
@@ -124,7 +148,7 @@ export class PlatformKernelBuilder implements KernelBuilder {
                 module.entries.map((entry, index) => ({ ...entry, binding: slot.firstBinding + index })),
             ),
         });
-        const code = [...placed.map(({ module, slot }) => `// ---- module ${module.name} ----\n${module.code(slot)}`), options.code].join('\n');
+        const code = hoistDirectives([...placed.map(({ module, slot }) => `// ---- module ${module.name} ----\n${module.code(slot)}`), options.code].join('\n'));
         const shaderModule = device.createShaderModule({ label, code });
 
         let pipeline: GPUComputePipeline;

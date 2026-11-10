@@ -32,6 +32,10 @@
  *      with the asset folder as the working directory, and `{dir}`, `{id}` and
  *      `{repo}` in args replaced by the absolute asset folder, the asset id and
  *      the repository root.
+ *      A `node` step (a TypeScript script run by this same Node, with its type
+ *      stripping) runs as `node <script> <args>` from the repository root, for
+ *      conversions that only reshape data and need no Blender (the candle
+ *      subset of sponza-candles).
  *      Convert scripts must never write to their input files: those are hard
  *      links into the shared cache, so an in-place edit would change the cache
  *      and the other asset that shares it. The tool checks this: it notes the
@@ -76,7 +80,7 @@ export interface AssetDownload {
     sha256: string;
 }
 
-export interface AssetConvert {
+export interface BlenderConvert {
     tool: 'blender';
     /** Repo-relative path to a Python script. It must write only new files, never its inputs (see the header). */
     script: string;
@@ -89,6 +93,15 @@ export interface AssetConvert {
      */
     blenderVersion: string;
 }
+
+/** A conversion in plain Node: a repo-relative TypeScript script, run with Node's type stripping. Same rules: new files only. */
+export interface NodeConvert {
+    tool: 'node';
+    script: string;
+    args: string[];
+}
+
+export type AssetConvert = BlenderConvert | NodeConvert;
 
 /** `validateSources` guarantees `sha256` and `bytes`. */
 export interface AssetOutput {
@@ -348,11 +361,13 @@ export function validateSources(value: unknown): string[] {
 
         const convert = entry.convert;
         if (convert !== null) {
-            if (!isRecord(convert) || convert.tool !== 'blender' || !isNonEmptyString(convert.script) || !Array.isArray(convert.args)) {
-                errors.push(`${where}.convert: must be null or { tool: "blender", script, args: [] }`);
+            if (!isRecord(convert) || (convert.tool !== 'blender' && convert.tool !== 'node') || !isNonEmptyString(convert.script) || !Array.isArray(convert.args)) {
+                errors.push(`${where}.convert: must be null, { tool: "blender", script, args: [], blenderVersion } or { tool: "node", script, args: [] }`);
             } else if (!isSafeRelativePath(convert.script) || !convert.args.every((arg: unknown) => typeof arg === 'string')) {
                 errors.push(`${where}.convert: script must be a repo-relative path and args must be strings`);
-            } else if (!(typeof convert.blenderVersion === 'string' && /^\d+\.\d+\.\d+$/.test(convert.blenderVersion))) {
+            } else if (convert.tool === 'node' && !convert.script.endsWith('.ts')) {
+                errors.push(`${where}.convert.script: a node conversion is a .ts script, run with Node's type stripping`);
+            } else if (convert.tool === 'blender' && !(typeof convert.blenderVersion === 'string' && /^\d+\.\d+\.\d+$/.test(convert.blenderVersion))) {
                 errors.push(`${where}.convert.blenderVersion: required, the full version that made the recorded outputs, like "4.5.0"`);
             }
         }
@@ -969,9 +984,9 @@ export function metalProblems(gltf: GltfJsonForMaterials): string[] {
 /** What to add to a mismatch message for a file a conversion makes. */
 function conversionCause(convert: AssetConvert | null | undefined): string {
     if (!convert) return '';
+    const likely = convert.tool === 'blender' ? `a different Blender version (this one needs ${convert.blenderVersion}) or a changed conversion script` : `a changed conversion script (${convert.script})`;
     return (
-        `. This file is made by a conversion, so a different Blender version (this one needs ${convert.blenderVersion}) or a changed ` +
-        `conversion script is the likely cause. If the change is intended, re-record the hashes (--hash, and --record-glb-views for ` +
+        `. This file is made by a conversion, so ${likely} is the likely cause. If the change is intended, re-record the hashes (--hash, and --record-glb-views for ` +
         `.glb outputs marked reproducible false)`
     );
 }
@@ -1548,15 +1563,15 @@ export async function runConversionProcess(command: string, args: string[], opti
 }
 
 /** Null when a conversion run counts as a success, otherwise the message to fail with. */
-export function conversionFailure(result: ConversionResult, script: string, limits: ConversionLimits = DEFAULT_CONVERSION_LIMITS): string | null {
+export function conversionFailure(result: ConversionResult, script: string, limits: ConversionLimits = DEFAULT_CONVERSION_LIMITS, tool = 'Blender'): string | null {
     switch (result.end) {
         case 'timed-out':
-            return `Blender was still running after ${limits.timeoutMs / 60_000} minutes without finishing the outputs, so it was stopped (${script})`;
+            return `${tool} was still running after ${limits.timeoutMs / 60_000} minutes without finishing the outputs, so it was stopped (${script})`;
         case 'stopped-after-outputs':
             return null;
         case 'exited':
             if (result.code === 0) return null;
-            return `Blender ${result.code !== null ? `exited with code ${result.code}` : `was ended by signal ${result.signal}`} while running ${script}`;
+            return `${tool} ${result.code !== null ? `exited with code ${result.code}` : `was ended by signal ${result.signal}`} while running ${script}`;
     }
 }
 
@@ -1585,20 +1600,28 @@ async function runConvert(asset: AssetEntry, assetDirectory: string, inputs: rea
     if (!convert) return;
     const script = resolve(repoRoot, convert.script);
     if (!(await fileExists(script))) throw new Error(`convert script not found: ${convert.script}`);
-    const blender = await findBlender(convert.blenderVersion);
     const args = substitutePlaceholders(convert.args, { dir: assetDirectory, id: asset.id, repo: repoRoot });
-    console.log(`  converting with Blender ${blender.version} at ${blender.path}`);
 
     const before = await fileFingerprints(assetDirectory, inputs);
-    const result = await runConversionProcess(blender.path, ['--background', '--factory-startup', '--python-exit-code', '1', '--python', script, '--', ...args], {
-        cwd: assetDirectory,
-        assetDirectory,
-        outputs: asset.outputs,
-        limits,
-    });
-    const failure = conversionFailure(result, convert.script, limits);
+    let result: ConversionResult;
+    if (convert.tool === 'node') {
+        // From the repository root, not the asset folder: the downloaded files are data, never code a run could pick up.
+        console.log(`  converting with Node ${process.version}`);
+        result = await runConversionProcess(process.execPath, [script, ...args], { cwd: repoRoot, assetDirectory, outputs: asset.outputs, limits });
+    } else {
+        const blender = await findBlender(convert.blenderVersion);
+        console.log(`  converting with Blender ${blender.version} at ${blender.path}`);
+        result = await runConversionProcess(blender.path, ['--background', '--factory-startup', '--python-exit-code', '1', '--python', script, '--', ...args], {
+            cwd: assetDirectory,
+            assetDirectory,
+            outputs: asset.outputs,
+            limits,
+        });
+    }
+    const tool = convert.tool === 'node' ? 'Node' : 'Blender';
+    const failure = conversionFailure(result, convert.script, limits, tool);
     if (failure) throw new Error(failure);
-    if (result.end === 'stopped-after-outputs') console.log('  all outputs are written; Blender did not exit by itself, so it was stopped');
+    if (result.end === 'stopped-after-outputs') console.log(`  all outputs are written; ${tool} did not exit by itself, so it was stopped`);
 
     const after = await fileFingerprints(assetDirectory, inputs);
     const changed = inputs.filter((path) => before.get(path) !== after.get(path));

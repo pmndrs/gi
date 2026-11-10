@@ -1,0 +1,4 @@
+{
+    "description": "GPU mesh packing (T2.13): every mesh of every procedural scene packed by gi/pack-mesh and compared with the CPU packer (indices, positions, uvs, slots bit for bit; normals within one octahedral step). VITE_DDGI_SCENES=sponza,bistro-exterior for the downloaded scenes.",
+    "timeoutMs": 300000
+}

@@ -62,7 +62,7 @@ export interface TopLevelBvh {
  * into object space cannot make a ray miss the box of an instance it touches.
  * About four f32 steps.
  */
-const WORLD_BOX_PADDING = 2 ** -21;
+export const WORLD_BOX_PADDING = 2 ** -21;
 
 /** Smallest determinant magnitude we still treat as an invertible transform. */
 const MIN_DETERMINANT = 1e-30;
@@ -73,20 +73,33 @@ const MIN_DETERMINANT = 1e-30;
  * Returns null if the matrix is singular or has non-finite entries.
  */
 export function invertAffine(objectToWorld: Mat4): { rows: Float64Array; determinant: number } | null {
+    const rows = new Float64Array(12);
+    const determinant = invertAffineInto(objectToWorld, rows);
+    return determinant === 0 ? null : { rows, determinant };
+}
+
+/**
+ * {@link invertAffine} into `out` (12 numbers), reading the matrix from `offset` in `objectToWorld`, without allocating: for the
+ * scene copy's per-instance writes, which `setTransforms` makes thousands
+ * of a frame. Returns the determinant, or 0 when the matrix is singular or
+ * the result isn't finite (then `out` holds garbage).
+ */
+export function invertAffineInto(objectToWorld: Mat4, out: Float64Array, offset = 0): number {
     const e = objectToWorld;
-    if (e.length < 16) throw new RangeError('objectToWorld must have 16 entries');
+    const o = offset;
+    if (e.length < o + 16) throw new RangeError('objectToWorld must have 16 entries');
     // The linear part L, with L[row][column] = e[column * 4 + row].
-    const m00 = e[0], m01 = e[4], m02 = e[8];
-    const m10 = e[1], m11 = e[5], m12 = e[9];
-    const m20 = e[2], m21 = e[6], m22 = e[10];
-    const tx = e[12], ty = e[13], tz = e[14];
+    const m00 = e[o], m01 = e[o + 4], m02 = e[o + 8];
+    const m10 = e[o + 1], m11 = e[o + 5], m12 = e[o + 9];
+    const m20 = e[o + 2], m21 = e[o + 6], m22 = e[o + 10];
+    const tx = e[o + 12], ty = e[o + 13], tz = e[o + 14];
 
     // Cofactors of the first column and the determinant.
     const c00 = m11 * m22 - m12 * m21;
     const c10 = m12 * m20 - m10 * m22;
     const c20 = m10 * m21 - m11 * m20;
     const determinant = m00 * c00 + m01 * c10 + m02 * c20;
-    if (!Number.isFinite(determinant) || !(Math.abs(determinant) > MIN_DETERMINANT)) return null;
+    if (!Number.isFinite(determinant) || !(Math.abs(determinant) > MIN_DETERMINANT)) return 0;
     const inverseDeterminant = 1 / determinant;
 
     // inverse(L) = adjugate(L) / det, written out by rows.
@@ -101,34 +114,52 @@ export function invertAffine(objectToWorld: Mat4): { rows: Float64Array; determi
     const i22 = (m00 * m11 - m01 * m10) * inverseDeterminant;
 
     // p_object = inverse(L) * (p_world - t) = inverse(L) * p_world - inverse(L) * t
-    const rows = new Float64Array([
-        i00, i01, i02, -(i00 * tx + i01 * ty + i02 * tz),
-        i10, i11, i12, -(i10 * tx + i11 * ty + i12 * tz),
-        i20, i21, i22, -(i20 * tx + i21 * ty + i22 * tz),
-    ]);
-    if (rows.some((value) => !Number.isFinite(value))) return null;
-    return { rows, determinant };
+    out[0] = i00;
+    out[1] = i01;
+    out[2] = i02;
+    out[3] = -(i00 * tx + i01 * ty + i02 * tz);
+    out[4] = i10;
+    out[5] = i11;
+    out[6] = i12;
+    out[7] = -(i10 * tx + i11 * ty + i12 * tz);
+    out[8] = i20;
+    out[9] = i21;
+    out[10] = i22;
+    out[11] = -(i20 * tx + i21 * ty + i22 * tz);
+    for (let index = 0; index < 12; index++) if (!Number.isFinite(out[index])) return 0;
+    return determinant;
 }
 
-/** Axis-aligned box around an object-space box after `objectToWorld`, grown by {@link WORLD_BOX_PADDING}. */
+/**
+ * Axis-aligned box around an object-space box after `objectToWorld`, grown by {@link WORLD_BOX_PADDING}.
+ * Each axis takes the smallest and largest of the eight corners' coordinates, each worked out as
+ * `e[axis] x + e[4 + axis] y + e[8 + axis] z + e[12 + axis]` in that order, so the result is the same
+ * to the bit however the loop is written. Written with plain numbers and no arrays: `setTransforms`
+ * calls it for every moved instance, 10,000 a frame (T2.M1).
+ */
 export function transformBounds(meshBounds: ArrayLike<number>, objectToWorld: Mat4, out: Float32Array, offset: number): void {
     const e = objectToWorld;
-    const low = [Infinity, Infinity, Infinity];
-    const high = [-Infinity, -Infinity, -Infinity];
-    for (let corner = 0; corner < 8; corner++) {
-        const x = corner & 1 ? meshBounds[3] : meshBounds[0];
-        const y = corner & 2 ? meshBounds[4] : meshBounds[1];
-        const z = corner & 4 ? meshBounds[5] : meshBounds[2];
-        for (let axis = 0; axis < 3; axis++) {
-            const value = e[axis] * x + e[4 + axis] * y + e[8 + axis] * z + e[12 + axis];
-            if (value < low[axis]) low[axis] = value;
-            if (value > high[axis]) high[axis] = value;
-        }
-    }
+    const x0 = meshBounds[0];
+    const y0 = meshBounds[1];
+    const z0 = meshBounds[2];
+    const x1 = meshBounds[3];
+    const y1 = meshBounds[4];
+    const z1 = meshBounds[5];
     for (let axis = 0; axis < 3; axis++) {
-        const pad = (Math.max(Math.abs(low[axis]), Math.abs(high[axis])) + (high[axis] - low[axis])) * WORLD_BOX_PADDING;
-        out[offset + axis] = low[axis] - pad;
-        out[offset + 3 + axis] = high[axis] + pad;
+        const mx = e[axis];
+        const my = e[4 + axis];
+        const mz = e[8 + axis];
+        const t = e[12 + axis];
+        let low = Infinity;
+        let high = -Infinity;
+        for (let corner = 0; corner < 8; corner++) {
+            const value = mx * (corner & 1 ? x1 : x0) + my * (corner & 2 ? y1 : y0) + mz * (corner & 4 ? z1 : z0) + t;
+            if (value < low) low = value;
+            if (value > high) high = value;
+        }
+        const pad = (Math.max(Math.abs(low), Math.abs(high)) + (high - low)) * WORLD_BOX_PADDING;
+        out[offset + axis] = low - pad;
+        out[offset + 3 + axis] = high + pad;
     }
 }
 

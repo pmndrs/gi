@@ -182,7 +182,7 @@ async function buildThreeSide(context: ThreePageContext, manifest: SceneManifest
     camera.updateMatrixWorld();
 
     const platform = new GIPlatformImpl(device, { label: `three ${manifest.id}` });
-    const ddgi = platform.addTechnique(new DDGITechnique({ volume: { center: manifest.volume.center, size: manifest.volume.size, spacing: manifest.volume.probeSpacing } }));
+    const ddgi = platform.addTechnique(new DDGITechnique({ volume: { center: manifest.volume.center, size: manifest.volume.size, spacing: manifest.volume.probeSpacing }, warmUpPasses: 0 }));
     platform.setOutput(ddgi);
     await platform.prepare();
     const threeGI = new ThreeGI(platform, scene, { budget: { units: 0 } });

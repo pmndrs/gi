@@ -155,8 +155,9 @@ describe('the rays backend’s top level', () => {
     async function setUp(features: string[], options: { diagnostics?: boolean; limits?: Partial<GPUSupportedLimits> } = {}) {
         const gpu = createGpu(features, options.limits);
         const scene = new PlatformScene(gpu.device);
-        const rays = new PlatformRayQueries(gpu.device, scene, { buildIn: 'main', diagnostics: options.diagnostics });
-        await rays.prepare(new PlatformKernelBuilder(gpu.device, 'test'));
+        // The top level is under test: mesh trees come from tinybvh alone (the fake device can't run the GPU's builds).
+        const rays = new PlatformRayQueries(gpu.device, scene, { buildIn: 'main', diagnostics: options.diagnostics, meshTrees: { gpuFirst: false } });
+        await rays.prepare(new PlatformKernelBuilder(gpu.device, 'test'), { batches: false });
         const frame = () => {
             const encoder = gpu.createEncoder();
             rays.update(encoder, scene.encode(encoder));
@@ -297,8 +298,8 @@ describe('the rays backend’s top level', () => {
         };
         const warnings: string[] = [];
         const scene = new PlatformScene(gpu.device);
-        const rays = new PlatformRayQueries(gpu.device, scene, { buildIn: 'main', diagnostics: true, warn: (message) => warnings.push(message) });
-        await rays.prepare(new PlatformKernelBuilder(gpu.device, 'test'));
+        const rays = new PlatformRayQueries(gpu.device, scene, { buildIn: 'main', diagnostics: true, warn: (message) => warnings.push(message), meshTrees: { gpuFirst: false } });
+        await rays.prepare(new PlatformKernelBuilder(gpu.device, 'test'), { batches: false });
         const frame = () => {
             const encoder = gpu.createEncoder();
             rays.update(encoder, scene.encode(encoder));

@@ -35,7 +35,7 @@ import type {
     TextureDescriptor,
     TextureHandle,
 } from '@pmndrs/ddgi-core';
-import { SceneSync } from './scene-sync.ts';
+import { ALWAYS_CHECKED_LIGHTS, DEFAULT_LIGHTS_PER_FRAME, HOT_FRAMES, SceneSync } from './scene-sync.ts';
 
 /** A SceneApi that records every call and keeps the live objects, for checking what the sync sent. */
 class RecordingSceneApi implements SceneApi {
@@ -108,6 +108,18 @@ class RecordingSceneApi implements SceneApi {
     setTransform(instance: InstanceHandle, transform: Mat4): void {
         this.log('setTransform');
         this.instances.get(instance)!.transform = Array.from(transform);
+    }
+    /** Every setTransforms call's instances, in order (one 'setTransforms' entry in `calls` per batch). */
+    readonly transformBatches: number[][] = [];
+    setTransforms(instances: Uint32Array, matrices: Float32Array): void {
+        this.log('setTransforms');
+        expect(matrices.length).toBe(instances.length * 16);
+        this.transformBatches.push(Array.from(instances));
+        instances.forEach((instance, index) => {
+            const record = this.instances.get(instance);
+            if (!record) throw new Error(`setTransforms on unknown instance ${instance}`);
+            record.transform = Array.from(matrices.subarray(index * 16, index * 16 + 16));
+        });
     }
     setVisible(instance: InstanceHandle, visible: boolean): void {
         this.log('setVisible');
@@ -202,7 +214,7 @@ describe('changes', () => {
 
     it('sends one transform when one object moves', () => {
         moving.position.set(1, 2, 3);
-        expect(frame(scene)).toEqual(['setTransform']);
+        expect(frame(scene)).toEqual(['setTransforms']);
         const instance = [...api.instances.values()][0];
         expect(instance.transform.slice(12, 15)).toEqual([1, 2, 3]);
     });
@@ -214,7 +226,7 @@ describe('changes', () => {
         parent.add(moving);
         frame(scene);
         parent.position.y = 5;
-        expect(frame(scene)).toEqual(['setTransform']);
+        expect(frame(scene)).toEqual(['setTransforms']);
     });
 
     it('sends a colour edit (three bumps no version for it), with metalness folded in', () => {
@@ -311,7 +323,7 @@ describe('the walk', () => {
         let framesUntilSeen = 0;
         for (; framesUntilSeen < 10; framesUntilSeen++) {
             bounded.update(scene);
-            if (api.take().includes('setTransform')) break;
+            if (api.take().includes('setTransforms')) break;
         }
         expect(framesUntilSeen).toBeLessThan(Math.ceil(101 / 16));
         // Now hot: each further move is sent in the frame it happens.
@@ -319,7 +331,7 @@ describe('the walk', () => {
             moving.position.y = frame;
             scene.updateMatrixWorld();
             bounded.update(scene);
-            expect(api.take()).toEqual(['setTransform']);
+            expect(api.take()).toEqual(['setTransforms']);
         }
     });
 
@@ -330,7 +342,7 @@ describe('the walk', () => {
         scene.updateMatrixWorld();
         bounded.markChanged(meshes[30]);
         bounded.update(scene);
-        expect(api.take()).toContain('setTransform');
+        expect(api.take()).toContain('setTransforms');
 
         const added = new Mesh(new BoxGeometry(), new MeshStandardMaterial());
         scene.add(added);
@@ -573,11 +585,59 @@ describe('instances', () => {
 
         instanced.setMatrixAt(1, new Matrix4().makeTranslation(0, 7, 0));
         instanced.instanceMatrix.needsUpdate = true;
-        expect(frame(scene)).toEqual(['setTransform']);
+        expect(frame(scene)).toEqual(['setTransforms']);
 
         instanced.count = 2;
         expect(frame(scene)).toEqual(['setVisible']);
         expect([...api.instances.values()][2].visible).toBe(false);
+    });
+
+    it('sends only the instances an update range names, and every changed one without ranges (T2.M1)', () => {
+        const scene = new Scene();
+        const count = 100;
+        const instanced = new InstancedMesh(new BoxGeometry(), new MeshStandardMaterial(), count);
+        for (let index = 0; index < count; index++) instanced.setMatrixAt(index, new Matrix4().makeTranslation(index, 0, 0));
+        scene.add(instanced);
+        frame(scene);
+        const handles = [...api.instances.keys()];
+        // Checked last frame, so this frame's ranges are trusted: instances 40 and 41 are named (as three's own
+        // addUpdateRange counts them, in array elements). Instance 90 also changes, outside the ranges: the range
+        // says it didn't, so it isn't even looked at. (Three would not upload it either.)
+        for (const index of [40, 41, 90]) instanced.setMatrixAt(index, new Matrix4().makeTranslation(index, 5, 0));
+        instanced.instanceMatrix.addUpdateRange(40 * 16, 2 * 16);
+        instanced.instanceMatrix.needsUpdate = true;
+        expect(frame(scene)).toEqual(['setTransforms']);
+        expect(api.transformBatches.at(-1)).toEqual([handles[40], handles[41]]);
+        instanced.instanceMatrix.clearUpdateRanges();
+
+        // No ranges: every instance is compared, and the changed one (90, still unsent) goes out.
+        instanced.setMatrixAt(3, new Matrix4().makeTranslation(3, 5, 0));
+        instanced.instanceMatrix.needsUpdate = true;
+        expect(frame(scene)).toEqual(['setTransforms']);
+        expect(api.transformBatches.at(-1)).toEqual([handles[3], handles[90]]);
+    });
+
+    it('sends every moved object of a frame in one setTransforms call (T2.M1)', () => {
+        const scene = new Scene();
+        const geometry = new BoxGeometry();
+        const material = new MeshStandardMaterial();
+        const meshes = Array.from({ length: 5 }, (_, index) => {
+            const mesh = new Mesh(geometry, material);
+            mesh.position.x = index;
+            scene.add(mesh);
+            return mesh;
+        });
+        const instanced = new InstancedMesh(geometry, material, 4);
+        for (let index = 0; index < 4; index++) instanced.setMatrixAt(index, new Matrix4().makeTranslation(0, index, 0));
+        scene.add(instanced);
+        frame(scene);
+        for (const mesh of meshes.slice(1, 4)) mesh.position.y += 1;
+        instanced.position.z = 2;
+        const calls = frame(scene);
+        expect(calls).toEqual(['setTransforms']);
+        // Three meshes and the four instances under the moved InstancedMesh.
+        expect(api.transformBatches.at(-1)).toHaveLength(3 + 4);
+        expect(sync.report.transforms).toBe(7);
     });
 
     it('shares one platform mesh between meshes that share a geometry', () => {
@@ -680,5 +740,101 @@ describe('lights', () => {
         frame(scene);
         light.removeFromParent();
         expect(frame(scene)).toEqual(['destroyLight']);
+    });
+});
+
+describe('the light walk (T2.1)', () => {
+    const CANDLES = 1024;
+    let scene: Scene;
+    let candles: PointLight[];
+    let sun: DirectionalLight;
+    const roundRobinFrames = Math.ceil((CANDLES + 1 - ALWAYS_CHECKED_LIGHTS) / DEFAULT_LIGHTS_PER_FRAME);
+
+    beforeEach(() => {
+        scene = new Scene();
+        candles = [];
+        for (let index = 0; index < CANDLES; index++) {
+            const candle = new PointLight(0xff3c00, 1, 0, 2);
+            candle.position.set(index % 32, 1, Math.floor(index / 32));
+            candles.push(candle);
+            scene.add(candle);
+        }
+        // Found after the candles: past the first 64 in the light list.
+        sun = new DirectionalLight(0xffffff, 3);
+        scene.add(sun);
+        frame(scene);
+    });
+
+    /** Frames until the next call shows up, up to `limit`. */
+    function framesUntilSent(limit: number): { frames: number; calls: string[] } {
+        for (let count = 1; count <= limit; count++) {
+            const calls = frame(scene);
+            if (calls.length > 0) return { frames: count, calls };
+        }
+        return { frames: Infinity, calls: [] };
+    }
+
+    it('checks a bounded number of lights in a still frame, however many there are', () => {
+        expect(api.lights.size).toBe(CANDLES + 1);
+        expect(frame(scene)).toEqual([]);
+        // The first 64, the sun (directional lights are always checked) and this frame's share of the rest.
+        expect(sync.report.lightsChecked).toBe(ALWAYS_CHECKED_LIGHTS + 1 + DEFAULT_LIGHTS_PER_FRAME);
+    });
+
+    it('sends a change to one of the first 64 lights, or to a directional light, the next frame', () => {
+        candles[10].intensity = 2;
+        expect(frame(scene)).toEqual(['updateLight intensity']);
+        sun.intensity = 4;
+        expect(frame(scene)).toEqual(['updateLight intensity']);
+    });
+
+    it('sees an unmarked change past the first 64 within one round of the round robin, then every frame while it is hot', () => {
+        const candle = candles[700];
+        candle.intensity = 0.5;
+        const seen = framesUntilSent(roundRobinFrames + 1);
+        expect(seen.calls).toEqual(['updateLight intensity']);
+        expect(seen.frames).toBeLessThanOrEqual(roundRobinFrames);
+        // Hot now: a flicker reaches GI every frame.
+        for (let step = 0; step < 5; step++) {
+            candle.intensity = 0.6 + step * 0.1;
+            expect(frame(scene)).toEqual(['updateLight intensity']);
+        }
+        // Still for HOT_FRAMES, it goes back to the round robin.
+        for (let step = 0; step <= HOT_FRAMES; step++) frame(scene);
+        expect(sync.report.lightsChecked).toBe(ALWAYS_CHECKED_LIGHTS + 1 + DEFAULT_LIGHTS_PER_FRAME);
+    });
+
+    it('sends a marked light the next update, wherever it is in the list', () => {
+        const candle = candles[900];
+        candle.position.y = 2;
+        candle.updateMatrixWorld();
+        sync.markChanged(candle);
+        expect(frame(scene)).toEqual(['updateLight position']);
+        candle.position.y = 2.5;
+        expect(frame(scene)).toEqual(['updateLight position']);
+    });
+
+    it('sees lights past the first 64 hidden or removed within one round', () => {
+        candles[600].visible = false;
+        const hidden = framesUntilSent(roundRobinFrames);
+        expect(hidden.calls).toEqual(['updateLight intensity']);
+        expect([...api.lights.values()].filter((light) => light.intensity === 0)).toHaveLength(1);
+        candles[800].removeFromParent();
+        const removed = framesUntilSent(roundRobinFrames);
+        expect(removed.calls).toEqual(['destroyLight']);
+        expect(api.lights.size).toBe(CANDLES);
+    });
+
+    it('takes the sun from the directional lights even when they are far down the list', () => {
+        const sky = new Group() as Group & Record<string, unknown>;
+        Object.assign(sky, { isSkyMesh: true, turbidity: { value: 2 }, sunPosition: { value: { x: 0, y: 1, z: 0 } } });
+        scene.add(sky);
+        sync.markChanged(sky);
+        frame(scene);
+        expect(api.environment?.type === 'procedural' && api.environment.sunIlluminance).toBeCloseTo(3);
+        sun.visible = false;
+        frame(scene);
+        // No visible sun left: the sky takes none.
+        expect(api.environment?.type === 'procedural' && api.environment.sunIlluminance).not.toBeCloseTo(3);
     });
 });

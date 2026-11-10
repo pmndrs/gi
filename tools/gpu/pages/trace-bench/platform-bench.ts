@@ -61,7 +61,7 @@ export async function runPlatformTracer(
     rays: OursRayBuffers,
     plan: TimingPlan,
 ): Promise<PlatformRun> {
-    const platform = new GIPlatformImpl(device, { label: 'bench platform' });
+    const platform = new GIPlatformImpl(device, { label: 'bench platform', rayBatches: true });
     try {
         const start = performance.now();
         const material = platform.scene.createMaterial({ albedo: [0.8, 0.8, 0.8] });

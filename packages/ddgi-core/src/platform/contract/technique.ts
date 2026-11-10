@@ -8,6 +8,7 @@
  */
 
 import type { FrameCamera, FrameScreen } from './frame';
+import type { ColorRGB } from './math';
 import type { QueryKind, SceneQueries } from './queries';
 import type { SceneChanges, SceneCopy } from './scene-copy';
 import type { BounceSource, HitShading } from './shade';
@@ -19,6 +20,15 @@ import type { KernelBuilder } from './wgsl';
 /** What a technique needs from the platform, checked before `prepare`. */
 export interface TechniqueRequirements {
     readonly queries: readonly QueryKind[];
+    /**
+     * Calls `queries.rays.encodeBatch` (rays and hits in buffers, traced in
+     * passes of their own). The platform compiles the batch kernels in
+     * `prepare` only when an attached technique says so: they are two more
+     * cold compiles of the whole tracer (T1.9a: about 0.3 s each on the RTX
+     * 3060), and DDGI traces inline. Without it `encodeBatch` throws; it never
+     * compiles on first use.
+     */
+    readonly rayBatches?: boolean;
     /** Needs {@link FrameScreen} every frame (screen-space techniques). */
     readonly screen?: boolean;
     /** Needs another technique as a bounce source or fallback. */
@@ -122,6 +132,26 @@ export interface GITechnique<Settings extends object = object> {
      * no floor.
      */
     minUnitsPerFrame?(rate: WorkFloorRate): number;
+    /**
+     * Optional: true while the technique runs its own start-up work, which
+     * ignores the frame's units (DDGI's warm-up: full passes over every
+     * probe behind the host's loading screen, docs/design/ddgi.md). The
+     * platform then hands it no budget and leaves those frames out of the
+     * budget's calibration and cost measurements; the calibration starts at
+     * the first frame after it. Absent means never.
+     */
+    readonly warmingUp?: boolean;
+
+    /**
+     * Optional (light groups, T2.5): re-weight light group `group` (a light's
+     * `group`, 0..3) by a linear RGB multiplier on top of its lights' own
+     * colour and intensity, at once: no update lag, no noise, nothing traced
+     * again (DDGI: `settings.lightGroups` must be on). Group membership is
+     * scene data; the weights are the technique's.
+     */
+    setGroupWeight?(group: number, weight: ColorRGB): void;
+    /** Optional, with `setGroupWeight`: the same for the sky and emissive surfaces. */
+    setEnvironmentWeight?(weight: ColorRGB): void;
 
     /** Forget accumulated history (a camera cut or a scene swap). */
     resetHistory(): void;

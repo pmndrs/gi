@@ -3,12 +3,14 @@
  * volume they describe.
  *
  * Settings are a live object, as the technique contract asks: the host edits
- * fields and the next `encode` reads them. Four of them need new GPU
+ * fields and the next `encode` reads them. Six of them need new GPU
  * resources and only take effect at the next `prepare`: `volume`,
- * `irradianceTexels`, `distanceTexels` and `maxProbesPerFrame`.
+ * `irradianceTexels`, `distanceTexels`, `maxProbesPerFrame`,
+ * `lightGroups.count` (its weights are live) and `sunLayer`.
  */
 
 import type { Vec3 } from '../../platform/contract/math.ts';
+import type { DDGILightGroups } from './light-groups.ts';
 
 export interface DDGIVolumeSettings {
     /** Centre of the box, metres. */
@@ -75,6 +77,110 @@ export interface DDGISettings {
      * where SceneChanges says a light changed instead.
      */
     irradianceChangeThreshold: number;
+    /**
+     * Change-driven history (docs/design/m2-lights.md §4.1, §4.2). On (the
+     * default): when the scene reports a light change, `ddgi/mark` works out
+     * from the light's own numbers how much the light at each probe changed,
+     * and the probe's next update cuts its history to match, so the change
+     * shows within a few updates instead of fading in over the memory time.
+     * A still scene is never touched. Off: the M1 rule alone (T1.12).
+     */
+    changeDrivenHistory: boolean;
+    /**
+     * ε, the tolerance a changed probe's history is cut for: after
+     * {@link changeUpdates} updates it is within this share of its new light
+     * (SPEC's "within 5% of settled"). Changes at or under it cut nothing.
+     */
+    changeTolerance: number;
+    /** K, the updates a changed probe is expected to get soon after its change (the GPU scheduler, T2.4b, keeps the promise). */
+    changeUpdates: number;
+    /**
+     * ρ, the share of a probe's light taken to come back through the field
+     * (bounces), 0..0.95, for how deep a change cuts the history (T2.4b,
+     * docs/design/ddgi.md "Change-driven history"). An update's estimate
+     * bounces off a field that still holds the old light, so its error shrinks
+     * only by h + (1 − h)ρ an update; the cut is solved with it so the probe
+     * is within {@link changeTolerance} after its {@link changeUpdates}
+     * promised updates. Higher: deeper cuts, noisier for a few updates; 0
+     * takes estimates as unbiased (the design's first rule).
+     */
+    changeBounceShare: number;
+    /**
+     * How much of a light's change at a probe the probe is taken to see
+     * (m2-lights.md §4.2): a probe sees a light only through the surfaces it
+     * lights, so its own change is a share of the light's. Tuned in T2.4a
+     * against probes that really changed ({@link DEFAULT_LIGHT_CHANGE_SCALE}).
+     */
+    lightChangeScale: number;
+    /**
+     * The share of each frame's probes the GPU scheduler gives to probes that
+     * are owed updates after a change, most urgent and nearest the camera
+     * first (docs/design/m2-lights.md §4.3). The rest always goes to the
+     * round robin through every probe, so no probe is starved. 0..1.
+     */
+    priorityShare: number;
+    /**
+     * After a global change (the sun, the sky) on a volume too big to give
+     * every probe {@link changeUpdates} updates within
+     * {@link FAR_RULE_FRAMES} frames, probes away from the camera's view
+     * (camera weight under {@link NEAR_CAMERA_WEIGHT}) are owed this many
+     * updates instead, and their history is cut for that many (m2-lights.md
+     * §6.4, "far probes owe 2"). They are noisier for a while, and their
+     * history grows back with the round robin.
+     */
+    farProbeUpdates: number;
+    /**
+     * Key probes and propagation (T2.4c, m2-lights.md §4.5), the main path
+     * for big changes. On (the default): on a volume too big to give every
+     * changed probe {@link changeUpdates} updates within
+     * {@link FAR_RULE_FRAMES} frames, after a change one probe in 8 (the key
+     * probes, every even grid index) goes first, and each update of a key
+     * passes the change it made on to the fine probes around it, which show
+     * it at once and are traced themselves later at a lower priority. Off:
+     * "far probes owe 2" ({@link farProbeUpdates}), the fallback.
+     */
+    keyProbes: boolean;
+    /** A marked key probe's urgency is its change times this (m2-lights.md §4.5), so keys come before fine probes away from the view. */
+    keyProbeBoost: number;
+    /**
+     * A marked fine probe away from the view's core (camera weight under
+     * {@link NEAR_CAMERA_WEIGHT}) waits for its keys: its urgency is its
+     * change times this, and its own update is cut for at least this share
+     * of the change (what propagation is taken not to bring).
+     */
+    keyResidualShare: number;
+    /** Updates a key probe away from the view's core owes after a change (near probes owe {@link changeUpdates}). */
+    keyProbeUpdates: number;
+    /**
+     * A test mode, off by default (T2.4c's checks of propagation alone):
+     * fine probes waiting for their keys' change are traced but not blended,
+     * so only propagation moves them. Never on in an application: those
+     * probes would keep their old light until it is switched off.
+     */
+    holdFineProbes: boolean;
+    /**
+     * The feedback rule (m2-lights.md §4.6). On (the default): a probe whose
+     * own update lands further from its stored value than its noise allows,
+     * with no change reported, asks for one more update soon, and so do its 6
+     * neighbours. It only schedules; it never changes how an update blends.
+     * Catches changes nobody reported (an emissive texture animated on the
+     * GPU, a material edit).
+     */
+    feedback: boolean;
+    /**
+     * The warm-up (moved from the viewer into the technique, T2.4b): after
+     * `prepare` and after `resetHistory`, once the ray-tracing trees are
+     * built, this many passes over every probe, as many probes a frame as
+     * {@link maxProbesPerFrame} allows, whatever the frame's budget, with no
+     * time between them for the history. What a game does behind its loading
+     * screen: at 2 ms a frame Sponza's 19,425 probes would take a minute to
+     * fill from black. 0 switches it off; GI then fills in at the budget.
+     */
+    warmUpPasses: number;
+    /** The warm-up stops early after this many seconds of warming... */
+    warmUpMaxSeconds: number;
+    /** ...but not before every probe was updated this many times, so no probe is left black. */
+    warmUpMinPasses: number;
     /** Largest change one update may make, as a multiple of the old value (fireflies). */
     maxBrightnessChange: number;
     /** Exponent of the cosine weight when blending distances. */
@@ -95,6 +201,33 @@ export interface DDGISettings {
     classification: boolean;
     /** Largest number of probes updated in one frame: sizes the update list and the scratch buffer. New `prepare` when changed. */
     maxProbesPerFrame: number;
+    /**
+     * Light groups (T2.5, light-groups.ts; docs/design/m2-lights.md §5): one
+     * irradiance layer per group plus one for the sky and emission, added up
+     * with live weights, so dimming or recolouring a whole group shows in the
+     * same frame with no update lag. Off (null, the default): one layer.
+     * Opt-in because each layer costs memory and its share of every probe
+     * update. Measured on the RTX 3060 (T2.5): Sponza's DDGI is 58 MB with
+     * groups off, 119 MB with 2 groups, 170 MB with 4 (+112 MB: about 25.5 MB
+     * a layer, mostly ray results and scratch, plus the composed atlas), and
+     * an update per probe costs 1.05× (2 groups) and 1.10× (4) at 512 probes;
+     * two-room 1.04× and 1.23×. `count` needs a new `prepare`; the weights are
+     * read every frame.
+     */
+    lightGroups: DDGILightGroups | null;
+    /**
+     * The sun layer (T2.6b, light-groups.ts; docs/design/m2-lights.md §6.1):
+     * the sun, the scene's first directional light, traced at a white
+     * reference in an irradiance layer of its own and weighed by its colour ×
+     * intensity when the layers are added up. A change of the sun's colour or
+     * brightness then shows exactly in the frame it happens, with nothing
+     * marked and nothing traced again; a change of its direction still
+     * re-traces. Works with or without light groups (at most 4 groups, the
+     * environment and the sun). Off by default: like a light group it costs a
+     * layer's memory and its share of every probe update (PROGRESS, T2.6b).
+     * Needs direct light deferred (the default). New `prepare` when changed.
+     */
+    sunLayer: boolean;
     /**
      * The fewest probes updated per frame under a millisecond budget, so the
      * field keeps converging on every device (budget v2). It wins over the
@@ -146,6 +279,163 @@ export const ADAPTIVE_UPDATES_PER_SAMPLE = 8;
 /** `hysteresisRampUpdates` by default, K (see ADAPTIVE_UPDATES_PER_SAMPLE). */
 export const ADAPTIVE_RAMP_UPDATES = 16;
 
+/** `changeTolerance` by default: SPEC's "within 5% of settled" (m2-lights.md, ε). */
+export const DEFAULT_CHANGE_TOLERANCE = 0.05;
+/** `changeUpdates` by default, K = 8 (m2-lights.md §4.1: at r = 1 the first update keeps 0.30 of the old value, 5% is left after 8). */
+export const DEFAULT_CHANGE_UPDATES = 8;
+/**
+ * `changeBounceShare` by default, ρ = 0.8 (T2.4b, DECISIONS 2026-11-06):
+ * two-room's, measured: after its lamp was halved, with nearly every probe
+ * updated at h ≈ 0 each frame (880 of 1,071), the view's error shrank by
+ * 0.84 a frame, so ρ ≈ (0.84 − 0.18) / 0.82 = 0.80. Cornell's fit is 0.65
+ * (T1.12); open scenes are lower, and get cuts somewhat deeper than they
+ * need. With the design's rule (ρ taken as 0, the count growing back by one
+ * an update) the halving was still 45% of the step away after 30 frames.
+ */
+export const DEFAULT_CHANGE_BOUNCE_SHARE = 0.8;
+/**
+ * `lightChangeScale` by default: 0.5, not the design's first guess of 0.25
+ * (T2.4a, RTX 3060, `ddgi-change-step`: two-room's lamp moved 2 m, every
+ * probe every frame; DECISIONS 2026-11-06). Measured against the two
+ * converged fields, a probe's true change was 0.48 × the mark's unscaled
+ * value at the median (quartiles 0.25-0.73), so 0.5 makes r about the true
+ * change. The scale sets how far a probe's history is cut, not only whether:
+ * at 0.25 every probe that changed by over 5% was still cut (lit-room recall
+ * 99.8%), but by too little, and the view took 0.73 s to get within 5% (the
+ * old lamp's bounce light lingered in probes cut too gently); at 0.5 it took
+ * 2 frames; at 1 also 2 frames, with deeper cuts (more noise right after a
+ * change, the design's risk 2; not measured).
+ */
+export const DEFAULT_LIGHT_CHANGE_SCALE = 0.5;
+
+/**
+ * `priorityShare` by default (m2-lights.md §4.3): three quarters of a frame's
+ * probes go to probes owed updates, a quarter always to the round robin.
+ */
+export const DEFAULT_PRIORITY_SHARE = 0.75;
+
+/** `farProbeUpdates` by default: two updates bring a far probe within 5% under the cut (m2-lights.md §6.4). */
+export const DEFAULT_FAR_PROBE_UPDATES = 2;
+
+/** `keyProbeBoost` by default (m2-lights.md §4.5): a key 10 spacings away scores about 0.03 × 4 = 0.14, a probe in view at least 0.5, so near probes still come first. */
+export const DEFAULT_KEY_PROBE_BOOST = 4;
+/** `keyResidualShare` by default (m2-lights.md §4.5). */
+export const DEFAULT_KEY_RESIDUAL_SHARE = 0.3;
+/**
+ * `keyProbeUpdates` by default (m2-lights.md §4.5): every key out of the
+ * view's core owes 4 after a change, on a volume whose keys couldn't all get
+ * the full count within FAR_RULE_FRAMES (Sponza: 2,717 keys). Where they can
+ * (the furnished room: 792 keys at 428 priority slots a frame), every key
+ * owes the full count instead (T2.4d): the keys are the level that carries
+ * the bounces, and a room's bounces need about 14 updates at ρ 0.8.
+ */
+export const DEFAULT_KEY_PROBE_UPDATES = 4;
+/**
+ * Updates a fine probe waiting for its keys owes (m2-lights.md §4.5's
+ * table: every fine probe traced once since the change). Its keys have
+ * already brought it most of the way, and its cut is for what is left.
+ */
+export const FINE_PROBE_UPDATES = 1;
+
+/**
+ * Key probes and propagation (T2.4c), or with `keyProbes` off "far probes
+ * owe 2", apply when giving every probe K updates at this frame's batch
+ * would take more than this many frames (`N × K / units`). Counted in
+ * frames, so the rule doesn't depend on the host's frame rate.
+ *
+ * 30, the response target's 0.5 s at 60 Hz (T2.4d, DECISIONS 2026-11-06;
+ * m2-lights.md §6.4 had 120, 2 s): where every probe's K updates don't fit in
+ * the time the view has to respond, a global change has to reach the field
+ * through the coarse level first. The furnished room (4,998 probes, 571 a
+ * frame: 70 frames) takes the key path now, Sponza (about 250) as before;
+ * two-room (10) and Cornell (9) don't. The same window decides whether every
+ * key can owe its full count (DEFAULT_KEY_PROBE_UPDATES).
+ */
+export const FAR_RULE_FRAMES = 30;
+
+/**
+ * How long a fine probe waiting for its keys' change may go untraced, in
+ * frames since `ddgi/mark` flagged it (T2.4d). Its keys usually take the
+ * change in within about 15 frames; the bound is for changes that keep going
+ * (a day passing re-marks the keys every frame, so they never finish) and for
+ * keys the priority share doesn't reach. 30, the response target's 0.5 s at
+ * 60 Hz: during a long change every fine probe is still traced about twice a
+ * second, with its keys' change passed to it in between.
+ */
+export const KEY_WAIT_FRAMES = 30;
+
+/**
+ * Changes continue (§4.5's second count, T2.4d) once `ddgi/mark` has run in
+ * this many frames in a row: a sun moving through a day, a lamp swinging, a
+ * door swinging. A single step counts only on a volume that takes a change
+ * in over more than FAR_RULE_FRAMES anyway (T2.18, change-intake-batch.ts).
+ */
+export const CONTINUING_CHANGE_FRAMES = 30;
+
+/**
+ * Frames without a mark that still count as part of a continuing change
+ * (T2.8). A host that animates slower than it draws marks a change only on
+ * some frames: at 30 Hz on a 60 Hz display, every other frame; at 30 Hz on
+ * 144 Hz, about one frame in five. Those gaps are the host's update rate,
+ * not the change stopping, so a run of marks survives up to this many
+ * unmarked frames in a row. 4 covers an animation at a fifth of the frame
+ * rate; after a real stop the smaller batch lasts at most 4 more frames.
+ */
+export const CONTINUING_CHANGE_GAP_FRAMES = 4;
+
+/**
+ * The longest a single change counts as being taken in, in frames after its
+ * latest mark (change-intake-batch.ts, T2.18): 120, the frames T2.4c gives
+ * the field to come within 5% (2 s at 60 Hz). Normally the census ends the
+ * intake much sooner, once nothing is owed; the cap is for a frame without
+ * a census (no GPU timings) and for owed work that never quite runs out.
+ */
+export const CHANGE_INTAKE_MAX_FRAMES = 120;
+
+/**
+ * While a change is taken in (§4.5's second count; change-intake-batch.ts),
+ * the batch is at least this share of the hand-out, whatever the census
+ * says: a guard against a census that reads oddly, not a tuned number (the
+ * day on Sponza needs about 0.63, a sun turn's first frames about 0.56).
+ */
+export const CHANGE_BATCH_MIN_SHARE = 0.5;
+
+/**
+ * What one fine probe `ddgi/propagate` passes a key's change to costs, in
+ * traced rays, for the batch while a change is taken in. Propagation reads
+ * up to 8 key tiles per layer and traces nothing, but it runs in every frame
+ * in which keys take a change in, on top of the list. Measured on Sponza
+ * after a 30° sun turn (RTX 3060, about 800 MHz, T2.10's VALID run): the
+ * pass rose 0.053 ms over a still frame for a median 926 probes propagated,
+ * 5.7e-5 ms each, while each extra ray traced cost `ddgi/trace` 2.3e-5 ms
+ * (0.22 ms for 9,408 more rays at the same batch): about 2.5 rays a probe.
+ * Both scale with the GPU's clock, so the ratio holds as it moves.
+ */
+export const PROPAGATED_PROBE_RAYS = 2.5;
+
+/**
+ * The camera weight's distance falloff, in probe spacings (m2-lights.md
+ * §4.3): `1 / (1 + (d / (4 × spacing))²)`. Within about 4 spacings of the
+ * camera a probe counts fully; at 10 spacings about 0.14.
+ */
+export const CAMERA_FALLOFF_SPACINGS = 4;
+
+/** A probe outside the view (frustum plus a cell's diagonal) counts this share as much (m2-lights.md §4.3). */
+export const OUT_OF_VIEW_WEIGHT = 0.25;
+
+/**
+ * Probes with at least this camera weight are "near and in view": after a
+ * global change they owe the full K updates, the rest {@link
+ * DEFAULT_FAR_PROBE_UPDATES} (m2-lights.md §6.4). 0.5 is a probe in view
+ * within 4 spacings of the camera.
+ */
+export const NEAR_CAMERA_WEIGHT = 0.5;
+
+/** The warm-up by default: 16 passes, stopping after 8 s once 2 are done (the viewer's rule since T1.8; DECISIONS 2026-11-05). */
+export const DEFAULT_WARM_UP_PASSES = 16;
+export const DEFAULT_WARM_UP_MAX_SECONDS = 8;
+export const DEFAULT_WARM_UP_MIN_PASSES = 2;
+
 /** The kernel's stand-in for an endless ramp (no Infinity in a shader that may assume finite floats). */
 const RAMP_UPDATES_ENDLESS = 1e9;
 
@@ -166,6 +456,22 @@ export const DEFAULT_DDGI_SETTINGS: Readonly<Omit<DDGISettings, 'volume'>> = {
     hysteresisUpdatesPerSample: ADAPTIVE_UPDATES_PER_SAMPLE,
     hysteresisRampUpdates: ADAPTIVE_RAMP_UPDATES,
     irradianceChangeThreshold: Infinity,
+    changeDrivenHistory: true,
+    changeTolerance: DEFAULT_CHANGE_TOLERANCE,
+    changeUpdates: DEFAULT_CHANGE_UPDATES,
+    changeBounceShare: DEFAULT_CHANGE_BOUNCE_SHARE,
+    lightChangeScale: DEFAULT_LIGHT_CHANGE_SCALE,
+    priorityShare: DEFAULT_PRIORITY_SHARE,
+    farProbeUpdates: DEFAULT_FAR_PROBE_UPDATES,
+    keyProbes: true,
+    keyProbeBoost: DEFAULT_KEY_PROBE_BOOST,
+    keyResidualShare: DEFAULT_KEY_RESIDUAL_SHARE,
+    keyProbeUpdates: DEFAULT_KEY_PROBE_UPDATES,
+    holdFineProbes: false,
+    feedback: true,
+    warmUpPasses: DEFAULT_WARM_UP_PASSES,
+    warmUpMaxSeconds: DEFAULT_WARM_UP_MAX_SECONDS,
+    warmUpMinPasses: DEFAULT_WARM_UP_MIN_PASSES,
     maxBrightnessChange: 2.0,
     distanceSharpness: 50,
     normalBias: 'auto',
@@ -176,6 +482,8 @@ export const DEFAULT_DDGI_SETTINGS: Readonly<Omit<DDGISettings, 'volume'>> = {
     minFrontFaceDistance: 'auto',
     classification: true,
     maxProbesPerFrame: 4096,
+    lightGroups: null,
+    sunLayer: false,
     minProbesPerFrame: 'auto',
 };
 
@@ -206,6 +514,12 @@ export const AUTO_MIN_FRONT_FACE_SHARE = 0.02;
  * needs 81 a frame, Cornell 8.
  */
 export const FLOOR_SWEEP_SECONDS = 4;
+
+/**
+ * The frame rate the floor assumes before frames carry a `deltaTime`, as the
+ * platform's Budget v2 does (work-budget.ts).
+ */
+export const FLOOR_ASSUMED_FRAMES_PER_SECOND = 60;
 
 /**
  * ...but `auto` never asks for more than this many times the calibrated batch
@@ -341,6 +655,19 @@ export function blendSettings(settings: DDGISettings): {
     maxBrightnessChange: number;
     distanceSharpness: number;
     bounceEnergy: number;
+    changeDrivenHistory: boolean;
+    changeTolerance: number;
+    changeUpdates: number;
+    changeBounceShare: number;
+    lightChangeScale: number;
+    priorityShare: number;
+    farProbeUpdates: number;
+    keyProbes: boolean;
+    keyProbeBoost: number;
+    keyResidualShare: number;
+    keyProbeUpdates: number;
+    holdFineProbes: boolean;
+    feedback: boolean;
 } {
     const defaults = DEFAULT_DDGI_SETTINGS;
     const memorySeconds = settings.hysteresisMemorySeconds;
@@ -360,5 +687,41 @@ export function blendSettings(settings: DDGISettings): {
         maxBrightnessChange: clamp(settings.maxBrightnessChange, 0, Number.MAX_VALUE, defaults.maxBrightnessChange),
         distanceSharpness: clamp(settings.distanceSharpness, 0, 1000, defaults.distanceSharpness),
         bounceEnergy: clamp(settings.bounceEnergy, 0, Number.MAX_VALUE, defaults.bounceEnergy),
+        changeDrivenHistory: settings.changeDrivenHistory !== false,
+        // Above 0 and below 1: the cut divides by (r - ε) only when r > ε, and ε = 1 would never cut.
+        changeTolerance: clamp(settings.changeTolerance, 1e-4, 0.99, defaults.changeTolerance),
+        changeUpdates: clamp(settings.changeUpdates, 1, 1000, defaults.changeUpdates),
+        // Below 1: the cut divides by 1 - rho.
+        changeBounceShare: clamp(settings.changeBounceShare, 0, 0.95, defaults.changeBounceShare),
+        lightChangeScale: clamp(settings.lightChangeScale, 0, 1000, defaults.lightChangeScale),
+        priorityShare: clamp(settings.priorityShare, 0, 1, defaults.priorityShare),
+        // Whole updates, 1..255: the owed count is 8 bits of the history record (PROBE_HISTORY_UPDATES).
+        farProbeUpdates: Math.round(clamp(settings.farProbeUpdates, 1, MAX_OWED_UPDATES, defaults.farProbeUpdates)),
+        keyProbes: settings.keyProbes !== false,
+        keyProbeBoost: clamp(settings.keyProbeBoost, 0, 1000, defaults.keyProbeBoost),
+        keyResidualShare: clamp(settings.keyResidualShare, 0, 1, defaults.keyResidualShare),
+        keyProbeUpdates: Math.round(clamp(settings.keyProbeUpdates, 1, MAX_OWED_UPDATES, defaults.keyProbeUpdates)),
+        holdFineProbes: settings.holdFineProbes === true,
+        feedback: settings.feedback !== false,
+    };
+}
+
+/** The most updates a probe can be owed: 8 bits in its history record (PROBE_HISTORY_UPDATES in layout.ts). */
+export const MAX_OWED_UPDATES = 255;
+
+/** K as whole owed updates (the owed count is an integer in the history record). */
+export function owedUpdates(changeUpdates: number): number {
+    return Math.max(1, Math.min(MAX_OWED_UPDATES, Math.round(changeUpdates)));
+}
+
+/** The live warm-up settings, limited to sensible values. */
+export function warmUpSettings(settings: DDGISettings): { passes: number; maxSeconds: number; minPasses: number } {
+    const defaults = DEFAULT_DDGI_SETTINGS;
+    const passes = Number.isFinite(settings.warmUpPasses) && settings.warmUpPasses > 0 ? settings.warmUpPasses : 0;
+    return {
+        passes,
+        maxSeconds: settings.warmUpMaxSeconds >= 0 ? settings.warmUpMaxSeconds : defaults.warmUpMaxSeconds,
+        // Never more than the passes asked for.
+        minPasses: Math.min(passes, settings.warmUpMinPasses >= 0 ? settings.warmUpMinPasses : defaults.warmUpMinPasses),
     };
 }

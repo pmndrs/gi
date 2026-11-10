@@ -12,6 +12,8 @@
  *   PROBE_GRID       the `LightProbeGrid` (only its own cameras see it)
  *   DDGI             DDGI's GI light (only DDGI's camera sees it)
  *   DDGI_PROBES      DDGI's probe spheres (DDGI's camera, when they are switched on)
+ *   HELPERS          the light markers and the light gizmo (every viewing camera; never
+ *                    a bake camera, and GI's rays pass through them)
  *
  * Lights follow the camera's layers too (`Renderer.js` tests `light.layers`),
  * which is what makes "GI only" possible without touching light intensities.
@@ -25,6 +27,7 @@ export const LAYER_DIRECT_LIGHTS = 2;
 export const LAYER_PROBE_GRID = 3;
 export const LAYER_DDGI = 4;
 export const LAYER_DDGI_PROBES = 5;
+export const LAYER_HELPERS = 6;
 
 /**
  * - `on`: direct light plus the technique's GI.
@@ -42,6 +45,7 @@ export type GiMode = 'on' | 'only' | 'off';
 export function applyViewLayers(layers: Layers, giMode: GiMode, giLayers: readonly number[]): void {
     layers.disableAll();
     layers.enable(LAYER_VIEW_GEOMETRY);
+    layers.enable(LAYER_HELPERS);
     if (giMode !== 'only') layers.enable(LAYER_DIRECT_LIGHTS);
     if (giMode !== 'off') for (const layer of giLayers) layers.enable(layer);
 }

@@ -34,7 +34,7 @@
  * spin: the box store was issued before the counter's, so it only has to
  * land). A spin that runs out is counted in the stats and triggers the repair
  * pass. The stats can be read back for diagnostics (`diagnostics: true`,
- * off by default: the platform promises hosts no readbacks), which is how a
+ * off by default: the platform promises hosts no readbacks frame after frame), which is how a
  * give-up reaches the platform's warnings and counters.
  *
  * **Subgroups** (DECISIONS 2026-11-04: written for subgroups first, with one
@@ -528,7 +528,7 @@ export interface GpuBvhRefitOptions {
     readonly label?: string;
     /**
      * Read the stats back (a frame or two late) into `latestStats`. Off by
-     * default: the platform promises hosts no readbacks, so only its stats or
+     * default: the platform promises hosts no readbacks frame after frame, so only its stats or
      * debug mode turns this on. Correctness never depends on it: a refit that
      * gives up is repaired on the GPU in the same frame either way.
      */

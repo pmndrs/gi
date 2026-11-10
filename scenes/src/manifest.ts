@@ -13,6 +13,18 @@
  *   `assets/downloads/<asset>/<path>`. `asset` is an id in
  *   `tools/assets/sources.json`, and `path` is one of that asset's outputs,
  *   relative to its download folder.
+ * - `light-set` parts (T2.1, `sponza-candles`) are one model copied at each
+ *   of a set of point lights, from a set file a convert step writes (like
+ *   `tools/assets/convert/sponza-candles.ts`). How many are loaded is a scene
+ *   setting (`settings`), and the first N of the set's own order are taken.
+ *
+ * `motions` (T2.1, docs/design/m2-lights.md §7) script a light over time:
+ * keyframes of its position, intensity and colour. Two come built in for
+ * each scene with a lamp: `light-sweep` (the lamp gliding along a path at
+ * 1 m/s, and back) and `light-step` (the same lamp jumping between two
+ * places every 3 s, for measuring response). The native harness (T2.7) and
+ * the viewer (T2.8) play them; `motionState` says what a motion's light is
+ * at a time, so both play them the same way.
  *
  * This file holds the types and the validator. It has no dependencies, so any
  * tool can import it.
@@ -48,7 +60,87 @@ export interface ModelPart {
     transform: ModelTransform;
 }
 
-export type ScenePart = ProceduralPart | ModelPart;
+/**
+ * One model copied at each of a set of point lights (T2.1). The set file
+ * (`LightSetFile`, a convert step's output) names the model, the light's
+ * colour and intensity, and the lights' positions in its selection order.
+ */
+export interface LightSetPart {
+    kind: 'light-set';
+    /** An asset id from `tools/assets/sources.json`. */
+    asset: string;
+    /** The set file, relative to `assets/downloads/<asset>/`; one of the asset's outputs. */
+    path: string;
+    /** The scene setting (a key of `settings`) that says how many to load: the first N of the set's order. */
+    countSetting: string;
+}
+
+export type ScenePart = ProceduralPart | ModelPart | LightSetPart;
+
+/** A whole-number knob of a scene, like `sponza-candles`' candle count. A viewer may offer it; a link may set it. */
+export interface SceneSetting {
+    /** Plain words, for a slider. */
+    label: string;
+    /** One sentence: what changing it does. */
+    description: string;
+    default: number;
+    min: number;
+    max: number;
+}
+
+/** What a `light-set` part's file holds (tools/assets/convert/sponza-candles.ts writes it). */
+export interface LightSetFile {
+    description: string;
+    /** The package file it was made from. */
+    source: string;
+    /** The model copied at each light, relative to the set file's folder; placed so its light is at its origin. */
+    prototype: string;
+    count: number;
+    trianglesPerCandle: number;
+    /** The selection rule, in words. */
+    order: string;
+    light: { type: 'point'; color: Vec3; intensity: number; range: number };
+    /** x, y, z of each light in metres, in the selection order. */
+    positions: number[];
+    packageIndices: number[];
+}
+
+/** One keyframe of a motion. Every keyframe of a motion sets the same fields. */
+export interface MotionKeyframe {
+    /** Seconds from the motion's start; the first is 0, and they increase. */
+    t: number;
+    /** Metres (point and spot lights). */
+    position?: Vec3;
+    /** In the light's own units (candela for point and spot, lux for directional). */
+    intensity?: number;
+    /** Linear RGB. */
+    color?: Vec3;
+}
+
+/** A scripted change of one light over time (docs/design/m2-lights.md §7). */
+export interface ManifestMotion {
+    /** Kebab-case, unique in the scene: `light-sweep`, `light-step`. */
+    id: string;
+    /** Plain words for a menu. */
+    label: string;
+    /** `light:<label>`: the manifest light with that label. */
+    target: string;
+    /**
+     * `linear` glides from keyframe to keyframe; `step` holds each keyframe
+     * until the next one's time, so the light jumps (a step response).
+     * Defaults to `linear`.
+     */
+    interpolation?: 'linear' | 'step';
+    /** Plays again from the start after the last keyframe. A looping motion ends where it began. */
+    loop: boolean;
+    keyframes: MotionKeyframe[];
+}
+
+/** The motion ids every scene with a lamp has (m2-lights.md §7). */
+export const BUILT_IN_MOTIONS = { sweep: 'light-sweep', step: 'light-step' } as const;
+/** The built-in sweep's speed, m/s, and the built-in step's time between jumps, seconds (m2-lights.md §7). */
+export const SWEEP_SPEED = 1;
+export const STEP_SECONDS = 3;
 
 export interface CameraBookmark {
     name: string;
@@ -159,8 +251,12 @@ export interface SceneManifest {
     parts: ScenePart[];
     /** 2 to 4 lit, useful views. The first is the one a viewer opens on. */
     cameras: CameraBookmark[];
-    /** Direct lights. Emissive surfaces in the geometry are not listed here. */
+    /** Direct lights. Emissive surfaces in the geometry are not listed here, nor a `light-set` part's lights. */
     lights: ManifestLight[];
+    /** Scripted light changes (the file comment). */
+    motions?: ManifestMotion[];
+    /** Whole-number knobs a `light-set` part reads (`countSetting`), by name. */
+    settings?: Record<string, SceneSetting>;
     environment: ManifestEnvironment;
     volume: ManifestVolume;
     /** True when a glTF/GLB exists for the native harness. */
@@ -204,6 +300,8 @@ const TOP_LEVEL_KEYS = new Set([
     'parts',
     'cameras',
     'lights',
+    'motions',
+    'settings',
     'environment',
     'volume',
     'nativeCapable',
@@ -325,9 +423,106 @@ function validatePart(part: Json, path: string, c: ErrorCollector, options: Vali
             c.vec3(`${path}.transform.rotationDeg`, part.transform.rotationDeg);
             c.positiveNumber(`${path}.transform.scale`, part.transform.scale);
         }
+    } else if (part.kind === 'light-set') {
+        if (!isNonEmptyString(part.asset) || !KEBAB_CASE.test(part.asset)) {
+            c.add(`${path}.asset`, 'must be a kebab-case asset id from tools/assets/sources.json');
+        }
+        if (!isNonEmptyString(part.path) || !isSafeRelativePath(part.path)) {
+            c.add(`${path}.path`, 'must be a relative path inside the asset download folder (no "..", no drive letter)');
+        }
+        if (!isNonEmptyString(part.countSetting)) c.add(`${path}.countSetting`, 'must name one of the scene\'s settings');
     } else {
-        c.add(`${path}.kind`, 'must be "procedural" or "model"');
+        c.add(`${path}.kind`, 'must be "procedural", "model" or "light-set"');
     }
+}
+
+function validateSettings(value: Record<string, Json>, c: ErrorCollector): void {
+    const settings = value.settings;
+    if (settings !== undefined) {
+        if (!isRecord(settings)) {
+            c.add('settings', 'must be an object of named settings');
+        } else {
+            for (const [name, setting] of Object.entries(settings)) {
+                const path = `settings.${name}`;
+                if (!KEBAB_CASE.test(name)) c.add(path, 'a setting name must be kebab-case');
+                if (!isRecord(setting)) {
+                    c.add(path, 'must be an object with label, description, default, min and max');
+                    continue;
+                }
+                if (!isNonEmptyString(setting.label)) c.add(`${path}.label`, 'must be a non-empty string');
+                if (!isNonEmptyString(setting.description)) c.add(`${path}.description`, 'must be a non-empty sentence');
+                const whole = ['default', 'min', 'max'].every((key) => Number.isInteger(setting[key]));
+                if (!whole) c.add(path, 'default, min and max must be whole numbers');
+                else if (!((setting.min as number) <= (setting.default as number) && (setting.default as number) <= (setting.max as number))) c.add(path, 'needs min <= default <= max');
+            }
+        }
+    }
+    const parts = Array.isArray(value.parts) ? value.parts : [];
+    parts.forEach((part: Json, index: number) => {
+        if (isRecord(part) && part.kind === 'light-set' && isNonEmptyString(part.countSetting) && !(isRecord(settings) && part.countSetting in settings)) {
+            c.add(`parts[${index}].countSetting`, `"${part.countSetting}" is not one of the scene settings`);
+        }
+    });
+}
+
+function validateMotions(value: Record<string, Json>, c: ErrorCollector): void {
+    const motions = value.motions;
+    if (motions === undefined) return;
+    if (!Array.isArray(motions)) {
+        c.add('motions', 'must be an array');
+        return;
+    }
+    const lights = Array.isArray(value.lights) ? value.lights.filter(isRecord) : [];
+    const ids = new Set<string>();
+    motions.forEach((motion: Json, index: number) => {
+        const path = `motions[${index}]`;
+        if (!isRecord(motion)) {
+            c.add(path, 'must be an object');
+            return;
+        }
+        if (!isNonEmptyString(motion.id) || !KEBAB_CASE.test(motion.id)) c.add(`${path}.id`, 'must be kebab-case, like "light-sweep"');
+        else if (ids.has(motion.id)) c.add(`${path}.id`, `"${motion.id}" is used twice`);
+        else ids.add(motion.id);
+        if (!isNonEmptyString(motion.label)) c.add(`${path}.label`, 'must be a non-empty string');
+        if (typeof motion.loop !== 'boolean') c.add(`${path}.loop`, 'must be true or false');
+        if (motion.interpolation !== undefined && motion.interpolation !== 'linear' && motion.interpolation !== 'step') c.add(`${path}.interpolation`, 'must be "linear" or "step"');
+        const target = typeof motion.target === 'string' ? /^light:(.+)$/.exec(motion.target) : null;
+        // Labels are optional and need not be unique, so the target must name exactly one light.
+        const named = target ? lights.filter((candidate) => candidate.label === target[1]) : [];
+        const light = named.length === 1 ? named[0] : undefined;
+        if (!target) c.add(`${path}.target`, 'must be "light:<label>", naming one of the manifest\'s lights by its label');
+        else if (named.length === 0) c.add(`${path}.target`, `no light has the label "${target[1]}"`);
+        else if (named.length > 1) c.add(`${path}.target`, `${named.length} lights have the label "${target[1]}"; a motion must name exactly one`);
+        if (!Array.isArray(motion.keyframes) || motion.keyframes.length < 2) {
+            c.add(`${path}.keyframes`, 'must have at least two keyframes');
+            return;
+        }
+        const fields = (keyframe: Record<string, Json>) => ['position', 'intensity', 'color'].filter((key) => keyframe[key] !== undefined).join(',');
+        let previousTime = -Infinity;
+        let firstFields: string | null = null;
+        motion.keyframes.forEach((keyframe: Json, frame: number) => {
+            const where = `${path}.keyframes[${frame}]`;
+            if (!isRecord(keyframe)) {
+                c.add(where, 'must be an object');
+                return;
+            }
+            if (!isFiniteNumber(keyframe.t)) c.add(`${where}.t`, 'must be a number of seconds');
+            else if (frame === 0 && keyframe.t !== 0) c.add(`${where}.t`, 'the first keyframe is at 0 s');
+            else if (!(keyframe.t > previousTime)) c.add(`${where}.t`, 'must be later than the keyframe before');
+            if (isFiniteNumber(keyframe.t)) previousTime = keyframe.t;
+            for (const key of Object.keys(keyframe)) if (!['t', 'position', 'intensity', 'color'].includes(key)) c.add(`${where}.${key}`, 'is not a keyframe field (t, position, intensity, color)');
+            if (keyframe.position !== undefined) {
+                c.vec3(`${where}.position`, keyframe.position);
+                if (light && light.type === 'directional') c.add(`${where}.position`, 'a directional light has no position');
+            }
+            if (keyframe.intensity !== undefined && !(isFiniteNumber(keyframe.intensity) && keyframe.intensity >= 0)) c.add(`${where}.intensity`, 'must be a number of 0 or more');
+            if (keyframe.color !== undefined) c.color(`${where}.color`, keyframe.color);
+            const these = fields(keyframe);
+            if (these === '') c.add(where, 'must set at least one of position, intensity and color');
+            if (firstFields === null) firstFields = these;
+            else if (these !== firstFields) c.add(where, `must set the same fields as the first keyframe (${firstFields})`);
+        });
+    });
 }
 
 function validateCamera(camera: Json, path: string, c: ErrorCollector): void {
@@ -449,8 +644,8 @@ function validateCredits(manifest: Record<string, Json>, c: ErrorCollector): voi
 
     const parts = Array.isArray(manifest.parts) ? manifest.parts : [];
     for (const part of parts) {
-        if (isRecord(part) && part.kind === 'model' && typeof part.asset === 'string' && !creditedAssets.has(part.asset)) {
-            c.add('credits', `no credit for asset "${part.asset}" used by a model part`);
+        if (isRecord(part) && (part.kind === 'model' || part.kind === 'light-set') && typeof part.asset === 'string' && !creditedAssets.has(part.asset)) {
+            c.add('credits', `no credit for asset "${part.asset}" used by a ${part.kind} part`);
         }
         if (isRecord(part) && part.kind === 'procedural' && !creditedAssets.has(null)) {
             c.add('credits', 'a procedural part needs a credit with asset null (license MIT, this repo)');
@@ -509,6 +704,8 @@ export function validateManifest(value: unknown, options: ValidateOptions = {}):
         value.lights.forEach((light: Json, index: number) => validateLight(light, `lights[${index}]`, c));
     }
 
+    validateMotions(value, c);
+    validateSettings(value, c);
     validateEnvironment(value.environment, c);
     validateVolume(value.volume, c);
 
@@ -558,7 +755,7 @@ export function checkManifestAgainstSources(manifest: SceneManifest, assets: rea
     if (manifest.status === 'awaiting-asset') return [];
     const errors: string[] = [];
     manifest.parts.forEach((part, index) => {
-        if (part.kind !== 'model') return;
+        if (part.kind === 'procedural') return;
         const asset = assets.find((candidate) => candidate.id === part.asset);
         if (!asset) {
             errors.push(`parts[${index}].asset: "${part.asset}" is not in tools/assets/sources.json`);
@@ -567,6 +764,39 @@ export function checkManifestAgainstSources(manifest: SceneManifest, assets: rea
         }
     });
     return errors;
+}
+
+/**
+ * The scene's settings with `overrides` (a link's, say) applied: each a whole
+ * number within its range, the default where no override is given. Unknown
+ * names and values that aren't numbers are left out.
+ */
+export function sceneSettingValues(manifest: Pick<SceneManifest, 'settings'>, overrides: Readonly<Record<string, unknown>> = {}): Record<string, number> {
+    const values: Record<string, number> = {};
+    for (const [name, setting] of Object.entries(manifest.settings ?? {})) {
+        const asked = Number(overrides[name]);
+        values[name] = Number.isFinite(asked) && overrides[name] !== undefined && overrides[name] !== '' ? Math.min(setting.max, Math.max(setting.min, Math.round(asked))) : setting.default;
+    }
+    return values;
+}
+
+/** What a motion sets on its light at a time (seconds from its start): keyframes interpolated (or held, for `step`), looping if it loops. */
+export function motionState(motion: ManifestMotion, seconds: number): Omit<MotionKeyframe, 't'> {
+    const frames = motion.keyframes;
+    const duration = frames[frames.length - 1].t;
+    const time = motion.loop && duration > 0 ? ((seconds % duration) + duration) % duration : Math.min(Math.max(seconds, 0), duration);
+    let next = frames.findIndex((frame) => frame.t > time);
+    if (next === -1) next = frames.length - 1;
+    const before = frames[Math.max(0, next - 1)];
+    const after = frames[next];
+    const share = motion.interpolation === 'step' || after.t === before.t ? (time >= after.t ? 1 : 0) : Math.min(1, Math.max(0, (time - before.t) / (after.t - before.t)));
+    const mix = (a: number, b: number) => a + (b - a) * share;
+    const mixVector = (a: Vec3, b: Vec3): Vec3 => [mix(a[0], b[0]), mix(a[1], b[1]), mix(a[2], b[2])];
+    return {
+        ...(before.position && after.position ? { position: mixVector(before.position, after.position) } : {}),
+        ...(before.intensity !== undefined && after.intensity !== undefined ? { intensity: mix(before.intensity, after.intensity) } : {}),
+        ...(before.color && after.color ? { color: mixVector(before.color, after.color) } : {}),
+    };
 }
 
 /** The exposure, in stops, a viewer opens the scene with (0 when the manifest names none). */

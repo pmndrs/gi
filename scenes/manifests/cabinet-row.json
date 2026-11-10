@@ -44,6 +44,31 @@
             "range": 12
         }
     ],
+    "motions": [
+        {
+            "id": "light-sweep",
+            "label": "ceiling-lamp sweeps at 1 m/s and back",
+            "target": "light:ceiling-lamp",
+            "loop": true,
+            "keyframes": [
+                { "t": 0, "position": [0.8, 2.2, 1.7] },
+                { "t": 3.2, "position": [4.0, 2.2, 1.7] },
+                { "t": 6.4, "position": [0.8, 2.2, 1.7] }
+            ]
+        },
+        {
+            "id": "light-step",
+            "label": "ceiling-lamp jumps every 3 s",
+            "target": "light:ceiling-lamp",
+            "interpolation": "step",
+            "loop": true,
+            "keyframes": [
+                { "t": 0, "position": [0.8, 2.2, 1.7] },
+                { "t": 3, "position": [4.0, 2.2, 1.7] },
+                { "t": 6, "position": [0.8, 2.2, 1.7] }
+            ]
+        }
+    ],
     "environment": {
         "type": "none"
     },

@@ -14,6 +14,6 @@ export type {
     UploadedMesh,
 } from './platform-scene.ts';
 export { SCENE_MODULE_ENTRIES, sceneModuleWgsl } from './wgsl.ts';
-export { packMesh, packedIndices, packedPositions, packedTriangleVertices } from './mesh-packing.ts';
-export type { PackedMesh, PackedMeshOffsets } from './mesh-packing.ts';
+export { packMesh, packMeshWords, packedIndices, packedPositions, packedTriangleVertices, planMesh } from './mesh-packing.ts';
+export type { MeshLayout, MeshPlan, PackedMesh, PackedMeshOffsets } from './mesh-packing.ts';
 export { decodeOctahedral, encodeOctahedral } from './octahedral.ts';

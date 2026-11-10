@@ -847,7 +847,11 @@
         "bytes": 3190731713,
         "sha256": "f8a43d972f377e7eb25e52fdc92faed425ad001a4516e0ecef436ff2f8663396"
       },
-      "convert": null,
+      "convert": {
+        "tool": "node",
+        "script": "tools/assets/convert/sponza-candles.ts",
+        "args": ["{dir}/pkg_d_10k_candles/NewSponza_4_Combined_glTF.gltf", "{dir}/candles"]
+      },
       "outputs": [
         {
           "path": "pkg_d_10k_candles/NewSponza_4_Combined_glTF.gltf",
@@ -858,6 +862,16 @@
           "path": "pkg_d_10k_candles/NewSponza_4_Combined_glTF.bin",
           "sha256": "de9e10dc8d7763adb80087cced117815e9b79d8e60f32691afc6fea95beec80a",
           "bytes": 648098592
+        },
+        {
+          "path": "candles/sponza-candle.glb",
+          "sha256": "29e7e2aa8af72a08da9bc93fda9d0f1c648daf19c54dcd06303e1d595283aed6",
+          "bytes": 56076
+        },
+        {
+          "path": "candles/sponza-candles.json",
+          "sha256": "dd36fd73e2af4345e77044c7bf65935933124e79d1ae9e28ecb277fa4b649ee6",
+          "bytes": 327658
         }
       ]
     },

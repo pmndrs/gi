@@ -1,0 +1,4 @@
+{
+    "description": "T2.12 check 4: on a device without subgroups (none requested), mesh trees come from tinybvh only (no GPU trees, CPU top level) and DDGI still gives GI: Cornell after 600 frames within 1% of M1's atlas mean, and a test view that is not black.",
+    "timeoutMs": 300000
+}

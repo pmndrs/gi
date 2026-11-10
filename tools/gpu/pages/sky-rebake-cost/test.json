@@ -1,0 +1,5 @@
+{
+    "description": "T2.6a check 2: what a sky re-bake costs while DDGI updates two-room GPU-bound, the procedural sun turned 0.1 degrees every frame: GPU median of the 'platform/sky bake' pass (bar 0.1 ms) and CPU per bake (bar 0.05 ms). A timing page: run it alone under the bench lock.",
+    "timeoutMs": 300000,
+    "manual": true
+}

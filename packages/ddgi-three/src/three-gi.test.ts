@@ -1,4 +1,4 @@
-import { BoxGeometry, Mesh, MeshStandardMaterial, PerspectiveCamera, PointLight, Scene, Texture } from 'three';
+import { BoxGeometry, Color, Mesh, MeshStandardMaterial, PerspectiveCamera, PointLight, Scene, Texture } from 'three';
 import { describe, expect, it } from 'vitest';
 import type { FrameInput, GIPlatform, SceneApi, ShadingModule } from '@pmndrs/ddgi-core';
 import { GIVolume } from './gi-volume.ts';
@@ -46,10 +46,69 @@ function fakePlatform(shading: ShadingModule) {
 }
 
 describe('ThreeGI', () => {
-    it('refuses a platform that is not prepared', () => {
+    it('refuses a platform that is not prepared and has no prepare promise', () => {
         const platform = fakePlatform(fakeShading());
         (platform.gi as { isReady: boolean }).isReady = false;
         expect(() => new ThreeGI(platform.gi, new Scene())).toThrow(/prepare/);
+    });
+
+    it('copies the scene in while the platform prepares, and adds its light once it is ready (T2.14)', async () => {
+        const platform = fakePlatform(fakeShading());
+        (platform.gi as { isReady: boolean }).isReady = false;
+        let prepared: () => void = () => {};
+        const preparing = new Promise<void>((resolve) => (prepared = resolve));
+        const scene = new Scene();
+        scene.add(new Mesh(new BoxGeometry(), new MeshStandardMaterial()));
+        const threeGI = new ThreeGI(platform.gi, scene, { preparing });
+        // The light wraps the technique's textures, which don't exist yet: a render meanwhile draws without GI.
+        expect(scene.children).not.toContain(threeGI.light);
+        const camera = new PerspectiveCamera();
+        threeGI.update(camera, 0);
+        expect(threeGI.sync.counts.instances).toBe(1);
+        expect(platform.frames).toHaveLength(0);
+        expect(platform.submits()).toBe(0);
+        expect(scene.children).not.toContain(threeGI.light);
+
+        (platform.gi as { isReady: boolean }).isReady = true;
+        prepared();
+        await preparing;
+        expect(scene.children).toContain(threeGI.light);
+        threeGI.update(camera, 0);
+        expect(platform.frames).toHaveLength(1);
+        expect(platform.submits()).toBe(1);
+    });
+
+    it('gives GI to a host that only renders (updateOnRender), with no update call of its own', async () => {
+        const platform = fakePlatform(fakeShading());
+        (platform.gi as { isReady: boolean }).isReady = false;
+        let prepared: () => void = () => {};
+        const preparing = new Promise<void>((resolve) => (prepared = resolve));
+        const scene = new Scene();
+        scene.add(new Mesh(new BoxGeometry(), new MeshStandardMaterial()));
+        const threeGI = new ThreeGI(platform.gi, scene, { preparing, updateOnRender: true });
+        expect(scene.children).not.toContain(threeGI.light);
+
+        (platform.gi as { isReady: boolean }).isReady = true;
+        prepared();
+        await preparing;
+        // The light is in the scene, so three's next render runs its render-time update.
+        expect(scene.children).toContain(threeGI.light);
+        threeGI.light.runRenderTimeUpdate(new PerspectiveCamera());
+        expect(platform.frames).toHaveLength(1);
+        expect(threeGI.sync.counts.instances).toBe(1);
+    });
+
+    it("throws prepare's failure at the next update and warns once", async () => {
+        const platform = fakePlatform(fakeShading());
+        (platform.gi as { isReady: boolean }).isReady = false;
+        const warnings: string[] = [];
+        const preparing = Promise.reject(new Error('kernel failed to compile'));
+        const threeGI = new ThreeGI(platform.gi, new Scene(), { preparing, warn: (message) => warnings.push(message) });
+        await preparing.catch(() => {});
+        await Promise.resolve();
+        expect(() => threeGI.update(new PerspectiveCamera(), 0)).toThrow(/kernel failed to compile/);
+        expect(warnings.some((message) => message.includes('kernel failed to compile'))).toBe(true);
+        expect(platform.frames).toHaveLength(0);
     });
 
     it('adds its light, encodes once per update with the camera, and submits before three renders', () => {
@@ -154,6 +213,28 @@ describe('ThreeGI', () => {
         expect(threeGI.light.computeCoverage).toBe(true);
         // The GI light itself lights every layer.
         expect(threeGI.light.layers.test(camera.layers)).toBe(true);
+    });
+
+    it("sets light group weights on the output technique, from three's colours in linear space times an intensity", () => {
+        const platform = fakePlatform(fakeShading());
+        const calls: Array<[string, number | null, readonly number[]]> = [];
+        const technique = {
+            id: 'ddgi',
+            setGroupWeight: (group: number, weight: readonly number[]) => calls.push(['group', group, weight]),
+            setEnvironmentWeight: (weight: readonly number[]) => calls.push(['environment', null, weight]),
+        };
+        Object.assign(platform.gi, { outputTechnique: technique });
+        const threeGI = new ThreeGI(platform.gi, new Scene());
+        threeGI.setGroupWeight(1, 'white', 0.25);
+        // '#808080' is sRGB: three keeps colours linear, so 0.5 encoded is about 0.216 linear.
+        threeGI.setGroupWeight(0, new Color('#808080'));
+        threeGI.setEnvironmentWeight(0xff0000, 2);
+        expect(calls[0]).toEqual(['group', 1, [0.25, 0.25, 0.25]]);
+        expect(calls[1][2][0]).toBeCloseTo(0.2158605, 6);
+        expect(calls[2]).toEqual(['environment', null, [2, 0, 0]]);
+        // A technique without light groups is refused with a message that says so.
+        Object.assign(platform.gi, { outputTechnique: { id: 'voxel' } });
+        expect(() => threeGI.setGroupWeight(0, 'white')).toThrow(/voxel.*light group weights/);
     });
 
     it('removes everything it added on dispose', () => {

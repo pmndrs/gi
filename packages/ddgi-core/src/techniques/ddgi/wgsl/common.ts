@@ -1,11 +1,12 @@
 /**
  * WGSL shared by DDGI's kernels (`ddgi/trace`, `ddgi/blend`, `ddgi/write`,
- * `ddgi/census`): the sampling function and its constants, the uniform
- * block, probe indexing, ray directions and random numbers. Every kernel
+ * `ddgi/census`, `ddgi/mark`, `ddgi/schedule-*`): the sampling function and
+ * its constants, the uniform block, probe indexing, the camera weight, ray
+ * directions and random numbers. Every kernel
  * includes it once; none of it binds anything.
  */
 
-import { FIXED_RAYS, MAX_RAYS_PER_PROBE } from '../settings.ts';
+import { FIXED_RAYS, MAX_RAYS_PER_PROBE, OUT_OF_VIEW_WEIGHT } from '../settings.ts';
 import { DDGI_SAMPLE_WGSL } from './sample.ts';
 
 /** `DdgiUniforms`; its byte layout is `UNIFORM_WORD` in layout.ts (checked by a unit test). */
@@ -47,6 +48,41 @@ struct DdgiUniforms {
     maxHistorySamples: f32,   // n_max
     updatesPerSample: f32,    // a: n is at most (blended updates) / a during the ramp; 1 = a plain mean
     rampUpdates: f32,         // K: the ramp lasts a probe's first K blended updates
+    // Change-driven history (docs/design/m2-lights.md §4.1, §4.2): ddgi/mark
+    // and the cut in ddgi/blend.
+    changeDrivenHistory: u32, // 0: no cut, the M1 rule alone
+    changeTolerance: f32,     // epsilon: what a changed probe's history is cut for
+    changeUpdates: f32,       // K: updates a changed probe is expected to get soon
+    lightChangeScale: f32,    // the share of a light's change at a probe the probe is taken to see
+    // The GPU scheduler (docs/design/m2-lights.md §4.3, §4.6, §6.4).
+    feedback: u32,            // 0: the feedback rule is off
+    priorityCount: u32,       // P: at most this many probes of the list go to probes owed updates
+    scrambleStride: u32,      // the round robin's order: order[i] = (i * stride) mod probe count
+    farOwedUpdates: f32,      // updates far probes owe after a global change this frame (K when the rule is off)
+    cameraFalloffDistance: f32, // the camera weight's falloff: 4 spacings
+    cameraPosition: vec4f,    // xyz: the camera; w: how far outside the frustum still counts as in view
+    // The view's planes, xyz pointing inwards and normalised, w the offset:
+    // a point p is inside when dot(xyz, p) + w >= 0 for all six.
+    frustumLeft: vec4f,
+    frustumRight: vec4f,
+    frustumBottom: vec4f,
+    frustumTop: vec4f,
+    frustumNear: vec4f,
+    frustumFar: vec4f,
+    // The share of a probe's light taken to come back through the field (rho), for the cut (ddgi/blend).
+    changeBounceShare: f32,
+    // Key probes and propagation (T2.4c, docs/design/m2-lights.md §4.5).
+    keyProbes: u32,           // 1: changes marked this frame take the key-probe path (the setting, on a volume too big for every probe's K updates)
+    keyProbeBoost: f32,       // a marked key's urgency is its change times this
+    keyResidualShare: f32,    // a fine probe waiting for its keys: urgency share, and the least of its change its own update is cut for
+    keyOwedUpdates: f32,      // updates a key away from the view's core owes
+    fineOwedUpdates: f32,     // updates a fine probe waiting for its keys owes
+    propagation: u32,         // 1: keys taking in a change pass it to their fine neighbours (ddgi/blend, ddgi/propagate)
+    holdFineProbes: u32,      // the test mode (settings.holdFineProbes): fine probes waiting for their keys are not blended
+    // The sun layer (T2.6b): the sun's colour x intensity (rgb; w unused), what
+    // one unit of its white-reference layer stands for. ddgi/blend weighs that
+    // layer by it in the probe's mean, so the mean is the probe's real light.
+    sunLight: vec4f,
 }
 
 const DDGI_MAX_RAYS: u32 = ${MAX_RAYS_PER_PROBE}u;
@@ -86,6 +122,76 @@ fn ddgiIsOff(state: u32) -> bool {
 
 fn ddgiTracedRays(state: u32) -> u32 {
     return select(ddgi.raysPerProbe, DDGI_FIXED_RAYS, ddgiIsOff(state));
+}
+
+// ---- The camera weight (docs/design/m2-lights.md §4.3) ----
+// SPEC's response target is judged on the image, and nearby, visible probes
+// are what the image shows, so the scheduler serves them first (Lumen's
+// priority does the same). Used by ddgi/schedule-* and by ddgi/mark (which
+// probes count as near after a global change).
+
+// A probe outside the view counts this much less.
+const DDGI_OUT_OF_VIEW_WEIGHT: f32 = ${OUT_OF_VIEW_WEIGHT};
+
+// Inside the view's six planes, or within the margin (cameraPosition.w) of
+// them: a probe up to a cell's diagonal outside still lights visible points.
+fn ddgiInView(position: vec3f) -> bool {
+    let margin = -ddgi.cameraPosition.w;
+    let point = vec4f(position, 1.0);
+    return dot(ddgi.frustumLeft, point) >= margin && dot(ddgi.frustumRight, point) >= margin
+        && dot(ddgi.frustumBottom, point) >= margin && dot(ddgi.frustumTop, point) >= margin
+        && dot(ddgi.frustumNear, point) >= margin && dot(ddgi.frustumFar, point) >= margin;
+}
+
+// 1 / (1 + (d / (4 spacings))^2), times DDGI_OUT_OF_VIEW_WEIGHT outside the
+// view. Taken at the probe's grid point: relocation moves it less than half a
+// spacing, which the falloff hardly notices.
+fn ddgiCameraWeight(probe: vec3i) -> f32 {
+    let position = ddgiProbePosition(probe, vec3f(0.0));
+    let scaled = length(position - ddgi.cameraPosition.xyz) / ddgi.cameraFalloffDistance;
+    let weight = 1.0 / (1.0 + scaled * scaled);
+    return select(weight * DDGI_OUT_OF_VIEW_WEIGHT, weight, ddgiInView(position));
+}
+
+// ---- Key probes (T2.4c, docs/design/m2-lights.md §4.5) ----
+// A key probe's grid index is even or the last one on every axis: about one
+// probe in 8, the coarse level of a virtual two-level grid at twice the
+// spacing. (isKeyProbe in layout.ts is the CPU twin.)
+
+fn ddgiIsKeyAxis(index: i32, count: i32) -> bool {
+    return index % 2 == 0 || index == count - 1;
+}
+
+fn ddgiIsKeyProbe(probe: vec3i) -> bool {
+    let counts = vec3i(ddgiProbeCount());
+    return ddgiIsKeyAxis(probe.x, counts.x) && ddgiIsKeyAxis(probe.y, counts.y) && ddgiIsKeyAxis(probe.z, counts.z);
+}
+
+// Key neighbour j (0..7) of a fine probe as an offset in grid steps, and
+// whether j is one of its neighbours (keyNeighbourOffset in layout.ts): on an
+// axis where the probe's index is a key index the offset is 0 and that
+// axis's bit of j must be 0; otherwise the bit chooses the key one step
+// below (0) or above (1). Every key neighbour has the same trilinear weight:
+// on the key lattice a fine probe sits halfway between its keys on each axis
+// where it isn't a key.
+struct DdgiKeyNeighbour {
+    offset: vec3i,
+    exists: bool,
+}
+
+fn ddgiKeyNeighbourOffset(neighbour: u32, probe: vec3i) -> DdgiKeyNeighbour {
+    let counts = vec3i(ddgiProbeCount());
+    var offset = vec3i(0);
+    var exists = true;
+    for (var axis = 0u; axis < 3u; axis++) {
+        let above = ((neighbour >> axis) & 1u) != 0u;
+        if (ddgiIsKeyAxis(probe[axis], counts[axis])) {
+            exists = exists && !above;
+        } else {
+            offset[axis] = select(-1, 1, above);
+        }
+    }
+    return DdgiKeyNeighbour(offset, exists);
 }
 
 // Point i of n spherical Fibonacci points (Keinert et al. 2015): equal-area

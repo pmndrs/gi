@@ -1,0 +1,4 @@
+{
+    "description": "T2.6b checks 1 and 2 and the 6-layer cap: the courtyard with the sun in a layer of its own; a change of the sun's colour and brightness shows in its own frame, matches a field re-converged at the new sun within 1% mean, marks nothing and leaves the history and layers byte for byte; with the sun layer off the field matches m2's within 0.1%; 4 groups, the environment and the sun (6 layers) add up, and both reductions agree.",
+    "timeoutMs": 900000
+}

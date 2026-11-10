@@ -25,6 +25,11 @@
  * 3. **The floor** (`GITechnique.minUnitsPerFrame`): the technique may ask
  *    for a minimum (DDGI: a full sweep within 4 s), which wins over the
  *    millisecond ceiling, so a weak device runs slower, never frozen.
+ * 3b. **The calibration guard** (T2.4b, after M1 once handed Sponza 26 probes
+ *    a frame instead of about 290): a calibration under half of the
+ *    previous one on the same device and scene is measured once more before
+ *    it is used ({@link CALIBRATION} `guardShare`). Every burst keeps its
+ *    timings (`Calibration.samples`), so a bad one can be read afterwards.
  * 4. **Saturation** ({@link SaturationGuard}): the batch steps down only when
  *    frames are late *and* the technique's timings show the GPU at full
  *    clocks (close to the calibrated cost), which is when the GPU is really
@@ -223,6 +228,15 @@ function modelAround(curve: readonly CurvePoint[], units: number): UnitCostModel
  *   a few seconds later matched the sustained cost within 5% (budget v2
  *   rework). The GPU settles over seconds, which agreeing timings a few
  *   frames apart can't see.
+ * - `guardShare`: a burst whose batch comes out under this share of the
+ *   previous calibration's on the same device and scene (solved for the
+ *   same share and cap) is measured once more, and the second result is
+ *   used whatever it is. Why (M1, the flicker check): one burst handed
+ *   Sponza 26 probes a frame instead of about 290, and the next run didn't
+ *   repeat it, so it was a burst that measured a passing state of the GPU,
+ *   not the scene. Half leaves room for real changes (a new budget is solved
+ *   from the curve anyway; a heavier scene really is slower) and catches a
+ *   10× miss. A scene that really got that much heavier costs one more burst.
  */
 export const CALIBRATION = {
     firstUnits: 1024,
@@ -240,6 +254,7 @@ export const CALIBRATION = {
     confirmFrames: 300,
     confirmJudgedFrames: 100,
     confirmTolerance: 0.1,
+    guardShare: 0.5,
 } as const;
 
 /** What a calibration found. */
@@ -271,6 +286,14 @@ export interface Calibration {
      * within the tolerance; undefined until confirmed.
      */
     readonly confirmFactor?: number;
+    /** Every timing the burst took, in the order they arrived (the calibration's log). */
+    readonly samples: readonly CostSample[];
+    /**
+     * The calibration guard (CALIBRATION `guardShare`): the batch a first
+     * burst found, when it came out under half of the previous calibration
+     * and this one is its re-measurement; undefined otherwise.
+     */
+    readonly remeasuredFrom?: number;
 }
 
 /**
@@ -309,6 +332,8 @@ export class CalibrationBurst {
     private fillerThisFrame = false;
     private fillerFrames = 0;
     private fillerMs = 0;
+    /** Every timing taken, for the calibration's log. */
+    private readonly samples: CostSample[] = [];
     private finished: Calibration | undefined;
 
     /** `cap`: `budget.units`. `fillerAllowed`: the platform's first calibration, behind its start-up (see CALIBRATION). */
@@ -362,7 +387,9 @@ export class CalibrationBurst {
     /** A timed frame. Frames from before the burst don't count. */
     add(sample: CostSample): void {
         if (this.finished || this.firstFrame === undefined || sample.frame < this.firstFrame) return;
-        if (!(sample.units > 0) || !(sample.ms >= 0) || this.settled.has(sample.units)) return;
+        if (!(sample.units > 0) || !(sample.ms >= 0)) return;
+        this.samples.push(sample);
+        if (this.settled.has(sample.units)) return;
         let list = this.pending.get(sample.units);
         if (!list) {
             list = [];
@@ -473,6 +500,7 @@ export class CalibrationBurst {
             fillerFrames: this.fillerFrames,
             fillerMs: this.fillerMs,
             measured,
+            samples: [...this.samples],
         };
     }
 
@@ -753,6 +781,14 @@ export interface BudgetReport {
     readonly calibration: Calibration | undefined;
 }
 
+/** What the calibration guard compares with (CALIBRATION `guardShare`): the previous calibration on this device and scene. */
+export interface CalibrationMemory {
+    /** The previous calibration, if any. */
+    previous(): Calibration | undefined;
+    /** A calibration was accepted: it becomes the previous one. */
+    remember(calibration: Calibration): void;
+}
+
 /**
  * One technique's units per frame under budget v2 (see the file comment).
  * The platform keeps one per attached technique and makes a new one on
@@ -787,6 +823,10 @@ export class WorkBudget {
     private confirmRatios: number[] = [];
     /** Frames handed out while confirming: it ends after twice `confirmFrames` even if timings went missing. */
     private confirmHandedFrames = 0;
+    /** The calibration guard: the previous calibration on this device and scene, and the batch of a first burst being re-measured. */
+    private readonly memory: CalibrationMemory | undefined;
+    private remeasuring: number | undefined;
+    private readonly warn: ((message: string) => void) | undefined;
     private latest: BudgetReport = {
         state: 'units',
         units: 0,
@@ -806,9 +846,14 @@ export class WorkBudget {
      * `fillerAllowed`: false for a technique added while the host runs live (no filler batches
      * in its frames); the platform allows them only before its first calibration.
      */
-    constructor(technique: Pick<GITechnique, 'msPerUnit' | 'minUnitsPerFrame'> = { msPerUnit: undefined }, options: { readonly fillerAllowed?: boolean } = {}) {
+    constructor(
+        technique: Pick<GITechnique, 'msPerUnit' | 'minUnitsPerFrame'> = { msPerUnit: undefined },
+        options: { readonly fillerAllowed?: boolean; readonly memory?: CalibrationMemory; readonly warn?: (message: string) => void } = {},
+    ) {
         this.technique = technique;
         this.fillerAllowed = options.fillerAllowed ?? true;
+        this.memory = options.memory;
+        this.warn = options.warn;
     }
 
     get report(): BudgetReport {
@@ -849,7 +894,7 @@ export class WorkBudget {
                 const units = burst.next(input.frame, input.deltaTime);
                 if (!burst.result) return this.handOut('calibrating', capped(units), 0);
                 // A burst that gave up finishes inside `next`: on to the hand-out below.
-                this.adopt(burst.result, true);
+                if (!this.finishBurst(burst.result)) return this.handOut('calibrating', capped(units), 0);
             }
         }
 
@@ -890,7 +935,7 @@ export class WorkBudget {
         const burst = this.burst;
         if (!burst) return;
         burst.used(handed, used);
-        if (burst.result) this.adopt(burst.result, true);
+        if (burst.result) this.finishBurst(burst.result);
     }
 
     /** A timed frame of this technique. */
@@ -898,7 +943,7 @@ export class WorkBudget {
         const burst = this.burst;
         if (burst) {
             burst.add(sample);
-            if (burst.result) this.adopt(burst.result, true);
+            if (burst.result) this.finishBurst(burst.result);
             return;
         }
         const calibration = this.calibration;
@@ -977,6 +1022,33 @@ export class WorkBudget {
     }
 
     /**
+     * A burst ended: the calibration guard (CALIBRATION `guardShare`), then
+     * the result is taken. Returns false when it starts a re-measurement
+     * instead: a measured batch under half of the previous calibration's on
+     * this device and scene, the first time. The second result is taken
+     * whatever it is, and both are reported (`remeasuredFrom`).
+     */
+    private finishBurst(result: Calibration): boolean {
+        const previous = result.measured ? this.memory?.previous() : undefined;
+        if (previous?.measured && this.remeasuring === undefined) {
+            const expected = unitsOnCurve(previous.curve, result.shareMs, Math.min(result.capacity, result.cap ?? Number.POSITIVE_INFINITY));
+            if (result.units < CALIBRATION.guardShare * expected) {
+                this.remeasuring = result.units;
+                this.warn?.(
+                    `@pmndrs/ddgi: the GPU budget's calibration came out at ${result.units} units a frame, under half of the previous calibration on this device and scene (${expected}); measuring once more. Its timings: ${describeSamples(result.samples)}`,
+                );
+                this.burst = new CalibrationBurst(result.shareMs, result.cap, false);
+                return false;
+            }
+        }
+        const taken = this.remeasuring === undefined ? result : { ...result, remeasuredFrom: this.remeasuring };
+        this.remeasuring = undefined;
+        this.adopt(taken, true);
+        if (taken.measured) this.memory?.remember(taken);
+        return true;
+    }
+
+    /**
      * Takes a calibration: `measuredNow` from a burst that just ended (every frame
      * handed out so far was a burst frame, whose timings may still arrive), or
      * else solved again from one.
@@ -1026,6 +1098,11 @@ export class WorkBudget {
     }
 }
 
+/** A burst's timings in a line, for the calibration guard's warning: `units: ms` in arrival order. */
+function describeSamples(samples: readonly CostSample[]): string {
+    return samples.map((sample) => `${sample.units}: ${sample.ms.toFixed(3)} ms`).join(', ');
+}
+
 /** A calibration from the technique's own cost per unit (no burst). */
 function proportionalCalibration(shareMs: number, cap: number | undefined, msPerUnit: number): Calibration {
     const point: CurvePoint = { units: 1, ms: msPerUnit, spread: 0 };
@@ -1042,6 +1119,7 @@ function proportionalCalibration(shareMs: number, cap: number | undefined, msPer
         fillerFrames: 0,
         fillerMs: 0,
         measured: true,
+        samples: [],
     };
 }
 

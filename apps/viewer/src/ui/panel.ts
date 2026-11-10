@@ -137,6 +137,7 @@ const STATS_LINES: ReadonlyArray<readonly [string, HelpKey]> = [
     ['top-level refit (GPU)', 'statsRefit'],
     ['GPU memory', 'statsMemory'],
     ['adapter (CPU)', 'statsSync'],
+    ['recompiles', 'statsRecompiles'],
     ['active, off, not updated yet', 'statsStates'],
 ];
 
@@ -148,7 +149,7 @@ const GI_CHOICES: readonly GiTechniqueId[] = ['ddgi', 'lpg', 'vxgi'];
 const BUDGET_STEP_MS = 0.25;
 
 
-function withHelp<T extends HTMLElement>(element: T, key: HelpKey): T {
+export function withHelp<T extends HTMLElement>(element: T, key: HelpKey): T {
     element.dataset.help = HELP[key];
     element.title = HELP[key];
     return element;
@@ -217,10 +218,14 @@ export class Panel {
 
     private sceneExposureEv = 0;
 
+    /**
+     * @param extraSections more sections (the lighting controls), placed after global illumination
+     */
     constructor(
         parent: HTMLElement,
         manifests: readonly SceneManifest[],
         private readonly handlers: PanelHandlers,
+        extraSections: readonly HTMLElement[] = [],
     ) {
         this.element = h('aside', { className: 'panel' });
         parent.append(this.element);
@@ -248,6 +253,7 @@ export class Panel {
             this.moveSection(),
             this.lightSection(),
             this.giSection(),
+            ...extraSections,
             this.compareSection(),
             this.upscalerSection(),
             this.displaySection(),

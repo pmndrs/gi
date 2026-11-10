@@ -138,7 +138,7 @@ await runGpuTest(
             assert(rays.topLevelPath === 'gpu-refit', `expected the GPU top level, got ${rays.topLevelPath}`);
             const top = rays.gpuTopLevel;
             assert(top, 'no GPU top level');
-            await rays.prepare(new PlatformKernelBuilder(device, 'tlas-bench'));
+            await rays.prepare(new PlatformKernelBuilder(device, 'tlas-bench'), { batches: false });
 
             const sphere = makeSphereMesh();
             const objectBox = objectBoxOf(sphere.positions);

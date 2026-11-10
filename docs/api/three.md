@@ -174,7 +174,17 @@ renderer.setAnimationLoop(() => {
 });
 ```
 
-`new ThreeGI(gi, scene, options)` needs a prepared platform. It adds the GI light to the scene.
+`new ThreeGI(gi, scene, options)` needs the platform's output technique and a prepared platform, or one still preparing with `prepare`'s promise passed as `preparing`; otherwise it throws. It adds the GI light to the scene once the platform is prepared.
+
+With `preparing` it may be made while the platform still prepares (T2.14), so the scene is copied in while the kernels compile. Until `prepare` resolves, `update` only copies the scene (the scene sync's CPU work) and the light stays out of the scene, so a render meanwhile draws without GI. When it resolves the light joins the scene, so a host that only renders (`updateOnRender`) gets GI without calling `update`; if it rejects, the next `update` throws the error. Chrome sends WebGPU calls to its GPU process when the JavaScript task ends, so let the task end between `prepare()` and a long copy, or the compiles wait for the copy. `GIVolume.start` does this:
+
+```ts
+const preparing = gi.prepare();
+await new Promise((resolve) => setTimeout(resolve, 0)); // the compile requests go out
+const threeGI = new ThreeGI(gi, scene, { volume, preparing });
+threeGI.update(camera, 0);                               // the scene copy, while compiling
+await preparing;                                         // the light is in the scene; the next update runs GI
+```
 
 `update(camera, deltaTime?)` is called once per frame, before `renderer.render` (or by the GI light itself, with `updateOnRender`). Each call:
 
@@ -191,7 +201,7 @@ The extra submit is needed because three r187 records into its own command encod
 | `light` | Settings for the GI light: `intensity`, `priority`, `replaceEnvironmentDiffuse`. |
 | `environment` | A platform environment to use instead of the scene's (the viewer's sky files, say). |
 | `sky` | A pmndrs/sky `Sky`, used as GI's sky. Its `exposure` becomes `sunIlluminance`. |
-| `objectsPerFrame`, `editChecksPerFrame` | How much of the scene is checked each frame (see "How changes are found"). |
+| `objectsPerFrame`, `editChecksPerFrame`, `lightsPerFrame` | How much of the scene is checked each frame (see "How changes are found"). |
 | `updateMatrixWorld` | Update world matrices in every `update` (see below). Default: no. |
 | `updateOnRender` | Run `update` from the GI light's render-time update (see above). Default: no. Can be switched later. |
 | `warn` | Where warnings go. Each message is shown once. |
@@ -202,7 +212,39 @@ Other members:
 - `threeGI.timings` gives the CPU time of the last update.
 - `threeGI.report` lists what the last update sent.
 - `threeGI.markChanged(object)` is described below.
+- `threeGI.setGroupWeight(group, color, intensity = 1)` and `threeGI.setEnvironmentWeight(color, intensity = 1)` are described in "Light groups" below.
 - `dispose()` removes what the adapter added.
+
+### Light groups
+
+Dimming or recolouring a whole group of lights in GI shows in the same frame, with no update lag and no noise (T2.5; docs/design/m2-lights.md §5). Put each light in a group with `userData.giLightGroup` (0 to 3), turn groups on in DDGI's settings, and set a weight:
+
+```ts
+await volume.start(renderer, scene, { ddgi: { lightGroups: { count: 2, weights: [[1, 1, 1], [1, 1, 1]], environmentWeight: [1, 1, 1] } } });
+volume.threeGI.setGroupWeight(1, 'white', 0.25);   // group 1 at a quarter
+volume.threeGI.setGroupWeight(0, '#ffcc88');       // group 0 warmer
+volume.threeGI.setEnvironmentWeight('white', 0.5); // the sky and emissive surfaces at half
+```
+
+- The colour is any three colour (`Color`, `'#ffcc88'`, `0xffcc88`), read in three's linear working colour space, times `intensity`, as a light's colour and intensity are.
+- A weight multiplies the lights' own colour and intensity, in GI only: dim three's own lights too for the direct light. Changing a light's `intensity` still works as before: it re-traces the probes it reaches.
+- Groups are off by default. Each group costs a layer of the field: on Sponza about 25 MB and 5% of each probe update (4 groups: +10%; two-room +23%), and `count` needs a new `prepare`.
+- Lights in a group at or past `count` share the last group's layer.
+
+### The sun layer
+
+With DDGI's `sunLayer` setting, a change of the sun's colour or brightness shows in GI exactly, in the frame it happens, with nothing traced again (T2.6b; docs/design/m2-lights.md §6.1). Change the sun as usual:
+
+```ts
+await volume.start(renderer, scene, { ddgi: { sunLayer: true } });
+sun.color.set('#ffb070');   // an evening sun: GI follows in the same frame
+sun.intensity = 1.5;
+```
+
+- The sun is the scene's first `DirectionalLight` (the first the adapter met). DDGI traces it in a layer of its own at a white reference and weighs that layer by the light's colour × intensity.
+- Turning the sun still re-traces, nearest the camera first, as before.
+- Dim or hide it (`intensity` 0 or `visible` false is fine: GI sees a sun at 0), but don't remove it: a removed sun makes another directional light the sun, and every probe is traced again.
+- Off by default. It costs a layer of the field (Sponza: 58 MB of GI becomes 93 MB) and its share of every probe update (PROGRESS, T2.6b). It works with light groups: the sun's layer is then also weighed by its group's weight. 4 groups, the environment and the sun are the most a volume holds.
 
 ### `GILight`
 
@@ -258,6 +300,7 @@ This is the mirroring on its own, for hosts that call `gi.encode` themselves.
 - `distance = 0` means no range limit.
 - A spot light's `angle` and `penumbra` become the outer and inner cones.
 - `userData.giLightGroup` (0 to 3) sets the light group.
+- GI traces shadows for a light when three's `castShadow` is on, or when `userData.giCastsShadows` is `true`. Use the second for lights three draws without shadows only because there are too many for shadow maps (hundreds of candles under three's `ClusteredLighting`, which skips shadowed lights). Without GI shadows their light leaks through walls into GI. `false` turns GI's shadows off for a light three shadows.
 
 **The sky**, the first of these that applies:
 1. your `environment` option;
@@ -297,8 +340,9 @@ The adapter does a fixed amount of work per frame instead:
 - **The walk.** Each frame checks `objectsPerFrame` objects for new, moved, hidden or removed ones, then carries on where it stopped. A whole pass takes `ceil(objects / objectsPerFrame)` frames. Removals can take up to two passes.
 - **The hot list.** Once an object is seen moving, it is checked every frame until it has been still for 60 frames. Continuous motion is therefore sent every frame.
 - **`markChanged(object)`.** Tells the adapter something changed (added, moved, edited or removed). The object and everything under it are picked up in the next `update`. Use it when you move things and want no delay.
+- **Moves go out in one batch.** Every transform an `update` finds changed is sent with one `setTransforms` call at its end. For an `InstancedMesh` whose instance matrices changed, the instances named by `instanceMatrix.addUpdateRange(...)` are the only ones looked at, when the mesh was also checked in the previous update (three clears the ranges at `render`, after `ThreeGI.update` in the documented order); otherwise every instance is compared and only changed ones are sent.
 - **Edits.** Each frame, `editChecksPerFrame` geometries, materials and objects are checked for edits: geometry, material values, the `giContributes` flag, and whether a mesh's materials still all let light through.
-- **Lights** are checked every frame.
+- **Lights** (T2.1). The first 64 lights and every directional light are checked every frame, so a scene with a few lamps sees each light change in the frame it happens. Past 64, lights follow the objects' rules: `lightsPerFrame` (default 64) of them a frame, round robin, and a light found changed stays checked every frame until it has been still for 60 frames. So 1,024 candles cost 128 light checks on a still frame, not 1,024; an unmarked candle change, hide or removal reaches GI within `ceil((lights − 64) / 64)` frames (15 for 1,024 candles), and a flickering candle every frame once seen. `markChanged(light)` sends it the next update.
 
 The first pass over a new scene is done in full, so GI has the whole scene from the first frame.
 
@@ -314,7 +358,7 @@ The defaults are `objectsPerFrame` 64 and `editChecksPerFrame` 8. The table show
 - The adapter's CPU time on a still frame is about 0.06–0.10 ms on Sponza and 0.11–0.15 ms on Bistro interior.
 - Bigger budgets find changes sooner and cost more per frame.
 
-By default `update` doesn't recompute world matrices: it reads the ones three's last render made. A move therefore reaches GI one frame late, which DDGI's blending over many frames hides. Recomputing them would make three do it twice per frame (1 ms on Bistro interior). `updateMatrixWorld: true` turns it on.
+By default `update` doesn't recompute world matrices: it reads the ones three's last render made. A move therefore reaches GI one frame late, which DDGI's blending over many frames hides. Recomputing them would make three do it twice per frame (1 ms on Bistro interior). `updateMatrixWorld: true` turns it on. A host that moves an object or light outside three's render (a gizmo, an animation step) and wants GI to see it in the same frame can call that object's `updateMatrixWorld()` right after the move, as the viewer's motion player does.
 
 ## Environment light counted twice
 

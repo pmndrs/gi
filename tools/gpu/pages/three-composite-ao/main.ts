@@ -177,7 +177,7 @@ async function loadAoScene(context: ThreePageContext, width: number, height: num
     const camera = shotCamera(manifest, width, height);
     const platform = new GIPlatformImpl(device, { label: `three composite ao ${job.scene}` });
     const volume = manifest.volume;
-    const ddgi = platform.addTechnique(new DDGITechnique({ volume: { center: volume.center, size: volume.size, spacing: volume.probeSpacing } }));
+    const ddgi = platform.addTechnique(new DDGITechnique({ volume: { center: volume.center, size: volume.size, spacing: volume.probeSpacing }, warmUpPasses: 0 }));
     platform.setOutput(ddgi);
     await platform.prepare();
     const environment = manifest.environment.type === 'procedural' ? platformSkyEnvironment(manifest) : null;

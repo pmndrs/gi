@@ -59,6 +59,24 @@ describe('url state', () => {
         expect(parseUrlState(serializeUrlState(state))).toEqual(state);
     });
 
+    it("keeps other names as scene settings and writes them back (sponza-candles' candles=4096)", () => {
+        const state = parseUrlState('?scene=sponza-candles&candles=4096&gi=only');
+        expect(state.sceneSettings).toEqual({ candles: '4096' });
+        expect(state.gi).toBe('only');
+        expect(serializeUrlState(state)).toContain('candles=4096');
+        expect(parseUrlState(serializeUrlState(state))).toEqual(state);
+    });
+
+    it('reads the light settings (T2.8): light groups, time of day, a motion, the reach of many candles', () => {
+        const state = parseUrlState('?scene=sponza&groups=4&tod=14.50,172&motion=light-sweep&reach=6');
+        expect(state).toMatchObject({ lightGroups: 4, timeOfDay: { hour: 14.5, dayOfYear: 172 }, motion: 'light-sweep', lightReach: 6 });
+        expect(state.sceneSettings).toEqual({});
+        expect(parseUrlState(serializeUrlState(state))).toEqual(state);
+        const nonsense = parseUrlState('?groups=3&tod=25,400,1&motion=../x&reach=-1');
+        expect(nonsense).toMatchObject({ lightGroups: 0, timeOfDay: null, motion: null, lightReach: null });
+        expect(parseUrlState('?tod=30,0').timeOfDay).toEqual({ hour: 24, dayOfYear: 1 });
+    });
+
     it('prefers a free camera over a bookmark in the link', () => {
         const state = { ...DEFAULT_URL_STATE, scene: 'cornell-box', camera: '2', freeCamera: [1, 2, 3, 4, 5, 6, 60] as [number, number, number, number, number, number, number] };
         const link = serializeUrlState(state);
